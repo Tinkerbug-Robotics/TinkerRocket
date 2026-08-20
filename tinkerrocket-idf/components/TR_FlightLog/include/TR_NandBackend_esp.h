@@ -29,6 +29,13 @@ public:
     TR_NandBackend_esp() = default;
     explicit TR_NandBackend_esp(TR_LogToFlash* logger) : logger_(logger) {}
 
+    // #671: forwarded from the logger's RDID-resolved NandGeometry; the
+    // legacy 4096/64/2048 when no logger is attached (host stub — the tests
+    // that want other geometries use FakeNandBackend instead).
+    uint32_t pageSize() const override;
+    uint32_t pagesPerBlock() const override;
+    uint32_t blockCount() const override;
+
     bool readPage(uint32_t block, uint32_t page_in_block, uint8_t* out) override;
     bool programPage(uint32_t block, uint32_t page_in_block, const uint8_t* data) override;
     bool eraseBlock(uint32_t block) override;

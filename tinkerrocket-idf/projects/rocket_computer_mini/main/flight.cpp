@@ -1991,14 +1991,22 @@ extern tr_flightlog::TR_FlightLog flightlog;   // defined in main.cpp
 static constexpr size_t kSnapFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
 // How far back to look.  Snapshots ride at 10 Hz inside a ~100 KB/s stream,
 // so ~64 KB covers the last ~6 snapshots — plenty to step over a torn tail.
-static constexpr uint32_t kTailScanMaxBytes = 16u * 4080u;
+// #671: a fixed BYTE budget, deliberately not denominated in pages — the
+// per-page payload is runtime chip geometry (2032 B on this part's
+// GD5F1GQ5UE, 4080 B on the legacy 4 KB part) and the scan below is
+// byte-offset/got-driven either way.
+static constexpr uint32_t kTailScanMaxBytes = 64u * 1024u;
 
 static bool snapshotTailScan(const char* filename, uint32_t final_bytes,
                              FlightSnapshotData& snap_out)
 {
-    // One flash-page-sized read window plus one frame of overlap carried
-    // between windows so a snapshot straddling a page boundary still parses.
-    static uint8_t tail_buf[4080 + kSnapFrameLen];
+    // One read window (sized to the MAX per-page payload so a single
+    // readFlightPage can always fill it regardless of chip geometry) plus one
+    // frame of overlap carried between windows so a snapshot straddling a
+    // page boundary still parses. On the mini's 2 KB-page part each call
+    // returns at most 2032 B — the loop just takes one more iteration.
+    static constexpr size_t kMaxPagePayload = 4096 - 16;   // NAND_PAGE_SIZE_MAX - PageHeader
+    static uint8_t tail_buf[kMaxPagePayload + kSnapFrameLen];
 
     const uint32_t scan_start = (final_bytes > kTailScanMaxBytes)
                               ? final_bytes - kTailScanMaxBytes : 0u;

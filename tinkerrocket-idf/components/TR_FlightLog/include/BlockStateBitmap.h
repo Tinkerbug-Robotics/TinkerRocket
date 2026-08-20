@@ -7,7 +7,12 @@
 
 namespace tr_flightlog {
 
-// 2-bit-per-block state map. 2048 blocks = 512 bytes.
+// 2-bit-per-block state map. Backing array is MAX-sized (2048 blocks = 512 B);
+// the ACTIVE block count is runtime chip geometry (#671) — 2048 on the legacy
+// and V9 parts, 1024 on the mini — set via setBlockCount() before use. Blocks
+// at or past the active count read BLOCK_BAD (the existing out-of-range
+// convention), so off-die blocks can never be allocated. serializedSize() is
+// derived from the active count: 512 B at 2048 blocks, 256 B at 1024.
 //
 // Byte layout (little-endian within the byte):
 //   buf[N / 4] bits [(N % 4)*2 .. (N % 4)*2 + 1] = state of block N
@@ -17,9 +22,16 @@ namespace tr_flightlog {
 // after a wipe-on-first-boot.
 class BlockStateBitmap {
 public:
-    static constexpr size_t SERIALIZED_SIZE = (NAND_BLOCK_COUNT + 3) / 4;  // 256 B
+    static constexpr size_t SERIALIZED_SIZE_MAX = (NAND_BLOCK_COUNT_MAX + 3) / 4;  // 512 B
 
     BlockStateBitmap();
+
+    // #671: set the active block count (chip geometry). Clamped to the max.
+    // Does NOT clear existing state — call before any get/set for sane bounds.
+    void   setBlockCount(uint32_t count);
+    uint32_t blockCount() const { return block_count_; }
+    // Serialized length for the ACTIVE count ((count+3)/4).
+    size_t serializedSize() const { return (block_count_ + 3) / 4; }
 
     // Single-block ops
     BlockState get(uint32_t block) const;
@@ -49,7 +61,8 @@ public:
     void clear();
 
 private:
-    uint8_t data_[SERIALIZED_SIZE] = {0};
+    uint8_t  data_[SERIALIZED_SIZE_MAX] = {0};
+    uint32_t block_count_ = NAND_BLOCK_COUNT_MAX;   // legacy default
 };
 
 }  // namespace tr_flightlog

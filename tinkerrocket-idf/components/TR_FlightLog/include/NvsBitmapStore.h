@@ -9,7 +9,9 @@ namespace tr_flightlog {
 //
 // Uses a distinct NVS namespace from TR_LogToFlash's own bad-block map
 // ("bblk"/"map"). The layouts are not compatible: TR_LogToFlash stores a
-// 128-byte 1-bit-per-block map, TR_FlightLog stores a 256-byte 2-bit map.
+// 1-bit-per-block map and TR_FlightLog a 2-bit one; both lengths are
+// runtime chip geometry (#671) — 256 B / 512 B at 2048 blocks, halved on the
+// mini's 1024-block part.
 // Sharing the namespace would cause silent corruption on upgrade.
 //
 // On host / in tests the implementation compiles to stubs that always return

@@ -2,6 +2,7 @@
 #define TR_LOG_TO_FLASH_H
 
 #include <compat.h>
+#include "nand_geometry.h"
 #include <RocketComputerTypes.h>
 #include "lfs.h"
 #include "mram_dirty_policy.h"
@@ -21,15 +22,19 @@ struct TR_LogToFlashConfig
 
     // LittleFS block-count. Defaults to the full chip for backward compat.
     // When sharing the NAND with TR_FlightLog (issue #50 Stage 2c) the caller
-    // shrinks this to just the blocks LFS owns (e.g. 32 for a 4 MB LFS
-    // partition) so the flight-log allocator can safely use the remainder.
-    uint32_t lfs_block_count = 0;  // 0 = full chip (NAND_BLOCK_COUNT)
+    // shrinks this to just the blocks LFS owns (32 on both firmwares; the
+    // BYTE size is 32 x the runtime block size — 8 MB on the legacy part,
+    // 4 MB on the 128 KB-block GD5F parts) so the flight-log allocator can
+    // safely use the remainder.
+    uint32_t lfs_block_count = 0;  // 0 = full chip (runtime block count)
 
     // Optional hot-path write override (issue #50 Stage 2c-3c). When set,
     // the flush task calls `write_sink(write_sink_ctx, payload, len)` for
     // each page drained from the ring instead of lfs_file_write. `len` is
-    // fixed at NAND_PAGE_SIZE - 16 (4080) so the sink can prepend a 16-byte
-    // TR_FlightLog PageHeader and still land on a NAND page boundary. The
+    // fixed at (runtime page size - 16) — sinkPayloadSize(), 4080 on the
+    // legacy 4 KB part and 2032 on the 2 KB GD5F parts (#671) — so the sink
+    // can prepend a 16-byte TR_FlightLog PageHeader and still land on a NAND
+    // page boundary. The
     // sink should return true on success; false drops the page (same as an
     // LFS write failure). When the sink is set, periodic lfs_file_sync calls
     // are suppressed — each page is self-describing via its PageHeader CRC.
@@ -161,8 +166,10 @@ public:
     bool enqueueFrame(const uint8_t* frame, size_t len);
 
     // --- Raw NAND access (bridge for TR_FlightLog, issue #50 Stage 2) --------
-    // These expose the private nand* primitives as full-page (2 KB) ops keyed
-    // by (block, page_in_block). They share the same SPI bus + bad-block
+    // These expose the private nand* primitives as full-page ops keyed
+    // by (block, page_in_block); "full page" is the RUNTIME page size
+    // (nandGeometry().page_size — 4096 on the V8 bench part, 2048 on the
+    // GD5F parts), and caller buffers must be at least that large. They share the same SPI bus + bad-block
     // bitmap as the LFS-backed flush path, so both layers stay consistent.
     // Intended only for the TR_NandBackend_esp adapter; internal callers keep
     // using the rowPageAddr variants.
@@ -224,6 +231,11 @@ public:
     // #822: true when the RAM ring was allocated from SPI PSRAM rather than
     // internal RAM. Meaningless while isMramEnabled() — there is no ring_buf_.
     bool isRingInPsram() const { return ring_in_psram_; }
+    // #671: the RDID-resolved chip geometry (legacy fallback until begin()).
+    // TR_FlightLog consumes this through TR_NandBackend_esp; the write-sink
+    // payload quantum is sinkPayloadSize() = page size - PageHeader (16 B).
+    const NandGeometry& nandGeometry() const { return geom_; }
+    uint32_t sinkPayloadSize() const { return geom_.page_size - 16u; }
 
     // #274 MRAM-ring recovery (sink mode). begin() sets "pending" if the previous
     // session was dirty and the non-volatile ring survived; the OC then opens a
@@ -251,12 +263,14 @@ private:
     static constexpr uint8_t STAT_PFAIL = 0x08;
     static constexpr uint8_t STAT_EFAIL = 0x04;
 
-    // FORESEE F35SQB004G, 4 Gbit / 512 MB: 4096 B/page x 64 pages/block x 2048 blocks.
-    // Must stay identical to tr_flightlog:: geometry in TR_FlightLog_types.h.
-    static constexpr uint32_t NAND_PAGE_SIZE = 4096;
-    static constexpr uint32_t NAND_PAGES_PER_BLK = 64;
-    static constexpr uint32_t NAND_BLOCK_SIZE = NAND_PAGE_SIZE * NAND_PAGES_PER_BLK;  // 256KB
-    static constexpr uint32_t NAND_BLOCK_COUNT = 2048;
+    // #671: geometry is RUNTIME, resolved from RDID in nandInit() — see
+    // nand_geometry.h for the part table and the legacy fallback. geom_ is
+    // valid from nandInit() on; everything before that (ring setup, NVS
+    // bitmap load) must not do geometry arithmetic. The old compile-time
+    // NAND_PAGE_SIZE/NAND_BLOCK_COUNT constants were deliberately retired so
+    // stale uses fail to compile; static buffers size themselves with the
+    // *_MAX constants from nand_geometry.h instead.
+    NandGeometry geom_ = NAND_GEOMETRY_LEGACY;
 
     struct __attribute__((packed)) LogMeta
     {
@@ -364,8 +378,10 @@ private:
     uint32_t log_curr_block = 1;
     bool log_block_erased = false;
 
-    // page staging
-    uint8_t page_buf[NAND_PAGE_SIZE];
+    // page staging. Statically MAX-sized (#671): only the first
+    // geom_.page_size bytes are ever staged per chunk; the flush arithmetic
+    // is denominated in chunk_target, never in sizeof(page_buf).
+    uint8_t page_buf[NAND_PAGE_SIZE_MAX];
     uint32_t page_buf_idx = 0;
 
     // Periodic sync — commits LittleFS metadata to NAND every N pages.  The
@@ -380,7 +396,12 @@ private:
     // NAND write amplification.  64 pages is the compromise: still cuts
     // the pre-patch 3.7 s loss window in half while letting LFS batch its
     // metadata commits.
-    static constexpr uint32_t SYNC_INTERVAL_PAGES = 64;   // ~256 KB / 1.8 s
+    // #671: byte-denominated so the tuned cadence survives page-size changes;
+    // 256 KB / page_size = 64 pages on the legacy 4 KB part (byte-identical
+    // to the old SYNC_INTERVAL_PAGES = 64), 128 pages on the 2 KB GD5F parts.
+    // Set in begin() from geom_. LFS path only — sink mode never syncs.
+    static constexpr uint32_t SYNC_INTERVAL_BYTES = 256 * 1024;
+    uint32_t sync_interval_pages_ = SYNC_INTERVAL_BYTES / NAND_GEOMETRY_LEGACY.page_size;
     uint32_t pages_since_sync_ = 0;
 
     // Interval-peak timing instrumentation (µs) — reset by
@@ -429,8 +450,13 @@ private:
     // One bit per NAND block: 0 = unknown-or-good, 1 = known-bad.
     // Loaded from NVS at begin().  Written back at closeLogSession and by
     // persistBadBlocksIfDirty() (called only outside the hot path).
-    static constexpr uint32_t BAD_BLOCK_BITMAP_BYTES = NAND_BLOCK_COUNT / 8;
-    uint8_t bad_block_bitmap_[BAD_BLOCK_BITMAP_BYTES] = {};
+    // #671: array is MAX-sized; the live blob length is geom_.bitmapBytes()
+    // (256 B legacy/V9, 128 B on the mini's 1024-block part). NVS load runs
+    // BEFORE the RDID read, so it loads up to the max and the length check
+    // is deferred to nandInit() where the expected size is known.
+    static constexpr uint32_t BAD_BLOCK_BITMAP_BYTES_MAX = NAND_BLOCK_COUNT_MAX / 8;
+    uint8_t bad_block_bitmap_[BAD_BLOCK_BITMAP_BYTES_MAX] = {};
+    size_t  bad_block_blob_len_ = 0;   // bytes actually read from NVS "map"
     bool     bad_block_bitmap_dirty_ = false;
     uint32_t bad_block_skips_ = 0;   // cumulative short-circuits
 
@@ -449,6 +475,12 @@ private:
     bool     nand_dead_bus_ = false;
     bool     bad_block_map_blob_ok_ = false;   // NVS "map" present, exact size
     uint16_t bad_block_scanned_chip_ = 0;      // NVS "scanned" (0 = never)
+    // #671: NVS "gpage" — the page size the persisted scan ran under (missing
+    // key loads as 4096 = the pre-#671 scan arithmetic). Folded into
+    // bad_block_map_blob_ok_ so a map scanned under the wrong geometry (old
+    // firmware on a GD5F chip probed the factory-marker column at 4096, which
+    // aliases to main-array byte 0 there) is rescanned, not trusted.
+    uint16_t bad_block_scan_page_size_ = 0;
 
     bool isBlockBad(uint32_t block) const;
     void markBlockBad(uint32_t block);
@@ -568,8 +600,9 @@ private:
     bool nandProgramPage(uint32_t rowPageAddr, const uint8_t* data, uint32_t len);
     bool nandReadPage(uint32_t rowPageAddr, uint8_t* out, uint32_t len);
     /// Read `len` bytes from `column` within a page — used to access the OOB /
-    /// spare area (column ≥ NAND_PAGE_SIZE) where factory bad-block markers
-    /// live.  Returns false if the PAGEREAD status polls out (suspect block).
+    /// spare area (column ≥ runtime page size — 4096 on the legacy part, 2048
+    /// on the GD5F parts) where factory bad-block markers live.  Returns
+    /// false if the PAGEREAD status polls out (suspect block).
     bool nandReadBytesAt(uint32_t rowPageAddr, uint32_t column,
                          uint8_t* out, uint32_t len);
     bool nandInit();

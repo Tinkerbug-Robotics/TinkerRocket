@@ -2369,7 +2369,9 @@ static void printStats()
                 rss.bad_blocks    = (uint16_t)flightlog.bitmap().countInState(tr_flightlog::BLOCK_BAD);
                 rss.system_blocks = (uint16_t)(fcfg.flight_region_start + 4u);  // LFS region + 4 metadata
                 rss.flight_count  = (uint16_t)flightlog.index().size();
-                rss.block_size_kb = (uint16_t)(tr_flightlog::NAND_BLOCK_SIZE / 1024u);
+                // #671: runtime block size (128 on this part's GD5F1GQ5UE); the wire
+        // struct is self-describing, the app scales by this field.
+        rss.block_size_kb = (uint16_t)(flightlog.pageSize() * flightlog.pagesPerBlock() / 1024u);
                 rss.flags         = RSS_FLAG_INITIALIZED;
                 if (flightlog.autoEvictedCount() > 0)  // #315
                     rss.flags |= RSS_FLAG_AUTO_EVICTED;
@@ -2708,9 +2710,11 @@ bool comms_setup_active()
     log_cfg.mram_cs = config::MRAM_CS;
     log_cfg.dirty_marker_addr = 0;
 
-    // --- LFS shrunk to 4 MB + hot-path write sink (issue #50) --------------
-    // LFS holds 32 blocks; TR_FlightLog owns the rest plus metadata blocks
-    // 2044-2047.  Each 4080 B drained chunk routes through flightlogWriteSink
+    // --- LFS region + hot-path write sink (issue #50) ----------------------
+    // LFS holds 32 blocks (4 MB at this part's 128 KB blocks); TR_FlightLog
+    // owns the rest up to the chip's top four metadata blocks (#671: runtime
+    // geometry — 1020-1023 on this 1024-block GD5F1GQ5UE).  Each
+    // (page - 16)-byte drained chunk routes through flightlogWriteSink
     // → flightlog.writeFrame() → one NAND page.
     log_cfg.lfs_block_count = 32;
     log_cfg.write_sink = flightlogWriteSink;
@@ -2734,14 +2738,23 @@ bool comms_setup_active()
     }
 
     // --- TR_FlightLog begin (issue #50) -------------------------------------
-    // #398: bitmap persists to NAND metadata blocks [2]/[3] (2046/2047), not
-    // NVS — NVS compaction disabled the flash cache and stalled core 1.
+    // #398: bitmap persists to NAND metadata blocks [2]/[3], not NVS — NVS
+    // compaction disabled the flash cache and stalled core 1.
     flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
     if (logger_ok)
     {
         tr_flightlog::TR_FlightLog::Config fl_cfg{};
-        // #398/#492: pre-allocate ~20 MB up front so most flights never
-        // extend mid-flight.
+        // #671: this board's GD5F1GQ5UE has 1024 blocks of 128 KB — the old
+        // compile-time defaults (region end 2044, metadata 2044-2047) were
+        // OFF-DIE here, addressing blocks past the end of the chip. Region
+        // and metadata now come from the RDID-resolved geometry: metadata is
+        // the chip's top four blocks (1020-1023 on this part).
+        const auto& ngeom = logger.nandGeometry();
+        fl_cfg.flight_region_end = static_cast<uint16_t>(ngeom.block_count - 4);
+        for (int i = 0; i < 4; ++i)
+            fl_cfg.metadata_blocks[i] = static_cast<uint16_t>(ngeom.block_count - 4 + i);
+        // #398/#492/#671: pre-allocate 80 blocks (~10 MB at this part's
+        // 128 KB blocks) so most flights never extend mid-flight.
         fl_cfg.prealloc_blocks = 80;
         // #315: rolling-buffer auto-eviction, target ~10% of the flight
         // region free.  Destructive by design; surfaced via log + the

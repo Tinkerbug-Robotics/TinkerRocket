@@ -194,15 +194,20 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     {
         return false;
     }
+    // #671: geometry is resolved now — fix the byte-denominated sync cadence
+    // (64 pages on the legacy 4 KB part, identical to the old constant).
+    sync_interval_pages_ = SYNC_INTERVAL_BYTES / geom_.page_size;
 
     // Boot-time non-destructive bad-block scan (#47): walks every not-yet-
     // known-bad block and probes for read errors + factory bad markers.
-    // #511: the full 2048-block walk costs ~2.7 s of the cmd-8 Power-On
+    // #511: the full block walk (2048 blocks ~2.7 s on the legacy part;
+    // half that on the mini's 1024) costs cmd-8 Power-On
     // stall, so it now runs only until one scan has completed for this chip
     // (NVS "scanned" marker, written strictly after the scan). Runtime
     // discovery (markBlockBad on read/prog/erase failures) keeps the map
     // current afterwards. A dead RDID bus skips the scan entirely — probing
-    // 2048 failing reads would mark every block bad and poison the map.
+    // a chip's worth of failing reads would mark every block bad and poison
+    // the map.
     switch (BadBlockScanPolicy::bootScanVerdict(nand_dead_bus_,
                                                 bad_block_map_blob_ok_,
                                                 bad_block_scanned_chip_,
@@ -230,8 +235,8 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     }
 
     // Allocate LittleFS buffers on heap to avoid stack overflow
-    lfs_read_buffer = (uint8_t*)malloc(NAND_PAGE_SIZE);
-    lfs_prog_buffer = (uint8_t*)malloc(NAND_PAGE_SIZE);
+    lfs_read_buffer = (uint8_t*)malloc(geom_.page_size);
+    lfs_prog_buffer = (uint8_t*)malloc(geom_.page_size);
     lfs_lookahead_buffer = (uint8_t*)malloc(128);
 
     if (!lfs_read_buffer || !lfs_prog_buffer || !lfs_lookahead_buffer)
@@ -262,14 +267,14 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     lfs_cfg->erase = lfsBlockErase;
     lfs_cfg->sync = lfsBlockSync;
 
-    lfs_cfg->read_size = NAND_PAGE_SIZE;      // 4096
-    lfs_cfg->prog_size = NAND_PAGE_SIZE;      // 4096
-    lfs_cfg->block_size = NAND_BLOCK_SIZE;    // 256KB
+    lfs_cfg->read_size = geom_.page_size;
+    lfs_cfg->prog_size = geom_.page_size;
+    lfs_cfg->block_size = geom_.blockSize();
     // Default to the full chip; caller may shrink (issue #50 Stage 2c) so the
     // trailing blocks can be owned by TR_FlightLog.
     lfs_cfg->block_count = (cfg.lfs_block_count > 0) ? cfg.lfs_block_count
-                                                     : NAND_BLOCK_COUNT;
-    lfs_cfg->cache_size = NAND_PAGE_SIZE;     // 4096
+                                                     : geom_.block_count;
+    lfs_cfg->cache_size = geom_.page_size;
     lfs_cfg->lookahead_size = 128;            // 128 bytes = 1024 bits
     lfs_cfg->block_cycles = 500;              // Wear leveling
 
@@ -1361,7 +1366,7 @@ bool TR_LogToFlash::nandWaitReady(uint32_t timeout_us)
 
 bool TR_LogToFlash::nandEraseBlock(uint32_t blockIndex)
 {
-    const uint32_t row = blockIndex * NAND_PAGES_PER_BLK;
+    const uint32_t row = blockIndex * geom_.pages_per_blk;
 
     spiAcquire();
     nandWREN();
@@ -1396,7 +1401,7 @@ bool TR_LogToFlash::nandEraseBlock(uint32_t blockIndex)
 
 bool TR_LogToFlash::nandProgramPage(uint32_t rowPageAddr, const uint8_t* data, uint32_t len)
 {
-    if (len != NAND_PAGE_SIZE)
+    if (len != geom_.page_size)
     {
         return false;
     }
@@ -1444,7 +1449,7 @@ bool TR_LogToFlash::nandProgramPage(uint32_t rowPageAddr, const uint8_t* data, u
 
 bool TR_LogToFlash::nandReadPage(uint32_t rowPageAddr, uint8_t* out, uint32_t len)
 {
-    if (len > NAND_PAGE_SIZE)
+    if (len > geom_.page_size)
     {
         return false;
     }
@@ -1570,6 +1575,66 @@ bool TR_LogToFlash::nandInit()
     // read bad_block_chip_id_, which the wipe below rewrites pre-scan.
     current_chip_id_ = current_chip_id;
     nand_dead_bus_ = dead_bus;
+
+    // #671: resolve the RUNTIME geometry from the chip ID. Table hit -> that
+    // part's numbers; unknown or dead-bus ID -> the legacy fallback, i.e.
+    // exactly the pre-#671 behaviour (keeps the V8 bench byte-identical and
+    // fails open for unlisted 4 Gbit parts). Unknown is an ERROR, not a
+    // WARN: on a 2 KB-page part the fallback corrupts data, so an unlisted
+    // ID must get added to nand_geometry.h, and this line is the tripwire.
+    const bool geom_known = nandGeometryForId(current_chip_id, &geom_);
+    if (dead_bus)
+    {
+        // geom_ is the legacy fallback; the dead bus is reported by the
+        // boot-scan gate in begin() and the mount failure that follows.
+    }
+    else if (geom_known)
+    {
+        ESP_LOGI(TAG, "NAND %s: %lu B pages x %lu/blk x %lu blocks (%lu MB)",
+                 geom_.name,
+                 (unsigned long)geom_.page_size,
+                 (unsigned long)geom_.pages_per_blk,
+                 (unsigned long)geom_.block_count,
+                 (unsigned long)(geom_.blockSize() / 1024 * geom_.block_count / 1024));
+    }
+    else
+    {
+        ESP_LOGE(TAG, "UNKNOWN NAND ID 0x%04X — assuming legacy geometry "
+                      "(%lu B pages, %lu blocks). If this part has 2 KB pages "
+                      "this WILL corrupt data: add its ID to nand_geometry.h.",
+                 (unsigned)current_chip_id,
+                 (unsigned long)geom_.page_size,
+                 (unsigned long)geom_.block_count);
+    }
+
+    // #671: the NVS bitmap blob was loaded BEFORE this RDID read (begin()
+    // ordering), so its length check had to wait until the expected size was
+    // known. Exact-size-for-this-chip keeps the #511 trusted-map gate
+    // meaningful: a blob persisted under a different geometry (chip swapped
+    // on a bench board) fails here and forces a rescan, which is the safe
+    // outcome.
+    bad_block_map_blob_ok_ = (bad_block_blob_len_ == geom_.bitmapBytes()) &&
+                             (bad_block_scan_page_size_ == geom_.page_size);
+    if (!bad_block_map_blob_ok_)
+    {
+        // Pre-#671 semantic, restored now that the expected size is known: a
+        // wrong-length blob is untrusted IN FULL. Keeping its partial bits
+        // would poison the forced rescan — the scan SKIPS already-known-bad
+        // blocks, so spurious bad bits from a truncated/foreign-geometry blob
+        // would never be re-probed and would then be persisted as truth.
+        if (bad_block_blob_len_ != 0)
+        {
+            memset(bad_block_bitmap_, 0, sizeof(bad_block_bitmap_));
+        }
+        // Dirty EVEN when the blob was absent (len 0, already clean): the
+        // forced rescan's persist must write the blob, or a chip whose NVS
+        // holds a matching "chip"/"scanned" but no "map" — e.g. a scan that
+        // found zero bad blocks and so never dirtied anything — re-runs the
+        // full boot scan on every boot forever. (Review finding; the old code
+        // converged by accident via load-side dirtying.)
+        bad_block_bitmap_dirty_ = true;
+    }
+
     if (!dead_bus && current_chip_id != bad_block_chip_id_)
     {
         if (cfg.debug)
@@ -1617,14 +1682,14 @@ int TR_LogToFlash::lfsBlockRead(const struct lfs_config *c, lfs_block_t block,
     while (bytes_read < size)
     {
         uint32_t block_offset = off + bytes_read;
-        uint32_t page_in_block = block_offset / NAND_PAGE_SIZE;
-        uint32_t offset_in_page = block_offset % NAND_PAGE_SIZE;
+        uint32_t page_in_block = block_offset / self->geom_.page_size;
+        uint32_t offset_in_page = block_offset % self->geom_.page_size;
 
-        uint32_t row_page = (block * NAND_PAGES_PER_BLK) + page_in_block;
+        uint32_t row_page = (block * self->geom_.pages_per_blk) + page_in_block;
 
         // Read full page into temp buffer
-        uint8_t page_buf[NAND_PAGE_SIZE];
-        if (!self->nandReadPage(row_page, page_buf, NAND_PAGE_SIZE))
+        uint8_t page_buf[NAND_PAGE_SIZE_MAX];
+        if (!self->nandReadPage(row_page, page_buf, self->geom_.page_size))
         {
             // Read failure — the block is suspect.  Tell LFS it's bad so it
             // relocates, and remember it so we skip on future mounts.
@@ -1633,9 +1698,9 @@ int TR_LogToFlash::lfsBlockRead(const struct lfs_config *c, lfs_block_t block,
         }
 
         // Copy requested portion
-        uint32_t bytes_to_copy = (size - bytes_read < NAND_PAGE_SIZE - offset_in_page)
+        uint32_t bytes_to_copy = (size - bytes_read < self->geom_.page_size - offset_in_page)
                                  ? (size - bytes_read)
-                                 : (NAND_PAGE_SIZE - offset_in_page);
+                                 : (self->geom_.page_size - offset_in_page);
         memcpy(buf + bytes_read, page_buf + offset_in_page, bytes_to_copy);
         bytes_read += bytes_to_copy;
     }
@@ -1663,7 +1728,7 @@ int TR_LogToFlash::lfsBlockProg(const struct lfs_config *c, lfs_block_t block,
     // LittleFS should only call this with page-aligned offsets and sizes
 
     // Verify alignment (LittleFS should respect prog_size)
-    if (off % NAND_PAGE_SIZE != 0 || size % NAND_PAGE_SIZE != 0)
+    if (off % self->geom_.page_size != 0 || size % self->geom_.page_size != 0)
     {
         return LFS_ERR_INVAL;
     }
@@ -1674,11 +1739,11 @@ int TR_LogToFlash::lfsBlockProg(const struct lfs_config *c, lfs_block_t block,
     while (bytes_written < size)
     {
         uint32_t block_offset = off + bytes_written;
-        uint32_t page_in_block = block_offset / NAND_PAGE_SIZE;
-        uint32_t row_page = (block * NAND_PAGES_PER_BLK) + page_in_block;
+        uint32_t page_in_block = block_offset / self->geom_.page_size;
+        uint32_t row_page = (block * self->geom_.pages_per_blk) + page_in_block;
 
         // Write full page directly (no read-modify-write)
-        if (!self->nandProgramPage(row_page, buf + bytes_written, NAND_PAGE_SIZE))
+        if (!self->nandProgramPage(row_page, buf + bytes_written, self->geom_.page_size))
         {
             // Program failed (STAT_PFAIL or timeout).  Mark the block bad
             // and tell LFS to relocate — CORRUPT (not IO) triggers the
@@ -1687,7 +1752,7 @@ int TR_LogToFlash::lfsBlockProg(const struct lfs_config *c, lfs_block_t block,
             return LFS_ERR_CORRUPT;
         }
 
-        bytes_written += NAND_PAGE_SIZE;
+        bytes_written += self->geom_.page_size;
     }
 
     return LFS_ERR_OK;
@@ -2041,7 +2106,7 @@ bool TR_LogToFlash::checkMramDirty()
 }
 
 // #274: replay the entire surviving MRAM ring through the write_sink. The sink
-// consumes (NAND_PAGE_SIZE - 16)-byte chunks (it prepends a 16-byte PageHeader),
+// consumes (runtime page size - 16)-byte chunks (it prepends a 16-byte PageHeader),
 // exactly like flushRingToNand; the ring is dumped raw and the downstream parser
 // handles SOF framing / CRC / stale + partial frames (parity with the legacy LFS
 // dump). The caller must have opened a destination flight on the sink first.
@@ -2049,8 +2114,17 @@ bool TR_LogToFlash::checkMramDirty()
 uint32_t TR_LogToFlash::drainMramToSink()
 {
     if (!use_mram_ || cfg.write_sink == nullptr) return 0;
-    constexpr uint32_t kChunk = NAND_PAGE_SIZE - 16u;   // 4080; matches flushRingToNand
-    uint8_t buf[kChunk];
+    // #671: the sink quantum is the RUNTIME payload-per-page — the same
+    // sinkPayloadSize() flushRingToNand derives its chunk_target from (4080
+    // legacy, 2032 on the GD5F parts). Chunk via page_buf instead of the old
+    // 4080-byte constexpr STACK array: runtime sizing can't be constexpr,
+    // and a page-sized stack array is exactly the pattern the
+    // runStartupRecovery comment records overflowing an 8 KB task stack.
+    // page_buf is idle here by construction — recovery replay runs from
+    // begin()'s caller before startFlushTask() and before any log session
+    // opens, and page_buf_idx is 0 until logging activates.
+    const uint32_t kChunk = sinkPayloadSize();
+    uint8_t* const buf = page_buf;
     uint32_t total = 0;
     for (uint32_t off = 0; off < ring_size_; off += kChunk)
     {
@@ -2157,13 +2231,13 @@ void TR_LogToFlash::clearRingLocked()
 
 bool TR_LogToFlash::isBlockBad(uint32_t block) const
 {
-    if (block >= NAND_BLOCK_COUNT) return true;  // treat OOB as bad
+    if (block >= geom_.block_count) return true;  // treat OOB as bad
     return (bad_block_bitmap_[block / 8] & (uint8_t)(1u << (block % 8))) != 0;
 }
 
 void TR_LogToFlash::markBlockBad(uint32_t block)
 {
-    if (block >= NAND_BLOCK_COUNT) return;
+    if (block >= geom_.block_count) return;
     uint8_t& byte = bad_block_bitmap_[block / 8];
     const uint8_t mask = (uint8_t)(1u << (block % 8));
     if (!(byte & mask))
@@ -2178,7 +2252,7 @@ void TR_LogToFlash::markBlockBad(uint32_t block)
 uint32_t TR_LogToFlash::countBadBlocks() const
 {
     uint32_t n = 0;
-    for (uint32_t i = 0; i < BAD_BLOCK_BITMAP_BYTES; ++i)
+    for (uint32_t i = 0; i < geom_.bitmapBytes(); ++i)
     {
         n += (uint32_t)__builtin_popcount(bad_block_bitmap_[i]);
     }
@@ -2192,25 +2266,46 @@ void TR_LogToFlash::loadBadBlocksFromNVS()
     {
         // First boot, namespace doesn't exist yet — nothing to load.
         memset(bad_block_bitmap_, 0, sizeof(bad_block_bitmap_));
+        bad_block_blob_len_ = 0;
         bad_block_chip_id_ = 0;
         bad_block_scanned_chip_ = 0;
+        bad_block_scan_page_size_ = 0;
         bad_block_map_blob_ok_ = false;
         bad_block_bitmap_dirty_ = false;
         if (cfg.debug) ESP_LOGI(TAG, "Bad-block NVS namespace not found, starting clean");
         return;
     }
-    const size_t got = prefs.getBytes("map", bad_block_bitmap_, sizeof(bad_block_bitmap_));
+    // #671: this runs BEFORE nandInit()'s RDID read, so the expected blob
+    // length (geom_.bitmapBytes()) is not known yet. Load up to the max and
+    // record what was actually stored; nandInit() finishes the validation
+    // once geometry is resolved. (Preferences::getBytes returns 0 when the
+    // stored blob is LARGER than the buffer, and the stored length when
+    // smaller — either way a mismatch fails the deferred check safely.)
+    bad_block_blob_len_ = prefs.getBytes("map", bad_block_bitmap_, sizeof(bad_block_bitmap_));
     bad_block_chip_id_ = prefs.getUShort("chip", 0);
     bad_block_scanned_chip_ = prefs.getUShort("scanned", 0);  // #511: written only post-scan
+    // #671: the page size the scan RAN UNDER. A scan's factory-marker probes
+    // are only valid for the geometry they used (the marker column is the
+    // page size), so the trusted-map gate must match it against the detected
+    // chip. Missing key = 4096: every pre-#671 firmware scanned with
+    // 4096-page arithmetic — correct on the legacy part (its maps stay
+    // trusted, no spurious V8 rescan), wrong on a 2 KB part (forces the one
+    // rescan that heals a map poisoned by old firmware on a GD5F chip).
+    bad_block_scan_page_size_ = prefs.getUShort("gpage", 4096);
     prefs.end();
-    bad_block_map_blob_ok_ = (got == sizeof(bad_block_bitmap_));
+    bad_block_map_blob_ok_ = false;  // provisional; finalized in nandInit()
     bad_block_bitmap_dirty_ = false;
-    if (!bad_block_map_blob_ok_)
+    if (bad_block_blob_len_ != sizeof(bad_block_bitmap_))
     {
-        memset(bad_block_bitmap_, 0, sizeof(bad_block_bitmap_));
-        // Self-repair: mark dirty so the forced rescan's persist rewrites the
-        // truncated/corrupt blob instead of leaving it short forever.
-        bad_block_bitmap_dirty_ = true;
+        // Not necessarily an error (a 1024-block part stores 128 B), but the
+        // tail must be clean either way; nandInit() decides validity.
+        memset(bad_block_bitmap_ + bad_block_blob_len_, 0,
+               sizeof(bad_block_bitmap_) - bad_block_blob_len_);
+        // NOT marked dirty here: a length mismatch against the STATIC max is
+        // normal on a 1024-block chip (its valid blob is 128 B). nandInit()
+        // owns the dirty/wipe decision once the per-chip expected length is
+        // known — dirtying here would rewrite a perfectly valid mini blob on
+        // every session close.
     }
     const uint32_t n_bad = countBadBlocks();
     if (cfg.debug) ESP_LOGI(TAG, "Loaded bad-block map: %lu known-bad blocks (saved chip=0x%04X)",
@@ -2226,7 +2321,10 @@ void TR_LogToFlash::persistBadBlocksIfDirty()
         if (cfg.debug) ESP_LOGW(TAG, "Bad-block NVS open failed, will retry next close");
         return;
     }
-    prefs.putBytes("map", bad_block_bitmap_, sizeof(bad_block_bitmap_));
+    // #671: persist exactly the detected chip's bitmap length (256 B on the
+    // 2048-block parts, 128 B on the mini's 1024-block part) so the deferred
+    // load-side check sees a size match on the next boot.
+    prefs.putBytes("map", bad_block_bitmap_, geom_.bitmapBytes());
     prefs.putUShort("chip", bad_block_chip_id_);
     prefs.end();
     bad_block_bitmap_dirty_ = false;
@@ -2245,8 +2343,10 @@ void TR_LogToFlash::markBootScanComplete()
         return;
     }
     prefs.putUShort("scanned", current_chip_id_);
+    prefs.putUShort("gpage", (uint16_t)geom_.page_size);  // #671: scan-time geometry
     prefs.end();
     bad_block_scanned_chip_ = current_chip_id_;
+    bad_block_scan_page_size_ = (uint16_t)geom_.page_size;
     if (cfg.debug) ESP_LOGI(TAG, "Bad-block boot scan complete for chip 0x%04X — future boots skip it",
                                   (unsigned)current_chip_id_);
 }
@@ -2259,13 +2359,13 @@ uint32_t TR_LogToFlash::scanBadBlocksAtBoot()
     uint8_t main_byte = 0xFF;
     uint8_t spare_byte[2] = { 0xFF, 0xFF };
 
-    for (uint32_t b = 0; b < NAND_BLOCK_COUNT; ++b)
+    for (uint32_t b = 0; b < geom_.block_count; ++b)
     {
         // Already-known bad blocks from NVS or this run — skip, no NAND work.
         if (isBlockBad(b)) continue;
         ++n_scanned;
 
-        const uint32_t page_0_row = b * NAND_PAGES_PER_BLK;
+        const uint32_t page_0_row = b * geom_.pages_per_blk;
         const uint32_t page_1_row = page_0_row + 1;
 
         // Option A — any read error on page 0 is a dead-block signal.
@@ -2278,13 +2378,13 @@ uint32_t TR_LogToFlash::scanBadBlocksAtBoot()
             continue;
         }
 
-        // Option B — factory bad-block markers live at column NAND_PAGE_SIZE
+        // Option B — factory bad-block markers live at the first spare column (= runtime page size)
         // (first byte of the spare/OOB area) on pages 0 and 1 per the MT29F
         // datasheet.  A fresh good block reads 0xFF in both; any other value
         // means the manufacturer flagged it.  A read failure here also
         // counts as a suspect block.
-        if (!nandReadBytesAt(page_0_row, NAND_PAGE_SIZE, &spare_byte[0], 1) ||
-            !nandReadBytesAt(page_1_row, NAND_PAGE_SIZE, &spare_byte[1], 1))
+        if (!nandReadBytesAt(page_0_row, geom_.page_size, &spare_byte[0], 1) ||
+            !nandReadBytesAt(page_1_row, geom_.page_size, &spare_byte[1], 1))
         {
             markBlockBad(b);
             ++n_new;
@@ -2384,7 +2484,7 @@ void TR_LogToFlash::runStartupRecovery()
     while (offset < ring_size_)
     {
         uint32_t len = ring_size_ - offset;
-        if (len > NAND_PAGE_SIZE) len = NAND_PAGE_SIZE;
+        if (len > geom_.page_size) len = geom_.page_size;
 
         mramReadBytes(offset, chunk, len);
         lfs_ssize_t written = lfs_file_write(&lfs, &rf, chunk, len);
@@ -2422,8 +2522,8 @@ void TR_LogToFlash::flushRingToNand()
     // constant literal is used here to avoid pulling TR_FlightLog headers
     // into TR_LogToFlash and creating a dependency cycle.
     const uint32_t chunk_target = (cfg.write_sink != nullptr)
-        ? (NAND_PAGE_SIZE - 16u)
-        : NAND_PAGE_SIZE;
+        ? sinkPayloadSize()
+        : geom_.page_size;
 
     // Read current count
     portENTER_CRITICAL(&ring_mux_);
@@ -2502,7 +2602,7 @@ void TR_LogToFlash::flushRingToNand()
                 const uint32_t cb_progs_before  = lfs_cb_progs_;
                 const uint32_t cb_erases_before = lfs_cb_erases_;
 
-                lfs_ssize_t written = lfs_file_write(&lfs, &file, page_buf, NAND_PAGE_SIZE);
+                lfs_ssize_t written = lfs_file_write(&lfs, &file, page_buf, geom_.page_size);
                 const uint32_t _dt = (uint32_t)(esp_timer_get_time() - _t0);
                 if (_dt > write_max_us_) write_max_us_ = _dt;
                 iter_ledger_.write_us += _dt;   // #510
@@ -2516,7 +2616,7 @@ void TR_LogToFlash::flushRingToNand()
                                   (unsigned long)(lfs_cb_progs_  - cb_progs_before),
                                   (unsigned long)(lfs_cb_erases_ - cb_erases_before));
                 }
-                ok = (written == NAND_PAGE_SIZE);
+                ok = (written == (lfs_ssize_t)geom_.page_size);
                 if (!ok && cfg.debug) ESP_LOGE(TAG, "Write failed: %d", written);
             }
 
@@ -2547,7 +2647,7 @@ void TR_LogToFlash::flushRingToNand()
             // TR_FlightLog pages are self-describing (PageHeader + CRC32), so
             // brownout recovery rebuilds the index scan-side; no sync needed.
             if (cfg.write_sink == nullptr &&
-                ++pages_since_sync_ >= SYNC_INTERVAL_PAGES)
+                ++pages_since_sync_ >= sync_interval_pages_)
             {
                 {
                     LFS_TIMING_START();
@@ -2922,25 +3022,25 @@ void TR_LogToFlash::applyPendingTimestamp_impl(const char* filename, uint16_t ye
 
 // ─── Raw NAND bridge (TR_FlightLog, issue #50 Stage 2) ───────────────────
 // Forwarders that convert (block, page_in_block) -> rowPageAddr and always
-// operate on a full NAND_PAGE_SIZE page. See TR_LogToFlash.h for rationale.
+// operate on a full runtime-page-size page. See TR_LogToFlash.h for rationale.
 
 bool TR_LogToFlash::readNandPage(uint32_t block, uint32_t page_in_block, uint8_t* out)
 {
-    if (block >= NAND_BLOCK_COUNT || page_in_block >= NAND_PAGES_PER_BLK) return false;
-    uint32_t rowPageAddr = block * NAND_PAGES_PER_BLK + page_in_block;
-    return nandReadPage(rowPageAddr, out, NAND_PAGE_SIZE);
+    if (block >= geom_.block_count || page_in_block >= geom_.pages_per_blk) return false;
+    uint32_t rowPageAddr = block * geom_.pages_per_blk + page_in_block;
+    return nandReadPage(rowPageAddr, out, geom_.page_size);
 }
 
 bool TR_LogToFlash::programNandPage(uint32_t block, uint32_t page_in_block, const uint8_t* data)
 {
-    if (block >= NAND_BLOCK_COUNT || page_in_block >= NAND_PAGES_PER_BLK) return false;
-    uint32_t rowPageAddr = block * NAND_PAGES_PER_BLK + page_in_block;
-    return nandProgramPage(rowPageAddr, data, NAND_PAGE_SIZE);
+    if (block >= geom_.block_count || page_in_block >= geom_.pages_per_blk) return false;
+    uint32_t rowPageAddr = block * geom_.pages_per_blk + page_in_block;
+    return nandProgramPage(rowPageAddr, data, geom_.page_size);
 }
 
 bool TR_LogToFlash::eraseNandBlock(uint32_t block)
 {
-    if (block >= NAND_BLOCK_COUNT) return false;
+    if (block >= geom_.block_count) return false;
     return nandEraseBlock(block);
 }
 
@@ -2951,7 +3051,7 @@ bool TR_LogToFlash::isNandBlockBad(uint32_t block) const
 
 bool TR_LogToFlash::markNandBlockBad(uint32_t block)
 {
-    if (block >= NAND_BLOCK_COUNT) return false;
+    if (block >= geom_.block_count) return false;
     markBlockBad(block);
     return true;
 }

@@ -17,7 +17,7 @@ namespace tr_flightlog {
 // and an internal-flash erase disables the CPU cache on BOTH cores (IDF spins
 // an esp_ipc stub on the other core), which froze core 1 — the parser and
 // loop_oc stalled ~100 ms. A NAND write is on the external SPI bus and never
-// touches the cache. The serialized bitmap (<= NAND_PAGE_SIZE - header) fits in
+// touches the cache. The serialized bitmap (<= runtime page size - header; checked at begin()) fits in
 // one NAND page, so each save is one erase + one page program.
 //
 // Migration: on the first boot after switching from NVS, both metadata blocks

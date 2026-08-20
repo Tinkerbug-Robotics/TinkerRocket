@@ -5,13 +5,15 @@
 
 namespace tr_flightlog {
 
-// ---- NAND geometry (FORESEE F35SQB004G, 4 Gbit / 512 MB — matches TR_LogToFlash) ----
-// 4096 B/page x 64 pages/block x 2048 blocks = 512 MB. Must stay identical to the
-// duplicate set in TR_LogToFlash.h (the live raw-SPI driver programs against it).
-constexpr uint32_t NAND_PAGE_SIZE      = 4096;
-constexpr uint32_t NAND_PAGES_PER_BLK  = 64;
-constexpr uint32_t NAND_BLOCK_SIZE     = NAND_PAGE_SIZE * NAND_PAGES_PER_BLK;  // 256 KB
-constexpr uint32_t NAND_BLOCK_COUNT    = 2048;
+// ---- NAND geometry (#671): RUNTIME, supplied by the backend ----
+// The driver (TR_LogToFlash) resolves the chip's real geometry from RDID and
+// TR_NandBackend reports it up through pageSize()/pagesPerBlock()/blockCount().
+// The old compile-time constants (4096/64/2048 — the F35SQB004G, which is only
+// the V8 bench part) were deliberately retired so stale uses fail to compile.
+// These maxima exist ONLY to size static buffers; all arithmetic must use the
+// backend-reported values, captured by TR_FlightLog::begin().
+constexpr uint32_t NAND_PAGE_SIZE_MAX   = 4096;
+constexpr uint32_t NAND_BLOCK_COUNT_MAX = 2048;
 
 // ---- Block state (2 bits per block in the persistent bitmap) ----
 enum BlockState : uint8_t {
@@ -25,7 +27,7 @@ enum BlockState : uint8_t {
 // CRC covers everything after the crc32 field (magic + seq + flight_id +
 // payload) so a bit-flip anywhere in the page is detected by the scanner.
 struct __attribute__((packed)) PageHeader {
-    uint32_t crc32;         // CRC32 over bytes[4..NAND_PAGE_SIZE-1]
+    uint32_t crc32;         // CRC32 over bytes[4..runtime_page_size-1]
     uint32_t magic;         // FPAG_MAGIC
     uint32_t seq_number;    // monotonic within the flight
     uint32_t flight_id;     // matches FlightIndexEntry.flight_id
