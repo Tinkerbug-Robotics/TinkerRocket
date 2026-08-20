@@ -18,11 +18,20 @@
 // so V9/V10 firmware kept driving an MRAM_CS that goes nowhere and backed the
 // log ring + reboot snapshot with an unfitted chip. The two headers differ in
 // exactly one value, MRAM_CS (34 vs -1); keep every other pin in step by hand.
+#ifndef TR_BOARD_V7
+#define TR_BOARD_V7 0
+#endif
 #ifndef TR_BOARD_V8
 #define TR_BOARD_V8 0
 #endif
 #ifndef TR_BOARD_V9
 #define TR_BOARD_V9 0
+#endif
+// No default (#834 sweep). main/CMakeLists.txt raises the same error with a
+// friendlier message; this is the backstop for anything that includes config.h
+// without going through it.
+#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1 or -DTR_BOARD_V9=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, and V9/V10 needs the sdkconfig overlay that enables its PSRAM log ring."
 #endif
 #if TR_BOARD_V8
 #include "board/board_v8.h"

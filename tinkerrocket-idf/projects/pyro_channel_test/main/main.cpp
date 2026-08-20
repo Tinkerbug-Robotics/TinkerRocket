@@ -68,6 +68,33 @@ static const char* TAG = "PYRO_DBG";
 #error "Pick one board: -DTR_BOARD_V8=1 or -DTR_BOARD_V9=1, not both."
 #endif
 
+// Board revision is MANDATORY here, with no default (#834).
+//
+// This tool drives squib FETs by hand, and the three maps disagree on exactly
+// the pins that matter. Falling through to V7 on a V9 board is not a
+// mis-labelled test, it is a live arming hazard: V7's "PYRO1 FIRE" is GPIO16,
+// which on V9 is PYRO_ARM itself — the U9 arming-FET gate through R21 — so
+// pressing 'f' on channel 1 arms the board while the tool's ARM indicator
+// tracks GPIO14, which on V9 is PYRO4_CONT, an input that never moves. None of
+// V9's four real FIRE pins (6/9/11/13) gets touched, so every reading looks
+// wrong-but-harmless right up until the moment it isn't.
+//
+// main/CMakeLists.txt raises the same error with a friendlier message; this is
+// the backstop for anything that reaches this file another way. Mirrors
+// flight_computer/main/config.h, which made the same call for the same reason.
+#ifndef TR_BOARD_V7
+#define TR_BOARD_V7 0
+#endif
+#ifndef TR_BOARD_V8
+#define TR_BOARD_V8 0
+#endif
+#ifndef TR_BOARD_V9
+#define TR_BOARD_V9 0
+#endif
+#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1 or -DTR_BOARD_V9=1. There is no default — this tool fires squib drivers by hand, and V7's PYRO1 FIRE pin (GPIO16) is V9's PYRO_ARM."
+#endif
+
 #if TR_BOARD_V9
 #define TR_BOARD_REV_STR "V9/V10"
 #elif TR_BOARD_V8
