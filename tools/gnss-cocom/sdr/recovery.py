@@ -22,6 +22,7 @@ as such rather than being silently attributed to the following window.
 from __future__ import annotations
 
 import argparse
+import statistics
 import json
 import sys
 from pathlib import Path
@@ -108,7 +109,17 @@ def main() -> int:
         during = [r[2].tracked_sats() for r in rows if w_end <= r[0] <= wait_end]
         sat_lo = min(during) if during else None
         sat_hi = max(during) if during else None
-        sats_txt = (f"{sat_lo}-{sat_hi}" if sat_lo is not None else "--")
+        # The bare minimum is not a safe basis for "was the receiver starved?".
+        # One transient epoch drags it to zero: the Air530 tracks 12-14
+        # satellites at 50 dBHz continuously and still drops a single GSV set
+        # every ~70 s, which made a genuinely slow gate read as re-acquisition
+        # and got a real finding dismissed. Judge on the median, and report how
+        # much of the wait was actually starved.
+        sat_med = statistics.median(during) if during else None
+        starved = sum(1 for x in during if x < 4)
+        starved_frac = (starved / len(during)) if during else 0.0
+        sats_txt = (f"{sat_lo}-{sat_hi} (med {sat_med:.0f})"
+                    if sat_lo is not None else "--")
 
         print(f"{i:>7} {limit:<10} "
               f"{(f'{shut:.1f}s' if shut is not None else 'never'):>9} "
@@ -119,7 +130,8 @@ def main() -> int:
               f"{sats_txt:>13}")
         results.append(dict(window=i, limit=limit, shut_at=shut, shut_lag=lag,
                             clear_at=w_end, recovered_at=rec, latency_s=lat,
-                            sats_min=sat_lo, sats_max=sat_hi))
+                            sats_min=sat_lo, sats_max=sat_hi, sats_med=sat_med,
+                            starved_frac=starved_frac))
 
     print()
     got = [r for r in results if r["latency_s"] is not None]
@@ -132,17 +144,30 @@ def main() -> int:
             where = (f"{tr['alt_m']/1000:.1f} km, {tr['speed_mps']:.0f} m/s"
                      if tr else "")
             note = ""
-            if r["sats_min"] is not None and r["sats_min"] < 4:
-                note = (f"  -- but only {r['sats_min']} satellite(s) were "
-                        f"tracked during the wait,\n          so this is "
-                        f"re-acquisition time, not the gate")
+            med, frac = r.get("sats_med"), r.get("starved_frac", 0.0)
+            if med is not None and med < 4:
+                note = (f"  -- but the median was only {med:.0f} satellite(s) "
+                        f"during the wait,\n          so this is re-acquisition "
+                        f"time, not the gate")
+            elif frac > 0.25:
+                note = (f"  -- {100*frac:.0f}% of the wait had fewer than 4 "
+                        f"satellites,\n          so treat this latency as a "
+                        f"mix of gate and re-acquisition")
+            elif med is not None and med >= 4:
+                note = (f"  -- {med:.0f} satellites held throughout, so this is "
+                        f"the gate,\n          not re-acquisition")
             print(f"RECOVERY: {r['limit']} gate re-opened {r['latency_s']:.1f} s "
                   f"after the limit cleared,\n          at {where}{note}")
     missed = [r for r in results if r["latency_s"] is None
               and r["shut_at"] is not None]
     for r in missed:
+        med = r.get("sats_med")
+        held = (f" The receiver held a median of {med:.0f} satellites through "
+                f"that whole\n              interval, so the position was being "
+                f"withheld, not searched for."
+                if med is not None and med >= 4 else "")
         print(f"NO RECOVERY in window {r['window']} ({r['limit']}): no fix "
-              f"between {r['clear_at']:.1f}s and the next limit exceedance.")
+              f"between {r['clear_at']:.1f}s and the next limit exceedance.{held}")
     if not got and not missed:
         print("The receiver never lost its fix. Either the flight never "
               "exceeded a limit\nor it was not locked to begin with.")

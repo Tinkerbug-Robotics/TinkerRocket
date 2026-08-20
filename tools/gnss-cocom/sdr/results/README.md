@@ -183,6 +183,42 @@ Velocity edges bracket **(514, 518] m/s**. The altitude bracket *inverts* --
 part lags **+2.3 s and +3.3 s on closing** the altitude gate, 400-600 m of
 overshoot at climb speed. Its descending edges are crisp and agree at ~80.1 km.
 
+## Air530 / AT6558R, conducted (2026-08-20)
+
+GPS + BeiDou, **NMEA 0183 at 9600**, on a CP2102 USB-UART through the same 70 dB
+pad. TX gain **32**. No configuration needed or possible: it ignores `$PCAS01`,
+so it cannot be moved off 9600 by that command. NMEA is sufficient here -- GGA
+reporting no fix while GSV still lists satellites *is* the BLOCKED/NO_LOCK
+distinction, and ground truth comes from the injected trajectory, not the
+receiver's own speed.
+
+| Capture | Boost | Result |
+|---|---|---|
+| `air530_spaceshot` | 15 g | w1/w2 never re-opened; w3 took **134.1 s**. Held a fix at **1334 m/s** before closing |
+| `air530_gentle_alt` | 3 g | w1/w2 never re-opened; w3 took **62.9 s**. Blocked for 76% of the flight |
+| `air530_gentle_alt_coldrun` | 3 g | first attempt, kept for the record: acquired only at t~200 s, so its recovery numbers are contaminated |
+
+**This part is the outlier.** It enforces both limits, and the signature is the
+usual one -- position withheld while a median of 12-13 satellites stay tracked at
+~50 dBHz. But both gate edges are latent. It closes **1.6-8.9 s late**, which on
+a 15 g boost means publishing a valid fix at two and a half times the limit, so
+its velocity bracket measures its latency rather than a threshold. And it
+re-opens **31-134 s** late, twice not at all before the next exceedance, against
+0.0-1.5 s everywhere else.
+
+Two things this run fixed in the tooling, both of which had been quietly wrong:
+
+* `recovery.py` judged "was the receiver starved?" on the **minimum** satellite
+  count across the wait. The Air530 drops a single GSV set about every 70 s, and
+  that one transient epoch pulled the minimum to 1 and made the tool dismiss a
+  real slow gate as "re-acquisition time, not the gate". It now judges on the
+  median and reports what fraction of the wait was actually starved. Both u-blox
+  parts reproduce their previous latencies exactly.
+* `align_start.py` only parsed UBX. It now reads NMEA GGA too, working in
+  seconds-of-day so one routine serves every receiver. Note the Air530's RMC date
+  reads **2007** rather than 2026 -- exactly 1024 weeks, a GPS week-number
+  rollover -- so pass `-t` explicitly rather than trusting the date it reports.
+
 ## Receivers compared
 
 Generated from `results/receivers.json` by `receiver_table.py` -- edit the JSON
@@ -193,6 +229,7 @@ and re-run it rather than hand-editing this table or the one in `report.html`.
 | SkyTraq PX1125R | L1 + L5 | conducted | 9 | 510-517 m/s | 79.90-80.20 km | none | independent | 0.0-1.5 s | 2 / 7 |
 | u-blox SAM-M10Q | L1 (GPS/GAL/BDS/GLO) | radiated, Faraday cage | 2 | 514-516 m/s | ~80.16 km | none | independent | 0.0-1.1 s | 4 / 13 |
 | u-blox ZED-F9P (ArduSimple) | L1 + L2 (L1 used here) | conducted | 2 | 514-518 m/s | 80.22-80.48 km † | none | independent | 0.1-1.0 s | 6 / 13 |
+| Air530 (AT6558R) | L1 (GPS + BeiDou) | conducted | 2 | 538-1334 m/s † | -- | none | independent | 31.0-134.1 s | 0 / 12 |
 
 **SkyTraq PX1125R** (2026-08-19, ~70 dB pad + DC block into RF_IN, TX gain 44-47): Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified.
 
@@ -200,12 +237,15 @@ and re-run it rather than hand-editing this table or the one in `report.html`.
 
 **u-blox ZED-F9P (ArduSimple)** (2026-08-20, 70 dB pad, TX gain 38): Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. Uniquely among the three parts it is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. Its descending edges are crisp and agree at ~80.1 km.
 
-&dagger; marks an inverted bracket: a value that still held a fix sitting above
-one that was withheld, which happens when a receiver is slow to close the gate.
-It is a latency, not a threshold difference.
+**Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): The outlier, and the reason the slow flight matters. It enforces both limits -- position is withheld while 12-13 satellites stay tracked at ~50 dBHz -- but both edges are badly latent. It is 1.6-8.9 s LATE to close, so on the 15 g boost it published a valid fix at 1334 m/s, two and a half times the limit, which is why its velocity bracket inverts rather than measuring anything. Re-opening is worse: 31 s, 63 s and 134 s across the two flights, and two windows never re-opened at all before the next limit was exceeded, against 0.0-1.5 s for the other three parts. Its RMC date also reads 2007 rather than 2026 -- exactly 1024 weeks, a GPS week-number rollover -- though time-of-day is correct so the measurement is unaffected. Ignores $PCAS01, so it cannot be moved off 9600 baud by that command.
 
-Across all three parts the velocity limit brackets to **(514, 516] m/s** and the
+&dagger; marks an inverted bracket: a value that still held a fix sitting above
+one that was withheld. On the F9P that is a 2-3 s closing lag; on the Air530 the
+latency is so large the bracket carries no threshold information at all.
+
+Across the four parts the velocity limit brackets to **(514, 516] m/s** and the
 altitude limit to **80 km**, with no 18 km gate anywhere and both limits always
-independent. More parts are planned against the same trajectories. To add one:
-fly `spaceshot` and `gentle_alt`, archive the capture and its scenario here, add
-an entry to `receivers.json`, and regenerate.
+independent. What varies enormously is **re-open latency**: under 1.5 s on three
+parts, 31-134 s on the Air530. More parts are planned against the same
+trajectories. To add one: fly `spaceshot` and `gentle_alt`, archive the capture
+and its scenario here, add an entry to `receivers.json`, and regenerate.

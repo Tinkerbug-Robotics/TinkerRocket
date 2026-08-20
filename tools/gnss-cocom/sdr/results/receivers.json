@@ -78,6 +78,30 @@
    "sats_min": 6,
    "sats_median": 13,
    "notes": "Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. Uniquely among the three parts it is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. Its descending edges are crisp and agree at ~80.1 km."
+  },
+  {
+   "id": "air530",
+   "part": "Air530 (AT6558R)",
+   "bands": "L1 (GPS + BeiDou)",
+   "protocol": "NMEA 0183 @ 9600",
+   "host": "CP2102 USB-UART",
+   "path": "conducted",
+   "rf": "70 dB pad, TX gain 32",
+   "date": "2026-08-20",
+   "runs": 2,
+   "velocity_fix_max_mps": 1334,
+   "velocity_blocked_min_mps": 538,
+   "altitude_fix_max_km": null,
+   "altitude_blocked_min_km": null,
+   "gate_18km": false,
+   "combination": "independent",
+   "recovery_s": [
+    31.0,
+    134.1
+   ],
+   "sats_min": 0,
+   "sats_median": 12,
+   "notes": "The outlier, and the reason the slow flight matters. It enforces both limits -- position is withheld while 12-13 satellites stay tracked at ~50 dBHz -- but both edges are badly latent. It is 1.6-8.9 s LATE to close, so on the 15 g boost it published a valid fix at 1334 m/s, two and a half times the limit, which is why its velocity bracket inverts rather than measuring anything. Re-opening is worse: 31 s, 63 s and 134 s across the two flights, and two windows never re-opened at all before the next limit was exceeded, against 0.0-1.5 s for the other three parts. Its RMC date also reads 2007 rather than 2026 -- exactly 1024 weeks, a GPS week-number rollover -- though time-of-day is correct so the measurement is unaffected. Ignores $PCAS01, so it cannot be moved off 9600 baud by that command."
   }
  ]
 }

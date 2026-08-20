@@ -31,8 +31,10 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
 
-from ublox_binary import (iter_frames, parse_nav_pvt, parse_nav_sat,   # noqa: E402
-                          CLS_NAV, MSG_NAV_PVT, MSG_NAV_SAT)
+# The shared monitor demuxes NMEA, SkyTraq binary and UBX, so one sweep works
+# for every receiver on this bench rather than one variant per protocol -- and
+# it applies the same FIX / BLOCKED / NO_LOCK classifier the measurement uses.
+from gnss_nmea_monitor import Parser, _demux                           # noqa: E402
 from ensure_hackrf import ensure_hackrf                                # noqa: E402
 
 TX_ERR = "/tmp/hackrf_gain_sweep.err"
@@ -68,31 +70,30 @@ def stop_tx(tx):
 def dwell(ser, seconds: float):
     """Watch one gain step; return (best_sat_count, median C/N0, got_fix)."""
     import statistics
+    p = Parser()
     buf = bytearray()
-    sats, best_n, cn0s, fix = {}, 0, [], False
+    best_n, cn0s, fix = 0, [], False
     ser.reset_input_buffer()
     t0 = time.time()
     while time.time() - t0 < seconds:
-        buf.extend(ser.read(ser.in_waiting or 1))
-        for cls, mid, pl in iter_frames(buf):
-            if cls != CLS_NAV:
-                continue
-            if mid == MSG_NAV_SAT:
-                best = {}
-                for x in parse_nav_sat(pl) or []:
-                    k = (x["gnss_name"], x["svid"])
-                    best[k] = max(best.get(k, -99), x["cn0"])
-                sats = best
-            elif mid == MSG_NAV_PVT:
-                r = parse_nav_pvt(pl)
-                if not r:
-                    continue
-                fix = fix or r["has_fix"]
-                live = [v for v in sats.values() if v >= 30]
-                if len(live) >= best_n:
-                    best_n = len(live)
-                    if live:
-                        cn0s = sorted(live)
+        chunk = ser.read(ser.in_waiting or 1)
+        if not chunk:
+            continue
+        buf.extend(chunk)
+        for kind, data in _demux(buf):
+            if kind == "nmea":
+                p.feed(data)
+            elif kind == "bin":
+                p.feed_binary(data)
+            elif kind == "ubx":
+                p.feed_ubx(data)
+        n = p.epoch.tracked_sats()
+        if n >= best_n:
+            best_n = n
+            c = p.epoch.mean_cn0()
+            if c:
+                cn0s.append(c)
+        fix = fix or p.epoch.verdict() == "FIX"
     med = statistics.median(cn0s) if cn0s else 0.0
     return best_n, med, fix
 
@@ -100,7 +101,10 @@ def dwell(ser, seconds: float):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("-p", "--port", default="/dev/cu.usbmodem101")
+    ap.add_argument("-p", "--port", default="auto",
+                    help="serial port; 'auto' resolves a u-blox by vendor id")
+    ap.add_argument("-b", "--baud", type=int, default=115200,
+                    help="9600 for an Air530/AT6558R; ignored on native USB")
     ap.add_argument("-s", "--scenario", default="t00_static")
     ap.add_argument("-g", "--gains", default="8,14,20,26,32,38,44,47")
     ap.add_argument("--dwell", type=float, default=35.0)
@@ -124,7 +128,10 @@ def main() -> int:
     print("  " + "-" * 40)
 
     rows = []
-    with serial.Serial(args.port, 115200, timeout=0.3) as ser:
+    from find_ublox import find_ublox
+    port = find_ublox(args.port) or args.port
+    print(f"# receiver on {port} @ {args.baud}\n")
+    with serial.Serial(port, args.baud, timeout=0.3) as ser:
         for i, g in enumerate(gains):
             tx = start_tx(c8, args.freq, args.rate, g)
             if tx is None:

@@ -39,21 +39,63 @@ WEEK = 7 * 86400
 
 
 def fixes_from_capture(cap: Path):
-    """(tow_s, alt_m) for every epoch that reported a valid fix."""
+    """(seconds_of_day, alt_m, date) for every epoch that reported a valid fix.
+
+    Seconds-of-day rather than time-of-week, because that is the one unit both
+    protocols can express: UBX carries iTOW, NMEA carries a wall clock. The
+    scenario start is always a whole minute inside a single day, so nothing is
+    lost by folding the week away, and it means one alignment routine serves a
+    u-blox, a SkyTraq and an Air530 alike.
+    """
     out = []
     for line in cap.read_text(errors="replace").splitlines():
         p = line.split()
-        if len(p) != 3 or p[1] != "U":
+
+        # --- UBX: "<t> U <hex>" ---------------------------------------------
+        if len(p) == 3 and p[1] == "U":
+            try:
+                d = bytes.fromhex(p[2])
+            except ValueError:
+                continue
+            if len(d) > 2 and d[0] == CLS_NAV and d[1] == MSG_NAV_PVT:
+                r = parse_nav_pvt(d[2:])
+                if r and r["has_fix"]:
+                    out.append((r["itow_ms"] / 1000.0 % 86400.0, r["alt_m"], None))
+            continue
+
+        # --- NMEA: "<t> $GNGGA,..." ------------------------------------------
+        i = line.find("$")
+        if i < 0:
+            continue
+        f = line[i:].split(",")
+        if len(f) < 10 or f[0][3:6] != "GGA":
             continue
         try:
-            d = bytes.fromhex(p[2])
-        except ValueError:
+            # quality 0 is "no fix"; anything else is a position we can use.
+            if int(f[6]) == 0:
+                continue
+            hh, mm, ss = int(f[1][0:2]), int(f[1][2:4]), float(f[1][4:])
+            alt = float(f[9])
+        except (ValueError, IndexError):
             continue
-        if len(d) > 2 and d[0] == CLS_NAV and d[1] == MSG_NAV_PVT:
-            r = parse_nav_pvt(d[2:])
-            if r and r["has_fix"]:
-                out.append((r["itow_ms"] / 1000.0, r["alt_m"]))
+        out.append((hh * 3600 + mm * 60 + ss, alt, None))
     return out
+
+
+def date_from_capture(cap: Path):
+    """UTC date from the first valid NMEA RMC, or None (UBX carries its own)."""
+    for line in cap.read_text(errors="replace").splitlines():
+        i = line.find("$")
+        if i < 0:
+            continue
+        f = line[i:].split(",")
+        if len(f) < 10 or f[0][3:6] != "RMC" or f[2] != "A":
+            continue
+        d = f[9]
+        if len(d) == 6 and d.isdigit():
+            dd, mo, yy = int(d[0:2]), int(d[2:4]), int(d[4:6])
+            return datetime.date(2000 + yy, mo, dd)
+    return None
 
 
 def tow_to_utc(tow: float, near: datetime.datetime) -> datetime.datetime:
@@ -78,7 +120,7 @@ def align(cap: Path, scenario: Path, search_s: float = 600.0):
     hi = int(first_tow // 60) * 60 + 60
     for cand in range(lo, hi + 1, 60):
         errs = []
-        for tow, alt in fx:
+        for tow, alt, _ in fx:
             t = tow - cand
             if 0.0 <= t <= dur:
                 errs.append(abs(alt - truth.at(t)["alt_m"]))
@@ -107,11 +149,19 @@ def main() -> int:
         return 1
     cand, med, n = best
 
-    # Any week in 2026 resolves the same TOW identically; anchor near the build.
-    utc = tow_to_utc(cand, datetime.datetime(2026, 8, 19))
+    nmea_date = date_from_capture(args.capture)
+    if nmea_date is not None:
+        utc = datetime.datetime.combine(nmea_date, datetime.time()) + \
+            datetime.timedelta(seconds=cand)
+    else:
+        # Any week in 2026 folds to the same seconds-of-day; anchor near the build.
+        base = tow_to_utc(0, datetime.datetime(2026, 8, 19))
+        utc = datetime.datetime.combine(base.date(), datetime.time()) + \
+            datetime.timedelta(seconds=cand)
+        utc = utc.replace(year=2026, month=8, day=18)
     stamp = utc.strftime("%Y/%m/%d,%H:%M:%S")
     print(f"{args.capture.name} vs {args.scenario.stem}")
-    print(f"  start TOW    : {cand}")
+    print(f"  start (s-o-d): {cand}")
     print(f"  start (UTC)  : {stamp}")
     print(f"  aligned on   : {n} fix epochs")
     print(f"  median resid : {med:.0f} m")

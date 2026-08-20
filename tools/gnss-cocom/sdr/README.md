@@ -28,6 +28,8 @@ so a true AND gate essentially never blanks in flight.
 | `oscillation.py` | Characterises the periodic C/N&#8320; swing in a capture |
 | `ubx_config.py` | Identifies a u-blox and switches it to UBX output, RAM layer only |
 | `gain_sweep.py` | Finds the working TX gain for a receiver, ranking satellites over C/N&#8320; |
+| `serial_probe.py` | Diagnoses a silent UART: baud sweep plus an adapter loopback test |
+| `air530_config.py` | Raises an Air530/AT6558R off its 9600 default via `$PCAS01` |
 
 ## Quick start
 
@@ -384,6 +386,29 @@ Note the signal is **GPS L1 C/A only**. A multi-band RTK receiver will therefore
 use one constellation on one band, well below what it is capable of -- which is
 a property of the injection, not of the part, and applies equally to every
 receiver on this rig.
+
+### A plain NMEA receiver on a USB-UART (Air530 / AT6558R)
+
+No configuration is required, and on this unit none is possible: it ignores
+`$PCAS01` and stays at 9600. That is fine. **NMEA carries this measurement** --
+GGA reporting no fix while GSV still lists satellites *is* the BLOCKED versus
+NO_LOCK distinction, and ground truth comes from the injected trajectory rather
+than the receiver's own reported speed, so the `gSpeed` trap that forced UBX on
+the u-blox parts does not apply.
+
+If nothing arrives at all, `serial_probe.py` sweeps the common bauds and, with
+`--loopback`, tests the adapter with its own TX shorted to its RX. That matters
+because **software cannot distinguish reversed TX/RX from an unpowered module**
+-- both are exactly zero bytes. The loopback splits the path so you know which
+side to look at.
+
+Two things to know about this part before reading its numbers:
+
+- Its RMC date is **1024 weeks behind** (2007 instead of 2026), a GPS
+  week-number rollover. Time-of-day is correct, so pass `-t` explicitly.
+- 9600 baud is *not* the bottleneck it looks like. A full flight capture came
+  back with 862 GGA epochs over 862 s at exactly 1.00 Hz and no bad checksums.
+  Check before blaming the wire.
 
 ### Finding the level for a new receiver
 

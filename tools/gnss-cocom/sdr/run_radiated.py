@@ -188,6 +188,17 @@ def main() -> int:
                     else:
                         fh.write(f"{t:.3f} {data}\n")
                         p.feed(data)
+                        # An NMEA receiver has no NAV-PVT to trigger the row
+                        # below, so drive the display off GGA instead -- without
+                        # this the run looks dead for its whole duration while
+                        # capturing perfectly.
+                        if data[3:6] == "GGA" and t - last >= 5:
+                            last = t
+                            e = p.epoch
+                            print(f"{t:>6.0f} {'FIX' if e.verdict()=='FIX' else '-':<10} "
+                                  f"{e.verdict():<8} {e.tracked_sats():>5} "
+                                  f"{'':>5} {'':>10} {'':>11} {'':>9} "
+                                  f"{(e.mean_cn0() or 0):>8.0f}")
                         continue
                     if kind == "ubx" and len(data) >= 2 and \
                             data[0] == CLS_NAV and data[1] == MSG_NAV_SAT:
