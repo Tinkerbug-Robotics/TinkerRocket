@@ -61,6 +61,13 @@ struct config : board_pins
     static constexpr bool DEBUG = true;  // Re-enabled (needed for telemetry updates)
     static constexpr bool VERBOSE_DEBUG = false;  // Temporarily disabled to see BLE output
     static constexpr uint32_t STATS_PERIOD_MS = 1000;
+
+    // #831: how long the OC keeps calling its FC-sourced telemetry LIVE after
+    // the last NonSensorData frame.  The FC sends those at
+    // NON_SENSOR_UPDATE_RATE = 500 Hz, so 3 s is ~1500 missed frames — far
+    // beyond any I2S hiccup, and matched to the base station's own
+    // BLE_TELEMETRY_STALE_MS so both transports age their data alike.
+    static constexpr uint32_t FC_FRAME_STALE_MS = 3000;
     // #398: dump per-task CPU utilization once per stats interval (the "TASKCPU"
     // line) to identify the core-1 hog during the launch-activation window.
     // Requires the run-time-stats sdkconfig flags; set false to silence.
