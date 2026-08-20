@@ -635,6 +635,37 @@ target_include_directories(test_nand_geometry PRIVATE
 target_link_libraries(test_nand_geometry GTest::gtest_main)
 gtest_discover_tests(test_nand_geometry)
 
+# ---------- test_snapshot_tail_scan (#846) ----------
+# The OC's boot re-seed of the snapshot cache: real TR_FlightLog over the
+# fake NAND, parameterized over both page geometries, exercising the carry
+# logic on frames straddling page-payload boundaries.
+add_executable(test_snapshot_tail_scan
+    test_snapshot_tail_scan.cpp
+    fakes/fake_nand_backend.cpp
+    ${LIB_DIR}/TR_FlightLog/TR_FlightLog.cpp
+    ${LIB_DIR}/TR_FlightLog/BlockStateBitmap.cpp
+    ${LIB_DIR}/TR_FlightLog/FlightIndex.cpp
+    ${LIB_DIR}/TR_FlightLog/TR_NandBackend_esp.cpp
+    ${LIB_DIR}/TR_FlightLog/NvsBitmapStore.cpp
+    ${LIB_DIR}/CRC/CRC.cpp
+    ${LIB_DIR}/CRC/CRC8.cpp
+    ${LIB_DIR}/CRC/CRC12.cpp
+    ${LIB_DIR}/CRC/CRC16.cpp
+    ${LIB_DIR}/CRC/CRC32.cpp
+    ${LIB_DIR}/CRC/CRC64.cpp
+    ${LIB_DIR}/CRC/CrcFastReverse.cpp
+    ${LIB_DIR}/CRC/FastCRC32.cpp
+)
+target_include_directories(test_snapshot_tail_scan PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_FlightLog/include
+    ${LIB_DIR}/TR_LogToFlash
+    ${LIB_DIR}/CRC
+)
+target_link_libraries(test_snapshot_tail_scan GTest::gtest_main)
+gtest_discover_tests(test_snapshot_tail_scan)
+
 # ---------- test_pwr_hold_policy (#848) ----------
 # FC power-hold latch boot reconciliation (P4_EN_HOLD): keep/release/assert
 # decision for a hold inherited across a reset. Pure header in the FC project.

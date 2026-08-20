@@ -79,7 +79,7 @@ this list is CI-enforced for uniqueness.
 | `0xD0` | `PYRO_FIRE_TEST` | — | test-fire a pyro channel from app |
 | `0xD1` | `IIS2MDC_MSG` | FC → OC | new-PCB IIS2MDC magnetometer raw frame |
 | `0xD2` | `SNAPSHOT_MSG` | FC → OC | FlightSnapshotData — FC→OC over I2S during INFLIGHT, |
-| `0xD3` | `GET_FLIGHT_SNAPSHOT` | FC → OC | FC→OC: request the latest snapshot from MRAM at boot |
+| `0xD3` | `GET_FLIGHT_SNAPSHOT` | FC → OC | FC→OC: request the latest snapshot from the OC's store at boot (RAM cache + NAND tail-scan; MRAM slot on… |
 | `0xD4` | `MAG_CAL_START` | OC → FC | OC→FC: enter MAG_CALIBRATION + begin sampling |
 | `0xD5` | `MAG_CAL_ABORT` | OC → FC | OC→FC: drop sampling, return to READY |
 | `0xD6` | `MAG_CAL_ACCEPT` | OC → FC | OC→FC: program new offsets, enter VERIFYING |

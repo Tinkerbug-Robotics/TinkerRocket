@@ -1912,7 +1912,7 @@ static constexpr uint8_t PYRO_FIRE_TEST            = 0xD0;  // test-fire a pyro 
 static constexpr uint8_t IIS2MDC_MSG          = 0xD1;  // new-PCB IIS2MDC magnetometer raw frame
 static constexpr uint8_t SNAPSHOT_MSG         = 0xD2;  // FlightSnapshotData — FC→OC over I2S during INFLIGHT,
                                                        // and OC→FC over I2C as the response to GET_FLIGHT_SNAPSHOT
-static constexpr uint8_t GET_FLIGHT_SNAPSHOT  = 0xD3;  // FC→OC: request the latest snapshot from MRAM at boot
+static constexpr uint8_t GET_FLIGHT_SNAPSHOT  = 0xD3;  // FC→OC: request the latest snapshot from the OC's store at boot (RAM cache + NAND tail-scan; MRAM slot on V7/V8 — #846)
 
 // --- Magnetometer hard-iron cal (issue #96) ---
 // OC→FC commands (passed via I2C as setPendingCommand byte) and a single

@@ -3764,8 +3764,9 @@ static void setup_fc()
     // ── Inflight reboot recovery ────────────────────────────────────────────
     // If the reset was unexpected (brownout, watchdog, panic), query the OC
     // for the latest snapshot it received over I2S and restore state to
-    // resume INFLIGHT ops.  Snapshot lives in OC's MRAM (non-volatile, no
-    // FC flash writes — see #104).
+    // resume INFLIGHT ops.  The snapshot lives in the OC's RAM cache, backed
+    // by the NAND log stream on no-MRAM boards and the MRAM slot on V7/V8
+    // (#104, #846) — no FC flash writes either way.
     {
         esp_reset_reason_t rst = esp_reset_reason();
         ESP_LOGI(TAG, "Reset reason: %s (%d)", resetReasonStr(rst), (int)rst);
@@ -3779,14 +3780,46 @@ static void setup_fc()
         FlightSnapshotData snap = {};
         bool valid = false;
 
-        if (unexpected_reset && !out_ready) {
-            ESP_LOGW(TAG, "[RECOVERY] OC not ready — skipping snapshot recovery");
-        }
-        else if (unexpected_reset) {
-            // Send GET_FLIGHT_SNAPSHOT request, then read the SNAPSHOT_MSG
-            // response.  OC reads from MRAM (~150 us) and queues the
-            // ~224-byte response into its I2C TX ringbuffer (256 B).
-            if (i2c_interface.sendMessage(GET_FLIGHT_SNAPSHOT, nullptr, 0) == ESP_OK) {
+        if (unexpected_reset) {
+            // #364/#846: bounded retries instead of the old single-shot. The
+            // both-reset case (pack brownout) is exactly when the one boot
+            // probe misses — the OC is still bringing its I2C slave up — and
+            // a silently-skipped recovery mid-descent is a ballistic. Five
+            // attempts ~350 ms apart bound the extra boot time at ~1.75 s,
+            // spent ONLY on unexpected-reset boots. Between attempts the OC
+            // gets a fresh OUT_STATUS_QUERY (full-length read — an aborted
+            // short read would desync its V2 slave TX ring, #399), and a
+            // failed snapshot read gets an I2C_TX_RESYNC first (#402; the
+            // bus is idle here by construction — nothing else polls during
+            // setup). A definitive answer (valid restore, sim refusal, or a
+            // LANDED/garbage frame that parsed) stops the retries; only
+            // transport failures continue.
+            constexpr int kRecoveryAttempts = 5;
+            (void)out_ready;   // no longer a precondition — see below
+            bool definitive = false;
+            for (int attempt = 0; attempt < kRecoveryAttempts && !definitive;
+                 ++attempt) {
+                if (attempt > 0) delay_ms(350);
+
+                // Deliberately NOT gated on out_ready. That gate IS #364: a
+                // single unretried boot probe, taken seconds earlier (the
+                // servo wiggle alone can be 4.2 s), decided recovery was
+                // impossible and the FC cold-started mid-descent. The ask
+                // below is its own liveness test — if the OC is not up, the
+                // read fails and we retry; if it is, we get the answer. No
+                // second status query: re-probing would also pop the OC's
+                // queued-command slot (CMD_REPEAT_LIMIT) for a reply this
+                // path discards.
+
+                // Send GET_FLIGHT_SNAPSHOT, then read the SNAPSHOT_MSG
+                // response. The OC serves its RAM cache (#846) — seeded live
+                // over I2S, or at boot from the NAND log stream — with the
+                // V7/V8 MRAM slot as fallback.
+                if (i2c_interface.sendMessage(GET_FLIGHT_SNAPSHOT, nullptr, 0) != ESP_OK) {
+                    ESP_LOGW(TAG, "[RECOVERY] Failed to send GET_FLIGHT_SNAPSHOT (attempt %d/%d)",
+                             attempt + 1, kRecoveryAttempts);
+                    continue;
+                }
                 delay_ms(20);  // let OC service the request and queue the response
 
                 constexpr size_t kRespFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
@@ -3798,49 +3831,65 @@ static void setup_fc()
                 // status-path residue bug. Buffer keeps slack for the scan.
                 uint8_t buf[kRespFrameLen + 16] = {};
                 esp_err_t rerr = i2c_interface.masterRead(buf, kRespFrameLen, 100);
-                if (rerr == ESP_OK) {
-                    // SOF scan — same defensive pattern as the [CFG READ] path.
-                    for (size_t off = 0; off + kRespFrameLen <= sizeof(buf); off++) {
-                        if (buf[off] == 0xAA && buf[off+1] == 0x55 &&
-                            buf[off+2] == 0xAA && buf[off+3] == 0x55 &&
-                            buf[off+4] == SNAPSHOT_MSG) {
-                            uint8_t type = 0;
-                            uint8_t payload[sizeof(FlightSnapshotData)] = {};
-                            size_t  payload_len = 0;
-                            if (TR_I2C_Interface::unpackMessage(
-                                    buf + off, kRespFrameLen,
-                                    type, payload, sizeof(payload),
-                                    payload_len, true) &&
-                                type == SNAPSHOT_MSG &&
-                                payload_len == sizeof(FlightSnapshotData)) {
-                                memcpy(&snap, payload, sizeof(FlightSnapshotData));
-                                if (snap.magic   == FlightSnapshotData::MAGIC &&
-                                    snap.version == FlightSnapshotData::VERSION &&
-                                    snap.rocket_state == (uint8_t)INFLIGHT &&
-                                    snap.crc32 == computeSnapshotCRC(snap)) {
-                                    if (snap.sim_flight) {
-                                        // The dry-fire gate lives in isSimActive(),
-                                        // which a reboot resets — restoring here
-                                        // would fire real pyro outputs on bench
-                                        // igniters mid-sim.
-                                        ESP_LOGW(TAG, "[RECOVERY] Snapshot is from a SIMULATED flight — refusing restore");
-                                    } else {
-                                        valid = true;
-                                    }
+                if (rerr != ESP_OK) {
+                    ESP_LOGW(TAG, "[RECOVERY] I2C read for snapshot failed: %s (attempt %d/%d)",
+                             esp_err_to_name(rerr), attempt + 1, kRecoveryAttempts);
+                    // The aborted read may have desynced the OC's slave TX
+                    // ring — ask it to reset before the next attempt (#402).
+                    (void)i2c_interface.sendMessage(I2C_TX_RESYNC, nullptr, 0);
+                    continue;
+                }
+                // SOF scan — same defensive pattern as the [CFG READ] path.
+                for (size_t off = 0; off + kRespFrameLen <= sizeof(buf); off++) {
+                    if (buf[off] == 0xAA && buf[off+1] == 0x55 &&
+                        buf[off+2] == 0xAA && buf[off+3] == 0x55 &&
+                        buf[off+4] == SNAPSHOT_MSG) {
+                        uint8_t type = 0;
+                        uint8_t payload[sizeof(FlightSnapshotData)] = {};
+                        size_t  payload_len = 0;
+                        if (TR_I2C_Interface::unpackMessage(
+                                buf + off, kRespFrameLen,
+                                type, payload, sizeof(payload),
+                                payload_len, true) &&
+                            type == SNAPSHOT_MSG &&
+                            payload_len == sizeof(FlightSnapshotData)) {
+                            memcpy(&snap, payload, sizeof(FlightSnapshotData));
+                            if (snap.magic   == FlightSnapshotData::MAGIC &&
+                                snap.version == FlightSnapshotData::VERSION &&
+                                snap.rocket_state == (uint8_t)INFLIGHT &&
+                                snap.crc32 == computeSnapshotCRC(snap)) {
+                                if (snap.sim_flight) {
+                                    // The dry-fire gate lives in isSimActive(),
+                                    // which a reboot resets — restoring here
+                                    // would fire real pyro outputs on bench
+                                    // igniters mid-sim.
+                                    ESP_LOGW(TAG, "[RECOVERY] Snapshot is from a SIMULATED flight — refusing restore");
                                 } else {
-                                    ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
-                                             (unsigned long)snap.magic, snap.rocket_state,
-                                             (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
+                                    valid = true;
                                 }
-                                break;
+                                definitive = true;   // a real answer, either way
+                                // The OC demonstrably answered — latch it for
+                                // the #848/#859 hold reconciliation just below,
+                                // which would otherwise inherit a stale false.
+                                out_ready = true;
+                            } else {
+                                ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
+                                         (unsigned long)snap.magic, snap.rocket_state,
+                                         (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
+                                // A frame that PARSED but fails validation is
+                                // also definitive when it is a LANDED clear —
+                                // the flight genuinely ended. Garbage keeps
+                                // retrying (could be a torn TX ring).
+                                if (snap.magic == FlightSnapshotData::MAGIC &&
+                                    snap.crc32 == computeSnapshotCRC(snap)) {
+                                    definitive = true;
+                                }
+                                out_ready = true;   // the OC answered
                             }
+                            break;
                         }
                     }
-                } else {
-                    ESP_LOGW(TAG, "[RECOVERY] I2C read for snapshot failed: %s", esp_err_to_name(rerr));
                 }
-            } else {
-                ESP_LOGW(TAG, "[RECOVERY] Failed to send GET_FLIGHT_SNAPSHOT");
             }
         }
 
@@ -3956,8 +4005,14 @@ static void setup_fc()
             kinematics.launch_flag = true;
         }
 
-        // Clear stale snapshot on normal boot (prevents recovery on next power cycle)
-        if (!reboot_recovery) {
+        // Clear stale snapshot on NORMAL boots only (prevents recovery on the
+        // next power cycle). #834 item 3: after an UNEXPECTED reset whose
+        // recovery FAILED (OC not ready, transport error), the record must
+        // survive — a follow-up brownout gets another chance at it, and the
+        // clear-on-failure used to destroy the snapshot on exactly the path
+        // that could not read it. A truly ended flight is cleared by the
+        // LANDED one-shot and by the next clean power cycle.
+        if (!reboot_recovery && !unexpected_reset) {
             clearFlightSnapshot();
         }
     }
