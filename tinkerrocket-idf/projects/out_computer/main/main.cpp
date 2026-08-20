@@ -7033,7 +7033,7 @@ static void loop_oc()
         {
             ESP_LOGW("BLE", "Download '%s' refused: rocket INFLIGHT",
                      download_filename.c_str());
-            ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
+            (void)ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             download_filename = "";
         }
         if (download_filename.length() > 0)
@@ -7070,7 +7070,7 @@ static void loop_oc()
             {
                 ESP_LOGE("BLE", "chunk data size is 0, aborting download");
                 // #526: this is a failure, not a completed empty file.
-                ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
+                (void)ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             }
             else
             {
@@ -7224,17 +7224,17 @@ static void loop_oc()
                 // rather than named here.
                 ESP_LOGE("BLE", "Download ABORTED after %lu bytes",
                          (unsigned long)bytes_sent);
-                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
+                (void)ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
             }
             // Send remaining data with EOF flag
             else if (ble_used > 0)
             {
-                ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, true);
+                (void)ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, true);
                 bytes_sent += ble_used;
             }
             else
             {
-                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
+                (void)ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
             }
 
             // Redundant EOF in case the last notification was dropped. #526: it
@@ -7242,7 +7242,7 @@ static void loop_oc()
             // followed by a bare redundant EOF would resurrect the truncation bug
             // (the app would complete the partial file as if it were whole).
             delay(50);
-            ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/send_failed);
+            (void)ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/send_failed);
 
             uint32_t elapsed_ms = millis() - start_ms;
             float kbps = (elapsed_ms > 0) ? (bytes_sent / 1024.0f) / (elapsed_ms / 1000.0f) : 0;
