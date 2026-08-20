@@ -353,6 +353,37 @@ which `ublox_binary.py` handles:
   `fixType` with that flag clear while it is withholding, which is precisely the
   transition being measured.
 
-For a radiated test in a Faraday cage, note that L1's quarter wave is **47.6 mm**,
-not the 83 mm of a 900 MHz whip -- and that free-space loss at L1 is only 26 dB
-at 30 cm, so distance is the fine adjustment once the pad is set.
+### Radiated test in a Faraday cage
+
+`run_radiated.py` transmits a scenario and captures the receiver through a
+passive tap. `--listen-only` checks the tap without transmitting; `--list` shows
+candidate ports. It never writes to the receiver: the flight computer owns that.
+
+L1's quarter wave is **47.6 mm**, not the 83 mm of a 900 MHz whip. Free-space
+loss at L1 is only 26 dB at 30 cm, so with the separation fixed by the box, TX
+gain is the only live adjustment -- and with 100 dB of pad it runs out:
+
+    separation   path loss   TX gain for -130 dBm at the patch
+       0.20 m      22.4 dB     39      (8 dB of headroom)
+       0.30 m      25.9 dB     43      (4 dB)
+       0.40 m      28.4 dB     45      (2 dB)
+       0.50 m      30.4 dB     47      (at the limit)
+       1.00 m      36.4 dB     53      (unreachable)
+
+So **keep the separation at or under about 0.4 m with 100 dB**, or drop to 90 dB
+if the cage forces more. Two things push the other way and are worth knowing
+before adding pad: the `.C8` files are amplitude-boosted by `boost_c8.py`, worth
+about +5 dB, and the receiver tolerated a wide range of levels on the conducted
+bench. Sweep gain and let C/N0 decide, exactly as in section 6.
+
+Cage-specific traps, none of which the conducted setup has:
+
+- **Cable leakage.** USB cables through the wall carry RF out; the cage is only
+  as good as its feedthroughs. Bulkhead connectors, or clamp-on ferrites at the
+  wall on both sides. Verify with a phone's GPS just outside the closed cage
+  while transmitting -- if its position or C/N0 moves, the cage is not closing.
+- **Multipath.** A metal box is a resonant cavity. Standing waves give deep
+  nulls, and moving the receiver a few centimetres can swing C/N0 by 20 dB --
+  worse than the ~15 dB bench oscillation documented in the report, and easily
+  mistaken for it. Absorber around the receiver, and once a working position is
+  found, mark it and leave it alone.
