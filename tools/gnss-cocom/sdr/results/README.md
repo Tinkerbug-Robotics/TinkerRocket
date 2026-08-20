@@ -99,3 +99,28 @@ local horizontal plane, but from 82.5 km the horizon is 9.2 degrees below it. An
 allocateChannel accepts an elvMask parameter then ignores it, hardcoding 0.0 in
 its checkSatVisibility call. `patch_horizon.py` fixes both; at 40N the sim then
 transmits 14 satellites at 82.5 km against 11 on the ground.
+
+
+## The bench carries a ~15 dB, ~80 s C/N0 oscillation
+
+Asked what reduced the satellite count in the 3 g run when the 15 g run at the
+same site and hour held 15 satellites throughout. The answer is neither flight.
+
+Reported C/N0 oscillates by about 15 dB with a period near 80 s, and every
+satellite-count dip in every flight sits in one of its troughs -- the epochs
+below four satellites sat 14 dB and 38 dB under their own run's median. Cornered
+by elimination:
+
+  flight dynamics       static scenario, stationary        still present
+  boost acceleration    3 g and 15 g prologues (identical) identical sawtooth
+  amplitude clipping    12.6% vs 0.04% clipping            same 15 dB swing
+  transmit clock        GPS time vs host over 200-800 s    agree to test resolution
+  injection level       TX gain 22 / 38 / 47               present at all
+
+`saw_static_raw` and `saw_static_boosted` are the clipping test pair. What
+remains is the receiver's AGC or C/N0 estimator, or something subtler in the
+chain: localised, not identified.
+
+It does not touch the gate results. Every threshold and latency was measured
+across a transition with satellites tracked either side, which is what the
+classifier requires before calling anything.

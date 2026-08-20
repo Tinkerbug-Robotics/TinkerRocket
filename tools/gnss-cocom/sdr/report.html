@@ -2253,14 +2253,46 @@
         either. The claim is withdrawn.</p>
 
       <h3>So why does the satellite count move?</h3>
-      <p>Not the injected signal: the generator transmits every satellite above the local
-        horizon at equal, constant power for the whole run &mdash; elevation mask zero, path
-        loss disabled &mdash; so about ten GPS satellites are present at full strength from
-        first sample to last. And not signal <em>strength</em> either, which is the
-        surprising part. Through a 146 s outage in the third run the satellites that were
-        being tracked sat at <strong>44 to 50 dBHz</strong> the whole time; there were just
-        one to four of them, climbing by roughly one satellite every 30 to 40 seconds. That
-        is the shape of sequential re-acquisition, not of a weak signal.</p>
+      <p>Not the injected signal, which transmits every visible satellite at equal, constant
+        power for the whole run. Not the trajectory either, and this is worth stating flatly
+        because it was the obvious suspect twice over. <strong>The bench signal chain carries
+        a periodic oscillation in reported C/N&#8320; of about 15 dB, with a period near
+        80 s</strong>, and every satellite-count dip in every flight sits in one of its
+        troughs. In the two matched flights the epochs that fell below four satellites sat
+        14 dB and 38 dB below their own run&rsquo;s median C/N&#8320;.</p>
+      <p>It is present under every condition tested, which is how it was cornered:</p>
+    </div>
+    <div class="scroll">
+      <table>
+        <caption>Ruling out the candidates for the ~80 s C/N&#8320; oscillation</caption>
+        <thead><tr><th>Suspected cause</th><th>Test</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td>Flight dynamics</td><td>static scenario, vehicle stationary at 1.2 km</td>
+              <td>oscillation still present &mdash; <strong>ruled out</strong></td></tr>
+          <tr><td>Boost acceleration</td><td>3 g and 15 g prologues, identical content</td>
+              <td>identical sawtooth in both &mdash; <strong>ruled out</strong></td></tr>
+          <tr><td>Amplitude boost / clipping</td>
+              <td>same file at 12.6% clipping and at 0.04%</td>
+              <td>same 15 dB swing, same period &mdash; <strong>ruled out</strong></td></tr>
+          <tr><td>Transmit clock error</td>
+              <td>simulated GPS time against host time over 200&ndash;800 s</td>
+              <td>agree to the resolution of the test &mdash; <strong>no gross error</strong></td></tr>
+          <tr><td>Injection level</td><td>TX gain 22, 38, 47</td>
+              <td>present at every gain &mdash; <strong>ruled out</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p style="margin-top:1.2rem">What remains is the receiver&rsquo;s own AGC or
+        C/N&#8320; estimator, or something subtler in the chain. It is localised but
+        <em>not identified</em>, and it should not be written up as though it were. What it
+        does establish is that the residual differences between otherwise matched runs are
+        phase luck against a bench artefact, not physics: the 3 g and 15 g flights differ
+        only in where their gate windows happen to fall relative to this oscillation.</p>
+      <p>None of it touches the gate results. Every threshold and every recovery latency in
+        this report was measured across a transition where the satellites were tracked
+        either side, which is the condition the classifier requires before it will call
+        anything at all.</p>
     </div>
     <ul class="notes">
       <li><strong>Too few satellites to lose any &mdash; and this was testable.</strong>
