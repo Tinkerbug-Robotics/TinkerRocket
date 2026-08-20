@@ -34,8 +34,15 @@ import json
 import math
 from pathlib import Path
 
-from make_trajectories import (ALT_LIMIT_CANDIDATES_M, LAT0_DEG, LON0_DEG,
-                               RATE_HZ, V_LIMIT_MPS, deg_lon_per_metre)
+from make_trajectories import (ALT_LIMIT_CANDIDATES_M, RATE_HZ, V_LIMIT_MPS,
+                               deg_lon_per_metre)
+from make_trajectories import LAT0_DEG as _LAT0, LON0_DEG as _LON0
+
+# Overridable, because the launch site is simulated and so its latitude is a
+# free parameter. GPS orbits at 55 degrees inclination, so low latitudes see
+# more of the constellation: at a 10 degree mask this ephemeris gives 12
+# satellites at the equator against 10 at the bench's nominal 40 N.
+LAT0_DEG, LON0_DEG = _LAT0, _LON0
 
 G0 = 9.80665
 R_AIR = 287.05
@@ -220,7 +227,15 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-o", "--outdir", default="scenarios", type=Path)
     ap.add_argument("--only", action="append", metavar="NAME")
+    ap.add_argument("--lat", type=float, help="launch latitude (default 40)")
+    ap.add_argument("--lon", type=float, help="launch longitude (default -119)")
     args = ap.parse_args()
+
+    global LAT0_DEG, LON0_DEG
+    if args.lat is not None:
+        LAT0_DEG = args.lat
+    if args.lon is not None:
+        LON0_DEG = args.lon
 
     names = args.only or list(FLIGHTS)
     args.outdir.mkdir(parents=True, exist_ok=True)

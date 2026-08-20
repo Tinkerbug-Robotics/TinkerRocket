@@ -39,6 +39,7 @@ a regenerated scenario, and `plot_flight.py` now refuses the mismatch.
 | `gentle_alt_v2` | 3 g | altitude gate re-opened **0.7 s** after descending below 80 km, with 6 satellites |
 | `spaceshot_v2` | 15 g | velocity gate re-opened **1.1 s** and **1.5 s** in two separate windows, with 6 and 4 satellites |
 | `spaceshot_v3` | 15 g | flown after the SMA was re-seated; 7 satellites held at 48-50 dBHz straight through the burn, gate re-opened in 1.0 s and 1.5 s |
+| `spaceshot_eq` | 15 g | equator / 08:30 / complete-day ephemeris, 14 SV transmitted. Never fell below 4 satellites; all three windows recovered in 1.0-1.5 s |
 | `spaceshot_slr_pwr` | 15 g | same profile with nav mode SLR (0x64/0x17 mode 9) and power mode Normal (0x0C) instead of airborne + default power save |
 
 Every window where four or more satellites were tracked re-opened in 0.7-1.5 s,
@@ -66,3 +67,20 @@ What differs is margin. The flights that lost satellites had them at 34-35 dBHz
 before ignition; the flight that did not had 49 dBHz. That is the bench RF path,
 not the flight. Acceleration has not been shown to matter independently here,
 and testing it properly needs a bench that holds a steady C/N0.
+
+
+## Satellite count is the binding constraint, and it is a free parameter
+
+Re-seating the SMA changed nothing: median C/N0 stayed at 44 dBHz and the run
+afterwards spent *less* time above four satellites, 70% against 89%. Moving the
+simulated launch site to the equator and the scenario to 08:30, against a
+complete-day ephemeris, puts 14 satellites in the sky instead of 10:
+
+    run                       SV tx  med sats  med C/N0  >=4 SV  recovery
+    40N 22:30                    10         6        44     89%  1.5 / 19.0 / 1.1 s
+    40N 22:30, re-seated         10         6        44     70%  1.5 / 1.0 / 146 s
+    equator 08:30                14         7        45    100%  1.5 / 1.0 / 1.1 s
+
+Signal level did not move, so this is redundancy rather than power. Use the
+equator and a scanned hour for future runs: `best_geometry.py <nav> <day>
+<lats> <hours> [lon] [elev_mask]`, and `make_flights.py --lat/--lon`.

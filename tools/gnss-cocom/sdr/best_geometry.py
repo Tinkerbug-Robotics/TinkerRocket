@@ -15,6 +15,10 @@ day = sys.argv[2]                      # YYYY/MM/DD
 lats = [float(x) for x in sys.argv[3].split(",")]
 hours = [int(x) for x in sys.argv[4].split(",")]
 lon = sys.argv[5] if len(sys.argv) > 5 else "-119"
+# Counting everything above a 0 degree mask flatters the result: a satellite at
+# 0.5 degrees elevation is in the arithmetic but not in the solution. Count what
+# a receiver would actually use.
+ELV_MIN = float(sys.argv[6]) if len(sys.argv) > 6 else 10.0
 sim = Path(__file__).resolve().parent / "bin" / "gps-sdr-sim"
 
 def count(lat, hh):
@@ -23,10 +27,14 @@ def count(lat, hh):
                         "-d", "1", "-b", "8", "-o", "/dev/null", "-t", t, "-p"],
                        capture_output=True, text=True)
     out = (r.stdout + r.stderr).replace("\r", "\n")
-    return sum(1 for l in out.splitlines()
-               if l[:2].strip().isdigit() and len(l.split()) >= 4)
+    n = 0
+    for l in out.splitlines():
+        f = l.split()
+        if l[:2].strip().isdigit() and len(f) >= 4 and float(f[2]) >= ELV_MIN:
+            n += 1
+    return n
 
-print(f"GPS satellites above the horizon, {day}, lon {lon}")
+print(f"GPS satellites above {ELV_MIN:.0f} deg elevation, {day}, lon {lon}")
 print("Ephemeris: " + Path(nav).name + "\n")
 print("  lat  " + " ".join(f"{h:02d}h" for h in hours) + "   min  max  mean")
 best = (0, None)

@@ -2285,12 +2285,43 @@
         is the shape of sequential re-acquisition, not of a weak signal.</p>
     </div>
     <ul class="notes">
-      <li><strong>Too few satellites to lose any.</strong> This is the binding constraint.
-        A fix needs four; the injected sky has ten and no second band or constellation
-        behind them. Once the receiver drops a few it is under the threshold, and it climbs
-        back one satellite at a time. Re-seating the SMA mid-session did not change this:
-        median C/N&#8320; stayed at 44 dBHz and the run afterwards actually spent
-        <em>less</em> of its time above four satellites, 70% against 89%.</li>
+      <li><strong>Too few satellites to lose any &mdash; and this was testable.</strong>
+        A fix needs four; the injected sky had ten and nothing behind them. Moving the
+        simulated launch site to the equator and the scenario to 08:30, against a
+        complete-day ephemeris, puts fourteen in the sky instead. Re-seating the SMA had
+        changed nothing (median C/N&#8320; stayed at 44 dBHz, and the run afterwards spent
+        <em>less</em> of its time above four satellites, 70% against 89%). Adding four
+        satellites changed everything:</li>
+    </ul>
+    <div class="scroll">
+      <table>
+        <caption>Same 15 g flight, same receiver, more satellites in the sky</caption>
+        <thead><tr><th>Run</th><th class="num">SV transmitted</th><th class="num">Median tracked</th><th class="num">Median C/N&#8320;</th><th class="num">Epochs with &ge;4 SV</th><th>Recovery latencies</th></tr></thead>
+        <tbody>
+          <tr><td class="id">40&deg;N 22:30</td><td class="num">10</td><td class="num">6</td>
+              <td class="num">44 dBHz</td><td class="num">89%</td><td>1.5 s, 19.0 s, 1.1 s</td></tr>
+          <tr><td class="id">40&deg;N 22:30, re-seated</td><td class="num">10</td><td class="num">6</td>
+              <td class="num">44 dBHz</td><td class="num">70%</td><td>1.5 s, 1.0 s, <strong>146 s</strong></td></tr>
+          <tr><td class="id">equator 08:30</td><td class="num"><strong>14</strong></td><td class="num">7</td>
+              <td class="num">45 dBHz</td><td class="num"><strong>100%</strong></td>
+              <td><strong>1.5 s, 1.0 s, 1.1 s</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p style="margin-top:1.2rem">The equator run never once fell below four satellites, and
+        every window recovered in about a second. Signal level did not move &mdash; 44 to
+        45 dBHz &mdash; so this is not a power effect. It is redundancy: with ten satellites
+        the receiver is one bad moment from dropping under the threshold, and with fourteen
+        it is not. That also settles which of the two remaining explanations was doing the
+        work, and it is a free change for any future run.</p>
+      <p>GPS orbits at 55&deg; inclination, so low latitudes see more of the constellation.
+        Counting only satellites above a realistic 10&deg; mask, this ephemeris gives 12 at
+        the equator against 10 at the bench&rsquo;s nominal 40&deg;N; the raw horizon count
+        is 14 against 10. Latitude and hour are both free parameters of a simulated flight,
+        and worth spending.</p>
+    </div>
+    <ul class="notes">
       <li><strong>Only ten satellites to lose.</strong> gps-sdr-sim is GPS L1 C/A only,
         while the receiver is multi-constellation and dual-band. In flight it would have
         GPS, GLONASS, Galileo and BeiDou across L1 and L5 &mdash; perhaps 25 to 35 signals,
