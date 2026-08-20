@@ -437,6 +437,20 @@ target_include_directories(test_ble_chunk_size PRIVATE
 target_link_libraries(test_ble_chunk_size GTest::gtest_main)
 gtest_discover_tests(test_ble_chunk_size)
 
+# ---------- test_mram_probe ----------
+# #826: the MRAM ring used to be selected from a CS pin number alone, so a
+# board with no MRAM part logged every flight from a floating SPI bus into
+# valid-CRC NAND pages while reporting healthy. MramProbe.h is the pure
+# verdict half of the boot probe — it asserts no constant bus value (what an
+# absent part produces) can be mistaken for a live device.
+add_executable(test_mram_probe test_mram_probe.cpp)
+target_include_directories(test_mram_probe PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LogToFlash
+)
+target_link_libraries(test_mram_probe GTest::gtest_main)
+gtest_discover_tests(test_mram_probe)
+
 # ---------- test_bs_download_policy ----------
 # Host-side test for the base-station cooperative BLE download (#380): chunk
 # planning bounded by open-time file size + the 15 ms notify-drain pacing gate.
