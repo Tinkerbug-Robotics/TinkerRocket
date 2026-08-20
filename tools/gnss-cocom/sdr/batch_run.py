@@ -36,6 +36,7 @@ from skytraq_binary import (MSG_RCV_STATE, MSG_SV_CH_STATUS,   # noqa: E402
 # number changes when it is moved to another USB socket. autodetect_port
 # matches on USB vendor instead, which is stable.
 from gnss_nmea_monitor import autodetect_port   # noqa: E402
+from ensure_hackrf import ensure_hackrf         # noqa: E402
 PORT = autodetect_port()
 START = "2026/08/19,22:30:00"
 STATIC = HERE / "c8" / "t00_long.C8"
@@ -60,6 +61,8 @@ def log(msg):
 
 
 def start_tx(c8: Path, gain: int):
+    if not ensure_hackrf(quiet=True):
+        return None
     errf = open("/tmp/hackrf_tx.err", "w")
     tx = subprocess.Popen(
         ["hackrf_transfer", "-t", str(c8), "-f", "1575420000",

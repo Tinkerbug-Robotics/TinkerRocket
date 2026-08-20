@@ -38,6 +38,8 @@ from serial.tools import list_ports                    # noqa: E402
 from gnss_nmea_monitor import Parser, _demux           # noqa: E402
 from ublox_binary import (CLS_NAV, MSG_NAV_PVT, MSG_NAV_SAT,   # noqa: E402
                           parse_nav_pvt, parse_nav_sat)
+sys.path.insert(0, str(HERE))
+from ensure_hackrf import ensure_hackrf                    # noqa: E402
 
 TX_ERR = "/tmp/hackrf_tx_radiated.err"
 
@@ -52,6 +54,10 @@ def list_candidate_ports():
 
 
 def start_tx(c8: Path, freq: int, rate: int, gain: int):
+    # The PortaPack boots into Mayhem and hides the radio; this is a no-op when
+    # the HackRF is already there.
+    if not ensure_hackrf():
+        return None
     errf = open(TX_ERR, "w")
     tx = subprocess.Popen(
         ["hackrf_transfer", "-t", str(c8), "-f", str(freq),
