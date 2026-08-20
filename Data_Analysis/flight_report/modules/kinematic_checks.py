@@ -52,7 +52,7 @@ _APOGEE_FLAGS = (
     "gps_apogee_flag", "pitch_apogee_flag", "apogee_flag", "alt_landed_flag",
 )
 _LANDING_SUBFLAGS = (
-    "impact_flag", "baro_stable_flag", "gyro_quiet_flag",
+    "impact_flag", "baro_stable_flag", "gyro_quiet_flag", "quiescent_flag",
     "gps_stationary_flag", "accel_1g_flag",
 )
 
@@ -364,6 +364,7 @@ _LANDING_STYLE = {
     "impact_flag":         ("Impact (high-G)",   "tab:red"),
     "baro_stable_flag":    ("Baro stable",       "tab:green"),
     "gyro_quiet_flag":     ("Gyro quiet",        "tab:purple"),
+    "quiescent_flag":      ("Quiescent (#824)",  "tab:brown"),
     "gps_stationary_flag": ("GPS stationary",    "tab:orange"),
     "accel_1g_flag":       ("Accel ≈ 1g",        "tab:blue"),
 }
@@ -393,6 +394,7 @@ def _plot_landing_voting(res):
     # Sub-flag latch markers
     fire_marker = {"impact_flag": "X", "baro_stable_flag": "^",
                    "gyro_quiet_flag": "o", "gps_stationary_flag": "s",
+                   "quiescent_flag": "D",
                    "accel_1g_flag": "D"}
     for name, t in sublatches:
         i = min(range(len(t_sim)), key=lambda j: abs(t_sim[j] - t))

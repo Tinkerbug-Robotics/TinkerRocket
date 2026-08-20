@@ -84,6 +84,13 @@ GYRO_QUIET_DPS           = 20.0    # |roll_rate| < this
 GPS_STATIONARY_SPEED_MS  = 1.0     # |velocity| < this (EKF proxy)
 ACCEL_1G_TOLERANCE       = 2.94    # |acc_mag − 1g| < this (≈ 0.3 g)
 
+# Extended quiescence (#824) — baro-independent path to LANDED; see the long
+# note in TR_KinematicChecks.cpp for the flight-data basis of these numbers.
+QUIESCENT_GYRO_DPS       = 5.0     # |roll_rate| < this
+QUIESCENT_ACCEL_TOL      = 0.49    # |acc_mag − 1g| < this (≈ 0.05 g)
+QUIESCENT_COUNT_HI       = 30      # ~30 s of net quiet
+QUIESCENT_COUNT_MAX      = 45
+
 
 def _constrain(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
@@ -107,6 +114,7 @@ class KinematicChecks:
     gyro_quiet_flag: bool = False      # roll-rate quiescent
     gps_stationary_flag: bool = False  # EKF speed near zero (GPS fresh)
     accel_1g_flag: bool = False        # acc_mag near 1 g
+    quiescent_flag: bool = False       # #824 sustained stillness
     max_altitude: float = 0.0
     max_speed: float = 0.0
     alt_est: float = 0.0
@@ -130,6 +138,7 @@ class KinematicChecks:
     gyro_quiet_count_: int = 0
     gps_stationary_count_: int = 0
     accel_1g_count_: int = 0
+    quiescent_count_: int = 0
 
     max_gps_altitude_: float = 0.0
     gps_apogee_count_: int = 0
@@ -187,10 +196,12 @@ class KinematicChecks:
         self.gyro_quiet_flag = False
         self.gps_stationary_flag = False
         self.accel_1g_flag = False
+        self.quiescent_flag = False
         self.baro_stable_count_ = 0
         self.gyro_quiet_count_ = 0
         self.gps_stationary_count_ = 0
         self.accel_1g_count_ = 0
+        self.quiescent_count_ = 0
         self.max_gps_altitude_ = 0.0
         self.gps_apogee_count_ = 0
         self.gps_available_ = False
@@ -220,6 +231,7 @@ class KinematicChecks:
         baro_locked_out: bool,
         now_ms: int,
         gps_vel_u: float = 0.0,
+        baro_healthy: bool = True,
     ) -> None:
         self._now_ms = now_ms
 
@@ -292,7 +304,14 @@ class KinematicChecks:
             self.landing_check_time = self._now_ms
 
             # Sub 1: Baro-stable (was the original slow path; +lower bound)
-            baro_stable_pass = (BARO_STABLE_PALT_MIN <= pressure_altitude <= BARO_STABLE_PALT_MAX
+            # Gated on baro_healthy (#824): baro_stable is mandatory in the
+            # vote, so it must not be satisfiable by a barometer that has
+            # stopped telling the truth.  A frozen sensor retains its last
+            # reading, making landing_alt_change exactly 0 — maximally
+            # "stable" — which would hand the vote its mandatory voter for
+            # free while the rocket is still descending.
+            baro_stable_pass = (baro_healthy
+                                and BARO_STABLE_PALT_MIN <= pressure_altitude <= BARO_STABLE_PALT_MAX
                                 and landing_alt_change < BARO_STABLE_DELTA_MAX
                                 and self.max_altitude > BARO_STABLE_MAX_ALT_MIN)
             if baro_stable_pass:
@@ -344,6 +363,28 @@ class KinematicChecks:
             elif self.accel_1g_count_ == 0:
                 self.accel_1g_flag = False
 
+            # Sub 5: Extended quiescence — NOT one of the votes below; an
+            # independent path to landed that survives a dead barometer (#824).
+            # Accumulates only after apogee (a rocket on the pad is quiescent by
+            # definition, and the rising-edge reset runs after the vote).  When the
+            # baro is healthy the altitude must also be unchanging — the IMU gates
+            # alone cannot tell "sitting in a field" from "descending smoothly".
+            quiescent_alt_ok = (not baro_healthy
+                                or landing_alt_change < BARO_STABLE_DELTA_MAX)
+            quiescent_pass = (self.apogee_flag
+                              and quiescent_alt_ok
+                              and abs(roll_rate) < QUIESCENT_GYRO_DPS
+                              and abs(acc_mag - G_MS2) < QUIESCENT_ACCEL_TOL)
+            if quiescent_pass:
+                self.quiescent_count_ = min(QUIESCENT_COUNT_MAX,
+                                            self.quiescent_count_ + 1)
+            else:
+                self.quiescent_count_ = max(0, self.quiescent_count_ - 1)
+            if self.quiescent_count_ >= QUIESCENT_COUNT_HI:
+                self.quiescent_flag = True
+            elif self.quiescent_count_ == 0:
+                self.quiescent_flag = False
+
         # Voting: impact alone fires master; otherwise N-1 of N over the
         # slow detectors (GPS excluded if stale). Master latches once true.
         # Gated on apogee_flag — pre-flight a static rocket trips
@@ -351,6 +392,11 @@ class KinematicChecks:
         # be 3 of 4 votes and fire landed on the pad.
         if not self.alt_landed_flag and self.apogee_flag:
             if self.impact_flag:
+                self.alt_landed_flag = True
+            elif self.quiescent_flag:
+                # Baro-independent path (#824): works in exactly the cases
+                # the vote cannot — a dead baro, or a landing site outside
+                # the BARO_STABLE_PALT band.
                 self.alt_landed_flag = True
             else:
                 available = 0
@@ -370,7 +416,14 @@ class KinematicChecks:
                 available += 1
                 if self.accel_1g_flag: passed += 1
 
-                if available >= 2 and passed >= 2 and passed >= (available - 1):
+                # baro_stable is mandatory (#824): it is the only
+                # altitude-aware detector here.  gyro_quiet and accel_1g both
+                # pass under a canopy at terminal velocity, so with GPS stale
+                # the old 2-of-3 rule could be met by altitude-blind evidence
+                # alone and cut the main deploy.
+                if (available >= 2 and passed >= 2
+                        and passed >= (available - 1)
+                        and self.baro_stable_flag):
                     self.alt_landed_flag = True
 
         # TRKC.cpp:189 ─ GPS max altitude tracking (post-launch)
@@ -497,10 +550,12 @@ class KinematicChecks:
             self.gyro_quiet_count_ = 0
             self.gps_stationary_count_ = 0
             self.accel_1g_count_ = 0
+            self.quiescent_count_ = 0
             self.baro_stable_flag = False
             self.gyro_quiet_flag = False
             self.gps_stationary_flag = False
             self.accel_1g_flag = False
+            self.quiescent_flag = False
 
         # TRKC.cpp:302 ─ Pre-apogee max speed
         speed = math.sqrt(velocity[0]**2 + velocity[1]**2 + velocity[2]**2)

@@ -756,3 +756,205 @@ TEST_F(KinematicChecksTest, Apogee_BothUnhealthy_NoFire) {
     EXPECT_FALSE(kc.apogee_flag);
     EXPECT_FALSE(kc.apogee_backstop_flag);
 }
+
+// ---------------------------------------------------------------------------
+// #824: the landing vote must not be satisfiable by altitude-blind evidence.
+// ---------------------------------------------------------------------------
+
+TEST_F(KinematicChecksTest, Landing_NoGPS_SteadyDescentAloft_DoesNotLatch) {
+    // The reported failure: with GPS stale the vote drops to 2-of-3, and
+    // gyro_quiet + accel_1g both pass under a canopy at terminal velocity
+    // (an accelerometer reads 1 g in steady descent).  Neither knows the
+    // rocket is 300 m up, so the pair must not be able to latch LANDED.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    // 60 s under canopy: quiet in roll, 1 g, no GPS, descending 3 m/s from
+    // 300 m — still well above the pad when the window ends.
+    for (int second = 0; second < 60; second++) {
+        uint32_t base = 1000 + second * 1000;
+        float alt = 300.0f - 3.0f * float(second);
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(alt, 9.81f, -3.0f, 1.0f);
+        }
+    }
+    EXPECT_TRUE(kc.gyro_quiet_flag);   // the altitude-blind pair does pass...
+    EXPECT_TRUE(kc.accel_1g_flag);
+    EXPECT_FALSE(kc.baro_stable_flag); // ...but the altitude-aware one does not
+    EXPECT_FALSE(kc.alt_landed_flag);  // so no latch
+}
+
+TEST_F(KinematicChecksTest, Landing_Quiescent_OutOfBandBaro_EventuallyLatches) {
+    // Requiring baro_stable must not strand a flight whose barometer can
+    // never satisfy it.  Landing 400 m off the pad reference puts palt
+    // outside BARO_STABLE_PALT_MAX forever; the quiescence backstop still
+    // ends the flight after ~30 s of genuine stillness.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    for (int second = 0; second < 40; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(400.0f, 9.80665f, 0.0f, 0.2f);
+        }
+    }
+    EXPECT_FALSE(kc.baro_stable_flag);
+    EXPECT_TRUE(kc.quiescent_flag);
+    EXPECT_TRUE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_Quiescent_UnderChute_DoesNotLatch) {
+    // Same 40 s aloft, but rolling the way the flight logs actually show
+    // (median 40-460 dps under chute).  Quiescence must stay clear.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    for (int second = 0; second < 40; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(300.0f, 9.81f, -6.0f, 40.0f);
+        }
+    }
+    EXPECT_FALSE(kc.quiescent_flag);
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_Quiescent_PendulumAccel_DoesNotLatch) {
+    // The case the roll gate alone would miss: an airframe descending
+    // without rolling.  A canopy pendulum modulates |a| well beyond the
+    // 0.05 g quiescence tolerance even when roll is near zero.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    for (int second = 0; second < 40; second++) {
+        uint32_t base = 1000 + second * 1000;
+        // +/- 0.2 g swing, alternating each second
+        float acc = (second % 2 == 0) ? 11.77f : 7.85f;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(300.0f, acc, -6.0f, 0.5f);
+        }
+    }
+    EXPECT_FALSE(kc.quiescent_flag);
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_Quiescent_NotArmedBeforeApogee) {
+    // A rocket sitting on the pad is quiescent by definition.  The apogee
+    // rising-edge reset must zero the counter so the backstop cannot fire
+    // the instant apogee latches.
+    for (int second = 0; second < 60; second++) {
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(second * 1000 + i * 2);
+            callStationary(0.0f, 9.80665f);
+        }
+    }
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(60000 + i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+
+    kc.apogee_flag = true;
+    setMockMillis(62000);
+    callFlight(300.0f, 9.80665f, -6.0f, 0.0f);
+    EXPECT_FALSE(kc.quiescent_flag);
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_FrozenBaro_CannotSupplyTheMandatoryVoter) {
+    // #824 follow-up: baro_stable is mandatory precisely because it is the
+    // only altitude-aware voter, so an unhealthy barometer must not be able
+    // to satisfy it.  A frozen sensor retains its last reading, which makes
+    // landing_altitude_change exactly 0 — maximally "stable" — so without the
+    // baro_healthy gate a baro stuck at an in-band value would hand the vote
+    // its mandatory voter while the rocket is still descending.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    // Baro frozen at 30 m (in band, zero delta) while actually descending;
+    // the IMU pair is quiet, so the vote would otherwise be 3 of 3.
+    for (int second = 0; second < 20; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(30.0f, 9.81f, -6.0f, 1.0f, 0.0f, false, 1.57f,
+                       false, false, 0.0f, true, /*baro_healthy=*/false);
+        }
+    }
+    EXPECT_TRUE(kc.gyro_quiet_flag);
+    EXPECT_TRUE(kc.accel_1g_flag);
+    EXPECT_FALSE(kc.baro_stable_flag) << "an unhealthy baro must not satisfy baro_stable";
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_HealthyBaro_StillLatchesNormally) {
+    // The gate above must not break the ordinary case: a healthy baro settled
+    // near the pad still latches baro_stable and votes the rocket down.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    for (int second = 0; second < 7; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(5.0f, 9.81f, 0.0f, 1.0f);
+        }
+    }
+    EXPECT_TRUE(kc.baro_stable_flag);
+    EXPECT_TRUE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_DeadBaro_QuiescenceStillNeedsAQuietIMU) {
+    // With baro_healthy false the quiescence detector drops its altitude term
+    // and runs on the IMU alone.  A frozen IMU is the one input that would
+    // satisfy both gates forever, which is why both callers zero acc_mag when
+    // the IMU is stale.  Confirm a moving airframe still cannot latch.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    for (int second = 0; second < 60; second++) {
+        uint32_t base = 1000 + second * 1000;
+        float alt = 300.0f - 3.0f * float(second);
+        // Real canopy accel scatter: the 0.05 g gate is missed most ticks.
+        float acc = (second % 3 == 0) ? 9.80665f : 10.8f;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(alt, acc, -3.0f, 1.0f, 0.0f, false, 1.57f,
+                       false, false, 0.0f, true, /*baro_healthy=*/false);
+        }
+    }
+    EXPECT_FALSE(kc.quiescent_flag) << "a <50% duty cycle cannot climb a leaky counter";
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
