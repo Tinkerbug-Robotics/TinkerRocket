@@ -1662,9 +1662,12 @@ struct SettingsView: View {
 /// keeps that telemetry churn out of the config Section entirely.
 ///
 /// Mirrors the dashboard pyro tile: continuity shows only while the shared ARM
-/// FET is engaged (after a Test Continuity pulse or when armed) and is gated to
-/// a LIVE frame so a stale frame fails safe to NO CONT (#297); the actuating
-/// buttons hide once armed / fired / in flight.
+/// FET is engaged (after a Test Continuity pulse or when armed), and is read
+/// through device.pyroContinuity + PyroContinuityBadge so both surfaces render
+/// the same four states from the same source. #297 fail-safe on a stale frame
+/// is .noData — a hollow grey "NO DATA" — not a red "NO CONT"; red is reserved
+/// for a MEASURED open. The actuating buttons hide once armed / fired /
+/// in flight.
 private struct PyroChannelTestControls: View {
     @ObservedObject var device: BLEDevice
     let channel: Int
@@ -1676,8 +1679,6 @@ private struct PyroChannelTestControls: View {
     var body: some View {
         if device.isConnected && !device.isBaseStation {
             if device.telemetry.pyro_armed || contTestActive {
-                let cont = device.telemetry.pyroCont(channel: channel)
-                    && device.telemetry.data_status == .live
                 HStack {
                     Text("Continuity")
                     Spacer()
@@ -1687,11 +1688,17 @@ private struct PyroChannelTestControls: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(.secondary)
                     } else {
-                        Circle().fill(cont ? Color.green : Color.red)
-                            .frame(width: 8, height: 8)
-                        Text(cont ? "CONT" : "NO CONT")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(cont ? .green : .red)
+                        // #828: was a two-state Bool (pyroCont && live) drawn
+                        // as green/red. That is the collapse pyroContinuity
+                        // exists to prevent — it showed a confident red
+                        // "NO CONT" for a channel that had never been
+                        // measured, which reads as a dead igniter or a spent
+                        // charge on a channel that is in fact live. Same
+                        // source and same badge as the dashboard tile now, so
+                        // the two cannot disagree on one frame.
+                        PyroContinuityBadge(
+                            state: device.pyroContinuity(channel: channel),
+                            font: .subheadline.weight(.semibold))
                     }
                 }
             }
