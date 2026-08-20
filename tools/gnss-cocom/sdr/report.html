@@ -1,0 +1,713 @@
+<title>Phoenix COCOM Gate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+
+<style>
+  :root {
+    --ground:      #F6F7F9;
+    --surface:     #FFFFFF;
+    --surface-2:   #EFF2F6;
+    --ink:         #16181F;
+    --ink-2:       #4A5261;
+    --ink-3:       #79808F;
+    --rule:        #DDE2E9;
+    --rule-strong: #C3CAD5;
+    --accent:      #29457E;
+    --accent-soft: #E6ECF7;
+    --fix:         #0E7C66;
+    --blocked:     #A2660A;
+    --nolock:      #9B3535;
+    --shade-a:     rgba(41, 69, 126, 0.10);
+    --shade-b:     rgba(41, 69, 126, 0.24);
+
+    --f-display: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+    --f-body:    "IBM Plex Serif", Georgia, "Times New Roman", serif;
+    --f-mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+    --measure: 66ch;
+    --pad: clamp(1.25rem, 4vw, 3rem);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #101218;
+      --surface:     #181B23;
+      --surface-2:   #1F232D;
+      --ink:         #E9EBF0;
+      --ink-2:       #A9B1C0;
+      --ink-3:       #78808F;
+      --rule:        #2A2F3A;
+      --rule-strong: #3B4250;
+      --accent:      #8DAEE2;
+      --accent-soft: #1B2432;
+      --fix:         #43C2A2;
+      --blocked:     #DFA23F;
+      --nolock:      #E07777;
+      --shade-a:     rgba(141, 174, 226, 0.12);
+      --shade-b:     rgba(141, 174, 226, 0.28);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #101218;
+    --surface:     #181B23;
+    --surface-2:   #1F232D;
+    --ink:         #E9EBF0;
+    --ink-2:       #A9B1C0;
+    --ink-3:       #78808F;
+    --rule:        #2A2F3A;
+    --rule-strong: #3B4250;
+    --accent:      #8DAEE2;
+    --accent-soft: #1B2432;
+    --fix:         #43C2A2;
+    --blocked:     #DFA23F;
+    --nolock:      #E07777;
+    --shade-a:     rgba(141, 174, 226, 0.12);
+    --shade-b:     rgba(141, 174, 226, 0.28);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 1020px;
+    margin: 0 auto;
+    padding: 0 var(--pad) 6rem;
+  }
+
+  .prose { max-width: var(--measure); }
+
+  p { margin: 0 0 1.1em; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px;
+  }
+
+  /* ---- masthead ---- */
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding: clamp(2.5rem, 7vw, 4.5rem) 0 1.5rem;
+    display: flex; flex-direction: column; gap: 1.4rem;
+  }
+  .kicker {
+    font-family: var(--f-mono); font-size: 0.72rem; font-weight: 500;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    display: flex; flex-wrap: wrap; gap: 0.5rem 1.4rem;
+  }
+  h1 {
+    font-family: var(--f-display); font-weight: 700;
+    font-size: clamp(2.4rem, 7vw, 4rem); line-height: 1.02;
+    letter-spacing: -0.015em; margin: 0; text-wrap: balance;
+  }
+  .standfirst {
+    font-size: clamp(1.05rem, 2.2vw, 1.22rem); color: var(--ink-2);
+    max-width: 56ch; margin: 0; font-style: italic;
+  }
+  .status {
+    display: inline-flex; align-items: center; gap: 0.6rem; align-self: flex-start;
+    font-family: var(--f-mono); font-size: 0.74rem; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--blocked);
+    border: 1px solid currentColor; border-radius: 2px; padding: 0.35rem 0.7rem;
+  }
+  .status-live { color: var(--fix); }
+  .status::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: currentColor; flex: none;
+  }
+
+  /* ---- sections ---- */
+  section { padding-top: clamp(3rem, 7vw, 4.5rem); }
+  h2 {
+    font-family: var(--f-display); font-weight: 600;
+    font-size: clamp(1.5rem, 3.4vw, 2rem); line-height: 1.15;
+    letter-spacing: -0.01em; margin: 0 0 1rem; text-wrap: balance;
+    display: flex; align-items: baseline; gap: 0.85rem;
+  }
+  h2 .n {
+    font-family: var(--f-mono); font-size: 0.7rem; font-weight: 500;
+    letter-spacing: 0.1em; color: var(--accent); flex: none;
+    padding-top: 0.15rem;
+  }
+  h3 {
+    font-family: var(--f-display); font-weight: 600; font-size: 1.1rem;
+    letter-spacing: 0.01em; margin: 2rem 0 0.6rem;
+  }
+
+  /* ---- figure ---- */
+  figure { margin: 2rem 0 0; }
+  .panels {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem; background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 1.5rem;
+  }
+  .badge {
+    font-family: var(--f-mono); font-size: 0.6rem; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--surface); background: var(--fix);
+    border-radius: 2px; padding: 0.12rem 0.4rem; vertical-align: 0.15em;
+    margin-left: 0.4rem; font-weight: 500;
+  }
+  .panel h4 {
+    font-family: var(--f-display); font-size: 0.95rem; font-weight: 600;
+    margin: 0 0 0.15rem;
+  }
+  .panel p {
+    font-family: var(--f-mono); font-size: 0.72rem; line-height: 1.5;
+    color: var(--ink-3); margin: 0 0 0.9rem;
+  }
+  .panel svg { width: 100%; height: auto; display: block; }
+  .panel svg text { font-family: var(--f-mono); fill: var(--ink-3); }
+  figcaption {
+    font-size: 0.86rem; color: var(--ink-2); margin-top: 0.9rem;
+    max-width: var(--measure);
+  }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.3rem; margin-top: 1.1rem;
+    font-family: var(--f-mono); font-size: 0.7rem; color: var(--ink-2);
+    letter-spacing: 0.02em;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 0.45rem; }
+  .swatch { display: inline-block; width: 15px; height: 3px; border-radius: 1px; flex: none; }
+
+  /* ---- tables ---- */
+  .scroll { overflow-x: auto; margin: 1.6rem 0 0; }
+  table {
+    border-collapse: collapse; width: 100%; min-width: 560px;
+    font-family: var(--f-mono); font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+  }
+  caption {
+    text-align: left; font-family: var(--f-display); font-size: 0.95rem;
+    font-weight: 600; color: var(--ink); padding-bottom: 0.6rem;
+  }
+  th, td {
+    text-align: left; padding: 0.55rem 0.9rem 0.55rem 0;
+    border-bottom: 1px solid var(--rule); vertical-align: top;
+  }
+  thead th {
+    font-weight: 500; font-size: 0.68rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--ink-3);
+    border-bottom: 1px solid var(--rule-strong); white-space: nowrap;
+  }
+  td.num { text-align: right; padding-right: 1.4rem; }
+  tbody tr:last-child td { border-bottom: none; }
+  .id { color: var(--accent); font-weight: 500; white-space: nowrap; }
+  .pending { color: var(--ink-3); }
+
+  .tag {
+    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 0.1rem 0.4rem; border-radius: 2px; white-space: nowrap;
+    border: 1px solid currentColor;
+  }
+  .t-fix { color: var(--fix); }
+  .t-blocked { color: var(--blocked); }
+  .t-nolock { color: var(--nolock); }
+  .t-none { color: var(--ink-3); }
+
+  /* ---- callout ---- */
+  .callout {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-left: 3px solid var(--blocked);
+    border-radius: 0 3px 3px 0; padding: 1.3rem 1.5rem; margin: 2rem 0 0;
+  }
+  .callout h3 { margin-top: 0; color: var(--blocked); }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .prose { max-width: 62ch; }
+
+  /* ---- code ---- */
+  pre {
+    background: var(--surface-2); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 1rem 1.1rem; overflow-x: auto; margin: 1.4rem 0 0;
+    font-family: var(--f-mono); font-size: 0.76rem; line-height: 1.7;
+    color: var(--ink-2);
+  }
+  code { font-family: var(--f-mono); font-size: 0.86em; color: var(--ink); }
+  pre code { color: inherit; font-size: inherit; }
+
+  /* ---- chain ---- */
+  .chain {
+    display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.5rem;
+    margin: 1.8rem 0 0; font-family: var(--f-mono); font-size: 0.72rem;
+  }
+  .node {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 0.7rem 0.9rem; flex: 1 1 130px; min-width: 130px;
+    display: flex; flex-direction: column; gap: 0.25rem;
+  }
+  .node b {
+    font-family: var(--f-display); font-size: 0.85rem; font-weight: 600;
+    color: var(--ink); letter-spacing: 0.01em;
+  }
+  .node span { color: var(--ink-3); line-height: 1.45; }
+  .node.hot { border-color: var(--rule-strong); background: var(--accent-soft); }
+
+  ul.notes {
+    max-width: var(--measure); padding-left: 1.1rem; margin: 1.2rem 0 0;
+  }
+  ul.notes li { margin-bottom: 0.6rem; }
+  ul.notes li::marker { color: var(--accent); }
+
+  footer {
+    margin-top: clamp(3.5rem, 8vw, 5rem); padding-top: 1.5rem;
+    border-top: 1px solid var(--rule);
+    font-family: var(--f-mono); font-size: 0.72rem; color: var(--ink-3);
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem;
+  }
+  footer a { color: var(--ink-2); }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="kicker">
+      <span>Tinkerbug Robotics</span>
+      <span>Issue #491</span>
+      <span>Bench report</span>
+      <span>19 Aug 2026</span>
+    </div>
+    <h1>Phoenix COCOM Gate</h1>
+    <p class="standfirst">Does the SkyTraq PX1105R / PX1125R withhold position when altitude
+      <em>and</em> speed are exceeded together, or whenever either one is? Measured on the
+      bench: <strong>independently</strong>. Either one closes the gate on its own &mdash; and
+      the altitude threshold is 80 km, not 18 km.</p>
+    <span class="status status-live">Answered &middot; both limits measured</span>
+  </header>
+
+  <section>
+    <h2><span class="n">01</span>Why it decides the receiver</h2>
+    <div class="prose">
+      <p>Every GNSS receiver sold outside export control carries a gate that stops it
+        producing position beyond a threshold of altitude and speed. What is not settled for
+        the SkyTraq Phoenix engine is the <em>operator</em> between those two conditions.</p>
+      <p>A rocket almost never trips both at once. Boost is fast but low: past 515 m/s while
+        still under 18 km. A space-shot apogee is high but slow: above 80 km with the vehicle
+        nearly stopped. So if the gate is a true <strong>AND</strong>, it essentially never
+        fires on a real flight, and the Phoenix parts become viable for high and fast work.
+        If the two limits act <strong>independently</strong>, position disappears partway up
+        the boost &mdash; the familiar, useless behaviour.</p>
+      <p>SkyTraq documents the AND reading in two of its own publications, neither of which
+        names the Phoenix parts. The PX11xx datasheets state <span class="id">Operational
+        Limits: Altitude &lt; 80,000 m and velocity &lt; 515 m/s</span>, which can be read
+        either way. The altitude figure is itself unresolved: 18 km in the FAQs, 80 km on the
+        datasheet. Nothing published settles it, so it gets measured.</p>
+    </div>
+
+    <figure>
+      <div class="panels">
+        <div class="panel">
+          <h4>If the gate is AND</h4>
+          <p>blocked only inside the intersection &mdash; ruled out</p>
+          <svg viewBox="0 0 340 290" role="img" aria-label="Altitude against speed. The blocked region is the intersection of speed above 515 metres per second and altitude above the gate, so it occupies only the upper-right corner. All four test trajectories stay outside it except t3a and t3b.">
+            <g transform="translate(38,12)">
+              <rect x="0" y="0" width="300" height="230" fill="var(--surface-2)"/>
+              <!-- blocked: speed>515 AND alt>18km -->
+              <rect x="154.5" y="0" width="145.5" height="188.6" fill="var(--shade-a)"/>
+              <!-- blocked: speed>515 AND alt>80km -->
+              <rect x="154.5" y="0" width="145.5" height="46" fill="var(--shade-a)"/>
+              <g stroke="var(--rule-strong)" stroke-width="1" stroke-dasharray="3 3">
+                <line x1="154.5" y1="0" x2="154.5" y2="230"/>
+                <line x1="0" y1="188.6" x2="300" y2="188.6"/>
+                <line x1="0" y1="46" x2="300" y2="46"/>
+              </g>
+              <g fill="none" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round">
+                <polyline points="0,218.5 270,218.5" stroke="var(--fix)"/>
+                <polyline points="15,218.5 30.7,218 51.1,216.8 77.1,214.3 106.1,210.4 106.1,120 106.1,34.1" stroke="var(--accent)"/>
+                <polyline points="0,218.5 25.5,218.3 51,217.6 76.6,216.5 106.3,214.6 130.4,201.2 160.3,190.2 195.5,178.9 233.5,167.7" stroke="var(--nolock)" stroke-dasharray="4 3"/>
+                <polyline points="0,69 30.6,68.6 60,67.5 90,65.6 96.8,54.6 110.4,46 130.8,36.4 160.4,24.8 201.2,10.4" stroke="var(--blocked)" stroke-dasharray="4 3"/>
+              </g>
+              <circle cx="15" cy="227.7" r="3" fill="var(--ink-2)"/>
+              <g class="measured">
+                <circle cx="154.5" cy="218.5" r="4.5" fill="var(--nolock)"/>
+                <circle cx="106.2" cy="46.0"  r="4.5" fill="var(--nolock)"/>
+              </g>
+
+              <g font-size="8" fill="var(--ink-3)">
+                <text x="158" y="252">515 m/s</text>
+                <text x="303" y="191" text-anchor="start" transform="rotate(-90 303 191)">18 km</text>
+                <text x="303" y="49" text-anchor="start" transform="rotate(-90 303 49)">80 km</text>
+              </g>
+              <g stroke="var(--rule-strong)" stroke-width="1">
+                <line x1="0" y1="230" x2="300" y2="230"/>
+                <line x1="0" y1="0" x2="0" y2="230"/>
+              </g>
+              <g font-size="8" fill="var(--ink-3)">
+                <text x="0" y="243">0</text>
+                <text x="296" y="243" text-anchor="end">1000</text>
+                <text x="130" y="266" font-size="8.5">speed (m/s)</text>
+                <text x="-8" y="230" text-anchor="end">0</text>
+                <text x="-8" y="6" text-anchor="end">100</text>
+                <text x="-8" y="118" text-anchor="end" transform="rotate(-90 -8 118)" font-size="8.5">altitude (km)</text>
+              </g>
+            </g>
+          </svg>
+        </div>
+
+        <div class="panel">
+          <h4>If the limits are independent <span class="badge">measured</span></h4>
+          <p>blocked across the union of both</p>
+          <svg viewBox="0 0 340 290" role="img" aria-label="Altitude against speed. The blocked region is the union of speed above 515 metres per second and altitude above the gate, forming an L shape. Trajectory t1 crosses into it at 515 metres per second and t2 crosses it at the altitude gate.">
+            <g transform="translate(38,12)">
+              <rect x="0" y="0" width="300" height="230" fill="var(--surface-2)"/>
+              <!-- velocity half-plane -->
+              <rect x="154.5" y="0" width="145.5" height="230" fill="var(--shade-b)"/>
+              <!-- altitude half-planes, nested -->
+              <rect x="0" y="0" width="300" height="188.6" fill="var(--shade-a)"/>
+              <rect x="0" y="0" width="300" height="46" fill="var(--shade-a)"/>
+              <g stroke="var(--rule-strong)" stroke-width="1" stroke-dasharray="3 3">
+                <line x1="154.5" y1="0" x2="154.5" y2="230"/>
+                <line x1="0" y1="188.6" x2="300" y2="188.6"/>
+                <line x1="0" y1="46" x2="300" y2="46"/>
+              </g>
+              <g fill="none" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round">
+                <polyline points="0,218.5 270,218.5" stroke="var(--fix)"/>
+                <polyline points="15,218.5 30.7,218 51.1,216.8 77.1,214.3 106.1,210.4 106.1,120 106.1,34.1" stroke="var(--accent)"/>
+                <polyline points="0,218.5 25.5,218.3 51,217.6 76.6,216.5 106.3,214.6 130.4,201.2 160.3,190.2 195.5,178.9 233.5,167.7" stroke="var(--nolock)" stroke-dasharray="4 3"/>
+                <polyline points="0,69 30.6,68.6 60,67.5 90,65.6 96.8,54.6 110.4,46 130.8,36.4 160.4,24.8 201.2,10.4" stroke="var(--blocked)" stroke-dasharray="4 3"/>
+              </g>
+              <circle cx="15" cy="227.7" r="3" fill="var(--ink-2)"/>
+              <g class="measured">
+                <circle cx="154.5" cy="218.5" r="4.5" fill="var(--nolock)"/>
+                <circle cx="106.2" cy="46.0"  r="4.5" fill="var(--nolock)"/>
+              </g>
+
+              <g font-size="8" fill="var(--ink-3)">
+                <text x="158" y="252">515 m/s</text>
+                <text x="303" y="191" text-anchor="start" transform="rotate(-90 303 191)">18 km</text>
+                <text x="303" y="49" text-anchor="start" transform="rotate(-90 303 49)">80 km</text>
+              </g>
+              <g stroke="var(--rule-strong)" stroke-width="1">
+                <line x1="0" y1="230" x2="300" y2="230"/>
+                <line x1="0" y1="0" x2="0" y2="230"/>
+              </g>
+              <g font-size="8" fill="var(--ink-3)">
+                <text x="0" y="243">0</text>
+                <text x="296" y="243" text-anchor="end">1000</text>
+                <text x="130" y="266" font-size="8.5">speed (m/s)</text>
+                <text x="-8" y="230" text-anchor="end">0</text>
+                <text x="-8" y="6" text-anchor="end">100</text>
+                <text x="-8" y="118" text-anchor="end" transform="rotate(-90 -8 118)" font-size="8.5">altitude (km)</text>
+              </g>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--fix)"></i>t1 velocity ramp</span>
+        <span><i class="swatch" style="background:var(--accent)"></i>t2 altitude ramp</span>
+        <span><i class="swatch" style="background:var(--nolock)"></i>t3a both, 18 km</span>
+        <span><i class="swatch" style="background:var(--blocked)"></i>t3b both, 80 km</span>
+        <span><i class="swatch" style="background:var(--ink-2);height:7px;width:7px;border-radius:50%"></i>t0 baseline</span>
+        <span><i class="swatch" style="background:var(--nolock);height:9px;width:9px;border-radius:50%"></i><strong>measured blocking point</strong></span>
+      </div>
+      <figcaption>The two hypotheses, drawn in the plane the gate acts on, with the four
+        moving test trajectories overlaid. Shading marks where position would be withheld;
+        the darker altitude band is the 80 km reading nested inside the 18 km one. The test
+        set is designed so that <strong>t1</strong> and <strong>t2</strong> each enter the
+        shaded region under exactly one hypothesis &mdash; which is what makes a single capture
+        decisive. The two red points are where the receiver actually withheld
+        position: 515 m/s at 5 km, and 80 km at 354 m/s. Both fall inside the union and
+        outside the intersection.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>How the signal is made</h2>
+    <div class="prose">
+      <p>The receiver is fed a synthesised GPS L1 constellation carrying a trajectory we
+        choose, injected by cable into its antenna port. Nothing is radiated: L1 is a live,
+        protected band, and a transmitter at this power denies GPS to everything nearby,
+        aircraft included.</p>
+    </div>
+
+    <div class="chain">
+      <div class="node"><b>Trajectory</b><span>lat/lon/height at 10 Hz, generated per test</span></div>
+      <div class="node"><b>gps-sdr-sim</b><span>RINEX ephemeris &rarr; 8-bit I/Q at 2.6 MSa/s</span></div>
+      <div class="node hot"><b>PortaPack</b><span>Mayhem GPS Sim, playing from SD at 1575.42 MHz</span></div>
+      <div class="node"><b>Pad + DC block</b><span>50&ndash;60 dB, blocks the 3.3 V antenna bias</span></div>
+      <div class="node hot"><b>PX1125R</b><span>RF_IN, ~&minus;100 dBm</span></div>
+      <div class="node"><b>NMEA capture</b><span>USB passthrough, timestamped, GSV included</span></div>
+    </div>
+
+    <h3>Time comes from the signal, not the clock</h3>
+    <div class="prose">
+      <p>The scenario is stamped with a start time, and a locked receiver reports that same
+        UTC back in its GGA and RMC sentences. Trajectory time is therefore just
+        <code>NMEA UTC &minus; scenario start</code> &mdash; exact, and completely indifferent to
+        when the operator pressed play. Host timestamps serve only as a fallback for epochs
+        the receiver emits with no UTC field, and the offset between the two clocks is fitted
+        across every epoch that carries both. The spread of that fit is reported with each
+        capture; a spread beyond about two seconds means the playback underran and the run is
+        discarded rather than interpreted.</p>
+
+      <h3>Blocked is not the same as lost</h3>
+      <p>The entire measurement rests on one distinction. A COCOM gate withholds
+        <em>position</em> while the satellites stay tracked: C/N&#8320; holds at 40&ndash;45 dBHz
+        and the GSV list is unchanged, but fix quality drops to zero and latitude and
+        longitude go empty. A genuine loss of lock looks different &mdash; C/N&#8320; collapses and
+        satellites fall out of view <em>first</em>. Classifying on GGA alone cannot tell them
+        apart, so GSV is logged throughout and every epoch is scored three ways:</p>
+    </div>
+    <div class="scroll">
+      <table>
+        <caption>Epoch classification</caption>
+        <thead><tr><th>Verdict</th><th>Position</th><th>Satellites</th><th>Means</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tag t-fix">FIX</span></td><td>reported</td><td>tracked</td><td>gate open</td></tr>
+          <tr><td><span class="tag t-blocked">BLOCKED</span></td><td>withheld</td><td>&ge;4 at &ge;30 dBHz</td><td>the COCOM signature</td></tr>
+          <tr><td><span class="tag t-nolock">NO_LOCK</span></td><td>withheld</td><td>collapsed</td><td>RF problem &mdash; run is void</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p>To keep that call unambiguous, the generator holds channel power constant for the
+        whole run instead of modelling path loss. C/N&#8320; then stays flat from first sample to
+        last, and any collapse is a real receiver behaviour rather than a modelled one. It is
+        a deliberate trade of realism for diagnostic power.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>The test set</h2>
+    <div class="prose">
+      <p>Each run isolates one variable. The two confirmation runs are alternatives, not both:
+        which one is worth flying depends on what t2 says the altitude threshold is.</p>
+    </div>
+    <div class="scroll">
+      <table>
+        <caption>Trajectories, and what each outcome would mean</caption>
+        <thead>
+          <tr>
+            <th>Run</th><th>Profile</th><th class="num">Peak alt</th><th class="num">Peak speed</th>
+            <th>Exceeds</th><th>If AND</th><th>If independent</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="id">t0</td><td>1 km, 50 m/s, 60 s</td>
+            <td class="num">1.0 km</td><td class="num">50 m/s</td>
+            <td><span class="tag t-none">neither</span></td>
+            <td colspan="2">Validates chain, level and time mapping</td>
+          </tr>
+          <tr>
+            <td class="id">t1</td><td>5 km held, 0&rarr;900 m/s over 90 s</td>
+            <td class="num">5.0 km</td><td class="num">900 m/s</td>
+            <td><span class="tag t-fix">velocity</span></td>
+            <td>holds to 900 m/s</td><td>blanks at ~515 m/s</td>
+          </tr>
+          <tr>
+            <td class="id">t2</td><td>354 m/s held, 5&rarr;85 km over 240 s</td>
+            <td class="num">85.5 km</td><td class="num">354 m/s</td>
+            <td><span class="tag t-fix">altitude</span></td>
+            <td>holds to 85 km</td><td>blanks at 18 or 80 km</td>
+          </tr>
+          <tr>
+            <td class="id">t3a</td><td>5&rarr;27 km while 0&rarr;700 m/s, 70 s</td>
+            <td class="num">27.1 km</td><td class="num">778 m/s</td>
+            <td><span class="tag t-blocked">both</span></td>
+            <td>blanks</td><td>already blanked in t1</td>
+          </tr>
+          <tr>
+            <td class="id">t3b</td><td>70&rarr;95 km while 0&rarr;600 m/s, 110 s</td>
+            <td class="num">95.5 km</td><td class="num">671 m/s</td>
+            <td><span class="tag t-blocked">both</span></td>
+            <td>blanks</td><td>already blanked in t1</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <h3>The filed test 2 could not have worked</h3>
+      <div class="prose">
+        <p>As originally specified, the altitude run climbed from 10 km to 85 km in 120
+          seconds. That is a vertical velocity of 625 m/s. COCOM acts on three-dimensional
+          speed, so the climb alone would have carried the vehicle past the 515 m/s limit
+          &mdash; the run would have exceeded <em>both</em> limits and settled nothing about an
+          independent altitude gate.</p>
+        <p>The trajectories here are therefore defined by velocity functions that are
+          integrated into position, never by altitude curves that are differentiated, and
+          every scenario is checked against both limits before it is written out. The run
+          table above prints what each one actually exceeds. The corrected t2 climbs at
+          350 m/s &mdash; 354 m/s in three dimensions, 69% of the limit &mdash; and crosses both
+          candidate altitude gates in one continuous 240-second pass.</p>
+      </div>
+    </div>
+
+    <div class="prose">
+      <h3>Continuity is doing real work</h3>
+      <p>t2 starts at 5 km, where t0 and t1 have already proved the receiver fixes, and
+        climbs without interruption through both candidate thresholds. That matters because a
+        receiver that simply never acquires at 70 km is indistinguishable from one that is
+        gated there. Beginning inside known-good territory and staying locked on the way up
+        removes the ambiguity. t3b, which has no choice but to start high, opens with a
+        20-second static hold so a failure to acquire shows up as NO_LOCK from the first
+        epoch rather than masquerading as a gate.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>Findings</h2>
+    <div class="prose">
+      <p><strong>The two limits act independently.</strong> Each was made to close the gate on
+        its own, with the other nowhere near its threshold:</p>
+      <p><strong>Velocity, at 5 km altitude.</strong> Three independent runs: normal 3-D fix at
+        an injected 510 m/s, position withheld at 520 m/s, bracketing the documented 515 m/s.
+        Altitude sat at 5.00 km throughout &mdash; below <em>both</em> candidate altitude
+        gates. Under AND logic nothing should have happened.</p>
+      <p><strong>Altitude, at 354 m/s.</strong> A slow climb held a fix continuously from 5 km
+        straight through <strong>18 km with no event whatsoever</strong>, and blanked between
+        79.55 km and 79.90 km. Speed never exceeded 354 m/s, 69% of the velocity limit.</p>
+      <p>Both transitions landed within about one second of where the trajectory crossed the
+        limit &mdash; the 80 km crossing was predicted at t=464.3 s and observed between
+        t=463 and t=464 &mdash; across two different scenarios probing two different
+        quantities. That is not coincidence.</p>
+      <p><strong>The 18 km figure is wrong for this engine, and the datasheet&rsquo;s 80 km is
+        right.</strong> More importantly, SkyTraq&rsquo;s published claim that either limit may
+        be exceeded alone is contradicted directly. For rocketry this is the unwelcome answer:
+        these receivers <em>will</em> blank partway up a boost, because boost passes 515 m/s
+        while still far below 80 km, and nothing about the altitude protects it.</p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>Results &mdash; every run, 2026-08-19</caption>
+        <thead>
+          <tr><th>Run</th><th>Exceeds</th><th>Verdict</th><th class="num">Last fix</th><th class="num">First block</th><th>Satellites across transition</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="id">t00 static</td><td><span class="tag t-none">neither</span></td>
+              <td><span class="tag t-fix">FIX</span></td>
+              <td class="num">&mdash;</td><td class="num">&mdash;</td>
+              <td>chain proven: 40.00000, &minus;119.00000 to &plusmn;1 m</td></tr>
+          <tr><td class="id">t0 baseline</td><td><span class="tag t-none">neither</span></td>
+              <td><span class="tag t-fix">FIX</span></td>
+              <td class="num">held to 50 m/s</td><td class="num">never blocked</td>
+              <td><strong>control</strong> &mdash; 7 sats, fix held throughout</td></tr>
+          <tr><td class="id">t1 &times;3</td><td><span class="tag t-fix">velocity</span></td>
+              <td><span class="tag t-blocked">BLOCKED</span></td>
+              <td class="num">510 m/s @ 5.00 km</td><td class="num">520 m/s @ 5.00 km</td>
+              <td>7 held at 38&ndash;41 dBHz, used_in_fix 7&rarr;0</td></tr>
+          <tr><td class="id">t2 &times;3</td><td><span class="tag t-fix">altitude</span></td>
+              <td><span class="tag t-blocked">BLOCKED</span></td>
+              <td class="num">79.55 km @ 354 m/s</td><td class="num">79.90 km @ 354 m/s</td>
+              <td>6 held at 35&ndash;48 dBHz, used_in_fix 6&rarr;0</td></tr>
+          <tr><td class="id">t3a</td><td><span class="tag t-blocked">both</span></td>
+              <td><span class="tag t-blocked">BLOCKED</span></td>
+              <td class="num">510 m/s @ 16.22 km</td><td class="num">517 m/s @ 16.56 km</td>
+              <td>velocity fired first, still below 18 km</td></tr>
+          <tr><td class="id">t3b</td><td><span class="tag t-blocked">both</span></td>
+              <td><span class="tag t-blocked">BLOCKED</span></td>
+              <td class="num">79.90 km @ 366 m/s</td><td class="num">80.20 km @ 371 m/s</td>
+              <td>altitude fired first, speed at 72% of limit</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>The two limits, as measured</caption>
+        <thead><tr><th>Limit</th><th class="num">Datasheet</th><th class="num">Measured bracket</th><th>Evidence</th></tr></thead>
+        <tbody>
+          <tr><td class="id">Velocity</td><td class="num">515 m/s</td>
+              <td class="num"><strong>510&ndash;517 m/s</strong></td>
+              <td>fired at 5.00 km and again at 16.22 km &mdash; altitude irrelevant</td></tr>
+          <tr><td class="id">Altitude</td><td class="num">80,000 m</td>
+              <td class="num"><strong>79.90&ndash;80.20 km</strong></td>
+              <td>fired at 354 m/s and 366 m/s &mdash; velocity irrelevant</td></tr>
+          <tr><td class="id">18 km gate</td><td class="num">claimed in FAQ</td>
+              <td class="num"><strong>does not exist</strong></td>
+              <td>fix held continuously through 18.30 km with no event</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>The raw evidence</h3>
+    <div class="prose">
+      <p>The distinction this rig exists to draw is visible directly in the frames. Across each
+        transition the satellite set does not change at all &mdash; same satellites, same
+        C/N&#8320; to within 1 dB. Only <code>used_in_fix</code> collapses:</p>
+    </div>
+<pre><code>t1, velocity crossing            t2, altitude crossing
+  E7 used=7  3:39* 4:39* 16:39*     E7 used=6  3:35* 26:39* 9:41* 4:38* 31:36* 6:48*
+             9:39* 31:41* 26:40*    DF t=463.0 fix=Y        &lt;- injected 79.55 km
+  DF t=291.0 fix=Y  &lt;- 510 m/s
+                                    E7 used=0  3:35  26:38  9:40  4:37  31:36  6:48
+  E7 used=0  3:39  4:39  16:39      DF t=464.0 fix=N        &lt;- injected 79.90 km
+             9:39  31:41  26:39
+  DF t=292.0 fix=N  &lt;- 520 m/s</code></pre>
+    <div class="prose">
+      <p style="margin-top:1.1rem">Tracking is undisturbed; the receiver simply stops using
+        what it is still receiving. A loss of signal looks nothing like this &mdash; satellites
+        fall out first, which is exactly what the earlier drop-outs in the same runs did, and
+        why the classifier scores those separately.</p>
+
+      <h3>One loose end</h3>
+      <p>Through the whole climb the receiver <em>reported</em> a frozen altitude of 4.94 km
+        &mdash; close to the value it was seeded with &mdash; while reporting the climb
+        velocity correctly at 354 m/s. It evidently knew its true altitude, since that is what
+        it gated on, but did not publish it. Whether that is an artifact of the seeded warm
+        restart or a reporting clamp in its own right is unresolved, and it matters for flight
+        use independently of COCOM. It does not affect the gate measurement: the blanking
+        point is set by the injected trajectory, and it landed on 80 km.</p>
+
+      <h3>What it took to get a trustworthy run</h3>
+      <p>Four things had to be fixed first, each of which produced a plausible wrong answer
+        before it was found:</p>
+    </div>
+    <ul class="notes">
+      <li><strong>Seed the receiver, every run.</strong> Left alone it fought the injection for
+        minutes &mdash; clock 618 s off, satellites tracked and ephemeris decoded but never
+        used. A seeded warm restart (<code>0x01</code> with the scenario&rsquo;s time and
+        position) cut time-to-first-fix to 43&ndash;63 s.</li>
+      <li><strong>Give every scenario a stationary prologue.</strong> Time-to-first-fix ran
+        63&ndash;186 s, longer than the entire 90 s velocity ramp.</li>
+      <li><strong>Less signal, not more.</strong> Solid lock at TX gain 22, never a fix at 32
+        &mdash; the front end overdrives. Higher C/N&#8320; with <em>fewer</em> satellites is
+        the tell.</li>
+      <li><strong>The classifier was under-counting satellites.</strong> The PX1125R reports one
+        channel per signal, so a satellite appears several times in one <code>0xE7</code> &mdash;
+        strong primary, near-zero secondary. Keying the C/N&#8320; map by satellite let the weak
+        entry overwrite the strong one, turning a gate closure with 7 satellites held into an
+        apparent collapse to 3. That is precisely the difference between BLOCKED and NO_LOCK.</li>
+    </ul>
+
+  <section>
+    <h2><span class="n">05</span>What this cannot tell us</h2>
+    <ul class="notes">
+      <li><strong>It measures the firmware gate, nothing else.</strong> The injected signal is
+        clean, vibration-free and free of multipath. A gate that never fires here says nothing
+        about whether boost-phase data is usable, which is the separate high-g and transonic
+        dynamics problem tracked in #174, #249 and #262.</li>
+      <li><strong>Navigation mode is a confound until it is pinned.</strong> The receiver's own
+        dynamics filter can withhold position for reasons that have nothing to do with COCOM,
+        and it produces the same NMEA symptom. Every run is made in a declared navigation mode
+        &mdash; <span class="id">0x64/0x17</span>, airborne &mdash; and t1 is repeated in <em>auto</em> as
+        a control. A difference between the two is itself a finding.</li>
+      <li><strong>L1 only.</strong> The gate acts on the computed position solution, so the
+        band it was computed from should be irrelevant. Should be. A dual-band confirmation
+        run is cheap insurance if the L1 result is surprising.</li>
+      <li><strong>One part, one firmware.</strong> Results bind to the silicon and firmware
+        version on the bench, recorded with each capture. SkyTraq has changed this behaviour
+        between engine generations before, which is the reason the published FAQs cannot be
+        taken at face value here.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <span>Rig: <code>tools/gnss-cocom/</code></span>
+    <span><a href="https://github.com/osqzss/gps-sdr-sim">gps-sdr-sim</a></span>
+    <span><a href="https://github.com/portapack-mayhem/mayhem-firmware/wiki/GPS-Sim">Mayhem GPS Sim</a></span>
+    <span><a href="https://www.skytraq.com.tw/homesite/AN0037.pdf">SkyTraq AN0037</a></span>
+    <span>Conducted injection only &mdash; never radiate L1</span>
+  </footer>
+
+</div>

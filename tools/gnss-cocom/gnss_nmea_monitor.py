@@ -263,9 +263,24 @@ class Parser:
             # Replace wholesale, as with GSV: a satellite that drops out must
             # disappear rather than linger at its last C/N0, or a real loss of
             # lock reads as a COCOM block.
-            e.cn0 = {key(s): float(s["cn0"]) for s in sats}
-            e.sats_in_view = len(sats)
-            e.sats_used = sum(1 for s in sats if s["used_in_fix"])
+            # Keep the STRONGEST signal per satellite, not the last one seen.
+            # The PX1125R reports one channel per signal (L1 C/A, L1C, L5...),
+            # so a satellite appears several times in one 0xE7 -- often with a
+            # healthy primary and a near-zero secondary. A plain dict
+            # comprehension keeps whichever came last, so a satellite tracked at
+            # 39 dBHz gets recorded at 11 and drops out of tracked_sats().
+            # That under-count lands directly on the #491 measurement: it turns
+            # a gate closure with 7 satellites held into an apparent collapse to
+            # 3, which the classifier then scores NO_LOCK instead of BLOCKED.
+            cn0 = {}
+            for s in sats:
+                k = key(s)
+                v = float(s["cn0"])
+                if v > cn0.get(k, float("-inf")):
+                    cn0[k] = v
+            e.cn0 = cn0
+            e.sats_in_view = len(cn0)
+            e.sats_used = len({key(s) for s in sats if s["used_in_fix"]})
             return True
 
         self.counts[f"0x{mid:02X} (unparsed)"] += 1
