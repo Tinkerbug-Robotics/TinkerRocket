@@ -364,12 +364,25 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     }
 
     // ================================================================
-    // ### Landing Detection: 5 sub-detectors + N-1 voting (#166) ###
-    // Fast path (impact) fires master immediately on unambiguous high-G
-    // ground contact.  Slow path requires 3 of the 4 settle-state
-    // detectors (Baro-stable, Gyro-quiet, GPS-stationary, Accel-1g) to
-    // agree — independent signals so a single noise source can't drive
-    // a false landed.  Master ``alt_landed_flag`` latches once true.
+    // ### Landing Detection: impact + a vote + quiescence (#166, #824) ###
+    // Three ways to latch, in the order they are tested below.
+    //
+    //  1. Fast path (impact): fires master immediately on unambiguous
+    //     high-G ground contact, gated on apogee + ground proximity.
+    //  2. Slow path: an N-1-of-N vote over four settle-state detectors
+    //     (Baro-stable, Gyro-quiet, GPS-stationary, Accel-1g) — independent
+    //     signals, so a single noise source cannot drive a false landed.
+    //     N is 3 or 4, not always 4: the GPS voter is counted only while
+    //     its fix is fresh.  Baro-stable is MANDATORY rather than merely
+    //     one of N, because it is the only detector here that carries
+    //     altitude information and a quorum reachable without it is
+    //     unsound (#824).
+    //  3. Extended quiescence: a separate, deliberately baro-independent
+    //     path, so that making Baro-stable mandatory cannot strand a
+    //     flight whose barometer is dead or whose landing site sits
+    //     outside the Baro-stable band.
+    //
+    // Master ``alt_landed_flag`` latches once true.
     // ================================================================
 
     // --- Fast path: high-G impact, gated on apogee + ground proximity.
