@@ -33,6 +33,8 @@
 #include <esp_ota_ops.h>          // Layer 4: esp_ota_mark_app_valid_cancel_rollback (#8/#13)
 #include <esp_app_desc.h>         // esp_app_get_description() for FC_IDENTITY version push (#8)
 #include <driver/gpio.h>
+#include <esp_attr.h>            // RTC_NOINIT_ATTR for the #848 power-hold latch flag
+#include "pwr_hold_policy.h"     // #848: boot reconciliation decision table
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
 #include <esp_private/gpio.h>      // gpio_func_sel
@@ -2792,6 +2794,75 @@ static inline void serviceHeartbeatBeep(uint32_t now_ms)
 static bool fc_ota_pending_verify = false;
 
 // ==========================================================================
+// SECTION: Power hold latch (#848)
+// ==========================================================================
+// V9/V10 only (PWR_HOLD_PIN = -1 elsewhere): GPIO5 is the second anode of the
+// D9 diode-OR into U30's enable, so driving it HIGH holds the FC's own power
+// rail up regardless of the OC — the fix for #825, where any OC fault reset
+// dropped the rail (R84/C105 give ~0.8 s) and the FC + all four pyro channels
+// powered off mid-flight, ballistic. LOW and high-Z are electrically
+// identical through the diode (an anode cannot pull the rail down), so this
+// pin can only ever ADD power — every glitch is harmless, and "release" just
+// hands control back to the OC's PWR_PIN.
+//
+// Assert = drive HIGH + gpio_hold_en. GPIO5 is an LP pad, and the LP_IOMUX
+// pad hold survives every digital reset (panic/WDT/SW; IDF releases it only
+// after deep-sleep wake) — so the FC's OWN crash mid-flight keeps the rail
+// solid with zero gap, no boot-time race against the R84/C105 decay. The
+// RTC_NOINIT flag mirrors the latch so boot can reconcile an inherited hold
+// (pwr_hold_policy.h): keep it when the flight resumes or the OC is dead
+// (downed-rocket GNSS tracker mode — battery pull to power off), release it
+// when the OC is alive to take the rail back.
+//
+// Asserted at every INFLIGHT entry (enterInflight + the reboot-recovery
+// restore), sims included — a sim exercises this mechanism harmlessly since
+// release follows at sim landing/stop. Released at LANDED, at sim reset, and
+// by boot reconciliation. NEVER asserted on the ground: with pyro armed on
+// the pad an OC reset dropping the rail is SAFE (FC off = nothing fires),
+// and an un-power-off-able ground state is an operator trap.
+static constexpr uint32_t kPwrHoldMagic = 0x484F4C44;  // "HOLD"
+RTC_NOINIT_ATTR static uint32_t pwr_hold_flag_rtc;
+static bool pwr_hold_latched_at_boot = false;  // set in setup_fc before the pad is touched
+// #848: boot (or landing) chose KeepHold because the OC was not answering —
+// re-reconciled at runtime the moment out_ready latches, so a transient miss
+// of the single boot probe (or the OC's own reboot racing ours) cannot leave
+// the board un-power-off-able against a live OC. The tracker-mode keep only
+// persists while the OC genuinely never answers.
+static bool pwr_hold_orphan_keep = false;
+
+static void pwrHoldAssert(const char* why)
+{
+    if (config::PWR_HOLD_PIN < 0) return;
+    const gpio_num_t pin = (gpio_num_t)config::PWR_HOLD_PIN;
+    // Configure first (no effect while a latched hold owns the pad), then
+    // cycle the hold: after hold_dis the pad is already driven HIGH, so a
+    // reboot-inherited latch hands over with no gap. gpio_set_direction also
+    // re-muxes the pad off its MTDO reset default.
+    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+    gpio_set_level(pin, 1);
+    gpio_hold_dis(pin);
+    gpio_hold_en(pin);
+    pwr_hold_flag_rtc = kPwrHoldMagic;
+    ESP_LOGW(TAG, "[PWR] Power hold ASSERTED (%s) — FC rail latched through "
+                  "OC resets and our own", why);
+}
+
+static void pwrHoldRelease(const char* why)
+{
+    if (config::PWR_HOLD_PIN < 0) return;
+    const gpio_num_t pin = (gpio_num_t)config::PWR_HOLD_PIN;
+    const bool was_latched = (pwr_hold_flag_rtc == kPwrHoldMagic);
+    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+    gpio_set_level(pin, 0);   // driven LOW == high-Z through D9: rail follows the OC
+    gpio_hold_dis(pin);
+    pwr_hold_flag_rtc = 0;
+    if (was_latched)
+    {
+        ESP_LOGW(TAG, "[PWR] Power hold released (%s) — rail control back to the OC", why);
+    }
+}
+
+// ==========================================================================
 // SECTION: OTA boot validation
 // ==========================================================================
 static inline void fcMaybeMarkOtaValid()
@@ -2963,6 +3034,31 @@ static void setup_fc()
     {
         gpio_set_direction((gpio_num_t)config::SERVO_ACT_PIN, GPIO_MODE_OUTPUT);
         gpio_set_level((gpio_num_t)config::SERVO_ACT_PIN, 1);
+    }
+
+    // #848: the power-hold latch may have survived the reset (LP pad hold +
+    // RTC flag both persist through panic/WDT/SW reboots). Do NOT touch the
+    // pad here — pulling the hold before the recovery path has decided
+    // whether the flight is still on would drop the one thing keeping the
+    // rail up if the OC is also down. Reconciliation runs after recovery.
+    if (config::PWR_HOLD_PIN >= 0)
+    {
+        // Gate on reset reason like the OC's rail_rtc: on a true power-on the
+        // pad hold cannot have survived (the LP domain lost power), but RTC
+        // SRAM remanence across a short battery reseat can preserve the magic
+        // — exactly the tracker-mode exit procedure. Without this, that
+        // reseat would boot believing a hold is latched.
+        pwr_hold_latched_at_boot = (esp_reset_reason() != ESP_RST_POWERON) &&
+                                   (pwr_hold_flag_rtc == kPwrHoldMagic);
+        if (pwr_hold_latched_at_boot)
+        {
+            ESP_LOGW(TAG, "[PWR] Power hold latched from a previous boot — "
+                          "keeping it until the flight state is resolved");
+        }
+        else
+        {
+            pwr_hold_flag_rtc = 0;   // normalize RTC garbage on cold boots
+        }
     }
 
     ESP_LOGI(TAG, "Starting ....");
@@ -3866,6 +3962,46 @@ static void setup_fc()
         }
     }
 
+    // #848: reconcile an inherited power hold now that the flight state is
+    // known (pwr_hold_policy.h carries the decision table + rationale).
+    if (config::PWR_HOLD_PIN >= 0)
+    {
+        switch (PwrHoldPolicy::bootAction(pwr_hold_latched_at_boot,
+                                          rocket_state == INFLIGHT,
+                                          out_ready))
+        {
+            case PwrHoldPolicy::BootAction::Assert:
+                pwrHoldAssert("reboot recovery");
+                break;
+            case PwrHoldPolicy::BootAction::Release:
+                pwrHoldRelease("boot: flight over, OC alive");
+                break;
+            case PwrHoldPolicy::BootAction::KeepHold:
+                // A latched hold with no recovered flight and no OC: this is a
+                // downed rocket and we are its GNSS tracker. Deliberately NOT
+                // released — battery pull is the power-off. If the OC answers
+                // later (the boot probe is a single unretried query and the OC
+                // may simply still be booting), the out_ready latch in the
+                // status-poll path releases this.
+                pwr_hold_orphan_keep = true;
+                ESP_LOGE(TAG, "[PWR] Power hold KEPT: previous flight did not "
+                              "resolve and the OC is not answering. Holding our "
+                              "own rail for recovery tracking; disconnect the "
+                              "battery to power off (auto-releases if the OC "
+                              "comes back).");
+                break;
+            case PwrHoldPolicy::BootAction::None:
+                // Defensive: the RTC flag and the LP-pad hold register are
+                // separate LP-domain state — a brownout can scramble the flag
+                // while the hold register keeps the pad latched. Releasing
+                // costs nothing here (LOW == high-Z through D9) and self-heals
+                // a phantom latch; pwrHoldRelease only logs when the flag was
+                // actually set, so cold boots stay quiet.
+                pwrHoldRelease("boot: no hold expected");
+                break;
+        }
+    }
+
     ESP_LOGI(TAG, "Setup complete");
     ESP_LOGI(TAG, "Setup complete…");
     triggerBlueLedFlash(time_ms());
@@ -3890,6 +4026,7 @@ static void resetFlightStateForSim(const char* edge)
     // Also resets GNSS state: the sim injects synthetic GNSS (fix=3, sats=12);
     // a stale copy would otherwise immediately re-trip READY -> PRELAUNCH.
     pyroSafeAll();
+    pwrHoldRelease("sim reset");  // #848: a sim abort exits INFLIGHT without LANDED
     // A sim start/stop used to leave a REAL camera powered and the start phase
     // machine armed — and with the sim driving rocket_state to INFLIGHT, that
     // armed machine takes the in-flight blind-record shortcuts.
@@ -3970,6 +4107,10 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
 {
     rocket_state = INFLIGHT;
     launch_time_millis = now_ms;
+    // #848: latch our own power rail for the duration of the flight (sims
+    // included — the release at LANDED/sim-reset makes it harmless and it
+    // exercises the mechanism on the bench).
+    pwrHoldAssert(from_state);
     // Orientation is now latched (estimator only runs in
     // READY/PRELAUNCH).  Start the boost-phase thrust-axis
     // cross-check on what was latched.
@@ -4981,7 +5122,18 @@ static void loop_fc()
                         && resp_payload_len >= 1)
                     {
                         query_ok = true;
-                        if (resp_payload[0] != 0) { out_ready = true; }
+                        if (resp_payload[0] != 0)
+                        {
+                            out_ready = true;
+                            // #848: the OC is provably alive — an orphaned
+                            // power hold kept for a dead OC hands the rail
+                            // back now (never during a flight).
+                            if (pwr_hold_orphan_keep && rocket_state != INFLIGHT)
+                            {
+                                pwr_hold_orphan_keep = false;
+                                pwrHoldRelease("OC answered after orphan keep");
+                            }
+                        }
                         // Reflect the OC's reported pending command every poll,
                         // INCLUDING 0 (idle).  The OC repeats each command for
                         // CMD_REPEAT_LIMIT polls then reports 0; holding the value
@@ -7485,6 +7637,24 @@ static void loop_fc()
                     landed_actions_done = true;
                     post_flight_lockout = true;  // #317: LANDED is terminal until reboot
                     pyroSafeAll();
+                    // #848: hand the rail back to the OC — but only if the OC
+                    // ever answered this session. Landing after a both-MCU
+                    // brownout (or with a hard-dead OC) with out_ready false
+                    // must NOT release: the hold is what keeps this downed
+                    // rocket's GNSS downlink alive. The out_ready latch in the
+                    // status-poll path releases it the moment the OC appears.
+                    if (out_ready)
+                    {
+                        pwrHoldRelease("landed");
+                    }
+                    else
+                    {
+                        pwr_hold_orphan_keep = true;
+                        ESP_LOGE(TAG, "[PWR] LANDED with the OC not answering — "
+                                      "KEEPING the power hold for recovery "
+                                      "tracking (battery pull to power off; "
+                                      "auto-releases if the OC comes back).");
+                    }
                     clearFlightSnapshot();  // prevent stale recovery on next boot
                     if (servo_enabled)
                     {
