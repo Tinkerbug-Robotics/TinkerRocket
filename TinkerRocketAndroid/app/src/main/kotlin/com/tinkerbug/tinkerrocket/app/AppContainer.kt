@@ -17,6 +17,7 @@ import com.tinkerbug.tinkerrocket.session.RocketProfileStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -213,6 +214,25 @@ class AppContainer(app: Application) {
             lastSession = PrefsLastSessionStore(app),
         )
         fleetRef
+    }
+
+    init {
+        // #829: the foreground service's lifetime belongs here, at process
+        // scope — not in the composition. It used to be started by a Compose
+        // LaunchedEffect, which cannot restart it after a mid-flight drop:
+        // while the activity is stopped the Recomposer's frame clock is
+        // paused, and by the time it resumes the reconnect ladder has already
+        // refilled the device map, so the effect's key reads unchanged and
+        // never re-runs. The service stayed dead for the rest of the session.
+        //
+        // linkActive stays true across a drop-and-reconnect, so this only
+        // fires on the transitions that matter, and the service stops itself
+        // when it goes false.
+        fleetScope.launch {
+            fleet.linkActive.collect { active ->
+                if (active) FleetService.start(app)
+            }
+        }
     }
 }
 

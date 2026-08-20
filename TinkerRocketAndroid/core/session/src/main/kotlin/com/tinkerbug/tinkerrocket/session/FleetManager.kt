@@ -107,6 +107,41 @@ public class FleetManager<S : Any>(
     private val _devices = MutableStateFlow<Map<String, FleetDevice<S>>>(linkedMapOf())
     public val devices: StateFlow<Map<String, FleetDevice<S>>> = _devices.asStateFlow()
 
+    private val _linkActive = MutableStateFlow(false)
+
+    /**
+     * True while the app still INTENDS to hold a link: a device is connected,
+     * or a reconnect ladder is still trying to get one back.
+     *
+     * #829: the foreground service keys off this rather than [devices].
+     * [handleDisconnect] removes the device from [devices] BEFORE the ladder
+     * starts, so on a single-device fleet every transient drop looked like
+     * "fleet is empty" and tore down the service that exists to keep the
+     * process — and its BLE links — alive, at exactly the moment the link
+     * needed recovering.
+     *
+     * Note there is no "the ladder gave up" state to wait for: the endgame in
+     * [launchReconnectLadder] is an unbounded sighting wait, deliberately, so
+     * a flight in progress is never abandoned. What clears this is a user
+     * disconnect, which cancels the ladder — or the ladder's job dying with
+     * the scope.
+     */
+    public val linkActive: StateFlow<Boolean> = _linkActive.asStateFlow()
+
+    /**
+     * Recompute [linkActive] after any change to [_devices] or [reconnectJobs].
+     *
+     * A completed or cancelled Job reports `isActive == false`, so stale
+     * entries left in [reconnectJobs] are inert here and need no bookkeeping
+     * of their own — which keeps this correct without a
+     * remove-the-right-generation dance against a ladder that was just
+     * superseded.
+     */
+    private fun refreshLinkActive() {
+        _linkActive.value = _devices.value.isNotEmpty() ||
+            reconnectJobs.values.any { it.isActive }
+    }
+
     /** Which device the dashboard is currently showing. */
     private val _activeDeviceId = MutableStateFlow<String?>(null)
     public val activeDeviceId: StateFlow<String?> = _activeDeviceId.asStateFlow()
@@ -320,6 +355,7 @@ public class FleetManager<S : Any>(
         // two concurrent tryConnects for one device would race adoption
         // (Phase 2 review).
         reconnectJobs.remove(deviceId)?.cancel()
+        refreshLinkActive()
         connectJobs[deviceId] = scope.launch {
             if (!tryConnect(deviceId, name, autoConnect = false)) {
                 _statusMessage.value = "Connection failed"
@@ -416,6 +452,7 @@ public class FleetManager<S : Any>(
             deviceType = deviceType,
         )
         _devices.value = LinkedHashMap(_devices.value).also { it[deviceId] = device }
+        refreshLinkActive()
         if (_activeDeviceId.value == null) _activeDeviceId.value = deviceId
         _statusMessage.value = "Connected to $advertisedName"
     }
@@ -437,6 +474,9 @@ public class FleetManager<S : Any>(
 
         if (pendingUserDisconnects.remove(deviceId)) {
             reconnectJobs.remove(deviceId)?.cancel()
+            // The user walked away from THIS device — but another may still be
+            // connected or mid-ladder, so recompute rather than clearing.
+            refreshLinkActive()
             _statusMessage.value = "Disconnected"
             _discoveredDevices.value = emptyList()
             // Deliberate: walking away is the ONE case we don't resume from.
@@ -544,6 +584,11 @@ public class FleetManager<S : Any>(
                 if (tryConnect(deviceId, name, autoConnect = true)) return@launch
             }
         }
+        // The ladder is now the thing keeping the link "intended" — set it
+        // before anyone can observe the empty fleet, and recompute when the
+        // job ends however it ends (reconnected, cancelled, scope torn down).
+        refreshLinkActive()
+        reconnectJobs[deviceId]?.invokeOnCompletion { refreshLinkActive() }
     }
 
     // --------------------------------------------------------- device lookup

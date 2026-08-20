@@ -128,14 +128,22 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // #385: keep the screen awake while any device is
-                    // connected; FGS pins the process on real connections
-                    // (BLUETOOTH_CONNECT is granted by the time one exists).
-                    LaunchedEffect(devices.isEmpty(), demoFleet) {
+                    // connected. This one genuinely IS activity-scoped — the
+                    // window flag dies with the window either way.
+                    //
+                    // #829: starting the foreground service used to ride along
+                    // here and must not — a LaunchedEffect cannot restart it
+                    // after a mid-flight drop (paused Recomposer, and the key
+                    // reads unchanged once the ladder refills the map). That
+                    // now lives in AppContainer at process scope, keyed on
+                    // fleet.linkActive. The demo fleet is a separate
+                    // FleetManager, so container.fleet stays empty in demo
+                    // mode and the service still never starts there.
+                    LaunchedEffect(devices.isEmpty()) {
                         if (devices.isEmpty()) {
                             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         } else {
                             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                            if (demoFleet == null) FleetService.start(this@MainActivity)
                         }
                     }
 
