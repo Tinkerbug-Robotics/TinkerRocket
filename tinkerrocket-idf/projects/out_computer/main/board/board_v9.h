@@ -77,6 +77,26 @@ struct board_pins
     //     fails to allocate is a far worse outcome than a short one — begin()
     //     returns false and flight logging is dead for the boot. Revisit with
     //     hardware and a free-heap number, not before.
+    //
+    //     Read that as "64 KB is what we can safely use today", NOT as "64 KB
+    //     is all this board has". The MRAM's designated replacement is on the
+    //     die: the RH2 carries 2 MB of in-package quad PSRAM, and the whole
+    //     point of the swap was for the ring to live there. It is unused —
+    //     CONFIG_SPIRAM is unset — and turning it on is a hardware question,
+    //     not a flag:
+    //       * prefab-review-2026-07-30.md H7: VDD_SPI feeds the in-package
+    //         PSRAM *and* the external boot flash through the S3's internal
+    //         ~14 ohm R_SPI, so concurrent flash program + PSRAM traffic lands
+    //         at ~2.53 V against a 2.7 V minimum for both — out of spec
+    //         exactly during heavy logging. The prescribed fix is a schematic
+    //         change (move U13's VCC to +3V3) and is still unaddressed.
+    //       * rocket_computer_mini/sdkconfig.defaults already carries a
+    //         "PSRAM: deliberately OFF — do not enable" note for this same
+    //         part, citing rail sag measured on radio_board and base station.
+    //       * TR_LogToFlash asks for MALLOC_CAP_INTERNAL, so enabling PSRAM
+    //         alone would not move the ring anyway.
+    //     And note it would not buy back the reboot features below: PSRAM is
+    //     volatile. It restores ring SIZE, never recovery.
     //   * the ring is volatile, so the FC's in-flight reboot recovery (#104,
     //     GET_FLIGHT_SNAPSHOT) and the #274 dirty-ring replay have nowhere to
     //     live and are UNAVAILABLE. main.cpp says so at boot rather than
