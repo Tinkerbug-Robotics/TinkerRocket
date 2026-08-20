@@ -40,8 +40,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.tinkerbug.tinkerrocket.app.theme.TrPyroContinuityBadge
 import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
+import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
 import com.tinkerbug.tinkerrocket.protocol.SignalQuality
+import com.tinkerbug.tinkerrocket.protocol.pyroContinuityOf
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.session.FleetDevice
 import com.tinkerbug.tinkerrocket.session.DeviceSession
@@ -52,8 +55,8 @@ import java.util.Locale
  * Phase 3 dashboard slice — the pad-ops core: identity header, staleness
  * banner (worsen-only effectiveDataStatus), rocket state, power section
  * gated on #377 (no blind cmd-8 until the first telemetry frame confirms
- * power state), battery / GNSS / link cards, pyro tiles with the
- * continuity-AND-live fail-safe rendering.
+ * power state), battery / GNSS / link cards, pyro tiles with the four-state
+ * continuity badge (#828).
  */
 @Composable
 fun DashboardScreen(
@@ -117,6 +120,7 @@ fun DashboardScreen(
         }
     }
     val telemetry by session.telemetry.collectAsState()
+    val connected by session.isConnected.collectAsState()
     val identity by session.identity.collectAsState()
     val hasTelemetry by session.hasReceivedTelemetry.collectAsState()
     val dataStatus by session.effectiveDataStatus.collectAsState()
@@ -340,12 +344,13 @@ fun DashboardScreen(
 
         // Pyro tiles: iOS PyroChannelsView twin (2x2 grid, direct rocket
         // links only — iOS hides pyro on BS links).  Badge ladder per tile:
-        // FIRED beats everything; CONT/NO CONT shows while armed or for 5 s
-        // after that tile's manual test (single-reveal state — a second tap
-        // MOVES the reveal, the iOS quirk included); a TESTING spinner
-        // replaces the badge while cmd 35 round-trips BLE→OC→I2C→FC (#411).
-        // Continuity is trusted only from a LIVE frame (#297) — a stale
-        // frame fails safe to NO CONT.
+        // FIRED beats everything; the continuity badge shows while armed or
+        // for 5 s after that tile's manual test (single-reveal state — a
+        // second tap MOVES the reveal, the iOS quirk included); a TESTING
+        // spinner replaces it while cmd 35 round-trips BLE→OC→I2C→FC (#411).
+        // The badge carries four states (#828): red is a MEASURED open, and a
+        // channel nobody has tested reads NOT TESTED, not NO CONT. #297
+        // fail-safe on a stale frame is NO DATA.
         if (!session.isBaseStation) {
             val config by session.rocketConfig.collectAsState()
             val contPendingUntil by session.contTestPendingUntil.collectAsState()
@@ -370,7 +375,6 @@ fun DashboardScreen(
                 }
             }
             val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
-            val live = dataStatus == TelemetryData.DataStatus.LIVE
             val armed = telemetry.pyroArmed
             val inflight = telemetry.state == "INFLIGHT"
 
@@ -399,12 +403,22 @@ fun DashboardScreen(
 
             @Composable
             fun tile(ch: Int, cont: Boolean, fired: Boolean, modifier: Modifier) {
+                // #828: `cont && live` collapsed "never measured" into the
+                // same red NO CONT as a measured open. The raw bit is still
+                // read for the legacy path inside pyroContinuityOf.
+                val continuity = pyroContinuityOf(
+                    telemetry = telemetry,
+                    channel = ch,
+                    isConnected = connected,
+                    dataStatus = dataStatus,
+                    isBaseStation = session.isBaseStation,
+                )
                 val (enabled, mode, value) = channelConfig(ch)
                 PyroTile(
                     ch = ch,
                     text = if (enabled) triggerText(mode, value) else "Disabled",
                     fired = fired,
-                    continuity = cont && live,
+                    continuity = continuity,
                     revealed = armed || contTestChannel == ch,
                     testing = (contPendingUntil[ch] ?: 0L) > nowMs,
                     // Rail gate matches the iOS tile: the OC refuses cmd 35
@@ -681,8 +695,9 @@ private fun StatCard(
  * iOS pyroTile twin.  Header: "CH n" + the badge ladder — FIRED beats the
  * continuity badge; CONT/NO CONT renders only while [revealed] (armed, or
  * the 5 s window after this tile's manual test); a TESTING spinner replaces
- * it while the cmd-35 round trip is pending.  [continuity] must already be
- * live-gated by the caller (#297).  Below the header: the trigger text or
+ * it while the cmd-35 round trip is pending.  [continuity] is the four-state
+ * verdict (#828) — the caller resolves it with pyroContinuityOf, which folds
+ * in the #297 live gate.  Below the header: the trigger text or
  * "Disabled".  Tap-to-configure stays iOS-only for now — Android edits pyro
  * config on the Settings screen.
  */
@@ -691,7 +706,7 @@ private fun PyroTile(
     ch: Int,
     text: String,
     fired: Boolean,
-    continuity: Boolean,
+    continuity: PyroContinuity,
     revealed: Boolean,
     testing: Boolean,
     showTestButton: Boolean,
@@ -735,18 +750,7 @@ private fun PyroTile(
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = bold),
                     )
                 }
-                revealed -> Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    val c = if (continuity) tr.statusOk else tr.statusBad
-                    Box(Modifier.size(8.dp).background(c, CircleShape))
-                    Text(
-                        if (continuity) "CONT" else "NO CONT",
-                        color = c,
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = bold),
-                    )
-                }
+                revealed -> TrPyroContinuityBadge(state = continuity)
             }
         }
         Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

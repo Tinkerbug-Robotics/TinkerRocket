@@ -5,6 +5,8 @@ import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.protocol.ConfigIdentityMsg
 import com.tinkerbug.tinkerrocket.protocol.FileInfo
+import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
+import com.tinkerbug.tinkerrocket.protocol.pyroContinuityOf
 import com.tinkerbug.tinkerrocket.protocol.FileOpsDispatch
 import com.tinkerbug.tinkerrocket.protocol.FileOpsMessage
 import com.tinkerbug.tinkerrocket.protocol.FrequencyScanSample
@@ -26,11 +28,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
@@ -948,6 +953,34 @@ public class DeviceSession(
     /** True while [channel]'s TESTING window is open. */
     public fun contTestPending(channel: Int): Boolean =
         (_contTestPendingUntil.value[channel] ?: 0L) > clock()
+
+    /**
+     * Four-state continuity for [channel], as a flow so Compose recomposes
+     * only when the VERDICT changes rather than on every telemetry frame.
+     * iOS twin: `BLEDevice.pyroContinuity(channel:)`.
+     *
+     * [isBaseStation] is read once per emission rather than observed — it is
+     * a plain getter off the identity, and both call sites already treat the
+     * link type as fixed for the lifetime of the session.
+     */
+    public fun pyroContinuityFlow(channel: Int): Flow<PyroContinuity> =
+        combine(telemetry, effectiveDataStatus, isConnected) { t, ds, connected ->
+            pyroContinuityOf(t, channel, connected, ds, isBaseStation)
+        }.distinctUntilChanged()
+
+    /**
+     * Snapshot of [pyroContinuityFlow] for non-Compose callers. Never use the
+     * Bool-ish shorthand `== PRESENT` to render a verdict — that is the
+     * collapse the four states exist to prevent (#828).
+     */
+    public fun pyroContinuity(channel: Int): PyroContinuity =
+        pyroContinuityOf(
+            telemetry.value,
+            channel,
+            isConnected.value,
+            effectiveDataStatus.value,
+            isBaseStation,
+        )
 
     /**
      * iOS applyPyroConfig step 3: mirror an optimistic cmd-34 push into
