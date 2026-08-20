@@ -134,6 +134,23 @@ for name in "${names[@]}"; do
 
   printf 'center_frequency=%s\nsample_rate=%s\n' "$CENTER" "$RATE" > "$name.TXT"
 
+  # Record the start time into the scenario JSON, which is the file correlate.py
+  # already loads. Printing it at the end of the run and asking the reader to
+  # keep a note of it was not enough: two flight captures were analysed before
+  # anyone noticed the note had never been written down, and a wrong start does
+  # not fail loudly -- correlate.py still prints a table, just aligned against
+  # the wrong part of the trajectory. align_start.py can recover it from a
+  # capture, but it should not have to.
+  python3 - "$HERE/$SCENDIR/$name.json" "$START" <<'PYEOF' || true
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+if p.exists():
+    m = json.loads(p.read_text())
+    m["start_time"] = sys.argv[2]
+    p.write_text(json.dumps(m, indent=1) + "\n")
+PYEOF
+
   bytes=$(wc -c < "$out" | tr -d ' ')
   secs=$(python3 -c "print(f'{$bytes/(2*$RATE):.1f}')")
   echo "    -> $out  $(python3 -c "print(f'{$bytes/1e9:.2f}')") GB  ${secs}s"

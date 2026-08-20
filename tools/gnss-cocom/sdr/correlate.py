@@ -220,7 +220,8 @@ def main() -> int:
                     help="print every epoch, not just transitions")
     args = ap.parse_args()
 
-    truth = Truth(json.loads(args.scenario.read_text()))
+    meta = json.loads(args.scenario.read_text())
+    truth = Truth(meta)
     samples = collect(args.capture)
     if not samples:
         raise SystemExit(f"no receiver epochs in {args.capture} "
@@ -353,8 +354,23 @@ def main() -> int:
     #
     # A COCOM gate does not flicker: once the trajectory is past the limit the
     # position stays withheld. So anchor on the LAST epoch that held a fix.
-    last_fix_i = max((i for i, r in enumerate(rows) if r[2] == "FIX"),
-                     default=None)
+    # A flight profile recovers by design and lands holding a fix, so "the last
+    # epoch that held one" is the touchdown, not the gate -- which reported a
+    # flight that blocked three times as never withheld at all. When the
+    # scenario declares blocked windows, anchor on the first closure inside the
+    # first of them instead; recovery.py handles the rest window by window.
+    windows = meta.get("blocked_windows") or []
+    last_fix_i = None
+    if windows:
+        w_start, w_end = windows[0]
+        for i in range(1, len(rows)):
+            if (rows[i - 1][2] == "FIX" and rows[i][2] != "FIX"
+                    and w_start - 2.0 <= rows[i][0] <= w_end + 2.0):
+                last_fix_i = i - 1
+                break
+    if last_fix_i is None:
+        last_fix_i = max((i for i, r in enumerate(rows) if r[2] == "FIX"),
+                         default=None)
     transient = sum(1 for i in range(1, len(rows))
                     if rows[i - 1][2] == "FIX" and rows[i][2] != "FIX") - 1
     first_block = None
@@ -408,9 +424,11 @@ def main() -> int:
     print("VERDICT: position withheld while satellites stayed tracked -- the "
           "COCOM signature.")
     if transient > 0:
-        print(f"         ({transient} earlier drop-out(s) recovered and are not "
-              f"the gate; this is the\n          transition the receiver never "
-              f"came back from.)")
+        kind = ("the first closure inside a declared blocked window"
+                if (meta.get("blocked_windows") or [])
+                else "the transition the receiver never came back from")
+        print(f"         ({transient} other drop-out(s) in this run; the one "
+              f"reported is\n          {kind}.)")
     if last_fix and last_fix[4] and tr_b:
         print(f"         last fix at  {last_fix[4]['alt_m'] / 1000:8.2f} km, "
               f"{last_fix[4]['speed_mps']:6.0f} m/s  (t={last_fix[0]:.1f}s)")

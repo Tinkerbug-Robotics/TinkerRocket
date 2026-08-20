@@ -22,6 +22,10 @@ so a true AND gate essentially never blanks in flight.
 | `plot_flight.py` | Altitude, speed, acceleration, lock state and satellite count on one time axis |
 | `recovery.py` | Shut lag and re-open latency per blocked window, with satellites in the wait |
 | `make_flights.py` | Realistic flight profiles integrated from thrust, drag and gravity |
+| `run_fc.py` | Transmits a scenario and records the flight computer's console, in one command |
+| `align_start.py` | Recovers a capture's scenario start time by matching reported to injected altitude |
+| `receiver_table.py` | Renders the receiver comparison from `results/receivers.json` |
+| `oscillation.py` | Characterises the periodic C/N&#8320; swing in a capture |
 
 ## Quick start
 
@@ -378,6 +382,27 @@ adds ~1.5 kB and logs, once a second:
 format, so `correlate.py`, `recovery.py`, `plot_flight.py` and `oscillation.py`
 all work unchanged against the same classifier the conducted rig used. The flag
 defaults off and the flight path neither sets nor needs it.
+
+`run_fc.py` drives that whole path in one command -- switch the PortaPack into
+HackRF mode, transmit, record the console, convert it:
+
+    ./run_fc.py -s gentle_alt -x 12          # -p defaults to /dev/cu.usbmodem101
+
+It refuses to start unless `hackrf_transfer` is actually streaming, because a
+run where the transmitter failed to open the device looks exactly like a run
+where the receiver heard nothing.
+
+**Recover the scenario start time from the capture, do not trust a note.**
+`build_scenarios.sh` now records `start_time` into `scenarios/NAME.json`, but
+captures predating that need `align_start.py`, which scans whole-minute
+candidates for the one that best matches reported altitude to injected altitude:
+
+    ./align_start.py captures/fc_spaceshot.log -s scenarios/spaceshot.json
+
+The median residual is the check -- tens of metres when the alignment is right,
+over a kilometre when the capture is not that scenario. This matters because a
+wrong start does not fail loudly: `correlate.py` still prints a full table, just
+aligned against the wrong part of the trajectory.
 
 L1's quarter wave is **47.6 mm**, not the 83 mm of a 900 MHz whip. Free-space
 loss at L1 is only 26 dB at 30 cm, so with the separation fixed by the box, TX

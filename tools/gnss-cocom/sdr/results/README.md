@@ -124,3 +124,52 @@ chain: localised, not identified.
 It does not touch the gate results. Every threshold and latency was measured
 across a transition with satellites tracked either side, which is what the
 classifier requires before calling anything.
+
+## u-blox SAM-M10Q, radiated (2026-08-20)
+
+The rocket computer's own receiver, flown against the same two trajectories to
+separate what is a rule from what is one vendor's choice. Different part,
+different protocol, different signal path.
+
+Scenario start for these captures: **2026/08/18,08:30:00** -- but do not take
+that on trust, recover it:
+
+```bash
+gunzip -c results/ublox_m10_gentle_alt.log.gz > /tmp/g.log
+python3 align_start.py /tmp/g.log -s results/ublox_m10_gentle_alt.scenario.json
+```
+
+The scenario each was flown against is archived beside it, `start_time` included.
+TX: HackRF One r9 via PortaPack in HackRF mode, **gain 12**, 100 dB pad, L1
+quarter-wave, inside a Faraday cage. Receiver: SAM-M10Q on the flight computer,
+configured by flight firmware (`DYN_MODEL_AIRBORNE4g`) and never written to by
+the rig. `.console.log.gz` is the raw FC console -- the primary record;
+`.log.gz` is `cocom_fcdiag.py`'s conversion of it.
+
+| Capture | Boost | Result |
+|---|---|---|
+| `ublox_m10_spaceshot` | 15 g | 3 windows, all recovered: 0.6 / 0.0 / 0.3 s. 618/795 epochs with a fix; satellites never below 4 |
+| `ublox_m10_gentle_alt` | 3 g | 3 windows, all recovered: 0.3 / 0.7 / 1.1 s. 646/824 with a fix; **the run that brackets the velocity gate**, min 9 satellites |
+
+Taken together the two flights corner the velocity gate between **514 and
+516 m/s** and the altitude gate at **~80.16 km**. The 15 g flight alone could
+only say 500-618 m/s: at 1 Hz a 15 g boost covers 118 m/s between epochs, so
+the slow ascent is what does the measuring.
+
+## Receivers compared
+
+Generated from `results/receivers.json` by `receiver_table.py` -- edit the JSON
+and re-run it rather than hand-editing this table or the one in `report.html`.
+
+| Receiver | Bands | Path | Runs | Velocity gate | Altitude gate | 18 km gate | Limits combined | Re-open latency | Sats min / median |
+|---|---|---|---|---|---|---|---|---|---|
+| SkyTraq PX1125R | L1 + L5 | conducted | 9 | 510-517 m/s | 79.90-80.20 km | none | independent | 0.0-1.5 s | 2 / 7 |
+| u-blox SAM-M10Q | L1 (GPS/GAL/BDS/GLO) | radiated, Faraday cage | 2 | 514-516 m/s | ~80.16 km | none | independent | 0.0-1.1 s | 4 / 13 |
+
+**SkyTraq PX1125R** (2026-08-19, ~70 dB pad + DC block into RF_IN, TX gain 44-47): Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified.
+
+**u-blox SAM-M10Q** (2026-08-20, 100 dB pad, L1 quarter-wave, TX gain 12): Never fell below 4 satellites in either flight, so every withheld epoch is the gate rather than a link failure. No periodic C/N0 oscillation appeared (r = 0.02 and 0.11).
+
+More parts are planned against the same trajectories. To add one: fly
+`spaceshot` and `gentle_alt`, archive the capture and its scenario here, add an
+entry to `receivers.json`, and regenerate.
