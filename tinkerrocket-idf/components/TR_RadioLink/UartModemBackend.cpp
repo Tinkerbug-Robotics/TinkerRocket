@@ -4,6 +4,7 @@
 
 #include <compat.h>
 #include <driver/gpio.h>
+#include <driver/uart.h>  // uart_flush_input on the re-attach probe
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -45,7 +46,20 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
     // polling a link that begin() had just declared dead. LORA_ACT is also the
     // recovery hammer for a wedged modem (#412) — dropping it means a later
     // retry gets a genuine power cycle instead of re-poking a stuck part.
-    auto failClosed = [&]() -> bool
+    //
+    // #823: that "later retry" is now real.  It never was — begin() is called
+    // exactly once per boot on both hosts, so dropping act_pin simply ended the
+    // radio for the session, and the hot-join this function's own header
+    // comment advertises could not fire either (unpowered module, and
+    // service() returned on !began_ before polling).  armReattach() below
+    // schedules the non-blocking re-attach in service(); see serviceReattach().
+    //
+    // `permanent` = the modem ANSWERED and is definitively incompatible.  Only
+    // a non-responsive modem is worth re-attaching to: a protocol-version
+    // mismatch is a mismatched daughterboard pair, and power-cycling it on a
+    // timer forever cannot make it compatible — it would just keep dropping a
+    // 22 dBm module in and out for the rest of the flight.
+    auto failClosed = [&](bool permanent) -> bool
     {
         modem_alive_   = false;
         began_         = false;
@@ -54,14 +68,24 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
         {
             gpio_set_level((gpio_num_t)cfg.act_pin, 0);
         }
+        if (permanent)
+        {
+            reattach_state_ = Reattach::Off;
+            ESP_LOGE(TAG, "radio permanently disabled — not re-attaching");
+        }
+        else
+        {
+            armReattach(millis());
+        }
         return false;
     };
 
     if (link_.begin(cfg.uart) != ESP_OK)
     {
         ESP_LOGE(TAG, "UART link init failed");
-        return failClosed();
+        return failClosed(false);
     }
+    link_open_ = true;
     began_ = true;
 
     // The modem sends BOOT (identity payload) once its firmware is up —
@@ -95,7 +119,7 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
     if (!modem_alive_)
     {
         ESP_LOGE(TAG, "no modem answer on the UART link — radio disabled");
-        return failClosed();
+        return failClosed(false);
     }
     if (identity_.protocol_version != PROTOCOL_VERSION)
     {
@@ -104,7 +128,7 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
         ESP_LOGE(TAG, "modem protocol v%u != host v%u — radio disabled "
                       "(mismatched daughterboard pair?)",
                  identity_.protocol_version, PROTOCOL_VERSION);
-        return failClosed();
+        return failClosed(true);
     }
     ESP_LOGI(TAG, "modem up: chip=%u fw=%.32s max_tx=%ddBm band=%.0f-%.0fMHz",
              identity_.chip, identity_.fw_version,
@@ -120,7 +144,7 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
         // #569: covers both "no STATUS ack" and "ack with radio_enabled=0"
         // (RF dead on the daughterboard — pushConfig logs the specific cause).
         ESP_LOGE(TAG, "initial SET_CONFIG rejected — radio disabled");
-        return failClosed();
+        return failClosed(false);
     }
 
     stats_.enabled = true;
@@ -330,10 +354,19 @@ void UartModemBackend::onFrame(uint8_t type, const uint8_t* payload, size_t len)
                               "disabled (mismatched daughterboard pair?)",
                          identity_.protocol_version, PROTOCOL_VERSION);
                 modem_alive_ = false;
+                // The modem ANSWERED, so it is not "non-responsive" — the one
+                // thing the re-attach is for.  Latch it so serviceReattach()
+                // can tell an incompatible pair apart from silence: without
+                // this, a mismatch found during a probe looks identical to no
+                // reply and the module gets power-cycled every 60 s for the
+                // rest of the flight.  begin() catches the mismatch it sees
+                // directly (failClosed(true)); this covers every other path.
+                modem_incompatible_ = true;
                 break;
             }
             const bool was_alive = modem_alive_;
             modem_alive_ = true;
+            if (type == MSG_IDENTITY) identity_reply_seen_ = true;
             if (type == MSG_BOOT)
             {
                 // Daughterboard (re)booted underneath us: either it rebooted
@@ -376,10 +409,153 @@ void UartModemBackend::onFrame(uint8_t type, const uint8_t* payload, size_t len)
 // IRadioLink surface
 // ---------------------------------------------------------------------------
 
+void UartModemBackend::armReattach(uint32_t now_ms)
+{
+    if (reattach_state_ == Reattach::Off && reattach_attempts_ == 0)
+    {
+        reattach_backoff_ms_ = REATTACH_FIRST_MS;
+    }
+    else
+    {
+        reattach_backoff_ms_ = (reattach_backoff_ms_ == 0)
+                                   ? REATTACH_FIRST_MS
+                                   : reattach_backoff_ms_ * 2;
+        if (reattach_backoff_ms_ > REATTACH_MAX_MS) reattach_backoff_ms_ = REATTACH_MAX_MS;
+    }
+    reattach_at_ms_ = now_ms + reattach_backoff_ms_;
+    reattach_state_ = Reattach::Backoff;
+    ESP_LOGW(TAG, "modem re-attach armed — retry in %lu ms (attempt %u)",
+             (unsigned long)reattach_backoff_ms_, (unsigned)(reattach_attempts_ + 1));
+}
+
+// Non-blocking re-attach.  Deliberately does NOT call begin(): that blocks
+// 2.5-4 s in its identity wait, which is fine once during boot and unacceptable
+// on a flying rocket's main loop.  The same sequence is spread across service()
+// calls instead — power up, open the link if needed, poke GET_IDENTITY on a
+// timer, and let the existing onFrame() handler set modem_alive_ off either a
+// BOOT or an IDENTITY reply.
+//
+// Retrying in flight is safe precisely BECAUSE the radio is already dead: the
+// module is unpowered and began_ is false, so there is no working link to
+// disturb and nothing is transmitting.  A modem that is merely wedged rather
+// than absent gets a genuine power cycle out of it, which is the #412 hammer.
+void UartModemBackend::serviceReattach(uint32_t now_ms)
+{
+    switch (reattach_state_)
+    {
+        case Reattach::Off:
+            return;
+
+        case Reattach::Backoff:
+        {
+            if ((int32_t)(now_ms - reattach_at_ms_) < 0) return;
+            reattach_attempts_++;
+            if (cfg_.act_pin >= 0)
+            {
+                gpio_set_direction((gpio_num_t)cfg_.act_pin, GPIO_MODE_OUTPUT);
+                gpio_set_level((gpio_num_t)cfg_.act_pin, 1);
+            }
+            // TR_UART_Link has no end(); re-installing the driver on an already
+            // open port would fail, so only open it the first time.
+            if (!link_open_)
+            {
+                if (link_.begin(cfg_.uart) != ESP_OK)
+                {
+                    ESP_LOGW(TAG, "re-attach: UART link init failed");
+                    if (cfg_.act_pin >= 0) gpio_set_level((gpio_num_t)cfg_.act_pin, 0);
+                    armReattach(now_ms);
+                    return;
+                }
+                link_open_ = true;
+            }
+            modem_alive_          = false;
+            modem_incompatible_   = false;
+            identity_reply_seen_  = false;
+            // Discard anything buffered from BEFORE this power cycle.  Without
+            // it a stale IDENTITY still sitting in the driver's RX FIFO from
+            // the previous attempt would satisfy the probe immediately, and we
+            // would declare the module re-attached before it had even booted.
+            uart_flush_input(cfg_.uart.port);
+            // Same windows begin() uses, and for the same reason: a host with an
+            // ACT pin just powered the module and knows the S3 boots in ~1 s,
+            // while an ACT-less host (the BS) may be attaching to a module that
+            // has been running for hours and can only keep asking.
+            reattach_deadline_ms_    = now_ms + (cfg_.act_pin >= 0 ? 2500 : 4000);
+            reattach_identity_at_ms_ = now_ms;
+            reattach_state_          = Reattach::Probing;
+            return;
+        }
+
+        case Reattach::Probing:
+        {
+            if ((int32_t)(now_ms - reattach_identity_at_ms_) >= 0)
+            {
+                (void)link_.sendFrame(MSG_GET_IDENTITY, nullptr, 0);
+                reattach_identity_at_ms_ = now_ms + 300;
+            }
+            link_.poll(&UartModemBackend::onFrameTrampoline, this);
+
+            // Require an IDENTITY *reply*, not merely modem_alive_.  An
+            // unsolicited BOOT sets modem_alive_ too, but it only proves the
+            // modem can transmit — if our TX direction is dead, SET_CONFIG will
+            // never land, and declaring re-attach here would set began_ and so
+            // stop serviceReattach() from ever power-cycling again, stranding a
+            // half-attached link with no recovery.  A reply to our own
+            // GET_IDENTITY proves both directions, and costs at most one 300 ms
+            // poke to obtain.
+            if (modem_alive_ && identity_reply_seen_)
+            {
+                // onFrame() already rejected a protocol mismatch by clearing
+                // modem_alive_, so reaching here means a compatible modem
+                // answered.  Do NOT push config from here — hand off to the
+                // durable config_repush_pending_ path in service() below, which
+                // already retries on a timer and already covers the RF-dead
+                // modem that acks with radio_enabled=0.
+                began_                 = true;
+                stats_.enabled         = true;
+                config_repush_pending_ = true;
+                repush_retry_at_ms_    = now_ms;
+                reattach_state_        = Reattach::Off;
+                // Reset the backoff so a LATER arm starts at REATTACH_FIRST_MS
+                // again rather than inheriting this failure's interval.
+                reattach_attempts_     = 0;
+                reattach_backoff_ms_   = 0;
+                ESP_LOGW(TAG, "modem re-attached after %u attempt(s) — "
+                              "config re-push queued",
+                         (unsigned)reattach_attempts_);
+                return;
+            }
+
+            if (modem_incompatible_)
+            {
+                // It answered — so it is responsive, just not compatible.  That
+                // is the one failure a power cycle provably cannot fix, and
+                // re-arming here would drop a 22 dBm module in and out every
+                // 60 s for the rest of the flight while logging on every reply.
+                if (cfg_.act_pin >= 0) gpio_set_level((gpio_num_t)cfg_.act_pin, 0);
+                reattach_state_ = Reattach::Off;
+                ESP_LOGE(TAG, "re-attach: modem answered with an incompatible "
+                              "protocol version — radio permanently disabled");
+                return;
+            }
+
+            if ((int32_t)(now_ms - reattach_deadline_ms_) >= 0)
+            {
+                // Unpower again between attempts so the next one is a real power
+                // cycle rather than another poke at a stuck part.
+                if (cfg_.act_pin >= 0) gpio_set_level((gpio_num_t)cfg_.act_pin, 0);
+                armReattach(now_ms);
+            }
+            return;
+        }
+    }
+}
+
 void UartModemBackend::service()
 {
     if (!began_)
     {
+        serviceReattach(millis());
         return;
     }
     link_.poll(&UartModemBackend::onFrameTrampoline, this);
@@ -395,11 +571,21 @@ void UartModemBackend::service()
     if (config_repush_pending_ && modem_alive_ &&
         (int32_t)(millis() - repush_retry_at_ms_) >= 0)
     {
-        // 500 ms matches begin(): the modem may be doing a full radio
-        // begin() (>=100 ms of fixed resets) before it can ack.
+        // 80 ms, NOT the 500 ms begin() uses.  pushConfig()'s ack wait is a
+        // spin loop (poll + vTaskDelay(1)), so an unacked push burns the whole
+        // budget inside service() — and 500 ms is 5x the OC's own
+        // LOOP_STALL_THRESHOLD_US (out_computer/main/main.cpp: 100 ms), which is
+        // why serviceLoRa() is wrapped in LOOP_STALL_INSTR at all.  begin() can
+        // afford 500 ms because it runs once at boot; this runs on a flying
+        // rocket's main loop and now also runs after a re-attach (#823), where
+        // a modem that answers GET_IDENTITY but never acks SET_CONFIG would
+        // otherwise stall the loop for 500 ms every 2 s indefinitely.
+        // Reliability comes from the DURABLE 2 s retry below, not from the
+        // length of any single wait: a modem mid radio-begin (>=100 ms of fixed
+        // resets) simply acks a later attempt.
         if (pushConfig(cfg_freq_mhz_, cfg_sf_, cfg_bw_khz_, cfg_cr_,
                        cfg_tx_power_, /*start_rx=*/true,
-                       /*ack_timeout_ms=*/500))
+                       /*ack_timeout_ms=*/80))
         {
             config_repush_pending_ = false;
             ESP_LOGI(TAG, "post-BOOT config re-push applied");

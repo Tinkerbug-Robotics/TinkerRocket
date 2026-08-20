@@ -143,6 +143,55 @@ private:
     bool config_repush_pending_ = false;
     uint32_t repush_retry_at_ms_ = 0;
 
+    // Re-attach after a failed begin() — the "later retry" begin()'s failClosed()
+    // comment has always promised and nothing ever performed.  begin() runs once
+    // per boot on both hosts, so before this a daughterboard that was absent,
+    // unpowered or wedged at boot stayed dark for the entire session: act_pin
+    // low so it could never announce BOOT, and began_ false so service()
+    // returned before polling and could never hear it if it did.  The hot-join
+    // path in onFrame() was therefore unreachable.
+    //
+    // Runs from service() while !began_, so no host changes and both MCUs get
+    // it.  Strictly non-blocking: begin()'s wait loop blocks 2.5-4 s, which is
+    // survivable once at boot but not on a flying rocket's main loop, so the
+    // probe is spread across service() calls instead.
+    //
+    // A successful re-attach hands off to config_repush_pending_ above rather
+    // than pushing config itself — that path is already durable and already
+    // covers the RF-dead modem.
+    enum class Reattach : uint8_t
+    {
+        Off,       // never failed, already re-attached, or failed permanently
+        Backoff,   // module unpowered, waiting out the interval
+        Probing,   // module powered, UART open, listening for BOOT/IDENTITY
+    };
+    Reattach reattach_state_ = Reattach::Off;
+    uint32_t reattach_at_ms_ = 0;        // when Backoff expires
+    uint32_t reattach_deadline_ms_ = 0;  // when the current probe gives up
+    uint32_t reattach_identity_at_ms_ = 0;
+    uint32_t reattach_backoff_ms_ = 0;   // current interval, doubles to the cap
+    uint16_t reattach_attempts_ = 0;
+    // TR_UART_Link has no end()/isOpen(), so re-calling begin() on an open port
+    // would re-install the driver.  Track it here instead.
+    bool link_open_ = false;
+    // Set by onFrame() when a modem ANSWERS with the wrong protocol version.
+    // The probe cannot otherwise tell "incompatible" from "silent", and only
+    // the silent case is worth power-cycling.
+    bool modem_incompatible_ = false;
+    // Set only by an IDENTITY frame, which is a REPLY to our GET_IDENTITY and
+    // therefore proves both directions of the link.  An unsolicited BOOT proves
+    // only that the modem transmits.
+    bool identity_reply_seen_ = false;
+
+    // First retry is soon because the overwhelmingly common cause is a
+    // daughterboard that was simply not plugged in or not yet powered; the cap
+    // keeps a permanently dead module from power-cycling itself forever.
+    static constexpr uint32_t REATTACH_FIRST_MS = 5000;
+    static constexpr uint32_t REATTACH_MAX_MS   = 60000;
+
+    void serviceReattach(uint32_t now_ms);
+    void armReattach(uint32_t now_ms);
+
     // Periodic link-health poll + change-triggered logging (see service())
     static constexpr uint32_t STATUS_POLL_MS = 2000;
     static constexpr uint32_t HEALTH_LOG_MS = 5000;
