@@ -120,17 +120,17 @@ def build_svg(meta, rows, truth):
     # red band behind the altitude trace invites the conclusion that altitude
     # was the problem, when it was speed; when a flight is over both at once,
     # both panels shade and that is the honest picture.
-    for wins, fill, y_top in ((meta.get("velocity_windows") or [],
-                               "var(--nolock, #9B3535)", y0_spd),
-                              (meta.get("altitude_80km_windows") or [],
-                               "var(--accent, #29457E)", y0_alt)):
+    for wins, fill, y_top, op in ((meta.get("velocity_windows") or [],
+                                   "var(--nolock, #9B3535)", y0_spd, 0.16),
+                                  (meta.get("altitude_80km_windows") or [],
+                                   "var(--blocked, #A2660A)", y0_alt, 0.30)):
         for a, b in wins:
             if b < t0:
                 continue
             out.append(f'<rect x="{x(max(a, t0)):.1f}" y="{y_top:.1f}" '
                        f'width="{max(1.0, x(b)-x(max(a, t0))):.1f}" '
                        f'height="{panel_h:.1f}" '
-                       f'fill="{fill}" opacity="0.16"/>')
+                       f'fill="{fill}" opacity="{op}"/>')
 
     # axes
     for y0 in (y0_alt, y0_spd):
@@ -243,14 +243,14 @@ def build_svg(meta, rows, truth):
         out.append(f'<text class="lbl" x="{PAD_L+22}" y="{yy+1:.0f}">'
                    f'{name} &#183; {esc(meaning)}</text>')
     lx = PAD_L + 400
-    for i, (fill, meaning) in enumerate(
-            [("var(--nolock, #9B3535)",
+    for i, (fill, op, meaning) in enumerate(
+            [("var(--nolock, #9B3535)", 0.16,
               "shaded on the SPEED panel: over 515 m/s"),
-             ("var(--accent, #29457E)",
+             ("var(--blocked, #A2660A)", 0.30,
               "shaded on the ALTITUDE panel: over 80 km")]):
         yy = ly + i * 12
         out.append(f'<rect x="{lx}" y="{yy-6:.0f}" width="16" height="8" '
-                   f'fill="{fill}" opacity="0.26"/>')
+                   f'fill="{fill}" opacity="{op*1.6:.2f}"/>')
         out.append(f'<text class="lbl" x="{lx+22}" y="{yy+1:.0f}">{esc(meaning)}</text>')
     out.append('</svg>')
     return "\n".join(out)

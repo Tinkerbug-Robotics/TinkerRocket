@@ -2,7 +2,7 @@
 <style>.ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}.gl{stroke:var(--rule,#DDE2E9);stroke-width:1;stroke-dasharray:3 3}.lbl{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-3,#79808F)}.ttl{font-family:var(--f-display,sans-serif);font-size:11px;font-weight:600;fill:var(--ink-2,#4A5261)}.trace{fill:none;stroke-width:1.8;stroke-linejoin:round}</style>
 <rect x="92.0" y="164.7" width="95.2" height="112.7" fill="var(--nolock, #9B3535)" opacity="0.16"/>
 <rect x="321.6" y="164.7" width="71.6" height="112.7" fill="var(--nolock, #9B3535)" opacity="0.16"/>
-<rect x="226.0" y="26.0" width="56.4" height="112.7" fill="var(--accent, #29457E)" opacity="0.16"/>
+<rect x="226.0" y="26.0" width="56.4" height="112.7" fill="var(--blocked, #A2660A)" opacity="0.3"/>
 <line class="ax" x1="62" y1="138.7" x2="882" y2="138.7"/>
 <line class="ax" x1="62" y1="26.0" x2="62" y2="138.7"/>
 <line class="ax" x1="62" y1="277.3" x2="882" y2="277.3"/>
@@ -719,6 +719,6 @@
 <text class="lbl" x="84" y="585">NO_LOCK &#183; satellites lost  =  a signal problem, not the gate</text>
 <rect x="462" y="554" width="16" height="8" fill="var(--nolock, #9B3535)" opacity="0.26"/>
 <text class="lbl" x="484" y="561">shaded on the SPEED panel: over 515 m/s</text>
-<rect x="462" y="566" width="16" height="8" fill="var(--accent, #29457E)" opacity="0.26"/>
+<rect x="462" y="566" width="16" height="8" fill="var(--blocked, #A2660A)" opacity="0.48"/>
 <text class="lbl" x="484" y="573">shaded on the ALTITUDE panel: over 80 km</text>
 </svg>
