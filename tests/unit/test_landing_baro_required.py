@@ -154,3 +154,55 @@ def test_quiescence_not_armed_before_apogee():
            roll_rate=0.0, position=(0.0, 0.0, 300.0))
     assert kc.quiescent_flag is False
     assert kc.alt_landed_flag is False
+
+
+def test_frozen_baro_cannot_supply_the_mandatory_voter():
+    """baro_stable is mandatory because it is the only altitude-aware voter,
+    so an unhealthy barometer must not be able to satisfy it.  A frozen sensor
+    retains its last reading, making landing_alt_change exactly 0 — maximally
+    "stable" — which would hand the vote its mandatory voter mid-descent."""
+    kc = KinematicChecks()
+    _seed_flown(kc)
+
+    for second in range(20):
+        base = 1000 + second * 1000
+        for i in range(50):
+            _drive(kc, now_ms=base + i * 2, pressure_altitude=30.0,
+                   acc_mag=9.81, roll_rate=1.0, baro_healthy=False,
+                   position=(0.0, 0.0, 30.0), velocity=(0.0, 0.0, -6.0))
+
+    assert kc.gyro_quiet_flag is True
+    assert kc.accel_1g_flag is True
+    assert kc.baro_stable_flag is False, "an unhealthy baro must not satisfy baro_stable"
+    assert kc.alt_landed_flag is False
+
+
+def test_healthy_baro_still_latches_normally():
+    """The baro_healthy gate must not break the ordinary landing."""
+    kc = KinematicChecks()
+    _seed_flown(kc)
+    _soak(kc, 7, pressure_altitude=5.0, acc_mag=9.81, roll_rate=1.0,
+          position=(0.0, 0.0, 5.0))
+
+    assert kc.baro_stable_flag is True
+    assert kc.alt_landed_flag is True
+
+
+def test_dead_baro_quiescence_still_needs_a_quiet_imu():
+    """With baro_healthy false, quiescence runs on the IMU alone.  Real canopy
+    accel scatter misses the 0.05 g gate most ticks, and a leaky +1/-1 counter
+    cannot climb on a sub-50% duty cycle."""
+    kc = KinematicChecks()
+    _seed_flown(kc)
+
+    for second in range(60):
+        base = 1000 + second * 1000
+        alt = 300.0 - 3.0 * second
+        acc = 9.80665 if second % 3 == 0 else 10.8
+        for i in range(50):
+            _drive(kc, now_ms=base + i * 2, pressure_altitude=alt,
+                   acc_mag=acc, roll_rate=1.0, baro_healthy=False,
+                   position=(0.0, 0.0, alt), velocity=(0.0, 0.0, -3.0))
+
+    assert kc.quiescent_flag is False
+    assert kc.alt_landed_flag is False

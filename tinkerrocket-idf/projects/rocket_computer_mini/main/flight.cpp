@@ -3422,8 +3422,20 @@ static void loop_fc()
                 (uint32_t)(time_us() - bmp_latest_si.time_us) < BARO_STALE_TIMEOUT_US;
             const bool ekf_healthy = ekf_initialized && ekf.isHealthy();
 
+            // #259 applied to the kinematic checks, matching the FC.
+            // ism6_latest_si RETAINS its last value when the IMU stops
+            // responding and have_ism6_si latches on first read, so a frozen
+            // IMU would otherwise feed a constant accel straight into launch
+            // detection and — since #824 — into the landing quiescence
+            // detector, whose two gates a frozen sample satisfies
+            // indefinitely.  0.0f fails both, i.e. "no evidence from a stale
+            // IMU" rather than a synthetic still-and-level reading.
+            constexpr uint32_t IMU_STALE_TIMEOUT_US = 100000u;  // 0.1 s (~1 kHz IMU)
+            const bool ism6_fresh_kc = have_ism6_si &&
+                (uint32_t)(time_us() - ism6_latest_si.time_us) < IMU_STALE_TIMEOUT_US;
+
             kinematics.kinematicChecks(pressure_altitude_m,
-                                       accel_norm,
+                                       ism6_fresh_kc ? accel_norm : 0.0f,
                                        imu_pos,
                                        imu_vel,
                                        roll_rate_dps,

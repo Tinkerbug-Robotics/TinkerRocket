@@ -304,7 +304,14 @@ class KinematicChecks:
             self.landing_check_time = self._now_ms
 
             # Sub 1: Baro-stable (was the original slow path; +lower bound)
-            baro_stable_pass = (BARO_STABLE_PALT_MIN <= pressure_altitude <= BARO_STABLE_PALT_MAX
+            # Gated on baro_healthy (#824): baro_stable is mandatory in the
+            # vote, so it must not be satisfiable by a barometer that has
+            # stopped telling the truth.  A frozen sensor retains its last
+            # reading, making landing_alt_change exactly 0 — maximally
+            # "stable" — which would hand the vote its mandatory voter for
+            # free while the rocket is still descending.
+            baro_stable_pass = (baro_healthy
+                                and BARO_STABLE_PALT_MIN <= pressure_altitude <= BARO_STABLE_PALT_MAX
                                 and landing_alt_change < BARO_STABLE_DELTA_MAX
                                 and self.max_altitude > BARO_STABLE_MAX_ALT_MIN)
             if baro_stable_pass:

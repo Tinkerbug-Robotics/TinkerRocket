@@ -880,3 +880,81 @@ TEST_F(KinematicChecksTest, Landing_Quiescent_NotArmedBeforeApogee) {
     EXPECT_FALSE(kc.quiescent_flag);
     EXPECT_FALSE(kc.alt_landed_flag);
 }
+
+TEST_F(KinematicChecksTest, Landing_FrozenBaro_CannotSupplyTheMandatoryVoter) {
+    // #824 follow-up: baro_stable is mandatory precisely because it is the
+    // only altitude-aware voter, so an unhealthy barometer must not be able
+    // to satisfy it.  A frozen sensor retains its last reading, which makes
+    // landing_altitude_change exactly 0 — maximally "stable" — so without the
+    // baro_healthy gate a baro stuck at an in-band value would hand the vote
+    // its mandatory voter while the rocket is still descending.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    // Baro frozen at 30 m (in band, zero delta) while actually descending;
+    // the IMU pair is quiet, so the vote would otherwise be 3 of 3.
+    for (int second = 0; second < 20; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(30.0f, 9.81f, -6.0f, 1.0f, 0.0f, false, 1.57f,
+                       false, false, 0.0f, true, /*baro_healthy=*/false);
+        }
+    }
+    EXPECT_TRUE(kc.gyro_quiet_flag);
+    EXPECT_TRUE(kc.accel_1g_flag);
+    EXPECT_FALSE(kc.baro_stable_flag) << "an unhealthy baro must not satisfy baro_stable";
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_HealthyBaro_StillLatchesNormally) {
+    // The gate above must not break the ordinary case: a healthy baro settled
+    // near the pad still latches baro_stable and votes the rocket down.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    for (int second = 0; second < 7; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(5.0f, 9.81f, 0.0f, 1.0f);
+        }
+    }
+    EXPECT_TRUE(kc.baro_stable_flag);
+    EXPECT_TRUE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_DeadBaro_QuiescenceStillNeedsAQuietIMU) {
+    // With baro_healthy false the quiescence detector drops its altitude term
+    // and runs on the IMU alone.  A frozen IMU is the one input that would
+    // satisfy both gates forever, which is why both callers zero acc_mag when
+    // the IMU is stale.  Confirm a moving airframe still cannot latch.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    for (int second = 0; second < 60; second++) {
+        uint32_t base = 1000 + second * 1000;
+        float alt = 300.0f - 3.0f * float(second);
+        // Real canopy accel scatter: the 0.05 g gate is missed most ticks.
+        float acc = (second % 3 == 0) ? 9.80665f : 10.8f;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(alt, acc, -3.0f, 1.0f, 0.0f, false, 1.57f,
+                       false, false, 0.0f, true, /*baro_healthy=*/false);
+        }
+    }
+    EXPECT_FALSE(kc.quiescent_flag) << "a <50% duty cycle cannot climb a leaky counter";
+    EXPECT_FALSE(kc.alt_landed_flag);
+}

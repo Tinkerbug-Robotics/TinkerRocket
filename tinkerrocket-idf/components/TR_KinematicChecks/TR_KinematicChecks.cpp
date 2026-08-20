@@ -414,7 +414,19 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         landing_check_time = millis();
 
         // Sub 1: Baro-stable (was the original slow path; +lower bound)
-        const bool baro_stable_pass = (pressure_altitude >= BARO_STABLE_PALT_MIN
+        //
+        // Gated on baro_healthy (#824).  This detector is now mandatory in the
+        // vote, on the grounds that it is the only one carrying altitude
+        // information — so it must not be satisfiable by a barometer that has
+        // stopped telling the truth.  It would be: pressure_altitude retains
+        // its last value when the sensor stops responding, which makes
+        // landing_altitude_change exactly 0 and looks maximally "stable".  A
+        // dead baro frozen at a reading inside the band would then hand the
+        // vote its mandatory voter for free, and gyro_quiet + accel_1g could
+        // carry the rest at altitude — reopening #824 through the very
+        // detector that was supposed to close it.
+        const bool baro_stable_pass = (baro_healthy
+                                       && pressure_altitude >= BARO_STABLE_PALT_MIN
                                        && pressure_altitude <= BARO_STABLE_PALT_MAX
                                        && landing_altitude_change < BARO_STABLE_DELTA_MAX
                                        && max_altitude > BARO_STABLE_MAX_ALT_MIN);
