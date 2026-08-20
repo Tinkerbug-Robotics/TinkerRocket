@@ -57,5 +57,21 @@ else()
 endif()
 set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}${TR_BENCH_SUFFIX}+${TR_BUILD_DATE}")
 
+# Board revision has to reach sdkconfig, not just the compiler (#822): V9/V10
+# enables the S3RH2's in-package PSRAM and V7/V8 must NOT, because those boards
+# have no PSRAM part and would spend every boot failing to find one.
+#
+# Both lines matter. SDKCONFIG_DEFAULTS picks the overlay; SDKCONFIG moves the
+# GENERATED config into the build dir, because the default is one shared
+# sdkconfig at the project root and IDF does not re-apply defaults to an
+# existing one. Without the second line, a root sdkconfig written by a V9 build
+# would silently carry CONFIG_SPIRAM into the next V8 build — the same
+# stale-cache trap as a wrong -DTR_BOARD_* flag, and just as quiet.
+if(TR_BOARD_V9)
+    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
+    message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on)")
+endif()
+set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(out_computer)

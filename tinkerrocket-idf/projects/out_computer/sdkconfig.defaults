@@ -153,40 +153,12 @@ CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
 # PHY power down during sleep
 CONFIG_ESP_PHY_MAC_BB_PD=y
 
-# === PSRAM: the log ring's real home on V9/V10 (#822) ===
-# U15 is an ESP32-S3RH2 with 2 MB of in-package QUAD PSRAM. That part was not
-# chosen by accident — deleting the MRAM (U12) and moving to the embedded-PSRAM
-# variant was one decision (prefab review I18), and the PSRAM is what buffers
-# NAND writes now. Leaving CONFIG_SPIRAM unset meant the ring fell back to
-# 64 KB of internal RAM and the replacement sat idle.
-#
-# The rail objection is settled, not waived: prior finding H7 (log flash sharing
-# the S3's internal ~14 ohm R_SPI with the PSRAM) was FIXED before fab — U13's
-# VCC moved to +3V3 and OUT_VDD_SPI now carries only U15.29, verified against
-# the live netlist. Budget is ~30 mA x 14 = 0.42 V -> ~2.88 V against a 2.7 V
-# minimum. Note this is the OPPOSITE of the mini, whose sdkconfig says "PSRAM:
-# deliberately OFF" precisely because that board still shares the rail.
-#
-# One residual, WORKLIST M-4: C27 is still 10 uF where the HDG wants 0.1 + 1 uF,
-# and no 100 nF was added at pin 29 — tau ~140 us, so a slow VDD_SPI ramp at
-# cold boot is the thing to watch on first bring-up. It is self-reporting: PSRAM
-# init is announced in the boot log.
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_QUAD=y
-# 40 MHz is the IDF default and far more than enough — the ring takes ~156 KB/s
-# against tens of MB/s available. Buys timing margin we have no reason to spend.
-CONFIG_SPIRAM_SPEED_40M=y
-# CAPS_ALLOC, *not* the default MALLOC. Only code that explicitly asks for
-# MALLOC_CAP_SPIRAM lands in PSRAM; plain malloc() keeps returning internal RAM
-# exactly as before. That keeps this change surgical — the log ring moves, and
-# nothing else in the firmware silently relocates into slower, non-DMA memory.
-CONFIG_SPIRAM_USE_CAPS_ALLOC=y
-# Boot without PSRAM instead of panicking. sdkconfig is per-project, not
-# per-board-flag, so this file is also compiled into the V7 and V8 images, and
-# no V8 artwork was ever committed to prove those boards carry a PSRAM part.
-# Without this, a V8 bench board would hard-panic at boot on an image built from
-# this config. TR_LogToFlash falls back to the internal ring on its own.
-CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+# === PSRAM ===
+# Deliberately NOT here. V9/V10 (ESP32-S3RH2, 2 MB in-package quad PSRAM) turns
+# it on via sdkconfig.defaults.v9; V7/V8 carry no PSRAM part, and enabling it
+# for them would mean a failed init and a spurious warning on every boot of a
+# perfectly good board. The project CMakeLists picks the fragment from the
+# TR_BOARD_* flag — see there, and board/board_v9.h for the hardware.
 
 # Flash
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y

@@ -22,6 +22,7 @@ idf_component_register(
         app_update
         esp_app_format
         nvs_flash
+        efuse            # #822: ESP_EFUSE_PSRAM_CAP board-vs-silicon check
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format -Wno-narrowing)
 

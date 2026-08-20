@@ -13,6 +13,8 @@
 #include <nvs_flash.h>
 #include <esp_log.h>
 #include <esp_mac.h>              // esp_efuse_mac_get_default for unit_id
+#include <esp_efuse.h>            // #822: read PSRAM_CAP to verify the board flag
+#include <esp_efuse_table.h>      // #822: ESP_EFUSE_PSRAM_CAP
 #include <esp_app_desc.h>         // esp_app_get_description for firmware version readback (#8)
 #include <esp_ota_ops.h>          // esp_ota_mark_app_valid_cancel_rollback (#8)
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
@@ -135,6 +137,36 @@ static bool flightlogWriteSink(void* ctx, const uint8_t* payload, size_t payload
 {
     auto* fl = static_cast<tr_flightlog::TR_FlightLog*>(ctx);
     return fl->writeFrame(payload, payload_len) == tr_flightlog::Status::Ok;
+}
+
+// #822: read the silicon rather than trusting the board flag.
+//
+// esp_chip_info() is no help on this part — esp_hw_support's S3 port hardcodes
+// features to WIFI_BGN|BLE and never sets CHIP_FEATURE_EMB_PSRAM — but eFuse
+// BLK1 carries PSRAM_CAP, and it reads the same whether or not CONFIG_SPIRAM
+// was compiled in. So even a V7/V8 image, which links no PSRAM support at all,
+// can still say what silicon it is sitting on.
+//
+// Returns in-package PSRAM size in MB, 0 for none, or -1 if unreadable.
+static int s3PsramCapMb()
+{
+    uint8_t cap = 0;
+    if (esp_efuse_read_field_blob(ESP_EFUSE_PSRAM_CAP, &cap,
+                                  ESP_EFUSE_PSRAM_CAP[0]->bit_count) != ESP_OK)
+    {
+        return -1;
+    }
+    // esp_efuse_table.csv: {0: None, 1: 8M, 2: 2M, 3: 16M}. The CSV also lists
+    // 4 = 4M, which a 2-bit field cannot encode; treat anything unexpected as
+    // unknown rather than inventing a size.
+    switch (cap)
+    {
+        case 0: return 0;
+        case 1: return 8;
+        case 2: return 2;   // the RH2
+        case 3: return 16;
+        default: return -1;
+    }
 }
 
 // #281/#278: classify flight-log storage for the #303 scorecard.  A full or
@@ -5689,6 +5721,42 @@ void initPeripherals()
     // loudly, at boot instead. The replacement design already exists on the
     // mini (snapshots written into the NAND log stream, recovered by a
     // tail-scan at boot); porting it to the OC/FC pair is the real fix.
+    // #822: cross-check the board flag against the silicon, unconditionally —
+    // this is the generalisation of the bug that motivated board_v9.h. A wrong
+    // -DTR_BOARD_* flag has no runtime symptom on this MCU (the pin maps are
+    // identical), so the only thing that can catch it is asking the chip.
+    {
+        const int psram_mb = s3PsramCapMb();
+        if (psram_mb < 0)
+        {
+            ESP_LOGI("PWR", "In-package PSRAM per eFuse: unreadable");
+        }
+        else if (psram_mb == 0)
+        {
+            ESP_LOGI("PWR", "In-package PSRAM per eFuse: none");
+        }
+        else
+        {
+            ESP_LOGI("PWR", "In-package PSRAM per eFuse: %d MB", psram_mb);
+        }
+
+        // Disagreements are build/flash mistakes, not hardware faults, so they
+        // are worth shouting about while someone is still at the bench.
+        if (config::RING_IN_PSRAM && psram_mb == 0)
+        {
+            ESP_LOGE("PWR", "BOARD FLAG SAYS PSRAM, SILICON SAYS NONE — this is "
+                            "not a V9/V10 board, or it was built -DTR_BOARD_V9=1 "
+                            "by mistake. Ring falls back to internal RAM.");
+        }
+        else if (!config::RING_IN_PSRAM && psram_mb > 0)
+        {
+            ESP_LOGW("PWR", "This chip has %d MB of in-package PSRAM that the "
+                            "selected board map does not use. Expected on a V7/V8 "
+                            "board (MRAM is fitted); if this IS a V9/V10 board, it "
+                            "was built with the wrong -DTR_BOARD_* flag.", psram_mb);
+        }
+    }
+
     if (!logger.isMramEnabled())
     {
         TR_LogToFlashStats mram_st = {};
