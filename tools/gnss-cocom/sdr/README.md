@@ -359,6 +359,26 @@ which `ublox_binary.py` handles:
 passive tap. `--listen-only` checks the tap without transmitting; `--list` shows
 candidate ports. It never writes to the receiver: the flight computer owns that.
 
+**No tap is needed if the FC is built with the diagnostic.** The FC's u-blox is
+otherwise unreachable -- its firmware sets UART1 output to UBX only and the
+flight computer consumes it, putting nothing raw on USB, and the console reports
+GNSS fix state only under `[SIM DIAG]`, which fires in simulation mode alone.
+Worse, the driver polls NAV-PVT and takes the satellite count from `getSIV()`;
+it never asks for NAV-SAT, so per-satellite C/N0 -- the input the whole
+BLOCKED-vs-NO_LOCK distinction rests on -- does not exist in its data flow.
+
+    idf.py -B build_cocom -DTR_BOARD_V8=1 -DTR_GNSS_COCOM_DIAG=1 build flash
+
+adds ~1.5 kB and logs, once a second:
+
+    I (25263) GNSS: [COCOM] P tow=24805 fix=0 ok=0 nsv=0 lat=0 lon=0 alt=0 vn=0 ve=0 vd=0
+    I (25263) GNSS: [COCOM] S n=2 0:22:20:0 5:1:10:0
+
+`cocom_fcdiag.py` converts a captured console log into the rig's `TS U <hex>`
+format, so `correlate.py`, `recovery.py`, `plot_flight.py` and `oscillation.py`
+all work unchanged against the same classifier the conducted rig used. The flag
+defaults off and the flight path neither sets nor needs it.
+
 L1's quarter wave is **47.6 mm**, not the 83 mm of a 900 MHz whip. Free-space
 loss at L1 is only 26 dB at 30 cm, so with the separation fixed by the box, TX
 gain is the only live adjustment -- and with 100 dB of pad it runs out:
