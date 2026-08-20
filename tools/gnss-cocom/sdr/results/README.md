@@ -206,6 +206,26 @@ its velocity bracket measures its latency rather than a threshold. And it
 re-opens **31-134 s** late, twice not at all before the next exceedance, against
 0.0-1.5 s everywhere else.
 
+**An 18 s periodic dip, and why it is not the bench.** The Air530's satellite
+count dips hard and regularly while the gate is shut -- median spacing 18 s on
+both flights (stdev 6 s and 11 s). Three things locate it inside the receiver:
+
+1. The **ZED-F9P is a control**: same scenario files, same 70 dB conducted path,
+   **zero** periodic dips. Its only blank epochs are three at t=850-862 s on
+   `gentle_alt`, after the 848 s file ends -- the transmitter stopping.
+2. **All twelve satellites blank in the same epoch** and return together within
+   three. Attenuation is graded; this is not. The receiver emits GSV sentences
+   with an *empty* C/N0 field, which is a reporting decision, not a signal level.
+3. It occurs **only while position is withheld** -- t=197-437 s on `spaceshot`,
+   nothing before launch and nothing after the fix returns at 560 s.
+
+18 s is three GPS subframes (the ephemeris span, subframes 1-3), so the part may
+re-validate ephemeris on that cadence and blank C/N0 while it does. That is a
+hypothesis; the three observations stand without it. Figure:
+`results/figures/air530_dip_periodicity.svg`.
+
+This mattered: it is exactly what made `recovery.py` misreport this receiver.
+
 Two things this run fixed in the tooling, both of which had been quietly wrong:
 
 * `recovery.py` judged "was the receiver starved?" on the **minimum** satellite
@@ -237,7 +257,7 @@ and re-run it rather than hand-editing this table or the one in `report.html`.
 
 **u-blox ZED-F9P (ArduSimple)** (2026-08-20, 70 dB pad, TX gain 38): Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. Uniquely among the three parts it is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. Its descending edges are crisp and agree at ~80.1 km.
 
-**Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): The outlier, and the reason the slow flight matters. It enforces both limits -- position is withheld while 12-13 satellites stay tracked at ~50 dBHz -- but both edges are badly latent. It is 1.6-8.9 s LATE to close, so on the 15 g boost it published a valid fix at 1334 m/s, two and a half times the limit, which is why its velocity bracket inverts rather than measuring anything. Re-opening is worse: 31 s, 63 s and 134 s across the two flights, and two windows never re-opened at all before the next limit was exceeded, against 0.0-1.5 s for the other three parts. Its RMC date also reads 2007 rather than 2026 -- exactly 1024 weeks, a GPS week-number rollover -- though time-of-day is correct so the measurement is unaffected. Ignores $PCAS01, so it cannot be moved off 9600 baud by that command.
+**Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): The outlier, and the reason the slow flight matters. It enforces both limits -- position is withheld while 12-13 satellites stay tracked at ~50 dBHz -- but both edges are badly latent. It is 1.6-8.9 s LATE to close, so on the 15 g boost it published a valid fix at 1334 m/s, two and a half times the limit, which is why its velocity bracket inverts rather than measuring anything. Re-opening is worse: 31 s, 63 s and 134 s across the two flights, and two windows never re-opened at all before the next limit was exceeded, against 0.0-1.5 s for the other three parts. Its RMC date also reads 2007 rather than 2026 -- exactly 1024 weeks, a GPS week-number rollover -- though time-of-day is correct so the measurement is unaffected. Ignores $PCAS01, so it cannot be moved off 9600 baud by that command. Its satellite count also dips on a tight 18 s cycle while the gate is shut -- every satellite blanking its C/N0 field in one epoch and returning within three. Pinned to the receiver, not the bench: the ZED-F9P recorded zero periodic dips on the same files through the same conducted path.
 
 &dagger; marks an inverted bracket: a value that still held a fix sitting above
 one that was withheld. On the F9P that is a 2-3 s closing lag; on the Air530 the
