@@ -28,3 +28,16 @@ the RP2040 USB port, SkyTraq binary output, warm-restarted and seeded per run.
 | `t2_altramp_a1/a2/a3` | altitude | blocked 79.55 -> 79.90 km at 354 m/s |
 | `t3a_both_18km_a1` | both | blocked 510 -> 517 m/s at 16.22 km |
 | `t3b_both_80km_a1` | both | blocked 79.90 -> 80.20 km at 366 m/s |
+
+Flight profiles from `make_flights.py`, flown 2026-08-20 to measure how fast the
+gate re-opens. Same start time and RF setup.
+
+| Capture | Boost | Profile | Result |
+|---|---|---|---|
+| `gentle_alt_a1` | 3 g | apogee 82.5 km | altitude gate re-opened **0.7 s** after descending below 80 km; tracking held throughout |
+| `boostthrough_a1` | 15 g | apogee 40 km | tracking lost at ignition (7 sats -> 2 at 142 m/s); 52.6 s to a fix, dominated by re-acquisition |
+| `spaceshot_a1` | 15 g | apogee 82.5 km | tracking lost at ignition, never recovered within the flight |
+
+Re-plot any of them with `plot_flight.py`; re-measure with `recovery.py`.
+Rendered figures are in `figures/` -- not `plots/`, which the repo-root
+`.gitignore` excludes globally. They are also embedded in `../report.html`.

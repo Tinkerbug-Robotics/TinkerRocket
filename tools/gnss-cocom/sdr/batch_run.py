@@ -32,7 +32,11 @@ from gnss_nmea_monitor import Parser, _demux         # noqa: E402
 from skytraq_binary import (MSG_RCV_STATE, MSG_SV_CH_STATUS,   # noqa: E402
                             parse_rcv_state, parse_sv_ch_status)
 
-PORT = "/dev/cu.usbmodem2101"
+# Never hardcode the port: the receiver enumerates as usbmodemNNNN and the
+# number changes when it is moved to another USB socket. autodetect_port
+# matches on USB vendor instead, which is stable.
+from gnss_nmea_monitor import autodetect_port   # noqa: E402
+PORT = autodetect_port()
 START = "2026/08/19,22:30:00"
 STATIC = HERE / "c8" / "t00_long.C8"
 CAPS = HERE / "captures"
