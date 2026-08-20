@@ -38,6 +38,7 @@ a regenerated scenario, and `plot_flight.py` now refuses the mismatch.
 |---|---|---|
 | `gentle_alt_v2` | 3 g | altitude gate re-opened **0.7 s** after descending below 80 km, with 6 satellites |
 | `spaceshot_v2` | 15 g | velocity gate re-opened **1.1 s** and **1.5 s** in two separate windows, with 6 and 4 satellites |
+| `spaceshot_v3` | 15 g | flown after the SMA was re-seated; 7 satellites held at 48-50 dBHz straight through the burn, gate re-opened in 1.0 s and 1.5 s |
 | `spaceshot_slr_pwr` | 15 g | same profile with nav mode SLR (0x64/0x17 mode 9) and power mode Normal (0x0C) instead of airborne + default power save |
 
 Every window where four or more satellites were tracked re-opened in 0.7-1.5 s,
@@ -56,9 +57,9 @@ artefacts. The profiles now fly a drogue from apogee and the main at 600 m AGL.
 
 An earlier version of this record said a 15 g boost breaks the tracking loops,
 on the grounds that 15 g is 787 Hz/s of Doppler rate and the first flights shed
-five of seven satellites at ignition. `spaceshot_v2` disproves it: the same
-profile held six satellites at 47-49 dBHz straight through the burn, 0 to
-1334 m/s, losing none. The fix vanishing partway up is the COCOM gate at
+five of seven satellites at ignition. `spaceshot_v2` and `spaceshot_v3` disprove it: the same
+profile held six and then seven satellites at 47-50 dBHz straight through the
+burn, 0 to 1334 m/s, losing none. The fix vanishing partway up is the COCOM gate at
 515 m/s, not a lock failure.
 
 What differs is margin. The flights that lost satellites had them at 34-35 dBHz

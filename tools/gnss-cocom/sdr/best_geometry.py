@@ -10,29 +10,32 @@ constellations, which needs a different generator.
 import subprocess, sys, datetime as dt
 from pathlib import Path
 
-nav, lat, lon = sys.argv[1], sys.argv[2], sys.argv[3]
-day = sys.argv[4]                      # YYYY/MM/DD
+nav = sys.argv[1]
+day = sys.argv[2]                      # YYYY/MM/DD
+lats = [float(x) for x in sys.argv[3].split(",")]
+hours = [int(x) for x in sys.argv[4].split(",")]
+lon = sys.argv[5] if len(sys.argv) > 5 else "-119"
 sim = Path(__file__).resolve().parent / "bin" / "gps-sdr-sim"
 
-print(f"GPS satellites above the horizon at {lat},{lon} on {day}\n")
-best = (0, None)
-for hh in range(0, 24):
+def count(lat, hh):
     t = f"{day},{hh:02d}:30:00"
     r = subprocess.run([str(sim), "-e", nav, "-l", f"{lat},{lon},1200",
                         "-d", "1", "-b", "8", "-o", "/dev/null", "-t", t, "-p"],
                        capture_output=True, text=True)
     out = (r.stdout + r.stderr).replace("\r", "\n")
-    svs = [l.split() for l in out.splitlines()
-           if l[:2].strip().isdigit() and len(l.split()) >= 4]
-    n = len(svs)
-    if n == 0:
-        continue
-    elevs = sorted(float(s[2]) for s in svs)
-    bar = "#" * n
-    print(f"  {hh:02d}:30  {n:2d} SV  {bar:<14} lowest {elevs[0]:5.1f} deg, "
-          f"highest {elevs[-1]:5.1f} deg")
-    if n > best[0]:
-        best = (n, t)
-print(f"\nbest: {best[0]} satellites at {best[1]}")
-print("Ephemeris coverage limits this as much as geometry does -- a partial-day\n"
-      "broadcast file has few satellites at the hours it was thin on.")
+    return sum(1 for l in out.splitlines()
+               if l[:2].strip().isdigit() and len(l.split()) >= 4)
+
+print(f"GPS satellites above the horizon, {day}, lon {lon}")
+print("Ephemeris: " + Path(nav).name + "\n")
+print("  lat  " + " ".join(f"{h:02d}h" for h in hours) + "   min  max  mean")
+best = (0, None)
+for lat in lats:
+    row = [count(lat, h) for h in hours]
+    mean = sum(row) / len(row)
+    print(f"  {lat:>4.0f}  " + " ".join(f"{n:>3d}" for n in row) +
+          f"   {min(row):>3d}  {max(row):>3d}  {mean:>4.1f}")
+    for h, n in zip(hours, row):
+        if n > best[0]:
+            best = (n, f"lat {lat:.0f}, {h:02d}:30")
+print(f"\nbest single epoch: {best[0]} satellites at {best[1]}")

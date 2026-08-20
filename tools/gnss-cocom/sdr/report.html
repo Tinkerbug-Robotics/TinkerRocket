@@ -2217,6 +2217,12 @@
         <caption>Recovery latency</caption>
         <thead><tr><th>Flight</th><th class="num">Boost</th><th>Gate</th><th class="num">Shut lag</th><th class="num">Re-open latency</th><th class="num">Sats in the wait</th></tr></thead>
         <tbody>
+          <tr><td class="id">spaceshot v3</td><td class="num">15 g</td><td>altitude</td>
+              <td class="num">+0.3 s</td><td class="num"><strong>1.0 s</strong></td>
+              <td class="num">6</td></tr>
+          <tr><td class="id">spaceshot v3</td><td class="num">15 g</td><td>velocity</td>
+              <td class="num">+0.9 s</td><td class="num"><strong>1.5 s</strong></td>
+              <td class="num">5</td></tr>
           <tr><td class="id">gentle_alt</td><td class="num">3 g</td><td>altitude</td>
               <td class="num">+0.3 s</td><td class="num"><strong>0.7 s</strong></td>
               <td class="num">6</td></tr>
@@ -2240,37 +2246,51 @@
     </div>
     <div class="prose">
       <p style="margin-top:1.4rem">Sort by the last column and the table stops being
-        confusing. <strong>Every window with four or more satellites re-opened in 0.7 to
-        1.5 s &mdash; one or two epochs &mdash; on both gates.</strong> Every window that
-        took longer had two. The gate is not slow; losing the satellites is what costs the
+        confusing. <strong>Every one of eight windows with four or more satellites re-opened
+        in 0.5 to 1.5 s &mdash; one or two epochs &mdash; on both gates, at 3 g and at
+        15 g.</strong> Every window that took longer had three or fewer. The gate is not slow; losing the satellites is what costs the
         time, and the two want opposite fixes.</p>
 
       <h3>A hypothesis that did not survive its own test</h3>
-      <p>An earlier draft of this report claimed a realistic 15 g boost breaks the
-        receiver&rsquo;s tracking loops &mdash; 15 g is 787 Hz/s of Doppler rate on L1, and
-        the first two flights shed five of seven satellites within a second of ignition.
-        The acceleration panel above was added to test that. It failed the test.</p>
-      <p>Re-flown on a healthy signal, the <em>same</em> 15 g profile held
-        <strong>six satellites at 47&ndash;49 dBHz straight through the burn</strong>, 0 to
-        1334 m/s, losing none; the fix vanishing partway up is the COCOM gate at 515 m/s,
-        not a lock failure. And on the 3 g flight the satellite count swung between two and
-        seven while acceleration sat flat at &minus;10 m/s&#178;, which acceleration cannot
-        explain.</p>
-      <p>What separates the runs is margin. Where satellites were lost they had been sitting
-        at <strong>34&ndash;35 dBHz before ignition</strong>; where they were not, at
-        <strong>49 dBHz</strong>. Fourteen decibels, on a bench path whose SMA had already
-        worked loose once.</p>
+      <p>An earlier draft claimed a realistic 15 g boost breaks the receiver&rsquo;s tracking
+        loops &mdash; 15 g is 787 Hz/s of Doppler rate on L1, and the first two flights shed
+        five of seven satellites within a second of ignition. The acceleration panel above
+        was added to test that. It failed the test, twice.</p>
+      <div class="scroll">
+        <table>
+          <caption>Satellites held through the 15 g burn, 129 m/s&#178; peak</caption>
+          <thead><tr><th>Run</th><th class="num">Before ignition</th><th class="num">During the burn</th><th class="num">Post-burn coast</th></tr></thead>
+          <tbody>
+            <tr><td class="id">spaceshot v2</td><td class="num">6 sv @ 49 dBHz</td>
+                <td class="num"><strong>6 sv @ 49 dBHz</strong></td><td class="num">6 sv @ 48 dBHz</td></tr>
+            <tr><td class="id">spaceshot v3</td><td class="num">7 sv @ 48 dBHz</td>
+                <td class="num"><strong>7 sv @ 50 dBHz</strong></td><td class="num">7 sv @ 48 dBHz</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:1.2rem">Two independent runs, no satellite lost, 0 to 1334 m/s.
+        The fix vanishing partway up the burn is the COCOM gate at 515 m/s, not a lock
+        failure. On the 3 g flight the satellite count swung between two and seven while
+        acceleration sat flat at &minus;10 m/s&#178;, which acceleration cannot explain
+        either. The claim is withdrawn.</p>
+
       <h3>So why does the satellite count move?</h3>
       <p>Not the injected signal: the generator transmits every satellite above the local
         horizon at equal, constant power for the whole run &mdash; elevation mask zero, path
         loss disabled &mdash; so about ten GPS satellites are present at full strength from
-        first sample to last. Every dip is the receiver letting go, and on this bench:</p>
+        first sample to last. And not signal <em>strength</em> either, which is the
+        surprising part. Through a 146 s outage in the third run the satellites that were
+        being tracked sat at <strong>44 to 50 dBHz</strong> the whole time; there were just
+        one to four of them, climbing by roughly one satellite every 30 to 40 seconds. That
+        is the shape of sequential re-acquisition, not of a weak signal.</p>
     </div>
     <ul class="notes">
-      <li><strong>A bench path with no headroom.</strong> The dominant effect, and an
-        artefact of the bench rather than of flight. Pre-flight C/N&#8320; varied between 34
-        and 49 dBHz across runs on identical settings, and the runs that started low are
-        exactly the ones that shed satellites.</li>
+      <li><strong>Too few satellites to lose any.</strong> This is the binding constraint.
+        A fix needs four; the injected sky has ten and no second band or constellation
+        behind them. Once the receiver drops a few it is under the threshold, and it climbs
+        back one satellite at a time. Re-seating the SMA mid-session did not change this:
+        median C/N&#8320; stayed at 44 dBHz and the run afterwards actually spent
+        <em>less</em> of its time above four satellites, 70% against 89%.</li>
       <li><strong>Only ten satellites to lose.</strong> gps-sdr-sim is GPS L1 C/A only,
         while the receiver is multi-constellation and dual-band. In flight it would have
         GPS, GLONASS, Galileo and BeiDou across L1 and L5 &mdash; perhaps 25 to 35 signals,
