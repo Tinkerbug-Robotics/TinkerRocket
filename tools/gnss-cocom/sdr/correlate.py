@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
     from gnss_nmea_monitor import Parser, replay_source
     from skytraq_binary import MSG_RCV_STATE, parse_rcv_state
+    from ublox_binary import CLS_NAV, MSG_NAV_PVT, parse_nav_pvt
 except ImportError as exc:  # pragma: no cover - depends on the receiver half
     raise SystemExit(
         f"cannot import the receiver half from the parent directory ({exc}).\n"
@@ -126,6 +127,10 @@ def collect(log_path: Path):
     for host_t, kind, data in replay_source(str(log_path)):
         if kind == "bin":
             marker = bool(data) and data[0] == MSG_RCV_STATE
+        elif kind == "ubx":
+            # NAV-PVT is the u-blox analogue of SkyTraq's 0xDF and, like it,
+            # trails the burst -- NAV-SAT for the same epoch arrives first.
+            marker = len(data) >= 2 and data[0] == CLS_NAV and data[1] == MSG_NAV_PVT
         else:
             data = data.strip()
             marker = data[3:6] == "GGA"
@@ -142,15 +147,32 @@ def collect(log_path: Path):
 
         if kind == "bin":
             parser.feed_binary(data)
+        elif kind == "ubx":
+            parser.feed_ubx(data)
         else:
             parser.feed(data)
 
         if marker:
-            if kind == "bin":
-                r = parse_rcv_state(data)
-                gps_wt = (r["week"], r["tow"]) if r else None
+            if kind in ("bin", "ubx"):
+                gps_wt = None
+                if kind == "bin":
+                    r = parse_rcv_state(data)
+                    gps_wt = (r["week"], r["tow"]) if r else None
+                else:
+                    r = parse_nav_pvt(data[2:])
+                    if r:
+                        if r["utc_valid"]:
+                            y, mo, d, hh, mi, ss = r["utc"]
+                            gps_wt = to_gps(dt.datetime(y, mo, d, hh, mi, ss))
+                        else:
+                            # NAV-PVT carries no week number, so with the date
+                            # unresolved the only anchor left is the scenario's
+                            # own week. Correct for any run shorter than a week,
+                            # which every scenario here is.
+                            gps_wt = (None, r["itow_ms"] / 1000.0)
                 e = parser.epoch
-                out.append((host_t, gps_wt, utc_to_sod(e.utc), "bin",
+                out.append((host_t, gps_wt, utc_to_sod(e.utc),
+                            "bin" if kind == "bin" else "ubx",
                             e.verdict(), e.snapshot()))
                 pending = None
             else:
@@ -169,6 +191,8 @@ def trajectory_time(sample, start, k):
 
     if gps_wt is not None:
         week, tow = gps_wt
+        if week is None:
+            week = w0
         return (week - w0) * SECONDS_IN_WEEK + (tow - tow0), "gps"
 
     if sod is not None:

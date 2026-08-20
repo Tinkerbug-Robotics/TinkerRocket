@@ -17,6 +17,11 @@ so a true AND gate essentially never blanks in flight.
 | `correlate.py` | Maps an NMEA capture onto the injected trajectory and brackets the threshold |
 | `rinex3to2.py` | Converts RINEX 3 mixed nav to the RINEX 2 GPS nav gps-sdr-sim requires |
 | `pick_start.py` | Picks a scenario start inside the ephemeris file's densest window |
+| `patch_horizon.py` | Fixes gps-sdr-sim's visibility mask so it follows the vehicle's altitude |
+| `best_geometry.py` | Scans latitude and hour for the most satellites above a given elevation |
+| `plot_flight.py` | Altitude, speed, acceleration, lock state and satellite count on one time axis |
+| `recovery.py` | Shut lag and re-open latency per blocked window, with satellites in the wait |
+| `make_flights.py` | Realistic flight profiles integrated from thrust, drag and gravity |
 
 ## Quick start
 
@@ -316,3 +321,38 @@ for the same reason the Loop checkbox stays unchecked.
 - [SkyTraq AN0037 — Phoenix binary messages](https://www.skytraq.com.tw/homesite/AN0037.pdf)
 - [SkyTraq Commonly Asked Questions](https://www.skytraq.com.tw/Commonly%20Asked%20Questions.pdf) (the AND claim)
 - [PX1125R datasheet](https://macrogroup.ru/upload/iblock/809/ugl3zqyphweatu0hjenfjwbxxtsiyt4b/PX1125R.pdf) (the 80 km / 515 m/s wording)
+
+
+## Testing the rocket computer instead of the bench PX1125R
+
+The flight computer is a different receiver and nothing measured here transfers
+to it. GNSS is on the **ESP32-P4** (GPIO3 rx / GPIO4 tx), and the part is a
+**u-blox SAM-M10Q** with an integrated patch antenna and LNA -- the S3 has no
+GNSS connection at all. u-blox documents its own limits, near 500 m/s and 80 km,
+enforced independently; the "AND" story is specifically a u-blox myth. Re-measure
+rather than assume. The scenarios and the whole analysis chain drop straight in.
+
+Two practical notes:
+
+- The FC calls `setUART1Output(COM_TYPE_UBX)`, so **NMEA is off on the wire** and
+  a passive tap on the receiver's TXD sees UBX only, at 460800 baud (38400 is the
+  module's factory default). `../ublox_binary.py` parses it: UBX-NAV-PVT and
+  UBX-NAV-SAT map onto SkyTraq's 0xDF and 0xE7, and `gnss_nmea_monitor.py` feeds
+  both into the same FIX / BLOCKED / NO_LOCK classifier. Captures are logged as
+  `TS U <hex>` beside the SkyTraq `TS B <hex>`.
+- The FC already sets `DYN_MODEL_AIRBORNE4g` and verifies the readback, which is
+  the u-blox equivalent of the navigation-mode lever this rig sets on the SkyTraq.
+
+Two traps in the UBX path, both of which land on the measurement and both of
+which `ublox_binary.py` handles:
+
+- NAV-PVT's `gSpeed` is **ground** speed. COCOM acts on 3-D speed and a rocket's
+  velocity is almost all vertical, so `gSpeed` reads near zero through exactly
+  the part of the flight the limit is about. Use velN/velE/velD.
+- A fix requires `gnssFixOK`, not just `fixType`. u-blox reports a populated
+  `fixType` with that flag clear while it is withholding, which is precisely the
+  transition being measured.
+
+For a radiated test in a Faraday cage, note that L1's quarter wave is **47.6 mm**,
+not the 83 mm of a 900 MHz whip -- and that free-space loss at L1 is only 26 dB
+at 30 cm, so distance is the fine adjustment once the pad is set.

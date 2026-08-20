@@ -57,6 +57,10 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field, replace
 
+from ublox_binary import (iter_frames as ubx_iter_frames,
+                          parse_nav_pvt, parse_nav_sat,
+                          key as ubx_key, CLS_NAV, MSG_NAV_PVT,
+                          MSG_NAV_SAT)
 from skytraq_binary import (MSG_RCV_STATE, MSG_SV_CH_STATUS, iter_frames, key,
                             parse_rcv_state, parse_sv_ch_status)
 
@@ -284,6 +288,60 @@ class Parser:
             return True
 
         self.counts[f"0x{mid:02X} (unparsed)"] += 1
+        return False
+
+    def feed_ubx(self, blob: bytes) -> bool:
+        """Update the epoch from one UBX frame (class+id followed by payload).
+
+        Deliberately writes the same Epoch fields feed_binary does, so the
+        FIX / BLOCKED / NO_LOCK verdict is computed by identical code whichever
+        receiver is on the bench.
+        """
+        if len(blob) < 2:
+            return False
+        cls, mid = blob[0], blob[1]
+        payload = blob[2:]
+
+        if cls == CLS_NAV and mid == MSG_NAV_PVT:
+            r = parse_nav_pvt(payload)
+            if not r:
+                self.bad += 1
+                return False
+            self.counts["UBX-NAV-PVT"] += 1
+            self.good += 1
+            e = self.epoch
+            e.nav_state = r["fix_type_name"] + ("" if r["gnss_fix_ok"] else "!")
+            e.fix_quality = 1 if r["has_fix"] else 0
+            e.lat, e.lon, e.alt_m = r["lat"], r["lon"], r["alt_m"]
+            e.speed_mps = r["speed_mps"]
+            e.hdop = r["pdop"]
+            e.fix_type = {0: 1, 1: 1, 2: 2, 3: 3, 4: 3, 5: 1}.get(r["fix_type"], 1)
+            y, mo, d, hh, mm, ss = r["utc"]
+            e.utc = f"{hh:02d}{mm:02d}{ss:05.2f}" if r["utc_valid"] else ""
+            return True
+
+        if cls == CLS_NAV and mid == MSG_NAV_SAT:
+            sats = parse_nav_sat(payload)
+            if sats is None:
+                self.bad += 1
+                return False
+            self.counts["UBX-NAV-SAT"] += 1
+            self.good += 1
+            e = self.epoch
+            # Strongest signal per satellite, never the last seen -- see the
+            # note on the SkyTraq path; u-blox reports one entry per signal too.
+            cn0 = {}
+            for s_ in sats:
+                k = ubx_key(s_)
+                v = float(s_["cn0"])
+                if v > cn0.get(k, float("-inf")):
+                    cn0[k] = v
+            e.cn0 = cn0
+            e.sats_in_view = len(cn0)
+            e.sats_used = len({ubx_key(s_) for s_ in sats if s_["used_in_fix"]})
+            return True
+
+        self.counts[f"UBX {cls:02X}/{mid:02X} (unparsed)"] += 1
         return False
 
     def _gga(self, f):
@@ -536,12 +594,17 @@ def run(source, args, log_fh):
 
     try:
         for t, kind, data in source:
-            if kind == "bin":
+            if kind in ("bin", "ubx"):
+                tag = "B" if kind == "bin" else "U"
                 if log_fh is not None:
-                    log_fh.write(f"{t:.3f} B {data.hex()}\n")
+                    log_fh.write(f"{t:.3f} {tag} {data.hex()}\n")
                 if args.raw:
-                    print(f"{t:8.3f} [bin 0x{data[0]:02X}] {data.hex()}")
-                if not parser.feed_binary(data):
+                    label = (f"bin 0x{data[0]:02X}" if kind == "bin"
+                             else f"ubx {data[0]:02X}/{data[1]:02X}")
+                    print(f"{t:8.3f} [{label}] {data.hex()}")
+                ok = (parser.feed_binary(data) if kind == "bin"
+                      else parser.feed_ubx(data))
+                if not ok:
                     continue
             else:
                 line = data
@@ -591,15 +654,32 @@ def _demux(buf: bytearray):
     with 0D 0A -- split the stream on newlines first and every frame shatters
     into unreadable fragments.  Whatever survives frame extraction is text.
     """
-    for payload in iter_frames(buf):
-        yield "bin", payload
+    # Binary before text for both formats: they are self-delimiting and their
+    # payloads contain 0x0A freely, so splitting on newlines first shreds them.
+    #
+    # Each extractor is called ONLY when its own preamble is present. Both of
+    # them, on finding no preamble, discard all but the last byte -- which is
+    # correct for a stream of their own protocol and catastrophic for the other
+    # one's. Calling the SkyTraq extractor unconditionally on a pure-UBX stream
+    # deletes every frame before the UBX extractor is even reached.
+    if buf.find(b"\xa0\xa1") >= 0:
+        for payload in iter_frames(buf):
+            yield "bin", payload
+    if buf.find(b"\xb5\x62") >= 0:
+        for cls, mid, payload in ubx_iter_frames(buf):
+            yield "ubx", bytes([cls, mid]) + payload
+    # Neither extractor ran and there is no line ending: bound the buffer so a
+    # stream of pure noise cannot grow it without limit.
+    if len(buf) > 65536 and b"\n" not in buf:
+        del buf[:len(buf) - 1]
     while True:
         nl = buf.find(b"\n")
         if nl < 0:
             break
         # Stop if a frame preamble begins before this newline: that frame is
         # still arriving, and its body may legitimately contain 0x0A.
-        pre = buf.find(b"\xa0\xa1")
+        pre = min((x for x in (buf.find(b"\xa0\xa1"), buf.find(b"\xb5\x62"))
+                   if x >= 0), default=-1)
         if 0 <= pre < nl:
             break
         line = bytes(buf[:nl]).decode("ascii", errors="replace").strip()
@@ -635,7 +715,8 @@ def serial_source(ser, deadline):
 
 
 def replay_source(path):
-    """Replay a capture. Lines are 'TS text' or 'TS B <hex>' for binary frames."""
+    """Replay a capture. Lines are 'TS text', 'TS B <hex>' for SkyTraq frames,
+    or 'TS U <hex>' for UBX frames (class+id then payload)."""
     with open(path, "r", errors="replace") as fh:
         for raw in fh:
             raw = raw.rstrip("\n")
@@ -648,9 +729,10 @@ def replay_source(path):
                 # A capture without timestamps still replays, just untimed.
                 yield 0.0, "nmea", raw
                 continue
-            if rest.startswith("B "):
+            if rest[:2] in ("B ", "U "):
                 try:
-                    yield t, "bin", bytes.fromhex(rest[2:])
+                    yield t, ("bin" if rest[0] == "B" else "ubx"), \
+                        bytes.fromhex(rest[2:])
                 except ValueError:
                     pass
                 continue
