@@ -756,3 +756,127 @@ TEST_F(KinematicChecksTest, Apogee_BothUnhealthy_NoFire) {
     EXPECT_FALSE(kc.apogee_flag);
     EXPECT_FALSE(kc.apogee_backstop_flag);
 }
+
+// ---------------------------------------------------------------------------
+// #824: the landing vote must not be satisfiable by altitude-blind evidence.
+// ---------------------------------------------------------------------------
+
+TEST_F(KinematicChecksTest, Landing_NoGPS_SteadyDescentAloft_DoesNotLatch) {
+    // The reported failure: with GPS stale the vote drops to 2-of-3, and
+    // gyro_quiet + accel_1g both pass under a canopy at terminal velocity
+    // (an accelerometer reads 1 g in steady descent).  Neither knows the
+    // rocket is 300 m up, so the pair must not be able to latch LANDED.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    // 60 s under canopy: quiet in roll, 1 g, no GPS, descending 3 m/s from
+    // 300 m — still well above the pad when the window ends.
+    for (int second = 0; second < 60; second++) {
+        uint32_t base = 1000 + second * 1000;
+        float alt = 300.0f - 3.0f * float(second);
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(alt, 9.81f, -3.0f, 1.0f);
+        }
+    }
+    EXPECT_TRUE(kc.gyro_quiet_flag);   // the altitude-blind pair does pass...
+    EXPECT_TRUE(kc.accel_1g_flag);
+    EXPECT_FALSE(kc.baro_stable_flag); // ...but the altitude-aware one does not
+    EXPECT_FALSE(kc.alt_landed_flag);  // so no latch
+}
+
+TEST_F(KinematicChecksTest, Landing_Quiescent_OutOfBandBaro_EventuallyLatches) {
+    // Requiring baro_stable must not strand a flight whose barometer can
+    // never satisfy it.  Landing 400 m off the pad reference puts palt
+    // outside BARO_STABLE_PALT_MAX forever; the quiescence backstop still
+    // ends the flight after ~30 s of genuine stillness.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    for (int second = 0; second < 40; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(400.0f, 9.80665f, 0.0f, 0.2f);
+        }
+    }
+    EXPECT_FALSE(kc.baro_stable_flag);
+    EXPECT_TRUE(kc.quiescent_flag);
+    EXPECT_TRUE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_Quiescent_UnderChute_DoesNotLatch) {
+    // Same 40 s aloft, but rolling the way the flight logs actually show
+    // (median 40-460 dps under chute).  Quiescence must stay clear.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    for (int second = 0; second < 40; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(300.0f, 9.81f, -6.0f, 40.0f);
+        }
+    }
+    EXPECT_FALSE(kc.quiescent_flag);
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_Quiescent_PendulumAccel_DoesNotLatch) {
+    // The case the roll gate alone would miss: an airframe descending
+    // without rolling.  A canopy pendulum modulates |a| well beyond the
+    // 0.05 g quiescence tolerance even when roll is near zero.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    for (int second = 0; second < 40; second++) {
+        uint32_t base = 1000 + second * 1000;
+        // +/- 0.2 g swing, alternating each second
+        float acc = (second % 2 == 0) ? 11.77f : 7.85f;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(300.0f, acc, -6.0f, 0.5f);
+        }
+    }
+    EXPECT_FALSE(kc.quiescent_flag);
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_Quiescent_NotArmedBeforeApogee) {
+    // A rocket sitting on the pad is quiescent by definition.  The apogee
+    // rising-edge reset must zero the counter so the backstop cannot fire
+    // the instant apogee latches.
+    for (int second = 0; second < 60; second++) {
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(second * 1000 + i * 2);
+            callStationary(0.0f, 9.80665f);
+        }
+    }
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(60000 + i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+
+    kc.apogee_flag = true;
+    setMockMillis(62000);
+    callFlight(300.0f, 9.80665f, -6.0f, 0.0f);
+    EXPECT_FALSE(kc.quiescent_flag);
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
