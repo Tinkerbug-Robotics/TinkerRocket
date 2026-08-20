@@ -21,6 +21,11 @@ class FakeScanner : BleScanner {
     var activeCollections = 0
         private set
 
+    /** Cumulative collections — #830 asserts the endgame paces its retries
+     *  rather than spinning a fresh platform scan per loop iteration. */
+    var totalCollections = 0
+        private set
+
     /**
      * Set to make the flow FAIL instead of emitting — what the real scanner
      * does when the adapter is off ("BLE scanner unavailable"). Left uncaught
@@ -29,7 +34,7 @@ class FakeScanner : BleScanner {
     var failWith: Throwable? = null
 
     override fun advertisements(): Flow<BleAdvertisement> = emissions
-        .onStart { activeCollections++; failWith?.let { throw it } }
+        .onStart { activeCollections++; totalCollections++; failWith?.let { throw it } }
         .onCompletion { activeCollections-- }
 }
 
