@@ -3,7 +3,7 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 28,051 lines across 71 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 28,061 lines across 71 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
@@ -79,13 +79,13 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [FrequencyScanSample.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FrequencyScanSample.swift) | 15 | `FrequencyScanSample` |
 
 
-## `Views/` — 27 files, 14,344 lines
+## `Views/` — 27 files, 14,354 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
 | [DashboardView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DashboardView.swift) | 3,164 | `IdentifiableInt`, `DashboardSheet`, `DashboardView`, `ConnectedFleetView`, `DirectRocketSection`, `FocusedRelaySection`, +40 more |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Connected fleet dashboard (#390) · Connected device dashboard (observes the BLEDevice for live updates) · Shared rocket telemetry cards · Component Views · Pyro Channels · Controls · Branded Toolbar · Signal Strength Tile · LoRa RSSI mapping (-130 to -30 dBm) · GNSS Satellites (0 to 30) · BLE RSSI mapping (-100 to -30 dBm) · Preview |
-| [SettingsView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/SettingsView.swift) | 1,728 | `SettingsView`, `PyroChannelTestControls` |
+| [SettingsView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/SettingsView.swift) | 1,735 | `SettingsView`, `PyroChannelTestControls` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Focus-driven self-apply (#144) · Base station (read-only display) · No active profile · Rocket settings (profile-backed) · Per-channel profile accessors (centralise the 4-channel switch) · Profile bindings · String ↔ profile sync · Helpers · Apply actions (write profile + push when connected) · LoRa TX power (base station only) · Pyro live controls |
 | [DriftCastView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DriftCastView.swift) | 1,428 | `DriftCastMapView`, `Trajectory3DView`, `DriftCastView`, `DriftCastSendButton` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Map Representable · 3D Trajectory View (SceneKit + ArcGIS Satellite Imagery) · Geo Conversion · USGS Satellite Imagery (cached) · Scene Builder · Scene Helpers · Main Drift Cast View · Computed Properties · Body · Map Section · Form Content · Results Section · Wind Profile Section · UI Helpers · Actions · Profile sync (#191) · Send-to-Unit Button · Preview |
@@ -93,7 +93,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | States · Sampling Hero · Pieces · Direction Bars · Accel coverage tracker |
 | [FlightTrajectoryView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FlightTrajectoryView.swift) | 764 | `FlightMapView`, `FlightScene3DView`, `FlightTrajectoryView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Data Extraction · 2D Map View · 3D Scene View · Geo Conversion · ArcGIS Satellite Imagery · Scene Builder · Scene Helpers · Container View |
-| [PyroTestView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PyroTestView.swift) | 724 | `PyroTestState`, `TickCounter`, `PyroTestView`, `PyroContinuityBadge`, `SlowMoCameraManager`, `CameraPreviewView` |
+| [PyroTestView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PyroTestView.swift) | 727 | `PyroTestState`, `TickCounter`, `PyroTestView`, `PyroContinuityBadge`, `SlowMoCameraManager`, `CameraPreviewView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | State Machine · Tick Counter (ObservableObject so SwiftUI can observe it) · View · Top Bar · Center Display · Bottom Controls · Actions · Continuity Badge (shared by the test view and the pyro cards) · Slow-Mo Camera Manager · Camera Preview (UIViewRepresentable) |
 | [FileManagerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FileManagerView.swift) | 626 | `FileManagerView`, `FilePageNavigator`, `FileRow`, `ShareHelper`, `FlightFileItemSource` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Share Helper (presents UIActivityViewController via UIKit to avoid SwiftUI .sheet blank screen) |
@@ -123,4 +123,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 71 files, 28,051 lines.
+Total: 71 files, 28,061 lines.
