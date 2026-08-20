@@ -80,3 +80,86 @@ final class PyroContinuityRenderTests: XCTestCase {
                        "legacy path genuinely cannot tell open from untested")
     }
 }
+
+// MARK: - #831: freshness on the direct path
+
+extension PyroContinuityRenderTests {
+
+    /// A link that has never delivered a frame is not a reading. Before this,
+    /// `effectiveDataStatus` was a pass-through on a direct link and the
+    /// rocket only ever sends "ds" when NOT live — so the #297 guard reduced
+    /// to `isConnected` and this returned a verdict from zeroed telemetry.
+    func testConnectedButNoFrameYetIsNoData() {
+        let d = BLEDevice(peripheral: nil, name: "TR-R-Test")
+        d.isConnected = true
+        XCTAssertNil(d.lastTelemetryAt, "test premise: no frame has arrived")
+        XCTAssertEqual(d.pyroContinuity(channel: 1), .noData,
+                       "a connected link with no frames must not report continuity")
+    }
+
+    /// The #831 hold-over, from the app's side: frames stop while the link
+    /// still counts as connected, and the last good reading must not stand.
+    func testSilentLinkGoesNoDataOnceStale() {
+        let d = rocket(health: 1 << 24)
+        XCTAssertEqual(d.pyroContinuity(channel: 1), .present,
+                       "premise: it reads green while the frame is fresh")
+
+        let seen = d.lastTelemetryAt!
+        d.nowProvider = { seen.addingTimeInterval(
+            Double(BLEDevice.telemetryStaleThresholdMs) / 1000 + 1) }
+
+        XCTAssertEqual(d.pyroContinuity(channel: 1), .noData,
+                       "a held-over green is exactly what #297 exists to prevent")
+    }
+
+    func testFreshFrameJustInsideTheWindowStillReads() {
+        let d = rocket(health: 1 << 24)
+        let seen = d.lastTelemetryAt!
+        d.nowProvider = { seen.addingTimeInterval(
+            Double(BLEDevice.telemetryStaleThresholdMs) / 1000 - 0.5) }
+        XCTAssertEqual(d.pyroContinuity(channel: 1), .present)
+    }
+
+    /// The OC now ages its own FC snapshot and sends STALE, which the existing
+    /// guard already honours — this pins that the two layers agree.
+    func testRocketReportedStaleIsNoDataEvenWithAFreshFrame() {
+        let d = rocket(health: 1 << 24, ds: 1)   // ds 1 = .stale
+        XCTAssertNotNil(d.lastTelemetryAt, "premise: the BLE frame itself is fresh")
+        XCTAssertEqual(d.pyroContinuity(channel: 1), .noData)
+    }
+
+    /// SYNCING is what the OC sends before the FC has ever spoken. It must not
+    /// fall through to the raw-cont-bit path and render a confident red.
+    func testRocketReportedSyncingIsNoDataNotOpen() {
+        let d = rocket(health: 0, ds: 2)         // ds 2 = .syncing
+        XCTAssertEqual(d.pyroContinuity(channel: 3), .noData)
+        XCTAssertNotEqual(d.pyroContinuity(channel: 3), .open)
+    }
+}
+
+// MARK: - #831: no evidence is not a measured open
+
+extension PyroContinuityRenderTests {
+
+    /// The OC's low-power frames (FC rail off) carry no pyro_status and no
+    /// sensor_health at all. A clear cont bit there is absence of evidence,
+    /// not a measured open — red is reserved for a measurement.
+    func testRocketPoweredOffIsUntestedNotOpen() {
+        let d = BLEDevice(peripheral: nil, name: "TR-R-Test")
+        d.isConnected = true
+        d.parseTelemetryData(#"{"st":"OFF"}"#.data(using: .utf8)!)
+        XCTAssertFalse(d.telemetry.hasSensorHealth, "premise: an all-zero scorecard")
+        XCTAssertEqual(d.pyroContinuity(channel: 1), .untested)
+        XCTAssertNotEqual(d.pyroContinuity(channel: 1), .open,
+                          "a powered-off rocket has not measured an open circuit")
+    }
+
+    /// The legacy path must survive that guard: pre-#803 firmware still fills
+    /// the rest of the scorecard, so its genuine open still reads as one.
+    func testLegacyOpenStillReadsOpenWhenTheScorecardIsPopulated() {
+        let d = rocket(health: 1 << 2, ps: 0)     // a non-pyro sensor reporting
+        XCTAssertTrue(d.telemetry.hasSensorHealth)
+        XCTAssertNil(d.telemetry.pyroMeasuredContinuity(channel: 2))
+        XCTAssertEqual(d.pyroContinuity(channel: 2), .open)
+    }
+}

@@ -130,8 +130,14 @@ public:
         // (default).  STALE = BS re-pushing cached data older than
         // BLE_TELEMETRY_STALE_MS; iOS dims + shows "stale (Ns ago)".
         // SYNCING = no rocket has ever been caught; iOS hides rocket
-        // fields and shows "Searching for rocket…".  Direct rocket
-        // connections always send LIVE.
+        // fields and shows "Searching for rocket…".
+        //
+        // A DIRECT rocket connection ages its own FC data the same way (#831):
+        // every rocket-derived field in the frame is republished from the last
+        // NonSensorData snapshot, so an FC that dies while the OC stays up
+        // would otherwise hold a green continuity reading over indefinitely.
+        // SYNCING until the first FC frame, STALE past
+        // config::FC_FRAME_STALE_MS without one.
         enum class DataStatus : uint8_t { LIVE = 0, STALE = 1, SYNCING = 2 };
         DataStatus data_status;
         uint32_t   data_age_ms;         // only meaningful when STALE

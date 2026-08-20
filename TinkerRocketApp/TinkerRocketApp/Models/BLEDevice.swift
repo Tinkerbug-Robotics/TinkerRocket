@@ -202,6 +202,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Mirrors the BS firmware's BLE_TELEMETRY_STALE_MS.
     static let relayStaleThresholdMs: UInt32 = 3000
 
+    /// #831: how long a connected-but-silent link keeps counting as live for
+    /// continuity. Matches the relay threshold and the OC's own
+    /// FC_FRAME_STALE_MS so all three age at the same rate.
+    static let telemetryStaleThresholdMs: UInt32 = 3000
+
+    /// Clock seam so the #831 staleness window is testable without waiting on
+    /// the wall clock. Production never replaces it.
+    var nowProvider: () -> Date = { Date() }
+
     /// Freshness the dashboard should trust for this link's rocket stream:
     /// the frame-carried status, worsened by the app-computed focused-rocket
     /// age when that is staler (never improved — a BS-reported STALE stays).
@@ -1077,13 +1086,30 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Path-aware continuity for the pyro UIs, #297 fail-safe included (a
     /// non-live stream is .noData, never a held-over green).
     ///
-    /// Direct link: the "ps" cont bit, which is ungated on the FC and so is a
-    /// real measurement whenever it is set. BS relay: the 65-byte LoRa
+    /// Direct link: prefers the measured sensor-health bits, falling back to
+    /// the "ps" cont bit for pre-#803 rockets. BS relay: the 65-byte LoRa
     /// downlink carries no pyro_status, so continuity rides the sensor-health
     /// scorecard — preferring the MEASURED bits (reported for every channel)
     /// and falling back to the config-gated ones for pre-#803 rockets.
+    ///
+    /// #831 — the fail-safe above used to be vacuous on a direct link, in two
+    /// layers. The rocket only ever sends "ds" when it is NOT live and the
+    /// decoder defaults a missing one to .live, so the guard reduced to
+    /// `isConnected`; and the OC republishes every rocket-derived field from
+    /// its last NonSensorData snapshot whether or not the FC is still alive,
+    /// so a dead FC left a green CONT standing indefinitely. The OC now ages
+    /// that snapshot and sends STALE/SYNCING accordingly, which makes the
+    /// existing guard real. The `lastTelemetryAt` check below covers the
+    /// remaining case the OC cannot report on: frames stopping altogether
+    /// while the link still counts as connected.
     func pyroContinuity(channel: Int) -> PyroContinuity {
         guard isConnected, effectiveDataStatus == .live else { return .noData }
+        // A connected link that has gone quiet is not a live reading, whatever
+        // the last frame said.
+        guard let seen = lastTelemetryAt,
+              nowProvider().timeIntervalSince(seen) * 1000
+                  <= Double(Self.telemetryStaleThresholdMs)
+        else { return .noData }
         if isBaseStation {
             if let measured = telemetry.pyroMeasuredContinuity(channel: channel) {
                 switch measured {
@@ -1111,6 +1137,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             default:   return .untested
             }
         }
+        // #831: fall back to the raw bit only when the rocket is actually
+        // reporting something. An all-zero scorecard means no evidence at all
+        // — the OC's low-power frames (FC rail off) never populate pyro_status
+        // or sensor_health, so a clear cont bit there is absence, not a
+        // measured open, and red is reserved for a measurement. A rocket on
+        // pre-#803 firmware still fills the rest of the scorecard, so its
+        // genuine open still reads as one.
+        guard telemetry.hasSensorHealth else { return .untested }
         return telemetry.pyroCont(channel: channel) ? .present : .open
     }
 

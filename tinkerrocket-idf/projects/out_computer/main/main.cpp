@@ -1012,6 +1012,12 @@ static GNSSDataSI latest_gnss_si = {};
 static bool latest_gnss_valid = false;
 static bool latest_power_valid = false;
 static bool latest_non_sensor_valid = false;
+// #831: when the last NonSensorData actually arrived.  latest_non_sensor_valid
+// latches once at first receipt and is never cleared, so it cannot answer "is
+// the FC still alive?" — and every rocket-derived field in the BLE frame, pyro
+// continuity included, is republished from that snapshot at full rate whether
+// the FC is alive or not.
+static uint32_t latest_non_sensor_rx_ms = 0;
 
 // FC boot progress (FC_BOOT_STATUS_MSG), live only during the FC's setup_fc.
 // Deliberately NOT cleared when boot completes: the last frame carries the
@@ -2941,6 +2947,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             const RocketState prev_state = latest_rocket_state;
             memcpy(&latest_non_sensor, payload, sizeof(NonSensorData));
             latest_non_sensor_valid = true;
+            latest_non_sensor_rx_ms = millis();   // #831
             fc_ns_since_boot = true;   // boot sequence over — real state is flowing
             latest_rocket_state = (RocketState)latest_non_sensor.rocket_state;
             // Update the flight-freeze sticky flag whenever the state
@@ -5741,6 +5748,52 @@ static void printStats()
         }
         sh = shSet(sh, SH_STORAGE_SHIFT, ocStorageHealth());  // #281/#278
         ble_telem.sensor_health = sh;
+    }
+    // #831: freshness of the FC-sourced half of this frame.
+    //
+    // Everything above that describes the rocket — attitude, the sensor-health
+    // scorecard, the pyro bits — is copied out of latest_non_sensor, an I2C
+    // snapshot the OC republishes on every BLE tick regardless of whether the
+    // FC is still talking.  latest_non_sensor_valid latches once at first
+    // receipt and is never cleared, so an FC that dies, reboots, or has its
+    // rail cut leaves the OC sending the last good frame's continuity bits
+    // forever, and the app renders a confident green CONT measured before the
+    // failure.  That is precisely the held-over green #297 exists to prevent;
+    // it just had no backstop on the direct path, because data_status was
+    // never set here at all and defaulted to LIVE on every frame.
+    //
+    // Setting it costs nothing on the wire (the field already exists and is
+    // only serialised when non-LIVE) and needs no app change: the app's
+    // existing #297 machinery already renders a non-live stream's continuity
+    // as NO DATA rather than a stale reading.
+    //
+    // The FC sends NonSensorData at NON_SENSOR_UPDATE_RATE = 500 Hz, so this
+    // threshold is ~1500 missed frames — it cannot fire on an I2S hiccup, only
+    // on an FC that has genuinely stopped.  SYNCING rather than STALE before
+    // the first frame ever arrives: "no rocket data yet" is a different thing
+    // from "rocket data has gone stale", and it is what the app already shows
+    // during the FC's ~25 s boot.
+    {
+        const uint32_t now_ms = millis();
+        if (!latest_non_sensor_valid)
+        {
+            ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::SYNCING;
+            ble_telem.data_age_ms = 0;
+        }
+        else
+        {
+            const uint32_t ns_age_ms = now_ms - latest_non_sensor_rx_ms;
+            if (ns_age_ms > config::FC_FRAME_STALE_MS)
+            {
+                ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::STALE;
+                ble_telem.data_age_ms = ns_age_ms;
+            }
+            else
+            {
+                ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::LIVE;
+                ble_telem.data_age_ms = 0;
+            }
+        }
     }
     ble_telem.rssi = NAN;  // LoRa RSSI only meaningful on base station (continuous RX)
     ble_telem.snr = NAN;
