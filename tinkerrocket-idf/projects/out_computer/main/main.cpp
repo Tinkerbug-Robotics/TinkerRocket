@@ -197,6 +197,13 @@ static SensorHealthState ocStorageHealth()
     const size_t cap  = tr_flightlog::FlightIndex::MAX_ENTRIES;
     if (used >= cap) st = SH_BAD;
     else if (used + 4 >= cap && st == SH_OK) st = SH_DEGRADED;
+    // #826: a board configured for an MRAM that did not answer the boot probe.
+    // DEGRADED rather than BAD — frames still reach the NAND, so nothing is
+    // lost, but the ring shrank to internal RAM and brownout recovery is gone
+    // for the session. Folded in here for the same reason as #566 above: this
+    // is precisely the state that used to read green while the part was dead.
+    // Never fires on a board that correctly has no MRAM (MRAM_CS < 0).
+    if (logger.mramProbeFailed() && st == SH_OK) st = SH_DEGRADED;
     return st;
 }
 

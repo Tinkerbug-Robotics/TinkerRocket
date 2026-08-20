@@ -1,4 +1,5 @@
 #include <TR_LogToFlash.h>
+#include <MramProbe.h>
 #include <CRC.h>
 #include <TR_NVS.h>
 #include <cstring>
@@ -41,22 +42,48 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     pinMode(cfg.nand_cs, OUTPUT);
     csHigh(cfg.nand_cs);
 
-    // Initialize ring buffer — MRAM (SPI) if configured, else heap RAM
+    // Initialize ring buffer — MRAM (SPI) if one actually answers, else heap RAM
+    use_mram_ = false;
+    mram_probe_failed_ = false;
     if (cfg.mram_cs >= 0)
     {
-        use_mram_ = true;
-        ring_size_ = cfg.mram_size;
         spi_mram = SPISettings(cfg.spi_hz_mram, MSBFIRST, cfg.spi_mode_mram);
 
         pinMode(cfg.mram_cs, OUTPUT);
         digitalWrite(cfg.mram_cs, HIGH);
 
-        if (cfg.debug) ESP_LOGI(TAG, "MRAM ring: %lu bytes on CS pin %d",
-                                      (unsigned long)ring_size_, cfg.mram_cs);
+        // #826: this used to be `use_mram_ = true` on the strength of the pin
+        // number alone. A configured-but-absent MRAM then clocked every frame
+        // onto an unconnected pad and read noise back, and that noise was
+        // programmed into the NAND inside a valid PageHeader with a good
+        // CRC32 — so nothing downstream could catch it, and ocStorageHealth()
+        // stayed green while every flight log was lost. The board split
+        // (#822) closed the reachable path; this closes the class, including
+        // a fitted part that is dead or badly soldered.
+        if (mramProbe())
+        {
+            use_mram_ = true;
+            ring_size_ = cfg.mram_size;
+            if (cfg.debug) ESP_LOGI(TAG, "MRAM ring: %lu bytes on CS pin %d",
+                                          (unsigned long)ring_size_, cfg.mram_cs);
+        }
+        else
+        {
+            // Loud and unconditional (not gated on cfg.debug): silence here is
+            // exactly the #826 failure. Logging continues on the RAM ring, so
+            // this degrades capacity and costs brownout recovery — it does not
+            // stop the vehicle logging.
+            mram_probe_failed_ = true;
+            ESP_LOGE(TAG, "MRAM configured on CS pin %d but NO DEVICE ANSWERED "
+                          "— falling back to a RAM ring. Check the board "
+                          "revision flag and the MRAM part/solder. In-flight "
+                          "reboot recovery is unavailable this session.",
+                     cfg.mram_cs);
+        }
     }
-    else
+
+    if (!use_mram_)
     {
-        use_mram_ = false;
         ring_in_psram_ = false;
 
         // #822: on a board with no MRAM but with in-package PSRAM (V9/V10's
@@ -881,6 +908,59 @@ void TR_LogToFlash::mramReadBytes(uint32_t addr, uint8_t* out, uint32_t len)
 // reserved space above ring_size_.  Same SPI primitives as
 // mramWriteBytes/mramReadBytes but no ring modulo — caller controls the
 // absolute address.  Returns false if MRAM isn't enabled.
+// #826: does a real MRAM answer on cfg.mram_cs?
+//
+// Deliberately NON-DESTRUCTIVE. Every byte of this part is live at boot: after
+// an unclean shutdown drainMramToSink() replays the whole ring [0, mram_size)
+// through the write sink (#274), and the caller's reserved region above it
+// holds the FlightSnapshot (#104) and the dirty marker. So this cannot be the
+// obvious scratch write/read-back — there is no scratch. Toggling WEL changes
+// only the status register and leaves memory untouched.
+//
+// It also cannot be fooled by an absent part, which a bare RDSR could be: with
+// nothing driving MISO the bus floats to a CONSTANT (0x00, 0xFF or noise), and
+// 0x00 is a perfectly plausible status byte — an unprotected part with WEL
+// clear. Demanding two DIFFERENT values in response to two commands we issue
+// means any constant fails one of the two checks, and noise only passes if it
+// happens to land correctly twice in a row.
+//
+// Runs before spi_mutex_ exists, which is safe: begin() is single-threaded
+// (the flush task is not started and nandInit() has not run), and the NAND CS
+// was driven high above so it cannot answer these opcodes.
+bool TR_LogToFlash::mramProbe()
+{
+    auto sendCmd = [this](uint8_t op) {
+        spi->beginTransaction(spi_mram);
+        csLow(cfg.mram_cs);
+        spi->transfer(op);
+        csHigh(cfg.mram_cs);
+        spi->endTransaction();
+    };
+    auto readStatus = [this]() -> uint8_t {
+        spi->beginTransaction(spi_mram);
+        csLow(cfg.mram_cs);
+        spi->transfer(MRAM_RDSR);
+        const uint8_t sr = spi->transfer(0x00);
+        csHigh(cfg.mram_cs);
+        spi->endTransaction();
+        return sr;
+    };
+
+    sendCmd(MRAM_WREN);
+    const uint8_t sr_set = readStatus();
+    sendCmd(MRAM_WRDI);            // leave WEL clear — the safe resting state
+    const uint8_t sr_clr = readStatus();
+
+    const bool ok = tr::mramProbeVerdict(sr_set, sr_clr);
+    if (!ok)
+    {
+        ESP_LOGE(TAG, "MRAM probe FAILED on CS %d: status after WREN=0x%02X, "
+                      "after WRDI=0x%02X (expected WEL set then clear)",
+                 cfg.mram_cs, sr_set, sr_clr);
+    }
+    return ok;
+}
+
 bool TR_LogToFlash::mramRawWrite(uint32_t addr, const uint8_t* data, uint32_t len)
 {
     if (!use_mram_ || data == nullptr || len == 0) return false;
