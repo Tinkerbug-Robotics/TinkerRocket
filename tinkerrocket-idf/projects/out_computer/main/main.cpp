@@ -74,6 +74,7 @@ static inline std::string itos(int v)
 #include <RocketComputerTypes.h>
 #include <TR_INA230.h>
 #include <TR_FlightLog.h>
+#include <SnapshotTailScan.h>   // #846: boot re-seed of the snapshot cache
 #include <TR_NandBackend_esp.h>
 #include <NvsBitmapStore.h>
 #include <NandBitmapStore.h>   // #398: bitmap on NAND (not NVS) — no cache-disable stall
@@ -654,6 +655,62 @@ static bool boot_rail_restored = false;  // this boot re-asserted the FC rail
 static bool boot_rail_restore_init_pending = false;
 
 static bool pwr_pin_on = false;
+// #846: the latest FC FlightSnapshotData WIRE frame, cached in plain RAM.
+// This is the primary snapshot store on every board now: the common recovery
+// case is "the FC reset, the OC did not" (post-#859 an OC fault can't even
+// drop the FC's rail mid-flight), and for that case RAM is all the
+// non-volatility required. The V7/V8 MRAM slot remains as the fallback for
+// an OC-also-reset, and V9/V10 cover that case by re-seeding this cache at
+// boot from the NAND log stream (the snapshot frames already ride it — every
+// received frame is enqueued byte-exact before dispatch). The FC's LANDED
+// "clear" snapshot flows through the same path, so cache invalidation is
+// inherited, and the FC re-validates magic/version/state/CRC32/sim on its
+// side — a stale or garbage cache can never restore a flight.
+static constexpr size_t kSnapFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
+static uint8_t  snapshot_cache[kSnapFrameLen];
+static bool     snapshot_cache_valid = false;
+// #846: set once the cache has actually been handed to the FC. The boot
+// re-seed's once-marker is written on CONSUMPTION, not on seeding — a
+// marker written at seed time would burn the flight's only chance if a
+// second reset wiped the RAM cache before the FC ever asked.
+static bool     snapshot_served = false;
+// #846: a boot re-seed is marked consumed only once the FC has actually
+// been served the frame (see snapshot_served). Until then these hold the
+// identity to stamp into NVS.
+static bool     snapshot_seed_pending_mark = false;
+static uint32_t snapshot_seed_id = 0;
+static uint32_t snapshot_seed_bytes = 0;
+// Serve-TTL: a snapshot older than the FC's MAX_FLIGHT_TIME is definitionally
+// unrestorable — the flight would have timed out to LANDED — so serving it
+// could only ever re-arm a grounded rocket (an FC WDT reset on the bench
+// hours after a failed recovery must NOT get last flight's INFLIGHT back).
+// Live 10 Hz frames refresh the stamp continuously, so an ACTIVE flight can
+// never expire; only an abandoned cache does.
+//
+// TWO bounds, because cache age alone is not flight age: a frame re-seeded
+// from NAND at boot has a fresh stamp but may describe an ancient flight, so
+// the frame's OWN flight_elapsed_ms is bounded as well (past MAX_FLIGHT the
+// FC's own timeout would already have forced LANDED). snapshotServable()
+// applies both and gates the V7/V8 MRAM fallback too — that store has no
+// clock of its own and, now that a failed recovery no longer clears it
+// (#834-3), can hold an INFLIGHT frame indefinitely.
+static constexpr uint32_t kSnapshotServeTtlMs = 600000;  // = FC MAX_FLIGHT_TIME
+static uint32_t snapshot_cache_ms = 0;                   // millis() at last write
+// Guards the cache against a torn read: the I2S parser task (core 1, prio 6)
+// writes it while loop_oc (prio 5) can be serving a GET from I2C ingress.
+static portMUX_TYPE snapshot_cache_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// True when a 232-byte snapshot wire frame is fresh enough to hand back.
+// `age_ms` is how long ago WE stored it (0 = unknown, e.g. the MRAM slot).
+static bool snapshotServable(const uint8_t* frame, uint32_t age_ms)
+{
+    if (age_ms >= kSnapshotServeTtlMs) return false;
+    FlightSnapshotData snap = {};
+    memcpy(&snap, frame + 6, sizeof(snap));   // past SOF(4)+type+len
+    if (snap.magic != FlightSnapshotData::MAGIC) return false;
+    if (snap.rocket_state != (uint8_t)INFLIGHT) return false;   // a clear
+    return snap.flight_elapsed_ms < kSnapshotServeTtlMs;
+}
 // #825: false after a boot rail restore — our reset wiped the commanded
 // camera state while the FC (kept alive by the restored rail) may still be
 // recording, so the explicit-state dedup below must forward the first
@@ -2976,14 +3033,40 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             uint32_t elapsed_ms = 0;
             memcpy(&elapsed_ms, payload + offsetof(FlightSnapshotData, flight_elapsed_ms),
                    sizeof(elapsed_ms));
+            uint8_t snap_state = 0;
+            memcpy(&snap_state, payload + offsetof(FlightSnapshotData, rocket_state),
+                   sizeof(snap_state));
             static uint32_t last_snap_elapsed_ms = 0;
             constexpr uint32_t NEW_FLIGHT_BACKSTEP_MS = 10'000;
+            // #846 SAFETY: a non-INFLIGHT frame is the FC's "clear" — it can
+            // only ever DISARM (the FC restores solely on INFLIGHT), so it
+            // must never be dropped as a replay. It routinely looks like one:
+            // clearFlightSnapshot() sends elapsed = FC uptime (a few seconds,
+            // launch_time_millis == 0 at boot), which lands inside the 10 s
+            // backstep below a real flight's elapsed. Dropping it left the
+            // store holding a genuine INFLIGHT frame that a later FC panic
+            // would restore ON THE GROUND with pyro channels re-armed.
+            // Elapsed-ms comparisons are meaningless across an FC reboot
+            // anyway; state is the only trustworthy discriminator here.
+            const bool is_clear = (snap_state != (uint8_t)INFLIGHT);
             const bool stale_replay =
+                !is_clear &&
                 elapsed_ms < last_snap_elapsed_ms &&
                 (last_snap_elapsed_ms - elapsed_ms) <= NEW_FLIGHT_BACKSTEP_MS;
             if (!stale_replay)
             {
                 last_snap_elapsed_ms = elapsed_ms;
+                // #846: RAM cache first — the store that actually serves
+                // GET_FLIGHT_SNAPSHOT now. Same #383 guard protects it.
+                if (frame_len == kSnapFrameLen)
+                {
+                    const uint32_t now_cache = millis();
+                    portENTER_CRITICAL(&snapshot_cache_mux);
+                    memcpy(snapshot_cache, frame, kSnapFrameLen);
+                    snapshot_cache_valid = true;
+                    snapshot_cache_ms = now_cache;
+                    portEXIT_CRITICAL(&snapshot_cache_mux);
+                }
                 // Save the full ~224 B wire frame (SOF + type + len + payload + CRC)
                 // so the recovery path can hand the bytes straight back to FC.
                 // #822: a no-op returning false on a board with no MRAM
@@ -2998,15 +3081,48 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     }
     else if (type == GET_FLIGHT_SNAPSHOT)
     {
-        // FC is asking for the latest snapshot at boot recovery.  Read
-        // the cached wire frame from MRAM and queue it as the I2C TX
-        // response.  If MRAM holds garbage / no valid snapshot, the FC's
-        // CRC + magic check will reject it and skip recovery — no need
-        // for an explicit "no data" indicator here.
-        constexpr size_t kFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
-        uint8_t snap_frame[kFrameLen] = {};
-        if (logger.mramRawRead(config::SNAPSHOT_REGION_BASE,
-                               snap_frame, sizeof(snap_frame)))
+        // FC is asking for the latest snapshot at boot recovery. #846: serve
+        // the RAM cache first — it holds the newest frame whether it arrived
+        // live over I2S or was re-seeded at boot from the NAND log stream.
+        // The V7/V8 MRAM slot is the fallback (an OC-also-reset on a board
+        // whose cache re-seed doesn't run because the MRAM covers it). The FC
+        // validates magic/version/state/CRC32/sim on its side, so garbage
+        // from either store is rejected there — no validity check needed here.
+        uint8_t snap_frame[kSnapFrameLen] = {};
+        bool have = false;
+        uint32_t cache_age = 0;
+        bool had_cache = false;
+        portENTER_CRITICAL(&snapshot_cache_mux);
+        if (snapshot_cache_valid)
+        {
+            memcpy(snap_frame, snapshot_cache, kSnapFrameLen);
+            cache_age = millis() - snapshot_cache_ms;
+            had_cache = true;
+        }
+        portEXIT_CRITICAL(&snapshot_cache_mux);
+
+        if (had_cache && snapshotServable(snap_frame, cache_age))
+        {
+            have = true;
+            snapshot_served = true;   // #846: consumed — see the boot re-seed
+        }
+        else if (!had_cache &&
+                 logger.mramRawRead(config::SNAPSHOT_REGION_BASE,
+                                    snap_frame, sizeof(snap_frame)) &&
+                 snapshotServable(snap_frame, 0))
+        {
+            // V7/V8 fallback. Age is unknown (the slot has no clock), so only
+            // the frame's own flight_elapsed_ms bounds it — enough to refuse
+            // a slot left INFLIGHT by a flight that has since timed out.
+            have = true;
+        }
+        else if (had_cache)
+        {
+            ESP_LOGW("OC", "[RECOVERY] cached snapshot not servable (age %lu ms, "
+                           "or not an in-flight frame) — not serving it",
+                     (unsigned long)cache_age);
+        }
+        if (have)
         {
             // Non-blocking write — if the TX ringbuffer is full, drop;
             // FC's masterRead retry path will handle it.
@@ -3014,16 +3130,14 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         }
         else
         {
-            // #822: no MRAM on this board, so there is no snapshot slot and we
-            // stage no response at all.  The FC handles that safely — its
-            // masterRead fails or its SOF scan finds nothing, and it logs
-            // "[RECOVERY] I2C read for snapshot failed" and carries on from a
-            // cold start — but from the OC side the request would otherwise
-            // vanish without trace.  This only fires when the FC has actually
-            // asked, i.e. once per unexpected FC reset, so it cannot spam.
-            ESP_LOGW("OC", "[RECOVERY] FC asked for a flight snapshot and this "
-                           "board has no MRAM to keep one in (#822) — sending "
-                           "no reply; in-flight reboot recovery is unavailable");
+            // No cache (nothing received this session, no boot re-seed) and
+            // no MRAM. The FC handles the missing reply safely — masterRead
+            // fails or the SOF scan finds nothing, it retries (#364), then
+            // cold-starts — but from the OC side the request would otherwise
+            // vanish without trace. Fires at most once per FC reset per retry.
+            ESP_LOGW("OC", "[RECOVERY] FC asked for a flight snapshot and "
+                           "none is available (no cached frame, no MRAM) — "
+                           "sending no reply");
         }
     }
     else if (type == I2C_TX_RESYNC)
@@ -5864,7 +5978,8 @@ void initPeripherals()
         ESP_LOGW("PWR", "  Log ring: %lu KB of %s, VOLATILE.",
                  (unsigned long)(mram_st.ring_size / 1024),
                  logger.isRingInPsram() ? "in-package PSRAM" : "internal RAM");
-        ESP_LOGW("PWR", "  In-flight reboot recovery (#104): UNAVAILABLE.");
+        ESP_LOGW("PWR", "  In-flight reboot recovery (#104): RAM cache + NAND");
+        ESP_LOGW("PWR", "  tail-scan (#846) — no longer MRAM-dependent.");
         ESP_LOGW("PWR", "  Dirty-ring replay (#274): UNAVAILABLE.");
         ESP_LOGW("PWR", "  Expected on V9/V10. On a V8 board this means the");
         ESP_LOGW("PWR", "  image was built with the wrong -DTR_BOARD_* flag.");
@@ -5967,6 +6082,126 @@ void initPeripherals()
             ESP_LOGE("FLIGHTLOG", "#274: MRAM recovery — prepareFlight failed (no space?)");
         }
         logger.finishMramRecovery();
+    }
+
+    // #846: re-seed the RAM snapshot cache from the NAND log stream — the
+    // OC-also-reset half of in-flight reboot recovery on no-MRAM boards. The
+    // snapshot frames rode the flight log (every received frame is enqueued
+    // byte-exact), and the brownout scanner inside flightlog.begin() has
+    // already recovered the un-finalized flight as flight_recovered_<id>.bin.
+    //
+    // The staleness defense is an NVS once-marker (id + final_bytes, since
+    // ids are reused after deletes), and it is load-bearing: without it a
+    // recovered flight could answer an FC panic weeks later with INFLIGHT and
+    // re-arm pyro on the ground. Three rules make it airtight:
+    //   * the marker is written on CONSUMPTION (after the frame is actually
+    //     served) or on DECLINE — never merely on seeding, or a second reset
+    //     before the FC asks would burn the flight's only chance;
+    //   * a POWERON boot still MARKS (without seeding): a cold start is
+    //     exactly when an old recovered flight must be retired, and a crash
+    //     whose next boot is a full pack dropout would otherwise leave it
+    //     unmarked for some later fault reset to seed from;
+    //   * NVS unavailable => do not seed at all (fail CLOSED — with no way to
+    //     record consumption, seeding could repeat indefinitely).
+    // The seeded frame must itself be INFLIGHT: a stream ending in the FC's
+    // LANDED clear means the flight is over. The FC re-validates
+    // magic/version/INFLIGHT/CRC32/sim regardless, so this is belt on braces.
+    if (!logger.isMramEnabled() && flightlog.isInitialized())
+    {
+        const bool cold_boot = (esp_reset_reason() == ESP_RST_POWERON);
+        uint32_t best_id = 0;
+        int best_idx = -1;
+        uint32_t newest_id = 0;
+        for (size_t i = 0; i < flightlog.index().size(); ++i)
+        {
+            const auto& e = flightlog.index().at(i);
+            if (e.flight_id > newest_id) newest_id = e.flight_id;
+            if (strncmp(e.filename, "flight_recovered_", 17) == 0 &&
+                e.flight_id >= best_id)
+            {
+                best_id = e.flight_id;
+                best_idx = (int)i;
+            }
+        }
+        if (best_idx >= 0 && best_id == newest_id)
+        {
+            const auto& e = flightlog.index().at((size_t)best_idx);
+            Preferences rp;
+            if (!rp.begin("snaprec", false))
+            {
+                ESP_LOGW("FLIGHTLOG", "#846: snaprec NVS unavailable — not "
+                         "re-seeding (cannot track consumption)");
+            }
+            else
+            {
+                const uint32_t done_id = rp.getUInt("done_id", 0);
+                const uint32_t done_by = rp.getUInt("done_by", 0);
+                const bool already = (done_id == e.flight_id &&
+                                      done_by == e.final_bytes);
+                if (already)
+                {
+                    // Nothing to do — this flight was seeded-and-served or
+                    // declined on an earlier boot.
+                }
+                else if (cold_boot)
+                {
+                    // Retire it without seeding: a cold start is not a
+                    // recovery context, and leaving it unmarked would let a
+                    // later fault reset seed from an arbitrarily old flight.
+                    rp.putUInt("done_id", e.flight_id);
+                    rp.putUInt("done_by", e.final_bytes);
+                    ESP_LOGI("FLIGHTLOG", "#846: %s retired on a cold boot "
+                             "(not a recovery context)", e.filename);
+                }
+                else
+                {
+                    // Window buffer sized for the MAX per-page payload so one
+                    // readFlightPage can always fill it at any chip geometry.
+                    static uint8_t scan_buf[(4096 - 16) + kSnapFrameLen];
+                    constexpr uint32_t kTailWindow = 64u * 1024u;
+                    uint8_t last_f[kSnapFrameLen] = {};
+                    uint8_t best_f[kSnapFrameLen] = {};
+                    const bool got = tr_flightlog::tailScanForFrame(
+                        flightlog, e.filename, e.final_bytes, SNAPSHOT_MSG,
+                        (uint8_t)sizeof(FlightSnapshotData), kTailWindow,
+                        last_f, scan_buf, sizeof(scan_buf),
+                        best_f, offsetof(FlightSnapshotData, flight_elapsed_ms));
+                    // The LAST frame decides whether the flight ended (a
+                    // LANDED clear means it did); the HIGHEST-elapsed frame is
+                    // the one to restore from, because an I2S DMA replay can
+                    // leave an older snapshot sitting after a newer one in the
+                    // stream — the same staleness the #383 guard blocks live.
+                    const bool ended = !got || !snapshotServable(last_f, 0);
+                    if (got && !ended && snapshotServable(best_f, 0))
+                    {
+                        portENTER_CRITICAL(&snapshot_cache_mux);
+                        memcpy(snapshot_cache, best_f, kSnapFrameLen);
+                        snapshot_cache_valid = true;
+                        snapshot_cache_ms = millis();
+                        portEXIT_CRITICAL(&snapshot_cache_mux);
+                        snapshot_seed_pending_mark = true;
+                        snapshot_seed_id = e.flight_id;
+                        snapshot_seed_bytes = e.final_bytes;
+                        ESP_LOGW("FLIGHTLOG", "#846: snapshot cache re-seeded "
+                                 "from %s (%lu B) — in-flight reboot recovery "
+                                 "armed for the FC's next ask",
+                                 e.filename, (unsigned long)e.final_bytes);
+                    }
+                    else
+                    {
+                        // Declined: nothing found, or the stream's last word
+                        // was a LANDED clear / an out-of-bounds elapsed. Mark
+                        // now — a rescan next boot would decline identically.
+                        rp.putUInt("done_id", e.flight_id);
+                        rp.putUInt("done_by", e.final_bytes);
+                        ESP_LOGW("FLIGHTLOG", "#846: no in-flight snapshot in "
+                                 "the tail of %s — recovery not re-seeded",
+                                 e.filename);
+                    }
+                }
+                rp.end();
+            }
+        }
     }
 
     // -------------------------------------------------------------------
@@ -6762,6 +6997,26 @@ static void loop_oc()
         rail_rtc.restore_attempts = 0;
         ESP_LOGW("OC", "FC rail restore complete — peripherals re-initialized "
                        "on the loop core, telemetry resuming.");
+    }
+
+    // #846: a boot-re-seeded snapshot is marked consumed only after the FC has
+    // actually been served it — writing the marker at seed time would burn the
+    // flight's one chance if another reset wiped the RAM cache before the ask.
+    // Done here (loop context) so the NVS write never lands in the I2C ingress
+    // path that serves the frame.
+    if (snapshot_seed_pending_mark && snapshot_served)
+    {
+        snapshot_seed_pending_mark = false;
+        Preferences rp;
+        if (rp.begin("snaprec", false))
+        {
+            rp.putUInt("done_id", snapshot_seed_id);
+            rp.putUInt("done_by", snapshot_seed_bytes);
+            rp.end();
+            ESP_LOGI("FLIGHTLOG", "#846: re-seeded snapshot consumed by the FC "
+                     "— flight %lu marked evaluated",
+                     (unsigned long)snapshot_seed_id);
+        }
     }
 
     // Serial debug console removed (was Arduino Serial.available/read).

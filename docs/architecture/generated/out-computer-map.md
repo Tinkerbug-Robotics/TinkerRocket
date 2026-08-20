@@ -3,41 +3,41 @@
 
 # Out Computer -- `main.cpp` navigation map
 
-`tinkerrocket-idf/projects/out_computer/main/main.cpp` is 8,321 lines in one translation unit. These are the
+`tinkerrocket-idf/projects/out_computer/main/main.cpp` is 8,576 lines in one translation unit. These are the
 `// SECTION:` banners in it, in file order. Indented rows (↳) are regions
 inside a single large function. Line counts include each section's banner
 and leading comments.
 
 | Section | Lines | Span |
 |---------|-------|------|
-| [**Includes, board selection, and compile-time configuration**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1-L82) | 82 | 1-82 |
-| [**OTA boot validation and rollback guard**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L83-L108) | 26 | 83-108 |
-| [**Peripheral objects and flight-log storage**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L109-L453) | 345 | 109-453 |
-| [**LoRa radio backend and shared device state**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L454-L480) | 27 | 454-480 |
-| [**FC command queue (OC -> FC over I2C)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L481-L663) | 183 | 481-663 |
-| [**LoRa frequency lock and channel hopping**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L664-L869) | 206 | 664-869 |
-| [**Cached configuration (NVS <-> FC <-> app)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L870-L1086) | 217 | 870-1086 |
-| [**Battery sampling and state of charge**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1087-L1220) | 134 | 1087-1220 |
-| [**Clock sources, low-power mode, and boot USB-serial grace**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1221-L1461) | 241 | 1221-1461 |
-| [**BLE connection-parameter policy**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1462-L1574) | 113 | 1462-1574 |
-| [**Derived telemetry (altitude and speed)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1575-L1646) | 72 | 1575-1646 |
-| [**IMU full-scale decode helpers**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1647-L1686) | 40 | 1647-1686 |
-| [**Ingest ring buffers and frame counters**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1687-L1826) | 140 | 1687-1826 |
-| [**Phone-I/O power management**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1827-L1934) | 108 | 1827-1934 |
-| [**I2C status-query response to the FC**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1935-L2109) | 175 | 1935-2109 |
-| [**FC OTA relay: I2S direction flip and image feeder**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L2110-L2371) | 262 | 2110-2371 |
-| [**Frame processing: FC -> OC telemetry ingest**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L2372-L3166) | 795 | 2372-3166 |
-| [**I2S DMA callback and parser task**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3167-L3289) | 123 | 3167-3289 |
-| [**I2C ingress from the FC**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3290-L3307) | 18 | 3290-3307 |
-| [**LoRa downlink: telemetry payload and beacon**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3308-L3677) | 370 | 3308-3677 |
-| [**Config readback to the app**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3678-L3956) | 279 | 3678-3956 |
-| [**LoRa uplink command handling**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3957-L4611) | 655 | 3957-4611 |
-| [**LoRa rendezvous and hop fallback**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L4612-L4944) | 333 | 4612-4944 |
-| [**Diagnostics and periodic statistics**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L4945-L5743) | 799 | 4945-5743 |
-| [**Peripheral initialization (runs on power-on)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L5744-L6353) | 610 | 5744-6353 |
-| [**Boot setup (rail off, BLE only)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L6354-L6705) | 352 | 6354-6705 |
-| [**Main loop**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L6706-L8312) | 1,607 | 6706-8312 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [BLE command dispatch](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L7102-L8312) | 1,211 | 7102-8312 |
-| [**FreeRTOS entry point**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L8313-L8321) | 9 | 8313-8321 |
+| [**Includes, board selection, and compile-time configuration**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1-L83) | 83 | 1-83 |
+| [**OTA boot validation and rollback guard**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L84-L109) | 26 | 84-109 |
+| [**Peripheral objects and flight-log storage**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L110-L454) | 345 | 110-454 |
+| [**LoRa radio backend and shared device state**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L455-L481) | 27 | 455-481 |
+| [**FC command queue (OC -> FC over I2C)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L482-L720) | 239 | 482-720 |
+| [**LoRa frequency lock and channel hopping**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L721-L926) | 206 | 721-926 |
+| [**Cached configuration (NVS <-> FC <-> app)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L927-L1143) | 217 | 927-1143 |
+| [**Battery sampling and state of charge**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1144-L1277) | 134 | 1144-1277 |
+| [**Clock sources, low-power mode, and boot USB-serial grace**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1278-L1518) | 241 | 1278-1518 |
+| [**BLE connection-parameter policy**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1519-L1631) | 113 | 1519-1631 |
+| [**Derived telemetry (altitude and speed)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1632-L1703) | 72 | 1632-1703 |
+| [**IMU full-scale decode helpers**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1704-L1743) | 40 | 1704-1743 |
+| [**Ingest ring buffers and frame counters**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1744-L1883) | 140 | 1744-1883 |
+| [**Phone-I/O power management**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1884-L1991) | 108 | 1884-1991 |
+| [**I2C status-query response to the FC**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L1992-L2166) | 175 | 1992-2166 |
+| [**FC OTA relay: I2S direction flip and image feeder**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L2167-L2428) | 262 | 2167-2428 |
+| [**Frame processing: FC -> OC telemetry ingest**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L2429-L3280) | 852 | 2429-3280 |
+| [**I2S DMA callback and parser task**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3281-L3403) | 123 | 3281-3403 |
+| [**I2C ingress from the FC**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3404-L3421) | 18 | 3404-3421 |
+| [**LoRa downlink: telemetry payload and beacon**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3422-L3791) | 370 | 3422-3791 |
+| [**Config readback to the app**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3792-L4070) | 279 | 3792-4070 |
+| [**LoRa uplink command handling**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L4071-L4725) | 655 | 4071-4725 |
+| [**LoRa rendezvous and hop fallback**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L4726-L5058) | 333 | 4726-5058 |
+| [**Diagnostics and periodic statistics**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L5059-L5857) | 799 | 5059-5857 |
+| [**Peripheral initialization (runs on power-on)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L5858-L6588) | 731 | 5858-6588 |
+| [**Boot setup (rail off, BLE only)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L6589-L6940) | 352 | 6589-6940 |
+| [**Main loop**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L6941-L8567) | 1,627 | 6941-8567 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [BLE command dispatch](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L7357-L8567) | 1,211 | 7357-8567 |
+| [**FreeRTOS entry point**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L8568-L8576) | 9 | 8568-8576 |
 
-Total: 28 sections (1 nested) across 8,321 lines.
+Total: 28 sections (1 nested) across 8,576 lines.
