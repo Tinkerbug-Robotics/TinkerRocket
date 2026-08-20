@@ -144,7 +144,11 @@ The low-side-versus-high-side arming question was not re-opened; it stays low-si
 
 **Close-out:** leave C20/C22/C48/C49 at 12 pF. On first article, measure the 40 MHz centre frequency and trim if it is outside ±10 ppm; 13 pF is the documented single-step trim. Treat load cap and harmonic suppression as one decision, never the frequency alone.
 
-**M-4. VDD_SPI decoupling against HDG.** C27 is still 10 uF on the VDD_SPI node; the guidance is 0.1 µF + 1 µF and explicitly warns against large capacitors there. The flash rail move (H7) is done; this is the leftover.
+**M-4. VDD_SPI decoupling against HDG — ⚠️ HALF DONE; the remaining half needs a board revision, not an assembly change.** ~~C27 is still 10 uF~~ **Corrected 2026-08-20: C27 is 1 µF and has been since the close-out commit 8f87aa0 (2026-08-09), i.e. in the fabbed V9.** The text above was written from prefab-review-2026-08-05, which read 10 µF correctly *at that date*; the resize landed in the close-out and this entry was never updated. Verified three ways: the schematic at both `rocket-computer-v9.0.0` and HEAD, the BOM (C27 sits on the 1 µF `CL05A105KO5NNNC` line), and a kicad-cli netlist export — `OUT_VDD_SPI = {U15.29 VDD_SPI, C27 1 µF}`.
+
+**Consequence: the slow-ramp worry attached to this item is void.** τ = 14 Ω × 1 µF ≈ **14 µs**, not the ~140 µs the 10 µF figure implied — so this is NOT a suspect for flaky PSRAM bring-up on the first article.
+
+**What genuinely remains:** there is no 0.1 µF on the node (the old C26 moved to +3V3 with the flash in H7), so the HDG's "0.1 µF + 1 µF" is half-met. There is **no pad** for a second cap — the net is exactly `{U15.29, C27}` — so this cannot be fixed by a BOM substitution at assembly. Assemble as-is (1 µF alone, on a node fed through the S3's internal ~14 Ω R_SPI and serving only the in-package PSRAM, which carries its own die-level decoupling, is defensible); add the 0402 100 nF beside C27 in the next board revision, where review #2 confirmed the room exists (~2.3 mm from the pin-29 corner).
 
 **M-5. TPS2121 ILIM at device maximum — ✅ DONE 2026-08-08: R64 18.7 k → 49.9 k.** The original finding had stale designators (R57's 1.5 k is in the OV2 divider; R59 pulls up the eFuse PG) but the right number: the actual ILIM resistor was **R64 = 18.7 k**, which is the first row of the TPS2121 datasheet table — the *maximum-current* setting, 4.6/5.2/5.8 A min/typ/max. Almost certainly copied from the table/EVM default.
 

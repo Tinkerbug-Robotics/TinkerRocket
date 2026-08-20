@@ -21,10 +21,14 @@
 # minimum. Note this is the OPPOSITE of the mini, whose sdkconfig says "PSRAM:
 # deliberately OFF" precisely because that board still shares the rail.
 #
-# One residual, WORKLIST M-4: C27 is still 10 uF where the HDG wants 0.1 + 1 uF,
-# and no 100 nF was added at pin 29 — tau ~140 us, so a slow VDD_SPI ramp at
-# cold boot is the thing to watch on first bring-up. It is self-reporting: PSRAM
-# init is announced in the boot log.
+# One residual, WORKLIST M-4, and it is SMALLER than that entry claims: C27 is
+# 1 uF in the fabbed V9 (close-out 8f87aa0, 2026-08-09) — WORKLIST still says
+# 10 uF because it was written from the 2026-08-05 review and never updated
+# after the resize landed. So tau is ~14 us, not ~140 us, and VDD_SPI ramp is
+# NOT a suspect for flaky PSRAM bring-up. What remains is only the missing
+# 0.1 uF (the HDG asks for 0.1 + 1 uF); there is no pad for it, so it is a
+# next-revision item, not an assembly one. PSRAM init is announced in the boot
+# log either way.
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_QUAD=y
 # 40 MHz is the IDF default and far more than enough — the ring takes ~156 KB/s
