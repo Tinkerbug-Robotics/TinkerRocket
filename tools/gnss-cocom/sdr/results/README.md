@@ -30,14 +30,22 @@ the RP2040 USB port, SkyTraq binary output, warm-restarted and seeded per run.
 | `t3b_both_80km_a1` | both | blocked 79.90 -> 80.20 km at 366 m/s |
 
 Flight profiles from `make_flights.py`, flown 2026-08-20 to measure how fast the
-gate re-opens. Same start time and RF setup.
+gate re-opens. Same start time and RF setup. The scenario each was flown against
+is archived beside it as `*_v2.scenario.json` -- a capture means nothing against
+a regenerated scenario, and `plot_flight.py` now refuses the mismatch.
 
-| Capture | Boost | Profile | Result |
-|---|---|---|---|
-| `gentle_alt_a1` | 3 g | apogee 82.5 km | altitude gate re-opened **0.7 s** after descending below 80 km; tracking held throughout |
-| `boostthrough_a1` | 15 g | apogee 40 km | tracking lost at ignition (7 sats -> 2 at 142 m/s); 52.6 s to a fix, dominated by re-acquisition |
-| `spaceshot_a1` | 15 g | apogee 82.5 km | tracking lost at ignition, never recovered within the flight |
+| Capture | Boost | Result |
+|---|---|---|
+| `gentle_alt_v2` | 3 g | altitude gate re-opened **0.7 s** after descending below 80 km, with 6 satellites |
+| `spaceshot_v2` | 15 g | velocity gate re-opened **1.1 s** and **1.5 s** in two separate windows, with 6 and 4 satellites |
 
-Re-plot any of them with `plot_flight.py`; re-measure with `recovery.py`.
-Rendered figures are in `figures/` -- not `plots/`, which the repo-root
-`.gitignore` excludes globally. They are also embedded in `../report.html`.
+Every window where four or more satellites were tracked re-opened in 0.7-1.5 s,
+on both gates. Windows that took 12-33 s all had two satellites: that is
+re-acquisition, not the gate. `recovery.py` prints the satellite count beside
+the latency so the two cannot be confused.
+
+Superseded and deleted: the first flight captures (`*_a1`). Their trajectories
+deployed the main parachute at 3 km while still doing 560 m/s, which produced
+~7000 m/s^2, reversed the velocity in an explicit integrator, and lofted the
+vehicle back to 28 km. Both the flights and the tracking losses in them were
+artefacts. The profiles now fly a drogue from apogee and the main at 600 m AGL.

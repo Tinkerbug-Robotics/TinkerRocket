@@ -19,7 +19,18 @@ Message layouts are from the AN0037 table in SkyTraqGit/skytraq-cmd-api:
      [10-11] lat S16 1/100 deg   [12-13] lon S16 1/100 deg   [14-15] alt S16 m
   0x64/0x17 CONFIGURE GNSS NAVIGATION MODE   4 bytes
      [3] 0=Auto 1=Pedestrian 2=Car 3=Marine 4=Balloon 5=Airborne
+         7=Quadcopter 9=SLR (Speed Lag Reduced)
      [4] 0=SRAM 1=SRAM+FLASH
+  0x0C CONFIGURE SYSTEM POWER MODE   3 bytes
+     [2] 0=Normal 1=Power Save   [3] 0=SRAM 1=SRAM+FLASH 2=temporary
+
+This is the closest thing the Phoenix protocol has to u-blox's dynamic model
+knobs. There is no exposed tracking-loop bandwidth or Doppler search window:
+navigation mode is the only dynamics lever, and "Configure GPS Parameter Search
+Engine Number" (0x64/0x0A) was removed from the protocol in a later revision,
+leaving only the query. Power mode matters for a different reason -- AN0037 says
+power save is enabled by default "to reduce current consumption by the search
+engine", which is exactly the engine that has to re-acquire after a boost.
 """
 
 from __future__ import annotations
@@ -39,7 +50,7 @@ except ImportError as exc:  # pragma: no cover
 
 MODES = {"hot": 1, "warm": 2, "cold": 3}
 NAV_MODES = {"auto": 0, "pedestrian": 1, "car": 2, "marine": 3,
-             "balloon": 4, "airborne": 5}
+             "balloon": 4, "airborne": 5, "quadcopter": 7, "slr": 9}
 
 
 def restart_payload(mode: int, when, lat: float, lon: float, alt: float) -> bytes:
@@ -65,7 +76,12 @@ def main() -> int:
     ap.add_argument("--mode", choices=list(MODES), default="warm",
                     help="warm keeps the almanac and uses the seed; cold discards more")
     ap.add_argument("--nav-mode", choices=list(NAV_MODES),
-                    help="also set platform dynamics (use 'airborne' for the ramps)")
+                    help="platform dynamics. 'airborne' for the ramps; 'slr' "
+                         "(Speed Lag Reduced) is worth trying against high "
+                         "acceleration")
+    ap.add_argument("--power-mode", choices=("normal", "save"),
+                    help="'normal' disables the default power-save mode, which "
+                         "throttles the search engine")
     args = ap.parse_args()
 
     date, clock = args.start.split(",")
@@ -75,6 +91,9 @@ def main() -> int:
     port = args.port or autodetect_port()
     print(f"# {port}")
     with serial.Serial(port, 115200, timeout=1) as ser:
+        if args.power_mode:
+            send(ser, bytes([0x0C, 0 if args.power_mode == "normal" else 1, 0x00]),
+                 f"power mode -> {args.power_mode}", expect_id=0x0C)
         if args.nav_mode:
             code = NAV_MODES[args.nav_mode]
             send(ser, bytes([0x64, 0x17, code, 0x00]),

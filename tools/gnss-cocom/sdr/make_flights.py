@@ -66,7 +66,9 @@ def gravity(h: float) -> float:
 
 
 def fly(burn_s: float, accel_mps2: float, cd_a_over_m: float,
-        alt0_m: float, stop_alt_m: float, max_s: float):
+        alt0_m: float, stop_alt_m: float, max_s: float,
+        chute_alt_m: float = 0.0, chute_cd_a_over_m: float = 0.0,
+        drogue_cd_a_over_m: float = 0.0):
     """Integrate a vertical flight. Returns [(t, alt, v_up)] at RATE_HZ.
 
     cd_a_over_m is the inverse ballistic coefficient, Cd*A/m [m^2/kg]: the only
@@ -80,7 +82,25 @@ def fly(burn_s: float, accel_mps2: float, cd_a_over_m: float,
 
     while t < max_s:
         thrust_a = accel_mps2 if t < burn_s else 0.0
-        drag_a = 0.5 * density(h) * cd_a_over_m * v * abs(v)
+        # A real flight does not stop at apogee, and the descent is where the
+        # receiver gets its satellites back after a boost that broke tracking.
+        # Truncating there hides the whole re-acquisition.
+        # Two-stage recovery, as a real high-power flight actually does it:
+        # a small drogue at apogee, the main low and slow. Deploying the main
+        # straight into a 560 m/s descent -- which an altitude trigger alone
+        # does -- is both unflyable and numerically explosive: it produced
+        # ~7000 m/s^2 here, reversed the sign of v, and lofted the vehicle back
+        # to 28 km on the plot.
+        k = cd_a_over_m
+        if apogee_seen and drogue_cd_a_over_m:
+            k = drogue_cd_a_over_m
+        if apogee_seen and chute_cd_a_over_m and h <= chute_alt_m:
+            k = chute_cd_a_over_m
+        drag_a = 0.5 * density(h) * k * v * abs(v)
+        # Drag can slow a body to rest but never push it back the way it came.
+        # With explicit Euler and a large k it can, unless it is clamped.
+        if abs(drag_a) * dt > abs(v):
+            drag_a = math.copysign(abs(v) / dt, drag_a)
         a = thrust_a - gravity(h) - drag_a       # drag opposes motion via v*|v|
         v += a * dt
         h += v * dt
@@ -96,9 +116,11 @@ def fly(burn_s: float, accel_mps2: float, cd_a_over_m: float,
 # burn_s, accel, Cd*A/m, alt0, stop_alt, max_s, purpose
 FLIGHTS = {
     "boostthrough": dict(
-        prologue_s=240.0,
+        prologue_s=180.0,
         burn_s=9.0, accel_mps2=152.6, cd_a_over_m=1.5e-4,
-        alt0_m=1_200.0, stop_alt_m=2_000.0, max_s=200.0,
+        alt0_m=1_200.0, stop_alt_m=1_250.0, max_s=900.0,
+        drogue_cd_a_over_m=0.012, chute_alt_m=1_800.0,
+        chute_cd_a_over_m=0.45,
         purpose="Apogee 40 km, peak 1068 m/s. Isolates recovery from the "
                 "VELOCITY gate: 34 s above 515 m/s on the way up, then 106 s "
                 "clear before the descent re-exceeds it, with altitude never "
@@ -116,18 +138,22 @@ FLIGHTS = {
     # gently keeps the receiver tracking throughout, so what is left to measure
     # is the gate re-opening rather than a re-acquisition.
     "gentle_alt": dict(
-        prologue_s=240.0,
+        prologue_s=180.0,
         burn_s=60.3, accel_mps2=29.4, cd_a_over_m=1.0e-4,
-        alt0_m=1_200.0, stop_alt_m=60_000.0, max_s=250.0,
+        alt0_m=1_200.0, stop_alt_m=1_250.0, max_s=900.0,
+        drogue_cd_a_over_m=0.012, chute_alt_m=1_800.0,
+        chute_cd_a_over_m=0.45,
         purpose="Apogee 82.8 km at 3 g. Gives both recoveries in one flight "
                 "with the dynamics kept inside what the receiver can track: "
                 "79 s blocked on velocity, 30 s clear, 48 s blocked on "
                 "altitude above 80 km, 30 s clear on the way back down.",
     ),
     "spaceshot": dict(
-        prologue_s=240.0,
+        prologue_s=180.0,
         burn_s=12.0, accel_mps2=142.2, cd_a_over_m=1.0e-4,
-        alt0_m=1_200.0, stop_alt_m=60_000.0, max_s=260.0,
+        alt0_m=1_200.0, stop_alt_m=1_250.0, max_s=900.0,
+        drogue_cd_a_over_m=0.012, chute_alt_m=1_800.0,
+        chute_cd_a_over_m=0.45,
         purpose="Apogee 82.5 km -- only just above the gate, and that is the "
                 "point: crossing speed at 80 km is sqrt(2g(apogee-80km)), so a "
                 "100 km apogee would cross at 626 m/s and the velocity gate "
@@ -160,7 +186,10 @@ def windows(samples, limit_fn):
 def build(name: str, spec: dict):
     pro = spec["prologue_s"]
     flight = fly(spec["burn_s"], spec["accel_mps2"], spec["cd_a_over_m"],
-                 spec["alt0_m"], spec["stop_alt_m"], spec["max_s"])
+                 spec["alt0_m"], spec["stop_alt_m"], spec["max_s"],
+                 spec.get("chute_alt_m", 0.0),
+                 spec.get("chute_cd_a_over_m", 0.0),
+                 spec.get("drogue_cd_a_over_m", 0.0))
 
     rows, truth = [], []
     east_m = 0.0

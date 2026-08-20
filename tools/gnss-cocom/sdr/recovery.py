@@ -80,9 +80,14 @@ def main() -> int:
               "started.\n           Recovery latencies below are not "
               "trustworthy -- re-run.")
 
+    # Satellite count during the wait is printed alongside the latency because
+    # without it the number is unreadable: every long latency measured here
+    # turned out to be the receiver re-acquiring satellites, not the gate being
+    # slow. A latency with satellites in hand means the gate; a latency with
+    # none means the signal, and the two want opposite fixes.
     print(f"\n{'window':>7} {'limit':<10} {'shut at':>9} {'lag':>6} "
-          f"{'clear at':>9} {'recovered':>10} {'latency':>8}")
-    print("-" * 68)
+          f"{'clear at':>9} {'recovered':>10} {'latency':>8} {'sats in wait':>13}")
+    print("-" * 84)
 
     results = []
     for i, (w_start, w_end) in enumerate(blocked, 1):
@@ -99,24 +104,40 @@ def main() -> int:
                     if r[0] > w_end and r[1] == "FIX" and r[0] < nxt), None)
         lat = (rec - w_end) if rec is not None else None
 
+        wait_end = rec if rec is not None else min(nxt, truth.duration)
+        during = [r[2].tracked_sats() for r in rows if w_end <= r[0] <= wait_end]
+        sat_lo = min(during) if during else None
+        sat_hi = max(during) if during else None
+        sats_txt = (f"{sat_lo}-{sat_hi}" if sat_lo is not None else "--")
+
         print(f"{i:>7} {limit:<10} "
               f"{(f'{shut:.1f}s' if shut is not None else 'never'):>9} "
               f"{(f'{lag:+.1f}' if lag is not None else '--'):>6} "
               f"{w_end:>8.1f}s "
               f"{(f'{rec:.1f}s' if rec is not None else 'never'):>10} "
-              f"{(f'{lat:.1f}s' if lat is not None else '--'):>8}")
+              f"{(f'{lat:.1f}s' if lat is not None else '--'):>8} "
+              f"{sats_txt:>13}")
         results.append(dict(window=i, limit=limit, shut_at=shut, shut_lag=lag,
-                            clear_at=w_end, recovered_at=rec, latency_s=lat))
+                            clear_at=w_end, recovered_at=rec, latency_s=lat,
+                            sats_min=sat_lo, sats_max=sat_hi))
 
     print()
     got = [r for r in results if r["latency_s"] is not None]
     if got:
         for r in got:
-            tr = truth.at(r["clear_at"])
+            # State at the moment of recovery, not at clear_at: clear_at is the
+            # last still-blocked sample, so quoting it prints a speed above the
+            # limit next to the words "the limit cleared".
+            tr = truth.at(r["recovered_at"])
             where = (f"{tr['alt_m']/1000:.1f} km, {tr['speed_mps']:.0f} m/s"
                      if tr else "")
+            note = ""
+            if r["sats_min"] is not None and r["sats_min"] < 4:
+                note = (f"  -- but only {r['sats_min']} satellite(s) were "
+                        f"tracked during the wait,\n          so this is "
+                        f"re-acquisition time, not the gate")
             print(f"RECOVERY: {r['limit']} gate re-opened {r['latency_s']:.1f} s "
-                  f"after the limit cleared ({where})")
+                  f"after the limit cleared,\n          at {where}{note}")
     missed = [r for r in results if r["latency_s"] is None
               and r["shut_at"] is not None]
     for r in missed:
