@@ -22,7 +22,7 @@
 //    the next boot rescans.
 //
 // 2. A dead SPI bus (RDID reads 0x0000/0xFFFF) must skip the scan outright:
-//    probing 2048 blocks over a dead bus fails every read, marks EVERY block
+//    probing every block over a dead bus fails every read, marks EVERY block
 //    bad, and poisons the persisted map for the real chip. (Before #511 this
 //    was a live failure mode.) dead_bus also swallows the 0x0000 chip id, so
 //    the scanned_chip_id==0 "no marker yet" sentinel can never falsely match.
@@ -40,7 +40,7 @@ public:
     };
 
     // dead_bus:         RDID returned 0x0000 or 0xFFFF (see nandInit()).
-    // map_blob_valid:   NVS "map" blob was present with the exact bitmap size.
+    // map_blob_valid:   NVS "map" blob was present with the exact bitmap size FOR THE DETECTED CHIP (#671: finalized in nandInit() after RDID).
     // scanned_chip_id:  NVS "scanned" marker (0 = never written).
     // current_chip_id:  RDID (MID << 8) | DID read this boot.
     static Verdict bootScanVerdict(bool dead_bus,

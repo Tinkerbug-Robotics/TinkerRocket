@@ -290,6 +290,16 @@ target_include_directories(test_tr_flightlog_core PRIVATE
 target_link_libraries(test_tr_flightlog_core GTest::gtest_main Threads::Threads)
 gtest_discover_tests(test_tr_flightlog_core)
 
+# #671: the same binary re-registered at the two GD5F geometries — every test
+# runs three times (legacy above, then V9's 2048B/2048blk and the mini's
+# 2048B/1024blk). TEST_SUFFIX keeps the three sets distinct in ctest output.
+gtest_discover_tests(test_tr_flightlog_core
+    PROPERTIES ENVIRONMENT "TR_TEST_NAND_GEOMETRY=gd2g"
+    TEST_SUFFIX ".gd2g")
+gtest_discover_tests(test_tr_flightlog_core
+    PROPERTIES ENVIRONMENT "TR_TEST_NAND_GEOMETRY=gd1g"
+    TEST_SUFFIX ".gd1g")
+
 # ---------- test_nand_bitmap_store (#398) ----------
 # NAND-backed dual-copy bitmap store — replaces the NVS store on the OC so the
 # frequent bitmap persists never touch internal flash (whose compaction erase
@@ -315,6 +325,14 @@ target_include_directories(test_nand_bitmap_store PRIVATE
 )
 target_link_libraries(test_nand_bitmap_store GTest::gtest_main Threads::Threads)
 gtest_discover_tests(test_nand_bitmap_store)
+
+# #671: GD5F geometry variants (see test_tr_flightlog_core above).
+gtest_discover_tests(test_nand_bitmap_store
+    PROPERTIES ENVIRONMENT "TR_TEST_NAND_GEOMETRY=gd2g"
+    TEST_SUFFIX ".gd2g")
+gtest_discover_tests(test_nand_bitmap_store
+    PROPERTIES ENVIRONMENT "TR_TEST_NAND_GEOMETRY=gd1g"
+    TEST_SUFFIX ".gd1g")
 
 # ---------- test_tr_ota (#8 phase 2) ----------
 # Host coverage for TR_OTA_Receiver: state machine, offset/size validation,
@@ -590,6 +608,18 @@ target_include_directories(test_bad_block_scan_policy PRIVATE
 )
 target_link_libraries(test_bad_block_scan_policy GTest::gtest_main)
 gtest_discover_tests(test_bad_block_scan_policy)
+
+# ---------- test_nand_geometry (#671) ----------
+# The RDID -> geometry table: F35SQB004G (V8 bench), GD5F2GQ5UE (V9),
+# GD5F1GQ5UE (mini), the unknown-ID legacy fallback, and dead-bus behaviour.
+# nand_geometry.h is pure, so the test just adds the component dir.
+add_executable(test_nand_geometry test_nand_geometry.cpp)
+target_include_directories(test_nand_geometry PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LogToFlash
+)
+target_link_libraries(test_nand_geometry GTest::gtest_main)
+gtest_discover_tests(test_nand_geometry)
 
 # ---------- test_flush_iter_ledger (#510) ----------
 # Host-side test for the flush-task per-iteration accounting: section sums,

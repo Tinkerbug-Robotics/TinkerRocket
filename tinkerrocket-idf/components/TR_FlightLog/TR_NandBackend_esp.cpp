@@ -12,6 +12,27 @@ namespace tr_flightlog {
 // logger is attached; return "no" when it is not (handy during early boot
 // before the logger's begin() has run).
 
+uint32_t TR_NandBackend_esp::pageSize() const {
+#ifdef ESP_PLATFORM
+    if (logger_) return logger_->nandGeometry().page_size;
+#endif
+    return 4096;  // legacy fallback (no logger / host stub)
+}
+
+uint32_t TR_NandBackend_esp::pagesPerBlock() const {
+#ifdef ESP_PLATFORM
+    if (logger_) return logger_->nandGeometry().pages_per_blk;
+#endif
+    return 64;
+}
+
+uint32_t TR_NandBackend_esp::blockCount() const {
+#ifdef ESP_PLATFORM
+    if (logger_) return logger_->nandGeometry().block_count;
+#endif
+    return 2048;
+}
+
 bool TR_NandBackend_esp::readPage(uint32_t block, uint32_t page_in_block, uint8_t* out) {
 #ifdef ESP_PLATFORM
     return logger_ && logger_->readNandPage(block, page_in_block, out);

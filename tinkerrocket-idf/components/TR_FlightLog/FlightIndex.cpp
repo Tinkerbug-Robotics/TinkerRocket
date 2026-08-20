@@ -15,15 +15,19 @@ constexpr size_t serialized_size(size_t entry_count) {
 }
 
 // Whole-page-aligned scratch for a full serialized snapshot, rounded up to a
-// NAND page so readPage/programPage (which always touch a full NAND_PAGE_SIZE)
+// NAND page so readPage/programPage (which always touch a full runtime page)
 // never run past the buffer. Allocated on the HEAP per call (#281): the snapshot
 // is ~6 KB at MAX_ENTRIES=128 — too large for the 4 KB main-task stack — and the
 // callers (main at boot, flush task at finalize, BLE task at delete) each get
 // their own buffer, so there's no stack pressure and no cross-task shared-buffer
 // race. Returns a zero-filled buffer (pads the last page deterministically), or
 // nullptr on OOM (caller degrades gracefully — the data stays on NAND).
+// #671: rounded to the MAX page size, which also covers every smaller page
+// size exactly (6160 B -> 8192 = 2 x 4096 = 4 x 2048). The per-chip stride is
+// runtime (nand.pageSize()); only the buffer allocation is compile-time.
 constexpr size_t SNAPSHOT_BUF_BYTES =
-    ((FlightIndex::MAX_SERIALIZED_BYTES + NAND_PAGE_SIZE - 1) / NAND_PAGE_SIZE) * NAND_PAGE_SIZE;
+    ((FlightIndex::MAX_SERIALIZED_BYTES + NAND_PAGE_SIZE_MAX - 1) / NAND_PAGE_SIZE_MAX) * NAND_PAGE_SIZE_MAX;
+static_assert(SNAPSHOT_BUF_BYTES % 2048 == 0, "buffer must hold whole pages at every supported page size");
 
 inline std::unique_ptr<uint8_t[]> allocSnapshotBuf() {
     return std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[SNAPSHOT_BUF_BYTES]());
@@ -112,10 +116,11 @@ FlightIndex::SnapshotInfo FlightIndex::inspect(TR_NandBackend& nand, uint32_t bl
     if (total_bytes > MAX_SERIALIZED_BYTES) return info;
 
     // Read the remaining pages of the serialized blob (page 0 already in buf).
-    const size_t pages_needed = (total_bytes + NAND_PAGE_SIZE - 1) / NAND_PAGE_SIZE;
+    const size_t page_size = nand.pageSize();
+    const size_t pages_needed = (total_bytes + page_size - 1) / page_size;
     for (size_t p = 1; p < pages_needed; ++p) {
         if (!nand.readPage(block, static_cast<uint32_t>(p),
-                           buf.get() + p * NAND_PAGE_SIZE)) {
+                           buf.get() + p * page_size)) {
             return info;
         }
     }
@@ -142,10 +147,11 @@ Status FlightIndex::readSnapshot(TR_NandBackend& nand, uint32_t block) {
     if (hdr.entry_count > MAX_ENTRIES) return Status::Error;
 
     const size_t total_bytes = serialized_size(hdr.entry_count);
-    const size_t pages_needed = (total_bytes + NAND_PAGE_SIZE - 1) / NAND_PAGE_SIZE;
+    const size_t page_size = nand.pageSize();
+    const size_t pages_needed = (total_bytes + page_size - 1) / page_size;
     for (size_t p = 1; p < pages_needed; ++p) {
         if (!nand.readPage(block, static_cast<uint32_t>(p),
-                           buf.get() + p * NAND_PAGE_SIZE)) {
+                           buf.get() + p * page_size)) {
             return Status::BackendFailed;
         }
     }
@@ -195,10 +201,11 @@ Status FlightIndex::writeSnapshot(TR_NandBackend& nand,
     const uint32_t crc = compute_crc(buf.get(), total_bytes);
     std::memcpy(buf.get(), &crc, sizeof(crc));
 
-    const size_t pages_needed = (total_bytes + NAND_PAGE_SIZE - 1) / NAND_PAGE_SIZE;
+    const size_t page_size = nand.pageSize();
+    const size_t pages_needed = (total_bytes + page_size - 1) / page_size;
     for (size_t p = 0; p < pages_needed; ++p) {
         if (!nand.programPage(block, static_cast<uint32_t>(p),
-                              buf.get() + p * NAND_PAGE_SIZE)) {
+                              buf.get() + p * page_size)) {
             return Status::BackendFailed;
         }
     }

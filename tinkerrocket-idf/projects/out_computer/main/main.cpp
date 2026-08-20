@@ -115,7 +115,7 @@ static TR_LogToFlash logger;
 // writes via writeFrame(), with dual-copy index metadata in blocks 1020-1023
 // and a persistent 3-state bitmap in NVS. TR_LogToFlash keeps the ring/flush
 // machinery and shelled-down 4 MB LFS partition for config; a write_sink
-// fn-pointer routes each drained 4080 B page into flightlog.writeFrame().
+// fn-pointer routes each drained page-sized chunk into flightlog.writeFrame().
 static tr_flightlog::TR_NandBackend_esp flightlog_backend;
 static tr_flightlog::TR_FlightLog flightlog;
 static tr_flightlog::NandBitmapStore flightlog_bitmap_store;  // #398: NAND-backed, bound in initPeripherals
@@ -202,7 +202,7 @@ static SensorHealthState ocStorageHealth()
 
 // Stage 3b (issue #50): BLE file-ops re-backed on TR_FlightLog.
 // Fills up to `max_bytes` of the downloader's scratch buffer by issuing
-// successive readFlightPage calls (each one returns at most 4080 payload
+// successive readFlightPage calls (each returns at most one page's payload
 // bytes — the portion of a single NAND page past its PageHeader). Matches
 // the logger.readFileChunk contract: sets eof=true when the last byte of
 // the flight has been read; returns false only on underlying NAND I/O error.
@@ -5148,7 +5148,10 @@ static void printStats()
                 rss.bad_blocks    = (uint16_t)flightlog.bitmap().countInState(tr_flightlog::BLOCK_BAD);
                 rss.system_blocks = (uint16_t)(fcfg.flight_region_start + 4u);  // LFS region + 4 metadata
                 rss.flight_count  = (uint16_t)flightlog.index().size();
-                rss.block_size_kb = (uint16_t)(tr_flightlog::NAND_BLOCK_SIZE / 1024u);
+                // #671: runtime block size — 256 on the V8 part, 128 on the
+                // GD5F parts. The wire struct is self-describing, so the app
+                // scales by this field.
+                rss.block_size_kb = (uint16_t)(flightlog.pageSize() * flightlog.pagesPerBlock() / 1024u);
                 rss.flags         = RSS_FLAG_INITIALIZED;
                 if (flightlog.autoEvictedCount() > 0)  // #315: rolling-buffer evicted this session
                     rss.flags |= RSS_FLAG_AUTO_EVICTED;
@@ -5679,8 +5682,9 @@ void initPeripherals()
 
     // --- LFS shrunk to 4 MB + hot-path write sink (issue #50) ---------------
     // LFS holds 32 blocks for config/placeholder use; TR_FlightLog owns the
-    // remaining 2012 blocks plus the metadata blocks 2044-2047. Each 4080 B
-    // chunk the flush task drains from the ring is routed through
+    // rest of the chip up to its four metadata blocks (#671: block size and
+    // count are runtime chip geometry). Each (page - 16)-byte chunk the
+    // flush task drains from the ring is routed through
     // flightlogWriteSink → flightlog.writeFrame(), which wraps it in a
     // PageHeader (CRC32 + seq + flight_id) and programs one NAND page
     // directly.
@@ -5793,10 +5797,21 @@ void initPeripherals()
     flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
     {
         tr_flightlog::TR_FlightLog::Config fl_cfg{};
-        // #398 / #492: the 3840 Hz stream makes larger files and the 512 MB
-        // chip has ample headroom, so pre-allocate ~20 MB up front (80 × 256 KB
-        // blocks) — most flights then never extend mid-flight (the extend path's
-        // NAND erase + bitmap persist is the in-flight hiccup we want to avoid).
+        // #671: geometry is runtime — logger.begin() resolved the chip from
+        // RDID, and everything below is denominated in ITS blocks. Region and
+        // metadata come from the chip's block count (top four blocks are
+        // metadata), which is what the Config sentinels would also derive —
+        // but the auto-evict target and the bitmap-store bind() below need
+        // the concrete numbers before flightlog.begin(), so fill explicitly.
+        const auto& ngeom = logger.nandGeometry();
+        fl_cfg.flight_region_end = static_cast<uint16_t>(ngeom.block_count - 4);
+        for (int i = 0; i < 4; ++i)
+            fl_cfg.metadata_blocks[i] = static_cast<uint16_t>(ngeom.block_count - 4 + i);
+        // #398 / #492 / #671: the 3840 Hz stream makes larger files, so
+        // pre-allocate 80 blocks up front — ~20 MB on the V8 bench part
+        // (256 KB blocks), ~10 MB on V9's GD5F2GQ5UE (128 KB blocks); both
+        // cover a typical flight (~156 KB/s x 60 s = ~9.4 MB) without the
+        // extend path's in-flight erase hiccup.
         fl_cfg.prealloc_blocks = 80;
         // #315: rolling-buffer auto-eviction. When the card fills, prepareFlight
         // reclaims space at arm time by deleting the oldest finalized flight(s)

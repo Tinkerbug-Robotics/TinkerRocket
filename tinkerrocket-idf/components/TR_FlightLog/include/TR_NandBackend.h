@@ -9,12 +9,21 @@ namespace tr_flightlog {
 // from TR_LogToFlash; the test fake implements it in-memory with accurate
 // NAND semantics (bit 1->0 only, erase-to-0xFF).
 //
-// Addressing uses (block, page_in_block). Block is 0..NAND_BLOCK_COUNT-1,
-// page_in_block is 0..NAND_PAGES_PER_BLK-1. Buffers are always NAND_PAGE_SIZE
-// bytes for read/program.
+// Addressing uses (block, page_in_block). Block is 0..blockCount()-1,
+// page_in_block is 0..pagesPerBlock()-1. Buffers are pageSize() bytes for
+// read/program (at most NAND_PAGE_SIZE_MAX — callers may size statically to
+// the max and use the runtime length).
 class TR_NandBackend {
 public:
     virtual ~TR_NandBackend() = default;
+
+    // #671: the chip's RDID-resolved geometry, valid for the backend's whole
+    // lifetime (geometry is a pure function of the physical chip). This is
+    // the single source of truth TR_FlightLog denominates all page/block
+    // arithmetic in — there is no compile-time geometry any more.
+    virtual uint32_t pageSize() const = 0;
+    virtual uint32_t pagesPerBlock() const = 0;
+    virtual uint32_t blockCount() const = 0;
 
     virtual bool readPage(uint32_t block, uint32_t page_in_block, uint8_t* out) = 0;
     virtual bool programPage(uint32_t block, uint32_t page_in_block, const uint8_t* data) = 0;

@@ -4,15 +4,15 @@
 
 namespace tr_flightlog_test {
 
-using tr_flightlog::NAND_BLOCK_COUNT;
-using tr_flightlog::NAND_PAGES_PER_BLK;
-using tr_flightlog::NAND_PAGE_SIZE;
-
-FakeNandBackend::FakeNandBackend() { reset(); }
+FakeNandBackend::FakeNandBackend(uint32_t page_size, uint32_t pages_per_block,
+                                 uint32_t block_count)
+    : page_size_(page_size), pages_per_blk_(pages_per_block), block_count_(block_count) {
+    reset();
+}
 
 void FakeNandBackend::reset() {
-    storage_.assign(static_cast<size_t>(TOTAL_PAGES) * NAND_PAGE_SIZE, 0xFF);
-    bad_blocks_.assign(NAND_BLOCK_COUNT, false);
+    storage_.assign(static_cast<size_t>(block_count_) * pages_per_blk_ * page_size_, 0xFF);
+    bad_blocks_.assign(block_count_, false);
     program_fail_once_.clear();
     read_error_persistent_.clear();
     program_count_ = 0;
@@ -22,33 +22,33 @@ void FakeNandBackend::reset() {
 
 uint8_t* FakeNandBackend::pageStorage(uint32_t block, uint32_t page) {
     const size_t offset =
-        (static_cast<size_t>(block) * NAND_PAGES_PER_BLK + page) * NAND_PAGE_SIZE;
+        (static_cast<size_t>(block) * pages_per_blk_ + page) * page_size_;
     return &storage_[offset];
 }
 
 const uint8_t* FakeNandBackend::pageStorage(uint32_t block, uint32_t page) const {
     const size_t offset =
-        (static_cast<size_t>(block) * NAND_PAGES_PER_BLK + page) * NAND_PAGE_SIZE;
+        (static_cast<size_t>(block) * pages_per_blk_ + page) * page_size_;
     return &storage_[offset];
 }
 
 bool FakeNandBackend::readPage(uint32_t block, uint32_t page_in_block, uint8_t* out) {
-    if (block >= NAND_BLOCK_COUNT || page_in_block >= NAND_PAGES_PER_BLK) return false;
+    if (block >= block_count_ || page_in_block >= pages_per_blk_) return false;
     if (read_error_persistent_.count({block, page_in_block})) return false;
-    std::memcpy(out, pageStorage(block, page_in_block), NAND_PAGE_SIZE);
+    std::memcpy(out, pageStorage(block, page_in_block), page_size_);
     ++read_count_;
     return true;
 }
 
 bool FakeNandBackend::programPage(uint32_t block, uint32_t page_in_block, const uint8_t* data) {
-    if (block >= NAND_BLOCK_COUNT || page_in_block >= NAND_PAGES_PER_BLK) return false;
+    if (block >= block_count_ || page_in_block >= pages_per_blk_) return false;
     auto it = program_fail_once_.find({block, page_in_block});
     if (it != program_fail_once_.end()) {
         program_fail_once_.erase(it);
         return false;
     }
     uint8_t* dst = pageStorage(block, page_in_block);
-    for (size_t i = 0; i < NAND_PAGE_SIZE; ++i) {
+    for (size_t i = 0; i < page_size_; ++i) {
         dst[i] = dst[i] & data[i];
     }
     ++program_count_;
@@ -56,26 +56,26 @@ bool FakeNandBackend::programPage(uint32_t block, uint32_t page_in_block, const 
 }
 
 bool FakeNandBackend::eraseBlock(uint32_t block) {
-    if (block >= NAND_BLOCK_COUNT) return false;
+    if (block >= block_count_) return false;
     uint8_t* start = pageStorage(block, 0);
-    std::memset(start, 0xFF, static_cast<size_t>(NAND_PAGES_PER_BLK) * NAND_PAGE_SIZE);
+    std::memset(start, 0xFF, static_cast<size_t>(pages_per_blk_) * page_size_);
     ++erase_count_;
     return true;
 }
 
 bool FakeNandBackend::isBlockBad(uint32_t block) {
-    if (block >= NAND_BLOCK_COUNT) return true;
+    if (block >= block_count_) return true;
     return bad_blocks_[block];
 }
 
 bool FakeNandBackend::markBlockBad(uint32_t block) {
-    if (block >= NAND_BLOCK_COUNT) return false;
+    if (block >= block_count_) return false;
     bad_blocks_[block] = true;
     return true;
 }
 
 void FakeNandBackend::injectFactoryBadBlock(uint32_t block) {
-    if (block < NAND_BLOCK_COUNT) bad_blocks_[block] = true;
+    if (block < block_count_) bad_blocks_[block] = true;
 }
 
 void FakeNandBackend::injectProgramFailOnce(uint32_t block, uint32_t page_in_block) {
