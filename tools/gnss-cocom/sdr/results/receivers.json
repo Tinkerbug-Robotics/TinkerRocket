@@ -1,53 +1,83 @@
 {
-  "_comment": "Measured COCOM behaviour per receiver. One entry per part. Brackets are (highest value that still held a fix, lowest value that was withheld], taken across every gate edge in every run for that receiver -- so they tighten as more runs are added. Edit this file and re-run receiver_table.py; do not hand-edit the table in report.html.",
-  "limits": {
-    "velocity_mps": 515,
-    "altitude_km": 18.288,
-    "altitude_km_alt": 80.0,
-    "note": "The export rule is usually quoted as 515 m/s and 18 km (60000 ft). Both receivers measured here gate altitude at 80 km, not 18 km."
+ "_comment": "Measured COCOM behaviour per receiver. One entry per part. Brackets are (highest value that still held a fix, lowest value that was withheld], taken across every gate edge in every run for that receiver -- so they tighten as more runs are added. Edit this file and re-run receiver_table.py; do not hand-edit the table in report.html.",
+ "limits": {
+  "velocity_mps": 515,
+  "altitude_km": 18.288,
+  "altitude_km_alt": 80.0,
+  "note": "The export rule is usually quoted as 515 m/s and 18 km (60000 ft). Both receivers measured here gate altitude at 80 km, not 18 km."
+ },
+ "receivers": [
+  {
+   "id": "px1125r",
+   "part": "SkyTraq PX1125R",
+   "bands": "L1 + L5",
+   "protocol": "SkyTraq binary",
+   "host": "dual-MCU TinkerNav, via the RP2040 USB port",
+   "path": "conducted",
+   "rf": "~70 dB pad + DC block into RF_IN, TX gain 44-47",
+   "date": "2026-08-19",
+   "runs": 9,
+   "velocity_fix_max_mps": 510,
+   "velocity_blocked_min_mps": 517,
+   "altitude_fix_max_km": 79.9,
+   "altitude_blocked_min_km": 80.2,
+   "gate_18km": false,
+   "combination": "independent",
+   "recovery_s": [
+    0.0,
+    1.5
+   ],
+   "sats_min": 2,
+   "sats_median": 7,
+   "notes": "Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified."
   },
-  "receivers": [
-    {
-      "id": "px1125r",
-      "part": "SkyTraq PX1125R",
-      "bands": "L1 + L5",
-      "protocol": "SkyTraq binary",
-      "host": "dual-MCU TinkerNav, via the RP2040 USB port",
-      "path": "conducted",
-      "rf": "~70 dB pad + DC block into RF_IN, TX gain 44-47",
-      "date": "2026-08-19",
-      "runs": 9,
-      "velocity_fix_max_mps": 510,
-      "velocity_blocked_min_mps": 517,
-      "altitude_fix_max_km": 79.90,
-      "altitude_blocked_min_km": 80.20,
-      "gate_18km": false,
-      "combination": "independent",
-      "recovery_s": [0.0, 1.5],
-      "sats_min": 2,
-      "sats_median": 7,
-      "notes": "Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified."
-    },
-    {
-      "id": "sam_m10q",
-      "part": "u-blox SAM-M10Q",
-      "bands": "L1 (GPS/GAL/BDS/GLO)",
-      "protocol": "UBX",
-      "host": "rocket-computer flight computer (ESP32-P4), TR_GNSS_COCOM_DIAG console",
-      "path": "radiated, Faraday cage",
-      "rf": "100 dB pad, L1 quarter-wave, TX gain 12",
-      "date": "2026-08-20",
-      "runs": 2,
-      "velocity_fix_max_mps": 514,
-      "velocity_blocked_min_mps": 516,
-      "altitude_fix_max_km": 80.16,
-      "altitude_blocked_min_km": 80.16,
-      "gate_18km": false,
-      "combination": "independent",
-      "recovery_s": [0.0, 1.1],
-      "sats_min": 4,
-      "sats_median": 13,
-      "notes": "Never fell below 4 satellites in either flight, so every withheld epoch is the gate rather than a link failure. No periodic C/N0 oscillation appeared (r = 0.02 and 0.11)."
-    }
-  ]
+  {
+   "id": "sam_m10q",
+   "part": "u-blox SAM-M10Q",
+   "bands": "L1 (GPS/GAL/BDS/GLO)",
+   "protocol": "UBX",
+   "host": "rocket-computer flight computer (ESP32-P4), TR_GNSS_COCOM_DIAG console",
+   "path": "radiated, Faraday cage",
+   "rf": "100 dB pad, L1 quarter-wave, TX gain 12",
+   "date": "2026-08-20",
+   "runs": 2,
+   "velocity_fix_max_mps": 514,
+   "velocity_blocked_min_mps": 516,
+   "altitude_fix_max_km": 80.16,
+   "altitude_blocked_min_km": 80.16,
+   "gate_18km": false,
+   "combination": "independent",
+   "recovery_s": [
+    0.0,
+    1.1
+   ],
+   "sats_min": 4,
+   "sats_median": 13,
+   "notes": "Never fell below 4 satellites in either flight, so every withheld epoch is the gate rather than a link failure. No periodic C/N0 oscillation appeared (r = 0.02 and 0.11)."
+  },
+  {
+   "id": "zed_f9p",
+   "part": "u-blox ZED-F9P (ArduSimple)",
+   "bands": "L1 + L2 (L1 used here)",
+   "protocol": "UBX",
+   "host": "standalone on its own USB CDC (1546:01A9)",
+   "path": "conducted",
+   "rf": "70 dB pad, TX gain 38",
+   "date": "2026-08-20",
+   "runs": 2,
+   "velocity_fix_max_mps": 514,
+   "velocity_blocked_min_mps": 518,
+   "altitude_fix_max_km": 80.48,
+   "altitude_blocked_min_km": 80.22,
+   "gate_18km": false,
+   "combination": "independent",
+   "recovery_s": [
+    0.1,
+    1.0
+   ],
+   "sats_min": 6,
+   "sats_median": 13,
+   "notes": "Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. Uniquely among the three parts it is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. Its descending edges are crisp and agree at ~80.1 km."
+  }
+ ]
 }

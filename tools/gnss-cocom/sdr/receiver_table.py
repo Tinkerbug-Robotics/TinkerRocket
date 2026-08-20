@@ -27,11 +27,21 @@ DATA = HERE / "results" / "receivers.json"
 
 
 def bracket(lo, hi, unit, fmt="{:.0f}"):
-    """(lo, hi] as a string, or a point estimate when the two coincide."""
+    """(lo, hi] as a string, or a point estimate when the two coincide.
+
+    The bracket can *invert* -- a value that still held a fix sitting above one
+    that was withheld -- when the receiver is slow to close the gate. The F9P
+    lags 2-3 s on the altitude limit, which at 200 m/s of climb overshoots by
+    400-600 m, so on one flight it held a fix at 80.48 km and on another it was
+    already blocked there. That is a latency, not a different threshold, and it
+    is marked rather than silently printed backwards.
+    """
     if lo is None or hi is None:
         return "--"
     if abs(hi - lo) < 1e-9:
         return f"~{fmt.format(hi)} {unit}"
+    if lo > hi:
+        return f"{fmt.format(hi)}-{fmt.format(lo)} {unit} \u2020"
     return f"{fmt.format(lo)}-{fmt.format(hi)} {unit}"
 
 

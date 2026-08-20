@@ -156,6 +156,33 @@ Taken together the two flights corner the velocity gate between **514 and
 only say 500-618 m/s: at 1 Hz a 15 g boost covers 118 m/s between epochs, so
 the slow ascent is what does the measuring.
 
+## ZED-F9P, conducted (2026-08-20)
+
+ArduSimple simpleRTK2B, standalone on its own USB CDC (`1546:01A9`), fed through
+the same 70 dB pad the PX1125R used. TX gain **38**, found by `gain_sweep.py`.
+Configured by `ubx_config.py` (UBX on, NMEA off, airborne <4 g).
+
+**It arrived configured as a fixed-position RTK base** (`CFG-TMODE-MODE=2`) and
+therefore did not navigate at all. Every symptom looked like an RF problem and
+none of it was: GPS tracked at a median 41 dBHz with valid ephemeris, 335 of 420
+epochs had four or more usable satellites, and `used_in_fix` stayed 0 while the
+reported position sat on the unit's surveyed base coordinates in New Jersey.
+Cold-starting did not help, because the position was configuration rather than
+retained state. `ubx_config.py` now reads `CFG-TMODE-MODE` first and says so.
+
+The config has since been written to **BBR+Flash**, so the unit comes up
+navigating; its original base-station setup was overwritten, not shadowed.
+
+| Capture | Boost | Result |
+|---|---|---|
+| `zed_f9p_spaceshot` | 15 g | 3 windows, recovered 0.5 / 1.0 / 0.1 s. 590/805 epochs with a fix |
+| `zed_f9p_gentle_alt` | 3 g | 3 windows, recovered 0.3 / 0.7 / 0.9 s. 517/812 with a fix |
+
+Velocity edges bracket **(514, 518] m/s**. The altitude bracket *inverts* --
+80.48 km held a fix on one flight and was blocked on the other -- because this
+part lags **+2.3 s and +3.3 s on closing** the altitude gate, 400-600 m of
+overshoot at climb speed. Its descending edges are crisp and agree at ~80.1 km.
+
 ## Receivers compared
 
 Generated from `results/receivers.json` by `receiver_table.py` -- edit the JSON
@@ -165,11 +192,20 @@ and re-run it rather than hand-editing this table or the one in `report.html`.
 |---|---|---|---|---|---|---|---|---|---|
 | SkyTraq PX1125R | L1 + L5 | conducted | 9 | 510-517 m/s | 79.90-80.20 km | none | independent | 0.0-1.5 s | 2 / 7 |
 | u-blox SAM-M10Q | L1 (GPS/GAL/BDS/GLO) | radiated, Faraday cage | 2 | 514-516 m/s | ~80.16 km | none | independent | 0.0-1.1 s | 4 / 13 |
+| u-blox ZED-F9P (ArduSimple) | L1 + L2 (L1 used here) | conducted | 2 | 514-518 m/s | 80.22-80.48 km † | none | independent | 0.1-1.0 s | 6 / 13 |
 
 **SkyTraq PX1125R** (2026-08-19, ~70 dB pad + DC block into RF_IN, TX gain 44-47): Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified.
 
 **u-blox SAM-M10Q** (2026-08-20, 100 dB pad, L1 quarter-wave, TX gain 12): Never fell below 4 satellites in either flight, so every withheld epoch is the gate rather than a link failure. No periodic C/N0 oscillation appeared (r = 0.02 and 0.11).
 
-More parts are planned against the same trajectories. To add one: fly
-`spaceshot` and `gentle_alt`, archive the capture and its scenario here, add an
-entry to `receivers.json`, and regenerate.
+**u-blox ZED-F9P (ArduSimple)** (2026-08-20, 70 dB pad, TX gain 38): Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. Uniquely among the three parts it is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. Its descending edges are crisp and agree at ~80.1 km.
+
+&dagger; marks an inverted bracket: a value that still held a fix sitting above
+one that was withheld, which happens when a receiver is slow to close the gate.
+It is a latency, not a threshold difference.
+
+Across all three parts the velocity limit brackets to **(514, 516] m/s** and the
+altitude limit to **80 km**, with no 18 km gate anywhere and both limits always
+independent. More parts are planned against the same trajectories. To add one:
+fly `spaceshot` and `gentle_alt`, archive the capture and its scenario here, add
+an entry to `receivers.json`, and regenerate.

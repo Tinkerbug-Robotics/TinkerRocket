@@ -40,8 +40,15 @@ from ublox_binary import (CLS_NAV, MSG_NAV_PVT, MSG_NAV_SAT,   # noqa: E402
                           parse_nav_pvt, parse_nav_sat)
 sys.path.insert(0, str(HERE))
 from ensure_hackrf import ensure_hackrf                    # noqa: E402
+from find_ublox import find_ublox                          # noqa: E402
 
-TX_ERR = "/tmp/hackrf_tx_radiated.err"
+# Per-scenario, not shared: an orphaned hackrf_transfer from an earlier run
+# keeps appending "MB / " progress lines to whatever file it was given, which
+# is enough to satisfy a naive "did it start?" check for a process that in
+# fact died with hackrf_open() failed. That combination reported a healthy
+# transmitter and a failed one in the same breath.
+def tx_err_path(scenario):
+    return f"/tmp/hackrf_tx_{scenario or 'probe'}.err"
 
 
 def list_candidate_ports():
@@ -53,25 +60,34 @@ def list_candidate_ports():
           "A u-blox on the flight computer runs at 460800 (38400 factory default).")
 
 
-def start_tx(c8: Path, freq: int, rate: int, gain: int):
+def start_tx(c8: Path, freq: int, rate: int, gain: int, errfile: str):
     # The PortaPack boots into Mayhem and hides the radio; this is a no-op when
     # the HackRF is already there.
     if not ensure_hackrf():
         return None
-    errf = open(TX_ERR, "w")
+    errf = open(errfile, "w")
     tx = subprocess.Popen(
         ["hackrf_transfer", "-t", str(c8), "-f", str(freq),
          "-s", str(rate), "-a", "0", "-x", str(gain)],
         stdout=errf, stderr=subprocess.STDOUT)
     time.sleep(4.0)
-    out = Path(TX_ERR).read_text()
-    if tx.poll() is not None or "MB / " not in out:
+    out = Path(errfile).read_text()
+    # Check for the explicit failure first. "Access denied" here almost always
+    # means another hackrf_transfer still holds the device -- killing a runner
+    # by name leaves its child alive, because the child is not matched by the
+    # parent's name.
+    failed = ("hackrf_open() failed" in out or "not found" in out.lower()
+              or tx.poll() is not None or "MB / " not in out)
+    if failed:
         try:
             tx.kill()
         except Exception:
             pass
         print("!! hackrf_transfer is not streaming:")
-        print(out[-800:] or "(no output)")
+        print(out[:400] or "(no output)")
+        if "hackrf_open() failed" in out:
+            print("   Another hackrf_transfer probably still holds the radio:\n"
+                  "     pkill -f hackrf_transfer")
         return None
     print(f"# TX confirmed: {out.strip().splitlines()[-1]}")
     return tx
@@ -92,7 +108,7 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--list", action="store_true", help="list serial ports and exit")
     ap.add_argument("-s", "--scenario", help="scenario name, e.g. spaceshot")
-    ap.add_argument("-p", "--port", help="serial tap on the receiver's TXD")
+    ap.add_argument("-p", "--port", help="serial port, or 'auto' for a u-blox")
     ap.add_argument("-b", "--baud", type=int, default=460800)
     ap.add_argument("-x", "--gain", type=int, default=40, help="HackRF TX gain 0-47")
     ap.add_argument("--freq", type=int, default=1575420000)
@@ -105,6 +121,7 @@ def main() -> int:
     if args.list:
         list_candidate_ports()
         return 0
+    args.port = find_ublox(args.port)
     if not args.port:
         list_candidate_ports()
         return "\n--port is required (see the list above)"
@@ -123,9 +140,14 @@ def main() -> int:
 
     tx = None
     if not args.listen_only:
+        # meta is None whenever the .C8 has no scenario sidecar -- the static
+        # probe files have none, and they are exactly what a level check uses.
+        span = (f"{meta['duration_s']:.0f}s" if meta
+                else f"{c8.stat().st_size/(2*args.rate):.0f}s (no sidecar)")
         print(f"# {args.scenario}: {c8.stat().st_size/1e9:.2f} GB, "
-              f"{meta['duration_s']:.0f}s, gain {args.gain}")
-        tx = start_tx(c8, args.freq, args.rate, args.gain)
+              f"{span}, gain {args.gain}")
+        tx = start_tx(c8, args.freq, args.rate, args.gain,
+                      tx_err_path(args.scenario))
         if tx is None:
             return 1
     else:

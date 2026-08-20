@@ -26,6 +26,8 @@ so a true AND gate essentially never blanks in flight.
 | `align_start.py` | Recovers a capture's scenario start time by matching reported to injected altitude |
 | `receiver_table.py` | Renders the receiver comparison from `results/receivers.json` |
 | `oscillation.py` | Characterises the periodic C/N&#8320; swing in a capture |
+| `ubx_config.py` | Identifies a u-blox and switches it to UBX output, RAM layer only |
+| `gain_sweep.py` | Finds the working TX gain for a receiver, ranking satellites over C/N&#8320; |
 
 ## Quick start
 
@@ -356,6 +358,43 @@ which `ublox_binary.py` handles:
 - A fix requires `gnssFixOK`, not just `fixType`. u-blox reports a populated
   `fixType` with that flag clear while it is withholding, which is precisely the
   transition being measured.
+
+### A standalone receiver on its own USB (ArduSimple ZED-F9P)
+
+Unlike the flight computer's SAM-M10Q, a bench receiver on its own USB is ours
+to configure -- and it has to be, because **it ships emitting NMEA only and NMEA
+cannot carry this measurement**. GGA has no flag separating "withholding a
+solution" from "no solution", and its speed is *ground* speed, near zero through
+exactly the part of a rocket flight the velocity limit is about.
+
+    ./ubx_config.py --identify-only        # confirm the part and firmware first
+    ./ubx_config.py                        # UBX on, NMEA off, airborne <4 g
+
+**Everything is written to the RAM layer only**, so a power cycle restores
+whatever the owner had configured -- this is somebody's surveying receiver, not
+bench equipment. The cost is that the configuration must be re-applied after
+every power cycle. `ubx_config.py` ACKs and then reads every key back; do not
+trust a run whose read-back was not clean.
+
+The ZED-F9P enumerates as its own USB CDC (`1546:01A9`, "u-blox GNSS receiver"),
+so the baud rate is irrelevant. No new parser is needed: it is a u-blox, and
+`ublox_binary.py` reads NAV-PVT and NAV-SAT from it unchanged.
+
+Note the signal is **GPS L1 C/A only**. A multi-band RTK receiver will therefore
+use one constellation on one band, well below what it is capable of -- which is
+a property of the injection, not of the part, and applies equally to every
+receiver on this rig.
+
+### Finding the level for a new receiver
+
+    ./gain_sweep.py -p /dev/cu.usbmodem101 -s t00_static
+
+Never carry a gain over from another part. The PX1125R locked solidly at TX gain
+22 and *never* fixed at 32 -- its front end overdrives -- and when a bad
+connector later cost ~25 dB the working point moved to 47. **The tell for
+overdrive is higher C/N&#8320; with fewer satellites**, so the sweep ranks by
+satellites tracked and uses C/N&#8320; only to break ties, and says so explicitly
+when the hottest setting is not the best one.
 
 ### Radiated test in a Faraday cage
 
