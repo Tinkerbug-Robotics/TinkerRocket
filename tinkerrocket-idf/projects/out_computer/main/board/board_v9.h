@@ -106,6 +106,18 @@ struct board_pins
     // Leaving it at 34 would not "keep MRAM working" — it would drive a
     // floating pad and hand both features an unconnected device.
     static constexpr int MRAM_CS = -1;       // U12 not fitted (CONFIRMED)
+    // ...and this is where the ring actually goes. U15 is an ESP32-S3RH2 with
+    // 2 MB of in-package quad PSRAM (datasheet Table 1-1; the RH2 is the
+    // official upgrade of the EOL S3R2). Deleting the MRAM and moving to the
+    // embedded-PSRAM part were ONE decision, so the ring belongs in PSRAM here
+    // — not in the 64 KB internal fallback, which is what firmware used until
+    // #822 simply because CONFIG_SPIRAM was never enabled.
+    // Wiring is correct as fabbed: quad PSRAM sits on SPICS1 (pad 28, NC
+    // externally by design), and GPIO35-38 stay free for the NAND because the
+    // GPIO33-37 restriction applies only to OCTAL parts. The VDD_SPI rail
+    // objection (H7) was fixed before fab — see sdkconfig.defaults.
+    // Still volatile: this buys ring SIZE, never reboot recovery.
+    static constexpr bool RING_IN_PSRAM = true;   // 2 MB in-package (CONFIRMED)
 
     // --- I2C slave (commands from FlightComputer) ---
     static constexpr int I2C_SDA_PIN = 5;    // ESP_SDA (CONFIRMED)

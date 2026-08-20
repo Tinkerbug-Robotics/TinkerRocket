@@ -91,8 +91,27 @@ struct config : board_pins
     static constexpr uint8_t SPI_MODE_NAND = SPI_MODE0;
 
     // --- RAM ring buffer (used when MRAM_CS = -1) ---
-    // Fallback if MRAM not available. MRAM is preferred (128 KB, no heap cost).
+    // Last-resort fallback: internal SRAM, used only when neither MRAM nor
+    // PSRAM is available. Kept small because the S3 has 512 KB of SRAM total
+    // and everything else has to fit alongside it.
     static constexpr uint32_t RAM_RING_SIZE = 65536;  // 64 KB fallback
+
+    // --- PSRAM ring buffer (#822; used when RING_IN_PSRAM && MRAM_CS = -1) ---
+    // The V9/V10 story: the MRAM was deleted in favour of the S3RH2's 2 MB of
+    // in-package PSRAM, which is there to buffer NAND writes. Board presence is
+    // the header's call (RING_IN_PSRAM); the size is policy and lives here.
+    //
+    // 512 KB is a deliberate first step, not a maximum. Arithmetic at the
+    // shipped default IMU rate (~156 KB/s from the pad):
+    //   MRAM  128 KB ring -> 97536 B prelaunch cap -> ~0.61 s of history
+    //   here  512 KB ring -> 384 KB prelaunch cap  -> ~2.5 s
+    // and ~3.3 s of total NAND-stall headroom against the ~0.8 s the MRAM ever
+    // gave. That is a 4x improvement while leaving 1.5 MB of the part unspoken
+    // for. Raising it toward 1-2 MB is reasonable once there is bench data on
+    // a real V9 — watch the #398 gauges (parser_max, spi_wait, ring_overruns)
+    // and the activation drain, since a larger prelaunch ring means a longer
+    // backlog for the flush task to work off after launch detect.
+    static constexpr uint32_t PSRAM_RING_SIZE = 524288;  // 512 KB
 
     // --- I2C from FlightComputer -> OutComputer (pins in board header) ---
     static constexpr uint8_t I2C_ADDRESS = 0x42;

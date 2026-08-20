@@ -5631,6 +5631,10 @@ void initPeripherals()
     log_cfg.spi_hz_nand = config::SPI_HZ_NAND;
     log_cfg.spi_mode_nand = config::SPI_MODE_NAND;
     log_cfg.ring_buffer_size = config::RAM_RING_SIZE;
+    // #822: on a board whose MRAM was replaced by in-package PSRAM, put the
+    // ring there instead of in the 64 KB internal fallback. 0 on every
+    // MRAM-fitted board, which keeps V7/V8 on exactly their old path.
+    log_cfg.psram_ring_size = config::RING_IN_PSRAM ? config::PSRAM_RING_SIZE : 0;
     log_cfg.debug = config::DEBUG;
     // MRAM ring buffer (128 KB on shared SPI bus — replaces 64 KB RAM ring)
     log_cfg.mram_cs = config::MRAM_CS;
@@ -5691,13 +5695,24 @@ void initPeripherals()
         logger.getStats(mram_st);
         ESP_LOGW("PWR", "========================================");
         ESP_LOGW("PWR", "NO MRAM ON THIS BOARD (MRAM_CS = -1).");
-        ESP_LOGW("PWR", "  Log ring: %lu KB of internal RAM, VOLATILE.",
-                 (unsigned long)(mram_st.ring_size / 1024));
+        ESP_LOGW("PWR", "  Log ring: %lu KB of %s, VOLATILE.",
+                 (unsigned long)(mram_st.ring_size / 1024),
+                 logger.isRingInPsram() ? "in-package PSRAM" : "internal RAM");
         ESP_LOGW("PWR", "  In-flight reboot recovery (#104): UNAVAILABLE.");
         ESP_LOGW("PWR", "  Dirty-ring replay (#274): UNAVAILABLE.");
         ESP_LOGW("PWR", "  Expected on V9/V10. On a V8 board this means the");
         ESP_LOGW("PWR", "  image was built with the wrong -DTR_BOARD_* flag.");
         ESP_LOGW("PWR", "========================================");
+        // #822: PSRAM is the ring's intended home on V9/V10. Landing on
+        // internal RAM instead means either CONFIG_SPIRAM is off or the part
+        // did not come up — the ring is then ~8x smaller than designed, which
+        // is exactly the kind of quiet downgrade this block exists to prevent.
+        if (config::RING_IN_PSRAM && !logger.isRingInPsram())
+        {
+            ESP_LOGE("PWR", "  ^ THIS BOARD EXPECTED A PSRAM RING AND DID NOT "
+                            "GET ONE — see the PSRAM init line earlier in this "
+                            "boot log.");
+        }
     }
 
     // --- TR_FlightLog begin (issue #50) -------------------------------------

@@ -57,16 +57,56 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     else
     {
         use_mram_ = false;
-        ring_size_ = cfg.ring_buffer_size;
-        ring_buf_ = (uint8_t*)heap_caps_malloc(ring_size_, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        ring_in_psram_ = false;
+
+        // #822: on a board with no MRAM but with in-package PSRAM (V9/V10's
+        // ESP32-S3RH2), the ring belongs in PSRAM — that part is the MRAM's
+        // designated replacement and exists to buffer NAND writes. Try it
+        // first, at its own (much larger) size.
+        //
+        // Safe to attempt unconditionally: with CONFIG_SPIRAM off, or the part
+        // absent under SPIRAM_IGNORE_NOTFOUND, this allocation simply returns
+        // null and we take the internal path below. The ring is only ever
+        // memcpy'd (never a DMA target), so PSRAM's DMA restrictions don't
+        // apply to it.
+        if (cfg.psram_ring_size > 0)
+        {
+            ring_size_ = cfg.psram_ring_size;
+            ring_buf_ = (uint8_t*)heap_caps_malloc(ring_size_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (ring_buf_)
+            {
+                ring_in_psram_ = true;
+                if (cfg.debug) ESP_LOGI(TAG, "Allocated %lu byte PSRAM ring (free PSRAM: %lu)",
+                                        (unsigned long)ring_size_,
+                                        (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+            }
+            else
+            {
+                // Loud, not silent: this is the difference between seconds of
+                // NAND-stall headroom and a fraction of one, and the whole
+                // point of the board's PSRAM. Falling back keeps the vehicle
+                // logging, but somebody needs to know why the ring shrank.
+                ESP_LOGW(TAG, "PSRAM ring (%lu B) requested but unavailable — "
+                              "falling back to %lu B of internal RAM. Check "
+                              "CONFIG_SPIRAM and the boot-time PSRAM init log.",
+                         (unsigned long)cfg.psram_ring_size,
+                         (unsigned long)cfg.ring_buffer_size);
+            }
+        }
+
         if (!ring_buf_)
         {
-            if (cfg.debug) ESP_LOGE(TAG, "Failed to allocate %lu byte ring buffer",
-                                          (unsigned long)ring_size_);
-            return false;
+            ring_size_ = cfg.ring_buffer_size;
+            ring_buf_ = (uint8_t*)heap_caps_malloc(ring_size_, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            if (!ring_buf_)
+            {
+                if (cfg.debug) ESP_LOGE(TAG, "Failed to allocate %lu byte ring buffer",
+                                              (unsigned long)ring_size_);
+                return false;
+            }
+            if (cfg.debug) ESP_LOGI(TAG, "Allocated %lu byte RAM ring (free heap: %lu)",
+                                          (unsigned long)ring_size_, (unsigned long)esp_get_free_heap_size());
         }
-        if (cfg.debug) ESP_LOGI(TAG, "Allocated %lu byte RAM ring (free heap: %lu)",
-                                      (unsigned long)ring_size_, (unsigned long)esp_get_free_heap_size());
     }
     ring_prelaunch_cap_ = prelaunchCap();
 

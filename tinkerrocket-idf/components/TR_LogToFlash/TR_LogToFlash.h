@@ -50,6 +50,15 @@ struct TR_LogToFlashConfig
     // When enabled the ring buffer lives in SPI MRAM instead of ESP32 RAM,
     // providing larger capacity (128 KB) and power-loss survivability.
     int mram_cs = -1;                   // chip-select pin (-1 = use RAM ring)
+
+    // #822: when MRAM is absent, prefer a ring this large in SPI PSRAM instead
+    // of `ring_buffer_size` in internal RAM. 0 = don't try PSRAM (the default,
+    // and what every MRAM-fitted board passes). The two sizes are separate on
+    // purpose: if the PSRAM allocation fails — part absent, CONFIG_SPIRAM off,
+    // fragmentation — begin() falls back to `ring_buffer_size` from INTERNAL
+    // RAM, and retrying a PSRAM-sized ring there would just fail again on a
+    // chip with 512 KB of SRAM total.
+    uint32_t psram_ring_size = 0;
     uint32_t spi_hz_mram = 40'000'000;
     uint8_t spi_mode_mram = SPI_MODE0;
     uint32_t mram_size = 131072;        // 128 KB (MR25H10)
@@ -206,6 +215,9 @@ public:
     bool mramRawWrite(uint32_t addr, const uint8_t* data, uint32_t len);
     bool mramRawRead(uint32_t addr, uint8_t* out, uint32_t len);
     bool isMramEnabled() const { return use_mram_; }
+    // #822: true when the RAM ring was allocated from SPI PSRAM rather than
+    // internal RAM. Meaningless while isMramEnabled() — there is no ring_buf_.
+    bool isRingInPsram() const { return ring_in_psram_; }
 
     // #274 MRAM-ring recovery (sink mode). begin() sets "pending" if the previous
     // session was dirty and the non-volatile ring survived; the OC then opens a
@@ -260,6 +272,7 @@ private:
     // Ring buffer storage (RAM fallback or MRAM via SPI)
     bool use_mram_ = false;
     uint8_t* ring_buf_ = nullptr;       // Used only when use_mram_ == false
+    bool ring_in_psram_ = false;        // #822: ring_buf_ came from PSRAM
     uint32_t ring_size_ = 0;
     uint32_t rb_head = 0;
     uint32_t rb_tail = 0;

@@ -50,6 +50,10 @@ struct board_pins
     static constexpr int NAND_CS = 36;       // M_FLASH_CS (CONFIRMED)
     // Fitted on V8 only; board_v9.h sets this to -1 (U12 deleted in V9).
     static constexpr int MRAM_CS = 34;       // MRAM_CS    (CONFIRMED)
+    // MRAM is fitted, so the ring lives there and never reaches the RAM/PSRAM
+    // path at all. false regardless of what this board's S3 turns out to be —
+    // no V8 artwork was ever committed, so its part is unproven either way.
+    static constexpr bool RING_IN_PSRAM = false;
 
     // --- I2C slave (commands from FlightComputer) ---
     static constexpr int I2C_SDA_PIN = 5;    // ESP_SDA (CONFIRMED)
