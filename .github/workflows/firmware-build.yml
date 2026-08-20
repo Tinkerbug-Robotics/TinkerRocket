@@ -24,15 +24,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # out_computer has no mandatory flag (default is the V7 map), but a
-          # flagless build compiles a revision nobody owns and leaves both real
-          # maps uncompiled. Build them explicitly: since #822 they differ —
-          # V9/V10 deleted the MRAM, so board_v9.h sets MRAM_CS = -1 — and a
-          # broken board_v9.h would otherwise never be compiled by CI at all.
+          # out_computer's flag is mandatory (#834) — a flagless build used to
+          # compile the V7 map silently. The maps differ in what is FITTED, not
+          # just pin numbering: V9/V10 deleted the MRAM (board_v9.h sets
+          # MRAM_CS = -1) and enables the PSRAM log ring via an sdkconfig
+          # overlay, so both need building or one of them rots.
           - project: out_computer
             board: V8
             flags: -B build_v8 -DTR_BOARD_V8=1
           - project: out_computer
+            board: V9
+            flags: -B build_v9 -DTR_BOARD_V9=1
+          # pyro_channel_test drives squib FETs by hand and was not built by CI
+          # at all. Its flag is mandatory too (#834): V7's PYRO1 FIRE pin is
+          # PYRO_ARM on V9, so a flagless build armed the board on the keypress
+          # meant to pulse channel 1. Build every map so none of them rots.
+          - project: pyro_channel_test
+            board: V7
+            flags: -B build_v7 -DTR_BOARD_V7=1
+          - project: pyro_channel_test
+            board: V8
+            flags: -B build_v8 -DTR_BOARD_V8=1
+          - project: pyro_channel_test
             board: V9
             flags: -B build_v9 -DTR_BOARD_V9=1
           - project: base_station
