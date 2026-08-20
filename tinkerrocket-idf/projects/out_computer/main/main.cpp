@@ -197,6 +197,13 @@ static SensorHealthState ocStorageHealth()
     const size_t cap  = tr_flightlog::FlightIndex::MAX_ENTRIES;
     if (used >= cap) st = SH_BAD;
     else if (used + 4 >= cap && st == SH_OK) st = SH_DEGRADED;
+    // #826: a board configured for an MRAM that did not answer the boot probe.
+    // DEGRADED rather than BAD — frames still reach the NAND, so nothing is
+    // lost, but the ring shrank to internal RAM and brownout recovery is gone
+    // for the session. Folded in here for the same reason as #566 above: this
+    // is precisely the state that used to read green while the part was dead.
+    // Never fires on a board that correctly has no MRAM (MRAM_CS < 0).
+    if (logger.mramProbeFailed() && st == SH_OK) st = SH_DEGRADED;
     return st;
 }
 
@@ -7048,7 +7055,7 @@ static void loop_oc()
         {
             ESP_LOGW("BLE", "Download '%s' refused: rocket INFLIGHT",
                      download_filename.c_str());
-            ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
+            (void)ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             download_filename = "";
         }
         if (download_filename.length() > 0)
@@ -7085,7 +7092,7 @@ static void loop_oc()
             {
                 ESP_LOGE("BLE", "chunk data size is 0, aborting download");
                 // #526: this is a failure, not a completed empty file.
-                ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
+                (void)ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             }
             else
             {
@@ -7239,17 +7246,17 @@ static void loop_oc()
                 // rather than named here.
                 ESP_LOGE("BLE", "Download ABORTED after %lu bytes",
                          (unsigned long)bytes_sent);
-                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
+                (void)ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
             }
             // Send remaining data with EOF flag
             else if (ble_used > 0)
             {
-                ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, true);
+                (void)ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, true);
                 bytes_sent += ble_used;
             }
             else
             {
-                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
+                (void)ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
             }
 
             // Redundant EOF in case the last notification was dropped. #526: it
@@ -7257,7 +7264,7 @@ static void loop_oc()
             // followed by a bare redundant EOF would resurrect the truncation bug
             // (the app would complete the partial file as if it were whole).
             delay(50);
-            ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/send_failed);
+            (void)ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/send_failed);
 
             uint32_t elapsed_ms = millis() - start_ms;
             float kbps = (elapsed_ms > 0) ? (bytes_sent / 1024.0f) / (elapsed_ms / 1000.0f) : 0;

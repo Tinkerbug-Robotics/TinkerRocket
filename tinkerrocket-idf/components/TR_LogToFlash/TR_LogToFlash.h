@@ -222,6 +222,12 @@ public:
     bool mramRawWrite(uint32_t addr, const uint8_t* data, uint32_t len);
     bool mramRawRead(uint32_t addr, uint8_t* out, uint32_t len);
     bool isMramEnabled() const { return use_mram_; }
+    // #826: true when cfg.mram_cs named a pin but no MRAM answered on it, so
+    // the ring silently fell back to RAM. Distinct from !isMramEnabled(),
+    // which is also true on a board that correctly has no MRAM (mram_cs < 0).
+    // Callers should surface this — it means a fitted part is dead or the
+    // wrong board revision flag was built.
+    bool mramProbeFailed() const { return mram_probe_failed_; }
     // #822: true when the RAM ring was allocated from SPI PSRAM rather than
     // internal RAM. Meaningless while isMramEnabled() — there is no ring_buf_.
     bool isRingInPsram() const { return ring_in_psram_; }
@@ -285,6 +291,7 @@ private:
 
     // Ring buffer storage (RAM fallback or MRAM via SPI)
     bool use_mram_ = false;
+    bool mram_probe_failed_ = false;   // #826
     uint8_t* ring_buf_ = nullptr;       // Used only when use_mram_ == false
     bool ring_in_psram_ = false;        // #822: ring_buf_ came from PSRAM
     uint32_t ring_size_ = 0;
@@ -552,6 +559,12 @@ private:
     static constexpr uint8_t MRAM_WREN  = 0x06;
     static constexpr uint8_t MRAM_READ  = 0x03;
     static constexpr uint8_t MRAM_WRITE = 0x02;
+    // #826: used only by mramProbe(). WEL is bit 1 of the status register and
+    // is the one piece of MRAM state that can be changed without touching a
+    // byte of memory.
+    static constexpr uint8_t MRAM_WRDI  = 0x04;
+    static constexpr uint8_t MRAM_RDSR  = 0x05;
+    static constexpr uint8_t MRAM_SR_WEL = 0x02;
     void mramWriteBytes(uint32_t addr, const uint8_t* data, uint32_t len);
     void mramReadBytes(uint32_t addr, uint8_t* out, uint32_t len);
 
@@ -575,6 +588,10 @@ private:
     uint32_t ringPop(uint8_t* out, uint32_t len);
     void ringPeekAt(uint32_t offset, uint8_t* out, uint32_t len);
 
+    // #826: confirm a real MRAM answers on cfg.mram_cs before trusting the
+    // pin number. Non-destructive — see the implementation for why it cannot
+    // be a scratch write/read-back.
+    bool mramProbe();
     void nandWREN();
     uint8_t nandGetFeature(uint8_t addr);
     void nandSetFeature(uint8_t addr, uint8_t val);
