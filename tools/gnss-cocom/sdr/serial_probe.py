@@ -23,18 +23,41 @@ import time
 
 BAUDS = (9600, 4800, 19200, 38400, 57600, 115200, 230400)
 
+
+def _ubx_frames(buf: bytes) -> int:
+    """Count checksum-valid UBX frames, so a binary stream is not read as noise."""
+    n = i = 0
+    while True:
+        i = buf.find(b"\xb5\x62", i)
+        if i < 0 or i + 6 > len(buf):
+            return n
+        ln = int.from_bytes(buf[i + 4:i + 6], "little")
+        end = i + 6 + ln + 2
+        if ln > 4096 or end > len(buf):
+            i += 2
+            continue
+        a = b = 0
+        for byte in buf[i + 2:end - 2]:
+            a = (a + byte) & 0xFF
+            b = (b + a) & 0xFF
+        if (a, b) == (buf[end - 2], buf[end - 1]):
+            n += 1
+            i = end
+        else:
+            i += 2
+
 # Receivers seen on this bench and where they idle. Air530 (AT6558R) is 9600 and
 # NMEA by default; u-blox native USB ignores baud entirely.
-KNOWN = {9600: "Air530 / AT6558R default, most NMEA modules",
-         38400: "u-blox UART factory default",
+KNOWN = {9600: "u-blox M8 UART default, Air530/AT6558R, most NMEA modules",
+         38400: "u-blox F9/M9 UART default",
          115200: "common after reconfiguration",
          460800: "flight-computer u-blox on this project"}
 
 
 def sweep(port: str, dwell: float = 2.5):
     import serial
-    print(f"  {'baud':>7} {'bytes':>7} {'printable':>10} {'$':>4}  sample")
-    print("  " + "-" * 70)
+    print(f"  {'baud':>7} {'bytes':>7} {'printable':>10} {'$':>4} {'UBX':>5}  sample")
+    print("  " + "-" * 74)
     best = None
     for baud in BAUDS:
         try:
@@ -50,11 +73,18 @@ def sweep(port: str, dwell: float = 2.5):
             continue
         pr = sum(1 for b in buf if 32 <= b < 127 or b in (10, 13))
         frac = (100 * pr // len(buf)) if buf else 0
-        smp = buf[:44].decode("ascii", "replace").replace("\r", "\\r").replace("\n", "\\n")
+        # A binary-only receiver is not garbage, it just is not ASCII. Counting
+        # UBX sync pairs alongside NMEA '$' stops a perfectly good UBX stream
+        # from being reported as noise at every baud -- which is what happened
+        # with the NEO-M8T, whose UART carries UBX and no NMEA at all.
+        n_ubx = _ubx_frames(buf)
+        smp = buf[:40].decode("ascii", "replace").replace("\r", "\\r").replace("\n", "\\n")
         note = f"   <- {KNOWN[baud]}" if baud in KNOWN and not buf else ""
-        print(f"  {baud:>7} {len(buf):>7} {frac:>9}% {buf.count(b'$'):>4}  {smp}{note}")
-        if buf and frac > 80 and (best is None or len(buf) > best[1]):
-            best = (baud, len(buf))
+        print(f"  {baud:>7} {len(buf):>7} {frac:>9}% {buf.count(b'$'):>4} "
+              f"{n_ubx:>5}  {smp}{note}")
+        score = buf.count(b"$") + n_ubx
+        if score > 2 and (best is None or score > best[1]):
+            best = (baud, score)
     return best
 
 

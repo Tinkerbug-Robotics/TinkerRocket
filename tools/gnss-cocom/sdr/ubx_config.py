@@ -30,11 +30,16 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ublox_binary import iter_frames, _checksum          # noqa: E402
+from ublox_binary import (iter_frames, _checksum,        # noqa: E402
+                          CLS_NAV, MSG_NAV_PVT as MSG_NAV_PVT_L,
+                          MSG_NAV_SAT as MSG_NAV_SAT_L)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from find_ublox import find_ublox                        # noqa: E402
 
 CLS_CFG, CLS_MON = 0x06, 0x0A
+MSG_CFG_MSG = 0x01        # legacy per-message rate (M8 and earlier)
+MSG_CFG_NAV5 = 0x24       # legacy dynamic model
+MSG_CFG_PRT = 0x00        # legacy port / protocol masks
 MSG_VALSET, MSG_VALGET = 0x8A, 0x8B
 MSG_RST = 0x04
 MSG_MON_VER = 0x04
@@ -105,6 +110,48 @@ def valget(keys, layer=0) -> bytes:
     return frame(CLS_CFG, MSG_VALGET, p)
 
 
+# --- generation split -------------------------------------------------------
+# CFG-VALSET/VALGET arrived with protocol 27 (F9, M9). An M8 -- including the
+# NEO-M8T -- speaks protocol 15-20 and answers a VALSET with a NAK, or with
+# nothing at all, which reads exactly like a wiring fault if you are not
+# expecting it. The two generations therefore need different configuration
+# paths, chosen from the PROTVER the receiver reports in MON-VER rather than
+# from what the box says.
+VALSET_MIN_PROTVER = 27.0
+
+
+def cfg_msg(cls: int, mid: int, rate: int, port: int = 1) -> bytes:
+    """Legacy CFG-MSG: set the output rate of one message on one port.
+
+    Port 1 is UART1 on every u-blox that has one. The 6-byte form addresses a
+    single port; the 8-byte form sets all six at once and is easy to get wrong.
+    """
+    p = bytearray(8)
+    p[0], p[1] = cls, mid
+    p[2 + port] = rate
+    return frame(CLS_CFG, MSG_CFG_MSG, bytes(p))
+
+
+def cfg_nav5_dynmodel(model: int) -> bytes:
+    """Legacy CFG-NAV5, applying the dynamic model and nothing else."""
+    p = bytearray(36)
+    p[0:2] = (0x0001).to_bytes(2, "little")   # mask: dyn model only
+    p[2] = model
+    return frame(CLS_CFG, MSG_CFG_NAV5, bytes(p))
+
+
+def protver_from_monver(payload: bytes):
+    """PROTVER as a float from a MON-VER payload, or None."""
+    for k in range(40, len(payload), 30):
+        ext = payload[k:k + 30].split(b"\x00")[0].decode(errors="replace")
+        if ext.startswith("PROTVER="):
+            try:
+                return float(ext.split("=", 1)[1])
+            except ValueError:
+                return None
+    return None
+
+
 def cold_start(ser, settle: float = 12.0) -> None:
     """Discard position, time, ephemeris and almanac; take it all from the signal.
 
@@ -151,6 +198,8 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-p", "--port", default="auto",
                     help="serial port, or 'auto' to resolve by u-blox vendor id")
+    ap.add_argument("-b", "--baud", type=int, default=115200,
+                    help="ignored on a native-USB receiver; M8 UARTs vary")
     ap.add_argument("--rate-hz", type=float, default=1.0)
     ap.add_argument("--dynmodel", type=int, default=8,
                     help="8 = airborne <4 g (default), 7 = <2 g, 6 = <1 g")
@@ -169,15 +218,17 @@ def main() -> int:
     if port is None:
         return "no u-blox on the bus (run ./find_ublox.py to see what is)"
     print(f"  port     : {port}")
-    with serial.Serial(port, 115200, timeout=0.2) as ser:
+    with serial.Serial(port, args.baud, timeout=0.2) as ser:
         time.sleep(0.3)
         ser.reset_input_buffer()
 
         # --- identify -------------------------------------------------------
         ser.write(frame(CLS_MON, MSG_MON_VER, b""))
         buf = read_for(ser, 2.0)
+        protver = None
         for cls, mid, pl in collect(buf):
             if cls == CLS_MON and mid == MSG_MON_VER:
+                protver = protver_from_monver(pl)
                 sw = pl[0:30].split(b"\x00")[0].decode(errors="replace")
                 hw = pl[30:40].split(b"\x00")[0].decode(errors="replace")
                 print(f"  software : {sw}")
@@ -193,7 +244,52 @@ def main() -> int:
                 print("     (a receiver emitting NMEA only still answers MON-VER;\n"
                       "      no answer usually means the wrong device or port)")
             return 1
+        legacy = protver is not None and protver < VALSET_MIN_PROTVER
+        if protver is not None:
+            print(f"  config   : {'legacy CFG-MSG (M8 or older)' if legacy else 'CFG-VALSET'}"
+                  f"  [PROTVER {protver}]")
+        else:
+            print("  config   : PROTVER unknown; assuming CFG-VALSET")
         if args.identify_only:
+            return 0
+
+        # --- M8 and older: legacy messages, no configuration database --------
+        if legacy:
+            if args.cold_start:
+                print("  cold start: clearing BBR")
+                cold_start(ser)
+            if args.persist:
+                print("  note: --persist has no effect on a legacy part here; "
+                      "CFG-CFG\n     would be needed to save, and is not sent.")
+            ser.reset_input_buffer()
+            for cls, mid, name in ((CLS_NAV, MSG_NAV_PVT_L, "NAV-PVT"),
+                                   (CLS_NAV, MSG_NAV_SAT_L, "NAV-SAT")):
+                ser.write(cfg_msg(cls, mid, 1))
+                time.sleep(0.25)
+            ser.write(cfg_nav5_dynmodel(args.dynmodel))
+            time.sleep(0.4)
+            if not args.keep_nmea:
+                # Silence the standard NMEA set message by message. CFG-PRT
+                # would do it with one frame by clearing the output protocol
+                # mask, but that frame also carries the baud rate, and getting
+                # it wrong takes the receiver off the wire mid-session.
+                for mid in range(0x00, 0x06):    # GGA GLL GSA GSV RMC VTG
+                    ser.write(cfg_msg(0xF0, mid, 0))
+                    time.sleep(0.12)
+            acks = [(c, m) for c, m, _ in collect(read_for(ser, 1.5)) if c == 0x05]
+            n_ack = sum(1 for c, m in acks if m == 0x01)
+            n_nak = sum(1 for c, m in acks if m == 0x00)
+            print(f"  CFG-MSG/NAV5: {n_ack} ACK, {n_nak} NAK")
+            ser.reset_input_buffer()
+            raw = bytes(read_for(ser, 3.0))
+            n_ubx = len(collect(bytearray(raw)))
+            print(f"  stream   : {len(raw)} B in 3 s -- {n_ubx} UBX frames, "
+                  f"{raw.count(b'$G')} NMEA sentences")
+            if n_ubx == 0:
+                print("  !! no UBX on the wire; NAV-PVT/NAV-SAT did not take")
+                return 1
+            # NMEA is left on deliberately: an M8T carries both without trouble
+            # at 9600, and the shared demuxer reads either.
             return 0
 
         # --- what mode did we find it in? -----------------------------------

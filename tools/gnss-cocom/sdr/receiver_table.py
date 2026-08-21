@@ -45,6 +45,26 @@ def bracket(lo, hi, unit, fmt="{:.0f}"):
     return f"{fmt.format(lo)}-{fmt.format(hi)} {unit}"
 
 
+def alt_cell(r):
+    """Altitude gate, with its cause when that is not the export limit.
+
+    A receiver can stop publishing altitude for reasons that have nothing to do
+    with COCOM -- the NEO-M8T's u-blox dynamic model caps at 50 km, and no model
+    u-blox offers goes higher, so the part stops navigating well below the
+    export threshold. That is still a real ceiling a flight computer will hit,
+    so it is recorded rather than omitted; but it is labelled, because reading
+    it as an export gate would be wrong.
+    """
+    txt = bracket(r.get("altitude_fix_max_km"), r.get("altitude_blocked_min_km"),
+                  "km", "{:.2f}")
+    cause = r.get("altitude_gate_cause")
+    if cause and cause != "cocom" and txt != "--":
+        txt += f" ({cause})"
+    elif txt == "--":
+        txt = r.get("altitude_note", "--")
+    return txt
+
+
 def rows(d):
     out = []
     for r in d["receivers"]:
@@ -53,7 +73,7 @@ def rows(d):
             "path": r["path"],
             "runs": r["runs"],
             "vel": bracket(r["velocity_fix_max_mps"], r["velocity_blocked_min_mps"], "m/s"),
-            "alt": bracket(r["altitude_fix_max_km"], r["altitude_blocked_min_km"], "km", "{:.2f}"),
+            "alt": alt_cell(r),
             "g18": "none" if not r["gate_18km"] else "yes",
             "comb": r["combination"],
             "rec": f"{r['recovery_s'][0]:.1f}-{r['recovery_s'][1]:.1f} s",

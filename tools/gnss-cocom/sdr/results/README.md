@@ -239,6 +239,38 @@ Two things this run fixed in the tooling, both of which had been quietly wrong:
   reads **2007** rather than 2026 -- exactly 1024 weeks, a GPS week-number
   rollover -- so pass `-t` explicitly rather than trusting the date it reports.
 
+## u-blox NEO-M8T, conducted (2026-08-20)
+
+M8 generation, **PROTVER 22.00**, FWVER `TIM 1.10`, UBX at **115200** on a CP2102.
+TX gain **38**. Configured by `ubx_config.py`, which now detects the generation
+from PROTVER and uses **legacy CFG-MSG / CFG-NAV5** -- `CFG-VALSET` only exists
+from protocol 27 (F9/M9) and an M8 answers it with a NAK or with nothing, which
+reads exactly like a wiring fault.
+
+| Capture | Scenario | Result |
+|---|---|---|
+| `neo_m8t_gentle_alt` | 3 g flight | velocity gate 510 -> 524 m/s; w3 recovered 0.9 s; w1/w2 never, because they clear above 50 km |
+| `neo_m8t_spaceshot` | 15 g flight | same pattern; w3 recovered 3.1 s at 28 km |
+| `neo_m8t_t2_altramp` | 85 km at 354 m/s | **fix at 49.80 km, none at 50.15 km** |
+| `neo_m8t_t2_altramp_portable` | same, portable model | **ceiling moves to 5.04 km** -- the control |
+
+**The 50 km ceiling is the u-blox dynamic model, not COCOM.** Airborne <4 g is
+specified at 50,000 m and measured here at 49.80-50.15 km with 14 satellites
+either side. The control run proves it: changing only the platform model, from
+airborne <4 g to portable, moved the same ceiling to 5.04 km. An export gate does
+not track the platform model.
+
+It is recorded in the table anyway, labelled `(dyn model)`, because a flight
+computer does lose position above 50 km with this part fitted. But it is not a
+fifth altitude threshold to set against four independent measurements of 80 km,
+and its true COCOM altitude behaviour is **unmeasurable** -- no u-blox model
+exceeds 50 km, and airborne <4 g is already the highest ceiling and the highest
+velocity limit available. The SAM-M10Q and ZED-F9P held fixes at 68.8 km on that
+same model 8, so this is M8-generation behaviour.
+
+Its velocity gate sits far below the ceiling and is therefore measurable:
+**510-524 m/s**, the same limit as every other part.
+
 ## Receivers compared
 
 Generated from `results/receivers.json` by `receiver_table.py` -- edit the JSON
@@ -250,6 +282,7 @@ and re-run it rather than hand-editing this table or the one in `report.html`.
 | u-blox SAM-M10Q | L1 (GPS/GAL/BDS/GLO) | radiated, Faraday cage | 2 | 514-516 m/s | ~80.16 km | none | independent | 0.0-1.1 s | 4 / 13 |
 | u-blox ZED-F9P (ArduSimple) | L1 + L2 (L1 used here) | conducted | 2 | 514-518 m/s | 80.22-80.48 km † | none | independent | 0.1-1.0 s | 6 / 13 |
 | Air530 (AT6558R) | L1 (GPS + BeiDou) | conducted | 2 | 538-1334 m/s † | -- | none | independent | 31.0-134.1 s | 0 / 12 |
+| u-blox NEO-M8T | L1 (GPS/GLO/GAL/BDS) | conducted | 3 | 510-524 m/s | 49.80-50.15 km (dyn model) | none | independent | 0.9-3.1 s | 8 / 14 |
 
 **SkyTraq PX1125R** (2026-08-19, ~70 dB pad + DC block into RF_IN, TX gain 44-47): Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified.
 
@@ -259,13 +292,22 @@ and re-run it rather than hand-editing this table or the one in `report.html`.
 
 **Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): The outlier, and the reason the slow flight matters. It enforces both limits -- position is withheld while 12-13 satellites stay tracked at ~50 dBHz -- but both edges are badly latent. It is 1.6-8.9 s LATE to close, so on the 15 g boost it published a valid fix at 1334 m/s, two and a half times the limit, which is why its velocity bracket inverts rather than measuring anything. Re-opening is worse: 31 s, 63 s and 134 s across the two flights, and two windows never re-opened at all before the next limit was exceeded, against 0.0-1.5 s for the other three parts. Its RMC date also reads 2007 rather than 2026 -- exactly 1024 weeks, a GPS week-number rollover -- though time-of-day is correct so the measurement is unaffected. Ignores $PCAS01, so it cannot be moved off 9600 baud by that command. Its satellite count also dips on a tight 18 s cycle while the gate is shut -- every satellite blanking its C/N0 field in one epoch and returning within three. Pinned to the receiver, not the bench: the ZED-F9P recorded zero periodic dips on the same files through the same conducted path.
 
+**u-blox NEO-M8T** (2026-08-20, 70 dB pad, TX gain 38): Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for a flight computer and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behaviour is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behaviour. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.
+
 &dagger; marks an inverted bracket: a value that still held a fix sitting above
 one that was withheld. On the F9P that is a 2-3 s closing lag; on the Air530 the
 latency is so large the bracket carries no threshold information at all.
 
-Across the four parts the velocity limit brackets to **(514, 516] m/s** and the
-altitude limit to **80 km**, with no 18 km gate anywhere and both limits always
-independent. What varies enormously is **re-open latency**: under 1.5 s on three
-parts, 31-134 s on the Air530. More parts are planned against the same
-trajectories. To add one: fly `spaceshot` and `gentle_alt`, archive the capture
-and its scenario here, add an entry to `receivers.json`, and regenerate.
+`(dyn model)` marks an altitude ceiling that is **not** an export gate --
+`altitude_gate_cause` in `receivers.json` carries this.
+
+Across the five parts the velocity limit brackets to **(514, 516] m/s** and,
+wherever it is measurable, the altitude limit to **80 km**, with no 18 km gate
+anywhere and both limits always independent. What varies enormously is **re-open
+latency**: under 1.5 s on most parts, 31-134 s on the Air530.
+
+More parts are planned against the same trajectories. To add one: fly
+`spaceshot` and `gentle_alt`, archive the capture and its scenario here, add an
+entry to `receivers.json`, and regenerate. If a part stops publishing at an
+unexpected altitude, run `t2_altramp` and then change the dynamic model before
+believing it is COCOM.

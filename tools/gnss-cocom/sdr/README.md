@@ -410,6 +410,34 @@ Two things to know about this part before reading its numbers:
   back with 862 GGA epochs over 862 s at exactly 1.00 Hz and no bad checksums.
   Check before blaming the wire.
 
+### A u-blox M8 (NEO-M8T): different configuration, and a false gate
+
+**`CFG-VALSET` does not exist before protocol 27.** An M8 answers it with a NAK
+or with nothing, which reads exactly like a wiring fault. `ubx_config.py` now
+reads PROTVER from MON-VER and switches to legacy `CFG-MSG` / `CFG-NAV5`
+automatically; it prints which path it chose.
+
+    ./ubx_config.py -p /dev/cu.usbserial-0001 -b 115200
+
+**Beware a ceiling that is not COCOM.** The NEO-M8T stops publishing position at
+50 km, which is *not* an export gate -- it is the u-blox dynamic model. Airborne
+&lt;4 g is specified at 50,000 m, and measured at 49.80-50.15 km here. The test
+is to change the model rather than the trajectory:
+
+    ./ubx_config.py -b 115200 --dynmodel 0      # portable
+    ./run_radiated.py -s t2_altramp -p auto -b 115200 -x 38
+
+The ceiling moves to ~5 km. An export gate does not track the platform model.
+No u-blox model exceeds 50 km and airborne &lt;4 g is already both the highest
+ceiling and the highest velocity limit, so an M8's true COCOM altitude behaviour
+cannot be measured at all -- the model stops it first. M10 and F9 parts held
+fixes at 68.8 km on the same model, so this is M8-generation behaviour.
+
+The general form of the trap: **a receiver that stops publishing is not
+necessarily a receiver that has hit the export limit.** Dynamic models,
+base-station modes and firmware ceilings all produce the same silence. Change
+the suspected cause and watch whether the threshold moves.
+
 ### Finding the level for a new receiver
 
     ./gain_sweep.py -p /dev/cu.usbmodem101 -s t00_static
