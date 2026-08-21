@@ -35,7 +35,11 @@ V_LIMIT_MPS = 515.0
 ALT_LIMIT_CANDIDATES_M = (18_000.0, 80_000.0)
 
 RATE_HZ = 10.0                    # gps-sdr-sim requires exactly 10 Hz
-MAX_DURATION_S = 600.0            # gps-sdr-sim rebuilt -DUSER_MOTION_SIZE=6000
+# The binary in bin/ reports "dynamic mode max: 1000" and has already produced
+# an 848 s scenario (gentle_alt), so the old 600 s figure here was stale and was
+# rejecting runs the simulator accepts. Keep this in step with `gps-sdr-sim -h`
+# rather than with whatever it was last built as.
+MAX_DURATION_S = 1000.0           # gps-sdr-sim -DUSER_MOTION_SIZE=10000
 
 # Open-sky origin.  Nothing depends on the exact spot; a mid-latitude land
 # location keeps the simulated constellation geometry unremarkable.
@@ -70,6 +74,114 @@ def ramp(t: float, t0: float, t1: float, v0: float, v1: float) -> float:
     return v0 + (v1 - v0) * (t - t0) / (t1 - t0)
 
 
+
+def _stair(t, v0, step, dwell, n):
+    """Staircase in speed: n levels of `dwell` seconds, `step` apart.
+
+    Transitions are ramped over 2 s rather than stepped. A true discontinuity
+    is not merely unphysical, it stresses the tracking loops and can cause a
+    genuine loss of lock in the middle of a dwell -- the one outcome this test
+    cannot distinguish from the gate it is measuring.
+    """
+    edge = 2.0
+    k = min(int(t // dwell), n - 1)
+    frac = t - k * dwell
+    lo = v0 + step * k
+    if k == 0 or frac >= edge:
+        return lo
+    return ramp(frac, 0.0, edge, lo - step, lo)
+
+
+def _stair_climb(t, dwell, n, climb):
+    """Vertical rate that dwells, then climbs briefly to the next level.
+
+    Returns climb rate rather than altitude, because the scenario integrates
+    velocity. Each level holds for `dwell` seconds at zero vertical rate, then
+    climbs at `climb` m/s for exactly as long as the next step needs.
+    """
+    steps_m = [2000.0, 1000.0, 1000.0, 1000.0, 1000.0]     # 76->78->79->80->81->82
+    k = min(int(t // dwell), n - 1)
+    frac = t - k * dwell
+    if k >= len(steps_m):
+        return 0.0
+    climb_s = steps_m[k] / climb
+    hold = dwell - climb_s
+    return 0.0 if frac < hold else climb
+
+
+def _blips(t, lengths, clear_s, v_low, v_high):
+    """Excursions above the limit of the given lengths, separated by clear runs.
+
+    v_low sits well under the velocity limit and v_high well over it, so each
+    excursion is unambiguous, and the clear intervals are long enough for even
+    the slowest recovery observed (134 s) to complete inside one.
+    """
+    edge = 2.0
+    cursor = 0.0
+    for n in lengths:
+        if t < cursor + clear_s:
+            return v_low
+        cursor += clear_s
+        if t < cursor + n:
+            f = t - cursor
+            if f < edge:
+                return ramp(f, 0.0, edge, v_low, v_high)
+            return v_high
+        cursor += n
+    return v_low
+
+
+def windows(samples, limit_fn):
+    """Contiguous [start, end] intervals where limit_fn(sample) holds.
+
+    Emitted so recovery.py and correlate.py can work against these scenarios at
+    all: both key off `blocked_windows`, which only make_flights.py used to
+    write. Without it a staircase reports zero windows and recovery.py has
+    nothing to measure -- which is exactly what the dwell scenarios are for.
+    """
+    out, start = [], None
+    for smp in samples:
+        hit = limit_fn(smp)
+        if hit and start is None:
+            start = smp["t"]
+        elif not hit and start is not None:
+            out.append([start, smp["t"]])
+            start = None
+    if start is not None:
+        out.append([start, samples[-1]["t"]])
+    return out
+
+
+
+def _stair_climb_low(t, dwell, n, climb):
+    """Vertical rate for the 12/14/16/18/20/22 km staircase.
+
+    Separate from _stair_climb because the step sizes differ; sharing one
+    helper with a steps list passed in would read more cleanly but this stays
+    parallel to the scenario above it, where the levels are written out.
+    """
+    steps_m = [2000.0, 2000.0, 2000.0, 2000.0, 2000.0]
+    k = min(int(t // dwell), n - 1)
+    frac = t - k * dwell
+    if k >= len(steps_m):
+        return 0.0
+    climb_s = steps_m[k] / climb
+    hold = dwell - climb_s
+    return 0.0 if frac < hold else climb
+
+
+
+def _stair_climb_vlow(t, dwell, n, climb):
+    """Vertical rate for the 8/9/10/11/12/13 km staircase (1 km steps)."""
+    steps_m = [1000.0] * 5
+    k = min(int(t // dwell), n - 1)
+    frac = t - k * dwell
+    if k >= len(steps_m):
+        return 0.0
+    climb_s = steps_m[k] / climb
+    return 0.0 if frac < dwell - climb_s else climb
+
+
 # --- Scenarios --------------------------------------------------------------
 # Each entry: duration_s, alt0_m, v_east(t), v_up(t), and what it is for.
 # v_east and v_up are in m/s and are integrated at RATE_HZ.
@@ -89,6 +201,88 @@ SCENARIOS = {
         purpose="Stationary warm-up for setting the injection level. Loopable, "
                 "so one file covers a whole gain sweep. Prove a fix here before "
                 "anything else is connected or concluded.",
+    ),
+    # --- Scenarios for a receiver whose gate is LATENT ----------------------
+    # A ramp cannot bracket a threshold that the receiver reacts to slowly. The
+    # Air530 closes its gate 1.6-8.9 s late, and on a 3 g climb the vehicle
+    # spends only ~1 s within +/-15 m/s of the limit, so the lag smears the
+    # bracket by 47-262 m/s: what comes back is the latency, not the threshold.
+    # The fix is to stop ramping and dwell -- hold a speed steady for far longer
+    # than the lag, and the receiver has time to make up its mind at each level.
+    "vel_stair": dict(
+        prologue_s=180.0,
+        duration_s=740.0,
+        alt0_m=5_000.0,
+        v_east=lambda t: _stair(t, 495.0, 5.0, 90.0, 8),
+        v_up=lambda t: 0.0,
+        purpose="Velocity staircase: 90 s dwells at 495-530 m/s in 5 m/s steps, "
+                "at a constant 5 km. Ninety seconds is ten times the worst close "
+                "lag seen on any part, so the first level that blocks IS the "
+                "threshold, bracketed to 5 m/s rather than to the latency.",
+    ),
+    # Same trick on the other axis. The Air530 has no measured altitude gate at
+    # all -- no clean edge ever appeared on a flight profile -- so this is the
+    # only way to get one. Speed is held at ~150 m/s, well clear of the velocity
+    # limit, and the climbs between dwells are brief.
+    # The Air530 turned out to have an altitude ceiling of its own, somewhere
+    # near 10-16 km on flight profiles -- close enough to 18 km (60,000 ft, the
+    # commonly-quoted COCOM altitude) to be worth bracketing properly. alt_stair
+    # dwells at 76-82 km and is entirely above it, so it cannot see this at all.
+    # Same dwell trick, an order of magnitude lower.
+    "alt_stair_low": dict(
+        prologue_s=180.0,
+        duration_s=560.0,
+        alt0_m=12_000.0,
+        v_east=lambda t: 120.0,
+        v_up=lambda t: _stair_climb_low(t, 90.0, 6, 150.0),
+        purpose="Low altitude staircase: 90 s dwells at 12/14/16/18/20/22 km "
+                "with speed held near 120 m/s. Brackets an altitude gate in the "
+                "18 km region, which no ramp can do on a part this latent.",
+    ),
+    # alt_stair_low found nothing above 12 km, and the flights put the highest
+    # Air530 fix at 10.50 km, so the ceiling sits in a 1.5 km window. One more
+    # octave down, in 1 km steps, to close it.
+    "alt_stair_vlow": dict(
+        prologue_s=180.0,
+        duration_s=560.0,
+        alt0_m=8_000.0,
+        v_east=lambda t: 120.0,
+        v_up=lambda t: _stair_climb_vlow(t, 90.0, 6, 100.0),
+        purpose="Very low altitude staircase: 90 s dwells at 8/9/10/11/12/13 km. "
+                "Closes the bracket on an altitude ceiling that the flight "
+                "profiles could only place somewhere between 10.5 and 12 km.",
+    ),
+    "alt_stair": dict(
+        prologue_s=180.0,
+        duration_s=560.0,
+        alt0_m=76_000.0,
+        v_east=lambda t: 150.0,
+        v_up=lambda t: _stair_climb(t, 90.0, 6, 200.0),
+        purpose="Altitude staircase: 90 s dwells at 76/78/79/80/81/82 km with "
+                "speed held near 150 m/s. Brackets an altitude gate on a part "
+                "too latent for a ramp to measure.",
+    ),
+    # Does the gate re-open slowly, or does the receiver drop its navigation
+    # state when gated and have to converge again? The Air530's recoveries were
+    # 31, 63 and 134 s and its WARM TTFF is ~40 s, which is suspiciously close.
+    # Excursions of very different lengths separate the two: a fixed
+    # re-convergence cost does not care how long the block lasted, and a slow
+    # gate should.
+    "blockdur": dict(
+        prologue_s=180.0,
+        duration_s=805.0,
+        alt0_m=5_000.0,
+        # 5/30/150 s spans a 30x range of block lengths, and 155 s of clear
+        # after each exceeds the longest recovery yet observed (134 s), so a
+        # slow recovery has room to finish inside its own interval instead of
+        # running into the next excursion. Four blips would have overrun
+        # gps-sdr-sim's 1000 s dynamic-mode cap and silently truncated the last.
+        v_east=lambda t: _blips(t, [5.0, 30.0, 150.0], 155.0, 300.0, 560.0),
+        v_up=lambda t: 0.0,
+        purpose="Four excursions over the velocity limit lasting 5, 15, 45 and "
+                "120 s, each followed by 150 s comfortably clear. If recovery "
+                "time is flat regardless of block length the receiver is "
+                "re-converging, not holding a gate shut.",
     ),
     "t0_baseline": dict(
         prologue_s=120.0,
@@ -286,6 +480,13 @@ def main() -> int:
                         altitude_candidates_m=list(ALT_LIMIT_CANDIDATES_M)),
             crossings=cx,
             exceeds=isolation(cx),
+            velocity_windows=windows(
+                built["truth"], lambda x: x["speed_mps"] > V_LIMIT_MPS),
+            altitude_80km_windows=windows(
+                built["truth"], lambda x: x["alt_m"] > 80_000.0),
+            blocked_windows=windows(
+                built["truth"], lambda x: x["speed_mps"] > V_LIMIT_MPS
+                or x["alt_m"] > 80_000.0),
             truth=built["truth"],
         )
         (args.outdir / f"{name}.json").write_text(json.dumps(meta, indent=1))

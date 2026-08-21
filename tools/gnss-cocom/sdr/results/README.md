@@ -183,61 +183,51 @@ Velocity edges bracket **(514, 518] m/s**. The altitude bracket *inverts* --
 part lags **+2.3 s and +3.3 s on closing** the altitude gate, 400-600 m of
 overshoot at climb speed. Its descending edges are crisp and agree at ~80.1 km.
 
-## Air530 / AT6558R, conducted (2026-08-20)
+## Air530 / AT6558R, conducted (2026-08-20, re-tested with dwell scenarios)
 
-GPS + BeiDou, **NMEA 0183 at 9600**, on a CP2102 USB-UART through the same 70 dB
-pad. TX gain **32**. No configuration needed or possible: it ignores `$PCAS01`,
-so it cannot be moved off 9600 by that command. NMEA is sufficient here -- GGA
-reporting no fix while GSV still lists satellites *is* the BLOCKED/NO_LOCK
-distinction, and ground truth comes from the injected trajectory, not the
-receiver's own speed.
+GPS + BeiDou, NMEA 0183 at 9600 on a CP2102, 70 dB pad, TX gain 32.
 
-| Capture | Boost | Result |
-|---|---|---|
-| `air530_spaceshot` | 15 g | w1/w2 never re-opened; w3 took **134.1 s**. Held a fix at **1334 m/s** before closing |
-| `air530_gentle_alt` | 3 g | w1/w2 never re-opened; w3 took **62.9 s**. Blocked for 76% of the flight |
-| `air530_gentle_alt_coldrun` | 3 g | first attempt, kept for the record: acquired only at t~200 s, so its recovery numbers are contaminated |
+**The first write-up of this part was wrong in every particular and the dwell
+scenarios corrected it.** It was recorded as having a latent COCOM velocity gate
+smeared over 538-1334 m/s with recoveries of 31-134 s. It has no velocity gate at
+all, and an altitude ceiling far below any export limit.
 
-**This part is the outlier.** It enforces both limits, and the signature is the
-usual one -- position withheld while a median of 12-13 satellites stay tracked at
-~50 dBHz. But both gate edges are latent. It closes **1.6-8.9 s late**, which on
-a 15 g boost means publishing a valid fix at two and a half times the limit, so
-its velocity bracket measures its latency rather than a threshold. And it
-re-opens **31-134 s** late, twice not at all before the next exceedance, against
-0.0-1.5 s everywhere else.
+Ramps cannot measure a receiver that reacts slowly: on a 3 g climb the vehicle
+spends ~1 s within +/-15 m/s of the limit, so a few seconds of lag smears the
+answer by hundreds of m/s and what comes back is the latency. Dwelling fixes it.
 
-**An 18 s periodic dip, and why it is not the bench.** The Air530's satellite
-count dips hard and regularly while the gate is shut -- median spacing 18 s on
-both flights (stdev 6 s and 11 s). Three things locate it inside the receiver:
+| Capture | What it shows |
+|---|---|
+| `air530_vel_stair` | 90 s dwells at 495-530 m/s, 5 km: **100% fix at every level** |
+| `air530_t1_velramp` | 0-900 m/s at 5 km: **held a fix throughout**, reported 899 m/s |
+| `air530_blockdur` | **fix held at 560 m/s for 148 continuous seconds** |
+| `air530_alt_stair_vlow` | 90 s dwells: 100% at 8 km, 97% at 9, 91% at 10, **0% at 11/12/13** |
+| `air530_alt_stair_low` | 90 s dwells at 12-22 km: zero fixes anywhere |
+| `air530_alt_stair` | 76-82 km: 726 epochs, zero fixes, median 10 satellites |
+| `air530_t2_altramp` | 354 m/s constant: fix at **9.90 km**, blocked at **10.25 km** |
+| `air530_t3a_both_18km` | 394 m/s: fix at **10.10 km**, blocked at **10.44 km** |
 
-1. The **ZED-F9P is a control**: same scenario files, same 70 dB conducted path,
-   **zero** periodic dips. Its only blank epochs are three at t=850-862 s on
-   `gentle_alt`, after the 848 s file ends -- the transmitter stopping.
-2. **All twelve satellites blank in the same epoch** and return together within
-   three. Attenuation is graded; this is not. The receiver emits GSV sentences
-   with an *empty* C/N0 field, which is a reporting decision, not a signal level.
-3. It occurs **only while position is withheld** -- t=197-437 s on `spaceshot`,
-   nothing before launch and nothing after the fix returns at 560 s.
+**No velocity gate. An altitude ceiling at 10-11 km, which is not COCOM** -- it
+sits below both candidate export altitudes, and `alt_stair_vlow` (13 km,
+156 m/s) crosses no export limit at all.
 
-18 s is three GPS subframes (the ephemeris span, subframes 1-3), so the part may
-re-validate ephemeris on that cadence and blank C/N0 while it does. That is a
-hypothesis; the three observations stand without it. Figure:
-`results/figures/air530_dip_periodicity.svg`.
+The flights misled because a rocket crosses 10 km fast, so the ceiling fires at
+almost the same moment a velocity limit would. The tell was in the data:
+on `spaceshot` the fix stops while speed is **falling**, 1334 -> 1304 m/s, as
+altitude rises through 9.83 km. No velocity gate fires on decreasing speed.
+The "recoveries" were the vehicle descending back through the ceiling, and the
+two windows that "never recovered" clear at 68-80 km, far above it.
 
-This mattered: it is exactly what made `recovery.py` misreport this receiver.
+**The 18 s C/N0 blanking** is confined to intervals where the receiver is
+withholding -- 19/677 epochs while withholding vs 0/170 while publishing on
+`gentle_alt`; 26/413 vs 4/419 on `spaceshot`; and on `blockdur`, where it holds a
+fix almost throughout, 2 events in 988 epochs. Note this cannot be measured with
+`verdict()`: a blank epoch has every C/N0 at zero, so its satellite count is zero
+and the verdict is forced to NO_LOCK. Use the fix flag (`blanking.py` does).
 
-Two things this run fixed in the tooling, both of which had been quietly wrong:
-
-* `recovery.py` judged "was the receiver starved?" on the **minimum** satellite
-  count across the wait. The Air530 drops a single GSV set about every 70 s, and
-  that one transient epoch pulled the minimum to 1 and made the tool dismiss a
-  real slow gate as "re-acquisition time, not the gate". It now judges on the
-  median and reports what fraction of the wait was actually starved. Both u-blox
-  parts reproduce their previous latencies exactly.
-* `align_start.py` only parsed UBX. It now reads NMEA GGA too, working in
-  seconds-of-day so one routine serves every receiver. Note the Air530's RMC date
-  reads **2007** rather than 2026 -- exactly 1024 weeks, a GPS week-number
-  rollover -- so pass `-t` explicitly rather than trusting the date it reports.
+For a flight computer this is the worst of the five: it stops publishing at
+10 km, below apogee for most high-power flights, for reasons unrelated to export
+control and with no documented threshold to design around.
 
 ## u-blox NEO-M8T, conducted (2026-08-20)
 
@@ -281,7 +271,7 @@ and re-run it rather than hand-editing this table or the one in `report.html`.
 | SkyTraq PX1125R | L1 + L5 | conducted | 9 | 510-517 m/s | 79.90-80.20 km | none | independent | 0.0-1.5 s | 2 / 7 |
 | u-blox SAM-M10Q | L1 (GPS/GAL/BDS/GLO) | radiated, Faraday cage | 2 | 514-516 m/s | ~80.16 km | none | independent | 0.0-1.1 s | 4 / 13 |
 | u-blox ZED-F9P (ArduSimple) | L1 + L2 (L1 used here) | conducted | 2 | 514-518 m/s | 80.22-80.48 km † | none | independent | 0.1-1.0 s | 6 / 13 |
-| Air530 (AT6558R) | L1 (GPS + BeiDou) | conducted | 2 | 538-1334 m/s † | -- | none | independent | 31.0-134.1 s | 0 / 12 |
+| Air530 (AT6558R) | L1 (GPS + BeiDou) | conducted | 9 | none to 900 m/s | 10.00-11.00 km (not COCOM) | none | n/a -- no velocity gate | n/a | 6 / 12 |
 | u-blox NEO-M8T | L1 (GPS/GLO/GAL/BDS) | conducted | 3 | 510-524 m/s | 49.80-50.15 km (dyn model) | none | independent | 0.9-3.1 s | 8 / 14 |
 
 **SkyTraq PX1125R** (2026-08-19, ~70 dB pad + DC block into RF_IN, TX gain 44-47): Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified.
@@ -290,7 +280,7 @@ and re-run it rather than hand-editing this table or the one in `report.html`.
 
 **u-blox ZED-F9P (ArduSimple)** (2026-08-20, 70 dB pad, TX gain 38): Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. Uniquely among the three parts it is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. Its descending edges are crisp and agree at ~80.1 km.
 
-**Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): The outlier, and the reason the slow flight matters. It enforces both limits -- position is withheld while 12-13 satellites stay tracked at ~50 dBHz -- but both edges are badly latent. It is 1.6-8.9 s LATE to close, so on the 15 g boost it published a valid fix at 1334 m/s, two and a half times the limit, which is why its velocity bracket inverts rather than measuring anything. Re-opening is worse: 31 s, 63 s and 134 s across the two flights, and two windows never re-opened at all before the next limit was exceeded, against 0.0-1.5 s for the other three parts. Its RMC date also reads 2007 rather than 2026 -- exactly 1024 weeks, a GPS week-number rollover -- though time-of-day is correct so the measurement is unaffected. Ignores $PCAS01, so it cannot be moved off 9600 baud by that command. Its satellite count also dips on a tight 18 s cycle while the gate is shut -- every satellite blanking its C/N0 field in one epoch and returning within three. Pinned to the receiver, not the bench: the ZED-F9P recorded zero periodic dips on the same files through the same conducted path.
+**Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): EVERYTHING FIRST RECORDED FOR THIS PART WAS WRONG, and dwell tests corrected it. It has NO velocity gate: it held a fix to 900 m/s at 5 km on t1_velramp (reporting 899), and 100% of epochs at every 90 s dwell from 495 to 530 m/s on vel_stair. What it has is an ALTITUDE ceiling at 10-11 km -- 100% fix at 8 km, 91% at 10 km, 0% at 11/12/13 km on 90 s dwells, and 9.90->10.25 km on a 354 m/s ramp with 11 satellites either side. That ceiling is BELOW every candidate COCOM altitude (18 km and 80 km), so it is not an export gate at all. The flight profiles read as a latent velocity gate only because they cross 10 km at high speed: the spaceshot transition happens while speed is DECREASING (1334 -> 1304 m/s) as altitude rises through 9.83 -> 11.15 km, which no velocity gate can do. Re-open latency is not defined for this part because there is no COCOM gate to re-open: on blockdur it held a fix at 560 m/s for 148 continuous seconds, dropping only 1 s at the sharp 130 m/s^2 transition. The 31-134 s 'recoveries' seen on flights were simply the vehicle descending back through the 10-11 km ceiling. The 18 s C/N0 blanking accompanies withholding (19/677 epochs while withholding vs 0/170 while publishing on gentle_alt).
 
 **u-blox NEO-M8T** (2026-08-20, 70 dB pad, TX gain 38): Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for a flight computer and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behaviour is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behaviour. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.
 
@@ -301,8 +291,10 @@ latency is so large the bracket carries no threshold information at all.
 `(dyn model)` marks an altitude ceiling that is **not** an export gate --
 `altitude_gate_cause` in `receivers.json` carries this.
 
-Across the five parts the velocity limit brackets to **(514, 516] m/s** and,
-wherever it is measurable, the altitude limit to **80 km**, with no 18 km gate
+Across the four parts that implement a velocity gate at all the limit brackets
+to **(514, 516] m/s**, and wherever an altitude gate is genuinely COCOM it sits
+at **80 km**. The Air530 implements neither: no velocity gate to 900 m/s, and a
+10-11 km ceiling that is not an export limit, with no 18 km gate
 anywhere and both limits always independent. What varies enormously is **re-open
 latency**: under 1.5 s on most parts, 31-134 s on the Air530.
 

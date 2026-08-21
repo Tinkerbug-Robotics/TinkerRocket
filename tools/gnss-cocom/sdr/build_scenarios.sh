@@ -141,14 +141,18 @@ for name in "${names[@]}"; do
   # not fail loudly -- correlate.py still prints a table, just aligned against
   # the wrong part of the trajectory. align_start.py can recover it from a
   # capture, but it should not have to.
-  python3 - "$HERE/$SCENDIR/$name.json" "$START" <<'PYEOF' || true
+  # SCENDIR is made absolute above, so it must NOT be prefixed with $HERE --
+  # doing so produced a doubled path, the exists() guard skipped silently and
+  # "|| true" hid it, which is the very failure this block exists to prevent.
+  python3 - "$SCENDIR/$name.json" "$START" <<'PYEOF'
 import json, sys
 from pathlib import Path
 p = Path(sys.argv[1])
-if p.exists():
-    m = json.loads(p.read_text())
-    m["start_time"] = sys.argv[2]
-    p.write_text(json.dumps(m, indent=1) + "\n")
+if not p.exists():
+    raise SystemExit(f"no scenario sidecar at {p}; start time NOT recorded")
+m = json.loads(p.read_text())
+m["start_time"] = sys.argv[2]
+p.write_text(json.dumps(m, indent=1) + "\n")
 PYEOF
 
   bytes=$(wc -c < "$out" | tr -d ' ')

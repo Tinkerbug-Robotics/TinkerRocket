@@ -30,6 +30,7 @@ so a true AND gate essentially never blanks in flight.
 | `gain_sweep.py` | Finds the working TX gain for a receiver, ranking satellites over C/N&#8320; |
 | `serial_probe.py` | Diagnoses a silent UART: baud sweep plus an adapter loopback test |
 | `air530_config.py` | Raises an Air530/AT6558R off its 9600 default via `$PCAS01` |
+| `blanking.py` | Tests whether C/N&#8320; blanking tracks the gate or free-runs |
 
 ## Quick start
 
@@ -437,6 +438,37 @@ The general form of the trap: **a receiver that stops publishing is not
 necessarily a receiver that has hit the export limit.** Dynamic models,
 base-station modes and firmware ceilings all produce the same silence. Change
 the suspected cause and watch whether the threshold moves.
+
+### When a ramp cannot measure the receiver: dwell instead
+
+Every original scenario here is a ramp, and a ramp measures a slow receiver's
+**latency**, not its threshold. On a 3 g climb the vehicle spends about one
+second within +/-15 m/s of the velocity limit; a receiver that reacts a few
+seconds late smears the bracket by hundreds of m/s. The Air530 came back as
+"538-1334 m/s" that way, which is not a threshold at all.
+
+The dwell scenarios hold a value steady for far longer than any plausible lag:
+
+    vel_stair       90 s dwells at 495-530 m/s, constant 5 km
+    alt_stair       90 s dwells at 76-82 km
+    alt_stair_low   90 s dwells at 12-22 km
+    alt_stair_vlow  90 s dwells at 8-13 km
+    blockdur        excursions of 5/30/150 s, each followed by 155 s clear
+
+`blockdur` separates a slow gate from a receiver that drops navigation state
+when gated: a fixed re-convergence cost does not care how long the block lasted,
+a slow gate should.
+
+**Watch for a ceiling that is not COCOM.** Two of five parts stop publishing
+below the export limit for unrelated reasons -- the NEO-M8T at 50 km (u-blox
+dynamic model) and the Air530 at 10-11 km. Both look exactly like a gate. Change
+the suspected cause, or dwell below and above the suspected ceiling, before
+recording a number as COCOM. `alt_stair_vlow` deliberately crosses **no** export
+limit (13 km, 156 m/s), so anything that blocks during it provably is not one.
+
+Note `align_start.py` cannot align a constant-altitude scenario -- there is no
+altitude signature to match, and it will say so rather than return a confident
+wrong answer. Use the `start_time` the build records in the scenario JSON.
 
 ### Finding the level for a new receiver
 

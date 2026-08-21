@@ -111,6 +111,17 @@ def align(cap: Path, scenario: Path, search_s: float = 600.0):
     if len(fx) < 20:
         return None, f"only {len(fx)} valid fixes in {cap.name}"
 
+    # Alignment works by matching reported altitude to injected altitude, so a
+    # scenario that holds one altitude throughout carries no signature to match
+    # and every candidate start scores about the same. blockdur sits at a
+    # constant 5 km and produced a confident-looking answer 6 minutes wrong.
+    alts = [s["alt_m"] for s in meta["truth"]]
+    if max(alts) - min(alts) < 500.0:
+        return None, (f"{meta['scenario']} varies by only "
+                      f"{max(alts)-min(alts):.0f} m in altitude -- there is no "
+                      f"signature to align against. Use the start time the "
+                      f"build recorded in the scenario JSON.")
+
     first_tow = fx[0][0]
     dur = meta["duration_s"]
     best = None

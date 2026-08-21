@@ -45,6 +45,21 @@ def bracket(lo, hi, unit, fmt="{:.0f}"):
     return f"{fmt.format(lo)}-{fmt.format(hi)} {unit}"
 
 
+def vel_cell(r):
+    """Velocity gate, or a bound when the part has none.
+
+    A receiver that never withholds is not a missing measurement, it is a
+    result -- the Air530 held a fix to 900 m/s, 1.75x the export limit -- and
+    printing "--" would read as untested. `velocity_gate_present: false` makes
+    it say so.
+    """
+    if r.get("velocity_gate_present") is False:
+        v = r.get("velocity_fix_max_mps")
+        return f"none to {v:.0f} m/s" if v else "none observed"
+    return bracket(r.get("velocity_fix_max_mps"),
+                   r.get("velocity_blocked_min_mps"), "m/s")
+
+
 def alt_cell(r):
     """Altitude gate, with its cause when that is not the export limit.
 
@@ -72,11 +87,12 @@ def rows(d):
             "part": r["part"],
             "path": r["path"],
             "runs": r["runs"],
-            "vel": bracket(r["velocity_fix_max_mps"], r["velocity_blocked_min_mps"], "m/s"),
+            "vel": vel_cell(r),
             "alt": alt_cell(r),
             "g18": "none" if not r["gate_18km"] else "yes",
             "comb": r["combination"],
-            "rec": f"{r['recovery_s'][0]:.1f}-{r['recovery_s'][1]:.1f} s",
+            "rec": (f"{r['recovery_s'][0]:.1f}-{r['recovery_s'][1]:.1f} s"
+                    if r.get("recovery_s") else "n/a"),
             "sats": f"{r['sats_min']} / {r['sats_median']}",
             "notes": r.get("notes", ""),
             "bands": r["bands"],
