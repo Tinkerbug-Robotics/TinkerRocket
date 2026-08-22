@@ -36,7 +36,8 @@ variable at a time.
 | `serial_probe.py` | Diagnoses a silent UART: baud sweep plus an adapter loopback test |
 | `air530_config.py` | Raises an Air530/AT6558R off its 9600 default via `$PCAS01` |
 | `blanking.py` | Tests whether C/N&#8320; blanking tracks the gate or free-runs |
-| `build_report.py` | Regenerates `report.html` from `receivers.json` and the archived figures |
+| `report_text.html` | **The report's prose — edit this**, then run `build_report.py` |
+| `build_report.py` | Assembles `report.html` from the text, `receivers.json` and the figures |
 | `make_block_diagram.py` | Draws the rig block diagram used in the report |
 
 ## Quick start
@@ -445,6 +446,27 @@ The general form of the trap: **a receiver that stops publishing is not
 necessarily a receiver that has hit the export limit.** Dynamic models,
 base-station modes and firmware ceilings all produce the same silence. Change
 the suspected cause and watch whether the threshold moves.
+
+### Editing the report
+
+`report.html` is **generated — do not edit it**, it is overwritten on every
+build. The words live in `report_text.html`:
+
+    $EDITOR report_text.html
+    ./build_report.py
+
+That file is read as plain text and never string-formatted, so braces, quotes
+and percent signs in the copy need no escaping. `{{PLACEHOLDERS}}` are filled
+from `results/receivers.json` and `results/figures/` — leave them in place and
+everything around them is free text. Per-receiver blurbs sit at the bottom
+between `<!--#blurb id-->` markers.
+
+`./build_report.py --check` verifies the inputs without writing, and reports a
+placeholder that has been deleted, an unknown one, or a figure that is
+referenced but missing.
+
+Measured numbers are generated from `receivers.json`, so a figure typed into the
+prose will not stay in step with the data — change the JSON instead.
 
 ### When a ramp cannot measure the receiver: dwell instead
 

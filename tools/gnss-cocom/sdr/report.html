@@ -281,7 +281,6 @@
   }
   footer a { color: var(--ink-2); }
 </style>
-
 <div class="page">
 
   <header class="masthead">
@@ -548,8 +547,7 @@
 
     <div class="prose">
       <h3>SkyTraq PX1125R</h3>
-      <p class="note">L1 + L5 &middot; SkyTraq binary &middot; conducted &middot;
-        ~70 dB pad + DC block into RF_IN, TX gain 44-47 &middot; 9 run(s)</p>
+      <p class="note">SkyTraq binary &middot; conducted &middot; ~70 dB pad + DC block into RF_IN, TX gain 44-47</p>
       <p>Textbook behaviour: both export limits enforced independently, velocity at 510&ndash;517&nbsp;m/s and altitude at 80&nbsp;km, re-opening within 1.5&nbsp;s whenever four or more satellites were held.</p>
       <p><strong>Velocity gate</strong> 510-517 m/s &nbsp;&middot;&nbsp;
          <strong>Altitude gate</strong> 79.90-80.20 km &nbsp;&middot;&nbsp;
@@ -2053,8 +2051,7 @@
 
     <div class="prose">
       <h3>u-blox SAM-M10Q</h3>
-      <p class="note">L1 (GPS/GAL/BDS/GLO) &middot; UBX &middot; radiated, Faraday cage &middot;
-        100 dB pad, L1 quarter-wave, TX gain 12 &middot; 2 run(s)</p>
+      <p class="note">UBX &middot; radiated, Faraday cage &middot; 100 dB pad, L1 quarter-wave, TX gain 12</p>
       <p>The flight computer's own receiver, and the tightest data on the bench: never fewer than four satellites in either flight, so every withheld epoch is unambiguously the gate.</p>
       <p><strong>Velocity gate</strong> 514-516 m/s &nbsp;&middot;&nbsp;
          <strong>Altitude gate</strong> ~80.16 km &nbsp;&middot;&nbsp;
@@ -3532,8 +3529,7 @@
 
     <div class="prose">
       <h3>u-blox ZED-F9P (ArduSimple)</h3>
-      <p class="note">L1 + L2 (L1 used here) &middot; UBX &middot; conducted &middot;
-        70 dB pad, TX gain 38 &middot; 2 run(s)</p>
+      <p class="note">UBX &middot; conducted &middot; 70 dB pad, TX gain 38</p>
       <p>Same thresholds as the others, but 2&ndash;3&nbsp;s slow to <em>close</em> the altitude gate &mdash; 400&ndash;600&nbsp;m of overshoot above 80&nbsp;km with position still being published.</p>
       <p><strong>Velocity gate</strong> 514-518 m/s &nbsp;&middot;&nbsp;
          <strong>Altitude gate</strong> 80.22-80.48 km &nbsp;&middot;&nbsp;
@@ -5060,8 +5056,7 @@
 
     <div class="prose">
       <h3>u-blox NEO-M8T</h3>
-      <p class="note">L1 (GPS/GLO/GAL/BDS) &middot; UBX @ 115200 &middot; conducted &middot;
-        70 dB pad, TX gain 38 &middot; 3 run(s)</p>
+      <p class="note">UBX @ 115200 &middot; conducted &middot; 70 dB pad, TX gain 38</p>
       <p>Velocity gate normal at 510&ndash;524&nbsp;m/s, but it stops publishing at 50&nbsp;km &mdash; the u-blox dynamic-model ceiling, not an export limit. Its true altitude behaviour is therefore unmeasurable.</p>
       <p><strong>Velocity gate</strong> 510-524 m/s &nbsp;&middot;&nbsp;
          <strong>Altitude gate</strong> 49.80-50.15 km <em>(dynamic model)</em> &nbsp;&middot;&nbsp;
@@ -6552,8 +6547,7 @@
 
     <div class="prose">
       <h3>Air530 (AT6558R)</h3>
-      <p class="note">L1 (GPS + BeiDou) &middot; NMEA 0183 @ 9600 &middot; conducted &middot;
-        70 dB pad, TX gain 32 &middot; 9 run(s)</p>
+      <p class="note">NMEA 0183 @ 9600 &middot; conducted &middot; 70 dB pad, TX gain 32</p>
       <p>The outlier. <strong>No velocity gate at all</strong>, and it stops publishing at 10&nbsp;km &mdash; below every candidate export altitude, and below apogee for most high-power flights.</p>
       <p><strong>Velocity gate</strong> none to 900 m/s &nbsp;&middot;&nbsp;
          <strong>Altitude gate</strong> 10.00-11.00 km <em>(not COCOM)</em> &nbsp;&middot;&nbsp;
