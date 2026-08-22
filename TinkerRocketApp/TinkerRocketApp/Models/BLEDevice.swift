@@ -1474,6 +1474,23 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
     }
 
+#if DEBUG
+    // Test seam (#832). Production always enters through downloadFile(), which
+    // needs a live characteristic, so the chunk handler had no reachable entry
+    // point from a test — which is why nothing covered it. DEBUG-only, so it
+    // cannot be called from a shipped build.
+    func beginDownloadForTesting(filename: String, completion: @escaping (URL?) -> Void) {
+        downloadingFilename = filename
+        downloadedData = Data()
+        downloadCompletionHandler = completion
+        isDownloading = true
+        downloadProgress = 0.0
+        downloadExpectedSize = Int(files.first(where: { $0.name == filename })?.size ?? 0)
+    }
+
+    func handleFileChunkForTesting(_ data: Data) { handleFileChunk(data) }
+#endif
+
     // MARK: - File chunk handling (private)
 
     private func handleFileChunk(_ data: Data) {
@@ -1499,9 +1516,30 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
 
-        if length > 0 && data.count >= 7 + Int(length) {
-            let chunkData = data.subdata(in: 7..<(7 + Int(length)))
-            downloadedData.append(chunkData)
+        // #832: the offset field was parsed and then used only in a debug
+        // print, so chunks were appended blindly. A notification dropped after
+        // the peripheral queued it — the exact residual case the firmware's
+        // redundant EOF (#524) exists to compensate for — left a silent hole
+        // with no gap detection, and the file was saved as complete.
+        //
+        // On a data chunk the offset IS the position this data belongs at, so
+        // contiguity is free: anything other than "exactly where we are" means
+        // a frame went missing.
+        if length > 0 {
+            guard data.count >= 7 + Int(length) else {
+                // A frame shorter than its own length header used to be
+                // dropped silently, leaving a hole indistinguishable from a
+                // clean transfer.
+                print("[DOWNLOAD] short frame: len=\(length) but \(data.count) bytes — failing")
+                failDownload()
+                return
+            }
+            guard Int(offset) == downloadedData.count else {
+                print("[DOWNLOAD] GAP: chunk at offset \(offset), expected \(downloadedData.count) — failing")
+                failDownload()
+                return
+            }
+            downloadedData.append(data.subdata(in: 7..<(7 + Int(length))))
         }
         let received = downloadedData.count
         let expectedSize = downloadExpectedSize
@@ -1518,6 +1556,16 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if isEOF {
             downloadStallTimer?.invalidate()
             downloadStallTimer = nil
+            // #832: the EOF frame carries the device's own bytes_sent in its
+            // offset field (out_computer/main.cpp, base_station/main.cpp), so
+            // the app is handed the authoritative total for free and used to
+            // throw it away. A mismatch means we are missing bytes the device
+            // believes it sent.
+            if Int(offset) != received {
+                print("[DOWNLOAD] EOF says \(offset) bytes, have \(received) — failing")
+                failDownload()
+                return
+            }
             completeDownload(fromStallTimer: false)
         } else {
             resetDownloadStallTimer()
@@ -1554,7 +1602,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             downloadCompletionHandler?(nil)
             return
         }
-        if fromStallTimer && downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize {
+        // #832: this shortfall check used to be gated on `fromStallTimer`, so
+        // the EOF path — the common one — wrote whatever it had and reported
+        // success. The listing's size is just as authoritative on either path.
+        if downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize {
             let handler = downloadCompletionHandler
             downloadingFilename = nil
             downloadedData = Data()
@@ -1639,10 +1690,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func getDownloadState(for filename: String) -> DownloadState {
         if isBaseStation {
             if FileCache.shared.isDirectCSVCached(filename) { return .completed }
-        } else {
-            if let deviceFile = files.first(where: { $0.name == filename }),
-               FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
+        } else if let deviceFile = files.first(where: { $0.name == filename }) {
+            // #832: this comparison was a fast path only — on a size MISMATCH
+            // it fell through to downloadStates, which downloadAndCacheFlight
+            // had already written .completed into. The one place that knows
+            // the true size failed OPEN, showing a green check on a truncated
+            // file and disabling the download button (downloadButtonDisabled
+            // returns true for .completed), so the operator could not re-pull
+            // the log in that session.
+            if FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
                 return .completed
+            }
+            // Cached but the wrong size: treat as not downloaded so it can be
+            // retried, rather than trusting a stale .completed.
+            if FileCache.shared.isFlightCached(filename) {
+                return .notDownloaded
             }
         }
         return downloadStates[filename] ?? .notDownloaded

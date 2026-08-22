@@ -268,6 +268,15 @@ nonisolated class FileCache {
         // Copy to cache
         try FileManager.default.copyItem(at: sourceURL, to: destURL)
 
+        // #832: the CSV is DERIVED from this binary, and generateAndCacheCSV
+        // returns a cached CSV before it ever looks at the binary it was
+        // handed.  Without this, re-downloading a file that came through
+        // truncated the first time overwrote the binary and then re-served the
+        // truncated CSV — the retry looked like it worked and changed nothing.
+        if let staleCSV = getCachedCSV(for: binaryFilename) {
+            try? FileManager.default.removeItem(at: staleCSV)
+        }
+
         return destURL
     }
 
