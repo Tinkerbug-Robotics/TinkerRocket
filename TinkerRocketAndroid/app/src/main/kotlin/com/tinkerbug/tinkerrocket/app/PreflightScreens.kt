@@ -43,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
@@ -129,11 +130,14 @@ fun PreflightMasterScreen(
                         canMoveUp = idx > 0,
                         canMoveDown = idx < master.items.lastIndex,
                         onClick = { editing = item },
+                        // Id-addressed moves: the tap executes later on the
+                        // fleet thread, where a captured index could point at
+                        // a different row — the store resolves the id then.
                         onMoveUp = {
-                            fleetScope.launch { preflight.moveMasterItem(idx, idx - 1) }
+                            fleetScope.launch { preflight.moveMasterItem(item.id, -1) }
                         },
                         onMoveDown = {
-                            fleetScope.launch { preflight.moveMasterItem(idx, idx + 1) }
+                            fleetScope.launch { preflight.moveMasterItem(item.id, +1) }
                         },
                         onDelete = {
                             fleetScope.launch { preflight.deleteMasterItem(item.id) }
@@ -217,7 +221,10 @@ fun PreflightRocketConfigScreen(
     val master by preflight.master.collectAsState()
     val configs by preflight.configs.collectAsState()
     val config = configs[profile.id]
+    val effective = PreflightChecklist.effectiveItems(master, config)
+    val masterIds = master.items.map { it.id }.toSet()
     val disabled = config?.disabledMasterIds?.toSet().orEmpty()
+    val excludedMaster = master.items.filter { it.id in disabled }
     val extras = config?.extraItems.orEmpty()
 
     var editing by remember { mutableStateOf<PreflightItem?>(null) }
@@ -232,66 +239,82 @@ fun PreflightRocketConfigScreen(
             Text(profile.name, style = MaterialTheme.typography.titleMedium)
         }
 
+        // The rocket's EFFECTIVE list in run order — exactly what the run
+        // screen walks, so the order edited here is the order flown.
+        // Master steps and extras interleave freely via the arrows (the
+        // store materializes the order into orderedIds on the first move).
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Master steps", style = MaterialTheme.typography.titleMedium)
+                Text("Steps", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Switch off master steps that don't apply to “${profile.name}”. " +
-                        "Master steps are edited on the previous screen and update every rocket.",
+                    "“${profile.name}”'s checklist in run order — reorder with the " +
+                        "arrows. Master steps (switch to exclude) are edited on the " +
+                        "previous screen and update every rocket; steps added here " +
+                        "belong to this rocket only.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                master.items.forEach { item ->
+                if (effective.isEmpty()) {
+                    Text(
+                        "No steps yet — add one below, or add master steps on the " +
+                            "previous screen.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                effective.forEachIndexed { idx, item ->
+                    val isMaster = item.id in masterIds
                     Row(
-                        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        Modifier.fillMaxWidth().padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        PreflightItemLabel(item, Modifier.weight(1f))
-                        Switch(
-                            checked = item.id !in disabled,
-                            onCheckedChange = { enabled ->
-                                fleetScope.launch {
-                                    preflight.setMasterItem(item.id, enabled, profile.id)
-                                }
+                        PreflightItemLabel(
+                            item,
+                            Modifier.weight(1f).let { m ->
+                                if (isMaster) m else m.clickable { editing = item }
                             },
                         )
+                        // Id-addressed moves (see moveMasterItem note): the
+                        // fleet thread resolves the tapped row's CURRENT
+                        // index, so a stale captured idx can't move a
+                        // different row.
+                        IconButton(
+                            onClick = {
+                                fleetScope.launch {
+                                    preflight.moveEffectiveItem(profile.id, item.id, -1)
+                                }
+                            },
+                            enabled = idx > 0,
+                        ) { Icon(Icons.Filled.ArrowUpward, "Move up", Modifier.size(18.dp)) }
+                        IconButton(
+                            onClick = {
+                                fleetScope.launch {
+                                    preflight.moveEffectiveItem(profile.id, item.id, +1)
+                                }
+                            },
+                            enabled = idx < effective.lastIndex,
+                        ) { Icon(Icons.Filled.ArrowDownward, "Move down", Modifier.size(18.dp)) }
+                        if (isMaster) {
+                            Switch(
+                                checked = true,
+                                onCheckedChange = { enabled ->
+                                    fleetScope.launch {
+                                        preflight.setMasterItem(item.id, enabled, profile.id)
+                                    }
+                                },
+                            )
+                        } else {
+                            IconButton(onClick = {
+                                fleetScope.launch {
+                                    preflight.deleteExtraItem(item.id, profile.id)
+                                }
+                            }) { Icon(Icons.Filled.Delete, "Delete", Modifier.size(18.dp)) }
+                        }
                     }
-                }
-            }
-        }
-
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("${profile.name} steps", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "Extra steps only this rocket needs — they run after the master steps.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                extras.forEachIndexed { idx, item ->
-                    PreflightEditRow(
-                        item = item,
-                        canMoveUp = idx > 0,
-                        canMoveDown = idx < extras.lastIndex,
-                        onClick = { editing = item },
-                        onMoveUp = {
-                            fleetScope.launch {
-                                preflight.moveExtraItem(profile.id, idx, idx - 1)
-                            }
-                        },
-                        onMoveDown = {
-                            fleetScope.launch {
-                                preflight.moveExtraItem(profile.id, idx, idx + 1)
-                            }
-                        },
-                        onDelete = {
-                            fleetScope.launch { preflight.deleteExtraItem(item.id, profile.id) }
-                        },
-                    )
                 }
                 // The same auto condition twice verifies nothing new — grey out
                 // kinds already anywhere in this rocket's effective list.
                 PreflightAddMenu(
-                    usedAutoKinds = PreflightChecklist.effectiveItems(master, config)
-                        .map { it.kind }.filter { it.isAuto }.toSet(),
+                    usedAutoKinds = effective.map { it.kind }.filter { it.isAuto }.toSet(),
                     onCustom = { editing = PreflightItem(title = "") },
                     onAuto = { kind ->
                         fleetScope.launch {
@@ -299,6 +322,35 @@ fun PreflightRocketConfigScreen(
                         }
                     },
                 )
+            }
+        }
+
+        if (excludedMaster.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Excluded master steps", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Master steps switched off for this rocket. Switch one back " +
+                            "on to return it to the list.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    excludedMaster.forEach { item ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.weight(1f).alpha(0.5f)) { PreflightItemLabel(item) }
+                            Switch(
+                                checked = false,
+                                onCheckedChange = { enabled ->
+                                    fleetScope.launch {
+                                        preflight.setMasterItem(item.id, enabled, profile.id)
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
             }
         }
     }

@@ -74,6 +74,53 @@ final class PreflightChecklistTests: XCTestCase {
                         .map(\.title), ["A, but sharper"])
     }
 
+    // MARK: - Per-rocket ordering
+
+    func testOrderedIdsReorderTheEffectiveList() {
+        let a = manual("A"), b = manual("B")
+        let master = PreflightMaster(items: [a, b])
+        let extra = manual("Extra")
+        // Custom order interleaves the extra between the master steps.
+        let config = PreflightRocketConfig(profileId: UUID(),
+                                           extraItems: [extra],
+                                           orderedIds: [b.id, extra.id, a.id])
+        XCTAssertEqual(PreflightChecklist.effectiveItems(master: master, config: config)
+                        .map(\.title), ["B", "Extra", "A"])
+    }
+
+    func testUnlistedItemsAppendAfterTheOrderedBlock() {
+        let a = manual("A"), b = manual("B")
+        var master = PreflightMaster(items: [a, b])
+        let config = PreflightRocketConfig(profileId: UUID(),
+                                           orderedIds: [b.id, a.id])
+        // A master step added AFTER the rocket's order was saved appends
+        // at the end instead of vanishing or hijacking the custom order.
+        let c = manual("C")
+        master.items.append(c)
+        XCTAssertEqual(PreflightChecklist.effectiveItems(master: master, config: config)
+                        .map(\.title), ["B", "A", "C"])
+    }
+
+    func testStaleOrderedIdsAreSkipped() {
+        let a = manual("A")
+        let master = PreflightMaster(items: [a])
+        // Order references a deleted step and excludes A behind a ghost id —
+        // both are simply ignored.
+        let config = PreflightRocketConfig(profileId: UUID(),
+                                           orderedIds: [UUID(), a.id, UUID()])
+        XCTAssertEqual(PreflightChecklist.effectiveItems(master: master, config: config)
+                        .map(\.title), ["A"])
+    }
+
+    func testEmptyOrderIsTheDefaultOrder() {
+        let a = manual("A"), b = manual("B")
+        let master = PreflightMaster(items: [a, b])
+        let config = PreflightRocketConfig(profileId: UUID(),
+                                           extraItems: [manual("Extra")])
+        XCTAssertEqual(PreflightChecklist.effectiveItems(master: master, config: config)
+                        .map(\.title), ["A", "B", "Extra"])
+    }
+
     // MARK: - Auto evaluation
 
     func testManualHasNoAutoStatus() {
@@ -230,12 +277,32 @@ final class PreflightChecklistTests: XCTestCase {
         let extra = manual("rail buttons")
         var config = PreflightRocketConfig(profileId: UUID(),
                                            disabledMasterIds: [UUID()],
-                                           extraItems: [extra])
+                                           extraItems: [extra],
+                                           orderedIds: [extra.id, UUID()])
         config.checked[extra.id.uuidString] = Date(timeIntervalSince1970: 1_700_000_000)
 
         let data = try JSONEncoder().encode(config)
         let decoded = try JSONDecoder().decode(PreflightRocketConfig.self, from: data)
         XCTAssertEqual(decoded, config)
+    }
+
+    /// Android-parity leniency: a malformed or non-string entry in a UUID
+    /// array skips just that entry — [UUID].self would throw and the store
+    /// would then discard the whole config file.
+    func testMalformedIdArrayEntriesAreSkippedNotFatal() throws {
+        let json = """
+        {"profileId":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+         "disabledMasterIds":["not-a-uuid","11111111-2222-3333-4444-555555555555"],
+         "orderedIds":["22222222-2222-3333-4444-555555555555","garbage",7],
+         "extraItems":[{"id":"33333333-2222-3333-4444-555555555555",
+                        "title":"kept","detail":"","kind":"manual"}]}
+        """.data(using: .utf8)!
+        let config = try JSONDecoder().decode(PreflightRocketConfig.self, from: json)
+        XCTAssertEqual(config.disabledMasterIds.map(\.uuidString),
+                       ["11111111-2222-3333-4444-555555555555"])
+        XCTAssertEqual(config.orderedIds.map(\.uuidString),
+                       ["22222222-2222-3333-4444-555555555555"])
+        XCTAssertEqual(config.extraItems.map(\.title), ["kept"])
     }
 
     func testMasterRoundTrip() throws {

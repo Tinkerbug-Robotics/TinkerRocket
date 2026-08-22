@@ -75,9 +75,14 @@ final class PyroContinuityRenderTests: XCTestCase {
         let d = rocket(health: 1 << 2, ps: contCh1)
         XCTAssertNil(d.telemetry.pyroMeasuredContinuity(channel: 1),
                      "test premise: this frame has no measured bits")
-        XCTAssertEqual(d.pyroContinuity(channel: 1), .present)
-        XCTAssertEqual(d.pyroContinuity(channel: 2), .open,
-                       "legacy path genuinely cannot tell open from untested")
+        XCTAssertEqual(d.pyroContinuity(channel: 1), .present,
+                       "a SET cont bit is unambiguous: measured, and continuous")
+        // Corrected 2026-08-22. This used to assert .open, pinning the idea
+        // that the legacy path "cannot tell open from untested" — but the FC
+        // only ever sets the bit as `cont_known && cont_state`, so a clear bit
+        // is precisely that ambiguity and must not be rendered as red.
+        XCTAssertEqual(d.pyroContinuity(channel: 2), .untested,
+                       "a CLEAR cont bit is ambiguous — never red")
     }
 }
 
@@ -154,12 +159,32 @@ extension PyroContinuityRenderTests {
                           "a powered-off rocket has not measured an open circuit")
     }
 
-    /// The legacy path must survive that guard: pre-#803 firmware still fills
-    /// the rest of the scorecard, so its genuine open still reads as one.
-    func testLegacyOpenStillReadsOpenWhenTheScorecardIsPopulated() {
+    /// A populated scorecard does not make a clear cont bit a measurement.
+    /// This asserted .open until 2026-08-22; the bench showed that is exactly
+    /// the state a rocket sits in before its first continuity test.
+    func testPopulatedScorecardStillDoesNotInventAnOpen() {
         let d = rocket(health: 1 << 2, ps: 0)     // a non-pyro sensor reporting
         XCTAssertTrue(d.telemetry.hasSensorHealth)
         XCTAssertNil(d.telemetry.pyroMeasuredContinuity(channel: 2))
-        XCTAssertEqual(d.pyroContinuity(channel: 2), .open)
+        XCTAssertEqual(d.pyroContinuity(channel: 2), .untested)
+    }
+
+    /// The exact frame the bench OC sent on 2026-08-22 with nothing yet
+    /// measured — sensor_health populated by the other sensors, all four
+    /// SH_PYRO_MEAS fields NA. Every channel rendered a confident red before
+    /// this fix. This is the state EVERY session starts in.
+    func testBenchFrameWithNothingMeasuredIsUntestedOnEveryChannel() {
+        let d = BLEDevice(peripheral: nil, name: "TR-R-Bench")
+        d.isConnected = true
+        d.parseTelemetryData(#"{"st":"READY","fs":16,"h":1092981}"#.data(using: .utf8)!)
+
+        XCTAssertNil(d.telemetry.pyroMeasuredContinuity(channel: 1),
+                     "premise: nothing measured, so this returns nil for every channel")
+        XCTAssertTrue(d.telemetry.hasSensorHealth,
+                      "premise: the scorecard IS populated by the other sensors")
+        for ch in 1...4 {
+            XCTAssertEqual(d.pyroContinuity(channel: ch), .untested,
+                           "ch\(ch): never measured must never render as a measured open")
+        }
     }
 }

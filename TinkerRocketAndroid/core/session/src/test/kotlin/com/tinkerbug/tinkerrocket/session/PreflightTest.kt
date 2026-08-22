@@ -83,6 +83,44 @@ class PreflightTest {
         )
     }
 
+    // ── Per-rocket ordering ──────────────────────────────────────────────
+
+    @Test
+    fun orderedIds_reorderAndInterleaveTheEffectiveList() {
+        val a = manual("A")
+        val b = manual("B")
+        val extra = manual("Extra")
+        val master = PreflightMaster(items = listOf(a, b), updatedAtMs = 0)
+        val config = PreflightRocketConfig(
+            profileId = UUID.randomUUID(),
+            extraItems = listOf(extra),
+            orderedIds = listOf(b.id, extra.id, a.id),
+            updatedAtMs = 0,
+        )
+        assertEquals(
+            listOf("B", "Extra", "A"),
+            PreflightChecklist.effectiveItems(master, config).map { it.title },
+        )
+    }
+
+    @Test
+    fun orderedIds_unlistedItemsAppendAndStaleIdsAreSkipped() {
+        val a = manual("A")
+        val b = manual("B")
+        val config = PreflightRocketConfig(
+            profileId = UUID.randomUUID(),
+            // Stale ghost id + only B listed: B first, A appends, ghost skipped.
+            orderedIds = listOf(UUID.randomUUID(), b.id),
+            updatedAtMs = 0,
+        )
+        // "C" added after the order was saved appends at the end.
+        val master = PreflightMaster(items = listOf(a, b, manual("C")), updatedAtMs = 0)
+        assertEquals(
+            listOf("B", "A", "C"),
+            PreflightChecklist.effectiveItems(master, config).map { it.title },
+        )
+    }
+
     // ── Auto evaluation ──────────────────────────────────────────────────
 
     @Test
@@ -317,6 +355,7 @@ class PreflightTest {
             profileId = UUID.randomUUID(),
             disabledMasterIds = listOf(UUID.randomUUID()),
             extraItems = listOf(extra),
+            orderedIds = listOf(extra.id, UUID.randomUUID()),
             checked = mapOf(extra.id.toString().uppercase() to 1_700_000_000_000),
             updatedAtMs = 1_700_000_123_000,
         )
@@ -392,13 +431,16 @@ class PreflightStoreTest {
     @Test
     fun masterMovePersistsOrder() {
         val store = makeStore()
-        store.addMasterItem(manualItem("A"))
+        val a = store.addMasterItem(manualItem("A"))
         store.addMasterItem(manualItem("B"))
-        store.addMasterItem(manualItem("C"))
-        store.moveMasterItem(fromIndex = 0, toIndex = 2)
+        val c = store.addMasterItem(manualItem("C"))
+        store.moveMasterItem(a.id, delta = +1)
+        store.moveMasterItem(a.id, delta = +1)
         assertEquals(listOf("B", "C", "A"), makeStore().master.value.items.map { it.title })
-        // Out-of-range is a no-op, not a crash.
-        store.moveMasterItem(fromIndex = 0, toIndex = 3)
+        // Out-of-range and unknown ids are no-ops, not crashes.
+        store.moveMasterItem(a.id, delta = +1)
+        store.moveMasterItem(c.id, delta = -5)
+        store.moveMasterItem(UUID.randomUUID(), delta = -1)
         assertEquals(listOf("B", "C", "A"), makeStore().master.value.items.map { it.title })
     }
 
@@ -455,6 +497,103 @@ class PreflightStoreTest {
         // Re-including later must come back UNCHECKED — stale evidence.
         store.setMasterItem(a.id, enabled = true, profileId = rocket)
         assertFalse(store.isChecked(a.id, rocket))
+    }
+
+    @Test
+    fun moveEffectiveItemInterleavesExtrasAndPersists() {
+        val store = makeStore()
+        store.addMasterItem(manualItem("A"))
+        store.addMasterItem(manualItem("B"))
+        val rocket = UUID.randomUUID()
+        val extra = store.addExtraItem(manualItem("Extra"), rocket)
+
+        // [A, B, Extra] → move Extra between the master steps.
+        store.moveEffectiveItem(rocket, extra.id, delta = -1)
+        assertEquals(
+            listOf("A", "Extra", "B"),
+            makeStore().effectiveItems(rocket).map { it.title },
+        )
+        // Other rockets keep the default order, and a new master step
+        // appends after the custom-ordered block.
+        assertEquals(listOf("A", "B"), store.effectiveItems(UUID.randomUUID()).map { it.title })
+        store.addMasterItem(manualItem("C"))
+        assertEquals(
+            listOf("A", "Extra", "B", "C"),
+            store.effectiveItems(rocket).map { it.title },
+        )
+        // Unknown ids and out-of-range deltas are no-ops.
+        store.moveEffectiveItem(rocket, UUID.randomUUID(), delta = +1)
+        store.moveEffectiveItem(rocket, extra.id, delta = -5)
+        assertEquals(
+            listOf("A", "Extra", "B", "C"),
+            store.effectiveItems(rocket).map { it.title },
+        )
+    }
+
+    @Test
+    fun excludedStepKeepsItsSlotWhenReIncluded() {
+        val store = makeStore()
+        val a = store.addMasterItem(manualItem("A"))
+        store.addMasterItem(manualItem("B"))
+        val rocket = UUID.randomUUID()
+        store.moveEffectiveItem(rocket, a.id, delta = +1)   // [B, A]
+
+        store.setMasterItem(a.id, enabled = false, profileId = rocket)
+        assertEquals(listOf("B"), store.effectiveItems(rocket).map { it.title })
+        store.setMasterItem(a.id, enabled = true, profileId = rocket)
+        assertEquals(listOf("B", "A"), store.effectiveItems(rocket).map { it.title })
+    }
+
+    /** The review-found hazard: a move must NOT erase an excluded step's slot. */
+    @Test
+    fun reorderWhileExcludedKeepsTheRememberedSlot() {
+        val store = makeStore()
+        val a = store.addMasterItem(manualItem("A"))
+        store.addMasterItem(manualItem("B"))
+        val c = store.addMasterItem(manualItem("C"))
+        val rocket = UUID.randomUUID()
+        store.moveEffectiveItem(rocket, c.id, delta = -1)   // [A, C, B]
+
+        store.setMasterItem(a.id, enabled = false, profileId = rocket)
+        assertEquals(listOf("C", "B"), store.effectiveItems(rocket).map { it.title })
+        // Reorder WHILE A is excluded — A's first-place slot must survive.
+        store.moveEffectiveItem(rocket, c.id, delta = +1)   // visible [B, C]
+        store.setMasterItem(a.id, enabled = true, profileId = rocket)
+        assertEquals(
+            listOf("A", "B", "C"),
+            makeStore().effectiveItems(rocket).map { it.title },
+        )
+    }
+
+    /** First-ever move must remember master positions of already-excluded steps. */
+    @Test
+    fun firstMoveRemembersExcludedMasterPositions() {
+        val store = makeStore()
+        val a = store.addMasterItem(manualItem("A"))
+        store.addMasterItem(manualItem("B"))
+        val c = store.addMasterItem(manualItem("C"))
+        val rocket = UUID.randomUUID()
+
+        store.setMasterItem(a.id, enabled = false, profileId = rocket)
+        store.moveEffectiveItem(rocket, c.id, delta = -1)   // visible [C, B]
+        store.setMasterItem(a.id, enabled = true, profileId = rocket)
+        // A comes back at its master position (first), not appended last.
+        assertEquals(listOf("A", "C", "B"), store.effectiveItems(rocket).map { it.title })
+    }
+
+    @Test
+    fun deleteScrubsOrderedIds() {
+        val store = makeStore()
+        val a = store.addMasterItem(manualItem("A"))
+        store.addMasterItem(manualItem("B"))
+        val rocket = UUID.randomUUID()
+        val extra = store.addExtraItem(manualItem("Extra"), rocket)
+        store.moveEffectiveItem(rocket, extra.id, delta = -2)   // [Extra, A, B]
+
+        store.deleteMasterItem(a.id)
+        store.deleteExtraItem(extra.id, rocket)
+        assertEquals(1, makeStore().config(rocket)!!.orderedIds.size)
+        assertEquals(listOf("B"), store.effectiveItems(rocket).map { it.title })
     }
 
     @Test
