@@ -77,6 +77,43 @@
       <p>Receivers do not implement the current MTCR 600 m/s limit. Most use the
         COCOM 515 m/s limit for speed, and altitude limits vary significantly
         from 10 km to 80 km, though several use the 80 km limit.</p>
+
+      <h3>Limits combined</h3>
+      <p>A receiver with both a speed and an altitude limit has to decide what to
+        do when only one of them is exceeded. It can stop publishing as soon as
+        <em>either</em> is passed, which the table calls <strong>independent</strong>,
+        or only when <em>both</em> are passed at once, which would be an AND.</p>
+      <p><strong>This decides whether a rocket loses position at all.</strong> A
+        flight almost never trips both limits together: boost is fast but still
+        low, and apogee is high but slow. A receiver using AND would therefore
+        keep publishing through an entire sounding-rocket flight, because there is
+        no moment where the vehicle is simultaneously above 80 km and above
+        515 m/s. Every part here that has both limits treats them independently,
+        so every one of them blanks partway up the boost &mdash; tens of
+        kilometers below its own altitude limit, with the flight barely
+        started.</p>
+      <p>The Air530 is listed as not applicable because it has no speed limit to
+        combine &mdash; only the altitude ceiling applies, so the question does
+        not arise.</p>
+
+      <h3>Re-open latency</h3>
+      <p>How long the receiver takes to publish a position again after the
+        vehicle drops back inside the limits. It is measured from the moment the
+        trajectory clears the limit to the first valid fix that follows.</p>
+      <p><strong>This is what determines whether the gate costs you anything.</strong>
+        The blanking itself is unavoidable on any of these parts, and on a
+        typical flight the vehicle is only over the speed limit for a few tens of
+        seconds. If position comes back within a second of dropping below it, the
+        result is a short gap in the log and the navigation filter reacquires
+        with the vehicle still climbing. If it takes a minute, the receiver is
+        silent through apogee and much of the descent &mdash; the part of the
+        flight where a position fix is most useful for recovery.</p>
+      <p>On these parts the cost is small: three of the four recover within a
+        second and a half, and the NEO-M8T within 3.1 s, against speed-limit
+        excursions that last 58 to 78 s on the two test flights. It is not a
+        number any datasheet reports, and measuring it needs a trajectory that
+        comes back under the limit &mdash; a ramp that only crosses the threshold
+        shows where the gate closes but never when it re-opens.</p>
     </div>
   </section>
 
