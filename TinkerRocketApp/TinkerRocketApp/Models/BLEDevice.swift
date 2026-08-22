@@ -1561,8 +1561,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // the app is handed the authoritative total for free and used to
             // throw it away. A mismatch means we are missing bytes the device
             // believes it sent.
-            if Int(offset) != received {
-                print("[DOWNLOAD] EOF says \(offset) bytes, have \(received) — failing")
+            // The EOF frame may carry DATA as well as the flag, in which case
+            // its offset is that data's POSITION, not the total. Measured on
+            // the bench 2026-08-22: the base station's last frame for an
+            // 18322-byte file is `offset=18190 len=132 eof=true`. A
+            // zero-length EOF has offset == total, so offset+length covers
+            // both shapes.
+            //
+            // The first cut of this compared offset alone, which would have
+            // failed every base-station download — the tests missed it because
+            // every EOF frame they built had an empty payload.
+            if Int(offset) + Int(length) != received {
+                print("[DOWNLOAD] EOF says \(Int(offset) + Int(length)) bytes, have \(received) — failing")
                 failDownload()
                 return
             }
