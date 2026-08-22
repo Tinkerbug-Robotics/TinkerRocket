@@ -189,8 +189,32 @@ flash/PSRAM, because the design's proof only covers one of them.
 | Octal PSRAM clock | GPIO47, GPIO48 | SPICLK_N / SPICLK_P | **Safe by the same proof** — these serve octal PSRAM only, and this part has none. Not directly exercised on V7, so slightly weaker evidence. |
 | **Quad PSRAM select** | **GPIO26** | **SPICS1** | **Confirmed unavailable** — datasheet Table 1-1 gives this part 2 MB quad PSRAM, whose chip select is this pin. **Left unused.** |
 | JTAG | GPIO39–42 | debug | Safe as GPIO; cost is losing hardware debug. |
-| Console | GPIO43, GPIO44 | UART0 | Safe as GPIO; cost is the serial console. **Both left free.** |
-| Strapping | GPIO0, 3, 45, 46 | boot mode, JTAG select, flash rail voltage, ROM log | GPIO3 is safe here — it drives a switch enable and its pulldown holds it low at reset. **GPIO45 left free**: it sets the flash rail voltage, and anything whose boot level the design does not control can stop the board booting. |
+| Console | GPIO43, GPIO44 | UART0 | Safe as GPIO; cost is the serial console. **Free on the flight computer; on the out computer GPIO44 carries `L_RXEN`, so that processor has console TX but no RX.** The "both left free" this row used to claim was never true of the shipped schematic. |
+| Strapping | GPIO0, 3, 45, 46 | boot mode, JTAG select, flash rail voltage, ROM log | **GPIO3: see the correction below.** **GPIO45 left free** on both processors: it sets the flash rail voltage, and anything whose boot level the design does not control can stop the board booting. |
+
+### Correction — GPIO3 no longer has the pulldown this document claimed
+
+This document used to justify GPIO3 with one sentence: *"GPIO3 is safe here — it
+drives a switch enable and its pulldown holds it low at reset."* Adding the
+second processor invalidated it on both parts, and the reasoning is worth
+recording because the failure was silent:
+
+- On the **flight computer**, GPIO3 was still the switch enable — but `D9` now
+  stands between the pin and `R84`, and a diode does not pass a pulldown. The
+  very change that created the enable OR is what removed the pull.
+- On the **out computer**, GPIO3 stopped being the enable altogether (that moved
+  to GPIO7) and became `ESP_SDO`, an *input* driven by the flight computer —
+  which is unpowered while the out computer boots, so the net floated.
+
+Both are now closed. `FC_EN_HOLD` moved to **GPIO17**, which is unconditionally
+free, so the flight computer's strapping pin is a bare pad; and `R34` (100 k)
+pulls `ESP_SDO` down so the out computer's GPIO3 has a defined level at reset.
+
+The residual risk was low either way — GPIO3 selects the JTAG signal source and
+is only sampled when `EFUSE_JTAG_SEL_ENABLE` is burned, so an unburned part
+ignores it, and `rocket-computer` flies `GPIO3 = ESP_SDO` with no pull at all.
+It is fixed because a floating input on a strapping pad is not something to
+carry into a layout, not because it was going to stop a boot.
 
 **Two signals were moved to reduce risk**, using pads freed by dropping the
 power-good and peripheral-enable signals:
@@ -411,13 +435,14 @@ left GPIO26) carries over verbatim.
 | `ESP_SDO` / `ESP_SDI` | 13, 14 | new — I2S data and frame sync to the OC |
 | `ESP_CS` / `ESP_SCLK` | 18, 21 | new — I2S word select and bit clock |
 | `ESP_SCL` / `ESP_SDA` | 33, 35 | new — I2C to the OC, 5.11 k to `V_MCU_SWTCH` |
-| `FC_EN_HOLD` | 3 | new — self-hold into `D9` |
+| `FC_EN_HOLD` | 17 | new — self-hold into `D9`. **Deliberately not GPIO3** — see the correction above. **Must stay in GPIO0–21**: the in-flight latch needs `gpio_hold_en`, which only reaches the reset-surviving RTC hold on an RTC pad (`SOC_RTCIO_PIN_COUNT = 22` on this part). Above GPIO21 the call still returns `ESP_OK` but degrades to a deep-sleep-only hold |
 | `FC_D−` / `FC_D+` | 19, 20 | USB, through the `U1` mux |
 
-**Spare on the flight computer: GPIO17, 36, 37, 38, 43, 44** — six pads, with
+**Spare on the flight computer: GPIO3, 36, 37, 38, 43, 44** — six pads, with
 the serial console (43/44) among them and therefore intact. GPIO45 and GPIO46
 carry the strapping network as before; **GPIO26 stays unused** for the
-quad-PSRAM reason argued above.
+quad-PSRAM reason argued above, and **GPIO3 is now a bare pad** with no trace on
+it, which is the safest state for a strapping pin the design has no use for.
 
 ### Out computer `U15` — on `+3V3`, always on
 
@@ -428,6 +453,13 @@ six `ESP_*` link pins on GPIO1–6 and `FC_EN_OC` on GPIO7.
 
 **Spare on the out computer: GPIO8, 9, 10, 11, 12, 34, 39, 40, 41, 42, 47, 48**
 — twelve pads freed by the sensors, GNSS and pyro moving away.
+
+**GPIO39–42 are among them, so the out computer has regained hardware JTAG.**
+The single-MCU board spent all four on the GNSS pair, `BMP585_INT` and
+`PYRO4_CONT`; those signals now belong to the flight computer, which spends its
+own four. Nothing was designed to recover the out computer's JTAG — it is a side
+effect of the split, and it is worth knowing before someone spends those pads
+again.
 
 ### Why these numbers
 

@@ -718,12 +718,16 @@
       "Sensors"
     ],
     [
+      "3f7c1a90-4d2b-4e15-9c88-1b6ad0e77c41",
+      "MCU - ESP32-S3 Flight Computer"
+    ],
+    [
       "ee020e52-8fb6-47c9-8c1d-1763f5da7dda",
       "Pyro"
     ],
     [
       "eab70588-b031-4461-adac-e038e88381cb",
-      "MCU - ESP32-S3"
+      "MCU - ESP32-S3 Out Computer"
     ],
     [
       "4387b4db-c729-4e1d-84b2-dffd80f2e21f",
