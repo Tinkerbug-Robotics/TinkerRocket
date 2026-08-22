@@ -788,3 +788,17 @@ target_compile_definitions(test_wire_fixture_freshness PRIVATE
 )
 target_link_libraries(test_wire_fixture_freshness GTest::gtest_main)
 gtest_discover_tests(test_wire_fixture_freshness)
+
+# ---------- test_main_deploy_gate (#834 item 4) ----------
+# Source-of-truth gate for the ALTITUDE_ON_DESCENT main-deploy trigger: refuses
+# a free-running (dead-baro) altitude estimate, catches a stuck static port via
+# a GNSS Doppler cross-check, and backstops both with a late-biased GNSS AGL
+# comparison. Pure header in the shared TR_KinematicChecks component (the FC and
+# the mini both use it).
+add_executable(test_main_deploy_gate test_main_deploy_gate.cpp)
+target_include_directories(test_main_deploy_gate PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/components/TR_KinematicChecks
+)
+target_link_libraries(test_main_deploy_gate GTest::gtest_main)
+gtest_discover_tests(test_main_deploy_gate)

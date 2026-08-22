@@ -1030,6 +1030,11 @@ TEST(RocketComputerTypes, FlightSnapshotData_Layout) {
     EXPECT_EQ(offsetof(FlightSnapshotData, pyro4_fired),        24u);
     EXPECT_EQ(offsetof(FlightSnapshotData, b2r_code),           25u);
     EXPECT_EQ(offsetof(FlightSnapshotData, b2r_mode),           26u);
+    // #834 item 4: reclaimed from pad2[1] — same offset, same struct size, so
+    // no VERSION bump. 0 (every older writer's value) means "pad datum not
+    // known to be converged", which disables the GNSS main-deploy backstop.
+    EXPECT_EQ(offsetof(FlightSnapshotData, ref_datum_converged), 27u);
+    EXPECT_EQ(sizeof(FlightSnapshotData::ref_datum_converged),    1u);
     EXPECT_EQ(offsetof(FlightSnapshotData, ground_pressure_pa), 28u);
     EXPECT_EQ(offsetof(FlightSnapshotData, ref_lat_rad),        32u);
     EXPECT_EQ(offsetof(FlightSnapshotData, ref_alt_m),          48u);
