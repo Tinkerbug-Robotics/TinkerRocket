@@ -235,23 +235,41 @@ def build_svg(meta, rows, truth):
     out.append(f'<text class="ttl" x="{PAD_L}" y="{y0_alt-8:.1f}">altitude (km)</text>')
     out.append(f'<text class="ttl" x="{PAD_L}" y="{y0_spd-8:.1f}">speed (m/s)</text>')
 
+    # The second legend column used to start at a fixed PAD_L + 400, which the
+    # longest verdict line outgrew: "BLOCKED - position withheld, satellites
+    # still tracked = the gate" is ~380 px at 9 px mono, so the two columns
+    # overlapped and the text ran together. Measure the widest entry instead,
+    # and fall back to a single stacked column if the pair will not fit.
+    SWATCH, GUTTER, EM = 22, 34, 0.62
+
+    def text_px(t):
+        return len(t) * 9 * EM
+
+    left = [f"{n} \u00b7 {m}" for n, m in VERDICT_MEANING]
+    right_items = [("var(--nolock, #9B3535)", 0.16,
+                    "shaded on the SPEED panel: over 515 m/s"),
+                   ("var(--blocked, #A2660A)", 0.30,
+                    "shaded on the ALTITUDE panel: over 80 km")]
+    lx = PAD_L + SWATCH + max(text_px(t) for t in left) + GUTTER
+    widest_right = max(text_px(m) for _, _, m in right_items)
+    two_col = lx + SWATCH + widest_right <= W - PAD_R
+
     ly = H - LEG_H + 4
     for i, (name, meaning) in enumerate(VERDICT_MEANING):
         yy = ly + i * 12
         out.append(f'<rect x="{PAD_L}" y="{yy-6:.0f}" width="16" height="8" '
                    f'fill="{VERDICT_FILL[name]}"/>')
-        out.append(f'<text class="lbl" x="{PAD_L+22}" y="{yy+1:.0f}">'
+        out.append(f'<text class="lbl" x="{PAD_L+SWATCH}" y="{yy+1:.0f}">'
                    f'{name} &#183; {esc(meaning)}</text>')
-    lx = PAD_L + 400
-    for i, (fill, op, meaning) in enumerate(
-            [("var(--nolock, #9B3535)", 0.16,
-              "shaded on the SPEED panel: over 515 m/s"),
-             ("var(--blocked, #A2660A)", 0.30,
-              "shaded on the ALTITUDE panel: over 80 km")]):
-        yy = ly + i * 12
-        out.append(f'<rect x="{lx}" y="{yy-6:.0f}" width="16" height="8" '
+    for i, (fill, op, meaning) in enumerate(right_items):
+        if two_col:
+            x, yy = lx, ly + i * 12
+        else:
+            x, yy = PAD_L, ly + (len(VERDICT_MEANING) + i) * 12
+        out.append(f'<rect x="{x:.0f}" y="{yy-6:.0f}" width="16" height="8" '
                    f'fill="{fill}" opacity="{op*1.6:.2f}"/>')
-        out.append(f'<text class="lbl" x="{lx+22}" y="{yy+1:.0f}">{esc(meaning)}</text>')
+        out.append(f'<text class="lbl" x="{x+SWATCH:.0f}" y="{yy+1:.0f}">'
+                   f'{esc(meaning)}</text>')
     out.append('</svg>')
     return "\n".join(out)
 

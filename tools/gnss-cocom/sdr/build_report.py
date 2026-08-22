@@ -72,13 +72,28 @@ def blurbs(text: str) -> dict:
             re.finditer(r'<!--#blurb (\w+)-->(.*?)<!--/blurb-->', text, re.S)}
 
 
+def fignotes(text: str) -> dict:
+    """Optional note printed under a receiver's plots, keyed by receiver id.
+
+    For things visible in one part's figures that would be noise in the shared
+    caption -- a bench artifact in one run, say. A receiver with nothing to say
+    simply has no block.
+    """
+    return {m.group(1): m.group(2).strip() for m in
+            re.finditer(r'<!--#fignote (\w+)-->(.*?)<!--/fignote-->', text, re.S)}
+
+
 def receiver_sections(d, text) -> str:
     by_id = {r["id"]: r for r in d["receivers"]}
     notes = blurbs(text)
+    fnotes = fignotes(text)
     out = []
     for rid in ORDER:
         r = by_id[rid]
         f1, f2 = PLOTS[rid]
+        fn = fnotes.get(rid)
+        note = (f'\n    <div class="prose">\n      <p class="note">{fn}</p>\n    </div>'
+                if fn else "")
         vel = (f"none to {r['velocity_fix_max_mps']:.0f} m/s"
                if r.get("velocity_gate_present") is False else
                bracket(r.get("velocity_fix_max_mps"),
@@ -116,6 +131,7 @@ def receiver_sections(d, text) -> str:
         amber for altitude. Read the lock strip against those bands, and the
         satellite bar underneath to confirm the receiver was still tracking.</figcaption>
     </figure>
+{note}
 ''')
     return "".join(out)
 
@@ -126,6 +142,7 @@ def build():
     # strip the editing instructions; keep any other comments the author wrote
     text = re.sub(r'<!--\s*=+\s*\n.*?=+\s*\n-->', '', text, flags=re.S)
     text = re.sub(r'<!--#blurb \w+-->.*?<!--/blurb-->', '', text, flags=re.S)
+    text = re.sub(r'<!--#fignote \w+-->.*?<!--/fignote-->', '', text, flags=re.S)
 
     table = subprocess.run([sys.executable, str(HERE / "receiver_table.py"), "--html"],
                            capture_output=True, text=True, check=True).stdout.strip()
