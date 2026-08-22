@@ -22,11 +22,12 @@ Verified from the exported netlist at the time of writing:
                                         ┌────────────────────┤
                                         │                    │
                                   load switch U30       direct loads
-                                        │              (out computer U15,
-                                        │               its boot flash, monitor)
+                                        │              (out computer U15, its boot
+                                        │               flash, the pack monitor U23
+                                        │               and the magnetometer U3)
                                         v
                                   V_MCU_SWTCH ──> flight computer U32 + its flash,
-                                                  the three sensors, GNSS,
+                                                  IMU, baro, GNSS,
                                                   LoRa radio, NAND
 ```
 
@@ -45,9 +46,18 @@ of load switch `U30`, and so still land on this budget.
 ## What the rail carries
 
 Direct `+3V3` loads today are the out computer (`U15`), its boot flash (`U13`),
-the current monitor (`U23`), and the load switch `U30`. Behind `U30` sit the
-flight computer (`U32`) and its boot flash (`U33`), the three sensors, the GNSS
-receiver, the LoRa radio and the NAND (`U11`).
+the current monitor (`U23`), the magnetometer (`U3`) and the load switch `U30`.
+Behind `U30` sit the flight computer (`U32`) and its boot flash (`U33`), the IMU
+and barometer, the GNSS receiver, the LoRa radio and the NAND (`U11`).
+
+**The magnetometer is deliberately on the always-on rail**, unlike the other two
+sensors. It shares `SEN_SCL`/`SEN_SDA` with the pack monitor `U23`, and those
+pull-ups (`R67`/`R69`, 5.11 k) are on `+3V3`. With `U3` behind the switch, the
+pull-ups drove its I2C pads while its own supply was actively discharged by
+`U30`'s QOD — above abs-max continuously, and clamping the bus below VIL so the
+pack monitor could not be read at all during pad standby. Matching `U3`'s rail
+to its bus removes both. It costs the magnetometer's quiescent draw on a rail
+that is up whenever the board is.
 
 With the two additions the inventory becomes:
 
@@ -74,7 +84,7 @@ The telemetry radio is the same 900 MHz module already carried by
 
 | Scenario | Composition | Total |
 |---|---|---|
-| Flight computer off | OC idle on `+3V3`, `U30` open — everything else dark | **~45 mA** |
+| Flight computer off | OC idle on `+3V3`, `U30` open — magnetometer and pack monitor still readable, everything behind the switch dark | **~46 mA** |
 | Pad idle | both MCUs idle, radio RX, GNSS tracking, no logging | **~160 mA** |
 | Realistic flight | OC active + BLE, FC active, radio TX, GNSS tracking, logging | **~300 mA** |
 | Worst credible | OC WiFi TX, FC active, radio TX, GNSS acquisition, NAND write | **~605 mA** |

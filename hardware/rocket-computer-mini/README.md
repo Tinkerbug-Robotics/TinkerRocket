@@ -41,7 +41,7 @@ expansion header, camera, servo and piezo came out.*
 | Rail | `+3V3` — always on | `V_MCU_SWTCH` — **starts off** |
 | Radio | 2.4 GHz chip antenna `U31`, 900 MHz LoRa `U16` | none |
 | Memory | NAND `U11` + boot flash `U13` | boot flash `U33` only |
-| Sensors | magnetometer and power monitor on `SEN_SC*` | IMU, baro, GNSS |
+| Sensors | magnetometer and pack monitor on `SEN_SC*` — **both on `+3V3`** | IMU, baro, GNSS |
 | Pyro | none | all four channels and `PYRO_ARM` |
 | USB | `OC_D±` | `FC_D±` |
 
@@ -141,6 +141,16 @@ Six wires, the same net names and the same protocols as `rocket-computer`:
 `rocket-computer`'s `R55`/`R58` — tied to the switched rail rather than `+3V3`
 on purpose, so they are not two more paths feeding a dead rail. `R34` (100 k)
 pulls `ESP_SDO` down; see above.
+
+**The magnetometer moved to `+3V3` for this reason.** It shares `SEN_SCL`/
+`SEN_SDA` with the pack monitor, whose pull-ups `R67`/`R69` are on `+3V3`. With
+`U3` behind the switch those pull-ups fed its I2C pads while `U30`'s QOD held
+its supply at ground — above abs-max, and clamping the bus below VIL so the
+INA230 was unreadable in exactly the pad-standby mode this design exists to
+enable. There is no other pack-voltage path to the out computer, so that was the
+whole of its battery telemetry. `R67`/`R69` were the only passive pull-ups on
+the board crossing the rail boundary; every remaining crossing is an actively
+driven signal.
 
 **Firmware constraint.** All six of these cross the `+3V3` / `V_MCU_SWTCH`
 boundary, and they are the only signals live during pad standby with the flight
