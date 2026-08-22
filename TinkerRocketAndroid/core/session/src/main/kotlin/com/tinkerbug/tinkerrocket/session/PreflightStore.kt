@@ -46,7 +46,7 @@ public class PreflightStore(
 
     /**
      * Remove a master step everywhere: from the master, from every rocket's
-     * exclusion list, and from every rocket's checked state.
+     * exclusion list, order, and checked state.
      */
     public fun deleteMasterItem(id: UUID) {
         mutateMaster { m -> m.copy(items = m.items.filterNot { it.id == id }) }
@@ -55,15 +55,26 @@ public class PreflightStore(
             mutateConfig(profileId) { c ->
                 c.copy(
                     disabledMasterIds = c.disabledMasterIds.filterNot { it == id },
+                    orderedIds = c.orderedIds.filterNot { it == id },
                     checked = c.checked - key,
                 )
             }
         }
     }
 
-    /** Move the step at [fromIndex] to [toIndex]; out-of-range is a no-op. */
-    public fun moveMasterItem(fromIndex: Int, toIndex: Int) {
-        mutateMaster { m -> m.copy(items = moved(m.items, fromIndex, toIndex)) }
+    /**
+     * Move the step [itemId] by [delta] slots; unknown id or out-of-range
+     * is a no-op.  Id-addressed rather than index-addressed: the arrow taps
+     * capture UI state at tap time but execute later on the fleet thread,
+     * so a raw index could point at a different row by the time it runs —
+     * resolving the id HERE moves the row that was actually tapped.
+     */
+    public fun moveMasterItem(itemId: UUID, delta: Int) {
+        mutateMaster { m ->
+            val from = m.items.indexOfFirst { it.id == itemId }
+            if (from < 0) return@mutateMaster m
+            m.copy(items = moved(m.items, from, from + delta))
+        }
     }
 
     /** Auto kinds already in the master — the add menu greys these out. */
@@ -118,15 +129,38 @@ public class PreflightStore(
         mutateConfig(profileId) { c ->
             c.copy(
                 extraItems = c.extraItems.filterNot { it.id == itemId },
+                orderedIds = c.orderedIds.filterNot { it == itemId },
                 checked = c.checked - itemId.toString().uppercase(),
             )
         }
     }
 
-    /** Move a rocket's extra step at [fromIndex] to [toIndex]; out-of-range no-ops. */
-    public fun moveExtraItem(profileId: UUID, fromIndex: Int, toIndex: Int) {
+    /**
+     * Move [itemId] by [delta] slots in a rocket's EFFECTIVE list (master
+     * steps and extras interleaved).  Id-addressed for the same stale-index
+     * reason as [moveMasterItem]; unknown id or out-of-range is a no-op.
+     *
+     * The order is materialized into `orderedIds` over the FULL id set —
+     * excluded master steps included, holding the slots they last had — so
+     * a move never erases an excluded step's remembered position
+     * (re-including restores it), and the first-ever move remembers master
+     * positions for steps excluded before it.  Steps added later append
+     * after the ordered block (see [PreflightChecklist.applyOrder]).
+     */
+    public fun moveEffectiveItem(profileId: UUID, itemId: UUID, delta: Int) {
+        val items = effectiveItems(profileId)
+        val from = items.indexOfFirst { it.id == itemId }
+        if (from < 0 || from + delta !in items.indices) return
+        val newVisible = moved(items, from, from + delta).map { it.id }
         mutateConfig(profileId) { c ->
-            c.copy(extraItems = moved(c.extraItems, fromIndex, toIndex))
+            // Full remembered order over every id (ALL master steps + extras),
+            // then rewrite just the visible slots in their new order — hidden
+            // ids keep their exact positions.
+            val all = _master.value.items + c.extraItems
+            val full = PreflightChecklist.applyOrder(all, c.orderedIds).map { it.id }
+            val visible = newVisible.toHashSet()
+            val next = newVisible.iterator()
+            c.copy(orderedIds = full.map { if (it in visible) next.next() else it })
         }
     }
 

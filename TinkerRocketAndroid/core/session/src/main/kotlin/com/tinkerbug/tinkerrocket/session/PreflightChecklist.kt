@@ -104,11 +104,17 @@ public data class PreflightMaster(
  * A rocket's diff against the master plus the current run's checked state.
  * `checked` maps item id (uppercase UUID string) to when it was checked
  * (epoch ms); only manual steps ever appear in it.
+ *
+ * [orderedIds] is this rocket's step order, set the first time the operator
+ * reorders its list.  Empty = the default order (master order, extras
+ * appended).  Later-added steps append after the custom-ordered block and
+ * stale ids are skipped — see [PreflightChecklist.applyOrder].
  */
 public data class PreflightRocketConfig(
     val profileId: UUID,
     val disabledMasterIds: List<UUID> = emptyList(),
     val extraItems: List<PreflightItem> = emptyList(),
+    val orderedIds: List<UUID> = emptyList(),
     val checked: Map<String, Long> = emptyMap(),
     val updatedAtMs: Long,
 ) {
@@ -155,14 +161,38 @@ public object PreflightChecklist {
     /** iOS LastValidRocketFix.minSatsForValidFix — the 3D-solution floor. */
     public const val MIN_SATS_FOR_FIX: Int = 4
 
-    /** Master items in master order, minus this rocket's exclusions, then extras. */
+    /**
+     * A rocket's effective checklist: master items minus its exclusions,
+     * plus its extras — in the rocket's custom order when it has one, else
+     * master order with extras appended.
+     */
     public fun effectiveItems(
         master: PreflightMaster,
         config: PreflightRocketConfig?,
     ): List<PreflightItem> {
         if (config == null) return master.items
         val disabled = config.disabledMasterIds.toSet()
-        return master.items.filterNot { it.id in disabled } + config.extraItems
+        val base = master.items.filterNot { it.id in disabled } + config.extraItems
+        return applyOrder(base, config.orderedIds)
+    }
+
+    /**
+     * Sort [items] by their position in [orderedIds].  Ids not listed
+     * (steps added after the order was saved) append after the ordered
+     * block in their base order; listed ids with no matching item (deleted
+     * or excluded steps) are skipped.  An empty order is the identity.
+     */
+    public fun applyOrder(
+        items: List<PreflightItem>,
+        orderedIds: List<UUID>,
+    ): List<PreflightItem> {
+        if (orderedIds.isEmpty()) return items
+        val position = HashMap<UUID, Int>()
+        orderedIds.forEachIndexed { idx, id -> position.putIfAbsent(id, idx) }
+        // Partition rather than sort: base order must be PRESERVED for the
+        // unlisted tail (iOS twin does the same).
+        val (listed, unlisted) = items.partition { it.id in position }
+        return listed.sortedBy { position[it.id]!! } + unlisted
     }
 
     /** Live status of one auto step; null for manual steps. */
@@ -323,6 +353,12 @@ public object PreflightCodec {
     private fun decodeItems(el: JsonArray?): List<PreflightItem> =
         el?.mapNotNull { (it as? JsonObject)?.let(::decodeItem) }.orEmpty()
 
+    private fun decodeUuidList(el: JsonArray?): List<UUID> =
+        el?.mapNotNull { item ->
+            (item as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+        }.orEmpty()
+
     // ── Master ───────────────────────────────────────────────────────────
 
     public fun encodeMaster(master: PreflightMaster): String = buildJsonObject {
@@ -349,6 +385,10 @@ public object PreflightCodec {
         )
         put("extraItems", buildJsonArray { config.extraItems.forEach { add(encodeItem(it)) } })
         put(
+            "orderedIds",
+            buildJsonArray { config.orderedIds.forEach { add(uuidJson(it)) } },
+        )
+        put(
             "checked",
             buildJsonObject { config.checked.forEach { (k, ms) -> put(k, appleDate(ms)) } },
         )
@@ -361,12 +401,9 @@ public object PreflightCodec {
         val profileId = o.uuid("profileId") ?: return null
         return PreflightRocketConfig(
             profileId = profileId,
-            disabledMasterIds = (o["disabledMasterIds"] as? JsonArray)
-                ?.mapNotNull { el ->
-                    (el as? JsonPrimitive)?.takeIf { it.isString }?.content
-                        ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-                }.orEmpty(),
+            disabledMasterIds = decodeUuidList(o["disabledMasterIds"] as? JsonArray),
             extraItems = decodeItems(o["extraItems"] as? JsonArray),
+            orderedIds = decodeUuidList(o["orderedIds"] as? JsonArray),
             checked = (o["checked"] as? JsonObject)?.let { obj ->
                 obj.keys.associateWith { k -> obj.dateMs(k, nowMs) }
             }.orEmpty(),

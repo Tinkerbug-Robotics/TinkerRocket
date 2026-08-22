@@ -57,12 +57,13 @@ final class PreflightStore: ObservableObject {
     }
 
     /// Remove a master step everywhere: from the master, from every
-    /// rocket's exclusion list, and from every rocket's checked state.
+    /// rocket's exclusion list, order, and checked state.
     func deleteMasterItem(_ id: UUID) {
         mutateMaster { $0.items.removeAll { $0.id == id } }
         for profileId in configs.keys {
             mutateConfig(profileId) { c in
                 c.disabledMasterIds.removeAll { $0 == id }
+                c.orderedIds.removeAll { $0 == id }
                 c.checked.removeValue(forKey: id.uuidString)
             }
         }
@@ -118,12 +119,32 @@ final class PreflightStore: ObservableObject {
     func deleteExtraItem(_ itemId: UUID, for profileId: UUID) {
         mutateConfig(profileId) { c in
             c.extraItems.removeAll { $0.id == itemId }
+            c.orderedIds.removeAll { $0 == itemId }
             c.checked.removeValue(forKey: itemId.uuidString)
         }
     }
 
-    func moveExtraItems(fromOffsets: IndexSet, toOffset: Int, for profileId: UUID) {
-        mutateConfig(profileId) { Self.move(&$0.extraItems, fromOffsets: fromOffsets, toOffset: toOffset) }
+    /// Reorder a rocket's EFFECTIVE list (master steps and extras
+    /// interleaved).  The order is materialized into `orderedIds` over the
+    /// FULL id set — excluded master steps included, holding the slots they
+    /// last had — so a move never erases an excluded step's remembered
+    /// position (re-including restores it) and the first-ever move remembers
+    /// master positions for steps excluded before it.  Steps added later
+    /// append after the ordered block (see PreflightChecklist.applyOrder).
+    func moveEffectiveItems(fromOffsets: IndexSet, toOffset: Int, for profileId: UUID) {
+        var newEffective = effectiveItems(for: profileId)
+        Self.move(&newEffective, fromOffsets: fromOffsets, toOffset: toOffset)
+        let newVisible = newEffective.map(\.id)
+        mutateConfig(profileId) { c in
+            // Full remembered order over every id (ALL master steps + extras),
+            // then rewrite just the visible slots in their new order — hidden
+            // ids keep their exact positions.
+            let all = master.items + c.extraItems
+            let full = PreflightChecklist.applyOrder(all, orderedIds: c.orderedIds).map(\.id)
+            let visible = Set(newVisible)
+            var next = newVisible.makeIterator()
+            c.orderedIds = full.map { visible.contains($0) ? next.next()! : $0 }
+        }
     }
 
     /// SwiftUI's `Array.move(fromOffsets:toOffset:)` semantics without the
