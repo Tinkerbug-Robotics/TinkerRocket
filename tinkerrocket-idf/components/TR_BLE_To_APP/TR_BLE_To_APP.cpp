@@ -595,6 +595,32 @@ void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
     conn_param_attempts_ = 0;
     ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d (%s)", reason, disconnectReasonName(reason));
 
+    // #834 item 7: an app that vanishes mid-OTA must not strand the session.
+    // For a RELAY (target == 1) the cost is severe and silent: the OC is left
+    // flipped to I2S master TX, the feeder pumps idle fill forever, no FC
+    // telemetry is received or logged, and both downlinks freeze at their last
+    // values until a power cycle. Reconnecting does not help — a fresh
+    // OTA_BEGIN skips arming the flip because the link is already flipped. So
+    // fire the same abort path handleOtaAbort() uses, minus the status
+    // notification, since there is nobody left to notify.
+    if (ota_relay_active_)
+    {
+        ESP_LOGE(BLE_TAG, "OTA relay was ACTIVE at disconnect — aborting so the "
+                          "OC reverts to slave RX");
+        if (ota_relay_abort_cb_) ota_relay_abort_cb_(ota_relay_ctx_);
+        ota_relay_active_   = false;
+        ota_session_active_ = false;
+    }
+    else if (ota_session_active_ && ota_pending_restart_at_ms_ == 0)
+    {
+        // A local (OC's own) OTA that can no longer complete. Leaving the flag
+        // set keeps updateBattery()/readINA230Power() gated off indefinitely.
+        // Skipped when a restart is already armed — that session succeeded and
+        // the disconnect is just the reboot starting.
+        ESP_LOGW(BLE_TAG, "Local OTA session was active at disconnect — aborting");
+        (void)ota_receiver_.abort();
+    }
+
     // Restart advertising so new devices can connect. Disconnect re-opens the
     // fast window (#541): reconnects are the common case right here.
     armFastAdvWindow();

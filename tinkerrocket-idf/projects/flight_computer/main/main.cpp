@@ -6213,7 +6213,28 @@ static void loop_fc()
             else if (out_pending_command == OTA_ABORT_CMD)
             {
                 ESP_LOGW(TAG, "[OTA] ABORT");
-                if (fc_ota_data_mode) fcRevertToTx();  // back to TX so status rides I2S
+                if (fc_ota_data_mode)
+                {
+                    // #834 items 6/7 (review): wait for the OC to stop driving
+                    // BCLK before seizing it, exactly as the FINISH path above
+                    // does and for the same reason — otherwise both ends drive
+                    // BCLK/WS. This used to be unreachable in practice because
+                    // nothing staged OTA_ABORT_CMD while the OC was (or was
+                    // about to be) master; the OC's disconnect/stall/flip-fail
+                    // recovery now does, so the abort path needs the same
+                    // handshake. Shorter cap than FINISH: an abort is already
+                    // the unhappy path and must not stall the flight loop.
+                    uint32_t last_cb = fc_ota_rx_cb_count;
+                    int quiet = 0;
+                    for (int i = 0; i < 120 && quiet < 20; i++)   // ~100 ms quiet, <=600 ms cap
+                    {
+                        delay_ms(5);
+                        const uint32_t cb = fc_ota_rx_cb_count;
+                        if (cb == last_cb) { quiet++; }
+                        else { quiet = 0; last_cb = cb; }
+                    }
+                    fcRevertToTx();  // back to TX so status rides I2S
+                }
                 (void)fc_ota_receiver.abort();
                 sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
             }
