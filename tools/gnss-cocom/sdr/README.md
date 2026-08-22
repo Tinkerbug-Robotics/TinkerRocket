@@ -37,6 +37,7 @@ variable at a time.
 | `air530_config.py` | Raises an Air530/AT6558R off its 9600 default via `$PCAS01` |
 | `blanking.py` | Tests whether C/N&#8320; blanking tracks the gate or free-runs |
 | `build_report.py` | Regenerates `report.html` from `receivers.json` and the archived figures |
+| `make_block_diagram.py` | Draws the rig block diagram used in the report |
 
 ## Quick start
 

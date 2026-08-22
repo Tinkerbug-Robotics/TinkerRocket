@@ -183,6 +183,22 @@ body = f'''
         quarter-wave inside a Faraday cage. The baseband comes from
         <code>gps-sdr-sim</code> against real broadcast ephemeris, so the
         satellites are where they actually were on the day.</p>
+    </div>
+
+    <figure>
+      <div class="panels" style="grid-template-columns:1fr">
+        <div class="panel">
+{fig("rig_block_diagram.svg")}
+        </div>
+      </div>
+      <figcaption>The rig. The trajectory does double duty: it is what the
+        simulator flies, and it is the ground truth every capture is compared
+        against &mdash; which is why no clock synchronisation between the
+        transmitter and the analysis is required. Only the link between the
+        attenuators and the receiver changes between parts.</figcaption>
+    </figure>
+
+    <div class="prose">
 
       <h3>Blocked is not the same as lost</h3>
       <p>The whole measurement rests on one distinction. A receiver that has been
