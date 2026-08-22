@@ -1137,15 +1137,24 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             default:   return .untested
             }
         }
-        // #831: fall back to the raw bit only when the rocket is actually
-        // reporting something. An all-zero scorecard means no evidence at all
-        // — the OC's low-power frames (FC rail off) never populate pyro_status
-        // or sensor_health, so a clear cont bit there is absence, not a
-        // measured open, and red is reserved for a measurement. A rocket on
-        // pre-#803 firmware still fills the rest of the scorecard, so its
-        // genuine open still reads as one.
-        guard telemetry.hasSensorHealth else { return .untested }
-        return telemetry.pyroCont(channel: channel) ? .present : .open
+        // The raw "ps" cont bit can only ever prove PRESENCE, never an open.
+        // The FC sets it as `cont_known[i] && cont_state[i]`
+        // (flight_computer/main.cpp), so a SET bit is unambiguous — measured,
+        // and continuous — while a CLEAR bit conflates "never measured" with
+        // "measured open". Red is reserved for a measurement, so a clear bit
+        // is .untested and a measured open can only come from the scorecard's
+        // SH_PYRO_MEAS = BAD above.
+        //
+        // Found on the bench 2026-08-22, and it is the state every session
+        // STARTS in: before any continuity test, all four SH_PYRO_MEAS fields
+        // read NA, so pyroMeasuredContinuity returns nil for every channel and
+        // execution reaches here. The live board reported
+        // sensor_health = 1092981 with a clear cont bit, and all four channels
+        // rendered a confident red "NO CONT". #828 fixed that at the view
+        // layer and #831 fixed the powered-off case, but both missed this one:
+        // their tests always had at least one channel measured, which is what
+        // makes pyroMeasuredContinuity return non-nil.
+        return telemetry.pyroCont(channel: channel) ? .present : .untested
     }
 
     /// Fail-safe Bool for callers that must reduce to go/no-go: ONLY a
