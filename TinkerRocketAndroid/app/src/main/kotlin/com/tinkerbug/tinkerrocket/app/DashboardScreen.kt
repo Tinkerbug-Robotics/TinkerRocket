@@ -81,6 +81,19 @@ fun DashboardScreen(
         "sim" -> { SimulationScreen(session, onBack = { onTool(null) }); return }
         "scan" -> { FreqScanScreen(session, onBack = { onTool(null) }); return }
         "magcal" -> { MagCalScreen(session, syncer, onBack = { onTool(null) }); return }
+        "preflight" -> {
+            if (container != null && profileStore != null) {
+                PreflightRunScreen(
+                    session = session,
+                    preflight = container.preflightStore,
+                    profiles = profileStore,
+                    syncer = syncer,
+                    fleetScope = container.fleetScope,
+                    onBack = { onTool(null) },
+                )
+            }
+            return
+        }
         "ota" -> {
             // The return sits outside the null check so an unroutable state
             // renders nothing rather than falling through into the dashboard
@@ -194,6 +207,20 @@ fun DashboardScreen(
         // READY and PRELAUNCH both render "PRELAUNCH" with a readiness badge
         // carrying the real distinction; raw wire strings untouched).
         RocketStateBanner(telemetry)
+
+        // Pre-flight checklist advisory: one quiet progress line for the
+        // active rocket, right under the state banner.  Advisory only — it
+        // never recolors the banner (sensor health owns that) and renders
+        // nothing when no checklist is configured.
+        if (container != null && profileStore != null) {
+            PreflightAdvisoryLine(
+                session = session,
+                preflight = container.preflightStore,
+                profiles = profileStore,
+                syncer = syncer,
+                onOpen = { onTool("preflight") },
+            )
+        }
 
         // Power section — #377: never offer the blind cmd-8 toggle until the
         // first telemetry frame of this session confirmed the power state.

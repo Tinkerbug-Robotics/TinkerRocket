@@ -83,6 +83,7 @@ fun SettingsScreen(
     syncer: ActiveRocketSyncer,
     fleetScope: CoroutineScope,
     session: DeviceSession? = null,
+    preflight: com.tinkerbug.tinkerrocket.session.PreflightStore? = null,
 ) {
     val profiles by store.profiles.collectAsState()
     val activeId by store.activeId.collectAsState()
@@ -664,7 +665,12 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
-                    fleetScope.launch { store.delete(active.id) }
+                    fleetScope.launch {
+                        store.delete(active.id)
+                        // The pre-flight checklist diff is keyed by profile
+                        // id and dies with it (iOS RocketProfileView twin).
+                        preflight?.deleteConfig(active.id)
+                    }
                 }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
