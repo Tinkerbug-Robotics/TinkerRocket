@@ -35,21 +35,27 @@
       <span>21 Aug 2026</span>
     </div>
     <h1>Hobby Grade GNSS Receiver Altitude and Speed Limits for High Performance Rockets</h1>
-    <p class="standfirst">Five hobby-grade GNSS receivers, flown against identical
-      simulated rocket trajectories, to find where each one stops publishing
-      position &mdash; and whether the reason is the COCOM export limit or
-      something else entirely. <strong>Two of the five stop well below the export
-      limit for unrelated reasons</strong>, and one implements no velocity limit
-      at all.</p>
-    <span class="status status-live">Five parts measured &middot; 25 runs</span>
+    <p class="standfirst">Five hobby-grade GNSS receivers were flown against identical
+      simulated rocket trajectories to find where each one stops publishing
+      state updates. Receivers are typically limited to 'COCOM' limits which come from 
+      a Cold War international agreement to place limits on GNSS receivers and keep
+      them from being used in ballistic missile guidance.  Limits were originally 18 km
+      and 515 m/s. The 18 km limit seems to have been removed more recently in favor of a
+      600 m/s limit from the Missile Technology Control Regime (MTCR Annex
+      Handbook 2017, Section 11.A.3). Receivers still implement limits differently and generally still implement
+      altitude limits, sometimes wildly different from the MTCR limit. The purpose of this 
+      work was to characterize the actual performance using a software-defined radio to
+      inject simulated trajectories into several readily available inexpensive receivers.</p>
+    <span class="status status-live">Five parts were measured</span>
   </header>
 
   <section>
     <h2><span class="n">01</span>The gates</h2>
     <div class="prose">
       <p>Every receiver here was flown against the same two trajectories through
-        the same signal generator. This is where each one stopped publishing a
-        position, and why.</p>
+        the same signal generator. If those two trajectories did not fully characterize
+        the limits, then additional excursions were run. The top-level summary of the results
+        is included in this table.</p>
     </div>
 
     <div class="scroll">
@@ -60,38 +66,17 @@
     </div>
 
     <div class="footnotes">
-        <p class="fn"><span class="mark">&nbsp;</span>Figures are rounded. Every
-          part that gates velocity brackets it within a few m/s of 515, and every
-          altitude gate lands within a few hundred metres of the figure shown, so
-          quoting each part's raw bracket here would invite a comparison the
-          measurement does not support. The measured brackets are given per
+        <p class="fn"><span class="mark">&nbsp;</span>Results are rounded slightly
+          here for the purpose of summarizing. The measured brackets are given per
           receiver below, and in <code>results/receivers.json</code>.</p>
 {{FOOTNOTES}}
     </div>
 
     <div class="prose">
       <h3>What the table says</h3>
-      <p><strong>The export limits themselves are consistent.</strong> Of the four
-        parts that implement a velocity gate, all four put it at the same place:
-        taking every gate edge from every flight, the highest speed that still
-        held a fix is 514&nbsp;m/s and the lowest that was withheld is
-        516&nbsp;m/s, straddling the quoted 515. Where an altitude gate is
-        genuinely an export gate it is at <strong>80&nbsp;km</strong>. Both limits
-        act <strong>independently</strong> &mdash; either closes the gate on its
-        own, which contradicts SkyTraq's own FAQ.</p>
-      <p><strong>What differs between parts is everything else.</strong> Two of
-        the five stop publishing far below the export limit, for reasons that have
-        nothing to do with export control: the NEO-M8T at 50&nbsp;km because of
-        its u-blox dynamic model, and the Air530 at 10&nbsp;km for reasons unknown.
-        A third, the Air530 again, implements no velocity limit at all &mdash; it
-        held a fix to 900&nbsp;m/s. And re-open latency spans two orders of
-        magnitude across the set.</p>
-      <p><strong>For choosing a receiver, the export gate is the least
-        interesting number on the page.</strong> It is the same everywhere. The
-        useful columns are the ceiling and its cause: a part that stops at
-        10&nbsp;km is unusable for high-power flight regardless of what the export
-        rule says, and a part that stops at 50&nbsp;km cannot be fixed by
-        configuration because no u-blox dynamic model goes higher.</p>
+      <p>Receivers do not implement the current MTCR 600 m/s limit. Most use the
+        COCOM 515 m/s limit for speed, and altitude limits vary significantly
+        from 10 km to 80 km, though several use the 80 km limit.</p>
     </div>
   </section>
 
@@ -164,6 +149,12 @@
         and settled before anything moves. Trajectory time is recovered from the
         GPS time in the receiver's own output, so no clock synchronisation between
         the transmitter and the analysis is needed.</p>
+      <p><strong>One signal, one band.</strong> The injection is GPS L1 C/A only.
+        Every receiver here is multi-constellation and two are multi-band, so all
+        of them are being tested well below what they can do. That is a property
+        of the rig, not of any part, and it applies equally to all five &mdash;
+        which is what makes the comparison fair even though it is not
+        representative of open-sky performance.</p>
     </div>
   </section>
 
@@ -181,16 +172,12 @@
     <h2><span class="n">04</span>Excursion tests</h2>
     <div class="prose">
       <p>The flight profiles were enough for four of the five parts. They were not
-        enough for the Air530, and the reason generalises: <strong>a ramp cannot
-        measure a threshold that a receiver reacts to slowly.</strong> On a
-        3&nbsp;g climb the vehicle spends about one second within
-        &plusmn;15&nbsp;m/s of the velocity limit, so a receiver lagging a few
-        seconds smears the answer across hundreds of m/s. What comes back is the
-        latency, not the threshold &mdash; and read as a threshold it is simply
-        wrong.</p>
-      <p>The fix is to stop ramping and <strong>dwell</strong>: hold a value steady
-        for far longer than any plausible lag, and the first level that blocks is
-        the threshold. Five scenarios were built for this.</p>
+        enough for the Air530 which, despite not implementing the MTCR velocity limit, it
+        also had the worst performance. Unlike every other unit, the Air530 periodically 
+        drops the fix internally during times it is blocked &mdash; i.e. above 10 km.</p>
+      <p>This means that additional scenarios were needed to study the behavior of the 
+        unit. So in addition to the data below, other scenarios were also run to
+        confirm the altitude limit and lack of velocity limit.</p>
 
       <div class="scroll">
         <table>
@@ -233,16 +220,13 @@
 
       <h3>The same trap on the NEO-M8T</h3>
       <p>The M8T stops publishing at 50&nbsp;km, which is the documented maximum
-        altitude of u-blox's airborne dynamic models rather than an export limit.
-        The test that separates the two is to change the model instead of the
-        trajectory: switching from airborne &lt;4&nbsp;g to portable moved the same
-        ceiling from 49.80&nbsp;km to 5.04&nbsp;km. An export gate does not track
-        the platform model.</p>
-      <p>No u-blox model exceeds 50&nbsp;km, and airborne &lt;4&nbsp;g is already
-        both the highest ceiling and the highest velocity limit available, so this
-        part's true altitude behaviour cannot be measured at all &mdash; the model
-        stops it first. The SAM-M10Q and ZED-F9P held fixes at 68.8&nbsp;km on that
-        same model, so it is an M8-generation behaviour.</p>
+        altitude of u-blox's airborne dynamic models rather than an MTCR limit.
+        The M8T has different models, and changing the model changed the limit, 
+        confirming that it was the model driving the limit and not MTCR. For example
+        switching from airborne &lt;4&nbsp;g to portable moved the same
+        ceiling from 49.80&nbsp;km to 5.04&nbsp;km.</p>
+      <p>No u-blox M8T model exceeds 50&nbsp;km. The SAM-M10Q and ZED-F9P held fixes
+        to 80&nbsp;km, so it is an M8-generation behaviour.</p>
     </div>
 
     <figure>
@@ -263,10 +247,9 @@
     <h2><span class="n">05</span>A receiver-side artifact</h2>
     <div class="prose">
       <p>The Air530's satellite count dips on a tight <strong>18&nbsp;s</strong>
-        cycle, and a regular artifact on a bench is guilty until proven innocent
-        &mdash; a loose connector or a playback stall would look like this and
-        would invalidate every number here. Three observations place it inside the
-        receiver.</p>
+        cycle. Ruling out bench issues here was important, since loose connectors
+        or other bench artifacts can drive errors. Three tests placed this behavior
+        on the Air530 and not the bench though.</p>
       <p><strong>A control part on the same path shows none of it.</strong> The
         ZED-F9P ran the identical scenario files through the identical
         70&nbsp;dB conducted chain with zero periodic dips.
@@ -298,31 +281,7 @@
     </figure>
   </section>
 
-  <section>
-    <h2><span class="n">06</span>What this cannot tell us</h2>
-    <div class="prose">
-      <p><strong>One signal, one band.</strong> The injection is GPS L1 C/A only.
-        Every receiver here is multi-constellation and two are multi-band, so all
-        of them are being tested well below what they can do. That is a property
-        of the rig, not of any part, and it applies equally to all five &mdash;
-        which is what makes the comparison fair even though it is not
-        representative of open-sky performance.</p>
-      <p><strong>One firmware, one sample.</strong> Each result is one physical
-        unit at one firmware version. Nothing here says a different sample of the
-        same part behaves identically, and the two ceilings that are not export
-        gates are exactly the kind of thing a firmware revision could move.</p>
-      <p><strong>Thresholds, not certification.</strong> These are bench
-        measurements of where a receiver stops publishing. They are not a
-        statement about what any receiver is licensed or required to do.</p>
-      <p><strong>Where a ceiling masks the export gate, the export gate is
-        unmeasured.</strong> The M8T's COCOM altitude behaviour above 50&nbsp;km
-        and the Air530's above 10&nbsp;km cannot be reached on this rig, because
-        the receivers stop for other reasons first.</p>
-    </div>
-  </section>
-
 </div>
-
 
 <!--
   ===========================================================================

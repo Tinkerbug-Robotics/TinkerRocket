@@ -149,6 +149,28 @@ def build():
     return HEAD.read_text() + "\n" + text.strip() + "\n", missing, left
 
 
+def tag_balance(text: str):
+    """Per-section counts of the container tags, so an edit cannot silently
+    unbalance the page.
+
+    Deleting a paragraph is easy; deleting the </div> that closed the block it
+    lived in is easy too, and the result still looks like valid text in an
+    editor. It shows up much later as a section swallowing everything after it.
+    """
+    import re as _re
+    out = []
+    for m in _re.finditer(r'<section>(.*?)</section>', text, _re.S):
+        body = m.group(1)
+        h = _re.search(r'<h2><span class="n">(\d+)</span>([^<]*)', body)
+        name = f"{h.group(1)} {h.group(2).strip()}" if h else "(unnamed)"
+        for tag in ("div", "figure", "table", "p"):
+            o = len(_re.findall(rf'<{tag}[\s>]', body))
+            c = body.count(f"</{tag}>")
+            if o != c:
+                out.append((name, tag, o, c))
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -157,6 +179,10 @@ def main() -> int:
     args = ap.parse_args()
 
     html, missing, left = build()
+    unbalanced = tag_balance(TEXT.read_text())
+    for name, tag, o, c in unbalanced:
+        print(f"  !! section '{name}': {o} <{tag}> but {c} </{tag}> "
+              f"-- report_text.html has an unclosed or stray tag")
     for k in missing:
         print(f"  !! {k} is not present in report_text.html -- that content will "
               f"not appear on the page")
@@ -168,11 +194,11 @@ def main() -> int:
     if args.check:
         print(f"  report_text.html {TEXT.stat().st_size} bytes, "
               f"{len(blurbs(TEXT.read_text()))} receiver blurbs")
-        return 0 if not (missing or left) else 1
+        return 0 if not (missing or left or unbalanced) else 1
 
     OUT.write_text(html)
     print(f"  report.html rebuilt: {len(html)} bytes")
-    return 0 if not (missing or left) else 1
+    return 0 if not (missing or left or unbalanced) else 1
 
 
 if __name__ == "__main__":
