@@ -1156,18 +1156,50 @@ struct HealthDotRow: View {
         }
     }
 
+    /// Most dots on one line.  Found on the bench 2026-08-22: a rocket with
+    /// two configured pyros produces nine dots, and the ninth sat off the
+    /// right edge of an iPhone 17 inside a `showsIndicators: false`
+    /// ScrollView — visible only if you happened to swipe a row that gave no
+    /// hint it could scroll.  That is bad here specifically because this row
+    /// answers "WHY does the banner say Do not fly": the verdict was on
+    /// screen while the red dot explaining it was not.  Six keeps a line
+    /// legible on the narrowest supported phone.
+    private static let maxPerLine = 6
+
+    /// Split into balanced lines rather than filling the first and orphaning
+    /// a remainder — 9 dots read better as 5+4 than 6+3.
+    private var lines: [[TelemetryData.SensorHealthRow]] {
+        guard rows.count > Self.maxPerLine else { return [rows] }
+        let lineCount = Int(ceil(Double(rows.count) / Double(Self.maxPerLine)))
+        let perLine = Int(ceil(Double(rows.count) / Double(lineCount)))
+        return stride(from: 0, to: rows.count, by: perLine).map {
+            Array(rows[$0 ..< min($0 + perLine, rows.count)])
+        }
+    }
+
     var body: some View {
-        HStack(spacing: 14) {
-            ForEach(rows) { row in
-                VStack(spacing: 3) {
-                    Circle()
-                        .fill(color(for: row.state))
-                        .frame(width: 12, height: 12)
-                    Text(row.name)
-                        .font(.caption2)
+        // Deliberately NOT lazy and no longer inside a ScrollView: both make
+        // ImageRenderer draw this empty, which is what left the clipping
+        // above untested — the render test targets this view directly and so
+        // never saw the container that was hiding a dot.
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(line) { row in
+                        VStack(spacing: 3) {
+                            Circle()
+                                .fill(color(for: row.state))
+                                .frame(width: 12, height: 12)
+                            Text(row.name)
+                                .font(.caption2)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1225,12 +1257,13 @@ struct HealthCardView: View {
             // labeled chip grid — the per-sensor state TEXT moved out of the
             // glanceable path (the go/no-go banner above carries the verdict;
             // a wrong dot's meaning is one tap into MagCal/Settings anyway).
-            // The row itself is a separate view because ImageRenderer draws
-            // ScrollView content as EMPTY — the render test hits the row
-            // directly (same reason the old LazyVGrid was render-untestable).
-            ScrollView(.horizontal, showsIndicators: false) {
-                HealthDotRow(rows: telemetry.sensorHealthRows)
-            }
+            // The row wraps rather than scrolling (2026-08-22): a ninth dot
+            // used to sit off the right edge of a `showsIndicators: false`
+            // horizontal ScrollView with nothing to say it was there.  The
+            // row is still a separate view so ImageRenderer can draw it — it
+            // used to be separate BECAUSE of the ScrollView, which is exactly
+            // why the render test could not see the clipping.
+            HealthDotRow(rows: telemetry.sensorHealthRows)
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
