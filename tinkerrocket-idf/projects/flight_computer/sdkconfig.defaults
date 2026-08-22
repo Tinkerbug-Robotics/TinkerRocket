@@ -7,7 +7,12 @@ CONFIG_PM_ENABLE=n
 CONFIG_BT_ENABLED=n
 
 # Flash
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# Boot NOR is a 128 Mbit (16 MB) part on every placement in the fleet
+# (rocket-computer U13/U16): GD25Q128ESIG today, W25Q128JVSIQ on boards fabbed before
+# 2026-08-15 — both 16 MB. Declaring 8 MB left half the part
+# unreachable and made every boot log "Detected size(16384k) larger
+# than the size in the binary image header(8192k)".
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
 # FreeRTOS
