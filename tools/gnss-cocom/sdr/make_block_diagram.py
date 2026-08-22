@@ -90,7 +90,8 @@ cls = Box("Classifier", "FIX / BLOCKED / NO_LOCK", "proc")
 cmp_ = Box("Compare", "against the trajectory", "proc")
 out = Box("Gate thresholds", "velocity and altitude", "out")
 
-M = 16                      # left margin
+M = 36                      # left margin, leaving a routing channel at CHAN
+CHAN = 15                   # x of the vertical channel left of every box
 TOP_A, TOP_B = 26, 214      # row baselines
 STACK_GAP = 14
 
@@ -184,16 +185,64 @@ def build():
              f'text-anchor="middle">conducted (SMA), or radiated inside a '
              f'Faraday cage</text>')
 
-    # the trajectory is also the ground truth the capture is compared against
+    # The trajectory is also the ground truth the capture is compared against.
+    # It leaves by the LEFT edge and drops down the routing channel: dropping
+    # from the box's centre put the vertical segment straight through the
+    # Receiver box, which sits directly below it.
     gt_y = out.bottom + 34
-    p.append(f'<path class="ar" d="M {traj.cx:.0f} {traj.bottom:.0f} V {gt_y:.0f} '
-             f'H {cmp_.cx:.0f} V {cmp_.bottom:.0f}" fill="none" '
+    p.append(f'<path class="ar" d="M {traj.x:.0f} {traj.cy:.0f} H {CHAN} '
+             f'V {gt_y:.0f} H {cmp_.cx:.0f} V {cmp_.bottom:.0f}" fill="none" '
              f'stroke-dasharray="4 3" marker-end="url(#ah)"/>')
-    p.append(f'<text class="lb" x="{(traj.cx + cmp_.cx)/2:.0f}" y="{gt_y + 14:.0f}" '
+    p.append(f'<text class="lb" x="{(CHAN + cmp_.cx)//2:.0f}" y="{gt_y + 14:.0f}" '
              f'text-anchor="middle">the same trajectory is the ground truth</text>')
 
     p.append('</svg>')
     return "\n".join(p) + "\n", extent, height
+
+
+def segments(svg: str):
+    """Every connector segment as (x1, y1, x2, y2), from lines and elbow paths."""
+    import re
+    segs = []
+    for m in re.findall(r'<line class="ar" x1="([\d.]+)" y1="([\d.]+)" '
+                        r'x2="([\d.]+)" y2="([\d.]+)"', svg):
+        segs.append(tuple(float(v) for v in m))
+    # Capture the whole d attribute, M included: matching after the M left
+    # the parser with no move-to and a None cursor.
+    for d in re.findall(r'<path class="ar" d="([^"]+)"', svg):
+        toks, x, y = d.split(), None, None
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            if t == "M":
+                x, y = float(toks[i + 1]), float(toks[i + 2]); i += 3
+            elif t == "H":
+                nx = float(toks[i + 1]); segs.append((x, y, nx, y)); x = nx; i += 2
+            elif t == "V":
+                ny = float(toks[i + 1]); segs.append((x, y, x, ny)); y = ny; i += 2
+            else:
+                i += 1
+    return segs
+
+
+def crossings(svg: str, boxes):
+    """Segments that pass through a box interior, excluding the box they touch.
+
+    Endpoint checks alone are not enough: a connector can start and end in clear
+    space and still run straight through a block on the way, which is what the
+    ground-truth line did to the Receiver.
+    """
+    out = []
+    for (x1, y1, x2, y2) in segments(svg):
+        lo_x, hi_x = min(x1, x2), max(x1, x2)
+        lo_y, hi_y = min(y1, y2), max(y1, y2)
+        for b in boxes:
+            bx0, by0, bx1, by1 = b.x, b.y, b.right, b.bottom
+            # strict overlap on both axes means the segment enters the interior
+            if lo_x < bx1 - 0.5 and bx0 + 0.5 < hi_x and \
+               lo_y < by1 - 0.5 and by0 + 0.5 < hi_y:
+                out.append(((x1, y1, x2, y2), b.label))
+    return out
 
 
 def main() -> int:
@@ -211,7 +260,12 @@ def main() -> int:
             flag = "  <- TIGHT" if b.slack() < 8 else ""
             print(f"  {b.label:<18} {b.w:>6.0f} {b.slack():>7.1f}{flag}")
         print(f"\n  widest row extends to x={extent:.0f} of {W}")
-        return 0 if extent <= W and all(b.slack() >= 0 for b in boxes) else 1
+        bad = crossings(svg, boxes)
+        for seg, name in bad:
+            print(f"  !! connector {seg} passes through '{name}'")
+        print(f"  connectors crossing a box: {len(bad)}")
+        return 0 if (extent <= W and not bad
+                     and all(b.slack() >= 0 for b in boxes)) else 1
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(svg)
