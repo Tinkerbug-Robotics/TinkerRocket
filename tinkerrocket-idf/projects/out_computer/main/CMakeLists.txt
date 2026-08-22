@@ -31,6 +31,7 @@ target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format -Wno-narr
 #   idf.py -B build_v7 -DTR_BOARD_V7=1 build   # legacy V7 board
 #   idf.py -B build_v8 -DTR_BOARD_V8=1 build   # V8 bench boards (MRAM fitted)
 #   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # V9/V10 (no MRAM, PSRAM ring)
+#   idf.py -B build_m1 -DTR_BOARD_M1=1 build   # rocket-computer-mini rev1
 #
 # There used to be a V7 default, i.e. `idf.py build` compiled the map of a
 # revision nobody owns, and did it silently. That was already a trap — V7's
@@ -44,7 +45,7 @@ target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format -Wno-narr
 # The build-dir name stays cosmetic — the board comes ONLY from the flag — but
 # use a separate -B dir per variant anyway, since CMake caches it.
 set(_tr_oc_board_flags "")
-foreach(_tr_flag TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9)
+foreach(_tr_flag TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9 TR_BOARD_M1)
     if(${_tr_flag})
         list(APPEND _tr_oc_board_flags ${_tr_flag})
     endif()
@@ -53,8 +54,9 @@ list(LENGTH _tr_oc_board_flags _tr_oc_board_flag_count)
 if(_tr_oc_board_flag_count EQUAL 0)
     message(FATAL_ERROR
         "out_computer: no board revision selected. Pass exactly one of "
-        "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 (V9 is the "
-        "hardware/rocket-computer V9/V10 board). There is no default: the old "
+        "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / -DTR_BOARD_M1=1 "
+        "(V9 is the hardware/rocket-computer V9/V10 board; M1 is "
+        "hardware/rocket-computer-mini rev1). There is no default: the old "
         "one was V7, whose PWR_PIN (GPIO6) is ESP_SCL on every later board, and "
         "V9/V10 additionally needs the sdkconfig overlay that enables its PSRAM "
         "log ring.")
@@ -65,7 +67,16 @@ elseif(NOT _tr_oc_board_flag_count EQUAL 1)
         "dir per variant — a stale CMake cache is the usual cause.")
 endif()
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ${_tr_oc_board_flags}=1)
-if(TR_BOARD_V9)
+# Every out_computer board is an ESP32-S3; assert it so a stray build dir
+# cannot produce an image for the wrong architecture.
+if(CONFIG_IDF_TARGET AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32s3")
+    message(FATAL_ERROR
+        "out_computer: every board revision is an ESP32-S3, but this build dir is "
+        "configured for '${CONFIG_IDF_TARGET}'. Use a fresh build dir.")
+endif()
+if(TR_BOARD_M1)
+    message(STATUS "out_computer: board pin map M1 (main/board/board_m1.h, rocket-computer-mini rev1, on-board SPI radio)")
+elseif(TR_BOARD_V9)
     message(STATUS "out_computer: board pin map V9/V10 (main/board/board_v9.h, no MRAM, PSRAM ring)")
 elseif(TR_BOARD_V8)
     message(STATUS "out_computer: board pin map V8 (main/board/board_v8.h, MRAM fitted)")

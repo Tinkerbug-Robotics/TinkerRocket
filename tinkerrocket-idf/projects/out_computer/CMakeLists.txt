@@ -34,7 +34,9 @@ string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
 # matters at runtime and not only for provenance: the two select different
 # headers (V9/V10 has no MRAM), so a "-v8" image on V9 hardware is a real
 # misconfiguration, not just a mislabel.
-if(TR_BOARD_V9)
+if(TR_BOARD_M1)
+    set(TR_BOARD_SUFFIX "-m1")
+elseif(TR_BOARD_V9)
     set(TR_BOARD_SUFFIX "-v9")
 elseif(TR_BOARD_V8)
     set(TR_BOARD_SUFFIX "-v8")
@@ -67,9 +69,18 @@ set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}${TR_BENCH_SUFFIX}+${TR_BUILD_DA
 # existing one. Without the second line, a root sdkconfig written by a V9 build
 # would silently carry CONFIG_SPIRAM into the next V8 build — the same
 # stale-cache trap as a wrong -DTR_BOARD_* flag, and just as quiet.
-if(TR_BOARD_V9)
+if(TR_BOARD_V9 OR TR_BOARD_M1)
+    # M1 shares the overlay: rocket-computer-mini's out computer is the same
+    # ESP32-S3RH2 with the same 2 MB of in-package quad PSRAM, so the log
+    # ring belongs in the same place. The file's V9-specific prose about U13's
+    # VCC and WORKLIST M-4 is rocket-computer's history, not the mini's; the
+    # CONFIG_* lines are what apply here.
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
-    message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on)")
+    if(TR_BOARD_M1)
+        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, shared with M1)")
+    else()
+        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on)")
+    endif()
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
 

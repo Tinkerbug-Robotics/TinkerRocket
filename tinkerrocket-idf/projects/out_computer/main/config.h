@@ -27,16 +27,26 @@
 #ifndef TR_BOARD_V9
 #define TR_BOARD_V9 0
 #endif
+// TR_BOARD_M1=1 selects board_m1.h — rocket-computer-mini rev1, where the far
+// side of the link is a second ESP32-S3 rather than a P4, the radio is an
+// on-board E220 on the memory SPI bus rather than a UART daughterboard, and
+// there is no camera, servo or separate GNSS rail. The six ESP_* link GPIOs
+// and the memory bus are identical to V9; everything else differs.
+#ifndef TR_BOARD_M1
+#define TR_BOARD_M1 0
+#endif
 // No default (#834 sweep). main/CMakeLists.txt raises the same error with a
 // friendlier message; this is the backstop for anything that includes config.h
 // without going through it.
-#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9) != 1
-#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1 or -DTR_BOARD_V9=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, and V9/V10 needs the sdkconfig overlay that enables its PSRAM log ring."
+#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_M1) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1 or -DTR_BOARD_M1=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, V9/V10 needs the sdkconfig overlay that enables its PSRAM log ring, and M1 (rocket-computer-mini) drives its radio over SPI where V8/V9 drive a UART daughterboard."
 #endif
 #if TR_BOARD_V8
 #include "board/board_v8.h"
 #elif TR_BOARD_V9
 #include "board/board_v9.h"
+#elif TR_BOARD_M1
+#include "board/board_m1.h"
 #else
 #include "board/board_v7.h"
 #endif
@@ -47,6 +57,23 @@
 // -1 on a V8 board the fitted MRAM simply goes unused. Both are silent. So pin
 // it here — re-aliasing the V9 branch back to board_v8.h, or editing MRAM_CS
 // in the wrong header, then fails the build instead of the flight.
+#if TR_BOARD_M1
+// The mini never had an MRAM to delete — U12 does not exist in its schematic.
+static_assert(board_pins::MRAM_CS < 0,
+              "rocket-computer-mini has no MRAM (no U12) — board_m1.h must keep MRAM_CS = -1");
+// The radio is a bare E220 on the memory SPI bus, not a UART daughterboard.
+// Getting this backwards points the modem backend at pins that are -1 and the
+// link simply never comes up, with no obvious symptom at the pin level.
+static_assert(!board_pins::USE_UART_RADIO_MODEM,
+              "rocket-computer-mini drives its radio over SPI — board_m1.h must keep USE_UART_RADIO_MODEM = false");
+static_assert(board_pins::LORA_CS_PIN >= 0 && board_pins::LORA_SPI_SCK >= 0,
+              "board_m1.h: the on-board E220 needs a real chip select and clock");
+// The E220's RF switch receive-enable MUST be driven; the base station has
+// already been bitten by an RXEN left floating in RX.
+static_assert(board_pins::LORA_RXEN_PIN >= 0,
+              "board_m1.h: L_RXEN reaches a GPIO on this board and must be driven");
+#endif
+
 #if TR_BOARD_V9
 static_assert(board_pins::MRAM_CS < 0,
               "V9/V10 deleted the MRAM (U12) — board_v9.h must keep MRAM_CS = -1 (#822)");

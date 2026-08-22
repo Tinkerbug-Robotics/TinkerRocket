@@ -15,6 +15,11 @@
 //   V7 legacy board:  idf.py -B build_v7 -DTR_BOARD_V7=1 build
 //   V8 bench boards:  idf.py -B build_v8 -DTR_BOARD_V8=1 build
 //   V9/V10 boards:    idf.py -B build_v9 -DTR_BOARD_V9=1 build
+//   rocket-computer-mini rev1:  idf.py -B build_m1 -DTR_BOARD_M1=1 build
+//
+// M1 is the one that is NOT an ESP32-P4 — the mini's flight computer is a
+// second ESP32-S3, and its pyro map shares no useful pin with V9's. Building
+// a V9 image for it fires the wrong channel silently.
 //
 // main/CMakeLists.txt enforces the same rule at configure time with a clearer
 // message; this check is the backstop for anything that includes config.h
@@ -28,10 +33,16 @@
 #ifndef TR_BOARD_V9
 #define TR_BOARD_V9 0
 #endif
-#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9) != 1
-#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1 or -DTR_BOARD_V9=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped) and a wrong map fires the wrong channel silently."
+#ifndef TR_BOARD_M1
+#define TR_BOARD_M1 0
 #endif
-#if TR_BOARD_V9
+#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_M1) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1 or -DTR_BOARD_M1=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped), and M1 (rocket-computer-mini) is an ESP32-S3 whose pyro map shares no pin with any of them. A wrong map fires the wrong channel silently."
+#endif
+#if TR_BOARD_M1
+#include "board/board_m1.h"
+#define TR_BOARD_REV_STR "M1 (rocket-computer-mini)"
+#elif TR_BOARD_V9
 #include "board/board_v9.h"
 #define TR_BOARD_REV_STR "V9/V10"
 #elif TR_BOARD_V8
@@ -40,6 +51,50 @@
 #else
 #include "board/board_v7.h"
 #define TR_BOARD_REV_STR "V7"
+#endif
+
+#if TR_BOARD_M1
+// ======================================================================
+// M1 invariants, asserted rather than trusted (this board fires pyros)
+// ======================================================================
+// The mini's flight computer is an ESP32-S3, and its pyro map shares no
+// useful pin with the P4 maps. Every failure below is SILENT at runtime — the
+// board boots, continuity reads plausibly, and the wrong channel fires — so
+// pin them at compile time.
+static_assert(board_pins::PYRO_ARM_PIN   == 8  &&
+              board_pins::PYRO1_FIRE_PIN == 4  && board_pins::PYRO1_CONT_PIN == 10 &&
+              board_pins::PYRO2_FIRE_PIN == 5  && board_pins::PYRO2_CONT_PIN == 11 &&
+              board_pins::PYRO3_FIRE_PIN == 6  && board_pins::PYRO3_CONT_PIN == 12 &&
+              board_pins::PYRO4_FIRE_PIN == 7  && board_pins::PYRO4_CONT_PIN == 42,
+              "board_m1.h pyro map changed — re-derive it from a netlist export of "
+              "hardware/rocket-computer-mini before editing this assert away");
+// No pyro line may land on a strapping pad. GPIO45 sets the flash rail
+// voltage and GPIO46 is sampled at boot; a continuity input's level depends
+// on whether an igniter happens to be connected, which the design does not
+// control, so one armed channel could stop the board booting.
+static_assert(board_pins::PYRO_ARM_PIN != 45 && board_pins::PYRO_ARM_PIN != 46 &&
+              board_pins::PYRO1_CONT_PIN != 45 && board_pins::PYRO1_CONT_PIN != 46 &&
+              board_pins::PYRO2_CONT_PIN != 45 && board_pins::PYRO2_CONT_PIN != 46 &&
+              board_pins::PYRO3_CONT_PIN != 45 && board_pins::PYRO3_CONT_PIN != 46 &&
+              board_pins::PYRO4_CONT_PIN != 45 && board_pins::PYRO4_CONT_PIN != 46,
+              "board_m1.h: a pyro line landed on an ESP32-S3 strapping pad");
+// The in-flight power latch (#848) needs gpio_hold_en to reach the RTC hold,
+// which on this part covers GPIO0-GPIO21 only (SOC_RTCIO_PIN_COUNT = 22).
+// Above that the call still returns ESP_OK and degrades to a deep-sleep-only
+// hold that evaporates on the first panic reset — #825, silently.
+static_assert(board_pins::PWR_HOLD_PIN >= 0 && board_pins::PWR_HOLD_PIN <= 21,
+              "board_m1.h: PWR_HOLD_PIN must be an RTC pad (GPIO0-21) or the in-flight "
+              "rail latch does not survive a reset — see #848/#825");
+// GPIO3 is a strapping pin (JTAG source select); latching it HIGH through
+// every in-flight reset is exactly what moving the hold off it avoided.
+static_assert(board_pins::PWR_HOLD_PIN != 3,
+              "board_m1.h: PWR_HOLD_PIN must not be GPIO3 — gpio_hold_en would latch a "
+              "strapping pad HIGH through every in-flight reset");
+// The magnetometer is on the OUT computer's I2C bus on this board. Turning
+// this on points the driver at pins that are -1.
+static_assert(!board_pins::USE_IIS2MDC,
+              "board_m1.h: the mini's magnetometer is on the out computer's bus — this "
+              "processor cannot reach it, so USE_IIS2MDC must stay false");
 #endif
 
 struct config : board_pins

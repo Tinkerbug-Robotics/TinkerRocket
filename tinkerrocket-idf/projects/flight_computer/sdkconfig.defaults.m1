@@ -1,0 +1,41 @@
+# sdkconfig overlay applied ONLY to -DTR_BOARD_M1=1 builds, on top of
+# sdkconfig.defaults. Selected by the project CMakeLists, not by the build-dir
+# name — see there.
+#
+# === THIS IS THE ONE THAT CHANGES THE CHIP ===
+# Every other flight_computer build targets an ESP32-P4. rocket-computer-mini's
+# flight computer (U32) is an ESP32-S3RH2 — the same part as its out computer.
+# That is not a variant of the P4 image, it is a different architecture
+# (Xtensa, not RISC-V), so this overlay MUST come after sdkconfig.defaults and
+# MUST land in a build dir of its own. A stale sdkconfig from a P4 build in the
+# same directory is the quiet failure mode here, which is why the project
+# CMakeLists also redirects SDKCONFIG into the build dir.
+#
+#   idf.py -B build_m1 -DTR_BOARD_M1=1 build
+#
+# If IDF has already fixed a target in build_m1, `idf.py -B build_m1 set-target
+# esp32s3` first, or delete the dir — set-target rewrites sdkconfig, and a
+# target mismatch surfaces as a wall of unrelated compile errors rather than a
+# clear message.
+CONFIG_IDF_TARGET="esp32s3"
+
+# === PSRAM: 2 MB in-package quad on the S3RH2 ===
+# Same part and same reasoning as the out computer's V9 overlay: the RH2 is the
+# embedded-PSRAM S3, the PSRAM sits on SPICS1 (pad 28, externally NC by
+# design), and GPIO33-37/47/48 stay usable because the octal restriction does
+# not apply to a quad part. IGNORE_NOTFOUND so a board that does not bring it
+# up boots anyway rather than panicking.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_40M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# === No radios on this processor ===
+# The S3 has WiFi and BLE where the P4 has neither, and this processor uses
+# neither: the mini's 2.4 GHz chip antenna is on the OUT computer, and U32 has
+# no antenna or matching network at all — its LNA_IN is a deliberate
+# no-connect. Compiling the stacks in would buy image size and a radio that
+# radiates into a via.
+CONFIG_BT_ENABLED=n
+CONFIG_ESP_WIFI_ENABLED=n

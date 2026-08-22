@@ -51,7 +51,9 @@ string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
 # version string (BLE config_identity "fw" field, boot log, OTA metadata), so
 # an image flashed onto the wrong revision can be spotted after the fact.
 # main/CMakeLists.txt is what validates the flag; this only labels the image.
-if(TR_BOARD_V9)
+if(TR_BOARD_M1)
+    set(TR_BOARD_SUFFIX "-m1")
+elseif(TR_BOARD_V9)
     set(TR_BOARD_SUFFIX "-v9")
 elseif(TR_BOARD_V8)
     set(TR_BOARD_SUFFIX "-v8")
@@ -61,6 +63,30 @@ else()
     set(TR_BOARD_SUFFIX "")
 endif()
 set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}+${TR_BUILD_DATE}")
+
+# Board revision has to reach sdkconfig, not just the compiler. M1
+# (rocket-computer-mini) is the only flight computer that is NOT an ESP32-P4 —
+# its FC is an ESP32-S3RH2 — so the overlay changes CONFIG_IDF_TARGET as well
+# as turning on that part's in-package PSRAM.
+#
+# Both lines matter. SDKCONFIG_DEFAULTS picks the overlay; SDKCONFIG moves the
+# GENERATED config into the build dir, because the default is one shared
+# sdkconfig at the project root and IDF does not re-apply defaults to an
+# existing one. Without the second line a root sdkconfig written by an M1 build
+# would carry esp32s3 into the next P4 build, and a target mismatch surfaces as
+# a wall of unrelated compile errors rather than a clear message.
+if(TR_BOARD_M1)
+    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.m1")
+    # CONFIG_IDF_TARGET in the overlay is NOT enough on its own. idf.py
+    # resolves the target before SDKCONFIG_DEFAULTS is applied, so an M1 build
+    # with only the overlay produces a perfectly successful ESP32-P4 image
+    # carrying the ESP32-S3 pin map — the exact silent wrong-chip build this
+    # project refuses to allow for pin maps. Force it into the cache here, and
+    # main/CMakeLists.txt asserts the result after resolution.
+    set(IDF_TARGET "esp32s3" CACHE STRING "M1 flight computer is an ESP32-S3" FORCE)
+    message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.m1 (ESP32-S3 target, PSRAM on)")
+endif()
+set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(flight_computer)

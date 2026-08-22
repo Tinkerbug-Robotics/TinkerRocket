@@ -1,0 +1,192 @@
+#pragma once
+
+#include <stdint.h>
+
+// rocket-computer-mini rev1 pin map for the FLIGHT COMPUTER (ESP32-S3RH2, U32).
+// Selected with TR_BOARD_M1=1:  idf.py -B build_m1 -DTR_BOARD_M1=1 build
+//
+// Board files: hardware/rocket-computer-mini/, sheet fc_esp32s3.kicad_sch.
+// Every constant below was taken from a kicad-cli netlist export of that
+// schematic at the merge of the second-processor work, not from the design
+// docs — walk U32's pad -> pinfunction -> net if you need to re-derive it.
+//
+// ### THE FLIGHT COMPUTER ON THIS BOARD IS AN ESP32-S3, NOT A P4 ###
+// Every other board_v*.h in this project maps an ESP32-P4. This one does not.
+// The topology is the same as rocket-computer's — the FC starts off, the out
+// computer switches it on, the FC holds its own rail up, and the FC owns all
+// four pyro channels — but the pin numbers come from a different part with
+// far fewer usable pads, and several P4 subsystems simply do not exist here.
+//
+// ### The pyro map is NOT the V9 map. Read this before firing anything. ###
+//   channel   V9 (P4)          here (S3)
+//   ARM       16               8
+//   1 FIRE    6                4
+//   1 CONT    7                10
+//   2 FIRE    11               5
+//   2 CONT    10               11
+//   3 FIRE    9                6
+//   3 CONT    12               12   (coincidence, not a shared constant)
+//   4 FIRE    13               7
+//   4 CONT    14               42
+// Nothing about these overlaps usefully. Building a V9 image for this board
+// fires the wrong channel silently, which is why config.h refuses to default.
+//
+// ### What this board does not have ###
+//   * no camera        — no CAM_SHUTTER, no RunCam UART, no camera rail
+//   * no servos        — no fin control, no SERVO_ACT
+//   * no piezo         — no sounds
+//   * no separate GNSS rail — the receiver is on V_MCU_SWTCH with us
+//   * only one indicator LED, and it is on a strapping pad (see RED_LED_PIN)
+//
+// KNOWN FIRMWARE GAP — THIS BOARD HAS NO HEADING SOURCE:
+// The magnetometer (U3, QMC5883P) is wired to the OUT COMPUTER's I2C bus on
+// this board, not to ours, so USE_IIS2MDC is false and IIS2MDC_SDA/SCL are
+// -1. Every magnetometer driver in the tree is built into THIS project (the
+// TR_IIS2MDC component reached through the TR_MAG_DRIVER_QMC5883P seam,
+// #797), and this project cannot reach the part. Until an out-computer-side
+// driver lands and ships mag frames across the link, anything that needs
+// heading — the EKF's yaw observability, MAGNETIC_DECLINATION_DEG, the
+// mag-aided attitude init — is running blind. Do NOT set USE_IIS2MDC true
+// here hoping the driver finds it; it is on the wrong processor's bus.
+struct board_pins
+{
+    // --- Sensor SPI bus (IMU + barometer) ---
+    // Named for the NET, as in board_v9.h: SENS_SDI is the sensors' data in
+    // (our MOSI) and SENS_SDO is their data out (our MISO). Do not swap them
+    // to match a "SDO = our output" reading.
+    static constexpr int SPI_SCK = 34;  // SENS_SCLK (CONFIRMED)
+    static constexpr int SPI_SDO = 2;   // SENS_SDO — sensors drive, we read
+    static constexpr int SPI_SDI = 1;   // SENS_SDI — we drive, sensors read
+
+    // --- GNSS (Quectel LC86G, UART only) ---
+    // Net names are from the module's perspective: GNSS_TX is the module's
+    // TXD, so we receive on it. No PPS to the MCU (1PPS drives LED D7), no
+    // reset line, no safeboot. A wedged receiver is recovered only by the
+    // out computer cycling the whole rail.
+    static constexpr int GNSS_RX = 39;         // net GNSS_TX, module->us
+    static constexpr int GNSS_TX = 40;         // net GNSS_RX, us->module
+    static constexpr int GNSS_RESET_N = -1;    // not wired (CONFIRMED)
+    static constexpr int GNSS_SAFEBOOT_N = -1; // not wired (CONFIRMED)
+
+    // --- Sensor chip selects ---
+    static constexpr int MMC5983MA_CS = -1;    // not fitted on the mini
+    static constexpr int BMP585_CS = 47;       // BMP585_CS   (CONFIRMED)
+    static constexpr int ISM6HG256_CS = 9;     // ISM6HG256_CS (CONFIRMED)
+    // The magnetometer is on the OUT COMPUTER's bus — see the file header.
+    static constexpr int IIS2MDC_SDA = -1;     // wrong processor (CONFIRMED)
+    static constexpr int IIS2MDC_SCL = -1;     // wrong processor (CONFIRMED)
+
+    // --- Which sensors this board actually has ---
+    // The part fitted is a BMP581, not a BMP585; the driver seam is shared
+    // and USE_BMP585 selects it, as on the single-MCU mini map.
+    static constexpr bool USE_BMP585 = true;
+    static constexpr bool USE_MMC5983MA = false;  // not fitted
+    static constexpr bool USE_GNSS = true;
+    static constexpr bool USE_ISM6HG256 = true;
+    static constexpr bool USE_IIS2MDC = false;    // on the OC's bus, not ours
+
+    // --- Sensor interrupts ---
+    // GPIO47/48 are SPICLK_N/SPICLK_P, which serve OCTAL PSRAM only; this
+    // part is quad, so they behave as ordinary GPIO. GPIO41 is MTDI — one of
+    // the four JTAG pads this board deliberately spends.
+    static constexpr int ISM6HG256_INT = 48;   // ISM6HG256_INT1 (CONFIRMED)
+    static constexpr int BMP585_INT = 41;      // BMP585_INT     (CONFIRMED)
+    static constexpr int MMC5983MA_INT = -1;   // not fitted
+    static constexpr int IIS2MDC_INT = -1;     // on the OC's bus, not ours
+
+    // --- No camera on this board ---
+    static constexpr int CAM_SHUTTER_PIN = -1;
+    static constexpr int RUNCAM_RX_PIN = -1;
+    static constexpr int RUNCAM_TX_PIN = -1;
+    static constexpr int RUNCAM_PWR_PIN = -1;
+
+    // --- Pyro (ALL FOUR CHANNELS ARE OURS) ---
+    // See the map comparison in the file header before changing anything.
+    // Every one of these is an unconditionally-free GPIO — no strapping pad,
+    // no JTAG pad, no PSRAM pad — except PYRO4_CONT, which spends MTMS. That
+    // is deliberate: continuity is a digital read whose level at boot depends
+    // on whether an igniter happens to be connected, so it must never sit on
+    // GPIO45 (which sets the flash rail voltage and could stop the board
+    // booting). Spending a JTAG pad was the cheaper trade.
+    static constexpr int PYRO_ARM_PIN   = 8;   // PYRO_ARM   (CONFIRMED)
+    static constexpr int PYRO1_FIRE_PIN = 4;   // PYRO1_FIRE (CONFIRMED)
+    static constexpr int PYRO1_CONT_PIN = 10;  // PYRO1_CONT (CONFIRMED)
+    static constexpr int PYRO2_FIRE_PIN = 5;   // PYRO2_FIRE (CONFIRMED)
+    static constexpr int PYRO2_CONT_PIN = 11;  // PYRO2_CONT (CONFIRMED)
+    static constexpr int PYRO3_FIRE_PIN = 6;   // PYRO3_FIRE (CONFIRMED)
+    static constexpr int PYRO3_CONT_PIN = 12;  // PYRO3_CONT (CONFIRMED)
+    static constexpr int PYRO4_FIRE_PIN = 7;   // PYRO4_FIRE (CONFIRMED)
+    static constexpr int PYRO4_CONT_PIN = 42;  // PYRO4_CONT (CONFIRMED; MTMS)
+
+    // --- No servos, no piezo on this board ---
+    static constexpr int SERVO_PIN_1 = -1;
+    static constexpr int SERVO_PIN_2 = -1;
+    static constexpr int SERVO_PIN_3 = -1;
+    static constexpr int SERVO_PIN_4 = -1;
+    static constexpr int PIEZO_PIN = -1;
+
+    // --- Indicators ---
+    // One LED (D5) and it hangs off GPIO45 through R114, which is ALSO the
+    // VDD_SPI voltage strap. Safe as drawn: 10 k in series with a white LED
+    // is non-conducting below its forward voltage, so at reset it pulls the
+    // same direction as the pad's internal pull-down and VDD_SPI still
+    // latches 3.3 V. Driving it high after boot lights the LED. Do not add a
+    // pull-up here.
+    static constexpr int RED_LED_PIN = 45;     // D5 (CONFIRMED)
+    static constexpr int BLUE_LED_PIN = -1;    // only one LED on this board
+
+    // --- I2C master to the OutComputer ---
+    static constexpr int ESP_SDA_PIN = 35;     // ESP_SDA (OC GPIO5)
+    static constexpr int ESP_SCL_PIN = 33;     // ESP_SCL (OC GPIO6)
+
+    // --- I2S master TX (high-frequency telemetry to the OutComputer) ---
+    // BCLK and WS match the P4's V9 numbers; the DATA PAIR DOES NOT. On the
+    // P4 ESP_SDO/ESP_SDI are GPIO19/20, but on an S3 those two pads are USB
+    // D-/D+ and this board spends them on the FSUSB63UMX mux so either
+    // processor can be flashed over the single USB-C port. 13/14 take their
+    // place. Both ends must agree PER NET; the OC side is 2/1/3/4.
+    static constexpr int I2S_BCLK_PIN  = 21;   // ESP_SCLK (OC GPIO2)
+    static constexpr int I2S_WS_PIN    = 18;   // ESP_CS   (OC GPIO1)
+    static constexpr int I2S_DOUT_PIN  = 13;   // ESP_SDO  (OC GPIO3)  [P4: 19]
+    static constexpr int I2S_FSYNC_PIN = 14;   // ESP_SDI  (OC GPIO4)  [P4: 20]
+
+    // --- No peripheral rail gates of our own ---
+    // rocket-computer's FC gates the GNSS rail (GPS_ACT) and the servo rail
+    // (SERVO_ACT). Neither exists here: one switch, U30, carries the GNSS,
+    // the sensors, the radio and the NAND together, and the out computer
+    // owns its enable.
+    static constexpr int GPS_ACT_PIN = -1;
+    static constexpr int SERVO_ACT_PIN = -1;
+
+    // ======================================================================
+    // Power hold latch (#848) — the whole reason this pin is where it is
+    // ======================================================================
+    // GPIO17 is the second anode of the D9 diode-OR into U30's enable, so
+    // driving it HIGH holds our own rail up regardless of the out computer.
+    // LOW and high-Z are electrically identical through the diode — an anode
+    // cannot pull the rail down — so this pin can only ever ADD power. Every
+    // glitch is harmless and "release" just hands the rail back to the OC's
+    // PWR_PIN. R84 (100 k) and C105 (10 uF) hold the enable up roughly 1.4 s
+    // after the last driver lets go; note the decay is on the ENABLE node,
+    // not on V_MCU_SWTCH, so we stay at full rail for the whole window and
+    // then drop sharply — there is no brownout race on the way down.
+    //
+    // *** THIS PIN MUST STAY INSIDE GPIO0-21. ***
+    // The assert is drive HIGH + gpio_hold_en, and on the ESP32-S3 that only
+    // reaches the reset-surviving RTC latch for an RTC-capable pad: ESP-IDF
+    // dispatches to rtc_gpio_hold_en() when rtc_gpio_is_valid_gpio() passes
+    // and otherwise falls back to the digital hold, which is DEEP-SLEEP ONLY.
+    // This part has SOC_RTCIO_PIN_COUNT = 22 (GPIO0-GPIO21) and
+    // RTCIO_GPIO17_CHANNEL exists, so GPIO17 latches exactly the way the P4's
+    // GPIO5 does. Move this above GPIO21 and gpio_hold_en still returns
+    // ESP_OK, the latch still looks asserted, and it evaporates on the first
+    // panic reset — reintroducing #825 (an OC fault reset powering the FC and
+    // all four pyro channels off mid-flight, ballistic) with no error to
+    // notice it by.
+    //
+    // Deliberately NOT GPIO3, where the single-MCU map had the rail enable:
+    // GPIO3 is a strapping pin (JTAG source select), and gpio_hold_en on it
+    // would latch that strap HIGH through every in-flight reset. GPIO3 is a
+    // bare pad on this board.
+    static constexpr int PWR_HOLD_PIN = 17;    // FC_EN_HOLD (CONFIRMED)
+};
