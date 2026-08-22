@@ -33,19 +33,17 @@
 //   * no camera, no servo    — so no TPS22811 high-side switches, no IMON
 //   * no separate GNSS rail  — the receiver is on V_MCU_SWTCH too
 //
-// KNOWN FIRMWARE GAPS on this board — read before bring-up:
-//   1. LORA_RXEN_PIN is new to this project. The E220-900MM22S needs its RF
-//      switch driven; the base station has already been bitten by an RXEN
-//      left floating in RX. rocket_computer_mini/comms.cpp consumes it
-//      (lora_cfg.rxen_pin); out_computer/comms.cpp does NOT yet. Wire it up
-//      before trusting a link budget.
-//   2. THE MAGNETOMETER HAS NO DRIVER ON THIS PROCESSOR. U3 (QMC5883P) is on
-//      PWR_SDA/PWR_SCL — this MCU's bus — but every magnetometer driver in
-//      the tree (TR_IIS2MDC via the TR_MAG_DRIVER_QMC5883P seam, #797) is
-//      built into the flight computer, which on this board cannot reach it.
-//      The out computer only ever CONSUMED mag messages over I2S. Until an
-//      OC-side driver lands, this board has no heading source. See the same
-//      note in flight_computer/main/board/board_m1.h.
+// KNOWN FIRMWARE GAP on this board — read before bring-up:
+// LORA_RXEN_PIN is new to this project. The E220-900MM22S needs its RF switch
+// driven; the base station has already been bitten by an RXEN left floating in
+// RX. rocket_computer_mini/comms.cpp consumes it (lora_cfg.rxen_pin);
+// out_computer/comms.cpp does NOT yet. Wire it up before trusting a link
+// budget.
+//
+// The magnetometer used to hang off our power-monitor bus and does not any
+// more — it moved to the flight computer's own MAG_SCL/MAG_SDA, where the
+// driver actually lives. PWR_SDA/PWR_SCL is a pure pack-monitor bus now, the
+// same shape as rocket-computer's PWR_SCL/PWR_SDA.
 struct board_pins
 {
     // --- Flight-computer rail switch ---
@@ -62,13 +60,13 @@ struct board_pins
     // sensors and the NAND with it.
     static constexpr int GPS_PWR_PIN = -1;   // no separate rail (CONFIRMED)
 
-    // --- Power monitoring + magnetometer (always-on I2C bus) ---
-    // INA230 @ 0x40 and the QMC5883P share this bus, and BOTH are on the
-    // always-on +3V3 rail along with the pull-ups R67/R69. That is load
-    // bearing: with the magnetometer behind U30 instead, those +3V3 pull-ups
-    // drove its I2C pads while its own supply was actively discharged, which
-    // clamped the bus below VIL and made the pack monitor unreadable in pad
-    // standby. Do not move U3 back to the switched rail.
+    // --- Power monitoring (INA230 @ 0x40, always-on I2C bus) ---
+    // Only the pack monitor is on this bus, and it, this MCU and the pull-ups
+    // R67/R69 are all on the always-on +3V3 rail. Keep it that way: the
+    // magnetometer used to hang here while its own supply sat behind U30, and
+    // those +3V3 pull-ups drove its pads against a rail the switch was
+    // actively discharging — which clamped the bus below VIL and made the
+    // pack monitor unreadable during pad standby.
     static constexpr int PWR_SDA = 21;       // SEN_SDA (CONFIRMED)
     static constexpr int PWR_SCL = 33;       // SEN_SCL (CONFIRMED)
 

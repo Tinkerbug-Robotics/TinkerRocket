@@ -41,7 +41,7 @@ expansion header, camera, servo and piezo came out.*
 | Rail | `+3V3` — always on | `V_MCU_SWTCH` — **starts off** |
 | Radio | 2.4 GHz chip antenna `U31`, 900 MHz LoRa `U16` | none |
 | Memory | NAND `U11` + boot flash `U13` | boot flash `U33` only |
-| Sensors | magnetometer and pack monitor on `SEN_SC*` — **both on `+3V3`** | IMU, baro, GNSS |
+| Sensors | pack monitor only, on `SEN_SC*` (`+3V3`) | IMU, baro, GNSS **and magnetometer** |
 | Pyro | none | all four channels and `PYRO_ARM` |
 | USB | `OC_D±` | `FC_D±` |
 
@@ -142,15 +142,33 @@ Six wires, the same net names and the same protocols as `rocket-computer`:
 on purpose, so they are not two more paths feeding a dead rail. `R34` (100 k)
 pulls `ESP_SDO` down; see above.
 
-**The magnetometer moved to `+3V3` for this reason.** It shares `SEN_SCL`/
-`SEN_SDA` with the pack monitor, whose pull-ups `R67`/`R69` are on `+3V3`. With
-`U3` behind the switch those pull-ups fed its I2C pads while `U30`'s QOD held
-its supply at ground — above abs-max, and clamping the bus below VIL so the
-INA230 was unreadable in exactly the pad-standby mode this design exists to
-enable. There is no other pack-voltage path to the out computer, so that was the
-whole of its battery telemetry. `R67`/`R69` were the only passive pull-ups on
-the board crossing the rail boundary; every remaining crossing is an actively
-driven signal.
+**The magnetometer belongs to the flight computer, and getting there took two
+tries.** It is a flight sensor, so it should always have sat with the IMU, the
+barometer and the GNSS — which is exactly where `rocket-computer` puts its
+`IIS2MDCTR`, on the flight computer's own I2C with the pull-ups on the same
+rail as the part. The mini instead shared it onto the out computer's
+power-monitor bus, a single-MCU decision (`pin-budget.md`: *"shares the
+power-monitor I²C bus — no new pins"*) that nothing revisited when the board
+grew a second processor.
+
+That left it stranded in two ways at once. Electrically, `R67`/`R69` pulled up
+to `+3V3` while `U3`'s supply sat behind `U30`, whose QOD actively discharges
+the rail — so in pad standby those pull-ups drove its I2C pads against a
+grounded supply, above abs-max, clamping the bus below VIL and making the
+INA230 unreadable. That was the whole of the board's battery telemetry, since
+nothing else reaches `VBAT`. And in firmware, every magnetometer driver in the
+tree is built into the flight computer, which could not reach a part on the
+other processor's bus — so the board had no heading source at all.
+
+Both are gone now: `U3` moved to `MAG_SCL`/`MAG_SDA` on the flight computer
+(GPIO37/GPIO36), with `R117`/`R118` (5.11 k) pulled up to `V_MCU_SWTCH` — the
+same rail as the part and its master. `SEN_SCL`/`SEN_SDA` is a pure pack-monitor
+bus on `+3V3`, the same shape as `rocket-computer`'s `PWR_SCL`/`PWR_SDA`. No
+passive pull-up crosses the rail boundary any more; every remaining crossing is
+an actively driven signal.
+
+The part exposes no DRDY on this land — every pad but SCL/SDA/VDD/GND is NC —
+so the magnetometer is poll-only. That is the part, not an omission.
 
 **Firmware constraint.** All six of these cross the `+3V3` / `V_MCU_SWTCH`
 boundary, and they are the only signals live during pad standby with the flight

@@ -5124,7 +5124,7 @@
 			)
 		)
 	)
-	(global_label "SEN_SCL"
+	(global_label "MAG_SCL"
 		(shape input)
 		(at 41.275 52.07 180)
 		(fields_autoplaced yes)
@@ -5172,7 +5172,7 @@
 			)
 		)
 	)
-	(global_label "SEN_SDA"
+	(global_label "MAG_SDA"
 		(shape input)
 		(at 41.275 49.53 180)
 		(fields_autoplaced yes)
@@ -9132,85 +9132,7 @@
 			)
 		)
 	)
-	(symbol
-		(lib_id "power:+3V3")
-		(at 16.51 41.275 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "93bbf1fa-d727-425e-a281-c70c71c5be45")
-		(property "Reference" "#PWR0430"
-			(at 16.51 45.085 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "+3V3"
-			(at 16.51 36.83 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 16.51 41.275 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 16.51 41.275 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"+3V3\""
-			(at 16.51 41.275 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "db7e06af-cee4-415a-aa04-003fa8c80a6d")
-		)
-		(instances
-			(project "rocket-computer-mini"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/1c983e58-9603-45bc-a3c3-aa797d38a10d"
-					(reference "#PWR0430")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(text "Magnetometer runs from the ALWAYS-ON +3V3, not V_MCU_SWTCH.\nIts SEN_SCL/SEN_SDA pull-ups (R67/R69) are on +3V3 and the bus is\nshared with the U23 power monitor, which is also always-on. With\nU3 on the switched rail the pull-ups drove its I2C pads above\nabs-max whenever the Flight Computer was off, and clamped the bus\nbelow VIL so the pack monitor could not be read during pad standby."
+	(text "Magnetometer is a FLIGHT sensor: it sits on the flight\ncomputer\u0027s own MAG_SCL/MAG_SDA bus with the IMU, baro and\nGNSS, and shares their V_MCU_SWTCH rail. Its pull-ups (R117/\nR118) are on that SAME rail - do not move them to +3V3, and do\nnot put this part back on the out computer\u0027s SEN_* bus: with\nthe pull-ups in one domain and the part in the other, U30\u0027s\nQOD held its supply at ground while they drove its pads."
 		(exclude_from_sim no)
 		(at 12.7 22.86 0)
 		(effects
@@ -9220,5 +9142,29 @@
 			(justify left)
 		)
 		(uuid "3a7c9e21-45bd-4f08-a913-77c1e0d5b8a2")
+	)
+	(global_label "V_MCU_SWTCH"
+		(shape input)
+		(at 16.51 41.275 90)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "d223f2cc-13cf-4588-a9c7-f7b6431f5892")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 16.51 24.985 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
 	)
 )

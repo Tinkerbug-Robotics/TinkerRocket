@@ -38,16 +38,12 @@
 //   * no separate GNSS rail — the receiver is on V_MCU_SWTCH with us
 //   * only one indicator LED, and it is on a strapping pad (see RED_LED_PIN)
 //
-// KNOWN FIRMWARE GAP — THIS BOARD HAS NO HEADING SOURCE:
-// The magnetometer (U3, QMC5883P) is wired to the OUT COMPUTER's I2C bus on
-// this board, not to ours, so USE_IIS2MDC is false and IIS2MDC_SDA/SCL are
-// -1. Every magnetometer driver in the tree is built into THIS project (the
-// TR_IIS2MDC component reached through the TR_MAG_DRIVER_QMC5883P seam,
-// #797), and this project cannot reach the part. Until an out-computer-side
-// driver lands and ships mag frames across the link, anything that needs
-// heading — the EKF's yaw observability, MAGNETIC_DECLINATION_DEG, the
-// mag-aided attitude init — is running blind. Do NOT set USE_IIS2MDC true
-// here hoping the driver finds it; it is on the wrong processor's bus.
+// The magnetometer is OURS, on its own I2C bus (MAG_SCL/MAG_SDA), exactly as
+// rocket-computer puts its IIS2MDCTR on the flight computer. It briefly was
+// not: the single-MCU mini shared it onto the power-monitor bus to save two
+// pins, and the second processor left it stranded on the out computer, which
+// has no magnetometer driver at all. Moving it here cost two spare pads and
+// closed that gap. Build this project with -DTR_MAG_DRIVER_QMC5883P.
 struct board_pins
 {
     // --- Sensor SPI bus (IMU + barometer) ---
@@ -72,9 +68,13 @@ struct board_pins
     static constexpr int MMC5983MA_CS = -1;    // not fitted on the mini
     static constexpr int BMP585_CS = 47;       // BMP585_CS   (CONFIRMED)
     static constexpr int ISM6HG256_CS = 9;     // ISM6HG256_CS (CONFIRMED)
-    // The magnetometer is on the OUT COMPUTER's bus — see the file header.
-    static constexpr int IIS2MDC_SDA = -1;     // wrong processor (CONFIRMED)
-    static constexpr int IIS2MDC_SCL = -1;     // wrong processor (CONFIRMED)
+    // Magnetometer I2C. U3 is a QMC5883P, reached through the TR_IIS2MDC
+    // component's TR_MAG_DRIVER_QMC5883P seam (#797) — hence the constant
+    // names. Its own bus, like rocket-computer's IIS2MDCTR_SCL/SDA: the part,
+    // its master and its pull-ups (R117/R118, 5.11 k) are all on
+    // V_MCU_SWTCH, so nothing drives a pad whose supply is down.
+    static constexpr int IIS2MDC_SDA = 36;     // MAG_SDA (CONFIRMED)
+    static constexpr int IIS2MDC_SCL = 37;     // MAG_SCL (CONFIRMED)
 
     // --- Which sensors this board actually has ---
     // The part fitted is a BMP581, not a BMP585; the driver seam is shared
@@ -83,7 +83,7 @@ struct board_pins
     static constexpr bool USE_MMC5983MA = false;  // not fitted
     static constexpr bool USE_GNSS = true;
     static constexpr bool USE_ISM6HG256 = true;
-    static constexpr bool USE_IIS2MDC = false;    // on the OC's bus, not ours
+    static constexpr bool USE_IIS2MDC = true;     // QMC5883P via the #797 seam
 
     // --- Sensor interrupts ---
     // GPIO47/48 are SPICLK_N/SPICLK_P, which serve OCTAL PSRAM only; this
@@ -92,7 +92,9 @@ struct board_pins
     static constexpr int ISM6HG256_INT = 48;   // ISM6HG256_INT1 (CONFIRMED)
     static constexpr int BMP585_INT = 41;      // BMP585_INT     (CONFIRMED)
     static constexpr int MMC5983MA_INT = -1;   // not fitted
-    static constexpr int IIS2MDC_INT = -1;     // on the OC's bus, not ours
+    // The QMC5883P land on this board exposes no DRDY/INT — every other pad
+    // is NC — so the magnetometer is poll-only. Not an omission.
+    static constexpr int IIS2MDC_INT = -1;     // no DRDY pin (CONFIRMED)
 
     // --- No camera on this board ---
     static constexpr int CAM_SHUTTER_PIN = -1;

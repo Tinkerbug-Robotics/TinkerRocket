@@ -90,11 +90,13 @@ static_assert(board_pins::PWR_HOLD_PIN >= 0 && board_pins::PWR_HOLD_PIN <= 21,
 static_assert(board_pins::PWR_HOLD_PIN != 3,
               "board_m1.h: PWR_HOLD_PIN must not be GPIO3 — gpio_hold_en would latch a "
               "strapping pad HIGH through every in-flight reset");
-// The magnetometer is on the OUT computer's I2C bus on this board. Turning
-// this on points the driver at pins that are -1.
-static_assert(!board_pins::USE_IIS2MDC,
-              "board_m1.h: the mini's magnetometer is on the out computer's bus — this "
-              "processor cannot reach it, so USE_IIS2MDC must stay false");
+// The magnetometer is on OUR bus and must stay there — it is a flight sensor,
+// and the out computer has no driver for one. Its pull-ups are on
+// V_MCU_SWTCH with the part, so master, slave and pull-ups share a rail.
+static_assert(board_pins::USE_IIS2MDC &&
+              board_pins::IIS2MDC_SDA >= 0 && board_pins::IIS2MDC_SCL >= 0,
+              "board_m1.h: the mini's magnetometer belongs to the flight computer — "
+              "USE_IIS2MDC on, with real MAG_SDA/MAG_SCL pins");
 #endif
 
 struct config : board_pins

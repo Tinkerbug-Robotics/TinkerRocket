@@ -120,7 +120,9 @@ field.
 In rough order of cost to the design:
 
 Three savings are already reflected in the 27 above and are decided: the
-magnetometer moving onto the power-monitor I²C bus, the radio's two non-pin
+magnetometer moving onto the power-monitor I²C bus (**since reversed** — see
+*The split*: it is a flight sensor and now has its own bus on the flight
+computer), the radio's two non-pin
 signals, and the GNSS reducing to its UART pair. What remains:
 
 ### Sharing an SPI bus beats adding an expander
@@ -435,10 +437,11 @@ left GPIO26) carries over verbatim.
 | `ESP_SDO` / `ESP_SDI` | 13, 14 | new — I2S data and frame sync to the OC |
 | `ESP_CS` / `ESP_SCLK` | 18, 21 | new — I2S word select and bit clock |
 | `ESP_SCL` / `ESP_SDA` | 33, 35 | new — I2C to the OC, 5.11 k to `V_MCU_SWTCH` |
+| `MAG_SDA` / `MAG_SCL` | 36, 37 | new — the magnetometer moved off the out computer's power-monitor bus onto ours, where the driver lives. Pull-ups `R117`/`R118` on `V_MCU_SWTCH`, the same rail as the part |
 | `FC_EN_HOLD` | 17 | new — self-hold into `D9`. **Deliberately not GPIO3** — see the correction above. **Must stay in GPIO0–21**: the in-flight latch needs `gpio_hold_en`, which only reaches the reset-surviving RTC hold on an RTC pad (`SOC_RTCIO_PIN_COUNT = 22` on this part). Above GPIO21 the call still returns `ESP_OK` but degrades to a deep-sleep-only hold |
 | `FC_D−` / `FC_D+` | 19, 20 | USB, through the `U1` mux |
 
-**Spare on the flight computer: GPIO3, 36, 37, 38, 43, 44** — six pads, with
+**Spare on the flight computer: GPIO3, 38, 43, 44** — four pads, with
 the serial console (43/44) among them and therefore intact. GPIO45 and GPIO46
 carry the strapping network as before; **GPIO26 stays unused** for the
 quad-PSRAM reason argued above, and **GPIO3 is now a bare pad** with no trace on
@@ -448,7 +451,8 @@ it, which is the safest state for a strapping pin the design has no use for.
 
 Keeps the radio (`L_CS`, `L_BUSY`, `L_DI01`, `L_RST`, `L_RXEN`), the shared
 memory bus (`M_SCK`, `M_MOSI`, `M_MISO`, `M_FLASH_CS`), the power-monitor and
-magnetometer I2C (`SEN_SCL`, `SEN_SDA`), its boot flash and USB. It gains the
+pack-monitor I2C (`SEN_SCL`, `SEN_SDA` — the magnetometer has moved off it),
+its boot flash and USB. It gains the
 six `ESP_*` link pins on GPIO1–6 and `FC_EN_OC` on GPIO7.
 
 **Spare on the out computer: GPIO8, 9, 10, 11, 12, 34, 39, 40, 41, 42, 47, 48**
