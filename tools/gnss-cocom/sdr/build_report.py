@@ -101,12 +101,12 @@ def receiver_sections(d, text) -> str:
     <figure>
       <div class="panels" style="grid-template-columns:1fr">
         <div class="panel">
-          <h4>{r['part']} &mdash; 15 g boost <span class="badge">spaceshot</span></h4>
+          <h4>{r['part']} &mdash; 15 g boost</h4>
           <p>82.5 km apogee, 1343 m/s peak &mdash; both limits exceeded</p>
 {fig(f1)}
         </div>
         <div class="panel">
-          <h4>{r['part']} &mdash; 3 g boost <span class="badge">gentle_alt</span></h4>
+          <h4>{r['part']} &mdash; 3 g boost</h4>
           <p>same apogee reached slowly &mdash; the run that brackets the thresholds</p>
 {fig(f2)}
         </div>
