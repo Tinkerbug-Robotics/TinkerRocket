@@ -130,19 +130,34 @@ struct PreflightMaster: Codable, Equatable {
 /// current run.  `checked` maps item id (uppercase UUID string — JSON
 /// dictionary keys must be strings) to when the operator checked it;
 /// only manual steps ever appear in it.
+///
+/// `orderedIds` is this rocket's step order, set the first time the
+/// operator reorders its list.  Empty = the default order (master order,
+/// extras appended).  Ids of later-added steps won't be in it — they
+/// append after the custom-ordered block — and stale ids (deleted or
+/// excluded steps) are simply skipped, so the order survives master
+/// edits without maintenance.
 struct PreflightRocketConfig: Codable, Equatable {
     var profileId: UUID
     var disabledMasterIds: [UUID] = []
     var extraItems: [PreflightItem] = []
+    var orderedIds: [UUID] = []
     var checked: [String: Date] = [:]
     var updatedAt: Date = Date()
 
+    // Explicit so lenientUUIDs can name the type in its signature — the
+    // synthesized CodingKeys isn't referable from other members' signatures.
+    enum CodingKeys: String, CodingKey {
+        case profileId, disabledMasterIds, extraItems, orderedIds, checked, updatedAt
+    }
+
     init(profileId: UUID, disabledMasterIds: [UUID] = [],
-         extraItems: [PreflightItem] = [], checked: [String: Date] = [:],
-         updatedAt: Date = Date()) {
+         extraItems: [PreflightItem] = [], orderedIds: [UUID] = [],
+         checked: [String: Date] = [:], updatedAt: Date = Date()) {
         self.profileId = profileId
         self.disabledMasterIds = disabledMasterIds
         self.extraItems = extraItems
+        self.orderedIds = orderedIds
         self.checked = checked
         self.updatedAt = updatedAt
     }
@@ -150,14 +165,39 @@ struct PreflightRocketConfig: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         profileId = try c.decode(UUID.self, forKey: .profileId)
-        disabledMasterIds = try c.decodeIfPresent([UUID].self, forKey: .disabledMasterIds) ?? []
+        // Id arrays decode LENIENTLY, per entry (Android decodeUuidList
+        // parity): [UUID].self would throw on one malformed element and
+        // PreflightStore.load() then discards the WHOLE config — exclusions,
+        // extras, checked state all lost for one bad string.
+        disabledMasterIds = Self.lenientUUIDs(c, .disabledMasterIds)
         extraItems = try c.decodeIfPresent([PreflightItem].self, forKey: .extraItems) ?? []
+        orderedIds = Self.lenientUUIDs(c, .orderedIds)
         checked = try c.decodeIfPresent([String: Date].self, forKey: .checked) ?? [:]
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
 
+    /// A UUID array where malformed or non-string entries are skipped, and
+    /// a wrong-typed value for the whole key yields [] — never a throw.
+    private static func lenientUUIDs(_ c: KeyedDecodingContainer<CodingKeys>,
+                                     _ key: CodingKeys) -> [UUID] {
+        let raw = (try? c.decodeIfPresent([FailableUUID].self, forKey: key)) ?? nil
+        return raw?.compactMap(\.value) ?? []
+    }
+
     func isChecked(_ itemId: UUID) -> Bool {
         checked[itemId.uuidString] != nil
+    }
+}
+
+/// Per-entry tolerant UUID decode: a malformed string or non-string entry
+/// decodes as nil (skipped by the caller) instead of throwing and taking
+/// the whole file down with it.
+private struct FailableUUID: Decodable {
+    let value: UUID?
+    init(from decoder: Decoder) {
+        let s = (try? decoder.singleValueContainer())
+            .flatMap { try? $0.decode(String.self) }
+        value = s.flatMap(UUID.init(uuidString:))
     }
 }
 
@@ -201,13 +241,36 @@ struct PreflightProgress: Equatable {
 
 enum PreflightChecklist {
 
-    /// A rocket's effective checklist: master items in master order, minus
-    /// the ones this rocket excludes, then the rocket's own extras.
+    /// A rocket's effective checklist: master items minus the ones this
+    /// rocket excludes, plus the rocket's own extras — in the rocket's
+    /// custom order when it has one, else master order with extras appended.
     static func effectiveItems(master: PreflightMaster,
                                config: PreflightRocketConfig?) -> [PreflightItem] {
         guard let config else { return master.items }
         let disabled = Set(config.disabledMasterIds)
-        return master.items.filter { !disabled.contains($0.id) } + config.extraItems
+        let base = master.items.filter { !disabled.contains($0.id) } + config.extraItems
+        return applyOrder(base, orderedIds: config.orderedIds)
+    }
+
+    /// Sort `items` by their position in `orderedIds`.  Ids not listed
+    /// (steps added after the order was saved) append after the ordered
+    /// block in their base order; listed ids with no matching item
+    /// (deleted or excluded steps) are skipped.  An empty order is the
+    /// identity — the base order stands.
+    static func applyOrder(_ items: [PreflightItem],
+                           orderedIds: [UUID]) -> [PreflightItem] {
+        guard !orderedIds.isEmpty else { return items }
+        var position: [UUID: Int] = [:]
+        for (idx, id) in orderedIds.enumerated() where position[id] == nil {
+            position[id] = idx
+        }
+        // Partition rather than sort: base order must be PRESERVED for the
+        // unlisted tail, and a single sort with a synthetic "infinity" key
+        // wouldn't be documented-stable across both halves.
+        let listed = items.filter { position[$0.id] != nil }
+            .sorted { position[$0.id]! < position[$1.id]! }
+        let unlisted = items.filter { position[$0.id] == nil }
+        return listed + unlisted
     }
 
     /// Live status of one auto step; nil for manual steps.

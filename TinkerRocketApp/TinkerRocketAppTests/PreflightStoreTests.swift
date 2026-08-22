@@ -118,6 +118,108 @@ final class PreflightStoreTests: XCTestCase {
         XCTAssertNil(makeStore().config(for: rocket))
     }
 
+    // MARK: - Per-rocket ordering
+
+    func testMoveEffectiveItemsInterleavesExtrasAndPersists() {
+        let store = makeStore()
+        _ = store.addMasterItem(PreflightItem(title: "A"))
+        _ = store.addMasterItem(PreflightItem(title: "B"))
+        let rocket = UUID()
+        store.addExtraItem(PreflightItem(title: "Extra"), for: rocket)
+
+        // [A, B, Extra] → move Extra between the master steps.
+        store.moveEffectiveItems(fromOffsets: IndexSet(integer: 2), toOffset: 1,
+                                 for: rocket)
+        XCTAssertEqual(store.effectiveItems(for: rocket).map(\.title),
+                       ["A", "Extra", "B"])
+        XCTAssertEqual(makeStore().effectiveItems(for: rocket).map(\.title),
+                       ["A", "Extra", "B"])
+        // Other rockets keep the default order.
+        XCTAssertEqual(store.effectiveItems(for: UUID()).map(\.title), ["A", "B"])
+    }
+
+    func testNewMasterStepAppendsAfterACustomOrder() {
+        let store = makeStore()
+        _ = store.addMasterItem(PreflightItem(title: "A"))
+        _ = store.addMasterItem(PreflightItem(title: "B"))
+        let rocket = UUID()
+        store.moveEffectiveItems(fromOffsets: IndexSet(integer: 0), toOffset: 2,
+                                 for: rocket)   // [B, A]
+
+        _ = store.addMasterItem(PreflightItem(title: "C"))
+        XCTAssertEqual(store.effectiveItems(for: rocket).map(\.title),
+                       ["B", "A", "C"])
+    }
+
+    func testExcludedStepKeepsItsSlotWhenReIncluded() {
+        let store = makeStore()
+        let a = store.addMasterItem(PreflightItem(title: "A"))
+        _ = store.addMasterItem(PreflightItem(title: "B"))
+        _ = store.addMasterItem(PreflightItem(title: "C"))
+        let rocket = UUID()
+        store.moveEffectiveItems(fromOffsets: IndexSet(integer: 0), toOffset: 3,
+                                 for: rocket)   // [B, C, A]
+
+        store.setMasterItem(a.id, enabled: false, for: rocket)
+        XCTAssertEqual(store.effectiveItems(for: rocket).map(\.title), ["B", "C"])
+        // The order still remembers A's slot — re-including restores it.
+        store.setMasterItem(a.id, enabled: true, for: rocket)
+        XCTAssertEqual(store.effectiveItems(for: rocket).map(\.title),
+                       ["B", "C", "A"])
+    }
+
+    /// The review-found hazard: a move must NOT erase an excluded step's slot.
+    func testReorderWhileExcludedKeepsTheRememberedSlot() {
+        let store = makeStore()
+        let a = store.addMasterItem(PreflightItem(title: "A"))
+        _ = store.addMasterItem(PreflightItem(title: "B"))
+        _ = store.addMasterItem(PreflightItem(title: "C"))
+        let rocket = UUID()
+        store.moveEffectiveItems(fromOffsets: IndexSet(integer: 2), toOffset: 1,
+                                 for: rocket)   // [A, C, B]
+
+        store.setMasterItem(a.id, enabled: false, for: rocket)
+        XCTAssertEqual(store.effectiveItems(for: rocket).map(\.title), ["C", "B"])
+        // Reorder WHILE A is excluded — A's first-place slot must survive.
+        store.moveEffectiveItems(fromOffsets: IndexSet(integer: 0), toOffset: 2,
+                                 for: rocket)   // visible [B, C]
+        store.setMasterItem(a.id, enabled: true, for: rocket)
+        XCTAssertEqual(makeStore().effectiveItems(for: rocket).map(\.title),
+                       ["A", "B", "C"])
+    }
+
+    /// First-ever move must remember master positions of already-excluded steps.
+    func testFirstMoveRemembersExcludedMasterPositions() {
+        let store = makeStore()
+        let a = store.addMasterItem(PreflightItem(title: "A"))
+        _ = store.addMasterItem(PreflightItem(title: "B"))
+        _ = store.addMasterItem(PreflightItem(title: "C"))
+        let rocket = UUID()
+
+        store.setMasterItem(a.id, enabled: false, for: rocket)
+        store.moveEffectiveItems(fromOffsets: IndexSet(integer: 1), toOffset: 0,
+                                 for: rocket)   // visible [C, B]
+        store.setMasterItem(a.id, enabled: true, for: rocket)
+        // A comes back at its master position (first), not appended last.
+        XCTAssertEqual(store.effectiveItems(for: rocket).map(\.title),
+                       ["A", "C", "B"])
+    }
+
+    func testDeleteScrubsOrderedIds() {
+        let store = makeStore()
+        let a = store.addMasterItem(PreflightItem(title: "A"))
+        _ = store.addMasterItem(PreflightItem(title: "B"))
+        let rocket = UUID()
+        let extra = store.addExtraItem(PreflightItem(title: "Extra"), for: rocket)
+        store.moveEffectiveItems(fromOffsets: IndexSet(integer: 2), toOffset: 0,
+                                 for: rocket)   // [Extra, A, B]
+
+        store.deleteMasterItem(a.id)
+        store.deleteExtraItem(extra.id, for: rocket)
+        XCTAssertEqual(store.config(for: rocket)?.orderedIds.count, 1)
+        XCTAssertEqual(store.effectiveItems(for: rocket).map(\.title), ["B"])
+    }
+
     // MARK: - Run state
 
     func testCheckedRoundTripAndReset() {
