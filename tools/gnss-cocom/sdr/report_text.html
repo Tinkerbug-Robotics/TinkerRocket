@@ -43,7 +43,7 @@
       and 515 m/s. The 18 km limit seems to have been removed more recently in favor of a
       600 m/s limit from the Missile Technology Control Regime (MTCR Annex
       Handbook 2017, Section 11.A.3). Receivers still implement limits differently and generally still implement
-      altitude limits, sometimes wildly different from the MTCR limit. The purpose of this 
+      altitude limits, sometimes wildly different from the COCOM limit. The purpose of this 
       work was to characterize the actual performance using a software-defined radio to
       inject simulated trajectories into several readily available inexpensive receivers.</p>
     <span class="status status-live">Five parts were measured</span>
@@ -99,7 +99,7 @@
       </div>
       <figcaption>The rig. The trajectory does double duty: it is what the
         simulator flies, and it is the ground truth every capture is compared
-        against &mdash; which is why no clock synchronisation between the
+        against &mdash; which is why no clock synchronization between the
         transmitter and the analysis is required. Only the link between the
         attenuators and the receiver changes between parts.</figcaption>
     </figure>
@@ -147,7 +147,7 @@
         ramps, and flown to the ground under a drogue-then-main recovery.</p>
       <p>Each flight opens with a 180&nbsp;s pad hold so the receiver has acquired
         and settled before anything moves. Trajectory time is recovered from the
-        GPS time in the receiver's own output, so no clock synchronisation between
+        GPS time in the receiver's own output, so no clock synchronization between
         the transmitter and the analysis is needed.</p>
       <p><strong>One signal, one band.</strong> The injection is GPS L1 C/A only.
         Every receiver here is multi-constellation and two are multi-band, so all
@@ -213,7 +213,7 @@
         envelope.</p>
       <p class="note">On a flight profile the ceiling and the velocity limit fire
         within moments of each other, because a rocket crosses 10&nbsp;km while
-        travelling fast. The distinguishing observation is on <code>spaceshot</code>,
+        traveling fast. The distinguishing observation is on <code>spaceshot</code>,
         where the fix stops while speed is <em>falling</em> (1334 &rarr;
         1304&nbsp;m/s) as altitude rises through 9.83&nbsp;km. No velocity gate
         fires on decreasing speed.</p>
@@ -226,7 +226,7 @@
         switching from airborne &lt;4&nbsp;g to portable moved the same
         ceiling from 49.80&nbsp;km to 5.04&nbsp;km.</p>
       <p>No u-blox M8T model exceeds 50&nbsp;km. The SAM-M10Q and ZED-F9P held fixes
-        to 80&nbsp;km, so it is an M8-generation behaviour.</p>
+        to 80&nbsp;km, so it is an M8-generation behavior.</p>
     </div>
 
     <figure>
@@ -291,7 +291,7 @@
 -->
 
 <!--#blurb px1125r-->
-Textbook behaviour: both export limits enforced independently, velocity at 510&ndash;517&nbsp;m/s and altitude at 80&nbsp;km, re-opening within 1.5&nbsp;s whenever four or more satellites were held.
+Textbook behavior: both export limits enforced independently, velocity at 510&ndash;517&nbsp;m/s and altitude at 80&nbsp;km, re-opening within 1.5&nbsp;s whenever four or more satellites were held.
 <!--/blurb-->
 
 <!--#blurb sam_m10q-->
@@ -303,7 +303,7 @@ Same thresholds as the others, but 2&ndash;3&nbsp;s slow to <em>close</em> the a
 <!--/blurb-->
 
 <!--#blurb neo_m8t-->
-Velocity gate normal at 510&ndash;524&nbsp;m/s, but it stops publishing at 50&nbsp;km &mdash; the u-blox dynamic-model ceiling, not an export limit. Its true altitude behaviour is therefore unmeasurable.
+Velocity gate normal at 510&ndash;524&nbsp;m/s, but it stops publishing at 50&nbsp;km &mdash; the u-blox dynamic-model ceiling, not an export limit. Its true altitude behavior is therefore unmeasurable.
 <!--/blurb-->
 
 <!--#blurb air530-->

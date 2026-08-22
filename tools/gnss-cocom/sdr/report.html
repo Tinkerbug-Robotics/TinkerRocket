@@ -376,7 +376,7 @@
           receiver below, and in <code>results/receivers.json</code>.</p>
         <p class="fn"><span class="mark">†</span>Slow to close: this part held a fix 2-3 s past the limit on both flights, about 400-600 m of overshoot above 80 km with position still being published. The threshold itself is normal.</p>
         <p class="fn"><span class="mark">‡</span>Not an export gate. This ceiling sits below the COCOM altitude, and the receiver stops publishing there for reasons unrelated to export control.</p>
-        <p class="fn"><span class="mark">§</span>The u-blox dynamic model's own altitude ceiling, not an export gate. Airborne <4 g is specified at 50,000 m; no u-blox model goes higher, so this part's export behaviour above it cannot be measured.</p>
+        <p class="fn"><span class="mark">§</span>The u-blox dynamic model's own altitude ceiling, not an export gate. Airborne <4 g is specified at 50,000 m; no u-blox model goes higher, so this part's export behavior above it cannot be measured.</p>
     </div>
 
     <div class="prose">
@@ -469,7 +469,7 @@
       </div>
       <figcaption>The rig. The trajectory does double duty: it is what the
         simulator flies, and it is the ground truth every capture is compared
-        against &mdash; which is why no clock synchronisation between the
+        against &mdash; which is why no clock synchronization between the
         transmitter and the analysis is required. Only the link between the
         attenuators and the receiver changes between parts.</figcaption>
     </figure>
@@ -517,7 +517,7 @@
         ramps, and flown to the ground under a drogue-then-main recovery.</p>
       <p>Each flight opens with a 180&nbsp;s pad hold so the receiver has acquired
         and settled before anything moves. Trajectory time is recovered from the
-        GPS time in the receiver's own output, so no clock synchronisation between
+        GPS time in the receiver's own output, so no clock synchronization between
         the transmitter and the analysis is needed.</p>
       <p><strong>One signal, one band.</strong> The injection is GPS L1 C/A only.
         Every receiver here is multi-constellation and two are multi-band, so all
@@ -539,7 +539,7 @@
     <div class="prose">
       <h3>SkyTraq PX1125R</h3>
       <p class="note">SkyTraq binary &middot; conducted &middot; ~70 dB pad + DC block into RF_IN, TX gain 44-47</p>
-      <p>Textbook behaviour: both export limits enforced independently, velocity at 510&ndash;517&nbsp;m/s and altitude at 80&nbsp;km, re-opening within 1.5&nbsp;s whenever four or more satellites were held.</p>
+      <p>Textbook behavior: both export limits enforced independently, velocity at 510&ndash;517&nbsp;m/s and altitude at 80&nbsp;km, re-opening within 1.5&nbsp;s whenever four or more satellites were held.</p>
       <p><strong>Velocity gate</strong> 510-517 m/s &nbsp;&middot;&nbsp;
          <strong>Altitude gate</strong> 79.90-80.20 km &nbsp;&middot;&nbsp;
          <strong>Satellites</strong> min 2, median 7</p>
@@ -5048,7 +5048,7 @@
     <div class="prose">
       <h3>u-blox NEO-M8T</h3>
       <p class="note">UBX @ 115200 &middot; conducted &middot; 70 dB pad, TX gain 38</p>
-      <p>Velocity gate normal at 510&ndash;524&nbsp;m/s, but it stops publishing at 50&nbsp;km &mdash; the u-blox dynamic-model ceiling, not an export limit. Its true altitude behaviour is therefore unmeasurable.</p>
+      <p>Velocity gate normal at 510&ndash;524&nbsp;m/s, but it stops publishing at 50&nbsp;km &mdash; the u-blox dynamic-model ceiling, not an export limit. Its true altitude behavior is therefore unmeasurable.</p>
       <p><strong>Velocity gate</strong> 510-524 m/s &nbsp;&middot;&nbsp;
          <strong>Altitude gate</strong> 49.80-50.15 km <em>(dynamic model)</em> &nbsp;&middot;&nbsp;
          <strong>Satellites</strong> min 8, median 14</p>
@@ -8121,7 +8121,7 @@
         envelope.</p>
       <p class="note">On a flight profile the ceiling and the velocity limit fire
         within moments of each other, because a rocket crosses 10&nbsp;km while
-        travelling fast. The distinguishing observation is on <code>spaceshot</code>,
+        traveling fast. The distinguishing observation is on <code>spaceshot</code>,
         where the fix stops while speed is <em>falling</em> (1334 &rarr;
         1304&nbsp;m/s) as altitude rises through 9.83&nbsp;km. No velocity gate
         fires on decreasing speed.</p>
@@ -8134,7 +8134,7 @@
         switching from airborne &lt;4&nbsp;g to portable moved the same
         ceiling from 49.80&nbsp;km to 5.04&nbsp;km.</p>
       <p>No u-blox M8T model exceeds 50&nbsp;km. The SAM-M10Q and ZED-F9P held fixes
-        to 80&nbsp;km, so it is an M8-generation behaviour.</p>
+        to 80&nbsp;km, so it is an M8-generation behavior.</p>
     </div>
 
     <figure>

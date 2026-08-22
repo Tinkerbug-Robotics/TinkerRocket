@@ -46,7 +46,7 @@ def bracket(lo, hi, unit, fmt="{:.0f}"):
 
 
 # The summary table rounds. Every part that gates velocity brackets it within a
-# few m/s of 515, and every altitude gate lands within a few hundred metres of a
+# few m/s of 515, and every altitude gate lands within a few hundred meters of a
 # round figure, so quoting 510-517 / 514-516 / 514-518 / 510-524 in a comparison
 # invites the reader to look for a difference between parts that the measurement
 # does not support. The precise brackets stay in receivers.json and in each
@@ -88,7 +88,7 @@ FOOTNOTES = {
     "dyn model": ("\u00a7",
                   "The u-blox dynamic model's own altitude ceiling, not an export "
                   "gate. Airborne <4 g is specified at 50,000 m; no u-blox model "
-                  "goes higher, so this part's export behaviour above it cannot "
+                  "goes higher, so this part's export behavior above it cannot "
                   "be measured."),
 }
 
@@ -100,7 +100,7 @@ def alt_cell(r):
         return r.get("altitude_note", "--"), None
     inverted = lo > hi
     txt = f"{_round_to((lo + hi) / 2.0, 1):.0f} km"
-    # Normalised: the JSON is hand-edited and has carried both "not COCOM" and
+    # Normalized: the JSON is hand-edited and has carried both "not COCOM" and
     # "not cocom" for the same thing.
     cause = (r.get("altitude_gate_cause") or "cocom").strip().lower()
     key = cause if cause in FOOTNOTES else ("inverted" if inverted else None)
