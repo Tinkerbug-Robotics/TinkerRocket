@@ -38,6 +38,29 @@ final class DownloadTruncationTests: XCTestCase {
         return result
     }
 
+    /// Real hardware ends a transfer with DATA and the EOF flag in the SAME
+    /// frame — measured on the bench 2026-08-22, the base station's last frame
+    /// for an 18322-byte file is `offset=18190 len=132 eof=true`. The first
+    /// cut of the EOF byte-count check compared `offset` alone and would have
+    /// failed every one of those; every test here used an empty EOF payload,
+    /// so none of them caught it.
+    func testDataBearingEofSucceeds() {
+        let url = run([
+            chunk(offset: 0, payload: Array(repeating: 0xAA, count: 100)),
+            chunk(offset: 100, payload: Array(repeating: 0xBB, count: 32), eof: true),
+        ], expectedSize: 132)
+        XCTAssertNotNil(url, "an EOF frame carrying data must not be rejected")
+    }
+
+    /// The same shape, but genuinely short against the listing.
+    func testDataBearingEofShortAgainstListingFails() {
+        let url = run([
+            chunk(offset: 0, payload: Array(repeating: 0xAA, count: 100)),
+            chunk(offset: 100, payload: Array(repeating: 0xBB, count: 32), eof: true),
+        ], expectedSize: 500)
+        XCTAssertNil(url, "132 bytes against a 500-byte listing must fail")
+    }
+
     /// A clean transfer still succeeds — the regression guard for the fix.
     func testCompleteTransferSucceeds() {
         let url = run([

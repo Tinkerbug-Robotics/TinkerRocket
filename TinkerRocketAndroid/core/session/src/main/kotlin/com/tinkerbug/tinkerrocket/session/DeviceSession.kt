@@ -675,11 +675,14 @@ public class DeviceSession(
      * assembled bytes (or a typed failure — iOS returns nil for all of
      * them).  Chunk semantics are EXACTLY the iOS `handleFileChunk` engine:
      *
-     *  - chunks are `[offset u32 LE][len u16 LE][flags u8][data]`; bytes are
-     *    appended in ARRIVAL order — the offset field is never used for
-     *    reassembly (bug-compat pin: a dropped chunk followed by EOF still
-     *    "succeeds" with truncated data — the stall-shortfall check only
-     *    guards the stall path);
+     *  - chunks are `[offset u32 LE][len u16 LE][flags u8][data]`.  The
+     *    offset is CHECKED (#854, following iOS #832): on a data chunk it is
+     *    the position that data belongs at, so a gap fails the download
+     *    instead of splicing; on the EOF chunk it carries the device's own
+     *    bytes_sent, which is checked against what arrived.  The shortfall
+     *    check against the listing size now guards BOTH the EOF and stall
+     *    paths — it used to guard only the stall path, so the common path
+     *    returned Success with whatever had turned up;
      *  - `flags & 0x01` = EOF, `flags & 0x02` = ABORT.  EOF|ABORT (#526)
      *    fails the download outright — the bytes are a truncated fragment;
      *  - every non-EOF chunk re-arms a 3 s stall timer.  On stall: shortfall
@@ -712,6 +715,14 @@ public class DeviceSession(
     private fun onFileChunk(data: ByteArray) {
         val d = activeDownload ?: return          // incl. duplicate-EOF tolerance
         if (data.size < CHUNK_HEADER_SIZE) return // malformed: ignored, timer untouched
+        // #854/#832: bytes 0-3 are the offset, and they used to be ignored
+        // entirely. On a data chunk the offset IS the position that data
+        // belongs at, so contiguity is free; on the EOF chunk it carries the
+        // device's own bytes_sent. Both were on the wire and thrown away.
+        val offset = (data[0].toLong() and 0xFF) or
+            ((data[1].toLong() and 0xFF) shl 8) or
+            ((data[2].toLong() and 0xFF) shl 16) or
+            ((data[3].toLong() and 0xFF) shl 24)
         val length = (data[4].toInt() and 0xFF) or ((data[5].toInt() and 0xFF) shl 8)
         val flags = data[6].toInt() and 0xFF
         val isEof = (flags and 0x01) != 0
@@ -724,7 +735,23 @@ public class DeviceSession(
             return
         }
 
-        if (length > 0 && data.size >= CHUNK_HEADER_SIZE + length) {
+        if (length > 0) {
+            if (data.size < CHUNK_HEADER_SIZE + length) {
+                // A frame shorter than its own length header used to be
+                // dropped in silence, leaving a hole indistinguishable from a
+                // clean transfer.
+                cancelStallTimer()
+                finishDownload(d, DownloadResult.Incomplete, finalProgress = null)
+                return
+            }
+            if (offset != d.buffer.size().toLong()) {
+                // A notification dropped AFTER the peripheral queued it — the
+                // case the firmware's redundant EOF exists for and cannot
+                // itself detect. Appending past it splices the file silently.
+                cancelStallTimer()
+                finishDownload(d, DownloadResult.Incomplete, finalProgress = null)
+                return
+            }
             d.buffer.write(data, CHUNK_HEADER_SIZE, length)
         }
         val received = d.buffer.size()
@@ -734,8 +761,18 @@ public class DeviceSession(
             )
         }
         if (isEof) {
-            _downloadState.value = _downloadState.value.copy(progress = 1.0)
             cancelStallTimer()
+            // The EOF frame carries the device's bytes_sent; a mismatch means
+            // we are missing bytes it believes it sent.
+            // The EOF frame may carry DATA as well as the flag, so its offset
+            // is that data's position, not the total (the base station's last
+            // frame is offset=18190 len=132 for an 18322-byte file). A
+            // zero-length EOF has offset == total; offset+length covers both.
+            if (offset + length.toLong() != received.toLong()) {
+                finishDownload(d, DownloadResult.Incomplete, finalProgress = null)
+                return
+            }
+            _downloadState.value = _downloadState.value.copy(progress = 1.0)
             completeDownload(d, fromStallTimer = false)
         } else {
             resetStallTimer()
@@ -758,7 +795,10 @@ public class DeviceSession(
 
     private fun completeDownload(d: ActiveDownload, fromStallTimer: Boolean) {
         cancelStallTimer()
-        if (fromStallTimer && d.expectedSize > 0 && d.buffer.size() < d.expectedSize) {
+        // #854/#832: this was gated on fromStallTimer, so the EOF path — the
+        // common one — returned Success with whatever had arrived. The
+        // listing's size is just as authoritative on either path.
+        if (d.expectedSize > 0 && d.buffer.size() < d.expectedSize) {
             finishDownload(d, DownloadResult.Incomplete, finalProgress = null)
             return
         }
