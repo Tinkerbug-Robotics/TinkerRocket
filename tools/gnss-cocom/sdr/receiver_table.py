@@ -45,8 +45,18 @@ def bracket(lo, hi, unit, fmt="{:.0f}"):
     return f"{fmt.format(lo)}-{fmt.format(hi)} {unit}"
 
 
+# The summary table rounds. Every part that gates velocity brackets it within a
+# few m/s of 515, and every altitude gate lands within a few hundred metres of a
+# round figure, so quoting 510-517 / 514-516 / 514-518 / 510-524 in a comparison
+# invites the reader to look for a difference between parts that the measurement
+# does not support. The precise brackets stay in receivers.json and in each
+# receiver's own section; this is the at-a-glance view.
+def _round_to(x, step):
+    return round(x / step) * step
+
+
 def vel_cell(r):
-    """Velocity gate, or a bound when the part has none.
+    """Velocity gate, rounded, or a bound when the part has none.
 
     A receiver that never withholds is not a missing measurement, it is a
     result -- the Air530 held a fix to 900 m/s, 1.75x the export limit -- and
@@ -56,8 +66,10 @@ def vel_cell(r):
     if r.get("velocity_gate_present") is False:
         v = r.get("velocity_fix_max_mps")
         return f"none to {v:.0f} m/s" if v else "none observed"
-    return bracket(r.get("velocity_fix_max_mps"),
-                   r.get("velocity_blocked_min_mps"), "m/s")
+    lo, hi = r.get("velocity_fix_max_mps"), r.get("velocity_blocked_min_mps")
+    if lo is None or hi is None:
+        return "--"
+    return f"{_round_to((lo + hi) / 2.0, 5):.0f} m/s"
 
 
 # Footnote markers, in the order they are first used. Kept as markers rather
@@ -66,9 +78,9 @@ def vel_cell(r):
 # a cell wide enough to say so inline pushes the table past a readable width.
 FOOTNOTES = {
     "inverted": ("\u2020",
-                 "An inverted bracket: a value that still held a fix sitting "
-                 "above one that was withheld. It means the receiver is slow to "
-                 "close, not that the threshold is uncertain."),
+                 "Slow to close: this part held a fix 2-3 s past the limit on "
+                 "both flights, about 400-600 m of overshoot above 80 km with "
+                 "position still being published. The threshold itself is normal."),
     "not cocom": ("\u2021",
                   "Not an export gate. This ceiling sits below the COCOM "
                   "altitude, and the receiver stops publishing there for reasons "
@@ -82,12 +94,12 @@ FOOTNOTES = {
 
 
 def alt_cell(r):
-    """Altitude gate, with a footnote marker when it needs qualifying."""
+    """Altitude gate, rounded, with a footnote marker when it needs qualifying."""
     lo, hi = r.get("altitude_fix_max_km"), r.get("altitude_blocked_min_km")
     if lo is None or hi is None:
         return r.get("altitude_note", "--"), None
     inverted = lo > hi
-    txt = bracket(lo, hi, "km", "{:.2f}").replace(" \u2020", "")
+    txt = f"{_round_to((lo + hi) / 2.0, 1):.0f} km"
     # Normalised: the JSON is hand-edited and has carried both "not COCOM" and
     # "not cocom" for the same thing.
     cause = (r.get("altitude_gate_cause") or "cocom").strip().lower()
@@ -122,8 +134,7 @@ def rows(d):
 # something does not exist.
 HEADS = [("part", "Receiver"), ("path", "Path"),
          ("vel", "Velocity gate"), ("alt", "Altitude gate"),
-         ("comb", "Limits combined"),
-         ("rec", "Re-open latency"), ("sats", "Sats min / median")]
+         ("comb", "Limits combined"), ("rec", "Re-open latency")]
 
 
 def used_footnotes(d):

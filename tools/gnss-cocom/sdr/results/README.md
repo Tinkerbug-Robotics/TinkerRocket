@@ -268,15 +268,15 @@ Generated from `results/receivers.json` by `receiver_table.py`. The whole of
 plus the archived figures in `results/figures/`. Edit the data and regenerate --
 neither table nor report should be hand-edited.
 
-| Receiver | Path | Velocity gate | Altitude gate | Limits combined | Re-open latency | Sats min / median |
-|---|---|---|---|---|---|---|
-| SkyTraq PX1125R | conducted | 510-517 m/s | 79.90-80.20 km | independent | 0.0-1.5 s | 2 / 7 |
-| u-blox SAM-M10Q | radiated, Faraday cage | 514-516 m/s | ~80.16 km | independent | 0.0-1.1 s | 4 / 13 |
-| u-blox ZED-F9P (ArduSimple) | conducted | 514-518 m/s | 80.22-80.48 km † | independent | 0.1-1.0 s | 6 / 13 |
-| Air530 (AT6558R) | conducted | none to 900 m/s | 10.00-11.00 km ‡ | n/a -- no velocity gate | n/a | 6 / 12 |
-| u-blox NEO-M8T | conducted | 510-524 m/s | 49.80-50.15 km § | independent | 0.9-3.1 s | 8 / 14 |
+| Receiver | Path | Velocity gate | Altitude gate | Limits combined | Re-open latency |
+|---|---|---|---|---|---|
+| SkyTraq PX1125R | conducted | 515 m/s | 80 km | independent | 0.0-1.5 s |
+| u-blox SAM-M10Q | radiated, Faraday cage | 515 m/s | 80 km | independent | 0.0-1.1 s |
+| u-blox ZED-F9P (ArduSimple) | conducted | 515 m/s | 80 km † | independent | 0.1-1.0 s |
+| Air530 (AT6558R) | conducted | none to 900 m/s | 10 km ‡ | n/a -- no velocity gate | n/a |
+| u-blox NEO-M8T | conducted | 515 m/s | 50 km § | independent | 0.9-3.1 s |
 
-† An inverted bracket: a value that still held a fix sitting above one that was withheld. It means the receiver is slow to close, not that the threshold is uncertain.
+† Slow to close: this part held a fix 2-3 s past the limit on both flights, about 400-600 m of overshoot above 80 km with position still being published. The threshold itself is normal.
 
 ‡ Not an export gate. This ceiling sits below the COCOM altitude, and the receiver stops publishing there for reasons unrelated to export control.
 

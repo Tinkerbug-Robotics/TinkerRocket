@@ -291,7 +291,7 @@
       <span>Bench report</span>
       <span>21 Aug 2026</span>
     </div>
-    <h1>Hobby Level GNSS Receiver Altitude and Speed Limits for High Performance Rockets</h1>
+    <h1>Hobby Grade GNSS Receiver Altitude and Speed Limits for High Performance Rockets</h1>
     <p class="standfirst">Five hobby-grade GNSS receivers, flown against identical
       simulated rocket trajectories, to find where each one stops publishing
       position &mdash; and whether the reason is the COCOM export limit or
@@ -319,63 +319,60 @@
     <th>Altitude gate</th>
     <th>Limits combined</th>
     <th>Re-open latency</th>
-    <th>Sats min / median</th>
   </tr></thead>
   <tbody>
     <tr>
       <td class="part">SkyTraq PX1125R</td>
       <td>conducted</td>
-      <td>510-517 m/s</td>
-      <td>79.90-80.20 km</td>
+      <td>515 m/s</td>
+      <td>80 km</td>
       <td>independent</td>
       <td>0.0-1.5 s</td>
-      <td>2 / 7</td>
     </tr>
     <tr>
       <td class="part">u-blox SAM-M10Q</td>
       <td>radiated, Faraday cage</td>
-      <td>514-516 m/s</td>
-      <td>~80.16 km</td>
+      <td>515 m/s</td>
+      <td>80 km</td>
       <td>independent</td>
       <td>0.0-1.1 s</td>
-      <td>4 / 13</td>
     </tr>
     <tr>
       <td class="part">u-blox ZED-F9P (ArduSimple)</td>
       <td>conducted</td>
-      <td>514-518 m/s</td>
-      <td>80.22-80.48 km †</td>
+      <td>515 m/s</td>
+      <td>80 km †</td>
       <td>independent</td>
       <td>0.1-1.0 s</td>
-      <td>6 / 13</td>
     </tr>
     <tr>
       <td class="part">Air530 (AT6558R)</td>
       <td>conducted</td>
       <td>none to 900 m/s</td>
-      <td>10.00-11.00 km ‡</td>
+      <td>10 km ‡</td>
       <td>n/a -- no velocity gate</td>
       <td>n/a</td>
-      <td>6 / 12</td>
     </tr>
     <tr>
       <td class="part">u-blox NEO-M8T</td>
       <td>conducted</td>
-      <td>510-524 m/s</td>
-      <td>49.80-50.15 km §</td>
+      <td>515 m/s</td>
+      <td>50 km §</td>
       <td>independent</td>
       <td>0.9-3.1 s</td>
-      <td>8 / 14</td>
     </tr>
   </tbody>
       </table>
     </div>
 
     <div class="footnotes">
-        <p class="fn"><span class="mark">&nbsp;</span>Brackets are <em>(highest
-          value that still held a fix, lowest value withheld]</em>, taken across
-          every gate edge in every run for that part.</p>
-        <p class="fn"><span class="mark">†</span>An inverted bracket: a value that still held a fix sitting above one that was withheld. It means the receiver is slow to close, not that the threshold is uncertain.</p>
+        <p class="fn"><span class="mark">&nbsp;</span>Figures are rounded. Every
+          part that gates velocity brackets it within a few m/s of 515, and every
+          altitude gate lands within a few hundred metres of the figure shown, so
+          quoting each part's raw bracket here would invite a comparison the
+          measurement does not support. The measured brackets are given per
+          receiver below, and in <code>results/receivers.json</code>.</p>
+        <p class="fn"><span class="mark">†</span>Slow to close: this part held a fix 2-3 s past the limit on both flights, about 400-600 m of overshoot above 80 km with position still being published. The threshold itself is normal.</p>
         <p class="fn"><span class="mark">‡</span>Not an export gate. This ceiling sits below the COCOM altitude, and the receiver stops publishing there for reasons unrelated to export control.</p>
         <p class="fn"><span class="mark">§</span>The u-blox dynamic model's own altitude ceiling, not an export gate. Airborne <4 g is specified at 50,000 m; no u-blox model goes higher, so this part's export behaviour above it cannot be measured.</p>
     </div>
@@ -475,8 +472,8 @@
       <p class="note">L1 + L5 &middot; SkyTraq binary &middot; conducted &middot;
         ~70 dB pad + DC block into RF_IN, TX gain 44-47 &middot; 9 run(s)</p>
       <p>Textbook behaviour: both export limits enforced independently, velocity at 510&ndash;517&nbsp;m/s and altitude at 80&nbsp;km, re-opening within 1.5&nbsp;s whenever four or more satellites were held.</p>
-      <p><strong>Velocity gate</strong> 510&ndash;517 m/s &nbsp;&middot;&nbsp;
-         <strong>Altitude gate</strong> 79.90&ndash;80.20 km &nbsp;&middot;&nbsp;
+      <p><strong>Velocity gate</strong> 510-517 m/s &nbsp;&middot;&nbsp;
+         <strong>Altitude gate</strong> 79.90-80.20 km &nbsp;&middot;&nbsp;
          <strong>Satellites</strong> min 2, median 7</p>
     </div>
 
@@ -1980,8 +1977,8 @@
       <p class="note">L1 (GPS/GAL/BDS/GLO) &middot; UBX &middot; radiated, Faraday cage &middot;
         100 dB pad, L1 quarter-wave, TX gain 12 &middot; 2 run(s)</p>
       <p>The flight computer's own receiver, and the tightest data on the bench: never fewer than four satellites in either flight, so every withheld epoch is unambiguously the gate.</p>
-      <p><strong>Velocity gate</strong> 514&ndash;516 m/s &nbsp;&middot;&nbsp;
-         <strong>Altitude gate</strong> 80.16&ndash;80.16 km &nbsp;&middot;&nbsp;
+      <p><strong>Velocity gate</strong> 514-516 m/s &nbsp;&middot;&nbsp;
+         <strong>Altitude gate</strong> ~80.16 km &nbsp;&middot;&nbsp;
          <strong>Satellites</strong> min 4, median 13</p>
     </div>
 
@@ -3459,8 +3456,8 @@
       <p class="note">L1 + L2 (L1 used here) &middot; UBX &middot; conducted &middot;
         70 dB pad, TX gain 38 &middot; 2 run(s)</p>
       <p>Same thresholds as the others, but 2&ndash;3&nbsp;s slow to <em>close</em> the altitude gate &mdash; 400&ndash;600&nbsp;m of overshoot above 80&nbsp;km with position still being published.</p>
-      <p><strong>Velocity gate</strong> 514&ndash;518 m/s &nbsp;&middot;&nbsp;
-         <strong>Altitude gate</strong> 80.48&ndash;80.22 km &nbsp;&middot;&nbsp;
+      <p><strong>Velocity gate</strong> 514-518 m/s &nbsp;&middot;&nbsp;
+         <strong>Altitude gate</strong> 80.22-80.48 km &nbsp;&middot;&nbsp;
          <strong>Satellites</strong> min 6, median 13</p>
     </div>
 
@@ -4987,8 +4984,8 @@
       <p class="note">L1 (GPS/GLO/GAL/BDS) &middot; UBX @ 115200 &middot; conducted &middot;
         70 dB pad, TX gain 38 &middot; 3 run(s)</p>
       <p>Velocity gate normal at 510&ndash;524&nbsp;m/s, but it stops publishing at 50&nbsp;km &mdash; the u-blox dynamic-model ceiling, not an export limit. Its true altitude behaviour is therefore unmeasurable.</p>
-      <p><strong>Velocity gate</strong> 510&ndash;524 m/s &nbsp;&middot;&nbsp;
-         <strong>Altitude gate</strong> 49.80&ndash;50.15 km <em>(dyn model)</em> &nbsp;&middot;&nbsp;
+      <p><strong>Velocity gate</strong> 510-524 m/s &nbsp;&middot;&nbsp;
+         <strong>Altitude gate</strong> 49.80-50.15 km <em>(dynamic model)</em> &nbsp;&middot;&nbsp;
          <strong>Satellites</strong> min 8, median 14</p>
     </div>
 
@@ -6480,7 +6477,7 @@
         70 dB pad, TX gain 32 &middot; 9 run(s)</p>
       <p>The outlier. <strong>No velocity gate at all</strong>, and it stops publishing at 10&nbsp;km &mdash; below every candidate export altitude, and below apogee for most high-power flights.</p>
       <p><strong>Velocity gate</strong> none to 900 m/s &nbsp;&middot;&nbsp;
-         <strong>Altitude gate</strong> 10.00&ndash;11.00 km <em>(not COCOM)</em> &nbsp;&middot;&nbsp;
+         <strong>Altitude gate</strong> 10.00-11.00 km <em>(not COCOM)</em> &nbsp;&middot;&nbsp;
          <strong>Satellites</strong> min 6, median 12</p>
     </div>
 

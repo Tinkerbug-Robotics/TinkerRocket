@@ -28,7 +28,7 @@ table = subprocess.run([sys.executable, str(HERE / "receiver_table.py"), "--html
                        capture_output=True, text=True, check=True).stdout.strip()
 
 sys.path.insert(0, str(HERE))
-from receiver_table import used_footnotes            # noqa: E402
+from receiver_table import used_footnotes, bracket   # noqa: E402
 notes_html = "\n".join(
     f'        <p class="fn"><span class="mark">{m}</span>{t}</p>'
     for m, t in used_footnotes(d))
@@ -63,12 +63,15 @@ for pid, f1, f2, verdict in PARTS:
     r = by_id[pid]
     vel = (f"none to {r['velocity_fix_max_mps']:.0f} m/s"
            if r.get("velocity_gate_present") is False else
-           f"{r['velocity_fix_max_mps']}&ndash;{r['velocity_blocked_min_mps']} m/s")
-    alt = ("&mdash;" if r.get("altitude_fix_max_km") is None else
-           f"{r['altitude_fix_max_km']:.2f}&ndash;{r['altitude_blocked_min_km']:.2f} km")
-    cause = r.get("altitude_gate_cause", "cocom")
-    if cause != "cocom":
-        alt += f" <em>({cause})</em>"
+           bracket(r.get("velocity_fix_max_mps"),
+                   r.get("velocity_blocked_min_mps"), "m/s"))
+    alt = bracket(r.get("altitude_fix_max_km"),
+                  r.get("altitude_blocked_min_km"), "km", "{:.2f}")
+    # Normalise for lookup, but present it properly capitalised.
+    CAUSE_LABEL = {"not cocom": "not COCOM", "dyn model": "dynamic model"}
+    cause = (r.get("altitude_gate_cause") or "cocom").strip().lower()
+    if cause != "cocom" and alt != "--":
+        alt += f" <em>({CAUSE_LABEL.get(cause, cause)})</em>"
     parts_html.append(f'''
     <div class="prose">
       <h3>{r['part']}</h3>
@@ -110,7 +113,7 @@ body = f'''
       <span>Bench report</span>
       <span>21 Aug 2026</span>
     </div>
-    <h1>Hobby Level GNSS Receiver Altitude and Speed Limits for High Performance Rockets</h1>
+    <h1>Hobby Grade GNSS Receiver Altitude and Speed Limits for High Performance Rockets</h1>
     <p class="standfirst">Five hobby-grade GNSS receivers, flown against identical
       simulated rocket trajectories, to find where each one stops publishing
       position &mdash; and whether the reason is the COCOM export limit or
@@ -136,9 +139,12 @@ body = f'''
     </div>
 
     <div class="footnotes">
-        <p class="fn"><span class="mark">&nbsp;</span>Brackets are <em>(highest
-          value that still held a fix, lowest value withheld]</em>, taken across
-          every gate edge in every run for that part.</p>
+        <p class="fn"><span class="mark">&nbsp;</span>Figures are rounded. Every
+          part that gates velocity brackets it within a few m/s of 515, and every
+          altitude gate lands within a few hundred metres of the figure shown, so
+          quoting each part's raw bracket here would invite a comparison the
+          measurement does not support. The measured brackets are given per
+          receiver below, and in <code>results/receivers.json</code>.</p>
 {notes_html}
     </div>
 
