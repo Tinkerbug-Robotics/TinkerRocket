@@ -263,8 +263,10 @@ Its velocity gate sits far below the ceiling and is therefore measurable:
 
 ## Receivers compared
 
-Generated from `results/receivers.json` by `receiver_table.py` -- edit the JSON
-and re-run it rather than hand-editing this table or the one in `report.html`.
+Generated from `results/receivers.json` by `receiver_table.py`. The whole of
+`report.html` is likewise generated, by `build_report.py`, from that same JSON
+plus the archived figures in `results/figures/`. Edit the data and regenerate --
+neither table nor report should be hand-edited.
 
 | Receiver | Bands | Path | Runs | Velocity gate | Altitude gate | 18 km gate | Limits combined | Re-open latency | Sats min / median |
 |---|---|---|---|---|---|---|---|---|---|
