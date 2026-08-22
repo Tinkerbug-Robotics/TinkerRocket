@@ -1,8 +1,8 @@
-<svg viewBox="0 0 900 596" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Altitude and speed against time for the spaceshot flight, with COCOM-exceeded spans shaded and the receiver lock state below.">
+<svg viewBox="0 0 900 596" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Altitude and speed against time for the spaceshot flight, with limit-exceeded spans shaded and the receiver lock state below.">
 <style>.ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}.gl{stroke:var(--rule,#DDE2E9);stroke-width:1;stroke-dasharray:3 3}.lbl{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-3,#79808F)}.ttl{font-family:var(--f-display,sans-serif);font-size:11px;font-weight:600;fill:var(--ink-2,#4A5261)}.trace{fill:none;stroke-width:1.8;stroke-linejoin:round}</style>
-<rect x="92.0" y="152.7" width="95.2" height="100.7" fill="var(--nolock, #9B3535)" opacity="0.16"/>
-<rect x="321.6" y="152.7" width="71.6" height="100.7" fill="var(--nolock, #9B3535)" opacity="0.16"/>
-<rect x="226.0" y="26.0" width="56.4" height="100.7" fill="var(--blocked, #A2660A)" opacity="0.3"/>
+<rect x="92.0" y="152.7" width="95.3" height="100.7" fill="var(--nolock, #9B3535)" opacity="0.16"/>
+<rect x="321.6" y="152.7" width="71.7" height="100.7" fill="var(--nolock, #9B3535)" opacity="0.16"/>
+<rect x="226.0" y="26.0" width="56.5" height="100.7" fill="var(--blocked, #A2660A)" opacity="0.3"/>
 <line class="ax" x1="62" y1="126.7" x2="882" y2="126.7"/>
 <line class="ax" x1="62" y1="26.0" x2="62" y2="126.7"/>
 <line class="ax" x1="62" y1="253.3" x2="882" y2="253.3"/>

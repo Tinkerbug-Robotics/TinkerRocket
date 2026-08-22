@@ -46,11 +46,16 @@ VERDICT_MEANING = [
 ]
 
 
+def _limit(v):
+    """A threshold in the plot's units, or None for a part that has no such gate."""
+    return None if str(v).strip().lower() in ("none", "off", "") else float(v)
+
+
 def esc(s):
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def build_svg(meta, rows, truth):
+def build_svg(meta, rows, truth, vel_limit=515.0, alt_limit=80.0):
     dur = meta["duration_s"]
     # Begin a little before ignition. The prologue exists so the receiver can
     # acquire before the flight starts; on the plot it is 180 s of flat line
@@ -103,7 +108,7 @@ def build_svg(meta, rows, truth):
 
     out = [f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" '
            f'role="img" aria-label="Altitude and speed against time for the '
-           f'{esc(meta["scenario"])} flight, with COCOM-exceeded spans shaded '
+           f'{esc(meta["scenario"])} flight, with limit-exceeded spans shaded '
            f'and the receiver lock state below.">',
            '<style>'
            '.ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}'
@@ -115,15 +120,37 @@ def build_svg(meta, rows, truth):
            '.trace{fill:none;stroke-width:1.8;stroke-linejoin:round}'
            '</style>']
 
+    # Shading is drawn against THIS RECEIVER'S measured thresholds, not against
+    # a fixed 515 m/s and 80 km. Two of the five parts stop well below the
+    # export limit -- the NEO-M8T at 50 km, the Air530 at 10 km and with no
+    # velocity gate at all -- so a constant band would sit nowhere near where
+    # their lock strip actually changes, and would invite the reader to conclude
+    # the receiver was misbehaving rather than doing exactly what it does.
+    def spans(key, limit):
+        """[start, end] intervals where truth[key] exceeds limit."""
+        if limit is None:
+            return []
+        out, start = [], None
+        for smp in truth:
+            hit = smp[key] > limit
+            if hit and start is None:
+                start = smp["t"]
+            elif not hit and start is not None:
+                out.append([start, smp["t"]]); start = None
+        if start is not None:
+            out.append([start, truth[-1]["t"]])
+        return out
+
+    vel_w = spans("speed_mps", vel_limit)
+    alt_w = spans("alt_m", alt_limit * 1000.0 if alt_limit is not None else None)
+
     # limit-exceeded shading, drawn behind everything
     # Shade the limit on the panel that is over it, not across both. Reading a
     # red band behind the altitude trace invites the conclusion that altitude
     # was the problem, when it was speed; when a flight is over both at once,
     # both panels shade and that is the honest picture.
-    for wins, fill, y_top, op in ((meta.get("velocity_windows") or [],
-                                   "var(--nolock, #9B3535)", y0_spd, 0.16),
-                                  (meta.get("altitude_80km_windows") or [],
-                                   "var(--blocked, #A2660A)", y0_alt, 0.30)):
+    for wins, fill, y_top, op in ((vel_w, "var(--nolock, #9B3535)", y0_spd, 0.16),
+                                  (alt_w, "var(--blocked, #A2660A)", y0_alt, 0.30)):
         for a, b in wins:
             if b < t0:
                 continue
@@ -139,17 +166,17 @@ def build_svg(meta, rows, truth):
         out.append(f'<line class="ax" x1="{PAD_L}" y1="{y0:.1f}" '
                    f'x2="{PAD_L}" y2="{y0+panel_h:.1f}"/>')
 
-    # the 80 km gate and the 515 m/s gate
-    if alt_top > 80:
-        out.append(f'<line class="gl" x1="{PAD_L}" y1="{y_alt(80):.1f}" '
-                   f'x2="{W-PAD_R}" y2="{y_alt(80):.1f}"/>')
-        out.append(f'<text class="lbl" x="{W-PAD_R-2}" y="{y_alt(80)-3:.1f}" '
-                   f'text-anchor="end">80 km gate</text>')
-    if spd_top > 515:
-        out.append(f'<line class="gl" x1="{PAD_L}" y1="{y_spd(515):.1f}" '
-                   f'x2="{W-PAD_R}" y2="{y_spd(515):.1f}"/>')
-        out.append(f'<text class="lbl" x="{W-PAD_R-2}" y="{y_spd(515)-3:.1f}" '
-                   f'text-anchor="end">515 m/s gate</text>')
+    # gate lines, at this receiver's thresholds
+    if alt_limit is not None and alt_top > alt_limit:
+        out.append(f'<line class="gl" x1="{PAD_L}" y1="{y_alt(alt_limit):.1f}" '
+                   f'x2="{W-PAD_R}" y2="{y_alt(alt_limit):.1f}"/>')
+        out.append(f'<text class="lbl" x="{W-PAD_R-2}" y="{y_alt(alt_limit)-3:.1f}" '
+                   f'text-anchor="end">{alt_limit:g} km gate</text>')
+    if vel_limit is not None and spd_top > vel_limit:
+        out.append(f'<line class="gl" x1="{PAD_L}" y1="{y_spd(vel_limit):.1f}" '
+                   f'x2="{W-PAD_R}" y2="{y_spd(vel_limit):.1f}"/>')
+        out.append(f'<text class="lbl" x="{W-PAD_R-2}" y="{y_spd(vel_limit)-3:.1f}" '
+                   f'text-anchor="end">{vel_limit:g} m/s gate</text>')
 
     # traces, subsampled -- 10 Hz truth is far more than the plot can show
     step = max(1, len(truth) // 900)
@@ -245,10 +272,15 @@ def build_svg(meta, rows, truth):
     ly = H - LEG_H + 4
     rows = [(VERDICT_FILL[n], 1.0, f"{n} &#183; {esc(m)}")
             for n, m in VERDICT_MEANING]
-    rows += [("var(--nolock, #9B3535)", 0.16 * 1.6,
-              "shaded on the SPEED panel: over 515 m/s"),
-             ("var(--blocked, #A2660A)", 0.30 * 1.6,
-              "shaded on the ALTITUDE panel: over 80 km")]
+    # Only describe a band that is actually drawn. The altitude-ramp scenario
+    # never reaches 515 m/s, so listing a speed band there advertised a colour
+    # the reader would never find.
+    if vel_w:
+        rows.append(("var(--nolock, #9B3535)", 0.16 * 1.6,
+                     f"shaded on the SPEED panel: over {vel_limit:g} m/s"))
+    if alt_w:
+        rows.append(("var(--blocked, #A2660A)", 0.30 * 1.6,
+                     f"shaded on the ALTITUDE panel: over {alt_limit:g} km"))
     for i, (fill, op, label) in enumerate(rows):
         yy = ly + i * 12
         out.append(f'<rect x="{PAD_L}" y="{yy-6:.0f}" width="16" height="8" '
@@ -263,6 +295,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("capture", type=Path)
+    ap.add_argument("--vel-limit", type=_limit, default=515.0, metavar="M/S",
+                    help="speed above which to shade, or 'none' for a receiver "
+                         "with no velocity gate (default 515)")
+    ap.add_argument("--alt-limit", type=_limit, default=80.0, metavar="KM",
+                    help="altitude above which to shade, or 'none' (default 80)")
     ap.add_argument("-s", "--scenario", required=True, type=Path)
     ap.add_argument("-t", "--start", required=True)
     ap.add_argument("-o", "--out", required=True, type=Path)
@@ -298,7 +335,8 @@ def main() -> int:
             f"re-plot it\nagainst the archived scenario it was flown with, or "
             f"re-fly it.")
 
-    args.out.write_text(build_svg(meta, rows, truth.samples))
+    args.out.write_text(build_svg(meta, rows, truth.samples,
+                                  args.vel_limit, args.alt_limit))
     n = {v: sum(1 for _, x, _n in rows if x == v) for v in VERDICT_FILL}
     print(f"{args.out}  ({len(rows)} epochs: "
           + ", ".join(f"{k} {v}" for k, v in n.items() if v) + ")")

@@ -128,9 +128,11 @@ def receiver_sections(d, text) -> str:
         </div>
       </div>
       <figcaption>{r['part']}: the two standard profiles. Shaded bands mark where
-        the injected trajectory exceeds a COCOM limit &mdash; red for velocity,
-        amber for altitude. Read the lock strip against those bands, and the
-        satellite bar underneath to confirm the receiver was still tracking.</figcaption>
+        the injected trajectory exceeds <em>this receiver's own</em> measured
+        thresholds &mdash; red for speed, amber for altitude &mdash; so they sit
+        where its lock strip should change rather than at a constant 515 m/s and
+        80 km. Read the lock strip against those bands, and the satellite bar
+        underneath to confirm the receiver was still tracking.</figcaption>
     </figure>
 {note}
 ''')

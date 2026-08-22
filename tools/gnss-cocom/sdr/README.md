@@ -39,6 +39,7 @@ variable at a time.
 | `report_text.html` | **The report's prose — edit this**, then run `build_report.py` |
 | `build_report.py` | Assembles `report.html` from the text, `receivers.json` and the figures |
 | `make_block_diagram.py` | Draws the rig block diagram used in the report |
+| `replot_all.py` | Regenerates every report figure, shading each at its own measured gate |
 
 ## Quick start
 
