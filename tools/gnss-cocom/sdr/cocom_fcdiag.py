@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Convert a flight-computer console log into the rig's UBX capture format.
+"""Convert a rocket-computer console log into the rig's UBX capture format.
 
 The FC's u-blox is not reachable directly: its firmware sets UART1 output to UBX
-only and the flight computer consumes it, putting nothing raw on USB. Rather
+only and the rocket computer consumes it, putting nothing raw on USB. Rather
 than clip a serial tap onto the receiver's TXD, the FC is built with
 TR_GNSS_COCOM_DIAG=1, which logs fix state and per-satellite C/N0 to the console
 that is already connected:

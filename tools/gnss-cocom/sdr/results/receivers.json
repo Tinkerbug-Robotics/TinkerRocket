@@ -36,7 +36,7 @@
    "part": "u-blox SAM-M10Q",
    "bands": "L1 (GPS/GAL/BDS/GLO)",
    "protocol": "UBX",
-   "host": "rocket-computer flight computer (ESP32-P4), TR_GNSS_COCOM_DIAG console",
+   "host": "rocket computer (ESP32-P4), TR_GNSS_COCOM_DIAG console",
    "path": "radiated, Faraday cage",
    "rf": "100 dB pad, L1 quarter-wave, TX gain 12",
    "date": "2026-08-20",
@@ -124,7 +124,7 @@
     3.1
    ],
    "sats_median": 14,
-   "notes": "Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for a flight computer and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behavior is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behavior. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.",
+   "notes": "Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for a rocket computer and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behavior is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behavior. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.",
    "velocity_gate_present": true,
    "sats_p05": 14
   }

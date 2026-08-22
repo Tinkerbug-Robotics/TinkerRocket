@@ -9,7 +9,7 @@ onto each other exactly:
     SkyTraq 0xDF  receiver state   <->  UBX-NAV-PVT  (0x01 0x07)
     SkyTraq 0xE7  channel status   <->  UBX-NAV-SAT  (0x01 0x35)
 
-Needed because the flight computer is a u-blox SAM-M10Q, not a PX1125R, and its
+Needed because the rocket computer is a u-blox SAM-M10Q, not a PX1125R, and its
 firmware calls setUART1Output(COM_TYPE_UBX) -- NMEA is switched off on the wire,
 so a passive tap on the receiver's TXD sees UBX and nothing else.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Identify and configure a u-blox F9/M9 receiver over its own USB port.
 
-Written for the ArduSimple ZED-F9P, which unlike the flight computer's SAM-M10Q
+Written for the ArduSimple ZED-F9P, which unlike the rocket computer's SAM-M10Q
 is ours to configure: it sits on its own USB CDC (1546:01A9) with nothing else
 driving it. Out of the box it emits NMEA only, and NMEA cannot carry this
 measurement -- GGA has no flag distinguishing "withholding a solution" from "no
@@ -68,7 +68,7 @@ KEYS = {
     # the two messages the classifier needs, on USB
     "CFG-MSGOUT-UBX_NAV_PVT_USB": 0x20910009,
     "CFG-MSGOUT-UBX_NAV_SAT_USB": 0x20910018,
-    # dynamics: 8 = airborne <4 g, matching the flight computer's receiver
+    # dynamics: 8 = airborne <4 g, matching the rocket computer's receiver
     "CFG-NAVSPG-DYNMODEL":      0x20110021,
     # navigation rate, ms between solutions
     "CFG-RATE-MEAS":            0x30210001,

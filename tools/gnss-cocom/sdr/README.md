@@ -27,7 +27,7 @@ variable at a time.
 | `plot_flight.py` | Altitude, speed, acceleration, lock state and satellite count on one time axis |
 | `recovery.py` | Shut lag and re-open latency per blocked window, with satellites in the wait |
 | `make_flights.py` | Realistic flight profiles integrated from thrust, drag and gravity |
-| `run_fc.py` | Transmits a scenario and records the flight computer's console, in one command |
+| `run_fc.py` | Transmits a scenario and records the rocket computer's console, in one command |
 | `align_start.py` | Recovers a capture's scenario start time by matching reported to injected altitude |
 | `receiver_table.py` | Renders the receiver comparison from `results/receivers.json` |
 | `oscillation.py` | Characterises the periodic C/N&#8320; swing in a capture |
@@ -342,7 +342,7 @@ for the same reason the Loop checkbox stays unchecked.
 
 ## Testing the rocket computer instead of the bench PX1125R
 
-The flight computer is a different receiver and nothing measured here transfers
+The rocket computer is a different receiver and nothing measured here transfers
 to it. GNSS is on the **ESP32-P4** (GPIO3 rx / GPIO4 tx), and the part is a
 **u-blox SAM-M10Q** with an integrated patch antenna and LNA -- the S3 has no
 GNSS connection at all. u-blox documents its own limits, near 500 m/s and 80 km,
@@ -372,7 +372,7 @@ which `ublox_binary.py` handles:
 
 ### A standalone receiver on its own USB (ArduSimple ZED-F9P)
 
-Unlike the flight computer's SAM-M10Q, a bench receiver on its own USB is ours
+Unlike the rocket computer's SAM-M10Q, a bench receiver on its own USB is ours
 to configure -- and it has to be, because **it ships emitting NMEA only and NMEA
 cannot carry this measurement**. GGA has no flag separating "withholding a
 solution" from "no solution", and its speed is *ground* speed, near zero through
@@ -514,11 +514,11 @@ when the hottest setting is not the best one.
 
 `run_radiated.py` transmits a scenario and captures the receiver through a
 passive tap. `--listen-only` checks the tap without transmitting; `--list` shows
-candidate ports. It never writes to the receiver: the flight computer owns that.
+candidate ports. It never writes to the receiver: the rocket computer owns that.
 
 **No tap is needed if the FC is built with the diagnostic.** The FC's u-blox is
 otherwise unreachable -- its firmware sets UART1 output to UBX only and the
-flight computer consumes it, putting nothing raw on USB, and the console reports
+rocket computer consumes it, putting nothing raw on USB, and the console reports
 GNSS fix state only under `[SIM DIAG]`, which fires in simulation mode alone.
 Worse, the driver polls NAV-PVT and takes the satellite count from `getSIV()`;
 it never asks for NAV-SAT, so per-satellite C/N0 -- the input the whole

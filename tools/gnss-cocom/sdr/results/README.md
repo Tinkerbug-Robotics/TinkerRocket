@@ -141,7 +141,7 @@ python3 align_start.py /tmp/g.log -s results/ublox_m10_gentle_alt.scenario.json
 
 The scenario each was flown against is archived beside it, `start_time` included.
 TX: HackRF One r9 via PortaPack in HackRF mode, **gain 12**, 100 dB pad, L1
-quarter-wave, inside a Faraday cage. Receiver: SAM-M10Q on the flight computer,
+quarter-wave, inside a Faraday cage. Receiver: SAM-M10Q on the rocket computer,
 configured by flight firmware (`DYN_MODEL_AIRBORNE4g`) and never written to by
 the rig. `.console.log.gz` is the raw FC console -- the primary record;
 `.log.gz` is `cocom_fcdiag.py`'s conversion of it.
@@ -225,7 +225,7 @@ fix almost throughout, 2 events in 988 epochs. Note this cannot be measured with
 `verdict()`: a blank epoch has every C/N0 at zero, so its satellite count is zero
 and the verdict is forced to NO_LOCK. Use the fix flag (`blanking.py` does).
 
-For a flight computer this is the worst of the five: it stops publishing at
+For a rocket computer this is the worst of the five: it stops publishing at
 10 km, below apogee for most high-power flights, for reasons unrelated to export
 control and with no documented threshold to design around.
 
@@ -290,7 +290,7 @@ neither table nor report should be hand-edited.
 
 **Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): EVERYTHING FIRST RECORDED FOR THIS PART WAS WRONG, and dwell tests corrected it. It has NO velocity gate: it held a fix to 900 m/s at 5 km on t1_velramp (reporting 899), and 100% of epochs at every 90 s dwell from 495 to 530 m/s on vel_stair. What it has is an ALTITUDE ceiling at 10-11 km -- 100% fix at 8 km, 91% at 10 km, 0% at 11/12/13 km on 90 s dwells, and 9.90->10.25 km on a 354 m/s ramp with 11 satellites either side. That ceiling is far below the COCOM altitude, so it is not an export gate at all. The flight profiles read as a latent velocity gate only because they cross 10 km at high speed: the spaceshot transition happens while speed is DECREASING (1334 -> 1304 m/s) as altitude rises through 9.83 -> 11.15 km, which no velocity gate can do. Re-open latency is not defined for this part because there is no COCOM gate to re-open: on blockdur it held a fix at 560 m/s for 148 continuous seconds, dropping only 1 s at the sharp 130 m/s^2 transition. The 31-134 s 'recoveries' seen on flights were simply the vehicle descending back through the 10-11 km ceiling. The 18 s C/N0 blanking accompanies withholding (19/677 epochs while withholding vs 0/170 while publishing on gentle_alt).
 
-**u-blox NEO-M8T** (2026-08-20, 70 dB pad, TX gain 38): Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for a flight computer and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behavior is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behavior. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.
+**u-blox NEO-M8T** (2026-08-20, 70 dB pad, TX gain 38): Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for a rocket computer and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behavior is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behavior. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.
 
 Across the four parts that implement a velocity gate at all the limit brackets
 to **(514, 516] m/s**, and wherever an altitude gate is genuinely COCOM it sits

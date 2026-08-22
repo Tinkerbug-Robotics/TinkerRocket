@@ -51,7 +51,7 @@ def _ubx_frames(buf: bytes) -> int:
 KNOWN = {9600: "u-blox M8 UART default, Air530/AT6558R, most NMEA modules",
          38400: "u-blox F9/M9 UART default",
          115200: "common after reconfiguration",
-         460800: "flight-computer u-blox on this project"}
+         460800: "rocket-computer u-blox on this project"}
 
 
 def sweep(port: str, dwell: float = 2.5):

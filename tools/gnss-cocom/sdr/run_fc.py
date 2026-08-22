@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run a scenario radiated at the flight computer, capturing its console.
+"""Run a scenario radiated at the rocket computer, capturing its console.
 
 The rocket-computer's u-blox cannot be tapped the way the PX1125R was: its
-firmware sets UART1 to UBX-only and the flight computer consumes the stream, so
+firmware sets UART1 to UBX-only and the rocket computer consumes the stream, so
 nothing raw reaches USB. Instead the FC is built with TR_GNSS_COCOM_DIAG=1 and
 logs fix state and per-satellite C/N0 to the console that is already attached.
 This drives the transmitter, records that console, and converts it into the same
@@ -10,7 +10,7 @@ capture format the conducted rig produced, so correlate.py / recovery.py /
 plot_flight.py all work unchanged.
 
 Unlike run_radiated.py there is no serial tap and no receiver configuration --
-the flight computer owns the receiver end to end. The only live adjustment is TX
+the rocket computer owns the receiver end to end. The only live adjustment is TX
 gain, because the cage fixes the geometry.
 """
 
@@ -58,7 +58,7 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-s", "--scenario", required=True)
     ap.add_argument("-p", "--port", default="/dev/cu.usbmodem101",
-                    help="flight-computer console")
+                    help="rocket-computer console")
     ap.add_argument("-b", "--baud", type=int, default=115200)
     ap.add_argument("-x", "--gain", type=int, default=12, help="HackRF TX gain 0-47")
     ap.add_argument("--freq", type=int, default=1575420000)

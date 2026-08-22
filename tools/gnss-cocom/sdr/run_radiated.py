@@ -3,12 +3,12 @@
 
 Differs from the conducted runs in three ways that matter:
 
-* **The receiver is not configured by us.** The flight computer owns it and sets
+* **The receiver is not configured by us.** The rocket computer owns it and sets
   it up at boot, including DYN_MODEL_AIRBORNE4g. This tool only listens, on a
   passive tap of the receiver's TXD line, so it cannot perturb the thing it is
   measuring. There is no seeded restart here; the SkyTraq `0x01` trick has a
   u-blox equivalent (UBX-CFG-RST) but injecting it would mean driving a line the
-  flight computer is also driving.
+  rocket computer is also driving.
 * **The tap is a generic USB-serial adapter**, so it cannot be found by USB
   vendor the way the passthrough board can. Pass --port, or run --list.
 * **Level is set by pad and geometry, not by a cable.** Free-space loss at L1 is
@@ -57,7 +57,7 @@ def list_candidate_ports():
         vid = f"{p.vid:04X}:{p.pid:04X}" if p.vid is not None else "----:----"
         print(f"  {p.device:<28} {vid}  {p.manufacturer or ''} {p.product or ''}")
     print("\nThe tap is whichever adapter is clipped to the receiver's TXD.\n"
-          "A u-blox on the flight computer runs at 460800 (38400 factory default).")
+          "A u-blox on the rocket computer runs at 460800 (38400 factory default).")
 
 
 def start_tx(c8: Path, freq: int, rate: int, gain: int, errfile: str):
@@ -231,7 +231,7 @@ def main() -> int:
     print(f"\n# {nbytes} bytes, {nframes} frames -> {cap}")
     if nframes == 0:
         print("# Nothing arrived. Check the tap is on the receiver's TXD (not the\n"
-              "# flight computer's), that ground is common, and the baud rate --\n"
+              "# rocket computer's), that ground is common, and the baud rate --\n"
               "# a u-blox on this firmware runs 460800, not the 38400 default.")
     return 0
 
