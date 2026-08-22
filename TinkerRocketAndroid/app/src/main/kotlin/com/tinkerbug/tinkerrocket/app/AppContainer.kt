@@ -69,6 +69,11 @@ class AppContainer(app: Application) {
     )
     val syncer = ActiveRocketSyncer(fleetScope)
 
+    /** Pre-flight checklists: master template + per-rocket diffs. */
+    val preflightStore = com.tinkerbug.tinkerrocket.session.PreflightStore(
+        directory = File(app.filesDir, "preflight_checklists"),
+    )
+
     /** Phone GPS + heading (ref-counted; consumers start/stop). */
     val phoneLocation = PhoneLocationManager(app)
 

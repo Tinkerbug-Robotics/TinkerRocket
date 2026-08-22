@@ -25,6 +25,7 @@ enum DashboardSheet: Identifiable {
     case servoTest(BLEDevice)
     case driftCast
     case frequencyScan(BLEDevice)   // #150: restored (removed in #136)
+    case preflight(BLEDevice)       // run the active rocket's pre-flight checklist
 
     var id: String {
         switch self {
@@ -33,6 +34,7 @@ enum DashboardSheet: Identifiable {
         case .servoTest(let d):     return "servoTest-\(d.peripheral?.identifier.uuidString ?? "")"
         case .driftCast:            return "driftCast"
         case .frequencyScan(let d): return "frequencyScan-\(d.peripheral?.identifier.uuidString ?? "")"
+        case .preflight(let d):     return "preflight-\(d.peripheral?.identifier.uuidString ?? "")"
         }
     }
 }
@@ -109,6 +111,22 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity)
                             .padding()
                             .background(.indigo)
+                            .foregroundColor(.white)
+                            .cornerRadius(TRShape.radiusButton)
+                        }
+
+                        // Master pre-flight checklist: the template every
+                        // rocket's checklist starts from, editable with no
+                        // device connected (build it at home, run it at the
+                        // pad from the dashboard advisory).
+                        NavigationLink(destination: PreflightMasterView()) {
+                            HStack {
+                                Image(systemName: "checklist")
+                                Text("Preflight Checklist")
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.teal)
                             .foregroundColor(.white)
                             .cornerRadius(TRShape.radiusButton)
                         }
@@ -288,6 +306,8 @@ struct DashboardView: View {
                     // hopping, the BS runs it as a coordinated scan and
                     // pushes the resulting skip-mask via cmd 15.
                     NavigationView { FrequencyScanView(device: device) }
+                case .preflight(let device):
+                    PreflightRunView(device: device)
                 }
             }
             // SwiftUI sheets get a fresh environment by default — re-inject
@@ -636,6 +656,15 @@ struct ConnectedDashboardView: View {
                                     state: device.telemetry.state),
                                 boot: device.telemetry.fcBootProgress)
                     .opacity(staleOpacity)
+
+                // Pre-flight checklist advisory: one quiet progress line for
+                // the active rocket, right under the state banner.  Advisory
+                // only — it never recolors the banner (sensor health owns
+                // that) and renders nothing when no checklist is configured.
+                PreflightAdvisoryRow(device: device) {
+                    activeSheet = .preflight(device)
+                }
+                .opacity(staleOpacity)
             }
 
             // #557: the FC lost its GNSS module and is flying a baro+IMU-only
