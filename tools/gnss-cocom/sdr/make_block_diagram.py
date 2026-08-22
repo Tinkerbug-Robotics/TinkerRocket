@@ -1,41 +1,73 @@
 #!/usr/bin/env python3
 """Draw the rig as a block diagram for the report's methodology section.
 
-Hand-authoring SVG path data is miserable to maintain and easy to get subtly
-wrong, so the boxes and connectors are laid out here from a small description
-and the geometry is computed. Colours come from the report's CSS variables with
-literal fallbacks, so the figure themes with the page and still renders if it is
-opened on its own.
+Boxes are **sized from their text**, and the row is then laid out from those
+widths, rather than both being hardcoded. The first version fixed the widths by
+eye and several labels overflowed their boxes -- which is the predictable
+outcome, because SVG does not wrap or clip text and nothing complains when it
+spills. Anything that changes a label now changes the box that holds it.
 
-    ./make_block_diagram.py     ->  results/figures/rig_block_diagram.svg
+Widths are estimated from character count and font size. That is approximate,
+so PAD is generous and `--check` reports the tightest fit in the drawing; keep
+some slack there and the estimate never has to be exact.
+
+Colours come from the report's CSS variables with literal fallbacks, so the
+figure themes with the page and still renders opened on its own.
+
+    ./make_block_diagram.py            ->  results/figures/rig_block_diagram.svg
+    ./make_block_diagram.py --check    report per-box text fit
 """
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "results" / "figures" / "rig_block_diagram.svg"
 
-W, H = 900, 330
-BOX_H = 46
-R = 5
+W = 900
+BOX_H, R, PAD, GAP = 48, 5, 16, 30
+LABEL_PX, SUB_PX = 12.5, 9.5
 
-# (x, y, w, label, sublabel, kind)
-BOXES = [
-    (14,  30, 128, "Broadcast ephemeris", "BKG, RINEX 3 → 2", "src"),
-    (14,  92, 128, "Trajectory", "10 Hz lat/lon/alt", "src"),
-    (176, 61, 118, "gps-sdr-sim", "GPS L1 C/A", "proc"),
-    (328, 61, 104, ".C8 baseband", "2.6 MSa/s", "data"),
-    (466, 61, 118, "HackRF One", "1575.42 MHz", "hw"),
-    (618, 61, 118, "Attenuators", "70 or 100 dB", "hw"),
+# Average advance width as a fraction of font size. IBM Plex Sans Condensed is
+# narrow; IBM Plex Mono is a true monospace at 0.6 em. Both are rounded up.
+EM_DISPLAY, EM_MONO = 0.52, 0.62
 
-    (466, 196, 118, "Receiver", "one of five", "hw"),
-    (618, 196, 118, "Capture", "UART or USB", "proc"),
-    (762, 196, 124, "Classifier", "FIX / BLOCKED / NO_LOCK", "proc"),
-    (302, 196, 128, "Compare", "vs injected truth", "proc"),
-    (110, 196, 152, "Gate thresholds", "velocity and altitude", "out"),
-]
+
+def text_w(s: str, px: float, mono: bool) -> float:
+    return len(s) * px * (EM_MONO if mono else EM_DISPLAY)
+
+
+class Box:
+    """A labelled block. Geometry is rounded to whole pixels at construction and
+    layout, so the rect and every connector that references its edges agree.
+
+    Rounding at draw time instead put an arrow one pixel inside the box it left,
+    because the rect rounded x and w separately while the connector rounded
+    their sum.
+    """
+
+    def __init__(self, label, sub, kind):
+        self.label, self.sub, self.kind = label, sub, kind
+        self.w = round(max(text_w(label, LABEL_PX, False),
+                           text_w(sub, SUB_PX, True)) + 2 * PAD)
+        self.x = self.y = 0
+
+    @property
+    def cx(self): return self.x + self.w // 2
+    @property
+    def cy(self): return self.y + BOX_H // 2
+    @property
+    def right(self): return self.x + self.w
+    @property
+    def bottom(self): return self.y + BOX_H
+
+    def slack(self):
+        widest = max(text_w(self.label, LABEL_PX, False),
+                     text_w(self.sub, SUB_PX, True))
+        return self.w - widest
+
 
 FILL = {"src": "var(--surface-2, #EEF1F5)", "proc": "var(--surface, #FFFFFF)",
         "data": "var(--surface-2, #EEF1F5)", "hw": "var(--surface, #FFFFFF)",
@@ -44,44 +76,78 @@ STROKE = {"src": "var(--rule, #DDE2E9)", "proc": "var(--rule-strong, #C3CAD5)",
           "data": "var(--rule, #DDE2E9)", "hw": "var(--rule-strong, #C3CAD5)",
           "out": "var(--accent, #2C5CA8)"}
 
+# --- the drawing ------------------------------------------------------------
+eph = Box("Ephemeris", "BKG broadcast", "src")
+traj = Box("Trajectory", "10 Hz lat/lon/alt", "src")
+sim = Box("gps-sdr-sim", "GPS L1 C/A", "proc")
+c8 = Box("Baseband", "2.6 MSa/s .C8", "data")
+hrf = Box("HackRF One", "1575.42 MHz", "hw")
+att = Box("Attenuators", "70 or 100 dB", "hw")
 
-def box(x, y, w, label, sub, kind):
-    o = [f'<rect x="{x}" y="{y}" width="{w}" height="{BOX_H}" rx="{R}" '
-         f'fill="{FILL[kind]}" stroke="{STROKE[kind]}" stroke-width="1"/>']
-    o.append(f'<text class="bl" x="{x + w/2:.0f}" y="{y + 19}" '
-             f'text-anchor="middle">{label}</text>')
-    if sub:
-        o.append(f'<text class="sb" x="{x + w/2:.0f}" y="{y + 34}" '
-                 f'text-anchor="middle">{sub}</text>')
+rx = Box("Receiver", "one of five", "hw")
+cap = Box("Capture", "UART or USB", "proc")
+cls = Box("Classifier", "FIX / BLOCKED / NO_LOCK", "proc")
+cmp_ = Box("Compare", "against the trajectory", "proc")
+out = Box("Gate thresholds", "velocity and altitude", "out")
+
+M = 16                      # left margin
+TOP_A, TOP_B = 26, 214      # row baselines
+STACK_GAP = 14
+
+
+def layout():
+    # column 0 of row A is a stack of two, vertically centred on the row
+    col0 = max(eph.w, traj.w)
+    eph.w = traj.w = col0
+    eph.x = traj.x = M
+    eph.y = TOP_A
+    traj.y = TOP_A + BOX_H + STACK_GAP
+    mid_a = round((eph.y + traj.bottom) / 2)
+
+    x = M + col0 + GAP
+    for b in (sim, c8, hrf, att):
+        b.x, b.y = x, mid_a - BOX_H // 2
+        x += b.w + GAP
+
+    x = M
+    for b in (rx, cap, cls, cmp_, out):
+        b.x, b.y = x, TOP_B
+        x += b.w + GAP
+    return x - GAP          # right-most extent
+
+
+def box_svg(b):
+    o = [f'<rect x="{b.x:.0f}" y="{b.y:.0f}" width="{b.w:.0f}" height="{BOX_H}" '
+         f'rx="{R}" fill="{FILL[b.kind]}" stroke="{STROKE[b.kind]}" stroke-width="1"/>',
+         f'<text class="bl" x="{b.cx:.0f}" y="{b.y + 20:.0f}" text-anchor="middle">'
+         f'{b.label}</text>']
+    if b.sub:
+        o.append(f'<text class="sb" x="{b.cx:.0f}" y="{b.y + 35:.0f}" '
+                 f'text-anchor="middle">{b.sub}</text>')
     return o
 
 
-def arrow(x1, y1, x2, y2, dashed=False, label=None, lx=None, ly=None):
+def h_arrow(a, b, dashed=False):
     d = ' stroke-dasharray="4 3"' if dashed else ''
-    o = [f'<line class="ar" x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}"{d} '
-         f'marker-end="url(#ah)"/>']
-    if label:
-        o.append(f'<text class="lb" x="{lx}" y="{ly}" text-anchor="middle">{label}</text>')
-    return o
+    return [f'<line class="ar" x1="{a.right:.0f}" y1="{a.cy:.0f}" '
+            f'x2="{b.x:.0f}" y2="{b.cy:.0f}"{d} marker-end="url(#ah)"/>']
 
 
-def elbow(x1, y1, x2, y2, label=None):
-    """Right-angled connector: across, then down/up, then into the target."""
-    mid = (y1 + y2) / 2
-    o = [f'<path class="ar" d="M {x1} {y1} V {mid} H {x2} V {y2}" fill="none" '
-         f'marker-end="url(#ah)"/>']
-    if label:
-        o.append(f'<text class="lb" x="{(x1+x2)/2:.0f}" y="{mid-6:.0f}" '
-                 f'text-anchor="middle">{label}</text>')
-    return o
+def elbow_into(a, b):
+    """From a's right edge, across and down/up into b's left edge."""
+    midx = (a.right + b.x) // 2
+    return [f'<path class="ar" d="M {a.right:.0f} {a.cy:.0f} H {midx:.0f} '
+            f'V {b.cy:.0f} H {b.x:.0f}" fill="none" marker-end="url(#ah)"/>']
 
 
-def main() -> int:
-    p = [f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" role="img" '
-         f'aria-label="Block diagram of the GNSS receiver test rig: ephemeris and '
-         f'trajectory into gps-sdr-sim, baseband to a HackRF through attenuators '
-         f'into the receiver, then capture, classification and comparison against '
-         f'the injected trajectory">']
+def build():
+    extent = layout()
+    height = 330
+    p = [f'<svg viewBox="0 0 {W} {height}" xmlns="http://www.w3.org/2000/svg" '
+         f'role="img" aria-label="Block diagram of the GNSS receiver test rig: '
+         f'ephemeris and trajectory into gps-sdr-sim, baseband to a HackRF through '
+         f'attenuators into the receiver, then capture, classification and '
+         f'comparison against the injected trajectory">']
     p.append('''<defs>
   <marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7"
           markerHeight="7" orient="auto-start-reverse">
@@ -96,48 +162,61 @@ def main() -> int:
       letter-spacing:.09em;text-transform:uppercase;fill:var(--ink-3,#79808F)}
   .ar{stroke:var(--ink-3,#79808F);stroke-width:1.3}
 </style>''')
+    p.append(f'<text class="hd" x="{M}" y="16">Signal generation</text>')
+    p.append(f'<text class="hd" x="{M}" y="204">Measurement</text>')
 
-    p.append('<text class="hd" x="14" y="18">Signal generation</text>')
-    p.append('<text class="hd" x="14" y="184">Measurement</text>')
+    for b in (eph, traj, sim, c8, hrf, att, rx, cap, cls, cmp_, out):
+        p += box_svg(b)
 
-    for b in BOXES:
-        p += box(*b)
+    p += elbow_into(eph, sim)
+    p += elbow_into(traj, sim)
+    for a, b in ((sim, c8), (c8, hrf), (hrf, att)):
+        p += h_arrow(a, b)
+    for a, b in ((rx, cap), (cap, cls), (cls, cmp_), (cmp_, out)):
+        p += h_arrow(a, b)
 
-    # generation row
-    p += elbow(142, 53, 176, 84)          # ephemeris -> sim
-    p += elbow(142, 115, 176, 84)         # trajectory -> sim
-    p += arrow(294, 84, 328, 84)
-    p += arrow(432, 84, 466, 84)
-    p += arrow(584, 84, 618, 84)
+    # attenuators wrap down into the receiver
+    wrap_y = (att.bottom + rx.y) // 2 - 12
+    p.append(f'<path class="ar" d="M {att.cx:.0f} {att.bottom:.0f} '
+             f'V {wrap_y:.0f} H {rx.cx:.0f} V {rx.y:.0f}" fill="none" '
+             f'marker-end="url(#ah)"/>')
+    p.append(f'<text class="lb" x="{(att.cx + rx.cx)/2:.0f}" y="{wrap_y - 7:.0f}" '
+             f'text-anchor="middle">conducted (SMA), or radiated inside a '
+             f'Faraday cage</text>')
 
-    # attenuators -> receiver, the two paths
-    p.append('<path class="ar" d="M 736 84 H 772 V 150 H 525 V 196" fill="none" '
-             'marker-end="url(#ah)"/>')
-    p.append('<text class="lb" x="648" y="144" text-anchor="middle">'
-             'conducted (SMA) &#183; or radiated into a Faraday cage</text>')
-
-    # measurement row, right to left
-    p += arrow(584, 219, 618, 219)
-    p += arrow(736, 219, 762, 219)
-    p.append('<path class="ar" d="M 824 242 V 272 H 366 V 242" fill="none" '
-             'marker-end="url(#ah)"/>')
-    p.append('<text class="lb" x="595" y="288" text-anchor="middle">'
-             'per-epoch fix state and satellite C/N&#8320;</text>')
-    p += arrow(302, 219, 262, 219)
-
-    # the trajectory feeds the comparison as well as the simulator
-    # From the BOTTOM edge of the trajectory box (y = 92 + BOX_H), not its
-    # centre: a connector that starts inside the shape it leaves draws a stub
-    # across the label.
-    p.append(f'<path class="ar" d="M 78 {92 + BOX_H} V 219 H 110" fill="none" '
-             'stroke-dasharray="4 3" marker-end="url(#ah)"/>')
-    p.append('<text class="lb" x="70" y="172" text-anchor="middle" '
-             'transform="rotate(-90 70 172)">ground truth</text>')
+    # the trajectory is also the ground truth the capture is compared against
+    gt_y = out.bottom + 34
+    p.append(f'<path class="ar" d="M {traj.cx:.0f} {traj.bottom:.0f} V {gt_y:.0f} '
+             f'H {cmp_.cx:.0f} V {cmp_.bottom:.0f}" fill="none" '
+             f'stroke-dasharray="4 3" marker-end="url(#ah)"/>')
+    p.append(f'<text class="lb" x="{(traj.cx + cmp_.cx)/2:.0f}" y="{gt_y + 14:.0f}" '
+             f'text-anchor="middle">the same trajectory is the ground truth</text>')
 
     p.append('</svg>')
+    return "\n".join(p) + "\n", extent, height
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--check", action="store_true",
+                    help="report per-box text fit instead of writing the file")
+    args = ap.parse_args()
+
+    svg, extent, height = build()
+    boxes = [eph, traj, sim, c8, hrf, att, rx, cap, cls, cmp_, out]
+    if args.check:
+        print(f"  {'box':<18} {'width':>6} {'slack':>7}")
+        for b in boxes:
+            flag = "  <- TIGHT" if b.slack() < 8 else ""
+            print(f"  {b.label:<18} {b.w:>6.0f} {b.slack():>7.1f}{flag}")
+        print(f"\n  widest row extends to x={extent:.0f} of {W}")
+        return 0 if extent <= W and all(b.slack() >= 0 for b in boxes) else 1
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text("\n".join(p) + "\n")
-    print(f"  {OUT.relative_to(HERE)}  ({OUT.stat().st_size} bytes)")
+    OUT.write_text(svg)
+    print(f"  {OUT.relative_to(HERE)}  ({OUT.stat().st_size} bytes), "
+          f"widest row to x={extent:.0f} of {W}")
     return 0
 
 

@@ -432,55 +432,54 @@
       letter-spacing:.09em;text-transform:uppercase;fill:var(--ink-3,#79808F)}
   .ar{stroke:var(--ink-3,#79808F);stroke-width:1.3}
 </style>
-<text class="hd" x="14" y="18">Signal generation</text>
-<text class="hd" x="14" y="184">Measurement</text>
-<rect x="14" y="30" width="128" height="46" rx="5" fill="var(--surface-2, #EEF1F5)" stroke="var(--rule, #DDE2E9)" stroke-width="1"/>
-<text class="bl" x="78" y="49" text-anchor="middle">Broadcast ephemeris</text>
-<text class="sb" x="78" y="64" text-anchor="middle">BKG, RINEX 3 → 2</text>
-<rect x="14" y="92" width="128" height="46" rx="5" fill="var(--surface-2, #EEF1F5)" stroke="var(--rule, #DDE2E9)" stroke-width="1"/>
-<text class="bl" x="78" y="111" text-anchor="middle">Trajectory</text>
-<text class="sb" x="78" y="126" text-anchor="middle">10 Hz lat/lon/alt</text>
-<rect x="176" y="61" width="118" height="46" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
-<text class="bl" x="235" y="80" text-anchor="middle">gps-sdr-sim</text>
-<text class="sb" x="235" y="95" text-anchor="middle">GPS L1 C/A</text>
-<rect x="328" y="61" width="104" height="46" rx="5" fill="var(--surface-2, #EEF1F5)" stroke="var(--rule, #DDE2E9)" stroke-width="1"/>
-<text class="bl" x="380" y="80" text-anchor="middle">.C8 baseband</text>
-<text class="sb" x="380" y="95" text-anchor="middle">2.6 MSa/s</text>
-<rect x="466" y="61" width="118" height="46" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
-<text class="bl" x="525" y="80" text-anchor="middle">HackRF One</text>
-<text class="sb" x="525" y="95" text-anchor="middle">1575.42 MHz</text>
-<rect x="618" y="61" width="118" height="46" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
-<text class="bl" x="677" y="80" text-anchor="middle">Attenuators</text>
-<text class="sb" x="677" y="95" text-anchor="middle">70 or 100 dB</text>
-<rect x="466" y="196" width="118" height="46" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
-<text class="bl" x="525" y="215" text-anchor="middle">Receiver</text>
-<text class="sb" x="525" y="230" text-anchor="middle">one of five</text>
-<rect x="618" y="196" width="118" height="46" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
-<text class="bl" x="677" y="215" text-anchor="middle">Capture</text>
-<text class="sb" x="677" y="230" text-anchor="middle">UART or USB</text>
-<rect x="762" y="196" width="124" height="46" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
-<text class="bl" x="824" y="215" text-anchor="middle">Classifier</text>
-<text class="sb" x="824" y="230" text-anchor="middle">FIX / BLOCKED / NO_LOCK</text>
-<rect x="302" y="196" width="128" height="46" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
-<text class="bl" x="366" y="215" text-anchor="middle">Compare</text>
-<text class="sb" x="366" y="230" text-anchor="middle">vs injected truth</text>
-<rect x="110" y="196" width="152" height="46" rx="5" fill="var(--accent-soft, #E7EDF6)" stroke="var(--accent, #2C5CA8)" stroke-width="1"/>
-<text class="bl" x="186" y="215" text-anchor="middle">Gate thresholds</text>
-<text class="sb" x="186" y="230" text-anchor="middle">velocity and altitude</text>
-<path class="ar" d="M 142 53 V 68.5 H 176 V 84" fill="none" marker-end="url(#ah)"/>
-<path class="ar" d="M 142 115 V 99.5 H 176 V 84" fill="none" marker-end="url(#ah)"/>
-<line class="ar" x1="294" y1="84" x2="328" y2="84" marker-end="url(#ah)"/>
-<line class="ar" x1="432" y1="84" x2="466" y2="84" marker-end="url(#ah)"/>
-<line class="ar" x1="584" y1="84" x2="618" y2="84" marker-end="url(#ah)"/>
-<path class="ar" d="M 736 84 H 772 V 150 H 525 V 196" fill="none" marker-end="url(#ah)"/>
-<text class="lb" x="648" y="144" text-anchor="middle">conducted (SMA) &#183; or radiated into a Faraday cage</text>
-<line class="ar" x1="584" y1="219" x2="618" y2="219" marker-end="url(#ah)"/>
-<line class="ar" x1="736" y1="219" x2="762" y2="219" marker-end="url(#ah)"/>
-<path class="ar" d="M 824 242 V 272 H 366 V 242" fill="none" marker-end="url(#ah)"/>
-<text class="lb" x="595" y="288" text-anchor="middle">per-epoch fix state and satellite C/N&#8320;</text>
-<line class="ar" x1="302" y1="219" x2="262" y2="219" marker-end="url(#ah)"/>
-<path class="ar" d="M 78 138 V 219 H 110" fill="none" stroke-dasharray="4 3" marker-end="url(#ah)"/>
-<text class="lb" x="70" y="172" text-anchor="middle" transform="rotate(-90 70 172)">ground truth</text>
+<text class="hd" x="16" y="16">Signal generation</text>
+<text class="hd" x="16" y="204">Measurement</text>
+<rect x="16" y="26" width="132" height="48" rx="5" fill="var(--surface-2, #EEF1F5)" stroke="var(--rule, #DDE2E9)" stroke-width="1"/>
+<text class="bl" x="82" y="46" text-anchor="middle">Ephemeris</text>
+<text class="sb" x="82" y="61" text-anchor="middle">BKG broadcast</text>
+<rect x="16" y="88" width="132" height="48" rx="5" fill="var(--surface-2, #EEF1F5)" stroke="var(--rule, #DDE2E9)" stroke-width="1"/>
+<text class="bl" x="82" y="108" text-anchor="middle">Trajectory</text>
+<text class="sb" x="82" y="123" text-anchor="middle">10 Hz lat/lon/alt</text>
+<rect x="178" y="57" width="104" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="230" y="77" text-anchor="middle">gps-sdr-sim</text>
+<text class="sb" x="230" y="92" text-anchor="middle">GPS L1 C/A</text>
+<rect x="312" y="57" width="109" height="48" rx="5" fill="var(--surface-2, #EEF1F5)" stroke="var(--rule, #DDE2E9)" stroke-width="1"/>
+<text class="bl" x="366" y="77" text-anchor="middle">Baseband</text>
+<text class="sb" x="366" y="92" text-anchor="middle">2.6 MSa/s .C8</text>
+<rect x="451" y="57" width="97" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="499" y="77" text-anchor="middle">HackRF One</text>
+<text class="sb" x="499" y="92" text-anchor="middle">1575.42 MHz</text>
+<rect x="578" y="57" width="104" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="630" y="77" text-anchor="middle">Attenuators</text>
+<text class="sb" x="630" y="92" text-anchor="middle">70 or 100 dB</text>
+<rect x="16" y="214" width="97" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="64" y="234" text-anchor="middle">Receiver</text>
+<text class="sb" x="64" y="249" text-anchor="middle">one of five</text>
+<rect x="143" y="214" width="97" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="191" y="234" text-anchor="middle">Capture</text>
+<text class="sb" x="191" y="249" text-anchor="middle">UART or USB</text>
+<rect x="270" y="214" width="167" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="353" y="234" text-anchor="middle">Classifier</text>
+<text class="sb" x="353" y="249" text-anchor="middle">FIX / BLOCKED / NO_LOCK</text>
+<rect x="467" y="214" width="162" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="548" y="234" text-anchor="middle">Compare</text>
+<text class="sb" x="548" y="249" text-anchor="middle">against the trajectory</text>
+<rect x="659" y="214" width="156" height="48" rx="5" fill="var(--accent-soft, #E7EDF6)" stroke="var(--accent, #2C5CA8)" stroke-width="1"/>
+<text class="bl" x="737" y="234" text-anchor="middle">Gate thresholds</text>
+<text class="sb" x="737" y="249" text-anchor="middle">velocity and altitude</text>
+<path class="ar" d="M 148 50 H 163 V 81 H 178" fill="none" marker-end="url(#ah)"/>
+<path class="ar" d="M 148 112 H 163 V 81 H 178" fill="none" marker-end="url(#ah)"/>
+<line class="ar" x1="282" y1="81" x2="312" y2="81" marker-end="url(#ah)"/>
+<line class="ar" x1="421" y1="81" x2="451" y2="81" marker-end="url(#ah)"/>
+<line class="ar" x1="548" y1="81" x2="578" y2="81" marker-end="url(#ah)"/>
+<line class="ar" x1="113" y1="238" x2="143" y2="238" marker-end="url(#ah)"/>
+<line class="ar" x1="240" y1="238" x2="270" y2="238" marker-end="url(#ah)"/>
+<line class="ar" x1="437" y1="238" x2="467" y2="238" marker-end="url(#ah)"/>
+<line class="ar" x1="629" y1="238" x2="659" y2="238" marker-end="url(#ah)"/>
+<path class="ar" d="M 630 105 V 147 H 64 V 214" fill="none" marker-end="url(#ah)"/>
+<text class="lb" x="347" y="140" text-anchor="middle">conducted (SMA), or radiated inside a Faraday cage</text>
+<path class="ar" d="M 82 136 V 296 H 548 V 262" fill="none" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+<text class="lb" x="315" y="310" text-anchor="middle">the same trajectory is the ground truth</text>
 </svg>
         </div>
       </div>
