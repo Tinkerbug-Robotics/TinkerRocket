@@ -110,7 +110,8 @@ def receiver_sections(d, text) -> str:
       <p>{notes.get(rid, '')}</p>
       <p><strong>Velocity gate</strong> {vel} &nbsp;&middot;&nbsp;
          <strong>Altitude gate</strong> {alt} &nbsp;&middot;&nbsp;
-         <strong>Satellites</strong> min {r['sats_min']}, median {r['sats_median']}</p>
+         <strong>Satellites</strong> median {r['sats_median']},
+         5th percentile {r['sats_p05']}</p>
     </div>
 
     <figure>

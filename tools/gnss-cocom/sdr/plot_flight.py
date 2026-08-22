@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from correlate import Truth, collect, parse_start, trajectory_time  # noqa: E402
 
 W, H = 900, 596
-LEG_H = 40
+LEG_H = 76   # five stacked legend rows at 12 px, plus breathing room
 SAT_H = 30
 PAD_L, PAD_R, PAD_T, PAD_B = 62, 18, 26, 54 + LEG_H
 STRIP_H = 16
@@ -235,41 +235,26 @@ def build_svg(meta, rows, truth):
     out.append(f'<text class="ttl" x="{PAD_L}" y="{y0_alt-8:.1f}">altitude (km)</text>')
     out.append(f'<text class="ttl" x="{PAD_L}" y="{y0_spd-8:.1f}">speed (m/s)</text>')
 
-    # The second legend column used to start at a fixed PAD_L + 400, which the
-    # longest verdict line outgrew: "BLOCKED - position withheld, satellites
-    # still tracked = the gate" is ~380 px at 9 px mono, so the two columns
-    # overlapped and the text ran together. Measure the widest entry instead,
-    # and fall back to a single stacked column if the pair will not fit.
-    SWATCH, GUTTER, EM = 22, 34, 0.62
-
-    def text_px(t):
-        return len(t) * 9 * EM
-
-    left = [f"{n} \u00b7 {m}" for n, m in VERDICT_MEANING]
-    right_items = [("var(--nolock, #9B3535)", 0.16,
-                    "shaded on the SPEED panel: over 515 m/s"),
-                   ("var(--blocked, #A2660A)", 0.30,
-                    "shaded on the ALTITUDE panel: over 80 km")]
-    lx = PAD_L + SWATCH + max(text_px(t) for t in left) + GUTTER
-    widest_right = max(text_px(m) for _, _, m in right_items)
-    two_col = lx + SWATCH + widest_right <= W - PAD_R
-
+    # ONE COLUMN, deliberately. Two columns were tried twice and collided both
+    # times: the width of a text run in SVG depends on which font actually
+    # resolves, and estimating it from character count was wrong by 25% here
+    # (IBM Plex Mono is 0.6 em, the substituted fallback measured nearer 0.8).
+    # SVG neither wraps nor clips, so the failure mode is silent overprinting.
+    # Stacking removes the guess entirely -- nothing can overlap a column that
+    # has nothing beside it -- at the cost of two rows of height.
     ly = H - LEG_H + 4
-    for i, (name, meaning) in enumerate(VERDICT_MEANING):
+    rows = [(VERDICT_FILL[n], 1.0, f"{n} &#183; {esc(m)}")
+            for n, m in VERDICT_MEANING]
+    rows += [("var(--nolock, #9B3535)", 0.16 * 1.6,
+              "shaded on the SPEED panel: over 515 m/s"),
+             ("var(--blocked, #A2660A)", 0.30 * 1.6,
+              "shaded on the ALTITUDE panel: over 80 km")]
+    for i, (fill, op, label) in enumerate(rows):
         yy = ly + i * 12
         out.append(f'<rect x="{PAD_L}" y="{yy-6:.0f}" width="16" height="8" '
-                   f'fill="{VERDICT_FILL[name]}"/>')
-        out.append(f'<text class="lbl" x="{PAD_L+SWATCH}" y="{yy+1:.0f}">'
-                   f'{name} &#183; {esc(meaning)}</text>')
-    for i, (fill, op, meaning) in enumerate(right_items):
-        if two_col:
-            x, yy = lx, ly + i * 12
-        else:
-            x, yy = PAD_L, ly + (len(VERDICT_MEANING) + i) * 12
-        out.append(f'<rect x="{x:.0f}" y="{yy-6:.0f}" width="16" height="8" '
-                   f'fill="{fill}" opacity="{op*1.6:.2f}"/>')
-        out.append(f'<text class="lbl" x="{x+SWATCH:.0f}" y="{yy+1:.0f}">'
-                   f'{esc(meaning)}</text>')
+                   f'fill="{fill}" opacity="{op:.2f}"/>')
+        out.append(f'<text class="lbl" x="{PAD_L+22}" y="{yy+1:.0f}">{label}</text>')
+
     out.append('</svg>')
     return "\n".join(out)
 

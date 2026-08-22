@@ -121,7 +121,6 @@ def rows(d):
             "comb": r["combination"],
             "rec": (f"{r['recovery_s'][0]:.1f}-{r['recovery_s'][1]:.1f} s"
                     if r.get("recovery_s") else "n/a"),
-            "sats": f"{r['sats_min']} / {r['sats_median']}",
             "notes": r.get("notes", ""),
             "bands": r["bands"],
             "protocol": r["protocol"],

@@ -1,5 +1,5 @@
 {
- "_comment": "Measured COCOM behavior per receiver. One entry per part. Brackets are (highest value that still held a fix, lowest value that was withheld], taken across every gate edge in every run for that receiver -- so they tighten as more runs are added. Edit this file and re-run receiver_table.py; do not hand-edit the table in report.html. altitude_gate_cause distinguishes an export gate from any other reason a part stops publishing altitude -- the NEO-M8T's u-blox dynamic model caps at 50 km, which is a real ceiling but is not COCOM.",
+ "_comment": "Measured COCOM behavior per receiver. One entry per part. Brackets are (highest value that still held a fix, lowest value that was withheld], taken across every gate edge in every run for that receiver -- so they tighten as more runs are added. Edit this file and re-run receiver_table.py; do not hand-edit the table in report.html. altitude_gate_cause distinguishes an export gate from any other reason a part stops publishing altitude -- the NEO-M8T's u-blox dynamic model caps at 50 km, which is a real ceiling but is not COCOM. sats_p05 / sats_median are the 5th percentile and median satellite count over the two standard flights, measured from first acquisition to the end of transmission. A raw minimum is not comparable: every run starts cold and every part drops a single epoch occasionally, so the minimum reads 0 for all five and says nothing.",
  "limits": {
   "velocity_mps": 515,
   "altitude_km_alt": 80.0,
@@ -25,11 +25,11 @@
     0.0,
     1.5
    ],
-   "sats_min": 2,
    "sats_median": 7,
    "notes": "Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified.",
    "altitude_gate_cause": "cocom",
-   "velocity_gate_present": true
+   "velocity_gate_present": true,
+   "sats_p05": 4
   },
   {
    "id": "sam_m10q",
@@ -50,11 +50,11 @@
     0.0,
     1.1
    ],
-   "sats_min": 4,
    "sats_median": 13,
    "notes": "Never fell below 4 satellites in either flight, so every withheld epoch is the gate rather than a link failure. No periodic C/N0 oscillation appeared (r = 0.02 and 0.11).",
    "altitude_gate_cause": "cocom",
-   "velocity_gate_present": true
+   "velocity_gate_present": true,
+   "sats_p05": 10
   },
   {
    "id": "zed_f9p",
@@ -75,11 +75,11 @@
     0.1,
     1.0
    ],
-   "sats_min": 6,
    "sats_median": 13,
    "notes": "Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. Uniquely among the three parts it is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. Its descending edges are crisp and agree at ~80.1 km.",
    "altitude_gate_cause": "cocom",
-   "velocity_gate_present": true
+   "velocity_gate_present": true,
+   "sats_p05": 10
   },
   {
    "id": "air530",
@@ -97,11 +97,11 @@
    "altitude_blocked_min_km": 11.0,
    "combination": "n/a -- no velocity gate",
    "recovery_s": null,
-   "sats_min": 6,
    "sats_median": 12,
    "notes": "EVERYTHING FIRST RECORDED FOR THIS PART WAS WRONG, and dwell tests corrected it. It has NO velocity gate: it held a fix to 900 m/s at 5 km on t1_velramp (reporting 899), and 100% of epochs at every 90 s dwell from 495 to 530 m/s on vel_stair. What it has is an ALTITUDE ceiling at 10-11 km -- 100% fix at 8 km, 91% at 10 km, 0% at 11/12/13 km on 90 s dwells, and 9.90->10.25 km on a 354 m/s ramp with 11 satellites either side. That ceiling is far below the COCOM altitude, so it is not an export gate at all. The flight profiles read as a latent velocity gate only because they cross 10 km at high speed: the spaceshot transition happens while speed is DECREASING (1334 -> 1304 m/s) as altitude rises through 9.83 -> 11.15 km, which no velocity gate can do. Re-open latency is not defined for this part because there is no COCOM gate to re-open: on blockdur it held a fix at 560 m/s for 148 continuous seconds, dropping only 1 s at the sharp 130 m/s^2 transition. The 31-134 s 'recoveries' seen on flights were simply the vehicle descending back through the 10-11 km ceiling. The 18 s C/N0 blanking accompanies withholding (19/677 epochs while withholding vs 0/170 while publishing on gentle_alt).",
    "altitude_gate_cause": "not COCOM",
-   "velocity_gate_present": false
+   "velocity_gate_present": false,
+   "sats_p05": 6
   },
   {
    "id": "neo_m8t",
@@ -123,10 +123,10 @@
     0.9,
     3.1
    ],
-   "sats_min": 8,
    "sats_median": 14,
    "notes": "Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for a flight computer and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behavior is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behavior. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.",
-   "velocity_gate_present": true
+   "velocity_gate_present": true,
+   "sats_p05": 14
   }
  ]
 }
