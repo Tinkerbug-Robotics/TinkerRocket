@@ -293,13 +293,13 @@
     <h1>Hobby Grade GNSS Receiver Altitude and Speed Limits for High Performance Rockets</h1>
     <p class="standfirst">Five hobby-grade GNSS receivers were flown against identical
       simulated rocket trajectories to find where each one stops publishing
-      state updates. Receivers are typically limited to 'COCOM' limits which come from 
+      state updates. Receivers are typically limited to 'COCOM' limits which come from
       a Cold War international agreement to place limits on GNSS receivers and keep
       them from being used in ballistic missile guidance.  Limits were originally 18 km
       and 515 m/s. The 18 km limit seems to have been removed more recently in favor of a
       600 m/s limit from the Missile Technology Control Regime (MTCR Annex
       Handbook 2017, Section 11.A.3). Receivers still implement limits differently and generally still implement
-      altitude limits, sometimes wildly different from the COCOM limit. The purpose of this 
+      altitude limits, sometimes wildly different from the COCOM limit. The purpose of this
       work was to characterize the actual performance using a software-defined radio to
       inject simulated trajectories into several readily available inexpensive receivers.</p>
     <span class="status status-live">Five parts were measured</span>
@@ -428,10 +428,13 @@
     <h2><span class="n">02</span>How this was measured</h2>
     <div class="prose">
       <p>A HackRF One drives a simulated GPS L1 C/A constellation into each
-        receiver through a fixed attenuator chain &mdash; conducted, never
-        radiated, except for the flight computer's receiver which is fed by a
-        quarter-wave inside a Faraday cage. The baseband comes from
-        <code>gps-sdr-sim</code> against real broadcast ephemeris, so the
+        receiver through a fixed attenuator chain. A direct path through
+        cables is used whenever possible, with transmission only inside a Faraday
+        cage &mdash; 100 dB of attenuation before the antenna, and monitoring
+        outside the cage for GNSS interference. The HackRF only transmits one frequency at a time,
+        so we only transmit L1 sats from the ephemeris. We found times/locations
+        with a favorable number of available satellites (13-15). The GNSS signal comes
+        from <code>gps-sdr-sim</code> against the real broadcast ephemeris, so the
         satellites are where they actually were on the day.</p>
     </div>
 
@@ -504,8 +507,8 @@
 </svg>
         </div>
       </div>
-      <figcaption>The rig. The trajectory does double duty: it is what the
-        simulator flies, and it is the ground truth every capture is compared
+      <figcaption>The bench setup. The trajectory is input to <code>gps-sdr-sim</code>,
+        and it is the ground truth every capture is compared
         against &mdash; which is why no clock synchronization between the
         transmitter and the analysis is required. Only the link between the
         attenuators and the receiver changes between parts.</figcaption>
@@ -513,12 +516,11 @@
 
     <div class="prose">
 
-      <h3>Blocked is not the same as lost</h3>
-      <p>The whole measurement rests on one distinction. A receiver that has been
-        <em>gated</em> keeps tracking satellites and simply declines to publish a
-        position; a receiver that has <em>lost signal</em> loses the satellites
-        first. Every capture therefore records both the fix state and the
-        per-satellite carrier-to-noise ratio, and each epoch is classified:</p>
+      <h3>Blocked vs Lost</h3>
+      <p>A receiver that has been <em>blocked</em> keeps tracking satellites and simply
+        declines to publish a fix; a receiver that has <em>lost signal</em> loses the satellites
+        first. Every capture records both the fix state and the
+        per-satellite carrier-to-noise ratio, so the two can be told apart:</p>
       <div class="scroll">
         <table>
           <thead><tr><th>Verdict</th><th>Fix</th><th>Satellites</th><th>Meaning</th></tr></thead>
@@ -531,7 +533,9 @@
       </div>
       <p>A result is only reported as a gate when the satellites stayed. Where a
         receiver was starved &mdash; fewer than four satellites through a wait
-        &mdash; the analysis says so rather than quoting a latency.</p>
+        &mdash; the analysis says so rather than quoting a latency. After working
+        out bugs in the bench setup, this only came up in the Air530 case, which
+        drops satellites on an 18 second period during a block.</p>
 
       <h3>The two standard trajectories</h3>
       <p>Every receiver flies both. They reach the same 82.5&nbsp;km apogee and
@@ -558,10 +562,10 @@
         the transmitter and the analysis is needed.</p>
       <p><strong>One signal, one band.</strong> The injection is GPS L1 C/A only.
         Every receiver here is multi-constellation and two are multi-band, so all
-        of them are being tested well below what they can do. That is a property
-        of the rig, not of any part, and it applies equally to all five &mdash;
-        which is what makes the comparison fair even though it is not
-        representative of open-sky performance.</p>
+        of them are being tested with fewer than typically visible satellites.
+        That is a property of the bench setup, not of any receiver, but by picking
+        favorable locations and times we ensured enough satellites were visible
+        to characterize gate performance.</p>
     </div>
   </section>
 
@@ -8118,9 +8122,9 @@
     <div class="prose">
       <p>The flight profiles were enough for four of the five parts. They were not
         enough for the Air530 which, despite not implementing the MTCR velocity limit, it
-        also had the worst performance. Unlike every other unit, the Air530 periodically 
+        also had the worst performance. Unlike every other unit, the Air530 periodically
         drops the fix internally during times it is blocked &mdash; i.e. above 10 km.</p>
-      <p>This means that additional scenarios were needed to study the behavior of the 
+      <p>This means that additional scenarios were needed to study the behavior of the
         unit. So in addition to the data below, other scenarios were also run to
         confirm the altitude limit and lack of velocity limit.</p>
 
@@ -8166,7 +8170,7 @@
       <h3>The same trap on the NEO-M8T</h3>
       <p>The M8T stops publishing at 50&nbsp;km, which is the documented maximum
         altitude of u-blox's airborne dynamic models rather than an MTCR limit.
-        The M8T has different models, and changing the model changed the limit, 
+        The M8T has different models, and changing the model changed the limit,
         confirming that it was the model driving the limit and not MTCR. For example
         switching from airborne &lt;4&nbsp;g to portable moved the same
         ceiling from 49.80&nbsp;km to 5.04&nbsp;km.</p>
