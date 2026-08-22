@@ -25,7 +25,7 @@ both ends instead of an S3 and a P4.
 
 | | at fork | S3 alone | now |
 |---|---|---|---|
-| Parts | 255 | 156 | **195** |
+| Parts | 255 | 156 | **196** |
 | Nets | 234 | 139 | **200** |
 | Sheets | 5 | 4 | **5** |
 
@@ -41,7 +41,7 @@ expansion header, camera, servo and piezo came out.*
 | Rail | `+3V3` — always on | `V_MCU_SWTCH` — **starts off** |
 | Radio | 2.4 GHz chip antenna `U31`, 900 MHz LoRa `U16` | none |
 | Memory | NAND `U11` + boot flash `U13` | boot flash `U33` only |
-| Sensors | magnetometer and power monitor on `SEN_SC*` | IMU, baro, GNSS |
+| Sensors | magnetometer and pack monitor on `SEN_SC*` — **both on `+3V3`** | IMU, baro, GNSS |
 | Pyro | none | all four channels and `PYRO_ARM` |
 | USB | `OC_D±` | `FC_D±` |
 
@@ -58,7 +58,7 @@ This is `rocket-computer`'s arrangement, reproduced part for part:
 ```
 FC_EN_OC   (OC GPIO7) ──>|─┐
                           ├── POWER_SWITCH ──> U30 EN/UVLO ──> V_MCU_SWTCH
-FC_EN_HOLD (FC GPIO3) ──>|─┘        │  │
+FC_EN_HOLD (FC GPIO17) ─>|─┘        │  │
                         D9          │  └── C105 10 uF   (rides out a drop-out)
                      BAV170M        └───── R84 100 k    (holds the rail off)
 ```
@@ -69,6 +69,53 @@ out computer boots on the always-on `+3V3` rail and raises `FC_EN_OC` to start
 the flight computer, which then asserts `FC_EN_HOLD` to hold its own rail up.
 **An out-computer reboot in flight can no longer power the flight computer
 down**, which is the whole point of the diode-OR.
+
+### The hold has to survive the flight computer's own crash
+
+`rocket-computer` closed #825/#848 in firmware (PR #859): the flight computer
+drives its hold pin HIGH **and calls `gpio_hold_en`**, so the pad stays latched
+through the FC's own panic/WDT/SW resets. That is what makes the latch a real
+in-flight guarantee rather than a race against the `R84`/`C105` decay — without
+it, an FC crash mid-flight drops the rail and takes all four pyro channels with
+it, ballistic.
+
+**That mechanism ports to this board, and the pin was chosen for it.** On the
+ESP32-S3 `gpio_hold_en()` only reaches the RTC-domain latch for RTC-capable
+pads; ESP-IDF dispatches to `rtc_gpio_hold_en()` when `rtc_gpio_is_valid_gpio()`
+passes, and falls back to the digital hold — which is **deep-sleep only** —
+otherwise. The S3 has `SOC_RTCIO_PIN_COUNT = 22`, covering **GPIO0–GPIO21**, and
+`RTCIO_GPIO17_CHANNEL` exists. So `FC_EN_HOLD` on GPIO17 latches exactly the way
+`P4_EN_HOLD` does on the P4's GPIO5.
+
+> **Constraint for whoever writes the flight-computer board header: the hold pin
+> must stay inside GPIO0–GPIO21.** Move it to GPIO26 or above and
+> `gpio_hold_en()` silently degrades to a deep-sleep-only hold — the call still
+> returns `ESP_OK`, the latch still looks asserted, and it evaporates on the
+> first panic reset. That reintroduces #825 with no error to notice it by.
+
+The decay window is unchanged from `rocket-computer`: `R84` 100 k and `C105`
+10 µF give roughly 1.4 s from 3.3 V to `U30`'s enable threshold. Note the decay
+is on the *enable* node, not on `V_MCU_SWTCH` — `U30` is a load switch, so its
+output stays at full rail until the enable crosses the threshold and then
+collapses. The flight computer is fully powered for the whole window, with no
+brownout race on the way down.
+
+One difference from `rocket-computer`, and it favours this board: there the
+radio has its own switch, so a flight-computer hold does not keep it alive.
+Here the radio and the GNSS receiver both ride `V_MCU_SWTCH`, so a held rail
+keeps telemetry *and* position up — which is what the downed-rocket tracker mode
+behind that firmware actually wants.
+
+`FC_EN_HOLD` sits on **GPIO17, not GPIO3**. GPIO3 is where `POWER_SWITCH` lived
+on the single-MCU board and is where a copy of that sheet would have left it —
+but GPIO3 is a strapping pin, and inserting `D9` puts a diode between it and
+`R84`, so it would have booted floating. GPIO17 is unconditionally free and
+GPIO3 is now a bare pad. The move also decouples the latch from boot
+configuration: `gpio_hold_en` on GPIO3 would have held a *strapping* pin HIGH
+through every in-flight reset. The same problem in reverse is why `R34` (100 k) pulls
+`ESP_SDO` down on the out computer: that net is GPIO3 *there*, driven by a
+flight computer that is unpowered while the out computer boots. See the
+correction section in [`pin-budget.md`](pin-budget.md).
 
 Note the consequence of the mini's rail split, which differs from
 `rocket-computer`: here the LoRa radio and the NAND sit on `V_MCU_SWTCH` rather
@@ -91,7 +138,26 @@ Six wires, the same net names and the same protocols as `rocket-computer`:
 | `ESP_SDA` | GPIO5 | GPIO35 | I2C data |
 
 `R115`/`R116` (5.11 k to `V_MCU_SWTCH`) pull the I2C pair up, matching
-`rocket-computer`'s `R55`/`R58`.
+`rocket-computer`'s `R55`/`R58` — tied to the switched rail rather than `+3V3`
+on purpose, so they are not two more paths feeding a dead rail. `R34` (100 k)
+pulls `ESP_SDO` down; see above.
+
+**The magnetometer moved to `+3V3` for this reason.** It shares `SEN_SCL`/
+`SEN_SDA` with the pack monitor, whose pull-ups `R67`/`R69` are on `+3V3`. With
+`U3` behind the switch those pull-ups fed its I2C pads while `U30`'s QOD held
+its supply at ground — above abs-max, and clamping the bus below VIL so the
+INA230 was unreadable in exactly the pad-standby mode this design exists to
+enable. There is no other pack-voltage path to the out computer, so that was the
+whole of its battery telemetry. `R67`/`R69` were the only passive pull-ups on
+the board crossing the rail boundary; every remaining crossing is an actively
+driven signal.
+
+**Firmware constraint.** All six of these cross the `+3V3` / `V_MCU_SWTCH`
+boundary, and they are the only signals live during pad standby with the flight
+computer off. The out computer must park every one of them Hi-Z whenever
+`V_MCU_SWTCH` is down, or it injects through the flight computer's ESD diodes
+into the dead rail. This exact failure already bit `rocket-computer` — the
+FC-relay OTA contention, where `i2s_del_channel()` left BCLK/WS/DOUT driven.
 
 **The out computer's six GPIO numbers are identical to `rocket-computer`'s**, so
 `projects/out_computer` ports across with a board header and nothing else. The
@@ -188,7 +254,7 @@ none have been fixed here.
 
 | | at fork | after `rev1` | after P4 removal | after the second S3 |
 |---|---|---|---|---|
-| ERC (`--severity-all`) | 1012 | 1012 | 823 → 610 | **735** |
+| ERC (`--severity-all`) | 1012 | 1012 | 823 → 610 | **739** |
 | DRC (`--severity-all`) | 26 | 28 | **88** | not re-run |
 | Schematic parity | 11 | 11 | **8** | not re-run |
 | Unconnected | 0 | 0 | **0** | not re-run |
@@ -199,16 +265,16 @@ the baseline the 735 is a delta against. DRC and parity are unmeasured because
 the second processor is schematic-only so far — **the PCB has not been
 touched**, so every board-side number above is stale by construction.*
 
-The +125 ERC items are all in categories the board already had, and none of them
+The +129 ERC items are all in categories the board already had, and none of them
 is a new wiring defect:
 
 | Added | Why |
 |---|---|
-| 94 `endpoint_off_grid` | inherited with the copied sheet geometry (515 already present) |
+| 98 `endpoint_off_grid` | inherited with the copied sheet geometry (515 already present) |
 | 19 `pin_not_connected` | spare pads — twelve freed on `U15`, seven unused on `U32`. Deliberately left bare rather than flagged, because they are spares, not decisions |
-| 7 `pin_to_pin` (warning) | the flash symbol types its bus pins *Unspecified*; `U13` already does this against `U15` |
+| 6 `pin_to_pin` (warning) | the flash symbol types its bus pins *Unspecified*; `U13` already does this against `U15` |
 | 3 `power_pin_not_driven` | power inputs fed through a passive — `L10` into `U32`, `R3` into `U1` — same shape as the five already present |
-| 2 `pin_to_pin` (error) | the flash symbol types GND as a *power output*; identical to `U13`'s existing pair |
+| 1 `pin_to_pin` (error) | the flash symbol types GND as a *power output*; identical to `U13`'s existing pair |
 | 2 `lib_symbol_mismatch` | `U33`/`Y3` inherit the cached-symbol drift `U13`/`Y1` already report |
 
 Every pre-existing DRC category went *down* with the parts count. The rise to 88
@@ -232,7 +298,7 @@ Three stale items are worth knowing about, none fixed:
   has the old vertical footprint.** Swapping it on the board means re-placing
   C12 and re-routing it, which is layout work for the next pass.
 - **`bom.csv` is still V9's full bill of materials** — 255 parts, including the
-  65 that no longer exist, and now also missing the 39 parts the second
+  65 that no longer exist, and now also missing the 40 parts the second
   processor added. The C12 row is the one line that is current.
 - **The on-board fabrication-note text still cites `QFN-104 (U17)`** as the
   reason ENIG is required. `U17` was the P4 and is gone. ENIG is still justified
@@ -271,9 +337,9 @@ and drops both warnings.
 
 **Schematic-complete for the two-processor split; the PCB has not been touched.**
 The flight computer, its power switch, the diode-OR enable and the USB mux exist
-in the schematic and export a clean netlist — 195 components, 200 nets, no
+in the schematic and export a clean netlist — 196 components, 200 nets, no
 duplicate references and no single-node nets. Nothing has been laid out: there
-is no footprint on the board for `U32`, `U33`, `U1`, `S1`, `D9`, `C105` or the
+is no footprint on the board for `U32`, `U33`, `U1`, `S1`, `D9`, `C105`, `R34` or the
 `C110`/`R110` block, and the board file still carries the P4-era track stubs.
 
 Not reviewed, not fabbed, no tag. Firmware exists —
@@ -316,3 +382,6 @@ Each of these is a decision left open rather than an oversight:
   are permanently unused, which is not the intent.
 - **Both processors' spare `GPIO26`** is the quad-PSRAM chip select on this part
   and remains unusable on each — see `pin-budget.md`.
+- **The six link lines are the only signals live during pad standby.** Firmware
+  must park them Hi-Z while `V_MCU_SWTCH` is down; the hardware does not enforce
+  it. See *The link between them*.
