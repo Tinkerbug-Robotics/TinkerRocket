@@ -1371,6 +1371,25 @@ private fun SignalBar(
         // iOS returns .gray for a missing reading; statusIdle is that same gray.
         SignalQuality.UNKNOWN -> tr.statusIdle
     }
+    // iOS ThermometerIndicator strokes the track (systemGray4, 1.5 pt) and fills
+    // nothing behind it, so the bar's full extent is always visible.  Android
+    // drew the inverse — no stroke, and a half-alpha cardSecondary track fill —
+    // but `Card` resolves to surfaceContainerHighest, which this theme maps to
+    // cardSecondary, so that fill composited to EXACTLY the card colour (sampled
+    // off the bench Pixel: track and card both #E5E5EA light / #2C2C2E dark).
+    // The track was not faint, it was absent: a weak signal read as "no bar at
+    // all" rather than "a short bar in a tall track", and an unread channel
+    // (LoRa on a direct link) drew nothing whatsoever.  The stroke is the scale,
+    // and the fill it replaces is gone — it was painting the card onto itself.
+    //
+    // No systemGray4 in the palette, and a raw hex in a screen is the thing the
+    // token pass removed, so this is the theme's own outline role — systemGray
+    // #8E8E93 in BOTH schemes (Theme.kt), so the polarity is right either way
+    // without re-reading isSystemInDarkTheme() here — at 20%.  Over the card it
+    // composites to #3F3F42 dark (measured on the bench Pixel) and ~#D4D4D9
+    // light (computed) against iOS's #3A3A3C / #D1D1D6: a few steps either side,
+    // imperceptible.  Being alpha over the card, it does track cardSecondary if
+    // that ever moves — the opaque-token alternative would not.
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -1379,7 +1398,11 @@ private fun SignalBar(
             Modifier
                 .height(120.dp)
                 .width(36.dp)
-                .background(tr.cardSecondary.copy(alpha = 0.5f), RoundedCornerShape(20.dp)),
+                .border(
+                    1.5.dp,
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                    RoundedCornerShape(20.dp),
+                ),
             contentAlignment = Alignment.BottomCenter,
         ) {
             if (fraction > 0f) {
