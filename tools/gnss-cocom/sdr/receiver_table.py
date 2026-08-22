@@ -41,7 +41,7 @@ def bracket(lo, hi, unit, fmt="{:.0f}"):
     if abs(hi - lo) < 1e-9:
         return f"~{fmt.format(hi)} {unit}"
     if lo > hi:
-        return f"{fmt.format(hi)}-{fmt.format(lo)} {unit} \u2020"
+        return f"{fmt.format(hi)}-{fmt.format(lo)} {unit}"
     return f"{fmt.format(lo)}-{fmt.format(hi)} {unit}"
 
 
@@ -60,24 +60,41 @@ def vel_cell(r):
                    r.get("velocity_blocked_min_mps"), "m/s")
 
 
-def alt_cell(r):
-    """Altitude gate, with its cause when that is not the export limit.
+# Footnote markers, in the order they are first used. Kept as markers rather
+# than parentheticals in the cell because the qualifications matter -- a ceiling
+# that is not an export gate is a different kind of fact from one that is -- and
+# a cell wide enough to say so inline pushes the table past a readable width.
+FOOTNOTES = {
+    "inverted": ("\u2020",
+                 "An inverted bracket: a value that still held a fix sitting "
+                 "above one that was withheld. It means the receiver is slow to "
+                 "close, not that the threshold is uncertain."),
+    "not cocom": ("\u2021",
+                  "Not an export gate. This ceiling sits below the COCOM "
+                  "altitude, and the receiver stops publishing there for reasons "
+                  "unrelated to export control."),
+    "dyn model": ("\u00a7",
+                  "The u-blox dynamic model's own altitude ceiling, not an export "
+                  "gate. Airborne <4 g is specified at 50,000 m; no u-blox model "
+                  "goes higher, so this part's export behaviour above it cannot "
+                  "be measured."),
+}
 
-    A receiver can stop publishing altitude for reasons that have nothing to do
-    with COCOM -- the NEO-M8T's u-blox dynamic model caps at 50 km, and no model
-    u-blox offers goes higher, so the part stops navigating well below the
-    export threshold. That is still a real ceiling a flight computer will hit,
-    so it is recorded rather than omitted; but it is labelled, because reading
-    it as an export gate would be wrong.
-    """
-    txt = bracket(r.get("altitude_fix_max_km"), r.get("altitude_blocked_min_km"),
-                  "km", "{:.2f}")
-    cause = r.get("altitude_gate_cause")
-    if cause and cause != "cocom" and txt != "--":
-        txt += f" ({cause})"
-    elif txt == "--":
-        txt = r.get("altitude_note", "--")
-    return txt
+
+def alt_cell(r):
+    """Altitude gate, with a footnote marker when it needs qualifying."""
+    lo, hi = r.get("altitude_fix_max_km"), r.get("altitude_blocked_min_km")
+    if lo is None or hi is None:
+        return r.get("altitude_note", "--"), None
+    inverted = lo > hi
+    txt = bracket(lo, hi, "km", "{:.2f}").replace(" \u2020", "")
+    # Normalised: the JSON is hand-edited and has carried both "not COCOM" and
+    # "not cocom" for the same thing.
+    cause = (r.get("altitude_gate_cause") or "cocom").strip().lower()
+    key = cause if cause in FOOTNOTES else ("inverted" if inverted else None)
+    if key:
+        txt += " " + FOOTNOTES[key][0]
+    return txt, key
 
 
 def rows(d):
@@ -88,8 +105,7 @@ def rows(d):
             "path": r["path"],
             "runs": r["runs"],
             "vel": vel_cell(r),
-            "alt": alt_cell(r),
-            "g18": "none" if not r["gate_18km"] else "yes",
+            "alt": alt_cell(r)[0],
             "comb": r["combination"],
             "rec": (f"{r['recovery_s'][0]:.1f}-{r['recovery_s'][1]:.1f} s"
                     if r.get("recovery_s") else "n/a"),
@@ -101,10 +117,24 @@ def rows(d):
     return out
 
 
-HEADS = [("part", "Receiver"), ("bands", "Bands"), ("path", "Path"),
-         ("runs", "Runs"), ("vel", "Velocity gate"), ("alt", "Altitude gate"),
-         ("g18", "18 km gate"), ("comb", "Limits combined"),
+# Bands and run counts were receiver spec, not measurement, and the "18 km gate"
+# column read "none" for every part ever tested -- a whole column restating that
+# something does not exist.
+HEADS = [("part", "Receiver"), ("path", "Path"),
+         ("vel", "Velocity gate"), ("alt", "Altitude gate"),
+         ("comb", "Limits combined"),
          ("rec", "Re-open latency"), ("sats", "Sats min / median")]
+
+
+def used_footnotes(d):
+    """(marker, text) for the footnotes this table actually needs, in order."""
+    seen, out = set(), []
+    for r in d["receivers"]:
+        key = alt_cell(r)[1]
+        if key and key not in seen:
+            seen.add(key)
+            out.append(FOOTNOTES[key])
+    return out
 
 
 def markdown(d) -> str:
@@ -114,6 +144,9 @@ def markdown(d) -> str:
     for r in rs:
         out.append("| " + " | ".join(str(r[k]) for k, _ in HEADS) + " |")
     out.append("")
+    for mark, text in used_footnotes(d):
+        out.append(f"{mark} {text}")
+        out.append("")
     for r, src in zip(rs, d["receivers"]):
         if r["notes"]:
             out.append(f"**{r['part']}** ({src['date']}, {src['rf']}): {r['notes']}")

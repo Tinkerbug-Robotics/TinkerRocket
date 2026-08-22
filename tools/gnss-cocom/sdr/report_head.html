@@ -184,6 +184,17 @@
   table.cmp { min-width: 900px; }
   table.cmp tbody tr:hover { background: var(--rule); }
 
+
+  /* ---- table footnotes ---- */
+  .footnotes { margin: 0.9rem 0 0; display: flex; flex-direction: column; gap: 0.5rem; }
+  .footnotes .fn {
+    display: flex; gap: 0.55rem; margin: 0;
+    font-size: 0.78rem; line-height: 1.5; color: var(--ink-3);
+  }
+  .footnotes .mark {
+    flex: 0 0 1rem; font-family: var(--f-mono); color: var(--ink-2);
+  }
+
   /* ---- tables ---- */
   .scroll { overflow-x: auto; margin: 1.6rem 0 0; }
   table {

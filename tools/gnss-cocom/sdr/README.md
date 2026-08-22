@@ -4,11 +4,16 @@ Generates the GPS signal that the receiver under test is fed, and turns the
 resulting NMEA capture into a number. The receiver half of the rig — the USB
 passthrough and the FIX / BLOCKED / NO_LOCK classifier — lives one directory up.
 
-The measurement: does the SkyTraq Phoenix engine (PX1105R / PX1125R) withhold
-position when altitude **and** velocity are both exceeded, or independently when
-**either** is? And is the altitude gate 18 km or 80 km? A rocket almost never
-trips both at once — boost is fast-but-low, a space-shot apogee is high-but-slow —
-so a true AND gate essentially never blanks in flight.
+The measurement: **where does a hobby-grade GNSS receiver stop publishing
+position, and why?** Five parts have been through it. The export limits, where a
+receiver implements them, are consistent — velocity at 515 m/s and altitude at
+80 km, each acting independently rather than as a conjunction. What differs
+between parts is everything else, including two that stop far below the export
+limit for unrelated reasons.
+
+A rocket almost never trips both limits at once — boost is fast-but-low, a
+space-shot apogee is high-but-slow — which is why the scenarios isolate one
+variable at a time.
 
 | Path | What it is |
 |---|---|
@@ -136,7 +141,7 @@ quietly.
 
 `t2_altramp` climbs at 350 m/s — 354 m/s in 3-D, 69% of the velocity limit, with
 enough margin that a noisy velocity estimate cannot nudge it over — and crosses
-**both** 18 km and 80 km in one continuous run. Continuity matters: a receiver
+from 5 km to 85 km in one continuous run. Continuity matters: a receiver
 that never acquires at 70 km looks identical to one that is gated there, and a
 single ramp from a known-good 5 km removes that ambiguity.
 

@@ -2,9 +2,8 @@
  "_comment": "Measured COCOM behaviour per receiver. One entry per part. Brackets are (highest value that still held a fix, lowest value that was withheld], taken across every gate edge in every run for that receiver -- so they tighten as more runs are added. Edit this file and re-run receiver_table.py; do not hand-edit the table in report.html. altitude_gate_cause distinguishes an export gate from any other reason a part stops publishing altitude -- the NEO-M8T's u-blox dynamic model caps at 50 km, which is a real ceiling but is not COCOM.",
  "limits": {
   "velocity_mps": 515,
-  "altitude_km": 18.288,
   "altitude_km_alt": 80.0,
-  "note": "The export rule is usually quoted as 515 m/s and 18 km (60000 ft). Both receivers measured here gate altitude at 80 km, not 18 km."
+  "note": "The export rule is quoted as 515 m/s and 80,000 m. Every part measured here that gates altitude at all does so at 80 km."
  },
  "receivers": [
   {
@@ -21,7 +20,6 @@
    "velocity_blocked_min_mps": 517,
    "altitude_fix_max_km": 79.9,
    "altitude_blocked_min_km": 80.2,
-   "gate_18km": false,
    "combination": "independent",
    "recovery_s": [
     0.0,
@@ -47,7 +45,6 @@
    "velocity_blocked_min_mps": 516,
    "altitude_fix_max_km": 80.16,
    "altitude_blocked_min_km": 80.16,
-   "gate_18km": false,
    "combination": "independent",
    "recovery_s": [
     0.0,
@@ -73,7 +70,6 @@
    "velocity_blocked_min_mps": 518,
    "altitude_fix_max_km": 80.48,
    "altitude_blocked_min_km": 80.22,
-   "gate_18km": false,
    "combination": "independent",
    "recovery_s": [
     0.1,
@@ -99,12 +95,11 @@
    "velocity_blocked_min_mps": null,
    "altitude_fix_max_km": 10.0,
    "altitude_blocked_min_km": 11.0,
-   "gate_18km": false,
    "combination": "n/a -- no velocity gate",
    "recovery_s": null,
    "sats_min": 6,
    "sats_median": 12,
-   "notes": "EVERYTHING FIRST RECORDED FOR THIS PART WAS WRONG, and dwell tests corrected it. It has NO velocity gate: it held a fix to 900 m/s at 5 km on t1_velramp (reporting 899), and 100% of epochs at every 90 s dwell from 495 to 530 m/s on vel_stair. What it has is an ALTITUDE ceiling at 10-11 km -- 100% fix at 8 km, 91% at 10 km, 0% at 11/12/13 km on 90 s dwells, and 9.90->10.25 km on a 354 m/s ramp with 11 satellites either side. That ceiling is BELOW every candidate COCOM altitude (18 km and 80 km), so it is not an export gate at all. The flight profiles read as a latent velocity gate only because they cross 10 km at high speed: the spaceshot transition happens while speed is DECREASING (1334 -> 1304 m/s) as altitude rises through 9.83 -> 11.15 km, which no velocity gate can do. Re-open latency is not defined for this part because there is no COCOM gate to re-open: on blockdur it held a fix at 560 m/s for 148 continuous seconds, dropping only 1 s at the sharp 130 m/s^2 transition. The 31-134 s 'recoveries' seen on flights were simply the vehicle descending back through the 10-11 km ceiling. The 18 s C/N0 blanking accompanies withholding (19/677 epochs while withholding vs 0/170 while publishing on gentle_alt).",
+   "notes": "EVERYTHING FIRST RECORDED FOR THIS PART WAS WRONG, and dwell tests corrected it. It has NO velocity gate: it held a fix to 900 m/s at 5 km on t1_velramp (reporting 899), and 100% of epochs at every 90 s dwell from 495 to 530 m/s on vel_stair. What it has is an ALTITUDE ceiling at 10-11 km -- 100% fix at 8 km, 91% at 10 km, 0% at 11/12/13 km on 90 s dwells, and 9.90->10.25 km on a 354 m/s ramp with 11 satellites either side. That ceiling is far below the COCOM altitude, so it is not an export gate at all. The flight profiles read as a latent velocity gate only because they cross 10 km at high speed: the spaceshot transition happens while speed is DECREASING (1334 -> 1304 m/s) as altitude rises through 9.83 -> 11.15 km, which no velocity gate can do. Re-open latency is not defined for this part because there is no COCOM gate to re-open: on blockdur it held a fix at 560 m/s for 148 continuous seconds, dropping only 1 s at the sharp 130 m/s^2 transition. The 31-134 s 'recoveries' seen on flights were simply the vehicle descending back through the 10-11 km ceiling. The 18 s C/N0 blanking accompanies withholding (19/677 epochs while withholding vs 0/170 while publishing on gentle_alt).",
    "altitude_gate_cause": "not COCOM",
    "velocity_gate_present": false
   },
@@ -123,7 +118,6 @@
    "altitude_fix_max_km": 49.8,
    "altitude_blocked_min_km": 50.15,
    "altitude_gate_cause": "dyn model",
-   "gate_18km": false,
    "combination": "independent",
    "recovery_s": [
     0.9,

@@ -27,6 +27,12 @@ d = json.loads((HERE / "results" / "receivers.json").read_text())
 table = subprocess.run([sys.executable, str(HERE / "receiver_table.py"), "--html"],
                        capture_output=True, text=True, check=True).stdout.strip()
 
+sys.path.insert(0, str(HERE))
+from receiver_table import used_footnotes            # noqa: E402
+notes_html = "\n".join(
+    f'        <p class="fn"><span class="mark">{m}</span>{t}</p>'
+    for m, t in used_footnotes(d))
+
 # Per-receiver panels: (id, figure prefix, one-line verdict, extra note)
 PARTS = [
     ("px1125r", "spaceshot.svg", "gentle_alt.svg",
@@ -104,7 +110,7 @@ body = f'''
       <span>Bench report</span>
       <span>21 Aug 2026</span>
     </div>
-    <h1>Where hobby GNSS receivers stop</h1>
+    <h1>Hobby Level GNSS Receiver Altitude and Speed Limits for High Performance Rockets</h1>
     <p class="standfirst">Five hobby-grade GNSS receivers, flown against identical
       simulated rocket trajectories, to find where each one stops publishing
       position &mdash; and whether the reason is the COCOM export limit or
@@ -129,24 +135,23 @@ body = f'''
       </table>
     </div>
 
-    <div class="prose">
-      <p class="note">Brackets are <em>(highest value that still held a fix,
-        lowest value withheld]</em>, taken across every gate edge in every run for
-        that part. &dagger; marks an inverted bracket &mdash; a value that held a
-        fix sitting above one that was withheld, which happens when a receiver is
-        slow to close. A parenthesised cause marks a ceiling that is <em>not</em>
-        an export gate.</p>
+    <div class="footnotes">
+        <p class="fn"><span class="mark">&nbsp;</span>Brackets are <em>(highest
+          value that still held a fix, lowest value withheld]</em>, taken across
+          every gate edge in every run for that part.</p>
+{notes_html}
+    </div>
 
+    <div class="prose">
       <h3>What the table says</h3>
       <p><strong>The export limits themselves are consistent.</strong> Of the four
         parts that implement a velocity gate, all four put it at the same place:
         taking every gate edge from every flight, the highest speed that still
         held a fix is 514&nbsp;m/s and the lowest that was withheld is
         516&nbsp;m/s, straddling the quoted 515. Where an altitude gate is
-        genuinely an export gate, it is at <strong>80&nbsp;km</strong>, never at
-        the commonly-quoted 18&nbsp;km. Both limits act
-        <strong>independently</strong> &mdash; either closes the gate on its own,
-        which contradicts SkyTraq's own FAQ.</p>
+        genuinely an export gate it is at <strong>80&nbsp;km</strong>. Both limits
+        act <strong>independently</strong> &mdash; either closes the gate on its
+        own, which contradicts SkyTraq's own FAQ.</p>
       <p><strong>What differs between parts is everything else.</strong> Two of
         the five stop publishing far below the export limit, for reasons that have
         nothing to do with export control: the NEO-M8T at 50&nbsp;km because of
@@ -251,7 +256,7 @@ body = f'''
           <tbody>
             <tr><td><code>vel_stair</code></td><td>90 s dwells, 495&ndash;530 m/s at 5 km</td><td>where is the velocity gate, latency removed</td></tr>
             <tr><td><code>alt_stair</code></td><td>90 s dwells, 76&ndash;82 km</td><td>where is the altitude gate near 80 km</td></tr>
-            <tr><td><code>alt_stair_low</code></td><td>90 s dwells, 12&ndash;22 km</td><td>is there a gate near the quoted 18 km</td></tr>
+            <tr><td><code>alt_stair_low</code></td><td>90 s dwells, 12&ndash;22 km</td><td>is there a gate anywhere in the low tens of km</td></tr>
             <tr><td><code>alt_stair_vlow</code></td><td>90 s dwells, 8&ndash;13 km</td><td>brackets a ceiling below any export limit</td></tr>
             <tr><td><code>blockdur</code></td><td>5 / 30 / 150 s excursions, 155 s clear between</td><td>is a slow recovery a gate, or the receiver re-converging</td></tr>
           </tbody>
@@ -272,10 +277,10 @@ body = f'''
         throughout &mdash; and two independent ramps agree (fix at 9.90&nbsp;km,
         blocked at 10.25&nbsp;km at a constant 354&nbsp;m/s; fix at 10.10, blocked
         at 10.44 at 394&nbsp;m/s).</p>
-      <p><strong>That ceiling is not an export gate.</strong> It sits below both
-        candidate COCOM altitudes, and <code>alt_stair_vlow</code> crosses no
-        export limit at all &mdash; 13&nbsp;km and 156&nbsp;m/s are inside the
-        envelope on any reading of the rule.</p>
+      <p><strong>That ceiling is not an export gate.</strong> It sits far below
+        the COCOM altitude, and <code>alt_stair_vlow</code> crosses no export
+        limit at all &mdash; 13&nbsp;km and 156&nbsp;m/s are well inside the
+        envelope.</p>
       <p class="note">On a flight profile the ceiling and the velocity limit fire
         within moments of each other, because a rocket crosses 10&nbsp;km while
         travelling fast. The distinguishing observation is on <code>spaceshot</code>,

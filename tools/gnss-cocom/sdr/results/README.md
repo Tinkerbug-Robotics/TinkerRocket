@@ -208,8 +208,8 @@ answer by hundreds of m/s and what comes back is the latency. Dwelling fixes it.
 | `air530_t3a_both_18km` | 394 m/s: fix at **10.10 km**, blocked at **10.44 km** |
 
 **No velocity gate. An altitude ceiling at 10-11 km, which is not COCOM** -- it
-sits below both candidate export altitudes, and `alt_stair_vlow` (13 km,
-156 m/s) crosses no export limit at all.
+sits far below the export altitude, and `alt_stair_vlow` (13 km, 156 m/s)
+crosses no export limit at all.
 
 The flights misled because a rocket crosses 10 km fast, so the ceiling fires at
 almost the same moment a velocity limit would. The tell was in the data:
@@ -268,13 +268,19 @@ Generated from `results/receivers.json` by `receiver_table.py`. The whole of
 plus the archived figures in `results/figures/`. Edit the data and regenerate --
 neither table nor report should be hand-edited.
 
-| Receiver | Bands | Path | Runs | Velocity gate | Altitude gate | 18 km gate | Limits combined | Re-open latency | Sats min / median |
-|---|---|---|---|---|---|---|---|---|---|
-| SkyTraq PX1125R | L1 + L5 | conducted | 9 | 510-517 m/s | 79.90-80.20 km | none | independent | 0.0-1.5 s | 2 / 7 |
-| u-blox SAM-M10Q | L1 (GPS/GAL/BDS/GLO) | radiated, Faraday cage | 2 | 514-516 m/s | ~80.16 km | none | independent | 0.0-1.1 s | 4 / 13 |
-| u-blox ZED-F9P (ArduSimple) | L1 + L2 (L1 used here) | conducted | 2 | 514-518 m/s | 80.22-80.48 km † | none | independent | 0.1-1.0 s | 6 / 13 |
-| Air530 (AT6558R) | L1 (GPS + BeiDou) | conducted | 9 | none to 900 m/s | 10.00-11.00 km (not COCOM) | none | n/a -- no velocity gate | n/a | 6 / 12 |
-| u-blox NEO-M8T | L1 (GPS/GLO/GAL/BDS) | conducted | 3 | 510-524 m/s | 49.80-50.15 km (dyn model) | none | independent | 0.9-3.1 s | 8 / 14 |
+| Receiver | Path | Velocity gate | Altitude gate | Limits combined | Re-open latency | Sats min / median |
+|---|---|---|---|---|---|---|
+| SkyTraq PX1125R | conducted | 510-517 m/s | 79.90-80.20 km | independent | 0.0-1.5 s | 2 / 7 |
+| u-blox SAM-M10Q | radiated, Faraday cage | 514-516 m/s | ~80.16 km | independent | 0.0-1.1 s | 4 / 13 |
+| u-blox ZED-F9P (ArduSimple) | conducted | 514-518 m/s | 80.22-80.48 km † | independent | 0.1-1.0 s | 6 / 13 |
+| Air530 (AT6558R) | conducted | none to 900 m/s | 10.00-11.00 km ‡ | n/a -- no velocity gate | n/a | 6 / 12 |
+| u-blox NEO-M8T | conducted | 510-524 m/s | 49.80-50.15 km § | independent | 0.9-3.1 s | 8 / 14 |
+
+† An inverted bracket: a value that still held a fix sitting above one that was withheld. It means the receiver is slow to close, not that the threshold is uncertain.
+
+‡ Not an export gate. This ceiling sits below the COCOM altitude, and the receiver stops publishing there for reasons unrelated to export control.
+
+§ The u-blox dynamic model's own altitude ceiling, not an export gate. Airborne <4 g is specified at 50,000 m; no u-blox model goes higher, so this part's export behaviour above it cannot be measured.
 
 **SkyTraq PX1125R** (2026-08-19, ~70 dB pad + DC block into RF_IN, TX gain 44-47): Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified.
 
@@ -282,21 +288,14 @@ neither table nor report should be hand-edited.
 
 **u-blox ZED-F9P (ArduSimple)** (2026-08-20, 70 dB pad, TX gain 38): Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. Uniquely among the three parts it is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. Its descending edges are crisp and agree at ~80.1 km.
 
-**Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): EVERYTHING FIRST RECORDED FOR THIS PART WAS WRONG, and dwell tests corrected it. It has NO velocity gate: it held a fix to 900 m/s at 5 km on t1_velramp (reporting 899), and 100% of epochs at every 90 s dwell from 495 to 530 m/s on vel_stair. What it has is an ALTITUDE ceiling at 10-11 km -- 100% fix at 8 km, 91% at 10 km, 0% at 11/12/13 km on 90 s dwells, and 9.90->10.25 km on a 354 m/s ramp with 11 satellites either side. That ceiling is BELOW every candidate COCOM altitude (18 km and 80 km), so it is not an export gate at all. The flight profiles read as a latent velocity gate only because they cross 10 km at high speed: the spaceshot transition happens while speed is DECREASING (1334 -> 1304 m/s) as altitude rises through 9.83 -> 11.15 km, which no velocity gate can do. Re-open latency is not defined for this part because there is no COCOM gate to re-open: on blockdur it held a fix at 560 m/s for 148 continuous seconds, dropping only 1 s at the sharp 130 m/s^2 transition. The 31-134 s 'recoveries' seen on flights were simply the vehicle descending back through the 10-11 km ceiling. The 18 s C/N0 blanking accompanies withholding (19/677 epochs while withholding vs 0/170 while publishing on gentle_alt).
+**Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): EVERYTHING FIRST RECORDED FOR THIS PART WAS WRONG, and dwell tests corrected it. It has NO velocity gate: it held a fix to 900 m/s at 5 km on t1_velramp (reporting 899), and 100% of epochs at every 90 s dwell from 495 to 530 m/s on vel_stair. What it has is an ALTITUDE ceiling at 10-11 km -- 100% fix at 8 km, 91% at 10 km, 0% at 11/12/13 km on 90 s dwells, and 9.90->10.25 km on a 354 m/s ramp with 11 satellites either side. That ceiling is far below the COCOM altitude, so it is not an export gate at all. The flight profiles read as a latent velocity gate only because they cross 10 km at high speed: the spaceshot transition happens while speed is DECREASING (1334 -> 1304 m/s) as altitude rises through 9.83 -> 11.15 km, which no velocity gate can do. Re-open latency is not defined for this part because there is no COCOM gate to re-open: on blockdur it held a fix at 560 m/s for 148 continuous seconds, dropping only 1 s at the sharp 130 m/s^2 transition. The 31-134 s 'recoveries' seen on flights were simply the vehicle descending back through the 10-11 km ceiling. The 18 s C/N0 blanking accompanies withholding (19/677 epochs while withholding vs 0/170 while publishing on gentle_alt).
 
 **u-blox NEO-M8T** (2026-08-20, 70 dB pad, TX gain 38): Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for a flight computer and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behaviour is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behaviour. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.
-
-&dagger; marks an inverted bracket: a value that still held a fix sitting above
-one that was withheld. On the F9P that is a 2-3 s closing lag; on the Air530 the
-latency is so large the bracket carries no threshold information at all.
-
-`(dyn model)` marks an altitude ceiling that is **not** an export gate --
-`altitude_gate_cause` in `receivers.json` carries this.
 
 Across the four parts that implement a velocity gate at all the limit brackets
 to **(514, 516] m/s**, and wherever an altitude gate is genuinely COCOM it sits
 at **80 km**. The Air530 implements neither: no velocity gate to 900 m/s, and a
-10-11 km ceiling that is not an export limit, with no 18 km gate
+10-11 km ceiling that is not an export limit
 anywhere and both limits always independent. What varies enormously is **re-open
 latency**: under 1.5 s on most parts, 31-134 s on the Air530.
 
