@@ -64,4 +64,43 @@ final class BackportRenderTests: XCTestCase {
             "row set drives the dot row; pin it so a rename shows up here"
         )
     }
+
+    /// Bench, 2026-08-22: a rocket configured with TWO pyros produces nine
+    /// dots, and the ninth was invisible — it sat off the right edge of a
+    /// `showsIndicators: false` horizontal ScrollView, on a card whose banner
+    /// read "Do not fly". The verdict was on screen; the dot explaining it
+    /// was not.
+    ///
+    /// The row now wraps, so every configured sensor is always visible. Note
+    /// this test could not have caught the original bug: it renders the row
+    /// directly, which is precisely how it bypassed the clipping container.
+    /// What it CAN pin is that no configured channel goes missing from the
+    /// data, and that the wrapping row still renders.
+    func testHealthCard_twoConfiguredPyros_bothRowsPresent() throws {
+        var t = TelemetryData()
+        // The bench frame: everything reporting, ch1 + ch2 configured and
+        // awaiting a continuity test (DEGRADED at shifts 12 and 14).
+        t.sensor_health = 1 | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) |
+            (1 << 10) | (2 << 12) | (2 << 14) | (1 << 20)
+
+        let names = t.sensorHealthRows.map(\.name)
+        XCTAssertEqual(
+            names,
+            ["Baro", "IMU", "EKF", "GNSS", "Battery", "Mag", "Storage", "Pyro 1", "Pyro 2"],
+            "both configured pyros must produce a row"
+        )
+        XCTAssertEqual(names.count, 9, "nine dots — one more than fits a line")
+        _ = try render(HealthDotRow(rows: t.sensorHealthRows), name: "health_dot_row_9")
+    }
+
+    /// All four pyros configured — the widest the row can get.
+    func testHealthCard_fourConfiguredPyros_allRowsPresent() throws {
+        var t = TelemetryData()
+        t.sensor_health = 1 | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 10) |
+            (2 << 12) | (2 << 14) | (2 << 16) | (2 << 18) | (1 << 20)
+        let names = t.sensorHealthRows.map(\.name)
+        XCTAssertEqual(names.suffix(4), ["Pyro 1", "Pyro 2", "Pyro 3", "Pyro 4"])
+        XCTAssertEqual(names.count, 11)
+        _ = try render(HealthDotRow(rows: t.sensorHealthRows), name: "health_dot_row_11")
+    }
 }
