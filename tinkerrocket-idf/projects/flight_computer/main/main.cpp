@@ -17,6 +17,7 @@
 #include <TR_GpsInsEKF.h>
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
+#include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
 #include <BurnoutDetector.h>      // shared burnout detector (#197/#256)
 #include <DeploymentDetector.h>   // shared recovery-deployment detector
 #include <TR_MagCalibrator.h>
@@ -340,6 +341,15 @@ static bool                 orient_thrust_mismatch = false;
 static float ground_pressure_pa = 101325.0f;
 static float pressure_alt_m = 0.0f;
 static float pressure_alt_rate_mps = 0.0f;
+// #834 item 4: pressure_alt_m/_rate come from a KF that FREE-RUNS at a
+// frozen rate when the barometer stops answering, so they cannot authorise
+// a main deploy on their own. Stepped once per flight-loop pass next to the
+// baro health test (which is a block-scoped local there), read per channel
+// in servicePyroChannels — same task, same iteration, write before read,
+// exactly like pressure_alt_m itself.
+static MainDeployGate::State  main_deploy_state;
+static MainDeployGate::Inputs main_deploy_in;
+static MainDeployGate::Source main_deploy_last_src = MainDeployGate::Source::None;
 static float max_alt_m = 0.0f;
 static float max_speed_mps = 0.0f;
 static GpsInsEKF ekf;
@@ -655,6 +665,10 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.ref_lat_rad        = ref_lat_rad;
     snap.ref_lon_rad        = ref_lon_rad;
     snap.ref_alt_m          = ref_alt_m;
+    // #834 item 4: record whether that datum came from a converged pad
+    // average, so a post-reboot flight knows if the GNSS backstop may use it.
+    snap.ref_datum_converged =
+        (ref_pos_count >= config::MAIN_DEPLOY_REF_MIN_FIXES) ? 1 : 0;
 
     snap.ekf_initialized = ekf_initialized  ? 1 : 0;
     snap.guidance_enabled = guidance_enabled ? 1 : 0;
@@ -1154,7 +1168,18 @@ static void servicePyroChannels(uint32_t now_ms)
                 const float elapsed_s = (float)(now_ms - pyro_apogee_time_ms) / 1000.0f;
                 if (elapsed_s >= val) should_fire = true;
             } else if (pyro_apogee_detected && mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT) {
-                if (pressure_alt_m <= val && pressure_alt_rate_mps < 0.0f) should_fire = true;
+                // #834 item 4: pressure_alt_m/_rate are a KF estimate that
+                // free-runs at a frozen rate with a dead barometer, so the raw
+                // comparison could fire the main hundreds of metres high (or
+                // never, with a blocked static port). The gate decides which
+                // source may authorise the deploy; when the barometer is
+                // trusted its verdict is bit-identical to the old predicate.
+                const MainDeployGate::Source src =
+                    MainDeployGate::evaluate(main_deploy_state, main_deploy_in, val);
+                if (src != MainDeployGate::Source::None) {
+                    should_fire         = true;
+                    main_deploy_last_src = src;
+                }
             }
             if (should_fire) {
                 ch.state          = PyroChState::ArmSettle;
@@ -1223,9 +1248,18 @@ static void servicePyroChannels(uint32_t now_ms)
 
     const bool dry = sensor_collector.isSimActive();
     for (int i = 0; i < 4; ++i) {
-        if (just_fired[i]) ESP_LOGW(TAG, "[PYRO] CH%d %s at alt=%.1f m",
-                                    i + 1, dry ? "DRY-FIRED (sim)" : "FIRED",
-                                    (double)pressure_alt_m);
+        if (just_fired[i]) {
+            // #834 item 4: record WHICH source authorised the deploy. On the
+            // GNSS backstop pressure_alt_m is a free-running estimate and is
+            // meaningless, so print the GNSS AGL that actually decided it.
+            const bool by_gnss = (pyroChMode(i) == PYRO_TRIGGER_ALTITUDE_ON_DESCENT &&
+                                  main_deploy_last_src == MainDeployGate::Source::Gnss);
+            ESP_LOGW(TAG, "[PYRO] CH%d %s at alt=%.1f m (src=%s)",
+                     i + 1, dry ? "DRY-FIRED (sim)" : "FIRED",
+                     by_gnss ? (double)main_deploy_in.gnss_agl_m
+                             : (double)pressure_alt_m,
+                     by_gnss ? "GNSS-backstop" : "baro");
+        }
         if (pulse_done[i]) ESP_LOGI(TAG, "[PYRO] CH%d fire pulse complete", i + 1);
     }
 }
@@ -3929,6 +3963,12 @@ static void setup_fc()
             }
             portEXIT_CRITICAL(&pyro_spinlock);
 
+            // #834 item 4: the sensor stack has just come up cold while the
+            // snapshot restored a mid-flight apogee, so the main-deploy gate
+            // must charge its dwells rather than credit a pad phase this boot
+            // never had. Without this the first post-reboot tick can fire.
+            MainDeployGate::reset(main_deploy_state, now_ms, /*after_reboot=*/true);
+
             ESP_LOGW(TAG, "[RECOVERY] Pyro: apogee=%d fired=[%d,%d,%d,%d]",
                      pyro_apogee_detected,
                      snap.pyro1_fired, snap.pyro2_fired,
@@ -3941,6 +3981,12 @@ static void setup_fc()
             ref_alt_m   = snap.ref_alt_m;
             have_ref_pos = true;
             ref_pos_frozen = true;
+            // #834 item 4: the accumulator is frozen from here on, so ref_pos_count
+            // can never climb again this flight. Re-seed it from the snapshot's
+            // convergence evidence, otherwise it stays 0 and the GNSS main-deploy
+            // backstop is structurally dead for the whole recovered descent.
+            ref_pos_count = snap.ref_datum_converged
+                                ? config::MAIN_DEPLOY_REF_MIN_FIXES : 0;
             ground_pressure_found = true;
 
             // Restore the board→rocket orientation BEFORE the EKF state —
@@ -4166,6 +4212,11 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // included — the release at LANDED/sim-reset makes it harmless and it
     // exercises the mechanism on the bench).
     pwrHoldAssert(from_state);
+    // #834 item 4: fresh main-deploy gate for this flight. A normal launch
+    // credits the pad phase (the barometer has been alive throughout), so the
+    // re-acquire dwell opens no window the legacy predicate did not have.
+    MainDeployGate::reset(main_deploy_state, now_ms, /*after_reboot=*/false);
+    main_deploy_last_src = MainDeployGate::Source::None;
     // Orientation is now latched (estimator only runs in
     // READY/PRELAUNCH).  Start the boost-phase thrust-axis
     // cross-check on what was latched.
@@ -6999,6 +7050,44 @@ static void loop_fc()
                                        (float)gnss_latest_si.vel_u,
                                        ekf_healthy,
                                        baro_healthy);
+
+            // #834 item 4: step the main-deploy gate here, where baro_healthy
+            // is in scope.  servicePyroChannels() runs LATER in this same pass
+            // and only reads the published Inputs, so the gate's view of
+            // pyro_apogee_detected is one tick (~1 ms at 1 kHz) stale — which
+            // only ever delays the first eligible tick, never advances it.
+            {
+                MainDeployGate::Inputs& g = main_deploy_in;
+                g.now_ms           = now_ms;
+                g.apogee           = pyro_apogee_detected;
+                g.impact_flag      = kinematics.impact_flag;
+                g.quiescent_flag   = kinematics.quiescent_flag;
+                g.baro_healthy     = baro_healthy;
+                g.baro_alt_m       = kinematics.alt_est;
+                g.baro_rate_mps    = kinematics.d_alt_est_;
+
+                // GNSS backstop input.  ref_alt_m is the pad datum (a running
+                // mean of Gate-3 fixes, frozen at launch), so this is AGL in
+                // the same frame as the operator's threshold.  ref_pos_count
+                // is load-bearing, not decorative: an under-converged pad
+                // average has been measured 132 m off, which would sail
+                // straight through the gate's margin and fire the main early.
+                constexpr uint32_t GNSS_STALE_TIMEOUT_US = 2000000u;  // 2 s @ ~10 Hz
+                const uint32_t gnss_age_us =
+                    (uint32_t)(time_us() - gnss_latest_si.time_us);
+                g.gnss_ok = have_gnss_si && have_ref_pos &&
+                            ref_pos_count >= config::MAIN_DEPLOY_REF_MIN_FIXES &&
+                            gnss_latest_si.fix_mode >= 3 &&
+                            gnss_latest_si.num_sats >= config::GNSS_MIN_SATS &&
+                            gnss_age_us < GNSS_STALE_TIMEOUT_US;
+                g.gnss_vel_u_mps = (float)gnss_latest_si.vel_u;
+                // Doppler-propagate the fix to now so receiver latency drops
+                // out of the error budget instead of being paid for in margin.
+                g.gnss_agl_m = (float)(gnss_latest_si.alt - ref_alt_m) +
+                               g.gnss_vel_u_mps * ((float)gnss_age_us * 1e-6f);
+
+                MainDeployGate::step(main_deploy_state, g);
+            }
 
             // --- Recovery deployment detection ---
             // Stepped from the same block, once per loop pass, on the same

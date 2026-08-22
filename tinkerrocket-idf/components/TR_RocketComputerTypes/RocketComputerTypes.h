@@ -2712,7 +2712,15 @@ struct __attribute__((packed)) FlightSnapshotData
     // post-reboot boot-default orientation would silently invalidate them.
     uint8_t  b2r_code;            // discrete orientation code
     uint8_t  b2r_mode;            // ORIENT_MODE_*
-    uint8_t  pad2[1];
+    // #834 item 4: did ref_alt_m below come from a CONVERGED pad average?
+    // The GNSS main-deploy backstop compares against ref_alt_m, and an
+    // under-converged pad datum has been measured 132 m off — far past the
+    // backstop's margin. ref_pos_count cannot be recomputed after a reboot
+    // (the accumulator is frozen), so the evidence has to ride the snapshot.
+    // Reclaimed from pad2[1]: size- and offset-neutral, and 0 (what every
+    // older writer left here) means "no evidence", which disables the
+    // backstop — fail-safe, so no VERSION bump is needed.
+    uint8_t  ref_datum_converged;
 
     // --- Flight references ---
     float    ground_pressure_pa;
