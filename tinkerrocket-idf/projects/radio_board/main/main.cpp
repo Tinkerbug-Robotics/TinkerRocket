@@ -271,6 +271,12 @@ static void sendIdentity(uint8_t msg_type)
                         sizeof(id));
 }
 
+// Outcome of the most recent SET_CONFIG, reported in every STATUS and sticky
+// until the next one (#835 item 7). Zero until a SET_CONFIG has been seen,
+// which is also what a host reading an older modem's zero-filled reserved
+// bytes concludes -- deliberately the same answer.
+static uint8_t last_cfg_apply = CFG_APPLY_OK;
+
 static void sendStatus()
 {
     TR_LoRa_Comms::Stats rs = {};
@@ -295,6 +301,7 @@ static void sendStatus()
     st.last_snr_db = rs.last_snr;
     st.current_freq_mhz = radio.currentFrequencyMHz();
     st.current_sf = radio.currentSpreadingFactor();
+    st.cfg_apply = last_cfg_apply;
     uart_link.sendFrame(MSG_STATUS, reinterpret_cast<const uint8_t*>(&st),
                         sizeof(st));
 }
@@ -372,11 +379,37 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
         d.tx_power_dbm = config::RADIO_MAX_TX_POWER_DBM;
     }
 
+    // #835 item 7: every path below records what actually reached the chip in
+    // last_cfg_apply, which sendStatus() puts in the ack. This used to be
+    // thrown away -- a rolled-back reconfigure() and a refused
+    // applyFrameParams() both produced a STATUS indistinguishable from success,
+    // so the host cached (and persisted to NVS) a modulation the radio never
+    // adopted, then computed its uplink SNR floor and hop dwell from it.
+    last_cfg_apply = CFG_APPLY_OK;
+
     if (!radio_up)
     {
         // Radio never came up (or wasn't wired at boot) — full begin(), which
         // applies every field including preamble/flags.
         radio_up = radio.begin(radioConfigFromMsg(d), config::DEBUG);
+        if (radio_up && !radio.lastBeginClean())
+        {
+            // begin() caches the REQUESTED values whatever the setters did, so
+            // without this the STATUS echo would confirm a config the chip
+            // never took. radio_enabled stays 1: the radio is up, just not
+            // where we asked.
+            last_cfg_apply |= CFG_APPLY_ERR_BEGIN;
+        }
+    }
+    else if (radio.isScanActive())
+    {
+        // All-or-nothing. applyFrameParams() refuses while a scan owns the
+        // radio but reconfigure() does not, so going ahead would leave the
+        // modulation NEW and the frame params OLD -- a split the host cannot
+        // see and cannot undo. Refuse the whole SET_CONFIG instead; the host
+        // still holds its own config and retries once the scan finishes.
+        last_cfg_apply |= CFG_APPLY_ERR_BUSY;
+        ESP_LOGW(TAG, "SET_CONFIG refused: scan owns the radio");
     }
     else
     {
@@ -386,13 +419,28 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
         // differs from our boot default would silently keep ours — its
         // airtime model (FCC dwell accounting, RocketComputerTypes.h) counts
         // preamble symbols it never actually got.
-        if (radio.reconfigure(d.freq_mhz, d.spreading_factor, d.bandwidth_khz,
-                              d.coding_rate, d.tx_power_dbm))
+        if (!radio.reconfigure(d.freq_mhz, d.spreading_factor, d.bandwidth_khz,
+                               d.coding_rate, d.tx_power_dbm))
         {
-            (void)radio.applyFrameParams(
-                d.preamble_len, (d.flags & CFG_FLAG_CRC_ON) != 0,
-                (d.flags & CFG_FLAG_RX_BOOSTED_GAIN) != 0,
-                (d.flags & CFG_FLAG_SYNCWORD_PRIVATE) != 0);
+            // TR_LoRa_Comms rolled the modulation back to the previous values.
+            last_cfg_apply |= CFG_APPLY_ERR_MODULATION;
+            ESP_LOGE(TAG, "SET_CONFIG: reconfigure REFUSED (%.3f MHz SF%u "
+                          "BW%.0f CR%u) — rolled back",
+                     (double)d.freq_mhz, d.spreading_factor,
+                     (double)d.bandwidth_khz, d.coding_rate);
+        }
+        else if (!radio.applyFrameParams(
+                     d.preamble_len, (d.flags & CFG_FLAG_CRC_ON) != 0,
+                     (d.flags & CFG_FLAG_RX_BOOSTED_GAIN) != 0,
+                     (d.flags & CFG_FLAG_SYNCWORD_PRIVATE) != 0))
+        {
+            // Modulation took, frame format did not. freq/sf now match what
+            // the host asked for, so nothing the host can observe would reveal
+            // this -- the flag is the only signal.
+            last_cfg_apply |= CFG_APPLY_ERR_FRAME;
+            ESP_LOGE(TAG, "SET_CONFIG: applyFrameParams REFUSED (preamble=%u) "
+                          "— modulation applied, frame format did NOT",
+                     (unsigned)d.preamble_len);
         }
     }
     if (radio_up && d.start_rx)

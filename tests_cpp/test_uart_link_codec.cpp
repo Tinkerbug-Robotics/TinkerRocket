@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstring>
 #include <vector>
 
@@ -279,4 +280,89 @@ TEST(RadioModemProtocol, MaxAirFrameFitsWithHeaders)
               tr_msg::MAX_PAYLOAD);
     EXPECT_LE(radio_modem::MAX_AIR_FRAME + sizeof(radio_modem::RxFrameHeader),
               tr_msg::MAX_PAYLOAD);
+}
+
+// ---------------------------------------------------------------------------
+// SET_CONFIG ack semantics (#835 item 7)
+//
+// handleSetConfig() used to ack every SET_CONFIG with a STATUS that looked
+// identical whether the radio had adopted the config or rolled it back, so the
+// host cached -- and persisted to NVS -- a modulation that was never on the
+// air. ModemStatusData::cfg_apply now carries the outcome, and
+// classifyConfigAck() is the host's decision.
+//
+// The encoding rests on ERROR POLARITY: 0 means applied. That is what lets a
+// modem predating the field, whose STATUS is built from a value-initialised
+// struct, keep working against a newer host. ZeroFilledStatusReadsAsApplied is
+// the test that pins it -- flip the polarity and it goes red.
+// ---------------------------------------------------------------------------
+
+TEST(RadioModemConfigAck, ZeroFilledStatusReadsAsApplied)
+{
+    // Exactly what every modem built before #835 puts on the wire: sendStatus()
+    // opens `ModemStatusData st = {}`, so the bytes that are now cfg_apply were
+    // zero. A newer host must read that as success, not reject every config.
+    radio_modem::ModemStatusData st = {};
+    st.radio_enabled = 1;
+    EXPECT_EQ(st.cfg_apply, radio_modem::CFG_APPLY_OK);
+    EXPECT_EQ(radio_modem::classifyConfigAck(st.radio_enabled, st.cfg_apply),
+              radio_modem::ConfigAckVerdict::Accept);
+}
+
+TEST(RadioModemConfigAck, RadioDeadOutranksEverything)
+{
+    // #569's rejection must keep priority: with the LLCC68 down, cfg_apply is
+    // meaningless and the caller needs the RF-dead diagnosis, not a config one.
+    EXPECT_EQ(radio_modem::classifyConfigAck(0, radio_modem::CFG_APPLY_OK),
+              radio_modem::ConfigAckVerdict::RadioDead);
+    EXPECT_EQ(radio_modem::classifyConfigAck(0, radio_modem::CFG_APPLY_ERR_MODULATION),
+              radio_modem::ConfigAckVerdict::RadioDead);
+}
+
+TEST(RadioModemConfigAck, EveryFailureBitIsRejected)
+{
+    // Each bit names a distinct half that did not reach the chip; all of them
+    // must stop the host caching the pushed values.
+    for (uint8_t bit : {radio_modem::CFG_APPLY_ERR_MODULATION,
+                        radio_modem::CFG_APPLY_ERR_FRAME,
+                        radio_modem::CFG_APPLY_ERR_BUSY,
+                        radio_modem::CFG_APPLY_ERR_BEGIN})
+    {
+        EXPECT_EQ(radio_modem::classifyConfigAck(1, bit),
+                  radio_modem::ConfigAckVerdict::NotApplied)
+            << "bit 0x" << std::hex << (unsigned)bit;
+    }
+    // Combined, e.g. a begin() that both came up partial and hit a busy radio.
+    EXPECT_EQ(radio_modem::classifyConfigAck(
+                  1, radio_modem::CFG_APPLY_ERR_FRAME | radio_modem::CFG_APPLY_ERR_BEGIN),
+              radio_modem::ConfigAckVerdict::NotApplied);
+}
+
+TEST(RadioModemConfigAck, FailureBitsAreDistinctAndNonZero)
+{
+    // A duplicated or zero bit would silently fold two causes together, and a
+    // zero one would read as success.
+    const uint8_t bits[] = {radio_modem::CFG_APPLY_ERR_MODULATION,
+                            radio_modem::CFG_APPLY_ERR_FRAME,
+                            radio_modem::CFG_APPLY_ERR_BUSY,
+                            radio_modem::CFG_APPLY_ERR_BEGIN};
+    uint8_t seen = 0;
+    for (uint8_t b : bits) {
+        EXPECT_NE(b, 0u);
+        EXPECT_EQ(b & seen, 0u) << "bit 0x" << std::hex << (unsigned)b << " reused";
+        seen |= b;
+    }
+}
+
+TEST(RadioModemConfigAck, CfgApplyLandsInTheOldReservedBytesAndKeepsTheSize)
+{
+    // The whole compatibility argument depends on cfg_apply occupying a byte
+    // that was previously reserved-and-zero, with the frame length unchanged so
+    // both ends' exact-length gates still accept it.
+    EXPECT_EQ(sizeof(radio_modem::ModemStatusData), 52u);
+    EXPECT_EQ(offsetof(radio_modem::ModemStatusData, cfg_apply),
+              offsetof(radio_modem::ModemStatusData, current_sf) + 1);
+    // current_sf was the last named field before the old reserved[3]; cfg_apply
+    // took the first of those three, leaving two.
+    EXPECT_EQ(sizeof(radio_modem::ModemStatusData{}.reserved), 2u);
 }

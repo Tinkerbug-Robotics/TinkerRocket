@@ -141,10 +141,26 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
     if (!pushConfig(freq_mhz, sf, bw_khz, cr, tx_power, /*start_rx=*/true,
                     /*ack_timeout_ms=*/500))
     {
-        // #569: covers both "no STATUS ack" and "ack with radio_enabled=0"
-        // (RF dead on the daughterboard — pushConfig logs the specific cause).
-        ESP_LOGE(TAG, "initial SET_CONFIG rejected — radio disabled");
-        return failClosed(false);
+        if (last_cfg_apply_ != CFG_APPLY_OK && last_status_.radio_enabled != 0)
+        {
+            // #835 item 7: the radio IS up, it just is not fully on the config
+            // we asked for. Taking it dark here would turn a degraded radio
+            // (wrong preamble, say) into no radio at all, which is worse than
+            // the fault. Come up loud and degraded instead; the modulation the
+            // modem is actually on is in its own log, and a later reconfigure()
+            // can still fix it.
+            ESP_LOGE(TAG, "initial SET_CONFIG only PARTLY applied "
+                          "(cfg_apply=0x%02X) — continuing on a config that is "
+                          "NOT what was requested",
+                     last_cfg_apply_);
+        }
+        else
+        {
+            // #569: covers both "no STATUS ack" and "ack with radio_enabled=0"
+            // (RF dead on the daughterboard — pushConfig logs the specific cause).
+            ESP_LOGE(TAG, "initial SET_CONFIG rejected — radio disabled");
+            return failClosed(false);
+        }
     }
 
     stats_.enabled = true;
@@ -174,6 +190,14 @@ bool UartModemBackend::pushConfig(float freq_mhz, uint8_t sf, float bw_khz,
               (cfg_.syncword_private ? CFG_FLAG_SYNCWORD_PRIVATE : 0);
     d.start_rx = start_rx ? 1 : 0;
 
+    // Drain anything already parsed-and-waiting before snapshotting (#835
+    // item 7). service() polls the modem with an unsolicited MSG_GET_STATUS
+    // every STATUS_POLL_MS, and its reply can be sitting in the RX ring right
+    // now; accepting that frame as this SET_CONFIG's ack would read a
+    // cfg_apply belonging to the PREVIOUS config. Harmless while the only
+    // field read was radio_enabled (identical in every frame), not harmless
+    // now.
+    link_.poll(&UartModemBackend::onFrameTrampoline, this);
     const uint32_t status_before = status_rx_count_;
     if (!link_.sendFrame(MSG_SET_CONFIG, reinterpret_cast<uint8_t*>(&d),
                          sizeof(d)))
@@ -197,11 +221,39 @@ bool UartModemBackend::pushConfig(float freq_mhz, uint8_t sf, float bw_khz,
             // watching tx_fail climb. Reject the config so begin() degrades
             // to radio-less, same as a failed TR_LoRa_Comms::begin(), and
             // the RF-dead state is loud and distinct from modem-absent.
-            if (last_status_.radio_enabled == 0)
+            last_cfg_apply_ = last_status_.cfg_apply;
+            const auto verdict = classifyConfigAck(last_status_.radio_enabled,
+                                                   last_status_.cfg_apply);
+            if (verdict == ConfigAckVerdict::RadioDead)
             {
                 ESP_LOGE(TAG, "modem alive but RADIO DEAD (STATUS ack has "
                               "radio_enabled=0 — LLCC68 init failed on the "
                               "daughterboard) — rejecting config");
+                return false;
+            }
+            // #835 item 7: the ack proves the modem is alive and the radio
+            // is up; cfg_apply is what proves the config actually reached the
+            // chip. Before this the modem acked identically whether
+            // reconfigure() had applied the modulation or rolled it back, so
+            // the caches below -- which feed the uplink SNR floor and the hop
+            // dwell, and get persisted to the "lora" NVS namespace -- could
+            // describe a modulation that was never on the air. Error polarity
+            // means an older modem's zero-filled byte reads as success, so
+            // this cannot reject a config that firmware would have accepted.
+            if (verdict == ConfigAckVerdict::NotApplied)
+            {
+                ESP_LOGE(TAG, "modem did NOT apply the config (cfg_apply=0x%02X:%s%s%s%s) "
+                              "— not caching; the radio is not on these settings",
+                         last_cfg_apply_,
+                         (last_cfg_apply_ & CFG_APPLY_ERR_MODULATION) ? " modulation-rolled-back" : "",
+                         (last_cfg_apply_ & CFG_APPLY_ERR_FRAME)      ? " frame-params-refused" : "",
+                         (last_cfg_apply_ & CFG_APPLY_ERR_BUSY)       ? " scan-busy" : "",
+                         (last_cfg_apply_ & CFG_APPLY_ERR_BEGIN)      ? " begin-partial" : "");
+                // Deliberately NOT arming config_repush_pending_: that gates
+                // send() (see the check in send()), so a cause that does not
+                // clear on its own would mute the downlink for good. The
+                // callers that care already retry -- service()'s durable
+                // re-push for a rebooted modem, and the operator for cmd-10.
                 return false;
             }
             cfg_freq_mhz_ = freq_mhz;

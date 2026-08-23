@@ -161,6 +161,15 @@ public:
 
     bool startScan(float start_mhz, float stop_mhz, uint16_t step_khz, uint16_t dwell_ms);
     void serviceScan();
+    // True when the last begin() applied every setter without error (#835
+    // item 7). begin() deliberately (void)-discards its eight setters and then
+    // caches cfg_freq_mhz_/cfg_sf_ UNCONDITIONALLY, so after a partial failure
+    // currentFrequencyMHz()/currentSpreadingFactor() report what was REQUESTED,
+    // not what the chip took -- a host comparing them against its own push
+    // cannot detect it. Failing begin() outright would turn a degraded radio
+    // into no radio, so it still returns true; this reports the difference.
+    bool lastBeginClean() const { return begin_clean_; }
+
     bool isScanActive() const { return scan_state_ != ScanState::Idle && scan_state_ != ScanState::Done; }
     bool isScanDone() const   { return scan_state_ == ScanState::Done; }
     void consumeScanDone()    { scan_state_ = ScanState::Idle; }
@@ -191,6 +200,7 @@ private:
     static constexpr uint32_t TX_WATCHDOG_MS = 3000;  // generous: SF12 BW125 ToA ~2.5s
 
     // Last-known-good radio config (for rollback on reconfigure failure)
+    bool    begin_clean_ = true;   // every begin() setter returned OK (#835)
     float   cfg_freq_mhz_ = 915.0f;
     uint8_t cfg_sf_ = 8;
     float   cfg_bw_khz_ = 250.0f;

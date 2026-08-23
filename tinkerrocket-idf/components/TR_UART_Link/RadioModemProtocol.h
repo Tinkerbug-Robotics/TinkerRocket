@@ -93,6 +93,13 @@ static_assert(sizeof(TxFrameHeader) == 1, "TxFrameHeader must be 1 byte");
 // runtime-settable SX126x commands). Hosts may assume the STATUS ack means
 // the full config — including preamble — is what is on the air; the airtime
 // accounting in RocketComputerTypes.h depends on that.
+//
+// #835 item 7: that promise used to be unenforced — handleSetConfig acked
+// unconditionally, so a rolled-back reconfigure() or a refused
+// applyFrameParams() still returned a STATUS with radio_enabled=1 and the host
+// committed (and persisted to NVS) a modulation the radio never adopted. The
+// ack now carries ModemStatusData::cfg_apply; a host that reads it can tell a
+// real apply from an echo.
 struct __attribute__((packed)) RadioConfigData
 {
     float freq_mhz;
@@ -163,9 +170,47 @@ struct __attribute__((packed)) ModemStatusData
     float last_snr_db;
     float current_freq_mhz;
     uint8_t current_sf;
-    uint8_t reserved[3];
+    // Outcome of the LAST SET_CONFIG, sticky until the next one (#835 item 7).
+    // ERROR polarity — 0 means fully applied — so a modem that predates this
+    // field, whose STATUS is built from a value-initialised `ModemStatusData
+    // st = {}`, reads as "ok" and a newer host does not reject every config it
+    // pushes. Deliberately NOT signalled by clearing radio_enabled: an older
+    // host takes that down failClosed(), turning a merely-wrong-preamble modem
+    // into no radio at all. radio_enabled keeps meaning "the LLCC68 came up".
+    uint8_t cfg_apply;
+    uint8_t reserved[2];
 };
 static_assert(sizeof(ModemStatusData) == 52, "ModemStatusData must be 52 bytes");
+
+// ModemStatusData::cfg_apply bits. Zero is success; each bit names a half of
+// SET_CONFIG that did not reach the chip, so the log line tells the operator
+// what to retry rather than just that something failed.
+static constexpr uint8_t CFG_APPLY_OK             = 0;
+static constexpr uint8_t CFG_APPLY_ERR_MODULATION = 1 << 0;  // reconfigure() false -> rolled back
+static constexpr uint8_t CFG_APPLY_ERR_FRAME      = 1 << 1;  // applyFrameParams() false
+static constexpr uint8_t CFG_APPLY_ERR_BUSY       = 1 << 2;  // a scan owned the radio; nothing applied
+static constexpr uint8_t CFG_APPLY_ERR_BEGIN      = 1 << 3;  // begin() came up but a setter failed
+
+// What a host should conclude from a SET_CONFIG's STATUS ack. Pure so the
+// host-side test can drive it without a UART link or a modem.
+enum class ConfigAckVerdict : uint8_t {
+    Accept,      // radio up and the whole config reached the chip
+    RadioDead,   // modem alive, LLCC68 init failed (#569)
+    NotApplied,  // radio up, but some or all of the config did not stick (#835)
+};
+
+// radio_enabled and cfg_apply come straight off ModemStatusData. The
+// RadioDead test comes first: a dead radio makes cfg_apply meaningless.
+//
+// Note the asymmetry that makes error polarity work -- cfg_apply == 0 is
+// indistinguishable from a modem too old to set the field, and that is the
+// intended reading. Such a modem behaves exactly as it did before #835.
+inline ConfigAckVerdict classifyConfigAck(uint8_t radio_enabled, uint8_t cfg_apply)
+{
+    if (radio_enabled == 0)          return ConfigAckVerdict::RadioDead;
+    if (cfg_apply != CFG_APPLY_OK)   return ConfigAckVerdict::NotApplied;
+    return ConfigAckVerdict::Accept;
+}
 
 struct __attribute__((packed)) ScanRequestData
 {

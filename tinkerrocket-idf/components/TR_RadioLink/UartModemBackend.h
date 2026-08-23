@@ -97,6 +97,10 @@ private:
     static void onFrameTrampoline(void* ctx, uint8_t type,
                                   const uint8_t* payload, size_t len);
     void onFrame(uint8_t type, const uint8_t* payload, size_t len);
+    // cfg_apply from the most recent SET_CONFIG ack (#835 item 7). Zero means
+    // the modem applied the whole config; non-zero names the half it did not.
+    uint8_t lastConfigApply() const { return last_cfg_apply_; }
+
     bool pushConfig(float freq_mhz, uint8_t sf, float bw_khz, uint8_t cr,
                     int8_t tx_power, bool start_rx, uint32_t ack_timeout_ms);
     bool waitTxIdle(uint32_t timeout_ms);
@@ -140,6 +144,7 @@ private:
     // BOOT config re-push deferred out of the frame handler (see onFrame).
     // Durable: stays set until a pushConfig() succeeds; send() refuses while
     // pending (the modem is on boot defaults until the push lands).
+    uint8_t last_cfg_apply_ = 0;   // ModemStatusData::cfg_apply of the last ack (#835)
     bool config_repush_pending_ = false;
     uint32_t repush_retry_at_ms_ = 0;
 

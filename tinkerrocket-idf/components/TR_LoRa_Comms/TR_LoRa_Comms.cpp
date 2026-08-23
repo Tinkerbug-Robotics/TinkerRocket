@@ -96,18 +96,35 @@ bool TR_LoRa_Comms::begin(const Config& cfg, bool debug)
         return false;
     }
 
-    // LLCC68 validates SF against the current BW, so set BW first
-    (void)radio_->setBandwidth(cfg.bandwidth_khz);
-    (void)radio_->setSpreadingFactor(cfg.spreading_factor);
-    (void)radio_->setCodingRate(cfg.coding_rate);
+    // LLCC68 validates SF against the current BW, so set BW first.
+    //
+    // #835 item 7: these stay non-fatal -- a radio that came up with one
+    // setter refused beats no radio, and failing begin() here would take the
+    // whole link down. But the results are no longer thrown away: the cache
+    // written just below records the REQUESTED values either way, so without
+    // begin_clean_ a partial failure is invisible to every consumer, including
+    // a host comparing the STATUS echo against its own push.
+    begin_clean_ = true;
+    auto step = [this](int16_t st) { if (st != RADIOLIB_ERR_NONE) begin_clean_ = false; };
+
+    step(radio_->setBandwidth(cfg.bandwidth_khz));
+    step(radio_->setSpreadingFactor(cfg.spreading_factor));
+    step(radio_->setCodingRate(cfg.coding_rate));
     if (cfg.syncword_private)
     {
-        (void)radio_->setSyncWord(RADIOLIB_SX126X_SYNC_WORD_PRIVATE);
+        step(radio_->setSyncWord(RADIOLIB_SX126X_SYNC_WORD_PRIVATE));
     }
-    (void)radio_->setPreambleLength(cfg.preamble_len);
-    (void)radio_->setOutputPower(cfg.tx_power_dbm);
-    (void)radio_->setRxBoostedGainMode(cfg.rx_boosted_gain);
-    (void)radio_->setCRC(cfg.crc_on);
+    step(radio_->setPreambleLength(cfg.preamble_len));
+    step(radio_->setOutputPower(cfg.tx_power_dbm));
+    step(radio_->setRxBoostedGainMode(cfg.rx_boosted_gain));
+    step(radio_->setCRC(cfg.crc_on));
+    if (!begin_clean_)
+    {
+        ESP_LOGE(TAG, "begin(): a radio setter was refused — the chip is NOT "
+                      "fully on the requested config (SF%u BW%.0f CR%u)",
+                 cfg.spreading_factor, (double)cfg.bandwidth_khz,
+                 cfg.coding_rate);
+    }
 
     // Store last-known-good config for rollback on reconfigure failure
     cfg_freq_mhz_ = cfg.freq_mhz;
