@@ -136,6 +136,14 @@ struct config : board_pins
     // which closed mid-flight on any altitude-driven silence.
     static constexpr uint32_t LOG_SILENCE_TIMEOUT_MS  = 5 * 60 * 1000;
     static constexpr uint32_t LOG_INFLIGHT_SAFETY_MS  = 20 * 60 * 1000; // Safety: close log 20 min after INFLIGHT entry if LANDED never seen (#107)
+    // #835 item 6: how long a rocket's telemetry may be silent before the BS
+    // releases the flight frequency lock. Deliberately NOT LOG_SILENCE_TIMEOUT_MS
+    // (5 min): releasing re-arms serviceRecovery, whose silence threshold is only
+    // ~10 s, so it would start a 21-channel grid scan away from the flight
+    // channel — and the 5 min value exists precisely because of altitude-driven
+    // RX gaps near apogee, when the rocket is still descending on that channel.
+    // Matched to the "presumed down" bound instead.
+    static constexpr uint32_t FREQ_LOCK_RELEASE_MS    = 20 * 60 * 1000;
     static constexpr size_t   BLE_FILE_CHUNK_SIZE    = 170;     // Bytes per BLE download chunk
     static constexpr uint32_t BLE_CHUNK_DELAY_MS     = 15;      // Delay between BLE chunks (ms)
     static constexpr size_t   FILES_PER_PAGE         = 5;       // BLE file list pagination

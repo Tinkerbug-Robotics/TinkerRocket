@@ -312,3 +312,80 @@ TEST(BSLogPolicyMultiRocket, BootEdgeAndSafetyArmSemantics)
     updateRocketLogState(s2, LANDED, 3000);
     EXPECT_EQ(s2.inflight_entry_ms, 0u);
 }
+
+// ---------------------------------------------------------------------------
+// #835 item 6: the freq lock's freshness window must actually be able to
+// expire, it must key on TELEMETRY rather than any received frame, and the
+// per-rocket latch must be clearable so a rebooted rocket cannot re-arm it.
+// ---------------------------------------------------------------------------
+
+namespace {
+bs_log_policy::RocketView lockedRocket(uint32_t telem_ms, uint32_t seen_ms)
+{
+    bs_log_policy::RocketView r;
+    r.active        = true;
+    r.freq_lock     = true;
+    r.last_telem_ms = telem_ms;
+    r.last_seen_ms  = seen_ms;
+    return r;
+}
+constexpr uint32_t kRelease = 20u * 60u * 1000u;
+}  // namespace
+
+TEST(BsFreqLock, HoldsWhileTelemetryIsFresh) {
+    bs_log_policy::RocketView v[1] = { lockedRocket(1000, 1000) };
+    EXPECT_TRUE(bs_log_policy::aggregateFreqLock(v, 1, 1000 + kRelease - 1, kRelease));
+}
+
+TEST(BsFreqLock, ExpiresOnceTelemetryGoesSilent) {
+    bs_log_policy::RocketView v[1] = { lockedRocket(1000, 1000) };
+    EXPECT_FALSE(bs_log_policy::aggregateFreqLock(v, 1, 1000 + kRelease + 1, kRelease))
+        << "the freshness window must be able to expire — this is the whole defect";
+}
+
+TEST(BsFreqLock, ABeaconAloneDoesNotHoldTheLock) {
+    // A rocket beaconing at range without decodable telemetry: last_seen_ms
+    // keeps advancing, last_telem_ms does not. Keying on last_seen_ms would
+    // hold the lock for the entire session.
+    const uint32_t now = 1000 + kRelease + 1;
+    bs_log_policy::RocketView v[1] = { lockedRocket(/*telem*/1000, /*seen*/now) };
+    EXPECT_FALSE(bs_log_policy::aggregateFreqLock(v, 1, now, kRelease))
+        << "a name beacon must not hold the flight frequency lock";
+    EXPECT_TRUE(bs_log_policy::freqLockExpired(v[0], now, kRelease));
+}
+
+TEST(BsFreqLock, ExpiredLatchIsReportedSoTheCallerCanClearIt) {
+    const uint32_t now = 1000 + kRelease + 1;
+    bs_log_policy::RocketView fresh   = lockedRocket(now, now);
+    bs_log_policy::RocketView stale   = lockedRocket(1000, 1000);
+    bs_log_policy::RocketView unlatch = lockedRocket(1000, 1000);
+    unlatch.freq_lock = false;
+
+    EXPECT_FALSE(bs_log_policy::freqLockExpired(fresh,   now, kRelease));
+    EXPECT_TRUE (bs_log_policy::freqLockExpired(stale,   now, kRelease));
+    EXPECT_FALSE(bs_log_policy::freqLockExpired(unlatch, now, kRelease))
+        << "nothing to release when the latch was never set";
+}
+
+TEST(BsFreqLock, OneFreshLockedRocketHoldsItForAll) {
+    bs_log_policy::RocketView v[3];
+    v[0] = lockedRocket(1000, 1000);              // stale
+    v[1] = lockedRocket(1000, 1000);              // stale
+    v[2] = lockedRocket(1000 + kRelease, 1000);   // fresh
+    const uint32_t now = 1000 + kRelease + 1;
+    EXPECT_TRUE(bs_log_policy::aggregateFreqLock(v, 3, now, kRelease))
+        << "a second rocket still transmitting must keep the lock";
+}
+
+TEST(BsFreqLock, InactiveSlotNeverHoldsTheLock) {
+    bs_log_policy::RocketView v[1] = { lockedRocket(1000, 1000) };
+    v[0].active = false;
+    EXPECT_FALSE(bs_log_policy::aggregateFreqLock(v, 1, 1000, kRelease));
+}
+
+TEST(BsFreqLock, SurvivesMillisWraparound) {
+    const uint32_t telem = 0xFFFFF000u;
+    bs_log_policy::RocketView v[1] = { lockedRocket(telem, telem) };
+    EXPECT_TRUE (bs_log_policy::aggregateFreqLock(v, 1, (uint32_t)(telem + 1000), kRelease));
+    EXPECT_FALSE(bs_log_policy::aggregateFreqLock(v, 1, (uint32_t)(telem + kRelease + 1), kRelease));
+}

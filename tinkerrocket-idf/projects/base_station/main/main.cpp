@@ -563,10 +563,18 @@ static bool     last_known_rocket_logging = false;    // Actual rocket logging s
 // computeFreqLockForFlight() in RocketComputerTypes.h.
 //
 // #381: this is now the AGGREGATE across tracked rockets — locked while any
-// fresh rocket's per-rocket lock is latched (bs_log_policy::aggregateFreqLock,
-// recomputed after each packet). The old single global was overwritten by
+// rocket with fresh TELEMETRY has its per-rocket lock latched
+// (bs_log_policy::aggregateFreqLock). The old single global was overwritten by
 // whichever rocket's packet arrived last, so a second rocket's READY cleared
 // the lock mid-flight of the first, once per interleaved packet.
+//
+// #835 item 6: recomputed on a TIMER in loop_bs, not only on packet arrival.
+// The old comment here said "recomputed after each packet" alongside the
+// freshness claim, which is self-contradictory and is what made the defect
+// read as intentional: the freshness window can only expire if something
+// evaluates it while packets are NOT arriving. Without that, a rocket lost
+// while INFLIGHT latched the lock until reboot, wedging cmd-10 reconfigures,
+// silence recovery and heartbeats for the rest of the session.
 static bool freq_locked_for_flight = false;
 
 // ----------------------------------------------------------------------------
@@ -759,6 +767,9 @@ struct TrackedRocket {
     double     last_lon_deg = NAN;
     double     last_alt_m = NAN;
     uint32_t   last_seen_ms = 0;
+    // #835 item 6: last accepted TELEMETRY packet. last_seen_ms above is also
+    // stamped by a name beacon, which must not hold the flight freq lock.
+    uint32_t   last_telem_ms = 0;
     // Free-running TX seq from the rocket (#105, widened to 16 bits in
     // proto v4).  -1 = no prior packet ("first contact"); on an
     // implausible forward delta we reset to -1 and treat the next
@@ -888,6 +899,7 @@ static void buildRocketViews(bs_log_policy::RocketView out[MAX_TRACKED_ROCKETS])
         out[i].state             = tracked_rockets[i].log_state.last_state;
         out[i].inflight_entry_ms = tracked_rockets[i].log_state.inflight_entry_ms;
         out[i].freq_lock         = tracked_rockets[i].log_state.freq_lock;
+        out[i].last_telem_ms     = tracked_rockets[i].last_telem_ms;
     }
 }
 
@@ -4557,13 +4569,14 @@ static void loop_bs()
                     // Freshness for the aggregate decisions below uses
                     // last_seen_ms; stamp it now (the tracker mirror further
                     // down stamps it again — idempotent).
-                    tracked_rockets[slot].last_seen_ms = now_ms;
+                    tracked_rockets[slot].last_seen_ms  = now_ms;
+                    tracked_rockets[slot].last_telem_ms = now_ms;   // #835 item 6
 
                     bs_log_policy::RocketView views[MAX_TRACKED_ROCKETS];
                     buildRocketViews(views);
                     freq_locked_for_flight = bs_log_policy::aggregateFreqLock(
                         views, MAX_TRACKED_ROCKETS, now_ms,
-                        config::LOG_SILENCE_TIMEOUT_MS);
+                        config::FREQ_LOCK_RELEASE_MS);
 
                     // Close on LANDED transition — but only when no other
                     // fresh rocket is still flying (#381). Boot edge is
@@ -4844,6 +4857,50 @@ static void loop_bs()
             ESP_LOGW(TAG, "[LOG] INFLIGHT safety timeout (%u min), closing log",
                      (unsigned)(config::LOG_INFLIGHT_SAFETY_MS / 60000));
             stopLogging();
+        }
+    }
+
+    // #835 item 6: release an expired flight frequency lock.
+    //
+    // DELIBERATELY OUTSIDE every `if (logging_active)` in this function. The
+    // obvious home is the INFLIGHT-safety block just above, but that block
+    // stops running the moment the log closes — and the log closes on the
+    // silence timeout below, which advances off the same packets. Put there,
+    // the release could never fire in the case it exists for. It also has to
+    // run when logging never started at all (failed mount, or a LANDED edge
+    // that already closed the file), because the lock is latched on packet
+    // arrival regardless of logging_active.
+    //
+    // Two halves. The aggregate is recomputed so the freshness window can
+    // actually expire; and each rocket's underlying latch is CLEARED once
+    // stale, because computeFreqLockForFlight() leaves the lock unchanged
+    // through INITIALIZATION and PRELAUNCH — so the first packet from a
+    // recovered, rebooted rocket would otherwise re-latch the aggregate from
+    // the stale bit and re-lock the base station until READY arrived.
+    {
+        const uint32_t fl_now_ms = millis();
+        bs_log_policy::RocketView fl_views[MAX_TRACKED_ROCKETS];
+        buildRocketViews(fl_views);
+
+        for (int i = 0; i < MAX_TRACKED_ROCKETS; ++i) {
+            if (bs_log_policy::freqLockExpired(fl_views[i], fl_now_ms,
+                                               config::FREQ_LOCK_RELEASE_MS)) {
+                tracked_rockets[i].log_state.freq_lock = false;
+                fl_views[i].freq_lock                  = false;
+                ESP_LOGW(TAG, "[FREQ] Lock released: rid=%u silent %lu s",
+                         (unsigned)tracked_rockets[i].rocket_id,
+                         (unsigned long)((fl_now_ms -
+                                          tracked_rockets[i].last_telem_ms) / 1000U));
+            }
+        }
+
+        const bool fl_locked = bs_log_policy::aggregateFreqLock(
+            fl_views, MAX_TRACKED_ROCKETS, fl_now_ms,
+            config::FREQ_LOCK_RELEASE_MS);
+        if (fl_locked != freq_locked_for_flight) {
+            freq_locked_for_flight = fl_locked;
+            ESP_LOGW(TAG, "[FREQ] Flight lock -> %s (timer)",
+                     fl_locked ? "LOCKED" : "released");
         }
     }
 

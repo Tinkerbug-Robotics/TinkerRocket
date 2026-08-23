@@ -76,6 +76,12 @@ struct RocketView {
     uint8_t  state             = 0;
     uint32_t inflight_entry_ms = 0;
     bool     freq_lock         = false;
+    // #835 item 6: last accepted TELEMETRY packet, distinct from last_seen_ms
+    // which a name beacon also stamps. The freq lock must key on telemetry:
+    // a rocket beaconing without decodable telemetry (netid-matched beacons
+    // getting through at range while full-size frames fail CRC) would
+    // otherwise look fresh forever and hold the lock for the whole session.
+    uint32_t last_telem_ms     = 0;
 };
 
 // A rocket silent longer than fresh_window_ms no longer vetoes a log close
@@ -129,11 +135,44 @@ static inline bool anySafetyExpired(const RocketView* rockets, int n,
 // Aggregate frequency lock: locked while ANY fresh rocket's per-rocket lock
 // is latched. Replaces the old single global that the last-arrived packet
 // overwrote (rocket B's READY unlocked mid-flight-of-A every other packet).
+// #835 item 6: telemetry-only freshness, for the freq lock alone. See the
+// last_telem_ms note in RocketView.
+static inline bool rocketTelemFresh(const RocketView& r, uint32_t now_ms,
+                                    uint32_t window_ms)
+{
+    return r.active && (now_ms - r.last_telem_ms) <= window_ms;
+}
+
+// True once a latched per-rocket lock has gone stale and should be dropped.
+// Separate from the aggregate so the CALLER can clear the underlying latch:
+// merely excluding a stale rocket from the aggregate leaves log_state.freq_lock
+// set, and computeFreqLockForFlight() leaves the lock UNCHANGED through
+// INITIALIZATION and PRELAUNCH — so the first packet from a recovered,
+// rebooted rocket would re-latch the aggregate from the stale bit and re-lock
+// the base station until READY arrived.
+static inline bool freqLockExpired(const RocketView& r, uint32_t now_ms,
+                                   uint32_t release_ms)
+{
+    return r.freq_lock && !rocketTelemFresh(r, now_ms, release_ms);
+}
+
+// Aggregate frequency lock: locked while ANY rocket with fresh TELEMETRY has
+// its per-rocket lock latched. Replaces the old single global that the
+// last-arrived packet overwrote (rocket B's READY unlocked mid-flight-of-A
+// every other packet).
+//
+// #835 item 6: `window_ms` is the freq-lock RELEASE window and is deliberately
+// NOT the log-silence timeout. Releasing the lock re-arms serviceRecovery,
+// whose own silence threshold is only ~10 s — so it would immediately start a
+// 21-channel grid scan away from the flight channel. The log-silence value was
+// itself raised to 5 min because of altitude-driven RX gaps near apogee, i.e.
+// exactly the window in which a rocket is still descending on that channel.
+// Use the "presumed down" bound instead.
 static inline bool aggregateFreqLock(const RocketView* rockets, int n,
-                                     uint32_t now_ms, uint32_t fresh_window_ms)
+                                     uint32_t now_ms, uint32_t window_ms)
 {
     for (int i = 0; i < n; ++i) {
-        if (rocketFresh(rockets[i], now_ms, fresh_window_ms) &&
+        if (rocketTelemFresh(rockets[i], now_ms, window_ms) &&
             rockets[i].freq_lock) return true;
     }
     return false;
