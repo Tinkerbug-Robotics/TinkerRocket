@@ -55,6 +55,7 @@ static inline std::string itos(int v)
 }
 
 #include "config.h"
+#include "ota_relay_policy.h"   // #834 items 6/7: I2S relay recovery timing
 #include "rail_restore_policy.h"  // #825: boot rail re-assert decision
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
@@ -2198,6 +2199,15 @@ static volatile bool oc_ota_tx_mode = false;                // flipped to master
 static volatile bool oc_ota_await_flip = false;             // READY seen; waiting for the FC to go quiet
 static volatile bool oc_ota_relay_ready_pending = false;    // relay "ready" to app once flipped to TX
 static volatile bool oc_ota_revert_to_rx_requested = false; // set on FINISH/ABORT staged
+// #834 item 6: oc_ota_tx_mode means "deliberately in master TX". It must NOT
+// double as "the I2S channel is fine" — the original bug was exactly that
+// conflation, because clearing it to stop the feeder also disabled
+// ocRevertToRx(), the only route back to slave RX. This is the honest state.
+static volatile bool oc_i2s_rx_broken     = false;  // no working slave RX
+static uint32_t      oc_i2s_rx_last_try_ms = 0;
+// #834 item 7: last relayed chunk, for the stall watchdog. 0 = not yet armed
+// (the app has not been told "ready", so silence is expected).
+static volatile uint32_t oc_ota_last_chunk_ms = 0;
 static uint32_t oc_ota_frames_pumped = 0;                   // diag: frames enqueued by relay cb
 static uint32_t oc_ota_feed_sent     = 0;                   // diag: frames the feeder wrote to I2S
 static uint32_t oc_ota_feed_idle     = 0;                   // diag: idle-fill writes (queue empty)
@@ -2232,6 +2242,58 @@ static constexpr uint32_t OTA_FLIP_SILENCE_MS = 500;
 static constexpr uint32_t OTA_RX_WARMUP_MS = 150;
 
 static bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user_ctx);  // defined below
+static void ocOtaRelayClearPendingFlip();                                    // defined below
+
+// Boot and every recovery path must build the RX channel identically — see
+// the note in ocBeginSlaveRxLocked().
+static constexpr uint32_t kI2sRxDmaDescNum  = 4;
+static constexpr uint32_t kI2sRxDmaFrameNum = 128;   // 512 B ≈ 2.9 ms @ 44100
+
+// #834 items 6/7: (re)establish slave RX. Caller holds oc_i2s_mutex. Records
+// oc_i2s_rx_broken so loop_oc can keep retrying — losing the RX channel means
+// the OC receives no FC telemetry at all, logs nothing and freezes both
+// downlinks, so it can never be left as a terminal state.
+static esp_err_t ocBeginSlaveRxLocked(const char* why)
+{
+    // dma_desc_num/dma_frame_num MUST match the boot init: 128 frames (512 B)
+    // spans ~2.9 ms at the 44100 link rate, which is the callback cadence the
+    // parser was tuned against (#104). The old revert path passed 64 — a
+    // leftover from the retired 22050 rate — which doubled the RX ISR cadence
+    // for the rest of the power cycle. Recovery must restore the link the
+    // parser expects, not a different one.
+    esp_err_t e = i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
+                                          config::I2S_WS_PIN,
+                                          config::I2S_DIN_PIN,
+                                          config::I2S_FSYNC_PIN,
+                                          config::I2S_SAMPLE_RATE,
+                                          kI2sRxDmaDescNum, kI2sRxDmaFrameNum);
+    if (e == ESP_OK)
+    {
+        // The callback IS the ingest path — an enabled channel with no callback
+        // registered delivers nothing to processFrame, which is the same dead
+        // telemetry we are recovering from. Treat its failure as RX broken, or
+        // the retry loop below would never run.
+        e = i2s_stream.registerRecvCallback(i2sRecvCallback, nullptr);
+        if (e != ESP_OK)
+            ESP_LOGE("OC", "OTA relay: registerRecvCallback FAILED (%s): %s",
+                     why, esp_err_to_name(e));
+    }
+    if (e == ESP_OK)
+    {
+        if (oc_i2s_rx_broken)
+            ESP_LOGW("OC", "OTA relay: slave RX restored (%s)", why);
+        oc_i2s_rx_broken = false;
+    }
+    else
+    {
+        oc_i2s_rx_broken = true;
+        ESP_LOGE("OC", "OTA relay: slave RX begin FAILED (%s): %s — "
+                       "no FC telemetry until this succeeds; retrying",
+                 why, esp_err_to_name(e));
+    }
+    oc_i2s_rx_last_try_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    return e;
+}
 
 // Flip slave-RX -> master-TX for the image pump. Runs in loop_oc once the FC's
 // I2S TX has gone quiet (it has flipped to slave RX), so there's no contention.
@@ -2247,8 +2309,46 @@ static void ocFlipToTx()
                                                  OTA_I2S_SAMPLE_RATE_HZ,
                                                  4, 64);
     oc_ota_tx_mode = (e == ESP_OK);
+    if (e != ESP_OK)
+    {
+        // #834 item 6: end() already deleted the channel, so right now the OC
+        // has NO I2S at all. ocRevertToRx() cannot help — it returns early on
+        // !oc_ota_tx_mode — so restore slave RX here, before releasing the
+        // mutex. Otherwise the OC never hears the FC again this power cycle.
+        //
+        // end() first: beginMasterTx's later error exits call i2s_del_channel()
+        // directly rather than end(), and del_channel frees the driver without
+        // detaching the GPIO matrix or clearing output-enable — so BCLK/WS can
+        // still be driven from the half-built master config. end() is null-safe
+        // and releases those pads (its GPIO block is outside the handle guard).
+        i2s_stream.end();
+        ocBeginSlaveRxLocked("flip-to-TX failed");
+    }
+    else
+    {
+        // #834 item 7: arm the stall watchdog at the FLIP, not when the app is
+        // told "ready". The "ready" release happens inside loop_oc's pwr_pin_on
+        // gate while the watchdog is serviced outside it, so arming there left
+        // a rail-off during the 150 ms warmup flipped with the watchdog asleep.
+        oc_ota_last_chunk_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    }
     xSemaphoreGive(oc_i2s_mutex);
     ESP_LOGW("OC", "OTA relay: I2S -> master TX for image pump (%s)", esp_err_to_name(e));
+    if (e != ESP_OK)
+    {
+        // Restoring OUR slave RX is only half the link. The FC flipped to slave
+        // RX when the OTA began — that silence is what we waited for before
+        // flipping — so with our flip failed BOTH ends are slave and nobody
+        // drives BCLK: telemetry stays dead despite a healthy channel. Tell the
+        // FC to abort so it reverts to master TX. I2C is independent of I2S, so
+        // this reaches it even with the I2S link down.
+        setPendingCommand(OTA_ABORT_CMD);
+        // "aborted" is in the apps' vocabulary; "error" is not, and an
+        // unrecognised token leaves the app waiting out its own timeout.
+        // terminal=true clears ota_relay_active_/ota_session_active_.
+        ble_app.relayFcOtaStatus("aborted", "i2s_flip_failed", 0, true);
+        ocOtaRelayClearPendingFlip();
+    }
 }
 
 // Revert master-TX -> slave-RX (normal telemetry + OTA status path). loop_oc.
@@ -2263,15 +2363,13 @@ static void ocRevertToRx()
     vTaskDelay(pdMS_TO_TICKS(100));
     xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
     i2s_stream.end();
-    const esp_err_t e = i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
-                                                config::I2S_WS_PIN,
-                                                config::I2S_DIN_PIN,
-                                                config::I2S_FSYNC_PIN,
-                                                config::I2S_SAMPLE_RATE,
-                                                4, 64);
-    if (e == ESP_OK)
-        i2s_stream.registerRecvCallback(i2sRecvCallback, nullptr);
-    oc_ota_tx_mode = false;
+    const esp_err_t e = ocBeginSlaveRxLocked("revert-to-RX");
+    // #834 item 6: clear tx_mode either way — the feeder must stop pumping, and
+    // the channel it was pumping into is gone regardless. A failure is carried
+    // by oc_i2s_rx_broken instead, which loop_oc retries; the old code cleared
+    // tx_mode and kept no record, so a failed revert was silent and permanent.
+    oc_ota_tx_mode       = false;
+    oc_ota_last_chunk_ms = 0;
     xSemaphoreGive(oc_i2s_mutex);
     ESP_LOGW("OC", "OTA relay: I2S -> slave RX (%s)", esp_err_to_name(e));
 }
@@ -2287,6 +2385,8 @@ static void ocOtaRelayData(void* /*ctx*/, uint32_t offset, const uint8_t* data, 
         ESP_LOGW("OC", "OTA relay: chunk @%u dropped — I2S not in TX mode", (unsigned)offset);
         return;
     }
+    // #834 item 7: the app is alive and pumping — feed the stall watchdog.
+    oc_ota_last_chunk_ms = (uint32_t)(esp_timer_get_time() / 1000);
     static constexpr size_t kMaxImg = MAX_PAYLOAD - 4;   // 4-byte offset header
     size_t sent = 0;
     while (sent < len)
@@ -2411,9 +2511,25 @@ static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* s
     ESP_LOGI("OC", "OTA relay: OTA_BEGIN stashed for loop-task staging (size=%u)",
              (unsigned)total_size);
 }
+// #834 item 7 (review): clear the PRE-flip arming state. oc_ota_await_flip is
+// armed when the FC's OTA_RELAY_READY arrives and was previously cleared only
+// by a new relay or by the flip itself — so a teardown during the silence wait
+// left it set and loop_oc flipped to master TX afterwards, with no session.
+// That became actively harmful once teardown started staging OTA_ABORT_CMD:
+// the FC's abort handler calls fcRevertToTx() with no quiet-wait (unlike its
+// FINISH path, which spins until the OC goes silent precisely to avoid this),
+// so both ends would drive BCLK/WS until the stall watchdog fired ~10 s later.
+static void ocOtaRelayClearPendingFlip()
+{
+    oc_ota_await_flip          = false;
+    oc_ota_relay_ready_pending = false;
+    oc_ota_warmup_since_ms     = 0;
+}
+
 static void ocOtaRelayFinish(void* /*ctx*/)
 {
     setPendingCommand(OTA_FINISH_CMD);
+    ocOtaRelayClearPendingFlip();
     // Revert to slave-RX (in loop_oc) so we can hear the FC's terminal status,
     // which it sends over the normal-direction I2S after IT reverts to TX.
     oc_ota_revert_to_rx_requested = true;
@@ -2422,6 +2538,7 @@ static void ocOtaRelayFinish(void* /*ctx*/)
 static void ocOtaRelayAbort(void* /*ctx*/)
 {
     setPendingCommand(OTA_ABORT_CMD);
+    ocOtaRelayClearPendingFlip();
     oc_ota_revert_to_rx_requested = true;
     ESP_LOGI("OC", "OTA relay: staged OTA_ABORT for FC");
 }
@@ -6497,29 +6614,28 @@ void initPeripherals()
     // dma_frame_num doubled 64 -> 128 alongside the 22050 -> 44100 link rate
     // so each descriptor still spans ~2.9 ms (512 B at 176 KB/s) — the same
     // callback cadence the parser was tuned against at the old rate.
-    if (i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
-                                 config::I2S_WS_PIN,
-                                 config::I2S_DIN_PIN,
-                                 config::I2S_FSYNC_PIN,
-                                 config::I2S_SAMPLE_RATE,
-                                 4,      // dma_desc_num
-                                 128) != ESP_OK)  // dma_frame_num → 512 bytes each
+    // #834 items 6/7 (review): go through the SAME helper the recovery paths use
+    // so a boot failure sets oc_i2s_rx_broken and loop_oc's 1 Hz retry picks it
+    // up. Open-coding begin+register here left the most consequential failure of
+    // all — no RX from boot — as the one case the new never-give-up retry did
+    // not cover, with the retry loop idle one screen away.
+    // The mutex may not exist yet at this point in setup; take it if it does.
+    if (oc_i2s_mutex != nullptr) xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
+    const esp_err_t rx_err = ocBeginSlaveRxLocked("boot");
+    if (oc_i2s_mutex != nullptr) xSemaphoreGive(oc_i2s_mutex);
+    if (rx_err != ESP_OK)
     {
-        ESP_LOGE("PWR", "I2S slave RX init failed");
+        ESP_LOGE("PWR", "I2S slave RX init failed — retrying from loop_oc");
     }
     else
     {
         ESP_LOGI("PWR", "I2S slave RX ready");
-
-        // Register zero-copy DMA receive callback.
-        // The callback fires from ISR context each time a DMA buffer
-        // completes, pushing bytes directly into rx_ring and notifying
-        // the parser task.  This eliminates stale DMA re-reads that
-        // caused periodic ~90ms gaps in logged data.
-        esp_err_t cb_err = i2s_stream.registerRecvCallback(i2sRecvCallback, nullptr);
-        if (cb_err != ESP_OK)
-            ESP_LOGE("PWR", "I2S recv callback failed: %s", esp_err_to_name(cb_err));
-
+    }
+    // Tasks are created unconditionally: a boot failure is now recoverable, and
+    // a channel that comes back via the retry needs a parser to drain rx_ring.
+    // Both are harmless with no channel — i2sRecvCallback null-checks
+    // i2s_rx_task_handle, and the feeder idles while !oc_ota_tx_mode.
+    {
         // Parser task — woken by DMA callback, parses frames from rx_ring.
         // Pinned to Core 1 at priority 6 (one above loopTask at prio 5).
         // Parser preempts loopTask whenever DMA notifies; loopTask runs
@@ -7094,21 +7210,14 @@ static void loop_oc()
             {
                 oc_ota_relay_ready_pending = false;
                 oc_ota_warmup_since_ms     = 0;
+                // #834 item 7: arm the stall watchdog only now. Before "ready"
+                // the silence is deliberate (the warmup window idle-fills so the
+                // FC's slave RX can lock onto BCLK), so arming earlier would
+                // abort every OTA.
+                oc_ota_last_chunk_ms = warm_now_ms;
                 ble_app.relayFcOtaStatus("ready", nullptr, 0, false);
             }
         }
-        if (oc_ota_revert_to_rx_requested)
-        {
-            // Clear AFTER the revert completes, not before. The feeder watches this
-            // flag to back off oc_i2s_mutex so ocRevertToRx() can acquire it (see the
-            // feeder's comment). Clearing first would let the higher-priority feeder
-            // resume mid-revert and starve ocRevertToRx()'s mutex take — the FINISH
-            // deadlock. ocRevertToRx() sets oc_ota_tx_mode=false, so the feeder idles
-            // regardless once it returns.
-            ocRevertToRx();
-            oc_ota_revert_to_rx_requested = false;
-        }
-
         // Deferred I2C slave init: wait for I2S DMA activity confirming
         // the FC is alive before enabling the slave on the bus.
         if (!i2c_slave_initialized && dma_cb_count > 50)
@@ -7258,6 +7367,70 @@ static void loop_oc()
         // the long delay saved little real power.
         delay(IDLE_LOOP_DELAY_MS);
 
+    }
+
+    // ----------------------------------------------------------------------
+    // I2S link recovery — deliberately OUTSIDE the pwr_pin_on gate above.
+    // #834 items 6/7: every path that can strand the OC's I2S is serviced here.
+    // Losing slave RX means no FC telemetry, no logging and two frozen
+    // downlinks until a power cycle, so recovery must not depend on the app,
+    // the FC, or the switched rail being on — a rail-off mid-relay used to
+    // strand it exactly this way, because the revert lived inside that gate.
+    // ----------------------------------------------------------------------
+    {
+        const uint32_t i2s_now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+        // The app vanished mid-transfer (walked out of range, screen lock, app
+        // killed). onDisconnect stages an abort, but a link that simply stops
+        // pumping without disconnecting leaves no event at all — hence a
+        // timeout on chunk arrival as well.
+        if (OtaRelayPolicy::relayStalled(oc_ota_tx_mode, oc_ota_last_chunk_ms,
+                                         i2s_now_ms))
+        {
+            ESP_LOGE("OC", "OTA relay: no chunk for %u ms while flipped — "
+                           "abandoning and reverting to slave RX",
+                     (unsigned)OtaRelayPolicy::kRelayStallTimeoutMs);
+            oc_ota_last_chunk_ms          = 0;   // disarm before the revert
+            setPendingCommand(OTA_ABORT_CMD);
+            oc_ota_revert_to_rx_requested = true;
+            // End the BLE-side session too. A stall with the link still UP
+            // produces no onDisconnect, so without this ota_relay_active_ and
+            // ota_session_active_ stay set: battery/power reads remain gated
+            // off and a later OTA_BEGIN is rejected as already-in-progress.
+            ble_app.relayFcOtaStatus("aborted", "relay_stalled", 0, true);
+            ocOtaRelayClearPendingFlip();
+        }
+
+        if (oc_ota_revert_to_rx_requested)
+        {
+            // Clear AFTER the revert completes, not before. The feeder watches this
+            // flag to back off oc_i2s_mutex so ocRevertToRx() can acquire it (see the
+            // feeder's comment). Clearing first would let the higher-priority feeder
+            // resume mid-revert and starve ocRevertToRx()'s mutex take — the FINISH
+            // deadlock. ocRevertToRx() sets oc_ota_tx_mode=false, so the feeder idles
+            // regardless once it returns.
+            ocRevertToRx();
+            oc_ota_revert_to_rx_requested = false;
+        }
+
+        // A begin that failed anywhere above leaves us with no channel. Keep
+        // retrying: a transient DMA-allocation failure (BLE buffers, the
+        // flightlog scratch and the 64 KB rx_ring are all live during a relay)
+        // costs about a second of telemetry instead of the whole flight.
+        // Re-sample: ocRevertToRx() above sleeps 100 ms and stamps
+        // oc_i2s_rx_last_try_ms, which would then be AHEAD of the i2s_now_ms
+        // captured at the top of this block — unsigned subtraction turns that
+        // into ~49 days and fires the retry immediately.
+        const uint32_t retry_now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        if (OtaRelayPolicy::shouldRetryRx(oc_i2s_rx_broken, retry_now_ms,
+                                          oc_i2s_rx_last_try_ms) &&
+            oc_i2s_mutex != nullptr)
+        {
+            xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
+            i2s_stream.end();          // drop whatever half-state is there
+            ocBeginSlaveRxLocked("retry");
+            xSemaphoreGive(oc_i2s_mutex);
+        }
     }
 
     // Auto-send config once the BLE connection is fully ready — MTU negotiated

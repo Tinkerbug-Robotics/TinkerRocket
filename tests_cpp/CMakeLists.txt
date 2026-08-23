@@ -802,3 +802,15 @@ target_include_directories(test_main_deploy_gate PRIVATE
 )
 target_link_libraries(test_main_deploy_gate GTest::gtest_main)
 gtest_discover_tests(test_main_deploy_gate)
+
+# ---------- test_ota_relay_policy (#834 items 6/7) ----------
+# Timing for the OC's I2S relay recovery: how often to retry a failed slave-RX
+# begin, and when to abandon a relay whose app has stopped pumping. Pure header
+# in the out_computer project.
+add_executable(test_ota_relay_policy test_ota_relay_policy.cpp)
+target_include_directories(test_ota_relay_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_ota_relay_policy GTest::gtest_main)
+gtest_discover_tests(test_ota_relay_policy)

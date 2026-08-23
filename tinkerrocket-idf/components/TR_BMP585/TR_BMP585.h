@@ -112,6 +112,18 @@ private:
   // false on add_device failure.  Idempotent across retries.
   bool ensureSpiDevice_();
 
+  // Issue the raw Bosch soft reset (0xB6 -> CMD 0x7E) and let the sensor
+  // settle. Caller must already hold a configured CS pin and SPI device.
+  // Split out of forceSoftResetRaw() so begin() can re-arm the sensor's
+  // post-POR state without also running the verification read.
+  void issueSoftReset_();
+
+  // One throwaway register read. The BMP5 SPI interface swallows the first
+  // transaction after a power-on or soft reset (Bosch's own bmp5_init() opens
+  // with exactly this for the same reason), so any read that is not preceded
+  // by one can return garbage.
+  void spiDummyRead_();
+
   // Configure cs_pin_ as a GPIO output, idle HIGH.
   void configureCsPin_();
 
