@@ -49,9 +49,16 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 HEADER = REPO / "tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h"
+# Every firmware BLE dispatch. A device missing here is invisible to BOTH
+# guards: its own numbers are never checked for duplicates, and its handlers
+# do not count toward "some firmware handles this app command", so an app
+# number only the missing device serves reads as unhandled. The mini was that
+# blind third device (#835 item 10) — 51 branches, none of them checked.
 DISPATCHES = [
     ("Out Computer", REPO / "tinkerrocket-idf/projects/out_computer/main/main.cpp"),
     ("Base Station", REPO / "tinkerrocket-idf/projects/base_station/main/main.cpp"),
+    ("Rocket Computer Mini",
+     REPO / "tinkerrocket-idf/projects/rocket_computer_mini/main/comms.cpp"),
 ]
 SWIFT_APP_DIR = REPO / "TinkerRocketApp/TinkerRocketApp"
 KOTLIN = (
@@ -194,9 +201,13 @@ def collect_kotlin_commands():
     }
 
 
-def app_parity_check(oc_values, bs_values):
+def app_parity_check(dispatch_values):
     """HARD check: Swift command set == Kotlin command set, and every app
-    number is handled by some firmware dispatch.  Returns (failed, lines)."""
+    number is handled by some firmware dispatch.  Returns (failed, lines).
+
+    Takes the whole {device: values} mapping rather than two named sets, so
+    adding a device to DISPATCHES is all that is needed to fold it into the
+    "is this number handled anywhere" test (#835 item 10)."""
     out = ["App parity (Swift <-> Kotlin <-> firmware, enforced):"]
     failed = False
 
@@ -258,7 +269,9 @@ def app_parity_check(oc_values, bs_values):
             + ", ".join(map(str, sorted(ALLOWED_DIVERGENCE)))
         )
 
-    handled = oc_values | bs_values | BLE_TO_APP_CMDS
+    handled = set(BLE_TO_APP_CMDS)
+    for values in dispatch_values.values():
+        handled |= values
     unhandled = sorted((swift_all | kotlin_nums) - handled)
     if unhandled:
         failed = True
@@ -295,9 +308,7 @@ def main():
                     values.add(v)
         dispatch_values[name] = values
 
-    parity_failed, lines = app_parity_check(
-        dispatch_values["Out Computer"], dispatch_values["Base Station"]
-    )
+    parity_failed, lines = app_parity_check(dispatch_values)
     any_failed = any_failed or parity_failed
     print("\n".join(lines))
     print()
