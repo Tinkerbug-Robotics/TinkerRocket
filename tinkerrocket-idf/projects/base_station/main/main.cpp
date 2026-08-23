@@ -568,11 +568,35 @@ static bool     last_known_rocket_logging = false;    // Actual rocket logging s
 // computeFreqLockForFlight() in RocketComputerTypes.h.
 //
 // #381: this is now the AGGREGATE across tracked rockets — locked while any
-// fresh rocket's per-rocket lock is latched (bs_log_policy::aggregateFreqLock,
-// recomputed after each packet). The old single global was overwritten by
-// whichever rocket's packet arrived last, so a second rocket's READY cleared
-// the lock mid-flight of the first, once per interleaved packet.
-static bool freq_locked_for_flight = false;
+// fresh rocket's per-rocket lock is latched (bs_log_policy::aggregateFreqLock).
+// The old single global was overwritten by whichever rocket's packet arrived
+// last, so a second rocket's READY cleared the lock mid-flight of the first,
+// once per interleaved packet.
+//
+// #835 item 6: the aggregate is a CACHE, and a cache only decays if something
+// recomputes it.  Until this fix the sole writer was the accepted-telemetry RX
+// path, so a rocket that went silent while INFLIGHT froze the last `true` for
+// the rest of the power cycle: the freshness window was unreachable and cmd-10,
+// silence recovery and fixed-mode heartbeats stayed suppressed until reboot.
+// loop_bs now re-evaluates every pass (see the log-lifecycle section), and the
+// latch expires reads older than the window even if that call is ever lost.
+//
+// Two windows — see bs_log_policy::FreqLockLatch for why.  The short one gates
+// the passive consumers; the long one gates anything that physically retunes
+// the radio, which must stay shut for the whole plausible flight.
+static bs_log_policy::FreqLockLatch freq_lock_latch;
+
+// Passive consumers: silence recovery, fixed-mode heartbeats, auto-acquire.
+static inline bool freqLockedForFlight()
+{
+    return freq_lock_latch.flightLockedAt(millis(), config::LOG_SILENCE_TIMEOUT_MS);
+}
+
+// Radio-moving consumers: the cmd-10 LoRa reconfigure transaction.
+static inline bool freqLockedForRetune()
+{
+    return freq_lock_latch.retuneLockedAt(millis(), config::LOG_INFLIGHT_SAFETY_MS);
+}
 
 // ----------------------------------------------------------------------------
 // Per-packet channel-hop state (issues #40 / #41, phase 2a — BS side)
@@ -893,6 +917,45 @@ static void buildRocketViews(bs_log_policy::RocketView out[MAX_TRACKED_ROCKETS])
         out[i].state             = tracked_rockets[i].log_state.last_state;
         out[i].inflight_entry_ms = tracked_rockets[i].log_state.inflight_entry_ms;
         out[i].freq_lock         = tracked_rockets[i].log_state.freq_lock;
+    }
+}
+
+// The single write point for the aggregate flight lock, so every edge is
+// logged once with the site that caused it.  Pre-#835 the RX-path write was
+// silent, which is much of why a permanently stuck lock went unnoticed: the
+// only trace in a capture was a secondary "[TXN] Refused" or an
+// recoveryEnd("flight locked") — the symptom, never the state.
+//
+// The edge guard wraps only the logging.  latch.update() ALWAYS runs, because
+// its last_eval_ms stamp is what the read-side backstop measures against; a
+// stamp that advanced only on an edge would expire the lock one window after
+// the first INFLIGHT packet regardless of ongoing telemetry.
+static void updateFreqLock(const bs_log_policy::RocketView* views,
+                           uint32_t now_ms, const char* why)
+{
+    const bool was_flight = freq_lock_latch.flight;
+    const bool was_retune = freq_lock_latch.retune;
+    freq_lock_latch.update(views, MAX_TRACKED_ROCKETS, now_ms,
+                           config::LOG_SILENCE_TIMEOUT_MS,
+                           config::LOG_INFLIGHT_SAFETY_MS);
+
+    if (freq_lock_latch.flight != was_flight)
+    {
+        if (freq_lock_latch.flight)
+            ESP_LOGI(TAG, "[LOG] Flight freq lock SET (%s) — silence recovery "
+                          "and fixed-channel heartbeats suppressed", why);
+        else
+            ESP_LOGW(TAG, "[LOG] Flight freq lock CLEARED (%s) — silence "
+                          "recovery and heartbeats re-enabled", why);
+    }
+    if (freq_lock_latch.retune != was_retune)
+    {
+        if (freq_lock_latch.retune)
+            ESP_LOGI(TAG, "[LOG] Retune lock SET (%s) — cmd-10 refused for the "
+                          "flight", why);
+        else
+            ESP_LOGW(TAG, "[LOG] Retune lock CLEARED (%s) — cmd-10 reconfigure "
+                          "accepted again", why);
     }
 }
 
@@ -2527,11 +2590,15 @@ static constexpr uint32_t TXN_MAX_RELAY_MS     = 3000;  // Upper bound on relay 
 static bool startLoRaTransaction(float new_freq, float new_bw,
                                  uint8_t new_sf, uint8_t new_cr, int8_t new_pwr)
 {
-    if (freq_locked_for_flight || hop_active_)
+    if (freqLockedForRetune() || hop_active_)
     {
+        // #835 item 6: deliberately the LONG window.  This is the one consumer
+        // that physically retunes the radio, and the relay is a broadcast whose
+        // transaction commits on any netid-matching packet — a second rocket on
+        // the pad can answer on the new channel and strand an airborne one.
         ESP_LOGW(TAG, "[TXN] Refused: %s",
-                 freq_locked_for_flight ? "frequency locked for flight"
-                                        : "channel hopping active");
+                 freqLockedForRetune() ? "frequency locked for flight"
+                                       : "channel hopping active");
         sendCurrentConfig();
         return false;
     }
@@ -2701,7 +2768,7 @@ static void serviceLoRaTransaction()
 // SECTION: Silence recovery
 // ==========================================================================
 // If the base station hears nothing from any rocket for RECOVERY_SILENCE_MS
-// while on the ground (not freq_locked_for_flight), hop through known-good
+// while on the ground (not freqLockedForFlight()), hop through known-good
 // frequencies looking for the rocket:
 //   Phase A (rendezvous): tune to LORA_FACTORY_RENDEZVOUS_MHZ and listen 3 s.  If a
 //     beacon / telem arrives, relay Cmd 10 with the saved NVS config to
@@ -2711,7 +2778,7 @@ static void serviceLoRaTransaction()
 //     step.  On hit, relay Cmd 10 on that channel and return to NVS.
 //     If the grid completes with nothing heard, give up this cycle and
 //     wait for the next silence trip.
-// While in flight (freq_locked_for_flight) recovery is fully disabled —
+// While in flight (freqLockedForFlight()) recovery is fully disabled —
 // momentary silence during flight is expected (SNR dips) and hopping would
 // guarantee we lose the rest of the telemetry stream.
 
@@ -2849,10 +2916,10 @@ static void serviceRecovery()
     // accept silence — neither is a recovery scenario.  In flight, momentary
     // SNR dips look like silence; while hopping (#40 / #41), the recovery
     // hop scan and the hop sequence would fight each other for the radio.
-    if (freq_locked_for_flight || hop_active_)
+    if (freqLockedForFlight() || hop_active_)
     {
         if (recovery_state != RecoveryState::IDLE)
-            recoveryEnd(freq_locked_for_flight ? "flight locked" : "hopping active");
+            recoveryEnd(freqLockedForFlight() ? "flight locked" : "hopping active");
         return;
     }
     // Transactional reconfigure takes priority.  A BLE Cmd 10 arriving
@@ -3016,7 +3083,7 @@ static void serviceHeartbeat()
     // sim flights; loss <0.2% in every non-flight state). Fixed-channel
     // flights keep the old behavior: no hop fallback to feed, and staying
     // RX-only in flight costs nothing.
-    if (freq_locked_for_flight && !hop_active_) return;  // fixed-channel flight only
+    if (freqLockedForFlight() && !hop_active_) return;  // fixed-channel flight only
     if (lora_txn_state != LoRaTxnState::IDLE)  return;  // Don't interfere with txn
     if (recovery_state != RecoveryState::IDLE) return;  // Recovery owns the radio
     if (scan_passes_remaining_ != 0)           return;  // #136: don't TX mid-scan
@@ -3764,7 +3831,7 @@ static void serviceAutoAcquire()
         return;
     }
 
-    if (freq_locked_for_flight)
+    if (freqLockedForFlight())
     {
         ESP_LOGW(TAG, "[AUTO] Rocket INFLIGHT before first acquire — done");
         auto_acquire_state = AutoAcquireState::DONE;
@@ -4680,10 +4747,8 @@ static void loop_bs()
                     tracked_rockets[slot].last_seen_ms = now_ms;
 
                     bs_log_policy::RocketView views[MAX_TRACKED_ROCKETS];
-                    buildRocketViews(views);
-                    freq_locked_for_flight = bs_log_policy::aggregateFreqLock(
-                        views, MAX_TRACKED_ROCKETS, now_ms,
-                        config::LOG_SILENCE_TIMEOUT_MS);
+                    buildRocketViews(views);   // KEEP: the landed_edge close below uses it
+                    updateFreqLock(views, now_ms, "rx");
 
                     // Close on LANDED transition — but only when no other
                     // fresh rocket is still flying (#381). Boot edge is
@@ -4950,12 +5015,25 @@ static void loop_bs()
     // stopLogging(). Does NOT inhibit the auto-restart on the next packet —
     // a rocket genuinely stuck INFLIGHT past the cap starts a fresh file and
     // the operator sees two files instead of one.
-    if (logging_active)
+    // One view snapshot serves BOTH the freq-lock freshness sweep and the
+    // INFLIGHT-safety close.
     {
         const uint32_t now_ms = millis();
         bs_log_policy::RocketView views[MAX_TRACKED_ROCKETS];
         buildRocketViews(views);
-        if (bs_log_policy::anySafetyExpired(views, MAX_TRACKED_ROCKETS, now_ms,
+
+        // #835 item 6: re-evaluate the aggregate freq lock EVERY pass, not
+        // only when a packet arrives.  Deliberately OUTSIDE the
+        // logging_active gate below — the lock outlives the log file, and a
+        // lock that only decayed while a file happened to be open would be
+        // the same bug in a smaller box.  Cheap enough to run unthrottled:
+        // buildRocketViews is 4 x 5 scalar copies (MAX_TRACKED_ROCKETS = 4)
+        // and each aggregate is at most 4 compares, against a loop_bs that
+        // vTaskDelay(1)s at 1 kHz.
+        updateFreqLock(views, now_ms, "freshness sweep");
+
+        if (logging_active &&
+            bs_log_policy::anySafetyExpired(views, MAX_TRACKED_ROCKETS, now_ms,
                                             config::LOG_INFLIGHT_SAFETY_MS) &&
             bs_log_policy::noFreshRocketFlying(views, MAX_TRACKED_ROCKETS, now_ms,
                                                config::LOG_SILENCE_TIMEOUT_MS,
