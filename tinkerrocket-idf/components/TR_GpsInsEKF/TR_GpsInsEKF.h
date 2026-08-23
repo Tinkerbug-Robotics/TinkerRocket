@@ -295,6 +295,10 @@ private:
                     float vMeas_NED[3],
                     uint32_t gnss_time_us);
 
+    // #834 item 5: restore P_ and the run-scoped state so init() is a real
+    // from-scratch init. Called by the constructor and by initCore().
+    void resetFilterState();
+
     // Shared core of init() — called after converting GNSS to LLA + NED
     void initCore(EkfIMUData imu_data,
                   EkfMagData mag_data,
