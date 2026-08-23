@@ -52,6 +52,15 @@ struct board_pins
     // No MAX17303 on this board — an 0x36 answer must be a MAX17205 (V1
     // firmware cross-flashed) and the strict DevName check applies.
     static constexpr bool EXPECT_MAX17303 = false;
+    // #835 item 2: this board HAS a gauge; board_v3 does not.
+    static constexpr bool HAS_FUEL_GAUGE = true;
+
+    // #835 item 2: no own-battery divider on this board — the gauge reads the
+    // cell directly. Declared so the shared ADC path in main.cpp compiles on
+    // every board; `if constexpr (!HAS_FUEL_GAUGE)` keeps it from running.
+    static constexpr int   BATT_VSENSE_GPIO     = -1;
+    static constexpr float BATT_VSENSE_DIVIDER  = 1.0f;
+    static constexpr int   BATT_VSENSE_ATTEN_DB = 12;
 
     // --- Flight-pack charger (MP2672): V3-only feature ---
     static constexpr bool HAS_PACK_CHARGER = false;
