@@ -422,7 +422,7 @@ Validates sensor rates, frame integrity, timestamp health, and data completeness
 
 ### CI/CD
 
-Nine GitHub Actions workflows run automatically, each path-filtered to what it covers:
+Ten GitHub Actions workflows run automatically, each path-filtered to what it covers:
 
 | Workflow | What it does |
 |----------|--------------|
@@ -435,6 +435,7 @@ Nine GitHub Actions workflows run automatically, each path-filtered to what it c
 | **flight-report-tests.yml** | Flight-report tooling — the Python suite, plus a Node job for the Explore panel, whose choice of what to draw is made in JavaScript and so is tested there |
 | **pages.yml** | Publishes the browser-based analysis tool to GitHub Pages on pushes to `main`. Builds `Data_Analysis/webtool/payload/` rather than shipping it — it is gitignored, and a committed copy would drift from the source the browser actually runs |
 | **wire-codes.yml** | Fails on duplicate BLE command numbers — the dispatch is a first-match chain, so a duplicate silently makes the later handler dead code |
+| **hardware.yml** | Every symbol the schematic marks `on_board` must have a footprint in the layout — on changes to `hardware/`. Nothing validated boards before this: `docs/board-versioning.md` names `kicad-cli pcb drc --schematic-parity` as the only gate, and that reconciles footprints already on the board rather than noticing one absent entirely. #833 got as far as a fab-ready V10 whose flight-battery positive terminal reached nothing but a floating pour |
 | **docs.yml** | Fails if a generated section map or the protocol reference disagrees with its source, or if the prose contradicts it — broken links, a stale ESP-IDF version, a missing workflow, a wrong struct size. The only workflow with **no path filter**: it runs on every push and PR, because docs drift as a side effect of changes anywhere |
 
 ## Communication Protocols
