@@ -1,6 +1,18 @@
 # Name,   Type, SubType, Offset,  Size,    Flags
+#
+# #835 item 1: spiffs was 0x1F0000 (1.94 MB) while sdkconfig.defaults
+# declares CONFIG_ESPTOOLPY_FLASHSIZE_16MB — half the part was simply
+# unallocated. A BS CSV row is ~200-230 B and a 10-minute flight logs at
+# ~2 Hz, so ~264 KB per flight: roughly 7 flights filled it, and there is
+# no eviction on the base station (writes just start failing into
+# log_write_fail_count). Grown to 0x9F0000 = 9.94 MB, which ends exactly
+# at 0x1000000, the end of the 16 MB part.
+#
+# Changing a partition table REFORMATS spiffs on the next flash: any logs
+# already on a base station are lost. Accepted deliberately — the BS holds
+# nothing long-term during development.
 nvs,      data, nvs,     0x9000,  0x5000,
 otadata,  data, ota,     0xe000,  0x2000,
 ota_0,    app,  ota_0,   0x10000, 0x300000,
 ota_1,    app,  ota_1,   0x310000,0x300000,
-spiffs,   data, spiffs,  0x610000,0x1F0000,
+spiffs,   data, spiffs,  0x610000,0x9F0000,

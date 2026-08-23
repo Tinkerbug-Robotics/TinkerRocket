@@ -481,6 +481,25 @@ target_include_directories(test_bs_download_policy PRIVATE
 target_link_libraries(test_bs_download_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_download_policy)
 
+# ---------- test_bs_board_map (x3) ----------
+# #835 items 1/2/4: board_v3.h claimed an external NAND, a fuel gauge and no
+# LoRa power gate — none of which match the netlist. Nothing asserted the board
+# headers against anything, so all three claims stood. Built once per board so a
+# claim has to survive being stated three times; TR_BS_BOARD picks the header
+# exactly as the firmware build does.
+foreach(BSREV 1 2 3)
+    add_executable(test_bs_board_map_v${BSREV} test_bs_board_map.cpp)
+    target_compile_definitions(test_bs_board_map_v${BSREV} PRIVATE TR_BS_BOARD=${BSREV})
+    target_include_directories(test_bs_board_map_v${BSREV} PRIVATE
+        ${SHIM_DIR}
+        ${LIB_DIR}/TR_RocketComputerTypes
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+    )
+    target_link_libraries(test_bs_board_map_v${BSREV} GTest::gtest_main)
+    gtest_discover_tests(test_bs_board_map_v${BSREV}
+        TEST_PREFIX "v${BSREV}.")
+endforeach()
+
 # ---------- test_bs_storage_policy ----------
 # Host-side test for the NAND bring-up retry policy (#761): mountExternalFlashFat
 # was single-shot, so one transient error demoted the whole boot from a 512 MB
