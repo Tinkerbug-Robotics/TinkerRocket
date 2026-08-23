@@ -1,0 +1,18 @@
+BASELINE -- PortaPack external TCXO in use, nothing on the CLKIN SMA.
+HackRF One r9 clone, Mayhem v2.0.1, TX gain 47, conducted into the PX1125R.
+Recorded 2026-08-20. Compare a run with config_disable_external_tcxo() set.
+
+capture                       epochs  median    p10    p90   swing   period      r
+------------------------------------------------------------------------------------
+saw_static_raw.log               209      44     35     48     13dB      73s   0.60
+   ▇▇▇▆▆▅▅▄▄▃▃▂▂▂▁▁▅██████▇▇▇▇▆▆▆▆▅▅▅▄▃▃▂▂▁▁███████▇▇▇▇▇▆▆▆▅▅▄▄▃▃▂▁▁▁████
+saw_static_boosted.log           209      43     37     46      9dB      82s   0.31
+   ▇▇▇▆▆▅▅▅▄▄▃▂▃▂▁▁▆▇▇▆▆████▇▇▇▆▆▆▅▅▄▅▅▅▅▄▄▄▃▃▂▇▇▆▆▆▇▇▇▇▆▇▇▇▆▆▅▅▄▄▆▇▇▆▆▇▇
+spaceshot_horizon.log            779      44     36     47     11dB      85s   0.38
+   █▇▇▆▇███▇▆▆███▇▇▇▆▅▆▇▇███▇▇▆████▇▆▅████▇▆████▇▇▆▇███▇▇▇████▇▇▇███
+
+across 3 captures: period 82s (spread 73-85s)
+
+Compare against a run with the external TCXO disabled. A period or
+depth that moves means the clock is implicated; identical numbers
+clear it and point at the receiver.

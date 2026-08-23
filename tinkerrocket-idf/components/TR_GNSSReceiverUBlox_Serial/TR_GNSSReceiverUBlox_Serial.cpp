@@ -1130,3 +1130,55 @@ void TR_GNSSReceiverUBloxSerial::getGNSSData(GNSSData &gnss_data)
     // than relocated — a wall-clock silence detector here would duplicate
     // the downstream gates.
 }
+
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG
+
+bool TR_GNSSReceiverUBloxSerial::enableSatDiag()
+{
+    // Automatic reports, so getNAVSAT(0) below never blocks the flight loop.
+    const bool ok = gnss.setAutoNAVSAT(true);
+    ESP_LOGI("GNSS", "[COCOM] NAV-SAT auto reports %s", ok ? "enabled" : "REFUSED");
+    return ok;
+}
+
+void TR_GNSSReceiverUBloxSerial::logSatDiag()
+{
+    // Fix state first, straight from the library's NAV-PVT cache. Velocity is
+    // logged as NED components rather than ground speed on purpose: COCOM acts
+    // on 3-D speed, and a rocket's velocity is almost entirely vertical, so
+    // ground speed reads near zero through exactly the part of a flight the
+    // limit is about.
+    ESP_LOGI("GNSS",
+             "[COCOM] P tow=%lu fix=%u ok=%u nsv=%u lat=%ld lon=%ld alt=%ld "
+             "vn=%ld ve=%ld vd=%ld",
+             (unsigned long)gnss.getTimeOfWeek(0),
+             (unsigned)gnss.getFixType(0),
+             (unsigned)(gnss.getGnssFixOk(0) ? 1 : 0),
+             (unsigned)gnss.getSIV(0),
+             (long)gnss.getLatitude(0),
+             (long)gnss.getLongitude(0),
+             (long)gnss.getAltitude(0),
+             (long)gnss.getNedNorthVel(0),
+             (long)gnss.getNedEastVel(0),
+             (long)gnss.getNedDownVel(0));
+
+    if (!gnss.getNAVSAT(0) || gnss.packetUBXNAVSAT == nullptr)
+        return;
+
+    const uint8_t n = gnss.packetUBXNAVSAT->data.header.numSvs;
+    // One line, space-separated gnss:sv:cno:used. Kept on a single line so a
+    // capture cannot interleave one epoch's satellites with another's under
+    // the log mutex.
+    char line[512];
+    int off = snprintf(line, sizeof(line), "[COCOM] S n=%u", (unsigned)n);
+    for (uint8_t i = 0; i < n && off > 0 && off < (int)sizeof(line) - 16; i++)
+    {
+        const auto &b = gnss.packetUBXNAVSAT->data.blocks[i];
+        off += snprintf(line + off, sizeof(line) - off, " %u:%u:%u:%u",
+                        (unsigned)b.gnssId, (unsigned)b.svId,
+                        (unsigned)b.cno, (unsigned)(b.flags.bits.svUsed ? 1 : 0));
+    }
+    ESP_LOGI("GNSS", "%s", line);
+}
+
+#endif  // TR_GNSS_COCOM_DIAG

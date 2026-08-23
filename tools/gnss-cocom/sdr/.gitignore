@@ -1,0 +1,16 @@
+# Regenerable build products and downloads -- not source, and large.
+bin/
+eph/
+c8/
+scenarios/
+sdcard/
+__pycache__/
+
+# captures/ is the working directory the runner writes into, including probes
+# and false starts. The runs the report actually cites are copied to results/
+# and committed: the .C8 files can be rebuilt from the toolchain any time, but
+# what the receiver did on the bench on 2026-08-19 cannot.
+captures/
+
+# repo root already ignores plots/ globally; this is the working copy
+plots/

@@ -539,6 +539,15 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         else
         {
             ESP_LOGI(SC_TAG, "GNSS found and initialized");
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86)
+            // #491 only: ask for per-satellite reports. The flight path does
+            // not need them -- it polls NAV-PVT and takes the count from
+            // getSIV() -- but telling a withheld position from a lost signal
+            // is only possible per-satellite, and that distinction is the
+            // whole measurement. Guarded off the LC86 driver, which has no
+            // such call.
+            gnss_receiver.enableSatDiag();
+#endif
         }
     }
 
@@ -895,6 +904,22 @@ void SensorCollector::pollGNSSdata(void* parameter)
 
         const uint32_t gnss_elapsed = time_us() - gnss_t0;
         self->pt_gnss_calls++;
+
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86)
+        // ~1 Hz, and after the poll so the NAV-PVT cache is fresh. Deliberately
+        // outside the timing accounting above: this is diagnostic load and
+        // should not be charged to the GNSS parse budget it would distort.
+        {
+            static uint32_t cocom_diag_us = 0;
+            const uint32_t now_us = time_us();
+            if (now_us - cocom_diag_us > 1000000U)
+            {
+                cocom_diag_us = now_us;
+                self->gnss_receiver.logSatDiag();
+            }
+        }
+#endif
+
         if (gnss_elapsed > self->pt_gnss_max_us)
         {
             self->pt_gnss_max_us = gnss_elapsed;

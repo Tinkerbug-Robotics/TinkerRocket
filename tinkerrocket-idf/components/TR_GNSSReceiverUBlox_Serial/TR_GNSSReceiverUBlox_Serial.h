@@ -32,6 +32,24 @@ class TR_GNSSReceiverUBloxSerial
         /// Call this at >=2x the navigation rate for reliable capture.
         bool pollNewPVT(GNSSData &data);
 
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG
+        /// Ask the receiver for per-satellite reports (UBX-NAV-SAT). Call once
+        /// after begin(). Off in normal builds.
+        ///
+        /// The flight path never needs this: it polls NAV-PVT and takes the
+        /// satellite count from getSIV(). But #491 turns on telling a withheld
+        /// position (satellites still tracked at healthy C/N0) from a lost
+        /// signal (satellites gone), and that distinction is only visible
+        /// per-satellite. Without NAV-SAT the two are indistinguishable and the
+        /// measurement cannot be made at all.
+        bool enableSatDiag();
+
+        /// Emit one line of fix state and one of per-satellite C/N0, in a form
+        /// cocom_fcdiag.py converts into the same UBX capture format the
+        /// conducted rig already analyses. Non-blocking; call about 1 Hz.
+        void logSatDiag();
+#endif
+
     private:
 
         SFE_UBLOX_GNSS_SERIAL gnss;
