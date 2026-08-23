@@ -18,6 +18,7 @@ class TrColors(
     val savedFlights: Color,
     val myDevices: Color,
     val driftCast: Color,
+    val preflight: Color,
     val scan: Color,
     val scanActive: Color,
     val camera: Color,
@@ -64,6 +65,7 @@ val TrColorsLight = TrColors(
     savedFlights = Color(0xFF0088FF),  // blue
     myDevices = Color(0xFF6155F5),  // indigo
     driftCast = Color(0xFFFF383C),  // red
+    preflight = Color(0xFF00C3D0),  // teal
     scan = Color(0xFF34C759),  // green
     scanActive = Color(0xFFFF383C),  // red
     camera = Color(0xFF0088FF),  // blue
@@ -110,6 +112,7 @@ val TrColorsDark = TrColors(
     savedFlights = Color(0xFF0091FF),  // blue
     myDevices = Color(0xFF6D7CFF),  // indigo
     driftCast = Color(0xFFFF4245),  // red
+    preflight = Color(0xFF00D2E0),  // teal
     scan = Color(0xFF30D158),  // green
     scanActive = Color(0xFFFF4245),  // red
     camera = Color(0xFF0091FF),  // blue

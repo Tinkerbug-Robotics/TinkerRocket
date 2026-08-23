@@ -1,6 +1,6 @@
 #include "NandBitmapStore.h"
 
-#include "TR_FlightLog_types.h"  // NAND_PAGE_SIZE
+#include "TR_FlightLog_types.h"  // NAND_PAGE_SIZE_MAX
 #include "CRC.h"                 // calcCRC32 (same as FlightIndex)
 
 #include <cstring>
@@ -21,14 +21,14 @@ bool NandBitmapStore::readSlot(uint32_t block, uint32_t& seq_out,
     seq_out = 0;
     if (!nand_) return false;
 
-    std::unique_ptr<uint8_t[]> page(new (std::nothrow) uint8_t[NAND_PAGE_SIZE]);
+    std::unique_ptr<uint8_t[]> page(new (std::nothrow) uint8_t[nand_->pageSize()]);
     if (!page) return false;
     if (!nand_->readPage(block, 0, page.get())) return false;
 
     Header hdr;
     std::memcpy(&hdr, page.get(), sizeof(hdr));
     if (hdr.magic != kMagic) return false;
-    if (hdr.length == 0 || hdr.length > NAND_PAGE_SIZE - sizeof(Header)) return false;
+    if (hdr.length == 0 || hdr.length > nand_->pageSize() - sizeof(Header)) return false;
 
     const uint32_t got = calcCRC32(page.get() + sizeof(uint32_t), crcSpan(hdr.length));
     if (got != hdr.crc32) return false;
@@ -59,7 +59,7 @@ bool NandBitmapStore::load(uint8_t* buf, size_t len) {
 }
 
 bool NandBitmapStore::save(const uint8_t* buf, size_t len) {
-    if (!nand_ || !buf || len == 0 || len > NAND_PAGE_SIZE - sizeof(Header)) return false;
+    if (!nand_ || !buf || len == 0 || len > nand_->pageSize() - sizeof(Header)) return false;
 
     // Target the older / invalid block so the newest valid snapshot survives a
     // power loss mid-erase or mid-program (power-safe dual copy).
@@ -74,9 +74,9 @@ bool NandBitmapStore::save(const uint8_t* buf, size_t len) {
     const uint32_t newest   = (a || b) ? (seq_a > seq_b ? seq_a : seq_b) : 0;
     const uint32_t next_seq = newest + 1;
 
-    std::unique_ptr<uint8_t[]> page(new (std::nothrow) uint8_t[NAND_PAGE_SIZE]);
+    std::unique_ptr<uint8_t[]> page(new (std::nothrow) uint8_t[nand_->pageSize()]);
     if (!page) return false;
-    std::memset(page.get(), 0xFF, NAND_PAGE_SIZE);
+    std::memset(page.get(), 0xFF, nand_->pageSize());
 
     Header hdr;
     hdr.crc32    = 0;

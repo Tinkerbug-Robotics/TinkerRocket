@@ -548,6 +548,9 @@ struct PyroContinuityBadge: View {
     var dotSize: CGFloat = 8
     /// Test view draws on a dark camera background; the cards on systemGray5.
     var onDark: Bool = false
+    /// Default suits the compact tiles. A Settings List row sits next to a
+    /// body-size label, so it overrides this rather than forking the badge.
+    var font: Font = .caption2.weight(.bold)
 
     private var color: Color {
         switch state {
@@ -581,7 +584,7 @@ struct PyroContinuityBadge: View {
             }
             .frame(width: dotSize, height: dotSize)
             Text(label)
-                .font(.caption2.weight(.bold))
+                .font(font)
                 .foregroundColor(color)
         }
     }

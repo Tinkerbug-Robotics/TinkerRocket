@@ -202,6 +202,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Mirrors the BS firmware's BLE_TELEMETRY_STALE_MS.
     static let relayStaleThresholdMs: UInt32 = 3000
 
+    /// #831: how long a connected-but-silent link keeps counting as live for
+    /// continuity. Matches the relay threshold and the OC's own
+    /// FC_FRAME_STALE_MS so all three age at the same rate.
+    static let telemetryStaleThresholdMs: UInt32 = 3000
+
+    /// Clock seam so the #831 staleness window is testable without waiting on
+    /// the wall clock. Production never replaces it.
+    var nowProvider: () -> Date = { Date() }
+
     /// Freshness the dashboard should trust for this link's rocket stream:
     /// the frame-carried status, worsened by the app-computed focused-rocket
     /// age when that is staler (never improved — a BS-reported STALE stays).
@@ -1077,13 +1086,30 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Path-aware continuity for the pyro UIs, #297 fail-safe included (a
     /// non-live stream is .noData, never a held-over green).
     ///
-    /// Direct link: the "ps" cont bit, which is ungated on the FC and so is a
-    /// real measurement whenever it is set. BS relay: the 65-byte LoRa
+    /// Direct link: prefers the measured sensor-health bits, falling back to
+    /// the "ps" cont bit for pre-#803 rockets. BS relay: the 65-byte LoRa
     /// downlink carries no pyro_status, so continuity rides the sensor-health
     /// scorecard — preferring the MEASURED bits (reported for every channel)
     /// and falling back to the config-gated ones for pre-#803 rockets.
+    ///
+    /// #831 — the fail-safe above used to be vacuous on a direct link, in two
+    /// layers. The rocket only ever sends "ds" when it is NOT live and the
+    /// decoder defaults a missing one to .live, so the guard reduced to
+    /// `isConnected`; and the OC republishes every rocket-derived field from
+    /// its last NonSensorData snapshot whether or not the FC is still alive,
+    /// so a dead FC left a green CONT standing indefinitely. The OC now ages
+    /// that snapshot and sends STALE/SYNCING accordingly, which makes the
+    /// existing guard real. The `lastTelemetryAt` check below covers the
+    /// remaining case the OC cannot report on: frames stopping altogether
+    /// while the link still counts as connected.
     func pyroContinuity(channel: Int) -> PyroContinuity {
         guard isConnected, effectiveDataStatus == .live else { return .noData }
+        // A connected link that has gone quiet is not a live reading, whatever
+        // the last frame said.
+        guard let seen = lastTelemetryAt,
+              nowProvider().timeIntervalSince(seen) * 1000
+                  <= Double(Self.telemetryStaleThresholdMs)
+        else { return .noData }
         if isBaseStation {
             if let measured = telemetry.pyroMeasuredContinuity(channel: channel) {
                 switch measured {
@@ -1111,7 +1137,24 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             default:   return .untested
             }
         }
-        return telemetry.pyroCont(channel: channel) ? .present : .open
+        // The raw "ps" cont bit can only ever prove PRESENCE, never an open.
+        // The FC sets it as `cont_known[i] && cont_state[i]`
+        // (flight_computer/main.cpp), so a SET bit is unambiguous — measured,
+        // and continuous — while a CLEAR bit conflates "never measured" with
+        // "measured open". Red is reserved for a measurement, so a clear bit
+        // is .untested and a measured open can only come from the scorecard's
+        // SH_PYRO_MEAS = BAD above.
+        //
+        // Found on the bench 2026-08-22, and it is the state every session
+        // STARTS in: before any continuity test, all four SH_PYRO_MEAS fields
+        // read NA, so pyroMeasuredContinuity returns nil for every channel and
+        // execution reaches here. The live board reported
+        // sensor_health = 1092981 with a clear cont bit, and all four channels
+        // rendered a confident red "NO CONT". #828 fixed that at the view
+        // layer and #831 fixed the powered-off case, but both missed this one:
+        // their tests always had at least one channel measured, which is what
+        // makes pyroMeasuredContinuity return non-nil.
+        return telemetry.pyroCont(channel: channel) ? .present : .untested
     }
 
     /// Fail-safe Bool for callers that must reduce to go/no-go: ONLY a
@@ -1431,6 +1474,23 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
     }
 
+#if DEBUG
+    // Test seam (#832). Production always enters through downloadFile(), which
+    // needs a live characteristic, so the chunk handler had no reachable entry
+    // point from a test — which is why nothing covered it. DEBUG-only, so it
+    // cannot be called from a shipped build.
+    func beginDownloadForTesting(filename: String, completion: @escaping (URL?) -> Void) {
+        downloadingFilename = filename
+        downloadedData = Data()
+        downloadCompletionHandler = completion
+        isDownloading = true
+        downloadProgress = 0.0
+        downloadExpectedSize = Int(files.first(where: { $0.name == filename })?.size ?? 0)
+    }
+
+    func handleFileChunkForTesting(_ data: Data) { handleFileChunk(data) }
+#endif
+
     // MARK: - File chunk handling (private)
 
     private func handleFileChunk(_ data: Data) {
@@ -1456,9 +1516,30 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
 
-        if length > 0 && data.count >= 7 + Int(length) {
-            let chunkData = data.subdata(in: 7..<(7 + Int(length)))
-            downloadedData.append(chunkData)
+        // #832: the offset field was parsed and then used only in a debug
+        // print, so chunks were appended blindly. A notification dropped after
+        // the peripheral queued it — the exact residual case the firmware's
+        // redundant EOF (#524) exists to compensate for — left a silent hole
+        // with no gap detection, and the file was saved as complete.
+        //
+        // On a data chunk the offset IS the position this data belongs at, so
+        // contiguity is free: anything other than "exactly where we are" means
+        // a frame went missing.
+        if length > 0 {
+            guard data.count >= 7 + Int(length) else {
+                // A frame shorter than its own length header used to be
+                // dropped silently, leaving a hole indistinguishable from a
+                // clean transfer.
+                print("[DOWNLOAD] short frame: len=\(length) but \(data.count) bytes — failing")
+                failDownload()
+                return
+            }
+            guard Int(offset) == downloadedData.count else {
+                print("[DOWNLOAD] GAP: chunk at offset \(offset), expected \(downloadedData.count) — failing")
+                failDownload()
+                return
+            }
+            downloadedData.append(data.subdata(in: 7..<(7 + Int(length))))
         }
         let received = downloadedData.count
         let expectedSize = downloadExpectedSize
@@ -1475,6 +1556,26 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if isEOF {
             downloadStallTimer?.invalidate()
             downloadStallTimer = nil
+            // #832: the EOF frame carries the device's own bytes_sent in its
+            // offset field (out_computer/main.cpp, base_station/main.cpp), so
+            // the app is handed the authoritative total for free and used to
+            // throw it away. A mismatch means we are missing bytes the device
+            // believes it sent.
+            // The EOF frame may carry DATA as well as the flag, in which case
+            // its offset is that data's POSITION, not the total. Measured on
+            // the bench 2026-08-22: the base station's last frame for an
+            // 18322-byte file is `offset=18190 len=132 eof=true`. A
+            // zero-length EOF has offset == total, so offset+length covers
+            // both shapes.
+            //
+            // The first cut of this compared offset alone, which would have
+            // failed every base-station download — the tests missed it because
+            // every EOF frame they built had an empty payload.
+            if Int(offset) + Int(length) != received {
+                print("[DOWNLOAD] EOF says \(Int(offset) + Int(length)) bytes, have \(received) — failing")
+                failDownload()
+                return
+            }
             completeDownload(fromStallTimer: false)
         } else {
             resetDownloadStallTimer()
@@ -1511,7 +1612,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             downloadCompletionHandler?(nil)
             return
         }
-        if fromStallTimer && downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize {
+        // #832: this shortfall check used to be gated on `fromStallTimer`, so
+        // the EOF path — the common one — wrote whatever it had and reported
+        // success. The listing's size is just as authoritative on either path.
+        if downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize {
             let handler = downloadCompletionHandler
             downloadingFilename = nil
             downloadedData = Data()
@@ -1596,10 +1700,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func getDownloadState(for filename: String) -> DownloadState {
         if isBaseStation {
             if FileCache.shared.isDirectCSVCached(filename) { return .completed }
-        } else {
-            if let deviceFile = files.first(where: { $0.name == filename }),
-               FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
+        } else if let deviceFile = files.first(where: { $0.name == filename }) {
+            // #832: this comparison was a fast path only — on a size MISMATCH
+            // it fell through to downloadStates, which downloadAndCacheFlight
+            // had already written .completed into. The one place that knows
+            // the true size failed OPEN, showing a green check on a truncated
+            // file and disabling the download button (downloadButtonDisabled
+            // returns true for .completed), so the operator could not re-pull
+            // the log in that session.
+            if FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
                 return .completed
+            }
+            // Cached but the wrong size: treat as not downloaded so it can be
+            // retried, rather than trusting a stale .completed.
+            if FileCache.shared.isFlightCached(filename) {
+                return .notDownloaded
             }
         }
         return downloadStates[filename] ?? .notDownloaded

@@ -3,6 +3,7 @@
 #include <driver/uart.h>
 #include <cstring>
 #include <TR_NVS.h>  // Preferences — once-ever OTP write guard
+#include "gnss_framing.h"
 
 static const char* TAG = "GNSS";
 
@@ -137,6 +138,30 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         ESP_LOGI(TAG, "Pulsed RESET_N on pin %d", reset_n_pin);
     };
 
+    // Does the stream at this baud actually FRAME as GNSS traffic?
+    //
+    // This used to be a bare `uartAvailable() > 0`, which is true for ANY byte
+    // — and a real 9600 NMEA stream sampled at 38400 still delivers bytes.
+    // Every wrong baud therefore looked alive and ran the expensive recovery
+    // branch (1.5 s begin + 250 ms drain + 1.5 s assumeSuccess begin).  The
+    // bring-up-deadline comment above has described this since 2026-08-03;
+    // moving 38400 to the front of probe_bauds treated the symptom for modules
+    // that really are at 38400, and made it worse for the common 9600 module.
+    // Measured on the bench 2026-08-19: a healthy SAM-M10Q talking 9600 was
+    // false-positived at 38400 and burned 9.4 s before the sweep got back to
+    // 9600.
+    //
+    // Requiring real framing makes a wrong baud fail in ONE window instead:
+    // either UBX sync (0xB5 0x62) or a complete NMEA sentence whose XOR
+    // checksum validates.  A baud mismatch shreds byte boundaries, so a
+    // spurious valid checksum is vanishingly unlikely, while a genuine stream
+    // produces one inside a single output period.  A module that is alive but
+    // emitting neither (mid-reconfiguration, binary-only at an odd rate) now
+    // falls through to the full sweep, which is where it belongs — and the
+    // 60 s deadline plus GNSS-absent degraded mode still backstop it.
+    // The framing test itself lives in gnss_framing.h so the host tests can
+    // reach it; see that header for why byte-presence alone was not enough.
+
     auto hasSerialActivity = [&](uint8_t rx_pin, uint8_t tx_pin, uint32_t baud,
                                  uint32_t window_ms = 400U) -> bool
     {
@@ -151,24 +176,49 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
             delay(1);
         }
 
+        // One NMEA sentence is <= 82 bytes; 256 holds a couple plus slack, so a
+        // sentence that starts mid-window still completes inside the buffer.
+        uint8_t win[256];
+        size_t  n = 0;
         const uint32_t activity_window_start = millis();
         while ((millis() - activity_window_start) < window_ms)
         {
-            if (uartAvailable() > 0)
+            uint8_t b;
+            while (n < sizeof(win) && uart_read_bytes(_uartPort, &b, 1, 0) > 0)
             {
-                ESP_LOGI(TAG, "Serial activity detected on RX=%d TX=%d at %lu baud",
-                         rx_pin, tx_pin, (unsigned long)baud);
+                win[n++] = b;
+            }
+            if (tr::gnssFramingDetected(win, n))
+            {
+                ESP_LOGI(TAG, "GNSS framing detected on RX=%d TX=%d at %lu baud "
+                              "(%u bytes)",
+                         rx_pin, tx_pin, (unsigned long)baud, (unsigned)n);
                 return true;
             }
+            if (n >= sizeof(win)) break;   // buffer full of unframed noise
             delay(1);
+        }
+        if (n > 0)
+        {
+            ESP_LOGD(TAG, "%u bytes at %lu baud but no UBX/NMEA framing — "
+                          "wrong baud, moving on",
+                     (unsigned)n, (unsigned long)baud);
         }
         return false;
     };
 
-    auto scanAndConnectPins = [&](uint8_t rx_pin, uint8_t tx_pin, uint32_t &found_baud) -> bool
+    // `first_baud` (0 = none) is tried before the standard order.  Callers who
+    // already have evidence for a rate — the 9600 orientation probe, or the
+    // NVS last-good record — pass it here so the sweep does not throw that
+    // knowledge away.  Before this, the orientation probe would confirm 9600
+    // and then hand off to a sweep that starts at 38400 (bench 2026-08-19:
+    // "activity at 9600" at t=6463 ms, actually connected at 9600 at
+    // t=16055 ms — 9.4 s spent re-deriving what was already known).
+    auto scanAndConnectPins = [&](uint8_t rx_pin, uint8_t tx_pin, uint32_t &found_baud,
+                                  uint32_t first_baud = 0U) -> bool
     {
         const size_t n = sizeof(probe_bauds) / sizeof(probe_bauds[0]);
-        for (size_t i = 0; i < n; i++)
+        for (size_t i = 0; i < n + 1; i++)
         {
             // #557: bail mid-sweep on the bring-up deadline.  A removed module
             // whose UART floats reads noise, so hasSerialActivity() trips and
@@ -177,7 +227,19 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
             // dead/noisy module spin ~100 s (bench 2026-07-21); a per-baud check
             // bounds bring-up to roughly the deadline + one baud probe.
             if (beginExpired()) return false;
-            const uint32_t baud = probe_bauds[i];
+            // i == 0 is the hinted rate; the rest is the standard order with the
+            // hint skipped so it is never probed twice.
+            uint32_t baud;
+            if (i == 0)
+            {
+                if (first_baud == 0U) continue;
+                baud = first_baud;
+            }
+            else
+            {
+                baud = probe_bauds[i - 1];
+                if (baud == first_baud) continue;
+            }
             ESP_LOGI(TAG, "Trying %lu baud (RX=%d, TX=%d)",
                      (unsigned long)baud, rx_pin, tx_pin);
 
@@ -221,16 +283,91 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         return false;
     };
 
+    // Last-good link, remembered across boots.
+    //
+    // A given airframe wakes on the same rate and the same wiring every time —
+    // this bench SAM-M10Q lands on 9600 default-orientation on every boot — yet
+    // bring-up re-derived it from scratch each power-up.  Recording the rate
+    // and orientation that actually worked turns the common case into one
+    // ~1.6 s attempt instead of a bootstrap plus a sweep.
+    //
+    // Advisory ONLY.  A wrong or stale record (module swapped, board rewired,
+    // receiver factory-reset back to 9600) costs one failed attempt and then
+    // falls through to the untouched bootstrap + sweep, so it can slow a boot
+    // slightly but can never prevent one.  That is why it is not gated on the
+    // module id: a swap self-corrects on the first boot after it.
+    struct LastLink { uint32_t baud; uint8_t rx; uint8_t tx; bool valid; };
+    auto loadLastLink = [&]() -> LastLink
+    {
+        LastLink l{0U, 0U, 0U, false};
+        Preferences prefs;
+        if (!prefs.begin("gnsslink", true)) return l;   // read-only; absent on first boot
+        l.baud = prefs.getUInt("baud", 0U);
+        l.rx   = prefs.getUChar("rx", 0xFF);
+        l.tx   = prefs.getUChar("tx", 0xFF);
+        prefs.end();
+        // Only honour a record that matches how this build is wired; a board
+        // header change must not send us probing pins that are no longer GNSS.
+        const bool pins_known = (l.rx == GNSS_RX && l.tx == GNSS_TX) ||
+                                (l.rx == GNSS_TX && l.tx == GNSS_RX);
+        l.valid = (l.baud != 0U) && pins_known;
+        return l;
+    };
+    auto saveLastLink = [&](uint32_t baud, uint8_t rx, uint8_t tx)
+    {
+        Preferences prefs;
+        if (!prefs.begin("gnsslink", false)) return;
+        // Write only on change — NVS is flash, and this runs every boot.
+        if (prefs.getUInt("baud", 0U) != baud ||
+            prefs.getUChar("rx", 0xFF) != rx ||
+            prefs.getUChar("tx", 0xFF) != tx)
+        {
+            prefs.putUInt("baud", baud);
+            prefs.putUChar("rx", rx);
+            prefs.putUChar("tx", tx);
+            ESP_LOGI(TAG, "Remembered GNSS link: %lu baud RX=%d TX=%d",
+                     (unsigned long)baud, rx, tx);
+        }
+        prefs.end();
+    };
+
+    // Fast path: retry exactly what worked last time, before the bootstrap.
+    {
+        const LastLink last = loadLastLink();
+        if (last.valid)
+        {
+            ESP_LOGI(TAG, "Trying remembered GNSS link: %lu baud RX=%d TX=%d",
+                     (unsigned long)last.baud, last.rx, last.tx);
+            uartBegin(last.baud, last.rx, last.tx);
+            delay(80);
+            if (gnss.begin(_uartPort, 1500))
+            {
+                connected_baud = last.baud;
+                active_rx      = last.rx;
+                active_tx      = last.tx;
+                ESP_LOGI(TAG, "Remembered GNSS link came up on the first try");
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Remembered link did not answer — full bring-up");
+            }
+        }
+    }
+
     // Bootstrap from preferred UART rate first (warm-boot fast path: module
     // already configured at preferred_baud from a previous run).
-    ESP_LOGI(TAG, "Bootstrap try %lu baud", (unsigned long)bootstrap_baud);
-    uartBegin(bootstrap_baud, GNSS_RX, GNSS_TX);
-    delay(80);
-    if (gnss.begin(_uartPort, 800))
+    // Skipped when the remembered link above already answered.
+    if (connected_baud == 0U)
     {
-        connected_baud = preferred_baud;
-        active_rx = GNSS_RX;
-        active_tx = GNSS_TX;
+        ESP_LOGI(TAG, "Bootstrap try %lu baud", (unsigned long)bootstrap_baud);
+        uartBegin(bootstrap_baud, GNSS_RX, GNSS_TX);
+        delay(80);
+        if (gnss.begin(_uartPort, 800))
+        {
+            connected_baud = preferred_baud;
+            active_rx = GNSS_RX;
+            active_tx = GNSS_TX;
+        }
     }
 
     // Warm-boot fast path for swapped-wiring boards: the module persists its
@@ -291,7 +428,9 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
                               "(RX=%d TX=%d)", probe_rx, probe_tx);
             }
             uint32_t probe_found = 0U;
-            if (scanAndConnectPins(probe_rx, probe_tx, probe_found))
+            // The probe just proved framed traffic at 9600 on these pins, so
+            // start there instead of at the head of probe_bauds.
+            if (scanAndConnectPins(probe_rx, probe_tx, probe_found, 9600U))
             {
                 connected_baud = probe_found;
                 // active_rx/tx set inside scanAndConnectPins
@@ -328,6 +467,16 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 
     ESP_LOGI(TAG, "Connected at %lu baud", (unsigned long)connected_baud);
     ESP_LOGI(TAG, "Active UART pins RX=%d TX=%d", active_rx, active_tx);
+
+    // Remember the rate the module was FOUND at, not the preferred rate it is
+    // about to be standardized to below.  Those differ, and the found rate is
+    // the one that predicts the next boot: this receiver comes up at the 9600
+    // factory default every power cycle, because V_BCKP is unconnected on the
+    // gnss-sam10m8-18mm-hv carrier (U1 pin 3, confirmed in the netlist), so it
+    // keeps no backup domain and forgets its configured rate. Saving
+    // preferred_baud here would hand the next boot a hint that is wrong on
+    // exactly the hardware this is meant to speed up.
+    saveLastLink(connected_baud, active_rx, active_tx);
 
     // Standardize to preferred baud for runtime.
     // We require preferred_baud for runtime consistency and throughput.

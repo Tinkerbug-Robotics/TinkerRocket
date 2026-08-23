@@ -153,8 +153,20 @@ CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
 # PHY power down during sleep
 CONFIG_ESP_PHY_MAC_BB_PD=y
 
+# === PSRAM ===
+# Deliberately NOT here. V9/V10 (ESP32-S3RH2, 2 MB in-package quad PSRAM) turns
+# it on via sdkconfig.defaults.v9; V7/V8 carry no PSRAM part, and enabling it
+# for them would mean a failed init and a spurious warning on every boot of a
+# perfectly good board. The project CMakeLists picks the fragment from the
+# TR_BOARD_* flag — see there, and board/board_v9.h for the hardware.
+
 # Flash
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# Boot NOR is a 128 Mbit (16 MB) part on every placement in the fleet
+# (rocket-computer U13/U16): GD25Q128ESIG today, W25Q128JVSIQ on boards fabbed before
+# 2026-08-15 — both 16 MB. Declaring 8 MB left half the part
+# unreachable and made every boot log "Detected size(16384k) larger
+# than the size in the binary image header(8192k)".
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
 # FreeRTOS

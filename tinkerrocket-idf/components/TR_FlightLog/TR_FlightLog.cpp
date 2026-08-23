@@ -21,14 +21,17 @@ namespace tr_flightlog {
 
 namespace {
 
-// CRC32 of a page that starts with a PageHeader: covers bytes[4..end].
-uint32_t page_crc(const uint8_t* page) {
+// CRC32 of a page that starts with a PageHeader: covers bytes[4..page_size-1].
+// #671: the span is the RUNTIME page size — a page written at one size can
+// never validate at another, which is fine because geometry is a pure
+// function of the physical chip (see nand_geometry.h).
+uint32_t page_crc(const uint8_t* page, uint32_t page_size) {
     constexpr size_t skip = sizeof(uint32_t);  // skip the crc32 field itself
-    return calcCRC32(page + skip, NAND_PAGE_SIZE - skip);
+    return calcCRC32(page + skip, page_size - skip);
 }
 
-bool page_is_all_ones(const uint8_t* page) {
-    for (size_t i = 0; i < NAND_PAGE_SIZE; ++i) {
+bool page_is_all_ones(const uint8_t* page, uint32_t page_size) {
+    for (size_t i = 0; i < page_size; ++i) {
         if (page[i] != 0xFF) return false;
     }
     return true;
@@ -72,22 +75,66 @@ Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
     cfg_          = cfg;
     bitmap_store_ = bitmap_store;
 
-    if (cfg_.flight_region_start >= cfg_.flight_region_end ||
-        cfg_.flight_region_end > NAND_BLOCK_COUNT) {
+    // #671: capture the chip's runtime geometry — the single source of truth
+    // for every page/block computation below. sanity-cap at the static maxima
+    // so a lying backend can't overrun the MAX-sized buffers.
+    g_page_   = nand_->pageSize();
+    g_ppb_    = nand_->pagesPerBlock();
+    g_blocks_ = nand_->blockCount();
+    if (g_page_ == 0 || g_page_ > NAND_PAGE_SIZE_MAX ||
+        g_ppb_ == 0 || g_blocks_ == 0 || g_blocks_ > NAND_BLOCK_COUNT_MAX) {
         return Status::OutOfRange;
+    }
+    bitmap_.setBlockCount(g_blocks_);
+
+    // #671: derive the sentinel defaults from the chip — metadata is the top
+    // four blocks, flight region runs up to them. Explicit caller values pass
+    // through untouched (and get validated either way).
+    if (cfg_.flight_region_end == 0) {
+        cfg_.flight_region_end = static_cast<uint16_t>(g_blocks_ - 4);
+    }
+    if (cfg_.metadata_blocks[0] == 0 && cfg_.metadata_blocks[1] == 0 &&
+        cfg_.metadata_blocks[2] == 0 && cfg_.metadata_blocks[3] == 0) {
+        for (int i = 0; i < 4; ++i) {
+            cfg_.metadata_blocks[i] = static_cast<uint16_t>(g_blocks_ - 4 + i);
+        }
+    }
+
+    if (cfg_.flight_region_start >= cfg_.flight_region_end ||
+        cfg_.flight_region_end > g_blocks_) {
+        return Status::OutOfRange;
+    }
+    // #671: this is the gate that was blind on the mini — the legacy defaults
+    // (metadata 2044-2047) validated against a compile-time 2048 and then
+    // addressed blocks past the end of a 1024-block die.
+    for (int i = 0; i < 4; ++i) {
+        if (cfg_.metadata_blocks[i] >= g_blocks_) return Status::OutOfRange;
+        // Metadata must sit outside the flight region, or the allocator can
+        // hand a flight the block the index/bitmap lives in and erase it.
+        if (cfg_.metadata_blocks[i] >= cfg_.flight_region_start &&
+            cfg_.metadata_blocks[i] < cfg_.flight_region_end) {
+            return Status::OutOfRange;
+        }
     }
     if (cfg_.prealloc_blocks == 0 ||
         cfg_.prealloc_blocks > (cfg_.flight_region_end - cfg_.flight_region_start)) {
         return Status::OutOfRange;
     }
+    // The dual-copy index snapshot must fit one metadata BLOCK at this
+    // geometry (it strides in pages of g_page_).
+    if (FlightIndex::MAX_SERIALIZED_BYTES > g_page_ * g_ppb_) {
+        return Status::OutOfRange;
+    }
 
     // Try to restore bitmap from persistent store. If nothing saved (or wrong
-    // size) start fresh and seed from the NAND backend's bad-block oracle. When
-    // fresh, defer persisting until after the index reconciliation below.
-    uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE];
-    bool restored = bitmap_store_ && bitmap_store_->load(buf, sizeof(buf));
+    // size for THIS chip's serialized length) start fresh and seed from the
+    // NAND backend's bad-block oracle. When fresh, defer persisting until
+    // after the index reconciliation below.
+    uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE_MAX];
+    const size_t ser_len = bitmap_.serializedSize();
+    bool restored = bitmap_store_ && bitmap_store_->load(buf, ser_len);
     if (restored) {
-        bitmap_.deserializeFrom(buf, sizeof(buf));
+        bitmap_.deserializeFrom(buf, ser_len);
     } else {
         bitmap_.clear();
         seedBitmapFromBackend();
@@ -113,7 +160,7 @@ Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
     for (size_t i = 0; i < index_.size(); ++i) {
         const FlightIndexEntry& e = index_.at(i);
         const uint32_t end = static_cast<uint32_t>(e.start_block) + e.n_blocks;
-        for (uint32_t b = e.start_block; b < end && b < NAND_BLOCK_COUNT; ++b) {
+        for (uint32_t b = e.start_block; b < end && b < g_blocks_; ++b) {
             if (bitmap_.get(b) == BLOCK_FREE) {
                 bitmap_.set(b, BLOCK_ALLOCATED);
                 ++promoted;
@@ -228,31 +275,31 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
                     continue;
                 }
                 // First page looked valid; handle it below along with the rest.
-                if (hdr0.crc32 == page_crc(page))
+                if (hdr0.crc32 == page_crc(page, g_page_))
                 {
                     ++valid_pages;
                     if (!saw_any || hdr0.seq_number > last_seq) {
                         last_seq           = hdr0.seq_number;
                         last_flight_id     = hdr0.flight_id;
-                        last_good_page_rel = static_cast<int32_t>(i * NAND_PAGES_PER_BLK);
+                        last_good_page_rel = static_cast<int32_t>(i * g_ppb_);
                         saw_any            = true;
                     }
                 }
             }
-            for (uint32_t p = 1; p < NAND_PAGES_PER_BLK; ++p) {
+            for (uint32_t p = 1; p < g_ppb_; ++p) {
                 if (!nand_->readPage(blk, p, page)) continue;
-                if (page_is_all_ones(page)) continue;   // unwritten
+                if (page_is_all_ones(page, g_page_)) continue;   // unwritten
 
                 PageHeader hdr;
                 std::memcpy(&hdr, page, sizeof(hdr));
                 if (hdr.magic != FPAG_MAGIC) continue;
-                if (hdr.crc32 != page_crc(page)) continue;
+                if (hdr.crc32 != page_crc(page, g_page_)) continue;
                 ++valid_pages;
 
                 if (!saw_any || hdr.seq_number > last_seq) {
                     last_seq           = hdr.seq_number;
                     last_flight_id     = hdr.flight_id;
-                    last_good_page_rel = static_cast<int32_t>(i * NAND_PAGES_PER_BLK + p);
+                    last_good_page_rel = static_cast<int32_t>(i * g_ppb_ + p);
                     saw_any            = true;
                 }
             }
@@ -270,9 +317,9 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
 
         // Synthesize a partial flight entry. final_bytes is the logical PAYLOAD
         // byte count actually flushed to NAND — #273: PAYLOAD_PER_PAGE (4080),
-        // NOT NAND_PAGE_SIZE (2048), or the downloader walks past the last real
+        // NOT the raw page size, or the downloader walks past the last real
         // page into PageHeader/0xFF bytes (corrupt tail, size ~0.8% too large).
-        constexpr uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - sizeof(PageHeader);
+        const uint32_t PAYLOAD_PER_PAGE = payloadPerPage();
         // #276: length is the count of *valid* pages actually present, NOT the
         // physical span of the highest-seq page. If the flight hit a bad block
         // mid-write, writePage marked it BAD and skipped to the next block, so
@@ -281,7 +328,7 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         // (used_pages) still sizes the block range to keep allocated; the gap is
         // walked on read (readFlightPage).
         const uint32_t used_pages  = static_cast<uint32_t>(last_good_page_rel + 1);
-        uint32_t used_blocks = (used_pages + NAND_PAGES_PER_BLK - 1) / NAND_PAGES_PER_BLK;
+        uint32_t used_blocks = (used_pages + g_ppb_ - 1) / g_ppb_;
         if (used_blocks > run_len) used_blocks = run_len;
 
         FlightIndexEntry entry{};
@@ -320,7 +367,7 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
 Status TR_FlightLog::markBlockBad(uint32_t block) {
     FlightLogLockGuard guard(mutex_);
     if (!initialized_) return Status::NotInitialized;
-    if (block >= NAND_BLOCK_COUNT) return Status::OutOfRange;
+    if (block >= g_blocks_) return Status::OutOfRange;
     bitmap_.set(block, BLOCK_BAD);
     if (nand_) nand_->markBlockBad(block);
     persistBitmap();
@@ -329,16 +376,22 @@ Status TR_FlightLog::markBlockBad(uint32_t block) {
 
 void TR_FlightLog::seedBitmapFromBackend() {
     if (!nand_) return;
-    for (uint32_t b = 0; b < NAND_BLOCK_COUNT; ++b) {
+    for (uint32_t b = 0; b < g_blocks_; ++b) {
         if (nand_->isBlockBad(b)) bitmap_.set(b, BLOCK_BAD);
     }
 }
 
 void TR_FlightLog::persistBitmap() {
     if (!bitmap_store_) return;
-    uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE];
-    bitmap_.serializeTo(buf, sizeof(buf));
-    bitmap_store_->save(buf, sizeof(buf));
+    // #671: save exactly the runtime serialized length — the load side (and
+    // the NVS store's exact-length match) expects (block_count+3)/4 bytes,
+    // 256 on the mini's 1024-block chip. Saving sizeof(buf) = the 512-byte
+    // MAX made every reboot restore fail there (blob length mismatch ->
+    // fresh reseed -> brownout recovery finds no allocated ranges).
+    uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE_MAX];
+    const size_t len = bitmap_.serializedSize();
+    bitmap_.serializeTo(buf, len);
+    bitmap_store_->save(buf, len);
 }
 
 void TR_FlightLog::requestPrepareFlight() {
@@ -522,10 +575,10 @@ Status TR_FlightLog::writeFrame(const uint8_t* payload, size_t payload_len) {
     if (!initialized_)   return Status::NotInitialized;
     if (!flight_active_) return Status::Error;
     if (payload == nullptr && payload_len != 0) return Status::OutOfRange;
-    if (payload_len > NAND_PAGE_SIZE - sizeof(PageHeader)) return Status::OutOfRange;
+    if (payload_len > payloadPerPage()) return Status::OutOfRange;
 
     uint8_t* const page = page_buf_;  // off-stack (member); guarded by mutex_ above
-    std::memset(page, 0xFF, NAND_PAGE_SIZE);
+    std::memset(page, 0xFF, g_page_);
 
     PageHeader hdr;
     hdr.crc32      = 0;  // placeholder
@@ -535,7 +588,7 @@ Status TR_FlightLog::writeFrame(const uint8_t* payload, size_t payload_len) {
     std::memcpy(page, &hdr, sizeof(hdr));
     if (payload_len > 0) std::memcpy(page + sizeof(hdr), payload, payload_len);
 
-    const uint32_t crc = page_crc(page);
+    const uint32_t crc = page_crc(page, g_page_);
     std::memcpy(page, &crc, sizeof(crc));
 
     // Lock already held; go straight to the locked impl (writePage would
@@ -557,13 +610,13 @@ Status TR_FlightLog::writePageLocked(const uint8_t* page) {
     // blocks can't cause an infinite loop.
     const uint32_t max_block_attempts = active_n_blocks_ + cfg_.extend_blocks;
     for (uint32_t attempt = 0; attempt <= max_block_attempts; ++attempt) {
-        const uint32_t rel_block = active_next_page_ / NAND_PAGES_PER_BLK;
+        const uint32_t rel_block = active_next_page_ / g_ppb_;
         if (rel_block >= active_n_blocks_) {
             if (!extendActiveRange()) return Status::NoSpace;
             continue;  // re-check bounds with the extended range
         }
         const uint32_t abs_block  = active_start_block_ + rel_block;
-        const uint32_t page_in_blk = active_next_page_ % NAND_PAGES_PER_BLK;
+        const uint32_t page_in_blk = active_next_page_ % g_ppb_;
 
         if (nand_->programPage(abs_block, page_in_blk, page)) {
             ++active_next_page_;
@@ -587,7 +640,7 @@ bool TR_FlightLog::retireBlockAndSalvage(uint32_t bad_block, uint32_t rel_block,
     bitmap_.set(bad_block, BLOCK_BAD);
     nand_->markBlockBad(bad_block);
     persistBitmap();
-    active_next_page_ = (rel_block + 1) * NAND_PAGES_PER_BLK;
+    active_next_page_ = (rel_block + 1) * g_ppb_;
 
     // page-0 failure: nothing was written in the block, so it's a clean
     // skip-ahead with nothing to relocate (the pre-#371 behavior).
@@ -608,20 +661,20 @@ bool TR_FlightLog::retireBlockAndSalvage(uint32_t bad_block, uint32_t rel_block,
     uint32_t restarts = 0;
     uint32_t i = 0;
     while (i < valid_pages) {
-        const uint32_t rel = active_next_page_ / NAND_PAGES_PER_BLK;
+        const uint32_t rel = active_next_page_ / g_ppb_;
         if (rel >= active_n_blocks_) {
             if (!extendActiveRange()) return false;
             continue;
         }
         const uint32_t dst_block = active_start_block_ + rel;
-        const uint32_t dst_page  = active_next_page_ % NAND_PAGES_PER_BLK;
+        const uint32_t dst_page  = active_next_page_ % g_ppb_;
 
         if (!nand_->readPage(bad_block, i, buf)) {
             // A committed page that will not read back — genuinely
             // unrecoverable. Write a zeroed placeholder so the stream stays
             // aligned (one lost page beats orphaning + shifting everything
             // after it) and flag it.
-            std::memset(buf, 0x00, NAND_PAGE_SIZE);
+            std::memset(buf, 0x00, g_page_);
             ++unrecoverable_page_count_;
             FL_LOGW("salvage: page %lu of retired block %lu unreadable — wrote "
                     "zeroed placeholder to keep the stream aligned (#371)",
@@ -640,7 +693,7 @@ bool TR_FlightLog::retireBlockAndSalvage(uint32_t bad_block, uint32_t rel_block,
         bitmap_.set(dst_block, BLOCK_BAD);
         nand_->markBlockBad(dst_block);
         persistBitmap();
-        active_next_page_ = (rel + 1) * NAND_PAGES_PER_BLK;
+        active_next_page_ = (rel + 1) * g_ppb_;
         i = 0;
         if (++restarts > max_restarts) return false;
     }
@@ -665,12 +718,12 @@ Status TR_FlightLog::finalizeFlight(const char* filename, uint32_t final_bytes) 
     // count alone would free post-gap blocks that still hold data (silent loss +
     // reuse) and shrink n_blocks below the span readFlightPage walks (#276).
     // final_bytes stays the logical byte length.
-    constexpr uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - sizeof(PageHeader);
+    const uint32_t PAYLOAD_PER_PAGE = payloadPerPage();
     const uint32_t logical_pages = (final_bytes == 0) ? 0
         : (final_bytes + PAYLOAD_PER_PAGE - 1) / PAYLOAD_PER_PAGE;
     const uint32_t span_pages = (active_next_page_ > logical_pages)
                                     ? active_next_page_ : logical_pages;
-    uint32_t used_blocks = (span_pages + NAND_PAGES_PER_BLK - 1) / NAND_PAGES_PER_BLK;
+    uint32_t used_blocks = (span_pages + g_ppb_ - 1) / g_ppb_;
     if (used_blocks > active_n_blocks_) used_blocks = active_n_blocks_;
 
     FlightIndexEntry entry{};
@@ -745,7 +798,7 @@ Status TR_FlightLog::readFlightPage(const char* filename, uint32_t offset,
     // `offset` is a byte index into the concatenated payload stream (what the
     // caller originally enqueued via writeFrame / what iOS expects to
     // download). The mapping hops the 16 B header on each physical page.
-    constexpr uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - sizeof(PageHeader);
+    const uint32_t PAYLOAD_PER_PAGE = payloadPerPage();
 
     const uint32_t logical_page = offset / PAYLOAD_PER_PAGE;
     const uint32_t byte_in_pl   = offset % PAYLOAD_PER_PAGE;
@@ -761,8 +814,8 @@ Status TR_FlightLog::readFlightPage(const char* filename, uint32_t offset,
     uint32_t abs_block  = entry->start_block;
     uint32_t pages_left = logical_page;
     while (abs_block < end_block && bitmap_.get(abs_block) == BLOCK_BAD) ++abs_block;
-    while (pages_left >= NAND_PAGES_PER_BLK) {
-        pages_left -= NAND_PAGES_PER_BLK;
+    while (pages_left >= g_ppb_) {
+        pages_left -= g_ppb_;
         ++abs_block;
         while (abs_block < end_block && bitmap_.get(abs_block) == BLOCK_BAD) ++abs_block;
     }

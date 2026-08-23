@@ -9,6 +9,8 @@
 #include "fakes/memory_bitmap_store.h"
 
 #include <atomic>
+#include <cstdlib>
+#include <string>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -25,15 +27,40 @@ using tr_flightlog::FlightIndexEntry;
 using tr_flightlog::FLGT_MAGIC;
 using tr_flightlog::FPAG_MAGIC;
 using tr_flightlog::PageHeader;
-using tr_flightlog::NAND_BLOCK_COUNT;
-using tr_flightlog::NAND_PAGES_PER_BLK;
-using tr_flightlog::NAND_PAGE_SIZE;
+using tr_flightlog::NAND_BLOCK_COUNT_MAX;
+using tr_flightlog::NAND_PAGE_SIZE_MAX;
 using tr_flightlog::Status;
 using tr_flightlog::TR_FlightLog;
-using tr_flightlog_test::FakeNandBackend;
 using tr_flightlog_test::MemoryBitmapStore;
 
 namespace {
+
+// ---------------------------------------------------------------------------
+// #671: geometry is runtime. The WHOLE suite runs at one of three chip
+// geometries selected by the TR_TEST_NAND_GEOMETRY env var; CMake registers
+// the same binary three times (legacy / gd2g / gd1g) so every behaviour is
+// exercised at 4096/64/2048 (F35SQB004G, the pre-#671 byte-identical case),
+// 2048/64/2048 (GD5F2GQ5UE, V9) and 2048/64/1024 (GD5F1GQ5UE, mini).
+// The old compile-time component constants are shadowed with runtime values
+// of the SAME NAMES so the file's arithmetic follows the selected geometry;
+// compile-time contexts (array sizes) use the *_MAX constants instead.
+// ---------------------------------------------------------------------------
+struct TestGeo { uint32_t page, ppb, blocks; const char* name; };
+inline TestGeo testGeoFromEnv() {
+    const char* g = std::getenv("TR_TEST_NAND_GEOMETRY");
+    if (g && std::string(g) == "gd2g") return {2048, 64, 2048, "GD5F2GQ5UE"};
+    if (g && std::string(g) == "gd1g") return {2048, 64, 1024, "GD5F1GQ5UE"};
+    return {4096, 64, 2048, "legacy/F35SQB004G"};
+}
+const TestGeo G = testGeoFromEnv();
+const uint32_t NAND_PAGE_SIZE     = G.page;
+const uint32_t NAND_PAGES_PER_BLK = G.ppb;
+const uint32_t NAND_BLOCK_COUNT   = G.blocks;
+
+// Every `FakeNandBackend nand;` below gets the selected geometry.
+struct FakeNandBackend : tr_flightlog_test::FakeNandBackend {
+    FakeNandBackend() : tr_flightlog_test::FakeNandBackend(G.page, G.ppb, G.blocks) {}
+};
 
 // Helper: build a filled-in FlightIndexEntry for tests.
 FlightIndexEntry makeEntry(uint32_t id, const char* filename,
@@ -50,10 +77,10 @@ FlightIndexEntry makeEntry(uint32_t id, const char* filename,
     return e;
 }
 
-// Match the default Config metadata blocks (top of the 2048-block F35SQB004G),
-// so tests that seed the index here line up with a default-config begin().
-constexpr uint32_t META_A = 2044;
-constexpr uint32_t META_B = 2045;
+// Match the derived Config metadata blocks (the chip's top four), so tests
+// that seed the index here line up with a sentinel-config begin() (#671).
+const uint32_t META_A = G.blocks - 4;
+const uint32_t META_B = G.blocks - 3;
 
 }  // namespace
 
@@ -195,6 +222,56 @@ TEST(TRFlightLogScaffold, BeginRejectsInvertedRegion) {
     EXPECT_FALSE(fl.isInitialized());
 }
 
+// #671: the gates that were blind on the mini — explicit legacy-part numbers
+// on a smaller chip must be rejected, and the sentinel Config must derive
+// on-die values. (At the legacy/gd2g geometries the legacy numbers ARE
+// on-die, so the reject case only bites at gd1g — which is the point of
+// running the suite there.)
+TEST(TRFlightLogScaffold, ExplicitLegacyConfigRejectedWhenOffDie) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    TR_FlightLog::Config cfg{};
+    cfg.flight_region_end  = 2044;                    // legacy 2048-block layout
+    const uint16_t md[4] = {2044, 2045, 2046, 2047};
+    for (int i = 0; i < 4; ++i) cfg.metadata_blocks[i] = md[i];
+    const auto st = fl.begin(nand, cfg, &store);
+    if (G.blocks < 2048) {
+        EXPECT_EQ(st, Status::OutOfRange);            // off-die on the mini part
+    } else {
+        EXPECT_EQ(st, Status::Ok);                    // on-die on 2048-block parts
+    }
+}
+
+TEST(TRFlightLogScaffold, SentinelConfigDerivesTopOfChip) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    EXPECT_EQ(fl.config().flight_region_end, G.blocks - 4);
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(fl.config().metadata_blocks[i], G.blocks - 4 + i);
+    }
+    EXPECT_EQ(fl.blockCount(), G.blocks);
+    EXPECT_EQ(fl.pageSize(), G.page);
+    EXPECT_EQ(fl.payloadPerPage(), G.page - 16);
+}
+
+TEST(TRFlightLogScaffold, MetadataInsideFlightRegionRejected) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    TR_FlightLog::Config cfg{};
+    cfg.flight_region_end = static_cast<uint16_t>(G.blocks - 4);
+    // Deliberately point one metadata block INSIDE the flight region: the
+    // allocator could hand it to a flight and erase the index.
+    cfg.metadata_blocks[0] = 40;
+    cfg.metadata_blocks[1] = static_cast<uint16_t>(G.blocks - 3);
+    cfg.metadata_blocks[2] = static_cast<uint16_t>(G.blocks - 2);
+    cfg.metadata_blocks[3] = static_cast<uint16_t>(G.blocks - 1);
+    EXPECT_EQ(fl.begin(nand, cfg, &store), Status::OutOfRange);
+}
+
 TEST(TRFlightLogScaffold, BeginRejectsRegionBeyondChip) {
     FakeNandBackend nand;
     TR_FlightLog fl;
@@ -216,7 +293,7 @@ TEST(TRFlightLogScaffold, BeginRejectsPreallocLargerThanRegion) {
 TEST(TRFlightLogScaffold, HotPathMethodsReturnNotInitializedBeforeBegin) {
     TR_FlightLog fl;
     uint32_t flight_id = 0;
-    uint8_t buf[NAND_PAGE_SIZE] = {};
+    uint8_t buf[NAND_PAGE_SIZE_MAX] = {};
     size_t out_len = 0;
 
     EXPECT_EQ(fl.prepareFlight(flight_id), Status::NotInitialized);
@@ -242,6 +319,7 @@ TEST(TRFlightLogTypes, FlightIndexEntryLayoutIsStable) {
 
 TEST(BlockStateBitmap, DefaultIsAllFree) {
     BlockStateBitmap bm;
+    bm.setBlockCount(G.blocks);
     EXPECT_EQ(bm.countInState(BLOCK_FREE), NAND_BLOCK_COUNT);
     EXPECT_EQ(bm.countInState(BLOCK_BAD), 0u);
     EXPECT_EQ(bm.countInState(BLOCK_ALLOCATED), 0u);
@@ -249,6 +327,7 @@ TEST(BlockStateBitmap, DefaultIsAllFree) {
 
 TEST(BlockStateBitmap, GetSetSingleBlocks) {
     BlockStateBitmap bm;
+    bm.setBlockCount(G.blocks);
     bm.set(0, BLOCK_BAD);
     bm.set(1, BLOCK_ALLOCATED);
     bm.set(2, BLOCK_FREE);
@@ -263,6 +342,7 @@ TEST(BlockStateBitmap, GetSetSingleBlocks) {
 
 TEST(BlockStateBitmap, SetAcrossByteBoundaryDoesNotClobberNeighbors) {
     BlockStateBitmap bm;
+    bm.setBlockCount(G.blocks);
     // Blocks 0..3 share byte[0]; block 4 is first in byte[1]. Make sure
     // setting each state independently doesn't leak into neighbors.
     bm.set(3, BLOCK_ALLOCATED);
@@ -275,12 +355,14 @@ TEST(BlockStateBitmap, SetAcrossByteBoundaryDoesNotClobberNeighbors) {
 
 TEST(BlockStateBitmap, OutOfRangeGetReturnsBad) {
     BlockStateBitmap bm;
+    bm.setBlockCount(G.blocks);
     EXPECT_EQ(bm.get(NAND_BLOCK_COUNT), BLOCK_BAD);
     EXPECT_EQ(bm.get(9999), BLOCK_BAD);
 }
 
 TEST(BlockStateBitmap, MarkAllocatedRangeSkipsBadBlocks) {
     BlockStateBitmap bm;
+    bm.setBlockCount(G.blocks);
     bm.set(105, BLOCK_BAD);
     size_t touched = bm.markAllocatedRange(100, 10);
     EXPECT_EQ(touched, 9u);  // 10 blocks, 1 bad skipped
@@ -291,6 +373,7 @@ TEST(BlockStateBitmap, MarkAllocatedRangeSkipsBadBlocks) {
 
 TEST(BlockStateBitmap, MarkFreeRangePreservesBad) {
     BlockStateBitmap bm;
+    bm.setBlockCount(G.blocks);
     bm.markAllocatedRange(200, 20);
     bm.set(210, BLOCK_BAD);
     size_t touched = bm.markFreeRange(200, 20);
@@ -301,6 +384,7 @@ TEST(BlockStateBitmap, MarkFreeRangePreservesBad) {
 
 TEST(BlockStateBitmap, FindContiguousFreeHappyPath) {
     BlockStateBitmap bm;
+    bm.setBlockCount(G.blocks);
     uint32_t start = 0;
     ASSERT_TRUE(bm.findContiguousFree(256, 32, 1020, start));
     EXPECT_EQ(start, 32u);
@@ -308,6 +392,7 @@ TEST(BlockStateBitmap, FindContiguousFreeHappyPath) {
 
 TEST(BlockStateBitmap, FindContiguousFreeSkipsAllocatedAndBad) {
     BlockStateBitmap bm;
+    bm.setBlockCount(G.blocks);
     bm.markAllocatedRange(32, 100);          // blocks 32..131 occupied
     bm.set(200, BLOCK_BAD);                  // splits later run
     uint32_t start = 0;
@@ -320,6 +405,7 @@ TEST(BlockStateBitmap, FindContiguousFreeSkipsAllocatedAndBad) {
 
 TEST(BlockStateBitmap, FindContiguousFreeReturnsFalseWhenNoFit) {
     BlockStateBitmap bm;
+    bm.setBlockCount(G.blocks);
     // Occupy every even block — longest free run is 1 block.
     for (uint32_t b = 0; b < NAND_BLOCK_COUNT; b += 2) {
         bm.set(b, BLOCK_ALLOCATED);
@@ -331,14 +417,17 @@ TEST(BlockStateBitmap, FindContiguousFreeReturnsFalseWhenNoFit) {
 
 TEST(BlockStateBitmap, SerializeRoundTrip) {
     BlockStateBitmap a;
+    a.setBlockCount(G.blocks);
     a.markAllocatedRange(32, 256);
     a.set(100, BLOCK_BAD);
     a.set(1023, BLOCK_BAD);
 
-    uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE] = {};
+    uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE_MAX] = {};
     a.serializeTo(buf, sizeof(buf));
 
     BlockStateBitmap b;
+
+    b.setBlockCount(G.blocks);
     ASSERT_TRUE(b.deserializeFrom(buf, sizeof(buf)));
 
     for (uint32_t blk = 0; blk < NAND_BLOCK_COUNT; ++blk) {
@@ -348,13 +437,20 @@ TEST(BlockStateBitmap, SerializeRoundTrip) {
 
 TEST(BlockStateBitmap, DeserializeRejectsShortBuffer) {
     BlockStateBitmap bm;
-    uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE - 1] = {};
-    EXPECT_FALSE(bm.deserializeFrom(buf, sizeof(buf)));
+    bm.setBlockCount(G.blocks);
+    bm.setBlockCount(G.blocks);
+    uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE_MAX] = {};
+    EXPECT_FALSE(bm.deserializeFrom(buf, bm.serializedSize() - 1));
 }
 
-TEST(BlockStateBitmap, SerializedSizeIs512Bytes) {
-    // Storage layout guard: 2048 blocks * 2 bits = 512 bytes.
-    EXPECT_EQ(BlockStateBitmap::SERIALIZED_SIZE, 512u);
+TEST(BlockStateBitmap, SerializedSizeMatchesGeometry) {
+    // Storage layout guard: 2 bits per block, runtime count (#671):
+    // 512 B at 2048 blocks, 256 B at the mini's 1024.
+    BlockStateBitmap bm;
+    bm.setBlockCount(G.blocks);
+    bm.setBlockCount(G.blocks);
+    EXPECT_EQ(bm.serializedSize(), (G.blocks + 3) / 4);
+    EXPECT_EQ(BlockStateBitmap::SERIALIZED_SIZE_MAX, 512u);
 }
 
 // ================================================================
@@ -384,7 +480,7 @@ TEST(TRFlightLogBitmap, FreshBeginPersistsSeededBitmap) {
     ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
 
     EXPECT_GE(store.saveCount(), 1u);
-    EXPECT_EQ(store.raw().size(), BlockStateBitmap::SERIALIZED_SIZE);
+    EXPECT_EQ(store.raw().size(), (G.blocks + 3) / 4);
 }
 
 TEST(TRFlightLogBitmap, RebootRestoresBitmapFromStore) {
@@ -961,7 +1057,7 @@ TEST(TRFlightLogWrite, RefusesWhenNoFlightActive) {
     TR_FlightLog fl;
     ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
 
-    uint8_t page[NAND_PAGE_SIZE] = {};
+    uint8_t page[NAND_PAGE_SIZE_MAX] = {};
     EXPECT_EQ(fl.writePage(page), Status::Error);
 }
 
@@ -1242,9 +1338,13 @@ TEST(TRFlightLogMigration, RestoredBitmapMissingAllocationIsSelfHealed) {
     // NAND — exactly the state left by a pre-reconciliation build's migration.
     {
         BlockStateBitmap blank;  // all FREE
-        uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE];
-        blank.serializeTo(buf, sizeof(buf));
-        store.save(buf, sizeof(buf));
+        blank.setBlockCount(G.blocks);
+        uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE_MAX];
+        // Runtime length, not sizeof: a MAX-length blob would fail the
+        // exact-length load at gd1g and silently flip this test onto the
+        // fresh-seed path instead of the restore path it exists to cover.
+        blank.serializeTo(buf, blank.serializedSize());
+        store.save(buf, blank.serializedSize());
     }
     const size_t saves_before = store.saveCount();
 
@@ -1320,7 +1420,7 @@ TEST(TRFlightLogRead, UnknownFilenameReturnsNotFound) {
 // readFlightPage is now PageHeader-aware: logical offsets index into the
 // concatenated payload stream produced by writeFrame, with 2032 payload
 // bytes per physical NAND page.
-constexpr uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - 16;  // sizeof(PageHeader)
+const uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - 16;  // 4080 legacy / 2032 GD5F  // sizeof(PageHeader)
 
 TEST(TRFlightLogRead, OffsetPastEndReturnsEOF) {
     FakeNandBackend nand;
@@ -1946,9 +2046,9 @@ TEST(TRFlightLogBrownout, BadBlockMidFlightRecoversOneCleanFlight) {
     MemoryBitmapStore store;
     uint32_t start_block = 0;
 
-    constexpr uint32_t BLOCK0_PAGES    = NAND_PAGES_PER_BLK;  // fills block 0
+    const uint32_t BLOCK0_PAGES    = NAND_PAGES_PER_BLK;  // fills block 0
     constexpr uint32_t AFTER_GAP_PAGES = 30;                  // lands in block 2
-    constexpr uint32_t VALID_PAGES = BLOCK0_PAGES + AFTER_GAP_PAGES;  // 94
+    const uint32_t VALID_PAGES = BLOCK0_PAGES + AFTER_GAP_PAGES;  // 94
 
     {
         TR_FlightLog fl;
@@ -2065,9 +2165,9 @@ TEST(TRFlightLogFinalize, BadBlockMidFlightKeepsAllDataAndBlocks) {
     ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
     const uint32_t start_block = fl.activeStartBlock();
 
-    constexpr uint32_t BLOCK0_PAGES    = NAND_PAGES_PER_BLK;
+    const uint32_t BLOCK0_PAGES    = NAND_PAGES_PER_BLK;
     constexpr uint32_t AFTER_GAP_PAGES = 30;
-    constexpr uint32_t VALID_PAGES = BLOCK0_PAGES + AFTER_GAP_PAGES;  // 94
+    const uint32_t VALID_PAGES = BLOCK0_PAGES + AFTER_GAP_PAGES;  // 94
 
     std::vector<uint8_t> payload(PAYLOAD_PER_PAGE, 0x5A);
     for (uint32_t i = 0; i < BLOCK0_PAGES; ++i)
@@ -2135,10 +2235,10 @@ TEST(TRFlightLogFinalize, MidBlockFailureRelocatesSalvagedPagesInOrder) {
     ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
     const uint32_t start_block = fl.activeStartBlock();
 
-    constexpr uint32_t BLOCK0 = NAND_PAGES_PER_BLK;  // 64 -> fills block 0
+    const uint32_t BLOCK0 = NAND_PAGES_PER_BLK;  // 64 -> fills block 0
     constexpr uint32_t P      = 10;                  // fail at page 10 of block 1
     constexpr uint32_t TAIL   = 40;
-    constexpr uint32_t TOTAL  = BLOCK0 + P + TAIL;   // 114 frames (< 256)
+    const uint32_t TOTAL  = BLOCK0 + P + TAIL;   // 114 frames (< 256)
 
     // Frame (BLOCK0+P) is the write that hits the injected failure; the P
     // frames before it (block 1 pages 0..P-1) are the salvaged ones.
@@ -2174,10 +2274,10 @@ TEST(TRFlightLogFinalize, MidBlockFailureCascadesToSecondBadBlock) {
     ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
     const uint32_t start_block = fl.activeStartBlock();
 
-    constexpr uint32_t BLOCK0 = NAND_PAGES_PER_BLK;
+    const uint32_t BLOCK0 = NAND_PAGES_PER_BLK;
     constexpr uint32_t P      = 10;
     constexpr uint32_t TAIL   = 40;
-    constexpr uint32_t TOTAL  = BLOCK0 + P + TAIL;
+    const uint32_t TOTAL  = BLOCK0 + P + TAIL;
 
     nand.injectProgramFailOnce(start_block + 1, P);       // block 1 page 10
     nand.injectProgramFailOnce(start_block + 2, 5);       // block 2 page 5 (salvage dst)
@@ -2204,11 +2304,11 @@ TEST(TRFlightLogFinalize, MidBlockFailureUnreadableSalvagePageKeepsAlignment) {
     ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
     const uint32_t start_block = fl.activeStartBlock();
 
-    constexpr uint32_t BLOCK0 = NAND_PAGES_PER_BLK;
+    const uint32_t BLOCK0 = NAND_PAGES_PER_BLK;
     constexpr uint32_t P      = 10;
     constexpr uint32_t TAIL   = 20;
-    constexpr uint32_t TOTAL  = BLOCK0 + P + TAIL;
-    constexpr uint32_t LOST   = BLOCK0 + 3;  // salvage page 3 of block 1 won't read
+    const uint32_t TOTAL  = BLOCK0 + P + TAIL;
+    const uint32_t LOST   = BLOCK0 + 3;  // salvage page 3 of block 1 won't read
 
     nand.injectProgramFailOnce(start_block + 1, P);
     nand.injectReadErrorPersistent(start_block + 1, 3);  // salvage re-read fails
@@ -2240,7 +2340,7 @@ TEST(TRFlightLogFinalize, MidBlockFailureUnreadableSalvagePageKeepsAlignment) {
 
 TEST(TRNandBackendEsp, StubInstantiatesAndReturnsFailures) {
     tr_flightlog::TR_NandBackend_esp backend;
-    uint8_t buf[tr_flightlog::NAND_PAGE_SIZE] = {};
+    uint8_t buf[NAND_PAGE_SIZE_MAX] = {};
     EXPECT_FALSE(backend.readPage(0, 0, buf));
     EXPECT_FALSE(backend.programPage(0, 0, buf));
     EXPECT_FALSE(backend.eraseBlock(0));
@@ -2257,7 +2357,7 @@ TEST(TRNandBackendEsp, StubInstantiatesAndReturnsFailures) {
 
 TEST(NvsBitmapStore, HostStubReturnsFalseForBothOps) {
     tr_flightlog::NvsBitmapStore store;
-    uint8_t buf[tr_flightlog::BlockStateBitmap::SERIALIZED_SIZE] = {};
+    uint8_t buf[tr_flightlog::BlockStateBitmap::SERIALIZED_SIZE_MAX] = {};
     EXPECT_FALSE(store.load(buf, sizeof(buf)));
     EXPECT_FALSE(store.save(buf, sizeof(buf)));
 }
@@ -2328,7 +2428,7 @@ TEST(TRFlightLogRead, CapsReadAtFileEnd) {
     ASSERT_EQ(fl.writeFrame(payload.data(), payload.size()), Status::Ok);
     ASSERT_EQ(fl.finalizeFlight("f.bin", 100), Status::Ok);
 
-    uint8_t out[NAND_PAGE_SIZE] = {};
+    uint8_t out[NAND_PAGE_SIZE_MAX] = {};
     size_t out_len = 0;
     ASSERT_EQ(fl.readFlightPage("f.bin", 0, out, sizeof(out), out_len), Status::Ok);
     EXPECT_EQ(out_len, 100u);  // capped at final_bytes
@@ -2370,6 +2470,11 @@ public:
         std::lock_guard<std::mutex> lk(io_mutex_);
         return inner_.readPage(b, p, out);
     }
+    // #671: geometry pass-throughs (no probing — pure metadata).
+    uint32_t pageSize() const override { return inner_.pageSize(); }
+    uint32_t pagesPerBlock() const override { return inner_.pagesPerBlock(); }
+    uint32_t blockCount() const override { return inner_.blockCount(); }
+
     bool programPage(uint32_t b, uint32_t p, const uint8_t* d) override {
         ScopedProbe probe(*this);
         std::lock_guard<std::mutex> lk(io_mutex_);

@@ -22,10 +22,18 @@ Verified from the exported netlist at the time of writing:
                                         ┌────────────────────┤
                                         │                    │
                                   load switch U30       direct loads
-                                        │              (MCU, flash, monitor)
+                                        │              (out computer U15, its boot
+                                        │               flash, the pack monitor U23
+                                        │               and the magnetometer U3)
                                         v
-                                  V_MCU_SWTCH ──> the three sensors
+                                  V_MCU_SWTCH ──> flight computer U32 + its flash,
+                                                  IMU, baro, GNSS,
+                                                  LoRa radio, NAND
 ```
+
+**Both processors are on this rail.** `U30` gates the flight computer as well as
+the peripherals, so the switched branch is now the larger of the two — but it is
+still the same buck, and the budget below is a budget for `U18`.
 
 `U18` is a fixed-output synchronous **buck**, 1 A class, feedback tied to ground
 for the internal divider. Its input is the muxed 2S pack rail through `L5`, so
@@ -37,16 +45,29 @@ of load switch `U30`, and so still land on this budget.
 
 ## What the rail carries
 
-Direct `+3V3` loads today are the MCU (`U15`), NAND and NOR flash (`U11`, `U13`),
-the current monitor (`U23`), and the load switch `U30` feeding the sensors.
+Direct `+3V3` loads today are the out computer (`U15`), its boot flash (`U13`),
+the current monitor (`U23`), the magnetometer (`U3`) and the load switch `U30`.
+Behind `U30` sit the flight computer (`U32`) and its boot flash (`U33`), the IMU
+and barometer, the GNSS receiver, the LoRa radio and the NAND (`U11`).
+
+**The magnetometer is deliberately on the always-on rail**, unlike the other two
+sensors. It shares `SEN_SCL`/`SEN_SDA` with the pack monitor `U23`, and those
+pull-ups (`R67`/`R69`, 5.11 k) are on `+3V3`. With `U3` behind the switch, the
+pull-ups drove its I2C pads while its own supply was actively discharged by
+`U30`'s QOD — above abs-max continuously, and clamping the bus below VIL so the
+pack monitor could not be read at all during pad standby. Matching `U3`'s rail
+to its bus removes both. It costs the magnetometer's quiescent draw on a rail
+that is up whenever the board is.
 
 With the two additions the inventory becomes:
 
 | Load | Condition | Estimate |
 |---|---|---|
-| MCU | CPU active, radios idle | 40–60 mA |
-| MCU | BLE transmit | ~130 mA |
-| MCU | WiFi transmit, peak | ~350 mA |
+| Out computer | CPU active, radios idle | 40–60 mA |
+| Out computer | BLE transmit | ~130 mA |
+| Out computer | WiFi transmit, peak | ~350 mA |
+| Flight computer | CPU active, **no antenna fitted** | 40–60 mA |
+| Flight computer | held in reset by `U30` | 0 mA |
 | Telemetry radio | transmit, 22 dBm class | 110–130 mA |
 | Telemetry radio | receive | ~15 mA |
 | Telemetry radio | sleep | µA |
@@ -63,9 +84,16 @@ The telemetry radio is the same 900 MHz module already carried by
 
 | Scenario | Composition | Total |
 |---|---|---|
-| Pad idle | MCU idle, radio RX, GNSS tracking, no logging | **~110 mA** |
-| Realistic flight | MCU active + BLE, radio TX, GNSS tracking, logging | **~250 mA** |
-| Worst credible | MCU WiFi TX, radio TX, GNSS acquisition, NAND write | **~555 mA** |
+| Flight computer off | OC idle on `+3V3`, `U30` open — magnetometer and pack monitor still readable, everything behind the switch dark | **~46 mA** |
+| Pad idle | both MCUs idle, radio RX, GNSS tracking, no logging | **~160 mA** |
+| Realistic flight | OC active + BLE, FC active, radio TX, GNSS tracking, logging | **~300 mA** |
+| Worst credible | OC WiFi TX, FC active, radio TX, GNSS acquisition, NAND write | **~605 mA** |
+
+The flight computer's contribution is a flat ~50 mA in every powered scenario:
+it has no antenna fitted, so it never reaches the WiFi or BLE transmit figures
+that dominate the out computer's column. The first row is new and is the reason
+the diode-OR exists — it is the pad-standby case, and the whole switched branch
+is off in it.
 
 Worst credible is a deliberately pessimistic alignment: it assumes the MCU's own
 radio transmits at full tilt while the telemetry radio is mid-burst and the GNSS
@@ -74,8 +102,14 @@ biggest open question in this document.
 
 ## Headroom
 
-Against a 1 A-class regulator, worst credible sits near **55 %**, realistic
-flight near **25 %**.
+Against a 1 A-class regulator, worst credible sits near **60 %**, realistic
+flight near **30 %**.
+
+> **These totals have not been re-argued from first principles since the second
+> processor landed** — the flight computer was added to the inventory and its
+> ~50 mA carried through the arithmetic, nothing more. The headroom conclusion
+> survives the change comfortably, but if this becomes a closed budget the
+> scenarios themselves should be rebuilt rather than incremented.
 
 The comparison that matters is historical rather than absolute. Before the
 reduction this same rail fed the second processor's supply through `U30`, and

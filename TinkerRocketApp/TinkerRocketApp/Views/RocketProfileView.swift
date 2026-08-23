@@ -17,6 +17,7 @@ struct RocketProfileView: View {
 
     @EnvironmentObject var store: RocketProfileStore
     @EnvironmentObject var syncer: ActiveRocketSyncer
+    @EnvironmentObject var preflight: PreflightStore
 
     @State private var showingAdd = false
     @State private var newName = ""
@@ -107,7 +108,7 @@ struct RocketProfileView: View {
             }
         }
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) { store.delete(profile.id) } label: {
+            Button(role: .destructive) { deleteProfile(profile.id) } label: {
                 Label("Delete", systemImage: "trash")
             }
         }
@@ -118,10 +119,17 @@ struct RocketProfileView: View {
             Button { store.duplicate(profile.id) } label: {
                 Label("Duplicate", systemImage: "plus.square.on.square")
             }
-            Button(role: .destructive) { store.delete(profile.id) } label: {
+            Button(role: .destructive) { deleteProfile(profile.id) } label: {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    /// Delete a profile and its pre-flight checklist config together — the
+    /// checklist diff is keyed by profile id and dies with it.
+    private func deleteProfile(_ id: UUID) {
+        store.delete(id)
+        preflight.deleteConfig(for: id)
     }
 
     // MARK: - Connection-aware section

@@ -219,11 +219,19 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         uint32_t bmp_retry_count = 0;
         while (!bmp585.begin())
         {
-            ESP_LOGW(SC_TAG, "BMP585 initialization failed, chip ID 0x%02X", bmp585.readChipIdCached());
+            // NOTE the cached id is only assigned on a SUCCESSFUL begin(), so
+            // on this path it is a stale value (0x00 on the first attempt) and
+            // NOT something read from the sensor. Do not read it as evidence
+            // about the part — it used to make an unrelated power_up_check()
+            // failure look like a dead or mis-wired chip.
+            ESP_LOGW(SC_TAG, "BMP585 begin() failed (attempt %lu) — retrying with a soft reset",
+                     (unsigned long)(bmp_retry_count + 1U));
             bmp_retry_count++;
 
-            // Warm-reset recovery path: after MCU flash, sensor may still be
-            // in active mode and not respond cleanly until a soft reset.
+            // begin() already soft-resets before bmp5_init(), so reaching here
+            // means something beyond the one-shot POR flag is wrong: the rail,
+            // the wiring, or the part. Reset again anyway — it is the one
+            // recovery we have and it is cheap.
             const bool reset_ok = bmp585.forceSoftResetRaw();
             ESP_LOGI(SC_TAG, "BMP585 soft-reset recovery %s", reset_ok ? "OK" : "pending");
 

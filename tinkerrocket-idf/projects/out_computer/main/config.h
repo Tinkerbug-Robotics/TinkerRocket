@@ -10,23 +10,49 @@
 // fork per revision. Select the V8 map with: idf.py -DTR_BOARD_V8=1 build
 // (default stays V7 until V8 bring-up completes).
 //
-// TR_BOARD_V9=1 selects the SAME board_v8.h. Unlike the FC — where V9 moved
-// three pyro pins and needed its own header — the S3's pin map is unchanged
-// from V8 through V10 (verified 2026-08-17 against every committed revision
-// of hardware/rocket-computer; see board_v8.h). The flag exists so a V9/V10
-// pair is built with one consistent revision flag on both MCUs, and so the
-// image is stamped "-v9". If a future revision does move an S3 pin, split
-// board_v9.h out here and switch this branch to it.
+// TR_BOARD_V9=1 selects board_v9.h (V9/V10). The S3's *pin* map is unchanged
+// from V8 through V10 — unlike the FC, where V9 moved three pyro pins — so
+// this used to be an alias to board_v8.h. #822: it isn't a pin change that
+// forced the split, it's a deleted part. V9 removed the MRAM (U12), and an
+// alias is presence-blind: it can say "same pins" but not "one fewer device",
+// so V9/V10 firmware kept driving an MRAM_CS that goes nowhere and backed the
+// log ring + reboot snapshot with an unfitted chip. The two headers differ in
+// exactly one value, MRAM_CS (34 vs -1); keep every other pin in step by hand.
+#ifndef TR_BOARD_V7
+#define TR_BOARD_V7 0
+#endif
 #ifndef TR_BOARD_V8
 #define TR_BOARD_V8 0
 #endif
 #ifndef TR_BOARD_V9
 #define TR_BOARD_V9 0
 #endif
-#if TR_BOARD_V8 || TR_BOARD_V9
+// No default (#834 sweep). main/CMakeLists.txt raises the same error with a
+// friendlier message; this is the backstop for anything that includes config.h
+// without going through it.
+#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1 or -DTR_BOARD_V9=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, and V9/V10 needs the sdkconfig overlay that enables its PSRAM log ring."
+#endif
+#if TR_BOARD_V8
 #include "board/board_v8.h"
+#elif TR_BOARD_V9
+#include "board/board_v9.h"
 #else
 #include "board/board_v7.h"
+#endif
+
+// The one difference between the V8 and V9 maps, asserted rather than trusted.
+// Nothing at runtime notices a wrong MRAM_CS: with 34 on a V9 board the ring
+// and the snapshot slot write to a floating pad and report success, and with
+// -1 on a V8 board the fitted MRAM simply goes unused. Both are silent. So pin
+// it here — re-aliasing the V9 branch back to board_v8.h, or editing MRAM_CS
+// in the wrong header, then fails the build instead of the flight.
+#if TR_BOARD_V9
+static_assert(board_pins::MRAM_CS < 0,
+              "V9/V10 deleted the MRAM (U12) — board_v9.h must keep MRAM_CS = -1 (#822)");
+#elif TR_BOARD_V8
+static_assert(board_pins::MRAM_CS == 34,
+              "V8 bench boards have the MRAM fitted on GPIO34 — do not change this (#822)");
 #endif
 
 struct config : board_pins
@@ -35,16 +61,30 @@ struct config : board_pins
     static constexpr bool DEBUG = true;  // Re-enabled (needed for telemetry updates)
     static constexpr bool VERBOSE_DEBUG = false;  // Temporarily disabled to see BLE output
     static constexpr uint32_t STATS_PERIOD_MS = 1000;
+
+    // #831: how long the OC keeps calling its FC-sourced telemetry LIVE after
+    // the last NonSensorData frame.  The FC sends those at
+    // NON_SENSOR_UPDATE_RATE = 500 Hz, so 3 s is ~1500 missed frames — far
+    // beyond any I2S hiccup, and matched to the base station's own
+    // BLE_TELEMETRY_STALE_MS so both transports age their data alike.
+    static constexpr uint32_t FC_FRAME_STALE_MS = 3000;
     // #398: dump per-task CPU utilization once per stats interval (the "TASKCPU"
     // line) to identify the core-1 hog during the launch-activation window.
     // Requires the run-time-stats sdkconfig flags; set false to silence.
     static constexpr bool PROFILE_TASK_CPU = true;
 
     // --- MRAM (MR25H10 on shared SPI bus; CS pin in board header) ---
-    // Enabled: 128 KB non-volatile ring buffer survives hard resets.
-    // SPI bus mutex prevents contention between Core 1 (ring push) and
-    // Core 0 (NAND flush).  On dirty startup, MRAM is drained to a
+    // V7/V8 only.  Enabled: 128 KB non-volatile ring buffer survives hard
+    // resets.  SPI bus mutex prevents contention between Core 1 (ring push)
+    // and Core 0 (NAND flush).  On dirty startup, MRAM is drained to a
     // recovery file before clearing.  MRAM_CS = -1 falls back to RAM ring.
+    //
+    // V9/V10 have no MRAM (board_v9.h, MRAM_CS = -1), so everything below
+    // that is measured from MRAM_SIZE — the snapshot region and the #274
+    // dirty marker — addresses a device that isn't there.  The constants stay
+    // (they are the V7/V8 geometry, and TR_LogToFlash ignores them outright
+    // when use_mram_ is false), but do NOT read them as "the OC always has a
+    // non-volatile snapshot store".  It doesn't; see initPeripherals().
     static constexpr uint32_t MRAM_SIZE = 131072;       // 128 KB
     static constexpr uint32_t SPI_HZ_MRAM = 40'000'000;
     static constexpr uint8_t SPI_MODE_MRAM = SPI_MODE0;
@@ -67,8 +107,27 @@ struct config : board_pins
     static constexpr uint8_t SPI_MODE_NAND = SPI_MODE0;
 
     // --- RAM ring buffer (used when MRAM_CS = -1) ---
-    // Fallback if MRAM not available. MRAM is preferred (128 KB, no heap cost).
+    // Last-resort fallback: internal SRAM, used only when neither MRAM nor
+    // PSRAM is available. Kept small because the S3 has 512 KB of SRAM total
+    // and everything else has to fit alongside it.
     static constexpr uint32_t RAM_RING_SIZE = 65536;  // 64 KB fallback
+
+    // --- PSRAM ring buffer (#822; used when RING_IN_PSRAM && MRAM_CS = -1) ---
+    // The V9/V10 story: the MRAM was deleted in favour of the S3RH2's 2 MB of
+    // in-package PSRAM, which is there to buffer NAND writes. Board presence is
+    // the header's call (RING_IN_PSRAM); the size is policy and lives here.
+    //
+    // 512 KB is a deliberate first step, not a maximum. Arithmetic at the
+    // shipped default IMU rate (~156 KB/s from the pad):
+    //   MRAM  128 KB ring -> 97536 B prelaunch cap -> ~0.61 s of history
+    //   here  512 KB ring -> 384 KB prelaunch cap  -> ~2.5 s
+    // and ~3.3 s of total NAND-stall headroom against the ~0.8 s the MRAM ever
+    // gave. That is a 4x improvement while leaving 1.5 MB of the part unspoken
+    // for. Raising it toward 1-2 MB is reasonable once there is bench data on
+    // a real V9 — watch the #398 gauges (parser_max, spi_wait, ring_overruns)
+    // and the activation drain, since a larger prelaunch ring means a longer
+    // backlog for the flush task to work off after launch detect.
+    static constexpr uint32_t PSRAM_RING_SIZE = 524288;  // 512 KB
 
     // --- I2C from FlightComputer -> OutComputer (pins in board header) ---
     static constexpr uint8_t I2C_ADDRESS = 0x42;

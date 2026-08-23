@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Straighten
@@ -88,6 +89,7 @@ fun ScannerScreen(
     onMyDevices: () -> Unit = {},
     onSavedFlights: () -> Unit = {},
     onDriftCast: () -> Unit = {},
+    onPreflight: () -> Unit = {},
     updateVersion: String? = null,
     onGetUpdate: () -> Unit = {},
     unitStore: UnitStore? = null,
@@ -151,6 +153,13 @@ fun ScannerScreen(
         TrActionButton(
             "My Devices", tr.myDevices, onMyDevices,
             icon = Icons.AutoMirrored.Filled.ListAlt,
+        )
+        // Master pre-flight checklist: the template every rocket's checklist
+        // starts from, editable with no device connected (build it at home,
+        // run it at the pad from the dashboard advisory).  iOS front-page twin.
+        TrActionButton(
+            "Preflight Checklist", tr.preflight, onPreflight,
+            icon = Icons.Filled.Checklist,
         )
         TrActionButton(
             "Reverse Drift Cast", tr.driftCast, onDriftCast,

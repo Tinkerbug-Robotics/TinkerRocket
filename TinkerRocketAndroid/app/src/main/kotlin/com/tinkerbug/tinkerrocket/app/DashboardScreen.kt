@@ -40,8 +40,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.tinkerbug.tinkerrocket.app.theme.TrPyroContinuityBadge
 import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
+import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
 import com.tinkerbug.tinkerrocket.protocol.SignalQuality
+import com.tinkerbug.tinkerrocket.protocol.pyroContinuityOf
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.session.FleetDevice
 import com.tinkerbug.tinkerrocket.session.DeviceSession
@@ -52,8 +55,8 @@ import java.util.Locale
  * Phase 3 dashboard slice — the pad-ops core: identity header, staleness
  * banner (worsen-only effectiveDataStatus), rocket state, power section
  * gated on #377 (no blind cmd-8 until the first telemetry frame confirms
- * power state), battery / GNSS / link cards, pyro tiles with the
- * continuity-AND-live fail-safe rendering.
+ * power state), battery / GNSS / link cards, pyro tiles with the four-state
+ * continuity badge (#828).
  */
 @Composable
 fun DashboardScreen(
@@ -78,6 +81,19 @@ fun DashboardScreen(
         "sim" -> { SimulationScreen(session, onBack = { onTool(null) }); return }
         "scan" -> { FreqScanScreen(session, onBack = { onTool(null) }); return }
         "magcal" -> { MagCalScreen(session, syncer, onBack = { onTool(null) }); return }
+        "preflight" -> {
+            if (container != null && profileStore != null) {
+                PreflightRunScreen(
+                    session = session,
+                    preflight = container.preflightStore,
+                    profiles = profileStore,
+                    syncer = syncer,
+                    fleetScope = container.fleetScope,
+                    onBack = { onTool(null) },
+                )
+            }
+            return
+        }
         "ota" -> {
             // The return sits outside the null check so an unroutable state
             // renders nothing rather than falling through into the dashboard
@@ -117,6 +133,7 @@ fun DashboardScreen(
         }
     }
     val telemetry by session.telemetry.collectAsState()
+    val connected by session.isConnected.collectAsState()
     val identity by session.identity.collectAsState()
     val hasTelemetry by session.hasReceivedTelemetry.collectAsState()
     val dataStatus by session.effectiveDataStatus.collectAsState()
@@ -189,7 +206,21 @@ fun DashboardScreen(
         // Rocket state — iOS RocketStateView twin (#382 display mapping:
         // READY and PRELAUNCH both render "PRELAUNCH" with a readiness badge
         // carrying the real distinction; raw wire strings untouched).
-        RocketStateBanner(telemetry.state)
+        RocketStateBanner(telemetry)
+
+        // Pre-flight checklist advisory: one quiet progress line for the
+        // active rocket, right under the state banner.  Advisory only — it
+        // never recolors the banner (sensor health owns that) and renders
+        // nothing when no checklist is configured.
+        if (container != null && profileStore != null) {
+            PreflightAdvisoryLine(
+                session = session,
+                preflight = container.preflightStore,
+                profiles = profileStore,
+                syncer = syncer,
+                onOpen = { onTool("preflight") },
+            )
+        }
 
         // Power section — #377: never offer the blind cmd-8 toggle until the
         // first telemetry frame of this session confirmed the power state.
@@ -340,12 +371,13 @@ fun DashboardScreen(
 
         // Pyro tiles: iOS PyroChannelsView twin (2x2 grid, direct rocket
         // links only — iOS hides pyro on BS links).  Badge ladder per tile:
-        // FIRED beats everything; CONT/NO CONT shows while armed or for 5 s
-        // after that tile's manual test (single-reveal state — a second tap
-        // MOVES the reveal, the iOS quirk included); a TESTING spinner
-        // replaces the badge while cmd 35 round-trips BLE→OC→I2C→FC (#411).
-        // Continuity is trusted only from a LIVE frame (#297) — a stale
-        // frame fails safe to NO CONT.
+        // FIRED beats everything; the continuity badge shows while armed or
+        // for 5 s after that tile's manual test (single-reveal state — a
+        // second tap MOVES the reveal, the iOS quirk included); a TESTING
+        // spinner replaces it while cmd 35 round-trips BLE→OC→I2C→FC (#411).
+        // The badge carries four states (#828): red is a MEASURED open, and a
+        // channel nobody has tested reads NOT TESTED, not NO CONT. #297
+        // fail-safe on a stale frame is NO DATA.
         if (!session.isBaseStation) {
             val config by session.rocketConfig.collectAsState()
             val contPendingUntil by session.contTestPendingUntil.collectAsState()
@@ -370,7 +402,6 @@ fun DashboardScreen(
                 }
             }
             val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
-            val live = dataStatus == TelemetryData.DataStatus.LIVE
             val armed = telemetry.pyroArmed
             val inflight = telemetry.state == "INFLIGHT"
 
@@ -399,12 +430,22 @@ fun DashboardScreen(
 
             @Composable
             fun tile(ch: Int, cont: Boolean, fired: Boolean, modifier: Modifier) {
+                // #828: `cont && live` collapsed "never measured" into the
+                // same red NO CONT as a measured open. The raw bit is still
+                // read for the legacy path inside pyroContinuityOf.
+                val continuity = pyroContinuityOf(
+                    telemetry = telemetry,
+                    channel = ch,
+                    isConnected = connected,
+                    dataStatus = dataStatus,
+                    isBaseStation = session.isBaseStation,
+                )
                 val (enabled, mode, value) = channelConfig(ch)
                 PyroTile(
                     ch = ch,
                     text = if (enabled) triggerText(mode, value) else "Disabled",
                     fired = fired,
-                    continuity = cont && live,
+                    continuity = continuity,
                     revealed = armed || contTestChannel == ch,
                     testing = (contPendingUntil[ch] ?: 0L) > nowMs,
                     // Rail gate matches the iOS tile: the OC refuses cmd 35
@@ -681,8 +722,9 @@ private fun StatCard(
  * iOS pyroTile twin.  Header: "CH n" + the badge ladder — FIRED beats the
  * continuity badge; CONT/NO CONT renders only while [revealed] (armed, or
  * the 5 s window after this tile's manual test); a TESTING spinner replaces
- * it while the cmd-35 round trip is pending.  [continuity] must already be
- * live-gated by the caller (#297).  Below the header: the trigger text or
+ * it while the cmd-35 round trip is pending.  [continuity] is the four-state
+ * verdict (#828) — the caller resolves it with pyroContinuityOf, which folds
+ * in the #297 live gate.  Below the header: the trigger text or
  * "Disabled".  Tap-to-configure stays iOS-only for now — Android edits pyro
  * config on the Settings screen.
  */
@@ -691,7 +733,7 @@ private fun PyroTile(
     ch: Int,
     text: String,
     fired: Boolean,
-    continuity: Boolean,
+    continuity: PyroContinuity,
     revealed: Boolean,
     testing: Boolean,
     showTestButton: Boolean,
@@ -735,18 +777,7 @@ private fun PyroTile(
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = bold),
                     )
                 }
-                revealed -> Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    val c = if (continuity) tr.statusOk else tr.statusBad
-                    Box(Modifier.size(8.dp).background(c, CircleShape))
-                    Text(
-                        if (continuity) "CONT" else "NO CONT",
-                        color = c,
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = bold),
-                    )
-                }
+                revealed -> TrPyroContinuityBadge(state = continuity)
             }
         }
         Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1138,10 +1169,18 @@ private data class StorageRow(
  * carries the real distinction.  Colors match iOS: acquiring orange, ready
  * green, INFLIGHT red, COMPLETE/MAG_CAL blue, else gray.  Wire strings,
  * CSV columns, and the announcer's raw-state logic are untouched.
+ *
+ * The second line is the FC boot report ("bs"/"bt"/"bd"): it exists because
+ * the state label alone cannot tell a rail that is off from a flight computer
+ * ten seconds into setup_fc() — both read INITIALIZATION off a zeroed
+ * rocket_state.  It sits UNDER the label rather than replacing it, so the
+ * state the rest of the dashboard is gated on stays where the operator
+ * expects it.
  */
 @Composable
-private fun RocketStateBanner(state: String) {
+private fun RocketStateBanner(telemetry: TelemetryData) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    val state = telemetry.state
     val color = when (state) {
         "READY" -> tr.statusScanning      // acquiring (orange)
         "PRELAUNCH" -> tr.statusConnected // fully ready (green)
@@ -1169,7 +1208,47 @@ private fun RocketStateBanner(state: String) {
                 36f, androidx.compose.ui.unit.TextUnitType.Sp),
             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
         )
+        val dwellS = rememberBootDwellSeconds(telemetry)
+        telemetry.fcBootStatusLine(dwellS)?.let { line ->
+            // A degraded step FINISHED and boot carried on, so nothing else
+            // will ever mention it; amber is the caution rung.  Everything
+            // else is secondary text — the state label owns the color.
+            val warn = telemetry.fcBootStalled(dwellS) ||
+                telemetry.fcBootDegradedSubsystems.isNotEmpty()
+            Text(
+                line,
+                color = if (warn) tr.statusWarn else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+        }
     }
+}
+
+/**
+ * Whole seconds the app has been looking at the SAME boot report — the dwell
+ * TelemetryData.fcBootStalled needs, because "bt" is stamped when a step
+ * starts and then repeats unchanged, so it cannot say how long the FC has sat
+ * there.  Any change to the report (step, "bt", degraded bits) is progress and
+ * re-arms the clock, which also keeps a boot that begins on a long-open
+ * dashboard from flashing an instant stall.
+ */
+@Composable
+private fun rememberBootDwellSeconds(telemetry: TelemetryData): Int {
+    if (!telemetry.fcBooting) return 0
+    val report = Triple(telemetry.fcBootStepRaw, telemetry.fcBootElapsedMs, telemetry.fcBootDegraded)
+    val seenAtMs = remember(report) { System.currentTimeMillis() }
+    var nowMs by remember(report) { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(report) {
+        // iOS leans on SwiftUI re-rendering at the ~2 Hz telemetry rate; a
+        // Compose recomposition needs a state write, and a wedged boot is
+        // precisely the case where no new frame changes anything.
+        while (true) {
+            delay(1_000)
+            nowMs = System.currentTimeMillis()
+        }
+    }
+    return ((nowMs - seenAtMs) / 1000L).toInt()
 }
 
 /**
@@ -1319,6 +1398,25 @@ private fun SignalBar(
         // iOS returns .gray for a missing reading; statusIdle is that same gray.
         SignalQuality.UNKNOWN -> tr.statusIdle
     }
+    // iOS ThermometerIndicator strokes the track (systemGray4, 1.5 pt) and fills
+    // nothing behind it, so the bar's full extent is always visible.  Android
+    // drew the inverse — no stroke, and a half-alpha cardSecondary track fill —
+    // but `Card` resolves to surfaceContainerHighest, which this theme maps to
+    // cardSecondary, so that fill composited to EXACTLY the card colour (sampled
+    // off the bench Pixel: track and card both #E5E5EA light / #2C2C2E dark).
+    // The track was not faint, it was absent: a weak signal read as "no bar at
+    // all" rather than "a short bar in a tall track", and an unread channel
+    // (LoRa on a direct link) drew nothing whatsoever.  The stroke is the scale,
+    // and the fill it replaces is gone — it was painting the card onto itself.
+    //
+    // No systemGray4 in the palette, and a raw hex in a screen is the thing the
+    // token pass removed, so this is the theme's own outline role — systemGray
+    // #8E8E93 in BOTH schemes (Theme.kt), so the polarity is right either way
+    // without re-reading isSystemInDarkTheme() here — at 20%.  Over the card it
+    // composites to #3F3F42 dark (measured on the bench Pixel) and ~#D4D4D9
+    // light (computed) against iOS's #3A3A3C / #D1D1D6: a few steps either side,
+    // imperceptible.  Being alpha over the card, it does track cardSecondary if
+    // that ever moves — the opaque-token alternative would not.
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -1327,7 +1425,11 @@ private fun SignalBar(
             Modifier
                 .height(120.dp)
                 .width(36.dp)
-                .background(tr.cardSecondary.copy(alpha = 0.5f), RoundedCornerShape(20.dp)),
+                .border(
+                    1.5.dp,
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                    RoundedCornerShape(20.dp),
+                ),
             contentAlignment = Alignment.BottomCenter,
         ) {
             if (fraction > 0f) {

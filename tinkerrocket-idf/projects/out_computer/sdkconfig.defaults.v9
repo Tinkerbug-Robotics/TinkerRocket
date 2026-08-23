@@ -1,0 +1,48 @@
+# sdkconfig overlay applied ONLY to -DTR_BOARD_V9=1 builds, on top of
+# sdkconfig.defaults. Selected by the project CMakeLists, not by the build-dir
+# name — see there.
+#
+# Exists because PSRAM presence is a board fact and sdkconfig is per-project.
+# V7/V8 have no PSRAM part (the MRAM is what they use), so compiling PSRAM
+# support into their images would buy a failed init and a scary boot warning on
+# a board that is working correctly.
+
+# === PSRAM: the log ring's real home on V9/V10 (#822) ===
+# U15 is an ESP32-S3RH2 with 2 MB of in-package QUAD PSRAM. That part was not
+# chosen by accident — deleting the MRAM (U12) and moving to the embedded-PSRAM
+# variant was one decision (prefab review I18), and the PSRAM is what buffers
+# NAND writes now. Leaving CONFIG_SPIRAM unset meant the ring fell back to
+# 64 KB of internal RAM and the replacement sat idle.
+#
+# The rail objection is settled, not waived: prior finding H7 (log flash sharing
+# the S3's internal ~14 ohm R_SPI with the PSRAM) was FIXED before fab — U13's
+# VCC moved to +3V3 and OUT_VDD_SPI now carries only U15.29, verified against
+# the live netlist. Budget is ~30 mA x 14 = 0.42 V -> ~2.88 V against a 2.7 V
+# minimum. Note this is the OPPOSITE of the mini, whose sdkconfig says "PSRAM:
+# deliberately OFF" precisely because that board still shares the rail.
+#
+# One residual, WORKLIST M-4, and it is SMALLER than that entry claims: C27 is
+# 1 uF in the fabbed V9 (close-out 8f87aa0, 2026-08-09) — WORKLIST still says
+# 10 uF because it was written from the 2026-08-05 review and never updated
+# after the resize landed. So tau is ~14 us, not ~140 us, and VDD_SPI ramp is
+# NOT a suspect for flaky PSRAM bring-up. What remains is only the missing
+# 0.1 uF (the HDG asks for 0.1 + 1 uF); there is no pad for it, so it is a
+# next-revision item, not an assembly one. PSRAM init is announced in the boot
+# log either way.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+# 40 MHz is the IDF default and far more than enough — the ring takes ~156 KB/s
+# against tens of MB/s available. Buys timing margin we have no reason to spend.
+CONFIG_SPIRAM_SPEED_40M=y
+# CAPS_ALLOC, *not* the default MALLOC. Only code that explicitly asks for
+# MALLOC_CAP_SPIRAM lands in PSRAM; plain malloc() keeps returning internal RAM
+# exactly as before. That keeps this change surgical — the log ring moves, and
+# nothing else in the firmware silently relocates into slower, non-DMA memory.
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+# Boot without PSRAM instead of panicking. sdkconfig is per-project, not
+# per-board-flag, so this file is also compiled into the V7 and V8 images, and
+# no V8 artwork was ever committed to prove those boards carry a PSRAM part.
+# Without this, a V8 bench board would hard-panic at boot on an image built from
+# this config. TR_LogToFlash falls back to the internal ring on its own.
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+

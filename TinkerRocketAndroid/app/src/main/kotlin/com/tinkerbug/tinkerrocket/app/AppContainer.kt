@@ -2,6 +2,7 @@ package com.tinkerbug.tinkerrocket.app
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import com.tinkerbug.tinkerrocket.ble.AndroidBleScanner
 import com.tinkerbug.tinkerrocket.ble.AndroidTransportFactory
 import com.tinkerbug.tinkerrocket.session.ActiveProfileStorage
@@ -14,9 +15,11 @@ import com.tinkerbug.tinkerrocket.session.KnownDeviceStorage
 import com.tinkerbug.tinkerrocket.session.KnownDeviceStore
 import com.tinkerbug.tinkerrocket.session.LastSessionStore
 import com.tinkerbug.tinkerrocket.session.RocketProfileStore
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -33,7 +36,25 @@ class AppContainer(app: Application) {
 
     private val fleetDispatcher =
         Executors.newSingleThreadExecutor { r -> Thread(r, "tr-fleet") }.asCoroutineDispatcher()
-    val fleetScope = CoroutineScope(SupervisorJob() + fleetDispatcher)
+
+    /**
+     * Last-resort backstop (#830).  A SupervisorJob stops a failing child from
+     * cancelling its siblings; it does NOT stop the throwable reaching
+     * Android's default handler, which kills the process.  Before this there
+     * was no CoroutineExceptionHandler anywhere in the app, so a single
+     * unguarded `scope.launch` — an adapter switched off mid-scan was enough —
+     * took the whole app down, potentially with a rocket in the air.
+     *
+     * This is deliberately a net, not a strategy: every failure that can be
+     * anticipated is still caught where it happens, so it can be reported to
+     * the user and recovered from. What lands here is a bug, and it is logged
+     * loudly enough to find.
+     */
+    private val fleetExceptionHandler = CoroutineExceptionHandler { _, e ->
+        Log.e("AppContainer", "uncaught exception in fleetScope — swallowed to keep the process alive", e)
+    }
+
+    val fleetScope = CoroutineScope(SupervisorJob() + fleetDispatcher + fleetExceptionHandler)
 
     val knownDevices = KnownDeviceStore(PrefsKnownStorage(app))
 
@@ -47,6 +68,11 @@ class AppContainer(app: Application) {
         activeStorage = PrefsActiveProfileStorage(app),
     )
     val syncer = ActiveRocketSyncer(fleetScope)
+
+    /** Pre-flight checklists: master template + per-rocket diffs. */
+    val preflightStore = com.tinkerbug.tinkerrocket.session.PreflightStore(
+        directory = File(app.filesDir, "preflight_checklists"),
+    )
 
     /** Phone GPS + heading (ref-counted; consumers start/stop). */
     val phoneLocation = PhoneLocationManager(app)
@@ -213,6 +239,25 @@ class AppContainer(app: Application) {
             lastSession = PrefsLastSessionStore(app),
         )
         fleetRef
+    }
+
+    init {
+        // #829: the foreground service's lifetime belongs here, at process
+        // scope — not in the composition. It used to be started by a Compose
+        // LaunchedEffect, which cannot restart it after a mid-flight drop:
+        // while the activity is stopped the Recomposer's frame clock is
+        // paused, and by the time it resumes the reconnect ladder has already
+        // refilled the device map, so the effect's key reads unchanged and
+        // never re-runs. The service stayed dead for the rest of the session.
+        //
+        // linkActive stays true across a drop-and-reconnect, so this only
+        // fires on the transitions that matter, and the service stops itself
+        // when it goes false.
+        fleetScope.launch {
+            fleet.linkActive.collect { active ->
+                if (active) FleetService.start(app)
+            }
+        }
     }
 }
 

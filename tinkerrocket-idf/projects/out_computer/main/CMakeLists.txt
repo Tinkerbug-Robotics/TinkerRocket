@@ -22,26 +22,55 @@ idf_component_register(
         app_update
         esp_app_format
         nvs_flash
+        efuse            # #822: ESP_EFUSE_PSRAM_CAP board-vs-silicon check
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format -Wno-narrowing)
 
-# Board revision selection (#411): `idf.py -DTR_BOARD_V8=1 build` compiles the
-# V8 pin map (main/board/board_v8.h); default is V7. Use a separate build dir
-# per variant (e.g. -B build_v8) — the flag is cached by CMake.
+# Board revision selection (#411). Exactly one flag, and it is MANDATORY:
 #
-# -DTR_BOARD_V9=1 is accepted and selects the same map: the S3 pin map did not
-# change between V8 and V9/V10 (see board_v8.h and main/config.h). It exists so
-# both MCUs of a V9 pair take the same flag — the FC's V9 map is a genuinely
-# different header, and mixing -DTR_BOARD_V8=1 here with -DTR_BOARD_V9=1 there
-# reads like a mistake even when it isn't.
-if(TR_BOARD_V8)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE TR_BOARD_V8=1)
-    message(STATUS "out_computer: board pin map V8")
-elseif(TR_BOARD_V9)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE TR_BOARD_V9=1)
-    message(STATUS "out_computer: board pin map V9/V10 (identical to V8 on this MCU)")
+#   idf.py -B build_v7 -DTR_BOARD_V7=1 build   # legacy V7 board
+#   idf.py -B build_v8 -DTR_BOARD_V8=1 build   # V8 bench boards (MRAM fitted)
+#   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # V9/V10 (no MRAM, PSRAM ring)
+#
+# There used to be a V7 default, i.e. `idf.py build` compiled the map of a
+# revision nobody owns, and did it silently. That was already a trap — V7's
+# PWR_PIN is GPIO6, which is ESP_SCL on V8 and later, so a V7 image toggles the
+# FC's I2C clock on every power on/off — and #822 made it worse: the maps now
+# differ in what is FITTED, not just in pin numbering. A flagless build gets the
+# V7 map, no PSRAM overlay, and an MRAM_CS pointing wherever V7 put it.
+#
+# The failure has no runtime symptom to catch it downstream, which is the same
+# argument flight_computer used to make its flag mandatory. Matching it here.
+# The build-dir name stays cosmetic — the board comes ONLY from the flag — but
+# use a separate -B dir per variant anyway, since CMake caches it.
+set(_tr_oc_board_flags "")
+foreach(_tr_flag TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9)
+    if(${_tr_flag})
+        list(APPEND _tr_oc_board_flags ${_tr_flag})
+    endif()
+endforeach()
+list(LENGTH _tr_oc_board_flags _tr_oc_board_flag_count)
+if(_tr_oc_board_flag_count EQUAL 0)
+    message(FATAL_ERROR
+        "out_computer: no board revision selected. Pass exactly one of "
+        "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 (V9 is the "
+        "hardware/rocket-computer V9/V10 board). There is no default: the old "
+        "one was V7, whose PWR_PIN (GPIO6) is ESP_SCL on every later board, and "
+        "V9/V10 additionally needs the sdkconfig overlay that enables its PSRAM "
+        "log ring.")
+elseif(NOT _tr_oc_board_flag_count EQUAL 1)
+    message(FATAL_ERROR
+        "out_computer: more than one board revision selected "
+        "(${_tr_oc_board_flags}). Pass exactly one, and use a separate build "
+        "dir per variant — a stale CMake cache is the usual cause.")
+endif()
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ${_tr_oc_board_flags}=1)
+if(TR_BOARD_V9)
+    message(STATUS "out_computer: board pin map V9/V10 (main/board/board_v9.h, no MRAM, PSRAM ring)")
+elseif(TR_BOARD_V8)
+    message(STATUS "out_computer: board pin map V8 (main/board/board_v8.h, MRAM fitted)")
 else()
-    message(STATUS "out_computer: board pin map V7 (default; pass -DTR_BOARD_V8=1 or -DTR_BOARD_V9=1 for newer hardware)")
+    message(STATUS "out_computer: board pin map V7 (main/board/board_v7.h)")
 endif()
 
 # Bench-debug image: `idf.py -B build_bench -DTR_OC_BENCH_DEBUG=1 build`.

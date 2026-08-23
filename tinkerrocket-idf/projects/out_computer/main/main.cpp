@@ -13,6 +13,8 @@
 #include <nvs_flash.h>
 #include <esp_log.h>
 #include <esp_mac.h>              // esp_efuse_mac_get_default for unit_id
+#include <esp_efuse.h>            // #822: read PSRAM_CAP to verify the board flag
+#include <esp_efuse_table.h>      // #822: ESP_EFUSE_PSRAM_CAP
 #include <esp_app_desc.h>         // esp_app_get_description for firmware version readback (#8)
 #include <esp_ota_ops.h>          // esp_ota_mark_app_valid_cancel_rollback (#8)
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
@@ -53,6 +55,10 @@ static inline std::string itos(int v)
 }
 
 #include "config.h"
+#include "ota_relay_policy.h"   // #834 items 6/7: I2S relay recovery timing
+#include "rail_restore_policy.h"  // #825: boot rail re-assert decision
+#include <esp_attr.h>             // RTC_NOINIT_ATTR
+#include <esp_system.h>           // esp_reset_reason
 #include "dedup_reboot_policy.h"
 
 #include <TR_I2C_Interface.h>
@@ -69,6 +75,7 @@ static inline std::string itos(int v)
 #include <RocketComputerTypes.h>
 #include <TR_INA230.h>
 #include <TR_FlightLog.h>
+#include <SnapshotTailScan.h>   // #846: boot re-seed of the snapshot cache
 #include <TR_NandBackend_esp.h>
 #include <NvsBitmapStore.h>
 #include <NandBitmapStore.h>   // #398: bitmap on NAND (not NVS) — no cache-disable stall
@@ -113,7 +120,7 @@ static TR_LogToFlash logger;
 // writes via writeFrame(), with dual-copy index metadata in blocks 1020-1023
 // and a persistent 3-state bitmap in NVS. TR_LogToFlash keeps the ring/flush
 // machinery and shelled-down 4 MB LFS partition for config; a write_sink
-// fn-pointer routes each drained 4080 B page into flightlog.writeFrame().
+// fn-pointer routes each drained page-sized chunk into flightlog.writeFrame().
 static tr_flightlog::TR_NandBackend_esp flightlog_backend;
 static tr_flightlog::TR_FlightLog flightlog;
 static tr_flightlog::NandBitmapStore flightlog_bitmap_store;  // #398: NAND-backed, bound in initPeripherals
@@ -135,6 +142,36 @@ static bool flightlogWriteSink(void* ctx, const uint8_t* payload, size_t payload
 {
     auto* fl = static_cast<tr_flightlog::TR_FlightLog*>(ctx);
     return fl->writeFrame(payload, payload_len) == tr_flightlog::Status::Ok;
+}
+
+// #822: read the silicon rather than trusting the board flag.
+//
+// esp_chip_info() is no help on this part — esp_hw_support's S3 port hardcodes
+// features to WIFI_BGN|BLE and never sets CHIP_FEATURE_EMB_PSRAM — but eFuse
+// BLK1 carries PSRAM_CAP, and it reads the same whether or not CONFIG_SPIRAM
+// was compiled in. So even a V7/V8 image, which links no PSRAM support at all,
+// can still say what silicon it is sitting on.
+//
+// Returns in-package PSRAM size in MB, 0 for none, or -1 if unreadable.
+static int s3PsramCapMb()
+{
+    uint8_t cap = 0;
+    if (esp_efuse_read_field_blob(ESP_EFUSE_PSRAM_CAP, &cap,
+                                  ESP_EFUSE_PSRAM_CAP[0]->bit_count) != ESP_OK)
+    {
+        return -1;
+    }
+    // esp_efuse_table.csv: {0: None, 1: 8M, 2: 2M, 3: 16M}. The CSV also lists
+    // 4 = 4M, which a 2-bit field cannot encode; treat anything unexpected as
+    // unknown rather than inventing a size.
+    switch (cap)
+    {
+        case 0: return 0;
+        case 1: return 8;
+        case 2: return 2;   // the RH2
+        case 3: return 16;
+        default: return -1;
+    }
 }
 
 // #281/#278: classify flight-log storage for the #303 scorecard.  A full or
@@ -165,12 +202,19 @@ static SensorHealthState ocStorageHealth()
     const size_t cap  = tr_flightlog::FlightIndex::MAX_ENTRIES;
     if (used >= cap) st = SH_BAD;
     else if (used + 4 >= cap && st == SH_OK) st = SH_DEGRADED;
+    // #826: a board configured for an MRAM that did not answer the boot probe.
+    // DEGRADED rather than BAD — frames still reach the NAND, so nothing is
+    // lost, but the ring shrank to internal RAM and brownout recovery is gone
+    // for the session. Folded in here for the same reason as #566 above: this
+    // is precisely the state that used to read green while the part was dead.
+    // Never fires on a board that correctly has no MRAM (MRAM_CS < 0).
+    if (logger.mramProbeFailed() && st == SH_OK) st = SH_DEGRADED;
     return st;
 }
 
 // Stage 3b (issue #50): BLE file-ops re-backed on TR_FlightLog.
 // Fills up to `max_bytes` of the downloader's scratch buffer by issuing
-// successive readFlightPage calls (each one returns at most 4080 payload
+// successive readFlightPage calls (each returns at most one page's payload
 // bytes — the portion of a single NAND page past its PageHeader). Matches
 // the logger.readFileChunk contract: sets eof=true when the last byte of
 // the flight has been read; returns false only on underlying NAND I/O error.
@@ -586,7 +630,93 @@ static uint8_t lora_cr         = config::LORA_CR;
 static int8_t  lora_tx_power   = config::LORA_TX_POWER_DBM;
 
 static RocketState latest_rocket_state = INITIALIZATION;
-static bool pwr_pin_on = false;              // Power rail state — starts OFF
+// #825: rail state retained across resets (RTC memory survives everything
+// except a true power-on). Updated at every rail toggle; deliberate_off is
+// set immediately before the #9 power-off esp_restart() so THAT reboot — the
+// one that implements power-off — keeps the boot-time rail-LOW behaviour it
+// depends on. Decision table in rail_restore_policy.h.
+// INVARIANT for every writer: assign the WHOLE struct in one statement so
+// rail_on and deliberate_off can never drift apart across a reset — the
+// restore decision reads them as a unit (rail_restore_policy.h), and a
+// partial update (e.g. setting deliberate_off while leaving rail_on=1) would
+// re-assert a rail the operator just turned off on the NEXT fault reset.
+// restore_attempts bounds the brownout retry loop: a sagging pack that
+// browns the OC out under the restored load must not cycle the rail forever
+// (pre-#825 it settled into rail-off idle; the bound restores that endpoint).
+struct RailRtcState { uint32_t magic; uint8_t rail_on; uint8_t deliberate_off;
+                      uint8_t restore_attempts; };
+static constexpr uint32_t kRailRtcMagic = 0x5241494D;  // "RAIM" (v2: +attempts)
+RTC_NOINIT_ATTR static RailRtcState rail_rtc;
+static bool boot_rail_restored = false;  // this boot re-asserted the FC rail
+// #825: the restore's cmd-8-ON side effects (initPeripherals etc.) must run
+// on the SAME core as the normal path — the I2S RX GDMA interrupt is
+// allocated on the calling core, and setup_oc runs on core 0 (the BT core)
+// while every other initPeripherals call runs from loop_oc on core 1. Set in
+// setup, consumed by the first loop_oc iteration.
+static bool boot_rail_restore_init_pending = false;
+
+static bool pwr_pin_on = false;
+// #846: the latest FC FlightSnapshotData WIRE frame, cached in plain RAM.
+// This is the primary snapshot store on every board now: the common recovery
+// case is "the FC reset, the OC did not" (post-#859 an OC fault can't even
+// drop the FC's rail mid-flight), and for that case RAM is all the
+// non-volatility required. The V7/V8 MRAM slot remains as the fallback for
+// an OC-also-reset, and V9/V10 cover that case by re-seeding this cache at
+// boot from the NAND log stream (the snapshot frames already ride it — every
+// received frame is enqueued byte-exact before dispatch). The FC's LANDED
+// "clear" snapshot flows through the same path, so cache invalidation is
+// inherited, and the FC re-validates magic/version/state/CRC32/sim on its
+// side — a stale or garbage cache can never restore a flight.
+static constexpr size_t kSnapFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
+static uint8_t  snapshot_cache[kSnapFrameLen];
+static bool     snapshot_cache_valid = false;
+// #846: set once the cache has actually been handed to the FC. The boot
+// re-seed's once-marker is written on CONSUMPTION, not on seeding — a
+// marker written at seed time would burn the flight's only chance if a
+// second reset wiped the RAM cache before the FC ever asked.
+static bool     snapshot_served = false;
+// #846: a boot re-seed is marked consumed only once the FC has actually
+// been served the frame (see snapshot_served). Until then these hold the
+// identity to stamp into NVS.
+static bool     snapshot_seed_pending_mark = false;
+static uint32_t snapshot_seed_id = 0;
+static uint32_t snapshot_seed_bytes = 0;
+// Serve-TTL: a snapshot older than the FC's MAX_FLIGHT_TIME is definitionally
+// unrestorable — the flight would have timed out to LANDED — so serving it
+// could only ever re-arm a grounded rocket (an FC WDT reset on the bench
+// hours after a failed recovery must NOT get last flight's INFLIGHT back).
+// Live 10 Hz frames refresh the stamp continuously, so an ACTIVE flight can
+// never expire; only an abandoned cache does.
+//
+// TWO bounds, because cache age alone is not flight age: a frame re-seeded
+// from NAND at boot has a fresh stamp but may describe an ancient flight, so
+// the frame's OWN flight_elapsed_ms is bounded as well (past MAX_FLIGHT the
+// FC's own timeout would already have forced LANDED). snapshotServable()
+// applies both and gates the V7/V8 MRAM fallback too — that store has no
+// clock of its own and, now that a failed recovery no longer clears it
+// (#834-3), can hold an INFLIGHT frame indefinitely.
+static constexpr uint32_t kSnapshotServeTtlMs = 600000;  // = FC MAX_FLIGHT_TIME
+static uint32_t snapshot_cache_ms = 0;                   // millis() at last write
+// Guards the cache against a torn read: the I2S parser task (core 1, prio 6)
+// writes it while loop_oc (prio 5) can be serving a GET from I2C ingress.
+static portMUX_TYPE snapshot_cache_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// True when a 232-byte snapshot wire frame is fresh enough to hand back.
+// `age_ms` is how long ago WE stored it (0 = unknown, e.g. the MRAM slot).
+static bool snapshotServable(const uint8_t* frame, uint32_t age_ms)
+{
+    if (age_ms >= kSnapshotServeTtlMs) return false;
+    FlightSnapshotData snap = {};
+    memcpy(&snap, frame + 6, sizeof(snap));   // past SOF(4)+type+len
+    if (snap.magic != FlightSnapshotData::MAGIC) return false;
+    if (snap.rocket_state != (uint8_t)INFLIGHT) return false;   // a clear
+    return snap.flight_elapsed_ms < kSnapshotServeTtlMs;
+}
+// #825: false after a boot rail restore — our reset wiped the commanded
+// camera state while the FC (kept alive by the restored rail) may still be
+// recording, so the explicit-state dedup below must forward the first
+// command instead of "already OFF, ignoring" it. True everywhere else.
+static bool camera_state_known = true;              // Power rail state — starts OFF
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 
 // ==========================================================================
@@ -883,6 +1013,31 @@ static GNSSDataSI latest_gnss_si = {};
 static bool latest_gnss_valid = false;
 static bool latest_power_valid = false;
 static bool latest_non_sensor_valid = false;
+// #831: when the last NonSensorData actually arrived.  latest_non_sensor_valid
+// latches once at first receipt and is never cleared, so it cannot answer "is
+// the FC still alive?" — and every rocket-derived field in the BLE frame, pyro
+// continuity included, is republished from that snapshot at full rate whether
+// the FC is alive or not.
+static uint32_t latest_non_sensor_rx_ms = 0;
+
+// FC boot progress (FC_BOOT_STATUS_MSG), live only during the FC's setup_fc.
+// Deliberately NOT cleared when boot completes: the last frame carries the
+// final degraded bitmask, and the app stops consulting it once real
+// rocket_state frames start arriving.
+static FcBootStatusData fc_boot_status{};
+static bool     fc_boot_status_valid = false;
+static uint32_t fc_boot_status_rx_ms = 0;
+// True once NonSensorData has arrived SINCE the last boot-status frame, i.e.
+// "this boot has finished and real state is flowing".
+//
+// Deliberately NOT latest_non_sensor_valid, which is set once at first receipt
+// and never cleared for the life of the OC process.  Gating on that worked
+// exactly once — on the first FC boot after an OC reset — and then suppressed
+// the boot line on every subsequent FC reboot, because the flag was still true
+// from the previous FC session.  (That never-aged latch is the same one behind
+// the stale-continuity finding.)  This flag is per boot sequence: cleared when
+// a boot-status frame arrives, set when NonSensorData does.
+static bool     fc_ns_since_boot = false;
 
 static float ground_pressure_pa = 101325.0f;
 static bool ground_pressure_set = false;
@@ -1836,6 +1991,143 @@ static inline void endPhoneIO()
 }
 
 // ==========================================================================
+// SECTION: pre-restart storage quiesce (#834 item 2)
+// ==========================================================================
+// Every deliberate esp_restart() on this MCU must leave the storage stack in a
+// state where the reset is indistinguishable from a clean power cycle.
+//
+// WHAT IS ACTUALLY AT RISK, AND WHAT IS NOT. U11 (the SPI NAND) sits on the
+// ALWAYS-ON +3V3 rail — U18's EN is tied to its own AVIN — so esp_restart()
+// removes no power from it. A PROGRAM EXECUTE or BLOCK ERASE the chip has
+// already latched is self-timed and lands correctly across the reset, and
+// FlightIndex::save() writes the OLDER-or-invalid metadata copy, so a reset
+// between its erase and its program still leaves a valid snapshot. The reset
+// therefore CANNOT half-program a page — which is what this was first assumed
+// to be about.
+//
+// What it CAN do, and did, on EVERY power-off: throw away up to 512 KB of
+// PSRAM log ring plus the staged partial page, the phone-synced filename and
+// the exact byte count. That ring is volatile in-package PSRAM on V9/V10
+// (there is no MRAM), so nothing else is holding that data. Draining it is
+// the whole point of this function. The bus park at the end is the small
+// remaining piece: it stops a command being cut mid-clock, which is benign
+// here but is what makes the GPIO teardown that follows provably safe rather
+// than probably safe.
+//
+// Why it lives in main.cpp: closing a flight is a three-party handshake — the
+// logger drains the ring and closes the session, g_finalize_pending stages the
+// index commit, TR_FlightLog writes it — and only main.cpp sees all three.
+//
+// NEVER REFUSES, unlike the mini's comms_prepare_power_off(). On the mini the
+// rail drop kills the NAND, so refusing genuinely protects the data. Here the
+// flash is powered regardless, PWR_PIN is already LOW by the time we run, the
+// reset IS the power-off, and cmd 8 sends no acknowledgement frame on OFF — so
+// a refusal would be an invisible half-off state the operator cannot diagnose.
+static constexpr uint32_t kQuiesceCloseTimeoutMs = 10000;
+static constexpr uint32_t kSpiParkTimeoutMs      = 250;
+static bool s_restart_quiesced = false;
+
+static void quiesceStorageForRestart(const char* why)
+{
+    // One-shot. Also load-bearing: phoneIoPmAcquire() inside beginPhoneIO() is
+    // a COUNTING esp_pm lock with no matching release on this path, so
+    // re-entering would leak lock counts.
+    if (s_restart_quiesced) return;
+    s_restart_quiesced = true;
+
+    const uint32_t t0 = millis();
+
+    // 1. Shut the producers. i2s_ingest_paused gates the DMA recv callback and
+    //    flash_op_active gates serviceI2CIngress, so no new flight can be
+    //    staged into the very iteration we are trying to end — a straggler
+    //    prepareFlight would set flight_active_ again and start an 80-block
+    //    erase, and the predicate below would never converge. Deliberately
+    //    never un-paused: every path out of here resets.
+    beginPhoneIO();
+
+    // 2. Close the flight. endLogging() latches end_flight_requested, which
+    //    makes enqueueFrame reject, so the ring cannot grow again and the
+    //    drain converges even with frames still in the rx ring.
+    if (logger.isLoggingActive())
+    {
+        logger.endLogging();
+        flightlogEndFlight();
+    }
+    // NOTE deliberately NO else-branch for "flight active but logging never
+    // activated" (a flight pre-created at PRELAUNCH that never received data).
+    // Finalizing it here would stamp it with logger.lastClosedSessionBytes(),
+    // which is sticky from the PREVIOUS flight — producing a phantom
+    // multi-megabyte entry over erased pages whose blocks then read as
+    // in-index, so brownout recovery can never reclaim them. With
+    // auto_evict_oldest on, each phantom also consumes headroom and is always
+    // the newest entry, so arming the next flight evicts a REAL one instead.
+    // Boot recovery already releases an orphan ALLOCATED run that has no valid
+    // pages, which is the correct and lossless handling.
+
+    // 3. Wait for the flush task to drain the ring, close the session and
+    //    service the deferred finalize. This needs at least TWO flush
+    //    iterations by construction: the hook runs before the end-flight block
+    //    within one iteration, so the finalize can only be serviced on the
+    //    pass after the one that closed.
+    const uint32_t deadline = millis() + kQuiesceCloseTimeoutMs;
+    bool closed = false;
+    for (;;)
+    {
+        bool finalize_pending;
+        portENTER_CRITICAL(&g_finalize_mux);
+        finalize_pending = g_finalize_pending;
+        portEXIT_CRITICAL(&g_finalize_mux);
+
+        // What this wait can actually influence: the ring drain and the
+        // session close, plus the deferred index commit those stage.
+        //
+        // isFlightActive() is deliberately NOT a term. It stays true for a
+        // flight pre-created at PRELAUNCH that never received data (nothing
+        // closes it, and finalizing it here would fabricate a phantom entry —
+        // see step 2), and it also stays true forever if a deferred
+        // finalizeFlight() failed its metadata write. Either way it is a state
+        // this function cannot clear, so including it would just spin out the
+        // full timeout on every power-off. Boot recovery reclaims both.
+        //
+        // isPrepareFlightPending() IS a term: an arm staged but not yet
+        // serviced would otherwise let the predicate pass, and the flush task
+        // would then start an 80-block erase burst underneath the park.
+        if (!logger.isLoggingActive() && !finalize_pending &&
+            !flightlog.isPrepareFlightPending())
+        {
+            closed = true;
+            break;
+        }
+        if ((int32_t)(deadline - millis()) <= 0)          // wrap-safe
+        {
+            ESP_LOGE("PWR", "%s: log close did not complete in %u ms "
+                            "(logging=%d finalize=%d prepare_pending=%d) — "
+                            "continuing anyway; an unclosed tail is recoverable",
+                     why, (unsigned)kQuiesceCloseTimeoutMs,
+                     (int)logger.isLoggingActive(), (int)finalize_pending,
+                     (int)flightlog.isPrepareFlightPending());
+            break;
+        }
+        delay(50);
+    }
+
+    // 4. Park the SPI bus and never give it back. MUST be the LAST logger or
+    //    flightlog call on this path. Uncontended on the clean path (step 3
+    //    has converged, so the flush task is idle at its vTaskDelay); the
+    //    timeout only matters after a step-3 timeout, and there the bus is not
+    //    coming back anyway.
+    const bool parked = logger.parkSpiBusForReset(kSpiParkTimeoutMs);
+    if (!parked)
+    {
+        ESP_LOGE("PWR", "%s: SPI bus still held after %u ms — resetting on top "
+                        "of it (#834 item 2)", why, (unsigned)kSpiParkTimeoutMs);
+    }
+
+    ESP_LOGI("PWR", "%s: storage quiesced in %lu ms (closed=%d parked=%d)",
+             why, (unsigned long)(millis() - t0), (int)closed, (int)parked);
+}
+
+// ==========================================================================
 // SECTION: I2C status-query response to the FC
 // ==========================================================================
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
@@ -2044,6 +2336,15 @@ static volatile bool oc_ota_tx_mode = false;                // flipped to master
 static volatile bool oc_ota_await_flip = false;             // READY seen; waiting for the FC to go quiet
 static volatile bool oc_ota_relay_ready_pending = false;    // relay "ready" to app once flipped to TX
 static volatile bool oc_ota_revert_to_rx_requested = false; // set on FINISH/ABORT staged
+// #834 item 6: oc_ota_tx_mode means "deliberately in master TX". It must NOT
+// double as "the I2S channel is fine" — the original bug was exactly that
+// conflation, because clearing it to stop the feeder also disabled
+// ocRevertToRx(), the only route back to slave RX. This is the honest state.
+static volatile bool oc_i2s_rx_broken     = false;  // no working slave RX
+static uint32_t      oc_i2s_rx_last_try_ms = 0;
+// #834 item 7: last relayed chunk, for the stall watchdog. 0 = not yet armed
+// (the app has not been told "ready", so silence is expected).
+static volatile uint32_t oc_ota_last_chunk_ms = 0;
 static uint32_t oc_ota_frames_pumped = 0;                   // diag: frames enqueued by relay cb
 static uint32_t oc_ota_feed_sent     = 0;                   // diag: frames the feeder wrote to I2S
 static uint32_t oc_ota_feed_idle     = 0;                   // diag: idle-fill writes (queue empty)
@@ -2078,6 +2379,58 @@ static constexpr uint32_t OTA_FLIP_SILENCE_MS = 500;
 static constexpr uint32_t OTA_RX_WARMUP_MS = 150;
 
 static bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user_ctx);  // defined below
+static void ocOtaRelayClearPendingFlip();                                    // defined below
+
+// Boot and every recovery path must build the RX channel identically — see
+// the note in ocBeginSlaveRxLocked().
+static constexpr uint32_t kI2sRxDmaDescNum  = 4;
+static constexpr uint32_t kI2sRxDmaFrameNum = 128;   // 512 B ≈ 2.9 ms @ 44100
+
+// #834 items 6/7: (re)establish slave RX. Caller holds oc_i2s_mutex. Records
+// oc_i2s_rx_broken so loop_oc can keep retrying — losing the RX channel means
+// the OC receives no FC telemetry at all, logs nothing and freezes both
+// downlinks, so it can never be left as a terminal state.
+static esp_err_t ocBeginSlaveRxLocked(const char* why)
+{
+    // dma_desc_num/dma_frame_num MUST match the boot init: 128 frames (512 B)
+    // spans ~2.9 ms at the 44100 link rate, which is the callback cadence the
+    // parser was tuned against (#104). The old revert path passed 64 — a
+    // leftover from the retired 22050 rate — which doubled the RX ISR cadence
+    // for the rest of the power cycle. Recovery must restore the link the
+    // parser expects, not a different one.
+    esp_err_t e = i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
+                                          config::I2S_WS_PIN,
+                                          config::I2S_DIN_PIN,
+                                          config::I2S_FSYNC_PIN,
+                                          config::I2S_SAMPLE_RATE,
+                                          kI2sRxDmaDescNum, kI2sRxDmaFrameNum);
+    if (e == ESP_OK)
+    {
+        // The callback IS the ingest path — an enabled channel with no callback
+        // registered delivers nothing to processFrame, which is the same dead
+        // telemetry we are recovering from. Treat its failure as RX broken, or
+        // the retry loop below would never run.
+        e = i2s_stream.registerRecvCallback(i2sRecvCallback, nullptr);
+        if (e != ESP_OK)
+            ESP_LOGE("OC", "OTA relay: registerRecvCallback FAILED (%s): %s",
+                     why, esp_err_to_name(e));
+    }
+    if (e == ESP_OK)
+    {
+        if (oc_i2s_rx_broken)
+            ESP_LOGW("OC", "OTA relay: slave RX restored (%s)", why);
+        oc_i2s_rx_broken = false;
+    }
+    else
+    {
+        oc_i2s_rx_broken = true;
+        ESP_LOGE("OC", "OTA relay: slave RX begin FAILED (%s): %s — "
+                       "no FC telemetry until this succeeds; retrying",
+                 why, esp_err_to_name(e));
+    }
+    oc_i2s_rx_last_try_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    return e;
+}
 
 // Flip slave-RX -> master-TX for the image pump. Runs in loop_oc once the FC's
 // I2S TX has gone quiet (it has flipped to slave RX), so there's no contention.
@@ -2093,8 +2446,46 @@ static void ocFlipToTx()
                                                  OTA_I2S_SAMPLE_RATE_HZ,
                                                  4, 64);
     oc_ota_tx_mode = (e == ESP_OK);
+    if (e != ESP_OK)
+    {
+        // #834 item 6: end() already deleted the channel, so right now the OC
+        // has NO I2S at all. ocRevertToRx() cannot help — it returns early on
+        // !oc_ota_tx_mode — so restore slave RX here, before releasing the
+        // mutex. Otherwise the OC never hears the FC again this power cycle.
+        //
+        // end() first: beginMasterTx's later error exits call i2s_del_channel()
+        // directly rather than end(), and del_channel frees the driver without
+        // detaching the GPIO matrix or clearing output-enable — so BCLK/WS can
+        // still be driven from the half-built master config. end() is null-safe
+        // and releases those pads (its GPIO block is outside the handle guard).
+        i2s_stream.end();
+        ocBeginSlaveRxLocked("flip-to-TX failed");
+    }
+    else
+    {
+        // #834 item 7: arm the stall watchdog at the FLIP, not when the app is
+        // told "ready". The "ready" release happens inside loop_oc's pwr_pin_on
+        // gate while the watchdog is serviced outside it, so arming there left
+        // a rail-off during the 150 ms warmup flipped with the watchdog asleep.
+        oc_ota_last_chunk_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    }
     xSemaphoreGive(oc_i2s_mutex);
     ESP_LOGW("OC", "OTA relay: I2S -> master TX for image pump (%s)", esp_err_to_name(e));
+    if (e != ESP_OK)
+    {
+        // Restoring OUR slave RX is only half the link. The FC flipped to slave
+        // RX when the OTA began — that silence is what we waited for before
+        // flipping — so with our flip failed BOTH ends are slave and nobody
+        // drives BCLK: telemetry stays dead despite a healthy channel. Tell the
+        // FC to abort so it reverts to master TX. I2C is independent of I2S, so
+        // this reaches it even with the I2S link down.
+        setPendingCommand(OTA_ABORT_CMD);
+        // "aborted" is in the apps' vocabulary; "error" is not, and an
+        // unrecognised token leaves the app waiting out its own timeout.
+        // terminal=true clears ota_relay_active_/ota_session_active_.
+        ble_app.relayFcOtaStatus("aborted", "i2s_flip_failed", 0, true);
+        ocOtaRelayClearPendingFlip();
+    }
 }
 
 // Revert master-TX -> slave-RX (normal telemetry + OTA status path). loop_oc.
@@ -2109,15 +2500,13 @@ static void ocRevertToRx()
     vTaskDelay(pdMS_TO_TICKS(100));
     xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
     i2s_stream.end();
-    const esp_err_t e = i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
-                                                config::I2S_WS_PIN,
-                                                config::I2S_DIN_PIN,
-                                                config::I2S_FSYNC_PIN,
-                                                config::I2S_SAMPLE_RATE,
-                                                4, 64);
-    if (e == ESP_OK)
-        i2s_stream.registerRecvCallback(i2sRecvCallback, nullptr);
-    oc_ota_tx_mode = false;
+    const esp_err_t e = ocBeginSlaveRxLocked("revert-to-RX");
+    // #834 item 6: clear tx_mode either way — the feeder must stop pumping, and
+    // the channel it was pumping into is gone regardless. A failure is carried
+    // by oc_i2s_rx_broken instead, which loop_oc retries; the old code cleared
+    // tx_mode and kept no record, so a failed revert was silent and permanent.
+    oc_ota_tx_mode       = false;
+    oc_ota_last_chunk_ms = 0;
     xSemaphoreGive(oc_i2s_mutex);
     ESP_LOGW("OC", "OTA relay: I2S -> slave RX (%s)", esp_err_to_name(e));
 }
@@ -2133,6 +2522,8 @@ static void ocOtaRelayData(void* /*ctx*/, uint32_t offset, const uint8_t* data, 
         ESP_LOGW("OC", "OTA relay: chunk @%u dropped — I2S not in TX mode", (unsigned)offset);
         return;
     }
+    // #834 item 7: the app is alive and pumping — feed the stall watchdog.
+    oc_ota_last_chunk_ms = (uint32_t)(esp_timer_get_time() / 1000);
     static constexpr size_t kMaxImg = MAX_PAYLOAD - 4;   // 4-byte offset header
     size_t sent = 0;
     while (sent < len)
@@ -2257,9 +2648,25 @@ static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* s
     ESP_LOGI("OC", "OTA relay: OTA_BEGIN stashed for loop-task staging (size=%u)",
              (unsigned)total_size);
 }
+// #834 item 7 (review): clear the PRE-flip arming state. oc_ota_await_flip is
+// armed when the FC's OTA_RELAY_READY arrives and was previously cleared only
+// by a new relay or by the flip itself — so a teardown during the silence wait
+// left it set and loop_oc flipped to master TX afterwards, with no session.
+// That became actively harmful once teardown started staging OTA_ABORT_CMD:
+// the FC's abort handler calls fcRevertToTx() with no quiet-wait (unlike its
+// FINISH path, which spins until the OC goes silent precisely to avoid this),
+// so both ends would drive BCLK/WS until the stall watchdog fired ~10 s later.
+static void ocOtaRelayClearPendingFlip()
+{
+    oc_ota_await_flip          = false;
+    oc_ota_relay_ready_pending = false;
+    oc_ota_warmup_since_ms     = 0;
+}
+
 static void ocOtaRelayFinish(void* /*ctx*/)
 {
     setPendingCommand(OTA_FINISH_CMD);
+    ocOtaRelayClearPendingFlip();
     // Revert to slave-RX (in loop_oc) so we can hear the FC's terminal status,
     // which it sends over the normal-direction I2S after IT reverts to TX.
     oc_ota_revert_to_rx_requested = true;
@@ -2268,6 +2675,7 @@ static void ocOtaRelayFinish(void* /*ctx*/)
 static void ocOtaRelayAbort(void* /*ctx*/)
 {
     setPendingCommand(OTA_ABORT_CMD);
+    ocOtaRelayClearPendingFlip();
     oc_ota_revert_to_rx_requested = true;
     ESP_LOGI("OC", "OTA relay: staged OTA_ABORT for FC");
 }
@@ -2353,6 +2761,7 @@ static bool isKnownMessageType(uint8_t type)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
         case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
         case I2C_TX_RESYNC:          // FC→OC over I2C — slave TX desync recovery (#402)
+        case FC_BOOT_STATUS_MSG:     // FC→OC over I2C during setup_fc — boot progress
             return true;
         default:
             return false;
@@ -2693,6 +3102,26 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             ble_app.sendSensorCalStatus(payload, sizeof(SensorCalStatusData));
         }
     }
+    else if (type == FC_BOOT_STATUS_MSG)
+    {
+        // FC boot progress during its ~10 s setup_fc, before any NonSensorData
+        // exists.  Latch it for the telemetry builder; the app renders it under
+        // the state so the operator sees which step is running (and which one it
+        // stalled on) instead of an undifferentiated "INITIALIZATION".
+        if (payload_len >= sizeof(FcBootStatusData))
+        {
+            memcpy(&fc_boot_status, payload, sizeof(FcBootStatusData));
+            fc_boot_status_valid = true;
+            fc_boot_status_rx_ms = millis();
+            // A new boot sequence: any NonSensorData seen before this belongs
+            // to the PREVIOUS FC session and must not suppress this one.
+            fc_ns_since_boot = false;
+            ESP_LOGI("OC", "[FC BOOT] step=%u degraded=0x%02X t=%u ms",
+                     (unsigned)fc_boot_status.step,
+                     (unsigned)fc_boot_status.degraded,
+                     (unsigned)fc_boot_status.elapsed_ms);
+        }
+    }
     else if (type == OTA_STATUS_MSG)
     {
         // #8 Phase 4: FC→OC OTA relay status. Map the FC's state byte to the
@@ -2772,6 +3201,8 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             const RocketState prev_state = latest_rocket_state;
             memcpy(&latest_non_sensor, payload, sizeof(NonSensorData));
             latest_non_sensor_valid = true;
+            latest_non_sensor_rx_ms = millis();   // #831
+            fc_ns_since_boot = true;   // boot sequence over — real state is flowing
             latest_rocket_state = (RocketState)latest_non_sensor.rocket_state;
             // Update the flight-freeze sticky flag whenever the state
             // changes (issue #71).  Safe to call on every frame — the
@@ -2856,16 +3287,47 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             uint32_t elapsed_ms = 0;
             memcpy(&elapsed_ms, payload + offsetof(FlightSnapshotData, flight_elapsed_ms),
                    sizeof(elapsed_ms));
+            uint8_t snap_state = 0;
+            memcpy(&snap_state, payload + offsetof(FlightSnapshotData, rocket_state),
+                   sizeof(snap_state));
             static uint32_t last_snap_elapsed_ms = 0;
             constexpr uint32_t NEW_FLIGHT_BACKSTEP_MS = 10'000;
+            // #846 SAFETY: a non-INFLIGHT frame is the FC's "clear" — it can
+            // only ever DISARM (the FC restores solely on INFLIGHT), so it
+            // must never be dropped as a replay. It routinely looks like one:
+            // clearFlightSnapshot() sends elapsed = FC uptime (a few seconds,
+            // launch_time_millis == 0 at boot), which lands inside the 10 s
+            // backstep below a real flight's elapsed. Dropping it left the
+            // store holding a genuine INFLIGHT frame that a later FC panic
+            // would restore ON THE GROUND with pyro channels re-armed.
+            // Elapsed-ms comparisons are meaningless across an FC reboot
+            // anyway; state is the only trustworthy discriminator here.
+            const bool is_clear = (snap_state != (uint8_t)INFLIGHT);
             const bool stale_replay =
+                !is_clear &&
                 elapsed_ms < last_snap_elapsed_ms &&
                 (last_snap_elapsed_ms - elapsed_ms) <= NEW_FLIGHT_BACKSTEP_MS;
             if (!stale_replay)
             {
                 last_snap_elapsed_ms = elapsed_ms;
+                // #846: RAM cache first — the store that actually serves
+                // GET_FLIGHT_SNAPSHOT now. Same #383 guard protects it.
+                if (frame_len == kSnapFrameLen)
+                {
+                    const uint32_t now_cache = millis();
+                    portENTER_CRITICAL(&snapshot_cache_mux);
+                    memcpy(snapshot_cache, frame, kSnapFrameLen);
+                    snapshot_cache_valid = true;
+                    snapshot_cache_ms = now_cache;
+                    portEXIT_CRITICAL(&snapshot_cache_mux);
+                }
                 // Save the full ~224 B wire frame (SOF + type + len + payload + CRC)
                 // so the recovery path can hand the bytes straight back to FC.
+                // #822: a no-op returning false on a board with no MRAM
+                // (V9/V10) — deliberately unlogged here, because this runs at
+                // 10 Hz for the whole flight.  initPeripherals() warns once at
+                // boot and the GET_FLIGHT_SNAPSHOT handler warns when the FC
+                // actually comes asking; those are the two places that matter.
                 (void)logger.mramRawWrite(config::SNAPSHOT_REGION_BASE,
                                           frame, frame_len);
             }
@@ -2873,19 +3335,63 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     }
     else if (type == GET_FLIGHT_SNAPSHOT)
     {
-        // FC is asking for the latest snapshot at boot recovery.  Read
-        // the cached wire frame from MRAM and queue it as the I2C TX
-        // response.  If MRAM holds garbage / no valid snapshot, the FC's
-        // CRC + magic check will reject it and skip recovery — no need
-        // for an explicit "no data" indicator here.
-        constexpr size_t kFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
-        uint8_t snap_frame[kFrameLen] = {};
-        if (logger.mramRawRead(config::SNAPSHOT_REGION_BASE,
-                               snap_frame, sizeof(snap_frame)))
+        // FC is asking for the latest snapshot at boot recovery. #846: serve
+        // the RAM cache first — it holds the newest frame whether it arrived
+        // live over I2S or was re-seeded at boot from the NAND log stream.
+        // The V7/V8 MRAM slot is the fallback (an OC-also-reset on a board
+        // whose cache re-seed doesn't run because the MRAM covers it). The FC
+        // validates magic/version/state/CRC32/sim on its side, so garbage
+        // from either store is rejected there — no validity check needed here.
+        uint8_t snap_frame[kSnapFrameLen] = {};
+        bool have = false;
+        uint32_t cache_age = 0;
+        bool had_cache = false;
+        portENTER_CRITICAL(&snapshot_cache_mux);
+        if (snapshot_cache_valid)
+        {
+            memcpy(snap_frame, snapshot_cache, kSnapFrameLen);
+            cache_age = millis() - snapshot_cache_ms;
+            had_cache = true;
+        }
+        portEXIT_CRITICAL(&snapshot_cache_mux);
+
+        if (had_cache && snapshotServable(snap_frame, cache_age))
+        {
+            have = true;
+            snapshot_served = true;   // #846: consumed — see the boot re-seed
+        }
+        else if (!had_cache &&
+                 logger.mramRawRead(config::SNAPSHOT_REGION_BASE,
+                                    snap_frame, sizeof(snap_frame)) &&
+                 snapshotServable(snap_frame, 0))
+        {
+            // V7/V8 fallback. Age is unknown (the slot has no clock), so only
+            // the frame's own flight_elapsed_ms bounds it — enough to refuse
+            // a slot left INFLIGHT by a flight that has since timed out.
+            have = true;
+        }
+        else if (had_cache)
+        {
+            ESP_LOGW("OC", "[RECOVERY] cached snapshot not servable (age %lu ms, "
+                           "or not an in-flight frame) — not serving it",
+                     (unsigned long)cache_age);
+        }
+        if (have)
         {
             // Non-blocking write — if the TX ringbuffer is full, drop;
             // FC's masterRead retry path will handle it.
             i2c_interface.writeToSlave(snap_frame, sizeof(snap_frame), 0);
+        }
+        else
+        {
+            // No cache (nothing received this session, no boot re-seed) and
+            // no MRAM. The FC handles the missing reply safely — masterRead
+            // fails or the SOF scan finds nothing, it retries (#364), then
+            // cold-starts — but from the OC side the request would otherwise
+            // vanish without trace. Fires at most once per FC reset per retry.
+            ESP_LOGW("OC", "[RECOVERY] FC asked for a flight snapshot and "
+                           "none is available (no cached frame, no MRAM) — "
+                           "sending no reply");
         }
     }
     else if (type == I2C_TX_RESYNC)
@@ -3856,8 +4362,9 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // Falls back to toggle if no payload (legacy compat).
         bool want_on = (payload_len >= 1) ? (payload[0] != 0)
                                           : !camera_recording_requested;
-        if (want_on != camera_recording_requested)
+        if (want_on != camera_recording_requested || !camera_state_known)
         {
+            camera_state_known = true;   // #825: see the BLE cmd-1 twin
             camera_recording_requested = want_on;
             setPendingCommand(want_on ? CAMERA_START : CAMERA_STOP);
             ESP_LOGI("LORA", "UPLINK Camera %s", want_on ? "START" : "STOP");
@@ -5057,7 +5564,10 @@ static void printStats()
                 rss.bad_blocks    = (uint16_t)flightlog.bitmap().countInState(tr_flightlog::BLOCK_BAD);
                 rss.system_blocks = (uint16_t)(fcfg.flight_region_start + 4u);  // LFS region + 4 metadata
                 rss.flight_count  = (uint16_t)flightlog.index().size();
-                rss.block_size_kb = (uint16_t)(tr_flightlog::NAND_BLOCK_SIZE / 1024u);
+                // #671: runtime block size — 256 on the V8 part, 128 on the
+                // GD5F parts. The wire struct is self-describing, so the app
+                // scales by this field.
+                rss.block_size_kb = (uint16_t)(flightlog.pageSize() * flightlog.pagesPerBlock() / 1024u);
                 rss.flags         = RSS_FLAG_INITIALIZED;
                 if (flightlog.autoEvictedCount() > 0)  // #315: rolling-buffer evicted this session
                     rss.flags |= RSS_FLAG_AUTO_EVICTED;
@@ -5416,6 +5926,17 @@ static void printStats()
     ble_telem.longitude = NAN;
     ble_telem.gdop = NAN;
     ble_telem.num_sats = 0;
+
+    // FC boot progress: report it ONLY until the FC's first NonSensorData
+    // arrives.  From that moment rocket_state is real and the boot keys would
+    // be stale, so they stop being emitted and the app falls back to the state
+    // machine.  Before ANY boot frame arrives the keys are absent too, which is
+    // itself the "flight computer has not spoken" signal the app needs to
+    // distinguish a powered-off FC from a booting one.
+    ble_telem.boot_valid      = fc_boot_status_valid && !fc_ns_since_boot;
+    ble_telem.boot_step       = fc_boot_status.step;
+    ble_telem.boot_degraded   = fc_boot_status.degraded;
+    ble_telem.boot_elapsed_ms = fc_boot_status.elapsed_ms;
     if (latest_power_valid)
     {
         POWERDataSI p = {};
@@ -5481,6 +6002,52 @@ static void printStats()
         }
         sh = shSet(sh, SH_STORAGE_SHIFT, ocStorageHealth());  // #281/#278
         ble_telem.sensor_health = sh;
+    }
+    // #831: freshness of the FC-sourced half of this frame.
+    //
+    // Everything above that describes the rocket — attitude, the sensor-health
+    // scorecard, the pyro bits — is copied out of latest_non_sensor, an I2C
+    // snapshot the OC republishes on every BLE tick regardless of whether the
+    // FC is still talking.  latest_non_sensor_valid latches once at first
+    // receipt and is never cleared, so an FC that dies, reboots, or has its
+    // rail cut leaves the OC sending the last good frame's continuity bits
+    // forever, and the app renders a confident green CONT measured before the
+    // failure.  That is precisely the held-over green #297 exists to prevent;
+    // it just had no backstop on the direct path, because data_status was
+    // never set here at all and defaulted to LIVE on every frame.
+    //
+    // Setting it costs nothing on the wire (the field already exists and is
+    // only serialised when non-LIVE) and needs no app change: the app's
+    // existing #297 machinery already renders a non-live stream's continuity
+    // as NO DATA rather than a stale reading.
+    //
+    // The FC sends NonSensorData at NON_SENSOR_UPDATE_RATE = 500 Hz, so this
+    // threshold is ~1500 missed frames — it cannot fire on an I2S hiccup, only
+    // on an FC that has genuinely stopped.  SYNCING rather than STALE before
+    // the first frame ever arrives: "no rocket data yet" is a different thing
+    // from "rocket data has gone stale", and it is what the app already shows
+    // during the FC's ~25 s boot.
+    {
+        const uint32_t now_ms = millis();
+        if (!latest_non_sensor_valid)
+        {
+            ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::SYNCING;
+            ble_telem.data_age_ms = 0;
+        }
+        else
+        {
+            const uint32_t ns_age_ms = now_ms - latest_non_sensor_rx_ms;
+            if (ns_age_ms > config::FC_FRAME_STALE_MS)
+            {
+                ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::STALE;
+                ble_telem.data_age_ms = ns_age_ms;
+            }
+            else
+            {
+                ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::LIVE;
+                ble_telem.data_age_ms = 0;
+            }
+        }
     }
     ble_telem.rssi = NAN;  // LoRa RSSI only meaningful on base station (continuous RX)
     ble_telem.snr = NAN;
@@ -5561,6 +6128,10 @@ void initPeripherals()
     log_cfg.spi_hz_nand = config::SPI_HZ_NAND;
     log_cfg.spi_mode_nand = config::SPI_MODE_NAND;
     log_cfg.ring_buffer_size = config::RAM_RING_SIZE;
+    // #822: on a board whose MRAM was replaced by in-package PSRAM, put the
+    // ring there instead of in the 64 KB internal fallback. 0 on every
+    // MRAM-fitted board, which keeps V7/V8 on exactly their old path.
+    log_cfg.psram_ring_size = config::RING_IN_PSRAM ? config::PSRAM_RING_SIZE : 0;
     log_cfg.debug = config::DEBUG;
     // MRAM ring buffer (128 KB on shared SPI bus — replaces 64 KB RAM ring)
     log_cfg.mram_cs = config::MRAM_CS;
@@ -5573,8 +6144,9 @@ void initPeripherals()
 
     // --- LFS shrunk to 4 MB + hot-path write sink (issue #50) ---------------
     // LFS holds 32 blocks for config/placeholder use; TR_FlightLog owns the
-    // remaining 2012 blocks plus the metadata blocks 2044-2047. Each 4080 B
-    // chunk the flush task drains from the ring is routed through
+    // rest of the chip up to its four metadata blocks (#671: block size and
+    // count are runtime chip geometry). Each (page - 16)-byte chunk the
+    // flush task drains from the ring is routed through
     // flightlogWriteSink → flightlog.writeFrame(), which wraps it in a
     // PageHeader (CRC32 + seq + flight_id) and programs one NAND page
     // directly.
@@ -5586,8 +6158,96 @@ void initPeripherals()
 
     if (!logger.begin(SPI, log_cfg))
     {
+        // Non-obvious on the RAM-ring path: begin() also fails when the 64 KB
+        // internal-RAM ring can't be allocated. That leaves
+        // peripherals_initialized false and flightlog uninitialized, so
+        // ocStorageHealth() reports SH_BAD and the pre-launch scorecard goes
+        // red — the operator does find out. Keep it that way.
         ESP_LOGE("PWR", "TR_LogToFlash begin failed");
         return;
+    }
+
+    // #822: V9/V10 deleted the MRAM (U12, MR25H10) — the S3RH2's in-package
+    // PSRAM replaced it — so board_v9.h sets MRAM_CS = -1 and TR_LogToFlash
+    // falls back to a heap RAM ring. Flight logging is unaffected (the ring
+    // still feeds the NAND flush task), but two things that live in the MRAM
+    // region are GONE on those boards, not degraded:
+    //
+    //   * #104 in-flight reboot recovery. The FC asks for its last snapshot
+    //     with GET_FLIGHT_SNAPSHOT after a brownout/panic; the handler reads it
+    //     out of MRAM, so with no MRAM there is nothing to answer with and the
+    //     FC skips recovery.
+    //   * #274 dirty-ring replay. The marker sits in the same region, so an
+    //     unclean shutdown can no longer be detected, and the volatile ring
+    //     would not have survived the reset anyway.
+    //
+    // Both failures are otherwise completely silent — mramRawWrite/Read just
+    // return false, nothing logs, nothing goes red — so the first evidence
+    // would be a flight that browned out and never came back. Say it once,
+    // loudly, at boot instead. The replacement design already exists on the
+    // mini (snapshots written into the NAND log stream, recovered by a
+    // tail-scan at boot); porting it to the OC/FC pair is the real fix.
+    // #822: cross-check the board flag against the silicon, unconditionally —
+    // this is the generalisation of the bug that motivated board_v9.h. A wrong
+    // -DTR_BOARD_* flag has no runtime symptom on this MCU (the pin maps are
+    // identical), so the only thing that can catch it is asking the chip.
+    {
+        const int psram_mb = s3PsramCapMb();
+        if (psram_mb < 0)
+        {
+            ESP_LOGI("PWR", "In-package PSRAM per eFuse: unreadable");
+        }
+        else if (psram_mb == 0)
+        {
+            ESP_LOGI("PWR", "In-package PSRAM per eFuse: none");
+        }
+        else
+        {
+            ESP_LOGI("PWR", "In-package PSRAM per eFuse: %d MB", psram_mb);
+        }
+
+        // Disagreements are build/flash mistakes, not hardware faults, so they
+        // are worth shouting about while someone is still at the bench.
+        if (config::RING_IN_PSRAM && psram_mb == 0)
+        {
+            ESP_LOGE("PWR", "BOARD FLAG SAYS PSRAM, SILICON SAYS NONE — this is "
+                            "not a V9/V10 board, or it was built -DTR_BOARD_V9=1 "
+                            "by mistake. Ring falls back to internal RAM.");
+        }
+        else if (!config::RING_IN_PSRAM && psram_mb > 0)
+        {
+            ESP_LOGW("PWR", "This chip has %d MB of in-package PSRAM that the "
+                            "selected board map does not use. Expected on a V7/V8 "
+                            "board (MRAM is fitted); if this IS a V9/V10 board, it "
+                            "was built with the wrong -DTR_BOARD_* flag.", psram_mb);
+        }
+    }
+
+    if (!logger.isMramEnabled())
+    {
+        TR_LogToFlashStats mram_st = {};
+        logger.getStats(mram_st);
+        ESP_LOGW("PWR", "========================================");
+        ESP_LOGW("PWR", "NO MRAM ON THIS BOARD (MRAM_CS = -1).");
+        ESP_LOGW("PWR", "  Log ring: %lu KB of %s, VOLATILE.",
+                 (unsigned long)(mram_st.ring_size / 1024),
+                 logger.isRingInPsram() ? "in-package PSRAM" : "internal RAM");
+        ESP_LOGW("PWR", "  In-flight reboot recovery (#104): RAM cache + NAND");
+        ESP_LOGW("PWR", "  tail-scan (#846) — no longer MRAM-dependent.");
+        ESP_LOGW("PWR", "  Dirty-ring replay (#274): UNAVAILABLE.");
+        ESP_LOGW("PWR", "  Expected on V9/V10. On a V8 board this means the");
+        ESP_LOGW("PWR", "  image was built with the wrong -DTR_BOARD_* flag.");
+        ESP_LOGW("PWR", "========================================");
+        // #822: PSRAM is the ring's intended home on V9/V10. Landing on
+        // internal RAM instead means either CONFIG_SPIRAM is off or the part
+        // did not come up — the ring is then ~8x smaller than designed, which
+        // is exactly the kind of quiet downgrade this block exists to prevent.
+        if (config::RING_IN_PSRAM && !logger.isRingInPsram())
+        {
+            ESP_LOGE("PWR", "  ^ THIS BOARD EXPECTED A PSRAM RING AND DID NOT "
+                            "GET ONE — see the PSRAM init line earlier in this "
+                            "boot log.");
+        }
     }
 
     // --- TR_FlightLog begin (issue #50) -------------------------------------
@@ -5600,10 +6260,21 @@ void initPeripherals()
     flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
     {
         tr_flightlog::TR_FlightLog::Config fl_cfg{};
-        // #398 / #492: the 3840 Hz stream makes larger files and the 512 MB
-        // chip has ample headroom, so pre-allocate ~20 MB up front (80 × 256 KB
-        // blocks) — most flights then never extend mid-flight (the extend path's
-        // NAND erase + bitmap persist is the in-flight hiccup we want to avoid).
+        // #671: geometry is runtime — logger.begin() resolved the chip from
+        // RDID, and everything below is denominated in ITS blocks. Region and
+        // metadata come from the chip's block count (top four blocks are
+        // metadata), which is what the Config sentinels would also derive —
+        // but the auto-evict target and the bitmap-store bind() below need
+        // the concrete numbers before flightlog.begin(), so fill explicitly.
+        const auto& ngeom = logger.nandGeometry();
+        fl_cfg.flight_region_end = static_cast<uint16_t>(ngeom.block_count - 4);
+        for (int i = 0; i < 4; ++i)
+            fl_cfg.metadata_blocks[i] = static_cast<uint16_t>(ngeom.block_count - 4 + i);
+        // #398 / #492 / #671: the 3840 Hz stream makes larger files, so
+        // pre-allocate 80 blocks up front — ~20 MB on the V8 bench part
+        // (256 KB blocks), ~10 MB on V9's GD5F2GQ5UE (128 KB blocks); both
+        // cover a typical flight (~156 KB/s x 60 s = ~9.4 MB) without the
+        // extend path's in-flight erase hiccup.
         fl_cfg.prealloc_blocks = 80;
         // #315: rolling-buffer auto-eviction. When the card fills, prepareFlight
         // reclaims space at arm time by deleting the oldest finalized flight(s)
@@ -5665,6 +6336,126 @@ void initPeripherals()
             ESP_LOGE("FLIGHTLOG", "#274: MRAM recovery — prepareFlight failed (no space?)");
         }
         logger.finishMramRecovery();
+    }
+
+    // #846: re-seed the RAM snapshot cache from the NAND log stream — the
+    // OC-also-reset half of in-flight reboot recovery on no-MRAM boards. The
+    // snapshot frames rode the flight log (every received frame is enqueued
+    // byte-exact), and the brownout scanner inside flightlog.begin() has
+    // already recovered the un-finalized flight as flight_recovered_<id>.bin.
+    //
+    // The staleness defense is an NVS once-marker (id + final_bytes, since
+    // ids are reused after deletes), and it is load-bearing: without it a
+    // recovered flight could answer an FC panic weeks later with INFLIGHT and
+    // re-arm pyro on the ground. Three rules make it airtight:
+    //   * the marker is written on CONSUMPTION (after the frame is actually
+    //     served) or on DECLINE — never merely on seeding, or a second reset
+    //     before the FC asks would burn the flight's only chance;
+    //   * a POWERON boot still MARKS (without seeding): a cold start is
+    //     exactly when an old recovered flight must be retired, and a crash
+    //     whose next boot is a full pack dropout would otherwise leave it
+    //     unmarked for some later fault reset to seed from;
+    //   * NVS unavailable => do not seed at all (fail CLOSED — with no way to
+    //     record consumption, seeding could repeat indefinitely).
+    // The seeded frame must itself be INFLIGHT: a stream ending in the FC's
+    // LANDED clear means the flight is over. The FC re-validates
+    // magic/version/INFLIGHT/CRC32/sim regardless, so this is belt on braces.
+    if (!logger.isMramEnabled() && flightlog.isInitialized())
+    {
+        const bool cold_boot = (esp_reset_reason() == ESP_RST_POWERON);
+        uint32_t best_id = 0;
+        int best_idx = -1;
+        uint32_t newest_id = 0;
+        for (size_t i = 0; i < flightlog.index().size(); ++i)
+        {
+            const auto& e = flightlog.index().at(i);
+            if (e.flight_id > newest_id) newest_id = e.flight_id;
+            if (strncmp(e.filename, "flight_recovered_", 17) == 0 &&
+                e.flight_id >= best_id)
+            {
+                best_id = e.flight_id;
+                best_idx = (int)i;
+            }
+        }
+        if (best_idx >= 0 && best_id == newest_id)
+        {
+            const auto& e = flightlog.index().at((size_t)best_idx);
+            Preferences rp;
+            if (!rp.begin("snaprec", false))
+            {
+                ESP_LOGW("FLIGHTLOG", "#846: snaprec NVS unavailable — not "
+                         "re-seeding (cannot track consumption)");
+            }
+            else
+            {
+                const uint32_t done_id = rp.getUInt("done_id", 0);
+                const uint32_t done_by = rp.getUInt("done_by", 0);
+                const bool already = (done_id == e.flight_id &&
+                                      done_by == e.final_bytes);
+                if (already)
+                {
+                    // Nothing to do — this flight was seeded-and-served or
+                    // declined on an earlier boot.
+                }
+                else if (cold_boot)
+                {
+                    // Retire it without seeding: a cold start is not a
+                    // recovery context, and leaving it unmarked would let a
+                    // later fault reset seed from an arbitrarily old flight.
+                    rp.putUInt("done_id", e.flight_id);
+                    rp.putUInt("done_by", e.final_bytes);
+                    ESP_LOGI("FLIGHTLOG", "#846: %s retired on a cold boot "
+                             "(not a recovery context)", e.filename);
+                }
+                else
+                {
+                    // Window buffer sized for the MAX per-page payload so one
+                    // readFlightPage can always fill it at any chip geometry.
+                    static uint8_t scan_buf[(4096 - 16) + kSnapFrameLen];
+                    constexpr uint32_t kTailWindow = 64u * 1024u;
+                    uint8_t last_f[kSnapFrameLen] = {};
+                    uint8_t best_f[kSnapFrameLen] = {};
+                    const bool got = tr_flightlog::tailScanForFrame(
+                        flightlog, e.filename, e.final_bytes, SNAPSHOT_MSG,
+                        (uint8_t)sizeof(FlightSnapshotData), kTailWindow,
+                        last_f, scan_buf, sizeof(scan_buf),
+                        best_f, offsetof(FlightSnapshotData, flight_elapsed_ms));
+                    // The LAST frame decides whether the flight ended (a
+                    // LANDED clear means it did); the HIGHEST-elapsed frame is
+                    // the one to restore from, because an I2S DMA replay can
+                    // leave an older snapshot sitting after a newer one in the
+                    // stream — the same staleness the #383 guard blocks live.
+                    const bool ended = !got || !snapshotServable(last_f, 0);
+                    if (got && !ended && snapshotServable(best_f, 0))
+                    {
+                        portENTER_CRITICAL(&snapshot_cache_mux);
+                        memcpy(snapshot_cache, best_f, kSnapFrameLen);
+                        snapshot_cache_valid = true;
+                        snapshot_cache_ms = millis();
+                        portEXIT_CRITICAL(&snapshot_cache_mux);
+                        snapshot_seed_pending_mark = true;
+                        snapshot_seed_id = e.flight_id;
+                        snapshot_seed_bytes = e.final_bytes;
+                        ESP_LOGW("FLIGHTLOG", "#846: snapshot cache re-seeded "
+                                 "from %s (%lu B) — in-flight reboot recovery "
+                                 "armed for the FC's next ask",
+                                 e.filename, (unsigned long)e.final_bytes);
+                    }
+                    else
+                    {
+                        // Declined: nothing found, or the stream's last word
+                        // was a LANDED clear / an out-of-bounds elapsed. Mark
+                        // now — a rescan next boot would decline identically.
+                        rp.putUInt("done_id", e.flight_id);
+                        rp.putUInt("done_by", e.final_bytes);
+                        ESP_LOGW("FLIGHTLOG", "#846: no in-flight snapshot in "
+                                 "the tail of %s — recovery not re-seeded",
+                                 e.filename);
+                    }
+                }
+                rp.end();
+            }
+        }
     }
 
     // -------------------------------------------------------------------
@@ -5960,29 +6751,28 @@ void initPeripherals()
     // dma_frame_num doubled 64 -> 128 alongside the 22050 -> 44100 link rate
     // so each descriptor still spans ~2.9 ms (512 B at 176 KB/s) — the same
     // callback cadence the parser was tuned against at the old rate.
-    if (i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
-                                 config::I2S_WS_PIN,
-                                 config::I2S_DIN_PIN,
-                                 config::I2S_FSYNC_PIN,
-                                 config::I2S_SAMPLE_RATE,
-                                 4,      // dma_desc_num
-                                 128) != ESP_OK)  // dma_frame_num → 512 bytes each
+    // #834 items 6/7 (review): go through the SAME helper the recovery paths use
+    // so a boot failure sets oc_i2s_rx_broken and loop_oc's 1 Hz retry picks it
+    // up. Open-coding begin+register here left the most consequential failure of
+    // all — no RX from boot — as the one case the new never-give-up retry did
+    // not cover, with the retry loop idle one screen away.
+    // The mutex may not exist yet at this point in setup; take it if it does.
+    if (oc_i2s_mutex != nullptr) xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
+    const esp_err_t rx_err = ocBeginSlaveRxLocked("boot");
+    if (oc_i2s_mutex != nullptr) xSemaphoreGive(oc_i2s_mutex);
+    if (rx_err != ESP_OK)
     {
-        ESP_LOGE("PWR", "I2S slave RX init failed");
+        ESP_LOGE("PWR", "I2S slave RX init failed — retrying from loop_oc");
     }
     else
     {
         ESP_LOGI("PWR", "I2S slave RX ready");
-
-        // Register zero-copy DMA receive callback.
-        // The callback fires from ISR context each time a DMA buffer
-        // completes, pushing bytes directly into rx_ring and notifying
-        // the parser task.  This eliminates stale DMA re-reads that
-        // caused periodic ~90ms gaps in logged data.
-        esp_err_t cb_err = i2s_stream.registerRecvCallback(i2sRecvCallback, nullptr);
-        if (cb_err != ESP_OK)
-            ESP_LOGE("PWR", "I2S recv callback failed: %s", esp_err_to_name(cb_err));
-
+    }
+    // Tasks are created unconditionally: a boot failure is now recoverable, and
+    // a channel that comes back via the retry needs a parser to drain rx_ring.
+    // Both are harmless with no channel — i2sRecvCallback null-checks
+    // i2s_rx_task_handle, and the feeder idles while !oc_ota_tx_mode.
+    {
         // Parser task — woken by DMA callback, parses frames from rx_ring.
         // Pinned to Core 1 at priority 6 (one above loopTask at prio 5).
         // Parser preempts loopTask whenever DMA notifies; loopTask runs
@@ -6054,6 +6844,46 @@ static void initI2CSlave()
 // ==========================================================================
 static void setup_oc()
 {
+    // #825: FIRST thing, before NVS init and the 500 ms boot delay burn the
+    // R84/C105 window (~0.8 s from the chip reset) — if the previous session
+    // had the FC rail ON and this reset was not a real power-on or the
+    // deliberate power-off reboot, re-assert the rail NOW. Without this, any
+    // OC panic/WDT/brownout (or a self-OTA restart) mid-flight let the FC —
+    // and its pyro channels — power off ~0.8 s later, ballistic.
+    {
+        const esp_reset_reason_t rst = esp_reset_reason();
+        const bool magic_ok = (rail_rtc.magic == kRailRtcMagic);
+        boot_rail_restored = RailRestorePolicy::shouldRestore(
+            rst == ESP_RST_POWERON, magic_ok,
+            magic_ok && rail_rtc.rail_on != 0,
+            magic_ok && rail_rtc.deliberate_off != 0,
+            magic_ok ? rail_rtc.restore_attempts : 0);
+        if (!magic_ok || rst == ESP_RST_POWERON)
+        {
+            rail_rtc = {kRailRtcMagic, 0, 0, 0};
+        }
+        rail_rtc.deliberate_off = 0;   // one-shot: consumed by this boot
+        if (magic_ok && rail_rtc.rail_on != 0 && !boot_rail_restored &&
+            rail_rtc.restore_attempts >= RailRestorePolicy::kMaxRestoreAttempts)
+        {
+            // Retry budget exhausted: stand down to the stable rail-off idle
+            // (the pre-#825 endpoint) instead of brownout-cycling the rail.
+            rail_rtc.rail_on = 0;
+            rail_rtc.restore_attempts = 0;
+        }
+        if (boot_rail_restored)
+        {
+            rail_rtc.restore_attempts++;   // cleared when the restore proves stable
+            pinMode(config::PWR_PIN, OUTPUT);
+            digitalWrite(config::PWR_PIN, HIGH);
+            if (config::GPS_PWR_PIN >= 0)
+            {
+                pinMode(config::GPS_PWR_PIN, OUTPUT);
+                digitalWrite(config::GPS_PWR_PIN, HIGH);
+            }
+        }
+    }
+
     // Ensure NVS is initialised (ESP-IDF on ESP32-P4/S3 may not auto-init)
     esp_err_t nvs_err = nvs_flash_init();
     if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND)
@@ -6064,14 +6894,23 @@ static void setup_oc()
 
     delay(500);
 
-    pinMode(config::PWR_PIN, OUTPUT);
-    digitalWrite(config::PWR_PIN, LOW);   // Start with power rail OFF
-    if (config::GPS_PWR_PIN >= 0)  // -1: board has no separate GPS rail (#411)
+    if (!boot_rail_restored)
     {
-        pinMode(config::GPS_PWR_PIN, OUTPUT);
-        digitalWrite(config::GPS_PWR_PIN, LOW);  // GPS enable rail off at boot
+        pinMode(config::PWR_PIN, OUTPUT);
+        digitalWrite(config::PWR_PIN, LOW);   // Start with power rail OFF
+        if (config::GPS_PWR_PIN >= 0)  // -1: board has no separate GPS rail (#411)
+        {
+            pinMode(config::GPS_PWR_PIN, OUTPUT);
+            digitalWrite(config::GPS_PWR_PIN, LOW);  // GPS enable rail off at boot
+        }
     }
-    pwr_pin_on = false;
+    else
+    {
+        ESP_LOGE("PWR", "FC rail RE-ASSERTED at boot: previous session had it "
+                        "ON and this was not a power-on or a deliberate "
+                        "power-off (#825). Peripherals re-init after setup.");
+    }
+    pwr_pin_on = boot_rail_restored;
 
     ESP_LOGI("OC", "Starting OutComputer (low-power mode)...");
     // V9 selects the same map as V8 on this MCU (see config.h) — reported
@@ -6323,11 +7162,33 @@ static void setup_oc()
     ble_app.setOtaRelayDelegate(ocOtaRelayBegin, ocOtaRelayFinish, ocOtaRelayAbort,
                                 ocOtaRelayData, nullptr);
 
-    // Enter low-power mode: 80 MHz, DFS to 40 MHz when idle
-    enterLowPowerMode();
+    if (boot_rail_restored)
+    {
+        // #825: the rail came back up at the top of setup. Stay OUT of
+        // low-power mode — the FC is running — but DEFER the cmd-8 power-ON
+        // side effects (initPeripherals etc.) to the first loop_oc iteration:
+        // loop_oc is pinned to core 1, where every other initPeripherals call
+        // runs, and the I2S RX GDMA / LoRa interrupts are allocated on the
+        // calling core. Running them here (setup_oc = core 0 = the BT core)
+        // would park the ~3 ms-cadence I2S ISR against the BLE stack for the
+        // rest of the resumed flight.
+        boot_rail_restore_init_pending = true;
+        // #825: the restored FC may still be mid-recording — our reset wiped
+        // the commanded camera state, so the explicit-state dedup must not
+        // trust it until the first command re-synchronizes it.
+        camera_state_known = false;
+        last_stats_ms = millis();
+        ESP_LOGW("OC", "OutComputer ready (FC rail RESTORED after reset — "
+                       "peripheral re-init deferred to the loop task).");
+    }
+    else
+    {
+        // Enter low-power mode: 80 MHz, DFS to 40 MHz when idle
+        enterLowPowerMode();
 
-    last_stats_ms = millis();
-    ESP_LOGI("OC", "OutComputer ready (PWR_PIN OFF, waiting for power-on command).");
+        last_stats_ms = millis();
+        ESP_LOGI("OC", "OutComputer ready (PWR_PIN OFF, waiting for power-on command).");
+    }
 }
 
 // ==========================================================================
@@ -6368,6 +7229,49 @@ static constexpr uint32_t IDLE_LOOP_DELAY_MS = 20;
 
 static void loop_oc()
 {
+    // #825: one-shot completion of a boot rail restore, on THIS task/core
+    // (core 1) so the I2S RX GDMA and LoRa interrupts land where every other
+    // initPeripherals() call puts them. The rail has been up since the top of
+    // setup_oc — far longer than the cmd-8 path's 500 ms settle.
+    if (boot_rail_restore_init_pending)
+    {
+        boot_rail_restore_init_pending = false;
+        vTaskDelay(1);  // feed watchdog before long init
+        initPeripherals();
+        if (ina230_ok) {
+            ina230.setConfiguration(INA230_Avg::AVG_1,
+                                    INA230_ConvTime::CT_332us,
+                                    INA230_ConvTime::CT_332us,
+                                    INA230_Mode::POWER_DOWN);
+            ina_continuous = false;
+        }
+        // The restore has proven stable (system up, peripherals in): reset
+        // the brownout retry budget so a LATER fault gets a fresh allowance.
+        rail_rtc.restore_attempts = 0;
+        ESP_LOGW("OC", "FC rail restore complete — peripherals re-initialized "
+                       "on the loop core, telemetry resuming.");
+    }
+
+    // #846: a boot-re-seeded snapshot is marked consumed only after the FC has
+    // actually been served it — writing the marker at seed time would burn the
+    // flight's one chance if another reset wiped the RAM cache before the ask.
+    // Done here (loop context) so the NVS write never lands in the I2C ingress
+    // path that serves the frame.
+    if (snapshot_seed_pending_mark && snapshot_served)
+    {
+        snapshot_seed_pending_mark = false;
+        Preferences rp;
+        if (rp.begin("snaprec", false))
+        {
+            rp.putUInt("done_id", snapshot_seed_id);
+            rp.putUInt("done_by", snapshot_seed_bytes);
+            rp.end();
+            ESP_LOGI("FLIGHTLOG", "#846: re-seeded snapshot consumed by the FC "
+                     "— flight %lu marked evaluated",
+                     (unsigned long)snapshot_seed_id);
+        }
+    }
+
     // Serial debug console removed (was Arduino Serial.available/read).
     // Use ESP-IDF console component or BLE commands for debug interaction.
     const int64_t _loop_oc_t0 = esp_timer_get_time();
@@ -6443,21 +7347,14 @@ static void loop_oc()
             {
                 oc_ota_relay_ready_pending = false;
                 oc_ota_warmup_since_ms     = 0;
+                // #834 item 7: arm the stall watchdog only now. Before "ready"
+                // the silence is deliberate (the warmup window idle-fills so the
+                // FC's slave RX can lock onto BCLK), so arming earlier would
+                // abort every OTA.
+                oc_ota_last_chunk_ms = warm_now_ms;
                 ble_app.relayFcOtaStatus("ready", nullptr, 0, false);
             }
         }
-        if (oc_ota_revert_to_rx_requested)
-        {
-            // Clear AFTER the revert completes, not before. The feeder watches this
-            // flag to back off oc_i2s_mutex so ocRevertToRx() can acquire it (see the
-            // feeder's comment). Clearing first would let the higher-priority feeder
-            // resume mid-revert and starve ocRevertToRx()'s mutex take — the FINISH
-            // deadlock. ocRevertToRx() sets oc_ota_tx_mode=false, so the feeder idles
-            // regardless once it returns.
-            ocRevertToRx();
-            oc_ota_revert_to_rx_requested = false;
-        }
-
         // Deferred I2C slave init: wait for I2S DMA activity confirming
         // the FC is alive before enabling the slave on the bus.
         if (!i2c_slave_initialized && dma_cb_count > 50)
@@ -6609,6 +7506,70 @@ static void loop_oc()
 
     }
 
+    // ----------------------------------------------------------------------
+    // I2S link recovery — deliberately OUTSIDE the pwr_pin_on gate above.
+    // #834 items 6/7: every path that can strand the OC's I2S is serviced here.
+    // Losing slave RX means no FC telemetry, no logging and two frozen
+    // downlinks until a power cycle, so recovery must not depend on the app,
+    // the FC, or the switched rail being on — a rail-off mid-relay used to
+    // strand it exactly this way, because the revert lived inside that gate.
+    // ----------------------------------------------------------------------
+    {
+        const uint32_t i2s_now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+        // The app vanished mid-transfer (walked out of range, screen lock, app
+        // killed). onDisconnect stages an abort, but a link that simply stops
+        // pumping without disconnecting leaves no event at all — hence a
+        // timeout on chunk arrival as well.
+        if (OtaRelayPolicy::relayStalled(oc_ota_tx_mode, oc_ota_last_chunk_ms,
+                                         i2s_now_ms))
+        {
+            ESP_LOGE("OC", "OTA relay: no chunk for %u ms while flipped — "
+                           "abandoning and reverting to slave RX",
+                     (unsigned)OtaRelayPolicy::kRelayStallTimeoutMs);
+            oc_ota_last_chunk_ms          = 0;   // disarm before the revert
+            setPendingCommand(OTA_ABORT_CMD);
+            oc_ota_revert_to_rx_requested = true;
+            // End the BLE-side session too. A stall with the link still UP
+            // produces no onDisconnect, so without this ota_relay_active_ and
+            // ota_session_active_ stay set: battery/power reads remain gated
+            // off and a later OTA_BEGIN is rejected as already-in-progress.
+            ble_app.relayFcOtaStatus("aborted", "relay_stalled", 0, true);
+            ocOtaRelayClearPendingFlip();
+        }
+
+        if (oc_ota_revert_to_rx_requested)
+        {
+            // Clear AFTER the revert completes, not before. The feeder watches this
+            // flag to back off oc_i2s_mutex so ocRevertToRx() can acquire it (see the
+            // feeder's comment). Clearing first would let the higher-priority feeder
+            // resume mid-revert and starve ocRevertToRx()'s mutex take — the FINISH
+            // deadlock. ocRevertToRx() sets oc_ota_tx_mode=false, so the feeder idles
+            // regardless once it returns.
+            ocRevertToRx();
+            oc_ota_revert_to_rx_requested = false;
+        }
+
+        // A begin that failed anywhere above leaves us with no channel. Keep
+        // retrying: a transient DMA-allocation failure (BLE buffers, the
+        // flightlog scratch and the 64 KB rx_ring are all live during a relay)
+        // costs about a second of telemetry instead of the whole flight.
+        // Re-sample: ocRevertToRx() above sleeps 100 ms and stamps
+        // oc_i2s_rx_last_try_ms, which would then be AHEAD of the i2s_now_ms
+        // captured at the top of this block — unsigned subtraction turns that
+        // into ~49 days and fires the retry immediately.
+        const uint32_t retry_now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        if (OtaRelayPolicy::shouldRetryRx(oc_i2s_rx_broken, retry_now_ms,
+                                          oc_i2s_rx_last_try_ms) &&
+            oc_i2s_mutex != nullptr)
+        {
+            xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
+            i2s_stream.end();          // drop whatever half-state is there
+            ocBeginSlaveRxLocked("retry");
+            xSemaphoreGive(oc_i2s_mutex);
+        }
+    }
+
     // Auto-send config once the BLE connection is fully ready — MTU negotiated
     // AND the app has enabled notifications on the telemetry/config char.
     // Edge-armed on connect, then deferred (no blocking delay) until ready.
@@ -6687,6 +7648,25 @@ static void loop_oc()
     // schedules esp_restart() ~500 ms out, but the reboot only fires from here.
     // Without this, an OTA completes and sets ota_1 yet the device never reboots
     // into the new image (#8 Phase-3 OC bench finding; loop_bs always called it).
+    // #834 item 2: ble_app.loop() below fires the OTA deferred reboot — on
+    // THIS task, with the flush task still programming pages, and with none of
+    // the power-off path's protection: no rail drop, no settle, no GPIO
+    // teardown. The 500 ms it waits is a BLE-notify drain window, not a
+    // storage window. Gated on otaRestartDue() (ELAPSED, not merely scheduled)
+    // so the ring keeps draining for that whole window and we only quiesce on
+    // the pass that will actually restart.
+    if (ble_app.otaRestartDue())
+    {
+        // Atomic with the restart on purpose. The quiesce is IRREVERSIBLE (the
+        // SPI bus is parked and never handed back, ingest stays paused), while
+        // ota_pending_restart_at_ms_ lives on the NimBLE host task and can be
+        // cleared by an OTA_ABORT arriving between these two lines. Letting
+        // ble_app.loop() re-derive the decision would then leave the OC
+        // quiesced and never rebooted — storage dead until a power cycle.
+        quiesceStorageForRestart("ota-reboot");
+        ESP_LOGW("OC", "OTA: rebooting now to load new partition (#834 item 2)");
+        esp_restart();
+    }
     ble_app.loop();
 
     // Check for BLE commands
@@ -6724,8 +7704,12 @@ static void loop_oc()
             const size_t   plen    = ble_app.getCommandPayloadLength();
             const bool want_on = (plen >= 1) ? (payload[0] != 0)
                                              : !camera_recording_requested;
-            if (want_on != camera_recording_requested)
+            if (want_on != camera_recording_requested || !camera_state_known)
             {
+                // #825: after a boot rail restore the flag is a guess (our
+                // reset zeroed it; the FC kept running) — forward the first
+                // explicit command unconditionally so a stop can always stop.
+                camera_state_known = true;
                 camera_recording_requested = want_on;
                 setPendingCommand(want_on ? CAMERA_START : CAMERA_STOP);
                 ESP_LOGI("BLE", "Camera %s%s", want_on ? "START" : "STOP",
@@ -6840,7 +7824,7 @@ static void loop_oc()
         {
             ESP_LOGW("BLE", "Download '%s' refused: rocket INFLIGHT",
                      download_filename.c_str());
-            ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
+            (void)ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             download_filename = "";
         }
         if (download_filename.length() > 0)
@@ -6877,7 +7861,7 @@ static void loop_oc()
             {
                 ESP_LOGE("BLE", "chunk data size is 0, aborting download");
                 // #526: this is a failure, not a completed empty file.
-                ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
+                (void)ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             }
             else
             {
@@ -7031,17 +8015,17 @@ static void loop_oc()
                 // rather than named here.
                 ESP_LOGE("BLE", "Download ABORTED after %lu bytes",
                          (unsigned long)bytes_sent);
-                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
+                (void)ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
             }
             // Send remaining data with EOF flag
             else if (ble_used > 0)
             {
-                ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, true);
+                (void)ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, true);
                 bytes_sent += ble_used;
             }
             else
             {
-                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
+                (void)ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
             }
 
             // Redundant EOF in case the last notification was dropped. #526: it
@@ -7049,7 +8033,7 @@ static void loop_oc()
             // followed by a bare redundant EOF would resurrect the truncation bug
             // (the app would complete the partial file as if it were whole).
             delay(50);
-            ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/send_failed);
+            (void)ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/send_failed);
 
             uint32_t elapsed_ms = millis() - start_ms;
             float kbps = (elapsed_ms > 0) ? (bytes_sent / 1024.0f) / (elapsed_ms / 1000.0f) : 0;
@@ -7201,7 +8185,34 @@ static void loop_oc()
             const bool was_on  = pwr_pin_on;
             const bool want_on = (plen >= 1) ? (payload[0] != 0) : !pwr_pin_on;
 
-            if (want_on == was_on)
+            // #834 item 2: refuse an OFF while flying, matching the gates
+            // delete and download already have. Two reasons. (1) Post-#848 the
+            // FC holds its own rail through P4_EN_HOLD, so this no longer
+            // powers anything down — it just resets the OC and kills the
+            // downlink mid-flight. (2) The quiesce above now CLOSES the
+            // session, and the #846 boot re-seed only ever reads a
+            // flight_recovered_* entry; a properly finalized flight is
+            // skipped. Without this gate a mid-flight power-off would destroy
+            // the FC's only NAND-side snapshot source while it is still
+            // flying. Gating removes that trade-off rather than weakening the
+            // quiesce.
+            // Freshness is load-bearing: latest_rocket_state NEVER AGES, and
+            // cmd 8 is the OC's only reset path. Gating on the latched value
+            // alone means an FC that died mid-flight — exactly when you most
+            // want to recover the OC — would refuse every power-off for the
+            // rest of the boot, with no way out but a battery pull.
+            const bool fc_state_fresh =
+                latest_non_sensor_valid &&
+                (uint32_t)(millis() - latest_non_sensor_rx_ms) <= config::FC_FRAME_STALE_MS;
+            const bool refuse_off = !want_on && was_on && fc_state_fresh &&
+                                    latest_rocket_state == INFLIGHT;
+            if (refuse_off)
+            {
+                ESP_LOGW("BLE", "Power off REFUSED: rocket is INFLIGHT "
+                                "(FC frame %lu ms ago)",
+                         (unsigned long)(millis() - latest_non_sensor_rx_ms));
+            }
+            else if (want_on == was_on)
             {
                 ESP_LOGI("BLE", "Power rail already %s, ignoring",
                          was_on ? "ON" : "OFF");
@@ -7222,6 +8233,7 @@ static void loop_oc()
                 {
                     digitalWrite(config::GPS_PWR_PIN, HIGH);
                 }
+                rail_rtc = {kRailRtcMagic, 1, 0, 0};  // #825: whole-struct write (see invariant)
                 vTaskDelay(pdMS_TO_TICKS(500));  // Allow power rail to stabilize
                 vTaskDelay(1);  // feed watchdog before long init
                 initPeripherals();  // Initialize SPI, NAND, LoRa, I2C
@@ -7263,45 +8275,100 @@ static void loop_oc()
                 // reconnect because the existing brownout-on-power-on
                 // hardware quirk exercises the same recovery path.
                 ESP_LOGI("PWR", "Power off: resetting OC for clean idle state (#9)...");
+                // #825: mark this restart as the DELIBERATE power-off so the
+                // boot-time re-assert stands down — boot-time rail-LOW is
+                // load-bearing for this flow (the reset IS the power-off).
+                rail_rtc = {kRailRtcMagic, 0, 1, 0};
                 digitalWrite(config::PWR_PIN, LOW);
                 if (config::GPS_PWR_PIN >= 0)
                 {
                     digitalWrite(config::GPS_PWR_PIN, LOW);  // drop GNSS rail in lockstep
                 }
 
-                // Drive every signal that goes from the OC to the switched-
-                // rail peripherals (LoRa, NAND, MRAM) LOW so back-feed current
-                // can't flow from the still-powered OC side through the
-                // peripherals' input ESD diodes into their now-unpowered VCC
-                // (TPS22918 OUT is being actively discharged via QOD, so any
-                // injected current shows up as steady draw on the OC's input
-                // rail). gpio_reset_pin detaches the pad from any SPI /
-                // peripheral matrix routing left over from initPeripherals();
-                // gpio_set_level(0) holds the pad LOW for the brief window
-                // before the reset. Post-reset, IOs default to high-Z, which
-                // is also fine — high-Z is not a back-feed source. (#9)
+                // #834 item 2: get the log onto the NAND before the reset.
+                // AFTER the rail drop on purpose — the wait doubles as
+                // rail-discharge time (PWR_PIN is already LOW) and the FC's
+                // frame source is gone. BEFORE the GPIO teardown below,
+                // because gpio_reset_pin() detaches the pads from the SPI
+                // matrix, after which no NAND command can complete.
+                quiesceStorageForRestart("power-off");
+
+                // Prevent back-feed into peripherals whose VCC is about to
+                // disappear: current from the still-powered OC side through a
+                // peripheral's input ESD diode into its dead rail shows up as
+                // steady draw on the OC's input. gpio_reset_pin detaches the
+                // pad from any peripheral-matrix routing left over from
+                // initPeripherals(); gpio_set_level(0) holds it LOW for the
+                // brief window before the reset. Post-reset IOs default to
+                // high-Z, which is also fine — high-Z is not a back-feed
+                // source. (#9)
+                //
+                // #834 item 2: this list used to name "LoRa, NAND, MRAM" and
+                // lead with the SPI bus. Every part of that was wrong for this
+                // board, verified against the KiCad netlist:
+                //   * U11 (GD5F2GQ5UE SPI NAND — "the flash") has VCC on +3V3,
+                //     generated by U18 (TPS62152) whose EN is tied to its own
+                //     AVIN: ALWAYS ON. It never loses power here, so there is
+                //     no dead rail to protect — and SPI_MISO is an output U11
+                //     DRIVES, so forcing the pad low was a push-pull fight with
+                //     a live chip. (Same reason the FC's I2S pins were moved to
+                //     the high-Z list below.)
+                //   * There is no MRAM on V9/V10 at all (#822) — MRAM_CS is -1.
+                //   * The switched rail V_MCU_SWTCH (U30) feeds the FC (U17)
+                //     and its sensors (U2/U3/U4/U20), none of which are here.
+                //   * LoRa is NOT on V_MCU_SWTCH: it is a J5 daughterboard fed
+                //     from VBATT through U29, enabled by LoRa_ACT, and talks
+                //     over UART — so the pins that genuinely need this are
+                //     LORA_UART_TX/RX, which the old list omitted entirely
+                //     while listing V7-only SPI-LoRa constants that are all -1
+                //     here and skipped. On V9 the loop therefore did nothing
+                //     except fight the flash.
+                // (There is no TPS22918 on this board either; the load
+                // switches are U29/U30 TPS22810 and U26/U28 TPS22811.)
+                //
+                // Split by direction: OC OUTPUTS into a soon-dead peripheral
+                // get driven LOW; anything the peripheral drives is left
+                // high-Z so we never contend with a still-powered part.
+                // LORA_ACT_PIN first: it is U29's enable, so dropping it is
+                // what actually removes the daughterboard's VBATT rail.
+                // Driving LORA_UART_TX low while the module is still powered
+                // would just hold a break condition on a live receiver; the
+                // back-feed this list exists to prevent only becomes possible
+                // once the rail is gone.
                 static const gpio_num_t kSwitchedRailPins[] = {
-                    (gpio_num_t)config::SPI_SCK,
-                    (gpio_num_t)config::SPI_MOSI,
-                    (gpio_num_t)config::SPI_MISO,
-                    (gpio_num_t)config::NAND_CS,
-                    (gpio_num_t)config::MRAM_CS,
-                    (gpio_num_t)config::LORA_SPI_SCK,
+                    (gpio_num_t)config::LORA_ACT_PIN,      // U29 EN -> LoRa rail
+                    (gpio_num_t)config::LORA_UART_TX_PIN,  // OC -> J5 daughterboard
+                    (gpio_num_t)config::LORA_SPI_SCK,      // V7 SPI-LoRa (-1 on V8+)
                     (gpio_num_t)config::LORA_SPI_MOSI,
-                    (gpio_num_t)config::LORA_SPI_MISO,
                     (gpio_num_t)config::LORA_CS_PIN,
                     (gpio_num_t)config::LORA_RST_PIN,
-                    (gpio_num_t)config::LORA_DIO1_PIN,
-                    (gpio_num_t)config::LORA_BUSY_PIN,
-                    // I2S signals from FC (slave RX on OC). FC's outputs go
-                    // high-Z when unpowered, but pinning these LOW removes
-                    // any residual matrix routing and avoids noise on
-                    // floating inputs that could spuriously draw through the
-                    // OC's input buffer / pull-up network. (#9)
+                };
+                // I2S signals from the FC (slave RX on the OC) are handled
+                // separately: they are FC OUTPUTS, and since #848 the FC can
+                // legitimately still be POWERED here (its P4_EN_HOLD latch
+                // during a sim/flight means dropping PWR_PIN no longer cuts
+                // its rail). Driving a live I2S bit clock hard LOW for the
+                // 100 ms below would be a sustained push-pull drive fight.
+                // gpio_reset_pin leaves them high-Z inputs — per the comment
+                // above, high-Z is not a back-feed source, which was the only
+                // reason these were ever in the driven-LOW list (#9).
+                // #834 item 2: the LoRa lines the DAUGHTERBOARD drives join
+                // them, for the same reason — and so do the flash's, which are
+                // simply left alone now: U11 stays powered, and the quiesce
+                // above has parked the SPI mutex with CS HIGH and no byte on
+                // the wire. (The park takes the mutex; it does NOT tear down
+                // the SPI driver — see TR_LogToFlash::parkSpiBusForReset. It
+                // does not need to: nothing can start a transaction while the
+                // bus is parked.)
+                static const gpio_num_t kHighZPins[] = {
                     (gpio_num_t)config::I2S_BCLK_PIN,
                     (gpio_num_t)config::I2S_WS_PIN,
                     (gpio_num_t)config::I2S_DIN_PIN,
                     (gpio_num_t)config::I2S_FSYNC_PIN,
+                    (gpio_num_t)config::LORA_UART_RX_PIN,  // J5 -> OC
+                    (gpio_num_t)config::LORA_SPI_MISO,     // V7 SPI-LoRa (-1 on V8+)
+                    (gpio_num_t)config::LORA_DIO1_PIN,
+                    (gpio_num_t)config::LORA_BUSY_PIN,
                 };
                 for (gpio_num_t pin : kSwitchedRailPins) {
                     if ((int)pin < 0) continue;  // peripheral absent on this board (#411)
@@ -7309,6 +8376,15 @@ static void loop_oc()
                     gpio_set_direction(pin, GPIO_MODE_OUTPUT);
                     gpio_set_pull_mode(pin, GPIO_FLOATING);
                     gpio_set_level(pin, 0);
+                }
+                for (gpio_num_t pin : kHighZPins) {
+                    if ((int)pin < 0) continue;
+                    gpio_reset_pin(pin);
+                    // gpio_reset_pin() ENABLES the internal pull-up, so on its
+                    // own it does not give the high-Z this list promises — a
+                    // ~45 kOhm pull to 3V3 still injects into an unpowered
+                    // peripheral, and still fights a live driver. Float it.
+                    gpio_set_pull_mode(pin, GPIO_FLOATING);
                 }
 
                 vTaskDelay(pdMS_TO_TICKS(100));   // let rail drop, caps discharge
@@ -7318,7 +8394,11 @@ static void loop_oc()
 
             // Only on an actual state change — an ignored duplicate must not
             // claim the rail was switched, nor re-push config.
-            if (want_on != was_on)
+            // #834 item 2: a REFUSED off never changed the rail, so it must
+            // not claim it did — the epilogue logs the transition, stalls the
+            // loop 100 ms and re-pushes config, all of which are wrong (and
+            // mid-flight, actively harmful) on a refusal.
+            if (want_on != was_on && !refuse_off)
             {
                 ESP_LOGI("BLE", "Power rail: %s%s", pwr_pin_on ? "ON" : "OFF",
                          (plen >= 1) ? "" : " (legacy toggle)");

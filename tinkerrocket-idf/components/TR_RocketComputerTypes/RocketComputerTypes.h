@@ -1116,6 +1116,51 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(MagCalApplyData) == 14,
               "MagCalApplyData must be 14 bytes");
 
+// FC boot progress (FC→OC over I2C, during setup_fc only).
+//
+// Why this exists as its own message rather than riding sensor_health: the FC
+// spends ~10 s in setup_fc() before loop_fc() ever runs, and NonSensorData —
+// which carries sensor_health — is not transmitted until then (FC main.cpp
+// enqueueI2STx(NON_SENSOR_MSG, ...)).  For that whole window the OC's
+// latest_non_sensor is still zeroed, and rocket_state == 0 == INITIALIZATION,
+// so the app cannot tell "flight computer off", "flight computer booting" and
+// "flight computer in the INITIALIZATION state" apart — all three render as
+// INIT.  The I2C master link is up early in setup_fc (well before sensor and
+// servo bring-up), so every slow step after it can report itself.
+//
+// `degraded` is a bitmask, not a step: a step that completed but degraded sets
+// its bit and boot CONTINUES, so the operator sees "GNSS: no fix yet" while the
+// sequence moves on rather than only learning at the end.  Bits persist for the
+// rest of the boot.
+typedef struct __attribute__((packed))
+{
+    uint8_t  step;        // FcBootStep — the step now STARTING
+    uint8_t  degraded;    // FCB_DEG_* bitmask of steps that completed degraded
+    uint16_t elapsed_ms;  // ms since FC reset, so the app can show a stall
+} FcBootStatusData;
+static_assert(sizeof(FcBootStatusData) == 4,
+              "FcBootStatusData must be 4 bytes");
+
+// Ordered: the app may render a progress bar from step/FCB_STEP_COUNT.  Append
+// only — the apps map unknown values to a generic "starting up".
+enum FcBootStep : uint8_t
+{
+    FCB_LINKS      = 0,  // I2C + I2S up (first reportable step)
+    FCB_NVS        = 1,  // reading stored config
+    FCB_SENSORS    = 2,  // IMU / baro / mag bring-up + ODR programming
+    FCB_GNSS       = 3,  // GNSS receiver bring-up
+    FCB_SERVOS     = 4,  // servo init + neutral settle
+    FCB_COMPLETE   = 5,  // setup_fc done; the state machine takes over
+    FCB_STEP_COUNT = 6,
+};
+
+// Degraded bits.  Set means "this step finished, but not fully" — boot did NOT
+// stop.  A step that is still running reports via `step` alone.
+static constexpr uint8_t FCB_DEG_SENSORS = 1u << 0;  // a sensor failed bring-up
+static constexpr uint8_t FCB_DEG_GNSS    = 1u << 1;  // no receiver / no fix yet
+static constexpr uint8_t FCB_DEG_SERVOS  = 1u << 2;  // servo init failed
+static constexpr uint8_t FCB_DEG_NVS     = 1u << 3;  // stored config unreadable
+
 // Sensor cal payload (issue #132): gyro zero-rate bias in raw LSB (subtracted
 // from raw gyro) + high-g accel bias in m/s².  app→FC via SENSOR_CAL_APPLY_MSG.
 typedef struct __attribute__((packed))
@@ -1867,7 +1912,7 @@ static constexpr uint8_t PYRO_FIRE_TEST            = 0xD0;  // test-fire a pyro 
 static constexpr uint8_t IIS2MDC_MSG          = 0xD1;  // new-PCB IIS2MDC magnetometer raw frame
 static constexpr uint8_t SNAPSHOT_MSG         = 0xD2;  // FlightSnapshotData — FC→OC over I2S during INFLIGHT,
                                                        // and OC→FC over I2C as the response to GET_FLIGHT_SNAPSHOT
-static constexpr uint8_t GET_FLIGHT_SNAPSHOT  = 0xD3;  // FC→OC: request the latest snapshot from MRAM at boot
+static constexpr uint8_t GET_FLIGHT_SNAPSHOT  = 0xD3;  // FC→OC: request the latest snapshot from the OC's store at boot (RAM cache + NAND tail-scan; MRAM slot on V7/V8 — #846)
 
 // --- Magnetometer hard-iron cal (issue #96) ---
 // OC→FC commands (passed via I2C as setPendingCommand byte) and a single
@@ -1941,6 +1986,11 @@ static constexpr uint8_t FLIGHT_SETTINGS_MSG = 0xE1;
 // (the MR25H10 is 128 KB; payload here lets us compare against the real
 // high-water mark per flight).  See LogBufferStatsData.
 static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 28-byte LogBufferStatsData, ~1 Hz, straight to the log
+
+// FC→OC over I2C during setup_fc only: 4-byte FcBootStatusData.  Sent before
+// the I2S telemetry stream exists, which is the whole point — see
+// FcBootStatusData above.  Stops once the FC enters loop_fc().
+static constexpr uint8_t FC_BOOT_STATUS_MSG   = 0xFA;  // FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only
 
 // --- OTA firmware relay to the Flight Computer (#8 Phase 4) ---
 // Control plane rides the OC↔FC I2C link: the OC stages OTA_BEGIN_PENDING
@@ -2662,7 +2712,15 @@ struct __attribute__((packed)) FlightSnapshotData
     // post-reboot boot-default orientation would silently invalidate them.
     uint8_t  b2r_code;            // discrete orientation code
     uint8_t  b2r_mode;            // ORIENT_MODE_*
-    uint8_t  pad2[1];
+    // #834 item 4: did ref_alt_m below come from a CONVERGED pad average?
+    // The GNSS main-deploy backstop compares against ref_alt_m, and an
+    // under-converged pad datum has been measured 132 m off — far past the
+    // backstop's margin. ref_pos_count cannot be recomputed after a reboot
+    // (the accumulator is frozen), so the evidence has to ride the snapshot.
+    // Reclaimed from pad2[1]: size- and offset-neutral, and 0 (what every
+    // older writer left here) means "no evidence", which disables the
+    // backstop — fail-safe, so no VERSION bump is needed.
+    uint8_t  ref_datum_converged;
 
     // --- Flight references ---
     float    ground_pressure_pa;

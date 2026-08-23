@@ -28,6 +28,8 @@ struct board_pins
     static constexpr int NAND_CS = 36;
     // MR25H10 on the shared bus; -1 = no MRAM (RAM ring fallback).
     static constexpr int MRAM_CS = 34;
+    // MRAM is fitted; the ring lives there. See board_v9.h.
+    static constexpr bool RING_IN_PSRAM = false;
 
     // --- I2C slave (commands from FlightComputer) ---
     static constexpr int I2C_SDA_PIN = 4;

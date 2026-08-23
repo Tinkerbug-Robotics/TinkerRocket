@@ -107,6 +107,41 @@ public class FleetManager<S : Any>(
     private val _devices = MutableStateFlow<Map<String, FleetDevice<S>>>(linkedMapOf())
     public val devices: StateFlow<Map<String, FleetDevice<S>>> = _devices.asStateFlow()
 
+    private val _linkActive = MutableStateFlow(false)
+
+    /**
+     * True while the app still INTENDS to hold a link: a device is connected,
+     * or a reconnect ladder is still trying to get one back.
+     *
+     * #829: the foreground service keys off this rather than [devices].
+     * [handleDisconnect] removes the device from [devices] BEFORE the ladder
+     * starts, so on a single-device fleet every transient drop looked like
+     * "fleet is empty" and tore down the service that exists to keep the
+     * process — and its BLE links — alive, at exactly the moment the link
+     * needed recovering.
+     *
+     * Note there is no "the ladder gave up" state to wait for: the endgame in
+     * [launchReconnectLadder] is an unbounded sighting wait, deliberately, so
+     * a flight in progress is never abandoned. What clears this is a user
+     * disconnect, which cancels the ladder — or the ladder's job dying with
+     * the scope.
+     */
+    public val linkActive: StateFlow<Boolean> = _linkActive.asStateFlow()
+
+    /**
+     * Recompute [linkActive] after any change to [_devices] or [reconnectJobs].
+     *
+     * A completed or cancelled Job reports `isActive == false`, so stale
+     * entries left in [reconnectJobs] are inert here and need no bookkeeping
+     * of their own — which keeps this correct without a
+     * remove-the-right-generation dance against a ladder that was just
+     * superseded.
+     */
+    private fun refreshLinkActive() {
+        _linkActive.value = _devices.value.isNotEmpty() ||
+            reconnectJobs.values.any { it.isActive }
+    }
+
     /** Which device the dashboard is currently showing. */
     private val _activeDeviceId = MutableStateFlow<String?>(null)
     public val activeDeviceId: StateFlow<String?> = _activeDeviceId.asStateFlow()
@@ -186,6 +221,15 @@ public class FleetManager<S : Any>(
          * already powered and advertising, which is the case worth serving.
          */
         public const val RESUME_SIGHTING_TIMEOUT_MS: Long = 20_000
+
+        /**
+         * Pacing for the endgame's sighting-wait loop (#830).  Each iteration
+         * opens and tears down its own platform scan, and Android silently
+         * throttles an app that starts more than 5 scans per 30 s
+         * (SCAN_FAILED_SCANNING_TOO_FREQUENTLY) — which the scanner surfaces
+         * as a flow failure.  8 s keeps the loop under ~4 starts per 30 s.
+         */
+        public const val ENDGAME_RETRY_DELAY_MS: Long = 8_000
 
         /**
          * Backoff before reconnect attempt `n` (1-based): `min(8, 2^(n-1))` s
@@ -320,6 +364,7 @@ public class FleetManager<S : Any>(
         // two concurrent tryConnects for one device would race adoption
         // (Phase 2 review).
         reconnectJobs.remove(deviceId)?.cancel()
+        refreshLinkActive()
         connectJobs[deviceId] = scope.launch {
             if (!tryConnect(deviceId, name, autoConnect = false)) {
                 _statusMessage.value = "Connection failed"
@@ -416,6 +461,7 @@ public class FleetManager<S : Any>(
             deviceType = deviceType,
         )
         _devices.value = LinkedHashMap(_devices.value).also { it[deviceId] = device }
+        refreshLinkActive()
         if (_activeDeviceId.value == null) _activeDeviceId.value = deviceId
         _statusMessage.value = "Connected to $advertisedName"
     }
@@ -437,6 +483,9 @@ public class FleetManager<S : Any>(
 
         if (pendingUserDisconnects.remove(deviceId)) {
             reconnectJobs.remove(deviceId)?.cancel()
+            // The user walked away from THIS device — but another may still be
+            // connected or mid-ladder, so recompute rather than clearing.
+            refreshLinkActive()
             _statusMessage.value = "Disconnected"
             _discoveredDevices.value = emptyList()
             // Deliberate: walking away is the ONE case we don't resume from.
@@ -482,23 +531,42 @@ public class FleetManager<S : Any>(
         if (_devices.value.isNotEmpty()) return          // already connected
         resumeJob?.cancel()
         resumeJob = scope.launch {
-            _statusMessage.value = "Looking for ${last.name}…"
-            // Background scan — NOT user-initiated, so no modal pops (#394).
-            scan(userInitiated = false)
-            val seen = withTimeoutOrNull(RESUME_SIGHTING_TIMEOUT_MS) {
-                scanner.advertisements().first { it.deviceId == last.deviceId }
-            }
-            if (seen == null) {
-                // Not here — say so plainly instead of implying we're still
-                // trying.  The device list keeps whatever the scan turned up.
-                if (_devices.value.isEmpty()) {
-                    _statusMessage.value = "${last.name} not found"
+            try {
+                _statusMessage.value = "Looking for ${last.name}…"
+                // Background scan — NOT user-initiated, so no modal pops (#394).
+                scan(userInitiated = false)
+                // #830: withTimeoutOrNull only converts TimeoutCancellationException.
+                // The scanner flow FAILS rather than times out when the adapter is
+                // off — bluetoothLeScanner is null and it closes with a
+                // BleTransportException — and that is a plain Exception, so it
+                // escaped this launch and the default handler killed the process.
+                // Bluetooth off + a saved session hint meant a crash on every cold
+                // start, repeating on every relaunch until the user turned the
+                // adapter on. Same failure scan() has guarded since the 2026-07-29
+                // bench; these two collections never got the same treatment.
+                val seen = withTimeoutOrNull(RESUME_SIGHTING_TIMEOUT_MS) {
+                    scanner.advertisements().first { it.deviceId == last.deviceId }
                 }
-                return@launch
+                if (seen == null) {
+                    // Not here — say so plainly instead of implying we're still
+                    // trying.  The device list keeps whatever the scan turned up.
+                    if (_devices.value.isEmpty()) {
+                        _statusMessage.value = "${last.name} not found"
+                    }
+                    return@launch
+                }
+                // Connected by other means while we waited (user tapped it).
+                if (_devices.value.containsKey(last.deviceId)) return@launch
+                tryConnect(last.deviceId, last.name, autoConnect = true)
+            } catch (e: CancellationException) {
+                throw e          // structured cancellation is not a failure
+            } catch (e: Exception) {
+                // Nothing is in the air on a cold start, so this is purely a
+                // "say so and leave the user on a normal scanner" case.
+                if (_devices.value.isEmpty()) {
+                    _statusMessage.value = e.message ?: "Could not resume"
+                }
             }
-            // Connected by other means while we waited (user tapped it).
-            if (_devices.value.containsKey(last.deviceId)) return@launch
-            tryConnect(last.deviceId, last.name, autoConnect = true)
         }
     }
 
@@ -539,11 +607,35 @@ public class FleetManager<S : Any>(
                 // Unbounded sighting wait — the Android analog of the
                 // parked CB connect().  Only a fresh advertisement unlocks
                 // the autoConnect attempt (never blind from a MAC).
-                scanner.advertisements().first { it.deviceId == deviceId }
+                //
+                // #830: this had no guard and no timeout, so ANY scanner
+                // failure — adapter switched off, or the
+                // SCAN_FAILED_SCANNING_TOO_FREQUENTLY this very loop
+                // provokes — escaped the launch and took the process down
+                // with the rocket airborne. Neither is fatal and neither is
+                // a reason to abandon the flight: report it, pace, retry.
+                try {
+                    scanner.advertisements().first { it.deviceId == deviceId }
+                } catch (e: CancellationException) {
+                    throw e      // structured cancellation is not a failure
+                } catch (e: Exception) {
+                    _statusMessage.value = e.message ?: "Scan failed"
+                    kotlinx.coroutines.delay(ENDGAME_RETRY_DELAY_MS)
+                    continue
+                }
                 if (_devices.value.containsKey(deviceId)) return@launch
                 if (tryConnect(deviceId, name, autoConnect = true)) return@launch
+                // The sighting was real but the connect failed. Pace before
+                // opening another scan, or the retry rate itself is what
+                // trips the platform throttle.
+                kotlinx.coroutines.delay(ENDGAME_RETRY_DELAY_MS)
             }
         }
+        // The ladder is now the thing keeping the link "intended" — set it
+        // before anyone can observe the empty fleet, and recompute when the
+        // job ends however it ends (reconnected, cancelled, scope torn down).
+        refreshLinkActive()
+        reconnectJobs[deviceId]?.invokeOnCompletion { refreshLinkActive() }
     }
 
     // --------------------------------------------------------- device lookup

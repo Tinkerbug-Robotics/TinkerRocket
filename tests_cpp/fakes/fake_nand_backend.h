@@ -22,9 +22,18 @@ namespace tr_flightlog_test {
 // its semantics must match the real chip closely.
 class FakeNandBackend : public tr_flightlog::TR_NandBackend {
 public:
-    FakeNandBackend();
+    // #671: geometry is a constructor parameter — the default is the legacy
+    // 4 Gbit part (4096/64/2048) so pre-existing tests stay byte-identical.
+    // Pass the GD5F figures (2048/64/2048 or 2048/64/1024) to model the
+    // V9 / mini chips.
+    explicit FakeNandBackend(uint32_t page_size = 4096,
+                             uint32_t pages_per_block = 64,
+                             uint32_t block_count = 2048);
 
     // TR_NandBackend overrides
+    uint32_t pageSize() const override { return page_size_; }
+    uint32_t pagesPerBlock() const override { return pages_per_blk_; }
+    uint32_t blockCount() const override { return block_count_; }
     bool readPage(uint32_t block, uint32_t page_in_block, uint8_t* out) override;
     bool programPage(uint32_t block, uint32_t page_in_block, const uint8_t* data) override;
     bool eraseBlock(uint32_t block) override;
@@ -56,10 +65,11 @@ public:
     void reset();
 
 private:
-    static constexpr uint32_t TOTAL_PAGES =
-        tr_flightlog::NAND_BLOCK_COUNT * tr_flightlog::NAND_PAGES_PER_BLK;
+    const uint32_t page_size_;
+    const uint32_t pages_per_blk_;
+    const uint32_t block_count_;
 
-    std::vector<uint8_t> storage_;   // TOTAL_PAGES * NAND_PAGE_SIZE bytes
+    std::vector<uint8_t> storage_;   // block_count_ * pages_per_blk_ * page_size_ bytes
     std::vector<bool>    bad_blocks_;
 
     struct PageKey {

@@ -25,6 +25,7 @@ enum DashboardSheet: Identifiable {
     case servoTest(BLEDevice)
     case driftCast
     case frequencyScan(BLEDevice)   // #150: restored (removed in #136)
+    case preflight(BLEDevice)       // run the active rocket's pre-flight checklist
 
     var id: String {
         switch self {
@@ -33,6 +34,7 @@ enum DashboardSheet: Identifiable {
         case .servoTest(let d):     return "servoTest-\(d.peripheral?.identifier.uuidString ?? "")"
         case .driftCast:            return "driftCast"
         case .frequencyScan(let d): return "frequencyScan-\(d.peripheral?.identifier.uuidString ?? "")"
+        case .preflight(let d):     return "preflight-\(d.peripheral?.identifier.uuidString ?? "")"
         }
     }
 }
@@ -109,6 +111,22 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity)
                             .padding()
                             .background(.indigo)
+                            .foregroundColor(.white)
+                            .cornerRadius(TRShape.radiusButton)
+                        }
+
+                        // Master pre-flight checklist: the template every
+                        // rocket's checklist starts from, editable with no
+                        // device connected (build it at home, run it at the
+                        // pad from the dashboard advisory).
+                        NavigationLink(destination: PreflightMasterView()) {
+                            HStack {
+                                Image(systemName: "checklist")
+                                Text("Preflight Checklist")
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.teal)
                             .foregroundColor(.white)
                             .cornerRadius(TRShape.radiusButton)
                         }
@@ -288,6 +306,8 @@ struct DashboardView: View {
                     // hopping, the BS runs it as a coordinated scan and
                     // pushes the resulting skip-mask via cmd 15.
                     NavigationView { FrequencyScanView(device: device) }
+                case .preflight(let device):
+                    PreflightRunView(device: device)
                 }
             }
             // SwiftUI sheets get a fresh environment by default — re-inject
@@ -633,8 +653,18 @@ struct ConnectedDashboardView: View {
                                     isBaseStation: device.isBaseStation,
                                     hopModeOn: device.rocketConfig?.loraHopDisabled == false,
                                     hopChannel: device.telemetry.hop_channel,
-                                    state: device.telemetry.state))
+                                    state: device.telemetry.state),
+                                boot: device.telemetry.fcBootProgress)
                     .opacity(staleOpacity)
+
+                // Pre-flight checklist advisory: one quiet progress line for
+                // the active rocket, right under the state banner.  Advisory
+                // only — it never recolors the banner (sensor health owns
+                // that) and renders nothing when no checklist is configured.
+                PreflightAdvisoryRow(device: device) {
+                    activeSheet = .preflight(device)
+                }
+                .opacity(staleOpacity)
             }
 
             // #557: the FC lost its GNSS module and is flying a baro+IMU-only
@@ -986,6 +1016,28 @@ func hopBadge(isBaseStation: Bool, hopModeOn: Bool,
 struct RocketStateView: View {
     let state: String
     var hopBadge: HopBadge? = nil
+    /// FC boot progress — carried only while setup_fc() is still running.
+    var boot: TelemetryData.FcBootProgress? = nil
+
+    // When the app first saw the boot state it is showing now.  "bt" is stamped
+    // when a step STARTS and then repeats unchanged in every frame, so it
+    // cannot say how long the FC has been sitting there; this can.
+    @State private var bootStepSeenAt = Date()
+
+    // The dwell needs its own clock.  Relying on the body being re-evaluated by
+    // incoming telemetry fails in precisely the two cases the stall line exists
+    // to catch: a WEDGED boot leaves `boot` unchanged (so SwiftUI has no reason
+    // to re-render), and a dropped link stops delivering frames altogether — in
+    // both the dwell would freeze and the stall would never appear.  1 Hz,
+    // matching the Android twin's ticker; `bootNow` is only written while a boot
+    // line is actually showing, so there is no steady-state invalidation cost.
+    private let bootTicker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var bootNow = Date()
+    // The state the timestamp belongs to.  Without it the first render after a
+    // step change still reads the OLD timestamp (onChange runs after the body),
+    // which flashes "no progress for 300s" the instant a boot begins on a
+    // dashboard that has been open a while.
+    @State private var bootStepSeenFor: TelemetryData.FcBootProgress?
 
     // #382 (display-only): the wire states READY and PRELAUNCH both mean "on
     // the pad" — READY is still waiting on the OC/GNSS gates, PRELAUNCH means
@@ -1014,11 +1066,39 @@ struct RocketStateView: View {
         }
     }
 
+    /// The secondary line under the state label.  Two very different things
+    /// land here.  With "bs" present the FC is mid-boot and we name the step.
+    /// Without it, a state still reading INITIALIZATION means the FC has NEVER
+    /// spoken (rail off, or not yet alive) — the OC's zeroed rocket_state, not
+    /// a rocket that is initializing — so say so instead of letting a bare
+    /// "INITIALIZATION" pass for a live flight computer.
+    var bootLine: String? {
+        if let boot { return boot.line(dwell: bootDwell) }
+        return state == "INITIALIZATION" ? "Waiting for flight computer…" : nil
+    }
+
+    var bootLineColor: Color {
+        guard let boot else { return .secondary }   // waiting on a silent FC
+        return (boot.isStalled(dwell: bootDwell) || !boot.degradedSubsystems.isEmpty)
+            ? .orange : .secondary
+    }
+
+    private var bootDwell: TimeInterval {
+        guard boot != nil, boot == bootStepSeenFor else { return 0 }
+        return bootNow.timeIntervalSince(bootStepSeenAt)
+    }
+
     var body: some View {
         VStack(spacing: 4) {
             Text(Self.displayLabel(for: state))
                 .font(.system(size: 36, weight: .bold))
                 .foregroundColor(stateColor)
+            if let bootLine {
+                Text(bootLine)
+                    .font(.caption)
+                    .foregroundColor(bootLineColor)
+                    .multilineTextAlignment(.center)
+            }
             switch hopBadge {
             case .active:
                 Label("Frequency Hopping", systemImage: "dot.radiowaves.left.and.right")
@@ -1040,6 +1120,19 @@ struct RocketStateView: View {
         .frame(maxWidth: .infinity)
         .background(stateColor.opacity(0.1))
         .cornerRadius(10)
+        .onAppear { noteBootStep() }
+        .onChange(of: boot) { _ in noteBootStep() }
+        .onReceive(bootTicker) { t in
+            // Only tick while a boot line is on screen — outside boot this view
+            // is static and re-rendering it once a second would be pure waste.
+            if bootLine != nil { bootNow = t }
+        }
+    }
+
+    private func noteBootStep() {
+        bootStepSeenAt = Date()
+        bootNow = bootStepSeenAt
+        bootStepSeenFor = boot
     }
 }
 
@@ -1063,18 +1156,50 @@ struct HealthDotRow: View {
         }
     }
 
+    /// Most dots on one line.  Found on the bench 2026-08-22: a rocket with
+    /// two configured pyros produces nine dots, and the ninth sat off the
+    /// right edge of an iPhone 17 inside a `showsIndicators: false`
+    /// ScrollView — visible only if you happened to swipe a row that gave no
+    /// hint it could scroll.  That is bad here specifically because this row
+    /// answers "WHY does the banner say Do not fly": the verdict was on
+    /// screen while the red dot explaining it was not.  Six keeps a line
+    /// legible on the narrowest supported phone.
+    private static let maxPerLine = 6
+
+    /// Split into balanced lines rather than filling the first and orphaning
+    /// a remainder — 9 dots read better as 5+4 than 6+3.
+    private var lines: [[TelemetryData.SensorHealthRow]] {
+        guard rows.count > Self.maxPerLine else { return [rows] }
+        let lineCount = Int(ceil(Double(rows.count) / Double(Self.maxPerLine)))
+        let perLine = Int(ceil(Double(rows.count) / Double(lineCount)))
+        return stride(from: 0, to: rows.count, by: perLine).map {
+            Array(rows[$0 ..< min($0 + perLine, rows.count)])
+        }
+    }
+
     var body: some View {
-        HStack(spacing: 14) {
-            ForEach(rows) { row in
-                VStack(spacing: 3) {
-                    Circle()
-                        .fill(color(for: row.state))
-                        .frame(width: 12, height: 12)
-                    Text(row.name)
-                        .font(.caption2)
+        // Deliberately NOT lazy and no longer inside a ScrollView: both make
+        // ImageRenderer draw this empty, which is what left the clipping
+        // above untested — the render test targets this view directly and so
+        // never saw the container that was hiding a dot.
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(line) { row in
+                        VStack(spacing: 3) {
+                            Circle()
+                                .fill(color(for: row.state))
+                                .frame(width: 12, height: 12)
+                            Text(row.name)
+                                .font(.caption2)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1132,12 +1257,13 @@ struct HealthCardView: View {
             // labeled chip grid — the per-sensor state TEXT moved out of the
             // glanceable path (the go/no-go banner above carries the verdict;
             // a wrong dot's meaning is one tap into MagCal/Settings anyway).
-            // The row itself is a separate view because ImageRenderer draws
-            // ScrollView content as EMPTY — the render test hits the row
-            // directly (same reason the old LazyVGrid was render-untestable).
-            ScrollView(.horizontal, showsIndicators: false) {
-                HealthDotRow(rows: telemetry.sensorHealthRows)
-            }
+            // The row wraps rather than scrolling (2026-08-22): a ninth dot
+            // used to sit off the right edge of a `showsIndicators: false`
+            // horizontal ScrollView with nothing to say it was there.  The
+            // row is still a separate view so ImageRenderer can draw it — it
+            // used to be separate BECAUSE of the ScrollView, which is exactly
+            // why the render test could not see the clipping.
+            HealthDotRow(rows: telemetry.sensorHealthRows)
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-90 codes. The dispatch on both ends is a flat first-match chain, so
+91 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -79,7 +79,7 @@ this list is CI-enforced for uniqueness.
 | `0xD0` | `PYRO_FIRE_TEST` | — | test-fire a pyro channel from app |
 | `0xD1` | `IIS2MDC_MSG` | FC → OC | new-PCB IIS2MDC magnetometer raw frame |
 | `0xD2` | `SNAPSHOT_MSG` | FC → OC | FlightSnapshotData — FC→OC over I2S during INFLIGHT, |
-| `0xD3` | `GET_FLIGHT_SNAPSHOT` | FC → OC | FC→OC: request the latest snapshot from MRAM at boot |
+| `0xD3` | `GET_FLIGHT_SNAPSHOT` | FC → OC | FC→OC: request the latest snapshot from the OC's store at boot (RAM cache + NAND tail-scan; MRAM slot on… |
 | `0xD4` | `MAG_CAL_START` | OC → FC | OC→FC: enter MAG_CALIBRATION + begin sampling |
 | `0xD5` | `MAG_CAL_ABORT` | OC → FC | OC→FC: drop sampling, return to READY |
 | `0xD6` | `MAG_CAL_ACCEPT` | OC → FC | OC→FC: program new offsets, enter VERIFYING |
@@ -118,8 +118,9 @@ this list is CI-enforced for uniqueness.
 | `0xF8` | `GUIDANCE_POINT_MSG` | FC → OC | 20-byte GuidancePointData |
 | `0xF4` | `I2C_TX_RESYNC` | — |  |
 | `0xF9` | `LORA_UPLINK_MSG` | OC → log | OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log |
+| `0xFA` | `FC_BOOT_STATUS_MSG` | FC → OC | FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only |
 
-> 53 of these 90 codes carry no comment in the header,
+> 53 of these 91 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -171,6 +172,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `RollWaypoint` | 9 |
 | `ServoTestAnglesData` | 8 |
 | `Vec3i16` | 6 |
+| `FcBootStatusData` | 4 |
 | `ServoReplayData` | 4 |
 | `i24le_t` | 3 |
 | `ImuRateConfigData` | 2 |

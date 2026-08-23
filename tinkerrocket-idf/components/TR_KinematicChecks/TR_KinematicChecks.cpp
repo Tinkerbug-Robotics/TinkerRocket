@@ -44,12 +44,34 @@ constexpr uint32_t GPS_APOGEE_FRESH_MS     = 500;
 
 // Launch accel-only fallback (#258): when the baro is INVALID, latch launch on
 // sustained high-G alone.  Deliberately a much higher bar than the baro-
-// confirmed path (3 g vs 2 g, 500 vs 50 samples) so handling/transport can't
+// confirmed path (3 g vs 2 g, 250 vs 50 samples) so handling/transport can't
 // fake it — a missed launch means recovery never arms (ballistic), so we
 // over-confirm.  Gated on !baro_healthy, so accel never decides launch while
 // the baro is valid.
+//
+// The counter is in flight-loop iterations, and the flight-logic block is
+// gated at flight_loop_period = 1e6 / config::FLIGHT_LOOP_UPDATE_RATE
+// (main.cpp:208, 4051) = 1 kHz, so 250 samples is ~250 ms of wall clock.
+// Halved from 500 (~500 ms): a short-burn motor's thrust curve tapers, so the
+// *continuous* >3 g window is shorter than the burn time, and a 500 ms gate
+// could sit out an entire small-motor boost and never latch — the exact
+// ballistic outcome the fallback exists to prevent.  Both counters reset on a
+// single sample <= 20 m/s2, so it takes a quarter second of UNINTERRUPTED >3 g.
+// A restrained motor burn reads ~1 g (thrust balanced by the rail nets out of
+// specific force), a drop is 0 g in free fall and milliseconds at impact, and
+// linear hand motion, bumps and vibration are oscillatory — they cross back
+// through the 2 g reset floor and can never accumulate.
+//
+// The one non-boost stimulus that is NOT oscillatory is sustained ROTATION:
+// centripetal acceleration is steady, so swinging the airframe with the board
+// ~1 m from the pivot at ~5.5 m/s holds 30 m/s2 for as long as the swing lasts.
+// A quarter second of that clears the bar.  Unquantified on a real prep bench,
+// and the halving is what brings it into reach — but it is not load-bearing on
+// its own: entering INFLIGHT arms nothing (enterInflight leaves ARM low and all
+// channels Idle), both pyro triggers are apogee-gated, and the apogee vote needs
+// burnout_detected, which a nose-up airframe cannot produce.
 constexpr float    LAUNCH_ACCEL_FALLBACK_MS2   = 30.0f;  // ~3 g
-constexpr uint16_t LAUNCH_ACCEL_FALLBACK_COUNT = 500;    // sustained samples
+constexpr uint16_t LAUNCH_ACCEL_FALLBACK_COUNT = 250;    // sustained samples (~250 ms at 1 kHz)
 
 // Baro settle window after burnout. Thrust tail-off can snap the bay pressure
 // back from its boost-suction offset (7/05 V2 F1: indicated altitude fell 15 m
@@ -88,6 +110,32 @@ constexpr float    BARO_STABLE_MAX_ALT_MIN  = 15.0f;    // rocket must have flow
 constexpr float    GYRO_QUIET_DPS           = 20.0f;
 constexpr float    GPS_STATIONARY_SPEED_MS  = 1.0f;     // EKF speed proxy
 constexpr float    ACCEL_1G_TOLERANCE_MS2   = 2.94f;    // ≈ 0.3 g
+
+// Extended quiescence (#824) — a deliberately baro-independent path to
+// LANDED.  The vote below now requires baro_stable, so a dead or
+// out-of-band barometer would otherwise leave the flight running until the
+// 10-minute flight-time backstop.  This detector answers "the airframe has
+// stopped moving" from the IMU alone, with thresholds picked so a descent
+// under canopy cannot reach them.  Longest uninterrupted run while
+// descending under chute, measured over 15 logged flights (2026-05..08):
+//
+//     |roll| < 20 dps  (the vote's threshold)   :  1 s
+//     |roll| <  5 dps                           :  1 s
+//     ||a|-g| < 0.3 g  (the vote's tolerance)   : 37 s   <-- why accel_1g
+//                                                            latches aloft
+//     ||a|-g| < 0.05 g                          :  8 s
+//     both tight gates together                 :  1 s
+//
+// while a stationary rocket (233 s of pre-launch log) held |roll| < 5 dps
+// for 109 s uninterrupted.  HI=30 therefore sits ~30x above anything a
+// canopy has produced and well inside what a rocket lying in a field
+// sustains.  The accel gate is not redundant: it independently caps the
+// exposure at ~8 s for an airframe that descends without rolling, which is
+// the one case the roll gate alone would miss.
+constexpr float    QUIESCENT_GYRO_DPS       = 5.0f;
+constexpr float    QUIESCENT_ACCEL_TOL_MS2  = 0.49f;    // ≈ 0.05 g
+constexpr uint8_t  QUIESCENT_COUNT_HI       = 30;       // ~30 s net quiet
+constexpr uint8_t  QUIESCENT_COUNT_MAX      = 45;
 }
 
 TR_KinematicChecks::TR_KinematicChecks()
@@ -117,10 +165,12 @@ TR_KinematicChecks::TR_KinematicChecks()
     gyro_quiet_flag = false;
     gps_stationary_flag = false;
     accel_1g_flag = false;
+    quiescent_flag = false;
     baro_stable_count_ = 0;
     gyro_quiet_count_ = 0;
     gps_stationary_count_ = 0;
     accel_1g_count_ = 0;
+    quiescent_count_ = 0;
     max_gps_altitude_ = 0.0f;
     gps_apogee_count_ = 0;
     gps_available_ = false;
@@ -177,10 +227,12 @@ void TR_KinematicChecks::reset()
     gyro_quiet_flag = false;
     gps_stationary_flag = false;
     accel_1g_flag = false;
+    quiescent_flag = false;
     baro_stable_count_ = 0;
     gyro_quiet_count_ = 0;
     gps_stationary_count_ = 0;
     accel_1g_count_ = 0;
+    quiescent_count_ = 0;
     max_gps_altitude_ = 0.0f;
     gps_apogee_count_ = 0;
     gps_available_ = false;
@@ -289,8 +341,8 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                 // #258 accel-only fallback — ONLY when the baro is invalid.
                 // On a healthy baro this branch is unreachable (the primary
                 // latches first), so accel never decides launch unless the baro
-                // can't.  Half a second of sustained >3 g with a dead baro is an
-                // unambiguous boost; latching here is what keeps recovery from
+                // can't.  A quarter second of sustained >3 g with a dead baro is
+                // an unambiguous boost; latching here is what keeps recovery from
                 // never arming (ballistic) on a baro failure.
                 launch_flag = true;
             }
@@ -312,12 +364,25 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     }
 
     // ================================================================
-    // ### Landing Detection: 5 sub-detectors + N-1 voting (#166) ###
-    // Fast path (impact) fires master immediately on unambiguous high-G
-    // ground contact.  Slow path requires 3 of the 4 settle-state
-    // detectors (Baro-stable, Gyro-quiet, GPS-stationary, Accel-1g) to
-    // agree — independent signals so a single noise source can't drive
-    // a false landed.  Master ``alt_landed_flag`` latches once true.
+    // ### Landing Detection: impact + a vote + quiescence (#166, #824) ###
+    // Three ways to latch, in the order they are tested below.
+    //
+    //  1. Fast path (impact): fires master immediately on unambiguous
+    //     high-G ground contact, gated on apogee + ground proximity.
+    //  2. Slow path: an N-1-of-N vote over four settle-state detectors
+    //     (Baro-stable, Gyro-quiet, GPS-stationary, Accel-1g) — independent
+    //     signals, so a single noise source cannot drive a false landed.
+    //     N is 3 or 4, not always 4: the GPS voter is counted only while
+    //     its fix is fresh.  Baro-stable is MANDATORY rather than merely
+    //     one of N, because it is the only detector here that carries
+    //     altitude information and a quorum reachable without it is
+    //     unsound (#824).
+    //  3. Extended quiescence: a separate, deliberately baro-independent
+    //     path, so that making Baro-stable mandatory cannot strand a
+    //     flight whose barometer is dead or whose landing site sits
+    //     outside the Baro-stable band.
+    //
+    // Master ``alt_landed_flag`` latches once true.
     // ================================================================
 
     // --- Fast path: high-G impact, gated on apogee + ground proximity.
@@ -349,7 +414,19 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         landing_check_time = millis();
 
         // Sub 1: Baro-stable (was the original slow path; +lower bound)
-        const bool baro_stable_pass = (pressure_altitude >= BARO_STABLE_PALT_MIN
+        //
+        // Gated on baro_healthy (#824).  This detector is now mandatory in the
+        // vote, on the grounds that it is the only one carrying altitude
+        // information — so it must not be satisfiable by a barometer that has
+        // stopped telling the truth.  It would be: pressure_altitude retains
+        // its last value when the sensor stops responding, which makes
+        // landing_altitude_change exactly 0 and looks maximally "stable".  A
+        // dead baro frozen at a reading inside the band would then hand the
+        // vote its mandatory voter for free, and gyro_quiet + accel_1g could
+        // carry the rest at altitude — reopening #824 through the very
+        // detector that was supposed to close it.
+        const bool baro_stable_pass = (baro_healthy
+                                       && pressure_altitude >= BARO_STABLE_PALT_MIN
                                        && pressure_altitude <= BARO_STABLE_PALT_MAX
                                        && landing_altitude_change < BARO_STABLE_DELTA_MAX
                                        && max_altitude > BARO_STABLE_MAX_ALT_MIN);
@@ -396,6 +473,40 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         }
         if (accel_1g_count_ >= LANDING_SLOW_COUNT_HI) accel_1g_flag = true;
         else if (accel_1g_count_ == 0)                accel_1g_flag = false;
+
+        // Sub 5: Extended quiescence — deliberately NOT one of the votes
+        // below; it is an independent path to landed that survives a dead
+        // barometer (#824).  Both IMU gates are far tighter than the vote's,
+        // and it needs ~30 s of net quiet rather than 4 s.
+        //
+        // Accumulates only after apogee.  A rocket on the pad is quiescent by
+        // definition, and the rising-edge reset further down runs AFTER the
+        // vote — so without this gate a full counter carried off the pad would
+        // latch LANDED on the first post-apogee tick, before the reset could
+        // clear it.  (The four voting detectors escape that ordering only
+        // because baro_stable additionally requires max_altitude > 15 m.)
+        //
+        // When the barometer is healthy the altitude must also be unchanging.
+        // The IMU gates alone cannot tell "sitting in a field" from "descending
+        // smoothly", so where an altitude reference exists this insists on one;
+        // it is dropped only when the baro is unusable, which is the situation
+        // this detector exists for.  Note the check is Δpalt only, with no
+        // band: that is what lets a rocket that landed hundreds of metres off
+        // the pad reference — never able to satisfy baro_stable — still finish
+        // its flight.
+        const bool quiescent_alt_ok = (!baro_healthy ||
+                                       landing_altitude_change < BARO_STABLE_DELTA_MAX);
+        const bool quiescent_pass = (apogee_flag &&
+                                     quiescent_alt_ok &&
+                                     fabs(roll_rate) < QUIESCENT_GYRO_DPS &&
+                                     fabs(acc_mag - G_MS2) < QUIESCENT_ACCEL_TOL_MS2);
+        if (quiescent_pass) {
+            if (quiescent_count_ < QUIESCENT_COUNT_MAX) quiescent_count_++;
+        } else {
+            if (quiescent_count_ > 0) quiescent_count_--;
+        }
+        if (quiescent_count_ >= QUIESCENT_COUNT_HI) quiescent_flag = true;
+        else if (quiescent_count_ == 0)             quiescent_flag = false;
     }
 
     // --- Voting: impact alone fires; otherwise N-1 of N over slow flags.
@@ -406,6 +517,15 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     {
         if (impact_flag)
         {
+            alt_landed_flag = true;
+        }
+        else if (quiescent_flag)
+        {
+            // Baro-independent path (#824).  Kept out of the vote so it still
+            // works in exactly the cases the vote cannot: a dead barometer, or
+            // a landing site far enough off the pad elevation to fall outside
+            // the BARO_STABLE_PALT band.  Costs ~30 s of extra flight time in
+            // those cases; the alternative was the 10-minute backstop.
             alt_landed_flag = true;
         }
         else
@@ -421,7 +541,17 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             }
             available++; if (accel_1g_flag) passed++;
 
-            if (available >= 2 && passed >= 2 && passed >= (available - 1))
+            // baro_stable is mandatory, not merely one vote among equals
+            // (#824).  It is the only altitude-aware detector in the set:
+            // gyro_quiet and accel_1g both pass under a canopy at terminal
+            // velocity (an accelerometer reads 1 g in steady descent exactly
+            // as it does sitting on the ground), so with GPS stale the old
+            // 2-of-3 rule could be satisfied entirely by altitude-blind
+            // evidence and cut the main deploy.  Requiring baro_stable means
+            // every latch has at least one detector that actually knows the
+            // rocket is near the ground.
+            if (available >= 2 && passed >= 2 && passed >= (available - 1)
+                && baro_stable_flag)
             {
                 alt_landed_flag = true;
             }
@@ -652,10 +782,12 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         gyro_quiet_count_     = 0;
         gps_stationary_count_ = 0;
         accel_1g_count_       = 0;
+        quiescent_count_      = 0;
         baro_stable_flag    = false;
         gyro_quiet_flag     = false;
         gps_stationary_flag = false;
         accel_1g_flag       = false;
+        quiescent_flag      = false;
     }
 
     // ### Pre-Apogee Max Speed ###

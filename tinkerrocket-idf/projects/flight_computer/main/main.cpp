@@ -17,6 +17,7 @@
 #include <TR_GpsInsEKF.h>
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
+#include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
 #include <BurnoutDetector.h>      // shared burnout detector (#197/#256)
 #include <DeploymentDetector.h>   // shared recovery-deployment detector
 #include <TR_MagCalibrator.h>
@@ -33,6 +34,8 @@
 #include <esp_ota_ops.h>          // Layer 4: esp_ota_mark_app_valid_cancel_rollback (#8/#13)
 #include <esp_app_desc.h>         // esp_app_get_description() for FC_IDENTITY version push (#8)
 #include <driver/gpio.h>
+#include <esp_attr.h>            // RTC_NOINIT_ATTR for the #848 power-hold latch flag
+#include "pwr_hold_policy.h"     // #848: boot reconciliation decision table
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
 #include <esp_private/gpio.h>      // gpio_func_sel
@@ -338,6 +341,15 @@ static bool                 orient_thrust_mismatch = false;
 static float ground_pressure_pa = 101325.0f;
 static float pressure_alt_m = 0.0f;
 static float pressure_alt_rate_mps = 0.0f;
+// #834 item 4: pressure_alt_m/_rate come from a KF that FREE-RUNS at a
+// frozen rate when the barometer stops answering, so they cannot authorise
+// a main deploy on their own. Stepped once per flight-loop pass next to the
+// baro health test (which is a block-scoped local there), read per channel
+// in servicePyroChannels — same task, same iteration, write before read,
+// exactly like pressure_alt_m itself.
+static MainDeployGate::State  main_deploy_state;
+static MainDeployGate::Inputs main_deploy_in;
+static MainDeployGate::Source main_deploy_last_src = MainDeployGate::Source::None;
 static float max_alt_m = 0.0f;
 static float max_speed_mps = 0.0f;
 static GpsInsEKF ekf;
@@ -653,6 +665,10 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.ref_lat_rad        = ref_lat_rad;
     snap.ref_lon_rad        = ref_lon_rad;
     snap.ref_alt_m          = ref_alt_m;
+    // #834 item 4: record whether that datum came from a converged pad
+    // average, so a post-reboot flight knows if the GNSS backstop may use it.
+    snap.ref_datum_converged =
+        (ref_pos_count >= config::MAIN_DEPLOY_REF_MIN_FIXES) ? 1 : 0;
 
     snap.ekf_initialized = ekf_initialized  ? 1 : 0;
     snap.guidance_enabled = guidance_enabled ? 1 : 0;
@@ -1152,7 +1168,18 @@ static void servicePyroChannels(uint32_t now_ms)
                 const float elapsed_s = (float)(now_ms - pyro_apogee_time_ms) / 1000.0f;
                 if (elapsed_s >= val) should_fire = true;
             } else if (pyro_apogee_detected && mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT) {
-                if (pressure_alt_m <= val && pressure_alt_rate_mps < 0.0f) should_fire = true;
+                // #834 item 4: pressure_alt_m/_rate are a KF estimate that
+                // free-runs at a frozen rate with a dead barometer, so the raw
+                // comparison could fire the main hundreds of metres high (or
+                // never, with a blocked static port). The gate decides which
+                // source may authorise the deploy; when the barometer is
+                // trusted its verdict is bit-identical to the old predicate.
+                const MainDeployGate::Source src =
+                    MainDeployGate::evaluate(main_deploy_state, main_deploy_in, val);
+                if (src != MainDeployGate::Source::None) {
+                    should_fire         = true;
+                    main_deploy_last_src = src;
+                }
             }
             if (should_fire) {
                 ch.state          = PyroChState::ArmSettle;
@@ -1221,9 +1248,18 @@ static void servicePyroChannels(uint32_t now_ms)
 
     const bool dry = sensor_collector.isSimActive();
     for (int i = 0; i < 4; ++i) {
-        if (just_fired[i]) ESP_LOGW(TAG, "[PYRO] CH%d %s at alt=%.1f m",
-                                    i + 1, dry ? "DRY-FIRED (sim)" : "FIRED",
-                                    (double)pressure_alt_m);
+        if (just_fired[i]) {
+            // #834 item 4: record WHICH source authorised the deploy. On the
+            // GNSS backstop pressure_alt_m is a free-running estimate and is
+            // meaningless, so print the GNSS AGL that actually decided it.
+            const bool by_gnss = (pyroChMode(i) == PYRO_TRIGGER_ALTITUDE_ON_DESCENT &&
+                                  main_deploy_last_src == MainDeployGate::Source::Gnss);
+            ESP_LOGW(TAG, "[PYRO] CH%d %s at alt=%.1f m (src=%s)",
+                     i + 1, dry ? "DRY-FIRED (sim)" : "FIRED",
+                     by_gnss ? (double)main_deploy_in.gnss_agl_m
+                             : (double)pressure_alt_m,
+                     by_gnss ? "GNSS-backstop" : "baro");
+        }
         if (pulse_done[i]) ESP_LOGI(TAG, "[PYRO] CH%d fire pulse complete", i + 1);
     }
 }
@@ -2792,6 +2828,75 @@ static inline void serviceHeartbeatBeep(uint32_t now_ms)
 static bool fc_ota_pending_verify = false;
 
 // ==========================================================================
+// SECTION: Power hold latch (#848)
+// ==========================================================================
+// V9/V10 only (PWR_HOLD_PIN = -1 elsewhere): GPIO5 is the second anode of the
+// D9 diode-OR into U30's enable, so driving it HIGH holds the FC's own power
+// rail up regardless of the OC — the fix for #825, where any OC fault reset
+// dropped the rail (R84/C105 give ~0.8 s) and the FC + all four pyro channels
+// powered off mid-flight, ballistic. LOW and high-Z are electrically
+// identical through the diode (an anode cannot pull the rail down), so this
+// pin can only ever ADD power — every glitch is harmless, and "release" just
+// hands control back to the OC's PWR_PIN.
+//
+// Assert = drive HIGH + gpio_hold_en. GPIO5 is an LP pad, and the LP_IOMUX
+// pad hold survives every digital reset (panic/WDT/SW; IDF releases it only
+// after deep-sleep wake) — so the FC's OWN crash mid-flight keeps the rail
+// solid with zero gap, no boot-time race against the R84/C105 decay. The
+// RTC_NOINIT flag mirrors the latch so boot can reconcile an inherited hold
+// (pwr_hold_policy.h): keep it when the flight resumes or the OC is dead
+// (downed-rocket GNSS tracker mode — battery pull to power off), release it
+// when the OC is alive to take the rail back.
+//
+// Asserted at every INFLIGHT entry (enterInflight + the reboot-recovery
+// restore), sims included — a sim exercises this mechanism harmlessly since
+// release follows at sim landing/stop. Released at LANDED, at sim reset, and
+// by boot reconciliation. NEVER asserted on the ground: with pyro armed on
+// the pad an OC reset dropping the rail is SAFE (FC off = nothing fires),
+// and an un-power-off-able ground state is an operator trap.
+static constexpr uint32_t kPwrHoldMagic = 0x484F4C44;  // "HOLD"
+RTC_NOINIT_ATTR static uint32_t pwr_hold_flag_rtc;
+static bool pwr_hold_latched_at_boot = false;  // set in setup_fc before the pad is touched
+// #848: boot (or landing) chose KeepHold because the OC was not answering —
+// re-reconciled at runtime the moment out_ready latches, so a transient miss
+// of the single boot probe (or the OC's own reboot racing ours) cannot leave
+// the board un-power-off-able against a live OC. The tracker-mode keep only
+// persists while the OC genuinely never answers.
+static bool pwr_hold_orphan_keep = false;
+
+static void pwrHoldAssert(const char* why)
+{
+    if (config::PWR_HOLD_PIN < 0) return;
+    const gpio_num_t pin = (gpio_num_t)config::PWR_HOLD_PIN;
+    // Configure first (no effect while a latched hold owns the pad), then
+    // cycle the hold: after hold_dis the pad is already driven HIGH, so a
+    // reboot-inherited latch hands over with no gap. gpio_set_direction also
+    // re-muxes the pad off its MTDO reset default.
+    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+    gpio_set_level(pin, 1);
+    gpio_hold_dis(pin);
+    gpio_hold_en(pin);
+    pwr_hold_flag_rtc = kPwrHoldMagic;
+    ESP_LOGW(TAG, "[PWR] Power hold ASSERTED (%s) — FC rail latched through "
+                  "OC resets and our own", why);
+}
+
+static void pwrHoldRelease(const char* why)
+{
+    if (config::PWR_HOLD_PIN < 0) return;
+    const gpio_num_t pin = (gpio_num_t)config::PWR_HOLD_PIN;
+    const bool was_latched = (pwr_hold_flag_rtc == kPwrHoldMagic);
+    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+    gpio_set_level(pin, 0);   // driven LOW == high-Z through D9: rail follows the OC
+    gpio_hold_dis(pin);
+    pwr_hold_flag_rtc = 0;
+    if (was_latched)
+    {
+        ESP_LOGW(TAG, "[PWR] Power hold released (%s) — rail control back to the OC", why);
+    }
+}
+
+// ==========================================================================
 // SECTION: OTA boot validation
 // ==========================================================================
 static inline void fcMaybeMarkOtaValid()
@@ -2812,6 +2917,92 @@ static inline void fcMaybeMarkOtaValid()
 // ==========================================================================
 // SECTION: Boot setup
 // ==========================================================================
+
+// Boot progress, FC->OC over I2C during setup_fc only (FcBootStatusData).
+//
+// setup_fc() takes ~10 s — sensor bring-up, GNSS, servos — and none of it is
+// visible to the operator today: NonSensorData (and with it sensor_health and
+// rocket_state) is not transmitted until loop_fc() runs, so the OC's zeroed
+// latest_non_sensor makes the app render rocket_state 0 == INITIALIZATION for
+// the whole window.  "Flight computer off", "flight computer booting" and
+// "flight computer in INITIALIZATION" are indistinguishable.  This announces
+// each step as it STARTS, so a stall is visible as a step that stops advancing.
+//
+// Rides I2S, NOT the I2C command link, and that choice is load-bearing.
+//
+// Bench 2026-08-19: sent over I2C, only steps 3/4/5 ever arrived.  The OC
+// defers its I2C SLAVE until it has seen 50 I2S DMA callbacks proving the FC is
+// alive (out_computer main.cpp, `dma_cb_count > 50`), so for the first ~20 s of
+// FC boot there is no slave on the bus at all and a master write goes nowhere.
+// The steps that were lost are exactly the ones worth reporting — LINKS, NVS
+// and the ~20 s SENSORS step — leaving the app on "waiting for flight
+// computer" for almost the whole boot and then flashing through GNSS/servos in
+// a couple of seconds.  I2S is up from the sender task onward, which is before
+// every step below, and it reaches the same processFrame() dispatch via
+// parseRxStream() -> handleReceivedFrame().
+//
+// Fire-and-forget: a failed enqueue must never hold up or abort boot, so the
+// result is discarded.  The OC treats absence as "no boot info", not an error.
+// FC_BOOT_STATUS_MSG is deliberately NOT one of the timestamped sensor types in
+// the OC's dedup switch, so its payload is never misread as a time_us the way
+// SNAPSHOT_MSG's magic would be.
+// REPEATED, not one-shot, and that is the whole reason this works.
+//
+// Bench 2026-08-19, twice: steps 0/1/2 never reached the OC over EITHER
+// transport.  All three fire inside the first ~250 ms of FC boot, when the link
+// is still coming up — the OC has not enabled its I2C slave yet (it waits for
+// 50 I2S DMA callbacks) and its I2S receiver has not locked onto the SOF sync.
+// A single frame per transition is therefore lost precisely for the steps worth
+// reporting, and the app sat on "waiting for flight computer" for the whole
+// ~20 s sensor phase before flashing through GNSS/servos.
+//
+// So a task re-emits the CURRENT step every 500 ms until boot completes.  Any
+// one lost frame stops mattering, and it is robust to whichever end is slow —
+// no assumption about when either transport becomes reliable.
+//
+// elapsed_ms is the step's START time, not "now", so repeats are byte-identical.
+// The app keys its dwell on the (step, elapsed, degraded) triple changing; a
+// ticking elapsed_ms would re-arm that every 500 ms and the stall line could
+// never appear.
+static uint8_t  fc_boot_degraded = 0;   // sticky FCB_DEG_* bits for this boot
+static volatile uint8_t  fc_boot_step_now = FCB_LINKS;
+static volatile uint16_t fc_boot_step_started_ms = 0;
+static volatile bool     fc_boot_reporting = false;
+
+static void fcBootEmitOnce()
+{
+    FcBootStatusData s{};
+    s.step       = fc_boot_step_now;
+    s.degraded   = fc_boot_degraded;
+    s.elapsed_ms = fc_boot_step_started_ms;
+    (void)enqueueI2STx(FC_BOOT_STATUS_MSG, (uint8_t*)&s, sizeof(s));
+}
+
+static void fcBootStatus(uint8_t step, uint8_t degraded_bit = 0)
+{
+    fc_boot_degraded |= degraded_bit;
+    fc_boot_step_now = step;
+    // Saturate rather than wrap so a slow boot reads as "a long time".
+    const uint32_t ms = time_ms();
+    fc_boot_step_started_ms = (ms > 65535u) ? 65535u : (uint16_t)ms;
+    fcBootEmitOnce();                       // immediate, for a warm link
+    fc_boot_reporting = (step != FCB_COMPLETE);
+}
+
+// Re-emitter.  Exits once setup_fc reports FCB_COMPLETE — from then on
+// NonSensorData carries the real state and the OC stops publishing boot keys.
+static void fcBootReporterTask(void*)
+{
+    while (fc_boot_reporting)
+    {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        if (fc_boot_reporting) fcBootEmitOnce();
+    }
+    // One last COMPLETE so a listener that missed the transition still sees it.
+    fcBootEmitOnce();
+    vTaskDelete(nullptr);
+}
+
 static void setup_fc()
 {
     // Ensure NVS is initialised (ESP-IDF on ESP32-P4 may not auto-init)
@@ -2877,6 +3068,31 @@ static void setup_fc()
     {
         gpio_set_direction((gpio_num_t)config::SERVO_ACT_PIN, GPIO_MODE_OUTPUT);
         gpio_set_level((gpio_num_t)config::SERVO_ACT_PIN, 1);
+    }
+
+    // #848: the power-hold latch may have survived the reset (LP pad hold +
+    // RTC flag both persist through panic/WDT/SW reboots). Do NOT touch the
+    // pad here — pulling the hold before the recovery path has decided
+    // whether the flight is still on would drop the one thing keeping the
+    // rail up if the OC is also down. Reconciliation runs after recovery.
+    if (config::PWR_HOLD_PIN >= 0)
+    {
+        // Gate on reset reason like the OC's rail_rtc: on a true power-on the
+        // pad hold cannot have survived (the LP domain lost power), but RTC
+        // SRAM remanence across a short battery reseat can preserve the magic
+        // — exactly the tracker-mode exit procedure. Without this, that
+        // reseat would boot believing a hold is latched.
+        pwr_hold_latched_at_boot = (esp_reset_reason() != ESP_RST_POWERON) &&
+                                   (pwr_hold_flag_rtc == kPwrHoldMagic);
+        if (pwr_hold_latched_at_boot)
+        {
+            ESP_LOGW(TAG, "[PWR] Power hold latched from a previous boot — "
+                          "keeping it until the flight state is resolved");
+        }
+        else
+        {
+            pwr_hold_flag_rtc = 0;   // normalize RTC garbage on cold boots
+        }
     }
 
     ESP_LOGI(TAG, "Starting ....");
@@ -3001,6 +3217,17 @@ static void setup_fc()
                             &i2s_sender_task_handle,
                             i2s_sender_core);
 
+    // First reportable boot step.  This sits AFTER the I2S queue and sender
+    // task exist, not up at the I2C init, because boot status rides I2S — see
+    // fcBootStatus().  "Links up" is honest here in a way it would not have
+    // been earlier: both transports are now live, which is exactly what the
+    // operator needs to know before the ~20 s sensor step.
+    fcBootStatus(FCB_LINKS);
+    // Low priority, off the sensor core: it must not compete with bring-up, and
+    // a 500 ms tick has no deadline worth defending.
+    xTaskCreatePinnedToCore(fcBootReporterTask, "FC Boot Rpt", 2560, nullptr, 1,
+                            nullptr, i2s_sender_core == 0 ? 1 : 0);
+
     // Phase 4 Layer 3: OTA image parser. Idle (blocked on notify) until the
     // I2S link is flipped to slave RX and the recv callback starts waking it.
     // Pinned to Core 1 (off the sensor core) at low priority — it only runs
@@ -3009,6 +3236,7 @@ static void setup_fc()
                             &fc_ota_parser_task, 1);
 
     // Load persistent rocket settings from NVS (factory default from config.h)
+    fcBootStatus(FCB_NVS);
     ESP_LOGI(TAG, "NVS prefs loading...");
     prefs.begin("rocket", false);  // read-write (creates namespace on first boot)
     enable_sounds = prefs.getBool("sounds", config::ENABLE_SOUNDS);
@@ -3333,6 +3561,12 @@ static void setup_fc()
 
     // Initialize sensor collector (including sensors) and start polling tasks
     ESP_LOGI(TAG, "Sensor collector init...");
+    // FCB_SENSORS covers GNSS bring-up too: begin() BLOCKS until the ~35 s GNSS
+    // deadline when the module is dead, so the two cannot be announced
+    // separately from out here.  That is also the stall this reporting exists to
+    // make visible — a boot parked on "Sensors" for 35 s is a dead GNSS, and the
+    // FCB_GNSS report immediately after begin() returns confirms it.
+    fcBootStatus(FCB_SENSORS);
     sensor_collector.begin(config::SENSOR_CORE);
 
     // #557: latch GNSS-absent mode.  isGnssOnline() is false when GNSS is built
@@ -3347,6 +3581,10 @@ static void setup_fc()
         ESP_LOGW(TAG, "[GNSS] Module absent (bring-up failed) — GNSS-absent "
                       "degraded mode: baro+IMU EKF init, guidance forced off");
     }
+    // Boot CONTINUES either way — the degraded bit is how the operator learns
+    // the receiver never came up, rather than only finding out from a missing
+    // fix later.
+    fcBootStatus(FCB_GNSS, gnss_absent_mode ? FCB_DEG_GNSS : 0);
     sensor_converter.configureISM6HG256FullScale(
         static_cast<ISM6LowGFullScale>(config::ISM6_LOW_G_FS_G),
         static_cast<ISM6HighGFullScale>(config::ISM6_HIGH_G_FS_G),
@@ -3503,6 +3741,9 @@ static void setup_fc()
     servo_control.setPIDDerivativeFilterCutoffHz(config::D_FILTER_CUTOFF_HZ);
     control_mixer.setDerivativeFilterCutoffHz(config::D_FILTER_CUTOFF_HZ);
     // Servo setup — always init hardware if pins valid, gate enabled on NVS.
+    // No pins configured is a build choice, not a fault, so it does not set the
+    // degraded bit — the app just sees the step pass.
+    fcBootStatus(FCB_SERVOS);
     if (servoPinsValid())
     {
         servo_control.begin();
@@ -3557,8 +3798,9 @@ static void setup_fc()
     // ── Inflight reboot recovery ────────────────────────────────────────────
     // If the reset was unexpected (brownout, watchdog, panic), query the OC
     // for the latest snapshot it received over I2S and restore state to
-    // resume INFLIGHT ops.  Snapshot lives in OC's MRAM (non-volatile, no
-    // FC flash writes — see #104).
+    // resume INFLIGHT ops.  The snapshot lives in the OC's RAM cache, backed
+    // by the NAND log stream on no-MRAM boards and the MRAM slot on V7/V8
+    // (#104, #846) — no FC flash writes either way.
     {
         esp_reset_reason_t rst = esp_reset_reason();
         ESP_LOGI(TAG, "Reset reason: %s (%d)", resetReasonStr(rst), (int)rst);
@@ -3572,14 +3814,46 @@ static void setup_fc()
         FlightSnapshotData snap = {};
         bool valid = false;
 
-        if (unexpected_reset && !out_ready) {
-            ESP_LOGW(TAG, "[RECOVERY] OC not ready — skipping snapshot recovery");
-        }
-        else if (unexpected_reset) {
-            // Send GET_FLIGHT_SNAPSHOT request, then read the SNAPSHOT_MSG
-            // response.  OC reads from MRAM (~150 us) and queues the
-            // ~224-byte response into its I2C TX ringbuffer (256 B).
-            if (i2c_interface.sendMessage(GET_FLIGHT_SNAPSHOT, nullptr, 0) == ESP_OK) {
+        if (unexpected_reset) {
+            // #364/#846: bounded retries instead of the old single-shot. The
+            // both-reset case (pack brownout) is exactly when the one boot
+            // probe misses — the OC is still bringing its I2C slave up — and
+            // a silently-skipped recovery mid-descent is a ballistic. Five
+            // attempts ~350 ms apart bound the extra boot time at ~1.75 s,
+            // spent ONLY on unexpected-reset boots. Between attempts the OC
+            // gets a fresh OUT_STATUS_QUERY (full-length read — an aborted
+            // short read would desync its V2 slave TX ring, #399), and a
+            // failed snapshot read gets an I2C_TX_RESYNC first (#402; the
+            // bus is idle here by construction — nothing else polls during
+            // setup). A definitive answer (valid restore, sim refusal, or a
+            // LANDED/garbage frame that parsed) stops the retries; only
+            // transport failures continue.
+            constexpr int kRecoveryAttempts = 5;
+            (void)out_ready;   // no longer a precondition — see below
+            bool definitive = false;
+            for (int attempt = 0; attempt < kRecoveryAttempts && !definitive;
+                 ++attempt) {
+                if (attempt > 0) delay_ms(350);
+
+                // Deliberately NOT gated on out_ready. That gate IS #364: a
+                // single unretried boot probe, taken seconds earlier (the
+                // servo wiggle alone can be 4.2 s), decided recovery was
+                // impossible and the FC cold-started mid-descent. The ask
+                // below is its own liveness test — if the OC is not up, the
+                // read fails and we retry; if it is, we get the answer. No
+                // second status query: re-probing would also pop the OC's
+                // queued-command slot (CMD_REPEAT_LIMIT) for a reply this
+                // path discards.
+
+                // Send GET_FLIGHT_SNAPSHOT, then read the SNAPSHOT_MSG
+                // response. The OC serves its RAM cache (#846) — seeded live
+                // over I2S, or at boot from the NAND log stream — with the
+                // V7/V8 MRAM slot as fallback.
+                if (i2c_interface.sendMessage(GET_FLIGHT_SNAPSHOT, nullptr, 0) != ESP_OK) {
+                    ESP_LOGW(TAG, "[RECOVERY] Failed to send GET_FLIGHT_SNAPSHOT (attempt %d/%d)",
+                             attempt + 1, kRecoveryAttempts);
+                    continue;
+                }
                 delay_ms(20);  // let OC service the request and queue the response
 
                 constexpr size_t kRespFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
@@ -3591,49 +3865,65 @@ static void setup_fc()
                 // status-path residue bug. Buffer keeps slack for the scan.
                 uint8_t buf[kRespFrameLen + 16] = {};
                 esp_err_t rerr = i2c_interface.masterRead(buf, kRespFrameLen, 100);
-                if (rerr == ESP_OK) {
-                    // SOF scan — same defensive pattern as the [CFG READ] path.
-                    for (size_t off = 0; off + kRespFrameLen <= sizeof(buf); off++) {
-                        if (buf[off] == 0xAA && buf[off+1] == 0x55 &&
-                            buf[off+2] == 0xAA && buf[off+3] == 0x55 &&
-                            buf[off+4] == SNAPSHOT_MSG) {
-                            uint8_t type = 0;
-                            uint8_t payload[sizeof(FlightSnapshotData)] = {};
-                            size_t  payload_len = 0;
-                            if (TR_I2C_Interface::unpackMessage(
-                                    buf + off, kRespFrameLen,
-                                    type, payload, sizeof(payload),
-                                    payload_len, true) &&
-                                type == SNAPSHOT_MSG &&
-                                payload_len == sizeof(FlightSnapshotData)) {
-                                memcpy(&snap, payload, sizeof(FlightSnapshotData));
-                                if (snap.magic   == FlightSnapshotData::MAGIC &&
-                                    snap.version == FlightSnapshotData::VERSION &&
-                                    snap.rocket_state == (uint8_t)INFLIGHT &&
-                                    snap.crc32 == computeSnapshotCRC(snap)) {
-                                    if (snap.sim_flight) {
-                                        // The dry-fire gate lives in isSimActive(),
-                                        // which a reboot resets — restoring here
-                                        // would fire real pyro outputs on bench
-                                        // igniters mid-sim.
-                                        ESP_LOGW(TAG, "[RECOVERY] Snapshot is from a SIMULATED flight — refusing restore");
-                                    } else {
-                                        valid = true;
-                                    }
+                if (rerr != ESP_OK) {
+                    ESP_LOGW(TAG, "[RECOVERY] I2C read for snapshot failed: %s (attempt %d/%d)",
+                             esp_err_to_name(rerr), attempt + 1, kRecoveryAttempts);
+                    // The aborted read may have desynced the OC's slave TX
+                    // ring — ask it to reset before the next attempt (#402).
+                    (void)i2c_interface.sendMessage(I2C_TX_RESYNC, nullptr, 0);
+                    continue;
+                }
+                // SOF scan — same defensive pattern as the [CFG READ] path.
+                for (size_t off = 0; off + kRespFrameLen <= sizeof(buf); off++) {
+                    if (buf[off] == 0xAA && buf[off+1] == 0x55 &&
+                        buf[off+2] == 0xAA && buf[off+3] == 0x55 &&
+                        buf[off+4] == SNAPSHOT_MSG) {
+                        uint8_t type = 0;
+                        uint8_t payload[sizeof(FlightSnapshotData)] = {};
+                        size_t  payload_len = 0;
+                        if (TR_I2C_Interface::unpackMessage(
+                                buf + off, kRespFrameLen,
+                                type, payload, sizeof(payload),
+                                payload_len, true) &&
+                            type == SNAPSHOT_MSG &&
+                            payload_len == sizeof(FlightSnapshotData)) {
+                            memcpy(&snap, payload, sizeof(FlightSnapshotData));
+                            if (snap.magic   == FlightSnapshotData::MAGIC &&
+                                snap.version == FlightSnapshotData::VERSION &&
+                                snap.rocket_state == (uint8_t)INFLIGHT &&
+                                snap.crc32 == computeSnapshotCRC(snap)) {
+                                if (snap.sim_flight) {
+                                    // The dry-fire gate lives in isSimActive(),
+                                    // which a reboot resets — restoring here
+                                    // would fire real pyro outputs on bench
+                                    // igniters mid-sim.
+                                    ESP_LOGW(TAG, "[RECOVERY] Snapshot is from a SIMULATED flight — refusing restore");
                                 } else {
-                                    ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
-                                             (unsigned long)snap.magic, snap.rocket_state,
-                                             (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
+                                    valid = true;
                                 }
-                                break;
+                                definitive = true;   // a real answer, either way
+                                // The OC demonstrably answered — latch it for
+                                // the #848/#859 hold reconciliation just below,
+                                // which would otherwise inherit a stale false.
+                                out_ready = true;
+                            } else {
+                                ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
+                                         (unsigned long)snap.magic, snap.rocket_state,
+                                         (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
+                                // A frame that PARSED but fails validation is
+                                // also definitive when it is a LANDED clear —
+                                // the flight genuinely ended. Garbage keeps
+                                // retrying (could be a torn TX ring).
+                                if (snap.magic == FlightSnapshotData::MAGIC &&
+                                    snap.crc32 == computeSnapshotCRC(snap)) {
+                                    definitive = true;
+                                }
+                                out_ready = true;   // the OC answered
                             }
+                            break;
                         }
                     }
-                } else {
-                    ESP_LOGW(TAG, "[RECOVERY] I2C read for snapshot failed: %s", esp_err_to_name(rerr));
                 }
-            } else {
-                ESP_LOGW(TAG, "[RECOVERY] Failed to send GET_FLIGHT_SNAPSHOT");
             }
         }
 
@@ -3673,6 +3963,12 @@ static void setup_fc()
             }
             portEXIT_CRITICAL(&pyro_spinlock);
 
+            // #834 item 4: the sensor stack has just come up cold while the
+            // snapshot restored a mid-flight apogee, so the main-deploy gate
+            // must charge its dwells rather than credit a pad phase this boot
+            // never had. Without this the first post-reboot tick can fire.
+            MainDeployGate::reset(main_deploy_state, now_ms, /*after_reboot=*/true);
+
             ESP_LOGW(TAG, "[RECOVERY] Pyro: apogee=%d fired=[%d,%d,%d,%d]",
                      pyro_apogee_detected,
                      snap.pyro1_fired, snap.pyro2_fired,
@@ -3685,6 +3981,12 @@ static void setup_fc()
             ref_alt_m   = snap.ref_alt_m;
             have_ref_pos = true;
             ref_pos_frozen = true;
+            // #834 item 4: the accumulator is frozen from here on, so ref_pos_count
+            // can never climb again this flight. Re-seed it from the snapshot's
+            // convergence evidence, otherwise it stays 0 and the GNSS main-deploy
+            // backstop is structurally dead for the whole recovered descent.
+            ref_pos_count = snap.ref_datum_converged
+                                ? config::MAIN_DEPLOY_REF_MIN_FIXES : 0;
             ground_pressure_found = true;
 
             // Restore the board→rocket orientation BEFORE the EKF state —
@@ -3749,9 +4051,55 @@ static void setup_fc()
             kinematics.launch_flag = true;
         }
 
-        // Clear stale snapshot on normal boot (prevents recovery on next power cycle)
-        if (!reboot_recovery) {
+        // Clear stale snapshot on NORMAL boots only (prevents recovery on the
+        // next power cycle). #834 item 3: after an UNEXPECTED reset whose
+        // recovery FAILED (OC not ready, transport error), the record must
+        // survive — a follow-up brownout gets another chance at it, and the
+        // clear-on-failure used to destroy the snapshot on exactly the path
+        // that could not read it. A truly ended flight is cleared by the
+        // LANDED one-shot and by the next clean power cycle.
+        if (!reboot_recovery && !unexpected_reset) {
             clearFlightSnapshot();
+        }
+    }
+
+    // #848: reconcile an inherited power hold now that the flight state is
+    // known (pwr_hold_policy.h carries the decision table + rationale).
+    if (config::PWR_HOLD_PIN >= 0)
+    {
+        switch (PwrHoldPolicy::bootAction(pwr_hold_latched_at_boot,
+                                          rocket_state == INFLIGHT,
+                                          out_ready))
+        {
+            case PwrHoldPolicy::BootAction::Assert:
+                pwrHoldAssert("reboot recovery");
+                break;
+            case PwrHoldPolicy::BootAction::Release:
+                pwrHoldRelease("boot: flight over, OC alive");
+                break;
+            case PwrHoldPolicy::BootAction::KeepHold:
+                // A latched hold with no recovered flight and no OC: this is a
+                // downed rocket and we are its GNSS tracker. Deliberately NOT
+                // released — battery pull is the power-off. If the OC answers
+                // later (the boot probe is a single unretried query and the OC
+                // may simply still be booting), the out_ready latch in the
+                // status-poll path releases this.
+                pwr_hold_orphan_keep = true;
+                ESP_LOGE(TAG, "[PWR] Power hold KEPT: previous flight did not "
+                              "resolve and the OC is not answering. Holding our "
+                              "own rail for recovery tracking; disconnect the "
+                              "battery to power off (auto-releases if the OC "
+                              "comes back).");
+                break;
+            case PwrHoldPolicy::BootAction::None:
+                // Defensive: the RTC flag and the LP-pad hold register are
+                // separate LP-domain state — a brownout can scramble the flag
+                // while the hold register keeps the pad latched. Releasing
+                // costs nothing here (LOW == high-Z through D9) and self-heals
+                // a phantom latch; pwrHoldRelease only logs when the flag was
+                // actually set, so cold boots stay quiet.
+                pwrHoldRelease("boot: no hold expected");
+                break;
         }
     }
 
@@ -3759,6 +4107,11 @@ static void setup_fc()
     ESP_LOGI(TAG, "Setup complete…");
     triggerBlueLedFlash(time_ms());
 
+    // Last boot report: from here the state machine runs and NonSensorData
+    // carries rocket_state, so the app switches to showing real states.  Any
+    // degraded bits accumulated above ride this final frame so a boot that
+    // finished imperfectly still says so.
+    fcBootStatus(FCB_COMPLETE);
 }
 
 // ==========================================================================
@@ -3774,6 +4127,7 @@ static void resetFlightStateForSim(const char* edge)
     // Also resets GNSS state: the sim injects synthetic GNSS (fix=3, sats=12);
     // a stale copy would otherwise immediately re-trip READY -> PRELAUNCH.
     pyroSafeAll();
+    pwrHoldRelease("sim reset");  // #848: a sim abort exits INFLIGHT without LANDED
     // A sim start/stop used to leave a REAL camera powered and the start phase
     // machine armed — and with the sim driving rocket_state to INFLIGHT, that
     // armed machine takes the in-flight blind-record shortcuts.
@@ -3854,6 +4208,15 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
 {
     rocket_state = INFLIGHT;
     launch_time_millis = now_ms;
+    // #848: latch our own power rail for the duration of the flight (sims
+    // included — the release at LANDED/sim-reset makes it harmless and it
+    // exercises the mechanism on the bench).
+    pwrHoldAssert(from_state);
+    // #834 item 4: fresh main-deploy gate for this flight. A normal launch
+    // credits the pad phase (the barometer has been alive throughout), so the
+    // re-acquire dwell opens no window the legacy predicate did not have.
+    MainDeployGate::reset(main_deploy_state, now_ms, /*after_reboot=*/false);
+    main_deploy_last_src = MainDeployGate::Source::None;
     // Orientation is now latched (estimator only runs in
     // READY/PRELAUNCH).  Start the boost-phase thrust-axis
     // cross-check on what was latched.
@@ -4865,7 +5228,18 @@ static void loop_fc()
                         && resp_payload_len >= 1)
                     {
                         query_ok = true;
-                        if (resp_payload[0] != 0) { out_ready = true; }
+                        if (resp_payload[0] != 0)
+                        {
+                            out_ready = true;
+                            // #848: the OC is provably alive — an orphaned
+                            // power hold kept for a dead OC hands the rail
+                            // back now (never during a flight).
+                            if (pwr_hold_orphan_keep && rocket_state != INFLIGHT)
+                            {
+                                pwr_hold_orphan_keep = false;
+                                pwrHoldRelease("OC answered after orphan keep");
+                            }
+                        }
                         // Reflect the OC's reported pending command every poll,
                         // INCLUDING 0 (idle).  The OC repeats each command for
                         // CMD_REPEAT_LIMIT polls then reports 0; holding the value
@@ -5839,7 +6213,28 @@ static void loop_fc()
             else if (out_pending_command == OTA_ABORT_CMD)
             {
                 ESP_LOGW(TAG, "[OTA] ABORT");
-                if (fc_ota_data_mode) fcRevertToTx();  // back to TX so status rides I2S
+                if (fc_ota_data_mode)
+                {
+                    // #834 items 6/7 (review): wait for the OC to stop driving
+                    // BCLK before seizing it, exactly as the FINISH path above
+                    // does and for the same reason — otherwise both ends drive
+                    // BCLK/WS. This used to be unreachable in practice because
+                    // nothing staged OTA_ABORT_CMD while the OC was (or was
+                    // about to be) master; the OC's disconnect/stall/flip-fail
+                    // recovery now does, so the abort path needs the same
+                    // handshake. Shorter cap than FINISH: an abort is already
+                    // the unhappy path and must not stall the flight loop.
+                    uint32_t last_cb = fc_ota_rx_cb_count;
+                    int quiet = 0;
+                    for (int i = 0; i < 120 && quiet < 20; i++)   // ~100 ms quiet, <=600 ms cap
+                    {
+                        delay_ms(5);
+                        const uint32_t cb = fc_ota_rx_cb_count;
+                        if (cb == last_cb) { quiet++; }
+                        else { quiet = 0; last_cb = cb; }
+                    }
+                    fcRevertToTx();  // back to TX so status rides I2S
+                }
                 (void)fc_ota_receiver.abort();
                 sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
             }
@@ -6078,9 +6473,32 @@ static void loop_fc()
             else if (out_pending_command == PYRO_FIRE_TEST)
             {
                 // Test-fire a pyro channel from the app (ground test only)
-                if (isCommandLockoutState(rocket_state)) {
-                    ESP_LOGW(TAG, "[PYRO FIRE TEST] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
-                             (unsigned)rocket_state);
+                //
+                // post_flight_lockout is checked SEPARATELY from
+                // isCommandLockoutState(), which covers only INFLIGHT and
+                // MAG_CALIBRATION — LANDED is not in that set, so before this the
+                // handler ran to completion after a flight.  pyroSetArmLocked()
+                // silently downgrades want_high to false under #317's lockout, so
+                // ARM never rose: with the arming FET off the squib return reaches
+                // ground only through R73 (1 k), single-digit mA, nowhere near an
+                // igniter's all-fire.  Nothing fired — but the handler still pulsed
+                // the FIRE pin, latched PyroChState::Done, and logged "CH%u fired".
+                // Done is what feeds the PSF_CHn_FIRED telemetry bit and the NVS
+                // flight snapshot, so a recovery crew trying to expend a leftover
+                // charge was told the channel had fired while the squib stayed live.
+                //
+                // Refusing is the correct outcome, not a limitation: #317 makes
+                // LANDED terminal until a hardware reboot precisely so the squib
+                // rail cannot be re-energised post-flight.  The bug was never that
+                // it refused — it was that it refused SILENTLY and then reported
+                // success.  A leftover charge is handled physically, or by rebooting
+                // the FC, which clears the lockout.
+                if (isCommandLockoutState(rocket_state) || post_flight_lockout) {
+                    ESP_LOGW(TAG, "[PYRO FIRE TEST] Rejected — state=%u post_flight_lockout=%d "
+                                  "(no test commands while INFLIGHT or in MAG_CALIBRATION, and "
+                                  "none after landing — ARM cannot be raised, so a 'fire' here "
+                                  "would report success without energising the squib)",
+                             (unsigned)rocket_state, (int)post_flight_lockout);
                 } else {
                     delay_ms(1);
                     uint8_t cfg_payload[4];
@@ -6618,8 +7036,29 @@ static void loop_fc()
                 (uint32_t)(time_us() - bmp_latest_si.time_us) < BARO_STALE_TIMEOUT_US;
             const bool ekf_healthy = ekf_initialized && ekf.isHealthy();
 
+            // #259 applied to launch detection.  ism6_latest_si RETAINS its last
+            // converted value when the drain yields no new sample (main.cpp
+            // ISM6 block), and have_ism6_si latches on first read and never
+            // clears — so a frozen IMU re-presents the same accel every tick.
+            // For the #258 accel-only launch fallback that is the difference
+            // between "250 ms of sustained >3 g" and "ONE sample above 3 g,
+            // then a freeze": launch_count_hi would run to the threshold with no
+            // further physical stimulus and latch launch_flag.  That path is now
+            // load-bearing (it is the only live launch detector with a dead baro,
+            // and it promotes straight out of INITIALIZATION), so gate it on the
+            // same freshness test burnout detection already uses below.
+            //
+            // Gate the ARGUMENT, not accel_norm itself: accel_norm also feeds
+            // deploymentDetectStep() and the telemetry/log field, which must keep
+            // reporting the last known value rather than a synthetic zero.
+            // 0.0f fails the >20 m/s2 test and takes the counter-zeroing branch,
+            // i.e. exactly "no launch evidence from a stale IMU".
+            constexpr uint32_t IMU_STALE_TIMEOUT_US = 100000u;  // 0.1 s (~1 kHz IMU)
+            const bool ism6_fresh_kc = have_ism6_si &&
+                (uint32_t)(time_us() - ism6_latest_si.time_us) < IMU_STALE_TIMEOUT_US;
+
             kinematics.kinematicChecks(pressure_altitude_m,
-                                       accel_norm,
+                                       ism6_fresh_kc ? accel_norm : 0.0f,
                                        imu_pos,
                                        imu_vel,
                                        roll_rate_dps,
@@ -6632,6 +7071,44 @@ static void loop_fc()
                                        (float)gnss_latest_si.vel_u,
                                        ekf_healthy,
                                        baro_healthy);
+
+            // #834 item 4: step the main-deploy gate here, where baro_healthy
+            // is in scope.  servicePyroChannels() runs LATER in this same pass
+            // and only reads the published Inputs, so the gate's view of
+            // pyro_apogee_detected is one tick (~1 ms at 1 kHz) stale — which
+            // only ever delays the first eligible tick, never advances it.
+            {
+                MainDeployGate::Inputs& g = main_deploy_in;
+                g.now_ms           = now_ms;
+                g.apogee           = pyro_apogee_detected;
+                g.impact_flag      = kinematics.impact_flag;
+                g.quiescent_flag   = kinematics.quiescent_flag;
+                g.baro_healthy     = baro_healthy;
+                g.baro_alt_m       = kinematics.alt_est;
+                g.baro_rate_mps    = kinematics.d_alt_est_;
+
+                // GNSS backstop input.  ref_alt_m is the pad datum (a running
+                // mean of Gate-3 fixes, frozen at launch), so this is AGL in
+                // the same frame as the operator's threshold.  ref_pos_count
+                // is load-bearing, not decorative: an under-converged pad
+                // average has been measured 132 m off, which would sail
+                // straight through the gate's margin and fire the main early.
+                constexpr uint32_t GNSS_STALE_TIMEOUT_US = 2000000u;  // 2 s @ ~10 Hz
+                const uint32_t gnss_age_us =
+                    (uint32_t)(time_us() - gnss_latest_si.time_us);
+                g.gnss_ok = have_gnss_si && have_ref_pos &&
+                            ref_pos_count >= config::MAIN_DEPLOY_REF_MIN_FIXES &&
+                            gnss_latest_si.fix_mode >= 3 &&
+                            gnss_latest_si.num_sats >= config::GNSS_MIN_SATS &&
+                            gnss_age_us < GNSS_STALE_TIMEOUT_US;
+                g.gnss_vel_u_mps = (float)gnss_latest_si.vel_u;
+                // Doppler-propagate the fix to now so receiver latency drops
+                // out of the error budget instead of being paid for in margin.
+                g.gnss_agl_m = (float)(gnss_latest_si.alt - ref_alt_m) +
+                               g.gnss_vel_u_mps * ((float)gnss_age_us * 1e-6f);
+
+                MainDeployGate::step(main_deploy_state, g);
+            }
 
             // --- Recovery deployment detection ---
             // Stepped from the same block, once per loop pass, on the same
@@ -6860,6 +7337,37 @@ static void loop_fc()
                         ready_chirp_played = true;
                     }
                     ESP_LOGI(TAG, "[STATE] INITIALIZATION -> READY");
+                }
+                else if (kinematics.launch_flag)
+                {
+                    // Launch detected while INITIALIZATION never completed —
+                    // in practice a baro that was already dead at power-up, since
+                    // have_bmp_si latches on the first in-band sample and never
+                    // clears.  The pad interlock is deliberate: the operator sees
+                    // a red baro dot (sensor_health SH_BAD) and a state that never
+                    // reaches READY, and the app gates its pad actions on
+                    // READY/PRELAUNCH.  But refusing to advance is only a *deploy*
+                    // inhibit, not a launch inhibit — nothing here can stop a
+                    // motor.  If the vehicle is demonstrably flying, sitting in
+                    // INITIALIZATION means no enterInflight(), no
+                    // servicePyroChannels(), no drogue, no main: a guaranteed
+                    // ballistic return.  Deploying on a degraded sensor set beats
+                    // not deploying at all, so hand over to the flight logic —
+                    // the same call #382 makes from READY and #363 makes from an
+                    // active ground test, for the same reason.
+                    //
+                    // Safe against a false positive on the pad: with the baro dead
+                    // the primary detector cannot fire (it requires baro-confirmed
+                    // climb), so the only way here is the #258 accel-only fallback
+                    // — ~250 ms of UNINTERRUPTED >3 g.  That is a strictly harder
+                    // bar than the escape READY already has.  And entering INFLIGHT
+                    // arms nothing by itself: enterInflight() leaves ARM low and
+                    // every channel Idle until a trigger fires.
+                    ESP_LOGW(TAG, "[STATE] LAUNCH FROM INITIALIZATION — init gates "
+                                  "never met (ism6=%d bmp=%d); promoting to INFLIGHT "
+                                  "in degraded mode",
+                             (int)have_ism6_si, (int)have_bmp_si);
+                    enterInflight(now_ms, "INITIALIZATION");
                 }
                 break;
             }
@@ -7294,6 +7802,24 @@ static void loop_fc()
                     landed_actions_done = true;
                     post_flight_lockout = true;  // #317: LANDED is terminal until reboot
                     pyroSafeAll();
+                    // #848: hand the rail back to the OC — but only if the OC
+                    // ever answered this session. Landing after a both-MCU
+                    // brownout (or with a hard-dead OC) with out_ready false
+                    // must NOT release: the hold is what keeps this downed
+                    // rocket's GNSS downlink alive. The out_ready latch in the
+                    // status-poll path releases it the moment the OC appears.
+                    if (out_ready)
+                    {
+                        pwrHoldRelease("landed");
+                    }
+                    else
+                    {
+                        pwr_hold_orphan_keep = true;
+                        ESP_LOGE(TAG, "[PWR] LANDED with the OC not answering — "
+                                      "KEEPING the power hold for recovery "
+                                      "tracking (battery pull to power off; "
+                                      "auto-releases if the OC comes back).");
+                    }
                     clearFlightSnapshot();  // prevent stale recovery on next boot
                     if (servo_enabled)
                     {

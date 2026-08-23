@@ -20,17 +20,23 @@ namespace tr_flightlog {
 class TR_FlightLog {
 public:
     struct Config {
-        // ~10 MB (~2.7 min at the ~64 KB/s log rate) covers the vast majority of
-        // flights without an overflow extend.  Was 256 (32 MB / ~8.5 min): with
-        // recovered flights now trimmed (scanForBrownoutRecovery) that headroom
-        // is pure waste/fragmentation, and a brownout flight no longer keeps it.
-        // Block is now 256 KB (F35SQB004G), so these are halved vs the old 128 KB
-        // block count to keep the same byte footprint / erase-stall duration.
-        uint16_t prealloc_blocks     = 40;    // ~10 MB
+        // Counts are in BLOCKS, whose byte size is runtime chip geometry
+        // (#671): 256 KB on the legacy V8 bench part, 128 KB on the GD5F
+        // parts — so 40 blocks is ~10 MB or ~5 MB depending on the chip.
+        // prealloc history: was 256 (32 MB / ~8.5 min); with recovered
+        // flights now trimmed (scanForBrownoutRecovery) that headroom was
+        // pure waste/fragmentation.
+        uint16_t prealloc_blocks     = 40;
         uint16_t extend_blocks       = 32;    // overflow step (~200 ms stall)
         uint16_t flight_region_start = 32;    // first block owned by this layer
-        uint16_t flight_region_end   = 2044;  // one past last flight block
-        uint16_t metadata_blocks[4]  = {2044, 2045, 2046, 2047};
+        // #671: 0 = derive from the chip at begin(): flight_region_end =
+        // blockCount - 4 and metadata = the top four blocks. The old
+        // compile-time defaults (2044 / {2044..2047}) described the 2048-block
+        // legacy part and were OFF-DIE on the mini's 1024-block chip. Callers
+        // that need the numbers before begin() (auto-evict targets, bitmap
+        // store binding) read the backend geometry and fill these explicitly.
+        uint16_t flight_region_end   = 0;     // 0 = blockCount - 4
+        uint16_t metadata_blocks[4]  = {0, 0, 0, 0};  // all-0 = top 4 blocks
         // #277: wall-clock cap on one brownout-recovery pass so a chip with many
         // large orphaned ranges can't scan for minutes and look hung past the
         // app's 180 s power-on watchdog. Checked at run boundaries (never
@@ -116,7 +122,7 @@ public:
     // Writes the assigned flight_id to `flight_id_out` on success.
     //
     // This is the synchronous form. On hardware, prefer
-    // requestPrepareFlight() + servicePendingPrepareFlight() so the 256-block
+    // requestPrepareFlight() + servicePendingPrepareFlight() so the prealloc-sized
     // erase loop runs on the flush task's core (Core 0) instead of blocking
     // sensor ingest on the calling core (issue #77).
     Status prepareFlight(uint32_t& flight_id_out);
@@ -144,14 +150,15 @@ public:
     bool servicePendingPrepareFlight(uint32_t& id_out, Status& status_out);
 
     // Hot path: deterministic page write. Called by flush task.
-    // `page` must be exactly NAND_PAGE_SIZE bytes. No allocation, no metadata.
+    // `page` must be exactly pageSize() bytes (runtime). No allocation, no metadata.
     // The caller owns the page layout — recovery requires a PageHeader at the
     // start; consider `writeFrame` instead for that case.
     Status writePage(const uint8_t* page);
 
-    // Hot-path helper: wrap `payload` (up to NAND_PAGE_SIZE - sizeof(PageHeader)
-    // = 4080 bytes) in a PageHeader (active flight_id + monotonic seq + CRC32)
-    // and program it. This is the recommended write API — pages written via
+    // Hot-path helper: wrap `payload` (up to payloadPerPage() — the runtime
+    // page size minus the 16-byte PageHeader: 4080 on the legacy part, 2032
+    // on the GD5F parts) in a PageHeader (active flight_id + monotonic seq +
+    // CRC32) and program it. This is the recommended write API — pages written via
     // writeFrame are recoverable by the brownout scanner if finalizeFlight is
     // never called.
     Status writeFrame(const uint8_t* payload, size_t payload_len);
@@ -169,6 +176,14 @@ public:
     // --- Introspection / test surface ---
     bool          isInitialized() const { return initialized_; }
     const Config& config() const        { return cfg_; }
+    // #671: runtime geometry captured from the backend at begin(). Valid only
+    // after begin(); before it these return the legacy figures. The flush
+    // task's chunk quantum and the tail-scan window are denominated in
+    // payloadPerPage().
+    uint32_t pageSize()       const { return g_page_; }
+    uint32_t pagesPerBlock()  const { return g_ppb_; }
+    uint32_t blockCount()     const { return g_blocks_; }
+    uint32_t payloadPerPage() const { return g_page_ - (uint32_t)sizeof(PageHeader); }
 
 private:
     TR_NandBackend*    nand_          = nullptr;
@@ -189,15 +204,22 @@ private:
     uint32_t last_evicted_flight_id_  = 0;  // #315: id of the most recent auto-evict
     bool     flight_active_       = false;
 
-    // Page-sized scratch buffers kept OFF the task stack. At the 4 KB
-    // F35SQB004G page size, the nested writeFrame -> writePageLocked ->
+    // Page-sized scratch buffers kept OFF the task stack. At the max (4 KB)
+    // page size, the nested writeFrame -> writePageLocked ->
     // retireBlockAndSalvage path would otherwise put two 4 KB page[] arrays on
     // the flush task's 8 KB stack at once and overflow it. All uses are
     // serialized by mutex_ (or run at boot before the flush task exists);
     // salvage needs its own buffer because it is live while page_buf_ is still
     // held by the in-progress writeFrame/writePage call.
-    uint8_t  page_buf_[NAND_PAGE_SIZE]    = {};  // writeFrame / readFlightPage / recovery
-    uint8_t  salvage_buf_[NAND_PAGE_SIZE] = {};  // retireBlockAndSalvage only
+    // #671: statically MAX-sized; only the first g_page_ bytes are live.
+    uint8_t  page_buf_[NAND_PAGE_SIZE_MAX]    = {};  // writeFrame / readFlightPage / recovery
+    uint8_t  salvage_buf_[NAND_PAGE_SIZE_MAX] = {};  // retireBlockAndSalvage only
+
+    // #671: runtime geometry, captured from the backend at begin(). Legacy
+    // defaults so pre-begin() calls (none should exist) stay old-behaviour.
+    uint32_t g_page_   = 4096;
+    uint32_t g_ppb_    = 64;
+    uint32_t g_blocks_ = 2048;
 
     // Single-producer (any task) / single-consumer (flush task) request flag
     // for the deferred prepareFlight path. `volatile` is sufficient because

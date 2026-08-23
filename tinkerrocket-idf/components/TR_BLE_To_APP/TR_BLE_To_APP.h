@@ -130,11 +130,31 @@ public:
         // (default).  STALE = BS re-pushing cached data older than
         // BLE_TELEMETRY_STALE_MS; iOS dims + shows "stale (Ns ago)".
         // SYNCING = no rocket has ever been caught; iOS hides rocket
-        // fields and shows "Searching for rocket…".  Direct rocket
-        // connections always send LIVE.
+        // fields and shows "Searching for rocket…".
+        //
+        // A DIRECT rocket connection ages its own FC data the same way (#831):
+        // every rocket-derived field in the frame is republished from the last
+        // NonSensorData snapshot, so an FC that dies while the OC stays up
+        // would otherwise hold a green continuity reading over indefinitely.
+        // SYNCING until the first FC frame, STALE past
+        // config::FC_FRAME_STALE_MS without one.
         enum class DataStatus : uint8_t { LIVE = 0, STALE = 1, SYNCING = 2 };
         DataStatus data_status;
         uint32_t   data_age_ms;         // only meaningful when STALE
+
+        // FC boot progress, live ONLY while the flight computer is still in
+        // setup_fc() and has never sent a NonSensorData frame.  The FC's setup
+        // takes ~10 s, during which rocket_state does not exist and the app
+        // would otherwise show a bare "INITIALIZATION" (in fact the zero value
+        // of a never-written field) for the whole window — indistinguishable
+        // from "flight computer powered off".  boot_step is FcBootStep,
+        // boot_degraded is the FCB_DEG_* bitmask of steps that finished
+        // degraded but did not stop the boot.  Set boot_valid false once real
+        // state frames arrive; the app then ignores these entirely.
+        bool     boot_valid;
+        uint8_t  boot_step;
+        uint8_t  boot_degraded;
+        uint16_t boot_elapsed_ms;
     };
 
     // Constructor
@@ -153,6 +173,13 @@ public:
     // Call frequently from main loop (handles BLE events)
     void loop();
 
+
+    // #834 item 2: true when the NEXT loop() call will esp_restart() to load a
+    // new OTA partition. The restart fires from inside loop(), on the caller's
+    // task, with no chance to intervene afterwards — this lets the caller
+    // quiesce storage first. ELAPSED, not merely scheduled, so the log ring
+    // keeps draining for the whole pre-reboot window.
+    bool otaRestartDue() const;
     // Check if a device is connected
     bool isConnected() const;
 
@@ -268,8 +295,13 @@ public:
     // failure), NOT because the file was fully sent. The app must FAIL the download
     // instead of saving the bytes it has. Old apps ignore bit1 and behave as today.
     // Defaulted so the base-station call sites are unchanged and byte-identical.
-    bool sendFileChunk(uint32_t offset, const uint8_t* data, size_t len, bool eof,
-                       bool abort = false);
+    // [[nodiscard]] (#827): the base station shipped for months silently
+    // dropping this return and handing the app spliced CSVs.  Two other
+    // downloaders honoured the contract by convention alone; now the compiler
+    // enforces it.  Terminal sends (an EOF or EOF|ABORT that ends the
+    // transfer) have nothing left to do on failure and cast to (void).
+    [[nodiscard]] bool sendFileChunk(uint32_t offset, const uint8_t* data,
+                                     size_t len, bool eof, bool abort = false);
 
     // Get the negotiated MTU (after connection established)
     // Returns 0 if not yet negotiated

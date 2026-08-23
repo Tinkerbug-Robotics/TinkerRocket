@@ -199,6 +199,24 @@ bool TR_BMP585::begin()
 
   if (!ensureSpiDevice_()) return false;
 
+  // Soft-reset BEFORE bmp5_init(), every time.
+  //
+  // bmp5_init() ends in power_up_check(), which demands the
+  // POR/soft-reset-complete bit in INT_STATUS (0x27). That bit is a ONE-SHOT:
+  // the sensor sets it once when it powers up (or is soft-reset) and it is
+  // cleared when read — and the previous boot's bmp5_init() already read it.
+  // This MCU resets far more often than the sensor's rail cycles (every flash,
+  // every reboot, every brownout recovery, and on the FC the rail is held up
+  // across resets by the #848 latch), so on essentially every boot the bit is
+  // already gone and bmp5_init() fails with BMP5_E_POWER_UP — nothing to do
+  // with the chip ID the caller then logs.
+  //
+  // The caller's retry loop used to paper over this by doing this very reset
+  // after the first failure, at a cost of ~530 ms and a scary WARN on every
+  // single boot. Doing it up front makes the first attempt succeed. On a
+  // genuinely cold sensor this is a harmless extra reset.
+  issueSoftReset_();
+
   // Fill Bosch dev struct
   dev_.intf = BMP5_SPI_INTF;
   dev_.read = &TR_BMP585::spiRead_;
@@ -226,6 +244,32 @@ bool TR_BMP585::begin()
   return true;
 }
 
+void TR_BMP585::issueSoftReset_()
+{
+  // Raw Bosch soft reset: write 0xB6 to CMD register 0x7E.
+  spi_transaction_t t = {};
+  t.cmd        = BMP5_REG_CMD & 0x7F;
+  t.length     = 8;
+  t.flags      = SPI_TRANS_USE_TXDATA;
+  t.tx_data[0] = BMP5_SOFT_RESET_CMD;
+  csSelect_();
+  spi_device_polling_transmit(spi_dev_, &t);
+  csDeselect_();
+
+  esp_rom_delay_us(5000);
+}
+
+void TR_BMP585::spiDummyRead_()
+{
+  spi_transaction_t t = {};
+  t.cmd    = BMP5_REG_CHIP_ID | 0x80;
+  t.length = 8;
+  t.flags  = SPI_TRANS_USE_RXDATA;
+  csSelect_();
+  spi_device_polling_transmit(spi_dev_, &t);
+  csDeselect_();
+}
+
 bool TR_BMP585::forceSoftResetRaw()
 {
   configureCsPin_();
@@ -233,19 +277,13 @@ bool TR_BMP585::forceSoftResetRaw()
 
   if (!ensureSpiDevice_()) return false;
 
-  // Raw Bosch soft reset: write 0xB6 to CMD register 0x7E.
-  {
-    spi_transaction_t t = {};
-    t.cmd        = BMP5_REG_CMD & 0x7F;
-    t.length     = 8;
-    t.flags      = SPI_TRANS_USE_TXDATA;
-    t.tx_data[0] = BMP5_SOFT_RESET_CMD;
-    csSelect_();
-    spi_device_polling_transmit(spi_dev_, &t);
-    csDeselect_();
-  }
+  issueSoftReset_();
 
-  esp_rom_delay_us(5000);
+  // The reset re-runs the SPI interface auto-detect, so the next transaction
+  // is swallowed. Without this throwaway the verification read below returns
+  // garbage and this function reports "pending" on a reset that in fact
+  // worked — which is exactly what the boot log showed.
+  spiDummyRead_();
 
   // Read chip-id directly to confirm SPI communication is back.
   uint8_t id = 0;

@@ -4830,6 +4830,221 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Device:D_Dual_CommonCathode_AAK"
+			(pin_names
+				(offset 0.762)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "D"
+				(at 1.27 -2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "D_Dual_CommonCathode_AAK"
+				(at 0 2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Dual diode, common cathode on pin 3"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "diode"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "D_Dual_CommonCathode_AAK_0_1"
+				(polyline
+					(pts
+						(xy -3.81 1.27) (xy -1.27 0) (xy -3.81 -1.27) (xy -3.81 1.27) (xy -3.81 1.27) (xy -3.81 1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -3.81 0) (xy 3.81 0)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.27 -1.27) (xy -1.27 1.27) (xy -1.27 1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0 0) (xy 0 -2.54)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(circle
+					(center 0 0)
+					(radius 0.254)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type outline)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 -1.27) (xy 1.27 1.27) (xy 1.27 1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 3.81 -1.27) (xy 1.27 0) (xy 3.81 1.27) (xy 3.81 -1.27) (xy 3.81 -1.27) (xy 3.81 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(pin passive line
+					(at -7.62 0 0)
+					(length 3.81)
+					(name "A"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 7.62 0 180)
+					(length 3.81)
+					(name "A"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -5.08 90)
+					(length 2.54)
+					(name "K"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Device:LED"
 			(pin_numbers
 				(hide yes)
@@ -5934,6 +6149,16 @@
 		)
 		(uuid "96b68b04-df05-4061-b9b1-166c0d0f02d9")
 	)
+	(text "FC enable: the Out Computer raises FC_EN_OC to start\nthe Flight Computer, which then holds its own rail up\nvia FC_EN_HOLD. C105 rides out a brief drop-out."
+		(exclude_from_sim no)
+		(at 240.03 80.01 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "b06ab877-a8fc-47fd-a929-5dd7a1dbd552")
+	)
 	(text "Select USB to provide \npower if plugged in"
 		(exclude_from_sim no)
 		(at 85.09 27.305 0)
@@ -6006,7 +6231,7 @@
 		)
 		(uuid "e8f333d3-3586-4f66-883d-910b97aa5f91")
 	)
-	(text "ESP32-OUT acts as a BLE power switch on boot. Switching\non V_MCU_SWITCH enables Flight Computer."
+	(text "V_MCU_SWTCH carries the Flight Computer, the sensors, the GNSS\nreceiver, the radio and the NAND. The Out Computer starts the rail;\nthe Flight Computer then holds it up itself."
 		(exclude_from_sim no)
 		(at 237.49 161.925 0)
 		(effects
@@ -6154,6 +6379,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "503452d3-4155-49fa-a77e-874352b18b0f")
+	)
+	(junction
+		(at 258.445 97.155)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "50ddcaab-0594-4e0f-a01c-061c0066c5a0")
 	)
 	(junction
 		(at 189.865 33.02)
@@ -7161,6 +7392,16 @@
 	)
 	(wire
 		(pts
+			(xy 258.445 97.155) (xy 258.445 98.425)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8fd6d8b0-b502-48db-aaae-33b44c337a07")
+	)
+	(wire
+		(pts
 			(xy 163.195 33.02) (xy 167.005 33.02)
 		)
 		(stroke
@@ -7651,6 +7892,16 @@
 	)
 	(wire
 		(pts
+			(xy 264.16 97.155) (xy 258.445 97.155)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f762cc9a-4998-4ec9-ab9d-d0082d68f96b")
+	)
+	(wire
+		(pts
 			(xy 137.795 23.495) (xy 137.795 31.75)
 		)
 		(stroke
@@ -7768,6 +8019,30 @@
 					(size 1.27 1.27)
 				)
 				(justify right)
+			)
+		)
+	)
+	(global_label "POWER_SWITCH"
+		(shape input)
+		(at 264.16 97.155 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "33e83783-8aa8-41cc-ac31-5c46944d2c4e")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 281.4175 97.155 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
 			)
 		)
 	)
@@ -8107,6 +8382,30 @@
 			)
 		)
 	)
+	(global_label "FC_EN_OC"
+		(shape input)
+		(at 266.065 92.075 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "ccc7aa03-e15e-4eef-a470-4e5668975567")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 278.3634 92.075 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
 	(global_label "V_MCU_2S"
 		(shape input)
 		(at 189.865 31.115 90)
@@ -8168,6 +8467,30 @@
 		(uuid "fd2a9dc8-bdcd-4a81-99ea-b96c635463d2")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 201.1825 142.24 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
+	(global_label "FC_EN_HOLD"
+		(shape input)
+		(at 250.825 92.075 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "fe319673-8baf-418e-a64a-1c4152b73f53")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 235.9865 92.075 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14340,6 +14663,84 @@
 	)
 	(symbol
 		(lib_id "power:GND")
+		(at 258.445 106.045 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "9cccbe72-7ff8-462a-afd1-c7ab4f726af3")
+		(property "Reference" "#PWR0410"
+			(at 258.445 106.045 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 260.35 109.855 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 258.445 106.045 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 258.445 106.045 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 258.445 106.045 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "3139225a-7e53-4002-a373-6f68b7e6810c")
+		)
+		(instances
+			(project "rocket-computer-mini"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "#PWR0410")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
 		(at 248.92 153.67 0)
 		(unit 1)
 		(body_style 1)
@@ -15612,6 +16013,109 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:C")
+		(at 258.445 102.235 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "d7e86667-1712-4b7c-a034-a65265722cc0")
+		(property "Reference" "C105"
+			(at 259.715 100.33 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "10 uF"
+			(at 259.715 105.41 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 258.445 102.235 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 258.445 102.235 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 258.445 102.235 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 258.445 102.235 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 258.445 102.235 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "5eee7e96-46ca-4ff3-aad2-21c93fd7ca2c")
+		)
+		(pin "2"
+			(uuid "346b1d8e-82e7-492f-a2d6-ce77daa99320")
+		)
+		(instances
+			(project "rocket-computer-mini"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "C105")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:GND")
 		(at 61.595 69.215 0)
 		(unit 1)
@@ -16483,6 +16987,110 @@
 			(project "rocket-computer-mini"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
 					(reference "C43")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:D_Dual_CommonCathode_AAK")
+		(at 258.445 92.075 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "e4fad4bc-abf8-412e-a54c-4f91f9553179")
+		(property "Reference" "D9"
+			(at 258.445 89.535 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "BAV170M"
+			(at 258.445 87.63 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Package_TO_SOT_SMD:SOT-883"
+			(at 258.445 92.075 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 258.445 92.075 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "P4 rail OR-gate: S3 authorises, P4 holds"
+			(at 258.445 92.075 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "BAV170M,315"
+			(at 347.98 54.61 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Nexperia"
+			(at 347.98 54.61 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "d7507937-fc76-459b-a6cd-f3892178c0cd")
+		)
+		(pin "2"
+			(uuid "e337f4d1-b730-44f6-a9de-d1e4f67b8209")
+		)
+		(pin "3"
+			(uuid "02150712-7087-4db1-af89-2303c1fbce8c")
+		)
+		(instances
+			(project "rocket-computer-mini"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "D9")
 					(unit 1)
 				)
 			)

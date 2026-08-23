@@ -128,14 +128,22 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // #385: keep the screen awake while any device is
-                    // connected; FGS pins the process on real connections
-                    // (BLUETOOTH_CONNECT is granted by the time one exists).
-                    LaunchedEffect(devices.isEmpty(), demoFleet) {
+                    // connected. This one genuinely IS activity-scoped — the
+                    // window flag dies with the window either way.
+                    //
+                    // #829: starting the foreground service used to ride along
+                    // here and must not — a LaunchedEffect cannot restart it
+                    // after a mid-flight drop (paused Recomposer, and the key
+                    // reads unchanged once the ladder refills the map). That
+                    // now lives in AppContainer at process scope, keyed on
+                    // fleet.linkActive. The demo fleet is a separate
+                    // FleetManager, so container.fleet stays empty in demo
+                    // mode and the service still never starts there.
+                    LaunchedEffect(devices.isEmpty()) {
                         if (devices.isEmpty()) {
                             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         } else {
                             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                            if (demoFleet == null) FleetService.start(this@MainActivity)
                         }
                     }
 
@@ -209,6 +217,7 @@ class MainActivity : ComponentActivity() {
                                         syncer = container.syncer,
                                         fleetScope = container.fleetScope,
                                         session = activeDevice.session,
+                                        preflight = container.preflightStore,
                                     )
                                 }
                             }
@@ -223,7 +232,17 @@ class MainActivity : ComponentActivity() {
                             var showMyDevices by remember { mutableStateOf(false) }
                             var showSavedFlights by remember { mutableStateOf(false) }
                             var showDriftCast by remember { mutableStateOf(false) }
-                            if (showDriftCast) {
+                            var showPreflight by remember { mutableStateOf(false) }
+                            if (showPreflight) {
+                                // Master pre-flight checklist editor — no
+                                // device needed (iOS front-page entry).
+                                PreflightMasterScreen(
+                                    preflight = container.preflightStore,
+                                    profiles = container.profileStore,
+                                    fleetScope = container.fleetScope,
+                                    onBack = { showPreflight = false },
+                                )
+                            } else if (showDriftCast) {
                                 // Standalone wind/trajectory planner — runs
                                 // with no device, like the iOS top-screen
                                 // entry (#42; design pass 2026-07-30 promoted
@@ -258,6 +277,7 @@ class MainActivity : ComponentActivity() {
                                     onMyDevices = { showMyDevices = true },
                                     onSavedFlights = { showSavedFlights = true },
                                     onDriftCast = { showDriftCast = true },
+                                    onPreflight = { showPreflight = true },
                                     unitStore = container.units,
                                     updateVersion = update?.versionName,
                                     onGetUpdate = {

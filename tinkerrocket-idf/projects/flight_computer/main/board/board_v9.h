@@ -184,12 +184,15 @@ struct board_pins
     // output V_MCU_SWTCH feeds every P4 supply pin. So the OC switches this
     // board on, and either MCU can hold it on.
     //
-    // Firmware deliberately does NOT drive this pin. The OC holds P4_EN_S3
-    // high for the whole powered session (out_computer main.cpp, PWR_PIN), so
-    // the FC boots and runs without it. Asserting it would make the FC
-    // un-power-off-able until something releases it, so the release policy has
-    // to be designed before it is wired up. For reference, R84 (100 k) and
-    // C105 (10 uF) on POWER_SWITCH hold the rail roughly 0.8 s after the last
-    // driver lets go.
-    static constexpr int PWR_HOLD_PIN = 5;    // P4_EN_HOLD (not driven yet)
+    // #848: firmware DRIVES this pin while INFLIGHT (asserted in
+    // enterInflight and the reboot-recovery restore; released at LANDED, sim
+    // reset, and boot reconciliation — pwr_hold_policy.h has the full table).
+    // The assert uses gpio_hold_en, so the pad stays latched HIGH through the
+    // FC's own panic/WDT resets: an OC fault reset can no longer power the FC
+    // off mid-flight (#825), and neither can the FC's own crash. Outside
+    // flight the pin is driven LOW (== high-Z through D9 — an anode cannot
+    // pull the rail down), so ground power-off via the OC works unchanged.
+    // For reference, R84 (100 k) and C105 (10 uF) on POWER_SWITCH hold the
+    // rail roughly 0.8 s after the last driver lets go.
+    static constexpr int PWR_HOLD_PIN = 5;    // P4_EN_HOLD (held while INFLIGHT, #848)
 };

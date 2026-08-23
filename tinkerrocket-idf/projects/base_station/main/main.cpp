@@ -1723,7 +1723,11 @@ static void startDownload()
     if (!f)
     {
         ESP_LOGE(TAG, "[BLE] Download failed, file not found: %s", filename.c_str());
-        ble_app.sendFileChunk(0, nullptr, 0, true);  // Send empty EOF
+        // #526: EOF|ABORT, not a bare EOF.  A bare EOF is indistinguishable
+        // from a successful zero-byte transfer, and the app saves it and
+        // reports success — so a log rotated or bulk-deleted between the
+        // listing and the request lands as a 0-byte "downloaded" file.
+        (void)ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
         return;
     }
 
@@ -1777,14 +1781,29 @@ static void serviceDownload()
             // old loop just stopped here without ever flagging EOF.
             ESP_LOGE(TAG, "[BLE] Download read failed at offset %lu of %s",
                      (unsigned long)dl_offset_, dl_name_);
-            ble_app.sendFileChunk(dl_offset_, nullptr, 0, true);
+            (void)ble_app.sendFileChunk(dl_offset_, nullptr, 0, true, /*abort=*/true);
             finishDownload("failed");
             return;
         }
     }
 
     const bool eof = plan.eof && (got == plan.read_len);
-    ble_app.sendFileChunk(dl_offset_, got ? chunk_buf : nullptr, got, eof);
+    if (!ble_app.sendFileChunk(dl_offset_, got ? chunk_buf : nullptr, got, eof))
+    {
+        // sendFileChunk only returns false once the whole reliable-send
+        // backpressure budget is spent (#524), i.e. the chunk is genuinely
+        // lost.  Its contract requires the caller to abort rather than carry
+        // on: the app appends chunks sequentially and never inspects the
+        // offset field, so continuing past a dropped chunk splices the file
+        // silently and hands over a CSV with an invisible hole in the middle
+        // that still parses.  The out_computer and the mini already do this;
+        // the base station was the one downloader that did not (#827).
+        ESP_LOGE(TAG, "[BLE] Download chunk send failed at offset %lu of %s, aborting",
+                 (unsigned long)dl_offset_, dl_name_);
+        (void)ble_app.sendFileChunk(dl_offset_, nullptr, 0, true, /*abort=*/true);
+        finishDownload("failed");
+        return;
+    }
     dl_offset_ += got;
     dl_last_chunk_ms_ = now;
 

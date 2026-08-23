@@ -47,8 +47,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.tinkerbug.tinkerrocket.app.theme.TrPyroContinuityBadge
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
+import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.CalAdvisory
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.ConfigGroup
@@ -81,6 +83,7 @@ fun SettingsScreen(
     syncer: ActiveRocketSyncer,
     fleetScope: CoroutineScope,
     session: DeviceSession? = null,
+    preflight: com.tinkerbug.tinkerrocket.session.PreflightStore? = null,
 ) {
     val profiles by store.profiles.collectAsState()
     val activeId by store.activeId.collectAsState()
@@ -662,7 +665,12 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
-                    fleetScope.launch { store.delete(active.id) }
+                    fleetScope.launch {
+                        store.delete(active.id)
+                        // The pre-flight checklist diff is keyed by profile
+                        // id and dies with it (iOS RocketProfileView twin).
+                        preflight?.deleteConfig(active.id)
+                    }
                 }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
@@ -911,17 +919,19 @@ private fun PyroTestControls(session: DeviceSession, channel: Int) {
     val fired by remember(session, channel) {
         session.telemetry.map { it.pyroFired(channel) }.distinctUntilChanged()
     }.collectAsState(initial = false)
-    val contBit by remember(session, channel) {
-        session.telemetry.map { it.pyroCont(channel) }.distinctUntilChanged()
-    }.collectAsState(initial = false)
+    // #828: was `telemetry.pyroCont(channel)` ANDed with a LIVE check and
+    // drawn green/red. That collapse cannot express "never measured this
+    // session", so an untested channel rendered as a confident MEASURED open
+    // — read by an operator as a dead igniter or a spent charge, on a channel
+    // that is in fact live. The flow already folds in connection and the #297
+    // live gate, and emits only when the verdict changes.
+    val continuity by remember(session, channel) {
+        session.pyroContinuityFlow(channel)
+    }.collectAsState(initial = PyroContinuity.NO_DATA)
     val inflight by remember(session) {
         session.telemetry.map { it.state == "INFLIGHT" }.distinctUntilChanged()
     }.collectAsState(initial = false)
-    val dataStatus by session.effectiveDataStatus.collectAsState()
     val contPendingUntil by session.contTestPendingUntil.collectAsState()
-
-    // #297 fail-safe: continuity is trusted only from a LIVE frame.
-    val cont = contBit && dataStatus == com.tinkerbug.tinkerrocket.protocol.TelemetryData.DataStatus.LIVE
 
     // iOS contTestActive: a 5 s reveal window after a manual test, so the
     // readout is visible even while unarmed.
@@ -966,18 +976,13 @@ private fun PyroTestControls(session: DeviceSession, channel: Int) {
                     )
                 }
             } else {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    val c = if (cont) tr.statusOk else tr.statusBad
-                    Box(Modifier.size(8.dp).background(c, CircleShape))
-                    Text(
-                        if (cont) "CONT" else "NO CONT",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = c,
-                    )
-                }
+                TrPyroContinuityBadge(
+                    state = continuity,
+                    dotSize = 8.dp,
+                    // This row sits beside a bodyLarge label, so it overrides
+                    // the badge's compact default rather than forking it.
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                )
             }
         }
     }

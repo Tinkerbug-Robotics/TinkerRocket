@@ -23,6 +23,7 @@
 #include <TR_GpsInsEKF.h>
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
+#include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
 #include <BurnoutDetector.h>       // shared burnout detector (#197/#256)
 #include <DeploymentDetector.h>    // shared recovery-deployment detector
 #include <TR_MagCalibrator.h>
@@ -309,6 +310,12 @@ static bool                 orient_thrust_mismatch = false;
 static float ground_pressure_pa = 101325.0f;
 static float pressure_alt_m = 0.0f;
 static float pressure_alt_rate_mps = 0.0f;
+// #834 item 4: the values above come from a KF that FREE-RUNS at a frozen
+// rate when the barometer stops answering, so they cannot authorise a main
+// deploy on their own. Same gate the FC uses; see MainDeployGate.h.
+static MainDeployGate::State  main_deploy_state;
+static MainDeployGate::Inputs main_deploy_in;
+static MainDeployGate::Source main_deploy_last_src = MainDeployGate::Source::None;
 static float max_alt_m = 0.0f;
 static float max_speed_mps = 0.0f;
 static GpsInsEKF ekf;
@@ -644,7 +651,15 @@ static void servicePyroChannels(uint32_t now_ms)
                 const float elapsed_s = (float)(now_ms - pyro_apogee_time_ms) / 1000.0f;
                 if (elapsed_s >= val) should_fire = true;
             } else if (pyro_apogee_detected && mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT) {
-                if (pressure_alt_m <= val && pressure_alt_rate_mps < 0.0f) should_fire = true;
+                // #834 item 4: see the FC's copy. A dead barometer free-runs
+                // this estimate through the threshold; a blocked static port
+                // freezes it so the threshold is never crossed at all.
+                const MainDeployGate::Source src =
+                    MainDeployGate::evaluate(main_deploy_state, main_deploy_in, val);
+                if (src != MainDeployGate::Source::None) {
+                    should_fire          = true;
+                    main_deploy_last_src = src;
+                }
             }
             if (should_fire) {
                 ch.state          = PyroChState::ArmSettle;
@@ -762,6 +777,10 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.ref_lat_rad        = ref_lat_rad;
     snap.ref_lon_rad        = ref_lon_rad;
     snap.ref_alt_m          = ref_alt_m;
+    // #834 item 4: record whether that datum came from a converged pad
+    // average, so a post-reboot flight knows if the GNSS backstop may use it.
+    snap.ref_datum_converged =
+        (ref_pos_count >= config::MAIN_DEPLOY_REF_MIN_FIXES) ? 1 : 0;
 
     snap.ekf_initialized  = ekf_initialized  ? 1 : 0;
     snap.guidance_enabled = 0;   // no guidance stack on the mini (wire field kept)
@@ -1223,6 +1242,10 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
 {
     rocket_state = INFLIGHT;
     launch_time_millis = now_ms;
+    // #834 item 4: fresh main-deploy gate for this flight; a normal launch
+    // credits the pad phase so the re-acquire dwell opens no new window.
+    MainDeployGate::reset(main_deploy_state, now_ms, /*after_reboot=*/false);
+    main_deploy_last_src = MainDeployGate::Source::None;
     // Orientation is now latched (estimator only runs in READY/PRELAUNCH).
     // Start the boost-phase thrust-axis cross-check on what was latched.
     orient_thrust_mismatch = false;
@@ -1991,14 +2014,22 @@ extern tr_flightlog::TR_FlightLog flightlog;   // defined in main.cpp
 static constexpr size_t kSnapFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
 // How far back to look.  Snapshots ride at 10 Hz inside a ~100 KB/s stream,
 // so ~64 KB covers the last ~6 snapshots — plenty to step over a torn tail.
-static constexpr uint32_t kTailScanMaxBytes = 16u * 4080u;
+// #671: a fixed BYTE budget, deliberately not denominated in pages — the
+// per-page payload is runtime chip geometry (2032 B on this part's
+// GD5F1GQ5UE, 4080 B on the legacy 4 KB part) and the scan below is
+// byte-offset/got-driven either way.
+static constexpr uint32_t kTailScanMaxBytes = 64u * 1024u;
 
 static bool snapshotTailScan(const char* filename, uint32_t final_bytes,
                              FlightSnapshotData& snap_out)
 {
-    // One flash-page-sized read window plus one frame of overlap carried
-    // between windows so a snapshot straddling a page boundary still parses.
-    static uint8_t tail_buf[4080 + kSnapFrameLen];
+    // One read window (sized to the MAX per-page payload so a single
+    // readFlightPage can always fill it regardless of chip geometry) plus one
+    // frame of overlap carried between windows so a snapshot straddling a
+    // page boundary still parses. On the mini's 2 KB-page part each call
+    // returns at most 2032 B — the loop just takes one more iteration.
+    static constexpr size_t kMaxPagePayload = 4096 - 16;   // NAND_PAGE_SIZE_MAX - PageHeader
+    static uint8_t tail_buf[kMaxPagePayload + kSnapFrameLen];
 
     const uint32_t scan_start = (final_bytes > kTailScanMaxBytes)
                               ? final_bytes - kTailScanMaxBytes : 0u;
@@ -2490,6 +2521,11 @@ void flight_setup()
                 burnout_time_ms = launch_time_millis + snap.burnout_elapsed_ms;
             }
 
+            // #834 item 4: recovery resumes a mid-flight apogee with a cold
+            // sensor stack, so the gate charges its dwells rather than
+            // crediting a pad phase this boot never had.
+            MainDeployGate::reset(main_deploy_state, now_ms, /*after_reboot=*/true);
+
             // Restore pyro state (safety-critical: no double-fire, no missed
             // fire).  With per-fire arming, ARM is never persistent — any
             // channel whose trigger condition is still met will re-arm and
@@ -2516,6 +2552,12 @@ void flight_setup()
             ref_alt_m   = snap.ref_alt_m;
             have_ref_pos = true;
             ref_pos_frozen = true;
+            // #834 item 4: the accumulator is frozen from here on, so ref_pos_count
+            // can never climb again this flight. Re-seed it from the snapshot's
+            // convergence evidence, otherwise it stays 0 and the GNSS main-deploy
+            // backstop is structurally dead for the whole recovered descent.
+            ref_pos_count = snap.ref_datum_converged
+                                ? config::MAIN_DEPLOY_REF_MIN_FIXES : 0;
             ground_pressure_found = true;
 
             // Restore the board→rocket orientation BEFORE the EKF state —
@@ -3422,8 +3464,20 @@ static void loop_fc()
                 (uint32_t)(time_us() - bmp_latest_si.time_us) < BARO_STALE_TIMEOUT_US;
             const bool ekf_healthy = ekf_initialized && ekf.isHealthy();
 
+            // #259 applied to the kinematic checks, matching the FC.
+            // ism6_latest_si RETAINS its last value when the IMU stops
+            // responding and have_ism6_si latches on first read, so a frozen
+            // IMU would otherwise feed a constant accel straight into launch
+            // detection and — since #824 — into the landing quiescence
+            // detector, whose two gates a frozen sample satisfies
+            // indefinitely.  0.0f fails both, i.e. "no evidence from a stale
+            // IMU" rather than a synthetic still-and-level reading.
+            constexpr uint32_t IMU_STALE_TIMEOUT_US = 100000u;  // 0.1 s (~1 kHz IMU)
+            const bool ism6_fresh_kc = have_ism6_si &&
+                (uint32_t)(time_us() - ism6_latest_si.time_us) < IMU_STALE_TIMEOUT_US;
+
             kinematics.kinematicChecks(pressure_altitude_m,
-                                       accel_norm,
+                                       ism6_fresh_kc ? accel_norm : 0.0f,
                                        imu_pos,
                                        imu_vel,
                                        roll_rate_dps,
@@ -3436,6 +3490,33 @@ static void loop_fc()
                                        (float)gnss_latest_si.vel_u,
                                        ekf_healthy,
                                        baro_healthy);
+
+            // #834 item 4: step the main-deploy gate where baro_healthy is in
+            // scope; the pyro service later in this same pass only reads it.
+            {
+                MainDeployGate::Inputs& g = main_deploy_in;
+                g.now_ms           = now_ms;
+                g.apogee           = pyro_apogee_detected;
+                g.impact_flag      = kinematics.impact_flag;
+                g.quiescent_flag   = kinematics.quiescent_flag;
+                g.baro_healthy     = baro_healthy;
+                g.baro_alt_m       = kinematics.alt_est;
+                g.baro_rate_mps    = kinematics.d_alt_est_;
+
+                constexpr uint32_t GNSS_STALE_TIMEOUT_US = 2000000u;  // 2 s
+                const uint32_t gnss_age_us =
+                    (uint32_t)(time_us() - gnss_latest_si.time_us);
+                g.gnss_ok = have_gnss_si && have_ref_pos &&
+                            ref_pos_count >= config::MAIN_DEPLOY_REF_MIN_FIXES &&
+                            gnss_latest_si.fix_mode >= 3 &&
+                            gnss_latest_si.num_sats >= config::GNSS_MIN_SATS &&
+                            gnss_age_us < GNSS_STALE_TIMEOUT_US;
+                g.gnss_vel_u_mps = (float)gnss_latest_si.vel_u;
+                g.gnss_agl_m = (float)(gnss_latest_si.alt - ref_alt_m) +
+                               g.gnss_vel_u_mps * ((float)gnss_age_us * 1e-6f);
+
+                MainDeployGate::step(main_deploy_state, g);
+            }
 
             // --- Recovery deployment detection ---
             // Stepped from the same block, once per loop pass, on the same

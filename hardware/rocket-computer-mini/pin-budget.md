@@ -1,5 +1,12 @@
 # rocket-computer-mini — MCU pin budget
 
+> **Superseded in premise, not in content.** This document asks whether *one*
+> ESP32-S3 can carry the board. The board now has two — an out computer and a
+> flight computer — so the question no longer binds. Every pin *classification*
+> below still applies to both processors, and every assignment it argues for is
+> still the assignment in the schematic; the signals simply live on two parts
+> now. See **The split**, at the end, for which pad ended up on which processor.
+
 **Purpose.** Establish whether the single MCU can carry the reduced board by
 itself, now that the telemetry radio is on-board rather than on a daughterboard.
 
@@ -182,8 +189,32 @@ flash/PSRAM, because the design's proof only covers one of them.
 | Octal PSRAM clock | GPIO47, GPIO48 | SPICLK_N / SPICLK_P | **Safe by the same proof** — these serve octal PSRAM only, and this part has none. Not directly exercised on V7, so slightly weaker evidence. |
 | **Quad PSRAM select** | **GPIO26** | **SPICS1** | **Confirmed unavailable** — datasheet Table 1-1 gives this part 2 MB quad PSRAM, whose chip select is this pin. **Left unused.** |
 | JTAG | GPIO39–42 | debug | Safe as GPIO; cost is losing hardware debug. |
-| Console | GPIO43, GPIO44 | UART0 | Safe as GPIO; cost is the serial console. **Both left free.** |
-| Strapping | GPIO0, 3, 45, 46 | boot mode, JTAG select, flash rail voltage, ROM log | GPIO3 is safe here — it drives a switch enable and its pulldown holds it low at reset. **GPIO45 left free**: it sets the flash rail voltage, and anything whose boot level the design does not control can stop the board booting. |
+| Console | GPIO43, GPIO44 | UART0 | Safe as GPIO; cost is the serial console. **Free on the flight computer; on the out computer GPIO44 carries `L_RXEN`, so that processor has console TX but no RX.** The "both left free" this row used to claim was never true of the shipped schematic. |
+| Strapping | GPIO0, 3, 45, 46 | boot mode, JTAG select, flash rail voltage, ROM log | **GPIO3: see the correction below.** **GPIO45 left free** on both processors: it sets the flash rail voltage, and anything whose boot level the design does not control can stop the board booting. |
+
+### Correction — GPIO3 no longer has the pulldown this document claimed
+
+This document used to justify GPIO3 with one sentence: *"GPIO3 is safe here — it
+drives a switch enable and its pulldown holds it low at reset."* Adding the
+second processor invalidated it on both parts, and the reasoning is worth
+recording because the failure was silent:
+
+- On the **flight computer**, GPIO3 was still the switch enable — but `D9` now
+  stands between the pin and `R84`, and a diode does not pass a pulldown. The
+  very change that created the enable OR is what removed the pull.
+- On the **out computer**, GPIO3 stopped being the enable altogether (that moved
+  to GPIO7) and became `ESP_SDO`, an *input* driven by the flight computer —
+  which is unpowered while the out computer boots, so the net floated.
+
+Both are now closed. `FC_EN_HOLD` moved to **GPIO17**, which is unconditionally
+free, so the flight computer's strapping pin is a bare pad; and `R34` (100 k)
+pulls `ESP_SDO` down so the out computer's GPIO3 has a defined level at reset.
+
+The residual risk was low either way — GPIO3 selects the JTAG signal source and
+is only sampled when `EFUSE_JTAG_SEL_ENABLE` is burned, so an unburned part
+ignores it, and `rocket-computer` flies `GPIO3 = ESP_SDO` with no pull at all.
+It is fixed because a floating input on a strapping pad is not something to
+carry into a layout, not because it was going to stop a boot.
 
 **Two signals were moved to reduce risk**, using pads freed by dropping the
 power-good and peripheral-enable signals:
@@ -378,3 +409,70 @@ this board declares it. That map has to be written from scratch anyway.
 Worth knowing: the base-station firmware records this exact defect having bitten
 before — *"was defined but never driven — RXEN floated in RX"*. A floating
 receive-enable is a known failure on this hardware, not a theoretical one.
+
+
+---
+
+## The split
+
+A second ESP32-S3RH2 was added as the flight computer. The signals this document
+placed did not move pads — they moved *processors*. Everything the flight
+computer owns kept the exact GPIO number assigned above, so the reasoning for
+each choice (why `PYRO4_CONT` is on GPIO42 and not GPIO45, why `BMP585_INT`
+left GPIO26) carries over verbatim.
+
+### Flight computer `U32` — on `V_MCU_SWTCH`, starts off
+
+| Signal | GPIO | Note |
+|---|---|---|
+| `SENS_SDI` / `SENS_SDO` / `SENS_SCLK` | 1, 2, 34 | unchanged |
+| `ISM6HG256_CS` / `ISM6HG256_INT1` | 9, 48 | unchanged |
+| `BMP585_CS` / `BMP585_INT` | 47, 41 | unchanged |
+| `GNSS_TX` / `GNSS_RX` | 39, 40 | unchanged |
+| `PYRO1..4_FIRE` | 4, 5, 6, 7 | unchanged |
+| `PYRO1..4_CONT` | 10, 11, 12, 42 | unchanged |
+| `PYRO_ARM` | 8 | unchanged |
+| `ESP_SDO` / `ESP_SDI` | 13, 14 | new — I2S data and frame sync to the OC |
+| `ESP_CS` / `ESP_SCLK` | 18, 21 | new — I2S word select and bit clock |
+| `ESP_SCL` / `ESP_SDA` | 33, 35 | new — I2C to the OC, 5.11 k to `V_MCU_SWTCH` |
+| `FC_EN_HOLD` | 17 | new — self-hold into `D9`. **Deliberately not GPIO3** — see the correction above. **Must stay in GPIO0–21**: the in-flight latch needs `gpio_hold_en`, which only reaches the reset-surviving RTC hold on an RTC pad (`SOC_RTCIO_PIN_COUNT = 22` on this part). Above GPIO21 the call still returns `ESP_OK` but degrades to a deep-sleep-only hold |
+| `FC_D−` / `FC_D+` | 19, 20 | USB, through the `U1` mux |
+
+**Spare on the flight computer: GPIO3, 36, 37, 38, 43, 44** — six pads, with
+the serial console (43/44) among them and therefore intact. GPIO45 and GPIO46
+carry the strapping network as before; **GPIO26 stays unused** for the
+quad-PSRAM reason argued above, and **GPIO3 is now a bare pad** with no trace on
+it, which is the safest state for a strapping pin the design has no use for.
+
+### Out computer `U15` — on `+3V3`, always on
+
+Keeps the radio (`L_CS`, `L_BUSY`, `L_DI01`, `L_RST`, `L_RXEN`), the shared
+memory bus (`M_SCK`, `M_MOSI`, `M_MISO`, `M_FLASH_CS`), the power-monitor and
+magnetometer I2C (`SEN_SCL`, `SEN_SDA`), its boot flash and USB. It gains the
+six `ESP_*` link pins on GPIO1–6 and `FC_EN_OC` on GPIO7.
+
+**Spare on the out computer: GPIO8, 9, 10, 11, 12, 34, 39, 40, 41, 42, 47, 48**
+— twelve pads freed by the sensors, GNSS and pyro moving away.
+
+**GPIO39–42 are among them, so the out computer has regained hardware JTAG.**
+The single-MCU board spent all four on the GNSS pair, `BMP585_INT` and
+`PYRO4_CONT`; those signals now belong to the flight computer, which spends its
+own four. Nothing was designed to recover the out computer's JTAG — it is a side
+effect of the split, and it is worth knowing before someone spends those pads
+again.
+
+### Why these numbers
+
+GPIO1–7 on the out computer are `rocket-computer`'s out-computer numbers exactly
+(`ESP_CS`=1, `ESP_SCLK`=2, `ESP_SDO`=3, `ESP_SDI`=4, `ESP_SDA`=5, `ESP_SCL`=6,
+enable=7), so that firmware ports with a board header alone.
+
+The flight computer matches on the two I2S clock lines but not the data pair.
+`rocket-computer`'s P4 puts `ESP_SDO`/`ESP_SDI` on GPIO19/20; on an S3 those
+pads *are* USB D−/D+, and this board spends them on the USB mux. GPIO13/14 take
+their place, which is a two-constant change in the flight-computer board header.
+
+**The pressure this document was written about is gone.** Two processors offer
+roughly 50 usable pads against a demand of 25 plus six link wires and two enable
+lines. The interesting constraint is no longer count — it is which pads on an S3
+can host USB and I2S at the same time, and the answer is that they cannot.

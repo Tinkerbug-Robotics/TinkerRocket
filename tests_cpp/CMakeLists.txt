@@ -290,6 +290,16 @@ target_include_directories(test_tr_flightlog_core PRIVATE
 target_link_libraries(test_tr_flightlog_core GTest::gtest_main Threads::Threads)
 gtest_discover_tests(test_tr_flightlog_core)
 
+# #671: the same binary re-registered at the two GD5F geometries — every test
+# runs three times (legacy above, then V9's 2048B/2048blk and the mini's
+# 2048B/1024blk). TEST_SUFFIX keeps the three sets distinct in ctest output.
+gtest_discover_tests(test_tr_flightlog_core
+    PROPERTIES ENVIRONMENT "TR_TEST_NAND_GEOMETRY=gd2g"
+    TEST_SUFFIX ".gd2g")
+gtest_discover_tests(test_tr_flightlog_core
+    PROPERTIES ENVIRONMENT "TR_TEST_NAND_GEOMETRY=gd1g"
+    TEST_SUFFIX ".gd1g")
+
 # ---------- test_nand_bitmap_store (#398) ----------
 # NAND-backed dual-copy bitmap store — replaces the NVS store on the OC so the
 # frequent bitmap persists never touch internal flash (whose compaction erase
@@ -315,6 +325,14 @@ target_include_directories(test_nand_bitmap_store PRIVATE
 )
 target_link_libraries(test_nand_bitmap_store GTest::gtest_main Threads::Threads)
 gtest_discover_tests(test_nand_bitmap_store)
+
+# #671: GD5F geometry variants (see test_tr_flightlog_core above).
+gtest_discover_tests(test_nand_bitmap_store
+    PROPERTIES ENVIRONMENT "TR_TEST_NAND_GEOMETRY=gd2g"
+    TEST_SUFFIX ".gd2g")
+gtest_discover_tests(test_nand_bitmap_store
+    PROPERTIES ENVIRONMENT "TR_TEST_NAND_GEOMETRY=gd1g"
+    TEST_SUFFIX ".gd1g")
 
 # ---------- test_tr_ota (#8 phase 2) ----------
 # Host coverage for TR_OTA_Receiver: state machine, offset/size validation,
@@ -437,6 +455,20 @@ target_include_directories(test_ble_chunk_size PRIVATE
 target_link_libraries(test_ble_chunk_size GTest::gtest_main)
 gtest_discover_tests(test_ble_chunk_size)
 
+# ---------- test_mram_probe ----------
+# #826: the MRAM ring used to be selected from a CS pin number alone, so a
+# board with no MRAM part logged every flight from a floating SPI bus into
+# valid-CRC NAND pages while reporting healthy. MramProbe.h is the pure
+# verdict half of the boot probe — it asserts no constant bus value (what an
+# absent part produces) can be mistaken for a live device.
+add_executable(test_mram_probe test_mram_probe.cpp)
+target_include_directories(test_mram_probe PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LogToFlash
+)
+target_link_libraries(test_mram_probe GTest::gtest_main)
+gtest_discover_tests(test_mram_probe)
+
 # ---------- test_bs_download_policy ----------
 # Host-side test for the base-station cooperative BLE download (#380): chunk
 # planning bounded by open-time file size + the 15 ms notify-drain pacing gate.
@@ -533,6 +565,19 @@ target_include_directories(test_baro_gate_policy PRIVATE
 target_link_libraries(test_baro_gate_policy GTest::gtest_main)
 gtest_discover_tests(test_baro_gate_policy)
 
+# ---------- test_gnss_framing ----------
+# GNSS bring-up baud detection used to accept ANY byte, so a 9600 stream sampled
+# at 38400 read as "alive" and ran a ~3 s recovery branch per wrong baud (bench
+# 2026-08-19: 9.4 s lost before the sweep came back to 9600).  gnss_framing.h is
+# pure, so the test just adds the component dir.
+add_executable(test_gnss_framing test_gnss_framing.cpp)
+target_include_directories(test_gnss_framing PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/components/TR_GNSSReceiverUBlox_Serial
+)
+target_link_libraries(test_gnss_framing GTest::gtest_main)
+gtest_discover_tests(test_gnss_framing)
+
 # ---------- test_dedup_reboot_policy ----------
 # Host-side test for the OC's FC-reboot-vs-replay discriminator (#468): a
 # reboot verdict requires the timestamp backstep to persist for the confirm
@@ -577,6 +622,71 @@ target_include_directories(test_bad_block_scan_policy PRIVATE
 )
 target_link_libraries(test_bad_block_scan_policy GTest::gtest_main)
 gtest_discover_tests(test_bad_block_scan_policy)
+
+# ---------- test_nand_geometry (#671) ----------
+# The RDID -> geometry table: F35SQB004G (V8 bench), GD5F2GQ5UE (V9),
+# GD5F1GQ5UE (mini), the unknown-ID legacy fallback, and dead-bus behaviour.
+# nand_geometry.h is pure, so the test just adds the component dir.
+add_executable(test_nand_geometry test_nand_geometry.cpp)
+target_include_directories(test_nand_geometry PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LogToFlash
+)
+target_link_libraries(test_nand_geometry GTest::gtest_main)
+gtest_discover_tests(test_nand_geometry)
+
+# ---------- test_snapshot_tail_scan (#846) ----------
+# The OC's boot re-seed of the snapshot cache: real TR_FlightLog over the
+# fake NAND, parameterized over both page geometries, exercising the carry
+# logic on frames straddling page-payload boundaries.
+add_executable(test_snapshot_tail_scan
+    test_snapshot_tail_scan.cpp
+    fakes/fake_nand_backend.cpp
+    ${LIB_DIR}/TR_FlightLog/TR_FlightLog.cpp
+    ${LIB_DIR}/TR_FlightLog/BlockStateBitmap.cpp
+    ${LIB_DIR}/TR_FlightLog/FlightIndex.cpp
+    ${LIB_DIR}/TR_FlightLog/TR_NandBackend_esp.cpp
+    ${LIB_DIR}/TR_FlightLog/NvsBitmapStore.cpp
+    ${LIB_DIR}/CRC/CRC.cpp
+    ${LIB_DIR}/CRC/CRC8.cpp
+    ${LIB_DIR}/CRC/CRC12.cpp
+    ${LIB_DIR}/CRC/CRC16.cpp
+    ${LIB_DIR}/CRC/CRC32.cpp
+    ${LIB_DIR}/CRC/CRC64.cpp
+    ${LIB_DIR}/CRC/CrcFastReverse.cpp
+    ${LIB_DIR}/CRC/FastCRC32.cpp
+)
+target_include_directories(test_snapshot_tail_scan PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_FlightLog/include
+    ${LIB_DIR}/TR_LogToFlash
+    ${LIB_DIR}/CRC
+)
+target_link_libraries(test_snapshot_tail_scan GTest::gtest_main)
+gtest_discover_tests(test_snapshot_tail_scan)
+
+# ---------- test_pwr_hold_policy (#848) ----------
+# FC power-hold latch boot reconciliation (P4_EN_HOLD): keep/release/assert
+# decision for a hold inherited across a reset. Pure header in the FC project.
+add_executable(test_pwr_hold_policy test_pwr_hold_policy.cpp)
+target_include_directories(test_pwr_hold_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+)
+target_link_libraries(test_pwr_hold_policy GTest::gtest_main)
+gtest_discover_tests(test_pwr_hold_policy)
+
+# ---------- test_rail_restore_policy (#825) ----------
+# OC boot rail re-assert decision: fault reset restores, the deliberate
+# power-off reboot stands down. Pure header in the OC project.
+add_executable(test_rail_restore_policy test_rail_restore_policy.cpp)
+target_include_directories(test_rail_restore_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_rail_restore_policy GTest::gtest_main)
+gtest_discover_tests(test_rail_restore_policy)
 
 # ---------- test_flush_iter_ledger (#510) ----------
 # Host-side test for the flush-task per-iteration accounting: section sums,
@@ -678,3 +788,29 @@ target_compile_definitions(test_wire_fixture_freshness PRIVATE
 )
 target_link_libraries(test_wire_fixture_freshness GTest::gtest_main)
 gtest_discover_tests(test_wire_fixture_freshness)
+
+# ---------- test_main_deploy_gate (#834 item 4) ----------
+# Source-of-truth gate for the ALTITUDE_ON_DESCENT main-deploy trigger: refuses
+# a free-running (dead-baro) altitude estimate, catches a stuck static port via
+# a GNSS Doppler cross-check, and backstops both with a late-biased GNSS AGL
+# comparison. Pure header in the shared TR_KinematicChecks component (the FC and
+# the mini both use it).
+add_executable(test_main_deploy_gate test_main_deploy_gate.cpp)
+target_include_directories(test_main_deploy_gate PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/components/TR_KinematicChecks
+)
+target_link_libraries(test_main_deploy_gate GTest::gtest_main)
+gtest_discover_tests(test_main_deploy_gate)
+
+# ---------- test_ota_relay_policy (#834 items 6/7) ----------
+# Timing for the OC's I2S relay recovery: how often to retry a failed slave-RX
+# begin, and when to abandon a relay whose app has stopped pumping. Pure header
+# in the out_computer project.
+add_executable(test_ota_relay_policy test_ota_relay_policy.cpp)
+target_include_directories(test_ota_relay_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_ota_relay_policy GTest::gtest_main)
+gtest_discover_tests(test_ota_relay_policy)

@@ -494,6 +494,186 @@ class TelemetryDataTest {
         assertEquals("\u2014", TelemetryData(soc = null).socDisplay)
     }
 
+    // ── FC boot progress ("bs"/"bt"/"bd") ─────────────────────────────────
+    // Twin of iOS FcBootProgressTests — same inputs, same rendered strings.
+
+    @Test
+    fun `boot keys decode together`() {
+        val t = decodeOk("""{"st":"INITIALIZATION","bs":2,"bt":4200,"bd":2}""")
+        assertTrue(t.fcBooting)
+        assertEquals(2, t.fcBootStepRaw)
+        assertEquals(FcBootStep.SENSORS, t.fcBootStep)
+        assertEquals(4200, t.fcBootElapsedMs)
+        assertEquals(FCB_DEG_GNSS, t.fcBootDegraded)
+        assertEquals(listOf("GNSS"), t.fcBootDegradedSubsystems)
+    }
+
+    @Test
+    fun `absent bd is the normal boot`() {
+        val t = decodeOk("""{"st":"INITIALIZATION","bs":4,"bt":9000}""")
+        assertEquals(0, t.fcBootDegraded)
+        assertEquals(emptyList(), t.fcBootDegradedSubsystems)
+        assertEquals("Starting servos", t.fcBootStatusLine())
+    }
+
+    @Test
+    fun `all boot keys absent is the running FC`() {
+        // Every frame from a running FC.  No progress to show, no error.
+        val t = decodeOk("""{"st":"PRELAUNCH","nsat":9}""")
+        assertFalse(t.fcBooting)
+        assertNull(t.fcBootStepRaw)
+        assertNull(t.fcBootElapsedMs)
+        assertEquals(0, t.fcBootDegraded)
+        assertNull(t.fcBootStepLabel)
+        assertNull(t.fcBootStatusLine(), "no \"bs\" = the FC is past boot (or silent)")
+        assertEquals("PRELAUNCH", t.state, "frame must decode as a whole")
+    }
+
+    @Test
+    fun `boot integer keys tolerate float and string`() {
+        // Same lenient-optional convention as hch/nidd (#571): one off-type
+        // key must degrade that key, never throw away the whole frame.
+        val t = decodeOk("""{"st":"INITIALIZATION","bs":"3","bt":7000.0,"bd":"4"}""")
+        assertEquals(FcBootStep.GNSS, t.fcBootStep)
+        assertEquals(7000, t.fcBootElapsedMs)
+        assertEquals(FCB_DEG_SERVOS, t.fcBootDegraded)
+        assertEquals("INITIALIZATION", t.state)
+    }
+
+    @Test
+    fun `every step has its label`() {
+        val expected = mapOf(
+            FcBootStep.LINKS to "Linking to flight computer",
+            FcBootStep.NVS to "Loading saved settings",
+            FcBootStep.SENSORS to "Starting sensors",
+            FcBootStep.GNSS to "Starting GNSS",
+            FcBootStep.SERVOS to "Starting servos",
+            FcBootStep.COMPLETE to "Flight computer ready",
+        )
+        for ((step, label) in expected) {
+            assertEquals(label, step.label)
+            assertEquals(label, decodeOk("""{"bs":${step.raw}}""").fcBootStatusLine())
+        }
+        assertEquals(expected.size, FcBootStep.entries.size)
+        assertEquals(expected.size, FcBootStep.STEP_COUNT, "FCB_STEP_COUNT")
+    }
+
+    @Test
+    fun `unknown step renders generically`() {
+        // FcBootStep is append-only: a newer FC will report steps this build
+        // has never heard of, and the line must still say something useful.
+        val t = decodeOk("""{"st":"INITIALIZATION","bs":99,"bt":1200}""")
+        assertTrue(t.fcBooting)
+        assertNull(t.fcBootStep)
+        assertEquals(99, t.fcBootStepRaw, "the raw wire value is kept")
+        assertEquals(FC_BOOT_UNKNOWN_LABEL, t.fcBootStatusLine())
+        assertEquals("Starting up\u2026", t.fcBootStatusLine())
+    }
+
+    @Test
+    fun `degraded bits name their subsystem`() {
+        fun names(bits: Int): List<String> =
+            decodeOk("""{"bs":5,"bd":$bits}""").fcBootDegradedSubsystems
+        assertEquals(listOf("sensors"), names(0x01))
+        assertEquals(listOf("GNSS"), names(0x02))
+        assertEquals(listOf("servos"), names(0x04))
+        assertEquals(listOf("saved settings"), names(0x08))
+        assertEquals(listOf("sensors", "GNSS", "servos", "saved settings"), names(0x0F))
+    }
+
+    @Test
+    fun `degraded is surfaced on the line`() {
+        // Boot CONTINUES past a degraded step, so the line is the only place
+        // the operator learns the receiver never came up.
+        val t = decodeOk("""{"bs":5,"bt":9000,"bd":2}""")
+        assertEquals("Flight computer ready — degraded: GNSS", t.fcBootStatusLine())
+    }
+
+    @Test
+    fun `a fresh step is not stalled`() {
+        val t = decodeOk("""{"bs":2,"bt":2000}""")
+        assertFalse(t.fcBootStalled(dwellS = 3))
+        assertEquals("Starting sensors", t.fcBootStatusLine(dwellS = 3))
+    }
+
+    @Test
+    fun `a stalled sensor step blames GNSS`() {
+        // sensor_collector.begin() blocks to its ~35 s deadline when the
+        // module is dead, so a boot parked on SENSORS IS the dead-GNSS stall.
+        val t = decodeOk("""{"bs":2,"bt":2000}""")
+        assertTrue(t.fcBootStalled(dwellS = 50))
+        assertEquals(
+            "Starting sensors — no progress for 50s, GNSS may be dead",
+            t.fcBootStatusLine(dwellS = 50),
+        )
+    }
+
+    @Test
+    fun `a stall on another step says so without blame`() {
+        assertEquals(
+            "Starting servos — no progress for 20s",
+            decodeOk("""{"bs":4,"bt":5000}""").fcBootStatusLine(dwellS = 20),
+        )
+        // Stall and degraded ride the same line, stall first.
+        assertEquals(
+            "Starting servos — no progress for 20s — degraded: GNSS",
+            decodeOk("""{"bs":4,"bt":5000,"bd":2}""").fcBootStatusLine(dwellS = 20),
+        )
+    }
+
+    /**
+     * Regression, measured on the bench 2026-08-19: a HEALTHY board sits on
+     * SENSORS for ~21 s, because GNSS bootstrap runs inside
+     * sensor_collector.begin() (it walks 460800 -> swapped RX/TX -> 9600 ->
+     * 38400 before settling, then reads OTP).  This shipped with a single 12 s
+     * threshold and so cried "GNSS may be dead" on every normal boot -- the
+     * fastest way to teach an operator to ignore the warning.  Pin the real
+     * measured duration as explicitly NOT a stall.
+     */
+    @Test
+    fun `the measured healthy sensor duration is not a stall`() {
+        val t = decodeOk("""{"bs":2,"bt":199}""")
+        assertFalse(t.fcBootStalled(dwellS = 21))
+        assertEquals("Starting sensors", t.fcBootStatusLine(dwellS = 21))
+        // The servo step's own measured 4.2 s must not trip its budget either.
+        val servos = decodeOk("""{"bs":4,"bt":21156}""")
+        assertFalse(servos.fcBootStalled(dwellS = 5))
+    }
+
+    @Test
+    fun `the complete step never stalls`() {
+        // FCB_COMPLETE means setup_fc() finished; the app is only waiting for
+        // the first real NonSensorData, which is not the FC's fault.
+        val t = decodeOk("""{"bs":5,"bt":10000}""")
+        assertFalse(t.fcBootStalled(dwellS = 60))
+        assertEquals("Flight computer ready", t.fcBootStatusLine(dwellS = 60))
+    }
+
+    @Test
+    fun `no boot keys while INITIALIZATION reads as waiting`() {
+        // The whole point of the line: a zeroed rocket_state must not pass for
+        // a live flight computer that is "initializing".
+        assertEquals(
+            "Waiting for flight computer\u2026",
+            decodeOk("""{"st":"INITIALIZATION"}""").fcBootStatusLine(),
+        )
+        assertEquals(
+            FC_BOOT_SILENT_LABEL,
+            decodeOk("""{"st":"INITIALIZATION"}""").fcBootStatusLine(dwellS = 30),
+        )
+    }
+
+    @Test
+    fun `running states get no secondary line`() {
+        for (st in listOf("READY", "PRELAUNCH", "INFLIGHT", "COMPLETE", "LANDED")) {
+            assertNull(
+                decodeOk("""{"st":"$st"}""").fcBootStatusLine(),
+                "$st is a live state — nothing to qualify",
+            )
+        }
+        assertNull(decodeOk("{}").fcBootStatusLine())
+    }
+
     @Test
     fun `base station soc display follows the same rules as the rocket's`() {
         // The BS pack empties the same way and would print the same "-0.0%".

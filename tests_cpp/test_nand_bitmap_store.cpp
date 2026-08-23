@@ -14,18 +14,36 @@
 #include "fakes/fake_nand_backend.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 using tr_flightlog::NandBitmapStore;
-using tr_flightlog::NAND_PAGE_SIZE;
-using tr_flightlog_test::FakeNandBackend;
+using tr_flightlog::NAND_PAGE_SIZE_MAX;
 
 namespace {
 
-constexpr uint32_t BLK_A = 2046;
-constexpr uint32_t BLK_B = 2047;
-constexpr size_t   BITMAP_LEN = 512;   // >= BlockStateBitmap::SERIALIZED_SIZE
+// #671: run the suite at the env-selected chip geometry (same contract as
+// test_tr_flightlog_core — CMake registers legacy/gd2g/gd1g variants). The
+// store's blocks are the chip's top two (metadata_blocks[2]/[3]) and the
+// bitmap payload is the 2-bit map's serialized size for that block count —
+// 512 B at 2048 blocks, 256 B at the mini's 1024.
+struct TestGeo { uint32_t page, ppb, blocks; };
+inline TestGeo testGeoFromEnv() {
+    const char* g = std::getenv("TR_TEST_NAND_GEOMETRY");
+    if (g && std::string(g) == "gd2g") return {2048, 64, 2048};
+    if (g && std::string(g) == "gd1g") return {2048, 64, 1024};
+    return {4096, 64, 2048};
+}
+const TestGeo G = testGeoFromEnv();
+const uint32_t BLK_A = G.blocks - 2;
+const uint32_t BLK_B = G.blocks - 1;
+const size_t   BITMAP_LEN = (G.blocks + 3) / 4;
+
+struct FakeNandBackend : tr_flightlog_test::FakeNandBackend {
+    FakeNandBackend() : tr_flightlog_test::FakeNandBackend(G.page, G.ppb, G.blocks) {}
+};
 
 // A recognizable bitmap payload that varies with `seed`.
 std::vector<uint8_t> makeBitmap(uint8_t seed, size_t len = BITMAP_LEN) {

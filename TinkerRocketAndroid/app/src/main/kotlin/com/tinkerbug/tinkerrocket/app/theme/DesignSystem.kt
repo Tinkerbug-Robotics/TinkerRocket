@@ -1,6 +1,7 @@
 package com.tinkerbug.tinkerrocket.app.theme
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,9 +30,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
 
 /**
  * The TinkerRocket component vocabulary — Compose renderings of the shapes
@@ -111,6 +115,55 @@ fun TrStatusPill(
         )
         Box(Modifier.width(8.dp))
         Text(text, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+/**
+ * Renders the four continuity states distinguishably. iOS twin:
+ * `PyroContinuityBadge` (PyroTestView.swift).
+ *
+ * Red is reserved for a MEASURED open circuit; the absence of a reading is
+ * grey and says so. Only a real measurement gets a filled dot — an absent
+ * reading gets a hollow one, so the two can never be mistaken for each other
+ * at a glance. Collapsing these to a Bool is what showed a confident
+ * "NO CONT" on a channel that had never been tested (#828).
+ */
+@Composable
+fun TrPyroContinuityBadge(
+    state: PyroContinuity,
+    modifier: Modifier = Modifier,
+    dotSize: Dp = 8.dp,
+    textStyle: TextStyle = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+) {
+    val tr = TrTheme.colors
+    val color = when (state) {
+        PyroContinuity.PRESENT -> tr.statusOk
+        PyroContinuity.OPEN -> tr.statusBad
+        PyroContinuity.UNTESTED -> tr.statusIdle
+        // Dimmer than UNTESTED: "the link cannot tell you" is weaker still
+        // than "nobody has measured it yet". iOS separates these the same way,
+        // secondary vs tertiaryLabel.
+        PyroContinuity.NO_DATA -> tr.statusIdle.copy(alpha = 0.6f)
+    }
+    val label = when (state) {
+        PyroContinuity.PRESENT -> "CONT"
+        PyroContinuity.OPEN -> "NO CONT"
+        PyroContinuity.UNTESTED -> "NOT TESTED"
+        PyroContinuity.NO_DATA -> "NO DATA"
+    }
+    Row(
+        modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        val dot = Modifier.size(dotSize)
+        when (state) {
+            PyroContinuity.PRESENT, PyroContinuity.OPEN ->
+                Box(dot.background(color, CircleShape))
+            else ->
+                Box(dot.border(1.5.dp, color, CircleShape))
+        }
+        Text(label, color = color, style = textStyle)
     }
 }
 
