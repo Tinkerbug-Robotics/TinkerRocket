@@ -303,3 +303,37 @@ More parts are planned against the same trajectories. To add one: fly
 entry to `receivers.json`, and regenerate. If a part stops publishing at an
 unexpected altitude, run `t2_altramp` and then change the dynamic model before
 believing it is COCOM.
+
+## Open questions, for whoever picks this up
+
+Three things the current data raises and does not settle. All three are visible
+in the archived captures; none needs new hardware.
+
+**1. The Air530 recovers below its ceiling on one flight and not the other.**
+On `spaceshot` it regains a fix at ~10.5 km on the way down and holds it solidly
+to landing. On `gentle_alt` it never recovers: 251 descent epochs below 10 km,
+13 satellites tracked, not one published position. The dwell tests are
+unambiguous that it publishes below 10 km when it has *never* been above -- 100%
+of epochs at 8 km on `alt_stair_vlow`, and a fix held at 560 m/s for 148 s at
+5 km on `blockdur`. So there is a recovery behavior sitting on top of the
+altitude ceiling that is not characterized. The test that would settle it: a
+scenario that climbs above 10 km, dwells, descends below, and dwells again.
+None of the current excursions do that.
+
+**2. The ZED-F9P blocks briefly during steady descent.** 34 in-envelope epochs
+across six groups on `gentle_alt`, every one with 10-14 satellites tracked, so
+they are genuine withholding rather than signal loss. One group is explained:
+twelve epochs at 1.7 km coincide with main-chute deploy, where the injected
+trajectory has a -361 m/s^2 spike. The other four groups -- at 22, 12, 7 and
+2.9 km -- sit in steady drogue descent at 0.1 to 0.5 m/s^2, with nothing
+happening. Unexplained.
+
+**3. That -361 m/s^2 deploy transient is not physical.** It is an artifact of
+how `make_flights.py` models canopy inflation, and no real parachute does that.
+Any receiver behavior at main deploy on these profiles may be a response to a
+transient that could not occur in flight. Worth softening the model before
+reading anything into it.
+
+For contrast, the SAM-M10Q and NEO-M8T have **zero** in-envelope blocked epochs
+on descent (0/418 and 0/392), and the PX1125R's 57 are all at 2-4 satellites --
+the bench C/N0 oscillation, not the receiver.
