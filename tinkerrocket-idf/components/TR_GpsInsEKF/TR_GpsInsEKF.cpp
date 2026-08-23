@@ -33,23 +33,8 @@ GpsInsEKF::GpsInsEKF() {
     R_[4][4]=vNoiseSigma_NE_mps*vNoiseSigma_NE_mps;
     R_[5][5]=vNoiseSigma_D_mps*vNoiseSigma_D_mps;
 
-    // Initial covariance P — 15x15
-    std::memset(P_, 0, sizeof(P_));
-    P_[0][0]=pErrSigma_Init_m*pErrSigma_Init_m;
-    P_[1][1]=pErrSigma_Init_m*pErrSigma_Init_m;
-    P_[2][2]=pErrSigma_Init_m*pErrSigma_Init_m;
-    P_[3][3]=vErrSigma_Init_mps*vErrSigma_Init_mps;
-    P_[4][4]=vErrSigma_Init_mps*vErrSigma_Init_mps;
-    P_[5][5]=vErrSigma_Init_mps*vErrSigma_Init_mps;
-    P_[6][6]=attErrSigma_Init_rad*attErrSigma_Init_rad;
-    P_[7][7]=attErrSigma_Init_rad*attErrSigma_Init_rad;
-    P_[8][8]=hdgErrSigma_Init_rad*hdgErrSigma_Init_rad;
-    P_[9][9]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
-    P_[10][10]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
-    P_[11][11]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
-    P_[12][12]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
-    P_[13][13]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
-    P_[14][14]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
+    // Initial covariance P — 15x15. Shared with resetEstimatorState_().
+    setInitialCovariance_();
 
     // Gs — 15x12
     std::memset(Gs_, 0, sizeof(Gs_));
@@ -88,11 +73,86 @@ GpsInsEKF::GpsInsEKF() {
 
 // ─── Init: shared core ──────────────────────────────────────────────
 
+// #834 item 5 -----------------------------------------------------------------
+void GpsInsEKF::setInitialCovariance_() {
+    std::memset(P_, 0, sizeof(P_));
+    P_[0][0]=pErrSigma_Init_m*pErrSigma_Init_m;
+    P_[1][1]=pErrSigma_Init_m*pErrSigma_Init_m;
+    P_[2][2]=pErrSigma_Init_m*pErrSigma_Init_m;
+    P_[3][3]=vErrSigma_Init_mps*vErrSigma_Init_mps;
+    P_[4][4]=vErrSigma_Init_mps*vErrSigma_Init_mps;
+    P_[5][5]=vErrSigma_Init_mps*vErrSigma_Init_mps;
+    P_[6][6]=attErrSigma_Init_rad*attErrSigma_Init_rad;
+    P_[7][7]=attErrSigma_Init_rad*attErrSigma_Init_rad;
+    P_[8][8]=hdgErrSigma_Init_rad*hdgErrSigma_Init_rad;
+    P_[9][9]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
+    P_[10][10]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
+    P_[11][11]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
+    P_[12][12]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
+    P_[13][13]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
+    P_[14][14]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
+}
+
+// Everything initCore() did NOT re-seed. The omission mattered most for the
+// board->rocket orientation change (FC main.cpp clears ekf_initialized and
+// calls init() again, commenting "re-init from scratch"): the accel bias had
+// converged in the OLD rocket frame, and keeping the VECTOR while permuting
+// the AXES applies a real bias to the wrong body axis. Because P[9..11] was
+// also kept — tight, from that convergence — the filter re-learns the correct
+// bias only over tens of seconds, and accelMeasUpdate() subtracts the
+// wrong-axis bias from the gravity innovation the whole time, tilting the pad
+// attitude solution. Accel and mag updates are gated off for the entire
+// ascent, so whatever tilt that leaves is frozen in for the flight. The gyro
+// bias had the same problem from the other end: initCore() DID re-seed it, but
+// held it under the old tight P[12..14] so the filter would not correct it.
+//
+// Tuning is deliberately untouched: R_, R_accel_, R_baro_, R_mag_,
+// R_mag_ceiling_, Rw_, Fs_, Gs_, sigma_accel_mps2_, sigma_mag_uT_,
+// gpsNoiseScale_ and declination_rad_ are configuration, and declination_ in
+// particular is set externally and must survive.
+//
+// frozen_dt_skips_ is also left alone on purpose — it is a lifetime
+// diagnostic counter (read via frozenDtSkips(), gates nothing), unlike
+// unhealthy_cooldown_ which gates isHealthy() and so must start clean.
+void GpsInsEKF::resetEstimatorState_() {
+    setInitialCovariance_();
+
+    // The state this was really about.
+    aBias_mps2_[0] = aBias_mps2_[1] = aBias_mps2_[2] = 0.0f;
+
+    // Derived outputs — stale values would otherwise be reported, and read by
+    // control, until the first update overwrites them.
+    aEst_B_mps2_[0]  = aEst_B_mps2_[1]  = aEst_B_mps2_[2]  = 0.0f;
+    wEst_B_rps_[0]   = wEst_B_rps_[1]   = wEst_B_rps_[2]   = 0.0f;
+    euler_BL_rad_[0] = euler_BL_rad_[1] = euler_BL_rad_[2] = 0.0f;
+    dt_s_            = 0.0f;
+
+    // Per-sensor "last sample" stamps. Carrying these across an init makes the
+    // next sample compute its dt against the PREVIOUS session's clock.
+    baroTimePrev_     = 0;
+    magTimePrev_      = 0;
+    prevGnssSampleUs_ = 0;
+
+    // GNSS-derived acceleration, which is only meaningful relative to the
+    // previous fix of the same session.
+    prevGnssVel_NED_[0] = prevGnssVel_NED_[1] = prevGnssVel_NED_[2] = 0.0f;
+    gnssAccelLP_NE_[0]  = gnssAccelLP_NE_[1]  = 0.0f;
+    haveGnssAccel_      = false;
+
+    // Health gate: a divergence cooldown from the previous configuration must
+    // not suppress isHealthy() for a filter that has just been rebuilt.
+    unhealthy_cooldown_ = 0;
+}
+
 void GpsInsEKF::initCore(EkfIMUData imu_data,
                          EkfMagData mag_data,
                          double pMeas_D_rrm[3],
                          float vMeas_NED[3],
                          uint32_t gnss_time_us) {
+    // #834 item 5: this is the only "from scratch" entry point, so make it
+    // actually be one. Must come first — everything below re-seeds on top.
+    resetEstimatorState_();
+
     tPrev_us_ = imu_data.time_us;
     timeWeekPrev_ = gnss_time_us;
 

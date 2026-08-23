@@ -987,3 +987,93 @@ TEST(EkfGyroBias508, GateDoesNotFireOnNormalPadNoise) {
     }
     EXPECT_EQ(ekf.gyroBiasGateTrips(), trips_before) << "gate is too tight";
 }
+
+// ---------------------------------------------------------------------------
+// #834 item 5: init() must actually be a from-scratch init.
+//
+// The FC clears ekf_initialized and calls init() again after a board->rocket
+// orientation change, commenting "re-init from scratch". It was not: initCore()
+// re-seeded position, velocity, gyro bias and the quaternion, but kept the
+// accel-bias VECTOR and the whole converged covariance. Keeping a bias learned
+// in the OLD rocket frame while the AXES are permuted applies a real bias to
+// the wrong body axis — and the retained tight P[9..11] is what stops the
+// filter from correcting it quickly.
+// ---------------------------------------------------------------------------
+
+TEST(EkfInitReset, InitClearsAccelBias) {
+    GpsInsEKF ekf;
+    ekf.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+
+    // Force a converged accel bias, as a minute on the pad would produce.
+    EkfStateSnapshot s{};
+    ekf.getState(s);
+    s.accel_bias[0] = 0.30f; s.accel_bias[1] = 0.02f; s.accel_bias[2] = -0.01f;
+    ekf.setState(s);
+    float b[3];
+    ekf.getAccelBias(b);
+    ASSERT_FLOAT_EQ(b[0], 0.30f);
+
+    // The orientation change: ekf_initialized cleared, init() called again.
+    ekf.init(makeStationaryIMU(1000000), makeStationaryGNSS(1000000),
+             makeStationaryMag(1000000));
+
+    ekf.getAccelBias(b);
+    EXPECT_FLOAT_EQ(b[0], 0.0f) << "a bias learned in the old frame survived init()";
+    EXPECT_FLOAT_EQ(b[1], 0.0f);
+    EXPECT_FLOAT_EQ(b[2], 0.0f);
+}
+
+TEST(EkfInitReset, InitRestoresTheInitialCovariance) {
+    GpsInsEKF ekf;
+    ekf.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+
+    float fresh[15];
+    ekf.getCovDiag(fresh);
+
+    // Collapse the covariance the way convergence would.
+    float tight[15];
+    for (int i = 0; i < 15; ++i) tight[i] = 1e-3f;
+    ekf.setCovFromDiag(tight);
+    float check[15];
+    ekf.getCovDiag(check);
+    ASSERT_FLOAT_EQ(check[9], 1e-3f);
+
+    ekf.init(makeStationaryIMU(1000000), makeStationaryGNSS(1000000),
+             makeStationaryMag(1000000));
+
+    float after[15];
+    ekf.getCovDiag(after);
+    for (int i = 0; i < 15; ++i)
+    {
+        EXPECT_FLOAT_EQ(after[i], fresh[i])
+            << "P[" << i << "] not restored to its initial value by init()";
+    }
+    // The accel-bias block specifically: this is what lets the filter re-learn
+    // a bias in the new frame instead of trusting the old one.
+    EXPECT_GT(after[9], 1e-3f);
+}
+
+TEST(EkfInitReset, InitLeavesTuningAlone) {
+    GpsInsEKF ekf;
+    ekf.setDeclination(0.21f);
+    ekf.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+    EXPECT_FLOAT_EQ(ekf.getDeclination(), 0.21f)
+        << "init() reset configuration, not just estimator state";
+}
+
+TEST(EkfInitReset, InitIsIdempotentOnAFreshFilter) {
+    // Two filters, one init'd twice, must agree — a reset that misses state
+    // shows up here as a divergence between them.
+    GpsInsEKF a, b;
+    a.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+    b.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+    b.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+
+    float da[15], db[15];
+    a.getCovDiag(da); b.getCovDiag(db);
+    for (int i = 0; i < 15; ++i) EXPECT_FLOAT_EQ(da[i], db[i]) << "P[" << i << "]";
+
+    float ba[3], bb[3];
+    a.getAccelBias(ba); b.getAccelBias(bb);
+    for (int i = 0; i < 3; ++i) EXPECT_FLOAT_EQ(ba[i], bb[i]);
+}

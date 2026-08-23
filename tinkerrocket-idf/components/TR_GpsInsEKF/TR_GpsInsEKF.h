@@ -296,6 +296,18 @@ private:
                     uint32_t gnss_time_us);
 
     // Shared core of init() — called after converting GNSS to LLA + NED
+    // #834 item 5: restore the constructor's initial P diagonal. Shared by the
+    // constructor and resetEstimatorState_() so the two can never drift.
+    void setInitialCovariance_();
+
+    // #834 item 5: return every ESTIMATOR state to its power-on value, leaving
+    // tuning (R_/Rw_/Fs_/Gs_/sigma_*/declination_) alone. initCore() used to
+    // re-seed only position, velocity, gyro bias and the quaternion, so an
+    // init() that the caller believed was "from scratch" silently kept the old
+    // accel-bias VECTOR and the whole converged covariance — including the
+    // tight P[9..11] that makes the filter trust that bias.
+    void resetEstimatorState_();
+
     void initCore(EkfIMUData imu_data,
                   EkfMagData mag_data,
                   double pMeas_D_rrm[3],
