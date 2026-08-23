@@ -436,10 +436,12 @@ baseline are chosen -- a first pass with a slightly different window showed no
 effect at all. What makes it credible is two receivers agreeing and the
 effect reversing with acceleration.
 
-**The SAM-M10Q cannot be checked this way.** Its captures come through the
-`[COCOM] S` console diagnostic, which logs `gnssId:svId:cno:used` and nothing
-else, so `cocom_fcdiag.py` synthesizes elevation as zero. Adding elevation to
-that log line is a one-field change and would close the gap.
+**The SAM-M10Q could not be checked this way, and now can.** Its archived
+captures come through the `[COCOM] S` console diagnostic, which logged
+`gnssId:svId:cno:used` and nothing else, so `cocom_fcdiag.py` synthesized
+elevation as zero. The log line now carries `gnss:sv:cno:used:elev`, and the
+four-field form is still accepted so the existing archive stays readable. The
+trial that uses it is written up below.
 
 So dynamics *are* measurable here, on individual channels. What the rig still
 cannot reproduce is everything else that co-occurs with boost in a real flight,
@@ -460,3 +462,57 @@ and it is the combination that costs a position fix rather than a few channels:
 Read the results accordingly: this bench characterizes **the export gate**, not
 the tracking loop. A part that sails through boost here may still drop lock on a
 real motor, and nothing measured here contradicts that.
+
+## Planned: does the SAM-M10Q lose its high-elevation satellites too?
+
+**Status: ready to run, needs the receiver back on the bench.**
+
+The elevation-dependent loss through the burn was measured on the ZED-F9P and
+NEO-M8T, which could be tapped directly for UBX. The SAM-M10Q is the part most
+worth knowing about and is the one part where it has never been tested, because
+its console diagnostic did not log elevation. It does now.
+
+**Prediction.** If the SAM-M10Q behaves like the other two, satellites above
+roughly 45 deg should lose 25-35 dB through the 13.5 g burn while everything
+below 30 deg holds, and the effect should vanish on `gentle_alt` at 2.0 g. If it
+does *not* show the effect, that is more interesting than if it does: the three
+parts would then differ in tracking-loop behavior under acceleration, which no
+datasheet reports and which matters directly for a boost phase.
+
+**Procedure.**
+
+1. Rebuild and flash with the diagnostic on. It is compile-gated and off by
+   default:
+
+       idf.py -B build_cocom -DTR_BOARD_V8=1 -DTR_GNSS_COCOM_DIAG=1 build flash
+
+2. Confirm the new field is present before spending a flight on it -- the log
+   line should read `0:22:20:0:41`, five fields, not four:
+
+       grep -m2 'COCOM. S' <console capture>
+
+   Worth the check: **no CI job compiles this block.** It is `#if`-gated off by
+   default, so the firmware build that runs on every push never sees it, and a
+   mistake inside it surfaces only at the bench. It was built locally with
+   `-DTR_GNSS_COCOM_DIAG=1` when the field was added, but nothing keeps it that
+   way.
+
+3. Fly both standard profiles, so the acceleration control is available:
+
+       ./run_fc.py -s spaceshot  -x 12
+       ./run_fc.py -s gentle_alt -x 12
+
+   Gain 12 was the working point for this part on the radiated cage link.
+
+4. Analyse exactly as the other two were: median C/N0 over the 40 s pad hold
+   before ignition against the burn window, per satellite, correlated against
+   `sin(elevation)`. Compare the 13.5 g flight to the 2.0 g one; the reversal is
+   what carries the result, not either number alone.
+
+**Watch for two things that bit this analysis the first time.** The result is
+sensitive to how the burn window and baseline are chosen -- a first pass with a
+slightly different window showed no effect at all -- so fix the windows before
+looking at the answer rather than after. And the >=45 deg band held only two
+satellites on the other parts, which is a geometry limit rather than a sampling
+choice: `best_geometry.py` can pick a site and hour that put more satellites
+overhead, and doing that first would make the result far stronger.
