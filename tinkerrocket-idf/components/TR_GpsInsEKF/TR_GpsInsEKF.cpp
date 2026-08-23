@@ -33,23 +33,9 @@ GpsInsEKF::GpsInsEKF() {
     R_[4][4]=vNoiseSigma_NE_mps*vNoiseSigma_NE_mps;
     R_[5][5]=vNoiseSigma_D_mps*vNoiseSigma_D_mps;
 
-    // Initial covariance P — 15x15
-    std::memset(P_, 0, sizeof(P_));
-    P_[0][0]=pErrSigma_Init_m*pErrSigma_Init_m;
-    P_[1][1]=pErrSigma_Init_m*pErrSigma_Init_m;
-    P_[2][2]=pErrSigma_Init_m*pErrSigma_Init_m;
-    P_[3][3]=vErrSigma_Init_mps*vErrSigma_Init_mps;
-    P_[4][4]=vErrSigma_Init_mps*vErrSigma_Init_mps;
-    P_[5][5]=vErrSigma_Init_mps*vErrSigma_Init_mps;
-    P_[6][6]=attErrSigma_Init_rad*attErrSigma_Init_rad;
-    P_[7][7]=attErrSigma_Init_rad*attErrSigma_Init_rad;
-    P_[8][8]=hdgErrSigma_Init_rad*hdgErrSigma_Init_rad;
-    P_[9][9]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
-    P_[10][10]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
-    P_[11][11]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
-    P_[12][12]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
-    P_[13][13]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
-    P_[14][14]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
+    // Initial covariance P and the run-scoped state (#834 item 5) — one
+    // definition, shared by the constructor and every init().
+    resetFilterState();
 
     // Gs — 15x12
     std::memset(Gs_, 0, sizeof(Gs_));
@@ -86,6 +72,61 @@ GpsInsEKF::GpsInsEKF() {
     quat_BL_[2] = 0.707107f; quat_BL_[3] = 0.0f;
 }
 
+// ─── Filter reset ───────────────────────────────────────────────────
+
+// Restore everything that describes a PARTICULAR run, as opposed to the
+// sensor-noise configuration (Rw_, R_, Gs_) which never changes.
+//
+// #834 item 5: initCore() re-seeded position, velocity, gyro bias and the
+// quaternion but left P_ and aBias_mps2_ exactly as the previous run had
+// converged them, so init() was never the "re-init from scratch" that
+// main.cpp claims when it clears ekf_initialized after a board->rocket
+// orientation change.  The accel bias is estimated in the BODY frame, so
+// permuting the axes 90 deg leaves a converged bias applied to the wrong
+// axis — and because P_[9..11] stayed tight, the filter needed tens of
+// seconds to unlearn it while accelMeasUpdate() tilted the attitude solution
+// with it.  Accel and mag updates are gated off for the whole ascent, so
+// whatever that leaves is frozen in for the flight.
+//
+// Safe against reboot recovery: setState() restores P_ and aBias_mps2_ from
+// the snapshot, and the FC only reaches init() when !ekf_initialized, which a
+// successful recovery has already set true.
+void GpsInsEKF::resetFilterState() {
+    std::memset(P_, 0, sizeof(P_));
+    P_[0][0]=pErrSigma_Init_m*pErrSigma_Init_m;
+    P_[1][1]=pErrSigma_Init_m*pErrSigma_Init_m;
+    P_[2][2]=pErrSigma_Init_m*pErrSigma_Init_m;
+    P_[3][3]=vErrSigma_Init_mps*vErrSigma_Init_mps;
+    P_[4][4]=vErrSigma_Init_mps*vErrSigma_Init_mps;
+    P_[5][5]=vErrSigma_Init_mps*vErrSigma_Init_mps;
+    P_[6][6]=attErrSigma_Init_rad*attErrSigma_Init_rad;
+    P_[7][7]=attErrSigma_Init_rad*attErrSigma_Init_rad;
+    P_[8][8]=hdgErrSigma_Init_rad*hdgErrSigma_Init_rad;
+    P_[9][9]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
+    P_[10][10]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
+    P_[11][11]=aBiasSigma_Init_mps2*aBiasSigma_Init_mps2;
+    P_[12][12]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
+    P_[13][13]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
+    P_[14][14]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
+
+    // Body-frame bias: meaningless once the body frame has been redefined.
+    // Also the only state with no default initializer in the header, so this
+    // is what stops a freshly constructed filter reading garbage.
+    aBias_mps2_[0] = aBias_mps2_[1] = aBias_mps2_[2] = 0.0f;
+
+    // Derived and cadence state that refers to a run which has ended.
+    unhealthy_cooldown_ = 0;
+    magTimePrev_        = 0;
+    baroTimePrev_       = 0;
+    prevGnssSampleUs_   = 0;
+    haveGnssAccel_      = false;
+    prevGnssVel_NED_[0] = prevGnssVel_NED_[1] = prevGnssVel_NED_[2] = 0.0f;
+    gnssAccelLP_NE_[0]  = gnssAccelLP_NE_[1]  = 0.0f;
+    frozen_dt_skips_    = 0;
+    dt_s_               = 0.0f;
+    euler_BL_rad_[0] = euler_BL_rad_[1] = euler_BL_rad_[2] = 0.0f;
+}
+
 // ─── Init: shared core ──────────────────────────────────────────────
 
 void GpsInsEKF::initCore(EkfIMUData imu_data,
@@ -93,6 +134,7 @@ void GpsInsEKF::initCore(EkfIMUData imu_data,
                          double pMeas_D_rrm[3],
                          float vMeas_NED[3],
                          uint32_t gnss_time_us) {
+    resetFilterState();   // #834 item 5 — make init() actually from scratch
     tPrev_us_ = imu_data.time_us;
     timeWeekPrev_ = gnss_time_us;
 
