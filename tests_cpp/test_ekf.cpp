@@ -1087,3 +1087,18 @@ TEST(EkfInitReset, FreshlyConstructedFilterHasZeroAccelBias) {
     EXPECT_NEAR(bias[1], 0.0f, 1e-6);
     EXPECT_NEAR(bias[2], 0.0f, 1e-6);
 }
+
+// A freshly constructed filter must not report stack garbage through its
+// estimate accessors, and a re-init must not report the previous
+// configuration's values. aBias_mps2_ was covered when resetFilterState()
+// landed; aEst_B_mps2_ and wEst_B_rps_ have the same missing initializer.
+TEST(EkfInitReset, FreshFilterReportsZeroedEstimates) {
+    GpsInsEKF ekf;
+    float a[3], w[3], b[3];
+    ekf.getAccelEst(a); ekf.getRotRateEst(w); ekf.getAccelBias(b);
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_FLOAT_EQ(a[i], 0.0f) << "aEst_B_mps2_[" << i << "] uninitialised";
+        EXPECT_FLOAT_EQ(w[i], 0.0f) << "wEst_B_rps_["  << i << "] uninitialised";
+        EXPECT_FLOAT_EQ(b[i], 0.0f) << "aBias_mps2_["  << i << "] uninitialised";
+    }
+}

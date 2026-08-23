@@ -110,9 +110,17 @@ void GpsInsEKF::resetFilterState() {
     P_[14][14]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
 
     // Body-frame bias: meaningless once the body frame has been redefined.
-    // Also the only state with no default initializer in the header, so this
-    // is what stops a freshly constructed filter reading garbage.
     aBias_mps2_[0] = aBias_mps2_[1] = aBias_mps2_[2] = 0.0f;
+
+    // The other two members with no default initializer in the header. Same
+    // argument as aBias_mps2_ above on re-init — they describe a body frame
+    // that no longer exists — and the same argument on FIRST construction:
+    // without this a freshly built filter returns whatever was on the stack
+    // through getAccelEst() / getRotRateEst(). Latent today (neither accessor
+    // has a caller yet), which is exactly why it is worth closing now rather
+    // than leaving for whoever adds the first one.
+    aEst_B_mps2_[0] = aEst_B_mps2_[1] = aEst_B_mps2_[2] = 0.0f;
+    wEst_B_rps_[0]  = wEst_B_rps_[1]  = wEst_B_rps_[2]  = 0.0f;
 
     // Derived and cadence state that refers to a run which has ended.
     unhealthy_cooldown_ = 0;
