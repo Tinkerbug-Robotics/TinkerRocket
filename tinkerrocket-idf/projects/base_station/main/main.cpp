@@ -20,6 +20,9 @@
 #include <driver/spi_master.h>
 #include <esp_vfs_fat_nand.h>
 #include <driver/i2c_master.h>
+#include <esp_adc/adc_oneshot.h>   // #835 item 2: own-battery divider read
+#include <esp_adc/adc_cali.h>
+#include <esp_adc/adc_cali_scheme.h>
 
 #include <cstdio>
 #include <memory>                // unique_ptr — file-list top-N window (#835)
@@ -971,8 +974,99 @@ static void maintainBatteryFets()
     }
 }
 
+// ── Own-battery voltage via ADC (#835 item 2) ────────────────────────
+//
+// Boards with no fuel gauge (board_v3: the MAX17303 was deleted in 15da738,
+// two weeks before the fab tag) measure the cell through a resistor divider
+// instead. That commit said SoC "now reads a 1M/1M divider on GPIO1"; the
+// firmware was never written, so bs_voltage/bs_soc sat at NaN forever.
+//
+// Every failure path here yields NaN rather than a number. A wrong battery
+// reading is worse than an admitted unknown: the operator plans a recovery
+// walk around it. In particular the esp-idf calibration curve is
+// per-attenuation, so if the cali handle cannot be created we report nothing
+// rather than scaling a raw count by a nominal full-scale and hoping.
+static adc_oneshot_unit_handle_t batt_adc_unit = nullptr;
+static adc_cali_handle_t         batt_adc_cali = nullptr;
+static bool                      batt_adc_ready = false;
+
+static void initBatteryAdc()
+{
+    adc_oneshot_unit_init_cfg_t unit_cfg = {};
+    unit_cfg.unit_id  = ADC_UNIT_1;             // GPIO1 = ADC1_CH0
+    unit_cfg.ulp_mode = ADC_ULP_MODE_DISABLE;
+    if (adc_oneshot_new_unit(&unit_cfg, &batt_adc_unit) != ESP_OK) {
+        ESP_LOGE(TAG, "[BATT] ADC unit init failed — battery voltage unavailable");
+        return;
+    }
+
+    adc_oneshot_chan_cfg_t chan_cfg = {};
+    chan_cfg.atten    = (adc_atten_t)ADC_ATTEN_DB_12;
+    chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_oneshot_config_channel(batt_adc_unit, ADC_CHANNEL_0, &chan_cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "[BATT] ADC channel config failed — battery voltage unavailable");
+        return;
+    }
+
+    // Curve fitting is the S3's scheme. Created FOR THIS attenuation — the
+    // curve is per-atten and mixing them mis-scales every read silently.
+    adc_cali_curve_fitting_config_t cali_cfg = {};
+    cali_cfg.unit_id  = ADC_UNIT_1;
+    cali_cfg.atten    = (adc_atten_t)ADC_ATTEN_DB_12;
+    cali_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &batt_adc_cali) != ESP_OK) {
+        ESP_LOGE(TAG, "[BATT] ADC calibration unavailable (no eFuse cal data?) — "
+                      "reporting no voltage rather than an uncalibrated guess");
+        return;
+    }
+
+    batt_adc_ready = true;
+    ESP_LOGI(TAG, "[BATT] ADC ready: GPIO%d, divider %.3f, %d dB",
+             config::BATT_VSENSE_GPIO, (double)config::BATT_VSENSE_DIVIDER,
+             config::BATT_VSENSE_ATTEN_DB);
+}
+
+// Returns the cell terminal voltage, or NaN if it cannot be measured.
+static float readBatteryVolts()
+{
+    if (!batt_adc_ready) return NAN;
+    // Average a handful: the divider is high-impedance (1M||1M = 500k) and the
+    // 100 nF at the pin is the only reservoir, so single reads are noisy.
+    constexpr int kSamples = 8;
+    int mv_sum = 0, taken = 0;
+    for (int i = 0; i < kSamples; ++i) {
+        int raw = 0;
+        if (adc_oneshot_read(batt_adc_unit, ADC_CHANNEL_0, &raw) != ESP_OK) continue;
+        int mv = 0;
+        if (adc_cali_raw_to_voltage(batt_adc_cali, raw, &mv) != ESP_OK) continue;
+        mv_sum += mv;
+        ++taken;
+    }
+    if (taken == 0) return NAN;
+    return ((float)mv_sum / (float)taken) * 0.001f * config::BATT_VSENSE_DIVIDER;
+}
 static void updateBattery()
 {
+    // constexpr, not #if: HAS_FUEL_GAUGE is a config struct member, and an
+    // #if on an undefined macro silently evaluates to 0 — which would have
+    // run the ADC path on the gauged boards too.
+    if constexpr (!config::HAS_FUEL_GAUGE)
+    {
+        // No gauge on this board — the divider is the only source (#835 item 2).
+        bs_voltage = readBatteryVolts();
+        if (isnan(bs_voltage)) {
+            bs_soc           = NAN;
+            bs_soc_estimated = false;
+        } else {
+            // 1S: BT2 is a single 18650 on a BQ21040 linear charger, so the
+            // estimator's per-cell curve applies directly. No current sense
+            // on this path, so no IR compensation — pass 0.
+            bs_soc           = bq_soc_estimator.update(bs_voltage, 1, 0.0f, 0.0f);
+            bs_soc_estimated = true;
+        }
+        return;
+    }
+
     if (!fuel_gauge_present) return;
     if (gauge_kind == GaugeKind::BQ27Z746)
     {
@@ -3981,6 +4075,17 @@ static void setup_bs()
         {
             ESP_LOGW(TAG, "No fuel gauge found (neither BQ27Z746 0x55 nor MAX17205/MAX17303 0x36) — battery readings unavailable");
         }
+    }
+
+    // #835 item 2: boards with no gauge measure the cell through a divider
+    // instead. Unconditional on the board flag rather than on the probe
+    // result: a gauged board whose gauge failed to answer should stay silent
+    // (its divider does not exist) rather than start reporting a voltage
+    // from an unconnected pin.
+    if constexpr (!config::HAS_FUEL_GAUGE)
+    {
+        initBatteryAdc();
+        updateBattery();   // seed bs_voltage/bs_soc before the first telemetry
     }
 
     // V3: external flight-pack charger on the same I2C bus as the gauge.

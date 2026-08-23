@@ -43,18 +43,35 @@ struct board_pins
     // so do NOT "fix" it by swapping these two on bring-up.)
     static constexpr int LORA_UART_TX_PIN = 35;  // LoRa_TX -> J6.4 (CONFIRMED)
     static constexpr int LORA_UART_RX_PIN = 36;  // LoRa_RX <- J6.3 (CONFIRMED)
-    // No daughterboard power-gate net identified on the V3 schematic (the OC
-    // V8 has LoRa_ACT); set if one exists — it's also the recovery hammer for
-    // a wedged daughterboard (#412).
-    static constexpr int LORA_ACT_PIN = -1;
+    // Daughterboard power gate (#835 item 4). It DOES exist and the old
+    // comment here denied it: LoRa_EN = GPIO21 -> R18 1k -> U2 TPS61023 EN,
+    // with R17 100k pulling EN to +3V3, so the rail is ON at reset (GPIO21 is
+    // high-Z then, and is not an S3 strapping pin). Driving it low puts EN at
+    // 3.3 * 1k/101k ~= 33 mV. V_LORA feeds J6.2 to the daughterboard.
+    //
+    // CAVEAT, unmeasured: the TPS61023 is a synchronous boost with NO output
+    // disconnect, so with EN low VIN still reaches VOUT through the high-side
+    // body diode. V_LORA may sit at roughly V_SWITCH - Vf rather than 0, and
+    // the daughterboard's own CR3 + TPS62913 chain could keep it alive. So
+    // treat this as "the gate is wired" — do NOT assume it is the #412
+    // recovery hammer until someone measures V_LORA and the daughterboard 3V3
+    // with GPIO21 low, on both a full and a half-discharged cell.
+    static constexpr int LORA_ACT_PIN = 21;
 
-    // --- Storage: external SPI NAND (FORESEE F35SQB004G), same as V2 ---
+    // --- Storage: NO external NAND and no SD slot (#835 item 1) ---
+    // This header claimed a FORESEE F35SQB004G "same as V2". There is no such
+    // part on this board and never was: the only flash is U1, the boot NOR on
+    // the S3's DEDICATED SPI0 pins (28-35 + VDD_SPI), and GPIO4/5/6/7 are
+    // unconnected pads in the netlist. The false claim made
+    // bs_storage_policy::demoted() report a demotion on every boot and log a
+    // "**** STORAGE DEMOTED ****" error for hardware that was working as
+    // designed. Logging goes to the spiffs partition on U1.
     static constexpr bool HAS_SDMMC    = false;
-    static constexpr bool HAS_EXT_NAND = true;
-    static constexpr int FLASH_SCK  = 4;   // M_SCK
-    static constexpr int FLASH_MOSI = 5;   // M_MOSI
-    static constexpr int FLASH_CS   = 6;   // M_FLASH_CS
-    static constexpr int FLASH_MISO = 7;   // M_MISO
+    static constexpr bool HAS_EXT_NAND = false;
+    static constexpr int FLASH_SCK  = -1;
+    static constexpr int FLASH_MOSI = -1;
+    static constexpr int FLASH_CS   = -1;
+    static constexpr int FLASH_MISO = -1;
     static constexpr int SD_CLK = -1;      // no SD slot
     static constexpr int SD_CMD = -1;
     static constexpr int SD_D0  = -1;
@@ -62,14 +79,32 @@ struct board_pins
     static constexpr int SD_D2  = -1;
     static constexpr int SD_D3  = -1;
 
-    // --- I2C bus (MAX17303 fuel gauge + MP2672 pack charger) ---
+    // --- I2C bus (MP2672 pack charger; NO fuel gauge) ---
     static constexpr int I2C_SCL_PIN = 34;
     static constexpr int I2C_SDA_PIN = 33;
-    // BOM assertion: the part at 0x36 IS a MAX17303 — claim it even if its
-    // DevName die rev is outside the known 0x404-0x406 range (first bench
-    // boot: an unlisted DevName silently demoted the gauge to the MAX17205
-    // driver's wrong register map).
-    static constexpr bool EXPECT_MAX17303 = true;
+    // #835 item 2: there is no fuel gauge on this board. The MAX17303 was
+    // DELETED in 15da738 (2026-07-26), two weeks before the fab tag, and
+    // replaced by a DW01A + FS8205A protection pair. That commit's own message
+    // says state of charge "now reads a 1M/1M divider on GPIO1" — the firmware
+    // half of that sentence was never written, so bs_voltage/bs_soc stayed NaN
+    // forever behind `if (!fuel_gauge_present) return;`.
+    static constexpr bool EXPECT_MAX17303 = false;
+    static constexpr bool HAS_FUEL_GAUGE  = false;
+
+    // --- Own-battery voltage sense (net Volt_Read) ---
+    // BT2 is a SINGLE 18650 (BH-18650-A5BJ001-2D) charged by U5 BQ21040, a 1S
+    // linear charger — so cells = 1 and bs_battery_soc's per-cell LiCoO2 curve
+    // applies directly. V_SWITCH -> R44 1M -> Volt_Read -> R46 1M -> GND, with
+    // C30 100 nF at the pin as the sampling reservoir.
+    //
+    // 12 dB attenuation, not the 6 dB used for the pack sense: a full 4.2 V
+    // cell divides to 2.1 V, which is outside the ~1.75 V calibrated range at
+    // 6 dB. The esp-idf calibration curve is PER-ATTENUATION — the adc_cali
+    // handle must be created for this exact setting or every read is silently
+    // mis-scaled.
+    static constexpr int   BATT_VSENSE_GPIO     = 1;    // Volt_Read, ADC1_CH0
+    static constexpr float BATT_VSENSE_DIVIDER  = 2.0f; // R44 1M / R46 1M
+    static constexpr int   BATT_VSENSE_ATTEN_DB = 12;   // ADC_ATTEN_DB_12
 
     // --- Flight-pack charger (MP2672GD-0000-Z, external 2S packs) ---
     static constexpr bool HAS_PACK_CHARGER = true;
