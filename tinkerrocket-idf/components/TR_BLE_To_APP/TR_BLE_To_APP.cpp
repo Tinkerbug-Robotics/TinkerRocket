@@ -1134,6 +1134,17 @@ bool TR_BLE_To_APP::begin()
     return true;
 }
 
+// #834 item 2: see the header. Tolerates millis() wraparound (49.7 days) the
+// same way the original inline test did — a large backward jump reads as wrap
+// and restarts now rather than waiting out the counter.
+bool TR_BLE_To_APP::otaRestartDue() const
+{
+    if (ota_pending_restart_at_ms_ == 0) return false;
+    const uint32_t now = (uint32_t)millis();
+    return (now >= ota_pending_restart_at_ms_) ||
+           ((ota_pending_restart_at_ms_ - now) > 0x7FFFFFFFu);
+}
+
 void TR_BLE_To_APP::loop()
 {
     // #503: deferred connection-parameter request. Fired from here, on the main
@@ -1155,13 +1166,9 @@ void TR_BLE_To_APP::loop()
     // Only OTA's deferred-restart watchdog needs poll-style handling here.
     if (ota_pending_restart_at_ms_ != 0)
     {
-        uint32_t now = (uint32_t)millis();
-        // Guard against millis() wraparound (49.7 days) by tolerating
-        // backward jumps: if 'now' is much less than the scheduled time we
-        // assume wrap and restart immediately rather than wait 49 days.
-        bool elapsed = (now >= ota_pending_restart_at_ms_) ||
-                       ((ota_pending_restart_at_ms_ - now) > 0x7FFFFFFFu);
-        if (elapsed)
+        // #834 item 2: one predicate, one wrap rule — otaRestartDue() is the
+        // same test, exposed so the OC can quiesce storage before we restart.
+        if (otaRestartDue())
         {
             ESP_LOGW(BLE_TAG, "OTA: rebooting now to load new partition");
             esp_restart();

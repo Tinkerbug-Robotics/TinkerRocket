@@ -829,6 +829,9 @@ bool TR_LogToFlash::isLoggingActive() const
 void TR_LogToFlash::spiAcquire()
 {
     if (!spi_mutex_) return;
+    // #834 item 2: the parking task already owns this bus exclusively and
+    // the mutex is not recursive — pass through instead of deadlocking it.
+    if (spi_park_owner_ == xTaskGetCurrentTaskHandle()) return;
     // #398: measure time blocked acquiring + hold duration, so the stats
     // window shows exactly which flush-side work starves the parser's MRAM
     // pushes (the multi-second parser_max mystery).
@@ -843,9 +846,36 @@ void TR_LogToFlash::spiAcquire()
 void TR_LogToFlash::spiRelease()
 {
     if (!spi_mutex_) return;
+    // #834 item 2: never unpark. Without this half a single re-entrant
+    // call would hand the bus back moments before the reset.
+    if (spi_park_owner_ == xTaskGetCurrentTaskHandle()) return;
     const uint32_t held = (uint32_t)(esp_timer_get_time() - spi_hold_start_us_);
     if (held > spi_hold_max_us_) spi_hold_max_us_ = held;
     xSemaphoreGive(spi_mutex_);
+}
+
+// #834 item 2: one-way park of the shared SPI bus ahead of a reset. See the
+// header for the contract. Deliberately does NOT go through spiAcquire() —
+// this wait is not a contention sample and must not pollute spi_wait_max_us,
+// and it needs a bounded take where spiAcquire() uses portMAX_DELAY.
+bool TR_LogToFlash::parkSpiBusForReset(uint32_t timeout_ms)
+{
+    if (!spi_mutex_)
+    {
+        // begin() never got as far as creating it, which means begin()
+        // returned false and the flush task was never started. Nothing drives
+        // this bus, so there is nothing to park and the reset is already safe.
+        return true;
+    }
+    if (spi_park_owner_ != nullptr) return true;          // idempotent
+
+    if (xSemaphoreTake(spi_mutex_, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    {
+        return false;
+    }
+    spi_park_owner_ = xTaskGetCurrentTaskHandle();
+    // No spiRelease() — intentional. The bus stays ours until the reset.
+    return true;
 }
 
 // ============================================================================
