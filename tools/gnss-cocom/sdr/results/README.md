@@ -337,3 +337,87 @@ reading anything into it.
 For contrast, the SAM-M10Q and NEO-M8T have **zero** in-envelope blocked epochs
 on descent (0/418 and 0/392), and the PX1125R's 57 are all at 2-4 satellites --
 the bench C/N0 oscillation, not the receiver.
+
+## Experiments still owed on the first four receivers
+
+Only the Air530 was ever run against the dwell scenarios. Every other part's
+thresholds are **ramp-derived**, and the central finding of this work is that a
+ramp measures a latent receiver's lag rather than its threshold. That lesson was
+applied to the Air530 and not carried back.
+
+    PX1125R   19 captures   dwell scenarios: NONE
+    SAM-M10Q   4 captures   dwell scenarios: NONE
+    ZED-F9P    2 captures   dwell scenarios: NONE
+    NEO-M8T    4 captures   dwell scenarios: NONE
+    Air530    11 captures   all five
+
+**How much it matters.** Measured shut lags on `gentle_alt`, converted into the
+units of the window they occur in (w1/w3 cross velocity at ~29 m/s^2, w2 crosses
+altitude at ~200 m/s):
+
+| | w1 vel | w2 alt | w3 vel | velocity smear | altitude smear |
+|---|---|---|---|---|---|
+| PX1125R | 0.6 s | 0.3 s | 0.4 s | 18 m/s | 60 m |
+| SAM-M10Q | 0.3 s | 0.7 s | 0.8 s | 24 m/s | 140 m |
+| ZED-F9P | 0.6 s | **3.3 s** | 0.4 s | 18 m/s | **660 m** |
+| NEO-M8T | 0.6 s | 0.3 s | 0.4 s | 18 m/s | 60 m |
+
+The reported velocity brackets are 8-14 m/s wide, so 18-24 m/s of lag is larger
+than the bracket itself -- and it biases **both** edges the same way, because the
+receiver holds a fix past the true threshold and then blocks late. The numbers
+are shifted up, not merely uncertain. The combined `(514, 516]` bracket is real
+arithmetic across the edges but is tighter than the method supports for the four
+ramp-measured parts.
+
+In priority order, all scenarios already built in `c8/` (21 GB, no regeneration):
+
+1. **`vel_stair` on the four ramp-measured parts.** 90 s dwells at 495-530 m/s
+   remove the lag entirely. ~16 min each. Either confirms 514-516 or shows the
+   true threshold is ~20 m/s lower. Run the staircase descending as well as
+   ascending and it also gives hysteresis, which nothing has tested.
+2. **`alt_stair` on the PX1125R, SAM-M10Q and ZED-F9P.** Their 80 km figures come
+   from flight profiles only. The F9P matters most: its 3.3 s altitude lag is
+   660 m of smear, which is exactly why its bracket inverts and carries a footnote.
+3. **Re-run the PX1125R entirely.** Its 19 captures all predate the link being
+   fixed -- 5th-percentile 4 satellites and median 7, against 10-14 for
+   everything measured since. It is the least trustworthy row in the table.
+
+Best done as each part goes back on the bench alongside a new one, since only
+one receiver connects at a time.
+
+## What this rig does not test: boost dynamics
+
+**No receiver has ever lost lock during the burn on this bench, and that is a
+property of the rig rather than a result.**
+
+The dynamics themselves are real and correctly injected. `spaceshot` peaks at
+132 m/s^2 (13.5 g), which is **695 Hz/s** of L1 Doppler rate against a peak shift
+of 7 kHz, and gps-sdr-sim derives that from the trajectory the same way physics
+would. Through the 12 s burn:
+
+| | on the pad | through the burn | NO_LOCK |
+|---|---|---|---|
+| SAM-M10Q | 13 sats, 41 dBHz | 11 sats, 38 dBHz | 0/11 |
+| ZED-F9P | 14 sats, 36 dBHz | 11 sats, 42 dBHz | 0/12 |
+| NEO-M8T | 14 sats, 51 dBHz | 12 sats, 43 dBHz | 0/12 |
+
+So 695 Hz/s alone does not break a receiver in airborne dynamic mode, which is
+what that mode exists for. But real boost lock-loss is not Doppler alone -- it is
+Doppler *plus* everything else that happens at the same moment, and none of the
+rest is in this signal:
+
+* **Vibration.** A solid motor is broadband violence and it modulates carrier
+  phase directly. The injected trajectory is smooth 10 Hz motion, interpolated.
+* **Plume attenuation.** Exhaust can attenuate and scatter L-band, worst for an
+  aft-facing antenna.
+* **Antenna pattern and body shadowing.** A real vehicle rolls and pitches, and
+  satellites sweep through pattern nulls. The injection is isotropic -- the
+  horizon patch fixes the elevation mask but there is no antenna gain pattern.
+* **Signal level.** The bench injects a clean 36-51 dBHz. Real flight is lower,
+  and loop stress multiplies with low C/N0: a loop that holds 695 Hz/s at 45 dBHz
+  can fail at 32.
+* **Airframe attenuation and multipath** from a nosecone or fairing.
+
+Read the results accordingly: this bench characterizes **the export gate**, not
+the tracking loop. A part that sails through boost here may still drop lock on a
+real motor, and nothing measured here contradicts that.
