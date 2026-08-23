@@ -133,6 +133,9 @@ constexpr int      NSLOTS    = 4;
 struct SimBS {
     RocketLogState slots[NSLOTS] = {};
     uint32_t       last_seen[NSLOTS] = {};
+    // #835 item 6 residual: telemetry-only clock. packet() advances both;
+    // beacon() advances only last_seen, as the firmware's rx_len>3 branch does.
+    uint32_t       last_telem[NSLOTS] = {};
     bool           slot_active[NSLOTS] = {};
     bool           logging = false;
     int            opens = 0;
@@ -145,7 +148,16 @@ struct SimBS {
             out[i].state             = slots[i].last_state;
             out[i].inflight_entry_ms = slots[i].inflight_entry_ms;
             out[i].freq_lock         = slots[i].freq_lock;
+            out[i].last_telem_ms     = last_telem[i];
         }
+    }
+
+    // A NAME BEACON: the base station heard the rocket, but decoded no
+    // telemetry. Mirrors main.cpp's rx_len>3 branch, which stamps last_seen_ms
+    // and touches nothing else.
+    void beacon(int slot, uint32_t now) {
+        slot_active[slot] = true;
+        last_seen[slot]   = now;
     }
 
     // One received packet from rocket in `slot` reporting `state` at `now`.
@@ -155,7 +167,8 @@ struct SimBS {
 
         slot_active[slot] = true;
         const auto edges = updateRocketLogState(slots[slot], state, now);
-        last_seen[slot] = now;
+        last_seen[slot]  = now;
+        last_telem[slot] = now;
 
         RocketView v[NSLOTS];
         views(v);
@@ -518,4 +531,112 @@ TEST(BSLogPolicyFreqLock, SecondFreshRocketHoldsTheLockForASilentOne)
 
     bs.tick(late + FRESH_MS + 1);   // now both are stale
     EXPECT_FALSE(bs.flightLock(late + FRESH_MS + 1));
+}
+
+// ---------------------------------------------------------------------------
+// #835 item 6 residuals. The expiry timer landed separately (FreqLockLatch);
+// these cover the two things it does not: the clock it keys on, and the
+// underlying per-rocket latch.
+// ---------------------------------------------------------------------------
+namespace {
+bs_log_policy::RocketView lockedView(uint32_t telem_ms, uint32_t seen_ms)
+{
+    bs_log_policy::RocketView r;
+    r.active        = true;
+    r.freq_lock     = true;
+    r.last_telem_ms = telem_ms;
+    r.last_seen_ms  = seen_ms;
+    return r;
+}
+constexpr uint32_t kWin = 5u * 60u * 1000u;
+}  // namespace
+
+TEST(BsFreqLockResiduals, BeaconAloneDoesNotHoldTheLock) {
+    // The rocket is beaconing (last_seen_ms current) but its telemetry stopped
+    // a window ago. Keying on last_seen_ms would hold the lock all session.
+    const uint32_t now = 1000 + kWin + 1;
+    bs_log_policy::RocketView v[1] = { lockedView(/*telem*/1000, /*seen*/now) };
+    EXPECT_FALSE(bs_log_policy::aggregateFreqLock(v, 1, now, kWin))
+        << "a name beacon must not hold the flight frequency lock";
+}
+
+TEST(BsFreqLockResiduals, LiveTelemetryStillHoldsIt) {
+    const uint32_t now = 1000 + kWin;
+    bs_log_policy::RocketView v[1] = { lockedView(now, now) };
+    EXPECT_TRUE(bs_log_policy::aggregateFreqLock(v, 1, now, kWin));
+}
+
+TEST(BsFreqLockResiduals, ExpiredLatchIsReportedForClearing) {
+    const uint32_t now = 1000 + kWin + 1;
+    bs_log_policy::RocketView fresh = lockedView(now, now);
+    bs_log_policy::RocketView stale = lockedView(1000, now);   // beaconing
+    bs_log_policy::RocketView never = lockedView(1000, 1000);
+    never.freq_lock = false;
+
+    EXPECT_FALSE(bs_log_policy::freqLockExpired(fresh, now, kWin));
+    EXPECT_TRUE (bs_log_policy::freqLockExpired(stale, now, kWin))
+        << "a beaconing rocket's stale latch must still be clearable";
+    EXPECT_FALSE(bs_log_policy::freqLockExpired(never, now, kWin))
+        << "nothing to clear when the latch was never set";
+}
+
+TEST(BsFreqLockResiduals, ClearingTheLatchStopsTheRebootReArm) {
+    // Model the sequence: latch goes stale, sweep clears it, then the rocket
+    // reboots and its first packet arrives in INITIALIZATION — where
+    // computeFreqLockForFlight leaves the lock UNCHANGED. With the latch
+    // cleared there is no stale bit to re-latch from.
+    const uint32_t now = 1000 + kWin + 1;
+    bs_log_policy::RocketView v[1] = { lockedView(1000, 1000) };
+    ASSERT_TRUE(bs_log_policy::freqLockExpired(v[0], now, kWin));
+    v[0].freq_lock = false;                       // what the sweep does
+
+    v[0].last_telem_ms = now;                     // first post-reboot packet
+    v[0].last_seen_ms  = now;
+    EXPECT_FALSE(bs_log_policy::aggregateFreqLock(v, 1, now, kWin))
+        << "a rebooted rocket must not re-lock the BS from a stale latch";
+}
+
+TEST(BsFreqLockResiduals, TelemetryFreshnessSurvivesWraparound) {
+    const uint32_t t = 0xFFFFF000u;
+    bs_log_policy::RocketView v[1] = { lockedView(t, t) };
+    EXPECT_TRUE (bs_log_policy::aggregateFreqLock(v, 1, (uint32_t)(t + 1000), kWin));
+    EXPECT_FALSE(bs_log_policy::aggregateFreqLock(v, 1, (uint32_t)(t + kWin + 1), kWin));
+}
+
+TEST(BsFreqLockResiduals, BeaconingRocketReleasesTheLockThroughTheFullPath) {
+    // End-to-end through the harness rather than hand-built views: one INFLIGHT
+    // telemetry packet latches the lock, then the rocket only ever beacons.
+    // Pre-residual the lock keyed on last_seen_ms, which beacon() advances, so
+    // it never released no matter how long telemetry had been gone.
+    SimBS bs;
+    const uint32_t t0 = 1000;
+    bs.packet(0, INFLIGHT, t0);
+    EXPECT_TRUE(bs.flightLock(t0));
+
+    // Beacons keep arriving every 30 s, well past the freshness window.
+    for (uint32_t dt = 30000; dt <= FRESH_MS + 60000; dt += 30000) {
+        bs.beacon(0, t0 + dt);
+        bs.tick(t0 + dt);
+    }
+    const uint32_t now = t0 + FRESH_MS + 60000;
+    EXPECT_FALSE(bs.flightLock(now))
+        << "beacons kept last_seen_ms current, but telemetry stopped — the "
+           "flight lock must still release";
+}
+
+TEST(BsFreqLockResiduals, BeaconsDoNotDelayReleaseVersusSilence) {
+    // The beaconing rocket and the fully silent one must release at the same
+    // moment: the only clock that matters here is telemetry.
+    SimBS beaconing, silent;
+    const uint32_t t0 = 1000;
+    beaconing.packet(0, INFLIGHT, t0);
+    silent.packet(0, INFLIGHT, t0);
+
+    const uint32_t now = t0 + FRESH_MS + 1;
+    beaconing.beacon(0, now);
+    beaconing.tick(now);
+    silent.tick(now);
+
+    EXPECT_EQ(beaconing.flightLock(now), silent.flightLock(now));
+    EXPECT_FALSE(beaconing.flightLock(now));
 }

@@ -76,6 +76,16 @@ struct RocketView {
     uint8_t  state             = 0;
     uint32_t inflight_entry_ms = 0;
     bool     freq_lock         = false;
+    // #835 item 6 residual: last accepted TELEMETRY packet.
+    //
+    // Distinct from last_seen_ms, which a NAME BEACON also stamps. The freq
+    // lock must key on telemetry: a rocket beaconing without decodable
+    // telemetry — netid-matched beacons getting through at range while
+    // full-size frames fail CRC — keeps last_seen_ms advancing forever and
+    // would hold the lock for the whole session even with the expiry timer
+    // running. The log-close rules deliberately keep using last_seen_ms:
+    // "have we heard anything at all" is the right question there.
+    uint32_t last_telem_ms     = 0;
 };
 
 // A rocket silent longer than fresh_window_ms no longer vetoes a log close
@@ -129,11 +139,33 @@ static inline bool anySafetyExpired(const RocketView* rockets, int n,
 // Aggregate frequency lock: locked while ANY fresh rocket's per-rocket lock
 // is latched. Replaces the old single global that the last-arrived packet
 // overwrote (rocket B's READY unlocked mid-flight-of-A every other packet).
+// #835 item 6 residual: telemetry-only freshness, for the freq lock alone.
+// See the last_telem_ms note in RocketView.
+static inline bool rocketTelemFresh(const RocketView& r, uint32_t now_ms,
+                                    uint32_t window_ms)
+{
+    return r.active && (now_ms - r.last_telem_ms) <= window_ms;
+}
+
+// True once a latched per-rocket lock has gone stale and the CALLER should
+// clear the underlying latch.
+//
+// Clearing only the aggregate is not enough: computeFreqLockForFlight() leaves
+// the per-rocket lock UNCHANGED through INITIALIZATION and PRELAUNCH, so the
+// first packet from a recovered, rebooted rocket re-latches the aggregate from
+// the stale bit and re-locks the base station until READY arrives — on exactly
+// the recovery path where the operator is trying to get the radio back.
+static inline bool freqLockExpired(const RocketView& r, uint32_t now_ms,
+                                   uint32_t release_ms)
+{
+    return r.freq_lock && !rocketTelemFresh(r, now_ms, release_ms);
+}
+
 static inline bool aggregateFreqLock(const RocketView* rockets, int n,
                                      uint32_t now_ms, uint32_t fresh_window_ms)
 {
     for (int i = 0; i < n; ++i) {
-        if (rocketFresh(rockets[i], now_ms, fresh_window_ms) &&
+        if (rocketTelemFresh(rockets[i], now_ms, fresh_window_ms) &&
             rockets[i].freq_lock) return true;
     }
     return false;
