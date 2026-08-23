@@ -387,8 +387,9 @@ one receiver connects at a time.
 
 ## What this rig does not test: boost dynamics
 
-**No receiver has ever lost lock during the burn on this bench, and that is a
-property of the rig rather than a result.**
+**No receiver loses its POSITION during the burn on this bench. Individual
+satellites are a different story, and the ones it loses are exactly the ones
+carrying the most Doppler.**
 
 The dynamics themselves are real and correctly injected. `spaceshot` peaks at
 132 m/s^2 (13.5 g), which is **695 Hz/s** of L1 Doppler rate against a peak shift
@@ -401,10 +402,48 @@ would. Through the 12 s burn:
 | ZED-F9P | 14 sats, 36 dBHz | 11 sats, 42 dBHz | 0/12 |
 | NEO-M8T | 14 sats, 51 dBHz | 12 sats, 43 dBHz | 0/12 |
 
-So 695 Hz/s alone does not break a receiver in airborne dynamic mode, which is
-what that mode exists for. But real boost lock-loss is not Doppler alone -- it is
-Doppler *plus* everything else that happens at the same moment, and none of the
-rest is in this signal:
+The satellite counts above hide what is actually happening. Doppler rate goes as
+`a * sin(elevation)` -- 693 Hz/s toward zenith against 60 Hz/s near the horizon,
+an 11x spread across the sky at the same instant -- and **the drop is entirely
+in the high-elevation satellites**. ZED-F9P through the 13.5 g burn, every
+tracked satellite:
+
+    GPS:11   70 deg   36 -> 0 dBHz   LOST
+    GPS:24   51 deg   34 -> 0 dBHz   LOST
+    GPS:21   38 deg   38 -> 48
+    GPS:6    31 deg   48 -> 0 dBHz   LOST
+    GPS:5    28 deg   37 -> 47
+    ... all nine satellites below 30 deg kept, several gaining 10-15 dB
+
+Acceleration is the control. Same geometry, same scenario, 4.5x less
+acceleration:
+
+| | peak | r(sin elev, dC/N0) | >=45 deg | <30 deg |
+|---|---|---|---|---|
+| ZED-F9P spaceshot | 13.5 g | **-0.67** | **-35 dB** | +10 dB |
+| ZED-F9P gentle_alt | 2.0 g | +0.54 | +8 dB | +2 dB |
+| NEO-M8T spaceshot | 13.5 g | **-0.45** | **-28 dB** | -3 dB |
+| NEO-M8T gentle_alt | 2.0 g | -- | 0 dB | 0 dB |
+
+Two independent receivers show it at 13.5 g and neither shows it at 2.0 g. Every
+channel is transmitted at equal power (`-p`), so the elevation dependence has to
+be receiver-side. This is Doppler-rate stress on the tracking loops, and the rig
+does reproduce it.
+
+Caveats: n=2 in the >=45 deg band, because that geometry simply does not put
+many satellites overhead, and the result is sensitive to how the burn window and
+baseline are chosen -- a first pass with a slightly different window showed no
+effect at all. What makes it credible is two receivers agreeing and the
+effect reversing with acceleration.
+
+**The SAM-M10Q cannot be checked this way.** Its captures come through the
+`[COCOM] S` console diagnostic, which logs `gnssId:svId:cno:used` and nothing
+else, so `cocom_fcdiag.py` synthesizes elevation as zero. Adding elevation to
+that log line is a one-field change and would close the gap.
+
+So dynamics *are* measurable here, on individual channels. What the rig still
+cannot reproduce is everything else that co-occurs with boost in a real flight,
+and it is the combination that costs a position fix rather than a few channels:
 
 * **Vibration.** A solid motor is broadband violence and it modulates carrier
   phase directly. The injected trajectory is smooth 10 Hz motion, interpolated.
