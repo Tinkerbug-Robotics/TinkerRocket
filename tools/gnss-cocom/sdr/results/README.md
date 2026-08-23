@@ -491,6 +491,12 @@ datasheet reports and which matters directly for a boost phase.
 
        grep -m2 'COCOM. S' <console capture>
 
+   Worth the check: **no CI job compiles this block.** It is `#if`-gated off by
+   default, so the firmware build that runs on every push never sees it, and a
+   mistake inside it surfaces only at the bench. It was built locally with
+   `-DTR_GNSS_COCOM_DIAG=1` when the field was added, but nothing keeps it that
+   way.
+
 3. Fly both standard profiles, so the acceleration control is available:
 
        ./run_fc.py -s spaceshot  -x 12
