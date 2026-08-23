@@ -121,6 +121,7 @@ using bs_log_policy::updateRocketLogState;
 using bs_log_policy::noFreshRocketFlying;
 using bs_log_policy::anySafetyExpired;
 using bs_log_policy::aggregateFreqLock;
+using bs_log_policy::FreqLockLatch;
 
 constexpr uint32_t FRESH_MS  = 5 * 60 * 1000;   // config::LOG_SILENCE_TIMEOUT_MS
 constexpr uint32_t SAFETY_MS = 20 * 60 * 1000;  // config::LOG_INFLIGHT_SAFETY_MS
@@ -158,6 +159,7 @@ struct SimBS {
 
         RocketView v[NSLOTS];
         views(v);
+        latch.update(v, NSLOTS, now, FRESH_MS, SAFETY_MS);  // main.cpp RX path
         if (edges.landed_edge && logging &&
             noFreshRocketFlying(v, NSLOTS, now, FRESH_MS, SAFETY_MS)) {
             logging = false;
@@ -167,11 +169,26 @@ struct SimBS {
         }
     }
 
-    bool freqLock(uint32_t now) {
+    // The freq-lock CACHE, driven exactly the way main.cpp drives it (#835
+    // item 6).  This replaced an accessor that recomputed aggregateFreqLock
+    // on every read -- a pull semantics the firmware never had, which is
+    // precisely why FreqLockStableAcrossInterleave below passed against a
+    // base station whose lock could never expire.
+    FreqLockLatch latch;
+
+    // The loop_bs freshness sweep: re-evaluate with no packet in hand.
+    void tick(uint32_t now) {
         RocketView v[NSLOTS];
         views(v);
-        return aggregateFreqLock(v, NSLOTS, now, FRESH_MS);
+        latch.update(v, NSLOTS, now, FRESH_MS, SAFETY_MS);
     }
+
+    bool flightLock(uint32_t now) const { return latch.flightLockedAt(now, FRESH_MS); }
+    bool retuneLock(uint32_t now) const { return latch.retuneLockedAt(now, SAFETY_MS); }
+
+    // The raw cached bit, with no read-side expiry -- what the pre-#835
+    // firmware exposed to every consumer.
+    bool rawFlight() const { return latch.flight; }
 };
 
 }  // namespace
@@ -283,14 +300,14 @@ TEST(BSLogPolicyMultiRocket, FreqLockStableAcrossInterleave)
     SimBS bs;
     uint32_t t = 1000;
     bs.packet(0, INFLIGHT, t);       t += 500;
-    EXPECT_TRUE(bs.freqLock(t));
+    EXPECT_TRUE(bs.flightLock(t));
     for (int i = 0; i < 20; ++i) {
         bs.packet(1, READY, t);      t += 250;
-        EXPECT_TRUE(bs.freqLock(t)) << "B's READY cleared A's in-flight lock";
+        EXPECT_TRUE(bs.flightLock(t)) << "B's READY cleared A's in-flight lock";
         bs.packet(0, INFLIGHT, t);   t += 250;
     }
     bs.packet(0, LANDED, t);
-    EXPECT_FALSE(bs.freqLock(t));
+    EXPECT_FALSE(bs.flightLock(t));
 }
 
 TEST(BSLogPolicyMultiRocket, BootEdgeAndSafetyArmSemantics)
@@ -311,4 +328,194 @@ TEST(BSLogPolicyMultiRocket, BootEdgeAndSafetyArmSemantics)
     // Leaving INFLIGHT disarms.
     updateRocketLogState(s2, LANDED, 3000);
     EXPECT_EQ(s2.inflight_entry_ms, 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Freq-lock expiry (#835 item 6)
+//
+// The bug was never in aggregateFreqLock — that predicate is pure, stateless
+// and correct. It was in the SCHEDULE: main.cpp assigned its cached copy from
+// exactly one place, the accepted-telemetry RX path, so when the packets
+// stopped the last `true` froze until a power cycle and the freshness window
+// was unreachable. A test of the predicate alone therefore cannot see this
+// bug; these tests drive the cache (FreqLockLatch) instead.
+//
+// Two windows, because the consumers are not equally dangerous. The short one
+// gates silence recovery and fixed-mode heartbeats. The long one gates the
+// cmd-10 transaction, the only consumer that physically retunes the radio —
+// releasing that at five minutes would let an operator retune off an airborne
+// rocket's channel, and the relay is a broadcast whose transaction commits on
+// any netid-matching packet, so a second rocket on the pad can strand the
+// airborne one for the rest of its descent.
+// ---------------------------------------------------------------------------
+
+TEST(BSLogPolicyFreqLock, LockExpiresWhenTelemetryStops)
+{
+    // The headline regression. One INFLIGHT packet, then silence forever.
+    // Pre-fix nothing recomputed the aggregate, so this stayed true until the
+    // base station was power-cycled.
+    SimBS bs;
+    const uint32_t t0 = 1000;
+    bs.packet(0, INFLIGHT, t0);
+    EXPECT_TRUE(bs.flightLock(t0));
+
+    // Sweep at 1 s steps right up to the window: still locked.
+    for (uint32_t dt = 1000; dt <= FRESH_MS; dt += 1000) {
+        bs.tick(t0 + dt);
+        ASSERT_TRUE(bs.flightLock(t0 + dt)) << "dropped early at dt=" << dt;
+    }
+
+    bs.tick(t0 + FRESH_MS + 1);
+    EXPECT_FALSE(bs.flightLock(t0 + FRESH_MS + 1))
+        << "silence past the freshness window must release the flight lock";
+}
+
+TEST(BSLogPolicyFreqLock, RawCacheIsStickyButReadsExpire)
+{
+    // Documents the shape of the original defect AND the backstop. With no
+    // sweep at all the cached bit stays true — that is the frozen value every
+    // consumer read pre-#835 — but the read-side check still expires it, so a
+    // future regression that deletes the loop_bs sweep degrades to a bounded
+    // window instead of back to "locked until reboot".
+    SimBS bs;
+    const uint32_t t0 = 1000;
+    bs.packet(0, INFLIGHT, t0);
+
+    EXPECT_TRUE(bs.rawFlight()) << "the cached bit itself never decays";
+    EXPECT_TRUE(bs.flightLock(t0 + FRESH_MS));
+    EXPECT_FALSE(bs.flightLock(t0 + FRESH_MS + 1))
+        << "read-side backstop must expire a cache nobody refreshed";
+}
+
+TEST(BSLogPolicyFreqLock, StampAdvancesOnEveryUpdateNotJustEdges)
+{
+    // The fail-DANGEROUS direction, and the reason update() must never sit
+    // behind an edge guard. If last_eval_ms only advanced when the aggregate
+    // CHANGED, it would freeze at the first INFLIGHT packet and the backstop
+    // would expire the lock one window later mid-flight, however much
+    // telemetry kept arriving. Silence-only tests cannot see that.
+    SimBS bs;
+    const uint32_t t0 = 1000;
+    bs.packet(0, INFLIGHT, t0);
+
+    // Continuous 2 Hz telemetry for three whole windows. The aggregate never
+    // changes value across any of it.
+    for (uint32_t dt = 500; dt <= 3 * FRESH_MS; dt += 500) {
+        bs.packet(0, INFLIGHT, t0 + dt);
+        ASSERT_TRUE(bs.flightLock(t0 + dt))
+            << "lock expired while telemetry was still arriving, dt=" << dt;
+        ASSERT_TRUE(bs.retuneLock(t0 + dt)) << "dt=" << dt;
+    }
+}
+
+TEST(BSLogPolicyFreqLock, RetuneLockOutlivesFlightLock)
+{
+    // The two-window split. After the silence window the passive consumers
+    // are released, but the radio-moving one stays shut for the whole
+    // plausible flight.
+    SimBS bs;
+    const uint32_t t0 = 1000;
+    bs.packet(0, INFLIGHT, t0);
+
+    const uint32_t after_flight = t0 + FRESH_MS + 1;
+    bs.tick(after_flight);
+    EXPECT_FALSE(bs.flightLock(after_flight)) << "recovery/heartbeat released";
+    EXPECT_TRUE(bs.retuneLock(after_flight))
+        << "cmd-10 must stay refused while the rocket may still be descending";
+
+    const uint32_t after_safety = t0 + SAFETY_MS + 1;
+    bs.tick(after_safety);
+    EXPECT_FALSE(bs.retuneLock(after_safety))
+        << "the retune lock must clear itself too — never wedged until reboot";
+}
+
+TEST(BSLogPolicyFreqLock, LandedClearsBothImmediately)
+{
+    // A clean landing releases everything on the fold, not a window later.
+    SimBS bs;
+    uint32_t t = 1000;
+    bs.packet(0, INFLIGHT, t);   t += 500;
+    ASSERT_TRUE(bs.flightLock(t));
+    ASSERT_TRUE(bs.retuneLock(t));
+    bs.packet(0, LANDED, t);
+    EXPECT_FALSE(bs.flightLock(t));
+    EXPECT_FALSE(bs.retuneLock(t));
+}
+
+TEST(BSLogPolicyFreqLock, ReassertsWhenTheRocketComesBack)
+{
+    // Expiry is not a one-way door: the per-rocket latch survives the silence
+    // (computeFreqLockForFlight clears only on READY/LANDED), so one packet
+    // re-locks. The whole safety argument for expiring at all rests on this.
+    SimBS bs;
+    const uint32_t t0 = 1000;
+    bs.packet(0, INFLIGHT, t0);
+
+    const uint32_t gone = t0 + SAFETY_MS + 60000;
+    bs.tick(gone);
+    ASSERT_FALSE(bs.flightLock(gone));
+    ASSERT_FALSE(bs.retuneLock(gone));
+
+    bs.packet(0, INFLIGHT, gone + 1000);
+    EXPECT_TRUE(bs.flightLock(gone + 1000));
+    EXPECT_TRUE(bs.retuneLock(gone + 1000));
+}
+
+TEST(BSLogPolicyFreqLock, HoldsAcrossAShortGapInclusiveOfTheBoundary)
+{
+    // rocketFresh uses <=, so the boundary tick is still fresh. An off-by-one
+    // here re-enables recovery hopping mid-descent.
+    SimBS bs;
+    const uint32_t t0 = 1000;
+    bs.packet(0, INFLIGHT, t0);
+    bs.tick(t0 + FRESH_MS);
+    EXPECT_TRUE(bs.flightLock(t0 + FRESH_MS)) << "boundary must still be fresh";
+}
+
+TEST(BSLogPolicyFreqLock, SweepAloneNeverSetsTheLock)
+{
+    // Guards a mis-ordered argument list in the sweep. rocketFresh short-
+    // circuits on r.active, so the zeroed last_seen_ms of an untouched slot
+    // cannot read as fresh during the first minutes of uptime.
+    SimBS bs;
+    for (uint32_t t = 0; t < 2 * FRESH_MS; t += 10000) {
+        bs.tick(t);
+        ASSERT_FALSE(bs.flightLock(t)) << "t=" << t;
+        ASSERT_FALSE(bs.retuneLock(t)) << "t=" << t;
+    }
+}
+
+TEST(BSLogPolicyFreqLock, SurvivesMillisWraparound)
+{
+    // Unsigned subtraction throughout — both in rocketFresh and in the
+    // read-side backstop.
+    SimBS bs;
+    const uint32_t t0 = 0xFFFFFF00u;  // ~1 minute before the wrap
+    bs.packet(0, INFLIGHT, t0);
+
+    const uint32_t mid = (uint32_t)(t0 + FRESH_MS / 2);   // wrapped
+    bs.tick(mid);
+    EXPECT_TRUE(bs.flightLock(mid)) << "wrap must not release the lock early";
+
+    const uint32_t past = (uint32_t)(t0 + FRESH_MS + 1000);
+    bs.tick(past);
+    EXPECT_FALSE(bs.flightLock(past)) << "wrap must not make the lock permanent";
+}
+
+TEST(BSLogPolicyFreqLock, SecondFreshRocketHoldsTheLockForASilentOne)
+{
+    // The aggregate is across rockets: A silent past the window, B still
+    // INFLIGHT and fresh, so the lock stays. Pins that the fix did not turn
+    // the aggregate into a per-rocket check.
+    SimBS bs;
+    const uint32_t t0 = 1000;
+    bs.packet(0, INFLIGHT, t0);
+    bs.packet(1, INFLIGHT, t0);
+
+    const uint32_t late = t0 + FRESH_MS + 1;
+    bs.packet(1, INFLIGHT, late);   // only B keeps talking
+    EXPECT_TRUE(bs.flightLock(late)) << "B is fresh and latched";
+
+    bs.tick(late + FRESH_MS + 1);   // now both are stale
+    EXPECT_FALSE(bs.flightLock(late + FRESH_MS + 1));
 }

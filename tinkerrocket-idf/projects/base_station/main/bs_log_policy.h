@@ -139,6 +139,73 @@ static inline bool aggregateFreqLock(const RocketView* rockets, int n,
     return false;
 }
 
+// Cached aggregate frequency lock (#835 item 6).
+//
+// aggregateFreqLock() above is freshness-gated, but a CACHED result only
+// decays if something recomputes it.  main.cpp assigned its global from
+// exactly one place -- the accepted-telemetry RX path -- so when the packets
+// stopped, the last `true` froze for the rest of the power cycle: the window
+// implemented right above was unreachable and only a power cycle cleared the
+// lock.  The cache lives HERE rather than in main.cpp so the host test can
+// drive the real object; the pre-#835 harness modelled a recompute-on-read
+// semantics the firmware never had, which is exactly why the existing
+// FreqLockStableAcrossInterleave passed against the broken code.
+//
+// TWO windows, because the consumers are not equally dangerous:
+//
+//   flight - the short (silence) window.  Gates the passive consumers:
+//            silence recovery and fixed-mode heartbeats.  These want to come
+//            back promptly once a rocket is gone, which is the whole point of
+//            the fix -- a lost rocket must not wedge them until reboot.
+//
+//   retune - the long (INFLIGHT-safety) window.  Gates anything that
+//            physically moves the radio off the flight channel.  Expiring
+//            that at the short window would hand the operator a live cmd-10
+//            while the rocket is still descending, and the cmd-10 relay is a
+//            BROADCAST whose transaction commits -- and persists to NVS -- on
+//            any netid-matching packet, so a second rocket on the pad
+//            answering on the new channel strands the airborne one for the
+//            rest of its descent.  Pre-#835 the frozen lock happened to
+//            prevent that; the long window keeps it shut for the whole
+//            plausible flight and still clears itself, so the operator is
+//            never wedged until a power cycle.
+struct FreqLockLatch {
+    bool     flight       = false;  // aggregate over the short window
+    bool     retune       = false;  // aggregate over the long window
+    uint32_t last_eval_ms = 0;      // when both were computed
+
+    // Recompute from a fresh view snapshot.  MUST be called unconditionally,
+    // never behind an edge guard: last_eval_ms is what the read-side backstop
+    // below measures against, so a stamp that only advances on an edge turns
+    // the backstop into a mid-flight fuse that expires the lock a window
+    // after the FIRST inflight packet no matter how much telemetry follows.
+    void update(const RocketView* rockets, int n, uint32_t now_ms,
+                uint32_t flight_window_ms, uint32_t retune_window_ms)
+    {
+        flight       = aggregateFreqLock(rockets, n, now_ms, flight_window_ms);
+        retune       = aggregateFreqLock(rockets, n, now_ms, retune_window_ms);
+        last_eval_ms = now_ms;
+    }
+
+    // Read-side backstop.  last_eval_ms is always >= the last_seen_ms of
+    // whichever rocket made the flag true, so this can only ever hold the
+    // lock LONGER than the true freshness rule, never release it earlier --
+    // the safe direction for both consumers.  It is inert while update()
+    // runs every loop pass (last_eval_ms == now), and it exists so that a
+    // future regression that deletes or re-gates that call degrades to a
+    // bounded window instead of back to "frozen until reboot", which was the
+    // actual root cause here.  Unsigned subtraction: millis()-wrap safe.
+    bool flightLockedAt(uint32_t now_ms, uint32_t window_ms) const
+    {
+        return flight && (now_ms - last_eval_ms) <= window_ms;
+    }
+
+    bool retuneLockedAt(uint32_t now_ms, uint32_t window_ms) const
+    {
+        return retune && (now_ms - last_eval_ms) <= window_ms;
+    }
+};
+
 // Strict parser for the sequential lora_NNN.csv filenames used when the BS
 // has no phone time-sync yet.  Returns true and sets `out_num` only when
 // `name` exactly matches that pattern with the entire string consumed.

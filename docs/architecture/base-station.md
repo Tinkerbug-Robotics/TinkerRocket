@@ -125,9 +125,17 @@ mechanisms, each catching a different failure:
 - **Silence recovery** — after 10 s of hearing nothing from any rocket, a two-phase hunt.
   Phase A tunes to the factory rendezvous channel and listens for 30 s. Phase B sweeps
   ±2 MHz around the NVS frequency in 21 steps of 200 kHz, dwelling one beacon cycle each.
+  Both are suppressed while the **flight frequency lock** holds — see below.
 - **Transactional reconfigure** — changing frequency is a two-sided commit. The Base
   Station does not simply retune and hope; it confirms the rocket followed, and rolls
   back to the old frequency if not.
+- **Flight frequency lock** — latched when any tracked rocket reports INFLIGHT, and
+  released on that rocket's READY or LANDED. While it holds, the Base Station will not
+  move its radio. It is an *aggregate* across tracked rockets and it decays with
+  silence, on two different clocks: silence recovery and fixed-channel heartbeats come
+  back 5 minutes after the last packet, but a cmd-10 reconfigure — the only thing that
+  physically retunes the radio — stays refused for 20 minutes, long enough to cover any
+  plausible descent. Both windows clear themselves; neither needs a power cycle.
 - **Coordinated noise scan** — a multi-pass RSSI scan that produces a channel skip mask,
   which is then pushed to the rocket so both ends hop over the same bad channels.
 - **Auto-acquire** — one shot per power cycle: wait to hear a rocket, then converge on it.
@@ -194,6 +202,22 @@ Computer and "relay to rocket" here, and that overlap is correct.
 the point where a packet merely passes the SNR floor and has the right shape. Doing so
 suppressed silence recovery and, worse, satisfied a command's "the rocket is alive"
 predicate on what was really just noise (#384).
+
+**A cached freshness-gated value only decays if something recomputes it.** The flight
+frequency lock is an aggregate that ignores rockets silent longer than the freshness
+window — but until #835 it was assigned from the telemetry RX path alone, so when the
+packets stopped the last `true` froze and the window was unreachable. One lost rocket
+wedged cmd-10, silence recovery and heartbeats until the Base Station was power-cycled.
+`loop_bs` now re-evaluates it every pass, outside the `logging_active` gate, and the
+latch expires stale reads on its own so deleting that call degrades to a bounded window
+rather than back to forever. Look for a cache whose only writer is an event handler.
+
+**Releasing an in-flight guard is not automatically safe.** Making the lock expire had to
+be split across two windows precisely because one consumer moves the radio. The cmd-10
+relay is a *broadcast* and its transaction commits — and writes NVS — on any
+netid-matching packet, so a second rocket on the pad can answer on the new channel and
+strand an airborne one on the old for the rest of its descent. Before shortening any
+guard, check what the guard was incidentally protecting.
 
 **The build flag does not match the board number on the silkscreen.** The current
 hardware is **V5**, and it is built as **`TR_BS_BOARD=3`** — the two numbering schemes
