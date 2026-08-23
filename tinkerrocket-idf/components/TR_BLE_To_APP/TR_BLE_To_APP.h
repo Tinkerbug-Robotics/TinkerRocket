@@ -173,6 +173,13 @@ public:
     // Call frequently from main loop (handles BLE events)
     void loop();
 
+
+    // #834 item 2: true when the NEXT loop() call will esp_restart() to load a
+    // new OTA partition. The restart fires from inside loop(), on the caller's
+    // task, with no chance to intervene afterwards — this lets the caller
+    // quiesce storage first. ELAPSED, not merely scheduled, so the log ring
+    // keeps draining for the whole pre-reboot window.
+    bool otaRestartDue() const;
     // Check if a device is connected
     bool isConnected() const;
 

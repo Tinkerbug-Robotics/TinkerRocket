@@ -194,6 +194,26 @@ public:
     void service();
     void startFlushTask(uint8_t core = 0, uint32_t stackSize = 8192, uint8_t priority = 1);
 
+    /// #834 item 2: take the shared SPI bus and DELIBERATELY NEVER GIVE IT
+    /// BACK, so the esp_restart() that follows cannot cut a NAND command
+    /// mid-clock. The shutdown counterpart of startFlushTask(), and like it
+    /// one-way and idempotent.
+    ///
+    /// GUARANTEES on true: the calling task owns spi_mutex_ for the rest of
+    /// this boot, CS is HIGH, and no byte is on the wire. Every runtime
+    /// transaction sits inside a spiAcquire()/spiRelease() pair and every such
+    /// pair raises CS before releasing; the only two beginTransaction() calls
+    /// outside a pair (mramProbe, nandInit) run single-threaded inside begin(),
+    /// long before startFlushTask(). A flush task caught "mid-operation" is
+    /// inside nandWaitReady(), which re-acquires per poll, so it parks there
+    /// rather than clocking anything.
+    ///
+    /// NOT guaranteed: that the CHIP is idle. A latched PROGRAM EXECUTE or
+    /// BLOCK ERASE is self-timed and completes on its own — safe here
+    /// precisely because U11 sits on the always-on +3V3 rail, so the reset
+    /// removes no power from it.
+    bool parkSpiBusForReset(uint32_t timeout_ms);
+
     void getStats(TR_LogToFlashStats& out) const;
     /// Zero the *_max_us fields so the next getStats() reflects only peaks
     /// seen since this call.  Intended to be called right after the caller
@@ -551,6 +571,10 @@ private:
     // SPI bus mutex — always created.  Both cores share the bus even without
     // MRAM (flush task programs NAND pages while the BLE download path reads).
     SemaphoreHandle_t spi_mutex_ = nullptr;
+    // #834 item 2: non-null once parkSpiBusForReset() has taken spi_mutex_ for
+    // good. spiAcquire/spiRelease pass through for that task so a re-entrant
+    // call cannot deadlock the power-off — or worse, hand the bus back.
+    TaskHandle_t spi_park_owner_ = nullptr;
     void spiAcquire();
     void spiRelease();
 

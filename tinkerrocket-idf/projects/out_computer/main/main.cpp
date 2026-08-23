@@ -1991,6 +1991,143 @@ static inline void endPhoneIO()
 }
 
 // ==========================================================================
+// SECTION: pre-restart storage quiesce (#834 item 2)
+// ==========================================================================
+// Every deliberate esp_restart() on this MCU must leave the storage stack in a
+// state where the reset is indistinguishable from a clean power cycle.
+//
+// WHAT IS ACTUALLY AT RISK, AND WHAT IS NOT. U11 (the SPI NAND) sits on the
+// ALWAYS-ON +3V3 rail — U18's EN is tied to its own AVIN — so esp_restart()
+// removes no power from it. A PROGRAM EXECUTE or BLOCK ERASE the chip has
+// already latched is self-timed and lands correctly across the reset, and
+// FlightIndex::save() writes the OLDER-or-invalid metadata copy, so a reset
+// between its erase and its program still leaves a valid snapshot. The reset
+// therefore CANNOT half-program a page — which is what this was first assumed
+// to be about.
+//
+// What it CAN do, and did, on EVERY power-off: throw away up to 512 KB of
+// PSRAM log ring plus the staged partial page, the phone-synced filename and
+// the exact byte count. That ring is volatile in-package PSRAM on V9/V10
+// (there is no MRAM), so nothing else is holding that data. Draining it is
+// the whole point of this function. The bus park at the end is the small
+// remaining piece: it stops a command being cut mid-clock, which is benign
+// here but is what makes the GPIO teardown that follows provably safe rather
+// than probably safe.
+//
+// Why it lives in main.cpp: closing a flight is a three-party handshake — the
+// logger drains the ring and closes the session, g_finalize_pending stages the
+// index commit, TR_FlightLog writes it — and only main.cpp sees all three.
+//
+// NEVER REFUSES, unlike the mini's comms_prepare_power_off(). On the mini the
+// rail drop kills the NAND, so refusing genuinely protects the data. Here the
+// flash is powered regardless, PWR_PIN is already LOW by the time we run, the
+// reset IS the power-off, and cmd 8 sends no acknowledgement frame on OFF — so
+// a refusal would be an invisible half-off state the operator cannot diagnose.
+static constexpr uint32_t kQuiesceCloseTimeoutMs = 10000;
+static constexpr uint32_t kSpiParkTimeoutMs      = 250;
+static bool s_restart_quiesced = false;
+
+static void quiesceStorageForRestart(const char* why)
+{
+    // One-shot. Also load-bearing: phoneIoPmAcquire() inside beginPhoneIO() is
+    // a COUNTING esp_pm lock with no matching release on this path, so
+    // re-entering would leak lock counts.
+    if (s_restart_quiesced) return;
+    s_restart_quiesced = true;
+
+    const uint32_t t0 = millis();
+
+    // 1. Shut the producers. i2s_ingest_paused gates the DMA recv callback and
+    //    flash_op_active gates serviceI2CIngress, so no new flight can be
+    //    staged into the very iteration we are trying to end — a straggler
+    //    prepareFlight would set flight_active_ again and start an 80-block
+    //    erase, and the predicate below would never converge. Deliberately
+    //    never un-paused: every path out of here resets.
+    beginPhoneIO();
+
+    // 2. Close the flight. endLogging() latches end_flight_requested, which
+    //    makes enqueueFrame reject, so the ring cannot grow again and the
+    //    drain converges even with frames still in the rx ring.
+    if (logger.isLoggingActive())
+    {
+        logger.endLogging();
+        flightlogEndFlight();
+    }
+    // NOTE deliberately NO else-branch for "flight active but logging never
+    // activated" (a flight pre-created at PRELAUNCH that never received data).
+    // Finalizing it here would stamp it with logger.lastClosedSessionBytes(),
+    // which is sticky from the PREVIOUS flight — producing a phantom
+    // multi-megabyte entry over erased pages whose blocks then read as
+    // in-index, so brownout recovery can never reclaim them. With
+    // auto_evict_oldest on, each phantom also consumes headroom and is always
+    // the newest entry, so arming the next flight evicts a REAL one instead.
+    // Boot recovery already releases an orphan ALLOCATED run that has no valid
+    // pages, which is the correct and lossless handling.
+
+    // 3. Wait for the flush task to drain the ring, close the session and
+    //    service the deferred finalize. This needs at least TWO flush
+    //    iterations by construction: the hook runs before the end-flight block
+    //    within one iteration, so the finalize can only be serviced on the
+    //    pass after the one that closed.
+    const uint32_t deadline = millis() + kQuiesceCloseTimeoutMs;
+    bool closed = false;
+    for (;;)
+    {
+        bool finalize_pending;
+        portENTER_CRITICAL(&g_finalize_mux);
+        finalize_pending = g_finalize_pending;
+        portEXIT_CRITICAL(&g_finalize_mux);
+
+        // What this wait can actually influence: the ring drain and the
+        // session close, plus the deferred index commit those stage.
+        //
+        // isFlightActive() is deliberately NOT a term. It stays true for a
+        // flight pre-created at PRELAUNCH that never received data (nothing
+        // closes it, and finalizing it here would fabricate a phantom entry —
+        // see step 2), and it also stays true forever if a deferred
+        // finalizeFlight() failed its metadata write. Either way it is a state
+        // this function cannot clear, so including it would just spin out the
+        // full timeout on every power-off. Boot recovery reclaims both.
+        //
+        // isPrepareFlightPending() IS a term: an arm staged but not yet
+        // serviced would otherwise let the predicate pass, and the flush task
+        // would then start an 80-block erase burst underneath the park.
+        if (!logger.isLoggingActive() && !finalize_pending &&
+            !flightlog.isPrepareFlightPending())
+        {
+            closed = true;
+            break;
+        }
+        if ((int32_t)(deadline - millis()) <= 0)          // wrap-safe
+        {
+            ESP_LOGE("PWR", "%s: log close did not complete in %u ms "
+                            "(logging=%d finalize=%d prepare_pending=%d) — "
+                            "continuing anyway; an unclosed tail is recoverable",
+                     why, (unsigned)kQuiesceCloseTimeoutMs,
+                     (int)logger.isLoggingActive(), (int)finalize_pending,
+                     (int)flightlog.isPrepareFlightPending());
+            break;
+        }
+        delay(50);
+    }
+
+    // 4. Park the SPI bus and never give it back. MUST be the LAST logger or
+    //    flightlog call on this path. Uncontended on the clean path (step 3
+    //    has converged, so the flush task is idle at its vTaskDelay); the
+    //    timeout only matters after a step-3 timeout, and there the bus is not
+    //    coming back anyway.
+    const bool parked = logger.parkSpiBusForReset(kSpiParkTimeoutMs);
+    if (!parked)
+    {
+        ESP_LOGE("PWR", "%s: SPI bus still held after %u ms — resetting on top "
+                        "of it (#834 item 2)", why, (unsigned)kSpiParkTimeoutMs);
+    }
+
+    ESP_LOGI("PWR", "%s: storage quiesced in %lu ms (closed=%d parked=%d)",
+             why, (unsigned long)(millis() - t0), (int)closed, (int)parked);
+}
+
+// ==========================================================================
 // SECTION: I2C status-query response to the FC
 // ==========================================================================
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
@@ -7511,6 +7648,25 @@ static void loop_oc()
     // schedules esp_restart() ~500 ms out, but the reboot only fires from here.
     // Without this, an OTA completes and sets ota_1 yet the device never reboots
     // into the new image (#8 Phase-3 OC bench finding; loop_bs always called it).
+    // #834 item 2: ble_app.loop() below fires the OTA deferred reboot — on
+    // THIS task, with the flush task still programming pages, and with none of
+    // the power-off path's protection: no rail drop, no settle, no GPIO
+    // teardown. The 500 ms it waits is a BLE-notify drain window, not a
+    // storage window. Gated on otaRestartDue() (ELAPSED, not merely scheduled)
+    // so the ring keeps draining for that whole window and we only quiesce on
+    // the pass that will actually restart.
+    if (ble_app.otaRestartDue())
+    {
+        // Atomic with the restart on purpose. The quiesce is IRREVERSIBLE (the
+        // SPI bus is parked and never handed back, ingest stays paused), while
+        // ota_pending_restart_at_ms_ lives on the NimBLE host task and can be
+        // cleared by an OTA_ABORT arriving between these two lines. Letting
+        // ble_app.loop() re-derive the decision would then leave the OC
+        // quiesced and never rebooted — storage dead until a power cycle.
+        quiesceStorageForRestart("ota-reboot");
+        ESP_LOGW("OC", "OTA: rebooting now to load new partition (#834 item 2)");
+        esp_restart();
+    }
     ble_app.loop();
 
     // Check for BLE commands
@@ -8029,7 +8185,34 @@ static void loop_oc()
             const bool was_on  = pwr_pin_on;
             const bool want_on = (plen >= 1) ? (payload[0] != 0) : !pwr_pin_on;
 
-            if (want_on == was_on)
+            // #834 item 2: refuse an OFF while flying, matching the gates
+            // delete and download already have. Two reasons. (1) Post-#848 the
+            // FC holds its own rail through P4_EN_HOLD, so this no longer
+            // powers anything down — it just resets the OC and kills the
+            // downlink mid-flight. (2) The quiesce above now CLOSES the
+            // session, and the #846 boot re-seed only ever reads a
+            // flight_recovered_* entry; a properly finalized flight is
+            // skipped. Without this gate a mid-flight power-off would destroy
+            // the FC's only NAND-side snapshot source while it is still
+            // flying. Gating removes that trade-off rather than weakening the
+            // quiesce.
+            // Freshness is load-bearing: latest_rocket_state NEVER AGES, and
+            // cmd 8 is the OC's only reset path. Gating on the latched value
+            // alone means an FC that died mid-flight — exactly when you most
+            // want to recover the OC — would refuse every power-off for the
+            // rest of the boot, with no way out but a battery pull.
+            const bool fc_state_fresh =
+                latest_non_sensor_valid &&
+                (uint32_t)(millis() - latest_non_sensor_rx_ms) <= config::FC_FRAME_STALE_MS;
+            const bool refuse_off = !want_on && was_on && fc_state_fresh &&
+                                    latest_rocket_state == INFLIGHT;
+            if (refuse_off)
+            {
+                ESP_LOGW("BLE", "Power off REFUSED: rocket is INFLIGHT "
+                                "(FC frame %lu ms ago)",
+                         (unsigned long)(millis() - latest_non_sensor_rx_ms));
+            }
+            else if (want_on == was_on)
             {
                 ESP_LOGI("BLE", "Power rail already %s, ignoring",
                          was_on ? "ON" : "OFF");
@@ -8102,6 +8285,14 @@ static void loop_oc()
                     digitalWrite(config::GPS_PWR_PIN, LOW);  // drop GNSS rail in lockstep
                 }
 
+                // #834 item 2: get the log onto the NAND before the reset.
+                // AFTER the rail drop on purpose — the wait doubles as
+                // rail-discharge time (PWR_PIN is already LOW) and the FC's
+                // frame source is gone. BEFORE the GPIO teardown below,
+                // because gpio_reset_pin() detaches the pads from the SPI
+                // matrix, after which no NAND command can complete.
+                quiesceStorageForRestart("power-off");
+
                 // Prevent back-feed into peripherals whose VCC is about to
                 // disappear: current from the still-powered OC side through a
                 // peripheral's input ESD diode into its dead rail shows up as
@@ -8138,7 +8329,14 @@ static void loop_oc()
                 // Split by direction: OC OUTPUTS into a soon-dead peripheral
                 // get driven LOW; anything the peripheral drives is left
                 // high-Z so we never contend with a still-powered part.
+                // LORA_ACT_PIN first: it is U29's enable, so dropping it is
+                // what actually removes the daughterboard's VBATT rail.
+                // Driving LORA_UART_TX low while the module is still powered
+                // would just hold a break condition on a live receiver; the
+                // back-feed this list exists to prevent only becomes possible
+                // once the rail is gone.
                 static const gpio_num_t kSwitchedRailPins[] = {
+                    (gpio_num_t)config::LORA_ACT_PIN,      // U29 EN -> LoRa rail
                     (gpio_num_t)config::LORA_UART_TX_PIN,  // OC -> J5 daughterboard
                     (gpio_num_t)config::LORA_SPI_SCK,      // V7 SPI-LoRa (-1 on V8+)
                     (gpio_num_t)config::LORA_SPI_MOSI,
@@ -8156,9 +8354,12 @@ static void loop_oc()
                 // reason these were ever in the driven-LOW list (#9).
                 // #834 item 2: the LoRa lines the DAUGHTERBOARD drives join
                 // them, for the same reason — and so do the flash's, which are
-                // simply left alone now (U11 stays powered; the SPI driver is
-                // torn down by the quiesce above, and a high-Z pad on a live
-                // bus is harmless).
+                // simply left alone now: U11 stays powered, and the quiesce
+                // above has parked the SPI mutex with CS HIGH and no byte on
+                // the wire. (The park takes the mutex; it does NOT tear down
+                // the SPI driver — see TR_LogToFlash::parkSpiBusForReset. It
+                // does not need to: nothing can start a transaction while the
+                // bus is parked.)
                 static const gpio_num_t kHighZPins[] = {
                     (gpio_num_t)config::I2S_BCLK_PIN,
                     (gpio_num_t)config::I2S_WS_PIN,
@@ -8178,7 +8379,12 @@ static void loop_oc()
                 }
                 for (gpio_num_t pin : kHighZPins) {
                     if ((int)pin < 0) continue;
-                    gpio_reset_pin(pin);   // high-Z: safe against a live driver
+                    gpio_reset_pin(pin);
+                    // gpio_reset_pin() ENABLES the internal pull-up, so on its
+                    // own it does not give the high-Z this list promises — a
+                    // ~45 kOhm pull to 3V3 still injects into an unpowered
+                    // peripheral, and still fights a live driver. Float it.
+                    gpio_set_pull_mode(pin, GPIO_FLOATING);
                 }
 
                 vTaskDelay(pdMS_TO_TICKS(100));   // let rail drop, caps discharge
@@ -8188,7 +8394,11 @@ static void loop_oc()
 
             // Only on an actual state change — an ignored duplicate must not
             // claim the rail was switched, nor re-push config.
-            if (want_on != was_on)
+            // #834 item 2: a REFUSED off never changed the rail, so it must
+            // not claim it did — the epilogue logs the transition, stalls the
+            // loop 100 ms and re-pushes config, all of which are wrong (and
+            // mid-flight, actively harmful) on a refusal.
+            if (want_on != was_on && !refuse_off)
             {
                 ESP_LOGI("BLE", "Power rail: %s%s", pwr_pin_on ? "ON" : "OFF",
                          (plen >= 1) ? "" : " (legacy toggle)");
