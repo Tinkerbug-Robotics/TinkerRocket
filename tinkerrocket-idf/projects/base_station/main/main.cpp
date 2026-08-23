@@ -25,6 +25,7 @@
 #include <esp_adc/adc_cali_scheme.h>
 
 #include <cstdio>
+#include <memory>                // unique_ptr — file-list top-N window (#835)
 #include <cstdlib>                // setenv() — UTC TZ for the log-rename helper (#168)
 #include <cstring>
 #include <cerrno>
@@ -42,6 +43,7 @@
 #include "bs_battery_soc.h"       // voltage-based SoC fallback (#501)
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
 #include "bs_storage_policy.h"    // NAND bring-up retry / demotion policy (#761)
+#include "bs_file_list.h"       // top-N file-list window (#835)
 
 #include <TR_LoRa_Comms.h>
 #include <LoRaDirectBackend.h>
@@ -1660,16 +1662,41 @@ static void handleFileListCommand()
 {
     uint8_t page = ble_app.getFileListPage();
 
-    // Collect all CSV files
-    struct FileEntry { char name[32]; uint32_t size; };
-    FileEntry entries[64];
-    size_t total = 0;
+    // Stream the WHOLE directory past a window that keeps only the N greatest
+    // names (#835 item 5).  This used to read into `FileEntry entries[64]` and
+    // stop at 64 BEFORE sorting; readdir returns on-disk slot order, so the
+    // entries it never reached were the newest logs and the just-recorded
+    // flight became unlistable and undownloadable once the directory held 64+
+    // files.  N is sized to the requested page, so page 0 is correct for any
+    // directory size and only paging depth is bounded.
+    const size_t want = bs_file_list::windowFor(page, config::FILES_PER_PAGE,
+                                                config::FILE_LIST_MAX_WINDOW);
+    if (want == 0)
+    {
+        // Past the deepest page we will build a window for.  An empty page is
+        // the "list ended" signal both apps already stop on.
+        ESP_LOGW(TAG, "[BLE] File list page %u beyond max window (%u entries)",
+                 (unsigned)page, (unsigned)config::FILE_LIST_MAX_WINDOW);
+        ble_app.sendFileList(String("[]"));
+        return;
+    }
+
+    std::unique_ptr<bs_file_list::Entry[]> storage(
+        new (std::nothrow) bs_file_list::Entry[want]);
+    if (!storage)
+    {
+        ESP_LOGE(TAG, "[BLE] File list page %u: out of memory for %u entries",
+                 (unsigned)page, (unsigned)want);
+        ble_app.sendFileList(String("[]"));
+        return;
+    }
+    bs_file_list::TopNames window(storage.get(), want);
 
     DIR* dir = opendir(SD_MOUNT_POINT);
     if (dir)
     {
         struct dirent* entry;
-        while ((entry = readdir(dir)) != nullptr && total < 64)
+        while ((entry = readdir(dir)) != nullptr)
         {
             // Skip directories
             if (entry->d_type == DT_DIR) continue;
@@ -1686,50 +1713,38 @@ static void handleFileListCommand()
             if (logging_active && strcmp(fname, active_basename) == 0)
                 continue;
 
-            strncpy(entries[total].name, fname, 31);
-            entries[total].name[31] = '\0';
-
-            // Get file size via stat
-            char fullpath[64];
-            snprintf(fullpath, sizeof(fullpath), "%s/%s", SD_MOUNT_POINT, fname);
-            struct stat st;
-            entries[total].size = (stat(fullpath, &st) == 0) ? (uint32_t)st.st_size : 0;
-            total++;
+            window.offer(fname);
         }
         closedir(dir);
     }
 
-    // Sort descending by name (newest = highest number first)
-    if (total > 1)
-    {
-        qsort(entries, total, sizeof(FileEntry),
-              [](const void* a, const void* b) -> int {
-                  return strcmp(((FileEntry*)b)->name, ((FileEntry*)a)->name);
-              });
-    }
-
-    // Paginate
-    size_t start = (size_t)page * config::FILES_PER_PAGE;
-    if (start > total) start = total;
-    size_t end = start + config::FILES_PER_PAGE;
-    if (end > total) end = total;
-
-    // Build JSON
+    // Build JSON.  stat() only the rows we actually emit -- the old code
+    // stat()ed every file it collected, which on FAT is a directory walk each.
+    const size_t start = (size_t)page * config::FILES_PER_PAGE;
     String json = "[";
-    for (size_t i = start; i < end; ++i)
+    size_t emitted = 0;
+    for (size_t i = start; i < window.count() && emitted < config::FILES_PER_PAGE; ++i)
     {
-        if (i > start) json += ",";
+        const char* name = window.at(i);
+        if (emitted > 0) json += ",";
+
+        char fullpath[64];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", SD_MOUNT_POINT, name);
+        struct stat st;
+        const uint32_t fsize = (stat(fullpath, &st) == 0) ? (uint32_t)st.st_size : 0;
+
         json += "{\"name\":\"";
-        json += entries[i].name;
+        json += name;
         json += "\",\"size\":";
-        json += std::to_string(entries[i].size);
+        json += std::to_string(fsize);
         json += "}";
+        ++emitted;
     }
     json += "]";
 
     ble_app.sendFileList(json);
     ESP_LOGI(TAG, "[BLE] Sent file list page %u: %u files (total %u)",
-             (unsigned)page, (unsigned)(end - start), (unsigned)total);
+             (unsigned)page, (unsigned)emitted, (unsigned)window.total());
 }
 
 static void handleDeleteCommand()

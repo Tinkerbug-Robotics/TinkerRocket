@@ -373,6 +373,18 @@ target_include_directories(test_bs_log_policy PRIVATE
 target_link_libraries(test_bs_log_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_log_policy)
 
+# ---------- test_bs_file_list ----------
+# Host-side test for the BLE file-list top-N window (#835 item 5).  The header
+# is pure (no IDF, no filesystem), so the test just adds base_station/main to
+# the include path.  See the test file for why truncate-then-sort lost the
+# newest logs.
+add_executable(test_bs_file_list test_bs_file_list.cpp)
+target_include_directories(test_bs_file_list PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_file_list GTest::gtest_main)
+gtest_discover_tests(test_bs_file_list)
+
 # ---------- test_bs_uplink_policy ----------
 # Host-side test for the base-station uplink transmit gate (#379): an uplink TX
 # during a LoRa frequency scan must be deferred, not sent on the scan channel.
