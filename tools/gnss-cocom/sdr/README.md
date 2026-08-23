@@ -530,7 +530,16 @@ BLOCKED-vs-NO_LOCK distinction rests on -- does not exist in its data flow.
 adds ~1.5 kB and logs, once a second:
 
     I (25263) GNSS: [COCOM] P tow=24805 fix=0 ok=0 nsv=0 lat=0 lon=0 alt=0 vn=0 ve=0 vd=0
-    I (25263) GNSS: [COCOM] S n=2 0:22:20:0 5:1:10:0
+    I (25263) GNSS: [COCOM] S n=2 0:22:20:0:41 5:1:10:0:12
+
+The satellite field is `gnss:sv:cno:used:elev`. **Elevation is there because
+Doppler rate goes as `a*sin(elevation)`** -- about 693 Hz/s toward zenith against
+60 Hz/s near the horizon on a 13.5 g boost -- so which satellites a receiver
+drops under acceleration can only be answered per-satellite with an elevation
+beside the C/N&#8320;. On the parts that could be tapped directly for UBX, the
+high-elevation satellites are exactly the ones lost through the burn.
+`cocom_fcdiag.py` still accepts the older four-field form, so captures archived
+before the field existed remain readable.
 
 `cocom_fcdiag.py` converts a captured console log into the rig's `TS U <hex>`
 format, so `correlate.py`, `recovery.py`, `plot_flight.py` and `oscillation.py`

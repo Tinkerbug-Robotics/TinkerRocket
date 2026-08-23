@@ -8,7 +8,7 @@ TR_GNSS_COCOM_DIAG=1, which logs fix state and per-satellite C/N0 to the console
 that is already connected:
 
     I (25263) GNSS: [COCOM] P tow=24805 fix=0 ok=0 nsv=0 lat=0 lon=0 alt=0 vn=0 ve=0 vd=0
-    I (25263) GNSS: [COCOM] S n=2 0:22:20:0 5:1:10:0
+    I (25263) GNSS: [COCOM] S n=2 0:22:20:0:41 5:1:10:0:12
 
 This turns those back into synthetic UBX-NAV-PVT and UBX-NAV-SAT frames written
 as `TS U <hex>`, which is exactly what gnss_nmea_monitor captures from a real
@@ -19,7 +19,10 @@ Two ordering details matter and are handled here:
 
 * NAV-SAT is emitted BEFORE its NAV-PVT, because correlate.py treats NAV-PVT as
   the epoch marker and closes the epoch on it -- the satellites for that epoch
-  must already be in. The FC logs them the other way round.
+  must already be in. The console logs them the other way round.
+* The satellite field is `gnss:sv:cno:used:elev`, and the four-field form
+  without elevation is still accepted: every capture archived before elevation
+  was added is in that older form, and those get elevation 0.
 * Timestamps come from the ESP log prefix, which is milliseconds since boot.
   That is a host clock, not a receiver clock, so it places epochs relative to
   each other but cannot anchor them to a scenario. Fix epochs carry GPS time in
@@ -60,9 +63,9 @@ def nav_pvt(tow_ms, fix, ok, nsv, lat, lon, alt_mm, vn, ve, vd) -> bytes:
 
 def nav_sat(sats) -> bytes:
     p = struct.pack("<IBBH", 0, 1, len(sats), 0)
-    for gnss_id, svid, cno, used in sats:
-        # elev/azim are not logged; they are not read by anything downstream.
-        p += struct.pack("<BBBb", gnss_id, svid, cno, 0)
+    for gnss_id, svid, cno, used, elev in sats:
+        # Azimuth is still not logged and nothing downstream reads it.
+        p += struct.pack("<BBBb", gnss_id, svid, cno, elev)
         p += struct.pack("<hh", 0, 0)
         p += struct.pack("<I", (0x08 if used else 0) | 0x0800)
     return p
@@ -100,12 +103,23 @@ def main() -> int:
             continue
 
         # S line: emit satellites first, then the PVT they belong to.
+        # Two field counts are accepted on purpose. Firmware built before
+        # elevation was added logs gnss:sv:cno:used, and every SAM-M10Q capture
+        # already in results/ is in that older form -- refusing it would make
+        # the archive unreadable to answer a question the archive cannot answer
+        # anyway. Older captures get elevation 0, which is what they carried.
         sats = []
         for tok in rest.split():
             parts = tok.split(":")
-            if len(parts) == 4 and all(x.lstrip("-").isdigit() for x in parts):
-                g, sv, cno, used = (int(x) for x in parts)
-                sats.append((g, sv & 0xFF, max(0, min(255, cno)), used))
+            if len(parts) not in (4, 5):
+                continue
+            if not all(x.lstrip("-").isdigit() for x in parts):
+                continue
+            vals = [int(x) for x in parts]
+            g, sv, cno, used = vals[0], vals[1], vals[2], vals[3]
+            elev = vals[4] if len(parts) == 5 else 0
+            sats.append((g, sv & 0xFF, max(0, min(255, cno)), used,
+                         max(-128, min(127, elev))))
         n_s += 1
         out.append(f"{t:.3f} U {blob(MSG_NAV_SAT, nav_sat(sats))}")
 
