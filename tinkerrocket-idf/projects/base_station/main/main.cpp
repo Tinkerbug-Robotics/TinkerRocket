@@ -788,6 +788,10 @@ struct TrackedRocket {
     double     last_lon_deg = NAN;
     double     last_alt_m = NAN;
     uint32_t   last_seen_ms = 0;
+    // #835 item 6 residual: last accepted TELEMETRY packet. last_seen_ms
+    // above is also stamped by a NAME BEACON, which must not hold the
+    // flight frequency lock alive.
+    uint32_t   last_telem_ms = 0;
     // Free-running TX seq from the rocket (#105, widened to 16 bits in
     // proto v4).  -1 = no prior packet ("first contact"); on an
     // implausible forward delta we reset to -1 and treat the next
@@ -917,6 +921,7 @@ static void buildRocketViews(bs_log_policy::RocketView out[MAX_TRACKED_ROCKETS])
         out[i].state             = tracked_rockets[i].log_state.last_state;
         out[i].inflight_entry_ms = tracked_rockets[i].log_state.inflight_entry_ms;
         out[i].freq_lock         = tracked_rockets[i].log_state.freq_lock;
+        out[i].last_telem_ms     = tracked_rockets[i].last_telem_ms;
     }
 }
 
@@ -4744,7 +4749,11 @@ static void loop_bs()
                     // Freshness for the aggregate decisions below uses
                     // last_seen_ms; stamp it now (the tracker mirror further
                     // down stamps it again — idempotent).
-                    tracked_rockets[slot].last_seen_ms = now_ms;
+                    tracked_rockets[slot].last_seen_ms  = now_ms;
+
+                    // #835 item 6 residual: telemetry-only clock for the freq lock.
+
+                    tracked_rockets[slot].last_telem_ms = now_ms;
 
                     bs_log_policy::RocketView views[MAX_TRACKED_ROCKETS];
                     buildRocketViews(views);   // KEEP: the landed_edge close below uses it
@@ -5030,6 +5039,30 @@ static void loop_bs()
         // buildRocketViews is 4 x 5 scalar copies (MAX_TRACKED_ROCKETS = 4)
         // and each aggregate is at most 4 compares, against a loop_bs that
         // vTaskDelay(1)s at 1 kHz.
+        // #835 item 6 residual: also CLEAR the underlying per-rocket latch
+        // once its telemetry has gone stale, not just the aggregate.
+        // computeFreqLockForFlight() leaves log_state.freq_lock UNCHANGED
+        // through INITIALIZATION and PRELAUNCH, so a recovered, rebooted
+        // rocket's first packet would otherwise re-latch the aggregate from
+        // the stale bit and re-lock the base station until READY arrived —
+        // on exactly the path where the operator is trying to get the radio
+        // back. Uses the RETUNE window (the longer of the two): a latch is
+        // only truly dead once even the radio-moving consumers would release.
+        for (int i = 0; i < MAX_TRACKED_ROCKETS; ++i)
+        {
+            if (bs_log_policy::freqLockExpired(views[i], now_ms,
+                                               config::LOG_INFLIGHT_SAFETY_MS))
+            {
+                tracked_rockets[i].log_state.freq_lock = false;
+                views[i].freq_lock                     = false;
+                ESP_LOGW(TAG, "[LOG] Per-rocket freq latch cleared: rid=%u "
+                              "no telemetry for %lu s",
+                         (unsigned)tracked_rockets[i].rocket_id,
+                         (unsigned long)((now_ms -
+                                          tracked_rockets[i].last_telem_ms) / 1000U));
+            }
+        }
+
         updateFreqLock(views, now_ms, "freshness sweep");
 
         if (logging_active &&
