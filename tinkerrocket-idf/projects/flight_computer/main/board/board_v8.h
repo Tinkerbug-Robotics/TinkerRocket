@@ -126,7 +126,11 @@ struct board_pins
 
     // ### Indicators ###
     static constexpr uint8_t PIEZO_PIN = 17;      // PIEZZO
-    // TODO: confirm which IND_* is which color (guess: IND_1=red, IND_2=blue).
+    // IND_1 = red, IND_2 = blue.  CONFIRMED on V9 hardware (bench 2026-08-24,
+    // #847), which carries the SAME pins and the same IND_1/IND_2 nets — so this
+    // is inferred here, not separately measured on a V8 board.  Good enough to
+    // stop guessing; re-check on V8 silicon before relying on it for anything
+    // beyond indicator polarity.
     static constexpr uint8_t RED_LED_PIN = 27;    // IND_1
     static constexpr uint8_t BLUE_LED_PIN = 26;   // IND_2
 
