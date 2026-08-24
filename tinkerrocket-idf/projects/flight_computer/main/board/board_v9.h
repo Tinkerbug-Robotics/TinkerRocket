@@ -153,7 +153,10 @@ struct board_pins
 
     // ### Indicators ###
     static constexpr uint8_t PIEZO_PIN = 17;      // PIEZZO
-    // TODO: confirm which IND_* is which color (guess: IND_1=red, IND_2=blue).
+    // IND_1 = RED, IND_2 = BLUE — CONFIRMED on the V9 first article, bench
+    // 2026-08-24 (#847).  The mapping below was a guess when this header was
+    // written; it turned out correct, so nothing moved.  Recorded rather than
+    // deleted so the next revision does not re-open the question.
     static constexpr uint8_t RED_LED_PIN = 27;    // IND_1
     static constexpr uint8_t BLUE_LED_PIN = 26;   // IND_2
 
