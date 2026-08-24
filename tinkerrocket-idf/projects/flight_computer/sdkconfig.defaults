@@ -43,3 +43,35 @@ CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5=y
 # Main task stack: the 5.5 default (3584 B) overflows FC's synchronous sensor
 # init when the Arduino loop stack isn't present. Restore the prior 16 KB.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# --- Deliberately-unused silicon on the FC (#851) -------------------------
+# Recorded as DECISIONS, not omissions.  The OC spent a month discovering its
+# PSRAM only after the MRAM was deleted from under it; the point of writing
+# these down is that the next person reads "off because we decided" rather
+# than "off because nobody looked".
+#
+# 1) U17 is an ESP32-P4NRW32 — 32 MB of IN-PACKAGE PSRAM — and there is no
+#    CONFIG_SPIRAM here on purpose.  The FC has no identified need: its logs
+#    stream to the OC over I2S rather than buffering locally, which is what
+#    the OC's PSRAM exists for (#842, the MRAM's replacement).  Enabling it
+#    is NOT free on this board — PSRAM access goes through the cache and can
+#    perturb the timing determinism of a 3840 Hz IMU path and a ~976 Hz
+#    control loop, which is measured and currently clean.  Revisit only when
+#    something concrete needs the space, and re-measure loop timing and the
+#    gap counters (#910) if it is ever turned on.
+#
+# 2) Y3, the FC's 32.768 kHz crystal, is fitted but unused: no
+#    CONFIG_RTC_CLK_SRC_EXT_CRYS, so the RTC runs on the internal RC.  That
+#    is fine here — the crystal matters for light-sleep and accurate RTC
+#    timekeeping, and the FC does neither.  It is awake for the whole flight,
+#    and the low-power path belongs to the OC (#519: EXT_CRYS + BT LP clock
+#    + XT-WDT).  If FC light-sleep is ever wanted, this is the first switch.
+#
+# 3) Boot NOR: V9 fits W25Q128JVSIQ (16 MB) and this file now declares 16 MB.
+#    NOTE the partition table (partitions.csv) still tops out near 6.4 MB, so
+#    the upper half is unused — deliberately, since raising it would fork the
+#    layout per hardware generation (V8 bench boards may carry 8 MB parts).
+#    Also note IDF does NOT re-apply defaults to an existing sdkconfig: an
+#    old build dir keeps building 8 MB and logs "Detected size(16384k) larger
+#    than the size in the binary image header(8192k)".  Delete the stale
+#    sdkconfig (the OC keeps one per build dir, #822) to pick this up.
