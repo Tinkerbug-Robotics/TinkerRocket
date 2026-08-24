@@ -70,5 +70,31 @@ else()
 endif()
 set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}+${TR_BUILD_DATE}")
 
+# Board revision has to reach sdkconfig, not just the compiler — the same
+# lesson out_computer/CMakeLists.txt records under #822, arrived at here by a
+# different route. V9/V10 fits a 16 MB boot NOR where V7/V8 carry an 8 MB
+# W25Q64 (measured; see sdkconfig.defaults), and a 16 MB declaration on an 8 MB
+# part is a boot loop inside the bootloader, before any firmware runs.
+#
+# Both lines matter, and the second is the one that is easy to leave out.
+# SDKCONFIG_DEFAULTS picks the overlay. SDKCONFIG moves the GENERATED config
+# into the build dir, because IDF's default is a single sdkconfig at the
+# PROJECT ROOT shared by every build dir, and it does not re-apply defaults to
+# an sdkconfig that already exists. Without it, `-B build_v9` and `-B build_v7`
+# quietly share one config: the first V9 build writes 16 MB into it and every
+# later V7 build inherits that, producing exactly the unbootable image this
+# split exists to prevent — with a correct-looking build log and a -v7 version
+# stamp on the image.
+#
+# One-time effect on existing checkouts: the root projects/flight_computer/
+# sdkconfig is now ignored (it is untracked, so nothing is lost from git). Any
+# hand-made menuconfig edits living there need re-applying in the build dir,
+# and `idf.py -B <dir> reconfigure` is what re-seeds from these defaults.
+if(TR_BOARD_V9)
+    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
+    message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (16 MB boot NOR)")
+endif()
+set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(flight_computer)

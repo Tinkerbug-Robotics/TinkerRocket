@@ -1,0 +1,25 @@
+# sdkconfig overlay applied ONLY to -DTR_BOARD_V9=1 builds, on top of
+# sdkconfig.defaults. Selected by the project CMakeLists, not by the build-dir
+# name — see there.
+#
+# Same shape as out_computer/sdkconfig.defaults.v9, and for the same reason:
+# sdkconfig is per-project, but the things in this file are per-BOARD.
+
+# === Boot NOR size: 16 MB on V9/V10, 8 MB on V7/V8 ===
+# U16 (the P4's boot flash) is a GD25Q128ESIG on V9/V10 — 16 MB. It was a
+# W25Q64JVXGIQ (8 MB) on everything fabbed before the V9 close-out on
+# 2026-08-09; hardware/rocket-computer/bom.csv carries that swap at 8f87aa0,
+# and the V7 board in hand measures ef/7017 = 8 MB on both MCUs (2026-08-24).
+#
+# This line is what stops a V9 board logging "Detected size(16384k) larger than
+# the size in the binary image header(8192k)" on every boot and leaving half
+# the fitted part unreachable. The base file declares 8 MB deliberately: that
+# direction is only wasteful, while declaring 16 MB against the 8 MB part V7/V8
+# actually carry is a bootloader-level boot loop with no firmware log at all.
+#
+# Nothing needs the space yet — partitions.csv ends at 0x610000 (6.06 MB) — so
+# this is about declaring the part honestly, not about using it. If a partition
+# ever does cross 8 MB, it has to move into a V9-only table the same way, or
+# V7/V8 stop building (gen_esp32part.py refuses a table larger than the
+# declared flash, which is the safe way for that mistake to surface).
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y

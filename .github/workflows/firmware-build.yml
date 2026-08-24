@@ -48,7 +48,18 @@ jobs:
           - project: pyro_channel_test
             board: V9
             flags: -B build_v9 -DTR_BOARD_V9=1
+          # base_station's flag is optional and defaults to V2, but the two
+          # revisions no longer share a flash layout: V1/V2 fit an 8 MB W25Q64
+          # and V3 (PCB V5/V6) a 16 MB GD25Q128ESIG, so V3 alone gets
+          # sdkconfig.defaults.v3 — 16 MB plus the partitions_v3.csv whose
+          # 9.94 MB spiffs does not fit an 8 MB part at all. Build both, or the
+          # overlay rots unbuilt and the default silently becomes the only
+          # tested one.
           - project: base_station
+            board: V2-default
+          - project: base_station
+            board: V3
+            flags: -B build_v3 -DTR_BS_BOARD=3
           - project: radio_board
           - project: rocket_computer_mini
           # flight_computer has no default board revision: the flag is
