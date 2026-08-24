@@ -134,8 +134,13 @@ struct TelemetryData: Codable {
     var source_unit_name: String?     // rocket unit name from LoRa beacon
 
     // Telemetry freshness status (#95).  Sent by the BS in periodic-push
-    // payloads; absent from RX-path payloads (which are always live) and
-    // from direct rocket connections.  iOS treats a missing "ds" as live.
+    // payloads; absent from RX-path payloads (which are always live).  iOS
+    // treats a missing "ds" as live.
+    //
+    // #831: a DIRECT rocket connection also sends it — SYNCING until the OC
+    // has seen the FC's first NonSensorData frame, so stale zeroed continuity
+    // cannot render green.  So .syncing does NOT imply "base station".  See
+    // DashboardVisibility: the state banner must stay visible through it.
     enum DataStatus: Int, Codable { case live = 0, stale = 1, syncing = 2 }
     var data_status: DataStatus = .live
     var data_age_ms: UInt32 = 0      // only meaningful when .stale
