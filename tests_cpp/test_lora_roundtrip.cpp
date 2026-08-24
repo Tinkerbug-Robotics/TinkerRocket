@@ -97,6 +97,7 @@ TEST_F(LoRaRoundtripTest, NominalFlight_Roundtrip) {
     EXPECT_FALSE(out.alt_landed_flag);
     EXPECT_TRUE(out.camera_recording);
     EXPECT_TRUE(out.logging_active);
+    EXPECT_FALSE(out.sim_active);   // #835 item 9: a real flight must stay false
     EXPECT_EQ(out.rocket_state, 3);
 
     // Accel/gyro (×10 quantization -> 0.1 resolution)
@@ -225,7 +226,13 @@ TEST_F(LoRaRoundtripTest, Orientation_SentinelsAndLegacyFrames) {
 
 TEST_F(LoRaRoundtripTest, ExtremeValues_NoOverflow) {
     LoRaDataSI extreme{};
-    extreme.num_sats = 127; // max for 7-bit
+    // #835 item 9 narrowed this field from 7 bits to 6: bit 6 became
+    // LORA_SIM_BIT, next to LORA_LOGGING_BIT at bit 7.  63 is the new
+    // ceiling.  Deliberate trade — a u-blox numSV across GPS+Galileo+
+    // GLONASS+BeiDou realistically tops out near 40, so 63 keeps ~50%
+    // headroom, and knowing a trace is synthetic is worth more than a
+    // sat count nothing can produce.
+    extreme.num_sats = 63; // max for the 6-bit field
     extreme.pdop = 100.0f;
     extreme.ecef_x = 7000000.0;
     extreme.ecef_y = -7000000.0;
@@ -261,7 +268,7 @@ TEST_F(LoRaRoundtripTest, ExtremeValues_NoOverflow) {
     LoRaDataSI out{};
     conv.unpackLoRa(packed, out);
 
-    EXPECT_EQ(out.num_sats, 127);
+    EXPECT_EQ(out.num_sats, 63);
     EXPECT_TRUE(out.launch_flag);
     EXPECT_TRUE(out.alt_apogee_flag);
     EXPECT_TRUE(out.vel_u_apogee_flag);
@@ -438,4 +445,95 @@ TEST_F(LoRaRoundtripTest, Seq_FullU16Range) {
         EXPECT_EQ(out.num_sats, 12)            << "seq=" << s;
         EXPECT_NEAR(out.vel_e, 1234.0f, 0.05f) << "seq=" << s;
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// #835 item 9 — sim_active on the LoRa wire.
+//
+// The FC raises NSF_SIM_ACTIVE while TR_Sensor_Collector_Sim substitutes
+// IMU/baro/GNSS.  A DIRECT BLE link relayed it, but the LoRa frame had no room
+// (flags_state and flags2 are both fully allocated), so the base station
+// memset() left sim_active FALSE on every relayed frame — an affirmative
+// "this is a real flight" rather than an absence.  A pad sim watched through
+// the BS was indistinguishable from a real flight, including in the CSV the
+// flight-report tooling consumes afterwards.
+//
+// The bit lives at num_sats bit 6, next to LORA_LOGGING_BIT at bit 7.
+// ---------------------------------------------------------------------------
+
+TEST_F(LoRaRoundtripTest, SimActiveSurvivesTheWire) {
+    LoRaDataSI in = makeNominal();
+    in.sim_active = true;
+    LoRaData packed{};
+    conv.packLoRa(in, packed);
+    LoRaDataSI out{};
+    conv.unpackLoRa(packed, out);
+    EXPECT_TRUE(out.sim_active);
+}
+
+TEST_F(LoRaRoundtripTest, SimAndLoggingBitsAreIndependent) {
+    // They share the num_sats byte, so a packing slip would couple them.
+    for (bool sim : {false, true}) {
+        for (bool logging : {false, true}) {
+            LoRaDataSI in = makeNominal();
+            in.sim_active = sim;
+            in.logging_active = logging;
+            LoRaData packed{};
+            conv.packLoRa(in, packed);
+            LoRaDataSI out{};
+            conv.unpackLoRa(packed, out);
+            EXPECT_EQ(out.sim_active, sim) << "sim=" << sim << " logging=" << logging;
+            EXPECT_EQ(out.logging_active, logging) << "sim=" << sim << " logging=" << logging;
+        }
+    }
+}
+
+TEST_F(LoRaRoundtripTest, SatCountIsUnharmedByTheFlagBits) {
+    // num_sats now has 6 bits (0-63) rather than 7. Real constellations top
+    // out near 40, so this must be lossless across the plausible range even
+    // with both flag bits set.
+    for (uint8_t sats : {0, 1, 12, 31, 40, 63}) {
+        LoRaDataSI in = makeNominal();
+        in.num_sats = sats;
+        in.sim_active = true;
+        in.logging_active = true;
+        LoRaData packed{};
+        conv.packLoRa(in, packed);
+        LoRaDataSI out{};
+        conv.unpackLoRa(packed, out);
+        EXPECT_EQ(out.num_sats, sats) << "sats=" << (int)sats;
+        EXPECT_TRUE(out.sim_active);
+        EXPECT_TRUE(out.logging_active);
+    }
+}
+
+TEST_F(LoRaRoundtripTest, SatCountClampsRatherThanCorruptingTheFlags) {
+    // A sender reporting an impossible sat count must not bleed into the flag
+    // bits — that would turn a real flight into a reported sim.
+    LoRaDataSI in = makeNominal();
+    in.num_sats = 200;
+    in.sim_active = false;
+    in.logging_active = false;
+    LoRaData packed{};
+    conv.packLoRa(in, packed);
+    LoRaDataSI out{};
+    conv.unpackLoRa(packed, out);
+    EXPECT_EQ(out.num_sats, 63);      // clamped
+    EXPECT_FALSE(out.sim_active);     // NOT corrupted by the clamp
+    EXPECT_FALSE(out.logging_active);
+}
+
+TEST_F(LoRaRoundtripTest, LegacySenderReadsAsNotSimulated) {
+    // A pre-#835 sender leaves bit 6 clear. That must read as "not a sim",
+    // matching the old behaviour rather than inventing a sim flight.
+    LoRaDataSI in = makeNominal();
+    in.sim_active = false;
+    LoRaData packed{};
+    conv.packLoRa(in, packed);
+    packed.num_sats &= ~LORA_SIM_BIT;   // as an older firmware would send it
+    LoRaDataSI out{};
+    conv.unpackLoRa(packed, out);
+    EXPECT_FALSE(out.sim_active);
+    EXPECT_EQ(out.num_sats, 12);
 }

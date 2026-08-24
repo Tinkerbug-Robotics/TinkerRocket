@@ -1780,6 +1780,22 @@ static constexpr uint8_t LORA_CAMERA_REC  = (1u << 7);  // bit 7: camera recordi
 // logging_active is packed into the MSB of num_sats (real range 0-40, 7 bits plenty)
 static constexpr uint8_t LORA_LOGGING_BIT = 0x80;
 
+// #835 item 9: sim_active rides num_sats bit 6, alongside LORA_LOGGING_BIT.
+// The FC raises NSF_SIM_ACTIVE while TR_Sensor_Collector_Sim is substituting
+// IMU/baro/GNSS, and a DIRECT BLE link relays it ("fs" bit 8) — but the LoRa
+// frame had nowhere to put it: flags_state is fully allocated (4 flags + 3-bit
+// state + camera) and so is flags2 (burnout + 5-bit orient code + 2-bit mode).
+// The base station memset()s its output and never assigned sim_active, so a
+// relayed sim flight reported sim_active=FALSE — an affirmative "this is real",
+// not an absence.  A pad sim watched through the BS was indistinguishable from
+// a real flight, in the app and in the CSV the flight-report tooling consumes.
+//
+// num_sats really runs 0-40, so 6 bits (0-63) still covers it with room; the
+// packer clamps to 63 rather than 127 now.  0 on the wire means "not reported"
+// for legacy senders, which is the same as the pre-#835 behaviour.
+static constexpr uint8_t LORA_SIM_BIT     = 0x40;
+static constexpr uint8_t LORA_NUM_SATS_MASK = 0x3F;
+
 // LoRaData.flags2 bit masks (#191).
 static constexpr uint8_t LORA2_BURNOUT = (1u << 0);   // NSF_BURNOUT relay
 
@@ -1812,7 +1828,10 @@ typedef struct
             vel_u_apogee_flag,      // bit          : bool
             launch_flag,            // bit          : bool
             camera_recording,       // bit 7        : bool
-            logging_active;         // MSB of num_sats byte
+            logging_active,         // MSB of num_sats byte
+            sim_active;             // #835 item 9: num_sats bit 6 — the rocket
+                                    // is running TR_Sensor_Collector_Sim, so
+                                    // this trace is synthetic, not a flight
     uint8_t rocket_state;           // 3 bits       : states 0 through 5 (incl. MAG_CALIBRATION; field holds 0-7)
     float   acc_x;                  // 0.1 m/s2     : -400 to 400
     float   acc_y;                  // 0.1 m/s2     : -400 to 400

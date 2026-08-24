@@ -1094,6 +1094,8 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
     lora.rocket_state = (uint8_t)latest_rocket_state;
     lora.camera_recording = false;   // MINI: no camera fitted
     lora.logging_active = logger.isLoggingActive();
+    // #835 item 9 — mini half; see the OC comment.
+    lora.sim_active     = nsFlagSet(latest_non_sensor.flags, NSF_SIM_ACTIVE);
 
     if (latest_non_sensor_valid)
     {

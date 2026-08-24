@@ -3755,6 +3755,10 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
     lora.rocket_state = (uint8_t)latest_rocket_state;
     lora.camera_recording = camera_recording_requested;
     lora.logging_active = logger.isLoggingActive();
+    // #835 item 9: relay sim mode over LoRa.  The direct-BLE path already
+    // reports it ("fs" bit 8); without this the base station affirmatively
+    // reported sim_active=false for a synthetic flight.
+    lora.sim_active     = nsFlagSet(latest_non_sensor.flags, NSF_SIM_ACTIVE);
 
     if (latest_non_sensor_valid)
     {

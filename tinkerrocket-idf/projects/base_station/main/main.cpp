@@ -2036,6 +2036,11 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     // whichever rocket spoke last, which is wrong for a re-push of a
     // different (focused) rocket's cached frame.
     out.logging_active = lora.logging_active;
+    // #835 item 9: without this the memset() above left sim_active=false on
+    // EVERY relayed frame — an affirmative "real flight", not an absence.  A
+    // pad sim watched through the base station looked identical to a real one,
+    // including in the CSV the flight-report tooling reads afterwards.
+    out.sim_active     = lora.sim_active;
     // Surface the BS log basename as a heartbeat so the operator can
     // confirm logging is live before each flight (#107).  The rocket-side
     // filename isn't shipped over LoRa, so this slot is otherwise unused
