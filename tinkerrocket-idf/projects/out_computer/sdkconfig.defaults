@@ -205,3 +205,19 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # Serial
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
+
+# --- Boot NOR size (#851 item 3) ------------------------------------------
+# V9 fits W25Q128JVSIQ (16 MB) for U13, and CONFIG_ESPTOOLPY_FLASHSIZE_16MB
+# above declares it.  The partition table still tops out well below that, so
+# the upper half is unused for now; raising it would fork the layout per
+# hardware generation (V8 bench boards may carry 8 MB parts), which is not
+# worth it until something needs the space.
+#
+# TRAP: IDF does not re-apply sdkconfig.defaults to an EXISTING sdkconfig, and
+# this project deliberately keeps one PER BUILD DIR (#822, so a V9 build
+# cannot poison a V8 one).  A build dir created before this line was added
+# keeps building 8 MB and logs "Detected size(16384k) larger than the size in
+# the binary image header(8192k)".  Verified 2026-08-24: build_v8/sdkconfig
+# and build_v9/sdkconfig both still said 8 MB while this file said 16 MB.
+# Fix is to delete build_<rev>/sdkconfig and reconfigure — an incremental
+# rebuild will NOT do it.
