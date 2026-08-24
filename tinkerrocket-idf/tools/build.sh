@@ -44,16 +44,17 @@ fi
 
 cd "$PROJECT_DIR"
 
-# Set target if not already done. Read the desired target from
-# sdkconfig.defaults so each project picks its own chip (OC/BS=esp32s3,
-# FC=esp32p4) without idf.py silently defaulting to esp32s3 and producing
-# a binary for the wrong target.
-if [ ! -f "sdkconfig" ]; then
-    TARGET="$(grep -E '^CONFIG_IDF_TARGET=' sdkconfig.defaults 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' | head -1)"
-    TARGET="${TARGET:-esp32s3}"
-    echo "First build — setting target to ${TARGET}..."
-    idf.py set-target "${TARGET}"
-fi
+# No explicit set-target. Every project pins its chip with CONFIG_IDF_TARGET in
+# its own sdkconfig.defaults (OC/BS/radio=esp32s3, FC=esp32p4, mini=esp32s3),
+# and idf.py honours that on the first configure of a build dir, so the target
+# is already correct without help.
+#
+# This used to run `idf.py set-target` guarded by `[ ! -f sdkconfig ]`, testing
+# for a generated config at the PROJECT ROOT. Every project now keeps its
+# generated sdkconfig in the build dir instead (see each CMakeLists), so that
+# guard would never be satisfied — and `set-target` DELETES the build directory,
+# so the helper would have thrown away and re-run the whole build on every
+# single invocation.
 
 case "$COMMAND" in
     build)     idf.py build ;;

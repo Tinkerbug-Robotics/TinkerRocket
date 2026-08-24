@@ -20,7 +20,11 @@ matching network, its own 32 MHz crystal, and an RF switch), a W25Q64 boot
 flash, USB-C for console+programming, and a 4-pin JST-SH host link. A later
 board revision exists in `hardware/lora-daughterboard` (S3RH2, W25Q128); its
 GPIO net map is pad-by-pad identical, so only the flash size in
-`sdkconfig.defaults` is revision-specific.
+`sdkconfig.defaults` is revision-specific — and that stays at **8 MB**, the
+value that boots on both. This project has no board-revision flag to fork on,
+and 8 MB on a 16 MB part only wastes the top half, while 16 MB on the as-built
+8 MB part is a bootloader-level boot loop. See
+[board-versioning.md](../../../docs/board-versioning.md#boot-nor-size-per-revision).
 
 Every pin in [main/config.h](main/config.h) is a schematic net verified
 against the board's `.kicad_pcb` pad→net map:

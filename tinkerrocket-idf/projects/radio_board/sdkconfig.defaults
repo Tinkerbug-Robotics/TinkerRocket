@@ -7,12 +7,26 @@ CONFIG_IDF_TARGET="esp32s3"
 # while the reverse bricks the boot. Do not raise this to match a schematic
 # without checking which board is in your hand. (Reading the flash part off a
 # stale field is the OC's 128-of-512 MB mistake, #492.)
-# Boot NOR is a 128 Mbit (16 MB) part on every placement in the fleet
-# (lora-daughterboard U22): GD25Q128ESIG today, W25Q128JVSIQ on boards fabbed before
-# 2026-08-15 — both 16 MB. Declaring 8 MB left half the part
-# unreachable and made every boot log "Detected size(16384k) larger
-# than the size in the binary image header(8192k)".
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+#
+# That paragraph was right and got overwritten anyway. A 2026-08-22 sweep
+# raised the whole fleet to 16 MB on the strength of the CURRENT schematic —
+# hardware/lora-daughterboard fits a GD25Q128ESIG — and appended its reasoning
+# below this block without removing the argument against it, leaving the file
+# asserting both. Reverted 2026-08-24. Unlike the rocket computer this project
+# has no board-revision flag to fork on, so the one declaration it gets has to
+# be the one that boots on every board, and that is 8 MB.
+#
+# The as-built LoRa Board V3 is the only radio board that has ever run this
+# firmware: the 16 MB first article is unflashable (dead flash, still open).
+# Raising this would have bricked the boot of the only working unit the next
+# time anyone deleted a build dir. Nothing wants the space either —
+# partitions.csv ends at 0x320000 (3.2 MB), deliberately, so the same image
+# flashes onto a bench devkit too.
+#
+# If a 16 MB board revision ever does come up, give this project the
+# TR_BOARD_*-style flag and sdkconfig.defaults.<rev> overlay that
+# flight_computer and out_computer use, rather than flipping this line.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
 # PSRAM stays OFF — hardware constraint, not a preference, and it holds for
