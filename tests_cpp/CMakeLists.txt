@@ -834,6 +834,14 @@ target_include_directories(test_main_deploy_gate PRIVATE
 target_link_libraries(test_main_deploy_gate GTest::gtest_main)
 gtest_discover_tests(test_main_deploy_gate)
 
+# ---------- test_modem_config_ack (#835 item 7) ----------
+add_executable(test_modem_config_ack test_modem_config_ack.cpp)
+target_include_directories(test_modem_config_ack PRIVATE
+    ${CMAKE_SOURCE_DIR}/../tinkerrocket-idf/components/TR_RadioLink
+    ${CMAKE_SOURCE_DIR}/../tinkerrocket-idf/components/TR_UART_Link)
+target_link_libraries(test_modem_config_ack GTest::gtest_main)
+gtest_discover_tests(test_modem_config_ack)
+
 # ---------- test_ota_relay_policy (#834 items 6/7) ----------
 # Timing for the OC's I2S relay recovery: how often to retry a failed slave-RX
 # begin, and when to abandon a relay whose app has stopped pumping. Pure header
