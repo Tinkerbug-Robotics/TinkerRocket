@@ -346,8 +346,10 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_NEXT_CH_HOP_OFFSCHEDULE` | `0xFE` (254) |  |
 | `LORA_NEXT_CH_NO_HOP` | `0xFF` (255) | sentinel: not hopping |
 | `LORA_NOISE_THRESHOLD_DB` | `0x0F` (15) | skip if peak > median + this |
+| `LORA_NUM_SATS_MASK` | `0x3F` (63) |  |
 | `LORA_NVS_SCHEMA_VERSION` | `0x04` (4) |  |
 | `LORA_PROTO_VERSION` | `0x04` (4) |  |
+| `LORA_SIM_BIT` | `0x40` (64) |  |
 | `LORA_STATE_SHIFT` | `0x04` (4) | bits 4-6: rocket state |
 | `LORA_UL_ACCEPTED` | `0x01` (1) | passed every filter, command dispatched |
 | `LORA_UL_MALFORMED` | `0x10` (16) | bad sync byte or short frame |

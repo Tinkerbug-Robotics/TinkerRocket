@@ -371,8 +371,11 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     out.next_channel_idx = in.next_channel_idx;
     out.seq              = in.seq;
 
-    // num_sats (bits 0-6) + logging_active (bit 7)
-    out.num_sats = (uint8_t)lroundi32(clampf((float)in.num_sats, 0.f, 127.f));
+    // num_sats (bits 0-5) + sim_active (bit 6) + logging_active (bit 7).
+    // Clamp is 63, not 127: bit 6 is now LORA_SIM_BIT (#835 item 9).  Real
+    // constellations top out around 40 sats, so 6 bits still has headroom.
+    out.num_sats = (uint8_t)lroundi32(clampf((float)in.num_sats, 0.f, 63.f));
+    if (in.sim_active)     out.num_sats |= LORA_SIM_BIT;
     if (in.logging_active) out.num_sats |= LORA_LOGGING_BIT;
 
     // pdop -> u8 0..100
@@ -515,7 +518,8 @@ void SensorConverter::unpackLoRa(const LoRaData& in, LoRaDataSI& out)
     out.next_channel_idx = in.next_channel_idx;
     out.seq              = in.seq;
 
-    out.num_sats = in.num_sats & 0x7F;  // bits 0-6
+    out.num_sats = in.num_sats & LORA_NUM_SATS_MASK;  // bits 0-5
+    out.sim_active     = (in.num_sats & LORA_SIM_BIT) != 0;      // #835 item 9
     out.logging_active = (in.num_sats & LORA_LOGGING_BIT) != 0;
     out.pdop = (float)in.pdop_u8;
 
