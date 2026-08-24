@@ -45,6 +45,7 @@ import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
 import com.tinkerbug.tinkerrocket.protocol.SignalQuality
 import com.tinkerbug.tinkerrocket.protocol.pyroContinuityOf
+import com.tinkerbug.tinkerrocket.protocol.showStateBanner
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.session.FleetDevice
 import com.tinkerbug.tinkerrocket.session.DeviceSession
@@ -206,7 +207,13 @@ fun DashboardScreen(
         // Rocket state — iOS RocketStateView twin (#382 display mapping:
         // READY and PRELAUNCH both render "PRELAUNCH" with a readiness badge
         // carrying the real distinction; raw wire strings untouched).
-        RocketStateBanner(telemetry)
+        //
+        // Hidden ONLY for a syncing base station that has caught no rocket —
+        // see showStateBanner for both meanings of SYNCING and why collapsing
+        // them broke the iOS twin.
+        if (showStateBanner(dataStatus, session.isBaseStation)) {
+            RocketStateBanner(telemetry)
+        }
 
         // Pre-flight checklist advisory: one quiet progress line for the
         // active rocket, right under the state banner.  Advisory only — it

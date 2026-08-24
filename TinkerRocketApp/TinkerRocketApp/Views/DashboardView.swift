@@ -39,6 +39,52 @@ enum DashboardSheet: Identifiable {
     }
 }
 
+/// What a dashboard row is allowed to draw for a given telemetry `DataStatus`.
+///
+/// SYNCING carries TWO different meanings on the wire, and that is the whole
+/// reason this policy exists as one named place rather than an inline `!=`:
+///
+///  * base-station path (#95) — "no rocket caught yet".  The telemetry struct
+///    is zero-initialised, so every VALUE is a lie: 0 m altitude, 0 continuity,
+///    a fabricated state.  Those must be hidden.
+///  * direct path (#831) — "connected to the FC, but it has not sent its first
+///    NonSensorData frame yet", i.e. it is still inside setup_fc().  Here the
+///    state and the boot-progress line are the ONLY real information we have,
+///    and they are exactly what the operator is waiting on.
+///
+/// One gate for both meanings hid the state banner for the whole ~25 s FC boot.
+enum DashboardVisibility {
+
+    /// Altitude, GNSS, continuity, sensor health — anything whose number would
+    /// be fabricated when the stream has not synced.  Hidden while syncing.
+    static func showValueViews(_ status: TelemetryData.DataStatus) -> Bool {
+        status != .syncing
+    }
+
+    /// The state banner and its FC boot-progress line.
+    ///
+    /// Shown whenever the state is REPORTED rather than fabricated, which is
+    /// what separates the two meanings of SYNCING:
+    ///
+    ///  * direct — always show.  SYNCING means the FC has not spoken yet, and
+    ///    the banner plus its boot line is the only news there is.  This is the
+    ///    case that regressed: the entire ~25 s FC boot rendered nothing.
+    ///  * base station, syncing — hide.  No rocket has ever been caught, so the
+    ///    BS pushes a zero-init LoRaDataSI whose state field is 0, and 0 is
+    ///    INITIALIZATION (RocketComputerTypes.h).  Rendering that would invent
+    ///    a rocket sitting on the pad, which is the exact thing #95 and the
+    ///    firmware's own comment (base_station/main/main.cpp) set out to avoid.
+    ///
+    /// Android twin: `showStateBanner` in core/protocol/DashboardVisibility.kt.
+    /// It had drawn RocketStateBanner unconditionally, so it never hid the boot
+    /// — but for the same reason it DID render the phantom pad rocket; both
+    /// sides now share this rule.
+    static func showStateBanner(_ status: TelemetryData.DataStatus,
+                                isBaseStation: Bool) -> Bool {
+        !(isBaseStation && status == .syncing)
+    }
+}
+
 struct DashboardView: View {
     @StateObject private var fleet = BLEFleet()
     @StateObject private var flightAnnouncer = FlightAnnouncer()
@@ -633,13 +679,14 @@ struct ConnectedDashboardView: View {
             // operator doesn't see the empty zero-init values rendered as
             // a fake "INIT" rocket.  When STALE we keep the views visible
             // but dim them and show a banner with the age.  Direct rocket
-            // connections always come through as .live (no banner, no dim).
+            // connections are NOT always .live: #831 reports SYNCING until the
+            // first FC NonSensorData frame, and STALE past FC_FRAME_STALE_MS.
             // #390: effectiveDataStatus overlays app-computed staleness of
             // the FOCUSED rocket — with the relay mirror pinned, the BS's
             // re-push may describe a different rocket and get dropped, so
             // the frame-carried status alone could freeze at .live.
             let dataStatus = device.effectiveDataStatus
-            let showRocketViews = dataStatus != .syncing
+            let showRocketViews = DashboardVisibility.showValueViews(dataStatus)
             let staleOpacity: Double = dataStatus == .stale ? 0.5 : 1.0
 
             if device.isBaseStation && dataStatus != .live {
@@ -647,7 +694,15 @@ struct ConnectedDashboardView: View {
                                       ageMs: device.effectiveDataAgeMs)
             }
 
-            if showRocketViews {
+            // NOT behind showRocketViews — see DashboardVisibility for why.
+            // Short version: showRocketViews hides VALUES while syncing, which
+            // is right, but the state banner is what EXPLAINS a syncing stream.
+            // Gating it too meant the whole ~25 s FC boot rendered nothing, and
+            // the boot-progress line added for exactly that window (fed by "bs")
+            // could never appear.  The state reappeared only at READY, which
+            // displays as "PRELAUNCH" — so the boot looked like it skipped INIT.
+            if DashboardVisibility.showStateBanner(dataStatus,
+                                                   isBaseStation: device.isBaseStation) {
                 RocketStateView(state: device.telemetry.state,
                                 hopBadge: hopBadge(
                                     isBaseStation: device.isBaseStation,
