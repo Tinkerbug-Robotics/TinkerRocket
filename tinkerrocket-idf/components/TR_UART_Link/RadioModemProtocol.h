@@ -145,6 +145,15 @@ struct __attribute__((packed)) ModemIdentityData
 };
 static_assert(sizeof(ModemIdentityData) == 44, "ModemIdentityData must be 44 bytes");
 
+// ModemStatusData::config_ok values.  0 stays UNKNOWN forever — it is what a
+// pre-#835 modem image leaves in the byte it knew as `reserved[0]`.
+enum CfgAck : uint8_t
+{
+    CFG_ACK_UNKNOWN  = 0,
+    CFG_ACK_APPLIED  = 1,
+    CFG_ACK_REJECTED = 2,
+};
+
 struct __attribute__((packed)) ModemStatusData
 {
     uint32_t uptime_ms;
@@ -163,7 +172,21 @@ struct __attribute__((packed)) ModemStatusData
     float last_snr_db;
     float current_freq_mhz;
     uint8_t current_sf;
-    uint8_t reserved[3];
+    // #835 item 7: did the LAST SET_CONFIG actually take?  radio_enabled only
+    // says the radio is alive, which it still is after a FAILED reconfigure()
+    // — TR_LoRa_Comms rolls back to the previous modulation and stays up.  A
+    // host that treats the STATUS ack as "config applied" then caches a
+    // modulation that is not on the air and writes it to NVS.
+    //
+    // TRI-STATE, and 0 is deliberately NOT "rejected": this byte was
+    // `reserved[0]` in earlier modem images, which zero-fill it.  Treating 0
+    // as a rejection would make every config from an older daughterboard
+    // fail.  Hosts fall back to comparing current_freq_mhz/current_sf when
+    // they see UNKNOWN.  Non-config STATUS frames report the last
+    // SET_CONFIG's result, so a periodic poll still tells the truth.
+    uint8_t config_ok;   // CfgAck: 0 = unknown (legacy image), 1 = applied,
+                         //         2 = rejected / rolled back
+    uint8_t reserved[2];
 };
 static_assert(sizeof(ModemStatusData) == 52, "ModemStatusData must be 52 bytes");
 

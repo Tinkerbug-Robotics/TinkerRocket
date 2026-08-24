@@ -1,3 +1,5 @@
+#include "modem_config_ack.h"
+#include <math.h>
 #include "UartModemBackend.h"
 
 #include <cstring>
@@ -202,6 +204,28 @@ bool UartModemBackend::pushConfig(float freq_mhz, uint8_t sf, float bw_khz,
                 ESP_LOGE(TAG, "modem alive but RADIO DEAD (STATUS ack has "
                               "radio_enabled=0 — LLCC68 init failed on the "
                               "daughterboard) — rejecting config");
+                return false;
+            }
+            // #835 item 7: radio_enabled only proves the radio is ALIVE.
+            // A failed reconfigure() rolls TR_LoRa_Comms back to the previous
+            // modulation and leaves it up, so the old code cached — and the
+            // OC wrote to NVS — a modulation that was never on the air.  Next
+            // boot then begin()s the illegal pair and disables the radio.
+            // The rule itself lives in modem_config_ack.h so it can be unit
+            // tested without a modem; see test_modem_config_ack.cpp.
+            if (!modem_config_ack::accepted(
+                    modem_config_ack::Ack{last_status_.config_ok,
+                                          last_status_.current_freq_mhz,
+                                          last_status_.current_sf},
+                    modem_config_ack::Want{freq_mhz, sf}))
+            {
+                ESP_LOGE(TAG, "config NOT applied: asked %.3f MHz SF%u, modem "
+                              "reports %.3f MHz SF%u (config_ok=%u) — radio is "
+                              "on its previous modulation; not caching",
+                         (double)freq_mhz, (unsigned)sf,
+                         (double)last_status_.current_freq_mhz,
+                         (unsigned)last_status_.current_sf,
+                         (unsigned)last_status_.config_ok);
                 return false;
             }
             cfg_freq_mhz_ = freq_mhz;

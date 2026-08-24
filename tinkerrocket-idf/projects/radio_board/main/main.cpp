@@ -271,6 +271,10 @@ static void sendIdentity(uint8_t msg_type)
                         sizeof(id));
 }
 
+// #835 item 7: result of the most recent SET_CONFIG.  Starts true so a STATUS
+// polled before any config is not reported as a failure.
+static bool last_set_config_ok = true;
+
 static void sendStatus()
 {
     TR_LoRa_Comms::Stats rs = {};
@@ -295,6 +299,7 @@ static void sendStatus()
     st.last_snr_db = rs.last_snr;
     st.current_freq_mhz = radio.currentFrequencyMHz();
     st.current_sf = radio.currentSpreadingFactor();
+    st.config_ok = last_set_config_ok ? CFG_ACK_APPLIED : CFG_ACK_REJECTED;
     uart_link.sendFrame(MSG_STATUS, reinterpret_cast<const uint8_t*>(&st),
                         sizeof(st));
 }
@@ -364,6 +369,8 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
     }
     RadioConfigData d;
     memcpy(&d, payload, sizeof(d));
+    // #835 item 7: tracks whether this SET_CONFIG actually reached the air.
+    bool cfg_ok = true;
 
     // Clamp to module capability — hosts should already respect IDENTITY,
     // but a matched-pair mismatch must degrade, not transmit out of spec.
@@ -377,6 +384,7 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
         // Radio never came up (or wasn't wired at boot) — full begin(), which
         // applies every field including preamble/flags.
         radio_up = radio.begin(radioConfigFromMsg(d), config::DEBUG);
+        cfg_ok = radio_up;
     }
     else
     {
@@ -389,15 +397,37 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
         if (radio.reconfigure(d.freq_mhz, d.spreading_factor, d.bandwidth_khz,
                               d.coding_rate, d.tx_power_dbm))
         {
-            (void)radio.applyFrameParams(
+            // #835 item 7: the frame-format half counts too.  A host whose
+            // preamble silently stayed at our boot default has an airtime
+            // model that counts symbols never sent, so a failure here is a
+            // config failure, not a cosmetic one.
+            cfg_ok = radio.applyFrameParams(
                 d.preamble_len, (d.flags & CFG_FLAG_CRC_ON) != 0,
                 (d.flags & CFG_FLAG_RX_BOOSTED_GAIN) != 0,
                 (d.flags & CFG_FLAG_SYNCWORD_PRIVATE) != 0);
+        }
+        else
+        {
+            // reconfigure() rolled the radio back to the PREVIOUS modulation
+            // and left it up.  Without this the STATUS below would ack with
+            // radio_enabled=1 and the host would cache a modulation that is
+            // not on the air (#835 item 7).
+            cfg_ok = false;
         }
     }
     if (radio_up && d.start_rx)
     {
         radio.startReceive();
+    }
+    // #835 item 7: publish the result BEFORE the ack, so the STATUS the host
+    // is waiting on carries this config's outcome rather than the previous.
+    last_set_config_ok = cfg_ok;
+    if (!cfg_ok)
+    {
+        ESP_LOGW(TAG, "SET_CONFIG REJECTED (%.3f MHz SF%u BW%u CR%u) — radio "
+                      "rolled back; acking with config_ok=0",
+                 (double)d.freq_mhz, (unsigned)d.spreading_factor,
+                 (unsigned)d.bandwidth_khz, (unsigned)d.coding_rate);
     }
     sendStatus();  // config paths always get a status echo as the ack
 }
