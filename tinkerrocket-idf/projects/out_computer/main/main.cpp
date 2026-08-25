@@ -60,6 +60,7 @@ static inline std::string itos(int v)
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
 #include "dedup_reboot_policy.h"
+#include "cmd_queue_dedupe_policy.h"  // #837 item 11: pyro tests key on channel
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -493,9 +494,12 @@ static volatile uint8_t pending_out_command = 0U;  // command currently being SE
 // SNAPSHOT of their config payload) now queue FIFO and are served one at a
 // time:
 //   - snapshot-at-enqueue: a later staging can't clobber an in-flight payload
-//   - dedupe by command id: a re-push replaces the queued payload in place
+//   - dedupe by OPERATION: a re-push replaces the queued payload in place
 //     (latest wins) instead of flooding the queue — self-applying settings
-//     sliders stay bounded
+//     sliders stay bounded. For most commands the operation is just the
+//     command id, because the payload IS the command. The two pyro tests
+//     carry a channel byte instead, so their key is (id, channel) — see
+//     cmd_queue_dedupe_policy.h and #837 item 11.
 //   - PYRO_FIRE_TEST / PYRO_CONT_TEST jump to the FRONT: a manual pyro test
 //     keeps its immediacy instead of waiting ~15 s behind a profile sync
 //   - one idle (cmd=0) poll is served between commands so the FC's dedup
@@ -517,7 +521,13 @@ struct QueuedCommand
     uint8_t cfg_len;
     uint8_t cfg[sizeof(RollProfileData)];
 };
-static constexpr size_t CMD_QUEUE_DEPTH = 16;   // sync burst is ~13-15 commands
+// Sync burst is ~13-15 commands. #837 item 11 raised this from 16: the two
+// pyro tests are now keyed by channel, so checking all four continuity
+// channels can hold 4 slots where the id-only dedupe collapsed them into 1.
+// 15 + 4 = 19 would have overflowed a 16-deep queue and dropped a pyro test
+// on the floor (logged, but invisible to the operator) if a profile sync were
+// still draining. Costs 4 x sizeof(QueuedCommand) = 320 B of static RAM.
+static constexpr size_t CMD_QUEUE_DEPTH = 20;
 static QueuedCommand cmd_queue[CMD_QUEUE_DEPTH];
 static size_t cmd_queue_head  = 0;   // index of next entry to pop
 static size_t cmd_queue_count = 0;
@@ -555,12 +565,21 @@ static void setPendingCommandWithConfig(uint8_t cmd, uint8_t msg_type,
     const bool front = (cmd == PYRO_FIRE_TEST || cmd == PYRO_CONT_TEST);
 
     portENTER_CRITICAL(&cmd_queue_mux);
-    // Dedupe: replace the payload of an already-queued entry with the same
-    // command id (latest value wins, position preserved).
+    // Dedupe: replace the payload of an already-queued entry describing the
+    // SAME OPERATION (latest value wins, position preserved).
+    //
+    // #837 item 11: "same operation" is not "same command id". The two pyro
+    // tests carry their channel in the payload, so matching on the id alone
+    // merged a queued test for one channel into a request for another and
+    // silently lost the first. cmdQueueSameOperation() folds the channel byte
+    // into the key for exactly those commands; a repeat tap on the same
+    // channel still collapses, which is what the flood protection is for.
+    const uint8_t entry_sel = (entry.cfg_len > 0) ? entry.cfg[0] : 0U;
     for (size_t i = 0; i < cmd_queue_count; i++)
     {
         QueuedCommand& q = cmd_queue[(cmd_queue_head + i) % CMD_QUEUE_DEPTH];
-        if (q.cmd == cmd)
+        const uint8_t q_sel = (q.cfg_len > 0) ? q.cfg[0] : 0U;
+        if (cmdQueueSameOperation(q.cmd, q_sel, entry.cmd, entry_sel))
         {
             q.cfg_type = entry.cfg_type;
             q.cfg_len  = entry.cfg_len;
