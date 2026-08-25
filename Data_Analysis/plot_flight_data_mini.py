@@ -125,7 +125,7 @@ MSG_EXPECTED_LEN = {
     MSG_END_FLIGHT:        None,
     MSG_LOG_BUFFER_STATS:  28,    # LogBufferStatsData
     MSG_LORA_UPLINK:       13,   # sizeof(LoRaUplinkData)
-    MSG_LORA:              65,  # sizeof(LoRaData) — #572: was a stale 49; sweep on struct-size changes (#227)
+    MSG_LORA:              (22, 55),  # #850: SLOW / FAST frames; sweep on struct-size changes (#227)
     MSG_GUIDANCE_TELEM:    (15, 19),  # legacy (mislabeled) / current (+fin cmds)
 }
 

@@ -16,7 +16,10 @@ TEST(RocketComputerTypes, StructSizes_MatchConstants) {
     EXPECT_EQ(SIZE_OF_MMC5983MA_DATA,  sizeof(MMC5983MAData));
     EXPECT_EQ(SIZE_OF_POWER_DATA,      sizeof(POWERData));
     EXPECT_EQ(SIZE_OF_NON_SENSOR_DATA, sizeof(NonSensorData));
-    EXPECT_EQ(SIZE_OF_LORA_DATA,       sizeof(LoRaData));
+    EXPECT_EQ(SIZE_OF_LORA_FAST,       sizeof(LoRaFastData));
+    EXPECT_EQ(SIZE_OF_LORA_SLOW,       sizeof(LoRaSlowData));
+    // The airtime budget is the LARGER frame, always (#850).
+    EXPECT_EQ(SIZE_OF_LORA_BUDGET,     SIZE_OF_LORA_FAST);
 }
 
 TEST(RocketComputerTypes, KnownSizes) {
@@ -32,7 +35,9 @@ TEST(RocketComputerTypes, KnownSizes) {
     // two sizes.
     EXPECT_EQ(SIZE_OF_POWER_DATA_V1,  10u);
     EXPECT_EQ(sizeof(NonSensorData),  50u);  // #529: +uint16 ekf_ticks (2 B)
-    EXPECT_EQ(sizeof(LoRaData),       65u);  // #191: +ENU vel +flags2, -derived Euler/speed
+    EXPECT_EQ(sizeof(LoRaFrameHeader), 7u);   // #850: shared prefix, both frames
+    EXPECT_EQ(sizeof(LoRaFastData),   55u);  // #850: 5-of-6 slots
+    EXPECT_EQ(sizeof(LoRaSlowData),   22u);  // #850: 1-of-6 slots
     EXPECT_EQ(sizeof(LoRaUplinkData), 13u);  // uplink RSSI/SNR log record (0xF9)
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
@@ -242,7 +247,8 @@ TEST(RocketComputerTypes, MaxPayload_CoversAllTypes) {
     EXPECT_GE(MAX_PAYLOAD, sizeof(MMC5983MAData));
     EXPECT_GE(MAX_PAYLOAD, sizeof(POWERData));
     EXPECT_GE(MAX_PAYLOAD, sizeof(NonSensorData));
-    EXPECT_GE(MAX_PAYLOAD, sizeof(LoRaData));
+    EXPECT_GE(MAX_PAYLOAD, sizeof(LoRaFastData));
+    EXPECT_GE(MAX_PAYLOAD, sizeof(LoRaSlowData));
     EXPECT_GE(MAX_PAYLOAD, sizeof(RollProfileData));
 
     // MAX_FRAME = 4 (preamble) + 1 (type) + 1 (len) + MAX_PAYLOAD + 2 (CRC16)
@@ -1663,7 +1669,10 @@ namespace fhss150 {
 // quantization).  Growing the frame has a real regulatory cost — at 73 B
 // the SF10/BW250 long-range rung crosses the FCC 400 ms occupancy line —
 // so the table below fails deliberately if it changes.
-constexpr size_t  kTelemFrameLen = SIZE_OF_LORA_DATA;
+// #850: budget against the LARGER of the two frames. Sizing the schedule
+// on the slow one would under-count every fast frame and walk the link
+// straight into the occupancy limit.
+constexpr size_t  kTelemFrameLen = SIZE_OF_LORA_BUDGET;
 constexpr uint8_t kCr            = LORA_FACTORY_RENDEZVOUS_CR;  // 4/5 on both ends
 // = out_computer config.h LORA_TX_RATE_HZ.  Telemetry is an unconditional
 // 2 Hz in every transmitting state.  If the rate ever rises, re-derive the
@@ -1683,12 +1692,16 @@ inline uint32_t fccWindowSec(float bw_khz) {
 
 TEST(LoraTimeOnAir, PinsTheNumbersTheDwellTableRestsOn) {
     using namespace fhss150;
-    // Semtech AN1200.13 at the production frame (66 B, preamble 12, CR4/5).
-    EXPECT_NEAR(telemToaMs(8,  250.0f), 112.0, 2.0);
-    EXPECT_NEAR(telemToaMs(9,  250.0f), 203.0, 2.0);
-    // The long-range rung: 14 ms under the FCC 400 ms occupancy line.
-    EXPECT_NEAR(telemToaMs(10, 250.0f), 386.0, 3.0);
-    // SF11 @ BW250 cannot fit even one packet in the budget.
+    // Semtech AN1200.13 at the production FAST frame (55 B since #850 split
+    // the downlink; was 65 B, and the pinned numbers below dropped with it).
+    EXPECT_NEAR(telemToaMs(8,  250.0f), 102.0, 2.0);   // was 112
+    EXPECT_NEAR(telemToaMs(9,  250.0f), 183.0, 2.0);   // was 203
+    // The long-range rung. This is the number the whole frame budget exists to
+    // protect: at 65 B it was 386 ms against a 390 ms dwell budget — 4 ms of
+    // margin, which is why the #150 doc says frame growth "breaks this first".
+    // The two-frame split bought back 41 ms.
+    EXPECT_NEAR(telemToaMs(10, 250.0f), 345.0, 3.0);   // was 386
+    // SF11 @ BW250 still cannot fit even one packet in the budget.
     EXPECT_GT(telemToaMs(11, 250.0f), LORA_HOP_DWELL_BUDGET_MS);
 }
 
@@ -1700,11 +1713,17 @@ TEST(LoraHopDwell, AdaptiveTable) {
     // regulatory decisions that must be made consciously.
     struct Row { uint8_t sf; float bw; uint8_t dwell; };
     const Row rows[] = {
-        {7,  250.0f, 4}, {8,  250.0f, 3}, {9,  250.0f, 1},
+        // #850 moved four of these rows, all in the permissive direction,
+        // because the FAST frame is 55 B where the single frame was 65:
+        //   SF9/BW250  1 -> 2      SF9/BW500  3 -> 4
+        //   SF9/BW125  0 -> 1      (hopping newly PERMITTED at that rung)
+        // SF10/BW250 keeps dwell 1 but its per-visit occupancy falls 386 ->
+        // 345 ms, which is the margin the split was really for.
+        {7,  250.0f, 4}, {8,  250.0f, 3}, {9,  250.0f, 2},
         {10, 250.0f, 1},                       // the +5 dB long-range rung
         {11, 250.0f, 0}, {12, 250.0f, 0},
-        {7,  125.0f, 3}, {8,  125.0f, 1}, {9,  125.0f, 0}, {10, 125.0f, 0},
-        {7,  500.0f, 4}, {8,  500.0f, 4}, {9,  500.0f, 3},
+        {7,  125.0f, 3}, {8,  125.0f, 1}, {9,  125.0f, 1}, {10, 125.0f, 0},
+        {7,  500.0f, 4}, {8,  500.0f, 4}, {9,  500.0f, 4},
         {10, 500.0f, 2}, {11, 500.0f, 1}, {12, 500.0f, 0},
     };
     for (const auto& r : rows) {

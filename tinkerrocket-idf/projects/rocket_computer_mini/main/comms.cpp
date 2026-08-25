@@ -451,7 +451,7 @@ static bool lora_in_rx_mode = false;
 // is not permitted at this (sf, bw, cr) and every hop entry point refuses.
 static inline uint8_t currentHopDwell()
 {
-    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_DATA, lora_cr);
+    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_BUDGET, lora_cr);
 }
 
 // #150: effective skip mask = cmd-15 noise mask (when valid for the current
@@ -1045,8 +1045,13 @@ static void serviceTelemFromFlight()
 // ==========================================================================
 // SECTION: LoRa payload build + TX pacing (OC L3134-3454)
 // ==========================================================================
-static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t seq)
+// #850: builds ONE of the two downlink frames — see the OC twin for the full
+// rationale. The mini has no TPS22811 current monitors, so the slow frame's
+// cam_ma / servo_ma go out as 0.
+static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t seq,
+                             uint8_t frame_type, size_t& out_len)
 {
+    out_len = 0;
     if (out_payload == nullptr)
     {
         return false;
@@ -1190,7 +1195,16 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
     lora.rssi = 0.0f;
     lora.snr = 0.0f;
 
-    sensor_converter.packLoRaData(lora, out_payload);
+    if (frame_type == LORA_FRAME_SLOW)
+    {
+        sensor_converter.packLoRaSlowBytes(lora, out_payload);
+        out_len = SIZE_OF_LORA_SLOW;
+    }
+    else
+    {
+        sensor_converter.packLoRaFastBytes(lora, out_payload);
+        out_len = SIZE_OF_LORA_FAST;
+    }
     return true;
 }
 
@@ -1235,18 +1249,22 @@ static void serviceLoRa()
         return;
     }
 
-    uint8_t payload[SIZE_OF_LORA_DATA] = {0};
-    if (!buildLoRaPayload(payload, lora_tx_seq))
+    // #850: five FAST then one SLOW, keyed off the seq that goes on the wire.
+    uint8_t payload[SIZE_OF_LORA_BUDGET] = {0};
+    size_t  payload_len = 0;
+    if (!buildLoRaPayload(payload, lora_tx_seq, loraFrameTypeForSlot(lora_tx_seq), payload_len))
     {
         return;
     }
     last_lora_tx_ms = now_ms;
     lora_in_rx_mode = false;  // Exiting RX for TX
-    if (lora_comms.send(payload, sizeof(payload)))
+    if (lora_comms.send(payload, payload_len))
     {
         lora_tx_ok++;
 
-        // Persist the exact 65 B that went on the air as a LORA_MSG (0xF1)
+        // Persist the exact bytes that went on the air as a LORA_MSG (0xF1)
+        // record — 55 B (FAST) or 22 B (SLOW) since #850, hence payload_len
+        // rather than sizeof(payload).
         // record — the rocket-side half of the per-packet loss measurement
         // (2026-08-08 Kaua'i range test).  Logged AFTER send() returns true
         // and BEFORE lora_tx_seq++ so the record holds the seq actually
@@ -1256,7 +1274,7 @@ static void serviceLoRa()
             uint8_t lora_frame[MAX_FRAME];
             size_t  lora_frame_len = 0;
             if (TR_I2C_Interface::packMessage(LORA_MSG,
-                                              payload, sizeof(payload),
+                                              payload, payload_len,
                                               lora_frame, sizeof(lora_frame),
                                               lora_frame_len))
             {
@@ -2209,14 +2227,16 @@ static void printLoRaPayloadDebug()
         return;
     }
 
-    uint8_t payload[SIZE_OF_LORA_DATA] = {0};
-    if (!buildLoRaPayload(payload, lora_tx_seq))
+    // Always FAST: a SLOW frame would leave most of the printed fields zero.
+    uint8_t payload[SIZE_OF_LORA_BUDGET] = {0};
+    size_t  payload_len = 0;
+    if (!buildLoRaPayload(payload, lora_tx_seq, LORA_FRAME_FAST, payload_len))
     {
         return;
     }
 
     LoRaDataSI decoded = {};
-    sensor_converter.unpackLoRa(payload, decoded);
+    sensor_converter.unpackLoRaFastBytes(payload, decoded);
     ESP_LOGI("LORA", "LoRa tx sats/pdop=%u/%.1f | ecef(m)=%.0f,%.0f,%.0f | alt/rate/max/mspd=%.1f/%.1f/%.1f/%.1f",
                   (unsigned)decoded.num_sats,
                   (double)decoded.pdop,

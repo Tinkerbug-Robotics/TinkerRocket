@@ -93,10 +93,22 @@ public:
     void packPowerData(const POWERDataSI& in, POWERData& out);
 
     // --- Pack and Unpack LoRa Data
-    void packLoRa(const LoRaDataSI& in, LoRaData& out);
-    void unpackLoRa(const LoRaData& in, LoRaDataSI& out);
-    void packLoRaData(const LoRaDataSI& in, uint8_t out_bytes[SIZE_OF_LORA_DATA]);
-    void unpackLoRa(const uint8_t in_bytes[SIZE_OF_LORA_DATA], LoRaDataSI& out);
+    // #850: the downlink is two interleaved frames. LoRaDataSI is the whole
+    // picture; each frame carries a subset, and each unpacker writes ONLY the
+    // fields its frame contains — never clearing the rest — so a receiver can
+    // hold one accumulator per rocket and forward-fill across frame types.
+    void packLoRaHeader(const LoRaDataSI& in, LoRaFrameHeader& out, uint8_t frame_type);
+    void unpackLoRaHeader(const LoRaFrameHeader& in, LoRaDataSI& out);
+
+    void packLoRaFast(const LoRaDataSI& in, LoRaFastData& out);
+    void unpackLoRaFast(const LoRaFastData& in, LoRaDataSI& out);
+    void packLoRaSlow(const LoRaDataSI& in, LoRaSlowData& out);
+    void unpackLoRaSlow(const LoRaSlowData& in, LoRaDataSI& out);
+
+    void packLoRaFastBytes(const LoRaDataSI& in, uint8_t out_bytes[SIZE_OF_LORA_FAST]);
+    void packLoRaSlowBytes(const LoRaDataSI& in, uint8_t out_bytes[SIZE_OF_LORA_SLOW]);
+    void unpackLoRaFastBytes(const uint8_t in_bytes[SIZE_OF_LORA_FAST], LoRaDataSI& out);
+    void unpackLoRaSlowBytes(const uint8_t in_bytes[SIZE_OF_LORA_SLOW], LoRaDataSI& out);
                                
     
 private:

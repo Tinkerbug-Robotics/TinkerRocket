@@ -388,36 +388,30 @@ void SensorConverter::convertNonSensorData(const NonSensorData& in, NonSensorDat
 }
 
 // --- LoRa pack/unpack ---
-void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
+// ---------------------------------------------------------------------------
+//  LoRa codec: two frames, one SI-domain model (#850)
+// ---------------------------------------------------------------------------
+// LoRaDataSI is the whole telemetry picture. Each frame carries a SUBSET of it,
+// and each unpacker writes ONLY the fields its frame actually contains — it
+// never zeroes the rest. That is what lets the base station keep one
+// accumulator per rocket and forward-fill: a slow frame updates the battery
+// and leaves the position alone, a fast frame the reverse, and every received
+// frame yields a complete CSV row.
+//
+// Corollary: do not "tidy" an unpacker by clearing fields it does not carry.
+// That would erase the other frame's contribution on every alternate packet.
+
+void SensorConverter::packLoRaHeader(const LoRaDataSI& in, LoRaFrameHeader& out,
+                                     uint8_t frame_type)
 {
-    // Routing header
     out.network_id       = in.network_id;
     out.rocket_id        = in.rocket_id;
     out.next_channel_idx = in.next_channel_idx;
     out.seq              = in.seq;
+    out.ver_type         = loraVerType(LORA_PROTO_VERSION, frame_type);
 
-    // num_sats (bits 0-5) + sim_active (bit 6) + logging_active (bit 7).
-    // Clamp is 63, not 127: bit 6 is now LORA_SIM_BIT (#835 item 9).  Real
-    // constellations top out around 40 sats, so 6 bits still has headroom.
-    out.num_sats = (uint8_t)lroundi32(clampf((float)in.num_sats, 0.f, 63.f));
-    if (in.sim_active)     out.num_sats |= LORA_SIM_BIT;
-    if (in.logging_active) out.num_sats |= LORA_LOGGING_BIT;
-
-    // pdop -> u8 0..100
-    out.pdop_u8 = (uint8_t)lroundi32(clampf(in.pdop, 0.f, 100.f));
-
-    // ECEF position (int24 meters)
-    double ex = clampd(in.ecef_x, -7000000.0, 7000000.0);
-    double ey = clampd(in.ecef_y, -7000000.0, 7000000.0);
-    double ez = clampd(in.ecef_z, -7000000.0, 7000000.0);
-    out.ecef_x_m = i24_from_i32(lroundi32(ex));
-    out.ecef_y_m = i24_from_i32(lroundi32(ey));
-    out.ecef_z_m = i24_from_i32(lroundi32(ez));
-
-    // horizontal_accuracy -> u8 0..100
-    out.hacc_u8 = (uint8_t)lroundi32(clampf(in.horizontal_accuracy, 0.f, 100.f));
-
-    // flags + rocket_state in 1 byte
+    // flags + rocket_state in 1 byte. Shared by both frames so the state is
+    // never more than one packet stale, whichever frame arrives.
     uint8_t packed = 0;
     if (in.launch_flag)       packed |= LORA_LAUNCH;
     if (in.vel_u_apogee_flag) packed |= LORA_VEL_APOGEE;
@@ -431,13 +425,48 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     uint8_t state = (uint8_t)(in.rocket_state > 7 ? 7 : in.rocket_state);
     packed |= (state & 0x07u) << LORA_STATE_SHIFT; // b4..b6
     out.flags_state = packed;
+}
 
-    // acceleration (×10) → i16. #572: clamp at the WIRE max (±3276.7, same
-    // bound as enc_gyro/enc_vel_dms), not the old ±400 m/s² (~40.8 g) which
-    // silently flat-topped telemetry/CSV traces on any boost above ~40 g even
-    // though the high-g accelerometer reads to 256 g (~2511 m/s² — inside the
-    // wire range, so the sensor ceiling is the real limit). Saturation only
-    // ever occurs above int16 capacity; no wire-format change.
+void SensorConverter::unpackLoRaHeader(const LoRaFrameHeader& in, LoRaDataSI& out)
+{
+    out.network_id       = in.network_id;
+    out.rocket_id        = in.rocket_id;
+    out.next_channel_idx = in.next_channel_idx;
+    out.seq              = in.seq;
+
+    out.launch_flag       = (in.flags_state & LORA_LAUNCH) != 0;
+    out.vel_u_apogee_flag = (in.flags_state & LORA_VEL_APOGEE) != 0;
+    out.alt_apogee_flag   = (in.flags_state & LORA_ALT_APOGEE) != 0;
+    out.alt_landed_flag   = (in.flags_state & LORA_ALT_LANDED) != 0;
+    out.camera_recording  = (in.flags_state & LORA_CAMERA_REC) != 0;
+    out.rocket_state      = (in.flags_state >> LORA_STATE_SHIFT) & 0x07u;
+}
+
+void SensorConverter::packLoRaFast(const LoRaDataSI& in, LoRaFastData& out)
+{
+    packLoRaHeader(in, out.hdr, LORA_FRAME_FAST);
+
+    // num_sats (bits 0-5) + sim_active (bit 6) + logging_active (bit 7).
+    // Clamp is 63, not 127: bit 6 is LORA_SIM_BIT (#835 item 9). Real
+    // constellations top out around 40 sats, so 6 bits still has headroom.
+    out.num_sats = (uint8_t)lroundi32(clampf((float)in.num_sats, 0.f, 63.f));
+    if (in.sim_active)     out.num_sats |= LORA_SIM_BIT;
+    if (in.logging_active) out.num_sats |= LORA_LOGGING_BIT;
+
+    out.pdop_u8 = (uint8_t)lroundi32(clampf(in.pdop, 0.f, 100.f));
+    out.hacc_u8 = (uint8_t)lroundi32(clampf(in.horizontal_accuracy, 0.f, 100.f));
+
+    // ECEF position (int24 meters)
+    double ex = clampd(in.ecef_x, -7000000.0, 7000000.0);
+    double ey = clampd(in.ecef_y, -7000000.0, 7000000.0);
+    double ez = clampd(in.ecef_z, -7000000.0, 7000000.0);
+    out.ecef_x_m = i24_from_i32(lroundi32(ex));
+    out.ecef_y_m = i24_from_i32(lroundi32(ey));
+    out.ecef_z_m = i24_from_i32(lroundi32(ez));
+
+    // acceleration (x10) -> i16. #572: clamp at the WIRE max (+/-3276.7), not
+    // the old +/-400 m/s^2 (~40.8 g), which silently flat-topped any boost
+    // above ~40 g even though the high-g accelerometer reads to 256 g.
     auto enc_acc = [](float a)->int16_t {
         a = SensorConverter::clampf(a, -3276.7f, 3276.7f);
         return (int16_t)lroundf(a * 10.f);
@@ -446,12 +475,9 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     out.acc_y_x10 = enc_acc(in.acc_y);
     out.acc_z_x10 = enc_acc(in.acc_z);
 
-    // gyro (×10) → i16. Clamp to ±3276.7, NOT the sensor's ±4500 dps FS: ×10
-    // into an int16 tops out at 32767 = 3276.7 dps, so the old ±4500 bound let
-    // any |rate| > 3276.7 dps (~546 rpm) overflow and wrap to a sign-flipped
-    // value (#563). Matches enc_vel_dms below (same ×10 int16 wire field). This
-    // is the LoRa telemetry packer only — FC control reads local gyro dps and is
-    // unaffected; a faster spin now saturates at ±3276.7 instead of wrapping.
+    // gyro (x10) -> i16. Clamp to +/-3276.7, NOT the sensor's +/-4500 dps FS:
+    // x10 into an int16 tops out at 3276.7 dps, so the old bound let any
+    // |rate| > 3276.7 dps (~546 rpm) overflow and wrap sign-flipped (#563).
     auto enc_gyro = [](float g)->int16_t {
         g = SensorConverter::clampf(g, -3276.7f, 3276.7f);
         return (int16_t)lroundf(g * 10.f);
@@ -460,57 +486,8 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     out.gyro_y_x10 = enc_gyro(in.gyro_y);
     out.gyro_z_x10 = enc_gyro(in.gyro_z);
 
-    // temperature ×10 → i16
-    {
-        float t = clampf(in.temp, -40.f, 200.f);
-        out.temp_x10 = (int16_t)lroundf(t * 10.f);
-    }
-
-    // voltage -> u8 2..10V
-    out.voltage_u8 = encodeVoltage_2_10_01(in.voltage);
-
-    // current mA → i16
-    {
-        float c = clampf(in.current, -10000.f, 10000.f);
-        out.current_ma = (int16_t)lroundf(c);
-    }
-
-    // soc % → i8
-    {
-        float s = clampf(in.soc, -25.f, 125.f);
-        int val = (int)lroundf(s);
-        if (val < -128) val = -128;
-        if (val > 127)  val = 127;
-        out.soc_i8 = (int8_t)val;
-    }
-
-    // pressure_alt → i24 (meters)
-    {
-        float pa = SensorConverter::clampf(in.pressure_alt, -1000.f, 100000.f);
-        out.pressure_alt_m = i24_from_i32(lroundi32(pa));
-    }
-
-    // altitude_rate → i16
-    {
-        float ar = clampf(in.altitude_rate, -2000.f, 2000.f);
-        out.altitude_rate = (int16_t)lroundf(ar);
-    }
-
-    // max_alt → i24
-    {
-        float ma = SensorConverter::clampf(in.max_alt, -1000.f, 400000.f);
-        out.max_alt_m = i24_from_i32(lroundi32(ma));
-    }
-
-    // max_speed → i16
-    {
-        float ms = clampf(in.max_speed, 0.f, 4000.f);
-        out.max_speed = (int16_t)lroundf(ms);
-    }
-
-    // quaternion × 10000 → i16.  (#191: roll/pitch/yaw and speed are no
-    // longer packed — the RX side derives them from the quaternion and the
-    // velocity components in unpackLoRa.)
+    // quaternion x 10000 -> i16. (#191: roll/pitch/yaw and speed are not
+    // packed — the RX side derives them from the quaternion and velocity.)
     auto enc_quat = [](float q)->int16_t {
         q = SensorConverter::clampf(q, -1.f, 1.f);
         return (int16_t)lroundf(q * 10000.f);
@@ -520,9 +497,16 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     out.q2 = enc_quat(in.q2);
     out.q3 = enc_quat(in.q3);
 
-    out.sensor_health = in.sensor_health;  // #303 raw bitfield, no encoding
+    {
+        float pa = SensorConverter::clampf(in.pressure_alt, -1000.f, 100000.f);
+        out.pressure_alt_m = i24_from_i32(lroundi32(pa));
+    }
+    {
+        float ar = clampf(in.altitude_rate, -2000.f, 2000.f);
+        out.altitude_rate = (int16_t)lroundf(ar);
+    }
 
-    // #191: EKF ENU velocity (m/s → dm/s i16) + burnout flag
+    // #191: EKF ENU velocity (m/s -> dm/s i16)
     auto enc_vel_dms = [](float v)->int16_t {
         v = SensorConverter::clampf(v, -3276.7f, 3276.7f);
         return (int16_t)lroundf(v * 10.f);
@@ -530,36 +514,27 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     out.vel_e_dms = enc_vel_dms(in.vel_e);
     out.vel_n_dms = enc_vel_dms(in.vel_n);
     out.vel_u_dms = enc_vel_dms(in.vel_u);
+
+    out.sensor_health = in.sensor_health;  // #303 raw bitfield, no encoding
+
     out.flags2 = (uint8_t)((in.burnout_detected ? LORA2_BURNOUT : 0)
         | ((in.imu_orient_code & LORA2_ORIENT_CODE_MASK) << LORA2_ORIENT_CODE_SHIFT)
         | ((in.imu_orient_mode & LORA2_ORIENT_MODE_MASK) << LORA2_ORIENT_MODE_SHIFT));
 }
 
-void SensorConverter::unpackLoRa(const LoRaData& in, LoRaDataSI& out)
+void SensorConverter::unpackLoRaFast(const LoRaFastData& in, LoRaDataSI& out)
 {
-    // Routing header
-    out.network_id       = in.network_id;
-    out.rocket_id        = in.rocket_id;
-    out.next_channel_idx = in.next_channel_idx;
-    out.seq              = in.seq;
+    unpackLoRaHeader(in.hdr, out);
 
-    out.num_sats = in.num_sats & LORA_NUM_SATS_MASK;  // bits 0-5
+    out.num_sats       = in.num_sats & LORA_NUM_SATS_MASK;  // bits 0-5
     out.sim_active     = (in.num_sats & LORA_SIM_BIT) != 0;      // #835 item 9
     out.logging_active = (in.num_sats & LORA_LOGGING_BIT) != 0;
-    out.pdop = (float)in.pdop_u8;
+    out.pdop           = (float)in.pdop_u8;
+    out.horizontal_accuracy = (float)in.hacc_u8;
 
     out.ecef_x = (double)i24_to_i32(in.ecef_x_m);
     out.ecef_y = (double)i24_to_i32(in.ecef_y_m);
     out.ecef_z = (double)i24_to_i32(in.ecef_z_m);
-
-    out.horizontal_accuracy = (float)in.hacc_u8;
-
-    out.launch_flag       = (in.flags_state & LORA_LAUNCH) != 0;
-    out.vel_u_apogee_flag = (in.flags_state & LORA_VEL_APOGEE) != 0;
-    out.alt_apogee_flag   = (in.flags_state & LORA_ALT_APOGEE) != 0;
-    out.alt_landed_flag   = (in.flags_state & LORA_ALT_LANDED) != 0;
-    out.camera_recording  = (in.flags_state & LORA_CAMERA_REC) != 0;
-    out.rocket_state      = (in.flags_state >> LORA_STATE_SHIFT) & 0x07u;
 
     out.acc_x = (float)in.acc_x_x10 / 10.0f;
     out.acc_y = (float)in.acc_y_x10 / 10.0f;
@@ -569,59 +544,113 @@ void SensorConverter::unpackLoRa(const LoRaData& in, LoRaDataSI& out)
     out.gyro_y = (float)in.gyro_y_x10 / 10.0f;
     out.gyro_z = (float)in.gyro_z_x10 / 10.0f;
 
-    out.temp   = (float)in.temp_x10 / 10.0f;
-
-    out.voltage = decodeVoltage_2_10_01(in.voltage_u8);
-    out.current = (float)in.current_ma;
-    out.soc     = (float)in.soc_i8;
-
-    out.pressure_alt  = (float)i24_to_i32(in.pressure_alt_m);
-    out.altitude_rate = (float)in.altitude_rate;
-    out.max_alt       = (float)i24_to_i32(in.max_alt_m);
-    out.max_speed     = (float)in.max_speed;
-
     out.q0 = (float)in.q0 / 10000.0f;
     out.q1 = (float)in.q1 / 10000.0f;
     out.q2 = (float)in.q2 / 10000.0f;
     out.q3 = (float)in.q3 / 10000.0f;
 
-    out.sensor_health = in.sensor_health;  // #303
+    out.pressure_alt  = (float)i24_to_i32(in.pressure_alt_m);
+    out.altitude_rate = (float)in.altitude_rate;
 
-    // #191: EKF ENU velocity (dm/s → m/s) + burnout flag
     out.vel_e = (float)in.vel_e_dms * 0.1f;
     out.vel_n = (float)in.vel_n_dms * 0.1f;
     out.vel_u = (float)in.vel_u_dms * 0.1f;
+
+    out.sensor_health = in.sensor_health;  // #303
+
     out.burnout_detected = (in.flags2 & LORA2_BURNOUT) != 0;
     out.imu_orient_code = (uint8_t)((in.flags2 >> LORA2_ORIENT_CODE_SHIFT) & LORA2_ORIENT_CODE_MASK);
     out.imu_orient_mode = (uint8_t)((in.flags2 >> LORA2_ORIENT_MODE_SHIFT) & LORA2_ORIENT_MODE_MASK);
 
-    // #191: Euler + instantaneous speed left the wire — derive them from
-    // the quaternion / velocity components so every downstream consumer
-    // (BS CSV, TelemetryData) keeps its values.
+    // #191: Euler + instantaneous speed left the wire — derive them from the
+    // quaternion / velocity so every downstream consumer keeps its values.
+    // Both inputs ride THIS frame, so the derivation is always self-consistent
+    // rather than mixing a fresh quaternion with a stale velocity.
     eulerFromQuat(out.q0, out.q1, out.q2, out.q3,
                   out.roll, out.pitch, out.yaw);
     out.speed = sqrtf(out.vel_e * out.vel_e +
                       out.vel_n * out.vel_n +
                       out.vel_u * out.vel_u);
-
-    // Not transmitted in LoRaData (superset fields)
-    out.base_station_voltage = 0.0f;
-    out.base_station_current = 0.0f;
-    out.base_station_soc     = 0.0f;
-    out.rssi = 0.0f;
-    out.snr  = 0.0f;
 }
 
-void SensorConverter::packLoRaData(const LoRaDataSI& in, uint8_t out_bytes[SIZE_OF_LORA_DATA])
+void SensorConverter::packLoRaSlow(const LoRaDataSI& in, LoRaSlowData& out)
 {
-    LoRaData p{};
-    packLoRa(in, p);
-    memcpy(out_bytes, &p, sizeof(LoRaData));
+    packLoRaHeader(in, out.hdr, LORA_FRAME_SLOW);
+
+    {
+        float ma = SensorConverter::clampf(in.max_alt, -1000.f, 400000.f);
+        out.max_alt_m = i24_from_i32(lroundi32(ma));
+    }
+    {
+        float ms = clampf(in.max_speed, 0.f, 4000.f);
+        out.max_speed = (int16_t)lroundf(ms);
+    }
+    {
+        float t = clampf(in.temp, -40.f, 200.f);
+        out.temp_x10 = (int16_t)lroundf(t * 10.f);
+    }
+
+    out.voltage_u8 = encodeVoltage_2_10_01(in.voltage);
+    {
+        float c = clampf(in.current, -10000.f, 10000.f);
+        out.current_ma = (int16_t)lroundf(c);
+    }
+    {
+        float s = clampf(in.soc, -25.f, 125.f);
+        int val = (int)lroundf(s);
+        if (val < -128) val = -128;
+        if (val > 127)  val = 127;
+        out.soc_i8 = (int8_t)val;
+    }
+
+    // #850: rail currents. encodeRailMilliamps handles NaN (no monitor
+    // fitted) and negative noise as 0, and saturates rather than wrapping.
+    out.cam_ma   = encodeRailMilliamps(in.cam_current);
+    out.servo_ma = encodeRailMilliamps(in.servo_current);
 }
 
-void SensorConverter::unpackLoRa(const uint8_t in_bytes[SIZE_OF_LORA_DATA], LoRaDataSI& out)
+void SensorConverter::unpackLoRaSlow(const LoRaSlowData& in, LoRaDataSI& out)
 {
-    LoRaData p{};
-    memcpy(&p, in_bytes, sizeof(LoRaData));
-    unpackLoRa(p, out);
+    unpackLoRaHeader(in.hdr, out);
+
+    out.max_alt   = (float)i24_to_i32(in.max_alt_m);
+    out.max_speed = (float)in.max_speed;
+    out.temp      = (float)in.temp_x10 / 10.0f;
+
+    out.voltage = decodeVoltage_2_10_01(in.voltage_u8);
+    out.current = (float)in.current_ma;
+    out.soc     = (float)in.soc_i8;
+
+    out.cam_current   = (float)in.cam_ma * 0.001f;
+    out.servo_current = (float)in.servo_ma * 0.001f;
+}
+
+// --- byte-level wrappers -----------------------------------------------------
+
+void SensorConverter::packLoRaFastBytes(const LoRaDataSI& in, uint8_t out_bytes[SIZE_OF_LORA_FAST])
+{
+    LoRaFastData p{};
+    packLoRaFast(in, p);
+    memcpy(out_bytes, &p, sizeof(LoRaFastData));
+}
+
+void SensorConverter::packLoRaSlowBytes(const LoRaDataSI& in, uint8_t out_bytes[SIZE_OF_LORA_SLOW])
+{
+    LoRaSlowData p{};
+    packLoRaSlow(in, p);
+    memcpy(out_bytes, &p, sizeof(LoRaSlowData));
+}
+
+void SensorConverter::unpackLoRaFastBytes(const uint8_t in_bytes[SIZE_OF_LORA_FAST], LoRaDataSI& out)
+{
+    LoRaFastData p{};
+    memcpy(&p, in_bytes, sizeof(LoRaFastData));
+    unpackLoRaFast(p, out);
+}
+
+void SensorConverter::unpackLoRaSlowBytes(const uint8_t in_bytes[SIZE_OF_LORA_SLOW], LoRaDataSI& out)
+{
+    LoRaSlowData p{};
+    memcpy(&p, in_bytes, sizeof(LoRaSlowData));
+    unpackLoRaSlow(p, out);
 }
