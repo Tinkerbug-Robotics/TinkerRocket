@@ -488,6 +488,64 @@ class ActiveRocketSyncerTest {
         assertIs<ActiveRocketSyncer.CalAdvisory.RocketHasUnsavedCal>(r.syncer.magCalAdvisory.value)
     }
 
+    /**
+     * The import stores the cal tagged with the connected board's id — that
+     * tag is what lets the syncer re-apply it, and only it, next connect.
+     */
+    @Test
+    fun import_tagsTheCalWithTheBoardId() = runTest {
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        r.fw.emitFileOpsFrame(r.fw.magCalStatusFrame(subType = 3))
+        runCurrent()
+        r.syncer.importRocketCalIntoActiveProfile(nowMs = 7)
+        runCurrent()
+
+        val cal = assertNotNull(r.store.activeProfile?.magCal)
+        assertEquals("boardA", cal.calibratedOnUnitID)
+        assertEquals(7, cal.calibratedAtMs)
+        assertIs<ActiveRocketSyncer.CalAdvisory.None>(r.syncer.magCalAdvisory.value)
+    }
+
+    /**
+     * Item 45: the same import BEFORE the identity readback lands must store
+     * nothing.  A cal tagged "" is permanently poisonous — no real board id is
+     * empty, so magCalSyncAction would take WarnMismatch every connect from
+     * then on and never push it.  iOS refuses the same way
+     * (MagCalView.swift:110).
+     *
+     * Reachable from the Mag Cal screen, which imports on APPLIED as soon as
+     * the user accepts a calibration it ran — it does not wait for the sync
+     * gate, so the #836-item-4 fix above does not cover this path.  Refusing
+     * only postpones: the same import once the id is in must still store.
+     */
+    @Test
+    fun importBeforeTheUnitIdLands_storesNothing() = runTest {
+        val r = rig(identityJson = null)
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertEquals("", r.session.identity.value.unitId, "identity has not landed")
+
+        r.fw.emitFileOpsFrame(r.fw.magCalStatusFrame(subType = 3))
+        runCurrent()
+        r.syncer.importRocketCalIntoActiveProfile(nowMs = 7)
+        runCurrent()
+        assertNull(r.store.activeProfile?.magCal, "no cal may be stored without a board id")
+
+        // The late identity readback: the very same import now has to work.
+        r.fw.emitTelemetryJson(
+            """{"type":"config_identity","uid":"boardA","un":"Atlas","nid":5,"rid":1,"dt":"R"}""",
+        )
+        runCurrent()
+        r.syncer.importRocketCalIntoActiveProfile(nowMs = 9)
+        runCurrent()
+        assertEquals("boardA", r.store.activeProfile?.magCal?.calibratedOnUnitID)
+    }
+
     @Test
     fun profileSwitch_rePushes() = runTest {
         val r = rig()

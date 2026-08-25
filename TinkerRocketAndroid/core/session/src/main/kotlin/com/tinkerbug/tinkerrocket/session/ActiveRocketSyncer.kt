@@ -591,12 +591,21 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         val profile = st.activeProfile ?: return
         val status = s.magCalStatus.value ?: return
         if (status.subType != MagCalSubType.APPLIED) return
+        // The board tag is the whole point of storing the cal, and the identity
+        // readback lands LATER than the status frame that offers the import.
+        // Tagging it "" — no real board id is ever empty — would make
+        // magCalSyncAction take WarnMismatch on every subsequent connect, so
+        // the cal could never be pushed again.  iOS guards the same way
+        // (MagCalView.swift:110); refuse and let the user import once the id
+        // is in, with the advisory still standing.
+        val unitId = s.identity.value.unitId
+        if (unitId.isEmpty()) return
         st.update(profile.id) {
             it.copy(
                 magCal = MagCalData(
                     offsetX = status.offsetX, offsetY = status.offsetY, offsetZ = status.offsetZ,
                     fieldRuT = status.fieldRUt, residualUT = status.residualUt,
-                    calibratedOnUnitID = s.identity.value.unitId,
+                    calibratedOnUnitID = unitId,
                     calibratedAtMs = nowMs,
                 ),
             )
