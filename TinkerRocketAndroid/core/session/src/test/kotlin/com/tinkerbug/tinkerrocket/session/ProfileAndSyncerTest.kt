@@ -634,6 +634,149 @@ class ActiveRocketSyncerTest {
         )
     }
 
+    // -- #915 firmware config report (pure) --------------------------------
+
+    private fun servoExtras() = com.tinkerbug.tinkerrocket.protocol.RocketServoExtras(
+        bias2 = 0, bias3 = 0, bias4 = 0,
+        finMinDeg = -60f, finMaxDeg = 60f,
+        finAzimuths = listOf(0f, 90f, 180f, 270f),
+        finReverseMask = 0, finRollReverseMask = 0, soundsEnabled = false,
+    )
+
+    private fun guidanceExtras(): com.tinkerbug.tinkerrocket.protocol.RocketGuidanceExtras {
+        val p = RocketProfile.makeDefault("x", 0)
+        return com.tinkerbug.tinkerrocket.protocol.RocketGuidanceExtras(
+            navGain = p.pnNavGain, maxAccel = p.pnMaxAccel,
+            accelToFin = p.pnAccelToFin, maxFinDeg = p.pnMaxFinDeg,
+            minSpeed = p.pnMinSpeed, coastDelayMs = p.pnCoastDelayMs,
+            targetMode = p.pnTargetMode, targetE = p.pnTargetE, targetN = p.pnTargetN,
+            targetAltM = p.pnTargetAltM, kpPos = p.pnKpPos, kdVel = p.pnKdVel,
+            guidanceLaw = p.pnGuidanceLaw,
+        )
+    }
+
+    /** A rocket that reports everything and agrees about all of it. */
+    private fun fullyReportingConfig() = matchingConfig().copy(
+        servoExtras = servoExtras(),
+        guidanceExtras = guidanceExtras(),
+        rollWaypoints = emptyList(),
+    )
+
+    @Test
+    fun fullReport_withNoDisagreement_changesNothing() {
+        val p = RocketProfile.makeDefault("x", 0)
+        assertEquals(emptyList(), ActiveRocketSyncer.adopt(p, fullyReportingConfig()).changed)
+    }
+
+    /**
+     * The group that motivated the firmware work: a fin layout from another
+     * airframe used to be invisible AND unverifiable.
+     */
+    @Test
+    fun finLayout_isAdoptedFromTheRocket() {
+        val p = RocketProfile.makeDefault("x", 0).copy(
+            finServoAtSlot = listOf(4, 3, 2, 1),
+            finRollReverse = listOf(true, false, false, false),
+        )
+        val r = ActiveRocketSyncer.adopt(p, fullyReportingConfig())
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_FIN_LAYOUT), r.changed)
+        assertEquals(listOf(1, 2, 3, 4), r.profile.finServoAtSlot)
+        assertEquals(listOf(false, false, false, false), r.profile.finRollReverse)
+        assertEquals(0, r.profile.finRingMode)
+
+        val rotated = fullyReportingConfig().copy(
+            servoExtras = servoExtras().copy(finAzimuths = listOf(45f, 135f, 225f, 315f)),
+        )
+        assertEquals(1, ActiveRocketSyncer.adopt(r.profile, rotated).profile.finRingMode)
+    }
+
+    @Test
+    fun servoTrim_finTravel_andSounds_areAdopted() {
+        val p = RocketProfile.makeDefault("x", 0)
+            .copy(servoBias3 = 55, finTravelDeg = 90f, soundsEnabled = true)
+        val r = ActiveRocketSyncer.adopt(p, fullyReportingConfig())
+        assertEquals(
+            listOf(
+                ActiveRocketSyncer.GROUP_SERVO_TRIM_24,
+                ActiveRocketSyncer.GROUP_FIN_TRAVEL,
+                ActiveRocketSyncer.GROUP_SOUNDS,
+            ),
+            r.changed,
+        )
+        assertEquals(0, r.profile.servoBias3)
+        assertEquals(120f, r.profile.finTravelDeg)
+        assertEquals(false, r.profile.soundsEnabled)
+    }
+
+    @Test
+    fun guidanceParameters_areAdopted() {
+        val p = RocketProfile.makeDefault("x", 0).copy(pnNavGain = 9f, pnGuidanceLaw = 1)
+        val r = ActiveRocketSyncer.adopt(p, fullyReportingConfig())
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_GUIDANCE_PARAMS), r.changed)
+        assertEquals(5.0f, r.profile.pnNavGain)
+        assertEquals(0, r.profile.pnGuidanceLaw)
+    }
+
+    /**
+     * "No waypoints" and "we can't see the waypoints" must not be the same
+     * thing: one clears the profile's roll profile, the other must not.
+     */
+    @Test
+    fun emptyWaypointList_isAnAnswer_butNullIsNot() {
+        val withWps = RocketProfile.makeDefault("x", 0).copy(
+            rollWaypoints = listOf(ProfileRollWaypoint(timeSeconds = 1f, angleDeg = 90f)),
+        )
+        val reported = ActiveRocketSyncer.adopt(withWps, fullyReportingConfig())
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_ROLL_PROFILE), reported.changed)
+        assertTrue(reported.profile.rollWaypoints.isEmpty(), "the rocket flies rate-only")
+
+        val unreported = ActiveRocketSyncer.adopt(
+            withWps, fullyReportingConfig().copy(rollWaypoints = null),
+        )
+        assertEquals(emptyList(), unreported.changed)
+        assertEquals(
+            1, unreported.profile.rollWaypoints.size,
+            "a rocket that can't report waypoints must not erase them",
+        )
+    }
+
+    /**
+     * Pre-report firmware, and the mini (no servo/fin/guidance hardware): the
+     * profile keeps its own and the app says it cannot check.
+     */
+    @Test
+    fun aGroupTheRocketCannotReport_isNamedAndLeftAlone() {
+        val p = RocketProfile.makeDefault("x", 0).copy(servoBias2 = 40, pnNavGain = 9f)
+        val cfg = matchingConfig()   // no extras at all
+        val r = ActiveRocketSyncer.adopt(p, cfg)
+        assertEquals(emptyList(), r.changed)
+        assertEquals(40, r.profile.servoBias2)
+        assertEquals(9f, r.profile.pnNavGain)
+        assertEquals(
+            listOf(
+                "Servo trim 2-4", "Fin travel", "Fin layout", "Sounds",
+                "Guidance parameters", "Roll profile",
+            ),
+            cfg.unreportedGroups,
+        )
+        assertEquals(
+            emptyList(), fullyReportingConfig().unreportedGroups,
+            "a reporting rocket leaves nothing unverifiable",
+        )
+    }
+
+    @Test
+    fun azimuthsThatDoNotDescribeFourSlots_areRefused() {
+        // Two servos claiming the same slot can't be inverted into a mapping;
+        // guessing one would put the wrong servo on the wrong fin.
+        assertNull(ActiveRocketSyncer.slotsFromAzimuths(listOf(0f, 0f, 180f, 270f)))
+        assertNull(ActiveRocketSyncer.slotsFromAzimuths(listOf(0f, 90f, 180f)))
+        assertEquals(
+            listOf(2, 3, 4, 1),
+            ActiveRocketSyncer.slotsFromAzimuths(listOf(270f, 0f, 90f, 180f)),
+        )
+    }
+
     @Test
     fun suggestion_pure() {
         val a = RocketProfile.makeDefault("A", 0).copy(lastUsedUnitID = "u1")

@@ -115,6 +115,42 @@ struct DiscoveredDevice: Identifiable {
     }
 }
 
+/// Servo trim 2-4, fin travel, fin layout and sounds, from the rocket's own
+/// `config_servo` readback (#915).  Grouped so "did this rocket report them?"
+/// is one nil check instead of nine, and so the settings UI can say which
+/// groups it cannot verify rather than implying the whole screen is confirmed.
+/// Absent on firmware that predates the config report, and on the mini, which
+/// has none of this hardware.
+nonisolated struct RocketServoExtras: Equatable {
+    var bias2: Int16
+    var bias3: Int16
+    var bias4: Int16
+    var finMinDeg: Float
+    var finMaxDeg: Float
+    var finAzimuths: [Float]      // 4, per-servo ring-position azimuth
+    var finReverseMask: UInt8     // bit i ⇒ servo i pitch/yaw reversed
+    var finRollReverseMask: UInt8 // bit i ⇒ servo i roll reversed (independent)
+    var soundsEnabled: Bool
+}
+
+/// The PN / station-keep parameters behind the guidance on/off flag, from the
+/// rocket's `config_guid` readback (#915).
+nonisolated struct RocketGuidanceExtras: Equatable {
+    var navGain: Float
+    var maxAccel: Float
+    var accelToFin: Float
+    var maxFinDeg: Float
+    var minSpeed: Float
+    var coastDelayMs: UInt16
+    var targetMode: UInt8
+    var targetE: Float
+    var targetN: Float
+    var targetAltM: Float
+    var kpPos: Float
+    var kdVel: Float
+    var guidanceLaw: UInt8
+}
+
 struct RocketConfig {
     var servoBias1: Int16 = 0   // #561: match RocketProfile/config.h (was 85 → ~10° servo-1 trim)
     var servoHz: Int16 = 333
@@ -171,6 +207,70 @@ struct RocketConfig {
     var pyro4Enabled: Bool = false
     var pyro4TriggerMode: UInt8 = 0
     var pyro4TriggerValue: Float = 0.0
+
+    // MARK: - #915 config report
+    // nil in all three cases means "this rocket does not report it", which is
+    // a real answer the UI shows as unverifiable — never a reason to invent a
+    // value and present it as the vehicle's.
+
+    var servoExtras: RocketServoExtras?
+    var guidanceExtras: RocketGuidanceExtras?
+    /// nil = not reported.  EMPTY = reported, and the rocket is flying
+    /// rate-only.  The two must not be conflated: one means "we don't know",
+    /// the other means "we know, and there are none".
+    var rollWaypoints: [(time: Float, angle: Float)]?
+
+    /// Setting groups this rocket does not report back.  Empty once the
+    /// config report has landed; the pre-#915 list on firmware that can't
+    /// send one.
+    var unreportedGroups: [String] {
+        var out: [String] = []
+        if servoExtras == nil {
+            out.append(contentsOf: ["Servo trim 2-4", "Fin travel", "Fin layout", "Sounds"])
+        }
+        if guidanceExtras == nil { out.append("Guidance parameters") }
+        if rollWaypoints == nil  { out.append("Roll profile") }
+        return out
+    }
+}
+
+// Manual conformance: the tuple array above blocks the synthesised one.
+extension RocketConfig: Equatable {
+    static func == (a: RocketConfig, b: RocketConfig) -> Bool {
+        a.servoBias1 == b.servoBias1 && a.servoHz == b.servoHz
+            && a.servoMinUs == b.servoMinUs && a.servoMaxUs == b.servoMaxUs
+            && a.pidKp == b.pidKp && a.pidKi == b.pidKi && a.pidKd == b.pidKd
+            && a.pidMinCmd == b.pidMinCmd && a.pidMaxCmd == b.pidMaxCmd
+            && a.servoEnabled == b.servoEnabled
+            && a.gainScheduleEnabled == b.gainScheduleEnabled
+            && a.useAngleControl == b.useAngleControl
+            && a.rollDelayMs == b.rollDelayMs
+            && a.rateCapDps == b.rateCapDps && a.kpAngle == b.kpAngle
+            && a.integralSepThreshold == b.integralSepThreshold
+            && a.rollGainsReported == b.rollGainsReported
+            && a.guidanceEnabled == b.guidanceEnabled
+            && a.cameraType == b.cameraType
+            && a.imuOrientSetting == b.imuOrientSetting
+            && a.imuRateHz == b.imuRateHz
+            && a.loraFreqMHz == b.loraFreqMHz && a.loraSF == b.loraSF
+            && a.loraBwKHz == b.loraBwKHz && a.loraCR == b.loraCR
+            && a.loraTxPower == b.loraTxPower
+            && a.loraHopDisabled == b.loraHopDisabled
+            && a.loraHopDwell == b.loraHopDwell
+            && a.pyro1Enabled == b.pyro1Enabled && a.pyro1TriggerMode == b.pyro1TriggerMode
+            && a.pyro1TriggerValue == b.pyro1TriggerValue
+            && a.pyro2Enabled == b.pyro2Enabled && a.pyro2TriggerMode == b.pyro2TriggerMode
+            && a.pyro2TriggerValue == b.pyro2TriggerValue
+            && a.pyro3Enabled == b.pyro3Enabled && a.pyro3TriggerMode == b.pyro3TriggerMode
+            && a.pyro3TriggerValue == b.pyro3TriggerValue
+            && a.pyro4Enabled == b.pyro4Enabled && a.pyro4TriggerMode == b.pyro4TriggerMode
+            && a.pyro4TriggerValue == b.pyro4TriggerValue
+            && a.servoExtras == b.servoExtras
+            && a.guidanceExtras == b.guidanceExtras
+            && a.rollWaypoints?.count == b.rollWaypoints?.count
+            && zip(a.rollWaypoints ?? [], b.rollWaypoints ?? [])
+                .allSatisfy { $0.time == $1.time && $0.angle == $1.angle }
+    }
 }
 
 // MARK: - Guidance-target echo (#435)

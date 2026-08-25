@@ -1946,6 +1946,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 cfg.pyro4Enabled = existing.pyro4Enabled
                 cfg.pyro4TriggerMode = existing.pyro4TriggerMode
                 cfg.pyro4TriggerValue = existing.pyro4TriggerValue
+                // #915: the config report rides its own frames, so a `config`
+                // rebuild must carry it over — same reason as the pyro fields
+                // above. Without this a re-sent readback would reset the app
+                // to "this rocket reports nothing" and put every group back
+                // on the can't-verify list.
+                cfg.servoExtras = existing.servoExtras
+                cfg.guidanceExtras = existing.guidanceExtras
+                cfg.rollWaypoints = existing.rollWaypoints
             }
             self.rocketConfig = cfg
             triggerAutoChannelSelectIfNeeded()
@@ -1969,6 +1977,78 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.pyro4TriggerMode = UInt8(dict["p4m"] as? Int ?? Int(cfg.pyro4TriggerMode))
             cfg.pyro4TriggerValue = parseFloat(dict["p4v"]) ?? cfg.pyro4TriggerValue
             self.rocketConfig = cfg
+            return
+        }
+
+        // #915 config report, relayed by the OC from the FC's own state as
+        // three small frames.  Everything here was previously invisible to
+        // the app, which is why the settings screen could show a value the
+        // rocket had never agreed to.  Defensive per the MTU-budget rule
+        // (#282): every key individually optional, and a frame that arrives
+        // malformed leaves the group nil (= "not reported") rather than
+        // half-filled.
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           dict["type"] as? String == "config_servo" {
+            var cfg = self.rocketConfig ?? RocketConfig()
+            let az = (dict["faz"] as? [Any])?.compactMap { parseFloat($0) } ?? []
+            if let b2 = dict["sb2"] as? Int, let b3 = dict["sb3"] as? Int,
+               let b4 = dict["sb4"] as? Int,
+               let fmn = parseFloat(dict["fmn"]), let fmx = parseFloat(dict["fmx"]),
+               az.count == 4,
+               let frv = dict["frv"] as? Int, let frrv = dict["frrv"] as? Int,
+               let snd = dict["snd"] as? Bool {
+                cfg.servoExtras = RocketServoExtras(
+                    bias2: Int16(clamping: b2), bias3: Int16(clamping: b3),
+                    bias4: Int16(clamping: b4),
+                    finMinDeg: fmn, finMaxDeg: fmx,
+                    finAzimuths: az,
+                    finReverseMask: UInt8(clamping: frv),
+                    finRollReverseMask: UInt8(clamping: frrv),
+                    soundsEnabled: snd)
+                self.rocketConfig = cfg
+            }
+            return
+        }
+
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           dict["type"] as? String == "config_guid" {
+            var cfg = self.rocketConfig ?? RocketConfig()
+            if let ng = parseFloat(dict["gng"]), let ma = parseFloat(dict["gma"]),
+               let af = parseFloat(dict["gaf"]), let mf = parseFloat(dict["gmf"]),
+               let ms = parseFloat(dict["gms"]), let cd = dict["gcd"] as? Int,
+               let tm = dict["gtm"] as? Int,
+               let te = parseFloat(dict["gte"]), let tn = parseFloat(dict["gtn"]),
+               let ta = parseFloat(dict["gta"]),
+               let kp = parseFloat(dict["gkp"]), let kd = parseFloat(dict["gkd"]),
+               let law = dict["glw"] as? Int {
+                cfg.guidanceExtras = RocketGuidanceExtras(
+                    navGain: ng, maxAccel: ma, accelToFin: af, maxFinDeg: mf,
+                    minSpeed: ms, coastDelayMs: UInt16(clamping: cd),
+                    targetMode: UInt8(clamping: tm),
+                    targetE: te, targetN: tn, targetAltM: ta,
+                    kpPos: kp, kdVel: kd, guidanceLaw: UInt8(clamping: law))
+                self.rocketConfig = cfg
+            }
+            return
+        }
+
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           dict["type"] as? String == "config_roll" {
+            var cfg = self.rocketConfig ?? RocketConfig()
+            // "n": 0 with an empty list is a real answer — this rocket is
+            // flying rate-only — so an empty array must still set the value
+            // rather than leaving it nil ("we don't know").
+            if let n = dict["n"] as? Int, let raw = dict["wp"] as? [Any] {
+                var wps: [(time: Float, angle: Float)] = []
+                for entry in raw.prefix(n) {
+                    guard let pair = entry as? [Any], pair.count == 2,
+                          let t = parseFloat(pair[0]), let a = parseFloat(pair[1])
+                    else { continue }
+                    wps.append((time: t, angle: a))
+                }
+                cfg.rollWaypoints = wps
+                self.rocketConfig = cfg
+            }
             return
         }
 

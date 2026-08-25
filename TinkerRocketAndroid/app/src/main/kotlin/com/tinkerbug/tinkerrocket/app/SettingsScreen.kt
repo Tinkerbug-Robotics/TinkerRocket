@@ -92,6 +92,7 @@ fun SettingsScreen(
     val sensorAdvisory by syncer.sensorCalAdvisory.collectAsState()
     val suggestedId by syncer.suggestedProfileId.collectAsState()
     val createdProfileName by syncer.createdProfileName.collectAsState()
+    val unreportedGroups by syncer.unreportedGroups.collectAsState()
     val active = activeId?.let { id -> profiles.firstOrNull { it.id == id } }
 
     // #361 analog: never subscribe this screen to raw telemetry — the jog
@@ -176,14 +177,19 @@ fun SettingsScreen(
         // otherwise, so say plainly which ones the app cannot check and put
         // the deliberate override next to that admission.
         if (connected && session?.isBaseStation == false) {
-            Banner(
-                "Can't verify: " +
-                    ActiveRocketSyncer.unreportedGroups.joinToString(", ") +
-                    ". This rocket doesn't report them, so they're shown from " +
-                    "the profile.",
-                "Send all",
-            ) {
-                fleetScope.launch { syncer.pushProfileToRocket() }
+            if (unreportedGroups.isNotEmpty()) {
+                Banner(
+                    "Can't verify: " + unreportedGroups.joinToString(", ") +
+                        ". This rocket doesn't report them, so they're shown " +
+                        "from the profile.",
+                    "Send all",
+                ) {
+                    fleetScope.launch { syncer.pushProfileToRocket() }
+                }
+            } else {
+                Banner("Settings come from this rocket.", "Send all") {
+                    fleetScope.launch { syncer.pushProfileToRocket() }
+                }
             }
         }
 

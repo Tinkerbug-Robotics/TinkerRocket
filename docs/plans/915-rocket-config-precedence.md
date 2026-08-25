@@ -73,21 +73,92 @@ they were only a display fallback; a silent re-tune once adoption reads them.
 Aligned to config.h on both platforms, the same fix #407 and #561 already made
 for the servo fields.
 
-## Follow-up: the firmware full-config report
+## The firmware follow-up (shipped second)
 
-Ordered second deliberately — the app change stands on its own, and this is what
-retires the "cannot verify" list.
+Ordered after the app change deliberately — that change stands on its own, and
+this is what retires the "cannot verify" list.
 
-1. **The FC should persist its IMU orientation setting.** Every other config
-   group writes NVS in its command handler; `ORIENT_CONFIG_PENDING` does not.
-   Today the OC's self-heal covers it, which means the one setting the issue
-   calls out as authoritative and uncorrectable-downstream is also the one whose
-   retention depends on a second board noticing and re-pushing.
-2. **A full-config report FC→OC.** `FlightSettingsData` already carries most of
-   it (219 bytes) but cannot be extended — `MAX_PAYLOAD` is 224, and fin layout
-   plus the PN parameters need roughly 58 more. So this is a new message, not a
-   tail append. The mini needs the local-read equivalent.
-3. **Readback frames for the rest**, split to stay under the BLE notify MTU;
-   `sendConfigJSON` silently drops anything over MTU−3, so the existing "keep
-   each frame tiny" discipline applies.
-4. Then the app can drop `unreportedGroups` and diff the whole surface.
+### 1. The FC now persists its IMU orientation setting
+
+Every other config group wrote NVS in its command handler; `ORIENT_CONFIG_PENDING`
+did not. It now stores the SETTING (`orient`/`set`, the same namespace and key
+the OC and the mini already use) and restores it at boot, ahead of the snapshot
+recovery — which still wins, because a mid-flight reboot has to come back in the
+frame the EKF state was estimated in.
+
+Only the setting is written, never the active frame: the pad-gravity auto-detect
+re-snaps that on its own, and persisting an auto-detected result would silently
+convert a rocket the user left on AUTO into a manually pinned one — pinning
+disables the very detect that chose it.
+
+**Two memories can now disagree**, so the report carries provenance
+(`F_ORIENT_FROM_NVS`). The OC's status-query self-heal — which existed *because*
+the FC could not remember — is skipped once the FC says it has its own record,
+and the `imu_orient` readback reports the FC's setting rather than the OC's
+cache. Without the bit, reflashing either board alone would silently lose
+whichever memory the other overwrote: an FC that genuinely holds AUTO is
+indistinguishable from one that has never been told.
+
+### 2. `ConfigReportData`, pushed FC→OC
+
+169 bytes on `CONFIG_REPORT_MSG` (0xFB), composed from the very structs the app
+writes — `ServoConfigData`, `FinConfigData`, `GuidanceConfigData`,
+`RollProfileData` — so a field that moves in one moves here with it.
+
+Not an extension of `FlightSettingsData`: that is 219 bytes against a
+`MAX_PAYLOAD` of 224, and it is a flight-log record emitted at
+PRELAUNCH→INFLIGHT, a different job from a pre-flight readback.
+
+**Pushed, not requested.** The FC emits it at boot, on every accepted change to
+a reported field, and every 5 s while not INFLIGHT. A request/response would have
+cost a second message code — and this space now has exactly two values left
+(0xFC, 0xFD) — and it would not have self-healed an OC that rebooted on its own,
+because the OC has no way to know it missed one.
+
+Deliberately **not logged**: the OC handles it before the log enqueue, like
+`FC_IDENTITY`. It is pre-flight state, `FlightSettingsData` already records what
+actually flew, and keeping it out spares the `Data_Analysis` parsers a message
+type they hardcode no length for.
+
+### 3. Three readback frames
+
+`config_servo` (trim 2-4, fin travel, fin layout, sounds), `config_guid` (the
+thirteen PN / station-keep parameters) and `config_roll` (the waypoints), each
+small enough for the notify MTU. `config_roll` is sent even when there are zero
+waypoints, because "rate-only" and "this rocket can't tell you" must not look
+alike to the app.
+
+This took the connect burst from six frames to nine against an eight-deep
+readback queue — the ninth enqueue evicted the oldest, which is the main
+`config` frame. Cap raised to 12; it has to move with the burst.
+
+The mini needs none of this: it has no servo, fin, guidance or roll hardware, so
+its `config` frame was already trimmed and those groups are genuinely absent
+rather than merely unreported.
+
+### 4. The app adopts them
+
+`unreportedGroups` is now derived from which frames actually arrived, so it
+empties on new firmware and stays honest on old firmware and on the mini. Two
+distinctions the adoption has to keep straight:
+
+- **null vs empty waypoints.** null is "we don't know" and must leave the
+  profile's roll profile alone; empty is "we know, and this rocket flies
+  rate-only" and must clear it.
+- **Fin azimuth → ring slot must FLOOR, not round.** The "×" layout's azimuths
+  (45/135/225/315) land exactly on rounding ties, where Kotlin breaks to even
+  and Swift breaks away from zero — the two platforms derived *different* fin
+  mappings from the same rocket. Flooring has no tie to break.
+
+An asymmetric rocket-side fin cal collapses to its span, because #449 made the
+profile store one travel number. That is a limitation of the profile model, not
+of the readback.
+
+## Still open
+
+- **Bench validation.** Nothing here has run on hardware. The interesting cases
+  are: a manual orientation surviving an FC-only reflash; an OC-only reflash not
+  overwriting it; and the connect burst arriving intact now that it is nine
+  frames.
+- Two free message codes left in the OC↔FC space. The next one needs an
+  escape/extended encoding, not a thirteenth constant.

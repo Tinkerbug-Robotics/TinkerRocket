@@ -1,5 +1,10 @@
 # Build artifacts
 build/
+# Per-board ESP-IDF build dirs.  main/CMakeLists.txt requires a board flag and
+# tells you to keep a separate -B dir per variant (CMake caches the flag), and
+# firmware-build.yml uses exactly these names — so building locally the way the
+# repo documents produced untracked directories.
+build_v*/
 *.o
 *.elf
 *.bin

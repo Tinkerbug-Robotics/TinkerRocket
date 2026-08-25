@@ -2010,6 +2010,10 @@ static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 28-byte Log
 // the I2S telemetry stream exists, which is the whole point — see
 // FcBootStatusData above.  Stops once the FC enters loop_fc().
 static constexpr uint8_t FC_BOOT_STATUS_MSG   = 0xFA;  // FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only
+static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 169-byte ConfigReportData, everything the app's config
+                                                      // readback cannot otherwise see (#915).  PUSHED, not requested —
+                                                      // see the struct comment.  0xFC/0xFD are the last free codes in
+                                                      // this space; anything past them needs an escape mechanism.
 
 // --- OTA firmware relay to the Flight Computer (#8 Phase 4) ---
 // Control plane rides the OC↔FC I2C link: the OC stages OTA_BEGIN_PENDING
@@ -2628,6 +2632,72 @@ struct __attribute__((packed)) FlightSettingsData
 static_assert(sizeof(FlightSettingsData) == 219,
               "FlightSettingsData layout check (v6: flown guidance target, #435)");
 
+// --- Full config report (#915) ---
+// FC→OC over I2S.  Carries exactly what the app's config readback CANNOT
+// otherwise see, so the phone can show and verify the whole editable surface
+// instead of displaying profile values it has no way to check against the
+// vehicle: servo trim 2-4, fin travel, fin layout, the PN guidance
+// parameters, the roll waypoints, sounds, and the orientation SETTING.
+//
+// Why not extend FlightSettingsData: that struct is 219 bytes against a
+// MAX_PAYLOAD of 224, and the fin layout plus the guidance parameters need
+// ~63 more.  It is also emitted at the PRELAUNCH→INFLIGHT transition and
+// logged into the flight .bin — a different job from a pre-flight readback.
+//
+// Why PUSHED rather than requested: the FC emits this at boot, on every
+// accepted config change, and slowly while not INFLIGHT.  A request/response
+// would have cost a second message code, and this space has three values left
+// (0xFB here, 0xFC and 0xFD after it).  The push also self-heals an OC that
+// rebooted independently, which a connect-time request would not.
+//
+// Composed from the very structs the app writes rather than re-listing their
+// fields: a field that moves in ServoConfigData / FinConfigData /
+// GuidanceConfigData / RollProfileData moves here with it, and their existing
+// offsetof pins already guard the internal order.
+struct __attribute__((packed)) ConfigReportData
+{
+    static constexpr uint8_t VERSION = 1;
+
+    // flags bit positions
+    static constexpr uint8_t F_SOUNDS = 0;   // piezo sounds enabled
+    // Set when imu_orient_setting below came from the FC's own NVS record
+    // rather than the compile-time board fallback.  This is what lets the OC
+    // tell "the FC deliberately holds AUTO" from "the FC has never been told":
+    // in the first case the FC's setting wins, in the second the OC re-pushes
+    // the setting it still remembers (and the FC then persists it).  Without
+    // the bit, reflashing either board silently loses whichever one's memory
+    // the other happened to overwrite.
+    static constexpr uint8_t F_ORIENT_FROM_NVS = 1;
+
+    uint32_t time_us;              // micros() at build — first, so the generic
+                                   // frame parser's "timestamp = first 4
+                                   // payload bytes" convention still holds
+    uint8_t  version;              // = VERSION
+    uint8_t  imu_orient_setting;   // IMU_ORIENT_AUTO, or a manual code 0..23.
+                                   // The SETTING, not the active frame — the
+                                   // active one is already in the status query
+                                   // as b2r_code/b2r_mode, and the two differ
+                                   // whenever pad-gravity detect has re-snapped
+                                   // an AUTO rocket.
+    uint8_t  flags;                // see F_* above
+    uint8_t  _pad;
+
+    ServoConfigData    servo;      // biases 1-4, hz, pulse endpoints, fin travel
+    FinConfigData      fin;        // ring azimuths + both reverse masks
+    GuidanceConfigData guidance;   // enable + every PN / station-keep parameter
+    RollProfileData    roll;       // waypoints (num_waypoints == 0 → rate-only)
+};
+static_assert(sizeof(ConfigReportData) == 169,
+              "ConfigReportData layout check (v1, #915)");
+// Nested-struct starts are wire ABI: the OC parses this by memcpy of the
+// whole thing, so a member reordered here silently reinterprets every field
+// after it.
+static_assert(offsetof(ConfigReportData, servo) == 8 &&
+              offsetof(ConfigReportData, fin) == 30 &&
+              offsetof(ConfigReportData, guidance) == 48 &&
+              offsetof(ConfigReportData, roll) == 93,
+              "ConfigReportData member order is wire ABI");
+
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the
 // per-flight .bin records exactly how much MRAM the session actually used.
@@ -2936,6 +3006,12 @@ static constexpr size_t MAX_PAYLOAD = (M_SENSOR_OR_PROFILE > P9 ? M_SENSOR_OR_PR
 // the struct.
 static_assert(sizeof(FlightSettingsData) <= MAX_PAYLOAD,
               "FlightSettingsData must fit one I2S frame");
+
+// Same for the #915 config report — it rides the same path, and it is the
+// struct most likely to grow next (every new editable setting the app cannot
+// otherwise verify belongs in it).
+static_assert(sizeof(ConfigReportData) <= MAX_PAYLOAD,
+              "ConfigReportData must fit one I2S frame");
 
 // Frame: [0xAA][0x55][0xAA][0x55] + type + length + payload + CRC16
 static constexpr size_t MAX_FRAME = 4 + 1 + 1 + MAX_PAYLOAD + 2;
