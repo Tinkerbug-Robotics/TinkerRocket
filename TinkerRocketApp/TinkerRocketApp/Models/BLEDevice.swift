@@ -60,6 +60,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var isDownloading = false
     @Published var downloadingFilename: String?
     @Published var csvGenerationProgress: Double = 0.0
+    /// Why the last CSV generation failed, or nil if the last one succeeded.
+    ///
+    /// The catch below used to swallow the error and hand the caller a bare
+    /// nil, so a download whose BYTES arrived fine but whose CSV could not be
+    /// produced reported as success and then simply never appeared in Saved
+    /// Files (which enumerates the CSV cache). That cost a debugging session
+    /// on 2026-08-25, when an app build without base-station log support was
+    /// handed a lora_*.bin. Android already reported this; iOS did not.
+    @Published var csvGenerationError: String?
     @Published var downloadStates: [String: DownloadState] = [:]
     @Published var simLaunched = false
     @Published var groundTestActive = false
@@ -1671,6 +1680,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
+            DispatchQueue.main.async { [weak self] in self?.csvGenerationError = nil }
             do {
                 if let cachedCSV = FileCache.shared.getCachedCSV(for: filename) {
                     DispatchQueue.main.async { completion(cachedCSV) }
@@ -1720,7 +1730,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 let cachedURL = try FileCache.shared.cacheCSV(at: tempCSV, for: filename)
                 DispatchQueue.main.async { completion(cachedURL) }
             } catch {
-                DispatchQueue.main.async { completion(nil) }
+                // Loud, and attributable to the file. The .bin is already
+                // cached, so the DATA survives a converter failure — what must
+                // not survive is the impression that everything worked.
+                print("[CSV] generation FAILED for \(filename): \(error.localizedDescription)")
+                DispatchQueue.main.async { [weak self] in
+                    self?.csvGenerationError =
+                        "CSV generation failed for \(filename): \(error.localizedDescription)"
+                    completion(nil)
+                }
             }
         }
     }
