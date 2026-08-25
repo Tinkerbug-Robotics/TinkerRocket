@@ -273,3 +273,136 @@ def read_bs_log(path):
         return rows, events, 'bin'
     rows, events = read_bs_csv(path)
     return rows, events, 'csv'
+
+
+# ==========================================================================
+#  CSV rendering
+# ==========================================================================
+# The base station used to write these columns itself.  It no longer does, so
+# this is the definition of the format — and the apps carry ports of it, tested
+# against the same golden.  The column set is the firmware's 39 verbatim, with
+# `frame` appended: appending is how rocket_id and cam_a/servo_a were added, so
+# anything keying columns by name is unaffected while the fast/slow information
+# that only exists post-#850 is not thrown away.
+
+CSV_COLUMNS = [
+    'time_ms', 'state', 'num_sats', 'pdop', 'lat', 'lon', 'alt_m', 'h_acc',
+    'acc_x', 'acc_y', 'acc_z', 'gyro_x', 'gyro_y', 'gyro_z',
+    'pressure_alt', 'alt_rate', 'max_alt', 'max_speed',
+    'voltage', 'current', 'soc', 'cam_a', 'servo_a', 'roll', 'pitch', 'yaw', 'speed',
+    'launch', 'vel_apo', 'alt_apo', 'landed', 'rssi', 'snr',
+    'next_ch', 'rx_freq_mhz', 'seq', 'gap', 'event', 'rocket_id', 'frame',
+]
+
+_WGS84_A = 6378137.0
+_WGS84_F = 1.0 / 298.257223563
+_WGS84_E2 = 2 * _WGS84_F - _WGS84_F * _WGS84_F
+
+
+def ecef_to_geodetic(x, y, z):
+    """WGS84 ECEF -> (lat_deg, lon_deg, alt_m).
+
+    Same iterative solution as TR_Coordinates::ecefToGeodetic, converging on
+    latitude to 1e-10 rad (~0.1 mm).  Kept identical rather than swapped for a
+    closed form so the three ports cannot drift in the last decimal.
+    """
+    lon = math.atan2(y, x)
+    p = math.sqrt(x * x + y * y)
+    lat = math.atan2(z, p * (1 - _WGS84_E2))
+    alt = 0.0
+    while True:
+        prev = lat
+        n = _WGS84_A / math.sqrt(1 - _WGS84_E2 * math.sin(lat) ** 2)
+        alt = p / math.cos(lat) - n
+        lat = math.atan2(z + n * _WGS84_E2 * math.sin(lat), p)
+        if abs(lat - prev) <= 1e-10:
+            break
+    return math.degrees(lat), math.degrees(lon), alt
+
+
+def euler_from_quat(qw, qx, qy, qz):
+    """Port of SensorConverter::eulerFromQuat — roll is the body-Z azimuth
+    (gimbal-lock-free), pitch and yaw are standard Euler."""
+    z_n = 2.0 * (qx * qz + qw * qy)
+    z_e = 2.0 * (qy * qz - qw * qx)
+    roll = -math.degrees(math.atan2(z_e, z_n))
+    sinp = 2.0 * (qw * qy - qz * qx)
+    if abs(sinp) >= 1.0:
+        pitch = math.copysign(90.0, sinp)
+    else:
+        pitch = math.degrees(math.asin(sinp))
+    yaw = math.degrees(math.atan2(2.0 * (qw * qz + qx * qy),
+                                  1.0 - 2.0 * (qy * qy + qz * qz)))
+    return roll, pitch, yaw
+
+
+def _f(value, decimals):
+    """printf("%.Nf") semantics, including the sign on a negative that rounds
+    to zero.  Python's format() already rounds ties-to-even on the exact binary
+    value, which is what C does."""
+    if value is None:
+        return ''
+    if isinstance(value, float) and value != value:
+        return 'nan'
+    return f'{value:.{decimals}f}'
+
+
+def rows_to_csv(rows, events=()):
+    """Render reader output as the base-station CSV.
+
+    Events are merged in by time so a single pass sees telemetry and events in
+    arrival order — the property the firmware's padded EVENT rows provided.
+    """
+    out = [','.join(CSV_COLUMNS)]
+
+    merged = [('rx', r) for r in rows] + [('ev', e) for e in events]
+    merged.sort(key=lambda t: t[1].get('time_ms', 0))
+
+    for kind, rec in merged:
+        if kind == 'ev':
+            cells = [''] * len(CSV_COLUMNS)
+            cells[0] = str(int(rec.get('time_ms', 0)))
+            cells[1] = 'EVENT'
+            cells[CSV_COLUMNS.index('rx_freq_mhz')] = _f(rec.get('rx_freq_mhz'), 3)
+            cells[CSV_COLUMNS.index('event')] = rec.get('event', '')
+            out.append(','.join(cells))
+            continue
+
+        r = rec
+        # lat/lon only where the rocket claims a fix — nonzero ECEF with
+        # num_sats == 0 is a stale register read (#95) and would render a
+        # valid-looking position for an invalid fix.
+        lat = lon = alt = float('nan')
+        if r.get('num_sats', 0) > 0 and any(r.get(k, 0.0) for k in ('ecef_x', 'ecef_y', 'ecef_z')):
+            lat, lon, alt = ecef_to_geodetic(r['ecef_x'], r['ecef_y'], r['ecef_z'])
+
+        roll = pitch = yaw = 0.0
+        if any(k in r for k in ('q0', 'q1', 'q2', 'q3')):
+            roll, pitch, yaw = euler_from_quat(r.get('q0', 0.0), r.get('q1', 0.0),
+                                               r.get('q2', 0.0), r.get('q3', 0.0))
+
+        out.append(','.join([
+            str(int(r.get('time_ms', 0))),
+            str(r.get('state', '')),
+            str(int(r.get('num_sats', 0))),
+            _f(r.get('pdop', 0.0), 1),
+            _f(lat, 7), _f(lon, 7), _f(alt, 1),
+            _f(r.get('h_acc', 0.0), 1),
+            _f(r.get('acc_x', 0.0), 2), _f(r.get('acc_y', 0.0), 2), _f(r.get('acc_z', 0.0), 2),
+            _f(r.get('gyro_x', 0.0), 1), _f(r.get('gyro_y', 0.0), 1), _f(r.get('gyro_z', 0.0), 1),
+            _f(r.get('pressure_alt', 0.0), 1), _f(r.get('alt_rate', 0.0), 1),
+            _f(r.get('max_alt', 0.0), 1), _f(r.get('max_speed', 0.0), 1),
+            _f(r.get('voltage', 0.0), 2), _f(r.get('current', 0.0), 0), _f(r.get('soc', 0.0), 1),
+            _f(r.get('cam_a', 0.0), 3), _f(r.get('servo_a', 0.0), 3),
+            _f(roll, 1), _f(pitch, 1), _f(yaw, 1), _f(r.get('speed', 0.0), 1),
+            str(int(r.get('launch', 0))), str(int(r.get('vel_apo', 0))),
+            str(int(r.get('alt_apo', 0))), str(int(r.get('landed', 0))),
+            _f(r.get('rssi', float('nan')), 0), _f(r.get('snr', float('nan')), 1),
+            str(int(r.get('next_ch', 255))), _f(r.get('rx_freq_mhz', 0.0), 3),
+            str(int(r.get('seq', 0))), str(int(r.get('gap', -1))),
+            '',                                     # event column, empty on telemetry
+            str(int(r.get('rocket_id', 0))),
+            str(r.get('frame', '')),
+        ]))
+
+    return '\n'.join(out) + '\n'

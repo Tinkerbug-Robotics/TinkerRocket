@@ -1104,7 +1104,10 @@ void buildBsLogGolden(Builder& b) {
     si.num_sats = 11;
     si.pdop = 2.0f;
     si.horizontal_accuracy = 5.0f;
-    si.ecef_x = 1113194.0;  si.ecef_y = -4813733.0;  si.ecef_z = 3985732.0;
+    // A real WGS84 surface point (39.082 N, 76.979 W, ~100 m — the field this
+    // repo's flights are flown at), so the golden's lat/lon/alt columns read
+    // as a plausible position rather than 21 km underground.
+    si.ecef_x = 1117001.0;  si.ecef_y = -4830195.0;  si.ecef_z = 3999454.0;
     si.acc_x = 0.1f; si.acc_y = -0.2f; si.acc_z = 9.8f;
     si.gyro_x = 1.5f; si.gyro_y = -2.5f; si.gyro_z = 0.5f;
     si.q0 = 1.0f; si.q1 = 0.0f; si.q2 = 0.0f; si.q3 = 0.0f;
