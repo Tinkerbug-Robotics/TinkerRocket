@@ -123,11 +123,16 @@ struct RocketConfig {
     // profile default and, paired with the ±60° fin cal, under-deflected ~2×.
     var servoMinUs: Int16 = 1000
     var servoMaxUs: Int16 = 2000
-    var pidKp: Float = 0.08
-    var pidKi: Float = 0.005
-    var pidKd: Float = 0.003
-    var pidMinCmd: Float = -10.0
-    var pidMaxCmd: Float = 10.0
+    // #915: match RocketProfile and config.h KP/KI/KD/MIN_CMD/MAX_CMD, the
+    // same alignment #407 and #561 made for the servo fields. These defaults
+    // survive into the profile whenever a readback omits the key, so a stale
+    // set here is a silent re-tune — the old 0.08/0.005/0.003/±10 matched
+    // neither the firmware nor the profile.
+    var pidKp: Float = 0.12
+    var pidKi: Float = 0.01
+    var pidKd: Float = 0.0
+    var pidMinCmd: Float = -20.0
+    var pidMaxCmd: Float = 20.0
     var servoEnabled: Bool = true
     var gainScheduleEnabled: Bool = true
     var useAngleControl: Bool = false
@@ -135,6 +140,11 @@ struct RocketConfig {
     var rateCapDps: Float = 60
     var kpAngle: Float = 2.0               // outer angle-loop P-gain (cascaded angle control)
     var integralSepThreshold: Float = 40   // PID integral-separation anti-windup threshold (deg/s); 0 disables
+    /// True once the rocket reported real roll-control gains instead of the
+    /// "use firmware default" sentinels (#253: rcap/kpang <= 0, iwind < 0).
+    /// Until then the three fields above hold the APP's defaults, not the
+    /// rocket's values — #915 adoption must not mistake them for a report.
+    var rollGainsReported: Bool = false
     var guidanceEnabled: Bool = false
     var cameraType: UInt8 = 2
     var imuOrientSetting: UInt8? = nil   // 0xFF auto / 0..23 manual (nil = not reported)

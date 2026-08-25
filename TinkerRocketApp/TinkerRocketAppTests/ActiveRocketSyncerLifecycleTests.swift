@@ -30,6 +30,143 @@ final class ActiveRocketSyncerLifecycleTests: XCTestCase {
         return d
     }
 
+    /// Let queued main-queue work run: the syncer's readback trigger and the
+    /// active-profile subscription both hop through `.receive(on: .main)`.
+    private func settleMainQueue(_ turns: Int = 5) {
+        for _ in 0..<turns {
+            let exp = expectation(description: "main-queue turn")
+            DispatchQueue.main.async { exp.fulfill() }
+            wait(for: [exp], timeout: 1)
+        }
+    }
+
+    /// Feed the connect-time readback the syncer waits on.
+    private func reportConfig(_ d: BLEDevice, unitID: String,
+                              mutate: (inout RocketConfig) -> Void = { _ in }) {
+        var cfg = RocketConfig()
+        mutate(&cfg)
+        d.rocketConfig = cfg
+        d.unitID = unitID
+    }
+
+    // MARK: - #915: the rocket keeps its own settings
+
+    /// The headline case: the phone is holding a DIFFERENT airframe's profile
+    /// and connects to a known rocket.  The board's own profile must become
+    /// active and nothing may be written to the vehicle.
+    func testConnectBindsTheBoardsProfileAndPushesNothing() {
+        let syncer = ActiveRocketSyncer()
+        let store = makeStore()
+        let mine = store.add(name: "Atlas")
+        store.update(mine.id) { $0.lastUsedUnitID = "BOARD1" }
+        let other = store.add(name: "Some other rocket")
+        store.setActive(other.id)
+
+        let rocket = makeRocket()
+        syncer.attach(device: rocket, store: store)
+        reportConfig(rocket, unitID: "BOARD1")
+        settleMainQueue()
+
+        XCTAssertEqual(store.activeId, mine.id,
+                       "the board's own profile is the one that becomes active")
+        XCTAssertNotEqual(syncer.syncState, .syncing,
+                          "connecting must never write settings to the rocket (#915)")
+    }
+
+    /// A board the app has never seen must be adopted as its own profile —
+    /// pushing whatever happened to be active is the failure #915 names.
+    func testUnknownBoardIsAdoptedAsANewProfile() {
+        let syncer = ActiveRocketSyncer()
+        let store = makeStore()
+        let other = store.add(name: "Some other rocket")
+        store.update(other.id) { $0.pidKp = 0.99 }
+        store.setActive(other.id)
+
+        let rocket = makeRocket()
+        rocket.unitName = "Newcomer"
+        syncer.attach(device: rocket, store: store)
+        reportConfig(rocket, unitID: "BOARD9")
+        settleMainQueue()
+
+        XCTAssertNotEqual(store.activeId, other.id)
+        XCTAssertEqual(store.activeProfile?.lastUsedUnitID, "BOARD9")
+        XCTAssertEqual(syncer.createdProfileName, "Newcomer")
+        XCTAssertNotEqual(syncer.syncState, .syncing)
+        XCTAssertEqual(store.profiles.first { $0.id == other.id }?.pidKp, 0.99,
+                       "the untouched profile keeps its own values")
+    }
+
+    /// The rocket's values win over the profile's, and the difference is
+    /// reported rather than applied silently.
+    func testDisagreementAdoptsTheRocketsValueAndSaysSo() {
+        let syncer = ActiveRocketSyncer()
+        let store = makeStore()
+        let mine = store.add(name: "Atlas")
+        store.update(mine.id) {
+            $0.lastUsedUnitID = "BOARD1"
+            $0.cameraType = 0
+        }
+        store.setActive(mine.id)
+
+        let rocket = makeRocket()
+        syncer.attach(device: rocket, store: store)
+        reportConfig(rocket, unitID: "BOARD1") { $0.cameraType = 1 }
+        settleMainQueue()
+
+        XCTAssertEqual(store.activeProfile?.cameraType, 1, "the rocket's value wins")
+        XCTAssertEqual(syncer.syncState,
+                       .adopted([ActiveRocketSyncer.groupCamera]))
+    }
+
+    /// End-to-end through the real JSON parser, in the order the out computer
+    /// actually queues the readback: config, config_pyro, config_identity,
+    /// then imu_orient.  The orientation setting rides that LAST frame, so it
+    /// lands after the syncer has already reconciled everything else — the
+    /// case the direct-assignment tests above can't reach.
+    func testLateOrientationFrameIsAdoptedToo() {
+        let syncer = ActiveRocketSyncer()
+        let store = makeStore()
+        let mine = store.add(name: "Atlas")
+        store.update(mine.id) {
+            $0.lastUsedUnitID = "boardA"
+            $0.imuOrientSetting = 7        // manual, carried over from elsewhere
+        }
+        store.setActive(mine.id)
+
+        let rocket = makeRocket()
+        syncer.attach(device: rocket, store: store)
+
+        func feed(_ json: String) {
+            rocket.parseTelemetryData(json.data(using: .utf8))
+        }
+        // Values chosen to match the profile so only orientation differs.
+        feed("""
+            {"type":"config","sb1":0,"shz":333,"smn":1000,"smx":2000,            "kp":0.1200,"ki":0.0100,"kd":0.0000,"pmn":-20.0,"pmx":20.0,            "sen":true,"gs":true,"ac":false,"rdly":0,            "rcap":60.0,"kpang":2.00,"iwind":40.0,            "ge":false,"camt":2,"irate":0}
+            """)
+        feed("""
+            {"type":"config_pyro","p1e":false,"p1m":0,"p1v":1.0,            "p2e":false,"p2m":0,"p2v":100.0,"p3e":false,"p3m":0,"p3v":0.0,            "p4e":false,"p4m":0,"p4v":0.0}
+            """)
+        feed("""
+            {"type":"config_identity","uid":"boardA","un":"Atlas","nid":5,            "rid":1,"dt":"R","fw":"test"}
+            """)
+        settleMainQueue()
+
+        XCTAssertEqual(store.activeId, mine.id)
+        XCTAssertNotEqual(syncer.syncState, .syncing,
+                          "the readback alone must not trigger a write")
+
+        // The orientation frame the OC queues last.
+        feed("""
+            {"type":"imu_orient","code":0,"mode":0,"name":"+X","set":255}
+            """)
+        settleMainQueue()
+
+        XCTAssertEqual(store.activeProfile?.imuOrientSetting, 0xFF,
+                       "this rocket is on pad auto-detect and stays that way")
+        XCTAssertEqual(syncer.syncState,
+                       .adopted([ActiveRocketSyncer.groupImuOrientation]))
+    }
+
     func testAttachRocket_IsVisiblyAwaitingSync_NotSilentIdle() {
         let syncer = ActiveRocketSyncer()
         syncer.attach(device: makeRocket(), store: makeStore())

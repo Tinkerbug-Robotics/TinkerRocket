@@ -5,6 +5,7 @@ import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
 import com.tinkerbug.tinkerrocket.protocol.RollWaypoint
 import com.tinkerbug.tinkerrocket.protocol.MagCalSubType
+import com.tinkerbug.tinkerrocket.protocol.RocketConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -22,13 +23,22 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 /**
- * Pushes the active rocket profile to the connected flight computer (#132) —
- * port of iOS ActiveRocketSyncer.swift.  The app is source-of-truth: on
- * connect the WHOLE active profile is pushed so the rocket always flies the
- * profile's settings, never whatever happened to be in its NVS — the fix for
- * "flew the wrong rocket's settings".  Whole-profile (not a diff) because
- * the config readback doesn't echo every field; connects are infrequent and
- * the writes idempotent.  Offline edits ride out on the next connect free.
+ * Reconciles the connected rocket's own settings with the app's profile for
+ * that airframe (#132, #915) — port of iOS ActiveRocketSyncer.swift.  The
+ * ROCKET is source-of-truth on connect: it reports what it has, the app
+ * adopts it into the profile bound to that board by `lastUsedUnitID`, and
+ * nothing is written to the vehicle unless the user asks.
+ *
+ * Why this way round (#915 reverses #132): the rocket persists essentially
+ * its whole config in NVS and reloads it at boot, so it already remembers
+ * what it was configured as.  Under the old rule, connecting while the phone
+ * held a different airframe's profile silently reconfigured the vehicle —
+ * fourteen config frames inside two seconds, no user action, no UI notice.
+ *
+ * The whole profile still goes out on an explicit act: switching the active
+ * profile onto a connected rocket, or [pushProfileToRocket] from the UI.
+ * The readback covers only about half the editable surface, so
+ * [unreportedGroups] names what the app cannot verify.
  *
  * Single-writer: all entry points run on the fleet dispatcher via [scope].
  */
@@ -38,8 +48,14 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         public data object Idle : SyncState          // not attached / base station
         public data object AwaitingSync : SyncState  // readback not in yet (#375)
         public data object NoProfile : SyncState
-        public data object Syncing : SyncState
-        public data object Synced : SyncState
+        public data object Syncing : SyncState       // explicit whole-profile push in flight
+        public data object Synced : SyncState        // profile and rocket agree on all reported
+        /**
+         * The rocket reported settings the profile disagreed with; the profile
+         * was updated to match and these groups changed (#915).  Informational,
+         * not a fault — the rocket kept flying what it had.
+         */
+        public data class Adopted(val groups: List<String>) : SyncState
         public data class Failed(val message: String) : SyncState
     }
 
@@ -69,9 +85,22 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
     private val _sensorCalAdvisory = MutableStateFlow<CalAdvisory>(CalAdvisory.None)
     public val sensorCalAdvisory: StateFlow<CalAdvisory> = _sensorCalAdvisory.asStateFlow()
 
-    /** A profile previously flown on this board — suggested, never auto-applied. */
+    /**
+     * A profile previously flown on this board — suggested, never auto-applied.
+     * Since #915 binds the board's profile automatically this is normally null
+     * (the bound profile IS the active one, and this excludes the active id);
+     * it still fires if a second profile claims the same board.
+     */
     private val _suggestedProfileId = MutableStateFlow<UUID?>(null)
     public val suggestedProfileId: StateFlow<UUID?> = _suggestedProfileId.asStateFlow()
+
+    /**
+     * Name of a profile this syncer created for a board it had never seen,
+     * seeded from the rocket's own reported settings (#915).  Surfaced as an
+     * info line so a silently-created profile is never a surprise.
+     */
+    private val _createdProfileName = MutableStateFlow<String?>(null)
+    public val createdProfileName: StateFlow<String?> = _createdProfileName.asStateFlow()
 
     private var session: DeviceSession? = null
     private var store: RocketProfileStore? = null
@@ -79,6 +108,23 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
     private var magCalReadPending = false
     private var sensorCalReadPending = false
     private var syncedTimer: Job? = null
+
+    /**
+     * The profile id THIS syncer made active while binding the board.  The
+     * activeId collection is delivered on a later dispatcher turn, so it
+     * cannot tell our own bind from a user tap — without this, binding a
+     * board would push the profile straight back at the rocket, reinstating
+     * the exact #915 behaviour the bind exists to remove.
+     */
+    private var selfSelectedProfileId: UUID? = null
+
+    /**
+     * The orientation setting rides a LATER readback frame than the main
+     * config, so the first adoption pass usually runs without it.  Armed once
+     * per attach; never re-armed, so a later user edit isn't mistaken for a
+     * rocket report.
+     */
+    private var orientAdoptArmed = false
 
     /**
      * Role at attach time.  A renamed device can mis-parse its type from the
@@ -157,13 +203,24 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
             }
         }
 
-        // Re-push when the user switches the active profile mid-connection.
+        // Push when the USER switches the active profile mid-connection.
         jobs += scope.launch {
             store.activeId.drop(1).collect {
                 val s = this@ActiveRocketSyncer.session ?: return@collect
                 if (!s.isConnected.value || s.isBaseStation) return@collect
+                // Our own bind, arriving late — not a user choice, so no push.
+                val mine = selfSelectedProfileId
+                if (mine != null && store.activeId.value == mine) {
+                    selfSelectedProfileId = null
+                    return@collect
+                }
+                selfSelectedProfileId = null
                 _suggestedProfileId.value = null   // user has chosen
-                performSync()
+                _createdProfileName.value = null
+                // Choosing a different profile for a CONNECTED rocket is the
+                // explicit "make this rocket fly these settings" act, so it
+                // still pushes — the one place #915 keeps the old behaviour.
+                pushProfileToRocket()
             }
         }
     }
@@ -178,26 +235,136 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         attachedAsBaseStation = false
         magCalReadPending = false
         sensorCalReadPending = false
+        selfSelectedProfileId = null
+        orientAdoptArmed = false
         _syncState.value = SyncState.Idle
         _magCalAdvisory.value = CalAdvisory.None
         _sensorCalAdvisory.value = CalAdvisory.None
         _suggestedProfileId.value = null
+        _createdProfileName.value = null
     }
 
     private fun onReadyToSync() {
         val s = session ?: return
         if (s.isBaseStation) return
         val st = store ?: return
+        bindProfileToBoard()
         _suggestedProfileId.value = suggestedProfile(
             st.profiles.value, st.activeId.value, s.identity.value.unitId.orEmpty(),
         )
-        performSync()
+        adoptRocketConfig()
     }
 
-    private fun performSync() {
+    /**
+     * Make the profile bound to the connected board the active one, creating
+     * one from the rocket's own settings if this board is new to the app.
+     *
+     * `lastUsedUnitID` was already a per-board binding; before #915 it only
+     * drove a suggestion the user had to accept while the *active* profile was
+     * pushed regardless.  Reading the binding instead of ignoring it is what
+     * lets the phone connect to any rocket in the field without changing it.
+     */
+    private fun bindProfileToBoard() {
+        val s = session ?: return
+        val st = store ?: return
+        val unitId = s.identity.value.unitId.orEmpty()
+        if (unitId.isEmpty()) return
+
+        val bound = st.profiles.value.firstOrNull { it.lastUsedUnitID == unitId }
+        if (bound != null) {
+            if (st.activeId.value != bound.id) {
+                selfSelectedProfileId = bound.id
+                st.setActive(bound.id)
+            }
+            return
+        }
+
+        // Board we have never seen: adopt it as its own profile.  Pushing the
+        // active profile here instead would be exactly the #915 failure —
+        // connect to an unfamiliar rocket, reconfigure it.
+        val name = s.identity.value.unitName?.takeIf { it.isNotEmpty() }
+            ?: "Rocket ${unitId.takeLast(4)}"
+        val created = st.add(name)
+        st.update(created.id) { it.copy(lastUsedUnitID = unitId) }
+        selfSelectedProfileId = created.id
+        st.setActive(created.id)
+        _createdProfileName.value = st.profiles.value.firstOrNull { it.id == created.id }?.name
+    }
+
+    /**
+     * Take the rocket's reported settings into the bound profile.  Nothing is
+     * written to the rocket.
+     */
+    private fun adoptRocketConfig() {
         val s = session
         val st = store
         if (s == null || st == null || !s.isConnected.value) {
+            _syncState.value = SyncState.Idle
+            return
+        }
+        val profile = st.activeProfile ?: run {
+            _syncState.value = SyncState.NoProfile
+            return
+        }
+        val cfg = s.rocketConfig.value ?: run {
+            _syncState.value = SyncState.AwaitingSync
+            return
+        }
+
+        val result = adopt(profile, cfg)
+        if (result.changed.isNotEmpty()) st.update(profile.id) { result.profile }
+
+        // A profile we just created from this same readback matches the rocket
+        // by construction — reporting its every factory-default field as
+        // "changed" would be noise.  createdProfileName covers it.
+        _syncState.value =
+            if (result.changed.isEmpty() || _createdProfileName.value != null) SyncState.Synced
+            else SyncState.Adopted(result.changed)
+
+        armOrientationAdopt(s, cfg)
+
+        syncCal(profile, s)
+    }
+
+    /**
+     * The orientation setting arrives in a later readback frame than the main
+     * config, so adopt it again when it lands.  Only while it is still
+     * missing, only once, and only on firmware that reports it at all
+     * (pre-v3-orientation FCs never send it — the collect simply never fires
+     * and the profile keeps its own value).
+     */
+    private fun armOrientationAdopt(s: DeviceSession, cfg: RocketConfig) {
+        if (cfg.imuOrientSetting != null || orientAdoptArmed) return
+        orientAdoptArmed = true
+        jobs += scope.launch {
+            val setting = s.rocketConfig
+                .map { it?.imuOrientSetting }
+                .filterNotNull()
+                .first()
+            val st = this@ActiveRocketSyncer.store ?: return@launch
+            if (!s.isConnected.value) return@launch
+            val profile = st.activeProfile ?: return@launch
+            if (profile.imuOrientSetting == setting) return@launch
+            st.update(profile.id) { it.copy(imuOrientSetting = setting) }
+            if (_createdProfileName.value != null) return@launch
+            val existing = (_syncState.value as? SyncState.Adopted)?.groups.orEmpty()
+            if (GROUP_IMU_ORIENTATION !in existing) {
+                _syncState.value = SyncState.Adopted(existing + GROUP_IMU_ORIENTATION)
+            }
+        }
+    }
+
+    /**
+     * Write the whole active profile to the connected rocket.  This is the old
+     * #132 connect-time behaviour, kept as a deliberate user action:
+     * provisioning a fresh board, cloning a known-good setup onto a
+     * replacement computer, or making the unreported groups true after editing
+     * them offline.
+     */
+    public fun pushProfileToRocket() {
+        val s = session
+        val st = store
+        if (s == null || st == null || !s.isConnected.value || s.isBaseStation) {
             _syncState.value = SyncState.Idle
             return
         }
@@ -212,7 +379,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
 
         syncCal(profile, s)
 
-        // Record which board this profile last flew on (soft pre-select).
+        // This profile now owns this board.
         st.update(profile.id) { it.copy(lastUsedUnitID = s.identity.value.unitId) }
 
         // Optimistic (no per-command ack on this link); hold "syncing"
@@ -371,6 +538,192 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
 
     public companion object {
         public const val SYNCED_DELAY_MS: Long = 800
+
+        // Group labels for the "what the rocket disagreed about" line.  Groups,
+        // not fields: "PID gains" reads better on a phone than five numbers,
+        // and the settings screen is organised the same way.
+        public const val GROUP_SERVO_TRIM: String = "Servo trim"
+        public const val GROUP_SERVO_TIMING: String = "Servo timing"
+        public const val GROUP_PID_GAINS: String = "PID gains"
+        public const val GROUP_SERVO_CONTROL: String = "Servo control"
+        public const val GROUP_GAIN_SCHEDULE: String = "Gain schedule"
+        public const val GROUP_ROLL_CONTROL: String = "Roll control"
+        public const val GROUP_GUIDANCE_ENABLE: String = "Guidance"
+        public const val GROUP_CAMERA: String = "Camera"
+        public const val GROUP_IMU_ORIENTATION: String = "IMU orientation"
+        public const val GROUP_IMU_RATE: String = "IMU rate"
+
+        /**
+         * Setting groups the rocket does not report back, so the app shows the
+         * profile's values for them and cannot verify them against the vehicle
+         * (#915).  Named so the UI can say which ones rather than implying the
+         * whole screen is confirmed.
+         */
+        public val unreportedGroups: List<String> = listOf(
+            "Servo trim 2-4", "Fin travel", "Fin layout",
+            "Roll profile", "Guidance parameters", "Sounds",
+        )
+
+        /** Outcome of [adopt]: the reconciled profile and what differed. */
+        public data class AdoptionResult(
+            val profile: RocketProfile,
+            val changed: List<String>,
+        )
+
+        /**
+         * Reconcile a profile against what the rocket reported — rocket wins —
+         * and name the groups that differed.  Pure, so the precedence rule is
+         * testable without a peripheral (mirrors [magCalSyncAction]).
+         *
+         * Only fields the readback actually echoes are touched.  Anything the
+         * rocket doesn't report (see [unreportedGroups]) is left exactly as the
+         * profile has it, because the alternative — resetting it to a default
+         * we invented — would be a silent change of its own.
+         *
+         * Comparisons run at the precision the value crossed the wire at, so a
+         * profile Kp of 0.12 doesn't "differ" from a rocket reporting 0.1200
+         * every single connect.
+         */
+        public fun adopt(profile: RocketProfile, cfg: RocketConfig): AdoptionResult {
+            var p = profile
+            val changed = mutableListOf<String>()
+
+            if (p.servoBias1 != cfg.servoBias1) {
+                p = p.copy(servoBias1 = cfg.servoBias1)
+                changed += GROUP_SERVO_TRIM
+            }
+
+            if (p.servoHz != cfg.servoHz || p.servoMinUs != cfg.servoMinUs ||
+                p.servoMaxUs != cfg.servoMaxUs
+            ) {
+                p = p.copy(
+                    servoHz = cfg.servoHz,
+                    servoMinUs = cfg.servoMinUs,
+                    servoMaxUs = cfg.servoMaxUs,
+                )
+                changed += GROUP_SERVO_TIMING
+            }
+
+            if (!same(p.pidKp, cfg.pidKp, 4) || !same(p.pidKi, cfg.pidKi, 4) ||
+                !same(p.pidKd, cfg.pidKd, 4) || !same(p.pidMinCmd, cfg.pidMinCmd, 1) ||
+                !same(p.pidMaxCmd, cfg.pidMaxCmd, 1)
+            ) {
+                p = p.copy(
+                    pidKp = cfg.pidKp, pidKi = cfg.pidKi, pidKd = cfg.pidKd,
+                    pidMinCmd = cfg.pidMinCmd, pidMaxCmd = cfg.pidMaxCmd,
+                )
+                changed += GROUP_PID_GAINS
+            }
+
+            if (p.servoControlEnabled != cfg.servoEnabled) {
+                p = p.copy(servoControlEnabled = cfg.servoEnabled)
+                changed += GROUP_SERVO_CONTROL
+            }
+
+            if (p.gainScheduleEnabled != cfg.gainScheduleEnabled) {
+                p = p.copy(gainScheduleEnabled = cfg.gainScheduleEnabled)
+                changed += GROUP_GAIN_SCHEDULE
+            }
+
+            // The three roll gains ride sentinels meaning "firmware default"
+            // (#253).  When the rocket sends those, RocketConfig holds the
+            // app's defaults rather than the vehicle's values — adopting them
+            // would overwrite the profile with a number nobody chose.
+            var rollDiffers = p.useAngleControl != cfg.useAngleControl ||
+                p.rollDelayMs != cfg.rollDelayMs
+            if (cfg.rollGainsReported) {
+                rollDiffers = rollDiffers ||
+                    !same(p.rateCapDps, cfg.rateCapDps, 1) ||
+                    !same(p.kpAngle, cfg.kpAngle, 2) ||
+                    !same(p.integralSepThreshold, cfg.integralSepThreshold, 1)
+            }
+            if (rollDiffers) {
+                p = p.copy(
+                    useAngleControl = cfg.useAngleControl,
+                    rollDelayMs = cfg.rollDelayMs,
+                )
+                if (cfg.rollGainsReported) {
+                    p = p.copy(
+                        rateCapDps = cfg.rateCapDps,
+                        kpAngle = cfg.kpAngle,
+                        integralSepThreshold = cfg.integralSepThreshold,
+                    )
+                }
+                changed += GROUP_ROLL_CONTROL
+            }
+
+            // Enable flag only — the PN parameters behind it aren't reported.
+            if (p.guidanceEnabled != cfg.guidanceEnabled) {
+                p = p.copy(guidanceEnabled = cfg.guidanceEnabled)
+                changed += GROUP_GUIDANCE_ENABLE
+            }
+
+            if (p.cameraType != cfg.cameraType) {
+                p = p.copy(cameraType = cfg.cameraType)
+                changed += GROUP_CAMERA
+            }
+
+            // null = this firmware doesn't report it; keep what the profile has.
+            cfg.imuOrientSetting?.let {
+                if (p.imuOrientSetting != it) {
+                    p = p.copy(imuOrientSetting = it)
+                    changed += GROUP_IMU_ORIENTATION
+                }
+            }
+            cfg.imuRateHz?.let {
+                if (p.imuRateHz != it) {
+                    p = p.copy(imuRateHz = it)
+                    changed += GROUP_IMU_RATE
+                }
+            }
+
+            val rocketPyro = listOf(
+                Triple(cfg.pyro1Enabled, cfg.pyro1TriggerMode, cfg.pyro1TriggerValue),
+                Triple(cfg.pyro2Enabled, cfg.pyro2TriggerMode, cfg.pyro2TriggerValue),
+                Triple(cfg.pyro3Enabled, cfg.pyro3TriggerMode, cfg.pyro3TriggerValue),
+                Triple(cfg.pyro4Enabled, cfg.pyro4TriggerMode, cfg.pyro4TriggerValue),
+            )
+            val profilePyro = listOf(
+                Triple(p.pyro1Enabled, p.pyro1TriggerMode, p.pyro1TriggerValue),
+                Triple(p.pyro2Enabled, p.pyro2TriggerMode, p.pyro2TriggerValue),
+                Triple(p.pyro3Enabled, p.pyro3TriggerMode, p.pyro3TriggerValue),
+                Triple(p.pyro4Enabled, p.pyro4TriggerMode, p.pyro4TriggerValue),
+            )
+            for (i in 0..3) {
+                if (profilePyro[i].first != rocketPyro[i].first ||
+                    profilePyro[i].second != rocketPyro[i].second ||
+                    !same(profilePyro[i].third, rocketPyro[i].third, 1)
+                ) {
+                    changed += "Pyro ${i + 1}"
+                }
+            }
+            p = p.copy(
+                pyro1Enabled = rocketPyro[0].first,
+                pyro1TriggerMode = rocketPyro[0].second,
+                pyro1TriggerValue = rocketPyro[0].third,
+                pyro2Enabled = rocketPyro[1].first,
+                pyro2TriggerMode = rocketPyro[1].second,
+                pyro2TriggerValue = rocketPyro[1].third,
+                pyro3Enabled = rocketPyro[2].first,
+                pyro3TriggerMode = rocketPyro[2].second,
+                pyro3TriggerValue = rocketPyro[2].third,
+                pyro4Enabled = rocketPyro[3].first,
+                pyro4TriggerMode = rocketPyro[3].second,
+                pyro4TriggerValue = rocketPyro[3].third,
+            )
+
+            return AdoptionResult(p, changed)
+        }
+
+        /**
+         * Equal once both sides are rounded to the decimals the value is
+         * serialised at in the readback JSON.
+         */
+        public fun same(a: Float, b: Float, decimals: Int): Boolean {
+            var scale = 1.0
+            repeat(decimals) { scale *= 10.0 }
+            return Math.round(a * scale) == Math.round(b * scale)
+        }
 
         /** Pure cal-sync decision, shared by mag + sensor cal (testable). */
         public sealed interface CalAction {

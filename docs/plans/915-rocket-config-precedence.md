@@ -1,0 +1,93 @@
+# 915 — The rocket keeps its own settings
+
+Issue: [#915](https://github.com/Tinkerbug-Robotics/TinkerRocket-Hardware/issues/915)
+
+A rocket that has been configured should stay configured, and a phone should be
+able to connect to any rocket in the field without changing it. That is a
+precedence decision, not a persistence one — the retention already works.
+
+## What the investigation found
+
+**Retention is not the gap.** The flight computer persists nearly its entire
+config to NVS and reloads it at boot: servo biases 1–4, hz, pulse endpoints, fin
+travel, PID, gain schedule, all five roll-control parameters, guidance enable
+plus all thirteen PN parameters, fin layout (four azimuths and both reverse
+masks), roll waypoints, pyro, IMU rate, sounds, servo-enable, camera, mag cal and
+sensor cal. The one exception is the IMU mounting orientation, which the FC does
+*not* store — the out computer stores it instead and re-pushes it through the
+status-query self-heal when the FC comes up in `ORIENT_MODE_DEFAULT`.
+
+**The gap was precedence.** Within about a second of connecting, the app pushed
+fourteen config frames (not eleven — the log in the issue is truncated; pyro,
+sounds and IMU rate follow), overwriting whatever the rocket had with whichever
+profile happened to be active. It did this *after* receiving the rocket's
+identity, and while already knowing which profile had last flown on that board.
+
+**`lastUsedUnitID` was already the binding, unused.** It bound a profile to a
+board's hardware id and drove a "last flown as…" suggestion the user had to
+accept — while the push went out regardless. Reading that binding instead of
+ignoring it is most of the fix.
+
+**The out computer's config cache is display-only.** It feeds the readback JSON
+and is never re-pushed to the FC, so it can drift from what the vehicle actually
+holds. The exception, again, is orientation.
+
+**`nid=180 → 0` is not an ongoing discard.** It is the one-shot identity NVS
+v0→v1 schema migration, which fires once per device.
+
+## The rule
+
+The rocket is authoritative on connect.
+
+1. On connect, the profile bound to the connected board becomes active.
+2. A board the app has never seen is adopted as a new profile, seeded from the
+   rocket's own reported settings and named from its unit name.
+3. The rocket's reported values are adopted into that profile. Where the two
+   disagreed, the profile changes and the app says which groups changed.
+4. **Connecting writes nothing to the vehicle.** The whole profile goes out only
+   on an explicit act: switching the active profile onto a connected rocket, or
+   *Send All Settings*. A single-field edit still self-applies its group (#144).
+
+Calibration is deliberately unchanged. Mag and sensor cal were already
+board-tagged and refused to cross to a board they were not captured on, which is
+the same guarantee by a different route; changing a well-tested safety path that
+already satisfies the goal would have been churn.
+
+## What the app still cannot see
+
+The readback echoes about half the editable surface. Not reported: servo trim
+2–4, fin travel, fin layout, roll waypoints, the PN guidance parameters, sounds.
+Those are shown from the profile and labelled as unverifiable rather than
+presented as confirmed. Two comparison rules keep adoption honest:
+
+- Values are compared at the precision they cross the wire at, so a profile Kp of
+  `0.12` does not "differ" from a rocket reporting `0.1200` on every connect.
+- The #253 sentinels (`rcap`/`kpang` ≤ 0, `iwind` < 0) mean "firmware default",
+  and `RocketConfig` then holds the *app's* defaults rather than the vehicle's.
+  Adoption skips those three fields when the sentinel came back, so a
+  deliberately-tuned profile is not overwritten with a number nobody chose.
+
+One defect fell out of this: `RocketConfig`'s PID defaults were `0.08 / 0.005 /
+0.003 / ±10`, matching neither the firmware nor `RocketProfile`. Harmless while
+they were only a display fallback; a silent re-tune once adoption reads them.
+Aligned to config.h on both platforms, the same fix #407 and #561 already made
+for the servo fields.
+
+## Follow-up: the firmware full-config report
+
+Ordered second deliberately — the app change stands on its own, and this is what
+retires the "cannot verify" list.
+
+1. **The FC should persist its IMU orientation setting.** Every other config
+   group writes NVS in its command handler; `ORIENT_CONFIG_PENDING` does not.
+   Today the OC's self-heal covers it, which means the one setting the issue
+   calls out as authoritative and uncorrectable-downstream is also the one whose
+   retention depends on a second board noticing and re-pushing.
+2. **A full-config report FC→OC.** `FlightSettingsData` already carries most of
+   it (219 bytes) but cannot be extended — `MAX_PAYLOAD` is 224, and fin layout
+   plus the PN parameters need roughly 58 more. So this is a new message, not a
+   tail append. The mini needs the local-read equivalent.
+3. **Readback frames for the rest**, split to stay under the BLE notify MTU;
+   `sendConfigJSON` silently drops anything over MTU−3, so the existing "keep
+   each frame tiny" discipline applies.
+4. Then the app can drop `unreportedGroups` and diff the whole surface.

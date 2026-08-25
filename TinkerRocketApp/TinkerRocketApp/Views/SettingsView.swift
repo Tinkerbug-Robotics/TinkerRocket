@@ -2,12 +2,12 @@
 //  SettingsView.swift
 //  TinkerRocketApp
 //
-//  Per-rocket settings, edited against the ACTIVE rocket profile (issue
-//  #132).  The app is source-of-truth: edits are written to the profile and,
-//  when a rocket is connected, also pushed live so there's no
-//  disconnect/reconnect needed to apply.  On the next connect the
-//  ActiveRocketSyncer re-pushes the whole profile, so the rocket always
-//  matches the profile regardless of what was in its NVS.
+//  Per-rocket settings, edited against the ACTIVE rocket profile (issues
+//  #132, #915).  An edit here is an explicit user act: it is written to the
+//  profile and, when a rocket is connected, pushed live so there's no
+//  disconnect/reconnect needed to apply.  Connecting is NOT such an act —
+//  since #915 the next connect adopts the rocket's own settings into the
+//  profile rather than re-pushing the profile over them.
 //
 //  LoRa frequency / TX power stay device/BS-side (not part of a profile) and
 //  are shown here read-only / BS-only as before.

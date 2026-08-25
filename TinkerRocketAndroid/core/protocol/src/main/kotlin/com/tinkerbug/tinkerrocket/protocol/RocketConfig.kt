@@ -26,11 +26,15 @@ public data class RocketConfig(
     // SERVO_MIN_US/MAX_US = 1000/2000.
     val servoMinUs: Int = 1000,                 // i16, "smn"
     val servoMaxUs: Int = 2000,                 // i16, "smx"
-    val pidKp: Float = 0.08f,                   // "kp"
-    val pidKi: Float = 0.005f,                  // "ki"
-    val pidKd: Float = 0.003f,                  // "kd"
-    val pidMinCmd: Float = -10.0f,              // "pmn"
-    val pidMaxCmd: Float = 10.0f,               // "pmx"
+    // #915: match RocketProfile and config.h KP/KI/KD/MIN_CMD/MAX_CMD, the
+    // same alignment #407 and #561 made for the servo fields.  These defaults
+    // survive into the profile whenever a readback omits the key, so a stale
+    // set here is a silent re-tune.
+    val pidKp: Float = 0.12f,                   // "kp"
+    val pidKi: Float = 0.01f,                   // "ki"
+    val pidKd: Float = 0.0f,                    // "kd"
+    val pidMinCmd: Float = -20.0f,              // "pmn"
+    val pidMaxCmd: Float = 20.0f,               // "pmx"
     val servoEnabled: Boolean = true,           // "sen"
     val gainScheduleEnabled: Boolean = true,    // "gs"
     val useAngleControl: Boolean = false,       // "ac"
@@ -40,6 +44,13 @@ public data class RocketConfig(
     val kpAngle: Float = 2.0f,                  // "kpang" (#253 sentinel: <= 0 → keep default)
     /** PID integral-separation anti-windup threshold (deg/s); 0 disables. */
     val integralSepThreshold: Float = 40f,      // "iwind" (#253 sentinel: < 0 → keep default)
+    /**
+     * True once the rocket reported real roll-control gains rather than the
+     * #253 "use firmware default" sentinels.  Until then the three fields
+     * above hold the APP's defaults, not the rocket's values — #915 adoption
+     * must not mistake them for a report.  Not a wire field.
+     */
+    val rollGainsReported: Boolean = false,
     val guidanceEnabled: Boolean = false,       // "ge"
     val cameraType: Int = 2,                    // u8, "camt"
     /** 0xFF auto / 0..23 manual (null = not reported).  NOT carried by the
@@ -144,6 +155,7 @@ public data class ConfigMessage(
             rateCapDps = rcap?.takeIf { it > 0 } ?: d.rateCapDps,
             kpAngle = kpang?.takeIf { it > 0 } ?: d.kpAngle,
             integralSepThreshold = iwind?.takeIf { it >= 0 } ?: d.integralSepThreshold,
+            rollGainsReported = rcap?.let { it > 0 } ?: false,
             guidanceEnabled = ge ?: d.guidanceEnabled,
             cameraType = (camt ?: d.cameraType.toLong()).coerceIn(0, 0xFF).toInt(),
             imuOrientSetting = d.imuOrientSetting,   // config never carries it (iOS: fresh nil)

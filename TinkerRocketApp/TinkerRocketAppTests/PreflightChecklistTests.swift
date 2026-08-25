@@ -148,7 +148,12 @@ final class PreflightChecklistTests: XCTestCase {
             .settingsSynced, in: connectedCtx(syncState: .synced)), .satisfied)
         XCTAssertEqual(PreflightChecklist.autoStatus(
             .settingsSynced, in: connectedCtx(syncState: .awaitingSync)),
-            .pending("Not yet applied"))
+            .pending("Rocket settings not read yet"))
+        // #915: the app took the rocket's own settings — the two agree, which
+        // is what this step checks.  What changed rides its own status line.
+        XCTAssertEqual(PreflightChecklist.autoStatus(
+            .settingsSynced, in: connectedCtx(syncState: .adopted(["PID gains"]))),
+            .satisfied)
         // A relay link can't sync — N/A, not pending-forever.
         XCTAssertEqual(PreflightChecklist.autoStatus(
             .settingsSynced, in: connectedCtx(isRelay: true, syncState: .idle)),

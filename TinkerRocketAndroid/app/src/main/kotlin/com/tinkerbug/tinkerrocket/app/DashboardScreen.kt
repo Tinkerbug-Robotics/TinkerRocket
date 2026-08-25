@@ -637,13 +637,18 @@ private fun SyncStateLine(state: com.tinkerbug.tinkerrocket.session.ActiveRocket
     val (label, color) = when (state) {
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Idle -> return
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.AwaitingSync ->
-            "profile: awaiting sync" to tr.statusWarn
+            "profile: reading rocket" to tr.statusWarn
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.NoProfile ->
             "profile: none active" to MaterialTheme.colorScheme.onSurfaceVariant
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Syncing ->
-            "profile: syncing…" to MaterialTheme.colorScheme.onSurfaceVariant
+            "profile: sending…" to MaterialTheme.colorScheme.onSurfaceVariant
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Synced ->
-            "profile: synced" to tr.statusOk
+            "profile: matches rocket" to tr.statusOk
+        // #915: informational, not a fault — the rocket kept what it had and
+        // the profile was brought into line.  Stays a quiet line; the rocket
+        // state banner is not recoloured for it.
+        is com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Adopted ->
+            "profile: updated from rocket" to MaterialTheme.colorScheme.onSurfaceVariant
         is com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Failed ->
             "profile: sync failed" to tr.statusBad
     }
