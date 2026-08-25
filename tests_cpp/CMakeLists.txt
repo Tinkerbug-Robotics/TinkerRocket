@@ -624,6 +624,22 @@ target_include_directories(test_dedup_reboot_policy PRIVATE
 target_link_libraries(test_dedup_reboot_policy GTest::gtest_main)
 gtest_discover_tests(test_dedup_reboot_policy)
 
+# ---------- test_cmd_queue_dedupe_policy ----------
+# Host-side test for the OC relay queue's dedupe key (#837 item 11). The queue
+# collapses a re-pushed command onto the queued one so a settings slider can't
+# flood it; that is wrong for PYRO_CONT_TEST / PYRO_FIRE_TEST, whose payload is
+# a channel byte, so two channels merged and the earlier test was lost with no
+# ack to report it. cmd_queue_dedupe_policy.h is pure apart from the shared
+# command-id constants.
+add_executable(test_cmd_queue_dedupe_policy test_cmd_queue_dedupe_policy.cpp)
+target_include_directories(test_cmd_queue_dedupe_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_cmd_queue_dedupe_policy GTest::gtest_main)
+gtest_discover_tests(test_cmd_queue_dedupe_policy)
+
 # ---------- test_mram_dirty_policy ----------
 # Host-side test for the #417 sink-mode dirty-marker gate: the marker means
 # "logging was activated" (launch detect / manual cmd-23 start), not "a log
