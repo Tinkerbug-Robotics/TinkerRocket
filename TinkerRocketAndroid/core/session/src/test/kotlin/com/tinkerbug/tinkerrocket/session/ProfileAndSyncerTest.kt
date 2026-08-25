@@ -840,3 +840,64 @@ class ActiveRocketSyncerTest {
         assertNull(ActiveRocketSyncer.suggestedProfile(listOf(a, b), active = null, unitId = ""))
     }
 }
+
+/**
+ * The connect-time sync gate (#836 item 4).
+ *
+ * The gate read `cfg != null && id.unitId != null`. `DeviceIdentity.unitId` is
+ * a non-nullable String defaulting to "", so the id half was a CONSTANT TRUE
+ * and the gate collapsed to the config half — which, by the gate's own comment,
+ * arrives before the identity readback.
+ *
+ * The consequence was not a late sync but a WRONG one.  onReadyToSync ran with
+ * unitId == "": bindProfileToBoard bailed on the empty id, so adoptRocketConfig
+ * wrote the connected rocket's settings into whatever profile was ACTIVE, and
+ * syncCal took magCalSyncAction's mismatch branch — the mag and sensor apply
+ * frames were never sent and a BoardMismatch advisory was raised against an
+ * empty id.  The collector is a first(), so nothing re-ran it when the real id
+ * landed — the rocket flew on whatever calibration was in its NVS.
+ */
+class SyncGateTest {
+
+    @Test
+    fun gateStaysShutUntilBothHalvesArePresent() {
+        // The ordering that broke it: config first, identity later.
+        assertTrue(!ActiveRocketSyncer.readyToSync(hasConfig = false, unitId = ""))
+        assertTrue(!ActiveRocketSyncer.readyToSync(hasConfig = true, unitId = ""))
+        assertTrue(ActiveRocketSyncer.readyToSync(hasConfig = true, unitId = "A1B2C3"))
+    }
+
+    @Test
+    fun aMissingIdentityIsEmptyNotNull() {
+        // The reason a null check could never work: this is what an
+        // un-received identity readback actually looks like.
+        assertEquals("", DeviceIdentity().unitId)
+    }
+
+    @Test
+    fun configWithoutIdentityDoesNotOpenTheGate() {
+        // Named separately because this is the exact case that shipped: the
+        // cmd-20 config frame lands ~1 s in, config_identity a beat later.
+        assertTrue(
+            !ActiveRocketSyncer.readyToSync(hasConfig = true, unitId = ""),
+            "syncing on the config frame alone pushes calibration against an empty unit id",
+        )
+    }
+
+    @Test
+    fun syncingAgainstAnEmptyUnitIdWouldMismatchNotPush() {
+        // Why the gate matters, rather than just when it opens. A stored cal is
+        // never calibratedOnUnitID == "", so an empty id takes the else branch.
+        val cal = MagCalData(
+            offsetX = 1, offsetY = 2, offsetZ = 3,
+            fieldRuT = 50f, residualUT = 1f,
+            calibratedOnUnitID = "A1B2C3", calibratedAtMs = 0,
+        )
+        assertIs<ActiveRocketSyncer.Companion.CalAction.WarnMismatch>(
+            ActiveRocketSyncer.magCalSyncAction(cal, ""),
+        )
+        assertIs<ActiveRocketSyncer.Companion.CalAction.Push>(
+            ActiveRocketSyncer.magCalSyncAction(cal, "A1B2C3"),
+        )
+    }
+}

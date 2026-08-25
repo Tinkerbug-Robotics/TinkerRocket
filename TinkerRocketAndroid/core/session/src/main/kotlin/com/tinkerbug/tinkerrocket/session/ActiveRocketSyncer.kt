@@ -190,8 +190,31 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
 
         // Sync ONCE when the config readback AND the hardware id are both in
         // (unitId arrives in a later readback than the main config).
+        //
+        // #836 item 4: the id half of this gate used to read `id.unitId !=
+        // null`. DeviceIdentity.unitId is a NON-NULLABLE String defaulting to
+        // "", so that was a constant true and the gate collapsed to `cfg !=
+        // null` — firing on the config frame alone, which by this comment's own
+        // account arrives FIRST. onReadyToSync then ran with unitId == "":
+        //
+        //  - bindProfileToBoard() bailed on the empty id, so the board was
+        //    never matched to its profile and an unfamiliar board was never
+        //    adopted as its own. adoptRocketConfig() went on to write the
+        //    connected rocket's settings into whatever profile happened to be
+        //    ACTIVE — the #915 failure this class exists to prevent, inverted.
+        //  - syncCal() then took magCalSyncAction("")'s `else` branch, because
+        //    no stored cal was ever calibrated on "": the mag and sensor apply
+        //    frames were never sent and a BoardMismatch advisory was raised
+        //    against an empty id.
+        //
+        // The collector is a first(), so nothing re-ran the sync when the real
+        // unitId arrived — the rocket flew on whatever calibration happened to
+        // be in its NVS. (The profile store itself was never corrupted: both
+        // bindProfileToBoard and RocketProfileStore.bind guard on empty.)
         jobs += scope.launch {
-            combine(session.rocketConfig, session.identity) { cfg, id -> cfg != null && id.unitId != null }
+            combine(session.rocketConfig, session.identity) { cfg, id ->
+                readyToSync(hasConfig = cfg != null, unitId = id.unitId)
+            }
                 .filter { it }
                 .first()
             onReadyToSync()
@@ -265,7 +288,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         val st = store ?: return
         bindProfileToBoard()
         _suggestedProfileId.value = suggestedProfile(
-            st.profiles.value, st.activeId.value, s.identity.value.unitId.orEmpty(),
+            st.profiles.value, st.activeId.value, s.identity.value.unitId,
         )
         adoptRocketConfig()
     }
@@ -282,7 +305,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
     private fun bindProfileToBoard() {
         val s = session ?: return
         val st = store ?: return
-        val unitId = s.identity.value.unitId.orEmpty()
+        val unitId = s.identity.value.unitId
         if (unitId.isEmpty()) return
 
         // A store written by the buggy build can already hold TWO profiles
@@ -425,7 +448,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
 
         // This profile now owns this board — and it has to own it EXCLUSIVELY,
         // or the next connect resolves the tie by name instead of by choice.
-        st.bind(profile.id, s.identity.value.unitId.orEmpty())
+        st.bind(profile.id, s.identity.value.unitId)
 
         // Optimistic (no per-command ack on this link); hold "syncing"
         // briefly so the badge is visible.
@@ -528,7 +551,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
     }
 
     private fun syncCal(profile: RocketProfile, s: DeviceSession) {
-        val unitId = s.identity.value.unitId.orEmpty()
+        val unitId = s.identity.value.unitId
         when (val action = magCalSyncAction(profile.magCal, unitId)) {
             is CalAction.Push -> {
                 _magCalAdvisory.value = CalAdvisory.None
@@ -573,7 +596,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 magCal = MagCalData(
                     offsetX = status.offsetX, offsetY = status.offsetY, offsetZ = status.offsetZ,
                     fieldRuT = status.fieldRUt, residualUT = status.residualUt,
-                    calibratedOnUnitID = s.identity.value.unitId.orEmpty(),
+                    calibratedOnUnitID = s.identity.value.unitId,
                     calibratedAtMs = nowMs,
                 ),
             )
@@ -904,6 +927,23 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
             public data class WarnMismatch(val savedOn: String, val current: String) : CalAction
             public data object ReadRocket : CalAction
         }
+
+        /**
+         * Both halves of the connect-time sync gate must be PRESENT (#836 item 4).
+         *
+         * This was inline as `cfg != null && id.unitId != null`, and
+         * DeviceIdentity.unitId is a NON-NULLABLE String defaulting to "" — so
+         * the id half was a constant true and the gate collapsed to the config
+         * half, which arrives FIRST. Named and pure so the emptiness rule is
+         * pinned by a test rather than living in a lambda where a null check
+         * looks reasonable.
+         *
+         * Emptiness, not nullness: "" is what an un-received identity readback
+         * looks like, and syncing against it makes magCalSyncAction take its
+         * mismatch branch (no stored cal was ever calibrated on "").
+         */
+        internal fun readyToSync(hasConfig: Boolean, unitId: String): Boolean =
+            hasConfig && unitId.isNotEmpty()
 
         public fun magCalSyncAction(cal: MagCalData?, deviceUnitId: String): CalAction =
             when {
