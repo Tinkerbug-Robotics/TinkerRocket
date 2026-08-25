@@ -285,8 +285,15 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         val unitId = s.identity.value.unitId.orEmpty()
         if (unitId.isEmpty()) return
 
-        val bound = st.profiles.value.firstOrNull { it.lastUsedUnitID == unitId }
+        // A store written by the buggy build can already hold TWO profiles
+        // claiming this board, and firstOrNull over a name-sorted list would
+        // pick alphabetically. Prefer the most recently updated — update() is
+        // the one funnel every edit, push and adoption goes through — and
+        // re-bind through st.bind so binding also releases the stale claim.
+        val claimants = st.profiles.value.filter { it.lastUsedUnitID == unitId }
+        val bound = claimants.maxByOrNull { it.updatedAtMs }
         if (bound != null) {
+            if (claimants.size > 1) st.bind(bound.id, unitId)
             if (st.activeId.value != bound.id) {
                 selfSelectedProfileId = bound.id
                 st.setActive(bound.id)
@@ -300,7 +307,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         val name = s.identity.value.unitName?.takeIf { it.isNotEmpty() }
             ?: "Rocket ${unitId.takeLast(4)}"
         val created = st.add(name)
-        st.update(created.id) { it.copy(lastUsedUnitID = unitId) }
+        st.bind(created.id, unitId)
         selfSelectedProfileId = created.id
         st.setActive(created.id)
         _createdProfileName.value = st.profiles.value.firstOrNull { it.id == created.id }?.name
@@ -416,8 +423,9 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
 
         syncCal(profile, s)
 
-        // This profile now owns this board.
-        st.update(profile.id) { it.copy(lastUsedUnitID = s.identity.value.unitId) }
+        // This profile now owns this board — and it has to own it EXCLUSIVELY,
+        // or the next connect resolves the tie by name instead of by choice.
+        st.bind(profile.id, s.identity.value.unitId.orEmpty())
 
         // Optimistic (no per-command ack on this link); hold "syncing"
         // briefly so the badge is visible.

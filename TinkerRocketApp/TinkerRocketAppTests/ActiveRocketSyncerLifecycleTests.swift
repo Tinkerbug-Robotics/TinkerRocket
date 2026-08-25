@@ -118,6 +118,47 @@ final class ActiveRocketSyncerLifecycleTests: XCTestCase {
                        .adopted([ActiveRocketSyncer.groupCamera]))
     }
 
+    // MARK: - Binding is exclusive (#915 bench regression)
+
+    /// Bench 2026-08-25: assign a second profile to a rocket, connect to a
+    /// different rocket, come back — and the selection had reverted. Both
+    /// profiles still claimed the board, and the lookup takes the first match
+    /// in a list sorted by NAME, so the winner was decided alphabetically
+    /// instead of by what the user chose.
+    func testAssigningASecondProfileReleasesTheFirst() {
+        let store = makeStore()
+        let alpha = store.add(name: "Alpha")        // sorts FIRST by name
+        let zulu  = store.add(name: "Zulu")
+        store.bind(alpha.id, toUnitID: "BOARD1")
+        store.bind(zulu.id,  toUnitID: "BOARD1")    // the user's later choice
+
+        XCTAssertNil(store.profiles.first { $0.id == alpha.id }?.lastUsedUnitID,
+                     "the earlier profile must release the board")
+        XCTAssertEqual(store.profiles.first { $0.id == zulu.id }?.lastUsedUnitID, "BOARD1")
+        XCTAssertEqual(store.profiles.filter { $0.lastUsedUnitID == "BOARD1" }.count, 1,
+                       "a board is claimed by exactly one profile")
+    }
+
+    /// The symptom as reported: come back to the rocket and get the profile
+    /// you actually chose, not the alphabetically-earlier one.
+    func testReconnectBindsTheChosenProfileNotTheAlphabeticallyFirst() {
+        let syncer = ActiveRocketSyncer()
+        let store = makeStore()
+        let alpha = store.add(name: "Alpha")
+        let zulu  = store.add(name: "Zulu")
+        store.bind(alpha.id, toUnitID: "BOARD1")
+        store.bind(zulu.id,  toUnitID: "BOARD1")    // chosen later, so it wins
+        store.setActive(alpha.id)                   // simulate being elsewhere
+
+        let rocket = makeRocket()
+        syncer.attach(device: rocket, store: store)
+        reportConfig(rocket, unitID: "BOARD1")
+        settleMainQueue()
+
+        XCTAssertEqual(store.activeId, zulu.id,
+                       "the board comes back on the profile the user put on it")
+    }
+
     /// End-to-end through the real JSON parser, in the order the out computer
     /// actually queues the readback: config, config_pyro, config_identity,
     /// then imu_orient.  The orientation setting rides that LAST frame, so it

@@ -242,7 +242,17 @@ final class ActiveRocketSyncer: ObservableObject {
     private func bindProfileToBoard() {
         guard let device, let store, !device.unitID.isEmpty else { return }
 
-        if let bound = store.profiles.first(where: { $0.lastUsedUnitID == device.unitID }) {
+        // A store written by the buggy build can already hold TWO profiles
+        // claiming this board, and `first` over a name-sorted list would pick
+        // alphabetically. Prefer the most recently updated — `update` is the
+        // one funnel every edit, push and adoption goes through, so it is the
+        // best proxy for "the one you last used here" — and re-bind through
+        // store.bind so the act of binding also releases the stale claim.
+        // Without the heal, installing the fix would leave the wrong profile
+        // stuck on the board it was already stuck on.
+        let claimants = store.profiles.filter { $0.lastUsedUnitID == device.unitID }
+        if let bound = claimants.max(by: { $0.updatedAt < $1.updatedAt }) {
+            if claimants.count > 1 { store.bind(bound.id, toUnitID: device.unitID) }
             if store.activeId != bound.id {
                 selfSelectedProfileId = bound.id
                 store.setActive(bound.id)
@@ -255,7 +265,7 @@ final class ActiveRocketSyncer: ObservableObject {
         // connect to an unfamiliar rocket, reconfigure it.
         let fallback = "Rocket \(device.unitID.suffix(4))"
         let created = store.add(name: device.unitName.isEmpty ? fallback : device.unitName)
-        store.update(created.id) { $0.lastUsedUnitID = device.unitID }
+        store.bind(created.id, toUnitID: device.unitID)
         selfSelectedProfileId = created.id
         store.setActive(created.id)
         createdProfileName = store.profiles.first { $0.id == created.id }?.name
@@ -413,8 +423,9 @@ final class ActiveRocketSyncer: ObservableObject {
         syncMagCal(profile: profile, device: device)
         syncSensorCal(profile: profile, device: device)
 
-        // This profile now owns this board.
-        store.update(profile.id) { $0.lastUsedUnitID = device.unitID }
+        // This profile now owns this board — and it has to own it EXCLUSIVELY,
+        // or the next connect resolves the tie by name instead of by choice.
+        store.bind(profile.id, toUnitID: device.unitID)
 
         // Optimistic, like the rest of the app's config writes (no per-command
         // ack on this link).  Hold "syncing" briefly so the badge is visible.

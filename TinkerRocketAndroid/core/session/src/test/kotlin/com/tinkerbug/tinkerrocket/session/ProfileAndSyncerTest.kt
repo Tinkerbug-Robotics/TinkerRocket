@@ -777,6 +777,60 @@ class ActiveRocketSyncerTest {
         )
     }
 
+    // -- Binding is exclusive (#915 bench regression) ----------------------
+
+    /**
+     * Bench 2026-08-25: assign a second profile to a rocket, connect to a
+     * different rocket, come back — and the selection had reverted. Both
+     * profiles still claimed the board, and the lookup takes the first match
+     * in a list sorted by NAME, so the winner was decided alphabetically
+     * instead of by what the user chose.
+     */
+    @Test
+    fun assigningASecondProfile_releasesTheFirst() = runTest {
+        val r = rig()
+        val alpha = r.store.add("Alpha")   // sorts FIRST by name
+        val zulu = r.store.add("Zulu")
+        r.store.bind(alpha.id, "BOARD1")
+        r.store.bind(zulu.id, "BOARD1")    // the user's later choice
+
+        assertNull(
+            r.store.profiles.value.first { it.id == alpha.id }.lastUsedUnitID,
+            "the earlier profile must release the board",
+        )
+        assertEquals(
+            "BOARD1",
+            r.store.profiles.value.first { it.id == zulu.id }.lastUsedUnitID,
+        )
+        assertEquals(
+            1, r.store.profiles.value.count { it.lastUsedUnitID == "BOARD1" },
+            "a board is claimed by exactly one profile",
+        )
+    }
+
+    /**
+     * The symptom as reported: come back to the rocket and get the profile you
+     * actually chose, not the alphabetically-earlier one.
+     */
+    @Test
+    fun reconnect_bindsTheChosenProfile_notTheAlphabeticallyFirst() = runTest {
+        val r = rig(makeProfile = false)
+        val alpha = r.store.add("Alpha")
+        val zulu = r.store.add("Zulu")
+        r.store.bind(alpha.id, "boardA")
+        r.store.bind(zulu.id, "boardA")    // chosen later, so it wins
+        r.store.setActive(alpha.id)        // simulate being elsewhere
+
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        assertEquals(
+            zulu.id, r.store.activeId.value,
+            "the board comes back on the profile the user put on it",
+        )
+    }
+
     @Test
     fun suggestion_pure() {
         val a = RocketProfile.makeDefault("A", 0).copy(lastUsedUnitID = "u1")
