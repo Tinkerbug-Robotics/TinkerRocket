@@ -145,6 +145,9 @@ private:
     static uint16_t encodeVoltage(float voltage_v);
     static int16_t  encodeCurrent(float current_ma);
     static int16_t  encodeSOC(float soc_pct);
+    // #850: amps -> mA for POWERData.cam_ma / .servo_ma. NaN and negatives
+    // encode as 0; over-range saturates rather than wrapping.
+    static uint16_t encodeRailMilliamps(float amps);
 
     // --- ECEF to Geo ---
     static void ecefToLla(double x, 

@@ -10,6 +10,14 @@ import Foundation
 struct TelemetryData: Codable {
     var soc: Float?                   // Battery state of charge %
     var current: Float?               // Battery current mA
+    // #850: camera / servo high-side-switch load currents, AMPS (not mA — the
+    // battery `current` above is the shunt; these are load rails). nil means
+    // the key was absent, i.e. this board has no TPS22811 monitor fitted or
+    // the read failed. Render as "--", never as 0.0 A: a camera that is off
+    // and a camera with no monitor look identical at zero, and only one of
+    // those is something we measured.
+    var cam_current: Float?           // Camera rail current A  (nil = not measured)
+    var servo_current: Float?         // Servo rail current A   (nil = not measured)
     var voltage: Float?               // Battery voltage V
     var latitude: Double?             // GPS latitude degrees
     var longitude: Double?            // GPS longitude degrees
@@ -391,6 +399,8 @@ struct TelemetryData: Codable {
     enum CodingKeys: String, CodingKey {
         case soc
         case current = "cur"
+        case cam_current = "ccur"      // #850
+        case servo_current = "scur"    // #850
         case voltage = "vol"
         case latitude = "lat"
         case longitude = "lon"
@@ -463,6 +473,10 @@ struct TelemetryData: Codable {
         }
         soc = try c.decodeIfPresent(Float.self, forKey: .soc)
         current = try c.decodeIfPresent(Float.self, forKey: .current)
+        // #850: decodeIfPresent, so an absent key stays nil ("no monitor
+        // fitted") rather than becoming 0 ("measured zero amps").
+        cam_current = try c.decodeIfPresent(Float.self, forKey: .cam_current)
+        servo_current = try c.decodeIfPresent(Float.self, forKey: .servo_current)
         voltage = try c.decodeIfPresent(Float.self, forKey: .voltage)
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
@@ -546,6 +560,27 @@ struct TelemetryData: Codable {
         }
         return "N/A"
     }
+
+    /// #850: format a high-side-switch load current for display.
+    ///
+    /// Amps with 2 decimals at 1 A and above, whole milliamps below — the
+    /// TPS22811 GIMON spread is +/-13%, so finer absolute precision would be a
+    /// fiction, but that error is a stable per-board GAIN term and relative
+    /// movement is faithful. Watching for a stalled servo depends on the
+    /// latter, not the former.
+    ///
+    /// nil renders as an em dash: the key was absent, meaning this board has no
+    /// monitor fitted. Never render that as 0.
+    ///
+    /// Android twin: `railAmpsDisplay(Float?)`.
+    static func railAmpsDisplay(_ amps: Float?) -> String {
+        guard let a = amps else { return "—" }
+        return a >= 1.0 ? String(format: "%.2f A", a)
+                        : String(format: "%.0f mA", a * 1000)
+    }
+
+    var camCurrentDisplay: String { Self.railAmpsDisplay(cam_current) }
+    var servoCurrentDisplay: String { Self.railAmpsDisplay(servo_current) }
 
     var voltageDisplay: String {
         if let voltage = voltage {

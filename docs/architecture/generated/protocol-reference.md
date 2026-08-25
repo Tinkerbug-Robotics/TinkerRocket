@@ -166,11 +166,11 @@ that changes size fails the build rather than corrupting a log silently.
 | `SimConfigData` | 16 |
 | `RocketStorageStatsData` | 15 |
 | `MagCalApplyData` | 14 |
+| `POWERData` | 14 |
 | `LoRaUplinkData` | 13 |
 | `BMP585Data` | 12 |
 | `MagCalMMCOffset` | 12 |
 | `IIS2MDCData` | 10 |
-| `POWERData` | 10 |
 | `RollWaypoint` | 9 |
 | `ServoTestAnglesData` | 8 |
 | `Vec3i16` | 6 |

@@ -1989,6 +1989,20 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("ly", data.low_g_y, 1);
     addFloat("lz", data.low_g_z, 1);
 
+    // #850: camera / servo high-side-switch load currents, amps.
+    //
+    // NaN when the board carries no monitor (V7/V8, mini) or the ADC failed,
+    // and addFloat drops NaN — so those boards pay ZERO bytes and the apps see
+    // the keys simply absent. Absent must render as "no reading", never as
+    // 0.0 A: a camera that is off and a camera whose monitor does not exist
+    // look identical at 0 A, and only one of them is a fact.
+    //
+    // Two decimals. The GIMON gain spread is +/-13% so absolute accuracy is
+    // ~+/-0.2 A, but that error is a stable per-board GAIN term — relative
+    // movement is faithful, which is what watching for a stalled servo needs.
+    addFloat("ccur", data.cam_current, 2);
+    addFloat("scur", data.servo_current, 2);
+
     // ── Tier 3: diagnostics / link / base station (first to drop) ─────────
 
     // LoRa signal quality (NaN on direct connection — will be omitted)

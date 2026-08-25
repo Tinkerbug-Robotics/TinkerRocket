@@ -26,7 +26,11 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(BMP585Data),     12u);
     EXPECT_EQ(sizeof(ISM6HG256Data),  22u);
     EXPECT_EQ(sizeof(MMC5983MAData),  16u);
-    EXPECT_EQ(sizeof(POWERData),      10u);
+    EXPECT_EQ(sizeof(POWERData),      14u);  // #850: v2, +cam_ma +servo_ma
+    // v1 stays pinned: it is the length decoders must still accept for logs
+    // written before #850, and Data_Analysis dispatches POWER on exactly these
+    // two sizes.
+    EXPECT_EQ(SIZE_OF_POWER_DATA_V1,  10u);
     EXPECT_EQ(sizeof(NonSensorData),  50u);  // #529: +uint16 ekf_ticks (2 B)
     EXPECT_EQ(sizeof(LoRaData),       65u);  // #191: +ENU vel +flags2, -derived Euler/speed
     EXPECT_EQ(sizeof(LoRaUplinkData), 13u);  // uplink RSSI/SNR log record (0xF9)

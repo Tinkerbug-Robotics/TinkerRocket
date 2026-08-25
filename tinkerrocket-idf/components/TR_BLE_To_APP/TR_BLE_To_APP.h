@@ -15,6 +15,7 @@ using String = std::string;     // API-compatible subset used by callers
 
 #include <cstdint>
 #include <cstddef>
+#include <cmath>                 // #850: NAN defaults on the rail-current fields
 
 #include "BleCommandRing.h"      // #517: depth for the command intake
 #include "TR_OTA_Receiver.h"
@@ -28,6 +29,19 @@ public:
     {
         float soc;              // Battery state of charge %
         float current;          // Battery current mA
+        // #850: camera / servo high-side-switch load currents, AMPS (not mA —
+        // these are load rails, not the battery shunt). NaN when the board has
+        // no TPS22811 monitor fitted (V7/V8, mini) or the ADC read failed;
+        // addFloat drops NaN, so the JSON key is simply absent and the apps
+        // must render that as "no reading", never as 0.0 A.
+        //
+        // DEFAULTED TO NaN, deliberately. Every construction site uses
+        // `TelemetryData t = {}`, which zero-initialises — so without these
+        // initialisers the mini, the base station's relayed-rocket frames and
+        // the OC's second builder would all have emitted "ccur":0.00 and
+        // claimed a measured zero on hardware that has no monitor at all.
+        float cam_current   = NAN;  // Camera rail current A  (NaN = not measured)
+        float servo_current = NAN;  // Servo rail current A   (NaN = not measured)
         float voltage;          // Battery voltage V
         double latitude;        // GPS latitude degrees
         double longitude;       // GPS longitude degrees

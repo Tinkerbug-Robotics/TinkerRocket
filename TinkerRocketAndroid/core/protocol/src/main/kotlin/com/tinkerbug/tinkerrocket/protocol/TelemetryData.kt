@@ -146,6 +146,13 @@ public const val FC_BOOT_SILENT_LABEL: String = "Waiting for flight computer\u20
 public data class TelemetryData(
     val soc: Float? = null,                   // Battery state of charge %
     val current: Float? = null,               // "cur"  Battery current mA
+    // #850: camera / servo high-side-switch load currents, AMPS (not mA — the
+    // battery `current` above is the shunt; these are load rails). null means
+    // the key was absent, i.e. this board has no TPS22811 monitor fitted or the
+    // read failed. Render as "--", never as 0.0 A — "off" and "no monitor" look
+    // identical at zero and only one of them is a measurement.
+    val camCurrent: Float? = null,            // "ccur" Camera rail current A
+    val servoCurrent: Float? = null,          // "scur" Servo rail current A
     val voltage: Float? = null,               // "vol"  Battery voltage V
     val latitude: Double? = null,             // "lat"  GPS latitude degrees
     val longitude: Double? = null,            // "lon"  GPS longitude degrees
@@ -673,6 +680,8 @@ public data class TelemetryData(
         private fun decodeOrThrow(json: JsonObject): TelemetryData = TelemetryData(
             soc = strictFloat(json, "soc"),
             current = strictFloat(json, "cur"),
+            camCurrent = strictFloat(json, "ccur"),      // #850
+            servoCurrent = strictFloat(json, "scur"),    // #850
             voltage = strictFloat(json, "vol"),
             latitude = strictDouble(json, "lat"),
             longitude = strictDouble(json, "lon"),
@@ -730,4 +739,24 @@ public data class TelemetryData(
             fieldsTrimmed = (flexInt(json, "tr") ?: 0) != 0,            // #282
         )
     }
+}
+
+/**
+ * #850: format a high-side-switch load current (camera / servo) for display.
+ *
+ * Amps with 2 decimals at 1 A and above, whole milliamps below. The TPS22811
+ * GIMON spread is +/-13%, so finer ABSOLUTE precision would be a fiction — but
+ * that error is a stable per-board GAIN term, so relative movement is faithful,
+ * and watching for a stalled servo depends on the latter.
+ *
+ * null renders as an em dash: the key was absent, meaning the board carries no
+ * monitor. Never render that as 0 — "off" and "not measured" both sit at zero
+ * and only one of them is something we observed.
+ *
+ * iOS twin: `TelemetryData.railAmpsDisplay(_:)`.
+ */
+public fun railAmpsDisplay(amps: Float?): String {
+    if (amps == null) return "\u2014"
+    return if (amps >= 1.0f) String.format(java.util.Locale.ROOT, "%.2f A", amps)
+           else String.format(java.util.Locale.ROOT, "%.0f mA", amps * 1000f)
 }

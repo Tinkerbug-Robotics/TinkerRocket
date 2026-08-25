@@ -1540,6 +1540,30 @@ struct BatteryView: View {
                            voltage: telemetry.bsVoltageDisplay,
                            current: telemetry.bsCurrentDisplay)
             }
+
+            // #850: camera / servo high-side-switch load currents.
+            //
+            // Rendered ONLY when the board actually reports them. A V7/V8
+            // rocket, the mini, or any pre-#850 firmware omits both keys, and
+            // an absent key means "no monitor fitted" — which must not appear
+            // as 0.00 A beside a live battery reading. Showing nothing is the
+            // honest render; showing zero would claim a measurement we do not
+            // have. Android twin: DashboardScreen.kt BatteryCard.
+            if telemetry.cam_current != nil || telemetry.servo_current != nil {
+                HStack(spacing: 0) {
+                    Text("Rail")
+                        .font(.caption)
+                        .frame(width: 70, alignment: .leading)
+                    Text("Cam \(telemetry.camCurrentDisplay)")
+                        .font(.caption.monospaced())
+                        .frame(maxWidth: .infinity)
+                    Text("Servo \(telemetry.servoCurrentDisplay)")
+                        .font(.caption.monospaced())
+                        .frame(maxWidth: .infinity)
+                    Text("")
+                        .frame(maxWidth: .infinity)
+                }
+            }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
