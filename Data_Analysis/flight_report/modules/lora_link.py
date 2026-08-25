@@ -114,6 +114,21 @@ def _own_peak_m(flight):
     return float(max(pressure_to_altitude(float(v), ground) for v in p))
 
 
+def _bs_log():
+    """Import the shared base-station log reader lazily.
+
+    flight_report is imported as a package from several entry points whose
+    sys.path differs; resolving this at call time rather than import time keeps
+    a missing path from breaking the whole report.
+    """
+    import importlib
+    import pathlib
+    import sys
+    root = str(pathlib.Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    return importlib.import_module("bs_log")
+
 def _read(flight: Flight):
     """The ground-station packet log as a DataFrame, or None if there isn't one."""
     try:
@@ -121,14 +136,23 @@ def _read(flight: Flight):
     except ImportError:                                    # pragma: no cover
         return None
     own_peak = _own_peak_m(flight)
-    paths = sorted(p for p in flight.bin_path.parent.glob("lora_*.csv")
-                   if p.is_file() and _belongs_to(p, flight, own_peak))
+    # #850: base-station logs are binary now; older ones are CSV and must keep
+    # working, so both extensions are globbed and bs_log detects the format by
+    # content. A binary log is turned into the same rectangular frame the CSV
+    # gave us, via the forward-fill that reassembles FAST/SLOW into whole rows.
+    candidates = sorted(list(flight.bin_path.parent.glob("lora_*.bin"))
+                        + list(flight.bin_path.parent.glob("lora_*.csv")))
+    paths = [p for p in candidates
+             if p.is_file() and _belongs_to(p, flight, own_peak)]
     if not paths:
         return None
     frames = []
     for p in paths:
         try:
-            frames.append(pd.read_csv(p))
+            rows, _events, fmt = _bs_log().read_bs_log(p)
+            if not rows:
+                continue
+            frames.append(pd.DataFrame(rows))
         except Exception:
             continue
     if not frames:

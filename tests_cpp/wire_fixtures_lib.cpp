@@ -9,6 +9,7 @@
 
 #include "RocketComputerTypes.h"
 #include "CRC.h"
+#include "TR_Sensor_Data_Converter.h"   // #850: real LoRa packers for the BS log golden
 
 #include <cstdio>
 #include <cstring>
@@ -1077,6 +1078,111 @@ void buildCsvFlight(Builder& b) {
           "wire/ — they are app output, not emitter output)");
 }
 
+
+// --------------------------------------------------- base-station log golden ---
+// A short base-station binary log built with the REAL packers, so the Python,
+// Kotlin and Swift readers all test against bytes the firmware itself produced
+// rather than against each other's idea of the layout.
+//
+// Deliberately exercises the things that are easy to get wrong: both frame
+// types on the real 5:1 schedule, a slow frame that must not blank the
+// position, a fast frame that must not blank the battery, an unknown-RSSI
+// sentinel, a sequence gap, and an event record interleaved with telemetry.
+void buildBsLogGolden(Builder& b) {
+    std::vector<uint8_t> stream;
+    const uint8_t magic[8] = {'T', 'R', 'B', 'S', 'L', 'O', 'G',
+                              BS_LOG_FORMAT_VERSION};
+    append(stream, std::vector<uint8_t>(magic, magic + sizeof(magic)));
+
+    SensorConverter conv;
+    LoRaDataSI si{};
+    si.network_id = 0;
+    si.rocket_id = 1;
+    si.next_channel_idx = LORA_NEXT_CH_NO_HOP;
+    si.rocket_state = 2;            // PRELAUNCH
+    si.launch_flag = false;
+    si.num_sats = 11;
+    si.pdop = 2.0f;
+    si.horizontal_accuracy = 5.0f;
+    // A real WGS84 surface point (39.082 N, 76.979 W, ~100 m — the field this
+    // repo's flights are flown at), so the golden's lat/lon/alt columns read
+    // as a plausible position rather than 21 km underground.
+    si.ecef_x = 1117001.0;  si.ecef_y = -4830195.0;  si.ecef_z = 3999454.0;
+    si.acc_x = 0.1f; si.acc_y = -0.2f; si.acc_z = 9.8f;
+    si.gyro_x = 1.5f; si.gyro_y = -2.5f; si.gyro_z = 0.5f;
+    si.q0 = 1.0f; si.q1 = 0.0f; si.q2 = 0.0f; si.q3 = 0.0f;
+    si.pressure_alt = 100.0f;
+    si.altitude_rate = 0.0f;
+    si.vel_e = 1.0f; si.vel_n = -2.0f; si.vel_u = 3.0f;
+    si.sensor_health = 0x00015555u;
+    si.max_alt = 120.0f;
+    si.max_speed = 12.0f;
+    si.temp = 21.5f;
+    si.voltage = 7.90f;
+    si.current = -450.0f;
+    si.soc = 79.0f;
+    si.cam_current = 1.48f;
+    si.servo_current = 0.34f;
+    si.burnout_detected = false;
+    si.imu_orient_code = 0;
+    si.imu_orient_mode = 1;
+
+    uint32_t frames = 0;
+    // seq 3 is skipped on purpose so a reader has a gap to compute.
+    const uint16_t seqs[] = {0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+    for (uint16_t seq : seqs) {
+        si.seq = seq;
+        si.pressure_alt = 100.0f + static_cast<float>(seq);   // moves every frame
+        si.max_alt      = 120.0f + static_cast<float>(seq);   // slow-frame only
+
+        uint8_t frame_bytes[SIZE_OF_LORA_FAST] = {0};
+        size_t  frame_len = 0;
+        if (loraFrameTypeForSlot(seq) == LORA_FRAME_SLOW) {
+            conv.packLoRaSlowBytes(si, frame_bytes);
+            frame_len = SIZE_OF_LORA_SLOW;
+        } else {
+            conv.packLoRaFastBytes(si, frame_bytes);
+            frame_len = SIZE_OF_LORA_FAST;
+        }
+
+        BsLoRaRxHeader hdr{};
+        hdr.time_ms = 500u * static_cast<uint32_t>(seq);
+        // One record carries the "no reading" sentinel so readers prove they
+        // render it as absent rather than as a plausible 0 dBm.
+        hdr.rssi_dbm_x10 = (seq == 2) ? BS_RSSI_UNKNOWN : static_cast<int16_t>(-410);
+        hdr.snr_db_x10   = (seq == 2) ? BS_RSSI_UNKNOWN : static_cast<int16_t>(120);
+        hdr.rx_freq_hz   = 915000000u;
+
+        std::vector<uint8_t> payload;
+        append(payload, bytesOf(hdr));
+        append(payload, std::vector<uint8_t>(frame_bytes, frame_bytes + frame_len));
+        append(stream, frame(BS_LORA_RX_MSG, payload));
+        ++frames;
+    }
+
+    // One interleaved event record.
+    {
+        const char* text = "hop start";
+        BsEventHeader eh{};
+        eh.time_ms = 3200;
+        eh.rx_freq_hz = 915500000u;
+        eh.text_len = static_cast<uint8_t>(strlen(text));
+        std::vector<uint8_t> payload;
+        append(payload, bytesOf(eh));
+        append(payload, std::vector<uint8_t>(text, text + eh.text_len));
+        append(stream, frame(BS_EVENT_MSG, payload));
+    }
+
+    b.add("csv", "bs_tiny.bin", stream,
+          Json().u("rx_records", frames).u("event_records", 1)
+              .u("fast_frames", 10).u("slow_frames", 2)
+              .u("skipped_seq", 3)
+              .done(),
+          "base-station binary log built with the real packers; the CSV golden "
+          "generated from it lives in tests_cpp/fixtures/csv_golden/ (app "
+          "output, not emitter output)");
+}
+
 }  // namespace
 
 FixtureMap generate() {
@@ -1086,6 +1192,7 @@ FixtureMap generate() {
     }
     Builder b;
     buildLogframes(b);
+    buildBsLogGolden(b);
     buildFramed(b);
     buildFileops(b);
     buildCommands(b);

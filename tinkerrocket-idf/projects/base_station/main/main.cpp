@@ -50,6 +50,7 @@
 #include <UartModemBackend.h>
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_Coordinates.h>
+#include <TR_I2C_Interface.h>   // binary log framing: packMessage(), same records as the OC
 #include <TR_BLE_To_APP.h>
 #include <TR_MAX17205G.h>
 #include <TR_MAX17303.h>
@@ -1300,7 +1301,7 @@ static time_t syncedEpoch()
     return mktime(&tm_sync);
 }
 
-// Build "<mount>/lora_YYYYMMDD_HHMMSS.csv" for the given UTC epoch, walking
+// Build "<mount>/lora_YYYYMMDD_HHMMSS.bin" for the given UTC epoch, walking
 // _2/_3/.. suffixes on collision until a free path is found.  Mirrors the
 // inline collision loop in startLogging() — extracted so the rename-on-
 // time-sync path (#168) reuses the same naming + collision rules.
@@ -1311,7 +1312,7 @@ static void buildTimestampedLogPathForEpoch(time_t epoch,
     gmtime_r(&epoch, &tm_buf);
     char basename[40];
     snprintf(basename, sizeof(basename),
-             "lora_%04d%02d%02d_%02d%02d%02d.csv",
+             "lora_%04d%02d%02d_%02d%02d%02d.bin",
              tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
              tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
     snprintf(out_path, out_len, "%s/%s", SD_MOUNT_POINT, basename);
@@ -1321,12 +1322,12 @@ static void buildTimestampedLogPathForEpoch(time_t epoch,
 
     char base_no_ext[40];
     const size_t blen = strlen(basename);
-    const size_t copy = (blen >= 4) ? (blen - 4) : blen;  // strip ".csv"
+    const size_t copy = (blen >= 4) ? (blen - 4) : blen;  // strip ".bin"
     memcpy(base_no_ext, basename, copy);
     base_no_ext[copy] = '\0';
     for (int suffix = 2; suffix < 100; suffix++)
     {
-        snprintf(out_path, out_len, "%s/%s_%d.csv",
+        snprintf(out_path, out_len, "%s/%s_%d.bin",
                  SD_MOUNT_POINT, base_no_ext, suffix);
         if (stat(out_path, &st) != 0) return;
     }
@@ -1342,9 +1343,9 @@ static uint16_t findNextFileNumber()
     while ((entry = readdir(dir)) != nullptr)
     {
         // #137: use the strict parser so timestamped siblings (e.g.
-        // lora_20260509_164143.csv) don't get matched as "lora_NNN.csv"
+        // lora_20260509_164143.bin) don't get matched as "lora_NNN.bin"
         // with the leading digits truncated to the low 16 bits (= 9885).
-        // Pre-fix, that quirk made the BS pick lora_9886.csv after every
+        // Pre-fix, that quirk made the BS pick lora_9886.bin after every
         // no-time-sync boot whose SD already held timestamped flights.
         uint16_t num = 0;
         if (bs_log_policy::parseSequentialFilename(entry->d_name, num))
@@ -1373,14 +1374,14 @@ static void startLogging()
         uint16_t y; uint8_t mo, d, h, mi, s;
         getCurrentTime(y, mo, d, h, mi, s);
         snprintf(basename, sizeof(basename),
-                 "lora_%04u%02u%02u_%02u%02u%02u.csv",
+                 "lora_%04u%02u%02u_%02u%02u%02u.bin",
                  y, mo, d, h, mi, s);
     }
     else
     {
         // Fallback to sequential numbering if no time sync
         uint16_t num = findNextFileNumber();
-        snprintf(basename, sizeof(basename), "lora_%03u.csv", num);
+        snprintf(basename, sizeof(basename), "lora_%03u.bin", num);
     }
     snprintf(log_filename, sizeof(log_filename), "%s/%s", SD_MOUNT_POINT, basename);
 
@@ -1397,19 +1398,19 @@ static void startLogging()
         {
             char base_no_ext[40];
             const size_t blen = strlen(basename);
-            const size_t copy = (blen >= 4) ? (blen - 4) : blen;  // strip ".csv"
+            const size_t copy = (blen >= 4) ? (blen - 4) : blen;  // strip ".bin"
             memcpy(base_no_ext, basename, copy);
             base_no_ext[copy] = '\0';
             for (int suffix = 2; suffix < 100; suffix++)
             {
-                snprintf(log_filename, sizeof(log_filename), "%s/%s_%d.csv",
+                snprintf(log_filename, sizeof(log_filename), "%s/%s_%d.bin",
                          SD_MOUNT_POINT, base_no_ext, suffix);
                 if (stat(log_filename, &st) != 0) break;
             }
         }
     }
 
-    log_file = fopen(log_filename, "w");
+    log_file = fopen(log_filename, "wb");
     if (!log_file)
     {
         ESP_LOGE(TAG, "[LOG] Failed to open %s for writing! errno=%d (%s)",
@@ -1424,23 +1425,28 @@ static void startLogging()
     // BS-derived gap to the last RX, plus an `event` column populated
     // for non-telemetry rows (hop_active / hop_inactive / hop_silence).
     // rocket_id (#381) attributes each telemetry row to its source rocket
-    // now that one file can interleave several; empty on EVENT rows (those
-    // are station-level, not per-rocket). All downstream consumers key
-    // columns by header name, so the trailing add is non-breaking.
-    int hdr_written = fprintf(log_file, "time_ms,state,num_sats,pdop,lat,lon,alt_m,h_acc,"
-                      "acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,"
-                      "pressure_alt,alt_rate,max_alt,max_speed,"
-                      "voltage,current,soc,cam_a,servo_a,roll,pitch,yaw,speed,"
-                      "launch,vel_apo,alt_apo,landed,rssi,snr,"
-                      "next_ch,rx_freq_mhz,seq,gap,event,rocket_id\n");
-    if (hdr_written <= 0)
+    // #850 follow-up: this file is BINARY now, not CSV. Instead of a column
+    // header it opens with a magic + version so a reader can identify it
+    // without trusting the extension, and refuse a file it does not understand
+    // rather than walking arbitrary bytes as records.
+    //
+    // The records that follow use the SAME framing as the rocket computer's log
+    // (TR_I2C_Interface::packMessage — SOF/type/len/CRC16), so the same walker
+    // reads both. That parity is the point: one binary format, one set of
+    // tools, and the CSV is generated wherever it is actually needed.
+    const uint8_t magic[8] = {
+        'T', 'R', 'B', 'S', 'L', 'O', 'G',        // "TRBSLOG"
+        BS_LOG_FORMAT_VERSION,
+    };
+    size_t hdr_written = fwrite(magic, 1, sizeof(magic), log_file);
+    if (hdr_written != sizeof(magic))
     {
         // #384 (#329 residual): a full/wedged card at open used to fail the
-        // header silently; every later name-keyed consumer then sees a
-        // headerless CSV.
+        // header silently; every later consumer then sees a headerless file.
         log_write_fail_count++;
-        ESP_LOGW(TAG, "[LOG] header fprintf() failed (ret=%d, errno=%d %s)",
-                 hdr_written, errno, strerror(errno));
+        ESP_LOGW(TAG, "[LOG] magic fwrite() failed (%u/%u, errno=%d %s)",
+                 (unsigned)hdr_written, (unsigned)sizeof(magic),
+                 errno, strerror(errno));
     }
 
     logging_active = true;
@@ -1482,12 +1488,12 @@ static void stopLogging()
 
 // Called from the BLE time-sync command (#9) right after the sync clock is
 // established.  If the currently-open log was opened pre-sync and therefore
-// carries a sequential `lora_NNN.csv` name, rename it on disk to its proper
-// `lora_YYYYMMDD_HHMMSS.csv` form using the wall-clock at which the file
+// carries a sequential `lora_NNN.bin` name, rename it on disk to its proper
+// `lora_YYYYMMDD_HHMMSS.bin` form using the wall-clock at which the file
 // actually opened (computed as sync_time minus elapsed millis since open).
 // Safe no-op when there's no open log, time isn't synced, or the file is
 // already timestamped.  This is the root-cause fix for #168 — the 5/17/26
-// test day produced `lora_002.csv` / `lora_003.csv` / `lora_004.csv` halves
+// test day produced `lora_002.bin` / `lora_003.bin` / `lora_004.bin` halves
 // of three flights alongside their timestamped post-landing remnants
 // because iOS BLE time-sync landed within a few seconds of each launch.
 static void renameOpenLogIfSequential()
@@ -1527,7 +1533,7 @@ static void renameOpenLogIfSequential()
     {
         ESP_LOGW(TAG, "[LOG] rename %s -> %s failed (errno=%d %s); reopening original",
                  old_path, new_path, errno, strerror(errno));
-        log_file = fopen(old_path, "a");
+        log_file = fopen(old_path, "ab");
         if (!log_file)
         {
             ESP_LOGE(TAG, "[LOG] Could not reopen %s after failed rename — logging stopped",
@@ -1537,7 +1543,7 @@ static void renameOpenLogIfSequential()
         return;
     }
 
-    log_file = fopen(new_path, "a");
+    log_file = fopen(new_path, "ab");
     if (!log_file)
     {
         ESP_LOGE(TAG, "[LOG] Could not open %s after rename — logging stopped",
@@ -1581,11 +1587,24 @@ static bool bsQueryStorage(uint64_t& total, uint64_t& used)
     return true;
 }
 
-static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
-                          double lat, double lon, double alt,
-                          float rx_freq_mhz, int32_t observed_gap)
+// ----------------------------------------------------------------------------
+// Binary LoRa RX record
+// ----------------------------------------------------------------------------
+// Logs the bytes we actually received, plus the three things only the base
+// station knows: when it arrived, how strong it was, and which channel it
+// landed on. Everything else the old CSV carried is either inside the frame or
+// derived from it, so it is recomputed by whatever renders the log.
+//
+// Takes the RAW frame, not the decoded LoRaDataSI, deliberately. With FAST and
+// SLOW interleaved, the accumulator is a running picture rather than a record
+// of this packet — writing it would log the same forward-filled values over and
+// over and lose which fields actually arrived when. The raw bytes are the
+// evidence; the picture can always be rebuilt from them.
+static void logLoRaPacket(const uint8_t* frame, size_t frame_len,
+                          float rssi, float snr, float rx_freq_mhz)
 {
-    if (!logging_active) return;
+    if (!logging_active || log_file == nullptr) return;
+    if (frame == nullptr || frame_len == 0) return;
 
     // Periodic storage usage check (every 100 writes)
     if (++log_write_count % 100 == 0)
@@ -1601,84 +1620,86 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
         }
     }
 
-    uint32_t time_ms = millis() - log_start_ms;
+    BsLoRaRxHeader hdr{};
+    hdr.time_ms = millis() - log_start_ms;
+    // NaN is what the radio reports when it has no reading; it must not become
+    // a plausible-looking 0 dBm in the log.
+    hdr.rssi_dbm_x10 = (rssi == rssi) ? (int16_t)lroundf(rssi * 10.0f) : BS_RSSI_UNKNOWN;
+    hdr.snr_db_x10   = (snr  == snr)  ? (int16_t)lroundf(snr  * 10.0f) : BS_RSSI_UNKNOWN;
+    hdr.rx_freq_hz   = (uint32_t)lroundf(rx_freq_mhz * 1e6f);
 
-    int written = fprintf(log_file, "%lu,%s,%u,%.1f,%.7f,%.7f,%.1f,%.1f,"
-                    "%.2f,%.2f,%.2f,%.1f,%.1f,%.1f,"
-                    "%.1f,%.1f,%.1f,%.1f,"
-                    "%.2f,%.0f,%.1f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,"
-                    "%d,%d,%d,%d,%.0f,%.1f,"
-                    "%u,%.3f,%u,%d,,%u\n",  // empty `event`, then rocket_id (#381)
-                    (unsigned long)time_ms,
-                    rocketStateToString(data.rocket_state),
-                    (unsigned)data.num_sats,
-                    (double)data.pdop,
-                    lat, lon, alt,
-                    (double)data.horizontal_accuracy,
-                    (double)data.acc_x, (double)data.acc_y, (double)data.acc_z,
-                    (double)data.gyro_x, (double)data.gyro_y, (double)data.gyro_z,
-                    (double)data.pressure_alt, (double)data.altitude_rate,
-                    (double)data.max_alt, (double)data.max_speed,
-                    (double)data.voltage, (double)data.current, (double)data.soc,
-                    // #850: rail currents, amps. They ride the SLOW frame, so on a
-                    // fast-frame row these are the last values received — which is
-                    // the forward-fill this CSV is built on, not a fresh reading.
-                    (double)data.cam_current, (double)data.servo_current,
-                    (double)data.roll, (double)data.pitch, (double)data.yaw,
-                    (double)data.speed,
-                    data.launch_flag ? 1 : 0,
-                    data.vel_u_apogee_flag ? 1 : 0,
-                    data.alt_apogee_flag ? 1 : 0,
-                    data.alt_landed_flag ? 1 : 0,
-                    (double)rssi, (double)snr,
-                    (unsigned)data.next_channel_idx, (double)rx_freq_mhz,
-                    (unsigned)data.seq, (int)observed_gap,
-                    (unsigned)data.rocket_id);
+    uint8_t payload[sizeof(BsLoRaRxHeader) + SIZE_OF_LORA_FAST];
+    if (frame_len > SIZE_OF_LORA_FAST) return;   // cannot happen; never truncate silently
+    memcpy(payload, &hdr, sizeof(hdr));
+    memcpy(payload + sizeof(hdr), frame, frame_len);
 
-    if (written <= 0)
+    uint8_t rec[MAX_FRAME];
+    size_t  rec_len = 0;
+    if (!TR_I2C_Interface::packMessage(BS_LORA_RX_MSG, payload,
+                                       sizeof(hdr) + frame_len,
+                                       rec, sizeof(rec), rec_len))
     {
         log_write_fail_count++;
-        ESP_LOGW(TAG, "[LOG] fprintf() failed (ret=%d, errno=%d %s)",
-                 written, errno, strerror(errno));
+        ESP_LOGW(TAG, "[LOG] packMessage(BS_LORA_RX) failed");
+        return;
+    }
+
+    const size_t wrote = fwrite(rec, 1, rec_len, log_file);
+    if (wrote != rec_len)
+    {
+        log_write_fail_count++;
+        ESP_LOGW(TAG, "[LOG] fwrite() short (%u/%u, errno=%d %s)",
+                 (unsigned)wrote, (unsigned)rec_len, errno, strerror(errno));
     }
 
     log_last_write_ms = millis();
 }
 
 // ----------------------------------------------------------------------------
-// CSV hop-event row (#105)
+// Binary hop-event record (#105)
 // ----------------------------------------------------------------------------
-// Mirrors the column layout of logLoRaPacket() so a single pandas read_csv()
-// pass can ingest both — telemetry rows and event rows in chronological
-// order.  All telemetry-typed fields are left empty (",,,") so the event
-// stands out and the parsers can drop it with a simple `state == "EVENT"`
-// filter.  The `event` column carries a free-text description; downstream
-// scripts grep this to plot session timelines and loss histograms.
+// Interleaved with the RX records in the same file and the same framing, so a
+// single pass over the log sees telemetry and events in arrival order — the
+// property the old CSV got by padding event rows out to the full column count.
+// Binary needs no padding: the record type distinguishes them.  The text is
+// free-form; downstream scripts match on it to plot session timelines and loss
+// histograms.
 //
 // Skipped when logging_active=false so we don't open a file just to record
 // an event with no surrounding telemetry.  Hop transitions still go to
 // ESP_LOG via the existing logging at the call site, so nothing is lost.
 static void logHopEvent(const char* event_str, float rx_freq_mhz)
 {
-    if (!logging_active || log_file == nullptr) return;
-    uint32_t time_ms = millis() - log_start_ms;
-    int written = fprintf(log_file,
-                    // 30 telemetry-typed fields blank, then next_ch=- (255 sentinel)
-                    // and rx_freq_mhz/seq/gap minimal so the event row still
-                    // tells you which freq the BS was sitting on at the moment.
-                    "%lu,EVENT,,,,,,,,,,,,,"   // time_ms, state, num_sats..gyro_z (14 cols)
-                    ",,,,"                    // pressure_alt, alt_rate, max_alt, max_speed
-                    ",,,,,,,,,"               // voltage..speed (9, +cam_a +servo_a #850)
-                    ",,,,,,"                  // launch, vel_apo, alt_apo, landed, rssi, snr
-                    "%u,%.3f,,,"              // next_ch=255 sentinel, rx_freq_mhz, seq=, gap=
-                    "%s,\n",                  // event, rocket_id empty (station-level row, #381)
-                    (unsigned long)time_ms,
-                    (unsigned)LORA_NEXT_CH_NO_HOP,
-                    (double)rx_freq_mhz,
-                    event_str);
-    if (written <= 0) {
-        log_write_fail_count++;  // #384: event rows now count toward #329 stats
-        ESP_LOGW(TAG, "[LOG] fprintf(event) failed");
+    if (!logging_active || log_file == nullptr || event_str == nullptr) return;
+
+    size_t text_len = strnlen(event_str, BS_EVENT_TEXT_MAX);
+
+    BsEventHeader hdr{};
+    hdr.time_ms    = millis() - log_start_ms;
+    hdr.rx_freq_hz = (uint32_t)lroundf(rx_freq_mhz * 1e6f);
+    hdr.text_len   = (uint8_t)text_len;
+
+    uint8_t payload[sizeof(BsEventHeader) + BS_EVENT_TEXT_MAX];
+    memcpy(payload, &hdr, sizeof(hdr));
+    memcpy(payload + sizeof(hdr), event_str, text_len);
+
+    uint8_t rec[MAX_FRAME];
+    size_t  rec_len = 0;
+    if (!TR_I2C_Interface::packMessage(BS_EVENT_MSG, payload,
+                                       sizeof(hdr) + text_len,
+                                       rec, sizeof(rec), rec_len))
+    {
+        log_write_fail_count++;
+        ESP_LOGW(TAG, "[LOG] packMessage(BS_EVENT) failed");
+        return;
+    }
+
+    const size_t wrote = fwrite(rec, 1, rec_len, log_file);
+    if (wrote != rec_len)
+    {
+        log_write_fail_count++;   // #384: event records count toward #329 stats
+        ESP_LOGW(TAG, "[LOG] fwrite(event) short (%u/%u)",
+                 (unsigned)wrote, (unsigned)rec_len);
     }
     log_last_write_ms = millis();
 }
@@ -1777,7 +1798,7 @@ static void handleFileListCommand()
 
             // Derive the active basename from log_filename for comparison
             const char* active_basename = log_filename;
-            // log_filename is e.g. "/sdcard/lora_001.csv", strip mount prefix
+            // log_filename is e.g. "/sdcard/lora_001.bin", strip mount prefix
             if (strncmp(active_basename, SD_MOUNT_POINT, strlen(SD_MOUNT_POINT)) == 0)
                 active_basename += strlen(SD_MOUNT_POINT) + 1; // skip "/sdcard/"
 
@@ -4812,9 +4833,14 @@ static void loop_bs()
 
                 if (logging_active)
                 {
-                    logLoRaPacket(decoded, ls.last_rssi, ls.last_snr,
-                                  lat_deg, lon_deg, alt_m,
-                                  currentRxFreqMHz(), observed_gap);
+                    // The RAW frame, not `decoded`: with FAST and SLOW
+                    // interleaved, `decoded` is the forward-filled accumulator
+                    // and logging it would repeat the same values and lose
+                    // which fields actually arrived in this packet. lat/lon,
+                    // Euler and the seq gap are all recomputed from these bytes
+                    // by whatever renders the log.
+                    logLoRaPacket(rx_buf, rx_len, ls.last_rssi, ls.last_snr,
+                                  currentRxFreqMHz());
                 }
 
                 if (slot >= 0)

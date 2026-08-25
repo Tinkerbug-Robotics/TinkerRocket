@@ -127,6 +127,12 @@ this list is CI-enforced for uniqueness.
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
 > fills the row in.
 
+> **Not in the registry:** `BS_EVENT_MSG`, `BS_LORA_RX_MSG`
+> — these are declared in the message-type block but absent from the
+> uniqueness registry, so nothing checks them for collisions. Either add
+> them to the registry or, if they are payload sentinels, to
+> `KNOWN_NON_MESSAGE` in the generator.
+
 ## Wire struct sizes
 
 From `static_assert` in the header, so these are compiler-enforced: a struct
@@ -171,8 +177,10 @@ that changes size fails the build rather than corrupting a log silently.
 | `POWERData` | 14 |
 | `LoRaUplinkData` | 13 |
 | `BMP585Data` | 12 |
+| `BsLoRaRxHeader` | 12 |
 | `MagCalMMCOffset` | 12 |
 | `IIS2MDCData` | 10 |
+| `BsEventHeader` | 9 |
 | `RollWaypoint` | 9 |
 | `ServoTestAnglesData` | 8 |
 | `LoRaFrameHeader` | 7 |

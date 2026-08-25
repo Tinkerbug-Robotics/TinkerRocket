@@ -1684,6 +1684,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 }
                 let tempCSV = FileManager.default.temporaryDirectory
                     .appendingPathComponent(csvTempName)
+
+                // #850: a base-station log is a different binary format
+                // (TRBSLOG magic) and has no flight summary — it is a record of
+                // received packets, not a flight. Dispatch on the MAGIC rather
+                // than the filename so a renamed file still converts, and skip
+                // the summary rather than writing an empty one.
+                let head = [UInt8]((try? Data(contentsOf: binaryURL)) ?? Data())
+                if BSLogCSVGenerator.isBaseStationLog(head) {
+                    let csv = try BSLogCSVGenerator.writeCSV(head)
+                    try csv.write(to: tempCSV, atomically: true, encoding: .utf8)
+                    let cachedURL = try FileCache.shared.cacheCSV(at: tempCSV, for: filename)
+                    DispatchQueue.main.async { completion(cachedURL) }
+                    return
+                }
+
                 let generator = CSVGenerator()
                 let summary = try generator.generateCSV(
                     from: binaryURL,

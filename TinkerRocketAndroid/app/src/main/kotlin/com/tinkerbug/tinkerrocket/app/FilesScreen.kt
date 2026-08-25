@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.tinkerbug.tinkerrocket.protocol.BsLogCsvGenerator
 import com.tinkerbug.tinkerrocket.protocol.CsvGenerator
 import com.tinkerbug.tinkerrocket.protocol.FileInfo
 import com.tinkerbug.tinkerrocket.session.DeviceSession
@@ -575,10 +576,20 @@ private suspend fun downloadAndConvert(
     is DownloadResult.Success -> withContext(Dispatchers.Default) {
         binFileFor(context, file.name).writeBytes(result.bytes)
         try {
-            val (csv, summary) = CsvGenerator().writeCsv(result.bytes)
-            csvFileFor(context, file.name).writeText(csv)
-            summaryFileFor(context, file.name).writeText(summary.toJson())
-            "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV"
+            // #850: a base-station log is a different binary format (TRBSLOG
+            // magic) and has no flight summary — it is a packet record, not a
+            // flight. Dispatch on the magic rather than the filename so a
+            // renamed file still converts correctly.
+            if (BsLogCsvGenerator.isBaseStationLog(result.bytes)) {
+                val csv = BsLogCsvGenerator().writeCsv(result.bytes)
+                csvFileFor(context, file.name).writeText(csv)
+                "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV"
+            } else {
+                val (csv, summary) = CsvGenerator().writeCsv(result.bytes)
+                csvFileFor(context, file.name).writeText(csv)
+                summaryFileFor(context, file.name).writeText(summary.toJson())
+                "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV"
+            }
         } catch (e: Exception) {
             // Keep the .bin either way — the data survives a converter bug.
             "Saved .bin; CSV failed: ${e.message}"
