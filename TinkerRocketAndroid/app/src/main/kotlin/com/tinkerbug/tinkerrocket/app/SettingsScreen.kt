@@ -117,6 +117,27 @@ fun SettingsScreen(
             ?: kotlinx.coroutines.flow.flowOf(false)
     }.collectAsState(initial = false)
 
+    // "LoRa off" is DEVICE state (rocket NVS), not a profile field, so it is
+    // read from the config readback and written straight to the session.
+    // A Pair, not just the flag: "no readback yet" and "a readback without the
+    // key" both leave loraTxDisabled null but mean different things — only the
+    // second is a firmware that cannot do this, and only that one is worth
+    // saying out loud.
+    val loraTx: Pair<Boolean, Boolean?> by remember(session) {
+        val f: kotlinx.coroutines.flow.Flow<Pair<Boolean, Boolean?>> =
+            session?.rocketConfig
+                ?.map { Pair(it != null, it?.loraTxDisabled) }
+                ?.distinctUntilChanged()
+                ?: kotlinx.coroutines.flow.flowOf(Pair(false, null))
+        f
+    }.collectAsState(initial = Pair(false, null))
+    val haveConfig = loraTx.first
+    val loraTxDisabled = loraTx.second
+    val inflight by remember(session) {
+        session?.telemetry?.map { it.state == "INFLIGHT" }?.distinctUntilChanged()
+            ?: kotlinx.coroutines.flow.flowOf(false)
+    }.collectAsState(initial = false)
+
     // Self-apply (#144): persist the edit, then push just its group.
     fun edit(group: ConfigGroup?, mutate: (RocketProfile) -> RocketProfile) {
         val id = activeId ?: return
@@ -298,6 +319,37 @@ fun SettingsScreen(
                     s.toIntOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rollDelayMs = v) } }
                 }
             }
+        }
+
+        // ── Radio (iOS General-tab "Radio" section) ──────────────────────
+        // Presented positively — the switch reads "LoRa telemetry", so ON
+        // always means the radio is doing something.  The wire byte is the
+        // inverse ("disabled"), inverted once, here.
+        Section("Radio") {
+            ToggleRow(
+                "LoRa telemetry",
+                loraTxDisabled != true,
+                enabled = session != null && connected &&
+                    loraTxDisabled != null && !inflight,
+            ) { on -> session?.sendLoraTxDisabled(!on) }
+            Caption(
+                when {
+                    inflight ->
+                        "Locked while the rocket is flying — muting it now would drop " +
+                            "the only link telling you where it is."
+                    connected && haveConfig && loraTxDisabled == null ->
+                        "This rocket's firmware doesn't support turning the radio off. " +
+                            "Update it to use this."
+                    loraTxDisabled == true ->
+                        "OFF — the rocket transmits nothing: no telemetry, no beacon. It " +
+                            "still listens, so the base station can turn it back on. You " +
+                            "will have no tracking during flight."
+                    else ->
+                        "ON — the rocket downlinks telemetry to the base station at 2 Hz. " +
+                            "Turn it off to fly silent (bench work, a busy band, or a site " +
+                            "where you would rather not transmit)."
+                },
+            )
         }
 
         // ── IMU Mounting (iOS General-tab section; raw-int field replaced
@@ -815,14 +867,19 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun ToggleRow(label: String, value: Boolean, onChange: (Boolean) -> Unit) {
+private fun ToggleRow(
+    label: String,
+    value: Boolean,
+    enabled: Boolean = true,
+    onChange: (Boolean) -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = value, onCheckedChange = onChange)
+        Switch(checked = value, onCheckedChange = onChange, enabled = enabled)
     }
 }
 
@@ -889,7 +946,7 @@ private fun PyroChannelSection(
     onValue: (Float) -> Unit,
 ) {
     Section("Pyro Channel $channel") {
-        ToggleRow("Enabled", enabled, onEnabled)
+        ToggleRow("Enabled", enabled, onChange = onEnabled)
         if (enabled) {
             val isTime = mode == 0
             SegmentedPicker(

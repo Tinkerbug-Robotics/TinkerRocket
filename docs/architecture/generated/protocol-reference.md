@@ -193,7 +193,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-51 commands.
+52 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -248,6 +248,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 65 |  | Full guidance config (GuidanceConfigData): relay the whole struct to the FC |
 | 66 |  | Full fin layout (FinConfigData): relay the whole struct to the FC |
 | 67 |  | IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0) or a whitelisted ISM6HG256 ODR (960/1920/3840).… |
+| 68 | `LORA_CMD_SET_TX_DISABLED` | "LoRa off": [disabled:1] — 1 mutes every LoRa transmit, 0 resumes. Same constant (and therefore the same… |
 
 > 10 of these have no comment in the dispatch and so no
 > description here: 6, 7, 15, 16, 21, 51, 52, 53, 54, 57. Adding a comment to the branch
@@ -341,6 +342,7 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_CMD_HEARTBEAT` | `0xFE` (254) |  |
 | `LORA_CMD_HOP_PAUSE` | `0x10` (16) | uplink cmd: park on lora_freq_mhz for N ms (#90) |
 | `LORA_CMD_SET_HOP_DISABLED` | `0x11` (17) | uplink cmd: 1 byte payload, 0=hopping enabled (default), 1=disabled (fixed-frequency mode for diagnostics,… |
+| `LORA_CMD_SET_TX_DISABLED` | `0x44` (68) | uplink + rocket BLE cmd: 1 byte payload, 1 = "LoRa off" (mute every transmit, keep listening), 0 =… |
 | `LORA_HOP_DWELL_MAX` | `0x04` (4) | #133 slow-hop robustness cap |
 | `LORA_LAUNCH` | `0x01` (1) | bit 0 |
 | `LORA_LOGGING_BIT` | `0x80` (128) |  |

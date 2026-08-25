@@ -205,6 +205,11 @@ struct RocketConfig {
     // 0 = hopping not legally possible at this preset (GUI greys the
     // option); nil = device doesn't report it (pre-#150 firmware).
     var loraHopDwell: Int? = nil
+    /// "LoRa off": the rocket is holding radio silence — no telemetry, no name
+    /// beacon, no hopping — while still listening for uplink.  nil = the
+    /// firmware predates the setting, which is NOT the same as "transmitting":
+    /// only `false` positively means the radio is on the air.
+    var loraTxDisabled: Bool? = nil
     var pyro1Enabled: Bool = false
     var pyro1TriggerMode: UInt8 = 0
     var pyro1TriggerValue: Float = 1.0

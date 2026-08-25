@@ -99,6 +99,15 @@ struct SettingsView: View {
     @State private var linkModeTouchedAt: Date?
     private static let linkModeHydrationHoldS: TimeInterval = 3.0
 
+    // "LoRa off" — device state (rocket NVS), NOT a profile field, so it
+    // hydrates from the ltxd readback exactly like link mode above.  Same
+    // tap-hold trick for the same reason: the firmware answers with a full
+    // config readback, and one already in flight when the toggle is tapped
+    // would flip it back under the user's finger.
+    @State private var loraTxOff = false
+    @State private var loraTxTouchedAt: Date?
+    private static let loraTxHydrationHoldS: TimeInterval = 3.0
+
     @FocusState private var focusedField: EditField?
     @State private var lastFocusedField: EditField?
 
@@ -322,6 +331,13 @@ struct SettingsView: View {
                 if let hd = cfg.loraHopDisabled,
                    linkModeTouchedAt.map({ Date().timeIntervalSince($0) > Self.linkModeHydrationHoldS }) ?? true {
                     linkModeHopping = !hd
+                }
+                // Same hold rule for the "LoRa off" switch.  nil (firmware
+                // without the setting) leaves the switch showing ON rather
+                // than inventing an OFF the rocket never reported.
+                if let txd = cfg.loraTxDisabled,
+                   loraTxTouchedAt.map({ Date().timeIntervalSince($0) > Self.loraTxHydrationHoldS }) ?? true {
+                    loraTxOff = txd
                 }
             }
         }
@@ -801,8 +817,61 @@ struct SettingsView: View {
                 .font(.caption).foregroundColor(.secondary)
         }
 
+        radioSection
+
         // Device-level firmware update lives on the General tab only (#314).
         firmwareSection
+    }
+
+    /// "LoRa off": hold the rocket's transmitter silent.  Lives on General
+    /// (not in loRaSections, which is the base station's read-only view of
+    /// frequency and power) because this one is a per-rocket operating
+    /// decision the user makes at the pad.
+    @ViewBuilder
+    private var radioSection: some View {
+        Section(header: Text("Radio"), footer: Text(radioFooter)) {
+            Toggle("LoRa Telemetry", isOn: loraTxBinding)
+                .disabled(!device.isConnected || !radioSettingSupported ||
+                          device.telemetry.state == "INFLIGHT")
+        }
+    }
+
+    /// True once a config readback has arrived AND it carried `ltxd`.  The two
+    /// halves are distinct: no readback yet means "don't know", a readback
+    /// without the key means "this firmware can't do it".  Both leave the
+    /// switch inert, but only the second is worth telling the user about.
+    private var radioSettingSupported: Bool {
+        device.rocketConfig?.loraTxDisabled != nil
+    }
+
+    private var radioFooter: String {
+        if device.telemetry.state == "INFLIGHT" {
+            return "Locked while the rocket is flying \u{2014} muting it now would drop the only link telling you where it is."
+        }
+        if device.isConnected, device.rocketConfig != nil, !radioSettingSupported {
+            return "This rocket\u{2019}s firmware doesn\u{2019}t support turning the radio off. Update it to use this."
+        }
+        return loraTxOff
+            ? "OFF \u{2014} the rocket transmits nothing: no telemetry, no beacon. It still listens, so the base station can turn it back on. You will have no tracking during flight."
+            : "ON \u{2014} the rocket downlinks telemetry to the base station at 2 Hz. Turn it off to fly silent (bench work, a busy band, or a site where you would rather not transmit)."
+    }
+
+    private var loraTxBinding: Binding<Bool> {
+        Binding(
+            // Inverted: the switch reads "LoRa Telemetry", the wire says
+            // "disabled".  Presented the positive way round so ON always
+            // means "the radio is doing something", never the reverse.
+            get: { !loraTxOff },
+            set: { newValue in
+                let wantOff = !newValue
+                guard wantOff != loraTxOff else { return }
+                loraTxOff = wantOff
+                loraTxTouchedAt = Date()
+                if device.isConnected {
+                    device.sendLoRaTxDisabled(wantOff)
+                }
+            }
+        )
     }
 
     // Board→rocket orientation: 0xFF = pad auto-detect, else code = axis*4 + clock.

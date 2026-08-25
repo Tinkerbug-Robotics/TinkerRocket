@@ -199,6 +199,11 @@ class MainActivity : ComponentActivity() {
                                         container = container,
                                         tool = tool,
                                         onTool = { tool = it },
+                                        // Dashboard advisories that point at a
+                                        // setting (iOS opens the settings
+                                        // sheet); same tab-change discipline as
+                                        // onTab above — close any open tool.
+                                        onOpenSettings = { tool = null; tab = 3 },
                                         onDisconnect = {
                                             fleet.disconnect(activeDevice.deviceId)
                                             demoFleet = null
