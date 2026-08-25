@@ -1980,7 +1980,37 @@ void TR_LogToFlash::closeLogSession()
             // whatever bytes we have — the sink (writeFrame) wraps payload
             // in a PageHeader and programs a full 4096-byte page, zero-
             // padding the unused payload tail. Accepted small loss.
-            (void)cfg.write_sink(cfg.write_sink_ctx, page_buf, page_buf_idx);
+            //
+            // #837 item 8: the result USED to be cast away. current_file_bytes
+            // counted these bytes when they were popped off the ring, and it is
+            // snapshotted into last_closed_session_bytes_ a few lines below and
+            // handed to TR_FlightLog::finalizeFlight as final_bytes. So a failed
+            // tail write — flight region full, or the tail landing on a run of
+            // bad blocks — left finalize keeping a page that was never
+            // programmed. readFlightPage then memcpy'd erased 0xFF into the
+            // download: a file of the advertised length whose tail is garbage,
+            // with nand_prog_fail unchanged so the storage scorecard stayed
+            // green. Mirror the flushRingToNand !ok path instead.
+            const bool tail_ok =
+                cfg.write_sink(cfg.write_sink_ctx, page_buf, page_buf_idx);
+            if (!tail_ok)
+            {
+                nand_prog_fail++;                     // -> shStorageState -> DEGRADED
+                current_file_bytes -= page_buf_idx;   // never reached NAND
+                ESP_LOGE(TAG, "closeLogSession: final %lu-byte page FAILED to "
+                              "write — session reported as %lu bytes, not %lu",
+                         (unsigned long)page_buf_idx,
+                         (unsigned long)current_file_bytes,
+                         (unsigned long)(current_file_bytes + page_buf_idx));
+            }
+            else
+            {
+                // The tail page is a NAND program op like any other; counting
+                // it keeps nand_prog_ops / nand_bytes_written honest, which
+                // they were not (one page short per session).
+                nand_bytes_written += page_buf_idx;
+                nand_prog_ops++;
+            }
             page_buf_idx = 0;
         }
         file_open = false;
