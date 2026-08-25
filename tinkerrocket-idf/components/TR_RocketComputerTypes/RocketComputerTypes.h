@@ -2279,6 +2279,74 @@ static_assert(sizeof(LoRaUplinkData) == 13, "LoRaUplinkData must be 13 bytes");
 // publishes this as a link message, which it never is.
 static constexpr uint8_t LORA_UPLINK_MSG     = 0xF9;  // OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log
 
+
+// ===========================================================================
+//  Base-station binary log records
+// ===========================================================================
+// The base station used to write a 39-column CSV straight to storage, one row
+// per received packet, formatting every float on the MCU. That cost ~174 bytes
+// per packet (measured over examples/flights/lora_20260705_173025.csv) against
+// ~70 for the binary form, and it does not survive the two-frame split well:
+// with FAST and SLOW arriving asynchronously, a CSV row is a snapshot of an
+// accumulator rather than a record of what was actually received.
+//
+// So the base station now does what the rocket computer already does — it logs
+// the bytes it saw, framed exactly like every other log record
+// (TR_I2C_Interface::packMessage: SOF/type/len/CRC16), and the CSV is generated
+// on the app side. Same framing means the same walkers and the same tooling.
+//
+// What the base station knows that the frame does not: when it arrived, how
+// strong it was, and which channel it landed on. That is the envelope below;
+// everything else is either in the frame or derived from it (lat/lon from ECEF,
+// Euler from the quaternion, gap from seq).
+
+typedef struct __attribute__((packed))
+{
+    uint32_t time_ms;        // BS-relative arrival; the CSV's time_ms column
+    int16_t  rssi_dbm_x10;   // dBm * 10  (-1200 = -120.0 dBm); INT16_MIN = unknown
+    int16_t  snr_db_x10;     // dB  * 10
+    uint32_t rx_freq_hz;     // channel it was received on (hop state)
+    // The raw LoRa frame follows immediately: SIZE_OF_LORA_FAST or
+    // SIZE_OF_LORA_SLOW bytes, verbatim, self-describing through its own
+    // ver_type. NOT repeated here — the record's length byte gives the frame
+    // length as (payload_len - sizeof(BsLoRaRxHeader)), so the two can never
+    // disagree the way a duplicated length field can.
+} BsLoRaRxHeader;
+
+static_assert(sizeof(BsLoRaRxHeader) == 12, "BsLoRaRxHeader must be 12 bytes");
+
+// Sentinel for "the radio gave us no reading". Distinct from a genuine 0 dBm,
+// which is a legal (if implausible) measurement.
+static constexpr int16_t BS_RSSI_UNKNOWN = INT16_MIN;
+
+// Hop / session events — the EVENT rows of the old CSV. Free text rather than
+// an enum because these are diagnostic breadcrumbs whose vocabulary changes
+// with the hop work, and an unknown code is worse than an unknown string.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_ms;
+    uint32_t rx_freq_hz;
+    uint8_t  text_len;       // bytes of UTF-8 text following, 0..63
+    // text follows
+} BsEventHeader;
+
+static_assert(sizeof(BsEventHeader) == 9, "BsEventHeader must be 9 bytes");
+
+static constexpr size_t BS_EVENT_TEXT_MAX = 63;
+
+// The trailing marker is load-bearing: gen_protocol_reference.py reads the
+// SAME-LINE comment, and without it infers a link direction from the _MSG
+// suffix that these do not have.
+// Every base-station log opens with the 8 bytes "TRBSLOG" + this version, so a
+// reader identifies the file by content rather than by extension and refuses an
+// unknown one instead of walking arbitrary bytes as records. Bump on any change
+// to the record layouts above.
+static constexpr uint8_t BS_LOG_FORMAT_VERSION = 1;
+static constexpr size_t  BS_LOG_MAGIC_LEN      = 8;
+
+static constexpr uint8_t BS_LORA_RX_MSG = 0xFC;  // BS→self: BsLoRaRxHeader + the raw LoRa frame, one per received packet
+static constexpr uint8_t BS_EVENT_MSG   = 0xFD;  // BS→self: BsEventHeader + UTF-8 text, one per hop/session event
+
 // LoRaUplinkData.flags — the disposition of the decode.  Exactly one of these
 // is set; they are separate bits rather than an enum so a reader can mask for
 // "anything that reached us" (all of them) vs "acted on" (ACCEPTED).

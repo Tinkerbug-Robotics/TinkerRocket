@@ -36,6 +36,8 @@ from collections import Counter
 
 # ── Wire format (see RocketComputerTypes.h) ─────────────────────────────────
 
+import bs_log   # shared base-station log reader (binary + legacy CSV)
+
 PREAMBLE = b'\xAA\x55\xAA\x55'
 MSG_LORA = 0xF1
 MSG_LORA_UPLINK = 0xF9        # OC-self-emitted uplink RX record
@@ -137,22 +139,28 @@ def read_rocket_bin(path):
     return rows, imu_frames, uplinks
 
 
-def read_bs_csv(path):
-    """Read a base-station lora_*.csv. Tolerates a truncated final row."""
-    rows = []
-    with open(path, newline='') as fh:
-        for rec in csv.DictReader(fh):
-            try:
-                rows.append(dict(seq=int(rec['seq']),
-                                 t_s=float(rec['time_ms']) / 1000.0,
-                                 rssi=float(rec['rssi']),
-                                 snr=float(rec['snr']),
-                                 rocket_id=rec.get('rocket_id'),
-                                 next_ch=rec.get('next_ch')))
-            except (TypeError, ValueError, KeyError):
-                continue          # truncated tail row, or a partial flush
-    return rows
+def read_bs_log_rows(path):
+    """Read a base-station log — binary since #850, CSV for anything older.
 
+    Delegates to Data_Analysis/bs_log.py, which detects the format by content
+    rather than extension, so a renamed file still reads correctly and the
+    repo's committed CSV example keeps working.
+    """
+    rows, _events, fmt = bs_log.read_bs_log(path)
+    out = []
+    for r in rows:
+        try:
+            out.append(dict(seq=int(r['seq']),
+                            t_s=float(r['t_s']),
+                            rssi=float(r.get('rssi', float('nan'))),
+                            snr=float(r.get('snr', float('nan'))),
+                            rocket_id=r.get('rocket_id'),
+                            next_ch=r.get('next_ch')))
+        except (TypeError, ValueError, KeyError):
+            continue        # truncated final record
+    if fmt == 'csv':
+        print(f"  (legacy CSV base-station log: {path})", file=sys.stderr)
+    return out
 
 def pct(n, d):
     return f"{100.0 * n / d:.1f}%" if d else "n/a"
@@ -221,7 +229,7 @@ def main():
                   "base station, or predates uplink RX logging")
 
     if args.bspath:
-        rx = read_bs_csv(args.bspath)
+        rx = read_bs_log_rows(args.bspath)
         print(f"\nbase station  {args.bspath}")
         if not rx:
             print("  no decodable rows")
