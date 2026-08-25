@@ -368,7 +368,10 @@ bool TR_LogToFlash::enqueueFrame(const uint8_t* frame, size_t len)
     }
     // Accept frames when logging is active OR when the log file has been
     // pre-created (PRELAUNCH).  Pre-launch frames buffer in the ring
-    // (capped at 50%) and are flushed once activateLogging() fires.
+    // (capped at 75% by prelaunchCap(), which keeps ~1 s of pre-ignition
+    // history while leaving the launch transient headroom — this said 50%,
+    // the cap's value before that tuning, #837 item 9) and are flushed once
+    // activateLogging() fires.
     // Cross-session stale MRAM is handled by runStartupRecovery() at boot;
     // within a session, processFrame() has a timestamp monotonicity filter
     // that catches anything that would look like a replay from the ring.

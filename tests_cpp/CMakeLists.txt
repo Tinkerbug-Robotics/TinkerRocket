@@ -749,6 +749,34 @@ target_include_directories(test_flush_iter_ledger PRIVATE
 target_link_libraries(test_flush_iter_ledger GTest::gtest_main)
 gtest_discover_tests(test_flush_iter_ledger)
 
+# ---------- test_log_to_flash_sink (#837 items 8 and 9, #271) ----------
+# The first target that compiles TR_LogToFlash.cpp itself rather than one of
+# its pure headers.  It covers SINK mode only — openLogSession,
+# flushRingToNand and closeLogSession all branch on cfg.write_sink before
+# they reach LittleFS, so the sink path needs no filesystem and lfs is
+# STUBBED (fakes/lfs_host_stub.c) instead of built.  Building the real lfs.c
+# would need a block device, and the block device is the component's own NAND
+# driver talking to a chip that is not there.
+#
+# The ESP-IDF surface comes from host_shim: freertos/ (mutexes and the
+# deterministic task driver that makes the close path reachable), esp_timer,
+# esp_heap_caps, esp_system, an in-memory TR_NVS, and an SPI stub that answers
+# RDID so the test can pick which NAND geometry begin() resolves.
+add_executable(test_log_to_flash_sink
+    test_log_to_flash_sink.cpp
+    fakes/lfs_host_stub.c
+    ${LIB_DIR}/TR_LogToFlash/TR_LogToFlash.cpp
+)
+target_include_directories(test_log_to_flash_sink PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LogToFlash
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/CRC
+)
+target_link_libraries(test_log_to_flash_sink GTest::gtest_main)
+gtest_discover_tests(test_log_to_flash_sink)
+
 # ---------- test_sim_pad_align (#508) ----------
 # Header-only pure math (no ESP/Arduino deps), so there is no component .cpp to
 # compile — the alignment solve was extracted out of SensorCollectorSim precisely
