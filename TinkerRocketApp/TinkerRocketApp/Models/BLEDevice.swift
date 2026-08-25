@@ -1808,15 +1808,25 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                         let tempCSV = FileManager.default.temporaryDirectory
                             .appendingPathComponent(csvName)
                         try csv.write(to: tempCSV, atomically: true, encoding: .utf8)
-                        let _ = try FileCache.shared.cacheDirectCSV(at: tempCSV, filename: csvName)
-                        // Keep the raw log, in the BINARY cache where the
-                        // rocket's .bin lives — not beside the CSV. The CSV is
-                        // a rendering; the .bin is the evidence, and the
-                        // post-flight tools are moving to read it directly, the
-                        // same way they read the rocket computer's log. Cached
-                        // here it gets a binaryURL on the flight entry and rides
-                        // the existing Share Flight Data sheet.
+
+                        // ORDER MATTERS, AND NOT OBVIOUSLY. cacheBinary()
+                        // deletes the cached CSV for the binary it is given
+                        // (#832: the CSV is normally DERIVED from the binary
+                        // lazily, so a re-download must invalidate a stale
+                        // rendering). Here the CSV is produced EAGERLY, up
+                        // front — so caching the binary second deleted the CSV
+                        // we had just written, leaving the .bin in place and
+                        // nothing in Saved Files. Cache the binary FIRST and
+                        // let #832 invalidate the OLD rendering; the fresh one
+                        // then lands and survives.
+                        //
+                        // The raw log goes in the BINARY cache where the
+                        // rocket's lives, not beside the CSV: the CSV is a
+                        // rendering, the .bin is the evidence the post-flight
+                        // tools read directly, and it rides the existing Share
+                        // Flight Data sheet from there.
                         let _ = try? FileCache.shared.cacheBinary(at: fileURL, for: filename)
+                        let _ = try FileCache.shared.cacheDirectCSV(at: tempCSV, filename: csvName)
                     } else {
                         let _ = try FileCache.shared.cacheDirectCSV(at: fileURL, filename: filename)
                     }
