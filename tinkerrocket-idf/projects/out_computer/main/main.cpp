@@ -1146,6 +1146,18 @@ static volatile bool imu_orient_dirty    = false;
 static uint8_t       imu_orient_pub_code = 0xFF;   // last published (0xFF = never)
 static uint8_t       imu_orient_pub_mode = 0xFF;
 
+// FC's full config report (#915), mirrored from CONFIG_REPORT_MSG.  This is
+// the ONLY source for the settings the app could not otherwise see — servo
+// trim 2-4, fin travel, fin layout, the PN guidance parameters, the roll
+// waypoints, sounds and the orientation SETTING.  Held in RAM only, never
+// NVS: a stale report served after an OC reboot would be a confident lie
+// about a vehicle we have not heard from, and the FC re-pushes every few
+// seconds anyway.  Until the first one lands the OC omits the frames it
+// feeds, and the app keeps saying it cannot verify those groups.
+static ConfigReportData fc_config_report = {};
+static bool             fc_config_report_valid = false;
+static volatile bool    fc_config_report_dirty = false;
+
 // FC's guidance-target echo (#435), mirrored from the v5 status query and
 // re-published as a compact "guid_target" JSON frame whenever it changes —
 // the app's cmd-28 send confirmation is gated on seeing this echo advance.
@@ -2781,6 +2793,7 @@ static bool isKnownMessageType(uint8_t type)
         case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
         case I2C_TX_RESYNC:          // FC→OC over I2C — slave TX desync recovery (#402)
         case FC_BOOT_STATUS_MSG:     // FC→OC over I2C during setup_fc — boot progress
+        case CONFIG_REPORT_MSG:      // FC→OC over I2S — full config report (#915)
             return true;
         default:
             return false;
@@ -2840,6 +2853,48 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         {
             memcpy(fc_fw_version, incoming, sizeof(fc_fw_version));
             fc_identity_dirty = true;
+        }
+        return;
+    }
+
+    // FC full config report (#915).  Handled here, BEFORE the log enqueue
+    // below, so it stays out of the flight log: it is a pre-flight readback,
+    // not flight data, and FlightSettingsData already records what actually
+    // flew.  Keeping it out also spares the Data_Analysis parsers a message
+    // type they hardcode no length for.  Same early-return shape as
+    // FC_IDENTITY above.
+    if (type == CONFIG_REPORT_MSG)
+    {
+        if (payload_len >= sizeof(ConfigReportData))
+        {
+            ConfigReportData incoming;
+            memcpy(&incoming, payload, sizeof(incoming));
+            if (incoming.version != ConfigReportData::VERSION)
+            {
+                // An FC newer or older than this OC.  Refuse rather than
+                // reinterpret: every field after a layout change would be
+                // silently misparsed, and the app would show it as verified.
+                static uint8_t warned_version = 0xFF;
+                if (warned_version != incoming.version)
+                {
+                    warned_version = incoming.version;
+                    ESP_LOGW("CFG", "Config report version %u unsupported "
+                                    "(expect %u) — ignoring",
+                             (unsigned)incoming.version,
+                             (unsigned)ConfigReportData::VERSION);
+                }
+                return;
+            }
+            // time_us changes on every push, so compare everything EXCEPT it —
+            // otherwise the 5 s repeat would re-publish to the app forever.
+            const bool changed =
+                !fc_config_report_valid ||
+                memcmp((const uint8_t*)&incoming + sizeof(incoming.time_us),
+                       (const uint8_t*)&fc_config_report + sizeof(incoming.time_us),
+                       sizeof(incoming) - sizeof(incoming.time_us)) != 0;
+            fc_config_report = incoming;
+            fc_config_report_valid = true;
+            if (changed) fc_config_report_dirty = true;
         }
         return;
     }
@@ -3028,7 +3083,20 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 // auto), re-stage the config.  Idempotent — once applied
                 // the query reflects MANUAL+code and this goes quiet.
                 // Never during flight (the FC refuses mid-flight anyway).
-                if (cfg_imu_orient != IMU_ORIENT_AUTO &&
+                //
+                // #915: skipped entirely once the FC carries its own NVS
+                // record.  This heal existed because the FC was the one
+                // config group that could not remember its own setting; a
+                // firmware that does remember must not have that memory
+                // overwritten from here every time it comes up.  The gate is
+                // the FC's own provenance bit, not a version number, so an
+                // FC that has genuinely never been told still gets healed.
+                const bool fc_remembers_orient =
+                    fc_config_report_valid &&
+                    (fc_config_report.flags &
+                     (1U << ConfigReportData::F_ORIENT_FROM_NVS)) != 0U;
+                if (!fc_remembers_orient &&
+                    cfg_imu_orient != IMU_ORIENT_AUTO &&
                     latest_rocket_state != INFLIGHT &&
                     (last_query_cfg.b2r_mode != ORIENT_MODE_MANUAL ||
                      last_query_cfg.b2r_code != cfg_imu_orient))
@@ -4078,7 +4146,14 @@ static void sendLoRaBeacon()
 // retries on mbuf exhaustion) rarely has to. Enqueue and drain both run in
 // loop_oc, so the ring needs no locking. sendConfigJSON no-ops when
 // disconnected, so any frames still queued at disconnect drain out harmlessly.
-static constexpr uint8_t  CFG_RB_CAP     = 8;
+// MUST exceed the connect burst, which sendCurrentConfig() enqueues in ONE
+// synchronous pass before any drain runs: config, config_pyro,
+// config_identity, fc_identity, imu_orient, guid_target, and the three #915
+// report frames = 9.  At the old cap of 8 the ninth enqueue evicted the
+// oldest — the main "config" frame — and the app silently never received it.
+// Raise this WITH the burst, or the drop is invisible except for one warning
+// line on a console nobody is watching on the pad.
+static constexpr uint8_t  CFG_RB_CAP     = 12;
 static constexpr uint32_t CFG_RB_PACE_MS = 20;   // >= negotiated max conn interval
 static String   cfg_rb_queue[CFG_RB_CAP];
 static uint8_t  cfg_rb_head  = 0;
@@ -4145,13 +4220,22 @@ static void sendImuOrientation()
     if (q.format_version < 3) return;  // pre-orientation FC
     // "set" is the user's SETTING (0xFF auto / manual code), distinct from
     // code/mode/name which describe what the FC is actively applying.
+    // #915: "set" is the VEHICLE's setting when the FC has one of its own.
+    // Reporting the OC's cache unconditionally was a lie waiting to happen —
+    // reflash the OC alone and it would tell the app AUTO while the FC flew a
+    // manual clocking out of its own NVS.
+    const bool fc_remembers =
+        fc_config_report_valid &&
+        (fc_config_report.flags & (1U << ConfigReportData::F_ORIENT_FROM_NVS)) != 0U;
+    const uint8_t reported_set =
+        fc_remembers ? fc_config_report.imu_orient_setting : cfg_imu_orient;
     char buf[112];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"imu_orient\",\"code\":%u,\"mode\":%u,\"name\":\"%s\",\"set\":%u}",
              (unsigned)q.b2r_code,
              (unsigned)q.b2r_mode,
              orientCodeName(q.b2r_code),
-             (unsigned)cfg_imu_orient);
+             (unsigned)reported_set);
     enqueueConfigReadback(String(buf));   // #398 item 3
     imu_orient_pub_code = q.b2r_code;
     imu_orient_pub_mode = q.b2r_mode;
@@ -4194,6 +4278,82 @@ static void sendGuidTarget()
              (unsigned)q.tgt_seq,
              (unsigned)q.tgt_status,
              (unsigned)q.tgt_last_rc);
+}
+
+// #915: the settings the "config" frame never carried, published from the
+// FC's own report so the app can SHOW and VERIFY them instead of displaying
+// profile values it has no way to check.  Split across three frames for the
+// same reason everything else here is kept small — sendConfigJSON silently
+// drops anything over the BLE notify MTU, so a single fat frame would vanish
+// without a trace.
+//
+// Emitted only once a report has landed.  Absence is the app's signal that
+// this rocket cannot report them, which is exactly what pre-#915 firmware
+// looks like — so the "can't verify" line stays correct on an old rocket
+// instead of the app silently believing stale defaults.
+static void sendConfigExtras()
+{
+    if (!fc_config_report_valid) return;
+    const ConfigReportData &r = fc_config_report;
+
+    // 1) Servo trim 2-4, fin travel, fin layout, sounds.
+    String j = "{\"type\":\"config_servo\"";
+    j += ",\"sb2\":"; j += itos(r.servo.bias_us[1]);
+    j += ",\"sb3\":"; j += itos(r.servo.bias_us[2]);
+    j += ",\"sb4\":"; j += itos(r.servo.bias_us[3]);
+    j += ",\"fmn\":"; j += fmtf(r.servo.fin_min_deg, 2);
+    j += ",\"fmx\":"; j += fmtf(r.servo.fin_max_deg, 2);
+    j += ",\"faz\":[";
+    for (int i = 0; i < 4; ++i) {
+        if (i) j += ",";
+        j += fmtf(r.fin.azimuth_deg[i], 1);
+    }
+    j += "]";
+    j += ",\"frv\":";  j += itos(r.fin.reverse_mask);
+    j += ",\"frrv\":"; j += itos(r.fin.roll_reverse_mask);
+    j += ",\"snd\":";
+    j += (r.flags & (1U << ConfigReportData::F_SOUNDS)) ? "true" : "false";
+    j += "}";
+    enqueueConfigReadback(j);
+    ESP_LOGI("CFG", "Queued config_servo readback (%u bytes)", (unsigned)j.length());
+
+    // 2) The PN / station-keep parameters behind the guidance on/off flag.
+    String g = "{\"type\":\"config_guid\"";
+    g += ",\"gng\":"; g += fmtf(r.guidance.nav_gain, 2);
+    g += ",\"gma\":"; g += fmtf(r.guidance.max_accel_mps2, 1);
+    g += ",\"gaf\":"; g += fmtf(r.guidance.accel_to_fin_deg, 2);
+    g += ",\"gmf\":"; g += fmtf(r.guidance.max_fin_deg, 1);
+    g += ",\"gms\":"; g += fmtf(r.guidance.min_speed_mps, 1);
+    g += ",\"gcd\":"; g += itos(r.guidance.coast_delay_ms);
+    g += ",\"gtm\":"; g += itos(r.guidance.target_mode);
+    g += ",\"gte\":"; g += fmtf(r.guidance.target_e_m, 1);
+    g += ",\"gtn\":"; g += fmtf(r.guidance.target_n_m, 1);
+    g += ",\"gta\":"; g += fmtf(r.guidance.target_alt_m, 1);
+    g += ",\"gkp\":"; g += fmtf(r.guidance.kp_pos_per_s2, 2);
+    g += ",\"gkd\":"; g += fmtf(r.guidance.kd_vel_per_s, 2);
+    g += ",\"glw\":"; g += itos(r.guidance.guidance_law);
+    g += "}";
+    enqueueConfigReadback(g);
+    ESP_LOGI("CFG", "Queued config_guid readback (%u bytes)", (unsigned)g.length());
+
+    // 3) The roll profile.  num_waypoints == 0 is a real answer ("rate-only"),
+    // not an absent one — the app must be able to tell that from "this rocket
+    // doesn't report waypoints", which is why the frame is sent either way.
+    String w = "{\"type\":\"config_roll\",\"n\":";
+    uint8_t n = r.roll.num_waypoints;
+    if (n > MAX_ROLL_WAYPOINTS) n = MAX_ROLL_WAYPOINTS;   // corrupt/forward record
+    w += itos(n);
+    w += ",\"wp\":[";
+    for (uint8_t i = 0; i < n; ++i) {
+        if (i) w += ",";
+        w += "["; w += fmtf(r.roll.waypoints[i].time_s, 2);
+        w += ",";  w += fmtf(r.roll.waypoints[i].angle_deg, 1);
+        w += "]";
+    }
+    w += "]}";
+    enqueueConfigReadback(w);
+    ESP_LOGI("CFG", "Queued config_roll readback (%u bytes, %u wp)",
+             (unsigned)w.length(), (unsigned)n);
 }
 
 static void sendCurrentConfig()
@@ -4277,6 +4437,7 @@ static void sendCurrentConfig()
     sendFcIdentity();
     sendImuOrientation();
     sendGuidTarget();
+    sendConfigExtras();   // #915
 }
 
 // Cache servo config to NVS (mirrors what FlightComputer stores)
@@ -7664,6 +7825,15 @@ static void loop_oc()
     {
         guid_target_dirty = false;
         sendGuidTarget();
+    }
+
+    // Same pattern for the #915 config report: an edit the app made lands in
+    // the FC's NVS and comes back through the report, and a change made over
+    // LoRa (or by another phone) reaches this phone without a reconnect.
+    if (fc_config_report_dirty && ble_app.isConnected() && ble_app.isReadyForNotify())
+    {
+        fc_config_report_dirty = false;
+        sendConfigExtras();
     }
 
     // Service the BLE library's poll-style work — currently just the OTA

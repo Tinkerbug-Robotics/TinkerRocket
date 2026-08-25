@@ -95,6 +95,16 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
     public val suggestedProfileId: StateFlow<UUID?> = _suggestedProfileId.asStateFlow()
 
     /**
+     * Setting groups the CONNECTED rocket does not report back, so the app
+     * shows the profile's values for them and cannot verify them against the
+     * vehicle.  Empty once the firmware's config report has landed; the full
+     * pre-report list on older firmware, and the servo/fin/guidance groups on
+     * a mini, which has none of that hardware.
+     */
+    private val _unreportedGroups = MutableStateFlow<List<String>>(emptyList())
+    public val unreportedGroups: StateFlow<List<String>> = _unreportedGroups.asStateFlow()
+
+    /**
      * Name of a profile this syncer created for a board it had never seen,
      * seeded from the rocket's own reported settings (#915).  Surfaced as an
      * info line so a silently-created profile is never a surprise.
@@ -125,6 +135,9 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
      * rocket report.
      */
     private var orientAdoptArmed = false
+
+    /** Armed once per attach, for the same reason as [orientAdoptArmed]. */
+    private var extrasAdoptArmed = false
 
     /**
      * Role at attach time.  A renamed device can mis-parse its type from the
@@ -237,11 +250,13 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         sensorCalReadPending = false
         selfSelectedProfileId = null
         orientAdoptArmed = false
+        extrasAdoptArmed = false
         _syncState.value = SyncState.Idle
         _magCalAdvisory.value = CalAdvisory.None
         _sensorCalAdvisory.value = CalAdvisory.None
         _suggestedProfileId.value = null
         _createdProfileName.value = null
+        _unreportedGroups.value = emptyList()
     }
 
     private fun onReadyToSync() {
@@ -270,8 +285,15 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         val unitId = s.identity.value.unitId.orEmpty()
         if (unitId.isEmpty()) return
 
-        val bound = st.profiles.value.firstOrNull { it.lastUsedUnitID == unitId }
+        // A store written by the buggy build can already hold TWO profiles
+        // claiming this board, and firstOrNull over a name-sorted list would
+        // pick alphabetically. Prefer the most recently updated — update() is
+        // the one funnel every edit, push and adoption goes through — and
+        // re-bind through st.bind so binding also releases the stale claim.
+        val claimants = st.profiles.value.filter { it.lastUsedUnitID == unitId }
+        val bound = claimants.maxByOrNull { it.updatedAtMs }
         if (bound != null) {
+            if (claimants.size > 1) st.bind(bound.id, unitId)
             if (st.activeId.value != bound.id) {
                 selfSelectedProfileId = bound.id
                 st.setActive(bound.id)
@@ -285,7 +307,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         val name = s.identity.value.unitName?.takeIf { it.isNotEmpty() }
             ?: "Rocket ${unitId.takeLast(4)}"
         val created = st.add(name)
-        st.update(created.id) { it.copy(lastUsedUnitID = unitId) }
+        st.bind(created.id, unitId)
         selfSelectedProfileId = created.id
         st.setActive(created.id)
         _createdProfileName.value = st.profiles.value.firstOrNull { it.id == created.id }?.name
@@ -311,6 +333,8 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
             return
         }
 
+        _unreportedGroups.value = cfg.unreportedGroups
+
         val result = adopt(profile, cfg)
         if (result.changed.isNotEmpty()) st.update(profile.id) { result.profile }
 
@@ -322,6 +346,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
             else SyncState.Adopted(result.changed)
 
         armOrientationAdopt(s, cfg)
+        armExtrasAdopt(s, cfg)
 
         syncCal(profile, s)
     }
@@ -355,6 +380,25 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
     }
 
     /**
+     * The three #915 config-report frames land after the main config readback,
+     * in their own paced slots.  Re-adopt as they arrive so the profile picks
+     * up the fin layout and guidance parameters without a reconnect.  Armed
+     * once per attach, so a later user edit — which also flows back through
+     * the report — is not reported as the rocket disagreeing with the phone.
+     */
+    private fun armExtrasAdopt(s: DeviceSession, cfg: RocketConfig) {
+        if (cfg.unreportedGroups.isEmpty() || extrasAdoptArmed) return
+        extrasAdoptArmed = true
+        jobs += scope.launch {
+            s.rocketConfig
+                .filterNotNull()
+                .filter { it.unreportedGroups.isEmpty() }
+                .first()
+            adoptRocketConfig()
+        }
+    }
+
+    /**
      * Write the whole active profile to the connected rocket.  This is the old
      * #132 connect-time behaviour, kept as a deliberate user action:
      * provisioning a fresh board, cloning a known-good setup onto a
@@ -379,8 +423,9 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
 
         syncCal(profile, s)
 
-        // This profile now owns this board.
-        st.update(profile.id) { it.copy(lastUsedUnitID = s.identity.value.unitId) }
+        // This profile now owns this board — and it has to own it EXCLUSIVELY,
+        // or the next connect resolves the tie by name instead of by choice.
+        st.bind(profile.id, s.identity.value.unitId.orEmpty())
 
         // Optimistic (no per-command ack on this link); hold "syncing"
         // briefly so the badge is visible.
@@ -553,16 +598,14 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         public const val GROUP_IMU_ORIENTATION: String = "IMU orientation"
         public const val GROUP_IMU_RATE: String = "IMU rate"
 
-        /**
-         * Setting groups the rocket does not report back, so the app shows the
-         * profile's values for them and cannot verify them against the vehicle
-         * (#915).  Named so the UI can say which ones rather than implying the
-         * whole screen is confirmed.
-         */
-        public val unreportedGroups: List<String> = listOf(
-            "Servo trim 2-4", "Fin travel", "Fin layout",
-            "Roll profile", "Guidance parameters", "Sounds",
-        )
+        // #915 firmware follow-up: reachable only once the rocket reports them.
+        public const val GROUP_SERVO_TRIM_24: String = "Servo trim 2-4"
+        public const val GROUP_FIN_TRAVEL: String = "Fin travel"
+        public const val GROUP_FIN_LAYOUT: String = "Fin layout"
+        public const val GROUP_SOUNDS: String = "Sounds"
+        public const val GROUP_GUIDANCE_PARAMS: String = "Guidance parameters"
+        public const val GROUP_ROLL_PROFILE: String = "Roll profile"
+
 
         /** Outcome of [adopt]: the reconciled profile and what differed. */
         public data class AdoptionResult(
@@ -712,7 +755,137 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 pyro4TriggerValue = rocketPyro[3].third,
             )
 
+            // ── The #915 firmware follow-up groups ─────────────────────────
+            // Each is null on a rocket that cannot report it (pre-report
+            // firmware, or the mini, which has none of this hardware).  null
+            // means "we don't know", and the only honest thing to do with that
+            // is leave the profile alone — resetting it to an invented default
+            // would be a silent change dressed up as a reconciliation.
+
+            cfg.servoExtras?.let { e ->
+                if (p.servoBias2 != e.bias2 || p.servoBias3 != e.bias3 ||
+                    p.servoBias4 != e.bias4
+                ) {
+                    p = p.copy(servoBias2 = e.bias2, servoBias3 = e.bias3, servoBias4 = e.bias4)
+                    changed += GROUP_SERVO_TRIM_24
+                }
+
+                // #449 made the profile store ONE travel number, from which the
+                // endpoints are derived symmetrically.  An asymmetric
+                // rocket-side cal therefore collapses to its span — the profile
+                // has no way to express it.
+                val travel = e.finMaxDeg - e.finMinDeg
+                if (!same(p.finTravelDeg, travel, 2)) {
+                    p = p.copy(finTravelDeg = travel)
+                    changed += GROUP_FIN_TRAVEL
+                }
+
+                val slots = slotsFromAzimuths(e.finAzimuths)
+                val reverse = (0..3).map { (e.finReverseMask shr it) and 1 == 1 }
+                val rollReverse = (0..3).map { (e.finRollReverseMask shr it) and 1 == 1 }
+                val ringMode = ringModeFromAzimuths(e.finAzimuths)
+                if (slots != null && (
+                        p.finServoAtSlot != slots || p.finReverse != reverse ||
+                            p.finRollReverse != rollReverse || p.finRingMode != ringMode
+                        )
+                ) {
+                    p = p.copy(
+                        finServoAtSlot = slots, finReverse = reverse,
+                        finRollReverse = rollReverse, finRingMode = ringMode,
+                    )
+                    changed += GROUP_FIN_LAYOUT
+                }
+
+                if (p.soundsEnabled != e.soundsEnabled) {
+                    p = p.copy(soundsEnabled = e.soundsEnabled)
+                    changed += GROUP_SOUNDS
+                }
+            }
+
+            cfg.guidanceExtras?.let { g ->
+                if (!same(p.pnNavGain, g.navGain, 2) ||
+                    !same(p.pnMaxAccel, g.maxAccel, 1) ||
+                    !same(p.pnAccelToFin, g.accelToFin, 2) ||
+                    !same(p.pnMaxFinDeg, g.maxFinDeg, 1) ||
+                    !same(p.pnMinSpeed, g.minSpeed, 1) ||
+                    p.pnCoastDelayMs != g.coastDelayMs ||
+                    p.pnTargetMode != g.targetMode ||
+                    !same(p.pnTargetE, g.targetE, 1) ||
+                    !same(p.pnTargetN, g.targetN, 1) ||
+                    !same(p.pnTargetAltM, g.targetAltM, 1) ||
+                    !same(p.pnKpPos, g.kpPos, 2) ||
+                    !same(p.pnKdVel, g.kdVel, 2) ||
+                    p.pnGuidanceLaw != g.guidanceLaw
+                ) {
+                    p = p.copy(
+                        pnNavGain = g.navGain, pnMaxAccel = g.maxAccel,
+                        pnAccelToFin = g.accelToFin, pnMaxFinDeg = g.maxFinDeg,
+                        pnMinSpeed = g.minSpeed, pnCoastDelayMs = g.coastDelayMs,
+                        pnTargetMode = g.targetMode, pnTargetE = g.targetE,
+                        pnTargetN = g.targetN, pnTargetAltM = g.targetAltM,
+                        pnKpPos = g.kpPos, pnKdVel = g.kdVel,
+                        pnGuidanceLaw = g.guidanceLaw,
+                    )
+                    changed += GROUP_GUIDANCE_PARAMS
+                }
+            }
+
+            cfg.rollWaypoints?.let { wps ->
+                val differs = wps.size != p.rollWaypoints.size ||
+                    wps.zip(p.rollWaypoints).any { (r, mine) ->
+                        !same(r.timeS, mine.timeSeconds, 2) ||
+                            !same(r.angleDeg, mine.angleDeg, 1)
+                    }
+                if (differs) {
+                    p = p.copy(
+                        rollWaypoints = wps.map {
+                            ProfileRollWaypoint(timeSeconds = it.timeS, angleDeg = it.angleDeg)
+                        },
+                    )
+                    changed += GROUP_ROLL_PROFILE
+                }
+            }
+
             return AdoptionResult(p, changed)
+        }
+
+        /**
+         * Ring mode from the reported azimuths: "+" is the on-axis set
+         * {0,90,180,270}, "×" the 45°-rotated one.  Anything else reads as "+"
+         * — the profile has no third mode, and the azimuths still round-trip
+         * through finServoAtSlot.
+         */
+        public fun ringModeFromAzimuths(az: List<Float>): Int {
+            val rotated = az.any { a ->
+                val m = ((a % 90) + 90) % 90
+                kotlin.math.abs(m - 45f) < 1f
+            }
+            return if (rotated) 1 else 0
+        }
+
+        /**
+         * Invert the app's slot→servo mapping from the azimuths the FC reports.
+         * Returns null if they don't describe four distinct slots, in which
+         * case the layout is left alone rather than guessed at — putting the
+         * wrong servo on the wrong fin is worse than not knowing.
+         */
+        public fun slotsFromAzimuths(az: List<Float>): List<Int>? {
+            if (az.size != 4) return null
+            val slots = IntArray(4)
+            val filled = mutableSetOf<Int>()
+            az.forEachIndexed { servoIdx, a ->
+                val norm = ((a % 360f) + 360f) % 360f
+                // FLOOR, not round-to-nearest: a slot IS a quadrant of the
+                // ring, and the "x" layout's azimuths (45/135/225/315) land
+                // exactly on rounding ties — where Kotlin breaks to even and
+                // Swift breaks away from zero, so the two platforms derived
+                // DIFFERENT fin mappings from the same rocket.  Flooring has
+                // no tie to break and gives 0..3 for both ring modes.
+                val slot = kotlin.math.floor(norm / 90f).toInt().coerceIn(0, 3)
+                if (!filled.add(slot)) return null      // two servos, one slot
+                slots[slot] = servoIdx + 1              // servos are 1-based
+            }
+            return if (filled.size == 4) slots.toList() else null
         }
 
         /**

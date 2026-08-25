@@ -37,6 +37,13 @@ public object TelemetryDispatch {
         return when (val type = JsonBridging.nsString(json, "type")) {
             "config" -> TelemetryCharMessage.Config(ConfigMessage.parse(json))
             "config_pyro" -> TelemetryCharMessage.ConfigPyro(ConfigPyroMessage.parse(json))
+            // #915 config report — three frames the OC emits from the FC's own
+            // state.  A frame that fails to parse yields a null payload, which
+            // the session layer leaves as "not reported" rather than applying
+            // half of it.
+            "config_servo" -> TelemetryCharMessage.ConfigServo(ConfigServoMessage.parse(json))
+            "config_guid" -> TelemetryCharMessage.ConfigGuid(ConfigGuidMessage.parse(json))
+            "config_roll" -> TelemetryCharMessage.ConfigRoll(ConfigRollMessage.parse(json))
             "config_identity" -> TelemetryCharMessage.ConfigIdentity(ConfigIdentityMsg.parse(json))
             "fc_identity" -> TelemetryCharMessage.FcIdentity(FcIdentityMsg.parse(json))
             "imu_orient" -> TelemetryCharMessage.ImuOrient(ImuOrientMsg.parse(json))
@@ -80,6 +87,15 @@ public sealed interface TelemetryCharMessage {
      * [ConfigPyroMessage.applyTo]`(currentConfig)` (edits only pyro fields).
      */
     public data class ConfigPyro(val msg: ConfigPyroMessage) : TelemetryCharMessage
+
+    /** `"type":"config_servo"` (#915); null payload = the frame was malformed. */
+    public data class ConfigServo(val extras: RocketServoExtras?) : TelemetryCharMessage
+
+    /** `"type":"config_guid"` (#915); null payload = the frame was malformed. */
+    public data class ConfigGuid(val extras: RocketGuidanceExtras?) : TelemetryCharMessage
+
+    /** `"type":"config_roll"` (#915). EMPTY list = rate-only, null = malformed. */
+    public data class ConfigRoll(val waypoints: List<ReportedRollWaypoint>?) : TelemetryCharMessage
 
     /** `"type":"config_identity"` — device identity readback. */
     public data class ConfigIdentity(val msg: ConfigIdentityMsg) : TelemetryCharMessage

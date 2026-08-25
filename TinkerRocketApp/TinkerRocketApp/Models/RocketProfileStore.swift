@@ -102,6 +102,24 @@ final class RocketProfileStore: ObservableObject {
         }
     }
 
+    /// Make `id` the ONE profile bound to `unitID`, releasing any other that
+    /// still claims that board.
+    ///
+    /// Binding has to be exclusive or it isn't a binding. Assigning a second
+    /// profile to a rocket used to leave the first one still claiming it, and
+    /// the connect-time lookup takes the FIRST match in a list sorted by NAME
+    /// — so which profile a board came back on was decided alphabetically
+    /// rather than by anything the user did. Bench-caught on #915: set a new
+    /// profile on a rocket, connect to another rocket, come back, and the
+    /// selection had silently reverted to the older profile.
+    func bind(_ id: UUID, toUnitID unitID: String) {
+        guard !unitID.isEmpty else { return }
+        for other in profiles where other.lastUsedUnitID == unitID && other.id != id {
+            update(other.id) { $0.lastUsedUnitID = nil }
+        }
+        update(id) { $0.lastUsedUnitID = unitID }
+    }
+
     func setActive(_ id: UUID?) {
         activeId = id
         persistActiveId()

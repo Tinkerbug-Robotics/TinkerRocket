@@ -435,6 +435,20 @@ public class DeviceSession(
             }
             is TelemetryCharMessage.ConfigPyro ->
                 _rocketConfig.value = msg.msg.applyTo(_rocketConfig.value)
+            // #915: a malformed frame leaves the group as it was — "not
+            // reported" — rather than applying half of it as verified.
+            is TelemetryCharMessage.ConfigServo -> msg.extras?.let { e ->
+                _rocketConfig.value = (_rocketConfig.value ?: RocketConfig())
+                    .copy(servoExtras = e)
+            }
+            is TelemetryCharMessage.ConfigGuid -> msg.extras?.let { e ->
+                _rocketConfig.value = (_rocketConfig.value ?: RocketConfig())
+                    .copy(guidanceExtras = e)
+            }
+            is TelemetryCharMessage.ConfigRoll -> msg.waypoints?.let { w ->
+                _rocketConfig.value = (_rocketConfig.value ?: RocketConfig())
+                    .copy(rollWaypoints = w)
+            }
             is TelemetryCharMessage.ConfigIdentity -> onConfigIdentity(msg.msg)
             is TelemetryCharMessage.FcIdentity -> {
                 msg.msg.fcFirmwareVersion?.let {

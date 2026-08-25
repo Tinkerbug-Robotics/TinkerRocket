@@ -333,6 +333,36 @@ static float   b2r_active_R[9] = {1.0f, 0.0f, 0.0f,
                                   0.0f, 0.0f, 1.0f};
 static int16_t b2r_active_residual_cdeg = 0;
 
+// The user's orientation SETTING (BLE cmd 64), as distinct from what the
+// converter is actively applying above: IMU_ORIENT_AUTO lets pad-gravity
+// detect drive the mapping, 0..23 pins a manual code.  NVS-persisted in
+// namespace "orient" key "set" — the same namespace/key the OC and the mini
+// use — so a manual mounting survives an FC power cycle on its own.
+//
+// #915: it used to be the ONE config group the FC did not store.  Every other
+// handler writes NVS; ORIENT_CONFIG_PENDING did not, so the FC always came up
+// in ORIENT_MODE_DEFAULT and the only thing that restored a manual clocking
+// was the OC noticing the mismatch on a status query and re-pushing.  That
+// left the setting the issue calls out as authoritative and uncorrectable-
+// downstream depending on a second board to remember it.
+static uint8_t b2r_setting = IMU_ORIENT_AUTO;
+// True once b2r_setting reflects a real NVS record rather than the
+// compile-time board fallback.  Reported to the OC so it can tell a
+// deliberate AUTO from a board that has never been told (see
+// ConfigReportData::F_ORIENT_FROM_NVS).
+static bool b2r_setting_from_nvs = false;
+
+// #915 full config report.  Set by any handler that changes a field the
+// report carries; drained in loop_fc so the 169-byte enqueue never happens
+// inside the I2C command path the OC is waiting on.  Declared up here rather
+// than beside buildConfigReport() because persistOrientSetting() — which sits
+// with the orientation code above it — is one of the setters.
+static volatile bool config_report_dirty = true;   // true: send one at boot
+static uint32_t      config_report_last_ms = 0;
+// Log the NEXT send only.  Set alongside config_report_dirty so boot and every
+// real change are visible, while the 5 s keep-alive repeat stays quiet.
+static volatile bool log_next_report_send = true;
+
 // Pad-gravity auto-detect (runs READY/PRELAUNCH, latched at launch) and
 // the boost-phase thrust-axis cross-check on the latched orientation.
 static OrientationEstimator orient_estimator;
@@ -1681,6 +1711,29 @@ static void applyBoardToRocketOrientation(uint8_t code, uint8_t mode)
     applyBoardToRocketRotation(R, code, mode, 0);
 }
 
+// Store the user's orientation SETTING so it survives a power cycle (#915).
+// Deliberately separate from applyBoardToRocketOrientation(): the pad-gravity
+// auto-detect calls that on its own every time it re-snaps, and an
+// auto-detected frame is an OBSERVATION, not a setting — writing it to NVS
+// would silently convert a rocket the user left on AUTO into a manually
+// pinned one, and manual disables the very auto-detect that chose it.
+static void persistOrientSetting(uint8_t setting)
+{
+    // NVS wear: only write on a real change.  The provenance flag is part of
+    // "changed" — a board with no record that is told its existing fallback
+    // value must still end up with a record, or the OC goes on believing the
+    // FC has never been told and re-pushes forever.
+    if (b2r_setting == setting && b2r_setting_from_nvs) return;
+    b2r_setting = setting;
+    b2r_setting_from_nvs = true;
+    config_report_dirty = true; log_next_report_send = true;   // #915: the report carries the SETTING
+    prefs.begin("orient", false);
+    prefs.putUChar("set", setting);
+    prefs.end();
+    ESP_LOGI(TAG, "[CFG] IMU orientation setting saved to NVS: %s",
+             setting == IMU_ORIENT_AUTO ? "AUTO" : orientCodeName(setting));
+}
+
 // Snap tolerance: a measured nose vector within this angle of a board axis
 // is treated as that axis (covers rail tilt + sensor noise for orthogonal
 // mounts).  Beyond it the board is genuinely mounted off-axis and the
@@ -1929,6 +1982,116 @@ static void sendFlightSettings()
     (void)enqueueI2STx(FLIGHT_SETTINGS_MSG,
                        reinterpret_cast<const uint8_t*>(&s),
                        sizeof(s));
+}
+
+// ==========================================================================
+// SECTION: Full config report (#915)
+// ==========================================================================
+// Everything the app's config readback cannot otherwise see, so the phone can
+// SHOW and VERIFY the whole editable surface instead of displaying profile
+// values it has no way to check against the vehicle.  The OC turns this into
+// readback JSON; nothing here is logged.
+//
+// Pushed rather than requested: emitted at boot, on every accepted change to
+// a reported field, and slowly while not INFLIGHT.  The slow repeat is what
+// makes it survive an OC that rebooted on its own — with request/response the
+// OC would have to know to ask again, and it has no way to know it missed one.
+
+// Repeat cadence while not INFLIGHT.  169 bytes every 5 s against a 22 kHz
+// I2S stream is noise; the point is bounded staleness after an OC reboot, not
+// throughput.
+static constexpr uint32_t CONFIG_REPORT_PERIOD_MS = 5000;
+
+static void buildConfigReport(ConfigReportData &r)
+{
+    memset(&r, 0, sizeof(r));
+    r.time_us = (uint32_t)esp_timer_get_time();
+    r.version = ConfigReportData::VERSION;
+    r.imu_orient_setting = b2r_setting;
+    if (enable_sounds) r.flags |= (1U << ConfigReportData::F_SOUNDS);
+    if (b2r_setting_from_nvs) r.flags |= (1U << ConfigReportData::F_ORIENT_FROM_NVS);
+
+    for (int i = 0; i < 4; ++i) {
+        r.servo.bias_us[i] = (int16_t)servo_control.getServoBiasUs(i);
+    }
+    r.servo.hz          = (int16_t)servo_control.getServoHz();
+    r.servo.min_us      = (int16_t)servo_control.getServoMinUs();
+    r.servo.max_us      = (int16_t)servo_control.getServoMaxUs();
+    r.servo.fin_min_deg = servo_control.getFinMinDeg();
+    r.servo.fin_max_deg = servo_control.getFinMaxDeg();
+
+    // From the mixer, not from the boot locals: it is what the mix actually
+    // uses, so a layout that failed to apply cannot be reported as applied.
+    for (int i = 0; i < 4; ++i) {
+        r.fin.azimuth_deg[i] = control_mixer.getFinAzimuthDeg(i);
+    }
+    r.fin.reverse_mask      = control_mixer.getFinReverseMask();
+    r.fin.roll_reverse_mask = control_mixer.getFinRollReverseMask();
+
+    r.guidance.nav_gain         = pn_nav_gain;
+    r.guidance.max_accel_mps2   = pn_max_accel;
+    r.guidance.accel_to_fin_deg = pn_accel_to_fin;
+    r.guidance.max_fin_deg      = pn_max_fin_deg;
+    r.guidance.min_speed_mps    = pn_min_speed;
+    // The PROFILE-owned aim point, not the live one: a Drift-Cast cmd-28
+    // point is RAM-only and deliberately never persisted, so reporting it
+    // here would invite the app to save a wind-compensated target into a
+    // profile and re-push it on a different day.
+    r.guidance.target_e_m       = pn_profile_target_e;
+    r.guidance.target_n_m       = pn_profile_target_n;
+    r.guidance.target_alt_m     = pn_target_alt;
+    r.guidance.coast_delay_ms   = pn_coast_delay_ms;
+    r.guidance.enable           = guidance_enabled ? 1U : 0U;
+    r.guidance.target_mode      = pn_target_mode;
+    r.guidance.kp_pos_per_s2    = pn_kp_pos;
+    r.guidance.kd_vel_per_s     = pn_kd_vel;
+    r.guidance.guidance_law     = pn_guidance_law;
+
+    r.roll = roll_profile;
+}
+
+static void sendConfigReport()
+{
+    ConfigReportData r;
+    buildConfigReport(r);
+    (void)enqueueI2STx(CONFIG_REPORT_MSG,
+                       reinterpret_cast<const uint8_t*>(&r),
+                       sizeof(r));
+    config_report_last_ms = millis();
+    config_report_dirty = false;
+    // Rate-limited to changes only: the 5 s repeat would otherwise scroll the
+    // console forever, but a SILENT sender is indistinguishable from a lost
+    // link when the OC says it has no report.
+    if (log_next_report_send)
+    {
+        log_next_report_send = false;
+        ESP_LOGI(TAG, "[CFG] Config report sent: orient=%s(%s) sounds=%s "
+                      "bias=[%d,%d,%d,%d] fin=[%.0f,%.0f,%.0f,%.0f] rev=0x%X/0x%X "
+                      "guid=%s wp=%u",
+                 b2r_setting == IMU_ORIENT_AUTO ? "AUTO" : orientCodeName(b2r_setting),
+                 b2r_setting_from_nvs ? "nvs" : "dflt",
+                 enable_sounds ? "on" : "off",
+                 (int)r.servo.bias_us[0], (int)r.servo.bias_us[1],
+                 (int)r.servo.bias_us[2], (int)r.servo.bias_us[3],
+                 (double)r.fin.azimuth_deg[0], (double)r.fin.azimuth_deg[1],
+                 (double)r.fin.azimuth_deg[2], (double)r.fin.azimuth_deg[3],
+                 (unsigned)r.fin.reverse_mask, (unsigned)r.fin.roll_reverse_mask,
+                 r.guidance.enable ? "on" : "off",
+                 (unsigned)r.roll.num_waypoints);
+    }
+}
+
+// Called from loop_fc.  Never during flight: the I2S budget belongs to
+// telemetry then, and config cannot change in INFLIGHT anyway (every handler
+// that writes a reported field refuses mid-flight).
+static void serviceConfigReport()
+{
+    if (rocket_state == INFLIGHT) return;
+    const uint32_t now = millis();
+    if (config_report_dirty ||
+        (uint32_t)(now - config_report_last_ms) >= CONFIG_REPORT_PERIOD_MS) {
+        sendConfigReport();
+    }
 }
 
 static SemaphoreHandle_t i2c_bus_mutex = nullptr;
@@ -3257,6 +3420,40 @@ static void setup_fc()
                   servo_enabled ? "true" : "false",
                   runtime_camera_type);
 
+    // Board→rocket orientation SETTING (#915).  Absent record = never set from
+    // the app, so fall back to the compile-time board default (which is what
+    // this code did unconditionally before).  Whitelisted on read, like the
+    // guidance law and target mode, so a corrupt or forward-version record
+    // cannot put the vehicle in an unplanned frame.
+    prefs.begin("orient", false);
+    if (prefs.isKey("set"))
+    {
+        const uint8_t nvs_set = prefs.getUChar("set", IMU_ORIENT_AUTO);
+        if (nvs_set == IMU_ORIENT_AUTO || nvs_set < ORIENT_CODE_COUNT)
+        {
+            b2r_setting = nvs_set;
+            b2r_setting_from_nvs = true;
+        }
+        else
+        {
+            ESP_LOGW(TAG, "NVS orientation setting %u invalid — using the "
+                          "board default", (unsigned)nvs_set);
+            b2r_setting = config::BOARD_TO_ROCKET_ORIENT;
+        }
+    }
+    else
+    {
+        b2r_setting = config::BOARD_TO_ROCKET_ORIENT;
+    }
+    prefs.end();
+    // Say WHERE it came from, not just what it is: "+X from a stored record"
+    // and "+X because nobody ever told this board" behave completely
+    // differently (the OC leaves the first alone and re-pushes over the
+    // second), and on the bench the two used to print the same line.
+    ESP_LOGI(TAG, "IMU orientation setting: %s (%s)",
+             b2r_setting == IMU_ORIENT_AUTO ? "AUTO" : orientCodeName(b2r_setting),
+             b2r_setting_from_nvs ? "from NVS" : "board default, no NVS record");
+
     // Load servo/PID NVS settings (namespace "servo")
     int16_t nvs_servo_hz  = config::SERVO_HZ;
     int16_t nvs_servo_min = config::SERVO_MIN_US;
@@ -3596,10 +3793,15 @@ static void setup_fc()
     sensor_collector.configureSimIis2mdcRotation(config::IIS2MDC_ROT_Z_DEG);
 
     // Board→rocket mounting orientation (converter + sim + OC query payload).
+    // #915: driven by the stored SETTING, so a manual clocking survives a
+    // power cycle here rather than waiting on the OC's re-push.  AUTO boots
+    // at identity in ORIENT_MODE_DEFAULT, which is what lets the pad-gravity
+    // detect take over.  A mid-flight reboot overrides this further down —
+    // the snapshot recovery restores the frame the EKF state was estimated
+    // in, and it must win over anything chosen here.
     applyBoardToRocketOrientation(
-        config::BOARD_TO_ROCKET_ORIENT,
-        (config::BOARD_TO_ROCKET_ORIENT == ORIENT_CODE_IDENTITY)
-            ? ORIENT_MODE_DEFAULT : ORIENT_MODE_MANUAL);
+        (b2r_setting == IMU_ORIENT_AUTO) ? ORIENT_CODE_IDENTITY : b2r_setting,
+        (b2r_setting == IMU_ORIENT_AUTO) ? ORIENT_MODE_DEFAULT : ORIENT_MODE_MANUAL);
 
     // Apply mag hard-iron offset to the IIS2MDC chip now that begin() has
     // finished its softReset (which zeroes OFFSET_X/Y/Z).  Issue #96.
@@ -4526,6 +4728,14 @@ static void loop_fc()
     }
 
     // ==========================================================================
+    // SECTION: Full config report (#915)
+    // ==========================================================================
+    // Drained here rather than sent from the I2C command handlers: those run
+    // inside the OC's poll window, and a 169-byte enqueue there would sit in
+    // the same path the OC is waiting on.
+    serviceConfigReport();
+
+    // ==========================================================================
     // SECTION: Magnetometer calibration status
     // ==========================================================================
     // Issue #96 — periodic mag-cal status frame.  5 Hz cadence in
@@ -5374,6 +5584,7 @@ static void loop_fc()
                 enable_sounds = true;
                 prefs.begin("rocket", false);  // read-write
                 prefs.putBool("sounds", true);
+                config_report_dirty = true; log_next_report_send = true;   // #915
                 prefs.end();
                 ESP_LOGI(TAG, "Sounds ENABLED (saved to NVS)");
                 // Confirmation beep so the user knows it worked
@@ -5388,6 +5599,7 @@ static void loop_fc()
                 piezoStop();
                 prefs.begin("rocket", false);  // read-write
                 prefs.putBool("sounds", false);
+                config_report_dirty = true; log_next_report_send = true;   // #915
                 prefs.end();
                 ESP_LOGI(TAG, "Sounds DISABLED (saved to NVS)");
             }
@@ -5458,6 +5670,7 @@ static void loop_fc()
                     prefs.putShort("max", cfg.max_us);
                     prefs.putFloat("fmin", cfg.fin_min_deg);
                     prefs.putFloat("fmax", cfg.fin_max_deg);
+                    config_report_dirty = true; log_next_report_send = true;   // #915: biases 2-4 + fin travel
                     prefs.end();
                     ESP_LOGI(TAG, "[SERVO CFG] Saved to NVS");
                 }
@@ -6261,6 +6474,7 @@ static void loop_fc()
                 guidance_enabled = true;
                 prefs.begin("servo", false);
                 prefs.putBool("guid_en", true);
+                config_report_dirty = true; log_next_report_send = true;   // #915
                 prefs.end();
                 ESP_LOGI(TAG, "[CFG] PN Guidance ENABLED");
             }
@@ -6274,6 +6488,7 @@ static void loop_fc()
                 roll_rate_pid_standalone.reset();
                 prefs.begin("servo", false);
                 prefs.putBool("guid_en", false);
+                config_report_dirty = true; log_next_report_send = true;   // #915
                 prefs.end();
                 ESP_LOGI(TAG, "[CFG] PN Guidance DISABLED");
             }
@@ -6323,7 +6538,9 @@ static void loop_fc()
                     if (rocket_state == INFLIGHT)
                     {
                         // Never re-frame mid-flight: EKF/control state is
-                        // only meaningful in the latched frame.
+                        // only meaningful in the latched frame.  Not persisted
+                        // either — a setting we refused to apply must not come
+                        // back as the boot frame on the next power-up.
                         ESP_LOGW(TAG, "[CFG] IMU orientation change ignored INFLIGHT");
                     }
                     else if (setting == IMU_ORIENT_AUTO)
@@ -6339,6 +6556,10 @@ static void loop_fc()
                             if (ekf_initialized) ekf_initialized = false;
                             ESP_LOGI(TAG, "[CFG] IMU orientation: AUTO (pad-gravity detect)");
                         }
+                        // Persisted even when the active frame did not change:
+                        // the SETTING is what survives the reboot, and "already
+                        // in DEFAULT mode" is not the same as "AUTO is stored".
+                        persistOrientSetting(IMU_ORIENT_AUTO);
                     }
                     else if (setting < ORIENT_CODE_COUNT)
                     {
@@ -6349,6 +6570,7 @@ static void loop_fc()
                                              (b2r_active_mode != ORIENT_MODE_MANUAL);
                         applyBoardToRocketOrientation(setting, ORIENT_MODE_MANUAL);
                         if (changed && ekf_initialized) ekf_initialized = false;
+                        persistOrientSetting(setting);
                         ESP_LOGI(TAG, "[CFG] IMU orientation: MANUAL %s",
                                  orientCodeName(setting));
                     }
@@ -6624,6 +6846,7 @@ static void loop_fc()
                     // Persist to NVS
                     prefs.begin("rollp", false);
                     prefs.putBytes("prof", &roll_profile, sizeof(RollProfileData));
+                    config_report_dirty = true; log_next_report_send = true;   // #915
                     prefs.end();
                     ESP_LOGI(TAG, "[ROLL PROF] Set %d waypoints (saved to NVS)",
                                   roll_profile.num_waypoints);
@@ -6646,6 +6869,7 @@ static void loop_fc()
                 prefs.begin("rollp", false);
                 prefs.remove("prof");
                 prefs.end();
+                config_report_dirty = true; log_next_report_send = true;   // #915
                 ESP_LOGI(TAG, "[ROLL PROF] Cleared (rate-only mode, saved to NVS)");
             }
             else if (out_pending_command == ROLL_CTRL_CONFIG_PENDING)
@@ -6813,6 +7037,7 @@ static void loop_fc()
                     prefs.putFloat("gkp", pn_kp_pos);
                     prefs.putFloat("gkd", pn_kd_vel);
                     prefs.putUChar("glw", pn_guidance_law);
+                    config_report_dirty = true; log_next_report_send = true;   // #915
                     prefs.end();
                     ESP_LOGI(TAG, "[GUID CFG] Saved to NVS");
                 }
@@ -6941,6 +7166,7 @@ static void loop_fc()
                         prefs.putFloat("fa3", f.azimuth_deg[3]);
                         prefs.putUChar("frv",  f.reverse_mask);
                         prefs.putUChar("frrv", f.roll_reverse_mask);
+                        config_report_dirty = true; log_next_report_send = true;   // #915
                         prefs.end();
                         ESP_LOGI(TAG, "[FIN CFG] Saved to NVS");
                     } else {

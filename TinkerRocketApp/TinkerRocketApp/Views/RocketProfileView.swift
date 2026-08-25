@@ -171,8 +171,10 @@ struct RocketProfileView: View {
             // put the deliberate override next to that admission.
             if isConnectedRocket {
                 VStack(alignment: .leading, spacing: 6) {
-                    advisory("Can't verify: \(ActiveRocketSyncer.unreportedGroups.joined(separator: ", ")). This rocket doesn't report them, so they're shown from the profile.",
-                             systemImage: "eye.slash", color: .secondary)
+                    if !syncer.unreportedGroups.isEmpty {
+                        advisory("Can't verify: \(syncer.unreportedGroups.joined(separator: ", ")). This rocket doesn't report them, so they're shown from the profile.",
+                                 systemImage: "eye.slash", color: .secondary)
+                    }
                     Button("Send All Settings to Rocket") {
                         syncer.pushProfileToRocket()
                     }

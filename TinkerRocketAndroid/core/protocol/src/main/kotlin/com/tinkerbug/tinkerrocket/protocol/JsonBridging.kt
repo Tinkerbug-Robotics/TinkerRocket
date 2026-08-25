@@ -101,6 +101,26 @@ internal object JsonBridging {
         return swiftFloat(s)
     }
 
+    /**
+     * One JSON element as a Float, with the same leniency [parseFloatIos]
+     * gives a keyed value.  For array members (#915 reports the fin azimuths
+     * and roll waypoints as arrays), where there is no key to look up.
+     */
+    fun floatOf(el: kotlinx.serialization.json.JsonElement): Float? {
+        val prim = el as? kotlinx.serialization.json.JsonPrimitive ?: return null
+        if (prim.isString) return swiftFloat(prim.content)
+        return prim.content.toDoubleOrNull()?.toFloat()
+    }
+
+    /** A JSON array of numbers as Floats, or null if the key is absent, not
+     *  an array, or holds anything that isn't a number. */
+    fun floatArray(json: JsonObject, key: String): List<Float>? {
+        val arr = json[key] as? kotlinx.serialization.json.JsonArray ?: return null
+        val out = ArrayList<Float>(arr.size)
+        for (el in arr) out += (floatOf(el) ?: return null)
+        return out
+    }
+
     private fun swiftFloat(s: String): Float? {
         if (s.isEmpty() || s.trim() != s) return null
         when (s.lowercase()) {

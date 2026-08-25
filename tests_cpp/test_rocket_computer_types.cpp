@@ -938,6 +938,45 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
     EXPECT_GE(-20.0f, loraMinValidSnrDb(12));
 }
 
+// --- Full config report (#915) ---
+// The OC parses this by memcpy of the whole struct and turns it into readback
+// JSON, so a member reordered on the FC side silently reinterprets every
+// field after it — and the app would then display the result as VERIFIED,
+// which is worse than the "cannot verify" state this frame exists to remove.
+TEST(RocketComputerTypes, ConfigReportData_Layout) {
+    EXPECT_EQ(sizeof(ConfigReportData), 169u);
+    // Rides the same I2S frame path as everything else FC→OC.
+    EXPECT_LE(sizeof(ConfigReportData), MAX_PAYLOAD);
+
+    // time_us first, so the generic frame parser's "timestamp = first 4
+    // payload bytes" convention still holds for this type.
+    EXPECT_EQ(offsetof(ConfigReportData, time_us),            0u);
+    EXPECT_EQ(offsetof(ConfigReportData, version),            4u);
+    EXPECT_EQ(offsetof(ConfigReportData, imu_orient_setting), 5u);
+    EXPECT_EQ(offsetof(ConfigReportData, flags),              6u);
+
+    // Composed from the structs the app writes; their own offsetof pins guard
+    // the internals, these pin where each one starts.
+    EXPECT_EQ(offsetof(ConfigReportData, servo),              8u);
+    EXPECT_EQ(offsetof(ConfigReportData, fin),               30u);
+    EXPECT_EQ(offsetof(ConfigReportData, guidance),          48u);
+    EXPECT_EQ(offsetof(ConfigReportData, roll),              93u);
+
+    // The starts are the running sum of the nested sizes — spelled out so a
+    // nested struct that grows fails HERE, naming itself, instead of only
+    // tripping the total-size check above.
+    EXPECT_EQ(sizeof(ServoConfigData),    22u);
+    EXPECT_EQ(sizeof(FinConfigData),      18u);
+    EXPECT_EQ(sizeof(GuidanceConfigData), 45u);
+    EXPECT_EQ(sizeof(RollProfileData),    76u);
+
+    // Flag bits are wire ABI: the OC reads F_ORIENT_FROM_NVS to decide
+    // whether to leave the FC's orientation alone or re-push its own.
+    EXPECT_EQ(ConfigReportData::F_SOUNDS,           0u);
+    EXPECT_EQ(ConfigReportData::F_ORIENT_FROM_NVS,  1u);
+    EXPECT_EQ(ConfigReportData::VERSION,            1u);
+}
+
 // --- Flight settings snapshot (#165) ---
 // The settings frame is decoded by the iOS app (SensorTypes.swift) and built
 // by the FC (flight_computer/main.cpp) at byte-exact offsets. Lock the layout
@@ -1513,6 +1552,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(LORA_UPLINK_MSG),
         // FC->OC boot progress during setup_fc, before the I2S stream exists.
         MT(FC_BOOT_STATUS_MSG),
+        // FC->OC full config report (#915) — what the app readback can't see.
+        MT(CONFIG_REPORT_MSG),
     };
 #undef MT
 
@@ -1537,7 +1578,11 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 89 = 87 + Drift-Cast guidance point pair (#435, BLE cmd 28).
     // 90 = 89 + LORA_UPLINK_MSG (OC-self-emitted uplink RSSI/SNR record).
     // 91 = 90 + FC_BOOT_STATUS_MSG (FC->OC boot progress during setup_fc).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 91u)
+    // 92 = 91 + CONFIG_REPORT_MSG (#915 full config report).  This leaves
+    //      exactly TWO free codes in the space (0xFC, 0xFD) — the next
+    //      message after those needs an escape/extended encoding, not a
+    //      thirteenth constant.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 92u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

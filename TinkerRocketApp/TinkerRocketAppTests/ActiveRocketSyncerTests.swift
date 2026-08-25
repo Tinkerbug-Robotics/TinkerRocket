@@ -167,6 +167,142 @@ final class ActiveRocketSyncerTests: XCTestCase {
                        "a second connect with the same rocket reports nothing")
     }
 
+    // MARK: - The firmware config report (#915 follow-up)
+
+    private func servoExtras() -> RocketServoExtras {
+        RocketServoExtras(bias2: 0, bias3: 0, bias4: 0,
+                          finMinDeg: -60, finMaxDeg: 60,
+                          finAzimuths: [0, 90, 180, 270],
+                          finReverseMask: 0, finRollReverseMask: 0,
+                          soundsEnabled: false)
+    }
+
+    private func guidanceExtras() -> RocketGuidanceExtras {
+        let p = RocketProfile.makeDefault(name: "x")
+        return RocketGuidanceExtras(
+            navGain: p.pnNavGain, maxAccel: p.pnMaxAccel,
+            accelToFin: p.pnAccelToFin, maxFinDeg: p.pnMaxFinDeg,
+            minSpeed: p.pnMinSpeed, coastDelayMs: p.pnCoastDelayMs,
+            targetMode: p.pnTargetMode, targetE: p.pnTargetE, targetN: p.pnTargetN,
+            targetAltM: p.pnTargetAltM, kpPos: p.pnKpPos, kdVel: p.pnKdVel,
+            guidanceLaw: p.pnGuidanceLaw)
+    }
+
+    /// A rocket that reports everything and agrees about all of it.
+    private func fullyReportingConfig() -> RocketConfig {
+        var c = matchingConfig()
+        c.servoExtras = servoExtras()
+        c.guidanceExtras = guidanceExtras()
+        c.rollWaypoints = []
+        return c
+    }
+
+    func testFullReportWithNoDisagreementChangesNothing() {
+        var p = RocketProfile.makeDefault(name: "x")
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: fullyReportingConfig()), [])
+    }
+
+    /// The group that motivated the firmware work: a fin layout from another
+    /// airframe used to be invisible AND unverifiable.
+    func testFinLayoutIsAdoptedFromTheRocket() {
+        var p = RocketProfile.makeDefault(name: "x")
+        p.finServoAtSlot = [4, 3, 2, 1]
+        p.finRollReverse = [true, false, false, false]
+        var cfg = fullyReportingConfig()
+        let changed = ActiveRocketSyncer.adopt(&p, from: cfg)
+        XCTAssertEqual(changed, [ActiveRocketSyncer.groupFinLayout])
+        XCTAssertEqual(p.finServoAtSlot, [1, 2, 3, 4])
+        XCTAssertEqual(p.finRollReverse, [false, false, false, false])
+        XCTAssertEqual(p.finRingMode, 0)
+        cfg.servoExtras?.finAzimuths = [45, 135, 225, 315]
+        _ = ActiveRocketSyncer.adopt(&p, from: cfg)
+        XCTAssertEqual(p.finRingMode, 1, "the 45°-rotated ring reads as ×")
+    }
+
+    func testServoTrimAndFinTravelAndSoundsAreAdopted() {
+        var p = RocketProfile.makeDefault(name: "x")
+        p.servoBias3 = 55
+        p.finTravelDeg = 90
+        p.soundsEnabled = true
+        var cfg = fullyReportingConfig()
+        cfg.servoExtras?.soundsEnabled = false
+        let changed = ActiveRocketSyncer.adopt(&p, from: cfg)
+        XCTAssertEqual(changed, [ActiveRocketSyncer.groupServoTrim24,
+                                 ActiveRocketSyncer.groupFinTravel,
+                                 ActiveRocketSyncer.groupSounds])
+        XCTAssertEqual(p.servoBias3, 0)
+        XCTAssertEqual(p.finTravelDeg, 120, "travel is the reported span")
+        XCTAssertFalse(p.soundsEnabled)
+    }
+
+    func testGuidanceParametersAreAdopted() {
+        var p = RocketProfile.makeDefault(name: "x")
+        p.pnNavGain = 9
+        p.pnGuidanceLaw = 1
+        let changed = ActiveRocketSyncer.adopt(&p, from: fullyReportingConfig())
+        XCTAssertEqual(changed, [ActiveRocketSyncer.groupGuidanceParams])
+        XCTAssertEqual(p.pnNavGain, 5.0)
+        XCTAssertEqual(p.pnGuidanceLaw, 0)
+    }
+
+    /// "No waypoints" and "we can't see the waypoints" must not be the same
+    /// thing: one clears the profile's roll profile, the other must not.
+    func testEmptyWaypointListIsAnAnswerButNilIsNot() {
+        var reported = RocketProfile.makeDefault(name: "x")
+        reported.rollWaypoints = [RollWaypoint(timeSeconds: 1, angleDeg: 90)]
+        var cfg = fullyReportingConfig()
+        cfg.rollWaypoints = []
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&reported, from: cfg),
+                       [ActiveRocketSyncer.groupRollProfile])
+        XCTAssertTrue(reported.rollWaypoints.isEmpty, "the rocket flies rate-only")
+
+        var unreported = RocketProfile.makeDefault(name: "x")
+        unreported.rollWaypoints = [RollWaypoint(timeSeconds: 1, angleDeg: 90)]
+        cfg.rollWaypoints = nil
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&unreported, from: cfg), [])
+        XCTAssertEqual(unreported.rollWaypoints.count, 1,
+                       "a rocket that can't report waypoints must not erase them")
+    }
+
+    func testWaypointsAreAdoptedFromTheRocket() {
+        var p = RocketProfile.makeDefault(name: "x")
+        var cfg = fullyReportingConfig()
+        cfg.rollWaypoints = [ReportedRollWaypoint(timeSeconds: 2.0, angleDeg: 45.0),
+                             ReportedRollWaypoint(timeSeconds: 5.0, angleDeg: 180.0)]
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg),
+                       [ActiveRocketSyncer.groupRollProfile])
+        XCTAssertEqual(p.rollWaypoints.map(\.timeSeconds), [2.0, 5.0])
+        XCTAssertEqual(p.rollWaypoints.map(\.angleDeg), [45.0, 180.0])
+    }
+
+    /// Pre-report firmware, and the mini (no servo/fin/guidance hardware):
+    /// the profile keeps its own and the app says it cannot check.
+    func testAGroupTheRocketCannotReportIsNamedAndLeftAlone() {
+        var p = RocketProfile.makeDefault(name: "x")
+        p.servoBias2 = 40
+        p.pnNavGain = 9
+        let cfg = matchingConfig()   // no extras at all
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg), [])
+        XCTAssertEqual(p.servoBias2, 40)
+        XCTAssertEqual(p.pnNavGain, 9)
+        XCTAssertEqual(cfg.unreportedGroups,
+                       ["Servo trim 2-4", "Fin travel", "Fin layout", "Sounds",
+                        "Guidance parameters", "Roll profile"])
+        XCTAssertEqual(fullyReportingConfig().unreportedGroups, [],
+                       "a reporting rocket leaves nothing unverifiable")
+    }
+
+    func testAzimuthsThatDoNotDescribeFourSlotsAreRefused() {
+        // Two servos claiming the same slot can't be inverted into a mapping;
+        // guessing one would put the wrong servo on the wrong fin.
+        XCTAssertNil(ActiveRocketSyncer.slotsFromAzimuths([0, 0, 180, 270]))
+        XCTAssertNil(ActiveRocketSyncer.slotsFromAzimuths([0, 90, 180]))
+        // Servo 1 sits at 270° (slot 3), servo 2 at 0° (slot 0), and so on —
+        // so slot 0 holds servo 2, slot 1 servo 3, slot 2 servo 4, slot 3 servo 1.
+        XCTAssertEqual(ActiveRocketSyncer.slotsFromAzimuths([270, 0, 90, 180]),
+                       [2, 3, 4, 1])
+    }
+
     // MARK: - Mag cal action
 
     func testNoProfileCalAsksRocket() {

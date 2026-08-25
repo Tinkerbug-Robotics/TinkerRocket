@@ -73,21 +73,146 @@ they were only a display fallback; a silent re-tune once adoption reads them.
 Aligned to config.h on both platforms, the same fix #407 and #561 already made
 for the servo fields.
 
-## Follow-up: the firmware full-config report
+## The firmware follow-up (shipped second)
 
-Ordered second deliberately — the app change stands on its own, and this is what
-retires the "cannot verify" list.
+Ordered after the app change deliberately — that change stands on its own, and
+this is what retires the "cannot verify" list.
 
-1. **The FC should persist its IMU orientation setting.** Every other config
-   group writes NVS in its command handler; `ORIENT_CONFIG_PENDING` does not.
-   Today the OC's self-heal covers it, which means the one setting the issue
-   calls out as authoritative and uncorrectable-downstream is also the one whose
-   retention depends on a second board noticing and re-pushing.
-2. **A full-config report FC→OC.** `FlightSettingsData` already carries most of
-   it (219 bytes) but cannot be extended — `MAX_PAYLOAD` is 224, and fin layout
-   plus the PN parameters need roughly 58 more. So this is a new message, not a
-   tail append. The mini needs the local-read equivalent.
-3. **Readback frames for the rest**, split to stay under the BLE notify MTU;
-   `sendConfigJSON` silently drops anything over MTU−3, so the existing "keep
-   each frame tiny" discipline applies.
-4. Then the app can drop `unreportedGroups` and diff the whole surface.
+### 1. The FC now persists its IMU orientation setting
+
+Every other config group wrote NVS in its command handler; `ORIENT_CONFIG_PENDING`
+did not. It now stores the SETTING (`orient`/`set`, the same namespace and key
+the OC and the mini already use) and restores it at boot, ahead of the snapshot
+recovery — which still wins, because a mid-flight reboot has to come back in the
+frame the EKF state was estimated in.
+
+Only the setting is written, never the active frame: the pad-gravity auto-detect
+re-snaps that on its own, and persisting an auto-detected result would silently
+convert a rocket the user left on AUTO into a manually pinned one — pinning
+disables the very detect that chose it.
+
+**Two memories can now disagree**, so the report carries provenance
+(`F_ORIENT_FROM_NVS`). The OC's status-query self-heal — which existed *because*
+the FC could not remember — is skipped once the FC says it has its own record,
+and the `imu_orient` readback reports the FC's setting rather than the OC's
+cache. Without the bit, reflashing either board alone would silently lose
+whichever memory the other overwrote: an FC that genuinely holds AUTO is
+indistinguishable from one that has never been told.
+
+### 2. `ConfigReportData`, pushed FC→OC
+
+169 bytes on `CONFIG_REPORT_MSG` (0xFB), composed from the very structs the app
+writes — `ServoConfigData`, `FinConfigData`, `GuidanceConfigData`,
+`RollProfileData` — so a field that moves in one moves here with it.
+
+Not an extension of `FlightSettingsData`: that is 219 bytes against a
+`MAX_PAYLOAD` of 224, and it is a flight-log record emitted at
+PRELAUNCH→INFLIGHT, a different job from a pre-flight readback.
+
+**Pushed, not requested.** The FC emits it at boot, on every accepted change to
+a reported field, and every 5 s while not INFLIGHT. A request/response would have
+cost a second message code — and this space now has exactly two values left
+(0xFC, 0xFD) — and it would not have self-healed an OC that rebooted on its own,
+because the OC has no way to know it missed one.
+
+Deliberately **not logged**: the OC handles it before the log enqueue, like
+`FC_IDENTITY`. It is pre-flight state, `FlightSettingsData` already records what
+actually flew, and keeping it out spares the `Data_Analysis` parsers a message
+type they hardcode no length for.
+
+### 3. Three readback frames
+
+`config_servo` (trim 2-4, fin travel, fin layout, sounds), `config_guid` (the
+thirteen PN / station-keep parameters) and `config_roll` (the waypoints), each
+small enough for the notify MTU. `config_roll` is sent even when there are zero
+waypoints, because "rate-only" and "this rocket can't tell you" must not look
+alike to the app.
+
+This took the connect burst from six frames to nine against an eight-deep
+readback queue — the ninth enqueue evicted the oldest, which is the main
+`config` frame. Cap raised to 12; it has to move with the burst.
+
+The mini needs none of this: it has no servo, fin, guidance or roll hardware, so
+its `config` frame was already trimmed and those groups are genuinely absent
+rather than merely unreported.
+
+### 4. The app adopts them
+
+`unreportedGroups` is now derived from which frames actually arrived, so it
+empties on new firmware and stays honest on old firmware and on the mini. Two
+distinctions the adoption has to keep straight:
+
+- **null vs empty waypoints.** null is "we don't know" and must leave the
+  profile's roll profile alone; empty is "we know, and this rocket flies
+  rate-only" and must clear it.
+- **Fin azimuth → ring slot must FLOOR, not round.** The "×" layout's azimuths
+  (45/135/225/315) land exactly on rounding ties, where Kotlin breaks to even
+  and Swift breaks away from zero — the two platforms derived *different* fin
+  mappings from the same rocket. Flooring has no tie to break.
+
+An asymmetric rocket-side fin cal collapses to its span, because #449 made the
+profile store one travel number. That is a limitation of the profile model, not
+of the readback.
+
+## Bench validation (V9 board, 2026-08-25)
+
+OC `9c:13:9e:28:ab:5c` + FC `80:f1:b2:d0:94:a7`, both on this branch, with a
+freshly installed app.
+
+**Orientation survives an FC-only reflash — confirmed.** The FC comes up
+
+    I (194)  FC: IMU orientation setting: +X (from NVS)
+    I (6027) FC: Board→rocket orientation: +X (code 0, mode 1, residual 0.00°)
+
+One line, mode 1 (MANUAL), straight from its own NVS. The issue's log showed
+mode 0 (DEFAULT) at boot and only reached mode 1 seconds later when something
+else pushed it.
+
+**The report reaches the app — confirmed.** The FC logs
+
+    [CFG] Config report sent: orient=+X(nvs) sounds=off bias=[-125,-60,20,-55]
+          fin=[0,90,180,270] rev=0x0/0x0 guid=on wp=0
+
+and a phone with NO saved profiles came away showing exactly those four trims.
+Trims 2-4 can only come from `config_servo`; trim 1 rides `sb1` in the main
+`config` frame — so the whole burst landed, which also clears the queue-depth
+change (at the old cap of 8 the ninth enqueue would have evicted `config` and
+servo 1 would have read 0).
+
+**Not tested: the OC-only-reflash case.** The provenance bit only does
+observable work when the two boards' orientation records DISAGREE, and today
+both hold +X. Arranging a genuine divergence means erasing one board's NVS,
+which the bench rule forbids (it holds cal and LoRa config). The logic is
+covered by construction and by the FC's `(from NVS)` / `(board default)` line,
+but it has not been exercised against a real disagreement.
+
+**A bug the bench found that no test would have.** Switching between two
+rockets: put a second profile on the V9, connect to the V8 (correct), come back
+to the V9 — and the selection had reverted. `lastUsedUnitID` bound a profile to
+a board but nothing ever RELEASED one, so two profiles claimed the same board
+and the lookup takes the first match in a list sorted by NAME. Which profile a
+rocket came back on was decided alphabetically. The other rocket looked fine
+only because a single profile had ever claimed it — one board is not enough to
+see this, which is exactly why it survived the unit tests.
+
+Binding is exclusive now, through one `store.bind()` that owns the invariant,
+plus a heal for stores the broken build already wrote: when more than one
+profile claims a board, prefer the most recently updated and release the rest.
+Without the heal the fix would have looked like it had not worked, because the
+wrong profile was already stuck where it was stuck.
+
+**The precedence rule itself held throughout.** Over the whole switching run
+the app sent the rocket three commands — time sync, a sensor-cal READ, and a
+readback request. Zero config writes, against thirteen frames in under two
+seconds from the old app on the same board that morning.
+
+**Expected bench noise:** `[ORIENT] pad gravity 93.9° off nose with MANUAL
+orientation +X` — the board is lying flat, so gravity is perpendicular to the
+nose axis and MANUAL means the FC will not auto-correct. Correct behaviour,
+and the warning that would matter on a pad.
+
+## Still open
+
+- The OC-only-reflash divergence case above.
+- Two free message codes left in the OC↔FC space. The next one needs an
+  escape/extended encoding, not a thirteenth constant.
