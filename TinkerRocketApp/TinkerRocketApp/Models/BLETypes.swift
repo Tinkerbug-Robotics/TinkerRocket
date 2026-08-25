@@ -133,6 +133,16 @@ nonisolated struct RocketServoExtras: Equatable {
     var soundsEnabled: Bool
 }
 
+/// One roll-profile waypoint as the rocket reports it (#915).  A named type,
+/// not a tuple: a tuple array blocks Swift's synthesised `Equatable`, and the
+/// hand-written conformance that replaced it was a single `&&` chain long
+/// enough to blow the type-checker's budget in CI.  Mirrors Android's
+/// `ReportedRollWaypoint`.
+nonisolated struct ReportedRollWaypoint: Equatable {
+    var timeSeconds: Float
+    var angleDeg: Float
+}
+
 /// The PN / station-keep parameters behind the guidance on/off flag, from the
 /// rocket's `config_guid` readback (#915).
 nonisolated struct RocketGuidanceExtras: Equatable {
@@ -218,7 +228,7 @@ struct RocketConfig {
     /// nil = not reported.  EMPTY = reported, and the rocket is flying
     /// rate-only.  The two must not be conflated: one means "we don't know",
     /// the other means "we know, and there are none".
-    var rollWaypoints: [(time: Float, angle: Float)]?
+    var rollWaypoints: [ReportedRollWaypoint]?
 
     /// Setting groups this rocket does not report back.  Empty once the
     /// config report has landed; the pre-#915 list on firmware that can't
@@ -234,44 +244,6 @@ struct RocketConfig {
     }
 }
 
-// Manual conformance: the tuple array above blocks the synthesised one.
-extension RocketConfig: Equatable {
-    static func == (a: RocketConfig, b: RocketConfig) -> Bool {
-        a.servoBias1 == b.servoBias1 && a.servoHz == b.servoHz
-            && a.servoMinUs == b.servoMinUs && a.servoMaxUs == b.servoMaxUs
-            && a.pidKp == b.pidKp && a.pidKi == b.pidKi && a.pidKd == b.pidKd
-            && a.pidMinCmd == b.pidMinCmd && a.pidMaxCmd == b.pidMaxCmd
-            && a.servoEnabled == b.servoEnabled
-            && a.gainScheduleEnabled == b.gainScheduleEnabled
-            && a.useAngleControl == b.useAngleControl
-            && a.rollDelayMs == b.rollDelayMs
-            && a.rateCapDps == b.rateCapDps && a.kpAngle == b.kpAngle
-            && a.integralSepThreshold == b.integralSepThreshold
-            && a.rollGainsReported == b.rollGainsReported
-            && a.guidanceEnabled == b.guidanceEnabled
-            && a.cameraType == b.cameraType
-            && a.imuOrientSetting == b.imuOrientSetting
-            && a.imuRateHz == b.imuRateHz
-            && a.loraFreqMHz == b.loraFreqMHz && a.loraSF == b.loraSF
-            && a.loraBwKHz == b.loraBwKHz && a.loraCR == b.loraCR
-            && a.loraTxPower == b.loraTxPower
-            && a.loraHopDisabled == b.loraHopDisabled
-            && a.loraHopDwell == b.loraHopDwell
-            && a.pyro1Enabled == b.pyro1Enabled && a.pyro1TriggerMode == b.pyro1TriggerMode
-            && a.pyro1TriggerValue == b.pyro1TriggerValue
-            && a.pyro2Enabled == b.pyro2Enabled && a.pyro2TriggerMode == b.pyro2TriggerMode
-            && a.pyro2TriggerValue == b.pyro2TriggerValue
-            && a.pyro3Enabled == b.pyro3Enabled && a.pyro3TriggerMode == b.pyro3TriggerMode
-            && a.pyro3TriggerValue == b.pyro3TriggerValue
-            && a.pyro4Enabled == b.pyro4Enabled && a.pyro4TriggerMode == b.pyro4TriggerMode
-            && a.pyro4TriggerValue == b.pyro4TriggerValue
-            && a.servoExtras == b.servoExtras
-            && a.guidanceExtras == b.guidanceExtras
-            && a.rollWaypoints?.count == b.rollWaypoints?.count
-            && zip(a.rollWaypoints ?? [], b.rollWaypoints ?? [])
-                .allSatisfy { $0.time == $1.time && $0.angle == $1.angle }
-    }
-}
 
 // MARK: - Guidance-target echo (#435)
 

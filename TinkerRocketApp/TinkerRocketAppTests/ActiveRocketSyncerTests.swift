@@ -267,7 +267,8 @@ final class ActiveRocketSyncerTests: XCTestCase {
     func testWaypointsAreAdoptedFromTheRocket() {
         var p = RocketProfile.makeDefault(name: "x")
         var cfg = fullyReportingConfig()
-        cfg.rollWaypoints = [(time: 2.0, angle: 45.0), (time: 5.0, angle: 180.0)]
+        cfg.rollWaypoints = [ReportedRollWaypoint(timeSeconds: 2.0, angleDeg: 45.0),
+                             ReportedRollWaypoint(timeSeconds: 5.0, angleDeg: 180.0)]
         XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg),
                        [ActiveRocketSyncer.groupRollProfile])
         XCTAssertEqual(p.rollWaypoints.map(\.timeSeconds), [2.0, 5.0])

@@ -646,12 +646,12 @@ final class ActiveRocketSyncer: ObservableObject {
         if let wps = cfg.rollWaypoints {
             let differs = wps.count != p.rollWaypoints.count
                 || zip(wps, p.rollWaypoints).contains {
-                    !same($0.time, $1.timeSeconds, decimals: 2)
-                        || !same($0.angle, $1.angleDeg, decimals: 1)
+                    !same($0.timeSeconds, $1.timeSeconds, decimals: 2)
+                        || !same($0.angleDeg, $1.angleDeg, decimals: 1)
                 }
             if differs {
                 p.rollWaypoints = wps.map {
-                    RollWaypoint(timeSeconds: $0.time, angleDeg: $0.angle)
+                    RollWaypoint(timeSeconds: $0.timeSeconds, angleDeg: $0.angleDeg)
                 }
                 changed.append(groupRollProfile)
             }

@@ -2039,12 +2039,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // flying rate-only — so an empty array must still set the value
             // rather than leaving it nil ("we don't know").
             if let n = dict["n"] as? Int, let raw = dict["wp"] as? [Any] {
-                var wps: [(time: Float, angle: Float)] = []
+                var wps: [ReportedRollWaypoint] = []
                 for entry in raw.prefix(n) {
                     guard let pair = entry as? [Any], pair.count == 2,
                           let t = parseFloat(pair[0]), let a = parseFloat(pair[1])
                     else { continue }
-                    wps.append((time: t, angle: a))
+                    wps.append(ReportedRollWaypoint(timeSeconds: t, angleDeg: a))
                 }
                 cfg.rollWaypoints = wps
                 self.rocketConfig = cfg
