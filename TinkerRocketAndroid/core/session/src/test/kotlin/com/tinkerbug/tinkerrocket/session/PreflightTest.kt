@@ -164,10 +164,21 @@ class PreflightTest {
             ),
         )
         assertEquals(
-            PreflightAutoStatus.Pending("Not yet applied"),
+            PreflightAutoStatus.Pending("Rocket settings not read yet"),
             PreflightChecklist.autoStatus(
                 PreflightItemKind.SETTINGS_SYNCED,
                 connectedCtx(syncState = ActiveRocketSyncer.SyncState.AwaitingSync),
+            ),
+        )
+        // #915: the app took the rocket's own settings — the two agree, which
+        // is what this step checks.  What changed rides its own status line.
+        assertEquals(
+            PreflightAutoStatus.Satisfied,
+            PreflightChecklist.autoStatus(
+                PreflightItemKind.SETTINGS_SYNCED,
+                connectedCtx(
+                    syncState = ActiveRocketSyncer.SyncState.Adopted(listOf("PID gains")),
+                ),
             ),
         )
         // A relay link can't sync — N/A, not pending-forever.

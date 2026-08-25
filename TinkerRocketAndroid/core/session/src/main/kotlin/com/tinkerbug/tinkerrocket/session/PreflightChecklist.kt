@@ -47,7 +47,7 @@ public enum class PreflightItemKind(public val wire: String) {
         get() = when (this) {
             MANUAL -> ""
             CONNECTED -> "Rocket powered on & connected"
-            SETTINGS_SYNCED -> "Settings applied to rocket"
+            SETTINGS_SYNCED -> "Rocket settings confirmed"
             GNSS_FIX -> "GNSS fix acquired"
             CAMERA_RECORDING -> "Camera recording"
             LOGGING_ACTIVE -> "Flight logging active"
@@ -59,7 +59,7 @@ public enum class PreflightItemKind(public val wire: String) {
         get() = when (this) {
             MANUAL -> ""
             CONNECTED -> "Verified from the live telemetry link."
-            SETTINGS_SYNCED -> "The active rocket profile has been pushed and confirmed."
+            SETTINGS_SYNCED -> "The rocket has reported its settings and the active profile matches them."
             GNSS_FIX -> "Position fix with enough satellites for a 3D solution."
             CAMERA_RECORDING -> "The flight computer reports the camera is recording."
             LOGGING_ACTIVE -> "The flight computer is writing the flight log."
@@ -214,7 +214,12 @@ public object PreflightChecklist {
 
             PreflightItemKind.SETTINGS_SYNCED -> when {
                 ctx.isRelay -> PreflightAutoStatus.NotApplicable("Needs a direct connection")
-                ctx.syncState is ActiveRocketSyncer.SyncState.Synced ->
+                // #915: Adopted means the app read the rocket's own settings and
+                // brought the profile into line — app and vehicle agree, which is
+                // exactly what this step asks.  The changed groups are surfaced as
+                // their own line, not as a blocked checklist item.
+                ctx.syncState is ActiveRocketSyncer.SyncState.Synced ||
+                    ctx.syncState is ActiveRocketSyncer.SyncState.Adopted ->
                     PreflightAutoStatus.Satisfied
                 ctx.syncState is ActiveRocketSyncer.SyncState.NoProfile ->
                     PreflightAutoStatus.Pending("No active rocket selected")
@@ -222,7 +227,7 @@ public object PreflightChecklist {
                     PreflightAutoStatus.Pending(
                         (ctx.syncState as ActiveRocketSyncer.SyncState.Failed).message,
                     )
-                else -> PreflightAutoStatus.Pending("Not yet applied")
+                else -> PreflightAutoStatus.Pending("Rocket settings not read yet")
             }
 
             PreflightItemKind.GNSS_FIX -> {

@@ -91,6 +91,7 @@ fun SettingsScreen(
     val magAdvisory by syncer.magCalAdvisory.collectAsState()
     val sensorAdvisory by syncer.sensorCalAdvisory.collectAsState()
     val suggestedId by syncer.suggestedProfileId.collectAsState()
+    val createdProfileName by syncer.createdProfileName.collectAsState()
     val active = activeId?.let { id -> profiles.firstOrNull { it.id == id } }
 
     // #361 analog: never subscribe this screen to raw telemetry — the jog
@@ -156,10 +157,35 @@ fun SettingsScreen(
                 fleetScope.launch { store.setActive(sid) }
             }
         }
+        // #915: a profile created for a board the app had never seen.
+        createdProfileName?.let { name ->
+            Card {
+                Text(
+                    "New rocket — created “$name” from its own settings.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
+        }
         CalBanner("Mag cal", magAdvisory, onImport = {
             fleetScope.launch { syncer.importRocketCalIntoActiveProfile(System.currentTimeMillis()) }
         })
         CalBanner("Sensor cal", sensorAdvisory, onImport = null)
+
+        // #915: the rocket keeps its own settings unless the user asks
+        // otherwise, so say plainly which ones the app cannot check and put
+        // the deliberate override next to that admission.
+        if (connected && session?.isBaseStation == false) {
+            Banner(
+                "Can't verify: " +
+                    ActiveRocketSyncer.unreportedGroups.joinToString(", ") +
+                    ". This rocket doesn't report them, so they're shown from " +
+                    "the profile.",
+                "Send all",
+            ) {
+                fleetScope.launch { syncer.pushProfileToRocket() }
+            }
+        }
 
         // ── Profile picker ───────────────────────────────────────────────
         Row(
@@ -685,10 +711,11 @@ private fun SyncBadge(state: SyncState) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val (label, color) = when (state) {
         SyncState.Idle -> return
-        SyncState.AwaitingSync -> "awaiting sync" to tr.statusWarn
+        SyncState.AwaitingSync -> "reading rocket" to tr.statusWarn
         SyncState.NoProfile -> "no profile" to tr.statusIdle
-        SyncState.Syncing -> "syncing…" to tr.statusIdle
-        SyncState.Synced -> "synced" to tr.statusOk
+        SyncState.Syncing -> "sending…" to tr.statusIdle
+        SyncState.Synced -> "matches rocket" to tr.statusOk
+        is SyncState.Adopted -> "updated from rocket" to tr.statusIdle
         is SyncState.Failed -> "sync failed" to tr.statusBad
     }
     Text(

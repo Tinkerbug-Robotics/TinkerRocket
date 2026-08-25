@@ -6,8 +6,10 @@
 //  profile of gains / biases / roll profile / camera / pyro / mag cal.
 //  Profiles live in the app (not on the flight computer) so the same set
 //  of settings can be applied to whichever physical computer is flying
-//  that airframe.  The app is source-of-truth: on connect the active
-//  profile is pushed to the rocket (see ActiveRocketSyncer).
+//  that airframe.  Since #915 the ROCKET is source-of-truth on connect:
+//  a profile is bound to a board by `lastUsedUnitID`, the rocket's reported
+//  settings are adopted into it, and the profile only reaches the vehicle on
+//  an explicit user action (see ActiveRocketSyncer).
 //
 //  Field defaults mirror RocketConfig (BLETypes.swift) and the firmware
 //  factory defaults, so a freshly-created profile matches an out-of-the-box
@@ -100,8 +102,9 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var rateCapDps: Float = 60          // outer-loop angle→rate cap (deg/s)
     var kpAngle: Float = 2.0            // outer angle-loop P-gain (cascaded angle control)
     var guidanceEnabled: Bool = false
-    // PN guidance params. Defaults MUST equal config.h (PN_*); pushed on connect,
-    // they override the FC, so a mismatch silently re-tunes guidance.
+    // PN guidance params. Defaults MUST equal config.h (PN_*). The rocket does
+    // not report these back (#915), so the app can't verify them — and on an
+    // explicit push a mismatch here silently re-tunes guidance.
     var pnNavGain: Float = 5.0          // config::PN_NAV_GAIN
     var pnMaxAccel: Float = 20.0        // config::PN_MAX_ACCEL_MPS2
     var pnAccelToFin: Float = 4.0       // config::PN_ACCEL_TO_FIN_DEG
@@ -113,8 +116,8 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var pnTargetE: Float = 0
     var pnTargetN: Float = 0
     // Station-keep PD gains + law selector (#534). Defaults MUST equal config.h
-    // (PN_KP_POS_PER_S2 / PN_KD_VEL_PER_S / GUIDANCE_LAW_DEFAULT) — the profile is
-    // pushed on connect and overrides the FC, so a mismatch silently re-tunes
+    // (PN_KP_POS_PER_S2 / PN_KD_VEL_PER_S / GUIDANCE_LAW_DEFAULT) — unreported by
+    // the rocket (#915), so an explicit push overrides the FC and a mismatch re-tunes
     // guidance. The gains are PROVISIONAL (seeded from the sim's guidance
     // scenario, pending the #534 acceptance A/B); keep them in lockstep with
     // config.h and tinkerrocket-sim scenarios.py.
@@ -185,8 +188,9 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     // physical roll authority on the corrected 1:1 fin-angle scale; ki is a small
     // bench-tunable seed (SIL roll plant unvalidated). MinCmd/MaxCmd are the max
     // command deflection (+/-20deg), well inside the +/-60deg mechanical limit.
-    // MUST stay in sync with config.h KP/KI/MIN_CMD/MAX_CMD -- this profile is
-    // pushed on connect (ActiveRocketSyncer) and OVERRIDES the firmware defaults.
+    // MUST stay in sync with config.h KP/KI/MIN_CMD/MAX_CMD -- they seed a
+    // freshly created profile, which #915 then overwrites from the rocket's own
+    // readback whenever the two disagree.
     var pidKp: Float = 0.12
     var pidKi: Float = 0.01
     var pidKd: Float = 0.0
@@ -197,9 +201,9 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     // MARK: Roll profile
     var rollWaypoints: [RollWaypoint] = []
 
-    // MARK: Pyro (per-airframe; auto-pushed on connect — arming stays a
-    // separate explicit action, never driven by the profile). New PCB
-    // has 4 channels sharing a single ARM FET.
+    // MARK: Pyro (per-airframe; echoed by the rocket and adopted from it on
+    // connect since #915 — arming stays a separate explicit action, never
+    // driven by the profile). New PCB has 4 channels sharing a single ARM FET.
     var pyro1Enabled: Bool = false
     var pyro1TriggerMode: UInt8 = 0
     var pyro1TriggerValue: Float = 1.0

@@ -11,29 +11,38 @@ apogee aloud during flight, and points you at where the rocket came down.
 
 ---
 
-## The app is the source of truth
+## The rocket is the source of truth
 
-This is the design decision everything else follows from, and it is worth stating
-plainly because it is the opposite of what you might assume.
+This is the design decision everything else follows from, and it changed direction once
+— which is worth knowing, because the code still carries both issue numbers.
 
-**Settings live in the app, not on the flight computer.** Each airframe gets a
+**Settings are edited in the app and kept by the rocket.** Each airframe gets a
 `RocketProfile` — gains, servo biases, roll profile, camera, pyro, magnetometer
-calibration — stored on the phone. When a rocket connects, the app pushes the *whole
-active profile* to it. The rocket flies the profile's settings, never whatever happened
-to be left in its NVS.
+calibration — stored on the phone and bound to one flight computer by its hardware id.
+When a rocket connects, the app makes that board's profile active, reads the rocket's
+own settings, and adopts them into the profile. **Connecting writes nothing to the
+vehicle.**
 
-That fixes a specific, expensive failure: swapping the flight computer between airframes
-and flying the previous airframe's tuning without noticing.
+Originally (#132) it was the other way round: the app pushed the whole active profile on
+connect, so the rocket flew the phone's settings whatever was in its NVS. That aimed at a
+real failure — swapping the flight computer between airframes and flying the previous
+airframe's tuning. But it created a worse one (#915): connecting to *check telemetry*
+while the phone held a different airframe's profile silently reconfigured the vehicle —
+fourteen config frames inside two seconds, no user action, no notice in the UI. Binding a
+profile to a board addresses the original failure without handing the phone that power.
 
-Two consequences fall out of it:
+Three consequences fall out of it:
 
-- **The push is not a diff.** The config readback does not echo every field — servo
-  biases 2–4, roll waypoints, and sound settings are absent from it — so a reliable
-  field-by-field diff is impossible. Connects happen once per flying session, so a
-  handful of idempotent writes is cheaper than the bugs a partial diff would invite.
-- **You get an offline queue for free.** Edits made while disconnected are saved to the
-  profile and ride out on the next connect. There is no separate pending-changes
-  mechanism because there does not need to be one.
+- **Push is an act, not a side effect.** The whole profile goes out only when the user
+  switches the active profile onto a connected rocket or taps *Send All Settings*.
+  Editing a single field still self-applies that field's group immediately (#144).
+- **The app can only verify about half the surface.** The config readback does not echo
+  servo biases 2–4, fin travel, fin layout, roll waypoints, the PN guidance parameters
+  or sounds. Those are shown from the profile and labelled as unverifiable, rather than
+  quietly presented as confirmed. Closing that gap needs a firmware-side full-config
+  report.
+- **Offline edits no longer ride out silently.** An edit made while disconnected reaches
+  the rocket on the next explicit push, not on the next connect.
 
 ## At a glance
 
@@ -41,12 +50,12 @@ Two consequences fall out of it:
 |---|---|
 | **Platform** | SwiftUI, iOS |
 | **Entry point** | [`TinkerRocketAppApp.swift`](../../TinkerRocketApp/TinkerRocketApp/TinkerRocketAppApp.swift) — onboarding on first launch, then the dashboard |
-| **Source** | ~25,500 lines across 65 Swift files |
+| **Source** | ~29,900 lines across 76 Swift files |
 | **Navigation** | [module map](generated/ios-app-map.md) — every file, what it declares, and its sections |
 | **Transport** | BLE GATT: one service, four characteristics |
 | **Telemetry** | JSON over notify |
 | **Persistence** | one JSON file per profile in Application Support; CSV cache in Documents |
-| **Tests** | 270, across 29 test files |
+| **Tests** | 467, across 47 test files |
 
 Unlike the firmware, this codebase is not a monolith — the files are the structure, and
 they already carry Swift's `// MARK: -` markers. The module map is generated from those
@@ -63,7 +72,7 @@ flowchart TB
     REM["<b>RemoteRocket</b><br/>seen via LoRa relay"]
     ROSTER["<b>RocketRoster</b><br/>RocketSubject per logical rocket<br/>merged across links"]
     STORE["<b>RocketProfileStore</b><br/>profiles + active selection"]
-    SYNC["<b>ActiveRocketSyncer</b><br/>pushes profile on connect"]
+    SYNC["<b>ActiveRocketSyncer</b><br/>adopts rocket config on connect"]
     VIEW["Dashboard and views"]
 
     FLEET --> DEV1

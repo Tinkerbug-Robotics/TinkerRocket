@@ -1915,7 +1915,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // #253: roll-control gain readback. The device reports sentinels
             // (rcap/kpang <= 0, iwind < 0) for "firmware default" — keep the
             // local value in that case rather than displaying the sentinel.
-            if let rcap = parseFloat(dict["rcap"]), rcap > 0 { cfg.rateCapDps = rcap }
+            if let rcap = parseFloat(dict["rcap"]), rcap > 0 {
+                cfg.rateCapDps = rcap
+                cfg.rollGainsReported = true
+            }
             if let kpa = parseFloat(dict["kpang"]), kpa > 0 { cfg.kpAngle = kpa }
             if let iw = parseFloat(dict["iwind"]), iw >= 0 { cfg.integralSepThreshold = iw }
             cfg.guidanceEnabled = dict["ge"] as? Bool ?? cfg.guidanceEnabled

@@ -2,8 +2,9 @@
 //  ActiveRocketSyncerTests.swift
 //  TinkerRocketAppTests
 //
-//  Pure decision logic for the connect-time profile sync (issue #132):
-//  mag-cal push/warn/read and the soft profile suggestion.
+//  Pure decision logic for the connect-time reconcile (issues #132, #915):
+//  the rocket-wins adoption rule, mag-cal push/warn/read, and the soft
+//  profile suggestion.
 //
 
 import XCTest
@@ -15,6 +16,155 @@ final class ActiveRocketSyncerTests: XCTestCase {
         MagCalData(offsetX: 1, offsetY: 2, offsetZ: 3,
                    fieldR_uT: 48, residualUT: 2,
                    calibratedOnUnitID: unitID, calibratedAt: Date())
+    }
+
+    // MARK: - Adoption: the rocket wins (#915)
+
+    /// A readback whose values all match RocketProfile's factory defaults, so
+    /// a test only has to state the field it cares about.
+    private func matchingConfig() -> RocketConfig {
+        let p = RocketProfile.makeDefault(name: "x")
+        var c = RocketConfig()
+        c.servoBias1 = p.servoBias1
+        c.servoHz = p.servoHz
+        c.servoMinUs = p.servoMinUs
+        c.servoMaxUs = p.servoMaxUs
+        c.pidKp = p.pidKp; c.pidKi = p.pidKi; c.pidKd = p.pidKd
+        c.pidMinCmd = p.pidMinCmd; c.pidMaxCmd = p.pidMaxCmd
+        c.servoEnabled = p.servoControlEnabled
+        c.gainScheduleEnabled = p.gainScheduleEnabled
+        c.useAngleControl = p.useAngleControl
+        c.rollDelayMs = p.rollDelayMs
+        c.rateCapDps = p.rateCapDps
+        c.kpAngle = p.kpAngle
+        c.integralSepThreshold = p.integralSepThreshold
+        c.rollGainsReported = true
+        c.guidanceEnabled = p.guidanceEnabled
+        c.cameraType = p.cameraType
+        c.imuOrientSetting = p.imuOrientSetting
+        c.imuRateHz = p.imuRateHz
+        c.pyro1Enabled = p.pyro1Enabled
+        c.pyro1TriggerMode = p.pyro1TriggerMode
+        c.pyro1TriggerValue = p.pyro1TriggerValue
+        c.pyro2Enabled = p.pyro2Enabled
+        c.pyro2TriggerMode = p.pyro2TriggerMode
+        c.pyro2TriggerValue = p.pyro2TriggerValue
+        c.pyro3Enabled = p.pyro3Enabled
+        c.pyro3TriggerMode = p.pyro3TriggerMode
+        c.pyro3TriggerValue = p.pyro3TriggerValue
+        c.pyro4Enabled = p.pyro4Enabled
+        c.pyro4TriggerMode = p.pyro4TriggerMode
+        c.pyro4TriggerValue = p.pyro4TriggerValue
+        return c
+    }
+
+    func testAgreementReportsNothingChanged() {
+        var p = RocketProfile.makeDefault(name: "Rolly Polly")
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: matchingConfig()), [])
+    }
+
+    func testRocketValueOverwritesTheProfile() {
+        var p = RocketProfile.makeDefault(name: "Rolly Polly")
+        p.pidKp = 0.30
+        var cfg = matchingConfig()
+        cfg.pidKp = 0.12
+        let changed = ActiveRocketSyncer.adopt(&p, from: cfg)
+        XCTAssertEqual(changed, [ActiveRocketSyncer.groupPidGains])
+        XCTAssertEqual(p.pidKp, 0.12, "the rocket's gain wins, not the phone's")
+    }
+
+    /// The whole point of #915: the rocket the phone connected to must come
+    /// away flying what it already had, and the profile must say so.
+    func testAnotherAirframesOrientationDoesNotSurvive() {
+        var p = RocketProfile.makeDefault(name: "Wrong airframe")
+        p.imuOrientSetting = 7            // manual, from a different rocket
+        var cfg = matchingConfig()
+        cfg.imuOrientSetting = 0xFF       // this rocket is on pad auto-detect
+        let changed = ActiveRocketSyncer.adopt(&p, from: cfg)
+        XCTAssertEqual(changed, [ActiveRocketSyncer.groupImuOrientation])
+        XCTAssertEqual(p.imuOrientSetting, 0xFF)
+    }
+
+    /// Wire rounding must not manufacture a diff on every single connect:
+    /// kp crosses at 4 decimals, kpAngle at 2, pyro values at 1.
+    func testWireRoundingIsNotADifference() {
+        var p = RocketProfile.makeDefault(name: "x")
+        p.pidKp = 0.120004            // rounds to 0.1200 on the wire
+        p.kpAngle = 2.001             // rounds to 2.00
+        p.pyro2TriggerValue = 100.04  // rounds to 100.0
+        var cfg = matchingConfig()
+        cfg.pidKp = 0.12
+        cfg.kpAngle = 2.0
+        cfg.pyro2TriggerValue = 100.0
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg), [])
+    }
+
+    /// #253 sentinels mean "the firmware is on its own default", and
+    /// RocketConfig then holds the APP's defaults — adopting those would
+    /// overwrite a deliberately-tuned profile with a number nobody chose.
+    func testUnreportedRollGainsAreLeftAlone() {
+        var p = RocketProfile.makeDefault(name: "x")
+        p.rateCapDps = 120
+        p.kpAngle = 5
+        var cfg = matchingConfig()
+        cfg.rollGainsReported = false     // rocket sent the sentinels
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg), [])
+        XCTAssertEqual(p.rateCapDps, 120)
+        XCTAssertEqual(p.kpAngle, 5)
+    }
+
+    /// Firmware too old to report orientation / IMU rate leaves those nil;
+    /// the profile keeps its own rather than being reset to an invention.
+    func testFieldsThisFirmwareNeverReportsAreKept() {
+        var p = RocketProfile.makeDefault(name: "x")
+        p.imuOrientSetting = 7
+        p.imuRateHz = 1920
+        var cfg = matchingConfig()
+        cfg.imuOrientSetting = nil
+        cfg.imuRateHz = nil
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg), [])
+        XCTAssertEqual(p.imuOrientSetting, 7)
+        XCTAssertEqual(p.imuRateHz, 1920)
+    }
+
+    /// Groups the readback never covers must survive untouched — adoption
+    /// may not silently reset what it cannot see.
+    func testUnreportedGroupsSurviveAdoption() {
+        var p = RocketProfile.makeDefault(name: "x")
+        p.servoBias2 = 40
+        p.finTravelDeg = 90
+        p.finRingMode = 1
+        p.soundsEnabled = true
+        p.pnNavGain = 9
+        p.rollWaypoints = [RollWaypoint(timeSeconds: 1, angleDeg: 90)]
+        _ = ActiveRocketSyncer.adopt(&p, from: matchingConfig())
+        XCTAssertEqual(p.servoBias2, 40)
+        XCTAssertEqual(p.finTravelDeg, 90)
+        XCTAssertEqual(p.finRingMode, 1)
+        XCTAssertTrue(p.soundsEnabled)
+        XCTAssertEqual(p.pnNavGain, 9)
+        XCTAssertEqual(p.rollWaypoints.count, 1)
+    }
+
+    func testEachPyroChannelIsNamedSeparately() {
+        var p = RocketProfile.makeDefault(name: "x")
+        var cfg = matchingConfig()
+        cfg.pyro1Enabled = !p.pyro1Enabled
+        cfg.pyro3TriggerValue = p.pyro3TriggerValue + 50
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg), ["Pyro 1", "Pyro 3"])
+        XCTAssertEqual(p.pyro1Enabled, cfg.pyro1Enabled)
+        XCTAssertEqual(p.pyro3TriggerValue, cfg.pyro3TriggerValue)
+    }
+
+    func testAdoptionIsIdempotent() {
+        var p = RocketProfile.makeDefault(name: "x")
+        p.cameraType = 0
+        var cfg = matchingConfig()
+        cfg.cameraType = 1
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg),
+                       [ActiveRocketSyncer.groupCamera])
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg), [],
+                       "a second connect with the same rocket reports nothing")
     }
 
     // MARK: - Mag cal action

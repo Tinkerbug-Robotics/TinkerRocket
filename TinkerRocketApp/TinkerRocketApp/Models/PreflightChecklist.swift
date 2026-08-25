@@ -31,7 +31,7 @@ enum PreflightItemKind: String, Codable, CaseIterable {
 
     // Auto steps — verified from telemetry / app state, never hand-checked.
     case connected                    // rocket powered on & telemetry flowing
-    case settingsSynced               // active profile pushed to the rocket
+    case settingsSynced               // profile reconciled with the rocket (#915)
     case gnssFix                      // usable GNSS solution
     case cameraRecording              // camera reports recording
     case loggingActive                // flight logging running
@@ -47,7 +47,7 @@ enum PreflightItemKind: String, Codable, CaseIterable {
         switch self {
         case .manual:          return ""
         case .connected:       return "Rocket powered on & connected"
-        case .settingsSynced:  return "Settings applied to rocket"
+        case .settingsSynced:  return "Rocket settings confirmed"
         case .gnssFix:         return "GNSS fix acquired"
         case .cameraRecording: return "Camera recording"
         case .loggingActive:   return "Flight logging active"
@@ -60,7 +60,7 @@ enum PreflightItemKind: String, Codable, CaseIterable {
         switch self {
         case .manual:          return ""
         case .connected:       return "Verified from the live telemetry link."
-        case .settingsSynced:  return "The active rocket profile has been pushed and confirmed."
+        case .settingsSynced:  return "The rocket has reported its settings and the active profile matches them."
         case .gnssFix:         return "Position fix with enough satellites for a 3D solution."
         case .cameraRecording: return "The flight computer reports the camera is recording."
         case .loggingActive:   return "The flight computer is writing the flight log."
@@ -292,10 +292,14 @@ enum PreflightChecklist {
         case .settingsSynced:
             if ctx.isRelay { return .notApplicable("Needs a direct connection") }
             switch ctx.syncState {
-            case .synced:    return .satisfied
+            // #915: adopted means the app read the rocket's own settings and
+            // brought the profile into line — app and vehicle agree, which is
+            // exactly what this step asks.  The changed groups are surfaced
+            // as their own line, not as a blocked checklist item.
+            case .synced, .adopted:   return .satisfied
             case .noProfile: return .pending("No active rocket selected")
             case .failed(let reason): return .pending(reason)
-            default:         return .pending("Not yet applied")
+            default:         return .pending("Rocket settings not read yet")
             }
 
         case .gnssFix:
