@@ -2019,6 +2019,18 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.soc = lora.soc;
     out.current = lora.current;
     out.voltage = lora.voltage;
+    // #850: the camera / servo rail currents ride the SLOW frame and land in
+    // this rocket's accumulator, so they are forwarded like any other relayed
+    // field. Without this the CSV got them and the app did not — the keys
+    // stayed at their NaN default, addFloat dropped them, and a base-station
+    // link showed "no reading" forever on hardware that was measuring fine.
+    //
+    // A rocket with no monitors fitted (V7/V8, mini) sends 0 rather than NaN,
+    // because the LoRa frame has no way to encode "absent". That is a known
+    // wrinkle of the relay path: on a DIRECT link absent and zero stay
+    // distinguishable, on a relayed one they do not.
+    out.cam_current   = lora.cam_current;
+    out.servo_current = lora.servo_current;
 
     // GPS (pre-computed lat/lon)
     out.latitude = lat_deg;
