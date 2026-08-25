@@ -186,6 +186,26 @@ which the bench rule forbids (it holds cal and LoRa config). The logic is
 covered by construction and by the FC's `(from NVS)` / `(board default)` line,
 but it has not been exercised against a real disagreement.
 
+**A bug the bench found that no test would have.** Switching between two
+rockets: put a second profile on the V9, connect to the V8 (correct), come back
+to the V9 — and the selection had reverted. `lastUsedUnitID` bound a profile to
+a board but nothing ever RELEASED one, so two profiles claimed the same board
+and the lookup takes the first match in a list sorted by NAME. Which profile a
+rocket came back on was decided alphabetically. The other rocket looked fine
+only because a single profile had ever claimed it — one board is not enough to
+see this, which is exactly why it survived the unit tests.
+
+Binding is exclusive now, through one `store.bind()` that owns the invariant,
+plus a heal for stores the broken build already wrote: when more than one
+profile claims a board, prefer the most recently updated and release the rest.
+Without the heal the fix would have looked like it had not worked, because the
+wrong profile was already stuck where it was stuck.
+
+**The precedence rule itself held throughout.** Over the whole switching run
+the app sent the rocket three commands — time sync, a sensor-cal READ, and a
+readback request. Zero config writes, against thirteen frames in under two
+seconds from the old app on the same board that morning.
+
 **Expected bench noise:** `[ORIENT] pad gravity 93.9° off nose with MANUAL
 orientation +X` — the board is lying flat, so gravity is perpendicular to the
 nose axis and MANUAL means the FC will not auto-correct. Correct behaviour,
