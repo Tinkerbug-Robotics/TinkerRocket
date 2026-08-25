@@ -266,3 +266,81 @@ def test_format_detection_is_by_content_not_extension(tmp_path):
     misnamed.write_bytes(src.read_bytes())
     _, _, fmt = bs_log.read_bs_log(misnamed)
     assert fmt == 'csv'
+
+
+# --------------------------------------------------------------------------
+# type parity between the two readers
+# --------------------------------------------------------------------------
+# bs_log's contract is that callers get the same row dicts whichever format the
+# file was in.  It did not hold: read_bs_csv coerced six fields and left the
+# rest as the strings csv.DictReader produced, so `lat` stayed a str.  A
+# consumer doing d["lat"].abs() then died with "bad operand type for abs():
+# 'str'" — which is exactly how the hosted report's Lora Link section crashed
+# the moment a legacy CSV sat in the same directory as a binary log.
+#
+# Types are the contract here, not just values.
+
+NUMERIC_COLUMNS = bs_log._CSV_FLOAT_COLUMNS + bs_log._CSV_INT_COLUMNS
+
+
+def _numeric_offenders(rows):
+    bad = {}
+    for r in rows:
+        for k in NUMERIC_COLUMNS:
+            if k in r and isinstance(r[k], str):
+                bad.setdefault(k, r[k])
+    return bad
+
+
+def test_binary_reader_yields_numbers_for_numeric_columns(tmp_path):
+    p = tmp_path / 'lora_100.bin'
+    _write_log(p, [_rx_record(100, _fast_frame(0)),
+                   _rx_record(600, _slow_frame(1))])
+    rows, _, _ = bs_log.read_bs_log(p)
+    assert not _numeric_offenders(rows)
+
+
+def test_csv_reader_yields_numbers_for_numeric_columns():
+    legacy = REPO / 'examples' / 'flights' / 'lora_20260705_173025.csv'
+    if not legacy.exists():
+        pytest.skip('example flight not present')
+    rows, _, fmt = bs_log.read_bs_log(legacy)
+    assert fmt == 'csv'
+    offenders = _numeric_offenders(rows)
+    assert not offenders, (
+        'these columns came back as strings, so arithmetic on them raises: '
+        f'{offenders}')
+
+
+def test_both_readers_agree_on_types_column_by_column(tmp_path):
+    """The property the module docstring claims. Pin it."""
+    legacy = REPO / 'examples' / 'flights' / 'lora_20260705_173025.csv'
+    if not legacy.exists():
+        pytest.skip('example flight not present')
+
+    p = tmp_path / 'lora_101.bin'
+    _write_log(p, [_rx_record(100, _fast_frame(0)),
+                   _rx_record(600, _slow_frame(1))])
+
+    bin_rows, _, _ = bs_log.read_bs_log(p)
+    csv_rows, _, _ = bs_log.read_bs_log(legacy)
+
+    for col in NUMERIC_COLUMNS:
+        b = next((r[col] for r in bin_rows if col in r), None)
+        c = next((r[col] for r in csv_rows if col in r), None)
+        if b is None or c is None:
+            continue
+        assert isinstance(b, (int, float)), f'{col}: binary gave {type(b).__name__}'
+        assert isinstance(c, (int, float)), f'{col}: csv gave {type(c).__name__}'
+
+
+def test_the_expression_that_crashed_the_hosted_report():
+    """d["lat"].abs() over a CSV+binary concatenation — the actual failure."""
+    pd = pytest.importorskip('pandas')
+    legacy = REPO / 'examples' / 'flights' / 'lora_20260705_173025.csv'
+    if not legacy.exists():
+        pytest.skip('example flight not present')
+    rows, _, _ = bs_log.read_bs_log(legacy)
+    df = pd.DataFrame(rows)
+    filtered = df[(df['lat'].abs() > 0.001) & (df['lon'].abs() > 0.001)]
+    assert len(filtered) > 0

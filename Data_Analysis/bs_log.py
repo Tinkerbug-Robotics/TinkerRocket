@@ -248,6 +248,23 @@ def read_bs_bin(path):
     return rows, events
 
 
+# Which CSV columns are numeric. Kept beside the reader rather than derived
+# from CSV_COLUMNS because the split is a property of the DATA, not the layout:
+# `state`, `event` and `frame` are text, everything else is a number that a
+# consumer will do arithmetic on.
+_CSV_FLOAT_COLUMNS = (
+    'pdop', 'lat', 'lon', 'alt_m', 'h_acc',
+    'acc_x', 'acc_y', 'acc_z', 'gyro_x', 'gyro_y', 'gyro_z',
+    'pressure_alt', 'alt_rate', 'max_alt', 'max_speed',
+    'voltage', 'current', 'soc', 'cam_a', 'servo_a',
+    'roll', 'pitch', 'yaw', 'speed', 'rssi', 'snr', 'rx_freq_mhz',
+)
+_CSV_INT_COLUMNS = (
+    'num_sats', 'launch', 'vel_apo', 'alt_apo', 'landed',
+    'next_ch', 'seq', 'gap', 'rocket_id',
+)
+
+
 def read_bs_csv(path):
     """Parse a legacy CSV base-station log. Tolerates a truncated final row."""
     rows, events = [], []
@@ -266,10 +283,19 @@ def read_bs_csv(path):
                 row = dict(rec)
                 row['time_ms'] = int(rec['time_ms'])
                 row['t_s'] = row['time_ms'] / 1000.0
-                for k in ('rssi', 'snr', 'pdop', 'voltage', 'current', 'soc'):
-                    if rec.get(k) not in (None, ''):
-                        row[k] = float(rec[k])
-                row['seq'] = int(rec['seq'])
+                # TYPE PARITY WITH THE BINARY READER. A csv.DictReader yields
+                # strings for everything, and this used to coerce only six
+                # fields — so `lat` stayed a str and a consumer doing
+                # d["lat"].abs() blew up with "bad operand type for abs(): 'str'"
+                # the moment a legacy CSV sat in the same directory as a binary
+                # log. The module contract is that callers get the same row
+                # dicts either way, so coerce everything numeric, not a subset.
+                for k in _CSV_FLOAT_COLUMNS:
+                    v = rec.get(k)
+                    row[k] = float(v) if v not in (None, '') else float('nan')
+                for k in _CSV_INT_COLUMNS:
+                    v = rec.get(k)
+                    row[k] = int(float(v)) if v not in (None, '') else 0
                 row['frame'] = 'csv'
                 rows.append(row)
             except (TypeError, ValueError, KeyError):
