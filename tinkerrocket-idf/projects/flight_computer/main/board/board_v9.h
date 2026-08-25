@@ -112,9 +112,33 @@ struct board_pins
     static constexpr int8_t RUNCAM_PWR_PIN = 32;   // camera power gate (CAM_ACT)
 
     // ### Pyro channels — ARM and FIRE 2/3 differ from V8 (see header note) ###
-    // One shared arming FET (U9) feeds all four squib drivers; each FIRE pin
-    // drives a DTC123J (Q2-Q5). ALL output-pad init MUST go through
-    // safePyroOutputInit() — never gpio_reset_pin() a FIRE or ARM pad.
+    // One shared arming FET (U9) feeds all four squib drivers. Each FIRE pin
+    // drives a DTC123J pre-biased NPN, whose collector pulls the gate of a
+    // TPN4R712MD high-side FET that sources V_CAP into the squib.
+    //
+    // THE DRIVER DESIGNATORS ARE NOT IN CHANNEL ORDER, AND THERE IS NO Q2.
+    // This comment used to say "Q2-Q5"; the real map, read out of the netlist
+    // 2026-08-25 (#837 item 2), is Q5/Q3/Q4/Q6 for channels 1/2/3/4. Counting
+    // upward from a non-existent Q2 puts channel 4 on Q5 — which is channel
+    // ONE's gate driver — so a scope check run that way reads a quiet pad and
+    // clears a channel it never probed. Probe by this table, not by counting:
+    //
+    //   ch | FIRE net   | P4 pin | driver | gate pull-up | FET | squib out
+    //   ---+------------+--------+--------+--------------+-----+-------------
+    //    1 | PYRO1_FIRE |      6 | Q5     | R15          | U8  | PYRO1_EXT (J2.1)
+    //    2 | PYRO2_FIRE |     11 | Q3     | R16          | U6  | PYRO2_EXT (J2.2)
+    //    3 | PYRO3_FIRE |      9 | Q4     | R17          | U7  | PYRO3_EXT (J2.3)
+    //    4 | PYRO4_FIRE |     13 | Q6     | R23          | U10 | PYRO4_EXT (J2.4)
+    //
+    // The gate resistor is a PULL-UP to V_CAP (R*.2 sits on V_CAP, R*.1 on the
+    // driver collector and the FET gate), so the FET is held OFF by default and
+    // the DTC123J pulls the gate down to turn it on. All four FET sources are
+    // on V_CAP. Each FIRE net also carries a pulldown to GND — R78/R79/R80/R81
+    // for channels 1/2/3/4 — keeping the driver base below Vbe while the P4 pad
+    // is high-Z, which is what makes the boot-quiet requirement above testable.
+    //
+    // ALL output-pad init MUST go through safePyroOutputInit() — never
+    // gpio_reset_pin() a FIRE or ARM pad.
     static constexpr uint8_t PYRO_ARM_PIN   = 16;  // PYRO_ARM   (V8: 5)
     static constexpr uint8_t PYRO1_FIRE_PIN = 6;   // PYRO1_FIRE
     static constexpr uint8_t PYRO1_CONT_PIN = 7;   // PYRO1_CONT
@@ -174,9 +198,22 @@ struct board_pins
     static constexpr int I2S_FSYNC_PIN = 20;  // ESP_SDI  (OC GPIO4)
 
     // ### Power gates ###
-    // Same pins as V8, but both now enable TPS22811 high-side switches
-    // (GPS_ACT -> U27, SERVO_ACT -> U28) instead of low-side MOSFETs. Both
-    // are still active-high enables, so the firmware sequence is unchanged.
+    // Same pins as V8, but both now enable high-side switches instead of
+    // low-side MOSFETs. Both are still active-high enables, so the firmware
+    // sequence is unchanged.
+    //
+    // The two parts are NOT the same, despite doing the same job here
+    // (corrected 2026-08-25, #837 item 2 — this said "both TPS22811"):
+    //
+    //   GPS_ACT   -> U27, a TPS22810DRVR (7-pin SON). NO IMON pin.
+    //   SERVO_ACT -> U28, a TPS22811LRPWR. Has IMON, read by the OC on its
+    //                GPIO9 as SERVO_IMON (out_computer board_v9.h).
+    //
+    // So there is no GNSS-rail current monitor on this board and no test point
+    // to look for. If #850 (read the staged CAM/SERVO IMON monitors) is ever
+    // widened, it CANNOT be extended to the GNSS rail without a board change.
+    // U29 (LoRa) and U30 (P4 latch) are TPS22810 as well; only U26 (camera)
+    // and U28 (servo) are TPS22811, and only those two have IMON.
     static constexpr int GPS_ACT_PIN = 15;    // GPS_ACT — GNSS rail enable
     static constexpr int SERVO_ACT_PIN = 8;   // SERVO_ACT — servo rail enable
 
