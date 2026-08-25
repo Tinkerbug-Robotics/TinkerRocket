@@ -33,3 +33,10 @@
 #undef abs
 #endif
 // NB: `constrain` intentionally kept — TR_PID and others rely on it.
+
+// The device compat.h also carries the Arduino SPI surface (SPISettings /
+// SPIClass) for the SPI-attached drivers — TR_LogToFlash reaches SPIClass
+// through <compat.h> alone.  Mirror that with the host stub.
+#ifdef __cplusplus
+#include "SPI.h"
+#endif
