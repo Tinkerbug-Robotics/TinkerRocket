@@ -799,6 +799,10 @@ gtest_discover_tests(test_lc86_parser)
 # would generate.  The Swift and Kotlin golden walks consume the same files.
 set(WIRE_FIXTURES_SRCS
     wire_fixtures_lib.cpp
+    # #850: the base-station log golden is packed with the REAL LoRa packers,
+    # so the Python/Kotlin/Swift readers test against firmware-produced bytes
+    # rather than against each other's idea of the layout.
+    ${LIB_DIR}/TR_Sensor_Data_Converter/TR_Sensor_Data_Converter.cpp
     ${LIB_DIR}/CRC/CRC16.cpp
     ${LIB_DIR}/CRC/CRC.cpp
     ${LIB_DIR}/CRC/CrcFastReverse.cpp
@@ -811,6 +815,7 @@ set(WIRE_FIXTURES_SRCS
 set(WIRE_FIXTURES_INCLUDES
     ${SHIM_DIR}   # Must come first so Arduino.h resolves to our shim
     ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_Sensor_Data_Converter
     ${LIB_DIR}/CRC
 )
 

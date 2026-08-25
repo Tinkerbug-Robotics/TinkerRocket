@@ -1,0 +1,6 @@
+{
+ "rx_records": 12,
+ "event_records": 1,
+ "fast_frames": 10,
+ "slow_frames": 2,
+ "skipped_seq": 3}

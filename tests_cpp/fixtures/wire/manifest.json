@@ -83,6 +83,10 @@
  "size": 210,
  "notes": "FlightSettingsData version-ladder truncation of the v6 image"},
  {
+ "file": "csv/bs_tiny.bin",
+ "size": 868,
+ "notes": "base-station binary log built with the real packers; the CSV golden generated from it lives in tests_cpp/fixtures/csv_golden/ (app output, not emitter output)"},
+ {
  "file": "framed/stream_good.bin",
  "size": 449,
  "notes": "8 valid frames: [AA 55 AA 55][type][len][payload][CRC16 poly 0x8001 init 0, BE on wire]"},
