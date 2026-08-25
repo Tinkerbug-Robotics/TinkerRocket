@@ -411,6 +411,15 @@ static bool    hop_needs_retune_  = false;
 // window between boot and the NVS load can never report hop-enabled.
 static bool    lora_hop_disabled  = true;
 
+// LoRa transmit mute — the user-facing "LoRa off" mode (mirrors the OC's
+// lora_tx_disabled).  When true nothing is transmitted: no telemetry, no name
+// beacon, no hop schedule.  The RECEIVER stays up (serviceLoRaUplink and the
+// RX-only rendezvous cycle keep running), so a muted rocket is still reachable
+// from the base station and can be un-muted over the air.  NVS-backed ("lora"
+// namespace, key "txdis"); initialized false so the window between boot and
+// the NVS load can never suppress telemetry.
+static bool    lora_tx_disabled   = false;
+
 // #150 bench finding (2026-07-15): defer hop activation past the BS's
 // cmd-17 mirror-retry train so the bootstrap lands on a listening BS.
 static constexpr uint32_t HOP_ENABLE_DEFER_MS = 1500;
@@ -463,7 +472,12 @@ static inline void updateHopFromState(RocketState s)
     // Fixed-frequency mode (#106/#150 link mode) stays on lora_freq_mhz for
     // every state; #150 also refuses when the modulation can't fit a dwell
     // visit inside the FCC occupancy budget.
-    const bool want_active = !lora_hop_disabled && currentHopDwell() > 0 &&
+    // A muted radio must not hop: the BS follows the schedule by decoding our
+    // packets, so hopping without transmitting only walks the receiver away
+    // from the channel the BS is calling on.  Folding it in here also gets the
+    // ON→OFF branch (retune back to lora_freq_mhz) for free.
+    const bool want_active = !lora_tx_disabled && !lora_hop_disabled &&
+                             currentHopDwell() > 0 &&
                              shouldHopInState(s);
     if (want_active && !hop_active_)
     {
@@ -1199,6 +1213,15 @@ static void serviceLoRa()
         hop_needs_retune_ = false;
     }
 
+    // "LoRa off": every transmit path stops here.  After service() and the
+    // pending retune on purpose — those are what finish an in-flight TX and
+    // bring the radio back to lora_freq_mhz, and returning above them would
+    // strand it muted on a hop channel with no way to be called back.
+    if (lora_tx_disabled)
+    {
+        return;
+    }
+
     const uint32_t now_ms = millis();
     const uint32_t period_ms = (config::LORA_TX_RATE_HZ > 0)
         ? (1000U / config::LORA_TX_RATE_HZ)
@@ -1279,6 +1302,7 @@ static uint32_t last_beacon_ms = 0;
 static void sendLoRaBeacon()
 {
     if (!config::USE_LORA_RADIO) return;
+    if (lora_tx_disabled) return;   // "LoRa off" — the beacon is a transmit too
 
     // Beacon in any state EXCEPT INFLIGHT (issue #71 field test: a rocket
     // whose flight side is slow to report state must still advertise).
@@ -1362,6 +1386,9 @@ static void sendCurrentConfig()
     j += ",\"lcr\":"; j += itos(lora_cr);
     j += ",\"lpw\":"; j += itos(lora_tx_power);
     j += ",\"lhd\":"; j += lora_hop_disabled ? "true" : "false";  // #106
+    // "LoRa off" mute; lenient-optional in both apps, so absence means
+    // "firmware predates the feature", not "transmitting".
+    j += ",\"ltxd\":"; j += lora_tx_disabled ? "true" : "false";
     // #150: airtime-derived hop dwell; 0 greys the option out in the app.
     j += ",\"lhdw\":"; j += itos(currentHopDwell());
     j += "}";
@@ -1416,6 +1443,48 @@ static void sendCurrentConfig()
 // ==========================================================================
 // SECTION: LoRa uplink command handling (OC L3780-4366)
 // ==========================================================================
+
+// Apply the "LoRa off" transmit mute (BLE cmd 68 / uplink cmd 68 both land
+// here so the two transports cannot diverge).  Desired-state, not a toggle: a
+// retried uplink must not silence a rocket the first copy already un-silenced.
+// Returns true when honoured (including already-there), false when refused
+// because the rocket is airborne.
+static bool applyLoRaTxMute(bool want_disabled, const char* src)
+{
+    if (!loraTxMuteChangeAllowed(want_disabled, latest_rocket_state))
+    {
+        ESP_LOGW("LORA", "%s LoRa TX mute REFUSED: rocket INFLIGHT — muting an "
+                         "airborne rocket would drop the only tracking link it has",
+                 src);
+        return false;
+    }
+    if (want_disabled == lora_tx_disabled)
+    {
+        ESP_LOGI("LORA", "%s LoRa TX already %s", src,
+                 lora_tx_disabled ? "OFF (muted)" : "ON");
+        return true;
+    }
+
+    lora_tx_disabled = want_disabled;
+    prefs.begin("lora", false);
+    prefs.putUChar("txdis", lora_tx_disabled ? 1 : 0);
+    prefs.end();
+
+    // Re-evaluate the hop schedule: muting takes the ON→OFF branch (radio back
+    // to lora_freq_mhz), un-muting restarts hopping if state + link mode want it.
+    updateHopFromState(latest_rocket_state);
+
+    // Echo to a directly-connected app so its toggle can't go stale when the
+    // base station is the one that changed this.  No-ops when disconnected.
+    sendCurrentConfig();
+
+    ESP_LOGW("OC", "[LORA] Transmit %s (%s) — %s",
+             lora_tx_disabled ? "MUTED" : "UNMUTED", src,
+             lora_tx_disabled
+                 ? "no telemetry, no beacon, no hopping; still listening for uplink"
+                 : "telemetry and beacon resume");
+    return true;
+}
 static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t payload_len)
 {
     ESP_LOGI("LORA", "UPLINK RX cmd=%u payload_len=%u", cmd, (unsigned)payload_len);
@@ -1638,6 +1707,14 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
             ESP_LOGI("LORA", "UPLINK Hop disable: already %s",
                      lora_hop_disabled ? "DISABLED" : "ENABLED");
         }
+    }
+    else if (cmd == LORA_CMD_SET_TX_DISABLED && payload_len >= 1)
+    {
+        // "LoRa off" over the air.  The useful direction is UN-muting — a
+        // muted rocket keeps listening precisely so the BS can call it back —
+        // but the command is symmetric so the app's toggle behaves the same
+        // direct or relayed.
+        (void)applyLoRaTxMute(payload[0] != 0, "UPLINK");
     }
     else if (cmd == LORA_CMD_CHANNEL_SET && payload_len >= 5)
     {
@@ -2489,8 +2566,10 @@ static void printStats()
     {
         TR_LoRa_Comms::Stats ls = {};
         lora_comms.getStats(ls);
-        ESP_LOGI("LORA", "LoRa en=%c tx_start/ok/fail=%lu/%lu/%lu local_ok/fail=%lu/%lu last_err=%d tx=%c",
+        // txmute= so a flat tx_ok reads as "muted on purpose", not "radio broken".
+        ESP_LOGI("LORA", "LoRa en=%c txmute=%c tx_start/ok/fail=%lu/%lu/%lu local_ok/fail=%lu/%lu last_err=%d tx=%c",
                       ls.enabled ? 'Y' : 'N',
+                      lora_tx_disabled ? 'Y' : 'N',
                       (unsigned long)ls.tx_started,
                       (unsigned long)ls.tx_ok,
                       (unsigned long)ls.tx_fail,
@@ -2547,6 +2626,18 @@ static void printStats()
              (unsigned long)flightlog.writeLockWaitSumUs());
     logger.resetIntervalTimings();
     flightlog.resetLockWaitStats();  // #510: same window as the logger sums
+
+    // "LoRa off" reminder, at the DEFAULT log level.  The txmute= field on the
+    // LoRa stats line above lives inside the VERBOSE_DEBUG block, which ships
+    // false — so on a normal bench capture the only radio evidence is a tx
+    // counter that never moves, which reads as a dead radio.  This says which
+    // it is, once per stats interval, and costs nothing when transmitting.
+    if (config::USE_LORA_RADIO && lora_tx_disabled)
+    {
+        ESP_LOGW("LORA", "transmit MUTED (\"LoRa off\") — no telemetry or beacon "
+                         "going out; still listening for uplink on %.2f MHz",
+                 (double)lora_comms.currentFrequencyMHz());
+    }
 
     // #398: per-task CPU deltas over this same interval.
     logTaskCpuDeltas(dt);
@@ -2830,6 +2921,11 @@ bool comms_setup_active()
         lora_cr        = prefs.getUChar("cr",   config::LORA_CR);
         lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
         lora_hop_disabled = prefs.getUChar("hopdis", 1) != 0;  // #150: default fixed mode
+        // "LoRa off" mute.  Deliberately NOT in the first-boot seeding block
+        // above, and read whether or not "freq" exists: the mute is settable
+        // over BLE before this ever runs, so seeding it would silently
+        // un-mute the rocket on first power-up.  Absent = 0 = transmitting.
+        lora_tx_disabled = prefs.getUChar("txdis", 0) != 0;
 
         // Issue #136: every boot starts on the hardcoded rendezvous preset
         // regardless of NVS; the BS moves us via the cmd-10 transactional
@@ -3019,6 +3115,16 @@ void comms_setup_idle()
                           (double)lora_freq_mhz, (unsigned)lora_sf,
                           (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
                           (int)lora_hop_disabled);
+        }
+        // Outside the isKey("freq") gate on purpose — see the twin in the
+        // rail-backed bring-up: a board that has never powered its flight side
+        // can hold a mute and no "freq" key at all, and the config readback the
+        // app pulls before power-on must still tell the truth about the radio.
+        lora_tx_disabled = prefs.getUChar("txdis", 0) != 0;
+        if (lora_tx_disabled)
+        {
+            ESP_LOGW("CFG", "NVS LoRa: transmit MUTED (\"LoRa off\") — no telemetry "
+                            "or beacon will go out until it is turned back on");
         }
         prefs.end();
 
@@ -3998,6 +4104,19 @@ static void comms_loop()
                                     "(not dynamic/960/1920/3840)",
                              (unsigned)rate_hz);
                 }
+            }
+        }
+        else if (ble_cmd == LORA_CMD_SET_TX_DISABLED)
+        {
+            // "LoRa off": [disabled:1] — 1 mutes every LoRa transmit, 0
+            // resumes.  Same constant (and number) as the uplink command, so
+            // the app's toggle means one thing whether it reaches the rocket
+            // directly or relayed through the base station.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 1)
+            {
+                (void)applyLoRaTxMute(payload[0] != 0, "BLE");
             }
         }
         else if (ble_cmd == 34)

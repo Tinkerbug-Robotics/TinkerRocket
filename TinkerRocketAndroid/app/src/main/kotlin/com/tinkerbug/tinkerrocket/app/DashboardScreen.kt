@@ -20,9 +20,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.SignalCellularOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -70,6 +73,7 @@ fun DashboardScreen(
     container: AppContainer? = null,
     tool: String? = null,
     onTool: (String?) -> Unit = {},
+    onOpenSettings: () -> Unit = {},
 ) {
     val session = device.session
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
@@ -227,6 +231,37 @@ fun DashboardScreen(
                 syncer = syncer,
                 onOpen = { onTool("preflight") },
             )
+        }
+
+        // "LoRa off": one quiet line, same shape and placement as the
+        // preflight advisory and under the same rule — advisory only, it never
+        // recolors the state banner.  Worth a line at all because a muted
+        // rocket looks exactly like a working one from a directly-connected
+        // phone, right up until it flies and there is no downlink to follow it
+        // with.  Only a direct link can know: a base-station relay hears
+        // nothing from a muted rocket, so there is no config readback to read
+        // this from — hence the isBaseStation guard rather than a
+        // confidently-wrong "transmitting".
+        val rocketCfg by session.rocketConfig.collectAsState()
+        if (!session.isBaseStation && rocketCfg?.loraTxDisabled == true) {
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = onOpenSettings)
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.SignalCellularOff,
+                    contentDescription = null,
+                    tint = tr.statusWarn,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "  LoRa off — no telemetry downlink",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tr.statusWarn,
+                )
+            }
         }
 
         // Power section — #377: never offer the blind cmd-8 toggle until the

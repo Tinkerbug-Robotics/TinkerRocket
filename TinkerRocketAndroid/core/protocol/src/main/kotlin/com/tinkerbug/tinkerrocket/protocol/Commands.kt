@@ -94,6 +94,17 @@ public object Commands {
         frame(BleCommandId.HOP_DISABLE_BS) { bool(disabled) }
 
     /**
+     * cmd 68 (rocket only) — "LoRa off": mute every LoRa transmit the rocket
+     * makes (telemetry, name beacon, hop schedule) while leaving its receiver
+     * up, so the base station can lift the mute over the air.  `[bool]`, 1 =
+     * silent.  Desired-state, never a toggle — a lost retry on a toggle would
+     * invert the one setting that decides whether the rocket is trackable.
+     * Firmware refuses a MUTE while the rocket is INFLIGHT.
+     */
+    public fun loraTxDisabled(disabled: Boolean): ByteArray =
+        frame(BleCommandId.LORA_TX_DISABLE_OC) { bool(disabled) }
+
+    /**
      * cmd 12 — ServoConfigData, 22 B (#267 grew it from 14):
      * `[bias_us i16 ×4][hz i16][min_us i16][max_us i16][fin_min_deg f32][fin_max_deg f32]`.
      * Missing bias entries pad with 0, extras are ignored (iOS indexes 0..<4).

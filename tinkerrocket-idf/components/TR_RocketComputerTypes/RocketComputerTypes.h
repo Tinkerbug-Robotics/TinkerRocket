@@ -124,6 +124,29 @@ static inline bool shouldHopInState(uint8_t s)
     return shouldHopInState((RocketState)s);
 }
 
+// Whether a requested LoRa transmit-mute change may be applied in this state.
+//
+// "LoRa off" (radio silence) stops every transmit the rocket makes —
+// telemetry, name beacon, hop schedule — while leaving the receiver up, so
+// the mute can be lifted again over the air.  Muting an AIRBORNE rocket
+// throws away the only link that says where it is, and the operator would
+// have no way to notice before it lands somewhere unknown, so a DISABLE is
+// refused while INFLIGHT.  An ENABLE is always allowed: it can only restore
+// telemetry, never remove it, and un-muting a rocket that took off muted is
+// exactly the recovery this rule has to leave open.
+//
+// Shared by the OC and mini BLE handlers, both uplink handlers, and the
+// host tests, so all four cannot drift.
+static inline bool loraTxMuteChangeAllowed(bool want_disabled, RocketState s)
+{
+    return !(want_disabled && s == INFLIGHT);
+}
+
+static inline bool loraTxMuteChangeAllowed(bool want_disabled, uint8_t s)
+{
+    return loraTxMuteChangeAllowed(want_disabled, (RocketState)s);
+}
+
 // ============================================================================
 // Channel-set generator for per-packet frequency hopping (issues #40 / #41)
 // ============================================================================
@@ -251,6 +274,15 @@ static constexpr uint8_t LORA_CMD_CHANNEL_SET     = 15;   // uplink cmd: rendezv
 static constexpr uint8_t LORA_CMD_HOP_PAUSE       = 16;   // uplink cmd: park on lora_freq_mhz for N ms (#90)
 static constexpr uint16_t LORA_HOP_PAUSE_MAX_MS   = 60000; // server-side cap on cmd 16 duration
 static constexpr uint8_t LORA_CMD_SET_HOP_DISABLED = 17;  // uplink cmd: 1 byte payload, 0=hopping enabled (default), 1=disabled (fixed-frequency mode for diagnostics, #106)
+// LoRa transmit mute ("LoRa off").  1 byte payload: 1 = radio silent, 0 =
+// transmitting (the default).  ONE number for two transports: the app sends
+// it straight to a rocket over BLE, and the base station relays the same
+// byte as an uplink command — the OC and mini dispatch both from this
+// constant so they cannot drift apart.  Deliberately NOT a toggle: a
+// dropped retry on a toggle inverts the setting, and this one decides
+// whether the rocket is trackable.  See loraTxMuteChangeAllowed() for the
+// in-flight refusal rule.
+static constexpr uint8_t LORA_CMD_SET_TX_DISABLED  = 68;  // uplink + rocket BLE cmd: 1 byte payload, 1 = "LoRa off" (mute every transmit, keep listening), 0 = transmitting (default)
 
 // ── App ↔ Base Station BLE command IDs (#287) ─────────────────────────────
 // The command byte the iOS app sends to the *base station* on the BLE command

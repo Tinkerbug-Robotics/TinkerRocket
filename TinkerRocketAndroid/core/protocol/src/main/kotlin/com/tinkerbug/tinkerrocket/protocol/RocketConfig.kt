@@ -111,6 +111,13 @@ public data class RocketConfig(
      * null = device doesn't report it (pre-#150 firmware).
      */
     val loraHopDwell: Int? = null,              // "lhdw"
+    /**
+     * "LoRa off": the rocket is holding radio silence — no telemetry, no name
+     * beacon, no hopping — while still listening for uplink.  null = firmware
+     * predates the setting, which is NOT the same as "transmitting": only
+     * `false` positively means the radio is on the air.
+     */
+    val loraTxDisabled: Boolean? = null,        // "ltxd"
     val pyro1Enabled: Boolean = false,          // "p1e" (config_pyro only)
     val pyro1TriggerMode: Int = 0,              // u8, "p1m"
     val pyro1TriggerValue: Float = 1.0f,        // "p1v"
@@ -183,6 +190,7 @@ public data class ConfigMessage(
     val lpw: Long? = null,
     val lhd: Boolean? = null,
     val lhdw: Long? = null,
+    val ltxd: Boolean? = null,
 ) {
     /**
      * Port of the iOS `"type":"config"` handler (BLEDevice.parseTelemetryData):
@@ -231,6 +239,7 @@ public data class ConfigMessage(
             loraTxPower = lpw?.coerceIn(-128, 127)?.toInt(),
             loraHopDisabled = lhd,                   // #106 (null if device doesn't report it)
             loraHopDwell = lhdw?.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong())?.toInt(),
+            loraTxDisabled = ltxd,                   // null if firmware predates "LoRa off"
             // A config message does NOT carry pyro fields — preserve them.
             pyro1Enabled = previous?.pyro1Enabled ?: d.pyro1Enabled,
             pyro1TriggerMode = previous?.pyro1TriggerMode ?: d.pyro1TriggerMode,
@@ -282,6 +291,7 @@ public data class ConfigMessage(
             lpw = JsonBridging.nsInt(json, "lpw"),
             lhd = JsonBridging.nsBool(json, "lhd"),
             lhdw = JsonBridging.nsInt(json, "lhdw"),
+            ltxd = JsonBridging.nsBool(json, "ltxd"),
         )
     }
 }
