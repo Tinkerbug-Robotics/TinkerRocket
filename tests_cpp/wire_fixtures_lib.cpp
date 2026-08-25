@@ -181,6 +181,9 @@ POWERData canonicalPower() {
     POWERData d{};
     d.time_us = 123456789u;
     d.voltage_raw = 27000; d.current_raw = -1234; d.soc_raw = 15000;
+    // #850 v2 tail. Deliberately distinct, non-zero, and not byte-symmetric so
+    // a v1 decoder reading past its length, or a byte-swap, both show up.
+    d.cam_ma = 1480; d.servo_ma = 2960;
     return d;
 }
 
@@ -479,12 +482,22 @@ void buildLogframes(Builder& b) {
               .done(),
           "IIS2MDCData, msg 0xD1");
 
+    // POWER length ladder (#850): 10 (v1) / 14 (v2, +cam_ma +servo_ma).  v1 is
+    // a faithful prefix of the append-only struct, and logs written before #850
+    // are 10 B forever — so both lengths stay pinned here.
     const auto pwr = canonicalPower();
-    b.add("logframes", "power_10.bin", bytesOf(pwr),
+    const auto pwrFull = bytesOf(pwr);
+    b.add("logframes", "power_14.bin", pwrFull,
+          Json().u("time_us", pwr.time_us).u("voltage_raw", pwr.voltage_raw)
+              .i("current_raw", pwr.current_raw).i("soc_raw", pwr.soc_raw)
+              .u("cam_ma", pwr.cam_ma).u("servo_ma", pwr.servo_ma)
+              .done(),
+          "POWERData v2 (+cam_ma +servo_ma), msg 0xA6");
+    b.add("logframes", "power_10.bin", prefix(pwrFull, 10),
           Json().u("time_us", pwr.time_us).u("voltage_raw", pwr.voltage_raw)
               .i("current_raw", pwr.current_raw).i("soc_raw", pwr.soc_raw)
               .done(),
-          "POWERData, msg 0xA6");
+          "POWERData v1 (pre-#850); absent rail currents decode as absent, not 0");
 
     // NonSensor length ladder: 43 (base) / 44 (+apogee_flags) / 48
     // (+sensor_health) / 50 (+ekf_ticks).  Each shorter form is a faithful

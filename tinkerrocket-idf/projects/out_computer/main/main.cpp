@@ -59,6 +59,9 @@ static inline std::string itos(int v)
 #include "rail_restore_policy.h"  // #825: boot rail re-assert decision
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
+#include <esp_adc/adc_oneshot.h>  // #850: camera/servo IMON reads
+#include <esp_adc/adc_cali.h>
+#include <esp_adc/adc_cali_scheme.h>
 #include "dedup_reboot_policy.h"
 #include "cmd_queue_dedupe_policy.h"  // #837 item 11: pyro tests key on channel
 
@@ -1226,6 +1229,132 @@ static constexpr uint8_t POWER_BAD_READ_LIMIT = 3;
 // consecutive rejects, latest_power_valid is cleared so the operator sees battery
 // N/A rather than a stale or garbage value.  Returns true when the sample was
 // accepted.
+// ---------------------------------------------------------------------------
+//  #850: camera / servo high-side-switch load currents (V9/V10 only)
+// ---------------------------------------------------------------------------
+// U26 (camera) and U28 (servo) are TPS22811 switches whose IMON pin sources
+// GIMON x ILOAD into a ground-referenced gain resistor, so
+//   ILOAD = V(pin) / (IMON_GAIN_A_PER_A * R).
+// V7/V8 and the mini set the GPIOs to -1 (no such part) and read NaN, which
+// packPowerData encodes as 0.
+//
+// Attenuation: both channels land at 0.286 V at their design currents (camera
+// 1.5 A into R85 = 2k, servo 3 A into R88 = 1k). ADC_ATTEN_DB_0 gives ~950 mV
+// full scale = 4.98 A / 9.97 A, about 3.3x design headroom, at the finest
+// resolution the part offers (1.22 mA / 2.43 mA per count). Do NOT widen the
+// attenuation for "headroom": the accuracy floor is the GIMON spread
+// (+/-13%), not the range, and a wider atten only coarsens every reading.
+//
+// Sampled on the existing 100 Hz INA230 tick, so this adds NO new wakeup and
+// does not disturb light sleep (#519) — only ~240 us of conversion inside a
+// tick that already blocks ~700 us polling the INA230's CVRF.
+static adc_oneshot_unit_handle_t rail_adc_unit = nullptr;
+static adc_cali_handle_t         rail_adc_cali = nullptr;
+static bool                      rail_adc_ready = false;
+
+static constexpr adc_atten_t kRailAtten = ADC_ATTEN_DB_0;
+
+// GPIO8 = ADC1_CH7, GPIO9 = ADC1_CH8 on the ESP32-S3. ADC1 is not the
+// WiFi-shared unit, so there is no contention with the BLE controller.
+static inline adc_channel_t railChannelForGpio(int gpio)
+{
+    return (gpio == 8) ? ADC_CHANNEL_7 : ADC_CHANNEL_8;
+}
+
+static void initRailCurrentAdc()
+{
+    if constexpr (config::CAM_IMON_GPIO < 0 && config::SERVO_IMON_GPIO < 0)
+    {
+        ESP_LOGI("OC", "[IMON] no high-side current monitors on this board — "
+                       "camera/servo current will report 0");
+        return;
+    }
+
+    adc_oneshot_unit_init_cfg_t unit_cfg = {};
+    unit_cfg.unit_id  = ADC_UNIT_1;
+    unit_cfg.ulp_mode = ADC_ULP_MODE_DISABLE;
+    if (adc_oneshot_new_unit(&unit_cfg, &rail_adc_unit) != ESP_OK)
+    {
+        ESP_LOGE("OC", "[IMON] ADC unit init failed — rail currents unavailable");
+        return;
+    }
+
+    adc_oneshot_chan_cfg_t chan_cfg = {};
+    chan_cfg.atten    = kRailAtten;
+    chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if constexpr (config::CAM_IMON_GPIO >= 0)
+    {
+        if (adc_oneshot_config_channel(rail_adc_unit,
+                                       railChannelForGpio(config::CAM_IMON_GPIO),
+                                       &chan_cfg) != ESP_OK)
+        {
+            ESP_LOGE("OC", "[IMON] camera channel config failed");
+            return;
+        }
+    }
+    if constexpr (config::SERVO_IMON_GPIO >= 0)
+    {
+        if (adc_oneshot_config_channel(rail_adc_unit,
+                                       railChannelForGpio(config::SERVO_IMON_GPIO),
+                                       &chan_cfg) != ESP_OK)
+        {
+            ESP_LOGE("OC", "[IMON] servo channel config failed");
+            return;
+        }
+    }
+
+    // Curve fitting is the S3's scheme and is created FOR THIS attenuation —
+    // the curve is per-atten, and mixing them mis-scales silently. Same trap
+    // the base station's battery ADC documents.
+    adc_cali_curve_fitting_config_t cali_cfg = {};
+    cali_cfg.unit_id  = ADC_UNIT_1;
+    cali_cfg.atten    = kRailAtten;
+    cali_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &rail_adc_cali) != ESP_OK)
+    {
+        ESP_LOGE("OC", "[IMON] ADC calibration unavailable (no eFuse cal data?) — "
+                       "reporting no rail current rather than an uncalibrated guess");
+        return;
+    }
+
+    rail_adc_ready = true;
+    ESP_LOGI("OC", "[IMON] ready: cam GPIO%d (%.0f ohm), servo GPIO%d (%.0f ohm), "
+                   "GIMON %.1f uA/A",
+             config::CAM_IMON_GPIO, (double)config::CAM_IMON_R_OHM,
+             config::SERVO_IMON_GPIO, (double)config::SERVO_IMON_R_OHM,
+             (double)(config::IMON_GAIN_A_PER_A * 1e6f));
+}
+
+// Amps on the given IMON channel, or NaN when unavailable. NaN rather than 0
+// deliberately: a board with no monitor and a board whose ADC failed are both
+// "unknown", and packPowerData collapses both to 0 on the wire — but the SI
+// path keeps them distinguishable from a genuine measured zero.
+static float readRailAmps(int gpio, float r_ohm)
+{
+    if (!rail_adc_ready || gpio < 0 || r_ohm <= 0.0f) return NAN;
+
+    // Four samples. The source impedance here is the 1-2k gain resistor —
+    // ~250x lower than the base station's 500k divider, so this does not need
+    // that path's 8x averaging; four is enough to halve the ADC's own noise
+    // without meaningfully extending the tick.
+    constexpr int kSamples = 4;
+    int mv_sum = 0, taken = 0;
+    const adc_channel_t ch = railChannelForGpio(gpio);
+    for (int i = 0; i < kSamples; ++i)
+    {
+        int raw = 0;
+        if (adc_oneshot_read(rail_adc_unit, ch, &raw) != ESP_OK) continue;
+        int mv = 0;
+        if (adc_cali_raw_to_voltage(rail_adc_cali, raw, &mv) != ESP_OK) continue;
+        mv_sum += mv;
+        ++taken;
+    }
+    if (taken == 0) return NAN;
+
+    const float volts = ((float)mv_sum / (float)taken) * 0.001f;
+    return volts / (config::IMON_GAIN_A_PER_A * r_ohm);
+}
+
 static bool commitPowerSample(float bus_v, float current_a)
 {
     static uint8_t consec_bad = 0;
@@ -1260,6 +1389,11 @@ static bool commitPowerSample(float bus_v, float current_a)
     // Negative = discharging; the INA shunt reads load current positive, so invert.
     psi.current = -current_a * 1000.0f;
     psi.soc     = soc_pct;
+    // #850: the two high-side-switch load currents ride the same sample so
+    // they share the INA230's timestamp and land in the same logged frame.
+    // NaN on boards without the monitors; packPowerData encodes that as 0.
+    psi.cam_current   = readRailAmps(config::CAM_IMON_GPIO, config::CAM_IMON_R_OHM);
+    psi.servo_current = readRailAmps(config::SERVO_IMON_GPIO, config::SERVO_IMON_R_OHM);
     sensor_converter.packPowerData(psi, latest_power_raw);
     latest_power_valid = true;
     return true;
@@ -5774,6 +5908,8 @@ static void printStats()
             ble_telem.soc = p.soc;
             ble_telem.current = p.current;
             ble_telem.voltage = p.voltage;
+            ble_telem.cam_current   = p.cam_current;    // #850
+            ble_telem.servo_current = p.servo_current;  // #850
         }
         else
         {
@@ -7447,6 +7583,11 @@ static void setup_oc()
     {
         ESP_LOGW("PWR", "INA230 not found -- battery monitoring disabled");
     }
+
+    // #850: the rail-current ADC is independent of the INA230 — bring it up
+    // whether or not the gauge answered, so a dead or absent INA230 does not
+    // also cost the camera/servo current readings.
+    initRailCurrentAdc();
 
     // #519: the OC owns its connection-parameter policy — slow (200 ms, latency 4)
     // while the rail is off to save idle power, fast (30 ms) once it comes on for

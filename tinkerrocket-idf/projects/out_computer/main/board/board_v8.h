@@ -100,19 +100,24 @@ struct board_pins
     // Also the recovery hammer for a wedged/bricked daughterboard (#412).
     static constexpr int LORA_ACT_PIN = 12;      // LoRa_ACT (CONFIRMED)
 
-    // --- High-side-switch current monitors (V9 close-out: TPS22811 U26/U28) ---
-    // IMON sources GIMON x ILOAD into a ground-referenced gain resistor:
-    //   ILOAD = V(pin) / (IMON_GAIN_A_PER_A * R).
-    // GIMON is 95.3 uA/A typical but 82.9-107.6 over temp (datasheet, at
-    // 1.5 A) — calibrate against a known load before trusting absolute amps.
-    // Gain resistors per hardware PR #728: CAM R85 = 2.0 k (2.2 k in the
-    // original V9 close-out) and SERVO R88 = 1.0 k — deliberately landing
-    // BOTH channels near 0.286 V at their design currents (camera 1.5 A,
-    // servo 3 A per high-side-switch-design.md). Nothing reads these yet;
-    // staged so the first implementation cannot inherit the 2.2 k scale.
-    static constexpr int   CAM_IMON_GPIO      = 8;         // CAM_IMON, ADC1_CH7
-    static constexpr int   SERVO_IMON_GPIO    = 9;         // SERVO_IMON, ADC1_CH8
-    static constexpr float IMON_GAIN_A_PER_A  = 95.3e-6f;  // TPS22811 GIMON typ
-    static constexpr float CAM_IMON_R_OHM     = 2000.0f;   // R85 (PR #728)
-    static constexpr float SERVO_IMON_R_OHM   = 1000.0f;   // R88
+    // --- High-side-switch current monitors: NOT FITTED ON V8 (#850) ---
+    // This block previously declared GPIO8/GPIO9 here, carried over verbatim
+    // from the V9 close-out (its own header said "V9 close-out: TPS22811
+    // U26/U28"). But the TPS22811 high-side switches are a V9 change: V9
+    // replaced V8's LOW-SIDE MOSFETs with them, and only U26 (camera) and U28
+    // (servo) are TPS22811 parts with an IMON pin at all — see the corrected
+    // note in flight_computer board_v9.h (#837 item 2).
+    //
+    // Leaving them non-negative made a V8 build read two ADC pins that have no
+    // monitor driving them and report the result as amps. Set to -1 so
+    // readRailCurrents() skips the channel and POWERData reports 0.
+    //
+    // NOT VERIFIED against V8 artwork, which lives outside this repo — this is
+    // the safe direction, not a measurement. If a V8 board is ever confirmed to
+    // carry the monitors, restore the pins and the V9 gain constants together.
+    static constexpr int   CAM_IMON_GPIO      = -1;
+    static constexpr int   SERVO_IMON_GPIO    = -1;
+    static constexpr float IMON_GAIN_A_PER_A  = 0.0f;
+    static constexpr float CAM_IMON_R_OHM     = 0.0f;
+    static constexpr float SERVO_IMON_R_OHM   = 0.0f;
 };

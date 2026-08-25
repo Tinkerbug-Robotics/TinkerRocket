@@ -419,3 +419,51 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(display(nil), "N/A")
     }
 }
+
+// MARK: - #850 rail currents (camera / servo high-side switches)
+
+extension TelemetryDataTests {
+
+    /// An absent key means the board has NO monitor fitted (V7/V8, mini, or
+    /// pre-#850 firmware). That is not the same fact as "measured 0.0 A", and
+    /// the difference is the whole point: a camera that is off and a camera
+    /// with no monitor both sit at zero, but only one of them is a reading.
+    func testRailCurrents_AbsentKeysDecodeAsNilNotZero() throws {
+        let json = #"{"soc": 85.0, "vol": 7.4, "cur": -450.0}"#
+        let t = try JSONDecoder().decode(TelemetryData.self, from: Data(json.utf8))
+
+        XCTAssertNil(t.cam_current)
+        XCTAssertNil(t.servo_current)
+        XCTAssertEqual(t.camCurrentDisplay, "—")
+        XCTAssertEqual(t.servoCurrentDisplay, "—")
+    }
+
+    func testRailCurrents_PresentKeysDecode() throws {
+        let json = #"{"soc": 85.0, "ccur": 1.48, "scur": 0.34}"#
+        let t = try JSONDecoder().decode(TelemetryData.self, from: Data(json.utf8))
+
+        XCTAssertEqual(t.cam_current ?? 0, 1.48, accuracy: 0.001)
+        XCTAssertEqual(t.servo_current ?? 0, 0.34, accuracy: 0.001)
+    }
+
+    /// A genuine measured zero is distinct from absent and must render as a
+    /// number, not an em dash.
+    func testRailCurrents_MeasuredZeroIsNotAbsent() throws {
+        let json = #"{"ccur": 0.0}"#
+        let t = try JSONDecoder().decode(TelemetryData.self, from: Data(json.utf8))
+
+        XCTAssertNotNil(t.cam_current)
+        XCTAssertEqual(t.camCurrentDisplay, "0 mA")
+        XCTAssertNil(t.servo_current)
+        XCTAssertEqual(t.servoCurrentDisplay, "—")
+    }
+
+    /// Amps at and above 1 A, milliamps below — matching the Android twin.
+    func testRailCurrents_DisplayCrossesOverAtOneAmp() {
+        XCTAssertEqual(TelemetryData.railAmpsDisplay(1.48), "1.48 A")
+        XCTAssertEqual(TelemetryData.railAmpsDisplay(1.0), "1.00 A")
+        XCTAssertEqual(TelemetryData.railAmpsDisplay(0.999), "999 mA")
+        XCTAssertEqual(TelemetryData.railAmpsDisplay(0.34), "340 mA")
+        XCTAssertEqual(TelemetryData.railAmpsDisplay(nil), "—")
+    }
+}

@@ -683,4 +683,48 @@ class TelemetryDataTest {
         // Absent on a direct rocket link, where the row is not rendered at all.
         assertEquals("\u2014", TelemetryData(bsSoc = null).bsSocDisplay)
     }
+
+    // ---- #850: rail currents (camera / servo high-side switches) ----
+
+    /**
+     * An absent key means the board has NO monitor fitted (V7/V8, mini, or
+     * pre-#850 firmware). That is a different fact from "measured 0.0 A", and
+     * the distinction is the point: a camera that is off and a camera with no
+     * monitor both sit at zero, but only one of them is a reading.
+     */
+    @Test
+    fun railCurrents_absentKeysDecodeAsNullNotZero() {
+        val t = decodeOk("""{"soc":85.0,"vol":7.4,"cur":-450.0}""")
+        assertNull(t.camCurrent)
+        assertNull(t.servoCurrent)
+        assertEquals("\u2014", railAmpsDisplay(t.camCurrent))
+        assertEquals("\u2014", railAmpsDisplay(t.servoCurrent))
+    }
+
+    @Test
+    fun railCurrents_presentKeysDecode() {
+        val t = decodeOk("""{"soc":85.0,"ccur":1.48,"scur":0.34}""")
+        assertEquals(1.48f, t.camCurrent!!, 0.001f)
+        assertEquals(0.34f, t.servoCurrent!!, 0.001f)
+    }
+
+    /** A genuine measured zero must render as a number, not an em dash. */
+    @Test
+    fun railCurrents_measuredZeroIsNotAbsent() {
+        val t = decodeOk("""{"ccur":0.0}""")
+        assertNotNull(t.camCurrent)
+        assertEquals("0 mA", railAmpsDisplay(t.camCurrent))
+        assertNull(t.servoCurrent)
+        assertEquals("\u2014", railAmpsDisplay(t.servoCurrent))
+    }
+
+    /** Amps at and above 1 A, milliamps below — matching the iOS twin. */
+    @Test
+    fun railCurrents_displayCrossesOverAtOneAmp() {
+        assertEquals("1.48 A", railAmpsDisplay(1.48f))
+        assertEquals("1.00 A", railAmpsDisplay(1.0f))
+        assertEquals("999 mA", railAmpsDisplay(0.999f))
+        assertEquals("340 mA", railAmpsDisplay(0.34f))
+        assertEquals("\u2014", railAmpsDisplay(null))
+    }
 }

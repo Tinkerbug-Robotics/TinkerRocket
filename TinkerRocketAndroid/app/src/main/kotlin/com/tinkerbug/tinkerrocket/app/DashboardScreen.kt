@@ -48,6 +48,7 @@ import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
 import com.tinkerbug.tinkerrocket.protocol.SignalQuality
 import com.tinkerbug.tinkerrocket.protocol.pyroContinuityOf
+import com.tinkerbug.tinkerrocket.protocol.railAmpsDisplay   // #850
 import com.tinkerbug.tinkerrocket.protocol.showStateBanner
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.session.FleetDevice
@@ -1555,6 +1556,30 @@ private fun BatteryCard(telemetry: TelemetryData, isBaseStation: Boolean) {
                     telemetry.bsVoltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
                     telemetry.bsCurrent?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
                 )
+            }
+
+            // #850: camera / servo high-side-switch load currents.
+            //
+            // Rendered ONLY when the board actually reports them. A V7/V8
+            // rocket, the mini, or any pre-#850 firmware omits both keys, and
+            // an absent key means "no monitor fitted" — which must not appear
+            // as 0.00 A next to a live battery reading. Showing nothing is the
+            // honest render; showing zero would claim a measurement.
+            if (telemetry.camCurrent != null || telemetry.servoCurrent != null) {
+                Row(Modifier.fillMaxWidth()) {
+                    Text("Rail", style = caption, modifier = Modifier.width(70.dp))
+                    listOf(
+                        "Cam " + railAmpsDisplay(telemetry.camCurrent),
+                        "Servo " + railAmpsDisplay(telemetry.servoCurrent),
+                        "",
+                    ).forEach {
+                        Text(
+                            it, style = caption.copy(fontFamily = mono),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
             }
         }
     }

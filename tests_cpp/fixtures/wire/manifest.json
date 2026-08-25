@@ -23,9 +23,13 @@
  "size": 10,
  "notes": "IIS2MDCData, msg 0xD1"},
  {
+ "file": "logframes/power_14.bin",
+ "size": 14,
+ "notes": "POWERData v2 (+cam_ma +servo_ma), msg 0xA6"},
+ {
  "file": "logframes/power_10.bin",
  "size": 10,
- "notes": "POWERData, msg 0xA6"},
+ "notes": "POWERData v1 (pre-#850); absent rail currents decode as absent, not 0"},
  {
  "file": "logframes/nonsensor_43.bin",
  "size": 43,
@@ -80,15 +84,15 @@
  "notes": "FlightSettingsData version-ladder truncation of the v6 image"},
  {
  "file": "framed/stream_good.bin",
- "size": 445,
+ "size": 449,
  "notes": "8 valid frames: [AA 55 AA 55][type][len][payload][CRC16 poly 0x8001 init 0, BE on wire]"},
  {
  "file": "framed/stream_badcrc_resync.bin",
- "size": 98,
+ "size": 102,
  "notes": "middle frame's CRC LSB flipped: skip + resync, do not abort"},
  {
  "file": "framed/stream_badlen_overshoot.bin",
- "size": 116,
+ "size": 120,
  "notes": "inflated len byte: whole-frame-skip resync overshoots the next frame (iOS-accepted behavior); advance-by-one would recover it — must not"},
  {
  "file": "framed/stream_truncated_tail.bin",
@@ -224,7 +228,7 @@
  "notes": "OTA_BEGIN; cmds 70-72 dispatch inside TR_BLE_To_APP.cpp, not main.cpp"},
  {
  "file": "csv/tiny_flight.bin",
- "size": 29141,
+ "size": 29285,
  "notes": "synthetic mini-device flight for the bin→CSV golden; app-generated CSV/summary goldens live in tests_cpp/fixtures/csv_golden/ (outside wire/ — they are app output, not emitter output)"}
  ]
 }

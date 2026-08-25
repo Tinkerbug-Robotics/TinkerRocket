@@ -169,12 +169,31 @@ int16_t SensorConverter::encodeSOC(float soc_pct)
     return (int16_t)lroundf((soc_pct + 25.0f) * (32767.0f / 150.0f));
 }
 
+// #850: high-side-switch load current, amps -> milliamps on the wire.
+// NaN means "no monitor fitted or the read failed" and encodes as 0. Negative
+// is nonphysical (the IMON is a current source) and means noise around zero,
+// so it clamps to 0 rather than wrapping to 65 A. Over-range saturates at the
+// ceiling so a fault always reads HIGH, never as a small number.
+uint16_t SensorConverter::encodeRailMilliamps(float amps)
+{
+    if (!(amps == amps)) return 0U;          // NaN
+    if (amps <= 0.0f)    return 0U;
+    const float ma = amps * 1000.0f;
+    if (ma >= 65535.0f) return 65535U;
+    return (uint16_t)lroundf(ma);
+}
+
 void SensorConverter::convertPowerData(const POWERData& in, POWERDataSI& out)
 {
     out.time_us = in.time_us;
     out.voltage = decodeVoltageFromInt(in.voltage_raw);
     out.current = decodeCurrentFromInt(in.current_raw);
     out.soc     = decodeSOCFromInt(in.soc_raw);
+    // #850: straight mA on the wire, amps here. A board with no monitor sends
+    // 0 and reads back 0.0 A — truthful, since its rails carry no measurement
+    // rather than an unknown one.
+    out.cam_current   = (float)in.cam_ma * 0.001f;
+    out.servo_current = (float)in.servo_ma * 0.001f;
 }
 
 void SensorConverter::packPowerData(const POWERDataSI& in, POWERData& out)
@@ -183,6 +202,12 @@ void SensorConverter::packPowerData(const POWERDataSI& in, POWERData& out)
     out.voltage_raw = encodeVoltage(in.voltage);
     out.current_raw = encodeCurrent(in.current);
     out.soc_raw     = encodeSOC(in.soc);
+    // #850: NaN (no monitor fitted / read failed) encodes as 0, and negatives
+    // clamp to 0 — the IMON is a source, so a negative reading is nonphysical
+    // and means noise around zero. Saturate at the uint16 ceiling rather than
+    // wrapping, so an over-range fault reads as "very high", never as "low".
+    out.cam_ma   = encodeRailMilliamps(in.cam_current);
+    out.servo_ma = encodeRailMilliamps(in.servo_current);
 }
 
 // --- BMP585 ---

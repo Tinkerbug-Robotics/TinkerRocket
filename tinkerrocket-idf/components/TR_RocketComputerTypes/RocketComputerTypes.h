@@ -915,6 +915,10 @@ typedef struct
 } GNSSDataSI;
 
 // --- Power Data ---
+// GROWS BY APPENDING. Readers must dispatch on the payload length, not assume
+// the current size — see MSG_EXPECTED_LEN in Data_Analysis/plot_flight_data*.py,
+// whose tuple form exists for exactly this ("wire structs grow by appending
+// version-gated fields"). v1 logs are 10 B and stay readable forever.
 typedef struct __attribute__((packed))
 {
     uint32_t time_us;
@@ -922,16 +926,41 @@ typedef struct __attribute__((packed))
     int16_t  current_raw; // (mA / 10000.0) * 32767   → -10000..+10000 mA
     int16_t  soc_raw;     // (soc + 25) * (32767/150) → -25..+125 %
 
+    // --- v2 (#850): high-side-switch load currents, milliamps, OC-measured ---
+    // Straight mA, NOT a scaled raw — one encoding shared by both channels so
+    // firmware, iOS and Android cannot drift apart on a per-channel scale
+    // factor. uint16 spans 0-65.5 A; the real ceiling is the ADC front end
+    // (~5 A camera, ~10 A servo at ADC_ATTEN_DB_0), both ~3.3x design current.
+    //
+    // ACCURACY: the TPS22811 GIMON is 95.3 uA/A typical but 82.9-107.6 over
+    // temperature, so absolute readings carry about +/-13% (+/-194 mA at the
+    // camera's 1.5 A design point, +/-387 mA at the servo's 3 A) until the
+    // board is calibrated against a known load. That error is a stable GAIN
+    // term, not noise — relative movement is faithful, which is what spotting
+    // a stalled servo actually needs. Resolution floor is the ADC, 1.22 mA
+    // (camera, R85 = 2k) and 2.43 mA (servo, R88 = 1k).
+    //
+    // 0 on any board without the monitors fitted: V7/V8 rocket-computers and
+    // the mini, whose board headers set CAM_IMON_GPIO / SERVO_IMON_GPIO to -1.
+    uint16_t cam_ma;
+    uint16_t servo_ma;
+
 } POWERData;
 
-static_assert(sizeof(POWERData) == 10, "POWERData must be 10 bytes");
+static_assert(sizeof(POWERData) == 14,
+              "POWERData must be 14 bytes (v2, #850: +cam_ma +servo_ma)");
 
-typedef struct 
+// Payload length of the pre-#850 frame. Kept so decoders can accept both.
+static constexpr size_t SIZE_OF_POWER_DATA_V1 = 10;
+
+typedef struct
 {
     uint32_t time_us;
     float voltage;
     float current;
     float soc;
+    float cam_current;    // A; NaN when the board has no monitor (#850)
+    float servo_current;  // A; NaN when the board has no monitor (#850)
 } POWERDataSI;
 
 // --- BMP585 Pressure and Temperature Data ---
