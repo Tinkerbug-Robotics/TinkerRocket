@@ -88,14 +88,19 @@ def _belongs_to(path, flight, own_peak_m) -> bool:
     if own_peak_m is None:
         return True
     try:
-        import pandas as pd
-        df = pd.read_csv(path, usecols=["pressure_alt"])
+        # #850: read through bs_log, NOT pd.read_csv. Base-station logs are
+        # binary now, and read_csv on a .bin throws — which landed in the
+        # `except` below and returned True, i.e. "don't judge". That silently
+        # turned this guard off for every binary log and reinstated the exact
+        # defect the docstring above describes: every flight in a directory
+        # shown another flight's radio link, with nothing indicating it.
+        rows, _events, _fmt = _bs_log().read_bs_log(path)
     except Exception:
         return True                      # unreadable or older format: don't judge
-    heard = df["pressure_alt"].to_numpy(dtype=float)
-    if not heard.size:
+    heard = [float(r["pressure_alt"]) for r in rows if r.get("pressure_alt") is not None]
+    if not heard:
         return True
-    heard_peak = float(heard.max())
+    heard_peak = max(heard)
     tolerance = max(_ALTITUDE_MATCH_FLOOR_M, _ALTITUDE_MATCH_FRACTION * own_peak_m)
     return abs(heard_peak - own_peak_m) <= tolerance
 

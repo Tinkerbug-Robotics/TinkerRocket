@@ -23,6 +23,11 @@ REPO = DATA_ANALYSIS.parent
 # Top-level modules imported by flight_report/ via sys.path manipulation.
 TOP_LEVEL_MODULES = [
     "plot_flight_data_mini.py",
+    # #850: flight_report/modules/lora_link.py imports this to read a
+    # base-station log in either format. Without it in the bundle the import
+    # fails inside Pyodide, the per-file except swallows it, and the Radio Link
+    # section silently reports no data on the hosted tool while working locally.
+    "bs_log.py",
     "analyze_gaps.py",
     "replay_kinematic_checks.py",
     "sim_kinematic_checks.py",
@@ -38,7 +43,8 @@ SAMPLE_SOURCES = [
     Path.home() / "Documents/Hobbies/ModelRockets/TestFlights/2026_07_05 CENJARS/Rolly Polly 54mm",
     REPO / "examples" / "flights",
 ]
-SAMPLE_PATTERNS = [SAMPLE_STEM + ".bin", SAMPLE_STEM + ".json", "lora_*.csv"]
+SAMPLE_PATTERNS = [SAMPLE_STEM + ".bin", SAMPLE_STEM + ".json",
+                   "lora_*.bin", "lora_*.csv"]
 
 
 def main() -> None:

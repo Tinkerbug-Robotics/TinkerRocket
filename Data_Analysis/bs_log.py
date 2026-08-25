@@ -223,6 +223,25 @@ def read_bs_bin(path):
         row['gap'] = -1 if prev is None else ((row['seq'] - prev - 1) & 0xFFFF)
         last_seq[rid] = row['seq']
 
+        # Derive the fields every consumer would otherwise recompute, so a row
+        # from the reader is the same complete record the CSV carries. Tools
+        # outside the app read the BINARY, not the rendered CSV, so anything the
+        # CSV has must be reachable here or those tools quietly see nothing —
+        # analyze_bs_gnss reported 100% "blanked position" for exactly that
+        # reason, because it looked for `lat` and the rows only had ECEF.
+        lat = lon = alt = float('nan')
+        if row.get('num_sats', 0) > 0 and any(
+                row.get(k, 0.0) for k in ('ecef_x', 'ecef_y', 'ecef_z')):
+            lat, lon, alt = ecef_to_geodetic(row['ecef_x'], row['ecef_y'], row['ecef_z'])
+        row['lat'], row['lon'], row['alt_m'] = lat, lon, alt
+
+        if any(k in row for k in ('q0', 'q1', 'q2', 'q3')):
+            row['roll'], row['pitch'], row['yaw'] = euler_from_quat(
+                row.get('q0', 0.0), row.get('q1', 0.0),
+                row.get('q2', 0.0), row.get('q3', 0.0))
+        else:
+            row['roll'] = row['pitch'] = row['yaw'] = 0.0
+
         accum[rid] = row
         rows.append(row)
 
@@ -369,17 +388,14 @@ def rows_to_csv(rows, events=()):
             continue
 
         r = rec
-        # lat/lon only where the rocket claims a fix — nonzero ECEF with
-        # num_sats == 0 is a stale register read (#95) and would render a
-        # valid-looking position for an invalid fix.
-        lat = lon = alt = float('nan')
-        if r.get('num_sats', 0) > 0 and any(r.get(k, 0.0) for k in ('ecef_x', 'ecef_y', 'ecef_z')):
-            lat, lon, alt = ecef_to_geodetic(r['ecef_x'], r['ecef_y'], r['ecef_z'])
-
-        roll = pitch = yaw = 0.0
-        if any(k in r for k in ('q0', 'q1', 'q2', 'q3')):
-            roll, pitch, yaw = euler_from_quat(r.get('q0', 0.0), r.get('q1', 0.0),
-                                               r.get('q2', 0.0), r.get('q3', 0.0))
+        # Derived by the reader (lat/lon only where the rocket claims a fix —
+        # nonzero ECEF with num_sats == 0 is a stale register read, #95).
+        lat = r.get('lat', float('nan'))
+        lon = r.get('lon', float('nan'))
+        alt = r.get('alt_m', float('nan'))
+        roll = r.get('roll', 0.0)
+        pitch = r.get('pitch', 0.0)
+        yaw = r.get('yaw', 0.0)
 
         out.append(','.join([
             str(int(r.get('time_ms', 0))),
