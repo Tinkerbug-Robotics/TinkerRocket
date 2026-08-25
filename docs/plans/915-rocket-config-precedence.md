@@ -154,11 +154,45 @@ An asymmetric rocket-side fin cal collapses to its span, because #449 made the
 profile store one travel number. That is a limitation of the profile model, not
 of the readback.
 
+## Bench validation (V9 board, 2026-08-25)
+
+OC `9c:13:9e:28:ab:5c` + FC `80:f1:b2:d0:94:a7`, both on this branch, with a
+freshly installed app.
+
+**Orientation survives an FC-only reflash — confirmed.** The FC comes up
+
+    I (194)  FC: IMU orientation setting: +X (from NVS)
+    I (6027) FC: Board→rocket orientation: +X (code 0, mode 1, residual 0.00°)
+
+One line, mode 1 (MANUAL), straight from its own NVS. The issue's log showed
+mode 0 (DEFAULT) at boot and only reached mode 1 seconds later when something
+else pushed it.
+
+**The report reaches the app — confirmed.** The FC logs
+
+    [CFG] Config report sent: orient=+X(nvs) sounds=off bias=[-125,-60,20,-55]
+          fin=[0,90,180,270] rev=0x0/0x0 guid=on wp=0
+
+and a phone with NO saved profiles came away showing exactly those four trims.
+Trims 2-4 can only come from `config_servo`; trim 1 rides `sb1` in the main
+`config` frame — so the whole burst landed, which also clears the queue-depth
+change (at the old cap of 8 the ninth enqueue would have evicted `config` and
+servo 1 would have read 0).
+
+**Not tested: the OC-only-reflash case.** The provenance bit only does
+observable work when the two boards' orientation records DISAGREE, and today
+both hold +X. Arranging a genuine divergence means erasing one board's NVS,
+which the bench rule forbids (it holds cal and LoRa config). The logic is
+covered by construction and by the FC's `(from NVS)` / `(board default)` line,
+but it has not been exercised against a real disagreement.
+
+**Expected bench noise:** `[ORIENT] pad gravity 93.9° off nose with MANUAL
+orientation +X` — the board is lying flat, so gravity is perpendicular to the
+nose axis and MANUAL means the FC will not auto-correct. Correct behaviour,
+and the warning that would matter on a pad.
+
 ## Still open
 
-- **Bench validation.** Nothing here has run on hardware. The interesting cases
-  are: a manual orientation surviving an FC-only reflash; an OC-only reflash not
-  overwriting it; and the connect burst arriving intact now that it is nine
-  frames.
+- The OC-only-reflash divergence case above.
 - Two free message codes left in the OC↔FC space. The next one needs an
   escape/extended encoding, not a thirteenth constant.
