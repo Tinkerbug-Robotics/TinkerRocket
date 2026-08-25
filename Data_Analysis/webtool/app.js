@@ -302,10 +302,17 @@ function updateControls() {
 
 function runFiles(fileEntries, rocketName) {
   if (running) return;
-  const bins = fileEntries.filter((f) => f.name.toLowerCase().endsWith(".bin"));
+  // #850: base-station logs are BINARY now (lora_*.bin), so ".bin" alone no
+  // longer identifies the rocket flight. Counting both kinds made dropping a
+  // flight together with its base-station log fail as "two flights" — the exact
+  // combination the fuller report wants.
+  const isBaseStationLog = (name) => /^lora_/i.test(name);
+  const bins = fileEntries.filter(
+    (f) => f.name.toLowerCase().endsWith(".bin") && !isBaseStationLog(f.name)
+  );
   if (bins.length === 0) {
     showError(
-      "Select at least the .bin flight log (add the matching .json/.csv and any lora_*.csv for a fuller report)."
+      "Select at least the .bin flight log (add the matching .json/.csv and any lora_* log for a fuller report)."
     );
     return;
   }
