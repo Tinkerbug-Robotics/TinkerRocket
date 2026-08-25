@@ -359,6 +359,9 @@ static bool b2r_setting_from_nvs = false;
 // with the orientation code above it — is one of the setters.
 static volatile bool config_report_dirty = true;   // true: send one at boot
 static uint32_t      config_report_last_ms = 0;
+// Log the NEXT send only.  Set alongside config_report_dirty so boot and every
+// real change are visible, while the 5 s keep-alive repeat stays quiet.
+static volatile bool log_next_report_send = true;
 
 // Pad-gravity auto-detect (runs READY/PRELAUNCH, latched at launch) and
 // the boost-phase thrust-axis cross-check on the latched orientation.
@@ -1723,7 +1726,7 @@ static void persistOrientSetting(uint8_t setting)
     if (b2r_setting == setting && b2r_setting_from_nvs) return;
     b2r_setting = setting;
     b2r_setting_from_nvs = true;
-    config_report_dirty = true;   // #915: the report carries the SETTING
+    config_report_dirty = true; log_next_report_send = true;   // #915: the report carries the SETTING
     prefs.begin("orient", false);
     prefs.putUChar("set", setting);
     prefs.end();
@@ -2056,6 +2059,26 @@ static void sendConfigReport()
                        sizeof(r));
     config_report_last_ms = millis();
     config_report_dirty = false;
+    // Rate-limited to changes only: the 5 s repeat would otherwise scroll the
+    // console forever, but a SILENT sender is indistinguishable from a lost
+    // link when the OC says it has no report.
+    if (log_next_report_send)
+    {
+        log_next_report_send = false;
+        ESP_LOGI(TAG, "[CFG] Config report sent: orient=%s(%s) sounds=%s "
+                      "bias=[%d,%d,%d,%d] fin=[%.0f,%.0f,%.0f,%.0f] rev=0x%X/0x%X "
+                      "guid=%s wp=%u",
+                 b2r_setting == IMU_ORIENT_AUTO ? "AUTO" : orientCodeName(b2r_setting),
+                 b2r_setting_from_nvs ? "nvs" : "dflt",
+                 enable_sounds ? "on" : "off",
+                 (int)r.servo.bias_us[0], (int)r.servo.bias_us[1],
+                 (int)r.servo.bias_us[2], (int)r.servo.bias_us[3],
+                 (double)r.fin.azimuth_deg[0], (double)r.fin.azimuth_deg[1],
+                 (double)r.fin.azimuth_deg[2], (double)r.fin.azimuth_deg[3],
+                 (unsigned)r.fin.reverse_mask, (unsigned)r.fin.roll_reverse_mask,
+                 r.guidance.enable ? "on" : "off",
+                 (unsigned)r.roll.num_waypoints);
+    }
 }
 
 // Called from loop_fc.  Never during flight: the I2S budget belongs to
@@ -3423,8 +3446,13 @@ static void setup_fc()
         b2r_setting = config::BOARD_TO_ROCKET_ORIENT;
     }
     prefs.end();
-    ESP_LOGI(TAG, "NVS IMU orientation setting: %s",
-             b2r_setting == IMU_ORIENT_AUTO ? "AUTO" : orientCodeName(b2r_setting));
+    // Say WHERE it came from, not just what it is: "+X from a stored record"
+    // and "+X because nobody ever told this board" behave completely
+    // differently (the OC leaves the first alone and re-pushes over the
+    // second), and on the bench the two used to print the same line.
+    ESP_LOGI(TAG, "IMU orientation setting: %s (%s)",
+             b2r_setting == IMU_ORIENT_AUTO ? "AUTO" : orientCodeName(b2r_setting),
+             b2r_setting_from_nvs ? "from NVS" : "board default, no NVS record");
 
     // Load servo/PID NVS settings (namespace "servo")
     int16_t nvs_servo_hz  = config::SERVO_HZ;
@@ -5556,7 +5584,7 @@ static void loop_fc()
                 enable_sounds = true;
                 prefs.begin("rocket", false);  // read-write
                 prefs.putBool("sounds", true);
-                config_report_dirty = true;   // #915
+                config_report_dirty = true; log_next_report_send = true;   // #915
                 prefs.end();
                 ESP_LOGI(TAG, "Sounds ENABLED (saved to NVS)");
                 // Confirmation beep so the user knows it worked
@@ -5571,7 +5599,7 @@ static void loop_fc()
                 piezoStop();
                 prefs.begin("rocket", false);  // read-write
                 prefs.putBool("sounds", false);
-                config_report_dirty = true;   // #915
+                config_report_dirty = true; log_next_report_send = true;   // #915
                 prefs.end();
                 ESP_LOGI(TAG, "Sounds DISABLED (saved to NVS)");
             }
@@ -5642,7 +5670,7 @@ static void loop_fc()
                     prefs.putShort("max", cfg.max_us);
                     prefs.putFloat("fmin", cfg.fin_min_deg);
                     prefs.putFloat("fmax", cfg.fin_max_deg);
-                    config_report_dirty = true;   // #915: biases 2-4 + fin travel
+                    config_report_dirty = true; log_next_report_send = true;   // #915: biases 2-4 + fin travel
                     prefs.end();
                     ESP_LOGI(TAG, "[SERVO CFG] Saved to NVS");
                 }
@@ -6446,7 +6474,7 @@ static void loop_fc()
                 guidance_enabled = true;
                 prefs.begin("servo", false);
                 prefs.putBool("guid_en", true);
-                config_report_dirty = true;   // #915
+                config_report_dirty = true; log_next_report_send = true;   // #915
                 prefs.end();
                 ESP_LOGI(TAG, "[CFG] PN Guidance ENABLED");
             }
@@ -6460,7 +6488,7 @@ static void loop_fc()
                 roll_rate_pid_standalone.reset();
                 prefs.begin("servo", false);
                 prefs.putBool("guid_en", false);
-                config_report_dirty = true;   // #915
+                config_report_dirty = true; log_next_report_send = true;   // #915
                 prefs.end();
                 ESP_LOGI(TAG, "[CFG] PN Guidance DISABLED");
             }
@@ -6818,7 +6846,7 @@ static void loop_fc()
                     // Persist to NVS
                     prefs.begin("rollp", false);
                     prefs.putBytes("prof", &roll_profile, sizeof(RollProfileData));
-                    config_report_dirty = true;   // #915
+                    config_report_dirty = true; log_next_report_send = true;   // #915
                     prefs.end();
                     ESP_LOGI(TAG, "[ROLL PROF] Set %d waypoints (saved to NVS)",
                                   roll_profile.num_waypoints);
@@ -6841,7 +6869,7 @@ static void loop_fc()
                 prefs.begin("rollp", false);
                 prefs.remove("prof");
                 prefs.end();
-                config_report_dirty = true;   // #915
+                config_report_dirty = true; log_next_report_send = true;   // #915
                 ESP_LOGI(TAG, "[ROLL PROF] Cleared (rate-only mode, saved to NVS)");
             }
             else if (out_pending_command == ROLL_CTRL_CONFIG_PENDING)
@@ -7009,7 +7037,7 @@ static void loop_fc()
                     prefs.putFloat("gkp", pn_kp_pos);
                     prefs.putFloat("gkd", pn_kd_vel);
                     prefs.putUChar("glw", pn_guidance_law);
-                    config_report_dirty = true;   // #915
+                    config_report_dirty = true; log_next_report_send = true;   // #915
                     prefs.end();
                     ESP_LOGI(TAG, "[GUID CFG] Saved to NVS");
                 }
@@ -7138,7 +7166,7 @@ static void loop_fc()
                         prefs.putFloat("fa3", f.azimuth_deg[3]);
                         prefs.putUChar("frv",  f.reverse_mask);
                         prefs.putUChar("frrv", f.roll_reverse_mask);
-                        config_report_dirty = true;   // #915
+                        config_report_dirty = true; log_next_report_send = true;   // #915
                         prefs.end();
                         ESP_LOGI(TAG, "[FIN CFG] Saved to NVS");
                     } else {
