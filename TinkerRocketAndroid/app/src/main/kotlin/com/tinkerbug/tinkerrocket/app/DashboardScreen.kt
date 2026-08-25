@@ -310,6 +310,11 @@ fun DashboardScreen(
 
         SignalCard(telemetry, rssi, session.isBaseStation)
         BatteryCard(telemetry, session.isBaseStation)
+        // #850: rail currents belong with the live telemetry, not only on the
+        // pre-power-on screen — a stalling servo is watched WHILE it runs.
+        if (telemetry.camCurrent != null || telemetry.servoCurrent != null) {
+            RailPowerCard(telemetry)
+        }
         // Orientation source is picked strictly by link type (iOS
         // RocketTelemetryCards): BS = relayed flags2 "imo", direct = the
         // imu_orient config readback.  No cross-fallback on either platform.
@@ -1557,28 +1562,57 @@ private fun BatteryCard(telemetry: TelemetryData, isBaseStation: Boolean) {
                     telemetry.bsCurrent?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
                 )
             }
+        }
+    }
+}
 
-            // #850: camera / servo high-side-switch load currents.
-            //
-            // Rendered ONLY when the board actually reports them. A V7/V8
-            // rocket, the mini, or any pre-#850 firmware omits both keys, and
-            // an absent key means "no monitor fitted" — which must not appear
-            // as 0.00 A next to a live battery reading. Showing nothing is the
-            // honest render; showing zero would claim a measurement.
-            if (telemetry.camCurrent != null || telemetry.servoCurrent != null) {
-                Row(Modifier.fillMaxWidth()) {
-                    Text("Rail", style = caption, modifier = Modifier.width(70.dp))
-                    listOf(
-                        "Cam " + railAmpsDisplay(telemetry.camCurrent),
-                        "Servo " + railAmpsDisplay(telemetry.servoCurrent),
-                        "",
-                    ).forEach {
-                        Text(
-                            it, style = caption.copy(fontFamily = mono),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
+/**
+ * #850: camera / servo high-side-switch load currents.
+ *
+ * Its own card rather than a sub-row of Battery: these are LOAD rails, not the
+ * pack, and the operator reads them for a different question — is the camera
+ * actually drawing, is a servo stalling. Burying them under the battery rows
+ * put them below the fold on the live rocket screen, which is where they matter.
+ *
+ * Rendered ONLY when the board reports them. A V7/V8 rocket, the mini, or any
+ * pre-#850 firmware omits both JSON keys, and an absent key means "no monitor
+ * fitted" — which must not appear as 0.00 A.
+ *
+ * One caveat the UI cannot fix: over a BASE-STATION relay the LoRa slow frame
+ * cannot encode "absent", so a monitor-less rocket relays a literal 0 and this
+ * shows 0.00 A. On a direct link the two stay distinct.
+ *
+ * iOS twin: DashboardView.swift RailPowerView.
+ */
+@Composable
+private fun RailPowerCard(telemetry: TelemetryData) {
+    val caption = MaterialTheme.typography.bodySmall
+    val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Rail Current", style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.fillMaxWidth()) {
+                Text("", modifier = Modifier.width(70.dp))
+                listOf("Camera", "Servo").forEach {
+                    Text(
+                        it, style = caption,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Row(Modifier.fillMaxWidth()) {
+                Text("Load", style = caption, modifier = Modifier.width(70.dp))
+                listOf(
+                    railAmpsDisplay(telemetry.camCurrent),
+                    railAmpsDisplay(telemetry.servoCurrent),
+                ).forEach {
+                    Text(
+                        it, style = caption.copy(fontFamily = mono),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
         }

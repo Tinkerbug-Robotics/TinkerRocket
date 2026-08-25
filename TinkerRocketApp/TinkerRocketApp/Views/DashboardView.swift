@@ -650,6 +650,10 @@ struct ConnectedDashboardView: View {
             //     battery + power on button ---
             BatteryView(telemetry: device.telemetry, isBaseStation: false)
 
+            if device.telemetry.cam_current != nil || device.telemetry.servo_current != nil {
+                RailPowerView(telemetry: device.telemetry)
+            }
+
             Button {
                 device.beginPowerOn()
             } label: {
@@ -930,6 +934,14 @@ struct RocketTelemetryCards: View {
                     // ambiguous, and splitting battery info across two places
                     // wasn't worth a shorter card.
                     BatteryView(telemetry: telemetry, isBaseStation: isBaseStation)
+                        .opacity(staleOpacity)
+                }
+
+                // #850: rail currents sit with the rest of the live telemetry,
+                // not only on the pre-power-on screen — a stalling servo is a
+                // thing you watch WHILE it is running.
+                if telemetry.cam_current != nil || telemetry.servo_current != nil {
+                    RailPowerView(telemetry: telemetry)
                         .opacity(staleOpacity)
                 }
 
@@ -1540,29 +1552,63 @@ struct BatteryView: View {
                            voltage: telemetry.bsVoltageDisplay,
                            current: telemetry.bsCurrentDisplay)
             }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemGray6))
+        .cornerRadius(10)
+    }
+}
 
-            // #850: camera / servo high-side-switch load currents.
-            //
-            // Rendered ONLY when the board actually reports them. A V7/V8
-            // rocket, the mini, or any pre-#850 firmware omits both keys, and
-            // an absent key means "no monitor fitted" — which must not appear
-            // as 0.00 A beside a live battery reading. Showing nothing is the
-            // honest render; showing zero would claim a measurement we do not
-            // have. Android twin: DashboardScreen.kt BatteryCard.
-            if telemetry.cam_current != nil || telemetry.servo_current != nil {
-                HStack(spacing: 0) {
-                    Text("Rail")
-                        .font(.caption)
-                        .frame(width: 70, alignment: .leading)
-                    Text("Cam \(telemetry.camCurrentDisplay)")
-                        .font(.caption.monospaced())
-                        .frame(maxWidth: .infinity)
-                    Text("Servo \(telemetry.servoCurrentDisplay)")
-                        .font(.caption.monospaced())
-                        .frame(maxWidth: .infinity)
-                    Text("")
-                        .frame(maxWidth: .infinity)
-                }
+/// #850: camera / servo high-side-switch load currents.
+///
+/// Its own card rather than a sub-row of Battery: these are LOAD rails, not the
+/// pack, and the operator reads them for a different question — is the camera
+/// actually drawing, is a servo stalling. Burying them under the battery rows
+/// put them below the fold on the live rocket screen, which is where they
+/// matter most.
+///
+/// Rendered ONLY when the board actually reports them. A V7/V8 rocket, the mini,
+/// or any pre-#850 firmware omits both JSON keys, and an absent key means "no
+/// monitor fitted" — which must not appear as 0.00 A. Showing nothing is the
+/// honest render; showing zero would claim a measurement we do not have.
+///
+/// One caveat the UI cannot fix: over a BASE-STATION relay the LoRa slow frame
+/// has no way to encode "absent", so a monitor-less rocket relays a literal 0
+/// and this card shows 0.00 A for it. On a direct link the two stay distinct.
+///
+/// Android twin: DashboardScreen.kt RailPowerCard.
+struct RailPowerView: View {
+    let telemetry: TelemetryData
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Rail Current")
+                .font(.headline)
+
+            HStack(spacing: 0) {
+                Text("")
+                    .frame(width: 70, alignment: .leading)
+                Text("Camera")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                Text("Servo")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+            }
+
+            HStack(spacing: 0) {
+                Text("Load")
+                    .font(.caption)
+                    .frame(width: 70, alignment: .leading)
+                Text(telemetry.camCurrentDisplay)
+                    .font(.caption.monospaced())
+                    .frame(maxWidth: .infinity)
+                Text(telemetry.servoCurrentDisplay)
+                    .font(.caption.monospaced())
+                    .frame(maxWidth: .infinity)
             }
         }
         .padding()

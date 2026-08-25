@@ -153,6 +153,27 @@ struct FileManagerView: View {
                     .padding(.bottom, 8)
                 }
 
+                // A CSV that could not be generated must SAY so. The bytes are
+                // cached either way, so the data is safe — but silence here
+                // reads as success, and the file then simply never appears in
+                // Saved Files (which lists the CSV cache, not the .bin cache).
+                if let csvError = device.csvGenerationError {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(csvError)
+                                .font(.caption)
+                            Text("The .bin was saved — only the CSV step failed.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                }
+
                 // File list
                 if displayedFiles.isEmpty {
                     VStack(spacing: 10) {
