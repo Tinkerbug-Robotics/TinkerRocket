@@ -1747,6 +1747,17 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     func getDownloadState(for filename: String) -> DownloadState {
         if isBaseStation {
+            // #850: for a BINARY log, "downloaded" means the rendered .csv is
+            // present — NOT the raw .bin. Those are different facts, and the
+            // difference bit us: an app build predating base-station log
+            // support copied lora_*.bin straight into the CSV cache, which made
+            // this probe report .completed (disabling re-download) for a file
+            // that had never been converted and so never appeared in the list.
+            // Requiring the .csv makes a half-done download retryable.
+            if filename.hasSuffix(".bin") {
+                return FileCache.shared.isDirectCSVCached(String(filename.dropLast(4)) + ".csv")
+                    ? .completed : .notDownloaded
+            }
             if FileCache.shared.isDirectCSVCached(filename) { return .completed }
         } else if let deviceFile = files.first(where: { $0.name == filename }) {
             // #832: this comparison was a fast path only — on a size MISMATCH
@@ -1777,10 +1788,44 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     return
                 }
                 do {
-                    let _ = try FileCache.shared.cacheDirectCSV(at: fileURL, filename: filename)
+                    // #850: base-station logs used to BE CSVs, so this path
+                    // copied the download straight into the CSV cache under its
+                    // own name. They are binary now, and a `lora_*.bin` sitting
+                    // in the CSV cache is invisible to listCachedFlights (which
+                    // requires a .csv suffix) — the download reported success
+                    // and the file then simply did not exist anywhere the UI
+                    // looks. Detect the TRBSLOG magic and render the CSV here.
+                    //
+                    // Dispatch on the MAGIC, not the extension: a legacy .csv
+                    // still takes the direct-copy path, and a renamed file is
+                    // still handled correctly.
+                    let bytes = [UInt8](try Data(contentsOf: fileURL))
+                    if BSLogCSVGenerator.isBaseStationLog(bytes) {
+                        let csv = try BSLogCSVGenerator.writeCSV(bytes)
+                        let csvName = filename.hasSuffix(".bin")
+                            ? String(filename.dropLast(4)) + ".csv"
+                            : filename + ".csv"
+                        let tempCSV = FileManager.default.temporaryDirectory
+                            .appendingPathComponent(csvName)
+                        try csv.write(to: tempCSV, atomically: true, encoding: .utf8)
+                        let _ = try FileCache.shared.cacheDirectCSV(at: tempCSV, filename: csvName)
+                        // Keep the raw log too: the CSV is a rendering, the
+                        // .bin is the evidence, and a converter bug must not
+                        // cost the flight.
+                        let _ = try? FileCache.shared.cacheDirectCSV(at: fileURL, filename: filename)
+                    } else {
+                        let _ = try FileCache.shared.cacheDirectCSV(at: fileURL, filename: filename)
+                    }
                     DispatchQueue.main.async { self.downloadStates[filename] = .completed; completion(true) }
                 } catch {
-                    DispatchQueue.main.async { self.downloadStates[filename] = .failed; completion(false) }
+                    print("[CSV] base-station log conversion FAILED for \(filename): "
+                          + "\(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        self.csvGenerationError =
+                            "CSV generation failed for \(filename): \(error.localizedDescription)"
+                        self.downloadStates[filename] = .failed
+                        completion(false)
+                    }
                 }
             }
             return
@@ -1826,7 +1871,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         DispatchQueue.main.async {
             for filename in filenames {
                 if self.isBaseStation {
-                    if FileCache.shared.isDirectCSVCached(filename) { self.downloadStates[filename] = .completed }
+                    // #850: same rule as getDownloadState — a binary log counts
+                    // as downloaded only once its .csv exists.
+                    let probe = filename.hasSuffix(".bin")
+                        ? String(filename.dropLast(4)) + ".csv" : filename
+                    if FileCache.shared.isDirectCSVCached(probe) {
+                        self.downloadStates[filename] = .completed
+                    }
                 } else {
                     if let deviceFile = self.files.first(where: { $0.name == filename }),
                        FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
