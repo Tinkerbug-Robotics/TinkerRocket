@@ -113,11 +113,15 @@ def _logging(recs, stats) -> Optional[dict[str, Any]]:
 
 
 def _radio(flight) -> Optional[dict[str, Any]]:
-    csvs = sorted(flight.bin_path.parent.glob("lora_*.csv"))
-    if not csvs:
+    # #850: ground-station logs are binary now; older ones are CSV. Globbing
+    # only .csv reported "no ground-station log" for every post-#850 flight —
+    # a missing check that looks exactly like a check that passed.
+    logs = sorted(list(flight.bin_path.parent.glob("lora_*.bin"))
+                  + list(flight.bin_path.parent.glob("lora_*.csv")))
+    if not logs:
         return None
-    return _verdict(OK, f"telemetry captured in {len(csvs)} ground-station log"
-                        f"{'s' if len(csvs) != 1 else ''}")
+    return _verdict(OK, f"telemetry captured in {len(logs)} ground-station log"
+                        f"{'s' if len(logs) != 1 else ''}")
 
 
 def analyze(flight: Flight) -> AnalysisResult:
