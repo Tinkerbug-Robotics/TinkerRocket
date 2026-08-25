@@ -139,7 +139,7 @@ static constexpr uint32_t NETID_DROP_REPORT_WINDOW_MS = 30000;
 static uint32_t lora_netid_last_drop_ms = 0;
 
 // #570: CRC-valid packets dropped because their length is neither a beacon
-// nor exactly SIZE_OF_LORA_DATA — the classic 65-vs-66 B mixed-flash trap
+// nor either telemetry frame size — the classic mixed-flash trap
 // (rocket and BS built from commits with different LoRaData sizes drops 100%
 // of telemetry while the app just shows "Searching"). Mirrors the #329
 // netid-drop pattern: lifetime count for logs, recency-windowed "szd"
@@ -639,7 +639,7 @@ static bool     lora_hop_disabled = true;
 // the same shared function.
 static inline uint8_t currentHopDwell()
 {
-    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_DATA, lora_cr);
+    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_BUDGET, lora_cr);
 }
 
 // ----------------------------------------------------------------------------
@@ -1430,7 +1430,7 @@ static void startLogging()
     int hdr_written = fprintf(log_file, "time_ms,state,num_sats,pdop,lat,lon,alt_m,h_acc,"
                       "acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,"
                       "pressure_alt,alt_rate,max_alt,max_speed,"
-                      "voltage,current,soc,roll,pitch,yaw,speed,"
+                      "voltage,current,soc,cam_a,servo_a,roll,pitch,yaw,speed,"
                       "launch,vel_apo,alt_apo,landed,rssi,snr,"
                       "next_ch,rx_freq_mhz,seq,gap,event,rocket_id\n");
     if (hdr_written <= 0)
@@ -1606,7 +1606,7 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
     int written = fprintf(log_file, "%lu,%s,%u,%.1f,%.7f,%.7f,%.1f,%.1f,"
                     "%.2f,%.2f,%.2f,%.1f,%.1f,%.1f,"
                     "%.1f,%.1f,%.1f,%.1f,"
-                    "%.2f,%.0f,%.1f,%.1f,%.1f,%.1f,%.1f,"
+                    "%.2f,%.0f,%.1f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,"
                     "%d,%d,%d,%d,%.0f,%.1f,"
                     "%u,%.3f,%u,%d,,%u\n",  // empty `event`, then rocket_id (#381)
                     (unsigned long)time_ms,
@@ -1620,6 +1620,10 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
                     (double)data.pressure_alt, (double)data.altitude_rate,
                     (double)data.max_alt, (double)data.max_speed,
                     (double)data.voltage, (double)data.current, (double)data.soc,
+                    // #850: rail currents, amps. They ride the SLOW frame, so on a
+                    // fast-frame row these are the last values received — which is
+                    // the forward-fill this CSV is built on, not a fresh reading.
+                    (double)data.cam_current, (double)data.servo_current,
                     (double)data.roll, (double)data.pitch, (double)data.yaw,
                     (double)data.speed,
                     data.launch_flag ? 1 : 0,
@@ -1664,7 +1668,7 @@ static void logHopEvent(const char* event_str, float rx_freq_mhz)
                     // tells you which freq the BS was sitting on at the moment.
                     "%lu,EVENT,,,,,,,,,,,,,"   // time_ms, state, num_sats..gyro_z (14 cols)
                     ",,,,"                    // pressure_alt, alt_rate, max_alt, max_speed
-                    ",,,,,,,"                 // voltage..speed (7)
+                    ",,,,,,,,,"               // voltage..speed (9, +cam_a +servo_a #850)
                     ",,,,,,"                  // launch, vel_apo, alt_apo, landed, rssi, snr
                     "%u,%.3f,,,"              // next_ch=255 sentinel, rx_freq_mhz, seq=, gap=
                     "%s,\n",                  // event, rocket_id empty (station-level row, #381)
@@ -2481,7 +2485,7 @@ static void serviceUplink()
     // margin.  The old flat 140 ms was sized for SF8's ~82 ms downlink and
     // under-reserved at higher SFs, sanctioning attempts that collided with
     // the head of the next downlink (see config.h UPLINK_RX_RESERVE_MARGIN_MS).
-    win.rx_reserve_ms = loraTimeOnAirMs(SIZE_OF_LORA_DATA, lora_sf, lora_bw_khz,
+    win.rx_reserve_ms = loraTimeOnAirMs(SIZE_OF_LORA_BUDGET, lora_sf, lora_bw_khz,
                                         lora_cr, LORA_TELEM_PREAMBLE_SYMS)
                         + config::UPLINK_RX_RESERVE_MARGIN_MS;
     win.link_stale_ms = config::UPLINK_LINK_STALE_MS;
@@ -4584,8 +4588,9 @@ static void loop_bs()
         // equal LORA_BEACON_SYNC (0xBE = nid 190) would otherwise parse as a
         // beacon and shadow 100% of telemetry. Inert today (boot forces
         // nid 0), so require the length to disambiguate: beacons are short,
-        // telemetry is exactly SIZE_OF_LORA_DATA.
-        if (rx_len >= 3 && rx_len != SIZE_OF_LORA_DATA && rx_buf[0] == LORA_BEACON_SYNC)
+        // telemetry is exactly SIZE_OF_LORA_FAST or SIZE_OF_LORA_SLOW.
+        if (rx_len >= 3 && rx_len != SIZE_OF_LORA_FAST && rx_len != SIZE_OF_LORA_SLOW
+            && rx_buf[0] == LORA_BEACON_SYNC)
         {
             uint8_t bcn_nid = rx_buf[1];
             uint8_t bcn_rid = rx_buf[2];
@@ -4606,16 +4611,61 @@ static void loop_bs()
                 }
             }
         }
-        // --- Telemetry packet: exactly SIZE_OF_LORA_DATA bytes ---
+        // --- Telemetry packet: FAST (55 B) or SLOW (22 B) ---
         // (#570: no literal here — a stale "(73)" outlived two frame diets.)
-        else if (rx_len == SIZE_OF_LORA_DATA)
+        else if (rx_len == SIZE_OF_LORA_FAST || rx_len == SIZE_OF_LORA_SLOW)
         {
-            // Decode the telemetry packet
-            LoRaDataSI decoded = {};
-            sensor_converter.unpackLoRa(rx_buf, decoded);
+            // #850: both frames open with the same 7-byte LoRaFrameHeader, so
+            // the routing fields and ver_type can be read before we know which
+            // frame this is. That is the whole point of the shared prefix.
+            LoRaFrameHeader hdr{};
+            memcpy(&hdr, rx_buf, sizeof(hdr));
+            const uint8_t frame_ver  = loraFrameVersion(hdr.ver_type);
+            const uint8_t frame_type = loraFrameType(hdr.ver_type);
 
+            // #837 item 14: the version is now CHECKED, not decorative. Before
+            // this it was never transmitted at all and `rx_len` was the only
+            // guard — which two frame sizes would have quietly defeated, since
+            // a stale build's 65 B frame is neither of ours but a future
+            // layout change at the same length would have been invisible.
+            // Type and length must agree. A frame claiming SLOW at 55 bytes is
+            // corrupt in a way the CRC did not catch, and decoding it would
+            // read 33 bytes past the struct.
+            const bool len_ok = (frame_type == LORA_FRAME_SLOW)
+                                    ? (rx_len == SIZE_OF_LORA_SLOW)
+                                    : (frame_type == LORA_FRAME_FAST && rx_len == SIZE_OF_LORA_FAST);
+
+            // Header only for now — enough for the network filter and the slot
+            // lookup below. The payload is merged into the per-rocket
+            // accumulator once we know which rocket it belongs to.
+            LoRaDataSI decoded = {};
+            sensor_converter.unpackLoRaHeader(hdr, decoded);
+
+            // Drop ladder, most-fundamental first: a frame we cannot parse,
+            // then one we can parse but is malformed, then one that parses
+            // fine but belongs to somebody else's network.
+            if (frame_ver != LORA_PROTO_VERSION)
+            {
+                lora_size_mismatch_drops++;
+                lora_size_last_drop_ms = millis();
+                if (lora_size_mismatch_drops == 1 || lora_size_mismatch_drops % 100 == 0)
+                {
+                    ESP_LOGW(TAG, "[RX] Drop: LoRa proto v%u != ours v%u (%lu dropped) "
+                                  "— rocket and base station flashed from different builds",
+                             (unsigned)frame_ver, (unsigned)LORA_PROTO_VERSION,
+                             (unsigned long)lora_size_mismatch_drops);
+                }
+            }
+            else if (!len_ok)
+            {
+                lora_size_mismatch_drops++;
+                lora_size_last_drop_ms = millis();
+                ESP_LOGW(TAG, "[RX] Drop: frame type %u with %u bytes (fast=%u slow=%u)",
+                         (unsigned)frame_type, (unsigned)rx_len,
+                         (unsigned)SIZE_OF_LORA_FAST, (unsigned)SIZE_OF_LORA_SLOW);
+            }
             // Filter by network_id
-            if (decoded.network_id != network_id)
+            else if (decoded.network_id != network_id)
             {
                 // Not our network — drop.  Previously fully silent (#329): if
                 // the rocket's nid drifts from the BS default (0, #136), every
@@ -4652,6 +4702,30 @@ static void loop_bs()
 
                 // Route to per-rocket tracker
                 int slot = findOrAllocRocket(decoded.rocket_id);
+
+                // #850: FORWARD-FILL. Each frame carries only its own subset,
+                // so seed from this rocket's last known state and let the frame
+                // overwrite what it actually contains. `decoded` is therefore
+                // always the complete picture — which is what lets every
+                // consumer below (CSV row, BLE telemetry, logging policy) stay
+                // written against a whole telemetry record, and what makes the
+                // CSV a rectangular table with a row per received packet rather
+                // than alternating half-empty rows.
+                //
+                // The unpackers deliberately do not clear the fields they do
+                // not carry; see the note in TR_Sensor_Data_Converter.cpp.
+                if (slot >= 0)
+                {
+                    decoded = tracked_rockets[slot].last_data;
+                }
+                if (frame_type == LORA_FRAME_SLOW)
+                {
+                    sensor_converter.unpackLoRaSlowBytes(rx_buf, decoded);
+                }
+                else
+                {
+                    sensor_converter.unpackLoRaFastBytes(rx_buf, decoded);
+                }
 
                 TR_LoRa_Comms::Stats ls = {};
                 lora_comms.getStats(ls);
@@ -5009,10 +5083,12 @@ static void loop_bs()
             // didn't).
             lora_size_mismatch_drops++;
             lora_size_last_drop_ms = millis();
-            ESP_LOGW(TAG, "[RX] Unexpected packet size: %u (expected %u or beacon) "
-                          "— %lu dropped; mixed-firmware flash? (SIZE_OF_LORA_DATA "
-                          "differs between rocket and BS builds)",
-                     (unsigned)rx_len, (unsigned)SIZE_OF_LORA_DATA,
+            ESP_LOGW(TAG, "[RX] Unexpected packet size: %u (expected %u fast, %u slow, "
+                          "or a beacon) — %lu dropped; mixed-firmware flash? A 65 B "
+                          "packet here is a pre-#850 rocket that still speaks the "
+                          "single-frame protocol",
+                     (unsigned)rx_len, (unsigned)SIZE_OF_LORA_FAST,
+                     (unsigned)SIZE_OF_LORA_SLOW,
                      (unsigned long)lora_size_mismatch_drops);
         }
     }

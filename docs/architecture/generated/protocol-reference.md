@@ -139,8 +139,8 @@ that changes size fails the build rather than corrupting a log silently.
 | `ConfigReportData` | 169 |
 | `RollProfileData` | 76 |
 | `RollProfileData` | 76 |
-| `LoRaData` | 65 |
-| `LoRaData` | 65 |
+| `LoRaFastData` | 55 |
+| `LoRaFastData` | 55 |
 | `NonSensorData` | 50 |
 | `NonSensorData` | 50 |
 | `GuidanceConfigData` | 45 |
@@ -153,6 +153,8 @@ that changes size fails the build rather than corrupting a log silently.
 | `BaseStationStorageStatsData` | 26 |
 | `PyroConfigData` | 24 |
 | `ISM6HG256Data` | 22 |
+| `LoRaSlowData` | 22 |
+| `LoRaSlowData` | 22 |
 | `ServoConfigData` | 22 |
 | `ServoConfigData` | 22 |
 | `GuidancePointData` | 20 |
@@ -173,6 +175,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `IIS2MDCData` | 10 |
 | `RollWaypoint` | 9 |
 | `ServoTestAnglesData` | 8 |
+| `LoRaFrameHeader` | 7 |
 | `Vec3i16` | 6 |
 | `FcBootStatusData` | 4 |
 | `ServoReplayData` | 4 |
@@ -343,6 +346,8 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_CMD_HOP_PAUSE` | `0x10` (16) | uplink cmd: park on lora_freq_mhz for N ms (#90) |
 | `LORA_CMD_SET_HOP_DISABLED` | `0x11` (17) | uplink cmd: 1 byte payload, 0=hopping enabled (default), 1=disabled (fixed-frequency mode for diagnostics,… |
 | `LORA_CMD_SET_TX_DISABLED` | `0x44` (68) | uplink + rocket BLE cmd: 1 byte payload, 1 = "LoRa off" (mute every transmit, keep listening), 0 =… |
+| `LORA_FRAME_FAST` | `0x00` (0) |  |
+| `LORA_FRAME_SLOW` | `0x01` (1) |  |
 | `LORA_HOP_DWELL_MAX` | `0x04` (4) | #133 slow-hop robustness cap |
 | `LORA_LAUNCH` | `0x01` (1) | bit 0 |
 | `LORA_LOGGING_BIT` | `0x80` (128) |  |
@@ -352,8 +357,10 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_NOISE_THRESHOLD_DB` | `0x0F` (15) | skip if peak > median + this |
 | `LORA_NUM_SATS_MASK` | `0x3F` (63) |  |
 | `LORA_NVS_SCHEMA_VERSION` | `0x04` (4) |  |
-| `LORA_PROTO_VERSION` | `0x04` (4) |  |
+| `LORA_PROTO_VERSION` | `0x05` (5) |  |
 | `LORA_SIM_BIT` | `0x40` (64) |  |
+| `LORA_SLOT_CYCLE` | `0x06` (6) |  |
+| `LORA_SLOW_SLOT` | `0x05` (5) | 0-based index within the cycle |
 | `LORA_STATE_SHIFT` | `0x04` (4) | bits 4-6: rocket state |
 | `LORA_UL_ACCEPTED` | `0x01` (1) | passed every filter, command dispatched |
 | `LORA_UL_MALFORMED` | `0x10` (16) | bad sync byte or short frame |

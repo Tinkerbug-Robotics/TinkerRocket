@@ -872,7 +872,7 @@ static bool lora_in_rx_mode = false;
 // only offered at the factory CR — see loraHopDwellForLink.
 static inline uint8_t currentHopDwell()
 {
-    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_DATA, lora_cr);
+    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_BUDGET, lora_cr);
 }
 
 // #150: effective skip mask for the hop schedule = the cmd-15 noise mask
@@ -3921,8 +3921,14 @@ static void serviceI2CIngress()
 // ==========================================================================
 // SECTION: LoRa downlink: telemetry payload and beacon
 // ==========================================================================
-static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t seq)
+// #850: builds ONE of the two downlink frames. The caller picks the type —
+// the TX path from the slot schedule, the debug printer always FAST so its
+// dump shows the full picture. out_len reports what actually went in, because
+// the two frames are different sizes and the buffer is sized for the larger.
+static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t seq,
+                             uint8_t frame_type, size_t& out_len)
 {
+    out_len = 0;
     if (out_payload == nullptr)
     {
         return false;
@@ -4118,7 +4124,25 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
     lora.rssi = 0.0f;
     lora.snr = 0.0f;
 
-    sensor_converter.packLoRaData(lora, out_payload);
+    // #850: rail currents ride the SLOW frame. Sampled by the OC on its 100 Hz
+    // INA230 tick; 0 on boards with no TPS22811 monitor fitted.
+    {
+        POWERDataSI p{};
+        sensor_converter.convertPowerData(latest_power_raw, p);
+        lora.cam_current   = p.cam_current;
+        lora.servo_current = p.servo_current;
+    }
+
+    if (frame_type == LORA_FRAME_SLOW)
+    {
+        sensor_converter.packLoRaSlowBytes(lora, out_payload);
+        out_len = SIZE_OF_LORA_SLOW;
+    }
+    else
+    {
+        sensor_converter.packLoRaFastBytes(lora, out_payload);
+        out_len = SIZE_OF_LORA_FAST;
+    }
     return true;
 }
 
@@ -4168,19 +4192,28 @@ static void serviceLoRa()
         return;
     }
 
-    uint8_t payload[SIZE_OF_LORA_DATA] = {0};
-    if (!buildLoRaPayload(payload, lora_tx_seq))
+    // #850: five FAST frames then one SLOW, so the slow set rides every 6th
+    // transmission (3.0 s at LORA_TX_RATE_HZ = 2). Keyed off the SAME seq that
+    // goes on the wire, so the base station can predict the type from the seq
+    // alone if it ever needs to.
+    uint8_t payload[SIZE_OF_LORA_BUDGET] = {0};
+    size_t  payload_len = 0;
+    const uint8_t frame_type = loraFrameTypeForSlot(lora_tx_seq);
+    if (!buildLoRaPayload(payload, lora_tx_seq, frame_type, payload_len))
     {
         return;
     }
     last_lora_tx_ms = now_ms;
     lora_in_rx_mode = false;  // Exiting RX for TX
-    if (lora_comms.send(payload, sizeof(payload)))
+    if (lora_comms.send(payload, payload_len))
     {
         lora_tx_ok++;
 
-        // Persist the exact 65 B that just went on the air as a LORA_MSG
-        // (0xF1) record.  The type has always been in the wire format and
+        // Persist the exact bytes that just went on the air as a LORA_MSG
+        // (0xF1) record.  #850: that is now 55 B (FAST) or 22 B (SLOW), so
+        // this logs payload_len, NOT sizeof(payload) — the buffer is sized for
+        // the larger frame and a slow frame would otherwise be recorded with
+        // 33 bytes of trailing zeros that every parser would read as data.  The type has always been in the wire format and
         // every decoder already knows it, but nothing had emitted it — so
         // the rocket log carried no evidence the radio had even keyed up,
         // and a lost base-station log meant the whole downlink measurement
@@ -4195,22 +4228,22 @@ static void serviceLoRa()
         // radiated, which is what makes the seq diff meaningful.
         //
         // Deliberately no timestamp field: the payload stays byte-identical
-        // to LoRaData (65 B, what MSG_EXPECTED_LEN and every parser already
-        // expect), and the record's position between IMU frames dates it to
+        // to what was radiated (MSG_EXPECTED_LEN accepts both frame sizes),
+        // and the record's position between IMU frames dates it to
         // ~256 us — better than an OC timestamp could, since esp_timer here
         // is a different clock domain from the FC time_us that every other
         // log record carries.
         //
         // enqueueFrame() drops the frame when no session is open, so this
-        // costs nothing off-session; on-session it is 65 B + 8 B of framing
-        // at LORA_TX_RATE_HZ (146 B/s at 2 Hz).  Name beacons are NOT logged
-        // — they are a different, variable-length payload and would break
-        // the fixed 65 B expectation for this type.
+        // costs nothing off-session; on-session it averages (5x55 + 22)/6 = 50 B
+        // plus 8 B of framing at LORA_TX_RATE_HZ (~116 B/s at 2 Hz, down from
+        // 146).  Name beacons are still NOT logged — they are a third,
+        // variable-length payload and carry no LoRaFrameHeader to dispatch on.
         {
             uint8_t lora_frame[MAX_FRAME];
             size_t  lora_frame_len = 0;
             if (TR_I2C_Interface::packMessage(LORA_MSG,
-                                              payload, sizeof(payload),
+                                              payload, payload_len,
                                               lora_frame, sizeof(lora_frame),
                                               lora_frame_len))
             {
@@ -5734,14 +5767,17 @@ static void printLoRaPayloadDebug()
         return;
     }
 
-    uint8_t payload[SIZE_OF_LORA_DATA] = {0};
-    if (!buildLoRaPayload(payload, lora_tx_seq))
+    // Always FAST here: the debug dump wants the position/attitude picture,
+    // and a SLOW frame would leave most of the printed fields at zero.
+    uint8_t payload[SIZE_OF_LORA_BUDGET] = {0};
+    size_t  payload_len = 0;
+    if (!buildLoRaPayload(payload, lora_tx_seq, LORA_FRAME_FAST, payload_len))
     {
         return;
     }
 
     LoRaDataSI decoded = {};
-    sensor_converter.unpackLoRa(payload, decoded);
+    sensor_converter.unpackLoRaFastBytes(payload, decoded);
     ESP_LOGI("LORA", "LoRa tx sats/pdop=%u/%.1f | ecef(m)=%.0f,%.0f,%.0f | alt/rate/max/mspd=%.1f/%.1f/%.1f/%.1f",
                   (unsigned)decoded.num_sats,
                   (double)decoded.pdop,

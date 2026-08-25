@@ -68,15 +68,40 @@ protected:
         si.imu_orient_mode = LORA2_OMODE_AUTO; // auto-snap
         return si;
     }
+
+    // ---- #850: the wire is TWO frames now -------------------------------
+    // Every assertion below asks "does this field survive encode/decode?",
+    // which is still exactly the right question — so round-trip through BOTH
+    // frames into ONE accumulator, mirroring what the base station does with
+    // its per-rocket LoRaDataSI. A field that fell out of both frames during
+    // the split would show up here as a dead value, which is the point.
+    struct BothFrames {
+        LoRaFastData fast{};
+        LoRaSlowData slow{};
+    };
+
+    BothFrames packBoth(const LoRaDataSI& in) {
+        BothFrames b{};
+        conv.packLoRaFast(in, b.fast);
+        conv.packLoRaSlow(in, b.slow);
+        return b;
+    }
+
+    LoRaDataSI unpackBoth(const BothFrames& b) {
+        LoRaDataSI out{};
+        conv.unpackLoRaFast(b.fast, out);
+        conv.unpackLoRaSlow(b.slow, out);
+        return out;
+    }
 };
 
 TEST_F(LoRaRoundtripTest, NominalFlight_Roundtrip) {
     LoRaDataSI in = makeNominal();
-    LoRaData packed{};
-    conv.packLoRa(in, packed);
+    BothFrames packed{};
+    packed = packBoth(in);
 
     LoRaDataSI out{};
-    conv.unpackLoRa(packed, out);
+    out = unpackBoth(packed);
 
     // Verify all fields survive roundtrip within quantization
     EXPECT_EQ(out.network_id, 1);
@@ -151,15 +176,15 @@ TEST_F(LoRaRoundtripTest, VelocityAndBurnout_IndependentOfFlagsState) {
     in.vel_n = 0.0f;
     in.vel_u = -45.6f;             // descending
 
-    LoRaData packed{};
-    conv.packLoRa(in, packed);
+    BothFrames packed{};
+    packed = packBoth(in);
     // burnout bit clear; the #390 orientation bits (code 21, auto) remain.
-    EXPECT_EQ(packed.flags2,
+    EXPECT_EQ(packed.fast.flags2,
               (uint8_t)((21u << LORA2_ORIENT_CODE_SHIFT)
                         | (LORA2_OMODE_AUTO << LORA2_ORIENT_MODE_SHIFT)));
 
     LoRaDataSI out{};
-    conv.unpackLoRa(packed, out);
+    out = unpackBoth(packed);
     EXPECT_FALSE(out.burnout_detected);
     EXPECT_TRUE(out.launch_flag);  // flags_state untouched by flags2
     EXPECT_NEAR(out.vel_e, -321.7f, 0.05f);
@@ -177,10 +202,10 @@ TEST_F(LoRaRoundtripTest, GnssAbsentHealthSlot_Roundtrip) {
     in.sensor_health = shSet(in.sensor_health, SH_STORAGE_SHIFT, SH_OK);  // neighbour
     in.sensor_health = shSet(in.sensor_health, SH_GNSS_SHIFT, SH_DEGRADED);
 
-    LoRaData packed{};
-    conv.packLoRa(in, packed);
+    BothFrames packed{};
+    packed = packBoth(in);
     LoRaDataSI out{};
-    conv.unpackLoRa(packed, out);
+    out = unpackBoth(packed);
 
     EXPECT_EQ(shGet(out.sensor_health, SH_GNSS_ABSENT_SHIFT), SH_BAD);
     EXPECT_EQ(shGet(out.sensor_health, SH_STORAGE_SHIFT),     SH_OK);
@@ -197,20 +222,20 @@ TEST_F(LoRaRoundtripTest, Orientation_SentinelsAndLegacyFrames) {
     in.imu_orient_code = 0;
     in.imu_orient_mode = LORA2_OMODE_NONE;
 
-    LoRaData packed{};
-    conv.packLoRa(in, packed);
-    EXPECT_EQ(packed.flags2, LORA2_BURNOUT);   // orientation bits all zero
+    BothFrames packed{};
+    packed = packBoth(in);
+    EXPECT_EQ(packed.fast.flags2, LORA2_BURNOUT);   // orientation bits all zero
 
     LoRaDataSI out{};
-    conv.unpackLoRa(packed, out);
+    out = unpackBoth(packed);
     EXPECT_EQ(out.imu_orient_mode, LORA2_OMODE_NONE);
     EXPECT_TRUE(out.burnout_detected);
 
     // Auto-exact: code sentinel 31 roundtrips.
     in.imu_orient_code = LORA2_ORIENT_CODE_NONE;
     in.imu_orient_mode = LORA2_OMODE_AUTO;
-    conv.packLoRa(in, packed);
-    conv.unpackLoRa(packed, out);
+    packed = packBoth(in);
+    out = unpackBoth(packed);
     EXPECT_EQ(out.imu_orient_code, LORA2_ORIENT_CODE_NONE);
     EXPECT_EQ(out.imu_orient_mode, LORA2_OMODE_AUTO);
 
@@ -218,8 +243,8 @@ TEST_F(LoRaRoundtripTest, Orientation_SentinelsAndLegacyFrames) {
     // purely by the mode bits.
     in.imu_orient_code = 0;
     in.imu_orient_mode = LORA2_OMODE_MANUAL;
-    conv.packLoRa(in, packed);
-    conv.unpackLoRa(packed, out);
+    packed = packBoth(in);
+    out = unpackBoth(packed);
     EXPECT_EQ(out.imu_orient_code, 0);
     EXPECT_EQ(out.imu_orient_mode, LORA2_OMODE_MANUAL);
 }
@@ -262,11 +287,11 @@ TEST_F(LoRaRoundtripTest, ExtremeValues_NoOverflow) {
     extreme.logging_active = true;
     extreme.rocket_state = 4; // LANDED
 
-    LoRaData packed{};
-    conv.packLoRa(extreme, packed);
+    BothFrames packed{};
+    packed = packBoth(extreme);
 
     LoRaDataSI out{};
-    conv.unpackLoRa(packed, out);
+    out = unpackBoth(packed);
 
     EXPECT_EQ(out.num_sats, 63);
     EXPECT_TRUE(out.launch_flag);
@@ -298,10 +323,10 @@ TEST_F(LoRaRoundtripTest, GyroOverflow_SaturatesInsteadOfWrapping) {
         LoRaDataSI in = makeNominal();
         in.gyro_x = 3200.0f;
         in.gyro_y = -3200.0f;
-        LoRaData packed{};
-        conv.packLoRa(in, packed);
+        BothFrames packed{};
+        packed = packBoth(in);
         LoRaDataSI out{};
-        conv.unpackLoRa(packed, out);
+        out = unpackBoth(packed);
         EXPECT_NEAR(out.gyro_x, 3200.0f, 0.1f);
         EXPECT_NEAR(out.gyro_y, -3200.0f, 0.1f);
     }
@@ -312,10 +337,10 @@ TEST_F(LoRaRoundtripTest, GyroOverflow_SaturatesInsteadOfWrapping) {
         in.gyro_x = rate;    // fast spin one way
         in.gyro_y = -rate;   // fast spin the other way
         in.gyro_z = rate;
-        LoRaData packed{};
-        conv.packLoRa(in, packed);
+        BothFrames packed{};
+        packed = packBoth(in);
         LoRaDataSI out{};
-        conv.unpackLoRa(packed, out);
+        out = unpackBoth(packed);
 
         // The bug's signature was a positive rate returning negative.
         EXPECT_GT(out.gyro_x, 0.0f) << "positive rate " << rate << " wrapped negative";
@@ -336,11 +361,11 @@ TEST_F(LoRaRoundtripTest, i24_SignExtension) {
     in.pressure_alt = -500.0f; // below sea level
     in.max_alt = -100.0f;
 
-    LoRaData packed{};
-    conv.packLoRa(in, packed);
+    BothFrames packed{};
+    packed = packBoth(in);
 
     LoRaDataSI out{};
-    conv.unpackLoRa(packed, out);
+    out = unpackBoth(packed);
 
     EXPECT_NEAR(out.ecef_x, -5000000.0, 1.0);
     EXPECT_NEAR(out.ecef_y, -100.0, 1.0);
@@ -358,11 +383,11 @@ TEST_F(LoRaRoundtripTest, RocketState_AllValues) {
         LoRaDataSI in{};
         in.rocket_state = state;
 
-        LoRaData packed{};
-        conv.packLoRa(in, packed);
+        BothFrames packed{};
+        packed = packBoth(in);
 
         LoRaDataSI out{};
-        conv.unpackLoRa(packed, out);
+        out = unpackBoth(packed);
 
         EXPECT_EQ(out.rocket_state, state)
             << "RocketState " << (int)state << " failed roundtrip";
@@ -379,11 +404,11 @@ TEST_F(LoRaRoundtripTest, FlagEncoding_AllCombinations) {
         in.alt_landed_flag   = (flags & 8) != 0;
         in.camera_recording  = (flags & 16) != 0;
 
-        LoRaData packed{};
-        conv.packLoRa(in, packed);
+        BothFrames packed{};
+        packed = packBoth(in);
 
         LoRaDataSI out{};
-        conv.unpackLoRa(packed, out);
+        out = unpackBoth(packed);
 
         EXPECT_EQ(out.launch_flag,       in.launch_flag)       << "flags=" << flags;
         EXPECT_EQ(out.vel_u_apogee_flag, in.vel_u_apogee_flag) << "flags=" << flags;
@@ -398,11 +423,14 @@ TEST_F(LoRaRoundtripTest, ByteLevel_PackUnpack) {
     LoRaDataSI in = makeNominal();
     in.network_id = 42;
     in.rocket_id = 7;
-    uint8_t bytes[SIZE_OF_LORA_DATA];
-    conv.packLoRaData(in, bytes);
+    uint8_t fast_bytes[SIZE_OF_LORA_FAST];
+    uint8_t slow_bytes[SIZE_OF_LORA_SLOW];
+    conv.packLoRaFastBytes(in, fast_bytes);
+    conv.packLoRaSlowBytes(in, slow_bytes);
 
     LoRaDataSI out{};
-    conv.unpackLoRa(bytes, out);
+    conv.unpackLoRaFastBytes(fast_bytes, out);
+    conv.unpackLoRaSlowBytes(slow_bytes, out);
 
     EXPECT_EQ(out.network_id, 42);
     EXPECT_EQ(out.rocket_id, 7);
@@ -433,10 +461,10 @@ TEST_F(LoRaRoundtripTest, Seq_FullU16Range) {
         // now derived on unpack, so it can no longer serve here).
         in.vel_e            = 1234.0f;
 
-        LoRaData packed{};
-        conv.packLoRa(in, packed);
+        BothFrames packed{};
+        packed = packBoth(in);
         LoRaDataSI out{};
-        conv.unpackLoRa(packed, out);
+        out = unpackBoth(packed);
 
         EXPECT_EQ(out.seq, s)                  << "seq=" << s;
         EXPECT_EQ(out.network_id, 42)          << "seq=" << s;
@@ -465,10 +493,10 @@ TEST_F(LoRaRoundtripTest, Seq_FullU16Range) {
 TEST_F(LoRaRoundtripTest, SimActiveSurvivesTheWire) {
     LoRaDataSI in = makeNominal();
     in.sim_active = true;
-    LoRaData packed{};
-    conv.packLoRa(in, packed);
+    BothFrames packed{};
+    packed = packBoth(in);
     LoRaDataSI out{};
-    conv.unpackLoRa(packed, out);
+    out = unpackBoth(packed);
     EXPECT_TRUE(out.sim_active);
 }
 
@@ -479,10 +507,10 @@ TEST_F(LoRaRoundtripTest, SimAndLoggingBitsAreIndependent) {
             LoRaDataSI in = makeNominal();
             in.sim_active = sim;
             in.logging_active = logging;
-            LoRaData packed{};
-            conv.packLoRa(in, packed);
+            BothFrames packed{};
+            packed = packBoth(in);
             LoRaDataSI out{};
-            conv.unpackLoRa(packed, out);
+            out = unpackBoth(packed);
             EXPECT_EQ(out.sim_active, sim) << "sim=" << sim << " logging=" << logging;
             EXPECT_EQ(out.logging_active, logging) << "sim=" << sim << " logging=" << logging;
         }
@@ -498,10 +526,10 @@ TEST_F(LoRaRoundtripTest, SatCountIsUnharmedByTheFlagBits) {
         in.num_sats = sats;
         in.sim_active = true;
         in.logging_active = true;
-        LoRaData packed{};
-        conv.packLoRa(in, packed);
+        BothFrames packed{};
+        packed = packBoth(in);
         LoRaDataSI out{};
-        conv.unpackLoRa(packed, out);
+        out = unpackBoth(packed);
         EXPECT_EQ(out.num_sats, sats) << "sats=" << (int)sats;
         EXPECT_TRUE(out.sim_active);
         EXPECT_TRUE(out.logging_active);
@@ -515,10 +543,10 @@ TEST_F(LoRaRoundtripTest, SatCountClampsRatherThanCorruptingTheFlags) {
     in.num_sats = 200;
     in.sim_active = false;
     in.logging_active = false;
-    LoRaData packed{};
-    conv.packLoRa(in, packed);
+    BothFrames packed{};
+    packed = packBoth(in);
     LoRaDataSI out{};
-    conv.unpackLoRa(packed, out);
+    out = unpackBoth(packed);
     EXPECT_EQ(out.num_sats, 63);      // clamped
     EXPECT_FALSE(out.sim_active);     // NOT corrupted by the clamp
     EXPECT_FALSE(out.logging_active);
@@ -529,11 +557,129 @@ TEST_F(LoRaRoundtripTest, LegacySenderReadsAsNotSimulated) {
     // matching the old behaviour rather than inventing a sim flight.
     LoRaDataSI in = makeNominal();
     in.sim_active = false;
-    LoRaData packed{};
-    conv.packLoRa(in, packed);
-    packed.num_sats &= ~LORA_SIM_BIT;   // as an older firmware would send it
+    BothFrames packed{};
+    packed = packBoth(in);
+    packed.fast.num_sats &= ~LORA_SIM_BIT;   // as an older firmware would send it
     LoRaDataSI out{};
-    conv.unpackLoRa(packed, out);
+    out = unpackBoth(packed);
     EXPECT_FALSE(out.sim_active);
     EXPECT_EQ(out.num_sats, 12);
+}
+
+// ===========================================================================
+//  #850: two-frame split — dispatch, and the merge the base station relies on
+// ===========================================================================
+
+TEST_F(LoRaRoundtripTest, HeaderCarriesVersionAndTypeInBothFrames) {
+    LoRaDataSI in = makeNominal();
+
+    LoRaFastData f{}; conv.packLoRaFast(in, f);
+    LoRaSlowData s{}; conv.packLoRaSlow(in, s);
+
+    EXPECT_EQ(loraFrameVersion(f.hdr.ver_type), LORA_PROTO_VERSION);
+    EXPECT_EQ(loraFrameType(f.hdr.ver_type),    LORA_FRAME_FAST);
+    EXPECT_EQ(loraFrameVersion(s.hdr.ver_type), LORA_PROTO_VERSION);
+    EXPECT_EQ(loraFrameType(s.hdr.ver_type),    LORA_FRAME_SLOW);
+
+    // The routing prefix must be byte-identical, because the base station
+    // reads it before it knows which frame it has.
+    EXPECT_EQ(0, memcmp(&f.hdr, &s.hdr, offsetof(LoRaFrameHeader, ver_type)));
+    EXPECT_EQ(f.hdr.flags_state, s.hdr.flags_state);
+}
+
+/// The property the whole design rests on: an unpacker writes ONLY the fields
+/// its frame carries. If a slow frame cleared the position, the base station's
+/// accumulator would blank the track once every six packets and the CSV would
+/// alternate between full and empty rows.
+TEST_F(LoRaRoundtripTest, SlowFrameDoesNotClobberFastFields) {
+    LoRaDataSI in = makeNominal();
+
+    LoRaDataSI acc{};
+    LoRaFastData f{}; conv.packLoRaFast(in, f);
+    conv.unpackLoRaFast(f, acc);
+
+    const double ecef_x_before = acc.ecef_x;
+    const float  palt_before   = acc.pressure_alt;
+    const float  q0_before     = acc.q0;
+    const uint32_t health_before = acc.sensor_health;
+
+    LoRaSlowData s{}; conv.packLoRaSlow(in, s);
+    conv.unpackLoRaSlow(s, acc);
+
+    EXPECT_DOUBLE_EQ(acc.ecef_x, ecef_x_before);
+    EXPECT_FLOAT_EQ(acc.pressure_alt, palt_before);
+    EXPECT_FLOAT_EQ(acc.q0, q0_before);
+    EXPECT_EQ(acc.sensor_health, health_before);
+}
+
+TEST_F(LoRaRoundtripTest, FastFrameDoesNotClobberSlowFields) {
+    LoRaDataSI in = makeNominal();
+    in.max_alt = 1234.0f;
+    in.voltage = 7.85f;
+    in.cam_current = 1.48f;
+    in.servo_current = 0.34f;
+
+    LoRaDataSI acc{};
+    LoRaSlowData s{}; conv.packLoRaSlow(in, s);
+    conv.unpackLoRaSlow(s, acc);
+
+    const float max_alt_before = acc.max_alt;
+    const float voltage_before = acc.voltage;
+    const float cam_before     = acc.cam_current;
+    const float servo_before   = acc.servo_current;
+
+    LoRaFastData f{}; conv.packLoRaFast(in, f);
+    conv.unpackLoRaFast(f, acc);
+
+    EXPECT_FLOAT_EQ(acc.max_alt, max_alt_before);
+    EXPECT_FLOAT_EQ(acc.voltage, voltage_before);
+    EXPECT_FLOAT_EQ(acc.cam_current, cam_before);
+    EXPECT_FLOAT_EQ(acc.servo_current, servo_before);
+}
+
+TEST_F(LoRaRoundtripTest, RailCurrentsRideTheSlowFrame) {
+    LoRaDataSI in = makeNominal();
+    in.cam_current   = 1.48f;
+    in.servo_current = 0.34f;
+
+    LoRaSlowData s{}; conv.packLoRaSlow(in, s);
+    EXPECT_EQ(s.cam_ma,   1480u);
+    EXPECT_EQ(s.servo_ma, 340u);
+
+    LoRaDataSI out{};
+    conv.unpackLoRaSlow(s, out);
+    EXPECT_NEAR(out.cam_current,   1.48f, 0.001f);
+    EXPECT_NEAR(out.servo_current, 0.34f, 0.001f);
+}
+
+/// Five FAST then one SLOW. At LORA_TX_RATE_HZ = 2 that puts the slow set on
+/// a 3.0 s cadence, which is what the airtime budget was computed against.
+TEST_F(LoRaRoundtripTest, SlotScheduleIsFiveFastToOneSlow) {
+    int fast = 0, slow = 0;
+    for (uint16_t seq = 0; seq < 60; ++seq) {
+        (loraFrameTypeForSlot(seq) == LORA_FRAME_SLOW) ? ++slow : ++fast;
+    }
+    EXPECT_EQ(slow, 10);
+    EXPECT_EQ(fast, 50);
+
+    // And it must be periodic, not clustered — a burst of slow frames would
+    // stall the position stream.
+    for (uint16_t seq = 0; seq < 60; ++seq) {
+        EXPECT_EQ(loraFrameTypeForSlot(seq) == LORA_FRAME_SLOW,
+                  (seq % LORA_SLOT_CYCLE) == LORA_SLOW_SLOT) << "seq " << seq;
+    }
+}
+
+/// seq wraps mod 65536, and 65536 is not a multiple of 6 — so the cycle phase
+/// jumps at the wrap. Harmless (the schedule stays 5:1 on average and the BS
+/// dispatches on ver_type, not on the seq), but pinned so nobody "fixes" it
+/// into something that skips a slow frame for 6 packets.
+TEST_F(LoRaRoundtripTest, SlotScheduleSurvivesSeqWraparound) {
+    int slow = 0;
+    for (uint32_t i = 0; i < 60; ++i) {
+        uint16_t seq = (uint16_t)((65536u - 30u + i) & 0xFFFFu);
+        if (loraFrameTypeForSlot(seq) == LORA_FRAME_SLOW) ++slow;
+    }
+    EXPECT_GE(slow, 9);
+    EXPECT_LE(slow, 11);
 }

@@ -40,7 +40,14 @@ PREAMBLE = b'\xAA\x55\xAA\x55'
 MSG_LORA = 0xF1
 MSG_LORA_UPLINK = 0xF9        # OC-self-emitted uplink RX record
 MSG_ISM6HG256 = 0xA2          # carries FC time_us; dates neighbouring records
-SIZE_OF_LORA_DATA = 65
+# #850: the downlink is two interleaved frames. Both open with the same
+# 7-byte header, so seq — the whole point of this tool — is readable from
+# either without knowing which one arrived.
+SIZE_OF_LORA_FAST = 55
+SIZE_OF_LORA_SLOW = 22
+LORA_PROTO_VERSION = 5
+LORA_FRAME_FAST = 0x0
+LORA_FRAME_SLOW = 0x1
 SIZE_OF_LORA_UPLINK = 13
 
 # LoRaUplinkData: time_us, rssi*10, snr*10, (MHz-900)*1000, sf, cmd, flags
@@ -51,8 +58,9 @@ LORA_CMD_HEARTBEAT = 0xFE
 
 # LoRaData prefix — the routing header plus the two fields worth reporting.
 # Offsets are pinned by static_asserts in RocketComputerTypes.h.
-FMT_LORA_HEAD = '<BBBHBB'     # network_id, rocket_id, next_channel_idx, seq,
-                              # num_sats, pdop_u8
+# #850: the shared 7-byte LoRaFrameHeader, identical in both frames.
+FMT_LORA_HDR  = '<BBBHBB'     # network_id, rocket_id, next_channel_idx, seq,
+                              # ver_type, flags_state
 LORA_LOGGING_BIT = 0x80       # packed into the MSB of num_sats
 
 
@@ -98,16 +106,34 @@ def read_rocket_bin(path):
                                 sf=sf, cmd=cmd, flags=fl,
                                 disp=next((n for b, n in UL_FLAGS if fl & b), 'unknown')))
         elif mtype == MSG_LORA:
-            if len(payload) != SIZE_OF_LORA_DATA:
+            if len(payload) not in (SIZE_OF_LORA_FAST, SIZE_OF_LORA_SLOW):
                 print(f"  ! 0xF1 record with {len(payload)} B payload, expected "
-                      f"{SIZE_OF_LORA_DATA} — LoRaData changed size and this "
-                      f"parser was not swept (#227)", file=sys.stderr)
+                      f"{SIZE_OF_LORA_FAST} (fast) or {SIZE_OF_LORA_SLOW} (slow) "
+                      f"— the LoRa frames changed size and this parser was not "
+                      f"swept (#227)", file=sys.stderr)
                 continue
-            nid, rid, nch, seq, sats, pdop = struct.unpack_from(FMT_LORA_HEAD, payload, 0)
+            nid, rid, nch, seq, ver_type, _flags = struct.unpack_from(
+                FMT_LORA_HDR, payload, 0)
+            ver, ftype = ver_type >> 4, ver_type & 0x0F
+            if ver != LORA_PROTO_VERSION:
+                print(f"  ! 0xF1 record at proto v{ver}, this parser speaks "
+                      f"v{LORA_PROTO_VERSION}", file=sys.stderr)
+                continue
+            # num_sats / pdop ride the FAST frame only. Slow frames still count
+            # for loss measurement — seq is in the shared header — so they are
+            # recorded with those two fields absent rather than dropped, which
+            # would inflate the apparent loss by 1-in-6.
+            if ftype == LORA_FRAME_FAST:
+                sats, pdop = struct.unpack_from('<BB', payload, 7)
+                num_sats = sats & ~LORA_LOGGING_BIT
+                logging_on = bool(sats & LORA_LOGGING_BIT)
+                pdop_val = pdop / 10.0
+            else:
+                num_sats, logging_on, pdop_val = None, None, None
             rows.append(dict(seq=seq, t_s=t_last, network_id=nid, rocket_id=rid,
-                             next_ch=nch, num_sats=sats & ~LORA_LOGGING_BIT,
-                             logging=bool(sats & LORA_LOGGING_BIT),
-                             pdop=pdop / 10.0))
+                             next_ch=nch, num_sats=num_sats,
+                             logging=logging_on, pdop=pdop_val,
+                             frame='slow' if ftype == LORA_FRAME_SLOW else 'fast'))
     return rows, imu_frames, uplinks
 
 
