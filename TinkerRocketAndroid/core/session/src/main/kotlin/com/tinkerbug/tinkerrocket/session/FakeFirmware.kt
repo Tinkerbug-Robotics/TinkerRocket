@@ -479,7 +479,7 @@ public class FakeFirmware(
                 """"kp":0.08,"ki":0.005,"kd":0.003,"pmn":-10.0,"pmx":10.0,""" +
                 """"sen":true,"gs":true,"ac":false,"rdly":0,"rcap":60.0,"kpang":2.0,""" +
                 """"iwind":40.0,"ge":false,"camt":2,"irate":1920,"lf":915.0,"lsf":8,""" +
-                """"lbw":250.0,"lcr":5,"lpw":17,"lhd":false,"lhdw":400}"""
+                """"lbw":250.0,"lcr":5,"lpw":17,"lhd":false,"lhdw":400,"ltxd":false}"""
 
         public const val DEFAULT_CONFIG_PYRO_JSON: String =
             """{"type":"config_pyro","p1e":true,"p1m":0,"p1v":1.0,"p2e":false,"p2m":1,""" +

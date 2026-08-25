@@ -788,6 +788,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
+    /// "LoRa off" — mute (or un-mute) every LoRa transmit the rocket makes.
+    /// The rocket keeps listening while muted, so this works in both
+    /// directions whether it reaches the rocket directly or relayed by the
+    /// base station.  Desired-state, never a toggle: a lost retry on a toggle
+    /// would invert the one setting that decides whether the rocket is
+    /// trackable.  Firmware refuses a MUTE while INFLIGHT; the local echo
+    /// below is corrected by the next config readback if that happens.
+    func sendLoRaTxDisabled(_ disabled: Bool) {
+        sendRawCommand(68, payload: Data([disabled ? 0x01 : 0x00]))
+        if var cfg = rocketConfig {
+            cfg.loraTxDisabled = disabled
+            rocketConfig = cfg
+        }
+    }
+
     func sendServoConfig(biases: [Int16], hz: Int16, minUs: Int16, maxUs: Int16,
                          finMinDeg: Float, finMaxDeg: Float) {
         var payload = Data()
@@ -1933,6 +1948,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.loraTxPower = (dict["lpw"] as? Int).map { Int8($0) }
             cfg.loraHopDisabled = dict["lhd"] as? Bool   // #106 (nil if device doesn't report it)
             cfg.loraHopDwell = dict["lhdw"] as? Int      // #150 (0 = hopping unavailable)
+            cfg.loraTxDisabled = dict["ltxd"] as? Bool   // nil if firmware predates "LoRa off"
             if let existing = self.rocketConfig {
                 cfg.pyro1Enabled = existing.pyro1Enabled
                 cfg.pyro1TriggerMode = existing.pyro1TriggerMode

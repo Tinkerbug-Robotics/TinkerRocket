@@ -950,6 +950,25 @@ public class DeviceSession(
         sendCommandFrame(Commands.powerState(railOn))
 
     /**
+     * cmd 68 — "LoRa off": mute (or un-mute) every LoRa transmit the rocket
+     * makes.  Device state, not a profile field, so it is pushed straight
+     * here rather than through [ActiveRocketSyncer].
+     *
+     * Mirrors iOS `sendLoRaTxDisabled`: the local echo keeps the switch and
+     * the dashboard advisory honest between the write and the firmware's
+     * config readback, and it only edits an EXISTING readback — fabricating
+     * one would render un-reported fields as device truth.  The firmware
+     * refuses a mute while INFLIGHT; its readback then corrects the echo.
+     */
+    public fun sendLoraTxDisabled(disabled: Boolean) {
+        sendCommandFrame(Commands.loraTxDisabled(disabled))
+        scope.launch {
+            val cfg = _rocketConfig.value ?: return@launch
+            _rocketConfig.value = cfg.copy(loraTxDisabled = disabled)
+        }
+    }
+
+    /**
      * #159 power-on press: lights the busy state and arms a 3 min watchdog
      * before commanding the rail ON.  Cleared by the first pwr_pin_on
      * telemetry frame, by the watchdog (a genuinely-dropped command), or by

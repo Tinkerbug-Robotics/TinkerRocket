@@ -720,6 +720,33 @@ struct ConnectedDashboardView: View {
                     activeSheet = .preflight(device)
                 }
                 .opacity(staleOpacity)
+
+                // "LoRa off": one quiet line, same shape and placement as the
+                // preflight advisory and under the same rule — advisory only,
+                // it never recolors the state banner.  Worth a line at all
+                // because a muted rocket looks exactly like a working one from
+                // a directly-connected phone, right up until it flies and
+                // there is no downlink to follow it with.  Only a direct BLE
+                // link can know: a base-station relay hears nothing from a
+                // muted rocket, so there is no config readback to read this
+                // from — hence the !isBaseStation guard rather than a
+                // confidently-wrong "transmitting".
+                if !device.isBaseStation,
+                   device.rocketConfig?.loraTxDisabled == true {
+                    Button { activeSheet = .settings(device) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                            Text("LoRa off — no telemetry downlink")
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.orange)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                    .opacity(staleOpacity)
+                }
             }
 
             // #557: the FC lost its GNSS module and is flying a baro+IMU-only

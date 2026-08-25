@@ -541,6 +541,61 @@ TEST(RocketComputerTypes, LoRaCmdHeartbeat_DoesNotCollide) {
     EXPECT_GT(LORA_CMD_HEARTBEAT, 60);
 }
 
+// ============================================================================
+// "LoRa off" — the transmit mute (BLE cmd 68 / uplink cmd 68)
+// ============================================================================
+
+TEST(LoraCmdSetTxDisabled, IdIsStableAndCollidesWithNothing) {
+    // ONE number for two transports: the app's BLE command to a rocket and
+    // the base station's relayed uplink command are the same byte, so a
+    // renumber here is a coordinated firmware + both-apps change.
+    EXPECT_EQ(LORA_CMD_SET_TX_DISABLED, 68u);
+    // Must not land on any other LoRa uplink command.
+    EXPECT_NE(LORA_CMD_SET_TX_DISABLED, LORA_CMD_CHANNEL_SET);
+    EXPECT_NE(LORA_CMD_SET_TX_DISABLED, LORA_CMD_HOP_PAUSE);
+    EXPECT_NE(LORA_CMD_SET_TX_DISABLED, LORA_CMD_SET_HOP_DISABLED);
+    EXPECT_NE(LORA_CMD_SET_TX_DISABLED, LORA_CMD_HEARTBEAT);
+    // Nor on the beacon discriminator, which shares the same air.
+    EXPECT_NE(LORA_CMD_SET_TX_DISABLED, LORA_BEACON_SYNC);
+}
+
+TEST(LoraTxMuteChangeAllowed, MuteRefusedOnlyInFlight) {
+    // Muting an airborne rocket throws away the only link that says where it
+    // is, and nothing on the ground would notice until it landed somewhere
+    // unknown.  Every other state may be muted — the pad states are the whole
+    // point of the feature, and LANDED is where a recovered rocket gets shut
+    // up before the drive home.
+    EXPECT_FALSE(loraTxMuteChangeAllowed(true, INFLIGHT));
+    EXPECT_TRUE(loraTxMuteChangeAllowed(true, INITIALIZATION));
+    EXPECT_TRUE(loraTxMuteChangeAllowed(true, READY));
+    EXPECT_TRUE(loraTxMuteChangeAllowed(true, PRELAUNCH));
+    EXPECT_TRUE(loraTxMuteChangeAllowed(true, LANDED));
+}
+
+TEST(LoraTxMuteChangeAllowed, UnmuteAllowedEverywhere) {
+    // The asymmetry is the point.  Un-muting can only ADD telemetry, and a
+    // rocket that took off muted must stay recoverable — refusing this in
+    // flight would close the one door left open by keeping the receiver up.
+    for (uint8_t st = 0; st <= (uint8_t)LANDED; ++st)
+    {
+        EXPECT_TRUE(loraTxMuteChangeAllowed(false, (RocketState)st))
+            << "un-mute refused in state " << (unsigned)st;
+    }
+}
+
+TEST(LoraTxMuteChangeAllowed, MatchesTheUint8Overload) {
+    // The uplink handler has the state as a raw wire byte; the BLE handler has
+    // the enum.  Both must decide identically or the same command would mean
+    // different things over the two transports.
+    for (uint8_t st = 0; st <= (uint8_t)LANDED; ++st)
+    {
+        EXPECT_EQ(loraTxMuteChangeAllowed(true,  st),
+                  loraTxMuteChangeAllowed(true,  (RocketState)st));
+        EXPECT_EQ(loraTxMuteChangeAllowed(false, st),
+                  loraTxMuteChangeAllowed(false, (RocketState)st));
+    }
+}
+
 TEST(FreqLockForFlight, InflightLatchesOn) {
     // Any state transition into INFLIGHT must set the lock, regardless
     // of the previous value.

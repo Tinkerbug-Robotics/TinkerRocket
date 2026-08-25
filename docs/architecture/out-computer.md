@@ -37,7 +37,7 @@ phone at the pad.
 | **Navigation** | [section map](generated/out-computer-map.md) — line ranges for all 29 regions |
 | **Talks to the FC** | I2S (telemetry in, 22 kHz DMA) + I2C (commands out, 1.2 MHz) |
 | **Talks to the ground** | LoRa 915 MHz at 2 Hz |
-| **Talks to your phone** | BLE GATT, 51 commands |
+| **Talks to your phone** | BLE GATT, 52 commands |
 | **Stores** | MRAM ring buffer → NAND flash, via `TR_LogToFlash` and `TR_FlightLog` |
 
 ## Two power states
@@ -195,6 +195,18 @@ case where the two ends disagree about what channel they are on:
   more than the scan range. Suppressed in flight.
 - **Hop fallback** (#40/#41): the equivalent for the frequency-hopping mode.
 
+**"LoRa off" mutes the transmitter, not the radio.** A per-rocket setting (BLE
+cmd 68, uplink cmd 68, NVS `lora/txdis`, readback key `ltxd`) stops every
+transmit the OC makes — telemetry, name beacon, and the hop schedule, which is
+forced off so a silent rocket cannot walk away from the channel the base
+station is calling on. The *receiver* stays up: uplink service and the
+rendezvous cycle are RX-only and keep running, which is what lets a muted
+rocket be un-muted over the air instead of only from BLE range. Muting is
+refused while `INFLIGHT` (`loraTxMuteChangeAllowed` in the shared header) —
+un-muting never is. Both apps show it as a switch plus one advisory line under
+the state banner, because a muted rocket is indistinguishable from a healthy
+one over BLE right up until it flies and nothing follows it.
+
 **Frequency is locked for the duration of a flight.** On `INFLIGHT` the lock latches,
 uplink retune commands are ignored, and rendezvous is suppressed — momentary silence in
 flight is usually an SNR dip, and leaving the operating frequency mid-flight to chase it
@@ -204,7 +216,7 @@ unit-tested rules.
 
 ### BLE
 
-The OC runs a GATT server and dispatches 51 commands from a flat `if (ble_cmd == N)`
+The OC runs a GATT server and dispatches 52 commands from a flat `if (ble_cmd == N)`
 chain in `loop_oc`.
 The chain is roughly grouped: file operations and camera control work with the rail
 off; simulator, config, pyro, servo, and identity commands need it on.
@@ -220,6 +232,7 @@ The authoritative list is the dispatch chain itself. A few worth knowing:
 | 9 | Phone time sync (for log filenames) | off ok |
 | 23 | Toggle logging | on |
 | 40–42 | Set unit name / network id / rocket id | either |
+| 68 | "LoRa off" — mute/un-mute every LoRa transmit; refused mid-`INFLIGHT` | either |
 
 Connection parameters are policy, not default: the OC explicitly requests a slow
 interval (200 ms, latency 4) while the rail is off and a fast one (30 ms) for
