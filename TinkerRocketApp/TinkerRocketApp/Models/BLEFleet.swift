@@ -195,7 +195,24 @@ class BLEFleet: NSObject, ObservableObject {
     private var reconnectAttempts: Int = 0
     private let maxReconnectAttempts = 8   // #291: was 3 (~7 s); raised for flight dropouts
     private var lastPeripheralIdentifier: UUID?
-    private var userInitiatedDisconnect = false
+    /// Peripherals the USER asked to disconnect, awaiting their
+    /// didDisconnectPeripheral callback (#836 item 8).
+    ///
+    /// This was a single fleet-wide Bool. disconnectAll() set it once and then
+    /// cancelled every connection in a loop, but the FIRST didDisconnect
+    /// consumed it — so with a base station and a rocket both up (an
+    /// explicitly supported pairing), the second device fell through to the
+    /// automatic-reconnect ladder and came back ~1 s later. On the resulting
+    /// didConnect the syncer re-attached and re-pushed the whole active
+    /// profile, sendPyroConfig included, to a rocket the user had just
+    /// disconnected from.
+    ///
+    /// Per-peripheral, so each cancel is matched by exactly the callback it
+    /// caused. It also fixes a second-order leak of the old Bool: disconnect()
+    /// set it even when the device had no peripheral, and with no callback
+    /// coming nothing ever cleared it — poisoning the next UNRELATED dropout
+    /// into looking user-initiated, which suppressed its reconnect.
+    private var userInitiatedDisconnects = UserDisconnectLedger()
     // #571: ALL peripherals handed back by CoreBluetooth state restoration —
     // a BS + direct-rocket session restores two, and keeping only .first
     // silently lost the second (it never reappeared because the restored
@@ -304,8 +321,8 @@ class BLEFleet: NSObject, ObservableObject {
             devices.removeAll { $0 === device }
             return
         }
-        userInitiatedDisconnect = true
         if let peripheral = device.peripheral {
+            userInitiatedDisconnects.mark(peripheral.identifier)
             centralManager.cancelPeripheralConnection(peripheral)
         }
     }
@@ -318,9 +335,11 @@ class BLEFleet: NSObject, ObservableObject {
             devices.removeAll { $0 === v.device }
             virtualDriver = nil
         }
-        userInitiatedDisconnect = true
+        // Mark EVERY peripheral before cancelling any: each cancel is matched
+        // by its own callback, so one shared flag could only ever cover one.
         for device in devices {
             if let peripheral = device.peripheral {
+                userInitiatedDisconnects.mark(peripheral.identifier)
                 centralManager.cancelPeripheralConnection(peripheral)
             }
         }
@@ -518,6 +537,10 @@ extension BLEFleet: CBCentralManagerDelegate {
         reconnectAttempts = 0
         // Connection resolved — the BLEDevice now owns the peripheral (#173).
         connectingPeripherals[peripheral.identifier] = nil
+        // Any pending user-disconnect marker for this peripheral is now stale:
+        // it is connected again, so the NEXT disconnect is a real dropout and
+        // must be allowed to reconnect (#836 item 8).
+        userInitiatedDisconnects.forget(peripheral.identifier)
 
         let device = BLEDevice(peripheral: peripheral, name: name)
         adopt(device, peripheralID: peripheral.identifier)
@@ -552,8 +575,7 @@ extension BLEFleet: CBCentralManagerDelegate {
             activeDeviceID = devices.first?.peripheral?.identifier
         }
 
-        if userInitiatedDisconnect {
-            userInitiatedDisconnect = false
+        if userInitiatedDisconnects.consume(peripheral.identifier) {
             reconnectAttempts = 0
             statusMessage = "Disconnected"
             discoveredDevices = []
@@ -595,6 +617,7 @@ extension BLEFleet: CBCentralManagerDelegate {
         print("Failed to connect: \(error?.localizedDescription ?? "Unknown error")")
         // Connection attempt resolved (failed) — release the strong ref (#173).
         connectingPeripherals[peripheral.identifier] = nil
+        userInitiatedDisconnects.forget(peripheral.identifier)
         statusMessage = "Connection failed"
     }
 }
