@@ -30,7 +30,11 @@ on:
       - '.github/workflows/unit-tests.yml'
 
 jobs:
-  unit:
+  # NOT "unit": android-tests.yml already has a job by that name, and GitHub
+  # lists checks by JOB name, so two workflows called "unit" are two
+  # indistinguishable rows on any PR that triggers both.  Introduced by #935;
+  # caught on #941, where the only "unit" rows were in fact Android's.
+  python-unit:
     runs-on: ubuntu-latest
 
     steps:
