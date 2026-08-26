@@ -44,6 +44,15 @@ class FakeTransport(val deviceId: String) : BleTransport {
     private val eventFlow = MutableSharedFlow<TransportEvent>(extraBufferCapacity = 16)
     override val events: Flow<TransportEvent> = eventFlow
 
+    /**
+     * Live collectors on [events].  This is the real leak signal for #838
+     * item 6: RealBleTransport backs `events` with a MutableSharedFlow that
+     * never completes, so a session that never cancels its collector stays
+     * reachable forever — and that shows up here as a subscription that
+     * outlives close().
+     */
+    val eventCollectorCount: Int get() = eventFlow.subscriptionCount.value
+
     var failConnect = false
     var connectCalls = 0
     val writes = mutableListOf<Pair<TrCharacteristic, ByteArray>>()
