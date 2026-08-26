@@ -55,6 +55,7 @@ import com.tinkerbug.tinkerrocket.session.FleetDevice
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.UnitFormatter
 import java.util.Locale
+import com.tinkerbug.tinkerrocket.protocol.PyroCardPolicy
 
 /**
  * Phase 3 dashboard slice — the pad-ops core: identity header, staleness
@@ -417,8 +418,8 @@ fun DashboardScreen(
             }
         }
 
-        // Pyro tiles: iOS PyroChannelsView twin (2x2 grid, direct rocket
-        // links only — iOS hides pyro on BS links).  Badge ladder per tile:
+        // Pyro tiles: iOS PyroChannelsView twin (2x2 grid).  Badge ladder per
+        // tile:
         // FIRED beats everything; the continuity badge shows while armed or
         // for 5 s after that tile's manual test (single-reveal state — a
         // second tap MOVES the reveal, the iOS quirk included); a TESTING
@@ -426,7 +427,23 @@ fun DashboardScreen(
         // The badge carries four states (#828): red is a MEASURED open, and a
         // channel nobody has tested reads NOT TESTED, not NO CONT. #297
         // fail-safe on a stale frame is NO DATA.
-        if (!session.isBaseStation) {
+        //
+        // #838 item 7: this was wrapped in `if (!session.isBaseStation)`,
+        // commented "direct rocket links only — iOS hides pyro on BS links".
+        // iOS does the OPPOSITE: DashboardView renders
+        // PyroChannelsView(relayMode: true) on a base-station link, with
+        // continuity from the relayed health scorecard. So the comment both
+        // misdescribed the reference implementation and disguised a missing
+        // safety display as deliberate parity — in the standard pad
+        // configuration (rocket relaying over LoRa to a BS the phone is paired
+        // to) the Android operator had NO continuity readout at all, on the
+        // only link available at the pad.
+        //
+        // pyroContinuityOf already handles the relay path correctly; nothing
+        // called it on this screen with isBaseStation = true because nothing
+        // rendered.
+        run {
+            val relay = session.isBaseStation
             val config by session.rocketConfig.collectAsState()
             val contPendingUntil by session.contTestPendingUntil.collectAsState()
             var contTestChannel by remember { mutableStateOf(0) }
@@ -450,12 +467,31 @@ fun DashboardScreen(
                 }
             }
             val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
-            val armed = telemetry.pyroArmed
+            // No armed/fired bits exist on the relay path — the LoRa downlink
+            // carries no pyro_status — so force them false rather than render
+            // a zero as a reading (iOS relayMode does the same).
+            val armed = PyroCardPolicy.armed(relay, telemetry.pyroArmed)
             val inflight = telemetry.state == "INFLIGHT"
 
             // iOS pyroChannelConfig(_:): no readback yet → (false, 0, 0),
             // which renders "Disabled" until the cmd-20 burst lands (~1 s).
+            //
+            // On a relay there is no cmd-20 readback to wait for — the config
+            // never arrives over LoRa — so the ACTIVE PROFILE stands in, which
+            // is what iOS's configProvider does on this branch. It describes
+            // what the app believes it pushed, not what the rocket echoed, and
+            // that distinction is why the card is labelled "(via LoRa)".
+            val profile = if (PyroCardPolicy.configSource(relay) ==
+                PyroCardPolicy.ConfigSource.ACTIVE_PROFILE) profileStore?.activeProfile else null
             fun channelConfig(ch: Int): Triple<Boolean, Int, Float> {
+                profile?.let { p ->
+                    return when (ch) {
+                        1 -> Triple(p.pyro1Enabled, p.pyro1TriggerMode, p.pyro1TriggerValue)
+                        2 -> Triple(p.pyro2Enabled, p.pyro2TriggerMode, p.pyro2TriggerValue)
+                        3 -> Triple(p.pyro3Enabled, p.pyro3TriggerMode, p.pyro3TriggerValue)
+                        else -> Triple(p.pyro4Enabled, p.pyro4TriggerMode, p.pyro4TriggerValue)
+                    }
+                }
                 val c = config ?: return Triple(false, 0, 0f)
                 return when (ch) {
                     1 -> Triple(c.pyro1Enabled, c.pyro1TriggerMode, c.pyro1TriggerValue)
@@ -494,13 +530,23 @@ fun DashboardScreen(
                     text = if (enabled) triggerText(mode, value) else "Disabled",
                     fired = fired,
                     continuity = continuity,
-                    revealed = armed || contTestChannel == ch,
-                    testing = (contPendingUntil[ch] ?: 0L) > nowMs,
+                    // Always revealed on a relay: `armed` is unavailable there,
+                    // so gating on it would hide the readout permanently — and
+                    // the readout is the entire point of this card at the pad.
+                    // Matches iOS `relayMode || armed || contTestChannel`.
+                    revealed = PyroCardPolicy.revealed(relay, armed, contTestChannel, ch),
+                    testing = !relay && (contPendingUntil[ch] ?: 0L) > nowMs,
                     // Rail gate matches the iOS tile: the OC refuses cmd 35
                     // rail-off (queued ARM pulse would deliver at power-on);
                     // this compact tile hides the button until power-on and
                     // the Settings twin carries the explanatory caption.
-                    showTestButton = !armed && !fired && !inflight && telemetry.pwrPinOn,
+                    // No test button on a relay. The stand-back LoRa test
+                    // (uplink cmds 35/36) is iOS-only — the parity ledger
+                    // records it as pending Android's own pyro-safety pass —
+                    // so offering a button that sends a direct-link cmd 35 into
+                    // a base station would do nothing and read as a fault.
+                    showTestButton = PyroCardPolicy.showTestButton(
+                        relay, armed, fired, inflight, telemetry.pwrPinOn),
                     onTestContinuity = {
                         session.sendPyroContTest(ch)
                         contTestChannel = ch
@@ -512,16 +558,17 @@ fun DashboardScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Pyro Channels${if (armed) " — ARMED" else ""}",
+                        PyroCardPolicy.title(relay, armed),
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        tile(1, telemetry.pyro1Cont, telemetry.pyro1Fired, Modifier.weight(1f))
-                        tile(2, telemetry.pyro2Cont, telemetry.pyro2Fired, Modifier.weight(1f))
+                        // Fired bits are direct-link only, like armed.
+                        tile(1, telemetry.pyro1Cont, PyroCardPolicy.fired(relay, telemetry.pyro1Fired), Modifier.weight(1f))
+                        tile(2, telemetry.pyro2Cont, PyroCardPolicy.fired(relay, telemetry.pyro2Fired), Modifier.weight(1f))
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        tile(3, telemetry.pyro3Cont, telemetry.pyro3Fired, Modifier.weight(1f))
-                        tile(4, telemetry.pyro4Cont, telemetry.pyro4Fired, Modifier.weight(1f))
+                        tile(3, telemetry.pyro3Cont, PyroCardPolicy.fired(relay, telemetry.pyro3Fired), Modifier.weight(1f))
+                        tile(4, telemetry.pyro4Cont, PyroCardPolicy.fired(relay, telemetry.pyro4Fired), Modifier.weight(1f))
                     }
                 }
             }
