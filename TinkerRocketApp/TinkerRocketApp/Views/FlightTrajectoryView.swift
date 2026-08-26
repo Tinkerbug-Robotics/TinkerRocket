@@ -255,7 +255,7 @@ struct FlightScene3DView: UIViewRepresentable {
                 withName: "mainCamera", recursively: false)
 
             if let ref = trackPoints.first {
-                Self.fetchArcGISImagery(
+                SceneGroundTexture.apply(
                     refLat: ref.lat, refLon: ref.lon,
                     extent: extent, groundNode: groundNode,
                     sceneRoot: scene.rootNode
@@ -276,44 +276,9 @@ struct FlightScene3DView: UIViewRepresentable {
         return SCNVector3(x, Float(altM), z)
     }
 
-    // MARK: - ArcGIS Satellite Imagery
-
-    private static func fetchArcGISImagery(
-        refLat: Double, refLon: Double, extent: Float,
-        groundNode: SCNNode, sceneRoot: SCNNode
-    ) {
-        let halfM = Double(extent * 1.5)
-        let mPerDegLat = 110_540.0
-        let mPerDegLon = 111_320.0 * cos(refLat * .pi / 180)
-
-        let south = refLat - halfM / mPerDegLat
-        let north = refLat + halfM / mPerDegLat
-        let west = refLon - halfM / mPerDegLon
-        let east = refLon + halfM / mPerDegLon
-
-        let bbox = "\(west),\(south),\(east),\(north)"
-        let urlStr = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export"
-            + "?bbox=\(bbox)&bboxSR=4326&imageSR=4326"
-            + "&size=1024,1024&format=png&f=image"
-
-        guard let url = URL(string: urlStr) else { return }
-
-        URLSession.shared.dataTask(with: url) { data, response, error in
-            guard let data = data,
-                  let httpResp = response as? HTTPURLResponse,
-                  httpResp.statusCode == 200,
-                  let image = UIImage(data: data) else { return }
-            DispatchQueue.main.async {
-                groundNode.geometry?.firstMaterial?.diffuse.contents = image
-                groundNode.geometry?.firstMaterial?.diffuse.wrapS = .clamp
-                groundNode.geometry?.firstMaterial?.diffuse.wrapT = .clamp
-                groundNode.geometry?.firstMaterial?.lightingModel = .constant
-                sceneRoot.childNode(withName: "groundGrid", recursively: false)?
-                    .removeFromParentNode()
-            }
-        }.resume()
-    }
-
+    // Ground texture lives in SceneGroundTexture (#838 item 1) — it used to
+    // be a private copy in each of these two views, and when the app moved
+    // off Esri only one copy was migrated.
     // MARK: - Scene Builder
 
     static func buildScene(
