@@ -427,7 +427,7 @@ Twelve GitHub Actions workflows run automatically, each path-filtered to what it
 | Workflow | What it does |
 |----------|--------------|
 | **cpp-tests.yml** | GoogleTest suites — on changes to `tinkerrocket-idf/components/`, `tinkerrocket-idf/projects/`, `tests_cpp/`, or `tests/integration/`. `projects/` is on the list because three suites include policy headers straight out of `projects/*/main` |
-| **firmware-build.yml** | Full ESP-IDF build of `flight_computer`, `out_computer`, `base_station`, and `radio_board` (Docker: `espressif/idf:v6.0.1`) |
+| **firmware-build.yml** | Full ESP-IDF build of `flight_computer`, `out_computer`, `base_station`, `radio_board`, `rocket_computer_mini` and `pyro_channel_test` — 12 jobs, since the board-flagged projects build once per revision (Docker: `espressif/idf:v6.0.1`) |
 | **sim-tests.yml** | pytest for `tinkerrocket-sim/` and the component sources it binds to |
 | **unit-tests.yml** | pytest for `tests/unit/` and `tests/test_roll_profile_semantics.py` — the Python ports of firmware logic (apogee detector, landing detector, mag-scale auto-select) and the base-station binary log reader, whose field offsets are asserted against the C structs in `RocketComputerTypes.h` |
 | **ios-tests.yml** | XCTest for `TinkerRocketApp/` |

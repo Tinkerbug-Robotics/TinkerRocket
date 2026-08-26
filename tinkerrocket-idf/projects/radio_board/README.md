@@ -54,10 +54,18 @@ J6 mates 1:1 with rocket-computer J5 and base-station J6.
 
 | Pin | Daughterboard net | Direction | Rocket host | Base-station host |
 |-----|-------------------|-----------|-------------|-------------------|
-| 1 | `VSS` | — | Q10-switched ground (`LoRa_ACT`) | hard GND |
-| 2 | `+BATT` | in | 6.4–8.4 V pack | ~4.6 V `V_LORA` |
+| 1 | `VSS` | — | hard GND | hard GND |
+| 2 | `+BATT` | in | 6.4–8.4 V pack, gated by U29 (TPS22810, EN = `LoRa_ACT`) via FL2 | ~4.6 V `V_LORA` from U2 (TPS61023 boost, EN = `LoRa_EN`) |
 | 3 | `LoRa_TX` (GPIO6) | **out** | OC GPIO10 (its RX) | BS GPIO36 (its RX) |
 | 4 | `LoRa_RX` (GPIO5) | **in** | OC GPIO11 (its TX) | BS GPIO35 (its TX) |
+
+**The rail is switched on the high side; the ground is common.** Pin 1 is a hard GND on
+both hosts — this table used to call the rocket side "Q10-switched ground (`LoRa_ACT`)",
+and there is no `Q10` in the rocket-computer netlist at all (#837 item 5). It matters
+beyond the reference designator: with a common ground, an "off" daughterboard is *not*
+isolated from the host. The host's idle-high UART TX drives through the daughterboard's
+R77 (1 k) into U28 GPIO5's ESD clamp and onto its 3V3 rail — the same phantom-feed
+already fixed for the RunCam. Park the host UART high-Z whenever the rail is gated off.
 
 Every board names these nets from *its own* perspective, so the same two names
 appear on both ends of a crossed pair — **the cable pin number is the only

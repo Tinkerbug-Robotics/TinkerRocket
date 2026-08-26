@@ -124,8 +124,19 @@ def check_idf_version():
             f"but firmware-build.yml builds on espressif/idf:{version}"]
 
 
+# Spelled-out counts the README uses for its CI table.  #838 item 9: the
+# README said "Nine" above a table listing ten, and the checker could not see
+# it — it only diffed *names*.  A wrong count is what a reader skims.
+_COUNT_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+}
+
+
 def check_workflows():
-    """The README's CI list must name every workflow, and no phantom ones."""
+    """The README's CI list must name every workflow, count them right, and
+    both docs must describe the firmware-build matrix as it actually is."""
     problems = []
     on_disk = {p.name for p in sorted(WORKFLOWS.glob("*.yml"))}
     text = README.read_text()
@@ -137,6 +148,84 @@ def check_workflows():
     for name in sorted(cited - on_disk):
         problems.append(f"README mentions {name}, which does not exist in "
                         f".github/workflows/")
+
+    # The count word above the table.
+    m = re.search(r"(\w+) GitHub Actions workflows run automatically", text)
+    if m is None:
+        problems.append("README no longer states how many workflows there are; "
+                        "the count sentence above the CI table is the thing "
+                        "readers skim")
+    else:
+        word = m.group(1).lower()
+        stated = _COUNT_WORDS.get(word)
+        if stated is None:
+            problems.append(f'README says "{m.group(1)} GitHub Actions workflows" '
+                            f"— not a count word this checker knows; spell it out")
+        elif stated != len(on_disk):
+            problems.append(f'README says "{m.group(1)} GitHub Actions workflows" '
+                            f"but {len(on_disk)} exist in .github/workflows/")
+
+    # CONTRIBUTING deliberately lists a run-these-locally SUBSET, so it is not
+    # checked for completeness — only for phantoms.
+    contributing = REPO / "CONTRIBUTING.md"
+    if contributing.exists():
+        for name in sorted(set(re.findall(r"[\w-]+\.yml", contributing.read_text())) - on_disk):
+            problems.append(f"CONTRIBUTING.md mentions {name}, which does not "
+                            f"exist in .github/workflows/")
+
+    # Every project in the firmware-build matrix must be named in both docs.
+    problems += _check_firmware_matrix(text, contributing)
+    return problems
+
+
+def _check_firmware_matrix(readme_text, contributing_path):
+    """Both docs enumerate the firmware-build projects; the matrix is truth."""
+    fw = WORKFLOWS / "firmware-build.yml"
+    if not fw.exists():
+        return []
+    # Deliberately a regex, not a YAML parse: check_docs.py has no third-party
+    # dependencies and runs before anything is installed.
+    projects = sorted(set(re.findall(r"^\s*-?\s*project:\s*([\w-]+)",
+                                     fw.read_text(), re.MULTILINE)))
+    if not projects:
+        return ["firmware-build.yml has no matrix `project:` entries; the "
+                "matrix check cannot verify the docs"]
+    problems = []
+
+    # README's CI table is the enumerating one: it must name every project.
+    row = next((ln for ln in readme_text.splitlines() if "firmware-build.yml" in ln), None)
+    if row is not None:
+        missing = [p for p in projects if p not in row]
+        if missing:
+            problems.append(
+                f"README.md's firmware-build row omits {', '.join(missing)} — the "
+                f"matrix builds {len(projects)} projects, so a reader concludes "
+                f"CI does not cover the ones left out")
+
+    # CONTRIBUTING's table is a deliberately terse run-these-locally summary,
+    # so it says "all N firmware projects" rather than listing them. Check the
+    # COUNT — "all four" was the #838 item 9 defect, and a wrong number there
+    # is what makes a contributor skip a local run.
+    if contributing_path.exists():
+        ctext = contributing_path.read_text()
+        crow = next((ln for ln in ctext.splitlines() if "firmware-build.yml" in ln), None)
+        if crow is not None:
+            m = re.search(r"all (\w+) firmware projects", crow)
+            if m is None:
+                missing = [p for p in projects if p not in crow]
+                if missing:
+                    problems.append(
+                        f"CONTRIBUTING.md's firmware-build row neither says "
+                        f'"all N firmware projects" nor names {", ".join(missing)}')
+            else:
+                stated = _COUNT_WORDS.get(m.group(1).lower())
+                if stated is None:
+                    problems.append(f'CONTRIBUTING.md says "all {m.group(1)} firmware '
+                                    f'projects" — not a count word this checker knows')
+                elif stated != len(projects):
+                    problems.append(
+                        f'CONTRIBUTING.md says "all {m.group(1)} firmware projects" but '
+                        f"firmware-build.yml builds {len(projects)}")
     return problems
 
 

@@ -20,10 +20,28 @@ struct config
     // host-agnostic, swappable matched pairs).
     //
     // J6 mates 1:1 with rocket-computer J5 and base-station J6:
-    //   J6.1 VSS  <- switched ground return (rocket: Q10 / LoRa_ACT)
+    //   J6.1 VSS  <- hard GND on BOTH hosts. The rail is switched on the
+    //                HIGH side, not the return: on the rocket by U29
+    //                (TPS22810DRVR, EN/UVLO = LoRa_ACT) feeding J5.2 through
+    //                FL2; on the base station by U2 (TPS61023 boost, EN =
+    //                LoRa_EN) whose output V_LORA is the only supply on J6.2.
+    //                #837 item 5: this said "switched ground return (rocket:
+    //                Q10 / LoRa_ACT)". There is no Q10 in the rocket-computer
+    //                netlist at all, and believing the GROUND is gated leads
+    //                to the wrong conclusion about an "off" daughterboard —
+    //                see the phantom-feed note below.
     //   J6.2 +BATT<- 6.4-8.4 V pack (rocket) or ~4.6 V V_LORA (base station)
     //   J6.3 net LoRa_TX = GPIO6 -> host's RX   (we drive it)
     //   J6.4 net LoRa_RX = GPIO5 <- host's TX   (host drives it)
+    // Because the ground is COMMON and only the high side is gated, an "off"
+    // daughterboard is not isolated from the host: the host's idle-high UART
+    // TX drives through the daughterboard's R77 (1k) into U28 GPIO5's ESD
+    // clamp and onto its 3V3 rail. That is the same phantom-feed already
+    // fixed for the RunCam, and it means the host UART must be parked (high-Z)
+    // whenever the rail is gated off — reasoning that "the board is off, so
+    // the line is harmless" is exactly what the old switched-ground wording
+    // encouraged.
+    //
     // The net *names* are self-perspective on each board, so the same two
     // names appear on both ends of a crossed pair — the cable pin number is
     // the only unambiguous reference. Host ends: OC GPIO11 TX / GPIO10 RX
