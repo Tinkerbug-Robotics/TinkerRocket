@@ -115,17 +115,24 @@ struct SaveAreaView: View {
                 .frame(height: 240)
 
                 Form {
+                    // Snapshotting the spec makes the manifest honest, but a
+                    // picker that still moves during a run is its own lie: the
+                    // sheet would show 20 km / Topo while 5 km of Imagery+Topo
+                    // was being fetched. Frozen for the duration, like Cancel.
                     Section("Source") {
                         Picker("Imagery", selection: $source) {
                             ForEach(cacheableSources) { Text($0.displayName).tag($0) }
                         }
+                        .disabled(downloader.isRunning)
                     }
                     Section("Area") {
                         sliderRow(title: "Radius", value: String(format: "%.1f km", radiusKm),
                                   binding: $radiusKm, range: 1...20, step: 0.5)
+                            .disabled(downloader.isRunning)
                         sliderRow(title: "Detail (max zoom)", value: "z\(Int(maxZoom))",
                                   binding: $maxZoom,
                                   range: 13...Double(source.maxZoom), step: 1)
+                            .disabled(downloader.isRunning)
                         HStack {
                             Text("Estimate").foregroundColor(.secondary)
                             Spacer()
@@ -174,16 +181,27 @@ struct SaveAreaView: View {
                                 // sheet: it outlives us, and a dismissal
                                 // mid-run used to finish the download with
                                 // nobody left to write the manifest.
+                                // Snapshot EVERYTHING the manifest needs before
+                                // starting (#836 item 1). Only regionName and
+                                // center used to be hoisted; radius, max zoom
+                                // and source were read from @State inside this
+                                // escaping closure, which runs minutes later
+                                // when the download finishes — so adjusting a
+                                // slider or the source picker mid-run recorded
+                                // a region nobody had fetched. The spec is the
+                                // same value handed to the downloader, so the
+                                // two cannot disagree.
                                 let regionName = name.isEmpty ? defaultName : name
-                                let center = region.center
-                                downloader.start(region: spec, source: source) { tiles, byteCount in
+                                let downloadedSpec = spec
+                                let downloadedSource = source
+                                downloader.start(region: downloadedSpec, source: downloadedSource) { tiles, byteCount in
                                     store.add(OfflineRegion(
                                         name: regionName,
-                                        lat: center.latitude, lon: center.longitude,
-                                        radiusMeters: radiusKm * 1000,
-                                        minZoom: 10, maxZoom: effectiveMaxZoom,
-                                        source: source.rawValue, tileCount: tiles,
-                                        bytes: byteCount, savedAt: Date()))
+                                        spec: downloadedSpec,
+                                        source: downloadedSource,
+                                        tileCount: tiles,
+                                        bytes: byteCount,
+                                        savedAt: Date()))
                                 }
                             } label: {
                                 Label("Download \(tileCount) tiles", systemImage: "arrow.down.circle.fill")

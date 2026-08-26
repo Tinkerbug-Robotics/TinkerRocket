@@ -36,6 +36,50 @@ struct OfflineRegion: Identifiable, Codable, Equatable {
     var tileSource: TileSource? { TileSource(rawValue: source) }
 }
 
+extension OfflineRegion {
+    /// Manifest entry for a completed download, derived from the SAME
+    /// `RegionSpec` and `TileSource` that were handed to the downloader
+    /// (#836 item 1).
+    ///
+    /// SaveAreaView used to build this by reading `radiusKm`, `maxZoom` and
+    /// `source` out of `@State` inside the escaping completion closure — which
+    /// runs when the download FINISHES, minutes later — while
+    /// `downloader.start` had snapshotted the real geometry by value at tap
+    /// time. Nothing disabled the source picker or the sliders during the run,
+    /// so a user who adjusted them mid-download got a manifest describing a
+    /// region nobody had fetched.
+    ///
+    /// Two things went wrong from there: the saved area claimed coverage it
+    /// did not have and drew the hatched "not downloaded" placeholder out to
+    /// its false radius; and `OfflineRegionStore.delete` calls
+    /// `cache.removeTiles(source:)` with the recorded source, so a wrong
+    /// source deleted nothing while the storage total dropped by `bytes` —
+    /// leaving tiles on disk that the total could not see and Delete could
+    /// never reclaim, which is exactly the failure TileDownloader says was
+    /// fixed.
+    ///
+    /// Taking the spec means the manifest and the download cannot describe
+    /// different regions: there is only one value.
+    ///
+    /// Use THIS initialiser for a finished download — the memberwise one
+    /// takes radius, zoom and source separately and so can express a
+    /// manifest that does not match what was fetched.
+    init(name: String, spec: RegionSpec, source: TileSource,
+         tileCount: Int, bytes: Int64, savedAt: Date) {
+        self.init(name: name,
+                  lat: spec.center.latitude,
+                  lon: spec.center.longitude,
+                  radiusMeters: spec.radiusMeters,
+                  minZoom: spec.minZoom,
+                  maxZoom: spec.maxZoom,
+                  source: source.rawValue,
+                  tileCount: tileCount,
+                  bytes: bytes,
+                  savedAt: savedAt)
+    }
+}
+
+
 final class OfflineRegionStore: ObservableObject {
     static let shared = OfflineRegionStore()
 
