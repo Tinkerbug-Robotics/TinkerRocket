@@ -57,7 +57,7 @@ which runs on everything. (The full set is larger; the README's CI table lists a
 | Workflow | Runs on |
 |----------|---------|
 | `cpp-tests.yml` | changes to components, `tests_cpp/`, integration tests |
-| `firmware-build.yml` | full ESP-IDF build of all four firmware projects |
+| `firmware-build.yml` | full ESP-IDF build of all six firmware projects, once per board revision |
 | `sim-tests.yml` | the simulator and the sources it binds to |
 | `unit-tests.yml` | `tests/unit/` — Python ports of firmware logic, plus the base-station log reader |
 | `ios-tests.yml` | the iOS app |
