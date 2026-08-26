@@ -141,6 +141,28 @@ class TelemetryDataTest {
         val t2 = decodeOk("""{"st":"PRELAUNCH"}""")
         assertNull(t2.hopChannel, "fixed-mode frames omit hch entirely")
         assertNull(t2.netidDrops, "healthy-nid frames omit nidd entirely")
+
+        // "szd" — the sibling counter (#838 item 4).  The base station has
+        // emitted it since #570 and this decoder ignored it, so a rocket and
+        // base station flashed from different builds produced a silent
+        // blackout: every frame dropped, nidd stays 0 because the netid never
+        // gets read, and the only counter that HAD the answer was discarded.
+        val t3 = decodeOk("""{"st":"PRELAUNCH","szd":12}""")
+        assertEquals(12, t3.sizeDrops)
+        assertNull(t3.netidDrops, "a protocol mismatch is not a netid mismatch")
+
+        // Same lenient-optional contract as nidd: omitted when healthy, and an
+        // off-type value must not fail the whole frame.
+        assertNull(decodeOk("""{"st":"PRELAUNCH"}""").sizeDrops)
+        assertEquals(7, decodeOk("""{"st":"PRELAUNCH","szd":"7"}""").sizeDrops)
+        assertEquals(4, decodeOk("""{"st":"PRELAUNCH","szd":4.0}""").sizeDrops)
+        assertNull(decodeOk("""{"st":"PRELAUNCH","szd":"bogus"}""").sizeDrops)
+
+        // Both faults at once — a mixed-build pair at a site with another
+        // pair nearby.  They are independent counters and must both survive.
+        val t4 = decodeOk("""{"st":"PRELAUNCH","nidd":3,"szd":9}""")
+        assertEquals(3, t4.netidDrops)
+        assertEquals(9, t4.sizeDrops)
     }
 
     // ── Missing keys → defaults ───────────────────────────────────────────

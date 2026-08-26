@@ -1430,6 +1430,40 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
                     label = "BLE",
                 )
             }
+
+            // LoRa drop counters (#838 item 4).  Both are recency-windowed by
+            // the base station, so a non-zero value means it is happening NOW.
+            // Android decoded "nidd" but rendered it nowhere and never decoded
+            // "szd" at all, so on this dashboard both faults were silent — the
+            // operator saw stale telemetry with no diagnostic, which is the
+            // blackout these counters exist to end.
+            if (isBaseStation) {
+                // Another BS/rocket pair on its own network id at the same
+                // site is normal traffic, so this stays informational.  iOS
+                // escalates it to a warning when the BS is hearing NO rocket;
+                // there is no tracking-health signal on this screen to gate
+                // that on, so it is left neutral rather than guessed at.
+                telemetry.netidDrops?.takeIf { it > 0 }?.let { drops ->
+                    Text(
+                        "Hearing $drops packets from other networks " +
+                            "(another pair nearby is normal)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // No benign reading for this one: these are OUR rocket's
+                // frames, unreadable because the two ends disagree about the
+                // protocol.
+                telemetry.sizeDrops?.takeIf { it > 0 }?.let { drops ->
+                    Text(
+                        "Protocol mismatch: $drops packets dropped — the rocket " +
+                            "and base station were flashed from different builds; " +
+                            "re-flash both",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
         }
     }
 }

@@ -25,7 +25,7 @@ is restored. "Parity at v1.0" is checkable ⇔ this file is honest.
 
 | Since | Divergence | Rationale |
 |---|---|---|
-| 2026-07-23 | Disconnect suppression is **per-device** (`pendingUserDisconnects` set); iOS uses one global `userInitiatedDisconnect` flag that can suppress the WRONG device's reconnect in a multi-device fleet | The global flag is an iOS latent bug, not a behavior to preserve |
+| 2026-08-25 | Both apps decode and render the LoRa drop counters `nidd` and `szd`, but iOS escalates the **nidd** line from informational to a warning when the base station is hearing no rocket (`trackingHealthy`); Android renders it informational always. `szd` is a warning on both. | Another BS/rocket pair on its own network id is normal traffic, so nidd is only a fault when it comes with no rocket — Android's dashboard has no tracking-health signal to gate on, and inventing one was out of scope for #838 item 4. `szd` has no benign reading on either platform. |
 | 2026-07-23 | Download API returns typed `DownloadResult.Busy` for a second concurrent download; iOS silently overwrites the in-flight completion handler (leaking it) | Silent handler loss is a defect; byte/wire behavior unchanged |
 | 2026-07-23 | Reconnect endgame is **re-scan → sighting-gated autoConnect**; iOS parks a CoreBluetooth `connect()` forever | Android `autoConnect=true` from a bare MAC can silently never fire (plan §3); the CB parked connect has no analog |
 | 2026-07-27 | FreqScan's fixed-frequency **Apply** (transactional relay + verify + rollback) is iOS-only; Android shows a "use iOS" note | The fleet runs hopping mode (#150 default) where Apply is refused by design — the mask auto-applies. Port the transactional flow when a fixed-frequency need reappears |

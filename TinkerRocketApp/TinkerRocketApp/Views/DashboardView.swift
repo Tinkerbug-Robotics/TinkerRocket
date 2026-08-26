@@ -3294,6 +3294,19 @@ struct SignalStrengthView: View {
                         .foregroundColor(.orange)
                 }
             }
+
+            // "szd" — the sibling counter, and unlike nidd it has no benign
+            // reading: these are OUR rocket's frames, unreadable because the
+            // two ends were flashed from different builds.  Not gated on
+            // trackingHealthy for that reason.  The base station has emitted
+            // this since #570 and neither app decoded it, so the blackout it
+            // exists to explain stayed silent (#838 item 4).
+            if isBaseStation, let drops = telemetry.size_drops, drops > 0 {
+                Label("Protocol mismatch: \(drops) packets dropped — the rocket and base station were flashed from different builds; re-flash both",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
         }
         .padding()
         .frame(maxWidth: .infinity)
