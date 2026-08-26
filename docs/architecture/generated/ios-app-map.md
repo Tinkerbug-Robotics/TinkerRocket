@@ -3,7 +3,7 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 31,110 lines across 77 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 31,198 lines across 77 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
@@ -85,7 +85,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [FrequencyScanSample.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FrequencyScanSample.swift) | 15 | `FrequencyScanSample` |
 
 
-## `Views/` — 30 files, 15,407 lines
+## `Views/` — 30 files, 15,495 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -103,12 +103,12 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | State Machine · Tick Counter (ObservableObject so SwiftUI can observe it) · View · Top Bar · Center Display · Bottom Controls · Actions · Continuity Badge (shared by the test view and the pyro cards) · Slow-Mo Camera Manager · Camera Preview (UIViewRepresentable) |
 | [FileManagerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FileManagerView.swift) | 647 | `FileManagerView`, `FilePageNavigator`, `FileRow`, `ShareHelper`, `FlightFileItemSource` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Share Helper (presents UIActivityViewController via UIKit to avoid SwiftUI .sheet blank screen) |
+| [MapView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/MapView.swift) | 544 | `PredictedLandingAnnotation`, `RocketMapView`, `MapView` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | UIViewRepresentable MKMapView wrapper · Main Map View · Preview |
 | [FlightChartView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FlightChartView.swift) | 512 | `FlightChartView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Zoom & Pan State · Zoom Helpers · Body · Chart View · Zoom Indicator · Gestures · Data Loading · Chart Series Update · Progressive LOD Re-decimation · Binary Search Helpers |
 | [FleetDashboardComponents.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FleetDashboardComponents.swift) | 502 | `PairSwitcherView`, `UnitsBarView`, `RocketChip`, `BaseStationStripView`, `RocketSectionHeader`, `RelayRocketSectionView`, +2 more |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Pair switcher (≥2 base stations) · Units bar (roster chips) · Base-station strip · Rocket section header · Non-focused relayed rocket section |
-| [MapView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/MapView.swift) | 456 | `PredictedLandingAnnotation`, `RocketMapView`, `MapView` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | UIViewRepresentable MKMapView wrapper · Main Map View · Preview |
 | [DeviceManagerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DeviceManagerView.swift) | 421 | `DeviceManagerView`, `KnownDeviceDetailView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Network · Devices · Detail / editor |
 | [MagCalSphereView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/MagCalSphereView.swift) | 355 | `MagCalSphereView` |
@@ -132,4 +132,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 77 files, 31,110 lines.
+Total: 77 files, 31,198 lines.
