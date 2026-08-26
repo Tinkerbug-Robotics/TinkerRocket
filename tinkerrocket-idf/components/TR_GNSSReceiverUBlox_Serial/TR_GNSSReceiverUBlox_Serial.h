@@ -66,6 +66,11 @@ class TR_GNSSReceiverUBloxSerial
         bool ensureHighPerformanceClock();
         bool otp_program_attempted_ = false;  // one write attempt per boot
         bool otp_reset_done_ = false;         // one post-write reset/reconnect per boot
+        // #837 item 6: RESET_N is not wired on ANY board revision to date
+        // (v7/v8/v9 all declare GNSS_RESET_N = -1) — the module's ~RESET goes
+        // only to its own pull-up and is never brought out to the host
+        // connector. Warn once per boot rather than on every retry.
+        bool reset_pin_absent_logged_ = false;
 
         // Helper: install/reconfigure the UART driver at a given baud rate and pins.
         // Tears down any existing driver first.
