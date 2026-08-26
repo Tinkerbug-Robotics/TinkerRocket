@@ -15,11 +15,18 @@ import kotlin.math.tan
  * this is that component's math, kept pure-JVM so the projection, culling and
  * camera conventions are testable without a Canvas).
  *
- * Coordinates are EKF local ENU meters, straight from the CSV columns the 2D
- * ground track already uses (`Position East/North/Up (m)`) — unlike iOS,
- * which reconstructs local coordinates from GPS lat/lon.  Same rendered
- * shape, better source: the EKF track is smoother and exists even for
- * GNSS-degraded flights.
+ * Coordinates are local ENU meters.  The EKF solution comes straight from the
+ * CSV's `Position East/North/Up (m)`; the GNSS solution is converted into the
+ * same frame by [geodeticToEnu].
+ *
+ * Both are drawn (#838 item 3).  This used to read "same rendered shape,
+ * better source" and plot the EKF track alone — but the two solutions are not
+ * the same shape: #741 measured them landing 81 m apart on the CENJARS
+ * flight, far enough to send someone to the wrong end of a field.  The EKF
+ * track IS smoother and does survive a GNSS outage, which is why it stays the
+ * primary; it is not a substitute for showing the other one.  A base-station
+ * LoRa log has no EKF columns at all, and used to render as the literal text
+ * "No EKF position data in this log".
  *
  * Conventions (pinned by Trajectory3DTest):
  *  - Camera azimuth `yawRad` is the direction of the CAMERA from the center,
@@ -74,6 +81,79 @@ public object Trajectory3D {
      * shave that a human will notice missing (the chart LOD learned the same
      * lesson; its test pins apogee surviving LTTB).
      */
+    /**
+     * Mean Earth radius, metres — the value the firmware's own forward
+     * conversion uses, so a track converted here lands in the same metric as
+     * the EKF track it is drawn beside.
+     */
+    private const val R_EARTH_M: Double = 6_371_000.0
+
+    /**
+     * Convert a geodetic track to the local ENU frame the EKF track lives in
+     * (#838 item 3).
+     *
+     * The two solutions genuinely disagree — #741 measured the nav filter and
+     * GNSS landing **81 m apart** on the CENJARS flight after a 1.9 s boost
+     * satellite outage that the filter dead-reckoned through and never
+     * reconverged from. The standing rule from that investigation is to draw
+     * both and say so, never to average them or silently prefer one.
+     *
+     * ANCHORING. The EKF's ENU origin is a running mean of pad GNSS fixes
+     * frozen 120 s after the first fix, and the firmware writes it to no frame
+     * and no sidecar (#741) — so it cannot be recovered from the log. Instead
+     * of reconstructing it, this pins the geodetic track's first valid fix to
+     * [anchorEast]/[anchorNorth], normally the EKF track's first sample. #741
+     * measured the two solutions 0.7 m apart at launch, so that alignment
+     * costs at most that, and every metre of divergence after it is real.
+     *
+     * Rows with no fix (lat or lon exactly 0, or non-finite) are dropped, and
+     * negative altitudes are clamped to 0 — both matching iOS
+     * `extractTrackPoints`, which drops them to avoid underground artefacts
+     * from sensor noise.
+     */
+    public fun geodeticToEnu(
+        lat: List<Double>,
+        lon: List<Double>,
+        alt: List<Double>,
+        anchorEast: Double = 0.0,
+        anchorNorth: Double = 0.0,
+    ): List<V3> {
+        val rows = minOf(lat.size, lon.size, alt.size)
+        var originLat = Double.NaN
+        var originLon = Double.NaN
+        var metresPerDegree = 0.0
+        var cosLat = 0.0
+        val out = ArrayList<V3>(rows)
+
+        for (i in 0 until rows) {
+            val la = lat[i]
+            val lo = lon[i]
+            val al = alt[i]
+            // "No fix" is exactly 0/0 in these logs, not a plausible position.
+            if (!la.isFinite() || !lo.isFinite() || la == 0.0 || lo == 0.0) continue
+            if (!al.isFinite()) continue
+
+            if (originLat.isNaN()) {
+                originLat = la
+                originLon = lo
+                // Scale by R + altitude and by the ORIGIN latitude's cosine,
+                // mirroring the firmware's own forward conversion rather than
+                // a more correct one, so the two tracks share a metric.
+                metresPerDegree = (R_EARTH_M + maxOf(al, 0.0)) * PI / 180.0
+                cosLat = cos(la * PI / 180.0)
+            }
+
+            out.add(
+                V3(
+                    e = anchorEast + (lo - originLon) * cosLat * metresPerDegree,
+                    n = anchorNorth + (la - originLat) * metresPerDegree,
+                    u = maxOf(al, 0.0),
+                ),
+            )
+        }
+        return out
+    }
+
     public fun downsample(track: List<V3>, maxCount: Int): List<V3> {
         if (track.size <= maxCount || maxCount < 3) return track
         val lm = landmarks(track) ?: return track
