@@ -51,14 +51,15 @@ otherwise be lost.
 
 ## What CI checks
 
-Seven workflows, each path-filtered to what it covers — except `docs.yml`, which runs on
-everything.
+The workflows you can run locally, each path-filtered to what it covers — except `docs.yml`,
+which runs on everything. (The full set is larger; the README's CI table lists all of them.)
 
 | Workflow | Runs on |
 |----------|---------|
 | `cpp-tests.yml` | changes to components, `tests_cpp/`, integration tests |
 | `firmware-build.yml` | full ESP-IDF build of all four firmware projects |
 | `sim-tests.yml` | the simulator and the sources it binds to |
+| `unit-tests.yml` | `tests/unit/` — Python ports of firmware logic, plus the base-station log reader |
 | `ios-tests.yml` | the iOS app |
 | `flight-report-tests.yml` | flight-report tooling |
 | `wire-codes.yml` | duplicate BLE command numbers |
@@ -70,6 +71,10 @@ Run the equivalents locally before pushing:
 cmake -S tests_cpp -B tests_cpp/build -DCMAKE_BUILD_TYPE=Debug
 cmake --build tests_cpp/build -j$(nproc)
 ctest --test-dir tests_cpp/build --output-on-failure
+```
+
+```bash
+python3 -m pytest tests/unit/ tests/test_roll_profile_semantics.py
 ```
 
 ```bash

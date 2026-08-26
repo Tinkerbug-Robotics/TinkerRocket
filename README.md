@@ -422,13 +422,14 @@ Validates sensor rates, frame integrity, timestamp health, and data completeness
 
 ### CI/CD
 
-Ten GitHub Actions workflows run automatically, each path-filtered to what it covers:
+Twelve GitHub Actions workflows run automatically, each path-filtered to what it covers:
 
 | Workflow | What it does |
 |----------|--------------|
-| **cpp-tests.yml** | GoogleTest suites — on changes to `tinkerrocket-idf/components/`, `tests_cpp/`, or `tests/integration/` |
+| **cpp-tests.yml** | GoogleTest suites — on changes to `tinkerrocket-idf/components/`, `tinkerrocket-idf/projects/`, `tests_cpp/`, or `tests/integration/`. `projects/` is on the list because three suites include policy headers straight out of `projects/*/main` |
 | **firmware-build.yml** | Full ESP-IDF build of `flight_computer`, `out_computer`, `base_station`, and `radio_board` (Docker: `espressif/idf:v6.0.1`) |
 | **sim-tests.yml** | pytest for `tinkerrocket-sim/` and the component sources it binds to |
+| **unit-tests.yml** | pytest for `tests/unit/` and `tests/test_roll_profile_semantics.py` — the Python ports of firmware logic (apogee detector, landing detector, mag-scale auto-select) and the base-station binary log reader, whose field offsets are asserted against the C structs in `RocketComputerTypes.h` |
 | **ios-tests.yml** | XCTest for `TinkerRocketApp/` |
 | **android-tests.yml** | Pure-JVM JUnit for `TinkerRocketAndroid/` (protocol/session/maps modules) against the same golden-vector corpus the C++ and iOS suites consume |
 | **android-release.yml** | Signed release APK on `android-v*` tag push — JVM suite, then `assembleRelease` signed from repo secrets, with an `apksigner` gate that fails if the APK came out debug-signed (see `docs/android-release-signing.md`) |

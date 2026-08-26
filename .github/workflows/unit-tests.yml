@@ -1,0 +1,49 @@
+name: Unit Tests (Python)
+
+# tests/unit/ and tests/test_roll_profile_semantics.py were invoked by NO
+# workflow (#836 item 6).  sim-tests.yml looks like it covers them — it runs
+# `python -m pytest tests/ -v` — but that step sets
+# `working-directory: tinkerrocket-sim`, so it collects tinkerrocket-sim/tests/,
+# an entirely different tree.  Five suites and 48 assertions ran only when
+# somebody remembered to run them by hand.
+
+on:
+  push:
+    paths:
+      - 'Data_Analysis/**'
+      - 'tests/unit/**'
+      - 'tests/test_roll_profile_semantics.py'
+      # test_bs_log_reader reads this header at runtime and asserts the Python
+      # reader's field offsets still match the C structs.
+      - 'tinkerrocket-idf/components/TR_RocketComputerTypes/**'
+      # test_apogee_detector and the landing suites mirror this component's
+      # logic in Python; the port has to be re-checked when it moves.
+      - 'tinkerrocket-idf/components/TR_KinematicChecks/**'
+      - '.github/workflows/unit-tests.yml'
+  pull_request:
+    paths:
+      - 'Data_Analysis/**'
+      - 'tests/unit/**'
+      - 'tests/test_roll_profile_semantics.py'
+      - 'tinkerrocket-idf/components/TR_RocketComputerTypes/**'
+      - 'tinkerrocket-idf/components/TR_KinematicChecks/**'
+      - '.github/workflows/unit-tests.yml'
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      # Same set flight-report-tests.yml installs: every suite here resolves
+      # its imports against Data_Analysis/, which needs all of these.
+      - name: Install dependencies
+        run: pip install numpy matplotlib jinja2 pandas pytest
+
+      - name: Run unit tests
+        run: python -m pytest tests/unit/ tests/test_roll_profile_semantics.py -v --tb=short
