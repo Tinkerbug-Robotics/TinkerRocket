@@ -64,7 +64,30 @@ struct board_pins
     // so OUR receive pin is 3 and OUR transmit pin is 4. These constants are
     // the FC's own rx/tx (passed straight to uartBegin(baud, rx, tx)) and
     // must stay in that order; do not "fix" them to match the net names.
-    // GNSS_RXD2 on GPIO2 (the receiver's second UART) is unused by firmware.
+    // J1 pin 5 is CARRIER-DEPENDENT, and the two carriers put opposite
+    // directions on it (#837 item 4).  Both fit the same BM05B-SRSS-TB and
+    // agree on pins 1-4 (module RXD / module TXD / VSYS / VSS), so they are
+    // mechanically interchangeable — pin 5 is the one place they differ:
+    //
+    //   gnss-sam10m8-18mm-hv   J3.5 -> R9 (1k) -> PPS -> U1.7 TIMEPULSE
+    //                          i.e. a module OUTPUT; an INPUT to the FC.
+    //   gnss-px1105r-...-ext-ant  J4.5 -> net RXD2 -> U1.15 RXD2
+    //                          i.e. a module INPUT; an OUTPUT from the FC.
+    //
+    // This used to read "GNSS_RXD2 on GPIO2 (the receiver's second UART) is
+    // unused by firmware", which is only true of the px1105r.  Implementing
+    // that "second UART" with a SAM-M10Q fitted would drive GPIO2 push-pull
+    // into the module's push-pull TIMEPULSE through R9 — a sustained ~3 mA
+    // contention on a u-blox output — and any read of that port would parse a
+    // 1 Hz square wave as NMEA/UBX.  In the other direction it means the free
+    // 1 PPS the SAM-M10Q carrier already routes to a P4 GPIO is being thrown
+    // away because the header called it a UART line.
+    //
+    // Nothing in firmware distinguishes the carriers at runtime — the board
+    // header hard-selects the UBlox driver and TR_GNSSReceiverUBlox_Serial has
+    // no carrier identification.  So GPIO2 stays unused: do not use it without
+    // first establishing which carrier is fitted (NVS, or the UBX MON-VER that
+    // begin() already reads).
     static constexpr uint8_t GNSS_RX = 3;   // FC receives; module TXD drives this
     static constexpr uint8_t GNSS_TX = 4;   // FC drives;   module RXD listens here
     static constexpr int8_t GNSS_RESET_N = -1;
@@ -181,6 +204,18 @@ struct board_pins
     // 2026-08-24 (#847).  The mapping below was a guess when this header was
     // written; it turned out correct, so nothing moved.  Recorded rather than
     // deleted so the next revision does not re-open the question.
+    //
+    // #837 item 1 re-opened it anyway, from the other direction: the SCHEMATIC
+    // said IND_1 -> R66 -> D7 and gave D7 the blue part, which would make this
+    // header backwards.  The bench article wins — it is the physical board —
+    // so the schematic and bom.csv were wrong, and were corrected instead:
+    // D7 now carries NCD0402R1 (Red) and D8 APHHS1005QBC/D (Blue), matching
+    // what the first article actually does.  Wiring did not change; only which
+    // part sits at which designator.
+    //
+    // That correction matters beyond this comment: a production run built to
+    // the OLD bom.csv would have fitted the two colours opposite to the board
+    // this mapping was verified against.
     static constexpr uint8_t RED_LED_PIN = 27;    // IND_1
     static constexpr uint8_t BLUE_LED_PIN = 26;   // IND_2
 

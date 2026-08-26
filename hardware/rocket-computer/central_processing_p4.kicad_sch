@@ -13815,7 +13815,7 @@
 				)
 			)
 		)
-		(property "Value" "Blue"
+		(property "Value" "Red"
 			(at 189.23 70.8025 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -13869,7 +13869,7 @@
 				)
 			)
 		)
-		(property "MPN" "APHHS1005QBC/D"
+		(property "MPN" "NCD0402R1"
 			(at 184.785 69.215 0)
 			(hide yes)
 			(show_name no)
@@ -13880,7 +13880,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Kingbright"
+		(property "Mfr" "NationStar"
 			(at 184.785 69.215 0)
 			(hide yes)
 			(show_name no)
@@ -14341,7 +14341,7 @@
 				)
 			)
 		)
-		(property "Value" "Red"
+		(property "Value" "Blue"
 			(at 203.835 70.8025 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14395,7 +14395,7 @@
 				)
 			)
 		)
-		(property "MPN" "NCD0402R1"
+		(property "MPN" "APHHS1005QBC/D"
 			(at 199.39 69.215 0)
 			(hide yes)
 			(show_name no)
@@ -14406,7 +14406,7 @@
 				)
 			)
 		)
-		(property "Mfr" "NationStar"
+		(property "Mfr" "Kingbright"
 			(at 199.39 69.215 0)
 			(hide yes)
 			(show_name no)

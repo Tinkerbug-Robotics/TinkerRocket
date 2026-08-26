@@ -35,7 +35,30 @@ struct board_pins
     // uartBegin(baud, rx, tx)), so they must be 3 and 4 in that order. V7 had
     // it right; the V8 header had it backwards and the driver's swap probe was
     // silently papering over it at ~1.5 s of boot cost.
-    // GNSS_RXD2 net on GPIO2 (receiver's second UART) is unused by firmware.
+    // J1 pin 5 is CARRIER-DEPENDENT, and the two carriers put opposite
+    // directions on it (#837 item 4).  Both fit the same BM05B-SRSS-TB and
+    // agree on pins 1-4 (module RXD / module TXD / VSYS / VSS), so they are
+    // mechanically interchangeable — pin 5 is the one place they differ:
+    //
+    //   gnss-sam10m8-18mm-hv   J3.5 -> R9 (1k) -> PPS -> U1.7 TIMEPULSE
+    //                          i.e. a module OUTPUT; an INPUT to the FC.
+    //   gnss-px1105r-...-ext-ant  J4.5 -> net RXD2 -> U1.15 RXD2
+    //                          i.e. a module INPUT; an OUTPUT from the FC.
+    //
+    // This used to read "GNSS_RXD2 on GPIO2 (the receiver's second UART) is
+    // unused by firmware", which is only true of the px1105r.  Implementing
+    // that "second UART" with a SAM-M10Q fitted would drive GPIO2 push-pull
+    // into the module's push-pull TIMEPULSE through R9 — a sustained ~3 mA
+    // contention on a u-blox output — and any read of that port would parse a
+    // 1 Hz square wave as NMEA/UBX.  In the other direction it means the free
+    // 1 PPS the SAM-M10Q carrier already routes to a P4 GPIO is being thrown
+    // away because the header called it a UART line.
+    //
+    // Nothing in firmware distinguishes the carriers at runtime — the board
+    // header hard-selects the UBlox driver and TR_GNSSReceiverUBlox_Serial has
+    // no carrier identification.  So GPIO2 stays unused: do not use it without
+    // first establishing which carrier is fitted (NVS, or the UBX MON-VER that
+    // begin() already reads).
     static constexpr uint8_t GNSS_RX = 3;   // FC receives; module TXD drives this
     static constexpr uint8_t GNSS_TX = 4;   // FC drives;   module RXD listens here
     static constexpr int8_t GNSS_RESET_N = -1;
@@ -131,6 +154,12 @@ struct board_pins
     // is inferred here, not separately measured on a V8 board.  Good enough to
     // stop guessing; re-check on V8 silicon before relying on it for anything
     // beyond indicator polarity.
+    //
+    // #837 item 1: the V9 SCHEMATIC disagreed with the V9 bench result, and
+    // the schematic was the one corrected (see board_v9.h).  The V8 archive
+    // wires this identically — GPIO27 -> IND_1 -> R59 -> D4, GPIO26 -> IND_2
+    // -> R60 -> D5 — so whatever the V8 archive's D4/D5 value fields say, the
+    // inference above still stands on the same footing it always did.
     static constexpr uint8_t RED_LED_PIN = 27;    // IND_1
     static constexpr uint8_t BLUE_LED_PIN = 26;   // IND_2
 
