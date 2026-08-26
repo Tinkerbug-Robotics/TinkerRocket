@@ -12,6 +12,7 @@ on:
       - 'tests_cpp/**'
       - 'tests/integration/**'
       - 'tests/test_data/**'   # integration tests are parametrized over these fixtures
+      - '.github/workflows/cpp-tests.yml'
   pull_request:
     paths:
       - 'tinkerrocket-idf/components/**'
@@ -23,6 +24,7 @@ on:
       - 'tests_cpp/**'
       - 'tests/integration/**'
       - 'tests/test_data/**'   # integration tests are parametrized over these fixtures
+      - '.github/workflows/cpp-tests.yml'
 
 # TR_GuidancePN is a private submodule. When the repo secret
 # TR_GUIDANCEPN_TOKEN is set (this org, trusted branches), we recurse
