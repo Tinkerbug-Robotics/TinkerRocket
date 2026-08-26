@@ -3,7 +3,7 @@
 	(generator "pcbnew")
 	(generator_version "10.0")
 	(general
-		(thickness 1.5862)
+		(thickness 1.6472)
 		(legacy_teardrops no)
 	)
 	(paper "A4")
@@ -14,6 +14,8 @@
 		(0 "F.Cu" signal)
 		(4 "In1.Cu" signal)
 		(6 "In2.Cu" signal)
+		(8 "In3.Cu" signal)
+		(10 "In4.Cu" signal)
 		(2 "B.Cu" signal)
 		(9 "F.Adhes" user "F.Adhesive")
 		(11 "B.Adhes" user "B.Adhesive")
@@ -56,7 +58,7 @@
 			)
 			(layer "dielectric 1"
 				(type "prepreg")
-				(thickness 0.2104)
+				(thickness 0.1)
 				(material "FR4 7628 RC49%")
 				(epsilon_r 4.4)
 				(loss_tangent 0.016)
@@ -67,7 +69,7 @@
 			)
 			(layer "dielectric 2"
 				(type "core")
-				(thickness 1.065)
+				(thickness 0.5579)
 				(material "FR4 core")
 				(epsilon_r 4.38)
 				(loss_tangent 0.016)
@@ -78,10 +80,32 @@
 			)
 			(layer "dielectric 3"
 				(type "prepreg")
-				(thickness 0.2104)
+				(thickness 0.1)
 				(material "FR4 7628 RC49%")
 				(epsilon_r 4.4)
 				(loss_tangent 0.016)
+			)
+			(layer "In3.Cu"
+				(type "copper")
+				(thickness 0.035)
+			)
+			(layer "dielectric 4"
+				(type "core")
+				(thickness 0.5579)
+				(material "FR4")
+				(epsilon_r 4.5)
+				(loss_tangent 0.02)
+			)
+			(layer "In4.Cu"
+				(type "copper")
+				(thickness 0.035)
+			)
+			(layer "dielectric 5"
+				(type "prepreg")
+				(thickness 0.1)
+				(material "FR4")
+				(epsilon_r 4.5)
+				(loss_tangent 0.02)
 			)
 			(layer "B.Cu"
 				(type "copper")
@@ -116,6 +140,7 @@
 		)
 		(capping no)
 		(filling no)
+		(zone_defaults)
 		(pcbplotparams
 			(layerselection 0x00000000_00000000_55555555_5755f5ff)
 			(plot_on_all_layers_selection 0x00000000_00000000_00000000_00000000)

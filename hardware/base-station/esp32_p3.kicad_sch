@@ -5153,30 +5153,6 @@
 			)
 		)
 	)
-	(global_label "VDD_SPI"
-		(shape input)
-		(at 34.925 110.49 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "ef9b47b6-0d6a-4bed-9ed7-6dfcb7b0e522")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 24.2593 110.49 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-	)
 	(global_label "LoRa_EN"
 		(shape input)
 		(at 171.45 104.775 0)
@@ -11360,6 +11336,84 @@
 			(project "base-station"
 				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
 					(reference "#PWR032")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+3V3")
+		(at 34.925 110.49 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "fdfe83fb-a0a5-40d1-9dec-81fab58d514f")
+		(property "Reference" "#PWR033"
+			(at 34.925 114.3 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 34.925 106.045 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 34.925 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 34.925 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 34.925 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "7824ef27-f47f-4cb0-91c2-5e57f1293483")
+		)
+		(instances
+			(project "base-station"
+				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
+					(reference "#PWR033")
 					(unit 1)
 				)
 			)
