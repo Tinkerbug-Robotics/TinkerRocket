@@ -512,6 +512,26 @@ foreach(BSREV 1 2 3)
         TEST_PREFIX "v${BSREV}.")
 endforeach()
 
+# ---------- test_fc_gnss_reset_map (x3) ----------
+# #837 item 6: the GNSS "reset and re-verify" path called a pulseReset() that
+# opened with a silent `if (reset_n_pin < 0) return;` — and every FC board
+# revision declares GNSS_RESET_N = -1, so the reset never happened and a fresh
+# SAM-M10Q flew at the default nav-rate ceiling. The fix routes that path
+# through UBX-CFG-RST; this pins the premise that there is no line to drive.
+# Built once per revision, exactly as the firmware selects its header.
+foreach(FCREV 7 8 9)
+    add_executable(test_fc_gnss_reset_map_v${FCREV} test_fc_gnss_reset_map.cpp)
+    target_compile_definitions(test_fc_gnss_reset_map_v${FCREV} PRIVATE TR_BOARD_V${FCREV}=1)
+    target_include_directories(test_fc_gnss_reset_map_v${FCREV} PRIVATE
+        ${SHIM_DIR}
+        ${LIB_DIR}/TR_RocketComputerTypes
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+    )
+    target_link_libraries(test_fc_gnss_reset_map_v${FCREV} GTest::gtest_main)
+    gtest_discover_tests(test_fc_gnss_reset_map_v${FCREV}
+        TEST_PREFIX "v${FCREV}.")
+endforeach()
+
 # ---------- test_bs_storage_policy ----------
 # Host-side test for the NAND bring-up retry policy (#761): mountExternalFlashFat
 # was single-shot, so one transient error demoted the whole boot from a 512 MB

@@ -121,11 +121,27 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         delay(10);
     }
 
-    auto pulseReset = [&]()
+    // Returns TRUE only if a reset line was actually driven (#837 item 6).
+    //
+    // This used to return void after a silent `if (reset_n_pin < 0) return;`,
+    // so every caller that logged "resetting the receiver" was describing
+    // something that had not happened. RESET_N is not wired on ANY board
+    // revision to date — v7, v8 and v9 all declare GNSS_RESET_N = -1, and the
+    // carrier confirms why: the SAM-M10Q's ~RESET (U1.18) goes only to R2 (1k)
+    // up to +3V3 and is not brought out to J3. There is nothing to drive.
+    auto pulseReset = [&]() -> bool
     {
         if (reset_n_pin < 0)
         {
-            return;
+            if (!reset_pin_absent_logged_)
+            {
+                reset_pin_absent_logged_ = true;
+                ESP_LOGW(TAG, "RESET_N is not wired on this board "
+                              "(GNSS_RESET_N = -1) — no hardware reset is "
+                              "possible; paths that reset-and-re-verify must "
+                              "use UBX-CFG-RST instead");
+            }
+            return false;
         }
 
         pinMode((uint8_t)reset_n_pin, OUTPUT);
@@ -136,6 +152,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         digitalWrite((uint8_t)reset_n_pin, HIGH);
         delay(250);
         ESP_LOGI(TAG, "Pulsed RESET_N on pin %d", reset_n_pin);
+        return true;
     };
 
     // Does the stream at this baud actually FRAME as GNSS traffic?
@@ -460,7 +477,13 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         ESP_LOGW(TAG, "No response on known bauds, retrying...");
         if ((scan_attempt % 2U) == 0U)
         {
-            pulseReset();
+            // Documented recovery step, and a no-op on every board built so
+            // far — pulseReset() now says so once instead of returning
+            // silently. Deliberately NOT falling back to UBX-CFG-RST here:
+            // unlike the OTP path, we have no working link at this point (the
+            // whole problem is that nothing has answered), so the baud to send
+            // it at is exactly what is unknown.
+            (void)pulseReset();
         }
         delay(700);
     }
@@ -588,9 +611,35 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         if (!otp_reset_done_)
         {
             otp_reset_done_ = true;
-            ESP_LOGW(TAG, "Resetting receiver to apply OTP high-clock config");
-            pulseReset();
-            delay(500);
+            // The OTP clock setting is only read at module startup, so the
+            // receiver has to actually restart. On every board built so far
+            // pulseReset() cannot do that (see there), and the reset it
+            // claimed to perform never happened: the recursive begin() below
+            // re-read the same pre-restart state, and the second pass gave up
+            // with "still not verified". A fresh SAM-M10Q therefore flew its
+            // first mission at the default clock — a ~10 Hz nav-rate ceiling
+            // on four constellations against GNSS_UPDATE_RATE = 18 — with
+            // nothing in the log saying the reset line does not exist.
+            //
+            // UBX-CFG-RST with resetMode 0 is a watchdog restart, which is
+            // exactly what the OTP config needs, and it travels over the UART
+            // we have just proved works (both OTP ACKs came back on it).
+            if (pulseReset())
+            {
+                ESP_LOGW(TAG, "Pulsed RESET_N to apply OTP high-clock config");
+                delay(500);
+            }
+            else
+            {
+                ESP_LOGW(TAG, "Issuing UBX-CFG-RST (hardware reset) to apply "
+                              "OTP high-clock config");
+                gnss.hardReset();
+                // A cold start takes appreciably longer than the 250 ms tail
+                // of a pin pulse, and it comes back at the DEFAULT baud with
+                // BBR cleared — the re-scan in the recursive begin() below
+                // finds it again, but only once it is actually up.
+                delay(1500);
+            }
             return begin(update_rate_hz_in, GNSS_RX, GNSS_TX,
                          reset_n_pin, safeboot_n_pin);
         }
