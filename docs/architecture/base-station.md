@@ -39,7 +39,7 @@ entirely** so it can be tested without hardware.
 | **Listens** | LoRa 915 MHz, up to 4 rockets tracked simultaneously |
 | **Stores** | CSV per flight on external flash (FAT) |
 | **Talks to your phone** | BLE GATT, 20 commands |
-| **Board** | **V5 hardware** — built as `TR_BS_BOARD=3`. Earlier revisions still build (1, 2) |
+| **Board** | **V6 hardware** — built as `TR_BS_BOARD=3`. Earlier revisions still build (1, 2) |
 
 ## The policy headers
 
@@ -159,7 +159,7 @@ GNSS sentinel. A log opened before that sync gets renamed once the time arrives.
 
 ## Power
 
-The current V5 board carries a **MAX17303G+** gauge and an MP2672 flight-pack charger.
+The current V6 board carries a **MAX17303G+** gauge and an MP2672 flight-pack charger.
 (Superseded revisions used the MAX17205G or BQ27Z746; the gauge is probed at runtime, so
 it does not depend on the build flag.) `maintainBatteryFets()` keeps the protection FETs enabled —
 the BQ27Z746 ships with `FET_EN=0` and reverts to it on reset, so a fresh gauge presents
@@ -220,16 +220,23 @@ strand an airborne one on the old for the rest of its descent. Before shortening
 guard, check what the guard was incidentally protecting.
 
 **The build flag does not match the board number on the silkscreen.** The current
-hardware is **V5**, and it is built as **`TR_BS_BOARD=3`** — the two numbering schemes
-diverged and have not been reconciled. Build the current board with:
+hardware is **V6** (the `.kicad_pcb` title block; V6 was the fixed-output TPS63021
+change), and it is built as **`TR_BS_BOARD=3`** — the two numbering schemes diverged
+and have not been reconciled. Build the current board with:
 
 ```bash
 idf.py -B build_v3 -DTR_BS_BOARD=3 build
 ```
 
-A plain `build/` directory defaults to `TR_BS_BOARD=2`, a superseded board. Flashing that
-onto a V5 gives you a **working boot with the wrong pin map** — no error, just peripherals
-that are not where the firmware thinks they are.
+A plain `build/` directory defaults to `TR_BS_BOARD=2`, a superseded board. Flashing
+that onto a V6 **hard-hangs at boot**: with `USE_UART_RADIO_MODEM=false` the direct-SPI
+branch calls `lora_direct_backend.begin()`, and an absent LLCC68 on floating SPI pins is
+exactly what makes RadioLib's `begin()` fail — so it logs `LoRa init FAILED!` and sits in
+`while (true) { vTaskDelay(...); }`, before BLE init and before the main loop.
+
+This paragraph used to say a wrong-flag build gave "a working boot with the wrong pin
+map — no error". It is the one paragraph an operator reads when the board will not
+work, and it described the opposite of what happens (#837 item 15).
 
 **`sdkconfig` is generated and untracked, and it overrides `sdkconfig.defaults`.** Same
 trap as the other firmwares: editing the defaults file does nothing while a stale

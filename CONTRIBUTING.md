@@ -148,16 +148,17 @@ as V8 — pass it anyway so both halves of a pair are built with one flag.
 
 ### Building the base station
 
-The build flag does not match the board number. Current hardware is **V5**, built as
-`TR_BS_BOARD=3`:
+The build flag does not match the board number. Current hardware is **V6**, built as
+`TR_BS_BOARD=3` — see [base-station.md](docs/architecture/base-station.md) for the
+flag-to-silkscreen mapping, which is the one place that tracks it:
 
 ```bash
 idf.py -B build_v3 -DTR_BS_BOARD=3 build
 ```
 
-A plain `build/` defaults to board 2 — a superseded revision. Flashing it onto a V5 boots
-cleanly with the wrong pin map: no error, just peripherals that are not where the firmware
-expects.
+A plain `build/` defaults to board 2 — a superseded revision. Flashing it onto a V6
+hard-hangs at boot with `LoRa init FAILED!`, before BLE init and before the main
+loop (#837 item 15).
 
 ### `sdkconfig` overrides `sdkconfig.defaults`
 
