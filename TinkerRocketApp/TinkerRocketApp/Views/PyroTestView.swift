@@ -60,7 +60,19 @@ struct PyroTestView: View {
     @State private var recordSecondsRemaining: Int = 10
     @State private var cameraRecording = false
     @State private var startedLoggingForTest = false  // #385: only stop what we started
-    @State private var videoSaved = false
+    /// Outcome of THIS run's recording: nil while the save is still in
+    /// flight, then saved/failed (#838 item 2).
+    ///
+    /// This was a plain `videoSaved: Bool` that startCountdown() forgot to
+    /// reset, and the .done branch keyed its icon and headline purely off it.
+    /// Run a test that records and saves, then tap FIRE again without leaving
+    /// the screen and hit an abort at T-0: the screen showed a green
+    /// checkmark and "Video Saved" for a run in which nothing was saved.
+    ///
+    /// A Bool cannot be made honest by resetting it either — false renders
+    /// "Video save failed", which is equally untrue of a run whose save has
+    /// not come back yet. Three states, so the screen can say "saving".
+    @State private var videoOutcome: VideoOutcome?
     @State private var errorMessage: String?
     // True once the fire command actually went out this test — the done-state
     // continuity verdict must not render for a test that never fired (guard
@@ -134,7 +146,7 @@ struct PyroTestView: View {
                             saveToPhotoLibrary(url: url)
                         } else {
                             DispatchQueue.main.async {
-                                videoSaved = false
+                                videoOutcome = .failed
                                 errorMessage = error?.localizedDescription ?? "Recording failed"
                                 state = .done
                                 ticker.stop()
@@ -154,6 +166,12 @@ struct PyroTestView: View {
                         errorMessage = device.isBaseStation
                             ? "Rocket LoRa link not ready — no fire command sent"
                             : "Link lost before fire — no fire command sent"
+                        // Recording and rocket logging started at T-5; this
+                        // path used to `return` without stopping either, so an
+                        // aborted test left the camera rolling until the
+                        // operator navigated away — and with nothing to end the
+                        // recording, no save verdict ever arrived.
+                        stopRecordingAndLogging()
                         state = .done
                         ticker.stop()
                         return
@@ -164,6 +182,7 @@ struct PyroTestView: View {
                     if device.isBaseStation,
                        device.focusRocketID != latchedTargetRID {
                         errorMessage = "Focused rocket changed — no fire command sent"
+                        stopRecordingAndLogging()
                         state = .done
                         ticker.stop()
                         return
@@ -338,10 +357,13 @@ struct PyroTestView: View {
 
         case .done:
             VStack(spacing: 12) {
-                Image(systemName: videoSaved ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                // Keyed off THIS run's outcome only.  nil means the save is
+                // still in flight — an abort at T-0 stops a recording that
+                // began at T-5, and its save lands a moment later.
+                Image(systemName: videoOutcome.iconName)
                     .font(.system(size: 60))
-                    .foregroundColor(videoSaved ? .green : .orange)
-                Text(videoSaved ? "Video Saved" : "Video save failed")
+                    .foregroundColor(videoOutcome.tint)
+                Text(videoOutcome.headline)
                     .font(.title2.weight(.bold))
                     .foregroundColor(.white)
 
@@ -475,6 +497,10 @@ struct PyroTestView: View {
     private func startCountdown() {
         errorMessage = nil
         firedThisTest = false
+        // Per-run, like errorMessage and firedThisTest.  Leaving this set was
+        // the whole of #838 item 2: a second test that aborted still wore the
+        // first one's green checkmark.
+        videoOutcome = nil
         state = .countdown
         secondsRemaining = 10
         ticker.start()
@@ -482,27 +508,35 @@ struct PyroTestView: View {
 
     private func safeRocket() {
         ticker.stop()
-        if cameraRecording {
-            // #560: cmd 23 is a TOGGLE — only stop logging if THIS test started
-            // it. Blind-toggling here stopped an operator's pre-existing session
-            // (the #385 failure mode, which was fixed on the recording-complete
-            // path but missed on the abort paths). Stop the camera regardless.
-            if startedLoggingForTest {
-                device.setRocketLoggingForTest(on: false)
-                startedLoggingForTest = false
-            }
-            camera.stopRecording()
-            cameraRecording = false
-        }
+        stopRecordingAndLogging()
         state = .idle
         secondsRemaining = 10
+    }
+
+    /// End whatever T-5 started: the camera, and rocket logging if THIS test
+    /// turned it on.
+    ///
+    /// Shared by safeRocket and the T-0 abort paths, which used to `return`
+    /// without doing either — leaving the camera rolling until the operator
+    /// navigated away, and leaving no way for a save verdict to arrive
+    /// (#838 item 2). #560 is why the logging half is conditional: cmd 23 is
+    /// a TOGGLE, and blind-toggling here stopped an operator's pre-existing
+    /// session. The camera stops regardless.
+    private func stopRecordingAndLogging() {
+        guard cameraRecording else { return }
+        if startedLoggingForTest {
+            device.setRocketLoggingForTest(on: false)
+            startedLoggingForTest = false
+        }
+        camera.stopRecording()
+        cameraRecording = false
     }
 
     private func saveToPhotoLibrary(url: URL) {
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
             guard status == .authorized else {
                 DispatchQueue.main.async {
-                    videoSaved = false
+                    videoOutcome = .failed
                     errorMessage = "Photo library access denied"
                     state = .done
                 }
@@ -513,7 +547,7 @@ struct PyroTestView: View {
             } completionHandler: { success, error in
                 try? FileManager.default.removeItem(at: url)
                 DispatchQueue.main.async {
-                    videoSaved = success
+                    videoOutcome = success ? .saved : .failed
                     if !success {
                         errorMessage = error?.localizedDescription ?? "Save failed"
                     }
@@ -535,6 +569,47 @@ struct PyroTestView: View {
             }
             camera.stopRecording()
             cameraRecording = false
+        }
+    }
+}
+
+/// What became of a pyro test's video recording (#838 item 2).
+///
+/// Deliberately three states, not a Bool. `PyroTestView` keyed its finished
+/// screen off a `videoSaved: Bool` that `startCountdown()` never reset, so a
+/// second test that aborted at T-0 still wore the first test's green
+/// checkmark and "Video Saved". Resetting the Bool would not have fixed it:
+/// `false` renders "Video save failed", which is equally untrue of a run
+/// whose save simply has not come back yet — and an abort at T-0 stops a
+/// recording that began at T-5, so that window is real.
+enum VideoOutcome: Equatable {
+    case saved
+    case failed
+}
+
+extension Optional where Wrapped == VideoOutcome {
+    /// nil = still saving.
+    var headline: String {
+        switch self {
+        case .some(.saved):  return "Video Saved"
+        case .some(.failed): return "Video save failed"
+        case .none:          return "Saving video…"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .some(.saved):  return "checkmark.circle.fill"
+        case .some(.failed): return "exclamationmark.circle.fill"
+        case .none:          return "arrow.triangle.2.circlepath"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .some(.saved):  return .green
+        case .some(.failed): return .orange
+        case .none:          return .secondary
         }
     }
 }
