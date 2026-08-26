@@ -93,16 +93,29 @@ checked-in copy only ever drifts out of sync with it. Each board keeps an empty
 `gerbers/` directory as the export target. Generate the package, then tag the
 commit so the revision stays recoverable:
 
-```bash
-kicad-cli pcb export gerbers -o hardware/rocket-computer/gerbers/ hardware/rocket-computer/rocket-computer.kicad_pcb
-```
+Use `tools/plot_gerbers.sh` rather than a bare `kicad-cli` invocation — it refuses to
+plot a dirty tree, stamps the commit and tag into the package's `README.txt`, and warns
+when the title-block rev disagrees with the tag:
 
 ```bash
-git tag hw/rocket-computer/v10 -m "sent to fab 2026-xx-xx"
+tools/plot_gerbers.sh rocket-computer
 ```
 
-The tag is what replaces `V9` in the filename. `git show hw/rocket-computer/v9`
-gets you exactly what was fabbed.
+Tag with the scheme in [docs/board-versioning.md](../docs/board-versioning.md) —
+lightweight, `<board>-v<major>.<minor>.<patch>`:
+
+```bash
+git tag rocket-computer-v10.0.0
+```
+
+`git show rocket-computer-v9.0.0` gets you exactly what was fabbed.
+
+This section used to give `git tag hw/rocket-computer/v10` and
+`git show hw/rocket-computer/v9`. That scheme does not exist: `git tag -l "hw/*"`
+returns nothing, `plot_gerbers.sh` matches `<board>-v*`, so a tag made the old way was
+invisible to the provenance tooling — the gerber package would have carried the
+PREVIOUS tag as its provenance while warning about a rev mismatch, and the documented
+`git show` would have returned `fatal: invalid object name` (#838 item 8).
 
 ## Libraries
 
