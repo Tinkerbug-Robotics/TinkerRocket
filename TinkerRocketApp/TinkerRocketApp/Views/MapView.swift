@@ -226,6 +226,11 @@ struct RocketMapView: UIViewRepresentable {
             self.parent = parent
         }
 
+        /// Same main-actor isolated-deinit trap as BasemapOverlayController
+        /// below it — SwiftUI releases this Coordinator whenever the map
+        /// screen goes away, so it is on the same hook.
+        nonisolated deinit {}
+
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
             // Check if the change is user-initiated (gesture recognizer active)
             if let gestureRecognizers = mapView.subviews.first?.gestureRecognizers {
