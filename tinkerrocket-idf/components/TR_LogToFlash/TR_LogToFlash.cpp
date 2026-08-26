@@ -2782,7 +2782,9 @@ void TR_LogToFlash::flushTaskLoop()
 
         // Periodic hook for deferred Core-0 work. Used by main.cpp to run
         // TR_FlightLog::servicePendingPrepareFlight on Core 0 (issue #77),
-        // moving the ~770 ms 256-block erase loop off the requesting task.
+        // moving the prealloc-sized erase loop off the requesting task
+        // (~120 ms at the current 40 blocks; this said "~770 ms 256-block",
+        // the retired preallocation — #837 item 10).
         // file_open is already set above, so frames keep flowing into the
         // ring on Core 1 while this hook runs.
         if (cfg.flush_task_hook != nullptr)

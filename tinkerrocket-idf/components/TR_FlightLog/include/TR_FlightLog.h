@@ -118,7 +118,10 @@ public:
     uint32_t  writeLockWaitSumUs() const { return wf_lock_wait_sum_us_; }
     void      resetLockWaitStats()       { wf_lock_wait_max_us_ = 0; wf_lock_wait_sum_us_ = 0; }
 
-    // Pre-launch: pick + erase a free contiguous range. May stall ~770 ms.
+    // Pre-launch: pick + erase a free contiguous range. Stalls for
+    // cfg_.prealloc_blocks erases — ~120 ms at the current 40 (#837 item 10;
+    // this said ~770 ms, the figure for the retired 256-block prealloc, so a
+    // reader sizing the arm-time window planned for 6x the real stall).
     // Writes the assigned flight_id to `flight_id_out` on success.
     //
     // This is the synchronous form. On hardware, prefer
@@ -128,7 +131,8 @@ public:
     Status prepareFlight(uint32_t& flight_id_out);
 
     // Defer a prepareFlight call. Sets a flag and returns immediately; the
-    // ~770 ms erase loop is performed by a later servicePendingPrepareFlight()
+    // prealloc-sized erase loop (~120 ms at 40 blocks) is performed by a
+    // later servicePendingPrepareFlight()
     // call (typically from the flush task on Core 0). Idempotent — calling
     // multiple times before service queues at most one prepare. No-op if a
     // flight is already active.
@@ -231,7 +235,7 @@ private:
     // touch this instance (#388). Held for the whole logical operation.
     // requestPrepareFlight() deliberately does NOT take it — it only sets the
     // volatile flag above, so the high-priority I2S task can never block on a
-    // ~770 ms prepareFlight erase that holds the lock.
+    // prepareFlight erase that holds the lock (~120 ms at 40 blocks).
     FlightLogMutex mutex_;
 
     // #510: writeFrame's mutex_-acquire wall time (see writeLockWaitMaxUs).

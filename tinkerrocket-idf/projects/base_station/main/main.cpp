@@ -216,7 +216,10 @@ static uint32_t uplink_defer_count    = 0;   // passes deferred to protect the d
 static uint32_t uplink_defer_override = 0;   // liveness backstop fired (should be ~0)
 
 // Storage mount state. Preferred backend is SD over SDMMC; if that fails at boot
-// we fall back to SPIFFS on internal flash (partitions.csv: "spiffs", ~5 MB).
+// we fall back to SPIFFS on internal flash (partitions.csv: "spiffs",
+// 0x1F0000 = ~1.9 MB — NOT the ~5 MB this said, which overstated the
+// surviving log capacity by 2.6x on the one comment a reader hits first
+// when triaging a demoted boot; #837 item 13).
 // The pointer is reassigned to /flash on fallback so all downstream paths
 // (logger, BLE file list/delete/download) keep working via VFS unchanged.
 static const char* SD_MOUNT_POINT = "/sdcard";
