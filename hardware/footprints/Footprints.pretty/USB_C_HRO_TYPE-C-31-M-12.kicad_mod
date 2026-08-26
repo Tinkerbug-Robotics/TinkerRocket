@@ -217,12 +217,26 @@
 		(roundrect_rratio 0.25)
 		(uuid "245fae56-8b58-4bd8-bbf1-36624dc3fa3e")
 	)
+	(pad "A1/B12" smd roundrect
+		(at -3.25 -4.045)
+		(size 0.6 1.45)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.25)
+		(uuid "eda87c04-3a59-4e2c-a9bd-f59ed31672aa")
+	)
 	(pad "A4/B9" smd roundrect
 		(at -2.45 -4.045)
 		(size 0.6 1.45)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(roundrect_rratio 0.25)
 		(uuid "412cd3c1-0d89-4ca6-be0e-1b17d8471f5a")
+	)
+	(pad "A4/B9" smd roundrect
+		(at -2.45 -4.045)
+		(size 0.6 1.45)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.25)
+		(uuid "70539c09-2020-4a42-a156-43d1513170d0")
 	)
 	(pad "A5" smd roundrect
 		(at -1.25 -4.045)
@@ -252,13 +266,6 @@
 		(roundrect_rratio 0.25)
 		(uuid "46ecdf8a-0917-4257-a388-b77e7451dc23")
 	)
-	(pad "B4/A9" smd roundrect
-		(at 2.45 -4.045)
-		(size 0.6 1.45)
-		(layers "F.Cu" "F.Mask" "F.Paste")
-		(roundrect_rratio 0.25)
-		(uuid "a35f3da7-7460-43f1-99b7-9ed521817778")
-	)
 	(pad "B1/A12" smd roundrect
 		(at 3.25 -4.045)
 		(size 0.6 1.45)
@@ -279,6 +286,13 @@
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(roundrect_rratio 0.25)
 		(uuid "51b193ee-c8c2-4ee6-8d8c-14b79a2c1520")
+	)
+	(pad "B4/A9" smd roundrect
+		(at 2.45 -4.045)
+		(size 0.6 1.45)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.25)
+		(uuid "a35f3da7-7460-43f1-99b7-9ed521817778")
 	)
 	(pad "B5" smd roundrect
 		(at 1.75 -4.045)
@@ -308,20 +322,6 @@
 		(roundrect_rratio 0.25)
 		(uuid "09bb6e12-e7e5-4788-b43e-4cc6c50a557a")
 	)
-	(pad "A4/B9" smd roundrect
-		(at -2.45 -4.045)
-		(size 0.6 1.45)
-		(layers "F.Cu" "F.Mask" "F.Paste")
-		(roundrect_rratio 0.25)
-		(uuid "70539c09-2020-4a42-a156-43d1513170d0")
-	)
-	(pad "A1/B12" smd roundrect
-		(at -3.25 -4.045)
-		(size 0.6 1.45)
-		(layers "F.Cu" "F.Mask" "F.Paste")
-		(roundrect_rratio 0.25)
-		(uuid "eda87c04-3a59-4e2c-a9bd-f59ed31672aa")
-	)
 	(pad "S1" thru_hole oval
 		(at -4.32 -3.13)
 		(size 1 2.1)
@@ -331,15 +331,6 @@
 		(remove_unused_layers no)
 		(uuid "69c3dc88-a37e-49ef-ae4d-497d3191ad5b")
 	)
-	(pad "S3" thru_hole oval
-		(at -4.32 1.05)
-		(size 1 1.6)
-		(drill oval 0.6 1.2)
-		(property pad_prop_mechanical)
-		(layers "*.Cu" "*.Mask")
-		(remove_unused_layers no)
-		(uuid "5991ca6f-c5c1-4692-8fe9-cf4b7ca50c4b")
-	)
 	(pad "S2" thru_hole oval
 		(at 4.32 -3.13)
 		(size 1 2.1)
@@ -348,6 +339,15 @@
 		(layers "*.Cu" "*.Mask")
 		(remove_unused_layers no)
 		(uuid "af5ae63f-ef36-487e-a6b8-831b84890f25")
+	)
+	(pad "S3" thru_hole oval
+		(at -4.32 1.05)
+		(size 1 1.6)
+		(drill oval 0.6 1.2)
+		(property pad_prop_mechanical)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "5991ca6f-c5c1-4692-8fe9-cf4b7ca50c4b")
 	)
 	(pad "S4" thru_hole oval
 		(at 4.32 1.05)

@@ -1,0 +1,219 @@
+(footprint "Supercap_Prismatic_13.0x7.0mm_H28.5mm_P10.00mm"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "Prismatic (rectangular can) electric double-layer supercapacitor module, vertical mount. Body 13.0 (W) x 7.0 (cell dia) mm cross-section x 28.5 mm tall, two straight radial leads on 10.00 mm pitch. Drawn for CDA/Zhifengwei CHP5R5L205R-TWQ (2.0 F, 5.5 V; ESR 190 mohm @1 kHz / ~380 mohm DC, per the CHP 5.5V series table; DigiKey-stocked). Dimensions and 10.00 mm lead spacing per the DigiKey listing (13 x 7 x 28.5 mm). Lead diameter 0.6 mm assumed from the CHP series family table; drill 0.9 mm gives 0.3 mm clearance. Pad 1 = POSITIVE. Datasheet: CDA CHP(5.5V) Series, spec date 2022-05-17.")
+	(tags "supercapacitor EDLC prismatic module radial tht polarised CHP")
+	(property "Reference" "REF**"
+		(at 0 -5 0)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a701")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "Supercap_Prismatic_13.0x7.0mm_H28.5mm_P10.00mm"
+		(at 0 5 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a702")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a703")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a704")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr through_hole)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -6.5 -3.5)
+		(end 6.5 -3.5)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a710")
+	)
+	(fp_line
+		(start -6.5 3.5)
+		(end -6.5 -3.5)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a713")
+	)
+	(fp_line
+		(start -5.2 -3.5)
+		(end -5.2 -2.5)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a714")
+	)
+	(fp_line
+		(start 6.5 -3.5)
+		(end 6.5 3.5)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a711")
+	)
+	(fp_line
+		(start 6.5 3.5)
+		(end -6.5 3.5)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a712")
+	)
+	(fp_line
+		(start -6.75 -3.75)
+		(end 6.75 -3.75)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a730")
+	)
+	(fp_line
+		(start -6.75 3.75)
+		(end -6.75 -3.75)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a733")
+	)
+	(fp_line
+		(start 6.75 -3.75)
+		(end 6.75 3.75)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a731")
+	)
+	(fp_line
+		(start 6.75 3.75)
+		(end -6.75 3.75)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a732")
+	)
+	(fp_line
+		(start -6.5 -3.5)
+		(end 6.5 -3.5)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a720")
+	)
+	(fp_line
+		(start -6.5 3.5)
+		(end -6.5 -3.5)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a723")
+	)
+	(fp_line
+		(start 6.5 -3.5)
+		(end 6.5 3.5)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a721")
+	)
+	(fp_line
+		(start 6.5 3.5)
+		(end -6.5 3.5)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a722")
+	)
+	(fp_text user "+"
+		(at -5.0 -2.2 0)
+		(layer "F.SilkS")
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a715")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" thru_hole rect
+		(at -5 0)
+		(size 1.6 1.6)
+		(drill 0.9)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a740")
+	)
+	(pad "2" thru_hole circle
+		(at 5 0)
+		(size 1.6 1.6)
+		(drill 0.9)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "3a1f9c02-6b41-4d7e-9a55-11c0b8e4a741")
+	)
+	(embedded_fonts no)
+)

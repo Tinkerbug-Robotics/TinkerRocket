@@ -13923,4 +13923,72 @@
 			)
 		)
 	)
+	(wire
+		(pts
+			(xy 212.725 83.82) (xy 216.535 83.82)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "cb5cd7aa-73b1-50ff-a097-3b4e044a31a8")
+	)
+	(global_label "PIEZZO"
+		(shape input)
+		(at 216.535 83.82 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "0d339515-dfa6-5e77-bbe8-7b8199a73409")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 216.535 83.82 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 212.725 104.14) (xy 216.535 104.14)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "481d5b24-e0b7-5490-a2dd-4c0a43af6c29")
+	)
+	(global_label "CAP_ACTIVE"
+		(shape input)
+		(at 216.535 104.14 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "24646dcc-67bb-555c-adb0-777ba42adc58")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 216.535 104.14 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
 )

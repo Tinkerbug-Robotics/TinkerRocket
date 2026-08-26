@@ -1,12 +1,14 @@
 (footprint "SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm_ThermalVias"
 	(version 20260206)
-	(generator "kicad-footprint-generator")
+	(generator "pcbnew")
+	(generator_version "10.0")
 	(layer "F.Cu")
 	(descr "SOIC, 8 Pin (https://www.analog.com/media/en/technical-documentation/data-sheets/ada4898-1_4898-2.pdf#page=29)")
 	(tags "SOIC SO")
 	(property "Reference" "REF**"
 		(at 0 -3.4 0)
 		(layer "F.SilkS")
+		(uuid "4ec3a719-4cef-4425-b060-ce69fbfe65e2")
 		(effects
 			(font
 				(size 1 1)
@@ -17,6 +19,7 @@
 	(property "Value" "SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm_ThermalVias"
 		(at 0 3.4 0)
 		(layer "F.Fab")
+		(uuid "ac11e1b9-39ee-42f2-93a1-1e488bad3aba")
 		(effects
 			(font
 				(size 1 1)
@@ -24,10 +27,33 @@
 			)
 		)
 	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "119f2681-94c8-4ae9-8d07-5d3e544ef586")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "e7c5daa7-403e-4b0d-b446-3a9226fd071d")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
 	(property "KiLib_Generator" "package/gullwing"
 		(at 0 0 0)
 		(layer "F.SilkS")
 		(hide yes)
+		(uuid "486d3ab4-9b39-4c1b-bd4b-db43a4b14516")
 		(effects
 			(font
 				(size 1 1)
@@ -45,6 +71,7 @@
 			(type solid)
 		)
 		(layer "F.SilkS")
+		(uuid "98b91337-7cb7-4742-b278-06b7684e64e0")
 	)
 	(fp_line
 		(start -2.06 -2.465)
@@ -54,6 +81,7 @@
 			(type solid)
 		)
 		(layer "F.SilkS")
+		(uuid "652ab856-975b-4753-a4d1-a0d916d642ee")
 	)
 	(fp_line
 		(start -2.06 2.56)
@@ -63,6 +91,7 @@
 			(type solid)
 		)
 		(layer "F.SilkS")
+		(uuid "0a5606bf-f169-4620-a295-9a6c6ad70c37")
 	)
 	(fp_line
 		(start 2.06 -2.56)
@@ -72,6 +101,7 @@
 			(type solid)
 		)
 		(layer "F.SilkS")
+		(uuid "cd09d58e-e315-4710-82cf-7cd090acfb2f")
 	)
 	(fp_line
 		(start 2.06 2.465)
@@ -81,6 +111,7 @@
 			(type solid)
 		)
 		(layer "F.SilkS")
+		(uuid "5b5ce5f3-1134-45fa-9e1c-462908898729")
 	)
 	(fp_line
 		(start 2.06 2.56)
@@ -90,12 +121,11 @@
 			(type solid)
 		)
 		(layer "F.SilkS")
+		(uuid "5abd287c-b790-43ea-bf96-eba98c7c3995")
 	)
 	(fp_poly
 		(pts
-			(xy -2.6 -2.47)
-			(xy -2.84 -2.8)
-			(xy -2.36 -2.8)
+			(xy -2.6 -2.47) (xy -2.84 -2.8) (xy -2.36 -2.8)
 		)
 		(stroke
 			(width 0.12)
@@ -103,6 +133,7 @@
 		)
 		(fill yes)
 		(layer "F.SilkS")
+		(uuid "3d080383-57fe-4163-8540-4e5e33cb9341")
 	)
 	(fp_line
 		(start -3.7 -2.46)
@@ -112,6 +143,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "42921fdf-f0f9-4ecf-b719-7a5df5d3fc15")
 	)
 	(fp_line
 		(start -3.7 2.46)
@@ -121,6 +153,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "ddb3d831-8010-49cf-a87b-7b8017c443b6")
 	)
 	(fp_line
 		(start -2.2 -2.7)
@@ -130,6 +163,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "53b43d44-4708-400f-99b8-433cee3eba1d")
 	)
 	(fp_line
 		(start -2.2 -2.46)
@@ -139,6 +173,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "08e42c55-4a78-4be1-a154-3f9d5d816053")
 	)
 	(fp_line
 		(start -2.2 2.46)
@@ -148,6 +183,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "b871e3ad-9bdb-49c2-812e-04007e4540fa")
 	)
 	(fp_line
 		(start -2.2 2.7)
@@ -157,6 +193,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "437bd454-93f9-4cc4-ab2b-b7b1124a2701")
 	)
 	(fp_line
 		(start 2.2 -2.7)
@@ -166,6 +203,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "2b09809f-54fb-4450-9e03-5c3437315c17")
 	)
 	(fp_line
 		(start 2.2 -2.46)
@@ -175,6 +213,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "ccb712d3-0f9f-4658-8dac-5b9937a8f121")
 	)
 	(fp_line
 		(start 2.2 2.46)
@@ -184,6 +223,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "66428763-ae35-4c5f-b4e7-3679c0964a18")
 	)
 	(fp_line
 		(start 2.2 2.7)
@@ -193,6 +233,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "c80594f8-2c75-4561-ae74-845ad41f132e")
 	)
 	(fp_line
 		(start 3.7 -2.46)
@@ -202,6 +243,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "fcee597b-dfc7-4fab-a351-25e1bd490cf0")
 	)
 	(fp_line
 		(start 3.7 2.46)
@@ -211,14 +253,11 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
+		(uuid "e41c9f71-b0b9-46b4-8e50-33946f173458")
 	)
 	(fp_poly
 		(pts
-			(xy -0.975 -2.45)
-			(xy 1.95 -2.45)
-			(xy 1.95 2.45)
-			(xy -1.95 2.45)
-			(xy -1.95 -1.475)
+			(xy -0.975 -2.45) (xy 1.95 -2.45) (xy 1.95 2.45) (xy -1.95 2.45) (xy -1.95 -1.475)
 		)
 		(stroke
 			(width 0.1)
@@ -226,10 +265,12 @@
 		)
 		(fill no)
 		(layer "F.Fab")
+		(uuid "a1223f4f-406c-40df-9410-d67c32f5249f")
 	)
 	(fp_text user "${REFERENCE}"
 		(at 0 0 90)
 		(layer "F.Fab")
+		(uuid "08c9f77d-fee5-449e-aedb-437a5406dbc7")
 		(effects
 			(font
 				(size 1 1)
@@ -242,72 +283,84 @@
 		(size 0.96 1.25)
 		(layers "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "b1c3af92-c482-4f80-a065-375c5c74ed11")
 	)
 	(pad "" smd roundrect
 		(at -0.57 0.75)
 		(size 0.96 1.25)
 		(layers "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "959996c1-d153-4269-9a7c-7082dc5ab323")
 	)
 	(pad "" smd roundrect
 		(at 0.57 -0.75)
 		(size 0.96 1.25)
 		(layers "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "5d19843a-bcb7-4ba5-8ed5-478db1fea063")
 	)
 	(pad "" smd roundrect
 		(at 0.57 0.75)
 		(size 0.96 1.25)
 		(layers "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "6863eca0-9ebf-4679-9469-f40055a6cbd9")
 	)
 	(pad "1" smd roundrect
 		(at -2.475 -1.905)
 		(size 1.95 0.6)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "42602433-6d9a-4f2d-b0d3-3bbb3baa509f")
 	)
 	(pad "2" smd roundrect
 		(at -2.475 -0.635)
 		(size 1.95 0.6)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "a78d021a-6622-41fb-b7f8-12899bbb5cc8")
 	)
 	(pad "3" smd roundrect
 		(at -2.475 0.635)
 		(size 1.95 0.6)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "e2fb2d04-6c0c-4969-9ddb-7f036b739b23")
 	)
 	(pad "4" smd roundrect
 		(at -2.475 1.905)
 		(size 1.95 0.6)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "e28975e1-a685-4101-bcf9-9ba68dbf1a45")
 	)
 	(pad "5" smd roundrect
 		(at 2.475 1.905)
 		(size 1.95 0.6)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "cedd728f-bd47-4b35-b610-998e3f17d8d3")
 	)
 	(pad "6" smd roundrect
 		(at 2.475 0.635)
 		(size 1.95 0.6)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "a29a0431-ddad-48f2-b764-795e79acb7bc")
 	)
 	(pad "7" smd roundrect
 		(at 2.475 -0.635)
 		(size 1.95 0.6)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "b6aed44b-a6d1-4e3e-9e8f-7a9702044ebb")
 	)
 	(pad "8" smd roundrect
 		(at 2.475 -1.905)
 		(size 1.95 0.6)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(roundrect_rratio 0.25)
+		(uuid "34d6307d-4404-4d24-b3a9-84d3bff07980")
 	)
 	(pad "9" thru_hole circle
 		(at -0.65 -1)
@@ -316,6 +369,7 @@
 		(property pad_prop_heatsink)
 		(layers "*.Cu")
 		(remove_unused_layers no)
+		(uuid "f361868f-529a-4daa-a6a9-4558c8abd5ff")
 	)
 	(pad "9" thru_hole circle
 		(at -0.65 0)
@@ -324,6 +378,7 @@
 		(property pad_prop_heatsink)
 		(layers "*.Cu")
 		(remove_unused_layers no)
+		(uuid "f407005b-1ecc-48f4-8b5a-5c46ff886f55")
 	)
 	(pad "9" thru_hole circle
 		(at -0.65 1)
@@ -332,6 +387,7 @@
 		(property pad_prop_heatsink)
 		(layers "*.Cu")
 		(remove_unused_layers no)
+		(uuid "4370226f-ca89-46f2-a511-f9d96409358d")
 	)
 	(pad "9" smd rect
 		(at 0 0)
@@ -339,6 +395,7 @@
 		(property pad_prop_heatsink)
 		(layers "B.Cu")
 		(zone_connect 2)
+		(uuid "de65c944-9ed9-486f-b3b7-7cd33c5f3129")
 	)
 	(pad "9" smd rect
 		(at 0 0)
@@ -346,6 +403,7 @@
 		(property pad_prop_heatsink)
 		(layers "F.Cu" "F.Mask")
 		(zone_connect 2)
+		(uuid "00b6a353-53df-4fed-a1f1-02d73df7930e")
 	)
 	(pad "9" thru_hole circle
 		(at 0.65 -1)
@@ -354,6 +412,7 @@
 		(property pad_prop_heatsink)
 		(layers "*.Cu")
 		(remove_unused_layers no)
+		(uuid "e74d0d0d-a375-44b5-b712-46ed4159fd26")
 	)
 	(pad "9" thru_hole circle
 		(at 0.65 0)
@@ -362,6 +421,7 @@
 		(property pad_prop_heatsink)
 		(layers "*.Cu")
 		(remove_unused_layers no)
+		(uuid "2526e2ed-a8e9-42ab-af1d-3982e37b33df")
 	)
 	(pad "9" thru_hole circle
 		(at 0.65 1)
@@ -370,6 +430,7 @@
 		(property pad_prop_heatsink)
 		(layers "*.Cu")
 		(remove_unused_layers no)
+		(uuid "b7111943-c528-4e9a-8a52-1fd57b0fce30")
 	)
 	(embedded_fonts no)
 	(model "${KICAD10_3DMODEL_DIR}/Package_SO.3dshapes/SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm.step"
