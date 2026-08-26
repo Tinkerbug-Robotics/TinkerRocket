@@ -55,10 +55,55 @@ struct FlightCSVData {
             "Number of Satellites", "PDOP",
             "GNSS Horizontal Accuracy (m)", "GNSS Vertical Accuracy (m)"
         ]),
+        // #142/#143 renamed the per-detector apogee columns in the WRITER and
+        // added a voted master, but this list kept the old names — "Altitude
+        // Apogee Flag" / "Velocity Apogee Flag" — for a year.  The picker
+        // intersects these groups with the file's actual headers, so the dead
+        // names were silently dropped rather than shown as ghosts, and the 16
+        // columns that do exist were unreachable: an operator investigating a
+        // deployment-timing anomaly could not plot when the master apogee vote
+        // latched or when a pyro fired (#838 item 5).
         ("Flags", [
-            "Launch Flag", "Altitude Apogee Flag", "Velocity Apogee Flag", "Landed Flag",
-            "Deployed Flag"
+            "Launch Flag", "Landed Flag", "Deployed Flag",
+            "Reboot Recovery", "FC Guidance Enabled"
+        ]),
+        // Its own group because apogee is not one thing: four independent
+        // detectors vote and the master latches on that vote, and telling a
+        // deployment story means plotting them against each other.
+        ("Apogee", [
+            "Apogee Detector: Baro", "Apogee Detector: Velocity",
+            "Apogee Detector: GPS", "Apogee Detector: Pitch",
+            "Apogee Flag (Master)"
+        ]),
+        ("Pyro", [
+            "Pyro 1 Continuity", "Pyro 2 Continuity",
+            "Pyro 3 Continuity", "Pyro 4 Continuity",
+            "Pyro 1 Fired", "Pyro 2 Fired", "Pyro 3 Fired", "Pyro 4 Fired"
+        ]),
+        ("Diagnostics", [
+            "EKF Ticks"
         ])
+    ]
+
+    /// Column names kept in `columnGroups` that the CURRENT writer no longer
+    /// emits, because files written by older builds still carry them and must
+    /// stay plottable.
+    ///
+    /// The parity test that pins `columnGroups` against
+    /// `CSVGenerator.buildCSVHeader()` allows exactly these — anything else
+    /// absent from the header is a rename that left this list behind, which is
+    /// what #838 item 5 was.
+    static let legacyColumnAliases: Set<String> = [
+        // Pre-#514 attitude names.  #514 renamed these to spell out that Roll
+        // is a body-Z azimuth while Pitch/Yaw are ZYX-Euler, so the three are
+        // not a valid Euler triple.
+        "Roll (deg)", "Pitch (deg)", "Yaw (deg)"
+    ]
+
+    /// Header columns deliberately absent from `columnGroups` — not plottable
+    /// as a series.
+    static let nonPlottableColumns: Set<String> = [
+        "Time (ms)"      // the X axis
     ]
 
     /// Column names grouped by category for LoRa base-station CSV files
