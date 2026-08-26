@@ -26,6 +26,8 @@ import com.tinkerbug.tinkerrocket.protocol.TelemetryDispatch
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -68,7 +70,12 @@ import java.time.ZoneOffset
  *    jobs with the same durations.
  */
 public class DeviceSession(
-    private val scope: CoroutineScope,
+    /**
+     * The fleet's scope. Deliberately NOT a `val`: only [sessionScope] is
+     * retained, so nothing in this class can launch onto the app-lifetime
+     * scope again (#838 item 6).
+     */
+    scope: CoroutineScope,
     private val transport: BleTransport,
     /** BLE advertised name at connect time (iOS `connectedDeviceName`). */
     public val connectedDeviceName: String = "",
@@ -299,6 +306,33 @@ public class DeviceSession(
     // ── Internal jobs / download state ───────────────────────────────────
 
     private var started = false
+    /**
+     * Everything this session launches, as a CHILD of the scope it was handed
+     * — so [close] can reclaim all of it at once (#838 item 6).
+     *
+     * The injected scope is the app-lifetime fleetScope. start() used to
+     * launch the transport-events collector directly on it and DISCARD the
+     * Job (only the second launch's Job is returned), and `transport.events`
+     * is a MutableSharedFlow that never completes — so that coroutine ran
+     * forever. FleetManager builds a brand-new DeviceSession on every
+     * (re)connect and drops the old one from _devices, but the live collector
+     * kept the old session reachable, and with it its RealBleTransport (hence
+     * a BluetoothGatt and its chars map), its remoteMap, and any partially
+     * assembled download ByteArrayOutputStream.
+     *
+     * A flaky launch day that cycles the link 40 times left 40 session graphs
+     * and 40 live coroutines on fleetScope with nothing able to reclaim them,
+     * on the same phone holding the flight's live telemetry.
+     *
+     * A child scope rather than a list of Jobs to cancel: there are 25 launch
+     * sites, and a list is a thing to forget to add to.
+     */
+    private val sessionScope: CoroutineScope =
+        CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+
+    /** The transport-events collector; ends only with [close]. */
+    private var eventsJob: Job? = null
+
     private var rssiJob: Job? = null
     private var downloadStallJob: Job? = null
     private var activeDownload: ActiveDownload? = null
@@ -335,9 +369,13 @@ public class DeviceSession(
         // does).  Double-connecting here raced/violated the transport
         // contract (Phase 2 review finding).  Standalone users (replay
         // feeds, tests) must connect the transport before start().
-        // Subscribe first so no event can be dropped.
-        scope.launch { transport.events.collect { onTransportEvent(it) } }
-        return scope.launch {
+        // Subscribe first so no event can be dropped.  transport.events is a
+        // MutableSharedFlow that never completes, so this collector only ends
+        // when the session scope is cancelled by close() (#838 item 6) — it
+        // used to be launched on the app-lifetime scope with its Job
+        // discarded, which is what kept every past session alive.
+        eventsJob = sessionScope.launch { transport.events.collect { onTransportEvent(it) } }
+        return sessionScope.launch {
             _isConnected.value = true
             transport.requestMtu(REQUESTED_MTU)
             transport.enableNotifications(TrCharacteristic.TELEMETRY)
@@ -354,6 +392,18 @@ public class DeviceSession(
                 writeCommand(Commands.setFocusRocket(focus))
             }
         }
+    }
+
+    /**
+     * Release this session for good: cancel every coroutine it started.
+     *
+     * Called by FleetSessionFactory.close when the connection drops
+     * (FleetManager.handleDisconnect). Idempotent, and safe on a session that
+     * was never started. A closed session is finished — FleetManager builds a
+     * new one on the next connect and never revives this one.
+     */
+    public fun close() {
+        sessionScope.cancel()
     }
 
     /**
@@ -639,7 +689,7 @@ public class DeviceSession(
      * notification, on this path) and parse it through the same demux.
      */
     public fun requestFileList(page: Int = 0) {
-        scope.launch {
+        sessionScope.launch {
             if (!writeCommand(Commands.fileList(page))) return@launch
             _currentPage.value = page
             launch {
@@ -653,7 +703,7 @@ public class DeviceSession(
 
     /** cmd 3 + optimistic local removal (iOS deleteFile). */
     public fun deleteFile(filename: String) {
-        scope.launch {
+        sessionScope.launch {
             if (!writeCommand(Commands.fileDelete(filename))) return@launch
             _files.value = _files.value.filterNot { it.name == filename }
         }
@@ -672,7 +722,7 @@ public class DeviceSession(
      */
     public fun deleteFiles(filenames: List<String>) {
         if (filenames.isEmpty()) return
-        scope.launch {
+        sessionScope.launch {
             for (name in filenames) {
                 if (!writeCommand(Commands.fileDelete(name))) return@launch
                 _files.value = _files.value.filterNot { it.name == name }
@@ -795,7 +845,7 @@ public class DeviceSession(
 
     private fun resetStallTimer() {
         downloadStallJob?.cancel()
-        downloadStallJob = scope.launch {
+        downloadStallJob = sessionScope.launch {
             delay(DOWNLOAD_STALL_MS)
             val d = activeDownload ?: return@launch
             completeDownload(d, fromStallTimer = true)
@@ -835,7 +885,7 @@ public class DeviceSession(
 
     private fun startRssiTicker() {
         rssiJob?.cancel()
-        rssiJob = scope.launch {
+        rssiJob = sessionScope.launch {
             while (isActive) {
                 delay(RSSI_POLL_MS)
                 runCatching { transport.readRssi() }.getOrNull()?.let {
@@ -894,7 +944,7 @@ public class DeviceSession(
      * refresh the staleness overlay, and push the pin (cmd 45) to the BS.
      */
     public fun setFocusRocket(rocketId: Int) {
-        scope.launch {
+        sessionScope.launch {
             _focusRocketId.value = rocketId
             remoteMap[rocketId]?.let { _telemetry.value = it.telemetry }
             // #140 re-latch from the fleet cache (iOS BLEFleet.setFocus):
@@ -914,7 +964,7 @@ public class DeviceSession(
 
     /** Fire-and-forget single-byte command (iOS sendCommand). */
     public fun sendBareCommand(cmdId: Int) {
-        scope.launch { writeCommand(Commands.bare(cmdId)) }
+        sessionScope.launch { writeCommand(Commands.bare(cmdId)) }
     }
 
     /**
@@ -937,7 +987,7 @@ public class DeviceSession(
 
     /** Fire-and-forget prebuilt `[cmd][payload]` frame (iOS sendRawCommand). */
     public fun sendCommandFrame(frame: ByteArray) {
-        scope.launch { writeCommand(frame) }
+        sessionScope.launch { writeCommand(frame) }
     }
 
     /**
@@ -962,7 +1012,7 @@ public class DeviceSession(
      */
     public fun sendLoraTxDisabled(disabled: Boolean) {
         sendCommandFrame(Commands.loraTxDisabled(disabled))
-        scope.launch {
+        sessionScope.launch {
             val cfg = _rocketConfig.value ?: return@launch
             _rocketConfig.value = cfg.copy(loraTxDisabled = disabled)
         }
@@ -978,10 +1028,10 @@ public class DeviceSession(
      * while busy is now idempotent rather than powering the rocket back off.
      */
     public fun beginPowerOn() {
-        scope.launch {
+        sessionScope.launch {
             _poweringOn.value = true
             poweringOnJob?.cancel()
-            poweringOnJob = scope.launch {
+            poweringOnJob = sessionScope.launch {
                 delay(POWER_ON_WATCHDOG_MS)
                 clearPoweringOnNow()
             }
@@ -997,7 +1047,7 @@ public class DeviceSession(
     // mutated on the caller's thread.)
 
     public fun clearPoweringOn() {
-        scope.launch { clearPoweringOnNow() }
+        sessionScope.launch { clearPoweringOnNow() }
     }
 
     internal fun clearPoweringOnNow() {
@@ -1016,7 +1066,7 @@ public class DeviceSession(
      * state on the wire.
      */
     public fun sendPyroContTest(channel: Int) {
-        scope.launch {
+        sessionScope.launch {
             _contTestPendingUntil.value = _contTestPendingUntil.value +
                 (channel to clock() + CONT_TEST_PENDING_WINDOW_MS)
             writeCommand(Commands.pyroContTest(channel))
@@ -1068,7 +1118,7 @@ public class DeviceSession(
      */
     public fun mirrorPyroConfig(channels: List<PyroChannelConfig>) {
         if (channels.size != 4) return
-        scope.launch {
+        sessionScope.launch {
             val cfg = _rocketConfig.value ?: return@launch
             _rocketConfig.value = cfg.copy(
                 pyro1Enabled = channels[0].enabled,
@@ -1088,14 +1138,14 @@ public class DeviceSession(
     }
 
     public fun markSimLaunched() {
-        scope.launch {
+        sessionScope.launch {
             _simLaunched.value = true
             simSawNonReady = false
         }
     }
 
     public fun clearSimBanner() {
-        scope.launch { clearSimBannerNow() }
+        sessionScope.launch { clearSimBannerNow() }
     }
 
     internal fun clearSimBannerNow() {
@@ -1109,12 +1159,12 @@ public class DeviceSession(
      * notification is lost — the BS runs 5 passes, ~10-45 s.
      */
     public fun startFrequencyScan(startMHz: Float, stopMHz: Float, stepKHz: Int, dwellMs: Int) {
-        scope.launch {
+        sessionScope.launch {
             _scanSamples.value = emptyList()
             _isScanning.value = true
             scanGeneration += 1
             val gen = scanGeneration
-            scope.launch {
+            sessionScope.launch {
                 delay(SCAN_RESULT_TIMEOUT_MS)
                 if (_isScanning.value && scanGeneration == gen) {
                     _isScanning.value = false
@@ -1130,7 +1180,7 @@ public class DeviceSession(
      * [sendGuidancePointConfirming] for the confirmed flow.
      */
     public fun sendGuidancePoint(lat: Double, lon: Double, altitudeM: Float) {
-        scope.launch { writeCommand(Commands.guidancePoint(lat, lon, altitudeM)) }
+        sessionScope.launch { writeCommand(Commands.guidancePoint(lat, lon, altitudeM)) }
     }
 
     /**
@@ -1169,15 +1219,15 @@ public class DeviceSession(
     // ── DeviceIdentityPusher (#547 registry push-through) ────────────────
 
     override fun sendSetUnitName(name: String) {
-        scope.launch { writeCommand(Commands.setUnitName(name)) }
+        sessionScope.launch { writeCommand(Commands.setUnitName(name)) }
     }
 
     override fun sendSetNetworkId(nid: Int) {
-        scope.launch { writeCommand(Commands.setNetworkId(nid)) }
+        sessionScope.launch { writeCommand(Commands.setNetworkId(nid)) }
     }
 
     override fun sendSetRocketId(rid: Int) {
-        scope.launch { writeCommand(Commands.setRocketId(rid)) }
+        sessionScope.launch { writeCommand(Commands.setRocketId(rid)) }
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -1192,7 +1242,7 @@ public class DeviceSession(
 
     /** Fresh phone time (unique sim filenames — iOS sendTimeSync before cmd 5). */
     public fun sendTimeSync() {
-        scope.launch { sendTimeSyncNow() }
+        sessionScope.launch { sendTimeSyncNow() }
     }
 
     private suspend fun sendTimeSyncNow() {

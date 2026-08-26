@@ -228,7 +228,10 @@ class AppContainer(app: Application) {
                 return session
             }
 
-            override fun close(session: DeviceSession) = Unit
+            // #838 item 6: this was `= Unit`, so every dropped connection
+            // leaked its DeviceSession, its transport (and BluetoothGatt) and
+            // its live events collector onto the app-lifetime fleetScope.
+            override fun close(session: DeviceSession) = session.close()
         }
         fleetRef = FleetManager(
             scope = fleetScope,
