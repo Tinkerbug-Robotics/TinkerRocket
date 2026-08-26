@@ -524,10 +524,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         return max(20, maxWrite - 7)
     }
 
-    /// Resumed by peripheralIsReady(toSendWriteWithoutResponse:) when the BLE
-    /// stack's outgoing write buffer drains and we can queue more chunks.
+    /// Signalled by peripheralIsReady(toSendWriteWithoutResponse:) when the
+    /// BLE stack's outgoing write buffer drains and we can queue more chunks.
     /// At most one waiter at a time — the OTASession chunk pump is serial.
-    private var otaReadyContinuation: CheckedContinuation<Void, Never>?
+    private let otaWriteGate = OtaWriteGate()
 
     /// Send a single OTA image chunk over the file-transfer characteristic.
     /// Frame: [offset:4 LE][length:2 LE][flags:1][data:N].
@@ -553,20 +553,23 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // WRITE_NO_RSP property on the firmware side doesn't hang the pump
         // forever (we hit exactly that on bench 2026-05-28).
         if !peripheral.canSendWriteWithoutResponse {
-            let ready = await withTimeout(seconds: 5.0) {
-                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                    if peripheral.canSendWriteWithoutResponse {
-                        cont.resume()
-                        return
-                    }
-                    self.otaReadyContinuation = cont
-                }
-            }
-            if !ready {
-                // Drain the pending continuation if it was set so the
-                // delegate doesn't try to resume a dead waiter later.
-                otaReadyContinuation = nil
+            // The readiness re-check runs INSIDE the gate, not here: iOS can
+            // report the buffer drained between this line and the parking,
+            // and that window is a lost wakeup.
+            switch await otaWriteGate.wait(seconds: 5.0,
+                                           alreadyReady: { peripheral.canSendWriteWithoutResponse }) {
+            case .ready:
+                break
+            case .timedOut:
                 throw OTAError.writeFailed("Timed out waiting for canSendWriteWithoutResponse — firmware may not advertise WRITE_NO_RSP on file-transfer characteristic")
+            case .disconnected:
+                // The old code resumed the waiter on disconnect and let
+                // execution fall through, with a comment saying the next
+                // peripheral guard would catch it. There is no next guard —
+                // `peripheral` is a local bound at function entry, so the
+                // chunk was written to a dead peripheral and the session
+                // counted it as sent.
+                throw OTAError.notConnected
             }
         }
 
@@ -581,33 +584,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         peripheral.writeValue(frame, for: characteristic, type: .withoutResponse)
     }
 
-    /// Run `body`; return true if it completed within `seconds`, false on
-    /// timeout. Used to bound waits on CoreBluetooth state changes.
-    private func withTimeout(seconds: TimeInterval,
-                             body: @escaping @Sendable () async -> Void) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await body()
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                return false
-            }
-            let first = await group.next() ?? false
-            group.cancelAll()
-            return first
-        }
-    }
-
     /// Wake any pending sendOtaChunk awaiter with an error when the device
     /// drops mid-transfer (called from onDisconnect).
     private func drainOtaReadyContinuation() {
-        if let cont = otaReadyContinuation {
-            otaReadyContinuation = nil
-            cont.resume()   // Non-throwing — sendOtaChunk will fail on the
-                            // next peripheral guard since peripheral is nil.
-        }
+        otaWriteGate.signal(.disconnected)
     }
 
     /// Kick off a base-station frequency scan.  Clears any previous results
@@ -1965,10 +1945,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // Wake the OTA chunk pump if it parked on a full outgoing buffer.
         // sendOtaChunk uses writeWithoutResponse for throughput; this
         // delegate is iOS's signal that the buffer has drained.
-        if let cont = otaReadyContinuation {
-            otaReadyContinuation = nil
-            cont.resume()
-        }
+        otaWriteGate.signal(.ready)
     }
 
     func peripheral(_ peripheral: CBPeripheral,
