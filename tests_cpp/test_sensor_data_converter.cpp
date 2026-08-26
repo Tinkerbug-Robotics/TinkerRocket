@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "TR_Sensor_Data_Converter.h"
 #include <cmath>
+#include <limits>   // #850: quiet_NaN in the rail-current tests
 #include <cstring>
 
 class SensorConverterTest : public ::testing::Test {
@@ -144,6 +145,65 @@ TEST_F(SensorConverterTest, Power_VoltageCurrentSOC) {
     EXPECT_NEAR(si.voltage, 3.7f, 0.01f);
     EXPECT_NEAR(si.current, 500.0f, 5.0f); // some quantization error
     EXPECT_NEAR(si.soc, 85.0f, 0.5f);
+}
+
+// ---------- #850: high-side-switch rail currents ----------
+
+TEST_F(SensorConverterTest, RailCurrents_RoundTripAtDesignPoints) {
+    POWERDataSI si{};
+    si.voltage = 7.4f; si.current = -500.0f; si.soc = 50.0f;
+    si.cam_current   = 1.5f;   // camera design current
+    si.servo_current = 3.0f;   // servo design current
+
+    POWERData raw{};
+    conv.packPowerData(si, raw);
+    EXPECT_EQ(raw.cam_ma,   1500u);
+    EXPECT_EQ(raw.servo_ma, 3000u);
+
+    POWERDataSI back{};
+    conv.convertPowerData(raw, back);
+    EXPECT_NEAR(back.cam_current,   1.5f, 0.001f);
+    EXPECT_NEAR(back.servo_current, 3.0f, 0.001f);
+}
+
+TEST_F(SensorConverterTest, RailCurrents_NaNMeansNoMonitorAndEncodesAsZero) {
+    // V7/V8 and the mini have no IMON, so readRailAmps() returns NaN. That must
+    // land as a clean 0 on the wire — never as a wrapped or garbage reading.
+    POWERDataSI si{};
+    si.cam_current   = std::numeric_limits<float>::quiet_NaN();
+    si.servo_current = std::numeric_limits<float>::quiet_NaN();
+
+    POWERData raw{};
+    conv.packPowerData(si, raw);
+    EXPECT_EQ(raw.cam_ma,   0u);
+    EXPECT_EQ(raw.servo_ma, 0u);
+}
+
+TEST_F(SensorConverterTest, RailCurrents_NegativeClampsRatherThanWrapping) {
+    // The IMON is a current SOURCE, so a negative reading is nonphysical and
+    // means ADC noise around zero. Casting it straight to uint16 would wrap to
+    // ~65 A and render as a catastrophic overcurrent.
+    POWERDataSI si{};
+    si.cam_current   = -0.004f;
+    si.servo_current = -1.0f;
+
+    POWERData raw{};
+    conv.packPowerData(si, raw);
+    EXPECT_EQ(raw.cam_ma,   0u);
+    EXPECT_EQ(raw.servo_ma, 0u);
+}
+
+TEST_F(SensorConverterTest, RailCurrents_OverRangeSaturatesHigh) {
+    // A fault must read HIGH, never low. Wrapping would turn a 70 A event into
+    // a comfortable-looking 4.5 A.
+    POWERDataSI si{};
+    si.cam_current   = 70.0f;
+    si.servo_current = 1000.0f;
+
+    POWERData raw{};
+    conv.packPowerData(si, raw);
+    EXPECT_EQ(raw.cam_ma,   65535u);
+    EXPECT_EQ(raw.servo_ma, 65535u);
 }
 
 // ---------- Magnetometer Conversion ----------

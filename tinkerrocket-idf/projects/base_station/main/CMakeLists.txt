@@ -17,6 +17,8 @@ idf_component_register(
         TR_OTA
         app_update
         driver
+        esp_adc              # #835 item 2: own-battery divider (adc_oneshot + adc_cali)
+        TR_I2C_Interface     # binary log framing: packMessage(), same as the OC
         esp_app_format
         esp_timer
         fatfs

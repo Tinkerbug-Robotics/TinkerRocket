@@ -20,9 +20,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.SignalCellularOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -45,6 +48,8 @@ import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
 import com.tinkerbug.tinkerrocket.protocol.SignalQuality
 import com.tinkerbug.tinkerrocket.protocol.pyroContinuityOf
+import com.tinkerbug.tinkerrocket.protocol.railAmpsDisplay   // #850
+import com.tinkerbug.tinkerrocket.protocol.showStateBanner
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.session.FleetDevice
 import com.tinkerbug.tinkerrocket.session.DeviceSession
@@ -69,6 +74,7 @@ fun DashboardScreen(
     container: AppContainer? = null,
     tool: String? = null,
     onTool: (String?) -> Unit = {},
+    onOpenSettings: () -> Unit = {},
 ) {
     val session = device.session
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
@@ -81,6 +87,19 @@ fun DashboardScreen(
         "sim" -> { SimulationScreen(session, onBack = { onTool(null) }); return }
         "scan" -> { FreqScanScreen(session, onBack = { onTool(null) }); return }
         "magcal" -> { MagCalScreen(session, syncer, onBack = { onTool(null) }); return }
+        "preflight" -> {
+            if (container != null && profileStore != null) {
+                PreflightRunScreen(
+                    session = session,
+                    preflight = container.preflightStore,
+                    profiles = profileStore,
+                    syncer = syncer,
+                    fleetScope = container.fleetScope,
+                    onBack = { onTool(null) },
+                )
+            }
+            return
+        }
         "ota" -> {
             // The return sits outside the null check so an unroutable state
             // renders nothing rather than falling through into the dashboard
@@ -193,7 +212,58 @@ fun DashboardScreen(
         // Rocket state — iOS RocketStateView twin (#382 display mapping:
         // READY and PRELAUNCH both render "PRELAUNCH" with a readiness badge
         // carrying the real distinction; raw wire strings untouched).
-        RocketStateBanner(telemetry)
+        //
+        // Hidden ONLY for a syncing base station that has caught no rocket —
+        // see showStateBanner for both meanings of SYNCING and why collapsing
+        // them broke the iOS twin.
+        if (showStateBanner(dataStatus, session.isBaseStation)) {
+            RocketStateBanner(telemetry)
+        }
+
+        // Pre-flight checklist advisory: one quiet progress line for the
+        // active rocket, right under the state banner.  Advisory only — it
+        // never recolors the banner (sensor health owns that) and renders
+        // nothing when no checklist is configured.
+        if (container != null && profileStore != null) {
+            PreflightAdvisoryLine(
+                session = session,
+                preflight = container.preflightStore,
+                profiles = profileStore,
+                syncer = syncer,
+                onOpen = { onTool("preflight") },
+            )
+        }
+
+        // "LoRa off": one quiet line, same shape and placement as the
+        // preflight advisory and under the same rule — advisory only, it never
+        // recolors the state banner.  Worth a line at all because a muted
+        // rocket looks exactly like a working one from a directly-connected
+        // phone, right up until it flies and there is no downlink to follow it
+        // with.  Only a direct link can know: a base-station relay hears
+        // nothing from a muted rocket, so there is no config readback to read
+        // this from — hence the isBaseStation guard rather than a
+        // confidently-wrong "transmitting".
+        val rocketCfg by session.rocketConfig.collectAsState()
+        if (!session.isBaseStation && rocketCfg?.loraTxDisabled == true) {
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = onOpenSettings)
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.SignalCellularOff,
+                    contentDescription = null,
+                    tint = tr.statusWarn,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "  LoRa off — no telemetry downlink",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tr.statusWarn,
+                )
+            }
+        }
 
         // Power section — #377: never offer the blind cmd-8 toggle until the
         // first telemetry frame of this session confirmed the power state.
@@ -240,6 +310,11 @@ fun DashboardScreen(
 
         SignalCard(telemetry, rssi, session.isBaseStation)
         BatteryCard(telemetry, session.isBaseStation)
+        // #850: rail currents belong with the live telemetry, not only on the
+        // pre-power-on screen — a stalling servo is watched WHILE it runs.
+        if (telemetry.camCurrent != null || telemetry.servoCurrent != null) {
+            RailPowerCard(telemetry)
+        }
         // Orientation source is picked strictly by link type (iOS
         // RocketTelemetryCards): BS = relayed flags2 "imo", direct = the
         // imu_orient config readback.  No cross-fallback on either platform.
@@ -603,13 +678,18 @@ private fun SyncStateLine(state: com.tinkerbug.tinkerrocket.session.ActiveRocket
     val (label, color) = when (state) {
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Idle -> return
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.AwaitingSync ->
-            "profile: awaiting sync" to tr.statusWarn
+            "profile: reading rocket" to tr.statusWarn
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.NoProfile ->
             "profile: none active" to MaterialTheme.colorScheme.onSurfaceVariant
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Syncing ->
-            "profile: syncing…" to MaterialTheme.colorScheme.onSurfaceVariant
+            "profile: sending…" to MaterialTheme.colorScheme.onSurfaceVariant
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Synced ->
-            "profile: synced" to tr.statusOk
+            "profile: matches rocket" to tr.statusOk
+        // #915: informational, not a fault — the rocket kept what it had and
+        // the profile was brought into line.  Stays a quiet line; the rocket
+        // state banner is not recoloured for it.
+        is com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Adopted ->
+            "profile: updated from rocket" to MaterialTheme.colorScheme.onSurfaceVariant
         is com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Failed ->
             "profile: sync failed" to tr.statusBad
     }
@@ -1350,6 +1430,40 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
                     label = "BLE",
                 )
             }
+
+            // LoRa drop counters (#838 item 4).  Both are recency-windowed by
+            // the base station, so a non-zero value means it is happening NOW.
+            // Android decoded "nidd" but rendered it nowhere and never decoded
+            // "szd" at all, so on this dashboard both faults were silent — the
+            // operator saw stale telemetry with no diagnostic, which is the
+            // blackout these counters exist to end.
+            if (isBaseStation) {
+                // Another BS/rocket pair on its own network id at the same
+                // site is normal traffic, so this stays informational.  iOS
+                // escalates it to a warning when the BS is hearing NO rocket;
+                // there is no tracking-health signal on this screen to gate
+                // that on, so it is left neutral rather than guessed at.
+                telemetry.netidDrops?.takeIf { it > 0 }?.let { drops ->
+                    Text(
+                        "Hearing $drops packets from other networks " +
+                            "(another pair nearby is normal)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // No benign reading for this one: these are OUR rocket's
+                // frames, unreadable because the two ends disagree about the
+                // protocol.
+                telemetry.sizeDrops?.takeIf { it > 0 }?.let { drops ->
+                    Text(
+                        "Protocol mismatch: $drops packets dropped — the rocket " +
+                            "and base station were flashed from different builds; " +
+                            "re-flash both",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
         }
     }
 }
@@ -1481,6 +1595,59 @@ private fun BatteryCard(telemetry: TelemetryData, isBaseStation: Boolean) {
                     telemetry.bsVoltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
                     telemetry.bsCurrent?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
                 )
+            }
+        }
+    }
+}
+
+/**
+ * #850: camera / servo high-side-switch load currents.
+ *
+ * Its own card rather than a sub-row of Battery: these are LOAD rails, not the
+ * pack, and the operator reads them for a different question — is the camera
+ * actually drawing, is a servo stalling. Burying them under the battery rows
+ * put them below the fold on the live rocket screen, which is where they matter.
+ *
+ * Rendered ONLY when the board reports them. A V7/V8 rocket, the mini, or any
+ * pre-#850 firmware omits both JSON keys, and an absent key means "no monitor
+ * fitted" — which must not appear as 0.00 A.
+ *
+ * One caveat the UI cannot fix: over a BASE-STATION relay the LoRa slow frame
+ * cannot encode "absent", so a monitor-less rocket relays a literal 0 and this
+ * shows 0.00 A. On a direct link the two stay distinct.
+ *
+ * iOS twin: DashboardView.swift RailPowerView.
+ */
+@Composable
+private fun RailPowerCard(telemetry: TelemetryData) {
+    val caption = MaterialTheme.typography.bodySmall
+    val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Rail Current", style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.fillMaxWidth()) {
+                Text("", modifier = Modifier.width(70.dp))
+                listOf("Camera", "Servo").forEach {
+                    Text(
+                        it, style = caption,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Row(Modifier.fillMaxWidth()) {
+                Text("Load", style = caption, modifier = Modifier.width(70.dp))
+                listOf(
+                    railAmpsDisplay(telemetry.camCurrent),
+                    railAmpsDisplay(telemetry.servoCurrent),
+                ).forEach {
+                    Text(
+                        it, style = caption.copy(fontFamily = mono),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
     }

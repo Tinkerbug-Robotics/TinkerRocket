@@ -20,8 +20,12 @@
 #include <driver/spi_master.h>
 #include <esp_vfs_fat_nand.h>
 #include <driver/i2c_master.h>
+#include <esp_adc/adc_oneshot.h>   // #835 item 2: own-battery divider read
+#include <esp_adc/adc_cali.h>
+#include <esp_adc/adc_cali_scheme.h>
 
 #include <cstdio>
+#include <memory>                // unique_ptr — file-list top-N window (#835)
 #include <cstdlib>                // setenv() — UTC TZ for the log-rename helper (#168)
 #include <cstring>
 #include <cerrno>
@@ -39,12 +43,14 @@
 #include "bs_battery_soc.h"       // voltage-based SoC fallback (#501)
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
 #include "bs_storage_policy.h"    // NAND bring-up retry / demotion policy (#761)
+#include "bs_file_list.h"       // top-N file-list window (#835)
 
 #include <TR_LoRa_Comms.h>
 #include <LoRaDirectBackend.h>
 #include <UartModemBackend.h>
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_Coordinates.h>
+#include <TR_I2C_Interface.h>   // binary log framing: packMessage(), same records as the OC
 #include <TR_BLE_To_APP.h>
 #include <TR_MAX17205G.h>
 #include <TR_MAX17303.h>
@@ -134,7 +140,7 @@ static constexpr uint32_t NETID_DROP_REPORT_WINDOW_MS = 30000;
 static uint32_t lora_netid_last_drop_ms = 0;
 
 // #570: CRC-valid packets dropped because their length is neither a beacon
-// nor exactly SIZE_OF_LORA_DATA — the classic 65-vs-66 B mixed-flash trap
+// nor either telemetry frame size — the classic mixed-flash trap
 // (rocket and BS built from commits with different LoRaData sizes drops 100%
 // of telemetry while the app just shows "Searching"). Mirrors the #329
 // netid-drop pattern: lifetime count for logs, recency-windowed "szd"
@@ -563,11 +569,35 @@ static bool     last_known_rocket_logging = false;    // Actual rocket logging s
 // computeFreqLockForFlight() in RocketComputerTypes.h.
 //
 // #381: this is now the AGGREGATE across tracked rockets — locked while any
-// fresh rocket's per-rocket lock is latched (bs_log_policy::aggregateFreqLock,
-// recomputed after each packet). The old single global was overwritten by
-// whichever rocket's packet arrived last, so a second rocket's READY cleared
-// the lock mid-flight of the first, once per interleaved packet.
-static bool freq_locked_for_flight = false;
+// fresh rocket's per-rocket lock is latched (bs_log_policy::aggregateFreqLock).
+// The old single global was overwritten by whichever rocket's packet arrived
+// last, so a second rocket's READY cleared the lock mid-flight of the first,
+// once per interleaved packet.
+//
+// #835 item 6: the aggregate is a CACHE, and a cache only decays if something
+// recomputes it.  Until this fix the sole writer was the accepted-telemetry RX
+// path, so a rocket that went silent while INFLIGHT froze the last `true` for
+// the rest of the power cycle: the freshness window was unreachable and cmd-10,
+// silence recovery and fixed-mode heartbeats stayed suppressed until reboot.
+// loop_bs now re-evaluates every pass (see the log-lifecycle section), and the
+// latch expires reads older than the window even if that call is ever lost.
+//
+// Two windows — see bs_log_policy::FreqLockLatch for why.  The short one gates
+// the passive consumers; the long one gates anything that physically retunes
+// the radio, which must stay shut for the whole plausible flight.
+static bs_log_policy::FreqLockLatch freq_lock_latch;
+
+// Passive consumers: silence recovery, fixed-mode heartbeats, auto-acquire.
+static inline bool freqLockedForFlight()
+{
+    return freq_lock_latch.flightLockedAt(millis(), config::LOG_SILENCE_TIMEOUT_MS);
+}
+
+// Radio-moving consumers: the cmd-10 LoRa reconfigure transaction.
+static inline bool freqLockedForRetune()
+{
+    return freq_lock_latch.retuneLockedAt(millis(), config::LOG_INFLIGHT_SAFETY_MS);
+}
 
 // ----------------------------------------------------------------------------
 // Per-packet channel-hop state (issues #40 / #41, phase 2a — BS side)
@@ -610,7 +640,7 @@ static bool     lora_hop_disabled = true;
 // the same shared function.
 static inline uint8_t currentHopDwell()
 {
-    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_DATA, lora_cr);
+    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_BUDGET, lora_cr);
 }
 
 // ----------------------------------------------------------------------------
@@ -759,6 +789,10 @@ struct TrackedRocket {
     double     last_lon_deg = NAN;
     double     last_alt_m = NAN;
     uint32_t   last_seen_ms = 0;
+    // #835 item 6 residual: last accepted TELEMETRY packet. last_seen_ms
+    // above is also stamped by a NAME BEACON, which must not hold the
+    // flight frequency lock alive.
+    uint32_t   last_telem_ms = 0;
     // Free-running TX seq from the rocket (#105, widened to 16 bits in
     // proto v4).  -1 = no prior packet ("first contact"); on an
     // implausible forward delta we reset to -1 and treat the next
@@ -888,6 +922,46 @@ static void buildRocketViews(bs_log_policy::RocketView out[MAX_TRACKED_ROCKETS])
         out[i].state             = tracked_rockets[i].log_state.last_state;
         out[i].inflight_entry_ms = tracked_rockets[i].log_state.inflight_entry_ms;
         out[i].freq_lock         = tracked_rockets[i].log_state.freq_lock;
+        out[i].last_telem_ms     = tracked_rockets[i].last_telem_ms;
+    }
+}
+
+// The single write point for the aggregate flight lock, so every edge is
+// logged once with the site that caused it.  Pre-#835 the RX-path write was
+// silent, which is much of why a permanently stuck lock went unnoticed: the
+// only trace in a capture was a secondary "[TXN] Refused" or an
+// recoveryEnd("flight locked") — the symptom, never the state.
+//
+// The edge guard wraps only the logging.  latch.update() ALWAYS runs, because
+// its last_eval_ms stamp is what the read-side backstop measures against; a
+// stamp that advanced only on an edge would expire the lock one window after
+// the first INFLIGHT packet regardless of ongoing telemetry.
+static void updateFreqLock(const bs_log_policy::RocketView* views,
+                           uint32_t now_ms, const char* why)
+{
+    const bool was_flight = freq_lock_latch.flight;
+    const bool was_retune = freq_lock_latch.retune;
+    freq_lock_latch.update(views, MAX_TRACKED_ROCKETS, now_ms,
+                           config::LOG_SILENCE_TIMEOUT_MS,
+                           config::LOG_INFLIGHT_SAFETY_MS);
+
+    if (freq_lock_latch.flight != was_flight)
+    {
+        if (freq_lock_latch.flight)
+            ESP_LOGI(TAG, "[LOG] Flight freq lock SET (%s) — silence recovery "
+                          "and fixed-channel heartbeats suppressed", why);
+        else
+            ESP_LOGW(TAG, "[LOG] Flight freq lock CLEARED (%s) — silence "
+                          "recovery and heartbeats re-enabled", why);
+    }
+    if (freq_lock_latch.retune != was_retune)
+    {
+        if (freq_lock_latch.retune)
+            ESP_LOGI(TAG, "[LOG] Retune lock SET (%s) — cmd-10 refused for the "
+                          "flight", why);
+        else
+            ESP_LOGW(TAG, "[LOG] Retune lock CLEARED (%s) — cmd-10 reconfigure "
+                          "accepted again", why);
     }
 }
 
@@ -969,8 +1043,99 @@ static void maintainBatteryFets()
     }
 }
 
+// ── Own-battery voltage via ADC (#835 item 2) ────────────────────────
+//
+// Boards with no fuel gauge (board_v3: the MAX17303 was deleted in 15da738,
+// two weeks before the fab tag) measure the cell through a resistor divider
+// instead. That commit said SoC "now reads a 1M/1M divider on GPIO1"; the
+// firmware was never written, so bs_voltage/bs_soc sat at NaN forever.
+//
+// Every failure path here yields NaN rather than a number. A wrong battery
+// reading is worse than an admitted unknown: the operator plans a recovery
+// walk around it. In particular the esp-idf calibration curve is
+// per-attenuation, so if the cali handle cannot be created we report nothing
+// rather than scaling a raw count by a nominal full-scale and hoping.
+static adc_oneshot_unit_handle_t batt_adc_unit = nullptr;
+static adc_cali_handle_t         batt_adc_cali = nullptr;
+static bool                      batt_adc_ready = false;
+
+static void initBatteryAdc()
+{
+    adc_oneshot_unit_init_cfg_t unit_cfg = {};
+    unit_cfg.unit_id  = ADC_UNIT_1;             // GPIO1 = ADC1_CH0
+    unit_cfg.ulp_mode = ADC_ULP_MODE_DISABLE;
+    if (adc_oneshot_new_unit(&unit_cfg, &batt_adc_unit) != ESP_OK) {
+        ESP_LOGE(TAG, "[BATT] ADC unit init failed — battery voltage unavailable");
+        return;
+    }
+
+    adc_oneshot_chan_cfg_t chan_cfg = {};
+    chan_cfg.atten    = (adc_atten_t)ADC_ATTEN_DB_12;
+    chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_oneshot_config_channel(batt_adc_unit, ADC_CHANNEL_0, &chan_cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "[BATT] ADC channel config failed — battery voltage unavailable");
+        return;
+    }
+
+    // Curve fitting is the S3's scheme. Created FOR THIS attenuation — the
+    // curve is per-atten and mixing them mis-scales every read silently.
+    adc_cali_curve_fitting_config_t cali_cfg = {};
+    cali_cfg.unit_id  = ADC_UNIT_1;
+    cali_cfg.atten    = (adc_atten_t)ADC_ATTEN_DB_12;
+    cali_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &batt_adc_cali) != ESP_OK) {
+        ESP_LOGE(TAG, "[BATT] ADC calibration unavailable (no eFuse cal data?) — "
+                      "reporting no voltage rather than an uncalibrated guess");
+        return;
+    }
+
+    batt_adc_ready = true;
+    ESP_LOGI(TAG, "[BATT] ADC ready: GPIO%d, divider %.3f, %d dB",
+             config::BATT_VSENSE_GPIO, (double)config::BATT_VSENSE_DIVIDER,
+             config::BATT_VSENSE_ATTEN_DB);
+}
+
+// Returns the cell terminal voltage, or NaN if it cannot be measured.
+static float readBatteryVolts()
+{
+    if (!batt_adc_ready) return NAN;
+    // Average a handful: the divider is high-impedance (1M||1M = 500k) and the
+    // 100 nF at the pin is the only reservoir, so single reads are noisy.
+    constexpr int kSamples = 8;
+    int mv_sum = 0, taken = 0;
+    for (int i = 0; i < kSamples; ++i) {
+        int raw = 0;
+        if (adc_oneshot_read(batt_adc_unit, ADC_CHANNEL_0, &raw) != ESP_OK) continue;
+        int mv = 0;
+        if (adc_cali_raw_to_voltage(batt_adc_cali, raw, &mv) != ESP_OK) continue;
+        mv_sum += mv;
+        ++taken;
+    }
+    if (taken == 0) return NAN;
+    return ((float)mv_sum / (float)taken) * 0.001f * config::BATT_VSENSE_DIVIDER;
+}
 static void updateBattery()
 {
+    // constexpr, not #if: HAS_FUEL_GAUGE is a config struct member, and an
+    // #if on an undefined macro silently evaluates to 0 — which would have
+    // run the ADC path on the gauged boards too.
+    if constexpr (!config::HAS_FUEL_GAUGE)
+    {
+        // No gauge on this board — the divider is the only source (#835 item 2).
+        bs_voltage = readBatteryVolts();
+        if (isnan(bs_voltage)) {
+            bs_soc           = NAN;
+            bs_soc_estimated = false;
+        } else {
+            // 1S: BT2 is a single 18650 on a BQ21040 linear charger, so the
+            // estimator's per-cell curve applies directly. No current sense
+            // on this path, so no IR compensation — pass 0.
+            bs_soc           = bq_soc_estimator.update(bs_voltage, 1, 0.0f, 0.0f);
+            bs_soc_estimated = true;
+        }
+        return;
+    }
+
     if (!fuel_gauge_present) return;
     if (gauge_kind == GaugeKind::BQ27Z746)
     {
@@ -1136,7 +1301,7 @@ static time_t syncedEpoch()
     return mktime(&tm_sync);
 }
 
-// Build "<mount>/lora_YYYYMMDD_HHMMSS.csv" for the given UTC epoch, walking
+// Build "<mount>/lora_YYYYMMDD_HHMMSS.bin" for the given UTC epoch, walking
 // _2/_3/.. suffixes on collision until a free path is found.  Mirrors the
 // inline collision loop in startLogging() — extracted so the rename-on-
 // time-sync path (#168) reuses the same naming + collision rules.
@@ -1147,7 +1312,7 @@ static void buildTimestampedLogPathForEpoch(time_t epoch,
     gmtime_r(&epoch, &tm_buf);
     char basename[40];
     snprintf(basename, sizeof(basename),
-             "lora_%04d%02d%02d_%02d%02d%02d.csv",
+             "lora_%04d%02d%02d_%02d%02d%02d.bin",
              tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
              tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
     snprintf(out_path, out_len, "%s/%s", SD_MOUNT_POINT, basename);
@@ -1157,12 +1322,12 @@ static void buildTimestampedLogPathForEpoch(time_t epoch,
 
     char base_no_ext[40];
     const size_t blen = strlen(basename);
-    const size_t copy = (blen >= 4) ? (blen - 4) : blen;  // strip ".csv"
+    const size_t copy = (blen >= 4) ? (blen - 4) : blen;  // strip ".bin"
     memcpy(base_no_ext, basename, copy);
     base_no_ext[copy] = '\0';
     for (int suffix = 2; suffix < 100; suffix++)
     {
-        snprintf(out_path, out_len, "%s/%s_%d.csv",
+        snprintf(out_path, out_len, "%s/%s_%d.bin",
                  SD_MOUNT_POINT, base_no_ext, suffix);
         if (stat(out_path, &st) != 0) return;
     }
@@ -1178,9 +1343,9 @@ static uint16_t findNextFileNumber()
     while ((entry = readdir(dir)) != nullptr)
     {
         // #137: use the strict parser so timestamped siblings (e.g.
-        // lora_20260509_164143.csv) don't get matched as "lora_NNN.csv"
+        // lora_20260509_164143.bin) don't get matched as "lora_NNN.bin"
         // with the leading digits truncated to the low 16 bits (= 9885).
-        // Pre-fix, that quirk made the BS pick lora_9886.csv after every
+        // Pre-fix, that quirk made the BS pick lora_9886.bin after every
         // no-time-sync boot whose SD already held timestamped flights.
         uint16_t num = 0;
         if (bs_log_policy::parseSequentialFilename(entry->d_name, num))
@@ -1209,14 +1374,14 @@ static void startLogging()
         uint16_t y; uint8_t mo, d, h, mi, s;
         getCurrentTime(y, mo, d, h, mi, s);
         snprintf(basename, sizeof(basename),
-                 "lora_%04u%02u%02u_%02u%02u%02u.csv",
+                 "lora_%04u%02u%02u_%02u%02u%02u.bin",
                  y, mo, d, h, mi, s);
     }
     else
     {
         // Fallback to sequential numbering if no time sync
         uint16_t num = findNextFileNumber();
-        snprintf(basename, sizeof(basename), "lora_%03u.csv", num);
+        snprintf(basename, sizeof(basename), "lora_%03u.bin", num);
     }
     snprintf(log_filename, sizeof(log_filename), "%s/%s", SD_MOUNT_POINT, basename);
 
@@ -1233,19 +1398,19 @@ static void startLogging()
         {
             char base_no_ext[40];
             const size_t blen = strlen(basename);
-            const size_t copy = (blen >= 4) ? (blen - 4) : blen;  // strip ".csv"
+            const size_t copy = (blen >= 4) ? (blen - 4) : blen;  // strip ".bin"
             memcpy(base_no_ext, basename, copy);
             base_no_ext[copy] = '\0';
             for (int suffix = 2; suffix < 100; suffix++)
             {
-                snprintf(log_filename, sizeof(log_filename), "%s/%s_%d.csv",
+                snprintf(log_filename, sizeof(log_filename), "%s/%s_%d.bin",
                          SD_MOUNT_POINT, base_no_ext, suffix);
                 if (stat(log_filename, &st) != 0) break;
             }
         }
     }
 
-    log_file = fopen(log_filename, "w");
+    log_file = fopen(log_filename, "wb");
     if (!log_file)
     {
         ESP_LOGE(TAG, "[LOG] Failed to open %s for writing! errno=%d (%s)",
@@ -1260,23 +1425,28 @@ static void startLogging()
     // BS-derived gap to the last RX, plus an `event` column populated
     // for non-telemetry rows (hop_active / hop_inactive / hop_silence).
     // rocket_id (#381) attributes each telemetry row to its source rocket
-    // now that one file can interleave several; empty on EVENT rows (those
-    // are station-level, not per-rocket). All downstream consumers key
-    // columns by header name, so the trailing add is non-breaking.
-    int hdr_written = fprintf(log_file, "time_ms,state,num_sats,pdop,lat,lon,alt_m,h_acc,"
-                      "acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,"
-                      "pressure_alt,alt_rate,max_alt,max_speed,"
-                      "voltage,current,soc,roll,pitch,yaw,speed,"
-                      "launch,vel_apo,alt_apo,landed,rssi,snr,"
-                      "next_ch,rx_freq_mhz,seq,gap,event,rocket_id\n");
-    if (hdr_written <= 0)
+    // #850 follow-up: this file is BINARY now, not CSV. Instead of a column
+    // header it opens with a magic + version so a reader can identify it
+    // without trusting the extension, and refuse a file it does not understand
+    // rather than walking arbitrary bytes as records.
+    //
+    // The records that follow use the SAME framing as the rocket computer's log
+    // (TR_I2C_Interface::packMessage — SOF/type/len/CRC16), so the same walker
+    // reads both. That parity is the point: one binary format, one set of
+    // tools, and the CSV is generated wherever it is actually needed.
+    const uint8_t magic[8] = {
+        'T', 'R', 'B', 'S', 'L', 'O', 'G',        // "TRBSLOG"
+        BS_LOG_FORMAT_VERSION,
+    };
+    size_t hdr_written = fwrite(magic, 1, sizeof(magic), log_file);
+    if (hdr_written != sizeof(magic))
     {
         // #384 (#329 residual): a full/wedged card at open used to fail the
-        // header silently; every later name-keyed consumer then sees a
-        // headerless CSV.
+        // header silently; every later consumer then sees a headerless file.
         log_write_fail_count++;
-        ESP_LOGW(TAG, "[LOG] header fprintf() failed (ret=%d, errno=%d %s)",
-                 hdr_written, errno, strerror(errno));
+        ESP_LOGW(TAG, "[LOG] magic fwrite() failed (%u/%u, errno=%d %s)",
+                 (unsigned)hdr_written, (unsigned)sizeof(magic),
+                 errno, strerror(errno));
     }
 
     logging_active = true;
@@ -1318,12 +1488,12 @@ static void stopLogging()
 
 // Called from the BLE time-sync command (#9) right after the sync clock is
 // established.  If the currently-open log was opened pre-sync and therefore
-// carries a sequential `lora_NNN.csv` name, rename it on disk to its proper
-// `lora_YYYYMMDD_HHMMSS.csv` form using the wall-clock at which the file
+// carries a sequential `lora_NNN.bin` name, rename it on disk to its proper
+// `lora_YYYYMMDD_HHMMSS.bin` form using the wall-clock at which the file
 // actually opened (computed as sync_time minus elapsed millis since open).
 // Safe no-op when there's no open log, time isn't synced, or the file is
 // already timestamped.  This is the root-cause fix for #168 — the 5/17/26
-// test day produced `lora_002.csv` / `lora_003.csv` / `lora_004.csv` halves
+// test day produced `lora_002.bin` / `lora_003.bin` / `lora_004.bin` halves
 // of three flights alongside their timestamped post-landing remnants
 // because iOS BLE time-sync landed within a few seconds of each launch.
 static void renameOpenLogIfSequential()
@@ -1363,7 +1533,7 @@ static void renameOpenLogIfSequential()
     {
         ESP_LOGW(TAG, "[LOG] rename %s -> %s failed (errno=%d %s); reopening original",
                  old_path, new_path, errno, strerror(errno));
-        log_file = fopen(old_path, "a");
+        log_file = fopen(old_path, "ab");
         if (!log_file)
         {
             ESP_LOGE(TAG, "[LOG] Could not reopen %s after failed rename — logging stopped",
@@ -1373,7 +1543,7 @@ static void renameOpenLogIfSequential()
         return;
     }
 
-    log_file = fopen(new_path, "a");
+    log_file = fopen(new_path, "ab");
     if (!log_file)
     {
         ESP_LOGE(TAG, "[LOG] Could not open %s after rename — logging stopped",
@@ -1417,11 +1587,24 @@ static bool bsQueryStorage(uint64_t& total, uint64_t& used)
     return true;
 }
 
-static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
-                          double lat, double lon, double alt,
-                          float rx_freq_mhz, int32_t observed_gap)
+// ----------------------------------------------------------------------------
+// Binary LoRa RX record
+// ----------------------------------------------------------------------------
+// Logs the bytes we actually received, plus the three things only the base
+// station knows: when it arrived, how strong it was, and which channel it
+// landed on. Everything else the old CSV carried is either inside the frame or
+// derived from it, so it is recomputed by whatever renders the log.
+//
+// Takes the RAW frame, not the decoded LoRaDataSI, deliberately. With FAST and
+// SLOW interleaved, the accumulator is a running picture rather than a record
+// of this packet — writing it would log the same forward-filled values over and
+// over and lose which fields actually arrived when. The raw bytes are the
+// evidence; the picture can always be rebuilt from them.
+static void logLoRaPacket(const uint8_t* frame, size_t frame_len,
+                          float rssi, float snr, float rx_freq_mhz)
 {
-    if (!logging_active) return;
+    if (!logging_active || log_file == nullptr) return;
+    if (frame == nullptr || frame_len == 0) return;
 
     // Periodic storage usage check (every 100 writes)
     if (++log_write_count % 100 == 0)
@@ -1437,80 +1620,86 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
         }
     }
 
-    uint32_t time_ms = millis() - log_start_ms;
+    BsLoRaRxHeader hdr{};
+    hdr.time_ms = millis() - log_start_ms;
+    // NaN is what the radio reports when it has no reading; it must not become
+    // a plausible-looking 0 dBm in the log.
+    hdr.rssi_dbm_x10 = (rssi == rssi) ? (int16_t)lroundf(rssi * 10.0f) : BS_RSSI_UNKNOWN;
+    hdr.snr_db_x10   = (snr  == snr)  ? (int16_t)lroundf(snr  * 10.0f) : BS_RSSI_UNKNOWN;
+    hdr.rx_freq_hz   = (uint32_t)lroundf(rx_freq_mhz * 1e6f);
 
-    int written = fprintf(log_file, "%lu,%s,%u,%.1f,%.7f,%.7f,%.1f,%.1f,"
-                    "%.2f,%.2f,%.2f,%.1f,%.1f,%.1f,"
-                    "%.1f,%.1f,%.1f,%.1f,"
-                    "%.2f,%.0f,%.1f,%.1f,%.1f,%.1f,%.1f,"
-                    "%d,%d,%d,%d,%.0f,%.1f,"
-                    "%u,%.3f,%u,%d,,%u\n",  // empty `event`, then rocket_id (#381)
-                    (unsigned long)time_ms,
-                    rocketStateToString(data.rocket_state),
-                    (unsigned)data.num_sats,
-                    (double)data.pdop,
-                    lat, lon, alt,
-                    (double)data.horizontal_accuracy,
-                    (double)data.acc_x, (double)data.acc_y, (double)data.acc_z,
-                    (double)data.gyro_x, (double)data.gyro_y, (double)data.gyro_z,
-                    (double)data.pressure_alt, (double)data.altitude_rate,
-                    (double)data.max_alt, (double)data.max_speed,
-                    (double)data.voltage, (double)data.current, (double)data.soc,
-                    (double)data.roll, (double)data.pitch, (double)data.yaw,
-                    (double)data.speed,
-                    data.launch_flag ? 1 : 0,
-                    data.vel_u_apogee_flag ? 1 : 0,
-                    data.alt_apogee_flag ? 1 : 0,
-                    data.alt_landed_flag ? 1 : 0,
-                    (double)rssi, (double)snr,
-                    (unsigned)data.next_channel_idx, (double)rx_freq_mhz,
-                    (unsigned)data.seq, (int)observed_gap,
-                    (unsigned)data.rocket_id);
+    uint8_t payload[sizeof(BsLoRaRxHeader) + SIZE_OF_LORA_FAST];
+    if (frame_len > SIZE_OF_LORA_FAST) return;   // cannot happen; never truncate silently
+    memcpy(payload, &hdr, sizeof(hdr));
+    memcpy(payload + sizeof(hdr), frame, frame_len);
 
-    if (written <= 0)
+    uint8_t rec[MAX_FRAME];
+    size_t  rec_len = 0;
+    if (!TR_I2C_Interface::packMessage(BS_LORA_RX_MSG, payload,
+                                       sizeof(hdr) + frame_len,
+                                       rec, sizeof(rec), rec_len))
     {
         log_write_fail_count++;
-        ESP_LOGW(TAG, "[LOG] fprintf() failed (ret=%d, errno=%d %s)",
-                 written, errno, strerror(errno));
+        ESP_LOGW(TAG, "[LOG] packMessage(BS_LORA_RX) failed");
+        return;
+    }
+
+    const size_t wrote = fwrite(rec, 1, rec_len, log_file);
+    if (wrote != rec_len)
+    {
+        log_write_fail_count++;
+        ESP_LOGW(TAG, "[LOG] fwrite() short (%u/%u, errno=%d %s)",
+                 (unsigned)wrote, (unsigned)rec_len, errno, strerror(errno));
     }
 
     log_last_write_ms = millis();
 }
 
 // ----------------------------------------------------------------------------
-// CSV hop-event row (#105)
+// Binary hop-event record (#105)
 // ----------------------------------------------------------------------------
-// Mirrors the column layout of logLoRaPacket() so a single pandas read_csv()
-// pass can ingest both — telemetry rows and event rows in chronological
-// order.  All telemetry-typed fields are left empty (",,,") so the event
-// stands out and the parsers can drop it with a simple `state == "EVENT"`
-// filter.  The `event` column carries a free-text description; downstream
-// scripts grep this to plot session timelines and loss histograms.
+// Interleaved with the RX records in the same file and the same framing, so a
+// single pass over the log sees telemetry and events in arrival order — the
+// property the old CSV got by padding event rows out to the full column count.
+// Binary needs no padding: the record type distinguishes them.  The text is
+// free-form; downstream scripts match on it to plot session timelines and loss
+// histograms.
 //
 // Skipped when logging_active=false so we don't open a file just to record
 // an event with no surrounding telemetry.  Hop transitions still go to
 // ESP_LOG via the existing logging at the call site, so nothing is lost.
 static void logHopEvent(const char* event_str, float rx_freq_mhz)
 {
-    if (!logging_active || log_file == nullptr) return;
-    uint32_t time_ms = millis() - log_start_ms;
-    int written = fprintf(log_file,
-                    // 30 telemetry-typed fields blank, then next_ch=- (255 sentinel)
-                    // and rx_freq_mhz/seq/gap minimal so the event row still
-                    // tells you which freq the BS was sitting on at the moment.
-                    "%lu,EVENT,,,,,,,,,,,,,"   // time_ms, state, num_sats..gyro_z (14 cols)
-                    ",,,,"                    // pressure_alt, alt_rate, max_alt, max_speed
-                    ",,,,,,,"                 // voltage..speed (7)
-                    ",,,,,,"                  // launch, vel_apo, alt_apo, landed, rssi, snr
-                    "%u,%.3f,,,"              // next_ch=255 sentinel, rx_freq_mhz, seq=, gap=
-                    "%s,\n",                  // event, rocket_id empty (station-level row, #381)
-                    (unsigned long)time_ms,
-                    (unsigned)LORA_NEXT_CH_NO_HOP,
-                    (double)rx_freq_mhz,
-                    event_str);
-    if (written <= 0) {
-        log_write_fail_count++;  // #384: event rows now count toward #329 stats
-        ESP_LOGW(TAG, "[LOG] fprintf(event) failed");
+    if (!logging_active || log_file == nullptr || event_str == nullptr) return;
+
+    size_t text_len = strnlen(event_str, BS_EVENT_TEXT_MAX);
+
+    BsEventHeader hdr{};
+    hdr.time_ms    = millis() - log_start_ms;
+    hdr.rx_freq_hz = (uint32_t)lroundf(rx_freq_mhz * 1e6f);
+    hdr.text_len   = (uint8_t)text_len;
+
+    uint8_t payload[sizeof(BsEventHeader) + BS_EVENT_TEXT_MAX];
+    memcpy(payload, &hdr, sizeof(hdr));
+    memcpy(payload + sizeof(hdr), event_str, text_len);
+
+    uint8_t rec[MAX_FRAME];
+    size_t  rec_len = 0;
+    if (!TR_I2C_Interface::packMessage(BS_EVENT_MSG, payload,
+                                       sizeof(hdr) + text_len,
+                                       rec, sizeof(rec), rec_len))
+    {
+        log_write_fail_count++;
+        ESP_LOGW(TAG, "[LOG] packMessage(BS_EVENT) failed");
+        return;
+    }
+
+    const size_t wrote = fwrite(rec, 1, rec_len, log_file);
+    if (wrote != rec_len)
+    {
+        log_write_fail_count++;   // #384: event records count toward #329 stats
+        ESP_LOGW(TAG, "[LOG] fwrite(event) short (%u/%u)",
+                 (unsigned)wrote, (unsigned)rec_len);
     }
     log_last_write_ms = millis();
 }
@@ -1566,16 +1755,41 @@ static void handleFileListCommand()
 {
     uint8_t page = ble_app.getFileListPage();
 
-    // Collect all CSV files
-    struct FileEntry { char name[32]; uint32_t size; };
-    FileEntry entries[64];
-    size_t total = 0;
+    // Stream the WHOLE directory past a window that keeps only the N greatest
+    // names (#835 item 5).  This used to read into `FileEntry entries[64]` and
+    // stop at 64 BEFORE sorting; readdir returns on-disk slot order, so the
+    // entries it never reached were the newest logs and the just-recorded
+    // flight became unlistable and undownloadable once the directory held 64+
+    // files.  N is sized to the requested page, so page 0 is correct for any
+    // directory size and only paging depth is bounded.
+    const size_t want = bs_file_list::windowFor(page, config::FILES_PER_PAGE,
+                                                config::FILE_LIST_MAX_WINDOW);
+    if (want == 0)
+    {
+        // Past the deepest page we will build a window for.  An empty page is
+        // the "list ended" signal both apps already stop on.
+        ESP_LOGW(TAG, "[BLE] File list page %u beyond max window (%u entries)",
+                 (unsigned)page, (unsigned)config::FILE_LIST_MAX_WINDOW);
+        ble_app.sendFileList(String("[]"));
+        return;
+    }
+
+    std::unique_ptr<bs_file_list::Entry[]> storage(
+        new (std::nothrow) bs_file_list::Entry[want]);
+    if (!storage)
+    {
+        ESP_LOGE(TAG, "[BLE] File list page %u: out of memory for %u entries",
+                 (unsigned)page, (unsigned)want);
+        ble_app.sendFileList(String("[]"));
+        return;
+    }
+    bs_file_list::TopNames window(storage.get(), want);
 
     DIR* dir = opendir(SD_MOUNT_POINT);
     if (dir)
     {
         struct dirent* entry;
-        while ((entry = readdir(dir)) != nullptr && total < 64)
+        while ((entry = readdir(dir)) != nullptr)
         {
             // Skip directories
             if (entry->d_type == DT_DIR) continue;
@@ -1584,7 +1798,7 @@ static void handleFileListCommand()
 
             // Derive the active basename from log_filename for comparison
             const char* active_basename = log_filename;
-            // log_filename is e.g. "/sdcard/lora_001.csv", strip mount prefix
+            // log_filename is e.g. "/sdcard/lora_001.bin", strip mount prefix
             if (strncmp(active_basename, SD_MOUNT_POINT, strlen(SD_MOUNT_POINT)) == 0)
                 active_basename += strlen(SD_MOUNT_POINT) + 1; // skip "/sdcard/"
 
@@ -1592,50 +1806,38 @@ static void handleFileListCommand()
             if (logging_active && strcmp(fname, active_basename) == 0)
                 continue;
 
-            strncpy(entries[total].name, fname, 31);
-            entries[total].name[31] = '\0';
-
-            // Get file size via stat
-            char fullpath[64];
-            snprintf(fullpath, sizeof(fullpath), "%s/%s", SD_MOUNT_POINT, fname);
-            struct stat st;
-            entries[total].size = (stat(fullpath, &st) == 0) ? (uint32_t)st.st_size : 0;
-            total++;
+            window.offer(fname);
         }
         closedir(dir);
     }
 
-    // Sort descending by name (newest = highest number first)
-    if (total > 1)
-    {
-        qsort(entries, total, sizeof(FileEntry),
-              [](const void* a, const void* b) -> int {
-                  return strcmp(((FileEntry*)b)->name, ((FileEntry*)a)->name);
-              });
-    }
-
-    // Paginate
-    size_t start = (size_t)page * config::FILES_PER_PAGE;
-    if (start > total) start = total;
-    size_t end = start + config::FILES_PER_PAGE;
-    if (end > total) end = total;
-
-    // Build JSON
+    // Build JSON.  stat() only the rows we actually emit -- the old code
+    // stat()ed every file it collected, which on FAT is a directory walk each.
+    const size_t start = (size_t)page * config::FILES_PER_PAGE;
     String json = "[";
-    for (size_t i = start; i < end; ++i)
+    size_t emitted = 0;
+    for (size_t i = start; i < window.count() && emitted < config::FILES_PER_PAGE; ++i)
     {
-        if (i > start) json += ",";
+        const char* name = window.at(i);
+        if (emitted > 0) json += ",";
+
+        char fullpath[64];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", SD_MOUNT_POINT, name);
+        struct stat st;
+        const uint32_t fsize = (stat(fullpath, &st) == 0) ? (uint32_t)st.st_size : 0;
+
         json += "{\"name\":\"";
-        json += entries[i].name;
+        json += name;
         json += "\",\"size\":";
-        json += std::to_string(entries[i].size);
+        json += std::to_string(fsize);
         json += "}";
+        ++emitted;
     }
     json += "]";
 
     ble_app.sendFileList(json);
     ESP_LOGI(TAG, "[BLE] Sent file list page %u: %u files (total %u)",
-             (unsigned)page, (unsigned)(end - start), (unsigned)total);
+             (unsigned)page, (unsigned)emitted, (unsigned)window.total());
 }
 
 static void handleDeleteCommand()
@@ -1838,6 +2040,18 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.soc = lora.soc;
     out.current = lora.current;
     out.voltage = lora.voltage;
+    // #850: the camera / servo rail currents ride the SLOW frame and land in
+    // this rocket's accumulator, so they are forwarded like any other relayed
+    // field. Without this the CSV got them and the app did not — the keys
+    // stayed at their NaN default, addFloat dropped them, and a base-station
+    // link showed "no reading" forever on hardware that was measuring fine.
+    //
+    // A rocket with no monitors fitted (V7/V8, mini) sends 0 rather than NaN,
+    // because the LoRa frame has no way to encode "absent". That is a known
+    // wrinkle of the relay path: on a DIRECT link absent and zero stay
+    // distinguishable, on a relayed one they do not.
+    out.cam_current   = lora.cam_current;
+    out.servo_current = lora.servo_current;
 
     // GPS (pre-computed lat/lon)
     out.latitude = lat_deg;
@@ -1859,6 +2073,11 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     // whichever rocket spoke last, which is wrong for a re-push of a
     // different (focused) rocket's cached frame.
     out.logging_active = lora.logging_active;
+    // #835 item 9: without this the memset() above left sim_active=false on
+    // EVERY relayed frame — an affirmative "real flight", not an absence.  A
+    // pad sim watched through the base station looked identical to a real one,
+    // including in the CSV the flight-report tooling reads afterwards.
+    out.sim_active     = lora.sim_active;
     // Surface the BS log basename as a heartbeat so the operator can
     // confirm logging is live before each flight (#107).  The rocket-side
     // filename isn't shipped over LoRa, so this slot is otherwise unused
@@ -2299,7 +2518,7 @@ static void serviceUplink()
     // margin.  The old flat 140 ms was sized for SF8's ~82 ms downlink and
     // under-reserved at higher SFs, sanctioning attempts that collided with
     // the head of the next downlink (see config.h UPLINK_RX_RESERVE_MARGIN_MS).
-    win.rx_reserve_ms = loraTimeOnAirMs(SIZE_OF_LORA_DATA, lora_sf, lora_bw_khz,
+    win.rx_reserve_ms = loraTimeOnAirMs(SIZE_OF_LORA_BUDGET, lora_sf, lora_bw_khz,
                                         lora_cr, LORA_TELEM_PREAMBLE_SYMS)
                         + config::UPLINK_RX_RESERVE_MARGIN_MS;
     win.link_stale_ms = config::UPLINK_LINK_STALE_MS;
@@ -2418,11 +2637,15 @@ static constexpr uint32_t TXN_MAX_RELAY_MS     = 3000;  // Upper bound on relay 
 static bool startLoRaTransaction(float new_freq, float new_bw,
                                  uint8_t new_sf, uint8_t new_cr, int8_t new_pwr)
 {
-    if (freq_locked_for_flight || hop_active_)
+    if (freqLockedForRetune() || hop_active_)
     {
+        // #835 item 6: deliberately the LONG window.  This is the one consumer
+        // that physically retunes the radio, and the relay is a broadcast whose
+        // transaction commits on any netid-matching packet — a second rocket on
+        // the pad can answer on the new channel and strand an airborne one.
         ESP_LOGW(TAG, "[TXN] Refused: %s",
-                 freq_locked_for_flight ? "frequency locked for flight"
-                                        : "channel hopping active");
+                 freqLockedForRetune() ? "frequency locked for flight"
+                                       : "channel hopping active");
         sendCurrentConfig();
         return false;
     }
@@ -2592,7 +2815,7 @@ static void serviceLoRaTransaction()
 // SECTION: Silence recovery
 // ==========================================================================
 // If the base station hears nothing from any rocket for RECOVERY_SILENCE_MS
-// while on the ground (not freq_locked_for_flight), hop through known-good
+// while on the ground (not freqLockedForFlight()), hop through known-good
 // frequencies looking for the rocket:
 //   Phase A (rendezvous): tune to LORA_FACTORY_RENDEZVOUS_MHZ and listen 3 s.  If a
 //     beacon / telem arrives, relay Cmd 10 with the saved NVS config to
@@ -2602,7 +2825,7 @@ static void serviceLoRaTransaction()
 //     step.  On hit, relay Cmd 10 on that channel and return to NVS.
 //     If the grid completes with nothing heard, give up this cycle and
 //     wait for the next silence trip.
-// While in flight (freq_locked_for_flight) recovery is fully disabled —
+// While in flight (freqLockedForFlight()) recovery is fully disabled —
 // momentary silence during flight is expected (SNR dips) and hopping would
 // guarantee we lose the rest of the telemetry stream.
 
@@ -2740,10 +2963,10 @@ static void serviceRecovery()
     // accept silence — neither is a recovery scenario.  In flight, momentary
     // SNR dips look like silence; while hopping (#40 / #41), the recovery
     // hop scan and the hop sequence would fight each other for the radio.
-    if (freq_locked_for_flight || hop_active_)
+    if (freqLockedForFlight() || hop_active_)
     {
         if (recovery_state != RecoveryState::IDLE)
-            recoveryEnd(freq_locked_for_flight ? "flight locked" : "hopping active");
+            recoveryEnd(freqLockedForFlight() ? "flight locked" : "hopping active");
         return;
     }
     // Transactional reconfigure takes priority.  A BLE Cmd 10 arriving
@@ -2907,7 +3130,7 @@ static void serviceHeartbeat()
     // sim flights; loss <0.2% in every non-flight state). Fixed-channel
     // flights keep the old behavior: no hop fallback to feed, and staying
     // RX-only in flight costs nothing.
-    if (freq_locked_for_flight && !hop_active_) return;  // fixed-channel flight only
+    if (freqLockedForFlight() && !hop_active_) return;  // fixed-channel flight only
     if (lora_txn_state != LoRaTxnState::IDLE)  return;  // Don't interfere with txn
     if (recovery_state != RecoveryState::IDLE) return;  // Recovery owns the radio
     if (scan_passes_remaining_ != 0)           return;  // #136: don't TX mid-scan
@@ -3655,7 +3878,7 @@ static void serviceAutoAcquire()
         return;
     }
 
-    if (freq_locked_for_flight)
+    if (freqLockedForFlight())
     {
         ESP_LOGW(TAG, "[AUTO] Rocket INFLIGHT before first acquire — done");
         auto_acquire_state = AutoAcquireState::DONE;
@@ -3966,6 +4189,17 @@ static void setup_bs()
         {
             ESP_LOGW(TAG, "No fuel gauge found (neither BQ27Z746 0x55 nor MAX17205/MAX17303 0x36) — battery readings unavailable");
         }
+    }
+
+    // #835 item 2: boards with no gauge measure the cell through a divider
+    // instead. Unconditional on the board flag rather than on the probe
+    // result: a gauged board whose gauge failed to answer should stay silent
+    // (its divider does not exist) rather than start reporting a voltage
+    // from an unconnected pin.
+    if constexpr (!config::HAS_FUEL_GAUGE)
+    {
+        initBatteryAdc();
+        updateBattery();   // seed bs_voltage/bs_soc before the first telemetry
     }
 
     // V3: external flight-pack charger on the same I2C bus as the gauge.
@@ -4387,8 +4621,9 @@ static void loop_bs()
         // equal LORA_BEACON_SYNC (0xBE = nid 190) would otherwise parse as a
         // beacon and shadow 100% of telemetry. Inert today (boot forces
         // nid 0), so require the length to disambiguate: beacons are short,
-        // telemetry is exactly SIZE_OF_LORA_DATA.
-        if (rx_len >= 3 && rx_len != SIZE_OF_LORA_DATA && rx_buf[0] == LORA_BEACON_SYNC)
+        // telemetry is exactly SIZE_OF_LORA_FAST or SIZE_OF_LORA_SLOW.
+        if (rx_len >= 3 && rx_len != SIZE_OF_LORA_FAST && rx_len != SIZE_OF_LORA_SLOW
+            && rx_buf[0] == LORA_BEACON_SYNC)
         {
             uint8_t bcn_nid = rx_buf[1];
             uint8_t bcn_rid = rx_buf[2];
@@ -4409,16 +4644,61 @@ static void loop_bs()
                 }
             }
         }
-        // --- Telemetry packet: exactly SIZE_OF_LORA_DATA bytes ---
+        // --- Telemetry packet: FAST (55 B) or SLOW (22 B) ---
         // (#570: no literal here — a stale "(73)" outlived two frame diets.)
-        else if (rx_len == SIZE_OF_LORA_DATA)
+        else if (rx_len == SIZE_OF_LORA_FAST || rx_len == SIZE_OF_LORA_SLOW)
         {
-            // Decode the telemetry packet
-            LoRaDataSI decoded = {};
-            sensor_converter.unpackLoRa(rx_buf, decoded);
+            // #850: both frames open with the same 7-byte LoRaFrameHeader, so
+            // the routing fields and ver_type can be read before we know which
+            // frame this is. That is the whole point of the shared prefix.
+            LoRaFrameHeader hdr{};
+            memcpy(&hdr, rx_buf, sizeof(hdr));
+            const uint8_t frame_ver  = loraFrameVersion(hdr.ver_type);
+            const uint8_t frame_type = loraFrameType(hdr.ver_type);
 
+            // #837 item 14: the version is now CHECKED, not decorative. Before
+            // this it was never transmitted at all and `rx_len` was the only
+            // guard — which two frame sizes would have quietly defeated, since
+            // a stale build's 65 B frame is neither of ours but a future
+            // layout change at the same length would have been invisible.
+            // Type and length must agree. A frame claiming SLOW at 55 bytes is
+            // corrupt in a way the CRC did not catch, and decoding it would
+            // read 33 bytes past the struct.
+            const bool len_ok = (frame_type == LORA_FRAME_SLOW)
+                                    ? (rx_len == SIZE_OF_LORA_SLOW)
+                                    : (frame_type == LORA_FRAME_FAST && rx_len == SIZE_OF_LORA_FAST);
+
+            // Header only for now — enough for the network filter and the slot
+            // lookup below. The payload is merged into the per-rocket
+            // accumulator once we know which rocket it belongs to.
+            LoRaDataSI decoded = {};
+            sensor_converter.unpackLoRaHeader(hdr, decoded);
+
+            // Drop ladder, most-fundamental first: a frame we cannot parse,
+            // then one we can parse but is malformed, then one that parses
+            // fine but belongs to somebody else's network.
+            if (frame_ver != LORA_PROTO_VERSION)
+            {
+                lora_size_mismatch_drops++;
+                lora_size_last_drop_ms = millis();
+                if (lora_size_mismatch_drops == 1 || lora_size_mismatch_drops % 100 == 0)
+                {
+                    ESP_LOGW(TAG, "[RX] Drop: LoRa proto v%u != ours v%u (%lu dropped) "
+                                  "— rocket and base station flashed from different builds",
+                             (unsigned)frame_ver, (unsigned)LORA_PROTO_VERSION,
+                             (unsigned long)lora_size_mismatch_drops);
+                }
+            }
+            else if (!len_ok)
+            {
+                lora_size_mismatch_drops++;
+                lora_size_last_drop_ms = millis();
+                ESP_LOGW(TAG, "[RX] Drop: frame type %u with %u bytes (fast=%u slow=%u)",
+                         (unsigned)frame_type, (unsigned)rx_len,
+                         (unsigned)SIZE_OF_LORA_FAST, (unsigned)SIZE_OF_LORA_SLOW);
+            }
             // Filter by network_id
-            if (decoded.network_id != network_id)
+            else if (decoded.network_id != network_id)
             {
                 // Not our network — drop.  Previously fully silent (#329): if
                 // the rocket's nid drifts from the BS default (0, #136), every
@@ -4455,6 +4735,30 @@ static void loop_bs()
 
                 // Route to per-rocket tracker
                 int slot = findOrAllocRocket(decoded.rocket_id);
+
+                // #850: FORWARD-FILL. Each frame carries only its own subset,
+                // so seed from this rocket's last known state and let the frame
+                // overwrite what it actually contains. `decoded` is therefore
+                // always the complete picture — which is what lets every
+                // consumer below (CSV row, BLE telemetry, logging policy) stay
+                // written against a whole telemetry record, and what makes the
+                // CSV a rectangular table with a row per received packet rather
+                // than alternating half-empty rows.
+                //
+                // The unpackers deliberately do not clear the fields they do
+                // not carry; see the note in TR_Sensor_Data_Converter.cpp.
+                if (slot >= 0)
+                {
+                    decoded = tracked_rockets[slot].last_data;
+                }
+                if (frame_type == LORA_FRAME_SLOW)
+                {
+                    sensor_converter.unpackLoRaSlowBytes(rx_buf, decoded);
+                }
+                else
+                {
+                    sensor_converter.unpackLoRaFastBytes(rx_buf, decoded);
+                }
 
                 TR_LoRa_Comms::Stats ls = {};
                 lora_comms.getStats(ls);
@@ -4529,9 +4833,14 @@ static void loop_bs()
 
                 if (logging_active)
                 {
-                    logLoRaPacket(decoded, ls.last_rssi, ls.last_snr,
-                                  lat_deg, lon_deg, alt_m,
-                                  currentRxFreqMHz(), observed_gap);
+                    // The RAW frame, not `decoded`: with FAST and SLOW
+                    // interleaved, `decoded` is the forward-filled accumulator
+                    // and logging it would repeat the same values and lose
+                    // which fields actually arrived in this packet. lat/lon,
+                    // Euler and the seq gap are all recomputed from these bytes
+                    // by whatever renders the log.
+                    logLoRaPacket(rx_buf, rx_len, ls.last_rssi, ls.last_snr,
+                                  currentRxFreqMHz());
                 }
 
                 if (slot >= 0)
@@ -4557,13 +4866,15 @@ static void loop_bs()
                     // Freshness for the aggregate decisions below uses
                     // last_seen_ms; stamp it now (the tracker mirror further
                     // down stamps it again — idempotent).
-                    tracked_rockets[slot].last_seen_ms = now_ms;
+                    tracked_rockets[slot].last_seen_ms  = now_ms;
+
+                    // #835 item 6 residual: telemetry-only clock for the freq lock.
+
+                    tracked_rockets[slot].last_telem_ms = now_ms;
 
                     bs_log_policy::RocketView views[MAX_TRACKED_ROCKETS];
-                    buildRocketViews(views);
-                    freq_locked_for_flight = bs_log_policy::aggregateFreqLock(
-                        views, MAX_TRACKED_ROCKETS, now_ms,
-                        config::LOG_SILENCE_TIMEOUT_MS);
+                    buildRocketViews(views);   // KEEP: the landed_edge close below uses it
+                    updateFreqLock(views, now_ms, "rx");
 
                     // Close on LANDED transition — but only when no other
                     // fresh rocket is still flying (#381). Boot edge is
@@ -4810,10 +5121,12 @@ static void loop_bs()
             // didn't).
             lora_size_mismatch_drops++;
             lora_size_last_drop_ms = millis();
-            ESP_LOGW(TAG, "[RX] Unexpected packet size: %u (expected %u or beacon) "
-                          "— %lu dropped; mixed-firmware flash? (SIZE_OF_LORA_DATA "
-                          "differs between rocket and BS builds)",
-                     (unsigned)rx_len, (unsigned)SIZE_OF_LORA_DATA,
+            ESP_LOGW(TAG, "[RX] Unexpected packet size: %u (expected %u fast, %u slow, "
+                          "or a beacon) — %lu dropped; mixed-firmware flash? A 65 B "
+                          "packet here is a pre-#850 rocket that still speaks the "
+                          "single-frame protocol",
+                     (unsigned)rx_len, (unsigned)SIZE_OF_LORA_FAST,
+                     (unsigned)SIZE_OF_LORA_SLOW,
                      (unsigned long)lora_size_mismatch_drops);
         }
     }
@@ -4830,12 +5143,49 @@ static void loop_bs()
     // stopLogging(). Does NOT inhibit the auto-restart on the next packet —
     // a rocket genuinely stuck INFLIGHT past the cap starts a fresh file and
     // the operator sees two files instead of one.
-    if (logging_active)
+    // One view snapshot serves BOTH the freq-lock freshness sweep and the
+    // INFLIGHT-safety close.
     {
         const uint32_t now_ms = millis();
         bs_log_policy::RocketView views[MAX_TRACKED_ROCKETS];
         buildRocketViews(views);
-        if (bs_log_policy::anySafetyExpired(views, MAX_TRACKED_ROCKETS, now_ms,
+
+        // #835 item 6: re-evaluate the aggregate freq lock EVERY pass, not
+        // only when a packet arrives.  Deliberately OUTSIDE the
+        // logging_active gate below — the lock outlives the log file, and a
+        // lock that only decayed while a file happened to be open would be
+        // the same bug in a smaller box.  Cheap enough to run unthrottled:
+        // buildRocketViews is 4 x 5 scalar copies (MAX_TRACKED_ROCKETS = 4)
+        // and each aggregate is at most 4 compares, against a loop_bs that
+        // vTaskDelay(1)s at 1 kHz.
+        // #835 item 6 residual: also CLEAR the underlying per-rocket latch
+        // once its telemetry has gone stale, not just the aggregate.
+        // computeFreqLockForFlight() leaves log_state.freq_lock UNCHANGED
+        // through INITIALIZATION and PRELAUNCH, so a recovered, rebooted
+        // rocket's first packet would otherwise re-latch the aggregate from
+        // the stale bit and re-lock the base station until READY arrived —
+        // on exactly the path where the operator is trying to get the radio
+        // back. Uses the RETUNE window (the longer of the two): a latch is
+        // only truly dead once even the radio-moving consumers would release.
+        for (int i = 0; i < MAX_TRACKED_ROCKETS; ++i)
+        {
+            if (bs_log_policy::freqLockExpired(views[i], now_ms,
+                                               config::LOG_INFLIGHT_SAFETY_MS))
+            {
+                tracked_rockets[i].log_state.freq_lock = false;
+                views[i].freq_lock                     = false;
+                ESP_LOGW(TAG, "[LOG] Per-rocket freq latch cleared: rid=%u "
+                              "no telemetry for %lu s",
+                         (unsigned)tracked_rockets[i].rocket_id,
+                         (unsigned long)((now_ms -
+                                          tracked_rockets[i].last_telem_ms) / 1000U));
+            }
+        }
+
+        updateFreqLock(views, now_ms, "freshness sweep");
+
+        if (logging_active &&
+            bs_log_policy::anySafetyExpired(views, MAX_TRACKED_ROCKETS, now_ms,
                                             config::LOG_INFLIGHT_SAFETY_MS) &&
             bs_log_policy::noFreshRocketFlying(views, MAX_TRACKED_ROCKETS, now_ms,
                                                config::LOG_SILENCE_TIMEOUT_MS,

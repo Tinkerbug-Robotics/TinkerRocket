@@ -368,7 +368,10 @@ bool TR_LogToFlash::enqueueFrame(const uint8_t* frame, size_t len)
     }
     // Accept frames when logging is active OR when the log file has been
     // pre-created (PRELAUNCH).  Pre-launch frames buffer in the ring
-    // (capped at 50%) and are flushed once activateLogging() fires.
+    // (capped at 75% by prelaunchCap(), which keeps ~1 s of pre-ignition
+    // history while leaving the launch transient headroom — this said 50%,
+    // the cap's value before that tuning, #837 item 9) and are flushed once
+    // activateLogging() fires.
     // Cross-session stale MRAM is handled by runStartupRecovery() at boot;
     // within a session, processFrame() has a timestamp monotonicity filter
     // that catches anything that would look like a replay from the ring.
@@ -829,6 +832,9 @@ bool TR_LogToFlash::isLoggingActive() const
 void TR_LogToFlash::spiAcquire()
 {
     if (!spi_mutex_) return;
+    // #834 item 2: the parking task already owns this bus exclusively and
+    // the mutex is not recursive — pass through instead of deadlocking it.
+    if (spi_park_owner_ == xTaskGetCurrentTaskHandle()) return;
     // #398: measure time blocked acquiring + hold duration, so the stats
     // window shows exactly which flush-side work starves the parser's MRAM
     // pushes (the multi-second parser_max mystery).
@@ -843,9 +849,36 @@ void TR_LogToFlash::spiAcquire()
 void TR_LogToFlash::spiRelease()
 {
     if (!spi_mutex_) return;
+    // #834 item 2: never unpark. Without this half a single re-entrant
+    // call would hand the bus back moments before the reset.
+    if (spi_park_owner_ == xTaskGetCurrentTaskHandle()) return;
     const uint32_t held = (uint32_t)(esp_timer_get_time() - spi_hold_start_us_);
     if (held > spi_hold_max_us_) spi_hold_max_us_ = held;
     xSemaphoreGive(spi_mutex_);
+}
+
+// #834 item 2: one-way park of the shared SPI bus ahead of a reset. See the
+// header for the contract. Deliberately does NOT go through spiAcquire() —
+// this wait is not a contention sample and must not pollute spi_wait_max_us,
+// and it needs a bounded take where spiAcquire() uses portMAX_DELAY.
+bool TR_LogToFlash::parkSpiBusForReset(uint32_t timeout_ms)
+{
+    if (!spi_mutex_)
+    {
+        // begin() never got as far as creating it, which means begin()
+        // returned false and the flush task was never started. Nothing drives
+        // this bus, so there is nothing to park and the reset is already safe.
+        return true;
+    }
+    if (spi_park_owner_ != nullptr) return true;          // idempotent
+
+    if (xSemaphoreTake(spi_mutex_, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    {
+        return false;
+    }
+    spi_park_owner_ = xTaskGetCurrentTaskHandle();
+    // No spiRelease() — intentional. The bus stays ours until the reset.
+    return true;
 }
 
 // ============================================================================
@@ -1950,7 +1983,37 @@ void TR_LogToFlash::closeLogSession()
             // whatever bytes we have — the sink (writeFrame) wraps payload
             // in a PageHeader and programs a full 4096-byte page, zero-
             // padding the unused payload tail. Accepted small loss.
-            (void)cfg.write_sink(cfg.write_sink_ctx, page_buf, page_buf_idx);
+            //
+            // #837 item 8: the result USED to be cast away. current_file_bytes
+            // counted these bytes when they were popped off the ring, and it is
+            // snapshotted into last_closed_session_bytes_ a few lines below and
+            // handed to TR_FlightLog::finalizeFlight as final_bytes. So a failed
+            // tail write — flight region full, or the tail landing on a run of
+            // bad blocks — left finalize keeping a page that was never
+            // programmed. readFlightPage then memcpy'd erased 0xFF into the
+            // download: a file of the advertised length whose tail is garbage,
+            // with nand_prog_fail unchanged so the storage scorecard stayed
+            // green. Mirror the flushRingToNand !ok path instead.
+            const bool tail_ok =
+                cfg.write_sink(cfg.write_sink_ctx, page_buf, page_buf_idx);
+            if (!tail_ok)
+            {
+                nand_prog_fail++;                     // -> shStorageState -> DEGRADED
+                current_file_bytes -= page_buf_idx;   // never reached NAND
+                ESP_LOGE(TAG, "closeLogSession: final %lu-byte page FAILED to "
+                              "write — session reported as %lu bytes, not %lu",
+                         (unsigned long)page_buf_idx,
+                         (unsigned long)current_file_bytes,
+                         (unsigned long)(current_file_bytes + page_buf_idx));
+            }
+            else
+            {
+                // The tail page is a NAND program op like any other; counting
+                // it keeps nand_prog_ops / nand_bytes_written honest, which
+                // they were not (one page short per session).
+                nand_bytes_written += page_buf_idx;
+                nand_prog_ops++;
+            }
             page_buf_idx = 0;
         }
         file_open = false;

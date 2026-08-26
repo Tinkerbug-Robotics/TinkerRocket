@@ -124,6 +124,29 @@ static inline bool shouldHopInState(uint8_t s)
     return shouldHopInState((RocketState)s);
 }
 
+// Whether a requested LoRa transmit-mute change may be applied in this state.
+//
+// "LoRa off" (radio silence) stops every transmit the rocket makes —
+// telemetry, name beacon, hop schedule — while leaving the receiver up, so
+// the mute can be lifted again over the air.  Muting an AIRBORNE rocket
+// throws away the only link that says where it is, and the operator would
+// have no way to notice before it lands somewhere unknown, so a DISABLE is
+// refused while INFLIGHT.  An ENABLE is always allowed: it can only restore
+// telemetry, never remove it, and un-muting a rocket that took off muted is
+// exactly the recovery this rule has to leave open.
+//
+// Shared by the OC and mini BLE handlers, both uplink handlers, and the
+// host tests, so all four cannot drift.
+static inline bool loraTxMuteChangeAllowed(bool want_disabled, RocketState s)
+{
+    return !(want_disabled && s == INFLIGHT);
+}
+
+static inline bool loraTxMuteChangeAllowed(bool want_disabled, uint8_t s)
+{
+    return loraTxMuteChangeAllowed(want_disabled, (RocketState)s);
+}
+
 // ============================================================================
 // Channel-set generator for per-packet frequency hopping (issues #40 / #41)
 // ============================================================================
@@ -251,6 +274,15 @@ static constexpr uint8_t LORA_CMD_CHANNEL_SET     = 15;   // uplink cmd: rendezv
 static constexpr uint8_t LORA_CMD_HOP_PAUSE       = 16;   // uplink cmd: park on lora_freq_mhz for N ms (#90)
 static constexpr uint16_t LORA_HOP_PAUSE_MAX_MS   = 60000; // server-side cap on cmd 16 duration
 static constexpr uint8_t LORA_CMD_SET_HOP_DISABLED = 17;  // uplink cmd: 1 byte payload, 0=hopping enabled (default), 1=disabled (fixed-frequency mode for diagnostics, #106)
+// LoRa transmit mute ("LoRa off").  1 byte payload: 1 = radio silent, 0 =
+// transmitting (the default).  ONE number for two transports: the app sends
+// it straight to a rocket over BLE, and the base station relays the same
+// byte as an uplink command — the OC and mini dispatch both from this
+// constant so they cannot drift apart.  Deliberately NOT a toggle: a
+// dropped retry on a toggle inverts the setting, and this one decides
+// whether the rocket is trackable.  See loraTxMuteChangeAllowed() for the
+// in-flight refusal rule.
+static constexpr uint8_t LORA_CMD_SET_TX_DISABLED  = 68;  // uplink + rocket BLE cmd: 1 byte payload, 1 = "LoRa off" (mute every transmit, keep listening), 0 = transmitting (default)
 
 // ── App ↔ Base Station BLE command IDs (#287) ─────────────────────────────
 // The command byte the iOS app sends to the *base station* on the BLE command
@@ -883,6 +915,10 @@ typedef struct
 } GNSSDataSI;
 
 // --- Power Data ---
+// GROWS BY APPENDING. Readers must dispatch on the payload length, not assume
+// the current size — see MSG_EXPECTED_LEN in Data_Analysis/plot_flight_data*.py,
+// whose tuple form exists for exactly this ("wire structs grow by appending
+// version-gated fields"). v1 logs are 10 B and stay readable forever.
 typedef struct __attribute__((packed))
 {
     uint32_t time_us;
@@ -890,16 +926,41 @@ typedef struct __attribute__((packed))
     int16_t  current_raw; // (mA / 10000.0) * 32767   → -10000..+10000 mA
     int16_t  soc_raw;     // (soc + 25) * (32767/150) → -25..+125 %
 
+    // --- v2 (#850): high-side-switch load currents, milliamps, OC-measured ---
+    // Straight mA, NOT a scaled raw — one encoding shared by both channels so
+    // firmware, iOS and Android cannot drift apart on a per-channel scale
+    // factor. uint16 spans 0-65.5 A; the real ceiling is the ADC front end
+    // (~5 A camera, ~10 A servo at ADC_ATTEN_DB_0), both ~3.3x design current.
+    //
+    // ACCURACY: the TPS22811 GIMON is 95.3 uA/A typical but 82.9-107.6 over
+    // temperature, so absolute readings carry about +/-13% (+/-194 mA at the
+    // camera's 1.5 A design point, +/-387 mA at the servo's 3 A) until the
+    // board is calibrated against a known load. That error is a stable GAIN
+    // term, not noise — relative movement is faithful, which is what spotting
+    // a stalled servo actually needs. Resolution floor is the ADC, 1.22 mA
+    // (camera, R85 = 2k) and 2.43 mA (servo, R88 = 1k).
+    //
+    // 0 on any board without the monitors fitted: V7/V8 rocket-computers and
+    // the mini, whose board headers set CAM_IMON_GPIO / SERVO_IMON_GPIO to -1.
+    uint16_t cam_ma;
+    uint16_t servo_ma;
+
 } POWERData;
 
-static_assert(sizeof(POWERData) == 10, "POWERData must be 10 bytes");
+static_assert(sizeof(POWERData) == 14,
+              "POWERData must be 14 bytes (v2, #850: +cam_ma +servo_ma)");
 
-typedef struct 
+// Payload length of the pre-#850 frame. Kept so decoders can accept both.
+static constexpr size_t SIZE_OF_POWER_DATA_V1 = 10;
+
+typedef struct
 {
     uint32_t time_us;
     float voltage;
     float current;
     float soc;
+    float cam_current;    // A; NaN when the board has no monitor (#850)
+    float servo_current;  // A; NaN when the board has no monitor (#850)
 } POWERDataSI;
 
 // --- BMP585 Pressure and Temperature Data ---
@@ -1658,7 +1719,13 @@ static constexpr uint8_t IDENTITY_NVS_SCHEMA_VERSION = 1;
 //       hop schedule.  With dwell=4 and BW=250 (69 channels) an 8-bit seq
 //       only spans 64 active positions, leaving 5 channels unreachable —
 //       16 bits covers any (BW, dwell) combination we'd reasonably pick.
-static constexpr uint8_t LORA_PROTO_VERSION = 4;
+//   v5: TWO frames (#850). 55 B FAST at 5-of-6 slots + 22 B SLOW at 1-of-6,
+//       both led by the 7-byte LoRaFrameHeader whose ver_type carries THIS
+//       constant. Unlike v1-v4, the version is now actually transmitted and
+//       checked — see the note on LoRaFrameHeader and #837 item 14, which
+//       recorded that the constant had been decorative (and its own changelog
+//       wrong: it described v4 as 62 B against a 65-byte struct) since #191.
+static constexpr uint8_t LORA_PROTO_VERSION = 5;
 
 // Slow-hop dwell (#133) — how many consecutive packets the rocket
 // transmits on a single channel before advancing.  Dwell > 1 gives the
@@ -1692,26 +1759,81 @@ static constexpr uint8_t LORA_BEACON_SYNC = 0xBE;
 // all the rocket needs to keep the timer reset.
 static constexpr uint8_t LORA_CMD_HEARTBEAT = 0xFE;
 
-// LoRa data to send from rocket to ground station
+// ---------------------------------------------------------------------------
+//  LoRa downlink: two interleaved frames (#850 / #837 item 14)
+// ---------------------------------------------------------------------------
+// The downlink used to be one 65-byte frame at a flat 2 Hz. That paid full
+// freight for fields that barely change, and it left the long-range rung with
+// no room: at SF10/BW250 a 65 B frame is 386 ms against a 390 ms dwell budget,
+// so the #150 doc records that "frame growth breaks this first".
+//
+// Now there are two frames on a 6-slot cycle: FAST five times, SLOW once, so
+// fast telemetry runs at ~1.67 Hz and the slow set every 3 s.
+//
+//   frame        bytes   SF8 ToA   dwell   per-visit   SF10 ToA   margin/390
+//   -----------  -----   -------   -----   ---------   --------   ----------
+//   old single      65    112 ms       3      336 ms     386 ms         4 ms
+//   FAST            55    102 ms       3      306 ms     345 ms        45 ms
+//   SLOW            22     56 ms       4      224 ms     202 ms       188 ms
+//
+// Airtime per 3 s falls from 672 ms to 566 ms (22.4% -> 18.9% duty), and the
+// SF10 margin goes from 4 ms to 45 ms — an 11x improvement in the constraint
+// that actually binds.
+//
+// WHY sensor_health STAYS IN THE FAST FRAME even though it is nominally slow:
+// its bits 24-30 (SH_PYRO_MEAS_SHIFT) are how the stand-back LoRa pyro test
+// (#803) returns its answer, and the app's relay-side pending window is 8 s.
+// On a 3 s frame, two dropped packets push the reply past that window and the
+// continuity test appears to time out, reverting to exactly the stale reading
+// #411 exists to suppress. Moving it would also have made things WORSE on
+// airtime: at 51 B the auto-derived dwell jumps 3 -> 4 and per-visit occupancy
+// goes to 388 ms, tighter than today. Keeping it is better on both counts.
+//
+// COMPATIBILITY. The old guard was `rx_len == SIZE_OF_LORA_DATA` — length as
+// identity. Two frame types make that untenable, so ver_type below carries the
+// protocol version explicitly and is CHECKED, closing #837 item 14 (the old
+// LORA_PROTO_VERSION was transmitted and verified by nothing). Both ends must
+// be flashed together; a version mismatch is now loud instead of silent.
+
+// Shared prefix, byte-identical in both frames so a receiver can read the
+// routing header and dispatch on ver_type before it knows the frame's size.
+// Keep this first in both structs and keep it 7 bytes.
 typedef struct __attribute__((packed))
 {
-    // --- Routing header (proto v2: hop byte added for #40/#41) ---
     uint8_t  network_id;      // LoRa network namespace (0..255)
-    uint8_t  rocket_id;       // Source rocket ID within network (1..254, 0=unset, 255=broadcast)
-    uint8_t  next_channel_idx;// 0..N-1 = hop to that channel after this RX; 0xFF = stay
-    uint16_t seq;             // free-running TX sequence (proto v4, #105) — wraps mod 65536
+    uint8_t  rocket_id;       // Source rocket ID (1..254, 0=unset, 255=broadcast)
+    uint8_t  next_channel_idx;// 0..N-1 = hop after this RX; 0xFF stay; 0xFE off-schedule
+    uint16_t seq;             // free-running TX sequence, wraps mod 65536
+    uint8_t  ver_type;        // high nibble = proto version, low nibble = LORA_FRAME_*
+    uint8_t  flags_state;     // bits 0..3 flags, bits 4..6 rocket_state
+} LoRaFrameHeader;
 
-    // --- Telemetry payload (unchanged from proto v0) ---
+static_assert(sizeof(LoRaFrameHeader) == 7, "LoRaFrameHeader must be 7 bytes");
+
+// ver_type accessors. The version occupies the high nibble so a receiver can
+// reject a mismatched build without knowing anything else about the frame.
+static constexpr uint8_t LORA_FRAME_FAST = 0x0;
+static constexpr uint8_t LORA_FRAME_SLOW = 0x1;
+
+static inline constexpr uint8_t loraVerType(uint8_t version, uint8_t frame_type)
+{
+    return (uint8_t)(((version & 0x0Fu) << 4) | (frame_type & 0x0Fu));
+}
+static inline constexpr uint8_t loraFrameVersion(uint8_t ver_type) { return (uint8_t)(ver_type >> 4); }
+static inline constexpr uint8_t loraFrameType(uint8_t ver_type)    { return (uint8_t)(ver_type & 0x0Fu); }
+
+// FAST frame: everything that moves on flight timescales.
+typedef struct __attribute__((packed))
+{
+    LoRaFrameHeader hdr;
+
     uint8_t num_sats;        // 0..255
-    uint8_t pdop_u8;         // 0..100 (as you do now)
+    uint8_t pdop_u8;         // 0..100
+    uint8_t hacc_u8;         // 0..100
 
     i24le_t ecef_x_m;        // meters, signed 24-bit
     i24le_t ecef_y_m;
     i24le_t ecef_z_m;
-
-    uint8_t hacc_u8;         // 0..100
-
-    uint8_t flags_state;     // bits 0..3 flags, bits 4..6 rocket_state
 
     int16_t acc_x_x10;       // m/s^2 * 10
     int16_t acc_y_x10;
@@ -1721,54 +1843,61 @@ typedef struct __attribute__((packed))
     int16_t gyro_y_x10;
     int16_t gyro_z_x10;
 
-    int16_t temp_x10;        // degC * 10
-
-    uint8_t voltage_u8;      // encodeVoltage_2_10_01()
-
-    int16_t current_ma;      // mA
-
-    int8_t  soc_i8;          // -128..127
-
-    i24le_t pressure_alt_m;  // meters
-
-    int16_t altitude_rate;   // m/s
-
-    i24le_t max_alt_m;       // meters
-
-    int16_t max_speed;       // m/s
-
-    int16_t q0;              // quaternion × 10000
+    int16_t q0;              // quaternion * 10000
     int16_t q1;
     int16_t q2;
     int16_t q3;
 
-    uint32_t sensor_health;  // #303 scorecard bitfield (see SH_*_SHIFT)
+    i24le_t pressure_alt_m;  // meters
+    int16_t altitude_rate;   // m/s
 
-    // #191: EKF launch-relative ENU velocity, dm/s = 0.1 m/s (i16 spans
-    // ±3276.7 m/s).  Paid for by dropping roll/pitch/yaw_cd and the
-    // instantaneous speed from the wire — all derivable on the ground
-    // (Euler from the quaternion above, speed = |v|; unpackLoRa does
-    // both) — which holds the frame at 65 B: airtime-identical to the
-    // 66 B layout the #150 FHSS dwell table was validated at.  Growing
-    // past 66 B is a REGULATORY decision: at 73 B the SF10/BW250
-    // long-range rung crosses the FCC 400 ms occupancy line.
-    int16_t vel_e_dms;
+    int16_t vel_e_dms;       // EKF launch-relative ENU velocity, dm/s (#191)
     int16_t vel_n_dms;
     int16_t vel_u_dms;
 
-    // Second flag byte (#191) — flags_state is full (5 flags + 3-bit state).
-    // bit 0: burnout_detected
-    // bits 1-5 (#390): board→rocket orientation code (0-23; 31 = auto-exact,
-    //                  no discrete code)
-    // bits 6-7 (#390): orientation report mode — 0 = not reported (pre-#390
-    //                  firmware zero-fills, so stale rockets can never render
-    //                  a false orientation), 1 = default, 2 = manual, 3 = auto
-    uint8_t flags2;
+    uint32_t sensor_health;  // #303 scorecard (see SH_*_SHIFT) — see note above
 
-} LoRaData;
+    uint8_t flags2;          // bit 0 burnout; bits 1-5 orient code; 6-7 mode (#390)
+} LoRaFastData;
 
-static_assert(sizeof(LoRaData) == 65,
-              "LoRaData must be 65 bytes (#191: +ENU velocity +flags2, -derived Euler/speed)");
+static_assert(sizeof(LoRaFastData) == 55, "LoRaFastData must be 55 bytes");
+
+// SLOW frame: slow-moving state, plus the two maxima the ground could in
+// principle recompute but keeps as insurance against packet loss.
+typedef struct __attribute__((packed))
+{
+    LoRaFrameHeader hdr;
+
+    i24le_t max_alt_m;       // meters
+    int16_t max_speed;       // m/s
+
+    int16_t temp_x10;        // degC * 10
+    uint8_t voltage_u8;      // encodeVoltage_2_10_01()
+    int16_t current_ma;      // mA
+    int8_t  soc_i8;          // -128..127
+
+    // #850: high-side-switch load currents, milliamps. 0 on any board without
+    // the TPS22811 monitors fitted (V7/V8, mini) — the ground renders a
+    // missing measurement as absent, not as a measured zero.
+    uint16_t cam_ma;
+    uint16_t servo_ma;
+} LoRaSlowData;
+
+static_assert(sizeof(LoRaSlowData) == 22, "LoRaSlowData must be 22 bytes");
+
+// The two frames MUST agree on the shared prefix, or dispatch reads garbage.
+static_assert(offsetof(LoRaFastData, hdr) == 0, "header must lead the fast frame");
+static_assert(offsetof(LoRaSlowData, hdr) == 0, "header must lead the slow frame");
+
+// Slot schedule: five FAST then one SLOW, so SLOW rides every 6th transmission
+// (3.0 s at the 2 Hz LORA_TX_RATE_HZ).
+static constexpr uint8_t LORA_SLOT_CYCLE     = 6;
+static constexpr uint8_t LORA_SLOW_SLOT      = 5;   // 0-based index within the cycle
+
+static inline constexpr uint8_t loraFrameTypeForSlot(uint16_t seq)
+{
+    return ((seq % LORA_SLOT_CYCLE) == LORA_SLOW_SLOT) ? LORA_FRAME_SLOW : LORA_FRAME_FAST;
+}
 
 static constexpr uint8_t LORA_LAUNCH      = (1u << 0);  // bit 0
 static constexpr uint8_t LORA_VEL_APOGEE  = (1u << 1);  // bit 1
@@ -1779,6 +1908,22 @@ static constexpr uint8_t LORA_CAMERA_REC  = (1u << 7);  // bit 7: camera recordi
 
 // logging_active is packed into the MSB of num_sats (real range 0-40, 7 bits plenty)
 static constexpr uint8_t LORA_LOGGING_BIT = 0x80;
+
+// #835 item 9: sim_active rides num_sats bit 6, alongside LORA_LOGGING_BIT.
+// The FC raises NSF_SIM_ACTIVE while TR_Sensor_Collector_Sim is substituting
+// IMU/baro/GNSS, and a DIRECT BLE link relays it ("fs" bit 8) — but the LoRa
+// frame had nowhere to put it: flags_state is fully allocated (4 flags + 3-bit
+// state + camera) and so is flags2 (burnout + 5-bit orient code + 2-bit mode).
+// The base station memset()s its output and never assigned sim_active, so a
+// relayed sim flight reported sim_active=FALSE — an affirmative "this is real",
+// not an absence.  A pad sim watched through the BS was indistinguishable from
+// a real flight, in the app and in the CSV the flight-report tooling consumes.
+//
+// num_sats really runs 0-40, so 6 bits (0-63) still covers it with room; the
+// packer clamps to 63 rather than 127 now.  0 on the wire means "not reported"
+// for legacy senders, which is the same as the pre-#835 behaviour.
+static constexpr uint8_t LORA_SIM_BIT     = 0x40;
+static constexpr uint8_t LORA_NUM_SATS_MASK = 0x3F;
 
 // LoRaData.flags2 bit masks (#191).
 static constexpr uint8_t LORA2_BURNOUT = (1u << 0);   // NSF_BURNOUT relay
@@ -1812,7 +1957,10 @@ typedef struct
             vel_u_apogee_flag,      // bit          : bool
             launch_flag,            // bit          : bool
             camera_recording,       // bit 7        : bool
-            logging_active;         // MSB of num_sats byte
+            logging_active,         // MSB of num_sats byte
+            sim_active;             // #835 item 9: num_sats bit 6 — the rocket
+                                    // is running TR_Sensor_Collector_Sim, so
+                                    // this trace is synthetic, not a flight
     uint8_t rocket_state;           // 3 bits       : states 0 through 5 (incl. MAG_CALIBRATION; field holds 0-7)
     float   acc_x;                  // 0.1 m/s2     : -400 to 400
     float   acc_y;                  // 0.1 m/s2     : -400 to 400
@@ -1824,6 +1972,12 @@ typedef struct
     float   voltage;                // 0.1          : 3 to 10
     float   current;                // 1 mA         : -10000 to 10000
     float   soc;                    // 1%           : -25 to 125
+    // #850: high-side-switch load currents, AMPS, carried on the SLOW frame.
+    // 0 on any board without the TPS22811 monitors fitted (V7/V8, mini). The
+    // base station forwards these to the app, which renders "no monitor" from
+    // the ABSENT JSON key rather than from a zero here.
+    float   cam_current;            // 1 A          : 0 to ~5
+    float   servo_current;          // 1 A          : 0 to ~10
     float   base_station_voltage;   // N/A
     float   base_station_current;   // N/A
     float   base_station_soc;       // N/A
@@ -1991,6 +2145,10 @@ static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 28-byte Log
 // the I2S telemetry stream exists, which is the whole point — see
 // FcBootStatusData above.  Stops once the FC enters loop_fc().
 static constexpr uint8_t FC_BOOT_STATUS_MSG   = 0xFA;  // FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only
+static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 169-byte ConfigReportData, everything the app's config
+                                                      // readback cannot otherwise see (#915).  PUSHED, not requested —
+                                                      // see the struct comment.  0xFC/0xFD are the last free codes in
+                                                      // this space; anything past them needs an escape mechanism.
 
 // --- OTA firmware relay to the Flight Computer (#8 Phase 4) ---
 // Control plane rides the OC↔FC I2C link: the OC stages OTA_BEGIN_PENDING
@@ -2120,6 +2278,74 @@ static_assert(sizeof(LoRaUplinkData) == 13, "LoRaUplinkData must be 13 bytes");
 // SAME-LINE comment, and without it infers "FC → OC" from the _MSG suffix and
 // publishes this as a link message, which it never is.
 static constexpr uint8_t LORA_UPLINK_MSG     = 0xF9;  // OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log
+
+
+// ===========================================================================
+//  Base-station binary log records
+// ===========================================================================
+// The base station used to write a 39-column CSV straight to storage, one row
+// per received packet, formatting every float on the MCU. That cost ~174 bytes
+// per packet (measured over examples/flights/lora_20260705_173025.csv) against
+// ~70 for the binary form, and it does not survive the two-frame split well:
+// with FAST and SLOW arriving asynchronously, a CSV row is a snapshot of an
+// accumulator rather than a record of what was actually received.
+//
+// So the base station now does what the rocket computer already does — it logs
+// the bytes it saw, framed exactly like every other log record
+// (TR_I2C_Interface::packMessage: SOF/type/len/CRC16), and the CSV is generated
+// on the app side. Same framing means the same walkers and the same tooling.
+//
+// What the base station knows that the frame does not: when it arrived, how
+// strong it was, and which channel it landed on. That is the envelope below;
+// everything else is either in the frame or derived from it (lat/lon from ECEF,
+// Euler from the quaternion, gap from seq).
+
+typedef struct __attribute__((packed))
+{
+    uint32_t time_ms;        // BS-relative arrival; the CSV's time_ms column
+    int16_t  rssi_dbm_x10;   // dBm * 10  (-1200 = -120.0 dBm); INT16_MIN = unknown
+    int16_t  snr_db_x10;     // dB  * 10
+    uint32_t rx_freq_hz;     // channel it was received on (hop state)
+    // The raw LoRa frame follows immediately: SIZE_OF_LORA_FAST or
+    // SIZE_OF_LORA_SLOW bytes, verbatim, self-describing through its own
+    // ver_type. NOT repeated here — the record's length byte gives the frame
+    // length as (payload_len - sizeof(BsLoRaRxHeader)), so the two can never
+    // disagree the way a duplicated length field can.
+} BsLoRaRxHeader;
+
+static_assert(sizeof(BsLoRaRxHeader) == 12, "BsLoRaRxHeader must be 12 bytes");
+
+// Sentinel for "the radio gave us no reading". Distinct from a genuine 0 dBm,
+// which is a legal (if implausible) measurement.
+static constexpr int16_t BS_RSSI_UNKNOWN = INT16_MIN;
+
+// Hop / session events — the EVENT rows of the old CSV. Free text rather than
+// an enum because these are diagnostic breadcrumbs whose vocabulary changes
+// with the hop work, and an unknown code is worse than an unknown string.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_ms;
+    uint32_t rx_freq_hz;
+    uint8_t  text_len;       // bytes of UTF-8 text following, 0..63
+    // text follows
+} BsEventHeader;
+
+static_assert(sizeof(BsEventHeader) == 9, "BsEventHeader must be 9 bytes");
+
+static constexpr size_t BS_EVENT_TEXT_MAX = 63;
+
+// The trailing marker is load-bearing: gen_protocol_reference.py reads the
+// SAME-LINE comment, and without it infers a link direction from the _MSG
+// suffix that these do not have.
+// Every base-station log opens with the 8 bytes "TRBSLOG" + this version, so a
+// reader identifies the file by content rather than by extension and refuses an
+// unknown one instead of walking arbitrary bytes as records. Bump on any change
+// to the record layouts above.
+static constexpr uint8_t BS_LOG_FORMAT_VERSION = 1;
+static constexpr size_t  BS_LOG_MAGIC_LEN      = 8;
+
+static constexpr uint8_t BS_LORA_RX_MSG = 0xFC;  // BS→self: BsLoRaRxHeader + the raw LoRa frame, one per received packet
+static constexpr uint8_t BS_EVENT_MSG   = 0xFD;  // BS→self: BsEventHeader + UTF-8 text, one per hop/session event
 
 // LoRaUplinkData.flags — the disposition of the decode.  Exactly one of these
 // is set; they are separate bits rather than an enum so a reader can mask for
@@ -2609,6 +2835,72 @@ struct __attribute__((packed)) FlightSettingsData
 static_assert(sizeof(FlightSettingsData) == 219,
               "FlightSettingsData layout check (v6: flown guidance target, #435)");
 
+// --- Full config report (#915) ---
+// FC→OC over I2S.  Carries exactly what the app's config readback CANNOT
+// otherwise see, so the phone can show and verify the whole editable surface
+// instead of displaying profile values it has no way to check against the
+// vehicle: servo trim 2-4, fin travel, fin layout, the PN guidance
+// parameters, the roll waypoints, sounds, and the orientation SETTING.
+//
+// Why not extend FlightSettingsData: that struct is 219 bytes against a
+// MAX_PAYLOAD of 224, and the fin layout plus the guidance parameters need
+// ~63 more.  It is also emitted at the PRELAUNCH→INFLIGHT transition and
+// logged into the flight .bin — a different job from a pre-flight readback.
+//
+// Why PUSHED rather than requested: the FC emits this at boot, on every
+// accepted config change, and slowly while not INFLIGHT.  A request/response
+// would have cost a second message code, and this space has three values left
+// (0xFB here, 0xFC and 0xFD after it).  The push also self-heals an OC that
+// rebooted independently, which a connect-time request would not.
+//
+// Composed from the very structs the app writes rather than re-listing their
+// fields: a field that moves in ServoConfigData / FinConfigData /
+// GuidanceConfigData / RollProfileData moves here with it, and their existing
+// offsetof pins already guard the internal order.
+struct __attribute__((packed)) ConfigReportData
+{
+    static constexpr uint8_t VERSION = 1;
+
+    // flags bit positions
+    static constexpr uint8_t F_SOUNDS = 0;   // piezo sounds enabled
+    // Set when imu_orient_setting below came from the FC's own NVS record
+    // rather than the compile-time board fallback.  This is what lets the OC
+    // tell "the FC deliberately holds AUTO" from "the FC has never been told":
+    // in the first case the FC's setting wins, in the second the OC re-pushes
+    // the setting it still remembers (and the FC then persists it).  Without
+    // the bit, reflashing either board silently loses whichever one's memory
+    // the other happened to overwrite.
+    static constexpr uint8_t F_ORIENT_FROM_NVS = 1;
+
+    uint32_t time_us;              // micros() at build — first, so the generic
+                                   // frame parser's "timestamp = first 4
+                                   // payload bytes" convention still holds
+    uint8_t  version;              // = VERSION
+    uint8_t  imu_orient_setting;   // IMU_ORIENT_AUTO, or a manual code 0..23.
+                                   // The SETTING, not the active frame — the
+                                   // active one is already in the status query
+                                   // as b2r_code/b2r_mode, and the two differ
+                                   // whenever pad-gravity detect has re-snapped
+                                   // an AUTO rocket.
+    uint8_t  flags;                // see F_* above
+    uint8_t  _pad;
+
+    ServoConfigData    servo;      // biases 1-4, hz, pulse endpoints, fin travel
+    FinConfigData      fin;        // ring azimuths + both reverse masks
+    GuidanceConfigData guidance;   // enable + every PN / station-keep parameter
+    RollProfileData    roll;       // waypoints (num_waypoints == 0 → rate-only)
+};
+static_assert(sizeof(ConfigReportData) == 169,
+              "ConfigReportData layout check (v1, #915)");
+// Nested-struct starts are wire ABI: the OC parses this by memcpy of the
+// whole thing, so a member reordered here silently reinterprets every field
+// after it.
+static_assert(offsetof(ConfigReportData, servo) == 8 &&
+              offsetof(ConfigReportData, fin) == 30 &&
+              offsetof(ConfigReportData, guidance) == 48 &&
+              offsetof(ConfigReportData, roll) == 93,
+              "ConfigReportData member order is wire ABI");
+
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the
 // per-flight .bin records exactly how much MRAM the session actually used.
@@ -2712,7 +3004,15 @@ struct __attribute__((packed)) FlightSnapshotData
     // post-reboot boot-default orientation would silently invalidate them.
     uint8_t  b2r_code;            // discrete orientation code
     uint8_t  b2r_mode;            // ORIENT_MODE_*
-    uint8_t  pad2[1];
+    // #834 item 4: did ref_alt_m below come from a CONVERGED pad average?
+    // The GNSS main-deploy backstop compares against ref_alt_m, and an
+    // under-converged pad datum has been measured 132 m off — far past the
+    // backstop's margin. ref_pos_count cannot be recomputed after a reboot
+    // (the accumulator is frozen), so the evidence has to ride the snapshot.
+    // Reclaimed from pad2[1]: size- and offset-neutral, and 0 (what every
+    // older writer left here) means "no evidence", which disables the
+    // backstop — fail-safe, so no VERSION bump is needed.
+    uint8_t  ref_datum_converged;
 
     // --- Flight references ---
     float    ground_pressure_pa;
@@ -2759,41 +3059,52 @@ static constexpr size_t SIZE_OF_NON_SENSOR_DATA = sizeof(NonSensorData);
 // of the wire format. Pin every field offset so any layout change is a
 // loud compile error on firmware and host builds alike. Values were
 // derived from the declared layouts; the compiler proves each line.
-static_assert(sizeof(LoRaData) == 65, "LoRaData wire size");
-static_assert(offsetof(LoRaData, network_id) == 0, "LoRaData.network_id moved");
-static_assert(offsetof(LoRaData, rocket_id) == 1, "LoRaData.rocket_id moved");
-static_assert(offsetof(LoRaData, next_channel_idx) == 2, "LoRaData.next_channel_idx moved");
-static_assert(offsetof(LoRaData, seq) == 3, "LoRaData.seq moved");
-static_assert(offsetof(LoRaData, num_sats) == 5, "LoRaData.num_sats moved");
-static_assert(offsetof(LoRaData, pdop_u8) == 6, "LoRaData.pdop_u8 moved");
-static_assert(offsetof(LoRaData, ecef_x_m) == 7, "LoRaData.ecef_x_m moved");
-static_assert(offsetof(LoRaData, ecef_y_m) == 10, "LoRaData.ecef_y_m moved");
-static_assert(offsetof(LoRaData, ecef_z_m) == 13, "LoRaData.ecef_z_m moved");
-static_assert(offsetof(LoRaData, hacc_u8) == 16, "LoRaData.hacc_u8 moved");
-static_assert(offsetof(LoRaData, flags_state) == 17, "LoRaData.flags_state moved");
-static_assert(offsetof(LoRaData, acc_x_x10) == 18, "LoRaData.acc_x_x10 moved");
-static_assert(offsetof(LoRaData, acc_y_x10) == 20, "LoRaData.acc_y_x10 moved");
-static_assert(offsetof(LoRaData, acc_z_x10) == 22, "LoRaData.acc_z_x10 moved");
-static_assert(offsetof(LoRaData, gyro_x_x10) == 24, "LoRaData.gyro_x_x10 moved");
-static_assert(offsetof(LoRaData, gyro_y_x10) == 26, "LoRaData.gyro_y_x10 moved");
-static_assert(offsetof(LoRaData, gyro_z_x10) == 28, "LoRaData.gyro_z_x10 moved");
-static_assert(offsetof(LoRaData, temp_x10) == 30, "LoRaData.temp_x10 moved");
-static_assert(offsetof(LoRaData, voltage_u8) == 32, "LoRaData.voltage_u8 moved");
-static_assert(offsetof(LoRaData, current_ma) == 33, "LoRaData.current_ma moved");
-static_assert(offsetof(LoRaData, soc_i8) == 35, "LoRaData.soc_i8 moved");
-static_assert(offsetof(LoRaData, pressure_alt_m) == 36, "LoRaData.pressure_alt_m moved");
-static_assert(offsetof(LoRaData, altitude_rate) == 39, "LoRaData.altitude_rate moved");
-static_assert(offsetof(LoRaData, max_alt_m) == 41, "LoRaData.max_alt_m moved");
-static_assert(offsetof(LoRaData, max_speed) == 44, "LoRaData.max_speed moved");
-static_assert(offsetof(LoRaData, q0) == 46, "LoRaData.q0 moved");
-static_assert(offsetof(LoRaData, q1) == 48, "LoRaData.q1 moved");
-static_assert(offsetof(LoRaData, q2) == 50, "LoRaData.q2 moved");
-static_assert(offsetof(LoRaData, q3) == 52, "LoRaData.q3 moved");
-static_assert(offsetof(LoRaData, sensor_health) == 54, "LoRaData.sensor_health moved");
-static_assert(offsetof(LoRaData, vel_e_dms) == 58, "LoRaData.vel_e_dms moved");
-static_assert(offsetof(LoRaData, vel_n_dms) == 60, "LoRaData.vel_n_dms moved");
-static_assert(offsetof(LoRaData, vel_u_dms) == 62, "LoRaData.vel_u_dms moved");
-static_assert(offsetof(LoRaData, flags2) == 64, "LoRaData.flags2 moved");
+static_assert(sizeof(LoRaFastData) == 55, "LoRaFastData wire size");
+static_assert(sizeof(LoRaSlowData) == 22, "LoRaSlowData wire size");
+// Shared header — byte-identical in both frames, which is what makes
+// dispatch-before-you-know-the-size safe. If these ever diverge, a receiver
+// reads ver_type out of the middle of a payload field.
+static_assert(offsetof(LoRaFrameHeader, network_id) == 0, "hdr.network_id moved");
+static_assert(offsetof(LoRaFrameHeader, rocket_id) == 1, "hdr.rocket_id moved");
+static_assert(offsetof(LoRaFrameHeader, next_channel_idx) == 2, "hdr.next_channel_idx moved");
+static_assert(offsetof(LoRaFrameHeader, seq) == 3, "hdr.seq moved");
+static_assert(offsetof(LoRaFrameHeader, ver_type) == 5, "hdr.ver_type moved");
+static_assert(offsetof(LoRaFrameHeader, flags_state) == 6, "hdr.flags_state moved");
+
+static_assert(offsetof(LoRaFastData, hdr) == 0, "fast.hdr moved");
+static_assert(offsetof(LoRaFastData, num_sats) == 7, "fast.num_sats moved");
+static_assert(offsetof(LoRaFastData, pdop_u8) == 8, "fast.pdop_u8 moved");
+static_assert(offsetof(LoRaFastData, hacc_u8) == 9, "fast.hacc_u8 moved");
+static_assert(offsetof(LoRaFastData, ecef_x_m) == 10, "fast.ecef_x_m moved");
+static_assert(offsetof(LoRaFastData, ecef_y_m) == 13, "fast.ecef_y_m moved");
+static_assert(offsetof(LoRaFastData, ecef_z_m) == 16, "fast.ecef_z_m moved");
+static_assert(offsetof(LoRaFastData, acc_x_x10) == 19, "fast.acc_x_x10 moved");
+static_assert(offsetof(LoRaFastData, acc_y_x10) == 21, "fast.acc_y_x10 moved");
+static_assert(offsetof(LoRaFastData, acc_z_x10) == 23, "fast.acc_z_x10 moved");
+static_assert(offsetof(LoRaFastData, gyro_x_x10) == 25, "fast.gyro_x_x10 moved");
+static_assert(offsetof(LoRaFastData, gyro_y_x10) == 27, "fast.gyro_y_x10 moved");
+static_assert(offsetof(LoRaFastData, gyro_z_x10) == 29, "fast.gyro_z_x10 moved");
+static_assert(offsetof(LoRaFastData, q0) == 31, "fast.q0 moved");
+static_assert(offsetof(LoRaFastData, q1) == 33, "fast.q1 moved");
+static_assert(offsetof(LoRaFastData, q2) == 35, "fast.q2 moved");
+static_assert(offsetof(LoRaFastData, q3) == 37, "fast.q3 moved");
+static_assert(offsetof(LoRaFastData, pressure_alt_m) == 39, "fast.pressure_alt_m moved");
+static_assert(offsetof(LoRaFastData, altitude_rate) == 42, "fast.altitude_rate moved");
+static_assert(offsetof(LoRaFastData, vel_e_dms) == 44, "fast.vel_e_dms moved");
+static_assert(offsetof(LoRaFastData, vel_n_dms) == 46, "fast.vel_n_dms moved");
+static_assert(offsetof(LoRaFastData, vel_u_dms) == 48, "fast.vel_u_dms moved");
+static_assert(offsetof(LoRaFastData, sensor_health) == 50, "fast.sensor_health moved");
+static_assert(offsetof(LoRaFastData, flags2) == 54, "fast.flags2 moved");
+
+static_assert(offsetof(LoRaSlowData, hdr) == 0, "slow.hdr moved");
+static_assert(offsetof(LoRaSlowData, max_alt_m) == 7, "slow.max_alt_m moved");
+static_assert(offsetof(LoRaSlowData, max_speed) == 10, "slow.max_speed moved");
+static_assert(offsetof(LoRaSlowData, temp_x10) == 12, "slow.temp_x10 moved");
+static_assert(offsetof(LoRaSlowData, voltage_u8) == 14, "slow.voltage_u8 moved");
+static_assert(offsetof(LoRaSlowData, current_ma) == 15, "slow.current_ma moved");
+static_assert(offsetof(LoRaSlowData, soc_i8) == 17, "slow.soc_i8 moved");
+static_assert(offsetof(LoRaSlowData, cam_ma) == 18, "slow.cam_ma moved");
+static_assert(offsetof(LoRaSlowData, servo_ma) == 20, "slow.servo_ma moved");
 
 static_assert(sizeof(GNSSData) == 42, "GNSSData wire size");
 static_assert(offsetof(GNSSData, time_us) == 0, "GNSSData.time_us moved");
@@ -2880,7 +3191,13 @@ static_assert(offsetof(RollProfileData, waypoints) == 4, "RollProfileData.waypoi
 static_assert(sizeof(LoRaChannelSetSelection) == 1 + LORA_SKIP_MASK_MAX_BYTES,
               "LoRaChannelSetSelection wire size");
 
-static constexpr size_t SIZE_OF_LORA_DATA       = sizeof(LoRaData);
+static constexpr size_t SIZE_OF_LORA_FAST       = sizeof(LoRaFastData);
+static constexpr size_t SIZE_OF_LORA_SLOW       = sizeof(LoRaSlowData);
+// Airtime, dwell and the BS's RX reserve must all be budgeted against the
+// LARGER frame, or a schedule sized on the slow one under-counts the fast one
+// and walks into the occupancy limit. There is exactly one right answer here,
+// so name it rather than letting each call site pick.
+static constexpr size_t SIZE_OF_LORA_BUDGET     = SIZE_OF_LORA_FAST;
 static constexpr size_t SIZE_OF_LORA_DATA_SI = sizeof(LoRaDataSI);
 
 // Calculate max message size to get MAX_PAYLOAD and MAX_FRAME
@@ -2890,7 +3207,7 @@ static constexpr size_t P3 = SIZE_OF_MMC5983MA_DATA;
 static constexpr size_t P4 = SIZE_OF_GNSS_DATA;
 static constexpr size_t P5 = SIZE_OF_POWER_DATA;
 static constexpr size_t P6 = SIZE_OF_NON_SENSOR_DATA;
-static constexpr size_t P7 = SIZE_OF_LORA_DATA;
+static constexpr size_t P7 = SIZE_OF_LORA_FAST;
 static constexpr size_t P8 = sizeof(RollProfileData);
 static constexpr size_t P9 = sizeof(FlightSnapshotData);  // largest payload (224 B as of snapshot v4)
 
@@ -2909,6 +3226,12 @@ static constexpr size_t MAX_PAYLOAD = (M_SENSOR_OR_PROFILE > P9 ? M_SENSOR_OR_PR
 // the struct.
 static_assert(sizeof(FlightSettingsData) <= MAX_PAYLOAD,
               "FlightSettingsData must fit one I2S frame");
+
+// Same for the #915 config report — it rides the same path, and it is the
+// struct most likely to grow next (every new editable setting the app cannot
+// otherwise verify belongs in it).
+static_assert(sizeof(ConfigReportData) <= MAX_PAYLOAD,
+              "ConfigReportData must fit one I2S frame");
 
 // Frame: [0xAA][0x55][0xAA][0x55] + type + length + payload + CRC16
 static constexpr size_t MAX_FRAME = 4 + 1 + 1 + MAX_PAYLOAD + 2;

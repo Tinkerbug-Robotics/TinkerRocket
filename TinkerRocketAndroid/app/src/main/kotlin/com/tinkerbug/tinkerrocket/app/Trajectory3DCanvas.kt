@@ -29,6 +29,7 @@ import com.tinkerbug.tinkerrocket.session.GuidanceResult
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
+import com.tinkerbug.tinkerrocket.protocol.flightTracks
 
 /**
  * The ONE shared orbit-camera scene (plan §1: all SceneKit views project to
@@ -235,8 +236,20 @@ internal fun OrbitSceneCanvas(
 
 @Composable
 fun Trajectory3DCanvas(data: FlightCsvData) {
-    val track = remember(data) {
-        Trajectory3D.downsample(ekfTrack(data).map { V3(it.first, it.second, it.third) }, 700)
+    val tracks = remember(data) { flightTracks(data) }
+    val track = remember(tracks) {
+        Trajectory3D.downsample(tracks.primary, 700)
+    }
+    // The other solution, drawn as a muted polyline beside the primary
+    // (#838 item 3).  Downsampled harder than the primary: it is context, and
+    // every point costs a SceneLine.  Empty on a base-station LoRa log, where
+    // the GNSS track IS the primary — drawing it twice would just thicken it.
+    val secondary = remember(tracks) {
+        if (tracks.ekf.size >= 2 && tracks.gnss.size >= 2) {
+            Trajectory3D.downsample(tracks.gnss, 250)
+        } else {
+            emptyList()
+        }
     }
     val lm = remember(track) { Trajectory3D.landmarks(track) }
     val groundU = remember(track) { track.minOfOrNull { it.u } ?: 0.0 }
@@ -251,19 +264,38 @@ fun Trajectory3DCanvas(data: FlightCsvData) {
             ),
         )
     } ?: emptyList()
-    val extra = lm?.let {
-        listOf(SceneLine(
-            it.apogee, V3(it.apogee.e, it.apogee.n, groundU),
-            Color(0xFF4DABF7).copy(alpha = 0.25f),
-        ))
-    } ?: emptyList()
+    val extra = buildList {
+        lm?.let {
+            add(SceneLine(
+                it.apogee, V3(it.apogee.e, it.apogee.n, groundU),
+                Color(0xFF4DABF7).copy(alpha = 0.25f),
+            ))
+        }
+        // The GNSS solution.  Grey and thin against the altitude-ramped
+        // primary: present, clearly secondary, and impossible to mistake for
+        // the same line.  #741 measured the two landing 81 m apart on the
+        // CENJARS flight, and that was invisible until both were on one view.
+        for (i in 1 until secondary.size) {
+            add(SceneLine(
+                secondary[i - 1], secondary[i],
+                Color(0xFF8C8C8C).copy(alpha = 0.7f), widthDp = 1.5,
+            ))
+        }
+    }
+    val secondaryMarkers = if (secondary.isEmpty()) emptyList() else listOf(
+        SceneMarker(secondary.last(), Color(0xFF8C8C8C), "GNSS landing", radiusDp = 5.0),
+    )
 
     OrbitSceneCanvas(
         track = track,
         trackColor = ::trajectoryAltitudeColor,
-        markers = markers,
+        markers = markers + secondaryMarkers,
         extraLines = extra,
-        emptyMessage = "No EKF position data in this log",
+        // Framing must cover both or the secondary runs off the edge.
+        frameAlso = secondary,
+        // Was "No EKF position data in this log" — true of every base-station
+        // LoRa log, and useless: those carry a perfectly good lat/lon track.
+        emptyMessage = "No position data in this log",
     )
 }
 
@@ -326,18 +358,3 @@ internal fun trajectoryAltitudeColor(t: Float): Color = Color(
     alpha = 1f,
 )
 
-/** Clean finite EKF (E, N, U) triples — the shared source for 2D and 3D. */
-internal fun ekfTrack(data: FlightCsvData): List<Triple<Double, Double, Double>> {
-    val e = data.columns["Position East (m)"] ?: emptyList()
-    val n = data.columns["Position North (m)"] ?: emptyList()
-    val u = data.columns["Position Up (m)"]
-        ?: data.columns["Pressure Altitude (m)"] ?: emptyList()
-    val rows = minOf(e.size, n.size, u.size)
-    return (0 until rows).mapNotNull { i ->
-        if (e[i].isFinite() && n[i].isFinite() && u[i].isFinite()) {
-            Triple(e[i], n[i], u[i])
-        } else {
-            null
-        }
-    }
-}

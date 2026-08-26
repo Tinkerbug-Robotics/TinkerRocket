@@ -32,6 +32,24 @@ class TR_GNSSReceiverUBloxSerial
         /// Call this at >=2x the navigation rate for reliable capture.
         bool pollNewPVT(GNSSData &data);
 
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG
+        /// Ask the receiver for per-satellite reports (UBX-NAV-SAT). Call once
+        /// after begin(). Off in normal builds.
+        ///
+        /// The flight path never needs this: it polls NAV-PVT and takes the
+        /// satellite count from getSIV(). But #491 turns on telling a withheld
+        /// position (satellites still tracked at healthy C/N0) from a lost
+        /// signal (satellites gone), and that distinction is only visible
+        /// per-satellite. Without NAV-SAT the two are indistinguishable and the
+        /// measurement cannot be made at all.
+        bool enableSatDiag();
+
+        /// Emit one line of fix state and one of per-satellite C/N0, in a form
+        /// cocom_fcdiag.py converts into the same UBX capture format the
+        /// conducted rig already analyses. Non-blocking; call about 1 Hz.
+        void logSatDiag();
+#endif
+
     private:
 
         SFE_UBLOX_GNSS_SERIAL gnss;
@@ -48,6 +66,11 @@ class TR_GNSSReceiverUBloxSerial
         bool ensureHighPerformanceClock();
         bool otp_program_attempted_ = false;  // one write attempt per boot
         bool otp_reset_done_ = false;         // one post-write reset/reconnect per boot
+        // #837 item 6: RESET_N is not wired on ANY board revision to date
+        // (v7/v8/v9 all declare GNSS_RESET_N = -1) — the module's ~RESET goes
+        // only to its own pull-up and is never brought out to the host
+        // connector. Warn once per boot rather than on every retry.
+        bool reset_pin_absent_logged_ = false;
 
         // Helper: install/reconfigure the UART driver at a given baud rate and pins.
         // Tears down any existing driver first.

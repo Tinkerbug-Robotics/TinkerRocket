@@ -474,7 +474,9 @@ nonisolated class CSVGenerator {
     }
 
     /// Build CSV header row
-    private func buildCSVHeader() -> String {
+    /// `internal` rather than `private` so the column-group parity test can
+    /// read the authoritative header (#838 item 5).
+    func buildCSVHeader() -> String {
         var columns: [String] = []
 
         // Time

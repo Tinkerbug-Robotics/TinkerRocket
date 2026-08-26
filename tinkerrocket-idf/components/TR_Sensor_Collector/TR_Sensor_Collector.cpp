@@ -219,11 +219,19 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         uint32_t bmp_retry_count = 0;
         while (!bmp585.begin())
         {
-            ESP_LOGW(SC_TAG, "BMP585 initialization failed, chip ID 0x%02X", bmp585.readChipIdCached());
+            // NOTE the cached id is only assigned on a SUCCESSFUL begin(), so
+            // on this path it is a stale value (0x00 on the first attempt) and
+            // NOT something read from the sensor. Do not read it as evidence
+            // about the part — it used to make an unrelated power_up_check()
+            // failure look like a dead or mis-wired chip.
+            ESP_LOGW(SC_TAG, "BMP585 begin() failed (attempt %lu) — retrying with a soft reset",
+                     (unsigned long)(bmp_retry_count + 1U));
             bmp_retry_count++;
 
-            // Warm-reset recovery path: after MCU flash, sensor may still be
-            // in active mode and not respond cleanly until a soft reset.
+            // begin() already soft-resets before bmp5_init(), so reaching here
+            // means something beyond the one-shot POR flag is wrong: the rail,
+            // the wiring, or the part. Reset again anyway — it is the one
+            // recovery we have and it is cheap.
             const bool reset_ok = bmp585.forceSoftResetRaw();
             ESP_LOGI(SC_TAG, "BMP585 soft-reset recovery %s", reset_ok ? "OK" : "pending");
 
@@ -531,6 +539,15 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         else
         {
             ESP_LOGI(SC_TAG, "GNSS found and initialized");
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86)
+            // #491 only: ask for per-satellite reports. The flight path does
+            // not need them -- it polls NAV-PVT and takes the count from
+            // getSIV() -- but telling a withheld position from a lost signal
+            // is only possible per-satellite, and that distinction is the
+            // whole measurement. Guarded off the LC86 driver, which has no
+            // such call.
+            gnss_receiver.enableSatDiag();
+#endif
         }
     }
 
@@ -887,6 +904,22 @@ void SensorCollector::pollGNSSdata(void* parameter)
 
         const uint32_t gnss_elapsed = time_us() - gnss_t0;
         self->pt_gnss_calls++;
+
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86)
+        // ~1 Hz, and after the poll so the NAV-PVT cache is fresh. Deliberately
+        // outside the timing accounting above: this is diagnostic load and
+        // should not be charged to the GNSS parse budget it would distort.
+        {
+            static uint32_t cocom_diag_us = 0;
+            const uint32_t now_us = time_us();
+            if (now_us - cocom_diag_us > 1000000U)
+            {
+                cocom_diag_us = now_us;
+                self->gnss_receiver.logSatDiag();
+            }
+        }
+#endif
+
         if (gnss_elapsed > self->pt_gnss_max_us)
         {
             self->pt_gnss_max_us = gnss_elapsed;

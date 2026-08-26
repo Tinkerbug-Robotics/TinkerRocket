@@ -373,6 +373,18 @@ target_include_directories(test_bs_log_policy PRIVATE
 target_link_libraries(test_bs_log_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_log_policy)
 
+# ---------- test_bs_file_list ----------
+# Host-side test for the BLE file-list top-N window (#835 item 5).  The header
+# is pure (no IDF, no filesystem), so the test just adds base_station/main to
+# the include path.  See the test file for why truncate-then-sort lost the
+# newest logs.
+add_executable(test_bs_file_list test_bs_file_list.cpp)
+target_include_directories(test_bs_file_list PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_file_list GTest::gtest_main)
+gtest_discover_tests(test_bs_file_list)
+
 # ---------- test_bs_uplink_policy ----------
 # Host-side test for the base-station uplink transmit gate (#379): an uplink TX
 # during a LoRa frequency scan must be deferred, not sent on the scan channel.
@@ -480,6 +492,45 @@ target_include_directories(test_bs_download_policy PRIVATE
 )
 target_link_libraries(test_bs_download_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_download_policy)
+
+# ---------- test_bs_board_map (x3) ----------
+# #835 items 1/2/4: board_v3.h claimed an external NAND, a fuel gauge and no
+# LoRa power gate — none of which match the netlist. Nothing asserted the board
+# headers against anything, so all three claims stood. Built once per board so a
+# claim has to survive being stated three times; TR_BS_BOARD picks the header
+# exactly as the firmware build does.
+foreach(BSREV 1 2 3)
+    add_executable(test_bs_board_map_v${BSREV} test_bs_board_map.cpp)
+    target_compile_definitions(test_bs_board_map_v${BSREV} PRIVATE TR_BS_BOARD=${BSREV})
+    target_include_directories(test_bs_board_map_v${BSREV} PRIVATE
+        ${SHIM_DIR}
+        ${LIB_DIR}/TR_RocketComputerTypes
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+    )
+    target_link_libraries(test_bs_board_map_v${BSREV} GTest::gtest_main)
+    gtest_discover_tests(test_bs_board_map_v${BSREV}
+        TEST_PREFIX "v${BSREV}.")
+endforeach()
+
+# ---------- test_fc_gnss_reset_map (x3) ----------
+# #837 item 6: the GNSS "reset and re-verify" path called a pulseReset() that
+# opened with a silent `if (reset_n_pin < 0) return;` — and every FC board
+# revision declares GNSS_RESET_N = -1, so the reset never happened and a fresh
+# SAM-M10Q flew at the default nav-rate ceiling. The fix routes that path
+# through UBX-CFG-RST; this pins the premise that there is no line to drive.
+# Built once per revision, exactly as the firmware selects its header.
+foreach(FCREV 7 8 9)
+    add_executable(test_fc_gnss_reset_map_v${FCREV} test_fc_gnss_reset_map.cpp)
+    target_compile_definitions(test_fc_gnss_reset_map_v${FCREV} PRIVATE TR_BOARD_V${FCREV}=1)
+    target_include_directories(test_fc_gnss_reset_map_v${FCREV} PRIVATE
+        ${SHIM_DIR}
+        ${LIB_DIR}/TR_RocketComputerTypes
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+    )
+    target_link_libraries(test_fc_gnss_reset_map_v${FCREV} GTest::gtest_main)
+    gtest_discover_tests(test_fc_gnss_reset_map_v${FCREV}
+        TEST_PREFIX "v${FCREV}.")
+endforeach()
 
 # ---------- test_bs_storage_policy ----------
 # Host-side test for the NAND bring-up retry policy (#761): mountExternalFlashFat
@@ -593,6 +644,22 @@ target_include_directories(test_dedup_reboot_policy PRIVATE
 target_link_libraries(test_dedup_reboot_policy GTest::gtest_main)
 gtest_discover_tests(test_dedup_reboot_policy)
 
+# ---------- test_cmd_queue_dedupe_policy ----------
+# Host-side test for the OC relay queue's dedupe key (#837 item 11). The queue
+# collapses a re-pushed command onto the queued one so a settings slider can't
+# flood it; that is wrong for PYRO_CONT_TEST / PYRO_FIRE_TEST, whose payload is
+# a channel byte, so two channels merged and the earlier test was lost with no
+# ack to report it. cmd_queue_dedupe_policy.h is pure apart from the shared
+# command-id constants.
+add_executable(test_cmd_queue_dedupe_policy test_cmd_queue_dedupe_policy.cpp)
+target_include_directories(test_cmd_queue_dedupe_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_cmd_queue_dedupe_policy GTest::gtest_main)
+gtest_discover_tests(test_cmd_queue_dedupe_policy)
+
 # ---------- test_mram_dirty_policy ----------
 # Host-side test for the #417 sink-mode dirty-marker gate: the marker means
 # "logging was activated" (launch detect / manual cmd-23 start), not "a log
@@ -702,6 +769,34 @@ target_include_directories(test_flush_iter_ledger PRIVATE
 target_link_libraries(test_flush_iter_ledger GTest::gtest_main)
 gtest_discover_tests(test_flush_iter_ledger)
 
+# ---------- test_log_to_flash_sink (#837 items 8 and 9, #271) ----------
+# The first target that compiles TR_LogToFlash.cpp itself rather than one of
+# its pure headers.  It covers SINK mode only — openLogSession,
+# flushRingToNand and closeLogSession all branch on cfg.write_sink before
+# they reach LittleFS, so the sink path needs no filesystem and lfs is
+# STUBBED (fakes/lfs_host_stub.c) instead of built.  Building the real lfs.c
+# would need a block device, and the block device is the component's own NAND
+# driver talking to a chip that is not there.
+#
+# The ESP-IDF surface comes from host_shim: freertos/ (mutexes and the
+# deterministic task driver that makes the close path reachable), esp_timer,
+# esp_heap_caps, esp_system, an in-memory TR_NVS, and an SPI stub that answers
+# RDID so the test can pick which NAND geometry begin() resolves.
+add_executable(test_log_to_flash_sink
+    test_log_to_flash_sink.cpp
+    fakes/lfs_host_stub.c
+    ${LIB_DIR}/TR_LogToFlash/TR_LogToFlash.cpp
+)
+target_include_directories(test_log_to_flash_sink PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LogToFlash
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/CRC
+)
+target_link_libraries(test_log_to_flash_sink GTest::gtest_main)
+gtest_discover_tests(test_log_to_flash_sink)
+
 # ---------- test_sim_pad_align (#508) ----------
 # Header-only pure math (no ESP/Arduino deps), so there is no component .cpp to
 # compile — the alignment solve was extracted out of SensorCollectorSim precisely
@@ -752,6 +847,10 @@ gtest_discover_tests(test_lc86_parser)
 # would generate.  The Swift and Kotlin golden walks consume the same files.
 set(WIRE_FIXTURES_SRCS
     wire_fixtures_lib.cpp
+    # #850: the base-station log golden is packed with the REAL LoRa packers,
+    # so the Python/Kotlin/Swift readers test against firmware-produced bytes
+    # rather than against each other's idea of the layout.
+    ${LIB_DIR}/TR_Sensor_Data_Converter/TR_Sensor_Data_Converter.cpp
     ${LIB_DIR}/CRC/CRC16.cpp
     ${LIB_DIR}/CRC/CRC.cpp
     ${LIB_DIR}/CRC/CrcFastReverse.cpp
@@ -764,6 +863,7 @@ set(WIRE_FIXTURES_SRCS
 set(WIRE_FIXTURES_INCLUDES
     ${SHIM_DIR}   # Must come first so Arduino.h resolves to our shim
     ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_Sensor_Data_Converter
     ${LIB_DIR}/CRC
 )
 
@@ -788,3 +888,37 @@ target_compile_definitions(test_wire_fixture_freshness PRIVATE
 )
 target_link_libraries(test_wire_fixture_freshness GTest::gtest_main)
 gtest_discover_tests(test_wire_fixture_freshness)
+
+# ---------- test_main_deploy_gate (#834 item 4) ----------
+# Source-of-truth gate for the ALTITUDE_ON_DESCENT main-deploy trigger: refuses
+# a free-running (dead-baro) altitude estimate, catches a stuck static port via
+# a GNSS Doppler cross-check, and backstops both with a late-biased GNSS AGL
+# comparison. Pure header in the shared TR_KinematicChecks component (the FC and
+# the mini both use it).
+add_executable(test_main_deploy_gate test_main_deploy_gate.cpp)
+target_include_directories(test_main_deploy_gate PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/components/TR_KinematicChecks
+)
+target_link_libraries(test_main_deploy_gate GTest::gtest_main)
+gtest_discover_tests(test_main_deploy_gate)
+
+# ---------- test_modem_config_ack (#835 item 7) ----------
+add_executable(test_modem_config_ack test_modem_config_ack.cpp)
+target_include_directories(test_modem_config_ack PRIVATE
+    ${CMAKE_SOURCE_DIR}/../tinkerrocket-idf/components/TR_RadioLink
+    ${CMAKE_SOURCE_DIR}/../tinkerrocket-idf/components/TR_UART_Link)
+target_link_libraries(test_modem_config_ack GTest::gtest_main)
+gtest_discover_tests(test_modem_config_ack)
+
+# ---------- test_ota_relay_policy (#834 items 6/7) ----------
+# Timing for the OC's I2S relay recovery: how often to retry a failed slave-RX
+# begin, and when to abandon a relay whose app has stopped pumping. Pure header
+# in the out_computer project.
+add_executable(test_ota_relay_policy test_ota_relay_policy.cpp)
+target_include_directories(test_ota_relay_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_ota_relay_policy GTest::gtest_main)
+gtest_discover_tests(test_ota_relay_policy)

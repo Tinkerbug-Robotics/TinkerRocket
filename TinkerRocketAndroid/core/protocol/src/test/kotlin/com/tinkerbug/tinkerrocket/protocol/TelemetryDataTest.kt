@@ -141,6 +141,28 @@ class TelemetryDataTest {
         val t2 = decodeOk("""{"st":"PRELAUNCH"}""")
         assertNull(t2.hopChannel, "fixed-mode frames omit hch entirely")
         assertNull(t2.netidDrops, "healthy-nid frames omit nidd entirely")
+
+        // "szd" — the sibling counter (#838 item 4).  The base station has
+        // emitted it since #570 and this decoder ignored it, so a rocket and
+        // base station flashed from different builds produced a silent
+        // blackout: every frame dropped, nidd stays 0 because the netid never
+        // gets read, and the only counter that HAD the answer was discarded.
+        val t3 = decodeOk("""{"st":"PRELAUNCH","szd":12}""")
+        assertEquals(12, t3.sizeDrops)
+        assertNull(t3.netidDrops, "a protocol mismatch is not a netid mismatch")
+
+        // Same lenient-optional contract as nidd: omitted when healthy, and an
+        // off-type value must not fail the whole frame.
+        assertNull(decodeOk("""{"st":"PRELAUNCH"}""").sizeDrops)
+        assertEquals(7, decodeOk("""{"st":"PRELAUNCH","szd":"7"}""").sizeDrops)
+        assertEquals(4, decodeOk("""{"st":"PRELAUNCH","szd":4.0}""").sizeDrops)
+        assertNull(decodeOk("""{"st":"PRELAUNCH","szd":"bogus"}""").sizeDrops)
+
+        // Both faults at once — a mixed-build pair at a site with another
+        // pair nearby.  They are independent counters and must both survive.
+        val t4 = decodeOk("""{"st":"PRELAUNCH","nidd":3,"szd":9}""")
+        assertEquals(3, t4.netidDrops)
+        assertEquals(9, t4.sizeDrops)
     }
 
     // ── Missing keys → defaults ───────────────────────────────────────────
@@ -682,5 +704,49 @@ class TelemetryDataTest {
         assertEquals("98.2%", TelemetryData(bsSoc = 98.2f).bsSocDisplay)
         // Absent on a direct rocket link, where the row is not rendered at all.
         assertEquals("\u2014", TelemetryData(bsSoc = null).bsSocDisplay)
+    }
+
+    // ---- #850: rail currents (camera / servo high-side switches) ----
+
+    /**
+     * An absent key means the board has NO monitor fitted (V7/V8, mini, or
+     * pre-#850 firmware). That is a different fact from "measured 0.0 A", and
+     * the distinction is the point: a camera that is off and a camera with no
+     * monitor both sit at zero, but only one of them is a reading.
+     */
+    @Test
+    fun railCurrents_absentKeysDecodeAsNullNotZero() {
+        val t = decodeOk("""{"soc":85.0,"vol":7.4,"cur":-450.0}""")
+        assertNull(t.camCurrent)
+        assertNull(t.servoCurrent)
+        assertEquals("\u2014", railAmpsDisplay(t.camCurrent))
+        assertEquals("\u2014", railAmpsDisplay(t.servoCurrent))
+    }
+
+    @Test
+    fun railCurrents_presentKeysDecode() {
+        val t = decodeOk("""{"soc":85.0,"ccur":1.48,"scur":0.34}""")
+        assertEquals(1.48f, t.camCurrent!!, 0.001f)
+        assertEquals(0.34f, t.servoCurrent!!, 0.001f)
+    }
+
+    /** A genuine measured zero must render as a number, not an em dash. */
+    @Test
+    fun railCurrents_measuredZeroIsNotAbsent() {
+        val t = decodeOk("""{"ccur":0.0}""")
+        assertNotNull(t.camCurrent)
+        assertEquals("0 mA", railAmpsDisplay(t.camCurrent))
+        assertNull(t.servoCurrent)
+        assertEquals("\u2014", railAmpsDisplay(t.servoCurrent))
+    }
+
+    /** Amps at and above 1 A, milliamps below — matching the iOS twin. */
+    @Test
+    fun railCurrents_displayCrossesOverAtOneAmp() {
+        assertEquals("1.48 A", railAmpsDisplay(1.48f))
+        assertEquals("1.00 A", railAmpsDisplay(1.0f))
+        assertEquals("999 mA", railAmpsDisplay(0.999f))
+        assertEquals("340 mA", railAmpsDisplay(0.34f))
+        assertEquals("\u2014", railAmpsDisplay(null))
     }
 }

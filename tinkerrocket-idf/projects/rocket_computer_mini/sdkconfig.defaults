@@ -78,8 +78,32 @@ CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
 CONFIG_ESP_PHY_MAC_BB_PD=y
 
 # === Flash ===
-# GD25Q128E — 16 MB, twice the fleet's 8 MB. Partition table still ends at
-# 0x620000; the rest is headroom (see partitions.csv).
+# GD25Q128E — 16 MB. U13, hardware/rocket-computer-mini/bom.csv, which has said
+# GD25Q128ESIG since the board was forked off the rocket computer on 2026-08-12
+# — i.e. after the 2026-08-09 close-out that moved the fleet from W25Q64 (8 MB)
+# to W25Q128/GD25Q128 (16 MB). There is no earlier mini revision carrying the
+# small part, so unlike flight_computer, out_computer and base_station this
+# project has only one boot NOR to declare and needs no per-board overlay.
+#
+# LEFT AT 16 MB in the 2026-08-24 sweep that took the other four back to 8 MB.
+# That sweep was undoing a fleet-wide change this project was never part of:
+# 16 MB has been the mini's value since its first commit (f7b8811), not drift.
+#
+# UNMEASURED against hardware, because as of 2026-08-24 no mini has been built
+# to measure. This is the BOM and the fab date, plus the owner's rule that the
+# latest revision of each board is 16 MB and every earlier one is 8 MB — the
+# mini has only ever had the one revision, and it postdates the swap.
+#
+# Still worth reading the part before the first article is flashed, because
+# this is the dangerous direction: 16 MB declared against an 8 MB part is not a
+# warning, it is a boot loop in the bootloader, with no firmware log at all —
+#   E spi_flash: Detected size(8192k) smaller than the size in the binary
+#                image header(16384k). Probe failed.
+# (Measured on the V7 rocket computer, 2026-08-24, which is what prompted all
+# of this.) One command settles it:
+#   python tools/check_flash_size.py --port PORT --build-dir projects/rocket_computer_mini/build
+# Partition table ends at 0x620000, so if the part does turn out to be 8 MB the
+# fix is one line here and nothing else moves.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 

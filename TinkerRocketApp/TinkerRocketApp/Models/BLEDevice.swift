@@ -60,6 +60,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var isDownloading = false
     @Published var downloadingFilename: String?
     @Published var csvGenerationProgress: Double = 0.0
+    /// Why the last CSV generation failed, or nil if the last one succeeded.
+    ///
+    /// The catch below used to swallow the error and hand the caller a bare
+    /// nil, so a download whose BYTES arrived fine but whose CSV could not be
+    /// produced reported as success and then simply never appeared in Saved
+    /// Files (which enumerates the CSV cache). That cost a debugging session
+    /// on 2026-08-25, when an app build without base-station log support was
+    /// handed a lora_*.bin. Android already reported this; iOS did not.
+    @Published var csvGenerationError: String?
     @Published var downloadStates: [String: DownloadState] = [:]
     @Published var simLaunched = false
     @Published var groundTestActive = false
@@ -515,10 +524,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         return max(20, maxWrite - 7)
     }
 
-    /// Resumed by peripheralIsReady(toSendWriteWithoutResponse:) when the BLE
-    /// stack's outgoing write buffer drains and we can queue more chunks.
+    /// Signalled by peripheralIsReady(toSendWriteWithoutResponse:) when the
+    /// BLE stack's outgoing write buffer drains and we can queue more chunks.
     /// At most one waiter at a time — the OTASession chunk pump is serial.
-    private var otaReadyContinuation: CheckedContinuation<Void, Never>?
+    private let otaWriteGate = OtaWriteGate()
 
     /// Send a single OTA image chunk over the file-transfer characteristic.
     /// Frame: [offset:4 LE][length:2 LE][flags:1][data:N].
@@ -544,20 +553,23 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // WRITE_NO_RSP property on the firmware side doesn't hang the pump
         // forever (we hit exactly that on bench 2026-05-28).
         if !peripheral.canSendWriteWithoutResponse {
-            let ready = await withTimeout(seconds: 5.0) {
-                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                    if peripheral.canSendWriteWithoutResponse {
-                        cont.resume()
-                        return
-                    }
-                    self.otaReadyContinuation = cont
-                }
-            }
-            if !ready {
-                // Drain the pending continuation if it was set so the
-                // delegate doesn't try to resume a dead waiter later.
-                otaReadyContinuation = nil
+            // The readiness re-check runs INSIDE the gate, not here: iOS can
+            // report the buffer drained between this line and the parking,
+            // and that window is a lost wakeup.
+            switch await otaWriteGate.wait(seconds: 5.0,
+                                           alreadyReady: { peripheral.canSendWriteWithoutResponse }) {
+            case .ready:
+                break
+            case .timedOut:
                 throw OTAError.writeFailed("Timed out waiting for canSendWriteWithoutResponse — firmware may not advertise WRITE_NO_RSP on file-transfer characteristic")
+            case .disconnected:
+                // The old code resumed the waiter on disconnect and let
+                // execution fall through, with a comment saying the next
+                // peripheral guard would catch it. There is no next guard —
+                // `peripheral` is a local bound at function entry, so the
+                // chunk was written to a dead peripheral and the session
+                // counted it as sent.
+                throw OTAError.notConnected
             }
         }
 
@@ -572,33 +584,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         peripheral.writeValue(frame, for: characteristic, type: .withoutResponse)
     }
 
-    /// Run `body`; return true if it completed within `seconds`, false on
-    /// timeout. Used to bound waits on CoreBluetooth state changes.
-    private func withTimeout(seconds: TimeInterval,
-                             body: @escaping @Sendable () async -> Void) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await body()
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                return false
-            }
-            let first = await group.next() ?? false
-            group.cancelAll()
-            return first
-        }
-    }
-
     /// Wake any pending sendOtaChunk awaiter with an error when the device
     /// drops mid-transfer (called from onDisconnect).
     private func drainOtaReadyContinuation() {
-        if let cont = otaReadyContinuation {
-            otaReadyContinuation = nil
-            cont.resume()   // Non-throwing — sendOtaChunk will fail on the
-                            // next peripheral guard since peripheral is nil.
-        }
+        otaWriteGate.signal(.disconnected)
     }
 
     /// Kick off a base-station frequency scan.  Clears any previous results
@@ -784,6 +773,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(17, payload: Data([disabled ? 0x01 : 0x00]))
         if var cfg = rocketConfig {
             cfg.loraHopDisabled = disabled
+            rocketConfig = cfg
+        }
+    }
+
+    /// "LoRa off" — mute (or un-mute) every LoRa transmit the rocket makes.
+    /// The rocket keeps listening while muted, so this works in both
+    /// directions whether it reaches the rocket directly or relayed by the
+    /// base station.  Desired-state, never a toggle: a lost retry on a toggle
+    /// would invert the one setting that decides whether the rocket is
+    /// trackable.  Firmware refuses a MUTE while INFLIGHT; the local echo
+    /// below is corrected by the next config readback if that happens.
+    func sendLoRaTxDisabled(_ disabled: Bool) {
+        sendRawCommand(68, payload: Data([disabled ? 0x01 : 0x00]))
+        if var cfg = rocketConfig {
+            cfg.loraTxDisabled = disabled
             rocketConfig = cfg
         }
     }
@@ -1137,15 +1141,24 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             default:   return .untested
             }
         }
-        // #831: fall back to the raw bit only when the rocket is actually
-        // reporting something. An all-zero scorecard means no evidence at all
-        // — the OC's low-power frames (FC rail off) never populate pyro_status
-        // or sensor_health, so a clear cont bit there is absence, not a
-        // measured open, and red is reserved for a measurement. A rocket on
-        // pre-#803 firmware still fills the rest of the scorecard, so its
-        // genuine open still reads as one.
-        guard telemetry.hasSensorHealth else { return .untested }
-        return telemetry.pyroCont(channel: channel) ? .present : .open
+        // The raw "ps" cont bit can only ever prove PRESENCE, never an open.
+        // The FC sets it as `cont_known[i] && cont_state[i]`
+        // (flight_computer/main.cpp), so a SET bit is unambiguous — measured,
+        // and continuous — while a CLEAR bit conflates "never measured" with
+        // "measured open". Red is reserved for a measurement, so a clear bit
+        // is .untested and a measured open can only come from the scorecard's
+        // SH_PYRO_MEAS = BAD above.
+        //
+        // Found on the bench 2026-08-22, and it is the state every session
+        // STARTS in: before any continuity test, all four SH_PYRO_MEAS fields
+        // read NA, so pyroMeasuredContinuity returns nil for every channel and
+        // execution reaches here. The live board reported
+        // sensor_health = 1092981 with a clear cont bit, and all four channels
+        // rendered a confident red "NO CONT". #828 fixed that at the view
+        // layer and #831 fixed the powered-off case, but both missed this one:
+        // their tests always had at least one channel measured, which is what
+        // makes pyroMeasuredContinuity return non-nil.
+        return telemetry.pyroCont(channel: channel) ? .present : .untested
     }
 
     /// Fail-safe Bool for callers that must reduce to go/no-go: ONLY a
@@ -1465,6 +1478,23 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
     }
 
+#if DEBUG
+    // Test seam (#832). Production always enters through downloadFile(), which
+    // needs a live characteristic, so the chunk handler had no reachable entry
+    // point from a test — which is why nothing covered it. DEBUG-only, so it
+    // cannot be called from a shipped build.
+    func beginDownloadForTesting(filename: String, completion: @escaping (URL?) -> Void) {
+        downloadingFilename = filename
+        downloadedData = Data()
+        downloadCompletionHandler = completion
+        isDownloading = true
+        downloadProgress = 0.0
+        downloadExpectedSize = Int(files.first(where: { $0.name == filename })?.size ?? 0)
+    }
+
+    func handleFileChunkForTesting(_ data: Data) { handleFileChunk(data) }
+#endif
+
     // MARK: - File chunk handling (private)
 
     private func handleFileChunk(_ data: Data) {
@@ -1490,9 +1520,30 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
 
-        if length > 0 && data.count >= 7 + Int(length) {
-            let chunkData = data.subdata(in: 7..<(7 + Int(length)))
-            downloadedData.append(chunkData)
+        // #832: the offset field was parsed and then used only in a debug
+        // print, so chunks were appended blindly. A notification dropped after
+        // the peripheral queued it — the exact residual case the firmware's
+        // redundant EOF (#524) exists to compensate for — left a silent hole
+        // with no gap detection, and the file was saved as complete.
+        //
+        // On a data chunk the offset IS the position this data belongs at, so
+        // contiguity is free: anything other than "exactly where we are" means
+        // a frame went missing.
+        if length > 0 {
+            guard data.count >= 7 + Int(length) else {
+                // A frame shorter than its own length header used to be
+                // dropped silently, leaving a hole indistinguishable from a
+                // clean transfer.
+                print("[DOWNLOAD] short frame: len=\(length) but \(data.count) bytes — failing")
+                failDownload()
+                return
+            }
+            guard Int(offset) == downloadedData.count else {
+                print("[DOWNLOAD] GAP: chunk at offset \(offset), expected \(downloadedData.count) — failing")
+                failDownload()
+                return
+            }
+            downloadedData.append(data.subdata(in: 7..<(7 + Int(length))))
         }
         let received = downloadedData.count
         let expectedSize = downloadExpectedSize
@@ -1509,6 +1560,26 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if isEOF {
             downloadStallTimer?.invalidate()
             downloadStallTimer = nil
+            // #832: the EOF frame carries the device's own bytes_sent in its
+            // offset field (out_computer/main.cpp, base_station/main.cpp), so
+            // the app is handed the authoritative total for free and used to
+            // throw it away. A mismatch means we are missing bytes the device
+            // believes it sent.
+            // The EOF frame may carry DATA as well as the flag, in which case
+            // its offset is that data's POSITION, not the total. Measured on
+            // the bench 2026-08-22: the base station's last frame for an
+            // 18322-byte file is `offset=18190 len=132 eof=true`. A
+            // zero-length EOF has offset == total, so offset+length covers
+            // both shapes.
+            //
+            // The first cut of this compared offset alone, which would have
+            // failed every base-station download — the tests missed it because
+            // every EOF frame they built had an empty payload.
+            if Int(offset) + Int(length) != received {
+                print("[DOWNLOAD] EOF says \(Int(offset) + Int(length)) bytes, have \(received) — failing")
+                failDownload()
+                return
+            }
             completeDownload(fromStallTimer: false)
         } else {
             resetDownloadStallTimer()
@@ -1545,7 +1616,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             downloadCompletionHandler?(nil)
             return
         }
-        if fromStallTimer && downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize {
+        // #832: this shortfall check used to be gated on `fromStallTimer`, so
+        // the EOF path — the common one — wrote whatever it had and reported
+        // success. The listing's size is just as authoritative on either path.
+        if downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize {
             let handler = downloadCompletionHandler
             downloadingFilename = nil
             downloadedData = Data()
@@ -1586,6 +1660,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
+            DispatchQueue.main.async { [weak self] in self?.csvGenerationError = nil }
             do {
                 if let cachedCSV = FileCache.shared.getCachedCSV(for: filename) {
                     DispatchQueue.main.async { completion(cachedCSV) }
@@ -1599,6 +1674,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 }
                 let tempCSV = FileManager.default.temporaryDirectory
                     .appendingPathComponent(csvTempName)
+
+                // #850: a base-station log is a different binary format
+                // (TRBSLOG magic) and has no flight summary — it is a record of
+                // received packets, not a flight. Dispatch on the MAGIC rather
+                // than the filename so a renamed file still converts, and skip
+                // the summary rather than writing an empty one.
+                let head = [UInt8]((try? Data(contentsOf: binaryURL)) ?? Data())
+                if BSLogCSVGenerator.isBaseStationLog(head) {
+                    let csv = try BSLogCSVGenerator.writeCSV(head)
+                    try csv.write(to: tempCSV, atomically: true, encoding: .utf8)
+                    let cachedURL = try FileCache.shared.cacheCSV(at: tempCSV, for: filename)
+                    DispatchQueue.main.async { completion(cachedURL) }
+                    return
+                }
+
                 let generator = CSVGenerator()
                 let summary = try generator.generateCSV(
                     from: binaryURL,
@@ -1620,7 +1710,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 let cachedURL = try FileCache.shared.cacheCSV(at: tempCSV, for: filename)
                 DispatchQueue.main.async { completion(cachedURL) }
             } catch {
-                DispatchQueue.main.async { completion(nil) }
+                // Loud, and attributable to the file. The .bin is already
+                // cached, so the DATA survives a converter failure — what must
+                // not survive is the impression that everything worked.
+                print("[CSV] generation FAILED for \(filename): \(error.localizedDescription)")
+                DispatchQueue.main.async { [weak self] in
+                    self?.csvGenerationError =
+                        "CSV generation failed for \(filename): \(error.localizedDescription)"
+                    completion(nil)
+                }
             }
         }
     }
@@ -1629,11 +1727,33 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     func getDownloadState(for filename: String) -> DownloadState {
         if isBaseStation {
+            // #850: for a BINARY log, "downloaded" means the rendered .csv is
+            // present — NOT the raw .bin. Those are different facts, and the
+            // difference bit us: an app build predating base-station log
+            // support copied lora_*.bin straight into the CSV cache, which made
+            // this probe report .completed (disabling re-download) for a file
+            // that had never been converted and so never appeared in the list.
+            // Requiring the .csv makes a half-done download retryable.
+            if filename.hasSuffix(".bin") {
+                return FileCache.shared.isDirectCSVCached(String(filename.dropLast(4)) + ".csv")
+                    ? .completed : .notDownloaded
+            }
             if FileCache.shared.isDirectCSVCached(filename) { return .completed }
-        } else {
-            if let deviceFile = files.first(where: { $0.name == filename }),
-               FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
+        } else if let deviceFile = files.first(where: { $0.name == filename }) {
+            // #832: this comparison was a fast path only — on a size MISMATCH
+            // it fell through to downloadStates, which downloadAndCacheFlight
+            // had already written .completed into. The one place that knows
+            // the true size failed OPEN, showing a green check on a truncated
+            // file and disabling the download button (downloadButtonDisabled
+            // returns true for .completed), so the operator could not re-pull
+            // the log in that session.
+            if FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
                 return .completed
+            }
+            // Cached but the wrong size: treat as not downloaded so it can be
+            // retried, rather than trusting a stale .completed.
+            if FileCache.shared.isFlightCached(filename) {
+                return .notDownloaded
             }
         }
         return downloadStates[filename] ?? .notDownloaded
@@ -1648,10 +1768,58 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     return
                 }
                 do {
-                    let _ = try FileCache.shared.cacheDirectCSV(at: fileURL, filename: filename)
+                    // #850: base-station logs used to BE CSVs, so this path
+                    // copied the download straight into the CSV cache under its
+                    // own name. They are binary now, and a `lora_*.bin` sitting
+                    // in the CSV cache is invisible to listCachedFlights (which
+                    // requires a .csv suffix) — the download reported success
+                    // and the file then simply did not exist anywhere the UI
+                    // looks. Detect the TRBSLOG magic and render the CSV here.
+                    //
+                    // Dispatch on the MAGIC, not the extension: a legacy .csv
+                    // still takes the direct-copy path, and a renamed file is
+                    // still handled correctly.
+                    let bytes = [UInt8](try Data(contentsOf: fileURL))
+                    if BSLogCSVGenerator.isBaseStationLog(bytes) {
+                        let csv = try BSLogCSVGenerator.writeCSV(bytes)
+                        let csvName = filename.hasSuffix(".bin")
+                            ? String(filename.dropLast(4)) + ".csv"
+                            : filename + ".csv"
+                        let tempCSV = FileManager.default.temporaryDirectory
+                            .appendingPathComponent(csvName)
+                        try csv.write(to: tempCSV, atomically: true, encoding: .utf8)
+
+                        // ORDER MATTERS, AND NOT OBVIOUSLY. cacheBinary()
+                        // deletes the cached CSV for the binary it is given
+                        // (#832: the CSV is normally DERIVED from the binary
+                        // lazily, so a re-download must invalidate a stale
+                        // rendering). Here the CSV is produced EAGERLY, up
+                        // front — so caching the binary second deleted the CSV
+                        // we had just written, leaving the .bin in place and
+                        // nothing in Saved Files. Cache the binary FIRST and
+                        // let #832 invalidate the OLD rendering; the fresh one
+                        // then lands and survives.
+                        //
+                        // The raw log goes in the BINARY cache where the
+                        // rocket's lives, not beside the CSV: the CSV is a
+                        // rendering, the .bin is the evidence the post-flight
+                        // tools read directly, and it rides the existing Share
+                        // Flight Data sheet from there.
+                        let _ = try? FileCache.shared.cacheBinary(at: fileURL, for: filename)
+                        let _ = try FileCache.shared.cacheDirectCSV(at: tempCSV, filename: csvName)
+                    } else {
+                        let _ = try FileCache.shared.cacheDirectCSV(at: fileURL, filename: filename)
+                    }
                     DispatchQueue.main.async { self.downloadStates[filename] = .completed; completion(true) }
                 } catch {
-                    DispatchQueue.main.async { self.downloadStates[filename] = .failed; completion(false) }
+                    print("[CSV] base-station log conversion FAILED for \(filename): "
+                          + "\(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        self.csvGenerationError =
+                            "CSV generation failed for \(filename): \(error.localizedDescription)"
+                        self.downloadStates[filename] = .failed
+                        completion(false)
+                    }
                 }
             }
             return
@@ -1697,7 +1865,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         DispatchQueue.main.async {
             for filename in filenames {
                 if self.isBaseStation {
-                    if FileCache.shared.isDirectCSVCached(filename) { self.downloadStates[filename] = .completed }
+                    // #850: same rule as getDownloadState — a binary log counts
+                    // as downloaded only once its .csv exists.
+                    let probe = filename.hasSuffix(".bin")
+                        ? String(filename.dropLast(4)) + ".csv" : filename
+                    if FileCache.shared.isDirectCSVCached(probe) {
+                        self.downloadStates[filename] = .completed
+                    }
                 } else {
                     if let deviceFile = self.files.first(where: { $0.name == filename }),
                        FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
@@ -1771,10 +1945,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // Wake the OTA chunk pump if it parked on a full outgoing buffer.
         // sendOtaChunk uses writeWithoutResponse for throughput; this
         // delegate is iOS's signal that the buffer has drained.
-        if let cont = otaReadyContinuation {
-            otaReadyContinuation = nil
-            cont.resume()
-        }
+        otaWriteGate.signal(.ready)
     }
 
     func peripheral(_ peripheral: CBPeripheral,
@@ -1834,7 +2005,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // #253: roll-control gain readback. The device reports sentinels
             // (rcap/kpang <= 0, iwind < 0) for "firmware default" — keep the
             // local value in that case rather than displaying the sentinel.
-            if let rcap = parseFloat(dict["rcap"]), rcap > 0 { cfg.rateCapDps = rcap }
+            if let rcap = parseFloat(dict["rcap"]), rcap > 0 {
+                cfg.rateCapDps = rcap
+                cfg.rollGainsReported = true
+            }
             if let kpa = parseFloat(dict["kpang"]), kpa > 0 { cfg.kpAngle = kpa }
             if let iw = parseFloat(dict["iwind"]), iw >= 0 { cfg.integralSepThreshold = iw }
             cfg.guidanceEnabled = dict["ge"] as? Bool ?? cfg.guidanceEnabled
@@ -1849,6 +2023,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.loraTxPower = (dict["lpw"] as? Int).map { Int8($0) }
             cfg.loraHopDisabled = dict["lhd"] as? Bool   // #106 (nil if device doesn't report it)
             cfg.loraHopDwell = dict["lhdw"] as? Int      // #150 (0 = hopping unavailable)
+            cfg.loraTxDisabled = dict["ltxd"] as? Bool   // nil if firmware predates "LoRa off"
             if let existing = self.rocketConfig {
                 cfg.pyro1Enabled = existing.pyro1Enabled
                 cfg.pyro1TriggerMode = existing.pyro1TriggerMode
@@ -1862,6 +2037,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 cfg.pyro4Enabled = existing.pyro4Enabled
                 cfg.pyro4TriggerMode = existing.pyro4TriggerMode
                 cfg.pyro4TriggerValue = existing.pyro4TriggerValue
+                // #915: the config report rides its own frames, so a `config`
+                // rebuild must carry it over — same reason as the pyro fields
+                // above. Without this a re-sent readback would reset the app
+                // to "this rocket reports nothing" and put every group back
+                // on the can't-verify list.
+                cfg.servoExtras = existing.servoExtras
+                cfg.guidanceExtras = existing.guidanceExtras
+                cfg.rollWaypoints = existing.rollWaypoints
             }
             self.rocketConfig = cfg
             triggerAutoChannelSelectIfNeeded()
@@ -1885,6 +2068,78 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.pyro4TriggerMode = UInt8(dict["p4m"] as? Int ?? Int(cfg.pyro4TriggerMode))
             cfg.pyro4TriggerValue = parseFloat(dict["p4v"]) ?? cfg.pyro4TriggerValue
             self.rocketConfig = cfg
+            return
+        }
+
+        // #915 config report, relayed by the OC from the FC's own state as
+        // three small frames.  Everything here was previously invisible to
+        // the app, which is why the settings screen could show a value the
+        // rocket had never agreed to.  Defensive per the MTU-budget rule
+        // (#282): every key individually optional, and a frame that arrives
+        // malformed leaves the group nil (= "not reported") rather than
+        // half-filled.
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           dict["type"] as? String == "config_servo" {
+            var cfg = self.rocketConfig ?? RocketConfig()
+            let az = (dict["faz"] as? [Any])?.compactMap { parseFloat($0) } ?? []
+            if let b2 = dict["sb2"] as? Int, let b3 = dict["sb3"] as? Int,
+               let b4 = dict["sb4"] as? Int,
+               let fmn = parseFloat(dict["fmn"]), let fmx = parseFloat(dict["fmx"]),
+               az.count == 4,
+               let frv = dict["frv"] as? Int, let frrv = dict["frrv"] as? Int,
+               let snd = dict["snd"] as? Bool {
+                cfg.servoExtras = RocketServoExtras(
+                    bias2: Int16(clamping: b2), bias3: Int16(clamping: b3),
+                    bias4: Int16(clamping: b4),
+                    finMinDeg: fmn, finMaxDeg: fmx,
+                    finAzimuths: az,
+                    finReverseMask: UInt8(clamping: frv),
+                    finRollReverseMask: UInt8(clamping: frrv),
+                    soundsEnabled: snd)
+                self.rocketConfig = cfg
+            }
+            return
+        }
+
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           dict["type"] as? String == "config_guid" {
+            var cfg = self.rocketConfig ?? RocketConfig()
+            if let ng = parseFloat(dict["gng"]), let ma = parseFloat(dict["gma"]),
+               let af = parseFloat(dict["gaf"]), let mf = parseFloat(dict["gmf"]),
+               let ms = parseFloat(dict["gms"]), let cd = dict["gcd"] as? Int,
+               let tm = dict["gtm"] as? Int,
+               let te = parseFloat(dict["gte"]), let tn = parseFloat(dict["gtn"]),
+               let ta = parseFloat(dict["gta"]),
+               let kp = parseFloat(dict["gkp"]), let kd = parseFloat(dict["gkd"]),
+               let law = dict["glw"] as? Int {
+                cfg.guidanceExtras = RocketGuidanceExtras(
+                    navGain: ng, maxAccel: ma, accelToFin: af, maxFinDeg: mf,
+                    minSpeed: ms, coastDelayMs: UInt16(clamping: cd),
+                    targetMode: UInt8(clamping: tm),
+                    targetE: te, targetN: tn, targetAltM: ta,
+                    kpPos: kp, kdVel: kd, guidanceLaw: UInt8(clamping: law))
+                self.rocketConfig = cfg
+            }
+            return
+        }
+
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           dict["type"] as? String == "config_roll" {
+            var cfg = self.rocketConfig ?? RocketConfig()
+            // "n": 0 with an empty list is a real answer — this rocket is
+            // flying rate-only — so an empty array must still set the value
+            // rather than leaving it nil ("we don't know").
+            if let n = dict["n"] as? Int, let raw = dict["wp"] as? [Any] {
+                var wps: [ReportedRollWaypoint] = []
+                for entry in raw.prefix(n) {
+                    guard let pair = entry as? [Any], pair.count == 2,
+                          let t = parseFloat(pair[0]), let a = parseFloat(pair[1])
+                    else { continue }
+                    wps.append(ReportedRollWaypoint(timeSeconds: t, angleDeg: a))
+                }
+                cfg.rollWaypoints = wps
+                self.rocketConfig = cfg
+            }
             return
         }
 

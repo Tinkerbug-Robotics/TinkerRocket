@@ -42,7 +42,32 @@ CONFIG_BT_CTRL_MODEM_SLEEP=y
 CONFIG_BT_CTRL_MODEM_SLEEP_MODE_1=y
 CONFIG_BT_CTRL_LPCLK_SEL_MAIN_XTAL=y
 
-# Flash
+# Flash — 8 MB, which is the SMALLEST boot NOR across the base stations, not
+# the typical one. The two ways of getting this wrong are not symmetric:
+#
+#   too small   benign. Boots, logs "Detected size(16384k) larger than the size
+#               in the binary image header(8192k)", leaves the top of the part
+#               unreachable.
+#   too large   FATAL, and in the bootloader, so no firmware ever runs to say so:
+#                 E spi_flash: Detected size(8192k) smaller than the size in the
+#                              binary image header(16384k). Probe failed.
+#               A continuous boot loop on a board that is perfectly good.
+#
+# U1 was a W25Q64JVXGIQ (8 MB) until the 2026-08-09 fab close-out and a
+# W25Q128JVSIQ / GD25Q128ESIG (16 MB) after it — hardware/base-station/bom.csv
+# across 199ecec -> 98f6e06, the same swap the rocket computer got on the same
+# day. V1 and V2 predate it; V3 (the PCB V5/V6 hardware) is the 16 MB board.
+#
+# V3 raises this to 16 MB in sdkconfig.defaults.v3, which ALSO switches the
+# partition table — unlike the other projects, the two are coupled here, see
+# partitions.csv. 8 MB is the base because TR_BS_BOARD is optional and defaults
+# to V2: a flagless build must not produce an image that bricks the boot of the
+# bench base station.
+#
+# Not measured with `esptool flash-id`, but not a guess either: it follows the
+# BOM history and the fab date, and the board owner confirmed the general rule
+# on 2026-08-24 — the latest revision of each board is 16 MB, every earlier one
+# is 8 MB. It is also the forgiving direction; 8 MB boots on either part.
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 

@@ -298,8 +298,13 @@ class ActiveRocketSyncerTest {
 
     private fun Rig.sentCommandIds(): List<Int> = fw.commandFrames.map { it[0].toInt() }
 
+    /**
+     * #915: connecting is not a command.  A board the app has never seen is
+     * adopted as its own profile and NOTHING flight-affecting is written to
+     * it — only the two cal READs, which ask rather than tell.
+     */
     @Test
-    fun pushesWholeProfile_onceConfigAndUnitIdLand() = runTest {
+    fun connect_writesNoConfig_andAdoptsTheBoardAsItsOwnProfile() = runTest {
         val r = rig()
         r.syncer.attach(r.session, r.store)
         runCurrent()
@@ -309,20 +314,61 @@ class ActiveRocketSyncerTest {
         runCurrent()
 
         val sent = r.sentCommandIds().toSet()
-        // The whole-profile push (iOS performSync order): servo 12, PID 13,
-        // servo-en 14, gainsched 22, rollctl 31, rollprofile 26, guidance 65,
-        // fin 66, camera 33, imu orient 64, imu rate 67, sounds 11, pyro 34;
-        // default profile has no cal → READ both: mag 61 + sensor 63.
-        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34, 61, 63)) {
-            assertTrue(cmd in sent, "cmd $cmd missing from push (sent: $sent)")
+        // The fourteen config frames #915 removed from the connect path.
+        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34)) {
+            assertTrue(cmd !in sent, "cmd $cmd was pushed on connect (sent: $sent)")
+        }
+        // Cal is still READ (a question, not a write) — the profile has none.
+        assertTrue(61 in sent && 63 in sent, "cal reads still go out")
+
+        // The unknown board became its own profile, named from its identity.
+        assertEquals("boardA", r.store.activeProfile?.lastUsedUnitID)
+        assertEquals("Atlas", r.syncer.createdProfileName.value)
+        assertIs<ActiveRocketSyncer.SyncState.Synced>(r.syncer.syncState.value)
+    }
+
+    /** A board with a bound profile makes that profile active, silently. */
+    @Test
+    fun knownBoard_bindsItsOwnProfile_insteadOfPushingTheActiveOne() = runTest {
+        val r = rig()
+        val mine = r.store.add("Atlas").let { p ->
+            r.store.update(p.id) { it.copy(lastUsedUnitID = "boardA", pidKp = 0.5f) }
+            p.id
+        }
+        val other = r.store.activeId.value
+        assertTrue(other != mine, "a different profile starts active")
+
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        assertEquals(mine, r.store.activeId.value, "the board's own profile wins")
+        assertNull(r.syncer.createdProfileName.value, "nothing was created")
+        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34)) {
+            assertTrue(cmd !in r.sentCommandIds(), "binding must not push cmd $cmd")
+        }
+    }
+
+    /** The old #132 behaviour, now reachable only on purpose. */
+    @Test
+    fun explicitPush_sendsTheWholeProfile() = runTest {
+        val r = rig()
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        val before = r.fw.commandFrames.size
+        r.syncer.pushProfileToRocket()
+        runCurrent()
+
+        val sent = r.sentCommandIds().drop(before).toSet()
+        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34)) {
+            assertTrue(cmd in sent, "cmd $cmd missing from the explicit push (sent: $sent)")
         }
         assertIs<ActiveRocketSyncer.SyncState.Syncing>(r.syncer.syncState.value)
-
         advanceTimeBy(ActiveRocketSyncer.SYNCED_DELAY_MS)
         runCurrent()
         assertIs<ActiveRocketSyncer.SyncState.Synced>(r.syncer.syncState.value)
-
-        // lastUsedUnitID recorded for the soft pre-select.
         assertEquals("boardA", r.store.activeProfile?.lastUsedUnitID)
     }
 
@@ -360,8 +406,6 @@ class ActiveRocketSyncerTest {
         r.syncer.attach(r.session, r.store)
         advanceTimeBy(1100)
         runCurrent()
-        advanceTimeBy(ActiveRocketSyncer.SYNCED_DELAY_MS)
-        runCurrent()
         assertIs<ActiveRocketSyncer.SyncState.Synced>(r.syncer.syncState.value)
 
         val before = r.fw.commandFrames.size
@@ -373,13 +417,20 @@ class ActiveRocketSyncerTest {
         assertIs<ActiveRocketSyncer.SyncState.Synced>(r.syncer.syncState.value)
     }
 
+    /**
+     * #915 replaced the "connected but no profile" dead end: a rocket that
+     * reports an identity always ends up with a profile, seeded from its own
+     * settings, so there is something to hold them in.
+     */
     @Test
-    fun noActiveProfile_reportsNoProfile() = runTest {
+    fun noProfilesAtAll_theBoardStillGetsOne() = runTest {
         val r = rig(makeProfile = false)
         r.syncer.attach(r.session, r.store)
         advanceTimeBy(1100)
         runCurrent()
-        assertIs<ActiveRocketSyncer.SyncState.NoProfile>(r.syncer.syncState.value)
+        assertNotNull(r.store.activeProfile)
+        assertEquals("boardA", r.store.activeProfile?.lastUsedUnitID)
+        assertIs<ActiveRocketSyncer.SyncState.Synced>(r.syncer.syncState.value)
     }
 
     @Test
@@ -399,9 +450,14 @@ class ActiveRocketSyncerTest {
 
     @Test
     fun calOnAnotherBoard_warnsInsteadOfPushing() = runTest {
+        // Bound to this board (#915) so it is the profile the connect reconciles;
+        // its cal, though, was captured on a different one.
         val r = rig(
             mutate = {
-                it.copy(magCal = MagCalData(1, 2, 3, 48f, 3f, "OTHERBOARD", 0))
+                it.copy(
+                    lastUsedUnitID = "boardA",
+                    magCal = MagCalData(1, 2, 3, 48f, 3f, "OTHERBOARD", 0),
+                )
             },
         )
         r.syncer.attach(r.session, r.store)
@@ -417,7 +473,8 @@ class ActiveRocketSyncerTest {
 
     @Test
     fun rocketAppliedCal_offersImport() = runTest {
-        val r = rig()   // default profile: no cal → connect-time READ
+        // Bound profile with no cal → connect-time READ.
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
         r.syncer.attach(r.session, r.store)
         advanceTimeBy(1100)
         runCurrent()
@@ -429,6 +486,64 @@ class ActiveRocketSyncerTest {
         )
         runCurrent()
         assertIs<ActiveRocketSyncer.CalAdvisory.RocketHasUnsavedCal>(r.syncer.magCalAdvisory.value)
+    }
+
+    /**
+     * The import stores the cal tagged with the connected board's id — that
+     * tag is what lets the syncer re-apply it, and only it, next connect.
+     */
+    @Test
+    fun import_tagsTheCalWithTheBoardId() = runTest {
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        r.fw.emitFileOpsFrame(r.fw.magCalStatusFrame(subType = 3))
+        runCurrent()
+        r.syncer.importRocketCalIntoActiveProfile(nowMs = 7)
+        runCurrent()
+
+        val cal = assertNotNull(r.store.activeProfile?.magCal)
+        assertEquals("boardA", cal.calibratedOnUnitID)
+        assertEquals(7, cal.calibratedAtMs)
+        assertIs<ActiveRocketSyncer.CalAdvisory.None>(r.syncer.magCalAdvisory.value)
+    }
+
+    /**
+     * Item 45: the same import BEFORE the identity readback lands must store
+     * nothing.  A cal tagged "" is permanently poisonous — no real board id is
+     * empty, so magCalSyncAction would take WarnMismatch every connect from
+     * then on and never push it.  iOS refuses the same way
+     * (MagCalView.swift:110).
+     *
+     * Reachable from the Mag Cal screen, which imports on APPLIED as soon as
+     * the user accepts a calibration it ran — it does not wait for the sync
+     * gate, so the #836-item-4 fix above does not cover this path.  Refusing
+     * only postpones: the same import once the id is in must still store.
+     */
+    @Test
+    fun importBeforeTheUnitIdLands_storesNothing() = runTest {
+        val r = rig(identityJson = null)
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertEquals("", r.session.identity.value.unitId, "identity has not landed")
+
+        r.fw.emitFileOpsFrame(r.fw.magCalStatusFrame(subType = 3))
+        runCurrent()
+        r.syncer.importRocketCalIntoActiveProfile(nowMs = 7)
+        runCurrent()
+        assertNull(r.store.activeProfile?.magCal, "no cal may be stored without a board id")
+
+        // The late identity readback: the very same import now has to work.
+        r.fw.emitTelemetryJson(
+            """{"type":"config_identity","uid":"boardA","un":"Atlas","nid":5,"rid":1,"dt":"R"}""",
+        )
+        runCurrent()
+        r.syncer.importRocketCalIntoActiveProfile(nowMs = 9)
+        runCurrent()
+        assertEquals("boardA", r.store.activeProfile?.magCal?.calibratedOnUnitID)
     }
 
     @Test
@@ -446,6 +561,334 @@ class ActiveRocketSyncerTest {
         assertNull(r.syncer.suggestedProfileId.value, "user chose — hint dropped")
     }
 
+    // ── #915: the precedence rule (pure) ─────────────────────────────────
+
+    /**
+     * A readback whose values all match RocketProfile's factory defaults, so
+     * a test only has to state the field it cares about.
+     */
+    private fun matchingConfig(): com.tinkerbug.tinkerrocket.protocol.RocketConfig {
+        val p = RocketProfile.makeDefault("x", nowMs = 0)
+        return com.tinkerbug.tinkerrocket.protocol.RocketConfig(
+            servoBias1 = p.servoBias1, servoHz = p.servoHz,
+            servoMinUs = p.servoMinUs, servoMaxUs = p.servoMaxUs,
+            pidKp = p.pidKp, pidKi = p.pidKi, pidKd = p.pidKd,
+            pidMinCmd = p.pidMinCmd, pidMaxCmd = p.pidMaxCmd,
+            servoEnabled = p.servoControlEnabled,
+            gainScheduleEnabled = p.gainScheduleEnabled,
+            useAngleControl = p.useAngleControl, rollDelayMs = p.rollDelayMs,
+            rateCapDps = p.rateCapDps, kpAngle = p.kpAngle,
+            integralSepThreshold = p.integralSepThreshold,
+            rollGainsReported = true,
+            guidanceEnabled = p.guidanceEnabled, cameraType = p.cameraType,
+            imuOrientSetting = p.imuOrientSetting, imuRateHz = p.imuRateHz,
+            pyro1Enabled = p.pyro1Enabled, pyro1TriggerMode = p.pyro1TriggerMode,
+            pyro1TriggerValue = p.pyro1TriggerValue,
+            pyro2Enabled = p.pyro2Enabled, pyro2TriggerMode = p.pyro2TriggerMode,
+            pyro2TriggerValue = p.pyro2TriggerValue,
+            pyro3Enabled = p.pyro3Enabled, pyro3TriggerMode = p.pyro3TriggerMode,
+            pyro3TriggerValue = p.pyro3TriggerValue,
+            pyro4Enabled = p.pyro4Enabled, pyro4TriggerMode = p.pyro4TriggerMode,
+            pyro4TriggerValue = p.pyro4TriggerValue,
+        )
+    }
+
+    @Test
+    fun agreement_reportsNothingChanged() {
+        val p = RocketProfile.makeDefault("Rolly Polly", 0)
+        assertEquals(emptyList(), ActiveRocketSyncer.adopt(p, matchingConfig()).changed)
+    }
+
+    @Test
+    fun rocketValue_overwritesTheProfile() {
+        val p = RocketProfile.makeDefault("Rolly Polly", 0).copy(pidKp = 0.30f)
+        val r = ActiveRocketSyncer.adopt(p, matchingConfig().copy(pidKp = 0.12f))
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_PID_GAINS), r.changed)
+        assertEquals(0.12f, r.profile.pidKp)
+    }
+
+    /**
+     * The whole point of #915: the rocket the phone connected to must come
+     * away flying what it already had, and the profile must say so.
+     */
+    @Test
+    fun anotherAirframesOrientation_doesNotSurvive() {
+        val p = RocketProfile.makeDefault("Wrong airframe", 0).copy(imuOrientSetting = 7)
+        val r = ActiveRocketSyncer.adopt(p, matchingConfig().copy(imuOrientSetting = 0xFF))
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_IMU_ORIENTATION), r.changed)
+        assertEquals(0xFF, r.profile.imuOrientSetting)
+    }
+
+    /** Wire rounding must not manufacture a diff on every single connect. */
+    @Test
+    fun wireRounding_isNotADifference() {
+        val p = RocketProfile.makeDefault("x", 0)
+            .copy(pidKp = 0.120004f, kpAngle = 2.001f, pyro2TriggerValue = 100.04f)
+        assertEquals(emptyList(), ActiveRocketSyncer.adopt(p, matchingConfig()).changed)
+    }
+
+    /**
+     * #253 sentinels mean "the firmware is on its own default", and
+     * RocketConfig then holds the APP's defaults — adopting those would
+     * overwrite a deliberately-tuned profile with a number nobody chose.
+     */
+    @Test
+    fun unreportedRollGains_areLeftAlone() {
+        val p = RocketProfile.makeDefault("x", 0).copy(rateCapDps = 120f, kpAngle = 5f)
+        val r = ActiveRocketSyncer.adopt(p, matchingConfig().copy(rollGainsReported = false))
+        assertEquals(emptyList(), r.changed)
+        assertEquals(120f, r.profile.rateCapDps)
+        assertEquals(5f, r.profile.kpAngle)
+    }
+
+    /** Firmware too old to report a field leaves the profile's value alone. */
+    @Test
+    fun fieldsThisFirmwareNeverReports_areKept() {
+        val p = RocketProfile.makeDefault("x", 0).copy(imuOrientSetting = 7, imuRateHz = 1920)
+        val r = ActiveRocketSyncer.adopt(
+            p, matchingConfig().copy(imuOrientSetting = null, imuRateHz = null),
+        )
+        assertEquals(emptyList(), r.changed)
+        assertEquals(7, r.profile.imuOrientSetting)
+        assertEquals(1920, r.profile.imuRateHz)
+    }
+
+    /** Adoption may not silently reset what it cannot see. */
+    @Test
+    fun unreportedGroups_surviveAdoption() {
+        val p = RocketProfile.makeDefault("x", 0).copy(
+            servoBias2 = 40, finTravelDeg = 90f, finRingMode = 1,
+            soundsEnabled = true, pnNavGain = 9f,
+            rollWaypoints = listOf(ProfileRollWaypoint(timeSeconds = 1f, angleDeg = 90f)),
+        )
+        val r = ActiveRocketSyncer.adopt(p, matchingConfig())
+        assertEquals(40, r.profile.servoBias2)
+        assertEquals(90f, r.profile.finTravelDeg)
+        assertEquals(1, r.profile.finRingMode)
+        assertTrue(r.profile.soundsEnabled)
+        assertEquals(9f, r.profile.pnNavGain)
+        assertEquals(1, r.profile.rollWaypoints.size)
+    }
+
+    @Test
+    fun eachPyroChannel_isNamedSeparately() {
+        val p = RocketProfile.makeDefault("x", 0)
+        val cfg = matchingConfig().copy(
+            pyro1Enabled = !p.pyro1Enabled,
+            pyro3TriggerValue = p.pyro3TriggerValue + 50f,
+        )
+        val r = ActiveRocketSyncer.adopt(p, cfg)
+        assertEquals(listOf("Pyro 1", "Pyro 3"), r.changed)
+    }
+
+    @Test
+    fun adoption_isIdempotent() {
+        val p = RocketProfile.makeDefault("x", 0).copy(cameraType = 0)
+        val cfg = matchingConfig().copy(cameraType = 1)
+        val first = ActiveRocketSyncer.adopt(p, cfg)
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_CAMERA), first.changed)
+        assertEquals(
+            emptyList(), ActiveRocketSyncer.adopt(first.profile, cfg).changed,
+        )
+    }
+
+    // -- #915 firmware config report (pure) --------------------------------
+
+    private fun servoExtras() = com.tinkerbug.tinkerrocket.protocol.RocketServoExtras(
+        bias2 = 0, bias3 = 0, bias4 = 0,
+        finMinDeg = -60f, finMaxDeg = 60f,
+        finAzimuths = listOf(0f, 90f, 180f, 270f),
+        finReverseMask = 0, finRollReverseMask = 0, soundsEnabled = false,
+    )
+
+    private fun guidanceExtras(): com.tinkerbug.tinkerrocket.protocol.RocketGuidanceExtras {
+        val p = RocketProfile.makeDefault("x", 0)
+        return com.tinkerbug.tinkerrocket.protocol.RocketGuidanceExtras(
+            navGain = p.pnNavGain, maxAccel = p.pnMaxAccel,
+            accelToFin = p.pnAccelToFin, maxFinDeg = p.pnMaxFinDeg,
+            minSpeed = p.pnMinSpeed, coastDelayMs = p.pnCoastDelayMs,
+            targetMode = p.pnTargetMode, targetE = p.pnTargetE, targetN = p.pnTargetN,
+            targetAltM = p.pnTargetAltM, kpPos = p.pnKpPos, kdVel = p.pnKdVel,
+            guidanceLaw = p.pnGuidanceLaw,
+        )
+    }
+
+    /** A rocket that reports everything and agrees about all of it. */
+    private fun fullyReportingConfig() = matchingConfig().copy(
+        servoExtras = servoExtras(),
+        guidanceExtras = guidanceExtras(),
+        rollWaypoints = emptyList(),
+    )
+
+    @Test
+    fun fullReport_withNoDisagreement_changesNothing() {
+        val p = RocketProfile.makeDefault("x", 0)
+        assertEquals(emptyList(), ActiveRocketSyncer.adopt(p, fullyReportingConfig()).changed)
+    }
+
+    /**
+     * The group that motivated the firmware work: a fin layout from another
+     * airframe used to be invisible AND unverifiable.
+     */
+    @Test
+    fun finLayout_isAdoptedFromTheRocket() {
+        val p = RocketProfile.makeDefault("x", 0).copy(
+            finServoAtSlot = listOf(4, 3, 2, 1),
+            finRollReverse = listOf(true, false, false, false),
+        )
+        val r = ActiveRocketSyncer.adopt(p, fullyReportingConfig())
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_FIN_LAYOUT), r.changed)
+        assertEquals(listOf(1, 2, 3, 4), r.profile.finServoAtSlot)
+        assertEquals(listOf(false, false, false, false), r.profile.finRollReverse)
+        assertEquals(0, r.profile.finRingMode)
+
+        val rotated = fullyReportingConfig().copy(
+            servoExtras = servoExtras().copy(finAzimuths = listOf(45f, 135f, 225f, 315f)),
+        )
+        assertEquals(1, ActiveRocketSyncer.adopt(r.profile, rotated).profile.finRingMode)
+    }
+
+    @Test
+    fun servoTrim_finTravel_andSounds_areAdopted() {
+        val p = RocketProfile.makeDefault("x", 0)
+            .copy(servoBias3 = 55, finTravelDeg = 90f, soundsEnabled = true)
+        val r = ActiveRocketSyncer.adopt(p, fullyReportingConfig())
+        assertEquals(
+            listOf(
+                ActiveRocketSyncer.GROUP_SERVO_TRIM_24,
+                ActiveRocketSyncer.GROUP_FIN_TRAVEL,
+                ActiveRocketSyncer.GROUP_SOUNDS,
+            ),
+            r.changed,
+        )
+        assertEquals(0, r.profile.servoBias3)
+        assertEquals(120f, r.profile.finTravelDeg)
+        assertEquals(false, r.profile.soundsEnabled)
+    }
+
+    @Test
+    fun guidanceParameters_areAdopted() {
+        val p = RocketProfile.makeDefault("x", 0).copy(pnNavGain = 9f, pnGuidanceLaw = 1)
+        val r = ActiveRocketSyncer.adopt(p, fullyReportingConfig())
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_GUIDANCE_PARAMS), r.changed)
+        assertEquals(5.0f, r.profile.pnNavGain)
+        assertEquals(0, r.profile.pnGuidanceLaw)
+    }
+
+    /**
+     * "No waypoints" and "we can't see the waypoints" must not be the same
+     * thing: one clears the profile's roll profile, the other must not.
+     */
+    @Test
+    fun emptyWaypointList_isAnAnswer_butNullIsNot() {
+        val withWps = RocketProfile.makeDefault("x", 0).copy(
+            rollWaypoints = listOf(ProfileRollWaypoint(timeSeconds = 1f, angleDeg = 90f)),
+        )
+        val reported = ActiveRocketSyncer.adopt(withWps, fullyReportingConfig())
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_ROLL_PROFILE), reported.changed)
+        assertTrue(reported.profile.rollWaypoints.isEmpty(), "the rocket flies rate-only")
+
+        val unreported = ActiveRocketSyncer.adopt(
+            withWps, fullyReportingConfig().copy(rollWaypoints = null),
+        )
+        assertEquals(emptyList(), unreported.changed)
+        assertEquals(
+            1, unreported.profile.rollWaypoints.size,
+            "a rocket that can't report waypoints must not erase them",
+        )
+    }
+
+    /**
+     * Pre-report firmware, and the mini (no servo/fin/guidance hardware): the
+     * profile keeps its own and the app says it cannot check.
+     */
+    @Test
+    fun aGroupTheRocketCannotReport_isNamedAndLeftAlone() {
+        val p = RocketProfile.makeDefault("x", 0).copy(servoBias2 = 40, pnNavGain = 9f)
+        val cfg = matchingConfig()   // no extras at all
+        val r = ActiveRocketSyncer.adopt(p, cfg)
+        assertEquals(emptyList(), r.changed)
+        assertEquals(40, r.profile.servoBias2)
+        assertEquals(9f, r.profile.pnNavGain)
+        assertEquals(
+            listOf(
+                "Servo trim 2-4", "Fin travel", "Fin layout", "Sounds",
+                "Guidance parameters", "Roll profile",
+            ),
+            cfg.unreportedGroups,
+        )
+        assertEquals(
+            emptyList(), fullyReportingConfig().unreportedGroups,
+            "a reporting rocket leaves nothing unverifiable",
+        )
+    }
+
+    @Test
+    fun azimuthsThatDoNotDescribeFourSlots_areRefused() {
+        // Two servos claiming the same slot can't be inverted into a mapping;
+        // guessing one would put the wrong servo on the wrong fin.
+        assertNull(ActiveRocketSyncer.slotsFromAzimuths(listOf(0f, 0f, 180f, 270f)))
+        assertNull(ActiveRocketSyncer.slotsFromAzimuths(listOf(0f, 90f, 180f)))
+        assertEquals(
+            listOf(2, 3, 4, 1),
+            ActiveRocketSyncer.slotsFromAzimuths(listOf(270f, 0f, 90f, 180f)),
+        )
+    }
+
+    // -- Binding is exclusive (#915 bench regression) ----------------------
+
+    /**
+     * Bench 2026-08-25: assign a second profile to a rocket, connect to a
+     * different rocket, come back — and the selection had reverted. Both
+     * profiles still claimed the board, and the lookup takes the first match
+     * in a list sorted by NAME, so the winner was decided alphabetically
+     * instead of by what the user chose.
+     */
+    @Test
+    fun assigningASecondProfile_releasesTheFirst() = runTest {
+        val r = rig()
+        val alpha = r.store.add("Alpha")   // sorts FIRST by name
+        val zulu = r.store.add("Zulu")
+        r.store.bind(alpha.id, "BOARD1")
+        r.store.bind(zulu.id, "BOARD1")    // the user's later choice
+
+        assertNull(
+            r.store.profiles.value.first { it.id == alpha.id }.lastUsedUnitID,
+            "the earlier profile must release the board",
+        )
+        assertEquals(
+            "BOARD1",
+            r.store.profiles.value.first { it.id == zulu.id }.lastUsedUnitID,
+        )
+        assertEquals(
+            1, r.store.profiles.value.count { it.lastUsedUnitID == "BOARD1" },
+            "a board is claimed by exactly one profile",
+        )
+    }
+
+    /**
+     * The symptom as reported: come back to the rocket and get the profile you
+     * actually chose, not the alphabetically-earlier one.
+     */
+    @Test
+    fun reconnect_bindsTheChosenProfile_notTheAlphabeticallyFirst() = runTest {
+        val r = rig(makeProfile = false)
+        val alpha = r.store.add("Alpha")
+        val zulu = r.store.add("Zulu")
+        r.store.bind(alpha.id, "boardA")
+        r.store.bind(zulu.id, "boardA")    // chosen later, so it wins
+        r.store.setActive(alpha.id)        // simulate being elsewhere
+
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        assertEquals(
+            zulu.id, r.store.activeId.value,
+            "the board comes back on the profile the user put on it",
+        )
+    }
+
     @Test
     fun suggestion_pure() {
         val a = RocketProfile.makeDefault("A", 0).copy(lastUsedUnitID = "u1")
@@ -453,5 +896,66 @@ class ActiveRocketSyncerTest {
         assertEquals(a.id, ActiveRocketSyncer.suggestedProfile(listOf(a, b), active = b.id, unitId = "u1"))
         assertNull(ActiveRocketSyncer.suggestedProfile(listOf(a, b), active = a.id, unitId = "u1"))
         assertNull(ActiveRocketSyncer.suggestedProfile(listOf(a, b), active = null, unitId = ""))
+    }
+}
+
+/**
+ * The connect-time sync gate (#836 item 4).
+ *
+ * The gate read `cfg != null && id.unitId != null`. `DeviceIdentity.unitId` is
+ * a non-nullable String defaulting to "", so the id half was a CONSTANT TRUE
+ * and the gate collapsed to the config half — which, by the gate's own comment,
+ * arrives before the identity readback.
+ *
+ * The consequence was not a late sync but a WRONG one.  onReadyToSync ran with
+ * unitId == "": bindProfileToBoard bailed on the empty id, so adoptRocketConfig
+ * wrote the connected rocket's settings into whatever profile was ACTIVE, and
+ * syncCal took magCalSyncAction's mismatch branch — the mag and sensor apply
+ * frames were never sent and a BoardMismatch advisory was raised against an
+ * empty id.  The collector is a first(), so nothing re-ran it when the real id
+ * landed — the rocket flew on whatever calibration was in its NVS.
+ */
+class SyncGateTest {
+
+    @Test
+    fun gateStaysShutUntilBothHalvesArePresent() {
+        // The ordering that broke it: config first, identity later.
+        assertTrue(!ActiveRocketSyncer.readyToSync(hasConfig = false, unitId = ""))
+        assertTrue(!ActiveRocketSyncer.readyToSync(hasConfig = true, unitId = ""))
+        assertTrue(ActiveRocketSyncer.readyToSync(hasConfig = true, unitId = "A1B2C3"))
+    }
+
+    @Test
+    fun aMissingIdentityIsEmptyNotNull() {
+        // The reason a null check could never work: this is what an
+        // un-received identity readback actually looks like.
+        assertEquals("", DeviceIdentity().unitId)
+    }
+
+    @Test
+    fun configWithoutIdentityDoesNotOpenTheGate() {
+        // Named separately because this is the exact case that shipped: the
+        // cmd-20 config frame lands ~1 s in, config_identity a beat later.
+        assertTrue(
+            !ActiveRocketSyncer.readyToSync(hasConfig = true, unitId = ""),
+            "syncing on the config frame alone pushes calibration against an empty unit id",
+        )
+    }
+
+    @Test
+    fun syncingAgainstAnEmptyUnitIdWouldMismatchNotPush() {
+        // Why the gate matters, rather than just when it opens. A stored cal is
+        // never calibratedOnUnitID == "", so an empty id takes the else branch.
+        val cal = MagCalData(
+            offsetX = 1, offsetY = 2, offsetZ = 3,
+            fieldRuT = 50f, residualUT = 1f,
+            calibratedOnUnitID = "A1B2C3", calibratedAtMs = 0,
+        )
+        assertIs<ActiveRocketSyncer.Companion.CalAction.WarnMismatch>(
+            ActiveRocketSyncer.magCalSyncAction(cal, ""),
+        )
+        assertIs<ActiveRocketSyncer.Companion.CalAction.Push>(
+            ActiveRocketSyncer.magCalSyncAction(cal, "A1B2C3"),
+        )
     }
 }

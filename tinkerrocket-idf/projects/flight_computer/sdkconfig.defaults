@@ -6,7 +6,34 @@ CONFIG_PM_ENABLE=n
 # No BLE on FlightComputer
 CONFIG_BT_ENABLED=n
 
-# Flash
+# Flash — 8 MB, which is the SMALLEST boot NOR in the fleet, not the typical
+# one. The two ways of getting this wrong are not symmetric:
+#
+#   too small   benign. Boots, logs "Detected size(16384k) larger than the size
+#               in the binary image header(8192k)", leaves the top of the part
+#               unreachable.
+#   too large   FATAL, and in the bootloader, so no firmware ever runs to say so:
+#                 E spi_flash: Detected size(8192k) smaller than the size in the
+#                              binary image header(16384k). Probe failed.
+#                 E esp_core_dump_flash: Core dump flash config is corrupted!
+#               A continuous boot loop on a board that is perfectly good.
+#
+# The fleet is genuinely mixed and the split has a date. U13/U16 were
+# W25Q64JVXGIQ (8 MB) until the V9 fab close-out on 2026-08-09 and
+# W25Q128JVSIQ / GD25Q128ESIG (16 MB) after it — see hardware/rocket-computer/
+# bom.csv across 199ecec -> 8f87aa0. So V7/V8 are 8 MB and V9/V10 are 16 MB.
+#
+# MEASURED on the V7 board 2026-08-24 with `esptool flash-id`, both MCUs:
+#   FC (ESP32-P4, MAC 30:ed:a0:e3:64:9c)  manufacturer ef, device 7017 -> 8 MB
+#   OC (ESP32-S3, MAC e0:72:a1:ca:e1:50)  manufacturer ef, device 7017 -> 8 MB
+#
+# V9/V10 raises this to 16 MB in sdkconfig.defaults.v9, applied by the project
+# CMakeLists off TR_BOARD_V9 — a per-board hardware fact belongs in the
+# per-board overlay, next to PSRAM, not in a fleet-wide constant. 8 MB stays
+# here as the BASE because it is the value that boots on every rocket computer
+# ever built, including the V8 bench units whose artwork was never committed
+# and whose parts nobody has read. It costs nothing: partitions.csv ends at
+# 0x610000 (6.06 MB), well inside 8 MB on either part.
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
@@ -38,3 +65,35 @@ CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5=y
 # Main task stack: the 5.5 default (3584 B) overflows FC's synchronous sensor
 # init when the Arduino loop stack isn't present. Restore the prior 16 KB.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# --- Deliberately-unused silicon on the FC (#851) -------------------------
+# Recorded as DECISIONS, not omissions.  The OC spent a month discovering its
+# PSRAM only after the MRAM was deleted from under it; the point of writing
+# these down is that the next person reads "off because we decided" rather
+# than "off because nobody looked".
+#
+# 1) U17 is an ESP32-P4NRW32 — 32 MB of IN-PACKAGE PSRAM — and there is no
+#    CONFIG_SPIRAM here on purpose.  The FC has no identified need: its logs
+#    stream to the OC over I2S rather than buffering locally, which is what
+#    the OC's PSRAM exists for (#842, the MRAM's replacement).  Enabling it
+#    is NOT free on this board — PSRAM access goes through the cache and can
+#    perturb the timing determinism of a 3840 Hz IMU path and a ~976 Hz
+#    control loop, which is measured and currently clean.  Revisit only when
+#    something concrete needs the space, and re-measure loop timing and the
+#    gap counters (#910) if it is ever turned on.
+#
+# 2) Y3, the FC's 32.768 kHz crystal, is fitted but unused: no
+#    CONFIG_RTC_CLK_SRC_EXT_CRYS, so the RTC runs on the internal RC.  That
+#    is fine here — the crystal matters for light-sleep and accurate RTC
+#    timekeeping, and the FC does neither.  It is awake for the whole flight,
+#    and the low-power path belongs to the OC (#519: EXT_CRYS + BT LP clock
+#    + XT-WDT).  If FC light-sleep is ever wanted, this is the first switch.
+#
+# 3) Boot NOR: V9 fits W25Q128JVSIQ (16 MB) and this file now declares 16 MB.
+#    NOTE the partition table (partitions.csv) still tops out near 6.4 MB, so
+#    the upper half is unused — deliberately, since raising it would fork the
+#    layout per hardware generation (V8 bench boards may carry 8 MB parts).
+#    Also note IDF does NOT re-apply defaults to an existing sdkconfig: an
+#    old build dir keeps building 8 MB and logs "Detected size(16384k) larger
+#    than the size in the binary image header(8192k)".  Delete the stale
+#    sdkconfig (the OC keeps one per build dir, #822) to pick this up.

@@ -23,6 +23,7 @@ idf_component_register(
         esp_app_format
         nvs_flash
         efuse            # #822: ESP_EFUSE_PSRAM_CAP board-vs-silicon check
+        esp_adc          # #850: camera/servo IMON reads (adc_oneshot + adc_cali)
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format -Wno-narrowing)
 

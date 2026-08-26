@@ -398,6 +398,11 @@ class CommandsGoldenTest {
         assertEquals(listOf(11, 0), Commands.soundsEnable(false).map { it.toInt() })
         assertEquals(listOf(14, 1), Commands.servoEnable(true).map { it.toInt() })
         assertEquals(listOf(17, 1), Commands.loraHopDisabled(true).map { it.toInt() })
+        // "LoRa off" — both directions pinned: an encoder that only ever
+        // produced the mute byte would look correct in a one-sided test and
+        // leave the rocket with no way back on the air.
+        assertEquals(listOf(68, 1), Commands.loraTxDisabled(true).map { it.toInt() })
+        assertEquals(listOf(68, 0), Commands.loraTxDisabled(false).map { it.toInt() })
         assertEquals(listOf(22, 0), Commands.gainScheduleEnable(false).map { it.toInt() })
         assertEquals(listOf(32, 1), Commands.guidanceEnable(true).map { it.toInt() })
         assertEquals(listOf(35, 2), Commands.pyroContTest(2).map { it.toInt() })

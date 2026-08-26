@@ -369,6 +369,11 @@ struct config : board_pins
     static constexpr float    GNSS_MAX_HACC_INIT_M  = 0.0f;  // max h_acc for EKF init  (0 = disable)
     static constexpr float    GNSS_MAX_VEL_INIT_MPS = 2.0f;  // max velocity magnitude for EKF init
     static constexpr uint8_t  GNSS_MIN_SATS_INIT    = 5;     // minimum sats for EKF init (stricter)
+    // #834 item 4: minimum pad fixes averaged into ref_alt_m before the GNSS
+    // AGL backstop may authorise a main deploy. An under-converged pad datum
+    // has been measured 132 m off — far past the gate's margin — so a short
+    // pad dwell must disqualify the backstop rather than bias it.
+    static constexpr uint32_t MAIN_DEPLOY_REF_MIN_FIXES = 300;
 
     // EKF scorecard health (#303): the filter counts as "converged" when its
     // worst-axis attitude and velocity covariance sit below these.  stabilizeP()

@@ -36,6 +36,39 @@ enum RocketFreshness: Equatable {
     static let staleAfter: TimeInterval = 3.0
     static let lostAfter: TimeInterval = 60.0
 
+    /// Compact age for operator-facing labels: seconds under a minute, then
+    /// whole minutes.  Shared so the section header, the stale advisory line
+    /// and the held go/no-go all phrase the same age identically — three
+    /// different renderings of "how old is this" on one screen is how an
+    /// operator ends up trusting the freshest-sounding one.
+    /// `.lost(lastSeen: nil)` — a rocket in the roster that has never been
+    /// heard — yields a non-finite age, and `Int(Double.infinity)` TRAPS in
+    /// Swift.  Callers get a word instead of a crash.
+    static func ageText(_ age: TimeInterval) -> String {
+        guard age.isFinite, age >= 0 else { return "unknown" }
+        return age < 60 ? "\(Int(age)) s" : "\(Int(age) / 60) min"
+    }
+
+    /// How much to fade a card stack fed by this stream.  Matches the
+    /// focused dashboard's own 0.5 (DashboardView's `staleOpacity`) so a
+    /// rocket does not change appearance when it gains or loses focus.
+    var cardOpacity: Double {
+        switch self {
+        case .live:  return 1.0
+        case .stale: return 0.5
+        case .lost:  return 0.35
+        }
+    }
+
+    /// Age to hand the go/no-go card, or nil while live.
+    func staleAgeSec(now: Date = Date()) -> TimeInterval? {
+        switch self {
+        case .live:               return nil
+        case .stale(let age):     return age
+        case .lost(let seen):     return seen.map { now.timeIntervalSince($0) } ?? .infinity
+        }
+    }
+
     static func from(lastSeen: Date?, now: Date) -> RocketFreshness {
         guard let seen = lastSeen else { return .lost(lastSeen: nil) }
         let age = now.timeIntervalSince(seen)

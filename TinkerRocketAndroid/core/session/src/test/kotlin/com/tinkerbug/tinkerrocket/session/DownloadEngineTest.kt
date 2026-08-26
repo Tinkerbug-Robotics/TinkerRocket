@@ -169,10 +169,17 @@ class DownloadEngineTest {
         assertFalse(h.session.downloadState.value.active)
     }
 
-    // ── Arrival-order append (iOS bug-compat pins) ───────────────────────
+    // ── Offset-checked reassembly (#854/#832) ────────────────────────────
+    //
+    // These two used to be "iOS bug-compat pins", asserting that a dropped
+    // chunk still succeeded with spliced data and that the offset field was
+    // ignored entirely.  iOS fixed that in #832 and Android follows here: the
+    // offset IS the position the data belongs at, so a gap is detectable for
+    // free, and the EOF frame carries the device's own bytes_sent.  Both
+    // tests now assert the corrected contract.
 
     @Test
-    fun droppedChunkThenEof_bugCompat_succeedsTruncated() = runTest {
+    fun droppedChunkThenEof_isIncompleteNotTruncatedSuccess() = runTest {
         val bytes = payload(300)
         val h = startedSession {
             deviceFiles += FakeFirmware.FakeFile("flight_1.bin", bytes)
@@ -182,30 +189,25 @@ class DownloadEngineTest {
 
         val result = async { h.session.downloadFile("flight_1.bin") }
         runCurrent()
-        // iOS parity pin: the EOF path never checks the byte count (only the
-        // stall path does), so a dropped middle chunk still "succeeds" — with
-        // chunks 0 and 2 concatenated in ARRIVAL order (offsets unused).
-        val success = assertIs<DownloadResult.Success>(result.await())
-        assertEquals(200, success.bytes.size)
-        assertContentEquals(
-            bytes.copyOfRange(0, 100) + bytes.copyOfRange(200, 300),
-            success.bytes,
-        )
+        // Chunk 1 never arrives, so chunk 2 shows up at offset 200 while only
+        // 100 bytes are buffered. That gap must fail the download rather than
+        // splice chunks 0 and 2 together and call it a flight log.
+        assertIs<DownloadResult.Incomplete>(result.await())
     }
 
     @Test
-    fun scrambledOffsetFields_areIgnored_appendIsArrivalOrder() = runTest {
+    fun scrambledOffsetFields_areRejected() = runTest {
         val bytes = payload(450)
         val h = startedSession {
             deviceFiles += FakeFirmware.FakeFile("flight_1.bin", bytes)
-            // Every chunk claims offset 0 — reassembly must not care.
+            // Every chunk claims offset 0 — which is now a detectable lie.
             downloadScript = FakeFirmware.DownloadScript(chunkSize = 100, scrambleOffsets = true)
         }
         loadFileList(h)
 
         val result = async { h.session.downloadFile("flight_1.bin") }
         runCurrent()
-        assertContentEquals(bytes, assertIs<DownloadResult.Success>(result.await()).bytes)
+        assertIs<DownloadResult.Incomplete>(result.await())
     }
 
     // ── Malformed frames ─────────────────────────────────────────────────
@@ -236,19 +238,37 @@ class DownloadEngineTest {
         advanceTimeBy(2000)
         runCurrent()
 
-        // A frame whose length field LIES (claims 50, carries 10): nothing is
-        // appended, but the stall timer still resets (iOS behavior).
-        val liar = h.fw.chunkFrame(10, good, 0).also { it[4] = 50 }
-        h.fw.emitFileTransferFrame(liar)
-        runCurrent()
-        advanceTimeBy(2000)   // 4 s after the good chunk — would have stalled
-        runCurrent()          // without the liar's timer reset
-        assertFalse(result.isCompleted)
-
-        // Zero-length EOF completes with only the good chunk's bytes.
+        // Zero-length EOF completes with the good chunk's bytes.
         h.fw.emitFileTransferFrame(h.fw.chunkFrame(10, ByteArray(0), FakeFirmware.FLAG_EOF))
         runCurrent()
         assertContentEquals(good, assertIs<DownloadResult.Success>(result.await()).bytes)
+    }
+
+    /**
+     * #854/#832: a frame whose length field LIES (claims 50, carries 10) used
+     * to be skipped in silence while the stall timer reset, so the transfer
+     * carried on around a hole. Its declared offset is the correct next
+     * position, so those 40 bytes were genuinely lost in transit — the file is
+     * short, and saying so beats saving it and calling it a flight log.
+     */
+    @Test
+    fun lyingLengthFrame_failsTheDownload() = runTest {
+        val h = startedSession {
+            deviceFiles += FakeFirmware.FakeFile("flight_1.bin", payload(300))
+            downloadScript = FakeFirmware.DownloadScript(stallAfterChunks = 0)
+        }
+        val result = async { h.session.downloadFile("flight_1.bin") }
+        runCurrent()
+
+        val good = ByteArray(10) { it.toByte() }
+        h.fw.emitFileTransferFrame(h.fw.chunkFrame(0, good, 0))
+        runCurrent()
+
+        val liar = h.fw.chunkFrame(10, good, 0).also { it[4] = 50 }
+        h.fw.emitFileTransferFrame(liar)
+        runCurrent()
+
+        assertIs<DownloadResult.Incomplete>(result.await())
     }
 
     // ── Concurrency / connection failures ────────────────────────────────

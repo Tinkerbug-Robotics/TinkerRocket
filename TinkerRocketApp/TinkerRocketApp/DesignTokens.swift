@@ -12,6 +12,7 @@ enum TRColor {
     static let savedFlights = dynamic(0x0088FF, 0x0091FF)  // blue
     static let myDevices = dynamic(0x6155F5, 0x6D7CFF)  // indigo
     static let driftCast = dynamic(0xFF383C, 0xFF4245)  // red
+    static let preflight = dynamic(0x00C3D0, 0x00D2E0)  // teal
     static let scan = dynamic(0x34C759, 0x30D158)  // green
     static let scanActive = dynamic(0xFF383C, 0xFF4245)  // red
     static let camera = dynamic(0x0088FF, 0x0091FF)  // blue

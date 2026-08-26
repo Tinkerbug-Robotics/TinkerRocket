@@ -51,6 +51,14 @@ string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
 # version string (BLE config_identity "fw" field, boot log, OTA metadata), so
 # an image flashed onto the wrong revision can be spotted after the fact.
 # main/CMakeLists.txt is what validates the flag; this only labels the image.
+# #491 bench diagnostic: per-satellite C/N0 on the console, so a withheld
+# position can be told from a lost signal. Off unless asked for; the flight
+# path neither sets nor needs it.
+if(TR_GNSS_COCOM_DIAG)
+    add_compile_definitions(TR_GNSS_COCOM_DIAG=1)
+    message(STATUS "TR_GNSS_COCOM_DIAG=1 -- per-satellite GNSS diagnostic ENABLED")
+endif()
+
 if(TR_BOARD_M1)
     set(TR_BOARD_SUFFIX "-m1")
 elseif(TR_BOARD_V9)
@@ -69,12 +77,18 @@ set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}+${TR_BUILD_DATE}")
 # its FC is an ESP32-S3RH2 — so the overlay changes CONFIG_IDF_TARGET as well
 # as turning on that part's in-package PSRAM.
 #
-# Both lines matter. SDKCONFIG_DEFAULTS picks the overlay; SDKCONFIG moves the
-# GENERATED config into the build dir, because the default is one shared
-# sdkconfig at the project root and IDF does not re-apply defaults to an
-# existing one. Without the second line a root sdkconfig written by an M1 build
-# would carry esp32s3 into the next P4 build, and a target mismatch surfaces as
-# a wall of unrelated compile errors rather than a clear message.
+# For V9/V10 the overlay instead selects the 16 MB boot NOR (V7/V8 carry an
+# 8 MB W25Q64, measured — see sdkconfig.defaults; a 16 MB declaration on an
+# 8 MB part is a boot loop inside the bootloader, before any firmware runs).
+#
+# Both lines matter, and the second is the one that is easy to leave out.
+# SDKCONFIG_DEFAULTS picks the overlay. SDKCONFIG moves the GENERATED config
+# into the build dir, because IDF's default is a single sdkconfig at the
+# PROJECT ROOT shared by every build dir, and it does not re-apply defaults to
+# an sdkconfig that already exists. Without it, builds with different -B dirs
+# quietly share one config — a wrong target or a wrong flash size ride into
+# the next build with a correct-looking log. `idf.py -B <dir> reconfigure`
+# re-seeds from these defaults; a root sdkconfig is now ignored (untracked).
 if(TR_BOARD_M1)
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.m1")
     # CONFIG_IDF_TARGET in the overlay is NOT enough on its own. idf.py
@@ -85,6 +99,9 @@ if(TR_BOARD_M1)
     # main/CMakeLists.txt asserts the result after resolution.
     set(IDF_TARGET "esp32s3" CACHE STRING "M1 flight computer is an ESP32-S3" FORCE)
     message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.m1 (ESP32-S3 target, PSRAM on)")
+elseif(TR_BOARD_V9)
+    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
+    message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (16 MB boot NOR)")
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
 

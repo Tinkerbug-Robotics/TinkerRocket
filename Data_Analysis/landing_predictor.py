@@ -248,10 +248,17 @@ def actual_landing_enu(result: ReplayResult,
     Falls back to the EKF time-series tail if no LoRa CSV is supplied.
     Returns (e, n, u, t_s).
     """
-    import csv
     if lora_csv is not None and lora_csv.exists():
-        with open(lora_csv) as f:
-            rows = list(csv.DictReader(f))
+        import pathlib
+        import sys as _sys
+        _root = str(pathlib.Path(__file__).resolve().parent)
+        if _root not in _sys.path:
+            _sys.path.insert(0, _root)
+        import bs_log
+        # Reads binary (#850) or legacy CSV; rows carry the same keys either
+        # way, with binary rows forward-filled back into whole records.
+        rows, _events, _fmt = bs_log.read_bs_log(lora_csv)
+        rows = [{k: ("" if v is None else v) for k, v in r.items()} for r in rows]
         # Multi-rocket demux (#381): post-#381 BS CSVs can interleave several
         # rockets (rocket_id column). Keep only the dominant rocket's rows so
         # "the last landed row" is this flight's landing, not whichever other
@@ -454,8 +461,13 @@ def _find_binary(path: Path) -> Path:
 
 
 def _find_lora_csv(bin_path: Path) -> Optional[Path]:
-    """Sibling lora_<timestamp>.csv next to the .bin (BS downlink log)."""
-    candidates = sorted(bin_path.parent.glob("lora_2*.csv"))
+    """Sibling base-station downlink log next to the .bin.
+
+    #850: those are binary now (lora_<timestamp>.bin); older ones are CSV. Both
+    are matched, binary first, and bs_log detects the format by content.
+    """
+    candidates = (sorted(bin_path.parent.glob("lora_2*.bin"))
+                  + sorted(bin_path.parent.glob("lora_2*.csv")))
     return candidates[0] if candidates else None
 
 

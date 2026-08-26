@@ -112,7 +112,7 @@ class TelemetryDispatchTest {
              "sen":false,"gs":false,"ac":true,"rdly":250,
              "rcap":45.0,"kpang":1.5,"iwind":30.0,"ge":true,"camt":1,
              "irate":1920,"lf":915.5,"lsf":8,"lbw":250.0,"lcr":5,"lpw":-3,
-             "lhd":true,"lhdw":400}
+             "lhd":true,"lhdw":400,"ltxd":true}
             """.trimIndent(),
         )
         assertEquals(12, cfg.servoBias1)
@@ -141,6 +141,18 @@ class TelemetryDispatchTest {
         assertEquals(-3, cfg.loraTxPower)
         assertEquals(true, cfg.loraHopDisabled)
         assertEquals(400, cfg.loraHopDwell)
+        assertEquals(true, cfg.loraTxDisabled)
+    }
+
+    @Test
+    fun `config ltxd absent stays null, never false`() {
+        // The three states are distinct and the app leans on it: true =
+        // muted, false = on the air, null = firmware predates "LoRa off".
+        // Collapsing null to false would make the dashboard advisory and the
+        // settings switch claim a radio state the rocket never reported.
+        assertNull(config("""{"type":"config","sb1":1}""").loraTxDisabled)
+        assertEquals(false, config("""{"type":"config","ltxd":false}""").loraTxDisabled)
+        assertEquals(true, config("""{"type":"config","ltxd":true}""").loraTxDisabled)
     }
 
     @Test

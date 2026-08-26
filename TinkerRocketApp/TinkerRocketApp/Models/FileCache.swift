@@ -19,7 +19,7 @@ struct CachedFlight: Identifiable {
     let name: String          // Original filename in cache (e.g., "flight_20260224_021306.csv")
     let type: CachedFlightType
     let csvURL: URL
-    let binaryURL: URL?       // Only for rocket flights
+    let binaryURL: URL?       // Rocket flights, and base-station logs since #850
     let summaryURL: URL?      // Flight summary JSON (rocket flights only)
     let size: UInt64
     let modificationDate: Date?
@@ -268,6 +268,15 @@ nonisolated class FileCache {
         // Copy to cache
         try FileManager.default.copyItem(at: sourceURL, to: destURL)
 
+        // #832: the CSV is DERIVED from this binary, and generateAndCacheCSV
+        // returns a cached CSV before it ever looks at the binary it was
+        // handed.  Without this, re-downloading a file that came through
+        // truncated the first time overwrote the binary and then re-served the
+        // truncated CSV — the retry looked like it worked and changed nothing.
+        if let staleCSV = getCachedCSV(for: binaryFilename) {
+            try? FileManager.default.removeItem(at: staleCSV)
+        }
+
         return destURL
     }
 
@@ -395,7 +404,7 @@ nonisolated class FileCache {
         // Remove CSV file
         try? FileManager.default.removeItem(at: flight.csvURL)
 
-        // Remove binary file if present (rocket flights)
+        // Remove binary file if present (rocket flights, and base-station logs)
         if let binaryURL = flight.binaryURL {
             try? FileManager.default.removeItem(at: binaryURL)
         }
@@ -453,6 +462,16 @@ nonisolated class FileCache {
                 }
             } else if filename.hasPrefix("lora_") && filename.hasSuffix(".csv") {
                 type = .loraLog
+                // #850: base-station logs are binary now and the CSV beside
+                // them is a rendering. Associate the raw .bin so it rides the
+                // Share sheet — the post-flight tools read the binary directly,
+                // the same way they read the rocket computer's log, and a CSV
+                // cannot be converted back into one.
+                let binURL = binaryCacheURL
+                    .appendingPathComponent(String(filename.dropLast(4)) + ".bin")
+                if FileManager.default.fileExists(atPath: binURL.path) {
+                    binaryURL = binURL
+                }
             } else {
                 // Unknown file pattern — skip
                 continue

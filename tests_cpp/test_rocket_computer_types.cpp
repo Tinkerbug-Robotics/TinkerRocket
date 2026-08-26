@@ -16,7 +16,10 @@ TEST(RocketComputerTypes, StructSizes_MatchConstants) {
     EXPECT_EQ(SIZE_OF_MMC5983MA_DATA,  sizeof(MMC5983MAData));
     EXPECT_EQ(SIZE_OF_POWER_DATA,      sizeof(POWERData));
     EXPECT_EQ(SIZE_OF_NON_SENSOR_DATA, sizeof(NonSensorData));
-    EXPECT_EQ(SIZE_OF_LORA_DATA,       sizeof(LoRaData));
+    EXPECT_EQ(SIZE_OF_LORA_FAST,       sizeof(LoRaFastData));
+    EXPECT_EQ(SIZE_OF_LORA_SLOW,       sizeof(LoRaSlowData));
+    // The airtime budget is the LARGER frame, always (#850).
+    EXPECT_EQ(SIZE_OF_LORA_BUDGET,     SIZE_OF_LORA_FAST);
 }
 
 TEST(RocketComputerTypes, KnownSizes) {
@@ -26,9 +29,15 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(BMP585Data),     12u);
     EXPECT_EQ(sizeof(ISM6HG256Data),  22u);
     EXPECT_EQ(sizeof(MMC5983MAData),  16u);
-    EXPECT_EQ(sizeof(POWERData),      10u);
+    EXPECT_EQ(sizeof(POWERData),      14u);  // #850: v2, +cam_ma +servo_ma
+    // v1 stays pinned: it is the length decoders must still accept for logs
+    // written before #850, and Data_Analysis dispatches POWER on exactly these
+    // two sizes.
+    EXPECT_EQ(SIZE_OF_POWER_DATA_V1,  10u);
     EXPECT_EQ(sizeof(NonSensorData),  50u);  // #529: +uint16 ekf_ticks (2 B)
-    EXPECT_EQ(sizeof(LoRaData),       65u);  // #191: +ENU vel +flags2, -derived Euler/speed
+    EXPECT_EQ(sizeof(LoRaFrameHeader), 7u);   // #850: shared prefix, both frames
+    EXPECT_EQ(sizeof(LoRaFastData),   55u);  // #850: 5-of-6 slots
+    EXPECT_EQ(sizeof(LoRaSlowData),   22u);  // #850: 1-of-6 slots
     EXPECT_EQ(sizeof(LoRaUplinkData), 13u);  // uplink RSSI/SNR log record (0xF9)
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
@@ -238,7 +247,8 @@ TEST(RocketComputerTypes, MaxPayload_CoversAllTypes) {
     EXPECT_GE(MAX_PAYLOAD, sizeof(MMC5983MAData));
     EXPECT_GE(MAX_PAYLOAD, sizeof(POWERData));
     EXPECT_GE(MAX_PAYLOAD, sizeof(NonSensorData));
-    EXPECT_GE(MAX_PAYLOAD, sizeof(LoRaData));
+    EXPECT_GE(MAX_PAYLOAD, sizeof(LoRaFastData));
+    EXPECT_GE(MAX_PAYLOAD, sizeof(LoRaSlowData));
     EXPECT_GE(MAX_PAYLOAD, sizeof(RollProfileData));
 
     // MAX_FRAME = 4 (preamble) + 1 (type) + 1 (len) + MAX_PAYLOAD + 2 (CRC16)
@@ -539,6 +549,61 @@ TEST(RocketComputerTypes, LoRaCmdHeartbeat_DoesNotCollide) {
     EXPECT_NE(LORA_CMD_HEARTBEAT, LORA_BEACON_SYNC);
     // Above the highest currently-used command byte (60 = freq scan)
     EXPECT_GT(LORA_CMD_HEARTBEAT, 60);
+}
+
+// ============================================================================
+// "LoRa off" — the transmit mute (BLE cmd 68 / uplink cmd 68)
+// ============================================================================
+
+TEST(LoraCmdSetTxDisabled, IdIsStableAndCollidesWithNothing) {
+    // ONE number for two transports: the app's BLE command to a rocket and
+    // the base station's relayed uplink command are the same byte, so a
+    // renumber here is a coordinated firmware + both-apps change.
+    EXPECT_EQ(LORA_CMD_SET_TX_DISABLED, 68u);
+    // Must not land on any other LoRa uplink command.
+    EXPECT_NE(LORA_CMD_SET_TX_DISABLED, LORA_CMD_CHANNEL_SET);
+    EXPECT_NE(LORA_CMD_SET_TX_DISABLED, LORA_CMD_HOP_PAUSE);
+    EXPECT_NE(LORA_CMD_SET_TX_DISABLED, LORA_CMD_SET_HOP_DISABLED);
+    EXPECT_NE(LORA_CMD_SET_TX_DISABLED, LORA_CMD_HEARTBEAT);
+    // Nor on the beacon discriminator, which shares the same air.
+    EXPECT_NE(LORA_CMD_SET_TX_DISABLED, LORA_BEACON_SYNC);
+}
+
+TEST(LoraTxMuteChangeAllowed, MuteRefusedOnlyInFlight) {
+    // Muting an airborne rocket throws away the only link that says where it
+    // is, and nothing on the ground would notice until it landed somewhere
+    // unknown.  Every other state may be muted — the pad states are the whole
+    // point of the feature, and LANDED is where a recovered rocket gets shut
+    // up before the drive home.
+    EXPECT_FALSE(loraTxMuteChangeAllowed(true, INFLIGHT));
+    EXPECT_TRUE(loraTxMuteChangeAllowed(true, INITIALIZATION));
+    EXPECT_TRUE(loraTxMuteChangeAllowed(true, READY));
+    EXPECT_TRUE(loraTxMuteChangeAllowed(true, PRELAUNCH));
+    EXPECT_TRUE(loraTxMuteChangeAllowed(true, LANDED));
+}
+
+TEST(LoraTxMuteChangeAllowed, UnmuteAllowedEverywhere) {
+    // The asymmetry is the point.  Un-muting can only ADD telemetry, and a
+    // rocket that took off muted must stay recoverable — refusing this in
+    // flight would close the one door left open by keeping the receiver up.
+    for (uint8_t st = 0; st <= (uint8_t)LANDED; ++st)
+    {
+        EXPECT_TRUE(loraTxMuteChangeAllowed(false, (RocketState)st))
+            << "un-mute refused in state " << (unsigned)st;
+    }
+}
+
+TEST(LoraTxMuteChangeAllowed, MatchesTheUint8Overload) {
+    // The uplink handler has the state as a raw wire byte; the BLE handler has
+    // the enum.  Both must decide identically or the same command would mean
+    // different things over the two transports.
+    for (uint8_t st = 0; st <= (uint8_t)LANDED; ++st)
+    {
+        EXPECT_EQ(loraTxMuteChangeAllowed(true,  st),
+                  loraTxMuteChangeAllowed(true,  (RocketState)st));
+        EXPECT_EQ(loraTxMuteChangeAllowed(false, st),
+                  loraTxMuteChangeAllowed(false, (RocketState)st));
+    }
 }
 
 TEST(FreqLockForFlight, InflightLatchesOn) {
@@ -938,6 +1003,45 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
     EXPECT_GE(-20.0f, loraMinValidSnrDb(12));
 }
 
+// --- Full config report (#915) ---
+// The OC parses this by memcpy of the whole struct and turns it into readback
+// JSON, so a member reordered on the FC side silently reinterprets every
+// field after it — and the app would then display the result as VERIFIED,
+// which is worse than the "cannot verify" state this frame exists to remove.
+TEST(RocketComputerTypes, ConfigReportData_Layout) {
+    EXPECT_EQ(sizeof(ConfigReportData), 169u);
+    // Rides the same I2S frame path as everything else FC→OC.
+    EXPECT_LE(sizeof(ConfigReportData), MAX_PAYLOAD);
+
+    // time_us first, so the generic frame parser's "timestamp = first 4
+    // payload bytes" convention still holds for this type.
+    EXPECT_EQ(offsetof(ConfigReportData, time_us),            0u);
+    EXPECT_EQ(offsetof(ConfigReportData, version),            4u);
+    EXPECT_EQ(offsetof(ConfigReportData, imu_orient_setting), 5u);
+    EXPECT_EQ(offsetof(ConfigReportData, flags),              6u);
+
+    // Composed from the structs the app writes; their own offsetof pins guard
+    // the internals, these pin where each one starts.
+    EXPECT_EQ(offsetof(ConfigReportData, servo),              8u);
+    EXPECT_EQ(offsetof(ConfigReportData, fin),               30u);
+    EXPECT_EQ(offsetof(ConfigReportData, guidance),          48u);
+    EXPECT_EQ(offsetof(ConfigReportData, roll),              93u);
+
+    // The starts are the running sum of the nested sizes — spelled out so a
+    // nested struct that grows fails HERE, naming itself, instead of only
+    // tripping the total-size check above.
+    EXPECT_EQ(sizeof(ServoConfigData),    22u);
+    EXPECT_EQ(sizeof(FinConfigData),      18u);
+    EXPECT_EQ(sizeof(GuidanceConfigData), 45u);
+    EXPECT_EQ(sizeof(RollProfileData),    76u);
+
+    // Flag bits are wire ABI: the OC reads F_ORIENT_FROM_NVS to decide
+    // whether to leave the FC's orientation alone or re-push its own.
+    EXPECT_EQ(ConfigReportData::F_SOUNDS,           0u);
+    EXPECT_EQ(ConfigReportData::F_ORIENT_FROM_NVS,  1u);
+    EXPECT_EQ(ConfigReportData::VERSION,            1u);
+}
+
 // --- Flight settings snapshot (#165) ---
 // The settings frame is decoded by the iOS app (SensorTypes.swift) and built
 // by the FC (flight_computer/main.cpp) at byte-exact offsets. Lock the layout
@@ -1030,6 +1134,11 @@ TEST(RocketComputerTypes, FlightSnapshotData_Layout) {
     EXPECT_EQ(offsetof(FlightSnapshotData, pyro4_fired),        24u);
     EXPECT_EQ(offsetof(FlightSnapshotData, b2r_code),           25u);
     EXPECT_EQ(offsetof(FlightSnapshotData, b2r_mode),           26u);
+    // #834 item 4: reclaimed from pad2[1] — same offset, same struct size, so
+    // no VERSION bump. 0 (every older writer's value) means "pad datum not
+    // known to be converged", which disables the GNSS main-deploy backstop.
+    EXPECT_EQ(offsetof(FlightSnapshotData, ref_datum_converged), 27u);
+    EXPECT_EQ(sizeof(FlightSnapshotData::ref_datum_converged),    1u);
     EXPECT_EQ(offsetof(FlightSnapshotData, ground_pressure_pa), 28u);
     EXPECT_EQ(offsetof(FlightSnapshotData, ref_lat_rad),        32u);
     EXPECT_EQ(offsetof(FlightSnapshotData, ref_alt_m),          48u);
@@ -1508,6 +1617,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(LORA_UPLINK_MSG),
         // FC->OC boot progress during setup_fc, before the I2S stream exists.
         MT(FC_BOOT_STATUS_MSG),
+        // FC->OC full config report (#915) — what the app readback can't see.
+        MT(CONFIG_REPORT_MSG),
     };
 #undef MT
 
@@ -1532,7 +1643,11 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 89 = 87 + Drift-Cast guidance point pair (#435, BLE cmd 28).
     // 90 = 89 + LORA_UPLINK_MSG (OC-self-emitted uplink RSSI/SNR record).
     // 91 = 90 + FC_BOOT_STATUS_MSG (FC->OC boot progress during setup_fc).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 91u)
+    // 92 = 91 + CONFIG_REPORT_MSG (#915 full config report).  This leaves
+    //      exactly TWO free codes in the space (0xFC, 0xFD) — the next
+    //      message after those needs an escape/extended encoding, not a
+    //      thirteenth constant.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 92u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
@@ -1554,7 +1669,10 @@ namespace fhss150 {
 // quantization).  Growing the frame has a real regulatory cost — at 73 B
 // the SF10/BW250 long-range rung crosses the FCC 400 ms occupancy line —
 // so the table below fails deliberately if it changes.
-constexpr size_t  kTelemFrameLen = SIZE_OF_LORA_DATA;
+// #850: budget against the LARGER of the two frames. Sizing the schedule
+// on the slow one would under-count every fast frame and walk the link
+// straight into the occupancy limit.
+constexpr size_t  kTelemFrameLen = SIZE_OF_LORA_BUDGET;
 constexpr uint8_t kCr            = LORA_FACTORY_RENDEZVOUS_CR;  // 4/5 on both ends
 // = out_computer config.h LORA_TX_RATE_HZ.  Telemetry is an unconditional
 // 2 Hz in every transmitting state.  If the rate ever rises, re-derive the
@@ -1574,12 +1692,16 @@ inline uint32_t fccWindowSec(float bw_khz) {
 
 TEST(LoraTimeOnAir, PinsTheNumbersTheDwellTableRestsOn) {
     using namespace fhss150;
-    // Semtech AN1200.13 at the production frame (66 B, preamble 12, CR4/5).
-    EXPECT_NEAR(telemToaMs(8,  250.0f), 112.0, 2.0);
-    EXPECT_NEAR(telemToaMs(9,  250.0f), 203.0, 2.0);
-    // The long-range rung: 14 ms under the FCC 400 ms occupancy line.
-    EXPECT_NEAR(telemToaMs(10, 250.0f), 386.0, 3.0);
-    // SF11 @ BW250 cannot fit even one packet in the budget.
+    // Semtech AN1200.13 at the production FAST frame (55 B since #850 split
+    // the downlink; was 65 B, and the pinned numbers below dropped with it).
+    EXPECT_NEAR(telemToaMs(8,  250.0f), 102.0, 2.0);   // was 112
+    EXPECT_NEAR(telemToaMs(9,  250.0f), 183.0, 2.0);   // was 203
+    // The long-range rung. This is the number the whole frame budget exists to
+    // protect: at 65 B it was 386 ms against a 390 ms dwell budget — 4 ms of
+    // margin, which is why the #150 doc says frame growth "breaks this first".
+    // The two-frame split bought back 41 ms.
+    EXPECT_NEAR(telemToaMs(10, 250.0f), 345.0, 3.0);   // was 386
+    // SF11 @ BW250 still cannot fit even one packet in the budget.
     EXPECT_GT(telemToaMs(11, 250.0f), LORA_HOP_DWELL_BUDGET_MS);
 }
 
@@ -1591,11 +1713,17 @@ TEST(LoraHopDwell, AdaptiveTable) {
     // regulatory decisions that must be made consciously.
     struct Row { uint8_t sf; float bw; uint8_t dwell; };
     const Row rows[] = {
-        {7,  250.0f, 4}, {8,  250.0f, 3}, {9,  250.0f, 1},
+        // #850 moved four of these rows, all in the permissive direction,
+        // because the FAST frame is 55 B where the single frame was 65:
+        //   SF9/BW250  1 -> 2      SF9/BW500  3 -> 4
+        //   SF9/BW125  0 -> 1      (hopping newly PERMITTED at that rung)
+        // SF10/BW250 keeps dwell 1 but its per-visit occupancy falls 386 ->
+        // 345 ms, which is the margin the split was really for.
+        {7,  250.0f, 4}, {8,  250.0f, 3}, {9,  250.0f, 2},
         {10, 250.0f, 1},                       // the +5 dB long-range rung
         {11, 250.0f, 0}, {12, 250.0f, 0},
-        {7,  125.0f, 3}, {8,  125.0f, 1}, {9,  125.0f, 0}, {10, 125.0f, 0},
-        {7,  500.0f, 4}, {8,  500.0f, 4}, {9,  500.0f, 3},
+        {7,  125.0f, 3}, {8,  125.0f, 1}, {9,  125.0f, 1}, {10, 125.0f, 0},
+        {7,  500.0f, 4}, {8,  500.0f, 4}, {9,  500.0f, 4},
         {10, 500.0f, 2}, {11, 500.0f, 1}, {12, 500.0f, 0},
     };
     for (const auto& r : rows) {

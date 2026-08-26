@@ -61,7 +61,10 @@ set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}${TR_BENCH_SUFFIX}+${TR_BUILD_DA
 
 # Board revision has to reach sdkconfig, not just the compiler (#822): V9/V10
 # enables the S3RH2's in-package PSRAM and V7/V8 must NOT, because those boards
-# have no PSRAM part and would spend every boot failing to find one.
+# have no PSRAM part and would spend every boot failing to find one. Since
+# 2026-08-24 the overlay also carries the boot NOR size, which is the more
+# dangerous of the two: V7/V8 fit an 8 MB W25Q64 (measured) and a 16 MB
+# declaration boot-loops them in the bootloader, before any firmware runs.
 #
 # Both lines matter. SDKCONFIG_DEFAULTS picks the overlay; SDKCONFIG moves the
 # GENERATED config into the build dir, because the default is one shared
@@ -79,7 +82,7 @@ if(TR_BOARD_V9 OR TR_BOARD_M1)
     if(TR_BOARD_M1)
         message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, shared with M1)")
     else()
-        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on)")
+        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, 16 MB boot NOR)")
     endif()
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")

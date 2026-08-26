@@ -83,6 +83,7 @@ fun SettingsScreen(
     syncer: ActiveRocketSyncer,
     fleetScope: CoroutineScope,
     session: DeviceSession? = null,
+    preflight: com.tinkerbug.tinkerrocket.session.PreflightStore? = null,
 ) {
     val profiles by store.profiles.collectAsState()
     val activeId by store.activeId.collectAsState()
@@ -90,6 +91,8 @@ fun SettingsScreen(
     val magAdvisory by syncer.magCalAdvisory.collectAsState()
     val sensorAdvisory by syncer.sensorCalAdvisory.collectAsState()
     val suggestedId by syncer.suggestedProfileId.collectAsState()
+    val createdProfileName by syncer.createdProfileName.collectAsState()
+    val unreportedGroups by syncer.unreportedGroups.collectAsState()
     val active = activeId?.let { id -> profiles.firstOrNull { it.id == id } }
 
     // #361 analog: never subscribe this screen to raw telemetry — the jog
@@ -111,6 +114,27 @@ fun SettingsScreen(
         ).collectAsState()
     val initializing by remember(session) {
         session?.telemetry?.map { it.state == "INITIALIZATION" }?.distinctUntilChanged()
+            ?: kotlinx.coroutines.flow.flowOf(false)
+    }.collectAsState(initial = false)
+
+    // "LoRa off" is DEVICE state (rocket NVS), not a profile field, so it is
+    // read from the config readback and written straight to the session.
+    // A Pair, not just the flag: "no readback yet" and "a readback without the
+    // key" both leave loraTxDisabled null but mean different things — only the
+    // second is a firmware that cannot do this, and only that one is worth
+    // saying out loud.
+    val loraTx: Pair<Boolean, Boolean?> by remember(session) {
+        val f: kotlinx.coroutines.flow.Flow<Pair<Boolean, Boolean?>> =
+            session?.rocketConfig
+                ?.map { Pair(it != null, it?.loraTxDisabled) }
+                ?.distinctUntilChanged()
+                ?: kotlinx.coroutines.flow.flowOf(Pair(false, null))
+        f
+    }.collectAsState(initial = Pair(false, null))
+    val haveConfig = loraTx.first
+    val loraTxDisabled = loraTx.second
+    val inflight by remember(session) {
+        session?.telemetry?.map { it.state == "INFLIGHT" }?.distinctUntilChanged()
             ?: kotlinx.coroutines.flow.flowOf(false)
     }.collectAsState(initial = false)
 
@@ -155,10 +179,40 @@ fun SettingsScreen(
                 fleetScope.launch { store.setActive(sid) }
             }
         }
+        // #915: a profile created for a board the app had never seen.
+        createdProfileName?.let { name ->
+            Card {
+                Text(
+                    "New rocket — created “$name” from its own settings.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
+        }
         CalBanner("Mag cal", magAdvisory, onImport = {
             fleetScope.launch { syncer.importRocketCalIntoActiveProfile(System.currentTimeMillis()) }
         })
         CalBanner("Sensor cal", sensorAdvisory, onImport = null)
+
+        // #915: the rocket keeps its own settings unless the user asks
+        // otherwise, so say plainly which ones the app cannot check and put
+        // the deliberate override next to that admission.
+        if (connected && session?.isBaseStation == false) {
+            if (unreportedGroups.isNotEmpty()) {
+                Banner(
+                    "Can't verify: " + unreportedGroups.joinToString(", ") +
+                        ". This rocket doesn't report them, so they're shown " +
+                        "from the profile.",
+                    "Send all",
+                ) {
+                    fleetScope.launch { syncer.pushProfileToRocket() }
+                }
+            } else {
+                Banner("Settings come from this rocket.", "Send all") {
+                    fleetScope.launch { syncer.pushProfileToRocket() }
+                }
+            }
+        }
 
         // ── Profile picker ───────────────────────────────────────────────
         Row(
@@ -265,6 +319,37 @@ fun SettingsScreen(
                     s.toIntOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rollDelayMs = v) } }
                 }
             }
+        }
+
+        // ── Radio (iOS General-tab "Radio" section) ──────────────────────
+        // Presented positively — the switch reads "LoRa telemetry", so ON
+        // always means the radio is doing something.  The wire byte is the
+        // inverse ("disabled"), inverted once, here.
+        Section("Radio") {
+            ToggleRow(
+                "LoRa telemetry",
+                loraTxDisabled != true,
+                enabled = session != null && connected &&
+                    loraTxDisabled != null && !inflight,
+            ) { on -> session?.sendLoraTxDisabled(!on) }
+            Caption(
+                when {
+                    inflight ->
+                        "Locked while the rocket is flying — muting it now would drop " +
+                            "the only link telling you where it is."
+                    connected && haveConfig && loraTxDisabled == null ->
+                        "This rocket's firmware doesn't support turning the radio off. " +
+                            "Update it to use this."
+                    loraTxDisabled == true ->
+                        "OFF — the rocket transmits nothing: no telemetry, no beacon. It " +
+                            "still listens, so the base station can turn it back on. You " +
+                            "will have no tracking during flight."
+                    else ->
+                        "ON — the rocket downlinks telemetry to the base station at 2 Hz. " +
+                            "Turn it off to fly silent (bench work, a busy band, or a site " +
+                            "where you would rather not transmit)."
+                },
+            )
         }
 
         // ── IMU Mounting (iOS General-tab section; raw-int field replaced
@@ -664,7 +749,12 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
-                    fleetScope.launch { store.delete(active.id) }
+                    fleetScope.launch {
+                        store.delete(active.id)
+                        // The pre-flight checklist diff is keyed by profile
+                        // id and dies with it (iOS RocketProfileView twin).
+                        preflight?.deleteConfig(active.id)
+                    }
                 }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
@@ -679,10 +769,11 @@ private fun SyncBadge(state: SyncState) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val (label, color) = when (state) {
         SyncState.Idle -> return
-        SyncState.AwaitingSync -> "awaiting sync" to tr.statusWarn
+        SyncState.AwaitingSync -> "reading rocket" to tr.statusWarn
         SyncState.NoProfile -> "no profile" to tr.statusIdle
-        SyncState.Syncing -> "syncing…" to tr.statusIdle
-        SyncState.Synced -> "synced" to tr.statusOk
+        SyncState.Syncing -> "sending…" to tr.statusIdle
+        SyncState.Synced -> "matches rocket" to tr.statusOk
+        is SyncState.Adopted -> "updated from rocket" to tr.statusIdle
         is SyncState.Failed -> "sync failed" to tr.statusBad
     }
     Text(
@@ -776,14 +867,19 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun ToggleRow(label: String, value: Boolean, onChange: (Boolean) -> Unit) {
+private fun ToggleRow(
+    label: String,
+    value: Boolean,
+    enabled: Boolean = true,
+    onChange: (Boolean) -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = value, onCheckedChange = onChange)
+        Switch(checked = value, onCheckedChange = onChange, enabled = enabled)
     }
 }
 
@@ -850,7 +946,7 @@ private fun PyroChannelSection(
     onValue: (Float) -> Unit,
 ) {
     Section("Pyro Channel $channel") {
-        ToggleRow("Enabled", enabled, onEnabled)
+        ToggleRow("Enabled", enabled, onChange = onEnabled)
         if (enabled) {
             val isTime = mode == 0
             SegmentedPicker(

@@ -95,6 +95,11 @@ public object BleCommandId {
     public const val GUIDANCE_CONFIG: Int = 65     // GuidanceConfigData 45 B — first 36 FROZEN (#534)
     public const val FIN_CONFIG: Int = 66          // FinConfigData 18 B
     public const val IMU_RATE: Int = 67            // [rate_hz u16] 960/1920/3840
+    // "LoRa off" — [bool] 1 = hold radio silence.  Rocket link only: the BS
+    // has no such mode (it is the receiver).  The SAME number is also the
+    // LoRa uplink command (LORA_CMD_SET_TX_DISABLED in RocketComputerTypes.h),
+    // so a relayed toggle and a direct one mean exactly one thing.
+    public const val LORA_TX_DISABLE_OC: Int = 68
 
     // OTA — dispatched in TR_BLE_To_APP.cpp, invisible to the main.cpp greps.
     public const val OTA_BEGIN: Int = 70           // [target u8][size u32][sha256 32 B]

@@ -55,10 +55,15 @@ static inline std::string itos(int v)
 }
 
 #include "config.h"
+#include "ota_relay_policy.h"   // #834 items 6/7: I2S relay recovery timing
 #include "rail_restore_policy.h"  // #825: boot rail re-assert decision
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
+#include <esp_adc/adc_oneshot.h>  // #850: camera/servo IMON reads
+#include <esp_adc/adc_cali.h>
+#include <esp_adc/adc_cali_scheme.h>
 #include "dedup_reboot_policy.h"
+#include "cmd_queue_dedupe_policy.h"  // #837 item 11: pyro tests key on channel
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -332,7 +337,13 @@ static void flightlogServicePendingFinalize()
     // closeLogSession (which ran in the same flush-task iteration that drained
     // the ring) has already zeroed current_file_bytes by the time we get here.
     // lastClosedSessionBytes() is a sticky snapshot it took just before the
-    // reset, so this is the exact byte count the sink received.
+    // reset, so this is the exact byte count the sink ACCEPTED.
+    //
+    // "accepted", not "was handed": closeLogSession rewinds the count when the
+    // final partial page fails to write (#837 item 8). Before that it reported
+    // bytes the NAND never took, and finalizeFlight kept a page that was never
+    // programmed — the download came back the advertised length with erased
+    // 0xFF as its tail.
     const uint32_t bytes = logger.lastClosedSessionBytes();
     auto st = flightlog.finalizeFlight(name_local, bytes);
     if (st == tr_flightlog::Status::Ok)
@@ -492,9 +503,12 @@ static volatile uint8_t pending_out_command = 0U;  // command currently being SE
 // SNAPSHOT of their config payload) now queue FIFO and are served one at a
 // time:
 //   - snapshot-at-enqueue: a later staging can't clobber an in-flight payload
-//   - dedupe by command id: a re-push replaces the queued payload in place
+//   - dedupe by OPERATION: a re-push replaces the queued payload in place
 //     (latest wins) instead of flooding the queue — self-applying settings
-//     sliders stay bounded
+//     sliders stay bounded. For most commands the operation is just the
+//     command id, because the payload IS the command. The two pyro tests
+//     carry a channel byte instead, so their key is (id, channel) — see
+//     cmd_queue_dedupe_policy.h and #837 item 11.
 //   - PYRO_FIRE_TEST / PYRO_CONT_TEST jump to the FRONT: a manual pyro test
 //     keeps its immediacy instead of waiting ~15 s behind a profile sync
 //   - one idle (cmd=0) poll is served between commands so the FC's dedup
@@ -516,7 +530,13 @@ struct QueuedCommand
     uint8_t cfg_len;
     uint8_t cfg[sizeof(RollProfileData)];
 };
-static constexpr size_t CMD_QUEUE_DEPTH = 16;   // sync burst is ~13-15 commands
+// Sync burst is ~13-15 commands. #837 item 11 raised this from 16: the two
+// pyro tests are now keyed by channel, so checking all four continuity
+// channels can hold 4 slots where the id-only dedupe collapsed them into 1.
+// 15 + 4 = 19 would have overflowed a 16-deep queue and dropped a pyro test
+// on the floor (logged, but invisible to the operator) if a profile sync were
+// still draining. Costs 4 x sizeof(QueuedCommand) = 320 B of static RAM.
+static constexpr size_t CMD_QUEUE_DEPTH = 20;
 static QueuedCommand cmd_queue[CMD_QUEUE_DEPTH];
 static size_t cmd_queue_head  = 0;   // index of next entry to pop
 static size_t cmd_queue_count = 0;
@@ -554,12 +574,21 @@ static void setPendingCommandWithConfig(uint8_t cmd, uint8_t msg_type,
     const bool front = (cmd == PYRO_FIRE_TEST || cmd == PYRO_CONT_TEST);
 
     portENTER_CRITICAL(&cmd_queue_mux);
-    // Dedupe: replace the payload of an already-queued entry with the same
-    // command id (latest value wins, position preserved).
+    // Dedupe: replace the payload of an already-queued entry describing the
+    // SAME OPERATION (latest value wins, position preserved).
+    //
+    // #837 item 11: "same operation" is not "same command id". The two pyro
+    // tests carry their channel in the payload, so matching on the id alone
+    // merged a queued test for one channel into a request for another and
+    // silently lost the first. cmdQueueSameOperation() folds the channel byte
+    // into the key for exactly those commands; a repeat tap on the same
+    // channel still collapses, which is what the flood protection is for.
+    const uint8_t entry_sel = (entry.cfg_len > 0) ? entry.cfg[0] : 0U;
     for (size_t i = 0; i < cmd_queue_count; i++)
     {
         QueuedCommand& q = cmd_queue[(cmd_queue_head + i) % CMD_QUEUE_DEPTH];
-        if (q.cmd == cmd)
+        const uint8_t q_sel = (q.cfg_len > 0) ? q.cfg[0] : 0U;
+        if (cmdQueueSameOperation(q.cmd, q_sel, entry.cmd, entry_sel))
         {
             q.cfg_type = entry.cfg_type;
             q.cfg_len  = entry.cfg_len;
@@ -781,6 +810,23 @@ static bool    hop_needs_retune_  = false;
 // and the NVS load can never report hop-enabled.
 static bool    lora_hop_disabled  = true;
 
+// LoRa transmit mute — the user-facing "LoRa off" mode.  When true the OC
+// makes NO transmission of any kind: no 2 Hz telemetry, no name beacon, and
+// no hop schedule (updateHopFromState folds this in, so hopping is forced
+// off and the radio returns to lora_freq_mhz).  The RECEIVER stays up:
+// serviceLoRaUplink keeps listening and the slow-rendezvous cycle keeps
+// visiting the factory channel, both of which are RX-only, so a muted rocket
+// is still reachable from the base station and can be un-muted over the air.
+// That listening path is the entire reason this is a TX mute and not a radio
+// power-down.
+//
+// NVS-backed ("lora" namespace, key "txdis") so the setting survives reboot.
+// It is deliberately on the schema-versioned namespace that gets WIPED on a
+// version bump: the wipe direction is TX back ON, which is the safe way to
+// lose this setting.  Initialized false so the window between boot and the
+// NVS load can never suppress telemetry.
+static bool    lora_tx_disabled   = false;
+
 // #150 bench finding (2026-07-15): when the BS mirrors a cmd-17 ENABLE it
 // fires an 8 x 100 ms blind retry train and is deaf (half-duplex TX) for
 // most of that window.  Activating the hop immediately on first-retry
@@ -832,7 +878,7 @@ static bool lora_in_rx_mode = false;
 // only offered at the factory CR — see loraHopDwellForLink.
 static inline uint8_t currentHopDwell()
 {
-    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_DATA, lora_cr);
+    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_BUDGET, lora_cr);
 }
 
 // #150: effective skip mask for the hop schedule = the cmd-15 noise mask
@@ -856,7 +902,14 @@ static inline void updateHopFromState(RocketState s)
     // for every state.  #150 also refuses to hop when the current
     // modulation can't fit a dwell visit inside the FCC occupancy budget
     // (currentHopDwell() == 0, e.g. BW125 @ SF9+).
-    const bool want_active = !lora_hop_disabled && currentHopDwell() > 0 &&
+    // A muted radio must not hop: the BS follows the schedule by decoding our
+    // packets, so hopping without transmitting just walks the receiver away
+    // from the channel the BS is calling on — the one path left for lifting
+    // the mute.  Folding it in here (rather than gating the hop service) also
+    // gets the ON→OFF branch below for free, which retunes back to
+    // lora_freq_mhz and unwinds a rendezvous visit in progress.
+    const bool want_active = !lora_tx_disabled && !lora_hop_disabled &&
+                             currentHopDwell() > 0 &&
                              shouldHopInState(s);
     if (want_active && !hop_active_)
     {
@@ -1126,6 +1179,18 @@ static volatile bool imu_orient_dirty    = false;
 static uint8_t       imu_orient_pub_code = 0xFF;   // last published (0xFF = never)
 static uint8_t       imu_orient_pub_mode = 0xFF;
 
+// FC's full config report (#915), mirrored from CONFIG_REPORT_MSG.  This is
+// the ONLY source for the settings the app could not otherwise see — servo
+// trim 2-4, fin travel, fin layout, the PN guidance parameters, the roll
+// waypoints, sounds and the orientation SETTING.  Held in RAM only, never
+// NVS: a stale report served after an OC reboot would be a confident lie
+// about a vehicle we have not heard from, and the FC re-pushes every few
+// seconds anyway.  Until the first one lands the OC omits the frames it
+// feeds, and the app keeps saying it cannot verify those groups.
+static ConfigReportData fc_config_report = {};
+static bool             fc_config_report_valid = false;
+static volatile bool    fc_config_report_dirty = false;
+
 // FC's guidance-target echo (#435), mirrored from the v5 status query and
 // re-published as a compact "guid_target" JSON frame whenever it changes —
 // the app's cmd-28 send confirmation is gated on seeing this echo advance.
@@ -1170,6 +1235,132 @@ static constexpr uint8_t POWER_BAD_READ_LIMIT = 3;
 // consecutive rejects, latest_power_valid is cleared so the operator sees battery
 // N/A rather than a stale or garbage value.  Returns true when the sample was
 // accepted.
+// ---------------------------------------------------------------------------
+//  #850: camera / servo high-side-switch load currents (V9/V10 only)
+// ---------------------------------------------------------------------------
+// U26 (camera) and U28 (servo) are TPS22811 switches whose IMON pin sources
+// GIMON x ILOAD into a ground-referenced gain resistor, so
+//   ILOAD = V(pin) / (IMON_GAIN_A_PER_A * R).
+// V7/V8 and the mini set the GPIOs to -1 (no such part) and read NaN, which
+// packPowerData encodes as 0.
+//
+// Attenuation: both channels land at 0.286 V at their design currents (camera
+// 1.5 A into R85 = 2k, servo 3 A into R88 = 1k). ADC_ATTEN_DB_0 gives ~950 mV
+// full scale = 4.98 A / 9.97 A, about 3.3x design headroom, at the finest
+// resolution the part offers (1.22 mA / 2.43 mA per count). Do NOT widen the
+// attenuation for "headroom": the accuracy floor is the GIMON spread
+// (+/-13%), not the range, and a wider atten only coarsens every reading.
+//
+// Sampled on the existing 100 Hz INA230 tick, so this adds NO new wakeup and
+// does not disturb light sleep (#519) — only ~240 us of conversion inside a
+// tick that already blocks ~700 us polling the INA230's CVRF.
+static adc_oneshot_unit_handle_t rail_adc_unit = nullptr;
+static adc_cali_handle_t         rail_adc_cali = nullptr;
+static bool                      rail_adc_ready = false;
+
+static constexpr adc_atten_t kRailAtten = ADC_ATTEN_DB_0;
+
+// GPIO8 = ADC1_CH7, GPIO9 = ADC1_CH8 on the ESP32-S3. ADC1 is not the
+// WiFi-shared unit, so there is no contention with the BLE controller.
+static inline adc_channel_t railChannelForGpio(int gpio)
+{
+    return (gpio == 8) ? ADC_CHANNEL_7 : ADC_CHANNEL_8;
+}
+
+static void initRailCurrentAdc()
+{
+    if constexpr (config::CAM_IMON_GPIO < 0 && config::SERVO_IMON_GPIO < 0)
+    {
+        ESP_LOGI("OC", "[IMON] no high-side current monitors on this board — "
+                       "camera/servo current will report 0");
+        return;
+    }
+
+    adc_oneshot_unit_init_cfg_t unit_cfg = {};
+    unit_cfg.unit_id  = ADC_UNIT_1;
+    unit_cfg.ulp_mode = ADC_ULP_MODE_DISABLE;
+    if (adc_oneshot_new_unit(&unit_cfg, &rail_adc_unit) != ESP_OK)
+    {
+        ESP_LOGE("OC", "[IMON] ADC unit init failed — rail currents unavailable");
+        return;
+    }
+
+    adc_oneshot_chan_cfg_t chan_cfg = {};
+    chan_cfg.atten    = kRailAtten;
+    chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if constexpr (config::CAM_IMON_GPIO >= 0)
+    {
+        if (adc_oneshot_config_channel(rail_adc_unit,
+                                       railChannelForGpio(config::CAM_IMON_GPIO),
+                                       &chan_cfg) != ESP_OK)
+        {
+            ESP_LOGE("OC", "[IMON] camera channel config failed");
+            return;
+        }
+    }
+    if constexpr (config::SERVO_IMON_GPIO >= 0)
+    {
+        if (adc_oneshot_config_channel(rail_adc_unit,
+                                       railChannelForGpio(config::SERVO_IMON_GPIO),
+                                       &chan_cfg) != ESP_OK)
+        {
+            ESP_LOGE("OC", "[IMON] servo channel config failed");
+            return;
+        }
+    }
+
+    // Curve fitting is the S3's scheme and is created FOR THIS attenuation —
+    // the curve is per-atten, and mixing them mis-scales silently. Same trap
+    // the base station's battery ADC documents.
+    adc_cali_curve_fitting_config_t cali_cfg = {};
+    cali_cfg.unit_id  = ADC_UNIT_1;
+    cali_cfg.atten    = kRailAtten;
+    cali_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &rail_adc_cali) != ESP_OK)
+    {
+        ESP_LOGE("OC", "[IMON] ADC calibration unavailable (no eFuse cal data?) — "
+                       "reporting no rail current rather than an uncalibrated guess");
+        return;
+    }
+
+    rail_adc_ready = true;
+    ESP_LOGI("OC", "[IMON] ready: cam GPIO%d (%.0f ohm), servo GPIO%d (%.0f ohm), "
+                   "GIMON %.1f uA/A",
+             config::CAM_IMON_GPIO, (double)config::CAM_IMON_R_OHM,
+             config::SERVO_IMON_GPIO, (double)config::SERVO_IMON_R_OHM,
+             (double)(config::IMON_GAIN_A_PER_A * 1e6f));
+}
+
+// Amps on the given IMON channel, or NaN when unavailable. NaN rather than 0
+// deliberately: a board with no monitor and a board whose ADC failed are both
+// "unknown", and packPowerData collapses both to 0 on the wire — but the SI
+// path keeps them distinguishable from a genuine measured zero.
+static float readRailAmps(int gpio, float r_ohm)
+{
+    if (!rail_adc_ready || gpio < 0 || r_ohm <= 0.0f) return NAN;
+
+    // Four samples. The source impedance here is the 1-2k gain resistor —
+    // ~250x lower than the base station's 500k divider, so this does not need
+    // that path's 8x averaging; four is enough to halve the ADC's own noise
+    // without meaningfully extending the tick.
+    constexpr int kSamples = 4;
+    int mv_sum = 0, taken = 0;
+    const adc_channel_t ch = railChannelForGpio(gpio);
+    for (int i = 0; i < kSamples; ++i)
+    {
+        int raw = 0;
+        if (adc_oneshot_read(rail_adc_unit, ch, &raw) != ESP_OK) continue;
+        int mv = 0;
+        if (adc_cali_raw_to_voltage(rail_adc_cali, raw, &mv) != ESP_OK) continue;
+        mv_sum += mv;
+        ++taken;
+    }
+    if (taken == 0) return NAN;
+
+    const float volts = ((float)mv_sum / (float)taken) * 0.001f;
+    return volts / (config::IMON_GAIN_A_PER_A * r_ohm);
+}
+
 static bool commitPowerSample(float bus_v, float current_a)
 {
     static uint8_t consec_bad = 0;
@@ -1204,6 +1395,11 @@ static bool commitPowerSample(float bus_v, float current_a)
     // Negative = discharging; the INA shunt reads load current positive, so invert.
     psi.current = -current_a * 1000.0f;
     psi.soc     = soc_pct;
+    // #850: the two high-side-switch load currents ride the same sample so
+    // they share the INA230's timestamp and land in the same logged frame.
+    // NaN on boards without the monitors; packPowerData encodes that as 0.
+    psi.cam_current   = readRailAmps(config::CAM_IMON_GPIO, config::CAM_IMON_R_OHM);
+    psi.servo_current = readRailAmps(config::SERVO_IMON_GPIO, config::SERVO_IMON_R_OHM);
     sensor_converter.packPowerData(psi, latest_power_raw);
     latest_power_valid = true;
     return true;
@@ -1990,6 +2186,143 @@ static inline void endPhoneIO()
 }
 
 // ==========================================================================
+// SECTION: pre-restart storage quiesce (#834 item 2)
+// ==========================================================================
+// Every deliberate esp_restart() on this MCU must leave the storage stack in a
+// state where the reset is indistinguishable from a clean power cycle.
+//
+// WHAT IS ACTUALLY AT RISK, AND WHAT IS NOT. U11 (the SPI NAND) sits on the
+// ALWAYS-ON +3V3 rail — U18's EN is tied to its own AVIN — so esp_restart()
+// removes no power from it. A PROGRAM EXECUTE or BLOCK ERASE the chip has
+// already latched is self-timed and lands correctly across the reset, and
+// FlightIndex::save() writes the OLDER-or-invalid metadata copy, so a reset
+// between its erase and its program still leaves a valid snapshot. The reset
+// therefore CANNOT half-program a page — which is what this was first assumed
+// to be about.
+//
+// What it CAN do, and did, on EVERY power-off: throw away up to 512 KB of
+// PSRAM log ring plus the staged partial page, the phone-synced filename and
+// the exact byte count. That ring is volatile in-package PSRAM on V9/V10
+// (there is no MRAM), so nothing else is holding that data. Draining it is
+// the whole point of this function. The bus park at the end is the small
+// remaining piece: it stops a command being cut mid-clock, which is benign
+// here but is what makes the GPIO teardown that follows provably safe rather
+// than probably safe.
+//
+// Why it lives in main.cpp: closing a flight is a three-party handshake — the
+// logger drains the ring and closes the session, g_finalize_pending stages the
+// index commit, TR_FlightLog writes it — and only main.cpp sees all three.
+//
+// NEVER REFUSES, unlike the mini's comms_prepare_power_off(). On the mini the
+// rail drop kills the NAND, so refusing genuinely protects the data. Here the
+// flash is powered regardless, PWR_PIN is already LOW by the time we run, the
+// reset IS the power-off, and cmd 8 sends no acknowledgement frame on OFF — so
+// a refusal would be an invisible half-off state the operator cannot diagnose.
+static constexpr uint32_t kQuiesceCloseTimeoutMs = 10000;
+static constexpr uint32_t kSpiParkTimeoutMs      = 250;
+static bool s_restart_quiesced = false;
+
+static void quiesceStorageForRestart(const char* why)
+{
+    // One-shot. Also load-bearing: phoneIoPmAcquire() inside beginPhoneIO() is
+    // a COUNTING esp_pm lock with no matching release on this path, so
+    // re-entering would leak lock counts.
+    if (s_restart_quiesced) return;
+    s_restart_quiesced = true;
+
+    const uint32_t t0 = millis();
+
+    // 1. Shut the producers. i2s_ingest_paused gates the DMA recv callback and
+    //    flash_op_active gates serviceI2CIngress, so no new flight can be
+    //    staged into the very iteration we are trying to end — a straggler
+    //    prepareFlight would set flight_active_ again and start an 80-block
+    //    erase, and the predicate below would never converge. Deliberately
+    //    never un-paused: every path out of here resets.
+    beginPhoneIO();
+
+    // 2. Close the flight. endLogging() latches end_flight_requested, which
+    //    makes enqueueFrame reject, so the ring cannot grow again and the
+    //    drain converges even with frames still in the rx ring.
+    if (logger.isLoggingActive())
+    {
+        logger.endLogging();
+        flightlogEndFlight();
+    }
+    // NOTE deliberately NO else-branch for "flight active but logging never
+    // activated" (a flight pre-created at PRELAUNCH that never received data).
+    // Finalizing it here would stamp it with logger.lastClosedSessionBytes(),
+    // which is sticky from the PREVIOUS flight — producing a phantom
+    // multi-megabyte entry over erased pages whose blocks then read as
+    // in-index, so brownout recovery can never reclaim them. With
+    // auto_evict_oldest on, each phantom also consumes headroom and is always
+    // the newest entry, so arming the next flight evicts a REAL one instead.
+    // Boot recovery already releases an orphan ALLOCATED run that has no valid
+    // pages, which is the correct and lossless handling.
+
+    // 3. Wait for the flush task to drain the ring, close the session and
+    //    service the deferred finalize. This needs at least TWO flush
+    //    iterations by construction: the hook runs before the end-flight block
+    //    within one iteration, so the finalize can only be serviced on the
+    //    pass after the one that closed.
+    const uint32_t deadline = millis() + kQuiesceCloseTimeoutMs;
+    bool closed = false;
+    for (;;)
+    {
+        bool finalize_pending;
+        portENTER_CRITICAL(&g_finalize_mux);
+        finalize_pending = g_finalize_pending;
+        portEXIT_CRITICAL(&g_finalize_mux);
+
+        // What this wait can actually influence: the ring drain and the
+        // session close, plus the deferred index commit those stage.
+        //
+        // isFlightActive() is deliberately NOT a term. It stays true for a
+        // flight pre-created at PRELAUNCH that never received data (nothing
+        // closes it, and finalizing it here would fabricate a phantom entry —
+        // see step 2), and it also stays true forever if a deferred
+        // finalizeFlight() failed its metadata write. Either way it is a state
+        // this function cannot clear, so including it would just spin out the
+        // full timeout on every power-off. Boot recovery reclaims both.
+        //
+        // isPrepareFlightPending() IS a term: an arm staged but not yet
+        // serviced would otherwise let the predicate pass, and the flush task
+        // would then start an 80-block erase burst underneath the park.
+        if (!logger.isLoggingActive() && !finalize_pending &&
+            !flightlog.isPrepareFlightPending())
+        {
+            closed = true;
+            break;
+        }
+        if ((int32_t)(deadline - millis()) <= 0)          // wrap-safe
+        {
+            ESP_LOGE("PWR", "%s: log close did not complete in %u ms "
+                            "(logging=%d finalize=%d prepare_pending=%d) — "
+                            "continuing anyway; an unclosed tail is recoverable",
+                     why, (unsigned)kQuiesceCloseTimeoutMs,
+                     (int)logger.isLoggingActive(), (int)finalize_pending,
+                     (int)flightlog.isPrepareFlightPending());
+            break;
+        }
+        delay(50);
+    }
+
+    // 4. Park the SPI bus and never give it back. MUST be the LAST logger or
+    //    flightlog call on this path. Uncontended on the clean path (step 3
+    //    has converged, so the flush task is idle at its vTaskDelay); the
+    //    timeout only matters after a step-3 timeout, and there the bus is not
+    //    coming back anyway.
+    const bool parked = logger.parkSpiBusForReset(kSpiParkTimeoutMs);
+    if (!parked)
+    {
+        ESP_LOGE("PWR", "%s: SPI bus still held after %u ms — resetting on top "
+                        "of it (#834 item 2)", why, (unsigned)kSpiParkTimeoutMs);
+    }
+
+    ESP_LOGI("PWR", "%s: storage quiesced in %lu ms (closed=%d parked=%d)",
+             why, (unsigned long)(millis() - t0), (int)closed, (int)parked);
+}
+
+// ==========================================================================
 // SECTION: I2C status-query response to the FC
 // ==========================================================================
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
@@ -2198,6 +2531,15 @@ static volatile bool oc_ota_tx_mode = false;                // flipped to master
 static volatile bool oc_ota_await_flip = false;             // READY seen; waiting for the FC to go quiet
 static volatile bool oc_ota_relay_ready_pending = false;    // relay "ready" to app once flipped to TX
 static volatile bool oc_ota_revert_to_rx_requested = false; // set on FINISH/ABORT staged
+// #834 item 6: oc_ota_tx_mode means "deliberately in master TX". It must NOT
+// double as "the I2S channel is fine" — the original bug was exactly that
+// conflation, because clearing it to stop the feeder also disabled
+// ocRevertToRx(), the only route back to slave RX. This is the honest state.
+static volatile bool oc_i2s_rx_broken     = false;  // no working slave RX
+static uint32_t      oc_i2s_rx_last_try_ms = 0;
+// #834 item 7: last relayed chunk, for the stall watchdog. 0 = not yet armed
+// (the app has not been told "ready", so silence is expected).
+static volatile uint32_t oc_ota_last_chunk_ms = 0;
 static uint32_t oc_ota_frames_pumped = 0;                   // diag: frames enqueued by relay cb
 static uint32_t oc_ota_feed_sent     = 0;                   // diag: frames the feeder wrote to I2S
 static uint32_t oc_ota_feed_idle     = 0;                   // diag: idle-fill writes (queue empty)
@@ -2232,6 +2574,58 @@ static constexpr uint32_t OTA_FLIP_SILENCE_MS = 500;
 static constexpr uint32_t OTA_RX_WARMUP_MS = 150;
 
 static bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user_ctx);  // defined below
+static void ocOtaRelayClearPendingFlip();                                    // defined below
+
+// Boot and every recovery path must build the RX channel identically — see
+// the note in ocBeginSlaveRxLocked().
+static constexpr uint32_t kI2sRxDmaDescNum  = 4;
+static constexpr uint32_t kI2sRxDmaFrameNum = 128;   // 512 B ≈ 2.9 ms @ 44100
+
+// #834 items 6/7: (re)establish slave RX. Caller holds oc_i2s_mutex. Records
+// oc_i2s_rx_broken so loop_oc can keep retrying — losing the RX channel means
+// the OC receives no FC telemetry at all, logs nothing and freezes both
+// downlinks, so it can never be left as a terminal state.
+static esp_err_t ocBeginSlaveRxLocked(const char* why)
+{
+    // dma_desc_num/dma_frame_num MUST match the boot init: 128 frames (512 B)
+    // spans ~2.9 ms at the 44100 link rate, which is the callback cadence the
+    // parser was tuned against (#104). The old revert path passed 64 — a
+    // leftover from the retired 22050 rate — which doubled the RX ISR cadence
+    // for the rest of the power cycle. Recovery must restore the link the
+    // parser expects, not a different one.
+    esp_err_t e = i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
+                                          config::I2S_WS_PIN,
+                                          config::I2S_DIN_PIN,
+                                          config::I2S_FSYNC_PIN,
+                                          config::I2S_SAMPLE_RATE,
+                                          kI2sRxDmaDescNum, kI2sRxDmaFrameNum);
+    if (e == ESP_OK)
+    {
+        // The callback IS the ingest path — an enabled channel with no callback
+        // registered delivers nothing to processFrame, which is the same dead
+        // telemetry we are recovering from. Treat its failure as RX broken, or
+        // the retry loop below would never run.
+        e = i2s_stream.registerRecvCallback(i2sRecvCallback, nullptr);
+        if (e != ESP_OK)
+            ESP_LOGE("OC", "OTA relay: registerRecvCallback FAILED (%s): %s",
+                     why, esp_err_to_name(e));
+    }
+    if (e == ESP_OK)
+    {
+        if (oc_i2s_rx_broken)
+            ESP_LOGW("OC", "OTA relay: slave RX restored (%s)", why);
+        oc_i2s_rx_broken = false;
+    }
+    else
+    {
+        oc_i2s_rx_broken = true;
+        ESP_LOGE("OC", "OTA relay: slave RX begin FAILED (%s): %s — "
+                       "no FC telemetry until this succeeds; retrying",
+                 why, esp_err_to_name(e));
+    }
+    oc_i2s_rx_last_try_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    return e;
+}
 
 // Flip slave-RX -> master-TX for the image pump. Runs in loop_oc once the FC's
 // I2S TX has gone quiet (it has flipped to slave RX), so there's no contention.
@@ -2247,8 +2641,46 @@ static void ocFlipToTx()
                                                  OTA_I2S_SAMPLE_RATE_HZ,
                                                  4, 64);
     oc_ota_tx_mode = (e == ESP_OK);
+    if (e != ESP_OK)
+    {
+        // #834 item 6: end() already deleted the channel, so right now the OC
+        // has NO I2S at all. ocRevertToRx() cannot help — it returns early on
+        // !oc_ota_tx_mode — so restore slave RX here, before releasing the
+        // mutex. Otherwise the OC never hears the FC again this power cycle.
+        //
+        // end() first: beginMasterTx's later error exits call i2s_del_channel()
+        // directly rather than end(), and del_channel frees the driver without
+        // detaching the GPIO matrix or clearing output-enable — so BCLK/WS can
+        // still be driven from the half-built master config. end() is null-safe
+        // and releases those pads (its GPIO block is outside the handle guard).
+        i2s_stream.end();
+        ocBeginSlaveRxLocked("flip-to-TX failed");
+    }
+    else
+    {
+        // #834 item 7: arm the stall watchdog at the FLIP, not when the app is
+        // told "ready". The "ready" release happens inside loop_oc's pwr_pin_on
+        // gate while the watchdog is serviced outside it, so arming there left
+        // a rail-off during the 150 ms warmup flipped with the watchdog asleep.
+        oc_ota_last_chunk_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    }
     xSemaphoreGive(oc_i2s_mutex);
     ESP_LOGW("OC", "OTA relay: I2S -> master TX for image pump (%s)", esp_err_to_name(e));
+    if (e != ESP_OK)
+    {
+        // Restoring OUR slave RX is only half the link. The FC flipped to slave
+        // RX when the OTA began — that silence is what we waited for before
+        // flipping — so with our flip failed BOTH ends are slave and nobody
+        // drives BCLK: telemetry stays dead despite a healthy channel. Tell the
+        // FC to abort so it reverts to master TX. I2C is independent of I2S, so
+        // this reaches it even with the I2S link down.
+        setPendingCommand(OTA_ABORT_CMD);
+        // "aborted" is in the apps' vocabulary; "error" is not, and an
+        // unrecognised token leaves the app waiting out its own timeout.
+        // terminal=true clears ota_relay_active_/ota_session_active_.
+        ble_app.relayFcOtaStatus("aborted", "i2s_flip_failed", 0, true);
+        ocOtaRelayClearPendingFlip();
+    }
 }
 
 // Revert master-TX -> slave-RX (normal telemetry + OTA status path). loop_oc.
@@ -2263,15 +2695,13 @@ static void ocRevertToRx()
     vTaskDelay(pdMS_TO_TICKS(100));
     xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
     i2s_stream.end();
-    const esp_err_t e = i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
-                                                config::I2S_WS_PIN,
-                                                config::I2S_DIN_PIN,
-                                                config::I2S_FSYNC_PIN,
-                                                config::I2S_SAMPLE_RATE,
-                                                4, 64);
-    if (e == ESP_OK)
-        i2s_stream.registerRecvCallback(i2sRecvCallback, nullptr);
-    oc_ota_tx_mode = false;
+    const esp_err_t e = ocBeginSlaveRxLocked("revert-to-RX");
+    // #834 item 6: clear tx_mode either way — the feeder must stop pumping, and
+    // the channel it was pumping into is gone regardless. A failure is carried
+    // by oc_i2s_rx_broken instead, which loop_oc retries; the old code cleared
+    // tx_mode and kept no record, so a failed revert was silent and permanent.
+    oc_ota_tx_mode       = false;
+    oc_ota_last_chunk_ms = 0;
     xSemaphoreGive(oc_i2s_mutex);
     ESP_LOGW("OC", "OTA relay: I2S -> slave RX (%s)", esp_err_to_name(e));
 }
@@ -2287,6 +2717,8 @@ static void ocOtaRelayData(void* /*ctx*/, uint32_t offset, const uint8_t* data, 
         ESP_LOGW("OC", "OTA relay: chunk @%u dropped — I2S not in TX mode", (unsigned)offset);
         return;
     }
+    // #834 item 7: the app is alive and pumping — feed the stall watchdog.
+    oc_ota_last_chunk_ms = (uint32_t)(esp_timer_get_time() / 1000);
     static constexpr size_t kMaxImg = MAX_PAYLOAD - 4;   // 4-byte offset header
     size_t sent = 0;
     while (sent < len)
@@ -2411,9 +2843,25 @@ static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* s
     ESP_LOGI("OC", "OTA relay: OTA_BEGIN stashed for loop-task staging (size=%u)",
              (unsigned)total_size);
 }
+// #834 item 7 (review): clear the PRE-flip arming state. oc_ota_await_flip is
+// armed when the FC's OTA_RELAY_READY arrives and was previously cleared only
+// by a new relay or by the flip itself — so a teardown during the silence wait
+// left it set and loop_oc flipped to master TX afterwards, with no session.
+// That became actively harmful once teardown started staging OTA_ABORT_CMD:
+// the FC's abort handler calls fcRevertToTx() with no quiet-wait (unlike its
+// FINISH path, which spins until the OC goes silent precisely to avoid this),
+// so both ends would drive BCLK/WS until the stall watchdog fired ~10 s later.
+static void ocOtaRelayClearPendingFlip()
+{
+    oc_ota_await_flip          = false;
+    oc_ota_relay_ready_pending = false;
+    oc_ota_warmup_since_ms     = 0;
+}
+
 static void ocOtaRelayFinish(void* /*ctx*/)
 {
     setPendingCommand(OTA_FINISH_CMD);
+    ocOtaRelayClearPendingFlip();
     // Revert to slave-RX (in loop_oc) so we can hear the FC's terminal status,
     // which it sends over the normal-direction I2S after IT reverts to TX.
     oc_ota_revert_to_rx_requested = true;
@@ -2422,6 +2870,7 @@ static void ocOtaRelayFinish(void* /*ctx*/)
 static void ocOtaRelayAbort(void* /*ctx*/)
 {
     setPendingCommand(OTA_ABORT_CMD);
+    ocOtaRelayClearPendingFlip();
     oc_ota_revert_to_rx_requested = true;
     ESP_LOGI("OC", "OTA relay: staged OTA_ABORT for FC");
 }
@@ -2508,6 +2957,7 @@ static bool isKnownMessageType(uint8_t type)
         case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
         case I2C_TX_RESYNC:          // FC→OC over I2C — slave TX desync recovery (#402)
         case FC_BOOT_STATUS_MSG:     // FC→OC over I2C during setup_fc — boot progress
+        case CONFIG_REPORT_MSG:      // FC→OC over I2S — full config report (#915)
             return true;
         default:
             return false;
@@ -2567,6 +3017,48 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         {
             memcpy(fc_fw_version, incoming, sizeof(fc_fw_version));
             fc_identity_dirty = true;
+        }
+        return;
+    }
+
+    // FC full config report (#915).  Handled here, BEFORE the log enqueue
+    // below, so it stays out of the flight log: it is a pre-flight readback,
+    // not flight data, and FlightSettingsData already records what actually
+    // flew.  Keeping it out also spares the Data_Analysis parsers a message
+    // type they hardcode no length for.  Same early-return shape as
+    // FC_IDENTITY above.
+    if (type == CONFIG_REPORT_MSG)
+    {
+        if (payload_len >= sizeof(ConfigReportData))
+        {
+            ConfigReportData incoming;
+            memcpy(&incoming, payload, sizeof(incoming));
+            if (incoming.version != ConfigReportData::VERSION)
+            {
+                // An FC newer or older than this OC.  Refuse rather than
+                // reinterpret: every field after a layout change would be
+                // silently misparsed, and the app would show it as verified.
+                static uint8_t warned_version = 0xFF;
+                if (warned_version != incoming.version)
+                {
+                    warned_version = incoming.version;
+                    ESP_LOGW("CFG", "Config report version %u unsupported "
+                                    "(expect %u) — ignoring",
+                             (unsigned)incoming.version,
+                             (unsigned)ConfigReportData::VERSION);
+                }
+                return;
+            }
+            // time_us changes on every push, so compare everything EXCEPT it —
+            // otherwise the 5 s repeat would re-publish to the app forever.
+            const bool changed =
+                !fc_config_report_valid ||
+                memcmp((const uint8_t*)&incoming + sizeof(incoming.time_us),
+                       (const uint8_t*)&fc_config_report + sizeof(incoming.time_us),
+                       sizeof(incoming) - sizeof(incoming.time_us)) != 0;
+            fc_config_report = incoming;
+            fc_config_report_valid = true;
+            if (changed) fc_config_report_dirty = true;
         }
         return;
     }
@@ -2755,7 +3247,20 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 // auto), re-stage the config.  Idempotent — once applied
                 // the query reflects MANUAL+code and this goes quiet.
                 // Never during flight (the FC refuses mid-flight anyway).
-                if (cfg_imu_orient != IMU_ORIENT_AUTO &&
+                //
+                // #915: skipped entirely once the FC carries its own NVS
+                // record.  This heal existed because the FC was the one
+                // config group that could not remember its own setting; a
+                // firmware that does remember must not have that memory
+                // overwritten from here every time it comes up.  The gate is
+                // the FC's own provenance bit, not a version number, so an
+                // FC that has genuinely never been told still gets healed.
+                const bool fc_remembers_orient =
+                    fc_config_report_valid &&
+                    (fc_config_report.flags &
+                     (1U << ConfigReportData::F_ORIENT_FROM_NVS)) != 0U;
+                if (!fc_remembers_orient &&
+                    cfg_imu_orient != IMU_ORIENT_AUTO &&
                     latest_rocket_state != INFLIGHT &&
                     (last_query_cfg.b2r_mode != ORIENT_MODE_MANUAL ||
                      last_query_cfg.b2r_code != cfg_imu_orient))
@@ -3422,8 +3927,14 @@ static void serviceI2CIngress()
 // ==========================================================================
 // SECTION: LoRa downlink: telemetry payload and beacon
 // ==========================================================================
-static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t seq)
+// #850: builds ONE of the two downlink frames. The caller picks the type —
+// the TX path from the slot schedule, the debug printer always FAST so its
+// dump shows the full picture. out_len reports what actually went in, because
+// the two frames are different sizes and the buffer is sized for the larger.
+static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t seq,
+                             uint8_t frame_type, size_t& out_len)
 {
+    out_len = 0;
     if (out_payload == nullptr)
     {
         return false;
@@ -3501,6 +4012,10 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
     lora.rocket_state = (uint8_t)latest_rocket_state;
     lora.camera_recording = camera_recording_requested;
     lora.logging_active = logger.isLoggingActive();
+    // #835 item 9: relay sim mode over LoRa.  The direct-BLE path already
+    // reports it ("fs" bit 8); without this the base station affirmatively
+    // reported sim_active=false for a synthetic flight.
+    lora.sim_active     = nsFlagSet(latest_non_sensor.flags, NSF_SIM_ACTIVE);
 
     if (latest_non_sensor_valid)
     {
@@ -3615,7 +4130,25 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
     lora.rssi = 0.0f;
     lora.snr = 0.0f;
 
-    sensor_converter.packLoRaData(lora, out_payload);
+    // #850: rail currents ride the SLOW frame. Sampled by the OC on its 100 Hz
+    // INA230 tick; 0 on boards with no TPS22811 monitor fitted.
+    {
+        POWERDataSI p{};
+        sensor_converter.convertPowerData(latest_power_raw, p);
+        lora.cam_current   = p.cam_current;
+        lora.servo_current = p.servo_current;
+    }
+
+    if (frame_type == LORA_FRAME_SLOW)
+    {
+        sensor_converter.packLoRaSlowBytes(lora, out_payload);
+        out_len = SIZE_OF_LORA_SLOW;
+    }
+    else
+    {
+        sensor_converter.packLoRaFastBytes(lora, out_payload);
+        out_len = SIZE_OF_LORA_FAST;
+    }
     return true;
 }
 
@@ -3641,6 +4174,17 @@ static void serviceLoRa()
         hop_needs_retune_ = false;
     }
 
+    // "LoRa off": every transmit path stops here.  Placed AFTER service() and
+    // the pending-retune block on purpose — service() is what completes an
+    // in-flight TX and drops the radio back into RX, and the retune is how the
+    // ON→OFF hop transition gets the radio back onto lora_freq_mhz.  Returning
+    // above either of those would strand the radio on a hop channel, muted,
+    // with no way for the base station to call it back.
+    if (lora_tx_disabled)
+    {
+        return;
+    }
+
     const uint32_t now_ms = millis();
     const uint32_t period_ms = (config::LORA_TX_RATE_HZ > 0)
         ? (1000U / config::LORA_TX_RATE_HZ)
@@ -3654,19 +4198,28 @@ static void serviceLoRa()
         return;
     }
 
-    uint8_t payload[SIZE_OF_LORA_DATA] = {0};
-    if (!buildLoRaPayload(payload, lora_tx_seq))
+    // #850: five FAST frames then one SLOW, so the slow set rides every 6th
+    // transmission (3.0 s at LORA_TX_RATE_HZ = 2). Keyed off the SAME seq that
+    // goes on the wire, so the base station can predict the type from the seq
+    // alone if it ever needs to.
+    uint8_t payload[SIZE_OF_LORA_BUDGET] = {0};
+    size_t  payload_len = 0;
+    const uint8_t frame_type = loraFrameTypeForSlot(lora_tx_seq);
+    if (!buildLoRaPayload(payload, lora_tx_seq, frame_type, payload_len))
     {
         return;
     }
     last_lora_tx_ms = now_ms;
     lora_in_rx_mode = false;  // Exiting RX for TX
-    if (lora_comms.send(payload, sizeof(payload)))
+    if (lora_comms.send(payload, payload_len))
     {
         lora_tx_ok++;
 
-        // Persist the exact 65 B that just went on the air as a LORA_MSG
-        // (0xF1) record.  The type has always been in the wire format and
+        // Persist the exact bytes that just went on the air as a LORA_MSG
+        // (0xF1) record.  #850: that is now 55 B (FAST) or 22 B (SLOW), so
+        // this logs payload_len, NOT sizeof(payload) — the buffer is sized for
+        // the larger frame and a slow frame would otherwise be recorded with
+        // 33 bytes of trailing zeros that every parser would read as data.  The type has always been in the wire format and
         // every decoder already knows it, but nothing had emitted it — so
         // the rocket log carried no evidence the radio had even keyed up,
         // and a lost base-station log meant the whole downlink measurement
@@ -3681,22 +4234,22 @@ static void serviceLoRa()
         // radiated, which is what makes the seq diff meaningful.
         //
         // Deliberately no timestamp field: the payload stays byte-identical
-        // to LoRaData (65 B, what MSG_EXPECTED_LEN and every parser already
-        // expect), and the record's position between IMU frames dates it to
+        // to what was radiated (MSG_EXPECTED_LEN accepts both frame sizes),
+        // and the record's position between IMU frames dates it to
         // ~256 us — better than an OC timestamp could, since esp_timer here
         // is a different clock domain from the FC time_us that every other
         // log record carries.
         //
         // enqueueFrame() drops the frame when no session is open, so this
-        // costs nothing off-session; on-session it is 65 B + 8 B of framing
-        // at LORA_TX_RATE_HZ (146 B/s at 2 Hz).  Name beacons are NOT logged
-        // — they are a different, variable-length payload and would break
-        // the fixed 65 B expectation for this type.
+        // costs nothing off-session; on-session it averages (5x55 + 22)/6 = 50 B
+        // plus 8 B of framing at LORA_TX_RATE_HZ (~116 B/s at 2 Hz, down from
+        // 146).  Name beacons are still NOT logged — they are a third,
+        // variable-length payload and carry no LoRaFrameHeader to dispatch on.
         {
             uint8_t lora_frame[MAX_FRAME];
             size_t  lora_frame_len = 0;
             if (TR_I2C_Interface::packMessage(LORA_MSG,
-                                              payload, sizeof(payload),
+                                              payload, payload_len,
                                               lora_frame, sizeof(lora_frame),
                                               lora_frame_len))
             {
@@ -3751,6 +4304,7 @@ static uint32_t last_beacon_ms = 0;
 static void sendLoRaBeacon()
 {
     if (!config::USE_LORA_RADIO) return;
+    if (lora_tx_disabled) return;   // "LoRa off" — the beacon is a transmit too
 
     // Beacon in any state EXCEPT INFLIGHT.  We used to gate on
     // READY/PRELAUNCH only, but that meant a rocket whose FlightComputer
@@ -3801,7 +4355,14 @@ static void sendLoRaBeacon()
 // retries on mbuf exhaustion) rarely has to. Enqueue and drain both run in
 // loop_oc, so the ring needs no locking. sendConfigJSON no-ops when
 // disconnected, so any frames still queued at disconnect drain out harmlessly.
-static constexpr uint8_t  CFG_RB_CAP     = 8;
+// MUST exceed the connect burst, which sendCurrentConfig() enqueues in ONE
+// synchronous pass before any drain runs: config, config_pyro,
+// config_identity, fc_identity, imu_orient, guid_target, and the three #915
+// report frames = 9.  At the old cap of 8 the ninth enqueue evicted the
+// oldest — the main "config" frame — and the app silently never received it.
+// Raise this WITH the burst, or the drop is invisible except for one warning
+// line on a console nobody is watching on the pad.
+static constexpr uint8_t  CFG_RB_CAP     = 12;
 static constexpr uint32_t CFG_RB_PACE_MS = 20;   // >= negotiated max conn interval
 static String   cfg_rb_queue[CFG_RB_CAP];
 static uint8_t  cfg_rb_head  = 0;
@@ -3868,13 +4429,22 @@ static void sendImuOrientation()
     if (q.format_version < 3) return;  // pre-orientation FC
     // "set" is the user's SETTING (0xFF auto / manual code), distinct from
     // code/mode/name which describe what the FC is actively applying.
+    // #915: "set" is the VEHICLE's setting when the FC has one of its own.
+    // Reporting the OC's cache unconditionally was a lie waiting to happen —
+    // reflash the OC alone and it would tell the app AUTO while the FC flew a
+    // manual clocking out of its own NVS.
+    const bool fc_remembers =
+        fc_config_report_valid &&
+        (fc_config_report.flags & (1U << ConfigReportData::F_ORIENT_FROM_NVS)) != 0U;
+    const uint8_t reported_set =
+        fc_remembers ? fc_config_report.imu_orient_setting : cfg_imu_orient;
     char buf[112];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"imu_orient\",\"code\":%u,\"mode\":%u,\"name\":\"%s\",\"set\":%u}",
              (unsigned)q.b2r_code,
              (unsigned)q.b2r_mode,
              orientCodeName(q.b2r_code),
-             (unsigned)cfg_imu_orient);
+             (unsigned)reported_set);
     enqueueConfigReadback(String(buf));   // #398 item 3
     imu_orient_pub_code = q.b2r_code;
     imu_orient_pub_mode = q.b2r_mode;
@@ -3919,6 +4489,82 @@ static void sendGuidTarget()
              (unsigned)q.tgt_last_rc);
 }
 
+// #915: the settings the "config" frame never carried, published from the
+// FC's own report so the app can SHOW and VERIFY them instead of displaying
+// profile values it has no way to check.  Split across three frames for the
+// same reason everything else here is kept small — sendConfigJSON silently
+// drops anything over the BLE notify MTU, so a single fat frame would vanish
+// without a trace.
+//
+// Emitted only once a report has landed.  Absence is the app's signal that
+// this rocket cannot report them, which is exactly what pre-#915 firmware
+// looks like — so the "can't verify" line stays correct on an old rocket
+// instead of the app silently believing stale defaults.
+static void sendConfigExtras()
+{
+    if (!fc_config_report_valid) return;
+    const ConfigReportData &r = fc_config_report;
+
+    // 1) Servo trim 2-4, fin travel, fin layout, sounds.
+    String j = "{\"type\":\"config_servo\"";
+    j += ",\"sb2\":"; j += itos(r.servo.bias_us[1]);
+    j += ",\"sb3\":"; j += itos(r.servo.bias_us[2]);
+    j += ",\"sb4\":"; j += itos(r.servo.bias_us[3]);
+    j += ",\"fmn\":"; j += fmtf(r.servo.fin_min_deg, 2);
+    j += ",\"fmx\":"; j += fmtf(r.servo.fin_max_deg, 2);
+    j += ",\"faz\":[";
+    for (int i = 0; i < 4; ++i) {
+        if (i) j += ",";
+        j += fmtf(r.fin.azimuth_deg[i], 1);
+    }
+    j += "]";
+    j += ",\"frv\":";  j += itos(r.fin.reverse_mask);
+    j += ",\"frrv\":"; j += itos(r.fin.roll_reverse_mask);
+    j += ",\"snd\":";
+    j += (r.flags & (1U << ConfigReportData::F_SOUNDS)) ? "true" : "false";
+    j += "}";
+    enqueueConfigReadback(j);
+    ESP_LOGI("CFG", "Queued config_servo readback (%u bytes)", (unsigned)j.length());
+
+    // 2) The PN / station-keep parameters behind the guidance on/off flag.
+    String g = "{\"type\":\"config_guid\"";
+    g += ",\"gng\":"; g += fmtf(r.guidance.nav_gain, 2);
+    g += ",\"gma\":"; g += fmtf(r.guidance.max_accel_mps2, 1);
+    g += ",\"gaf\":"; g += fmtf(r.guidance.accel_to_fin_deg, 2);
+    g += ",\"gmf\":"; g += fmtf(r.guidance.max_fin_deg, 1);
+    g += ",\"gms\":"; g += fmtf(r.guidance.min_speed_mps, 1);
+    g += ",\"gcd\":"; g += itos(r.guidance.coast_delay_ms);
+    g += ",\"gtm\":"; g += itos(r.guidance.target_mode);
+    g += ",\"gte\":"; g += fmtf(r.guidance.target_e_m, 1);
+    g += ",\"gtn\":"; g += fmtf(r.guidance.target_n_m, 1);
+    g += ",\"gta\":"; g += fmtf(r.guidance.target_alt_m, 1);
+    g += ",\"gkp\":"; g += fmtf(r.guidance.kp_pos_per_s2, 2);
+    g += ",\"gkd\":"; g += fmtf(r.guidance.kd_vel_per_s, 2);
+    g += ",\"glw\":"; g += itos(r.guidance.guidance_law);
+    g += "}";
+    enqueueConfigReadback(g);
+    ESP_LOGI("CFG", "Queued config_guid readback (%u bytes)", (unsigned)g.length());
+
+    // 3) The roll profile.  num_waypoints == 0 is a real answer ("rate-only"),
+    // not an absent one — the app must be able to tell that from "this rocket
+    // doesn't report waypoints", which is why the frame is sent either way.
+    String w = "{\"type\":\"config_roll\",\"n\":";
+    uint8_t n = r.roll.num_waypoints;
+    if (n > MAX_ROLL_WAYPOINTS) n = MAX_ROLL_WAYPOINTS;   // corrupt/forward record
+    w += itos(n);
+    w += ",\"wp\":[";
+    for (uint8_t i = 0; i < n; ++i) {
+        if (i) w += ",";
+        w += "["; w += fmtf(r.roll.waypoints[i].time_s, 2);
+        w += ",";  w += fmtf(r.roll.waypoints[i].angle_deg, 1);
+        w += "]";
+    }
+    w += "]}";
+    enqueueConfigReadback(w);
+    ESP_LOGI("CFG", "Queued config_roll readback (%u bytes, %u wp)",
+             (unsigned)w.length(), (unsigned)n);
+}
+
 static void sendCurrentConfig()
 {
     // Split config into two smaller JSON messages to stay within MTU limits.
@@ -3952,6 +4598,9 @@ static void sendCurrentConfig()
     j += ",\"lcr\":"; j += itos(lora_cr);
     j += ",\"lpw\":"; j += itos(lora_tx_power);
     j += ",\"lhd\":"; j += lora_hop_disabled ? "true" : "false";  // #106
+    // "LoRa off" mute.  Both apps decode it lenient-optional, so absence
+    // means "firmware predates the feature", not "transmitting".
+    j += ",\"ltxd\":"; j += lora_tx_disabled ? "true" : "false";
     // #150: airtime-derived hop dwell for the current preset; 0 tells the
     // app hopping is unavailable at this modulation (option greys out).
     j += ",\"lhdw\":"; j += itos(currentHopDwell());
@@ -4000,6 +4649,7 @@ static void sendCurrentConfig()
     sendFcIdentity();
     sendImuOrientation();
     sendGuidTarget();
+    sendConfigExtras();   // #915
 }
 
 // Cache servo config to NVS (mirrors what FlightComputer stores)
@@ -4066,6 +4716,54 @@ static void cacheRollControlConfig(const uint8_t* payload, size_t len)
     ESP_LOGI("CFG", "Roll control cached: angle_ctrl=%s delay=%u ms rcap=%.1f kpang=%.2f iwind=%.1f",
         cfg_use_angle_ctrl ? "ON" : "OFF", (unsigned)cfg_roll_delay_ms,
         (double)cfg_rate_cap_dps, (double)cfg_kp_angle, (double)cfg_iwind_dps);
+}
+
+// Apply the "LoRa off" transmit mute (BLE cmd 68 / uplink cmd 68 both land
+// here so the two transports cannot diverge).  Desired-state, not a toggle:
+// `want_disabled` is what the operator asked for, and a repeat of the same
+// value is a no-op rather than an inversion — a retried uplink must not
+// silence a rocket the first copy already un-silenced.
+//
+// Returns true when the request was honoured (including the already-there
+// case); false when it was refused because the rocket is airborne.
+static bool applyLoRaTxMute(bool want_disabled, const char* src)
+{
+    if (!loraTxMuteChangeAllowed(want_disabled, latest_rocket_state))
+    {
+        ESP_LOGW("LORA", "%s LoRa TX mute REFUSED: rocket INFLIGHT — muting an "
+                         "airborne rocket would drop the only tracking link it has",
+                 src);
+        return false;
+    }
+    if (want_disabled == lora_tx_disabled)
+    {
+        ESP_LOGI("LORA", "%s LoRa TX already %s", src,
+                 lora_tx_disabled ? "OFF (muted)" : "ON");
+        return true;
+    }
+
+    lora_tx_disabled = want_disabled;
+    prefs.begin("lora", false);
+    prefs.putUChar("txdis", lora_tx_disabled ? 1 : 0);
+    prefs.end();
+
+    // Re-evaluate the hop schedule against the new mute: muting takes the
+    // ON→OFF branch (radio back to lora_freq_mhz, rendezvous visit unwound),
+    // un-muting restarts hopping if the rocket's state and link mode want it.
+    updateHopFromState(latest_rocket_state);
+
+    // Echo to a directly-connected app.  Matters most on the UPLINK path: the
+    // base station can un-mute a rocket the phone is also connected to, and
+    // without this the app's toggle would keep claiming the radio is off.
+    // No-ops harmlessly when nothing is connected.
+    sendCurrentConfig();
+
+    ESP_LOGW("OC", "[LORA] Transmit %s (%s) — %s",
+             lora_tx_disabled ? "MUTED" : "UNMUTED", src,
+             lora_tx_disabled
+                 ? "no telemetry, no beacon, no hopping; still listening for uplink"
+                 : "telemetry and beacon resume");
+    return true;
 }
 
 // ==========================================================================
@@ -4393,6 +5091,15 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
             ESP_LOGI("LORA", "UPLINK Hop disable: already %s",
                      lora_hop_disabled ? "DISABLED" : "ENABLED");
         }
+    }
+    else if (cmd == LORA_CMD_SET_TX_DISABLED && payload_len >= 1)
+    {
+        // "LoRa off" over the air.  The only genuinely useful
+        // direction here is UN-muting — a muted rocket keeps listening
+        // precisely so the base station can call it back — but the command is
+        // symmetric so the app's toggle behaves the same whether it is talking
+        // to the rocket directly or relaying through the BS.
+        (void)applyLoRaTxMute(payload[0] != 0, "UPLINK");
     }
     else if (cmd == 12 && payload_len >= sizeof(ServoConfigData))
     {
@@ -5066,14 +5773,17 @@ static void printLoRaPayloadDebug()
         return;
     }
 
-    uint8_t payload[SIZE_OF_LORA_DATA] = {0};
-    if (!buildLoRaPayload(payload, lora_tx_seq))
+    // Always FAST here: the debug dump wants the position/attitude picture,
+    // and a SLOW frame would leave most of the printed fields at zero.
+    uint8_t payload[SIZE_OF_LORA_BUDGET] = {0};
+    size_t  payload_len = 0;
+    if (!buildLoRaPayload(payload, lora_tx_seq, LORA_FRAME_FAST, payload_len))
     {
         return;
     }
 
     LoRaDataSI decoded = {};
-    sensor_converter.unpackLoRa(payload, decoded);
+    sensor_converter.unpackLoRaFastBytes(payload, decoded);
     ESP_LOGI("LORA", "LoRa tx sats/pdop=%u/%.1f | ecef(m)=%.0f,%.0f,%.0f | alt/rate/max/mspd=%.1f/%.1f/%.1f/%.1f",
                   (unsigned)decoded.num_sats,
                   (double)decoded.pdop,
@@ -5240,6 +5950,8 @@ static void printStats()
             ble_telem.soc = p.soc;
             ble_telem.current = p.current;
             ble_telem.voltage = p.voltage;
+            ble_telem.cam_current   = p.cam_current;    // #850
+            ble_telem.servo_current = p.servo_current;  // #850
         }
         else
         {
@@ -5506,8 +6218,11 @@ static void printStats()
     {
         TR_LoRa_Comms::Stats ls = {};
         lora_comms.getStats(ls);
-        ESP_LOGI("LORA", "LoRa en=%c tx_start/ok/fail=%lu/%lu/%lu local_ok/fail=%lu/%lu last_err=%d tx=%c",
+        // txmute= is here so a flat tx_ok reads as "muted on purpose" rather
+        // than "radio broken" — that is the whole diagnostic value of the field.
+        ESP_LOGI("LORA", "LoRa en=%c txmute=%c tx_start/ok/fail=%lu/%lu/%lu local_ok/fail=%lu/%lu last_err=%d tx=%c",
                       ls.enabled ? 'Y' : 'N',
+                      lora_tx_disabled ? 'Y' : 'N',
                       (unsigned long)ls.tx_started,
                       (unsigned long)ls.tx_ok,
                       (unsigned long)ls.tx_fail,
@@ -5657,6 +6372,18 @@ static void printStats()
              (unsigned long)flightlog.writeLockWaitSumUs());  //   mutex share of wsum
     logger.resetIntervalTimings();
     flightlog.resetLockWaitStats();  // #510: same window as the logger sums
+
+    // "LoRa off" reminder, at the DEFAULT log level.  The txmute= field on the
+    // LoRa stats line above lives inside the VERBOSE_DEBUG block, which ships
+    // false — so on a normal bench capture the only radio evidence is a tx
+    // counter that never moves, which reads as a dead radio.  This says which
+    // it is, once per stats interval, and costs nothing when transmitting.
+    if (config::USE_LORA_RADIO && lora_tx_disabled)
+    {
+        ESP_LOGW("LORA", "transmit MUTED (\"LoRa off\") — no telemetry or beacon "
+                         "going out; still listening for uplink on %.2f MHz",
+                 (double)lora_comms.currentFrequencyMHz());
+    }
 
     // #398: per-task CPU deltas over this same interval — pins the core-1 hog
     // that co-stalls loop_oc during the launch-activation window. Uses `dt`
@@ -6270,6 +6997,13 @@ void initPeripherals()
         lora_cr        = prefs.getUChar("cr",   config::LORA_CR);
         lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
         lora_hop_disabled = prefs.getUChar("hopdis", 1) != 0;  // #150: default fixed mode
+        // "LoRa off" mute.  Deliberately NOT part of the first-boot seeding
+        // block above, and read whether or not "freq" exists: the mute is
+        // settable over BLE with the FC rail OFF, i.e. before this function
+        // has ever run and written a "freq" key, so a seed-on-first-boot
+        // would silently un-mute the rocket the first time the rail came up.
+        // An absent key reads 0 = transmitting, the right default anyway.
+        lora_tx_disabled = prefs.getUChar("txdis", 0) != 0;
 
         // Issue #136: every rocket boot starts on the hardcoded
         // rendezvous frequency + preset regardless of any NVS values
@@ -6497,29 +7231,28 @@ void initPeripherals()
     // dma_frame_num doubled 64 -> 128 alongside the 22050 -> 44100 link rate
     // so each descriptor still spans ~2.9 ms (512 B at 176 KB/s) — the same
     // callback cadence the parser was tuned against at the old rate.
-    if (i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
-                                 config::I2S_WS_PIN,
-                                 config::I2S_DIN_PIN,
-                                 config::I2S_FSYNC_PIN,
-                                 config::I2S_SAMPLE_RATE,
-                                 4,      // dma_desc_num
-                                 128) != ESP_OK)  // dma_frame_num → 512 bytes each
+    // #834 items 6/7 (review): go through the SAME helper the recovery paths use
+    // so a boot failure sets oc_i2s_rx_broken and loop_oc's 1 Hz retry picks it
+    // up. Open-coding begin+register here left the most consequential failure of
+    // all — no RX from boot — as the one case the new never-give-up retry did
+    // not cover, with the retry loop idle one screen away.
+    // The mutex may not exist yet at this point in setup; take it if it does.
+    if (oc_i2s_mutex != nullptr) xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
+    const esp_err_t rx_err = ocBeginSlaveRxLocked("boot");
+    if (oc_i2s_mutex != nullptr) xSemaphoreGive(oc_i2s_mutex);
+    if (rx_err != ESP_OK)
     {
-        ESP_LOGE("PWR", "I2S slave RX init failed");
+        ESP_LOGE("PWR", "I2S slave RX init failed — retrying from loop_oc");
     }
     else
     {
         ESP_LOGI("PWR", "I2S slave RX ready");
-
-        // Register zero-copy DMA receive callback.
-        // The callback fires from ISR context each time a DMA buffer
-        // completes, pushing bytes directly into rx_ring and notifying
-        // the parser task.  This eliminates stale DMA re-reads that
-        // caused periodic ~90ms gaps in logged data.
-        esp_err_t cb_err = i2s_stream.registerRecvCallback(i2sRecvCallback, nullptr);
-        if (cb_err != ESP_OK)
-            ESP_LOGE("PWR", "I2S recv callback failed: %s", esp_err_to_name(cb_err));
-
+    }
+    // Tasks are created unconditionally: a boot failure is now recoverable, and
+    // a channel that comes back via the retry needs a parser to drain rx_ring.
+    // Both are harmless with no channel — i2sRecvCallback null-checks
+    // i2s_rx_task_handle, and the feeder idles while !oc_ota_tx_mode.
+    {
         // Parser task — woken by DMA callback, parses frames from rx_ring.
         // Pinned to Core 1 at priority 6 (one above loopTask at prio 5).
         // Parser preempts loopTask whenever DMA notifies; loopTask runs
@@ -6722,6 +7455,17 @@ static void setup_oc()
                           (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
                           (int)lora_hop_disabled);
         }
+        // Outside the isKey("freq") gate on purpose: "LoRa off" is settable
+        // over BLE with the rail off, so a board that has never run
+        // initPeripherals() can hold a mute and no "freq" key at all.  Read
+        // here as well as there so the config readback the app pulls before
+        // power-on already tells the truth about the radio.
+        lora_tx_disabled = prefs.getUChar("txdis", 0) != 0;
+        if (lora_tx_disabled)
+        {
+            ESP_LOGW("CFG", "NVS LoRa: transmit MUTED (\"LoRa off\") — no telemetry "
+                            "or beacon will go out until it is turned back on");
+        }
         prefs.end();
 
         // Issue #136: same boot-time rendezvous override as the later
@@ -6881,6 +7625,11 @@ static void setup_oc()
     {
         ESP_LOGW("PWR", "INA230 not found -- battery monitoring disabled");
     }
+
+    // #850: the rail-current ADC is independent of the INA230 — bring it up
+    // whether or not the gauge answered, so a dead or absent INA230 does not
+    // also cost the camera/servo current readings.
+    initRailCurrentAdc();
 
     // #519: the OC owns its connection-parameter policy — slow (200 ms, latency 4)
     // while the rail is off to save idle power, fast (30 ms) once it comes on for
@@ -7094,21 +7843,14 @@ static void loop_oc()
             {
                 oc_ota_relay_ready_pending = false;
                 oc_ota_warmup_since_ms     = 0;
+                // #834 item 7: arm the stall watchdog only now. Before "ready"
+                // the silence is deliberate (the warmup window idle-fills so the
+                // FC's slave RX can lock onto BCLK), so arming earlier would
+                // abort every OTA.
+                oc_ota_last_chunk_ms = warm_now_ms;
                 ble_app.relayFcOtaStatus("ready", nullptr, 0, false);
             }
         }
-        if (oc_ota_revert_to_rx_requested)
-        {
-            // Clear AFTER the revert completes, not before. The feeder watches this
-            // flag to back off oc_i2s_mutex so ocRevertToRx() can acquire it (see the
-            // feeder's comment). Clearing first would let the higher-priority feeder
-            // resume mid-revert and starve ocRevertToRx()'s mutex take — the FINISH
-            // deadlock. ocRevertToRx() sets oc_ota_tx_mode=false, so the feeder idles
-            // regardless once it returns.
-            ocRevertToRx();
-            oc_ota_revert_to_rx_requested = false;
-        }
-
         // Deferred I2C slave init: wait for I2S DMA activity confirming
         // the FC is alive before enabling the slave on the bus.
         if (!i2c_slave_initialized && dma_cb_count > 50)
@@ -7260,6 +8002,70 @@ static void loop_oc()
 
     }
 
+    // ----------------------------------------------------------------------
+    // I2S link recovery — deliberately OUTSIDE the pwr_pin_on gate above.
+    // #834 items 6/7: every path that can strand the OC's I2S is serviced here.
+    // Losing slave RX means no FC telemetry, no logging and two frozen
+    // downlinks until a power cycle, so recovery must not depend on the app,
+    // the FC, or the switched rail being on — a rail-off mid-relay used to
+    // strand it exactly this way, because the revert lived inside that gate.
+    // ----------------------------------------------------------------------
+    {
+        const uint32_t i2s_now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+        // The app vanished mid-transfer (walked out of range, screen lock, app
+        // killed). onDisconnect stages an abort, but a link that simply stops
+        // pumping without disconnecting leaves no event at all — hence a
+        // timeout on chunk arrival as well.
+        if (OtaRelayPolicy::relayStalled(oc_ota_tx_mode, oc_ota_last_chunk_ms,
+                                         i2s_now_ms))
+        {
+            ESP_LOGE("OC", "OTA relay: no chunk for %u ms while flipped — "
+                           "abandoning and reverting to slave RX",
+                     (unsigned)OtaRelayPolicy::kRelayStallTimeoutMs);
+            oc_ota_last_chunk_ms          = 0;   // disarm before the revert
+            setPendingCommand(OTA_ABORT_CMD);
+            oc_ota_revert_to_rx_requested = true;
+            // End the BLE-side session too. A stall with the link still UP
+            // produces no onDisconnect, so without this ota_relay_active_ and
+            // ota_session_active_ stay set: battery/power reads remain gated
+            // off and a later OTA_BEGIN is rejected as already-in-progress.
+            ble_app.relayFcOtaStatus("aborted", "relay_stalled", 0, true);
+            ocOtaRelayClearPendingFlip();
+        }
+
+        if (oc_ota_revert_to_rx_requested)
+        {
+            // Clear AFTER the revert completes, not before. The feeder watches this
+            // flag to back off oc_i2s_mutex so ocRevertToRx() can acquire it (see the
+            // feeder's comment). Clearing first would let the higher-priority feeder
+            // resume mid-revert and starve ocRevertToRx()'s mutex take — the FINISH
+            // deadlock. ocRevertToRx() sets oc_ota_tx_mode=false, so the feeder idles
+            // regardless once it returns.
+            ocRevertToRx();
+            oc_ota_revert_to_rx_requested = false;
+        }
+
+        // A begin that failed anywhere above leaves us with no channel. Keep
+        // retrying: a transient DMA-allocation failure (BLE buffers, the
+        // flightlog scratch and the 64 KB rx_ring are all live during a relay)
+        // costs about a second of telemetry instead of the whole flight.
+        // Re-sample: ocRevertToRx() above sleeps 100 ms and stamps
+        // oc_i2s_rx_last_try_ms, which would then be AHEAD of the i2s_now_ms
+        // captured at the top of this block — unsigned subtraction turns that
+        // into ~49 days and fires the retry immediately.
+        const uint32_t retry_now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        if (OtaRelayPolicy::shouldRetryRx(oc_i2s_rx_broken, retry_now_ms,
+                                          oc_i2s_rx_last_try_ms) &&
+            oc_i2s_mutex != nullptr)
+        {
+            xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
+            i2s_stream.end();          // drop whatever half-state is there
+            ocBeginSlaveRxLocked("retry");
+            xSemaphoreGive(oc_i2s_mutex);
+        }
+    }
+
     // Auto-send config once the BLE connection is fully ready — MTU negotiated
     // AND the app has enabled notifications on the telemetry/config char.
     // Edge-armed on connect, then deferred (no blocking delay) until ready.
@@ -7333,11 +8139,39 @@ static void loop_oc()
         sendGuidTarget();
     }
 
+    // Same pattern for the #915 config report: an edit the app made lands in
+    // the FC's NVS and comes back through the report, and a change made over
+    // LoRa (or by another phone) reaches this phone without a reconnect.
+    if (fc_config_report_dirty && ble_app.isConnected() && ble_app.isReadyForNotify())
+    {
+        fc_config_report_dirty = false;
+        sendConfigExtras();
+    }
+
     // Service the BLE library's poll-style work — currently just the OTA
     // deferred-restart watchdog. handleOtaFinish() sets the boot partition and
     // schedules esp_restart() ~500 ms out, but the reboot only fires from here.
     // Without this, an OTA completes and sets ota_1 yet the device never reboots
     // into the new image (#8 Phase-3 OC bench finding; loop_bs always called it).
+    // #834 item 2: ble_app.loop() below fires the OTA deferred reboot — on
+    // THIS task, with the flush task still programming pages, and with none of
+    // the power-off path's protection: no rail drop, no settle, no GPIO
+    // teardown. The 500 ms it waits is a BLE-notify drain window, not a
+    // storage window. Gated on otaRestartDue() (ELAPSED, not merely scheduled)
+    // so the ring keeps draining for that whole window and we only quiesce on
+    // the pass that will actually restart.
+    if (ble_app.otaRestartDue())
+    {
+        // Atomic with the restart on purpose. The quiesce is IRREVERSIBLE (the
+        // SPI bus is parked and never handed back, ingest stays paused), while
+        // ota_pending_restart_at_ms_ lives on the NimBLE host task and can be
+        // cleared by an OTA_ABORT arriving between these two lines. Letting
+        // ble_app.loop() re-derive the decision would then leave the OC
+        // quiesced and never rebooted — storage dead until a power cycle.
+        quiesceStorageForRestart("ota-reboot");
+        ESP_LOGW("OC", "OTA: rebooting now to load new partition (#834 item 2)");
+        esp_restart();
+    }
     ble_app.loop();
 
     // Check for BLE commands
@@ -7856,7 +8690,34 @@ static void loop_oc()
             const bool was_on  = pwr_pin_on;
             const bool want_on = (plen >= 1) ? (payload[0] != 0) : !pwr_pin_on;
 
-            if (want_on == was_on)
+            // #834 item 2: refuse an OFF while flying, matching the gates
+            // delete and download already have. Two reasons. (1) Post-#848 the
+            // FC holds its own rail through P4_EN_HOLD, so this no longer
+            // powers anything down — it just resets the OC and kills the
+            // downlink mid-flight. (2) The quiesce above now CLOSES the
+            // session, and the #846 boot re-seed only ever reads a
+            // flight_recovered_* entry; a properly finalized flight is
+            // skipped. Without this gate a mid-flight power-off would destroy
+            // the FC's only NAND-side snapshot source while it is still
+            // flying. Gating removes that trade-off rather than weakening the
+            // quiesce.
+            // Freshness is load-bearing: latest_rocket_state NEVER AGES, and
+            // cmd 8 is the OC's only reset path. Gating on the latched value
+            // alone means an FC that died mid-flight — exactly when you most
+            // want to recover the OC — would refuse every power-off for the
+            // rest of the boot, with no way out but a battery pull.
+            const bool fc_state_fresh =
+                latest_non_sensor_valid &&
+                (uint32_t)(millis() - latest_non_sensor_rx_ms) <= config::FC_FRAME_STALE_MS;
+            const bool refuse_off = !want_on && was_on && fc_state_fresh &&
+                                    latest_rocket_state == INFLIGHT;
+            if (refuse_off)
+            {
+                ESP_LOGW("BLE", "Power off REFUSED: rocket is INFLIGHT "
+                                "(FC frame %lu ms ago)",
+                         (unsigned long)(millis() - latest_non_sensor_rx_ms));
+            }
+            else if (want_on == was_on)
             {
                 ESP_LOGI("BLE", "Power rail already %s, ignoring",
                          was_on ? "ON" : "OFF");
@@ -7929,30 +8790,63 @@ static void loop_oc()
                     digitalWrite(config::GPS_PWR_PIN, LOW);  // drop GNSS rail in lockstep
                 }
 
-                // Drive every signal that goes from the OC to the switched-
-                // rail peripherals (LoRa, NAND, MRAM) LOW so back-feed current
-                // can't flow from the still-powered OC side through the
-                // peripherals' input ESD diodes into their now-unpowered VCC
-                // (TPS22918 OUT is being actively discharged via QOD, so any
-                // injected current shows up as steady draw on the OC's input
-                // rail). gpio_reset_pin detaches the pad from any SPI /
-                // peripheral matrix routing left over from initPeripherals();
-                // gpio_set_level(0) holds the pad LOW for the brief window
-                // before the reset. Post-reset, IOs default to high-Z, which
-                // is also fine — high-Z is not a back-feed source. (#9)
+                // #834 item 2: get the log onto the NAND before the reset.
+                // AFTER the rail drop on purpose — the wait doubles as
+                // rail-discharge time (PWR_PIN is already LOW) and the FC's
+                // frame source is gone. BEFORE the GPIO teardown below,
+                // because gpio_reset_pin() detaches the pads from the SPI
+                // matrix, after which no NAND command can complete.
+                quiesceStorageForRestart("power-off");
+
+                // Prevent back-feed into peripherals whose VCC is about to
+                // disappear: current from the still-powered OC side through a
+                // peripheral's input ESD diode into its dead rail shows up as
+                // steady draw on the OC's input. gpio_reset_pin detaches the
+                // pad from any peripheral-matrix routing left over from
+                // initPeripherals(); gpio_set_level(0) holds it LOW for the
+                // brief window before the reset. Post-reset IOs default to
+                // high-Z, which is also fine — high-Z is not a back-feed
+                // source. (#9)
+                //
+                // #834 item 2: this list used to name "LoRa, NAND, MRAM" and
+                // lead with the SPI bus. Every part of that was wrong for this
+                // board, verified against the KiCad netlist:
+                //   * U11 (GD5F2GQ5UE SPI NAND — "the flash") has VCC on +3V3,
+                //     generated by U18 (TPS62152) whose EN is tied to its own
+                //     AVIN: ALWAYS ON. It never loses power here, so there is
+                //     no dead rail to protect — and SPI_MISO is an output U11
+                //     DRIVES, so forcing the pad low was a push-pull fight with
+                //     a live chip. (Same reason the FC's I2S pins were moved to
+                //     the high-Z list below.)
+                //   * There is no MRAM on V9/V10 at all (#822) — MRAM_CS is -1.
+                //   * The switched rail V_MCU_SWTCH (U30) feeds the FC (U17)
+                //     and its sensors (U2/U3/U4/U20), none of which are here.
+                //   * LoRa is NOT on V_MCU_SWTCH: it is a J5 daughterboard fed
+                //     from VBATT through U29, enabled by LoRa_ACT, and talks
+                //     over UART — so the pins that genuinely need this are
+                //     LORA_UART_TX/RX, which the old list omitted entirely
+                //     while listing V7-only SPI-LoRa constants that are all -1
+                //     here and skipped. On V9 the loop therefore did nothing
+                //     except fight the flash.
+                // (There is no TPS22918 on this board either; the load
+                // switches are U29/U30 TPS22810 and U26/U28 TPS22811.)
+                //
+                // Split by direction: OC OUTPUTS into a soon-dead peripheral
+                // get driven LOW; anything the peripheral drives is left
+                // high-Z so we never contend with a still-powered part.
+                // LORA_ACT_PIN first: it is U29's enable, so dropping it is
+                // what actually removes the daughterboard's VBATT rail.
+                // Driving LORA_UART_TX low while the module is still powered
+                // would just hold a break condition on a live receiver; the
+                // back-feed this list exists to prevent only becomes possible
+                // once the rail is gone.
                 static const gpio_num_t kSwitchedRailPins[] = {
-                    (gpio_num_t)config::SPI_SCK,
-                    (gpio_num_t)config::SPI_MOSI,
-                    (gpio_num_t)config::SPI_MISO,
-                    (gpio_num_t)config::NAND_CS,
-                    (gpio_num_t)config::MRAM_CS,
-                    (gpio_num_t)config::LORA_SPI_SCK,
+                    (gpio_num_t)config::LORA_ACT_PIN,      // U29 EN -> LoRa rail
+                    (gpio_num_t)config::LORA_UART_TX_PIN,  // OC -> J5 daughterboard
+                    (gpio_num_t)config::LORA_SPI_SCK,      // V7 SPI-LoRa (-1 on V8+)
                     (gpio_num_t)config::LORA_SPI_MOSI,
-                    (gpio_num_t)config::LORA_SPI_MISO,
                     (gpio_num_t)config::LORA_CS_PIN,
                     (gpio_num_t)config::LORA_RST_PIN,
-                    (gpio_num_t)config::LORA_DIO1_PIN,
-                    (gpio_num_t)config::LORA_BUSY_PIN,
                 };
                 // I2S signals from the FC (slave RX on the OC) are handled
                 // separately: they are FC OUTPUTS, and since #848 the FC can
@@ -7961,13 +8855,25 @@ static void loop_oc()
                 // its rail). Driving a live I2S bit clock hard LOW for the
                 // 100 ms below would be a sustained push-pull drive fight.
                 // gpio_reset_pin leaves them high-Z inputs — per the comment
-                // below, high-Z is not a back-feed source, which was the only
+                // above, high-Z is not a back-feed source, which was the only
                 // reason these were ever in the driven-LOW list (#9).
-                static const gpio_num_t kFcDrivenPins[] = {
+                // #834 item 2: the LoRa lines the DAUGHTERBOARD drives join
+                // them, for the same reason — and so do the flash's, which are
+                // simply left alone now: U11 stays powered, and the quiesce
+                // above has parked the SPI mutex with CS HIGH and no byte on
+                // the wire. (The park takes the mutex; it does NOT tear down
+                // the SPI driver — see TR_LogToFlash::parkSpiBusForReset. It
+                // does not need to: nothing can start a transaction while the
+                // bus is parked.)
+                static const gpio_num_t kHighZPins[] = {
                     (gpio_num_t)config::I2S_BCLK_PIN,
                     (gpio_num_t)config::I2S_WS_PIN,
                     (gpio_num_t)config::I2S_DIN_PIN,
                     (gpio_num_t)config::I2S_FSYNC_PIN,
+                    (gpio_num_t)config::LORA_UART_RX_PIN,  // J5 -> OC
+                    (gpio_num_t)config::LORA_SPI_MISO,     // V7 SPI-LoRa (-1 on V8+)
+                    (gpio_num_t)config::LORA_DIO1_PIN,
+                    (gpio_num_t)config::LORA_BUSY_PIN,
                 };
                 for (gpio_num_t pin : kSwitchedRailPins) {
                     if ((int)pin < 0) continue;  // peripheral absent on this board (#411)
@@ -7976,9 +8882,14 @@ static void loop_oc()
                     gpio_set_pull_mode(pin, GPIO_FLOATING);
                     gpio_set_level(pin, 0);
                 }
-                for (gpio_num_t pin : kFcDrivenPins) {
+                for (gpio_num_t pin : kHighZPins) {
                     if ((int)pin < 0) continue;
-                    gpio_reset_pin(pin);   // high-Z input: safe against a live FC
+                    gpio_reset_pin(pin);
+                    // gpio_reset_pin() ENABLES the internal pull-up, so on its
+                    // own it does not give the high-Z this list promises — a
+                    // ~45 kOhm pull to 3V3 still injects into an unpowered
+                    // peripheral, and still fights a live driver. Float it.
+                    gpio_set_pull_mode(pin, GPIO_FLOATING);
                 }
 
                 vTaskDelay(pdMS_TO_TICKS(100));   // let rail drop, caps discharge
@@ -7988,7 +8899,11 @@ static void loop_oc()
 
             // Only on an actual state change — an ignored duplicate must not
             // claim the rail was switched, nor re-push config.
-            if (want_on != was_on)
+            // #834 item 2: a REFUSED off never changed the rail, so it must
+            // not claim it did — the epilogue logs the transition, stalls the
+            // loop 100 ms and re-pushes config, all of which are wrong (and
+            // mid-flight, actively harmful) on a refusal.
+            if (want_on != was_on && !refuse_off)
             {
                 ESP_LOGI("BLE", "Power rail: %s%s", pwr_pin_on ? "ON" : "OFF",
                          (plen >= 1) ? "" : " (legacy toggle)");
@@ -8310,6 +9225,24 @@ static void loop_oc()
                                     "(not dynamic/960/1920/3840)",
                              (unsigned)rate_hz);
                 }
+            }
+        }
+        else if (ble_cmd == LORA_CMD_SET_TX_DISABLED)
+        {
+            // "LoRa off": [disabled:1] — 1 mutes every LoRa transmit, 0
+            // resumes.  Same constant (and therefore the same number) as the
+            // uplink command, so the app's toggle means one thing whether it
+            // reaches the rocket over BLE or relayed through the base station.
+            //
+            // Rail state is irrelevant: with the FC rail off the radio isn't
+            // even initialized, and the setting simply sits in NVS until
+            // initPeripherals reads it — which is exactly how an operator
+            // arms "fly quiet" before powering the stack up.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 1)
+            {
+                (void)applyLoRaTxMute(payload[0] != 0, "BLE");
             }
         }
         else if (ble_cmd == 34)

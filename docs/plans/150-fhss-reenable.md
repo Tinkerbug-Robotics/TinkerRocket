@@ -96,28 +96,38 @@ Key corrections to #150's framing that came out of this survey:
 ## 3. FCC compliance math for the #133 scheme
 
 Operating point: band plan 902–928 MHz, spacing 1.5×BW (69 channels at
-BW250), SF8/BW250/CR4:5, preamble 12, 66-byte telemetry frame
-(`sizeof(LoRaData)`, static-asserted), unconditional 2 Hz cadence.
+BW250), SF8/BW250/CR4:5, preamble 12, unconditional 2 Hz cadence.
+
+**Frame size, revised by #850.** The downlink is now two interleaved frames —
+a 55-byte FAST frame on 5 of every 6 slots and a 22-byte SLOW frame on the
+6th. Airtime and dwell are budgeted against `SIZE_OF_LORA_BUDGET`, which is
+deliberately the LARGER (fast) frame: sizing the schedule on the slow one
+would under-count every fast frame and walk the link into the occupancy limit.
+The numbers below are therefore the 55-byte figures, and all of them moved in
+the permissive direction relative to the 65/66-byte single frame they replace.
 
 Airtime (Semtech AN1200.13, `loraTimeOnAirMs`, shared by the OC scheduler, BS
 follower, and the host tests):
 
-| Modulation | ToA (66 B) | Dwell (≤ 390 ms budget) | Per-visit occupancy | Notes |
-|---|---|---|---|---|
-| SF7/BW250 | 64 ms | 4 | 256 ms | |
-| SF8/BW250 (default) | 112 ms | 3 | 336 ms | old fixed dwell=4 → 448 ms = **over the line**; this is the #150 dwell fix |
-| SF9/BW250 | 203 ms | 1 | 203 ms | +2.5 dB range rung |
-| SF10/BW250 | 386 ms | 1 | 386 ms | **+5 dB long-range rung**, 14 ms margin — frame growth breaks this first (gtest-pinned) |
-| SF11+/BW250, SF9+/BW125 | > 390 ms | 0 | — | hopping refused; fixed mode only |
-| SF7/BW125 | 127 ms | 3 | 381 ms | 20 s window applies (BW < 250) |
-| BW500 SF7–SF11 | 32–345 ms | 4/4/3/2/1 | ≤ 345 ms | |
+| Modulation | ToA (55 B) | was (65 B) | Dwell (≤ 390 ms budget) | Per-visit occupancy | Notes |
+|---|---|---|---|---|---|
+| SF7/BW250 | 56 ms | 64 ms | 4 | 224 ms | |
+| SF8/BW250 (default) | 102 ms | 112 ms | 3 | 306 ms | old fixed dwell=4 → over the line; this is the #150 dwell fix |
+| SF9/BW250 | 183 ms | 203 ms | **2** (was 1) | 366 ms | +2.5 dB range rung |
+| SF10/BW250 | 345 ms | 386 ms | 1 | 345 ms | **+5 dB long-range rung**. Margin to the 400 ms line went 14 ms → 55 ms; this is the rung the frame diet was for (gtest-pinned) |
+| SF11+/BW250 | > 390 ms | > 390 ms | 0 | — | hopping refused; fixed mode only |
+| SF7/BW125 | 112 ms | 127 ms | 3 | 336 ms | 20 s window applies (BW < 250) |
+| SF8/BW125 | 203 ms | 224 ms | 1 | 203 ms | |
+| SF9/BW125 | 366 ms | 407 ms | **1** (was 0) | 366 ms | hopping newly PERMITTED at this rung |
+| BW500 SF7–SF11 | 28–304 ms | 32–345 ms | 4/4/**4**/2/1 | ≤ 364 ms | SF9 gained a packet |
 
 - **Budget = 390 ms, not 400**: headroom for formula-vs-measured drift while
   keeping the SF10/BW250 rung. (An earlier plan draft said 380, computed
-  against a stale 62-byte frame note; the real frame is 66 B → 386 ms, so 380
-  would have silently dropped the long-range rung.) The binding check is the
-  `ComplianceInvariant` gtest: `dwell × ToA ≤ 400 ms` for every configurable
-  modulation.
+  against a stale 62-byte frame note — the constant's own changelog was wrong,
+  which #837 item 14 recorded and #850 fixed by making the version byte real.)
+  The binding check is the `ComplianceInvariant` gtest: `dwell × ToA ≤ 400 ms`
+  for every configurable modulation. It passed before and after the split; only
+  the pinned per-row values in `LoraHopDwell.AdaptiveTable` moved.
 - **Revisit bound**: per-visit occupancy is sufficient because a full cycle
   (`n_active × dwell / 2 Hz`) outlasts the window even at the floor count:
   worst case 25 × 1 / 2 = 12.5 s ≥ 10 s (BW500), 50 × 1 / 2 = 25 s ≥ 20 s

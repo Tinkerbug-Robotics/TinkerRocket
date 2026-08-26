@@ -900,6 +900,13 @@ public interface FleetSessionFactory<S : Any> {
     ): S
 
     /** Teardown for a session whose connection dropped (iOS onDisconnect). */
+    /**
+     * MUST release the session — cancel its coroutines and drop its transport
+     * references. FleetManager builds a NEW session on every (re)connect and
+     * removes this one from _devices, so anything the implementation leaves
+     * running keeps the whole old session graph reachable for the life of the
+     * process (#838 item 6, where this was implemented as `= Unit`).
+     */
     public fun close(session: S)
 }
 

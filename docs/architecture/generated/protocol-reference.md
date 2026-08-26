@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-91 codes. The dispatch on both ends is a flat first-match chain, so
+92 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -119,12 +119,19 @@ this list is CI-enforced for uniqueness.
 | `0xF4` | `I2C_TX_RESYNC` | — |  |
 | `0xF9` | `LORA_UPLINK_MSG` | OC → log | OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log |
 | `0xFA` | `FC_BOOT_STATUS_MSG` | FC → OC | FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only |
+| `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 169-byte ConfigReportData, everything the app's config |
 
-> 53 of these 91 codes carry no comment in the header,
+> 53 of these 92 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
 > fills the row in.
+
+> **Not in the registry:** `BS_EVENT_MSG`, `BS_LORA_RX_MSG`
+> — these are declared in the message-type block but absent from the
+> uniqueness registry, so nothing checks them for collisions. Either add
+> them to the registry or, if they are payload sentinels, to
+> `KNOWN_NON_MESSAGE` in the generator.
 
 ## Wire struct sizes
 
@@ -135,10 +142,11 @@ that changes size fails the build rather than corrupting a log silently.
 |--------|-------|
 | `FlightSnapshotData` | 224 |
 | `FlightSettingsData` | 219 |
+| `ConfigReportData` | 169 |
 | `RollProfileData` | 76 |
 | `RollProfileData` | 76 |
-| `LoRaData` | 65 |
-| `LoRaData` | 65 |
+| `LoRaFastData` | 55 |
+| `LoRaFastData` | 55 |
 | `NonSensorData` | 50 |
 | `NonSensorData` | 50 |
 | `GuidanceConfigData` | 45 |
@@ -151,6 +159,8 @@ that changes size fails the build rather than corrupting a log silently.
 | `BaseStationStorageStatsData` | 26 |
 | `PyroConfigData` | 24 |
 | `ISM6HG256Data` | 22 |
+| `LoRaSlowData` | 22 |
+| `LoRaSlowData` | 22 |
 | `ServoConfigData` | 22 |
 | `ServoConfigData` | 22 |
 | `GuidancePointData` | 20 |
@@ -164,13 +174,16 @@ that changes size fails the build rather than corrupting a log silently.
 | `SimConfigData` | 16 |
 | `RocketStorageStatsData` | 15 |
 | `MagCalApplyData` | 14 |
+| `POWERData` | 14 |
 | `LoRaUplinkData` | 13 |
 | `BMP585Data` | 12 |
+| `BsLoRaRxHeader` | 12 |
 | `MagCalMMCOffset` | 12 |
 | `IIS2MDCData` | 10 |
-| `POWERData` | 10 |
+| `BsEventHeader` | 9 |
 | `RollWaypoint` | 9 |
 | `ServoTestAnglesData` | 8 |
+| `LoRaFrameHeader` | 7 |
 | `Vec3i16` | 6 |
 | `FcBootStatusData` | 4 |
 | `ServoReplayData` | 4 |
@@ -191,7 +204,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-51 commands.
+52 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -246,6 +259,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 65 |  | Full guidance config (GuidanceConfigData): relay the whole struct to the FC |
 | 66 |  | Full fin layout (FinConfigData): relay the whole struct to the FC |
 | 67 |  | IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0) or a whitelisted ISM6HG256 ODR (960/1920/3840).… |
+| 68 | `LORA_CMD_SET_TX_DISABLED` | "LoRa off": [disabled:1] — 1 mutes every LoRa transmit, 0 resumes. Same constant (and therefore the same… |
 
 > 10 of these have no comment in the dispatch and so no
 > description here: 6, 7, 15, 16, 21, 51, 52, 53, 54, 57. Adding a comment to the branch
@@ -339,6 +353,9 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_CMD_HEARTBEAT` | `0xFE` (254) |  |
 | `LORA_CMD_HOP_PAUSE` | `0x10` (16) | uplink cmd: park on lora_freq_mhz for N ms (#90) |
 | `LORA_CMD_SET_HOP_DISABLED` | `0x11` (17) | uplink cmd: 1 byte payload, 0=hopping enabled (default), 1=disabled (fixed-frequency mode for diagnostics,… |
+| `LORA_CMD_SET_TX_DISABLED` | `0x44` (68) | uplink + rocket BLE cmd: 1 byte payload, 1 = "LoRa off" (mute every transmit, keep listening), 0 =… |
+| `LORA_FRAME_FAST` | `0x00` (0) |  |
+| `LORA_FRAME_SLOW` | `0x01` (1) |  |
 | `LORA_HOP_DWELL_MAX` | `0x04` (4) | #133 slow-hop robustness cap |
 | `LORA_LAUNCH` | `0x01` (1) | bit 0 |
 | `LORA_LOGGING_BIT` | `0x80` (128) |  |
@@ -346,8 +363,12 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_NEXT_CH_HOP_OFFSCHEDULE` | `0xFE` (254) |  |
 | `LORA_NEXT_CH_NO_HOP` | `0xFF` (255) | sentinel: not hopping |
 | `LORA_NOISE_THRESHOLD_DB` | `0x0F` (15) | skip if peak > median + this |
+| `LORA_NUM_SATS_MASK` | `0x3F` (63) |  |
 | `LORA_NVS_SCHEMA_VERSION` | `0x04` (4) |  |
-| `LORA_PROTO_VERSION` | `0x04` (4) |  |
+| `LORA_PROTO_VERSION` | `0x05` (5) |  |
+| `LORA_SIM_BIT` | `0x40` (64) |  |
+| `LORA_SLOT_CYCLE` | `0x06` (6) |  |
+| `LORA_SLOW_SLOT` | `0x05` (5) | 0-based index within the cycle |
 | `LORA_STATE_SHIFT` | `0x04` (4) | bits 4-6: rocket state |
 | `LORA_UL_ACCEPTED` | `0x01` (1) | passed every filter, command dispatched |
 | `LORA_UL_MALFORMED` | `0x10` (16) | bad sync byte or short frame |

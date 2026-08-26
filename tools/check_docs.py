@@ -54,7 +54,9 @@ CODE_TO_STRUCT = {
     0xA5: "NonSensorData",
     0xA6: "POWERData",
     0xD1: "IIS2MDCData",
-    0xF1: "LoRaData",
+    # #850: 0xF1 is TWO frames now. A tuple means "the README must quote a
+    # size that matches ONE of these", which is what a mixed-frame log holds.
+    0xF1: ("LoRaFastData", "LoRaSlowData"),
     0xF9: "LoRaUplinkData",
 }
 
@@ -160,13 +162,20 @@ def check_struct_sizes():
             problems.append(f"README quotes a size for message 0x{code:02X} but "
                             f"CODE_TO_STRUCT in this checker has no entry for it")
             continue
-        actual = sizes.get(struct)
-        if actual is None:
-            problems.append(f"no static_assert(sizeof({struct})) in the header, "
-                            f"so 0x{code:02X} cannot be verified")
-        elif actual != claimed:
+        # One code may map to several wire structs (#850: 0xF1 is a fast frame
+        # OR a slow one). Every named struct must still be pinned by a
+        # static_assert, and the README's number must match one of them.
+        structs = struct if isinstance(struct, tuple) else (struct,)
+        missing = [n for n in structs if sizes.get(n) is None]
+        if missing:
+            problems.append(f"no static_assert(sizeof({', '.join(missing)})) in the "
+                            f"header, so 0x{code:02X} cannot be verified")
+            continue
+        actual = [sizes[n] for n in structs]
+        if claimed not in actual:
+            expect = " or ".join(f"sizeof({n}) == {sizes[n]}" for n in structs)
             problems.append(f"README says message 0x{code:02X} is {claimed} B, but "
-                            f"sizeof({struct}) == {actual}  [{where}]")
+                            f"{expect}  [{where}]")
     return problems
 
 

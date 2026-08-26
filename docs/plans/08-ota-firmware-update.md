@@ -36,6 +36,17 @@ This document is the contract that Phases 2–4 implement against.
 
 All three boards are 8 MB. New `partitions.csv`:
 
+> **Superseded in part, 2026-08-24.** "All three boards are 8 MB" was true when
+> this was written and is no longer true of the whole fleet: the 2026-08-09 fab
+> close-out moved the boot NOR from a `W25Q64` (8 MB) to a `W25Q128` /
+> `GD25Q128ESIG` (16 MB), so rocket-computer V9/V10 and base-station V3 carry
+> the larger part while V7/V8 and base-station V1/V2 still carry the small one.
+> The layouts below still describe the 8 MB boards. The base station's V3 table
+> has since grown its spiffs to 9.94 MB and moved to `partitions_v3.csv` (#835
+> item 1) — the OTA slots are unchanged, so nothing in this plan depends on it.
+> See [board-versioning.md](../board-versioning.md#boot-nor-size-per-revision).
+
+
 ### Base Station
 
 ```

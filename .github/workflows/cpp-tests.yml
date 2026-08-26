@@ -4,15 +4,27 @@ on:
   push:
     paths:
       - 'tinkerrocket-idf/components/**'
+      # Three suites include headers straight out of projects/*/main:
+      # test_bs_board_map, test_bs_storage_policy and
+      # test_cmd_queue_dedupe_policy.  Without this the policy headers they
+      # pin could be edited without ever running their own tests (#836 item 5).
+      - 'tinkerrocket-idf/projects/**'
       - 'tests_cpp/**'
       - 'tests/integration/**'
       - 'tests/test_data/**'   # integration tests are parametrized over these fixtures
+      - '.github/workflows/cpp-tests.yml'
   pull_request:
     paths:
       - 'tinkerrocket-idf/components/**'
+      # Three suites include headers straight out of projects/*/main:
+      # test_bs_board_map, test_bs_storage_policy and
+      # test_cmd_queue_dedupe_policy.  Without this the policy headers they
+      # pin could be edited without ever running their own tests (#836 item 5).
+      - 'tinkerrocket-idf/projects/**'
       - 'tests_cpp/**'
       - 'tests/integration/**'
       - 'tests/test_data/**'   # integration tests are parametrized over these fixtures
+      - '.github/workflows/cpp-tests.yml'
 
 # TR_GuidancePN is a private submodule. When the repo secret
 # TR_GUIDANCEPN_TOKEN is set (this org, trusted branches), we recurse

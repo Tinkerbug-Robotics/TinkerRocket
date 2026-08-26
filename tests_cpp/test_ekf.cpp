@@ -987,3 +987,118 @@ TEST(EkfGyroBias508, GateDoesNotFireOnNormalPadNoise) {
     }
     EXPECT_EQ(ekf.gyroBiasGateTrips(), trips_before) << "gate is too tight";
 }
+
+// ── #834 item 5: init() must actually be a from-scratch init ───────────
+//
+// initCore() re-seeded position, velocity, gyro bias and the quaternion but
+// left P_ and aBias_mps2_ exactly as the previous run had converged them.
+// main.cpp clears ekf_initialized after a board->rocket orientation change
+// with the comment "EKF attitude/velocity/biases were estimated in the OLD
+// rocket frame. Re-init from scratch" — which was not what happened.
+//
+// The accel bias is a BODY-frame quantity, so permuting the axes 90 deg
+// leaves a converged bias applied to the wrong axis; and because P_[9..11]
+// stayed tight the filter needed tens of seconds to unlearn it, while
+// accelMeasUpdate() tilted the attitude solution with it. Accel and mag
+// updates are gated off for the whole ascent, so that error is frozen in.
+
+TEST(EkfInitReset, InitZeroesTheAccelBias) {
+    GpsInsEKF ekf;
+    ekf.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+
+    // Stand in for a converged run: a snapshot restore is the only public way
+    // to plant a bias, and it is exactly the shape a previous run leaves.
+    EkfStateSnapshot s{};
+    ekf.getState(s);
+    s.accel_bias[0] = 0.30f; s.accel_bias[1] = 0.02f; s.accel_bias[2] = -0.01f;
+    ekf.setState(s);
+
+    float bias[3];
+    ekf.getAccelBias(bias);
+    ASSERT_NEAR(bias[0], 0.30f, 1e-6) << "premise: the bias is planted";
+
+    ekf.init(makeStationaryIMU(1000), makeStationaryGNSS(1000), makeStationaryMag(1000));
+
+    ekf.getAccelBias(bias);
+    EXPECT_NEAR(bias[0], 0.0f, 1e-6) << "a body-frame bias must not survive a re-init";
+    EXPECT_NEAR(bias[1], 0.0f, 1e-6);
+    EXPECT_NEAR(bias[2], 0.0f, 1e-6);
+}
+
+TEST(EkfInitReset, InitReinflatesTheCovariance) {
+    GpsInsEKF ekf;
+    ekf.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+
+    float fresh[15];
+    ekf.getCovDiag(fresh);
+
+    // Drive the diagonal down the way convergence would.
+    float tight[15];
+    for (int i = 0; i < 15; ++i) tight[i] = 1e-3f;
+    ekf.setCovFromDiag(tight);
+
+    float check[15];
+    ekf.getCovDiag(check);
+    ASSERT_NEAR(check[9], 1e-3f, 1e-9) << "premise: the covariance is tight";
+
+    ekf.init(makeStationaryIMU(1000), makeStationaryGNSS(1000), makeStationaryMag(1000));
+
+    ekf.getCovDiag(check);
+    for (int i = 0; i < 15; ++i) {
+        // Restoration to the initial value IS the contract. Note the gyro-bias
+        // block P_[12..14] is legitimately SMALLER than the 1e-3 tightened
+        // above — wBiasSigma_Init_rps^2 = 0.01745^2 = 3.05e-4 — so "bigger than
+        // what we tightened to" is the wrong test for it. Every initial value
+        // differs from 1e-3, so this assertion already proves nothing was left
+        // at the converged value.
+        EXPECT_NEAR(check[i], fresh[i], 1e-9)
+            << "P_[" << i << "] must return to its initial value on re-init";
+        EXPECT_NE(check[i], 1e-3f)
+            << "P_[" << i << "] is still the tightened value — not reset";
+    }
+}
+
+// The accel-bias covariance is the specific block that made the stale bias
+// unrecoverable: tight P_[9..11] means the filter trusts a bias that now
+// refers to a different set of axes.
+TEST(EkfInitReset, AccelBiasCovarianceIsReinflatedSpecifically) {
+    GpsInsEKF ekf;
+    ekf.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+    float tight[15];
+    ekf.getCovDiag(tight);
+    for (int i = 9; i < 12; ++i) tight[i] = 1e-3f;
+    ekf.setCovFromDiag(tight);
+
+    ekf.init(makeStationaryIMU(1000), makeStationaryGNSS(1000), makeStationaryMag(1000));
+
+    float after[15];
+    ekf.getCovDiag(after);
+    for (int i = 9; i < 12; ++i)
+        EXPECT_GT(after[i], 0.9f) << "P_[" << i << "] should be aBiasSigma_Init^2 (0.981^2)";
+}
+
+// A freshly constructed filter must not expose garbage: aBias_mps2_ is the
+// one state with no default initializer in the header.
+TEST(EkfInitReset, FreshlyConstructedFilterHasZeroAccelBias) {
+    GpsInsEKF ekf;
+    float bias[3];
+    ekf.getAccelBias(bias);
+    EXPECT_NEAR(bias[0], 0.0f, 1e-6);
+    EXPECT_NEAR(bias[1], 0.0f, 1e-6);
+    EXPECT_NEAR(bias[2], 0.0f, 1e-6);
+}
+
+// A freshly constructed filter must not report stack garbage through its
+// estimate accessors, and a re-init must not report the previous
+// configuration's values. aBias_mps2_ was covered when resetFilterState()
+// landed; aEst_B_mps2_ and wEst_B_rps_ have the same missing initializer.
+TEST(EkfInitReset, FreshFilterReportsZeroedEstimates) {
+    GpsInsEKF ekf;
+    float a[3], w[3], b[3];
+    ekf.getAccelEst(a); ekf.getRotRateEst(w); ekf.getAccelBias(b);
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_FLOAT_EQ(a[i], 0.0f) << "aEst_B_mps2_[" << i << "] uninitialised";
+        EXPECT_FLOAT_EQ(w[i], 0.0f) << "wEst_B_rps_["  << i << "] uninitialised";
+        EXPECT_FLOAT_EQ(b[i], 0.0f) << "aBias_mps2_["  << i << "] uninitialised";
+    }
+}

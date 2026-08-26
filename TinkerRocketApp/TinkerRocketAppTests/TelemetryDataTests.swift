@@ -56,6 +56,7 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(t.frames_drop, 2)
         XCTAssertEqual(t.hop_channel, 5)
         XCTAssertEqual(t.netid_drops, 4)
+        XCTAssertNil(t.size_drops, "szd is absent from a healthy frame")
         XCTAssertEqual(t.sensor_health, 9)
         XCTAssertEqual(t.bs_log_silence_remaining_s, 120)
         XCTAssertEqual(t.data_status, .stale)
@@ -417,5 +418,100 @@ final class TelemetryDataTests: XCTestCase {
         // In-range values are untouched, and absent stays absent.
         XCTAssertEqual(display(42.5), "42.5%")
         XCTAssertEqual(display(nil), "N/A")
+    }
+}
+
+// MARK: - #850 rail currents (camera / servo high-side switches)
+
+extension TelemetryDataTests {
+
+    /// An absent key means the board has NO monitor fitted (V7/V8, mini, or
+    /// pre-#850 firmware). That is not the same fact as "measured 0.0 A", and
+    /// the difference is the whole point: a camera that is off and a camera
+    /// with no monitor both sit at zero, but only one of them is a reading.
+    func testRailCurrents_AbsentKeysDecodeAsNilNotZero() throws {
+        let json = #"{"soc": 85.0, "vol": 7.4, "cur": -450.0}"#
+        let t = try JSONDecoder().decode(TelemetryData.self, from: Data(json.utf8))
+
+        XCTAssertNil(t.cam_current)
+        XCTAssertNil(t.servo_current)
+        XCTAssertEqual(t.camCurrentDisplay, "—")
+        XCTAssertEqual(t.servoCurrentDisplay, "—")
+    }
+
+    func testRailCurrents_PresentKeysDecode() throws {
+        let json = #"{"soc": 85.0, "ccur": 1.48, "scur": 0.34}"#
+        let t = try JSONDecoder().decode(TelemetryData.self, from: Data(json.utf8))
+
+        XCTAssertEqual(t.cam_current ?? 0, 1.48, accuracy: 0.001)
+        XCTAssertEqual(t.servo_current ?? 0, 0.34, accuracy: 0.001)
+    }
+
+    /// A genuine measured zero is distinct from absent and must render as a
+    /// number, not an em dash.
+    func testRailCurrents_MeasuredZeroIsNotAbsent() throws {
+        let json = #"{"ccur": 0.0}"#
+        let t = try JSONDecoder().decode(TelemetryData.self, from: Data(json.utf8))
+
+        XCTAssertNotNil(t.cam_current)
+        XCTAssertEqual(t.camCurrentDisplay, "0 mA")
+        XCTAssertNil(t.servo_current)
+        XCTAssertEqual(t.servoCurrentDisplay, "—")
+    }
+
+    /// Amps at and above 1 A, milliamps below — matching the Android twin.
+    func testRailCurrents_DisplayCrossesOverAtOneAmp() {
+        XCTAssertEqual(TelemetryData.railAmpsDisplay(1.48), "1.48 A")
+        XCTAssertEqual(TelemetryData.railAmpsDisplay(1.0), "1.00 A")
+        XCTAssertEqual(TelemetryData.railAmpsDisplay(0.999), "999 mA")
+        XCTAssertEqual(TelemetryData.railAmpsDisplay(0.34), "340 mA")
+        XCTAssertEqual(TelemetryData.railAmpsDisplay(nil), "—")
+    }
+}
+
+/// #838 item 4 — "szd" (LoRa protocol-mismatch drops) was emitted by the base
+/// station and decoded by neither app.
+///
+/// It is the sibling of "nidd" with the same recency window but a different
+/// fault: nidd means somebody else's traffic, szd means OUR rocket is
+/// unreadable because the two ends were flashed from different builds. When
+/// that happens every frame is dropped, `lora_netid_mismatch_drops` stays 0
+/// because the netid never gets read — so the only counter that had the answer
+/// was the one being thrown away, and the operator saw "Searching for rocket…"
+/// with no diagnostic.
+final class SizeDropDecodeTests: XCTestCase {
+
+    private func decode(_ json: String) throws -> TelemetryData {
+        try JSONDecoder().decode(TelemetryData.self, from: Data(json.utf8))
+    }
+
+    func testSzdDecodes() throws {
+        XCTAssertEqual(try decode(#"{"st":"PRELAUNCH","szd":12}"#).size_drops, 12)
+    }
+
+    func testOmittedWhenHealthy() throws {
+        XCTAssertNil(try decode(#"{"st":"PRELAUNCH"}"#).size_drops)
+    }
+
+    /// Same lenient-optional contract as hch/nidd (#571): the base station has
+    /// shipped these as strings and as doubles, and one off-type value must
+    /// never fail the whole frame.
+    func testLenientTypes() throws {
+        XCTAssertEqual(try decode(#"{"st":"PRELAUNCH","szd":"7"}"#).size_drops, 7)
+        XCTAssertEqual(try decode(#"{"st":"PRELAUNCH","szd":4.0}"#).size_drops, 4)
+        XCTAssertNil(try decode(#"{"st":"PRELAUNCH","szd":"bogus"}"#).size_drops)
+    }
+
+    /// Independent counters — a mixed-build pair at a site with another pair
+    /// nearby reports both, and neither may swallow the other.
+    func testBothFaultsAtOnce() throws {
+        let t = try decode(#"{"st":"PRELAUNCH","nidd":3,"szd":9}"#)
+        XCTAssertEqual(t.netid_drops, 3)
+        XCTAssertEqual(t.size_drops, 9)
+    }
+
+    func testProtocolMismatchIsNotANetidMismatch() throws {
+        let t = try decode(#"{"st":"PRELAUNCH","szd":12}"#)
+        XCTAssertNil(t.netid_drops)
     }
 }

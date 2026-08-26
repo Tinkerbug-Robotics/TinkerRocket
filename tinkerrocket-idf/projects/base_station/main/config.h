@@ -139,6 +139,11 @@ struct config : board_pins
     static constexpr size_t   BLE_FILE_CHUNK_SIZE    = 170;     // Bytes per BLE download chunk
     static constexpr uint32_t BLE_CHUNK_DELAY_MS     = 15;      // Delay between BLE chunks (ms)
     static constexpr size_t   FILES_PER_PAGE         = 5;       // BLE file list pagination
+    // Largest top-N window handleFileListCommand() will build (#835 item 5).
+    // Caps how deep the operator can page (250/5 = 50 pages) and therefore
+    // the transient heap that costs (250 * 32 B = 8 kB on the deepest page).
+    // Page 0 stays correct for any directory size -- the window streams.
+    static constexpr size_t   FILE_LIST_MAX_WINDOW   = 250;
     static constexpr uint32_t LOG_FLUSH_INTERVAL_MS  = 10000;   // Periodic flush to flash (10s)
     static constexpr uint32_t LOG_OPEN_RETRY_MS      = 5000;    // Retry fopen() at most this often when a start attempt fails (#107)
 

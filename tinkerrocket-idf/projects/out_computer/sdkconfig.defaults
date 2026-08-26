@@ -160,7 +160,9 @@ CONFIG_ESP_PHY_MAC_BB_PD=y
 # perfectly good board. The project CMakeLists picks the fragment from the
 # TR_BOARD_* flag — see there, and board/board_v9.h for the hardware.
 
-# Flash
+# Flash — 8 MB, which is the SMALLEST boot NOR in the fleet, not the typical
+# one. See the "Boot NOR size" block at the bottom of this file for why the
+# base value is the small one and V9/V10 raises it in sdkconfig.defaults.v9.
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
@@ -200,3 +202,49 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # Serial
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
+
+# --- Boot NOR size (#851 item 3, corrected 2026-08-24) --------------------
+# The two ways of getting this wrong are not symmetric:
+#
+#   too small   benign. Boots, logs "Detected size(16384k) larger than the size
+#               in the binary image header(8192k)", leaves the top of the part
+#               unreachable.
+#   too large   FATAL, and in the bootloader, so no firmware ever runs to say so:
+#                 E spi_flash: Detected size(8192k) smaller than the size in the
+#                              binary image header(16384k). Probe failed.
+#                 E esp_core_dump_flash: Core dump flash config is corrupted!
+#               A continuous boot loop on a board that is perfectly good.
+#
+# So the base value here is the SMALLEST part in the fleet and V9/V10 raises it
+# in sdkconfig.defaults.v9, next to the PSRAM that is per-board for the same
+# reason. What this block used to say — that 16 MB is right for "every
+# placement in the fleet", hedged with "V8 bench boards may carry 8 MB parts" —
+# was wrong, and the hedge was the part that mattered.
+#
+# The fleet is genuinely mixed and the split has a date. U13/U16 were
+# W25Q64JVXGIQ (8 MB) until the V9 fab close-out on 2026-08-09 and
+# W25Q128JVSIQ / GD25Q128ESIG (16 MB) after it — see hardware/rocket-computer/
+# bom.csv across 199ecec -> 8f87aa0. So V7/V8 are 8 MB and V9/V10 are 16 MB.
+#
+# MEASURED on the V7 board 2026-08-24 with `esptool flash-id`, both MCUs:
+#   OC (ESP32-S3, MAC e0:72:a1:ca:e1:50)  manufacturer ef, device 7017 -> 8 MB
+#   FC (ESP32-P4, MAC 30:ed:a0:e3:64:9c)  manufacturer ef, device 7017 -> 8 MB
+# A fresh `-B build_v7 -DTR_BOARD_V7=1` image built from the old 16 MB default
+# boot-looped that board continuously. V8 is still unmeasured — no V8 artwork
+# was ever committed — which is the other reason the base value is 8 MB.
+#
+# Nothing is given up by it: partitions.csv ends at 0x620000 (6.4 MB). If a
+# partition ever does cross 8 MB it has to move into a V9-only table, or V7/V8
+# stop building — gen_esp32part.py refuses a table larger than the declared
+# flash, which is the safe way for that mistake to surface.
+#
+# TRAP: IDF does not re-apply sdkconfig.defaults to an EXISTING sdkconfig, and
+# this project deliberately keeps one PER BUILD DIR (#822, so a V9 build
+# cannot poison a V8 one).  A build dir created before a change here keeps
+# building the old value.  Verified 2026-08-24: build_v8/sdkconfig and
+# build_v9/sdkconfig both still said 8 MB while this file said 16 MB, which is
+# the only reason the wrong default never reached a board from this machine.
+# Fix is to delete build_<rev>/sdkconfig and reconfigure — an incremental
+# rebuild will NOT do it. That staleness cuts both ways: it is also why a
+# fresh clone, or a deleted build dir, was all it took to produce an
+# unbootable flight image.

@@ -15,7 +15,15 @@ import sys, csv
 from collections import Counter
 
 def is_blank(v):
+    # #850: rows come from bs_log now, which yields TYPED values (floats, ints)
+    # rather than the strings a csv.DictReader produced. A float NaN is the
+    # binary format's way of saying "no fix", so it has to be recognised here
+    # as well as the CSV spellings.
     if v is None: return True
+    if isinstance(v, float):
+        return v != v or v in (float("inf"), float("-inf"))
+    if not isinstance(v, str):
+        return False
     s = v.strip().lower()
     return s in ("", "nan", "-nan", "inf", "-inf")
 
@@ -24,16 +32,25 @@ def fnum(v):
     except (TypeError, ValueError): return None
 
 def main(path):
+    # #850: base-station logs are BINARY now. Read through bs_log, which detects
+    # the format by content and still opens the legacy CSVs — a DictReader
+    # pointed at a .bin yields garbage rows rather than an error, so this had to
+    # move rather than merely tolerate the new extension.
+    import pathlib
+    import sys as _sys
+    _root = str(pathlib.Path(__file__).resolve().parent)
+    if _root not in _sys.path:
+        _sys.path.insert(0, _root)
+    import bs_log
+
+    parsed, _events, _fmt = bs_log.read_bs_log(path)
     rows = []
-    with open(path, newline="") as f:
-        r = csv.DictReader(f)
-        for row in r:
-            # Skip EVENT rows (no telemetry payload) and malformed rows.
-            if row.get("state", "").strip().upper() == "EVENT":
-                continue
-            if is_blank(row.get("num_sats")):
-                continue
-            rows.append(row)
+    for row in parsed:
+        # Skip EVENT rows (no telemetry payload) and malformed rows. Events come
+        # back on their own channel from bs_log, so only the blank guard is left.
+        if is_blank(row.get("num_sats")):
+            continue
+        rows.append(row)
 
     n = len(rows)
     if n == 0:

@@ -60,11 +60,11 @@ MSG_EXPECTED_LEN = {
     MSG_BMP585:           12,
     MSG_MMC5983MA:        16,
     MSG_NON_SENSOR:       (42, 43, 44, 48, 50),
-    MSG_POWER:            10,
+    MSG_POWER:            (10, 14),  # #850: v2 appends cam_ma + servo_ma
     MSG_START_LOGGING:    None,
     MSG_END_FLIGHT:       None,
     MSG_LORA_UPLINK:      13,   # sizeof(LoRaUplinkData)
-    MSG_LORA:             65,   # sizeof(LoRaData) — #572: was a stale 49; sweep on struct-size changes (#227)
+    MSG_LORA:             (22, 55),  # #850: SLOW / FAST frames; sweep on struct-size changes (#227)
 }
 
 FMT_ISM6       = '<I hhh hhh hhh'

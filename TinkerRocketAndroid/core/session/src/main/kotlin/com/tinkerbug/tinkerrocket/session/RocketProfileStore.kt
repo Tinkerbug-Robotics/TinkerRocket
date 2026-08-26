@@ -73,6 +73,24 @@ public class RocketProfileStore(
         if (_activeId.value == id) setActive(null)
     }
 
+    /**
+     * Make [id] the ONE profile bound to [unitId], releasing any other that
+     * still claims that board.
+     *
+     * Binding has to be exclusive or it isn't a binding. Assigning a second
+     * profile to a rocket used to leave the first one still claiming it, and
+     * the connect-time lookup takes the FIRST match in a list sorted by NAME
+     * — so which profile a board came back on was decided alphabetically
+     * rather than by anything the user did. Bench-caught on #915.
+     */
+    public fun bind(id: UUID, unitId: String) {
+        if (unitId.isEmpty()) return
+        profiles.value
+            .filter { it.lastUsedUnitID == unitId && it.id != id }
+            .forEach { other -> update(other.id) { it.copy(lastUsedUnitID = null) } }
+        update(id) { it.copy(lastUsedUnitID = unitId) }
+    }
+
     public fun setActive(id: UUID?) {
         _activeId.value = id?.takeIf { candidate -> _profiles.value.any { it.id == candidate } }
         activeStorage.saveActiveId(_activeId.value?.toString()?.uppercase())

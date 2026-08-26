@@ -1,0 +1,28 @@
+name: hardware
+
+# Scoped to hardware/ on purpose. The gate below is currently RED on
+# rocket-computer (#833: Q11 is in the schematic and not in the layout), and
+# firmware/app work should not be blocked by a board defect it cannot fix.
+on:
+  push:
+    paths: ['hardware/**', 'tools/check_board_parity.py', '.github/workflows/hardware.yml']
+  pull_request:
+    paths: ['hardware/**', 'tools/check_board_parity.py', '.github/workflows/hardware.yml']
+
+jobs:
+  board-parity:
+    # Nothing in CI validated hardware/ before this. docs/board-versioning.md
+    # names `kicad-cli pcb drc --schematic-parity` as the only gate, and that
+    # command does NOT notice a footprint missing from the layout entirely —
+    # it reconciles what IS on the board. #833 shipped that far: the flight
+    # battery's positive terminal reached nothing but a floating pour.
+    #
+    # Pure Python, no KiCad on the runner, so it costs seconds.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Every board-bound symbol has a footprint
+        run: python3 tools/check_board_parity.py

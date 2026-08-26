@@ -199,6 +199,11 @@ class MainActivity : ComponentActivity() {
                                         container = container,
                                         tool = tool,
                                         onTool = { tool = it },
+                                        // Dashboard advisories that point at a
+                                        // setting (iOS opens the settings
+                                        // sheet); same tab-change discipline as
+                                        // onTab above — close any open tool.
+                                        onOpenSettings = { tool = null; tab = 3 },
                                         onDisconnect = {
                                             fleet.disconnect(activeDevice.deviceId)
                                             demoFleet = null
@@ -217,6 +222,7 @@ class MainActivity : ComponentActivity() {
                                         syncer = container.syncer,
                                         fleetScope = container.fleetScope,
                                         session = activeDevice.session,
+                                        preflight = container.preflightStore,
                                     )
                                 }
                             }
@@ -231,7 +237,17 @@ class MainActivity : ComponentActivity() {
                             var showMyDevices by remember { mutableStateOf(false) }
                             var showSavedFlights by remember { mutableStateOf(false) }
                             var showDriftCast by remember { mutableStateOf(false) }
-                            if (showDriftCast) {
+                            var showPreflight by remember { mutableStateOf(false) }
+                            if (showPreflight) {
+                                // Master pre-flight checklist editor — no
+                                // device needed (iOS front-page entry).
+                                PreflightMasterScreen(
+                                    preflight = container.preflightStore,
+                                    profiles = container.profileStore,
+                                    fleetScope = container.fleetScope,
+                                    onBack = { showPreflight = false },
+                                )
+                            } else if (showDriftCast) {
                                 // Standalone wind/trajectory planner — runs
                                 // with no device, like the iOS top-screen
                                 // entry (#42; design pass 2026-07-30 promoted
@@ -266,6 +282,7 @@ class MainActivity : ComponentActivity() {
                                     onMyDevices = { showMyDevices = true },
                                     onSavedFlights = { showSavedFlights = true },
                                     onDriftCast = { showDriftCast = true },
+                                    onPreflight = { showPreflight = true },
                                     unitStore = container.units,
                                     updateVersion = update?.versionName,
                                     onGetUpdate = {

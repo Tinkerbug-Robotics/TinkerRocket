@@ -10,6 +10,14 @@ import Foundation
 struct TelemetryData: Codable {
     var soc: Float?                   // Battery state of charge %
     var current: Float?               // Battery current mA
+    // #850: camera / servo high-side-switch load currents, AMPS (not mA — the
+    // battery `current` above is the shunt; these are load rails). nil means
+    // the key was absent, i.e. this board has no TPS22811 monitor fitted or
+    // the read failed. Render as "--", never as 0.0 A: a camera that is off
+    // and a camera with no monitor look identical at zero, and only one of
+    // those is something we measured.
+    var cam_current: Float?           // Camera rail current A  (nil = not measured)
+    var servo_current: Float?         // Servo rail current A   (nil = not measured)
     var voltage: Float?               // Battery voltage V
     var latitude: Double?             // GPS latitude degrees
     var longitude: Double?            // GPS longitude degrees
@@ -91,6 +99,16 @@ struct TelemetryData: Codable {
     // the wrong network id — the failure that used to be silent).
     var hop_channel: Int?
     var netid_drops: Int?
+    /// "szd" — LoRa frames dropped because the rocket and this base station
+    /// disagree about the protocol (#570, #838 item 4).  Sibling of
+    /// `netid_drops` with the same recency window but a different fault: nidd
+    /// means somebody else's traffic, szd means OUR rocket is unreadable
+    /// because the two were flashed from different builds.  Since #925 it also
+    /// counts frames whose LORA_PROTO_VERSION nibble is not ours.
+    ///
+    /// Emitted by the base station since #570; neither app decoded it, so the
+    /// blackout it exists to explain stayed silent.
+    var size_drops: Int?
 
     // Base station (base station only)
     var bs_soc: Float?                // Base station SOC %
@@ -134,8 +152,13 @@ struct TelemetryData: Codable {
     var source_unit_name: String?     // rocket unit name from LoRa beacon
 
     // Telemetry freshness status (#95).  Sent by the BS in periodic-push
-    // payloads; absent from RX-path payloads (which are always live) and
-    // from direct rocket connections.  iOS treats a missing "ds" as live.
+    // payloads; absent from RX-path payloads (which are always live).  iOS
+    // treats a missing "ds" as live.
+    //
+    // #831: a DIRECT rocket connection also sends it — SYNCING until the OC
+    // has seen the FC's first NonSensorData frame, so stale zeroed continuity
+    // cannot render green.  So .syncing does NOT imply "base station".  See
+    // DashboardVisibility: the state banner must stay visible through it.
     enum DataStatus: Int, Codable { case live = 0, stale = 1, syncing = 2 }
     var data_status: DataStatus = .live
     var data_age_ms: UInt32 = 0      // only meaningful when .stale
@@ -386,6 +409,8 @@ struct TelemetryData: Codable {
     enum CodingKeys: String, CodingKey {
         case soc
         case current = "cur"
+        case cam_current = "ccur"      // #850
+        case servo_current = "scur"    // #850
         case voltage = "vol"
         case latitude = "lat"
         case longitude = "lon"
@@ -418,6 +443,7 @@ struct TelemetryData: Codable {
         case rssi, snr
         case hop_channel = "hch"
         case netid_drops = "nidd"
+        case size_drops = "szd"
         case bs_soc = "bsoc"
         case bs_voltage = "bvol"
         case bs_current = "bcur"
@@ -458,6 +484,10 @@ struct TelemetryData: Codable {
         }
         soc = try c.decodeIfPresent(Float.self, forKey: .soc)
         current = try c.decodeIfPresent(Float.self, forKey: .current)
+        // #850: decodeIfPresent, so an absent key stays nil ("no monitor
+        // fitted") rather than becoming 0 ("measured zero amps").
+        cam_current = try c.decodeIfPresent(Float.self, forKey: .cam_current)
+        servo_current = try c.decodeIfPresent(Float.self, forKey: .servo_current)
         voltage = try c.decodeIfPresent(Float.self, forKey: .voltage)
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
@@ -500,6 +530,7 @@ struct TelemetryData: Codable {
         snr = try c.decodeIfPresent(Float.self, forKey: .snr)
         hop_channel = flexInt(.hop_channel)                          // #571
         netid_drops = flexInt(.netid_drops)                          // #571
+        size_drops = flexInt(.size_drops)                            // #838 item 4
         bs_soc = try c.decodeIfPresent(Float.self, forKey: .bs_soc)
         bs_voltage = try c.decodeIfPresent(Float.self, forKey: .bs_voltage)
         bs_current = try c.decodeIfPresent(Float.self, forKey: .bs_current)
@@ -541,6 +572,27 @@ struct TelemetryData: Codable {
         }
         return "N/A"
     }
+
+    /// #850: format a high-side-switch load current for display.
+    ///
+    /// Amps with 2 decimals at 1 A and above, whole milliamps below — the
+    /// TPS22811 GIMON spread is +/-13%, so finer absolute precision would be a
+    /// fiction, but that error is a stable per-board GAIN term and relative
+    /// movement is faithful. Watching for a stalled servo depends on the
+    /// latter, not the former.
+    ///
+    /// nil renders as an em dash: the key was absent, meaning this board has no
+    /// monitor fitted. Never render that as 0.
+    ///
+    /// Android twin: `railAmpsDisplay(Float?)`.
+    static func railAmpsDisplay(_ amps: Float?) -> String {
+        guard let a = amps else { return "—" }
+        return a >= 1.0 ? String(format: "%.2f A", a)
+                        : String(format: "%.0f mA", a * 1000)
+    }
+
+    var camCurrentDisplay: String { Self.railAmpsDisplay(cam_current) }
+    var servoCurrentDisplay: String { Self.railAmpsDisplay(servo_current) }
 
     var voltageDisplay: String {
         if let voltage = voltage {

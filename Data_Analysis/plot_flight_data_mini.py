@@ -120,12 +120,12 @@ MSG_EXPECTED_LEN = {
     MSG_MMC5983MA:         16,
     MSG_IIS2MDC:           10,   # IIS2MDCData (new PCB rev)
     MSG_NON_SENSOR:        None,  # 42 (legacy) or 43 (with pyro_status byte)
-    MSG_POWER:             10,
+    MSG_POWER:            (10, 14),  # #850: v2 appends cam_ma + servo_ma
     MSG_START_LOGGING:     None,  # variable / no payload
     MSG_END_FLIGHT:        None,
     MSG_LOG_BUFFER_STATS:  28,    # LogBufferStatsData
     MSG_LORA_UPLINK:       13,   # sizeof(LoRaUplinkData)
-    MSG_LORA:              65,  # sizeof(LoRaData) — #572: was a stale 49; sweep on struct-size changes (#227)
+    MSG_LORA:              (22, 55),  # #850: SLOW / FAST frames; sweep on struct-size changes (#227)
     MSG_GUIDANCE_TELEM:    (15, 19),  # legacy (mislabeled) / current (+fin cmds)
 }
 
@@ -141,7 +141,8 @@ FMT_MMC = '<I III'
 # IIS2MDCData: 10 bytes (time_us, mag_x/y/z:i16) — new PCB rev
 FMT_IIS2MDC = '<I hhh'
 # POWERData: 10 bytes (time_us, voltage_raw:u16, current_raw:i16, soc_raw:i16)
-FMT_POWER = '<I Hhh'
+FMT_POWER    = '<I Hhh'     # v1, 10 B (pre-#850)
+FMT_POWER_V2 = '<I HhhHH'   # v2, 14 B (+cam_ma, +servo_ma)
 # NonSensorData: 42 bytes (q0-q3 as int16*10000, roll_cmd centideg)
 FMT_NONSENSOR_42 = '<I hhhhh iii iii BB h'     # legacy (no pyro_status)
 FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'  # +pyro_status byte (#34)
@@ -634,13 +635,21 @@ def parse_binary_file(filepath):
                         f"NonSensorData struct change.\n")
 
             elif msg_type == MSG_POWER:
-                fields = struct.unpack(FMT_POWER, payload)
+                # #850: dispatch on length. v1 logs (10 B) predate the rail
+                # current monitors and report them as None, NOT 0 -- "not
+                # measured" and "measured zero" are different facts and a plot
+                # must not draw a flat 0 A line for a board that never had the
+                # hardware.
+                v2 = (len(payload) == 14)
+                fields = struct.unpack(FMT_POWER_V2 if v2 else FMT_POWER, payload)
                 if fields[0] != 0 or fields[1] != 0 or fields[2] != 0 or fields[3] != 0:
                     records["POWER"].append({
                         "time_us":  fields[0],
                         "voltage":  decode_voltage(fields[1]),
                         "current":  decode_current(fields[2]),
                         "soc":      decode_soc(fields[3]),
+                        "cam_a":    (fields[4] / 1000.0) if v2 else None,
+                        "servo_a":  (fields[5] / 1000.0) if v2 else None,
                     })
 
             elif msg_type == MSG_LOG_BUFFER_STATS:

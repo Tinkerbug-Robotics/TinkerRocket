@@ -422,19 +422,21 @@ Validates sensor rates, frame integrity, timestamp health, and data completeness
 
 ### CI/CD
 
-Nine GitHub Actions workflows run automatically, each path-filtered to what it covers:
+Twelve GitHub Actions workflows run automatically, each path-filtered to what it covers:
 
 | Workflow | What it does |
 |----------|--------------|
-| **cpp-tests.yml** | GoogleTest suites — on changes to `tinkerrocket-idf/components/`, `tests_cpp/`, or `tests/integration/` |
+| **cpp-tests.yml** | GoogleTest suites — on changes to `tinkerrocket-idf/components/`, `tinkerrocket-idf/projects/`, `tests_cpp/`, or `tests/integration/`. `projects/` is on the list because three suites include policy headers straight out of `projects/*/main` |
 | **firmware-build.yml** | Full ESP-IDF build of `flight_computer`, `out_computer`, `base_station`, and `radio_board` (Docker: `espressif/idf:v6.0.1`) |
 | **sim-tests.yml** | pytest for `tinkerrocket-sim/` and the component sources it binds to |
+| **unit-tests.yml** | pytest for `tests/unit/` and `tests/test_roll_profile_semantics.py` — the Python ports of firmware logic (apogee detector, landing detector, mag-scale auto-select) and the base-station binary log reader, whose field offsets are asserted against the C structs in `RocketComputerTypes.h` |
 | **ios-tests.yml** | XCTest for `TinkerRocketApp/` |
 | **android-tests.yml** | Pure-JVM JUnit for `TinkerRocketAndroid/` (protocol/session/maps modules) against the same golden-vector corpus the C++ and iOS suites consume |
 | **android-release.yml** | Signed release APK on `android-v*` tag push — JVM suite, then `assembleRelease` signed from repo secrets, with an `apksigner` gate that fails if the APK came out debug-signed (see `docs/android-release-signing.md`) |
 | **flight-report-tests.yml** | Flight-report tooling — the Python suite, plus a Node job for the Explore panel, whose choice of what to draw is made in JavaScript and so is tested there |
 | **pages.yml** | Publishes the browser-based analysis tool to GitHub Pages on pushes to `main`. Builds `Data_Analysis/webtool/payload/` rather than shipping it — it is gitignored, and a committed copy would drift from the source the browser actually runs |
 | **wire-codes.yml** | Fails on duplicate BLE command numbers — the dispatch is a first-match chain, so a duplicate silently makes the later handler dead code |
+| **hardware.yml** | Every symbol the schematic marks `on_board` must have a footprint in the layout — on changes to `hardware/`. Nothing validated boards before this: `docs/board-versioning.md` names `kicad-cli pcb drc --schematic-parity` as the only gate, and that reconciles footprints already on the board rather than noticing one absent entirely. #833 got as far as a fab-ready V10 whose flight-battery positive terminal reached nothing but a floating pour |
 | **docs.yml** | Fails if a generated section map or the protocol reference disagrees with its source, or if the prose contradicts it — broken links, a stale ESP-IDF version, a missing workflow, a wrong struct size. The only workflow with **no path filter**: it runs on every push and PR, because docs drift as a side effect of changes anywhere |
 
 ## Communication Protocols
@@ -460,9 +462,10 @@ The main sensor frames, with the rate each is produced at:
 | 0xA2 | ISM6HG256 (IMU) | 22 B | 1920 Hz (default) |
 | 0xA3 | BMP585 (Baro) | 12 B | 500 Hz |
 | 0xA5 | NonSensor (EKF) | 50 B | 500 Hz |
-| 0xA6 | Power | 10 B | 10 Hz |
+| 0xA6 | Power | 14 B | 100 Hz |
 | 0xD1 | IIS2MDC (Mag) | 10 B | 100 Hz |
-| 0xF1 | LoRa Telemetry | 65 B | 2 Hz |
+| 0xF1 | LoRa Telemetry (fast) | 55 B | 1.67 Hz |
+| 0xF1 | LoRa Telemetry (slow) | 22 B | 0.33 Hz |
 | 0xF9 | LoRa Uplink RX | 13 B | per uplink decode |
 
 `0xA4` (MMC5983MA, 16 B) is the magnetometer frame from an earlier sensor, still on the

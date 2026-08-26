@@ -25,6 +25,7 @@ enum DashboardSheet: Identifiable {
     case servoTest(BLEDevice)
     case driftCast
     case frequencyScan(BLEDevice)   // #150: restored (removed in #136)
+    case preflight(BLEDevice)       // run the active rocket's pre-flight checklist
 
     var id: String {
         switch self {
@@ -33,7 +34,54 @@ enum DashboardSheet: Identifiable {
         case .servoTest(let d):     return "servoTest-\(d.peripheral?.identifier.uuidString ?? "")"
         case .driftCast:            return "driftCast"
         case .frequencyScan(let d): return "frequencyScan-\(d.peripheral?.identifier.uuidString ?? "")"
+        case .preflight(let d):     return "preflight-\(d.peripheral?.identifier.uuidString ?? "")"
         }
+    }
+}
+
+/// What a dashboard row is allowed to draw for a given telemetry `DataStatus`.
+///
+/// SYNCING carries TWO different meanings on the wire, and that is the whole
+/// reason this policy exists as one named place rather than an inline `!=`:
+///
+///  * base-station path (#95) — "no rocket caught yet".  The telemetry struct
+///    is zero-initialised, so every VALUE is a lie: 0 m altitude, 0 continuity,
+///    a fabricated state.  Those must be hidden.
+///  * direct path (#831) — "connected to the FC, but it has not sent its first
+///    NonSensorData frame yet", i.e. it is still inside setup_fc().  Here the
+///    state and the boot-progress line are the ONLY real information we have,
+///    and they are exactly what the operator is waiting on.
+///
+/// One gate for both meanings hid the state banner for the whole ~25 s FC boot.
+enum DashboardVisibility {
+
+    /// Altitude, GNSS, continuity, sensor health — anything whose number would
+    /// be fabricated when the stream has not synced.  Hidden while syncing.
+    static func showValueViews(_ status: TelemetryData.DataStatus) -> Bool {
+        status != .syncing
+    }
+
+    /// The state banner and its FC boot-progress line.
+    ///
+    /// Shown whenever the state is REPORTED rather than fabricated, which is
+    /// what separates the two meanings of SYNCING:
+    ///
+    ///  * direct — always show.  SYNCING means the FC has not spoken yet, and
+    ///    the banner plus its boot line is the only news there is.  This is the
+    ///    case that regressed: the entire ~25 s FC boot rendered nothing.
+    ///  * base station, syncing — hide.  No rocket has ever been caught, so the
+    ///    BS pushes a zero-init LoRaDataSI whose state field is 0, and 0 is
+    ///    INITIALIZATION (RocketComputerTypes.h).  Rendering that would invent
+    ///    a rocket sitting on the pad, which is the exact thing #95 and the
+    ///    firmware's own comment (base_station/main/main.cpp) set out to avoid.
+    ///
+    /// Android twin: `showStateBanner` in core/protocol/DashboardVisibility.kt.
+    /// It had drawn RocketStateBanner unconditionally, so it never hid the boot
+    /// — but for the same reason it DID render the phantom pad rocket; both
+    /// sides now share this rule.
+    static func showStateBanner(_ status: TelemetryData.DataStatus,
+                                isBaseStation: Bool) -> Bool {
+        !(isBaseStation && status == .syncing)
     }
 }
 
@@ -109,6 +157,22 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity)
                             .padding()
                             .background(.indigo)
+                            .foregroundColor(.white)
+                            .cornerRadius(TRShape.radiusButton)
+                        }
+
+                        // Master pre-flight checklist: the template every
+                        // rocket's checklist starts from, editable with no
+                        // device connected (build it at home, run it at the
+                        // pad from the dashboard advisory).
+                        NavigationLink(destination: PreflightMasterView()) {
+                            HStack {
+                                Image(systemName: "checklist")
+                                Text("Preflight Checklist")
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.teal)
                             .foregroundColor(.white)
                             .cornerRadius(TRShape.radiusButton)
                         }
@@ -288,6 +352,8 @@ struct DashboardView: View {
                     // hopping, the BS runs it as a coordinated scan and
                     // pushes the resulting skip-mask via cmd 15.
                     NavigationView { FrequencyScanView(device: device) }
+                case .preflight(let device):
+                    PreflightRunView(device: device)
                 }
             }
             // SwiftUI sheets get a fresh environment by default — re-inject
@@ -584,6 +650,10 @@ struct ConnectedDashboardView: View {
             //     battery + power on button ---
             BatteryView(telemetry: device.telemetry, isBaseStation: false)
 
+            if device.telemetry.cam_current != nil || device.telemetry.servo_current != nil {
+                RailPowerView(telemetry: device.telemetry)
+            }
+
             Button {
                 device.beginPowerOn()
             } label: {
@@ -613,13 +683,14 @@ struct ConnectedDashboardView: View {
             // operator doesn't see the empty zero-init values rendered as
             // a fake "INIT" rocket.  When STALE we keep the views visible
             // but dim them and show a banner with the age.  Direct rocket
-            // connections always come through as .live (no banner, no dim).
+            // connections are NOT always .live: #831 reports SYNCING until the
+            // first FC NonSensorData frame, and STALE past FC_FRAME_STALE_MS.
             // #390: effectiveDataStatus overlays app-computed staleness of
             // the FOCUSED rocket — with the relay mirror pinned, the BS's
             // re-push may describe a different rocket and get dropped, so
             // the frame-carried status alone could freeze at .live.
             let dataStatus = device.effectiveDataStatus
-            let showRocketViews = dataStatus != .syncing
+            let showRocketViews = DashboardVisibility.showValueViews(dataStatus)
             let staleOpacity: Double = dataStatus == .stale ? 0.5 : 1.0
 
             if device.isBaseStation && dataStatus != .live {
@@ -627,7 +698,15 @@ struct ConnectedDashboardView: View {
                                       ageMs: device.effectiveDataAgeMs)
             }
 
-            if showRocketViews {
+            // NOT behind showRocketViews — see DashboardVisibility for why.
+            // Short version: showRocketViews hides VALUES while syncing, which
+            // is right, but the state banner is what EXPLAINS a syncing stream.
+            // Gating it too meant the whole ~25 s FC boot rendered nothing, and
+            // the boot-progress line added for exactly that window (fed by "bs")
+            // could never appear.  The state reappeared only at READY, which
+            // displays as "PRELAUNCH" — so the boot looked like it skipped INIT.
+            if DashboardVisibility.showStateBanner(dataStatus,
+                                                   isBaseStation: device.isBaseStation) {
                 RocketStateView(state: device.telemetry.state,
                                 hopBadge: hopBadge(
                                     isBaseStation: device.isBaseStation,
@@ -636,6 +715,42 @@ struct ConnectedDashboardView: View {
                                     state: device.telemetry.state),
                                 boot: device.telemetry.fcBootProgress)
                     .opacity(staleOpacity)
+
+                // Pre-flight checklist advisory: one quiet progress line for
+                // the active rocket, right under the state banner.  Advisory
+                // only — it never recolors the banner (sensor health owns
+                // that) and renders nothing when no checklist is configured.
+                PreflightAdvisoryRow(device: device) {
+                    activeSheet = .preflight(device)
+                }
+                .opacity(staleOpacity)
+
+                // "LoRa off": one quiet line, same shape and placement as the
+                // preflight advisory and under the same rule — advisory only,
+                // it never recolors the state banner.  Worth a line at all
+                // because a muted rocket looks exactly like a working one from
+                // a directly-connected phone, right up until it flies and
+                // there is no downlink to follow it with.  Only a direct BLE
+                // link can know: a base-station relay hears nothing from a
+                // muted rocket, so there is no config readback to read this
+                // from — hence the !isBaseStation guard rather than a
+                // confidently-wrong "transmitting".
+                if !device.isBaseStation,
+                   device.rocketConfig?.loraTxDisabled == true {
+                    Button { activeSheet = .settings(device) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                            Text("LoRa off — no telemetry downlink")
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.orange)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                    .opacity(staleOpacity)
+                }
             }
 
             // #557: the FC lost its GNSS module and is flying a baro+IMU-only
@@ -688,6 +803,10 @@ struct ConnectedDashboardView: View {
                 directOrientationName: device.imuOrientationName,
                 directOrientationMode: device.imuOrientationMode,
                 staleOpacity: staleOpacity,
+                // Same signal the STALE banner above is drawn from, so the
+                // banner and the held verdict can never disagree.
+                staleAgeSec: dataStatus == .stale
+                    ? Double(device.effectiveDataAgeMs) / 1000.0 : nil,
                 showRocketViews: showRocketViews,
                 // On SYNCING (searching, no rocket data yet) keep the BS-only
                 // battery so the operator still has a live indicator.
@@ -787,6 +906,11 @@ struct RocketTelemetryCards: View {
     var directOrientationMode: IMUOrientationMode = .unknown
     /// Dimming applied while the stream is stale; 1.0 when live.
     var staleOpacity: Double = 1.0
+    /// Age of the newest frame while the stream is NOT live, else nil.  Only
+    /// the go/no-go card uses it: dimming is right for measurements, but a
+    /// launch recommendation has to stop being made, not just be shown
+    /// faintly (#836 item 3).
+    var staleAgeSec: TimeInterval? = nil
     /// False while a BS link is still searching and has no rocket data yet —
     /// suppresses the rocket-specific cards without hiding link status.
     var showRocketViews: Bool = true
@@ -819,6 +943,14 @@ struct RocketTelemetryCards: View {
                     // ambiguous, and splitting battery info across two places
                     // wasn't worth a shorter card.
                     BatteryView(telemetry: telemetry, isBaseStation: isBaseStation)
+                        .opacity(staleOpacity)
+                }
+
+                // #850: rail currents sit with the rest of the live telemetry,
+                // not only on the pre-power-on screen — a stalling servo is a
+                // thing you watch WHILE it is running.
+                if telemetry.cam_current != nil || telemetry.servo_current != nil {
+                    RailPowerView(telemetry: telemetry)
                         .opacity(staleOpacity)
                 }
 
@@ -870,7 +1002,7 @@ struct RocketTelemetryCards: View {
                 // Pre-launch sensor health scorecard + go/no-go (#303).  Only
                 // shown once the rocket reports a scorecard ("h" present).
                 if showRocketViews && telemetry.hasSensorHealth {
-                    HealthCardView(telemetry: telemetry)
+                    HealthCardView(telemetry: telemetry, staleAgeSec: staleAgeSec)
                         .opacity(staleOpacity)
                 }
             }
@@ -1127,23 +1259,64 @@ struct HealthDotRow: View {
         }
     }
 
+    /// Most dots on one line.  Found on the bench 2026-08-22: a rocket with
+    /// two configured pyros produces nine dots, and the ninth sat off the
+    /// right edge of an iPhone 17 inside a `showsIndicators: false`
+    /// ScrollView — visible only if you happened to swipe a row that gave no
+    /// hint it could scroll.  That is bad here specifically because this row
+    /// answers "WHY does the banner say Do not fly": the verdict was on
+    /// screen while the red dot explaining it was not.  Six keeps a line
+    /// legible on the narrowest supported phone.
+    private static let maxPerLine = 6
+
+    /// Split into balanced lines rather than filling the first and orphaning
+    /// a remainder — 9 dots read better as 5+4 than 6+3.
+    private var lines: [[TelemetryData.SensorHealthRow]] {
+        guard rows.count > Self.maxPerLine else { return [rows] }
+        let lineCount = Int(ceil(Double(rows.count) / Double(Self.maxPerLine)))
+        let perLine = Int(ceil(Double(rows.count) / Double(lineCount)))
+        return stride(from: 0, to: rows.count, by: perLine).map {
+            Array(rows[$0 ..< min($0 + perLine, rows.count)])
+        }
+    }
+
     var body: some View {
-        HStack(spacing: 14) {
-            ForEach(rows) { row in
-                VStack(spacing: 3) {
-                    Circle()
-                        .fill(color(for: row.state))
-                        .frame(width: 12, height: 12)
-                    Text(row.name)
-                        .font(.caption2)
+        // Deliberately NOT lazy and no longer inside a ScrollView: both make
+        // ImageRenderer draw this empty, which is what left the clipping
+        // above untested — the render test targets this view directly and so
+        // never saw the container that was hiding a dot.
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(line) { row in
+                        VStack(spacing: 3) {
+                            Circle()
+                                .fill(color(for: row.state))
+                                .frame(width: 12, height: 12)
+                            Text(row.name)
+                                .font(.caption2)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 struct HealthCardView: View {
     let telemetry: TelemetryData
+    /// Age of the newest frame when the stream is NOT live, else nil (#836
+    /// item 3).  Dimming alone was not enough here: every other card shows a
+    /// MEASUREMENT, which stays true of the moment it was taken, but this one
+    /// shows a go/no-go RECOMMENDATION, and a recommendation derived from
+    /// minutes-old sensor bits is not a stale fact — it is an assertion about
+    /// right now that nothing supports.  A relayed rocket whose link had died
+    /// went on reading "Ready to fly" at full strength.  While this is set the
+    /// verdict is HELD rather than restated.
+    var staleAgeSec: TimeInterval? = nil
 
     private func color(for state: TelemetryData.SensorHealth) -> Color {
         switch state {
@@ -1153,7 +1326,24 @@ struct HealthCardView: View {
         case .na:       return .gray
         }
     }
+    /// Whether the verdict is being asserted or held.  Pure and static so the
+    /// rule is pinned by a test rather than living in three view-private
+    /// computed properties that could drift apart from each other.
+    static func isHeld(staleAgeSec: TimeInterval?) -> Bool { staleAgeSec != nil }
+
+    /// "Held — data 47 s old".  Deliberately NOT a verdict word: "unknown"
+    /// reads as a measurement that failed, "held" says the app stopped
+    /// judging because the input stopped arriving.
+    static func readinessLabel(_ readiness: TelemetryData.FlightReadiness,
+                               staleAgeSec: TimeInterval?) -> String {
+        guard let age = staleAgeSec else { return readiness.label }
+        // `.lost(lastSeen: nil)` hands us a non-finite age; Int() would trap.
+        guard age.isFinite else { return "Held — no telemetry received" }
+        return "Held — data \(RocketFreshness.ageText(age)) old"
+    }
+
     private var readinessColor: Color {
+        if Self.isHeld(staleAgeSec: staleAgeSec) { return .gray }
         switch telemetry.flightReadiness {
         case .ready:    return .green
         case .caution:  return .orange
@@ -1162,12 +1352,16 @@ struct HealthCardView: View {
         }
     }
     private var readinessIcon: String {
+        if Self.isHeld(staleAgeSec: staleAgeSec) { return "hourglass" }
         switch telemetry.flightReadiness {
         case .ready:    return "checkmark.seal.fill"
         case .caution:  return "exclamationmark.triangle.fill"
         case .notReady: return "xmark.octagon.fill"
         case .unknown:  return "hourglass"
         }
+    }
+    private var readinessLabel: String {
+        Self.readinessLabel(telemetry.flightReadiness, staleAgeSec: staleAgeSec)
     }
 
     var body: some View {
@@ -1180,7 +1374,7 @@ struct HealthCardView: View {
                 Image(systemName: readinessIcon)
                     .font(.title2)
                     .foregroundColor(readinessColor)
-                Text(telemetry.flightReadiness.label)
+                Text(readinessLabel)
                     .font(.system(.title3, design: .default).weight(.semibold))
                     .foregroundColor(readinessColor)
                 Spacer(minLength: 0)
@@ -1196,12 +1390,13 @@ struct HealthCardView: View {
             // labeled chip grid — the per-sensor state TEXT moved out of the
             // glanceable path (the go/no-go banner above carries the verdict;
             // a wrong dot's meaning is one tap into MagCal/Settings anyway).
-            // The row itself is a separate view because ImageRenderer draws
-            // ScrollView content as EMPTY — the render test hits the row
-            // directly (same reason the old LazyVGrid was render-untestable).
-            ScrollView(.horizontal, showsIndicators: false) {
-                HealthDotRow(rows: telemetry.sensorHealthRows)
-            }
+            // The row wraps rather than scrolling (2026-08-22): a ninth dot
+            // used to sit off the right edge of a `showsIndicators: false`
+            // horizontal ScrollView with nothing to say it was there.  The
+            // row is still a separate view so ImageRenderer can draw it — it
+            // used to be separate BECAUSE of the ScrollView, which is exactly
+            // why the render test could not see the clipping.
+            HealthDotRow(rows: telemetry.sensorHealthRows)
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1395,6 +1590,64 @@ struct BatteryView: View {
                            charge: telemetry.bsSocDisplay,
                            voltage: telemetry.bsVoltageDisplay,
                            current: telemetry.bsCurrentDisplay)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemGray6))
+        .cornerRadius(10)
+    }
+}
+
+/// #850: camera / servo high-side-switch load currents.
+///
+/// Its own card rather than a sub-row of Battery: these are LOAD rails, not the
+/// pack, and the operator reads them for a different question — is the camera
+/// actually drawing, is a servo stalling. Burying them under the battery rows
+/// put them below the fold on the live rocket screen, which is where they
+/// matter most.
+///
+/// Rendered ONLY when the board actually reports them. A V7/V8 rocket, the mini,
+/// or any pre-#850 firmware omits both JSON keys, and an absent key means "no
+/// monitor fitted" — which must not appear as 0.00 A. Showing nothing is the
+/// honest render; showing zero would claim a measurement we do not have.
+///
+/// One caveat the UI cannot fix: over a BASE-STATION relay the LoRa slow frame
+/// has no way to encode "absent", so a monitor-less rocket relays a literal 0
+/// and this card shows 0.00 A for it. On a direct link the two stay distinct.
+///
+/// Android twin: DashboardScreen.kt RailPowerCard.
+struct RailPowerView: View {
+    let telemetry: TelemetryData
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Rail Current")
+                .font(.headline)
+
+            HStack(spacing: 0) {
+                Text("")
+                    .frame(width: 70, alignment: .leading)
+                Text("Camera")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                Text("Servo")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+            }
+
+            HStack(spacing: 0) {
+                Text("Load")
+                    .font(.caption)
+                    .frame(width: 70, alignment: .leading)
+                Text(telemetry.camCurrentDisplay)
+                    .font(.caption.monospaced())
+                    .frame(maxWidth: .infinity)
+                Text(telemetry.servoCurrentDisplay)
+                    .font(.caption.monospaced())
+                    .frame(maxWidth: .infinity)
             }
         }
         .padding()
@@ -3040,6 +3293,19 @@ struct SignalStrengthView: View {
                         .font(.caption)
                         .foregroundColor(.orange)
                 }
+            }
+
+            // "szd" — the sibling counter, and unlike nidd it has no benign
+            // reading: these are OUR rocket's frames, unreadable because the
+            // two ends were flashed from different builds.  Not gated on
+            // trackingHealthy for that reason.  The base station has emitted
+            // this since #570 and neither app decoded it, so the blackout it
+            // exists to explain stayed silent (#838 item 4).
+            if isBaseStation, let drops = telemetry.size_drops, drops > 0 {
+                Label("Protocol mismatch: \(drops) packets dropped — the rocket and base station were flashed from different builds; re-flash both",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
             }
         }
         .padding()

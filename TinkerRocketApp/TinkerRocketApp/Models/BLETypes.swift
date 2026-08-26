@@ -115,6 +115,52 @@ struct DiscoveredDevice: Identifiable {
     }
 }
 
+/// Servo trim 2-4, fin travel, fin layout and sounds, from the rocket's own
+/// `config_servo` readback (#915).  Grouped so "did this rocket report them?"
+/// is one nil check instead of nine, and so the settings UI can say which
+/// groups it cannot verify rather than implying the whole screen is confirmed.
+/// Absent on firmware that predates the config report, and on the mini, which
+/// has none of this hardware.
+nonisolated struct RocketServoExtras: Equatable {
+    var bias2: Int16
+    var bias3: Int16
+    var bias4: Int16
+    var finMinDeg: Float
+    var finMaxDeg: Float
+    var finAzimuths: [Float]      // 4, per-servo ring-position azimuth
+    var finReverseMask: UInt8     // bit i ⇒ servo i pitch/yaw reversed
+    var finRollReverseMask: UInt8 // bit i ⇒ servo i roll reversed (independent)
+    var soundsEnabled: Bool
+}
+
+/// One roll-profile waypoint as the rocket reports it (#915).  A named type,
+/// not a tuple: a tuple array blocks Swift's synthesised `Equatable`, and the
+/// hand-written conformance that replaced it was a single `&&` chain long
+/// enough to blow the type-checker's budget in CI.  Mirrors Android's
+/// `ReportedRollWaypoint`.
+nonisolated struct ReportedRollWaypoint: Equatable {
+    var timeSeconds: Float
+    var angleDeg: Float
+}
+
+/// The PN / station-keep parameters behind the guidance on/off flag, from the
+/// rocket's `config_guid` readback (#915).
+nonisolated struct RocketGuidanceExtras: Equatable {
+    var navGain: Float
+    var maxAccel: Float
+    var accelToFin: Float
+    var maxFinDeg: Float
+    var minSpeed: Float
+    var coastDelayMs: UInt16
+    var targetMode: UInt8
+    var targetE: Float
+    var targetN: Float
+    var targetAltM: Float
+    var kpPos: Float
+    var kdVel: Float
+    var guidanceLaw: UInt8
+}
+
 struct RocketConfig {
     var servoBias1: Int16 = 0   // #561: match RocketProfile/config.h (was 85 → ~10° servo-1 trim)
     var servoHz: Int16 = 333
@@ -123,11 +169,16 @@ struct RocketConfig {
     // profile default and, paired with the ±60° fin cal, under-deflected ~2×.
     var servoMinUs: Int16 = 1000
     var servoMaxUs: Int16 = 2000
-    var pidKp: Float = 0.08
-    var pidKi: Float = 0.005
-    var pidKd: Float = 0.003
-    var pidMinCmd: Float = -10.0
-    var pidMaxCmd: Float = 10.0
+    // #915: match RocketProfile and config.h KP/KI/KD/MIN_CMD/MAX_CMD, the
+    // same alignment #407 and #561 made for the servo fields. These defaults
+    // survive into the profile whenever a readback omits the key, so a stale
+    // set here is a silent re-tune — the old 0.08/0.005/0.003/±10 matched
+    // neither the firmware nor the profile.
+    var pidKp: Float = 0.12
+    var pidKi: Float = 0.01
+    var pidKd: Float = 0.0
+    var pidMinCmd: Float = -20.0
+    var pidMaxCmd: Float = 20.0
     var servoEnabled: Bool = true
     var gainScheduleEnabled: Bool = true
     var useAngleControl: Bool = false
@@ -135,6 +186,11 @@ struct RocketConfig {
     var rateCapDps: Float = 60
     var kpAngle: Float = 2.0               // outer angle-loop P-gain (cascaded angle control)
     var integralSepThreshold: Float = 40   // PID integral-separation anti-windup threshold (deg/s); 0 disables
+    /// True once the rocket reported real roll-control gains instead of the
+    /// "use firmware default" sentinels (#253: rcap/kpang <= 0, iwind < 0).
+    /// Until then the three fields above hold the APP's defaults, not the
+    /// rocket's values — #915 adoption must not mistake them for a report.
+    var rollGainsReported: Bool = false
     var guidanceEnabled: Bool = false
     var cameraType: UInt8 = 2
     var imuOrientSetting: UInt8? = nil   // 0xFF auto / 0..23 manual (nil = not reported)
@@ -149,6 +205,11 @@ struct RocketConfig {
     // 0 = hopping not legally possible at this preset (GUI greys the
     // option); nil = device doesn't report it (pre-#150 firmware).
     var loraHopDwell: Int? = nil
+    /// "LoRa off": the rocket is holding radio silence — no telemetry, no name
+    /// beacon, no hopping — while still listening for uplink.  nil = the
+    /// firmware predates the setting, which is NOT the same as "transmitting":
+    /// only `false` positively means the radio is on the air.
+    var loraTxDisabled: Bool? = nil
     var pyro1Enabled: Bool = false
     var pyro1TriggerMode: UInt8 = 0
     var pyro1TriggerValue: Float = 1.0
@@ -161,7 +222,33 @@ struct RocketConfig {
     var pyro4Enabled: Bool = false
     var pyro4TriggerMode: UInt8 = 0
     var pyro4TriggerValue: Float = 0.0
+
+    // MARK: - #915 config report
+    // nil in all three cases means "this rocket does not report it", which is
+    // a real answer the UI shows as unverifiable — never a reason to invent a
+    // value and present it as the vehicle's.
+
+    var servoExtras: RocketServoExtras?
+    var guidanceExtras: RocketGuidanceExtras?
+    /// nil = not reported.  EMPTY = reported, and the rocket is flying
+    /// rate-only.  The two must not be conflated: one means "we don't know",
+    /// the other means "we know, and there are none".
+    var rollWaypoints: [ReportedRollWaypoint]?
+
+    /// Setting groups this rocket does not report back.  Empty once the
+    /// config report has landed; the pre-#915 list on firmware that can't
+    /// send one.
+    var unreportedGroups: [String] {
+        var out: [String] = []
+        if servoExtras == nil {
+            out.append(contentsOf: ["Servo trim 2-4", "Fin travel", "Fin layout", "Sounds"])
+        }
+        if guidanceExtras == nil { out.append("Guidance parameters") }
+        if rollWaypoints == nil  { out.append("Roll profile") }
+        return out
+    }
 }
+
 
 // MARK: - Guidance-target echo (#435)
 

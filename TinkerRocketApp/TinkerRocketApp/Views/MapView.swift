@@ -14,6 +14,25 @@ import MapKit
 /// pins apart by type, without smuggling a flag through the subtitle.
 private final class PredictedLandingAnnotation: MKPointAnnotation {}
 
+/// The slice of MKMapView the pin/overlay reconciler actually uses.
+///
+/// It exists so the reconciler can be tested without a rendering MKMapView:
+/// instantiating one inside a unit test crashed the whole xctest process on
+/// the CI simulator (the runner restarted nine times on that suite and the
+/// job exited 65 with "0 failures" — a crash, not an assertion).  MKMapView's
+/// own method signatures already match, so conformance costs one line.
+protocol RocketMapSurface: AnyObject {
+    var drawnOverlays: [MKOverlay] { get }
+    func addAnnotation(_ annotation: MKAnnotation)
+    func removeAnnotation(_ annotation: MKAnnotation)
+    func addOverlay(_ overlay: MKOverlay)
+    func removeOverlays(_ overlays: [MKOverlay])
+}
+
+extension MKMapView: RocketMapSurface {
+    var drawnOverlays: [MKOverlay] { overlays }
+}
+
 struct RocketMapView: UIViewRepresentable {
     /// Trial 0 (offline maps): selectable basemap. Apple cases use the native
     /// basemap; tile cases draw a basemap-replacing MKTileOverlay so we can A/B
@@ -55,44 +74,30 @@ struct RocketMapView: UIViewRepresentable {
         }
         context.coordinator.basemap.apply(tileSource, to: mapView)
 
-        // Reset annotations + DATA overlays each pass (cheap).  The basemap tile
-        // overlay is managed separately above so it isn't torn down/reloaded on
-        // every telemetry tick.
-        // MKUserLocation lives in `annotations` too, and it is MapKit's, not
-        // ours — tearing it down every telemetry tick fights the framework
-        // for the one annotation we do not manage.
-        mapView.removeAnnotations(mapView.annotations.filter { !($0 is MKUserLocation) })
-        mapView.removeOverlays(mapView.overlays.filter { !($0 is MKTileOverlay) })
-
-        if let coordinate = rocketCoordinate {
-            let annotation = MKPointAnnotation()
-            annotation.coordinate = coordinate
-            annotation.title = "TinkerRocket"
-            annotation.subtitle = rocketSubtitle
-            mapView.addAnnotation(annotation)
-        }
-
-        if let landing = predictedLandingCoordinate {
-            let annotation = PredictedLandingAnnotation()
-            annotation.coordinate = landing
-            annotation.title = "Predicted Landing"
-            annotation.subtitle = predictedLandingSubtitle
-            mapView.addAnnotation(annotation)
-
-            // Uncertainty circle (#191).  Added before the descent polyline
-            // so the dashed track renders on top of the fill.
-            if predictedUncertaintyRadiusM > 0 {
-                mapView.addOverlay(MKCircle(center: landing,
-                                            radius: predictedUncertaintyRadiusM))
-            }
-        }
-
-        if predictedDescentTrack.count >= 2 {
-            var coords = predictedDescentTrack
-            let line = MKPolyline(coordinates: &coords, count: coords.count)
-            line.title = "predicted-descent"
-            mapView.addOverlay(line)
-        }
+        // Annotations are UPDATED IN PLACE, never torn down and rebuilt
+        // (#836 item 2).  This used to be a removeAnnotations/addAnnotation
+        // pair every pass, described as "cheap" — which it is, in CPU.  What
+        // it cost was the callout: the parent drives this view from a 1 Hz
+        // TimelineView so the "last fix Ns ago" subtitle keeps ticking, so
+        // removing an annotation ran once a second, and removing an
+        // annotation dismisses its callout.  Tapping either pin popped a
+        // callout that vanished within the second — on the screen whose whole
+        // job is telling you where to walk.
+        //
+        // MKPointAnnotation's coordinate/title/subtitle are KVO-compliant, so
+        // mutating them moves the pin and re-renders an OPEN callout in
+        // place; the ticking age now updates inside the callout instead of
+        // destroying it.  Writes are guarded so an unchanged value does not
+        // churn the map.
+        context.coordinator.syncAnnotations(on: mapView,
+                                            rocket: rocketCoordinate,
+                                            rocketSubtitle: rocketSubtitle,
+                                            landing: predictedLandingCoordinate,
+                                            landingSubtitle: predictedLandingSubtitle)
+        context.coordinator.syncDataOverlays(on: mapView,
+                                             landing: predictedLandingCoordinate,
+                                             uncertaintyRadiusM: predictedUncertaintyRadiusM,
+                                             descentTrack: predictedDescentTrack)
 
         // Update region if significantly different (avoid fighting user gestures)
         let centerDelta = abs(mapView.region.center.latitude - region.center.latitude) +
@@ -105,6 +110,23 @@ struct RocketMapView: UIViewRepresentable {
         }
     }
 
+    /// CLLocationCoordinate2D is not Equatable.  Exact compare is right here:
+    /// the values come from the same upstream Doubles each pass, so equal
+    /// means "genuinely did not move" and any real movement differs in the
+    /// low bits.
+    static func sameCoordinate(_ a: CLLocationCoordinate2D,
+                               _ b: CLLocationCoordinate2D) -> Bool {
+        a.latitude == b.latitude && a.longitude == b.longitude
+    }
+
+    /// Identity of the drawn uncertainty circle, so it is rebuilt only when
+    /// it actually changes.
+    struct CircleKey: Equatable {
+        let lat: Double
+        let lon: Double
+        let radius: Double
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
@@ -115,9 +137,99 @@ struct RocketMapView: UIViewRepresentable {
         /// Shared basemap overlay controller (swaps tiles only on source change).
         let basemap = BasemapOverlayController()
 
+        // Long-lived annotations, mutated in place.  Held here rather than
+        // recreated in updateUIView so a callout the operator opened survives
+        // the next telemetry frame (#836 item 2).
+        let rocketAnnotation = MKPointAnnotation()
+        fileprivate let landingAnnotation = PredictedLandingAnnotation()
+        var rocketShown = false
+        var landingShown = false
+
+        // Last drawn data-overlay inputs.
+        var circleKey: CircleKey?
+        var trackKey: [[Double]] = []
+
+        /// Update the pins IN PLACE.  Callers must not remove and re-add
+        /// them: removing an annotation dismisses its callout, and this runs
+        /// on the parent's 1 Hz tick (#836 item 2).
+        func syncAnnotations(on mapView: RocketMapSurface,
+                             rocket: CLLocationCoordinate2D?,
+                             rocketSubtitle: String?,
+                             landing: CLLocationCoordinate2D?,
+                             landingSubtitle: String?) {
+            if let coordinate = rocket {
+                let a = rocketAnnotation
+                if !RocketMapView.sameCoordinate(a.coordinate, coordinate) { a.coordinate = coordinate }
+                if a.title != "TinkerRocket" { a.title = "TinkerRocket" }
+                if a.subtitle != rocketSubtitle { a.subtitle = rocketSubtitle }
+                if !rocketShown {
+                    mapView.addAnnotation(a)
+                    rocketShown = true
+                }
+            } else if rocketShown {
+                mapView.removeAnnotation(rocketAnnotation)
+                rocketShown = false
+            }
+
+            if let landing {
+                let a = landingAnnotation
+                if !RocketMapView.sameCoordinate(a.coordinate, landing) { a.coordinate = landing }
+                if a.title != "Predicted Landing" { a.title = "Predicted Landing" }
+                if a.subtitle != landingSubtitle { a.subtitle = landingSubtitle }
+                if !landingShown {
+                    mapView.addAnnotation(a)
+                    landingShown = true
+                }
+            } else if landingShown {
+                mapView.removeAnnotation(landingAnnotation)
+                landingShown = false
+            }
+        }
+
+        /// Rebuild the data overlays only when their inputs change.  They
+        /// have no callout to lose, but they were being torn down and
+        /// re-added on the same 1 Hz tick — re-rendering a latched
+        /// prediction that does not move.
+        func syncDataOverlays(on mapView: RocketMapSurface,
+                              landing: CLLocationCoordinate2D?,
+                              uncertaintyRadiusM: Double,
+                              descentTrack: [CLLocationCoordinate2D]) {
+            let newCircle = landing.flatMap { c -> CircleKey? in
+                uncertaintyRadiusM > 0
+                    ? CircleKey(lat: c.latitude, lon: c.longitude, radius: uncertaintyRadiusM)
+                    : nil
+            }
+            let newTrack = descentTrack.count >= 2
+                ? descentTrack.map { [$0.latitude, $0.longitude] } : []
+            guard newCircle != circleKey || newTrack != trackKey else { return }
+            circleKey = newCircle
+            trackKey = newTrack
+
+            mapView.removeOverlays(mapView.drawnOverlays.filter { !($0 is MKTileOverlay) })
+
+            // Uncertainty circle (#191).  Added before the descent polyline
+            // so the dashed track renders on top of the fill.
+            if let k = newCircle {
+                mapView.addOverlay(MKCircle(
+                    center: CLLocationCoordinate2D(latitude: k.lat, longitude: k.lon),
+                    radius: k.radius))
+            }
+            if descentTrack.count >= 2 {
+                var coords = descentTrack
+                let line = MKPolyline(coordinates: &coords, count: coords.count)
+                line.title = "predicted-descent"
+                mapView.addOverlay(line)
+            }
+        }
+
         init(_ parent: RocketMapView) {
             self.parent = parent
         }
+
+        /// Same main-actor isolated-deinit trap as BasemapOverlayController
+        /// below it — SwiftUI releases this Coordinator whenever the map
+        /// screen goes away, so it is on the same hook.
+        nonisolated deinit {}
 
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
             // Check if the change is user-initiated (gesture recognizer active)

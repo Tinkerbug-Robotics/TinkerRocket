@@ -69,6 +69,11 @@ class AppContainer(app: Application) {
     )
     val syncer = ActiveRocketSyncer(fleetScope)
 
+    /** Pre-flight checklists: master template + per-rocket diffs. */
+    val preflightStore = com.tinkerbug.tinkerrocket.session.PreflightStore(
+        directory = File(app.filesDir, "preflight_checklists"),
+    )
+
     /** Phone GPS + heading (ref-counted; consumers start/stop). */
     val phoneLocation = PhoneLocationManager(app)
 
@@ -223,7 +228,10 @@ class AppContainer(app: Application) {
                 return session
             }
 
-            override fun close(session: DeviceSession) = Unit
+            // #838 item 6: this was `= Unit`, so every dropped connection
+            // leaked its DeviceSession, its transport (and BluetoothGatt) and
+            // its live events collector onto the app-lifetime fleetScope.
+            override fun close(session: DeviceSession) = session.close()
         }
         fleetRef = FleetManager(
             scope = fleetScope,

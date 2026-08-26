@@ -325,10 +325,32 @@ struct RelayRocketSectionView: View {
             RocketSectionHeader(subject: subject,
                                 collapsible: collapsible,
                                 collapsed: $collapsed)
+            // 1 Hz clock.  remote.lastSeen is @Published, so a NEW frame
+            // re-renders this section — but the case that matters here is
+            // frames STOPPING, and then nothing publishes and the staleness
+            // treatment would never engage.  The header runs its own ticker
+            // for exactly this reason; the cards need one too.
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let freshness = subject.freshness(now: context.date)
+                staleAwareBody(freshness: freshness, now: context.date)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func staleAwareBody(freshness: RocketFreshness, now: Date) -> some View {
+        VStack(spacing: 12) {
             if collapsed {
                 CollapsedRocketSummary(telemetry: remote.telemetry)
+                    .opacity(freshness.cardOpacity)
             } else {
                 RocketStateView(state: remote.telemetry.state)
+                    .opacity(freshness.cardOpacity)
+
+                // Advisory line under the state banner, same shape and rule
+                // as the preflight and "LoRa off" lines: it never recolors
+                // the banner, and renders nothing while the stream is live.
+                StaleTelemetryAdvisoryRow(freshness: freshness, now: now)
                 // The same card stack the focused/direct dashboard renders.
                 // This branch used to hand-assemble a shorter list and had
                 // silently lost SignalStrengthView (arrow + GNSS bar + LoRa
@@ -342,8 +364,12 @@ struct RelayRocketSectionView: View {
                     bleRSSI: via.connectedRSSI,
                     locationManager: locationManager,
                     rocketFix: rocketFix,
-                    trackingHealthy: trackingHealthy
+                    trackingHealthy: trackingHealthy,
+                    staleOpacity: freshness.cardOpacity,
+                    staleAgeSec: freshness.staleAgeSec(now: now)
                 )
+                // NOT dimmed: the controls still work on a stale rocket, and
+                // a faded button reads as disabled.
                 relayActions
             }
         }
@@ -403,6 +429,56 @@ struct RelayRocketSectionView: View {
 
 /// One-line summary shown while a rocket's section is collapsed:
 /// state · altitude · speed · battery.
+/// One quiet line under the rocket state banner while telemetry is not live
+/// (#836 item 3).
+///
+/// The section header already carries the age ("via Base 1 · 47 s ago"), but
+/// it is caption2 secondary text that doubles as the transport line, sitting
+/// ABOVE the state banner — easy to read past on a pad, where the eye goes to
+/// the big state word and the cards under it.  This repeats the fact where
+/// those cards start.
+///
+/// Advisory only: it never recolors the state banner, matching the preflight
+/// and "LoRa off" lines it sits alongside.  Renders nothing while live.
+struct StaleTelemetryAdvisoryRow: View {
+    let freshness: RocketFreshness
+    var now: Date = Date()
+
+    /// The rendered text, or nil when the line stays silent.
+    /// `messageForTest` is the same value — SwiftUI bodies are not directly
+    /// assertable, so the copy the test reads has to be the copy the body
+    /// renders.
+    var messageForTest: String? { message }
+
+    private var message: String? {
+        switch freshness {
+        case .live:
+            return nil
+        case .stale(let age):
+            return "Telemetry \(RocketFreshness.ageText(age)) old"
+        case .lost(let seen):
+            guard let seen else { return "No telemetry received" }
+            return "Link lost — last heard \(RocketFreshness.ageText(now.timeIntervalSince(seen))) ago"
+        }
+    }
+
+    var body: some View {
+        if let message {
+            HStack(spacing: 6) {
+                Image(systemName: "clock.badge.exclamationmark")
+                    .font(.caption)
+                Text(message)
+                    .font(.caption)
+                Spacer(minLength: 0)
+            }
+            .foregroundColor(.orange)
+            .padding(.horizontal, 4)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(message)
+        }
+    }
+}
+
 struct CollapsedRocketSummary: View {
     let telemetry: TelemetryData
 

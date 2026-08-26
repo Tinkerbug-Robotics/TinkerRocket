@@ -17,6 +17,7 @@ struct RocketProfileView: View {
 
     @EnvironmentObject var store: RocketProfileStore
     @EnvironmentObject var syncer: ActiveRocketSyncer
+    @EnvironmentObject var preflight: PreflightStore
 
     @State private var showingAdd = false
     @State private var newName = ""
@@ -107,7 +108,7 @@ struct RocketProfileView: View {
             }
         }
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) { store.delete(profile.id) } label: {
+            Button(role: .destructive) { deleteProfile(profile.id) } label: {
                 Label("Delete", systemImage: "trash")
             }
         }
@@ -118,10 +119,17 @@ struct RocketProfileView: View {
             Button { store.duplicate(profile.id) } label: {
                 Label("Duplicate", systemImage: "plus.square.on.square")
             }
-            Button(role: .destructive) { store.delete(profile.id) } label: {
+            Button(role: .destructive) { deleteProfile(profile.id) } label: {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    /// Delete a profile and its pre-flight checklist config together — the
+    /// checklist diff is keyed by profile id and dies with it.
+    private func deleteProfile(_ id: UUID) {
+        store.delete(id)
+        preflight.deleteConfig(for: id)
     }
 
     // MARK: - Connection-aware section
@@ -146,11 +154,33 @@ struct RocketProfileView: View {
                 }
             }
 
+            if let created = syncer.createdProfileName {
+                advisory("New rocket — created \u{201C}\(created)\u{201D} from its own settings.",
+                         systemImage: "plus.circle", color: .blue)
+            }
+
             calAdvisoryView("magnetometer", advisory: syncer.magCalAdvisory) {
                 syncer.importRocketCalIntoActiveProfile()
             }
             calAdvisoryView("sensor", advisory: syncer.sensorCalAdvisory) {
                 syncer.importRocketSensorCalIntoActiveProfile()
+            }
+
+            // #915: the rocket keeps its own settings unless the user asks
+            // otherwise, so say plainly which ones the app cannot check and
+            // put the deliberate override next to that admission.
+            if isConnectedRocket {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !syncer.unreportedGroups.isEmpty {
+                        advisory("Can't verify: \(syncer.unreportedGroups.joined(separator: ", ")). This rocket doesn't report them, so they're shown from the profile.",
+                                 systemImage: "eye.slash", color: .secondary)
+                    }
+                    Button("Send All Settings to Rocket") {
+                        syncer.pushProfileToRocket()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(store.activeProfile == nil)
+                }
             }
         }
     }
@@ -200,20 +230,28 @@ struct SyncStatusRow: View {
         case .idle:
             EmptyView()
         case .awaitingSync:
-            // #375: a connected-but-not-yet-synced rocket used to render as
-            // silent .idle/EmptyView — invisible, so an unsynced rocket could
-            // reach the pad on stale NVS settings. Amber until the push runs.
-            Label("Settings not yet applied to this rocket", systemImage: "exclamationmark.triangle.fill")
+            // #375: a connected-but-not-reconciled rocket used to render as
+            // silent .idle/EmptyView — invisible, so a rocket whose settings
+            // the app had never seen could reach the pad unnoticed.
+            Label("Reading this rocket's settings…", systemImage: "arrow.down.circle")
                 .font(.caption).foregroundColor(.orange)
         case .noProfile:
-            Label("No active rocket — pick one to apply settings", systemImage: "questionmark.circle")
+            Label("No active rocket — pick one to hold this rocket's settings",
+                  systemImage: "questionmark.circle")
                 .font(.caption).foregroundColor(.secondary)
         case .syncing:
-            Label("Applying settings to rocket…", systemImage: "arrow.triangle.2.circlepath")
+            Label("Sending settings to rocket…", systemImage: "arrow.triangle.2.circlepath")
                 .font(.caption).foregroundColor(.secondary)
         case .synced:
-            Label("Settings applied", systemImage: "checkmark.circle.fill")
+            Label("Profile matches this rocket", systemImage: "checkmark.circle.fill")
                 .font(.caption).foregroundColor(.green)
+        case .adopted(let groups):
+            // #915: informational, not a fault — the rocket kept flying what
+            // it had and the profile was brought into line with it.  Stays a
+            // quiet line; the rocket-state banner is not recoloured for this.
+            Label("Updated from this rocket: \(groups.joined(separator: ", "))",
+                  systemImage: "arrow.down.circle.fill")
+                .font(.caption).foregroundColor(.blue)
         case .failed(let reason):
             Label(reason, systemImage: "xmark.circle.fill")
                 .font(.caption).foregroundColor(.red)
