@@ -803,6 +803,10 @@ struct ConnectedDashboardView: View {
                 directOrientationName: device.imuOrientationName,
                 directOrientationMode: device.imuOrientationMode,
                 staleOpacity: staleOpacity,
+                // Same signal the STALE banner above is drawn from, so the
+                // banner and the held verdict can never disagree.
+                staleAgeSec: dataStatus == .stale
+                    ? Double(device.effectiveDataAgeMs) / 1000.0 : nil,
                 showRocketViews: showRocketViews,
                 // On SYNCING (searching, no rocket data yet) keep the BS-only
                 // battery so the operator still has a live indicator.
@@ -902,6 +906,11 @@ struct RocketTelemetryCards: View {
     var directOrientationMode: IMUOrientationMode = .unknown
     /// Dimming applied while the stream is stale; 1.0 when live.
     var staleOpacity: Double = 1.0
+    /// Age of the newest frame while the stream is NOT live, else nil.  Only
+    /// the go/no-go card uses it: dimming is right for measurements, but a
+    /// launch recommendation has to stop being made, not just be shown
+    /// faintly (#836 item 3).
+    var staleAgeSec: TimeInterval? = nil
     /// False while a BS link is still searching and has no rocket data yet —
     /// suppresses the rocket-specific cards without hiding link status.
     var showRocketViews: Bool = true
@@ -993,7 +1002,7 @@ struct RocketTelemetryCards: View {
                 // Pre-launch sensor health scorecard + go/no-go (#303).  Only
                 // shown once the rocket reports a scorecard ("h" present).
                 if showRocketViews && telemetry.hasSensorHealth {
-                    HealthCardView(telemetry: telemetry)
+                    HealthCardView(telemetry: telemetry, staleAgeSec: staleAgeSec)
                         .opacity(staleOpacity)
                 }
             }
@@ -1299,6 +1308,15 @@ struct HealthDotRow: View {
 
 struct HealthCardView: View {
     let telemetry: TelemetryData
+    /// Age of the newest frame when the stream is NOT live, else nil (#836
+    /// item 3).  Dimming alone was not enough here: every other card shows a
+    /// MEASUREMENT, which stays true of the moment it was taken, but this one
+    /// shows a go/no-go RECOMMENDATION, and a recommendation derived from
+    /// minutes-old sensor bits is not a stale fact — it is an assertion about
+    /// right now that nothing supports.  A relayed rocket whose link had died
+    /// went on reading "Ready to fly" at full strength.  While this is set the
+    /// verdict is HELD rather than restated.
+    var staleAgeSec: TimeInterval? = nil
 
     private func color(for state: TelemetryData.SensorHealth) -> Color {
         switch state {
@@ -1308,7 +1326,24 @@ struct HealthCardView: View {
         case .na:       return .gray
         }
     }
+    /// Whether the verdict is being asserted or held.  Pure and static so the
+    /// rule is pinned by a test rather than living in three view-private
+    /// computed properties that could drift apart from each other.
+    static func isHeld(staleAgeSec: TimeInterval?) -> Bool { staleAgeSec != nil }
+
+    /// "Held — data 47 s old".  Deliberately NOT a verdict word: "unknown"
+    /// reads as a measurement that failed, "held" says the app stopped
+    /// judging because the input stopped arriving.
+    static func readinessLabel(_ readiness: TelemetryData.FlightReadiness,
+                               staleAgeSec: TimeInterval?) -> String {
+        guard let age = staleAgeSec else { return readiness.label }
+        // `.lost(lastSeen: nil)` hands us a non-finite age; Int() would trap.
+        guard age.isFinite else { return "Held — no telemetry received" }
+        return "Held — data \(RocketFreshness.ageText(age)) old"
+    }
+
     private var readinessColor: Color {
+        if Self.isHeld(staleAgeSec: staleAgeSec) { return .gray }
         switch telemetry.flightReadiness {
         case .ready:    return .green
         case .caution:  return .orange
@@ -1317,12 +1352,16 @@ struct HealthCardView: View {
         }
     }
     private var readinessIcon: String {
+        if Self.isHeld(staleAgeSec: staleAgeSec) { return "hourglass" }
         switch telemetry.flightReadiness {
         case .ready:    return "checkmark.seal.fill"
         case .caution:  return "exclamationmark.triangle.fill"
         case .notReady: return "xmark.octagon.fill"
         case .unknown:  return "hourglass"
         }
+    }
+    private var readinessLabel: String {
+        Self.readinessLabel(telemetry.flightReadiness, staleAgeSec: staleAgeSec)
     }
 
     var body: some View {
@@ -1335,7 +1374,7 @@ struct HealthCardView: View {
                 Image(systemName: readinessIcon)
                     .font(.title2)
                     .foregroundColor(readinessColor)
-                Text(telemetry.flightReadiness.label)
+                Text(readinessLabel)
                     .font(.system(.title3, design: .default).weight(.semibold))
                     .foregroundColor(readinessColor)
                 Spacer(minLength: 0)
