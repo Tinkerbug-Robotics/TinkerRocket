@@ -14,6 +14,25 @@ import MapKit
 /// pins apart by type, without smuggling a flag through the subtitle.
 private final class PredictedLandingAnnotation: MKPointAnnotation {}
 
+/// The slice of MKMapView the pin/overlay reconciler actually uses.
+///
+/// It exists so the reconciler can be tested without a rendering MKMapView:
+/// instantiating one inside a unit test crashed the whole xctest process on
+/// the CI simulator (the runner restarted nine times on that suite and the
+/// job exited 65 with "0 failures" — a crash, not an assertion).  MKMapView's
+/// own method signatures already match, so conformance costs one line.
+protocol RocketMapSurface: AnyObject {
+    var drawnOverlays: [MKOverlay] { get }
+    func addAnnotation(_ annotation: MKAnnotation)
+    func removeAnnotation(_ annotation: MKAnnotation)
+    func addOverlay(_ overlay: MKOverlay)
+    func removeOverlays(_ overlays: [MKOverlay])
+}
+
+extension MKMapView: RocketMapSurface {
+    var drawnOverlays: [MKOverlay] { overlays }
+}
+
 struct RocketMapView: UIViewRepresentable {
     /// Trial 0 (offline maps): selectable basemap. Apple cases use the native
     /// basemap; tile cases draw a basemap-replacing MKTileOverlay so we can A/B
@@ -133,7 +152,7 @@ struct RocketMapView: UIViewRepresentable {
         /// Update the pins IN PLACE.  Callers must not remove and re-add
         /// them: removing an annotation dismisses its callout, and this runs
         /// on the parent's 1 Hz tick (#836 item 2).
-        func syncAnnotations(on mapView: MKMapView,
+        func syncAnnotations(on mapView: RocketMapSurface,
                              rocket: CLLocationCoordinate2D?,
                              rocketSubtitle: String?,
                              landing: CLLocationCoordinate2D?,
@@ -171,7 +190,7 @@ struct RocketMapView: UIViewRepresentable {
         /// have no callout to lose, but they were being torn down and
         /// re-added on the same 1 Hz tick — re-rendering a latched
         /// prediction that does not move.
-        func syncDataOverlays(on mapView: MKMapView,
+        func syncDataOverlays(on mapView: RocketMapSurface,
                               landing: CLLocationCoordinate2D?,
                               uncertaintyRadiusM: Double,
                               descentTrack: [CLLocationCoordinate2D]) {
@@ -186,7 +205,7 @@ struct RocketMapView: UIViewRepresentable {
             circleKey = newCircle
             trackKey = newTrack
 
-            mapView.removeOverlays(mapView.overlays.filter { !($0 is MKTileOverlay) })
+            mapView.removeOverlays(mapView.drawnOverlays.filter { !($0 is MKTileOverlay) })
 
             // Uncertainty circle (#191).  Added before the descent polyline
             // so the dashed track renders on top of the fill.

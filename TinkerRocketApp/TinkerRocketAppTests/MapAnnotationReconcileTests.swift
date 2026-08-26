@@ -9,11 +9,46 @@ import SwiftUI
 /// commented "cheap" — which it is, in CPU. What it cost was the callout.
 /// The parent wraps RocketMapView in `TimelineView(.periodic(by: 1.0))` so the
 /// "last fix Ns ago" subtitle keeps ticking, so the teardown ran once a
-/// second, and removing an annotation dismisses its callout. Tapping either
-/// pin popped a callout that vanished inside a second — on the screen whose
-/// whole job is telling you where to walk.
+/// second — and **removing an annotation dismisses its callout**. Tapping
+/// either pin popped a callout that vanished inside a second, on the screen
+/// whose whole job is telling you where to walk.
 ///
-/// The pins are now long-lived objects mutated in place.
+/// These tests assert the mechanism rather than MapKit's rendered selection:
+/// what dismisses a callout is the `removeAnnotation` call, so "the callout
+/// survives" is exactly "no remove happened". That also keeps the suite off a
+/// live MKMapView — instantiating one here crashed the whole xctest process on
+/// the CI simulator while passing locally.
+private final class MapSurfaceSpy: RocketMapSurface {
+    private(set) var added: [MKAnnotation] = []
+    private(set) var removed: [MKAnnotation] = []
+    private(set) var overlays: [MKOverlay] = []
+    private(set) var overlayRemovals = 0
+
+    var drawnOverlays: [MKOverlay] { overlays }
+
+    /// Pins currently on the map.  `added`/`removed` are CALL LOGS — a pin
+    /// that is added, removed and re-added appears twice in `added` — while
+    /// this is the live set.  The distinction is the point of the suite: the
+    /// bug was extra calls, not a wrong final picture.
+    private(set) var annotations: [MKAnnotation] = []
+
+    func addAnnotation(_ annotation: MKAnnotation) {
+        added.append(annotation)
+        if !annotations.contains(where: { $0 === annotation }) {
+            annotations.append(annotation)
+        }
+    }
+    func removeAnnotation(_ annotation: MKAnnotation) {
+        removed.append(annotation)
+        annotations.removeAll { $0 === annotation }
+    }
+    func addOverlay(_ overlay: MKOverlay) { overlays.append(overlay) }
+    func removeOverlays(_ overlays: [MKOverlay]) {
+        overlayRemovals += 1
+        self.overlays.removeAll { o in overlays.contains { $0 === o } }
+    }
+}
+
 final class MapAnnotationReconcileTests: XCTestCase {
 
     private let padA = CLLocationCoordinate2D(latitude: 40.1, longitude: -105.2)
@@ -26,121 +61,125 @@ final class MapAnnotationReconcileTests: XCTestCase {
         )
     }
 
-    /// THE regression. A selected annotation is one with an open callout;
-    /// MapKit clears the selection when the annotation is removed.
-    func testOpenCalloutSurvivesRepeatedUpdates() {
-        let map = MKMapView()
+    /// THE regression. Ten ticks of the 1 Hz clock with the subtitle
+    /// advancing — exactly what happens while the operator reads the callout.
+    func testTickingTheClockNeverRemovesAPin() {
+        let map = MapSurfaceSpy()
         let coord = makeCoordinator()
 
         coord.syncAnnotations(on: map, rocket: padA, rocketSubtitle: "3 sats · 1 s ago",
-                              landing: nil, landingSubtitle: nil)
-        let pin = try? XCTUnwrap(map.annotations.first { !($0 is MKUserLocation) })
-        map.selectAnnotation(pin as! MKAnnotation, animated: false)
-        XCTAssertEqual(map.selectedAnnotations.count, 1, "precondition: callout is open")
+                              landing: padB, landingSubtitle: "±30 m")
+        XCTAssertEqual(map.added.count, 2)
 
-        // Ten ticks of the 1 Hz clock, subtitle advancing each time — exactly
-        // what the TimelineView does while the operator reads the callout.
         for age in 2...11 {
             coord.syncAnnotations(on: map, rocket: padA, rocketSubtitle: "3 sats · \(age) s ago",
-                                  landing: nil, landingSubtitle: nil)
+                                  landing: padB, landingSubtitle: "±30 m")
         }
 
-        XCTAssertEqual(map.selectedAnnotations.count, 1,
-                       "the callout was dismissed by a telemetry tick")
+        XCTAssertTrue(map.removed.isEmpty,
+                      "a pin was removed on a telemetry tick — that dismisses its callout")
+        XCTAssertEqual(map.added.count, 2, "pins were re-added, so they had been torn down")
     }
 
     func testSubtitleUpdatesInPlaceOnTheSameObject() {
-        let map = MKMapView()
+        let map = MapSurfaceSpy()
         let coord = makeCoordinator()
 
         coord.syncAnnotations(on: map, rocket: padA, rocketSubtitle: "1 s ago",
                               landing: nil, landingSubtitle: nil)
-        let first = map.annotations.first { !($0 is MKUserLocation) } as? MKPointAnnotation
-
+        let pin = map.added.first as? MKPointAnnotation
         coord.syncAnnotations(on: map, rocket: padA, rocketSubtitle: "2 s ago",
                               landing: nil, landingSubtitle: nil)
-        let second = map.annotations.first { !($0 is MKUserLocation) } as? MKPointAnnotation
 
         // Same object, new text: that is what keeps an open callout alive AND
         // keeps the age ticking inside it.
-        XCTAssertTrue(first === second, "annotation was replaced, not updated")
-        XCTAssertEqual(second?.subtitle, "2 s ago")
+        XCTAssertEqual(map.added.count, 1, "annotation was replaced, not updated")
+        XCTAssertEqual(pin?.subtitle, "2 s ago")
+        XCTAssertEqual(pin?.title, "TinkerRocket")
     }
 
     func testMovingRocketMovesTheSamePin() {
-        let map = MKMapView()
+        let map = MapSurfaceSpy()
         let coord = makeCoordinator()
 
         coord.syncAnnotations(on: map, rocket: padA, rocketSubtitle: nil,
                               landing: nil, landingSubtitle: nil)
-        let before = map.annotations.first { !($0 is MKUserLocation) } as? MKPointAnnotation
+        let pin = map.added.first as? MKPointAnnotation
         coord.syncAnnotations(on: map, rocket: padB, rocketSubtitle: nil,
                               landing: nil, landingSubtitle: nil)
-        let after = map.annotations.first { !($0 is MKUserLocation) } as? MKPointAnnotation
 
-        XCTAssertTrue(before === after)
-        XCTAssertEqual(after?.coordinate.latitude ?? 0, padB.latitude, accuracy: 1e-9)
-        XCTAssertEqual(map.annotations.filter { !($0 is MKUserLocation) }.count, 1,
-                       "a move must not leave the old pin behind")
+        XCTAssertEqual(map.added.count, 1, "a move must not leave the old pin behind")
+        XCTAssertTrue(map.removed.isEmpty)
+        XCTAssertEqual(pin?.coordinate.latitude ?? 0, padB.latitude, accuracy: 1e-9)
     }
 
     func testLandingPinAddedAndRemovedWithThePrediction() {
-        let map = MKMapView()
+        let map = MapSurfaceSpy()
         let coord = makeCoordinator()
 
         coord.syncAnnotations(on: map, rocket: padA, rocketSubtitle: nil,
                               landing: nil, landingSubtitle: nil)
-        XCTAssertEqual(map.annotations.filter { !($0 is MKUserLocation) }.count, 1)
+        XCTAssertEqual(map.annotations.count, 1)
 
         coord.syncAnnotations(on: map, rocket: padA, rocketSubtitle: nil,
                               landing: padB, landingSubtitle: "±30 m")
-        XCTAssertEqual(map.annotations.filter { !($0 is MKUserLocation) }.count, 2)
+        XCTAssertEqual(map.annotations.count, 2)
 
-        // Predictor going quiet must take its pin with it, not strand it.
+        // The predictor going quiet must take its pin with it, not strand it —
+        // and must not take the rocket's pin along with it.
         coord.syncAnnotations(on: map, rocket: padA, rocketSubtitle: nil,
                               landing: nil, landingSubtitle: nil)
-        XCTAssertEqual(map.annotations.filter { !($0 is MKUserLocation) }.count, 1)
+        XCTAssertEqual(map.annotations.count, 1)
+        XCTAssertEqual(map.removed.count, 1)
+        // The landing pin, not the rocket's.  Identified by title because the
+        // annotation subclass is file-private to MapView.swift.
+        XCTAssertEqual(map.removed.first?.title ?? nil, "Predicted Landing")
     }
 
-    func testRocketPinRemovedWhenTheFixGoesAway() {
-        let map = MKMapView()
+    func testRocketPinRemovedWhenTheFixGoesAwayAndComesBackOnce() {
+        let map = MapSurfaceSpy()
         let coord = makeCoordinator()
 
         coord.syncAnnotations(on: map, rocket: padA, rocketSubtitle: nil,
                               landing: nil, landingSubtitle: nil)
         coord.syncAnnotations(on: map, rocket: nil, rocketSubtitle: nil,
                               landing: nil, landingSubtitle: nil)
-        XCTAssertTrue(map.annotations.filter { !($0 is MKUserLocation) }.isEmpty)
+        XCTAssertTrue(map.annotations.isEmpty)
 
-        // And comes back on the same object rather than accumulating.
+        // Repeated empty passes must not remove it again.
+        coord.syncAnnotations(on: map, rocket: nil, rocketSubtitle: nil,
+                              landing: nil, landingSubtitle: nil)
+        XCTAssertEqual(map.removed.count, 1)
+
         coord.syncAnnotations(on: map, rocket: padA, rocketSubtitle: nil,
                               landing: nil, landingSubtitle: nil)
-        XCTAssertEqual(map.annotations.filter { !($0 is MKUserLocation) }.count, 1)
+        XCTAssertEqual(map.annotations.count, 1)
     }
 
     // MARK: - Data overlays
 
     func testOverlaysRebuiltOnlyWhenTheirInputsChange() {
-        let map = MKMapView()
+        let map = MapSurfaceSpy()
         let coord = makeCoordinator()
         let track = [padA, padB]
 
         coord.syncDataOverlays(on: map, landing: padB, uncertaintyRadiusM: 30, descentTrack: track)
-        let first = map.overlays.compactMap { $0 as? MKCircle }.first
-        XCTAssertNotNil(first)
+        let circle = map.overlays.compactMap { $0 as? MKCircle }.first
+        XCTAssertNotNil(circle)
         XCTAssertEqual(map.overlays.count, 2)          // circle + polyline
+        XCTAssertEqual(map.overlayRemovals, 1)
 
         // A latched prediction re-sent on every tick must not re-render.
         for _ in 0..<5 {
             coord.syncDataOverlays(on: map, landing: padB, uncertaintyRadiusM: 30, descentTrack: track)
         }
-        XCTAssertTrue(map.overlays.compactMap { $0 as? MKCircle }.first === first,
-                      "unchanged overlays were torn down and rebuilt")
+        XCTAssertEqual(map.overlayRemovals, 1, "unchanged overlays were torn down and rebuilt")
+        XCTAssertTrue(map.overlays.compactMap { $0 as? MKCircle }.first === circle)
         XCTAssertEqual(map.overlays.count, 2, "overlays accumulated")
     }
 
     func testShrinkingUncertaintyRedrawsTheCircle() {
-        let map = MKMapView()
+        let map = MapSurfaceSpy()
         let coord = makeCoordinator()
 
         coord.syncDataOverlays(on: map, landing: padB, uncertaintyRadiusM: 90, descentTrack: [])
@@ -154,7 +193,7 @@ final class MapAnnotationReconcileTests: XCTestCase {
     }
 
     func testZeroRadiusDrawsNoCircle() {
-        let map = MKMapView()
+        let map = MapSurfaceSpy()
         let coord = makeCoordinator()
         coord.syncDataOverlays(on: map, landing: padB, uncertaintyRadiusM: 0, descentTrack: [])
         XCTAssertTrue(map.overlays.isEmpty)
