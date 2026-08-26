@@ -707,10 +707,15 @@ Status TR_FlightLog::finalizeFlight(const char* filename, uint32_t final_bytes) 
     if (filename == nullptr) return Status::OutOfRange;
 
     // Trim unused tail blocks from the preallocated range. prepareFlight
-    // reserves 32 MB of headroom for long flights, but most flights are far
-    // shorter — without trimming, the bitmap caps out at floor(region / 32MB)
-    // simultaneous flights regardless of their actual size. Round up to cover
-    // any partial trailing page.
+    // reserves cfg_.prealloc_blocks of headroom for long flights — 40 blocks,
+    // which is ~10 MB or ~5 MB depending on the chip's block size (#671) —
+    // but most flights are far shorter. Without trimming, the bitmap caps out
+    // at floor(region / prealloc) simultaneous flights regardless of their
+    // actual size. Round up to cover any partial trailing page.
+    //
+    // #837 item 10: this said "32 MB", the flat size of the retired 256-block
+    // preallocation, which mis-stated the reservation by 3x and hardcoded a
+    // number that stopped being fixed at all once geometry went runtime.
     // Size the kept range to cover BOTH the logical length (final_bytes) AND the
     // PHYSICAL span actually consumed (active_next_page_). They match for a
     // normal flight; a runtime bad block makes the physical span larger

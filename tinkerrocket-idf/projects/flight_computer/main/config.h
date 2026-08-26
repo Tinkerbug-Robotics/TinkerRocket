@@ -271,14 +271,28 @@ struct config : board_pins
     static constexpr uint32_t RUNCAM_RETRY_OFF_MS     = 3000;  // parked+unpowered between attempts
 
     // ### Pyro timing (pins in board header) ###
-    // One shared arming FET feeds all four squib drivers. ARM is raised
-    // only momentarily — for the PRELAUNCH continuity check and again
-    // during a fire pulse — never latched in flight.
+    // One shared arming FET feeds all four squib drivers. ARM is raised only
+    // during a FIRE pulse — never latched in flight, and NOT raised to read
+    // continuity.
+    //
+    // #837 item 7: this used to say ARM was also raised "for the PRELAUNCH
+    // continuity check", and that PYRO_ARM_SETTLE_MS gated the CONT read.
+    // Neither is true of any continuity path. pyroPrelaunchContTest() and the
+    // PYRO_CONT_TEST handler are both bare gpio_get_level() reads of the CONT
+    // pins — no ARM assertion, no settle. Continuity is sensed from the
+    // always-on VPP divider, so what it actually depends on is the FLIGHT
+    // BATTERY being present, not ARM: with no pack fitted every channel reads
+    // a false CONT. That is the fail-deadly case, and the old comment pointed
+    // away from it — someone debugging a bad reading would lengthen
+    // PYRO_ARM_SETTLE_MS (no effect on continuity whatsoever) or add an ARM
+    // assertion to the pad test, energising the shared squib rail on the pad
+    // for no measurement benefit.
+    //
     // E-matches commit in <10 ms; 200 ms is ignition margin while bounding
     // the I2t a shorted match can dump into the channel FET on 2S.
     static constexpr uint32_t PYRO_FIRE_DURATION_MS    = 200;
-    // Time between raising ARM and reading CONT / pulsing FIRE, giving
-    // the upstream arming FET its turn-on settle margin.
+    // Time between raising ARM and pulsing FIRE, giving the upstream arming
+    // FET its turn-on settle margin. Consumed ONLY by the fire paths.
     static constexpr uint32_t PYRO_ARM_SETTLE_MS       = 10;
 
     // ### Servo Controls (pins in board header) ###
