@@ -216,7 +216,7 @@ struct Trajectory3DView: UIViewRepresentable {
                 withName: "mainCamera", recursively: false)
 
             // Fetch ArcGIS satellite imagery asynchronously
-            Self.fetchArcGISImagery(
+            SceneGroundTexture.apply(
                 refLat: r.launchLat, refLon: r.launchLon,
                 extent: extent, groundNode: groundNode,
                 sceneRoot: scene.rootNode
@@ -238,61 +238,9 @@ struct Trajectory3DView: UIViewRepresentable {
         return SCNVector3(x, Float(altM), z)
     }
 
-    // MARK: - USGS Satellite Imagery (cached)
-
-    /// Fetch the ground-plane texture from the USGS MapServer export API (no key,
-    /// public domain — consistent with the 2D source) and apply it. Routed
-    /// through OfflineTileCache so a scene viewed once renders offline later; if
-    /// there's no imagery and no connection, the grid stays.
-    private static func fetchArcGISImagery(
-        refLat: Double, refLon: Double, extent: Float,
-        groundNode: SCNNode, sceneRoot: SCNNode
-    ) {
-        let halfM = Double(extent * 1.5)
-        let mPerDegLat = 110_540.0
-        let mPerDegLon = 111_320.0 * cos(refLat * .pi / 180)
-
-        let south = refLat - halfM / mPerDegLat
-        let north = refLat + halfM / mPerDegLat
-        let west = refLon - halfM / mPerDegLon
-        let east = refLon + halfM / mPerDegLon
-
-        let bbox = "\(west),\(south),\(east),\(north)"
-        let urlStr = "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export"
-            + "?bbox=\(bbox)&bboxSR=4326&imageSR=4326"
-            + "&size=1024,1024&format=png&f=image"
-        let cacheKey = "3d_\(bbox)"
-
-        let apply: (UIImage) -> Void = { image in
-            DispatchQueue.main.async {
-                groundNode.geometry?.firstMaterial?.diffuse.contents = image
-                groundNode.geometry?.firstMaterial?.diffuse.wrapS = .clamp
-                groundNode.geometry?.firstMaterial?.diffuse.wrapT = .clamp
-                groundNode.geometry?.firstMaterial?.lightingModel = .constant
-                // Remove grid overlay now that we have imagery
-                sceneRoot.childNode(withName: "groundGrid", recursively: false)?
-                    .removeFromParentNode()
-            }
-        }
-
-        // Cached copy first → renders offline for a scene viewed before.
-        if let data = OfflineTileCache.shared.blob(forKey: cacheKey),
-           let image = UIImage(data: data) {
-            apply(image)
-            return
-        }
-
-        guard let url = URL(string: urlStr) else { return }
-        URLSession.shared.dataTask(with: url) { data, response, _ in
-            guard let data = data,
-                  let httpResp = response as? HTTPURLResponse,
-                  httpResp.statusCode == 200,
-                  let image = UIImage(data: data) else { return }
-            OfflineTileCache.shared.storeBlob(data, forKey: cacheKey)
-            apply(image)
-        }.resume()
-    }
-
+    // Ground texture lives in SceneGroundTexture (#838 item 1) — it used to
+    // be a private copy in each of these two views, and when the app moved
+    // off Esri only one copy was migrated.
     // MARK: - Scene Builder
 
     /// Build the 3D scene. Returns the scene, the ground node (for texture update),
