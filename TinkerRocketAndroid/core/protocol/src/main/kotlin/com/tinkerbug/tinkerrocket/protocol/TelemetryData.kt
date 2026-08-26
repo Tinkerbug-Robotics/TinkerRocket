@@ -212,6 +212,19 @@ public data class TelemetryData(
     // #150: hop-state surface — present only while hopping / after nid drops.
     val hopChannel: Int? = null,              // "hch"
     val netidDrops: Int? = null,              // "nidd"
+    /**
+     * "szd" — LoRa frames dropped because the rocket and this base station
+     * disagree about the protocol (#570, #838 item 4).  Sibling of [netidDrops]
+     * and populated with the same recency window, but a different fault: nidd
+     * means somebody else's traffic, szd means OUR rocket is unreadable because
+     * the two were flashed from different builds.  Since #925 it also counts
+     * frames whose LORA_PROTO_VERSION nibble is not ours, which is exactly the
+     * mixed-fleet case the two-frame split created.
+     *
+     * The base station has emitted this since #570; neither app decoded it, so
+     * the blackout it exists to explain stayed silent.
+     */
+    val sizeDrops: Int? = null,               // "szd"
 
     // Base station (base station only)
     val bsSoc: Float? = null,                 // "bsoc"
@@ -722,6 +735,7 @@ public data class TelemetryData(
             snr = strictFloat(json, "snr"),
             hopChannel = flexInt(json, "hch"),                          // #571
             netidDrops = flexInt(json, "nidd"),                         // #571
+            sizeDrops = flexInt(json, "szd"),                           // #838 item 4
             bsSoc = strictFloat(json, "bsoc"),
             bsVoltage = strictFloat(json, "bvol"),
             bsCurrent = strictFloat(json, "bcur"),

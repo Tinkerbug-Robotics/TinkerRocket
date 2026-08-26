@@ -99,6 +99,16 @@ struct TelemetryData: Codable {
     // the wrong network id — the failure that used to be silent).
     var hop_channel: Int?
     var netid_drops: Int?
+    /// "szd" — LoRa frames dropped because the rocket and this base station
+    /// disagree about the protocol (#570, #838 item 4).  Sibling of
+    /// `netid_drops` with the same recency window but a different fault: nidd
+    /// means somebody else's traffic, szd means OUR rocket is unreadable
+    /// because the two were flashed from different builds.  Since #925 it also
+    /// counts frames whose LORA_PROTO_VERSION nibble is not ours.
+    ///
+    /// Emitted by the base station since #570; neither app decoded it, so the
+    /// blackout it exists to explain stayed silent.
+    var size_drops: Int?
 
     // Base station (base station only)
     var bs_soc: Float?                // Base station SOC %
@@ -433,6 +443,7 @@ struct TelemetryData: Codable {
         case rssi, snr
         case hop_channel = "hch"
         case netid_drops = "nidd"
+        case size_drops = "szd"
         case bs_soc = "bsoc"
         case bs_voltage = "bvol"
         case bs_current = "bcur"
@@ -519,6 +530,7 @@ struct TelemetryData: Codable {
         snr = try c.decodeIfPresent(Float.self, forKey: .snr)
         hop_channel = flexInt(.hop_channel)                          // #571
         netid_drops = flexInt(.netid_drops)                          // #571
+        size_drops = flexInt(.size_drops)                            // #838 item 4
         bs_soc = try c.decodeIfPresent(Float.self, forKey: .bs_soc)
         bs_voltage = try c.decodeIfPresent(Float.self, forKey: .bs_voltage)
         bs_current = try c.decodeIfPresent(Float.self, forKey: .bs_current)

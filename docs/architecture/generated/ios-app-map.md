@@ -3,7 +3,7 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 31,308 lines across 78 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 31,333 lines across 78 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
@@ -30,7 +30,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [NetworkMonitor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/NetworkMonitor.swift) | 52 | `NetworkMonitor`, `OfflinePill` |
 
 
-## `Models/` — 38 files, 14,856 lines
+## `Models/` — 38 files, 14,868 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -42,7 +42,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Device Auto-Detection · Main CSV Generation · Rotation Configuration · Helper Functions · Flight Summary · Flight Settings (#165) · CSV Errors |
 | [ActiveRocketSyncer.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/ActiveRocketSyncer.swift) | 871 | `ActiveRocketSyncer` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Lifecycle · Triggers · Binding · Adoption (rocket wins) · Explicit push (user-initiated only) · The precedence rule · Mag cal · Sensor cal (gyro + high-g) — mirrors mag cal · Suggestion |
-| [TelemetryData.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/TelemetryData.swift) | 791 | `TelemetryData` |
+| [TelemetryData.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/TelemetryData.swift) | 803 | `TelemetryData` |
 | [FlightAnnouncer.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FlightAnnouncer.swift) | 635 | `TelemetryAnnouncer`, `AnnouncerSpeech`, `FlightAnnouncer`, `SystemSpeech` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Seams · Private State · Constants · Init · Main Entry Point · Event Detectors · Horizontal Distance · Speak policy · State Reset · Production speech engine |
 | [BLEFleet.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BLEFleet.swift) | 623 | `BLEFleet` |
@@ -86,11 +86,11 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [FrequencyScanSample.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FrequencyScanSample.swift) | 15 | `FrequencyScanSample` |
 
 
-## `Views/` — 30 files, 15,519 lines
+## `Views/` — 30 files, 15,532 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
-| [DashboardView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DashboardView.swift) | 3,417 | `IdentifiableInt`, `DashboardSheet`, `DashboardVisibility`, `DashboardView`, `ConnectedFleetView`, `DirectRocketSection`, +42 more |
+| [DashboardView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DashboardView.swift) | 3,430 | `IdentifiableInt`, `DashboardSheet`, `DashboardVisibility`, `DashboardView`, `ConnectedFleetView`, `DirectRocketSection`, +42 more |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Connected fleet dashboard (#390) · Connected device dashboard (observes the BLEDevice for live updates) · Shared rocket telemetry cards · Component Views · Pyro Channels · Controls · Branded Toolbar · Signal Strength Tile · LoRa RSSI mapping (-130 to -30 dBm) · GNSS Satellites (0 to 30) · BLE RSSI mapping (-100 to -30 dBm) · Preview |
 | [SettingsView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/SettingsView.swift) | 1,804 | `SettingsView`, `PyroChannelTestControls` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Focus-driven self-apply (#144) · Base station (read-only display) · No active profile · Rocket settings (profile-backed) · Per-channel profile accessors (centralise the 4-channel switch) · Profile bindings · String ↔ profile sync · Helpers · Apply actions (write profile + push when connected) · LoRa TX power (base station only) · Pyro live controls |
@@ -133,4 +133,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 78 files, 31,308 lines.
+Total: 78 files, 31,333 lines.
