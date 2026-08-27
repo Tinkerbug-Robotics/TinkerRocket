@@ -2714,6 +2714,25 @@ static_assert(offsetof(RollControlConfigData, use_angle_control) == 0 &&
 // globals, config:: constants, pyro_config, and the active roll_profile.
 // time_us is first so the generic frame parser's "timestamp = first 4 payload
 // bytes" convention still holds.
+// GNSS high-performance-clock OTP state, as the FC determined it at boot.
+// Logged per flight in FlightSettingsData (v7+) so a flight record says
+// whether the receiver was running the high clock.
+//
+// #837 item 6 asked what the OTP clock buys and nobody could answer it: every
+// real flight measures 18.18 Hz whether it predates OTP programming or not,
+// and the log recorded no way to tell which modules were programmed. The
+// driver has always determined this at every boot and then thrown it away.
+namespace gnss_otp {
+static constexpr uint8_t UNKNOWN     = 0;  // never evaluated (no GNSS, or pre-v7 log)
+static constexpr uint8_t NOT_M10     = 1;  // not a positively identified M10 — never eligible
+static constexpr uint8_t VERIFIED    = 2;  // all four keys read the high-clock values
+static constexpr uint8_t PARTIAL     = 3;  // some keys readable or mismatched — never auto-written
+static constexpr uint8_t BLANK       = 4;  // all keys NACK: unprogrammed, and left that way
+static constexpr uint8_t BLOCKLISTED = 5;  // BLANK but on kOtpNeverProgram (a failed write reads BLANK)
+static constexpr uint8_t PROGRAMMED  = 6;  // written THIS boot and verified after the reset
+static constexpr uint8_t WRITE_FAILED = 7; // written this boot, verify still failed
+}  // namespace gnss_otp
+
 struct __attribute__((packed)) FlightSettingsData
 {
     // v2: appended board→rocket mounting orientation (b2r_* fields).
@@ -2729,12 +2748,17 @@ struct __attribute__((packed)) FlightSettingsData
     //  bumping it would force a sweep of the Data_Analysis parsers, which
     //  hardcode message lengths, for a bit that older readers already ignore.)
     // v6: appended the flown guidance target (guid_tgt_* tail, #435).
+    // v7: appended gnss_otp_state (#837 item 6) — whether the GNSS receiver
+    //     was running the high-performance clock on this flight.  The FC has
+    //     always determined this at boot and logged it only to serial, so no
+    //     flight record could say which modules were programmed; that is
+    //     precisely what made "what does the OTP clock buy" unanswerable.
     // (no version bump for the dynamic logging rate: F_IMU_RATE_DYNAMIC claims
     //  the last free flags bit, bit 7. Layout is byte-identical — same reasoning
     //  as F_GUIDANCE_STATION_KEEP above; older readers ignore the bit and read
     //  ism6_update_rate_hz as the flown rate, which is exactly what it is up to
     //  the deployment step-down.)
-    static constexpr uint8_t VERSION = 6;
+    static constexpr uint8_t VERSION = 7;
 
     // flags bit positions
     static constexpr uint8_t F_USE_ANGLE_CONTROL = 0;  // cascaded angle vs rate-only
@@ -2831,9 +2855,14 @@ struct __attribute__((packed)) FlightSettingsData
     float    guid_tgt_e_m;
     float    guid_tgt_n_m;
     uint8_t  guid_tgt_src;
+
+    // GNSS high-perf-clock OTP state at boot (v7+, #837 item 6).  One of the
+    // gnss_otp::* constants above.  Pre-v7 logs decode as UNKNOWN, which is
+    // exactly what they are — the state was determined and discarded.
+    uint8_t  gnss_otp_state;
 };
-static_assert(sizeof(FlightSettingsData) == 219,
-              "FlightSettingsData layout check (v6: flown guidance target, #435)");
+static_assert(sizeof(FlightSettingsData) == 220,
+              "FlightSettingsData layout check (v7: GNSS OTP state, #837 item 6)");
 
 // --- Full config report (#915) ---
 // FC→OC over I2S.  Carries exactly what the app's config readback CANNOT

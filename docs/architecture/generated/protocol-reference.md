@@ -141,7 +141,7 @@ that changes size fails the build rather than corrupting a log silently.
 | Struct | Bytes |
 |--------|-------|
 | `FlightSnapshotData` | 224 |
-| `FlightSettingsData` | 219 |
+| `FlightSettingsData` | 220 |
 | `ConfigReportData` | 169 |
 | `RollProfileData` | 76 |
 | `RollProfileData` | 76 |

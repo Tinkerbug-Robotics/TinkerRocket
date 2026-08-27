@@ -18,6 +18,9 @@ class TR_GNSSReceiverUBloxSerial
         TR_GNSSReceiverUBloxSerial(uart_port_t uart_port = UART_NUM_1);
 
         // Initialize GNSS over UART
+        /** GNSS high-perf-clock OTP state at boot; a gnss_otp::* constant. */
+        uint8_t otpState() const { return otp_state_; }
+
         bool begin(uint8_t update_rate_hz,
                    uint8_t GNSS_RX,
                    uint8_t GNSS_TX,
@@ -71,6 +74,12 @@ class TR_GNSSReceiverUBloxSerial
         // only to its own pull-up and is never brought out to the host
         // connector. Warn once per boot rather than on every retry.
         bool reset_pin_absent_logged_ = false;
+
+        // What ensureHighPerformanceClock() concluded, as a gnss_otp::*
+        // constant.  Previously determined at every boot and logged only to
+        // serial — so no flight record could say whether the receiver ran the
+        // high clock (#837 item 6).  Now carried into FlightSettingsData v7.
+        uint8_t otp_state_ = gnss_otp::UNKNOWN;
 
         // Helper: install/reconfigure the UART driver at a given baud rate and pins.
         // Tears down any existing driver first.

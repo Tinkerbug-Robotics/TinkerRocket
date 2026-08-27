@@ -628,6 +628,12 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
     // — a config the firmware believes it applied should actually be applied
     // — but nothing here has established what the high clock changes in
     // flight.  Do not restate a rate benefit without measuring one.
+    if (!module_is_m10)
+    {
+        // Never eligible — the OTP gate requires a positively identified
+        // M10 so we can never burn OTP on a different part.
+        otp_state_ = gnss_otp::NOT_M10;
+    }
     if (module_is_m10 && !ensureHighPerformanceClock())
     {
         // OTP just programmed: it only applies at startup, so hardware-reset
@@ -962,6 +968,11 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
     if (matching == 4)
     {
         ESP_LOGI(TAG, "High-performance clock OTP config VERIFIED (4/4 keys)");
+        // Distinguish "already programmed when we arrived" from "we
+        // programmed it on this boot" — the second pass after a write
+        // lands here too, and that difference is the whole question.
+        otp_state_ = otp_program_attempted_ ? gnss_otp::PROGRAMMED
+                                            : gnss_otp::VERIFIED;
         return true;
     }
     if (readable > 0)
@@ -972,9 +983,11 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
         ESP_LOGE(TAG, "OTP state PARTIAL/MISMATCHED (%u/4 readable, %u/4 "
                       "matching) — auto-programming refused; inspect with "
                       "u-center", readable, matching);
+        otp_state_ = gnss_otp::PARTIAL;
         return true;
     }
     ESP_LOGW(TAG, "OTP state BLANK (all keys NACK) — module unprogrammed");
+    otp_state_ = gnss_otp::BLANK;
 
     if (!kOtpAutoProgram)
     {
@@ -989,6 +1002,7 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
         // Do not write again — the NVS record below also blocks future boots.
         ESP_LOGE(TAG, "High-perf clock verify fails after this boot's OTP "
                       "write — NOT retrying (finite OTP)");
+        otp_state_ = gnss_otp::WRITE_FAILED;
         return true;
     }
 
@@ -1013,6 +1027,7 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
         {
             ESP_LOGW(TAG, "Module %s is on the OTP never-program list — "
                           "running at default clock", uniq);
+            otp_state_ = gnss_otp::BLOCKLISTED;
             return true;
         }
     }

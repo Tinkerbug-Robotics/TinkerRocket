@@ -1973,6 +1973,13 @@ static void buildFlightSettings(FlightSettingsData& s)
     s.guid_tgt_e_m = pn_target_e;
     s.guid_tgt_n_m = pn_target_n;
     s.guid_tgt_src = guidanceFlownTargetSrc(guid_point_valid, pn_target_mode);
+    // v7 (#837 item 6): whether the GNSS receiver was running the
+    // high-performance clock on THIS flight.  The driver has always
+    // determined this at boot and logged it only to serial, which is why
+    // "what does the OTP clock buy" could not be answered from any flight
+    // record — every flight measured 18.18 Hz and none of them said which
+    // modules were programmed.
+    s.gnss_otp_state = sensor_collector_hw.gnssOtpState();
 }
 
 static void sendFlightSettings()

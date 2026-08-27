@@ -79,6 +79,10 @@ typedef struct
 class SensorCollector
 {
 public:
+
+    /** GNSS high-perf-clock OTP state at boot; a gnss_otp::* constant.
+     *  Board-agnostic: the LC86 driver reports NOT_M10 (#837 item 6). */
+    uint8_t gnssOtpState() const { return gnss_receiver.otpState(); }
     SensorCollector(uint8_t ISM6HG256_CS,
                     uint8_t ISM6HG256_INT,
                     uint16_t ISM6HG256_UPDATE_RATE,
