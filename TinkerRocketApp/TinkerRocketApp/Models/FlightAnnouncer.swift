@@ -94,8 +94,15 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
     private var apogeeAnnounced = false
     private var landedAnnounced = false
 
-    // Burnout detection: track consecutive updates where max_speed doesn't increase
-    private var lastMaxSpeed: Float = 0
+    // Burnout detection: a burnout is a RISE followed by a PLATEAU, and both
+    // halves have to be observed.  `max_speed_mps` is a running maximum that
+    // never decreases, so "it stopped increasing" is true at every instant
+    // AFTER burnout — including minutes later under canopy.  Treating the
+    // plateau alone as the signal announces a long-past burnout to anyone who
+    // starts watching late: voice toggled on mid-flight, or a BLE reconnect.
+    // `nil` = no baseline sampled yet; `sawSpeedIncrease` = we watched it climb.
+    private var lastMaxSpeed: Float?
+    private var sawSpeedIncrease = false
     private var maxSpeedStableCount: Int = 0
     private static let burnoutStableThreshold = 3  // consecutive unchanged updates to confirm burnout
 
@@ -272,17 +279,30 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
         guard !burnoutAnnounced else { return }
         guard let maxSpeed = telemetry.max_speed_mps, maxSpeed > Self.burnoutMinSpeed else { return }
 
-        if maxSpeed > lastMaxSpeed + 0.5 {
+        guard let last = lastMaxSpeed else {
+            // First sample we've seen.  A running maximum reads identically
+            // during the burn and long after it, so one frame proves nothing.
+            // Adopt it as the baseline and wait for evidence either way.
+            lastMaxSpeed = maxSpeed
+            return
+        }
+
+        if maxSpeed > last + 0.5 {
             // Speed still increasing — reset counter (0.5 m/s tolerance for telemetry jitter)
             lastMaxSpeed = maxSpeed
+            sawSpeedIncrease = true
             maxSpeedStableCount = 0
-        } else {
-            // Speed stable or decreasing — increment counter
-            maxSpeedStableCount += 1
-            if maxSpeedStableCount >= Self.burnoutStableThreshold {
-                burnoutAnnounced = true
-                announceImmediate("Burnout. Max speed \(UnitFormatter.spokenSpeed(Double(lastMaxSpeed), system: unitSystem()))")
-            }
+            return
+        }
+
+        // Plateau.  Only means burnout if we actually watched the climb that
+        // came before it — otherwise we are just late to a flight already in
+        // progress, and the "max speed" we'd read out is minutes stale.
+        guard sawSpeedIncrease else { return }
+        maxSpeedStableCount += 1
+        if maxSpeedStableCount >= Self.burnoutStableThreshold {
+            burnoutAnnounced = true
+            announceImmediate("Burnout. Max speed \(UnitFormatter.spokenSpeed(Double(last), system: unitSystem()))")
         }
     }
 
@@ -439,7 +459,8 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
         burnoutAnnounced = false
         apogeeAnnounced = false
         landedAnnounced = false
-        lastMaxSpeed = 0
+        lastMaxSpeed = nil
+        sawSpeedIncrease = false
         maxSpeedStableCount = 0
         lastAltitudeAnnounceTime = .distantPast
         lastDescentAnnounceTime = .distantPast

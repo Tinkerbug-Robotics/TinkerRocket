@@ -72,8 +72,11 @@ final class FlightAnnouncerPolicyTests: XCTestCase {
 
     private let APO = 0x04, LAUNCH = 0x01, LANDED_F = 0x08
 
-    /// Drive a burnout: one rising frame then three stable ones.
+    /// Drive a burnout: a baseline frame, a genuinely rising frame, then three
+    /// stable ones.  The rise is load-bearing — a plateau with no observed
+    /// climb is the "arrived mid-flight" case, which must NOT announce.
     private func driveBurnout(_ a: FlightAnnouncer, speed: Float = 80) {
+        a.processTelemetry(frame(maxSpeed: speed - 20))
         a.processTelemetry(frame(maxSpeed: speed))
         for _ in 0..<3 { a.processTelemetry(frame(maxSpeed: speed)) }
     }
@@ -100,11 +103,37 @@ final class FlightAnnouncerPolicyTests: XCTestCase {
 
     func testBurnout_jitterWithinHalfMps_countsAsStable() {
         let a = makeAnnouncer()
-        a.processTelemetry(frame(maxSpeed: 80.0))
+        a.processTelemetry(frame(maxSpeed: 60.0))   // baseline
+        a.processTelemetry(frame(maxSpeed: 80.0))   // genuine climb, observed
         a.processTelemetry(frame(maxSpeed: 80.3))   // +0.3 — jitter, counts stable
         a.processTelemetry(frame(maxSpeed: 80.1))
         a.processTelemetry(frame(maxSpeed: 80.2))
         XCTAssertEqual(spy.spoken.count, 1, "jitter under 0.5 m/s must not reset the counter")
+    }
+
+    /// The 2026-08-27 sim-flight report: voice switched on part-way through
+    /// announced "Burnout" minutes late, just before landing.  `max_speed_mps`
+    /// is a RUNNING MAXIMUM, so "stopped increasing" is permanently true once
+    /// the motor is out — a detector that keys on the plateau alone fires for
+    /// anyone who starts watching late, reading out a stale peak speed.
+    func testBurnout_notAnnounced_whenObservationStartsAfterTheBurn() {
+        let a = makeAnnouncer()
+        // Every frame carries the same already-peaked running max — exactly
+        // what the telemetry looks like on the way down under canopy.
+        for _ in 0..<10 { a.processTelemetry(frame(maxSpeed: 120)) }
+        XCTAssertTrue(spy.spoken.isEmpty,
+                      "a plateau with no observed climb is a late arrival, not a burnout")
+    }
+
+    /// The case the fix must not break: enabling voice DURING the boost still
+    /// produces a correct, timely callout, because the climb is then observed.
+    func testBurnout_announced_whenVoiceEnabledDuringBoost() {
+        let a = makeAnnouncer()
+        a.processTelemetry(frame(maxSpeed: 40))     // baseline, still climbing
+        a.processTelemetry(frame(maxSpeed: 70))     // rise observed
+        a.processTelemetry(frame(maxSpeed: 95))     // still rising
+        for _ in 0..<3 { a.processTelemetry(frame(maxSpeed: 95)) }
+        XCTAssertEqual(spy.texts, ["Burnout. Max speed 95 meters per second"])
     }
 
     // ── Altitude cadence ─────────────────────────────────────────────────
