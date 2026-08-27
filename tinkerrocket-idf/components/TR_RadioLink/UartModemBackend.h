@@ -23,6 +23,8 @@
 //   can't-retune-mid-TX rule), otherwise fire-and-forget HOP_FREQ.
 // - A modem BOOT message (daughterboard rebooted/power-cycled) clears the
 //   in-flight slot and triggers an automatic config re-push.
+#include "modem_rail_sequence.h"
+
 class UartModemBackend final : public IRadioLink
 {
 public:
@@ -174,6 +176,17 @@ private:
     // TR_UART_Link has no end()/isOpen(), so re-calling begin() on an open port
     // would re-install the driver.  Track it here instead.
     bool link_open_ = false;
+
+    // #700: the host must not drive the daughterboard's UART while its rail
+    // is gated off.  TR_UART_Link has no end(), so the driver stays installed
+    // for the life of the boot — parking is done at the GPIO matrix instead,
+    // exactly as the FC does for the RunCam.  Ordering is the whole point:
+    // park BEFORE dropping act_pin, attach AFTER raising it.
+    void parkModemUart();
+    void attachModemUart();
+    void runRailStep(modem_rail::Step s, int act_pin);
+    void railDown(int act_pin);
+    void railUp(int act_pin);
     // Set by onFrame() when a modem ANSWERS with the wrong protocol version.
     // The probe cannot otherwise tell "incompatible" from "silent", and only
     // the silent case is worth power-cycling.
