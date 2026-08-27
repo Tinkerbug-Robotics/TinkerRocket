@@ -515,7 +515,14 @@ public class DeviceSession(
         }
     }
 
-    private fun onTelemetry(data: TelemetryData) {
+    /** #968: synthesizes the latched past-apogee phase bit. */
+    private val pastApogeeLatch = PastApogeeLatch()
+
+    private fun onTelemetry(raw: TelemetryData) {
+        // #968: the wire carries only the LIVE apogee votes, which clear below
+        // ~15 m AGL. Latch the phase here, at the single entry point, so every
+        // consumer downstream sees one consistent answer.
+        val data = pastApogeeLatch.apply(raw)
         // #377: the flags are now confirmed — flips exactly once per session.
         if (!_hasReceivedTelemetry.value) _hasReceivedTelemetry.value = true
         lastTelemetryAtMs = clock()

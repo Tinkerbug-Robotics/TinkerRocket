@@ -89,18 +89,21 @@ final class VirtualRocketTests: XCTestCase {
         announcer.isEnabled = true
         spy.spoken.removeAll()   // drop the "Voice ready" confirmation
 
-        let decoder = JSONDecoder()
-        let idleReady = try decoder.decode(
-            TelemetryData.self,
-            from: Data(#"{"rid":1,"run":"Booster","st":"READY","fs":16,"palt":0.2}"#.utf8))
+        // Drive the REAL production path: VirtualRocket feeds
+        // `device.parseTelemetryData` (VirtualRocket.swift:65), which is also
+        // where the #968 past-apogee latch is applied.  Decoding straight to
+        // TelemetryData here would skip that and test a path nothing uses.
+        let device = BLEDevice(peripheral: nil, name: "TR-R-Virtual")
+        device.flightAnnouncer = announcer
+
+        let idleReady = Data(#"{"rid":1,"run":"Booster","st":"READY","fs":16,"palt":0.2}"#.utf8)
 
         for flight in 0..<2 {
             let startCount = spy.spoken.count
             for tick in 0..<VirtualRocketDriver.flightTicks {
                 clock.t = clock.t.addingTimeInterval(VirtualRocketDriver.flightTickSeconds)
                 let json = VirtualRocketDriver.flightFrameJSON(tick: tick)
-                let frame = try decoder.decode(TelemetryData.self, from: Data(json.utf8))
-                announcer.processTelemetry(frame)
+                device.parseTelemetryData(Data(json.utf8))
             }
             let calls = spy.texts.dropFirst(startCount)
 
@@ -134,7 +137,7 @@ final class VirtualRocketTests: XCTestCase {
             // Back to READY idle, then the next flight's PRELAUNCH edge must
             // reset the one-shots (the second-flight-mute regression).
             clock.advance(5)
-            announcer.processTelemetry(idleReady)
+            device.parseTelemetryData(idleReady)
         }
     }
 }

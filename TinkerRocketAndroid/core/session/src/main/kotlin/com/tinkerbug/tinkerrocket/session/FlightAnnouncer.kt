@@ -180,7 +180,7 @@ public class FlightAnnouncer(
         }
 
         // INFLIGHT, pre-apogee.
-        if (state == "INFLIGHT" && !telemetry.altApo) {
+        if (state == "INFLIGHT" && !telemetry.pastApogee) {
             checkBurnout(telemetry)
             if (burnoutAnnounced) checkPeriodicAltitude(telemetry)
         }
@@ -201,7 +201,7 @@ public class FlightAnnouncer(
         checkDeployment(telemetry, state)
 
         // Descent callouts (after apogee, before landed).
-        if (telemetry.altApo && !telemetry.landedFlag && state == "INFLIGHT") {
+        if (telemetry.pastApogee && !telemetry.landedFlag && state == "INFLIGHT") {
             checkDescentCallout(telemetry)
         }
 
@@ -275,7 +275,7 @@ public class FlightAnnouncer(
             nowMs = clock(),
             altitudeRateMps = telemetry.altitudeRate,
             altAglM = telemetry.pressureAlt,
-            afterApogee = telemetry.altApo,
+            afterApogee = telemetry.pastApogee,
             landed = telemetry.landedFlag || state == "LANDED",
             profile = recovery(),
         ) ?: return

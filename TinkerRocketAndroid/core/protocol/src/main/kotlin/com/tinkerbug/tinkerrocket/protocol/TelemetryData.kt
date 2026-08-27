@@ -352,6 +352,24 @@ public data class TelemetryData(
     // #191: motor burnout detected (fs bit 9) — gates ascent landing prediction.
     public val burnoutFlag: Boolean get() = (flightStatusBits and 0x200) != 0
 
+    // #968: LATCHED "this flight is past apogee" (fs bit 10).
+    //
+    // [altApo] and [velApo] above are LIVE VOTES, not phase latches: the FC
+    // builds them from a leaky counter whose baro test requires
+    // `alt_est > 15.0f`, so both CLEAR below ~15 m AGL and every consumer that
+    // read them as "we are past apogee" silently flipped back to "pre-apogee"
+    // for the last seconds of every flight (measured: 130.96 s -> 138.84 s on
+    // the 2026-08-27 sim flight).  That is what let a stale burnout be
+    // announced just before landing (#964), and the same clearing caused #235.
+    //
+    // The firmware HAS a latched master vote (NSF2_MASTER_APOGEE) but does not
+    // put it on the wire, and there is no room to add it: LoRa `flags_state`
+    // is fully allocated and `num_sats` has only 6 bits left against a real
+    // 0-40 range.  So the app latches it itself (DeviceSession.onTelemetry),
+    // into the bit position the firmware would use — if a future protocol
+    // version does send it, this reads through unchanged.
+    public val pastApogee: Boolean get() = (flightStatusBits and PAST_APOGEE_BIT) != 0
+
     // ── Pyro status bitfield ("ps") ───────────────────────────────────────
     public val pyroArmed: Boolean get() = (pyroStatusBits and 0x001) != 0
     public val pyro1Cont: Boolean get() = (pyroStatusBits and 0x002) != 0
@@ -596,6 +614,9 @@ public data class TelemetryData(
     }
 
     public companion object {
+        /** #968: fs bit 10 — the app-latched "past apogee" phase. */
+        public const val PAST_APOGEE_BIT: Int = 0x400
+
 
         /** Strict-field type mismatch → the whole frame is discarded. */
         private class FrameTypeMismatch : RuntimeException(null, null, false, false)

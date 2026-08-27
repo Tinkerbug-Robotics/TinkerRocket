@@ -70,7 +70,13 @@ final class FlightAnnouncerPolicyTests: XCTestCase {
         return t
     }
 
-    private let APO = 0x04, LAUNCH = 0x01, LANDED_F = 0x08
+    private let LAUNCH = 0x01, LANDED_F = 0x08
+    /// What production actually delivers past apogee: the live vote AND the
+    /// latched phase bit `BLEDevice` synthesizes on every frame (#968).
+    private let APO = 0x04 | 0x400
+    /// The last seconds of a real flight: the live vote has decayed below
+    /// ~15 m AGL, but the latch still says the flight is past apogee.
+    private let APO_VOTE_CLEARED = 0x400
 
     /// Drive a burnout: a baseline frame, a genuinely rising frame, then three
     /// stable ones.  The rise is load-bearing — a plateau with no observed
@@ -134,6 +140,28 @@ final class FlightAnnouncerPolicyTests: XCTestCase {
         a.processTelemetry(frame(maxSpeed: 95))     // still rising
         for _ in 0..<3 { a.processTelemetry(frame(maxSpeed: 95)) }
         XCTAssertEqual(spy.texts, ["Burnout. Max speed 95 meters per second"])
+    }
+
+    /// #968: descent callouts must keep firing in the last seconds of the
+    /// flight, when the FC's live apogee votes have decayed below ~15 m AGL.
+    /// Before the latch they stopped exactly when they mattered most.
+    func testDescent_continuesAfterTheLiveApogeeVoteClears() {
+        let a = makeAnnouncer()
+        a.processTelemetry(frame())
+        a.processTelemetry(frame(maxAlt: 455, fs: APO))
+        spy.spoken.removeAll()
+
+        clock.advance(5)
+        a.processTelemetry(frame(palt: 300, rate: -5, fs: APO))
+        XCTAssertEqual(spy.texts, ["300 meters, descending 5 meters per second"])
+        spy.spoken.removeAll()
+
+        // Now under ~15 m AGL: alt_apo and vel_apo have both decayed away,
+        // but the flight is still descending and still wants callouts.
+        clock.advance(10)
+        a.processTelemetry(frame(palt: 12, rate: -5, fs: APO_VOTE_CLEARED))
+        XCTAssertEqual(spy.texts, ["12 meters, descending 5 meters per second"],
+                       "the latch must keep the descent cadence alive (#968)")
     }
 
     // ── Altitude cadence ─────────────────────────────────────────────────

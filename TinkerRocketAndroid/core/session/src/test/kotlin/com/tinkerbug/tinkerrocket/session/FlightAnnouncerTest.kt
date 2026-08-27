@@ -63,6 +63,7 @@ class FlightAnnouncerTest {
         rate: Float? = null,
         maxAlt: Float? = null,
         apo: Boolean = false,
+        apoVoteCleared: Boolean = false,
         landed: Boolean = false,
         launch: Boolean = false,
         lat: Double? = null,
@@ -74,8 +75,14 @@ class FlightAnnouncerTest {
         pressureAlt = palt,
         altitudeRate = rate,
         maxAltM = maxAlt,
+        // #968: past apogee, production delivers BOTH the live vote (0x04)
+        // and the latched phase bit DeviceSession synthesizes (0x400).
+        // `apoVoteCleared` is the last seconds of a real flight: the vote has
+        // decayed below ~15 m AGL but the latch still holds.
         flightStatusBits = (if (launch) 0x01 else 0) or
-            (if (apo) 0x04 else 0) or (if (landed) 0x08 else 0),
+            (if (apo) (0x04 or 0x400) else 0) or
+            (if (apoVoteCleared) 0x400 else 0) or
+            (if (landed) 0x08 else 0),
         latitude = lat,
         longitude = lon,
         dataStatus = status,
@@ -339,6 +346,36 @@ class FlightAnnouncerTest {
         for (v in listOf(40f, 70f, 95f)) rig.announcer.processTelemetry(frame(maxSpeed = v))
         repeat(3) { rig.announcer.processTelemetry(frame(maxSpeed = 95f)) }
         assertEquals(listOf("Burnout. Max speed 95 meters per second"), rig.speech.spoken)
+    }
+
+    /**
+     * #968: descent callouts must keep firing in the last seconds of the
+     * flight, when the FC's live apogee votes have decayed below ~15 m AGL.
+     * Before the latch they stopped exactly when they mattered most.
+     */
+    @Test
+    fun descent_continuesAfterTheLiveApogeeVoteClears() {
+        val rig = Rig()
+        rig.burnOut()
+        rig.announcer.processTelemetry(frame(apo = true, maxAlt = 455f))
+        rig.speech.spoken.clear()
+
+        rig.now = 5_000
+        rig.announcer.processTelemetry(frame(apo = true, palt = 300f, rate = -5f))
+        assertEquals(listOf("300 meters, descending 5 meters per second"), rig.speech.spoken)
+        rig.speech.spoken.clear()
+
+        // Under ~15 m AGL both live votes have decayed away, but the flight is
+        // still descending and still wants callouts.
+        rig.now = 15_000
+        rig.announcer.processTelemetry(
+            frame(apoVoteCleared = true, palt = 12f, rate = -5f),
+        )
+        assertEquals(
+            listOf("12 meters, descending 5 meters per second"),
+            rig.speech.spoken,
+            "the latch must keep the descent cadence alive (#968)",
+        )
     }
 
     @Test
