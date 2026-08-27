@@ -18,6 +18,7 @@
 
 #include <TR_Sensor_Collector.h>
 #include <RocketComputerTypes.h>
+#include "sim_landed_hold.h"
 
 class SensorCollectorSim
 {
@@ -101,6 +102,13 @@ public:
     bool isSimActive() const;
     bool isSimConfigured() const { return configured_; }
 
+    // #971: the FC's current RocketState, pushed in every loop.  The
+    // SIM_LANDED hold ends when the flight computer ACTUALLY reaches LANDED
+    // rather than after a fixed guess at how long its detector takes.  The
+    // guess was 9000 ms against a real requirement of >9000 ms, so the
+    // transition missed by a margin of zero on every sim flight.
+    void noteRocketState(uint8_t state) { fc_rocket_state_ = state; }
+
 private:
     // ========================================================================
     // Sim phases
@@ -123,6 +131,7 @@ private:
     SimConfigData cfg_         = {};
     bool          configured_  = false;
     SimPhase      phase_       = SIM_IDLE;
+    uint8_t       fc_rocket_state_ = 0;   // #971: last state the FC reported
     uint32_t      phase_start_ms_ = 0;
     uint32_t      last_step_us_   = 0;
 
@@ -208,6 +217,7 @@ private:
     static constexpr float LAUNCH_ANGLE_RAD = 85.0f * 3.14159265f / 180.0f;  // 5° from vertical
     static constexpr float CP_CG_DIST_M    = 0.075f;   // 1.5 cal stability margin (50mm body)
     static constexpr float I_TRANSVERSE     = 0.02f;    // kg⋅m² (500g, 0.6m rocket)
+
     static constexpr float C_DAMP           = 20.0f;    // pitch damping coefficient
 
     // ISM6 sensitivity constants (for ±16g low-G, ±256g high-G, ±4000dps gyro)

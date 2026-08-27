@@ -369,19 +369,44 @@ void SensorCollectorSim::stepPhysics(float dt)
         stepDescent(dt);
         break;
     case SIM_LANDED:
+    {
         velocity_mps_   = 0.0f;
         accel_mps2_     = 0.0f;
         pitch_rad_      = 0.0f;
         pitch_rate_rps_ = 0.0f;
-        // Hold long enough for the kinematic landing checks to fire.
-        // Landing detection needs 5 consecutive 1-second checks (5s)
-        // plus a 2-second state-machine debounce = 7s minimum.
-        if (elapsed_ms >= 9000)
+        // Hold until the FC's own state machine reaches LANDED (#971).
+        //
+        // This used to be a fixed 9000 ms, chosen from a comment that budgeted
+        // "5 consecutive 1-second checks (5s) plus a 2-second state-machine
+        // debounce = 7s minimum".  That budget was wrong in a way that only
+        // shows on a sim: a sim never produces an impact (accel is a flat 1 g,
+        // never the 15 g LANDING_IMPACT_G spike), so alt_landed_flag can only
+        // come from the SLOW vote, whose sub-flags run a leaky counter at 1 Hz.
+        // Measured on flight_20260827_122854: the flag took 7.0 s, and the FC
+        // then wants `> 2000` ms MORE of it — i.e. >9.0 s against a 9.0 s hold.
+        // Every sim flight missed LANDED by a margin of zero, leaving the FC in
+        // INFLIGHT with the log open until the 10-minute backstop.
+        //
+        // Asking the FC directly means this cannot drift out of sync again if
+        // the detector's timing changes.  The timeout is only a backstop so a
+        // detector that never fires cannot hang the sim forever.
+        const sim_landed::Exit decision =
+            sim_landed::decide(fc_rocket_state_, (uint8_t)LANDED, elapsed_ms);
+        if (decision == sim_landed::Exit::FcLanded)
         {
             phase_ = SIM_IDLE;
-            Serial.println("[SIM] Complete (auto-stop after LANDED hold)");
+            ESP_LOGI("SIM", "Complete (FC reached LANDED after %.1f s hold)",
+                     (double)(elapsed_ms / 1000.0f));
+        }
+        else if (decision == sim_landed::Exit::GaveUp)
+        {
+            phase_ = SIM_IDLE;
+            ESP_LOGW("SIM", "Complete (gave up after %.1f s — FC never left "
+                     "state %u; landing detection did not fire)",
+                     (double)(elapsed_ms / 1000.0f), (unsigned)fc_rocket_state_);
         }
         break;
+    }
     default:
         break;
     }

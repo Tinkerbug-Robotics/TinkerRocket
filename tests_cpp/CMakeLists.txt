@@ -512,6 +512,18 @@ foreach(BSREV 1 2 3)
         TEST_PREFIX "v${BSREV}.")
 endforeach()
 
+# ---------- test_sim_landed_hold ----------
+# #971: the sim's SIM_LANDED hold was exactly the FC's minimum requirement
+# against a strictly-greater comparison, so no simulated flight ever reached
+# LANDED. The rule is pure, so it is pinned here rather than trusted.
+add_executable(test_sim_landed_hold test_sim_landed_hold.cpp)
+target_include_directories(test_sim_landed_hold PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Sensor_Collector_Sim
+)
+target_link_libraries(test_sim_landed_hold GTest::gtest_main)
+gtest_discover_tests(test_sim_landed_hold)
+
 # ---------- test_modem_rail_sequence ----------
 # #700: the host drove the LoRa daughterboard's UART while its rail was gated
 # off (floating ground on V8, dead rail on V9 — same phantom feed either way).

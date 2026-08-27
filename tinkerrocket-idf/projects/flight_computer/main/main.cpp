@@ -8142,6 +8142,14 @@ static void loop_fc()
         // to hold LANDED so the lockout stays validated.  An explicit Stop is
         // handled in the SIM_STOP_CMD handler instead (#393), which is the only
         // way to distinguish a user abort from a flown-out sim.
+        // #971: tell the sim what state we are ACTUALLY in.  Its SIM_LANDED
+        // hold used to run for a fixed 9000 ms, guessed from the landing
+        // detector's timing — and that guess was exactly the requirement, so
+        // `> 2000U` below never became true and no sim flight ever reached
+        // LANDED.  Pushing the real state lets the hold end on the real
+        // transition and cannot drift out of sync again.
+        sensor_collector.noteRocketState((uint8_t)rocket_state);
+
         {
             const bool curr_sim_active = sensor_collector.isSimActive();
             if (!prev_sim_active && curr_sim_active)
