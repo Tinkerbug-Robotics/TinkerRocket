@@ -3229,6 +3229,15 @@ static void setup_fc()
     // boot wiggle both need their rails up); -1 = rail not FC-switched.
     // SERVO_ACT is the #345 servo-power MOSFET — held on for now;
     // integrating it with SERVO_RELAX_ON_PAD is a follow-up.
+    // #700: this is the safe order and must stay that way — rail UP before the
+    // GNSS UART is configured, so the host never drives an unpowered module.
+    // GPS_ACT is raised once here and never lowered, which is why the GNSS
+    // branch has no phantom-feed exposure today. IF ANYTHING EVER GATES IT OFF
+    // (a power-cycle recovery, a sleep mode), the UART pins must be parked
+    // high-Z FIRST — see UartModemBackend::parkModemUart() for the pattern and
+    // why: there is no series resistance on these lines on V8 or V9, so a
+    // still-driven TX feeds the module through its RX ESD diode whether the
+    // gate is low-side (V8, floating ground) or high-side (V9, dead rail).
     if (config::GPS_ACT_PIN >= 0)
     {
         gpio_set_direction((gpio_num_t)config::GPS_ACT_PIN, GPIO_MODE_OUTPUT);

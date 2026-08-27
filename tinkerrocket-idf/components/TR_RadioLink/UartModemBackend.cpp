@@ -7,6 +7,7 @@
 #include <compat.h>
 #include <driver/gpio.h>
 #include <driver/uart.h>  // uart_flush_input on the re-attach probe
+#include "modem_rail_sequence.h"  // #700 park/rail ordering
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -18,6 +19,72 @@ using namespace radio_modem;
 // ---------------------------------------------------------------------------
 // begin / config push
 // ---------------------------------------------------------------------------
+
+// ── Daughterboard UART parking (#700) ────────────────────────────────────
+//
+// All the daughterboard branches gate the rail, not the signals, and there is
+// no series resistance on any of these lines on V8 or V9.  With the rail down
+// and the host's TX pad still configured, the pad idles HIGH at 3.3 V and
+// feeds the module through its RX ESD diode — on V8 the module's ground is
+// floating (low-side N-FET in the return), on V9 the ground is common and the
+// rail is simply dead (high-side TPS22810).  Different mechanism, same
+// outcome: the host powers a module it believes it switched off, unbounded,
+// for as long as the rail stays down.
+//
+// TR_UART_Link has no end() — the driver is installed once per boot — so the
+// pins are parked at the GPIO matrix, which is what the FC already does for
+// the RunCam.  gpio_reset_pin leaves the pull-up ON; it has to come off, since
+// even a weak pull is a feed path on a resistor-less line.
+void UartModemBackend::parkModemUart()
+{
+    if (!link_open_) return;
+    const int pins[2] = {cfg_.uart.tx_pin, cfg_.uart.rx_pin};
+    for (int pin : pins)
+    {
+        if (pin < 0) continue;
+        gpio_reset_pin((gpio_num_t)pin);
+        gpio_set_direction((gpio_num_t)pin, GPIO_MODE_INPUT);
+        gpio_set_pull_mode((gpio_num_t)pin, GPIO_FLOATING);
+    }
+}
+
+// Re-point the UART matrix at the pins.  Safe to call when already attached.
+void UartModemBackend::attachModemUart()
+{
+    if (!link_open_) return;
+    uart_set_pin(cfg_.uart.port, cfg_.uart.tx_pin, cfg_.uart.rx_pin,
+                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+}
+
+// Execute one pinned step (#700).  The ORDER lives in modem_rail_sequence.h so
+// a test pins it; this just performs whatever that header says, which is why a
+// new failure path cannot invent its own ordering by accident.
+void UartModemBackend::runRailStep(modem_rail::Step s, int act_pin)
+{
+    switch (s) {
+    case modem_rail::Step::ParkUart:   parkModemUart(); break;
+    case modem_rail::Step::AttachUart: attachModemUart(); break;
+    case modem_rail::Step::RailDown:
+        if (act_pin >= 0) gpio_set_level((gpio_num_t)act_pin, 0);
+        break;
+    case modem_rail::Step::RailUp:
+        if (act_pin >= 0) {
+            gpio_set_direction((gpio_num_t)act_pin, GPIO_MODE_OUTPUT);
+            gpio_set_level((gpio_num_t)act_pin, 1);
+        }
+        break;
+    }
+}
+
+void UartModemBackend::railDown(int act_pin)
+{
+    for (auto s : modem_rail::kPowerDown) runRailStep(s, act_pin);
+}
+
+void UartModemBackend::railUp(int act_pin)
+{
+    for (auto s : modem_rail::kPowerUp) runRailStep(s, act_pin);
+}
 
 bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
                              float bw_khz, uint8_t cr, int8_t tx_power,
@@ -40,6 +107,9 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
         gpio_set_direction((gpio_num_t)cfg.act_pin, GPIO_MODE_OUTPUT);
         gpio_set_level((gpio_num_t)cfg.act_pin, 1);  // power the daughterboard
     }
+    // #700: the rail goes up BEFORE link_.begin() below configures the UART
+    // pins, so the host never drives an unpowered module.  Keep that order —
+    // every failure path from here parks the pins before dropping the rail.
 
     // Every failure path below leaves the daughterboard UNPOWERED and the
     // backend not-began. Previously they all returned false with act_pin still
@@ -66,10 +136,8 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
         modem_alive_   = false;
         began_         = false;
         stats_.enabled = false;
-        if (cfg.act_pin >= 0)
-        {
-            gpio_set_level((gpio_num_t)cfg.act_pin, 0);
-        }
+        // #700: stop driving before the rail goes away, not after.
+        railDown(cfg.act_pin);
         if (permanent)
         {
             reattach_state_ = Reattach::Off;
@@ -474,11 +542,10 @@ void UartModemBackend::serviceReattach(uint32_t now_ms)
         {
             if ((int32_t)(now_ms - reattach_at_ms_) < 0) return;
             reattach_attempts_++;
-            if (cfg_.act_pin >= 0)
-            {
-                gpio_set_direction((gpio_num_t)cfg_.act_pin, GPIO_MODE_OUTPUT);
-                gpio_set_level((gpio_num_t)cfg_.act_pin, 1);
-            }
+            // #700: rail first, signals second.  On the first pass
+            // link_.begin() below does the uart_set_pin itself; on every later
+            // pass the pins are still parked from the last failClosed.
+            railUp(cfg_.act_pin);
             // TR_UART_Link has no end(); re-installing the driver on an already
             // open port would fail, so only open it the first time.
             if (!link_open_)
@@ -486,7 +553,7 @@ void UartModemBackend::serviceReattach(uint32_t now_ms)
                 if (link_.begin(cfg_.uart) != ESP_OK)
                 {
                     ESP_LOGW(TAG, "re-attach: UART link init failed");
-                    if (cfg_.act_pin >= 0) gpio_set_level((gpio_num_t)cfg_.act_pin, 0);
+                    railDown(cfg_.act_pin);
                     armReattach(now_ms);
                     return;
                 }

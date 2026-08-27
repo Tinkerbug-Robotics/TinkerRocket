@@ -512,6 +512,18 @@ foreach(BSREV 1 2 3)
         TEST_PREFIX "v${BSREV}.")
 endforeach()
 
+# ---------- test_modem_rail_sequence ----------
+# #700: the host drove the LoRa daughterboard's UART while its rail was gated
+# off (floating ground on V8, dead rail on V9 — same phantom feed either way).
+# The ordering rules are pure, so they are pinned here rather than trusted.
+add_executable(test_modem_rail_sequence test_modem_rail_sequence.cpp)
+target_include_directories(test_modem_rail_sequence PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RadioLink
+)
+target_link_libraries(test_modem_rail_sequence GTest::gtest_main)
+gtest_discover_tests(test_modem_rail_sequence)
+
 # ---------- test_fc_gnss_reset_map (x3) ----------
 # #837 item 6: the GNSS "reset and re-verify" path called a pulseReset() that
 # opened with a silent `if (reset_n_pin < 0) return;` — and every FC board
