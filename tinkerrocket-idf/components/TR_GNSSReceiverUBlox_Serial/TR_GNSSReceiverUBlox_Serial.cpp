@@ -918,8 +918,20 @@ static constexpr bool kOtpAutoProgram = true;
 //   byte-identical across three u-blox manuals); most likely the interrupted
 //   first attempt left its config region failing read-back.  Works normally
 //   at the default clock.
+//   FB80A88FA854 — rocket-computer V9's fitted module, found 2026-08-27 during
+//   a flight-readiness pass.  Its boot log says the write already happened and
+//   verify still fails:
+//     "OTP write was ALREADY attempted on module FB80A88FA854 (NVS guard) but
+//      verify fails — NOT rewriting.  Investigate manually"
+//   Until now it was protected ONLY by that FC's NVS guard, which is exactly
+//   the gap this list exists to close: move the daughter board to another main
+//   board (or clear this FC's NVS) and a second write gets spent on a module
+//   that has already failed one.  Works normally at the default clock — and
+//   default-clock modules measure the full 18 Hz (see #837 item 6), so this
+//   costs no capability.
 static constexpr const char *kOtpNeverProgram[] = {
     "B9A8090FB454",
+    "FB80A88FA854",
 };
 
 bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
