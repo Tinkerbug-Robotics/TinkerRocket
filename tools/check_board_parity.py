@@ -124,6 +124,12 @@ EXEMPT = {
     'rocket-computer-mini':
         'layout in progress — never tagged or fabbed, ~40 parts still unplaced '
         '(U32 the ESP32-S3 among them). Gate it once the layout is complete.',
+    'rocket-computer':
+        'pack-direct pyro + supercap rework drawn 2026-08-26 in 7ad7508, which '
+        'declared itself WIP; the layout has not followed yet, so 27 symbols '
+        '(C130-C139, D12-D15, Q12, R120-R130, U40/41/42/44/45) are schematic-'
+        'only. THIS BOARD FLIES — re-gate it the moment the rework is placed, '
+        'and do not let anything else ride in behind the exemption.',
 }
 
 
