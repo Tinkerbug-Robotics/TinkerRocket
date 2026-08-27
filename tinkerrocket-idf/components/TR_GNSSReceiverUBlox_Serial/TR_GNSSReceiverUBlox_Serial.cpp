@@ -597,13 +597,37 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
     }
 
     // ── High performance navigation update rate (§2.1.5, UBX-22020019) ──
-    // The M10 defaults to a low CPU clock whose nav-rate ceiling (~10 Hz with
-    // 4 concurrent constellations) is below our configured GNSS_UPDATE_RATE.
     // The high-clock configuration lives in OTP memory: programmed once,
     // applied automatically at every startup, PERMANENT.  Verify it at every
     // boot (new/replacement modules arrive unprogrammed) and program it —
     // with the manual's exact byte strings — when absent.  Gated on a
     // positively identified M10 so we can never burn OTP on a different part.
+    //
+    // WHAT THIS BUYS IS UNMEASURED, and this comment used to overstate it.
+    // It said the default clock's "~10 Hz with 4 concurrent constellations"
+    // ceiling "is below our configured GNSS_UPDATE_RATE", implying a fresh
+    // module runs at roughly half the intended rate.  Measured 2026-08-27
+    // against the four flights in examples/flights/ — all dated 2026-07-05,
+    // two days BEFORE OTP programming existed (#426 landed 07-07), so every
+    // one of them ran on a default-clock module:
+    //
+    //   flight          distinct GNSS epochs   span     rate    median sats
+    //   ..._174532            1397             77.8 s   18.18 Hz     21
+    //   ..._183745             441             24.4 s   18.18 Hz     16
+    //   ..._191300             645             38.2 s   18.18 Hz     17
+    //   ..._195028             262             15.5 s   18.18 Hz     29
+    //
+    // Distinct receiver UTC epochs, not log rows — the CSV holds each fix
+    // across rows until the next arrives, which inflates a row-wise count.
+    // A default-clock module tracking 16-29 satellites delivered the full
+    // requested 18 Hz on every flight.  So there is no halving, and config.h
+    // has it right: 18 is an OVER-REQUEST so the receiver does not
+    // self-limit, not a target the default clock cannot reach.
+    //
+    // The OTP write is still worth doing and its failure still worth fixing
+    // — a config the firmware believes it applied should actually be applied
+    // — but nothing here has established what the high clock changes in
+    // flight.  Do not restate a rate benefit without measuring one.
     if (module_is_m10 && !ensureHighPerformanceClock())
     {
         // OTP just programmed: it only applies at startup, so hardware-reset
@@ -617,9 +641,15 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
             // claimed to perform never happened: the recursive begin() below
             // re-read the same pre-restart state, and the second pass gave up
             // with "still not verified". A fresh SAM-M10Q therefore flew its
-            // first mission at the default clock — a ~10 Hz nav-rate ceiling
-            // on four constellations against GNSS_UPDATE_RATE = 18 — with
-            // nothing in the log saying the reset line does not exist.
+            // first mission at the default clock, with nothing in the log
+            // saying the reset line does not exist.
+            //
+            // #837 item 6 (and this comment, originally) called that "roughly
+            // half the intended GNSS rate". That is not what the flight data
+            // shows — see the measurement above the OTP block. The defect is
+            // that a write the firmware reports as applied is not applied,
+            // and that the log claims a reset it did not perform; it is not a
+            // known rate loss.
             //
             // UBX-CFG-RST with resetMode 0 is a watchdog restart, which is
             // exactly what the OTP config needs, and it travels over the UART
@@ -644,8 +674,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
                          reset_n_pin, safeboot_n_pin);
         }
         ESP_LOGE(TAG, "High-performance clock still not verified after OTP "
-                      "write + reset — continuing at default clock (reduced "
-                      "nav-rate ceiling)");
+                      "write + reset — continuing at default clock");
     }
 
     auto configureReceiver = [&]() -> bool
