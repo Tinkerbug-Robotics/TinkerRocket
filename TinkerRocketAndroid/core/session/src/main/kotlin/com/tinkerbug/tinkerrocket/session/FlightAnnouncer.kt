@@ -112,7 +112,15 @@ public class FlightAnnouncer(
     private var landedAnnounced = false
 
     // Burnout detection: consecutive frames where max_speed didn't increase
-    private var lastMaxSpeed: Float = 0f
+    // A burnout is a RISE followed by a PLATEAU, and both halves have to be
+    // observed. `maxSpeedMps` is a running maximum that never decreases, so
+    // "it stopped increasing" is true at every instant AFTER burnout —
+    // including minutes later under canopy. Keying on the plateau alone
+    // announces a long-past burnout to anyone who starts watching late (voice
+    // toggled on mid-flight, or a reconnect). `null` = no baseline sampled
+    // yet; `sawSpeedIncrease` = we watched it climb.
+    private var lastMaxSpeed: Float? = null
+    private var sawSpeedIncrease = false
     private var maxSpeedStableCount: Int = 0
 
     /** Recovery-event detector (#813). Self-guards on apogee/landing. */
@@ -222,19 +230,34 @@ public class FlightAnnouncer(
         val maxSpeed = telemetry.maxSpeedMps ?: return
         if (maxSpeed <= BURNOUT_MIN_SPEED_MPS) return
 
-        if (maxSpeed > lastMaxSpeed + 0.5f) {
+        val last = lastMaxSpeed
+        if (last == null) {
+            // First sample we've seen. A running maximum reads identically
+            // during the burn and long after it, so one frame proves nothing.
+            // Adopt it as the baseline and wait for evidence either way.
+            lastMaxSpeed = maxSpeed
+            return
+        }
+
+        if (maxSpeed > last + 0.5f) {
             // Still accelerating — reset (0.5 m/s tolerance for jitter).
             lastMaxSpeed = maxSpeed
+            sawSpeedIncrease = true
             maxSpeedStableCount = 0
-        } else {
-            maxSpeedStableCount++
-            if (maxSpeedStableCount >= BURNOUT_STABLE_THRESHOLD) {
-                burnoutAnnounced = true
-                announceImmediate(
-                    "Burnout. Max speed " +
-                        SpokenUnits.speed(lastMaxSpeed.toDouble(), unitSystem()),
-                )
-            }
+            return
+        }
+
+        // Plateau. Only means burnout if we actually watched the climb that
+        // came before it — otherwise we are just late to a flight already in
+        // progress, and the "max speed" we'd read out is minutes stale.
+        if (!sawSpeedIncrease) return
+        maxSpeedStableCount++
+        if (maxSpeedStableCount >= BURNOUT_STABLE_THRESHOLD) {
+            burnoutAnnounced = true
+            announceImmediate(
+                "Burnout. Max speed " +
+                    SpokenUnits.speed(last.toDouble(), unitSystem()),
+            )
         }
     }
 
@@ -356,7 +379,8 @@ public class FlightAnnouncer(
         burnoutAnnounced = false
         apogeeAnnounced = false
         landedAnnounced = false
-        lastMaxSpeed = 0f
+        lastMaxSpeed = null
+        sawSpeedIncrease = false
         maxSpeedStableCount = 0
         lastAltitudeAnnounceMs = Long.MIN_VALUE / 2
         lastDescentAnnounceMs = Long.MIN_VALUE / 2

@@ -92,8 +92,13 @@ class FlightAnnouncerTest {
         )
     }
 
-    /** Drive to a just-burned-out state: burnout announced, log cleared. */
+    /**
+     * Drive to a just-burned-out state: burnout announced, log cleared.
+     * The climb is load-bearing — a plateau with no observed rise is the
+     * "started watching mid-flight" case, which deliberately stays silent.
+     */
     private fun Rig.burnOut(maxSpeed: Float = 60f) {
+        announcer.processTelemetry(frame(maxSpeed = maxSpeed - 20f))
         announcer.processTelemetry(frame(maxSpeed = maxSpeed))
         repeat(3) { announcer.processTelemetry(frame(maxSpeed = maxSpeed)) }
         speech.spoken.clear()
@@ -299,11 +304,41 @@ class FlightAnnouncerTest {
     @Test
     fun burnout_jitterWithinHalfMps_countsAsStable() {
         val rig = Rig()
-        rig.announcer.processTelemetry(frame(maxSpeed = 60f))
+        rig.announcer.processTelemetry(frame(maxSpeed = 40f))   // baseline
+        rig.announcer.processTelemetry(frame(maxSpeed = 60f))   // genuine climb, observed
         // +0.4 m/s is telemetry jitter, not acceleration.
         for (v in listOf(60.4f, 60.2f, 60.4f)) rig.announcer.processTelemetry(frame(maxSpeed = v))
         assertEquals(1, rig.speech.spoken.size)
         assertEquals("Burnout. Max speed 60 meters per second", rig.speech.spoken.first())
+    }
+
+    /**
+     * The 2026-08-27 sim-flight report: voice switched on part-way through the
+     * flight announced "Burnout" minutes late, just before landing.
+     * `maxSpeedMps` is a RUNNING MAXIMUM, so "stopped increasing" is
+     * permanently true once the motor is out — a detector keyed on the plateau
+     * alone fires for anyone who starts watching late, reading out a stale peak.
+     */
+    @Test
+    fun burnout_notAnnounced_whenObservationStartsAfterTheBurn() {
+        val rig = Rig()
+        // Every frame carries the same already-peaked running max — exactly
+        // what the telemetry looks like on the way down under canopy.
+        repeat(10) { rig.announcer.processTelemetry(frame(maxSpeed = 120f)) }
+        assertEquals(
+            0,
+            rig.speech.spoken.size,
+            "a plateau with no observed climb is a late arrival, not a burnout",
+        )
+    }
+
+    /** The case the fix must not break: enabling voice DURING the boost. */
+    @Test
+    fun burnout_announced_whenVoiceEnabledDuringBoost() {
+        val rig = Rig()
+        for (v in listOf(40f, 70f, 95f)) rig.announcer.processTelemetry(frame(maxSpeed = v))
+        repeat(3) { rig.announcer.processTelemetry(frame(maxSpeed = 95f)) }
+        assertEquals(listOf("Burnout. Max speed 95 meters per second"), rig.speech.spoken)
     }
 
     @Test
@@ -465,7 +500,7 @@ class FlightAnnouncerTest {
 
         // Next flight: PRELAUNCH resets, so all events fire again.
         rig.announcer.processTelemetry(frame(state = "PRELAUNCH"))
-        for (v in listOf(50f, 50f, 50f, 50f)) rig.announcer.processTelemetry(frame(maxSpeed = v))
+        for (v in listOf(30f, 50f, 50f, 50f, 50f)) rig.announcer.processTelemetry(frame(maxSpeed = v))
         assertEquals(listOf("Burnout. Max speed 50 meters per second"), rig.speech.spoken)
     }
 
@@ -501,7 +536,7 @@ class FlightAnnouncerTest {
             clock = { rig.now },
             unitSystem = { UnitSystem.IMPERIAL },
         )
-        for (v in listOf(60f, 60f, 60f, 60f)) announcer.processTelemetry(frame(maxSpeed = v))
+        for (v in listOf(40f, 60f, 60f, 60f, 60f)) announcer.processTelemetry(frame(maxSpeed = v))
         assertEquals(listOf("Burnout. Max speed 197 feet per second"), speech.spoken)
         announcer.processTelemetry(frame(apo = true, maxAlt = 400f))
         assertEquals("Apogee. 1312 feet", speech.spoken[1])
