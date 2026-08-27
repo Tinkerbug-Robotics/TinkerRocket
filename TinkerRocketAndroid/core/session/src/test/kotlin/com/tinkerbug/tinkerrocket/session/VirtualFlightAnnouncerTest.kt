@@ -33,12 +33,19 @@ class VirtualFlightAnnouncerTest {
         override fun stop() = Unit
     }
 
-    private fun flyOnce(announcer: FlightAnnouncer, clock: (Long) -> Unit) {
+    private fun flyOnce(
+        announcer: FlightAnnouncer,
+        latch: PastApogeeLatch,
+        clock: (Long) -> Unit,
+    ) {
         for (tick in 0 until VirtualFlightScript.TICKS) {
             clock(tick * VirtualFlightScript.TICK_MS)
             val frame = TelemetryData.decode(VirtualFlightScript.frameJson(tick))
                 ?: fail("script frame $tick did not decode")
-            announcer.processTelemetry(frame)
+            // #968: DeviceSession applies this latch to every frame before the
+            // announcer sees it; feeding raw frames would exercise a path
+            // production does not have.
+            announcer.processTelemetry(latch.apply(frame))
         }
     }
 
@@ -52,6 +59,7 @@ class VirtualFlightAnnouncerTest {
             clock = { nowMs },
         )
 
+        val latch = PastApogeeLatch()
         val idleReady = TelemetryData.decode(
             """{"rid":1,"run":"Booster","st":"READY","fs":16,"palt":0.2}""",
         ) ?: fail("idle frame did not decode")
@@ -59,7 +67,7 @@ class VirtualFlightAnnouncerTest {
         var flightBase = 0L
         repeat(2) { flight ->
             val startCount = speech.spoken.size
-            flyOnce(announcer) { offset -> nowMs = flightBase + offset }
+            flyOnce(announcer, latch) { offset -> nowMs = flightBase + offset }
             val calls = speech.spoken.drop(startCount)
 
             // One-shots: exactly one each, in flight order.
@@ -93,7 +101,7 @@ class VirtualFlightAnnouncerTest {
             // Back to the READY idle, then the next flight's PRELAUNCH edge
             // must reset the one-shots (the second-flight-mute regression).
             nowMs = flightBase + VirtualFlightScript.TICKS * VirtualFlightScript.TICK_MS
-            announcer.processTelemetry(idleReady)
+            announcer.processTelemetry(latch.apply(idleReady))
             flightBase = nowMs + 5_000
         }
     }

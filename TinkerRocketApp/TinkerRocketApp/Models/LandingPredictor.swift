@@ -12,7 +12,7 @@
 //
 //  Algorithm mirrors the Python validation tool at
 //  `Data_Analysis/landing_predictor.py`.
-//  Descent branch (alt_apo flag set, or vu <= 0): drift-cast forward from
+//  Descent branch (past_apogee latched, or vu <= 0): drift-cast forward from
 //  the current position using the active RocketProfile's drogue/main rates
 //  and the cached wind profile.  When a fresh GNSS fix is available, the
 //  snapshot position is taken from raw GNSS rather than EKF — bypasses the
@@ -170,7 +170,7 @@ final class LandingPredictor: ObservableObject {
         // positive; post-burnout coast predicts via the ascent ballistic
         // (#191 item 1).  Boost never predicts — no thrust model.
         let vU = Double(t.altitude_rate ?? 0)
-        let descending = t.alt_apo || vU <= 0.5
+        let descending = t.past_apogee || vU <= 0.5
 
         guard let profile = profileStore?.activeProfile else { return }
 

@@ -392,7 +392,7 @@ fun DashboardScreen(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FlagChip("LAUNCH", telemetry.launchFlag)
             FlagChip("BURNOUT", telemetry.burnoutFlag)
-            FlagChip("APOGEE", telemetry.altApo || telemetry.velApo)
+            FlagChip("APOGEE", telemetry.pastApogee)
             FlagChip("LANDED", telemetry.landedFlag)
         }
 

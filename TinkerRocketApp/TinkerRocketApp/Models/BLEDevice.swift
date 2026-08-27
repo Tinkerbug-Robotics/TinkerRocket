@@ -396,6 +396,31 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// latch used to only clear on the direct path, leaving the banner
     /// stuck after every relayed sim flight (found via the Virtual Rocket,
     /// which is a BS; Android's latch already watches the focused stream).
+    /// Per-rocket latch for #968's `past_apogee` bit.  Keyed by relayed rocket
+    /// id (0 = this device's own direct link) because a base station can relay
+    /// two flights at once and they must not contaminate each other (#390).
+    private var pastApogeeSeen: [UInt8: Bool] = [:]
+
+    /// Synthesize the latched past-apogee bit the wire cannot carry.
+    ///
+    /// Rises the first time EITHER live vote fires — `vel_apo` typically leads
+    /// `alt_apo` by a few hundred ms — and then holds until the next flight
+    /// arms.  Clearing on PRELAUNCH/READY/INITIALIZATION matches
+    /// `FlightAnnouncer.resetFlightState()`, so a second flight on the same
+    /// connection starts clean.
+    private func applyPastApogeeLatch(_ t: inout TelemetryData) {
+        let key = UInt8(t.source_rocket_id ?? 0)
+        if t.state == "PRELAUNCH" || t.state == "READY" || t.state == "INITIALIZATION" {
+            pastApogeeSeen[key] = false
+        }
+        if t.alt_apo || t.vel_apo {
+            pastApogeeSeen[key] = true
+        }
+        if pastApogeeSeen[key] == true {
+            t.flight_status_bits |= TelemetryData.pastApogeeBit
+        }
+    }
+
     private func updateSimBannerLatch(_ t: TelemetryData) {
         guard simLaunched else { return }
         if t.state != "READY" && t.state != "INITIALIZATION" {
@@ -2212,7 +2237,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
         // Regular telemetry
         do {
-            let newTelemetry = try jsonDecoder.decode(TelemetryData.self, from: data)
+            var newTelemetry = try jsonDecoder.decode(TelemetryData.self, from: data)
+            // #968: the wire carries only the LIVE apogee votes, which clear
+            // below ~15 m AGL.  Latch the phase here, at the single decode
+            // point, so every consumer downstream (announcer, predictor,
+            // dashboard, relayed RemoteRockets) sees one consistent answer.
+            self.applyPastApogeeLatch(&newTelemetry)
 
             // #377: power state (and the rest of the flags) are now confirmed —
             // the UI may trust telemetry.pwr_pin_on from here on. Guarded so we

@@ -216,7 +216,7 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
         }
 
         // --- INFLIGHT announcements (before apogee) ---
-        if state == "INFLIGHT" && !telemetry.alt_apo {
+        if state == "INFLIGHT" && !telemetry.past_apogee {
             checkBurnout(telemetry)
             // Only announce altitude after burnout — during powered flight there
             // is too much happening and the rapidly changing values aren't useful.
@@ -242,7 +242,7 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
         checkDeployment(telemetry, state: state)
 
         // --- Descent callouts (after apogee, before landed) ---
-        if telemetry.alt_apo && !telemetry.landed_flag && state == "INFLIGHT" {
+        if telemetry.past_apogee && !telemetry.landed_flag && state == "INFLIGHT" {
             checkDescentCallout(telemetry)
         }
 
@@ -326,7 +326,7 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
             now: now(),
             altitudeRateMps: telemetry.altitude_rate,
             altAglM: telemetry.pressure_alt,
-            afterApogee: telemetry.alt_apo,
+            afterApogee: telemetry.past_apogee,
             landed: telemetry.landed_flag || state == "LANDED",
             profile: currentRecovery()
         ) else { return }

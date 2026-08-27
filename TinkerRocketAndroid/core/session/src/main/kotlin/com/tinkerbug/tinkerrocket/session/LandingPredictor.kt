@@ -114,7 +114,7 @@ public class LandingPredictor(
         }
 
         val vU = (t.altitudeRate ?: 0f).toDouble()
-        val descending = t.altApo || vU <= 0.5
+        val descending = t.pastApogee || vU <= 0.5
         val profile = profileStore?.activeProfile ?: return
 
         // pressure_alt is baro; operators tare to launch → treat as AGL.

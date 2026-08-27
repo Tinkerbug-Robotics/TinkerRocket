@@ -2075,7 +2075,7 @@ struct FlightEventFlagsView: View {
     private var chips: [(label: String, on: Bool)] {
         [("LAUNCH", telemetry.launch_flag),
          ("BURNOUT", telemetry.burnout_flag),
-         ("APOGEE", telemetry.alt_apo || telemetry.vel_apo),
+         ("APOGEE", telemetry.past_apogee),
          ("LANDED", telemetry.landed_flag)]
     }
 

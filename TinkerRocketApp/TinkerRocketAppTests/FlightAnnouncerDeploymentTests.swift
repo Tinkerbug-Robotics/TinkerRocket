@@ -49,7 +49,9 @@ final class FlightAnnouncerDeploymentTests: XCTestCase {
         return a
     }
 
-    private let APO = 0x04
+    /// Live apogee vote plus the latched phase bit `BLEDevice` synthesizes —
+    /// what production delivers past apogee (#968).
+    private let APO = 0x04 | 0x400
 
     private func frame(palt: Float?, rate: Float?, apo: Bool, maxAlt: Float? = nil) -> TelemetryData {
         var t = TelemetryData()

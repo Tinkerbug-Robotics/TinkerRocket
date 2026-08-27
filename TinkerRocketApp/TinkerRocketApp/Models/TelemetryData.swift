@@ -147,6 +147,25 @@ struct TelemetryData: Codable {
     // prediction to post-burnout coast, where the ballistic model is valid.
     var burnout_flag: Bool      { (flight_status_bits & 0x200) != 0 }
 
+    // #968: LATCHED "this flight is past apogee" (fs bit 10).
+    //
+    // `alt_apo` and `vel_apo` above are LIVE VOTES, not phase latches: the FC
+    // builds them from a leaky counter whose baro test requires
+    // `alt_est > 15.0f`, so both CLEAR below ~15 m AGL and every consumer that
+    // read them as "we are past apogee" silently flipped back to "pre-apogee"
+    // for the last seconds of every flight (measured: 130.96 s -> 138.84 s on
+    // the 2026-08-27 sim flight).  That is what let a stale burnout be
+    // announced just before landing (#964), and the same clearing caused #235.
+    //
+    // The firmware HAS a latched master vote (`NSF2_MASTER_APOGEE`) but does
+    // not put it on the wire, and there is no room to add it: LoRa
+    // `flags_state` is fully allocated and `num_sats` has only 6 bits left
+    // against a real 0-40 range.  So the app latches it itself, into the bit
+    // position the firmware would use — if a future protocol version does send
+    // it, this reads through unchanged.
+    static let pastApogeeBit = 0x400
+    var past_apogee: Bool       { (flight_status_bits & Self.pastApogeeBit) != 0 }
+
     // Source rocket identity (base station relay only, nil for direct BLE)
     var source_rocket_id: Int?        // rocket_id from LoRa header
     var source_unit_name: String?     // rocket unit name from LoRa beacon
