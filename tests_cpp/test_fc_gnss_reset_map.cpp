@@ -18,9 +18,15 @@
 // after OTP write + reset".
 //
 // The consequence is a fresh SAM-M10Q flying its first mission at the default
-// clock: a ~10 Hz nav-rate ceiling on four constellations against
-// GNSS_UPDATE_RATE = 18. If that boot is the pad boot, the whole flight is
-// logged and EKF-fused at roughly half the intended GNSS rate.
+// clock, with nothing in the log explaining why.
+//
+// This used to say "roughly half the intended GNSS rate". Measured 2026-08-27
+// and withdrawn: the four flights in examples/flights/ all predate OTP
+// programming (#426, 2026-07-07) and so ran on default-clock modules, yet
+// every one delivered 18.18 Hz of distinct GNSS epochs while tracking 16-29
+// satellites. There is no known rate loss. What is real is that a config the
+// firmware reports as applied is not applied, and that the log claimed a
+// reset that never happened.
 //
 // The fix routes that path through UBX-CFG-RST instead. This file pins the
 // premise: there is no reset line to drive. The carrier confirms why — the

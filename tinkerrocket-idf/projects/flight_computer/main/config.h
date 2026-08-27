@@ -111,10 +111,17 @@ struct config : board_pins
 
     // ### Data Update Rates (Hz) ###
     static constexpr uint16_t FLIGHT_LOOP_UPDATE_RATE = 1000;
-    // Requested > 10 Hz so the M10 runs at its 4-constellation ceiling
-    // (~10 Hz).  The actual rate depends on satellite count; asking for
-    // 18 Hz ensures the receiver doesn't self-limit below 10 Hz and the
-    // poll task checks frequently enough (every 28 ms) to catch every fix.
+    // An OVER-REQUEST, not a target: asking above the receiver's own ceiling
+    // stops it self-limiting, and makes the poll task check often enough
+    // (every 28 ms) to catch every fix.
+    //
+    // Measured 2026-08-27 on the four flights in examples/flights/: distinct
+    // GNSS epochs land at 18.18 Hz on all four, while tracking 16-29
+    // satellites.  Those flights predate OTP high-clock programming (#426,
+    // 2026-07-07), so they ran on DEFAULT-clock modules — i.e. 18 Hz is
+    // reached without the high clock, and the "~10 Hz with 4 constellations"
+    // figure quoted in TR_GNSSReceiverUBlox_Serial.cpp was not what the
+    // hardware does.  See the note above the OTP block there.
     static constexpr uint16_t GNSS_UPDATE_RATE = 18;
     static constexpr uint16_t BMP585_UPDATE_RATE = 500;
     // MMC5983MA hardware supports 1/10/20/50/100/200/1000 Hz only.
