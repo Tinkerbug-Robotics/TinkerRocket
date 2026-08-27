@@ -1116,18 +1116,45 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
         static constexpr float CHI2_GATE_1DOF = 10.83f;  // χ²(1, 0.001) — vert  velocity
         float Spp[9] = { S[0],  S[1],  S[2],  S[6],  S[7],  S[8],  S[12], S[13], S[14] };
         float Sinv3[9];
-        // Huber-style soft de-weight: when a block's NIS exceeds the gate,
-        // inflate that block's R by (NIS/gate) instead of rejecting it.  An
-        // inconsistent measurement is down-weighted in proportion to how far
-        // out it is (so a true outlier has near-zero influence) but never
-        // fully discarded — so the filter can still recover after it has
-        // drifted (e.g. a large reacquired-GNSS velocity innovation following
-        // a GNSS gap keeps pulling the estimate back).
+        // Huber soft de-weight: when a block's NIS exceeds the gate, inflate
+        // that block's R by sqrt(NIS/gate) instead of rejecting it.  An
+        // inconsistent measurement is down-weighted but never fully discarded,
+        // so the filter can still recover after it has drifted (e.g. a large
+        // reacquired-GNSS innovation following a GNSS gap keeps pulling the
+        // estimate back).
+        //
+        // #741: the inflation was (NIS/gate), NOT its square root, and that is
+        // a different estimator with the opposite tail behaviour.  NIS goes as
+        // y^2, so inflating R by NIS/gate makes the applied correction
+        //
+        //     K*y  ~  P*y / (P + R*y^2/gate)   ->   ~ 1/y   for large y
+        //
+        // i.e. a REDESCENDING influence function: the further the estimate has
+        // drifted, the LESS each good fix pulls it back.  Huber's defining
+        // property is the opposite — influence is BOUNDED, not vanishing — and
+        // the comment here always claimed the bounded behaviour.  sqrt(NIS/gate)
+        // makes R scale as y, so K*y tends to a constant and a drifted filter
+        // keeps being pulled back at full strength.
+        //
+        // Measured against this file through the sim bindings (settle 60 s so P
+        // is small, then step GNSS): fraction of the step closed after 10 s —
+        //
+        //     step    NIS/gate    sqrt(NIS/gate)
+        //      2 m      63.5%         63.5%      (below the gate: unchanged)
+        //     10 m      63.5%         63.5%
+        //     30 m      25.3%         47.9%
+        //     50 m       9.0%         31.6%
+        //     81 m       3.4%         20.6%      <- the #741 separation
+        //
+        // Below the gate nothing changes, which is the point: only the outlier
+        // regime is touched.  81 m is the observed nav-vs-GNSS landing gap on
+        // the CENJARS flight, where the two solutions diverge during a 1.9 s
+        // boost satellite outage and never reconverge.
         float infl_pos = 1.0f, infl_vh = 1.0f, infl_vd = 1.0f;
         if (invertMatrix3x3(Spp, Sinv3)) {
             float nis = 0.0f;
             for (int i=0;i<3;i++){ float r=0; for(int j=0;j<3;j++) r+=Sinv3[i*3+j]*y[j]; nis+=y[i]*r; }
-            if (nis > CHI2_GATE_3DOF) infl_pos = nis / CHI2_GATE_3DOF;
+            if (nis > CHI2_GATE_3DOF) infl_pos = std::sqrt(nis / CHI2_GATE_3DOF);
         }
         // Horizontal velocity (vN, vE) — 2×2 innovation block, indices 3,4.
         {
@@ -1137,7 +1164,7 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
                 const float yN = y[3], yE = y[4];
                 // NIS = yᵀ Sₕ⁻¹ y, with Sₕ⁻¹ = (1/det)[[d,-b],[-c,a]].
                 const float nis = (yN*(d*yN - b*yE) + yE*(a*yE - c*yN)) / det;
-                if (nis > CHI2_GATE_2DOF) infl_vh = nis / CHI2_GATE_2DOF;
+                if (nis > CHI2_GATE_2DOF) infl_vh = std::sqrt(nis / CHI2_GATE_2DOF);
             }
         }
         // Vertical velocity (vD) — 1×1 block, index 5. This is the term that
@@ -1147,7 +1174,7 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
             const float Svd = S[35];
             if (Svd > 1e-12f) {
                 const float nis = (y[5]*y[5]) / Svd;
-                if (nis > CHI2_GATE_1DOF) infl_vd = nis / CHI2_GATE_1DOF;
+                if (nis > CHI2_GATE_1DOF) infl_vd = std::sqrt(nis / CHI2_GATE_1DOF);
             }
         }
         if (infl_pos > 1.0f || infl_vh > 1.0f || infl_vd > 1.0f) {
