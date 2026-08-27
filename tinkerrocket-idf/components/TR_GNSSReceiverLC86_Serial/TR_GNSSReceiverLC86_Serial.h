@@ -29,6 +29,10 @@ class TR_GNSSReceiverLC86Serial
         // self-starts when its rail rises. Returns false (GNSS-absent
         // degraded mode, #557) on a dead/deaf module or when the load-bearing
         // $PQTMPVT stream cannot be enabled.
+        /** No OTP high-perf-clock concept on this part — it is not an M10.
+         *  Present so callers need not branch on the driver (#837 item 6). */
+        uint8_t otpState() const { return gnss_otp::NOT_M10; }
+
         bool begin(uint8_t update_rate_hz,
                    uint8_t GNSS_RX,
                    uint8_t GNSS_TX,

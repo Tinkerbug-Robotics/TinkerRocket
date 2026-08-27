@@ -9,7 +9,7 @@ public data class RollWaypointRaw(
 
 /**
  * FlightSettingsData — msg 0xE1, runtime settings snapshot at launch (#165).
- * 188 B v1 / 200 B v2 / 208 B v3 / 210 B v5 / 219 B v6.  Layout mirrors the
+ * 188 B v1 / 200 B v2 / 208 B v3 / 210 B v5 / 219 B v6 / 220 B v7.  Layout mirrors the
  * packed C++ struct in RocketComputerTypes.h byte-for-byte (verified by
  * offset); port of the iOS SensorTypes.swift decoder.
  *
@@ -20,6 +20,7 @@ public data class RollWaypointRaw(
  *  - v3 @ 200: fin-angle calibration (#267)  (version >= 3 && size >= 208)
  *  - v5 @ 208: IMU logging rate              (version >= 5 && size >= 210)
  *  - v6 @ 210: flown guidance target (#435)  (version >= 6 && size >= 219)
+ *  - v7 @ 219: GNSS OTP clock state (#837 item 6)  (version >= 7 && size >= 220)
  */
 public data class FlightSettingsData(
     val timeUs: Long,            // u32
@@ -84,6 +85,9 @@ public data class FlightSettingsData(
     val guidTgtEM: Float?,
     val guidTgtNM: Float?,
     val guidTgtSrc: Int?,        // u8
+    /** GNSS high-perf-clock OTP state at boot (v7+, #837 item 6); null on
+     *  pre-v7 logs, where the state was determined and then discarded. */
+    val gnssOtpState: Int? = null,
 ) {
     public val useAngleControl: Boolean get() = flags and (1 shl F_USE_ANGLE_CONTROL) != 0
     public val gainScheduleEnabled: Boolean get() = flags and (1 shl F_GAIN_SCHEDULE) != 0
@@ -226,7 +230,16 @@ public data class FlightSettingsData(
                 guidTgtSrc = o.u8()
             }
 
+            // v7 GNSS OTP state at fixed offset 219 (#837 item 6). Null on
+            // pre-v7 logs, which is exactly what they are: the FC determined
+            // this at boot and recorded it nowhere.
+            var gnssOtpState: Int? = null
+            if (version >= 7 && payload.size >= 220) {
+                gnssOtpState = LeBuffer(payload, 219).u8()
+            }
+
             return FlightSettingsData(
+                gnssOtpState = gnssOtpState,
                 timeUs = timeUs,
                 version = version,
                 flags = flags,

@@ -23,7 +23,7 @@ enum MessageType: UInt8 {
     case h3lis331 = 0xA9   // Legacy-only high-G accelerometer (10B)
     case cameraStart = 0xAA
     case cameraStop = 0xAB
-    case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2 / 208B v3 / 210B v5 / 219B v6) — runtime settings snapshot at launch (#165)
+    case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2 / 208B v3 / 210B v5 / 219B v6 / 220B v7) — runtime settings snapshot at launch (#165)
     case iis2mdc = 0xD1    // IIS2MDC magnetometer (new Mini PCB rev, 10B)
     case lora = 0xF1
 }
@@ -206,6 +206,9 @@ nonisolated struct FlightSettingsData {
     let guid_tgt_e_m: Float?
     let guid_tgt_n_m: Float?
     let guid_tgt_src: UInt8?
+    /// GNSS high-perf-clock OTP state at boot (v7+, #837 item 6); nil on
+    /// pre-v7 logs, where the state was determined and then discarded.
+    let gnss_otp_state: UInt8?
 
     let b2r_code: UInt8?
     let b2r_mode: UInt8?            // 0 default, 1 manual, 2 auto-snap, 3 auto-exact
@@ -356,6 +359,16 @@ nonisolated struct FlightSettingsData {
             guid_tgt_e_m = nil
             guid_tgt_n_m = nil
             guid_tgt_src = nil
+        }
+
+        // v7 GNSS OTP state at fixed offset 219 (#837 item 6). Pre-v7 logs
+        // decode as nil, which is exactly what they are: the FC determined
+        // this at boot and recorded it nowhere.
+        if version >= 7 && data.count >= 220 {
+            var o = 219
+            gnss_otp_state = data.readUInt8(at: &o)
+        } else {
+            gnss_otp_state = nil
         }
     }
 }

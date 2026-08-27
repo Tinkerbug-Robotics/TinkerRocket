@@ -92,6 +92,23 @@ MSG_LOG_BUFFER_STATS  = 0xE2  # OC self-emitted ring-buffer snapshot (~1 Hz)
 MSG_LORA              = 0xF1
 MSG_LORA_UPLINK       = 0xF9  # OC-self-emitted uplink RSSI/SNR record
 MSG_GUIDANCE_TELEM    = 0xCA  # GuidanceTelemData, ~10 Hz during guided coast
+MSG_FLIGHT_SETTINGS   = 0xE1  # FlightSettingsData, once at PRELAUNCH->INFLIGHT
+
+# FlightSettingsData v7 gnss_otp_state (#837 item 6) — whether the GNSS
+# receiver was running the high-performance clock on this flight.  Before
+# v7 the FC determined this at every boot and logged it only to serial, so
+# no flight record could say which modules were programmed — which is
+# exactly why "what does the OTP clock buy" was unanswerable from data.
+GNSS_OTP_STATES = {
+    0: "UNKNOWN",      # not evaluated, or a pre-v7 log
+    1: "NOT_M10",      # not an M10 — never eligible
+    2: "VERIFIED",     # high clock was already programmed
+    3: "PARTIAL",      # something in OTP, but not our config
+    4: "BLANK",        # unprogrammed, left that way
+    5: "BLOCKLISTED",  # BLANK but on kOtpNeverProgram
+    6: "PROGRAMMED",   # written THIS boot and verified
+    7: "WRITE_FAILED", # written this boot, verify still failed
+}
 
 MSG_NAMES = {
     MSG_OUT_STATUS_QUERY: "OUT_STATUS_QUERY",
@@ -100,6 +117,7 @@ MSG_NAMES = {
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
     MSG_IIS2MDC:          "IIS2MDC",
+    MSG_FLIGHT_SETTINGS:  "FlightSettings",
     MSG_NON_SENSOR:       "NonSensor",
     MSG_POWER:            "POWER",
     MSG_START_LOGGING:    "StartLogging",
@@ -348,6 +366,11 @@ def parse_binary_file(filepath):
         # Board→rocket mounting orientation (OutStatusQueryData v3+).
         # None = identity (board +X toward the nose, pre-v3 logs).
         "b2r_code": None,
+        # #837 item 6: GNSS high-perf-clock OTP state (FlightSettingsData
+        # v7+).  None on older logs — the state existed at boot and was
+        # never written down, which is what made the question unanswerable.
+        "gnss_otp_state": None,
+        "gnss_otp_state_name": None,
         "b2r_mode": None,
         "b2r_quat": None,
     }
@@ -409,6 +432,17 @@ def parse_binary_file(filepath):
         stats["good_crc"] += 1
         type_name = MSG_NAMES.get(msg_type, f"0x{msg_type:02X}")
         stats["type_counts"][type_name] = stats["type_counts"].get(type_name, 0) + 1
+
+        # FlightSettingsData: pull the one field post-flight analysis needs from
+        # it directly (#837 item 6).  The frame is not otherwise decoded here —
+        # the apps own that — but the GNSS OTP clock state is a per-flight FACT
+        # that until v7 existed nowhere in the record.  version @4, state @219.
+        if msg_type == MSG_FLIGHT_SETTINGS and msg_len >= 220:
+            fs_version = payload[4]
+            if fs_version >= 7:
+                config["gnss_otp_state"] = payload[219]
+                config["gnss_otp_state_name"] = GNSS_OTP_STATES.get(
+                    payload[219], f"?{payload[219]}")
 
         pos += msg_len + 2
 

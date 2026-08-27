@@ -269,6 +269,9 @@ FlightSettingsData canonicalFlightSettings() {
     s.ism6_update_rate_hz = 1920;
     s.guid_tgt_e_m = 25.5f; s.guid_tgt_n_m = -30.25f;
     s.guid_tgt_src = GUID_TGT_GEO_ACTIVE;
+    // v7: a value that is neither 0 nor 1, so a decoder that silently drops
+    // the field or reads a neighbouring byte cannot accidentally match.
+    s.gnss_otp_state = gnss_otp::BLOCKLISTED;
     return s;
 }
 
@@ -429,6 +432,7 @@ std::string flightSettingsSidecar(const FlightSettingsData& s, size_t presentByt
         j.f("guid_tgt_e_m", s.guid_tgt_e_m).f("guid_tgt_n_m", s.guid_tgt_n_m)
             .u("guid_tgt_src", s.guid_tgt_src);
     }
+    if (presentBytes >= 220) j.u("gnss_otp_state", s.gnss_otp_state);
     return j.done();
 }
 
@@ -533,21 +537,22 @@ void buildLogframes(Builder& b) {
 
     // FlightSettings version ladder (version byte at offset 4):
     // v1 = 188, v2 = 200 (+b2r), v3/v4 = 208 (+fin cal; v4 = semantics only),
-    // v5 = 210 (+imu rate), v6 = 219 (+flown guidance target).
+    // v5 = 210 (+imu rate), v6 = 219 (+flown guidance target),
+    // v7 = 220 (+GNSS OTP clock state, #837 item 6).
     const auto fs = canonicalFlightSettings();
     const auto fsFull = bytesOf(fs);
-    b.add("logframes", "flightsettings_v6_219.bin", fsFull,
-          flightSettingsSidecar(fs, 219, fs.version),
-          "FlightSettingsData v6, msg 0xE1; pyro sub-struct pinned by cmd34 fixture");
+    b.add("logframes", "flightsettings_v7_220.bin", fsFull,
+          flightSettingsSidecar(fs, 220, fs.version),
+          "FlightSettingsData v7, msg 0xE1; pyro sub-struct pinned by cmd34 fixture");
     const struct { size_t len; uint8_t ver; } fsLadder[] = {
-        {188, 1}, {200, 2}, {208, 3}, {210, 5}};
+        {188, 1}, {200, 2}, {208, 3}, {210, 5}, {219, 6}};
     for (const auto& lv : fsLadder) {
         auto img = prefix(fsFull, lv.len);
         img[4] = lv.ver;
         char name[40];
         std::snprintf(name, sizeof(name), "flightsettings_v%u_%zu.bin", lv.ver, lv.len);
         b.add("logframes", name, img, flightSettingsSidecar(fs, lv.len, lv.ver),
-              "FlightSettingsData version-ladder truncation of the v6 image");
+              "FlightSettingsData version-ladder truncation of the v7 image");
     }
 }
 

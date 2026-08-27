@@ -63,32 +63,36 @@
  "size": 26,
  "notes": "OutStatusQueryData truncated to v3 (b2r orientation, no IIS rotation)"},
  {
- "file": "logframes/flightsettings_v6_219.bin",
- "size": 219,
- "notes": "FlightSettingsData v6, msg 0xE1; pyro sub-struct pinned by cmd34 fixture"},
+ "file": "logframes/flightsettings_v7_220.bin",
+ "size": 220,
+ "notes": "FlightSettingsData v7, msg 0xE1; pyro sub-struct pinned by cmd34 fixture"},
  {
  "file": "logframes/flightsettings_v1_188.bin",
  "size": 188,
- "notes": "FlightSettingsData version-ladder truncation of the v6 image"},
+ "notes": "FlightSettingsData version-ladder truncation of the v7 image"},
  {
  "file": "logframes/flightsettings_v2_200.bin",
  "size": 200,
- "notes": "FlightSettingsData version-ladder truncation of the v6 image"},
+ "notes": "FlightSettingsData version-ladder truncation of the v7 image"},
  {
  "file": "logframes/flightsettings_v3_208.bin",
  "size": 208,
- "notes": "FlightSettingsData version-ladder truncation of the v6 image"},
+ "notes": "FlightSettingsData version-ladder truncation of the v7 image"},
  {
  "file": "logframes/flightsettings_v5_210.bin",
  "size": 210,
- "notes": "FlightSettingsData version-ladder truncation of the v6 image"},
+ "notes": "FlightSettingsData version-ladder truncation of the v7 image"},
+ {
+ "file": "logframes/flightsettings_v6_219.bin",
+ "size": 219,
+ "notes": "FlightSettingsData version-ladder truncation of the v7 image"},
  {
  "file": "csv/bs_tiny.bin",
  "size": 868,
  "notes": "base-station binary log built with the real packers; the CSV golden generated from it lives in tests_cpp/fixtures/csv_golden/ (app output, not emitter output)"},
  {
  "file": "framed/stream_good.bin",
- "size": 449,
+ "size": 450,
  "notes": "8 valid frames: [AA 55 AA 55][type][len][payload][CRC16 poly 0x8001 init 0, BE on wire]"},
  {
  "file": "framed/stream_badcrc_resync.bin",
@@ -232,7 +236,7 @@
  "notes": "OTA_BEGIN; cmds 70-72 dispatch inside TR_BLE_To_APP.cpp, not main.cpp"},
  {
  "file": "csv/tiny_flight.bin",
- "size": 29285,
+ "size": 29286,
  "notes": "synthetic mini-device flight for the bin→CSV golden; app-generated CSV/summary goldens live in tests_cpp/fixtures/csv_golden/ (outside wire/ — they are app output, not emitter output)"}
  ]
 }
