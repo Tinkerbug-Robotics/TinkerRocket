@@ -898,15 +898,17 @@ static int findOrAllocRocket(uint8_t rid) {
         tracked_rockets[free_slot].last_seen_ms = millis();
         return free_slot;
     }
-    // All slots full — evict oldest
-    uint32_t oldest_ms = UINT32_MAX;
-    int oldest_idx = 0;
-    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++) {
-        if (tracked_rockets[i].last_seen_ms < oldest_ms) {
-            oldest_ms = tracked_rockets[i].last_seen_ms;
-            oldest_idx = i;
-        }
-    }
+    // All slots full — evict oldest.
+    //
+    // #902: this compared the absolute millis() timestamps with a raw `<`,
+    // which is not wrap-safe.  ~49.7 days after boot millis() wraps to 0, and
+    // for the whole window after that the FRESHEST rocket (a small post-wrap
+    // value) compares as the oldest and gets evicted, while a rocket last
+    // heard days ago (a huge pre-wrap value) is kept.  Compare AGE instead —
+    // `now - then` is correct across the wrap, which is the rule
+    // bs_log_policy.h already documents for exactly this reason.
+    const int oldest_idx = bs_log_policy::evictOldestIndex(
+        tracked_rockets, MAX_TRACKED_ROCKETS, millis());
     tracked_rockets[oldest_idx].active = true;
     tracked_rockets[oldest_idx].rocket_id = rid;
     tracked_rockets[oldest_idx].unit_name[0] = '\0';
@@ -1357,7 +1359,11 @@ static uint16_t findNextFileNumber()
         }
     }
     closedir(dir);
-    return max_num + 1;
+    // parseSequentialFilename caps at 65535, so a card that somehow reached
+    // the ceiling would wrap to 0 and start overwriting.  Saturate instead:
+    // reusing the last slot is bad, silently reusing the FIRST is worse.
+    if (max_num >= 0xFFFFu) return 0xFFFFu;
+    return (uint16_t)(max_num + 1);
 }
 
 static void startLogging()
@@ -1382,9 +1388,19 @@ static void startLogging()
     }
     else
     {
-        // Fallback to sequential numbering if no time sync
+        // Fallback to sequential numbering if no time sync.
+        //
+        // #897: this was "%03u", a MINIMUM width, and num is not capped at
+        // 999.  lora_1000.bin is four digits and strcmp-sorts BELOW
+        // lora_999.bin, so the app's file list — and every "latest log" that
+        // reads the last entry — silently mis-orders once the counter rolls
+        // past 999.  Fixed width at 5 digits instead, which is what
+        // parseSequentialFilename already accepts (1-5 digits, <= 65535), so
+        // every name sorts lexicographically in numeric order.  Older
+        // 3-digit names still parse, so the counter picks up where it left
+        // off rather than restarting.
         uint16_t num = findNextFileNumber();
-        snprintf(basename, sizeof(basename), "lora_%03u.bin", num);
+        snprintf(basename, sizeof(basename), "lora_%05u.bin", num);
     }
     snprintf(log_filename, sizeof(log_filename), "%s/%s", SD_MOUNT_POINT, basename);
 
@@ -1513,7 +1529,13 @@ static void renameOpenLogIfSequential()
 
     const time_t epoch_sync = syncedEpoch();
     if (epoch_sync <= 0) return;
-    const uint32_t back_s = (time_sync_millis > log_start_ms)
+    // #902: `time_sync_millis > log_start_ms` is a raw comparison on absolute
+    // millis().  The subtraction below is already wrap-safe on its own; the
+    // guard is what is not, and across a wrap it picks the wrong branch and
+    // throws away a correct elapsed time.  Ask the wrap-safe question instead:
+    // has the sync happened at or after the log opened?
+    const bool sync_after_open = (int32_t)(time_sync_millis - log_start_ms) >= 0;
+    const uint32_t back_s = sync_after_open
                               ? (time_sync_millis - log_start_ms) / 1000U
                               : 0U;
     const time_t epoch_open = epoch_sync - (time_t)back_s;
@@ -2630,7 +2652,12 @@ static int8_t  txn_old_pwr = 0;
 static uint32_t txn_phase_start_ms = 0;
 // last_packet_ms value at the moment we switched to NEW.  Any increase
 // during the verify window proves the rocket joined us on NEW.
-static uint32_t txn_verify_baseline_packet_ms = 0;
+// #901/#902: a TIME baseline (wrap-safe comparisons) plus the set of rockets
+// that must be heard again before the reconfigure is allowed to commit.
+static uint32_t txn_verify_baseline_ms   = 0;
+static uint32_t txn_verify_expected_mask = 0;
+// A rocket silent longer than this before the switch cannot be stranded by it.
+static constexpr uint32_t TXN_VERIFY_FRESH_MS = 15000;
 
 static constexpr uint32_t TXN_VERIFY_WINDOW_MS = 5000;  // Listen 5 s on NEW
 static constexpr uint32_t TXN_MAX_RELAY_MS     = 3000;  // Upper bound on relay phase
@@ -2721,7 +2748,24 @@ static void serviceLoRaTransaction()
             }
             lora_comms.startReceive();  // listen on NEW freq
 
-            txn_verify_baseline_packet_ms = last_packet_ms;
+            // #901: snapshot WHICH rockets have to follow us.  cmd-10 relays
+            // as a BROADCAST (target_rid 0xFF), so it is a fleet operation —
+            // every rocket in the network is told to retune.  The commit test
+            // therefore has to be "did they all arrive on NEW", not "did
+            // anybody transmit".
+            txn_verify_baseline_ms   = now;
+            txn_verify_expected_mask = 0;
+            for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
+            {
+                // Only rockets we were actually hearing before the switch.  A
+                // slot that had already gone quiet cannot be stranded by this
+                // transaction and must not block it forever.
+                if (tracked_rockets[i].active &&
+                    (now - tracked_rockets[i].last_seen_ms) <= TXN_VERIFY_FRESH_MS)
+                {
+                    txn_verify_expected_mask |= (uint32_t)1u << i;
+                }
+            }
             lora_txn_state = LoRaTxnState::VERIFYING;
             txn_phase_start_ms = now;
             ESP_LOGI(TAG, "[TXN] On NEW %.2f MHz; verifying for %u ms",
@@ -2732,10 +2776,37 @@ static void serviceLoRaTransaction()
         case LoRaTxnState::VERIFYING:
         {
             const uint32_t now = millis();
-            // Any packet (beacon or telem) received after we switched proves
-            // the rocket joined us on NEW.  The RX path unconditionally
-            // bumps last_packet_ms on every successful receive.
-            if (last_packet_ms > txn_verify_baseline_packet_ms)
+            // #901: this used to be `last_packet_ms > txn_verify_baseline_ms`
+            // — ANY netid-matching packet from ANY rocket, compared with a raw
+            // `>` on absolute millis() into the bargain (#902).  Two rockets,
+            // one on the pad and one airborne: the pad rocket hears the
+            // broadcast, follows to NEW, and its very first packet commits the
+            // transaction.  The airborne one that never heard it is left on
+            // OLD, and the BS has just persisted NEW to NVS.  The rollback on
+            // the timeout path — which would have put the BS back where the
+            // stranded rocket still is — never runs.
+            //
+            // Require every rocket we were hearing before the switch to be
+            // heard again after it.  If any is missing we simply do not
+            // commit, and the existing VERIFY timeout rolls the BS back to
+            // OLD, which is exactly where a rocket that missed the broadcast
+            // still is.
+            uint32_t followed_mask = 0;
+            for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
+            {
+                if ((txn_verify_expected_mask & ((uint32_t)1u << i)) == 0) continue;
+                // Wrap-safe "seen at or after the baseline" (#902).
+                if ((int32_t)(tracked_rockets[i].last_seen_ms - txn_verify_baseline_ms) >= 0)
+                {
+                    followed_mask |= (uint32_t)1u << i;
+                }
+            }
+            // No tracked rocket at all: nothing can be stranded, so a bare
+            // packet is enough — this is the single-rocket / bench case, and
+            // refusing to ever commit here would make cmd-10 unusable.
+            if (bs_log_policy::reconfigureMayCommit(
+                    txn_verify_expected_mask, followed_mask,
+                    last_packet_ms, txn_verify_baseline_ms))
             {
                 // COMMIT: radio already on NEW; persist to NVS + update
                 // runtime vars so the rest of the firmware sees the new

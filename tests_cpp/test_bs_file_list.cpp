@@ -26,7 +26,7 @@ using bs_file_list::windowFor;
 
 namespace {
 
-// "lora_001.csv" .. "lora_NNN.csv", in creation order (oldest first) — the
+// "lora_001.bin" .. "lora_NNN.bin", in creation order (oldest first) — the
 // order readdir hands back on a freshly-filled card.
 std::vector<std::string> creationOrder(int n)
 {
@@ -34,7 +34,7 @@ std::vector<std::string> creationOrder(int n)
     for (int i = 1; i <= n; ++i)
     {
         char b[32];
-        snprintf(b, sizeof(b), "lora_%03d.csv", i);
+        snprintf(b, sizeof(b), "lora_%03d.bin", i);
         v.emplace_back(b);
     }
     return v;
@@ -109,8 +109,8 @@ TEST(BsFileList, OldTruncateThenSortRegression)
     for (const auto& n : dir) w.offer(n.c_str());
 
     EXPECT_EQ(drain(w), (std::vector<std::string>{
-        "lora_070.csv", "lora_069.csv", "lora_068.csv",
-        "lora_067.csv", "lora_066.csv"}));
+        "lora_070.bin", "lora_069.bin", "lora_068.bin",
+        "lora_067.bin", "lora_066.bin"}));
 
     // ...and the true directory count survives the window.
     EXPECT_EQ(w.total(), 70u);
@@ -128,7 +128,7 @@ TEST(BsFileList, NewestFileIsOnPageZeroForAnyDirectorySize)
     for (int n : {1, 5, 63, 64, 65, 70, 250, 251, 999})
     {
         char newest[32];
-        snprintf(newest, sizeof(newest), "lora_%03d.csv", n);
+        snprintf(newest, sizeof(newest), "lora_%03d.bin", n);
         const auto p0 = pageOf(creationOrder(n), 0, 5, 250);
         ASSERT_FALSE(p0.empty()) << "n=" << n;
         EXPECT_EQ(p0.front(), newest) << "n=" << n;
@@ -228,12 +228,12 @@ TEST(BsFileList, SortIsStrcmpNotNumeric)
 {
     std::vector<Entry> storage(3);
     TopNames w(storage.data(), 3);
-    w.offer("lora_999.csv");
-    w.offer("lora_1000.csv");
-    w.offer("lora_1001.csv");
-    EXPECT_STREQ(w.at(0), "lora_999.csv");   // numerically the OLDEST of the three
-    EXPECT_STREQ(w.at(1), "lora_1001.csv");
-    EXPECT_STREQ(w.at(2), "lora_1000.csv");
+    w.offer("lora_999.bin");
+    w.offer("lora_1000.bin");
+    w.offer("lora_1001.bin");
+    EXPECT_STREQ(w.at(0), "lora_999.bin");   // numerically the OLDEST of the three
+    EXPECT_STREQ(w.at(1), "lora_1001.bin");
+    EXPECT_STREQ(w.at(2), "lora_1000.bin");
 }
 
 TEST(BsFileList, TotalCountsEveryOfferedName)
@@ -262,19 +262,19 @@ TEST(BsFileList, HandlesEqualNames)
 {
     std::vector<Entry> storage(3);
     TopNames w(storage.data(), 3);
-    w.offer("same.csv");
-    w.offer("same.csv");
-    w.offer("same.csv");
-    w.offer("same.csv");
+    w.offer("same.bin");
+    w.offer("same.bin");
+    w.offer("same.bin");
+    w.offer("same.bin");
     EXPECT_EQ(w.count(), 3u);
     EXPECT_EQ(w.total(), 4u);
-    for (size_t i = 0; i < w.count(); ++i) EXPECT_STREQ(w.at(i), "same.csv");
+    for (size_t i = 0; i < w.count(); ++i) EXPECT_STREQ(w.at(i), "same.bin");
 }
 
 TEST(BsFileList, ZeroCapacityAndNullStorageAreSafe)
 {
     TopNames zero(nullptr, 0);
-    zero.offer("lora_001.csv");
+    zero.offer("lora_001.bin");
     EXPECT_EQ(zero.count(), 0u);
     EXPECT_EQ(zero.total(), 1u);
     EXPECT_EQ(zero.at(0), nullptr);
@@ -282,7 +282,7 @@ TEST(BsFileList, ZeroCapacityAndNullStorageAreSafe)
     Entry buf[1];
     TopNames null_storage(nullptr, 4);  // capacity is clamped to 0
     EXPECT_EQ(null_storage.capacity(), 0u);
-    null_storage.offer("lora_001.csv");
+    null_storage.offer("lora_001.bin");
     EXPECT_EQ(null_storage.count(), 0u);
     (void)buf;
 }
@@ -291,7 +291,7 @@ TEST(BsFileList, NullNameIsIgnoredButStillCounted)
 {
     std::vector<Entry> storage(2);
     TopNames w(storage.data(), 2);
-    w.offer("lora_001.csv");
+    w.offer("lora_001.bin");
     w.offer(nullptr);
     EXPECT_EQ(w.count(), 1u);
     EXPECT_EQ(w.total(), 2u);
@@ -301,8 +301,8 @@ TEST(BsFileList, AtIsOutOfRangeSafe)
 {
     std::vector<Entry> storage(4);
     TopNames w(storage.data(), 4);
-    w.offer("a.csv");
-    EXPECT_STREQ(w.at(0), "a.csv");
+    w.offer("a.bin");
+    EXPECT_STREQ(w.at(0), "a.bin");
     EXPECT_EQ(w.at(1), nullptr);   // allocated but unfilled
     EXPECT_EQ(w.at(99), nullptr);
 }

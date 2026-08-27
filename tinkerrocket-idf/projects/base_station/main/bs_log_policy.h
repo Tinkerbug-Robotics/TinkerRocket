@@ -99,6 +99,56 @@ static inline bool rocketFresh(const RocketView& r, uint32_t now_ms,
     return r.active && (now_ms - r.last_seen_ms) <= fresh_window_ms;
 }
 
+// #902: pick the slot to evict when all are full.
+//
+// This was `if (r.last_seen_ms < oldest_ms)` on absolute millis() — not
+// wrap-safe.  ~49.7 days after boot millis() returns to 0, and for the whole
+// window after that the FRESHEST rocket (small post-wrap value) reads as the
+// oldest and gets evicted while one last heard days ago (huge pre-wrap value)
+// is kept.  Compare AGE: `now - then` is correct across the wrap, which is the
+// rule this header already states for rocketFresh above.
+//
+// Ties go to the lowest index, matching the old scan's behaviour.
+template <typename RocketArray>
+static inline int evictOldestIndex(const RocketArray& rockets, int count,
+                                   uint32_t now_ms)
+{
+    uint32_t oldest_age = 0;
+    int oldest_idx = 0;
+    for (int i = 0; i < count; i++) {
+        const uint32_t age = now_ms - rockets[i].last_seen_ms;
+        if (age > oldest_age) {
+            oldest_age = age;
+            oldest_idx = i;
+        }
+    }
+    return oldest_idx;
+}
+
+// #901: may a cmd-10 LoRa reconfigure COMMIT?
+//
+// cmd-10 relays as a BROADCAST (target_rid 0xFF), so it is a fleet operation:
+// every rocket in the network is told to retune.  The old predicate was "any
+// netid-matching packet arrived after the baseline", which proves only that
+// SOMEBODY followed.  Two rockets, one on the pad and one airborne: the pad
+// rocket follows, its first packet commits, and the airborne one that never
+// heard the broadcast is stranded on the OLD channel while the BS persists NEW
+// to NVS — and the rollback that would have put the BS back where that rocket
+// still is never runs.
+//
+// So: every rocket we were hearing BEFORE the switch must be heard again
+// after it.  With no tracked rocket at all nothing can be stranded, and
+// requiring an impossible quorum would make cmd-10 unusable on the bench — so
+// that case falls back to "any packet since the baseline".
+static inline bool reconfigureMayCommit(uint32_t expected_mask,
+                                        uint32_t followed_mask,
+                                        uint32_t last_packet_ms,
+                                        uint32_t baseline_ms)
+{
+    if (expected_mask != 0) return followed_mask == expected_mask;
+    return (int32_t)(last_packet_ms - baseline_ms) >= 0;
+}
+
 // True when NO fresh rocket is still "in play" — i.e. every fresh rocket is
 // either LANDED or presumed down (INFLIGHT safety timer expired: armed and
 // past safety_ms with no state change — telemetry lost mid-flight). This is
@@ -252,17 +302,23 @@ struct FreqLockLatch {
 // reflected in the return value.  The result was that any timestamped file
 // on the SD inflated max_num past every real sequential, so the next
 // no-time-sync boot produced silly names like `lora_9886.csv` even when the
-// card had only ever held `lora_001.csv` next to timestamped flights (#137).
+// card had only ever held `lora_001.bin` next to timestamped flights (#137).
 //
 // Walks digits explicitly (rather than letting sscanf %hu accept signs /
-// whitespace and wrap), so any non-digit between "lora_" and ".csv"
+// whitespace and wrap), so any non-digit between "lora_" and ".bin"
 // disqualifies the match.
 static inline bool parseSequentialFilename(const char* name, uint16_t& out_num)
 {
     if (name == nullptr) return false;
     const size_t len = strlen(name);
     constexpr const char PREFIX[] = "lora_";
-    constexpr const char SUFFIX[] = ".csv";
+    // #927 switched the writer from CSV to binary and updated this function's
+    // comments to say ".bin" — but not this constant.  The parser then matched
+    // NOTHING on a post-#927 card, so findNextFileNumber() saw max_num = 0 and
+    // returned 1 on every no-time-sync boot: each session overwrote
+    // lora_001.bin.  Silent data loss, and invisible to any test that fed it
+    // the old CSV names.
+    constexpr const char SUFFIX[] = ".bin";
     constexpr size_t PREFIX_LEN = sizeof(PREFIX) - 1;
     constexpr size_t SUFFIX_LEN = sizeof(SUFFIX) - 1;
     if (len <= PREFIX_LEN + SUFFIX_LEN) return false;

@@ -11,6 +11,7 @@
 // is for.
 
 #include <gtest/gtest.h>
+#include <string>
 
 #include "bs_log_policy.h"
 
@@ -21,49 +22,49 @@
 TEST(BSLogPolicyParseFilename, AcceptsValidSequentialNames)
 {
     uint16_t n = 0xFFFF;
-    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_001.csv", n));
+    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_001.bin", n));
     EXPECT_EQ(n, 1u);
 
     n = 0xFFFF;
-    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_42.csv", n));
+    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_42.bin", n));
     EXPECT_EQ(n, 42u);
 
     n = 0xFFFF;
-    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_9886.csv", n));
+    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_9886.bin", n));
     EXPECT_EQ(n, 9886u);
 
     n = 0xFFFF;
-    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_65535.csv", n));
+    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_65535.bin", n));
     EXPECT_EQ(n, 65535u);
 
     n = 0xFFFF;
-    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_0.csv", n));
+    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_0.bin", n));
     EXPECT_EQ(n, 0u);
 }
 
 TEST(BSLogPolicyParseFilename, RejectsTimestampedNames)
 {
     // Regression for the core #137 sscanf bug.  Pre-fix:
-    //   sscanf("lora_20260509_164143.csv", "lora_%hu.csv", &n) == 1, n=9885
+    //   sscanf("lora_20260509_164143.bin", "lora_%hu.bin", &n) == 1, n=9885
     // This made findNextFileNumber inflate max+1 to 9886, producing
     // `lora_9886.csv` on the next no-time-sync boot.
     uint16_t n = 0xFFFF;
     EXPECT_FALSE(bs_log_policy::parseSequentialFilename(
-        "lora_20260509_164143.csv", n));
+        "lora_20260509_164143.bin", n));
     EXPECT_FALSE(bs_log_policy::parseSequentialFilename(
-        "lora_20260509_144144.csv", n));
+        "lora_20260509_144144.bin", n));
     // _2 collision-suffix variant should also reject (it's still timestamped)
     EXPECT_FALSE(bs_log_policy::parseSequentialFilename(
-        "lora_20260509_164143_2.csv", n));
+        "lora_20260509_164143_2.bin", n));
 }
 
 TEST(BSLogPolicyParseFilename, RejectsUnrelatedNames)
 {
     uint16_t n = 0xFFFF;
     EXPECT_FALSE(bs_log_policy::parseSequentialFilename(
-        "flight_20260509_144128.csv", n));
+        "flight_20260509_144128.bin", n));
     EXPECT_FALSE(bs_log_policy::parseSequentialFilename(
-        "lora.csv", n));               // no number
+        "lora.bin", n));               // no number
     EXPECT_FALSE(bs_log_policy::parseSequentialFilename(
         "lora_001.txt", n));           // wrong extension
     EXPECT_FALSE(bs_log_policy::parseSequentialFilename(
@@ -80,13 +81,13 @@ TEST(BSLogPolicyParseFilename, RejectsNegativeSignAndNonDigits)
 {
     // The parser walks digits explicitly (rather than letting sscanf %hu
     // accept signs / whitespace and wrap), so any non-digit between
-    // "lora_" and ".csv" disqualifies the match.
+    // "lora_" and ".bin" disqualifies the match.
     uint16_t n = 0xFFFF;
-    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_-1.csv", n));
-    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_+1.csv", n));
-    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_ 1.csv", n));
-    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_1a.csv", n));
-    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_abc.csv", n));
+    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_-1.bin", n));
+    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_+1.bin", n));
+    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_ 1.bin", n));
+    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_1a.bin", n));
+    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_abc.bin", n));
 }
 
 TEST(BSLogPolicyParseFilename, RejectsOversized)
@@ -96,10 +97,10 @@ TEST(BSLogPolicyParseFilename, RejectsOversized)
     // because they'd have come from a sequence we never produce.  Real-
     // world BS code writes %03u, so anything >5 digits is malformed.
     uint16_t n = 0xFFFF;
-    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_99999.csv", n));
-    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_123456.csv", n));
+    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_99999.bin", n));
+    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_123456.bin", n));
     // Boundary: 65535 is the highest uint16 (5 digits) — accepted.
-    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_65535.csv", n));
+    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_65535.bin", n));
 }
 
 // ---------------------------------------------------------------------------
@@ -639,4 +640,95 @@ TEST(BsFreqLockResiduals, BeaconsDoNotDelayReleaseVersusSilence) {
 
     EXPECT_EQ(beaconing.flightLock(now), silent.flightLock(now));
     EXPECT_FALSE(beaconing.flightLock(now));
+}
+
+// ── #927 regression: the parser's suffix must track the writer's ──────────
+//
+// #927 switched the BS from writing CSV to writing binary and updated this
+// parser's COMMENTS to say ".bin" — but not its SUFFIX constant. It then
+// matched nothing on a post-#927 card, so findNextFileNumber() saw max_num = 0
+// and returned 1 on every no-time-sync boot: each session overwrote
+// lora_001.bin. Silent data loss, invisible to any test still feeding it the
+// old CSV names — which is what these tests were doing.
+TEST(BsLogPolicy, ParsesTheSuffixTheWriterActuallyEmits) {
+    uint16_t n = 0;
+    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_00007.bin", n));
+    EXPECT_EQ(n, 7u);
+    // The retired CSV name must NOT match, or a card holding both would let a
+    // stale .csv set the counter above the real .bin high-water mark.
+    EXPECT_FALSE(bs_log_policy::parseSequentialFilename("lora_00007.csv", n));
+}
+
+// ── #897: fixed width, so strcmp order == numeric order ──────────────────
+TEST(BsLogPolicy, FiveDigitNamesSortNumericallyByStrcmp) {
+    // "%03u" is a MINIMUM width: lora_1000.bin is 4 chars of digits and
+    // strcmp-sorts BELOW lora_999.bin, so the app's file list mis-ordered once
+    // the counter passed 999.
+    EXPECT_LT(std::string("lora_00999.bin"), std::string("lora_01000.bin"));
+    EXPECT_LT(std::string("lora_00001.bin"), std::string("lora_00002.bin"));
+    EXPECT_LT(std::string("lora_09999.bin"), std::string("lora_10000.bin"));
+    // The defect, stated so the test says what it prevents.
+    EXPECT_LT(std::string("lora_1000.bin"), std::string("lora_999.bin"));
+}
+
+TEST(BsLogPolicy, OlderThreeDigitNamesStillParse) {
+    // Migration: a card written before the width change keeps contributing to
+    // the high-water mark, so the counter resumes instead of restarting at 1.
+    uint16_t n = 0;
+    EXPECT_TRUE(bs_log_policy::parseSequentialFilename("lora_042.bin", n));
+    EXPECT_EQ(n, 42u);
+}
+
+// ── #902: evict the OLDEST, including across the millis() wrap ────────────
+namespace {
+struct FakeRocket { bool active = true; uint32_t last_seen_ms = 0; };
+}
+
+TEST(BsLogPolicy, EvictsTheOldestSlotNormally) {
+    FakeRocket r[4];
+    r[0].last_seen_ms = 5000; r[1].last_seen_ms = 1000;
+    r[2].last_seen_ms = 9000; r[3].last_seen_ms = 7000;
+    EXPECT_EQ(bs_log_policy::evictOldestIndex(r, 4, 10000), 1);
+}
+
+// THE regression: the freshest rocket must not be evicted across the wrap.
+TEST(BsLogPolicy, DoesNotEvictTheFreshestRocketAcrossTheWrap) {
+    FakeRocket r[4];
+    // now has just wrapped past 0. Slot 3 was heard 10 ms ago (post-wrap);
+    // the others are pre-wrap and genuinely old.
+    const uint32_t now = 10;
+    r[0].last_seen_ms = 0xFFFFFF00u;   // ~4 s before the wrap
+    r[1].last_seen_ms = 0xF0000000u;   // much older
+    r[2].last_seen_ms = 0xFFFFFFF0u;   // ~0.3 s before the wrap
+    r[3].last_seen_ms = 0u;            // 10 ms ago — the FRESHEST
+    EXPECT_EQ(bs_log_policy::evictOldestIndex(r, 4, now), 1)
+        << "a raw `<` on absolute millis picks slot 3, the freshest";
+}
+
+TEST(BsLogPolicy, EvictTiesGoToTheLowestIndex) {
+    FakeRocket r[4];
+    for (auto& x : r) x.last_seen_ms = 1234;
+    EXPECT_EQ(bs_log_policy::evictOldestIndex(r, 4, 5000), 0);
+}
+
+// ── #901: a fleet reconfigure commits only when the fleet followed ────────
+TEST(BsLogPolicy, ReconfigureCommitsOnlyWhenEveryTrackedRocketFollowed) {
+    // Two rockets expected (slots 0 and 1); only slot 0 arrived on NEW.
+    EXPECT_FALSE(bs_log_policy::reconfigureMayCommit(0b011, 0b001, 0, 0))
+        << "the airborne rocket is stranded on OLD and the BS just committed NEW";
+    EXPECT_TRUE(bs_log_policy::reconfigureMayCommit(0b011, 0b011, 0, 0));
+}
+
+TEST(BsLogPolicy, ReconfigureFallsBackToAnyPacketWithNoTrackedRockets) {
+    // Bench / single-rocket case: nothing can be stranded, and demanding an
+    // impossible quorum would make cmd-10 unusable.
+    EXPECT_TRUE(bs_log_policy::reconfigureMayCommit(0, 0, /*last*/ 500, /*base*/ 400));
+    EXPECT_FALSE(bs_log_policy::reconfigureMayCommit(0, 0, /*last*/ 300, /*base*/ 400));
+}
+
+TEST(BsLogPolicy, ReconfigureFallbackIsWrapSafe) {
+    // last_packet just after the wrap, baseline just before it: a raw `>`
+    // reads this as "no packet since" and refuses to commit forever.
+    EXPECT_TRUE(bs_log_policy::reconfigureMayCommit(0, 0, /*last*/ 5,
+                                                    /*base*/ 0xFFFFFFF0u));
 }
