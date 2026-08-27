@@ -129,7 +129,8 @@ EXEMPT = {
         'declared itself WIP; the layout has not followed yet, so 27 symbols '
         '(C130-C139, D12-D15, Q12, R120-R130, U40/41/42/44/45) are schematic-'
         'only. THIS BOARD FLIES — re-gate it the moment the rework is placed, '
-        'and do not let anything else ride in behind the exemption.',
+        'and do not let anything else ride in behind the exemption. '
+        'Tracked in #966.',
 }
 
 
