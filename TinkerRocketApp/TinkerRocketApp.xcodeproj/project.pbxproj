@@ -103,6 +103,7 @@
 				11BE4A6C2F47D50200AAAE18 /* Sources */,
 				11BE4A6D2F47D50200AAAE18 /* Frameworks */,
 				11BE4A6E2F47D50200AAAE18 /* Resources */,
+				A1B2C3D40000000000000974 /* Stamp git sha into the bundle */,
 			);
 			buildRules = (
 			);
@@ -119,6 +120,24 @@
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A1B2C3D40000000000000974 /* Stamp git sha into the bundle */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Stamp git sha into the bundle";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# 974: stamp the commit that built this app into the bundle.\n# Written as a RESOURCE, not into Info.plist: ProcessInfoPlistFile runs\n# AFTER custom script phases, so a stamp written there is overwritten.\n# This lands before CodeSign, so it is signed with the bundle.\nREPO=\"$SRCROOT/..\"\nSHA=$(git -C \"$REPO\" rev-parse --short HEAD 2>/dev/null || echo unknown)\nif [ -n \"$(git -C \"$REPO\" status --porcelain 2>/dev/null)\" ]; then\n  SHA=\"$SHA-dirty\"\nfi\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nmkdir -p \"$DEST\"\nprintf '%s' \"$SHA\" > \"$DEST/build-stamp.txt\"\necho \"note: build-stamp.txt = $SHA\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXProject section */
 		11BE4A682F47D50200AAAE18 /* Project object */ = {

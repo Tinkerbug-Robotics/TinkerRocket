@@ -8,6 +8,36 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Build provenance (#974).  The firmware stamps its commit into every flight
+// record (`fw_git_sha`, e.g. "d7017c0-v8+20260827-1919"), so any board can be
+// traced to the source that built it.  The apps could not: versionName is a
+// static "1.0.3" that has not moved in months, which made the app build the
+// one component of a flight nobody could identify after the fact.
+//
+// Computed at BUILD time on purpose.  A committed constant is structurally
+// unable to name its own commit — it can only ever hold the sha of the commit
+// BEFORE the one being built.
+val trGitSha: String = run {
+    fun git(vararg args: String): String? = try {
+        val p = ProcessBuilder(listOf("git", *args))
+            .directory(rootDir)
+            .redirectErrorStream(true)
+            .start()
+        val out = p.inputStream.bufferedReader().readText().trim()
+        if (p.waitFor() == 0) out else null
+    } catch (_: Exception) {
+        null
+    }
+    val sha = git("rev-parse", "--short", "HEAD")
+    when {
+        sha.isNullOrEmpty() -> "unknown"
+        // A dirty tree means the APK does NOT correspond to any commit; say so
+        // rather than naming a commit the binary does not match.
+        !git("status", "--porcelain").isNullOrBlank() -> "$sha-dirty"
+        else -> sha
+    }
+}
+
 android {
     namespace = "com.tinkerbug.tinkerrocket"
     compileSdk = 36
@@ -31,6 +61,8 @@ android {
             "TR_MAPS_API_KEY",
             "\"${System.getenv("TR_ANDROID_MAPS_API_KEY").orEmpty()}\"",
         )
+        // #974: which commit built this APK.  Surfaced in Settings.
+        buildConfigField("String", "TR_GIT_SHA", "\"$trGitSha\"")
     }
 
     buildFeatures {
