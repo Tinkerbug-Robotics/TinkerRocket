@@ -16,16 +16,30 @@ CONFIG_IDF_TARGET="esp32s3"
 # has no board-revision flag to fork on, so the one declaration it gets has to
 # be the one that boots on every board, and that is 8 MB.
 #
-# The as-built LoRa Board V3 is the only radio board that has ever run this
-# firmware: the 16 MB first article is unflashable (dead flash, still open).
-# Raising this would have bricked the boot of the only working unit the next
-# time anyone deleted a build dir. Nothing wants the space either —
-# partitions.csv ends at 0x320000 (3.2 MB), deliberately, so the same image
-# flashes onto a bench devkit too.
+# THE FLEET IS MIXED — corrected 2026-08-27. This block used to say "the
+# as-built LoRa Board V3 is the only radio board that has ever run this
+# firmware: the 16 MB first article is unflashable (dead flash, still open)".
+# That is no longer true. Measured during a flight-readiness pass, both fitted
+# daughterboards flashed and booted first time:
 #
-# If a 16 MB board revision ever does come up, give this project the
+#   V8 pair  E0:72:A1:CA:F6:7C   8 MB  (GigaDevice c8:6517)
+#   V9 pair  E0:72:A1:CA:F6:40  16 MB
+#
+# Whatever ails the unflashable first article, it is not true of every 16 MB
+# board. Do not repeat that claim.
+#
+# THE 8 MB DECLARATION STAYS, and the mixed fleet is exactly why: it is the one
+# value that boots on both, since an 8 MB image runs on a 16 MB part while the
+# reverse bricks the boot. Nothing wants the space either — partitions.csv ends
+# at 0x320000 (3.2 MB), deliberately, so the same image flashes onto a bench
+# devkit too.
+#
+# So the old conclusion survives its own stale premise: what changed is that
+# 8 MB is now load-bearing for a board that EXISTS, not insurance against a
+# hypothetical one. If this project ever does need the space, give it the
 # TR_BOARD_*-style flag and sdkconfig.defaults.<rev> overlay that
-# flight_computer and out_computer use, rather than flipping this line.
+# flight_computer and out_computer use, rather than flipping this line — a
+# single declaration cannot serve both parts once it exceeds 8 MB.
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
