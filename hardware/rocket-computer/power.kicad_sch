@@ -16471,7 +16471,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "4.7 uF"
+		(property "Value" "10 uF"
 			(at 55.88 166.37 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -16515,7 +16515,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL05A105KO5NNNC"
+		(property "MPN" "CL05A106MQ5NUNC"
 			(at 55.88 163.83 0)
 			(hide yes)
 			(show_name no)
@@ -19923,6 +19923,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B103KB5NNNC"
+			(at 389.255 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 389.255 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(property "Description" ""
 			(at 389.255 44.45 0)
 			(hide yes)
@@ -20292,6 +20314,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B103KB5NNNC"
+			(at 344.17 107.95 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 344.17 107.95 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(property "Description" ""
 			(at 344.17 107.95 0)
 			(hide yes)
@@ -20405,6 +20449,28 @@
 			)
 		)
 		(property "Datasheet" ""
+			(at 403.86 40.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CRCW201033R0FKEF"
+			(at 403.86 40.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Vishay Dale"
 			(at 403.86 40.64 0)
 			(hide yes)
 			(show_name no)
@@ -20552,6 +20618,28 @@
 			)
 		)
 		(property "Datasheet" ""
+			(at 412.75 40.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CRCW201033R0FKEF"
+			(at 412.75 40.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Vishay Dale"
 			(at 412.75 40.64 0)
 			(hide yes)
 			(show_name no)
@@ -21087,6 +21175,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 424.18 40.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 424.18 40.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(property "Description" ""
 			(at 424.18 40.64 0)
 			(hide yes)
@@ -21222,7 +21332,7 @@
 				)
 			)
 		)
-		(property "Value" "10 uF"
+		(property "Value" "22 uF"
 			(at 431.8 40.64 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21244,6 +21354,28 @@
 			)
 		)
 		(property "Datasheet" ""
+			(at 431.8 40.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 431.8 40.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 431.8 40.64 0)
 			(hide yes)
 			(show_name no)
@@ -21421,6 +21553,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-07100KL"
+			(at 424.18 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 424.18 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(property "Description" ""
 			(at 424.18 63.5 0)
 			(hide yes)
@@ -21558,6 +21712,28 @@
 			)
 		)
 		(property "Datasheet" ""
+			(at 424.18 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07100KL"
+			(at 424.18 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 424.18 86.36 0)
 			(hide yes)
 			(show_name no)
@@ -21725,6 +21901,28 @@
 			)
 		)
 		(property "Datasheet" ""
+			(at 431.8 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07100KL"
+			(at 431.8 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 431.8 63.5 0)
 			(hide yes)
 			(show_name no)

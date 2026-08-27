@@ -11764,7 +11764,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Footprints:DTC123JEBTL"
+		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
 			(at 81.28 188.595 0)
 			(hide yes)
 			(show_name no)
@@ -12694,7 +12694,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Footprints:DTC123JEBTL"
+		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
 			(at 81.28 140.97 0)
 			(hide yes)
 			(show_name no)
@@ -16204,7 +16204,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Footprints:DTC123JEBTL"
+		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
 			(at 172.085 145.415 0)
 			(hide yes)
 			(show_name no)
@@ -17604,7 +17604,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Footprints:DTC123JEBTL"
+		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
 			(at 89.535 59.055 0)
 			(hide yes)
 			(show_name no)
@@ -18801,6 +18801,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 312.42 45.72 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 312.42 45.72 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(property "Description" ""
 			(at 312.42 45.72 0)
 			(hide yes)
@@ -19286,6 +19308,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 312.42 76.2 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 312.42 76.2 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(property "Description" ""
 			(at 312.42 76.2 0)
 			(hide yes)
@@ -19453,6 +19497,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-071ML"
+			(at 340.36 45.72 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 340.36 45.72 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(property "Description" ""
 			(at 340.36 45.72 0)
 			(hide yes)
@@ -19479,6 +19545,176 @@
 			)
 		)
 	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 347.980 45.720 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "f11537bb-7432-47d0-9640-560941582954")
+		(property "Reference" "R131"
+			(at 347.980 45.720 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1 M"
+			(at 347.980 45.720 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 347.980 45.720 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 347.980 45.720 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-071ML"
+			(at 347.980 45.720 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 347.980 45.720 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 347.980 45.720 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "5d996218-7319-45b6-ba03-473e09b74de7")
+		)
+		(pin "2"
+			(uuid "a80c39c1-20cd-49df-a6ea-0b6605e5a81c")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "R131")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 347.980 41.910) (xy 347.980 39.370)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0a04ca2c-8b53-4e49-aab3-b00bbed29f1f")
+	)
+	(wire
+		(pts
+			(xy 347.980 49.530) (xy 347.980 52.070)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "98bc5d13-cecc-4bef-9726-c9e7b087fe7b")
+	)
+	(global_label "ARM_GATE"
+		(shape input)
+		(at 347.980 39.370 90)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "55185274-ec14-41fc-996d-f08d8e2a907c")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 347.980 39.370 270)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(global_label "ARM_TMR"
+		(shape input)
+		(at 347.980 52.070 270)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "d7c1f994-e50e-41a0-b5df-925d8efcdad0")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 347.980 52.070 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+
 	(wire
 		(pts
 			(xy 340.36 41.91) (xy 340.36 38.099999999999994)
@@ -19568,7 +19804,7 @@
 				)
 			)
 		)
-		(property "Value" "10 uF"
+		(property "Value" "22 uF"
 			(at 340.36 68.58 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -19590,6 +19826,28 @@
 			)
 		)
 		(property "Datasheet" ""
+			(at 340.36 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 340.36 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 340.36 68.58 0)
 			(hide yes)
 			(show_name no)
@@ -19870,7 +20128,7 @@
 				)
 			)
 		)
-		(property "Value" "22 k"
+		(property "Value" "10 k"
 			(at 367.03 86.36 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -19892,6 +20150,28 @@
 			)
 		)
 		(property "Datasheet" ""
+			(at 367.03 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 367.03 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 367.03 86.36 0)
 			(hide yes)
 			(show_name no)
@@ -20150,6 +20430,28 @@
 			)
 		)
 		(property "Datasheet" ""
+			(at 344.17 96.52 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 344.17 96.52 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 344.17 96.52 0)
 			(hide yes)
 			(show_name no)
@@ -20531,7 +20833,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:DTC123JEBTL"
+		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
 			(at 368.3 111.76 0)
 			(hide yes)
 			(show_name no)
@@ -20543,6 +20845,28 @@
 			)
 		)
 		(property "Datasheet" ""
+			(at 368.3 111.76 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "DTC123JEBTL"
+			(at 368.3 111.76 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Rohm"
 			(at 368.3 111.76 0)
 			(hide yes)
 			(show_name no)
