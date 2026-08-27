@@ -47,6 +47,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.tinkerbug.tinkerrocket.BuildConfig
 import com.tinkerbug.tinkerrocket.app.theme.TrPyroContinuityBadge
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
@@ -244,6 +245,16 @@ fun SettingsScreen(
                 OutlinedButton(onClick = { confirmDelete = true }) { Text("Delete") }
             }
         }
+
+        // #974: which build is this?  Deliberately ABOVE the active-profile
+        // guard below — build provenance must be readable even with no profile
+        // selected, which is exactly the state someone is in when they are
+        // trying to work out what is installed.
+        Text(
+            "Build ${BuildConfig.VERSION_NAME} (${BuildConfig.TR_GIT_SHA})",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         if (active == null) {
             Text(

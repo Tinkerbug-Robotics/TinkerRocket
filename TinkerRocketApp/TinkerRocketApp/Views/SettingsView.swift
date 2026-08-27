@@ -445,6 +445,20 @@ struct SettingsView: View {
                 Label("Update firmware…", systemImage: "arrow.up.circle")
             }
             .disabled(!device.isConnected)
+
+            // #974: the firmware version above traces a board to its source;
+            // this does the same for the app.  Sits beside it deliberately —
+            // when a flight looks wrong, "which builds produced this?" is one
+            // question, not two.
+            HStack {
+                Text("App build")
+                Spacer()
+                Text(AppBuildStamp.description)
+                    .font(.body.monospaced())
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
         }
     }
 
