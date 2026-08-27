@@ -23,6 +23,47 @@ Against [`base-station/`](../base-station/):
   adjustable TPS63020 and its feedback divider. base-station moved to the same
   part at V6.
 
+## The battery thermistor is board-mounted, and that is a compromise
+
+`TH1` feeds the BQ21040's `TS` pin, which gates charging on temperature. It is a
+10 kΩ-at-25 °C NTC, B25/85 = 3435 K, ±1 % on both, in an 0603 chip package, on
+the component side at the far end of the board from the charger. `R53` (210 kΩ,
+`TS` to ground) is TI's TTDM-defeat resistor and is unchanged — with the same
+resistance-temperature curve the charger's temperature window does not move.
+
+Until 2026-08-27 `TH1` was a two-pin 2.54 mm land for a **leaded** thermistor of
+that same curve, meant to be taped to the 18650 so `TS` read *cell* temperature.
+The cell holder leaves no room for a part under the cell, so the sensor moved
+onto the board.
+
+**What that costs.** The NTC now reads the ground plane, not the cell, and its
+self-heat bias runs one way: a warm board makes the charger believe the pack is
+warmer than it is.
+
+- On the hot side that is conservative — charging is inhibited early.
+- On the **cold** side it is not. Board self-heat can mask a genuinely cold cell
+  and allow a sub-0 °C charge, which is the failure the `TS` pin exists to
+  prevent.
+
+Placement mitigates this; it does not remove it. `TH1` sits 25 mm from the
+charger — the dominant heat source while charging, dissipating on the order of
+1 W as a linear regulator at the ~0.79 A `R52` programs — 27 mm from the
+buck-boost and 15 mm from the ESP32-S3. Weighted by dissipation over distance
+that is about 37 % less coupling than the old land, which sat 8.6 mm from the
+buck-boost and 13.5 mm from the charger. A solid inner ground plane keeps the
+board close to isothermal, so what remains is a board-wide offset rather than a
+local hot spot.
+
+Everywhere on the board that is further from the heat needs a sensor trace
+threaded through the ESP32-S3 fanout or the chip antenna's ground-via fence;
+neither is worth it for a few degrees. The route as built is 19 mm on `F.Cu`
+with no vias.
+
+**Open at first article:** with the board charging, compare the `TS` node
+against a reference probe on the cell at room temperature and near 0 °C, and
+confirm the offset is small enough to accept. If it is not, the fix is a wired
+probe on a connector, not a different chip.
+
 ## The radio pinout is deliberately identical to lora-daughterboard
 
 All eight ESP32↔E220 signals land on the same GPIOs as the fabbed

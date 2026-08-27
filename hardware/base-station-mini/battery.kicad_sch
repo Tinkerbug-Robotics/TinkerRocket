@@ -5390,7 +5390,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
 			(at 90.17 74.93 0)
 			(hide yes)
 			(show_name no)
@@ -5412,7 +5412,7 @@
 				)
 			)
 		)
-		(property "Description" "Temperature dependent resistor"
+		(property "Description" "Battery temperature sense for the BQ21040 TS pin - 10 k NTC at 25 C, B25/85 = 3435 K, 0603. R53 (210 k, TS to GND) is TI's TTDM-defeat resistor. BOARD-MOUNTED, not on the cell: placed at the far end of the board from the charger, buck and ESP32-S3 so board self-heating biases the reading as little as possible. Consequence: the JEITA window tracks PCB temperature, so a cold cell in a self-heated board can still be charged - see the board README."
 			(at 90.17 74.93 0)
 			(hide yes)
 			(show_name no)
@@ -5423,7 +5423,7 @@
 				)
 			)
 		)
-		(property "MPN" "MF52B 103F3435-100"
+		(property "MPN" "TX06F103F3435ER"
 			(at 90.17 74.93 0)
 			(hide yes)
 			(show_name no)
@@ -5434,7 +5434,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Nanjing Shiheng"
+		(property "Mfr" "Ohmite"
 			(at 90.17 74.93 0)
 			(hide yes)
 			(show_name no)
