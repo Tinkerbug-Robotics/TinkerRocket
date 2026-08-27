@@ -101,6 +101,31 @@ android {
                 signingConfigs.getByName("debug")
             }
         }
+        debug {
+            // #975: bench installs without editing this file.
+            //
+            // The app already on a bench phone is signed with a DIFFERENT debug
+            // keystore than a fresh local build, so `adb install -r` fails
+            // INSTALL_FAILED_UPDATE_INCOMPATIBLE and a plain install would need
+            // an uninstall -- which drops that install's flights, offline tiles
+            // and settings. A suffixed applicationId coexists instead, and
+            // updates in place on repeat installs.
+            //
+            // This used to be a hand-edit reverted before committing. Two things
+            // went wrong with that: it dirties the tree, so #974's build stamp
+            // reports `<sha>-dirty` and the bench APK can never name its commit;
+            // and "revert before committing" is a step someone eventually
+            // forgets. An env var does the same job with neither problem:
+            //
+            //     TR_ANDROID_APP_ID_SUFFIX=.bench ./gradlew :app:assembleDebug
+            //
+            // Empty/unset (the default, and what CI sees) leaves the applicationId
+            // exactly as it was.
+            val suffix = System.getenv("TR_ANDROID_APP_ID_SUFFIX").orEmpty()
+            if (suffix.isNotEmpty()) {
+                applicationIdSuffix = suffix
+            }
+        }
     }
 
     sourceSets {
