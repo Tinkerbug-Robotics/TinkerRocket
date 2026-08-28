@@ -48,7 +48,7 @@
 47;"R56";"R_0402_1005Metric";1;"12 k";"RC0402FR-0712KL";"Yageo";"Fit"
 48;"R57";"R_0402_1005Metric";1;"1.5 k";"RC0402FR-071K5L";"Yageo";"Fit"
 49;"R60";"R_0402_1005Metric";1;"15.4 k";"RC0402FR-0715K4L";"Yageo";"Fit"
-50;"R72";"R_0805_2012Metric";1;"2 m";"CSSH0805FT2L00";"Stackpole";"Fit"
+50;"R72";"R_0805_2012Metric";1;"2 m";"PA0805FRF870R002L";"YAGEO";"Fit"
 51;"R74, R75";"R_0402_1005Metric";2;"499 k";"RC0402FR-07499KL";"Yageo";"DNP"
 52;"R76";"R_0402_1005Metric";1;"0";"RC0402JR-070RL";"Yageo";"DNP"
 53;"R85";"R_0402_1005Metric";1;"2 k";"RC0402FR-072KL";"Yageo";"Fit"

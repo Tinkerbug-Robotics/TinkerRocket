@@ -62154,7 +62154,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CSSH0805FT2L00"
+		(property "MPN" "PA0805FRF870R002L"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -62168,7 +62168,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Mfr" "Stackpole"
+		(property "Mfr" "YAGEO"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")

@@ -15259,7 +15259,7 @@
 				)
 			)
 		)
-		(property "MPN" "CSSH0805FT2L00"
+		(property "MPN" "PA0805FRF870R002L"
 			(at 212.09 50.8 0)
 			(hide yes)
 			(show_name no)
@@ -15270,7 +15270,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Stackpole"
+		(property "Mfr" "YAGEO"
 			(at 212.09 50.8 0)
 			(hide yes)
 			(show_name no)
