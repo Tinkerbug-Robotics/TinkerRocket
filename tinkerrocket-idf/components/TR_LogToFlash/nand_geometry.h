@@ -7,21 +7,22 @@
 // ID->geometry mapping is unit-testable — nothing else in tests_cpp can reach
 // nandInit().
 //
-// Why runtime: the fleet now spans three parts that the SAME firmware image
+// Why runtime: the fleet now spans four parts that the SAME firmware image
 // must drive correctly —
 //
-//   part          board       MID DID   page  pages/blk blocks  total
-//   F35SQB004G    V8 bench   0xCD 0x53  4096      64     2048   512 MB
-//   GD5F2GQ5UE    V9/V10     0xC8 0x52  2048      64     2048   256 MB
-//   GD5F1GQ5UE    mini       0xC8 0x51  2048      64     1024   128 MB
+//   part                board       MID DID   page  pages/blk blocks  total
+//   F35SQB004G          V8 bench   0xCD 0x53  4096      64     2048   512 MB
+//   GD5F2GQ5UE          V9/V10     0xC8 0x52  2048      64     2048   256 MB
+//   GD5F1GQ5UE          mini       0xC8 0x51  2048      64     1024   128 MB
+//   MX35UF4G24AD-Z4I8   V7         0xC2 0xF5  4096      64     2048   512 MB
 //
-// Every ID is cross-validated in two independent, silicon-tested drivers:
+// Every ID is cross-validated in independent, silicon-tested drivers:
 // the vendored spi_nand_flash devices table (nand_foresee.c — validated on
 // the physical bench part in #492 — and nand_gigadevice.c) and the Linux
-// kernel's drivers/mtd/nand/spi/{foresee,gigadevice}.c. All three parts are
-// single-plane (no plane-select bit in the column address) and 64 pages per
-// block, so the SPI command sequences are identical across them — only the
-// page size and block count differ.
+// kernel's drivers/mtd/nand/spi/{foresee,gigadevice,macronix}.c. All four
+// parts are single-plane (no plane-select bit in the column address) and 64
+// pages per block, so the SPI command sequences are identical across them —
+// only the page size and block count differ.
 //
 // UNKNOWN IDs FALL BACK TO THE LEGACY GEOMETRY (the F35SQB004G numbers,
 // i.e. exactly the behaviour every board had before #671). That is a
@@ -63,8 +64,9 @@ constexpr NandGeometry NAND_GEOMETRY_LEGACY = {4096, 64, 2048,
                                                "legacy/unknown (F35SQB004G-compatible)"};
 
 // chip_id is (MID << 8) | DID as nandInit() builds it — one DID byte only
-// (that is all the driver captures; parts with 2-byte DIDs truncate, so
-// entries here must be unambiguous in 16 bits — verified for these three).
+// (that is all the driver captures; parts with 2-byte DIDs truncate — the
+// Macronix full ID is 0xF5 0x03 — so entries here must be unambiguous in
+// 16 bits, verified for these four).
 // Returns true on a table hit; false leaves *out at the legacy fallback.
 inline bool nandGeometryForId(uint16_t chip_id, NandGeometry* out)
 {
@@ -78,6 +80,14 @@ inline bool nandGeometryForId(uint16_t chip_id, NandGeometry* out)
             return true;
         case 0xC851:  // GigaDevice GD5F1GQ5UE — rocket computer mini
             *out = {2048, 64, 1024, "GD5F1GQ5UE (1Gbit)"};
+            return true;
+        case 0xC2F5:  // Macronix MX35UF4G24AD-Z4I8 — V7 rocket computer.
+            // Geometry-identical to the legacy fallback; listed only to keep
+            // the unknown-ID ERROR tripwire quiet on that board. Only the
+            // -Z4I8 suffix (DID 0xF5) is single-plane; the plain
+            // MX35UF4G24AD (DID 0xB5) is a 2-plane part this driver cannot
+            // address — never add a 0xC2B5 entry.
+            *out = {4096, 64, 2048, "MX35UF4G24AD-Z4I8 (4Gbit)"};
             return true;
         default:
             *out = NAND_GEOMETRY_LEGACY;
