@@ -19,6 +19,7 @@ only ever give a coarse answer no matter how carefully it is flown.
 from __future__ import annotations
 
 import argparse
+import statistics
 import json
 from pathlib import Path
 
@@ -55,6 +56,22 @@ def _round_to(x, step):
     return round(x / step) * step
 
 
+def velocity_threshold(r):
+    """Best estimate of a part's velocity threshold, in m/s, or None if it has
+    no velocity gate. Median of every measured gate edge -- see vel_cell."""
+    if r.get("velocity_gate_present") is False:
+        return None
+    edges = r.get("velocity_edges")
+    if edges:
+        vals = sorted(edges.get("fix", []) + edges.get("blocked", []))
+        if vals:
+            return _round_to(statistics.median(vals), 5)
+    lo, hi = r.get("velocity_fix_max_mps"), r.get("velocity_blocked_min_mps")
+    if lo is None or hi is None:
+        return None
+    return _round_to((lo + hi) / 2.0, 5)
+
+
 def vel_cell(r):
     """Velocity gate, rounded, or a bound when the part has none.
 
@@ -66,6 +83,18 @@ def vel_cell(r):
     if r.get("velocity_gate_present") is False:
         v = r.get("velocity_fix_max_mps")
         return f"none to {v:.0f} m/s" if v else "none observed"
+    # Prefer every measured gate edge over the two extremes. Edges bracket the
+    # threshold from both sides, so their median sits on it -- and unlike
+    # max(fix)/min(blocked) it does not move when one epoch closes early. The
+    # Quescan M10 blocked once at 510 m/s while every other edge on it was
+    # consistent with 515; at 29 m/s^2 one epoch is 29 m/s wide, so that single
+    # sample dragged the midpoint a whole rounding step and made the part look
+    # different from the others when it is not.
+    edges = r.get("velocity_edges")
+    if edges:
+        vals = sorted(edges.get("fix", []) + edges.get("blocked", []))
+        if vals:
+            return f"{_round_to(statistics.median(vals), 5):.0f} m/s"
     lo, hi = r.get("velocity_fix_max_mps"), r.get("velocity_blocked_min_mps")
     if lo is None or hi is None:
         return "--"

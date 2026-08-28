@@ -127,6 +127,53 @@
    "notes": "Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for flight use and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behavior is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behavior. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.",
    "velocity_gate_present": true,
    "sats_p05": 14
+  },
+  {
+   "id": "quescan_m10",
+   "part": "Quescan M10 (u-blox M10)",
+   "bands": "L1 (GPS/GLO/GAL/BDS)",
+   "protocol": "UBX @ 38400",
+   "host": "standalone on a CP2102 USB-UART",
+   "path": "radiated",
+   "rf": "antenna, TX gain 26",
+   "date": "2026-08-28",
+   "runs": 2,
+   "velocity_gate_present": true,
+   "velocity_fix_max_mps": 514,
+   "velocity_blocked_min_mps": 510,
+   "altitude_fix_max_km": 80.85,
+   "altitude_blocked_min_km": 79.07,
+   "altitude_gate_cause": "cocom",
+   "combination": "independent",
+   "recovery_s": [
+    0.1,
+    5.0
+   ],
+   "sats_p05": 12,
+   "sats_median": 13,
+   "notes": "A bare u-blox M10 die on a third-party carrier: ROM SPG 5.10, hardware 000A0000, PROTVER 34.10, and it answers the full private protocol down to SEC-UNIQID. It reports no MOD= string, which is what a raw chip does rather than a u-blox-branded module. Gate behavior is in family -- velocity around 515, altitude at 80 km, limits independent -- but it is the slowest part measured on the ALTITUDE gate: +2.3 s to close and 4.7-5.0 s to re-open, against 0.7-1.7 s elsewhere, which is why both its brackets inverted. Flown on the same ephemeris, start time and launch site as the SAM-M10Q, ZED-F9P and NEO-M8T, so its satellite geometry is directly comparable rather than merely similar. One velocity edge closed a single epoch early, blocking at 510 m/s, while every other edge on this part is consistent with 515; at 29 m/s^2 an epoch is 29 m/s wide, so that is quantization rather than a lower threshold.",
+   "velocity_edges": {
+    "fix": [
+     512,
+     511,
+     512,
+     514,
+     496,
+     513,
+     510,
+     497
+    ],
+    "blocked": [
+     629,
+     521,
+     521,
+     535,
+     510,
+     522,
+     519,
+     518
+    ]
+   }
   }
  ]
 }

@@ -22,6 +22,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from receiver_table import velocity_threshold   # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 RES = HERE / "results"
 FIG = RES / "figures"
@@ -39,17 +42,23 @@ JOBS = [
     ("air530",   "air530_spaceshot",     "air530_spaceshot",    "2026/08/18,08:30:00", "air530_spaceshot.svg"),
     ("air530",   "air530_gentle_alt",    "air530_gentle_alt",   "2026/08/18,08:30:00", "air530_gentle_alt.svg"),
     ("neo_m8t",  "neo_m8t_t2_altramp",   "neo_m8t_t2_altramp",  "2026/08/19,22:30:00", "neo_m8t_t2_altramp.svg"),
+    ("quescan_m10", "quescan_m10_spaceshot",  "quescan_m10_spaceshot",  "2026/08/18,08:30:00", "quescan_m10_spaceshot.svg"),
+    ("quescan_m10", "quescan_m10_gentle_alt", "quescan_m10_gentle_alt", "2026/08/18,08:30:00", "quescan_m10_gentle_alt.svg"),
 ]
 
 
 def limits(rec):
     """(velocity, altitude) thresholds to shade, rounded as the table shows them.
 
+    The velocity estimate comes from receiver_table.velocity_threshold rather
+    than being recomputed here: a second copy of the rule drifted the moment the
+    table switched to a robust edge median, and a figure shaded at 510 beside a
+    table row saying 515 is worse than either alone.
+
     A part with no velocity gate shades no speed band -- the Air530 held a fix
     to 900 m/s, so a band at 515 would mark something that never happened.
     """
-    vel = (None if rec.get("velocity_gate_present") is False
-           else round((rec["velocity_fix_max_mps"] + rec["velocity_blocked_min_mps"]) / 2 / 5) * 5)
+    vel = velocity_threshold(rec)
     lo, hi = rec.get("altitude_fix_max_km"), rec.get("altitude_blocked_min_km")
     alt = None if lo is None or hi is None else round((lo + hi) / 2)
     return vel, alt

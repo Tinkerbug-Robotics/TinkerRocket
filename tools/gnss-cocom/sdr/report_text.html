@@ -363,6 +363,14 @@ Same thresholds as the others, but 2&ndash;3&nbsp;s slow to <em>close</em> the a
 Velocity gate normal at 510&ndash;524&nbsp;m/s, but it stops publishing at 50&nbsp;km &mdash; the u-blox dynamic-model ceiling, not an export limit. Its true altitude behavior is therefore unmeasurable.
 <!--/blurb-->
 
+<!--#blurb quescan_m10-->
+A bare u-blox M10 die on a third-party carrier &mdash; it answers the full
+private protocol down to <code>SEC-UNIQID</code> but reports no module name,
+which is what a raw chip does. Gate behavior is in family, but it is the slowest
+part measured on the altitude gate: 2.3&nbsp;s to close and about 5&nbsp;s to
+re-open, against under two seconds everywhere else.
+<!--/blurb-->
+
 <!--#blurb air530-->
 The outlier. <strong>No velocity gate at all</strong>, and it stops publishing at 10&nbsp;km &mdash; below every candidate export altitude, and below apogee for most high-power flights.
 <!--/blurb-->

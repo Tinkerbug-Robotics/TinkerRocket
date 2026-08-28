@@ -34,7 +34,16 @@ from ublox_binary import (iter_frames, _checksum,        # noqa: E402
                           CLS_NAV, MSG_NAV_PVT as MSG_NAV_PVT_L,
                           MSG_NAV_SAT as MSG_NAV_SAT_L)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from find_ublox import find_ublox                        # noqa: E402
+from find_ublox import find_ublox, UBLOX_VID              # noqa: E402
+
+
+def UBLOX_VID_PORT(dev: str) -> bool:
+    """True if this port IS the receiver's own USB CDC rather than a bridge."""
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return False
+    return any(p.device == dev and p.vid == UBLOX_VID for p in list_ports.comports())
 
 CLS_CFG, CLS_MON = 0x06, 0x0A
 MSG_CFG_MSG = 0x01        # legacy per-message rate (M8 and earlier)
@@ -60,14 +69,24 @@ LAYER_RAM, LAYER_BBR, LAYER_FLASH = 0x01, 0x02, 0x04
 # Storage size is encoded in bits 30:28 of the key.
 SIZE_OF = {0x1: 1, 0x2: 1, 0x3: 2, 0x4: 4, 0x5: 8}
 
+# The configuration keys are PER PORT, and picking the wrong port's set does not
+# fail politely: VALSET is all-or-nothing, so one inapplicable key NAKs the whole
+# frame and nothing is written. A module on a USB-UART bridge has no USB port at
+# all, and the USB keys that worked on the F9P's native USB were rejected
+# wholesale by an M10 on a CP2102.
 KEYS = {
-    # output protocol switches for the USB port
+    # --- native USB (the receiver enumerates as its own CDC) ---
     "CFG-USBOUTPROT-UBX":       0x10780001,
     "CFG-USBOUTPROT-NMEA":      0x10780002,
     "CFG-USBOUTPROT-RTCM3X":    0x10780004,
-    # the two messages the classifier needs, on USB
     "CFG-MSGOUT-UBX_NAV_PVT_USB": 0x20910009,
     "CFG-MSGOUT-UBX_NAV_SAT_USB": 0x20910018,
+    # --- UART1 (the receiver is behind a USB-UART bridge) ---
+    "CFG-UART1OUTPROT-UBX":     0x10740001,
+    "CFG-UART1OUTPROT-NMEA":    0x10740002,
+    "CFG-UART1OUTPROT-RTCM3X":  0x10740004,
+    "CFG-MSGOUT-UBX_NAV_PVT_UART1": 0x20910007,
+    "CFG-MSGOUT-UBX_NAV_SAT_UART1": 0x20910016,
     # dynamics: 8 = airborne <4 g, matching the rocket computer's receiver
     "CFG-NAVSPG-DYNMODEL":      0x20110021,
     # navigation rate, ms between solutions
@@ -203,6 +222,10 @@ def main() -> int:
     ap.add_argument("--rate-hz", type=float, default=1.0)
     ap.add_argument("--dynmodel", type=int, default=8,
                     help="8 = airborne <4 g (default), 7 = <2 g, 6 = <1 g")
+    ap.add_argument("--iface", choices=("auto", "usb", "uart1"), default="auto",
+                    help="which port's config keys to write. 'auto' picks USB "
+                         "for a receiver on its own CDC and UART1 for one behind "
+                         "a serial bridge")
     ap.add_argument("--keep-nmea", action="store_true",
                     help="leave NMEA on; the capture then carries both protocols")
     ap.add_argument("--identify-only", action="store_true")
@@ -311,23 +334,46 @@ def main() -> int:
             cold_start(ser)
 
         # --- configure, RAM only --------------------------------------------
+        # Native-USB receivers enumerate under u-blox's own vendor id; anything
+        # reached through a bridge (CP2102, FTDI, CH340) is on UART1.
+        iface = args.iface
+        if iface == "auto":
+            iface = "usb" if UBLOX_VID_PORT(port) else "uart1"
+        P = "USB" if iface == "usb" else "UART1"
+        OUT = "CFG-USBOUTPROT" if iface == "usb" else "CFG-UART1OUTPROT"
+        print(f"  iface    : {P}"
+              f"{'  (auto-detected)' if args.iface == 'auto' else ''}")
         items = [
-            (KEYS["CFG-USBOUTPROT-UBX"], 1),
-            (KEYS["CFG-USBOUTPROT-RTCM3X"], 0),
-            (KEYS["CFG-MSGOUT-UBX_NAV_PVT_USB"], 1),
-            (KEYS["CFG-MSGOUT-UBX_NAV_SAT_USB"], 1),
+            (KEYS[f"{OUT}-UBX"], 1),
+            (KEYS[f"CFG-MSGOUT-UBX_NAV_PVT_{P}"], 1),
+            (KEYS[f"CFG-MSGOUT-UBX_NAV_SAT_{P}"], 1),
             (KEYS["CFG-NAVSPG-DYNMODEL"], args.dynmodel),
             (KEYS["CFG-RATE-MEAS"], int(round(1000.0 / args.rate_hz))),
-            (KEYS["CFG-TMODE-MODE"], 0),
         ]
         if not args.keep_nmea:
-            items.append((KEYS["CFG-USBOUTPROT-NMEA"], 0))
+            items.append((KEYS[f"{OUT}-NMEA"], 0))
+
+        # Defensive settings that only exist on RTK-capable parts. A plain
+        # navigation M10 has neither an RTCM3 output nor a time mode, and NAKs
+        # them -- which, because VALSET is all-or-nothing, took the whole frame
+        # down with it. Applied separately so an absent feature costs nothing.
+        optional = [
+            (KEYS[f"{OUT}-RTCM3X"], 0, "RTCM3 output off"),
+            (KEYS["CFG-TMODE-MODE"], 0, "base/time mode off"),
+        ]
 
         layers = LAYER_RAM | (LAYER_BBR | LAYER_FLASH if args.persist else 0)
         if args.persist:
             print("  persisting to BBR+Flash: these settings will survive a power "
                   "cycle\n     (the unit's original base-station setup is being "
                   "overwritten, not shadowed)")
+        for key, val, what in optional:
+            ser.reset_input_buffer()
+            ser.write(valset([(key, val)], layers))
+            r = [m for c, m, _ in collect(read_for(ser, 0.8)) if c == 0x05]
+            if 0x00 in r:
+                print(f"  skipped  : {what} -- this receiver has no such feature")
+
         ser.reset_input_buffer()
         ser.write(valset(items, layers))
         buf = read_for(ser, 1.5)
@@ -337,6 +383,23 @@ def main() -> int:
             print(f"  VALSET   : ACK ({len(items)} keys, {where})")
         elif any(m == 0x00 for _, m, _ in acks):
             print("  VALSET   : NAK -- the receiver rejected the configuration")
+            # VALSET is all-or-nothing, so a NAK says nothing about WHICH key was
+            # wrong. Retry them one at a time; the ones that NAK alone are the
+            # ones this receiver does not have.
+            names = {v: k for k, v in KEYS.items()}
+            bad = []
+            for key, val in items:
+                ser.reset_input_buffer()
+                ser.write(valset([(key, val)], LAYER_RAM))
+                r = [m for c, m, _ in collect(read_for(ser, 0.8)) if c == 0x05]
+                if 0x00 in r:
+                    bad.append(names.get(key, hex(key)))
+            if bad:
+                print("  rejected individually:")
+                for b in bad:
+                    print(f"    {b}")
+                print("  A key the receiver does not implement -- usually the "
+                      "wrong port's\n     key set. Try --iface uart1 or --iface usb.")
             return 1
         else:
             print("  VALSET   : no ACK seen (continuing; verification below is "

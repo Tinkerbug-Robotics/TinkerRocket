@@ -274,6 +274,7 @@ neither table nor report should be hand-edited.
 | u-blox ZED-F9P (ArduSimple) | conducted | 515 m/s | 80 km † | independent | 0.1-1.0 s |
 | Air530 (AT6558R) | conducted | none to 900 m/s | 10 km ‡ | n/a -- no velocity gate | n/a |
 | u-blox NEO-M8T | conducted | 515 m/s | 50 km § | independent | 0.9-3.1 s |
+| Quescan M10 (u-blox M10) | radiated | 515 m/s | 80 km † | independent | 0.1-5.0 s |
 
 † Slow to close: this part held a fix 2-3 s past the limit on both flights, about 400-600 m of overshoot above 80 km with position still being published. The threshold itself is normal.
 
@@ -290,6 +291,8 @@ neither table nor report should be hand-edited.
 **Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): EVERYTHING FIRST RECORDED FOR THIS PART WAS WRONG, and dwell tests corrected it. It has NO velocity gate: it held a fix to 900 m/s at 5 km on t1_velramp (reporting 899), and 100% of epochs at every 90 s dwell from 495 to 530 m/s on vel_stair. What it has is an ALTITUDE ceiling at 10-11 km -- 100% fix at 8 km, 91% at 10 km, 0% at 11/12/13 km on 90 s dwells, and 9.90->10.25 km on a 354 m/s ramp with 11 satellites either side. That ceiling is far below the COCOM altitude, so it is not an export gate at all. The flight profiles read as a latent velocity gate only because they cross 10 km at high speed: the spaceshot transition happens while speed is DECREASING (1334 -> 1304 m/s) as altitude rises through 9.83 -> 11.15 km, which no velocity gate can do. Re-open latency is not defined for this part because there is no COCOM gate to re-open: on blockdur it held a fix at 560 m/s for 148 continuous seconds, dropping only 1 s at the sharp 130 m/s^2 transition. The 31-134 s 'recoveries' seen on flights were simply the vehicle descending back through the 10-11 km ceiling. The 18 s C/N0 blanking accompanies withholding (19/677 epochs while withholding vs 0/170 while publishing on gentle_alt).
 
 **u-blox NEO-M8T** (2026-08-20, 70 dB pad, TX gain 38): Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for flight use and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behavior is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behavior. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.
+
+**Quescan M10 (u-blox M10)** (2026-08-28, antenna, TX gain 26): A bare u-blox M10 die on a third-party carrier: ROM SPG 5.10, hardware 000A0000, PROTVER 34.10, and it answers the full private protocol down to SEC-UNIQID. It reports no MOD= string, which is what a raw chip does rather than a u-blox-branded module. Gate behavior is in family -- velocity around 515, altitude at 80 km, limits independent -- but it is the slowest part measured on the ALTITUDE gate: +2.3 s to close and 4.7-5.0 s to re-open, against 0.7-1.7 s elsewhere, which is why both its brackets inverted. Flown on the same ephemeris, start time and launch site as the SAM-M10Q, ZED-F9P and NEO-M8T, so its satellite geometry is directly comparable rather than merely similar. One velocity edge closed a single epoch early, blocking at 510 m/s, while every other edge on this part is consistent with 515; at 29 m/s^2 an epoch is 29 m/s wide, so that is quantization rather than a lower threshold.
 
 Across the four parts that implement a velocity gate at all the limit brackets
 to **(514, 516] m/s**, and wherever an altitude gate is genuinely COCOM it sits
@@ -337,6 +340,50 @@ reading anything into it.
 For contrast, the SAM-M10Q and NEO-M8T have **zero** in-envelope blocked epochs
 on descent (0/418 and 0/392), and the PX1125R's 57 are all at 2-4 satellites --
 the bench C/N0 oscillation, not the receiver.
+
+## Quescan M10, radiated (2026-08-28)
+
+A **bare u-blox M10 die on a third-party carrier**: `ROM SPG 5.10`, hardware
+`000A0000`, `PROTVER=34.10`, answering the full private protocol down to
+`SEC-UNIQID`, `MON-RF`, `MON-HW`, `MON-GNSS` and `MON-COMMS` at correct payload
+sizes. It reports **no `MOD=` string**, which is what a raw chip does rather
+than a u-blox-branded module. Found at **38400 baud**, the M9/M10 UART default,
+emitting NMEA only. TX gain **26**, off a broad plateau: 12-13 satellites and
+44-47 dBHz from gain 14 to 47, no compression at the top.
+
+| Capture | Result |
+|---|---|
+| `quescan_m10_spaceshot` | 3 windows, recovered 0.5 / 5.0 / 0.1 s |
+| `quescan_m10_gentle_alt` | 3 windows, recovered 0.3 / 4.7 / 0.9 s |
+
+Gate behavior is in family -- velocity around 515, altitude at 80 km, limits
+independent -- but it is **the slowest part measured on the altitude gate**:
++2.3 s to close and 4.7-5.0 s to re-open against 0.7-1.7 s everywhere else,
+which is why both its brackets invert.
+
+**Flown on the same ephemeris, start time and launch site as the SAM-M10Q,
+ZED-F9P and NEO-M8T**, so its satellite geometry is directly comparable rather
+than merely similar.
+
+### Three receivers, one sky, the same two satellites
+
+| | GPS:11 @ 70 deg | GPS:24 @ 51 deg | r(sin elev, dC/N0) | >=45 deg | <30 deg |
+|---|---|---|---|---|---|
+| ZED-F9P | 36 -> 0 dBHz | 34 -> 0 dBHz | -0.67 | -35 dB | +10 dB |
+| NEO-M8T | (same sky) | (same sky) | -0.45 | -28 dB | -3 dB |
+| Quescan M10 | 42 -> 24 dBHz | 39 -> 11 dBHz | -0.44 | -23 dB | -3 dB |
+
+Because the geometry was matched, all three lose **the same two physical
+satellites** rather than merely showing three separate correlations. The
+acceleration control holds here too: at 2.0 g, r = **+0.31** and >=45 deg at
+**+7 dB** -- the effect vanishes, as on the other two.
+
+One velocity edge closed a single epoch early, blocking at 510 m/s while every
+other edge on this part is consistent with 515. At 29 m/s^2 an epoch is 29 m/s
+wide, so that is quantization rather than a lower threshold -- and it is why
+`receiver_table.py` now estimates the threshold from the **median of every
+measured edge** instead of `max(fix)`/`min(blocked)`, which one sample can drag
+a whole rounding step.
 
 ## Experiments still owed on the first four receivers
 
