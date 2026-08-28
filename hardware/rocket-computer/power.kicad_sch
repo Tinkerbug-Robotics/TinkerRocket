@@ -20459,7 +20459,7 @@
 				)
 			)
 		)
-		(property "MPN" "CRCW201033R0FKEF"
+		(property "MPN" "RC2010FK-0733RL"
 			(at 403.86 40.64 0)
 			(hide yes)
 			(show_name no)
@@ -20470,7 +20470,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Vishay Dale"
+		(property "Mfr" "Yageo"
 			(at 403.86 40.64 0)
 			(hide yes)
 			(show_name no)
@@ -20628,7 +20628,7 @@
 				)
 			)
 		)
-		(property "MPN" "CRCW201033R0FKEF"
+		(property "MPN" "RC2010FK-0733RL"
 			(at 412.75 40.64 0)
 			(hide yes)
 			(show_name no)
@@ -20639,7 +20639,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Vishay Dale"
+		(property "Mfr" "Yageo"
 			(at 412.75 40.64 0)
 			(hide yes)
 			(show_name no)

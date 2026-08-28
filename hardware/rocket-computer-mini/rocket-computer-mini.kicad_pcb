@@ -52116,7 +52116,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "TBLH11-350-05-BK"
+		(property "Value" "JL212R-SMT-35005BP1"
 			(at 3.35 8.235 180)
 			(layer "B.Fab")
 			(hide yes)

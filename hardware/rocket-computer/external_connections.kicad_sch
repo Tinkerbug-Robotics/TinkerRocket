@@ -14075,7 +14075,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "TBLH11-350-05-BK"
+		(property "Value" "JL212R-SMT-35005BP1"
 			(at 130.81 71.7549 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14168,7 +14168,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MPN" "TBLH11-350-05-BK"
+		(property "MPN" "JL212R-SMT-35005BP1"
 			(at 109.22 70.485 0)
 			(hide yes)
 			(show_name no)
@@ -14179,7 +14179,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Same Sky (CUI)"
+		(property "Mfr" "JILN"
 			(at 109.22 70.485 0)
 			(hide yes)
 			(show_name no)
