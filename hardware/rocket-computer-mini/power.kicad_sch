@@ -11490,7 +11490,7 @@
 				)
 			)
 		)
-		(property "MPN" "CRCW201033R0FKEF"
+		(property "MPN" "RC2010FK-0733RL"
 			(at 210.185 67.945 90)
 			(hide yes)
 			(show_name no)
@@ -11501,7 +11501,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Vishay Dale"
+		(property "Mfr" "Yageo"
 			(at 210.185 67.945 90)
 			(hide yes)
 			(show_name no)
