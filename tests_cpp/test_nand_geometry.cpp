@@ -40,6 +40,27 @@ TEST(NandGeometry, GD5F1GQ5UE_MiniPart) {
     EXPECT_EQ(g.bitmapBytes(), 128u);
 }
 
+TEST(NandGeometry, MX35UF4G24AD_Z4I8_V7Part) {
+    // Byte-identical to the legacy fallback on purpose — the entry exists to
+    // silence the unknown-ID ERROR tripwire on the V7 board, not to change
+    // behaviour.
+    NandGeometry g{};
+    EXPECT_TRUE(nandGeometryForId(0xC2F5, &g));
+    EXPECT_EQ(g.page_size, 4096u);
+    EXPECT_EQ(g.pages_per_blk, 64u);
+    EXPECT_EQ(g.block_count, 2048u);
+    EXPECT_EQ(g.blockSize(), 256u * 1024u);
+    EXPECT_EQ(g.bitmapBytes(), 256u);
+}
+
+TEST(NandGeometry, TwoPlaneMacronixStaysUnlisted) {
+    // The plain MX35UF4G24AD (DID 0xB5) is a 2-plane part this single-plane
+    // driver cannot address. It must NOT get a table entry: falling back keeps
+    // the ERROR tripwire loud instead of silently claiming support.
+    NandGeometry g{};
+    EXPECT_FALSE(nandGeometryForId(0xC2B5, &g));
+}
+
 TEST(NandGeometry, UnknownIdFallsBackToLegacy) {
     // Fail-open on purpose: an unlisted part gets the pre-#671 behaviour
     // (right for any 4 Gbit/4 KB part, loudly logged by the driver), and the
@@ -69,7 +90,7 @@ TEST(NandGeometry, LegacyFallbackEqualsPre671Constants) {
 }
 
 TEST(NandGeometry, EveryTablePartFitsTheStaticMaxima) {
-    for (uint16_t id : {0xCD53, 0xC852, 0xC851}) {
+    for (uint16_t id : {0xCD53, 0xC852, 0xC851, 0xC2F5}) {
         NandGeometry g{};
         ASSERT_TRUE(nandGeometryForId(id, &g)) << std::hex << id;
         EXPECT_LE(g.page_size, NAND_PAGE_SIZE_MAX) << std::hex << id;
