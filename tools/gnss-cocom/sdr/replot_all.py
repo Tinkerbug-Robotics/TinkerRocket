@@ -44,6 +44,8 @@ JOBS = [
     ("neo_m8t",  "neo_m8t_t2_altramp",   "neo_m8t_t2_altramp",  "2026/08/19,22:30:00", "neo_m8t_t2_altramp.svg"),
     ("quescan_m10", "quescan_m10_spaceshot",  "quescan_m10_spaceshot",  "2026/08/18,08:30:00", "quescan_m10_spaceshot.svg"),
     ("quescan_m10", "quescan_m10_gentle_alt", "quescan_m10_gentle_alt", "2026/08/18,08:30:00", "quescan_m10_gentle_alt.svg"),
+    ("beitian_bn182", "beitian_bn182_spaceshot",  "beitian_bn182_spaceshot",  "2026/08/18,08:30:00", "beitian_bn182_spaceshot.svg"),
+    ("beitian_bn182", "beitian_bn182_gentle_alt", "beitian_bn182_gentle_alt", "2026/08/18,08:30:00", "beitian_bn182_gentle_alt.svg"),
 ]
 
 

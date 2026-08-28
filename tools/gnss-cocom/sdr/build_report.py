@@ -58,8 +58,9 @@ PLOTS = {
     "neo_m8t":  ("neo_m8t_spaceshot.svg", "neo_m8t_gentle_alt.svg"),
     "air530":   ("air530_spaceshot.svg", "air530_gentle_alt.svg"),
     "quescan_m10": ("quescan_m10_spaceshot.svg", "quescan_m10_gentle_alt.svg"),
+    "beitian_bn182": ("beitian_bn182_spaceshot.svg", "beitian_bn182_gentle_alt.svg"),
 }
-ORDER = ["px1125r", "sam_m10q", "quescan_m10", "zed_f9p", "neo_m8t", "air530"]
+ORDER = ["px1125r", "sam_m10q", "quescan_m10", "beitian_bn182", "zed_f9p", "neo_m8t", "air530"]
 
 
 def fig(name: str) -> str:

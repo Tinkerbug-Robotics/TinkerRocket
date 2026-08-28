@@ -155,25 +155,50 @@
    "velocity_edges": {
     "fix": [
      512,
-     511,
      512,
-     514,
      496,
-     513,
-     510,
-     497
+     510
     ],
     "blocked": [
      629,
      521,
-     521,
-     535,
      510,
-     522,
-     519,
-     518
+     519
     ]
    }
+  },
+  {
+   "id": "beitian_bn182",
+   "part": "Beitian BN-182 (u-blox M10)",
+   "bands": "L1 (GPS/GAL/BDS)",
+   "protocol": "UBX @ 115200",
+   "host": "standalone on a CP2102 USB-UART",
+   "path": "radiated",
+   "rf": "antenna, TX gain 20",
+   "date": "2026-08-28",
+   "runs": 3,
+   "velocity_gate_present": true,
+   "velocity_fix_max_mps": 511,
+   "velocity_blocked_min_mps": 343,
+   "velocity_edges": {
+    "fix": [
+     496
+    ],
+    "blocked": [
+     510
+    ]
+   },
+   "altitude_fix_max_km": 80.08,
+   "altitude_blocked_min_km": 79.63,
+   "altitude_gate_cause": "cocom",
+   "combination": "independent",
+   "recovery_s": [
+    0.5,
+    11.3
+   ],
+   "sats_p05": 8,
+   "sats_median": 12,
+   "notes": "The same u-blox M10 die and firmware as the Quescan -- identical MON-VER, different chip serial (dee2c50fbf vs c8bf908e28) -- flown on the same ephemeris, start time and launch site. It behaves like its MIRROR IMAGE on recovery: fast on altitude (1.0 s) and slow on velocity (10.1 s), where the Quescan is slow on altitude (5.0 s) and fast on velocity (0.1 s). On three of four velocity windows it does not re-open when speed drops below 515 but waits until 328-410 m/s, with 9-13 satellites held throughout, so it is the gate rather than re-acquisition. Transmit level is NOT the cause: a control flight at gain 26, matching the Quescan, reproduced every latency to the tenth of a second (0.5 / 1.0 / 10.1 s) and every shut lag. What differs and was not controlled is configuration in the modules' own flash -- this one runs GPS+Galileo+BeiDou with GLONASS off, the Quescan has GLONASS enabled, and CFG-NAVSPG holds more than the dynamic model. The practical lesson is that the same chip does not predict gate behavior: two M10 modules from different vendors differ by two orders of magnitude on velocity-gate recovery, and no datasheet says which you are buying."
   }
  ]
 }

@@ -355,6 +355,15 @@ Textbook behavior: both export limits enforced independently, velocity at 510&nd
 The tightest data on the bench: never fewer than four satellites in either flight, so every withheld epoch is unambiguously the gate and not a link failure. It is also the only part fed by antenna rather than by cable.
 <!--/blurb-->
 
+<!--#blurb beitian_bn182-->
+The same u-blox M10 die and firmware as the Quescan, on another vendor's board,
+flown on the same sky &mdash; and it behaves like its mirror image. Where the
+Quescan is slow on altitude and fast on velocity, this one is fast on altitude
+and takes ten seconds to re-open on velocity, waiting until the vehicle has shed
+another 180&nbsp;m/s. A control flight 6&nbsp;dB hotter reproduced every latency
+exactly, so it is not signal level. The same chip does not predict the gate.
+<!--/blurb-->
+
 <!--#blurb zed_f9p-->
 Same thresholds as the others, but 2&ndash;3&nbsp;s slow to <em>close</em> the altitude gate &mdash; 400&ndash;600&nbsp;m of overshoot above 80&nbsp;km with position still being published.
 <!--/blurb-->

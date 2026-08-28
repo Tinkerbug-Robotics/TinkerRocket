@@ -61,44 +61,48 @@ def velocity_threshold(r):
     no velocity gate. Median of every measured gate edge -- see vel_cell."""
     if r.get("velocity_gate_present") is False:
         return None
+    # CLOSING edges only, and each edge reduced to its own midpoint before
+    # taking the median across edges.
+    #
+    # Opening edges do not measure the threshold on a part that is slow to
+    # re-open: the Beitian waits ~10 s, by which time the vehicle has shed
+    # 180 m/s, so its opening edges sit at 328-410 m/s and dragged this
+    # estimate to 410 -- a latency reported as a threshold. Per-edge midpoints
+    # then median is also robust to one coarse edge: a 15 g boost crossing
+    # brackets only to +/-60 m/s, and averaging raw values lets it dominate.
     edges = r.get("velocity_edges")
     if edges:
-        vals = sorted(edges.get("fix", []) + edges.get("blocked", []))
-        if vals:
-            return _round_to(statistics.median(vals), 5)
+        pairs = list(zip(edges.get("fix", []), edges.get("blocked", [])))
+        if pairs:
+            mids = sorted((f + b) / 2.0 for f, b in pairs)
+            return _round_to(statistics.median(mids), 5)
     lo, hi = r.get("velocity_fix_max_mps"), r.get("velocity_blocked_min_mps")
     if lo is None or hi is None:
         return None
     return _round_to((lo + hi) / 2.0, 5)
 
 
-def vel_cell(r):
-    """Velocity gate, rounded, or a bound when the part has none.
+def vel_marker(r):
+    """Footnote key for a velocity estimate that needs qualifying, or None."""
+    e = r.get("velocity_edges")
+    if e and len(e.get("fix", [])) < 2:
+        return "few edges"
+    return None
 
-    A receiver that never withholds is not a missing measurement, it is a
-    result -- the Air530 held a fix to 900 m/s, 1.75x the export limit -- and
-    printing "--" would read as untested. `velocity_gate_present: false` makes
-    it say so.
+
+def vel_cell(r):
+    """Rendered velocity-gate cell: the estimate, or a bound when there is no gate.
+
+    Calls velocity_threshold rather than repeating it. A second copy of this
+    rule has now drifted twice -- once between this file and replot_all.py, and
+    once between these two functions, printing 510 here while the estimator said
+    515. One implementation, called from everywhere.
     """
     if r.get("velocity_gate_present") is False:
         v = r.get("velocity_fix_max_mps")
         return f"none to {v:.0f} m/s" if v else "none observed"
-    # Prefer every measured gate edge over the two extremes. Edges bracket the
-    # threshold from both sides, so their median sits on it -- and unlike
-    # max(fix)/min(blocked) it does not move when one epoch closes early. The
-    # Quescan M10 blocked once at 510 m/s while every other edge on it was
-    # consistent with 515; at 29 m/s^2 one epoch is 29 m/s wide, so that single
-    # sample dragged the midpoint a whole rounding step and made the part look
-    # different from the others when it is not.
-    edges = r.get("velocity_edges")
-    if edges:
-        vals = sorted(edges.get("fix", []) + edges.get("blocked", []))
-        if vals:
-            return f"{_round_to(statistics.median(vals), 5):.0f} m/s"
-    lo, hi = r.get("velocity_fix_max_mps"), r.get("velocity_blocked_min_mps")
-    if lo is None or hi is None:
-        return "--"
-    return f"{_round_to((lo + hi) / 2.0, 5):.0f} m/s"
+    est = velocity_threshold(r)
+    return f"{est:.0f} m/s" if est is not None else "--"
 
 
 # Footnote markers, in the order they are first used. Kept as markers rather
@@ -114,6 +118,11 @@ FOOTNOTES = {
                   "Not an export gate. This ceiling sits below the COCOM "
                   "altitude, and the receiver stops publishing there for reasons "
                   "unrelated to export control."),
+    "few edges": ("\u00b6",
+                  "Rests on a single closing edge, so it is bracketed only to "
+                  "the width of one navigation epoch. This part was slow enough "
+                  "to re-open that the gate had not cleared before the next "
+                  "window, leaving no fix to close again."),
     "dyn model": ("\u00a7",
                   "The u-blox dynamic model's own altitude ceiling, not an export "
                   "gate. Airborne <4 g is specified at 50,000 m; no u-blox model "
@@ -145,7 +154,8 @@ def rows(d):
             "part": r["part"],
             "path": r["path"],
             "runs": r["runs"],
-            "vel": vel_cell(r),
+            "vel": vel_cell(r) + (" " + FOOTNOTES[vel_marker(r)][0]
+                                  if vel_marker(r) else ""),
             "alt": alt_cell(r)[0],
             "comb": r["combination"],
             "rec": (f"{r['recovery_s'][0]:.1f}-{r['recovery_s'][1]:.1f} s"
@@ -169,10 +179,10 @@ def used_footnotes(d):
     """(marker, text) for the footnotes this table actually needs, in order."""
     seen, out = set(), []
     for r in d["receivers"]:
-        key = alt_cell(r)[1]
-        if key and key not in seen:
-            seen.add(key)
-            out.append(FOOTNOTES[key])
+        for key in (alt_cell(r)[1], vel_marker(r)):
+            if key and key not in seen:
+                seen.add(key)
+                out.append(FOOTNOTES[key])
     return out
 
 
