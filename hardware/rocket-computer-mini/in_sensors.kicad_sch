@@ -6554,7 +6554,7 @@
 				)
 			)
 		)
-		(property "MPN" "XL-1005UGC"
+		(property "MPN" "APHHS1005QBC/D"
 			(at 264.795 57.15 0)
 			(hide yes)
 			(show_name no)
@@ -6565,7 +6565,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Xinglight"
+		(property "Mfr" "Kingbright"
 			(at 264.795 57.15 0)
 			(hide yes)
 			(show_name no)

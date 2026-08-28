@@ -121,6 +121,11 @@ def pcb_refs(board_dir: Path) -> set[str]:
 # Boards not gated, and why.  Everything else is gated by DEFAULT, so a new
 # board is covered the day it lands rather than the day someone remembers.
 EXEMPT = {
+    'rocket-computer':
+        'V10 rework in progress — the 27 pack-fire/supercap parts are drawn but '
+        'unplaced and the DTC123J land fix exposed pyro-area routing to redo '
+        '(must not fab as-is; see the 2026-08-26 rework commit). Gate it again '
+        'once the V10 layout is complete.',
     'rocket-computer-mini':
         'layout in progress — never tagged or fabbed, ~40 parts still unplaced '
         '(U32 the ESP32-S3 among them). Gate it once the layout is complete.',
