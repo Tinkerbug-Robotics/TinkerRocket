@@ -12222,4 +12222,38 @@
 			)
 		)
 	)
+	(wire
+		(pts
+			(xy 212.725 78.74) (xy 217.805 78.74)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1beb4016-3b3e-4a76-9f31-f28bc1a1826b")
+	)
+	(global_label "OC_ARM_EN"
+		(shape input)
+		(at 217.805 78.74 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "dd8ce5d5-46b3-480d-9337-312c237c75d4")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 217.805 78.74 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
 )
