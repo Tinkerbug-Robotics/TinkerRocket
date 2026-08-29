@@ -289,18 +289,18 @@
       <span>21 Aug 2026</span>
     </div>
     <h1>Hobby Grade GNSS Receiver Altitude and Speed Limits for High Performance Rockets</h1>
-    <p class="standfirst">Five hobby-grade GNSS receivers were flown against identical
+    <p class="standfirst">Seven hobby-grade GNSS receivers were flown against identical
       simulated rocket trajectories to find where each one stops publishing
       state updates. Receivers are typically limited to 'COCOM' limits which come from
       a Cold War international agreement to place limits on GNSS receivers and keep
       them from being used in ballistic missile guidance.  Limits were originally 18 km
-      and 515 m/s. The 18 km limit seems to have been removed more recently in favor of a
-      600 m/s limit from the Missile Technology Control Regime (MTCR Annex
-      Handbook 2017, Section 11.A.3). Receivers still implement limits differently and generally still implement
-      altitude limits, sometimes wildly different from the COCOM limit. The purpose of this
-      work was to characterize the actual performance using a software-defined radio to
-      inject simulated trajectories into several readily available inexpensive receivers.</p>
-    <span class="status status-live">Five parts were measured</span>
+      (60,000 ft) and 515 m/s &mdash; The 18 km limit seems to have been removed more recently
+      in favor of a 600 m/s limit from the Missile Technology Control Regime (MTCR Annex
+      Handbook 2017, Section 11.A.3). Receivers still implement limits differently and generally 
+      still implement altitude limits, sometimes very different from the COCOM limit. The 
+      purpose of this work was to characterize the actual performance using a software-defined 
+      radio to inject simulated trajectories into several readily available inexpensive receivers.</p>
+    <span class="status status-live">Seven parts were measured</span>
   </header>
 
   <section>
@@ -366,7 +366,7 @@
     </tr>
     <tr>
       <td class="part">Quescan M10 (u-blox M10)</td>
-      <td>radiated</td>
+      <td>radiated, Faraday cage</td>
       <td>515 m/s</td>
       <td>80 km †</td>
       <td>independent</td>
@@ -374,7 +374,7 @@
     </tr>
     <tr>
       <td class="part">Beitian BN-182 (u-blox M10)</td>
-      <td>radiated</td>
+      <td>radiated, Faraday cage</td>
       <td>505 m/s ¶</td>
       <td>80 km †</td>
       <td>independent</td>
@@ -422,20 +422,12 @@
       <p>How long the receiver takes to publish a position again after the
         vehicle drops back inside the limits. It is measured from the moment the
         trajectory clears the limit to the first valid fix that follows.</p>
-      <p><strong>This is what determines whether the gate costs you anything.</strong>
-        The blanking itself is unavoidable on any of these parts, and on a
-        typical flight the vehicle is only over the speed limit for a few tens of
-        seconds. If position comes back within a second of dropping below it, the
-        result is a short gap in the log and the navigation filter reacquires
-        with the vehicle still climbing. If it takes a minute, the receiver is
-        silent through apogee and much of the descent &mdash; the part of the
-        flight where a position fix is most useful for recovery.</p>
-      <p>On these parts the cost is small: three of the four recover within a
-        second and a half, and the NEO-M8T within 3.1 s, against speed-limit
-        excursions that last 58 to 78 s on the two test flights. It is not a
-        number any datasheet reports, and measuring it needs a trajectory that
-        comes back under the limit &mdash; a ramp that only crosses the threshold
-        shows where the gate closes but never when it re-opens.</p>
+      <p>The shorter the delay, the faster you get fix back after passing below
+        a threshold. Since the receivers continue to operate and have a fix 
+        internally when exceeding the limits, they should be able to report
+        their fix quickly once inside the limits again. Three of the receivers  
+        tested recover in under 2 seconds, and the NEO-M8T within 3.1 s, but 
+        two take between 5 and 11 seconds.</p>
     </div>
   </section>
 
@@ -2107,7 +2099,7 @@ depend on it.</p>
 
     <div class="prose">
       <h3>u-blox SAM-M10Q</h3>
-      <p class="note">UBX &middot; radiated, Faraday cage &middot; 100 dB pad, L1 quarter-wave, TX gain 12</p>
+      <p class="note">UBX &middot; radiated, Faraday cage &middot; 100 dB pad, L1 quarter-wave in Faraday cage, TX gain 12</p>
       <p>The tightest data on the bench: never fewer than four satellites in either flight, so every withheld epoch is unambiguously the gate and not a link failure. It is also the only part fed by antenna rather than by cable.</p>
       <p><strong>Velocity gate</strong> 514-516 m/s &nbsp;&middot;&nbsp;
          <strong>Altitude gate</strong> ~80.16 km &nbsp;&middot;&nbsp;
@@ -3589,7 +3581,7 @@ depend on it.</p>
 
     <div class="prose">
       <h3>Quescan M10 (u-blox M10)</h3>
-      <p class="note">UBX @ 38400 &middot; radiated &middot; antenna, TX gain 26</p>
+      <p class="note">UBX @ 38400 &middot; radiated, Faraday cage &middot; L1 antenna in Faraday cage, TX gain 26</p>
       <p>A bare u-blox M10 die on a third-party carrier &mdash; it answers the full
 private protocol down to <code>SEC-UNIQID</code> but reports no module name,
 which is what a raw chip does. Gate behavior is in family, but it is the slowest
@@ -5168,7 +5160,7 @@ re-open, against under two seconds everywhere else.</p>
 
     <div class="prose">
       <h3>Beitian BN-182 (u-blox M10)</h3>
-      <p class="note">UBX @ 115200 &middot; radiated &middot; antenna, TX gain 20</p>
+      <p class="note">UBX @ 115200 &middot; radiated, Faraday cage &middot; L1 antenna in Faraday cage, TX gain 20</p>
       <p>The same u-blox M10 die and firmware as the Quescan, on another vendor's board,
 flown on the same sky &mdash; and it behaves like its mirror image. Where the
 Quescan is slow on altitude and fast on velocity, this one is fast on altitude
@@ -11938,5 +11930,248 @@ exactly, so it is not signal level. The same chip does not predict the gate.</p>
         what the bench looks like without it.</figcaption>
     </figure>
   </section>
+
+    <section>
+      <h2><span class="n">06</span>What the boost drops</h2>
+      <div class="prose">
+        <p>Everything above is about the export gate: the moment a receiver
+          refuses to publish a position it is perfectly capable of computing.
+          This section is about a different kind of loss, and one that is not a
+          policy decision at all. Through the burn every receiver keeps
+          publishing, but each one stops tracking some of its satellites &mdash;
+          and which ones it loses is not random.</p>
+
+        <p><strong>Doppler rate is the reason.</strong> An L1 carrier shifts
+          5.25&nbsp;Hz for every m/s of range rate, so under acceleration the
+          shift is not merely large, it is <em>moving</em>, and the tracking loop
+          has to follow it. How fast it moves depends on where the satellite sits
+          relative to the velocity vector: the rate goes as
+          <code>a &times; sin(elevation)</code>. For a vertical boost at
+          13.5&nbsp;g that is 693&nbsp;Hz/s toward zenith against 60&nbsp;Hz/s near
+          the horizon &mdash; an elevenfold spread across the sky at the same
+          instant. If the tracking loop is what limits these parts, the loss should
+          be concentrated overhead, and it should scale with acceleration.</p>
+
+        <p>Both hold. Across the four receivers that report per-satellite
+          elevation, the two highest satellites in the sky are the hardest hit
+          every time, while the nine below 30&deg; are flat or slightly better
+          off:</p>
+      </div>
+
+      <figure>
+<svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Per-satellite carrier-to-noise change through the burn plotted against satellite elevation, at 13.5 g and at 2.0 g. At 13.5 g the high-elevation satellites lose 15 to 47 dB on every receiver; at 2.0 g there is no elevation trend.">
+<style>.ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}.gl{stroke:var(--rule,#DDE2E9);stroke-width:1;stroke-dasharray:3 3}.zl{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}.lbl{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-3,#79808F)}.ttl{font-family:var(--f-display,sans-serif);font-size:11px;font-weight:600;fill:var(--ink-2,#4A5261)}.rr{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-2,#4A5261)}</style>
+<text class="ttl" x="54" y="18">13.5 g boost</text>
+<line class="gl" x1="54.0" y1="326.0" x2="446.0" y2="326.0"/>
+<text class="lbl" x="48.0" y="329.0" text-anchor="end">-50</text>
+<line class="gl" x1="54.0" y1="282.6" x2="446.0" y2="282.6"/>
+<text class="lbl" x="48.0" y="285.6" text-anchor="end">-40</text>
+<line class="gl" x1="54.0" y1="239.2" x2="446.0" y2="239.2"/>
+<text class="lbl" x="48.0" y="242.2" text-anchor="end">-30</text>
+<line class="gl" x1="54.0" y1="195.8" x2="446.0" y2="195.8"/>
+<text class="lbl" x="48.0" y="198.8" text-anchor="end">-20</text>
+<line class="gl" x1="54.0" y1="152.5" x2="446.0" y2="152.5"/>
+<text class="lbl" x="48.0" y="155.5" text-anchor="end">-10</text>
+<line class="gl" x1="54.0" y1="109.1" x2="446.0" y2="109.1"/>
+<text class="lbl" x="48.0" y="112.1" text-anchor="end">+0</text>
+<line class="gl" x1="54.0" y1="65.7" x2="446.0" y2="65.7"/>
+<text class="lbl" x="48.0" y="68.7" text-anchor="end">+10</text>
+<line class="zl" x1="54.0" y1="109.1" x2="446.0" y2="109.1"/>
+<line class="ax" x1="54.0" y1="44.0" x2="54.0" y2="326.0"/>
+<text class="lbl" x="54.0" y="340.0" text-anchor="middle">0</text>
+<text class="lbl" x="132.4" y="340.0" text-anchor="middle">15</text>
+<text class="lbl" x="210.8" y="340.0" text-anchor="middle">30</text>
+<text class="lbl" x="289.2" y="340.0" text-anchor="middle">45</text>
+<text class="lbl" x="367.6" y="340.0" text-anchor="middle">60</text>
+<text class="lbl" x="446.0" y="340.0" text-anchor="middle">75</text>
+<text class="lbl" x="250.0" y="354.0" text-anchor="middle">satellite elevation, degrees</text>
+<circle cx="200.3" cy="83.0" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<path d="M212.0,309.0 L220.0,317.0 M212.0,317.0 L220.0,309.0" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<path d="M415.9,274.3 L423.9,282.3 M415.9,282.3 L423.9,274.3" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="101.0" cy="61.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="142.9" cy="113.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="158.5" cy="78.7" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="121.9" cy="113.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="195.1" cy="100.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="252.6" cy="117.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="189.9" cy="111.2" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<path d="M316.6,269.9 L324.6,277.9 M316.6,277.9 L324.6,269.9" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="80.1" cy="70.0" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="111.5" cy="141.6" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="200.3" cy="165.5" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="216.0" cy="139.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="419.9" cy="178.5" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="101.0" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="142.9" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="158.5" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="121.9" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="195.1" cy="161.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="252.6" cy="195.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="189.9" cy="143.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="320.6" cy="217.5" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="80.1" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="111.5" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="200.3" cy="96.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="216.0" cy="96.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="419.9" cy="174.2" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="101.0" cy="139.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="142.9" cy="135.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="158.5" cy="135.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="121.9" cy="143.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="195.1" cy="135.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="252.6" cy="169.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="189.9" cy="130.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="320.6" cy="247.9" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="80.1" cy="139.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="111.5" cy="135.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="200.3" cy="221.9" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="216.0" cy="239.2" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="419.9" cy="161.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="101.0" cy="70.0" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="142.9" cy="91.7" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="158.5" cy="113.4" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="121.9" cy="70.0" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="195.1" cy="70.0" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="252.6" cy="226.2" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="189.9" cy="78.7" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="320.6" cy="221.9" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="80.1" cy="122.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="116.7" cy="122.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<text class="rr" x="444.0" y="56.0" text-anchor="end">ZED-F9P  r = -0.71</text>
+<text class="rr" x="444.0" y="68.0" text-anchor="end">NEO-M8T  r = -0.84</text>
+<text class="rr" x="444.0" y="80.0" text-anchor="end">Quescan M10  r = -0.50</text>
+<text class="rr" x="444.0" y="92.0" text-anchor="end">Beitian BN-182  r = -0.59</text>
+<text class="ttl" x="492" y="18">2.0 g boost</text>
+<line class="gl" x1="492.0" y1="326.0" x2="884.0" y2="326.0"/>
+<line class="gl" x1="492.0" y1="282.6" x2="884.0" y2="282.6"/>
+<line class="gl" x1="492.0" y1="239.2" x2="884.0" y2="239.2"/>
+<line class="gl" x1="492.0" y1="195.8" x2="884.0" y2="195.8"/>
+<line class="gl" x1="492.0" y1="152.5" x2="884.0" y2="152.5"/>
+<line class="gl" x1="492.0" y1="109.1" x2="884.0" y2="109.1"/>
+<line class="gl" x1="492.0" y1="65.7" x2="884.0" y2="65.7"/>
+<line class="zl" x1="492.0" y1="109.1" x2="884.0" y2="109.1"/>
+<line class="ax" x1="492.0" y1="44.0" x2="492.0" y2="326.0"/>
+<text class="lbl" x="492.0" y="340.0" text-anchor="middle">0</text>
+<text class="lbl" x="570.4" y="340.0" text-anchor="middle">15</text>
+<text class="lbl" x="648.8" y="340.0" text-anchor="middle">30</text>
+<text class="lbl" x="727.2" y="340.0" text-anchor="middle">45</text>
+<text class="lbl" x="805.6" y="340.0" text-anchor="middle">60</text>
+<text class="lbl" x="884.0" y="340.0" text-anchor="middle">75</text>
+<text class="lbl" x="688.0" y="354.0" text-anchor="middle">satellite elevation, degrees</text>
+<circle cx="638.3" cy="156.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="654.0" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="857.9" cy="87.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="539.0" cy="143.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="580.9" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="596.5" cy="104.7" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="559.9" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="633.1" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="690.6" cy="113.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="627.9" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="758.6" cy="104.7" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="518.1" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="549.5" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="638.3" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="654.0" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="857.9" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="539.0" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="580.9" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="596.5" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="559.9" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="633.1" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="690.6" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="627.9" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="758.6" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="518.1" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="549.5" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="638.3" cy="109.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="654.0" cy="117.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="857.9" cy="113.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="539.0" cy="109.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="580.9" cy="113.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="596.5" cy="57.0" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="559.9" cy="113.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="633.1" cy="113.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="690.6" cy="87.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="627.9" cy="113.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="758.6" cy="52.7" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="518.1" cy="109.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="554.7" cy="109.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="638.3" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="654.0" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="857.9" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="539.0" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="580.9" cy="122.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="596.5" cy="135.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="559.9" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="633.1" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="690.6" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="627.9" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="758.6" cy="74.4" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="518.1" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="549.5" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<text class="rr" x="882.0" y="56.0" text-anchor="end">ZED-F9P  r = +0.35</text>
+<text class="rr" x="882.0" y="68.0" text-anchor="end">NEO-M8T  r = n/a</text>
+<text class="rr" x="882.0" y="80.0" text-anchor="end">Quescan M10  r = +0.28</text>
+<text class="rr" x="882.0" y="92.0" text-anchor="end">Beitian BN-182  r = +0.41</text>
+<circle cx="58.0" cy="367.0" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<text class="lbl" x="67.0" y="370.0">ZED-F9P</text>
+<circle cx="113.2" cy="367.0" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<text class="lbl" x="122.2" y="370.0">NEO-M8T</text>
+<circle cx="168.4" cy="367.0" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<text class="lbl" x="177.4" y="370.0">Quescan M10</text>
+<circle cx="246.0" cy="367.0" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<text class="lbl" x="255.0" y="370.0">Beitian BN-182</text>
+<path d="M337.4,363.0 L345.4,371.0 M337.4,371.0 L345.4,363.0" stroke="var(--ink-3,#79808F)" stroke-width="1.8" fill="none"/>
+<text class="lbl" x="350.4" y="370.0">lost lock entirely</text>
+<text class="lbl" x="54.0" y="390.0">change in carrier-to-noise from the pad baseline to the burn, per satellite; r is against sin(elevation)</text>
+</svg>
+        <figcaption>Every satellite each receiver tracked on the pad, plotted by
+          elevation against what the burn did to its carrier. Same sky, same
+          scenario files, same satellites &mdash; only the acceleration
+          differs.</figcaption>
+      </figure>
+
+      <div class="prose">
+        <p><strong>Acceleration is the control.</strong> The 2.0&nbsp;g flight
+          uses the same geometry and the same satellites, and the effect does not
+          merely weaken, it reverses: the correlation against
+          <code>sin(elevation)</code> runs &minus;0.50 to &minus;0.84 at
+          13.5&nbsp;g and comes back positive on every part at 2.0&nbsp;g. Since
+          each channel is transmitted at equal power, the elevation dependence
+          cannot come from the injection; it has to be receiver-side.</p>
+
+        <p><strong>What actually dropped.</strong> Only the ZED-F9P lost
+          satellites outright, three of thirteen: GPS&nbsp;11 at 70&deg;,
+          GPS&nbsp;24 at 51&deg; and GPS&nbsp;6 at 31&deg;, each from a healthy
+          carrier to nothing. The other three receivers leaned on the same
+          satellites &mdash; 12 to 32&nbsp;dB off the two highest &mdash; but held
+          lock on all of them. The ranking by elevation is consistent across
+          parts even where the outcome is not.</p>
+
+        <p><strong>What did not drop is the position.</strong> No receiver went
+          to no-lock during any burn. Losing three satellites out of thirteen
+          costs geometry, not a fix. On this bench the thing that stops a position
+          is the gate, not the dynamics.</p>
+
+        <p class="note">Two caveats carry real weight. Only two satellites sit
+          above 45&deg; in this geometry, so the band that shows the effect most
+          clearly is also the thinnest; and all four parts that report elevation
+          are u-blox, spanning three generations (M8, M10, F9) but one vendor.
+          What makes the result credible is four receivers agreeing and the effect
+          reversing with acceleration.</p>
+
+        <p>One boundary is worth stating plainly, because it decides how far this
+          generalizes. The rig injects smooth, clean, interpolated motion. A real
+          motor adds broadband vibration that modulates carrier phase directly,
+          plume attenuation, body shadowing and antenna-pattern nulls as the
+          vehicle rolls, and a signal level well below the 32&ndash;51&nbsp;dBHz
+          delivered here &mdash; and loop stress multiplies with low carrier. A
+          loop that holds 693&nbsp;Hz/s at 45&nbsp;dBHz can fail at 32. This bench
+          characterizes the export gate; a part that sails through boost here may
+          still drop lock on a real motor, and nothing measured here contradicts
+          that.</p>
+      </div>
+    </section>
 
 </div>

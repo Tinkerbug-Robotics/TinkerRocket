@@ -20,6 +20,7 @@ Placeholders in report_text.html are substituted, not formatted:
     {{FIG_BLOCK_DIAGRAM}}  }
     {{FIG_M8T_ALTRAMP}}    }  inline SVG from results/figures/
     {{FIG_DIP}}            }
+    {{FIG_BOOST_ELEV}}     }
 
 Per-receiver blurbs are marked in report_text.html as
 
@@ -163,6 +164,7 @@ def build():
         "{{FIG_BLOCK_DIAGRAM}}": fig("rig_block_diagram.svg"),
         "{{FIG_M8T_ALTRAMP}}": fig("neo_m8t_t2_altramp.svg"),
         "{{FIG_DIP}}": fig("air530_dip_periodicity.svg"),
+        "{{FIG_BOOST_ELEV}}": fig("boost_elevation.svg"),
     }
     missing = [k for k in fills if k not in text]
     for k, v in fills.items():

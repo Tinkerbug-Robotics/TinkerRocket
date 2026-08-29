@@ -274,8 +274,8 @@ neither table nor report should be hand-edited.
 | u-blox ZED-F9P (ArduSimple) | conducted | 515 m/s | 80 km † | independent | 0.1-1.0 s |
 | Air530 (AT6558R) | conducted | none to 900 m/s | 10 km ‡ | n/a -- no velocity gate | n/a |
 | u-blox NEO-M8T | conducted | 515 m/s | 50 km § | independent | 0.9-3.1 s |
-| Quescan M10 (u-blox M10) | radiated | 515 m/s | 80 km † | independent | 0.1-5.0 s |
-| Beitian BN-182 (u-blox M10) | radiated | 505 m/s ¶ | 80 km † | independent | 0.5-11.3 s |
+| Quescan M10 (u-blox M10) | radiated, Faraday cage | 515 m/s | 80 km † | independent | 0.1-5.0 s |
+| Beitian BN-182 (u-blox M10) | radiated, Faraday cage | 505 m/s ¶ | 80 km † | independent | 0.5-11.3 s |
 
 † Slow to close: this part held a fix 2-3 s past the limit on both flights, about 400-600 m of overshoot above 80 km with position still being published. The threshold itself is normal.
 
@@ -521,7 +521,8 @@ one receiver connects at a time.
 
 **No receiver loses its POSITION during the burn on this bench. Individual
 satellites are a different story, and the ones it loses are exactly the ones
-carrying the most Doppler.**
+carrying the most Doppler.** Measured on four receivers with `boost_sats.py`;
+written up as section 06 of the report.
 
 The dynamics themselves are real and correctly injected. `spaceshot` peaks at
 132 m/s^2 (13.5 g), which is **695 Hz/s** of L1 Doppler rate against a peak shift
@@ -550,23 +551,56 @@ tracked satellite:
 Acceleration is the control. Same geometry, same scenario, 4.5x less
 acceleration:
 
-| | peak | r(sin elev, dC/N0) | >=45 deg | <30 deg |
-|---|---|---|---|---|
-| ZED-F9P spaceshot | 13.5 g | **-0.67** | **-35 dB** | +10 dB |
-| ZED-F9P gentle_alt | 2.0 g | +0.54 | +8 dB | +2 dB |
-| NEO-M8T spaceshot | 13.5 g | **-0.45** | **-28 dB** | -3 dB |
-| NEO-M8T gentle_alt | 2.0 g | -- | 0 dB | 0 dB |
+`boost_sats.py` recomputes this from the raw NAV-SAT in any capture, so it now
+covers every receiver that reports per-satellite elevation -- four of the seven.
+The other three cannot answer the question: the Air530 speaks NMEA, the PX1125R
+SkyTraq binary, and the SAM-M10Q archive comes through the console diagnostic
+that synthesized elevation as zero (see the planned trial below).
 
-Two independent receivers show it at 13.5 g and neither shows it at 2.0 g. Every
-channel is transmitted at equal power (`-p`), so the elevation dependence has to
-be receiver-side. This is Doppler-rate stress on the tracking loops, and the rig
-does reproduce it.
+    python3 boost_sats.py results/zed_f9p_spaceshot.log.gz \
+                          results/zed_f9p_spaceshot.scenario.json
+
+| | peak | r(sin elev, dC/N0) | >=45 deg | <30 deg | lost |
+|---|---|---|---|---|---|
+| ZED-F9P spaceshot | 13.5 g | **-0.71** | **-38 dB** | +2 dB | 3 |
+| ZED-F9P gentle_alt | 2.0 g | +0.35 | +3 dB | +0 dB | 0 |
+| NEO-M8T spaceshot | 13.5 g | **-0.84** | **-20 dB** | -4 dB | 0 |
+| NEO-M8T gentle_alt | 2.0 g | -- | +0 dB | +0 dB | 0 |
+| Quescan M10 spaceshot | 13.5 g | **-0.50** | **-24 dB** | -6 dB | 0 |
+| Quescan M10 gentle_alt | 2.0 g | +0.28 | +6 dB | +0 dB | 0 |
+| Beitian BN-182 spaceshot | 13.5 g | **-0.59** | **-19 dB** | +4 dB | 0 |
+| Beitian BN-182 gentle_alt | 2.0 g | +0.41 | +4 dB | +0 dB | 0 |
+
+**Four independent receivers show it at 13.5 g and none shows it at 2.0 g**, where
+the correlation does not merely weaken but comes back positive on every part.
+Every channel is transmitted at equal power (`-p`), so the elevation dependence
+has to be receiver-side. This is Doppler-rate stress on the tracking loops, and
+the rig does reproduce it.
+
+The ranking is consistent even where the outcome is not. GPS:11 (70 deg) and
+GPS:24 (51 deg) are the two worst-hit satellites on all four parts -- -39/-38 on
+the ZED-F9P, -16/-25 on the NEO-M8T, -15/-32 on the Quescan, -12/-26 on the
+Beitian -- but only the ZED-F9P actually drops any of them.
 
 Caveats: n=2 in the >=45 deg band, because that geometry simply does not put
-many satellites overhead, and the result is sensitive to how the burn window and
-baseline are chosen -- a first pass with a slightly different window showed no
-effect at all. What makes it credible is two receivers agreeing and the
-effect reversing with acceleration.
+many satellites overhead; all four parts are u-blox, spanning three generations
+(M8, M10, F9) but one vendor; and the result is sensitive to how the burn window
+and baseline are chosen -- a first pass with a slightly different window showed
+no effect at all. `boost_sats.py` fixes the windows (baseline is the 60 s of pad
+time ending 5 s before ignition, burn starts 1 s after) so the choice is at least
+the same for every part. The earlier hand-computed pass gave -0.67 and -0.45 for
+the two receivers it covered, against -0.71 and -0.84 here; the signs and the
+reversal are robust, the second decimal is not.
+
+The NEO-M8T deserves its own asterisk: it reports a flat 51 dBHz for all 13
+satellites on the pad -- one distinct value, against 10 on the ZED-F9P -- so its
+reported carrier is clamped at the top of its range at this injection level. Its
+baseline therefore carries no per-satellite information and its delta is just the
+burn value minus a constant, which is why its r moved furthest between passes
+(-0.45 to -0.84). The sign still means what it says, but read that row as a
+ranking of burn C/N0 by elevation rather than a change from a measured baseline.
+Backing the injection level off until its pad C/N0 spreads would settle it. What makes it credible is four
+receivers agreeing and the effect reversing with acceleration.
 
 **The SAM-M10Q could not be checked this way, and now can.** Its archived
 captures come through the `[COCOM] S` console diagnostic, which logged

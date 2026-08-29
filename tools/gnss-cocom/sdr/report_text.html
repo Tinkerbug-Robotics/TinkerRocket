@@ -33,18 +33,18 @@
       <span>21 Aug 2026</span>
     </div>
     <h1>Hobby Grade GNSS Receiver Altitude and Speed Limits for High Performance Rockets</h1>
-    <p class="standfirst">Five hobby-grade GNSS receivers were flown against identical
+    <p class="standfirst">Seven hobby-grade GNSS receivers were flown against identical
       simulated rocket trajectories to find where each one stops publishing
       state updates. Receivers are typically limited to 'COCOM' limits which come from
       a Cold War international agreement to place limits on GNSS receivers and keep
       them from being used in ballistic missile guidance.  Limits were originally 18 km
-      and 515 m/s. The 18 km limit seems to have been removed more recently in favor of a
-      600 m/s limit from the Missile Technology Control Regime (MTCR Annex
-      Handbook 2017, Section 11.A.3). Receivers still implement limits differently and generally still implement
-      altitude limits, sometimes wildly different from the COCOM limit. The purpose of this
-      work was to characterize the actual performance using a software-defined radio to
-      inject simulated trajectories into several readily available inexpensive receivers.</p>
-    <span class="status status-live">Five parts were measured</span>
+      (60,000 ft) and 515 m/s &mdash; The 18 km limit seems to have been removed more recently
+      in favor of a 600 m/s limit from the Missile Technology Control Regime (MTCR Annex
+      Handbook 2017, Section 11.A.3). Receivers still implement limits differently and generally 
+      still implement altitude limits, sometimes very different from the COCOM limit. The 
+      purpose of this work was to characterize the actual performance using a software-defined 
+      radio to inject simulated trajectories into several readily available inexpensive receivers.</p>
+    <span class="status status-live">Seven parts were measured</span>
   </header>
 
   <section>
@@ -98,20 +98,12 @@
       <p>How long the receiver takes to publish a position again after the
         vehicle drops back inside the limits. It is measured from the moment the
         trajectory clears the limit to the first valid fix that follows.</p>
-      <p><strong>This is what determines whether the gate costs you anything.</strong>
-        The blanking itself is unavoidable on any of these parts, and on a
-        typical flight the vehicle is only over the speed limit for a few tens of
-        seconds. If position comes back within a second of dropping below it, the
-        result is a short gap in the log and the navigation filter reacquires
-        with the vehicle still climbing. If it takes a minute, the receiver is
-        silent through apogee and much of the descent &mdash; the part of the
-        flight where a position fix is most useful for recovery.</p>
-      <p>On these parts the cost is small: three of the four recover within a
-        second and a half, and the NEO-M8T within 3.1 s, against speed-limit
-        excursions that last 58 to 78 s on the two test flights. It is not a
-        number any datasheet reports, and measuring it needs a trajectory that
-        comes back under the limit &mdash; a ramp that only crosses the threshold
-        shows where the gate closes but never when it re-opens.</p>
+      <p>The shorter the delay, the faster you get fix back after passing below
+        a threshold. Since the receivers continue to operate and have a fix 
+        internally when exceeding the limits, they should be able to report
+        their fix quickly once inside the limits again. Three of the receivers  
+        tested recover in under 2 seconds, and the NEO-M8T within 3.1 s, but 
+        two take between 5 and 11 seconds.</p>
     </div>
   </section>
 
@@ -319,6 +311,83 @@
         what the bench looks like without it.</figcaption>
     </figure>
   </section>
+
+    <section>
+      <h2><span class="n">06</span>What the boost drops</h2>
+      <div class="prose">
+        <p>Everything above is about the export gate: the moment a receiver
+          refuses to publish a position it is perfectly capable of computing.
+          This section is about a different kind of loss, and one that is not a
+          policy decision at all. Through the burn every receiver keeps
+          publishing, but each one stops tracking some of its satellites &mdash;
+          and which ones it loses is not random.</p>
+
+        <p><strong>Doppler rate is the reason.</strong> An L1 carrier shifts
+          5.25&nbsp;Hz for every m/s of range rate, so under acceleration the
+          shift is not merely large, it is <em>moving</em>, and the tracking loop
+          has to follow it. How fast it moves depends on where the satellite sits
+          relative to the velocity vector: the rate goes as
+          <code>a &times; sin(elevation)</code>. For a vertical boost at
+          13.5&nbsp;g that is 693&nbsp;Hz/s toward zenith against 60&nbsp;Hz/s near
+          the horizon &mdash; an elevenfold spread across the sky at the same
+          instant. If the tracking loop is what limits these parts, the loss should
+          be concentrated overhead, and it should scale with acceleration.</p>
+
+        <p>Both hold. Across the four receivers that report per-satellite
+          elevation, the two highest satellites in the sky are the hardest hit
+          every time, while the nine below 30&deg; are flat or slightly better
+          off:</p>
+      </div>
+
+      <figure>
+{{FIG_BOOST_ELEV}}
+        <figcaption>Every satellite each receiver tracked on the pad, plotted by
+          elevation against what the burn did to its carrier. Same sky, same
+          scenario files, same satellites &mdash; only the acceleration
+          differs.</figcaption>
+      </figure>
+
+      <div class="prose">
+        <p><strong>Acceleration is the control.</strong> The 2.0&nbsp;g flight
+          uses the same geometry and the same satellites, and the effect does not
+          merely weaken, it reverses: the correlation against
+          <code>sin(elevation)</code> runs &minus;0.50 to &minus;0.84 at
+          13.5&nbsp;g and comes back positive on every part at 2.0&nbsp;g. Since
+          each channel is transmitted at equal power, the elevation dependence
+          cannot come from the injection; it has to be receiver-side.</p>
+
+        <p><strong>What actually dropped.</strong> Only the ZED-F9P lost
+          satellites outright, three of thirteen: GPS&nbsp;11 at 70&deg;,
+          GPS&nbsp;24 at 51&deg; and GPS&nbsp;6 at 31&deg;, each from a healthy
+          carrier to nothing. The other three receivers leaned on the same
+          satellites &mdash; 12 to 32&nbsp;dB off the two highest &mdash; but held
+          lock on all of them. The ranking by elevation is consistent across
+          parts even where the outcome is not.</p>
+
+        <p><strong>What did not drop is the position.</strong> No receiver went
+          to no-lock during any burn. Losing three satellites out of thirteen
+          costs geometry, not a fix. On this bench the thing that stops a position
+          is the gate, not the dynamics.</p>
+
+        <p class="note">Two caveats carry real weight. Only two satellites sit
+          above 45&deg; in this geometry, so the band that shows the effect most
+          clearly is also the thinnest; and all four parts that report elevation
+          are u-blox, spanning three generations (M8, M10, F9) but one vendor.
+          What makes the result credible is four receivers agreeing and the effect
+          reversing with acceleration.</p>
+
+        <p>One boundary is worth stating plainly, because it decides how far this
+          generalizes. The rig injects smooth, clean, interpolated motion. A real
+          motor adds broadband vibration that modulates carrier phase directly,
+          plume attenuation, body shadowing and antenna-pattern nulls as the
+          vehicle rolls, and a signal level well below the 32&ndash;51&nbsp;dBHz
+          delivered here &mdash; and loop stress multiplies with low carrier. A
+          loop that holds 693&nbsp;Hz/s at 45&nbsp;dBHz can fail at 32. This bench
+          characterizes the export gate; a part that sails through boost here may
+          still drop lock on a real motor, and nothing measured here contradicts
+          that.</p>
+      </div>
+    </section>
 
 </div>
 
