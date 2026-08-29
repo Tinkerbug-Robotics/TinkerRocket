@@ -3,10 +3,10 @@
 	(generator "manual")
 	(generator_version "1.0")
 	(layer "F.Cu")
-	(descr "Cylindrical radial EDLC supercapacitor mounted HORIZONTALLY (leads bent 90 deg). Can axis parallel to the board, 10.0 mm tall lying on its side. Two radial leads on 5.00 mm pitch exit the end face and bend down to the pads; 2.5 mm is allowed between pad centre and the can's near face for the bend. Drawn for Eaton HV1020-2R7505-R (5.0 F, 2.7 V; ~40 mohm). Pad 1 = POSITIVE. *** DELIBERATELY NO COURTYARD OVER THE BODY *** - the can is glued down and may lie over other components, so the only keep-out is a small courtyard around the two legs, matching the house prismatic-horizontal convention. The body outline is on F.Fab as documentation only and generates no DRC. MECHANICAL: parts under the can must clear its underside (set by your standoff/glue line); parts under the 2.5 mm lead bend must stay low, since the lead descends there from the can's 5.0 mm mid-height to the board. Vertical alternative: stock Capacitor_THT:CP_Radial_D10.0mm_P5.00mm (20 mm standing). Datasheet: Eaton HV series cylindrical cells.")
+	(descr "Cylindrical radial EDLC supercapacitor mounted HORIZONTALLY, FOLD-BACK bend: the two radial leads (5.00 mm pitch) exit the end face and fold 180 deg back under the can, so the holes sit ~2.5 mm in FRONT of the face and the can extends over the opposite side of the pads. Can axis parallel to the board, 10.0 mm tall lying on its side. Fold radius ~1.2 mm on the 0.6 mm leads. Drawn for Eaton HV1020-2R7505-R (5.0 F, 2.7 V; ~40 mohm). Pad 1 = POSITIVE. *** DELIBERATELY NO COURTYARD OVER THE BODY *** - the can is glued down and may lie over other components, so the only keep-out is a small courtyard around the two legs, matching the house prismatic-horizontal convention. The body outline is on F.Fab as documentation only and generates no DRC. MECHANICAL: parts under the can must clear its underside (set by your standoff/glue line); parts under the 2.5 mm lead bend must stay low, since the lead descends there from the can's 5.0 mm mid-height to the board. Vertical alternative: stock Capacitor_THT:CP_Radial_D10.0mm_P5.00mm (20 mm standing). Datasheet: Eaton HV series cylindrical cells.")
 	(tags "supercapacitor EDLC radial horizontal lay-down bent-lead glued no-keepout tht polarised HV1020")
 	(property "Reference" "REF**"
-		(at 12.5 -6.5 0)
+		(at -12.5 -6.5 0)
 		(unlocked yes)
 		(layer "F.SilkS")
 		(effects
@@ -17,7 +17,7 @@
 		)
 	)
 	(property "Value" "Supercap_Radial_D10.0mm_L20.0mm_P5.00mm_Horizontal"
-		(at 12.5 6.5 0)
+		(at -12.5 6.5 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
@@ -29,7 +29,7 @@
 		)
 	)
 	(fp_text user "+"
-		(at -1.8 -2.5 0)
+		(at 1.8 -2.5 0)
 		(layer "F.SilkS")
 		(effects
 			(font
@@ -39,8 +39,8 @@
 		)
 	)
 	(fp_line
-		(start 2.5 -5)
-		(end 22.5 -5)
+		(start -2.5 -5)
+		(end -22.5 -5)
 		(stroke
 			(width 0.1)
 			(type solid)
@@ -48,8 +48,8 @@
 		(layer "F.Fab")
 	)
 	(fp_line
-		(start 22.5 -5)
-		(end 22.5 5)
+		(start -22.5 -5)
+		(end -22.5 5)
 		(stroke
 			(width 0.1)
 			(type solid)
@@ -57,8 +57,8 @@
 		(layer "F.Fab")
 	)
 	(fp_line
-		(start 22.5 5)
-		(end 2.5 5)
+		(start -22.5 5)
+		(end -2.5 5)
 		(stroke
 			(width 0.1)
 			(type solid)
@@ -66,8 +66,8 @@
 		(layer "F.Fab")
 	)
 	(fp_line
-		(start 2.5 5)
-		(end 2.5 -5)
+		(start -2.5 5)
+		(end -2.5 -5)
 		(stroke
 			(width 0.1)
 			(type solid)
@@ -75,8 +75,8 @@
 		(layer "F.Fab")
 	)
 	(fp_line
-		(start 2.5 -5.2)
-		(end 4.5 -5.2)
+		(start -2.5 -5.2)
+		(end -4.5 -5.2)
 		(stroke
 			(width 0.12)
 			(type solid)
@@ -84,8 +84,8 @@
 		(layer "F.SilkS")
 	)
 	(fp_line
-		(start 2.5 5.2)
-		(end 4.5 5.2)
+		(start -2.5 5.2)
+		(end -4.5 5.2)
 		(stroke
 			(width 0.12)
 			(type solid)

@@ -57,7 +57,7 @@ lose the first-boot-blip special case.
     is why the second cap stays in this drawing (see cap options below).
 - **Inductor**: peak = IL(DC) + ΔIL/2 ≈ 2.0/3.3·0.7/0.85·… worst ≈ 2.6 A at the
   V10 floor. XGL4020-222: Isat 2.7 A (10% drop) / 4.4 A (20%), soft-sat, DCR
-  21.5 mΩ max — fine. The stocked VLS3012 line was REJECTED (Isat ~1.5 A).
+  21.5 mΩ max — fine. The stocked VLS3012CX line was REJECTED: its 30%-drop saturation is 1.7 A max-spec / 1.89 A typ (TDK) against a converter current limit of up to 2.6 A + ripple, exercised by design during backup at load.
   Footprint drawn to Coilcraft doc 1529: pads 0.98×3.4 mm, 2.37 mm gap
   (`Footprints:L_XGL4020_4.0x4.0mm`).
 - **Charge current**: ICHG 100 mA against the TPS62152's 1 A budget (worst
