@@ -13991,4 +13991,28 @@
 			)
 		)
 	)
+	(global_label "OC_ARM_EN"
+		(shape input)
+		(at 212.725 86.36 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "0b33b9f0-298c-4af0-994c-73132cfba72e")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 212.725 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
 )

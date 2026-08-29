@@ -6278,7 +6278,7 @@
 			)
 		)
 	)
-	(global_label "EXP_12"
+	(global_label "FC_ARM"
 		(shape input)
 		(at 90.17 90.805 0)
 		(fields_autoplaced yes)
@@ -8054,7 +8054,7 @@
 			)
 		)
 	)
-	(global_label "ARM_CLK"
+	(global_label "WDT_PET"
 		(shape input)
 		(at 44.45 116.205 180)
 		(fields_autoplaced yes)
@@ -19865,6 +19865,30 @@
 					(reference "#PWR0169")
 					(unit 1)
 				)
+			)
+		)
+	)
+	(global_label "FC_CHIP_PU"
+		(shape input)
+		(at 33.02 35.56 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "4c3480e9-0606-466b-b28f-b4dc87584c0b")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 33.02 35.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
 			)
 		)
 	)

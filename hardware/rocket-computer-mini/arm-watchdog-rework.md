@@ -1,9 +1,32 @@
 # Pyro ARM rework 3: supervised-MCU arm (replaces charge pump + one-shot)
 
-**Status: DRAWN ON THE MINI 2026-08-28 (schematic + PCB deletions; the 5 new
-footprints await placement). V10 not yet drawn.** Applies to rocket-computer-mini
-and rocket-computer V10 identically (same refdes). Supersedes the charge-pump
-ARM + one-shot ceiling drawn 2026-08-26.
+**Status: DRAWN ON BOTH BOARDS 2026-08-28** (mini merged as PR #981; V10 drawn on
+`claude/rocket-v10-arm-rework`, uncommitted). Same refdes on both except the WDT
+bypass (mini C139, V10 **C140** — V10's C139 is a supercap). Supersedes the
+charge-pump ARM + one-shot ceiling drawn 2026-08-26.
+
+**V10 specifics (2026-08-28):**
+- `FC_ARM` = **P4 GPIO33, traded from EXP_12**: the P4 had zero free GPIOs (USB
+  DM/DP are the dedicated HS PHY, MIPI pads are not muxable, GPIO1 = 32k crystal,
+  GPIO35/36 = straps). EXP_05-08/12 were the non-strap, non-servo expansion lines
+  (EXP_01-04 are the fin servos; EXP_09-11 sit on P4 strap pins GPIO38/37/34);
+  EXP_12 was taken as the last-in-line. **J3 pin 9 is now NC** and the old EXP_12
+  route (30 segments/vias) is already cut from the PCB — the arm line must never
+  reach the expansion header.
+- `WDT_PET` = P4 GPIO16 (ex-ARM_CLK), `OC_ARM_EN` = S3 GPIO14 (pad 19),
+  RESET → the existing R42/C39 CHIP_PU RC (`FC_CHIP_PU`). WDT VDD = V_MCU_SWTCH.
+- **No gate-drive bench item on V10**: U9 is a CSD16323Q3, RDS(on) spec'd at
+  VGS = 3 V (5.4 mΩ typ / 7.2 max, Vth typ 1.1 V) — the ~3.2 V drive is in-spec.
+- The V10 arm circuit (old and new) is **parked off the A4 page** at x ≈ 300-385,
+  as the 2026-08-26 rework left it — it edits fine but does not print; pull it
+  onto the sheet during the V10 tidy/layout pass.
+- Verification: netlist diff exactly to spec (280→272, −13+5, EXP_12→FC_ARM,
+  J3.9 NC'd, nothing else moved); ERC 1028→1029 (only +3 off-grid endpoints in
+  the sheet's existing half-grid style, −2 real warnings); bom.csv reconciled
+  0/0/0; R22 revalued both sides; zones refilled (GND +6.1 mm² / VBATT +0.3 mm²
+  where the EXP_12 route freed corridor, 36/38 untouched);
+  `check_board_parity.py` passes with the exemption text updated to the real
+  20-symbol schematic-only list.
 
 **Mini drawing verification (2026-08-28):** netlist diff against pre-edit baseline
 is exactly the spec — components 223→215 (−13 +5), net membership changes only the
