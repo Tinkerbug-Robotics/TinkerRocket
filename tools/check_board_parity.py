@@ -122,14 +122,15 @@ def pcb_refs(board_dir: Path) -> set[str]:
 # board is covered the day it lands rather than the day someone remembers.
 EXEMPT = {
     'rocket-computer-mini':
-        'layout in progress — never tagged or fabbed, ~40 parts still unplaced '
-        '(U32 the ESP32-S3 among them). Gate it once the layout is complete.',
+        'layout in progress — never tagged or fabbed; the TPS61094 hold-up '
+        'parts (2026-08-29) await placement. Gate it once the layout is '
+        'complete.',
     'rocket-computer':
-        'pack-fire hold-up (2026-08-26) + supervised-arm rework 3 (2026-08-28) '
-        'await the V10 layout pass: 20 symbols are schematic-only (C130, '
-        'C134/C136-C140, D16, R120, R125-R128, R132/R133, U40/U42/U44/U45/U46). '
-        'THIS BOARD FLIES — re-gate it the moment the rework is placed, and do '
-        'not let anything else ride in behind the exemption. Tracked in #966.',
+        'supervised-arm rework 3 + TPS61094 hold-up (2026-08-29) await the V10 '
+        'layout pass: 17 symbols are schematic-only (C130, C140-C142, D16, L11, '
+        'R125/R126, R132-R138, U46/U47). THIS BOARD FLIES — re-gate it the '
+        'moment the rework is placed, and do not let anything else ride in '
+        'behind the exemption. Tracked in #966.',
 }
 
 

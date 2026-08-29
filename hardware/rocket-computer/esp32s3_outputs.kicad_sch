@@ -13967,7 +13967,7 @@
 		)
 		(uuid "481d5b24-e0b7-5490-a2dd-4c0a43af6c29")
 	)
-	(global_label "CAP_ACTIVE"
+	(global_label "VBUCK_OK"
 		(shape input)
 		(at 216.535 104.14 0)
 		(fields_autoplaced yes)

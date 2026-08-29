@@ -4824,7 +4824,7 @@
 			)
 		)
 	)
-	(global_label "CAP_ACTIVE"
+	(global_label "VBUCK_OK"
 		(shape input)
 		(at 193.675 72.39 0)
 		(fields_autoplaced yes)
