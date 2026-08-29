@@ -420,4 +420,15 @@
 		)
 	)
 	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/SOD-523_0P9X1P3_ONS.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
 )
