@@ -5870,7 +5870,194 @@
 			)
 			(embedded_fonts no)
 		)
-	)
+		(symbol "Custom:TPS3813L30DBV"
+			(pin_names
+				(offset 0.254)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at 0 12.7 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "TPS3813L30DBV"
+				(at 0 -12.7 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" "Package_TO_SOT_SMD:SOT-23-6"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Window-watchdog supervisor, 2.64 V threshold, open-drain reset, SOT-23-6"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "TPS3813L30DBV_0_1"
+				(rectangle
+					(start -7.62 7.62)
+					(end 7.62 -7.62)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+			)
+			(symbol "TPS3813L30DBV_1_1"
+				(pin input line
+					(at -10.16 2.54 0)
+					(length 2.54)
+					(name "WDI"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at 0.0 -10.16 90)
+					(length 2.54)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -10.16 0.0 0)
+					(length 2.54)
+					(name "WDT"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at 0.0 10.16 270)
+					(length 2.54)
+					(name "VDD"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -10.16 -2.54 0)
+					(length 2.54)
+					(name "WDR"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin open_collector line
+					(at 10.16 0.0 180)
+					(length 2.54)
+					(name "~{RESET}"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+)
 	(text "Piezzo"
 		(exclude_from_sim no)
 		(at 221.615 64.135 0)
@@ -8891,30 +9078,7 @@
 			)
 		)
 	)
-	(global_label "EXP_12"
-		(shape input)
-		(at 254 161.29 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "80e248d6-7077-4817-bdcf-dad9d34e72d6")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 243.9997 161.29 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-	)
+	
 	(global_label "V_MCU_SWTCH"
 		(shape input)
 		(at 120.65 127 90)
@@ -16603,7 +16767,7 @@
 				)
 			)
 		)
-		(property "Value" "5.11 k"
+		(property "Value" "100 k"
 			(at 163.83 93.345 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -16646,7 +16810,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-075K11L"
+		(property "MPN" "RC0402FR-07100KL"
 			(at 161.925 92.71 0)
 			(hide yes)
 			(show_name no)
@@ -18748,346 +18912,87 @@
 			)
 		)
 	)
-	(symbol
-		(lib_id "Device:C")
-		(at 312.42 45.72 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "bf3f50c1-d059-5f5c-a53f-a6e370031705")
-		(property "Reference" "C131"
-			(at 312.42 45.72 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "100 nF"
-			(at 312.42 45.72 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 312.42 45.72 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 312.42 45.72 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CL05B104KO5NNNC"
-			(at 312.42 45.72 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Samsung"
-			(at 312.42 45.72 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 312.42 45.72 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "126a268e-1f5b-5caa-afcf-efb76d135421")
-		)
-		(pin "2"
-			(uuid "f135bcab-7826-50bc-8bd0-561434ddad75")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "C131")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 312.42 41.91) (xy 312.42 38.099999999999994)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ae386e7a-f4cf-5829-a319-e090b042a292")
-	)
-	(global_label "ARM_CLK"
-		(shape passive)
-		(at 312.42 38.099999999999994 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "142e51af-c9cf-5ecd-8d9d-82c81962982e")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 312.42 38.099999999999994 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 312.42 49.53) (xy 312.42 53.34)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "fc2cf85a-79b3-5c43-9a15-aaaa4c62b069")
-	)
-	(global_label "ARM_PUMP"
-		(shape passive)
-		(at 312.42 53.34 270)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "1f2a3d47-dd72-5254-b259-a33158249d9e")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 312.42 53.34 270)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	(no_connect
+		(at 254.0 161.29)
+		(uuid "7b6b9a73-0ec8-4e66-bb10-be5d27f61154")
 	)
 	(symbol
-		(lib_id "Device:D_Schottky")
-		(at 325.12 55.88 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "4d0ccdda-2b75-5f52-bfa3-30e22b94c22d")
-		(property "Reference" "D12"
-			(at 325.12 55.88 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "BAT54XV2T1G"
-			(at 325.12 55.88 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
-			(at 325.12 55.88 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 325.12 55.88 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 325.12 55.88 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "BAT54XV2T1G"
-			(at 325.12 55.88 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "onsemi"
-			(at 325.12 55.88 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "ccd5e3dc-a04e-514b-ad85-3bc93297b824")
-		)
-		(pin "2"
-			(uuid "1e634c0d-fd71-58b8-867f-31b5c4419664")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "D12")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 321.31 55.88) (xy 317.5 55.88)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d63c21ce-40da-5184-87c4-2fc851e9ad56")
-	)
-	(global_label "ARM_PUMP"
-		(shape passive)
-		(at 317.5 55.88 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "8d19cd5d-3db0-5354-bdbc-97aa0e0ed409")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 317.5 55.88 180)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 328.93 55.88) (xy 332.74 55.88)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "47197f7c-ded4-5ce2-adeb-5f4f1bee6831")
-	)
-	(global_label "V_MCU_SWTCH"
-		(shape passive)
-		(at 332.74 55.88 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "c6dea78b-bb20-596c-8d62-608926c9b595")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 332.74 55.88 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:D_Schottky")
+		(lib_id "Custom:TPS3813L30DBV")
 		(at 325.12 66.04 0)
 		(unit 1)
 		(body_style 1)
@@ -19096,9 +19001,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "81c54f5d-3f3e-5d20-a05d-39859e92a5cc")
-		(property "Reference" "D13"
-			(at 325.12 66.04 0)
+		(uuid "d0b40b9e-31a6-4c8c-831a-7cc555ca99c6")
+		(property "Reference" "U46"
+			(at 325.12 60.96000000000001 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -19107,8 +19012,8 @@
 				)
 			)
 		)
-		(property "Value" "BAT54XV2T1G"
-			(at 325.12 66.04 0)
+		(property "Value" "TPS3813L30DBV"
+			(at 325.12 71.12 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -19117,18 +19022,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
-			(at 325.12 66.04 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
+		(property "Footprint" "Package_TO_SOT_SMD:SOT-23-6"
 			(at 325.12 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -19139,7 +19033,7 @@
 				)
 			)
 		)
-		(property "Description" ""
+		(property "Datasheet" ""
 			(at 325.12 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -19150,7 +19044,7 @@
 				)
 			)
 		)
-		(property "MPN" "BAT54XV2T1G"
+		(property "Description" "Window watchdog: pets 94 ms - 2 s, resets FC via CHIP_PU"
 			(at 325.12 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -19161,1443 +19055,8 @@
 				)
 			)
 		)
-		(property "Mfr" "onsemi"
+		(property "MPN" "TPS3813L30DBVR"
 			(at 325.12 66.04 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "d48194a0-e28b-5528-b347-6e9b9db6d793")
-		)
-		(pin "2"
-			(uuid "c7d94dc6-63a0-5ad0-8b9f-80670c904d31")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "D13")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 321.31 66.04) (xy 317.5 66.04)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "cd8838a6-072c-538a-8541-73d2f6a1910c")
-	)
-	(global_label "ARM_GATE"
-		(shape passive)
-		(at 317.5 66.04 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "e9a2a6c5-1072-50e2-bb8d-3f38116dca6a")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 317.5 66.04 180)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 328.93 66.04) (xy 332.74 66.04)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "4dcb4110-1687-5cc2-b875-2e47b9f948f1")
-	)
-	(global_label "ARM_PUMP"
-		(shape passive)
-		(at 332.74 66.04 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "f33c6690-59fe-5b91-9aba-266bff42a272")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 332.74 66.04 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:C")
-		(at 312.42 76.2 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "03560a25-6b51-50c1-a4e1-3daf33d2145d")
-		(property "Reference" "C132"
-			(at 312.42 76.2 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "1 uF"
-			(at 312.42 76.2 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 312.42 76.2 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 312.42 76.2 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CL05A105KO5NNNC"
-			(at 312.42 76.2 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Samsung"
-			(at 312.42 76.2 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 312.42 76.2 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "8b9e1ba3-cc0b-5b08-a296-d837ac8f66f5")
-		)
-		(pin "2"
-			(uuid "71998e9d-738e-53b6-b9fc-b25d844a4cbd")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "C132")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 312.42 72.39) (xy 312.42 68.58)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "9c4ba9d6-d15e-56d8-acfc-1f6f367fbdf3")
-	)
-	(global_label "ARM_GATE"
-		(shape passive)
-		(at 312.42 68.58 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "ae05d6d7-3160-5f2e-9e15-dd396071e4e8")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 312.42 68.58 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 312.42 80.01) (xy 312.42 83.82000000000001)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ca450ed9-6fba-5c98-b7dc-4618bfc2a88a")
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 312.42 83.82000000000001 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files no)
-		(dnp no)
-		(uuid "e3e2cbf1-9f6a-5cd9-9d39-ab81f79381d5")
-		(property "Reference" "#PWR614"
-			(at 312.42 83.82000000000001 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 312.42 87.32000000000001 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "d443cb49-2ab6-5431-a55b-bb40a1998d2b")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "#PWR614")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 340.36 45.72 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "2fbb466d-c7ec-56fd-b2ab-92d0f90cb91f")
-		(property "Reference" "R121"
-			(at 340.36 45.72 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "1 M"
-			(at 340.36 45.72 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 340.36 45.72 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 340.36 45.72 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-071ML"
-			(at 340.36 45.72 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 340.36 45.72 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 340.36 45.72 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "95cfacb9-0e59-5d44-834d-ef5728dfeb49")
-		)
-		(pin "2"
-			(uuid "54dd52eb-a1e4-5a7b-962e-4c7ede5c12a6")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "R121")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 347.980 45.720 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "f11537bb-7432-47d0-9640-560941582954")
-		(property "Reference" "R131"
-			(at 347.980 45.720 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "1 M"
-			(at 347.980 45.720 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 347.980 45.720 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 347.980 45.720 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-071ML"
-			(at 347.980 45.720 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 347.980 45.720 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 347.980 45.720 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "5d996218-7319-45b6-ba03-473e09b74de7")
-		)
-		(pin "2"
-			(uuid "a80c39c1-20cd-49df-a6ea-0b6605e5a81c")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "R131")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 347.980 41.910) (xy 347.980 39.370)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "0a04ca2c-8b53-4e49-aab3-b00bbed29f1f")
-	)
-	(wire
-		(pts
-			(xy 347.980 49.530) (xy 347.980 52.070)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "98bc5d13-cecc-4bef-9726-c9e7b087fe7b")
-	)
-	(global_label "ARM_GATE"
-		(shape input)
-		(at 347.980 39.370 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "55185274-ec14-41fc-996d-f08d8e2a907c")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 347.980 39.370 270)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(global_label "ARM_TMR"
-		(shape input)
-		(at 347.980 52.070 270)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "d7c1f994-e50e-41a0-b5df-925d8efcdad0")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 347.980 52.070 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-
-	(wire
-		(pts
-			(xy 340.36 41.91) (xy 340.36 38.099999999999994)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "9074b6fa-d66d-5031-b3f2-a3e289353500")
-	)
-	(global_label "ARM_GATE"
-		(shape passive)
-		(at 340.36 38.099999999999994 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "775c6cfa-63f9-5086-b677-e719102ba920")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 340.36 38.099999999999994 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 340.36 49.53) (xy 340.36 53.34)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "a28bc465-a5d7-5503-90ef-a1ac1f7be505")
-	)
-	(global_label "ARM_TMR"
-		(shape passive)
-		(at 340.36 53.34 270)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "e1fa595c-4ecb-59f4-b79e-cada50d029ad")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 340.36 53.34 270)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:C")
-		(at 340.36 68.58 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "9df63c9b-057e-5243-8733-d565a67bda42")
-		(property "Reference" "C133"
-			(at 340.36 68.58 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "22 uF"
-			(at 340.36 68.58 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
-			(at 340.36 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 340.36 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CL21A226MOQNNNE"
-			(at 340.36 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Samsung"
-			(at 340.36 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 340.36 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "c44dccc2-d155-5e7c-bf21-5f8a159d5576")
-		)
-		(pin "2"
-			(uuid "fffcbcaa-5bc4-5ad7-becb-9681145a9831")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "C133")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 340.36 64.77) (xy 340.36 60.959999999999994)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "24066aeb-f048-591a-854e-167875c3c774")
-	)
-	(global_label "ARM_TMR"
-		(shape passive)
-		(at 340.36 60.959999999999994 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "17a89dda-3194-5a5d-baf5-ecbdd3158e50")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 340.36 60.959999999999994 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 340.36 72.39) (xy 340.36 76.2)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "557e2d76-c175-5e78-9e16-1e1535646afc")
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 340.36 76.2 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files no)
-		(dnp no)
-		(uuid "451f9b32-513f-50f3-9d92-b43657efaf4c")
-		(property "Reference" "#PWR615"
-			(at 340.36 76.2 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 340.36 79.7 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "ee9568f8-02aa-5d1f-9f1d-d7e71be71b61")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "#PWR615")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:D_Schottky")
-		(at 355.6 86.36 180)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "b8343a5f-e853-5413-8a2d-d14fd9de7a6d")
-		(property "Reference" "D14"
-			(at 355.6 86.36 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "BAT54XV2T1G"
-			(at 355.6 86.36 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
-			(at 355.6 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 355.6 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 355.6 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "BAT54XV2T1G"
-			(at 355.6 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "onsemi"
-			(at 355.6 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "a441dbaa-bb50-5b08-b4d7-aa8fa1955eb9")
-		)
-		(pin "2"
-			(uuid "887b9031-8e6f-5286-af1b-8f475ddad11a")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "D14")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 351.79 86.36) (xy 347.98 86.36)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "2a7a895d-04cc-5ece-b8ee-7b6c23be50b1")
-	)
-	(global_label "ARM_TMR"
-		(shape input)
-		(at 347.98 86.36 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "9a9518e2-fe0e-5049-92fd-85257126df29")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 347.98 86.36 180)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 367.03 86.36 90)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "9812dc56-29ef-5a07-8096-f62ba7d5d531")
-		(property "Reference" "R130"
-			(at 367.03 86.36 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "10 k"
-			(at 367.03 86.36 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 367.03 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 367.03 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-0710KL"
-			(at 367.03 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 367.03 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 367.03 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "257c981a-7f67-59b0-8974-0d2ba4d81f18")
-		)
-		(pin "2"
-			(uuid "a62b4010-4a78-5455-9ddf-c56f1ce840a2")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "R130")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 359.41 86.36) (xy 363.22 86.36)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "1198ef39-6c1f-5442-9b65-79f45936bc9c")
-	)
-	(wire
-		(pts
-			(xy 370.84 86.36) (xy 374.65 86.36)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "5af000d1-f19e-59d0-9d68-af9c43bc4594")
-	)
-	(global_label "ARM_GATE"
-		(shape input)
-		(at 374.65 86.36 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "57b51c1c-111d-524b-b8e1-4fc95d515254")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 374.65 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:D_Schottky")
-		(at 355.6 96.52 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "a8d6cfd9-d43d-5090-9c9f-82ce8a653e54")
-		(property "Reference" "D15"
-			(at 355.6 96.52 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "BAT54XV2T1G"
-			(at 355.6 96.52 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
-			(at 355.6 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 355.6 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 355.6 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "BAT54XV2T1G"
-			(at 355.6 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "onsemi"
-			(at 355.6 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "c7813f71-c9ff-5b91-a5b8-fba0677256e1")
-		)
-		(pin "2"
-			(uuid "332cbea8-4060-526e-8cb1-8a5a9447d0b4")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "D15")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 359.41 96.52) (xy 363.22 96.52)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c51bf830-e1b3-52ce-8fea-f71e2e005b5b")
-	)
-	(global_label "ARM_CROW"
-		(shape input)
-		(at 363.22 96.52 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "1304635e-3b62-5677-9732-c945da69076f")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 363.22 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 344.17 96.52 90)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "818bc96a-1085-57a0-8e3f-568a041a4f14")
-		(property "Reference" "R129"
-			(at 344.17 96.52 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "10 k"
-			(at 344.17 96.52 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 344.17 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 344.17 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-0710KL"
-			(at 344.17 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 344.17 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 344.17 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "7af45b2f-13b8-5fb4-a0a4-a6668e1e918e")
-		)
-		(pin "2"
-			(uuid "0f5c1f29-27fd-540d-a000-400a8fa41a56")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "R129")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 347.98 96.52) (xy 351.79 96.52)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "7df53a91-a511-5cbe-84a9-c4d12e9f5297")
-	)
-	(wire
-		(pts
-			(xy 340.36 96.52) (xy 336.55 96.52)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "48972242-72b4-5373-8db8-91ed229cfbdd")
-	)
-	(global_label "ARM_TMR"
-		(shape input)
-		(at 336.55 96.52 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "52aca6d5-7324-533c-92b7-aa700b03b40e")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 336.55 96.52 180)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(symbol
-		(lib_id "74xGxx:74LVC1G17")
-		(at 340.36 111.76 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "22a2567d-1a03-55ad-926d-dbfaf9a0722f")
-		(property "Reference" "U41"
-			(at 340.36 111.76 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "74LVC1G17"
-			(at 340.36 111.76 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Package_TO_SOT_SMD:SOT-353_SC-70-5"
-			(at 340.36 111.76 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 340.36 111.76 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 340.36 111.76 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "SN74LVC1G17DCKR"
-			(at 340.36 111.76 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20608,7 +19067,7 @@
 			)
 		)
 		(property "Mfr" "Texas Instruments"
-			(at 340.36 111.76 0)
+			(at 325.12 66.04 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20619,24 +19078,27 @@
 			)
 		)
 		(pin "1"
-			(uuid "71bd1214-f83e-5554-b1d2-e3b8a129c4a6")
+			(uuid "277b92c8-e60c-425f-b2a6-1a6c4bfd0b11")
 		)
 		(pin "2"
-			(uuid "11a48020-d030-51bd-bace-cf068f56337c")
+			(uuid "412ae7e7-8dba-43b6-9e6c-6fafb29d9cb4")
 		)
 		(pin "3"
-			(uuid "5fcece15-c939-582d-aa66-c6431f9effbd")
+			(uuid "0171b9ad-d244-4fe0-931b-699d6814ba07")
 		)
 		(pin "4"
-			(uuid "72ef0cdf-7655-5253-a7f0-12bb212f73bd")
+			(uuid "d05578bc-5adf-4442-b428-e6c555277c50")
 		)
 		(pin "5"
-			(uuid "88889dc2-63c8-558a-9aca-7a43e4e6f2ef")
+			(uuid "02dd2604-18ab-4337-a58f-374fad3b1a05")
+		)
+		(pin "6"
+			(uuid "1fc2a954-4f00-4c8d-a359-686c1a7d3a1e")
 		)
 		(instances
 			(project "rocket-computer"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "U41")
+					(reference "U46")
 					(unit 1)
 				)
 			)
@@ -20644,27 +19106,27 @@
 	)
 	(wire
 		(pts
-			(xy 327.66 111.76) (xy 323.85 111.76)
+			(xy 314.96 63.5) (xy 302.26 63.5)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "6e0e4e7f-a14c-54a6-97ac-6edf894e137d")
+		(uuid "037cf154-afa4-4b6d-9b7c-bf4d4b8178ec")
 	)
-	(global_label "ARM_TMR"
-		(shape passive)
-		(at 323.85 111.76 180)
+	(global_label "WDT_PET"
+		(shape input)
+		(at 302.26 63.5 180)
 		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
-			(justify left)
+			(justify right)
 		)
-		(uuid "66f05519-539a-5b6a-9483-86bf4a6289c2")
+		(uuid "99549c00-9ca3-46df-bf78-ca4b09dd95b6")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 323.85 111.76 180)
+			(at 302.26 63.5 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20672,139 +19134,19 @@
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
+				(justify right)
 			)
 		)
 	)
-	(wire
-		(pts
-			(xy 350.52 111.76) (xy 354.33 111.76)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "bec5c98a-13ef-5b9f-91d5-300b6e7e7478")
-	)
-	(global_label "ARM_CROW"
-		(shape passive)
-		(at 354.33 111.76 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "d11250f6-5f95-5fc3-9ce9-64eb1b253255")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 354.33 111.76 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 335.28 101.6) (xy 335.28 97.79)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "0f208e7b-f3cc-5713-962f-f7eb7e1bb5e0")
-	)
-	(global_label "V_MCU_SWTCH"
-		(shape passive)
-		(at 335.28 97.79 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "bbc333e5-2732-53dd-8f89-dabce2c1944d")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 335.28 97.79 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 335.28 121.92) (xy 335.28 125.73)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "fc67628a-7d8e-58b0-9307-d788dea76bb4")
+	(junction
+		(at 304.8 63.5)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "f0bbc3db-6465-4cc0-99b4-529e6d53c004")
 	)
 	(symbol
-		(lib_id "power:GND")
-		(at 335.28 125.73 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files no)
-		(dnp no)
-		(uuid "6ff8c725-040e-50e4-af56-a236fc6461b2")
-		(property "Reference" "#PWR617"
-			(at 335.28 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 335.28 129.23000000000002 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "aecef4eb-7c71-5cb3-b44e-2465440883eb")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "#PWR617")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(no_connect
-		(at 332.74 106.68)
-		(uuid "c7a43291-6992-5d7a-9dee-3c5396aff469")
-	)
-	(symbol
-		(lib_id "Transistor_BJT:DTC123J")
-		(at 368.3 111.76 0)
+		(lib_id "Device:R_US")
+		(at 304.8 67.31 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -20812,9 +19154,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "add0a88b-0f1f-5414-b441-0d92af0b6f5f")
-		(property "Reference" "Q12"
-			(at 368.3 111.76 0)
+		(uuid "77e2304a-1517-42f0-9595-5c8c6b1e5824")
+		(property "Reference" "R133"
+			(at 304.8 62.230000000000004 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -20823,8 +19165,8 @@
 				)
 			)
 		)
-		(property "Value" "DTC123J"
-			(at 368.3 111.76 0)
+		(property "Value" "100 k"
+			(at 304.8 72.39 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -20833,8 +19175,8 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
-			(at 368.3 111.76 0)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 304.8 67.31 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20845,29 +19187,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 368.3 111.76 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "DTC123JEBTL"
-			(at 368.3 111.76 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Rohm"
-			(at 368.3 111.76 0)
+			(at 304.8 67.31 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20878,7 +19198,29 @@
 			)
 		)
 		(property "Description" ""
-			(at 368.3 111.76 0)
+			(at 304.8 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07100KL"
+			(at 304.8 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 304.8 67.31 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20889,18 +19231,15 @@
 			)
 		)
 		(pin "1"
-			(uuid "a57a775c-3a94-5629-9eb9-29c2869d34f6")
+			(uuid "447a8a86-284d-4fc0-ad7b-f72677bed150")
 		)
 		(pin "2"
-			(uuid "ca800ed0-43ed-563b-a309-4fc31a681950")
-		)
-		(pin "3"
-			(uuid "748d9e89-a288-542d-9152-5aa9c1b15646")
+			(uuid "3b85e690-30a5-48af-a7b8-5edb3b8673da")
 		)
 		(instances
 			(project "rocket-computer"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "Q12")
+					(reference "R133")
 					(unit 1)
 				)
 			)
@@ -20908,85 +19247,17 @@
 	)
 	(wire
 		(pts
-			(xy 361.95 111.76) (xy 358.14 111.76)
+			(xy 304.8 71.12) (xy 304.8 73.66)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "8c0eedcd-3da3-5377-9a5f-7ec8d3612060")
-	)
-	(global_label "ARM_CROW"
-		(shape passive)
-		(at 358.14 111.76 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "2c101670-fa55-5a2d-a48b-b93a06a55d81")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 358.14 111.76 180)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 370.84 106.68) (xy 370.84 102.87)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "530c2584-d272-5be4-86ba-0df3971a161c")
-	)
-	(global_label "ARM_GATE"
-		(shape passive)
-		(at 370.84 102.87 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "bef4cd06-fd49-517a-912d-03a469c828e6")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 370.84 102.87 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 370.84 116.84) (xy 370.84 120.65)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "db59c48c-14a3-572c-b359-5d62d7827679")
+		(uuid "2ebd42db-24e8-4eca-97ca-9897eb23b762")
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 370.84 120.65 0)
+		(at 304.8 73.66 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -20994,9 +19265,9 @@
 		(on_board yes)
 		(in_pos_files no)
 		(dnp no)
-		(uuid "2a53c0e7-77fa-52f8-b200-395350d4db3c")
-		(property "Reference" "#PWR616"
-			(at 370.84 120.65 0)
+		(uuid "10d64d1e-0090-4277-88fc-1942f7ae874a")
+		(property "Reference" "#PWR618"
+			(at 304.8 68.58 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21007,7 +19278,40 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 370.84 124.15 0)
+			(at 304.8 78.74 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 304.8 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 304.8 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 304.8 73.66 0)
+			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -21017,103 +19321,773 @@
 			)
 		)
 		(pin "1"
-			(uuid "2e9b1eb5-4bf6-5d43-bdaa-8656b5f73aeb")
+			(uuid "84fb94d5-8883-438f-9f10-7116c8b4d446")
 		)
 		(instances
 			(project "rocket-computer"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "#PWR616")
+					(reference "#PWR618")
 					(unit 1)
 				)
 			)
 		)
 	)
-	(text "PYRO ARM (ported from the mini, corrections included) -- OFF-PAGE"
-		(exclude_from_sim no)
-		(at 310.0 130.0 0)
+	(wire
+		(pts
+			(xy 314.96 66.04) (xy 311.15 66.04)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "81c3377c-5da5-4f06-92d6-77d791440abb")
+	)
+	(wire
+		(pts
+			(xy 311.15 66.04) (xy 311.15 53.34)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d7a65486-529d-4dfc-af4e-888d32431fea")
+	)
+	(wire
+		(pts
+			(xy 311.15 53.34) (xy 325.12 53.34)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "af5e68be-44ed-4f2a-9c6a-ccbc2a7d6158")
+	)
+	(wire
+		(pts
+			(xy 325.12 55.88) (xy 325.12 53.34)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "076ada14-0994-46ac-b63e-7938bdc692e8")
+	)
+	(global_label "V_MCU_SWTCH"
+		(shape input)
+		(at 325.12 53.34 90)
+		(fields_autoplaced yes)
 		(effects
 			(font
-				(size 2.0 2.0)
+				(size 1.27 1.27)
 			)
-			(justify left bottom)
+			(justify left)
 		)
-		(uuid "feb98043-528a-5336-9c21-b5cfc5b87abc")
+		(uuid "8dad1677-ab53-49f5-b466-b7ff6a45da2d")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 325.12 53.34 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
 	)
-	(text "Arming = square wave on ARM_CLK (P4 pad 17, ex-PYRO_ARM).  D12 anchors the pump"
+	(wire
+		(pts
+			(xy 325.12 76.2) (xy 325.12 78.74)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b961273c-f53f-4a5d-851c-dab614674a46")
+	)
+	(wire
+		(pts
+			(xy 314.96 68.58) (xy 313.69 68.58)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c2a71de4-6229-49d2-9321-5dcda66a7925")
+	)
+	(wire
+		(pts
+			(xy 313.69 68.58) (xy 313.69 78.74)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d7a980dc-72d3-4c34-999d-ec161deae9b0")
+	)
+	(wire
+		(pts
+			(xy 313.69 78.74) (xy 325.12 78.74)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "eada354a-bb41-4b90-9e31-ee98c63cafde")
+	)
+	(junction
+		(at 325.12 78.74)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "c4f6136b-a1f7-4945-812b-09d94c911e41")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 325.12 78.74 0)
+		(unit 1)
+		(body_style 1)
 		(exclude_from_sim no)
-		(at 310.0 134.5 0)
+		(in_bom no)
+		(on_board yes)
+		(in_pos_files no)
+		(dnp no)
+		(uuid "dcc36099-3a89-44c9-81fe-c3ade920fddd")
+		(property "Reference" "#PWR619"
+			(at 325.12 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 325.12 83.82 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 325.12 78.74 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 325.12 78.74 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 325.12 78.74 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "e101412f-874f-4a8c-ae4f-2facea8b9321")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "#PWR619")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 335.28 66.04) (xy 341.63 66.04)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6739c76d-e453-4a1f-8b79-b5681dbdf655")
+	)
+	(global_label "FC_CHIP_PU"
+		(shape input)
+		(at 341.63 66.04 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "4165394d-6ae7-4cff-8adc-29621c4c4c39")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 341.63 66.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 347.98 57.15 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "eaf72095-1d95-402a-bb07-229463856835")
+		(property "Reference" "C140"
+			(at 347.98 52.07 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "100 nF"
+			(at 347.98 62.23 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 347.98 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 347.98 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 347.98 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 347.98 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 347.98 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "03aaf09c-4e84-47e4-bcc8-d875e11e421e")
+		)
+		(pin "2"
+			(uuid "3462f198-f3db-4c01-ace3-72284872049e")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "C140")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(global_label "V_MCU_SWTCH"
+		(shape input)
+		(at 347.98 53.34 90)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "d8fdc5f1-7f4d-4b15-a65a-439450fbd370")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 347.98 53.34 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 347.98 60.96) (xy 347.98 63.5)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "433dd644-3138-41d5-8773-d69926c0af68")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 347.98 63.5 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(in_pos_files no)
+		(dnp no)
+		(uuid "4a007cdd-0b75-437d-aeed-713b213faf30")
+		(property "Reference" "#PWR620"
+			(at 347.98 58.42 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 347.98 68.58 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 347.98 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 347.98 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 347.98 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "d70d6dd8-6ba6-4191-80a2-512a015bf303")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "#PWR620")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:D_Schottky")
+		(at 363.22 66.04 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "880f5b3c-cc8d-417e-a812-587e47aeee12")
+		(property "Reference" "D16"
+			(at 363.22 60.96000000000001 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "BAT54XV2T1G"
+			(at 363.22 71.12 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
+			(at 363.22 66.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 363.22 66.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 363.22 66.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "BAT54XV2T1G"
+			(at 363.22 66.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "onsemi"
+			(at 363.22 66.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "78cbe062-4033-484f-bf91-d98689318f8a")
+		)
+		(pin "2"
+			(uuid "8ee5b59a-5bb8-40c4-80fd-d896af994f7f")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "D16")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 363.22 62.23) (xy 363.22 60.96)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a0d6450c-2e09-4c18-a57d-98b75b30a5ac")
+	)
+	(global_label "ARM_GATE"
+		(shape input)
+		(at 363.22 60.96 90)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "3242befd-6177-4948-a7a0-199b16100823")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 363.22 60.96 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 363.22 69.85) (xy 363.22 72.39)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ee792d6b-902e-41dd-a386-937c523b1b7c")
+	)
+	(global_label "OC_ARM_EN"
+		(shape input)
+		(at 363.22 72.39 270)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "9f9381f5-6290-462e-b6b8-17241469b5ac")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 363.22 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 147.955 86.995 270)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "6540f80f-7437-403b-a68c-a5f302202022")
+		(property "Reference" "R132"
+			(at 147.955 81.915 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "5.11 k"
+			(at 147.955 92.075 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 147.955 86.995 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 147.955 86.995 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 147.955 86.995 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 147.955 86.995 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 147.955 86.995 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "6c68116c-b8b6-41e5-bb32-be0e40fa3e42")
+		)
+		(pin "2"
+			(uuid "b2d7e29d-0312-4e17-a169-ff180549332b")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "R132")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 151.765 86.995) (xy 154.305 86.995)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ef05c0e0-e53c-4b77-b7e7-6e968500dffa")
+	)
+	(wire
+		(pts
+			(xy 140.335 86.995) (xy 144.145 86.995)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1e028107-bb1c-4c1c-8bde-4a5001852ccb")
+	)
+	(global_label "FC_ARM"
+		(shape input)
+		(at 140.335 86.995 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "4fa62a7e-5c8b-4e6b-a10a-97229b3886b6")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 140.335 86.995 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
+	(text "Supervised arm (rework 3): ARM_GATE's only source is FC_ARM through R132.\nAn FC that is off, in reset, or rebooting reverts GPIO33 to an input and\nR22 bleeds the gate in ~0.2 ms -- no static pin state can arm, so no clamp\non this node is needed or fitted.  U46 window-watchdog (WDT=VDD, WDR=GND:\nwindow 94 ms - 2 s; pet ~250 ms from scheduled task code, never an ISR or\nperipheral) hard-resets a non-petting FC via FC_CHIP_PU, clearing FC_ARM\nby construction.  D16 = OC consent: low vetoes; high-Z loses only the OC\nterm (fire still needs the FC channel FETs).  FC_ARM took EXP_12, so J3\npin 9 is NC -- cut the old EXP_12 route in layout; the arm line must\nnever reach the expansion header.\n\n*** RESET is a ~25 ms PULSE -- keep it on CHIP_PU, never clamp this node\nwith it: a wedged FC with FC_ARM high would re-arm between pulses. ***\n*** L30 only: K33's VIT (2.87-3.00 V) overlaps the 2.86-2.94 V hold-up\ncutoff -- it can hold the FC in reset during a legitimate ride-through. ***"
+		(exclude_from_sim no)
+		(at 306.07 121.92 0)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
 			(justify left bottom)
 		)
-		(uuid "0cc1cdab-9ac4-5401-8e2a-f7dc507e1228")
-	)
-	(text "to V_MCU_SWTCH (true doubler, ~6 V gate).  R21 relabeled: pump -> R21 -> U9 gate;"
-		(exclude_from_sim no)
-		(at 310.0 138.5 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "df66de1d-4dea-5ec8-8eee-3a7f76ce26b2")
-	)
-	(text "a static GPIO level can never arm.  V_CAP is GONE: FET sources + gate pulls now"
-		(exclude_from_sim no)
-		(at 310.0 142.5 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "9fe3f5c1-92d8-59c1-b9eb-fde24a3989bb")
-	)
-	(text "ride VBAT_CON (pack-direct, upstream of the eFuse).  R20/C12 deleted."
-		(exclude_from_sim no)
-		(at 310.0 146.5 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "07521bb7-0e22-55cc-962f-496100d45f60")
-	)
-	(text "One-shot ceiling times ARM_GATE itself: R121 1M x C133 (0805) -> trip 1.5-3.3 s,"
-		(exclude_from_sim no)
-		(at 310.0 151.0 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "cc2ec844-09f5-5680-aa2e-628a767c574d")
-	)
-	(text "then D15/R129 LATCH until the P4 domain power-cycles.  D14+R130 auto-reset on"
-		(exclude_from_sim no)
-		(at 310.0 155.0 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "d25ac68d-f051-5f58-be42-30ad17d605e1")
-	)
-	(text "disarm; leave >= 0.5 s between ARM cycles."
-		(exclude_from_sim no)
-		(at 310.0 159.0 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "2b4029d2-d7d2-5d8f-aca7-eb0e97552b9e")
+		(uuid "ee50073f-c2c2-48c0-8952-233b972947c0")
 	)
 )
