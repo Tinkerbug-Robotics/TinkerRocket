@@ -7,6 +7,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -39,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -304,32 +306,11 @@ fun SettingsScreen(
         }
 
         // ── Rocket ───────────────────────────────────────────────────────
+        // Control settings that used to live here (servo enable, gain
+        // schedule, angle control, roll delay) moved down under the servo
+        // control gate, where the switch that makes them do anything is.
         Section("Rocket") {
             ToggleRow("Sounds", active.soundsEnabled) { v -> edit(ConfigGroup.SOUNDS) { it.copy(soundsEnabled = v) } }
-            ToggleRow("Servo control", active.servoControlEnabled) { v ->
-                edit(ConfigGroup.SERVO_ENABLE) { it.copy(servoControlEnabled = v) }
-            }
-            ToggleRow("Gain schedule", active.gainScheduleEnabled) { v ->
-                edit(ConfigGroup.GAIN_SCHEDULE) { it.copy(gainScheduleEnabled = v) }
-            }
-            ToggleRow("Angle control", active.useAngleControl) { v ->
-                edit(ConfigGroup.ROLL_CONTROL) { it.copy(useAngleControl = v) }
-            }
-            if (active.useAngleControl) {
-                FieldRow {
-                    NumField("Kp angle", fmt(active.kpAngle), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(kpAngle = v) } }
-                    }
-                    NumField("Rate cap °/s", fmt(active.rateCapDps), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rateCapDps = v) } }
-                    }
-                }
-            }
-            FieldRow {
-                NumField("Roll delay ms", active.rollDelayMs.toString(), Modifier.weight(1f)) { s ->
-                    s.toIntOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rollDelayMs = v) } }
-                }
-            }
         }
 
         // ── Radio (iOS General-tab "Radio" section) ──────────────────────
@@ -443,180 +424,252 @@ fun SettingsScreen(
             )
         }
 
-        // ── PID ──────────────────────────────────────────────────────────
-        Section("PID") {
-            FieldRow {
-                NumField("Kp", fmt(active.pidKp), Modifier.weight(1f)) { s ->
-                    s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKp = v) } }
-                }
-                NumField("Ki", fmt(active.pidKi), Modifier.weight(1f)) { s ->
-                    s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKi = v) } }
-                }
-                NumField("Kd", fmt(active.pidKd), Modifier.weight(1f)) { s ->
-                    s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKd = v) } }
-                }
+        // ── Servo control ────────────────────────────────────────────────
+        // The master switch for every control setting below it, so it leads
+        // the block instead of sitting mid-way down a mixed "Rocket" section
+        // (iOS Control-tab twin).  Nothing under it reaches the fins except
+        // through the servo driver — the bench jog included, which cannot move
+        // a servo the FC never writes to.  Dimmed and locked rather than
+        // removed: the values stay readable for a preflight check, and a block
+        // that vanishes reads as broken rather than as switched off.
+        val servoOn = active.servoControlEnabled
+        // Close the keyboard when the gate shuts: the scrim swallows taps, not
+        // keystrokes, so a field focused before the switch was turned off would
+        // still take typing through it.  Blurring also commits that pending
+        // edit (NumField commits on blur) instead of stranding it.
+        LaunchedEffect(servoOn) { if (!servoOn) focusManager.clearFocus() }
+        Section("Servo control") {
+            ToggleRow("Servo control", servoOn) { v ->
+                edit(ConfigGroup.SERVO_ENABLE) { it.copy(servoControlEnabled = v) }
             }
-            FieldRow {
-                NumField("Min cmd", fmt(active.pidMinCmd), Modifier.weight(1f)) { s ->
-                    s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidMinCmd = v) } }
-                }
-                NumField("Max cmd", fmt(active.pidMaxCmd), Modifier.weight(1f)) { s ->
-                    s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidMaxCmd = v) } }
-                }
-                // Rides the roll-control frame, not the PID frame.
-                NumField("I-sep °/s", fmt(active.integralSepThreshold), Modifier.weight(1f)) { s ->
-                    s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(integralSepThreshold = v) } }
-                }
-            }
-        }
-
-        // ── Servo ────────────────────────────────────────────────────────
-        Section("Servo") {
-            FieldRow {
-                NumField("Bias 1", active.servoBias1.toString(), Modifier.weight(1f)) { s ->
-                    s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias1 = v) } }
-                }
-                NumField("Bias 2", active.servoBias2.toString(), Modifier.weight(1f)) { s ->
-                    s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias2 = v) } }
-                }
-                NumField("Bias 3", active.servoBias3.toString(), Modifier.weight(1f)) { s ->
-                    s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias3 = v) } }
-                }
-                NumField("Bias 4", active.servoBias4.toString(), Modifier.weight(1f)) { s ->
-                    s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias4 = v) } }
-                }
-            }
-            FieldRow {
-                NumField("Hz", active.servoHz.toString(), Modifier.weight(1f)) { s ->
-                    s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoHz = v) } }
-                }
-                NumField("Min µs", active.servoMinUs.toString(), Modifier.weight(1f)) { s ->
-                    s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoMinUs = v) } }
-                }
-                NumField("Max µs", active.servoMaxUs.toString(), Modifier.weight(1f)) { s ->
-                    s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoMaxUs = v) } }
-                }
-                // #449: travel is the editable quantity; fin angles derive.
-                NumField("Travel °", fmt(active.finTravelDeg), Modifier.weight(1f)) { s ->
-                    s.toFloatOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(finTravelDeg = v) } }
-                }
-            }
-        }
-
-        // ── Fin layout (cmd 66) ──────────────────────────────────────────
-        Section("Fin layout") {
-            FinLayoutEditor(
-                ringMode = active.finRingMode,
-                servoAtSlot = active.finServoAtSlot,
-                reverse = active.finReverse,
-                rollReverse = active.finRollReverse,
-                canJog = canJog,
-                finMinDeg = active.finMinDeg,
-                finMaxDeg = active.finMaxDeg,
-                onSetRingMode = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finRingMode = v) } },
-                onSetServoAtSlot = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finServoAtSlot = v) } },
-                onSetReverse = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finReverse = v) } },
-                onSetRollReverse = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finRollReverse = v) } },
-                onJogAngles = { angles -> session?.sendCommandFrame(Commands.servoTestAngles(angles)) },
-                onJogStop = { session?.sendBareCommand(BleCommandId.SERVO_TEST_STOP) },
+            Caption(
+                if (servoOn) {
+                    "The flight computer drives the fin servos. Everything below — gains, " +
+                        "roll control, servo calibration, fin layout, guidance — applies."
+                } else {
+                    "Off — the fins never move: no roll control, no guidance, no bench jog. " +
+                        "The settings below stay saved, and do nothing until this is on."
+                },
             )
         }
 
-        // ── Roll profile (cmd 26; Clear = cmd 27, matching iOS) ──────────
-        Section("Roll profile") {
-            Text(
-                "The target roll angle ramps linearly between waypoints. Before " +
-                    "the first waypoint the controller nulls roll rate (fins keep " +
-                    "zero roll through boost); after the last waypoint the final " +
-                    "angle is held. To hold an angle, give two consecutive " +
-                    "waypoints the same angle.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            active.rollWaypoints.forEachIndexed { i, wp ->
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("WP ${i + 1}", style = MaterialTheme.typography.bodySmall)
-                    NumField("Time s", fmt(wp.timeSeconds), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v ->
-                            edit(ConfigGroup.ROLL_PROFILE) { p ->
-                                p.copy(
-                                    rollWaypoints = p.rollWaypoints.mapIndexed { j, w ->
-                                        if (j == i) w.copy(timeSeconds = v) else w
-                                    },
-                                )
-                            }
-                        }
+        GatedControls(enabled = servoOn) {
+            // ── PID ──────────────────────────────────────────────────────
+            Section("PID") {
+                FieldRow {
+                    NumField("Kp", fmt(active.pidKp), Modifier.weight(1f)) { s ->
+                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKp = v) } }
                     }
-                    NumField("Angle °", fmt(wp.angleDeg), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v ->
-                            edit(ConfigGroup.ROLL_PROFILE) { p ->
-                                p.copy(
-                                    rollWaypoints = p.rollWaypoints.mapIndexed { j, w ->
-                                        if (j == i) w.copy(angleDeg = v) else w
-                                    },
-                                )
-                            }
-                        }
+                    NumField("Ki", fmt(active.pidKi), Modifier.weight(1f)) { s ->
+                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKi = v) } }
                     }
-                    TextButton(onClick = {
-                        edit(ConfigGroup.ROLL_PROFILE) { p ->
-                            p.copy(rollWaypoints = p.rollWaypoints.filterIndexed { j, _ -> j != i })
-                        }
-                    }) { Text("✕") }
+                    NumField("Kd", fmt(active.pidKd), Modifier.weight(1f)) { s ->
+                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKd = v) } }
+                    }
                 }
+                FieldRow {
+                    NumField("Min cmd", fmt(active.pidMinCmd), Modifier.weight(1f)) { s ->
+                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidMinCmd = v) } }
+                    }
+                    NumField("Max cmd", fmt(active.pidMaxCmd), Modifier.weight(1f)) { s ->
+                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidMaxCmd = v) } }
+                    }
+                    // Rides the roll-control frame, not the PID frame.
+                    NumField("I-sep °/s", fmt(active.integralSepThreshold), Modifier.weight(1f)) { s ->
+                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(integralSepThreshold = v) } }
+                    }
+                }
+                ToggleRow("Gain schedule", active.gainScheduleEnabled) { v ->
+                    edit(ConfigGroup.GAIN_SCHEDULE) { it.copy(gainScheduleEnabled = v) }
+                }
+                Caption(
+                    "Gain schedule scales the gains by (V_ref/V)² so fin authority stays " +
+                        "roughly constant as speed changes. Off = fixed gains at all speeds.",
+                )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (active.rollWaypoints.size < 8) {
-                    OutlinedButton(onClick = {
-                        val t = (active.rollWaypoints.lastOrNull()?.timeSeconds ?: -1f) + 1f
-                        edit(ConfigGroup.ROLL_PROFILE) { p ->
-                            p.copy(
-                                rollWaypoints = p.rollWaypoints +
-                                    ProfileRollWaypoint(timeSeconds = t, angleDeg = 0f),
-                            )
-                        }
-                    }) { Text("Add Waypoint") }
-                }
-                if (active.rollWaypoints.isNotEmpty()) {
-                    OutlinedButton(onClick = {
-                        // iOS: empty the profile + explicit clear command (27).
-                        edit(null) { it.copy(rollWaypoints = emptyList()) }
-                        session?.sendBareCommand(BleCommandId.ROLL_PROFILE_CLEAR)
-                    }) { Text("Clear Roll Profile") }
-                }
-            }
-        }
 
-        // ── Guidance ─────────────────────────────────────────────────────
-        Section("Guidance") {
-            ToggleRow("Guidance enabled", active.guidanceEnabled) { v ->
-                edit(ConfigGroup.GUIDANCE) { it.copy(guidanceEnabled = v) }
-            }
-            if (active.guidanceEnabled) {
-                FieldRow {
-                    NumField("Nav gain", fmt(active.pnNavGain), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnNavGain = v) } }
-                    }
-                    NumField("Max accel", fmt(active.pnMaxAccel), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMaxAccel = v) } }
-                    }
-                    NumField("Max fin °", fmt(active.pnMaxFinDeg), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMaxFinDeg = v) } }
+            // ── Roll control (iOS Control-tab "Roll Control" section) ────
+            Section("Roll control") {
+                ToggleRow("Angle control", active.useAngleControl) { v ->
+                    edit(ConfigGroup.ROLL_CONTROL) { it.copy(useAngleControl = v) }
+                }
+                Caption(
+                    if (active.useAngleControl) {
+                        "Cascaded angle control — fins track the roll profile waypoints below."
+                    } else {
+                        "Rate-only control — fins hold zero roll rate. No profile followed."
+                    },
+                )
+                if (active.useAngleControl) {
+                    FieldRow {
+                        NumField("Kp angle", fmt(active.kpAngle), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(kpAngle = v) } }
+                        }
+                        NumField("Rate cap °/s", fmt(active.rateCapDps), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rateCapDps = v) } }
+                        }
                     }
                 }
                 FieldRow {
-                    NumField("Min speed", fmt(active.pnMinSpeed), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMinSpeed = v) } }
+                    NumField("Roll delay ms", active.rollDelayMs.toString(), Modifier.weight(1f)) { s ->
+                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rollDelayMs = v) } }
                     }
-                    NumField("Target alt m", fmt(active.pnTargetAltM), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnTargetAltM = v) } }
+                }
+                Caption(
+                    "Milliseconds after launch before control activates — roll-rate-null and " +
+                        "PN guidance both engage at this delay, keeping fins neutral through " +
+                        "initial boost.",
+                )
+            }
+
+            // ── Servo ────────────────────────────────────────────────────
+            Section("Servo") {
+                FieldRow {
+                    NumField("Bias 1", active.servoBias1.toString(), Modifier.weight(1f)) { s ->
+                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias1 = v) } }
                     }
-                    NumField("Coast ms", active.pnCoastDelayMs.toString(), Modifier.weight(1f)) { s ->
-                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnCoastDelayMs = v) } }
+                    NumField("Bias 2", active.servoBias2.toString(), Modifier.weight(1f)) { s ->
+                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias2 = v) } }
+                    }
+                    NumField("Bias 3", active.servoBias3.toString(), Modifier.weight(1f)) { s ->
+                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias3 = v) } }
+                    }
+                    NumField("Bias 4", active.servoBias4.toString(), Modifier.weight(1f)) { s ->
+                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias4 = v) } }
+                    }
+                }
+                FieldRow {
+                    NumField("Hz", active.servoHz.toString(), Modifier.weight(1f)) { s ->
+                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoHz = v) } }
+                    }
+                    NumField("Min µs", active.servoMinUs.toString(), Modifier.weight(1f)) { s ->
+                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoMinUs = v) } }
+                    }
+                    NumField("Max µs", active.servoMaxUs.toString(), Modifier.weight(1f)) { s ->
+                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoMaxUs = v) } }
+                    }
+                    // #449: travel is the editable quantity; fin angles derive.
+                    NumField("Travel °", fmt(active.finTravelDeg), Modifier.weight(1f)) { s ->
+                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(finTravelDeg = v) } }
+                    }
+                }
+            }
+
+            // ── Fin layout (cmd 66) ──────────────────────────────────────
+            Section("Fin layout") {
+                FinLayoutEditor(
+                    ringMode = active.finRingMode,
+                    servoAtSlot = active.finServoAtSlot,
+                    reverse = active.finReverse,
+                    rollReverse = active.finRollReverse,
+                    canJog = canJog,
+                    finMinDeg = active.finMinDeg,
+                    finMaxDeg = active.finMaxDeg,
+                    onSetRingMode = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finRingMode = v) } },
+                    onSetServoAtSlot = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finServoAtSlot = v) } },
+                    onSetReverse = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finReverse = v) } },
+                    onSetRollReverse = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finRollReverse = v) } },
+                    onJogAngles = { angles -> session?.sendCommandFrame(Commands.servoTestAngles(angles)) },
+                    onJogStop = { session?.sendBareCommand(BleCommandId.SERVO_TEST_STOP) },
+                )
+            }
+
+            // ── Roll profile (cmd 26; Clear = cmd 27, matching iOS) ──────
+            Section("Roll profile") {
+                Text(
+                    "The target roll angle ramps linearly between waypoints. Before " +
+                        "the first waypoint the controller nulls roll rate (fins keep " +
+                        "zero roll through boost); after the last waypoint the final " +
+                        "angle is held. To hold an angle, give two consecutive " +
+                        "waypoints the same angle.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                active.rollWaypoints.forEachIndexed { i, wp ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("WP ${i + 1}", style = MaterialTheme.typography.bodySmall)
+                        NumField("Time s", fmt(wp.timeSeconds), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v ->
+                                edit(ConfigGroup.ROLL_PROFILE) { p ->
+                                    p.copy(
+                                        rollWaypoints = p.rollWaypoints.mapIndexed { j, w ->
+                                            if (j == i) w.copy(timeSeconds = v) else w
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        NumField("Angle °", fmt(wp.angleDeg), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v ->
+                                edit(ConfigGroup.ROLL_PROFILE) { p ->
+                                    p.copy(
+                                        rollWaypoints = p.rollWaypoints.mapIndexed { j, w ->
+                                            if (j == i) w.copy(angleDeg = v) else w
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        TextButton(onClick = {
+                            edit(ConfigGroup.ROLL_PROFILE) { p ->
+                                p.copy(rollWaypoints = p.rollWaypoints.filterIndexed { j, _ -> j != i })
+                            }
+                        }) { Text("✕") }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (active.rollWaypoints.size < 8) {
+                        OutlinedButton(onClick = {
+                            val t = (active.rollWaypoints.lastOrNull()?.timeSeconds ?: -1f) + 1f
+                            edit(ConfigGroup.ROLL_PROFILE) { p ->
+                                p.copy(
+                                    rollWaypoints = p.rollWaypoints +
+                                        ProfileRollWaypoint(timeSeconds = t, angleDeg = 0f),
+                                )
+                            }
+                        }) { Text("Add Waypoint") }
+                    }
+                    if (active.rollWaypoints.isNotEmpty()) {
+                        OutlinedButton(onClick = {
+                            // iOS: empty the profile + explicit clear command (27).
+                            edit(null) { it.copy(rollWaypoints = emptyList()) }
+                            session?.sendBareCommand(BleCommandId.ROLL_PROFILE_CLEAR)
+                        }) { Text("Clear Roll Profile") }
+                    }
+                }
+            }
+
+            // ── Guidance ─────────────────────────────────────────────────
+            Section("Guidance") {
+                ToggleRow("Guidance enabled", active.guidanceEnabled) { v ->
+                    edit(ConfigGroup.GUIDANCE) { it.copy(guidanceEnabled = v) }
+                }
+                if (active.guidanceEnabled) {
+                    FieldRow {
+                        NumField("Nav gain", fmt(active.pnNavGain), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnNavGain = v) } }
+                        }
+                        NumField("Max accel", fmt(active.pnMaxAccel), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMaxAccel = v) } }
+                        }
+                        NumField("Max fin °", fmt(active.pnMaxFinDeg), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMaxFinDeg = v) } }
+                        }
+                    }
+                    FieldRow {
+                        NumField("Min speed", fmt(active.pnMinSpeed), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMinSpeed = v) } }
+                        }
+                        NumField("Target alt m", fmt(active.pnTargetAltM), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnTargetAltM = v) } }
+                        }
+                        NumField("Coast ms", active.pnCoastDelayMs.toString(), Modifier.weight(1f)) { s ->
+                            s.toIntOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnCoastDelayMs = v) } }
+                        }
                     }
                 }
             }
@@ -873,6 +926,35 @@ private fun Section(title: String, content: @Composable () -> Unit) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
             content()
+        }
+    }
+}
+
+/**
+ * Dim-and-lock wrapper for the control block under the servo-control switch.
+ *
+ * A scrim rather than an `enabled` flag threaded through every field: the
+ * block holds NumFields, FilterChips, dropdowns and the fin-layout jog canvas,
+ * none of which take one, and all of which must go inert together.  The scrim
+ * detects taps only — it never consumes the drag, so the settings list still
+ * scrolls through the grayed region.  [content] stays composed, so no
+ * NumField is disposed (which would fire its commit-on-dispose) just because
+ * servo control was switched off mid-edit.
+ */
+@Composable
+private fun GatedControls(enabled: Boolean, content: @Composable ColumnScope.() -> Unit) {
+    Box {
+        Column(
+            Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.5f),
+            verticalArrangement = Arrangement.spacedBy(10.dp),   // matches the screen Column
+            content = content,
+        )
+        if (!enabled) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .pointerInput(Unit) { detectTapGestures { } },
+            )
         }
     }
 }
