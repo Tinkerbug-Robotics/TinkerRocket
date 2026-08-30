@@ -5,6 +5,15 @@ gain K_plant, FFT-identifies any persistent oscillation, computes phase
 margin given the current Kp, and recommends tuned gains for a target
 crossover frequency.
 
+Drawn with the report's interactive charts (2026-08-29; the matplotlib
+figures this section carried before are retired). One deliberate omission:
+the four-panel launch→ejection tracking figure is NOT reproduced here — the
+Roll Control section directly above renders exactly those panels,
+interactively, from the same `roll_series` data, and shipping the arrays
+twice under colliding chart ids bought nothing. This section keeps what the
+Roll section deliberately leaves out: the full-log timeline, the rate-only
+close-up, the steady-state spectrum, and the tuning numbers.
+
 Skips gracefully on flights without active roll control (`roll_cmd ≡ 0`).
 Adapted from `analyze_roll_pid.py`.
 """
@@ -14,8 +23,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MultipleLocator
 import numpy as np
 
 try:
@@ -30,6 +37,7 @@ if str(_PARENT) not in sys.path:
 
 from plot_flight_data_mini import get_array  # noqa: E402
 
+from ..charts import chart, trace
 from ..flight import Flight
 from ..registry import AnalysisResult
 
@@ -161,26 +169,6 @@ def _break_seam(y):
     return y
 
 
-def _shade_segments(ax, tw, is_ang, label="rate-null (no angle target)"):
-    """Shade the contiguous time spans where the profile is in null-rate mode."""
-    if tw is None or len(tw) == 0:
-        return
-    shown = False
-    start = None
-    for i in range(len(tw)):
-        null = not bool(is_ang[i])
-        if null and start is None:
-            start = float(tw[i])
-        elif not null and start is not None:
-            ax.axvspan(start, float(tw[i]), color="0.85", alpha=0.6, lw=0,
-                       label=(label if not shown else None))
-            shown = True
-            start = None
-    if start is not None:
-        ax.axvspan(start, float(tw[-1]), color="0.85", alpha=0.6, lw=0,
-                   label=(label if not shown else None))
-
-
 def _as_float(v):
     """Parse a sidecar value to float, or None if missing / non-numeric."""
     try:
@@ -189,73 +177,130 @@ def _as_float(v):
         return None
 
 
-def _clip_rate_axis(ax, tw, gw, eject_t, rate_cap=None):
-    """Clip a roll-rate axis to in-flight magnitudes so the apogee tumble spike
-    doesn't crush the controlled-flight detail; annotate if anything is clipped.
-    Scale is anchored on the rate cap (the natural scale of controlled roll rate),
-    with a robust percentile floor; the final second before ejection is excluded
-    so a pre-apogee tumble ramp can't inflate the scale."""
-    if gw is None or len(gw) == 0:
-        return
-    core = gw[tw <= eject_t - 1.0]
-    core = core if core.size else gw
+# Chart colors — matplotlib tab-palette parity with the retired static figures.
+_C_RATE = "#2ca02c"     # tab:green
+_C_CMD = "#ff7f0e"      # tab:orange
+_C_SPEED = "#555555"
+_C_FFT = "#1f77b4"      # tab:blue
+_C_PEAK = "#d62728"     # tab:red
+
+
+def rate_axis_limit(t, g, eject_t, cap) -> tuple[float, float]:
+    """Y-limit for a roll-rate panel, and the true peak it may be hiding.
+
+    Shared with the flight-level roll section so both scale that axis the same
+    way: the larger of a robust percentile of the in-flight magnitudes and a
+    multiple of the rate cap, with the last second before ejection excluded so a
+    tumble that starts early cannot inflate it.
+    """
+    g = np.asarray(g, dtype=float)
+    t = np.asarray(t, dtype=float)
+    n = min(g.size, t.size)
+    # Mask both together. Dropping non-finite samples from g first and then
+    # slicing t to the survivors' *count* would pair each reading with the
+    # wrong timestamp, so the window below would select the wrong samples.
+    fin = np.isfinite(g[:n])
+    g, t = g[:n][fin], t[:n][fin]
+    if not g.size:
+        return 30.0, 0.0
+    core = g
+    if eject_t is not None and np.isfinite(eject_t):
+        sel = t <= float(eject_t) - 1.0
+        if sel.any():
+            core = g[sel]
     lim = max(float(np.percentile(np.abs(core), 95)) * 1.4,
-              (rate_cap * 2.5) if rate_cap else 0.0, 30.0)
-    peak = float(np.max(np.abs(gw)))
-    ax.set_ylim(-lim, lim)
-    if peak > lim * 1.05:
-        ax.text(0.01, 0.04, f"axis clipped — peak |rate| {peak:.0f}°/s",
-                transform=ax.transAxes, ha="left", va="bottom", fontsize=8, color="0.4")
+              (float(cap) * 2.5) if cap else 0.0, 30.0)
+    return lim, float(np.max(np.abs(g)))
 
 
-def _zoom_cmd_axis(ax, cmd_win, cmd_limit=None):
-    """Zoom a roll-command axis to the command's actual range (the observed
-    min/max padded by 5°), and note the range / ±cmd-limit authority."""
-    if cmd_win is None or len(cmd_win) == 0:
+def _hline(spec: dict, y: float, color: str, dash: str = "dot") -> None:
+    """A horizontal reference line in data coordinates (roll.py's idiom).
+
+    Safe against the units toggle only because every axis this is used on is in
+    degrees or degrees per second, neither of which the toggle converts.
+    """
+    if not spec:
         return
-    lo, hi = float(np.nanmin(cmd_win)), float(np.nanmax(cmd_win))
-    ax.set_ylim(lo - 5.0, hi + 5.0)
-    note = f"cmd ∈ [{lo:.1f}, {hi:.1f}]°"
-    if cmd_limit is not None:
-        note += f"  ·  limit ±{cmd_limit:g}°"
-    ax.text(0.99, 0.04, note, transform=ax.transAxes, ha="right", va="bottom",
-            fontsize=8, color="0.4")
+    spec["layout"].setdefault("shapes", []).append({
+        "type": "line", "xref": "paper", "yref": "y",
+        "x0": 0, "x1": 1, "y0": y, "y1": y,
+        "line": {"color": color, "width": 1, "dash": dash},
+        "layer": "below",
+    })
 
 
-def _overlay_speed(ax, t, speed):
-    """Overlay airspeed on a right-hand twin axis (roll authority scales with it).
-    Keeps the primary (command) line drawn on top."""
-    axb = ax.twinx()
-    axb.plot(t, speed, color="0.45", lw=1.1, alpha=0.7, zorder=1)
-    axb.set_ylabel("Speed (m/s)", color="0.45")
-    axb.tick_params(axis="y", labelcolor="0.45")
-    ax.set_zorder(axb.get_zorder() + 1)
-    ax.patch.set_visible(False)
-    return axb
+def _stack(specs: list, x_range: list[float], dtick: float | None = None) -> list:
+    """Make a run of charts read as one multi-panel figure.
+
+    Same treatment as the Roll section's four-panel stack: a shared x window,
+    tick labels and the axis title only on the bottom panel, event labels only
+    on the top one, collapsed margins between, and legends inset so nothing
+    lands in the seams. `dtick` adds the 1 s major / 0.5 s minor grid the
+    launch→eject close-ups use.
+    """
+    kept = [sp for sp in specs if sp]
+    for i, sp in enumerate(kept):
+        first, last = i == 0, i == len(kept) - 1
+        ax = sp["layout"]["xaxis"]
+        ax["range"] = list(x_range)
+        ax["showticklabels"] = last
+        if dtick:
+            ax.update({
+                "tick0": 0, "dtick": dtick,
+                "minor": {"dtick": dtick / 2, "showgrid": True,
+                          "gridcolor": "#f4f4f4"},
+            })
+        if not first:
+            sp["layout"]["annotations"] = []
+            sp["layout"]["title"] = {"text": "", "font": {"size": 14}}
+            sp["layout"]["height"] = sp["layout"]["height"] - 40
+        sp["layout"]["margin"] = {
+            # The y2 axis draws its labels in the right margin; collapsing it
+            # to the stack's 20 px would clip them.
+            "l": 70, "r": 60 if "yaxis2" in sp["layout"] else 20,
+            "t": 40 if first else 8,
+            "b": 42 if last else 6,
+        }
+        if sp["layout"].get("showlegend"):
+            sp["layout"]["legend"] = {
+                "x": 0.008 if first else 0.992,
+                "xanchor": "left" if first else "right",
+                "y": 0.98, "yanchor": "top",
+                "bgcolor": "rgba(255,255,255,0.72)",
+                "borderwidth": 0, "font": {"size": 10},
+            }
+        sp["stack"] = "first" if first else ("last" if last else "mid")
+    return kept
 
 
-def _fine_time_axis(ax):
-    """1 s major / 0.5 s minor ticks with a two-level grid, so transition times
-    are easy to read off the launch→eject figures."""
-    ax.xaxis.set_major_locator(MultipleLocator(1.0))
-    ax.xaxis.set_minor_locator(MultipleLocator(0.5))
-    ax.grid(True, which="major", alpha=0.35)
-    ax.grid(True, which="minor", alpha=0.15)
+def _fft_trace(freqs, mag):
+    """The spectrum as one line trace, built by hand rather than via `trace()`.
 
-
-def _phase_label(wps, i, semantics="step"):
-    """Short label for the control phase that STARTS at waypoint i."""
-    wt, wa, wnull = wps[i]
-    if semantics == "ramp":
-        if i < len(wps) - 1:
-            a1 = wps[i + 1][1]
-            return f"hold {wa:g}°" if a1 == wa else f"ramp {wa:g}→{a1:g}°"
-        return f"hold {wa:g}°"
-    if wnull:
-        return "null-rate"
-    if i < len(wps) - 1:
-        return f"cmd {wps[i + 1][1]:g}° (step)"
-    return f"hold {wa:g}°"
+    The shared builder rounds y to 4 decimals — right for sensor series, fatal
+    for a spectrum drawn on a log axis, where the noise floor lives well below
+    1e-4 °/s and would round to an unplottable 0. Zeros are dropped for the
+    same reason (log of the DC bin's exact 0 has no pixel), and everything
+    non-finite goes because NaN/Inf in a chart spec kills the whole document.
+    """
+    f = np.asarray(freqs, dtype=float)
+    m = np.asarray(mag, dtype=float)
+    n = min(f.size, m.size)
+    f, m = f[:n], m[:n]
+    # f > 0 also drops the DC bin: the window is mean-subtracted before the
+    # FFT, so bin 0 is numerical dust (~1e-16) that would stretch the log
+    # autorange down to femto-scale and flatten the real spectrum.
+    good = np.isfinite(f) & np.isfinite(m) & (f > 0) & (m > 0)
+    f, m = f[good], m[good]
+    if f.size < 4:
+        return None
+    return {
+        "type": "scatter", "mode": "lines", "name": "Amplitude",
+        "x": np.round(f, 3).tolist(),
+        "y": [float(f"{v:.5g}") for v in m],
+        "yaxis": "y",
+        "line": {"width": 1.2, "color": _C_FFT},
+        "hovertemplate": "%{y:.3g} °/s @ %{x:.2f} Hz<extra></extra>",
+    }
 
 
 def _effective_plan(wps, semantics="step"):
@@ -838,204 +883,167 @@ def analyze(flight: Flight) -> AnalysisResult:
             metrics[f"segment {a:.2g}–{b:.2g}s"] = desc
     result.metrics = metrics
 
-    # ── Figures ──
-    # 1) Full timeline: rate, cmd, speed
-    fig, axes = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
-    axes[0].plot(t_imu, g, color="tab:green", lw=0.4, alpha=0.5, label="gyro x (raw)")
+    # ── Charts ──
+    # The "control on" instant is drawn on every panel. event_shapes styles the
+    # keys it knows (launch/burnout/…) and falls back to gray for the rest, so
+    # module-specific events like this one need no registration.
+    ev_on = {"control on": round(float(t_control_on), 3)}
+
+    # 1) Full-timeline stack: rate, command, speed over the whole log, so the
+    #    pre-launch idle and the post-apogee behavior stay visible. The
+    #    launch→ejection close-up is the Roll Control section's four panels
+    #    (angle flights) or the stack below (rate-only flights).
+    t_all_lo = float(min(t_imu[0], t_ns[0]))
+    t_all_hi = float(max(t_imu[-1], t_ns[-1]))
+    pad = 0.02 * (t_all_hi - t_all_lo) or 1.0
+    full_range = [t_all_lo - pad, t_all_hi + pad]
+
+    raw = trace(t_imu, g, "Gyro X (raw)", _C_RATE, mode="lines+markers", width=0.7)
+    rate_traces = []
+    if raw:
+        raw["opacity"] = 0.45   # thin + faded, as the static figure drew it
+        rate_traces.append(raw)
     if t_imu.size > 50:
         g_sm = _moving_average(g, min(50, max(2, t_imu.size // 10)))
-        axes[0].plot(t_imu, g_sm, color="tab:green", lw=1.5, label="50-pt avg")
-    axes[0].axhline(0, color="k", lw=0.5, alpha=0.3)
-    axes[0].axvline(t_control_on, color="red", linestyle="--", lw=1.2,
-                    label=f"control on ({t_control_on:.2f}s)")
-    axes[0].set_ylabel("Roll rate (deg/s)")
-    axes[0].set_title("Roll rate (gyro X)")
-    axes[0].legend(loc="upper right", fontsize=8)
-    axes[0].grid(True, alpha=0.3)
+        # Pure line: the average is derived, not samples, so no markers.
+        rate_traces.append(trace(t_imu, g_sm, "50-pt average", _C_RATE,
+                                 mode="lines", width=2.0))
+    rate_spec = chart(
+        "chart-roll-pid-rate", "Roll PID — full timeline", rate_traces,
+        x_title="", y_title="Roll rate", y_unit="°/s", events=ev_on, height=250,
+    )
+    if rate_spec:
+        _hline(rate_spec, 0.0, "#999", dash="solid")
+    cmd_spec = chart(
+        "chart-roll-pid-cmd", "",
+        [trace(t_ns, cmd, "Fin Command", _C_CMD, mode="lines+markers", width=1.2)],
+        x_title="", y_title="Roll command", y_unit="°", events=ev_on, height=250,
+    )
+    if cmd_spec:
+        _hline(cmd_spec, 0.0, "#999", dash="solid")
+    speed_spec = chart(
+        "chart-roll-pid-speed", "",
+        [trace(t_ns, speed, "Speed (nav)", _C_SPEED, mode="lines+markers", width=1.2)],
+        x_title="Time since launch (s)", y_title="Speed", y_unit="m/s",
+        events=ev_on, height=250,
+    )
+    timeline = _stack([rate_spec, cmd_spec, speed_spec], full_range)
+    if timeline and has_angle_profile:
+        timeline[-1]["note"] = (
+            "Angle tracking, error, commanded rate and fin command for the "
+            "launch→ejection window are the Roll Control section's four panels "
+            "above; the table here carries the numbers behind them."
+        )
+    result.charts.extend(timeline)
 
-    axes[1].plot(t_ns, cmd, color="tab:orange", lw=0.8)
-    axes[1].axhline(0, color="k", lw=0.5, alpha=0.3)
-    axes[1].axvline(t_control_on, color="red", linestyle="--", lw=1.2)
-    axes[1].set_ylabel("Roll cmd (deg)")
-    axes[1].set_title("Roll command (PID output → servo)")
-    axes[1].grid(True, alpha=0.3)
-
-    axes[2].plot(t_ns, speed, color="k", lw=1.2)
-    axes[2].axvline(t_control_on, color="red", linestyle="--", lw=1.2)
-    axes[2].set_xlabel("Time since launch (s)")
-    axes[2].set_ylabel("Speed (m/s)")
-    axes[2].set_title("Airspeed (nav)")
-    axes[2].grid(True, alpha=0.3)
-    fig.tight_layout()
-    result.figures.append(fig)
-
-    # Program events / phase transitions within the plotted window. With
-    # annotate=True, each line gets a timestamped, vertical label (use on the
-    # top panel only).
-    def _event_list():
-        evs = [(t_control_on, "control on", "red", "--")]
-        if burnout_t is not None and -0.2 <= burnout_t <= win_end + 0.2:
-            evs.append((burnout_t, "burnout", "tab:purple", "--"))
-        if eject_t <= win_end + 0.2:
-            evs.append((eject_t, "apogee/eject", "black", "--"))
-        for i, (wt, _, wnull) in enumerate(wps):
-            if -0.2 <= wt <= win_end + 0.2:
-                # null-rate segments are already shown by the gray shading; only
-                # label the meaningful mode-change transitions (angle / hold).
-                lbl = _phase_label(wps, i, semantics)
-                evs.append((wt, None if (semantics != "ramp" and wnull) else lbl, "gray", ":"))
-        return evs
-
-    def _mark_events(ax, annotate=False):
-        for et, lbl, c, ls in _event_list():
-            ax.axvline(et, color=c, linestyle=ls, lw=(0.8 if ls == ":" else 1.0))
-        if annotate:
-            for et, lbl, c, ls in _event_list():
-                if lbl is None:
-                    continue
-                ax.annotate(f"{et:.2f}s  {lbl}", xy=(et, 0.0),
-                            xycoords=("data", "axes fraction"),
-                            xytext=(2, 3), textcoords="offset points",
-                            rotation=90, va="bottom", ha="left",
-                            fontsize=7, color=c)
-
-    # Launch → ejection window (shared by the figures below), trimmed if configured.
-    t_lo, t_hi = -0.2, win_end + 0.2
-    win = (t_imu >= t_lo) & (t_imu <= t_hi)
-    win_c = (t_ns >= t_lo) & (t_ns <= t_hi)
-    rate_cap = _as_float(rc_cfg.get("rate_cap_dps"))
-
-    # 2) Control timeline — launch → ejection (roll rate + servo command).
-    #    For angle-profile flights this is folded into the 4-panel tracking
-    #    figure below, so only render it standalone for rate-only flights.
+    # 2) Control close-up — launch → ejection (roll rate + servo command).
+    #    For angle-profile flights the Roll Control section's four panels are
+    #    this view and more, so it renders only for rate-only flights. The
+    #    static figure also drew a gray line per profile waypoint; on a
+    #    rate-only flight a stored waypoint plan was by definition not
+    #    followed, so those lines are dropped rather than ported.
     if not has_angle_profile:
-        fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
-        axes[0].plot(t_imu[win], g[win], color="tab:green", lw=0.9)
-        axes[0].axhline(0, color="k", lw=0.5)
-        axes[0].set_ylabel("Roll rate (deg/s)")
-        axes[0].set_title("Roll control — launch → ejection")
-        _clip_rate_axis(axes[0], t_imu[win], g[win], win_end, rate_cap)
-        _mark_events(axes[0], annotate=True)
-        axes[1].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=1.0, zorder=3)
-        axes[1].axhline(0, color="k", lw=0.5)
-        axes[1].set_xlabel("Time since launch (s)")
-        axes[1].set_ylabel("Roll cmd (deg)", color="tab:orange")
-        axes[1].tick_params(axis="y", labelcolor="tab:orange")
-        _zoom_cmd_axis(axes[1], cmd[win_c], _as_float(rc_cfg.get("cmd_limit_max_deg")))
-        _overlay_speed(axes[1], t_ns[win_c], speed[win_c])
-        _mark_events(axes[1])
-        for ax in axes:
-            _fine_time_axis(ax)
-        fig.tight_layout()
-        result.figures.append(fig)
+        x_lo, x_hi = -0.2, win_end + 0.2
+        xpad = 0.05 * (x_hi - x_lo)
+        ctl_range = [x_lo - xpad, x_hi + xpad]
+        ev_ctl = dict(ev_on)
+        if burnout_t is not None and np.isfinite(burnout_t) \
+                and x_lo <= burnout_t <= x_hi:
+            ev_ctl["burnout"] = round(float(burnout_t), 3)
+        if np.isfinite(eject_t) and eject_t <= x_hi:
+            ev_ctl["apogee/eject"] = round(float(eject_t), 3)
+        win = (t_imu >= x_lo) & (t_imu <= x_hi)
+        win_c = (t_ns >= x_lo) & (t_ns <= x_hi)
+        notes: list[str] = []
 
-    # 3) Roll-angle tracking vs profile plan + control activity (launch → ejection)
-    if has_angle_profile and track_tw is not None and track_tw.size > 5:
-        fig, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
+        ctl_rate = chart(
+            "chart-roll-pid-ctl-rate", "Roll control — launch → ejection",
+            [trace(t_imu[win], g[win], "Gyro X", _C_RATE,
+                   mode="lines+markers", width=1.2)],
+            x_title="", y_title="Roll rate", y_unit="°/s",
+            events=ev_ctl, height=270,
+        )
+        if ctl_rate:
+            lim, peak = rate_axis_limit(t_imu[win], g[win], win_end, rate_cap_cfg)
+            ctl_rate["layout"]["yaxis"]["range"] = [-lim, lim]
+            _hline(ctl_rate, 0.0, "#999", dash="solid")
+            if rate_cap_cfg:
+                _hline(ctl_rate, float(rate_cap_cfg), "#999")
+                _hline(ctl_rate, -float(rate_cap_cfg), "#999")
+                notes.append(f"Dotted lines on the rate panel mark the "
+                             f"±{rate_cap_cfg:g}°/s rate cap.")
+            if peak > lim * 1.05:
+                notes.append(f"Rate axis clipped to the controlled flight; "
+                             f"peak |rate| was {peak:.0f}°/s.")
 
-        # Panel 0 — roll angle: target vs actual (both wrapped ±180)
-        _shade_segments(axes[0], track_tw, track_is_ang)
-        axes[0].plot(track_tw, track_tgt, color="tab:orange", lw=2.2, label="profile target")
-        axes[0].plot(track_tw, track_act, color="tab:green", lw=1.4, label="actual roll (quaternion)")
-        axes[0].set_ylabel("Roll angle\n(deg, wrapped ±180)")
-        axes[0].set_ylim(-189, 189)
-        axes[0].set_yticks([-180, -90, 0, 90, 180])
-        axes[0].set_title("Roll angle tracking vs profile plan (launch → ejection)")
-        axes[0].grid(True, alpha=0.3)
-        if semantics == "ramp":
-            # Ramp semantics: the target passes through each waypoint's
-            # (time, angle) exactly — annotate the waypoints themselves.
-            for (wt, wa, _) in wps:
-                if 0 <= wt <= win_end:
-                    axes[0].annotate(f"{wa:g}°", xy=(wt, _wrap180(wa)), fontsize=8,
-                                     color="tab:orange", ha="left", va="bottom",
-                                     xytext=(2, 2), textcoords="offset points")
-        else:
-            # Step semantics: label each ANGLE segment with its effective
-            # command (the NEXT waypoint's angle), centered on the visible part
-            # of the segment — not the waypoint angle at the waypoint time,
-            # which reads as "hold this from here" and is wrong.
-            seg_spans = [(wps[i][0], wps[i + 1][0], wps[i + 1][1], wps[i][2])
-                         for i in range(len(wps) - 1)]
-            if not wps[-1][2]:  # trailing hold segment if the last waypoint is angle-mode
-                seg_spans.append((wps[-1][0], win_end, wps[-1][1], False))
-            for (sa, sb, s_ang, s_null) in seg_spans:
-                sa, sb = max(sa, 0.0), min(sb, win_end)
-                if s_null or sb - sa < 0.05:
-                    continue
-                axes[0].annotate(f"cmd {s_ang:g}°", xy=(0.5 * (sa + sb), _wrap180(s_ang)),
-                                 fontsize=8, color="tab:orange", ha="center", va="bottom",
-                                 xytext=(0, 3), textcoords="offset points")
-        _mark_events(axes[0], annotate=True)
-        axes[0].legend(loc="upper left", fontsize=8)
+        ctl_cmd = chart(
+            "chart-roll-pid-ctl-cmd", "",
+            [trace(t_ns[win_c], cmd[win_c], "Fin Command", _C_CMD,
+                   mode="lines+markers", width=1.4),
+             trace(t_ns[win_c], speed[win_c], "Speed", _C_SPEED,
+                   mode="lines", width=1.1, axis="y2")],
+            x_title="Time since launch (s)", y_title="Roll command", y_unit="°",
+            y2_title="Speed (m/s)", events=ev_ctl, height=270,
+        )
+        if ctl_cmd:
+            _hline(ctl_cmd, 0.0, "#999", dash="solid")
+            cw = cmd[win_c]
+            cw = cw[np.isfinite(cw)]
+            if cw.size:
+                # Zoomed to the command's own range plus 5°: it lives in a few
+                # degrees while its limit is ±20, and scaling to the limit
+                # would flatten everything the controller did.
+                lo, hi = float(np.min(cw)), float(np.max(cw))
+                ctl_cmd["layout"]["yaxis"]["range"] = [lo - 5.0, hi + 5.0]
+                cmd_note = f"Fin command spans [{lo:.1f}, {hi:.1f}]°"
+                limit = _as_float(rc_cfg.get("cmd_limit_max_deg"))
+                if limit:
+                    drawn = [r for r in (limit, -limit) if lo - 5.0 <= r <= hi + 5.0]
+                    for rail in drawn:
+                        _hline(ctl_cmd, rail, "#999")
+                    if drawn:
+                        cmd_note += f" against a ±{limit:g}° limit"
+                notes.append(cmd_note + ".")
 
-        # Panel 1 — tracking error
-        _shade_segments(axes[1], track_tw, track_is_ang, label=None)
-        axes[1].axhline(0, color="k", lw=0.5)
-        axes[1].plot(track_tw, track_err, color="tab:red", lw=1.1)
-        axes[1].set_ylabel("Tracking error\n(deg)")
-        axes[1].grid(True, alpha=0.3)
-        _mark_events(axes[1])
-        if np.isfinite(angle_rms):
-            txt = f"RMS {angle_rms:.1f}°   peak {angle_peak:.1f}°"
-            if rate_cap is not None and profile_ramp > rate_cap + 1e-6:
-                txt += (f"\nramp {profile_ramp:.0f}°/s > cap {rate_cap:g}°/s"
-                        f"\n→ setpoint unreachable, error not a control metric")
-            axes[1].text(0.99, 0.05, txt,
-                         transform=axes[1].transAxes, ha="right", va="bottom", fontsize=8,
-                         bbox=dict(boxstyle="round", fc="white", ec="0.7", alpha=0.85))
+        ctl = _stack([ctl_rate, ctl_cmd], ctl_range, dtick=1.0)
+        if ctl:
+            ctl[-1]["note"] = " ".join(notes)
+        result.charts.extend(ctl)
 
-        # Panel 2 — roll rate: achieved (gyro) vs the firmware's commanded rate
-        # (outer loop, clipped to ±rate cap), so the cap + the ±180° wrap flip
-        # are visible against what the rocket actually did.
-        _shade_segments(axes[2], track_tw, track_is_ang, label=None)
-        axes[2].axhline(0, color="k", lw=0.5)
-        axes[2].plot(t_imu[win], g[win], color="tab:green", lw=0.9, label="roll rate (gyro, achieved)")
-        if track_ratecmd is not None:
-            axes[2].plot(track_tw, track_ratecmd, color="tab:blue", lw=1.5,
-                         label="commanded rate (outer loop)")
-        axes[2].set_ylabel("Roll rate\n(deg/s)")
-        axes[2].grid(True, alpha=0.3)
-        _clip_rate_axis(axes[2], t_imu[win], g[win], win_end, rate_cap)
-        if rate_cap is not None:
-            axes[2].axhline(rate_cap, color="tab:blue", ls=":", lw=1.0,
-                            label=f"rate cap ±{rate_cap:g}°/s")
-            axes[2].axhline(-rate_cap, color="tab:blue", ls=":", lw=1.0)
-        _mark_events(axes[2])
-        axes[2].legend(loc="upper right", fontsize=8)
-
-        # Panel 3 — roll command (PID output → servo), zoomed to its actual
-        # range, with airspeed overlaid (roll authority scales with speed).
-        _shade_segments(axes[3], track_tw, track_is_ang, label=None)
-        axes[3].axhline(0, color="k", lw=0.5)
-        axes[3].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=1.0, zorder=3)
-        axes[3].set_ylabel("Roll cmd (deg)", color="tab:orange")
-        axes[3].tick_params(axis="y", labelcolor="tab:orange")
-        axes[3].set_xlabel("Time since launch (s)")
-        _zoom_cmd_axis(axes[3], cmd[win_c], _as_float(rc_cfg.get("cmd_limit_max_deg")))
-        _overlay_speed(axes[3], t_ns[win_c], speed[win_c])
-        _mark_events(axes[3])
-
-        for ax in axes:
-            _fine_time_axis(ax)
-        fig.tight_layout()
-        result.figures.append(fig)
-
-    # 4) FFT of steady-state roll rate
+    # 3) Spectrum of the steady-state roll rate, on a log amplitude axis. This
+    #    is where a limit-cycle oscillation shows as a spike and broadband
+    #    airframe vibration as a floor — the dominant_osc_hz metric's evidence.
     if fft_freqs is not None and fft_mag is not None:
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ax.semilogy(fft_freqs, fft_mag, color="tab:blue", lw=0.8)
-        ax.set_xlim(0, 50)
-        ax.set_xlabel("Frequency (Hz)")
-        ax.set_ylabel("Amplitude (deg/s)")
-        ax.set_title(f"FFT of roll rate, steady-state window "
-                     f"({ss_t0:.1f}–{ss_t1:.1f}s)")
-        ax.grid(True, alpha=0.3)
-        if np.isfinite(osc_freq):
-            ax.axvline(osc_freq, color="red", linestyle="--", lw=1.0,
-                       label=f"peak: {osc_freq:.1f} Hz")
-            ax.legend()
-        fig.tight_layout()
-        result.figures.append(fig)
+        fft_t = _fft_trace(fft_freqs, fft_mag)
+        if fft_t:
+            fft_spec = chart(
+                "chart-roll-pid-fft",
+                f"Roll-rate spectrum, steady-state window ({ss_t0:.1f}–{ss_t1:.1f} s)",
+                [fft_t],
+                x_title="Frequency (Hz)", y_title="Amplitude", y_unit="°/s",
+                height=320,
+            )
+            if fft_spec:
+                fft_spec["layout"]["yaxis"]["type"] = "log"
+                # The window shows the control band; the full spectrum (out to
+                # Nyquist) is shipped, and Autoscale reveals it.
+                fft_spec["layout"]["xaxis"]["range"] = [0.0, 50.0]
+                if np.isfinite(osc_freq):
+                    fft_spec["layout"].setdefault("shapes", []).append({
+                        "type": "line", "xref": "x", "yref": "paper",
+                        "x0": float(osc_freq), "x1": float(osc_freq),
+                        "y0": 0, "y1": 1,
+                        "line": {"color": _C_PEAK, "width": 1, "dash": "dash"},
+                    })
+                    fft_spec["layout"].setdefault("annotations", []).append({
+                        "x": float(osc_freq), "y": 1.0,
+                        "xref": "x", "yref": "paper",
+                        "text": f"peak {osc_freq:.1f} Hz", "showarrow": False,
+                        "font": {"size": 10, "color": _C_PEAK},
+                        "yanchor": "bottom",
+                    })
+                fft_spec["note"] = ("Log amplitude, windowed to 0–50 Hz; "
+                                    "Autoscale shows the full spectrum.")
+                result.charts.append(fft_spec)
 
     return result

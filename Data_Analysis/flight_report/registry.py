@@ -95,6 +95,10 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         # Directly below the kinematic charts: roll is the one axis those three
         # say nothing about, and on a roll-control flight it is the whole story.
         ("roll",              roll.analyze,              LEVEL_FLIGHT),
+        # The control-loop view of the same axis: plant gain, oscillation,
+        # phase margin, and recommended gains. Skips itself when roll_cmd ≡ 0,
+        # so non-control flights never see it.
+        ("roll_pid",          roll_pid.analyze,          LEVEL_FLIGHT),
         ("apogee",            apogee.analyze,            LEVEL_FLIGHT),
         # Straight after the detectors: this is where their votes land, and the
         # step out of coast is the master flag latching.
