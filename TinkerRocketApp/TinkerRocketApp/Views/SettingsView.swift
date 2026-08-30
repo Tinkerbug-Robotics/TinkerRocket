@@ -553,6 +553,46 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var controlSections: some View {
+        servoEnableSection
+        // Everything below only ever reaches the fins through the servo
+        // driver, so with servo control off it is all inert — the bench jog
+        // included, since it cannot move a servo the FC never writes to.
+        // Dimmed and locked rather than removed: the values stay readable for
+        // a preflight check, and a tab that collapses to a single row reads as
+        // broken rather than as switched off.
+        Group {
+            pidGainsSection
+            servoSection
+            controlModeSection
+            if profile.guidanceEnabled {
+                guidanceSection
+            } else {
+                rollControlSection
+            }
+            finLayoutSection
+        }
+        .disabled(!profile.servoControlEnabled)
+        .opacity(profile.servoControlEnabled ? 1.0 : 0.5)
+    }
+
+    /// The master switch for everything else on this tab, so it sits alone at
+    /// the top of it rather than buried mid-way down the Servo section.  Plain
+    /// header, no "Sent" badge: it pushes on tap through `bind`, and borrowing
+    /// `servoApplied` would flash "Sent" here every time the servo CALIBRATION
+    /// group applied.
+    private var servoEnableSection: some View {
+        Section(header: Text("Servo Control")) {
+            Toggle("Enable Servo Control", isOn: bind(\.servoControlEnabled) {
+                device.sendServoControlConfig(enabled: $0)
+            })
+            Text(profile.servoControlEnabled
+                ? "The flight computer drives the fin servos. Everything below \u{2014} gains, servo calibration, control mode, fin layout \u{2014} applies."
+                : "Off \u{2014} the fins never move: no roll control, no guidance, no bench jog. The settings below stay saved, and do nothing until this is on.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    private var pidGainsSection: some View {
         Section(header: configHeader("PID Gains", applied: pidApplied)) {
             stringRow("Kp", text: $sPidKp, field: .pidKp, decimal: true)
             stringRow("Ki", text: $sPidKi, field: .pidKi, decimal: true)
@@ -569,11 +609,10 @@ struct SettingsView: View {
             Text("Scales the gains by (V_ref/V)\u{00B2} so fin authority stays roughly constant as speed changes. Disable for fixed gains at all speeds.")
                 .font(.caption).foregroundColor(.secondary)
         }
+    }
 
+    private var servoSection: some View {
         Section(header: configHeader("Servo", applied: servoApplied)) {
-            Toggle("Enable Servo Control", isOn: bind(\.servoControlEnabled) {
-                device.sendServoControlConfig(enabled: $0)
-            })
             stringRow("Servo 1", text: $sBias1, field: .bias1)
             stringRow("Servo 2", text: $sBias2, field: .bias2)
             stringRow("Servo 3", text: $sBias3, field: .bias3)
@@ -588,14 +627,6 @@ struct SettingsView: View {
             Text("Servo datasheet values: the pulse endpoints and the TOTAL fin deflection swept between them (servo travel \u{00D7} linkage ratio; 1:1 for a fin bolted straight to the arm). The controller maps a commanded fin angle onto the pulse that produces it, so these three numbers set the real authority \u{2014} narrowing the pulse range narrows the fins.")
                 .font(.caption).foregroundColor(.secondary)
         }
-
-        controlModeSection
-        if profile.guidanceEnabled {
-            guidanceSection
-        } else {
-            rollControlSection
-        }
-        finLayoutSection
     }
 
     @ViewBuilder
