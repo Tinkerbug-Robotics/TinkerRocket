@@ -3716,7 +3716,7 @@
 		)
 		(uuid "24a1ee19-730a-4c05-9ca7-8444cda32a9d")
 	)
-	(text "GPIO3 is a strapping pin (JTAG source select) and ESP_SDO is\ndriven by the Flight Computer, which is unpowered while the Out\nComputer boots. R34 gives the pad a defined level at reset."
+	(text "GPIO3 is a strapping pin (JTAG source select) and ESP_I2S_SD is\ndriven by the Flight Computer, which is unpowered while the Out\nComputer boots. R34 gives the pad a defined level at reset."
 		(exclude_from_sim no)
 		(at 161.925 139.7 0)
 		(effects
@@ -4705,7 +4705,7 @@
 			)
 		)
 	)
-	(global_label "ESP_CS"
+	(global_label "ESP_I2S_WS"
 		(shape input)
 		(at 212.725 53.34 0)
 		(fields_autoplaced yes)
@@ -4873,7 +4873,7 @@
 			)
 		)
 	)
-	(global_label "ESP_SDI"
+	(global_label "ESP_I2S_FSYNC"
 		(shape input)
 		(at 212.725 60.96 0)
 		(fields_autoplaced yes)
@@ -5089,7 +5089,7 @@
 			)
 		)
 	)
-	(global_label "ESP_SDO"
+	(global_label "ESP_I2S_SD"
 		(shape input)
 		(at 239.395 128.905 90)
 		(fields_autoplaced yes)
@@ -5209,7 +5209,7 @@
 			)
 		)
 	)
-	(global_label "ESP_SDO"
+	(global_label "ESP_I2S_SD"
 		(shape input)
 		(at 212.725 58.42 0)
 		(fields_autoplaced yes)
@@ -5353,7 +5353,7 @@
 			)
 		)
 	)
-	(global_label "ESP_SCLK"
+	(global_label "ESP_I2S_BCLK"
 		(shape input)
 		(at 212.725 55.88 0)
 		(fields_autoplaced yes)

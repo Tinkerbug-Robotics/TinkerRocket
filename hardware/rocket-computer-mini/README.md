@@ -367,31 +367,32 @@ and drops both warnings.
 
 ## Status
 
-**Schematic-complete for the two-processor split; the PCB has not been laid
-out.** The flight computer, its power switch, the diode-OR enable and the USB
+**Schematic-complete for the two-processor split; the PCB is placed but not
+routed.** The flight computer, its power switch, the diode-OR enable and the USB
 mux exist in the schematic and export a clean netlist — **214 components, 205
 nets** (2026-08-30, after the arm and TPS61094 hold-up reworks; this paragraph
 said 196/200 before those landed), no duplicate references and no single-node
 nets.
 
-Three things about the board file, all verified 2026-08-30:
+Board file, verified 2026-08-30:
 
-- **The footprints now exist but are not placed.** `U32`, `U1`, `S1`, `D9`,
-  `C105`, `R34` and the rest have been imported — this file used to say they had
-  no footprint at all. Twenty-two of the newest parts (`C114`–`C125`, `L9`,
-  `L10`, `R110`–`R118`) sit in an import scatter block at x > 130 mm, roughly
-  45 mm clear of where the board is. DRC reports 330 unconnected pads.
-- **There is no board outline.** `Edge.Cuts` carries no geometry — only the
-  layer declaration. The 22.0 × 54.8 mm outline existed at `0e0f2d5` and went
-  missing in `7ad7508` (the pack-direct pyro/supercap WIP commit) along with
-  ~82 track segments and 10 vias. Recover it from that commit before placing
-  anything against a boundary that is not there.
-- **The stored net names are one rework behind the schematic.** The PCB still
-  says `CAP_ACTIVE` and `ARM_CLK`; the schematic says `VBUCK_OK`, `WDT_PET`,
-  `FC_ARM`, `OC_ARM_EN` and five more from the TPS61094 work. Nine schematic
-  nets have no PCB counterpart and three PCB nets no longer exist. Run *Update
-  PCB from Schematic* before trusting anything read out of the board file — a
-  pin-map audit taken from it will be wrong in exactly those places.
+- **All 214 footprints are placed**, inside x 73.2–124.5 / y 103.7–170.1 mm.
+  The import scatter block that used to sit at x > 130 is gone.
+- **The outline is back** — one `Edge.Cuts` shape, 22.5 × 69.5 mm. It had been
+  lost between `0e0f2d5` and `7ad7508` (the pack-direct pyro/supercap WIP
+  commit), which left the file with no board boundary at all for a while.
+- **The net names are re-synced with the schematic.** `CAP_ACTIVE` and
+  `ARM_CLK` are gone; `VBUCK_OK`, `WDT_PET`, `FC_ARM`, `OC_ARM_EN` and the rest
+  of the TPS61094 nets are in. Until this pass the board file lagged the
+  schematic by two reworks — **9 schematic nets had no PCB counterpart and 3 PCB
+  nets no longer existed** — and `kicad-cli pcb drc --schematic-parity` did not
+  flag it, because it reconciles footprints rather than stale net strings. Take
+  pin maps from a `kicad-cli sch export netlist`, never from the board file; an
+  audit run against the stale copy produced three wrong findings before the
+  netlist corrected them.
+- **Nothing is routed yet**: 0 track segments, 2 vias, 12 zones. DRC reports 103
+  violations and 372 unconnected pads, which is the expected shape for a placed,
+  unrouted board.
 
 Not reviewed, not fabbed, no tag. Firmware exists —
 [`tinkerrocket-idf/projects/rocket_computer_mini`](../../tinkerrocket-idf/projects/rocket_computer_mini/)
