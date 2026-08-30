@@ -224,13 +224,19 @@ struct board_pins
     static constexpr uint8_t ESP_SCL_PIN = 22;  // ESP_SCL (OC GPIO6)
 
     // ### I2S high-frequency telemetry to the OutComputer ###
-    // ESP_* net convention (must match the OC's board header per-net):
-    //   ESP_SCLK = bit clock, ESP_SDO = FC data out, ESP_CS = word select,
-    //   ESP_SDI = frame sync.
-    static constexpr int I2S_BCLK_PIN  = 21;  // ESP_SCLK (OC GPIO2)
-    static constexpr int I2S_WS_PIN    = 18;  // ESP_CS   (OC GPIO1)
-    static constexpr int I2S_DOUT_PIN  = 19;  // ESP_SDO  (OC GPIO3)
-    static constexpr int I2S_FSYNC_PIN = 20;  // ESP_SDI  (OC GPIO4)
+    // ESP_I2S_* net convention (must match the OC's board header per-net):
+    //   ESP_I2S_BCLK = bit clock,   ESP_I2S_SD    = FC data out,
+    //   ESP_I2S_WS   = word select, ESP_I2S_FSYNC = frame sync.
+    // These nets were renamed in the V10 working tree (2026-08-30) to say what
+    // they are: ESP_SCLK -> ESP_I2S_BCLK, ESP_CS -> ESP_I2S_WS,
+    // ESP_SDO -> ESP_I2S_SD, ESP_SDI -> ESP_I2S_FSYNC. Boards fabbed from the
+    // rocket-computer-v9.0.0 tag still carry the old labels; the GPIO numbers
+    // below are unchanged either way. ESP_I2S_FSYNC is a plain GPIO the master
+    // pulses per frame, not an I2S peripheral signal.
+    static constexpr int I2S_BCLK_PIN  = 21;  // ESP_I2S_BCLK  (OC GPIO2)
+    static constexpr int I2S_WS_PIN    = 18;  // ESP_I2S_WS    (OC GPIO1)
+    static constexpr int I2S_DOUT_PIN  = 19;  // ESP_I2S_SD    (OC GPIO3)
+    static constexpr int I2S_FSYNC_PIN = 20;  // ESP_I2S_FSYNC (OC GPIO4)
 
     // ### Power gates ###
     // Same pins as V8, but both now enable high-side switches instead of

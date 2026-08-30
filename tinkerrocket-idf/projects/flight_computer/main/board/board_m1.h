@@ -66,7 +66,7 @@ struct board_pins
 
     // --- Sensor chip selects ---
     static constexpr int MMC5983MA_CS = -1;    // not fitted on the mini
-    static constexpr int BMP585_CS = 47;       // BMP585_CS   (CONFIRMED)
+    static constexpr int BMP585_CS = 48;       // BMP585_CS   (pad 36, SPICLK_N)
     static constexpr int ISM6HG256_CS = 9;     // ISM6HG256_CS (CONFIRMED)
     // Magnetometer I2C. U3 is a QMC5883P, reached through the TR_IIS2MDC
     // component's TR_MAG_DRIVER_QMC5883P seam (#797) — hence the constant
@@ -86,10 +86,19 @@ struct board_pins
     static constexpr bool USE_IIS2MDC = true;     // QMC5883P via the #797 seam
 
     // --- Sensor interrupts ---
-    // GPIO47/48 are SPICLK_N/SPICLK_P, which serve OCTAL PSRAM only; this
-    // part is quad, so they behave as ordinary GPIO. GPIO41 is MTDI — one of
-    // the four JTAG pads this board deliberately spends.
-    static constexpr int ISM6HG256_INT = 48;   // ISM6HG256_INT1 (CONFIRMED)
+    // GPIO47/48 serve OCTAL PSRAM only; this part is quad, so they behave as
+    // ordinary GPIO. GPIO41 is MTDI — one of the four JTAG pads this board
+    // deliberately spends.
+    //
+    // GPIO47 IS SPICLK_P AND GPIO48 IS SPICLK_N, not the other way round
+    // (ESP-IDF io_mux_reg.h: IO_MUX_GPIO47_REG = PERIPHS_IO_MUX_SPICLK_P_U).
+    // These two constants were reversed until 2026-08-30 because pin-budget.md
+    // paired them "GPIO47, GPIO48 = SPICLK_N / SPICLK_P". The schematic puts
+    // BMP585_CS on pad 36 (SPICLK_N) and ISM6HG256_INT1 on pad 37 (SPICLK_P),
+    // so the correct numbers are 48 and 47. With the old values the barometer
+    // chip select would never have asserted and the IMU interrupt line would
+    // have been driven as an output.
+    static constexpr int ISM6HG256_INT = 47;   // ISM6HG256_INT1 (pad 37, SPICLK_P)
     static constexpr int BMP585_INT = 41;      // BMP585_INT     (CONFIRMED)
     static constexpr int MMC5983MA_INT = -1;   // not fitted
     // The QMC5883P land on this board exposes no DRDY/INT — every other pad
@@ -128,14 +137,23 @@ struct board_pins
     static constexpr int PIEZO_PIN = -1;
 
     // --- Indicators ---
-    // One LED (D5) and it hangs off GPIO45 through R114, which is ALSO the
-    // VDD_SPI voltage strap. Safe as drawn: 10 k in series with a white LED
-    // is non-conducting below its forward voltage, so at reset it pulls the
-    // same direction as the pad's internal pull-down and VDD_SPI still
-    // latches 3.3 V. Driving it high after boot lights the LED. Do not add a
-    // pull-up here.
-    static constexpr int RED_LED_PIN = 45;     // D5 (CONFIRMED)
-    static constexpr int BLUE_LED_PIN = -1;    // only one LED on this board
+    // TWO LEDs, both cathode-to-GND through 10 k, both driven high to light:
+    //   IND_1 -> R70 -> D10, RED   -> GPIO38 (ordinary pad)
+    //   IND_2 -> R71 -> D11, BLUE  -> GPIO45 (VDD_SPI voltage strap)
+    // This header claimed one white LED on GPIO45 called D5 through R114 until
+    // 2026-08-30. None of that matched the schematic: it named the blue LED
+    // red, left the red one unclaimed, and cited parts that do not exist. Take
+    // IND_1/IND_2 from the netlist, not from the reference designators here —
+    // rocket-computer had the same colour swap on D7/D8 (fixed 2026-08-26).
+    //
+    // GPIO45 is safe as drawn, and the reason is the LED, not the resistor:
+    // 10 k in series with a BLUE die (Vf ~2.7-3.0 V) is non-conducting near
+    // 0 V, so at reset the branch pulls the same direction as the pad's
+    // internal pull-down and VDD_SPI still latches 3.3 V. Driving it high
+    // after boot lights it. Do not add a pull-up here, and do not move a
+    // lower-Vf colour onto this pad.
+    static constexpr int RED_LED_PIN = 38;     // IND_1 -> D10 red
+    static constexpr int BLUE_LED_PIN = 45;    // IND_2 -> D11 blue (VDD_SPI strap)
 
     // --- I2C master to the OutComputer ---
     static constexpr int ESP_SDA_PIN = 35;     // ESP_SDA (OC GPIO5)
@@ -143,14 +161,20 @@ struct board_pins
 
     // --- I2S master TX (high-frequency telemetry to the OutComputer) ---
     // BCLK and WS match the P4's V9 numbers; the DATA PAIR DOES NOT. On the
-    // P4 ESP_SDO/ESP_SDI are GPIO19/20, but on an S3 those two pads are USB
-    // D-/D+ and this board spends them on the FSUSB63UMX mux so either
-    // processor can be flashed over the single USB-C port. 13/14 take their
-    // place. Both ends must agree PER NET; the OC side is 2/1/3/4.
-    static constexpr int I2S_BCLK_PIN  = 21;   // ESP_SCLK (OC GPIO2)
-    static constexpr int I2S_WS_PIN    = 18;   // ESP_CS   (OC GPIO1)
-    static constexpr int I2S_DOUT_PIN  = 13;   // ESP_SDO  (OC GPIO3)  [P4: 19]
-    static constexpr int I2S_FSYNC_PIN = 14;   // ESP_SDI  (OC GPIO4)  [P4: 20]
+    // P4 the data and frame-sync nets are GPIO19/20, but on an S3 those two
+    // pads are USB D-/D+ and this board spends them on the FSUSB63UMX mux so
+    // either processor can be flashed over the single USB-C port. 13/14 take
+    // their place. Both ends must agree PER NET; the OC side is 2/1/3/4.
+    //
+    // ESP_I2S_FSYNC is NOT an I2S peripheral signal. Three of these four are
+    // (BCLK/WS/SD); the fourth is a plain GPIO the master pulses around each
+    // writeFrame() and the slave reads to resync. It shares the ESP_I2S_
+    // prefix because it belongs to this link, not because the peripheral
+    // drives it.
+    static constexpr int I2S_BCLK_PIN  = 21;   // ESP_I2S_BCLK  (OC GPIO2)
+    static constexpr int I2S_WS_PIN    = 18;   // ESP_I2S_WS    (OC GPIO1)
+    static constexpr int I2S_DOUT_PIN  = 13;   // ESP_I2S_SD    (OC GPIO3)  [P4: 19]
+    static constexpr int I2S_FSYNC_PIN = 14;   // ESP_I2S_FSYNC (OC GPIO4)  [P4: 20]
 
     // --- No peripheral rail gates of our own ---
     // rocket-computer's FC gates the GNSS rail (GPS_ACT) and the servo rail
