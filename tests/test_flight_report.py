@@ -135,8 +135,10 @@ def test_report_has_inline_figures(reports: dict[str, Path]) -> None:
     The per-sensor timing histogram is the exception, and a deliberate one: it is
     a distribution rather than a series, nothing zooms into it, and rebuilding it
     as a Plotly figure would cost more than it returns. Every other flight-level
-    visual is an interactive chart, so the count is pinned rather than merely
-    bounded — a second PNG appearing here should be a decision, not a drift.
+    visual is an interactive chart — the Roll PID section's figures were the
+    last static holdouts, ported to charts 2026-08-29 — so the count is pinned
+    rather than merely bounded: a second PNG appearing here should be a
+    decision, not a drift.
     """
     flight = reports["flight"].read_text(encoding="utf-8")
     flight_figs = flight.count('<img src="data:image/png;base64,')

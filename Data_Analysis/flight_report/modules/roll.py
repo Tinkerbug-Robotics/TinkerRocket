@@ -19,9 +19,10 @@ servo command with an R² fit and can overrule it. This module asks that shared
 function rather than deciding for itself, so the flight and detailed reports
 can never disagree about what the flight was.
 
-The detailed report keeps the same four panels as static figures, plus the
-plant-gain estimate, the FFT and the tuning recommendation. This is the readable
-subset, made interactive.
+The Roll PID section that follows carries what these panels deliberately leave
+out — the full-log timeline, the plant-gain estimate, the steady-state spectrum
+and the tuning recommendation. This section is the readable tracking story;
+that one is the tuning bench.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ from ..charts import COLORS, chart, trace
 from ..events import markers
 from ..flight import Flight
 from ..registry import AnalysisResult
-from .roll_pid import roll_series
+from .roll_pid import rate_axis_limit, roll_series
 
 # Matching the detailed report's figures, so the two reports read as the same picture.
 C_TARGET = "#ff7f0e"    # commanded
@@ -54,11 +55,10 @@ C_RATECMD = "#1f77b4"
 def _null_rate_segments(tw: np.ndarray, is_ang: np.ndarray) -> list[tuple[float, float]]:
     """Contiguous spans where NO angle was being commanded.
 
-    The inverse of the angle segments, matching `roll_pid._shade_segments`: the
-    detailed report's figures tint the *rate-null* stretches, leaving the angle-tracking
-    ones on white, because those are the parts a reader is being asked to judge.
-    Shading the other way round reads as "this is the interesting bit" pointed at
-    exactly the wrong half.
+    The inverse of the angle segments: the figures tint the *rate-null*
+    stretches, leaving the angle-tracking ones on white, because those are the
+    parts a reader is being asked to judge. Shading the other way round reads
+    as "this is the interesting bit" pointed at exactly the wrong half.
     """
     if tw is None or is_ang is None or not len(tw):
         return []
@@ -150,34 +150,6 @@ def _segmented(x, y, name, color, width) -> list[dict[str, Any]]:
                     out.append(t)
             start = None
     return out
-
-
-def _rate_limit(t, g, eject_t, cap) -> tuple[float, float]:
-    """Y-limit for the roll-rate panel, and the true peak it may be hiding.
-
-    Ported from `roll_pid._clip_rate_axis` so both reports scale that axis the
-    same way: the larger of a robust percentile of the in-flight magnitudes and a
-    multiple of the rate cap, with the last second before ejection excluded so a
-    tumble that starts early cannot inflate it.
-    """
-    g = np.asarray(g, dtype=float)
-    t = np.asarray(t, dtype=float)
-    n = min(g.size, t.size)
-    # Mask both together. Dropping non-finite samples from g first and then
-    # slicing t to the survivors' *count* would pair each reading with the
-    # wrong timestamp, so the window below would select the wrong samples.
-    fin = np.isfinite(g[:n])
-    g, t = g[:n][fin], t[:n][fin]
-    if not g.size:
-        return 30.0, 0.0
-    core = g
-    if eject_t is not None and np.isfinite(eject_t):
-        sel = t <= float(eject_t) - 1.0
-        if sel.any():
-            core = g[sel]
-    lim = max(float(np.percentile(np.abs(core), 95)) * 1.4,
-              (float(cap) * 2.5) if cap else 0.0, 30.0)
-    return lim, float(np.max(np.abs(g)))
 
 
 def _events_since_launch(flight, lo: float, hi: float) -> dict[str, float]:
@@ -300,15 +272,15 @@ def _control_charts(flight, s: dict, facts: dict[str, Any]) -> list[dict[str, An
     )
     cap = s.get("rate_cap_cfg")
     if rate_spec:
-        # Scale the axis the way the detailed report's figure does, rather than with the
-        # generic spike clipper: anchor on the rate cap, which is the natural size
-        # of controlled roll, and exclude the last second before ejection so a
-        # tumble starting early cannot inflate it. Without this the ~620°/s
-        # off-the-rail spike flattens the entire controlled portion into a line.
-        # win_end, not eject_t — the detailed report's helper is passed the end of the
-        # plotting window, and using apogee instead would admit a second of
+        # Scale the axis with the shared roll_pid.rate_axis_limit, rather than
+        # the generic spike clipper: anchor on the rate cap, which is the
+        # natural size of controlled roll, and exclude the last second before
+        # ejection so a tumble starting early cannot inflate it. Without this
+        # the ~620°/s off-the-rail spike flattens the entire controlled portion
+        # into a line. win_end, not eject_t — the helper is passed the end of
+        # the plotting window, and using apogee instead would admit a second of
         # tumble into the percentile and quietly widen the axis.
-        lim, peak = _rate_limit(t_imu[win], g[win], win_end, cap)
+        lim, peak = rate_axis_limit(t_imu[win], g[win], win_end, cap)
         rate_spec["layout"]["yaxis"]["range"] = [-lim, lim]
         _hline(rate_spec, 0.0, "#999", dash="solid")
         if cap:
