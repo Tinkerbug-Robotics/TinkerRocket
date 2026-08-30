@@ -5593,7 +5593,7 @@
 			)
 		)
 	)
-	(global_label "ESP_CS"
+	(global_label "ESP_I2S_WS"
 		(shape input)
 		(at 212.725 53.34 0)
 		(fields_autoplaced yes)
@@ -5881,7 +5881,7 @@
 			)
 		)
 	)
-	(global_label "ESP_SCLK"
+	(global_label "ESP_I2S_BCLK"
 		(shape input)
 		(at 212.725 55.88 0)
 		(fields_autoplaced yes)
@@ -5977,7 +5977,7 @@
 			)
 		)
 	)
-	(global_label "ESP_SDO"
+	(global_label "ESP_I2S_SD"
 		(shape input)
 		(at 212.725 58.42 0)
 		(fields_autoplaced yes)
@@ -6001,7 +6001,7 @@
 			)
 		)
 	)
-	(global_label "ESP_SDI"
+	(global_label "ESP_I2S_FSYNC"
 		(shape input)
 		(at 212.725 60.96 0)
 		(fields_autoplaced yes)

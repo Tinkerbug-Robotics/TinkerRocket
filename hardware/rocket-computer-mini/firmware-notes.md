@@ -43,12 +43,23 @@ detector becomes a never-fires backstop.
 
 Do this **before** flying the new power stage; it is one config line per image.
 
-## 2. Pin assignments — WIRED 2026-08-26 (board headers still needed)
+## 2. Pin assignments — WIRED 2026-08-26, **two rows superseded since**
+
+> **`ARM_CLK` and `CAP_ACTIVE` no longer exist.** Two later reworks replaced
+> them, and this table is corrected in place below rather than deleted so the
+> old names remain findable:
+> [`arm-watchdog-rework.md`](arm-watchdog-rework.md) (2026-08-28) retired the
+> LEDC arm clock for a supervised-MCU arm, and
+> [`holdup-tps61094-rework.md`](holdup-tps61094-rework.md) (2026-08-29) replaced
+> the LM66100 hold-up chain with a TPS61094. **Section 4 below still describes
+> the LM66100 behaviour and its polarity is now inverted** — read the hold-up
+> rework doc before implementing it. The netlist is the authority for all of
+> this; the PCB file has not been re-synced and still carries the old names.
 
 | Signal | Pin | Notes |
 |---|---|---|
-| `ARM_CLK` | **FC GPIO8** | LEDC output. GPIO8 was `PYRO_ARM`, which the one-shot rework eliminated — the console UART is fully restored (GPIO43/44 both free again). |
-| `CAP_ACTIVE` | **FC GPIO3** + **OC GPIO34** | wired to both MCUs. GPIO3 is the JTAG-select strap: R127's 100 k pull-up to +3V3 gives it a *defined* high at boot (better than floating). If the LM66100 ST polarity check shows it idles LOW, revisit this pin. |
+| ~~`ARM_CLK`~~ → `WDT_PET` | **FC GPIO8** | no longer an LEDC output — it is the windowed-watchdog pet line, toggled ~250 ms. The arm intent moved to `FC_ARM` on **FC GPIO44** and the OC's veto to `OC_ARM_EN` on **OC GPIO11**, so the console is now **TX-only** (GPIO43); the "GPIO43/44 both free again" this row used to claim is no longer true. |
+| ~~`CAP_ACTIVE`~~ → `VBUCK_OK` | **FC GPIO3** + **OC GPIO34** | still wired to both MCUs, still on the JTAG-select strap, but the source and the sense both changed. The TPS61094 has no status pin, so the pin now watches a `V_BUCK` divider — `R137` 100 k / `R138` 1 M — and the polarity is **inverted**: HIGH = buck present, LOW = riding the cap. There is no `R127` and no LM66100 on this board any more. The divider still gives the strapping pad a defined level at reset, which is why GPIO3 is an acceptable home for it. |
 | `V_SCAP_ADC` | **OC GPIO8** (ADC1) — wired | the FC has no ADC-capable pin left, so the pre-arm supercap check lives on the OC. Arm commands already flow through the OC, so the gate sits in the right place; the OC refuses/forwards accordingly. |
 
 FC free pins after the rework: GPIO43/44 (console — keep them) and nothing

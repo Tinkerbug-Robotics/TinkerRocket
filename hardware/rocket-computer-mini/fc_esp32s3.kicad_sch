@@ -2983,7 +2983,7 @@
 	)
 	(text "ESP32-S3 - Flight Computer"
 		(exclude_from_sim no)
-		(at 151.765 33.02 0)
+		(at 137.795 29.845 0)
 		(effects
 			(font
 				(size 2.5 2.5)
@@ -3005,12 +3005,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "3365169a-6c68-4bfa-a5ee-8ed1abca9ffc")
-	)
-	(junction
-		(at 132.08 50.8)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "63d2f4aa-61be-49ec-a1aa-823bde3765b5")
 	)
 	(junction
 		(at 248.92 54.61)
@@ -3084,6 +3078,12 @@
 		(color 0 0 0 0)
 		(uuid "fbcbbb15-0841-4127-a2e8-b1a638c1547c")
 	)
+	(junction
+		(at 130.81 50.8)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "fe28b8e9-86fc-49fa-9996-5962c84667f0")
+	)
 	(no_connect
 		(at 139.065 67.31)
 		(uuid "a487edbb-f861-4b88-a5c6-eec3dd0022aa")
@@ -3097,6 +3097,16 @@
 			(type default)
 		)
 		(uuid "129c0fd6-2f45-4383-ad6c-f2cb5e4ce081")
+	)
+	(wire
+		(pts
+			(xy 133.985 100.33) (xy 139.065 100.33)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1497a459-d8ac-40e1-b318-b1ece5f04fe7")
 	)
 	(wire
 		(pts
@@ -3130,7 +3140,7 @@
 	)
 	(wire
 		(pts
-			(xy 132.08 38.1) (xy 132.08 41.91)
+			(xy 130.81 38.1) (xy 130.81 41.91)
 		)
 		(stroke
 			(width 0)
@@ -3157,6 +3167,16 @@
 			(type default)
 		)
 		(uuid "258a9899-93e3-4767-a58a-04317769069a")
+	)
+	(wire
+		(pts
+			(xy 130.81 50.8) (xy 139.065 50.8)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2e698486-3703-4e12-a78f-03106d999fa7")
 	)
 	(wire
 		(pts
@@ -3220,7 +3240,7 @@
 	)
 	(wire
 		(pts
-			(xy 132.08 50.8) (xy 132.08 52.07)
+			(xy 130.81 50.8) (xy 130.81 52.07)
 		)
 		(stroke
 			(width 0)
@@ -3357,6 +3377,16 @@
 			(type default)
 		)
 		(uuid "83ff1836-8b1e-46cc-aa22-35fc5623e9f8")
+	)
+	(wire
+		(pts
+			(xy 139.065 50.8) (xy 139.065 62.23)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "88abffb4-00e7-4a8a-8d9f-8b6a4e02bf0a")
 	)
 	(wire
 		(pts
@@ -3520,7 +3550,7 @@
 	)
 	(wire
 		(pts
-			(xy 132.08 49.53) (xy 132.08 50.8)
+			(xy 130.81 49.53) (xy 130.81 50.8)
 		)
 		(stroke
 			(width 0)
@@ -3610,16 +3640,6 @@
 	)
 	(wire
 		(pts
-			(xy 139.065 50.8) (xy 132.08 50.8)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "f36e11df-7e6e-4cdd-ad16-0ae4a70e248c")
-	)
-	(wire
-		(pts
 			(xy 116.84 64.135) (xy 116.84 71.755)
 		)
 		(stroke
@@ -3627,16 +3647,6 @@
 			(type default)
 		)
 		(uuid "f4d7924c-ccf6-46b1-a526-8f2206bdb32f")
-	)
-	(wire
-		(pts
-			(xy 139.065 62.23) (xy 139.065 50.8)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "fde895aa-4244-4ad7-a8c0-68328fc563b4")
 	)
 	(wire
 		(pts
@@ -3720,7 +3730,7 @@
 			)
 		)
 	)
-	(global_label "ESP_SDO"
+	(global_label "ESP_I2S_SD"
 		(shape input)
 		(at 189.865 97.79 0)
 		(fields_autoplaced yes)
@@ -3888,7 +3898,7 @@
 			)
 		)
 	)
-	(global_label "ESP_SDI"
+	(global_label "ESP_I2S_FSYNC"
 		(shape input)
 		(at 189.865 100.33 0)
 		(fields_autoplaced yes)
@@ -4008,7 +4018,7 @@
 			)
 		)
 	)
-	(global_label "ESP_CS"
+	(global_label "ESP_I2S_WS"
 		(shape input)
 		(at 189.865 105.41 0)
 		(fields_autoplaced yes)
@@ -4512,6 +4522,54 @@
 			)
 		)
 	)
+	(global_label "FC_CHIP_PU"
+		(shape input)
+		(at 139.065 50.8 90)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "b2fb5f96-3996-430a-8ea2-8c52e2829ca7")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 139.065 36.4452 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(global_label "FC_ARM"
+		(shape input)
+		(at 133.985 100.33 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "b37646ca-8806-49cc-b73f-d12b472d02bf")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 133.985 100.33 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
 	(global_label "FC_D-"
 		(shape input)
 		(at 213.995 107.95 0)
@@ -4560,7 +4618,7 @@
 			)
 		)
 	)
-	(global_label "ESP_SCLK"
+	(global_label "ESP_I2S_BCLK"
 		(shape input)
 		(at 189.865 113.03 0)
 		(fields_autoplaced yes)
@@ -4778,7 +4836,7 @@
 	)
 	(global_label "V_MCU_SWTCH"
 		(shape input)
-		(at 132.08 38.1 90)
+		(at 130.81 38.1 90)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -4788,7 +4846,7 @@
 		)
 		(uuid "d8f4778b-70ad-474b-ad89-3b821957472b")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 132.08 21.81 90)
+			(at 130.81 21.81 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5295,7 +5353,7 @@
 	)
 	(symbol
 		(lib_id "Device:R_US")
-		(at 132.08 45.72 0)
+		(at 130.81 45.72 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -5306,7 +5364,7 @@
 		(fields_autoplaced yes)
 		(uuid "0b7db109-1618-4a81-a926-e2c38481bff7")
 		(property "Reference" "R110"
-			(at 133.985 44.4499 0)
+			(at 132.715 44.4499 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -5317,7 +5375,7 @@
 			)
 		)
 		(property "Value" "10 k"
-			(at 133.985 46.9899 0)
+			(at 132.715 46.9899 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -5328,7 +5386,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 133.096 45.974 90)
+			(at 131.826 45.974 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5339,7 +5397,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 132.08 45.72 0)
+			(at 130.81 45.72 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5350,7 +5408,7 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
-			(at 132.08 45.72 0)
+			(at 130.81 45.72 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5361,7 +5419,7 @@
 			)
 		)
 		(property "MPN" "RC0402FR-0710KL"
-			(at 132.08 45.72 0)
+			(at 130.81 45.72 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5372,7 +5430,7 @@
 			)
 		)
 		(property "Mfr" "Yageo"
-			(at 132.08 45.72 0)
+			(at 130.81 45.72 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9159,7 +9217,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 132.08 55.88 0)
+		(at 130.81 55.88 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -9169,7 +9227,7 @@
 		(dnp no)
 		(uuid "b0273a38-033c-4917-aa32-64ae22a5af8c")
 		(property "Reference" "C114"
-			(at 132.08 53.34 0)
+			(at 130.81 53.34 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -9180,7 +9238,7 @@
 			)
 		)
 		(property "Value" "1 uF"
-			(at 132.08 58.42 0)
+			(at 130.81 58.42 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -9191,7 +9249,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 133.0452 59.69 0)
+			(at 131.7752 59.69 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9202,7 +9260,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 132.08 55.88 0)
+			(at 130.81 55.88 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9213,7 +9271,7 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
-			(at 132.08 55.88 0)
+			(at 130.81 55.88 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9224,7 +9282,7 @@
 			)
 		)
 		(property "MPN" "CL05A105KO5NNNC"
-			(at 132.08 55.88 0)
+			(at 130.81 55.88 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9235,7 +9293,7 @@
 			)
 		)
 		(property "Mfr" "Samsung"
-			(at 132.08 55.88 0)
+			(at 130.81 55.88 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10108,7 +10166,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 132.08 59.69 0)
+		(at 130.81 59.69 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -10118,7 +10176,7 @@
 		(dnp no)
 		(uuid "d6747be1-ea64-45d6-ae6a-e8c24bd1ed6b")
 		(property "Reference" "#PWR0311"
-			(at 132.08 66.04 0)
+			(at 130.81 66.04 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10129,7 +10187,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 133.985 63.5 0)
+			(at 132.715 63.5 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10140,7 +10198,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 132.08 59.69 0)
+			(at 130.81 59.69 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10151,7 +10209,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 132.08 59.69 0)
+			(at 130.81 59.69 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10162,7 +10220,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 132.08 59.69 0)
+			(at 130.81 59.69 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10839,64 +10897,6 @@
 					(reference "#PWR0324")
 					(unit 1)
 				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 133.985 100.33) (xy 139.065 100.33)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "1497a459-d8ac-40e1-b318-b1ece5f04fe7")
-	)
-	(global_label "FC_ARM"
-		(shape input)
-		(at 133.985 100.33 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "b37646ca-8806-49cc-b73f-d12b472d02bf")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 133.985 100.33 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-	)
-	(global_label "FC_CHIP_PU"
-		(shape input)
-		(at 139.065 60.96 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "b2fb5f96-3996-430a-8ea2-8c52e2829ca7")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 139.065 60.96 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
 			)
 		)
 	)

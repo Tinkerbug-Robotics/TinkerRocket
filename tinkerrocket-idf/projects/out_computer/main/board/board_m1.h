@@ -19,8 +19,8 @@
 // radio and GNSS on-board instead of on daughterboards.
 //
 // ### The six link GPIOs are IDENTICAL to board_v9.h ###
-// ESP_CS=1, ESP_SCLK=2, ESP_SDO=3, ESP_SDI=4, ESP_SDA=5, ESP_SCL=6, and the
-// FC enable on 7. That is deliberate — the hardware was drawn to match the
+// ESP_I2S_WS=1, ESP_I2S_BCLK=2, ESP_I2S_SD=3, ESP_I2S_FSYNC=4, ESP_SDA=5,
+// ESP_SCL=6, and the FC enable on 7. That is deliberate — the hardware was drawn to match the
 // reference so this project ports with a board header and nothing else. Do
 // not "simplify" by aliasing board_v9.h anyway: the radio and GNSS blocks
 // below are completely different, and a UART-modem backend on this board
@@ -99,20 +99,24 @@ struct board_pins
 
     // --- I2S slave RX (high-frequency telemetry from the FlightComputer) ---
     // Both ends must agree PER NET, not per role name. FC side on this board:
-    // ESP_SCLK=21, ESP_CS=18, ESP_SDO=13, ESP_SDI=14 — note SDO/SDI are NOT
-    // the P4's 19/20, because on an S3 those pads are USB D-/D+ and this
-    // board spends them on the USB mux. Our four are unchanged from V9.
-    //   ESP_SCLK = bit clock, ESP_SDO = FC data out (our DIN),
-    //   ESP_CS = word select, ESP_SDI = frame sync.
+    // ESP_I2S_BCLK=21, ESP_I2S_WS=18, ESP_I2S_SD=13, ESP_I2S_FSYNC=14 — note
+    // the data pair is NOT the P4's 19/20, because on an S3 those pads are USB
+    // D-/D+ and this board spends them on the USB mux. Our four are unchanged
+    // from V9.
+    //   ESP_I2S_BCLK = bit clock,   ESP_I2S_SD    = FC data out (our DIN),
+    //   ESP_I2S_WS   = word select, ESP_I2S_FSYNC = frame sync.
+    // ESP_I2S_FSYNC is a plain GPIO, not a peripheral signal — the FC pulses
+    // it around each frame and we read it to resync.
+    //
     // These six link nets are the ONLY signals live during pad standby with
     // the flight computer off. Park every one of them Hi-Z whenever
     // V_MCU_SWTCH is down or they inject through the FC's ESD diodes into a
     // dead rail — this is the failure that i2s_del_channel() caused on
     // rocket-computer by leaving BCLK/WS/DOUT driven.
-    static constexpr int I2S_BCLK_PIN  = 2;  // ESP_SCLK (FC GPIO21)
-    static constexpr int I2S_WS_PIN    = 1;  // ESP_CS   (FC GPIO18)
-    static constexpr int I2S_DIN_PIN   = 3;  // ESP_SDO  (FC GPIO13)
-    static constexpr int I2S_FSYNC_PIN = 4;  // ESP_SDI  (FC GPIO14)
+    static constexpr int I2S_BCLK_PIN  = 2;  // ESP_I2S_BCLK  (FC GPIO21)
+    static constexpr int I2S_WS_PIN    = 1;  // ESP_I2S_WS    (FC GPIO18)
+    static constexpr int I2S_DIN_PIN   = 3;  // ESP_I2S_SD    (FC GPIO13)
+    static constexpr int I2S_FSYNC_PIN = 4;  // ESP_I2S_FSYNC (FC GPIO14)
 
     // --- Radio: bare E220-900MM22S on-board, direct SPI (V7 topology) ---
     // NOT the UART daughterboard. This is the V7 arrangement returning: the

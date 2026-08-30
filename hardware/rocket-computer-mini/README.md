@@ -109,13 +109,20 @@ behind that firmware actually wants.
 `FC_EN_HOLD` sits on **GPIO17, not GPIO3**. GPIO3 is where `POWER_SWITCH` lived
 on the single-MCU board and is where a copy of that sheet would have left it —
 but GPIO3 is a strapping pin, and inserting `D9` puts a diode between it and
-`R84`, so it would have booted floating. GPIO17 is unconditionally free and
-GPIO3 is now a bare pad. The move also decouples the latch from boot
-configuration: `gpio_hold_en` on GPIO3 would have held a *strapping* pin HIGH
-through every in-flight reset. The same problem in reverse is why `R34` (100 k) pulls
-`ESP_SDO` down on the out computer: that net is GPIO3 *there*, driven by a
-flight computer that is unpowered while the out computer boots. See the
-correction section in [`pin-budget.md`](pin-budget.md).
+`R84`, so it would have booted floating. GPIO17 is unconditionally free. The
+move also decouples the latch from boot configuration: `gpio_hold_en` on GPIO3
+would have held a *strapping* pin HIGH through every in-flight reset. The same
+problem in reverse is why `R34` (100 k) pulls `ESP_I2S_SD` down on the out
+computer: that net is GPIO3 *there*, driven by a flight computer that is
+unpowered while the out computer boots.
+
+**The flight computer's GPIO3 did not stay bare, and this file said it had
+until 2026-08-30.** The supercap hold-up rework landed `VBUCK_OK` on it, through
+the `R137` 100 k / `R138` 1 M divider off `V_BUCK`. That keeps the property the
+move was made for — the pad has a defined level at reset, set by a passive
+divider rather than by a driven pin — so the strapping argument still holds;
+it is simply no longer true that nothing is connected there. See the correction
+section in [`pin-budget.md`](pin-budget.md).
 
 Note the consequence of the mini's rail split, which differs from
 `rocket-computer`: here the LoRa radio and the NAND sit on `V_MCU_SWTCH` rather
@@ -130,17 +137,24 @@ Six wires, the same net names and the same protocols as `rocket-computer`:
 
 | Net | OC pin | FC pin | Role |
 |---|---|---|---|
-| `ESP_SCLK` | GPIO2 | GPIO21 | I2S bit clock |
-| `ESP_CS` | GPIO1 | GPIO18 | I2S word select |
-| `ESP_SDO` | GPIO3 | GPIO13 | I2S data, FC → OC |
-| `ESP_SDI` | GPIO4 | GPIO14 | I2S frame sync |
+| `ESP_I2S_BCLK` | GPIO2 | GPIO21 | I2S bit clock |
+| `ESP_I2S_WS` | GPIO1 | GPIO18 | I2S word select |
+| `ESP_I2S_SD` | GPIO3 | GPIO13 | I2S data, FC → OC |
+| `ESP_I2S_FSYNC` | GPIO4 | GPIO14 | frame sync — a plain GPIO, not an I2S signal |
 | `ESP_SCL` | GPIO6 | GPIO33 | I2C clock |
 | `ESP_SDA` | GPIO5 | GPIO35 | I2C data |
+
+**The four I2S nets were called `ESP_SCLK` / `ESP_CS` / `ESP_SDO` / `ESP_SDI`
+until 2026-08-30**, on this board and on `rocket-computer`. Those names read as
+SPI and the link has never been SPI; boards fabbed before that date carry the
+old labels, and the GPIO numbers are the same either way. `ESP_I2S_FSYNC` is the
+odd one of the four — the peripheral does not drive it, the master pulses it
+around each `writeFrame()` and the slave reads it to resync.
 
 `R115`/`R116` (5.11 k to `V_MCU_SWTCH`) pull the I2C pair up, matching
 `rocket-computer`'s `R55`/`R58` — tied to the switched rail rather than `+3V3`
 on purpose, so they are not two more paths feeding a dead rail. `R34` (100 k)
-pulls `ESP_SDO` down; see above.
+pulls `ESP_I2S_SD` down; see above.
 
 **The magnetometer belongs to the flight computer, and getting there took two
 tries.** It is a flight sensor, so it should always have sat with the IMU, the
@@ -353,12 +367,32 @@ and drops both warnings.
 
 ## Status
 
-**Schematic-complete for the two-processor split; the PCB has not been touched.**
-The flight computer, its power switch, the diode-OR enable and the USB mux exist
-in the schematic and export a clean netlist — 196 components, 200 nets, no
-duplicate references and no single-node nets. Nothing has been laid out: there
-is no footprint on the board for `U32`, `U33`, `U1`, `S1`, `D9`, `C105`, `R34` or the
-`C110`/`R110` block, and the board file still carries the P4-era track stubs.
+**Schematic-complete for the two-processor split; the PCB is placed but not
+routed.** The flight computer, its power switch, the diode-OR enable and the USB
+mux exist in the schematic and export a clean netlist — **214 components, 205
+nets** (2026-08-30, after the arm and TPS61094 hold-up reworks; this paragraph
+said 196/200 before those landed), no duplicate references and no single-node
+nets.
+
+Board file, verified 2026-08-30:
+
+- **All 214 footprints are placed**, inside x 73.2–124.5 / y 103.7–170.1 mm.
+  The import scatter block that used to sit at x > 130 is gone.
+- **The outline is back** — one `Edge.Cuts` shape, 22.5 × 69.5 mm. It had been
+  lost between `0e0f2d5` and `7ad7508` (the pack-direct pyro/supercap WIP
+  commit), which left the file with no board boundary at all for a while.
+- **The net names are re-synced with the schematic.** `CAP_ACTIVE` and
+  `ARM_CLK` are gone; `VBUCK_OK`, `WDT_PET`, `FC_ARM`, `OC_ARM_EN` and the rest
+  of the TPS61094 nets are in. Until this pass the board file lagged the
+  schematic by two reworks — **9 schematic nets had no PCB counterpart and 3 PCB
+  nets no longer existed** — and `kicad-cli pcb drc --schematic-parity` did not
+  flag it, because it reconciles footprints rather than stale net strings. Take
+  pin maps from a `kicad-cli sch export netlist`, never from the board file; an
+  audit run against the stale copy produced three wrong findings before the
+  netlist corrected them.
+- **Nothing is routed yet**: 0 track segments, 2 vias, 12 zones. DRC reports 103
+  violations and 372 unconnected pads, which is the expected shape for a placed,
+  unrouted board.
 
 Not reviewed, not fabbed, no tag. Firmware exists —
 [`tinkerrocket-idf/projects/rocket_computer_mini`](../../tinkerrocket-idf/projects/rocket_computer_mini/)

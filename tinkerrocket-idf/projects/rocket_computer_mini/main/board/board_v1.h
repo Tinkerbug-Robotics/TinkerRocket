@@ -43,8 +43,14 @@ struct board_pins
     static constexpr int SENS_SPI_MISO = 2;      // SENS_SDO  (CONFIRMED)
 
     static constexpr int ISM6HG256_CS = 9;       // ISM6HG256_CS   (CONFIRMED)
-    static constexpr int ISM6HG256_INT = 48;     // ISM6HG256_INT1 (CONFIRMED)
-    static constexpr int BMP585_CS = 47;         // BMP585_CS      (CONFIRMED)
+    // GPIO47 IS SPICLK_P AND GPIO48 IS SPICLK_N (ESP-IDF io_mux_reg.h:
+    // IO_MUX_GPIO47_REG = PERIPHS_IO_MUX_SPICLK_P_U). These two were reversed
+    // until 2026-08-30, following pin-budget.md's "GPIO47, GPIO48 = SPICLK_N /
+    // SPICLK_P" pairing. The schematic puts BMP585_CS on pad 36 (SPICLK_N) and
+    // ISM6HG256_INT1 on pad 37 (SPICLK_P) both before and after the two-MCU
+    // split, so the correct numbers are 48 and 47.
+    static constexpr int ISM6HG256_INT = 47;     // ISM6HG256_INT1 (pad 37, SPICLK_P)
+    static constexpr int BMP585_CS = 48;         // BMP585_CS      (pad 36, SPICLK_N)
     static constexpr int BMP585_INT = 41;        // BMP585_INT     (CONFIRMED)
 
     // --- Magnetometer (IIS2MDC @ 0x1E, on the PWR_SDA/PWR_SCL bus) ---

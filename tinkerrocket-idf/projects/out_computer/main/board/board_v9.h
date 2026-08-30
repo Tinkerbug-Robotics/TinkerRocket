@@ -125,15 +125,21 @@ struct board_pins
     static constexpr int I2C_SCL_PIN = 6;    // ESP_SCL (CONFIRMED)
 
     // --- I2S slave RX (high-frequency telemetry from FlightComputer) ---
-    // ESP_* net convention, fixed against the FC-side schematic (FC pins:
-    // ESP_SCLK=21, ESP_CS=18, ESP_SDO=19, ESP_SDI=20) and mirrored in the
-    // FC's board headers — both ends must agree PER NET:
-    //   ESP_SCLK = bit clock, ESP_SDO = FC data out (our DIN),
-    //   ESP_CS = word select, ESP_SDI = frame sync.
-    static constexpr int I2S_BCLK_PIN  = 2;  // ESP_SCLK
-    static constexpr int I2S_WS_PIN    = 1;  // ESP_CS
-    static constexpr int I2S_DIN_PIN   = 3;  // ESP_SDO
-    static constexpr int I2S_FSYNC_PIN = 4;  // ESP_SDI
+    // ESP_I2S_* net convention, fixed against the FC-side schematic (FC pins:
+    // ESP_I2S_BCLK=21, ESP_I2S_WS=18, ESP_I2S_SD=19, ESP_I2S_FSYNC=20) and
+    // mirrored in the FC's board headers — both ends must agree PER NET:
+    //   ESP_I2S_BCLK = bit clock,   ESP_I2S_SD    = FC data out (our DIN),
+    //   ESP_I2S_WS   = word select, ESP_I2S_FSYNC = frame sync.
+    // These nets were renamed in the V10 working tree (2026-08-30) to say what
+    // they are: ESP_SCLK -> ESP_I2S_BCLK, ESP_CS -> ESP_I2S_WS,
+    // ESP_SDO -> ESP_I2S_SD, ESP_SDI -> ESP_I2S_FSYNC. Boards fabbed from the
+    // rocket-computer-v9.0.0 tag still carry the old labels; the GPIO numbers
+    // below are unchanged either way. ESP_I2S_FSYNC is a plain GPIO the master
+    // pulses per frame, not an I2S peripheral signal.
+    static constexpr int I2S_BCLK_PIN  = 2;  // ESP_I2S_BCLK
+    static constexpr int I2S_WS_PIN    = 1;  // ESP_I2S_WS
+    static constexpr int I2S_DIN_PIN   = 3;  // ESP_I2S_SD
+    static constexpr int I2S_FSYNC_PIN = 4;  // ESP_I2S_FSYNC
 
     // --- Radio topology: UART daughterboard (#409/#410) — no direct LLCC68.
     // USE_LORA_RADIO=true: the radio paths run, through the UART-modem
