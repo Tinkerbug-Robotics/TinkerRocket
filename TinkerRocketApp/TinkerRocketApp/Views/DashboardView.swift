@@ -403,24 +403,23 @@ struct DashboardView: View {
     /// BLEDevice objects exist or matter: appear, connect/disconnect, device
     /// list changes (reconnects create a new object), pair switches.
     ///
-    /// Voice: the first direct rocket link when one exists (full frame
-    /// rate), else the foreground base station — whose stream is pinned to
-    /// its focused rocket, so callouts never interleave two rockets.
     /// Sync: profiles only push over a direct rocket link.
+    ///
+    /// Voice used to be picked here too, and must not be: these are view
+    /// callbacks, and SwiftUI does not run them while the app is backgrounded,
+    /// so a reconnect behind the operator's back left the announcer wired to a
+    /// dead BLEDevice for the rest of the flight.  `BLEFleet` owns that routing
+    /// now (see `BLEFleet.flightAnnouncer`); all this does is hand the
+    /// announcer over, which is idempotent — the object never changes.
     private func attachActiveDevice() {
-        let directRocket = fleet.devices.first {
-            $0.isConnected && $0.deviceType == .rocket
-        }
-        let voiceDevice = directRocket ?? fleet.foregroundBaseStation
-
-        for other in fleet.devices where other !== voiceDevice {
-            other.flightAnnouncer = nil
-        }
-        voiceDevice?.flightAnnouncer = flightAnnouncer
+        fleet.flightAnnouncer = flightAnnouncer
         // #813: lets a deployment be graded against this rocket's own
         // expected descent rates.  Weak on the announcer's side.
         flightAnnouncer.profileStore = profileStore
 
+        let directRocket = fleet.devices.first {
+            $0.isConnected && $0.deviceType == .rocket
+        }
         if let rocket = directRocket {
             syncer.attach(device: rocket, store: profileStore)
         } else {
