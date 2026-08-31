@@ -28,8 +28,12 @@ antenna**; the module PCB under it is 16 mm (+0.3/−0.15), and pads 1–12 are 
 *that* edge. Every claim here is against *LC86G Series Hardware Design v1.5* (Quectel, 2025-10-09):
 pin dispositions from Table 6, the reflow limits in B4 from Table 28, the land pattern from
 Figure 26 (§5.3), the module geometry from Figure 28 (§7.1), and the keepout and ground-plane rules
-from §5.1.4 and §5.3. **Figure and section numbers moved between revisions** — v1.1 had the same
-land pattern as Figure 31 and the design guide as §5.2.4. Quote the revision when citing.
+from §5.1.4 and §5.3. The datasheet is vendored at
+`hardware/datasheets/Quectel_LC86G_Series_Hardware_Design_V1.5.pdf` — use it rather than a
+web copy. **Figure and section numbers moved between revisions** and v1.1 does not dimension the
+antenna offset at all, which makes its Figure 33 read as though the pads are inset 1.2 mm inside
+the body. v1.1 had the land pattern as Figure 31 and the design guide as §5.2.4. Quote the
+revision when citing.
 
 ---
 
