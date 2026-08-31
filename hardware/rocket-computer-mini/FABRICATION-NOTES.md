@@ -330,18 +330,31 @@ and without cutting `In1`.
   on every side. Whether the outline can give it that is an open question against the 22.35 mm
   inherited width.
 
-- **The footprint does not carry v1.5's antenna offset.** Everything is drawn as though the patch
-  were centred on the module PCB: `F.Fab` at ±8.00 (the 16 mm PCB) and the `F.SilkS` brackets at
-  ±9.20 (the 18.4 mm antenna). v1.5's new dimensions say the patch is *offset* — 0.94 + 16 + 1.46 =
-  18.4 — so on one edge it reaches 9.46 mm and on the other 8.94 mm. Which axis and which sign is a
-  reading off Figure 28, not a dimension that can be extracted, so it is recorded rather than
-  applied. **The courtyard was grown from ±9.45 to ±9.75** to contain the antenna on the long side
-  at worst-case tolerance (9.46 + 0.2) regardless of orientation; that part is safe without
-  resolving the question. The silk brackets are cosmetic and sit under the part.
+- ~~**The footprint does not carry v1.5's antenna offset.**~~ **RESOLVED and applied.** The patch is
+  offset on the module PCB, and measuring Figure 28 against the interior pad grid (2.2 mm pitch,
+  ~122.5 px/mm at 1200 dpi) puts numbers on it. In footprint coordinates:
+
+  | edge | measured | overhang from the ±8.00 PCB |
+  |---|---|---|
+  | antenna −y | −8.952 | **0.943** — datasheet 0.94 |
+  | antenna +y | +9.493 | **1.461** — datasheet 1.46 |
+  | antenna −x | −8.992 | 0.992 |
+  | antenna +x | +9.414 | 1.414 |
+
+  The Y pair reproduces Quectel's dimensions to 0.003 mm, which settles the axis: **0.94 is on −y,
+  1.46 on +y**, and the patch sits toward the +x/+y corner, away from pin 1. The orientation is
+  confirmed independently by pad 12 — the tall 2.25 mm land — appearing top-left in the bottom view,
+  which is where footprint (+x, −y) predicts. X is offset too, by an amount Quectel does not
+  dimension; the values above are measured, not quoted.
+
+  `F.SilkS` now draws the true outline (x −8.99 to +9.41, y −8.94 to +9.46, using the datasheet's
+  exact Y overhangs and the measured X) instead of a centred ±9.20 square. `F.Fab` stays at ±8.00 —
+  measurement confirms the PCB *is* centred on the pad field (−7.998 / +8.032). The courtyard at
+  ±9.75 clears the antenna by 0.29 mm on its worst side, so it needs no further change.
 
 - **§5.3 wants ≥3 mm between the module and other components; four top-side parts are inside it.**
-  Measured from the body edge on the current placement: `C38` and `R33` at 0.76 mm, `H1` at 2.47 mm,
-  `H3` at 2.54 mm. `H1`/`H3` are mounting holes rather than components, but a screw head is metal
+  Measured to the true antenna outline on the current placement: `C38` and `R33` at 0.97 mm,
+  `H1` at 2.73 mm, `H3` at 2.80 mm — all four still inside, the offset having bought ~0.2 mm. `H1`/`H3` are mounting holes rather than components, but a screw head is metal
   near a patch antenna and §5.1.4 separately asks for 10 mm to tall metal. Free to fix now.
   Note the courtyard does **not** encode this rule — it is sized to the part (±9.75), not to the
   3 mm keepout (which would be ±12.2). Enforcing 3 mm through the courtyard is an option if DRC
