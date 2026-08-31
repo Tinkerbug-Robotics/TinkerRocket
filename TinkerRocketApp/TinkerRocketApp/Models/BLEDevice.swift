@@ -50,7 +50,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Synchronous on purpose; the fleet's `$devices` subscription lands a
     /// runloop turn later.
     @Published var isConnected = false {
-        didSet { if isConnected != oldValue { fleet?.routeAnnouncer() } }
+        didSet { if isConnected != oldValue { fleet?.routeDeviceBindings() } }
     }
     @Published var telemetry = TelemetryData()
     // #377: `telemetry` starts as TelemetryData() (all zeros), which reads as
@@ -141,7 +141,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// rocket that reconnects mid-flight would never take voice back off the
     /// base station.
     @Published var deviceType: BLEDeviceType = .unknown {
-        didSet { if deviceType != oldValue { fleet?.routeAnnouncer() } }
+        didSet { if deviceType != oldValue { fleet?.routeDeviceBindings() } }
     }
 
     /// Firmware version stamp from config_identity "fw" field (#8).

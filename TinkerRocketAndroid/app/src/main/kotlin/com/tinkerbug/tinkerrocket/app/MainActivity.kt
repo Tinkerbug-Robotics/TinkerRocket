@@ -91,39 +91,24 @@ class MainActivity : ComponentActivity() {
                     // changes tick this often enough during a flash.
                     val otaInFlight = container.runningOta()
 
-                    // Syncer follows the active device (#132); attach is
-                    // idempotent per (session, role) and hops to the fleet
-                    // dispatcher (single-writer contract).  Demo attaches
-                    // too — the push lands harmlessly in FakeFirmware.
-                    LaunchedEffect(activeDevice?.session) {
-                        val session = activeDevice?.session
-                        container.fleetScope.launch {
-                            if (session != null) {
-                                container.syncer.attach(session, container.profileStore)
-                            } else {
-                                container.syncer.detach()
+                    // Voice and profile sync for the REAL fleet are bound at
+                    // process scope in AppContainer, not here: a LaunchedEffect
+                    // cannot re-bind them after a mid-flight drop that happens
+                    // while the app is backgrounded (paused Recomposer, and the
+                    // key reads unchanged once the reconnect ladder refills the
+                    // map).  That is #829's mechanism and iOS #989's bug; both
+                    // used to live right here.
+                    //
+                    // The DEMO fleet is a separate FleetManager the container
+                    // does not own, so it still binds from the composition —
+                    // which is fine, and only fine, because nothing is flying:
+                    // demo mode exists to be looked at, and its "flight" ends
+                    // when the screen does.
+                    if (demoFleet != null) {
+                        LaunchedEffect(demoFleet, devices, active) {
+                            container.fleetScope.launch {
+                                container.routeDeviceBindings(fleet)
                             }
-                        }
-                    }
-
-                    // Voice follows iOS attachActiveDevice (#375, #390): the
-                    // first connected direct rocket when one exists (full
-                    // frame rate), else the foreground base station — whose
-                    // stream is pinned to its focused rocket, so callouts
-                    // never interleave two rockets.  Keyed on the device map
-                    // so reconnects (new session objects) re-attach.
-                    LaunchedEffect(devices) {
-                        container.fleetScope.launch {
-                            val direct = devices.values.firstOrNull {
-                                it.session.isConnected.value &&
-                                    it.deviceType ==
-                                    com.tinkerbug.tinkerrocket.session.BleDeviceType.ROCKET
-                            }
-                            val voice = direct ?: fleet.foregroundBaseStation()
-                            for (d in devices.values) {
-                                if (d !== voice) d.session.telemetryAnnouncer = null
-                            }
-                            voice?.session?.telemetryAnnouncer = container.announcer
                         }
                     }
 

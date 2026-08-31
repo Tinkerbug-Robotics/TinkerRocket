@@ -403,27 +403,30 @@ struct DashboardView: View {
     /// BLEDevice objects exist or matter: appear, connect/disconnect, device
     /// list changes (reconnects create a new object), pair switches.
     ///
-    /// Sync: profiles only push over a direct rocket link.
+    /// Hand the fleet the two things it routes, and nothing more.
     ///
-    /// Voice used to be picked here too, and must not be: these are view
+    /// Both used to be DECIDED here, and must not be: these are view
     /// callbacks, and SwiftUI does not run them while the app is backgrounded,
-    /// so a reconnect behind the operator's back left the announcer wired to a
-    /// dead BLEDevice for the rest of the flight.  `BLEFleet` owns that routing
-    /// now (see `BLEFleet.flightAnnouncer`); all this does is hand the
-    /// announcer over, which is idempotent — the object never changes.
+    /// so a reconnect behind the operator's back left voice and profile sync
+    /// wired to a dead BLEDevice for the rest of the flight.  `BLEFleet` owns
+    /// both bindings now (see `BLEFleet.flightAnnouncer` and
+    /// `onDirectRocketChange`).  What is left is idempotent: the announcer,
+    /// syncer and store are all app-scoped objects that never change identity,
+    /// so re-running this is a no-op.
     private func attachActiveDevice() {
         fleet.flightAnnouncer = flightAnnouncer
         // #813: lets a deployment be graded against this rocket's own
         // expected descent rates.  Weak on the announcer's side.
         flightAnnouncer.profileStore = profileStore
 
-        let directRocket = fleet.devices.first {
-            $0.isConnected && $0.deviceType == .rocket
-        }
-        if let rocket = directRocket {
-            syncer.attach(device: rocket, store: profileStore)
-        } else {
-            syncer.detach()
+        // Profiles only push over a direct rocket link; the base station is a
+        // read-only display and never receives one.
+        fleet.onDirectRocketChange = { [syncer, profileStore] rocket in
+            if let rocket {
+                syncer.attach(device: rocket, store: profileStore)
+            } else {
+                syncer.detach()
+            }
         }
     }
 }
