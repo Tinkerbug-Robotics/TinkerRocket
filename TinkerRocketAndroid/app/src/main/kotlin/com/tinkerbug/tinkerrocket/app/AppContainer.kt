@@ -7,6 +7,7 @@ import com.tinkerbug.tinkerrocket.ble.AndroidBleScanner
 import com.tinkerbug.tinkerrocket.ble.AndroidTransportFactory
 import com.tinkerbug.tinkerrocket.session.ActiveProfileStorage
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
+import com.tinkerbug.tinkerrocket.session.BleDeviceType
 import com.tinkerbug.tinkerrocket.session.BleTransport
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.FleetManager
@@ -18,6 +19,7 @@ import com.tinkerbug.tinkerrocket.session.RocketProfileStore
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import java.io.File
@@ -244,6 +246,34 @@ class AppContainer(app: Application) {
         fleetRef
     }
 
+    /**
+     * Bind voice and profile sync to [f]'s current state.  Idempotent:
+     * `syncer.attach` early-returns for the same session+role, and the
+     * announcer assignment is last-write-wins over a stable set.
+     *
+     * MUST be called on [fleetScope] (single-writer contract).
+     */
+    fun routeDeviceBindings(f: FleetManager<DeviceSession>) {
+        val devices = f.devices.value
+
+        // Profile sync follows the ACTIVE device chip (#132).
+        val session = f.activeDeviceId.value?.let { devices[it] }?.session
+        if (session != null) syncer.attach(session, profileStore) else syncer.detach()
+
+        // Voice follows the first connected direct rocket when one exists
+        // (full frame rate), else the foreground base station — whose stream
+        // is pinned to its focused rocket, so callouts never interleave two
+        // rockets (#375, #390).
+        val direct = devices.values.firstOrNull {
+            it.session.isConnected.value && it.deviceType == BleDeviceType.ROCKET
+        }
+        val voice = direct ?: f.foregroundBaseStation()
+        for (d in devices.values) {
+            if (d !== voice) d.session.telemetryAnnouncer = null
+        }
+        voice?.session?.telemetryAnnouncer = announcer
+    }
+
     init {
         // #829: the foreground service's lifetime belongs here, at process
         // scope — not in the composition. It used to be started by a Compose
@@ -260,6 +290,30 @@ class AppContainer(app: Application) {
             fleet.linkActive.collect { active ->
                 if (active) FleetService.start(app)
             }
+        }
+
+        // The voice and profile-sync bindings belong here for exactly the same
+        // reason, and #829 left both of them behind in the composition — the
+        // voice one directly below the comment explaining why the pattern does
+        // not work. iOS #989 is the same bug and the same fix; this is its
+        // Android half.
+        //
+        // What goes wrong when this is a LaunchedEffect: a reconnect builds a
+        // NEW DeviceSession whose telemetryAnnouncer starts null, so callouts
+        // stop and the syncer holds a dead session. If the drop happens while
+        // the operator is in another app — filming the launch, which is when
+        // the link drops — nothing re-binds, and nothing re-binds on resume
+        // either, because the ladder has refilled the map and the key reads
+        // unchanged. Silent for the rest of the flight.
+        //
+        // Keying on `devices` alone is enough here, unlike iOS: a disconnect
+        // empties the map, and an identity readback that resolves a device's
+        // role REPLACES its entry (handleIdentity copies the record), so both
+        // edges emit. activeDeviceId is combined in for the syncer, which
+        // follows the active chip rather than the direct link.
+        fleetScope.launch {
+            combine(fleet.devices, fleet.activeDeviceId) { _, _ -> Unit }
+                .collect { routeDeviceBindings(fleet) }
         }
     }
 }

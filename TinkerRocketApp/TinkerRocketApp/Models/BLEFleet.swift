@@ -275,26 +275,58 @@ class BLEFleet: NSObject, ObservableObject {
     /// with the toolbar speaker icon still green — it reports audio-session
     /// health, and the session was fine.  Nothing was wrong except the wire.
     var flightAnnouncer: (any TelemetryAnnouncer)? {
-        didSet { routeAnnouncer() }
+        didSet { routeDeviceBindings() }
     }
 
-    /// The link that speaks: the first connected direct rocket when one exists
-    /// (full frame rate), else the foreground base station — whose stream is
-    /// pinned to its focused rocket, so callouts never interleave two rockets.
-    var voiceDevice: BLEDevice? {
+    /// Where the profile syncer binds, called with nil when no direct rocket
+    /// link exists.  A closure rather than the syncer itself so the BLE layer
+    /// stays free of profile-layer types — and so the routing is testable
+    /// without building a real syncer and store.
+    ///
+    /// Same story as `flightAnnouncer`: this used to be decided inside
+    /// `DashboardView.attachActiveDevice()`, so a reconnect while the app was
+    /// backgrounded left the syncer bound to a dead BLEDevice.  Lower stakes
+    /// than the voice bug — an unsynced rocket shows `.awaitingSync` rather
+    /// than going quiet — but the same defect, and #375 exists precisely
+    /// because silent non-sync is how an unsynced rocket reached the pad.
+    var onDirectRocketChange: ((BLEDevice?) -> Void)? {
+        didSet { routeProfileSync() }
+    }
+
+    /// The connected direct rocket link, if there is one.  Profiles only push
+    /// over a direct link, and it is also the preferred voice source.
+    var directRocket: BLEDevice? {
         devices.first { $0.isConnected && $0.deviceType == .rocket }
-            ?? foregroundBaseStation
+    }
+
+    /// The link that speaks: the direct rocket when one exists (full frame
+    /// rate), else the foreground base station — whose stream is pinned to its
+    /// focused rocket, so callouts never interleave two rockets.
+    var voiceDevice: BLEDevice? { directRocket ?? foregroundBaseStation }
+
+    /// Re-run every binding the fleet owns.  Idempotent and cheap — safe to
+    /// call from any state change, and called from several deliberately
+    /// overlapping ones.
+    func routeDeviceBindings() {
+        routeAnnouncer()
+        routeProfileSync()
     }
 
     /// Point the announcer at `voiceDevice` and clear it everywhere else.
-    /// Idempotent and cheap — safe to call from any state change, and called
-    /// from several deliberately overlapping ones.
     func routeAnnouncer() {
         let voice = voiceDevice
         for device in devices where device !== voice {
             device.flightAnnouncer = nil
         }
         voice?.flightAnnouncer = flightAnnouncer
+    }
+
+    /// Hand the current direct rocket — or nil — to whoever is binding.
+    /// Not de-duplicated: `ActiveRocketSyncer.attach` is documented idempotent
+    /// for the same device+store pair and deliberately falls through to a full
+    /// re-attach for a new object, which is exactly the reconnect case.
+    func routeProfileSync() {
+        onDirectRocketChange?(directRocket)
     }
 
     /// Re-route on the two fleet-level changes that can move the voice device.
@@ -306,17 +338,17 @@ class BLEFleet: NSObject, ObservableObject {
     /// the identity readback) come in synchronously through `BLEDevice`'s own
     /// `didSet`s instead, so the disconnect edge — the one that has to move
     /// voice to the base station mid-flight — is handled without any delay.
-    private func startAnnouncerRouting() {
+    private func startBindingRouting() {
         Publishers.Merge(
             $devices.map { _ in () },
             $foregroundBSID.map { _ in () }
         )
         .receive(on: DispatchQueue.main)
-        .sink { [weak self] in self?.routeAnnouncer() }
-        .store(in: &announcerRouting)
+        .sink { [weak self] in self?.routeDeviceBindings() }
+        .store(in: &bindingRouting)
     }
 
-    private var announcerRouting = Set<AnyCancellable>()
+    private var bindingRouting = Set<AnyCancellable>()
 
     // MARK: - Init
 
@@ -327,7 +359,7 @@ class BLEFleet: NSObject, ObservableObject {
             queue: nil,
             options: [CBCentralManagerOptionRestoreIdentifierKey: "TinkerRocketBLE"]
         )
-        startAnnouncerRouting()
+        startBindingRouting()
     }
 
     // MARK: - Scanning
