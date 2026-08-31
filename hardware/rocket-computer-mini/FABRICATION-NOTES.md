@@ -316,20 +316,33 @@ and without cutting `In1`.
   is supposed to witness. **Ask the assembler which they can do before changing the footprint** —
   angled inspection of the real fillet is the better answer if it is available.
 
-- **The centre vacancy is the antenna feed keepout — do not stitch it.** The six interior positions
-  the footprint omits (x ±2.2 to 0, y −1.6 and +0.6) are Figure 26's **Ø2.4 mm keepout**. v1.5 added
-  a note saying exactly what that means: *"'Keepout' mentioned in Figure 26 is a restricted area for
-  traces and vias."* §5.1.4 separately requires a feed-point keepout of at least 2.5 mm diameter *on
-  every layer*, adding that "interfering vias are not allowed either". Ground stitching under the
-  module is still wanted everywhere else — Quectel asks for a large ground plane on the GND pins —
-  but not there.
+- ~~**The centre vacancy is the antenna feed keepout.**~~ **Already enforced — leave it alone.** The
+  six interior positions the footprint omits (x ±2.2 to 0, y −1.6 and +0.6) are Figure 26's Ø2.4 mm
+  keepout, and v1.5 spells out what that means: *"'Keepout' mentioned in Figure 26 is a restricted
+  area for traces and vias."* §5.1.4 asks for at least 2.5 mm diameter *on every layer*. The
+  footprint already carries it as a **rule area** named `LC86G patch antenna feed keepout` — Ø2.50 mm
+  at local (−0.60, −0.64), tracks and vias `not_allowed` on all six copper layers, in both the
+  library and the board. DRC enforces it; nothing to add. Ground stitching under the module is still
+  wanted everywhere else — Quectel asks for a large ground plane on the GND pins — but not there.
 
 - **§5.1.4 wants a ground plane of at least 30 mm × 30 mm around the module,** with no components
   and no interfering vias in it. `U5` is 18.4 mm, so that is ~5.8 mm of clear plane beyond the body
   on every side. Whether the outline can give it that is an open question against the 22.35 mm
   inherited width.
 
+- **The footprint does not carry v1.5's antenna offset.** Everything is drawn as though the patch
+  were centred on the module PCB: `F.Fab` at ±8.00 (the 16 mm PCB) and the `F.SilkS` brackets at
+  ±9.20 (the 18.4 mm antenna). v1.5's new dimensions say the patch is *offset* — 0.94 + 16 + 1.46 =
+  18.4 — so on one edge it reaches 9.46 mm and on the other 8.94 mm. Which axis and which sign is a
+  reading off Figure 28, not a dimension that can be extracted, so it is recorded rather than
+  applied. **The courtyard was grown from ±9.45 to ±9.75** to contain the antenna on the long side
+  at worst-case tolerance (9.46 + 0.2) regardless of orientation; that part is safe without
+  resolving the question. The silk brackets are cosmetic and sit under the part.
+
 - **§5.3 wants ≥3 mm between the module and other components; four top-side parts are inside it.**
   Measured from the body edge on the current placement: `C38` and `R33` at 0.76 mm, `H1` at 2.47 mm,
   `H3` at 2.54 mm. `H1`/`H3` are mounting holes rather than components, but a screw head is metal
   near a patch antenna and §5.1.4 separately asks for 10 mm to tall metal. Free to fix now.
+  Note the courtyard does **not** encode this rule — it is sized to the part (±9.75), not to the
+  3 mm keepout (which would be ±12.2). Enforcing 3 mm through the courtyard is an option if DRC
+  should catch it automatically; it would make the courtyard wider than the inherited board width.
