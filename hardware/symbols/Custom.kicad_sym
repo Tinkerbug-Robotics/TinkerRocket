@@ -1652,7 +1652,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "1043P:BAT_1043P"
+		(property "Footprint" "Footprints:BAT_1043P"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5802,7 +5802,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "RTK:2337019-1"
+		(property "Footprint" "Footprints:2337019-1"
 			(at 10.16 -4.064 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8077,7 +8077,7 @@
 				)
 			)
 		)
-		(property "Footprint" "ANT_47948-0001_MOL"
+		(property "Footprint" "Footprints:ANT_47948-0001_MOL"
 			(at 11.684 8.128 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10865,7 +10865,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "6130XX21021_61300621021:61300621021"
+		(property "Footprint" "Footprints:61300621021"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12491,7 +12491,7 @@
 				)
 			)
 		)
-		(property "Footprint" "CONN16_878321620_MOL"
+		(property "Footprint" "Footprints:CONN16_878321620_MOL"
 			(at -2.54 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15599,7 +15599,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "ADP7142ARDZ:SOIC127P600X175-9N"
+		(property "Footprint" "Footprints:SOIC127P600X175-9N"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -22420,7 +22420,7 @@
 				(justify left top)
 			)
 		)
-		(property "Footprint" "ASPI-0530HI-2R2M-T2:IND_ASPI-0530HI-2R2M-T2"
+		(property "Footprint" "Footprints:IND_ASPI-0530HI-2R2M-T2"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -23021,7 +23021,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "B2B-PH-SM4-TB:JST_B2B-PH-SM4-TB"
+		(property "Footprint" "Footprints:JST_B2B-PH-SM4-TB"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -23388,7 +23388,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "B4B-PH-SM4-TB:JST_B4B-PH-SM4-TB"
+		(property "Footprint" "Footprints:JST_B4B-PH-SM4-TB"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -26448,7 +26448,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "BLM18PG471SN1D:BEADC1608X95N"
+		(property "Footprint" "Footprints:BEADC1608X95N"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -26720,7 +26720,7 @@
 				)
 			)
 		)
-		(property "Footprint" "CONN_BM05B-SRSS-TB_JST"
+		(property "Footprint" "Footprints:CONN_BM05B-SRSS-TB_JST"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -28841,7 +28841,7 @@
 				)
 			)
 		)
-		(property "Footprint" "LGA9_BMP585_BOS"
+		(property "Footprint" "Footprints:LGA9_BMP585_BOS"
 			(at 6.096 18.796 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -29735,7 +29735,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "BQ21040DBVR:SOT95P280X145-6N"
+		(property "Footprint" "Footprints:SOT95P280X145-6N"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -32781,7 +32781,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "CON-SMA-EDGE-S:RFSOLUTIONS_CON-SMA-EDGE-S"
+		(property "Footprint" "Footprints:RFSOLUTIONS_CON-SMA-EDGE-S"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -33200,7 +33200,7 @@
 				)
 			)
 		)
-		(property "Footprint" "TSON Advance_TOS"
+		(property "Footprint" "Footprints:TSON Advance_TOS"
 			(at 6.985 3.175 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -35067,7 +35067,7 @@
 				)
 			)
 		)
-		(property "Footprint" "USC_TOS"
+		(property "Footprint" "Footprints:USC_TOS"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -35631,7 +35631,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "DFE201610E-1R0M=P2:INDC2016X100N"
+		(property "Footprint" "Footprints:INDC2016X100N"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -35784,7 +35784,7 @@
 				(justify left top)
 			)
 		)
-		(property "Footprint" "DLW21SN670HQ2L:FIL_DLW21SN670HQ2L"
+		(property "Footprint" "Footprints:FIL_DLW21SN670HQ2L"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -40128,7 +40128,7 @@
 				)
 			)
 		)
-		(property "Footprint" "footprints:E220-900MM22S"
+		(property "Footprint" "Footprints:E220-900MM22S"
 			(at 1.27 5.715 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -40968,7 +40968,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "ECS-.327-6-16R-TR:XTAL_ECS-.327-6-16R-TR"
+		(property "Footprint" "Footprints:XTAL_ECS-.327-6-16R-TR"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -41321,7 +41321,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "ECS-400-10-37B2-CKY-TR:XTAL_ECS-400-10-37B2-CKY-TR"
+		(property "Footprint" "Footprints:XTAL_ECS-400-10-37B2-CKY-TR"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -44440,7 +44440,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "ESP32-P4NRW32:IC_ESP32-P4NRW32"
+		(property "Footprint" "Footprints:IC_ESP32-P4NRW32"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -46567,7 +46567,7 @@
 				(justify left top)
 			)
 		)
-		(property "Footprint" "ESP32-S3:IC_ESP32-S3"
+		(property "Footprint" "Footprints:IC_ESP32-S3"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -53747,7 +53747,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "FSUSB63UMX:QFN40P180X180X55-12N"
+		(property "Footprint" "Footprints:QFN40P180X180X55-12N"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -54990,7 +54990,7 @@
 				)
 			)
 		)
-		(property "Footprint" "LGA-12_2X2X0P7_STM"
+		(property "Footprint" "Footprints:LGA-12_2X2X0P7_STM"
 			(at 14.478 14.224 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -55319,7 +55319,7 @@
 				)
 			)
 		)
-		(property "Footprint" "RGT16_1P7X1P7"
+		(property "Footprint" "Footprints:RGT16_1P7X1P7"
 			(at -17.78 11.43 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -56758,7 +56758,7 @@
 				)
 			)
 		)
-		(property "Footprint" "U_LGA-14L_2p5X3p0X0p83_STM"
+		(property "Footprint" "Footprints:U_LGA-14L_2p5X3p0X0p83_STM"
 			(at 0 14.986 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -59228,7 +59228,7 @@
 				(justify left top)
 			)
 		)
-		(property "Footprint" "JS202011JCQN:SW_JS202011JCQN"
+		(property "Footprint" "Footprints:SW_JS202011JCQN"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -59716,7 +59716,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "KMR221GLFS:SW_KMR221GLFS"
+		(property "Footprint" "Footprints:SW_KMR221GLFS"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -69717,7 +69717,7 @@
 				)
 			)
 		)
-		(property "Footprint" "QFN-18_2MMx3MM_MP2672_MNP_MPS"
+		(property "Footprint" "Footprints:QFN-18_2MMx3MM_MP2672_MNP_MPS"
 			(at -16.51 8.89 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -70804,7 +70804,7 @@
 				)
 			)
 		)
-		(property "Footprint" "8L_WSON_8x6x3p4x4p3_MAC"
+		(property "Footprint" "Footprints:8L_WSON_8x6x3p4x4p3_MAC"
 			(at 11.684 12.954 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -72795,7 +72795,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "PB400EEQR1BLK:SW_PB400EEQR1BLK"
+		(property "Footprint" "Footprints:SW_PB400EEQR1BLK"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -74080,7 +74080,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "PMPB14XNX:TRANS_PMPB14XNX"
+		(property "Footprint" "Footprints:TRANS_PMPB14XNX"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -74634,7 +74634,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Footprints:PX1105R"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -78868,7 +78868,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "SAM-M10Q-00B:XCVR_SAM-M10Q-00B"
+		(property "Footprint" "Footprints:XCVR_SAM-M10Q-00B"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -84950,7 +84950,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "SMT-0540-T-9-R:XDCR_SMT-0540-T-9-R"
+		(property "Footprint" "Footprints:XDCR_SMT-0540-T-9-R"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -85251,7 +85251,7 @@
 				)
 			)
 		)
-		(property "Footprint" "TVS-SP05_LTF"
+		(property "Footprint" "Footprints:TVS-SP05_LTF"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -86530,7 +86530,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "SRP4020TA-1R5M:IND_SRP4020TA-1R5M"
+		(property "Footprint" "Footprints:IND_SRP4020TA-1R5M"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -87465,7 +87465,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "SS24FL:SODFL3617X108N"
+		(property "Footprint" "Footprints:SODFL3617X108N"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -89429,7 +89429,7 @@
 				)
 			)
 		)
-		(property "Footprint" "CAPMP7.6X4.3_3.1N_KEM"
+		(property "Footprint" "Footprints:CAPMP7.6X4.3_3.1N_KEM"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -91458,7 +91458,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "TBLH11-350-05-BK:CUI_TBLH11-350-05-BK"
+		(property "Footprint" "Footprints:CUI_TBLH11-350-05-BK"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -92056,7 +92056,7 @@
 				)
 			)
 		)
-		(property "Footprint" "DRL0006A"
+		(property "Footprint" "Footprints:DRL0006A"
 			(at 5.08 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -92910,7 +92910,7 @@
 				)
 			)
 		)
-		(property "Footprint" "TSON Advance_TOS"
+		(property "Footprint" "Footprints:TSON Advance_TOS"
 			(at 6.985 3.175 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -93169,7 +93169,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "TPS2121RUXR:IC_TPS2121RUXR"
+		(property "Footprint" "Footprints:IC_TPS2121RUXR"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -94426,7 +94426,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "TPS22918DBVR:SOT95P280X145-6N"
+		(property "Footprint" "Footprints:SOT95P280X145-6N"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -94614,7 +94614,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "TPS259824LNRGER:IC_TPS259824LNRGER"
+		(property "Footprint" "Footprints:IC_TPS259827LNRGER"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -97145,7 +97145,7 @@
 				)
 			)
 		)
-		(property "Footprint" "DRL0006A"
+		(property "Footprint" "Footprints:DRL0006A"
 			(at 0.508 -12.7 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -97831,7 +97831,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "TPS62913RPUR:IC_TPS62913RPUR"
+		(property "Footprint" "Footprints:IC_TPS62913RPUR"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -98224,7 +98224,7 @@
 				(justify left top)
 			)
 		)
-		(property "Footprint" "TPS63020DSJR:IC_TPS63020DSJR"
+		(property "Footprint" "Footprints:IC_TPS63021DSJR"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -98767,7 +98767,7 @@
 				(justify left top)
 			)
 		)
-		(property "Footprint" "TPS63021DSJR:IC_TPS63021DSJR"
+		(property "Footprint" "Footprints:IC_TPS63021DSJR"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -100390,7 +100390,7 @@
 				(justify left top)
 			)
 		)
-		(property "Footprint" "TYPE-C-31-M-12:HRO_TYPE-C-31-M-12"
+		(property "Footprint" "Footprints:USB_C_HRO_TYPE-C-31-M-12"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -101557,7 +101557,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "USB4110GFA:GCT_USB4110GFA"
+		(property "Footprint" "Footprints:GCT_USB4110GFA"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -101997,7 +101997,7 @@
 				(justify left top)
 			)
 		)
-		(property "Footprint" "VLS3012CX-2R2M-1:IND_VLS3012CX-2R2M-1"
+		(property "Footprint" "Footprints:IND_VLS3012CX-2R2M-1"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -102924,7 +102924,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "W25Q128JVSIQ:SOIC127P790X216-8N"
+		(property "Footprint" "Footprints:SOIC127P790X216-8N"
 			(at 12.7 1.27 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -103985,7 +103985,7 @@
 				(justify bottom)
 			)
 		)
-		(property "Footprint" "WE-CBA_0805:WE-CBA_0805_W4.0"
+		(property "Footprint" "Footprints:WE-CBA_0805_W4.0"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -104965,7 +104965,7 @@
 				(justify bottom)
 			)
 		)
-		(property "Footprint" "WE-MAPI_4020:WE-MAPI_4020"
+		(property "Footprint" "Footprints:WE-MAPI_4020"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
