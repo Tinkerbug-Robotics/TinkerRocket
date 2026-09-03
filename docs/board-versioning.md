@@ -30,7 +30,7 @@ that cannot include it — the hash changes when you commit. Tags avoid that.
 lora-daughterboard-v3.0.0
 rocket-computer-v9.0.0
 base-station-v5.0.0
-gnss-sam10m8-18mm-hv-v2.0.0
+gnss-sam10m8-18mm-hv-v3.0.0
 gnss-px1105r-18mm-highpower-ext-ant-v1.0.0
 servo-adapter-v1.0.0
 ```
@@ -152,6 +152,19 @@ left over from before is now ignored and can be deleted.
 
 ## Current state
 
+gnss-sam10m8-18mm-hv **v3.0.0**, 2026-09-02 — the carrier re-drawn around an
+ADP7142ARDZ-3.3 linear regulator after the 2026-08-29 side-by-side, where the
+V9 nosecone's buck carrier tracked 7–10 satellites against 26–27 on the old LDO
+board under the same sky. Copper changed and V2 was fabricated, so it is a major
+bump, and the silkscreen reads V3. The board also became 6-layer by decision
+(JLC06161H-3313), with 0.4/0.3 mm filled-and-capped vias and via-in-pad. DRC at
+tagging (`--severity-error --schematic-parity`): 0 errors, 0 unconnected,
+0 parity. Gerbers plotted from the tag; no upload has been made yet, so no
+release asset exists for it. Fabrication and assembly constraints that do not
+fit on the board live in `hardware/gnss-sam10m8-18mm-hv/FABRICATION-NOTES.md`.
+
+The set below is the previous state and still describes the other five boards.
+
 Fab set 2026-08-09 — all six boards tagged as a set at 5e3a426. Four fab
 packages were exported and uploaded that evening (base-station v5, lora
 v3, rocket-computer v9, sam10m8 v2), each verified geometry-identical —
@@ -169,7 +182,7 @@ the two boards without an upload. DRC below is
 | lora-daughterboard | v3.0.0 | 3 courtyard overlaps (review-waived), 0 unconnected |
 | rocket-computer | v9.0.0 | 3 courtyard overlaps (review-waived), 0 unconnected |
 | servo-adapter | v1.0.0 | 4 courtyard overlaps (J1 vs C1/C3/C4, waived); silkscreen still has no `${REVISION}` |
-| gnss-sam10m8-18mm-hv | v2.1.0 | 0 errors ✓ |
+| gnss-sam10m8-18mm-hv | v2.1.0 (superseded by v3.0.0) | 0 errors ✓ |
 | gnss-px1105r-18mm-highpower-ext-ant | v1.1.0 | 6 errors — stale zone fills from 8f87aa0 shorted +3V3 to two GND vias and the GND pour to two RXD2 tracks in the *stored artwork*; design intent sound. Refilled and cleared to 0 in the commit after the tag; verify which artwork the fab actually received. |
 
 The gnss v1.1.0 / v2.1.0 tags supersede v1.0.0 / v2.0.0, which were never
