@@ -60,7 +60,7 @@
           "hatch_smoothing_level": 0,
           "hatch_smoothing_value": 0.1,
           "hatch_thickness": 1.0,
-          "min_clearance": 0.15,
+          "min_clearance": 0.127,
           "min_island_area": 10.0,
           "min_thickness": 0.127,
           "pad_connection": 3,
@@ -160,8 +160,8 @@
         "min_text_thickness": 0.08,
         "min_through_hole_diameter": 0.3,
         "min_track_width": 0.0,
-        "min_via_annular_width": 0.1,
-        "min_via_diameter": 0.5,
+        "min_via_annular_width": 0.05,
+        "min_via_diameter": 0.4,
         "solder_mask_to_copper_clearance": 0.0,
         "use_height_for_length_calcs": true
       },
@@ -211,6 +211,7 @@
       ],
       "track_widths": [
         0.0,
+        0.1,
         0.127,
         0.2,
         0.4
@@ -264,7 +265,7 @@
       "internal_id": "",
       "mfg": "",
       "mpn": "",
-      "sch_revision": ""
+      "sch_revision": "V3"
     },
     "layer_pairs": [],
     "layer_presets": [],
@@ -685,7 +686,7 @@
         "uuid": "a61d9c6a-d8dd-4945-858b-535894b4ed8b"
       }
     ],
-    "used_designators": "",
+    "used_designators": "C135-136",
     "variants": []
   },
   "sheets": [
