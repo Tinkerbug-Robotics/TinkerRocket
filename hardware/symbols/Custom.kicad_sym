@@ -15730,7 +15730,7 @@
 					(type background)
 				)
 			)
-			(pin output line
+			(pin power_out line
 				(at 15.24 10.16 180)
 				(length 5.08)
 				(name "VOUT"
@@ -15748,7 +15748,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin passive line
 				(at 15.24 7.62 180)
 				(length 5.08)
 				(name "VOUT__1"
@@ -15838,7 +15838,7 @@
 					)
 				)
 			)
-			(pin input line
+			(pin power_in line
 				(at -15.24 10.16 0)
 				(length 5.08)
 				(name "VIN"
@@ -15856,7 +15856,7 @@
 					)
 				)
 			)
-			(pin input line
+			(pin passive line
 				(at -15.24 7.62 0)
 				(length 5.08)
 				(name "VIN__1"
@@ -26979,7 +26979,7 @@
 					(type none)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 0 0 0)
 				(length 5.08)
 				(name "1"
@@ -26997,7 +26997,7 @@
 					)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 0 -2.54 0)
 				(length 5.08)
 				(name "2"
@@ -27015,7 +27015,7 @@
 					)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 0 -5.08 0)
 				(length 5.08)
 				(name "3"
@@ -27033,7 +27033,7 @@
 					)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 0 -7.62 0)
 				(length 5.08)
 				(name "4"
@@ -27051,7 +27051,7 @@
 					)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 0 -10.16 0)
 				(length 5.08)
 				(name "5"
@@ -27069,7 +27069,7 @@
 					)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 13.97 10.16 270)
 				(length 7.62)
 				(name "GND"
@@ -27087,7 +27087,7 @@
 					)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 11.43 10.16 270)
 				(length 7.62)
 				(name "GND"
@@ -27335,7 +27335,7 @@
 					(type none)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 0 0 0)
 				(length 5.08)
 				(name "1"
@@ -27353,7 +27353,7 @@
 					)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 0 -2.54 0)
 				(length 5.08)
 				(name "2"
@@ -27371,7 +27371,7 @@
 					)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 0 -5.08 0)
 				(length 5.08)
 				(name "3"
@@ -27389,7 +27389,7 @@
 					)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 0 -7.62 0)
 				(length 5.08)
 				(name "4"
@@ -27407,7 +27407,7 @@
 					)
 				)
 			)
-			(pin unspecified line
+			(pin passive line
 				(at 0 -10.16 0)
 				(length 5.08)
 				(name "5"
