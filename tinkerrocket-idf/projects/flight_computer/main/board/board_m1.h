@@ -32,9 +32,11 @@
 // SPI group and the pyro group were swapped across the package to shorten the
 // routing. Every one is still a no-pull pad at reset per S3 datasheet Table
 // 2-1 — no FIRE line acquired a boot-time pull-up. They are now on pads in the
-// VDD_SPI/VDD3P3_CPU domain rather than VDD3P3_RTC, so their drive level rides
-// the GPIO45 VDD_SPI strap; GPIO45 has an internal WPD and reads low at boot,
-// giving 3.3 V. A 1.8 V VDD_SPI would leave FIRE unable to assert at all,
+// VDD3P3_CPU domain rather than VDD3P3_RTC. Three of them (PYRO2/3/4 on
+// GPIO35/34/33) are on pads the datasheet lists as VDD_SPI/VDD3P3_CPU, whose
+// supply follows the GPIO45 VDD_SPI strap; PYRO1 on GPIO38 is VDD3P3_CPU only.
+// GPIO45 has an internal WPD and reads low at boot, giving 3.3 V. A 1.8 V
+// VDD_SPI would leave three of the four FIRE lines unable to assert,
 // which fails safe but would be a silent no-deploy.
 //
 // Nothing about these overlaps usefully. Building a V9 image for this board
@@ -132,8 +134,9 @@ struct board_pins
     // the cheaper trade.
     //
     // PYRO_ARM is GPIO44 (net FC_ARM), NOT the GPIO8 the first single-MCU
-    // build used. GPIO8 became the hardware watchdog's pet line and is now a
-    // bare pad; the arm moved to GPIO44 and stayed there. A V9-or-earlier
+    // build used. GPIO8 was briefly the hardware watchdog's pet line, and after
+    // the 2026-09-03 pin swap it carries ISM6HG256_INT1; the arm moved to
+    // GPIO44 and stayed there. A V9-or-earlier
     // image drives GPIO8 and the arm FET simply never turns on — nothing
     // fires, which is the safe direction, but it fails a pad test that looks
     // like a dead igniter.
@@ -166,7 +169,8 @@ struct board_pins
 
     // --- Indicators ---
     // TWO LEDs, both cathode-to-GND through 10 k, both driven high to light:
-    //   IND_1 -> R70 -> D10, RED   -> GPIO38 (ordinary pad)
+    //   IND_1 -> R70 -> D10, RED   -> GPIO43 (U0TXD; was GPIO38 before the
+    //                                 2026-09-03 swap - GPIO38 is PYRO1_FIRE now)
     //   IND_2 -> R71 -> D11, BLUE  -> GPIO45 (VDD_SPI voltage strap)
     // This header claimed one white LED on GPIO45 called D5 through R114 until
     // 2026-08-30. None of that matched the schematic: it named the blue LED

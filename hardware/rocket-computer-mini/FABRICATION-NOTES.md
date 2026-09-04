@@ -1,8 +1,11 @@
 # Rocket computer mini — fabrication and assembly notes
 
-> ## ⚠ PRE-LAYOUT — NOT RELEASABLE
+> ## Board state — routed, placed, fills current
 >
-> **This board has no `Edge.Cuts` outline, 106 track segments and 31 vias. It is placed, not routed.**
+> **22.55 × 69.62 mm, 8 layers, 1.63 mm. Fully routed: 0 unconnected items, 2,152 track segments,
+> 585 vias. Zone fills verified current (a refill changes nothing). 31 DRC items remain, every one
+> silkscreen-cosmetic, an accepted decision, or a courtyard nudge — none affects fabrication.**
+> As of commit `932cf04`, 2026-09-04. The gerbers in `gerbers/` predate this and must be re-plotted.
 >
 > Standing rule: **never send this file to a fab house or an assembler with a `<TBD>` in it.**
 > There are none as of 2026-09-04; if one reappears, it is a number that does not exist yet. The `README` warns specifically
@@ -222,7 +225,8 @@ B8. C130 (5 F 2.7 V RADIAL SUPERCAPACITOR, 10 mm DIA x 20 mm,
     HOLE PART ON AN OTHERWISE REFLOW BOARD. HAND SOLDER AFTER
     BOTH PASSES. IT IS POLARISED: PAD 1 = V_SCAP (+), PAD 2 =
     GND (-). CONFIRM AGAINST THE SCHEMATIC, NOT THE SILKSCREEN.
-    THE CAN LIES OVER U16, J8, U21, U23 AND D7 AND IS BONDED
+    THE CAN LIES OVER 31 PARTS - U16, J8, U19, U21, U23, D7, L11
+    AND 24 SMALL PASSIVES INCLUDING C149 - AND IS BONDED
     DOWN WITH NEUTRAL/ALKOXY-CURE RTV - NEVER ACETOXY-CURE,
     WHICH RELEASES ACETIC ACID ONTO THE COPPER BENEATH IT.
     EVERYTHING UNDER THE CAN IS UNREWORKABLE ONCE BONDED, SO
