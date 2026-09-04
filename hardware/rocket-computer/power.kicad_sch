@@ -20111,7 +20111,7 @@
 				)
 			)
 		)
-		(property "Value" "10 uF"
+		(property "Value" "22 uF"
 			(at 336.55 54.61 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20121,7 +20121,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 336.55 49.53 0)
 			(hide yes)
 			(show_name no)
@@ -20154,7 +20154,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL05A106MQ5NUNC"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 336.55 49.53 0)
 			(hide yes)
 			(show_name no)
@@ -20842,7 +20842,7 @@
 				)
 			)
 		)
-		(property "Value" "4.75 k"
+		(property "Value" "3.09 k"
 			(at 389.89 57.15 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20885,7 +20885,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-074K75L"
+		(property "MPN" "RC0402FR-073K09L"
 			(at 389.89 52.07 0)
 			(hide yes)
 			(show_name no)

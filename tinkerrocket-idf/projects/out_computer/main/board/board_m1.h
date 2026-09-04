@@ -38,7 +38,8 @@
 // driven; the base station has already been bitten by an RXEN left floating in
 // RX. rocket_computer_mini/comms.cpp consumes it (lora_cfg.rxen_pin);
 // out_computer/comms.cpp does NOT yet. Wire it up before trusting a link
-// budget.
+// budget. It moved from GPIO44 to GPIO10 in #1015; there is no UART0
+// console on this board either way, since GPIO43 (U0TXD) is unrouted too.
 //
 // The magnetometer used to hang off our power-monitor bus and does not any
 // more — it moved to the flight computer's own MAG_SCL/MAG_SDA, where the
@@ -93,6 +94,40 @@ struct board_pins
     // reboot recovery.
     static constexpr bool RING_IN_PSRAM = true;   // 2 MB in-package (CONFIRMED)
 
+    // --- Pyro arm consent (net OC_ARM_EN) ---
+    // The out computer's half of a two-processor arm. The flight computer
+    // drives FC_ARM, this drives the consent transistor in series with it,
+    // and the arm FET only turns on when BOTH are high. Neither processor can
+    // arm the board alone, which is the whole point: an FC that hangs with
+    // its arm line stuck high, or one whose GPIO44 is still sitting at the
+    // ROM console's boot pull-up, cannot fire anything while we hold this
+    // low.
+    //
+    // Drive it LOW explicitly and EARLY — before the FC rail comes up through
+    // PWR_PIN — and leave it low until flight software has a reason to arm.
+    // This pad floats from reset until we configure it, and a floating gate
+    // on a consent transistor is not a consent decision.
+    //
+    // This is a real vote, not a formality. Do not wire it to "always high at
+    // boot" for bench convenience; that silently collapses the design back to
+    // a single-processor arm.
+    static constexpr int ARM_CONSENT_PIN = 11;   // OC_ARM_EN (CONFIRMED)
+
+    // --- Hold-up capacitor voltage (net V_SCAP_ADC) ---
+    // Divider off the hold-up capacitor bank, read as ADC1_CH7. Tells us how
+    // much ride-through energy is actually stored, which is the number that
+    // decides whether a brownout is survivable rather than merely detected.
+    //
+    // The flight computer watches the buck instead, on its own VBUCK_OK pin —
+    // that says "the supply went away", this says "and here is what is left".
+    // They are different questions and neither substitutes for the other.
+    //
+    // No VBUCK_OK on this processor: the out computer reads the pack through
+    // the INA230 on the power bus (VBAT_CON) and does not need a second
+    // opinion about the buck. The pad that carried the OC's VBUCK_OK on the
+    // earlier revision is GPIO34, and it is bare now.
+    static constexpr int SCAP_ADC_PIN = 8;       // V_SCAP_ADC (CONFIRMED; ADC1_CH7)
+
     // --- I2C slave (commands from the FlightComputer) ---
     static constexpr int I2C_SDA_PIN = 5;    // ESP_SDA (CONFIRMED)
     static constexpr int I2C_SCL_PIN = 6;    // ESP_SCL (CONFIRMED)
@@ -132,12 +167,32 @@ struct board_pins
     static constexpr int LORA_BUSY_PIN = 14; // L_BUSY (CONFIRMED)
     static constexpr int LORA_DIO1_PIN = 17; // L_DI01 (CONFIRMED)
     static constexpr int LORA_RST_PIN = 18;  // L_RST  (CONFIRMED)
-    // RF switch receive-enable. DIO2 drives transmit-enable inside the module
-    // once configured, so only RXEN reaches a GPIO — and it MUST be driven.
-    // GPIO44 is U0RXD, so this board has console TX but no console RX; that
-    // was the deliberate trade for the pin. NOT YET CONSUMED by this
-    // project's comms.cpp — see the gap note in the file header.
-    static constexpr int LORA_RXEN_PIN = 44; // L_RXEN (CONFIRMED; U0RXD spent)
+    // RF switch receive-enable, and the only half of the switch we own: DIO2
+    // drives transmit-enable *inside* the module, on a net that never reaches
+    // a GPIO, so firmware can neither read nor override it.
+    //
+    // MOVED OFF GPIO44 (#1015). GPIO44 is U0RXD and carries the ROM console's
+    // weak pull-up from power-on until the pad is configured, which forced
+    // RXEN high through every reset — before any code runs. Reset the board
+    // mid-transmit and DIO2 is still holding TXEN high for the tail of that
+    // packet, so both arms of the RF switch are asserted at once on a 22 dBm
+    // module. Nothing in firmware could prevent it, because the pull-up is
+    // inside the pad.
+    //
+    // GPIO10 is a plain pad: no strapping role, no reset pull. R142 (100 k)
+    // pulls L_RXEN down, so the line is deterministically LOW — receive path
+    // off — from power-on until we drive it. Off is the safe default here;
+    // the failure this avoids is silent, because it degrades RECEIVE while
+    // transmit keeps working, so telemetry looks healthy while the uplink
+    // (arming, the pyro commands, mute) quietly stops answering.
+    //
+    // If this board is ever put into light sleep while it needs to hear
+    // uplink, this pin needs gpio_hold_en — otherwise the pad goes high-Z,
+    // R142 wins, and the receiver goes deaf with no error. That is the same
+    // shape as the V9 GPIO12 lesson.
+    //
+    // NOT YET CONSUMED by this project's comms.cpp — see the file header.
+    static constexpr int LORA_RXEN_PIN = 10; // L_RXEN (CONFIRMED)
 
     // --- No radio daughterboard on this board ---
     static constexpr int LORA_UART_TX_PIN = -1;

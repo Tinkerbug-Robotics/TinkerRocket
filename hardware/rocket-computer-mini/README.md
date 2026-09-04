@@ -42,7 +42,7 @@ expansion header, camera, servo and piezo came out.*
 | Radio | 2.4 GHz chip antenna `U31`, 900 MHz LoRa `U16` | none |
 | Memory | NAND `U11` + boot flash `U13` | boot flash `U33` only |
 | Sensors | pack monitor only, on `SEN_SC*` (`+3V3`) | IMU, baro, GNSS **and magnetometer** |
-| Pyro | none | all four channels and `PYRO_ARM` |
+| Pyro | arm consent (`OC_ARM_EN`) | all four channels and the arm request (`FC_ARM`) |
 | USB | `OC_D±` | `FC_D±` |
 
 The flight computer is a copy of the out-computer sheet with the chip antenna,
@@ -131,6 +131,36 @@ and no logging". `rocket-computer` gives the radio its own switch (`U29`) and
 can therefore transmit on the pad with the flight computer asleep. That is a
 deliberate choice for this board, not an oversight — see *Open items*.
 
+### Arming needs both processors
+
+The pyro return switch `U9` is closed from pack voltage by `Q13`, through
+`R139` and `R21` onto the `ARM_GATE` node, with `R22` bleeding the gate in about
+0.2 ms whenever the drive stops. `Q13`'s base is pulled down only through two
+digital transistors in series: `Q12`, driven by the flight computer's `FC_ARM`
+(GPIO44) through `R132`, and `Q14`, driven by the out computer's `OC_ARM_EN`
+(GPIO11). **Both pins have to be driven high to arm.** A processor that is off,
+in reset, or leaving its pin high-impedance holds its transistor off through the
+transistor's built-in base-emitter resistor, so neither MCU can arm the board
+alone and a dead MCU disarms it.
+
+The out computer's term is the fail-safe, and it is there for a reason: GPIO44
+is the flight computer's U0RXD and carries a weak pull-up at and after reset, so
+the flight-computer term on its own is *not* a safe idle. The firmware contract
+that goes with the circuit: the out computer drives `OC_ARM_EN` low at boot,
+raises it only on an explicit arm, and drops it when flight-computer heartbeats
+stop. The flight computer keeps its own task watchdog for everything else.
+
+**2026-09-02: the window watchdog is gone.** The 2026-08-28 rework had a
+supervisor on the flight computer's `CHIP_PU` that reset it whenever GPIO8
+stopped toggling. It was removed from the schematic and the board (`U46`,
+`R133`, `C139` and their copper) as complexity the consent stage makes
+unnecessary — liveness is a firmware check on the out computer now, and a
+hardware reset line on `CHIP_PU` also blocked flashing the flight computer over
+USB. `FC_CHIP_PU` is back to its reset RC only, and GPIO8 is a spare pad. The
+same change replaced the pack-node veto diode `D16` with `Q14`, which is what
+took the pack voltage off the out computer's GPIO11. `Q14` still has to be
+placed on the board.
+
 ### The link between them
 
 Six wires, the same net names and the same protocols as `rocket-computer`:
@@ -214,7 +244,8 @@ re-homed on the flight computer or deliberately gone:
 | Was orphaned | Now |
 |---|---|
 | IMU / baro SPI + interrupts, GNSS UART | flight computer, same GPIO as the single-MCU map |
-| all four `PYRO*_FIRE` / `PYRO*_CONT`, `PYRO_ARM` | flight computer, same GPIO as the single-MCU map |
+| all four `PYRO*_FIRE` / `PYRO*_CONT` | flight computer, same GPIO as the single-MCU map |
+| `PYRO_ARM` | flight computer as `FC_ARM` (GPIO44), and it no longer arms alone — see *Arming needs both processors* |
 | the six `ESP_*` link lines | live again, both ends populated |
 | `P4_EN_HOLD` | `FC_EN_HOLD`, into `D9` |
 | all twelve `EXP_01`–`EXP_12` | removed |
@@ -231,6 +262,11 @@ bus, the power-monitor I2C and USB, and gains twelve spare pads.
   a GNSS module and the telemetry radio added. Concludes the inherited buck
   stays, and explains why the ground station's buck-boost must not be copied
   here.
+- [`arm-watchdog-rework.md`](arm-watchdog-rework.md) — the 2026-08-28
+  supervised-arm design **as proposed**. The window watchdog it specifies was
+  removed on 2026-09-02 and the veto diode became `Q14`; read it for the
+  reasoning that retired the charge pump, not for the current circuit, which is
+  described under *Arming needs both processors* above.
 - [`pin-budget.md`](pin-budget.md) — whether the single processor can carry the
   board alone. 23 signals into 27 usable pads, with a proposed assignment that
   keeps the serial console and spends JTAG. **Written against the single-MCU
@@ -263,10 +299,13 @@ them are records of *that* board, and each would be actively misleading here:
 - **`WORKLIST.md`** — the closing record of the V9 pre-fab review, written
   against V9's live files. Its board state, its closed items, and its bench list
   describe a board this one will not be.
-- **`FABRICATION-NOTES.md`** — fab and assembly instructions keyed to V9's exact
-  geometry (22.35 × 75.00 mm, 6 layer, 1.546 mm stack) and its specific parts.
-  A reduced board will not share those numbers, and stale fab notes are the kind
-  of error that reaches a fab house.
+- **`FABRICATION-NOTES.md`** — **rewritten for this board (2026-09-03).** It now
+  carries the mini's own geometry (22.55 × 69.62 mm, 8 layer, 1.630 mm on
+  JLCPCB `JLC08161H-2116`) and its own parts. It began as a copy keyed to V9's
+  22.35 × 75.00 mm, 6 layer, 1.546 mm stack; the on-board `User.Drawings` text
+  was still the V9 block verbatim until the same date. Stale fab notes are the
+  kind of error that reaches a fab house — re-read this file against the board
+  file after any stackup or part change.
 - **`power-eco.md`** and **`high-side-switch-design.md`** — design rationale for
   the V9 power architecture. These remain the best reading on *why* the
   inherited power tree looks the way it does; read them in
@@ -284,7 +323,14 @@ none have been fixed here.
 
 ### Where the numbers stand now
 
-| | at fork | after `rev1` | after P4 removal | after the second S3 |
+> **Stale — these numbers pre-date the current board** and are kept only as the
+> record of the fork. Since they were taken the board has gained the arm rework,
+> the hold-up converter, an 8-layer stackup, the WLCSP flash and the chip
+> antenna, and the PCB has been laid out. Re-measuring them is part of
+> [#1013](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1013).
+
+
+| | at fork | after the rev change | after P4 removal | after the second S3 |
 |---|---|---|---|---|
 | ERC (`--severity-all`) | 1012 | 1012 | 823 → 610 | **739** |
 | DRC (`--severity-all`) | 26 | 28 | **88** | not re-run |
@@ -320,50 +366,41 @@ The board still carries the P4-era stubs and has no footprint for `U32`, `U33`,
 `U1`, `S1` or `D9` at all, so the layout pass those stubs were waiting for is
 still outstanding and still the right time to clear them.
 
-Three stale items are worth knowing about, none fixed:
+Three stale items were listed here; **all three are now resolved** (2026-09-03):
 
-- **`C12`'s footprint disagrees between schematic and board.** The pyro energy
-  store was changed from the Nichicon `EKYC160ELL103MM25S` to a Rubycon 2200 µF
-  16 V (`16ZLH2200MEFC12.5X20`) in a horizontal lay-down can with a hold-down
-  strap — which is what the inherited fab notes' "can floating 4 mm above the
-  board" warning was about. **The schematic carries the change; the PCB still
-  has the old vertical footprint.** Swapping it on the board means re-placing
-  C12 and re-routing it, which is layout work for the next pass.
-- **`bom.csv` is still V9's full bill of materials** — 255 parts, including the
-  65 that no longer exist, and now also missing the 40 parts the second
-  processor added. The C12 row is the one line that is current.
-- **The on-board fabrication-note text still cites `QFN-104 (U17)`** as the
-  reason ENIG is required. `U17` was the P4 and is gone. ENIG is still justified
-  by `U15` (0.4 mm QFN-56) and `U21` (0.4 mm X2QFN), but the citation is dead and
-  the note also still calls the board "ROCKET COMPUTER" at V9's dimensions.
+- **`C12`'s footprint disagreement is gone** — with it the whole part. The
+  2200 µF pyro energy store no longer exists anywhere in the design; the
+  refdes `C12` has been reused for the BLE antenna's DNP series-match position.
+- **`bom.csv` is current** — 69 rows, 209 designators, reconciling against the
+  netlist exactly (the eight unmatched refs are `FID1-4`/`H1-4`, excluded by
+  design). It is no longer V9's 255-part bill.
+- **The on-board fabrication note has been rewritten** against this board. It
+  names the board `TINKERROCKET ROCKET COMPUTER MINI` at its own
+  22.55 × 69.62 mm, and justifies ENIG by the parts that are actually fitted —
+  the 0.5 mm-pitch WLCSPs (`U13`, `U33`), the 0.4 mm QFN-56s (`U15`, `U32`),
+  the 0.4 mm X2QFN (`U21`) and the 0.4 mm 12-lead (`U1`). The dead `QFN-104
+  (U17)` citation is gone.
 
-### The revision, and what changing it cost
+### The revision
 
-The title block arrived reading `(rev "V9")` — the revision of a *different*
-design's fab release — and the front silkscreen renders
-`Tinker\nRocket\n${REVISION}` from it. It now reads **`rev1`**, this board's own
-first revision.
+**This board is `V1`.** The title block carries `(rev "V1")` and the back
+silkscreen renders `TR-Mini\n${REVISION}` from it, so the revision reaches the
+board from one place and cannot drift from the documentation.
 
-That is the only edit made since the fork, and it is not free. `rev1` is two
-characters wider than `V9`, so the silkscreen block grew and now touches R1:
+`V1` is this board's own first revision. It is deliberately two characters, to
+match the `V10` / `V6` / `V4` convention on the other boards in this repo — a
+`rev1`-style string was tried during the fork and was wider, which grew the
+silkscreen block until it collided with `R1`. That is history now: the text sits
+on `B.Silkscreen` at (81.19, 119.37) and `R1` is 21 mm away at (76.81, 140.71),
+so neither the `silk_overlap` nor the `silk_over_copper` warning that the longer
+string caused still exists.
 
-| | at fork | after `rev1` |
-|---|---|---|
-| DRC (`--severity-all`) | 26 | **28** |
-
-The two new items are `silk_overlap` (the text against R1's silkscreen segment)
-and `silk_over_copper` (the text against R1's pad 1), both at
-`@(72.64 mm, 159.51 mm)`, both severity *warning*. They are cosmetic and in the
-same class as the 26 already inherited — but they are **new, not inherited**,
-and they are a layout problem, not a naming one.
-
-Deliberately not fixed by nudging the text: this board exists to have most of
-its content removed, and that silkscreen will have to be repositioned anyway
-once the layout is cut down. Fixing it now would be laying out a board that is
-about to stop existing. Whoever does the reduction should clear it then — or
-shorten the string, since a two-character revision (`V1`, matching the `V9` /
-`V5` convention on the other boards) reoccupies the original footprint exactly
-and drops both warnings.
+The title block arrived from the fork reading `(rev "V9")` — the revision of a
+*different* design's fab release. There is no fab tag or release for this board
+under any revision, and the gerbers in `gerbers/` were plotted on 2026-08-31,
+before the current layout — so nothing that has been sent out corresponds to
+what `V1` names today. Re-plotting them is part of
+[#1013](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1013).
 
 ## Status
 
@@ -382,7 +419,7 @@ Board file, verified 2026-08-30:
   lost between `0e0f2d5` and `7ad7508` (the pack-direct pyro/supercap WIP
   commit), which left the file with no board boundary at all for a while.
 - **The net names are re-synced with the schematic.** `CAP_ACTIVE` and
-  `ARM_CLK` are gone; `VBUCK_OK`, `WDT_PET`, `FC_ARM`, `OC_ARM_EN` and the rest
+  `ARM_CLK` are gone; `VBUCK_OK`, `FC_ARM`, `OC_ARM_EN` and the rest
   of the TPS61094 nets are in. Until this pass the board file lagged the
   schematic by two reworks — **9 schematic nets had no PCB counterpart and 3 PCB
   nets no longer existed** — and `kicad-cli pcb drc --schematic-parity` did not
