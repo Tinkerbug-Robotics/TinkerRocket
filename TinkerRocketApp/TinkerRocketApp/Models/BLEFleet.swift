@@ -256,6 +256,100 @@ class BLEFleet: NSObject, ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
+    // MARK: - Voice routing (#829's iOS twin)
+
+    /// The flight announcer, or nil when the dashboard hasn't handed one over.
+    /// The dashboard OWNS it (an `@StateObject` on the root view); routing it
+    /// onto a link lives HERE, at fleet scope, because it has to keep working
+    /// while nothing is on screen.
+    ///
+    /// It used to be assigned from `DashboardView`'s `.onChange(of:)` handlers
+    /// — the same shape #829 had to take out of Android's Compose starter, and
+    /// wrong for the same reason.  Every reconnect builds a NEW `BLEDevice`
+    /// whose `flightAnnouncer` starts nil, and SwiftUI does not run a stopped
+    /// view's `onChange`.  So a link drop while the operator was in another app
+    /// (filming the launch) left the announcer pointing at a dead object, and
+    /// it never recovered: by the time the app came back the reconnect ladder
+    /// had refilled `devices`, so the value read the same as it had before and
+    /// the `onChange` never fired either.  Silence for the rest of the flight,
+    /// with the toolbar speaker icon still green — it reports audio-session
+    /// health, and the session was fine.  Nothing was wrong except the wire.
+    var flightAnnouncer: (any TelemetryAnnouncer)? {
+        didSet { routeDeviceBindings() }
+    }
+
+    /// Where the profile syncer binds, called with nil when no direct rocket
+    /// link exists.  A closure rather than the syncer itself so the BLE layer
+    /// stays free of profile-layer types — and so the routing is testable
+    /// without building a real syncer and store.
+    ///
+    /// Same story as `flightAnnouncer`: this used to be decided inside
+    /// `DashboardView.attachActiveDevice()`, so a reconnect while the app was
+    /// backgrounded left the syncer bound to a dead BLEDevice.  Lower stakes
+    /// than the voice bug — an unsynced rocket shows `.awaitingSync` rather
+    /// than going quiet — but the same defect, and #375 exists precisely
+    /// because silent non-sync is how an unsynced rocket reached the pad.
+    var onDirectRocketChange: ((BLEDevice?) -> Void)? {
+        didSet { routeProfileSync() }
+    }
+
+    /// The connected direct rocket link, if there is one.  Profiles only push
+    /// over a direct link, and it is also the preferred voice source.
+    var directRocket: BLEDevice? {
+        devices.first { $0.isConnected && $0.deviceType == .rocket }
+    }
+
+    /// The link that speaks: the direct rocket when one exists (full frame
+    /// rate), else the foreground base station — whose stream is pinned to its
+    /// focused rocket, so callouts never interleave two rockets.
+    var voiceDevice: BLEDevice? { directRocket ?? foregroundBaseStation }
+
+    /// Re-run every binding the fleet owns.  Idempotent and cheap — safe to
+    /// call from any state change, and called from several deliberately
+    /// overlapping ones.
+    func routeDeviceBindings() {
+        routeAnnouncer()
+        routeProfileSync()
+    }
+
+    /// Point the announcer at `voiceDevice` and clear it everywhere else.
+    func routeAnnouncer() {
+        let voice = voiceDevice
+        for device in devices where device !== voice {
+            device.flightAnnouncer = nil
+        }
+        voice?.flightAnnouncer = flightAnnouncer
+    }
+
+    /// Hand the current direct rocket — or nil — to whoever is binding.
+    /// Not de-duplicated: `ActiveRocketSyncer.attach` is documented idempotent
+    /// for the same device+store pair and deliberately falls through to a full
+    /// re-attach for a new object, which is exactly the reconnect case.
+    func routeProfileSync() {
+        onDirectRocketChange?(directRocket)
+    }
+
+    /// Re-route on the two fleet-level changes that can move the voice device.
+    /// `@Published` fires in `willSet`, so this hops to the next main-queue
+    /// turn: reading `devices` synchronously here would see the roster as it
+    /// was BEFORE the connect or disconnect that woke us.
+    ///
+    /// The per-device transitions (`isConnected`, `deviceType` resolving after
+    /// the identity readback) come in synchronously through `BLEDevice`'s own
+    /// `didSet`s instead, so the disconnect edge — the one that has to move
+    /// voice to the base station mid-flight — is handled without any delay.
+    private func startBindingRouting() {
+        Publishers.Merge(
+            $devices.map { _ in () },
+            $foregroundBSID.map { _ in () }
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] in self?.routeDeviceBindings() }
+        .store(in: &bindingRouting)
+    }
+
+    private var bindingRouting = Set<AnyCancellable>()
+
     // MARK: - Init
 
     override init() {
@@ -265,6 +359,7 @@ class BLEFleet: NSObject, ObservableObject {
             queue: nil,
             options: [CBCentralManagerOptionRestoreIdentifierKey: "TinkerRocketBLE"]
         )
+        startBindingRouting()
     }
 
     // MARK: - Scanning

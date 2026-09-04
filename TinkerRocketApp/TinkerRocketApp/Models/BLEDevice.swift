@@ -44,7 +44,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Published per-device state
 
-    @Published var isConnected = false
+    /// `didSet`: the fleet re-routes voice on this edge.  It is the one that
+    /// matters most — a direct rocket link dropping at launch is what hands
+    /// the callouts over to the base station, and it happens on every flight.
+    /// Synchronous on purpose; the fleet's `$devices` subscription lands a
+    /// runloop turn later.
+    @Published var isConnected = false {
+        didSet { if isConnected != oldValue { fleet?.routeDeviceBindings() } }
+    }
     @Published var telemetry = TelemetryData()
     // #377: `telemetry` starts as TelemetryData() (all zeros), which reads as
     // pwr_pin_on == false — indistinguishable from a genuinely-off rocket. In
@@ -128,7 +135,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var unitName: String = ""    // e.g. "Atlas" (user-settable)
     @Published var networkID: UInt8 = 0
     @Published var rocketID: UInt8 = 0
-    @Published var deviceType: BLEDeviceType = .unknown
+    /// `didSet`: a device joins the roster as `.unknown` and only resolves its
+    /// role when the config_identity readback lands ~1 s later (#375) — long
+    /// after the fleet's roster subscription has run.  Without this edge a
+    /// rocket that reconnects mid-flight would never take voice back off the
+    /// base station.
+    @Published var deviceType: BLEDeviceType = .unknown {
+        didSet { if deviceType != oldValue { fleet?.routeDeviceBindings() } }
+    }
 
     /// Firmware version stamp from config_identity "fw" field (#8).
     /// Format: `<git_short_sha>+<build_yyyymmdd-hhmm>`, optionally with

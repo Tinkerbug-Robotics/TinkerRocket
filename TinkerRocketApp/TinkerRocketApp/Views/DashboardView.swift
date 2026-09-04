@@ -403,28 +403,30 @@ struct DashboardView: View {
     /// BLEDevice objects exist or matter: appear, connect/disconnect, device
     /// list changes (reconnects create a new object), pair switches.
     ///
-    /// Voice: the first direct rocket link when one exists (full frame
-    /// rate), else the foreground base station — whose stream is pinned to
-    /// its focused rocket, so callouts never interleave two rockets.
-    /// Sync: profiles only push over a direct rocket link.
+    /// Hand the fleet the two things it routes, and nothing more.
+    ///
+    /// Both used to be DECIDED here, and must not be: these are view
+    /// callbacks, and SwiftUI does not run them while the app is backgrounded,
+    /// so a reconnect behind the operator's back left voice and profile sync
+    /// wired to a dead BLEDevice for the rest of the flight.  `BLEFleet` owns
+    /// both bindings now (see `BLEFleet.flightAnnouncer` and
+    /// `onDirectRocketChange`).  What is left is idempotent: the announcer,
+    /// syncer and store are all app-scoped objects that never change identity,
+    /// so re-running this is a no-op.
     private func attachActiveDevice() {
-        let directRocket = fleet.devices.first {
-            $0.isConnected && $0.deviceType == .rocket
-        }
-        let voiceDevice = directRocket ?? fleet.foregroundBaseStation
-
-        for other in fleet.devices where other !== voiceDevice {
-            other.flightAnnouncer = nil
-        }
-        voiceDevice?.flightAnnouncer = flightAnnouncer
+        fleet.flightAnnouncer = flightAnnouncer
         // #813: lets a deployment be graded against this rocket's own
         // expected descent rates.  Weak on the announcer's side.
         flightAnnouncer.profileStore = profileStore
 
-        if let rocket = directRocket {
-            syncer.attach(device: rocket, store: profileStore)
-        } else {
-            syncer.detach()
+        // Profiles only push over a direct rocket link; the base station is a
+        // read-only display and never receives one.
+        fleet.onDirectRocketChange = { [syncer, profileStore] rocket in
+            if let rocket {
+                syncer.attach(device: rocket, store: profileStore)
+            } else {
+                syncer.detach()
+            }
         }
     }
 }
