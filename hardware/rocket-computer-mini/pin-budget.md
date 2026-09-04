@@ -276,7 +276,11 @@ are spent. That is not "no console": the S3 routes any UART through the GPIO mat
 GPIO47 or GPIO48 if ever wanted. Day to day the console is USB-Serial-JTAG on GPIO19/20 through the mux.
 **Do not "correct" `IND_1` back to GPIO38 from an older copy of this file — GPIO38 is `PYRO1_FIRE`.**
 
-## Assignment — as built
+## Assignment — as built (single-processor allocation, superseded)
+
+> **Historical.** This table is the allocation from before the two-processor split and before the
+> 2026-09-03 pin swap; it mixes signals that now live on different chips. The live per-MCU
+> assignment is under *The split* below, and the netlist is the authority.
 
 > **This section describes the SINGLE-MCU board and is superseded.** Everything
 > from *The split* onward is the two-processor design that is actually drawn.
@@ -309,11 +313,11 @@ The allocation is driven by three rules, in order:
 | Signal | Pin | Tier | Why here |
 |---|---|---|---|
 | PERIPH_EN | GPIO3 | strapping | enable idles low, which is what this pad wants at reset |
-| ISM6HG256_CS | GPIO4 | free | safety-critical output |
-| SENS_SDI | GPIO5 | free | safety-critical output |
-| SENS_SCLK | GPIO6 | free | safety-critical output |
-| SENS_SDO | GPIO7 | free | safety-critical output |
-| ISM6HG256_INT1 | GPIO8 | free | safety-critical output |
+| PYRO1_FIRE | GPIO4 | free | safety-critical output |
+| PYRO2_FIRE | GPIO5 | free | safety-critical output |
+| PYRO3_FIRE | GPIO6 | free | safety-critical output |
+| PYRO4_FIRE | GPIO7 | free | safety-critical output |
+| PYRO_ARM | GPIO8 | free | safety-critical output |
 | PYRO1_CONT | GPIO10 | free | continuity sense |
 | PYRO2_CONT | GPIO11 | free | continuity sense |
 | PYRO3_CONT | GPIO12 | free | continuity sense |
@@ -321,10 +325,10 @@ The allocation is driven by three rules, in order:
 | L_BUSY | GPIO14 | free | radio input |
 | L_DIO1 | GPIO17 | free | radio interrupt |
 | L_RST | GPIO18 | free | radio output |
-| PYRO3_FIRE | GPIO34 | free | sensor bus |
+| SENS_SCLK | GPIO34 | free | sensor bus |
 | SENS_SDI | GPIO1 | free | sensor bus |
 | SENS_SDO | GPIO2 | free | sensor bus |
-| BMP585_CS | GPIO9 | free | sensor select |
+| ISM6HG256_CS | GPIO9 | free | sensor select |
 | *(spare)* | GPIO48 | flash-adjacent | free since the 2026-09-03 swap (pad 36, SPICLK_N) |
 | *(spare)* | GPIO47 | flash-adjacent | free since the 2026-09-03 swap (pad 37, SPICLK_P) |
 | BMP585_INT | GPIO26 | flash-adjacent | passive input |
@@ -332,7 +336,7 @@ The allocation is driven by three rules, in order:
 | GNSS_RX | GPIO40 | JTAG | UART, tolerant |
 | PG_RAIL | GPIO41 | JTAG | passive input |
 | POWER_SWITCH | GPIO42 | JTAG | passive input |
-| FC_ARM | GPIO44 | console RX | continuity sense — see the note below |
+| PYRO4_CONT | GPIO44 | console RX | continuity sense — see the note below |
 
 ### The switched rail problem
 
@@ -477,32 +481,31 @@ left GPIO26) carries over verbatim.
 
 | Signal | GPIO | Note |
 |---|---|---|
-| `SENS_SDI` / `SENS_SDO` / `SENS_SCLK` | 1, 2, 34 | unchanged |
-| `ISM6HG256_CS` / `ISM6HG256_INT1` | 9, **47** | unchanged. GPIO47 is pad 37, `SPICLK_P` — this row said 48 until 2026-08-30 |
-| `BMP585_CS` / `BMP585_INT` | **48**, 41 | unchanged. GPIO48 is pad 36, `SPICLK_N` — this row said 47 until 2026-08-30 |
-| `GNSS_TX` / `GNSS_RX` | 39, 40 | unchanged |
-| `PYRO1..4_FIRE` | 4, 5, 6, 7 | unchanged |
+| `SENS_SDI` / `SENS_SDO` / `SENS_SCLK` | 5, 7, 6 | moved here by the 2026-09-03 swap (were 35, 33, 34) |
+| `ISM6HG256_CS` / `ISM6HG256_INT1` | 4, 8 | moved by the swap (were 38, 47) |
+| `BMP585_CS` / `BMP585_INT` | 9, 41 | CS moved by the swap (was 48); INT unchanged |
+| `GNSS_TX` / `GNSS_RX` | 39, 40 | unchanged. Net names are the module's: we receive on `GNSS_TX` |
+| `PYRO1..4_FIRE` | 38, 35, 34, 33 | **moved by the swap** (were 4, 5, 6, 7). No reset pull on any of the four — S3 datasheet Table 2-1 |
 | `PYRO1..4_CONT` | 10, 11, 12, 42 | unchanged |
-| `PYRO_ARM` | 8 | unchanged |
-| `ESP_I2S_SD` / `ESP_I2S_FSYNC` | 13, 14 | new — I2S data and frame sync to the OC |
-| `ESP_I2S_WS` / `ESP_I2S_BCLK` | 18, 21 | new — I2S word select and bit clock |
-| `ESP_SCL` / `ESP_SDA` | 33, 35 | new — I2C to the OC, 5.11 k to `V_MCU_SWTCH` |
-| `MAG_SDA` / `MAG_SCL` | 36, 37 | new — the magnetometer moved off the out computer's power-monitor bus onto ours, where the driver lives. Pull-ups `R117`/`R118` on `V_MCU_SWTCH`, the same rail as the part |
-| `FC_EN_HOLD` | 17 | new — self-hold into `D9`. **Deliberately not GPIO3** — see the correction above. **Must stay in GPIO0–21**: the in-flight latch needs `gpio_hold_en`, which only reaches the reset-surviving RTC hold on an RTC pad (`SOC_RTCIO_PIN_COUNT = 22` on this part). Above GPIO21 the call still returns `ESP_OK` but degrades to a deep-sleep-only hold |
-| `FC_D−` / `FC_D+` | 19, 20 | USB, through the `U1` mux |
-| `IND_1` / `IND_2` | 38, 45 | LED drives. `IND_1` → `R70` → `D10` **red**; `IND_2` → `R71` → `D11` **blue**. Both cathode-to-GND, driven high to light |
-| `VBUCK_OK` | 3 | supercap hold-up status, `R137`/`R138` divider off `V_BUCK` — see the correction above |
-| `WDT_PET` / `FC_ARM` | 8, 44 | the supervised-MCU arm rework; see [`arm-watchdog-rework.md`](arm-watchdog-rework.md) |
+| `FC_ARM` | 44 | the arm line (`U0RXD`, ROM boot pull-up — contained by the OC consent stage `Q14`); see [`arm-watchdog-rework.md`](arm-watchdog-rework.md). `PYRO_ARM` on GPIO8 and `WDT_PET` are gone |
+| `ESP_I2S_SD` / `ESP_I2S_FSYNC` | 13, 14 | I2S data and frame sync to the OC |
+| `ESP_I2S_WS` / `ESP_I2S_BCLK` | 18, 21 | I2S word select and bit clock |
+| `ESP_SDA` / `ESP_SCL` | 36, 37 | I2C to the OC, 5.11 k to `V_MCU_SWTCH`. (An earlier revision of this table listed 33/35 — those are FIRE pins now) |
+| `MAG_SDA` / `MAG_SCL` | 1, 2 | the magnetometer moved off the OC's power-monitor bus onto ours, where the driver lives. Pull-ups `R117`/`R118` on `V_MCU_SWTCH` |
+| `FC_EN_HOLD` | 17 | self-hold into `D9`. **Deliberately not GPIO3**, and **must stay in GPIO0–21** — the in-flight latch needs the RTC hold (`SOC_RTCIO_PIN_COUNT = 22`); above GPIO21 `gpio_hold_en` still returns `ESP_OK` but degrades to deep-sleep-only |
+| `Net-(U32-GPIO19)` / `Net-(U32-GPIO20)` | 19, 20 | USB-Serial-JTAG, through the `U1` mux — the console and flashing path |
+| `IND_1` / `IND_2` | 43, 45 | LED drives, driven high to light. `IND_1` → `R70` → `D10` **red** on `U0TXD` (weak reset pull-up, ~73 µA — dark); `IND_2` → `R71` → `D11` **blue** on the VDD_SPI strap, safe only because a blue die behind 10 k cannot pull it high |
+| `VBUCK_OK` | 3 | hold-up status, `R137`/`R138` divider off `V_BUCK`, read as ADC1_CH2 — see the GPIO3 correction above |
 
-**Spare on the flight computer: GPIO47 and GPIO48** — the two flash-adjacent pads freed by the swap; GPIO43 (the former console TX pad) now carries `IND_1`, and it was the only one
-left. **This paragraph claimed GPIO3, 38, 43 and 44 until 2026-08-30 and was
-wrong on three of the four.** GPIO3 carries `VBUCK_OK` (hold-up rework), GPIO38
-carries `IND_1`, and GPIO44 carries `FC_ARM` (arm rework) — which also means the
-console is now TX-only, as `arm-watchdog-rework.md` records. GPIO45 is **not**
-free either: it carries `IND_2`, which is safe only because a blue LED behind
-10 k cannot pull a VDD_SPI strap high (see the flight-computer board header).
-GPIO46 carries the strapping network as before, and **GPIO26 stays unused** for
-the quad-PSRAM reason argued above.
+
+**Spare on the flight computer: GPIO47 and GPIO48** — the two flash-adjacent pads (37, 36) freed by the
+2026-09-03 swap. Everything else is spent: GPIO3 carries `VBUCK_OK`, GPIO38 carries `PYRO1_FIRE`,
+GPIO43 carries `IND_1` and GPIO44 carries `FC_ARM` — so both UART0 IO_MUX pads are gone. That is not
+"no console": the S3 routes any UART through the GPIO matrix, and one can be put on GPIO47/48 if ever
+wanted; day to day the console is USB-Serial-JTAG. GPIO45 is **not** free either (`IND_2`), GPIO46
+carries the strapping network, and **GPIO26 stays unused** for the quad-PSRAM reason argued above.
+*(This paragraph has been wrong twice: it claimed GPIO3/38/43/44 free until 2026-08-30, and
+GPIO43 free until 2026-09-04.)*
 
 ### Out computer `U15` — on `+3V3`, always on
 
