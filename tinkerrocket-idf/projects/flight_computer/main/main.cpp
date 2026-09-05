@@ -5964,6 +5964,17 @@ static void loop_fc()
                     mag_cal_session_active = true;
                     mag_cal_status_dirty = true;
 
+                    // The boot self-test sweep now runs from the READY tick
+                    // rather than from setup, so a mag-cal started while it is
+                    // part-way through would otherwise leave one fin parked
+                    // off-centre and holding current for the whole session (no
+                    // state below READY/PRELAUNCH services the sweep). Abandon
+                    // it; the stow just below puts the tabs where mag cal wants
+                    // them anyway, and the one-shot is spent so it will not
+                    // restart on the way back to READY.
+                    servo_control.cancelWiggle();
+                    servo_boot_selftest_pending = false;
+
                     // Issue #216 — entering MAG_CALIBRATION must NOT leave
                     // any flight-time effects active.  Specifically:
                     //   * Stow servos so a deflection commanded earlier
