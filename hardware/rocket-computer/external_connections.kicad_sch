@@ -10227,7 +10227,7 @@
 				)
 			)
 		)
-		(property "MPN" "DTC123JEBTL"
+		(property "MPN" "DTC123JETL"
 			(at 325.12 73.025 0)
 			(hide yes)
 			(show_name no)
@@ -10442,7 +10442,7 @@
 				)
 			)
 		)
-		(property "MPN" "DTC123JEBTL"
+		(property "MPN" "DTC123JETL"
 			(at 330.2 62.23 0)
 			(hide yes)
 			(show_name no)
@@ -13057,7 +13057,7 @@
 				)
 			)
 		)
-		(property "MPN" "DTC123JEBTL"
+		(property "MPN" "DTC123JETL"
 			(at 81.28 188.595 0)
 			(hide yes)
 			(show_name no)
@@ -13987,7 +13987,7 @@
 				)
 			)
 		)
-		(property "MPN" "DTC123JEBTL"
+		(property "MPN" "DTC123JETL"
 			(at 81.28 140.97 0)
 			(hide yes)
 			(show_name no)
@@ -17497,7 +17497,7 @@
 				)
 			)
 		)
-		(property "MPN" "DTC123JEBTL"
+		(property "MPN" "DTC123JETL"
 			(at 172.085 145.415 0)
 			(hide yes)
 			(show_name no)
@@ -18897,7 +18897,7 @@
 				)
 			)
 		)
-		(property "MPN" "DTC123JEBTL"
+		(property "MPN" "DTC123JETL"
 			(at 89.535 59.055 0)
 			(hide yes)
 			(show_name no)
