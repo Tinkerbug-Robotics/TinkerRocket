@@ -163,23 +163,70 @@ not re-proposed:
 
 ---
 
-## 5. Decisions reserved to the owner
+## 5. Decisions — SETTLED 2026-09-05
 
-Step 5 is blocked on these. They are policy and field-workflow calls, not
-engineering unknowns.
+All eight are the owner's rulings. Implement to these; do not re-litigate them
+without saying so.
 
-1. **Auto power-on.** With a live token, connecting the battery powers the board
-   up by itself rather than waiting for the app's power button. This is a real
-   change to the prep-table workflow and should probably have a distinct LED or
-   audible signature.
-2. **Where the token lives.** A dedicated NVS partition is robust against the
-   shared namespace filling, but a partition-table change means existing boards
-   need a full erase-and-reflash rather than an OTA.
-3. **One flash write in flight.** The token is written at the launch edge. The
-   alternative removes every in-flight write but loses V9/V10 coverage for the
-   first half-second of flight — the window the incident actually fell in.
-4. **Slow-main vehicles.** The low-and-slow arm was deleted. Confirm no vehicle
-   descends under a main slower than ~5 m/s, and this costs nothing.
+1. **Sensorless backstop — DROPPED.** A recovery boot that comes back with both
+   the barometer and the IMU dead never arms. Nothing arms without live sensor
+   evidence, on any path. The cost is accepted: a genuine flight that loses both
+   sensors across the reboot makes no deployment. This removes the design's only
+   nonzero ground-fire probability.
+2. **The one in-flight flash write — ACCEPTED.** The token plus its snapshot
+   frame is written at the launch edge on the Core-0 flush task. This is what
+   keeps V9/V10 covered for the first ~0.5 s of flight, which is precisely when
+   the V8 was cut.
+3. **Token store — DEDICATED PARTITION, NOW.** Owner's direction: *"There is no
+   issue with losing data on existing boards, don't design around it through at
+   least V10 and mini V1."* So no NVS-preservation work. (It happens to be free
+   anyway: `out_computer/partitions.csv` ends at `0x620000` and the base flash
+   size is 8 MB, so a `flighttok` partition appended there moves nothing and
+   fits on both the 8 MB V7/V8 and the 16 MB V9/V10 boards. Note the documented
+   trap — IDF does not re-apply `sdkconfig.defaults` to an existing sdkconfig
+   and this project keeps one per build dir, so delete or reconfigure every
+   `build_<rev>` when the table changes.)
+4. **Battery-connect auto power-on — ACCEPTED, with a distinct indication.** A
+   token-driven boot gets an LED pattern or tone unlike a normal one, so it is
+   unmistakable at the prep table that a board came up believing a flight is in
+   progress.
+5. **Slow/low never arms.** Owner's ruling: *"There is no need to arm if the
+   rocket is under a main chute. If we are slow or low don't come back and arm
+   any charges."* The low-and-slow arm stays deleted, and this is now a stated
+   principle rather than a threshold trade. Under a main at ~5 m/s nothing arms;
+   under a drogue at ~15 m/s it does, so the main charge still fires — the case
+   that actually matters.
+6. **Stale-token self-heal — TWO POWER CYCLES.** Refutation drives to LANDED and
+   reuses that one-shot, which already handles the power hold, the post-flight
+   lockout and the snapshot clear. ~30 s of proven stillness, using the shipped
+   quiescence detector rather than a second at-rest test.
+7. **`kMaxPoweronRestores` = 5.**
+8. **Recovery-unsettled signal — OUT-COMPUTER LOCAL GATE.** No wire-format
+   change. Forced by fact as much as preference: every bit of both telemetry
+   flag bytes is already allocated (`NSF_*` bits 0-7 and `NSF2_*` bits 0-7 are
+   all taken), so a verdict on the wire would need a struct change with parity
+   ripple through both apps, the base station and every parser.
+
+### Why the arming conditions use rate and acceleration, never altitude
+
+Raised by the owner and worth recording, because it constrains the whole
+interlock: after a reboot there is nothing to integrate and GNSS is ~30 s away,
+so how is "slow or low" measurable at all?
+
+Velocity is never integrated. Two signals are available within milliseconds and
+both are instantaneous:
+
+- **Barometric rate**, from differentiating successive pressure samples.
+  Absolute AGL needs a ground reference and is badly wrong if a stale token
+  supplies a foreign one; *rate* merely scales with that reference, so a few
+  percent of reference error costs a few percent of rate error.
+- **IMU specific force and angular rate**, read directly. Under thrust,
+  free-fall, spin and sitting-still are all separable with no baseline.
+
+GNSS cannot carry this and is a corroborating input only. Absolute altitude is
+the one quantity a reboot genuinely cannot establish — which is why the review
+had already deleted the only arm that used it, independently of the owner's
+ruling above. The two conclusions agree.
 
 ## 6. Bench gates before any of this flies
 
