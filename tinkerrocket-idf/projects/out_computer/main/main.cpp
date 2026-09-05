@@ -7624,11 +7624,19 @@ static void setup_oc()
         // RTC magic tier 1 depends on while reporting something else entirely.
         // Keying tier 2 on POWERON would exclude exactly the resets that need
         // it most.
-        if (!boot_rail_restored)
+        // The token partition is separate from the shared `nvs`, so it needs its
+        // own init — and it must run on EVERY boot, not only where tier 2 needs
+        // to read it. token_nvs_ok gates the WRITE sites too (ARMED, INFLIGHT,
+        // the LANDED clear), and a tier-1 rail restore is a mid-flight OC reset:
+        // exactly the boot where the flight continues and its token must still
+        // be maintained. Scoped to the tier-2 branch, a flight that survived an
+        // OC fault would never have its token cleared at LANDED, and the next
+        // battery connect would self-power and restore a flight that is over.
+        //
+        // Placed after the tier-1 decision so it cannot intrude on that ~0.8 s
+        // decay race, and a failure is not fatal: it means no token can be read
+        // or written, and shouldAutoRestore refuses.
         {
-            // The token partition is separate from the shared `nvs`, so it
-            // needs its own init. A failure here is not fatal: it simply means
-            // no token can be read or written, and shouldAutoRestore refuses.
             esp_err_t terr = nvs_flash_init_partition(kTokNvsPart);
             if (terr == ESP_ERR_NVS_NO_FREE_PAGES ||
                 terr == ESP_ERR_NVS_NEW_VERSION_FOUND)
@@ -7643,6 +7651,10 @@ static void setup_oc()
                                 "— in-flight reboot recovery is DISABLED this "
                                 "boot", esp_err_to_name(terr));
             }
+        }
+
+        if (!boot_rail_restored)
+        {
             boot_token_valid = token_nvs_ok && tokenRead(boot_token);
 
             if (FlightTokenPolicy::shouldAutoRestore(
