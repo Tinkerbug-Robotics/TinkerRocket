@@ -101,10 +101,10 @@ nothing yet constrains what a restored flight may do.
 
 | Step | Content | State |
 |---|---|---|
-| 1 | Pure policy headers + host tests, wired to nothing | not started |
+| 1 | `RecoveryArmGate.h` + 21 host tests, wired to nothing | **DONE** |
 | 2 | OC-side retirement hardening of the V7/V8 MRAM slot | not started |
 | 3 | **FC boot hygiene — no recovery semantics** | **DONE** |
-| 4 | Interlock + delayed apogee arm, on today's fault-reset path only | not started |
+| 4 | Interlock + delayed apogee arm, on today's fault-reset path only | **DONE** |
 | 5 | The behaviour change: the flight token and the POWERON widening | blocked on §5 |
 | 6 | Escape hatch (clear the token over BLE) | not started |
 | 7 | Mini parity | after 4 has flown |
@@ -132,6 +132,36 @@ unbounded barometer retry and a `while (1)` on a configuration failure. Either
 one stopped the FC booting at all, on **every** reset reason.
 
 ---
+
+### Step 4, delivered
+
+`RecoveryArmGate` is wired into the existing fault-reset recovery. Two barriers
+now stand between a stored record and an energised channel: the Idle ->
+ArmSettle branch (the only place a channel can leave Idle) additionally requires
+the interlock to have Opened on live evidence from this boot's own sensors, and
+the restored apogee is withheld from both trigger conditions until Open has
+persisted. `pyro_apogee_detected` itself is restored normally so the snapshot
+keeps round-tripping.
+
+A refuted restore is driven to LANDED, not back to READY, so the post-flight
+lockout, the power-hold release discipline and the snapshot clear all apply
+unchanged — and the app-side test-fire path stays refused throughout without new
+code, because `isCommandLockoutState` already covers INFLIGHT and LANDED sets
+`post_flight_lockout`. That closes both energising paths.
+
+**A normal launch is bit-identical.** `recovery_gate_active` is set only in the
+restore block, so both new conjuncts collapse to their old form on any flight
+that was not restored.
+
+**The capability this costs on the fault-reset path, stated plainly.** With no
+sensorless backstop (decision 1) and no altitude arm (decision 5), a restored
+flight whose barometer is dead, which is under a chute at 1 g, not spinning, and
+whose GNSS has not yet acquired, has no arm available and will not deploy.
+Previously a time-after-apogee channel would have fired on the stored apogee
+with no live evidence at all. The exposure is bounded by GNSS: a cold fix takes
+~30 s against a ~40 s drogue descent from 600 m, and the GNSS arm opens on 5 m/s
+of vertical speed of either sign. This is the direct consequence of two
+deliberate rulings and is recorded here so it is not rediscovered as a surprise.
 
 ## 4. What the adversarial pass killed
 
