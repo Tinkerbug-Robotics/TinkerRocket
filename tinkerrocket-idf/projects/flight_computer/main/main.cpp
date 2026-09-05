@@ -18,6 +18,7 @@
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
+#include <RecoveryArmGate.h>   // #1176: arming gate for a restored flight
 #include <BurnoutDetector.h>      // shared burnout detector (#197/#256)
 #include <DeploymentDetector.h>   // shared recovery-deployment detector
 #include <TR_MagCalibrator.h>
@@ -649,6 +650,19 @@ static uint32_t      pyro_apogee_time_ms  = 0;
 // Forward decl — full definition is below the I2S sender setup.
 static inline bool enqueueI2STx(uint8_t type, const uint8_t *payload, size_t len);
 
+// #1176: the arming half of reboot recovery. A restored flight may not arm a
+// deployment channel until THIS boot's own sensors show motion that ground
+// handling cannot produce (RecoveryArmGate). Active only on a boot that
+// actually restored a flight; a normal launch never constructs it, so nothing
+// about an ordinary flight changes.
+static RecoveryArmGate::State recovery_arm_state;
+static bool     recovery_gate_active = false;
+// Latched once the gate has been Open long enough to hand over the restored
+// apogee. Separate from pyro_apogee_detected on purpose: that is restored
+// normally so the snapshot keeps round-tripping (a second reboot must not read
+// back a flight whose apogee has been erased), and this gates the two trigger
+// conditions that consume it.
+static bool     recovery_apogee_armed = false;
 static bool     reboot_recovery = false;      // true during servo settle period after recovery
 static bool     reboot_recovery_telem = false; // true for rest of flight (telemetry flag)
 static uint32_t servo_settle_end_ms = 0;      // hold servos neutral until this time
@@ -1195,15 +1209,36 @@ static void servicePyroChannels(uint32_t now_ms)
     for (int i = 0; i < 4; ++i) {
         PyroChRuntime& ch = pyro_ch[i];
 
-        // Idle → ArmSettle when trigger satisfied
-        if (ch.state == PyroChState::Idle && pyroChEnabled(i)) {
+        // Idle → ArmSettle when trigger satisfied.
+        //
+        // #1176: on a boot that RESTORED a flight, nothing may leave Idle until
+        // RecoveryArmGate has seen live evidence from this boot's own sensors
+        // that the vehicle is still flying. Every input to the trigger
+        // conditions below came from the previous boot, so on a stale restore —
+        // a flight that ended without reaching LANDED, a battery reseat, a
+        // recovered airframe on the bench — a channel already past its
+        // time-after-apogee delay would otherwise fire immediately, on the
+        // ground. This conjunct is the whole barrier, and it is the ONLY place
+        // a channel can leave Idle. recovery_gate_active is false on a normal
+        // launch, so an ordinary flight is bit-identical to today.
+        if (ch.state == PyroChState::Idle && pyroChEnabled(i) &&
+            (!recovery_gate_active ||
+             RecoveryArmGate::armingPermitted(recovery_arm_state))) {
             bool should_fire = false;
             const uint8_t mode = pyroChMode(i);
             const float   val  = pyroChValue(i);
-            if (pyro_apogee_detected && mode == PYRO_TRIGGER_TIME_AFTER_APOGEE) {
+            // The restored apogee is handed over separately and later — see
+            // recovery_apogee_armed. Both trigger modes consume
+            // pyro_apogee_detected, so withholding it is a second checkpoint on
+            // the same evidence: a single noisy tick that opens the gate cannot
+            // also fire a charge whose delay has already elapsed.
+            const bool apogee_usable =
+                pyro_apogee_detected &&
+                (!recovery_gate_active || recovery_apogee_armed);
+            if (apogee_usable && mode == PYRO_TRIGGER_TIME_AFTER_APOGEE) {
                 const float elapsed_s = (float)(now_ms - pyro_apogee_time_ms) / 1000.0f;
                 if (elapsed_s >= val) should_fire = true;
-            } else if (pyro_apogee_detected && mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT) {
+            } else if (apogee_usable && mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT) {
                 // #834 item 4: pressure_alt_m/_rate are a KF estimate that
                 // free-runs at a frozen rate with a dead barometer, so the raw
                 // comparison could fire the main hundreds of metres high (or
@@ -4274,6 +4309,16 @@ static void setup_fc()
                 ESP_LOGW(TAG, "[RECOVERY] EKF state restored (P diag from snap, off-diag rebuilding)");
             }
 
+            // #1176: arm the interlock. From here until the gate sees live
+            // evidence of flight, no deployment channel may leave Idle and the
+            // restored apogee is withheld from both trigger conditions. This is
+            // the difference between resuming a flight and resurrecting one.
+            RecoveryArmGate::reset(recovery_arm_state, now_ms);
+            recovery_gate_active  = true;
+            recovery_apogee_armed = false;
+            ESP_LOGW(TAG, "[RECOVERY] Deployment channels INHIBITED until live "
+                          "flight evidence — restored apogee withheld");
+
             // Hold servos neutral for 500ms while EKF settles
             reboot_recovery = true;
             reboot_recovery_telem = true;
@@ -4405,6 +4450,11 @@ static void resetFlightStateForSim(const char* edge)
     guidance_active = false;
     reboot_recovery = false;
     reboot_recovery_telem = false;
+    // #1176: a sim start/stop is the sim's equivalent of a reboot, so the
+    // arming interlock must not carry a verdict across it.
+    recovery_gate_active  = false;
+    recovery_apogee_armed = false;
+    RecoveryArmGate::reset(recovery_arm_state, millis());
     clearFlightSnapshot();
     // #435: a sim start/stop is the sim's equivalent of a reboot, and a real
     // reboot drops the (RAM-only) Drift-Cast point.  The ref just discarded
@@ -4447,6 +4497,13 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // READY does not start sweeping a vehicle that has already flown.
     servo_control.cancelWiggle();
     servo_boot_selftest_pending = false;
+    // #1176: a launch detected in THIS session is its own live evidence, so
+    // the recovery interlock has nothing to decide. Clearing it here also
+    // stops a restored-then-refuted flight leaving stale arming state behind
+    // for a later launch in the same power cycle.
+    recovery_gate_active  = false;
+    recovery_apogee_armed = false;
+    RecoveryArmGate::reset(recovery_arm_state, now_ms);
     // #848: latch our own power rail for the duration of the flight (sims
     // included — the release at LANDED/sim-reset makes it harmless and it
     // exercises the mechanism on the bench).
@@ -7382,6 +7439,67 @@ static void loop_fc()
                                g.gnss_vel_u_mps * ((float)gnss_age_us * 1e-6f);
 
                 MainDeployGate::step(main_deploy_state, g);
+
+                // #1176: step the recovery arming interlock from the same
+                // block, on the same already-computed health predicates.
+                // Only meaningful on a boot that restored a flight.
+                if (recovery_gate_active)
+                {
+                    RecoveryArmGate::Inputs r;
+                    r.now_ms            = now_ms;
+                    r.flight_elapsed_ms = now_ms - launch_time_millis;
+                    r.baro_healthy      = baro_healthy;
+                    r.baro_rate_mps     = kinematics.d_alt_est_;
+                    // Gate on FRESHNESS, not merely on a sample existing:
+                    // ism6_latest_si retains its last value when the drain
+                    // yields nothing, so a frozen IMU would otherwise
+                    // re-present one large sample forever and hold an arm
+                    // open. Same reasoning as the #258 launch-detect gate.
+                    r.imu_fresh         = ism6_fresh_kc;
+                    r.accel_norm_ms2    = ism6_fresh_kc ? accel_norm : 0.0f;
+                    // Roll axis only — that is what is computed in this scope,
+                    // and it is the axis a vehicle under a drogue actually
+                    // spins about. A pitch/yaw tumble is therefore invisible to
+                    // the spin arm; the other arms cover those cases.
+                    r.gyro_norm_dps     = ism6_fresh_kc ? fabsf(roll_rate_dps)
+                                                        : 0.0f;
+                    r.gnss_ok           = g.gnss_ok;
+                    r.gnss_vel_u_mps    = g.gnss_vel_u_mps;
+                    r.quiescent_flag    = kinematics.quiescent_flag;
+
+                    const RecoveryArmGate::Verdict prev =
+                        recovery_arm_state.verdict;
+                    RecoveryArmGate::step(recovery_arm_state, r);
+
+                    if (prev != recovery_arm_state.verdict)
+                    {
+                        if (RecoveryArmGate::armingPermitted(recovery_arm_state))
+                        {
+                            ESP_LOGW(TAG, "[RECOVERY] Flight CONFIRMED by live "
+                                          "evidence (%s) — deployment channels "
+                                          "released",
+                                     RecoveryArmGate::armName(
+                                         recovery_arm_state.opened_by));
+                        }
+                        else if (RecoveryArmGate::refuted(recovery_arm_state))
+                        {
+                            ESP_LOGE(TAG, "[RECOVERY] Restored flight REFUTED — "
+                                          "the vehicle is not flying. Ending the "
+                                          "flight; deployment channels never "
+                                          "armed.");
+                        }
+                    }
+                    // Hand the restored apogee over only once Open has
+                    // persisted. Latched: a later lull must not withdraw it
+                    // mid-descent.
+                    if (!recovery_apogee_armed &&
+                        RecoveryArmGate::apogeeArmed(recovery_arm_state, now_ms))
+                    {
+                        recovery_apogee_armed = true;
+                        ESP_LOGW(TAG, "[RECOVERY] Restored apogee handed to the "
+                                      "deployment triggers");
+                    }
+                }
             }
 
             // --- Recovery deployment detection ---
@@ -8117,6 +8235,28 @@ static void loop_fc()
                     // for >500ms beyond the 2s window — prevents single-frame
                     // noise from restarting the entire landing countdown.
                     landed_candidate_active = false;
+                }
+
+                // #1176: a restored flight that the arming interlock has
+                // REFUTED is not flying — the token was stale, and this boot is
+                // sitting on the ground. End the flight through LANDED rather
+                // than dropping back to READY: LANDED is the state this
+                // codebase already treats as terminal, so the post-flight
+                // lockout, the power-hold release discipline (which must NOT
+                // release when the OC is silent) and the snapshot clear all
+                // apply unchanged. The cost is that the operator power-cycles
+                // once more for a normal session; the alternative reopens
+                // defects the review found in the READY path.
+                if (recovery_gate_active &&
+                    RecoveryArmGate::refuted(recovery_arm_state) &&
+                    rocket_state == INFLIGHT)
+                {
+                    pyroSafeAll();
+                    rocket_state = LANDED;
+                    ESP_LOGE(TAG, "[STATE] INFLIGHT -> LANDED (recovery refuted: "
+                                  "no live evidence of flight). Power-cycle for a "
+                                  "normal session.");
+                    break;
                 }
 
                 // Safety timeout: force LANDED if flight exceeds 10 minutes

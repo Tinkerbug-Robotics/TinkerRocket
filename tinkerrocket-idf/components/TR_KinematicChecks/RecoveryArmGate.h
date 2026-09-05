@@ -169,6 +169,11 @@ struct Inputs {
     // imu_fresh must be the FRESHNESS gate, not merely "a sample exists":
     // ism6_latest_si retains its last value when the drain yields nothing, so
     // a frozen IMU would otherwise re-present one stale sample forever.
+    //
+    // gyro_norm_dps is the ROLL axis alone as wired on the FC — that is the
+    // axis a vehicle under a drogue spins about, and it is what the flight
+    // loop already computes at this point. A pure pitch/yaw tumble is
+    // therefore invisible to the spin arm; the other arms cover those cases.
     bool     imu_fresh      = false;
     float    accel_norm_ms2 = 0.0f;
     float    gyro_norm_dps  = 0.0f;
