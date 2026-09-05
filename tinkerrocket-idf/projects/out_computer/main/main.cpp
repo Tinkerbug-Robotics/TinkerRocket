@@ -3792,6 +3792,25 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // frame precisely for that window. Age is unknown (the token has no
             // clock), so only the frame's own flight_elapsed_ms bounds it —
             // the same bound the V7/V8 MRAM slot has always had.
+            //
+            // WHY SERVING A LAUNCH-EDGE FRAME IS NOT A MIS-PHASING HAZARD, and
+            // the residual that remains. This frame's flight_elapsed_ms is ~0,
+            // so restoring it tells the FC the flight has just begun. That is
+            // correct BY CONSTRUCTION in the case it exists for: this branch is
+            // reached only when neither the RAM cache nor the NAND tail scan
+            // produced anything, and on a flight old enough to have been
+            // running for a while there WOULD be pages to scan. A young flight
+            // is the only one with no pages.
+            //
+            // The residual: if the tail scan fails for an unrelated reason (a
+            // recovery entry the brownout scanner did not synthesise, an index
+            // that did not load) on a flight that is genuinely old, this serves
+            // a frame that restarts the flight clock. The consequences are
+            // bounded and fail toward inaction rather than toward firing — the
+            // restored frame carries no apogee, so neither trigger mode can
+            // evaluate, and RecoveryArmGate still requires live evidence before
+            // anything may arm. A late deployment is possible; a spurious one
+            // is not.
             memcpy(snap_frame, boot_token.snap, kSnapFrameLen);
             have = true;
             ESP_LOGW("OC", "[RECOVERY] serving the snapshot carried in the "
