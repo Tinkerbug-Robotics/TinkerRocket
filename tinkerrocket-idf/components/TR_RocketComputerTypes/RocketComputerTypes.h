@@ -914,6 +914,103 @@ typedef struct
     float vertical_accuracy; // m
 } GNSSDataSI;
 
+// --- GNSS per-satellite report (UBX-NAV-SAT), one record per navigation epoch ---
+// Logged beside GNSSData at the same rate (GNSS_SAT_MSG).  The fix summary
+// says HOW MANY satellites the solution used; this says WHICH ones the
+// receiver holds, how strong each is and where it sits in the sky.  That is
+// the difference between "channels dropped" and "position withheld" when a
+// fix goes away, and it is the only way to ask whether a boost-phase dropout
+// is elevation-shaped (Doppler rate goes as a*sin(elevation): ~693 Hz/s toward
+// zenith against ~60 Hz/s at the horizon on a 13.5 g burn).  Same field set
+// the SDR bench diagnostic prints (gnss:sv:cno:used:elev) plus the tracking
+// quality indicator, azimuth and health, so a flight log converts into the
+// rig's UBX capture format and the bench analysis runs on real flights
+// unchanged (tools/gnss-cocom/sdr/cocom_flightlog.py).
+//
+// Variable length on the wire: GNSS_SAT_HEADER_BYTES + 6 * num_blocks.  The
+// receiver's table can exceed GNSS_SAT_MAX_BLOCKS because it lists satellites
+// it is merely searching for (cno 0); gnssSatSelect() keeps tracked entries
+// first, so truncation, when it happens, drops only entries with no signal.
+// u-blox only: the mini's LC86G has no NAV-SAT (see its driver's pollNewSat).
+typedef struct __attribute__((packed))
+{
+    uint8_t gnss_id;    // UBX gnssId: 0 GPS, 1 SBAS, 2 Galileo, 3 BeiDou, 5 QZSS, 6 GLONASS, 7 NavIC
+    uint8_t sv_id;      // satellite number within that constellation
+    uint8_t cno_dbhz;   // C/N0, dB-Hz; 0 = no signal
+    int8_t  elev_deg;   // elevation, -90..+90 deg (negative = below the horizon)
+    uint8_t azim_2deg;  // azimuth / 2, 0..179 (2 deg steps)
+    uint8_t flags;      // GNSS_SAT_F_* below
+} GNSSSatBlock;
+
+// GNSSSatBlock.flags.  Quality is the NAV-SAT qualityInd: 0 no signal,
+// 1 searching, 2 acquired, 3 detected but unusable, 4 code locked, 5-7 code
+// AND carrier locked.  A loop under Doppler-rate stress drops from 5-7 to 4
+// before the satellite leaves the table, which is why it is worth a field.
+static constexpr uint8_t GNSS_SAT_F_USED         = 1u << 0;   // used in this epoch's solution
+static constexpr uint8_t GNSS_SAT_F_QUAL_SHIFT   = 1;         // bits 1-3: qualityInd
+static constexpr uint8_t GNSS_SAT_F_QUAL_MASK    = 0x07u << 1;
+static constexpr uint8_t GNSS_SAT_F_HEALTH_SHIFT = 4;         // bits 4-5: 0 unknown, 1 healthy, 2 unhealthy
+static constexpr uint8_t GNSS_SAT_F_HEALTH_MASK  = 0x03u << 4;
+static constexpr uint8_t GNSS_SAT_F_EPH          = 1u << 6;   // ephemeris available for this SV
+static constexpr uint8_t GNSS_SAT_F_ALM          = 1u << 7;   // almanac available for this SV
+
+static inline uint8_t gnssSatFlags(bool used, uint8_t quality, uint8_t health,
+                                   bool eph, bool alm)
+{
+    return (uint8_t)((used ? GNSS_SAT_F_USED : 0)
+                   | ((quality & 0x07u) << GNSS_SAT_F_QUAL_SHIFT)
+                   | ((health  & 0x03u) << GNSS_SAT_F_HEALTH_SHIFT)
+                   | (eph ? GNSS_SAT_F_EPH : 0)
+                   | (alm ? GNSS_SAT_F_ALM : 0));
+}
+
+// 32 blocks: 26-27 tracked satellites is the most any flight has shown on a
+// good sky, and 10 + 6*32 = 202 bytes fits one I2S frame beside the 224-byte
+// snapshot that sizes MAX_PAYLOAD.
+static constexpr uint8_t GNSS_SAT_MAX_BLOCKS = 32;
+
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;     // FC clock at parse — same clock as GNSSData.time_us
+    uint32_t itow_ms;     // GPS time of week of the epoch: pairs this record with
+                          // the GNSSData (NAV-PVT) of the same epoch exactly
+    uint8_t  num_svs;     // entries in the receiver's table this epoch
+    uint8_t  num_blocks;  // entries that follow; < num_svs only when truncated
+    GNSSSatBlock sat[GNSS_SAT_MAX_BLOCKS];
+} GNSSSatData;
+
+static constexpr size_t GNSS_SAT_HEADER_BYTES = 10;
+
+/// Bytes a GNSSSatData occupies on the wire when it carries `num_blocks`
+/// entries.  Senders MUST use this, not sizeof: an epoch with 12 satellites
+/// is 82 bytes, not 202.
+static inline size_t gnssSatWireSize(uint8_t num_blocks)
+{
+    const uint8_t n = num_blocks > GNSS_SAT_MAX_BLOCKS ? GNSS_SAT_MAX_BLOCKS
+                                                       : num_blocks;
+    return GNSS_SAT_HEADER_BYTES + (size_t)n * sizeof(GNSSSatBlock);
+}
+
+/// Fill out.sat[] from `n` candidate blocks: every entry with a signal
+/// (cno > 0) first, in receiver order, then the rest, until
+/// GNSS_SAT_MAX_BLOCKS is reached.  out.num_svs = n, out.num_blocks = kept.
+/// Does not touch out.time_us / out.itow_ms.  Pure, host-tested.
+static inline void gnssSatSelect(const GNSSSatBlock* all, uint8_t n, GNSSSatData& out)
+{
+    uint8_t kept = 0;
+    for (int pass = 0; pass < 2 && kept < GNSS_SAT_MAX_BLOCKS; pass++)
+    {
+        for (uint16_t i = 0; i < n && kept < GNSS_SAT_MAX_BLOCKS; i++)
+        {
+            const bool tracked = all[i].cno_dbhz > 0;
+            if ((pass == 0) == tracked)
+                out.sat[kept++] = all[i];
+        }
+    }
+    out.num_svs    = n;
+    out.num_blocks = kept;
+}
+
 // --- Power Data ---
 // GROWS BY APPENDING. Readers must dispatch on the payload length, not assume
 // the current size — see MSG_EXPECTED_LEN in Data_Analysis/plot_flight_data*.py,
@@ -2014,6 +2111,14 @@ static constexpr uint8_t REG_LOG_STATE      = 0x07;
 static constexpr uint8_t REG_TEST           = 0x08;
 
 // ### Message Types from In ESP32 ###
+// 0xA0-0xFD are all assigned (see the note at CONFIG_REPORT_MSG).  New FC→OC
+// records open the 0x90-0x9F block instead.  Nothing on any link gates on the
+// RANGE of a type byte: the OC admits types by isKnownMessageType() and every
+// .bin decoder skips a type it does not know, so a code below 0xA0 is as valid
+// as one above it.  Keep 0x00-0x08 clear — that is the I2C register space.
+static constexpr uint8_t GNSS_SAT_MSG        = 0x90;  // FC→OC over I2S: GNSSSatData, per-satellite C/N0 at every GNSS
+                                                      // epoch, straight to the log.  VARIABLE length: 10 + 6*num_blocks
+                                                      // bytes (gnssSatWireSize), never sizeof.
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
 static constexpr uint8_t ISM6HG256_MSG       = 0xA2;
@@ -2147,8 +2252,9 @@ static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 28-byte Log
 static constexpr uint8_t FC_BOOT_STATUS_MSG   = 0xFA;  // FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only
 static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 169-byte ConfigReportData, everything the app's config
                                                       // readback cannot otherwise see (#915).  PUSHED, not requested —
-                                                      // see the struct comment.  0xFC/0xFD are the last free codes in
-                                                      // this space; anything past them needs an escape mechanism.
+                                                      // see the struct comment.  0xFC/0xFD have since gone to the base
+                                                      // station's own log records: 0xA0-0xFD is FULL.  New codes open
+                                                      // the 0x90 block — see GNSS_SAT_MSG.
 
 // --- OTA firmware relay to the Flight Computer (#8 Phase 4) ---
 // Control plane rides the OC↔FC I2C link: the OC stages OTA_BEGIN_PENDING
@@ -3177,6 +3283,20 @@ static_assert(offsetof(GNSSData, vel_u_mmps) == 36, "GNSSData.vel_u_mmps moved")
 static_assert(offsetof(GNSSData, h_acc_m) == 40, "GNSSData.h_acc_m moved");
 static_assert(offsetof(GNSSData, v_acc_m) == 41, "GNSSData.v_acc_m moved");
 
+static_assert(sizeof(GNSSSatBlock) == 6, "GNSSSatBlock wire size");
+static_assert(offsetof(GNSSSatBlock, gnss_id) == 0, "GNSSSatBlock.gnss_id moved");
+static_assert(offsetof(GNSSSatBlock, sv_id) == 1, "GNSSSatBlock.sv_id moved");
+static_assert(offsetof(GNSSSatBlock, cno_dbhz) == 2, "GNSSSatBlock.cno_dbhz moved");
+static_assert(offsetof(GNSSSatBlock, elev_deg) == 3, "GNSSSatBlock.elev_deg moved");
+static_assert(offsetof(GNSSSatBlock, azim_2deg) == 4, "GNSSSatBlock.azim_2deg moved");
+static_assert(offsetof(GNSSSatBlock, flags) == 5, "GNSSSatBlock.flags moved");
+static_assert(sizeof(GNSSSatData) == 202, "GNSSSatData wire size (10 + 6 * 32)");
+static_assert(offsetof(GNSSSatData, time_us) == 0, "GNSSSatData.time_us moved");
+static_assert(offsetof(GNSSSatData, itow_ms) == 4, "GNSSSatData.itow_ms moved");
+static_assert(offsetof(GNSSSatData, num_svs) == 8, "GNSSSatData.num_svs moved");
+static_assert(offsetof(GNSSSatData, num_blocks) == 9, "GNSSSatData.num_blocks moved");
+static_assert(offsetof(GNSSSatData, sat) == GNSS_SAT_HEADER_BYTES, "GNSSSatData.sat moved");
+
 static_assert(sizeof(NonSensorData) == 50, "NonSensorData wire size");
 static_assert(offsetof(NonSensorData, time_us) == 0, "NonSensorData.time_us moved");
 static_assert(offsetof(NonSensorData, q0) == 4, "NonSensorData.q0 moved");
@@ -3270,6 +3390,13 @@ static constexpr size_t M_SENSOR = (M1234 > M567 ? M1234 : M567);
 
 static constexpr size_t M_SENSOR_OR_PROFILE = (M_SENSOR > P8 ? M_SENSOR : P8);
 static constexpr size_t MAX_PAYLOAD = (M_SENSOR_OR_PROFILE > P9 ? M_SENSOR_OR_PROFILE : P9);
+
+// The per-satellite GNSS record rides the same I2S frame path (GNSS_SAT_MSG).
+// It is not in the max() chain above because it is variable-length and never
+// the largest; this pins that assumption so a bigger GNSS_SAT_MAX_BLOCKS or a
+// smaller snapshot cannot silently make enqueueI2STx() drop every epoch.
+static_assert(sizeof(GNSSSatData) <= MAX_PAYLOAD,
+              "GNSSSatData must fit one I2S frame payload");
 
 // The flight settings snapshot (#165) rides the same I2S frame path, so it
 // must also fit one payload.  Checked here since MAX_PAYLOAD is defined below

@@ -136,12 +136,17 @@ public:
     volatile bool mmc5983ma_data_ready;
     volatile bool iis2mdc_data_ready;
     volatile bool gnss_data_ready;
+    volatile bool gnss_sat_data_ready;
 
     bool getISM6HG256Data(ISM6HG256Data &data_out);
     bool getBMP585Data(BMP585Data &data_out);
     bool getMMC5983MAData(MMC5983MAData &data_out);
     bool getIIS2MDCData(IIS2MDCData &data_out);
     bool getGNSSData(GNSSData &data_out);
+    // Per-satellite report for the latest GNSS epoch (GNSSSatData, u-blox
+    // only — the LC86 driver never produces one).  Same pop-once contract as
+    // getGNSSData(): true at most once per epoch.
+    bool getGNSSSatData(GNSSSatData &data_out);
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const;
     void getMMC5983MADebugSnapshot(MMC5983MADebugSnapshot &snapshot_out) const;
     void getPollTimingSnapshot(PollTimingSnapshot &snapshot_out) const;
@@ -238,6 +243,7 @@ private:
     MMC5983MAData mmc5983ma_data;
     IIS2MDCData iis2mdc_data;
     GNSSData gnss_data;
+    GNSSSatData gnss_sat_data;   // shares gnssDataSemaphore with gnss_data
 
     // IMU handoff queue (poll task -> consumer).  The previous single-slot
     // latest-sample handoff silently dropped any sample the consumer didn't

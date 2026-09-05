@@ -28,6 +28,7 @@ variable at a time.
 | `recovery.py` | Shut lag and re-open latency per blocked window, with satellites in the wait |
 | `make_flights.py` | Realistic flight profiles integrated from thrust, drag and gravity |
 | `run_fc.py` | Transmits a scenario and records the rocket computer's console, in one command |
+| `cocom_flightlog.py` | Converts a rocket computer flight log (`.bin`) into the rig's capture format, so a real flight is analysed by the same scripts as a bench run |
 | `align_start.py` | Recovers a capture's scenario start time by matching reported to injected altitude |
 | `receiver_table.py` | Renders the receiver comparison from `results/receivers.json` |
 | `oscillation.py` | Characterises the periodic C/N&#8320; swing in a capture |
@@ -545,6 +546,21 @@ before the field existed remain readable.
 format, so `correlate.py`, `recovery.py`, `plot_flight.py` and `oscillation.py`
 all work unchanged against the same classifier the conducted rig used. The flag
 defaults off and the flight path neither sets nor needs it.
+
+**Real flights carry the same data now.** Since the `GNSS_SAT_MSG` record
+(type `0x90`), every flight log holds a per-satellite report at every GNSS
+epoch -- `gnssId`, `svId`, C/N&#8320;, elevation, azimuth, the used flag and the
+receiver's tracking-quality indicator -- beside the fix it belongs to, paired
+by GPS time of week. `cocom_flightlog.py` converts a `.bin` into the same
+`TS U <hex>` stream `cocom_fcdiag.py` makes from a console capture, so a real
+boost is analysed by exactly the scripts that analysed the injected one:
+
+    ./cocom_flightlog.py flight_20260905_120000.bin -o results/flight_20260905.txt
+    ./plot_flight.py results/flight_20260905.txt
+
+The console diagnostic is still the way to see a bench run live, and it no
+longer needs to enable NAV-SAT itself: the flight firmware turns it on at
+every boot for the record, and the diagnostic prints the cache.
 
 `run_fc.py` drives that whole path in one command -- switch the PortaPack into
 HackRF mode, transmit, record the console, convert it:
