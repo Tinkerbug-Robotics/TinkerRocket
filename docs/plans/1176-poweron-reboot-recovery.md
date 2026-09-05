@@ -106,7 +106,7 @@ nothing yet constrains what a restored flight may do.
 | 3 | **FC boot hygiene — no recovery semantics** | **DONE** |
 | 4 | Interlock + delayed apogee arm, on today's fault-reset path only | **DONE** |
 | 5 | The behaviour change: the flight token and the POWERON widening | **DONE** |
-| 6 | Escape hatch (clear the token over BLE) | not started |
+| 6 | Escape hatch: end a restored flight over BLE | **DONE** |
 | 7 | Mini parity | after 4 has flown |
 | 8 | Follow-ups, filed not bundled | — |
 
