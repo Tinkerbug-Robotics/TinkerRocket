@@ -102,14 +102,18 @@ struct board_pins
     // ordinary GPIO. GPIO41 is MTDI — one of the four JTAG pads this board
     // deliberately spends.
     //
-    // GPIO47 IS SPICLK_P AND GPIO48 IS SPICLK_N, not the other way round
-    // (ESP-IDF io_mux_reg.h: IO_MUX_GPIO47_REG = PERIPHS_IO_MUX_SPICLK_P_U).
-    // These two constants were reversed until 2026-08-30 because pin-budget.md
-    // paired them "GPIO47, GPIO48 = SPICLK_N / SPICLK_P". The schematic puts
-    // BMP585_CS on pad 36 (SPICLK_N) and ISM6HG256_INT1 on pad 37 (SPICLK_P),
-    // so the correct numbers are 48 and 47. With the old values the barometer
-    // chip select would never have asserted and the IMU interrupt line would
-    // have been driven as an output.
+    // GPIO47 IS SPICLK_P (pad 37) AND GPIO48 IS SPICLK_N (pad 36), not the other
+    // way round (ESP-IDF io_mux_reg.h: IO_MUX_GPIO47_REG =
+    // PERIPHS_IO_MUX_SPICLK_P_U). Keep that fact; it is easy to get backwards.
+    //
+    // BUT DO NOT USE THOSE TWO NUMBERS HERE. This comment told you to put
+    // BMP585_CS on 48 and ISM6HG256_INT on 47; that was true only until the
+    // 2026-09-03 pin swap moved the sensor SPI bus. Pads 36 and 37 are BARE on
+    // this board -- GPIO47 and GPIO48 are the flight computer's only two spare
+    // pads. Setting either constant to them gives a barometer whose chip select
+    // never asserts and an IMU interrupt that never fires, and the build passes.
+    // The live values are BMP585_CS = 9 (pad 14) and ISM6HG256_INT = 8 (pad 13),
+    // both asserted in config.h.
     static constexpr int ISM6HG256_INT = 8;    // ISM6HG256_INT1 (pad 13)
     static constexpr int BMP585_INT = 41;      // BMP585_INT     (CONFIRMED)
     static constexpr int MMC5983MA_INT = -1;   // not fitted

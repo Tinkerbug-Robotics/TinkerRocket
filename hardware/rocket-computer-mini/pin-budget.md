@@ -195,7 +195,7 @@ flash/PSRAM, because the design's proof only covers one of them.
 | Octal PSRAM clock | GPIO47, GPIO48 | SPICLK_P / SPICLK_N | **Safe by the same proof** — these serve octal PSRAM only, and this part has none. Not directly exercised on V7, so slightly weaker evidence. |
 | **Quad PSRAM select** | **GPIO26** | **SPICS1** | **Confirmed unavailable** — datasheet Table 1-1 gives this part 2 MB quad PSRAM, whose chip select is this pin. **Left unused.** |
 | JTAG | GPIO39–42 | debug | Safe as GPIO; cost is losing hardware debug. |
-| Console | GPIO43, GPIO44 | UART0 | Safe as GPIO; cost is the serial console. **Both spent on the flight computer since 2026-09-03 (`IND_1`, `FC_ARM`); on the out computer GPIO44 carries `L_RXEN`, so that processor has console TX but no RX.** The "both left free" this row used to claim was never true of the shipped schematic. |
+| Console | GPIO43, GPIO44 | UART0 | Safe as GPIO; cost is the serial console. **Both spent on the flight computer since 2026-09-03 (`IND_1` on GPIO43, `FC_ARM` on GPIO44), so the flight computer has no hardware console at all and debugs over USB or the GPIO matrix. On the out computer both pads are unconnected, so that processor keeps a full hardware console.** (`L_RXEN` is on out-computer GPIO10, pad 15 — this row said GPIO44 until 2026-09-04 and contradicted its own spare list below.) The "both left free" this row used to claim was never true of the flight computer. |
 | Strapping | GPIO0, 3, 45, 46 | boot mode, JTAG select, flash rail voltage, ROM log | **GPIO3: see the correction below.** **GPIO45 left free** on both processors: it sets the flash rail voltage, and anything whose boot level the design does not control can stop the board booting. |
 
 ### Correction — GPIO3 no longer has the pulldown this document claimed
@@ -218,7 +218,10 @@ a defined level at reset.
 
 **The flight computer's GPIO3 is not a bare pad, and this document said it was
 until 2026-08-30.** The supercap hold-up rework put `VBUCK_OK` on it — the
-`R137` 100 k / `R138` 1 M divider off `V_BUCK`, which the flight computer reads
+`R137` 100 k / `R138` 360 k divider off `V_BUCK`, which the flight computer reads
+(`R138` was drawn as 1 M and became 360 k under #1000 so the node lands inside
+ADC range — GPIO3 is `ADC1_CH2`. The node sits at 2.71 V with the buck up and
+2.39 V on cap energy, from a 78 kΩ source with `C152` 100 nF across it.)
 to tell "buck present" from "riding the cap". That is a *better* state than bare,
 not a worse one: the divider gives the strapping pad a defined level at reset
 the same way `R34` does on the out computer, and it is a passive network rather

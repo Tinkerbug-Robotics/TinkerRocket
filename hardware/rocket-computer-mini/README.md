@@ -39,7 +39,7 @@ expansion header, camera, servo and piezo came out.*
 |---|---|---|
 | Sheet | [`esp32s3_mcu.kicad_sch`](esp32s3_mcu.kicad_sch) | [`fc_esp32s3.kicad_sch`](fc_esp32s3.kicad_sch) |
 | Rail | `+3V3` — always on | `V_MCU_SWTCH` — **starts off** |
-| Radio | 2.4 GHz chip antenna `U31`, 900 MHz LoRa `U16` | none |
+| Radio | 2.4 GHz chip antenna `U14`, 900 MHz LoRa `U16` | none |
 | Memory | NAND `U11` + boot flash `U13` | boot flash `U33` only |
 | Sensors | pack monitor only, on `SEN_SC*` (`+3V3`) | IMU, baro, GNSS **and magnetometer** |
 | Pyro | arm consent (`OC_ARM_EN`) | all four channels and the arm request (`FC_ARM`) |
@@ -118,7 +118,9 @@ unpowered while the out computer boots.
 
 **The flight computer's GPIO3 did not stay bare, and this file said it had
 until 2026-08-30.** The supercap hold-up rework landed `VBUCK_OK` on it, through
-the `R137` 100 k / `R138` 1 M divider off `V_BUCK`. That keeps the property the
+the `R137` 100 k / `R138` 360 k divider off `V_BUCK` (`R138` was 1 M until #1000
+lowered it to put the node inside ADC range; GPIO3 is `ADC1_CH2` and `C152`
+100 nF sits across the tap). That keeps the property the
 move was made for — the pad has a defined level at reset, set by a passive
 divider rather than by a driven pin — so the strapping argument still holds;
 it is simply no longer true that nothing is connected there. See the correction
@@ -171,8 +173,15 @@ Six wires, the same net names and the same protocols as `rocket-computer`:
 | `ESP_I2S_WS` | GPIO1 | GPIO18 | I2S word select |
 | `ESP_I2S_SD` | GPIO3 | GPIO13 | I2S data, FC → OC |
 | `ESP_I2S_FSYNC` | GPIO4 | GPIO14 | frame sync — a plain GPIO, not an I2S signal |
-| `ESP_SCL` | GPIO6 | GPIO33 | I2C clock |
-| `ESP_SDA` | GPIO5 | GPIO35 | I2C data |
+| `ESP_SCL` | GPIO6 | GPIO37 | I2C clock |
+| `ESP_SDA` | GPIO5 | GPIO36 | I2C data |
+
+**The flight computer's I2C pins moved on 2026-09-03.** This table said FC
+`GPIO33` / `GPIO35` until 2026-09-04; the pin swap that freed the sensor SPI
+bus put `ESP_SCL` on FC `GPIO37` (pad 42) and `ESP_SDA` on FC `GPIO36`
+(pad 41). **`GPIO33` and `GPIO35` are `PYRO4_FIRE` and `PYRO2_FIRE` now**, so a
+header written from the old table would have run the inter-processor I2C
+clock straight into two pyro gates. The out-computer column never changed.
 
 **The four I2S nets were called `ESP_SCLK` / `ESP_CS` / `ESP_SDO` / `ESP_SDI`
 until 2026-08-30**, on this board and on `rocket-computer`. Those names read as
@@ -371,7 +380,7 @@ Three stale items were listed here; **all three are now resolved** (2026-09-03):
 - **`C12`'s footprint disagreement is gone** — with it the whole part. The
   2200 µF pyro energy store no longer exists anywhere in the design; the
   refdes `C12` has been reused for the BLE antenna's DNP series-match position.
-- **`bom.csv` is current** — 69 rows, 209 designators, reconciling against the
+- **`bom.csv` is current** — 70 rows, 221 designators, reconciling against the
   netlist exactly (the eight unmatched refs are `FID1-4`/`H1-4`, excluded by
   design). It is no longer V9's 255-part bill.
 - **The on-board fabrication note has been rewritten** against this board. It

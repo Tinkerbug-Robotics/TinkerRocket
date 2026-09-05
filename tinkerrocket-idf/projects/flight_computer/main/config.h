@@ -94,6 +94,14 @@ static_assert(board_pins::PWR_HOLD_PIN >= 0 && board_pins::PWR_HOLD_PIN <= 21,
 static_assert(board_pins::PWR_HOLD_PIN != 3,
               "board_m1.h: PWR_HOLD_PIN must not be GPIO3 — gpio_hold_en would latch a "
               "strapping pad HIGH through every in-flight reset");
+// The sensor SPI bus moved on 2026-09-03 and the two constants below are the
+// ones a maintainer is most likely to "restore" from the stale comment that
+// used to sit above them in board_m1.h: pads 36 and 37 (GPIO48 and GPIO47) are
+// BARE on this board. A barometer whose chip select never asserts and an IMU
+// interrupt that never fires are both silent at runtime.
+static_assert(board_pins::BMP585_CS == 9 && board_pins::ISM6HG256_INT == 8,
+              "board_m1.h: BMP585_CS is pad 14 (GPIO9) and ISM6HG256_INT is pad 13 "
+              "(GPIO8) since the 2026-09-03 pin swap — GPIO47/48 are spare pads");
 // The magnetometer is on OUR bus and must stay there — it is a flight sensor,
 // and the out computer has no driver for one. Its pull-ups are on
 // V_MCU_SWTCH with the part, so master, slave and pull-ups share a rail.

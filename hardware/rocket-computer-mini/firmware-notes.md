@@ -1,22 +1,35 @@
 # rocket-computer-mini — firmware changes for the supercap / UVLO / arm-protection rework
 
-**Status: hardware is drawn and wired into the sheets (2026-08-26) — ARM_CLK,
-CAP_ACTIVE and the supervisor chain all connect; layout not started. Nothing below
-is implemented in firmware.** This is the handoff list: what firmware must change, what it should
-change, and what it can now stop doing.
+> # SUPERSEDED IN PART — read this before implementing anything below
+>
+> **Written 2026-08-26 against hardware that has since been reworked twice. Checked
+> against the routed board on 2026-09-04. Three sections describe parts that are not
+> on this board.** Nothing here is implemented in firmware, and some of it must never be.
+>
+> | § | State on the fabricated board |
+> |---|---|
+> | 1. Brownout detector | **Rationale gone; the setting is unreviewed.** The TPS3840 supervisor (`U45`) and load switch (`U42`) this section defends against were deleted. The rail now holds a flat 3.0 V from the `TPS61094` until the hold-up cap is spent, so the level must be re-derived against 3.0 V, not against a 2.86–2.94 V supervisor trip. |
+> | 2. Pin assignments | **Corrected in place below** (2026-09-04). The table is the only part of this file that tracks the board. |
+> | 3. Pyro arming | **RETRACTED IN FULL.** There is no charge pump, no `ARM_CLK`, and no hardware one-shot. Arming is now two static consent lines. See [`arm-watchdog-rework.md`](arm-watchdog-rework.md). |
+> | 4. `CAP_ACTIVE` handler | **RETRACTED IN FULL.** No `U40`, no `R127`, no LM66100. The signal is `VBUCK_OK` and its polarity is inverted. See [`holdup-tps61094-rework.md`](holdup-tps61094-rework.md); the parking and shedding *order* in that section is still the right shape. |
+> | 5. Supercap charge gate | **Intent stands, every number is wrong.** Corrected inline. |
+> | 6. Behaviour that needs no code | **Stands, except** the "cut itself" and "re-enable bounce" bullets, which describe `U45`. |
+> | 7. Open verifications | **RETRACTED.** Every row names a deleted part. |
 
-The hardware this responds to:
+The hardware as fabricated:
 
 - Pyro fires **from the pack** (`VBAT_CON` tap); the old 2200 µF store and its
-  150 Ω charge resistor are gone from the firing path.
-- The +3V3 rail carries a **2 F supercap** (C130, CHP5R5L205R-TWQ) behind an ideal
-  diode (U40) and a 33 Ω charge resistor (R120), isolated from the buck by U44.
-- A **TPS3840x29 supervisor (U45) cuts the rail at 2.86–2.94 V** through load
-  switch U42, so a dying rail never drags the MCUs and flash through the
-  undefined region — the cut is a clean edge, and restart on buck return is
-  unconditional (release 2.93–3.07 V vs buck-min 3.234 V).
-- The pyro **ARM gate is charge-pump driven** (ARM_CLK) with a **hardware
-  one-shot ceiling** (2.3–4.3 s) that crowbars the gate independent of firmware.
+  150 Ω charge resistor are gone from the firing path. *(Still true.)*
+- The +3V3 rail carries a **5 F supercap** (`C130`) charged and boosted by a single
+  `TPS61094` (`U47`): 100 mA charge, 2.5 V termination, and a flat 3.0 V out while
+  running on stored energy. The 2 F part, its ideal diode (`U40`), its 33 Ω charge
+  resistor (`R120`) and the isolating switch (`U44`) are all gone.
+- **There is no supervisor.** `U45` and `U42` were deleted with the rest of the chain.
+- The pyro **ARM gate is driven by two static consent lines**, `FC_ARM` (flight
+  computer GPIO44) and `OC_ARM_EN` (out computer GPIO11), both of which must be high.
+  There is no charge pump and no hardware one-shot ceiling; the windowed watchdog that
+  briefly replaced them was itself removed on 2026-09-02 in favour of a firmware
+  heartbeat.
 
 ---
 
@@ -58,18 +71,31 @@ Do this **before** flying the new power stage; it is one config line per image.
 
 | Signal | Pin | Notes |
 |---|---|---|
-| ~~`ARM_CLK`~~ → `WDT_PET` | **FC GPIO8** | no longer an LEDC output — it is the windowed-watchdog pet line, toggled ~250 ms. The arm intent moved to `FC_ARM` on **FC GPIO44** and the OC's veto to `OC_ARM_EN` on **OC GPIO11**, so the console is now **TX-only** (GPIO43); the "GPIO43/44 both free again" this row used to claim is no longer true. |
-| ~~`CAP_ACTIVE`~~ → `VBUCK_OK` | **FC GPIO3** + **OC GPIO34** | still wired to both MCUs, still on the JTAG-select strap, but the source and the sense both changed. The TPS61094 has no status pin, so the pin now watches a `V_BUCK` divider — `R137` 100 k / `R138` 1 M — and the polarity is **inverted**: HIGH = buck present, LOW = riding the cap. There is no `R127` and no LM66100 on this board any more. The divider still gives the strapping pad a defined level at reset, which is why GPIO3 is an acceptable home for it. |
+| ~~`ARM_CLK`~~ ~~→ `WDT_PET`~~ → **gone** | **FC GPIO8 is now `ISM6HG256_INT1`** (pad 13) | Both the LEDC arm clock and the windowed-watchdog pet line that replaced it are gone; the watchdog was removed 2026-09-02 for a firmware heartbeat. **Do not drive FC GPIO8** — it is the IMU interrupt input. Arm intent is `FC_ARM` on **FC GPIO44** (pad 50), the out computer's consent is `OC_ARM_EN` on **OC GPIO11** (pad 16), and both must be high to arm. **The flight computer has no hardware console left**: GPIO43 became `IND_1` on 2026-09-04, so console is USB or the GPIO matrix. The out computer keeps both UART0 pads. |
+| ~~`CAP_ACTIVE`~~ → `VBUCK_OK` | **FC GPIO3 only** (pad 8, `ADC1_CH2`) | The out computer was taken off this net on 2026-09-03 — its GPIO34 has no ADC. The TPS61094 has no status pin, so the flight computer watches a `V_BUCK` divider, **`R137` 100 k / `R138` 360 k** (`R138` was drawn as 1 M; #1000 lowered it to land the node in ADC range), with **`C152` 100 nF** across the tap so the 78 kΩ source can drive the SAR sample-and-hold. **Read it as an ADC, not as a logic level**: 2.71 V with the buck up, 2.39 V on cap energy, a 325 mV window. Polarity is **inverted** against the old `CAP_ACTIVE`: high = buck present, low = riding the cap. There is no `R127` and no LM66100 on this board. The divider still gives the strapping pad a defined level at reset, which is why GPIO3 is an acceptable home for it. |
 | `V_SCAP_ADC` | **OC GPIO8** (ADC1) — wired | the FC has no ADC-capable pin left, so the pre-arm supercap check lives on the OC. Arm commands already flow through the OC, so the gate sits in the right place; the OC refuses/forwards accordingly. |
 
-FC free pins after the rework: GPIO43/44 (console — keep them) and nothing
-else. The rework *returned* a pin: `PYRO_ARM` no longer exists in hardware.
+FC free pins after the rework: **none**. GPIO43 and GPIO44 both went to
+`IND_1` and `FC_ARM`, and the 2026-09-03 sensor-SPI swap spent the rest; the two
+spare pads left on the flight computer are GPIO47 and GPIO48, which are bare. The
+`ESP_SDA` / `ESP_SCL` link pair moved to **FC GPIO36 / GPIO37** in that swap —
+GPIO33 and GPIO35, which older tables give for it, are `PYRO4_FIRE` and
+`PYRO2_FIRE` now.
 
 Extend `board_*.h` with all three, then run the netlist parity sweep
 (`kicad-cli` GPIO→net table vs the header — see the board-header parity
 procedure); nothing in CI catches a mismatch.
 
-## 3. Pyro arming — REQUIRED changes to every ARM path
+## 3. Pyro arming — ~~REQUIRED changes to every ARM path~~ RETRACTED
+
+> **Do not implement this section.** There is no charge pump, no `ARM_CLK` net and no
+> hardware one-shot on this board. **FC GPIO8, which the section tells you to clock, is
+> the IMU interrupt input** — configuring LEDC on it breaks the IMU and arms nothing.
+> The real path is two static consent lines, `FC_ARM` (FC GPIO44) and `OC_ARM_EN`
+> (OC GPIO11), both high to arm, with the out computer holding the veto; see
+> [`arm-watchdog-rework.md`](arm-watchdog-rework.md). Kept below only so the old
+> names stay searchable.
+
 
 **`PYRO_ARM` no longer exists.** Arming is one operation: **run a 50% duty
 square wave on `ARM_CLK` (FC GPIO8)** — LEDC, ~20–200 kHz, 50 kHz suggested
@@ -106,7 +132,15 @@ Note the fire-duration knob is now real: firing comes from the pack, so
 `PYRO_FIRE_DURATION_MS` (200) actually changes delivered energy. No change
 required for e-matches; revisit only if hotter igniters return to scope.
 
-## 4. `CAP_ACTIVE` handler — REQUIRED
+## 4. ~~`CAP_ACTIVE` handler — REQUIRED~~ RETRACTED (the order of operations still applies)
+
+> **`U40`, `R127` and the LM66100 do not exist on this board.** The signal is
+> `VBUCK_OK`, it is an ADC reading rather than a logic level, and its sense is
+> inverted — see the §2 row. The numbered park-and-shed sequence below is still the
+> right shape for a hold-up event; the polarity discussion, the first-boot blip and
+> the time budgets are not. Hold-up on the fabricated board is ~21 s at 190 mA and
+> ~13.6 s at 300 mA, from 5 F terminating at 2.5 V into a flat 3.0 V rail.
+
 
 U40's status pin, pulled up by R127: it changes state when the rail transfers
 from the buck to the supercap — i.e. **VBATT/buck is gone and the computer is
@@ -148,13 +182,19 @@ normal operation, re-enable TX.
 
 ## 5. Supercap charge gate — REQUIRED for arming, recommended elsewhere
 
-`V_SCAP_ADC` is V_SCAP ÷ 2 (100 k / 100 k, R125/R126): full scale ~1.65 V at
-the pin (~1.73 V full scale with DEF high) — configure ADC attenuation accordingly and calibrate the 2:1 ratio.
+`V_SCAP_ADC` is V_SCAP ÷ 2 (100 k / 100 k, `R125`/`R126`) on **out-computer
+GPIO8** (pad 13), with `C144` 100 nF at the pin: full scale ~1.25 V at the pin for a
+2.5 V cap — configure ADC attenuation accordingly and calibrate the 2:1 ratio.
 
 - **Pre-arm check:** refuse pyro arm (and fail the preflight-checklist step)
-  until V_SCAP ≥ ~3.1 V. Rationale: after a pad power-cycle the cap is empty
-  and recharges through 33 Ω at τ = 66 s — **~5.5 min to full**. Without the
-  gate, a quick cycle-and-launch flies with no hold-up and nothing would say so.
+  until the hold-up cap is charged. **The 3.1 V threshold this line used to give is
+  unreachable** — the `TPS61094` terminates charging at **2.5 V**, so a 3.1 V gate
+  refuses arming forever. Gate at roughly **2.3 V** instead, and re-derive it from
+  the hold-up seconds actually wanted. Rationale is unchanged: after a pad
+  power-cycle the cap is empty, and at the 100 mA charge current 5 F takes about
+  **two minutes** to reach 2.5 V (not the 5.5 min through 33 Ω this line used to
+  claim — `R120` is gone). Without the gate, a quick cycle-and-launch flies with no
+  hold-up and nothing would say so.
 - **Telemetry:** report V_SCAP (or a charged/charging flag) in sensor_health so
   the app can show "backup charging, n%". Adding a logged field means a log
   format version bump — batch it with the next format change rather than
@@ -179,7 +219,12 @@ the pin (~1.73 V full scale with DEF high) — configure ADC attenuation accordi
 - **GNSS through transients.** The hold-up keeps the LC86G powered through any
   survivable sag, so no cold-start handling is needed — that's the point.
 
-## 7. Open verifications (hardware side, but they set firmware limits)
+## 7. ~~Open verifications (hardware side, but they set firmware limits)~~ RETRACTED
+
+> Every row below names a part that was deleted in the 2026-08-29 hold-up rework.
+> The live open items live on the tracker and in
+> [`holdup-tps61094-rework.md`](holdup-tps61094-rework.md).
+
 
 | Item | Sets |
 |---|---|
