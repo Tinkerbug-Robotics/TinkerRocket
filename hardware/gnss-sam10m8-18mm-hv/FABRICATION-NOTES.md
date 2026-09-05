@@ -13,7 +13,7 @@ Applies from revision **V3** (LDO supply, 6-layer). Written 2026-09-02. Block A 
 | Outline | 22.00 × 27.50 mm, 1 mm corner radius, four 2.2 mm mounting holes | Unchanged from V2. |
 | Copper to edge | ≥ 0.5 mm (fills), 0.73 mm nearest track | Above JLC's 0.2 mm routed minimum. |
 | Silkscreen | 0.8–0.85 mm text, 0.15 mm stroke; board ID "SAM-M10Q V3" and "TinkerRocket" on the top strip, "PATCH ANT ON BACK" along the bottom edge, "1" beside J3 pin 1 | Nothing under the module; the ID is readable assembled. |
-| Stencil | 120 µm (module paste apertures per u-blox 4.4.1 assume it); see #959 for the repo-wide thickness rule | The 2 × 2 windowpane on U1 (61.9 % coverage) is drawn for 120 µm. |
+| Stencil | **120 µm**, specified explicitly — do not leave the fab to choose (module paste apertures per u-blox 4.4.1 assume it); see #959 for the repo-wide thickness rule | The 2 × 2 windowpane on U1 (61.9 % coverage) is drawn for 120 µm. 120 µm is a u-blox requirement here, not an area-ratio limit: the tightest aperture on the board is FL1's 0.900 × 0.350 mm at **AR 1.05**, and nothing needs a foil thinner than **191 µm** (F.Cu, FL1) or **243 µm** (B.Cu, U1's windowpane). Both sides carry paste, so the order needs a top *and* a bottom stencil. |
 
 Plot with `tools/plot_gerbers.sh` from the tagged commit, and confirm the `.gbrjob` says `LayerNumber: 6` and `BoardThickness: 1.5994` before uploading.
 
