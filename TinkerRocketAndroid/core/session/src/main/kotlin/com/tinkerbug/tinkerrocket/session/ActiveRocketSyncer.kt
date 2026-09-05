@@ -498,6 +498,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                     rateCapDps = profile.rateCapDps,
                     kpAngle = profile.kpAngle,
                     integralSepThreshold = profile.integralSepThreshold,
+                    rollMinSpeedMps = profile.rollMinSpeedMps,
                 ),
             )
             // mode byte is legacy wire (pre-v4); always .angle = 0.
@@ -705,7 +706,8 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
             // app's defaults rather than the vehicle's values — adopting them
             // would overwrite the profile with a number nobody chose.
             var rollDiffers = p.useAngleControl != cfg.useAngleControl ||
-                p.rollDelayMs != cfg.rollDelayMs
+                p.rollDelayMs != cfg.rollDelayMs ||
+                !same(p.rollMinSpeedMps, cfg.rollMinSpeedMps, 1)
             if (cfg.rollGainsReported) {
                 rollDiffers = rollDiffers ||
                     !same(p.rateCapDps, cfg.rateCapDps, 1) ||
@@ -716,6 +718,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 p = p.copy(
                     useAngleControl = cfg.useAngleControl,
                     rollDelayMs = cfg.rollDelayMs,
+                    rollMinSpeedMps = cfg.rollMinSpeedMps,
                 )
                 if (cfg.rollGainsReported) {
                     p = p.copy(

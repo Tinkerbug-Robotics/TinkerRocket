@@ -371,6 +371,10 @@ def parse_binary_file(filepath):
         # never written down, which is what made the question unanswerable.
         "gnss_otp_state": None,
         "gnss_otp_state_name": None,
+        # Roll-control speed gate that flew, m/s (FlightSettingsData v8+).
+        # None on older logs, which had no speed gate at all — so None and 0.0
+        # mean the same thing for those flights.
+        "roll_min_speed_mps": None,
         "b2r_mode": None,
         "b2r_quat": None,
     }
@@ -443,6 +447,12 @@ def parse_binary_file(filepath):
                 config["gnss_otp_state"] = payload[219]
                 config["gnss_otp_state_name"] = GNSS_OTP_STATES.get(
                     payload[219], f"?{payload[219]}")
+            # v8 roll-control speed gate @220, deci-m/s.  Same reason as the OTP
+            # state: it decides whether the fins were allowed to move at all
+            # early in the flight, and pre-v8 it existed nowhere in the record.
+            if fs_version >= 8 and msg_len >= 222:
+                config["roll_min_speed_mps"] = (
+                    int.from_bytes(payload[220:222], "little") / 10.0)
 
         pos += msg_len + 2
 

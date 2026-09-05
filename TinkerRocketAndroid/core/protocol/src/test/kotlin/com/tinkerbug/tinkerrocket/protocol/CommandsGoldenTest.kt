@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
@@ -60,7 +61,8 @@ class CommandsGoldenTest {
         "cmd24_servotest_8.bin",
         "cmd26_rollprofile_76.bin",
         "cmd28_guidpoint_20.bin",
-        "cmd31_rollctl_16.bin",
+        "cmd31_rollctl_20.bin",
+        "cmd31_rollctl_legacy_16.bin",
         "cmd33_camera_1.bin",
         "cmd34_pyro_24.bin",
         "cmd40_setname.bin",
@@ -190,17 +192,41 @@ class CommandsGoldenTest {
 
     @Test
     fun `cmd31 roll control config`() {
-        val s = side("cmd31_rollctl_16.bin")
+        val s = side("cmd31_rollctl_20.bin")
         assertMatchesFixture(
-            "cmd31_rollctl_16.bin",
+            "cmd31_rollctl_20.bin",
             Commands.rollControlConfig(
                 useAngleControl = s.i("use_angle_control") != 0,
                 rollDelayMs = s.i("roll_delay_ms"),
                 rateCapDps = s.f("kp_angle_rate_cap_dps"),
                 kpAngle = s.f("kp_angle"),
                 integralSepThreshold = s.f("integral_sep_threshold_dps"),
+                rollMinSpeedMps = s.f("roll_min_speed_mps"),
             ),
         )
+    }
+
+    /**
+     * The pre-speed-gate 16-byte payload an older app sent.  The rocket pads it
+     * out with the gate off, so the leading 16 bytes of what this app now sends
+     * must still be byte-identical to that legacy frame.
+     */
+    @Test
+    fun `cmd31 legacy 16-byte payload is the prefix of the current frame`() {
+        val s = side("cmd31_rollctl_legacy_16.bin")
+        val legacy = WireFixtures.bytes("commands/cmd31_rollctl_legacy_16.bin")
+        val current = Commands.rollControlConfig(
+            useAngleControl = s.i("use_angle_control") != 0,
+            rollDelayMs = s.i("roll_delay_ms"),
+            rateCapDps = s.f("kp_angle_rate_cap_dps"),
+            kpAngle = s.f("kp_angle"),
+            integralSepThreshold = s.f("integral_sep_threshold_dps"),
+            rollMinSpeedMps = s.f("roll_min_speed_mps"),
+        )
+        // The sidecar reports the gate as 0 for a legacy frame, so the frame
+        // this app builds from it is the legacy one plus a zeroed f32 tail.
+        assertEquals(0.0f, s.f("roll_min_speed_mps"))
+        assertContentEquals(legacy, current.copyOf(legacy.size))
     }
 
     @Test

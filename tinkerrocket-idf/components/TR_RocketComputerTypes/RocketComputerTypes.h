@@ -2691,15 +2691,26 @@ typedef struct __attribute__((packed))
     float    kp_angle_rate_cap_dps;  // outer-loop angle→rate command cap (deg/s); <=0 keeps firmware default
     float    kp_angle;               // outer-loop angle P-gain; <=0 keeps firmware default
     float    integral_sep_threshold_dps;  // roll-rate PID integral-separation anti-windup threshold (deg/s); >=0 applies (0 disables), <0 keeps firmware default
+    // Control-authority speed gate (v2 tail).  Airspeed (m/s, EKF speed) the
+    // vehicle must reach before roll control and guidance engage; 0 disables
+    // the gate and restores the pure time-delay behaviour.  ANDed with
+    // roll_delay_ms — both gates must open.  <0 or non-finite keeps the
+    // firmware's current value, matching the sentinel style of the gains above.
+    float    roll_min_speed_mps;
 } RollControlConfigData;
-static_assert(sizeof(RollControlConfigData) == 16, "RollControlConfigData must be 16 bytes");
+static_assert(sizeof(RollControlConfigData) == 20, "RollControlConfigData must be 20 bytes");
 // #572: field-order pin — see PIDConfigData.
 static_assert(offsetof(RollControlConfigData, use_angle_control) == 0 &&
               offsetof(RollControlConfigData, roll_delay_ms) == 2 &&
               offsetof(RollControlConfigData, kp_angle_rate_cap_dps) == 4 &&
               offsetof(RollControlConfigData, kp_angle) == 8 &&
-              offsetof(RollControlConfigData, integral_sep_threshold_dps) == 12,
+              offsetof(RollControlConfigData, integral_sep_threshold_dps) == 12 &&
+              offsetof(RollControlConfigData, roll_min_speed_mps) == 16,
               "RollControlConfigData field order is wire ABI (app hand-packs it)");
+// Legacy 16-byte payload from an app built before the speed gate.  The OC
+// pads such a frame out to the full struct (roll_min_speed_mps = 0, gate off)
+// rather than dropping it, so an older phone keeps configuring roll control.
+static constexpr size_t ROLL_CTRL_CONFIG_LEN_V1 = 16;
 
 // --- Flight settings snapshot (#165) ---
 // One-shot snapshot of the rocket's runtime settings, emitted FC→OC over I2S
@@ -2758,7 +2769,8 @@ struct __attribute__((packed)) FlightSettingsData
     //  as F_GUIDANCE_STATION_KEEP above; older readers ignore the bit and read
     //  ism6_update_rate_hz as the flown rate, which is exactly what it is up to
     //  the deployment step-down.)
-    static constexpr uint8_t VERSION = 7;
+    // v8 appends the roll-control speed gate (roll_min_speed_dmps).
+    static constexpr uint8_t VERSION = 8;
 
     // flags bit positions
     static constexpr uint8_t F_USE_ANGLE_CONTROL = 0;  // cascaded angle vs rate-only
@@ -2860,9 +2872,18 @@ struct __attribute__((packed)) FlightSettingsData
     // gnss_otp::* constants above.  Pre-v7 logs decode as UNKNOWN, which is
     // exactly what they are — the state was determined and discarded.
     uint8_t  gnss_otp_state;
+
+    // Roll-control speed gate that flew (v8+): the airspeed the vehicle had to
+    // reach before control engaged, in DECI-metres/second (0.1 m/s units).
+    // 0 = no speed gate, which is how every pre-v8 log decodes and exactly
+    // what those flights did.  Scaled uint16 rather than a float on purpose:
+    // this struct is bounded by MAX_PAYLOAD (224) and a float would spend the
+    // last of that headroom for resolution a gate does not need — same reason
+    // b2r_residual_cdeg and b2r_q are scaled ints.
+    uint16_t roll_min_speed_dmps;
 };
-static_assert(sizeof(FlightSettingsData) == 220,
-              "FlightSettingsData layout check (v7: GNSS OTP state, #837 item 6)");
+static_assert(sizeof(FlightSettingsData) == 222,
+              "FlightSettingsData layout check (v8: roll-control speed gate)");
 
 // --- Full config report (#915) ---
 // FC→OC over I2S.  Carries exactly what the app's config readback CANNOT
