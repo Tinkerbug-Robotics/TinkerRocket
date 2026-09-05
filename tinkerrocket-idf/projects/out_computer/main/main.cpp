@@ -751,6 +751,10 @@ static bool  boot_token_valid   = false;   // magic + CRC both good
 static bool  boot_token_restore = false;   // tier 2 said yes and the rail came up
 static bool  token_nvs_ok       = false;   // the partition opened at all
 static uint32_t boot_token_restore_ms = 0; // millis() at the restore, for the clear floor
+// #1176 step 6: millis() at which an operator override was relayed, or 0.
+// Only used to report the real outcome — the FC may refuse, and "queued" is
+// not "executed" on a channel with no acknowledgement.
+static uint32_t recovery_end_req_ms = 0;
 
 // A token-driven restore must not be retired by the very first non-INFLIGHT
 // frame it sees: the FC reports INITIALIZATION while it is still deciding, and
@@ -8323,6 +8327,30 @@ static void loop_oc()
                 }
             }
 
+            // #1176 step 6: report the override's real OUTCOME rather than the
+            // fact that it was queued. The OC->FC channel has no
+            // acknowledgement at all, and the FC refuses unless the vehicle is
+            // demonstrably still, so "sent" proves nothing. Success is the FC
+            // actually reaching LANDED.
+            if (recovery_end_req_ms != 0)
+            {
+                if (latest_rocket_state == LANDED)
+                {
+                    recovery_end_req_ms = 0;
+                    ESP_LOGW("OC", "#1176: the FC ended the restored flight — "
+                                   "power-cycle for a normal session");
+                    ble_app.sendRecoveryEndResult(3);
+                }
+                else if ((uint32_t)(millis() - recovery_end_req_ms) > 5000U)
+                {
+                    recovery_end_req_ms = 0;
+                    ESP_LOGE("OC", "#1176: the FC did NOT end the restored flight "
+                                   "— it refused, or the command was never "
+                                   "delivered. Nothing was changed.");
+                    ble_app.sendRecoveryEndResult(4);
+                }
+            }
+
             prev_rs_lockout = latest_rocket_state;
             const bool ns_launch = latest_non_sensor_valid &&
                                    nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
@@ -9929,6 +9957,58 @@ static void loop_oc()
         {
             setPendingCommand(SENSOR_CAL_READ);
             ESP_LOGI("BLE", "Sensor cal READ -> FlightComputer");
+        }
+        else if (ble_cmd == 69)
+        {
+            // #1176 step 6 — the operator's manual end of a restored flight.
+            //
+            // BLE ONLY, by decision: this number is deliberately absent from
+            // processUplinkCommand, because a command that ends a flight must
+            // require physical proximity rather than being reachable from a
+            // ground station over the radio link.
+            //
+            // THE OC DOES NOT DECIDE, AND IT DOES NOT TOUCH THE TOKEN. Only the
+            // FC can see the arming interlock, and only the interlock can tell
+            // a restored flight that is sitting on a bench from one that is
+            // genuinely airborne with its deployments still outstanding. So
+            // this relays the request and nothing else: every failure mode is
+            // "nothing happened" rather than "the recovery record is gone and
+            // the rocket is still flying". The token is retired only by the
+            // existing LANDED clear, which fires when the FC actually agrees.
+            const bool fc_fresh =
+                latest_non_sensor_valid &&
+                (uint32_t)(millis() - latest_non_sensor_rx_ms) <= config::FC_FRAME_STALE_MS;
+            const bool is_restored_flight =
+                fc_fresh && latest_rocket_state == INFLIGHT &&
+                (latest_non_sensor.apogee_flags & NSF2_REBOOT_RECOVERY) != 0;
+
+            if (!fc_fresh)
+            {
+                ESP_LOGW("OC", "#1176: end-restored-flight refused — no fresh FC "
+                               "telemetry, so the rocket's state is unknown");
+                ble_app.sendRecoveryEndResult(1);
+            }
+            else if (!is_restored_flight)
+            {
+                // The load-bearing refusal: a normal, never-restored flight is
+                // untouchable from the ground. NSF2_REBOOT_RECOVERY is set for
+                // the whole of a restored flight and covers BOTH restore paths
+                // (the tier-2 token and a tier-1 fault reset), which the OC's
+                // own boot_token_restore would not.
+                ESP_LOGW("OC", "#1176: end-restored-flight refused — this is not "
+                               "a restored flight in progress (state=%u)",
+                         (unsigned)latest_rocket_state);
+                ble_app.sendRecoveryEndResult(2);
+            }
+            else
+            {
+                setPendingCommand(RECOVERY_END_PENDING);
+                recovery_end_req_ms = millis();
+                ESP_LOGW("OC", "#1176: end-restored-flight relayed to the FC — "
+                               "it decides, and it refuses unless the vehicle is "
+                               "demonstrably still");
+                ble_app.sendRecoveryEndResult(0);
+            }
         }
     }
 

@@ -101,6 +101,14 @@ public object BleCommandId {
     // so a relayed toggle and a direct one mean exactly one thing.
     public const val LORA_TX_DISABLE_OC: Int = 68
 
+    // #1176 step 6 — end a RESTORED flight (one the rocket resumed after an
+    // in-flight reboot) without waiting for it to time itself out. BLE ONLY,
+    // deliberately: it is absent from the LoRa uplink so that ending a flight
+    // requires physical proximity. The firmware decides — the flight computer
+    // refuses unless the vehicle is demonstrably still — and the outcome
+    // arrives as a 0xCF file-ops notification.
+    public const val END_RESTORED_FLIGHT: Int = 69
+
     // OTA — dispatched in TR_BLE_To_APP.cpp, invisible to the main.cpp greps.
     public const val OTA_BEGIN: Int = 70           // [target u8][size u32][sha256 32 B]
     public const val OTA_FINISH: Int = 71

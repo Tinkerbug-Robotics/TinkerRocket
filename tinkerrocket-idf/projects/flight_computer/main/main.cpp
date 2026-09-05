@@ -663,6 +663,11 @@ static bool     recovery_gate_active = false;
 // back a flight whose apogee has been erased), and this gates the two trigger
 // conditions that consume it.
 static bool     recovery_apogee_armed = false;
+// #1176 step 6: the operator has asked, over BLE, to end this restored flight.
+// One-shot, consumed by the INFLIGHT case. Set only after the FC itself has
+// checked that the vehicle is demonstrably still — the OC cannot make that
+// judgement and deliberately does not try.
+static bool     recovery_override_requested = false;
 static bool     reboot_recovery = false;      // true during servo settle period after recovery
 static bool     reboot_recovery_telem = false; // true for rest of flight (telemetry flag)
 static uint32_t servo_settle_end_ms = 0;      // hold servos neutral until this time
@@ -4419,7 +4424,12 @@ static void setup_fc()
 
     ESP_LOGI(TAG, "Setup complete");
     ESP_LOGI(TAG, "Setup complete…");
-    triggerBlueLedFlash(time_ms());
+    // #1176: do NOT flash on a recovery boot. The restore block drives both
+    // LEDs on deliberately (owner's decision 4) as the operator's only
+    // at-a-glance cue that this board came up believing a flight is in
+    // progress, and starting the normal boot flash here would drive blue back
+    // low and erase it.
+    if (!recovery_gate_active) triggerBlueLedFlash(time_ms());
 
     // Last boot report: from here the state machine runs and NonSensorData
     // carries rocket_state, so the app switches to showing real states.  Any
@@ -4491,6 +4501,7 @@ static void resetFlightStateForSim(const char* edge)
     // arming interlock must not carry a verdict across it.
     recovery_gate_active  = false;
     recovery_apogee_armed = false;
+    recovery_override_requested = false;
     RecoveryArmGate::reset(recovery_arm_state, millis());
     clearFlightSnapshot();
     // #435: a sim start/stop is the sim's equivalent of a reboot, and a real
@@ -4540,6 +4551,7 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // for a later launch in the same power cycle.
     recovery_gate_active  = false;
     recovery_apogee_armed = false;
+    recovery_override_requested = false;
     RecoveryArmGate::reset(recovery_arm_state, now_ms);
     // #848: latch our own power rail for the duration of the flight (sims
     // included — the release at LANDED/sim-reset makes it harmless and it
@@ -5530,7 +5542,22 @@ static void loop_fc()
         // racing an in-flight transaction (the #279 constraint).
         static uint32_t i2c_resync_grace_until_ms = 0;
         static bool     i2c_resync_active = false;
-        if ((rocket_state != INFLIGHT || sensor_collector.isSimActive())
+        // #1176 step 6: a restored flight must also poll, or the operator's
+        // override can never reach it — this poll is the ONLY OC->FC command
+        // channel (the FC is the I2C master, the OC the slave).
+        //
+        // The extra term is self-closing and cannot affect a normal flight:
+        // recovery_gate_active is set only in the restore block and cleared in
+        // enterInflight, and the term stops the moment the interlock leaves
+        // Locked. Measured across the flight corpus, that window is 1.0-11.0 s
+        // on a healthy restored flight (median 3.2 s) — and on a flight whose
+        // barometer is dead it can last the whole descent, which is the case
+        // to keep in mind when reading the 50 ms masterRead timeout below.
+        const bool recovery_poll_window =
+            recovery_gate_active &&
+            recovery_arm_state.verdict == RecoveryArmGate::Verdict::Locked;
+        if ((rocket_state != INFLIGHT || sensor_collector.isSimActive() ||
+             recovery_poll_window)
             && (now_ms - out_ready_request_time_ms) > 250U
             && (int32_t)(now_ms - i2c_resync_grace_until_ms) >= 0)
         {
@@ -7361,9 +7388,50 @@ static void loop_fc()
                 servo_control.resetPID();
                 ESP_LOGI(TAG, "[SERVO REPLAY] Stopped - servos stowed");
             }
+            else if (out_pending_command == RECOVERY_END_PENDING)
+            {
+                // #1176 step 6: the operator's manual end of a restored flight.
+                //
+                // The FC decides, not the OC, because only the FC can see the
+                // interlock — and the condition is POSITIVE stillness, not the
+                // absence of an Open verdict. "Not Open" is the pre-decision
+                // state: a genuine restored flight sits in it for seconds after
+                // every restore, and for an entire descent when the barometer
+                // is dead. Accepting there would let a ground station end a
+                // real flight while its deployments were still outstanding.
+                //
+                // The only effect is to set a one-shot. Everything else is left
+                // to the existing LANDED transition, so a delivery that arrives
+                // late simply finds rocket_state != INFLIGHT and does nothing.
+                if (!recovery_gate_active || rocket_state != INFLIGHT)
+                {
+                    ESP_LOGW(TAG, "[RECOVERY] End-restored-flight refused: this "
+                                  "is not a restored flight in progress "
+                                  "(gate_active=%d state=%u)",
+                             (int)recovery_gate_active, (unsigned)rocket_state);
+                }
+                else if (!RecoveryArmGate::overrideAllowed(recovery_arm_state,
+                                                           time_ms()))
+                {
+                    ESP_LOGE(TAG, "[RECOVERY] End-restored-flight REFUSED — the "
+                                  "vehicle is not demonstrably still (verdict=%u, "
+                                  "still for %lu ms). If it really is on the "
+                                  "ground, wait and retry.",
+                             (unsigned)recovery_arm_state.verdict,
+                             (unsigned long)RecoveryArmGate::stillMs(
+                                 recovery_arm_state, time_ms()));
+                }
+                else
+                {
+                    recovery_override_requested = true;
+                    ESP_LOGW(TAG, "[RECOVERY] Operator ended the restored flight "
+                                  "— stillness confirmed; going to LANDED");
+                }
+            }
             else
             {
-                ESP_LOGW(TAG, "[I2C RX] Unknown pending command: 0x%02X", (unsigned)out_pending_command);
+                ESP_LOGW(TAG, "[I2C RX] Unknown pending command: 0x%02X",
+                         (unsigned)out_pending_command);
             }
             // NOTE: do NOT clear out_pending_command here — it mirrors the OC's
             // reported command and is cleared by the next poll when the OC
@@ -8284,15 +8352,19 @@ static void loop_fc()
                 // apply unchanged. The cost is that the operator power-cycles
                 // once more for a normal session; the alternative reopens
                 // defects the review found in the READY path.
-                if (recovery_gate_active &&
-                    RecoveryArmGate::refuted(recovery_arm_state) &&
-                    rocket_state == INFLIGHT)
+                if (recovery_gate_active && rocket_state == INFLIGHT &&
+                    (RecoveryArmGate::refuted(recovery_arm_state) ||
+                     recovery_override_requested))
                 {
+                    const bool by_operator = recovery_override_requested;
+                    recovery_override_requested = false;
                     pyroSafeAll();
                     rocket_state = LANDED;
-                    ESP_LOGE(TAG, "[STATE] INFLIGHT -> LANDED (recovery refuted: "
-                                  "no live evidence of flight). Power-cycle for a "
-                                  "normal session.");
+                    ESP_LOGE(TAG, "[STATE] INFLIGHT -> LANDED (%s). Power-cycle "
+                                  "for a normal session.",
+                             by_operator ? "ended by the operator"
+                                         : "recovery refuted: no live evidence "
+                                           "of flight");
                     break;
                 }
 

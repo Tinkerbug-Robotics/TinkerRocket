@@ -1622,6 +1622,7 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(FC_BOOT_STATUS_MSG),
         // FC->OC full config report (#915) — what the app readback can't see.
         MT(CONFIG_REPORT_MSG),
+        MT(RECOVERY_END_PENDING),
     };
 #undef MT
 
@@ -1650,7 +1651,11 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //      exactly TWO free codes in the space (0xFC, 0xFD) — the next
     //      message after those needs an escape/extended encoding, not a
     //      thirteenth constant.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 92u)
+    // 93 = 92 + RECOVERY_END_PENDING (#1176 step 6, 0xFC). ONE free code
+    //      (0xFD) remains. Note 0xFC is also BS_LORA_RX_MSG, a base-station
+    //      log record type in a namespace this sweep does not cover and which
+    //      never appears on the OC<->FC wire — a deliberate alias.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 93u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

@@ -283,6 +283,12 @@ public:
     // decoder and lands as a phantom all-defaults frame on pre-refusal
     // apps, while an unknown file-ops discriminator is dropped safely.
     void sendPyroTestRefusal(uint8_t refused_cmd, uint8_t channel, uint8_t reason);
+    // #1176 step 6: outcome of an "end the restored flight" request (cmd 69).
+    // result: 0 relayed to the FC, 1 no fresh FC telemetry, 2 not a restored
+    // flight, 3 the FC ended it, 4 the FC refused or never received it.
+    // 0 and 3 are both reported: 0 means "asked", 3 means "done", and on a
+    // channel with no acknowledgement those are genuinely different claims.
+    void sendRecoveryEndResult(uint8_t result);
 
     // Get pending download filename (empty if none)
     // Clears the filename after reading

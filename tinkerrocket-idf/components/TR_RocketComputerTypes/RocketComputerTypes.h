@@ -2145,6 +2145,17 @@ static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 28-byte Log
 // the I2S telemetry stream exists, which is the whole point — see
 // FcBootStatusData above.  Stops once the FC enters loop_fc().
 static constexpr uint8_t FC_BOOT_STATUS_MSG   = 0xFA;  // FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only
+// OC->FC: end a restored flight on the operator's explicit request (#1176
+// step 6). Carries no payload — the FC decides whether to honour it, and the
+// only reason it exists as a code rather than a flag is that the pending-
+// command channel is a single byte.
+//
+// 0xFC is also BS_LORA_RX_MSG, a BASE-STATION log record type. That is a
+// deliberate cross-namespace alias, not an oversight: a BS->self log code
+// never appears on the OC<->FC wire, and the tree already does this with
+// LORA_BEACON_SYNC 0xBE vs SERVO_TEST_MSG 0xBE. Taking it leaves 0xFD as the
+// last free code in this space.
+static constexpr uint8_t RECOVERY_END_PENDING = 0xFC;
 static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 169-byte ConfigReportData, everything the app's config
                                                       // readback cannot otherwise see (#915).  PUSHED, not requested —
                                                       // see the struct comment.  0xFC/0xFD are the last free codes in
