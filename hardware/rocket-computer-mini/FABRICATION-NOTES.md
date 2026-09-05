@@ -1,20 +1,25 @@
 # Rocket computer mini — fabrication and assembly notes
 
-> ## Board state — routed, placed, fills current, ready to plot
+> ## Board state — routed, placed, fills current, ready to plot (V1.0.1)
 >
-> **22.55 × 69.62 mm, 8 layers, 1.630 mm. Fully routed: 0 unconnected items, 2,194 track
-> segments, 596 vias, 221 fitted parts against a 221-designator `bom.csv`. 18 DRC items remain:
-> 14 silkscreen cosmetics, the two accepted fiducial-in-courtyard overlaps (#1008) and two
-> library-copy warnings — none affects fabrication. One schematic-parity item, also accepted:
-> `U9`'s symbol carries a pin 9 that its footprint does not, on the same `PYRO_GND` net as pads
-> 5–8.** Zone fills refilled and verified current; a stale fill is exactly how a 3V3–GND short
-> reached a gerber on this project once before.
+> **22.55 × 69.62 mm, 8 layers, 1.630 mm. Fully routed: 0 unconnected items, 2,296 track
+> segments, 598 vias, 221 fitted parts against a 221-designator `bom.csv`. 22 DRC items remain:
+> 14 silkscreen cosmetics, the two accepted fiducial-in-courtyard overlaps (#1008), five
+> library-copy warnings and one library-issue warning — none affects fabrication. One accepted
+> schematic-parity item: `U9`'s symbol carries a pin 9 that its footprint does not, on the same
+> `PYRO_GND` net as pads 5–8.** Zone fills verified current.
 >
-> **Fixed immediately before this plot:** `C152`'s only tie to `VBUCK_OK` was a 14 µm corner
-> overlap with a via — connected as far as KiCad and DRC were concerned, and opened by less
-> etch variation than a normal process holds. It now has a 0.10 mm stub. And the file's cached
-> board thickness read 1.5765 mm while the stackup summed to 1.6301, so the `.gbrjob` was
-> telling the fab a different thickness from A1 below; the cache now agrees with the stackup.
+> **V1.0.1 — the change JLCPCB asked for.** Their engineering review of the V1.0.0 upload found
+> vias in the ball pads of the two 24-ball WLCSP flash parts (`U13`, `U33`). Eight vias sat in or
+> across a ball pad, five of them essentially centred: a 0.30 mm drill cannot share a 0.254 mm
+> pad. Every ball pad is now clear — the nearest drill edge to any ball pad is 45 µm. Rerouting
+> for that left three things that were caught and fixed before this plot: a pad connected by a
+> 5 µm sliver, a drill 6 µm off a ball pad, and a courtyard overlap and a dangling stub from the
+> parts that moved. The five library-copy warnings are the window-paned exposed-pad apertures
+> added to the shared library after V1.0.0; **the board keeps its own copies and must not be
+> updated from the library before this run.**
+>
+> As of the V1.0.1 tag. The gerbers in `gerbers/` are plotted from it.
 >
 > Standing rule: **never send this file to a fab house or an assembler with a `<TBD>` in it.**
 > There are none as of 2026-09-04; if one reappears, it is a number that does not exist yet. The `README` warns specifically
