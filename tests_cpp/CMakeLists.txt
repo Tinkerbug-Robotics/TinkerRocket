@@ -927,6 +927,21 @@ target_include_directories(test_main_deploy_gate PRIVATE
 target_link_libraries(test_main_deploy_gate GTest::gtest_main)
 gtest_discover_tests(test_main_deploy_gate)
 
+# ---------- test_recovery_arm_gate (#1176) ----------
+# May a flight restored by reboot recovery arm a deployment channel? Default-deny,
+# opened only by live this-boot evidence of motion that ground handling cannot
+# produce, and refuted by sustained stillness. Every arm is a RATE or an
+# acceleration: a reboot cannot establish absolute altitude, because a stale token
+# supplies a foreign ground reference. Pure header in the shared TR_KinematicChecks
+# component, beside MainDeployGate, so the mini shares it.
+add_executable(test_recovery_arm_gate test_recovery_arm_gate.cpp)
+target_include_directories(test_recovery_arm_gate PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/components/TR_KinematicChecks
+)
+target_link_libraries(test_recovery_arm_gate GTest::gtest_main)
+gtest_discover_tests(test_recovery_arm_gate)
+
 # ---------- test_modem_config_ack (#835 item 7) ----------
 add_executable(test_modem_config_ack test_modem_config_ack.cpp)
 target_include_directories(test_modem_config_ack PRIVATE
