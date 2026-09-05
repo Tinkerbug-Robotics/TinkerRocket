@@ -1,18 +1,20 @@
 # Rocket computer mini — fabrication and assembly notes
 
-> ## Board state — routed, placed, fills current; ONE part still to place
+> ## Board state — routed, placed, fills current, ready to plot
 >
-> **22.55 × 69.62 mm, 8 layers, 1.63 mm. Fully routed: 0 unconnected items, 2,184 track segments,
-> 596 vias. Zone fills refilled 2026-09-04 evening (they had gone stale behind eight new vias — a stale
-> fill is exactly how a 3V3–GND short reached a gerber once before). 18 DRC items remain: 14 silkscreen
-> cosmetics, the two accepted fiducial-in-courtyard overlaps (#1008), and two library-copy warnings —
-> none affects fabrication.** As of the 2026-09-04 evening commit (the #1169 pass). The gerbers in
-> `gerbers/` predate this and must be re-plotted.
+> **22.55 × 69.62 mm, 8 layers, 1.630 mm. Fully routed: 0 unconnected items, 2,194 track
+> segments, 596 vias, 221 fitted parts against a 221-designator `bom.csv`. 18 DRC items remain:
+> 14 silkscreen cosmetics, the two accepted fiducial-in-courtyard overlaps (#1008) and two
+> library-copy warnings — none affects fabrication. One schematic-parity item, also accepted:
+> `U9`'s symbol carries a pin 9 that its footprint does not, on the same `PYRO_GND` net as pads
+> 5–8.** Zone fills refilled and verified current; a stale fill is exactly how a 3V3–GND short
+> reached a gerber on this project once before.
 >
-> **Not yet on the board: `C152`, 100 nF 0402 on `VBUCK_OK` at U32 pin 8 (FC GPIO3).** It is on the
-> schematic and in `bom.csv`; update the PCB from the schematic, place it against pin 8 with its
-> ground on the local pour, refill, re-run DRC, then plot. Until then this file describes a board
-> with 220 placed parts and a BOM with 221.
+> **Fixed immediately before this plot:** `C152`'s only tie to `VBUCK_OK` was a 14 µm corner
+> overlap with a via — connected as far as KiCad and DRC were concerned, and opened by less
+> etch variation than a normal process holds. It now has a 0.10 mm stub. And the file's cached
+> board thickness read 1.5765 mm while the stackup summed to 1.6301, so the `.gbrjob` was
+> telling the fab a different thickness from A1 below; the cache now agrees with the stackup.
 >
 > Standing rule: **never send this file to a fab house or an assembler with a `<TBD>` in it.**
 > There are none as of 2026-09-04; if one reappears, it is a number that does not exist yet. The `README` warns specifically
@@ -74,9 +76,11 @@ A3. VIAS: FILLED WITH NON-CONDUCTIVE EPOXY AND PLATED OVER
     *** VIA-IN-PAD IS MANDATORY ON THIS BOARD, NOT OPTIONAL. ***
     THE GNSS MODULE (U5) CARRIES A VIA IN EVERY GROUND PAD THAT
     HAS ONE AS A DELIBERATE HEAT PATH INTO A BLIND JOINT PLANE.
-    (LAYOUT NOTE, NOT A FAB INSTRUCTION: PADS 18, 30, 33 AND 34
-    HAVE NO VIA TODAY - EITHER ADD THEM OR ACCEPT THE REDUCED
-    HEAT PATH BEFORE THIS GOES OUT.) AN
+    (LAYOUT NOTE, NOT A FAB INSTRUCTION: PADS 32 AND 33 HAVE NO
+    VIA TODAY - MEASURED 2026-09-04. PADS 18, 30 AND 34 DO, AND
+    THIS NOTE NAMED THEM IN ERROR UNTIL NOW. PAD 32 IS A CORNER
+    OF THE ARRAY, SO IT IS THE MORE USEFUL OF THE TWO TO STITCH.
+    ACCEPTED AS-IS FOR THIS RUN.) AN
     UNPLUGGED BARREL DRAINS THE JOINT IT SITS IN, AND THAT JOINT
     CANNOT BE INSPECTED OR REWORKED. IF THIS LINE IS NOT ON THE
     QUOTE, THE BOARD IS NOT BUILDABLE.
@@ -98,8 +102,13 @@ A4. CONTROLLED IMPEDANCE: 50 OHM SINGLE-ENDED ON TWO FEEDS -
     CONTROL ON THIS NET IS OPTIONAL - IF THE FAB CHARGES FOR IT,
     DROPPING IT IS DEFENSIBLE. RE-DERIVE IF THE FEED IS EVER
     LENGTHENED.
-    THE 2.4 GHz FEED'S LAYER IS SET AT PLACEMENT (U14 IS NOT YET
-    PLACED); ABRACON ASKS FOR A CPWG KEPT AS SHORT AS POSSIBLE.
+    THE 2.4 GHz FEED IS PLACED AND ROUTED: U14 SITS AT THE BOARD
+    EDGE AND ITS FEED IS 2.99 mm OF 0.18 mm TRACK ON F.Cu
+    REFERENCED TO In1.Cu, COPLANAR WITH THE F.Cu GROUND POUR.
+    AT 2.4 GHz THAT LENGTH IS UNDER 15 DEGREES ELECTRICAL, SO
+    IMPEDANCE CONTROL ON THIS NET IS OPTIONAL TOO - QUOTE THE
+    IMPEDANCE SERVICE AGAINST THE 900 MHz FEED IF IT IS CHARGED
+    FOR SEPARATELY.
 
 A5. MIN ANNULAR RING 0.05 mm.
     MIN VIA 0.40 mm PAD ON 0.30 mm DRILL.
@@ -112,7 +121,11 @@ A6. MIN TRACK AND SPACING 0.09 mm.
     IS 0.55 mm CENTRE TO CENTRE.
 
 A7. MIXED TECHNOLOGY - ONE THROUGH-HOLE PART (C130) SHARES THE
-    BOARD WITH 0.306 mm PITCH SMD.
+    BOARD WITH 0.40 mm PITCH SMD, WHICH IS THE FINEST PITCH ON
+    IT (U1, U14, U15, U32 - MEASURED, AND AGREES WITH A2).
+    NOTE: THE ON-BOARD Dwgs.User COPY OF THIS NOTE STILL READS
+    0.30 mm AND OVERSTATES THE PROCESS CLASS; THE FAB SHOULD
+    TAKE 0.40 mm FROM THIS FILE.
 ```
 
 ---
@@ -412,10 +425,15 @@ and without cutting `In1`.
   measurement confirms the PCB *is* centred on the pad field (−7.998 / +8.032). The courtyard at
   ±9.75 clears the antenna by 0.29 mm on its worst side, so it needs no further change.
 
-- **§5.3 wants ≥3 mm between the module and other components; four top-side parts are inside it.**
-  Measured to the true antenna outline on the current placement: `C38` and `R33` at 0.97 mm,
-  `H1` at 2.73 mm, `H3` at 2.80 mm — all four still inside, the offset having bought ~0.2 mm. `H1`/`H3` are mounting holes rather than components, but a screw head is metal
-  near a patch antenna and §5.1.4 separately asks for 10 mm to tall metal. Free to fix now.
+- **§5.3 wants ≥3 mm between the module and other components; thirteen top-side items are
+  inside it.** Re-measured courtyard-to-courtyard on 2026-09-04, replacing an older count of
+  four: `R33` (0.00), `R140` (0.00), `C19` (0.00), `C21` (0.00), `U11` (0.77), `Y1` (0.90),
+  `R141` (1.32), `SW3` (1.90), `R38` (2.21), `R39` (2.22), `C144` (2.26), and the mounting holes
+  `H1` (2.41) and `H3` (2.42). The four at 0.00 touch the courtyard box without their outlines
+  overlapping — DRC reports no `courtyards_overlap` for any of them. `C38`, which this bullet
+  used to name, is on the **bottom** side and so is not what §5.3 is about. On a 22.55 mm board
+  this rule cannot be met without moving the module, and the deficit is accepted for this run;
+  it is recorded here because a GNSS installation on this project has already lost ≥8 dB once.
   Note the courtyard does **not** encode this rule — it is sized to the part (±9.75), not to the
   3 mm keepout (which would be ±12.2). Enforcing 3 mm through the courtyard is an option if DRC
   should catch it automatically; it would make the courtyard wider than the inherited board width.
