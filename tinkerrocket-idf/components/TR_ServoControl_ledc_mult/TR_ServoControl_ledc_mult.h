@@ -25,14 +25,45 @@ public:
                     float min_cmd_in,
                     float max_cmd_in);
 
-    // configure timers/channels and centre all servos
+    // Configure timers/channels.  Commands NO motion: the channels are left at
+    // 0% duty (no pulse train), exactly the state idle() produces, so the fins
+    // stay wherever they are until something deliberately drives them.
+    //
+    // This used to end with setPulse(0), snapping all four fins simultaneously
+    // to the raw pulse mid-point.  On a reboot during flight that is an
+    // uncommanded four-fin step at flight dynamic pressure, issued before the
+    // firmware has even asked whether the vehicle is airborne — and it was NOT
+    // gated on servo_enabled, only on the pins being mapped.  Hardware setup
+    // and actuator motion are now separate concerns: the caller decides when
+    // motion is safe (see beginWiggle) and nothing here moves a fin.
     void begin();
     // set desired roll‑rate setpoint (deg/s)
     void setSetpoint(float setpoint);
     // update PWM outputs from measured roll-rate (deg/s)
     void control(float roll_rate);
-    // sweep from mid->min->max->mid
-    void wiggle();
+
+    // ── Boot "servos alive" self-test (non-blocking) ──
+    // Sweeps each fin mid->min->max->mid in turn, one servo at a time.  Split
+    // into a state machine serviced across caller ticks, in the same shape as
+    // the neutral settle below.  It used to be a single blocking call that sat
+    // in 12 x 350 ms delay()s: 4.2 s of wall clock that (a) ran inside
+    // setup_fc ahead of the in-flight-reboot check, and (b) cannot be moved
+    // into the flight loop as a blocking call because that task is subscribed
+    // to a 5 s panic watchdog.  Servicing it across ticks fixes both.
+    // Call only where the vehicle is known NOT to be airborne.
+    void beginWiggle(uint32_t now_ms);
+    void serviceWiggle(uint32_t now_ms);
+    bool isWiggling() const { return wiggle_active_; }
+    // Abandon a sweep in progress without moving anything. Used when launch is
+    // detected mid-sweep: the flight control path takes over the outputs on the
+    // same tick, so the sweep must simply stop claiming them.
+    void cancelWiggle() { wiggle_active_ = false; }
+    // Per-step dwell and the total wall-clock duration of the sweep (4 servos
+    // x 3 positions x kWiggleStepMs), for callers that report progress.
+    // Literals rather than LEDC_CHANNEL_COUNT because that member is declared
+    // further down; a static_assert in the .cpp pins them together.
+    static constexpr uint32_t kWiggleStepMs     = 350u;
+    static constexpr uint32_t kWiggleDurationMs = 4u * 3u * kWiggleStepMs;
     // return servos to centre
     void stowControl();
     // Relax the servos by stopping the PWM pulse train (0% duty -> output held
@@ -236,6 +267,14 @@ private:
     // (overshoot commanded) and serviceNeutralSettle() dropping to neutral.
     bool     neutral_settle_active_ = false;
     uint32_t neutral_settle_at_ms_  = 0;   // tick at/after which to settle
+
+    // Boot self-test sweep, serviced across ticks.  wiggle_step_ counts
+    // 0..(4*3-1) as servo-major, position-minor: step/3 is the servo, step%3
+    // selects min/max/centre.  wiggle_at_ms_ is the tick at/after which the
+    // NEXT step is commanded.
+    bool     wiggle_active_ = false;
+    uint8_t  wiggle_step_   = 0;
+    uint32_t wiggle_at_ms_  = 0;
 
     // LEDC channels/timers for four servos
     static constexpr int LEDC_CHANNEL_COUNT = 4;

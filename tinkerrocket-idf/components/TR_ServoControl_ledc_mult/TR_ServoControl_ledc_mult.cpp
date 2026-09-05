@@ -84,8 +84,17 @@ void TR_ServoControl::begin() {
                      esp_err_to_name(terr), esp_err_to_name(cerr));
         }
     }
-    // centre all servos
-    setPulse(0);
+    // Deliberately NO motion here.  ledc_channel_config() above left every
+    // channel at duty 0, which is precisely the state idle() produces: the
+    // output is held low, no pulse train reaches the servos, and the fins stay
+    // where they are.  Record that so idle() stays idempotent and the first
+    // real drive command resumes PWM through the normal path.
+    //
+    // This used to be setPulse(0) — a simultaneous four-channel snap to the raw
+    // pulse mid-point, issued from setup_fc before the firmware had asked
+    // whether the vehicle was still airborne, and gated only on the pins being
+    // mapped rather than on servo control being enabled at all.
+    is_idle_ = true;
 }
 
 void TR_ServoControl::setSetpoint(float setpoint) {
@@ -134,24 +143,54 @@ void TR_ServoControl::setFinCalibration(float finMinDeg, float finMaxDeg) {
     fin_max_deg_ = finMaxDeg;
 }
 
-void TR_ServoControl::wiggle() {
-    // Boot "servos alive" check.  Wiggle each servo individually, in order
-    // 0->1->2->3, so only ONE servo draws movement (inrush) current at a time.
-    // Sweeping all four at once stacked four inrush spikes on the shared rail,
-    // which could sag it enough to brown out the camera on the pad — a
-    // bandaid for that, until the next PCB's servo-power MOSFET.  Each servo
-    // returns to centre before the next begins; the others hold their
-    // begin()-set centre while one sweeps.
-    const int mid = (servo_min_us + servo_max_us) / 2;
-    constexpr int kSettleMs = 350;  // ample for an 8 g servo to traverse + be seen
-    for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
-        setPulseChannel(i, servo_min_us);  // min
-        delay(kSettleMs);
-        setPulseChannel(i, servo_max_us);  // max
-        delay(kSettleMs);
-        setPulseChannel(i, mid);           // back to centre
-        delay(kSettleMs);
+// Boot "servos alive" check.  Wiggles each servo individually, in order
+// 0->1->2->3, so only ONE servo draws movement (inrush) current at a time.
+// Sweeping all four at once stacked four inrush spikes on the shared rail,
+// which could sag it enough to brown out the camera on the pad — a bandaid for
+// that, until the next PCB's servo-power MOSFET.  Do NOT parallelise the
+// sequencing to save time; the one-at-a-time order is the point.
+//
+// Now a state machine rather than 12 blocking delay()s.  The old blocking form
+// cost 4.2 s inside setup_fc, ahead of the in-flight reboot check, and it could
+// not simply be relocated into the flight loop: that task is subscribed to a
+// 5 s panic watchdog (esp_task_wdt with trigger_panic), so a 4.2 s blocking
+// call there would sit at 84% of the panic deadline with no margin for a slow
+// tick.  Serviced across ticks it costs nothing and cannot trip the watchdog.
+static_assert(TR_ServoControl::kWiggleDurationMs == 4u * 3u * 350u,
+              "wiggle duration must match 4 servos x 3 positions x step dwell");
+
+void TR_ServoControl::beginWiggle(uint32_t now_ms) {
+    wiggle_active_ = true;
+    wiggle_step_   = 0;
+    wiggle_at_ms_  = now_ms;   // first step is commanded on the next service call
+}
+
+void TR_ServoControl::serviceWiggle(uint32_t now_ms) {
+    if (!wiggle_active_) return;
+    // Signed compare so the tick counter can wrap safely (same idiom as
+    // serviceNeutralSettle and the pad-relax wake gate in main.cpp).
+    if ((int32_t)(now_ms - wiggle_at_ms_) < 0) return;
+
+    constexpr uint8_t kSteps = 4 * 3;
+    if (wiggle_step_ >= kSteps) {          // sweep complete
+        wiggle_active_ = false;
+        return;
     }
+
+    const int mid     = (servo_min_us + servo_max_us) / 2;
+    const int servo   = wiggle_step_ / 3;
+    const int phase   = wiggle_step_ % 3;
+    const int pulse   = (phase == 0) ? servo_min_us
+                      : (phase == 1) ? servo_max_us
+                                     : mid;
+    setPulseChannel(servo, pulse);
+
+    // Note the dwell is applied AFTER the final step too: the deactivation
+    // branch above is reached only once wiggle_at_ms_ has expired again, so the
+    // closing centre command is actually held rather than being cut short by
+    // the caller seeing isWiggling() go false on the same tick it was issued.
+    ++wiggle_step_;
+    wiggle_at_ms_ = now_ms + kWiggleStepMs;
 }
 
 void TR_ServoControl::stowControl() {

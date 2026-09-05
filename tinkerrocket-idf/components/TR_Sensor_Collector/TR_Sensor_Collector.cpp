@@ -216,9 +216,38 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     ESP_LOGI(SC_TAG, "Initializing BMP585...");
     if (use_bmp585)
     {
+        // Bring-up deadline. This loop used to be unbounded: a dead or
+        // mis-wired barometer retried at ~510 ms per pass forever, so the FC
+        // never reached the end of begin(), never ran the in-flight reboot
+        // recovery that lives after it, and never started the flight loop —
+        // on EVERY reset reason, including a reboot in flight. delay_ms feeds
+        // the watchdog, so nothing rescued it; the boot simply never finished.
+        //
+        // The GNSS path already had exactly this deadline for exactly this
+        // reason (#557) and continues in a degraded mode on expiry. Do the
+        // same here: the altitude filter tolerates a missing barometer far
+        // better than the vehicle tolerates a computer that never boots.
+        // Sized to cover a slow but healthy part with wide margin while
+        // staying far below the time a flight actually takes.
+        constexpr uint32_t kBmpBringupTimeoutMs = 5000U;
+        const uint32_t bmp_deadline_ms = millis() + kBmpBringupTimeoutMs;
         uint32_t bmp_retry_count = 0;
+        bool bmp_ok = true;
         while (!bmp585.begin())
         {
+            // Checked before each RETRY, so one full attempt always completes.
+            if ((int32_t)(millis() - bmp_deadline_ms) >= 0)
+            {
+                bmp_ok = false;
+                ESP_LOGE(SC_TAG,
+                         "BMP585 bring-up FAILED after %lu attempts / %lu ms — "
+                         "continuing in a baro-absent degraded mode. Altitude, "
+                         "apogee detection and the barometric deployment paths "
+                         "are unavailable this flight.",
+                         (unsigned long)bmp_retry_count,
+                         (unsigned long)kBmpBringupTimeoutMs);
+                break;
+            }
             // NOTE the cached id is only assigned on a SUCCESSFUL begin(), so
             // on this path it is a stale value (0x00 on the first attempt) and
             // NOT something read from the sensor. Do not read it as evidence
@@ -247,33 +276,51 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             delay_ms(500);
         }
 
-        ESP_LOGI(SC_TAG, "BMP585 OK. chip_id = 0x%02X", bmp585.readChipId());
-
-        bool bmp_ok = true;
-        // Continuous mode ignores the ODR register (datasheet §4.3.6).
-        // Throughput is set solely by OSR: x1/x1 ≈ 498 Hz theoretical.
-        // Continuous mode (§4.3.6) ignores the ODR register — throughput is
-        // determined solely by OSR settings.  OSR x1/x1 yields ~460 Hz.
-        bmp_ok = bmp_ok && bmp585.setTemperatureOversampling(TR_BMP585::Oversampling::x1);
-        bmp_ok = bmp_ok && bmp585.setPressureOversampling(TR_BMP585::Oversampling::x1);
-        bmp_ok = bmp_ok && bmp585.setIirFilter(TR_BMP585::IirCoeff::Bypass,
-                                               TR_BMP585::IirCoeff::Bypass);
-        bmp_ok = bmp_ok && bmp585.enableDataReadyInterrupt(true, false, true, false);
-        bmp_ok = bmp_ok && bmp585.setPowerMode(TR_BMP585::PowerMode::Continuous);
-
-        if (!bmp_ok)
+        if (bmp_ok)
         {
-            ESP_LOGE(SC_TAG, "BMP585 configuration failed, stopping.");
-            while (1) { delay_ms(1000); }
+            ESP_LOGI(SC_TAG, "BMP585 OK. chip_id = 0x%02X", bmp585.readChipId());
+
+            // Continuous mode ignores the ODR register (datasheet §4.3.6) —
+            // throughput is determined solely by OSR settings.  OSR x1/x1
+            // yields ~460 Hz.
+            bmp_ok = bmp_ok && bmp585.setTemperatureOversampling(TR_BMP585::Oversampling::x1);
+            bmp_ok = bmp_ok && bmp585.setPressureOversampling(TR_BMP585::Oversampling::x1);
+            bmp_ok = bmp_ok && bmp585.setIirFilter(TR_BMP585::IirCoeff::Bypass,
+                                                   TR_BMP585::IirCoeff::Bypass);
+            bmp_ok = bmp_ok && bmp585.enableDataReadyInterrupt(true, false, true, false);
+            bmp_ok = bmp_ok && bmp585.setPowerMode(TR_BMP585::PowerMode::Continuous);
+
+            if (!bmp_ok)
+            {
+                // This used to be `while (1) { delay_ms(1000); }` — an
+                // unconditional, permanent hang inside begin(). A barometer
+                // that answered its chip ID but refused one configuration
+                // write took the whole flight computer down with it, on every
+                // boot, with no telemetry and no flight. Degrade instead, the
+                // same way the GNSS path does (#557).
+                ESP_LOGE(SC_TAG, "BMP585 configuration FAILED — continuing in a "
+                                 "baro-absent degraded mode.");
+            }
+            else
+            {
+                ESP_LOGI(SC_TAG, "BMP585 continuous mode active; throughput set "
+                                 "by OSR/filter (ODR ignored in this mode).");
+            }
         }
+        bmp585_online_ = bmp_ok;
 
-        ESP_LOGI(SC_TAG, "BMP585 continuous mode active; throughput set by OSR/filter (ODR ignored in this mode).");
-
-        bmp585_instance = this;
-        gpio_set_direction((gpio_num_t)(BMP585_INT), GPIO_MODE_INPUT);
-        gpio_set_intr_type((gpio_num_t)(BMP585_INT), GPIO_INTR_POSEDGE);
-        gpio_isr_handler_add((gpio_num_t)(BMP585_INT), &onBMP585IntTrampoline, nullptr);
-        gpio_intr_enable((gpio_num_t)(BMP585_INT));
+        // Only attach the data-ready interrupt for a part that is actually
+        // producing conversions. A dead or unconfigured sensor drives no edges,
+        // so the handler would never run — but leaving the pin as a live
+        // interrupt source on a floating input can chatter.
+        if (bmp_ok)
+        {
+            bmp585_instance = this;
+            gpio_set_direction((gpio_num_t)(BMP585_INT), GPIO_MODE_INPUT);
+            gpio_set_intr_type((gpio_num_t)(BMP585_INT), GPIO_INTR_POSEDGE);
+            gpio_isr_handler_add((gpio_num_t)(BMP585_INT), &onBMP585IntTrampoline, nullptr);
+            gpio_intr_enable((gpio_num_t)(BMP585_INT));
+        }
     }
 
     // ### Magnetometer auto-detection ###

@@ -580,6 +580,12 @@ static bool servo_replay_active = false;
 // #345 follow-up: while now_ms < this, READY/PRELAUNCH skip the per-tick
 // servo idle() so a just-applied trim stays driven and visible on the pad.
 static uint32_t servo_pad_wake_until_ms = 0;
+// One-shot: run the boot "servos alive" sweep on the first READY tick.
+// Set in setup_fc when servo control is enabled; consumed by the READY case.
+// Deliberately NOT consumed anywhere else — INFLIGHT (including a restored
+// flight) and every other state leave it set and untouched, so a vehicle that
+// boots straight into a recovered flight never sweeps a fin.
+static bool servo_boot_selftest_pending = false;
 static bool prev_sim_active = false;
 // Roll profile: (time, angle) waypoints for cascaded angle controller
 static RollProfileData roll_profile = {};  // zeroed → num_waypoints = 0 (rate-only)
@@ -3781,6 +3787,18 @@ static void setup_fc()
     // FCB_GNSS report immediately after begin() returns confirms it.
     fcBootStatus(FCB_SENSORS);
     sensor_collector.begin(config::SENSOR_CORE);
+    // The barometer bring-up is now bounded (it used to retry forever, which
+    // meant a dead part stopped the FC booting at all, on every reset reason).
+    // A boot that continued without it must SAY so — a silent baro-absent
+    // flight loses the altitude filter, apogee detection and the barometric
+    // deployment paths, and the operator has to learn that on the pad rather
+    // than from a missing deployment.
+    if (config::USE_BMP585 && !sensor_collector_hw.isBaroOnline())
+    {
+        ESP_LOGE(TAG, "[BARO] Barometer did NOT come up — flying baro-absent. "
+                      "Altitude/apogee/barometric deployment are unavailable.");
+        fcBootStatus(FCB_SENSORS, FCB_DEG_SENSORS);
+    }
 
     // #557: latch GNSS-absent mode.  isGnssOnline() is false when GNSS is built
     // in but the module failed bring-up (dead/deaf UART).  The FC then flies a
@@ -3980,30 +3998,26 @@ static void setup_fc()
         {
             servo_control.enableGainSchedule(config::GAIN_SCHEDULE_V_REF, config::GAIN_SCHEDULE_V_MIN);
         }
-        if (servo_enabled && config::SERVO_WIGGLE_ON_BOOT)
-        {
-            servo_control.wiggle();
-        }
-        if (servo_enabled)
-        {
-            // #345 follow-up: settle at the *commanded* neutral (0deg -> the
-            // physical fin-neutral incl. trim, via the fin calibration), NOT the
-            // raw pulse-midpoint the wiggle returns to.  Those two only coincide
-            // for a symmetric fin cal; with a per-model/asymmetric cal the wiggle
-            // leaves the tabs off the trimmed straight position.  Drive through
-            // the same setServoAngles() path the flight/servo-test neutral uses
-            // so the boot rest position matches exactly what was trimmed.
-            // #407: settle via the anti-backlash approach (overshoot then back)
-            // so the boot rest position is repeatable on a slightly worn servo;
-            // the per-tick serviceNeutralSettle() below completes it.
-            servo_control.beginNeutralSettle(time_ms());
-            // Hold that trimmed neutral briefly before the pad relax kicks in, so
-            // the operator can see/verify the tabs sit straight on boot instead
-            // of going limp the instant READY starts.
-            if (config::SERVO_RELAX_ON_PAD)
-                servo_pad_wake_until_ms = time_ms() + config::SERVO_PAD_TRIM_WAKE_MS;
-        }
-        ESP_LOGI(TAG, "Servo control %s, gain schedule %s (hardware ready)",
+        // NO SERVO MOTION IN setup_fc — see servo_boot_selftest_pending.
+        //
+        // This block used to run a 4.2 s stop-to-stop sweep of all four fins
+        // and then command a neutral settle, ~40 lines ABOVE the code that
+        // first asks whether this boot is a mid-flight reboot. On a reboot
+        // during flight that is uncommanded full-authority fin deflection at
+        // flight dynamic pressure with no control law running, and it delayed
+        // the recovery restore by the same 4.2 s. servo_control.begin() itself
+        // used to snap all four fins to the raw pulse mid-point, and it is not
+        // even gated on servo_enabled.
+        //
+        // The fix is structural rather than a new predicate: setup commands no
+        // motion at all, and the self-test is deferred to the first READY tick.
+        // Reaching READY is POSITIVE proof the vehicle is not resuming a
+        // flight — a restored flight enters INFLIGHT directly from setup and
+        // never passes through READY — so there is no reset-reason test to get
+        // wrong, and no path on which a boot can move a fin in the air.
+        servo_boot_selftest_pending = servo_enabled;
+        ESP_LOGI(TAG, "Servo control %s, gain schedule %s (hardware configured, "
+                      "no motion until READY)",
                       servo_enabled ? "enabled" : "disabled",
                       gain_sched_enabled ? "ON" : "OFF");
     }
@@ -4426,6 +4440,13 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
 {
     rocket_state = INFLIGHT;
     launch_time_millis = now_ms;
+    // A launch can land mid boot self-test (READY -> PRELAUNCH is automatic and
+    // the sweep runs for seconds). The flight control path drives all four
+    // outputs from this tick on, so abandon the sweep rather than let it keep
+    // claiming them; also retire the one-shot so a later sim reset back to
+    // READY does not start sweeping a vehicle that has already flown.
+    servo_control.cancelWiggle();
+    servo_boot_selftest_pending = false;
     // #848: latch our own power rail for the duration of the flight (sims
     // included — the release at LANDED/sim-reset makes it harmless and it
     // exercises the mechanism on the bench).
@@ -7615,9 +7636,55 @@ static void loop_fc()
             }
             case READY:
             {
+                // Boot "servos alive" sweep, deferred out of setup_fc to here.
+                // Reaching READY is the positive proof that this boot is not
+                // resuming a flight: a restored flight goes straight to
+                // INFLIGHT from setup and never enters this case. Starting the
+                // sweep here — rather than gating a setup-time sweep on a
+                // reset reason — means no boot can move a fin in the air even
+                // if the recovery decision itself is wrong.
+                if (servo_boot_selftest_pending && servo_enabled &&
+                    config::SERVO_WIGGLE_ON_BOOT)
+                {
+                    servo_boot_selftest_pending = false;
+                    servo_control.beginWiggle(now_ms);
+                    // Keep the tabs driven through the sweep and the settle
+                    // that follows it, then hold the trimmed neutral briefly so
+                    // the operator can see the fins sit straight before the pad
+                    // relax cuts the pulse train.
+                    servo_pad_wake_until_ms =
+                        now_ms + TR_ServoControl::kWiggleDurationMs +
+                        config::SERVO_PAD_TRIM_WAKE_MS;
+                    ESP_LOGI(TAG, "[SERVO] boot self-test sweep started (%u ms)",
+                             (unsigned)TR_ServoControl::kWiggleDurationMs);
+                }
+                else if (servo_boot_selftest_pending && servo_enabled)
+                {
+                    // Sweep compiled off: still settle to the trimmed neutral
+                    // once, which is what the old setup-time path did for the
+                    // no-wiggle build.
+                    servo_boot_selftest_pending = false;
+                    servo_control.beginNeutralSettle(now_ms);
+                    if (config::SERVO_RELAX_ON_PAD)
+                        servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
+                }
+
+                // Advance the boot sweep, then chain the anti-backlash neutral
+                // settle (#407) onto its end so the tabs finish at the
+                // *commanded* neutral (0 deg through the fin calibration,
+                // including trim) rather than the raw pulse mid-point the sweep
+                // returns to. Those two coincide only for a symmetric cal.
+                if (servo_enabled && servo_control.isWiggling())
+                {
+                    servo_control.serviceWiggle(now_ms);
+                    if (!servo_control.isWiggling())
+                        servo_control.beginNeutralSettle(now_ms);
+                }
+
                 // Advance an in-progress anti-backlash neutral settle (#407)
-                // started by boot-settle or a pad trim; a no-op otherwise.  Runs
-                // before the relax gate so it completes within the wake window.
+                // started by the boot sweep above or a pad trim; a no-op
+                // otherwise.  Runs before the relax gate so it completes within
+                // the wake window.
                 if (servo_enabled) servo_control.serviceNeutralSettle(now_ms);
 
                 // Relax the servos on the pad: cut the pulse train so the
@@ -7627,6 +7694,8 @@ static void loop_fc()
                 // Held off during the pad-trim wake window (#345 follow-up) so a
                 // just-applied trim stays driven long enough to see.
                 if (servo_enabled && config::SERVO_RELAX_ON_PAD &&
+                    !servo_control.isWiggling() &&
+                    !servo_control.isNeutralSettling() &&
                     (int32_t)(now_ms - servo_pad_wake_until_ms) >= 0)
                     servo_control.idle();
 
@@ -7666,6 +7735,17 @@ static void loop_fc()
             }
             case PRELAUNCH:
             {
+                // READY -> PRELAUNCH is automatic (out_ready + 4 sats + 3 s), so
+                // outdoors it can fire part-way through the boot self-test
+                // sweep. Keep servicing it here or the fins would stop mid-throw
+                // wherever the transition caught them.
+                if (servo_enabled && servo_control.isWiggling())
+                {
+                    servo_control.serviceWiggle(now_ms);
+                    if (!servo_control.isWiggling())
+                        servo_control.beginNeutralSettle(now_ms);
+                }
+
                 // Advance an in-progress anti-backlash neutral settle (#407),
                 // e.g. a trim applied while sitting in PRELAUNCH; no-op otherwise.
                 if (servo_enabled) servo_control.serviceNeutralSettle(now_ms);
@@ -7675,6 +7755,8 @@ static void loop_fc()
                 // launch_flag flips below.  Held off during the pad-trim wake
                 // window (#345 follow-up) so a just-applied trim stays visible.
                 if (servo_enabled && config::SERVO_RELAX_ON_PAD &&
+                    !servo_control.isWiggling() &&
+                    !servo_control.isNeutralSettling() &&
                     (int32_t)(now_ms - servo_pad_wake_until_ms) >= 0)
                     servo_control.idle();
 

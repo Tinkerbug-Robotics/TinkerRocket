@@ -163,6 +163,11 @@ public:
     // computer reads this to enter GNSS-absent mode (baro+IMU EKF init,
     // guidance forced off).  Always false when use_gnss is compiled out.
     bool isGnssOnline() const { return use_gnss && gnss_online_; }
+    // False when the barometer never completed bring-up or configuration, so
+    // begin() continued in a baro-absent degraded mode rather than hanging.
+    // The altitude filter, apogee detection and the barometric deployment
+    // paths all have no input in that case — the caller should say so loudly.
+    bool isBaroOnline() const { return use_bmp585 && bmp585_online_; }
 
     // Program IIS2MDC OFFSET_X/Y/Z hard-iron registers.  Returns false if
     // the IIS2MDC isn't active or the I2C write failed.  Issue #96.
@@ -215,6 +220,8 @@ private:
     // module fails bring-up (dead/deaf UART).  Gates the GNSS poll task and is
     // exposed via isGnssOnline() so the FC can enter GNSS-absent mode.
     bool gnss_online_ = true;
+    // Set by begin() once the barometer has both answered and been configured.
+    bool bmp585_online_ = false;
 
     // Set true after IIS2MDC is detected and configured at boot. When true,
     // the legacy MMC5983MA SPI path is skipped.
