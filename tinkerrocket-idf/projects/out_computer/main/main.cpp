@@ -6811,6 +6811,44 @@ void initPeripherals()
         logger.finishMramRecovery();
     }
 
+    // #1176: retire the V7/V8 MRAM snapshot slot on any boot that is NOT a
+    // recovery context.
+    //
+    // Until now the only thing that cleared that slot for a flight which never
+    // reached LANDED was the FC's setup-time clearFlightSnapshot()
+    // (flight_computer/main.cpp:4279) — a clear that fires precisely on the
+    // boots the token work is about to reclassify as possible recoveries. Left
+    // as it was, loosening the FC predicate would remove the slot's only
+    // retirement for that case and leave an INFLIGHT frame sitting in
+    // non-volatile memory indefinitely, answerable to any later fault reset.
+    //
+    // So retirement moves to the party that always runs, always knows the boot
+    // context, and does not need the FC to be powered at all. This strictly
+    // strengthens the current firmware on its own: today a flight that ended
+    // by a battery pull leaves a live INFLIGHT slot until some later boot
+    // happens to clear it.
+    //
+    // The MRAM is the V7/V8 store; V9/V10 have no MRAM part and are covered by
+    // the #846 NVS once-marker below.
+    if (logger.isMramEnabled() && !boot_rail_restored)
+    {
+        uint8_t zeroed[kSnapFrameLen] = {};
+        if (logger.mramRawWrite(config::SNAPSHOT_REGION_BASE,
+                                zeroed, sizeof(zeroed)))
+        {
+            ESP_LOGI("FLIGHTLOG", "#1176: MRAM snapshot slot retired — this boot "
+                                  "is not a recovery context");
+        }
+        else
+        {
+            // Loud, because the consequence is a stale INFLIGHT frame that
+            // outlives the flight it belongs to.
+            ESP_LOGE("FLIGHTLOG", "#1176: FAILED to retire the MRAM snapshot "
+                                  "slot — a stale in-flight frame may survive "
+                                  "into a later boot");
+        }
+    }
+
     // #846: re-seed the RAM snapshot cache from the NAND log stream — the
     // OC-also-reset half of in-flight reboot recovery on no-MRAM boards. The
     // snapshot frames rode the flight log (every received frame is enqueued
