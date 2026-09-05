@@ -57,6 +57,7 @@ static inline std::string itos(int v)
 #include "config.h"
 #include "ota_relay_policy.h"   // #834 items 6/7: I2S relay recovery timing
 #include "rail_restore_policy.h"  // #825: boot rail re-assert decision
+#include "flight_token_policy.h"  // #1176: tier-2 rail decision from a durable token
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
 #include <esp_adc/adc_oneshot.h>  // #850: camera/servo IMON reads
@@ -363,12 +364,30 @@ static void flightlogServicePendingFinalize()
     }
 }
 
+// #1176: services the deferred INFLIGHT token write. Defined with the token
+// store further down; declared here because this hook is wired into
+// TR_LogToFlash above that definition.
+static void tokenServiceInflightWrite();
+
 // Drives the deferred Core-0 work for TR_FlightLog. Wired into
 // TR_LogToFlash::flushTaskLoop via cfg.flush_task_hook so it executes on the
 // flush task's core (Core 0). Logs the prepareFlight outcome here because
 // TR_FlightLog itself stays free of ESP_LOG dependencies (host-testable).
 static void flightlogFlushTaskHook(void* /*ctx*/)
 {
+    // #1176 W2b — the one in-flight flash write, on Core 0, FIRST.
+    //
+    // Deferred here from the loop_oc launch edge for the same reason
+    // flightlogBeginFlight defers its own work: this task is where a NAND stall
+    // is already tolerated, and neither the loop nor the I2S parser can afford
+    // one. The write lands tens of milliseconds after launch detect, inside the
+    // window before the first NAND page of the flight exists — which is exactly
+    // why the token carries a snapshot frame at all.
+    //
+    // Defined below, with the rest of the token store; declared above this hook
+    // because the hook is wired into TR_LogToFlash before that point in the file.
+    tokenServiceInflightWrite();
+
     uint32_t id = 0;
     tr_flightlog::Status st = tr_flightlog::Status::Ok;
     const uint32_t evicted_before = flightlog.autoEvictedCount();
@@ -698,6 +717,148 @@ static bool pwr_pin_on = false;
 static constexpr size_t kSnapFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
 static uint8_t  snapshot_cache[kSnapFrameLen];
 static bool     snapshot_cache_valid = false;
+
+// ==========================================================================
+// SECTION: #1176 flight token — durable evidence that a flight was in progress
+// ==========================================================================
+// Survives a total power loss, which is the one thing RTC-retained state and
+// the reset-cause register cannot do. Decision table and the reasoning behind
+// every refusal live in flight_token_policy.h; this is only the store.
+//
+// It carries the last snapshot frame as well as the state, because on V9/V10
+// there are NO NAND PAGES for roughly the first half second of a flight — the
+// log session is still being prepared — so a reboot at the incident's own
+// timing (T+0.451 s) would have nothing to tail-scan even with a perfect
+// token. The carried frame is the last-resort source for exactly that window.
+struct __attribute__((packed)) FlightToken {
+    uint32_t magic;
+    uint8_t  state;        // FlightTokenPolicy::kTok*
+    uint8_t  attempts;     // auto-restore attempts consumed
+    uint16_t rsv;
+    uint8_t  have_frame;   // 1 = snap[] holds a launch-edge capture
+    uint8_t  pad[3];
+    uint8_t  snap[kSnapFrameLen];
+    uint32_t crc32;        // over everything above
+};
+
+static constexpr const char* kTokNvsPart = "flighttok";
+static constexpr const char* kTokNvsNs   = "flight";
+static constexpr const char* kTokNvsKey  = "tok";
+
+// Boot-time reads of the token, latched for the whole session.
+static FlightToken boot_token = {};
+static bool  boot_token_valid   = false;   // magic + CRC both good
+static bool  boot_token_restore = false;   // tier 2 said yes and the rail came up
+static bool  token_nvs_ok       = false;   // the partition opened at all
+static uint32_t boot_token_restore_ms = 0; // millis() at the restore, for the clear floor
+
+// A token-driven restore must not be retired by the very first non-INFLIGHT
+// frame it sees: the FC reports INITIALIZATION while it is still deciding, and
+// clearing on that would destroy the record the FC is in the middle of asking
+// for. Ten seconds is comfortably past the FC's whole recovery handshake.
+static constexpr uint32_t kTokenClearFloorMs = 10000;
+
+static uint32_t tokenCrc(const FlightToken& t)
+{
+    CRC32 crc;
+    crc.add(reinterpret_cast<const uint8_t*>(&t), offsetof(FlightToken, crc32));
+    return crc.calc();
+}
+
+// Read the token. Fails CLOSED: any error leaves `out` zeroed and returns
+// false, which every caller treats as "no flight was in progress".
+static bool tokenRead(FlightToken& out)
+{
+    out = FlightToken{};
+    nvs_handle_t h;
+    if (nvs_open_from_partition(kTokNvsPart, kTokNvsNs, NVS_READONLY, &h) != ESP_OK)
+        return false;
+    size_t len = sizeof(out);
+    const esp_err_t err = nvs_get_blob(h, kTokNvsKey, &out, &len);
+    nvs_close(h);
+    if (err != ESP_OK || len != sizeof(out)) { out = FlightToken{}; return false; }
+    if (out.magic != FlightTokenPolicy::kFlightTokenMagic ||
+        out.crc32 != tokenCrc(out))
+    {
+        out = FlightToken{};
+        return false;
+    }
+    return true;
+}
+
+// Write the token and READ IT BACK. The read-back is not belt and braces: the
+// attempt counter is the only bound on repeated restores, so a write that
+// silently failed would leave that bound non-existent. Callers that are
+// incrementing the counter must refuse the restore when this returns false.
+static bool tokenWrite(FlightToken& t)
+{
+    t.magic = FlightTokenPolicy::kFlightTokenMagic;
+    t.crc32 = tokenCrc(t);
+    nvs_handle_t h;
+    if (nvs_open_from_partition(kTokNvsPart, kTokNvsNs, NVS_READWRITE, &h) != ESP_OK)
+        return false;
+    esp_err_t err = nvs_set_blob(h, kTokNvsKey, &t, sizeof(t));
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    if (err != ESP_OK) return false;
+
+    FlightToken back = {};
+    if (!tokenRead(back)) return false;
+    return back.state == t.state && back.attempts == t.attempts &&
+           back.have_frame == t.have_frame && back.crc32 == t.crc32;
+}
+
+// Set the token's state, preserving the carried frame unless asked to drop it.
+static bool tokenSetState(uint8_t state, bool keep_frame, const uint8_t* frame)
+{
+    FlightToken t = {};
+    (void)tokenRead(t);          // a corrupt/absent token simply starts from zero
+    t.state = state;
+    if (frame) { memcpy(t.snap, frame, kSnapFrameLen); t.have_frame = 1; }
+    else if (!keep_frame)       { memset(t.snap, 0, kSnapFrameLen); t.have_frame = 0; }
+    return tokenWrite(t);
+}
+
+// RAM staging for the launch-edge write. The blob write itself runs on the
+// Core-0 flush task (see flightlogFlushTaskHook) rather than in the loop or the
+// I2S parser, so the one in-flight flash write never lands in a latency-
+// critical path.
+static volatile bool token_inflight_write_pending = false;
+static uint8_t  token_pending_frame[kSnapFrameLen];
+static bool     token_pending_have_frame = false;
+static portMUX_TYPE token_pending_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// Runs on the Core-0 flush task; see the call site in flightlogFlushTaskHook.
+static void tokenServiceInflightWrite()
+{
+    if (!token_inflight_write_pending) return;
+    token_inflight_write_pending = false;
+
+    uint8_t frame[kSnapFrameLen];
+    bool have;
+    portENTER_CRITICAL(&token_pending_mux);
+    have = token_pending_have_frame;
+    if (have) memcpy(frame, token_pending_frame, kSnapFrameLen);
+    portEXIT_CRITICAL(&token_pending_mux);
+
+    FlightToken t = {};
+    t.state    = FlightTokenPolicy::kTokInflight;
+    t.attempts = 0;                     // a new flight gets a full budget
+    if (have) { memcpy(t.snap, frame, kSnapFrameLen); t.have_frame = 1; }
+    if (tokenWrite(t))
+    {
+        ESP_LOGW("PWR", "#1176: flight token set INFLIGHT (carried frame %s)",
+                 have ? "yes" : "no");
+    }
+    else
+    {
+        // Not fatal to the flight, but it means this flight cannot be recovered
+        // from a power-loss reboot. Say so, rather than leaving it to be
+        // discovered from a silent failure to come back.
+        ESP_LOGE("PWR", "#1176: INFLIGHT token write FAILED — a power-loss "
+                        "reboot will NOT recover this flight");
+    }
+}
 // #846: set once the cache has actually been handed to the FC. The boot
 // re-seed's once-marker is written on CONSUMPTION, not on seeding — a
 // marker written at seed time would burn the flight's only chance if a
@@ -3620,6 +3781,21 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // the frame's own flight_elapsed_ms bounds it — enough to refuse
             // a slot left INFLIGHT by a flight that has since timed out.
             have = true;
+        }
+        else if (boot_token_restore && boot_token.have_frame &&
+                 snapshotServable(boot_token.snap, 0))
+        {
+            // #1176 third source, and on V9/V10 it is the ONLY one for a reboot
+            // in the first half second of a flight: the log session is still
+            // being prepared then, so there are no NAND pages to tail-scan and
+            // no MRAM part to fall back on. The token carries the launch-edge
+            // frame precisely for that window. Age is unknown (the token has no
+            // clock), so only the frame's own flight_elapsed_ms bounds it —
+            // the same bound the V7/V8 MRAM slot has always had.
+            memcpy(snap_frame, boot_token.snap, kSnapFrameLen);
+            have = true;
+            ESP_LOGW("OC", "[RECOVERY] serving the snapshot carried in the "
+                           "flight token");
         }
         else if (had_cache)
         {
@@ -6830,7 +7006,7 @@ void initPeripherals()
     //
     // The MRAM is the V7/V8 store; V9/V10 have no MRAM part and are covered by
     // the #846 NVS once-marker below.
-    if (logger.isMramEnabled() && !boot_rail_restored)
+    if (logger.isMramEnabled() && !boot_rail_restored && !boot_token_restore)
     {
         uint8_t zeroed[kSnapFrameLen] = {};
         if (logger.mramRawWrite(config::SNAPSHOT_REGION_BASE,
@@ -6873,7 +7049,12 @@ void initPeripherals()
     // magic/version/INFLIGHT/CRC32/sim regardless, so this is belt on braces.
     if (!logger.isMramEnabled() && flightlog.isInitialized())
     {
-        const bool cold_boot = (esp_reset_reason() == ESP_RST_POWERON);
+        // #1176: "is this a recovery context?" is now answered by the token,
+        // not by the reset reason. The old test asked ESP_RST_POWERON, which
+        // is both unsound (the S3 aliases chip-brownout to it) and wrong in the
+        // other direction (the operator's own power-off produces ESP_RST_SW and
+        // was therefore misclassified as a recovery context -- #1157).
+        const bool cold_boot = !boot_rail_restored && !boot_token_restore;
         uint32_t best_id = 0;
         int best_idx = -1;
         uint32_t newest_id = 0;
@@ -7376,6 +7557,15 @@ static void setup_oc()
             magic_ok && rail_rtc.rail_on != 0,
             magic_ok && rail_rtc.deliberate_off != 0,
             magic_ok ? rail_rtc.restore_attempts : 0);
+        // #1176: capture both of these BEFORE the blocks below consume them.
+        // deliberate_off is zeroed a few lines down as a one-shot, and the
+        // stand-down block clears restore_attempts — but tier 2 needs to see
+        // both, or the two crash-loop bounds stop composing and the second
+        // silently re-arms the first.
+        const bool tier1_deliberate_off = magic_ok && rail_rtc.deliberate_off != 0;
+        const bool tier1_stood_down =
+            magic_ok &&
+            rail_rtc.restore_attempts >= RailRestorePolicy::kMaxRestoreAttempts;
         if (!magic_ok || rst == ESP_RST_POWERON)
         {
             rail_rtc = {kRailRtcMagic, 0, 0, 0};
@@ -7400,6 +7590,97 @@ static void setup_oc()
                 digitalWrite(config::GPS_PWR_PIN, HIGH);
             }
         }
+
+        // ── #1176 TIER 2: the durable flight token ───────────────────────────
+        // Tier 1 above is untouched and stays first: it wins the ~0.8 s
+        // R84/C105 decay race on fault resets, which is the whole point of
+        // #825, and must not grow a millisecond. Tier 2 runs only where tier 1
+        // DECLINED — by which point the rail is already fully down and there is
+        // no decay window left to lose, which is what licenses touching NVS
+        // here at all.
+        //
+        // Entry is `!boot_rail_restored`, deliberately NOT "the reset was a
+        // power-on". The S3's reset-cause register aliases a chip-level
+        // brownout to a power-on (both 0x01), and a glitch reset can lose the
+        // RTC magic tier 1 depends on while reporting something else entirely.
+        // Keying tier 2 on POWERON would exclude exactly the resets that need
+        // it most.
+        if (!boot_rail_restored)
+        {
+            // The token partition is separate from the shared `nvs`, so it
+            // needs its own init. A failure here is not fatal: it simply means
+            // no token can be read or written, and shouldAutoRestore refuses.
+            esp_err_t terr = nvs_flash_init_partition(kTokNvsPart);
+            if (terr == ESP_ERR_NVS_NO_FREE_PAGES ||
+                terr == ESP_ERR_NVS_NEW_VERSION_FOUND)
+            {
+                nvs_flash_erase_partition(kTokNvsPart);
+                terr = nvs_flash_init_partition(kTokNvsPart);
+            }
+            token_nvs_ok = (terr == ESP_OK);
+            if (!token_nvs_ok)
+            {
+                ESP_LOGE("PWR", "#1176: flight-token partition unavailable (%s) "
+                                "— in-flight reboot recovery is DISABLED this "
+                                "boot", esp_err_to_name(terr));
+            }
+            boot_token_valid = token_nvs_ok && tokenRead(boot_token);
+
+            if (FlightTokenPolicy::shouldAutoRestore(
+                    boot_token_valid, boot_token_valid, boot_token.state,
+                    boot_token.attempts, tier1_deliberate_off,
+                    tier1_stood_down, token_nvs_ok))
+            {
+                // Consume an attempt BEFORE raising the rail, and verify the
+                // write. The counter is the only bound on repeated restores; a
+                // write that silently failed would leave that bound
+                // non-existent, so a failure here refuses rather than
+                // proceeding with a void budget.
+                FlightToken t = boot_token;
+                t.attempts = (uint8_t)(t.attempts + 1);
+                if (tokenWrite(t))
+                {
+                    boot_token = t;
+                    boot_token_restore = true;
+                    pinMode(config::PWR_PIN, OUTPUT);
+                    digitalWrite(config::PWR_PIN, HIGH);
+                    if (config::GPS_PWR_PIN >= 0)
+                    {
+                        pinMode(config::GPS_PWR_PIN, OUTPUT);
+                        digitalWrite(config::GPS_PWR_PIN, HIGH);
+                    }
+                    // Keep the RTC view consistent with the rail we just
+                    // raised, so a SUBSEQUENT fault reset is handled by tier 1
+                    // in the normal way rather than falling to tier 2 again.
+                    rail_rtc.rail_on = 1;
+                    ESP_LOGE("PWR", "#1176: FC rail raised from the FLIGHT TOKEN "
+                                    "— a flight was in progress and never ended "
+                                    "cleanly (attempt %u/%u, carried frame %s). "
+                                    "Deployment stays inhibited until the FC "
+                                    "sees live evidence of flight.",
+                             (unsigned)t.attempts,
+                             (unsigned)FlightTokenPolicy::kMaxPoweronRestores,
+                             t.have_frame ? "yes" : "no");
+                }
+                else
+                {
+                    ESP_LOGE("PWR", "#1176: could not record a restore attempt "
+                                    "— REFUSING the token restore rather than "
+                                    "retrying without a bound");
+                }
+            }
+            else if (boot_token_valid &&
+                     boot_token.state == FlightTokenPolicy::kTokInflight)
+            {
+                ESP_LOGE("PWR", "#1176: a flight token says a flight was in "
+                                "progress, but the restore was refused "
+                                "(attempts %u/%u, tier1_stood_down=%d, "
+                                "deliberate_off=%d). Staying idle.",
+                         (unsigned)boot_token.attempts,
+                         (unsigned)FlightTokenPolicy::kMaxPoweronRestores,
+                         (int)tier1_stood_down, (int)tier1_deliberate_off);
+            }
+        }
     }
 
     // Ensure NVS is initialised (ESP-IDF on ESP32-P4/S3 may not auto-init)
@@ -7412,7 +7693,7 @@ static void setup_oc()
 
     delay(500);
 
-    if (!boot_rail_restored)
+    if (!boot_rail_restored && !boot_token_restore)
     {
         pinMode(config::PWR_PIN, OUTPUT);
         digitalWrite(config::PWR_PIN, LOW);   // Start with power rail OFF
@@ -7428,7 +7709,7 @@ static void setup_oc()
                         "ON and this was not a power-on or a deliberate "
                         "power-off (#825). Peripherals re-init after setup.");
     }
-    pwr_pin_on = boot_rail_restored;
+    pwr_pin_on = boot_rail_restored || boot_token_restore;
 
     ESP_LOGI("OC", "Starting OutComputer (low-power mode)...");
     // V9 selects the same map as V8 on this MCU (see config.h) — reported
@@ -7696,8 +7977,14 @@ static void setup_oc()
     ble_app.setOtaRelayDelegate(ocOtaRelayBegin, ocOtaRelayFinish, ocOtaRelayAbort,
                                 ocOtaRelayData, nullptr);
 
-    if (boot_rail_restored)
+    if (boot_rail_restored || boot_token_restore)
     {
+        // #1176: a token restore takes the same path as a #825 rail restore —
+        // the rail is up, the FC is booting, and the peripheral bring-up must
+        // be DEFERRED to the loop core for the same GDMA/interrupt-affinity
+        // reason. Stamp the restore time so the split-brain guard has a floor
+        // to measure against.
+        if (boot_token_restore) boot_token_restore_ms = millis();
         // #825: the rail came back up at the top of setup. Stay OUT of
         // low-power mode — the FC is running — but DEFER the cmd-8 power-ON
         // side effects (initPeripherals etc.) to the first loop_oc iteration:
@@ -7924,6 +8211,87 @@ static void loop_oc()
                 // the FC's sim-start re-arm and let the new sim flight log.
                 oc_landed_lockout = false;
             }
+            // ── #1176 flight-token write sites ──────────────────────────
+            // All on loop_oc, never in the I2S parser task or an ISR: the
+            // measured core-1 stall that moved the flightlog bitmap off NVS
+            // is the precedent (see initPeripherals).
+            {
+                // W1 — ARMED, on reaching PRELAUNCH. A pad state; it never
+                // auto-restores, it only marks that a session was set up.
+                if (latest_rocket_state == PRELAUNCH &&
+                    prev_rs_lockout != PRELAUNCH && token_nvs_ok)
+                {
+                    if (!tokenSetState(FlightTokenPolicy::kTokArmed, false, nullptr))
+                        ESP_LOGE("PWR", "#1176: ARMED token write FAILED");
+                }
+                // W2 — INFLIGHT, on the PRELAUNCH -> INFLIGHT edge.
+                //
+                // The edge is PRELAUNCH->INFLIGHT and NOT the NSF_LAUNCH rising
+                // edge, and that is load-bearing: a restored flight enters
+                // INFLIGHT with no PRELAUNCH behind it, so it can never
+                // re-stamp its own token and refill its own restore budget.
+                // The degraded promotions that skip PRELAUNCH therefore write
+                // no token and fly without in-flight recovery — accepted,
+                // because the alternative reopens that hole.
+                //
+                // Only the RAM staging happens here. The blob write runs on the
+                // Core-0 flush task so the single in-flight flash write never
+                // lands in a latency-critical path.
+                if (latest_rocket_state == INFLIGHT &&
+                    prev_rs_lockout == PRELAUNCH && token_nvs_ok)
+                {
+                    portENTER_CRITICAL(&token_pending_mux);
+                    if (snapshot_cache_valid)
+                    {
+                        memcpy(token_pending_frame, snapshot_cache, kSnapFrameLen);
+                        token_pending_have_frame = true;
+                    }
+                    else
+                    {
+                        token_pending_have_frame = false;
+                    }
+                    portEXIT_CRITICAL(&token_pending_mux);
+                    token_inflight_write_pending = true;
+                }
+                // W4 — clear on LANDED, the primary retirement. Refutation of a
+                // stale restore reaches LANDED too, so a wrongly-restored board
+                // retires its own token after ONE restore; that is what lets
+                // the attempt budget be generous about genuine repeated power
+                // loss in the air.
+                if (latest_rocket_state == LANDED &&
+                    prev_rs_lockout != LANDED && token_nvs_ok)
+                {
+                    FlightToken t = {};
+                    t.state = FlightTokenPolicy::kTokNone;
+                    t.attempts = 0;
+                    if (tokenWrite(t))
+                        ESP_LOGI("PWR", "#1176: flight token cleared at LANDED");
+                    else
+                        ESP_LOGE("PWR", "#1176: token clear at LANDED FAILED");
+                }
+                // Split-brain guard: a token-driven restore whose FC reports a
+                // non-INFLIGHT state was a stale restore, so retire the token.
+                // Floored at kTokenClearFloorMs because the FC reports
+                // INITIALIZATION while it is still deciding, and clearing on
+                // that would destroy the record it is in the middle of asking
+                // for. Clears the TOKEN ONLY — never the MRAM slot.
+                if (boot_token_restore && token_nvs_ok &&
+                    latest_non_sensor_valid &&
+                    latest_rocket_state != INFLIGHT &&
+                    (uint32_t)(millis() - boot_token_restore_ms) > kTokenClearFloorMs)
+                {
+                    FlightToken t = {};
+                    t.state = FlightTokenPolicy::kTokNone;
+                    if (tokenWrite(t))
+                    {
+                        boot_token_restore = false;   // one-shot
+                        ESP_LOGW("PWR", "#1176: token retired — the restored FC "
+                                        "reports state %u, not INFLIGHT",
+                                 (unsigned)latest_rocket_state);
+                    }
+                }
+            }
+
             prev_rs_lockout = latest_rocket_state;
             const bool ns_launch = latest_non_sensor_valid &&
                                    nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
@@ -8821,6 +9189,18 @@ static void loop_oc()
                 // #825: mark this restart as the DELIBERATE power-off so the
                 // boot-time re-assert stands down — boot-time rail-LOW is
                 // load-bearing for this flow (the reset IS the power-off).
+                // #1176: the operator is deliberately powering down, so any
+                // flight is over as far as recovery is concerned. Clear the
+                // token BEFORE the reboot that implements the power-off, or
+                // the next boot would restore the rail the operator just
+                // asked to drop.
+                if (token_nvs_ok)
+                {
+                    FlightToken t = {};
+                    t.state = FlightTokenPolicy::kTokNone;
+                    if (!tokenWrite(t))
+                        ESP_LOGE("PWR", "#1176: token clear at power-off FAILED");
+                }
                 rail_rtc = {kRailRtcMagic, 0, 1, 0};
                 digitalWrite(config::PWR_PIN, LOW);
                 if (config::GPS_PWR_PIN >= 0)

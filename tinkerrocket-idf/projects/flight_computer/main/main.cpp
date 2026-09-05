@@ -4063,25 +4063,42 @@ static void setup_fc()
     }
 
     // ── Inflight reboot recovery ────────────────────────────────────────────
-    // If the reset was unexpected (brownout, watchdog, panic), query the OC
-    // for the latest snapshot it received over I2S and restore state to
-    // resume INFLIGHT ops.  The snapshot lives in the OC's RAM cache, backed
-    // by the NAND log stream on no-MRAM boards and the MRAM slot on V7/V8
-    // (#104, #846) — no FC flash writes either way.
+    // Ask the OC for the latest snapshot it holds and, if it has a live one,
+    // restore state and resume INFLIGHT. The snapshot lives in the OC's RAM
+    // cache, backed by the NAND log stream on no-MRAM boards, the MRAM slot on
+    // V7/V8, and the flight token's carried frame (#104, #846, #1176) — no FC
+    // flash writes on any path.
+    //
+    // #1176: THE ASK IS NO LONGER GATED ON THE RESET REASON. It used to run
+    // only for a five-value fault whitelist, which excluded a power-on — and a
+    // power interruption is precisely the event this recovery exists for. Worse,
+    // the reset-cause register cannot support the distinction anyway: an
+    // ESP32-S3 aliases a chip-level brownout to a power-on (both 0x01), so the
+    // question "was this a fault?" has no reliable answer in silicon.
+    //
+    // The OC's ANSWER is the authority instead, and that is sound because the OC
+    // now retires its stores on any boot that is not a recovery context: the
+    // V7/V8 MRAM slot is zeroed at initPeripherals and the #846 NAND re-seed is
+    // gated on the flight token rather than on ESP_RST_POWERON. So "the OC has a
+    // servable INFLIGHT frame" now means "a flight really is in progress".
+    //
+    // The cost on a normal boot is one I2C exchange, because the retry loop
+    // stops the moment the OC answers ANYTHING. The retries only accumulate
+    // when the OC does not answer at all, which is the one case where cold
+    // starting mid-descent would be unrecoverable.
     {
         esp_reset_reason_t rst = esp_reset_reason();
         ESP_LOGI(TAG, "Reset reason: %s (%d)", resetReasonStr(rst), (int)rst);
 
-        bool unexpected_reset = (rst == ESP_RST_BROWNOUT ||
-                                 rst == ESP_RST_PANIC    ||
-                                 rst == ESP_RST_INT_WDT  ||
-                                 rst == ESP_RST_TASK_WDT ||
-                                 rst == ESP_RST_WDT);
-
         FlightSnapshotData snap = {};
         bool valid = false;
+        // True once the OC has given a real answer, of any kind. Distinguishes
+        // "the OC says there is no flight" from "the OC never answered" — the
+        // difference between safely clearing the record and destroying the one
+        // the next brownout would have needed (#834 item 3).
+        bool answered_no_flight = false;
 
-        if (unexpected_reset) {
+        {
             // #364/#846: bounded retries instead of the old single-shot. The
             // both-reset case (pack brownout) is exactly when the one boot
             // probe misses — the OC is still bringing its I2C slave up — and
@@ -4168,6 +4185,7 @@ static void setup_fc()
                                 } else {
                                     valid = true;
                                 }
+                                if (!valid) answered_no_flight = true;
                                 definitive = true;   // a real answer, either way
                                 // The OC demonstrably answered — latch it for
                                 // the #848/#859 hold reconciliation just below,
@@ -4184,6 +4202,7 @@ static void setup_fc()
                                 if (snap.magic == FlightSnapshotData::MAGIC &&
                                     snap.crc32 == computeSnapshotCRC(snap)) {
                                     definitive = true;
+                                    answered_no_flight = true;
                                 }
                                 out_ready = true;   // the OC answered
                             }
@@ -4316,6 +4335,16 @@ static void setup_fc()
             RecoveryArmGate::reset(recovery_arm_state, now_ms);
             recovery_gate_active  = true;
             recovery_apogee_armed = false;
+
+            // Owner's decision 4: a boot that came up believing a flight is in
+            // progress must be UNMISTAKABLE at the prep table, because with a
+            // live token the board now powers itself up the moment the pack is
+            // connected rather than waiting for the app's power button. Both
+            // LEDs held on is a state no other boot path produces — a normal
+            // boot leaves red on and blue off — so it reads at a glance from
+            // across a table without needing the app or the log.
+            gpio_set_level((gpio_num_t)(config::RED_LED_PIN), 1);
+            gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN), 1);
             ESP_LOGW(TAG, "[RECOVERY] Deployment channels INHIBITED until live "
                           "flight evidence — restored apogee withheld");
 
@@ -4328,14 +4357,22 @@ static void setup_fc()
             kinematics.launch_flag = true;
         }
 
-        // Clear stale snapshot on NORMAL boots only (prevents recovery on the
-        // next power cycle). #834 item 3: after an UNEXPECTED reset whose
-        // recovery FAILED (OC not ready, transport error), the record must
-        // survive — a follow-up brownout gets another chance at it, and the
-        // clear-on-failure used to destroy the snapshot on exactly the path
-        // that could not read it. A truly ended flight is cleared by the
-        // LANDED one-shot and by the next clean power cycle.
-        if (!reboot_recovery && !unexpected_reset) {
+        // Clear the stale snapshot only on a POSITIVE "there is no flight"
+        // answer from the OC.
+        //
+        // #834 item 3 established the rule this implements: after a failed
+        // recovery the record must SURVIVE, because a follow-up brownout gets
+        // another chance at it and clear-on-failure used to destroy the
+        // snapshot on exactly the path that could not read it. That rule was
+        // previously expressed as "clear on a normal reset reason", which
+        // #1176 removes as unsound — a power-loss boot took the clear branch
+        // and overwrote the record of the flight it was in the middle of.
+        //
+        // Expressed on the answer instead, it is strictly tighter: no answer
+        // means no clear, on every reset reason. A genuinely ended flight is
+        // still cleared here (the OC serves the LANDED frame), by the LANDED
+        // one-shot, and by the OC's own retirement of its stores.
+        if (!reboot_recovery && answered_no_flight) {
             clearFlightSnapshot();
         }
     }
