@@ -1622,6 +1622,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(FC_BOOT_STATUS_MSG),
         // FC->OC full config report (#915) — what the app readback can't see.
         MT(CONFIG_REPORT_MSG),
+        // FC->OC per-satellite GNSS report, log-only. First code in the 0x90
+        // block: 0xA0-0xFD is full (see RocketComputerTypes.h).
+        MT(GNSS_SAT_MSG),
     };
 #undef MT
 
@@ -1646,11 +1649,12 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 89 = 87 + Drift-Cast guidance point pair (#435, BLE cmd 28).
     // 90 = 89 + LORA_UPLINK_MSG (OC-self-emitted uplink RSSI/SNR record).
     // 91 = 90 + FC_BOOT_STATUS_MSG (FC->OC boot progress during setup_fc).
-    // 92 = 91 + CONFIG_REPORT_MSG (#915 full config report).  This leaves
-    //      exactly TWO free codes in the space (0xFC, 0xFD) — the next
-    //      message after those needs an escape/extended encoding, not a
-    //      thirteenth constant.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 92u)
+    // 92 = 91 + CONFIG_REPORT_MSG (#915 full config report).  This left
+    //      exactly TWO free codes in the space (0xFC, 0xFD), since taken by
+    //      the base station's own log records.
+    // 93 = 92 + GNSS_SAT_MSG (per-satellite GNSS record).  0xA0-0xFD being
+    //      full, it opens the 0x90-0x9F block — see RocketComputerTypes.h.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 93u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
@@ -1965,4 +1969,113 @@ TEST(LoraHopSentinels, OffScheduleMarkerCannotCollideWithChannelIndices) {
     EXPECT_LE(loraChannelCount(500.0f), 253);
     EXPECT_GT((int)LORA_NEXT_CH_HOP_OFFSCHEDULE,
               (int)loraChannelCount(125.0f));
+}
+
+
+// ---------------------------------------------------------------------------
+// GNSS per-satellite record (GNSS_SAT_MSG / GNSSSatData)
+//
+// Variable-length on the wire (10 + 6 * num_blocks), packed by gnssSatSelect()
+// with a tracked-first policy so truncation only ever drops satellites the
+// receiver is merely searching for.  These pin the layout the Python decoder
+// and the COCOM flight-log converter read, and the selection policy.
+// ---------------------------------------------------------------------------
+TEST(RocketComputerTypes, GnssSatRecord_WireLayout) {
+    EXPECT_EQ(sizeof(GNSSSatBlock), 6u);
+    EXPECT_EQ(GNSS_SAT_HEADER_BYTES, 10u);
+    EXPECT_EQ(sizeof(GNSSSatData), GNSS_SAT_HEADER_BYTES + 6u * GNSS_SAT_MAX_BLOCKS);
+    EXPECT_LE(sizeof(GNSSSatData), MAX_PAYLOAD);
+    EXPECT_EQ(gnssSatWireSize(0), 10u);
+    EXPECT_EQ(gnssSatWireSize(12), 82u);
+    EXPECT_EQ(gnssSatWireSize(GNSS_SAT_MAX_BLOCKS), sizeof(GNSSSatData));
+    // An over-count clamps to the struct rather than reading past it.
+    EXPECT_EQ(gnssSatWireSize(255), sizeof(GNSSSatData));
+    EXPECT_EQ(GNSS_SAT_MSG, 0x90);
+}
+
+TEST(RocketComputerTypes, GnssSatFlags_PackFieldsWithoutSmearing) {
+    const uint8_t f = gnssSatFlags(true, 7, 1, true, false);
+    EXPECT_TRUE(f & GNSS_SAT_F_USED);
+    EXPECT_EQ((f & GNSS_SAT_F_QUAL_MASK) >> GNSS_SAT_F_QUAL_SHIFT, 7);
+    EXPECT_EQ((f & GNSS_SAT_F_HEALTH_MASK) >> GNSS_SAT_F_HEALTH_SHIFT, 1);
+    EXPECT_TRUE(f & GNSS_SAT_F_EPH);
+    EXPECT_FALSE(f & GNSS_SAT_F_ALM);
+
+    // Out-of-range inputs are masked, never carried into a neighbouring field.
+    const uint8_t g = gnssSatFlags(false, 0xFF, 0xFF, false, true);
+    EXPECT_FALSE(g & GNSS_SAT_F_USED);
+    EXPECT_EQ((g & GNSS_SAT_F_QUAL_MASK) >> GNSS_SAT_F_QUAL_SHIFT, 7);
+    EXPECT_EQ((g & GNSS_SAT_F_HEALTH_MASK) >> GNSS_SAT_F_HEALTH_SHIFT, 3);
+    EXPECT_FALSE(g & GNSS_SAT_F_EPH);
+    EXPECT_TRUE(g & GNSS_SAT_F_ALM);
+}
+
+static GNSSSatBlock gnssSatTestBlock(uint8_t sv, uint8_t cno) {
+    GNSSSatBlock b{};
+    b.gnss_id = 0;
+    b.sv_id = sv;
+    b.cno_dbhz = cno;
+    return b;
+}
+
+TEST(RocketComputerTypes, GnssSatSelect_TrackedFirstReceiverOrderWithin) {
+    const GNSSSatBlock all[5] = {
+        gnssSatTestBlock(1, 40), gnssSatTestBlock(2, 0), gnssSatTestBlock(3, 35),
+        gnssSatTestBlock(4, 0),  gnssSatTestBlock(5, 20),
+    };
+    GNSSSatData out{};
+    gnssSatSelect(all, 5, out);
+    EXPECT_EQ(out.num_svs, 5);
+    EXPECT_EQ(out.num_blocks, 5);
+    EXPECT_EQ(out.sat[0].sv_id, 1);
+    EXPECT_EQ(out.sat[1].sv_id, 3);
+    EXPECT_EQ(out.sat[2].sv_id, 5);
+    EXPECT_EQ(out.sat[3].sv_id, 2);
+    EXPECT_EQ(out.sat[4].sv_id, 4);
+}
+
+TEST(RocketComputerTypes, GnssSatSelect_TruncationDropsOnlySilentEntries) {
+    // 48 in the receiver's table: tracked entries scattered among searching ones.
+    GNSSSatBlock all[48];
+    int tracked = 0;
+    for (int i = 0; i < 48; i++) {
+        const bool t = (i % 5 == 0) || (i % 7 == 0);
+        all[i] = gnssSatTestBlock((uint8_t)(i + 1), t ? 30 : 0);
+        tracked += t ? 1 : 0;
+    }
+    ASSERT_LT(tracked, (int)GNSS_SAT_MAX_BLOCKS);   // the second pass must run
+
+    GNSSSatData out{};
+    gnssSatSelect(all, 48, out);
+    EXPECT_EQ(out.num_svs, 48);
+    EXPECT_EQ(out.num_blocks, GNSS_SAT_MAX_BLOCKS);
+    int kept_tracked = 0;
+    for (int i = 0; i < out.num_blocks; i++) {
+        const bool t = out.sat[i].cno_dbhz > 0;
+        kept_tracked += t ? 1 : 0;
+        // Every tracked entry precedes every silent one.
+        EXPECT_EQ(t, i < tracked) << "block " << i;
+    }
+    EXPECT_EQ(kept_tracked, tracked);   // nothing with a signal was dropped
+}
+
+TEST(RocketComputerTypes, GnssSatSelect_MoreTrackedThanFitKeepsTheFirstN) {
+    GNSSSatBlock all[40];
+    for (int i = 0; i < 40; i++) all[i] = gnssSatTestBlock((uint8_t)(i + 1), 30);
+    GNSSSatData out{};
+    gnssSatSelect(all, 40, out);
+    EXPECT_EQ(out.num_svs, 40);
+    EXPECT_EQ(out.num_blocks, GNSS_SAT_MAX_BLOCKS);
+    for (int i = 0; i < GNSS_SAT_MAX_BLOCKS; i++) EXPECT_EQ(out.sat[i].sv_id, i + 1);
+}
+
+TEST(RocketComputerTypes, GnssSatSelect_EmptyLeavesHeaderTimesAlone) {
+    GNSSSatData out{};
+    out.time_us = 7;
+    out.itow_ms = 9;
+    gnssSatSelect(nullptr, 0, out);
+    EXPECT_EQ(out.num_svs, 0);
+    EXPECT_EQ(out.num_blocks, 0);
+    EXPECT_EQ(out.time_us, 7u);
+    EXPECT_EQ(out.itow_ms, 9u);
 }

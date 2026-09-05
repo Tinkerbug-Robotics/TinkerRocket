@@ -35,21 +35,19 @@ class TR_GNSSReceiverUBloxSerial
         /// Call this at >=2x the navigation rate for reliable capture.
         bool pollNewPVT(GNSSData &data);
 
-#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG
-        /// Ask the receiver for per-satellite reports (UBX-NAV-SAT). Call once
-        /// after begin(). Off in normal builds.
-        ///
-        /// The flight path never needs this: it polls NAV-PVT and takes the
-        /// satellite count from getSIV(). But #491 turns on telling a withheld
-        /// position (satellites still tracked at healthy C/N0) from a lost
-        /// signal (satellites gone), and that distinction is only visible
-        /// per-satellite. Without NAV-SAT the two are indistinguishable and the
-        /// measurement cannot be made at all.
-        bool enableSatDiag();
+        /// Non-blocking poll: parse any pending serial bytes and, if a new
+        /// UBX-NAV-SAT report has arrived since the last call, pack it into
+        /// `out` (tracked satellites first — gnssSatSelect) and return true.
+        /// begin() enables NAV-SAT at the navigation rate, so one arrives per
+        /// epoch alongside NAV-PVT; pair the two records by itow_ms.  Returns
+        /// false forever if the receiver refused the enable at begin().
+        bool pollNewSat(GNSSSatData &out);
 
-        /// Emit one line of fix state and one of per-satellite C/N0, in a form
-        /// cocom_fcdiag.py converts into the same UBX capture format the
-        /// conducted rig already analyses. Non-blocking; call about 1 Hz.
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG
+        /// Emit one line of fix state and one of per-satellite C/N0 over the
+        /// console, in the form cocom_fcdiag.py converts into the rig's UBX
+        /// capture format.  Reads the NAV-PVT and NAV-SAT caches; the flight
+        /// path (pollNewSat) owns the freshness flag.  Call about 1 Hz.
         void logSatDiag();
 #endif
 
@@ -60,6 +58,17 @@ class TR_GNSSReceiverUBloxSerial
         uart_port_t _uartPort;
 
         uint8_t update_rate_hz;
+
+        // NAV-SAT accepted by the receiver at begin().  False leaves
+        // pollNewSat() a no-op rather than failing GNSS bring-up: the fix is
+        // flight-critical, the per-satellite record is not.
+        bool sat_reports_enabled_ = false;
+
+        // Staging for pollNewSat(): every block the receiver reported this
+        // epoch, converted, before gnssSatSelect() picks the ones that fit.
+        // A member, not a stack array — 255 * 6 B on the poll task's stack
+        // is not worth the risk.
+        GNSSSatBlock sat_scratch_[UBX_NAV_SAT_MAX_BLOCKS];
 
         // SAM-M10Q "high performance navigation update rate" (integration
         // manual UBX-22020019 §2.1.5): verify the high-CPU-clock OTP

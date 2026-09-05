@@ -183,6 +183,7 @@ static IIS2MDCDataSI iis2mdc_latest_si = {};
 static bool have_iis2mdc_si = false;
 static GNSSData gnss_data;
 static uint8_t gnss_data_buffer[SIZE_OF_GNSS_DATA];
+static GNSSSatData gnss_sat_data;   // per-satellite report, logged beside gnss_data (GNSS_SAT_MSG)
 static NonSensorData non_sensor_data;
 static uint8_t non_sensor_data_buffer[SIZE_OF_NON_SENSOR_DATA];
 
@@ -4741,6 +4742,18 @@ static void loop_fc()
         (void)enqueueI2STx(GNSS_MSG,
                            gnss_data_buffer,
                            SIZE_OF_GNSS_DATA);
+    }
+
+    // Per-satellite report for the same epoch (GNSS_SAT_MSG).  Log-only: the
+    // FC reads nothing from it.  Sent at its wire length, not sizeof, so an
+    // epoch with 12 satellites costs 82 bytes rather than 202.  At 18 Hz and
+    // ~27 tracked satellites this is ~3 kB/s on top of the ~30 kB/s the
+    // sensors already put on the I2S link.
+    if (sensor_collector.getGNSSSatData(gnss_sat_data))
+    {
+        (void)enqueueI2STx(GNSS_SAT_MSG,
+                           reinterpret_cast<const uint8_t*>(&gnss_sat_data),
+                           gnssSatWireSize(gnss_sat_data.num_blocks));
     }
 
     // ==========================================================================

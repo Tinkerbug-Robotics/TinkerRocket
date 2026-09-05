@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-92 codes. The dispatch on both ends is a flat first-match chain, so
+93 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -120,8 +120,9 @@ this list is CI-enforced for uniqueness.
 | `0xF9` | `LORA_UPLINK_MSG` | OC → log | OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log |
 | `0xFA` | `FC_BOOT_STATUS_MSG` | FC → OC | FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only |
 | `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 169-byte ConfigReportData, everything the app's config |
+| `0x90` | `GNSS_SAT_MSG` | FC → OC | FC→OC over I2S: GNSSSatData, per-satellite C/N0 at every GNSS |
 
-> 53 of these 92 codes carry no comment in the header,
+> 53 of these 93 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -142,6 +143,7 @@ that changes size fails the build rather than corrupting a log silently.
 |--------|-------|
 | `FlightSnapshotData` | 224 |
 | `FlightSettingsData` | 220 |
+| `GNSSSatData` | 202 |
 | `ConfigReportData` | 169 |
 | `RollProfileData` | 76 |
 | `RollProfileData` | 76 |
@@ -184,6 +186,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `RollWaypoint` | 9 |
 | `ServoTestAnglesData` | 8 |
 | `LoRaFrameHeader` | 7 |
+| `GNSSSatBlock` | 6 |
 | `Vec3i16` | 6 |
 | `FcBootStatusData` | 4 |
 | `ServoReplayData` | 4 |

@@ -2008,7 +2008,7 @@ static uint32_t msg_count_end_flight = 0;
 static uint32_t msg_count_unknown = 0;
 // #569: types accepted by isKnownMessageType and written to the flight log by
 // the enqueue path, but with no live handler branch (GUIDANCE_TELEM_MSG,
-// FLIGHT_SETTINGS_MSG, LORA_MSG). They used to fall through to
+// FLIGHT_SETTINGS_MSG, LORA_MSG, GNSS_SAT_MSG). They used to fall through to
 // msg_count_unknown++, so a guided flight showed a climbing "unknown" rate
 // that read as I2S corruption and masked genuinely unknown frames.
 static uint32_t msg_count_logonly = 0;
@@ -2958,6 +2958,7 @@ static bool isKnownMessageType(uint8_t type)
         case I2C_TX_RESYNC:          // FC→OC over I2C — slave TX desync recovery (#402)
         case FC_BOOT_STATUS_MSG:     // FC→OC over I2C during setup_fc — boot progress
         case CONFIG_REPORT_MSG:      // FC→OC over I2S — full config report (#915)
+        case GNSS_SAT_MSG:           // FC→OC over I2S — per-satellite C/N0 every GNSS epoch, log-only
             return true;
         default:
             return false;
@@ -3661,12 +3662,13 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     }
     else if (type == GUIDANCE_TELEM_MSG ||
              type == FLIGHT_SETTINGS_MSG ||
-             type == LORA_MSG)
+             type == LORA_MSG ||
+             type == GNSS_SAT_MSG)
     {
         // #569: log-only types — no live handler by design (they exist for
         // the flight log; GUIDANCE_TELEM streams at up to 500 Hz in guided
-        // flight). Count them separately so "unknown" stays a real
-        // corruption signal.
+        // flight, GNSS_SAT at every GNSS epoch). Count them separately so
+        // "unknown" stays a real corruption signal.
         msg_count_logonly++;
     }
     else
