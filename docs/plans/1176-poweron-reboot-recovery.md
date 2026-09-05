@@ -258,7 +258,76 @@ the one quantity a reboot genuinely cannot establish — which is why the review
 had already deleted the only arm that used it, independently of the owner's
 ruling above. The two conclusions agree.
 
-## 6. Bench gates before any of this flies
+## 6. Gate zero: measured, 2026-09-05
+
+`Data_Analysis/replay_recovery_arm_gate.py` drives the real `RecoveryArmGate`
+together with the shipped `TR_KinematicChecks`, both compiled out of the
+firmware tree by `_recovery_arm_gate_shim.cpp` — the same no-drift pattern
+`replay_deployment_detector.py` uses. Run across **27 flights** (the whole
+`TestFlights` corpus with a launch and a usable IMU stream).
+
+Two fidelity choices make the numbers mean something, and both make the result
+worse rather than flattering it:
+
+- **The altitude filter is rebuilt cold at the simulated reboot.** A recovery
+  boot has no filter history. Replaying against the log's own warm
+  `baro_alt_rate` would never exercise the settle window.
+- **GNSS is suppressed for 30 s after the reboot.** `V_BCKP` is on the switched
+  rail, so a recovery boot cold-starts the receiver. Before this was modelled
+  the replay showed GNSS carrying almost every flight — an input the vehicle
+  would not have had.
+
+| Scenario | Sensors | Opened | Gate open (min / med / max) | Carried by |
+|---|---|---|---|---|
+| Reboot at T+0.5 s (the incident) | healthy | **27 / 27** | 1.00 / 3.15 / 10.96 s | free-fall 20, spin 3, descent 2, boost 2 |
+| Reboot at apogee + 3 s (under drogue) | healthy | **17 / 17** | 1.60 / 1.60 / 1.65 s | descent 17 |
+| Reboot at T+0.5 s | baro dead | 26 / 27 | 1.00 / 3.15 / 31.0 s | free-fall 20, spin 3, boost 2, gnss 1 |
+| Reboot at apogee + 3 s | baro dead | **10 / 17** | 2.94 / 31.0 / 31.0 s | gnss 5, spin 5 |
+
+The restored apogee is released exactly 1.00 s after the gate opens in every
+case, as designed.
+
+### What the replay found
+
+**The under-drogue case is tight and reliable.** With a healthy barometer, a
+reboot mid-descent opens the gate in 1.60 s and releases the apogee at 2.60 s,
+on every flight, with no spread worth reporting. That is the case the main
+charge depends on, and it is the answer to "does this cost us a deployment".
+
+**The boost arm barely works, and that is a real finding.** Every flight is
+under thrust at T+0.5 s, yet the acceleration arm carried only 2 of 27. The
+30 m/s² bar is crossed constantly during boost but not *continuously*: the
+recorded vibration is ±300 m/s² about the thrust level, so the unbroken 1 s
+hold keeps resetting. Twenty flights fell through to free-fall instead, i.e.
+they armed at burnout + 2 s rather than during boost. If boost-phase arming is
+wanted, the hold has to become a leaky accumulator rather than an unbroken run
+— the pattern `MainDeployGate`'s stuck-port check already uses.
+
+**The dead-barometer cost is now measured, not reasoned.** With no barometer,
+a mid-descent reboot fails to deploy on **7 of 17 flights**, and the ones that
+succeed wait ~31 s for GNSS. The failures are all short flights (14-22 s total)
+that land before the receiver acquires. This is the direct, quantified
+consequence of dropping the sensorless backstop (decision 1) and refusing to
+arm on altitude (decision 5). It was accepted deliberately; the number is
+recorded here so the trade is visible rather than implied.
+
+**The spin arm earns its place.** It carried 3 flights with healthy sensors and
+5 of the 10 successful dead-barometer descents — exactly the case the header
+argued it exists for.
+
+### What gate zero could NOT test
+
+The logs contain almost no pre-launch data (1-3 s), because a log session opens
+at launch detect. So the corpus cannot answer "does the gate stay shut on a
+rocket that is being handled", and the pad segments hoped for do not exist. The
+owner has ruled out the hand-carry and taped-port captures (no local terrain,
+no reliable way to block the port). **The remaining ground evidence is
+therefore a stationary bench capture**, which is cheap: power a board, leave it
+still for fifteen minutes, download. That would confirm the gate never opens
+and that refutation fires at ~30 s. Until then the ground case rests on the
+per-arm reasoning in `RecoveryArmGate.h`, not on data.
+
+## 7. Bench gates before any of this flies
 
 No threshold in this design has been measured; all are reasoned from source and
 physics. In particular:
