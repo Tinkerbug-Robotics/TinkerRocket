@@ -1,11 +1,18 @@
 # Rocket computer mini — fabrication and assembly notes
 
-> ## Board state — routed, placed, fills current
+> ## Board state — routed, placed, fills current; ONE part still to place
 >
-> **22.55 × 69.62 mm, 8 layers, 1.63 mm. Fully routed: 0 unconnected items, 2,152 track segments,
-> 585 vias. Zone fills verified current (a refill changes nothing). 31 DRC items remain, every one
-> silkscreen-cosmetic, an accepted decision, or a courtyard nudge — none affects fabrication.**
-> As of commit `932cf04`, 2026-09-04. The gerbers in `gerbers/` predate this and must be re-plotted.
+> **22.55 × 69.62 mm, 8 layers, 1.63 mm. Fully routed: 0 unconnected items, 2,184 track segments,
+> 596 vias. Zone fills refilled 2026-09-04 evening (they had gone stale behind eight new vias — a stale
+> fill is exactly how a 3V3–GND short reached a gerber once before). 18 DRC items remain: 14 silkscreen
+> cosmetics, the two accepted fiducial-in-courtyard overlaps (#1008), and two library-copy warnings —
+> none affects fabrication.** As of the 2026-09-04 evening commit (the #1169 pass). The gerbers in
+> `gerbers/` predate this and must be re-plotted.
+>
+> **Not yet on the board: `C152`, 100 nF 0402 on `VBUCK_OK` at U32 pin 8 (FC GPIO3).** It is on the
+> schematic and in `bom.csv`; update the PCB from the schematic, place it against pin 8 with its
+> ground on the local pour, refill, re-run DRC, then plot. Until then this file describes a board
+> with 220 placed parts and a BOM with 221.
 >
 > Standing rule: **never send this file to a fab house or an assembler with a `<TBD>` in it.**
 > There are none as of 2026-09-04; if one reappears, it is a number that does not exist yet. The `README` warns specifically
@@ -225,8 +232,8 @@ B8. C130 (5 F 2.7 V RADIAL SUPERCAPACITOR, 10 mm DIA x 20 mm,
     HOLE PART ON AN OTHERWISE REFLOW BOARD. HAND SOLDER AFTER
     BOTH PASSES. IT IS POLARISED: PAD 1 = V_SCAP (+), PAD 2 =
     GND (-). CONFIRM AGAINST THE SCHEMATIC, NOT THE SILKSCREEN.
-    THE CAN LIES OVER 31 PARTS - U16, J8, U19, U21, U23, D7, L11
-    AND 24 SMALL PASSIVES INCLUDING C149 - AND IS BONDED
+    THE CAN LIES OVER 26 PARTS - FID4, J8, U16, U19, U21 AND
+    U23 PLUS 20 SMALL PASSIVES INCLUDING C149 - AND IS BONDED
     DOWN WITH NEUTRAL/ALKOXY-CURE RTV - NEVER ACETOXY-CURE,
     WHICH RELEASES ACETIC ACID ONTO THE COPPER BENEATH IT.
     EVERYTHING UNDER THE CAN IS UNREWORKABLE ONCE BONDED, SO

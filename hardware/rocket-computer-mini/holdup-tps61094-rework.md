@@ -30,7 +30,8 @@ V_HOLD and V_UVLO_EN are gone. Added: U47 TPS61094DSSR (WSON-12), L7 2.2 µH
 (VCHG → 2.5 V), R136 22.1 k (ICHG → 100 mA) — all three 1%, values straight from
 the datasheet §8.2.4 reference design — C141 10 µF at VIN, C142 10 µF ceramic at
 V_SCAP (the prismatic cap's ~190 mΩ ESR needs a local ceramic for the 1 MHz boost
-pulses), and the VBUCK_OK divider R137 100 k / R138 1 M.
+pulses), and the VBUCK_OK divider R137 100 k / R138 1 M (R138 became 360 k under #1000,
+and C152 100 nF was added at the FC pin under #1169 — see the firmware handoff).
 
 **CAP_ACTIVE is renamed VBUCK_OK and INVERTED**: the TPS61094 has no status pin,
 so the MCU pin now watches a V_BUCK divider — HIGH = buck present, LOW = riding
@@ -141,7 +142,10 @@ job on this board. Sheet note and bom updated; netlist/ERC verified.
 
 - `VBUCK_OK` replaces `CAP_ACTIVE`, **inverted** (HIGH = buck present). Mini: FC
   GPIO3 only as of 2026-09-03 — the OC was taken off this net, see below; V10:
-  S3 GPIO34 (P4 via link). Drop the first-boot-blip handling.
+  S3 GPIO34 (P4 via link). Drop the first-boot-blip handling. The mini's pin has
+  a 100 nF reservoir (C152, 2026-09-04) so the ADC can also read it: 78 kΩ source
+  into the S3's sampling capacitor otherwise, the same defect #1022 fixed on
+  V_SCAP_ADC.
 - Backup detection = VBUCK_OK low; cap health = existing V_SCAP_ADC (unchanged,
   R125/R126). Shed choreography simplifies: the rail holds 3.0 V flat (mini;
   3.3 V on the V10 until it takes the same change); budget

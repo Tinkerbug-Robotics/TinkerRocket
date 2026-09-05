@@ -3304,16 +3304,7 @@
 		)
 		(uuid "45df924e-09e4-426d-b94c-9f358754e52a")
 	)
-	(wire
-		(pts
-			(xy 51.435 120.015) (xy 50.165 120.015)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "4badfa76-166a-440f-8b94-43703d5a0fc9")
-	)
+
 	(wire
 		(pts
 			(xy 229.87 73.025) (xy 229.87 81.915)
