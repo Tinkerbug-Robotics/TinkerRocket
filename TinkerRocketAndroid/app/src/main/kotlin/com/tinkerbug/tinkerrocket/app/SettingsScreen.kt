@@ -514,11 +514,28 @@ fun SettingsScreen(
                     NumField("Roll delay ms", active.rollDelayMs.toString(), Modifier.weight(1f)) { s ->
                         s.toIntOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rollDelayMs = v) } }
                     }
+                    NumField("Min speed m/s", fmt(active.rollMinSpeedMps), Modifier.weight(1f)) { s ->
+                        // Clamped to the firmware's accepted range: the rocket
+                        // rejects anything above it, and a gate that never opens
+                        // means no roll control for the whole flight.
+                        s.toFloatOrNull()?.let { v ->
+                            edit(ConfigGroup.ROLL_CONTROL) {
+                                it.copy(rollMinSpeedMps = v.coerceIn(0f, 300f))
+                            }
+                        }
+                    }
                 }
                 Caption(
                     "Milliseconds after launch before control activates — roll-rate-null and " +
                         "PN guidance both engage at this delay, keeping fins neutral through " +
                         "initial boost.",
+                )
+                Caption(
+                    "Min speed is the airspeed the rocket must reach before control activates. " +
+                        "Fin authority scales with speed squared, so a loop that starts on the " +
+                        "rail commands full deflection the fins cannot deliver and departs when " +
+                        "authority arrives. Applied on top of the roll delay: both must be " +
+                        "satisfied. 0 disables the speed gate.",
                 )
             }
 

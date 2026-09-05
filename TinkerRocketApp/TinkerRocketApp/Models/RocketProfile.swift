@@ -99,6 +99,10 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var gainScheduleEnabled: Bool = true
     var useAngleControl: Bool = false
     var rollDelayMs: UInt16 = 0
+    // Control-authority speed gate (m/s). Roll control and guidance wait for
+    // BOTH the activation delay and this airspeed. 0 = no speed gate, which is
+    // the firmware default (config::ROLL_CONTROL_MIN_SPEED_MPS).
+    var rollMinSpeedMps: Float = 0
     var rateCapDps: Float = 60          // outer-loop angle→rate cap (deg/s)
     var kpAngle: Float = 2.0            // outer angle-loop P-gain (cascaded angle control)
     var guidanceEnabled: Bool = false
@@ -323,6 +327,7 @@ extension RocketProfile {
         gainScheduleEnabled = try c.decodeIfPresent(Bool.self, forKey: .gainScheduleEnabled) ?? defaults.gainScheduleEnabled
         useAngleControl = try c.decodeIfPresent(Bool.self, forKey: .useAngleControl) ?? defaults.useAngleControl
         rollDelayMs = try c.decodeIfPresent(UInt16.self, forKey: .rollDelayMs) ?? defaults.rollDelayMs
+        rollMinSpeedMps = try c.decodeIfPresent(Float.self, forKey: .rollMinSpeedMps) ?? defaults.rollMinSpeedMps
         rateCapDps = try c.decodeIfPresent(Float.self, forKey: .rateCapDps) ?? defaults.rateCapDps
         kpAngle = try c.decodeIfPresent(Float.self, forKey: .kpAngle) ?? defaults.kpAngle
         guidanceEnabled = try c.decodeIfPresent(Bool.self, forKey: .guidanceEnabled) ?? defaults.guidanceEnabled

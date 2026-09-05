@@ -481,6 +481,18 @@ static bool servo_enabled = false;
 static bool gain_sched_enabled = config::GAIN_SCHEDULE_ENABLED;
 static bool use_angle_control = config::USE_ANGLE_CONTROL;
 static uint16_t roll_delay_ms = config::ROLL_CONTROL_DELAY_MS;
+// Control-authority speed gate: fins stay neutral until the EKF speed first
+// reaches this (m/s).  0 = gate off.  ANDed with roll_delay_ms.
+static float roll_min_speed_mps = config::ROLL_CONTROL_MIN_SPEED_MPS;
+// Per-flight latch: set the first tick the speed gate is satisfied, and never
+// cleared until the next launch/sim.  Without the latch the gate would re-close
+// as the vehicle slows toward apogee, stowing the fins and resetting the PID
+// mid-flight — and then re-opening on the descent, which is the one place roll
+// control is neither wanted nor trustworthy.
+static bool roll_speed_gate_open = false;
+// One-shot diagnostic: whether the "gate still shut" warning has been logged
+// for this flight.  Cleared with the latch.
+static bool roll_speed_gate_warned = false;
 static float kp_angle_rate_cap_dps = config::KP_ANGLE_RATE_CAP_DPS;
 
 // ==========================================================================
@@ -1906,6 +1918,14 @@ static void buildFlightSettings(FlightSettingsData& s)
                             flags |= (uint8_t)(1u << FlightSettingsData::F_GUIDANCE_STATION_KEEP);
     s.flags = flags;
     s.roll_delay_ms = roll_delay_ms;
+    // v8: the speed gate that flew, in 0.1 m/s units.  Clamped rather than
+    // wrapped so an absurd value reads as "very high gate", not as a low one.
+    {
+        float dm = roll_min_speed_mps * 10.0f;
+        if (!(dm > 0.0f))      dm = 0.0f;        // also catches NaN
+        if (dm > 65535.0f)     dm = 65535.0f;
+        s.roll_min_speed_dmps = (uint16_t)(dm + 0.5f);
+    }
 
     // Inner rate PID — live base gains (NVS/BLE-overridable, so read from
     // servo_control rather than config:: which is only the boot default).
@@ -3514,6 +3534,15 @@ static void setup_fc()
     gain_sched_enabled      = prefs.getBool("gs", config::GAIN_SCHEDULE_ENABLED);
     use_angle_control       = prefs.getBool("ac", config::USE_ANGLE_CONTROL);
     roll_delay_ms           = prefs.getUShort("rdly", config::ROLL_CONTROL_DELAY_MS);
+    roll_min_speed_mps      = prefs.getFloat("rmspd", config::ROLL_CONTROL_MIN_SPEED_MPS);
+    // A corrupt/absurd stored value must not create a gate that never opens.
+    if (!(roll_min_speed_mps >= 0.0f) ||
+        roll_min_speed_mps > config::ROLL_CONTROL_MIN_SPEED_MAX_MPS)
+    {
+        ESP_LOGW(TAG, "[ROLL CFG] NVS speed gate %.1f m/s out of range - gate OFF",
+                      (double)roll_min_speed_mps);
+        roll_min_speed_mps = 0.0f;
+    }
     kp_angle_rate_cap_dps   = prefs.getFloat("rcap", config::KP_ANGLE_RATE_CAP_DPS);
     kp_angle_outer          = prefs.getFloat("kpang", config::KP_ANGLE);
     integral_sep_threshold_dps = prefs.getFloat("iwind", config::INTEGRAL_SEP_THRESHOLD_DPS);
@@ -3567,6 +3596,12 @@ static void setup_fc()
     ESP_LOGI(TAG, "Angle control: %s  Roll delay: %u ms  Rate cap: %.1f dps",
                   use_angle_control ? "ON" : "OFF", (unsigned)roll_delay_ms,
                   (double)kp_angle_rate_cap_dps);
+    if (roll_min_speed_mps > 0.0f) {
+        ESP_LOGI(TAG, "Roll speed gate: %.1f m/s (control waits for delay AND speed)",
+                      (double)roll_min_speed_mps);
+    } else {
+        ESP_LOGI(TAG, "Roll speed gate: OFF (time delay only)");
+    }
 #if TR_GUIDANCE_AVAILABLE
     ESP_LOGI(TAG, "Guidance: %s  law=%s (compiled in)",
                   guidance_enabled ? "ON" : "OFF",
@@ -4159,6 +4194,15 @@ static void setup_fc()
 
             // Rebase timestamps to new time_ms() epoch
             launch_time_millis = now_ms - snap.flight_elapsed_ms;
+            // The control-authority speed gate is NOT in the snapshot, so it
+            // starts shut and has to re-satisfy after a mid-flight reboot.
+            // That is deliberate rather than an omission: reboot_recovery
+            // already stows the fins through the settle, a boost/coast reboot
+            // re-opens the gate on the first tick (the vehicle is fast), and a
+            // descent reboot leaves the fins neutral — which is where roll
+            // control is neither wanted nor trustworthy anyway.  Keeping it out
+            // of FlightSnapshotData avoids a snapshot version bump that would
+            // make every v4 snapshot on the boards unreadable.
             if (snap.pyro_apogee_detected) {
                 pyro_apogee_detected = true;
                 pyro_apogee_time_ms = launch_time_millis + snap.apogee_elapsed_ms;
@@ -4390,6 +4434,8 @@ static void resetFlightStateForSim(const char* edge)
     deployment_time_ms  = 0;
     applyImuRateForFlightPhase();
     guidance_active = false;
+    roll_speed_gate_open = false;      // re-arm the control-authority speed gate
+    roll_speed_gate_warned = false;
     reboot_recovery = false;
     reboot_recovery_telem = false;
     clearFlightSnapshot();
@@ -4547,6 +4593,8 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     applyImuRateForFlightPhase();
     guidance_active = false;
     guidance_tilt_inhibited = false;   // clear tilt-limit latch
+    roll_speed_gate_open = false;      // re-arm the control-authority speed gate
+    roll_speed_gate_warned = false;
     // Reset pyro channels on launch. ARM stays LOW until a
     // channel's trigger fires (per-fire arming on new PCB).
     pyro_apogee_detected = false;
@@ -6928,13 +6976,33 @@ static void loop_fc()
                         integral_sep_threshold_dps = rc.integral_sep_threshold_dps;
                         applyRollPidSepThreshold(integral_sep_threshold_dps);  // #268: both roll PIDs
                     }
-                    ESP_LOGI(TAG, "[ROLL CFG] angle_ctrl=%s delay=%u ms rate_cap=%.0f kp_angle=%.2f iwindup=%.0f",
+                    // Control-authority speed gate: 0 turns the gate off, so
+                    // unlike the gains above the accepted range INCLUDES zero.
+                    // A negative or non-finite value is garbage and leaves the
+                    // gate as it was; too large a value is rejected rather than
+                    // stored, because a gate that can never open silently
+                    // disables roll control for every future flight.
+                    if (rc.roll_min_speed_mps >= 0.0f &&
+                        rc.roll_min_speed_mps <= config::ROLL_CONTROL_MIN_SPEED_MAX_MPS)
+                    {
+                        roll_min_speed_mps = rc.roll_min_speed_mps;
+                    }
+                    else
+                    {
+                        ESP_LOGW(TAG, "[ROLL CFG] speed gate %.1f m/s rejected (0-%.0f) - keeping %.1f",
+                                      (double)rc.roll_min_speed_mps,
+                                      (double)config::ROLL_CONTROL_MIN_SPEED_MAX_MPS,
+                                      (double)roll_min_speed_mps);
+                    }
+                    ESP_LOGI(TAG, "[ROLL CFG] angle_ctrl=%s delay=%u ms min_speed=%.1f m/s rate_cap=%.0f kp_angle=%.2f iwindup=%.0f",
                                   use_angle_control ? "ON" : "OFF",
-                                  (unsigned)roll_delay_ms, (double)kp_angle_rate_cap_dps,
+                                  (unsigned)roll_delay_ms, (double)roll_min_speed_mps,
+                                  (double)kp_angle_rate_cap_dps,
                                   (double)kp_angle_outer, (double)integral_sep_threshold_dps);
                     prefs.begin("servo", false);
                     prefs.putBool("ac", use_angle_control);
                     prefs.putUShort("rdly", roll_delay_ms);
+                    prefs.putFloat("rmspd", roll_min_speed_mps);
                     prefs.putFloat("rcap", kp_angle_rate_cap_dps);
                     prefs.putFloat("kpang", kp_angle_outer);
                     prefs.putFloat("iwind", integral_sep_threshold_dps);
@@ -7775,13 +7843,74 @@ static void loop_fc()
 
                 if (servo_enabled)
                 {
-                    // Delay roll control activation after launch if configured
-                    if (reboot_recovery || t_since_launch_ms < roll_delay_ms)
+                    // --- Control-authority speed gate (2026-08-29 54 mm) ---
+                    // Fin authority scales with V^2, so on a low-thrust rail
+                    // exit the loop can be commanding full deflection while the
+                    // fins can barely answer.  That is what the 54 mm roll
+                    // flight did with delay 0: engaged at 7 m/s, sat at the
+                    // +/-20 deg command limit for a third of the first half
+                    // second, and departed to 904 deg/s of roll at T+0.50 s as
+                    // authority arrived.  The gate holds the fins neutral until
+                    // the vehicle is actually fast enough to steer.
+                    //
+                    // Speed source is the EKF velocity — the same `speed` the
+                    // gain schedule and guidance already use, so one number
+                    // decides "is there authority" everywhere.  It is only
+                    // meaningful once the filter has initialised; before that
+                    // imu_vel is a stale zero and the gate stays shut, which is
+                    // the safe direction.
+                    //
+                    // Latched: once open it stays open for the flight (see
+                    // roll_speed_gate_open).  If it never opens the fins stay
+                    // neutral for the whole flight — burnout, apogee and every
+                    // pyro channel are detected above this block and are
+                    // unaffected, so a vehicle that never reaches the gate
+                    // still recovers normally.
+                    if (!roll_speed_gate_open)
                     {
-                        // Hold fins neutral until delay/settle elapses.  #270:
-                        // centre the fins (no PID) and reset the integral — the
-                        // pre-roll_delay window must not accumulate an offset that
-                        // would jerk the fins when roll control activates.
+                        if (roll_min_speed_mps <= 0.0f)
+                        {
+                            roll_speed_gate_open = true;   // gate disabled
+                        }
+                        else if (ekf_initialized && ism6_fresh)
+                        {
+                            const float gate_speed = sqrtf(imu_vel[0]*imu_vel[0] +
+                                                           imu_vel[1]*imu_vel[1] +
+                                                           imu_vel[2]*imu_vel[2]);
+                            if (gate_speed >= roll_min_speed_mps)
+                            {
+                                roll_speed_gate_open = true;
+                                ESP_LOGI(TAG, "[CTRL] Speed gate OPEN at %.1f m/s "
+                                              "(>= %.1f) T+%lu ms - roll control armed",
+                                              (double)gate_speed, (double)roll_min_speed_mps,
+                                              (unsigned long)t_since_launch_ms);
+                            }
+                        }
+                        if (!roll_speed_gate_open && !roll_speed_gate_warned &&
+                            t_since_launch_ms >= config::ROLL_CONTROL_SPEED_GATE_WARN_MS)
+                        {
+                            roll_speed_gate_warned = true;
+                            ESP_LOGW(TAG, "[CTRL] Speed gate still SHUT at T+%lu ms "
+                                          "(need %.1f m/s, ekf_init=%d) - fins stay neutral",
+                                          (unsigned long)t_since_launch_ms,
+                                          (double)roll_min_speed_mps, ekf_initialized ? 1 : 0);
+                        }
+                    }
+
+                    // Delay roll control activation after launch if configured.
+                    // Time and speed gates are ANDed: control starts when the
+                    // delay has elapsed AND the vehicle has enough authority.
+                    if (reboot_recovery || t_since_launch_ms < roll_delay_ms ||
+                        !roll_speed_gate_open)
+                    {
+                        // Hold fins neutral until delay/settle elapses and the
+                        // speed gate opens.  #270: centre the fins (no PID) and
+                        // reset the integral — the pre-activation window must
+                        // not accumulate an offset that would jerk the fins when
+                        // roll control activates.  That reset is what keeps the
+                        // speed gate from simply deferring the 54 mm departure:
+                        // the loop starts from a clean integrator at the moment
+                        // the fins can answer.
                         servo_control.stowControl();
                         servo_control.resetPID();
                         // #568: defensive — can't be true here on a normal flight
@@ -7816,10 +7945,10 @@ static void loop_fc()
 
                         // --- Guided mode (PN guidance) ---
                         // Shares roll-control initiation timing: this whole branch is
-                        // gated by t_since_launch_ms >= roll_delay_ms above, so guidance
-                        // engages WITH roll control (at the roll-control delay after
-                        // launch), NOT after burnout.  Set roll_delay_ms to ~burn time to
-                        // keep guidance post-boost.  Still needs a healthy EKF + airspeed
+                        // gated by t_since_launch_ms >= roll_delay_ms AND the
+                        // control-authority speed gate above, so guidance engages WITH
+                        // roll control, NOT after burnout.  Set roll_delay_ms to ~burn
+                        // time to keep guidance post-boost.  Still needs a healthy EKF + airspeed
                         // (pn_min_speed) and stops at closest point of approach (CPA).
                         // (pn_coast_delay_ms / burnout are no longer gates here.)
                         // Tilt-limit safety gate: off-vertical angle of the nose

@@ -88,6 +88,13 @@ public data class FlightSettingsData(
     /** GNSS high-perf-clock OTP state at boot (v7+, #837 item 6); null on
      *  pre-v7 logs, where the state was determined and then discarded. */
     val gnssOtpState: Int? = null,
+    /**
+     * v8+: the roll-control speed gate that flew, in m/s.  The vehicle had to
+     * reach this airspeed before roll control and guidance engaged, on top of
+     * [rollDelayMs].  Null on pre-v8 logs — those flights had no speed gate,
+     * so null and 0 mean the same thing here.  Stored on the wire as deci-m/s.
+     */
+    val rollMinSpeedMps: Float? = null,
 ) {
     public val useAngleControl: Boolean get() = flags and (1 shl F_USE_ANGLE_CONTROL) != 0
     public val gainScheduleEnabled: Boolean get() = flags and (1 shl F_GAIN_SCHEDULE) != 0
@@ -238,8 +245,15 @@ public data class FlightSettingsData(
                 gnssOtpState = LeBuffer(payload, 219).u8()
             }
 
+            // v8 roll-control speed gate at fixed offset 220, deci-m/s.
+            var rollMinSpeedMps: Float? = null
+            if (version >= 8 && payload.size >= 222) {
+                rollMinSpeedMps = LeBuffer(payload, 220).u16() / 10.0f
+            }
+
             return FlightSettingsData(
                 gnssOtpState = gnssOtpState,
+                rollMinSpeedMps = rollMinSpeedMps,
                 timeUs = timeUs,
                 version = version,
                 flags = flags,
