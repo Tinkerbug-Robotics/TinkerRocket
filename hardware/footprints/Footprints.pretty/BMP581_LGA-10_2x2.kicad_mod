@@ -298,5 +298,16 @@
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(uuid "9c20af87-251b-4323-8009-8035309c1f1c")
 	)
+	(model "${KICAD10_3DMODEL_DIR}/Package_LGA.3dshapes/ST_HLGA-10_2x2mm_P0.5mm_LayoutBorder3x2y.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
 	(embedded_fonts no)
 )
