@@ -820,6 +820,12 @@ def analyze(flight: Flight) -> AnalysisResult:
         if flown_mode_note:
             metrics["flown_mode_check"] = flown_mode_note
         metrics["roll_delay_ms"]  = rc_cfg.get("delay_ms", "—")
+        # v8+ only. Absent means the firmware had no speed gate, which is a
+        # different statement from "the gate was set to 0", so say which.
+        _min_spd = rc_cfg.get("min_speed_mps")
+        metrics["roll_min_speed_mps"] = (
+            "none (pre-v8 firmware)" if _min_spd is None
+            else ("off" if _min_spd <= 0 else _min_spd))
         metrics["rate_cap_dps"]   = rc_cfg.get("rate_cap_dps", "—")
         metrics["cmd_limit_deg"]  = (f"[{rc_cfg.get('cmd_limit_min_deg', '?')}, "
                                      f"{rc_cfg.get('cmd_limit_max_deg', '?')}]")

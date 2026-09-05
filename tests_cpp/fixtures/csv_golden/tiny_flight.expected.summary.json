@@ -59,6 +59,7 @@
       "ki" : 0.15,
       "kp" : 0.8,
       "kp_angle" : 2.5,
+      "min_speed_mps" : 28,
       "mode" : "angle_profile",
       "profile" : [
         {

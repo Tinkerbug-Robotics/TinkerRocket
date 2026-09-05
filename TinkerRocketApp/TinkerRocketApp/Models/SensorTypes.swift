@@ -23,7 +23,7 @@ enum MessageType: UInt8 {
     case h3lis331 = 0xA9   // Legacy-only high-G accelerometer (10B)
     case cameraStart = 0xAA
     case cameraStop = 0xAB
-    case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2 / 208B v3 / 210B v5 / 219B v6 / 220B v7) — runtime settings snapshot at launch (#165)
+    case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2 / 208B v3 / 210B v5 / 219B v6 / 220B v7 / 222B v8) — runtime settings snapshot at launch (#165)
     case iis2mdc = 0xD1    // IIS2MDC magnetometer (new Mini PCB rev, 10B)
     case lora = 0xF1
 }
@@ -197,6 +197,13 @@ nonisolated struct FlightSettingsData {
     /// v5+: IMU logging rate (ISM6HG256 ODR, Hz) that actually flew.
     let ism6_update_rate_hz: UInt16?
 
+    /// v8+: the roll-control speed gate that flew, in m/s. The vehicle had to
+    /// reach this airspeed before roll control and guidance engaged, on top of
+    /// the activation delay. 0 means no speed gate, which is how every pre-v8
+    /// log decodes and exactly what those flights did. Stored on the wire as
+    /// deci-m/s (`roll_min_speed_dmps`) and scaled here.
+    let roll_min_speed_mps: Float?
+
     /// v6+ (#435): the horizontal guidance aim point that actually FLEW —
     /// pad-relative ENU meters, re-converted from the frozen GNSS reference
     /// at launch (so it can differ slightly from the receipt-time echo).
@@ -369,6 +376,16 @@ nonisolated struct FlightSettingsData {
             gnss_otp_state = data.readUInt8(at: &o)
         } else {
             gnss_otp_state = nil
+        }
+
+        // v8 roll-control speed gate at fixed offset 220, deci-m/s. nil on
+        // pre-v8 logs — those flights had no speed gate at all, so nil and
+        // "0 m/s" mean the same thing here.
+        if version >= 8 && data.count >= 222 {
+            var o = 220
+            roll_min_speed_mps = Float(data.readUInt16LE(at: &o)) / 10.0
+        } else {
+            roll_min_speed_mps = nil
         }
     }
 }

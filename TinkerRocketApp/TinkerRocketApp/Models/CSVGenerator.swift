@@ -774,6 +774,9 @@ nonisolated struct RollControlSettings: Codable, Sendable {
     let cmd_limit_min_deg: Double
     let cmd_limit_max_deg: Double
     let delay_ms: Int
+    /// Control-authority speed gate (m/s) that flew; nil on pre-v8 firmware,
+    /// which had no speed gate. Control waited for the delay AND this speed.
+    let min_speed_mps: Double?
     let rate_cap_dps: Double
     let roll_rate_set_point: Double
     let guidance_enabled: Bool
@@ -800,6 +803,7 @@ nonisolated struct RollControlSettings: Codable, Sendable {
         cmd_limit_min_deg = sigFig(raw.min_cmd_deg)
         cmd_limit_max_deg = sigFig(raw.max_cmd_deg)
         delay_ms = Int(raw.roll_delay_ms)
+        min_speed_mps = raw.roll_min_speed_mps.map { sigFig($0) }
         rate_cap_dps = sigFig(raw.kp_angle_rate_cap_dps)
         roll_rate_set_point = sigFig(raw.roll_rate_set_point)
         guidance_enabled = raw.guidanceEnabled

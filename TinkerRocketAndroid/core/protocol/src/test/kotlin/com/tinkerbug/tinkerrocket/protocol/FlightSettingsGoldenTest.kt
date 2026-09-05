@@ -21,7 +21,8 @@ class FlightSettingsGoldenTest {
     private val ladder = listOf(
         "logframes/flightsettings_v1_188.bin", "logframes/flightsettings_v2_200.bin",
         "logframes/flightsettings_v3_208.bin", "logframes/flightsettings_v5_210.bin",
-        "logframes/flightsettings_v6_219.bin",
+        "logframes/flightsettings_v6_219.bin", "logframes/flightsettings_v7_220.bin",
+        "logframes/flightsettings_v8_222.bin",
     )
 
     @Test
@@ -89,6 +90,18 @@ class FlightSettingsGoldenTest {
                 assertEquals(side["guid_tgt_src"]!!.jsonPrimitive.int, s.guidTgtSrc, rel)
             } else {
                 assertNull(s.guidTgtEM, rel)
+            }
+            if (present >= 220) {
+                assertEquals(side["gnss_otp_state"]!!.jsonPrimitive.int, s.gnssOtpState, rel)
+            } else {
+                assertNull(s.gnssOtpState, rel)
+            }
+            // v8 roll-control speed gate: deci-m/s on the wire, m/s in the app.
+            if (present >= 222) {
+                assertEquals(side["roll_min_speed_dmps"]!!.jsonPrimitive.int / 10.0f,
+                    s.rollMinSpeedMps, rel)
+            } else {
+                assertNull(s.rollMinSpeedMps, rel)
             }
         }
     }

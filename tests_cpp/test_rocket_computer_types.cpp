@@ -1049,15 +1049,17 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
 TEST(RocketComputerTypes, FlightSettingsData_Layout) {
     // v2: +12 b2r orientation; v3: +8 fin cal; v5: +2 imu rate;
     // v6: +9 flown guidance target (#435).
-    EXPECT_EQ(sizeof(FlightSettingsData), 220u);
+    EXPECT_EQ(sizeof(FlightSettingsData), 222u);
     // 219 <= MAX_PAYLOAD (224, FlightSnapshotData-bound) — the v6 tail was
     // deliberately E/N+src, not lat/lon+E/N, to stay under this ceiling
     // WITHOUT growing the I2S frame bound.
     EXPECT_LE(sizeof(FlightSettingsData), MAX_PAYLOAD);
 
-    // v7 (#837 item 6): GNSS OTP state is the last byte.
+    // v7 (#837 item 6): GNSS OTP state.
     EXPECT_EQ(offsetof(FlightSettingsData, gnss_otp_state),     219u);
-    EXPECT_EQ(FlightSettingsData::VERSION,                      7u);
+    // v8: roll-control speed gate is the tail, 0.1 m/s units.
+    EXPECT_EQ(offsetof(FlightSettingsData, roll_min_speed_dmps), 220u);
+    EXPECT_EQ(FlightSettingsData::VERSION,                      8u);
     EXPECT_EQ(offsetof(FlightSettingsData, time_us),            0u);
     EXPECT_EQ(offsetof(FlightSettingsData, version),            4u);
     EXPECT_EQ(offsetof(FlightSettingsData, flags),              5u);

@@ -391,7 +391,8 @@ final class ActiveRocketSyncer: ObservableObject {
                                      rollDelayMs: profile.rollDelayMs,
                                      rateCapDps: profile.rateCapDps,
                                      kpAngle: profile.kpAngle,
-                                     integralSepThreshold: profile.integralSepThreshold)
+                                     integralSepThreshold: profile.integralSepThreshold,
+                                     rollMinSpeedMps: profile.rollMinSpeedMps)
         // mode byte is a legacy wire field (pre-v4 firmware); always send .angle
         device.sendRollProfile(waypoints: profile.rollWaypoints.map {
             (time: $0.timeSeconds, angle: $0.angleDeg, mode: RollSegmentMode.angle.rawValue)
@@ -515,6 +516,7 @@ final class ActiveRocketSyncer: ObservableObject {
         // overwrite the profile with a number nobody chose.
         var rollDiffers = p.useAngleControl != cfg.useAngleControl
             || p.rollDelayMs != cfg.rollDelayMs
+            || !same(p.rollMinSpeedMps, cfg.rollMinSpeedMps, decimals: 1)
         if cfg.rollGainsReported {
             rollDiffers = rollDiffers
                 || !same(p.rateCapDps, cfg.rateCapDps, decimals: 1)
@@ -524,6 +526,7 @@ final class ActiveRocketSyncer: ObservableObject {
         if rollDiffers {
             p.useAngleControl = cfg.useAngleControl
             p.rollDelayMs = cfg.rollDelayMs
+            p.rollMinSpeedMps = cfg.rollMinSpeedMps
             if cfg.rollGainsReported {
                 p.rateCapDps = cfg.rateCapDps
                 p.kpAngle = cfg.kpAngle

@@ -35,6 +35,7 @@ final class ActiveRocketSyncerTests: XCTestCase {
         c.gainScheduleEnabled = p.gainScheduleEnabled
         c.useAngleControl = p.useAngleControl
         c.rollDelayMs = p.rollDelayMs
+        c.rollMinSpeedMps = p.rollMinSpeedMps
         c.rateCapDps = p.rateCapDps
         c.kpAngle = p.kpAngle
         c.integralSepThreshold = p.integralSepThreshold

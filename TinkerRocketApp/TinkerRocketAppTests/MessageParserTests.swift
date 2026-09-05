@@ -295,6 +295,8 @@ final class MessageParserTests: XCTestCase {
         XCTAssertNil(raw.b2r_code)
         XCTAssertNil(raw.b2rDisplayName)
         XCTAssertNil(s.imu.mounting)
+        // v1 frame: no roll-control speed gate either — that flight had none.
+        XCTAssertNil(raw.roll_min_speed_mps)
 
         // ---- v2: board→rocket orientation tail @188 (firmware VERSION 2) ----
         var p2 = p
