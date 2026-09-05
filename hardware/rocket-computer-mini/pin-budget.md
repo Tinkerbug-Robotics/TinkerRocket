@@ -179,7 +179,7 @@ console's receive line, rather than on the spare GPIO45. GPIO45 is sampled at
 reset to set the flash rail voltage, and a continuity input's level at boot
 depends on whether an igniter happens to be connected — which is not something
 the design controls. An armed channel could hold that pad high and stop the board
-booting. GPIO43 is kept free so the boot ROM can still print, which preserves
+booting. GPIO43 carried the boot-ROM console until the 2026-09-03 swap put `IND_1` on it; see the correction below —
 bring-up diagnostics even without console input.
 
 ## Special-function pins — verdict per group
@@ -195,7 +195,7 @@ flash/PSRAM, because the design's proof only covers one of them.
 | Octal PSRAM clock | GPIO47, GPIO48 | SPICLK_P / SPICLK_N | **Safe by the same proof** — these serve octal PSRAM only, and this part has none. Not directly exercised on V7, so slightly weaker evidence. |
 | **Quad PSRAM select** | **GPIO26** | **SPICS1** | **Confirmed unavailable** — datasheet Table 1-1 gives this part 2 MB quad PSRAM, whose chip select is this pin. **Left unused.** |
 | JTAG | GPIO39–42 | debug | Safe as GPIO; cost is losing hardware debug. |
-| Console | GPIO43, GPIO44 | UART0 | Safe as GPIO; cost is the serial console. **Free on the flight computer; on the out computer GPIO44 carries `L_RXEN`, so that processor has console TX but no RX.** The "both left free" this row used to claim was never true of the shipped schematic. |
+| Console | GPIO43, GPIO44 | UART0 | Safe as GPIO; cost is the serial console. **Both spent on the flight computer since 2026-09-03 (`IND_1` on GPIO43, `FC_ARM` on GPIO44), so the flight computer has no hardware console at all and debugs over USB or the GPIO matrix. On the out computer both pads are unconnected, so that processor keeps a full hardware console.** (`L_RXEN` is on out-computer GPIO10, pad 15 — this row said GPIO44 until 2026-09-04 and contradicted its own spare list below.) The "both left free" this row used to claim was never true of the flight computer. |
 | Strapping | GPIO0, 3, 45, 46 | boot mode, JTAG select, flash rail voltage, ROM log | **GPIO3: see the correction below.** **GPIO45 left free** on both processors: it sets the flash rail voltage, and anything whose boot level the design does not control can stop the board booting. |
 
 ### Correction — GPIO3 no longer has the pulldown this document claimed
@@ -218,7 +218,10 @@ a defined level at reset.
 
 **The flight computer's GPIO3 is not a bare pad, and this document said it was
 until 2026-08-30.** The supercap hold-up rework put `VBUCK_OK` on it — the
-`R137` 100 k / `R138` 1 M divider off `V_BUCK`, which the flight computer reads
+`R137` 100 k / `R138` 360 k divider off `V_BUCK`, which the flight computer reads
+(`R138` was drawn as 1 M and became 360 k under #1000 so the node lands inside
+ADC range — GPIO3 is `ADC1_CH2`. The node sits at 2.71 V with the buck up and
+2.39 V on cap energy, from a 78 kΩ source with `C152` 100 nF across it.)
 to tell "buck present" from "riding the cap". That is a *better* state than bare,
 not a worse one: the divider gives the strapping pad a defined level at reset
 the same way `R34` does on the out computer, and it is a passive network rather
@@ -242,12 +245,45 @@ power-good and peripheral-enable signals:
 | `BMP585_INT` | GPIO26 (SPICS1) | GPIO41 (JTAG) | removes the only quad-PSRAM exposure |
 | `PYRO4_CONT` | GPIO44 (U0RXD) | GPIO42 (JTAG) | returns the full serial console |
 
-After the move, **four pads are free — GPIO26, GPIO43, GPIO44, GPIO45** — and the
+After the move, **four pads were free — GPIO26, GPIO43, GPIO44, GPIO45** (GPIO43/44 have since been spent; see the correction below) — and the
 two genuinely hazardous ones are among them. The cost is JTAG, which is now fully
 spent. That is the right trade: a console works from first power-on with no
 adapter, and the two risky pads are removed from the design rather than managed.
 
-## Assignment — as built
+### Correction — the 2026-09-03 pin swap moved twelve flight-computer pads
+
+To shorten routing, six pads on each side of the flight computer were exchanged. Every statement
+above that names one of these pins is historical; the netlist is the authority.
+
+| signal | was | now | pad |
+|---|---|---|---|
+| `PYRO1_FIRE` | GPIO4 | **GPIO38** | 43 |
+| `PYRO2_FIRE` | GPIO5 | **GPIO35** | 40 |
+| `PYRO3_FIRE` | GPIO6 | **GPIO34** | 39 |
+| `PYRO4_FIRE` | GPIO7 | **GPIO33** | 38 |
+| `ISM6HG256_CS` | GPIO38 | **GPIO4** | 9 |
+| `SENS_SDI` | GPIO35 | **GPIO5** | 10 |
+| `SENS_SCLK` | GPIO34 | **GPIO6** | 11 |
+| `SENS_SDO` | GPIO33 | **GPIO7** | 12 |
+| `ISM6HG256_INT1` | GPIO47 | **GPIO8** | 13 |
+| `BMP585_CS` | GPIO48 | **GPIO9** | 14 |
+| `IND_1` | GPIO9 → GPIO48 | **GPIO43** (U0TXD) | 49 |
+| *(spare)* | — | GPIO47, GPIO48 | 37, 36 |
+
+None of the twelve is a strapping pad, and per the S3 datasheet Table 2-1 none carries a reset pull,
+so no FIRE line acquired a boot-time pull-up. Three of the four FIRE pins (GPIO33/34/35) now sit in the
+VDD_SPI/VDD3P3_CPU domain and follow the GPIO45 strap; GPIO38 is VDD3P3_CPU only.
+
+**Consequence for the console:** with `IND_1` on GPIO43 and `FC_ARM` on GPIO44, both UART0 IO_MUX pads
+are spent. That is not "no console": the S3 routes any UART through the GPIO matrix, so one can be put on
+GPIO47 or GPIO48 if ever wanted. Day to day the console is USB-Serial-JTAG on GPIO19/20 through the mux.
+**Do not "correct" `IND_1` back to GPIO38 from an older copy of this file — GPIO38 is `PYRO1_FIRE`.**
+
+## Assignment — as built (single-processor allocation, superseded)
+
+> **Historical.** This table is the allocation from before the two-processor split and before the
+> 2026-09-03 pin swap; it mixes signals that now live on different chips. The live per-MCU
+> assignment is under *The split* below, and the netlist is the authority.
 
 > **This section describes the SINGLE-MCU board and is superseded.** Everything
 > from *The split* onward is the two-processor design that is actually drawn.
@@ -256,7 +292,7 @@ adapter, and the two risky pads are removed from the design rather than managed.
 
 **This is wired in the schematic.** All 25 signals below are connected to the
 processor by global label at the pin, and the netlist confirms every one reaches
-it. Two pads remain free: **GPIO43** and **GPIO45**.
+it. Two pads remained free at the time: **GPIO43** and **GPIO45** (both spent since; see the correction below).
 
 The radio's clock, data-in and data-out are absent from the table because they
 are no longer dedicated — the radio shares the memory bus and keeps only its own
@@ -296,8 +332,8 @@ The allocation is driven by three rules, in order:
 | SENS_SDI | GPIO1 | free | sensor bus |
 | SENS_SDO | GPIO2 | free | sensor bus |
 | ISM6HG256_CS | GPIO9 | free | sensor select |
-| BMP585_CS | GPIO48 | flash-adjacent | sensor select (pad 36, SPICLK_N) |
-| ISM6HG256_INT1 | GPIO47 | flash-adjacent | passive input (pad 37, SPICLK_P) |
+| *(spare)* | GPIO48 | flash-adjacent | free since the 2026-09-03 swap (pad 36, SPICLK_N) |
+| *(spare)* | GPIO47 | flash-adjacent | free since the 2026-09-03 swap (pad 37, SPICLK_P) |
 | BMP585_INT | GPIO26 | flash-adjacent | passive input |
 | GNSS_TX | GPIO39 | JTAG | UART, tolerant |
 | GNSS_RX | GPIO40 | JTAG | UART, tolerant |
@@ -342,7 +378,7 @@ The receiver's own pins — supply, ground, UART, reset — are also not yet wir
 **What this costs and keeps:**
 
 - **JTAG is spent** — all four pads used.
-- **The serial console is kept** — GPIO43/44 stay free. Of the two debug
+- **The serial console was kept at the time** — GPIO43/44 were free (both spent 2026-09-03; the console is USB-Serial-JTAG, or any UART matrixed onto GPIO47/48). Of the two debug
   channels this is the one worth keeping: it works from first power-on with no
   adapter, and it is where the boot ROM and the bootloader talk.
 - **Two strapping pads spare** — GPIO3 and GPIO45. GPIO45 sets the flash rail
@@ -389,7 +425,7 @@ property of the assignment, and it holds:
 | GPIO18 | low **and high-level**, ~60 µs | radio reset (active-low) |
 | GPIO19, GPIO20 | high-level / pull-down | USB pair, pre-existing |
 
-**Every pyro output is on a low-glitch pin.** `PYRO1_FIRE`–`PYRO4_FIRE` (GPIO4–7)
+**Every pyro output is on a low-glitch pin.** `PYRO1_FIRE`–`PYRO4_FIRE` (GPIO38/35/34/33 since the 2026-09-03 swap; GPIO4–7 before it)
 and `PYRO_ARM` (GPIO8) sit in the GPIO1–14 group, which glitches *low* only —
 they cannot be driven high by the chip before firmware takes control. That is
 the property the design needs and it is satisfied by construction.
@@ -412,7 +448,7 @@ and both existing radio boards implement it identically:
 | | `lora-daughterboard` | `base-station-mini` | here |
 |---|---|---|---|
 | DIO2 → TXEN | shorted on-board | shorted on-board | shorted on-board |
-| RXEN | GPIO35 | GPIO35 | **GPIO44** |
+| PYRO2_FIRE | GPIO35 | GPIO35 | **GPIO44** |
 | DIO3 | floating | — | floating |
 
 Only the **RX half** reaches a processor pin. The transmit half is driven by the
@@ -448,32 +484,31 @@ left GPIO26) carries over verbatim.
 
 | Signal | GPIO | Note |
 |---|---|---|
-| `SENS_SDI` / `SENS_SDO` / `SENS_SCLK` | 1, 2, 34 | unchanged |
-| `ISM6HG256_CS` / `ISM6HG256_INT1` | 9, **47** | unchanged. GPIO47 is pad 37, `SPICLK_P` — this row said 48 until 2026-08-30 |
-| `BMP585_CS` / `BMP585_INT` | **48**, 41 | unchanged. GPIO48 is pad 36, `SPICLK_N` — this row said 47 until 2026-08-30 |
-| `GNSS_TX` / `GNSS_RX` | 39, 40 | unchanged |
-| `PYRO1..4_FIRE` | 4, 5, 6, 7 | unchanged |
+| `SENS_SDI` / `SENS_SDO` / `SENS_SCLK` | 5, 7, 6 | moved here by the 2026-09-03 swap (were 35, 33, 34) |
+| `ISM6HG256_CS` / `ISM6HG256_INT1` | 4, 8 | moved by the swap (were 38, 47) |
+| `BMP585_CS` / `BMP585_INT` | 9, 41 | CS moved by the swap (was 48); INT unchanged |
+| `GNSS_TX` / `GNSS_RX` | 39, 40 | unchanged. Net names are the module's: we receive on `GNSS_TX` |
+| `PYRO1..4_FIRE` | 38, 35, 34, 33 | **moved by the swap** (were 4, 5, 6, 7). No reset pull on any of the four — S3 datasheet Table 2-1 |
 | `PYRO1..4_CONT` | 10, 11, 12, 42 | unchanged |
-| `PYRO_ARM` | 8 | unchanged |
-| `ESP_I2S_SD` / `ESP_I2S_FSYNC` | 13, 14 | new — I2S data and frame sync to the OC |
-| `ESP_I2S_WS` / `ESP_I2S_BCLK` | 18, 21 | new — I2S word select and bit clock |
-| `ESP_SCL` / `ESP_SDA` | 33, 35 | new — I2C to the OC, 5.11 k to `V_MCU_SWTCH` |
-| `MAG_SDA` / `MAG_SCL` | 36, 37 | new — the magnetometer moved off the out computer's power-monitor bus onto ours, where the driver lives. Pull-ups `R117`/`R118` on `V_MCU_SWTCH`, the same rail as the part |
-| `FC_EN_HOLD` | 17 | new — self-hold into `D9`. **Deliberately not GPIO3** — see the correction above. **Must stay in GPIO0–21**: the in-flight latch needs `gpio_hold_en`, which only reaches the reset-surviving RTC hold on an RTC pad (`SOC_RTCIO_PIN_COUNT = 22` on this part). Above GPIO21 the call still returns `ESP_OK` but degrades to a deep-sleep-only hold |
-| `FC_D−` / `FC_D+` | 19, 20 | USB, through the `U1` mux |
-| `IND_1` / `IND_2` | 38, 45 | LED drives. `IND_1` → `R70` → `D10` **red**; `IND_2` → `R71` → `D11` **blue**. Both cathode-to-GND, driven high to light |
-| `VBUCK_OK` | 3 | supercap hold-up status, `R137`/`R138` divider off `V_BUCK` — see the correction above |
-| `WDT_PET` / `FC_ARM` | 8, 44 | the supervised-MCU arm rework; see [`arm-watchdog-rework.md`](arm-watchdog-rework.md) |
+| `FC_ARM` | 44 | the arm line (`U0RXD`, ROM boot pull-up — contained by the OC consent stage `Q14`); see [`arm-watchdog-rework.md`](arm-watchdog-rework.md). `PYRO_ARM` on GPIO8 and `WDT_PET` are gone |
+| `ESP_I2S_SD` / `ESP_I2S_FSYNC` | 13, 14 | I2S data and frame sync to the OC |
+| `ESP_I2S_WS` / `ESP_I2S_BCLK` | 18, 21 | I2S word select and bit clock |
+| `ESP_SDA` / `ESP_SCL` | 36, 37 | I2C to the OC, 5.11 k to `V_MCU_SWTCH`. (An earlier revision of this table listed 33/35 — those are FIRE pins now) |
+| `MAG_SDA` / `MAG_SCL` | 1, 2 | the magnetometer moved off the OC's power-monitor bus onto ours, where the driver lives. Pull-ups `R117`/`R118` on `V_MCU_SWTCH` |
+| `FC_EN_HOLD` | 17 | self-hold into `D9`. **Deliberately not GPIO3**, and **must stay in GPIO0–21** — the in-flight latch needs the RTC hold (`SOC_RTCIO_PIN_COUNT = 22`); above GPIO21 `gpio_hold_en` still returns `ESP_OK` but degrades to deep-sleep-only |
+| `Net-(U32-GPIO19)` / `Net-(U32-GPIO20)` | 19, 20 | USB-Serial-JTAG, through the `U1` mux — the console and flashing path |
+| `IND_1` / `IND_2` | 43, 45 | LED drives, driven high to light. `IND_1` → `R70` → `D10` **red** on `U0TXD` (weak reset pull-up, ~73 µA — dark); `IND_2` → `R71` → `D11` **blue** on the VDD_SPI strap, safe only because a blue die behind 10 k cannot pull it high |
+| `VBUCK_OK` | 3 | hold-up status, `R137`/`R138` divider off `V_BUCK`, read as ADC1_CH2 — see the GPIO3 correction above |
 
-**Spare on the flight computer: GPIO43** — the console TX pad, and the only one
-left. **This paragraph claimed GPIO3, 38, 43 and 44 until 2026-08-30 and was
-wrong on three of the four.** GPIO3 carries `VBUCK_OK` (hold-up rework), GPIO38
-carries `IND_1`, and GPIO44 carries `FC_ARM` (arm rework) — which also means the
-console is now TX-only, as `arm-watchdog-rework.md` records. GPIO45 is **not**
-free either: it carries `IND_2`, which is safe only because a blue LED behind
-10 k cannot pull a VDD_SPI strap high (see the flight-computer board header).
-GPIO46 carries the strapping network as before, and **GPIO26 stays unused** for
-the quad-PSRAM reason argued above.
+
+**Spare on the flight computer: GPIO47 and GPIO48** — the two flash-adjacent pads (37, 36) freed by the
+2026-09-03 swap. Everything else is spent: GPIO3 carries `VBUCK_OK`, GPIO38 carries `PYRO1_FIRE`,
+GPIO43 carries `IND_1` and GPIO44 carries `FC_ARM` — so both UART0 IO_MUX pads are gone. That is not
+"no console": the S3 routes any UART through the GPIO matrix, and one can be put on GPIO47/48 if ever
+wanted; day to day the console is USB-Serial-JTAG. GPIO45 is **not** free either (`IND_2`), GPIO46
+carries the strapping network, and **GPIO26 stays unused** for the quad-PSRAM reason argued above.
+*(This paragraph has been wrong twice: it claimed GPIO3/38/43/44 free until 2026-08-30, and
+GPIO43 free until 2026-09-04.)*
 
 ### Out computer `U15` — on `+3V3`, always on
 
@@ -483,7 +518,7 @@ pack-monitor I2C (`SEN_SCL`, `SEN_SDA` — the magnetometer has moved off it),
 its boot flash and USB. It gains the
 six `ESP_*` link pins on GPIO1–6 and `FC_EN_OC` on GPIO7.
 
-**Spare on the out computer: GPIO8, 9, 10, 11, 12, 34, 39, 40, 41, 42, 47, 48**
+**Spare on the out computer: GPIO9, 12, 34, 39, 40, 41, 42, 43, 44, 45, 47, 48**
 — twelve pads freed by the sensors, GNSS and pyro moving away.
 
 **GPIO39–42 are among them, so the out computer has regained hardware JTAG.**

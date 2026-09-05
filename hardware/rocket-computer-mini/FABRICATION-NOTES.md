@@ -1,11 +1,23 @@
 # Rocket computer mini — fabrication and assembly notes
 
-> ## ⚠ PRE-LAYOUT — NOT RELEASABLE
+> ## Board state — routed, placed, fills current, ready to plot
 >
-> **This board has no `Edge.Cuts` outline, 106 track segments and 31 vias. It is placed, not routed.**
+> **22.55 × 69.62 mm, 8 layers, 1.630 mm. Fully routed: 0 unconnected items, 2,194 track
+> segments, 596 vias, 221 fitted parts against a 221-designator `bom.csv`. 18 DRC items remain:
+> 14 silkscreen cosmetics, the two accepted fiducial-in-courtyard overlaps (#1008) and two
+> library-copy warnings — none affects fabrication. One schematic-parity item, also accepted:
+> `U9`'s symbol carries a pin 9 that its footprint does not, on the same `PYRO_GND` net as pads
+> 5–8.** Zone fills refilled and verified current; a stale fill is exactly how a 3V3–GND short
+> reached a gerber on this project once before.
 >
-> Every `<TBD>` below is a number that cannot exist until layout closes. **Do not send this file
-> to a fab house or an assembler with a `<TBD>` still in it.** The `README` warns specifically
+> **Fixed immediately before this plot:** `C152`'s only tie to `VBUCK_OK` was a 14 µm corner
+> overlap with a via — connected as far as KiCad and DRC were concerned, and opened by less
+> etch variation than a normal process holds. It now has a 0.10 mm stub. And the file's cached
+> board thickness read 1.5765 mm while the stackup summed to 1.6301, so the `.gbrjob` was
+> telling the fab a different thickness from A1 below; the cache now agrees with the stackup.
+>
+> Standing rule: **never send this file to a fab house or an assembler with a `<TBD>` in it.**
+> There are none as of 2026-09-04; if one reappears, it is a number that does not exist yet. The `README` warns specifically
 > that stale fab notes are the kind of error that reaches a fab house — that warning applies to
 > this file first.
 >
@@ -21,7 +33,8 @@ travel in the design files.** Via protection, surface finish, inner-layer copper
 thickness are each absent from the gerbers, the `.gbrjob`, the Excellon drill file, IPC-2581 and
 ODB++. On this board the stencil is the worst of them — see B1, and [#959](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/959).
 
-Board: **`<TBD>` mm, 6 layer, 1.546 mm stack.** F / In1 / In2 / In3 / In4 / B.
+Board: **22.55 × 69.62 mm, 8 layer, 1.630 mm stack.**
+F / In1 GND / In2 signal / In3 +3V3 / In4 V_MCU_SWTCH / In5 signal / In6 GND / B.
 
 `U5` is the **LC86G (LA)** — 18.4 × 18.4 × 7.05 mm, 8.0 g. The 18.4 mm is the **ceramic patch
 antenna**; the module PCB under it is 16 mm (+0.3/−0.15), and pads 1–12 are castellated flush with
@@ -41,40 +54,78 @@ revision when citing.
 
 ```
 TINKERROCKET ROCKET COMPUTER MINI - FABRICATION NOTES
-BOARD <TBD> x <TBD> mm, 6 LAYER, 1.546 mm STACK.
+BOARD 22.55 x 69.62 mm, 8 LAYER, 1.630 mm STACK.
 
-A1. STACKUP: JLCPCB JLC06161H-3313, 1 oz OUTER / 0.5 oz INNER.
-    BUILD TO THIS TEMPLATE. JLC LISTS TWO TEMPLATES UNDER THIS
-    NAME - USE THE DEFAULT, WITH THE 2116 MIDDLE PREPREG AT
-    0.1164 mm (NOT THE 0.1088 mm VARIANT).
+A1. STACKUP: JLCPCB JLC08161H-2116, EIGHT LAYER, 1.630 mm.
+    1 oz OUTER / 0.5 oz INNER. BUILD TO THIS TEMPLATE.
+    OUTER PREPREG 2116 AT 0.1164 mm (er 4.16), CORES 0.300 mm
+    (er 4.41), INNER PREPREG 1080 x2 AT 0.1528 mm (er 3.91),
+    ALL Nan Ya NP-155F. THE BUILD IS SYMMETRIC.
+    NOTE: JLC PUBLISH 4- AND 6-LAYER IMPEDANCE TEMPLATES ONLY;
+    CONFIRM THIS 8-LAYER TEMPLATE AND ITS IMPEDANCE SERVICE
+    WITH THE FAB BEFORE ORDERING.
 
-A2. SURFACE FINISH: ENIG. REQUIRED FOR THE 0.306 mm PITCH CHIP
-    ANTENNA (U31), THE TWO 0.4 mm PITCH QFN-56 (U15, U32), THE
-    0.4 mm X2QFN (U21) AND THE 0.4 mm 12-LEAD (U1).
+A2. SURFACE FINISH: ENIG. REQUIRED FOR THE 0.5 mm PITCH 24-BALL
+    WLCSP FLASH (U13, U33), THE TWO 0.4 mm PITCH QFN-56 (U15,
+    U32), THE 0.4 mm X2QFN (U21), THE 0.4 mm 12-LEAD (U1) AND
+    THE 0.40 mm PITCH CHIP ANTENNA (U14).
     DO NOT SUBSTITUTE HASL.
 
 A3. VIAS: FILLED WITH NON-CONDUCTIVE EPOXY AND PLATED OVER
     (CAPPED), IPC-4761 TYPE VII.
     *** VIA-IN-PAD IS MANDATORY ON THIS BOARD, NOT OPTIONAL. ***
-    THE GNSS MODULE (U5) CARRIES ONE VIA IN EVERY GROUND PAD AS
-    A DELIBERATE HEAT PATH INTO A BLIND JOINT PLANE. AN
+    THE GNSS MODULE (U5) CARRIES A VIA IN EVERY GROUND PAD THAT
+    HAS ONE AS A DELIBERATE HEAT PATH INTO A BLIND JOINT PLANE.
+    (LAYOUT NOTE, NOT A FAB INSTRUCTION: PADS 32 AND 33 HAVE NO
+    VIA TODAY - MEASURED 2026-09-04. PADS 18, 30 AND 34 DO, AND
+    THIS NOTE NAMED THEM IN ERROR UNTIL NOW. PAD 32 IS A CORNER
+    OF THE ARRAY, SO IT IS THE MORE USEFUL OF THE TWO TO STITCH.
+    ACCEPTED AS-IS FOR THIS RUN.) AN
     UNPLUGGED BARREL DRAINS THE JOINT IT SITS IN, AND THAT JOINT
     CANNOT BE INSPECTED OR REWORKED. IF THIS LINE IS NOT ON THE
     QUOTE, THE BOARD IS NOT BUILDABLE.
     ALL OTHER VIAS TENTED BOTH SIDES.
 
 A4. CONTROLLED IMPEDANCE: 50 OHM SINGLE-ENDED ON TWO FEEDS -
-    THE 2.4 GHz CHIP ANTENNA (U31) AND THE 900 MHz RADIO FEED
-    (U16 TO J8). BOTH F.Cu REFERENCED TO In1.Cu.
-    TRACK WIDTH <TBD>.
+    THE 2.4 GHz CHIP ANTENNA FEED (U14) AND THE 900 MHz RADIO
+    FEED (U16 TO J8).
+    THE 900 MHz FEED IS ON **B.Cu REFERENCED TO In6.Cu** - NOT
+    F.Cu/In1.Cu AS THIS NOTE PREVIOUSLY SAID.
+    ON THE A1 STACK (0.1164 mm 2116, er 4.16) A COPLANAR
+    WAVEGUIDE WITH GROUND MAKES 50 OHM AT **0.15 mm TRACK WITH
+    0.19 mm GAPS**; THE 0.127 mm GAP CURRENTLY DRAWN WOULD NEED
+    A 0.123 mm TRACK. AS DRAWN TODAY (0.18 mm / 0.127 mm) IT IS
+    ABOUT 42 OHM - WAS 38 OHM ON THE OLD STACK, SO THE NEW
+    TEMPLATE MOVES IT TOWARDS TARGET.
+    THE FEED IS ONLY ~6.3 mm LONG, UNDER 15 DEGREES ELECTRICAL
+    AT 915 MHz, SO THE MISMATCH COSTS UNDER 0.02 dB. IMPEDANCE
+    CONTROL ON THIS NET IS OPTIONAL - IF THE FAB CHARGES FOR IT,
+    DROPPING IT IS DEFENSIBLE. RE-DERIVE IF THE FEED IS EVER
+    LENGTHENED.
+    THE 2.4 GHz FEED IS PLACED AND ROUTED: U14 SITS AT THE BOARD
+    EDGE AND ITS FEED IS 2.99 mm OF 0.18 mm TRACK ON F.Cu
+    REFERENCED TO In1.Cu, COPLANAR WITH THE F.Cu GROUND POUR.
+    AT 2.4 GHz THAT LENGTH IS UNDER 15 DEGREES ELECTRICAL, SO
+    IMPEDANCE CONTROL ON THIS NET IS OPTIONAL TOO - QUOTE THE
+    IMPEDANCE SERVICE AGAINST THE 900 MHz FEED IF IT IS CHARGED
+    FOR SEPARATELY.
 
 A5. MIN ANNULAR RING 0.05 mm.
     MIN VIA 0.40 mm PAD ON 0.30 mm DRILL.
 
 A6. MIN TRACK AND SPACING 0.09 mm.
+    HOLE TO HOLE 0.25 mm BETWEEN DIFFERENT NETS,
+    MEASURED HOLE EDGE TO HOLE EDGE (WALL OF MATERIAL
+    BETWEEN THE TWO DRILLED BARRELS), NOT CENTRE TO
+    CENTRE. ON THE 0.30 mm DRILLS USED THROUGHOUT THIS
+    IS 0.55 mm CENTRE TO CENTRE.
 
 A7. MIXED TECHNOLOGY - ONE THROUGH-HOLE PART (C130) SHARES THE
-    BOARD WITH 0.306 mm PITCH SMD.
+    BOARD WITH 0.40 mm PITCH SMD, WHICH IS THE FINEST PITCH ON
+    IT (U1, U14, U15, U32 - MEASURED, AND AGREES WITH A2).
+    NOTE: THE ON-BOARD Dwgs.User COPY OF THIS NOTE STILL READS
+    0.30 mm AND OVERSTATES THE PROCESS CLASS; THE FAB SHOULD
+    TAKE 0.40 mm FROM THIS FILE.
 ```
 
 ---
@@ -84,15 +135,16 @@ A7. MIXED TECHNOLOGY - ONE THROUGH-HOLE PART (C130) SHARES THE
 ```
 TINKERROCKET ROCKET COMPUTER MINI - ASSEMBLY NOTES
 
-B1. *** THE F-SIDE STENCIL IS A STEP STENCIL. ***
-    F SIDE BASE FOIL 0.09 mm (3.5 mil) OR THINNER, LASER CUT,
-    ELECTROPOLISHED AND NANO-COATED.
-    THIS IS SET BY U31 (TDK CHIP ANTENNA): FOUR 0.20 x 0.30 mm
-    APERTURES ON 0.306 mm CENTRES, AREA RATIO 0.60 AT A 0.10 mm
-    FOIL - BELOW THE 0.66 FLOOR. DO NOT SUPPLY A 0.10 mm OR
-    THICKER FLAT FOIL FOR THIS SIDE.
-    STEP UP OVER U5 (GNSS MODULE) ONLY. STEP HEIGHT <TBD>.
-    B SIDE: FLAT FOIL 0.11 mm OR THINNER, SET BY U21.
+B1. *** STENCIL FOIL 0.08 mm (3 mil), FLAT - NO STEP. ***
+    LASER CUT, ELECTROPOLISHED AND NANO-COATED.
+    THE STEP THIS NOTE USED TO CALL FOR WAS SET BY A TDK CHIP
+    ANTENNA THAT IS NO LONGER FITTED. THE FINEST APERTURE ON THE
+    BOARD IS NOW THE 24-BALL WLCSP FLASH (U13, U33): 0.254 mm
+    ROUND PADS, AREA RATIO 0.64 AT A 0.10 mm FOIL - BELOW THE
+    0.66 FLOOR - AND 0.79 AT 0.08 mm. EVERY OTHER APERTURE,
+    INCLUDING THE 0.30 x 0.30 mm ANTENNA PADS (U14, RATIO 0.94
+    AT 0.08 mm), CLEARS COMFORTABLY AT THAT FOIL, SO ONE FLAT
+    0.08 mm FOIL SERVES BOTH SIDES.
 
 B2. *** U5 - THE 24 INTERIOR JOINTS ARE BLIND. THE 12
     PERIMETER JOINTS ARE CASTELLATED - INSPECT THEM. ***
@@ -140,9 +192,16 @@ B4. PROFILE TO U5'S JOINTS, NOT TO THE BOARD TOP.
     ON A 1 C/s RAMP, SO THE SOAK IS WHAT CLOSES THAT GAP - A
     HOTTER PEAK IS NOT AVAILABLE AS A SUBSTITUTE.
 
-B5. *** WITNESS PADS - INCOMING TEST IS MANDATORY ON U5. ***
+B5. *** U5 INTERIOR JOINTS ARE NOT ELECTRICALLY TESTABLE. ***
+    !!! THE WITNESS-PAD SCHEME DESCRIBED BELOW WAS NEVER BUILT.
+    THE BOARD HAS NO TEST POINTS, AND EVERY U5 GROUND PAD IS
+    TIED TO THE POUR THROUGH ITS OWN VIA, SO NO PAIR OF PADS
+    ISOLATES A JOINT. X-RAY IS THE ONLY ACCEPTANCE METHOD FOR
+    THE 24 BLIND INTERIOR JOINTS UNTIL WITNESS PADS ARE ACTUALLY
+    DRAWN. DECIDE WHICH BEFORE COMMITTING TO A BATCH. !!!
+    (UNBUILT SCHEME, RETAINED SO IT CAN BE IMPLEMENTED:)
     FIVE OF U5'S GROUND PADS ARE ISOLATED FROM THE POUR AND
-    ROUTED OUT TO TEST PADS AT <TBD>. CONTINUITY BETWEEN ANY
+    ROUTED OUT TO TEST PADS (NOT YET DRAWN). CONTINUITY BETWEEN ANY
     PAIR RUNS THROUGH ONE JOINT, THE MODULE'S INTERNAL GROUND,
     AND ANOTHER JOINT. MEASURE ALL PAIRS. A PAD THAT READS OPEN
     AGAINST ALL THE OTHERS IS A COLD JOINT ON THAT PAD.
@@ -162,21 +221,36 @@ B6. *** BUILT FOR THE OVEN. LIMITED REWORK ONLY. ***
     A COLD JOINT ANYWHERE IN THE 24-PAD INTERIOR ARRAY IS NOT
     REACHABLE AND THE BOARD IS SCRAP.
     BUILD THE FIRST ARTICLES AS A QUALIFICATION RUN AND CLEAR
-    B5 BEFORE COMMITTING TO A BATCH.
+    B5 BEFORE COMMITTING TO A BATCH - NOTE B5 CURRENTLY MEANS
+    X-RAY OF THE 24 INTERIOR JOINTS, NOT A CONTINUITY TEST,
+    BECAUSE THE WITNESS PADS DO NOT EXIST.
+
+B7a. J8 (SMA EDGE CONNECTOR) IS HAND SOLDERED AFTER BOTH
+    REFLOW PASSES. IT STRADDLES THE BOARD EDGE AND ITS TWO
+    TOP-SIDE PADS CARRY PASTE APERTURES IN THE FOOTPRINT - DO
+    NOT PASTE THEM. THE TOP STENCIL CANNOT SEAT OVER A FITTED
+    CONNECTOR, AND PASTE REFLOWED ONTO EMPTY PADS HAS TO BE
+    CLEANED OFF BEFORE THE PART CAN GO ON.
 
 B7. BOTTOM-SIDE PARTS AT OR OVER THE INVERTED-PASS WEIGHT
     LIMIT (30 g/in2 OF LAND):
-      U16  E220-900MM22S RADIO  12.0 mm2 ->  0.56 g
+      U16  900 MHz LORA MODULE  12.0 mm2 ->  0.56 g
       J8   SMA EDGE             26.2 mm2 ->  1.22 g
       J2   TERMINAL BLOCK       64.0 mm2 ->  2.98 g
     THESE NEED ADHESIVE DOTS BEFORE THE FIRST PASS, OR HAND
     ATTACH AFTER THE SECOND.
 
-B8. C130 (CHP5R5L205R-TWQ SUPERCAPACITOR) IS THE ONLY
-    THROUGH-HOLE PART ON AN OTHERWISE REFLOW BOARD. HAND SOLDER
-    AFTER BOTH PASSES. IT IS POLARISED: PAD 1 = V_SCAP (+),
-    PAD 2 = GND (-). CONFIRM AGAINST THE SCHEMATIC, NOT THE
-    SILKSCREEN.
+B8. C130 (5 F 2.7 V RADIAL SUPERCAPACITOR, 10 mm DIA x 20 mm,
+    5 mm LEAD PITCH, MOUNTED LYING DOWN) IS THE ONLY THROUGH-
+    HOLE PART ON AN OTHERWISE REFLOW BOARD. HAND SOLDER AFTER
+    BOTH PASSES. IT IS POLARISED: PAD 1 = V_SCAP (+), PAD 2 =
+    GND (-). CONFIRM AGAINST THE SCHEMATIC, NOT THE SILKSCREEN.
+    THE CAN LIES OVER 26 PARTS - FID4, J8, U16, U19, U21 AND
+    U23 PLUS 20 SMALL PASSIVES INCLUDING C149 - AND IS BONDED
+    DOWN WITH NEUTRAL/ALKOXY-CURE RTV - NEVER ACETOXY-CURE,
+    WHICH RELEASES ACETIC ACID ONTO THE COPPER BENEATH IT.
+    EVERYTHING UNDER THE CAN IS UNREWORKABLE ONCE BONDED, SO
+    COMPLETE ELECTRICAL BRING-UP FIRST.
 ```
 
 ---
@@ -213,9 +287,10 @@ to an SMA edge connector. The rocket computer's notes list one impedance-control
 that line across would silently drop the 900 MHz one.
 
 **B1 — the stencil conflict is real and it is not about the GNSS module.** The front side carries
-the smallest aperture in the repo (`U31`, area ratio 0.60 at 0.10 mm) *and* the largest module on
-the board. Those two want opposite foils, and placement cannot separate them because `U5` has to be
-opposite the other large parts. A step is the only way to serve both from one print. Note the
+the smallest aperture in the repo (now `U13`/`U33`, the 24-ball WLCSP flash — area ratio 0.64 at
+0.10 mm, 0.79 at 0.08 mm; the old `U31` chip antenna that set this is no longer fitted) *and* the largest module on
+the board. With the TDK antenna gone, nothing on the board needs a foil thicker than 0.08 mm, and the
+WLCSP needs one no thicker — so one flat 0.08 mm foil serves both sides and no step is required. Note the
 direction of the surprise: the base foil is *thinner* than the 0.10 mm that earlier paste-coverage
 arithmetic assumed, so every coverage percentage converts to less solder than it reads as.
 
@@ -288,17 +363,15 @@ and without cutting `In1`.
 
 ## Still open
 
-- **Board outline.** No `Edge.Cuts` geometry exists. `U5`'s 18.9 mm courtyard is the widest part on
-  the board; if the inherited 22.35 mm width is kept it occupies 85% of it, which leaves no room
-  for the step stencil's apertureless margin except along the length.
-- **Step height (B1).** Deliberately unset. Only the warpage mechanism argues for more volume, and
-  which mechanism is at work is what B5 measures. Set it after the first qualification run, not
-  before — see [#906](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/906).
 - **Witness pad locations (B5).** Five ground pads, four LGA corners plus one centre, routed out to
   an accessible test field. Positions depend on the outline.
 - **Impedance track widths (A4).** Both feeds, once the stackup is confirmed against the fab's
   actual template.
-- **`U31` land pattern.** The 0.20 × 0.30 mm lands have never been checked against TDK's published
+- **`U14` land pattern.** The Abracon chip antenna replaced the TDK part; its land is derived from
+  the part's terminal drawing and cross-checked against three dimensions on the datasheet's
+  recommended-layout figure, but it has not been checked against a vendor CAD library. Its 4.60 ×
+  3.50 mm ground clearance must be reproduced as an all-layer keep-out.
+- **`U31` land pattern (part no longer fitted).** The 0.20 × 0.30 mm lands have never been checked against TDK's published
   land pattern; the part arrived with the cost-reduction sweep. Tracked in [#959](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/959).
 - ~~**The LC86G's LCC land length is unverified.**~~ **CLOSED — the land is correct as drawn.**
   The module PCB is 16 mm (+0.3/−0.15) and its perimeter pads are 1.5 × 1.0 mm castellated, flush
@@ -352,10 +425,15 @@ and without cutting `In1`.
   measurement confirms the PCB *is* centred on the pad field (−7.998 / +8.032). The courtyard at
   ±9.75 clears the antenna by 0.29 mm on its worst side, so it needs no further change.
 
-- **§5.3 wants ≥3 mm between the module and other components; four top-side parts are inside it.**
-  Measured to the true antenna outline on the current placement: `C38` and `R33` at 0.97 mm,
-  `H1` at 2.73 mm, `H3` at 2.80 mm — all four still inside, the offset having bought ~0.2 mm. `H1`/`H3` are mounting holes rather than components, but a screw head is metal
-  near a patch antenna and §5.1.4 separately asks for 10 mm to tall metal. Free to fix now.
+- **§5.3 wants ≥3 mm between the module and other components; thirteen top-side items are
+  inside it.** Re-measured courtyard-to-courtyard on 2026-09-04, replacing an older count of
+  four: `R33` (0.00), `R140` (0.00), `C19` (0.00), `C21` (0.00), `U11` (0.77), `Y1` (0.90),
+  `R141` (1.32), `SW3` (1.90), `R38` (2.21), `R39` (2.22), `C144` (2.26), and the mounting holes
+  `H1` (2.41) and `H3` (2.42). The four at 0.00 touch the courtyard box without their outlines
+  overlapping — DRC reports no `courtyards_overlap` for any of them. `C38`, which this bullet
+  used to name, is on the **bottom** side and so is not what §5.3 is about. On a 22.55 mm board
+  this rule cannot be met without moving the module, and the deficit is accepted for this run;
+  it is recorded here because a GNSS installation on this project has already lost ≥8 dB once.
   Note the courtyard does **not** encode this rule — it is sized to the part (±9.75), not to the
   3 mm keepout (which would be ±12.2). Enforcing 3 mm through the courtyard is an option if DRC
   should catch it automatically; it would make the courtyard wider than the inherited board width.

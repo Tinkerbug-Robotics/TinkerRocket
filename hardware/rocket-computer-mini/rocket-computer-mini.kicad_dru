@@ -1,0 +1,26 @@
+(version 1)
+
+# Different-net hole-to-hole wall.
+#
+# KiCad measures hole_to_hole EDGE TO EDGE - the wall of material between the
+# two drilled barrels, not centre-to-centre. Verified on this board: a pair at
+# 0.79216 mm centre-to-centre reports "actual 0.4922", exactly one 0.30 mm
+# drill diameter less. So 0.25 mm here means 0.55 mm centre-to-centre on the
+# 0.30 mm drills used throughout.
+#
+# The value is a deliberate margin over the 0.20 mm that every other board in
+# this repo uses and that JLC has already built five times (rocket-computer V9,
+# base-station, base-station-mini and lora-daughterboard at 0.20; the GNSS
+# carrier at 0.25). The margin is for this board being eight layers at 1.63 mm
+# rather than six - more stack, more drill wander. It is NOT a quoted fab
+# capability: no JLC capability document has been captured in this repo, and an
+# earlier 0.5 mm figure here was asserted without one. If you tighten the board
+# toward the rule, confirm the real number with the fab first.
+#
+# The global min_hole_to_hole in the project file stays at 0.20 and is
+# net-agnostic; it carries the same-net drill-registration floor. Same-net
+# breakout merges a net with itself and is harmless, which is why this rule is
+# conditioned on the nets differing. Review finding #1005.
+(rule "hole_to_hole_different_nets"
+	(constraint hole_to_hole (min 0.25mm))
+	(condition "A.Net != B.Net"))

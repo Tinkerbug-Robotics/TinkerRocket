@@ -61,11 +61,11 @@
 // useful pin with the P4 maps. Every failure below is SILENT at runtime — the
 // board boots, continuity reads plausibly, and the wrong channel fires — so
 // pin them at compile time.
-static_assert(board_pins::PYRO_ARM_PIN   == 8  &&
-              board_pins::PYRO1_FIRE_PIN == 4  && board_pins::PYRO1_CONT_PIN == 10 &&
-              board_pins::PYRO2_FIRE_PIN == 5  && board_pins::PYRO2_CONT_PIN == 11 &&
-              board_pins::PYRO3_FIRE_PIN == 6  && board_pins::PYRO3_CONT_PIN == 12 &&
-              board_pins::PYRO4_FIRE_PIN == 7  && board_pins::PYRO4_CONT_PIN == 42,
+static_assert(board_pins::PYRO_ARM_PIN   == 44 &&
+              board_pins::PYRO1_FIRE_PIN == 38 && board_pins::PYRO1_CONT_PIN == 10 &&
+              board_pins::PYRO2_FIRE_PIN == 35 && board_pins::PYRO2_CONT_PIN == 11 &&
+              board_pins::PYRO3_FIRE_PIN == 34 && board_pins::PYRO3_CONT_PIN == 12 &&
+              board_pins::PYRO4_FIRE_PIN == 33 && board_pins::PYRO4_CONT_PIN == 42,
               "board_m1.h pyro map changed — re-derive it from a netlist export of "
               "hardware/rocket-computer-mini before editing this assert away");
 // No pyro line may land on a strapping pad. GPIO45 sets the flash rail
@@ -73,6 +73,10 @@ static_assert(board_pins::PYRO_ARM_PIN   == 8  &&
 // on whether an igniter happens to be connected, which the design does not
 // control, so one armed channel could stop the board booting.
 static_assert(board_pins::PYRO_ARM_PIN != 45 && board_pins::PYRO_ARM_PIN != 46 &&
+              board_pins::PYRO1_FIRE_PIN != 45 && board_pins::PYRO1_FIRE_PIN != 46 &&
+              board_pins::PYRO2_FIRE_PIN != 45 && board_pins::PYRO2_FIRE_PIN != 46 &&
+              board_pins::PYRO3_FIRE_PIN != 45 && board_pins::PYRO3_FIRE_PIN != 46 &&
+              board_pins::PYRO4_FIRE_PIN != 45 && board_pins::PYRO4_FIRE_PIN != 46 &&
               board_pins::PYRO1_CONT_PIN != 45 && board_pins::PYRO1_CONT_PIN != 46 &&
               board_pins::PYRO2_CONT_PIN != 45 && board_pins::PYRO2_CONT_PIN != 46 &&
               board_pins::PYRO3_CONT_PIN != 45 && board_pins::PYRO3_CONT_PIN != 46 &&
@@ -90,6 +94,14 @@ static_assert(board_pins::PWR_HOLD_PIN >= 0 && board_pins::PWR_HOLD_PIN <= 21,
 static_assert(board_pins::PWR_HOLD_PIN != 3,
               "board_m1.h: PWR_HOLD_PIN must not be GPIO3 — gpio_hold_en would latch a "
               "strapping pad HIGH through every in-flight reset");
+// The sensor SPI bus moved on 2026-09-03 and the two constants below are the
+// ones a maintainer is most likely to "restore" from the stale comment that
+// used to sit above them in board_m1.h: pads 36 and 37 (GPIO48 and GPIO47) are
+// BARE on this board. A barometer whose chip select never asserts and an IMU
+// interrupt that never fires are both silent at runtime.
+static_assert(board_pins::BMP585_CS == 9 && board_pins::ISM6HG256_INT == 8,
+              "board_m1.h: BMP585_CS is pad 14 (GPIO9) and ISM6HG256_INT is pad 13 "
+              "(GPIO8) since the 2026-09-03 pin swap — GPIO47/48 are spare pads");
 // The magnetometer is on OUR bus and must stay there — it is a flight sensor,
 // and the out computer has no driver for one. Its pull-ups are on
 // V_MCU_SWTCH with the part, so master, slave and pull-ups share a rail.

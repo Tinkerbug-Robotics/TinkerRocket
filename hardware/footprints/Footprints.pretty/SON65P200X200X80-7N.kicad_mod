@@ -231,7 +231,7 @@
 		(at 0 0)
 		(size 1 1.6)
 		(layers "F.Cu" "F.Mask")
-		(solder_mask_margin 0.05)
+		(solder_mask_margin 0)
 		(uuid "60dbc0e2-1c70-4465-864b-c16f53988006")
 	)
 	(embedded_fonts no)

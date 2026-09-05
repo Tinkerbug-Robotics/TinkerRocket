@@ -1,0 +1,185 @@
+(footprint "ANT_AANI-CH-0070_ABR"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "Abracon AANI-CH-0070 2.4 GHz loop chip antenna, 1.00 x 0.50 x 0.40 mm, edge-mounted. Pads 1+4 = FEED (tie together), pads 2+3 = GND. Land 0.30 x 0.30, 0.25 mm column gap, 0.10 mm row gap (derived from the part terminal drawing and cross-checked against the datasheet's recommended-layout dimensions). The 4.60 x 3.50 mm rectangle on Dwgs.User is the required ground clearance - it must be reproduced as an all-layer keep-out on the board, and the part sits at the PCB edge.")
+	(tags "antenna chip loop 2.4GHz BLE Abracon AANI-CH-0070")
+	(property "Reference" "REF**"
+		(at 0 -0.95 0)
+		(layer "F.SilkS")
+		(uuid "63ee3d00-8831-4c69-9f6b-f7dff2c7e5ae")
+		(effects
+			(font
+				(size 0.4 0.4)
+				(thickness 0.06)
+			)
+		)
+	)
+	(property "Value" "ANT_AANI-CH-0070_ABR"
+		(at 0 0.95 0)
+		(layer "F.Fab")
+		(uuid "a3385375-aa88-45c9-aad3-4d58f87dff63")
+		(effects
+			(font
+				(size 0.4 0.4)
+				(thickness 0.06)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "5a5338c5-06bd-4d5e-8050-5ba0a503bce6")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "13bd8b49-a068-4e7a-a71a-5b21f73c5989")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(attr smd)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_circle
+		(center -0.75 0.45)
+		(end -0.69 0.45)
+		(stroke
+			(width 0.08)
+			(type default)
+		)
+		(fill yes)
+		(layer "F.SilkS")
+		(uuid "9a278cbc-23c6-41a3-9002-8212420794d2")
+	)
+	(fp_line
+		(start -0.625 -0.55)
+		(end 0.625 -0.55)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "6bb5f90f-5773-4a69-b0aa-28e16c947580")
+	)
+	(fp_line
+		(start -0.625 0.55)
+		(end -0.625 -0.55)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "1016b6fd-691f-4b7c-8427-5cfa7e741356")
+	)
+	(fp_line
+		(start 0.625 -0.55)
+		(end 0.625 0.55)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "91f363c4-aa89-4878-857d-d8c0bae4bffc")
+	)
+	(fp_line
+		(start 0.625 0.55)
+		(end -0.625 0.55)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "fd434edd-3b7e-4a79-9801-314d22bbe1ae")
+	)
+	(fp_line
+		(start -0.5 -0.25)
+		(end 0.5 -0.25)
+		(stroke
+			(width 0.03)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "efa83e79-a1bd-4362-ae12-9b3e4afe46b2")
+	)
+	(fp_line
+		(start -0.5 0.25)
+		(end -0.5 -0.25)
+		(stroke
+			(width 0.03)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "a9f989f0-e741-4811-b6c7-7ff4090ec08a")
+	)
+	(fp_line
+		(start 0.5 -0.25)
+		(end 0.5 0.25)
+		(stroke
+			(width 0.03)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "12ce93e3-379f-4825-b66f-d161665e9610")
+	)
+	(fp_line
+		(start 0.5 0.25)
+		(end -0.5 0.25)
+		(stroke
+			(width 0.03)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "91227020-89f6-4059-b192-7ea65f7ca2b8")
+	)
+	(pad "1" smd rect
+		(at -0.275 0.2)
+		(size 0.3 0.3)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(thermal_bridge_angle 45)
+		(uuid "29c4c51b-8ac4-494b-a078-68b9bb6acb2d")
+	)
+	(pad "2" smd rect
+		(at 0.275 0.2)
+		(size 0.3 0.3)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(thermal_bridge_angle 45)
+		(uuid "50febee7-e2a7-4c1f-ba79-5da5a8f24c75")
+	)
+	(pad "3" smd rect
+		(at 0.275 -0.2)
+		(size 0.3 0.3)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(thermal_bridge_angle 45)
+		(uuid "b033548e-557e-4371-8aea-93ba8a52cad1")
+	)
+	(pad "4" smd rect
+		(at -0.275 -0.2)
+		(size 0.3 0.3)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(thermal_bridge_angle 45)
+		(uuid "5d0f97d1-dfd4-46b6-80f0-a92bc0b6cab8")
+	)
+	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/ANT_AANI-CH-0070_ABR.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)
