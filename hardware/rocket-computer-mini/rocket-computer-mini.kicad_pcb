@@ -3077,7 +3077,7 @@
 			(uuid "038dec12-dc9a-4aa3-93b2-27e133e1d30e")
 		)
 		(embedded_fonts no)
-		(model "${KICAD10_3DMODEL_DIR}/Package_TO_SOT_SMD.3dshapes/SOT-883.step"
+		(model "${KIPRJMOD}/../3dmodels/SOT-883.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -9261,6 +9261,17 @@
 				(pts
 					(xy 90.9537 155.4247) (xy 90.9537 156.4153) (xy 90.1663 156.4153) (xy 90.1663 155.4247)
 				)
+			)
+		)
+		(model "${KIPRJMOD}/../3dmodels/SOD-523_0P9X1P3_ONS.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
 			)
 		)
 		(embedded_fonts no)
@@ -16552,6 +16563,17 @@
 			(pintype "power_in")
 			(uuid "102feb4f-9436-418b-ab93-9f4613fce097")
 		)
+		(model "${KICAD10_3DMODEL_DIR}/Package_LGA.3dshapes/ST_HLGA-10_2x2mm_P0.5mm_LayoutBorder3x2y.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
 		(embedded_fonts no)
 	)
 	(footprint "Resistor_SMD:R_0402_1005Metric"
@@ -17762,6 +17784,17 @@
 				)
 			)
 		)
+		(model "${KIPRJMOD}/../3dmodels/SOD-523_0P9X1P3_ONS.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
 		(embedded_fonts no)
 	)
 	(footprint "Capacitor_SMD:C_0402_1005Metric"
@@ -18744,6 +18777,17 @@
 			(pinfunction "SDA_16")
 			(pintype "bidirectional")
 			(uuid "1d7ffd07-eb4a-4100-bfc6-3c486f40b5b5")
+		)
+		(model "${KICAD10_3DMODEL_DIR}/Package_LGA.3dshapes/LGA-16_3x3mm_P0.5mm.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
 		)
 		(embedded_fonts no)
 	)
@@ -40750,6 +40794,17 @@
 				)
 			)
 		)
+		(model "${KIPRJMOD}/../3dmodels/SOD-523_0P9X1P3_ONS.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
 		(embedded_fonts no)
 	)
 	(footprint "Footprints:TSON Advance_TOS"
@@ -52807,6 +52862,17 @@
 				)
 			)
 		)
+		(model "${KIPRJMOD}/../3dmodels/SOD-523_0P9X1P3_ONS.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
 		(embedded_fonts no)
 	)
 	(footprint "Resistor_SMD:R_0402_1005Metric"
@@ -56123,7 +56189,7 @@
 			(uuid "590f6a7d-3883-41fb-8ede-e54bff4b8c90")
 		)
 		(embedded_fonts no)
-		(model "${KICAD10_3DMODEL_DIR}/Package_SON.3dshapes/WSON-12-1EP_3x2mm_P0.5mm_EP1x2.65.step"
+		(model "${KIPRJMOD}/../3dmodels/WSON-12-1EP_3x2mm_P0.5mm_EP1x2.65.step"
 			(offset
 				(xyz 0 0 0)
 			)
