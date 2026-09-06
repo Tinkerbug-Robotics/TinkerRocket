@@ -42,6 +42,12 @@ public data class RocketProfile(
     val gainScheduleEnabled: Boolean = true,
     val useAngleControl: Boolean = false,
     val rollDelayMs: Int = 0,
+    /**
+     * Control-authority speed gate (m/s).  Roll control and guidance wait for
+     * BOTH [rollDelayMs] and this airspeed.  0 = no speed gate, matching the
+     * firmware default.
+     */
+    val rollMinSpeedMps: Float = 0f,
     val rateCapDps: Float = 60f,           // config::KP_ANGLE_RATE_CAP_DPS
     val kpAngle: Float = 2.0f,             // config::KP_ANGLE
     val guidanceEnabled: Boolean = false,
@@ -203,6 +209,7 @@ public object RocketProfileCodec {
         put("gainScheduleEnabled", JsonPrimitive(p.gainScheduleEnabled))
         put("useAngleControl", JsonPrimitive(p.useAngleControl))
         put("rollDelayMs", JsonPrimitive(p.rollDelayMs))
+        put("rollMinSpeedMps", JsonPrimitive(p.rollMinSpeedMps))
         put("rateCapDps", JsonPrimitive(p.rateCapDps))
         put("kpAngle", JsonPrimitive(p.kpAngle))
         put("guidanceEnabled", JsonPrimitive(p.guidanceEnabled))
@@ -329,6 +336,7 @@ public object RocketProfileCodec {
             gainScheduleEnabled = o.bool("gainScheduleEnabled") ?: d.gainScheduleEnabled,
             useAngleControl = o.bool("useAngleControl") ?: d.useAngleControl,
             rollDelayMs = o.int("rollDelayMs") ?: d.rollDelayMs,
+            rollMinSpeedMps = o.float("rollMinSpeedMps") ?: d.rollMinSpeedMps,
             rateCapDps = o.float("rateCapDps") ?: d.rateCapDps,
             kpAngle = o.float("kpAngle") ?: d.kpAngle,
             guidanceEnabled = o.bool("guidanceEnabled") ?: d.guidanceEnabled,

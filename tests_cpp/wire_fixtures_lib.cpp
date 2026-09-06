@@ -250,6 +250,7 @@ FlightSettingsData canonicalFlightSettings() {
     s.version = FlightSettingsData::VERSION;
     s.flags = 0x4F;  // angle_ctl | gain_sched | guidance | servo_en | station_keep
     s.roll_delay_ms = 1500;
+    s.roll_min_speed_dmps = 280;   // v8: 28.0 m/s control-authority speed gate
     s.kp = 0.8f; s.ki = 0.15f; s.kd = 0.05f; s.d_lpf_hz = 25.0f;
     s.min_cmd_deg = -15.0f; s.max_cmd_deg = 15.0f;
     s.kp_angle = 2.5f; s.kp_angle_rate_cap_dps = 180.0f;
@@ -433,6 +434,7 @@ std::string flightSettingsSidecar(const FlightSettingsData& s, size_t presentByt
             .u("guid_tgt_src", s.guid_tgt_src);
     }
     if (presentBytes >= 220) j.u("gnss_otp_state", s.gnss_otp_state);
+    if (presentBytes >= 222) j.u("roll_min_speed_dmps", s.roll_min_speed_dmps);
     return j.done();
 }
 
@@ -538,21 +540,22 @@ void buildLogframes(Builder& b) {
     // FlightSettings version ladder (version byte at offset 4):
     // v1 = 188, v2 = 200 (+b2r), v3/v4 = 208 (+fin cal; v4 = semantics only),
     // v5 = 210 (+imu rate), v6 = 219 (+flown guidance target),
-    // v7 = 220 (+GNSS OTP clock state, #837 item 6).
+    // v7 = 220 (+GNSS OTP clock state, #837 item 6),
+    // v8 = 222 (+roll-control speed gate).
     const auto fs = canonicalFlightSettings();
     const auto fsFull = bytesOf(fs);
-    b.add("logframes", "flightsettings_v7_220.bin", fsFull,
-          flightSettingsSidecar(fs, 220, fs.version),
-          "FlightSettingsData v7, msg 0xE1; pyro sub-struct pinned by cmd34 fixture");
+    b.add("logframes", "flightsettings_v8_222.bin", fsFull,
+          flightSettingsSidecar(fs, 222, fs.version),
+          "FlightSettingsData v8, msg 0xE1; pyro sub-struct pinned by cmd34 fixture");
     const struct { size_t len; uint8_t ver; } fsLadder[] = {
-        {188, 1}, {200, 2}, {208, 3}, {210, 5}, {219, 6}};
+        {188, 1}, {200, 2}, {208, 3}, {210, 5}, {219, 6}, {220, 7}};
     for (const auto& lv : fsLadder) {
         auto img = prefix(fsFull, lv.len);
         img[4] = lv.ver;
         char name[40];
         std::snprintf(name, sizeof(name), "flightsettings_v%u_%zu.bin", lv.ver, lv.len);
         b.add("logframes", name, img, flightSettingsSidecar(fs, lv.len, lv.ver),
-              "FlightSettingsData version-ladder truncation of the v7 image");
+              "FlightSettingsData version-ladder truncation of the v8 image");
     }
 }
 
@@ -804,11 +807,23 @@ void buildCommands(Builder& b) {
         r.use_angle_control = 1; r._pad = 0; r.roll_delay_ms = 1200;
         r.kp_angle_rate_cap_dps = 120.0f; r.kp_angle = 2.5f;
         r.integral_sep_threshold_dps = -1.0f;  // sentinel: keep firmware default
-        b.add("commands", "cmd31_rollctl_16.bin", cmd(31, bytesOf(r)),
+        r.roll_min_speed_mps = 28.0f;          // control-authority speed gate
+        const auto rcFull = bytesOf(r);
+        b.add("commands", "cmd31_rollctl_20.bin", cmd(31, rcFull),
               Json().u("cmd", 31).u("use_angle_control", 1).u("roll_delay_ms", 1200)
                   .f("kp_angle_rate_cap_dps", 120.0f).f("kp_angle", 2.5f)
-                  .f("integral_sep_threshold_dps", -1.0f).done(),
+                  .f("integral_sep_threshold_dps", -1.0f)
+                  .f("roll_min_speed_mps", 28.0f).done(),
               "RollControlConfigData; iwind < 0 = keep-firmware-default sentinel (#253)");
+        // Legacy 16-byte payload from an app built before the speed gate.  The
+        // OC pads it out to the full struct with the gate off rather than
+        // dropping the push, so this image must stay decodable.
+        b.add("commands", "cmd31_rollctl_legacy_16.bin", cmd(31, prefix(rcFull, 16)),
+              Json().u("cmd", 31).u("use_angle_control", 1).u("roll_delay_ms", 1200)
+                  .f("kp_angle_rate_cap_dps", 120.0f).f("kp_angle", 2.5f)
+                  .f("integral_sep_threshold_dps", -1.0f)
+                  .f("roll_min_speed_mps", 0.0f).done(),
+              "RollControlConfigData truncated to the pre-speed-gate 16 B; gate reads 0 = off");
     }
 
     b.add("commands", "cmd33_camera_1.bin", cmd(33, bytesOf(CameraConfigData{2})),

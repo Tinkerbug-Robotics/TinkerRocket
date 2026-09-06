@@ -47,6 +47,9 @@ TYPES_H = REPO / "tinkerrocket-idf/components/TR_RocketComputerTypes/RocketCompu
 # explicit. A row with no entry is REPORTED rather than skipped, so a new row
 # cannot quietly opt out of the check.
 CODE_TO_STRUCT = {
+    # Variable-length on the wire (10 + 6 * num_blocks); the README quotes the
+    # struct's full size, which is what the static_assert pins.
+    0x90: "GNSSSatData",
     0xA1: "GNSSData",
     0xA2: "ISM6HG256Data",
     0xA3: "BMP585Data",

@@ -64,6 +64,17 @@ class SimConfig:
     # main.cpp). This is the app's "Activation Delay" (BLE roll_delay_ms);
     # guidance engages at launch+delay, NOT at burnout.
     roll_delay_s: float = 0.25
+    # Control-authority speed gate (m/s, firmware roll_min_speed_mps / the app's
+    # "Min Speed"). Fin control and guidance wait for the airspeed as well as
+    # roll_delay_s — the firmware ANDs the two. 0 disables the gate.
+    #
+    # Fin authority scales with V^2, so a loop that engages on the rail commands
+    # deflection the fins cannot deliver; the 2026-08-29 54 mm flight (delay 0)
+    # saturated its fin command for a third of the first half second and
+    # departed to 904 deg/s of roll as authority arrived at 40-55 m/s.
+    # Latched like the firmware: once open it stays open, so the gate does not
+    # re-close as the vehicle slows toward apogee.
+    roll_min_speed_mps: float = 0.0
 
     # Roll angle profile: list of (time_s, angle_deg) waypoints, or None
     # When set, a cascaded controller tracks angle → rate → fin tab
@@ -436,6 +447,8 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     fin_horns = np.zeros(4)
     guidance_active = False
     guidance_tilt_inhibited = False  # tilt-limit safety latch (FC: guidance_tilt_inhibited)
+    roll_speed_gate_open = config.roll_min_speed_mps <= 0.0  # FC: roll_speed_gate_open
+    roll_speed_gate_t = None  # time the speed gate opened, for the run summary
     guidance_tilt_trip_t = None      # time the latch tripped (for reporting/plots)
     burnout_detected = False
     burnout_time = None
@@ -777,6 +790,14 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                     if hasattr(sim.rocket, 'roll_disturbance_torque'):
                         sim.rocket.roll_disturbance_torque = 0.0
 
+                # --- Control-authority speed gate (FC: roll_speed_gate_open) ---
+                # Latched: satisfied once, open for the rest of the flight.
+                if not roll_speed_gate_open and speed >= config.roll_min_speed_mps:
+                    roll_speed_gate_open = True
+                    roll_speed_gate_t = t
+                    print(f"  [CTRL] speed gate OPEN at {speed:.1f} m/s "
+                          f"(>= {config.roll_min_speed_mps:.1f}) @t={t:.3f}s")
+
                 # --- Determine if guided coast is active ---
                 # Mirrors the firmware: guidance engages once past the shared
                 # activation delay (launch+roll_delay_s), gated only by airspeed
@@ -788,7 +809,7 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                 # launch+activation delay (the FC checks it inside the post-launch
                 # control block), so a pad-init attitude transient can't trip it.
                 if (config.guidance_enabled and not guidance_tilt_inhibited
-                        and t >= config.roll_delay_s):
+                        and t >= config.roll_delay_s and roll_speed_gate_open):
                     eq = ekf.get_quaternion()  # (q0,q1,q2,q3) body->NED
                     nose_up = -2.0 * (eq[1]*eq[3] - eq[0]*eq[2])
                     nose_up = max(-1.0, min(1.0, nose_up))
@@ -804,17 +825,20 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
 
                 guidance_active = False
                 if (config.guidance_enabled and guidance is not None and
-                        t >= config.roll_delay_s and
+                        t >= config.roll_delay_s and roll_speed_gate_open and
                         not guidance_tilt_inhibited and
                         not guidance_cpa_reached and
                         speed > config.pn_min_speed_mps):
                     guidance_active = True
 
                 # Fin control (roll + guidance) engages after the shared
-                # activation delay, matching the firmware neutral-hold gate
-                # `t_since_launch_ms >= roll_delay_ms`. speed > 5 is a rail-
-                # clearance floor.
-                if config.control_enabled and speed > 5.0 and t >= config.roll_delay_s:
+                # activation delay AND the control-authority speed gate,
+                # matching the firmware neutral-hold gate
+                # `t_since_launch_ms >= roll_delay_ms || !roll_speed_gate_open`.
+                # speed > 5 is a rail-clearance floor the firmware does not have;
+                # set roll_min_speed_mps to model the configurable gate.
+                if (config.control_enabled and speed > 5.0
+                        and t >= config.roll_delay_s and roll_speed_gate_open):
                     rot_rate = ekf.get_rot_rate_est()
                     roll_rate_dps = math.degrees(rot_rate[0])
 

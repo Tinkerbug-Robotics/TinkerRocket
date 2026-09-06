@@ -80,6 +80,8 @@ MAG_UT_PER_LSB_BY_TYPE = {0: IIS2MDC_UT_PER_LSB, 1: QMC5883P_UT_PER_LSB}
 # ---------- Message type IDs (Mini) ----------
 MSG_OUT_STATUS_QUERY  = 0xA0
 MSG_GNSS              = 0xA1
+MSG_GNSS_SAT          = 0x90  # GNSSSatData: per-satellite C/N0 at every GNSS epoch,
+                              # variable length 10 + 6*n (first code of the 0x90 block)
 MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
@@ -113,6 +115,7 @@ GNSS_OTP_STATES = {
 MSG_NAMES = {
     MSG_OUT_STATUS_QUERY: "OUT_STATUS_QUERY",
     MSG_GNSS:             "GNSS",
+    MSG_GNSS_SAT:         "GNSS_SAT",
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
@@ -133,6 +136,7 @@ MSG_NAMES = {
 MSG_EXPECTED_LEN = {
     MSG_OUT_STATUS_QUERY:  (16, 26, 28, 41, 42),  # OutStatusQueryData v2 / v3 (+b2r) / v4 (+iis2mdc rot) / v5 (+guid target echo, #435) / v6 (+mag_type)
     MSG_GNSS:              42,
+    MSG_GNSS_SAT:          None,  # 10 + 6*n (n <= 32); the shape is checked where it is decoded
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
@@ -150,6 +154,70 @@ MSG_EXPECTED_LEN = {
 # Struct formats (little-endian, packed)
 # GNSSData: 42 bytes
 FMT_GNSS = '<I HBB BBB H BBB iii iii BB'
+# GNSSSatData: 10-byte header (time_us, itow_ms, num_svs, num_blocks) then
+# num_blocks x 6-byte GNSSSatBlock (gnss_id, sv_id, cno, elev, azim/2, flags)
+FMT_GNSS_SAT_HDR = '<I I B B'
+FMT_GNSS_SAT_BLK = '<B B B b B B'
+GNSS_SAT_HDR_LEN = struct.calcsize(FMT_GNSS_SAT_HDR)
+GNSS_SAT_BLK_LEN = struct.calcsize(FMT_GNSS_SAT_BLK)
+# UBX gnssId -> constellation, as u-blox numbers them.
+GNSS_ID_NAMES = {0: "GPS", 1: "SBAS", 2: "Galileo", 3: "BeiDou", 4: "IMES",
+                 5: "QZSS", 6: "GLONASS", 7: "NavIC"}
+# GNSSSatBlock.flags — mirrors GNSS_SAT_F_* in RocketComputerTypes.h.
+GNSS_SAT_F_USED = 0x01
+GNSS_SAT_F_QUAL_SHIFT, GNSS_SAT_F_QUAL_MASK = 1, 0x0E
+GNSS_SAT_F_HEALTH_SHIFT, GNSS_SAT_F_HEALTH_MASK = 4, 0x30
+GNSS_SAT_F_EPH = 0x40
+GNSS_SAT_F_ALM = 0x80
+
+
+def decode_gnss_sat(payload):
+    """GNSSSatData payload -> record dict, or None if the shape is wrong.
+
+    The nested `sats` list carries one dict per satellite; the flat summary
+    fields beside it exist so the stream plots and catalogs like any other
+    (the report's field catalog ignores non-numeric values).  num_blocks may
+    be < num_svs: the firmware keeps tracked satellites first and truncates at
+    32, so a truncated epoch still holds every satellite with a signal.
+    """
+    if len(payload) < GNSS_SAT_HDR_LEN:
+        return None
+    if (len(payload) - GNSS_SAT_HDR_LEN) % GNSS_SAT_BLK_LEN != 0:
+        return None
+    time_us, itow_ms, num_svs, num_blocks = struct.unpack_from(FMT_GNSS_SAT_HDR, payload, 0)
+    n_on_wire = (len(payload) - GNSS_SAT_HDR_LEN) // GNSS_SAT_BLK_LEN
+    if num_blocks != n_on_wire:
+        return None
+    sats = []
+    for i in range(num_blocks):
+        off = GNSS_SAT_HDR_LEN + i * GNSS_SAT_BLK_LEN
+        gnss_id, sv_id, cno, elev, azim2, flags = struct.unpack_from(FMT_GNSS_SAT_BLK, payload, off)
+        sats.append({
+            "gnss_id":  gnss_id,
+            "gnss":     GNSS_ID_NAMES.get(gnss_id, f"?{gnss_id}"),
+            "sv_id":    sv_id,
+            "cno_dbhz": cno,
+            "elev_deg": elev,
+            "azim_deg": azim2 * 2,
+            "used":     bool(flags & GNSS_SAT_F_USED),
+            "quality":  (flags & GNSS_SAT_F_QUAL_MASK) >> GNSS_SAT_F_QUAL_SHIFT,
+            "health":   (flags & GNSS_SAT_F_HEALTH_MASK) >> GNSS_SAT_F_HEALTH_SHIFT,
+            "eph":      bool(flags & GNSS_SAT_F_EPH),
+            "alm":      bool(flags & GNSS_SAT_F_ALM),
+        })
+    tracked = [s for s in sats if s["cno_dbhz"] > 0]
+    used = [s for s in sats if s["used"]]
+    return {
+        "time_us":       time_us,
+        "itow_ms":       itow_ms,
+        "num_svs":       num_svs,
+        "num_blocks":    num_blocks,
+        "n_tracked":     len(tracked),
+        "n_used":        len(used),
+        "cno_max":       max((s["cno_dbhz"] for s in tracked), default=0),
+        "cno_mean_used": (sum(s["cno_dbhz"] for s in used) / len(used)) if used else 0.0,
+        "sats":          sats,
+    }
 # ISM6HG256Data: 22 bytes (time_us + 3×Vec3i16)
 FMT_ISM6 = '<I hhh hhh hhh'
 # BMP585Data: 12 bytes (time_us, temp_q16:i32, press_q6:u32)
@@ -341,6 +409,7 @@ def parse_binary_file(filepath):
     file_size = len(data)
     records = {
         "GNSS":           [],
+        "GNSS_SAT":       [],
         "ISM6HG256":      [],
         "BMP585":         [],
         "MMC5983MA":      [],
@@ -371,6 +440,10 @@ def parse_binary_file(filepath):
         # never written down, which is what made the question unanswerable.
         "gnss_otp_state": None,
         "gnss_otp_state_name": None,
+        # Roll-control speed gate that flew, m/s (FlightSettingsData v8+).
+        # None on older logs, which had no speed gate at all — so None and 0.0
+        # mean the same thing for those flights.
+        "roll_min_speed_mps": None,
         "b2r_mode": None,
         "b2r_quat": None,
     }
@@ -443,6 +516,12 @@ def parse_binary_file(filepath):
                 config["gnss_otp_state"] = payload[219]
                 config["gnss_otp_state_name"] = GNSS_OTP_STATES.get(
                     payload[219], f"?{payload[219]}")
+            # v8 roll-control speed gate @220, deci-m/s.  Same reason as the OTP
+            # state: it decides whether the fins were allowed to move at all
+            # early in the flight, and pre-v8 it existed nowhere in the record.
+            if fs_version >= 8 and msg_len >= 222:
+                config["roll_min_speed_mps"] = (
+                    int.from_bytes(payload[220:222], "little") / 10.0)
 
         pos += msg_len + 2
 
@@ -503,6 +582,11 @@ def parse_binary_file(filepath):
                     "h_acc_m":   fields[17],
                     "v_acc_m":   fields[18],
                 })
+
+            elif msg_type == MSG_GNSS_SAT:
+                rec = decode_gnss_sat(payload)
+                if rec is not None:
+                    records["GNSS_SAT"].append(rec)
 
             elif msg_type == MSG_ISM6HG256:
                 fields = struct.unpack(FMT_ISM6, payload)

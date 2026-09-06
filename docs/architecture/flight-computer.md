@@ -153,17 +153,33 @@ a lockout suppresses barometric apogee voting between 260 m/s (on) and 240 m/s (
 Two mutually exclusive modes, chosen in the app.
 
 **Roll control** nulls roll rate with a PID driving the fin tabs through the control
-mixer. It starts at launch plus a configurable `roll_delay`, so the boost phase — where
-fin authority is highest and the vehicle is least in need of help — is left alone.
+mixer. It starts once **two** activation gates have both opened: a configurable
+`roll_delay` after launch, and a configurable `roll_min_speed` the vehicle must reach.
 
-**Guidance** adds a proportional-navigation law on top. It is gated on the *same*
-`roll_delay`, which is the subtle part: guidance begins a fixed time after **launch**,
-not after burnout. To keep guidance out of the boost phase, set `roll_delay` to
-approximately the motor burn time.
+The speed gate exists because fin authority scales with the square of airspeed while the
+delay only tracks the clock, and the time to reach a useful speed changes with motor,
+mass and rail exit. A loop that engages at rail speed commands deflection the fins cannot
+deliver, winds up, and then departs when authority arrives. The 54 mm roll-control flight
+of 2026-08-29 flew with `roll_delay` at zero: it engaged at 7 m/s, held the fin command
+at its ±20° limit for a third of the first half second, and reached 904 °/s of roll at
+T+0.50 s as authority came in around 40–55 m/s. `roll_min_speed` defaults to 0, which
+disables it and preserves the delay-only behaviour.
+
+The speed gate is a **latch**: once satisfied it stays open for the flight, so control
+does not drop out and re-engage as the vehicle slows through apogee. It reads the EKF
+speed, so it cannot open before the filter initialises. If it never opens the fins stay
+neutral for the whole flight — burnout, apogee and every pyro channel are detected
+outside the servo branch, so recovery is unaffected. That is the safe failure, and the
+firmware logs a warning once if the gate is still shut five seconds after launch.
+
+**Guidance** adds a proportional-navigation law on top. It is gated on the *same* two
+activation gates, which is the subtle part: guidance begins after **launch**, not after
+burnout. To keep guidance out of the boost phase, set `roll_delay` to approximately the
+motor burn time.
 
 Guidance additionally requires a healthy EKF, sufficient airspeed, and a tilt within
 limits. The tilt check is a **latch** — once tripped, guidance is off for the remainder
-of the flight and the vehicle reverts to roll-only. Before `roll_delay` elapses, and
+of the flight and the vehicle reverts to roll-only. Before the activation gates open, and
 whenever the EKF is unhealthy, the control path falls back to a pure gyro rate-null that
 needs no state estimate at all.
 

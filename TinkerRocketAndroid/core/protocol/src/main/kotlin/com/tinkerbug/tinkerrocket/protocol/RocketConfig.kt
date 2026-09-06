@@ -78,6 +78,11 @@ public data class RocketConfig(
     val gainScheduleEnabled: Boolean = true,    // "gs"
     val useAngleControl: Boolean = false,       // "ac"
     val rollDelayMs: Int = 0,                   // u16, "rdly"
+    /**
+     * Control-authority speed gate (m/s): roll control and guidance wait for
+     * this airspeed as well as [rollDelayMs].  0 = no speed gate.
+     */
+    val rollMinSpeedMps: Float = 0f,            // "rmspd"
     val rateCapDps: Float = 60f,                // "rcap" (#253 sentinel: <= 0 → keep default)
     /** Outer angle-loop P-gain (cascaded angle control). */
     val kpAngle: Float = 2.0f,                  // "kpang" (#253 sentinel: <= 0 → keep default)
@@ -177,6 +182,7 @@ public data class ConfigMessage(
     val gs: Boolean? = null,
     val ac: Boolean? = null,
     val rdly: Long? = null,
+    val rmspd: Float? = null,
     val rcap: Float? = null,
     val kpang: Float? = null,
     val iwind: Float? = null,
@@ -223,6 +229,9 @@ public data class ConfigMessage(
             gainScheduleEnabled = gs ?: d.gainScheduleEnabled,
             useAngleControl = ac ?: d.useAngleControl,
             rollDelayMs = (rdly ?: d.rollDelayMs.toLong()).coerceIn(0, 0xFFFF).toInt(),
+            // Absent on firmware built before the speed gate — keep whatever the
+            // app already holds rather than reading a missing key as 0 (off).
+            rollMinSpeedMps = rmspd?.takeIf { it >= 0 } ?: d.rollMinSpeedMps,
             // #253 sentinel gates — keep the default on sentinel values.
             rateCapDps = rcap?.takeIf { it > 0 } ?: d.rateCapDps,
             kpAngle = kpang?.takeIf { it > 0 } ?: d.kpAngle,
@@ -278,6 +287,7 @@ public data class ConfigMessage(
             gs = JsonBridging.nsBool(json, "gs"),
             ac = JsonBridging.nsBool(json, "ac"),
             rdly = JsonBridging.nsInt(json, "rdly"),
+            rmspd = JsonBridging.parseFloatIos(json, "rmspd"),
             rcap = JsonBridging.parseFloatIos(json, "rcap"),
             kpang = JsonBridging.parseFloatIos(json, "kpang"),
             iwind = JsonBridging.parseFloatIos(json, "iwind"),

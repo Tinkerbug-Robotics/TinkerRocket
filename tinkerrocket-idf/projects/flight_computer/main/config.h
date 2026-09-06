@@ -475,6 +475,35 @@ struct config : board_pins
     // for this many ms after launch detection before engaging any roll control.
     static constexpr uint16_t ROLL_CONTROL_DELAY_MS = 0;  // default; overridden at runtime via app
 
+    // Roll control activation SPEED gate (m/s).  Fins stay neutral until the
+    // EKF speed first reaches this value, ANDed with ROLL_CONTROL_DELAY_MS —
+    // both gates must open before roll control or guidance engages.  0
+    // disables the gate (time-delay-only behaviour).
+    //
+    // Why a speed gate and not just a longer delay: fin authority scales with
+    // V^2, so the useful trigger is a speed, and the time it takes to reach it
+    // changes with motor, mass and rail exit.  On the 54 mm roll-control
+    // flight of 2026-08-29 (delay 0 ms) the loop engaged at 7 m/s, saturated
+    // the fin command at the +/-20 deg limit for 34% of the first half second
+    // while the fins could not answer, and the vehicle departed to 904 deg/s
+    // of roll at T+0.50 s before authority arrived around 40-55 m/s.  A gate
+    // in the 25-30 m/s band (T+0.24 to T+0.31 s on that flight, and the same
+    // band as GAIN_SCHEDULE_V_MIN below) holds the fins neutral through the
+    // no-authority window instead.
+    //
+    // Default 0 so an un-configured vehicle keeps its existing behaviour;
+    // set per-rocket from the app.  Runtime-overridable via NVS key "rmspd".
+    static constexpr float ROLL_CONTROL_MIN_SPEED_MPS = 0.0f;
+    // Upper bound accepted from the app, m/s.  Rejects a garbled frame rather
+    // than latching a gate that can never open.
+    static constexpr float ROLL_CONTROL_MIN_SPEED_MAX_MPS = 300.0f;
+    // If the speed gate has not opened this long after launch, say so once in
+    // the log.  Purely diagnostic — it does NOT open the gate.  A gate that
+    // never opens leaves the fins neutral for the flight, which is the safe
+    // failure: burnout, apogee and every pyro channel are detected outside the
+    // servo branch and are unaffected.
+    static constexpr uint32_t ROLL_CONTROL_SPEED_GATE_WARN_MS = 5000;
+
     // Gain scheduling — V_ref is the speed where base gains apply.
     // Gains scale as (V_ref/V)², capped at 3.0. At low speed, gains
     // increase to compensate for reduced aerodynamic effectiveness.

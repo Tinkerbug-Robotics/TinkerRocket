@@ -109,7 +109,7 @@ class TelemetryDispatchTest {
             """
             {"type":"config","sb1":12,"shz":300,"smn":1100,"smx":1900,
              "kp":0.1,"ki":0.01,"kd":0.002,"pmn":-8.0,"pmx":8.0,
-             "sen":false,"gs":false,"ac":true,"rdly":250,
+             "sen":false,"gs":false,"ac":true,"rdly":250,"rmspd":28.0,
              "rcap":45.0,"kpang":1.5,"iwind":30.0,"ge":true,"camt":1,
              "irate":1920,"lf":915.5,"lsf":8,"lbw":250.0,"lcr":5,"lpw":-3,
              "lhd":true,"lhdw":400,"ltxd":true}
@@ -128,6 +128,7 @@ class TelemetryDispatchTest {
         assertFalse(cfg.gainScheduleEnabled)
         assertTrue(cfg.useAngleControl)
         assertEquals(250, cfg.rollDelayMs)
+        assertEquals(28.0f, cfg.rollMinSpeedMps)
         assertEquals(45.0f, cfg.rateCapDps)
         assertEquals(1.5f, cfg.kpAngle)
         assertEquals(30.0f, cfg.integralSepThreshold)

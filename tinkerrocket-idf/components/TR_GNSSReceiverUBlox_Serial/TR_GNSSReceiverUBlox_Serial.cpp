@@ -842,6 +842,29 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         if (!ok) return false;
         ESP_LOGI(TAG, "Auto PVT enabled");
 
+        // Per-satellite report (UBX-NAV-SAT) at the same rate as NAV-PVT, one
+        // per epoch.  Flight data, not a diagnostic: it is logged beside every
+        // GNSSData (GNSS_SAT_MSG) so a lost fix reads as "channels dropped" vs
+        // "position withheld", per satellite and with elevation.  ~370 B per
+        // epoch at 18 Hz is ~7 kB/s on a 46 kB/s link.  Non-fatal on refusal:
+        // the fix is flight-critical, this record is not, and a module that
+        // takes PVT but not SAT should still fly.
+        sat_reports_enabled_ = false;
+        for (i = 0; i < 3; i++)
+        {
+            if (gnss.setAutoNAVSAT(true)) { sat_reports_enabled_ = true; break; }
+            ESP_LOGW(TAG, "Failed to enable auto NAV-SAT");
+            delay(150);
+        }
+        if (sat_reports_enabled_)
+        {
+            ESP_LOGI(TAG, "Auto NAV-SAT enabled (per-satellite record on)");
+        }
+        else
+        {
+            ESP_LOGE(TAG, "NAV-SAT REFUSED — flying without the per-satellite record");
+        }
+
         // Save settings to BBR/flash where available.
         (void)gnss.saveConfiguration();
         return true;
@@ -1158,6 +1181,46 @@ bool TR_GNSSReceiverUBloxSerial::pollNewPVT(GNSSData &gnss_data)
     return true;
 }
 
+bool TR_GNSSReceiverUBloxSerial::pollNewSat(GNSSSatData &out)
+{
+    // getNAVSAT(0) with auto reports on never blocks: it parses whatever is
+    // pending on the UART and answers whether a NAV-SAT has landed since the
+    // last flushNAVSAT().  The library stores the message atomically once its
+    // checksum passes, so the cache is never half an epoch.
+    if (!sat_reports_enabled_ || !gnss.getNAVSAT(0) || gnss.packetUBXNAVSAT == nullptr)
+        return false;
+
+    const UBX_NAV_SAT_data_t &d = gnss.packetUBXNAVSAT->data;
+    const uint8_t n = d.header.numSvs;   // <= UBX_NAV_SAT_MAX_BLOCKS by type
+    for (uint16_t i = 0; i < n; i++)
+    {
+        const UBX_NAV_SAT_block_t &b = d.blocks[i];
+        GNSSSatBlock &s = sat_scratch_[i];
+        s.gnss_id  = b.gnssId;
+        s.sv_id    = b.svId;
+        s.cno_dbhz = b.cno;
+        s.elev_deg = b.elev;
+        // NAV-SAT azimuth is 0..360 deg (signed on the wire); fold to 0..179
+        // in 2 deg steps.  360 wraps to 0.
+        int16_t az = b.azim;
+        while (az < 0)    az += 360;
+        while (az >= 360) az -= 360;
+        s.azim_2deg = (uint8_t)(az / 2);
+        s.flags = gnssSatFlags(b.flags.bits.svUsed != 0,
+                               (uint8_t)b.flags.bits.qualityInd,
+                               (uint8_t)b.flags.bits.health,
+                               b.flags.bits.ephAvail != 0,
+                               b.flags.bits.almAvail != 0);
+    }
+
+    out.time_us = micros();
+    out.itow_ms = d.header.iTOW;
+    gnssSatSelect(sat_scratch_, n, out);
+
+    gnss.flushNAVSAT();   // consumed: the next getNAVSAT(0) waits for a new epoch
+    return true;
+}
+
 void TR_GNSSReceiverUBloxSerial::getGNSSData(GNSSData &gnss_data)
 {
     // #572: every getter passes maxWait=0 explicitly. The SparkFun default is
@@ -1238,14 +1301,6 @@ void TR_GNSSReceiverUBloxSerial::getGNSSData(GNSSData &gnss_data)
 
 #if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG
 
-bool TR_GNSSReceiverUBloxSerial::enableSatDiag()
-{
-    // Automatic reports, so getNAVSAT(0) below never blocks the flight loop.
-    const bool ok = gnss.setAutoNAVSAT(true);
-    ESP_LOGI("GNSS", "[COCOM] NAV-SAT auto reports %s", ok ? "enabled" : "REFUSED");
-    return ok;
-}
-
 void TR_GNSSReceiverUBloxSerial::logSatDiag()
 {
     // Fix state first, straight from the library's NAV-PVT cache. Velocity is
@@ -1267,7 +1322,11 @@ void TR_GNSSReceiverUBloxSerial::logSatDiag()
              (long)gnss.getNedEastVel(0),
              (long)gnss.getNedDownVel(0));
 
-    if (!gnss.getNAVSAT(0) || gnss.packetUBXNAVSAT == nullptr)
+    // The cache, not the freshness flag: pollNewSat() consumes the flag on
+    // every epoch for the flight record, and NAV-SAT has been on since
+    // begin() (GNSS_SAT_MSG), so there is nothing to enable here any more.
+    // At ~1 Hz this prints the most recent of the ~18 epochs since last time.
+    if (!sat_reports_enabled_ || gnss.packetUBXNAVSAT == nullptr)
         return;
 
     const uint8_t n = gnss.packetUBXNAVSAT->data.header.numSvs;

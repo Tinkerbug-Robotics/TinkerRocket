@@ -890,7 +890,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     func sendRollControlConfig(useAngleControl: Bool, rollDelayMs: UInt16, rateCapDps: Float,
-                               kpAngle: Float, integralSepThreshold: Float) {
+                               kpAngle: Float, integralSepThreshold: Float,
+                               rollMinSpeedMps: Float) {
         var payload = Data()
         payload.append(useAngleControl ? 0x01 : 0x00)
         payload.append(0x00)
@@ -902,13 +903,16 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         payload.append(Data(bytes: &kpa, count: 4))
         var iwind = integralSepThreshold          // PID integral-separation anti-windup threshold (deg/s), LE float
         payload.append(Data(bytes: &iwind, count: 4))
-        sendRawCommand(31, payload: payload)      // RollControlConfigData = 16 bytes
+        var minSpd = rollMinSpeedMps              // control-authority speed gate (m/s), LE float; 0 = off
+        payload.append(Data(bytes: &minSpd, count: 4))
+        sendRawCommand(31, payload: payload)      // RollControlConfigData = 20 bytes
         if var cfg = rocketConfig {
             cfg.useAngleControl = useAngleControl
             cfg.rollDelayMs = rollDelayMs
             cfg.rateCapDps = rateCapDps
             cfg.kpAngle = kpAngle
             cfg.integralSepThreshold = integralSepThreshold
+            cfg.rollMinSpeedMps = rollMinSpeedMps
             rocketConfig = cfg
         }
     }
@@ -2041,6 +2045,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.gainScheduleEnabled = dict["gs"] as? Bool ?? cfg.gainScheduleEnabled
             cfg.useAngleControl = dict["ac"] as? Bool ?? cfg.useAngleControl
             cfg.rollDelayMs = UInt16(dict["rdly"] as? Int ?? Int(cfg.rollDelayMs))
+            // "rmspd" is absent on firmware built before the speed gate; keep
+            // whatever the app already holds rather than reading it as 0 (off).
+            if let rmspd = dict["rmspd"] as? Double { cfg.rollMinSpeedMps = Float(rmspd) }
             // #253: roll-control gain readback. The device reports sentinels
             // (rcap/kpang <= 0, iwind < 0) for "firmware default" — keep the
             // local value in that case rather than displaying the sentinel.

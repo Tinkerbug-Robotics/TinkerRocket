@@ -371,6 +371,12 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
     memcpy(&d, payload, sizeof(d));
     // #835 item 7: tracks whether this SET_CONFIG actually reached the air.
     bool cfg_ok = true;
+    // Which half failed, for the log only.  Three paths reach the rejection
+    // warning below and they are not the same event: the radio can be down,
+    // rolled back, or running the NEW modulation with a stale frame format.
+    // The wire still carries only CFG_ACK_REJECTED — see #1173 for putting the
+    // reason in ModemStatusData where a host can act on it.
+    const char* fail_what = "";
 
     // Clamp to module capability — hosts should already respect IDENTITY,
     // but a matched-pair mismatch must degrade, not transmit out of spec.
@@ -385,6 +391,7 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
         // applies every field including preamble/flags.
         radio_up = radio.begin(radioConfigFromMsg(d), config::DEBUG);
         cfg_ok = radio_up;
+        fail_what = "begin() failed - the LLCC68 is down, nothing is on the air";
     }
     else
     {
@@ -405,6 +412,12 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
                 d.preamble_len, (d.flags & CFG_FLAG_CRC_ON) != 0,
                 (d.flags & CFG_FLAG_RX_BOOSTED_GAIN) != 0,
                 (d.flags & CFG_FLAG_SYNCWORD_PRIVATE) != 0);
+            // NOT a rollback: the requested modulation took and is live.  Only
+            // preamble/CRC/gain/syncword are still the previous ones, which is
+            // the quieter failure - the host's airtime model is now wrong for a
+            // link that is otherwise up and passing traffic.
+            fail_what = "frame params rejected - the NEW modulation IS live, "
+                        "with the PREVIOUS preamble/CRC/gain/syncword";
         }
         else
         {
@@ -413,6 +426,8 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
             // radio_enabled=1 and the host would cache a modulation that is
             // not on the air (#835 item 7).
             cfg_ok = false;
+            fail_what = "modulation rejected - radio rolled back to the "
+                        "previous one and is still up";
         }
     }
     if (radio_up && d.start_rx)
@@ -424,10 +439,11 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
     last_set_config_ok = cfg_ok;
     if (!cfg_ok)
     {
-        ESP_LOGW(TAG, "SET_CONFIG REJECTED (%.3f MHz SF%u BW%u CR%u) — radio "
-                      "rolled back; acking with config_ok=0",
+        ESP_LOGW(TAG, "SET_CONFIG REJECTED (%.3f MHz SF%u BW%u CR%u) — %s; "
+                      "acking with config_ok=%u (CFG_ACK_REJECTED)",
                  (double)d.freq_mhz, (unsigned)d.spreading_factor,
-                 (unsigned)d.bandwidth_khz, (unsigned)d.coding_rate);
+                 (unsigned)d.bandwidth_khz, (unsigned)d.coding_rate,
+                 fail_what, (unsigned)CFG_ACK_REJECTED);
     }
     sendStatus();  // config paths always get a status echo as the ack
 }

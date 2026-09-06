@@ -459,6 +459,7 @@ The main sensor frames, with the rate each is produced at:
 | Type | Name | Size | Rate |
 |------|------|------|------|
 | 0xA1 | GNSS | 42 B | 18 Hz |
+| 0x90 | GNSS per-satellite (C/N0, elevation, azimuth, used; 10 + 6·n on the wire) | 202 B | 18 Hz |
 | 0xA2 | ISM6HG256 (IMU) | 22 B | 1920 Hz (default) |
 | 0xA3 | BMP585 (Baro) | 12 B | 500 Hz |
 | 0xA5 | NonSensor (EKF) | 50 B | 500 Hz |

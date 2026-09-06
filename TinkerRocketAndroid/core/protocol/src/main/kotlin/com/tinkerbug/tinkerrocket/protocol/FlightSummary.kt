@@ -154,6 +154,11 @@ public data class RollControlSettings(
     val cmdLimitMinDeg: Double,
     val cmdLimitMaxDeg: Double,
     val delayMs: Int,
+    /**
+     * Control-authority speed gate (m/s) that flew; null on pre-v8 firmware,
+     * which had no speed gate.  Control waited for the delay AND this speed.
+     */
+    val minSpeedMps: Double?,
     val rateCapDps: Double,
     val rollRateSetPoint: Double,
     val guidanceEnabled: Boolean,
@@ -172,6 +177,7 @@ public data class RollControlSettings(
         "cmd_limit_min_deg" to JsonPrimitive(cmdLimitMinDeg),
         "cmd_limit_max_deg" to JsonPrimitive(cmdLimitMaxDeg),
         "delay_ms" to JsonPrimitive(delayMs),
+        "min_speed_mps" to minSpeedMps?.let { JsonPrimitive(it) },
         "rate_cap_dps" to JsonPrimitive(rateCapDps),
         "roll_rate_set_point" to JsonPrimitive(rollRateSetPoint),
         "guidance_enabled" to JsonPrimitive(guidanceEnabled),
@@ -200,6 +206,7 @@ public data class RollControlSettings(
                 cmdLimitMinDeg = sigFig(raw.minCmdDeg),
                 cmdLimitMaxDeg = sigFig(raw.maxCmdDeg),
                 delayMs = raw.rollDelayMs,
+                minSpeedMps = raw.rollMinSpeedMps?.let { sigFig(it) },
                 rateCapDps = sigFig(raw.kpAngleRateCapDps),
                 rollRateSetPoint = sigFig(raw.rollRateSetPoint),
                 guidanceEnabled = raw.guidanceEnabled,

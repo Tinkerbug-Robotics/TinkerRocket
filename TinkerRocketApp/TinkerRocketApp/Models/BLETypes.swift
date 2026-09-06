@@ -183,6 +183,9 @@ struct RocketConfig {
     var gainScheduleEnabled: Bool = true
     var useAngleControl: Bool = false
     var rollDelayMs: UInt16 = 0
+    /// Control-authority speed gate (m/s): roll control and guidance wait for
+    /// this airspeed as well as `rollDelayMs`. 0 = no speed gate.
+    var rollMinSpeedMps: Float = 0
     var rateCapDps: Float = 60
     var kpAngle: Float = 2.0               // outer angle-loop P-gain (cascaded angle control)
     var integralSepThreshold: Float = 40   // PID integral-separation anti-windup threshold (deg/s); 0 disables
