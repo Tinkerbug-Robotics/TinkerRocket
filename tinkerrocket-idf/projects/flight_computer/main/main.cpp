@@ -18,6 +18,7 @@
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
+#include <RecoveryArmGate.h>   // #1176: arming gate for a restored flight
 #include <BurnoutDetector.h>      // shared burnout detector (#197/#256)
 #include <DeploymentDetector.h>   // shared recovery-deployment detector
 #include <TR_MagCalibrator.h>
@@ -593,6 +594,12 @@ static bool servo_replay_active = false;
 // #345 follow-up: while now_ms < this, READY/PRELAUNCH skip the per-tick
 // servo idle() so a just-applied trim stays driven and visible on the pad.
 static uint32_t servo_pad_wake_until_ms = 0;
+// One-shot: run the boot "servos alive" sweep on the first READY tick.
+// Set in setup_fc when servo control is enabled; consumed by the READY case.
+// Deliberately NOT consumed anywhere else — INFLIGHT (including a restored
+// flight) and every other state leave it set and untouched, so a vehicle that
+// boots straight into a recovered flight never sweeps a fin.
+static bool servo_boot_selftest_pending = false;
 static bool prev_sim_active = false;
 // Roll profile: (time, angle) waypoints for cascaded angle controller
 static RollProfileData roll_profile = {};  // zeroed → num_waypoints = 0 (rate-only)
@@ -656,6 +663,19 @@ static uint32_t      pyro_apogee_time_ms  = 0;
 // Forward decl — full definition is below the I2S sender setup.
 static inline bool enqueueI2STx(uint8_t type, const uint8_t *payload, size_t len);
 
+// #1176: the arming half of reboot recovery. A restored flight may not arm a
+// deployment channel until THIS boot's own sensors show motion that ground
+// handling cannot produce (RecoveryArmGate). Active only on a boot that
+// actually restored a flight; a normal launch never constructs it, so nothing
+// about an ordinary flight changes.
+static RecoveryArmGate::State recovery_arm_state;
+static bool     recovery_gate_active = false;
+// Latched once the gate has been Open long enough to hand over the restored
+// apogee. Separate from pyro_apogee_detected on purpose: that is restored
+// normally so the snapshot keeps round-tripping (a second reboot must not read
+// back a flight whose apogee has been erased), and this gates the two trigger
+// conditions that consume it.
+static bool     recovery_apogee_armed = false;
 static bool     reboot_recovery = false;      // true during servo settle period after recovery
 static bool     reboot_recovery_telem = false; // true for rest of flight (telemetry flag)
 static uint32_t servo_settle_end_ms = 0;      // hold servos neutral until this time
@@ -1202,15 +1222,36 @@ static void servicePyroChannels(uint32_t now_ms)
     for (int i = 0; i < 4; ++i) {
         PyroChRuntime& ch = pyro_ch[i];
 
-        // Idle → ArmSettle when trigger satisfied
-        if (ch.state == PyroChState::Idle && pyroChEnabled(i)) {
+        // Idle → ArmSettle when trigger satisfied.
+        //
+        // #1176: on a boot that RESTORED a flight, nothing may leave Idle until
+        // RecoveryArmGate has seen live evidence from this boot's own sensors
+        // that the vehicle is still flying. Every input to the trigger
+        // conditions below came from the previous boot, so on a stale restore —
+        // a flight that ended without reaching LANDED, a battery reseat, a
+        // recovered airframe on the bench — a channel already past its
+        // time-after-apogee delay would otherwise fire immediately, on the
+        // ground. This conjunct is the whole barrier, and it is the ONLY place
+        // a channel can leave Idle. recovery_gate_active is false on a normal
+        // launch, so an ordinary flight is bit-identical to today.
+        if (ch.state == PyroChState::Idle && pyroChEnabled(i) &&
+            (!recovery_gate_active ||
+             RecoveryArmGate::armingPermitted(recovery_arm_state))) {
             bool should_fire = false;
             const uint8_t mode = pyroChMode(i);
             const float   val  = pyroChValue(i);
-            if (pyro_apogee_detected && mode == PYRO_TRIGGER_TIME_AFTER_APOGEE) {
+            // The restored apogee is handed over separately and later — see
+            // recovery_apogee_armed. Both trigger modes consume
+            // pyro_apogee_detected, so withholding it is a second checkpoint on
+            // the same evidence: a single noisy tick that opens the gate cannot
+            // also fire a charge whose delay has already elapsed.
+            const bool apogee_usable =
+                pyro_apogee_detected &&
+                (!recovery_gate_active || recovery_apogee_armed);
+            if (apogee_usable && mode == PYRO_TRIGGER_TIME_AFTER_APOGEE) {
                 const float elapsed_s = (float)(now_ms - pyro_apogee_time_ms) / 1000.0f;
                 if (elapsed_s >= val) should_fire = true;
-            } else if (pyro_apogee_detected && mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT) {
+            } else if (apogee_usable && mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT) {
                 // #834 item 4: pressure_alt_m/_rate are a KF estimate that
                 // free-runs at a frozen rate with a dead barometer, so the raw
                 // comparison could fire the main hundreds of metres high (or
@@ -3817,6 +3858,18 @@ static void setup_fc()
     // FCB_GNSS report immediately after begin() returns confirms it.
     fcBootStatus(FCB_SENSORS);
     sensor_collector.begin(config::SENSOR_CORE);
+    // The barometer bring-up is now bounded (it used to retry forever, which
+    // meant a dead part stopped the FC booting at all, on every reset reason).
+    // A boot that continued without it must SAY so — a silent baro-absent
+    // flight loses the altitude filter, apogee detection and the barometric
+    // deployment paths, and the operator has to learn that on the pad rather
+    // than from a missing deployment.
+    if (config::USE_BMP585 && !sensor_collector_hw.isBaroOnline())
+    {
+        ESP_LOGE(TAG, "[BARO] Barometer did NOT come up — flying baro-absent. "
+                      "Altitude/apogee/barometric deployment are unavailable.");
+        fcBootStatus(FCB_SENSORS, FCB_DEG_SENSORS);
+    }
 
     // #557: latch GNSS-absent mode.  isGnssOnline() is false when GNSS is built
     // in but the module failed bring-up (dead/deaf UART).  The FC then flies a
@@ -4016,30 +4069,26 @@ static void setup_fc()
         {
             servo_control.enableGainSchedule(config::GAIN_SCHEDULE_V_REF, config::GAIN_SCHEDULE_V_MIN);
         }
-        if (servo_enabled && config::SERVO_WIGGLE_ON_BOOT)
-        {
-            servo_control.wiggle();
-        }
-        if (servo_enabled)
-        {
-            // #345 follow-up: settle at the *commanded* neutral (0deg -> the
-            // physical fin-neutral incl. trim, via the fin calibration), NOT the
-            // raw pulse-midpoint the wiggle returns to.  Those two only coincide
-            // for a symmetric fin cal; with a per-model/asymmetric cal the wiggle
-            // leaves the tabs off the trimmed straight position.  Drive through
-            // the same setServoAngles() path the flight/servo-test neutral uses
-            // so the boot rest position matches exactly what was trimmed.
-            // #407: settle via the anti-backlash approach (overshoot then back)
-            // so the boot rest position is repeatable on a slightly worn servo;
-            // the per-tick serviceNeutralSettle() below completes it.
-            servo_control.beginNeutralSettle(time_ms());
-            // Hold that trimmed neutral briefly before the pad relax kicks in, so
-            // the operator can see/verify the tabs sit straight on boot instead
-            // of going limp the instant READY starts.
-            if (config::SERVO_RELAX_ON_PAD)
-                servo_pad_wake_until_ms = time_ms() + config::SERVO_PAD_TRIM_WAKE_MS;
-        }
-        ESP_LOGI(TAG, "Servo control %s, gain schedule %s (hardware ready)",
+        // NO SERVO MOTION IN setup_fc — see servo_boot_selftest_pending.
+        //
+        // This block used to run a 4.2 s stop-to-stop sweep of all four fins
+        // and then command a neutral settle, ~40 lines ABOVE the code that
+        // first asks whether this boot is a mid-flight reboot. On a reboot
+        // during flight that is uncommanded full-authority fin deflection at
+        // flight dynamic pressure with no control law running, and it delayed
+        // the recovery restore by the same 4.2 s. servo_control.begin() itself
+        // used to snap all four fins to the raw pulse mid-point, and it is not
+        // even gated on servo_enabled.
+        //
+        // The fix is structural rather than a new predicate: setup commands no
+        // motion at all, and the self-test is deferred to the first READY tick.
+        // Reaching READY is POSITIVE proof the vehicle is not resuming a
+        // flight — a restored flight enters INFLIGHT directly from setup and
+        // never passes through READY — so there is no reset-reason test to get
+        // wrong, and no path on which a boot can move a fin in the air.
+        servo_boot_selftest_pending = servo_enabled;
+        ESP_LOGI(TAG, "Servo control %s, gain schedule %s (hardware configured, "
+                      "no motion until READY)",
                       servo_enabled ? "enabled" : "disabled",
                       gain_sched_enabled ? "ON" : "OFF");
     }
@@ -4305,6 +4354,16 @@ static void setup_fc()
                 ESP_LOGW(TAG, "[RECOVERY] EKF state restored (P diag from snap, off-diag rebuilding)");
             }
 
+            // #1176: arm the interlock. From here until the gate sees live
+            // evidence of flight, no deployment channel may leave Idle and the
+            // restored apogee is withheld from both trigger conditions. This is
+            // the difference between resuming a flight and resurrecting one.
+            RecoveryArmGate::reset(recovery_arm_state, now_ms);
+            recovery_gate_active  = true;
+            recovery_apogee_armed = false;
+            ESP_LOGW(TAG, "[RECOVERY] Deployment channels INHIBITED until live "
+                          "flight evidence — restored apogee withheld");
+
             // Hold servos neutral for 500ms while EKF settles
             reboot_recovery = true;
             reboot_recovery_telem = true;
@@ -4438,6 +4497,11 @@ static void resetFlightStateForSim(const char* edge)
     roll_speed_gate_warned = false;
     reboot_recovery = false;
     reboot_recovery_telem = false;
+    // #1176: a sim start/stop is the sim's equivalent of a reboot, so the
+    // arming interlock must not carry a verdict across it.
+    recovery_gate_active  = false;
+    recovery_apogee_armed = false;
+    RecoveryArmGate::reset(recovery_arm_state, millis());
     clearFlightSnapshot();
     // #435: a sim start/stop is the sim's equivalent of a reboot, and a real
     // reboot drops the (RAM-only) Drift-Cast point.  The ref just discarded
@@ -4473,6 +4537,20 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
 {
     rocket_state = INFLIGHT;
     launch_time_millis = now_ms;
+    // A launch can land mid boot self-test (READY -> PRELAUNCH is automatic and
+    // the sweep runs for seconds). The flight control path drives all four
+    // outputs from this tick on, so abandon the sweep rather than let it keep
+    // claiming them; also retire the one-shot so a later sim reset back to
+    // READY does not start sweeping a vehicle that has already flown.
+    servo_control.cancelWiggle();
+    servo_boot_selftest_pending = false;
+    // #1176: a launch detected in THIS session is its own live evidence, so
+    // the recovery interlock has nothing to decide. Clearing it here also
+    // stops a restored-then-refuted flight leaving stale arming state behind
+    // for a later launch in the same power cycle.
+    recovery_gate_active  = false;
+    recovery_apogee_armed = false;
+    RecoveryArmGate::reset(recovery_arm_state, now_ms);
     // #848: latch our own power rail for the duration of the flight (sims
     // included — the release at LANDED/sim-reset makes it harmless and it
     // exercises the mechanism on the bench).
@@ -6004,6 +6082,17 @@ static void loop_fc()
                     mag_cal_session_active = true;
                     mag_cal_status_dirty = true;
 
+                    // The boot self-test sweep now runs from the READY tick
+                    // rather than from setup, so a mag-cal started while it is
+                    // part-way through would otherwise leave one fin parked
+                    // off-centre and holding current for the whole session (no
+                    // state below READY/PRELAUNCH services the sweep). Abandon
+                    // it; the stow just below puts the tabs where mag cal wants
+                    // them anyway, and the one-shot is spent so it will not
+                    // restart on the way back to READY.
+                    servo_control.cancelWiggle();
+                    servo_boot_selftest_pending = false;
+
                     // Issue #216 — entering MAG_CALIBRATION must NOT leave
                     // any flight-time effects active.  Specifically:
                     //   * Stow servos so a deflection commanded earlier
@@ -7431,6 +7520,67 @@ static void loop_fc()
                                g.gnss_vel_u_mps * ((float)gnss_age_us * 1e-6f);
 
                 MainDeployGate::step(main_deploy_state, g);
+
+                // #1176: step the recovery arming interlock from the same
+                // block, on the same already-computed health predicates.
+                // Only meaningful on a boot that restored a flight.
+                if (recovery_gate_active)
+                {
+                    RecoveryArmGate::Inputs r;
+                    r.now_ms            = now_ms;
+                    r.flight_elapsed_ms = now_ms - launch_time_millis;
+                    r.baro_healthy      = baro_healthy;
+                    r.baro_rate_mps     = kinematics.d_alt_est_;
+                    // Gate on FRESHNESS, not merely on a sample existing:
+                    // ism6_latest_si retains its last value when the drain
+                    // yields nothing, so a frozen IMU would otherwise
+                    // re-present one large sample forever and hold an arm
+                    // open. Same reasoning as the #258 launch-detect gate.
+                    r.imu_fresh         = ism6_fresh_kc;
+                    r.accel_norm_ms2    = ism6_fresh_kc ? accel_norm : 0.0f;
+                    // Roll axis only — that is what is computed in this scope,
+                    // and it is the axis a vehicle under a drogue actually
+                    // spins about. A pitch/yaw tumble is therefore invisible to
+                    // the spin arm; the other arms cover those cases.
+                    r.gyro_norm_dps     = ism6_fresh_kc ? fabsf(roll_rate_dps)
+                                                        : 0.0f;
+                    r.gnss_ok           = g.gnss_ok;
+                    r.gnss_vel_u_mps    = g.gnss_vel_u_mps;
+                    r.quiescent_flag    = kinematics.quiescent_flag;
+
+                    const RecoveryArmGate::Verdict prev =
+                        recovery_arm_state.verdict;
+                    RecoveryArmGate::step(recovery_arm_state, r);
+
+                    if (prev != recovery_arm_state.verdict)
+                    {
+                        if (RecoveryArmGate::armingPermitted(recovery_arm_state))
+                        {
+                            ESP_LOGW(TAG, "[RECOVERY] Flight CONFIRMED by live "
+                                          "evidence (%s) — deployment channels "
+                                          "released",
+                                     RecoveryArmGate::armName(
+                                         recovery_arm_state.opened_by));
+                        }
+                        else if (RecoveryArmGate::refuted(recovery_arm_state))
+                        {
+                            ESP_LOGE(TAG, "[RECOVERY] Restored flight REFUTED — "
+                                          "the vehicle is not flying. Ending the "
+                                          "flight; deployment channels never "
+                                          "armed.");
+                        }
+                    }
+                    // Hand the restored apogee over only once Open has
+                    // persisted. Latched: a later lull must not withdraw it
+                    // mid-descent.
+                    if (!recovery_apogee_armed &&
+                        RecoveryArmGate::apogeeArmed(recovery_arm_state, now_ms))
+                    {
+                        recovery_apogee_armed = true;
+                        ESP_LOGW(TAG, "[RECOVERY] Restored apogee handed to the "
+                                      "deployment triggers");
+                    }
+                }
             }
 
             // --- Recovery deployment detection ---
@@ -7696,9 +7846,55 @@ static void loop_fc()
             }
             case READY:
             {
+                // Boot "servos alive" sweep, deferred out of setup_fc to here.
+                // Reaching READY is the positive proof that this boot is not
+                // resuming a flight: a restored flight goes straight to
+                // INFLIGHT from setup and never enters this case. Starting the
+                // sweep here — rather than gating a setup-time sweep on a
+                // reset reason — means no boot can move a fin in the air even
+                // if the recovery decision itself is wrong.
+                if (servo_boot_selftest_pending && servo_enabled &&
+                    config::SERVO_WIGGLE_ON_BOOT)
+                {
+                    servo_boot_selftest_pending = false;
+                    servo_control.beginWiggle(now_ms);
+                    // Keep the tabs driven through the sweep and the settle
+                    // that follows it, then hold the trimmed neutral briefly so
+                    // the operator can see the fins sit straight before the pad
+                    // relax cuts the pulse train.
+                    servo_pad_wake_until_ms =
+                        now_ms + TR_ServoControl::kWiggleDurationMs +
+                        config::SERVO_PAD_TRIM_WAKE_MS;
+                    ESP_LOGI(TAG, "[SERVO] boot self-test sweep started (%u ms)",
+                             (unsigned)TR_ServoControl::kWiggleDurationMs);
+                }
+                else if (servo_boot_selftest_pending && servo_enabled)
+                {
+                    // Sweep compiled off: still settle to the trimmed neutral
+                    // once, which is what the old setup-time path did for the
+                    // no-wiggle build.
+                    servo_boot_selftest_pending = false;
+                    servo_control.beginNeutralSettle(now_ms);
+                    if (config::SERVO_RELAX_ON_PAD)
+                        servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
+                }
+
+                // Advance the boot sweep, then chain the anti-backlash neutral
+                // settle (#407) onto its end so the tabs finish at the
+                // *commanded* neutral (0 deg through the fin calibration,
+                // including trim) rather than the raw pulse mid-point the sweep
+                // returns to. Those two coincide only for a symmetric cal.
+                if (servo_enabled && servo_control.isWiggling())
+                {
+                    servo_control.serviceWiggle(now_ms);
+                    if (!servo_control.isWiggling())
+                        servo_control.beginNeutralSettle(now_ms);
+                }
+
                 // Advance an in-progress anti-backlash neutral settle (#407)
-                // started by boot-settle or a pad trim; a no-op otherwise.  Runs
-                // before the relax gate so it completes within the wake window.
+                // started by the boot sweep above or a pad trim; a no-op
+                // otherwise.  Runs before the relax gate so it completes within
+                // the wake window.
                 if (servo_enabled) servo_control.serviceNeutralSettle(now_ms);
 
                 // Relax the servos on the pad: cut the pulse train so the
@@ -7708,6 +7904,8 @@ static void loop_fc()
                 // Held off during the pad-trim wake window (#345 follow-up) so a
                 // just-applied trim stays driven long enough to see.
                 if (servo_enabled && config::SERVO_RELAX_ON_PAD &&
+                    !servo_control.isWiggling() &&
+                    !servo_control.isNeutralSettling() &&
                     (int32_t)(now_ms - servo_pad_wake_until_ms) >= 0)
                     servo_control.idle();
 
@@ -7747,6 +7945,17 @@ static void loop_fc()
             }
             case PRELAUNCH:
             {
+                // READY -> PRELAUNCH is automatic (out_ready + 4 sats + 3 s), so
+                // outdoors it can fire part-way through the boot self-test
+                // sweep. Keep servicing it here or the fins would stop mid-throw
+                // wherever the transition caught them.
+                if (servo_enabled && servo_control.isWiggling())
+                {
+                    servo_control.serviceWiggle(now_ms);
+                    if (!servo_control.isWiggling())
+                        servo_control.beginNeutralSettle(now_ms);
+                }
+
                 // Advance an in-progress anti-backlash neutral settle (#407),
                 // e.g. a trim applied while sitting in PRELAUNCH; no-op otherwise.
                 if (servo_enabled) servo_control.serviceNeutralSettle(now_ms);
@@ -7756,6 +7965,8 @@ static void loop_fc()
                 // launch_flag flips below.  Held off during the pad-trim wake
                 // window (#345 follow-up) so a just-applied trim stays visible.
                 if (servo_enabled && config::SERVO_RELAX_ON_PAD &&
+                    !servo_control.isWiggling() &&
+                    !servo_control.isNeutralSettling() &&
                     (int32_t)(now_ms - servo_pad_wake_until_ms) >= 0)
                     servo_control.idle();
 
@@ -8166,6 +8377,28 @@ static void loop_fc()
                     // for >500ms beyond the 2s window — prevents single-frame
                     // noise from restarting the entire landing countdown.
                     landed_candidate_active = false;
+                }
+
+                // #1176: a restored flight that the arming interlock has
+                // REFUTED is not flying — the token was stale, and this boot is
+                // sitting on the ground. End the flight through LANDED rather
+                // than dropping back to READY: LANDED is the state this
+                // codebase already treats as terminal, so the post-flight
+                // lockout, the power-hold release discipline (which must NOT
+                // release when the OC is silent) and the snapshot clear all
+                // apply unchanged. The cost is that the operator power-cycles
+                // once more for a normal session; the alternative reopens
+                // defects the review found in the READY path.
+                if (recovery_gate_active &&
+                    RecoveryArmGate::refuted(recovery_arm_state) &&
+                    rocket_state == INFLIGHT)
+                {
+                    pyroSafeAll();
+                    rocket_state = LANDED;
+                    ESP_LOGE(TAG, "[STATE] INFLIGHT -> LANDED (recovery refuted: "
+                                  "no live evidence of flight). Power-cycle for a "
+                                  "normal session.");
+                    break;
                 }
 
                 // Safety timeout: force LANDED if flight exceeds 10 minutes
