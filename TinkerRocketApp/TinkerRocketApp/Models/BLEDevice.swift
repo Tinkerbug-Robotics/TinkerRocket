@@ -831,6 +831,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
+    /// #1176 step 6 — end a flight the rocket RESTORED after an in-flight
+    /// reboot, without waiting for it to time itself out.
+    ///
+    /// The firmware decides, not the app: the flight computer refuses unless
+    /// the vehicle is demonstrably still, so this is a request rather than a
+    /// command. The outcome arrives as a 0xCF file-ops notification, because
+    /// "sent" and "done" are genuinely different claims on a link with no
+    /// acknowledgement.
+    func sendEndRestoredFlight() {
+        sendRawCommand(69, payload: Data())
+    }
+
     func sendServoConfig(biases: [Int16], hz: Int16, minUs: Int16, maxUs: Int16,
                          finMinDeg: Float, finMaxDeg: Float) {
         var payload = Data()

@@ -779,6 +779,20 @@ target_include_directories(test_rail_restore_policy PRIVATE
 target_link_libraries(test_rail_restore_policy GTest::gtest_main)
 gtest_discover_tests(test_rail_restore_policy)
 
+# ---------- test_flight_token_policy (#1176) ----------
+# Tier 2 of the OC boot rail decision: a durable NVS token says a flight was in
+# progress and never cleanly ended, so the rail comes back even though the reset
+# looks like a cold start. The reset reason is deliberately NOT an input -- the
+# S3 aliases chip-brownout to power-on in its reset-cause register, so no
+# predicate built on it can be sound. Pure header in the OC project.
+add_executable(test_flight_token_policy test_flight_token_policy.cpp)
+target_include_directories(test_flight_token_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_flight_token_policy GTest::gtest_main)
+gtest_discover_tests(test_flight_token_policy)
+
 # ---------- test_flush_iter_ledger (#510) ----------
 # Host-side test for the flush-task per-iteration accounting: section sums,
 # clamped unaccounted/drain-other arithmetic, and the WARN/INFO classification

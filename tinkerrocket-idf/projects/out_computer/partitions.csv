@@ -4,3 +4,12 @@ otadata,  data, ota,     0xe000,  0x2000,
 ota_0,    app,  ota_0,   0x10000, 0x300000,
 ota_1,    app,  ota_1,   0x310000,0x300000,
 coredump, data, coredump,0x610000,0x10000,
+# #1176: the in-flight recovery token. Its OWN partition, not a namespace in
+# the shared `nvs` above, for two reasons: no other namespace can exhaust the
+# store the restore-attempt bound lives in, and keeping it far below its
+# compaction threshold means the one launch-edge write is a plain append rather
+# than a sector erase (which disables the NVS cache and stalls core 1).
+# Appended at the end so nothing above it moves: the existing `nvs` keeps its
+# offset and size, so mag cal, LoRa config and identity all survive the
+# partition-table change. Ends at 0x624000, inside the 8 MB V7/V8 flash.
+flighttok,data, nvs,     0x620000,0x4000,

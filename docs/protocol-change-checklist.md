@@ -45,7 +45,7 @@ it cannot see are marked ⚠ MANUAL. Finish with `tools/preflight_protocol.sh`.
 | New BLE command | OC or BS dispatch (independent namespaces — never reuse 56–58/61–63 history or 70–72), both apps' senders + `BleCommandId.kt`, checker |
 | Grown log struct | New length gate in ALL decoders (C, Swift, Kotlin, Python), fixture regen, CSV column append (comma-free names! #514), EKF replay |
 | New telemetry JSON key | Ranked insertion in the builder (#282), lenient-optional decode in both apps (ints via flexInt; floats/strings strict — mirror iOS exactly), fixture for the trimmed form |
-| New file_ops frame | Discriminator must not collide with `{`/`[`/0xAA/0xCA–0xCD; both apps' demux ladders; full-frame fixture (discriminator byte included) |
+| New file_ops frame | Discriminator must not collide with `{`/`[`/0xAA/0xCA–0xCF; both apps' demux ladders; full-frame fixture (discriminator byte included) |
 | Config field | The six-way lockstep: `config.h` default == RocketProfile default in BOTH apps (a wrong default silently re-tunes the rocket on connect), NVS, readback JSON key + sentinel semantics, gtest |
 
 ## C. One-command local gate

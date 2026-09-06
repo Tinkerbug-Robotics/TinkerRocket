@@ -3593,6 +3593,17 @@ static void comms_loop()
     // Service the BLE library's poll-style work — drives the deferred OTA
     // restart.  LOAD-BEARING: handleOtaFinish() sets the boot partition and
     // schedules esp_restart(), but the reboot only fires from this poll.
+    //
+    // #1176: an OTA reboot is a DELIBERATE restart, so retire the ACTIVE flag
+    // before it fires. Recovery eligibility no longer consults the reset
+    // reason, so without this the post-update boot would look exactly like a
+    // session that ended unexpectedly and could restore an old interrupted
+    // flight on the bench. Cheap and idempotent; a flight in progress is
+    // already refused an OTA elsewhere.
+    if (ble_app.otaRestartDue())
+    {
+        mini_link::retireActiveFlag("OTA restart");
+    }
     ble_app.loop();
 
     // ======================================================================

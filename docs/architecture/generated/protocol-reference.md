@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-93 codes. The dispatch on both ends is a flat first-match chain, so
+94 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -121,8 +121,9 @@ this list is CI-enforced for uniqueness.
 | `0xFA` | `FC_BOOT_STATUS_MSG` | FC → OC | FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only |
 | `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 169-byte ConfigReportData, everything the app's config |
 | `0x90` | `GNSS_SAT_MSG` | FC → OC | FC→OC over I2S: GNSSSatData, per-satellite C/N0 at every GNSS |
+| `0x91` | `RECOVERY_END_PENDING` | OC → FC |  |
 
-> 53 of these 93 codes carry no comment in the header,
+> 54 of these 94 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -207,7 +208,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-52 commands.
+53 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -263,6 +264,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 66 |  | Full fin layout (FinConfigData): relay the whole struct to the FC |
 | 67 |  | IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0) or a whitelisted ISM6HG256 ODR (960/1920/3840).… |
 | 68 | `LORA_CMD_SET_TX_DISABLED` | "LoRa off": [disabled:1] — 1 mutes every LoRa transmit, 0 resumes. Same constant (and therefore the same… |
+| 69 |  | #1176 step 6 — the operator's manual end of a restored flight. BLE ONLY, by decision: this number is… |
 
 > 10 of these have no comment in the dispatch and so no
 > description here: 6, 7, 15, 16, 21, 51, 52, 53, 54, 57. Adding a comment to the branch

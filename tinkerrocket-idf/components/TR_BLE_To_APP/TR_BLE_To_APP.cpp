@@ -1584,6 +1584,25 @@ void TR_BLE_To_APP::sendStorageStats(uint8_t marker, const uint8_t* bytes, size_
     }
 }
 
+void TR_BLE_To_APP::sendRecoveryEndResult(uint8_t result)
+{
+    if (!device_connected_) return;
+    // 0xCF marker + the command it answers + the result. Next free
+    // discriminator after 0xCA-0xCE; an unknown one is not rejected loudly on
+    // the app side, it is fed to the file-list JSON parser, so the number
+    // matters.
+    uint8_t buf[3] = { 0xCF, 69, result };
+    int rc = notify_data(conn_handle_, file_ops_val_handle_, buf, sizeof(buf));
+    if (rc != 0)
+    {
+        // An outcome the app never hears looks like a dead button — and here
+        // the operator is deciding whether the rocket is safe to handle, so a
+        // silent failure is worse than usual.
+        ESP_LOGW(BLE_TAG, "Recovery-end notify failed, rc=%d (result=%u)",
+                 rc, (unsigned)result);
+    }
+}
+
 void TR_BLE_To_APP::sendPyroTestRefusal(uint8_t refused_cmd, uint8_t channel, uint8_t reason)
 {
     if (!device_connected_) return;

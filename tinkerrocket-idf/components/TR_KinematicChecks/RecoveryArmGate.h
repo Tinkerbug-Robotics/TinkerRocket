@@ -119,12 +119,26 @@ struct Config {
     // MainDeployGate's reacquire dwell, and for the same reason.
     uint32_t baro_settle_ms   = 600;
 
-    // --- Ground refutation.  POSITIVE stillness evidence only, and only from
-    // the shipped quiescence detector (TR_KinematicChecks): a blocked static
-    // port emits positive-LOOKING evidence — fresh, in band, zero rate — so a
-    // bespoke at-rest test built on the barometer would refute a live flight
-    // whose port iced over.  quiescent_flag is baro-independent, calibrated
-    // against real flight data, and is already what MainDeployGate trusts.
+    // --- Ground refutation.  POSITIVE stillness evidence only.
+    //
+    // TWO SOURCES, because the shipped one cannot fire here.  quiescent_flag
+    // (TR_KinematicChecks) is the calibrated, baro-independent detector
+    // MainDeployGate trusts, and it stays the preferred input — but its
+    // quiescent_pass has `apogee_flag` as a hard conjunct, and a RESTORED
+    // flight starts with a fresh TR_KinematicChecks whose apogee flag is
+    // false.  On the path this gate exists for, that flag can therefore never
+    // latch, and a refutation built only on it is dead code: a stale-token
+    // board would sit INFLIGHT for the full 10-minute flight timeout instead
+    // of the ~30 s the design promises.
+    //
+    // So the gate also accumulates the SAME underlying terms itself, minus the
+    // apogee conjunct that is wrong for this use (a rocket on the pad being
+    // still is exactly the signal we want, not one to suppress).  Thresholds
+    // are the shipped ones, deliberately — this reuses the calibration without
+    // depending on a latch that cannot set.
+    float    still_gyro_dps   = 5.0f;    // QUIESCENT_GYRO_DPS
+    float    still_accel_tol  = 0.49f;   // QUIESCENT_ACCEL_TOL_MS2, ~0.05 g
+    float    still_rate_mps   = 0.5f;    // baro rate, when the baro is usable
     uint32_t refute_hold_ms   = 30000;
 
     // A restored flight older than the FC's own flight timeout is over by
@@ -135,6 +149,12 @@ struct Config {
     // trigger conditions.  A second checkpoint on the same evidence, so a
     // single noisy tick that trips an arm cannot also arm the charge.
     uint32_t apogee_arm_ms    = 1000;
+
+    // How long stillness must hold before an OPERATOR may manually end a
+    // restored flight (#1176 step 6). Far shorter than refutation, because a
+    // human is asserting it as well — but not zero, because the whole point is
+    // that the assertion must be corroborated by the vehicle.
+    uint32_t override_still_ms = 5000;
 };
 
 struct State {
@@ -152,6 +172,7 @@ struct State {
     uint32_t freefall_since = 0;
     uint32_t spin_since     = 0;
     uint32_t quiet_since    = 0;
+    uint32_t still_since    = 0;   // the gate's own stillness accumulator
 };
 
 struct Inputs {
@@ -185,6 +206,41 @@ struct Inputs {
     // The shipped baro-independent stillness detector.
     bool     quiescent_flag = false;
 };
+
+// Matches TR_KinematicChecks.cpp's G_MS2 exactly.
+inline constexpr float kG_MS2 = 9.80665f;
+
+// Instantaneous stillness: the shipped quiescence terms without the apogee
+// conjunct.  Requires FRESH inertial data — a frozen IMU reading exactly 1 g
+// must not look like a vehicle at rest.
+inline bool stillNow(const Inputs& in, const Config& cfg)
+{
+    if (!in.imu_fresh) return false;
+    const float dg = in.accel_norm_ms2 - kG_MS2;
+    const float adg = dg < 0.0f ? -dg : dg;
+    const float agyro = in.gyro_norm_dps < 0.0f ? -in.gyro_norm_dps
+                                                : in.gyro_norm_dps;
+    if (adg >= cfg.still_accel_tol) return false;
+    if (agyro >= cfg.still_gyro_dps) return false;
+    // When the barometer is usable the altitude must be unchanging too: the
+    // inertial gates alone cannot separate "sitting in a field" from
+    // "descending smoothly under a big canopy".  Dropped when the baro is
+    // unusable, which is the situation this has to keep working in.
+    if (in.baro_healthy)
+    {
+        const float ar = in.baro_rate_mps < 0.0f ? -in.baro_rate_mps
+                                                 : in.baro_rate_mps;
+        if (ar >= cfg.still_rate_mps) return false;
+    }
+    return true;
+}
+
+// How long stillness has held continuously, in ms. 0 when not still.
+inline uint32_t stillMs(const State& st, uint32_t now_ms)
+{
+    if (st.still_since == 0) return 0;
+    return (uint32_t)(now_ms - (st.still_since - 1u));
+}
 
 inline void reset(State& st, uint32_t now_ms)
 {
@@ -228,8 +284,18 @@ inline void step(State& st, const Inputs& in, const Config& cfg = Config{})
         return;
     }
 
-    // Refutation: sustained, positive, baro-independent stillness.
-    if (held(in.quiescent_flag, in.now_ms, cfg.refute_hold_ms, st.quiet_since))
+    // Accumulate the gate's own stillness, always — the override predicate
+    // below reads it even when refutation has not matured.
+    const bool still = held(stillNow(in, cfg), in.now_ms,
+                            cfg.refute_hold_ms, st.still_since);
+
+    // Refutation: sustained, positive stillness, from EITHER source. The
+    // shipped detector is preferred and is what a normal flight uses; the
+    // gate's own accumulator is what makes this reachable at all on a restored
+    // flight, whose fresh TR_KinematicChecks can never latch quiescent_flag
+    // (see the Config note).
+    if (held(in.quiescent_flag, in.now_ms, cfg.refute_hold_ms, st.quiet_since) ||
+        still)
     {
         st.verdict = Verdict::Refuted;
         return;
@@ -307,6 +373,29 @@ inline bool apogeeArmed(const State& st, uint32_t now_ms,
 
 // Positive evidence the vehicle is not flying: the caller drives LANDED.
 inline bool refuted(const State& st) { return st.verdict == Verdict::Refuted; }
+
+// May an OPERATOR manually end this restored flight right now (#1176 step 6)?
+//
+// THE TRAP THIS AVOIDS, and it is the whole reason this is a function rather
+// than a `verdict != Open` test at the call site. "Not Open" is NOT "not
+// flying": Locked is the PRE-DECISION state, and a genuine restored flight
+// sits in it for the first 1-11 seconds after every restore — and, measured
+// across the flight corpus, for the ENTIRE descent of a flight whose
+// barometer died under a canopy. Accepting an override while merely Locked
+// would let a ground station end a real flight during exactly the window in
+// which its deployments are still outstanding.
+//
+// So the condition is POSITIVE: the vehicle must be demonstrably still, right
+// now, and have been for a continuous dwell — the thing a prep table produces
+// and boost, free fall, spin and descent under canopy do not. Locked is still
+// required, because once live evidence has Opened the gate the vehicle has
+// proven it is flying and no operator assertion may override that.
+inline bool overrideAllowed(const State& st, uint32_t now_ms,
+                            const Config& cfg = Config{})
+{
+    return st.verdict == Verdict::Locked &&
+           stillMs(st, now_ms) >= cfg.override_still_ms;
+}
 
 inline const char* armName(Arm a)
 {

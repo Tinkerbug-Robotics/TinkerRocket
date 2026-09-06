@@ -80,8 +80,18 @@ reset is whole-system and the boot default is IDLE, so `main.cpp` persists
 "ACTIVE was commanded" in NVS: an unexpected reset while ACTIVE auto
 re-enters, and the flight side scans the tail of the interrupted flight's
 NAND log for the last valid snapshot frame to restore EKF/flight state.
-Capped at 3 consecutive attempts (crash-loop guard), forgiven after 60 s of
-healthy ACTIVE.
+Capped at 3 consecutive attempts (crash-loop guard). #1176: the budget is
+refilled at the LANDED edge — a flight that genuinely ended gives it back,
+while a restore the arming interlock REFUTED does not, so a wrongly restored
+board on a bench cannot refill the bound that limits it. It used to be
+forgiven after 60 s of healthy ACTIVE, which a wrongly restored flight
+satisfied just as well as a real one.
+
+Recovery eligibility no longer consults the reset reason at all (#1176): the
+NVS ACTIVE flag already survives a total power loss, which is the property
+that matters, and the ESP32-S3 cannot distinguish a chip brownout from a
+power-on anyway. Deliberate reboots (a commanded power-off, an OTA restart)
+retire the flag so they are not mistaken for an interrupted flight.
 
 ## GNSS: LC86G, not u-blox
 

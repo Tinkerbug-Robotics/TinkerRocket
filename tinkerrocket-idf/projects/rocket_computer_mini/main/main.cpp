@@ -419,14 +419,49 @@ static constexpr uint32_t POWER_REQ_OFF = 1u << 1;
 // CLEAN power-off. On any boot that finds the flag set, re-enter ACTIVE
 // without waiting for a BLE command. A consecutive-attempt counter caps
 // this at MAX_AUTO_RESTORES so a deterministic crash-in-ACTIVE can't loop
-// forever with pyro hardware powered; the counter clears after the machine
-// stays healthy for AUTO_RESTORE_HEALTHY_MS.
+// forever with pyro hardware powered. #1176: the counter is cleared only where
+// a flight genuinely ended (the LANDED edge and a deliberate power-off, both of
+// which clear PWR_KEY_ACTIVE) — NOT after a healthy hold, which a wrongly
+// restored flight sitting on a bench satisfies just as well as a real one.
 static constexpr const char* PWR_NVS_NS      = "power";
 static constexpr const char* PWR_KEY_ACTIVE  = "active";
 static constexpr const char* PWR_KEY_AUTO_N  = "auto_n";
 static constexpr uint8_t MAX_AUTO_RESTORES   = 3;
-static constexpr uint32_t AUTO_RESTORE_HEALTHY_MS = 60000;
-static int64_t s_active_since_us = 0;
+static int64_t s_active_since_us = 0;   // stamped at ACTIVE entry (unread since #1176 removed the healthy-hold rule; kept for the next diagnostic that wants it)
+
+void mini_link::flightEnded(bool genuine)
+{
+    // Defined here because the power NVS flags live in this translation unit.
+    if (!genuine) return;
+    Preferences p;
+    if (p.begin(PWR_NVS_NS, false))
+    {
+        p.putUChar(PWR_KEY_AUTO_N, 0);
+        p.end();
+    }
+    else
+    {
+        ESP_LOGE(TAG, "#1176: could not clear the auto-restore retry budget at "
+                      "LANDED — a later in-flight reset may be refused");
+    }
+}
+
+void mini_link::retireActiveFlag(const char* why)
+{
+    Preferences p;
+    if (p.begin(PWR_NVS_NS, false))
+    {
+        p.putUChar(PWR_KEY_ACTIVE, 0);
+        p.putUChar(PWR_KEY_AUTO_N, 0);
+        p.end();
+        ESP_LOGW(TAG, "#1176: ACTIVE flag retired (%s) — the next boot is a "
+                      "deliberate one, not an interrupted flight", why);
+    }
+    else
+    {
+        ESP_LOGE(TAG, "#1176: could not retire the ACTIVE flag (%s)", why);
+    }
+}
 
 static void pwrFlagWrite(const char* key, uint8_t v)
 {
@@ -787,7 +822,7 @@ extern "C" void app_main(void)
         if (attempts >= MAX_AUTO_RESTORES)
         {
             ESP_LOGE(TAG, "ACTIVE-restore SUPPRESSED: %u consecutive attempts "
-                          "without a healthy hold — staying IDLE. Power on "
+                          "without a completed flight — staying IDLE. Power on "
                           "manually and read the coredump.", attempts);
             pwrFlagWrite(PWR_KEY_ACTIVE, 0);
             pwrFlagWrite(PWR_KEY_AUTO_N, 0);
@@ -811,8 +846,11 @@ extern "C" void app_main(void)
     for (;;)
     {
         uint32_t bits = 0;
-        // The 10 s timeout exists only to service the healthy-hold clear
-        // below; requests still wake it immediately.
+        // #1176: the healthy-hold clear this timeout used to service is gone
+        // (the retry budget is now refilled at the LANDED edge instead), so
+        // nothing here is periodic any more. The timeout is kept rather than
+        // portMAX_DELAY only so the task remains observably alive in a stack
+        // dump; requests still wake it immediately.
         (void)xTaskNotifyWait(0, UINT32_MAX, &bits, pdMS_TO_TICKS(10000));
         if ((bits & POWER_REQ_ON) && !pwr_pin_on)
         {
@@ -822,15 +860,17 @@ extern "C" void app_main(void)
         {
             powerOff();   // does not return if it succeeds (esp_restart)
         }
-        // ACTIVE held healthy long enough: forgive past auto-restore
-        // attempts so the next unexpected reset gets its full retry budget.
-        if (pwr_pin_on && s_active_since_us != 0 &&
-            (esp_timer_get_time() - s_active_since_us) / 1000 > AUTO_RESTORE_HEALTHY_MS &&
-            pwrFlagRead(PWR_KEY_AUTO_N) != 0)
-        {
-            pwrFlagWrite(PWR_KEY_AUTO_N, 0);
-            ESP_LOGI(TAG, "ACTIVE healthy for %u ms — auto-restore budget reset",
-                     (unsigned)AUTO_RESTORE_HEALTHY_MS);
-        }
+        // #1176: THE 60 s "HEALTHY HOLD FORGIVES THE BUDGET" RULE IS GONE.
+        //
+        // It refilled the auto-restore budget after any 60 s of held ACTIVE —
+        // including 60 s of a WRONGLY restored flight sitting on a bench, which
+        // is precisely the state the budget exists to bound. A board with a
+        // stale ACTIVE flag could therefore restore, hold, refill, and restore
+        // again indefinitely, and the one bound on that loop would never bite.
+        // The two-MCU design removed its equivalent for the same reason.
+        //
+        // The budget is now cleared only where a flight genuinely ended: at the
+        // LANDED edge and on a deliberate power-off, both of which reach
+        // pwrFlagWrite(PWR_KEY_ACTIVE, 0) and clear the counter with it.
     }
 }

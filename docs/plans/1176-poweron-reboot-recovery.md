@@ -102,12 +102,12 @@ nothing yet constrains what a restored flight may do.
 | Step | Content | State |
 |---|---|---|
 | 1 | `RecoveryArmGate.h` + 21 host tests, wired to nothing | **DONE** |
-| 2 | OC-side retirement hardening of the V7/V8 MRAM slot | not started |
+| 2 | OC-side retirement hardening of the V7/V8 MRAM slot | **DONE** |
 | 3 | **FC boot hygiene — no recovery semantics** | **DONE** |
 | 4 | Interlock + delayed apogee arm, on today's fault-reset path only | **DONE** |
-| 5 | The behaviour change: the flight token and the POWERON widening | blocked on §5 |
-| 6 | Escape hatch (clear the token over BLE) | not started |
-| 7 | Mini parity | after 4 has flown |
+| 5 | The behaviour change: the flight token and the POWERON widening | **DONE** |
+| 6 | Escape hatch: end a restored flight over BLE | **DONE** |
+| 7 | Mini parity | **DONE** (do not fly before the two-MCU work has) |
 | 8 | Follow-ups, filed not bundled | — |
 
 ### Step 3, delivered
@@ -162,6 +162,83 @@ with no live evidence at all. The exposure is bounded by GNSS: a cold fix takes
 ~30 s against a ~40 s drogue descent from 600 m, and the GNSS arm opens on 5 m/s
 of vertical speed of either sign. This is the direct consequence of two
 deliberate rulings and is recorded here so it is not rediscovered as a surprise.
+
+### Steps 2 and 5, delivered
+
+**Step 2** moves retirement of the V7/V8 MRAM snapshot slot to the OC, on any
+boot that is not a recovery context. It had to land first: the only thing that
+previously cleared that slot for a flight which never reached LANDED was the
+FC's setup-time clear — the very clear step 5 loosens.
+
+**Step 5** is the behaviour change. A durable NVS token in its own `flighttok`
+partition records that a flight was in progress and never cleanly ended, and
+tier 2 of the boot rail decision consults it whenever tier 1 declined. Tier 1
+is untouched and stays first, because it wins the ~0.8 s decay race on fault
+resets and must not grow a millisecond.
+
+Details worth knowing before changing any of it:
+
+- **Entry to tier 2 is `!boot_rail_restored`, not "the reset was a power-on".**
+  A glitch reset can lose the RTC magic tier 1 depends on while reporting
+  something else entirely, so keying on POWERON would exclude the resets that
+  need tier 2 most.
+- **The two crash-loop bounds compose.** `tier1_stood_down` and
+  `deliberate_off` are captured *before* the existing blocks consume them, so
+  tier 2 cannot silently re-arm a tier-1 stand-down.
+- **Fail closed in both directions.** The restore-attempt counter is the only
+  bound on repeated restores and it is a *write*, so it is written and read back
+  before the rail goes up; a failure refuses rather than restoring unbounded.
+- **The INFLIGHT write edge is PRELAUNCH → INFLIGHT**, not the launch flag's
+  rising edge, so a restored flight — which enters INFLIGHT with no PRELAUNCH
+  behind it — can never re-stamp its own token and refill its own budget.
+- **The token carries a snapshot frame**, because on V9/V10 there are no NAND
+  pages for roughly the first half second of a flight. Its `flight_elapsed_ms`
+  is ~0, which is correct by construction: this source is reached only when
+  neither the RAM cache nor the tail scan produced anything, and a flight old
+  enough to have been running would have pages. The residual, if the tail scan
+  fails for an unrelated reason on an old flight, is a restarted flight clock —
+  bounded, and failing toward a late deployment rather than a spurious one,
+  because the frame carries no apogee and the interlock still gates arming.
+- **The partition moves nothing.** `flighttok` is appended at `0x620000`, so the
+  existing `nvs` keeps its offset and size and the stored calibration, LoRa
+  configuration and identity all survive the table change. Boards still need a
+  USB reflash rather than an over-the-air update, because the partition table
+  itself changes.
+
+The FC also stops gating its ask on the reset reason: the OC's answer is the
+authority, which is sound only because step 2 made the OC retire its stores on
+every non-recovery boot. Its clear predicate moves from "the reset looked
+normal" to "the OC positively said there is no flight" — strictly tighter, and
+it preserves #834 item 3 because no answer now means no clear on every reset
+reason.
+
+### Step 7, delivered — and what its review caught
+
+The mini's ACTIVE flag already lived in NVS and already survived a power loss,
+so the port was mostly a matter of removing the reset-reason conjunct that had
+been added on top of it and bringing `RecoveryArmGate` across. An adversarial
+pass over the diff found three things worth recording:
+
+- **Deleting the 60 s "healthy hold forgives the budget" rule was a regression
+  on its own.** That rule was the retry budget's *only* refill, and every real
+  pad session exceeds 60 s, so it silently guaranteed a full budget at every
+  launch. Removing it made the counter ratchet across battery reconnects: three
+  reseats before a launch and a genuine in-flight reset would have been refused
+  — the 2026-08-29 outcome, recreated by the fix for it. The budget is now
+  refilled at the LANDED edge, and deliberately **not** by a restore the
+  interlock refuted, since that is the bench case the bound exists to limit.
+- **The mini has no escape hatch and is harder to stop than the flight
+  computer**, which discards every command while INFLIGHT and refuses
+  power-off. A wrongly restored board would have had no exit short of pulling
+  the pack or waiting out the ten-minute timeout. Rather than port the whole
+  BLE override, `flightSafeToPowerOff()` now permits a power-off on a restored
+  flight the interlock has not opened *and* that is demonstrably still — the
+  same positive predicate the flight computer's override uses, reusing the same
+  shared function, with no new command.
+- **The widened eligibility admits more than a power loss** — any reset the
+  ACTIVE flag survives, including a self-OTA reboot or a USB reflash. Deliberate
+  reboots now retire the flag so they are not mistaken for an interrupted
+  flight.
 
 ## 4. What the adversarial pass killed
 

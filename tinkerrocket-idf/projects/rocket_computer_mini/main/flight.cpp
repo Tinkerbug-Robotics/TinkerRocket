@@ -26,6 +26,7 @@
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
 #include <BurnoutDetector.h>       // shared burnout detector (#197/#256)
 #include <DeploymentDetector.h>    // shared recovery-deployment detector
+#include <RecoveryArmGate.h>        // #1176: arming gate for a restored flight
 #include <TR_MagCalibrator.h>
 #include <RocketComputerTypes.h>
 #include <TR_FlightLog.h>          // snapshot tail-scan recovery (replaces OC MRAM)
@@ -371,6 +372,12 @@ static Preferences prefs;
 // still holds: logFrame is a RAM-ring enqueue, the flush task owns the NAND).
 // On unexpected reboot, flight_setup() tail-scans the brownout-recovered
 // flight for the last snapshot and restores flight state.
+// #1176: the arming half of reboot recovery, ported from the FC. A restored
+// flight may not arm a deployment channel until THIS boot's own sensors show
+// motion that ground handling cannot produce.
+static RecoveryArmGate::State recovery_arm_state;
+static bool     recovery_gate_active  = false;
+static bool     recovery_apogee_armed = false;
 static bool     reboot_recovery = false;      // true during the settle period after recovery
 static bool     reboot_recovery_telem = false; // true for rest of flight (telemetry flag)
 // FC name: servo_settle_end_ms.  The mini has no servos; the window is kept
@@ -643,14 +650,27 @@ static void servicePyroChannels(uint32_t now_ms)
         PyroChRuntime& ch = pyro_ch[i];
 
         // Idle → ArmSettle when trigger satisfied
-        if (ch.state == PyroChState::Idle && pyroChEnabled(i)) {
+        // #1176: on a boot that RESTORED a flight, nothing may leave Idle until
+        // RecoveryArmGate has seen live evidence from this boot's own sensors.
+        // Every input to the trigger conditions below came from the previous
+        // boot. recovery_gate_active is false on a normal launch, so an
+        // ordinary flight is bit-identical to today.
+        if (ch.state == PyroChState::Idle && pyroChEnabled(i) &&
+            (!recovery_gate_active ||
+             RecoveryArmGate::armingPermitted(recovery_arm_state))) {
             bool should_fire = false;
             const uint8_t mode = pyroChMode(i);
             const float   val  = pyroChValue(i);
-            if (pyro_apogee_detected && mode == PYRO_TRIGGER_TIME_AFTER_APOGEE) {
+            // The restored apogee is handed over separately and later, so a
+            // single noisy tick that opens the gate cannot also fire a charge
+            // whose delay has already elapsed.
+            const bool apogee_usable =
+                pyro_apogee_detected &&
+                (!recovery_gate_active || recovery_apogee_armed);
+            if (apogee_usable && mode == PYRO_TRIGGER_TIME_AFTER_APOGEE) {
                 const float elapsed_s = (float)(now_ms - pyro_apogee_time_ms) / 1000.0f;
                 if (elapsed_s >= val) should_fire = true;
-            } else if (pyro_apogee_detected && mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT) {
+            } else if (apogee_usable && mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT) {
                 // #834 item 4: see the FC's copy. A dead barometer free-runs
                 // this estimate through the threshold; a blocked static port
                 // freezes it so the threshold is never crossed at all.
@@ -1228,6 +1248,11 @@ static void resetFlightStateForSim(const char* edge)
     applyImuRateForFlightPhase();
     reboot_recovery = false;
     reboot_recovery_telem = false;
+    // #1176: a sim start/stop is the sim's equivalent of a reboot, so the
+    // arming interlock must not carry a verdict across it.
+    recovery_gate_active  = false;
+    recovery_apogee_armed = false;
+    RecoveryArmGate::reset(recovery_arm_state, time_ms());
     clearFlightSnapshot();
     ESP_LOGI(TAG, "[STATE] Sim %s -> READY", edge);
 }
@@ -1243,6 +1268,13 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
 {
     rocket_state = INFLIGHT;
     launch_time_millis = now_ms;
+    // #1176: a launch detected in THIS session is its own live evidence, so
+    // the recovery interlock has nothing left to decide. Clearing it here also
+    // stops a restored-then-refuted flight leaving stale arming state behind
+    // for a later launch in the same power cycle.
+    recovery_gate_active  = false;
+    recovery_apogee_armed = false;
+    RecoveryArmGate::reset(recovery_arm_state, now_ms);
     // #834 item 4: fresh main-deploy gate for this flight; a normal launch
     // credits the pad phase so the re-acquire dwell opens no new window.
     MainDeployGate::reset(main_deploy_state, now_ms, /*after_reboot=*/false);
@@ -2361,30 +2393,48 @@ void flight_setup()
     }
 
     // ── Inflight reboot recovery ────────────────────────────────────────────
-    // If the reset was unexpected (brownout, watchdog, panic), look for the
-    // interrupted flight the brownout scan just indexed and restore state to
-    // resume INFLIGHT ops.  See snapshotTailScan above for the gate list.
+    // If the ACTIVE-restore policy re-entered automatically — i.e. the last
+    // session was commanded ACTIVE and never cleanly powered off — look for
+    // the interrupted flight the brownout scan just indexed and restore state
+    // to resume INFLIGHT ops.  See snapshotTailScan above for the gate list.
+    // The RESET REASON is deliberately not part of this decision (#1176).
     {
         esp_reset_reason_t rst = esp_reset_reason();
         ESP_LOGI(TAG, "Reset reason: %s (%d)", resetReasonStr(rst), (int)rst);
 
-        const bool unexpected_reset = (rst == ESP_RST_BROWNOUT ||
-                                       rst == ESP_RST_PANIC    ||
-                                       rst == ESP_RST_INT_WDT  ||
-                                       rst == ESP_RST_TASK_WDT ||
-                                       rst == ESP_RST_WDT);
-
-        // Recovery may only run on the boot that interrupted the flight:
-        // this power-on must be the ACTIVE-restore policy's automatic
-        // re-entry (mini_link::active_restore_boot — main.cpp found the
-        // persisted ACTIVE flag) AND this chip reset must itself be
-        // unexpected. A manual power-on can carry a stale reset reason from
-        // a crash-in-IDLE hours earlier (a chip reset never precedes a
-        // commanded power-on), which is why the reason alone is not enough.
-        // A battery re-connect after a mid-flight brownout reads POWERON
-        // here and correctly declines — same semantics as the FC, where
-        // POWERON also skipped MRAM recovery.
-        const bool recovery_eligible = mini_link::active_restore_boot && unexpected_reset;
+        // Recovery may only run on the boot that interrupted the flight: this
+        // power-on must be the ACTIVE-restore policy's automatic re-entry
+        // (mini_link::active_restore_boot — main.cpp found the persisted
+        // ACTIVE flag). That flag lives in NVS and therefore SURVIVES A TOTAL
+        // POWER LOSS, which is the whole property this gate needs.
+        //
+        // #1176: the `&& unexpected_reset` conjunct is GONE, and its removal is
+        // the mini's half of the same defect the two-MCU boards had. The old
+        // comment here said a battery re-connect after a mid-flight brownout
+        // "reads POWERON and correctly declines — same semantics as the FC".
+        // Those semantics were the bug: on 2026-08-29 a V8 lost power for an
+        // instant under boost and did nothing for the rest of the flight
+        // because every layer asked whether the reset was a fault, and a power
+        // interruption is exactly what destroys the evidence needed to answer.
+        // The ESP32-S3 cannot even support the question — its reset-cause
+        // register aliases a chip-level brownout to a power-on (both 0x01).
+        //
+        // Dropping the conjunct costs nothing that was load-bearing. The old
+        // justification was that "a manual power-on can carry a stale reset
+        // reason", but active_restore_boot is set ONLY on the automatic
+        // re-entry and never on a manual, user-commanded power-on
+        // (mini_link.h), so it already excludes that case on its own. The
+        // stale-flight defences are unchanged and untouched: the NVS
+        // evaluated-once marker, the newest-id test, the tail scan, and the
+        // full magic/version/state/CRC/sim validation below.
+        // NOTE the widened set: dropping the conjunct admits every reset the
+        // ACTIVE flag survives, not only a power loss — a self-OTA reboot, a
+        // USB reflash, an external reset. Those are handled by clearing the
+        // ACTIVE flag on the paths that are deliberate reboots (see the OTA
+        // restart in comms.cpp), by the evaluated-once marker, and finally by
+        // the arming interlock, which holds every deployment channel shut
+        // until this boot's own sensors prove the vehicle is flying.
+        const bool recovery_eligible = mini_link::active_restore_boot;
 
         // The MRAM slot the FC invalidated on every clean boot does not
         // exist here — the equivalent is an NVS marker holding the last
@@ -2444,7 +2494,7 @@ void flight_setup()
                 }
             } else if (!recovery_eligible) {
                 ESP_LOGI(TAG, "[RECOVERY] interrupted flight %lu present but this boot is not "
-                              "an unexpected-reset re-entry (restore_boot=%d reason=%s) — booting clean",
+                              "an ACTIVE-restore re-entry (restore_boot=%d, reset was %s) — booting clean",
                          (unsigned long)recovered_id,
                          (int)mini_link::active_restore_boot, resetReasonStr(rst));
             } else if (recovered_id == recovery_done_id &&
@@ -2510,6 +2560,17 @@ void flight_setup()
 
             // Restore flight state
             rocket_state = INFLIGHT;
+
+            // #1176: arm the interlock. Until this boot's own sensors show
+            // live evidence of flight, no deployment channel may leave Idle
+            // and the restored apogee is withheld from both trigger
+            // conditions. Same barrier as the FC's, and it is what makes
+            // widening the eligibility gate above safe.
+            RecoveryArmGate::reset(recovery_arm_state, now_ms);
+            recovery_gate_active  = true;
+            recovery_apogee_armed = false;
+            ESP_LOGW(TAG, "[RECOVERY] Deployment channels INHIBITED until live "
+                          "flight evidence — restored apogee withheld");
 
             // Rebase timestamps to new time_ms() epoch
             launch_time_millis = now_ms - snap.flight_elapsed_ms;
@@ -3517,6 +3578,55 @@ static void loop_fc()
                                g.gnss_vel_u_mps * ((float)gnss_age_us * 1e-6f);
 
                 MainDeployGate::step(main_deploy_state, g);
+
+                // #1176: step the recovery arming interlock from the same
+                // block. Only meaningful on a boot that restored a flight.
+                if (recovery_gate_active)
+                {
+                    RecoveryArmGate::Inputs r;
+                    r.now_ms            = now_ms;
+                    r.flight_elapsed_ms = now_ms - launch_time_millis;
+                    r.baro_healthy      = baro_healthy;
+                    r.baro_rate_mps     = kinematics.d_alt_est_;
+                    // Freshness, not merely "a sample exists": ism6_latest_si
+                    // retains its last value when the drain yields nothing, so
+                    // a frozen IMU would otherwise re-present one sample
+                    // forever and hold an arm open.
+                    r.imu_fresh         = ism6_fresh_kc;
+                    r.accel_norm_ms2    = ism6_fresh_kc ? accel_norm : 0.0f;
+                    // Roll axis alone, as on the FC: it is what this scope
+                    // computes and the axis a vehicle under a drogue spins
+                    // about.
+                    r.gyro_norm_dps     = ism6_fresh_kc ? fabsf(roll_rate_dps)
+                                                        : 0.0f;
+                    r.gnss_ok           = g.gnss_ok;
+                    r.gnss_vel_u_mps    = g.gnss_vel_u_mps;
+                    r.quiescent_flag    = kinematics.quiescent_flag;
+
+                    const RecoveryArmGate::Verdict prev =
+                        recovery_arm_state.verdict;
+                    RecoveryArmGate::step(recovery_arm_state, r);
+                    if (prev != recovery_arm_state.verdict)
+                    {
+                        if (RecoveryArmGate::armingPermitted(recovery_arm_state))
+                            ESP_LOGW(TAG, "[RECOVERY] Flight CONFIRMED by live "
+                                          "evidence (%s) — deployment channels "
+                                          "released",
+                                     RecoveryArmGate::armName(
+                                         recovery_arm_state.opened_by));
+                        else if (RecoveryArmGate::refuted(recovery_arm_state))
+                            ESP_LOGE(TAG, "[RECOVERY] Restored flight REFUTED — "
+                                          "the vehicle is not flying. Ending the "
+                                          "flight; channels never armed.");
+                    }
+                    if (!recovery_apogee_armed &&
+                        RecoveryArmGate::apogeeArmed(recovery_arm_state, now_ms))
+                    {
+                        recovery_apogee_armed = true;
+                        ESP_LOGW(TAG, "[RECOVERY] Restored apogee handed to the "
+                                      "deployment triggers");
+                    }
+                }
             }
 
             // --- Recovery deployment detection ---
@@ -3753,6 +3863,23 @@ static void loop_fc()
 
                 // Safety timeout: force LANDED if flight exceeds 10 minutes
                 // (landing detection failure, stuck at altitude, KF divergence)
+                // #1176: a restored flight the interlock has REFUTED is not
+                // flying — the record was stale and this boot is on the ground.
+                // End through LANDED, which this codebase already treats as
+                // terminal, so the post-flight lockout and the snapshot clear
+                // apply unchanged.
+                if (recovery_gate_active &&
+                    RecoveryArmGate::refuted(recovery_arm_state) &&
+                    rocket_state == INFLIGHT)
+                {
+                    pyroSafeAll();
+                    rocket_state = LANDED;
+                    ESP_LOGE(TAG, "[STATE] INFLIGHT -> LANDED (recovery refuted: "
+                                  "no live evidence of flight). Power-cycle for a "
+                                  "normal session.");
+                    break;
+                }
+
                 static constexpr uint32_t MAX_FLIGHT_TIME_MS = 600000U;
                 if (now_ms - launch_time_millis > MAX_FLIGHT_TIME_MS)
                 {
@@ -3769,6 +3896,13 @@ static void loop_fc()
                     landed_actions_done = true;
                     post_flight_lockout = true;  // #317: LANDED is terminal until reboot
                     pyroSafeAll();
+                    // #1176: a flight genuinely ended, so give the ACTIVE-restore
+                    // retry budget back. A REFUTED restore does not count — that
+                    // is a wrongly restored flight on a bench, and it must not
+                    // refill the budget whose whole job is to bound it.
+                    mini_link::flightEnded(
+                        !(recovery_gate_active &&
+                          RecoveryArmGate::refuted(recovery_arm_state)));
                     clearFlightSnapshot();  // prevent stale recovery on next boot
                     reboot_recovery = false;
                     reboot_recovery_telem = false;
@@ -4229,7 +4363,33 @@ bool flightSafeToPowerOff()
     if (rocket_state == PRELAUNCH || rocket_state == INFLIGHT ||
         rocket_state == MAG_CALIBRATION)
     {
-        return false;
+        // #1176: ONE exception, and it is the mini's escape hatch.
+        //
+        // A restored flight is INFLIGHT, so without this a board that came up
+        // believing it is flying refuses every power-off — and the mini also
+        // discards all commands while INFLIGHT, so there would be no way to
+        // stop it short of pulling the pack (which the power-off path exists
+        // to avoid, because the NAND is on the switched rail) or waiting out
+        // the ten-minute flight timeout.
+        //
+        // The condition is the same POSITIVE one the FC's step-6 override
+        // uses, and reuses the same shared predicate: the interlock has NOT
+        // opened (no live evidence of flight) AND the vehicle is demonstrably
+        // still, right now, for a continuous dwell. "Not opened" alone would
+        // not do — Locked is the pre-decision state a genuine restored flight
+        // sits in for its first seconds, and for a whole descent with a dead
+        // barometer.
+        if (rocket_state == INFLIGHT && recovery_gate_active &&
+            RecoveryArmGate::overrideAllowed(recovery_arm_state, time_ms()))
+        {
+            ESP_LOGW(TAG, "[RECOVERY] power-off ALLOWED on a restored flight — "
+                          "no live evidence of flight and the vehicle is still");
+            // Fall through to the pyro-busy check below, which still applies.
+        }
+        else
+        {
+            return false;
+        }
     }
     // A mag-cal session can hold state outside the MAG_CALIBRATION rocket
     // state only transiently, but the chip-offset bookkeeping must not be

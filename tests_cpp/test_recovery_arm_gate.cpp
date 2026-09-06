@@ -227,15 +227,114 @@ TEST(RecoveryArmGate, SustainedStillnessRefutes)
 
 TEST(RecoveryArmGate, InterruptedStillnessDoesNotRefute)
 {
+    // The interruption has to be PHYSICAL, not merely a cleared flag: the gate
+    // accumulates stillness from the raw terms as well as from the shipped
+    // detector, precisely so a restored flight (whose fresh kinematics can
+    // never latch that flag) can still refute. Picking the rocket up shows in
+    // both.
     State st; reset(st, 0);
     Inputs in = still();
     in.quiescent_flag = true;
     uint32_t t = run(st, in, 0, 25000);
-    in.quiescent_flag = false;                   // picked up, or a gust
-    t = run(st, in, t, 100);
+
+    in.quiescent_flag = false;
+    in.accel_norm_ms2 = 14.0f;                   // lifted
+    in.gyro_norm_dps  = 40.0f;
+    t = run(st, in, t, 200);
+
+    in = still();
     in.quiescent_flag = true;
     run(st, in, t, 25000);
-    EXPECT_FALSE(refuted(st));                   // the hold restarted
+    EXPECT_FALSE(refuted(st));                   // both holds restarted
+}
+
+TEST(RecoveryArmGate, RefutesOnARestoredFlightWithNoQuiescentFlag)
+{
+    // THE REGRESSION TEST FOR A REAL DEFECT. The shipped quiescence detector
+    // gates its pass on apogee_flag, and a restored flight starts with a fresh
+    // TR_KinematicChecks whose apogee flag is false — so on the one path this
+    // gate exists for, quiescent_flag can NEVER become true. A refutation built
+    // only on it is dead code, and a stale-token board would sit INFLIGHT for
+    // the full ten-minute flight timeout instead of self-healing in ~30 s.
+    State st; reset(st, 0);
+    Inputs in = still();
+    in.quiescent_flag = false;                   // as a restored flight sees it
+    uint32_t t = run(st, in, 0, 20000);
+    EXPECT_FALSE(refuted(st));                   // not yet
+    run(st, in, t, 12000);
+    EXPECT_TRUE(refuted(st));
+}
+
+TEST(RecoveryArmGate, AFrozenImuAtOneGIsNotStillness)
+{
+    // A frozen IMU retains its last sample, and if that sample happened to be
+    // ~1 g it would look exactly like a vehicle at rest. Freshness gates the
+    // stillness terms for the same reason it gates the arming ones.
+    State st; reset(st, 0);
+    Inputs in = still();
+    in.imu_fresh = false;
+    run(st, in, 0, 60000);
+    EXPECT_FALSE(refuted(st));
+    EXPECT_FALSE(overrideAllowed(st, 60000));
+}
+
+TEST(RecoveryArmGate, DescendingUnderCanopyIsNotStillness)
+{
+    // The inertial terms alone cannot separate sitting in a field from a
+    // smooth descent — under a canopy the airframe is near 1 g and may barely
+    // roll. The barometric term is what separates them, whenever the baro
+    // is usable.
+    State st; reset(st, 0);
+    Inputs in = still();
+    in.baro_rate_mps = -5.5f;                    // under a main
+    run(st, in, 0, 60000);
+    EXPECT_FALSE(refuted(st));
+    EXPECT_FALSE(overrideAllowed(st, 60000));
+}
+
+// ---------------------------------------------------------------------------
+// The operator override (#1176 step 6).
+
+TEST(RecoveryArmGate, OverrideNeedsPositiveStillnessNotMerelyLocked)
+{
+    // THE CENTRAL SAFETY PROPERTY. "Not Open" is not "not flying": Locked is
+    // the pre-decision state, and a genuine restored flight sits in it for
+    // seconds after every restore — and for an entire descent when the
+    // barometer is dead. An override that merely required Locked would let a
+    // ground station end a real flight in exactly that window.
+    State st; reset(st, 0);
+    Inputs in = still();
+    in.baro_healthy   = false;                   // dead baro: Locked all descent
+    in.accel_norm_ms2 = 9.75f;                   // ~1 g under a canopy
+    in.gyro_norm_dps  = 30.0f;                   // but rolling
+    uint32_t t = run(st, in, 0, 60000);
+    ASSERT_EQ(st.verdict, Verdict::Locked);      // Locked, and airborne
+    EXPECT_FALSE(overrideAllowed(st, t));        // must still refuse
+}
+
+TEST(RecoveryArmGate, OverrideAllowedOnAStationaryBench)
+{
+    State st; reset(st, 0);
+    Inputs in = still();
+    uint32_t t = run(st, in, 0, 4000);
+    EXPECT_FALSE(overrideAllowed(st, t));        // dwell not met yet
+    t = run(st, in, t, 2000);
+    EXPECT_TRUE(overrideAllowed(st, t));
+}
+
+TEST(RecoveryArmGate, OverrideRefusedOnceTheGateHasOpened)
+{
+    // Once live evidence has proven the vehicle is flying, no operator
+    // assertion may override it.
+    State st; reset(st, 0);
+    Inputs in = still();
+    in.baro_rate_mps = -15.0f;
+    uint32_t t = run(st, in, 0, 2000);
+    ASSERT_TRUE(armingPermitted(st));
+
+    in = still();                                 // now sitting perfectly still
+    t = run(st, in, t, 10000);
+    EXPECT_FALSE(overrideAllowed(st, t));
 }
 
 TEST(RecoveryArmGate, AFlightPastTheTimeoutIsRefutedRegardlessOfMotion)

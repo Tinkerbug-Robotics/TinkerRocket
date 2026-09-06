@@ -2119,6 +2119,17 @@ static constexpr uint8_t REG_TEST           = 0x08;
 static constexpr uint8_t GNSS_SAT_MSG        = 0x90;  // FC→OC over I2S: GNSSSatData, per-satellite C/N0 at every GNSS
                                                       // epoch, straight to the log.  VARIABLE length: 10 + 6*num_blocks
                                                       // bytes (gnssSatWireSize), never sizeof.
+// OC→FC: end a restored flight on the operator's explicit request (#1176
+// step 6).  Carries no payload — the FC decides whether to honour it, and it
+// is a code rather than a flag only because the pending-command channel is a
+// single byte.
+//
+// In the 0x90 block, not 0xFC. An earlier draft took 0xFC on the grounds that
+// its only other user is a base-station log record in a namespace that never
+// reaches this wire — true, but #1183 had already ruled 0xA0-0xFD full for
+// exactly that reason and opened this block. One convention beats two
+// defensible ones.
+static constexpr uint8_t RECOVERY_END_PENDING = 0x91;
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
 static constexpr uint8_t ISM6HG256_MSG       = 0xA2;

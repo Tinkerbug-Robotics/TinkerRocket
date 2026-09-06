@@ -1627,6 +1627,7 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         // FC->OC per-satellite GNSS report, log-only. First code in the 0x90
         // block: 0xA0-0xFD is full (see RocketComputerTypes.h).
         MT(GNSS_SAT_MSG),
+        MT(RECOVERY_END_PENDING),
     };
 #undef MT
 
@@ -1656,7 +1657,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //      the base station's own log records.
     // 93 = 92 + GNSS_SAT_MSG (per-satellite GNSS record).  0xA0-0xFD being
     //      full, it opens the 0x90-0x9F block — see RocketComputerTypes.h.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 93u)
+    // 94 = 93 + RECOVERY_END_PENDING (#1176 step 6), the second code in that
+    //      same 0x90 block.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 94u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
