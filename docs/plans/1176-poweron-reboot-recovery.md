@@ -107,7 +107,7 @@ nothing yet constrains what a restored flight may do.
 | 4 | Interlock + delayed apogee arm, on today's fault-reset path only | **DONE** |
 | 5 | The behaviour change: the flight token and the POWERON widening | **DONE** |
 | 6 | Escape hatch: end a restored flight over BLE | **DONE** |
-| 7 | Mini parity | after 4 has flown |
+| 7 | Mini parity | **DONE** (do not fly before the two-MCU work has) |
 | 8 | Follow-ups, filed not bundled | — |
 
 ### Step 3, delivered
@@ -211,6 +211,34 @@ every non-recovery boot. Its clear predicate moves from "the reset looked
 normal" to "the OC positively said there is no flight" — strictly tighter, and
 it preserves #834 item 3 because no answer now means no clear on every reset
 reason.
+
+### Step 7, delivered — and what its review caught
+
+The mini's ACTIVE flag already lived in NVS and already survived a power loss,
+so the port was mostly a matter of removing the reset-reason conjunct that had
+been added on top of it and bringing `RecoveryArmGate` across. An adversarial
+pass over the diff found three things worth recording:
+
+- **Deleting the 60 s "healthy hold forgives the budget" rule was a regression
+  on its own.** That rule was the retry budget's *only* refill, and every real
+  pad session exceeds 60 s, so it silently guaranteed a full budget at every
+  launch. Removing it made the counter ratchet across battery reconnects: three
+  reseats before a launch and a genuine in-flight reset would have been refused
+  — the 2026-08-29 outcome, recreated by the fix for it. The budget is now
+  refilled at the LANDED edge, and deliberately **not** by a restore the
+  interlock refuted, since that is the bench case the bound exists to limit.
+- **The mini has no escape hatch and is harder to stop than the flight
+  computer**, which discards every command while INFLIGHT and refuses
+  power-off. A wrongly restored board would have had no exit short of pulling
+  the pack or waiting out the ten-minute timeout. Rather than port the whole
+  BLE override, `flightSafeToPowerOff()` now permits a power-off on a restored
+  flight the interlock has not opened *and* that is demonstrably still — the
+  same positive predicate the flight computer's override uses, reusing the same
+  shared function, with no new command.
+- **The widened eligibility admits more than a power loss** — any reset the
+  ACTIVE flag survives, including a self-OTA reboot or a USB reflash. Deliberate
+  reboots now retire the flag so they are not mistaken for an interrupted
+  flight.
 
 ## 4. What the adversarial pass killed
 

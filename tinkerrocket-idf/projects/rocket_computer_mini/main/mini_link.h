@@ -84,6 +84,28 @@ void init();
 // power-up with a stale interrupted flight still on the chip.
 extern bool active_restore_boot;
 
+// #1176: the flight side reached LANDED, so a flight genuinely ended. Clears
+// the ACTIVE-restore RETRY COUNTER (not the ACTIVE flag itself — an unexpected
+// reset after landing should still re-enter ACTIVE and keep a downed rocket's
+// tracker alive).
+//
+// This exists because deleting the old "60 s of healthy ACTIVE forgives the
+// budget" rule removed the counter's ONLY refill. Every real pad session
+// exceeds 60 s, so that rule silently guaranteed a full budget at every
+// launch; without a replacement the counter would ratchet across battery
+// reconnects and could refuse the one in-flight restore this issue exists to
+// enable. `genuine` is false when the flight is ending because the recovery
+// interlock REFUTED it — a wrongly restored flight on a bench must not refill
+// the budget that bounds it.
+void flightEnded(bool genuine);
+
+// #1176: this reboot is DELIBERATE, so the next boot must not read it as a
+// session that ended unexpectedly. Clears the ACTIVE flag and its retry
+// counter. Recovery eligibility no longer consults the reset reason, so the
+// deliberate-reboot paths have to say so for themselves — otherwise a
+// post-OTA boot looks exactly like a power loss mid-flight.
+void retireActiveFlag(const char* why);
+
 // Command shutter: sendCommand() refuses (returns false) while closed.
 // Closed at boot and during power-off (nothing should reach a flight side
 // that doesn't exist / is being torn down); opened by main.cpp once the
