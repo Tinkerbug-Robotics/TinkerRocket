@@ -36,6 +36,12 @@ public:
     bool getMMC5983MAData(MMC5983MAData& data_out);
     bool getIIS2MDCData(IIS2MDCData& data_out);
     bool getGNSSData(GNSSData& data_out);
+    // Per-satellite report (GNSS_SAT_MSG).  Passthrough while idle; while a
+    // sim runs the real receiver's table is consumed and DROPPED — the fix
+    // the log carries is synthetic, and a real sky beside a fake trajectory
+    // would read as a genuine per-satellite record of a flight that never
+    // happened.  Nothing synthetic replaces it: the sim has no satellites.
+    bool getGNSSSatData(GNSSSatData& data_out);
 
     // Debug passthrough
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot& snapshot_out) const;

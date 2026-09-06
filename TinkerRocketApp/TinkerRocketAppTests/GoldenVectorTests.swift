@@ -282,7 +282,8 @@ final class GoldenVectorTests: XCTestCase {
     func testFlightSettingsLadder() throws {
         for rel in ["logframes/flightsettings_v1_188.bin", "logframes/flightsettings_v2_200.bin",
                     "logframes/flightsettings_v3_208.bin", "logframes/flightsettings_v5_210.bin",
-                    "logframes/flightsettings_v6_219.bin"] {
+                    "logframes/flightsettings_v6_219.bin", "logframes/flightsettings_v7_220.bin",
+                    "logframes/flightsettings_v8_222.bin"] {
             let side = WireFixtures.sidecar(rel)
             let s = try FlightSettingsData(from: WireFixtures.data(rel))
 
@@ -342,6 +343,18 @@ final class GoldenVectorTests: XCTestCase {
                 XCTAssertEqual(s.guid_tgt_src.map(Int.init), side.int("guid_tgt_src"), rel)
             } else {
                 XCTAssertNil(s.guid_tgt_e_m, rel)
+            }
+            if present >= 220 {
+                XCTAssertEqual(s.gnss_otp_state.map(Int.init), side.int("gnss_otp_state"), rel)
+            } else {
+                XCTAssertNil(s.gnss_otp_state, rel)
+            }
+            // v8 roll-control speed gate: deci-m/s on the wire, m/s in the app.
+            if present >= 222 {
+                XCTAssertEqual(s.roll_min_speed_mps,
+                               Float(side.int("roll_min_speed_dmps")) / 10.0, rel)
+            } else {
+                XCTAssertNil(s.roll_min_speed_mps, rel)
             }
         }
     }

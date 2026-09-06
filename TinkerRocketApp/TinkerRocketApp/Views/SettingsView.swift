@@ -43,6 +43,7 @@ struct SettingsView: View {
     @State private var sPidMinCmd = ""
     @State private var sPidMaxCmd = ""
     @State private var sRollDelayMs = ""
+    @State private var sRollMinSpeed = ""
     @State private var savedRollUsesAngle: Bool? = nil
     @State private var savedOrientCode: UInt8? = nil
     @State private var sRateCapDps = ""
@@ -179,6 +180,7 @@ struct SettingsView: View {
         case bias1, bias2, bias3, bias4, servoHz, servoMin, servoMax, finTravel
         case pidKp, pidKi, pidKd, pidMin, pidMax
         case rollDelay
+        case rollMinSpeed
         case rateCap
         case kpAngle
         case integralSep
@@ -220,7 +222,7 @@ struct SettingsView: View {
         switch field {
         case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax, .finTravel: return .servo
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
-        case .rollDelay, .rateCap, .kpAngle, .integralSep: return .rollControl
+        case .rollDelay, .rollMinSpeed, .rateCap, .kpAngle, .integralSep: return .rollControl
         case .guidTargetAlt, .guidNavGain, .guidMaxAccel, .guidAccelToFin, .guidMaxFin, .guidMinSpeed,
              .guidKpPos, .guidKdVel: return .guidance
         case .wpTime, .wpAngle: return .rollWaypoints
@@ -1008,6 +1010,19 @@ struct SettingsView: View {
                 .font(.caption).foregroundColor(.secondary)
 
             HStack {
+                Text("Min Speed")
+                Spacer()
+                TextField("0", text: $sRollMinSpeed)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
+                    .focused($focusedField, equals: .rollMinSpeed)
+                Text("m/s").foregroundColor(.secondary)
+            }
+            Text("Airspeed the rocket must reach before control activates \u{2014} fin authority scales with speed squared, so a loop that starts on the rail commands full deflection the fins cannot deliver and departs when authority arrives. Applied on top of the Activation Delay: both must be satisfied. 0 disables the speed gate.")
+                .font(.caption).foregroundColor(.secondary)
+
+            HStack {
                 Text("Rate Cap")
                 Spacer()
                 TextField("60", text: $sRateCapDps)
@@ -1192,6 +1207,10 @@ struct SettingsView: View {
                 Text("ms").foregroundColor(.secondary)
             }
             Text("Milliseconds after launch before control activates \u{2014} roll-rate-null and guidance both engage at this delay, keeping fins neutral through initial boost.")
+                .font(.caption).foregroundColor(.secondary)
+            Text(profile.rollMinSpeedMps > 0
+                 ? "Roll Control also holds activation until \(formatDecimal(Double(profile.rollMinSpeedMps))) m/s. Guidance shares that gate, so it engages at whichever comes last."
+                 : "Roll Control can also hold activation until a minimum airspeed; that gate is off. Guidance shares it.")
                 .font(.caption).foregroundColor(.secondary)
             Text(profile.pnGuidanceLaw == 0
                  ? "Nav gain = PN aggressiveness (3\u{2013}5). Min speed gates guidance off below useful fin authority. Stored in the rocket profile."
@@ -1394,6 +1413,7 @@ struct SettingsView: View {
         sPidMinCmd = formatDecimal(Double(p.pidMinCmd))
         sPidMaxCmd = formatDecimal(Double(p.pidMaxCmd))
         sRollDelayMs = formatInt(Double(p.rollDelayMs))
+        sRollMinSpeed = formatDecimal(Double(p.rollMinSpeedMps))
         sRateCapDps = formatInt(Double(p.rateCapDps))
         sKpAngle = formatDecimal(Double(p.kpAngle))
         sIntegralSep = formatInt(Double(p.integralSepThreshold))
@@ -1606,16 +1626,22 @@ struct SettingsView: View {
         let rateCap = max(0, Float(sRateCapDps) ?? profile.rateCapDps)
         let kpAngle = max(0, Float(sKpAngle) ?? profile.kpAngle)
         let iwind   = max(0, Float(sIntegralSep) ?? profile.integralSepThreshold)
+        // Clamped to the firmware's accepted range: the FC rejects anything
+        // above it outright, and a gate that never opens means no roll control
+        // for the whole flight.
+        let minSpeed = min(300, max(0, Float(sRollMinSpeed) ?? profile.rollMinSpeedMps))
         let useAngle = profile.useAngleControl
         updateProfile {
             $0.rollDelayMs = delayMs
+            $0.rollMinSpeedMps = minSpeed
             $0.rateCapDps = rateCap
             $0.kpAngle = kpAngle
             $0.integralSepThreshold = iwind
         }
         if device.isConnected {
             device.sendRollControlConfig(useAngleControl: useAngle, rollDelayMs: delayMs, rateCapDps: rateCap,
-                                         kpAngle: kpAngle, integralSepThreshold: iwind)
+                                         kpAngle: kpAngle, integralSepThreshold: iwind,
+                                         rollMinSpeedMps: minSpeed)
         }
         showApplied($rollControlApplied)
     }

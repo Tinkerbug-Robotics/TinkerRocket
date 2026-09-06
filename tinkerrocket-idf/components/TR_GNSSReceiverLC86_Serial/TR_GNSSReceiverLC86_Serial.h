@@ -50,6 +50,14 @@ class TR_GNSSReceiverLC86Serial
         /// Bounded work per call (the collector counts >1 ms polls).
         bool pollNewPVT(GNSSData &data);
 
+        /// Always false: this part has no per-satellite report.  The LC86G
+        /// speaks NMEA plus Quectel's PAIR/PQTM sentences, not UBX, so there
+        /// is no NAV-SAT; the NMEA equivalent (GSV for C/N0, elevation and
+        /// azimuth, GSA for the used flag) is switched OFF in begin() for the
+        /// poll budget.  Present so the collector needs no driver branch; a
+        /// mini flight log therefore carries no GNSS_SAT_MSG records.
+        bool pollNewSat(GNSSSatData &) { return false; }
+
     private:
 
         // What awaitEvent() is pumping the RX stream for (begin()-time only;

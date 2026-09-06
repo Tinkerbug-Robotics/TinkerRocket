@@ -1024,6 +1024,7 @@ static void buildFlightSettings(FlightSettingsData& s)
     if (FW_GIT_DIRTY)       flags |= (uint8_t)(1u << FlightSettingsData::F_FW_DIRTY);
     s.flags = flags;
     s.roll_delay_ms = 0;
+    s.roll_min_speed_dmps = 0;   // no roll control on this board, so no speed gate
 
     // PID / angle-loop / gain-schedule / setpoint fields: memset already
     // zeroed them (no roll control on this board).

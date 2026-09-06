@@ -56,7 +56,7 @@ public object BleCommandId {
     public const val ROLL_PROFILE: Int = 26        // RollProfileData 76 B
     public const val ROLL_PROFILE_CLEAR: Int = 27
     public const val GUIDANCE_POINT: Int = 28      // GuidancePointData 20 B (#435)
-    public const val ROLL_CTRL_CONFIG: Int = 31    // RollControlConfigData 16 B
+    public const val ROLL_CTRL_CONFIG: Int = 31    // RollControlConfigData 20 B
     public const val GUIDANCE_ENABLE: Int = 32     // [bool]
     public const val CAMERA_CONFIG: Int = 33       // CameraConfigData 1 B
     public const val PYRO_CONFIG: Int = 34         // PyroConfigData 24 B

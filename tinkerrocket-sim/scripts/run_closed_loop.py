@@ -60,6 +60,11 @@ CONTROL_ENABLED = True      # False = passive flight (no fin tab actuation)
 # "Activation Delay" (firmware roll_delay_ms / BLE), SHARED by roll control and
 # guidance. Guidance engages at launch + this delay, NOT at burnout.
 ROLL_DELAY_MS = 250
+# Control-authority speed gate (m/s) — the app's "Min Speed" (firmware
+# roll_min_speed_mps). ANDed with ROLL_DELAY_MS: control waits for both. Fin
+# authority scales with V^2, so this is the gate that actually tracks authority;
+# the delay only tracks the clock. 0 disables it.
+ROLL_MIN_SPEED_MPS = 0.0
 ROLL_DISTURBANCE_NM = 0.002  # constant roll torque disturbance (N-m)
 
 # --- Gain scheduling — V_ref=50 gives 1.73x at 38 m/s, 0.51x at 70 m/s ---
@@ -671,6 +676,7 @@ if __name__ == "__main__":
         gnss_rate=GNSS_RATE,
         control_enabled=CONTROL_ENABLED,
         roll_delay_s=ROLL_DELAY_MS / 1000.0,
+        roll_min_speed_mps=ROLL_MIN_SPEED_MPS,
         pid_kp=KP,
         pid_ki=KI,
         pid_kd=KD,

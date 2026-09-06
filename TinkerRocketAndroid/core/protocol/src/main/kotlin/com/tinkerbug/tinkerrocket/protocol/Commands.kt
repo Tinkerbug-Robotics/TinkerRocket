@@ -178,9 +178,14 @@ public object Commands {
         }
 
     /**
-     * cmd 31 — RollControlConfigData, 16 B:
+     * cmd 31 — RollControlConfigData, 20 B:
      * `[use_angle_control u8][pad u8][roll_delay_ms u16][rate_cap_dps f32]
-     * [kp_angle f32][integral_sep_threshold f32]`.
+     * [kp_angle f32][integral_sep_threshold f32][roll_min_speed_mps f32]`.
+     *
+     * [rollMinSpeedMps] is the control-authority speed gate: roll control and
+     * guidance wait for that airspeed as well as [rollDelayMs].  0 turns the
+     * gate off.  A rocket running firmware older than the gate reads only the
+     * first 16 bytes and ignores the tail.
      */
     public fun rollControlConfig(
         useAngleControl: Boolean,
@@ -188,10 +193,12 @@ public object Commands {
         rateCapDps: Float,
         kpAngle: Float,
         integralSepThreshold: Float,
+        rollMinSpeedMps: Float = 0f,
     ): ByteArray = frame(BleCommandId.ROLL_CTRL_CONFIG) {
         bool(useAngleControl); u8(0)
         u16(rollDelayMs)
         f32(rateCapDps); f32(kpAngle); f32(integralSepThreshold)
+        f32(rollMinSpeedMps)
     }
 
     // -------------------------------------------------------------- guidance

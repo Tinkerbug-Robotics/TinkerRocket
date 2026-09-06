@@ -477,7 +477,7 @@ public class FakeFirmware(
         public const val DEFAULT_CONFIG_JSON: String =
             """{"type":"config","sb1":0,"shz":333,"smn":1000,"smx":2000,""" +
                 """"kp":0.08,"ki":0.005,"kd":0.003,"pmn":-10.0,"pmx":10.0,""" +
-                """"sen":true,"gs":true,"ac":false,"rdly":0,"rcap":60.0,"kpang":2.0,""" +
+                """"sen":true,"gs":true,"ac":false,"rdly":0,"rmspd":0.0,"rcap":60.0,"kpang":2.0,""" +
                 """"iwind":40.0,"ge":false,"camt":2,"irate":1920,"lf":915.0,"lsf":8,""" +
                 """"lbw":250.0,"lcr":5,"lpw":17,"lhd":false,"lhdw":400,"ltxd":false}"""
 

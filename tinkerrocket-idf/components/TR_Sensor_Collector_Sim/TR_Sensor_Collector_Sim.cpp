@@ -346,6 +346,13 @@ bool SensorCollectorSim::getGNSSData(GNSSData& data_out)
     return false;
 }
 
+bool SensorCollectorSim::getGNSSSatData(GNSSSatData& data_out)
+{
+    const bool have_data = real_.getGNSSSatData(data_out);
+    if (phase_ == SIM_IDLE) return have_data;
+    return false;   // consumed, not forwarded — see the header
+}
+
 // ============================================================================
 // Physics
 // ============================================================================

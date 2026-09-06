@@ -106,6 +106,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     mmc5983ma_data_ready = false;
     iis2mdc_data_ready = false;
     gnss_data_ready = false;
+    gnss_sat_data_ready = false;
     iis2mdc_last_sample_us = 0;
     bmp585_irq_pending_count = 0;
     mmc5983ma_irq_pending_count = 0;
@@ -586,15 +587,10 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         else
         {
             ESP_LOGI(SC_TAG, "GNSS found and initialized");
-#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86)
-            // #491 only: ask for per-satellite reports. The flight path does
-            // not need them -- it polls NAV-PVT and takes the count from
-            // getSIV() -- but telling a withheld position from a lost signal
-            // is only possible per-satellite, and that distinction is the
-            // whole measurement. Guarded off the LC86 driver, which has no
-            // such call.
-            gnss_receiver.enableSatDiag();
-#endif
+            // Per-satellite reports (UBX-NAV-SAT) are enabled inside the
+            // u-blox driver's begin() now — they feed the GNSS_SAT_MSG flight
+            // record at every epoch, so the #491 console diagnostic below no
+            // longer has an enable step of its own.
         }
     }
 
@@ -949,6 +945,17 @@ void SensorCollector::pollGNSSdata(void* parameter)
         GNSSData gnss_sample = {};
         const bool have_new = self->gnss_receiver.pollNewPVT(gnss_sample);
 
+        // Per-satellite report for the same epoch (GNSS_SAT_MSG).  u-blox
+        // only — the LC86 driver's pollNewSat() is a constant false.  Inside
+        // the timing accounting on purpose: this is flight data now, so its
+        // parse cost belongs in the GNSS budget the >1 ms counters watch.
+        // Static, not a local: this task has a 4 KB stack and the record is
+        // 202 B; one poll task exists per boot, so a function-static is as
+        // private as a local here.  Only the num_blocks the driver filled
+        // are ever sent, so a stale tail from an earlier epoch is inert.
+        static GNSSSatData sat_sample = {};
+        const bool have_sat = self->gnss_receiver.pollNewSat(sat_sample);
+
         const uint32_t gnss_elapsed = time_us() - gnss_t0;
         self->pt_gnss_calls++;
 
@@ -981,6 +988,16 @@ void SensorCollector::pollGNSSdata(void* parameter)
             {
                 self->gnss_data = gnss_sample;
                 self->gnss_data_ready = true;
+                xSemaphoreGive(self->gnssDataSemaphore);
+            }
+        }
+
+        if (have_sat)
+        {
+            if (xSemaphoreTake(self->gnssDataSemaphore, 0) == pdTRUE)
+            {
+                self->gnss_sat_data = sat_sample;
+                self->gnss_sat_data_ready = true;
                 xSemaphoreGive(self->gnssDataSemaphore);
             }
         }
@@ -1047,6 +1064,18 @@ bool SensorCollector::getGNSSData(GNSSData& gnss_out)
         gnss_out = gnss_data;
         xSemaphoreGive(gnssDataSemaphore);
         gnss_data_ready = false;
+        return true;
+    }
+    return false;
+}
+
+bool SensorCollector::getGNSSSatData(GNSSSatData& sat_out)
+{
+    if (gnss_sat_data_ready && xSemaphoreTake(gnssDataSemaphore, 0) == pdTRUE)
+    {
+        sat_out = gnss_sat_data;
+        xSemaphoreGive(gnssDataSemaphore);
+        gnss_sat_data_ready = false;
         return true;
     }
     return false;

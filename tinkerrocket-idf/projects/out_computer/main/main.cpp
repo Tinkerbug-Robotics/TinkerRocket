@@ -1159,10 +1159,13 @@ static bool    cfg_servo_enabled = true;
 static bool    cfg_gain_sched   = true;
 static bool    cfg_use_angle_ctrl = false;
 static uint16_t cfg_roll_delay_ms  = 0;
+// Control-authority speed gate (m/s) cached for config readback.  0 = gate off
+// (time delay only), which is also what a legacy 16-byte cmd-31 push means.
+static float   cfg_roll_min_speed = 0.0f;
 // #253: cached roll-control gains for config readback.  <=0 means "firmware
 // default" (mirrors the FC's apply semantics for these fields) — the app shows
 // its own default in that case.  Written by cacheRollControlConfig on every
-// cmd-31 push (the full 16-byte struct passes through since #387), persisted
+// cmd-31 push (the full struct passes through since #387), persisted
 // in the "roll" NVS namespace, surfaced via sendCurrentConfig.
 static float   cfg_rate_cap_dps  = 0.0f;
 static float   cfg_kp_angle      = 0.0f;
@@ -2173,7 +2176,7 @@ static uint32_t msg_count_end_flight = 0;
 static uint32_t msg_count_unknown = 0;
 // #569: types accepted by isKnownMessageType and written to the flight log by
 // the enqueue path, but with no live handler branch (GUIDANCE_TELEM_MSG,
-// FLIGHT_SETTINGS_MSG, LORA_MSG). They used to fall through to
+// FLIGHT_SETTINGS_MSG, LORA_MSG, GNSS_SAT_MSG). They used to fall through to
 // msg_count_unknown++, so a guided flight showed a climbing "unknown" rate
 // that read as I2S corruption and masked genuinely unknown frames.
 static uint32_t msg_count_logonly = 0;
@@ -3123,6 +3126,7 @@ static bool isKnownMessageType(uint8_t type)
         case I2C_TX_RESYNC:          // FC→OC over I2C — slave TX desync recovery (#402)
         case FC_BOOT_STATUS_MSG:     // FC→OC over I2C during setup_fc — boot progress
         case CONFIG_REPORT_MSG:      // FC→OC over I2S — full config report (#915)
+        case GNSS_SAT_MSG:           // FC→OC over I2S — per-satellite C/N0 every GNSS epoch, log-only
             return true;
         default:
             return false;
@@ -3860,12 +3864,13 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     }
     else if (type == GUIDANCE_TELEM_MSG ||
              type == FLIGHT_SETTINGS_MSG ||
-             type == LORA_MSG)
+             type == LORA_MSG ||
+             type == GNSS_SAT_MSG)
     {
         // #569: log-only types — no live handler by design (they exist for
         // the flight log; GUIDANCE_TELEM streams at up to 500 Hz in guided
-        // flight). Count them separately so "unknown" stays a real
-        // corruption signal.
+        // flight, GNSS_SAT at every GNSS epoch). Count them separately so
+        // "unknown" stays a real corruption signal.
         msg_count_logonly++;
     }
     else
@@ -4782,6 +4787,8 @@ static void sendCurrentConfig()
     j += ",\"gs\":";  j += cfg_gain_sched ? "true" : "false";
     j += ",\"ac\":";  j += cfg_use_angle_ctrl ? "true" : "false";
     j += ",\"rdly\":"; j += itos(cfg_roll_delay_ms);
+    // Control-authority speed gate, m/s (0 = off, time delay only).
+    j += ",\"rmspd\":"; j += fmtf(cfg_roll_min_speed, 1);
     // #253: roll-control gain readback (sentinels — rcap/kpang <=0, iwind <0 —
     // mean "firmware default"; the app keeps its local value in that case).
     j += ",\"rcap\":";  j += fmtf(cfg_rate_cap_dps, 1);
@@ -4893,12 +4900,18 @@ static void cachePIDConfig(const uint8_t* payload, size_t len)
 // Cache roll control config to NVS
 static void cacheRollControlConfig(const uint8_t* payload, size_t len)
 {
-    // memcpy reads the full struct, so the caller must supply the full struct.
-    if (len < sizeof(RollControlConfigData)) return;
-    RollControlConfigData rc;
-    memcpy(&rc, payload, sizeof(rc));
+    // Accept the legacy 16-byte payload (an app built before the speed gate)
+    // as well as the full struct; the missing tail means "gate off".  memcpy
+    // reads whole fields, so zero-fill first and copy only what arrived.
+    if (len < ROLL_CTRL_CONFIG_LEN_V1) return;
+    RollControlConfigData rc = {};
+    memcpy(&rc, payload, (len < sizeof(rc)) ? len : sizeof(rc));
     cfg_use_angle_ctrl = (rc.use_angle_control != 0);
     cfg_roll_delay_ms  = rc.roll_delay_ms;
+    // Mirror the FC's apply rule so the readback echoes what the FC kept: a
+    // negative or out-of-range value is garbage and leaves the cache alone.
+    if (rc.roll_min_speed_mps >= 0.0f && rc.roll_min_speed_mps <= 300.0f)
+        cfg_roll_min_speed = rc.roll_min_speed_mps;
     // #253: cache the gains too so the config readback echoes what was pushed
     // (sentinels — cap/kp <=0, iwind <0 — mean "firmware default", matching
     // the FC's apply semantics).
@@ -4908,12 +4921,14 @@ static void cacheRollControlConfig(const uint8_t* payload, size_t len)
     prefs.begin("roll", false);
     prefs.putBool("ac", cfg_use_angle_ctrl);
     prefs.putUShort("rdly", cfg_roll_delay_ms);
+    prefs.putFloat("rmspd", cfg_roll_min_speed);
     prefs.putFloat("rcap", cfg_rate_cap_dps);
     prefs.putFloat("kpang", cfg_kp_angle);
     prefs.putFloat("iwind", cfg_iwind_dps);
     prefs.end();
-    ESP_LOGI("CFG", "Roll control cached: angle_ctrl=%s delay=%u ms rcap=%.1f kpang=%.2f iwind=%.1f",
+    ESP_LOGI("CFG", "Roll control cached: angle_ctrl=%s delay=%u ms minspd=%.1f rcap=%.1f kpang=%.2f iwind=%.1f",
         cfg_use_angle_ctrl ? "ON" : "OFF", (unsigned)cfg_roll_delay_ms,
+        (double)cfg_roll_min_speed,
         (double)cfg_rate_cap_dps, (double)cfg_kp_angle, (double)cfg_iwind_dps);
 }
 
@@ -5330,14 +5345,20 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         setPendingCommand(enabled ? GAIN_SCHED_ENABLE : GAIN_SCHED_DISABLE);
         ESP_LOGI("LORA", "UPLINK Gain schedule: %s", enabled ? "ENABLE" : "DISABLE");
     }
-    else if (cmd == 31 && payload_len >= sizeof(RollControlConfigData))
+    else if (cmd == 31 && payload_len >= ROLL_CTRL_CONFIG_LEN_V1)
     {
-        // Roll control config from BaseStation. Relay the FULL struct: the FC
-        // rejects any frame shorter than sizeof(RollControlConfigData) (16 B),
-        // so a truncated copy silently drops every roll-control setting.
-                setPendingCommandWithConfig(ROLL_CTRL_CONFIG_PENDING, ROLL_CTRL_CONFIG_MSG, payload, sizeof(RollControlConfigData));
-        cacheRollControlConfig(payload, payload_len);
-        ESP_LOGI("LORA", "UPLINK Roll control config queued for RocketComputer");
+        // Roll control config from BaseStation. Relay the FULL struct: the FC's
+        // readConfigFrame matches on an exact payload length, so a short copy is
+        // never found and silently drops every roll-control setting.  A legacy
+        // 16-byte uplink is padded to the full struct (speed gate off), the same
+        // as the BLE path.
+        uint8_t rc_buf[sizeof(RollControlConfigData)] = {};
+        const size_t copy_len = (payload_len < sizeof(rc_buf)) ? payload_len : sizeof(rc_buf);
+        memcpy(rc_buf, payload, copy_len);
+        setPendingCommandWithConfig(ROLL_CTRL_CONFIG_PENDING, ROLL_CTRL_CONFIG_MSG, rc_buf, sizeof(rc_buf));
+        cacheRollControlConfig(rc_buf, sizeof(rc_buf));
+        ESP_LOGI("LORA", "UPLINK Roll control config queued for RocketComputer (%u B in)",
+            (unsigned)payload_len);
     }
     else if (cmd == 32 && payload_len >= 1)
     {
@@ -7325,12 +7346,14 @@ void initPeripherals()
         prefs.begin("roll", false);
         cfg_use_angle_ctrl = prefs.getBool("ac", cfg_use_angle_ctrl);
         cfg_roll_delay_ms  = prefs.getUShort("rdly", cfg_roll_delay_ms);
+        cfg_roll_min_speed = prefs.getFloat("rmspd", cfg_roll_min_speed);
         cfg_rate_cap_dps   = prefs.getFloat("rcap", cfg_rate_cap_dps);   // #253
         cfg_kp_angle       = prefs.getFloat("kpang", cfg_kp_angle);      // #253
         cfg_iwind_dps      = prefs.getFloat("iwind", cfg_iwind_dps);     // #253
         prefs.end();
-        ESP_LOGI("CFG", "NVS Roll control: angle_ctrl=%s delay=%u ms rcap=%.1f kpang=%.2f iwind=%.1f",
+        ESP_LOGI("CFG", "NVS Roll control: angle_ctrl=%s delay=%u ms minspd=%.1f rcap=%.1f kpang=%.2f iwind=%.1f",
             cfg_use_angle_ctrl ? "ON" : "OFF", (unsigned)cfg_roll_delay_ms,
+            (double)cfg_roll_min_speed,
             (double)cfg_rate_cap_dps, (double)cfg_kp_angle, (double)cfg_iwind_dps);
 
         // Load cached guidance config from NVS
@@ -7857,6 +7880,7 @@ static void setup_oc()
         prefs.begin("roll", false);
         cfg_use_angle_ctrl = prefs.getBool("ac", false);
         cfg_roll_delay_ms  = prefs.getUShort("rdly", 0);
+        cfg_roll_min_speed = prefs.getFloat("rmspd", 0.0f);  // 0 = speed gate off
         cfg_rate_cap_dps   = prefs.getFloat("rcap", 0.0f);   // #253 (<=0 = fw default)
         cfg_kp_angle       = prefs.getFloat("kpang", 0.0f);  // #253 (<=0 = fw default)
         cfg_iwind_dps      = prefs.getFloat("iwind", -1.0f); // #253 (<0 = fw default)
@@ -9570,19 +9594,36 @@ static void loop_oc()
         }
         else if (ble_cmd == 31)
         {
-            // Roll control config (RollControlConfigData, 16 B):
+            // Roll control config (RollControlConfigData, 20 B):
             // [use_angle_control:1][pad:1][roll_delay_ms:2]
             // [kp_angle_rate_cap_dps:4][kp_angle:4][integral_sep_threshold_dps:4]
-            // Relay the FULL struct: the FC rejects anything shorter than
-            // sizeof(RollControlConfigData), so a truncated copy silently drops
-            // every roll-control setting.
+            // [roll_min_speed_mps:4]
+            // Relay the FULL struct: the FC's readConfigFrame matches on an
+            // exact payload length, so a short copy is not merely truncated —
+            // the frame is never found and every roll-control setting is
+            // silently dropped.
+            //
+            // A phone built before the speed gate sends only the first 16
+            // bytes.  Pad that to the full struct with roll_min_speed_mps = 0
+            // (gate off, which is what that app means) instead of refusing it,
+            // so an older app on newer firmware still configures roll control.
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
-            if (plen >= sizeof(RollControlConfigData))
+            if (plen >= ROLL_CTRL_CONFIG_LEN_V1)
             {
-                                setPendingCommandWithConfig(ROLL_CTRL_CONFIG_PENDING, ROLL_CTRL_CONFIG_MSG, payload, sizeof(RollControlConfigData));
-                cacheRollControlConfig(payload, plen);
-                ESP_LOGI("BLE", "Roll control config queued");
+                uint8_t rc_buf[sizeof(RollControlConfigData)] = {};
+                const size_t copy_len = (plen < sizeof(rc_buf)) ? plen : sizeof(rc_buf);
+                memcpy(rc_buf, payload, copy_len);
+                setPendingCommandWithConfig(ROLL_CTRL_CONFIG_PENDING, ROLL_CTRL_CONFIG_MSG, rc_buf, sizeof(rc_buf));
+                cacheRollControlConfig(rc_buf, sizeof(rc_buf));
+                ESP_LOGI("BLE", "Roll control config queued (%u B in%s)",
+                    (unsigned)plen,
+                    (plen < sizeof(RollControlConfigData)) ? ", legacy - speed gate off" : "");
+            }
+            else
+            {
+                ESP_LOGW("BLE", "Roll control config too short (%u < %u)",
+                    (unsigned)plen, (unsigned)ROLL_CTRL_CONFIG_LEN_V1);
             }
         }
         else if (ble_cmd == 32)

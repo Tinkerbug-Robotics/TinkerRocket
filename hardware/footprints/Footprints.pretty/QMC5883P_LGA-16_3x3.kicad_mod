@@ -334,5 +334,16 @@
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(uuid "a28304cc-def3-4463-a00b-001c61906e94")
 	)
+	(model "${KICAD10_3DMODEL_DIR}/Package_LGA.3dshapes/LGA-16_3x3mm_P0.5mm.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
 	(embedded_fonts no)
 )
