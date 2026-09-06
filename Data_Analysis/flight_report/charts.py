@@ -30,6 +30,20 @@ COLORS = [
     "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
 ]
 
+# Time is shipped at the log clock's own resolution. The boards stamp every
+# record in integer microseconds, so six decimals is exact and never invents a
+# digit. This used to be three: 1 ms was "well below sensor resolution" for the
+# barometer and GNSS, but the IMU logs at 3.84 kHz under boost — samples
+# 264 µs apart — so four consecutive readings rounded onto one x, and zooming
+# into an acceleration chart showed columns of stacked dots where the trace
+# should be. Whatever the rounding, it has to stay finer than the fastest
+# stream's spacing, and the clock's own resolution is the one bound no sensor
+# rate can get under.
+TIME_DECIMALS = 6
+# The hover reads the same digits. d3-format's `~` trims trailing zeros, so a
+# 100 Hz barometer sample still shows "2.75" rather than "2.750000".
+X_HOVER_FORMAT = f".{TIME_DECIMALS}~f"
+
 # Chronological, which is the order they are drawn and listed in. Ejection sits
 # between burnout and apogee because that is where it usually falls — but not
 # always: a rocket can deploy before it stops climbing, and the sample flight
@@ -50,11 +64,12 @@ def _clean(x: Sequence[float], y: Sequence[float]) -> tuple[list, list]:
     renders a gap for a `None`, but dropping is simpler and matches the
     scatter-style plots these mirror.
 
-    Values are rounded hard: time to 1 ms and samples to 4 decimals, both well
-    below sensor resolution. Digits that survive rounding are digits shipped in
-    every report, and at ~10^5 points per report they add up to megabytes.
-    No samples are dropped — see the module docstring on why decimating here
-    would be wrong.
+    Values are rounded: x to six decimals — the log clock's microsecond on the
+    time axis nearly every chart has; see TIME_DECIMALS for why anything coarser
+    stacks the IMU's samples — and y to 4 decimals, below what any sensor
+    resolves. Digits that survive rounding are digits shipped in every report,
+    and at ~10^5 points per report they add up to megabytes. No samples are
+    dropped — see the module docstring on why decimating here would be wrong.
     """
     xa = np.asarray(x, dtype=float)
     ya = np.asarray(y, dtype=float)
@@ -64,7 +79,7 @@ def _clean(x: Sequence[float], y: Sequence[float]) -> tuple[list, list]:
     good = np.isfinite(xa) & np.isfinite(ya)
     xa, ya = xa[good], ya[good]
 
-    return np.round(xa, 3).tolist(), np.round(ya, 4).tolist()
+    return np.round(xa, TIME_DECIMALS).tolist(), np.round(ya, 4).tolist()
 
 
 def trace(
@@ -96,12 +111,14 @@ def trace(
         "x": xs,
         "y": ys,
         "yaxis": axis,
-        "hovertemplate": f"{name}: %{{y:.4g}}<br>%{{x:.3f}}<extra></extra>",
+        "hovertemplate": f"{name}: %{{y:.4g}}<br>%{{x:{X_HOVER_FORMAT}}}<extra></extra>",
     }
-    if "lines" in mode:
-        spec["line"] = {"width": width, "color": color}
-    if "markers" in mode:
-        spec["marker"] = {"size": size, "color": color}
+    # Both styles ship whatever the mode, so the report's Dots / Lines / Both
+    # control can switch a trace without losing its color: Plotly colors a line
+    # from `line`, not from `marker`, and a marker trace with no `line` would
+    # fall back to the default colorway the moment it was switched.
+    spec["line"] = {"width": width, "color": color}
+    spec["marker"] = {"size": size, "color": color}
     return spec
 
 

@@ -152,7 +152,9 @@
         type: "scatter", mode: mode, name: key, x: [], y: [], yaxis: "y",
         line: {width: 1.4, color: color, shape: step ? "hv" : "linear"},
         marker: {size: 4, color: color},
-        hovertemplate: key + ": %{y:.4g}<br>%{x:.3f} s<extra></extra>"
+        // Time to the microsecond the log stamps, trailing zeros trimmed —
+        // the same digits the payload carries (charts.TIME_DECIMALS).
+        hovertemplate: key + ": %{y:.4g}<br>%{x:.6~f} s<extra></extra>"
       });
       if (ch.caution) cautions.push(key + " — " + ch.caution);
     });

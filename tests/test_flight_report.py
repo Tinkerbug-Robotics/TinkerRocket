@@ -148,6 +148,33 @@ def test_report_has_inline_figures(reports: dict[str, Path]) -> None:
     )
 
 
+def _unpack_steps(spec: dict) -> dict:
+    """Mirror of the template's unpackSteps: x axes and Explore t arrive as integer steps.
+
+    Kept in step with render._pack_axis by hand — there is no shared code
+    between the Python that packs and the JavaScript that unpacks, so this is
+    the third copy of the rule and the tests are what keep the three agreeing.
+    """
+    div = spec.get("stepDiv")
+    if not div:
+        return spec
+
+    def axis(steps: list) -> list[float]:
+        out, acc = [], 0
+        for step in steps:
+            acc += step
+            out.append(acc / div)
+        return out
+
+    for t in spec.get("traces", []):
+        if "xd" in t:
+            t["x"] = axis(t.pop("xd"))
+    for stream in (spec.get("streams") or {}).values():
+        if "td" in stream:
+            stream["t"] = axis(stream.pop("td"))
+    return spec
+
+
 def _chart_specs(html: str) -> list[tuple[str, dict]]:
     """Every embedded chart spec, decoding the gzip+base64 form used by big ones."""
     import base64
@@ -164,7 +191,7 @@ def _chart_specs(html: str) -> list[tuple[str, dict]]:
             raw = gzip.decompress(base64.b64decode(body.strip())).decode("utf-8")
         else:
             raw = body.replace("\\u003c", "<")
-        out.append((chart_id, json.loads(raw)))
+        out.append((chart_id, _unpack_steps(json.loads(raw))))
     return out
 
 
@@ -459,6 +486,114 @@ def test_charts_keep_every_sample(report_html: Path) -> None:
         f"altitude chart's longest trace has only {longest:,} points — the full "
         "barometer series should be tens of thousands; has something decimated it?"
     )
+
+
+def _dataset_spec(html: str) -> dict:
+    """The Explore payload, decoding the gzip+base64 form it takes on a real flight."""
+    import base64
+    import gzip
+    import json
+    import re
+
+    m = re.search(
+        r'<script type="application/json" class="dataset-spec"([^>]*)>(.*?)</script>', html, re.S
+    )
+    assert m, "explore dataset missing"
+    tag, body = m.groups()
+    if 'data-encoding="gzip+base64"' in tag:
+        raw = gzip.decompress(base64.b64decode(body.strip())).decode("utf-8")
+    else:
+        raw = body.replace("\\u003c", "<")
+    return _unpack_steps(json.loads(raw))
+
+
+def test_time_axis_resolves_every_imu_sample(report_html: Path) -> None:
+    """Consecutive samples of one trace must land on distinct x values.
+
+    The golden flight's IMU logs at 3.84 kHz under boost, 260 µs apart, and the
+    charts used to round time to 1 ms — which put three or four consecutive
+    samples on one x, so a zoomed-in acceleration chart showed columns of
+    stacked dots instead of a trace. Time now ships at the log clock's own
+    microsecond (charts.TIME_DECIMALS), on the charts and in the Explore
+    dataset alike. Strict ordering is what is checked, not a duplicate count:
+    the raw stamps are strictly increasing on every stream of this flight, so
+    an equal pair of neighbours can only have come from rounding.
+    """
+    html = report_html.read_text(encoding="utf-8")
+    specs = dict(_chart_specs(html))
+    accel = specs.get("chart-accel-g")
+    assert accel, "acceleration chart missing"
+    for t in accel["traces"]:
+        xs = t["x"]
+        stacked = sum(1 for a, b in zip(xs, xs[1:]) if b <= a)
+        assert stacked == 0, (
+            f"{t['name']}: {stacked:,} of {len(xs):,} samples share an x with their "
+            "predecessor — time is rounded coarser than the IMU's sample spacing"
+        )
+
+    imu_t = _dataset_spec(html)["streams"]["ISM6HG256"]["t"]
+    stacked = sum(1 for a, b in zip(imu_t, imu_t[1:]) if b <= a)
+    assert stacked == 0, (
+        f"Explore dataset: {stacked:,} of {len(imu_t):,} IMU samples share a t with "
+        "their predecessor"
+    )
+
+
+def test_step_encoded_time_axis_round_trips_exactly(report_html: Path) -> None:
+    """The step encoding of x is a size trick, not a precision one.
+
+    render._pack_axis ships each x axis as integer microsecond steps because
+    they gzip to a fraction of what absolute six-decimal floats do. The claim
+    that goes with it is exactness: what the reader's browser rebuilds must be
+    the very doubles the builder rounded to, not something a summation drifted
+    away from. Checked end to end — log to chart builder to serializer to
+    gzip to decode to unpack — against the IMU clock of the golden flight.
+    """
+    import numpy as np
+
+    from flight_report.charts import TIME_DECIMALS
+    from flight_report.flight import Flight
+    from plot_flight_data_mini import get_array
+
+    flight = Flight.from_bin(GOLDEN_BIN)
+    flight.load()
+    imu = flight.records["ISM6HG256"]
+    expected = np.round((get_array(imu, "time_us") - flight.t0_us) / 1e6, TIME_DECIMALS).tolist()
+
+    specs = dict(_chart_specs(report_html.read_text(encoding="utf-8")))
+    xs = specs["chart-accel-g"]["traces"][0]["x"]
+    # The chart may open on a pre-launch window rather than the first record.
+    start = expected.index(xs[0])
+    assert xs == expected[start:start + len(xs)], (
+        "unpacked x axis is not bit-identical to the rounded IMU clock"
+    )
+
+
+def test_charts_offer_dots_lines_or_both(report_html: Path) -> None:
+    """Every sample chart carries the Dots / Lines / Both control, and its traces can take either.
+
+    Dots is the default because a scatter shows where the samples fall and
+    where they thin out; a reader tracing a waveform through a zoomed-in boost
+    wants the line. The control itself is DOM wiring in the template and is
+    not unit-tested here, so what is pinned is the contract it relies on: one
+    control per non-3D chart, and both a `line` and a `marker` style on every
+    marker trace, in the same color, so the switch never recolors a series.
+    """
+    html = report_html.read_text(encoding="utf-8")
+    for chart_id, spec in _chart_specs(html):
+        if spec.get("kind") == "3d":
+            assert f'data-chart="{chart_id}"' not in html, f"{chart_id}: a 3D chart got a draw-mode control"
+            continue
+        assert f'<div class="draw-mode" data-chart="{chart_id}"' in html, (
+            f"{chart_id} has no Dots / Lines / Both control"
+        )
+        for t in spec["traces"]:
+            if "markers" not in t.get("mode", "markers"):
+                continue
+            assert "line" in t and "marker" in t, f"{chart_id}/{t['name']} lacks a line or marker style"
+            assert t["line"].get("color") == t["marker"].get("color"), (
+                f"{chart_id}/{t['name']}: line and marker colors differ, so switching would recolor it"
+            )
 
 
 def test_report_has_no_module_errors(report_html: Path) -> None:

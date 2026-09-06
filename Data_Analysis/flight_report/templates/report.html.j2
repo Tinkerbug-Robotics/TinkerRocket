@@ -26,7 +26,7 @@
           font-family: ui-monospace, "SF Mono", monospace; font-size: 0.85rem; white-space: pre-wrap; }
   .figure { margin: 12px 0; text-align: center; }
   .figure img { max-width: 100%; border: 1px solid #eee; border-radius: 4px; }
-  .chart { margin: 12px 0; border: 1px solid #eee; border-radius: 4px; padding: 4px; }
+  .chart { position: relative; margin: 12px 0; border: 1px solid #eee; border-radius: 4px; padding: 4px; }
   .chart-note { color: #888; font-size: 0.78rem; margin: 0 0 6px 8px; }
   /* A stacked group reads as one multi-panel figure rather than as separate
      charts: no gap, no repeated border between panels, no rounded corners in
@@ -93,6 +93,16 @@
     padding: 4px 12px; cursor: pointer;
   }
   .units button.active { background: #333; color: #fff; }
+  /* Dots / Lines / Both. Over the top-left corner of its chart, in the title
+     band and clear of Plotly's toolbar at the top-right; the top-bar copy sets
+     every chart at once. */
+  .draw-mode { display: inline-flex; border: 1px solid #d5d5da; border-radius: 999px; overflow: hidden; background: #fff; }
+  .draw-mode button { border: 0; background: #fff; color: #777; font-size: 0.72rem; padding: 2px 9px; cursor: pointer; }
+  .draw-mode button.active { background: #666; color: #fff; }
+  .chart > .draw-mode { position: absolute; top: 8px; left: 8px; z-index: 2; }
+  .topbar-right { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .topbar-right .label { color: #777; font-size: 0.78rem; margin-right: -6px; }
+  .explore-actions .draw-mode { margin-top: 10px; }
   .map { height: 460px; border: 1px solid #eee; border-radius: 4px; margin: 12px 0; }
   .map-note { color: #888; font-size: 0.78rem; margin: 0 0 6px 2px; }
   .map-links { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0 16px; }
@@ -134,9 +144,17 @@ details.explore > summary:hover { background: #f2f4f7; }
 
 <div class="topbar">
   <div class="topbar-left"></div>
-  <div class="units" role="group" aria-label="Units">
-    <button type="button" data-units="metric" class="active">Metric</button><button
-            type="button" data-units="imperial">Imperial</button>
+  <div class="topbar-right">
+    <span class="label">All charts:</span>
+    <div class="draw-mode draw-mode-all" role="group" aria-label="Draw every chart as">
+      <button type="button" data-mode="dots">Dots</button><button
+              type="button" data-mode="lines">Lines</button><button
+              type="button" data-mode="both">Both</button>
+    </div>
+    <div class="units" role="group" aria-label="Units">
+      <button type="button" data-units="metric" class="active">Metric</button><button
+              type="button" data-units="imperial">Imperial</button>
+    </div>
   </div>
 </div>
 
@@ -250,11 +268,21 @@ details.explore > summary:hover { background: #f2f4f7; }
   to pan, click a legend entry to hide a series. Charts with more samples than the
   screen has pixels draw a min/max envelope, so no peak is hidden and zooming
   redraws from the full data. Autoscale and PNG export are in each chart's toolbar.
+  Dots, Lines or Both at a chart's top-left picks how its samples are drawn; the same
+  control in the top bar sets every chart.
 </div>
 {% set _ = chart_hint_shown.__setitem__('done', True) %}
 {% endif %}
 {% for c in s.charts %}
-<div class="chart{% if c.stack %} stacked stacked-{{ c.stack }}{% endif %}"><div id="{{ c.id }}"></div></div>
+<div class="chart{% if c.stack %} stacked stacked-{{ c.stack }}{% endif %}">
+{% if c.kind != "3d" %}
+<div class="draw-mode" data-chart="{{ c.id }}" role="group" aria-label="Draw this chart as">
+  <button type="button" data-mode="dots">Dots</button><button
+          type="button" data-mode="lines">Lines</button><button
+          type="button" data-mode="both">Both</button>
+</div>
+{% endif %}
+<div id="{{ c.id }}"></div></div>
 {% if c.note %}<p class="chart-note">{{ c.note }}</p>{% endif %}
 <script type="application/json" class="chart-spec" data-target="{{ c.id }}"{% if c.gzipped %} data-encoding="gzip+base64"{% endif %}>{{ c.payload }}</script>
 {% endfor %}
@@ -290,6 +318,11 @@ details.explore > summary:hover { background: #f2f4f7; }
         </p>
         {% else %}
         <label><input type="checkbox" class="explore-norm"> Normalize each series to 0&ndash;1</label>
+        <div class="draw-mode" role="group" aria-label="Draw as">
+          <button type="button" data-mode="dots">Dots</button><button
+                  type="button" data-mode="lines">Lines</button><button
+                  type="button" data-mode="both">Both</button>
+        </div>
         <p class="explore-hint">
           Ctrl/&#8984;-click for several. Each series is drawn on its own stream's
           timestamps &mdash; nothing is resampled onto a shared clock, so two sensors
@@ -826,37 +859,73 @@ details.explore > summary:hover { background: #f2f4f7; }
   /* Marker size and opacity for the current density, mirroring how the static
      figures are drawn (small semi-transparent dots, so a dense run reads as a
      band of samples rather than a solid bar). Markers grow and go fully opaque
-     as you zoom in and there is room to see them individually. */
-  function markerStyle(pointCount, baseMode) {
+     as you zoom in and there is room to see them individually.
+
+     `drawMode` is the reader's Dots / Lines / Both choice: whether a run of
+     samples is drawn as points, as a line through them, or both. Absent, the
+     trace keeps the mode it was built with. Traces that are lines by
+     construction — the sample-rate bars, the detector lanes — ignore it: there
+     are no samples there to show. */
+  function markerStyle(pointCount, baseMode, drawMode) {
     if (baseMode.indexOf("markers") < 0) return {mode: baseMode, size: 4, opacity: 1};
-    if (pointCount > 3000) return {mode: baseMode, size: 2, opacity: 0.45};
-    if (pointCount > 1200) return {mode: baseMode, size: 3, opacity: 0.6};
-    if (pointCount > 300) return {mode: baseMode, size: 5, opacity: 0.85};
-    return {mode: baseMode, size: 7, opacity: 1};
+    var mode = drawMode === "lines" ? "lines"
+             : drawMode === "both" ? "lines+markers"
+             : drawMode === "dots" ? "markers" : baseMode;
+    if (pointCount > 3000) return {mode: mode, size: 2, opacity: 0.45};
+    if (pointCount > 1200) return {mode: mode, size: 3, opacity: 0.6};
+    if (pointCount > 300) return {mode: mode, size: 5, opacity: 0.85};
+    return {mode: mode, size: 7, opacity: 1};
   }
 
-  function draw(gd, fullSeries, range, spec) {
+  function draw(gd, fullSeries, range, spec, drawMode) {
     // The stored range is always SI; the axis may be showing imperial.
     var yf = spec && spec.yUnit ? unitFactor(spec.yUnit) : 1;
     var xf = spec && spec.xUnit ? unitFactor(spec.xUnit) : 1;
-    var xs = [], ys = [], sizes = [], opacities = [];
+    var xs = [], ys = [], modes = [], sizes = [], opacities = [];
     for (var i = 0; i < fullSeries.length; i++) {
       var v = viewFor(fullSeries[i], range, xf);
-      var st = markerStyle(v.x.length, fullSeries[i].baseMode);
+      var st = markerStyle(v.x.length, fullSeries[i].baseMode, drawMode);
       xs.push(xf === 1 ? v.x : v.x.map(function (n) { return n * xf; }));
       ys.push(yf === 1 ? v.y : v.y.map(function (n) { return n * yf; }));
-      sizes.push(st.size); opacities.push(st.opacity);
+      modes.push(st.mode); sizes.push(st.size); opacities.push(st.opacity);
     }
     return Plotly.restyle(gd, {
-      x: xs, y: ys, "marker.size": sizes, "marker.opacity": opacities
+      x: xs, y: ys, mode: modes, "marker.size": sizes, "marker.opacity": opacities
     });
+  }
+
+  /* x axes — and the Explore streams' t — arrive as integer steps in units of
+     1/spec.stepDiv: the first value absolute, each next one the increment (see
+     render._pack_axis). A regular stream's steps are near-identical short
+     strings that gzip folds away, where absolute microsecond floats barely
+     compress. Rebuilt into plain arrays here, at the one place a payload is
+     parsed, so nothing past it knows. The running sum is an exact integer and
+     the division rounds it to the nearest double — the value the builder
+     rounded to, so the round trip is exact. */
+  function stepsToAxis(steps, div) {
+    var out = new Array(steps.length), acc = 0;
+    for (var i = 0; i < steps.length; i++) { acc += steps[i]; out[i] = acc / div; }
+    return out;
+  }
+  function unpackSteps(spec) {
+    var div = spec.stepDiv;
+    if (!div) return spec;
+    (spec.traces || []).forEach(function (t) {
+      if (t.xd) { t.x = stepsToAxis(t.xd, div); delete t.xd; }
+    });
+    var streams = spec.streams || {};
+    Object.keys(streams).forEach(function (k) {
+      var s = streams[k];
+      if (s.td) { s.t = stepsToAxis(s.td, div); delete s.td; }
+    });
+    return spec;
   }
 
   /* Large charts ship gzip+base64 (see render._chart_payload) — full-resolution
      sample arrays are mostly digits and commas, which compress about 5x. */
   function readSpec(el) {
     if (el.dataset.encoding !== "gzip+base64") {
-      return Promise.resolve(JSON.parse(el.textContent));
+      return Promise.resolve(unpackSteps(JSON.parse(el.textContent)));
     }
     if (typeof DecompressionStream === "undefined") {
       return Promise.reject(new Error(
@@ -866,7 +935,7 @@ details.explore > summary:hover { background: #f2f4f7; }
     var bytes = new Uint8Array(raw.length);
     for (var j = 0; j < raw.length; j++) bytes[j] = raw.charCodeAt(j);
     var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-    return new Response(stream).text().then(JSON.parse);
+    return new Response(stream).text().then(JSON.parse).then(unpackSteps);
   }
 
   /* --- units -------------------------------------------------------------
@@ -968,7 +1037,7 @@ details.explore > summary:hover { background: #f2f4f7; }
         continue;
       }
 
-      draw(c.gd, c.full, c.range, c.spec);
+      draw(c.gd, c.full, c.range, c.spec, c.drawMode);
       var upd = {};
       if (c.spec.yUnit) upd["yaxis.title.text"] = axisTitle(c.spec.yTitleBase, c.spec.yUnit);
       if (c.spec.xUnit) upd["xaxis.title.text"] = axisTitle(c.spec.xTitleBase, c.spec.xUnit);
@@ -1002,6 +1071,67 @@ details.explore > summary:hover { background: #f2f4f7; }
       if (btn) btn.click();
     }
   } catch (e) {}
+
+  /* --- draw mode: Dots / Lines / Both ------------------------------------
+     Sample charts are dots by default, matching the static figures: a scatter
+     shows where the samples fall and where they thin out, and a line drawn
+     through a dense run swallows the markers. But a reader tracing a waveform
+     through a zoomed-in boost wants the line, so each chart carries a control
+     and the one in the top bar sets them all. The choice only changes how the
+     viewport slice is drawn; the envelope and the full arrays behind it are
+     the same either way. Remembered like the units, so a preference carries
+     across reports. */
+  var drawModeAll = null;   // the top-bar choice; charts plotted later start from it
+
+  function drawModeButtons(ctl, mode) {
+    var btns = ctl.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle("active", btns[i].dataset.mode === mode);
+    }
+  }
+  /* Give a chart entry its mode and a setter that redraws it. */
+  function drawModeEntry(entry, ctl, initial, onChange) {
+    entry.drawMode = initial;
+    entry.setDrawMode = function (mode) {
+      entry.drawMode = mode;
+      drawModeButtons(ctl, mode);
+      if (onChange) onChange(mode);
+      draw(entry.gd, entry.full, entry.range, entry.spec, mode);
+    };
+    drawModeButtons(ctl, initial);
+  }
+  /* Wire a control to whichever entry `current` returns at click time — the
+     Explore panel re-plots into the same element on every Draw, so a control
+     must not hold on to one entry. Bound once per control. */
+  function bindDrawMode(ctl, current) {
+    ctl.addEventListener("click", function (ev) {
+      var b = ev.target.closest("button");
+      var entry = current();
+      if (!b || !b.dataset.mode || !entry || !entry.setDrawMode) return;
+      if (b.dataset.mode !== entry.drawMode) entry.setDrawMode(b.dataset.mode);
+    });
+  }
+
+  var allCtl = document.querySelector(".draw-mode-all");
+  if (allCtl) {
+    allCtl.addEventListener("click", function (ev) {
+      var b = ev.target.closest("button");
+      if (!b || !b.dataset.mode) return;
+      drawModeAll = b.dataset.mode;
+      drawModeButtons(allCtl, drawModeAll);
+      for (var i = 0; i < charts.length; i++) {
+        if (charts[i].setDrawMode) charts[i].setDrawMode(drawModeAll);
+      }
+      try { localStorage.setItem("tr-draw", drawModeAll); } catch (e) {}
+    });
+    try {
+      var savedDraw = localStorage.getItem("tr-draw");
+      if (savedDraw === "dots" || savedDraw === "lines" || savedDraw === "both") {
+        var savedBtn = allCtl.querySelector('button[data-mode="' + savedDraw + '"]');
+        if (savedBtn) savedBtn.click();
+      }
+    } catch (e) {}
+  }
   /* --- Explore panel (#752) ---------------------------------------------
      Plot any channel in the log, chosen at read time. Lives inside this IIFE so
      it reuses the machinery the curated charts already use — readSpec for the
@@ -1044,6 +1174,11 @@ details.explore > summary:hover { background: #f2f4f7; }
       var plotEl = panel.querySelector(".explore-plot");
       var notesEl = panel.querySelector(".explore-notes");
       var data = null, entry = null, loading = false;
+      /* The panel's Dots / Lines / Both choice, kept across Draws. Explore
+         series are built lines+markers, so "both" is its natural default. */
+      var panelDrawMode = null;
+      var modeCtl = panel.querySelector(".draw-mode");
+      if (modeCtl) bindDrawMode(modeCtl, function () { return entry; });
 
       function label(key, ch) {
         /* ch.label is the human name from the channel catalog ("Vertical
@@ -1222,9 +1357,10 @@ details.explore > summary:hover { background: #f2f4f7; }
           plot_bgcolor: "#fff", paper_bgcolor: "#fff"
         };
 
+        var drawMode0 = panelDrawMode || drawModeAll || "both";
         var initial = out.traces.map(function (tr, idx) {
           var v = viewFor(out.full[idx], null);
-          var st = markerStyle(v.x.length, out.full[idx].baseMode);
+          var st = markerStyle(v.x.length, out.full[idx].baseMode, drawMode0);
           var copy = Object.assign({}, tr);
           copy.x = v.x; copy.y = v.y; copy.mode = st.mode;
           copy.marker = Object.assign({}, tr.marker, {size: st.size, opacity: st.opacity});
@@ -1235,6 +1371,9 @@ details.explore > summary:hover { background: #f2f4f7; }
         Plotly.newPlot(plotEl, initial, layout, config).then(function (gd) {
           entry = {gd: gd, full: out.full, spec: spec, range: null};
           charts.push(entry);
+          if (modeCtl) {
+            drawModeEntry(entry, modeCtl, drawMode0, function (m) { panelDrawMode = m; });
+          }
           var pending = null;
           gd.on("plotly_relayout", function (ev) {
             var range = null;
@@ -1249,7 +1388,7 @@ details.explore > summary:hover { background: #f2f4f7; }
             if (pending) clearTimeout(pending);
             pending = setTimeout(function () {
               pending = null;
-              draw(gd, out.full, entry.range, spec);
+              draw(gd, out.full, entry.range, spec, entry.drawMode);
             }, 60);
           });
         });
@@ -1351,9 +1490,10 @@ details.explore > summary:hover { background: #f2f4f7; }
         });
         var yf0 = spec.yUnit ? unitFactor(spec.yUnit) : 1;
         var xf0 = spec.xUnit ? unitFactor(spec.xUnit) : 1;
+        var drawMode0 = drawModeAll || "dots";
         var initial = spec.traces.map(function (t, idx) {
           var v = viewFor(full[idx], null);
-          var st = markerStyle(v.x.length, full[idx].baseMode);
+          var st = markerStyle(v.x.length, full[idx].baseMode, drawMode0);
           var copy = Object.assign({}, t);
           copy.x = xf0 === 1 ? v.x : v.x.map(function (n) { return n * xf0; });
           copy.y = yf0 === 1 ? v.y : v.y.map(function (n) { return n * yf0; });
@@ -1376,6 +1516,11 @@ details.explore > summary:hover { background: #f2f4f7; }
         Plotly.newPlot(target, initial, layout, config).then(function (gd) {
           var entry = {gd: gd, full: full, spec: spec, range: null};
           charts.push(entry);
+          var ctl = target.parentNode.querySelector(".draw-mode");
+          if (ctl) {
+            drawModeEntry(entry, ctl, drawMode0);
+            bindDrawMode(ctl, function () { return entry; });
+          }
           var pending = null;
           gd.on("plotly_relayout", function (ev) {
             var range = null;
@@ -1394,7 +1539,7 @@ details.explore > summary:hover { background: #f2f4f7; }
             pending = setTimeout(function () {
               pending = null;
               entry.range = range;   // remembered so a unit switch keeps the zoom
-              draw(gd, full, range, spec);
+              draw(gd, full, range, spec, entry.drawMode);
             }, 60);
           });
         });
