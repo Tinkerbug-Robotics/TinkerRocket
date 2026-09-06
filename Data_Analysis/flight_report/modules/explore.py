@@ -32,6 +32,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..catalog import KIND_BOOL, KIND_COUNTER, KIND_ENUM, build
+from ..charts import TIME_DECIMALS
 from ..flight import Flight
 from ..registry import AnalysisResult
 
@@ -61,10 +62,11 @@ def _first_present(channels: dict, wanted: tuple[str, ...]) -> list[str]:
 # its own copy — see `analyze_xy`.
 DATASET_ID = "explore-data"
 
-# Time to 1 ms and samples to 4 decimals, both well below sensor resolution and
-# matching what `charts._clean` ships. Digits that survive rounding are digits
-# in every copy of the report.
-_T_DP = 3
+# Time at the log clock's microsecond and samples to 4 decimals, matching what
+# `charts._clean` ships — see TIME_DECIMALS there for why anything coarser
+# stacks the IMU's samples. Digits that survive rounding are digits in every
+# copy of the report.
+_T_DP = TIME_DECIMALS
 _V_DP = 4
 
 # Except where a unit is enormous. A degree of latitude is 111 km, so the default

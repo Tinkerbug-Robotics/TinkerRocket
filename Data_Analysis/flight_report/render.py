@@ -11,8 +11,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
+import numpy as np
 from jinja2 import Environment, FileSystemLoader
 from markupsafe import Markup
+
+from .charts import TIME_DECIMALS
 
 if TYPE_CHECKING:
     import matplotlib.figure
@@ -26,6 +29,9 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 # Charts smaller than this stay as plain JSON; see _chart_payload.
 _GZIP_THRESHOLD_BYTES = 64 * 1024
+
+# x axes ship as integer steps in units of 1/_STEP_DIV; see _pack_axis.
+_STEP_DIV = 10 ** TIME_DECIMALS
 
 _env = Environment(
     loader=FileSystemLoader(str(_TEMPLATE_DIR)),
@@ -67,6 +73,58 @@ def _chart_payload(chart: dict) -> tuple[Markup, bool]:
     return Markup(packed), True
 
 
+def _pack_axis(values) -> list[int] | None:
+    """`values` as integers in units of 1/_STEP_DIV: the first absolute, each
+    next one the step from its predecessor. None when `values` is not a plain
+    numeric list, so a text axis would ship as it is rather than fail the render.
+
+    A size trick, not a precision one. Time is exact at six decimals
+    (charts.TIME_DECIMALS), so microsecond integers lose nothing. But a stream
+    logs at a near-constant rate, which makes consecutive steps near-identical
+    short strings — "264,265,263,264" — that gzip folds to almost nothing,
+    where absolute values are six fresh digits every sample and barely
+    compress. On a 3.84 kHz V9 flight the chart payloads halved (15.4 MB to
+    7.7 MB), to below what they weighed at 1 ms resolution. The template's
+    readSpec rebuilds the absolute array on load, so nothing past the decode
+    ever sees steps; tests/test_flight_report.py mirrors it.
+    """
+    arr = np.asarray(values)
+    if arr.ndim != 1 or arr.size == 0 or arr.dtype.kind not in "iuf":
+        return None
+    q = np.rint(arr.astype(float) * _STEP_DIV).astype(np.int64)
+    return np.diff(q, prepend=np.int64(0)).tolist()
+
+
+def _pack_chart(chart: dict) -> dict:
+    """The chart with each trace's x as steps under `xd`; see _pack_axis.
+
+    3D charts go through untouched: their x is one of three equal axes the
+    template plots straight through, and they carry only the flight itself.
+    """
+    if chart.get("kind") == "3d":
+        return chart
+    traces = []
+    for t in chart.get("traces", []):
+        steps = _pack_axis(t.get("x"))
+        if steps is None:
+            traces.append(t)
+            continue
+        traces.append({**{k: v for k, v in t.items() if k != "x"}, "xd": steps})
+    return {**chart, "traces": traces, "stepDiv": _STEP_DIV}
+
+
+def _pack_dataset(d: dict) -> dict:
+    """The Explore payload with each stream's t as steps under `td`; see _pack_axis."""
+    streams = {}
+    for name, stream in (d.get("streams") or {}).items():
+        steps = _pack_axis(stream.get("t"))
+        if steps is None:
+            streams[name] = stream
+            continue
+        streams[name] = {**{k: v for k, v in stream.items() if k != "t"}, "td": steps}
+    return {**d, "streams": streams, "stepDiv": _STEP_DIV}
+
+
 def _dataset_entry(d: dict) -> dict:
     """Panel descriptor for the template: payload for an owner, id for a ref.
 
@@ -77,7 +135,7 @@ def _dataset_entry(d: dict) -> dict:
     entry = {"id": d["id"], "panel": d.get("panel", "time"), "ref": bool(d.get("ref"))}
     if entry["ref"]:
         return entry
-    payload, gz = _chart_payload({k: v for k, v in d.items() if k != "panel"})
+    payload, gz = _chart_payload(_pack_dataset({k: v for k, v in d.items() if k != "panel"}))
     entry["payload"] = payload
     entry["gzipped"] = gz
     return entry
@@ -191,7 +249,7 @@ def render_report(
             "charts": [
                 {**c, "payload": payload, "gzipped": gz}
                 for c in r.charts
-                for payload, gz in [_chart_payload(c)]
+                for payload, gz in [_chart_payload(_pack_chart(c))]
             ],
             "maps": [
                 {**m, "payload": payload, "gzipped": gz}

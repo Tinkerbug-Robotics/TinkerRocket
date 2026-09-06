@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ..charts import chart, trace
+from ..charts import X_HOVER_FORMAT, chart, trace
 from ..flight import Flight
 from ..registry import AnalysisResult
 from .kinematic_checks import (
@@ -188,7 +188,7 @@ def _altitude_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
         rj = trace(rejects, [floor] * len(rejects), "Baro Rejected", "#d62728",
                    mode="markers", size=6)
         if rj:
-            rj["hovertemplate"] = "Baro rejected<br>%{x:.3f} s<extra></extra>"
+            rj["hovertemplate"] = f"Baro rejected<br>%{{x:{X_HOVER_FORMAT}}} s<extra></extra>"
             traces.append(rj)
 
     events: dict[str, float] = {}
@@ -288,7 +288,7 @@ def _lane_chart(res) -> Optional[dict[str, Any]]:
                       mode="lines", width=9)
             if t:
                 t["hovertemplate"] = (f"{label} condition true<br>"
-                                      f"%{{x:.3f}} s<extra></extra>")
+                                      f"%{{x:{X_HOVER_FORMAT}}} s<extra></extra>")
                 traces.append(t)
 
     if not traces:

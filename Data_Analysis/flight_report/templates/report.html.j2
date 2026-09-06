@@ -852,11 +852,38 @@ details.explore > summary:hover { background: #f2f4f7; }
     });
   }
 
+  /* x axes — and the Explore streams' t — arrive as integer steps in units of
+     1/spec.stepDiv: the first value absolute, each next one the increment (see
+     render._pack_axis). A regular stream's steps are near-identical short
+     strings that gzip folds away, where absolute microsecond floats barely
+     compress. Rebuilt into plain arrays here, at the one place a payload is
+     parsed, so nothing past it knows. The running sum is an exact integer and
+     the division rounds it to the nearest double — the value the builder
+     rounded to, so the round trip is exact. */
+  function stepsToAxis(steps, div) {
+    var out = new Array(steps.length), acc = 0;
+    for (var i = 0; i < steps.length; i++) { acc += steps[i]; out[i] = acc / div; }
+    return out;
+  }
+  function unpackSteps(spec) {
+    var div = spec.stepDiv;
+    if (!div) return spec;
+    (spec.traces || []).forEach(function (t) {
+      if (t.xd) { t.x = stepsToAxis(t.xd, div); delete t.xd; }
+    });
+    var streams = spec.streams || {};
+    Object.keys(streams).forEach(function (k) {
+      var s = streams[k];
+      if (s.td) { s.t = stepsToAxis(s.td, div); delete s.td; }
+    });
+    return spec;
+  }
+
   /* Large charts ship gzip+base64 (see render._chart_payload) — full-resolution
      sample arrays are mostly digits and commas, which compress about 5x. */
   function readSpec(el) {
     if (el.dataset.encoding !== "gzip+base64") {
-      return Promise.resolve(JSON.parse(el.textContent));
+      return Promise.resolve(unpackSteps(JSON.parse(el.textContent)));
     }
     if (typeof DecompressionStream === "undefined") {
       return Promise.reject(new Error(
@@ -866,7 +893,7 @@ details.explore > summary:hover { background: #f2f4f7; }
     var bytes = new Uint8Array(raw.length);
     for (var j = 0; j < raw.length; j++) bytes[j] = raw.charCodeAt(j);
     var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-    return new Response(stream).text().then(JSON.parse);
+    return new Response(stream).text().then(JSON.parse).then(unpackSteps);
   }
 
   /* --- units -------------------------------------------------------------
