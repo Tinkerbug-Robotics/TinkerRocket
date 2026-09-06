@@ -29,6 +29,13 @@ class AnalysisResult:
     # and nothing draws until the reader asks for something.
     datasets: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Grouped two-column tables — [{"name": heading, "rows": [(label, value)]}] —
+    # laid out side by side. For reference material such as the settings
+    # snapshot, where the app's own section headings are the right grouping
+    # and one long table would lose them.
+    groups: list[dict[str, Any]] = field(default_factory=list)
+    # One quiet line under the heading: what the section is or is not showing.
+    note: str = ""
     text: str = ""                         # optional pre-formatted block (monospace)
     error: str | None = None               # if module crashed, captured here
 
@@ -118,6 +125,7 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         ("parser_stats",      parser_stats.analyze,      LEVEL_FLIGHT),
         ("timing",            timing.analyze,            LEVEL_FLIGHT),
         ("settings",          settings.analyze,          LEVEL_FLIGHT),
+        ("system",            settings.analyze_system,   LEVEL_FLIGHT),
         # Deployment & recovery — descent profile, the flat ground-track map and
         # the KML links. Detailed-level by decision: the flat map is the one that
         # still draws with no network (it degrades to graph paper with the track

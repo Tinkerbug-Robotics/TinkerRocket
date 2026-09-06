@@ -67,17 +67,17 @@
     line-height: 1.15; margin: 1px 0 2px;
   }
   .card-grid .stat .h { font-size: 0.72rem; color: #888; }
-  /* Settings snapshot — grouped tables rather than a wall of JSON. */
-  .settings-note { color: #666; font-size: 0.9rem; margin: 4px 0 12px; }
+  /* Grouped tables (the settings snapshot): the app's own section headings,
+     side by side, rather than one long table or a wall of JSON. Labels are the
+     app's words, so they are set like prose, not like keys. */
+  .section-note { color: #666; font-size: 0.9rem; margin: 4px 0 12px; }
   .settings {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: 12px 24px; align-items: start;
   }
-  .settings-group h3 { margin: 0 0 4px; font-size: 0.9rem; text-transform: capitalize; }
-  .settings-group table.metrics { width: 100%; font-size: 0.82rem; }
-  .settings-group table.metrics td:first-child {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #444;
-  }
+  .settings-group h3 { margin: 0 0 4px; font-size: 0.9rem; }
+  .settings-group table.metrics { width: 100%; font-size: 0.82rem; margin: 0; }
+  .settings-group table.metrics td:first-child { color: #444; }
   .topbar {
     display: flex; align-items: center; justify-content: space-between;
     gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
@@ -205,8 +205,9 @@ details.explore > summary:hover { background: #f2f4f7; }
    without a ground station is the common case: it is not a fault and not a
    warning, so it should leave no trace rather than a bare heading. #}
 {% if s.error or s.warnings or s.metrics or s.charts or s.figures or s.maps
-      or s.globes or s.datasets or s.text %}
+      or s.globes or s.datasets or s.groups or s.note or s.text %}
 <h2 id="{{ s.name }}">{{ s.title }}</h2>
+{% if s.note %}<p class="section-note">{{ s.note }}</p>{% endif %}
 
 {% if s.error %}
 <div class="err">{{ s.error }}</div>
@@ -229,6 +230,23 @@ details.explore > summary:hover { background: #f2f4f7; }
   {% endfor %}
   </tbody>
 </table>
+{% endif %}
+
+{% if s.groups %}
+<div class="settings">
+  {% for g in s.groups %}
+  <div class="settings-group">
+    <h3>{{ g.name }}</h3>
+    <table class="metrics">
+      <tbody>
+      {% for k, v in g.rows %}
+        <tr><td>{{ k }}</td><td class="num">{{ v }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+</div>
 {% endif %}
 
 {% if s.text %}

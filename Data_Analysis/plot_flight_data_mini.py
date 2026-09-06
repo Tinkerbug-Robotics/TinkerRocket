@@ -446,6 +446,12 @@ def parse_binary_file(filepath):
         "roll_min_speed_mps": None,
         "b2r_mode": None,
         "b2r_quat": None,
+        # Every FlightSettingsData payload, verbatim and in log order.
+        # flight_report/flight_settings.py decodes the whole struct (all
+        # versions) for the report's Settings section: the frame is the log's
+        # own record of what the vehicle was told to do, and the sidecar .json
+        # is only the app's rendering of this same frame.
+        "flight_settings_frames": [],
     }
 
     stats = {
@@ -510,6 +516,8 @@ def parse_binary_file(filepath):
         # it directly (#837 item 6).  The frame is not otherwise decoded here —
         # the apps own that — but the GNSS OTP clock state is a per-flight FACT
         # that until v7 existed nowhere in the record.  version @4, state @219.
+        if msg_type == MSG_FLIGHT_SETTINGS:
+            config["flight_settings_frames"].append(bytes(payload))
         if msg_type == MSG_FLIGHT_SETTINGS and msg_len >= 220:
             fs_version = payload[4]
             if fs_version >= 7:

@@ -47,6 +47,7 @@ FLIGHT_SECTIONS = [
     'id="parser_stats"',
     'id="timing"',
     'id="settings"',
+    'id="system"',
 ]
 
 
@@ -126,6 +127,12 @@ def test_flight_report_is_the_headline_read(reports: dict[str, Path]) -> None:
     )
     assert html.index('id="timing"') > html.index('id="parser_stats"'), (
         "Per-sensor timing should follow the message counts it explains"
+    )
+    # What the flyer set comes first; what the firmware and sensors were
+    # running comes after it, where a reader chasing a wrong number can still
+    # find it without it crowding the settings they recognize.
+    assert html.index('id="system"') > html.index('id="settings"'), (
+        "System configuration should sit below the rocket settings"
     )
 
 
@@ -594,6 +601,92 @@ def test_charts_offer_dots_lines_or_both(report_html: Path) -> None:
             assert t["line"].get("color") == t["marker"].get("color"), (
                 f"{chart_id}/{t['name']}: line and marker colors differ, so switching would recolor it"
             )
+
+
+def _section(html: str, section_id: str) -> str:
+    """The HTML of one report section, heading to the next heading."""
+    start = html.index(f'<h2 id="{section_id}">')
+    nxt = html.find("<h2 id=", start + 1)
+    return html[start:nxt if nxt > 0 else None]
+
+
+def test_settings_use_the_apps_words(report_html: Path) -> None:
+    """Settings are read from the log's own frame and labeled as the app labels them.
+
+    A flyer checking a number against what they typed into the app should find
+    the same heading and the same words — "Pyro Channel 1", "Enabled", "Max
+    Deflection" — not the firmware's field names. And the rows come from the
+    FlightSettingsData frame in the binary, not the sidecar: the golden flight
+    has no sidecar at all and still shows every group.
+    """
+    html = report_html.read_text(encoding="utf-8")
+    settings = _section(html, "settings")
+    for heading in ("Rocket", "IMU Mounting", "Servo Control", "PID Gains", "Servo",
+                    "Control Mode", "Camera", "Pyro Channel 1", "Pyro Channel 4"):
+        assert f"<h3>{heading}</h3>" in settings, f"settings section lacks the app's {heading!r} group"
+    for label in ("Enable Sounds", "Enable Servo Control", "Max Deflection", "Min Pulse",
+                  "Camera Type", "Nose axis"):
+        assert f"<td>{label}</td>" in settings, f"settings section lacks the app's {label!r} row"
+    for raw in ("gyro_fs_dps", "max_cmd_deg", "trigger_mode", "pyro.ch1"):
+        assert raw not in settings, f"firmware field name {raw!r} leaked into the settings section"
+
+    system = _section(html, "system")
+    for heading in ("Firmware", "IMU", "Sensor mounting"):
+        assert f"<h3>{heading}</h3>" in system, f"system section lacks the {heading!r} group"
+    assert "Gyroscope range" in system, "gyro full scale belongs in the system section"
+    assert "Gyroscope range" not in settings, "gyro full scale is not something the flyer set"
+
+
+def test_flight_settings_frame_decodes_every_version() -> None:
+    """The decoder reads what a frame's length covers and nothing more.
+
+    Built from the struct layout by hand: a full v8 frame decodes every tail,
+    and the same bytes cut at the v2 length decode the head and the mounting
+    orientation and leave the later tails None rather than misreading them.
+    """
+    import struct
+
+    from flight_report import flight_settings as fs
+
+    flags = (1 << fs.F_SERVO_ENABLED) | (1 << fs.F_GAIN_SCHEDULE) | (1 << fs.F_SOUNDS) \
+        | (1 << fs.F_IMU_RATE_DYNAMIC)
+    head = struct.pack("<IBBH6f2f3ffBHH4hhhhB",
+                       123456, 8, flags, 500,
+                       0.12, 0.01, 0.0, 10.0, -20.0, 20.0,
+                       2.0, 60.0,
+                       50.0, 25.0, 3.0,
+                       0.0,
+                       16, 256, 4000,
+                       5, -5, 0, 0, 333, 1000, 2000,
+                       2)
+    pyro = struct.pack("<BBf", 1, 1, 228.6) + struct.pack("<BBf", 0, 0, 0.0) * 3
+    sha = b"d7017c0".ljust(12, b"\0")
+    profile = bytes([2, 0, 0, 0]) + struct.pack("<ffB", 1.0, 0.0, 0) \
+        + struct.pack("<ffB", 3.0, 90.0, 0) + bytes(9 * 6)
+    tails = struct.pack("<BBh4h", 4, 1, 0, 10000, 0, 0, 0) \
+        + struct.pack("<2f", -30.0, 30.0) + struct.pack("<H", 3840) \
+        + struct.pack("<2fB", 0.0, 0.0, 0) + struct.pack("<B", 5) + struct.pack("<H", 250)
+    frame = head + pyro + sha + profile + tails
+    assert len(frame) == 222
+
+    d = fs.decode(frame)
+    assert d["version"] == 8 and d["servo_enabled"] and d["gain_schedule_enabled"]
+    assert d["sounds_enabled"] and d["imu_rate_dynamic"] and not d["guidance_enabled"]
+    assert d["roll_delay_ms"] == 500 and abs(d["kp"] - 0.12) < 1e-6
+    assert d["servo_bias_us"] == [5, -5, 0, 0] and d["servo_hz"] == 333
+    assert d["camera_type"] == 2 and d["fw_git_sha"] == "d7017c0"
+    assert d["pyro"][0] == {"enabled": True, "mode": 1, "value": struct.unpack("<f", struct.pack("<f", 228.6))[0]}
+    assert d["num_waypoints"] == 2 and d["waypoints"][1]["angle_deg"] == 90.0
+    assert fs.orientation_name(d["b2r_code"]) == "-X" and d["b2r_mode"] == 1
+    assert d["fin_min_deg"] == -30.0 and d["fin_max_deg"] == 30.0
+    assert d["ism6_update_rate_hz"] == 3840
+    assert d["gnss_otp_state"] == 5 and fs.gnss_otp_name(5) == "BLOCKLISTED"
+    assert d["roll_min_speed_mps"] == 25.0
+
+    v2 = fs.decode(frame[:200])
+    assert v2["b2r_code"] == 4 and v2["fin_min_deg"] is None
+    assert v2["ism6_update_rate_hz"] is None and v2["roll_min_speed_mps"] is None
+    assert v2["gnss_otp_state"] is None
 
 
 def test_report_has_no_module_errors(report_html: Path) -> None:
