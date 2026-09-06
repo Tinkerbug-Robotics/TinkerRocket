@@ -569,6 +569,33 @@ def test_step_encoded_time_axis_round_trips_exactly(report_html: Path) -> None:
     )
 
 
+def test_charts_offer_dots_lines_or_both(report_html: Path) -> None:
+    """Every sample chart carries the Dots / Lines / Both control, and its traces can take either.
+
+    Dots is the default because a scatter shows where the samples fall and
+    where they thin out; a reader tracing a waveform through a zoomed-in boost
+    wants the line. The control itself is DOM wiring in the template and is
+    not unit-tested here, so what is pinned is the contract it relies on: one
+    control per non-3D chart, and both a `line` and a `marker` style on every
+    marker trace, in the same color, so the switch never recolors a series.
+    """
+    html = report_html.read_text(encoding="utf-8")
+    for chart_id, spec in _chart_specs(html):
+        if spec.get("kind") == "3d":
+            assert f'data-chart="{chart_id}"' not in html, f"{chart_id}: a 3D chart got a draw-mode control"
+            continue
+        assert f'<div class="draw-mode" data-chart="{chart_id}"' in html, (
+            f"{chart_id} has no Dots / Lines / Both control"
+        )
+        for t in spec["traces"]:
+            if "markers" not in t.get("mode", "markers"):
+                continue
+            assert "line" in t and "marker" in t, f"{chart_id}/{t['name']} lacks a line or marker style"
+            assert t["line"].get("color") == t["marker"].get("color"), (
+                f"{chart_id}/{t['name']}: line and marker colors differ, so switching would recolor it"
+            )
+
+
 def test_report_has_no_module_errors(report_html: Path) -> None:
     """Every analysis module should run to completion (warnings OK, errors not)."""
     html = report_html.read_text(encoding="utf-8")

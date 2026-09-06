@@ -113,10 +113,12 @@ def trace(
         "yaxis": axis,
         "hovertemplate": f"{name}: %{{y:.4g}}<br>%{{x:{X_HOVER_FORMAT}}}<extra></extra>",
     }
-    if "lines" in mode:
-        spec["line"] = {"width": width, "color": color}
-    if "markers" in mode:
-        spec["marker"] = {"size": size, "color": color}
+    # Both styles ship whatever the mode, so the report's Dots / Lines / Both
+    # control can switch a trace without losing its color: Plotly colors a line
+    # from `line`, not from `marker`, and a marker trace with no `line` would
+    # fall back to the default colorway the moment it was switched.
+    spec["line"] = {"width": width, "color": color}
+    spec["marker"] = {"size": size, "color": color}
     return spec
 
 
