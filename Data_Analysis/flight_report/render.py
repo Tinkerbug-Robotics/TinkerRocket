@@ -141,57 +141,6 @@ def _dataset_entry(d: dict) -> dict:
     return entry
 
 
-def _flatten_settings(node, prefix: str = "") -> list[tuple[str, str]]:
-    """Nested settings dict -> flat (dotted key, display value) pairs, sorted.
-
-    The sidecar nests a few levels deep (`pyro.ch1.trigger_mode`), which as raw
-    JSON is a wall of braces. Flattening to dotted keys makes it a table you can
-    scan and diff against another flight.
-    """
-    rows: list[tuple[str, str]] = []
-    if isinstance(node, dict):
-        for k, v in sorted(node.items()):
-            rows.extend(_flatten_settings(v, f"{prefix}.{k}" if prefix else str(k)))
-    elif isinstance(node, list):
-        if node and all(isinstance(v, (int, float, str, bool)) or v is None for v in node):
-            rows.append((prefix, ", ".join("null" if v is None else str(v) for v in node)))
-        else:
-            for i, v in enumerate(node):
-                rows.extend(_flatten_settings(v, f"{prefix}[{i}]"))
-    elif isinstance(node, bool):
-        rows.append((prefix, "yes" if node else "no"))
-    elif node is None:
-        rows.append((prefix, "—"))
-    else:
-        rows.append((prefix, str(node)))
-    return rows
-
-
-def _settings_groups(sidecar: dict) -> list[dict]:
-    """Settings only, grouped by top-level key. Flight performance is excluded.
-
-    The sidecar mixes configuration with results (apogee_time_s, max_altitude_m
-    and friends). Those are the summary card's job; repeating them here as raw
-    JSON invites the two to disagree.
-    """
-    settings = sidecar.get("settings")
-    if not isinstance(settings, dict):
-        return []
-
-    groups = []
-    scalars: list[tuple[str, str]] = []
-    for key, value in sorted(settings.items()):
-        if isinstance(value, (dict, list)):
-            rows = _flatten_settings(value)
-            if rows:
-                groups.append({"name": key, "rows": rows})
-        else:
-            scalars.extend(_flatten_settings(value, key))
-    if scalars:
-        groups.insert(0, {"name": "general", "rows": scalars})
-    return groups
-
-
 @lru_cache(maxsize=8)
 def _read_vendor(name: str) -> str:
     """A vendored asset, or '' if it isn't present (that feature then degrades).
@@ -263,6 +212,8 @@ def render_report(
             ],
             "datasets": [_dataset_entry(d) for d in r.datasets],
             "warnings": r.warnings,
+            "groups": r.groups,
+            "note": r.note,
             "text": r.text,
             "error": r.error,
         })
@@ -284,7 +235,6 @@ def render_report(
         date_str=flight.date.strftime("%Y-%m-%d %H:%M:%S") if flight.date else "unknown",
         duration_s=flight.duration_s,
         sidecar=flight.sidecar,
-        settings_groups=_settings_groups(flight.sidecar or {}),
         stats=flight.stats,
         config=flight.config,
         sections=sections,
