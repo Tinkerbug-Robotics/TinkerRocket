@@ -132,9 +132,17 @@ public class OtaSession(
         begin.sendCommandFrame(Commands.otaBegin(targetIsFc, image.size.toLong(), sha))
         val beginTimeout = if (targetIsFc) BEGIN_TIMEOUT_FC_MS else BEGIN_TIMEOUT_MS
         if (!awaitOtaState(OtaStatusUpdate.State.READY, beginTimeout)) {
-            _state.value = State.Failed(
-                "Device did not accept OTA_BEGIN within ${beginTimeout / 1000}s",
-            )
+            // A refused begin is answered, not ignored: verify_failed with a
+            // token (bad_payload, bad_target, inflight_refused — #1106).  The
+            // wait fails fast on it, so the timeout wording would both hide
+            // the one thing the firmware said and claim a wait that never
+            // happened.  Same shape as the finish handling below.
+            val st = sessionLookup()?.otaStatus?.value
+            _state.value = if (st?.state == OtaStatusUpdate.State.VERIFY_FAILED) {
+                State.Failed("Device refused OTA_BEGIN: ${st.err ?: "unknown"}")
+            } else {
+                State.Failed("Device did not accept OTA_BEGIN within ${beginTimeout / 1000}s")
+            }
             return
         }
 

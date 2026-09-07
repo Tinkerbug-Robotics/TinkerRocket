@@ -193,6 +193,27 @@ class OtaSessionTest {
     }
 
     @Test
+    fun beginRefused_reportsTheFirmwareTokenNotTheTimeout() = runTest {
+        // #1106: the OC refuses to flash its own image while the FC reports
+        // INFLIGHT, answering OTA_BEGIN with verify_failed/inflight_refused
+        // (bad_payload and bad_target take the same path).  The begin wait
+        // fails fast on that status, so the message must carry the token —
+        // the timeout wording would hide the one thing the firmware said.
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("verify_failed", err = "inflight_refused")
+        // 200 ms, not the 5 s window: a refusal is a verdict, not a timeout.
+        advanceTimeBy(200); runCurrent()
+
+        val st = r.ota.state.value
+        assertIs<OtaSession.State.Failed>(st)
+        assertEquals("Device refused OTA_BEGIN: inflight_refused", st.reason)
+        assertEquals(0, r.fw.otaChunks.size, "no chunks after a refused begin")
+    }
+
+    @Test
     fun finishNeverAcked_failsAfterFinishTimeout() = runTest {
         val r = rig()
         advanceTimeBy(1_200); runCurrent()

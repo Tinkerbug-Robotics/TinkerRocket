@@ -178,6 +178,25 @@ final class OTASessionFlowTests: XCTestCase {
         XCTAssertEqual(link.chunks.count, 0, "no chunks before the firmware says ready")
     }
 
+    func testBeginRefused_reportsTheFirmwareTokenNotTheTimeout() async throws {
+        // #1106: the OC refuses to flash its own image while the FC reports
+        // INFLIGHT, answering OTA_BEGIN with verify_failed/inflight_refused
+        // (bad_payload and bad_target take the same path). The begin wait
+        // fails fast on that status, so the message must carry the token —
+        // the timeout wording would hide the one thing the firmware said.
+        let link = ScriptedLink()
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .verifyFailed, bytes: 0,
+                                         err: "inflight_refused", fw: nil)
+
+        try await waitUntil("begin refusal") { self.failureReason(session.state) != nil }
+        XCTAssertEqual(failureReason(session.state), "Device refused OTA_BEGIN: inflight_refused")
+        XCTAssertEqual(link.chunks.count, 0, "no chunks after a refused begin")
+    }
+
     func testFinishNeverAcked_failsAfterFinishTimeout() async throws {
         let link = ScriptedLink()
         let session = makeSession(LinkBox(link))
