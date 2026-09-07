@@ -2239,6 +2239,19 @@ void TR_BLE_To_APP::handleOtaBegin(const uint8_t* data, size_t length)
         return;
     }
 
+    // #1106: the host's veto on flashing this device's own image. Refuse
+    // BEFORE anything changes — no session flag, no erase, no receiver state —
+    // so a refused begin leaves whatever was there exactly as it was, and any
+    // chunks or OTA_FINISH the app still sends fall into the receiver's normal
+    // session_not_active path. verify_failed is the state both apps already
+    // treat as terminal at begin (bad_target/bad_payload use it too).
+    if (!otaSelfFlashPermitted())
+    {
+        ESP_LOGW(BLE_TAG, "OTA_BEGIN refused: host reports rocket INFLIGHT");
+        sendOtaStatusJSON("verify_failed", "inflight_refused", 0, nullptr);
+        return;
+    }
+
     ESP_LOGI(BLE_TAG, "OTA_BEGIN: size=%u bytes", (unsigned)total_size);
     ota_last_writing_notify_ms_ = 0;
     ota_pending_restart_at_ms_ = 0;
@@ -2260,6 +2273,23 @@ void TR_BLE_To_APP::handleOtaFinish()
         ESP_LOGI(BLE_TAG, "OTA_FINISH (FC relay)");
         if (ota_relay_finish_cb_) ota_relay_finish_cb_(ota_relay_ctx_);
         return;  // session ends when the OC relays the FC's terminal status
+    }
+    // #1106: a session begun on the pad is legal, and the rocket can launch
+    // during the transfer. finish() would set the boot partition and arm the
+    // reboot that closes the flight log (and on V7/V8 drops the FC rail), so
+    // ask again here. abort() discards the staged image — esp_ota_abort():
+    // no boot-partition change, no erase — and returns the receiver to Idle,
+    // whose status callback also clears ota_session_active_ so the host's
+    // I2C gauge poll resumes. Order matters for the apps: the abort's "idle"
+    // status goes out first so the terminal verify_failed is what they read.
+    if (!otaSelfFlashPermitted())
+    {
+        const size_t staged = ota_receiver_.bytesWritten();
+        ESP_LOGW(BLE_TAG, "OTA_FINISH refused: host reports rocket INFLIGHT — "
+                          "staged image (%u bytes) discarded", (unsigned)staged);
+        (void)ota_receiver_.abort();   // -> Idle -> callback clears ota_session_active_
+        sendOtaStatusJSON("verify_failed", "inflight_refused", staged, nullptr);
+        return;
     }
     ESP_LOGI(BLE_TAG, "OTA_FINISH (bytes_written=%u)", (unsigned)ota_receiver_.bytesWritten());
     TR_OTA_Receiver::Error e = ota_receiver_.finish();
@@ -2289,6 +2319,19 @@ void TR_BLE_To_APP::handleOtaAbort()
     }
     ota_pending_restart_at_ms_ = 0;
     (void)ota_receiver_.abort();   // -> Idle -> callback clears ota_session_active_
+}
+
+// #1106: see the header. Unset = permitted, so devices that never register
+// (base station, bench projects) keep flashing exactly as before.
+bool TR_BLE_To_APP::otaSelfFlashPermitted() const
+{
+    return !ota_permit_cb_ || ota_permit_cb_(ota_permit_ctx_);
+}
+
+void TR_BLE_To_APP::setOtaPermitCallback(bool (*cb)(void* ctx), void* ctx)
+{
+    ota_permit_cb_  = cb;
+    ota_permit_ctx_ = ctx;
 }
 
 void TR_BLE_To_APP::setOtaRelayDelegate(void (*begin_cb)(void*, uint32_t, const uint8_t*),

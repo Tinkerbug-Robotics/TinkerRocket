@@ -541,6 +541,13 @@ private:
     void* ota_relay_ctx_ = nullptr;
     bool  ota_relay_active_ = false;  // a target==1 relay session is in progress
 
+    // ---- Self-flash veto (#1106) -------------------------------------------
+    // The host's answer to "may this device flash ITS OWN image right now?".
+    // Unset = always permitted. See setOtaPermitCallback().
+    bool (*ota_permit_cb_)(void* ctx) = nullptr;
+    void* ota_permit_ctx_ = nullptr;
+    bool otaSelfFlashPermitted() const;
+
     void onFileTransferWrite(const uint8_t* data, size_t length);
     void handleOtaBegin(const uint8_t* data, size_t length);
     void handleOtaFinish();
@@ -564,6 +571,20 @@ public:
     bool isOtaRelayActive() const { return ota_relay_active_; }
     void relayFcOtaStatus(const char* state, const char* err,
                           uint32_t bytes_written, bool terminal);
+
+    // ---- Self-flash veto (#1106) -------------------------------------------
+    // OTA_BEGIN/OTA_FINISH for target==0 are handled entirely in this class,
+    // on the NimBLE host task, and never reach the host's main-loop dispatch
+    // — so the host, the only party that knows the rocket state, registers a
+    // veto instead. Consulted before esp_ota_begin() erases the partition and
+    // again before OTA_FINISH sets the boot partition and arms the reboot. A
+    // false return refuses with ota_status verify_failed / inflight_refused
+    // and changes nothing else (no session flag, no erase, no receiver state).
+    // Unset (base station, bench projects) = always permitted, so devices that
+    // never register flash exactly as before. Invoked on the NimBLE host task:
+    // the callback must only read state its host publishes for cross-task use.
+    // The relayed image (target==1) is not covered — the FC gates that itself.
+    void setOtaPermitCallback(bool (*cb)(void* ctx), void* ctx);
 
     // ---- NimBLE callbacks (static, forwarded via user-data pointer) --------
     static int  gap_event_cb(struct ble_gap_event* event, void* arg);
