@@ -130,8 +130,11 @@ struct Inputs {
     // so a static port blocked on the pad pins barometric altitude near zero
     // for the whole flight and the drogue charge's own >15 g shock latches it
     // — on exactly the flight the GNSS backstop exists to save.  So it may
-    // only inhibit while the barometer is trusted.  quiescent_flag (#824) is
-    // baro-independent and always inhibits.
+    // only inhibit while the barometer is trusted.  (#1103 later closed that
+    // hole at the source: impact also requires max_altitude > 15 m, i.e. a
+    // barometer that has seen the flight, so a sealed port can no longer
+    // latch it at all.  The trust qualification here stays as defence in
+    // depth.)  quiescent_flag (#824) is baro-independent and always inhibits.
     bool     impact_flag     = false;
     bool     quiescent_flag  = false;
     // Barometric estimate (TR_KinematicChecks)
