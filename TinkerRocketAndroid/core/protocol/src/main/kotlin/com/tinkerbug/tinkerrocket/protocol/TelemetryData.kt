@@ -803,7 +803,7 @@ public data class TelemetryData(
  */
 /** #1166: the out computer's verdict on the hold-up supercap (telemetry key "hu"). */
 public enum class HoldupState(public val code: Int) {
-    CHARGING(1), CHARGED(2), NOT_CHARGING(3);
+    CHARGING(1), CHARGED(2), NOT_CHARGING(3), NO_READING(4);
 
     public companion object {
         public fun fromCode(code: Int?): HoldupState? = values().firstOrNull { it.code == code }
@@ -811,16 +811,20 @@ public enum class HoldupState(public val code: Int) {
 }
 
 /**
- * The one quiet advisory line for a hold-up cap that never charged, or null
- * when there is nothing to say.  iOS twin: `TelemetryData.holdupAdvisoryText`.
+ * The one quiet advisory line, or null when there is nothing to say: a cap
+ * that never charged speaks, and so does a sense that exists but does not
+ * answer — a dead ADC must not be silence either.  Charging and charged stay
+ * quiet.  iOS twin: `TelemetryData.holdupAdvisoryText`.
  */
-public fun holdupAdvisoryText(state: Int?, scapVolts: Float?): String? {
-    if (HoldupState.fromCode(state) != HoldupState.NOT_CHARGING) return null
-    return if (scapVolts != null) {
-        String.format(java.util.Locale.US, "Hold-up backup not charged — %.2f V", scapVolts)
-    } else {
-        "Hold-up backup not charged"
-    }
+public fun holdupAdvisoryText(state: Int?, scapVolts: Float?): String? = when (HoldupState.fromCode(state)) {
+    HoldupState.NOT_CHARGING ->
+        if (scapVolts != null) {
+            String.format(java.util.Locale.US, "Hold-up backup not charged — %.2f V", scapVolts)
+        } else {
+            "Hold-up backup not charged"
+        }
+    HoldupState.NO_READING -> "Hold-up backup sense — no reading"
+    else -> null
 }
 
 public fun railAmpsDisplay(amps: Float?): String {

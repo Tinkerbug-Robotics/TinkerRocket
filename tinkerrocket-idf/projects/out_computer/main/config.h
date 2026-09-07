@@ -82,6 +82,21 @@ static_assert(board_pins::MRAM_CS == 34,
               "V8 bench boards have the MRAM fitted on GPIO34 — do not change this (#822)");
 #endif
 
+// #1166: the hold-up cap sense (V_SCAP_ADC, R125/R126) reaches this processor
+// on the mini, and its verdict is the only thing on the board that reports a
+// hold-up that silently is not there.  Setting the pin to -1 there would
+// compile the monitor out and bring that silence back.
+#if TR_BOARD_M1
+static_assert(board_pins::SCAP_ADC_PIN >= 0,
+              "board_m1.h: V_SCAP_ADC reaches the out computer on the mini and must be read (#1166)");
+#endif
+// Wherever the sense exists it must sit on ADC1 (GPIO1-10 on the S3): ADC2 is
+// unusable with the radio up, and a wrong pad reads a floating input as a
+// verdict.
+static_assert(board_pins::SCAP_ADC_PIN < 0 ||
+              (board_pins::SCAP_ADC_PIN >= 1 && board_pins::SCAP_ADC_PIN <= 10),
+              "SCAP_ADC_PIN must be an ADC1 pad (GPIO1-10) or -1 (#1166)");
+
 struct config : board_pins
 {
     // --- Debug ---
@@ -217,14 +232,21 @@ struct config : board_pins
     //     block.  Measured from boot on a cold start and from the last charged
     //     reading otherwise, so a cap a hold-up event just drained gets its
     //     recharge time before anyone is told.
-    //   TRACE_*: the [HOLDUP] console line — every FAST_MS for the first
-    //     RAMP_MS of uptime (the first-article cold-start trace), every
-    //     SLOW_MS after, and on every change of verdict.
-    static constexpr float    HOLDUP_CHARGED_V       = 2.2f;
-    static constexpr uint32_t HOLDUP_LOW_ADVISORY_MS = 180000u;
-    static constexpr uint32_t HOLDUP_TRACE_RAMP_MS   = 300000u;
-    static constexpr uint32_t HOLDUP_TRACE_FAST_MS   = 5000u;
-    static constexpr uint32_t HOLDUP_TRACE_SLOW_MS   = 60000u;
+    //   TRACE_DELTA_V / TRACE_PERIOD_MS: the [HOLDUP] console line — one
+    //     whenever V_SCAP has moved TRACE_DELTA_V since the last line, at
+    //     least every TRACE_PERIOD_MS when steady, and on every change of
+    //     verdict.  Through the 100 mA ramp that is a line every ~2.5 s (the
+    //     first-article cold-start trace); terminated, one a minute; a
+    //     discharge riding the cap logs every second.
+    //   PIN_CEILING_MV: the 6 dB range is good to ~1.75 V at the pad; a
+    //     2.5 V termination is 1.25 V and the VIN − 800 mV bound ~1.33 V.
+    //     Above this, once per boot, say the divider or VCHG is not as built
+    //     rather than report a confidently clipped number.
+    static constexpr float    HOLDUP_CHARGED_V        = 2.2f;
+    static constexpr uint32_t HOLDUP_LOW_ADVISORY_MS  = 180000u;
+    static constexpr float    HOLDUP_TRACE_DELTA_V    = 0.05f;
+    static constexpr uint32_t HOLDUP_TRACE_PERIOD_MS  = 60000u;
+    static constexpr int      HOLDUP_PIN_CEILING_MV   = 1600;
 };
 
 #endif
