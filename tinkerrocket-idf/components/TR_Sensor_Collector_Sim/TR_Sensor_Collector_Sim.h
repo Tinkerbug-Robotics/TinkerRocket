@@ -49,10 +49,15 @@ public:
     void getPollTimingSnapshot(PollTimingSnapshot& snapshot_out) const;
     void resetPollTimingSnapshot();
 
-    // Calibration (no-op in sim — synthetic data has no bias).  Forwards the
-    // real collector's verdict otherwise (#1110): false means nothing was
-    // measured or the result was rejected, and the values below are unchanged.
-    bool calibrateGyro(float rotation_z_deg = 0.0f);
+    // Pad calibration (#1110/#1114), forwarded to the real collector: a
+    // request, a once-per-pass poll, a cancel.  Refused (nothing started)
+    // while a sim is active — synthetic data has no bias to measure.  The
+    // values below are copied from the real collector on Committed and are
+    // unchanged otherwise.
+    bool          startCalibration(float rotation_z_deg = 0.0f);
+    SensorCalPoll pollCalibration();
+    void          cancelCalibration();
+    bool          calibrationInProgress() const { return real_.calibrationInProgress(); }
     float hg_bias_x = 0.0f, hg_bias_y = 0.0f, hg_bias_z = 0.0f;
     float cal_gravity_mag = 0.0f;
 
