@@ -565,6 +565,8 @@ public class CsvGenerator {
         // #529: free-running EKF update-tick counter (uint16 wrap).  Blank on
         // logs predating the 50-byte NonSensorData.
         columns.add("EKF Ticks")
+        // #1190: EKF shock-gate trips (u16 wrap); blank before the 52-byte layout.
+        columns.add("EKF Shock Gate Trips")
 
         return columns.joinToString(",") + "\n"
     }
@@ -676,6 +678,7 @@ public class CsvGenerator {
         values.add(nonSensor?.let { if (it.guidanceEnabled) "1" else "0" } ?: "")
         // #529: bare int or blank (blank when no NonSensor OR pre-50-B log)
         values.add(nonSensor?.ekfTicks?.toString() ?: "")
+        values.add(nonSensor?.shockGateTrips?.toString() ?: "")
 
         return values.joinToString(",") + "\n"
     }

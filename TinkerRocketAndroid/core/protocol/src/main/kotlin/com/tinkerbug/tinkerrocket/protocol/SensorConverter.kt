@@ -446,6 +446,7 @@ public class SensorConverter {
             guidanceEnabled = false,
             deployedFlag = false,
             ekfTicks = null,
+            shockGateTrips = null,
         )
     }
 
@@ -559,6 +560,7 @@ public class SensorConverter {
             guidanceEnabled = guidanceEnabled,
             deployedFlag = deployedFlag,
             ekfTicks = raw.ekfTicks,   // #529
+            shockGateTrips = raw.shockGateTrips,   // #1190
         )
     }
 }

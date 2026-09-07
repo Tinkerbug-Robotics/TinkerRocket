@@ -9,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -448,5 +449,17 @@ class SensorConverterTest {
 
         // #529: ekf_ticks carried through verbatim on the 50-byte layout.
         assertEquals(side["ekf_ticks"]!!.jsonPrimitive.int, si.ekfTicks)
+        // ...and #1190's shock_gate_trips is absent there.
+        assertNull(si.shockGateTrips)
+    }
+
+    @Test
+    fun `golden nonsensor_52 carries shock_gate_trips through`() {
+        val side = WireFixtures.sidecar("logframes/nonsensor_52.bin")
+        val raw = assertNotNull(NonSensorData.decode(WireFixtures.bytes("logframes/nonsensor_52.bin")))
+        val si = converter.convertNonSensor(raw)
+        assertEquals(side["ekf_ticks"]!!.jsonPrimitive.int, si.ekfTicks)
+        // #1190: shock_gate_trips carried through verbatim on the 52-byte layout.
+        assertEquals(side["shock_gate_trips"]!!.jsonPrimitive.int, si.shockGateTrips)
     }
 }

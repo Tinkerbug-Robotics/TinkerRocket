@@ -202,6 +202,7 @@ NonSensorData canonicalNonSensor() {
     d.apogee_flags = 0x05;  // gps_apogee | master apogee
     d.sensor_health = 0x00F0A5C3u;  // gnssAbsent bits 22-23 = 3 (BAD/active)
     d.ekf_ticks = 54321;
+    d.shock_gate_trips = 14;   // #1190: the 2026-08-29 burst's count
     return d;
 }
 
@@ -371,6 +372,7 @@ std::string nonSensorSidecar(const NonSensorData& d, size_t presentBytes) {
     if (presentBytes >= 44) j.u("apogee_flags", d.apogee_flags);
     if (presentBytes >= 48) j.u("sensor_health", d.sensor_health);
     if (presentBytes >= 50) j.u("ekf_ticks", d.ekf_ticks);
+    if (presentBytes >= 52) j.u("shock_gate_trips", d.shock_gate_trips);
     return j.done();
 }
 
@@ -507,11 +509,11 @@ void buildLogframes(Builder& b) {
           "POWERData v1 (pre-#850); absent rail currents decode as absent, not 0");
 
     // NonSensor length ladder: 43 (base) / 44 (+apogee_flags) / 48
-    // (+sensor_health) / 50 (+ekf_ticks).  Each shorter form is a faithful
-    // prefix of the append-only struct.
+    // (+sensor_health) / 50 (+ekf_ticks) / 52 (+shock_gate_trips, #1190).
+    // Each shorter form is a faithful prefix of the append-only struct.
     const auto ns = canonicalNonSensor();
     const auto nsFull = bytesOf(ns);
-    for (size_t len : {size_t{43}, size_t{44}, size_t{48}, size_t{50}}) {
+    for (size_t len : {size_t{43}, size_t{44}, size_t{48}, size_t{50}, size_t{52}}) {
         char name[32];
         std::snprintf(name, sizeof(name), "nonsensor_%zu.bin", len);
         b.add("logframes", name, prefix(nsFull, len), nonSensorSidecar(ns, len),
@@ -1057,6 +1059,8 @@ void buildCsvFlight(Builder& b) {
             d.apogee_flags = af;
             d.sensor_health = 0x00500541u;
             d.ekf_ticks = static_cast<uint16_t>((i * 13) & 0xFFFF);
+            // #1190: one shock burst at boost + 0.3 s, the flight's 14 trips.
+            d.shock_gate_trips = (t_ms >= 8300) ? 14 : 0;
             append(stream, frame(NON_SENSOR_MSG, bytesOf(d)));
             ++frames;
         }

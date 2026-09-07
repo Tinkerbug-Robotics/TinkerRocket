@@ -664,6 +664,19 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                 imu_d.gyro_x = imu_meas['gyro_x']
                 imu_d.gyro_y = -imu_meas['gyro_y']  # FLU→FRD
                 imu_d.gyro_z = -imu_meas['gyro_z']  # FLU→FRD
+                # #1190: the shock gate's saturation verdicts, per sensor axis —
+                # the IMU model clips per axis at the configured full scale, and
+                # its axes ARE the sensor axes (no mount rotation in the sim), so
+                # any axis within 5 % of that clip is what the FC drain window
+                # would report from raw counts.  No clip configured → never.
+                if config.gyro_full_scale_dps is not None:
+                    imu_d.gyro_railed = any(
+                        abs(imu_meas[k]) >= 0.95 * config.gyro_full_scale_dps
+                        for k in ('gyro_x', 'gyro_y', 'gyro_z'))
+                if config.accel_full_scale_g is not None:
+                    imu_d.accel_railed = any(
+                        abs(imu_meas[k]) >= 0.95 * config.accel_full_scale_g * 9.807
+                        for k in ('acc_x', 'acc_y', 'acc_z'))
 
                 # Check if GNSS has new data (with dropout model)
                 gnss_d = EKFGNSSData()

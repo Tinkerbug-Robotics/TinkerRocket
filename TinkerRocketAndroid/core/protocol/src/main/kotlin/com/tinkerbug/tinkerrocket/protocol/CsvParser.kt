@@ -94,6 +94,7 @@ public class FlightCsvData(
             )),
             ColumnGroup("Diagnostics", listOf(
                 "EKF Ticks",
+                "EKF Shock Gate Trips",   // #1190
             )),
         )
 

@@ -103,6 +103,26 @@
     static constexpr float    EKF_ATT_VAR_OK        = 0.1f;   // rad², worst attitude axis (~18° 1σ)
     static constexpr float    EKF_VEL_VAR_OK        = 4.0f;   // (m/s)², worst velocity axis (~2 m/s 1σ)
 
+    // #1190 EKF shock gate: a SATURATED gyro or accelerometer axis is not a
+    // measurement, so the filter holds its attitude through it.  The
+    // 2026-08-29 nose burst (gyro to 4492 dps against ±4000) put a 38° step
+    // into the logged pitch that lasted to apogee.  Saturation is the ONLY
+    // criterion, per SENSOR axis (the chip sits at 45° to the thrust axis, so a
+    // body-frame magnitude runs √2 above any axis): these computers fly other
+    // rockets, and a value inside the sensor's range is a measurement whatever
+    // this airframe can or cannot do.
+    //   GYRO_RAIL_FRAC:  a gyro axis at or beyond this fraction of the nominal
+    //     full scale (0.95 × 4000 = 3800 dps; the ST digital rail is 4587).
+    //   ACCEL_RAIL_FRAC: a high-g accelerometer axis at or beyond this fraction
+    //     of its full scale (0.95 × 256 = 243 g).  The low-g channel's rail is
+    //     handled by the channel switch, not here.
+    //   SETTLE_MS: hold after the LAST trip.  Bridges the gaps between the rail
+    //     samples inside one burst (22.5 ms was the longest on 2026-08-29) and
+    //     the ring-down after the last one (~11 ms there).
+    static constexpr float    EKF_SHOCK_GYRO_RAIL_FRAC  = 0.95f;
+    static constexpr float    EKF_SHOCK_ACCEL_RAIL_FRAC = 0.95f;
+    static constexpr uint32_t EKF_SHOCK_SETTLE_MS       = 50u;
+
     // Barometer spike rejection (#450: rate-aware) — reject only when BOTH the
     // absolute deadband and the apparent rate over the actual pair spacing are
     // exceeded.

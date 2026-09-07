@@ -296,3 +296,67 @@ TEST(ImuDrainWindow, BoxcarPassesAirframeBendingUntouched)
     EXPECT_GT(ratio, 0.99);
     EXPECT_LE(ratio, 1.0 + 1e-9);
 }
+
+// ── #1190: the shock gate's raw-count saturation bars ─────────────────────
+//
+// The EKF holds its attitude through a saturated gyro or accelerometer axis,
+// and since the filter only ever sees the window MEAN in body axes, the
+// verdict comes from the window's worst raw sample per SENSOR axis, judged
+// here.  Saturation is per axis: with the chip at 45 deg to the thrust axis a
+// body-frame magnitude runs sqrt(2) above any axis, so a magnitude bar at the
+// rail would trip with nothing saturated.
+
+TEST(ImuDrainWindow, GyroFsFractionBarMatchesTheConverterScale)
+{
+    // The converter's gyro scale is FS × 0.035 mdps/LSB (#369), so nominal
+    // full scale is 28571 LSB at every FS setting and a fraction of it is the
+    // same count too: 27142 LSB reads 3800 dps at ±4000 and 1900 dps at ±2000.
+    const int32_t bar = imu_drain::gyroFsFractionLsb(0.95f);
+    EXPECT_EQ(bar, 27142);
+    EXPECT_NEAR(bar * 4000.0f * 0.035e-3f, 3800.0f, 0.2f);
+    EXPECT_NEAR(bar * 2000.0f * 0.035e-3f, 1900.0f, 0.1f);
+    EXPECT_EQ(imu_drain::gyroFsFractionLsb(1.0f), 28571);   // the int16 rail is 32767
+}
+
+TEST(ImuDrainWindow, AccelFsFractionBarIsFsIndependent)
+{
+    // FS / 32768 per LSB on both accelerometer channels, so the bar is the
+    // same count at every FS: 31129 LSB is 243 g on ±256 g and 15.2 g on ±16 g.
+    EXPECT_EQ(imu_drain::accelFsFractionLsb(0.95f), 31129);
+    EXPECT_EQ(imu_drain::accelFsFractionLsb(1.0f), 32768);  // the rail itself
+    EXPECT_NEAR(31129 * 256.0f / 32768.0f, 243.2f, 0.1f);
+}
+
+TEST(ImuDrainWindow, GyroAboveSeesTheOneRailedSampleTheMeanHides)
+{
+    // The 2026-08-29 burst shape: a window of unremarkable samples with one
+    // at 32086 LSB (4492 dps) on sensor Y.  The mean sits well under the bar.
+    ImuDrainWindow w;
+    for (int i = 0; i < 7; ++i) w.add(sample((uint32_t)i, 0, 0, 0, 0, 0, 0, 500, -500, 0));
+    w.add(sample(7, 0, 0, 0, 0, 0, 0, 0, -32086, 0));
+    ISM6HG256Data m{};
+    ASSERT_TRUE(w.mean(m));
+    EXPECT_GT(m.gyro_raw.y, -5000);                          // ~-4448 LSB, nowhere near 27142
+    EXPECT_TRUE(w.gyroAbove(imu_drain::gyroFsFractionLsb(0.95f)));
+    EXPECT_FALSE(w.highGAbove(imu_drain::accelFsFractionLsb(0.95f)));
+}
+
+TEST(ImuDrainWindow, HighGAboveIsPerSensorAxisAndEitherSign)
+{
+    const int32_t bar = imu_drain::accelFsFractionLsb(0.95f);
+    ImuDrainWindow w;
+    w.add(sample(0, 0, 0, 0, 0, 0, -31500, 0, 0, 0));        // -246 g on sensor Z: at the rail
+    EXPECT_TRUE(w.highGAbove(bar));
+    EXPECT_FALSE(w.gyroAbove(imu_drain::gyroFsFractionLsb(0.95f)));
+
+    // 94 g on the nose (the 2026-08-29 burst's peak) is 12035 LSB along the
+    // chip's X/Y diagonal — inside the range on every axis, so no verdict.
+    ImuDrainWindow v;
+    v.add(sample(0, 0, 0, 0, 8510, 8510, 0, 0, 0, 0));
+    EXPECT_FALSE(v.highGAbove(bar));
+
+    // Two axes at 75 % of FS: 271 g of magnitude, no axis saturated, no verdict.
+    ImuDrainWindow u;
+    u.add(sample(0, 0, 0, 0, 24576, 24576, 0, 0, 0, 0));
+    EXPECT_FALSE(u.highGAbove(bar));
+}

@@ -133,6 +133,15 @@ void GpsInsEKF::resetFilterState() {
     frozen_dt_skips_    = 0;
     dt_s_               = 0.0f;
     euler_BL_rad_[0] = euler_BL_rad_[1] = euler_BL_rad_[2] = 0.0f;
+
+    // #1190: a hold belongs to the run that tripped it.  The thresholds are
+    // configuration and survive, like declination_rad_.
+    shock_trip_us_     = 0;
+    shock_hold_armed_  = false;
+    shock_hold_active_ = false;
+    shock_held_s_      = 0.0f;
+    shock_gate_trips_  = 0;
+    shock_hold_ticks_  = 0;
 }
 
 // ─── Init: shared core ──────────────────────────────────────────────
@@ -252,8 +261,30 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
         }
     }
 
-    // 5. Bias-corrected gyro rate (needed for quaternion propagation in timeUpdate)
-    for (int i=0;i<3;i++) wEst_B_rps_[i] = wMeas[i] - wBias_rps_[i];
+    // 4b. #1190 shock gate: did a raw sample behind this update have a gyro or
+    //     accelerometer axis at its rail?  Only the caller can say (see the
+    //     header); the filter tests no magnitude of its own.
+    {
+        const bool trip = imu_data.gyro_railed || imu_data.accel_railed;
+        if (trip) {
+            ++shock_gate_trips_;
+            shock_hold_armed_ = true;
+            shock_trip_us_    = t_us;
+        } else if (shock_hold_armed_ &&
+                   (uint32_t)(t_us - shock_trip_us_) >= shock_settle_us_) {
+            shock_hold_armed_ = false;     // the settle window is over — release
+        }
+        shock_hold_active_ = shock_hold_armed_;
+        if (shock_hold_active_) ++shock_hold_ticks_;
+        else                    shock_held_s_ = 0.0f;
+    }
+
+    // 5. Bias-corrected gyro rate (needed for quaternion propagation in timeUpdate).
+    //    #1190: zero while the shock gate holds — the exponential map then
+    //    returns the identity and the attitude-error Jacobian block -[w×]
+    //    vanishes with it; nothing else in the prediction reads the rate.
+    for (int i=0;i<3;i++)
+        wEst_B_rps_[i] = shock_hold_active_ ? 0.0f : (wMeas[i] - wBias_rps_[i]);
 
     // 6. Compute gravity in body frame and accel estimate using current quaternion
     {
@@ -265,6 +296,20 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
 
     // 7. Time update (quaternion propagation + velocity/position/covariance prediction)
     timeUpdate();
+
+    // 7b. #1190: while held, the attitude may have moved unobserved.  Grow the
+    //     attitude variance by the increment of (σ_rate · T_held / 2)² from the
+    //     previous tick to this one, so a hold of T seconds ends (σ · T / 2)²
+    //     wider — the /2 because the attitude error state is the half-angle
+    //     δθ/2 (see the quaternion corrections: dq = [1, x6, x7, x8]).
+    if (shock_hold_active_) {
+        const float t_prev = shock_held_s_;
+        shock_held_s_ += dt_s_;
+        const float s   = 0.5f * SHOCK_HOLD_RATE_SIGMA_RPS;
+        const float add = s * s * (shock_held_s_ * shock_held_s_ - t_prev * t_prev);
+        P_[6][6] += add; P_[7][7] += add; P_[8][8] += add;
+        stabilizeP();   // a hold that never ends still stops at P_MAX_ATT
+    }
 
     // 8. Accelerometer gravity reference update
     if (accel_valid) accelMeasUpdate(aMeas);
@@ -319,7 +364,8 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
         float aGrav_B[3] = {T_NED2B_local[0][2]*G, T_NED2B_local[1][2]*G, T_NED2B_local[2][2]*G};
         for (int i=0;i<3;i++) {
             aEst_B_mps2_[i] = aMeas[i] + aGrav_B[i] - aBias_mps2_[i];
-            wEst_B_rps_[i] = wMeas[i] - wBias_rps_[i];
+            // #1190: a held tick reports no rate — the filter is not using one.
+            wEst_B_rps_[i] = shock_hold_active_ ? 0.0f : (wMeas[i] - wBias_rps_[i]);
         }
     }
 

@@ -583,6 +583,8 @@ nonisolated class CSVGenerator {
         // this against Time give the achieved EKF rate — the number the EKF
         // replay tool needs. Blank on logs predating the 50-byte NonSensorData.
         columns.append("EKF Ticks")
+        // #1190: EKF shock-gate trips (uint16 wrap); blank before the 52-byte layout.
+        columns.append("EKF Shock Gate Trips")
 
         return columns.joined(separator: ",") + "\n"
     }
@@ -693,6 +695,7 @@ nonisolated class CSVGenerator {
         values.append(nonSensor.map { $0.reboot_recovery ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.guidance_enabled ? "1" : "0" } ?? "")
         values.append(nonSensor.flatMap { $0.ekf_ticks.map(String.init) } ?? "")
+        values.append(nonSensor.flatMap { $0.shock_gate_trips.map(String.init) } ?? "")
 
         return values.joined(separator: ",") + "\n"
     }

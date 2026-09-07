@@ -179,7 +179,8 @@ final class GoldenVectorTests: XCTestCase {
 
     func testNonSensorLadder() throws {
         for rel in ["logframes/nonsensor_43.bin", "logframes/nonsensor_44.bin",
-                    "logframes/nonsensor_48.bin", "logframes/nonsensor_50.bin"] {
+                    "logframes/nonsensor_48.bin", "logframes/nonsensor_50.bin",
+                    "logframes/nonsensor_52.bin"] {
             let side = WireFixtures.sidecar(rel)
             let n = try NonSensorData(from: WireFixtures.data(rel))
             assertNonSensorBase(n, side)
@@ -194,6 +195,13 @@ final class GoldenVectorTests: XCTestCase {
                 XCTAssertEqual(n.ekf_ticks.map(Int.init), side.int("ekf_ticks"), "ekf_ticks @ \(rel)")
             } else {
                 XCTAssertNil(n.ekf_ticks, "ekf_ticks must be nil @ \(rel)")
+            }
+            // #1190 nil-vs-value distinction: shock_gate_trips only exists at 52 B.
+            if present >= 52 {
+                XCTAssertEqual(n.shock_gate_trips.map(Int.init), side.int("shock_gate_trips"),
+                               "shock_gate_trips @ \(rel)")
+            } else {
+                XCTAssertNil(n.shock_gate_trips, "shock_gate_trips must be nil @ \(rel)")
             }
         }
     }

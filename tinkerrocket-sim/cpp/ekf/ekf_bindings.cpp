@@ -28,7 +28,12 @@ PYBIND11_MODULE(_ekf, m) {
         .def_readwrite("acc_z", &EkfIMUData::acc_z)
         .def_readwrite("gyro_x", &EkfIMUData::gyro_x)
         .def_readwrite("gyro_y", &EkfIMUData::gyro_y)
-        .def_readwrite("gyro_z", &EkfIMUData::gyro_z);
+        .def_readwrite("gyro_z", &EkfIMUData::gyro_z)
+        // #1190: the caller's per-raw-sample saturation verdicts (the replay
+        // judges every logged sample between two EKF ticks per sensor axis, as
+        // the FC drain loop does; the sim its per-axis clip).
+        .def_readwrite("gyro_railed", &EkfIMUData::gyro_railed)
+        .def_readwrite("accel_railed", &EkfIMUData::accel_railed);
 
     py::class_<EkfGNSSData>(m, "GNSSData")
         .def(py::init<>())
@@ -90,6 +95,11 @@ PYBIND11_MODULE(_ekf, m) {
         .def("set_gps_noise_scale", &GpsInsEKF::setGpsNoiseScale,
              py::arg("scale"))
         .def("get_gps_noise_scale", &GpsInsEKF::getGpsNoiseScale)
+        // #1190 shock gate: the settle window and its counters.
+        .def("set_shock_gate_settle", &GpsInsEKF::setShockGateSettle, py::arg("settle_us"))
+        .def("shock_gate_trips", &GpsInsEKF::shockGateTrips)
+        .def("shock_gate_hold_ticks", &GpsInsEKF::shockGateHoldTicks)
+        .def("shock_gate_held", &GpsInsEKF::shockGateHeld)
         .def("get_orientation", [](const GpsInsEKF& self) {
             float r[3]; self.getOrientEst(r);
             return py::make_tuple(r[0], r[1], r[2]);

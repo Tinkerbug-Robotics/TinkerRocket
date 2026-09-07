@@ -27,6 +27,27 @@ RAD2DEG = 180.0 / math.pi
 # Low-g saturation threshold: ±(16 - 0.5)g = ±15.5g
 LOW_G_SAT_THRESH = 15.5 * G_MS2
 
+# #1190 shock gate — flight_computer/main/config.h EKF_SHOCK_*; keep in step.
+# Saturation is the ONLY criterion, judged per SENSOR axis on raw counts by the
+# FC drain loop over EVERY sample (imu_drain_window.h) and passed to the filter
+# as EkfIMUData.gyro_railed / accel_railed — the filter tests no magnitude of
+# its own.  This replay does the same over the logged samples between two EKF
+# ticks, on the raw counts recovered from the parser's SI values.  The bars in
+# LSB are FS-independent (the ST gyro's nominal FS is 28571 LSB at every
+# setting; the accelerometers map FS onto 32768).
+SHOCK_GYRO_RAIL_FRAC = 0.95     # of the nominal gyro full scale
+SHOCK_ACCEL_RAIL_FRAC = 0.95    # of the high-g accelerometer full scale
+SHOCK_SETTLE_MS = 50            # hold after the last trip
+GYRO_RAIL_LSB = int(SHOCK_GYRO_RAIL_FRAC / 0.035e-3)          # 27142 = 3800 dps at ±4000
+ACCEL_RAIL_LSB = int(SHOCK_ACCEL_RAIL_FRAC * 32768)           # 31129 = 243 g at ±256
+LOW_G_NEAR_RAIL_LSB = int((16.0 - 0.5) / 16.0 * 32768)        # 31744, the #1191 switch bar
+
+# #1214 (squash commit on main) changed what the flight loop hands the EKF:
+# the drain-window MEAN of every sample since the last tick, stamped at the
+# window centre, instead of the newest drained sample.  A log written before
+# it is only reproduced by --imu-feed newest; the version guard says which.
+MEAN_FEED_COMMIT = "60efb324"
+
 
 # Firmware pad heading (flight_computer/main/config.h: PAD_HEADING_DEG).
 PAD_HEADING_DEG = 0.0
@@ -333,13 +354,24 @@ def check_ekf_version(binary_file):
               "branch?) — cannot verify EKF skew.")
         return {"fw_sha": fw_sha, "fw_dirty": fw_dirty, "matched": None}
 
+    # Which IMU feed wrote this log (see MEAN_FEED_COMMIT).
+    rc_feed, _ = _git("merge-base", "--is-ancestor", MEAN_FEED_COMMIT, fw_sha)
+    mean_feed = None if rc_feed is None else (rc_feed == 0)
+    if mean_feed is True:
+        print("     IMU feed of that firmware: drain-window MEAN (#1214) — "
+              "replay with --imu-feed mean (the default)")
+    elif mean_feed is False:
+        print("     IMU feed of that firmware: NEWEST drained sample (pre-#1214) — "
+              "replay with --imu-feed newest to reproduce it")
+
     # git diff <sha> -- <files>: lists EKF sources that differ between the
     # firmware's commit and the working tree the extension was built from.
     _, out = _git("diff", "--name-only", fw_sha, "--", *_EKF_SRC)
     differ = [ln for ln in out.splitlines() if ln.strip()]
     if not differ:
         print(f"     EKF source matches that commit — VERSION-MATCHED.{dirty_note}")
-        return {"fw_sha": fw_sha, "fw_dirty": fw_dirty, "matched": True}
+        return {"fw_sha": fw_sha, "fw_dirty": fw_dirty, "matched": True,
+                "mean_feed": mean_feed}
     print("     *** EKF SOURCE DIFFERS from the firmware's commit — SKEW ***")
     for ln in differ:
         print(f"        changed: {ln}")
@@ -349,14 +381,141 @@ def check_ekf_version(binary_file):
           + " ".join(_EKF_SRC))
     print("     then rebuild the extension "
           "(cd tinkerrocket-sim && TR_SKIP_GUIDANCE=1 python setup.py build_ext --inplace).")
-    return {"fw_sha": fw_sha, "fw_dirty": fw_dirty, "matched": False}
+    return {"fw_sha": fw_sha, "fw_dirty": fw_dirty, "matched": False,
+            "mean_feed": mean_feed}
 
 
-def replay(binary_file, plot_dir=None, align_baro=True):
+def _sensor_xy(x, y, rot_z_deg):
+    """Board-frame X/Y back to the chip's own axes — the inverse of the
+    converter's Z rotation (ISM6HG256_ROT_Z_DEG).  The firmware judges every
+    rail per SENSOR axis on raw counts; with the -45° mount a single-axis rail
+    reads 0.71× on two board axes and a body-frame test never sees it."""
+    c = math.cos(math.radians(rot_z_deg))
+    s = math.sin(math.radians(rot_z_deg))
+    return x * c + y * s, -x * s + y * c
+
+
+def _attach_raw_counts(records, config):
+    """Recover each IMU record's logged int16 counts from the parser's SI values
+    (the same inverse #1191's replay_imu_drain uses, round-trip checked) and hang
+    them on the record as `_raw` = (lx, ly, lz, hx, hy, hz, gx, gy, gz).  The
+    shock-gate verdicts are then judged exactly as the drain window judges them:
+    per sensor axis, in LSB, against the firmware's bars.  Returns False (and
+    attaches nothing) when the inverse cannot be trusted, in which case the
+    verdicts fall back to the SI per-sensor-axis test."""
+    imu = records.get("ISM6HG256") or []
+    if not imu:
+        return False
+    try:
+        from replay_imu_drain import conversion_matrices, recover_raw
+        cm = conversion_matrices(config)
+        raw = recover_raw(imu, cm)          # sys.exit()s if the round trip fails
+    except (ImportError, KeyError, TypeError, ValueError, SystemExit) as e:
+        print(f"  raw-count recovery unavailable ({e}); shock-gate verdicts from SI values")
+        return False
+    for r, row in zip(imu, raw):
+        r["_raw"] = row
+    return True
+
+
+def _ekf_imu_from_window(win, rec, rot_z_deg, imu_feed, shock_gate, si_bars):
+    """The EKF's IMU input for one tick, from every logged sample since the
+    previous tick (`win`, ending in `rec`).
+
+    imu_feed="mean"   — firmware since #1214: the window mean of every channel,
+                        stamped at the window centre; the low-g/high-g switch
+                        on the window's WORST sample per sensor axis.
+    imu_feed="newest" — firmware before #1214: this sample alone, the switch
+                        on its body-frame values at 15.5 g.
+    The #1190 shock-gate verdicts — a gyro or high-g accelerometer SENSOR axis
+    at its rail in any sample of the window — are judged in both modes, on the
+    recovered raw counts when `_raw` is attached (the firmware's own LSB bars)
+    and otherwise on SI values un-rotated to the sensor axes against
+    `si_bars` = (gyro_rail_dps, accel_rail_mps2).  Not raised when the gate
+    is off.
+    """
+    lg_rail = gy_rail = hg_rail = False
+    gyro_rail_dps, accel_rail_mps2 = si_bars
+    for r in win:
+        raw = r.get("_raw")
+        if raw is not None:
+            a = [abs(int(v)) for v in raw]
+            if max(a[0:3]) > LOW_G_NEAR_RAIL_LSB:
+                lg_rail = True
+            if max(a[6:9]) >= GYRO_RAIL_LSB:
+                gy_rail = True
+            if max(a[3:6]) >= ACCEL_RAIL_LSB:
+                hg_rail = True
+            continue
+        sx, sy = _sensor_xy(r["low_acc_x"], r["low_acc_y"], rot_z_deg)
+        if max(abs(sx), abs(sy), abs(r["low_acc_z"])) > LOW_G_SAT_THRESH:
+            lg_rail = True
+        gx, gy = _sensor_xy(r["gyro_x"], r["gyro_y"], rot_z_deg)
+        if max(abs(gx), abs(gy), abs(r["gyro_z"])) >= gyro_rail_dps:
+            gy_rail = True
+        hx, hy = _sensor_xy(r["high_acc_x"], r["high_acc_y"], rot_z_deg)
+        if max(abs(hx), abs(hy), abs(r["high_acc_z"])) >= accel_rail_mps2:
+            hg_rail = True
+
+    if imu_feed == "mean":
+        n = float(len(win))
+        def mean(k):
+            return sum(r[k] for r in win) / n
+        lx, ly, lz = mean("low_acc_x"), mean("low_acc_y"), mean("low_acc_z")
+        hx, hy, hz = mean("high_acc_x"), mean("high_acc_y"), mean("high_acc_z")
+        gx, gy, gz = mean("gyro_x"), mean("gyro_y"), mean("gyro_z")
+        t0, t1 = win[0]["time_us"], win[-1]["time_us"]
+        stamp = t0 + (t1 - t0) // 2
+        near_rail = lg_rail
+    else:
+        lx, ly, lz = rec["low_acc_x"], rec["low_acc_y"], rec["low_acc_z"]
+        hx, hy, hz = rec["high_acc_x"], rec["high_acc_y"], rec["high_acc_z"]
+        gx, gy, gz = rec["gyro_x"], rec["gyro_y"], rec["gyro_z"]
+        stamp = rec["time_us"]
+        near_rail = (abs(lx) > LOW_G_SAT_THRESH or abs(ly) > LOW_G_SAT_THRESH
+                     or abs(lz) > LOW_G_SAT_THRESH)
+
+    ax, ay, az = (hx, hy, hz) if near_rail else (lx, ly, lz)
+
+    # Board frame (FLU) → EKF body frame (FRD)
+    imu_d = IMUData()
+    imu_d.time_us = stamp
+    imu_d.acc_x = ax               # X same
+    imu_d.acc_y = -ay              # FLU Y=Left → FRD Y=Right
+    imu_d.acc_z = -az              # FLU Z=Up → FRD Z=Down
+    imu_d.gyro_x = gx              # deg/s — the EKF converts internally
+    imu_d.gyro_y = -gy             # FLU→FRD
+    imu_d.gyro_z = -gz             # FLU→FRD
+    imu_d.gyro_railed = bool(shock_gate and gy_rail)
+    imu_d.accel_railed = bool(shock_gate and hg_rail)
+    return imu_d
+
+
+def _spans(t_us, flag):
+    """Contiguous runs where `flag` is true, as (start_us, end_us) pairs."""
+    spans = []
+    start = None
+    for t, f in zip(t_us, flag):
+        if f and start is None:
+            start = t
+        elif not f and start is not None:
+            spans.append((start, t))
+            start = None
+    if start is not None:
+        spans.append((start, t_us[-1]))
+    return spans
+
+
+def replay(binary_file, plot_dir=None, align_baro=True, imu_feed="mean",
+           shock_gate=True):
     mode = ("aligned baro+GNSS frame (the FIX)" if align_baro
             else "pad-relative baro (firmware behaviour, the BUG)")
+    if imu_feed not in ("mean", "newest"):
+        raise ValueError(f"imu_feed must be 'mean' or 'newest', not {imu_feed!r}")
     print(f"Parsing: {binary_file}")
     print(f"  Baro frame mode: {mode}")
+    print(f"  IMU feed: {'drain-window MEAN (firmware since #1214)' if imu_feed == 'mean' else 'NEWEST drained sample (firmware before #1214)'}")
+    print(f"  Shock gate (#1190): {'ON' if shock_gate else 'OFF (pre-fix filter)'}")
     records, stats, config = parse_binary_file(str(binary_file))
     print(f"  Frames: {stats['good_crc']:,} good, {stats['bad_crc']} bad CRC")
     # Mag: old PCB logs MMC5983MA, new PCB logs IIS2MDC — only one is populated.
@@ -402,6 +561,26 @@ def replay(binary_file, plot_dir=None, align_baro=True):
     ekf = GpsInsEKF()
     ekf_initialized = False
     next_ekf_us = None          # firmware-rate EKF clock (see ekf_rate_hz above)
+
+    # #1190: the shock gate's settle window as the FC configures it at boot
+    # (config.h EKF_SHOCK_SETTLE_MS); the saturation verdicts are judged per
+    # sensor axis in _ekf_imu_from_window, on recovered raw counts when the
+    # parser's conversion inverts cleanly.  Gate off = no verdict is ever raised.
+    ekf.set_shock_gate_settle(SHOCK_SETTLE_MS * 1000)
+    gyro_fs_dps = float(config.get("gyro_fs_dps") or 4000)
+    high_g_fs_g = float(config.get("high_g_fs_g") or 256)
+    si_bars = (SHOCK_GYRO_RAIL_FRAC * gyro_fs_dps,
+               SHOCK_ACCEL_RAIL_FRAC * high_g_fs_g * G_MS2)
+    if shock_gate:
+        have_raw = _attach_raw_counts(records, config)
+        print(f"  Shock gate bars (per sensor axis): gyro ≥ {GYRO_RAIL_LSB} LSB "
+              f"({si_bars[0]:.0f} dps), high-g accel ≥ {ACCEL_RAIL_LSB} LSB "
+              f"({SHOCK_ACCEL_RAIL_FRAC * high_g_fs_g:.0f} g), settle {SHOCK_SETTLE_MS} ms; "
+              f"verdicts from {'recovered raw counts' if have_raw else 'SI values'}")
+    rot_z_deg = float(config["ism6_rot_z_deg"]) if config.get("ism6_rot_z_deg") is not None else -45.0
+    imu_win = []                # every logged IMU sample since the last EKF tick
+    tick_t = []                 # per EKF tick: stamp and whether the gate held
+    tick_held = []
     # Firmware flight state, tracked from the log (drives the AHRS accel gate).
     # Default to a non-INFLIGHT state so a log with no NonSensor records behaves
     # like the pad — AHRS on — rather than silently disabling the gravity update.
@@ -443,6 +622,7 @@ def replay(binary_file, plot_dir=None, align_baro=True):
     log_cov_pos = []
     log_cov_vel = []
     log_cov_att = []
+    log_held = []               # #1190: the gate was holding at this sample
 
     # GNSS truth arrays
     gnss_log_time = []
@@ -538,30 +718,19 @@ def replay(binary_file, plot_dir=None, align_baro=True):
             if latest_gnss is None:
                 continue  # Need at least one GNSS fix before init
 
-            # Select accel source (low-g or high-g based on saturation)
-            lx = rec["low_acc_x"]
-            ly = rec["low_acc_y"]
-            lz = rec["low_acc_z"]
-            if (abs(lx) > LOW_G_SAT_THRESH or
-                abs(ly) > LOW_G_SAT_THRESH or
-                abs(lz) > LOW_G_SAT_THRESH):
-                ax_board = rec["high_acc_x"]
-                ay_board = rec["high_acc_y"]
-                az_board = rec["high_acc_z"]
-            else:
-                ax_board = lx
-                ay_board = ly
-                az_board = lz
-
-            # Board frame (FLU) → EKF body frame (FRD)
-            imu_d = IMUData()
-            imu_d.time_us = time_us
-            imu_d.acc_x = ax_board           # X same
-            imu_d.acc_y = -ay_board           # FLU Y=Left → FRD Y=Right
-            imu_d.acc_z = -az_board           # FLU Z=Up → FRD Z=Down
-            imu_d.gyro_x = rec["gyro_x"]      # X same (dps → the EKF converts internally?)
-            imu_d.gyro_y = -rec["gyro_y"]      # FLU→FRD
-            imu_d.gyro_z = -rec["gyro_z"]      # FLU→FRD
+            # Every logged sample lands in the window.  The EKF runs on the
+            # firmware's CLOCK (ekf_rate_hz — logged since #529, constant
+            # fallback before), and at each tick is handed the window's MEAN
+            # (--imu-feed mean, firmware since #1214) or just the newest sample
+            # (newest, the 1-in-N pick of the firmware before it).  The #1190
+            # shock-gate verdicts come from every sample of the window either
+            # way, as the FC drain loop's do.
+            imu_win.append(rec)
+            if ekf_initialized and (next_ekf_us is not None) and (time_us < next_ekf_us):
+                continue
+            imu_d = _ekf_imu_from_window(imu_win, rec, rot_z_deg, imu_feed,
+                                         shock_gate, si_bars)
+            imu_win = []
 
             # Prepare GNSS data (LLA path)
             gnss_d = GNSSDataLLA()
@@ -655,13 +824,7 @@ def replay(binary_file, plot_dir=None, align_baro=True):
                       f"declination={math.degrees(decl_rad):.2f}°")
                 continue
 
-            # Run the EKF on the firmware's CLOCK, not on every logged IMU sample
-            # (see ekf_rate_hz — logged since #529, constant fallback before). The
-            # firmware feeds it the newest sample at that cadence and never sees
-            # the rest, so this drops the intervening samples exactly as the
-            # flight loop does — imu_d here is already the latest one.
-            if (next_ekf_us is not None) and (time_us < next_ekf_us):
-                continue
+            # This is an EKF tick (the window gate above let it through).
             next_ekf_us = time_us + ekf_period_us
 
             # #514: AHRS accel gate — follow the LOGGED flight state.
@@ -690,13 +853,16 @@ def replay(binary_file, plot_dir=None, align_baro=True):
 
             ekf.update_lla(use_ahrs_acc, imu_d, gnss_d, mag_d)
             n_imu += 1
+            tick_t.append(time_us)
+            tick_held.append(ekf.shock_gate_held())
 
             if gnss_d.time_us != last_gnss_time_us:
                 n_gnss_updates += 1
                 last_gnss_time_us = gnss_d.time_us
 
-            # Log EKF output (every 20th sample ≈ 100 Hz)
-            if n_imu % 20 == 0:
+            # Log EKF output (every 5th tick ≈ 100 Hz — a 120 ms shock burst
+            # needs more than the 3 points a 25 Hz log would give it)
+            if n_imu % 5 == 0:
                 log_time_us.append(time_us)
                 pos = ekf.get_position()
                 vel = ekf.get_velocity()
@@ -723,9 +889,20 @@ def replay(binary_file, plot_dir=None, align_baro=True):
                 log_cov_pos.append(cp)
                 log_cov_vel.append(cv)
                 log_cov_att.append(ca)
+                log_held.append(ekf.shock_gate_held())
 
     print(f"\n  Processed: {n_imu:,} IMU updates, {n_gnss_updates} GNSS updates, "
           f"{n_baro_updates} baro updates")
+
+    # ── #1190 shock gate: what it did ──
+    hold_spans = _spans(tick_t, tick_held)
+    shock_trips = ekf.shock_gate_trips()
+    shock_hold_ticks = ekf.shock_gate_hold_ticks()
+    print(f"\n  ── Shock gate (#1190): {shock_trips} trips, attitude held "
+          f"{shock_hold_ticks} ticks in {len(hold_spans)} span(s) ──")
+    for a, b in hold_spans:
+        print(f"     held t={(a - t0_us) / 1e6:8.3f}s .. {(b - t0_us) / 1e6:8.3f}s "
+              f"({(b - a) / 1e3:.0f} ms)")
 
     # Show the achieved EKF rate against the firmware's, so a rate mismatch is
     # visible rather than inferred — it is the single easiest way to make this
@@ -740,6 +917,7 @@ def replay(binary_file, plot_dir=None, align_baro=True):
 
     # ---- Convert to numpy ----
     t_ekf = (np.array(log_time_us) - t0_us) / 1e6
+    held_arr = np.array(log_held, dtype=bool)
     ekf_lat = np.array(log_ekf_lat)
     ekf_lon = np.array(log_ekf_lon)
     ekf_alt = np.array(log_ekf_alt)
@@ -796,6 +974,7 @@ def replay(binary_file, plot_dir=None, align_baro=True):
             inside = (t_r >= t_ns[0]) & (t_r <= t_ns[-1])
             if inside.any():
                 div = div[inside]
+                div_t = (t_r[inside] - t0_us) / 1e6
                 fidelity = {
                     "mean_deg": float(div.mean()),
                     "max_deg": float(div.max()),
@@ -836,6 +1015,27 @@ def replay(binary_file, plot_dir=None, align_baro=True):
     if fidelity is None:
         print("\n  ── Replay fidelity: no logged quaternion in this file "
               "(legacy log) — replay is UNVERIFIED ──")
+        div_t, div = np.array([]), np.array([])
+
+    # #1190: the replay's pitch across each hold span, against what the
+    # firmware logged there.  Pitch here is the elevation of body +X.
+    def _logged_pitch_at(tt):
+        r = _nearest_nonsensor(records, t0_us + int(tt * 1e6))
+        if r is None:
+            return float("nan")
+        q = np.array([r["q0"], r["q1"], r["q2"], r["q3"]], dtype=float)
+        q /= np.linalg.norm(q)
+        v = max(-1.0, min(1.0, 2.0 * (q[0] * q[2] - q[1] * q[3])))
+        return math.degrees(math.asin(v))
+    for a, b in hold_spans:
+        ta, tb = (a - t0_us) / 1e6, (b - t0_us) / 1e6
+        def _pitch_at(tt):
+            return ekf_pitch[int(np.argmin(np.abs(t_ekf - tt)))]
+        print(f"     hold {ta:8.3f}..{tb:8.3f}s: replay pitch "
+              f"{_pitch_at(ta - 0.02):6.1f}° before → {_pitch_at(tb):6.1f}° at release "
+              f"→ {_pitch_at(tb + 0.1):6.1f}° +100 ms   | firmware logged "
+              f"{_logged_pitch_at(ta - 0.02):6.1f}° → {_logged_pitch_at(tb):6.1f}° → "
+              f"{_logged_pitch_at(tb + 0.1):6.1f}°")
 
     t_gnss = (np.array(gnss_log_time) - t0_us) / 1e6
     g_lat = np.array(gnss_log_lat)
@@ -954,15 +1154,25 @@ def replay(binary_file, plot_dir=None, align_baro=True):
 
     # --- Fig 3: Attitude + gyro bias ---
     fig, axes = plt.subplots(4, 1, figsize=(14, 12), sharex=True)
-    fig.suptitle('Flight Replay: EKF Attitude & Gyro Bias', fontsize=14, fontweight='bold')
+    gate_note = (f"shock gate ON: {shock_trips} trips, {len(hold_spans)} hold span(s)"
+                 if shock_gate else "shock gate OFF")
+    fig.suptitle(f'Flight Replay: EKF Attitude & Gyro Bias  [{imu_feed} feed, {gate_note}]',
+                 fontsize=14, fontweight='bold')
+
+    def shade_holds(ax):
+        for k, (a, b) in enumerate(hold_spans):
+            ax.axvspan((a - t0_us) / 1e6, (b - t0_us) / 1e6, color='magenta',
+                       alpha=0.25, label='Shock-gate hold' if k == 0 else None)
 
     axes[0].plot(t_ekf, ekf_roll, '-', lw=1, color='C0')
     axes[0].set_ylabel('Roll (deg)'); axes[0].grid(True, alpha=0.3)
-    shade_phases(axes[0])
+    shade_phases(axes[0]); shade_holds(axes[0])
 
     axes[1].plot(t_ekf, ekf_pitch, '-', lw=1, color='C1')
     axes[1].set_ylabel('Pitch (deg)'); axes[1].grid(True, alpha=0.3)
-    shade_phases(axes[1])
+    shade_phases(axes[1]); shade_holds(axes[1])
+    if hold_spans:
+        axes[1].legend(fontsize=9)
 
     axes[2].plot(t_ekf, ekf_yaw, '-', lw=1, color='C2')
     axes[2].set_ylabel('Yaw (deg)'); axes[2].grid(True, alpha=0.3)
@@ -1012,6 +1222,21 @@ def replay(binary_file, plot_dir=None, align_baro=True):
     print(f"\nPlots saved to {plot_dir}/")
     return {
         "align_baro": align_baro,
+        "imu_feed": imu_feed,
+        "shock_gate": shock_gate,
+        # #1190: what the gate did — trips, held ticks, the hold spans in
+        # absolute time_us, and the per-log-sample held flag.
+        "shock_trips": shock_trips,
+        "shock_hold_ticks": shock_hold_ticks,
+        "hold_spans": hold_spans,
+        "held": held_arr,
+        "ekf_pitch": ekf_pitch,
+        "ekf_roll": ekf_roll,
+        "ekf_q": np.array(log_ekf_q),
+        # #514 divergence-vs-time series behind `fidelity` (empty on a legacy log).
+        "div_t": div_t,
+        "div_deg": div,
+        "t0_us": t0_us,
         # #514: None for legacy logs (no quaternion). A FAIL here means every other
         # number in this dict is describing a replay, not the firmware.
         "fidelity": fidelity,
@@ -1042,10 +1267,22 @@ if __name__ == "__main__":
     parser.add_argument("--emulate-firmware-baro", action="store_true",
                         help="Feed pad-relative baro (no GNSS-frame offset) to "
                              "reproduce the firmware bug at main.cpp:2812.")
+    parser.add_argument("--imu-feed", choices=("mean", "newest"), default="mean",
+                        help="What each EKF tick is handed: the drain-window MEAN "
+                             "(firmware since #1214, default) or the newest drained "
+                             "sample (firmware before it). The version guard says "
+                             "which one wrote the log.")
+    parser.add_argument("--no-shock-gate", action="store_true",
+                        help="Run the pre-#1190 filter: integrate a saturated gyro / "
+                             "accelerometer axis as if it were a measurement.")
+    parser.add_argument("--no-open", action="store_true",
+                        help="Do not open the plots when done.")
     args = parser.parse_args()
 
     result = replay(Path(args.binary_file), args.plot_dir,
-                    align_baro=not args.emulate_firmware_baro)
+                    align_baro=not args.emulate_firmware_baro,
+                    imu_feed=args.imu_feed, shock_gate=not args.no_shock_gate)
 
-    import subprocess
-    subprocess.run(["open"] + [str(p) for p in result["plots"]])
+    if not args.no_open:
+        import subprocess
+        subprocess.run(["open"] + [str(p) for p in result["plots"]])

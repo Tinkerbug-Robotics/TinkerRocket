@@ -47,6 +47,32 @@ namespace imu_drain
         return (int32_t)(((fs_g - margin_g) / fs_g) * 32768.0f);
     }
 
+    // #1190: the two saturation bars behind the EKF's shock gate, in raw LSB
+    // and per SENSOR axis — saturation is a per-axis property of the chip, and
+    // the mount puts the chip at 45 deg to the thrust axis, so a body-frame
+    // magnitude sits well above any axis (the low-g reads 15.5 g of magnitude
+    // with 11 g on each of two axes).  Nothing below the rail is gated: a
+    // value inside the sensor's range is a measurement, on any rocket.
+    //
+    // The ST gyro does NOT map its full scale onto the int16 span: it has a
+    // fixed 0.035 mdps/LSB per dps of full scale (SensorConverter, #369), so
+    // the NOMINAL full scale is the same count at every FS setting,
+    // 1 / 0.035e-3 = 28571 LSB, and the int16 rail (32767) sits at 114.7 %
+    // of it.  `fraction` of nominal FS, e.g. 0.95 -> 27142 LSB = 3800 dps at
+    // +-4000.  The 2026-08-29 nose burst peaked at 32086 LSB (4492 dps).
+    constexpr int32_t gyroFsFractionLsb(float fraction)
+    {
+        return (int32_t)(fraction * (1.0f / 0.035e-3f));
+    }
+
+    // The accelerometers map their full scale onto the int16 span (FS / 32768
+    // per LSB), so a fraction of FS is the same count at every FS setting:
+    // 0.95 -> 31129 LSB, 243 g on the +-256 g high-g channel.
+    constexpr int32_t accelFsFractionLsb(float fraction)
+    {
+        return (int32_t)(fraction * 32768.0f);
+    }
+
     // Integer mean rounded half away from zero.  The mean of int16 samples is
     // itself within int16 range, so the result needs no clamp.
     inline int16_t roundedMean(int32_t sum, uint32_t n)
@@ -106,6 +132,21 @@ struct ImuDrainWindow
     bool lowGNearRail(int32_t thresh_lsb) const
     {
         return anyAbove(max_lg, thresh_lsb);
+    }
+
+    // #1190: the same question for the gyro and the high-g accelerometer —
+    // the shock gate's two criteria, and the only place they are judged.
+    // On the window's worst sample per sensor axis for the reason above: the
+    // EKF is handed the mean, and the mean of a burst that touched the rail on
+    // a few samples sits far below it (the 2026-08-29 burst had 21 samples
+    // over 3800 dps in ~940).
+    bool gyroAbove(int32_t thresh_lsb) const
+    {
+        return anyAbove(max_gy, thresh_lsb);
+    }
+    bool highGAbove(int32_t thresh_lsb) const
+    {
+        return anyAbove(max_hg, thresh_lsb);
     }
 
     static bool anyAbove(const int32_t (&mx)[3], int32_t thresh_lsb)

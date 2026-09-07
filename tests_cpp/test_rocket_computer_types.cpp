@@ -40,7 +40,7 @@ TEST(RocketComputerTypes, KnownSizes) {
     // written before #850, and Data_Analysis dispatches POWER on exactly these
     // two sizes.
     EXPECT_EQ(SIZE_OF_POWER_DATA_V1,  10u);
-    EXPECT_EQ(sizeof(NonSensorData),  50u);  // #529: +uint16 ekf_ticks (2 B)
+    EXPECT_EQ(sizeof(NonSensorData),  52u);  // #1190: +uint16 shock_gate_trips (2 B) after #529's ekf_ticks
     EXPECT_EQ(sizeof(LoRaFrameHeader), 7u);   // #850: shared prefix, both frames
     EXPECT_EQ(sizeof(LoRaFastData),   55u);  // #850: 5-of-6 slots
     EXPECT_EQ(sizeof(LoRaSlowData),   22u);  // #850: 1-of-6 slots
