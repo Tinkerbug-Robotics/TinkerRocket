@@ -787,6 +787,22 @@ target_include_directories(test_oc_cmd_session_gate PRIVATE
 target_link_libraries(test_oc_cmd_session_gate GTest::gtest_main)
 gtest_discover_tests(test_oc_cmd_session_gate)
 
+# ---------- test_oc_cmd_dedup (#1112) ----------
+# The FC's OC-command dedup key and config-retry budget. The dispatch block
+# runs only on the pass that polled, so a config handler's "retry on next
+# poll" re-arms it for the next poll rather than the next ~1 ms loop pass
+# (which used to re-run readConfigFrame() at ~26 Hz against the same stale
+# mirror, and forever once a real INFLIGHT stopped the poll); each served
+# command gets CFG_RETRY_LIMIT retries. Pure header beside oc_cmd_session_gate.h.
+add_executable(test_oc_cmd_dedup test_oc_cmd_dedup.cpp)
+target_include_directories(test_oc_cmd_dedup PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_oc_cmd_dedup GTest::gtest_main)
+gtest_discover_tests(test_oc_cmd_dedup)
+
 # ---------- test_mram_dirty_policy ----------
 # Host-side test for the #417 sink-mode dirty-marker gate: the marker means
 # "logging was activated" (launch detect / manual cmd-23 start), not "a log

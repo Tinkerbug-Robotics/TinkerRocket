@@ -87,7 +87,9 @@ the flight logic inside is gated to `FLIGHT_LOOP_UPDATE_RATE` (1000 Hz).
    pre-flight states and then *freezes* at `PRELAUNCH` — see Gotchas.
 4. **Update the EKF** (every other pass, so 500 Hz).
 5. **Poll the Out Computer over I2C** for a pending command — skipped in flight.
-6. **Dispatch that command** — roughly 60 handlers, the largest block in the file.
+6. **Dispatch that command** — roughly 60 handlers, the largest block in the file. It
+   runs only on a pass that polled: it is the tail of the poll transaction, so between
+   polls, and for the whole of a real flight, it is a no-op.
 7. **Run kinematic checks**: launch, apogee, and landing detection with per-sensor health
    feeding an adaptive quorum.
 8. **Run the state machine**, including pyro servicing and the control law.
@@ -243,6 +245,17 @@ each command across several polls for I2C reliability, and that field mirrors wh
 is currently reporting. Clearing it at dispatch makes the reset fire between polls and
 every repeat re-executes the command. The dedup key is `last_processed_cmd`, and it
 resets only when the OC actually reports 0.
+
+**A config retry means the next poll, not the next loop pass.** A config handler that
+finds no config frame in the read clears the dedup key so that the OC's next delivery —
+which re-stages the frame — gets another attempt. That only works because the dispatch
+block runs solely on the pass that polled. `out_pending_command` is written by nothing but
+the poll, so a dispatch that ran on every pass re-fired about a millisecond later against
+the same stale bytes and spent ~38 ms per pass inside `readConfigFrame()` — a ~26 Hz
+flight loop for the rest of the OC's repeat window, and for the rest of the flight once a
+real `INFLIGHT` stopped the poll (#1112). Each served command also gets a retry budget of
+three; after that the key keeps the command until the OC reports 0, so a frame the OC
+dropped, or an OC that stopped answering, cannot be re-read forever.
 
 **Attitude drifts on the pad and that is not a bug.** Sitting vertical puts the vehicle
 at an Euler-angle singularity, so roll and yaw trade off against each other freely while

@@ -44,6 +44,7 @@
 #include "sim_flight_policy.h"   // #1104: sim edge rule + latched dry-fire predicate (TR_Sensor_Collector_Sim)
 #include "oc_cmd_session_gate.h" // #1105: no replay of one-shot commands across an FC boot
 #include "fc_ota_session_policy.h" // #1116: the FC's own exit from an OTA image session nobody ends
+#include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
 #include <esp_private/gpio.h>      // gpio_func_sel
@@ -335,7 +336,11 @@ static GroundRefFreeze::State ground_ref_freeze;   // #1108
 static bool out_ready = false;
 static uint32_t out_ready_request_time_ms = 0;
 static uint8_t out_pending_command = 0U;
-static uint8_t last_processed_cmd = 0U;  // dedup: ignore OutComputer repeats
+// #1112: the dedup key (last_processed_cmd: ignore the OC's repeat deliveries)
+// and the per-command config-retry budget.  The dispatch runs only on the
+// pass that polled, and a config handler's "retry on next poll" re-arms it
+// for the next POLL, never the next loop pass (see oc_cmd_dedup.h).
+static OcCmdDedup oc_cmd_dedup;
 // #1105: a one-shot actuating command is executed only on a 0 -> cmd edge
 // observed THIS boot; one already being served when the FC came up belongs
 // to the previous session and is refused (see oc_cmd_session_gate.h).
@@ -1027,6 +1032,29 @@ static bool readConfigFrame(uint8_t expected_type,
 
     payload_len_out = 0;
     return false;
+}
+
+// #1112: a config-pending handler found no config frame in this poll's read.
+// Re-arm the dispatch for the NEXT poll — never the next loop pass — while
+// the per-command retry budget lasts, and log which.  The OC re-stages the
+// frame on each of its repeat deliveries, so the next poll's combined read is
+// a genuine second chance; re-reading the same staged bytes ~1 ms later, as
+// the old `last_processed_cmd = 0` at every call site did, was not (see
+// oc_cmd_dedup.h for the storm that caused).
+static void cfgRetryOnNextPoll(const char* what)
+{
+    if (oc_cmd_dedup.armRetry())
+    {
+        ESP_LOGW(TAG, "[%s] Config not in this read, will retry on next poll (%u/%u)",
+                 what, (unsigned)oc_cmd_dedup.retries,
+                 (unsigned)OcCmdDedup::CFG_RETRY_LIMIT);
+    }
+    else
+    {
+        ESP_LOGW(TAG, "[%s] Config not in this read and the retry budget (%u) is "
+                      "spent — giving up until the OC clears the command (#1112)",
+                 what, (unsigned)OcCmdDedup::CFG_RETRY_LIMIT);
+    }
 }
 
 // ── Pyro channel helpers ─────────────────────────────────────────────────────
@@ -5877,12 +5905,16 @@ static void loop_fc()
         const bool recovery_poll_window =
             recovery_gate_active &&
             recovery_arm_state.verdict == RecoveryArmGate::Verdict::Locked;
+        // #1112: the command dispatch below runs only on a pass that polled —
+        // it is the tail of this poll transaction, not a free-running block.
+        bool oc_polled = false;
         if ((rocket_state != INFLIGHT || sensor_collector.isSimActive() ||
              recovery_poll_window)
             && (now_ms - out_ready_request_time_ms) > 250U
             && (int32_t)(now_ms - i2c_resync_grace_until_ms) >= 0)
         {
             out_ready_request_time_ms = now_ms;
+            oc_polled = true;
 
             xSemaphoreTake(i2c_bus_mutex, portMAX_DELAY);
 
@@ -6035,21 +6067,25 @@ static void loop_fc()
         // ==========================================================================
         // SECTION: Command dispatch from the Out Computer
         // ==========================================================================
-        // Dedup: OutComputer repeats each command for 5 polls for I2C
-        // reliability.  Process only the first delivery.  out_pending_command
-        // mirrors the OC's reported command (set every poll above, including 0),
-        // so it stays non-zero for the whole repeat window — we must NOT clear
-        // it at dispatch, or the reset below would fire between polls and every
-        // repeat would re-execute.  last_processed_cmd resets only when the OC
-        // actually reports 0 (repeat window done), freeing the same command to
-        // be issued again later.
-        if (out_pending_command == 0U)
+        // Dedup: OutComputer repeats each command for several polls
+        // (CMD_REPEAT_LIMIT) for I2C reliability.  Process only the first
+        // delivery.  out_pending_command mirrors the OC's reported command (set
+        // every poll above, including 0), so it stays non-zero for the whole
+        // repeat window — we must NOT clear it at dispatch, or the reset would
+        // fire between polls and every repeat would re-execute.  The dedup key
+        // (oc_cmd_dedup.last_processed_cmd) resets only when the OC actually
+        // reports 0 (repeat window done), freeing the same command to be issued
+        // again later.
+        //
+        // #1112: the whole block runs only on a pass that polled (oc_polled).
+        // The mirror is written only by the poll, so between polls nothing here
+        // can change — and a config handler's "retry on next poll" (which
+        // clears the key) used to re-fire on the very next ~1 ms pass against
+        // the same stale bytes, ~38 ms of readConfigFrame() per pass, until the
+        // OC cleared the command — or forever, once the poll had stopped (real
+        // INFLIGHT, the #402 quiet window).  See oc_cmd_dedup.h.
+        if (oc_cmd_dedup.take(oc_polled, out_pending_command) != 0U)
         {
-            last_processed_cmd = 0U;  // reset once OutComputer clears
-        }
-        if (out_pending_command != 0U && out_pending_command != last_processed_cmd)
-        {
-            last_processed_cmd = out_pending_command;
             ESP_LOGI(TAG, "[I2C RX] pending_command=0x%02X", (unsigned)out_pending_command);
             if (!oc_cmd_gate.admits(out_pending_command))
             {
@@ -6170,8 +6206,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    last_processed_cmd = 0U;  // retry on next poll
-                    ESP_LOGW(TAG, "[SERVO CFG] Config not in this read, will retry");
+                    cfgRetryOnNextPoll("SERVO CFG");   // #1112
                 }
             }
             else if (out_pending_command == PID_CONFIG_PENDING)
@@ -6202,8 +6237,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    last_processed_cmd = 0U;  // retry on next poll
-                    ESP_LOGW(TAG, "[PID CFG] Config not in this read, will retry");
+                    cfgRetryOnNextPoll("PID CFG");   // #1112
                 }
             }
             else if (out_pending_command == SERVO_CTRL_ENABLE)
@@ -6242,8 +6276,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    last_processed_cmd = 0U;  // retry on next poll
-                    ESP_LOGW(TAG, "[SIM CFG] Config not in this read, will retry");
+                    cfgRetryOnNextPoll("SIM CFG");   // #1112
                 }
             }
             else if (out_pending_command == SIM_START_CMD)
@@ -7350,8 +7383,7 @@ static void loop_fc()
                     }
                     else
                     {
-                        // Config not in this read — allow retry on next poll
-                        last_processed_cmd = 0U;
+                        cfgRetryOnNextPoll("SERVO TEST");   // #1112
                     }
                 }
             }
@@ -7431,8 +7463,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    last_processed_cmd = 0U;  // retry on next poll
-                    ESP_LOGW(TAG, "[ROLL PROF] Config not in this read, will retry");
+                    cfgRetryOnNextPoll("ROLL PROF");   // #1112
                 }
             }
             else if (out_pending_command == ROLL_PROFILE_CLEAR)
@@ -7800,7 +7831,7 @@ static void loop_fc()
                     }
                     else
                     {
-                        last_processed_cmd = 0U;  // retry on next poll
+                        cfgRetryOnNextPoll("SERVO REPLAY");   // #1112
                     }
                 }
             }
@@ -7862,8 +7893,10 @@ static void loop_fc()
         }
 
         // Release exclusive bus access now that the query exchange and any
-        // follow-up config reads (readConfigFrame) are complete.
-        if (i2c_bus_mutex != nullptr && xSemaphoreGetMutexHolder(i2c_bus_mutex) == xTaskGetCurrentTaskHandle())
+        // follow-up config reads (readConfigFrame) are complete.  The take is
+        // in the poll block and #1112 keeps the dispatch on that same pass, so
+        // the give pairs with it by construction.
+        if (oc_polled)
         {
             xSemaphoreGive(i2c_bus_mutex);
         }
