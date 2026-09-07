@@ -467,6 +467,51 @@ extension TelemetryDataTests {
         XCTAssertEqual(TelemetryData.railAmpsDisplay(0.34), "340 mA")
         XCTAssertEqual(TelemetryData.railAmpsDisplay(nil), "—")
     }
+
+    // MARK: - Hold-up capacitor (#1166)
+
+    private func decodeTelemetry(_ json: String) throws -> TelemetryData {
+        try JSONDecoder().decode(TelemetryData.self, from: Data(json.utf8))
+    }
+
+    /// The keys are absent on every board without the sense; that must be
+    /// nil — no verdict — not a verdict.
+    func testHoldup_AbsentKeysDecodeAsNil() throws {
+        let t = try decodeTelemetry(#"{"soc": 85.0, "vol": 7.4}"#)
+        XCTAssertNil(t.scap_voltage)
+        XCTAssertNil(t.holdup_state)
+        XCTAssertNil(t.holdupState)
+        XCTAssertNil(t.holdupAdvisoryText)
+    }
+
+    func testHoldup_PresentKeysDecode() throws {
+        let t = try decodeTelemetry(#"{"vsc": 2.43, "hup": 2}"#)
+        XCTAssertEqual(t.scap_voltage ?? 0, 2.43, accuracy: 0.001)
+        XCTAssertEqual(t.holdupState, .charged)
+        XCTAssertNil(t.holdupAdvisoryText)   // charged has nothing to say
+    }
+
+    /// Only LOW and NO READING produce a line; the charging window is quiet.
+    func testHoldup_AdvisoryOnlyWhenLowOrUnreadable() throws {
+        XCTAssertNil(try decodeTelemetry(#"{"vsc": 0.31, "hup": 1}"#).holdupAdvisoryText)
+        XCTAssertEqual(try decodeTelemetry(#"{"vsc": 0.31, "hup": 3}"#).holdupAdvisoryText,
+                       "Backup cap not charged — 0.31 V")
+        XCTAssertEqual(try decodeTelemetry(#"{"hup": 3}"#).holdupAdvisoryText,
+                       "Backup cap not charged")
+        XCTAssertEqual(try decodeTelemetry(#"{"hup": 4}"#).holdupAdvisoryText,
+                       "Backup cap sense — no reading")
+    }
+
+    /// "hup" is an integer key and must survive float/string drift like the
+    /// rest (#571); an unknown value is no verdict rather than a crash.
+    func testHoldup_StateToleratesDriftAndUnknownValues() throws {
+        XCTAssertEqual(try decodeTelemetry(#"{"hup": "3"}"#).holdupState, .low)
+        XCTAssertEqual(try decodeTelemetry(#"{"hup": 3.0}"#).holdupState, .low)
+        let u = try decodeTelemetry(#"{"hup": 9}"#)
+        XCTAssertEqual(u.holdup_state, 9)
+        XCTAssertNil(u.holdupState)
+        XCTAssertNil(u.holdupAdvisoryText)
+    }
 }
 
 /// #838 item 4 — "szd" (LoRa protocol-mismatch drops) was emitted by the base
@@ -513,46 +558,5 @@ final class SizeDropDecodeTests: XCTestCase {
     func testProtocolMismatchIsNotANetidMismatch() throws {
         let t = try decode(#"{"st":"PRELAUNCH","szd":12}"#)
         XCTAssertNil(t.netid_drops)
-    }
-
-    // MARK: - Hold-up capacitor (#1166)
-
-    /// The keys are absent on every board without the sense; that must be
-    /// nil — no verdict — not a verdict.
-    func testHoldup_AbsentKeysDecodeAsNil() throws {
-        let t = try decode(#"{"soc": 85.0, "vol": 7.4}"#)
-        XCTAssertNil(t.scap_voltage)
-        XCTAssertNil(t.holdup_state)
-        XCTAssertNil(t.holdupState)
-        XCTAssertNil(t.holdupAdvisoryText)
-    }
-
-    func testHoldup_PresentKeysDecode() throws {
-        let t = try decode(#"{"vsc": 2.43, "hup": 2}"#)
-        XCTAssertEqual(t.scap_voltage ?? 0, 2.43, accuracy: 0.001)
-        XCTAssertEqual(t.holdupState, .charged)
-        XCTAssertNil(t.holdupAdvisoryText)   // charged has nothing to say
-    }
-
-    /// Only LOW and NO READING produce a line; the charging window is quiet.
-    func testHoldup_AdvisoryOnlyWhenLowOrUnreadable() throws {
-        XCTAssertNil(try decode(#"{"vsc": 0.31, "hup": 1}"#).holdupAdvisoryText)
-        XCTAssertEqual(try decode(#"{"vsc": 0.31, "hup": 3}"#).holdupAdvisoryText,
-                       "Backup cap not charged — 0.31 V")
-        XCTAssertEqual(try decode(#"{"hup": 3}"#).holdupAdvisoryText,
-                       "Backup cap not charged")
-        XCTAssertEqual(try decode(#"{"hup": 4}"#).holdupAdvisoryText,
-                       "Backup cap sense — no reading")
-    }
-
-    /// "hup" is an integer key and must survive float/string drift like the
-    /// rest (#571); an unknown value is no verdict rather than a crash.
-    func testHoldup_StateToleratesDriftAndUnknownValues() throws {
-        XCTAssertEqual(try decode(#"{"hup": "3"}"#).holdupState, .low)
-        XCTAssertEqual(try decode(#"{"hup": 3.0}"#).holdupState, .low)
-        let u = try decode(#"{"hup": 9}"#)
-        XCTAssertEqual(u.holdup_state, 9)
-        XCTAssertNil(u.holdupState)
-        XCTAssertNil(u.holdupAdvisoryText)
     }
 }
