@@ -158,7 +158,16 @@ final class OTASession: ObservableObject {
         do {
             try await awaitOtaState(.ready, timeout: beginTimeoutS)
         } catch {
-            state = .failed(reason: "Device did not accept OTA_BEGIN within \(Int(beginTimeoutS))s")
+            if let st = device?.otaStatus, st.state == .verifyFailed {
+                // A refused begin is answered, not ignored: verify_failed with
+                // a token (bad_payload, bad_target, inflight_refused — #1106).
+                // The wait fails fast on it, so the timeout wording would both
+                // hide the one thing the firmware said and claim a wait that
+                // never happened. Same shape as the finish handling below.
+                state = .failed(reason: "Device refused OTA_BEGIN: \(st.err ?? "unknown")")
+            } else {
+                state = .failed(reason: "Device did not accept OTA_BEGIN within \(Int(beginTimeoutS))s")
+            }
             return
         }
 

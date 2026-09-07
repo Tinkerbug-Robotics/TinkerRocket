@@ -145,6 +145,25 @@ target_include_directories(test_ekf PRIVATE
 target_link_libraries(test_ekf GTest::gtest_main)
 gtest_discover_tests(test_ekf)
 
+# ---------- test_ekf_gnss_feed (#1107) ----------
+# What the flight loop hands the EKF as its GNSS input each tick: the last
+# accepted fix, held unchanged until a newer one arrives — never a zeroed
+# placeholder under a "consumed" timestamp.  The loop's own consume markers and
+# the filter's dedup disagreed on a frozen-IMU-timestamp tick (the #440 skip
+# returns before the GNSS block) and the filter then fused lat=0/lon=0/vel=0.
+# Pure header in the shared TR_GpsInsEKF component (the mini shares it); the
+# end-to-end cases drive the real filter.
+add_executable(test_ekf_gnss_feed test_ekf_gnss_feed.cpp
+    ${LIB_DIR}/TR_GpsInsEKF/TR_GpsInsEKF.cpp
+)
+target_include_directories(test_ekf_gnss_feed PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GpsInsEKF
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_ekf_gnss_feed GTest::gtest_main)
+gtest_discover_tests(test_ekf_gnss_feed)
+
 # ---------- test_geomag ----------
 # WMM2025 magnetic-declination model (TR_GeoMag), validated against the
 # official NOAA WMM2025_TestValues.txt reference declinations.
@@ -524,6 +543,20 @@ target_include_directories(test_sim_landed_hold PRIVATE
 target_link_libraries(test_sim_landed_hold GTest::gtest_main)
 gtest_discover_tests(test_sim_landed_hold)
 
+# ---------- test_sim_flight_policy ----------
+# #1104: the sim can end while the FC is still INFLIGHT (#971's 30 s give-up),
+# and the FC only acted on the rising edge of isSimActive() — so the pyro
+# dry-fire gate turned off and the I2C command poll stopped, with real
+# ARM/FIRE outputs live on the bench. The edge rule and the latched dry-fire
+# predicate are pure, so they are pinned here rather than trusted.
+add_executable(test_sim_flight_policy test_sim_flight_policy.cpp)
+target_include_directories(test_sim_flight_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Sensor_Collector_Sim
+)
+target_link_libraries(test_sim_flight_policy GTest::gtest_main)
+gtest_discover_tests(test_sim_flight_policy)
+
 # ---------- test_modem_rail_sequence ----------
 # #700: the host drove the LoRa daughterboard's UART while its rail was gated
 # off (floating ground on V8, dead rail on V9 — same phantom feed either way).
@@ -683,6 +716,36 @@ target_include_directories(test_cmd_queue_dedupe_policy PRIVATE
 )
 target_link_libraries(test_cmd_queue_dedupe_policy GTest::gtest_main)
 gtest_discover_tests(test_cmd_queue_dedupe_policy)
+
+# ---------- test_cmd_queue_session_policy (#1105) ----------
+# The OC relay queue and its serving slot outlive the FC, and the slot advances
+# only on polls it receives, so an FC reset inside a repeat window froze it on
+# PYRO_FIRE_TEST and the rebooted FC fired the channel again. When the FC
+# reports a boot, one-shot actuating commands are retired from the slot and the
+# queue; a config sync keeps its order. The ring compaction is the policy.
+add_executable(test_cmd_queue_session_policy test_cmd_queue_session_policy.cpp)
+target_include_directories(test_cmd_queue_session_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_cmd_queue_session_policy GTest::gtest_main)
+gtest_discover_tests(test_cmd_queue_session_policy)
+
+# ---------- test_oc_cmd_session_gate (#1105) ----------
+# The FC half of the same fix: a one-shot actuating command is executed only
+# on a 0 -> cmd edge observed this boot. The OC serves an idle poll between
+# commands, so the only command that can arrive before any idle is one that
+# was already being served when the FC came up. Pure header in the
+# flight_computer project beside baro_gate_policy.h.
+add_executable(test_oc_cmd_session_gate test_oc_cmd_session_gate.cpp)
+target_include_directories(test_oc_cmd_session_gate PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_oc_cmd_session_gate GTest::gtest_main)
+gtest_discover_tests(test_oc_cmd_session_gate)
 
 # ---------- test_mram_dirty_policy ----------
 # Host-side test for the #417 sink-mode dirty-marker gate: the marker means

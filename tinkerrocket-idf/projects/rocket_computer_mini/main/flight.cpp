@@ -13,6 +13,7 @@
 #include "config.h"
 #include "flight.h"
 #include "mini_link.h"
+#include "sim_flight_policy.h"   // #1104: sim edge rule + latched dry-fire predicate (TR_Sensor_Collector_Sim)
 
 #include <TR_NVS.h>
 #include <TR_Sensor_Collector.h>
@@ -21,6 +22,7 @@
 #include <TR_I2C_Interface.h>      // packMessage/unpackMessage statics only — no bus
 #include <TR_Orientation.h>
 #include <TR_GpsInsEKF.h>
+#include <EkfGnssFeed.h>      // #1107: the GNSS input the EKF is handed each tick
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
@@ -334,11 +336,10 @@ static uint32_t ref_pos_count = 0;
 static bool ref_pos_frozen = false;
 static constexpr uint32_t REF_POS_MAX_AGE_MS = 120000; // 2 minutes
 static uint32_t ref_pos_first_time_ms = 0;
-// Last GNSS time_us fed to EKF (avoid double-counting same sample)
-static uint32_t last_gnss_time_us_for_ekf = 0;
-// Duplicate-fix detection: track GPS fix timestamp (second + milli_second).
-static uint8_t  last_gnss_fix_second = 0xFF;
-static uint16_t last_gnss_fix_ms     = 0xFFFF;
+// The GNSS input the EKF is handed on every tick: the last accepted fix, held
+// unchanged until a newer one arrives.  The loop keeps no "consumed" markers of
+// its own — the filter fuses each fix time_us once — see EkfGnssFeed.h (#1107).
+static EkfGnssFeed ekf_gnss_feed;
 static bool landed_actions_done = false;
 
 static bool burnout_detected = false;
@@ -365,6 +366,15 @@ static void applyImuRateForFlightPhase()
 static bool mach_locked_out = false;    // promoted from baro block for apogee voting
 static bool gps_new_for_kc = false;     // new GPS sample available for kinematic checks
 static bool prev_sim_active = false;
+// #1104: true from the sim START edge until the next resetFlightStateForSim().
+// The pyro dry-fire gate and the snapshot's sim stamp key on this (OR'd with
+// isSimActive(), see sim_flight::simulated) rather than on isSimActive()
+// alone: the sim can drop to SIM_IDLE while the flight is still INFLIGHT —
+// #971's 30 s give-up when landing detection never fires — and in the loop
+// pass where that happens servicePyroChannels() runs BEFORE the falling edge
+// is handled, so a sampled isSimActive() reads "live flight" for one tick.  A
+// latch cannot.
+static bool sim_flight_latched = false;
 static Preferences prefs;
 
 // --- Inflight reboot recovery ---
@@ -630,6 +640,15 @@ static void pyroPrelaunchContTest(uint32_t /*now_ms*/)
 // global ARM-pin level from the union of all channel demands.
 static void servicePyroChannels(uint32_t now_ms)
 {
+    // SIM DRY-FIRE gate, decided ONCE per pass and LATCHED for the flight
+    // (#1104): the sim steps its physics inside our IMU read, so on the pass
+    // in which it gives up (#971, flight still INFLIGHT) isSimActive() is
+    // already false here — one tick before the edge handler at the end of the
+    // flight loop resets the flight.  Sampled, that tick would drive real
+    // ARM/FIRE outputs.
+    const bool dry = sim_flight::simulated(sim_flight_latched,
+                                           sensor_collector.isSimActive());
+
     // Detect apogee (N-1 of N voting in TR_KinematicChecks)
     if (!pyro_apogee_detected && kinematics.apogee_flag) {
         pyro_apogee_detected = true;
@@ -698,7 +717,7 @@ static void servicePyroChannels(uint32_t now_ms)
         // channel now" regardless of sim state.
         if (ch.state == PyroChState::ArmSettle &&
             (now_ms - ch.phase_start_ms) >= config::PYRO_ARM_SETTLE_MS) {
-            if (!sensor_collector.isSimActive()) {
+            if (!dry) {
                 gpio_set_level((gpio_num_t)PYRO_FIRE_PINS[i], 1);
             }
             ch.state          = PyroChState::Firing;
@@ -743,11 +762,10 @@ static void servicePyroChannels(uint32_t now_ms)
             break;
         }
     }
-    pyroSetArmLocked(any_demand && !sensor_collector.isSimActive());
+    pyroSetArmLocked(any_demand && !dry);
 
     portEXIT_CRITICAL(&pyro_spinlock);
 
-    const bool dry = sensor_collector.isSimActive();
     for (int i = 0; i < 4; ++i) {
         if (just_fired[i]) ESP_LOGW(TAG, "[PYRO] CH%d %s at alt=%.1f m",
                                     i + 1, dry ? "DRY-FIRED (sim)" : "FIRED",
@@ -778,8 +796,11 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.rocket_state = (override_state != 0xFF) ? override_state : (uint8_t)rocket_state;
     // v4: latch sim mode into the snapshot — isSimActive() is false after a
     // reboot, so the restore path can only learn this from the snapshot
-    // itself (and refuses to restore when set).
-    snap.sim_flight   = sensor_collector.isSimActive() ? 1 : 0;
+    // itself (and refuses to restore when set).  #1104: OR'd with the
+    // flight-long latch, so the pass in which the sim gives up (isSimActive()
+    // already false, flight still INFLIGHT) cannot stamp a real-flight snapshot.
+    snap.sim_flight   = sim_flight::simulated(sim_flight_latched,
+                                              sensor_collector.isSimActive()) ? 1 : 0;
 
     snap.flight_elapsed_ms  = now_ms - launch_time_millis;
     snap.apogee_elapsed_ms  = pyro_apogee_detected
@@ -1203,15 +1224,24 @@ static void publishSensorCalFromNVS()
 // SECTION: Simulator re-arm
 // ==========================================================================
 // #393: reset the flight state machine for a sim run.  Used on the sim START
-// edge (fresh run — the sim's equivalent of a reboot) and on an explicit sim
-// STOP (SIM_STOP_CMD → abort back to READY).  Deliberately NOT called on the
-// sim's natural completion (SIM_LANDED → SIM_IDLE auto-stop), so a flown-out
-// sim still holds LANDED to validate the post-flight lockout.
+// edge (fresh run — the sim's equivalent of a reboot), on an explicit sim
+// STOP (SIM_STOP_CMD → abort back to READY), and (#1104) on a sim that ended
+// with the flight NOT in LANDED — the #971 give-up — which is treated exactly
+// like a Stop.  Deliberately NOT called on the sim's natural completion
+// (SIM_LANDED → SIM_IDLE with the flight in LANDED), so a flown-out sim still
+// holds LANDED to validate the post-flight lockout.
 static void resetFlightStateForSim(const char* edge)
 {
     // Also resets GNSS state: the sim injects synthetic GNSS (fix=3, sats=12);
     // a stale copy would otherwise immediately re-trip READY -> PRELAUNCH.
     pyroSafeAll();
+    // #1104: whichever edge brought us here, the flight the sim was driving is
+    // over.  Drop the dry-fire latch (the START edge re-sets it right after
+    // this returns) and re-sync the edge detector, so the handler at the end
+    // of the flight loop does not ALSO see a user Stop's stopSim() as a
+    // falling edge and reset a second time.
+    sim_flight_latched = false;
+    prev_sim_active    = sensor_collector.isSimActive();
     rocket_state = READY;
     post_flight_lockout = false;  // #317: a deliberate sim start/stop re-arms
     ground_pressure_found = false;
@@ -1228,9 +1258,7 @@ static void resetFlightStateForSim(const char* edge)
     ref_lat_sum = ref_lon_sum = ref_alt_sum = 0.0;
     ref_pos_count = 0;
     ref_pos_first_time_ms = 0;
-    last_gnss_time_us_for_ekf = 0;
-    last_gnss_fix_second = 0xFF;
-    last_gnss_fix_ms     = 0xFFFF;
+    ekf_gnss_feed.reset();
     gnss_started = false;
     have_gnss_si = false;
     // #557: a sim injects synthetic GNSS, so re-evaluate the degraded path from
@@ -1446,8 +1474,11 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
     else if (cmd.type == SIM_STOP_CMD)
     {
         // #393: an explicit Stop aborts the sim flight back to READY.
-        // Reset here (not on the isSimActive falling edge) so it fires only
-        // for a real user Stop, never a naturally-completed sim.
+        // Reset here, the moment the command arrives, so a Stop never waits
+        // on the edge handler — and so a naturally-completed sim (falling
+        // edge with the flight in LANDED) is never mistaken for one.
+        // resetFlightStateForSim() re-syncs the edge detector, so the
+        // stopSim() just above is not counted a second time there (#1104).
         sensor_collector.stopSim();
         resetFlightStateForSim("stop");
         ESP_LOGI(TAG, "[SIM] Stop cmd received — flight state reset (#393)");
@@ -3215,32 +3246,40 @@ static void loop_fc()
 
             // ── Build EKF input: GNSS in LLA + NED ──
             // Layered quality gating:
-            //   Gate 1: fix >= 3, sats >= MIN, h_acc < MAX, new timestamp
+            //   Gate 1: fix >= 3, sats >= MIN, h_acc < MAX, and a newly arrived fix
             //   Gate 3: init requires h_acc < INIT_MAX and vel < INIT_MAX_VEL
             // Gate 2 (chi-squared innovation test) lives inside EKF::measUpdate.
             //
-            // EKF decimation gate, computed up-front: the GNSS consume/dedup
-            // below must know whether the EKF will actually process the fix
-            // this tick (#367).  (The FC also paused the EKF while an OTA
-            // image streamed — no such mode here.)
+            // EKF decimation: run predict+update every Nth flight-loop tick.
+            // (The FC also pauses the EKF while an OTA image streams — no such
+            // mode here.)
             static uint8_t ekf_decim_ctr = 0;
             const bool run_ekf_this_tick =
                 (++ekf_decim_ctr >= config::EKF_DECIMATION);
             if (run_ekf_this_tick) ekf_decim_ctr = 0;
 
-            EkfGNSSDataLLA ekf_gnss = {};
-            const bool gnss_fix_is_new =
-                (gnss_latest_si.second != last_gnss_fix_second) ||
-                (gnss_latest_si.milli_second != last_gnss_fix_ms);
             const bool hacc_ok =
                 (config::GNSS_MAX_HACC_M <= 0.0f) ||  // 0 = disable h_acc gate
                 (gnss_latest_si.horizontal_accuracy < config::GNSS_MAX_HACC_M);
-            const bool gnss_gate1 =
+            const bool gnss_quality_ok =
                 have_gnss_si &&
                 gnss_latest_si.fix_mode >= 3U &&
                 gnss_latest_si.num_sats >= config::GNSS_MIN_SATS &&
-                hacc_ok &&
-                gnss_fix_is_new;
+                hacc_ok;
+            // #1107: the feed holds the last accepted fix and the EKF is handed
+            // THAT, unchanged, on every tick until a newer one arrives.  The
+            // filter fuses each fix time_us once and skips a repeat, so which
+            // fixes are consumed is tracked in exactly one place — the filter —
+            // and a fix it did not get to (a #440 frozen-IMU-timestamp skip, an
+            // EKF-off decimation tick) is simply offered again next tick.  This
+            // loop used to keep its own consumed markers and, once they said
+            // "seen", hand the EKF an all-zero LLA/velocity under the marker's
+            // timestamp; whenever the two disagreed (#367, then #1107) the
+            // filter fused lat=0/lon=0/alt=0/vel=0 as a real fix.  Never hand it
+            // a placeholder: a real fix, or the previous one again.
+            const bool gnss_gate1 =
+                ekf_gnss_feed.offer(gnss_latest_si, gnss_quality_ok);  // true once per new accepted fix
+            const EkfGNSSDataLLA& ekf_gnss = ekf_gnss_feed.current();
             // Gate 3 (init-specific): tighter accuracy + low velocity on pad
             const float gnss_vel_mag = sqrtf(
                 (float)(gnss_latest_si.vel_e * gnss_latest_si.vel_e +
@@ -3257,25 +3296,8 @@ static void loop_fc()
 
             if (gnss_gate1)
             {
-                static constexpr double DEG2RAD = M_PI / 180.0;
-                ekf_gnss.time_us   = gnss_latest_si.time_us;
-                ekf_gnss.lat_rad   = gnss_latest_si.lat * DEG2RAD;
-                ekf_gnss.lon_rad   = gnss_latest_si.lon * DEG2RAD;
-                ekf_gnss.alt_m     = gnss_latest_si.alt;
-                ekf_gnss.vel_n_mps = (float)gnss_latest_si.vel_n;
-                ekf_gnss.vel_e_mps = (float)gnss_latest_si.vel_e;
-                ekf_gnss.vel_d_mps = -(float)gnss_latest_si.vel_u; // ENU U→NED D
-                // #367: only mark the fix consumed when the EKF actually runs
-                // this tick.  Advancing these markers on a decimation-"off"
-                // tick would drop the fix and inject a zeroed measurement
-                // carrying this (never-processed) timestamp.
-                if (run_ekf_this_tick)
-                {
-                    last_gnss_time_us_for_ekf = gnss_latest_si.time_us;
-                    last_gnss_fix_second     = gnss_latest_si.second;
-                    last_gnss_fix_ms         = gnss_latest_si.milli_second;
-                }
-
+                // Once per newly accepted fix (whether or not the EKF runs this
+                // tick — the fix itself waits in the feed for the next EKF tick).
                 // Scale GNSS noise by h_acc — inflate R when receiver is
                 // uncertain.  Nominal R assumes h_acc ≈ 3 m.
                 //
@@ -3317,9 +3339,6 @@ static void loop_fc()
                                       (unsigned long)ref_pos_count);
                     }
                 }
-            } else {
-                // Pass stale GNSS timestamp so EKF skips measurement update
-                ekf_gnss.time_us = last_gnss_time_us_for_ekf;
             }
 
             // ── Initialize or update the EKF ──
@@ -3343,20 +3362,24 @@ static void loop_fc()
                     (initGyroN >= 8) &&
                     ((int32_t)(time_ms() - gnss_absent_dwell_ms) >= 0);
                 if (normal_init || degraded_init) {
+                    EkfGNSSDataLLA init_gnss = ekf_gnss;
                     if (degraded_init) {
                         // Pad-relative seed: lat/lon 0 (equator — regular, no
                         // geodetic singularity), alt from baro, zero velocity,
                         // and a stale GNSS time so the EKF never runs a GNSS
                         // measurement update against this fake origin.  Baro
                         // then bounds the vertical channel and accel+mag
-                        // bound attitude.
-                        ekf_gnss.time_us   = 0;
-                        ekf_gnss.lat_rad   = 0.0;
-                        ekf_gnss.lon_rad   = 0.0;
-                        ekf_gnss.alt_m     = pressure_altitude_m;
-                        ekf_gnss.vel_n_mps = 0.0f;
-                        ekf_gnss.vel_e_mps = 0.0f;
-                        ekf_gnss.vel_d_mps = 0.0f;
+                        // bound attitude.  (Degraded init is gated on never
+                        // having started GNSS, so the feed holds no fix and
+                        // keeps handing the EKF time_us 0 — equal to this
+                        // seed's — which the filter skips, #1107.)
+                        init_gnss.time_us   = 0;
+                        init_gnss.lat_rad   = 0.0;
+                        init_gnss.lon_rad   = 0.0;
+                        init_gnss.alt_m     = pressure_altitude_m;
+                        init_gnss.vel_n_mps = 0.0f;
+                        init_gnss.vel_e_mps = 0.0f;
+                        init_gnss.vel_d_mps = 0.0f;
                     }
                     // #297: seed wBias off the recent-window gyro average
                     // rather than the single live sample (see the ring above).
@@ -3373,7 +3396,7 @@ static void loop_fc()
                         ekf_imu.gyro_y = gsum[1] / initGyroN;
                         ekf_imu.gyro_z = gsum[2] / initGyroN;
                     }
-                    ekf.init(ekf_imu, ekf_gnss, ekf_mag);
+                    ekf.init(ekf_imu, init_gnss, ekf_mag);
 
                     // Pad attitude initialization: quaternion from measured
                     // gravity plus the known pad heading, bypassing the noisy
@@ -4022,17 +4045,51 @@ static void loop_fc()
         // ==========================================================================
         // SECTION: Simulator re-arm and diagnostics
         // ==========================================================================
-        // ---- Re-arm on a NEW sim run, NOT when a sim ends (#317) ----
+        // ---- Re-arm on a NEW sim run; hold LANDED on a flown-out one (#317) ----
         // A sim flight that reaches LANDED must STAY landed — terminal,
         // exactly like real hardware — so the sim faithfully validates the
         // post-flight lockout. Re-arm on the RISING edge of sim-active (the
         // deliberate start of a new run).  An explicit Stop is handled in the
-        // SIM_STOP_CMD handler instead (#393).
+        // SIM_STOP_CMD handler (#393).
+        //
+        // #1104: the falling edge is NOT always the natural completion.  The
+        // SIM_LANDED hold gives up after sim_landed::HOLD_MAX_MS (#971) when
+        // landing detection never fires, and drops to SIM_IDLE with the
+        // flight still INFLIGHT.  Left there, this is a LIVE flight on the
+        // bench: the dry-fire gate keyed off isSimActive() would drive real
+        // ARM/FIRE outputs (a TIME_AFTER_APOGEE delay still counting from the
+        // simulated apogee needs no motion at all), and the command drain
+        // above discards everything in a non-sim INFLIGHT, so a Stop cannot
+        // reach us until the 10-minute backstop.  So the rule keys on OUR
+        // state, not on the sim's reason: a falling edge in LANDED is the
+        // flown-out sim (hold); any other falling edge is treated exactly
+        // like a user Stop.  sim_flight_policy.h pins it.
+        //
+        // #971: tell the sim what state we are ACTUALLY in, so its SIM_LANDED
+        // hold ends on the real transition instead of running to its 30 s
+        // backstop.  The FC got this in PR #972; this port never did, which
+        // is why every mini sim used to end by "gave up".
+        sensor_collector.noteRocketState((uint8_t)rocket_state);
+
         {
             const bool curr_sim_active = sensor_collector.isSimActive();
-            if (!prev_sim_active && curr_sim_active)
+            switch (sim_flight::classify(prev_sim_active, curr_sim_active,
+                                         rocket_state == LANDED))
             {
-                resetFlightStateForSim("start");
+                case sim_flight::Edge::Start:
+                    resetFlightStateForSim("start");
+                    sim_flight_latched = true;   // cleared by the next reset
+                    break;
+                case sim_flight::Edge::EndedEarly:
+                    ESP_LOGE(TAG, "[SIM] ended with the flight still in state %u — "
+                                  "treating it as Stop: pyros safed, flight "
+                                  "state reset (#1104)",
+                             (unsigned)rocket_state);
+                    resetFlightStateForSim("ended early");
+                    break;
+                case sim_flight::Edge::EndedLanded:   // flown out: hold LANDED
+                case sim_flight::Edge::None:
+                    break;
             }
             prev_sim_active = curr_sim_active;
         }

@@ -3099,6 +3099,28 @@ bool comms_setup_active()
     return radio_ok || !config::USE_LORA_RADIO;
 }
 
+// #1106: the mini's veto on flashing its own image. Here the BLE peer IS the
+// flight computer: a mid-flight OTA_BEGIN erases a partition underneath the
+// flight task (cache-off flash stalls every non-IRAM task for 1-2 s), and
+// OTA_FINISH reboots the vehicle's only processor with deployments still
+// owed. Nothing else gates it — target==0 is handled inside TR_BLE_To_APP and
+// never crosses the flight side's command shutter. INFLIGHT only, like the OC
+// and the #383 uplink refusals. No freshness clause: the cache is refreshed
+// in-process by serviceTelemFromFlight(), so there is no second clock domain
+// to go stale (a hung flight task pins it, as it already pins power-off; USB
+// flashing remains). A restored flight (#1176) reads INFLIGHT too — power
+// off first, which carries the still-vehicle override, then flash from IDLE.
+// Runs on the NimBLE host task; reads one aligned enum the comms task writes.
+static bool miniOtaSelfFlashPermitted(void* /*ctx*/)
+{
+    const bool refuse = (latest_rocket_state == INFLIGHT);
+    if (refuse)
+    {
+        ESP_LOGW("BLE", "Self-OTA REFUSED: rocket is INFLIGHT");
+    }
+    return !refuse;
+}
+
 // ==========================================================================
 // SECTION: Always-on bring-up (port of the OC's setup_oc NVS/BLE/INA half)
 // ==========================================================================
@@ -3255,6 +3277,8 @@ void comms_setup_idle()
     }
     // MINI: no setOtaRelayDelegate — there is no second MCU.  An OTA_BEGIN
     // with target=1 gets a clean "bad_target" from TR_BLE_To_APP itself.
+    // #1106: veto a self-OTA (target==0) while INFLIGHT.
+    ble_app.setOtaPermitCallback(miniOtaSelfFlashPermitted, nullptr);
 
     last_stats_ms = millis();
 }
@@ -3599,7 +3623,8 @@ static void comms_loop()
     // reason, so without this the post-update boot would look exactly like a
     // session that ended unexpectedly and could restore an old interrupted
     // flight on the bench. Cheap and idempotent; a flight in progress is
-    // already refused an OTA elsewhere.
+    // refused at OTA_BEGIN/OTA_FINISH (miniOtaSelfFlashPermitted, #1106), so
+    // this never fires mid-flight.
     if (ble_app.otaRestartDue())
     {
         mini_link::retireActiveFlag("OTA restart");
