@@ -815,6 +815,13 @@ static constexpr const char* kTokNvsKey  = "tok";
 static FlightToken boot_token = {};
 static bool  boot_token_valid   = false;   // magic + CRC both good
 static bool  boot_token_restore = false;   // tier 2 said yes and the rail came up
+// #1188: the same fact, latched for the WHOLE session. boot_token_restore above
+// is a one-shot that the split-brain guard clears when it retires the token
+// (~10 s after a restore the FC declined), which is exactly the case the
+// operator's cue exists for — so the cue cannot ride that flag. This one is
+// never cleared; it rides to the FC in every OUT_STATUS_RESPONSE
+// (OUT_STATUS_TOKEN_POWERED_BIT) and the FC decides what to show.
+static bool  boot_token_powered = false;
 static bool  token_nvs_ok       = false;   // the partition opened at all
 static uint32_t boot_token_restore_ms = 0; // millis() at the restore, for the clear floor
 // #1176 step 6: millis() at which an operator override was relayed, or 0.
@@ -2667,8 +2674,11 @@ static void queueOutStatusResponse(bool ready)
     uint8_t tx_buf[I2C_TX_SIZE] = {};  // zero-padded
     size_t  tx_pos = 0;
 
-    // Pack status response into the buffer
-    uint8_t payload[2] = { ready ? 1U : 0U, cmd };
+    // Pack status response into the buffer. Byte 0 is the ready bit plus, on
+    // a session the OC started by itself from a flight token, the #1188 cue
+    // bit — never without ready, so an FC reading `!= 0` still sees exactly
+    // "ready" (RocketComputerTypes.h, outStatusByte).
+    uint8_t payload[2] = { outStatusByte(ready, boot_token_powered), cmd };
     size_t frame_len = 0;
     if (!TR_I2C_Interface::packMessage(OUT_STATUS_RESPONSE,
                                        payload,
@@ -7848,6 +7858,7 @@ static void setup_oc()
                 {
                     boot_token = t;
                     boot_token_restore = true;
+                    boot_token_powered = true;   // #1188: session-long, for the FC's cue
                     pinMode(config::PWR_PIN, OUTPUT);
                     digitalWrite(config::PWR_PIN, HIGH);
                     if (config::GPS_PWR_PIN >= 0)

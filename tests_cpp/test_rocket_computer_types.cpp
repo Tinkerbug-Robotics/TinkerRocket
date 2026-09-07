@@ -1269,6 +1269,26 @@ TEST(RocketComputerTypes, GuidancePointData_Layout) {
 // static_asserts live in RocketComputerTypes.h itself (this test target
 // recompiles the header, so they fire in CI); pin the version semantics here
 // so a format bump can't ship without a conscious edit.
+// #1188: byte 0 of OUT_STATUS_RESPONSE grew a second bit. Every FC firmware
+// ever shipped reads that byte as `!= 0` meaning ready, so the encoder must
+// never set the new bit without the ready bit — pin both values and the
+// invariant, not just the values.
+TEST(RocketComputerTypes, OutStatusByte_TokenPoweredNeverWithoutReady) {
+    EXPECT_EQ(OUT_STATUS_READY_BIT,         0x01u);
+    EXPECT_EQ(OUT_STATUS_TOKEN_POWERED_BIT, 0x02u);
+    EXPECT_EQ(outStatusByte(false, false), 0u);
+    EXPECT_EQ(outStatusByte(false, true),  0u);     // not ready: the cue bit waits
+    EXPECT_EQ(outStatusByte(true,  false), 0x01u);  // byte-identical to every older OC
+    EXPECT_EQ(outStatusByte(true,  true),  0x03u);
+    for (bool ready : {false, true}) {
+        for (bool tok : {false, true}) {
+            EXPECT_EQ(outStatusByte(ready, tok) != 0, ready);   // `!= 0` is still exactly "ready"
+        }
+    }
+    EXPECT_NE(outStatusByte(true, true)  & OUT_STATUS_TOKEN_POWERED_BIT, 0);
+    EXPECT_EQ(outStatusByte(true, false) & OUT_STATUS_TOKEN_POWERED_BIT, 0);
+}
+
 TEST(RocketComputerTypes, OutStatusQuery_MagType_V6) {
     EXPECT_EQ(sizeof(OutStatusQueryData), 42u);  // v6: +mag_type (v5 was 41: #435)
     // The zeroed default must decode as the big board's chip — every pre-v6

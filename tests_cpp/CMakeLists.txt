@@ -899,6 +899,18 @@ target_include_directories(test_pwr_hold_policy PRIVATE
 target_link_libraries(test_pwr_hold_policy GTest::gtest_main)
 gtest_discover_tests(test_pwr_hold_policy)
 
+# ---------- test_boot_cue_policy (#1188) ----------
+# FC boot LED cue: which of the two owner-mandated cues (restored flight /
+# self-powered idle) the board shows, computed from its current belief. Pure
+# header in the FC project.
+add_executable(test_boot_cue_policy test_boot_cue_policy.cpp)
+target_include_directories(test_boot_cue_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+)
+target_link_libraries(test_boot_cue_policy GTest::gtest_main)
+gtest_discover_tests(test_boot_cue_policy)
+
 # ---------- test_rail_restore_policy (#825) ----------
 # OC boot rail re-assert decision: fault reset restores, the deliberate
 # power-off reboot stands down. Pure header in the OC project.

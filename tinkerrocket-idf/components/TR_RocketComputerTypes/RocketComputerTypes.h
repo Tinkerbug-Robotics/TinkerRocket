@@ -854,6 +854,26 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(OutStatusQueryData) == 42,
               "OutStatusQueryData must be 42 bytes");
 
+// ### OUT_STATUS_RESPONSE, payload byte 0: the out computer's status bits ###
+// Historically a bare 0/1 "ready" byte, and every flight-computer firmware
+// reads it as `!= 0` meaning ready. Bit 1 now carries a second fact (#1188,
+// #1176 decision 4): this OC session began with the OC raising the FC rail
+// from a flight token, not with an operator's power-on. The FC turns that into
+// a local LED cue whenever it is on the ground without a restored flight
+// (flight_computer/main/boot_cue_policy.h).
+//
+// The invariant that keeps every older reader correct: the OC NEVER sets bit 1
+// without bit 0. outStatusByte() enforces it, so `!= 0` still means exactly
+// "ready" on any firmware pairing, and an old FC simply never sees the cue.
+static constexpr uint8_t OUT_STATUS_READY_BIT         = 0x01;
+static constexpr uint8_t OUT_STATUS_TOKEN_POWERED_BIT = 0x02;
+static inline uint8_t outStatusByte(bool ready, bool token_powered)
+{
+    if (!ready) return 0;
+    return (uint8_t)(OUT_STATUS_READY_BIT |
+                     (token_powered ? OUT_STATUS_TOKEN_POWERED_BIT : 0));
+}
+
 // ### Data Structures ###
 // Packed and unpacked data structures for each type ---
 
