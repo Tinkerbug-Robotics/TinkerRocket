@@ -543,5 +543,13 @@ final class SizeDropDecodeTests: XCTestCase {
         // "hu" as a float: the #571 tolerance every integer key has.
         let loose = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"hu": 3.0}"#.utf8))
         XCTAssertEqual(loose.holdupAdvisoryText, "Hold-up backup not charged")
+        // A sense that exists but does not answer is not silence.
+        let dead = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"hu": 4}"#.utf8))
+        XCTAssertEqual(dead.holdupState, .noReading)
+        XCTAssertEqual(dead.holdupAdvisoryText, "Hold-up backup sense — no reading")
+        // An unknown future code is no verdict at all.
+        let future = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"hu": 9}"#.utf8))
+        XCTAssertNil(future.holdupState)
+        XCTAssertNil(future.holdupAdvisoryText)
     }
 }

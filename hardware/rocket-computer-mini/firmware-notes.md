@@ -201,13 +201,17 @@ GPIO8** (pad 13), with `C144` 100 nF at the pin: full scale ~1.25 V at the pin f
   claim — `R120` is gone). Without the gate, a quick cycle-and-launch flies with no
   hold-up and nothing would say so.
 - **Telemetry (#1166, shipped on the out computer):** `V_SCAP` is read once a
-  second on the INA230 tick (ADC1_CH7, `ADC_ATTEN_DB_6`, its own calibration
-  curve), traced on the console as `[HOLDUP] +N s V_SCAP=x.xx V (state)` — every
-  5 s for the first 5 min of uptime, every 60 s after, and on every change of
-  verdict — and sent over BLE as `scap` (volts) and `hu` (1 charging, 2 charged,
-  3 never charged: under 2.2 V for three minutes, measured from boot on a cold
-  start and from the last charged reading after a drain). Both apps render
-  `hu` 3 as one quiet advisory line under the state banner. `sensor_health` is
+  second on the INA230 tick (ADC1_CH7, `ADC_ATTEN_DB_6` — the 1.25 V-full-scale
+  step saturates exactly at the 2.5 V termination, and the VIN − 800 mV bound
+  can put ~1.33 V at the pin — with its own calibration curve, and a once-per-
+  boot warning if the pin ever reads above 1.6 V), traced on the console as
+  `[HOLDUP] +N s V_SCAP=x.xx V (state)` — a line per ~50 mV of movement (every
+  ~2.5 s through the ramp, every second through a discharge), at least one a
+  minute, and on every change of verdict — and sent over BLE as `scap` (volts)
+  and `hu` (1 charging, 2 charged, 3 never charged: under 2.2 V for three
+  minutes, measured from boot on a cold start and from the last charged reading
+  after a drain; 4 the sense did not answer). Both apps render `hu` 3 and 4 as
+  one quiet advisory line under the state banner. `sensor_health` is
   full, which is why these are keys of their own; the LoRa relay does not carry
   them, so the line is direct-link only. The flight log does not carry V_SCAP
   yet: adding a logged field means a log format version bump — batch it with

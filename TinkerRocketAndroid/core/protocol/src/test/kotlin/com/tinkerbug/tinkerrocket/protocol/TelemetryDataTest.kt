@@ -778,5 +778,10 @@ class TelemetryDataTest {
         )
         // "hu" as a float: the flexInt tolerance every integer key has.
         assertEquals("Hold-up backup not charged", decodeOk("""{"hu":3.0}""").holdupAdvisoryText)
+        // A sense that exists but does not answer is not silence.
+        assertEquals("Hold-up backup sense — no reading", decodeOk("""{"hu":4}""").holdupAdvisoryText)
+        // An unknown future code is no verdict at all.
+        assertNull(HoldupState.fromCode(9))
+        assertNull(decodeOk("""{"hu":9}""").holdupAdvisoryText)
     }
 }

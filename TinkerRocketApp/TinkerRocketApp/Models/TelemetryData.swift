@@ -249,17 +249,24 @@ struct TelemetryData: Codable {
     var gnssAbsentMode: Bool { shState(22) == .bad }
 
     // #1166: the out computer's verdict on the hold-up supercap ("hu").
-    enum HoldupState: Int { case charging = 1, charged = 2, notCharging = 3 }
+    enum HoldupState: Int { case charging = 1, charged = 2, notCharging = 3, noReading = 4 }
     var holdupState: HoldupState? { holdup_state.flatMap(HoldupState.init(rawValue:)) }
-    /// The one quiet advisory line for a hold-up cap that never charged, or
-    /// nil when there is nothing to say.  Android twin:
-    /// `holdupAdvisoryText(Int?, Float?)`.
+    /// The one quiet advisory line, or nil when there is nothing to say: a
+    /// cap that never charged speaks, and so does a sense that exists but
+    /// does not answer — a dead ADC must not be silence either.  Charging and
+    /// charged stay quiet.  Android twin: `holdupAdvisoryText(Int?, Float?)`.
     var holdupAdvisoryText: String? {
-        guard holdupState == .notCharging else { return nil }
-        if let v = scap_voltage {
-            return String(format: "Hold-up backup not charged — %.2f V", v)
+        switch holdupState {
+        case .notCharging:
+            if let v = scap_voltage {
+                return String(format: "Hold-up backup not charged — %.2f V", v)
+            }
+            return "Hold-up backup not charged"
+        case .noReading:
+            return "Hold-up backup sense — no reading"
+        default:
+            return nil
         }
-        return "Hold-up backup not charged"
     }
     func pyroHealth(channel: Int) -> SensorHealth {   // channel 1...4; .na = not configured
         guard (1...4).contains(channel) else { return .na }

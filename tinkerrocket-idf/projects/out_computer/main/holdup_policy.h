@@ -35,6 +35,7 @@ namespace holdup_policy
         CHARGING     = 1,   // under the bar, inside the grace window
         CHARGED      = 2,   // at or above the bar
         NOT_CHARGING = 3,   // under the bar for the whole grace window — advisory
+        NO_READING   = 4,   // the sense exists but the ADC did not answer — advisory
     };
 
     inline const char* stateName(uint8_t s)
@@ -44,6 +45,7 @@ namespace holdup_policy
             case CHARGING:     return "charging";
             case CHARGED:      return "charged";
             case NOT_CHARGING: return "NOT CHARGING";
+            case NO_READING:   return "NO READING";
             default:           return "unknown";
         }
     }
@@ -54,14 +56,15 @@ namespace holdup_policy
         bool     seen_charged    = false;
         uint32_t last_charged_ms = 0;   // uptime of the last reading at/above the bar
 
-        // One reading.  `scap_v` NaN = nothing read this time (state NONE, the
-        // grace clock is untouched).  `now_ms` is uptime, wrap-safe: the
-        // elapsed arithmetic is unsigned.
+        // One reading.  `scap_v` NaN = the sense is there but the ADC did not
+        // answer: NO_READING, its own advisory — a dead sense must not be
+        // silence either — and the grace clock is untouched.  `now_ms` is
+        // uptime, wrap-safe: the elapsed arithmetic is unsigned.
         uint8_t update(float scap_v, uint32_t now_ms, float charged_v, uint32_t advisory_ms)
         {
             if (!(scap_v == scap_v))
             {
-                state = NONE;
+                state = NO_READING;
                 return state;
             }
             if (scap_v >= charged_v)
@@ -80,13 +83,27 @@ namespace holdup_policy
     };
 
     // Console trace cadence for the first-article cold-start log #1166 asks
-    // for: a line every `fast_ms` through the charge ramp (uptime under
-    // `ramp_ms`), every `slow_ms` after, and always the very first one.
-    inline bool traceDue(uint32_t now_ms, uint32_t last_trace_ms, bool ever_traced,
-                         uint32_t ramp_ms, uint32_t fast_ms, uint32_t slow_ms)
+    // for: a line whenever V_SCAP has moved `delta_v` since the last line, or
+    // at least every `period_ms` when it is steady — plus the first sample and
+    // every change of verdict.  During the 100 mA ramp (~20 mV/s into 5 F)
+    // 50 mV is a line every ~2.5 s, the charge profile the first article
+    // needs; terminated, one a minute; a discharge (~84 mV/s riding the cap)
+    // logs every second, which is the hold-time curve.  NaN-to-NaN is steady
+    // and falls to the period rule, so a dead sense does not spam.
+    inline bool traceDue(bool state_changed, bool ever_traced,
+                         float scap_v, float last_traced_v,
+                         uint32_t now_ms, uint32_t last_trace_ms,
+                         float delta_v, uint32_t period_ms)
     {
-        if (!ever_traced) return true;
-        const uint32_t period = (now_ms < ramp_ms) ? fast_ms : slow_ms;
-        return (uint32_t)(now_ms - last_trace_ms) >= period;
+        if (state_changed || !ever_traced) return true;
+        const bool v_nan = !(scap_v == scap_v);
+        const bool l_nan = !(last_traced_v == last_traced_v);
+        if (v_nan != l_nan) return true;
+        if (!v_nan)
+        {
+            const float d = scap_v - last_traced_v;
+            if (d >= delta_v || d <= -delta_v) return true;
+        }
+        return (uint32_t)(now_ms - last_trace_ms) >= period_ms;
     }
 }

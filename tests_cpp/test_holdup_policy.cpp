@@ -75,12 +75,14 @@ TEST(HoldupPolicy1166, ADrainedCapGetsItsRechargeTimeFromTheLastChargedReading)
     EXPECT_EQ(u.update(0.9f, 600u * kSecond + kAdvisory, kBarV, kAdvisory), NOT_CHARGING);
 }
 
-TEST(HoldupPolicy1166, TheBarIsInclusiveAndAReadingFailureIsNone)
+TEST(HoldupPolicy1166, TheBarIsInclusiveAndAReadingFailureIsItsOwnVerdict)
 {
     Tracker t;
     EXPECT_EQ(t.update(2.19f, kSecond, kBarV, kAdvisory), CHARGING);
     EXPECT_EQ(t.update(2.20f, 2 * kSecond, kBarV, kAdvisory), CHARGED);
-    EXPECT_EQ(t.update(NAN, 3 * kSecond, kBarV, kAdvisory), NONE);   // ADC failed this time
+    // The ADC did not answer: NO_READING, an advisory of its own — a dead
+    // sense is not silence — and the grace clock is untouched.
+    EXPECT_EQ(t.update(NAN, 3 * kSecond, kBarV, kAdvisory), NO_READING);
     // ...and the failed read did not restart or advance the grace clock:
     // 3 min after the last charged reading it is an advisory, not sooner.
     EXPECT_EQ(t.update(1.0f, 2 * kSecond + kAdvisory - kSecond, kBarV, kAdvisory), CHARGING);
@@ -100,14 +102,44 @@ TEST(HoldupPolicy1166, UptimeWrapDoesNotResetTheWindow)
     EXPECT_EQ(t.update(1.0f, after, kBarV, kAdvisory), NOT_CHARGING);
 }
 
-TEST(HoldupPolicy1166, TraceIsDenseThroughTheRampThenSparse)
+TEST(HoldupPolicy1166, TraceFollowsTheVoltageAndNeverGoesQuietForLong)
 {
-    const uint32_t ramp = 300u * kSecond, fast = 5u * kSecond, slow = 60u * kSecond;
-    EXPECT_TRUE(traceDue(0, 0, false, ramp, fast, slow));                        // first ever
-    EXPECT_FALSE(traceDue(4u * kSecond, 0, true, ramp, fast, slow));
-    EXPECT_TRUE(traceDue(5u * kSecond, 0, true, ramp, fast, slow));
-    EXPECT_FALSE(traceDue(ramp + 30u * kSecond, ramp, true, ramp, fast, slow));   // sparse after the ramp
-    EXPECT_TRUE(traceDue(ramp + 60u * kSecond, ramp, true, ramp, fast, slow));
+    const float    dv = 0.05f;
+    const uint32_t period = 60u * kSecond;
+    // The first sample always prints.
+    EXPECT_TRUE(traceDue(false, false, 0.0f, NAN, 0, 0, dv, period));
+    // Steady: nothing until the period.
+    EXPECT_FALSE(traceDue(false, true, 2.50f, 2.50f, 30u * kSecond, 0, dv, period));
+    EXPECT_TRUE(traceDue(false, true, 2.50f, 2.50f, period, 0, dv, period));
+    // Moving: the ramp at 20 mV/s earns a line every 2.5 s, either direction.
+    EXPECT_FALSE(traceDue(false, true, 0.84f, 0.80f, 2u * kSecond, 0, dv, period));
+    EXPECT_TRUE(traceDue(false, true, 0.85f, 0.80f, 2500u, 0, dv, period));
+    EXPECT_TRUE(traceDue(false, true, 0.75f, 0.80f, 2500u, 0, dv, period));
+    // A change of verdict always prints.
+    EXPECT_TRUE(traceDue(true, true, 2.21f, 2.20f, 5u * kSecond, 0, dv, period));
+    // NaN-to-NaN is steady (a dead sense does not spam); NaN-to-value and
+    // value-to-NaN are transitions and print.
+    EXPECT_FALSE(traceDue(false, true, NAN, NAN, 5u * kSecond, 0, dv, period));
+    EXPECT_TRUE(traceDue(false, true, NAN, NAN, period, 0, dv, period));
+    EXPECT_TRUE(traceDue(false, true, 1.0f, NAN, 5u * kSecond, 0, dv, period));
+    EXPECT_TRUE(traceDue(false, true, NAN, 1.0f, 5u * kSecond, 0, dv, period));
     EXPECT_EQ(stateName(NOT_CHARGING), std::string("NOT CHARGING"));
+    EXPECT_EQ(stateName(NO_READING), std::string("NO READING"));
     EXPECT_EQ(stateName(CHARGED), std::string("charged"));
+}
+
+TEST(HoldupPolicy1166, ADischargeRidingTheCapLogsEverySecond)
+{
+    // A hold-up event: the rail rides the cap and V_SCAP falls ~84 mV/s at
+    // 190 mA.  Every one-second sample moves more than 50 mV, so every one
+    // prints — that curve is the hold time.
+    float v = 2.5f, last = 2.5f;
+    uint32_t last_ms = 0;
+    int lines = 0;
+    for (uint32_t ms = kSecond; ms <= 10u * kSecond; ms += kSecond)
+    {
+        v -= 0.084f;
+        if (traceDue(false, true, v, last, ms, last_ms, 0.05f, 60u * kSecond)) { ++lines; last = v; last_ms = ms; }
+    }
+    EXPECT_EQ(lines, 10);
 }

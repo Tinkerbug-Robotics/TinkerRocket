@@ -1640,7 +1640,8 @@ static float                  holdup_scap_v  = NAN;     // latest cap voltage; N
 static holdup_policy::Tracker holdup_tracker;
 static_assert((uint8_t)holdup_policy::CHARGING     == (uint8_t)TR_BLE_To_APP::HOLDUP_CHARGING &&
               (uint8_t)holdup_policy::CHARGED      == (uint8_t)TR_BLE_To_APP::HOLDUP_CHARGED &&
-              (uint8_t)holdup_policy::NOT_CHARGING == (uint8_t)TR_BLE_To_APP::HOLDUP_NOT_CHARGING,
+              (uint8_t)holdup_policy::NOT_CHARGING == (uint8_t)TR_BLE_To_APP::HOLDUP_NOT_CHARGING &&
+              (uint8_t)holdup_policy::NO_READING   == (uint8_t)TR_BLE_To_APP::HOLDUP_NO_READING,
               "holdup_policy::State must mirror TR_BLE_To_APP::HoldupState — it is the wire value");
 
 // ESP32-S3: ADC1_CHn is GPIO(n+1) for GPIO1-10 (the IMON helper above is the
@@ -1710,20 +1711,36 @@ static float readHoldupVolts()
         ++taken;
     }
     if (taken == 0) return NAN;
-    return ((float)mv_sum / (float)taken) * 0.001f * config::SCAP_DIVIDER_RATIO;
+    const float pin_mv = (float)mv_sum / (float)taken;
+
+    // The 6 dB range is good to ~1.75 V at the pad and the cap terminates at
+    // 2.5 V = 1.25 V here.  Above the ceiling the number is clipped and the
+    // divider or VCHG is not as built — say so once rather than report a
+    // confident value.
+    static bool warned_ceiling = false;
+    if (pin_mv > (float)config::HOLDUP_PIN_CEILING_MV && !warned_ceiling)
+    {
+        warned_ceiling = true;
+        ESP_LOGW("OC", "[HOLDUP] pin at %.0f mV, above the %d mV the 6 dB range is good "
+                       "for — V_SCAP readings from here are clipped; check R125/R126 and VCHG (#1166)",
+                 (double)pin_mv, config::HOLDUP_PIN_CEILING_MV);
+    }
+    return pin_mv * 0.001f * config::SCAP_DIVIDER_RATIO;
 }
 
-// Once a second: read, judge, and keep the [HOLDUP] console trace — dense
-// through the ~2 min charge ramp, sparse after, and at once on any change of
-// verdict.  A NOT CHARGING verdict is a warning; everything else is info.
+// Once a second: read, judge, and keep the [HOLDUP] console trace — a line
+// per 50 mV of movement (every ~2.5 s through the charge ramp, every second
+// through a discharge), at least one a minute, and at once on any change of
+// verdict.  NOT CHARGING and NO READING are warnings; everything else is info.
 static void serviceHoldup(uint32_t now_ms)
 {
     if (!scap_adc_ready) return;
-    static bool     ever_read     = false;
-    static uint32_t last_read_ms  = 0;
-    static bool     ever_traced   = false;
-    static uint32_t last_trace_ms = 0;
-    static uint8_t  last_state    = holdup_policy::NONE;
+    static bool     ever_read      = false;
+    static uint32_t last_read_ms   = 0;
+    static bool     ever_traced    = false;
+    static uint32_t last_trace_ms  = 0;
+    static float    last_traced_v  = NAN;
+    static uint8_t  last_state     = holdup_policy::NONE;
     if (ever_read && (uint32_t)(now_ms - last_read_ms) < 1000u) return;
     ever_read    = true;
     last_read_ms = now_ms;
@@ -1733,15 +1750,22 @@ static void serviceHoldup(uint32_t now_ms)
                                              config::HOLDUP_CHARGED_V,
                                              config::HOLDUP_LOW_ADVISORY_MS);
     const bool changed = (st != last_state);
-    const bool due = holdup_policy::traceDue(now_ms, last_trace_ms, ever_traced,
-                                             config::HOLDUP_TRACE_RAMP_MS,
-                                             config::HOLDUP_TRACE_FAST_MS,
-                                             config::HOLDUP_TRACE_SLOW_MS);
-    if (changed || due)
+    const bool due = holdup_policy::traceDue(changed, ever_traced,
+                                             holdup_scap_v, last_traced_v,
+                                             now_ms, last_trace_ms,
+                                             config::HOLDUP_TRACE_DELTA_V,
+                                             config::HOLDUP_TRACE_PERIOD_MS);
+    if (due)
     {
         ever_traced   = true;
         last_trace_ms = now_ms;
-        if (st == holdup_policy::NOT_CHARGING)
+        last_traced_v = holdup_scap_v;
+        if (st == holdup_policy::NO_READING)
+        {
+            ESP_LOGW("OC", "[HOLDUP] +%lu s no reading from the hold-up cap sense (#1166)",
+                     (unsigned long)(now_ms / 1000u));
+        }
+        else if (st == holdup_policy::NOT_CHARGING)
         {
             ESP_LOGW("OC", "[HOLDUP] +%lu s V_SCAP=%.2f V — hold-up cap NOT CHARGING: under the "
                            "%.2f V bar for %lu s, the brownout bridge is not there (#1166)",
