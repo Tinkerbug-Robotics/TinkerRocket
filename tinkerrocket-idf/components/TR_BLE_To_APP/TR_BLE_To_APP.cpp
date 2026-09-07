@@ -593,7 +593,32 @@ void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
     // would be wrong.
     conn_param_due_ms_ = 0;
     conn_param_attempts_ = 0;
+
+    // #1124: the queued commands belong to that connection too — the same
+    // argument as conn_param_due_ms_ three lines up, but with teeth. loop_oc
+    // drains one ring entry per iteration with no connection gate, so a command
+    // pushed during a multi-second stall (a log download holds the loop for
+    // minutes) is dispatched after the link has gone. For cmd 36 that is a
+    // deployment channel firing seconds-to-minutes after the operator tapped
+    // it, saw nothing happen and walked toward the rocket, with nobody
+    // connected — the latent-fire hazard #804's rail-off refusal exists to
+    // prevent, arriving by a path that refusal does not cover.
+    portENTER_CRITICAL(&s_cmd_mux);
+    const size_t dropped = cmd_ring_.size();
+    cmd_ring_.clear();
+    portEXIT_CRITICAL(&s_cmd_mux);
+    // consumed_ holds the entry loop_oc is midway through reading (the
+    // file_list_page / delete_name / download_name "clears after reading"
+    // contract); drop it too so nothing from the dead link survives.
+    consumed_ = tr_ble::PendingCommand{};
+
     ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d (%s)", reason, disconnectReasonName(reason));
+    if (dropped > 0)
+    {
+        ESP_LOGW(BLE_TAG, "dropped %u queued command(s) on disconnect (#1124) — "
+                 "they belonged to the connection that just went away",
+                 (unsigned)dropped);
+    }
 
     // #834 item 7: an app that vanishes mid-OTA must not strand the session.
     // For a RELAY (target == 1) the cost is severe and silent: the OC is left

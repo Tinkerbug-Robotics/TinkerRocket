@@ -65,6 +65,16 @@ public:
         return true;
     }
 
+    // Drop every queued command. #1124: commands belong to the connection that
+    // sent them — a queued pyro test fire (cmd 36) that the operator tapped,
+    // saw ignored, and walked away from must not execute on the next
+    // connection, or with nobody connected at all.
+    void clear()
+    {
+        head_  = 0;
+        count_ = 0;
+    }
+
     // Pop the OLDEST entry into `out`. Returns false and leaves `out` untouched
     // when empty.
     bool pop(PendingCommand& out)
