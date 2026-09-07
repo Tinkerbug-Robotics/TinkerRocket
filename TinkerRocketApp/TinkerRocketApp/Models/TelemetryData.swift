@@ -18,6 +18,12 @@ struct TelemetryData: Codable {
     // those is something we measured.
     var cam_current: Float?           // Camera rail current A  (nil = not measured)
     var servo_current: Float?         // Servo rail current A   (nil = not measured)
+    // #1166: the hold-up supercap on rocket-computer-mini (V_SCAP, volts) and
+    // the out computer's verdict on it ("hu": 1 charging, 2 charged, 3 never
+    // charged — HoldupState).  nil = no sense line on this board, or a relay
+    // link (LoRa does not carry it).  Rendered as one quiet advisory line.
+    var scap_voltage: Float?
+    var holdup_state: Int?
     var voltage: Float?               // Battery voltage V
     var latitude: Double?             // GPS latitude degrees
     var longitude: Double?            // GPS longitude degrees
@@ -241,6 +247,20 @@ struct TelemetryData: Codable {
     // absolute position and guidance is off.  Rides sensor_health, so it reaches
     // the app on both the direct-BLE and base-station-relay paths.
     var gnssAbsentMode: Bool { shState(22) == .bad }
+
+    // #1166: the out computer's verdict on the hold-up supercap ("hu").
+    enum HoldupState: Int { case charging = 1, charged = 2, notCharging = 3 }
+    var holdupState: HoldupState? { holdup_state.flatMap(HoldupState.init(rawValue:)) }
+    /// The one quiet advisory line for a hold-up cap that never charged, or
+    /// nil when there is nothing to say.  Android twin:
+    /// `holdupAdvisoryText(Int?, Float?)`.
+    var holdupAdvisoryText: String? {
+        guard holdupState == .notCharging else { return nil }
+        if let v = scap_voltage {
+            return String(format: "Hold-up backup not charged — %.2f V", v)
+        }
+        return "Hold-up backup not charged"
+    }
     func pyroHealth(channel: Int) -> SensorHealth {   // channel 1...4; .na = not configured
         guard (1...4).contains(channel) else { return .na }
         return shState(12 + (channel - 1) * 2)
@@ -430,6 +450,8 @@ struct TelemetryData: Codable {
         case current = "cur"
         case cam_current = "ccur"      // #850
         case servo_current = "scur"    // #850
+        case scap_voltage = "scap"     // #1166
+        case holdup_state = "hu"       // #1166
         case voltage = "vol"
         case latitude = "lat"
         case longitude = "lon"
@@ -507,6 +529,9 @@ struct TelemetryData: Codable {
         // fitted") rather than becoming 0 ("measured zero amps").
         cam_current = try c.decodeIfPresent(Float.self, forKey: .cam_current)
         servo_current = try c.decodeIfPresent(Float.self, forKey: .servo_current)
+        // #1166: absent stays nil ("no sense line / relay"), never 0.
+        scap_voltage = try c.decodeIfPresent(Float.self, forKey: .scap_voltage)
+        holdup_state = flexInt(.holdup_state)
         voltage = try c.decodeIfPresent(Float.self, forKey: .voltage)
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)

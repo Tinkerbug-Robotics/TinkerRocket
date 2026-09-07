@@ -922,6 +922,20 @@ target_include_directories(test_rail_restore_policy PRIVATE
 target_link_libraries(test_rail_restore_policy GTest::gtest_main)
 gtest_discover_tests(test_rail_restore_policy)
 
+# ---------- test_holdup_policy (#1166) ----------
+# The out computer's verdict on rocket-computer-mini's hold-up supercap from a
+# stream of V_SCAP readings: charging through the ~2 min ramp, charged at the
+# 2.2 V bar, NOT_CHARGING after three minutes under it, with the grace window
+# running from the last charged reading after a drain. Pure header in the OC
+# project; the ADC read and the telemetry key stay in main.cpp.
+add_executable(test_holdup_policy test_holdup_policy.cpp)
+target_include_directories(test_holdup_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_holdup_policy GTest::gtest_main)
+gtest_discover_tests(test_holdup_policy)
+
 # ---------- test_flight_token_policy (#1176) ----------
 # Tier 2 of the OC boot rail decision: a durable NVS token says a flight was in
 # progress and never cleanly ended, so the rail comes back even though the reset

@@ -25,6 +25,19 @@ class TR_BLE_To_APP
 {
 public:
     // Telemetry data structure matching web GUI
+    // #1166: the out computer's verdict on the hold-up supercap, carried as
+    // the telemetry key "hu".  The apps render NOT_CHARGING as one quiet
+    // advisory line under the state banner — never a recolour, never an arm
+    // block (the hardware fix in #999 makes a non-charging cap unlikely; this
+    // is the diagnostic that says so if it happens anyway).
+    enum HoldupState : uint8_t
+    {
+        HOLDUP_NONE         = 0,  // no sense line, or not read yet — key absent
+        HOLDUP_CHARGING     = 1,  // under the charged bar, inside the grace window
+        HOLDUP_CHARGED      = 2,  // at or above the charged bar
+        HOLDUP_NOT_CHARGING = 3,  // under the bar for the whole grace window — advisory
+    };
+
     struct TelemetryData
     {
         float soc;              // Battery state of charge %
@@ -42,6 +55,14 @@ public:
         // claimed a measured zero on hardware that has no monitor at all.
         float cam_current   = NAN;  // Camera rail current A  (NaN = not measured)
         float servo_current = NAN;  // Servo rail current A   (NaN = not measured)
+        // #1166: the hold-up supercap (rocket-computer-mini: V_SCAP_ADC lands
+        // on the out computer).  Cap voltage in volts, NaN where the board has
+        // no sense line (V7/V8/V9) so the key is simply absent; and the OC's
+        // verdict on it — one of the HoldupState values below, 0 = not
+        // reported.  A hold-up that silently is not there looks exactly like
+        // one that is, which is why the verdict travels at all.
+        float   scap_voltage = NAN;
+        uint8_t holdup_state = 0;
         float voltage;          // Battery voltage V
         double latitude;        // GPS latitude degrees
         double longitude;       // GPS longitude degrees

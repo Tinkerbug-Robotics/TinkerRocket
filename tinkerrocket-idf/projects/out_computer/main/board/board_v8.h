@@ -115,6 +115,10 @@ struct board_pins
     // NOT VERIFIED against V8 artwork, which lives outside this repo — this is
     // the safe direction, not a measurement. If a V8 board is ever confirmed to
     // carry the monitors, restore the pins and the V9 gain constants together.
+    // #1166: no hold-up supercap sense line on this processor (the V10's
+    // V_SCAP_ADC goes to the flight computer; V7/V8/V9 have no hold-up).
+    static constexpr int   SCAP_ADC_PIN       = -1;
+    static constexpr float SCAP_DIVIDER_RATIO = 1.0f;    // unused with no pin
     static constexpr int   CAM_IMON_GPIO      = -1;
     static constexpr int   SERVO_IMON_GPIO    = -1;
     static constexpr float IMON_GAIN_A_PER_A  = 0.0f;

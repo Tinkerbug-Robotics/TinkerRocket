@@ -2022,6 +2022,14 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("ccur", data.cam_current, 2);
     addFloat("scur", data.servo_current, 2);
 
+    // #1166: hold-up supercap voltage and the OC's verdict on it.  Both absent
+    // on boards without the V_SCAP sense line (addFloat drops NaN; state 0 is
+    // not emitted), so V7/V8/V9 pay nothing.  "hu" 3 = under the charged bar
+    // for the whole grace window: the apps show one quiet advisory line.
+    // Two decimals: the bar is 2.2 V on a 2.5 V termination, 10 mV is plenty.
+    addFloat("scap", data.scap_voltage, 2);
+    if (data.holdup_state != 0) { addUint("hu", data.holdup_state); }
+
     // ── Tier 3: diagnostics / link / base station (first to drop) ─────────
 
     // LoRa signal quality (NaN on direct connection — will be omitted)

@@ -153,6 +153,12 @@ public data class TelemetryData(
     // identical at zero and only one of them is a measurement.
     val camCurrent: Float? = null,            // "ccur" Camera rail current A
     val servoCurrent: Float? = null,          // "scur" Servo rail current A
+    // #1166: the hold-up supercap on rocket-computer-mini (V_SCAP, volts) and
+    // the out computer's verdict on it ("hu": 1 charging, 2 charged, 3 never
+    // charged — HoldupState).  null = no sense line on this board, or a relay
+    // link (LoRa does not carry it).  Rendered as one quiet advisory line.
+    val scapVoltage: Float? = null,           // "scap" Hold-up cap voltage V
+    val holdupState: Int? = null,             // "hu"   HoldupState code
     val voltage: Float? = null,               // "vol"  Battery voltage V
     val latitude: Double? = null,             // "lat"  GPS latitude degrees
     val longitude: Double? = null,            // "lon"  GPS longitude degrees
@@ -418,6 +424,9 @@ public data class TelemetryData(
     // (fix health, shift 8).  BAD (0b11) = FC initialized the EKF on the
     // baro+IMU path (dead/deaf module): no absolute position, guidance off.
     public val gnssAbsentMode: Boolean get() = shState(22) == SensorHealth.BAD
+
+    /** #1166: the one quiet advisory line for a hold-up cap that never charged, or null. */
+    public val holdupAdvisoryText: String? get() = holdupAdvisoryText(holdupState, scapVoltage)
 
     /** Channel 1..4; NA = not configured (and for out-of-range channels). */
     public fun pyroHealth(channel: Int): SensorHealth {
@@ -716,6 +725,8 @@ public data class TelemetryData(
             current = strictFloat(json, "cur"),
             camCurrent = strictFloat(json, "ccur"),      // #850
             servoCurrent = strictFloat(json, "scur"),    // #850
+            scapVoltage = strictFloat(json, "scap"),     // #1166
+            holdupState = flexInt(json, "hu"),           // #1166
             voltage = strictFloat(json, "vol"),
             latitude = strictDouble(json, "lat"),
             longitude = strictDouble(json, "lon"),
@@ -790,6 +801,28 @@ public data class TelemetryData(
  *
  * iOS twin: `TelemetryData.railAmpsDisplay(_:)`.
  */
+/** #1166: the out computer's verdict on the hold-up supercap (telemetry key "hu"). */
+public enum class HoldupState(public val code: Int) {
+    CHARGING(1), CHARGED(2), NOT_CHARGING(3);
+
+    public companion object {
+        public fun fromCode(code: Int?): HoldupState? = values().firstOrNull { it.code == code }
+    }
+}
+
+/**
+ * The one quiet advisory line for a hold-up cap that never charged, or null
+ * when there is nothing to say.  iOS twin: `TelemetryData.holdupAdvisoryText`.
+ */
+public fun holdupAdvisoryText(state: Int?, scapVolts: Float?): String? {
+    if (HoldupState.fromCode(state) != HoldupState.NOT_CHARGING) return null
+    return if (scapVolts != null) {
+        String.format(java.util.Locale.US, "Hold-up backup not charged — %.2f V", scapVolts)
+    } else {
+        "Hold-up backup not charged"
+    }
+}
+
 public fun railAmpsDisplay(amps: Float?): String {
     if (amps == null) return "\u2014"
     return if (amps >= 1.0f) String.format(java.util.Locale.ROOT, "%.2f A", amps)
