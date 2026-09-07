@@ -185,6 +185,7 @@ phone                                            device
 | Phone-side disconnect mid-stream | (device times out after 30s of no chunks, calls `esp_ota_abort`) | On reconnect, send `OTA_ABORT` defensively then start fresh |
 | Power loss mid-flash | (no change — `ota_1` is half-written but unused; bootloader still boots `ota_0`) | Restart OTA from scratch |
 | `OTA_BEGIN` while a session is active | `esp_ota_abort` prior session, start new | (initiated by phone; phone considers prior session lost) |
+| `OTA_BEGIN` refused (`bad_payload`, `bad_target`, or `inflight_refused` — the OC will not flash its own image while the FC reports INFLIGHT, #1106) | `verify_failed` with the token in `err`; no session opened | Report `Device refused OTA_BEGIN: <err>` — the token, not the begin timeout; allow retry from picker |
 
 ### 2.6 Throughput estimate
 
