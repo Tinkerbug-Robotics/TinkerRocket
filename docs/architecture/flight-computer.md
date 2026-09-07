@@ -201,7 +201,12 @@ Two links, opposite directions, different roles.
 **I2S carries telemetry out.** The FC is master TX, streaming packed sensor frames
 continuously. A sender task on core 0 owns the write so the flight loop never blocks on
 it. During an OTA the link flips: the FC becomes slave RX and receives a firmware image
-through the same pins.
+through the same pins. The Out Computer's finish or abort command ends that session — or,
+if neither ever arrives (a dropped command, an Out Computer reboot mid-transfer), the FC
+ends it itself: no accepted image byte for 30 s once the Out Computer has released the
+clock, and a new begin supersedes a session that is still open (#1116). Left open, the
+flipped link means no telemetry out, the navigation filter paused and the flight loop
+throttled, with no way back short of a battery pull.
 
 **I2C carries commands in.** The FC is master and polls the Out Computer every 250 ms,
 reading a combined `[status][optional config]` response of exactly 96 bytes. The protocol

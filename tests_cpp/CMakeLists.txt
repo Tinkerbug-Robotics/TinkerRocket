@@ -1063,3 +1063,33 @@ target_include_directories(test_ota_relay_policy PRIVATE
 )
 target_link_libraries(test_ota_relay_policy GTest::gtest_main)
 gtest_discover_tests(test_ota_relay_policy)
+
+# ---------- test_fc_ota_session_policy (#1116) ----------
+# The FC's own exit from an OTA image session that nobody ends: the I2S link
+# was flipped to slave RX for the image and only an OC-delivered FINISH/ABORT
+# flipped it back, so a dropped command (or an OC reboot) left the FC without
+# telemetry or EKF until a battery pull. The decision — no accepted image byte
+# for 30 s, once the OC has released the clock — is the policy; it includes
+# the OC's ota_relay_policy.h to pin that the OC's watchdog fires first.
+add_executable(test_fc_ota_session_policy test_fc_ota_session_policy.cpp)
+target_include_directories(test_fc_ota_session_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_fc_ota_session_policy GTest::gtest_main)
+gtest_discover_tests(test_fc_ota_session_policy)
+
+# ---------- test_cmd_queue_admit_policy (#1116) ----------
+# The OC half: the relay queue holds two slots back for OTA_FINISH_CMD /
+# OTA_ABORT_CMD, the FC's only way out of image mode, so a queue full of a
+# profile sync can no longer drop them. Pure apart from the shared command-id
+# constants.
+add_executable(test_cmd_queue_admit_policy test_cmd_queue_admit_policy.cpp)
+target_include_directories(test_cmd_queue_admit_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_cmd_queue_admit_policy GTest::gtest_main)
+gtest_discover_tests(test_cmd_queue_admit_policy)

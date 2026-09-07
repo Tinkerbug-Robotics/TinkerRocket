@@ -153,7 +153,11 @@ an in-flight one), a repeated command id replaces the queued payload in place ra
 than flooding the queue (self-applying settings sliders stay bounded), and pyro test
 commands jump to the front so a manual test keeps its immediacy instead of waiting
 behind a profile sync. One idle poll is served between commands so the FC's dedup
-filter sees a reset edge between back-to-back identical ids.
+filter sees a reset edge between back-to-back identical ids. A fourth quirk is from
+#1116: the two commands that end an FC OTA image session (finish, abort) have two slots
+held in reserve, because they are the FC's only way out of its flipped, slave-RX image
+mode and a queue full of a profile sync used to drop them. (The FC also times such a
+session out on its own now, so a drop is no longer permanent — but still a failed update.)
 
 With the rail off the queue simply holds. Connecting and configuring before power-on
 works by design — the whole sync drains in order once the FC boots.

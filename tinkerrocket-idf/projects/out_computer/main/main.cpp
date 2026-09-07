@@ -66,6 +66,7 @@ static inline std::string itos(int v)
 #include "dedup_reboot_policy.h"
 #include "cmd_queue_dedupe_policy.h"  // #837 item 11: pyro tests key on channel
 #include "cmd_queue_session_policy.h" // #1105: retire one-shots when the FC reports a boot
+#include "cmd_queue_admit_policy.h"   // #1116: two slots held back for OTA_FINISH/ABORT
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -622,12 +623,16 @@ static void setPendingCommandWithConfig(uint8_t cmd, uint8_t msg_type,
             return;
         }
     }
-    if (cmd_queue_count >= CMD_QUEUE_DEPTH)
+    // #1116: the two commands that end an FC OTA image session have two slots
+    // held back for them (cmd_queue_admit_policy.h). A full queue used to drop
+    // the FINISH/ABORT that is the FC's only way out of slave-RX image mode.
+    if (!cmdQueueAdmits(cmd, cmd_queue_count, CMD_QUEUE_DEPTH))
     {
+        const size_t queued = cmd_queue_count;
         cmd_queue_drops++;
         portEXIT_CRITICAL(&cmd_queue_mux);
-        ESP_LOGW("OC", "FC cmd queue FULL — dropped cmd 0x%02X (drops=%lu)",
-                 (unsigned)cmd, (unsigned long)cmd_queue_drops);
+        ESP_LOGW("OC", "FC cmd queue FULL — dropped cmd 0x%02X (queued=%u, drops=%lu)",
+                 (unsigned)cmd, (unsigned)queued, (unsigned long)cmd_queue_drops);
         return;
     }
     if (front)
@@ -3702,6 +3707,14 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 case OTA_RELAY_ABORTED:       state = "aborted"; terminal = true; break;
                 default: break;
             }
+            // #1116: a terminal status means the FC is back in master TX with
+            // no session — nothing is left to flip for. Clear the pre-flip
+            // arming here as well as on our own finish/abort paths: the FC now
+            // ends a session by itself (its watchdog, or a BEGIN superseding a
+            // stale one), and a READY armed on this side with no OC-side
+            // teardown to clear it would flip us to master TX at the FC's next
+            // silence (a reboot), with no session — the #834 item 7 hazard.
+            if (terminal) ocOtaRelayClearPendingFlip();
             // Dedupe identical consecutive FC resends (see last_relay_* above):
             // keep the per-frame serial log (confirms the resends arrived over
             // I2S) but only re-notify the app when the status actually changes.
