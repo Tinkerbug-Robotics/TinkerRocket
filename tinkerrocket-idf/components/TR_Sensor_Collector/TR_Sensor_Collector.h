@@ -22,6 +22,7 @@
 #include <TR_GNSSReceiverUBlox_Serial.h>
 #endif
 #include <RocketComputerTypes.h>
+#include "sensor_cal_math.h"
 
 typedef struct
 {
@@ -152,8 +153,14 @@ public:
     void getPollTimingSnapshot(PollTimingSnapshot &snapshot_out) const;
     void resetPollTimingSnapshot();
 
-    // Pad calibration: gyro zero-rate + high-g accel cross-cal against low-g
-    void calibrateGyro(float rotation_z_deg = 0.0f);
+    // Pad calibration: gyro zero-rate + high-g accel cross-cal against low-g.
+    // Blocks the caller for CAL_WINDOW_US (~10 s) while pollIMUdata — the
+    // sole owner of the SPI bus — sums every ISM6 sample it reads (#1110).
+    // Returns true when a result was measured and committed.  Returns false,
+    // leaving the previous offsets untouched, when the poll task produced no
+    // samples inside the window or the low-g gravity magnitude failed the
+    // plausibility band in sensor_cal_math.h.
+    bool calibrateGyro(float rotation_z_deg = 0.0f);
     int16_t gyro_cal_x;
     int16_t gyro_cal_y;
     int16_t gyro_cal_z;
@@ -199,6 +206,23 @@ private:
     // between transactions. The ISM6 uses spi_device_polling_transmit, so
     // only the poll task may touch the chip once it is running (#475).
     volatile uint16_t ism6_rate_pending_ = 0;
+    // #1110: the pad calibration is serviced by pollIMUdata as well.
+    // calibrateGyro() (flight task, core 1) posts cal_request_pending_ and
+    // blocks on cal_done_sem_; the poll task opens a CAL_WINDOW_US window,
+    // sums every ISM6 sample into cal_sums_ instead of enqueueing it, and
+    // gives the semaphore once the deadline has passed — even if DRDY has
+    // gone quiet, so the flight task always gets an answer.  It used to
+    // vTaskSuspend() the poll task from the other core and drive the bus
+    // itself: a suspend landing inside a BMP585/MMC5983MA transaction froze
+    // the SPI bus lock (calibration blocked forever, task-WDT reboot on the
+    // pad) or left that chip select asserted for the whole calibration (two
+    // slaves on MISO, garbage offsets saved to NVS).
+    static constexpr uint32_t CAL_WINDOW_US = 10'000'000;  // the ~10 s the old 1000 x 10 ms loop took; the app's spinner is a 12 s timer
+    volatile bool     cal_request_pending_ = false;  // flight task -> poll task; a lone flag with no payload to order
+    bool              cal_active_ = false;           // poll-task private: window open
+    uint32_t          cal_deadline_us_ = 0;          // poll-task private
+    SensorCalSums     cal_sums_;                     // written by the poll task; read by the flight task only after cal_done_sem_
+    SemaphoreHandle_t cal_done_sem_ = nullptr;       // created in begin(); given once per window
     uint8_t BMP585_CS;
     uint8_t BMP585_INT;
     uint16_t BMP585_UPDATE_RATE;

@@ -249,6 +249,17 @@ target_include_directories(test_sensor_data_converter PRIVATE
 target_link_libraries(test_sensor_data_converter GTest::gtest_main)
 gtest_discover_tests(test_sensor_data_converter)
 
+# ---------- test_sensor_cal_math ----------
+# Pad-calibration arithmetic (#1110): window sums -> gyro zero-rate offsets,
+# high-g cross-cal bias, and the gravity plausibility gate.  Header-only and
+# IDF-free, so it runs here; the poll-task handshake around it is bench-only.
+add_executable(test_sensor_cal_math test_sensor_cal_math.cpp)
+target_include_directories(test_sensor_cal_math PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector
+)
+target_link_libraries(test_sensor_cal_math GTest::gtest_main)
+gtest_discover_tests(test_sensor_cal_math)
+
 # ---------- test_orientation ----------
 # Board→rocket mounting orientation utilities (discrete 24-code set,
 # quaternion round-trips, gravity nose snap, pad attitude init).

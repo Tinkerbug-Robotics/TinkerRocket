@@ -65,20 +65,24 @@ void SensorCollectorSim::resetPollTimingSnapshot()
 // Calibration (no-op — sim data is synthetic, no real bias to correct)
 // ============================================================================
 
-void SensorCollectorSim::calibrateGyro(float rotation_z_deg)
+bool SensorCollectorSim::calibrateGyro(float rotation_z_deg)
 {
     if (isSimActive())
     {
         Serial.println("[SIM] calibrateGyro called — no-op in sim mode");
-        return;
+        // Nothing measured and nothing changed; the caller re-saves what it
+        // already holds, exactly as before the verdict existed.
+        return true;
     }
     // Sim not active — delegate to real hardware
-    real_.calibrateGyro(rotation_z_deg);
-    // Copy results so FlightComputer can read them from the wrapper
+    const bool ok = real_.calibrateGyro(rotation_z_deg);
+    // Copy results so FlightComputer can read them from the wrapper.  A
+    // rejected run leaves real_'s values as they were, so this is a no-op then.
     hg_bias_x       = real_.hg_bias_x;
     hg_bias_y       = real_.hg_bias_y;
     hg_bias_z       = real_.hg_bias_z;
     cal_gravity_mag  = real_.cal_gravity_mag;
+    return ok;
 }
 
 bool SensorCollectorSim::setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz)
