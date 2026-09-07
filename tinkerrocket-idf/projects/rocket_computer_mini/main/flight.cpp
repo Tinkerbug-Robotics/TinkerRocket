@@ -22,6 +22,7 @@
 #include <TR_I2C_Interface.h>      // packMessage/unpackMessage statics only — no bus
 #include <TR_Orientation.h>
 #include <TR_GpsInsEKF.h>
+#include <EkfGnssFeed.h>      // #1107: the GNSS input the EKF is handed each tick
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
@@ -333,11 +334,10 @@ static uint32_t ref_pos_count = 0;
 static bool ref_pos_frozen = false;
 static constexpr uint32_t REF_POS_MAX_AGE_MS = 120000; // 2 minutes
 static uint32_t ref_pos_first_time_ms = 0;
-// Last GNSS time_us fed to EKF (avoid double-counting same sample)
-static uint32_t last_gnss_time_us_for_ekf = 0;
-// Duplicate-fix detection: track GPS fix timestamp (second + milli_second).
-static uint8_t  last_gnss_fix_second = 0xFF;
-static uint16_t last_gnss_fix_ms     = 0xFFFF;
+// The GNSS input the EKF is handed on every tick: the last accepted fix, held
+// unchanged until a newer one arrives.  The loop keeps no "consumed" markers of
+// its own — the filter fuses each fix time_us once — see EkfGnssFeed.h (#1107).
+static EkfGnssFeed ekf_gnss_feed;
 static bool landed_actions_done = false;
 
 static bool burnout_detected = false;
@@ -1255,9 +1255,7 @@ static void resetFlightStateForSim(const char* edge)
     ref_lat_sum = ref_lon_sum = ref_alt_sum = 0.0;
     ref_pos_count = 0;
     ref_pos_first_time_ms = 0;
-    last_gnss_time_us_for_ekf = 0;
-    last_gnss_fix_second = 0xFF;
-    last_gnss_fix_ms     = 0xFFFF;
+    ekf_gnss_feed.reset();
     gnss_started = false;
     have_gnss_si = false;
     // #557: a sim injects synthetic GNSS, so re-evaluate the degraded path from
@@ -3182,32 +3180,40 @@ static void loop_fc()
 
             // ── Build EKF input: GNSS in LLA + NED ──
             // Layered quality gating:
-            //   Gate 1: fix >= 3, sats >= MIN, h_acc < MAX, new timestamp
+            //   Gate 1: fix >= 3, sats >= MIN, h_acc < MAX, and a newly arrived fix
             //   Gate 3: init requires h_acc < INIT_MAX and vel < INIT_MAX_VEL
             // Gate 2 (chi-squared innovation test) lives inside EKF::measUpdate.
             //
-            // EKF decimation gate, computed up-front: the GNSS consume/dedup
-            // below must know whether the EKF will actually process the fix
-            // this tick (#367).  (The FC also paused the EKF while an OTA
-            // image streamed — no such mode here.)
+            // EKF decimation: run predict+update every Nth flight-loop tick.
+            // (The FC also pauses the EKF while an OTA image streams — no such
+            // mode here.)
             static uint8_t ekf_decim_ctr = 0;
             const bool run_ekf_this_tick =
                 (++ekf_decim_ctr >= config::EKF_DECIMATION);
             if (run_ekf_this_tick) ekf_decim_ctr = 0;
 
-            EkfGNSSDataLLA ekf_gnss = {};
-            const bool gnss_fix_is_new =
-                (gnss_latest_si.second != last_gnss_fix_second) ||
-                (gnss_latest_si.milli_second != last_gnss_fix_ms);
             const bool hacc_ok =
                 (config::GNSS_MAX_HACC_M <= 0.0f) ||  // 0 = disable h_acc gate
                 (gnss_latest_si.horizontal_accuracy < config::GNSS_MAX_HACC_M);
-            const bool gnss_gate1 =
+            const bool gnss_quality_ok =
                 have_gnss_si &&
                 gnss_latest_si.fix_mode >= 3U &&
                 gnss_latest_si.num_sats >= config::GNSS_MIN_SATS &&
-                hacc_ok &&
-                gnss_fix_is_new;
+                hacc_ok;
+            // #1107: the feed holds the last accepted fix and the EKF is handed
+            // THAT, unchanged, on every tick until a newer one arrives.  The
+            // filter fuses each fix time_us once and skips a repeat, so which
+            // fixes are consumed is tracked in exactly one place — the filter —
+            // and a fix it did not get to (a #440 frozen-IMU-timestamp skip, an
+            // EKF-off decimation tick) is simply offered again next tick.  This
+            // loop used to keep its own consumed markers and, once they said
+            // "seen", hand the EKF an all-zero LLA/velocity under the marker's
+            // timestamp; whenever the two disagreed (#367, then #1107) the
+            // filter fused lat=0/lon=0/alt=0/vel=0 as a real fix.  Never hand it
+            // a placeholder: a real fix, or the previous one again.
+            const bool gnss_gate1 =
+                ekf_gnss_feed.offer(gnss_latest_si, gnss_quality_ok);  // true once per new accepted fix
+            const EkfGNSSDataLLA& ekf_gnss = ekf_gnss_feed.current();
             // Gate 3 (init-specific): tighter accuracy + low velocity on pad
             const float gnss_vel_mag = sqrtf(
                 (float)(gnss_latest_si.vel_e * gnss_latest_si.vel_e +
@@ -3224,25 +3230,8 @@ static void loop_fc()
 
             if (gnss_gate1)
             {
-                static constexpr double DEG2RAD = M_PI / 180.0;
-                ekf_gnss.time_us   = gnss_latest_si.time_us;
-                ekf_gnss.lat_rad   = gnss_latest_si.lat * DEG2RAD;
-                ekf_gnss.lon_rad   = gnss_latest_si.lon * DEG2RAD;
-                ekf_gnss.alt_m     = gnss_latest_si.alt;
-                ekf_gnss.vel_n_mps = (float)gnss_latest_si.vel_n;
-                ekf_gnss.vel_e_mps = (float)gnss_latest_si.vel_e;
-                ekf_gnss.vel_d_mps = -(float)gnss_latest_si.vel_u; // ENU U→NED D
-                // #367: only mark the fix consumed when the EKF actually runs
-                // this tick.  Advancing these markers on a decimation-"off"
-                // tick would drop the fix and inject a zeroed measurement
-                // carrying this (never-processed) timestamp.
-                if (run_ekf_this_tick)
-                {
-                    last_gnss_time_us_for_ekf = gnss_latest_si.time_us;
-                    last_gnss_fix_second     = gnss_latest_si.second;
-                    last_gnss_fix_ms         = gnss_latest_si.milli_second;
-                }
-
+                // Once per newly accepted fix (whether or not the EKF runs this
+                // tick — the fix itself waits in the feed for the next EKF tick).
                 // Scale GNSS noise by h_acc — inflate R when receiver is
                 // uncertain.  Nominal R assumes h_acc ≈ 3 m.
                 //
@@ -3284,9 +3273,6 @@ static void loop_fc()
                                       (unsigned long)ref_pos_count);
                     }
                 }
-            } else {
-                // Pass stale GNSS timestamp so EKF skips measurement update
-                ekf_gnss.time_us = last_gnss_time_us_for_ekf;
             }
 
             // ── Initialize or update the EKF ──
@@ -3310,20 +3296,24 @@ static void loop_fc()
                     (initGyroN >= 8) &&
                     ((int32_t)(time_ms() - gnss_absent_dwell_ms) >= 0);
                 if (normal_init || degraded_init) {
+                    EkfGNSSDataLLA init_gnss = ekf_gnss;
                     if (degraded_init) {
                         // Pad-relative seed: lat/lon 0 (equator — regular, no
                         // geodetic singularity), alt from baro, zero velocity,
                         // and a stale GNSS time so the EKF never runs a GNSS
                         // measurement update against this fake origin.  Baro
                         // then bounds the vertical channel and accel+mag
-                        // bound attitude.
-                        ekf_gnss.time_us   = 0;
-                        ekf_gnss.lat_rad   = 0.0;
-                        ekf_gnss.lon_rad   = 0.0;
-                        ekf_gnss.alt_m     = pressure_altitude_m;
-                        ekf_gnss.vel_n_mps = 0.0f;
-                        ekf_gnss.vel_e_mps = 0.0f;
-                        ekf_gnss.vel_d_mps = 0.0f;
+                        // bound attitude.  (Degraded init is gated on never
+                        // having started GNSS, so the feed holds no fix and
+                        // keeps handing the EKF time_us 0 — equal to this
+                        // seed's — which the filter skips, #1107.)
+                        init_gnss.time_us   = 0;
+                        init_gnss.lat_rad   = 0.0;
+                        init_gnss.lon_rad   = 0.0;
+                        init_gnss.alt_m     = pressure_altitude_m;
+                        init_gnss.vel_n_mps = 0.0f;
+                        init_gnss.vel_e_mps = 0.0f;
+                        init_gnss.vel_d_mps = 0.0f;
                     }
                     // #297: seed wBias off the recent-window gyro average
                     // rather than the single live sample (see the ring above).
@@ -3340,7 +3330,7 @@ static void loop_fc()
                         ekf_imu.gyro_y = gsum[1] / initGyroN;
                         ekf_imu.gyro_z = gsum[2] / initGyroN;
                     }
-                    ekf.init(ekf_imu, ekf_gnss, ekf_mag);
+                    ekf.init(ekf_imu, init_gnss, ekf_mag);
 
                     // Pad attitude initialization: quaternion from measured
                     // gravity plus the known pad heading, bypassing the noisy

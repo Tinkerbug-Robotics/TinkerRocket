@@ -132,6 +132,11 @@ public:
     void getRotRateBias(float (&r)[3]) const { r[0]=wBias_rps_[0]; r[1]=wBias_rps_[1]; r[2]=wBias_rps_[2]; }
     // #440 diagnostics: updates skipped on a frozen IMU timestamp.
     uint32_t frozenDtSkips() const { return frozen_dt_skips_; }
+    // time_us of the last GNSS measurement actually fused (#1107).  The
+    // caller's feed holds each fix until this catches up with it; a fix
+    // presented on a tick that returned at the frozen-dt skip above shows
+    // here only once a later tick has fused it.
+    uint32_t lastGnssTimeUs() const { return timeWeekPrev_; }
 
     void getOrientEst(float (&r)[3]) const { r[0]=euler_BL_rad_[0]; r[1]=euler_BL_rad_[1]; r[2]=euler_BL_rad_[2]; }
     void getPosEst(double (&r)[3]) const { r[0]=pEst_D_rrm_[0]; r[1]=pEst_D_rrm_[1]; r[2]=pEst_D_rrm_[2]; }

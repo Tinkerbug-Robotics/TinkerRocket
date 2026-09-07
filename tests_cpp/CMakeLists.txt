@@ -145,6 +145,25 @@ target_include_directories(test_ekf PRIVATE
 target_link_libraries(test_ekf GTest::gtest_main)
 gtest_discover_tests(test_ekf)
 
+# ---------- test_ekf_gnss_feed (#1107) ----------
+# What the flight loop hands the EKF as its GNSS input each tick: the last
+# accepted fix, held unchanged until a newer one arrives — never a zeroed
+# placeholder under a "consumed" timestamp.  The loop's own consume markers and
+# the filter's dedup disagreed on a frozen-IMU-timestamp tick (the #440 skip
+# returns before the GNSS block) and the filter then fused lat=0/lon=0/vel=0.
+# Pure header in the shared TR_GpsInsEKF component (the mini shares it); the
+# end-to-end cases drive the real filter.
+add_executable(test_ekf_gnss_feed test_ekf_gnss_feed.cpp
+    ${LIB_DIR}/TR_GpsInsEKF/TR_GpsInsEKF.cpp
+)
+target_include_directories(test_ekf_gnss_feed PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GpsInsEKF
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_ekf_gnss_feed GTest::gtest_main)
+gtest_discover_tests(test_ekf_gnss_feed)
+
 # ---------- test_geomag ----------
 # WMM2025 magnetic-declination model (TR_GeoMag), validated against the
 # official NOAA WMM2025_TestValues.txt reference declinations.
