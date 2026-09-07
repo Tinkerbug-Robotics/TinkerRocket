@@ -2184,6 +2184,40 @@ static constexpr uint8_t SNAPSHOT_MSG         = 0xD2;  // FlightSnapshotData —
                                                        // and OC→FC over I2C as the response to GET_FLIGHT_SNAPSHOT
 static constexpr uint8_t GET_FLIGHT_SNAPSHOT  = 0xD3;  // FC→OC: request the latest snapshot from the OC's store at boot (RAM cache + NAND tail-scan; MRAM slot on V7/V8 — #846)
 
+// --- One-shot actuating commands (#1105) ---
+// The OC→FC commands whose DELIVERY moves or energises hardware, or starts an
+// autonomous sequence: a deployment-channel test fire, the momentary ARM of a
+// continuity test, a servo test or replay, the fin ground test, a simulated
+// flight. Every other command sets state — a config, a desired camera or sound
+// state, a cal step, a stop — and is idempotent to deliver twice.
+//
+// The distinction matters at an FC session boundary. The OC repeats a served
+// command for CMD_REPEAT_LIMIT polls and advances only on polls it receives,
+// so an FC reset inside that window freezes the serving slot; the rebooted FC
+// then reads the same command with a zeroed dedup key and would execute it a
+// second time — for PYRO_FIRE_TEST a second ARM + FIRE pulse with no operator
+// action, after a gap bounded only by the FC's downtime. Delivering a config
+// across that boundary is harmless and wanted (a connect-time sync queues
+// across power-on by design, #366); delivering one of THESE is never wanted,
+// because the operator issued it to a session that no longer exists.
+//
+// Both ends consult this list. The FC executes one only on a 0 -> cmd edge it
+// observed THIS boot (flight_computer oc_cmd_session_gate.h); the OC retires
+// them from its serving slot and queue when the FC reports a boot
+// (out_computer cmd_queue_session_policy.h). Deliberately NOT here: the stop
+// commands (a stop must never be refused), the mag/sensor-cal and OTA session
+// commands (state entries with their own session handling, no hardware
+// motion), and CAMERA_START (a desired state the OC re-asserts anyway).
+static inline constexpr bool cmdIsOneShotActuating(uint8_t cmd)
+{
+    return cmd == PYRO_FIRE_TEST ||
+           cmd == PYRO_CONT_TEST ||
+           cmd == SERVO_TEST_PENDING ||
+           cmd == SERVO_REPLAY_PENDING ||
+           cmd == GROUND_TEST_START ||
+           cmd == SIM_START_CMD;
+}
+
 // --- Magnetometer hard-iron cal (issue #96) ---
 // OC→FC commands (passed via I2C as setPendingCommand byte) and a single
 // FC→OC status message that carries either live progress or the final fit.

@@ -65,6 +65,7 @@ static inline std::string itos(int v)
 #include <esp_adc/adc_cali_scheme.h>
 #include "dedup_reboot_policy.h"
 #include "cmd_queue_dedupe_policy.h"  // #837 item 11: pyro tests key on channel
+#include "cmd_queue_session_policy.h" // #1105: retire one-shots when the FC reports a boot
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -542,6 +543,11 @@ static volatile uint8_t pending_out_command = 0U;  // command currently being SE
 // (with a 0xCE file-ops refusal frame back to the app) and the LoRa cmd
 // 35/36 branches in processUplinkCommand (log-only — the uplink has no
 // feedback channel, #285 blind fire-and-retry).
+// EXCEPTION 2 (#1105): the queue and the serving slot also outlive an FC
+// RESET with the rail on, and the slot advances only on polls it receives,
+// so a reset inside a repeat window freezes it on the command being served.
+// One-shot actuating commands (cmdIsOneShotActuating) are retired from both
+// when the FC reports a boot — see cmd_queue_session_policy.h.
 struct QueuedCommand
 {
     uint8_t cmd;
@@ -649,6 +655,60 @@ static void setPendingCommand(uint8_t cmd)
 // sync drains in ~13 s instead of ~20 s ((3+1 idle) x 250 ms per command).
 static const uint8_t CMD_REPEAT_LIMIT = 3;
 static uint8_t cmd_delivery_count = 0;
+// #1105: latched by the FC_BOOT_STATUS_MSG handler (I2S parser task) and
+// consumed at the top of queueOutStatusResponse() (loop task, the serving
+// slot's only writer). Set means "the FC has reported a boot since the last
+// serve": the next serve first retires any one-shot actuating command from
+// the slot and the queue — issued to the FC session that just ended, they
+// must not be delivered to the one starting. Boot frames repeat every 500 ms
+// for the whole ~20 s setup, so a missed frame costs nothing; the FC refuses
+// such a command on its own (oc_cmd_session_gate.h) in case every frame is
+// missed. Policy in cmd_queue_session_policy.h.
+static volatile bool fc_boot_retire_pending = false;
+
+// #1105: runs inside queueOutStatusResponse() before it reads the serving
+// slot, once per boot report. Clears the slot if it holds a one-shot actuating
+// command and drops every such entry from the queue; the survivors keep their
+// order, so a config sync queued across the boundary still drains. Scheduling
+// an idle poll afterwards hands the FC's own session gate the cmd=0 it needs
+// before it will admit a fresh one-shot.
+static void retireOneShotCommandsForFcBoot()
+{
+    CmdQueueRetired dropped[CMD_QUEUE_DEPTH];
+    size_t n_dropped = 0;
+    bool serving_retired = false;
+    CmdQueueRetired serving = {0U, 0U};
+
+    portENTER_CRITICAL(&cmd_queue_mux);
+    if (cmdQueueRetireServingOnFcBoot(pending_out_command))
+    {
+        serving.cmd = pending_out_command;
+        serving.sel = (serving_cfg_len > 0) ? serving_cfg[0] : 0U;
+        serving_retired = true;
+        pending_out_command = 0U;
+        serving_cfg_len = 0;
+        serving_cfg_type = 0;
+        cmd_delivery_count = 0;
+        cmd_idle_gap_pending = true;   // this poll reports cmd=0 (#368 reset edge)
+    }
+    n_dropped = cmdQueueRetireOneShots(cmd_queue, cmd_queue_head, cmd_queue_count,
+                                       dropped, CMD_QUEUE_DEPTH);
+    portEXIT_CRITICAL(&cmd_queue_mux);
+
+    // Log outside the critical section.
+    if (serving_retired)
+    {
+        ESP_LOGW("OC", "FC boot reported: retired one-shot cmd 0x%02X (sel=%u) from the "
+                       "serving slot — issued to the previous FC session, not replayed (#1105)",
+                 (unsigned)serving.cmd, (unsigned)serving.sel);
+    }
+    for (size_t i = 0; i < n_dropped && i < CMD_QUEUE_DEPTH; i++)
+    {
+        ESP_LOGW("OC", "FC boot reported: dropped queued one-shot cmd 0x%02X (sel=%u) — "
+                       "issued to the previous FC session, not replayed (#1105)",
+                 (unsigned)dropped[i].cmd, (unsigned)dropped[i].sel);
+    }
+}
 static bool camera_recording_requested = false;
 // #383: camera/logging uplinks refused because the rocket was INFLIGHT
 // (FC skips I2C polls in flight — the command could never be delivered).
@@ -2536,6 +2596,14 @@ static_assert(I2C_STATUS_FRAME_B + sizeof(RollProfileData) + I2C_FRAME_OVERHEAD_
 
 static void queueOutStatusResponse(bool ready)
 {
+    // #1105: the FC has reported a boot since the last serve — retire what
+    // was issued to the session that ended before reading the slot below.
+    if (fc_boot_retire_pending)
+    {
+        fc_boot_retire_pending = false;
+        retireOneShotCommandsForFcBoot();
+    }
+
     // #366: serving-slot lifecycle.  When idle, first serve one cmd=0 poll
     // (the FC's dedup reset edge — #368), then pop the next queued command
     // into the serving copy.
@@ -3536,6 +3604,17 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // A new boot sequence: any NonSensorData seen before this belongs
             // to the PREVIOUS FC session and must not suppress this one.
             fc_ns_since_boot = false;
+            // #1105: a boot in progress means any one-shot actuating command
+            // the queue holds was issued to the session that ended — have the
+            // next serve retire it. FCB_COMPLETE is excluded on purpose: the
+            // reporter task re-emits it up to 500 ms into loop_fc, by which
+            // time the slot may hold a command tapped at the LIVE FC. The
+            // earlier steps have cleaned the slot long before then, and the
+            // FC's own gate covers the case where every one of them was missed.
+            if (fc_boot_status.step != FCB_COMPLETE)
+            {
+                fc_boot_retire_pending = true;
+            }
             ESP_LOGI("OC", "[FC BOOT] step=%u degraded=0x%02X t=%u ms",
                      (unsigned)fc_boot_status.step,
                      (unsigned)fc_boot_status.degraded,

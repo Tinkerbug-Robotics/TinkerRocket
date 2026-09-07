@@ -684,6 +684,36 @@ target_include_directories(test_cmd_queue_dedupe_policy PRIVATE
 target_link_libraries(test_cmd_queue_dedupe_policy GTest::gtest_main)
 gtest_discover_tests(test_cmd_queue_dedupe_policy)
 
+# ---------- test_cmd_queue_session_policy (#1105) ----------
+# The OC relay queue and its serving slot outlive the FC, and the slot advances
+# only on polls it receives, so an FC reset inside a repeat window froze it on
+# PYRO_FIRE_TEST and the rebooted FC fired the channel again. When the FC
+# reports a boot, one-shot actuating commands are retired from the slot and the
+# queue; a config sync keeps its order. The ring compaction is the policy.
+add_executable(test_cmd_queue_session_policy test_cmd_queue_session_policy.cpp)
+target_include_directories(test_cmd_queue_session_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_cmd_queue_session_policy GTest::gtest_main)
+gtest_discover_tests(test_cmd_queue_session_policy)
+
+# ---------- test_oc_cmd_session_gate (#1105) ----------
+# The FC half of the same fix: a one-shot actuating command is executed only
+# on a 0 -> cmd edge observed this boot. The OC serves an idle poll between
+# commands, so the only command that can arrive before any idle is one that
+# was already being served when the FC came up. Pure header in the
+# flight_computer project beside baro_gate_policy.h.
+add_executable(test_oc_cmd_session_gate test_oc_cmd_session_gate.cpp)
+target_include_directories(test_oc_cmd_session_gate PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_oc_cmd_session_gate GTest::gtest_main)
+gtest_discover_tests(test_oc_cmd_session_gate)
+
 # ---------- test_mram_dirty_policy ----------
 # Host-side test for the #417 sink-mode dirty-marker gate: the marker means
 # "logging was activated" (launch detect / manual cmd-23 start), not "a log
