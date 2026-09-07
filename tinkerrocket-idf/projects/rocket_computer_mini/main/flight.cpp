@@ -17,6 +17,7 @@
 
 #include <TR_NVS.h>
 #include <TR_Sensor_Collector.h>
+#include <imu_drain_window.h>     // #1191: mean + worst-sample stats over each IMU drain pass
 #include <TR_Sensor_Collector_Sim.h>
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_I2C_Interface.h>      // packMessage/unpackMessage statics only — no bus
@@ -238,6 +239,15 @@ static uint32_t ekf_tick_counter = 0;
 
 // --- Converted SI values (latest sample of each sensor) ---
 static ISM6HG256DataSI ism6_latest_si = {};
+// #1191: low-g near-rail verdict for the estimator pass, taken from the drain
+// window's WORST raw sample per sensor axis (imu_drain_window.h says why not
+// the mean, and why sensor axes rather than body axes).  Set where the window
+// is averaged, consumed by the low-g/high-g channel switch in the EKF-input
+// block; retained across passes that drain nothing, exactly as ism6_latest_si
+// is.  The bar is the same 15.5 g the body-frame test used, in raw LSB.
+static bool ism6_low_g_near_rail = false;
+static constexpr int32_t kLowGNearRailLsb =
+    imu_drain::nearRailLsb((float)config::ISM6_LOW_G_FS_G, 0.5f);
 static BMP585DataSI bmp_latest_si = {};
 // #260: source-validity bounds for BMP585 pressure (Pa).  Finite bounds also
 // reject NaN/Inf.  Downstream trust gates use a tighter 25-125 kPa window.
@@ -2850,18 +2860,29 @@ static void loop_fc()
     // mini_link::logFrame (byte-identical stream to the OC's) and refreshes
     // the comms-side telem cache.
     static uint32_t dbg_ism6_reads = 0, dbg_bmp_reads = 0, dbg_bmp_bad_reads = 0, dbg_iis2mdc_reads = 0, dbg_gnss_reads = 0;
+    // #1191: drain passes that handed the estimators a sample, and the largest
+    // window seen.  The [SENSOR] line prints reads/passes — the mean N behind
+    // the anti-alias figure — and the worst backlog.
+    static uint32_t dbg_ism6_passes = 0, dbg_ism6_win_max = 0;
 
     // Drain ALL pending IMU samples each iteration.  The chip runs at the
-    // configured ODR — about two samples per ~1 ms loop pass at 1920 Hz —
-    // and every one is logged so the recorded IMU rate follows the chip ODR,
-    // not the loop rate.  The control/EKF path converts only the FRESHEST
-    // drained sample: kinematics and the EKF keep running at loop rate.
+    // configured ODR (3840 Hz to deployment under IMU_RATE_DYNAMIC, 960 Hz
+    // after) — several samples per ~2 ms loop pass — and every one is logged
+    // so the recorded IMU rate follows the chip ODR, not the loop rate.
+    // The control/EKF path gets the MEAN of the drained samples (#1191).  It
+    // used to take the freshest one: a 1-in-N decimation with no anti-alias
+    // step, which handed the 2026-08-29 boost's ~800 Hz motor tone to the EKF
+    // and the roll P-term folded to ~192 Hz at full amplitude.  The mean is an
+    // N-tap boxcar at the ODR — about -15 dB at 800 Hz, under 1 % at 30 Hz,
+    // under a millisecond of delay (imu_drain_window.h).  Kinematics and the
+    // EKF keep running at loop rate exactly as before, and the logged stream
+    // is untouched.
     {
-        bool ism6_new_this_iter = false;
+        ImuDrainWindow ism6_win;
         while (sensor_collector.getISM6HG256Data(ism6hg256_data))
         {
             dbg_ism6_reads++;
-            ism6_new_this_iter = true;
+            ism6_win.add(ism6hg256_data);
 
             memcpy(ism6hg256_data_buffer,
                    &ism6hg256_data,
@@ -2872,13 +2893,22 @@ static void loop_fc()
                                       (uint8_t)SIZE_OF_ISM6HG256_DATA);
         }
 
-        if (ism6_new_this_iter)
+        ISM6HG256Data ism6_mean_raw = {};
+        if (ism6_win.mean(ism6_mean_raw))
         {
-            sensor_converter.convertISM6HG256Data(ism6hg256_data, ism6_latest_si);
+            dbg_ism6_passes++;
+            if (ism6_win.n > dbg_ism6_win_max) dbg_ism6_win_max = ism6_win.n;
+
+            sensor_converter.convertISM6HG256Data(ism6_mean_raw, ism6_latest_si);
             have_ism6_si = true;
+            // The low-g near-rail verdict comes from the window's WORST raw
+            // sample per sensor axis, not from the mean the converter was
+            // just handed: an average of clipped samples is still biased.
+            ism6_low_g_near_rail = ism6_win.lowGNearRail(kLowGNearRailLsb);
             // Latest-wins cache for the comms side (one copy per drain pass,
             // not per sample — the cache is a latest-state snapshot, the log
-            // stream above carries every sample).
+            // stream above carries every sample).  The freshest raw sample is
+            // still in ism6hg256_data after the drain.
             telemStore(mini_link::telem.imu, ism6hg256_data,
                        mini_link::telem.imu_update_us);
 
@@ -3155,12 +3185,14 @@ static void loop_fc()
             const float az = (float)ism6_latest_si.low_g_acc_z;
             roll_rate_dps = (float)ism6_latest_si.gyro_x;
 
-            // Switch to high-G channel when any low-G axis approaches saturation
-            static constexpr float kLowGSatThreshMps2 =
-                (config::ISM6_LOW_G_FS_G - 0.5f) * 9.80665f;
-            const bool low_g_near_sat = (fabsf(ax) > kLowGSatThreshMps2) ||
-                                        (fabsf(ay) > kLowGSatThreshMps2) ||
-                                        (fabsf(az) > kLowGSatThreshMps2);
+            // Switch to the high-g channel when the low-g part is near its
+            // rail.  #1191: the verdict is the drain window's worst raw sample
+            // per SENSOR axis (set where the window is averaged), not a test
+            // on the body-frame means above.  An average of clipped samples
+            // is still biased, and with the -45 deg mount a single-axis rail
+            // reads 11.3 g on two body axes, under the 15.5 g bar the
+            // body-frame test applied.
+            const bool low_g_near_sat = ism6_low_g_near_rail;
             const float hx = (float)ism6_latest_si.high_g_acc_x;
             const float hy = (float)ism6_latest_si.high_g_acc_y;
             const float hz = (float)ism6_latest_si.high_g_acc_z;
@@ -4476,8 +4508,10 @@ static void loop_fc()
             lt_loop_count = 0;
 
             // Sensor data flow diagnostic
-            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu bmp=%lu bmp_bad=%lu iis=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
+            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu (win n=%.1f max=%lu) bmp=%lu bmp_bad=%lu iis=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
                           (unsigned long)dbg_ism6_reads,
+                          dbg_ism6_passes ? (double)dbg_ism6_reads / (double)dbg_ism6_passes : 0.0,
+                          (unsigned long)dbg_ism6_win_max,
                           (unsigned long)dbg_bmp_reads,
                           (unsigned long)dbg_bmp_bad_reads,
                           (unsigned long)dbg_iis2mdc_reads,
@@ -4486,6 +4520,8 @@ static void loop_fc()
                           have_ism6_si ? (double)ism6_latest_si.gyro_z : 0.0,
                           gpio_get_level((gpio_num_t)config::ISM6HG256_INT));
             dbg_ism6_reads = 0;
+            dbg_ism6_passes = 0;
+            dbg_ism6_win_max = 0;
             dbg_bmp_reads = 0;
             dbg_bmp_bad_reads = 0;
             dbg_iis2mdc_reads = 0;
