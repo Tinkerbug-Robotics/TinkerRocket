@@ -188,6 +188,18 @@ target_include_directories(test_kinematic_checks PRIVATE
 target_link_libraries(test_kinematic_checks GTest::gtest_main)
 gtest_discover_tests(test_kinematic_checks)
 
+# ---------- test_iis2mdc_poll_gate ----------
+# The IIS2MDC attempt gate (#1111): a failed read advances the gate like a
+# successful one, five in a row stall it into a 1->32 s back-off probe, and
+# the clock seed survives a begin() long after boot.  Header-only and
+# IDF-free; the I2C transfers it paces are bench-only.
+add_executable(test_iis2mdc_poll_gate test_iis2mdc_poll_gate.cpp)
+target_include_directories(test_iis2mdc_poll_gate PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector
+)
+target_link_libraries(test_iis2mdc_poll_gate GTest::gtest_main)
+gtest_discover_tests(test_iis2mdc_poll_gate)
+
 # ---------- test_control_mixer ----------
 add_executable(test_control_mixer test_control_mixer.cpp
     ${LIB_DIR}/TR_ControlMixer/TR_ControlMixer.cpp

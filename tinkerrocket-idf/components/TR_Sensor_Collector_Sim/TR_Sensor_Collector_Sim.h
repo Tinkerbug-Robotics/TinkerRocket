@@ -68,6 +68,12 @@ public:
     bool isIIS2MDCActive() const { return real_.isIIS2MDCActive(); }
     bool setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
 
+    // #1111: IIS2MDC poll health passthrough.  Real-chip state regardless of
+    // sim mode: a stalled bench mag stops the sim's synthetic mag too, since
+    // getIIS2MDCData() above rides the real read's cadence.
+    bool isIIS2MDCStalled() const { return real_.isIIS2MDCStalled(); }
+    void getIIS2MDCDebugSnapshot(IIS2MDCDebugSnapshot& snapshot_out) const;
+
     // ---- Sim control ----
     void configureSim(const SimConfigData& cfg);
     void configureSimRotation(float ism6_rot_z_deg);

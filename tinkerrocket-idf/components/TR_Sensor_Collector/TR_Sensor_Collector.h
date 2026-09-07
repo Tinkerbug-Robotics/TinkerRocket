@@ -10,6 +10,7 @@
 #include <TR_BMP585.h>
 #include <TR_MMC5983MA.h>
 #include <TR_IIS2MDC.h>
+#include "iis2mdc_poll_gate.h"
 // GNSS driver is a compile-time seam: the rocket-computer boards carry a
 // u-blox receiver, the mini carries a Quectel LC86G. Both drivers expose the
 // identical begin/pollNewPVT/getGNSSData surface and produce the same
@@ -77,6 +78,20 @@ typedef struct
     uint8_t last_ctrl1;
     uint8_t last_ctrl2;
 } MMC5983MADebugSnapshot;
+
+// #1111: IIS2MDC poll health.  read_ok/read_fail count attempts (a stall
+// probe counts as an attempt); stall_events/recoveries count transitions;
+// read_max_us is the longest single attempt since boot — the number that
+// says how much of the IMU poll loop one failing mag transaction costs.
+typedef struct
+{
+    uint32_t read_ok;
+    uint32_t read_fail;
+    uint32_t stall_events;
+    uint32_t recoveries;
+    uint32_t read_max_us;
+    bool stalled;
+} IIS2MDCDebugSnapshot;
 
 class SensorCollector
 {
@@ -197,6 +212,11 @@ public:
     // Program IIS2MDC OFFSET_X/Y/Z hard-iron registers.  Returns false if
     // the IIS2MDC isn't active or the I2C write failed.  Issue #96.
     bool setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
+
+    // #1111: IIS2MDC poll health.  Stalled = the chip failed STALL_FAILS
+    // consecutive reads and the poll is down to the backed-off probe.
+    bool isIIS2MDCStalled() const { return iis2mdc_active && iis2mdc_gate.stalled; }
+    void getIIS2MDCDebugSnapshot(IIS2MDCDebugSnapshot &snapshot_out) const;
 
     // Calibration results (populated by pollCalibration() on Committed)
     float hg_bias_x = 0.0f, hg_bias_y = 0.0f, hg_bias_z = 0.0f;  // m/s², body frame
@@ -354,9 +374,18 @@ private:
     SemaphoreHandle_t iis2mdcDataSemaphore;
     SemaphoreHandle_t gnssDataSemaphore;
 
-    // Time-gated polling state for IIS2MDC (no DRDY pin yet).
-    uint32_t iis2mdc_last_sample_us = 0;
-    static constexpr uint32_t IIS2MDC_PERIOD_US = 10000;  // 100 Hz, matches default ODR
+    // Time-gated polling state for IIS2MDC (no DRDY pin in the poll path).
+    // #1111: attempt gate + stall back-off; see iis2mdc_poll_gate.h.
+    Iis2mdcPollGate iis2mdc_gate;
+    uint32_t iis2mdc_read_max_us = 0;   // worst single attempt (read or probe) since boot
+    // Last hard-iron offset programmed via setIIS2MDCHardIronOffset(), re-applied
+    // when the chip comes back from a stall (a brown-out resets OFFSET_X/Y/Z).
+    // Written by the app task, read by the poll task on recovery; a torn
+    // triple is harmless (the next cal apply rewrites all three).
+    bool    iis2mdc_offset_set = false;
+    int16_t iis2mdc_offset_cx = 0, iis2mdc_offset_cy = 0, iis2mdc_offset_cz = 0;
+    // Stall probe: WHO_AM_I, then the boot configuration (and the offset).
+    bool reviveIIS2MDC();
     TaskHandle_t pollIMUTaskHandle;
     TaskHandle_t pollGNSSTaskHandle = nullptr;
 
