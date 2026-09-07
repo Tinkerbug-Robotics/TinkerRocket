@@ -1494,23 +1494,37 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
     else if (cmd.type == GYRO_CAL_CMD)
     {
         ESP_LOGI(TAG, "[CAL] Sensor calibration requested...");
-        sensor_collector.calibrateGyro(config::ISM6HG256_ROT_Z_DEG);
-        sensor_converter.setHighGBias(sensor_collector.hg_bias_x,
-                                      sensor_collector.hg_bias_y,
-                                      sensor_collector.hg_bias_z);
-        // (FC also echoed the bias into the OC status-query payload — the
-        // mini's comms side reads it back via SENSOR_CAL_STATUS below.)
-        // Persist to NVS — high-g bias + gyro zero-rate bias (#132).
-        prefs.begin("cal", false);
-        prefs.putFloat("hgbx", sensor_collector.hg_bias_x);
-        prefs.putFloat("hgby", sensor_collector.hg_bias_y);
-        prefs.putFloat("hgbz", sensor_collector.hg_bias_z);
-        prefs.putShort("gx", sensor_collector_hw.gyro_cal_x);
-        prefs.putShort("gy", sensor_collector_hw.gyro_cal_y);
-        prefs.putShort("gz", sensor_collector_hw.gyro_cal_z);
-        prefs.end();
-        ESP_LOGI(TAG, "[CAL] Sensor calibration complete (saved to NVS)");
-        // Push the result up so the app can snapshot it into the profile.
+        // #1110: the collector runs the window inside its IMU poll task and
+        // says whether a result was measured and committed.  On false it kept
+        // the previous offsets, so the converter and NVS already hold what
+        // the rocket is using — nothing to re-apply and nothing to save.
+        if (sensor_collector.calibrateGyro(config::ISM6HG256_ROT_Z_DEG))
+        {
+            sensor_converter.setHighGBias(sensor_collector.hg_bias_x,
+                                          sensor_collector.hg_bias_y,
+                                          sensor_collector.hg_bias_z);
+            // (FC also echoed the bias into the OC status-query payload — the
+            // mini's comms side reads it back via SENSOR_CAL_STATUS below.)
+            // Persist to NVS — high-g bias + gyro zero-rate bias (#132).
+            prefs.begin("cal", false);
+            prefs.putFloat("hgbx", sensor_collector.hg_bias_x);
+            prefs.putFloat("hgby", sensor_collector.hg_bias_y);
+            prefs.putFloat("hgbz", sensor_collector.hg_bias_z);
+            prefs.putShort("gx", sensor_collector_hw.gyro_cal_x);
+            prefs.putShort("gy", sensor_collector_hw.gyro_cal_y);
+            prefs.putShort("gz", sensor_collector_hw.gyro_cal_z);
+            prefs.end();
+            ESP_LOGI(TAG, "[CAL] Sensor calibration complete (saved to NVS)");
+        }
+        else
+        {
+            ESP_LOGE(TAG, "[CAL] Sensor calibration FAILED — previous calibration kept "
+                          "(the SENSORS log above says why)");
+        }
+        // Push the stored result up either way so the app's pending snapshot
+        // resolves to the values the rocket is actually using.  The status
+        // frame carries no failure field, so a failed run reads as a re-send
+        // of the old calibration there.
         publishSensorCalFromNVS();
     }
     // Issue #96 — magnetometer hard-iron cal: start / abort / accept / retry.

@@ -213,6 +213,15 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     }
     xSemaphoreGive(gnssDataSemaphore);
 
+    // #1110: completion signal for the pad calibration the poll task runs.
+    // Deliberately NOT given here — pollIMUdata gives it once per window.
+    cal_done_sem_ = xSemaphoreCreateBinary();
+    if (cal_done_sem_ == NULL)
+    {
+        ESP_LOGE(SC_TAG, "Failed to create calibration semaphore!");
+        while (1) delay_ms(1000);
+    }
+
     // ### Initialize Sensors ###
     ESP_LOGI(SC_TAG, "Initializing BMP585...");
     if (use_bmp585)
@@ -664,6 +673,25 @@ void SensorCollector::pollIMUdata(void* parameter)
             }
         }
 
+        // #1110: the pad calibration is serviced here too, by the bus owner.
+        // Open a requested window; close an open one once its deadline has
+        // passed.  The close is checked on every wake — 100 ms at worst, on
+        // the notify timeout — so a dead DRDY line still ends the window and
+        // answers the flight task instead of leaving it waiting.
+        if (self->cal_request_pending_)
+        {
+            self->cal_request_pending_ = false;
+            self->cal_sums_ = SensorCalSums{};
+            self->cal_deadline_us_ = time_us() + CAL_WINDOW_US;
+            self->cal_active_ = true;
+        }
+        if (self->cal_active_ &&
+            (int32_t)(time_us() - self->cal_deadline_us_) >= 0)
+        {
+            self->cal_active_ = false;
+            xSemaphoreGive(self->cal_done_sem_);
+        }
+
         // === ISM6HG256 FIRST — highest rate sensor, latency-critical ===
         // Use the ISR flag instead of an SPI DRDY register read.  The ISR
         // fires when ANY routed DRDY goes high.  We read all three channels
@@ -692,7 +720,8 @@ void SensorCollector::pollIMUdata(void* parameter)
             TR_ISM6HG256_AxesRaw_t g_raw = {};
 
             // Bulk read: gyro + lg accel + hg accel in one 24-byte SPI transaction
-            (void)self->ism6hg256.Get_AllAxesRaw(&g_raw, &lg_raw, &hg_raw);
+            const TR_ISM6HG256Status read_st =
+                self->ism6hg256.Get_AllAxesRaw(&g_raw, &lg_raw, &hg_raw);
 
             {
                 self->start_time = time_us();
@@ -727,11 +756,34 @@ void SensorCollector::pollIMUdata(void* parameter)
                 }
                 self->pt_last_ism6_time_us = this_time;
 
+                if (self->cal_active_)
+                {
+                    // #1110: calibration window open — this sample belongs to
+                    // the calibrator, not the queue.  The consumer is blocked
+                    // in calibrateGyro() for the whole window, so enqueueing
+                    // would only run up the drop gauge behind the logged
+                    // IMU_DROP flag (#474); the old suspend fed it nothing
+                    // either.  Sum the raw values (g_raw, before the offset
+                    // subtract above), and only a read the driver accepted.
+                    if (read_st == TR_ISM6HG256_OK)
+                    {
+                        self->cal_sums_.g[0]  += g_raw.x;
+                        self->cal_sums_.g[1]  += g_raw.y;
+                        self->cal_sums_.g[2]  += g_raw.z;
+                        self->cal_sums_.lg[0] += lg_raw.x;
+                        self->cal_sums_.lg[1] += lg_raw.y;
+                        self->cal_sums_.lg[2] += lg_raw.z;
+                        self->cal_sums_.hg[0] += hg_raw.x;
+                        self->cal_sums_.hg[1] += hg_raw.y;
+                        self->cal_sums_.hg[2] += hg_raw.z;
+                        self->cal_sums_.count++;
+                    }
+                }
                 // Enqueue the sample; on a full queue drop the OLDEST so the
                 // freshest data always lands (control reads the tail).  A
                 // nonzero drop counter means the consumer stalled for longer
                 // than ISM6_QUEUE_DEPTH samples — visible in [SENSOR] diag.
-                if (xQueueSend(self->ism6Queue, &self->ism6hg256_data, 0) != pdTRUE)
+                else if (xQueueSend(self->ism6Queue, &self->ism6hg256_data, 0) != pdTRUE)
                 {
                     ISM6HG256Data discard;
                     (void)xQueueReceive(self->ism6Queue, &discard, 0);
@@ -1152,158 +1204,104 @@ void SensorCollector::resetPollTimingSnapshot()
     pt_gnss_over_10ms = 0;
 }
 
-// --- Pad calibration ---
-// Reads 1000 raw samples over ~10 seconds.
-//  • Gyro: averages to compute zero-rate offset (subtracted in polling task).
-//  • Accel: cross-calibrates high-g against low-g to compute body-frame bias
-//    (subtracted by SensorConverter during conversion).
-//  • Computes gravity magnitude from low-g for sanity check.
+// --- Pad calibration (#1110: measured by the IMU poll task) ---
+// calibrateGyro() posts a request; pollIMUdata — the only task allowed to
+// touch the SPI bus once it is running (#475) — sums every ISM6 sample it
+// reads for CAL_WINDOW_US and gives cal_done_sem_.  The sums become offsets
+// here, via sensor_cal_math.h:
+//  • Gyro: zero-rate offset, subtracted from every sample by the poll task.
+//  • Accel: high-g cross-calibrated against low-g → body-frame bias,
+//    subtracted by SensorConverter during conversion (#572: scaled from the
+//    CONFIGURED full scales, never literals).
+//  • Gravity magnitude from low-g: a plausibility gate on the whole result.
 // Must be called when the rocket is stationary (e.g. on the launch pad).
-void SensorCollector::calibrateGyro(float rotation_z_deg)
+bool SensorCollector::calibrateGyro(float rotation_z_deg)
 {
     if (!use_ism6hg256)
     {
         ESP_LOGW(SC_TAG, "No ISM6HG256 — skipping calibration");
-        return;
+        return false;
     }
-
-    ESP_LOGI(SC_TAG, "Calibrating sensors (1000 samples)...");
-
-    // Suspend the IMU polling task to prevent SPI bus contention during calibration
-    if (pollIMUTaskHandle != nullptr) {
-        vTaskSuspend(pollIMUTaskHandle);
-    }
-
-    // Gyro accumulators
-    int32_t sum_gx = 0, sum_gy = 0, sum_gz = 0;
-
-    // Accel accumulators (raw LSBs, int32 is sufficient for 1000 * int16)
-    int32_t sum_lg_x = 0, sum_lg_y = 0, sum_lg_z = 0;
-    int32_t sum_hg_x = 0, sum_hg_y = 0, sum_hg_z = 0;
-
-    const int num_samples = 1000;
-    int gyro_count = 0;
-    int accel_count = 0;
-
-    for (int i = 0; i < num_samples; i++)
+    if (pollIMUTaskHandle == nullptr || cal_done_sem_ == nullptr)
     {
-        // Bulk read gyro + low-g accel + high-g accel
-        TR_ISM6HG256_AxesRaw_t g_raw, lg_raw, hg_raw;
-        if (ism6hg256.Get_AllAxesRaw(&g_raw, &lg_raw, &hg_raw) == TR_ISM6HG256_OK)
-        {
-            sum_gx += g_raw.x;
-            sum_gy += g_raw.y;
-            sum_gz += g_raw.z;
-            gyro_count++;
+        ESP_LOGW(SC_TAG, "IMU poll task not running — skipping calibration");
+        return false;
+    }
 
-            sum_lg_x += lg_raw.x;
-            sum_lg_y += lg_raw.y;
-            sum_lg_z += lg_raw.z;
-            sum_hg_x += hg_raw.x;
-            sum_hg_y += hg_raw.y;
-            sum_hg_z += hg_raw.z;
-            accel_count++;
-        }
+    ESP_LOGI(SC_TAG, "Calibrating sensors (%lu ms window, every ISM6 sample)...",
+             (unsigned long)(CAL_WINDOW_US / 1000));
 
-        delay_ms(10);
+    // A window that closed after a previous timeout may have left a stale
+    // completion behind; consume it so it cannot end this window early.
+    (void)xSemaphoreTake(cal_done_sem_, 0);
+    cal_request_pending_ = true;
 
-        // 1000 samples × 10 ms = ~10 s of sleep inside a single loop_fc()
-        // iteration.  The flight task is subscribed to the task WDT (5 s
-        // timeout, see main.cpp esp_task_wdt_reconfigure) and only feeds
-        // it at the top of loop_fc(), so without an explicit reset here
-        // the WDT trips twice during cal and dumps a CPU 1 backtrace
-        // storm — even though the cal itself completes correctly.  Guard
-        // on subscription so this is a no-op on host/sim builds where
-        // the task isn't registered with the WDT.
+    // Wait for the poll task to close the window.  Short slices keep the
+    // task WDT fed — the flight task is subscribed (5 s timeout, see
+    // main.cpp esp_task_wdt_reconfigure) and only feeds it at the top of
+    // loop_fc().  Guard on subscription so this is a no-op on host/sim
+    // builds where the task isn't registered with the WDT.  The overall
+    // bound only trips if the poll task is not running at all: a live one
+    // closes the window at the deadline even with a dead DRDY line.
+    const uint32_t wait_t0_ms  = time_ms();
+    const uint32_t wait_max_ms = CAL_WINDOW_US / 1000 + 2000;
+    for (;;)
+    {
+        const bool done = (xSemaphoreTake(cal_done_sem_, pdMS_TO_TICKS(500)) == pdTRUE);
 #ifdef ESP_PLATFORM
         if (esp_task_wdt_status(nullptr) == ESP_OK) {
             esp_task_wdt_reset();
         }
 #endif
+        if (done) break;
+        if ((uint32_t)(time_ms() - wait_t0_ms) > wait_max_ms)
+        {
+            cal_request_pending_ = false;  // never serviced — withdraw it
+            ESP_LOGE(SC_TAG, "Calibration timed out (poll task not servicing requests) "
+                             "— previous calibration kept");
+            return false;
+        }
     }
 
-    // --- Gyro offsets ---
-    if (gyro_count > 0)
+    // The poll task wrote cal_sums_ before giving the semaphore and will not
+    // touch it again until the next request.
+    SensorCalResult r;
+    if (!sensor_cal::compute(cal_sums_, rotation_z_deg,
+                             ism6_low_g_fs_g_, ism6_high_g_fs_g_, r))
     {
-        gyro_cal_x = (int16_t)(sum_gx / gyro_count);
-        gyro_cal_y = (int16_t)(sum_gy / gyro_count);
-        gyro_cal_z = (int16_t)(sum_gz / gyro_count);
-        ESP_LOGI(SC_TAG, "Gyro offsets: %d, %d, %d  (%d samples)",
-                      gyro_cal_x, gyro_cal_y, gyro_cal_z, gyro_count);
+        ESP_LOGW(SC_TAG, "No IMU samples in the calibration window — previous calibration kept");
+        return false;
     }
-    else
+    if (!sensor_cal::gravityPlausible(r.gravity_mag))
     {
-        ESP_LOGW(SC_TAG, "No gyro samples collected");
+        ESP_LOGE(SC_TAG, "Calibration REJECTED: low-g gravity %.3f m/s² outside %.2f..%.2f "
+                         "(%lu samples) — bus contention, full-scale mismatch, or the rocket "
+                         "was moving; previous calibration kept",
+                 (double)r.gravity_mag, (double)sensor_cal::kGravityMinMs2,
+                 (double)sensor_cal::kGravityMaxMs2, (unsigned long)cal_sums_.count);
+        return false;
     }
 
-    // --- Accel cross-calibration ---
-    if (accel_count > 0)
-    {
-        // ISM6HG256 sensitivity — #572: derived from the CONFIGURED full
-        // scales (the same ctor members Set_X_FullScale programs into the
-        // chip), NOT literals. The old hardcoded 16g/256g silently decoupled
-        // from a non-default FS: counts scaled with the wrong per-LSB put a
-        // ~1 g error into hg_bias, which setHighGBias() then subtracted from
-        // every boost sample (burnout detect, max-speed, launch fallback).
-        // Inert on the shipping build (FS is constexpr 16/256 in config.h) —
-        // this is the maintainability pin. Formula mirrors
-        // SensorConverter::configureISM6HG256FullScale (FS*1000/32768 mg/LSB).
-        static constexpr float g_ms2 = 9.80665f;
-        const float lg_ms2_per_lsb =
-            ((float)ism6_low_g_fs_g_  * 1000.0f / 32768.0f) * 1e-3f * g_ms2;
-        const float hg_ms2_per_lsb =
-            ((float)ism6_high_g_fs_g_ * 1000.0f / 32768.0f) * 1e-3f * g_ms2;
+    // Commit.  Nothing above touched the live offsets, so a rejected run
+    // leaves the rocket exactly as it was.
+    gyro_cal_x = r.gyro_offset[0];
+    gyro_cal_y = r.gyro_offset[1];
+    gyro_cal_z = r.gyro_offset[2];
+    hg_bias_x = r.hg_bias[0];
+    hg_bias_y = r.hg_bias[1];
+    hg_bias_z = r.hg_bias[2];
+    cal_gravity_mag = r.gravity_mag;
 
-        // Average raw → SI (sensor frame)
-        const float avg_lg_x = ((float)sum_lg_x / accel_count) * lg_ms2_per_lsb;
-        const float avg_lg_y = ((float)sum_lg_y / accel_count) * lg_ms2_per_lsb;
-        const float avg_lg_z = ((float)sum_lg_z / accel_count) * lg_ms2_per_lsb;
-
-        const float avg_hg_x = ((float)sum_hg_x / accel_count) * hg_ms2_per_lsb;
-        const float avg_hg_y = ((float)sum_hg_y / accel_count) * hg_ms2_per_lsb;
-        const float avg_hg_z = ((float)sum_hg_z / accel_count) * hg_ms2_per_lsb;
-
-        // Rotate both to body frame (same rotation for all ISM6HG256 channels)
-        const float rot_rad = rotation_z_deg * (PI / 180.0f);
-        const float c = cosf(rot_rad);
-        const float s = sinf(rot_rad);
-
-        const float lg_bx = avg_lg_x * c - avg_lg_y * s;
-        const float lg_by = avg_lg_x * s + avg_lg_y * c;
-        const float lg_bz = avg_lg_z;
-
-        const float hg_bx = avg_hg_x * c - avg_hg_y * s;
-        const float hg_by = avg_hg_x * s + avg_hg_y * c;
-        const float hg_bz = avg_hg_z;
-
-        // Bias = high_g - low_g in body frame
-        hg_bias_x = hg_bx - lg_bx;
-        hg_bias_y = hg_by - lg_by;
-        hg_bias_z = hg_bz - lg_bz;
-
-        // Gravity magnitude from low-g (body frame magnitude = sensor frame magnitude)
-        cal_gravity_mag = sqrtf(avg_lg_x * avg_lg_x +
-                                avg_lg_y * avg_lg_y +
-                                avg_lg_z * avg_lg_z);
-
-        ESP_LOGI(SC_TAG, "Low-g  avg (body): %.3f, %.3f, %.3f m/s²",
-                      (double)lg_bx, (double)lg_by, (double)lg_bz);
-        ESP_LOGI(SC_TAG, "High-g avg (body): %.3f, %.3f, %.3f m/s²",
-                      (double)hg_bx, (double)hg_by, (double)hg_bz);
-        ESP_LOGI(SC_TAG, "HG bias:           %.3f, %.3f, %.3f m/s²",
-                      (double)hg_bias_x, (double)hg_bias_y, (double)hg_bias_z);
-        ESP_LOGI(SC_TAG, "Gravity magnitude: %.3f m/s²  (%d samples)",
-                      (double)cal_gravity_mag, accel_count);
-    }
-    else
-    {
-        ESP_LOGW(SC_TAG, "No accel samples collected");
-    }
-
-    // Resume the IMU polling task
-    if (pollIMUTaskHandle != nullptr) {
-        vTaskResume(pollIMUTaskHandle);
-    }
+    ESP_LOGI(SC_TAG, "Gyro offsets: %d, %d, %d  (%lu samples)",
+             gyro_cal_x, gyro_cal_y, gyro_cal_z, (unsigned long)cal_sums_.count);
+    ESP_LOGI(SC_TAG, "Low-g  avg (body): %.3f, %.3f, %.3f m/s²",
+             (double)r.lg_body[0], (double)r.lg_body[1], (double)r.lg_body[2]);
+    ESP_LOGI(SC_TAG, "High-g avg (body): %.3f, %.3f, %.3f m/s²",
+             (double)r.hg_body[0], (double)r.hg_body[1], (double)r.hg_body[2]);
+    ESP_LOGI(SC_TAG, "HG bias:           %.3f, %.3f, %.3f m/s²",
+             (double)hg_bias_x, (double)hg_bias_y, (double)hg_bias_z);
+    ESP_LOGI(SC_TAG, "Gravity magnitude: %.3f m/s²", (double)cal_gravity_mag);
+    return true;
 }
 
 void IRAM_ATTR SensorCollector::onISM6HG256Int1Trampoline(void* /*arg*/)
