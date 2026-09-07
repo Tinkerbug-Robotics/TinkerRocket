@@ -341,4 +341,71 @@ final class OTASessionFlowTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(link.abortCount, 1)
         XCTAssertEqual(failureReason(session.state), "Cancelled")
     }
+
+    // MARK: - Cancel stays "Cancelled" in every phase
+
+    // The Kotlin twin gets these for free: job.cancel() throws a
+    // CancellationException out of every delay(), which unwinds runFlow before
+    // it can write state. Here the sleep's CancellationError used to land in
+    // the begin/finish catch blocks and overwrite "Cancelled" with the timeout
+    // wording (sending a second OTA_ABORT since #1203), and a cancel during
+    // the reboot phase fell through the reconnect and version waits to a
+    // spurious rollback verdict. Each case waits out the scaled window it
+    // cancelled inside, then checks nothing overwrote the cancel.
+
+    func testCancelDuringBeginWait_staysCancelled() async throws {
+        let link = ScriptedLink()
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        session.cancel()
+        XCTAssertEqual(failureReason(session.state), "Cancelled")
+
+        try await Task.sleep(nanoseconds: 80_000_000)   // begin window is 25 ms scaled
+        XCTAssertEqual(failureReason(session.state), "Cancelled",
+                       "the begin timeout must not overwrite the cancel")
+        XCTAssertEqual(link.abortCount, 1, "one abort, from cancel() — not a second from the catch")
+        XCTAssertEqual(link.chunks.count, 0)
+    }
+
+    func testCancelDuringFinishWait_staysCancelled() async throws {
+        let link = ScriptedLink()
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("verifying") { session.state == .verifying }
+        session.cancel()
+        XCTAssertEqual(failureReason(session.state), "Cancelled")
+
+        try await Task.sleep(nanoseconds: 150_000_000)  // finish window is 75 ms scaled
+        XCTAssertEqual(failureReason(session.state), "Cancelled",
+                       "the finish timeout must not overwrite the cancel")
+        XCTAssertEqual(link.abortCount, 1, "one abort, from cancel() — not a second from the catch")
+    }
+
+    func testCancelWhileRebooting_staysCancelled() async throws {
+        // Worst case before the fix: with the link still connected the
+        // disconnect wait times out, the reconnect wait passes at once, the
+        // version wait times out on the unchanged firmware, and the flow
+        // declared rollbackDetected("v1-old") over the user's own cancel.
+        let link = ScriptedLink(firmwareVersion: "v1-old")
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("finish") { link.finishCount == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .readyToBoot, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("rebooting") { session.state == .rebooting }
+        session.cancel()
+        XCTAssertEqual(failureReason(session.state), "Cancelled")
+
+        try await Task.sleep(nanoseconds: 450_000_000)  // disconnect+reconnect+fw = 375 ms scaled
+        XCTAssertEqual(failureReason(session.state), "Cancelled",
+                       "neither the reconnect timeout nor a rollback verdict may overwrite the cancel: \(session.state)")
+        XCTAssertEqual(link.abortCount, 1)
+    }
 }

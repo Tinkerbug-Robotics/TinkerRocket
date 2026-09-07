@@ -377,6 +377,69 @@ class OtaSessionTest {
         assertTrue(r.fw.commandFrames.any { it[0].toInt() == BleCommandId.OTA_ABORT })
     }
 
+    // ── Cancel stays "Cancelled" in every phase ──────────────────────────
+    // job.cancel() throws a CancellationException out of every delay(), which
+    // unwinds runFlow before it can write state; these pin that, because the
+    // iOS twin had to add explicit early returns to get the same (its waits
+    // caught the cancellation as a timeout, and a cancel during the reboot
+    // phase fell through to a spurious rollback verdict).
+
+    private fun abortCount(r: Rig) = r.fw.commandFrames.count { it[0].toInt() == BleCommandId.OTA_ABORT }
+
+    @Test
+    fun cancelDuringBeginWait_staysCancelled() = runTest {
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r.ota.cancel()
+        runCurrent()
+        assertEquals(OtaSession.State.Failed("Cancelled"), r.ota.state.value)
+
+        advanceTimeBy(OtaSession.BEGIN_TIMEOUT_MS + 500); runCurrent()
+        assertEquals(OtaSession.State.Failed("Cancelled"), r.ota.state.value, "the begin timeout must not overwrite the cancel")
+        assertEquals(1, abortCount(r), "one abort, from cancel()")
+        assertEquals(0, r.fw.otaChunks.size)
+    }
+
+    @Test
+    fun cancelDuringFinishWait_staysCancelled() = runTest {
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        assertIs<OtaSession.State.Verifying>(r.ota.state.value)
+        r.ota.cancel()
+        runCurrent()
+        assertEquals(OtaSession.State.Failed("Cancelled"), r.ota.state.value)
+
+        advanceTimeBy(OtaSession.FINISH_TIMEOUT_MS + 500); runCurrent()
+        assertEquals(OtaSession.State.Failed("Cancelled"), r.ota.state.value, "the finish timeout must not overwrite the cancel")
+        assertEquals(1, abortCount(r), "one abort, from cancel()")
+    }
+
+    @Test
+    fun cancelWhileRebooting_staysCancelled() = runTest {
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        r.fw.emitOtaStatus("ready_to_boot")
+        advanceTimeBy(200); runCurrent()
+        assertIs<OtaSession.State.Rebooting>(r.ota.state.value)
+        r.ota.cancel()
+        runCurrent()
+
+        // Link still up, firmware unchanged: the path that read as a rollback.
+        advanceTimeBy(OtaSession.RECONNECT_TIMEOUT_MS + OtaSession.FW_TIMEOUT_MS + 6_000); runCurrent()
+        assertEquals(OtaSession.State.Failed("Cancelled"), r.ota.state.value, "neither the reconnect timeout nor a rollback verdict may overwrite the cancel")
+        assertEquals(1, abortCount(r))
+    }
+
     // ── FC-target specifics (#8 P4) ──────────────────────────────────────
 
     @Test
