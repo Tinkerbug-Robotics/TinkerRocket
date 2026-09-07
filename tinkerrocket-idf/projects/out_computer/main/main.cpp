@@ -6637,6 +6637,15 @@ static void printStats()
         ble_telem.soc = p.soc;
         ble_telem.current = p.current;
         ble_telem.voltage = p.voltage;
+        // #850: the rail currents ride the same INA230 sample as the pack, on
+        // BOTH power states. They were only copied on the low-power path
+        // above, so a direct BLE link showed them on the pre-power-on screen
+        // and then lost them the moment the FC rail came up — the one place a
+        // stalling servo or a dark camera is actually worth watching. The
+        // relayed path never had the gap (the LoRa slow frame carries them
+        // regardless), which is why #928's live check did not catch it.
+        ble_telem.cam_current   = p.cam_current;
+        ble_telem.servo_current = p.servo_current;
     }
     if (latest_gnss_valid)
     {
