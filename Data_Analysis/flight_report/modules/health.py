@@ -23,6 +23,7 @@ from plot_flight_data_mini import get_array  # noqa: E402
 
 from ..flight import Flight
 from ..registry import AnalysisResult
+from .power import chatter_in_flight
 
 OK, CHECK, PROBLEM = "OK", "CHECK", "PROBLEM"
 
@@ -38,7 +39,7 @@ def _verdict(status: str, detail: str) -> dict[str, Any]:
     return {"status": status, "detail": detail}
 
 
-def _battery(recs) -> Optional[dict[str, Any]]:
+def _battery(recs, flight: Optional[Flight] = None) -> Optional[dict[str, Any]]:
     pw = recs.get("POWER") or []
     if not pw or "voltage" not in pw[0]:
         return None
@@ -57,6 +58,20 @@ def _battery(recs) -> Optional[dict[str, Any]]:
         return _verdict(PROBLEM, detail + " — the pack sagged below a safe level under load")
     if low < BATT_LOW_V:
         return _verdict(CHECK, detail + " — charge before the next flight")
+
+    # A pack can be full and still be about to disconnect. A single-sample
+    # drop with no change in load is a connector losing contact under
+    # vibration, which is how the 2026-08-29 av-bay computer went dark 0.45 s
+    # into boost with 7.8 V on the last sample. The pack section has the
+    # detail; the verdict only needs to say "look".
+    if flight is not None:
+        hits = chatter_in_flight(flight)
+        if hits:
+            worst = min(hits, key=lambda h: h["v"] - h["around"])
+            return _verdict(CHECK, detail + (
+                f" — but the bus dropped for a single sample {len(hits)} time"
+                f"{'s' if len(hits) != 1 else ''} in flight with no load change "
+                f"(to {worst['v']:.2f} V at {worst['t']:.2f} s): check the pack connector and harness"))
     return _verdict(OK, detail)
 
 
@@ -129,7 +144,7 @@ def analyze(flight: Flight) -> AnalysisResult:
     recs = flight.records
 
     checks = [
-        ("Battery", _battery(recs)),
+        ("Battery", _battery(recs, flight)),
         ("GNSS", _gnss(recs)),
         ("Data logging", _logging(recs, flight.stats)),
         ("Radio link", _radio(flight)),

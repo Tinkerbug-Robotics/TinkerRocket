@@ -191,4 +191,15 @@ def compute_summary(flight) -> list[dict[str, Any]]:
                 suffix=f" {point}",
             ))
 
+    # --- The pack ------------------------------------------------------------
+    # Its lowest reading, which is the number a flyer checks against the
+    # regulator's dropout; what the flight drew rides in the hint. Imported
+    # here rather than at the top: the module imports the registry, and the
+    # registry imports every module, so a top-level import would run before
+    # the module had finished defining itself.
+    from .modules.power import pack_summary
+    pack = pack_summary(flight)
+    if pack is not None:
+        cells.append(_cell("Pack minimum", pack["v_min"], "V", 2, pack["hint"]))
+
     return cells

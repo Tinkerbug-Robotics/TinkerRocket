@@ -35,6 +35,11 @@ CONVERSIONS = {
     "N": None,     # thrust: SI either way
     "kg": (2.204622622, "lb", 3),
     "°": None,
+    # Electrical: the pack section quotes them and nothing converts them.
+    "V": None,
+    "A": None,
+    "mAh": None,
+    "mΩ": None,
     "": None,
 }
 

@@ -73,6 +73,7 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         sample_rates,
         stability,
         health,
+        power,
         rocket_state,
         barometer,
         lora_link,
@@ -116,6 +117,9 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         # it looks, so it belongs where the numbers are read.
         ("sample_rates",      sample_rates.analyze,      LEVEL_FLIGHT),
         ("health",            health.analyze,            LEVEL_FLIGHT),
+        # The trace behind the battery verdict, and the record's ending: whether
+        # the pack was drawn down, sagged, chattered, or was simply cut.
+        ("power",             power.analyze,             LEVEL_FLIGHT),
         # The tail of the report: what happened after the charge fired, then the
         # raw signal behind every altitude, then the radio, then the record of
         # the record itself. Reference rather than reading, in that order.
