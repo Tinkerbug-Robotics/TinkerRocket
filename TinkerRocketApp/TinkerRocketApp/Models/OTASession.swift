@@ -91,6 +91,14 @@ final class OTASession: ObservableObject {
     }
 
     /// User-initiated cancel. Sends OTA_ABORT and tears the task down.
+    ///
+    /// "Cancelled" is the state that stays on screen: every wait in the flow
+    /// returns early once the task is cancelled, without writing state or
+    /// aborting again — the Kotlin twin unwinds on CancellationException and
+    /// gets the same for free. Before that, the sleep's cancellation error
+    /// landed in the begin/finish catch blocks and overwrote "Cancelled" with
+    /// the timeout wording, and a cancel during the reboot phase fell through
+    /// the reconnect and version waits to a spurious rollback verdict.
     func cancel() {
         task?.cancel()
         device?.sendOtaAbort()
@@ -162,6 +170,11 @@ final class OTASession: ObservableObject {
         let beginTimeoutS = OTATimeouts.seconds(.begin, targetIsFC: targetIsFC)
         do {
             try await awaitOtaState(.ready, timeout: beginTimeoutS)
+        } catch is CancellationError {
+            // cancel() has already reported "Cancelled" and sent OTA_ABORT (or
+            // a start() re-call has already replaced this task): a cancelled
+            // run must not touch state again. See cancel().
+            return
         } catch {
             if let st = device?.otaStatus, st.state == .verifyFailed {
                 // A refused begin is answered, not ignored: verify_failed with
@@ -270,6 +283,8 @@ final class OTASession: ObservableObject {
         let finishTimeoutS = OTATimeouts.seconds(.finish, targetIsFC: targetIsFC)
         do {
             try await awaitOtaState(.readyToBoot, timeout: finishTimeoutS)
+        } catch is CancellationError {
+            return   // as at the begin wait: cancel() already reported and aborted
         } catch {
             if let st = device?.otaStatus, st.state == .verifyFailed {
                 // Byte count included deliberately: short of the image size means
@@ -302,12 +317,16 @@ final class OTASession: ObservableObject {
             _ = await waitFor(timeout: OTATimeouts.seconds(.disconnect, targetIsFC: targetIsFC)) { [weak self] in
                 self?.device == nil || self?.device?.isConnected == false
             }
+            // waitFor answers false on cancellation as well as on timeout;
+            // only the timeout is a verdict. See cancel().
+            if Task.isCancelled { return }
 
             // After BLEFleet creates a fresh BLEDevice for our peripheralID,
             // self.device starts returning the new instance.
             let reconnected = await waitFor(timeout: OTATimeouts.seconds(.reconnect, targetIsFC: targetIsFC)) { [weak self] in
                 self?.device?.isConnected == true
             }
+            if Task.isCancelled { return }
             if !reconnected {
                 state = .failed(reason: "Device did not reconnect within 60s — try power-cycling")
                 return
@@ -328,6 +347,7 @@ final class OTASession: ObservableObject {
             guard !fw.isEmpty else { return false }
             return fw != preFlash
         }
+        if Task.isCancelled { return }   // see cancel(): a cancelled wait is not a rollback
         let postFw = (targetIsFC ? device?.fcFirmwareVersion
                                  : device?.firmwareVersion) ?? ""
         if !gotNewFw {
@@ -345,7 +365,8 @@ final class OTASession: ObservableObject {
     // MARK: - Wait helpers
 
     /// Spin-wait for `device.otaStatus.state == expected` (or VerifyFailed,
-    /// which fails fast). Polls every 50 ms up to `timeout` seconds.
+    /// which fails fast). Polls every 50 ms up to `timeout` seconds. Throws
+    /// CancellationError once the task is cancelled — callers return on it.
     /// Reads `device?.otaStatus` directly each iteration so a BLEDevice
     /// reconnect (new instance) is picked up automatically.
     private func awaitOtaState(_ expected: OTAStatusUpdate.State, timeout: TimeInterval) async throws {
@@ -363,7 +384,9 @@ final class OTASession: ObservableObject {
     }
 
     /// Generic predicate-based wait. Returns true if predicate fired before
-    /// timeout. 50 ms poll interval.
+    /// timeout. 50 ms poll interval. Also returns false once the task is
+    /// cancelled — callers check Task.isCancelled before reading a false as a
+    /// timeout.
     private func waitFor(timeout: TimeInterval, _ predicate: @MainActor @escaping () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout * timeScale)
         while Date() < deadline {
