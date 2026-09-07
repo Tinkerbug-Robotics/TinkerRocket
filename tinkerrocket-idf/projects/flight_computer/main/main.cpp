@@ -39,6 +39,7 @@
 #include <driver/gpio.h>
 #include <esp_attr.h>            // RTC_NOINIT_ATTR for the #848 power-hold latch flag
 #include "pwr_hold_policy.h"     // #848: boot reconciliation decision table
+#include "boot_cue_policy.h"     // #1188: boot LED cue decision table
 #include "sim_flight_policy.h"   // #1104: sim edge rule + latched dry-fire predicate (TR_Sensor_Collector_Sim)
 #include "oc_cmd_session_gate.h" // #1105: no replay of one-shot commands across an FC boot
 #include <driver/uart.h>
@@ -698,6 +699,14 @@ static bool     recovery_apogee_armed = false;
 static bool     recovery_override_requested = false;
 static bool     reboot_recovery = false;      // true during servo settle period after recovery
 static bool     reboot_recovery_telem = false; // true for rest of flight (telemetry flag)
+// #1188 (#1176 decision 4): the OC reports on every status poll whether THIS
+// session began with it raising our rail from a flight token rather than with
+// an operator's power-on (OUT_STATUS_TOKEN_POWERED_BIT). Latched for the
+// session — the fact cannot change until the next power cycle — and turned
+// into an LED cue by serviceBootCue() whenever we are on the ground with no
+// restored flight in progress. Decision table: boot_cue_policy.h.
+static bool     oc_self_powered = false;
+static BootCuePolicy::Cue boot_cue_active = BootCuePolicy::Cue::None;
 static uint32_t servo_settle_end_ms = 0;      // hold servos neutral until this time
 static uint32_t last_snapshot_ms = 0;         // rate-limit NVS writes to 10 Hz
 // Resend the flight settings snapshot (#165) on the first few INFLIGHT ticks
@@ -2246,8 +2255,13 @@ static void i2sSenderTask(void *)
 // ==========================================================================
 // SECTION: Status LED
 // ==========================================================================
+// Two owners of the blue LED with a strict priority: while a boot cue (next
+// section) is active it owns the pin outright and the heartbeat blip is
+// suppressed rather than blended — a 40 ms blip inside a cue pattern would be
+// a third pattern nobody defined.
 static inline void triggerBlueLedFlash(uint32_t now_ms)
 {
+    if (boot_cue_active != BootCuePolicy::Cue::None) return;   // #1188: the cue owns blue
     gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN), 1);
     blue_led_flash_active = true;
     blue_led_flash_end_ms = now_ms + (uint32_t)config::BLUE_LED_FLASH_MS;
@@ -2261,8 +2275,75 @@ static inline void serviceBlueLedFlash(uint32_t now_ms)
     }
     if ((int32_t)(now_ms - blue_led_flash_end_ms) >= 0)
     {
-        gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN), 0);
+        // A flash armed just before a cue took the pin (the end-of-setup
+        // flash, typically) must not switch the cue's blue off.
+        if (boot_cue_active == BootCuePolicy::Cue::None)
+        {
+            gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN), 0);
+        }
         blue_led_flash_active = false;
+    }
+}
+
+// ==========================================================================
+// SECTION: Boot cue (#1188, #1176 decision 4)
+// ==========================================================================
+// Decision table and the reasoning behind it: boot_cue_policy.h. This is only
+// the driver — recompute the cue from the board's CURRENT belief every tick,
+// log each transition once, and own both LED pins while a cue is active.
+static inline void noteOcSelfPowered()
+{
+    if (oc_self_powered) return;
+    oc_self_powered = true;
+    ESP_LOGW(TAG, "[BOOT CUE] the OC reports this session was self-powered from a "
+                  "flight token — the previous session never ended cleanly");
+}
+
+static void serviceBootCue(uint32_t now_ms)
+{
+    using BootCuePolicy::Cue;
+    const bool restored_in_progress = recovery_gate_active && rocket_state == INFLIGHT;
+    const bool on_ground = (rocket_state == READY || rocket_state == PRELAUNCH ||
+                            rocket_state == LANDED);
+    const Cue cue = BootCuePolicy::cueFor(restored_in_progress, oc_self_powered, on_ground);
+
+    if (cue != boot_cue_active)
+    {
+        switch (cue)
+        {
+            case Cue::RestoredFlight:
+                ESP_LOGW(TAG, "[BOOT CUE] restored flight in progress — both LEDs solid");
+                break;
+            case Cue::SelfPoweredIdle:
+                ESP_LOGW(TAG, "[BOOT CUE] self-powered session with no flight in progress "
+                              "(state %u) — blue LED blinking until a launch or a "
+                              "power-off; power-cycle from the app to clear",
+                         (unsigned)rocket_state);
+                break;
+            case Cue::None:
+                ESP_LOGI(TAG, "[BOOT CUE] cleared — the heartbeat owns the blue LED again");
+                // Hand the pin back in the heartbeat's idle state. A flash it
+                // tried to arm while the cue held the pin was never shown.
+                gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN), 0);
+                blue_led_flash_active = false;
+                break;
+        }
+        boot_cue_active = cue;
+    }
+
+    switch (cue)
+    {
+        case Cue::RestoredFlight:
+            gpio_set_level((gpio_num_t)(config::RED_LED_PIN), 1);
+            gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN), 1);
+            break;
+        case Cue::SelfPoweredIdle:
+            gpio_set_level((gpio_num_t)(config::RED_LED_PIN), 1);
+            gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN),
+                           ((now_ms / config::BOOT_CUE_BLINK_HALF_MS) & 1U) ? 1 : 0);
+            break;
+        case Cue::None:
+            break;
     }
 }
 
@@ -4022,6 +4103,9 @@ static void setup_fc()
                 && resp_payload_len >= 1)
             {
                 if (resp_payload[0] != 0) { out_ready = true; }
+                // #1188: the OC's second status bit — this session began with
+                // the OC raising our rail from a flight token.
+                if (resp_payload[0] & OUT_STATUS_TOKEN_POWERED_BIT) noteOcSelfPowered();
                 if (resp_payload_len >= 2)
                 {
                     // #1105: this boot's first look at the serving slot goes
@@ -5759,6 +5843,9 @@ static void loop_fc()
                                 pwrHoldRelease("OC answered after orphan keep");
                             }
                         }
+                        // #1188: latched here too, so a boot whose initial
+                        // query the OC missed still gets its cue.
+                        if (resp_payload[0] & OUT_STATUS_TOKEN_POWERED_BIT) noteOcSelfPowered();
                         // Reflect the OC's reported pending command every poll,
                         // INCLUDING 0 (idle).  The OC repeats each command for
                         // CMD_REPEAT_LIMIT polls then reports 0; holding the value
@@ -9073,6 +9160,7 @@ static void loop_fc()
     
     const uint32_t now_ms_for_sound = time_ms();
     serviceBootReadyChirp(now_ms_for_sound);
+    serviceBootCue(now_ms_for_sound);        // #1188: before the heartbeat decides
     serviceHeartbeatBeep(now_ms_for_sound);
     serviceBlueLedFlash(now_ms_for_sound);
     serviceCameraStart(now_ms_for_sound);
