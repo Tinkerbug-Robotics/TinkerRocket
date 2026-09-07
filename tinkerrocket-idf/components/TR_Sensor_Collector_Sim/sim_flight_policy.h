@@ -1,0 +1,64 @@
+#pragma once
+// #1104: what the flight computer does when the simulator's active flag
+// changes, and when a pyro decision is "dry".  Lives next to
+// sim_landed_hold.h because the two are one contract: the hold decides when
+// the sim ends, this decides what the FC does about it — and the mini's
+// flight task, which shares this component, needs the same rules.
+//
+// The FC used to act only on the RISING edge of isSimActive(), on the
+// assumption that the falling edge always coincides with the FC in LANDED —
+// the sim's natural completion, where the FC must HOLD LANDED so the
+// post-flight lockout stays validated (#317).  #971 broke that assumption:
+// the SIM_LANDED hold now gives up after sim_landed::HOLD_MAX_MS when landing
+// detection never fires, and drops the sim to SIM_IDLE with the FC still
+// INFLIGHT.  From that tick the dry-fire gate (keyed off isSimActive()) was
+// OFF and the I2C command poll (skipped in a non-sim INFLIGHT) stopped: real
+// ARM/FIRE outputs on the bench, and no way to reach the FC until the
+// 10-minute flight backstop.
+//
+// Two rules close it.  Both are pure, so tests_cpp/test_sim_flight_policy.cpp
+// pins them instead of trusting them.
+
+#include <cstdint>
+
+namespace sim_flight
+{
+
+enum class Edge : uint8_t
+{
+    None,         // no change
+    Start,        // sim went active: a fresh run — reset the flight state and
+                  // latch "this flight is simulated"
+    EndedLanded,  // sim went idle with the FC in LANDED: the flown-out sim —
+                  // hold LANDED so the post-flight lockout stays validated
+    EndedEarly,   // sim went idle with the FC NOT in LANDED (the #971 give-up,
+                  // or any future early exit): treat exactly like a user Stop —
+                  // safe the pyros and reset the flight state to READY
+};
+
+/// Pure decision on the isSimActive() edge.  Keys on the FC's OWN state, not
+/// on the sim's stated reason, because the FC's state is what decides whether
+/// leaving things alone is safe.  `fc_landed` is `rocket_state == LANDED`,
+/// passed in so this header stays free of the firmware type.
+constexpr Edge classify(bool prev_active, bool curr_active, bool fc_landed)
+{
+    if (!prev_active && curr_active) return Edge::Start;
+    if (prev_active && !curr_active) return fc_landed ? Edge::EndedLanded
+                                                      : Edge::EndedEarly;
+    return Edge::None;
+}
+
+/// Is the flight being flown right now a simulated one?  True if the sim is
+/// active OR this flight was started by the sim (a latch set on the Start
+/// edge and cleared only when the flight state is reset).  The pyro dry-fire
+/// gate and the snapshot's sim stamp key on THIS rather than on isSimActive()
+/// alone: the sim steps its physics inside the FC's IMU read, so on the pass
+/// in which it gives up, servicePyroChannels() runs with isSimActive() already
+/// false — one tick BEFORE the edge above is handled.  Sampled, that tick
+/// would drive real outputs; latched, it cannot.
+constexpr bool simulated(bool sim_flight_latched, bool sim_active)
+{
+    return sim_flight_latched || sim_active;
+}
+
+}  // namespace sim_flight
