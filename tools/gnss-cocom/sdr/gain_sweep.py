@@ -146,15 +146,26 @@ def main() -> int:
 
     if not rows:
         return 1
-    # Satellites first, C/N0 only to break ties: see the module docstring.
-    best = max(rows, key=lambda r: (r[1], r[2]))
+    # Satellites first, then the LOWEST gain that achieves them. Breaking ties
+    # on C/N0 picks more power for no more satellites: on a Beitian M10, gain 8
+    # and gain 44 both tracked 14, and the C/N0 tie-break chose 44 -- 36 dB more
+    # radiated power for 0.9 dB of reported carrier. This band is protected and
+    # a shielded enclosure is never perfect, so the least power that does the job
+    # is the right answer, not the most comfortable one.
+    best_n = max(r[1] for r in rows)
+    best = min((r for r in rows if r[1] == best_n), key=lambda r: r[0])
     print(f"\n  best: gain {best[0]} -- {best[1]} satellites at {best[2]:.0f} dBHz")
     top = max(r[2] for r in rows)
     if best[2] < top:
         hot = [r for r in rows if r[2] == top][0]
-        print(f"  note: gain {hot[0]} reported a higher C/N0 ({hot[2]:.0f} dBHz) with "
-              f"{hot[1]} satellites.\n        Higher level, fewer satellites is the "
-              "compression signature -- do not use it.")
+        if hot[1] < best[1]:
+            print(f"  note: gain {hot[0]} reported a higher C/N0 ({hot[2]:.0f} dBHz) "
+                  f"with {hot[1]} satellites.\n        Higher level, fewer "
+                  "satellites is the compression signature -- do not use it.")
+        else:
+            print(f"  note: gain {hot[0]} reached the same {best[1]} satellites at "
+                  f"{hot[2]:.0f} dBHz, but is\n        {hot[0]-best[0]} dB hotter for "
+                  "no more satellites. Transmit the least that works.")
     return 0
 
 

@@ -1,0 +1,167 @@
+<svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Per-satellite carrier-to-noise change through the burn plotted against satellite elevation, at 13.5 g and at 2.0 g. At 13.5 g the high-elevation satellites lose 15 to 47 dB on every receiver; at 2.0 g there is no elevation trend.">
+<style>.ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}.gl{stroke:var(--rule,#DDE2E9);stroke-width:1;stroke-dasharray:3 3}.zl{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}.lbl{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-3,#79808F)}.ttl{font-family:var(--f-display,sans-serif);font-size:11px;font-weight:600;fill:var(--ink-2,#4A5261)}.rr{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-2,#4A5261)}</style>
+<text class="ttl" x="54" y="18">13.5 g boost</text>
+<line class="gl" x1="54.0" y1="326.0" x2="446.0" y2="326.0"/>
+<text class="lbl" x="48.0" y="329.0" text-anchor="end">-50</text>
+<line class="gl" x1="54.0" y1="282.6" x2="446.0" y2="282.6"/>
+<text class="lbl" x="48.0" y="285.6" text-anchor="end">-40</text>
+<line class="gl" x1="54.0" y1="239.2" x2="446.0" y2="239.2"/>
+<text class="lbl" x="48.0" y="242.2" text-anchor="end">-30</text>
+<line class="gl" x1="54.0" y1="195.8" x2="446.0" y2="195.8"/>
+<text class="lbl" x="48.0" y="198.8" text-anchor="end">-20</text>
+<line class="gl" x1="54.0" y1="152.5" x2="446.0" y2="152.5"/>
+<text class="lbl" x="48.0" y="155.5" text-anchor="end">-10</text>
+<line class="gl" x1="54.0" y1="109.1" x2="446.0" y2="109.1"/>
+<text class="lbl" x="48.0" y="112.1" text-anchor="end">+0</text>
+<line class="gl" x1="54.0" y1="65.7" x2="446.0" y2="65.7"/>
+<text class="lbl" x="48.0" y="68.7" text-anchor="end">+10</text>
+<line class="zl" x1="54.0" y1="109.1" x2="446.0" y2="109.1"/>
+<line class="ax" x1="54.0" y1="44.0" x2="54.0" y2="326.0"/>
+<text class="lbl" x="54.0" y="340.0" text-anchor="middle">0</text>
+<text class="lbl" x="132.4" y="340.0" text-anchor="middle">15</text>
+<text class="lbl" x="210.8" y="340.0" text-anchor="middle">30</text>
+<text class="lbl" x="289.2" y="340.0" text-anchor="middle">45</text>
+<text class="lbl" x="367.6" y="340.0" text-anchor="middle">60</text>
+<text class="lbl" x="446.0" y="340.0" text-anchor="middle">75</text>
+<text class="lbl" x="250.0" y="354.0" text-anchor="middle">satellite elevation, degrees</text>
+<circle cx="200.3" cy="83.0" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<path d="M212.0,309.0 L220.0,317.0 M212.0,317.0 L220.0,309.0" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<path d="M415.9,274.3 L423.9,282.3 M415.9,282.3 L423.9,274.3" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="101.0" cy="61.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="142.9" cy="113.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="158.5" cy="78.7" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="121.9" cy="113.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="195.1" cy="100.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="252.6" cy="117.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="189.9" cy="111.2" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<path d="M316.6,269.9 L324.6,277.9 M316.6,277.9 L324.6,269.9" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="80.1" cy="70.0" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="111.5" cy="141.6" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="200.3" cy="165.5" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="216.0" cy="139.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="419.9" cy="178.5" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="101.0" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="142.9" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="158.5" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="121.9" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="195.1" cy="161.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="252.6" cy="195.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="189.9" cy="143.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="320.6" cy="217.5" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="80.1" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="111.5" cy="126.4" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="200.3" cy="96.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="216.0" cy="96.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="419.9" cy="174.2" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="101.0" cy="139.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="142.9" cy="135.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="158.5" cy="135.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="121.9" cy="143.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="195.1" cy="135.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="252.6" cy="169.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="189.9" cy="130.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="320.6" cy="247.9" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="80.1" cy="139.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="111.5" cy="135.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="200.3" cy="221.9" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="216.0" cy="239.2" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="419.9" cy="161.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="101.0" cy="70.0" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="142.9" cy="91.7" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="158.5" cy="113.4" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="121.9" cy="70.0" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="195.1" cy="70.0" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="252.6" cy="226.2" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="189.9" cy="78.7" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="320.6" cy="221.9" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="80.1" cy="122.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="116.7" cy="122.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<text class="rr" x="444.0" y="56.0" text-anchor="end">ZED-F9P  r = -0.71</text>
+<text class="rr" x="444.0" y="68.0" text-anchor="end">NEO-M8T  r = -0.84</text>
+<text class="rr" x="444.0" y="80.0" text-anchor="end">Quescan M10  r = -0.50</text>
+<text class="rr" x="444.0" y="92.0" text-anchor="end">Beitian BN-182  r = -0.59</text>
+<text class="ttl" x="492" y="18">2.0 g boost</text>
+<line class="gl" x1="492.0" y1="326.0" x2="884.0" y2="326.0"/>
+<line class="gl" x1="492.0" y1="282.6" x2="884.0" y2="282.6"/>
+<line class="gl" x1="492.0" y1="239.2" x2="884.0" y2="239.2"/>
+<line class="gl" x1="492.0" y1="195.8" x2="884.0" y2="195.8"/>
+<line class="gl" x1="492.0" y1="152.5" x2="884.0" y2="152.5"/>
+<line class="gl" x1="492.0" y1="109.1" x2="884.0" y2="109.1"/>
+<line class="gl" x1="492.0" y1="65.7" x2="884.0" y2="65.7"/>
+<line class="zl" x1="492.0" y1="109.1" x2="884.0" y2="109.1"/>
+<line class="ax" x1="492.0" y1="44.0" x2="492.0" y2="326.0"/>
+<text class="lbl" x="492.0" y="340.0" text-anchor="middle">0</text>
+<text class="lbl" x="570.4" y="340.0" text-anchor="middle">15</text>
+<text class="lbl" x="648.8" y="340.0" text-anchor="middle">30</text>
+<text class="lbl" x="727.2" y="340.0" text-anchor="middle">45</text>
+<text class="lbl" x="805.6" y="340.0" text-anchor="middle">60</text>
+<text class="lbl" x="884.0" y="340.0" text-anchor="middle">75</text>
+<text class="lbl" x="688.0" y="354.0" text-anchor="middle">satellite elevation, degrees</text>
+<circle cx="638.3" cy="156.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="654.0" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="857.9" cy="87.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="539.0" cy="143.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="580.9" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="596.5" cy="104.7" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="559.9" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="633.1" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="690.6" cy="113.4" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="627.9" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="758.6" cy="104.7" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="518.1" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="549.5" cy="109.1" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="638.3" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="654.0" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="857.9" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="539.0" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="580.9" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="596.5" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="559.9" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="633.1" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="690.6" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="627.9" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="758.6" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="518.1" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="549.5" cy="109.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="638.3" cy="109.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="654.0" cy="117.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="857.9" cy="113.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="539.0" cy="109.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="580.9" cy="113.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="596.5" cy="57.0" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="559.9" cy="113.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="633.1" cy="113.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="690.6" cy="87.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="627.9" cy="113.4" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="758.6" cy="52.7" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="518.1" cy="109.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="554.7" cy="109.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="638.3" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="654.0" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="857.9" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="539.0" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="580.9" cy="122.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="596.5" cy="135.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="559.9" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="633.1" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="690.6" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="627.9" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="758.6" cy="74.4" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="518.1" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="549.5" cy="109.1" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<text class="rr" x="882.0" y="56.0" text-anchor="end">ZED-F9P  r = +0.35</text>
+<text class="rr" x="882.0" y="68.0" text-anchor="end">NEO-M8T  r = n/a</text>
+<text class="rr" x="882.0" y="80.0" text-anchor="end">Quescan M10  r = +0.28</text>
+<text class="rr" x="882.0" y="92.0" text-anchor="end">Beitian BN-182  r = +0.41</text>
+<circle cx="58.0" cy="367.0" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<text class="lbl" x="67.0" y="370.0">ZED-F9P</text>
+<circle cx="113.2" cy="367.0" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<text class="lbl" x="122.2" y="370.0">NEO-M8T</text>
+<circle cx="168.4" cy="367.0" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<text class="lbl" x="177.4" y="370.0">Quescan M10</text>
+<circle cx="246.0" cy="367.0" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<text class="lbl" x="255.0" y="370.0">Beitian BN-182</text>
+<path d="M337.4,363.0 L345.4,371.0 M337.4,371.0 L345.4,363.0" stroke="var(--ink-3,#79808F)" stroke-width="1.8" fill="none"/>
+<text class="lbl" x="350.4" y="370.0">lost lock entirely</text>
+<text class="lbl" x="54.0" y="390.0">change in carrier-to-noise from the pad baseline to the burn, per satellite; r is against sin(elevation)</text>
+</svg>
