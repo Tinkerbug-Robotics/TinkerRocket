@@ -2836,10 +2836,19 @@ enum RollSegmentMode : uint8_t
     ROLL_SEG_NULL_RATE = 1,  // hold roll rate = 0 (rate-only inner PID); angle field ignored
 };
 
+// #1115: both computers RANGE-CHECK these fields on arrival and REJECT the
+// whole frame if any used waypoint fails — see RollProfileGate.h, which owns
+// the bounds (finite, 0 <= time_s <= 600, |angle_deg| <= 720, non-decreasing
+// times).  A rejected profile is not clamped and not persisted: the rocket
+// keeps the profile it already had, so a client that sends an out-of-range
+// value gets the OLD profile back in the config report, not the one it sent.
+// Neither app clamps its free-text entry, and both adopt the reported config
+// only on attach, so a client wanting the operator to see the error at the
+// moment they type it must validate its own input against these bounds.
 typedef struct __attribute__((packed))
 {
-    float   time_s;     // seconds after launch
-    float   angle_deg;  // target roll angle (deg) at this time
+    float   time_s;     // seconds after launch; finite, 0..600, non-decreasing
+    float   angle_deg;  // target roll angle (deg) at this time; finite, |a| <= 720
     uint8_t mode;       // LEGACY (pre-v4 per-waypoint RollSegmentMode); kept for wire
                         // layout, ignored by firmware — always write ROLL_SEG_ANGLE
 } RollWaypoint;

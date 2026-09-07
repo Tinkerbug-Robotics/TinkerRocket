@@ -17,6 +17,7 @@
 
 #include <TR_NVS.h>
 #include <TR_Sensor_Collector.h>
+#include <imu_drain_window.h>     // #1191: mean + worst-sample stats over each IMU drain pass
 #include <TR_Sensor_Collector_Sim.h>
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_I2C_Interface.h>      // packMessage/unpackMessage statics only — no bus
@@ -238,6 +239,15 @@ static uint32_t ekf_tick_counter = 0;
 
 // --- Converted SI values (latest sample of each sensor) ---
 static ISM6HG256DataSI ism6_latest_si = {};
+// #1191: low-g near-rail verdict for the estimator pass, taken from the drain
+// window's WORST raw sample per sensor axis (imu_drain_window.h says why not
+// the mean, and why sensor axes rather than body axes).  Set where the window
+// is averaged, consumed by the low-g/high-g channel switch in the EKF-input
+// block; retained across passes that drain nothing, exactly as ism6_latest_si
+// is.  The bar is the same 15.5 g the body-frame test used, in raw LSB.
+static bool ism6_low_g_near_rail = false;
+static constexpr int32_t kLowGNearRailLsb =
+    imu_drain::nearRailLsb((float)config::ISM6_LOW_G_FS_G, 0.5f);
 static BMP585DataSI bmp_latest_si = {};
 // #260: source-validity bounds for BMP585 pressure (Pa).  Finite bounds also
 // reject NaN/Inf.  Downstream trust gates use a tighter 25-125 kPa window.
@@ -1479,9 +1489,32 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
         // edge with the flight in LANDED) is never mistaken for one.
         // resetFlightStateForSim() re-syncs the edge detector, so the
         // stopSim() just above is not counted a second time there (#1104).
-        sensor_collector.stopSim();
-        resetFlightStateForSim("stop");
-        ESP_LOGI(TAG, "[SIM] Stop cmd received — flight state reset (#393)");
+        //
+        // #1113: but ONLY against a sim flight.  This reset clears the #317
+        // post-flight lockout — the one command that deliberately re-arms —
+        // and a real INFLIGHT discards frames but LANDED does not, so a Stop
+        // that reached a REAL flight's terminal LANDED (a broadcast uplink
+        // meant for the bench rocket, an app whose SIM MODE banner never
+        // cleared) dropped the flight to READY with the deployment latches
+        // cleared and a failed channel's e-match still live.  The latch is
+        // what tells a flown-out sim (Stop must still work) from a real
+        // landing (it must not): isSimActive() is false for both.  The queue
+        // drains whole in one pass, so a START and a STOP can land in the
+        // same tick before the edge handler has latched — the active sim
+        // carries that one.  sim_flight_policy.h pins the rule.
+        if (sim_flight::stopApplies(sim_flight_latched,
+                                    sensor_collector.isSimActive()))
+        {
+            sensor_collector.stopSim();
+            resetFlightStateForSim("stop");
+            ESP_LOGI(TAG, "[SIM] Stop cmd received — flight state reset (#393)");
+        }
+        else
+        {
+            ESP_LOGW(TAG, "[SIM] Stop ignored: no sim flight this run "
+                          "(state=%u post_flight_lockout=%d) (#1113)",
+                     (unsigned)rocket_state, (int)post_flight_lockout);
+        }
     }
     else if (cmd.type == GROUND_TEST_START || cmd.type == GROUND_TEST_STOP)
     {
@@ -1494,38 +1527,41 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
     else if (cmd.type == GYRO_CAL_CMD)
     {
         ESP_LOGI(TAG, "[CAL] Sensor calibration requested...");
-        // #1110: the collector runs the window inside its IMU poll task and
-        // says whether a result was measured and committed.  On false it kept
-        // the previous offsets, so the converter and NVS already hold what
-        // the rocket is using — nothing to re-apply and nothing to save.
-        if (sensor_collector.calibrateGyro(config::ISM6HG256_ROT_Z_DEG))
+        // #1110: the collector measures the window inside its IMU poll task.
+        // #1114: the flight loop no longer waits the ~10 s for it — the
+        // request is posted here and the answer is collected by the "Pad
+        // calibration completion" block in loop_fc(), so launch detection,
+        // the EKF, the state machine and the deployment channels keep
+        // running through the window.  A rocket that is flying, has flown,
+        // or has just left the pad is refused: a tap that lands after
+        // ignition must never open a window.
+        const char* cal_refusal =
+            sensor_cal::refusal(rocket_state, kinematics.launch_flag);
+        if (cal_refusal != nullptr)
         {
-            sensor_converter.setHighGBias(sensor_collector.hg_bias_x,
-                                          sensor_collector.hg_bias_y,
-                                          sensor_collector.hg_bias_z);
-            // (FC also echoed the bias into the OC status-query payload — the
-            // mini's comms side reads it back via SENSOR_CAL_STATUS below.)
-            // Persist to NVS — high-g bias + gyro zero-rate bias (#132).
-            prefs.begin("cal", false);
-            prefs.putFloat("hgbx", sensor_collector.hg_bias_x);
-            prefs.putFloat("hgby", sensor_collector.hg_bias_y);
-            prefs.putFloat("hgbz", sensor_collector.hg_bias_z);
-            prefs.putShort("gx", sensor_collector_hw.gyro_cal_x);
-            prefs.putShort("gy", sensor_collector_hw.gyro_cal_y);
-            prefs.putShort("gz", sensor_collector_hw.gyro_cal_z);
-            prefs.end();
-            ESP_LOGI(TAG, "[CAL] Sensor calibration complete (saved to NVS)");
+            ESP_LOGW(TAG, "[CAL] Sensor calibration REFUSED: %s — previous calibration kept",
+                     cal_refusal);
+            publishSensorCalFromNVS();
         }
-        else
+        else if (sensor_collector.calibrationInProgress())
         {
-            ESP_LOGE(TAG, "[CAL] Sensor calibration FAILED — previous calibration kept "
-                          "(the SENSORS log above says why)");
+            // The open window answers for this tap too: its completion
+            // publishes.  Publishing the stored cal now would resolve the
+            // app's pending snapshot to the OLD values first.
+            ESP_LOGW(TAG, "[CAL] Sensor calibration already running — request ignored");
         }
-        // Push the stored result up either way so the app's pending snapshot
-        // resolves to the values the rocket is actually using.  The status
-        // frame carries no failure field, so a failed run reads as a re-send
-        // of the old calibration there.
-        publishSensorCalFromNVS();
+        else if (!sensor_collector.startCalibration(config::ISM6HG256_ROT_Z_DEG))
+        {
+            // Not started: no IMU, poll task down, or a sim running — the
+            // SENSORS/SIM line above says which.  Nothing changed; push the
+            // stored result so the app's pending snapshot resolves to the
+            // values the rocket is actually using.  The status frame carries
+            // no failure field, so it reads as a re-send of the old
+            // calibration there.
+            ESP_LOGE(TAG, "[CAL] Sensor calibration NOT STARTED — previous calibration kept "
+                          "(the log line above says why)");
+            publishSensorCalFromNVS();
+        }
     }
     // Issue #96 — magnetometer hard-iron cal: start / abort / accept / retry.
     // Entry refused only from INFLIGHT.  With #216 the MAG_CALIBRATION state
@@ -2824,18 +2860,29 @@ static void loop_fc()
     // mini_link::logFrame (byte-identical stream to the OC's) and refreshes
     // the comms-side telem cache.
     static uint32_t dbg_ism6_reads = 0, dbg_bmp_reads = 0, dbg_bmp_bad_reads = 0, dbg_iis2mdc_reads = 0, dbg_gnss_reads = 0;
+    // #1191: drain passes that handed the estimators a sample, and the largest
+    // window seen.  The [SENSOR] line prints reads/passes — the mean N behind
+    // the anti-alias figure — and the worst backlog.
+    static uint32_t dbg_ism6_passes = 0, dbg_ism6_win_max = 0;
 
     // Drain ALL pending IMU samples each iteration.  The chip runs at the
-    // configured ODR — about two samples per ~1 ms loop pass at 1920 Hz —
-    // and every one is logged so the recorded IMU rate follows the chip ODR,
-    // not the loop rate.  The control/EKF path converts only the FRESHEST
-    // drained sample: kinematics and the EKF keep running at loop rate.
+    // configured ODR (3840 Hz to deployment under IMU_RATE_DYNAMIC, 960 Hz
+    // after) — several samples per ~2 ms loop pass — and every one is logged
+    // so the recorded IMU rate follows the chip ODR, not the loop rate.
+    // The control/EKF path gets the MEAN of the drained samples (#1191).  It
+    // used to take the freshest one: a 1-in-N decimation with no anti-alias
+    // step, which handed the 2026-08-29 boost's ~800 Hz motor tone to the EKF
+    // and the roll P-term folded to ~192 Hz at full amplitude.  The mean is an
+    // N-tap boxcar at the ODR — about -15 dB at 800 Hz, under 1 % at 30 Hz,
+    // under a millisecond of delay (imu_drain_window.h).  Kinematics and the
+    // EKF keep running at loop rate exactly as before, and the logged stream
+    // is untouched.
     {
-        bool ism6_new_this_iter = false;
+        ImuDrainWindow ism6_win;
         while (sensor_collector.getISM6HG256Data(ism6hg256_data))
         {
             dbg_ism6_reads++;
-            ism6_new_this_iter = true;
+            ism6_win.add(ism6hg256_data);
 
             memcpy(ism6hg256_data_buffer,
                    &ism6hg256_data,
@@ -2846,13 +2893,22 @@ static void loop_fc()
                                       (uint8_t)SIZE_OF_ISM6HG256_DATA);
         }
 
-        if (ism6_new_this_iter)
+        ISM6HG256Data ism6_mean_raw = {};
+        if (ism6_win.mean(ism6_mean_raw))
         {
-            sensor_converter.convertISM6HG256Data(ism6hg256_data, ism6_latest_si);
+            dbg_ism6_passes++;
+            if (ism6_win.n > dbg_ism6_win_max) dbg_ism6_win_max = ism6_win.n;
+
+            sensor_converter.convertISM6HG256Data(ism6_mean_raw, ism6_latest_si);
             have_ism6_si = true;
+            // The low-g near-rail verdict comes from the window's WORST raw
+            // sample per sensor axis, not from the mean the converter was
+            // just handed: an average of clipped samples is still biased.
+            ism6_low_g_near_rail = ism6_win.lowGNearRail(kLowGNearRailLsb);
             // Latest-wins cache for the comms side (one copy per drain pass,
             // not per sample — the cache is a latest-state snapshot, the log
-            // stream above carries every sample).
+            // stream above carries every sample).  The freshest raw sample is
+            // still in ism6hg256_data after the drain.
             telemStore(mini_link::telem.imu, ism6hg256_data,
                        mini_link::telem.imu_update_us);
 
@@ -3129,12 +3185,14 @@ static void loop_fc()
             const float az = (float)ism6_latest_si.low_g_acc_z;
             roll_rate_dps = (float)ism6_latest_si.gyro_x;
 
-            // Switch to high-G channel when any low-G axis approaches saturation
-            static constexpr float kLowGSatThreshMps2 =
-                (config::ISM6_LOW_G_FS_G - 0.5f) * 9.80665f;
-            const bool low_g_near_sat = (fabsf(ax) > kLowGSatThreshMps2) ||
-                                        (fabsf(ay) > kLowGSatThreshMps2) ||
-                                        (fabsf(az) > kLowGSatThreshMps2);
+            // Switch to the high-g channel when the low-g part is near its
+            // rail.  #1191: the verdict is the drain window's worst raw sample
+            // per SENSOR axis (set where the window is averaged), not a test
+            // on the body-frame means above.  An average of clipped samples
+            // is still biased, and with the -45 deg mount a single-axis rail
+            // reads 11.3 g on two body axes, under the 15.5 g bar the
+            // body-frame test applied.
+            const bool low_g_near_sat = ism6_low_g_near_rail;
             const float hx = (float)ism6_latest_si.high_g_acc_x;
             const float hy = (float)ism6_latest_si.high_g_acc_y;
             const float hz = (float)ism6_latest_si.high_g_acc_z;
@@ -3604,6 +3662,70 @@ static void loop_fc()
                     continue;
                 }
                 handleCommandFrame(cmd, now_ms);
+            }
+        }
+
+        // ==========================================================================
+        // SECTION: Pad calibration completion (#1114)
+        // ==========================================================================
+        // The IMU poll task is measuring the window GYRO_CAL_CMD posted from
+        // handleCommandFrame() while this loop keeps flying.  Collect the
+        // answer here, once per pass — or drop the window the moment the
+        // rocket stops being on the pad.  launch_flag is the detector's own
+        // verdict; rocket_state covers a launch it did not call (a sim, a
+        // restored flight).  Either way the calibrator is being fed motion,
+        // so its answer is discarded unseen and the previous calibration
+        // stays live.  Until #1114 the flight task sat inside the calibrator
+        // for the whole window: a motor lit during an on-pad cal was a boost
+        // nobody sampled — no launch detect, no INFLIGHT, no deployment.
+        if (sensor_collector.calibrationInProgress())
+        {
+            const char* cal_cancel =
+                sensor_cal::refusal(rocket_state, kinematics.launch_flag);
+            if (cal_cancel != nullptr)
+            {
+                sensor_collector.cancelCalibration();
+                ESP_LOGW(TAG, "[CAL] Sensor calibration CANCELLED: %s — previous calibration kept",
+                         cal_cancel);
+                publishSensorCalFromNVS();
+            }
+            else
+            {
+                switch (sensor_collector.pollCalibration())
+                {
+                    case SensorCalPoll::Committed:
+                        sensor_converter.setHighGBias(sensor_collector.hg_bias_x,
+                                                      sensor_collector.hg_bias_y,
+                                                      sensor_collector.hg_bias_z);
+                        // (FC also echoes the bias into the OC status-query
+                        // payload — the mini's comms side reads it back via
+                        // SENSOR_CAL_STATUS below.)
+                        // Persist to NVS — high-g bias + gyro zero-rate bias (#132).
+                        prefs.begin("cal", false);
+                        prefs.putFloat("hgbx", sensor_collector.hg_bias_x);
+                        prefs.putFloat("hgby", sensor_collector.hg_bias_y);
+                        prefs.putFloat("hgbz", sensor_collector.hg_bias_z);
+                        prefs.putShort("gx", sensor_collector_hw.gyro_cal_x);
+                        prefs.putShort("gy", sensor_collector_hw.gyro_cal_y);
+                        prefs.putShort("gz", sensor_collector_hw.gyro_cal_z);
+                        prefs.end();
+                        ESP_LOGI(TAG, "[CAL] Sensor calibration complete (saved to NVS)");
+                        publishSensorCalFromNVS();
+                        break;
+                    case SensorCalPoll::Rejected:
+                        // The previous offsets are untouched, so the
+                        // converter and NVS already hold what the rocket is
+                        // using — nothing to re-apply, nothing to save.
+                        // Publish so the app's pending snapshot resolves; the
+                        // frame carries no failure field, so it reads as a
+                        // re-send of the old calibration there.
+                        ESP_LOGE(TAG, "[CAL] Sensor calibration FAILED — previous calibration kept "
+                                      "(the SENSORS log above says why)");
+                        publishSensorCalFromNVS();
+                        break;
+                    default:
+                        break;   // Running: nothing to do this pass
+                }
             }
         }
 
@@ -4277,9 +4399,22 @@ static void loop_fc()
             }
             sh = shSet(sh, SH_EKF_SHIFT, ekf_st);
 
-            // Mag — present (cal-residual refinement is a follow-up; amber-only).
-            sh = shSet(sh, SH_MAG_SHIFT,
-                       (have_iis2mdc_si || have_mmc_si) ? SH_OK : SH_NA);
+            // Mag — present + fresh (cal-residual refinement is a follow-up;
+            // amber-only).  #1111: have_iis2mdc_si latches on the first
+            // sample, so presence alone stayed OK for the rest of the flight
+            // after the chip stopped answering; a stalled or rail-less mag
+            // now reads DEGRADED once its last sample is 500 ms old (the
+            // baro's window; 50 missed samples at 100 Hz).  have_mmc_si is
+            // const false on this board — the compiler folds that branch.
+            SensorHealthState mag_st = SH_NA;
+            if (have_iis2mdc_si) {
+                const bool fresh = (uint32_t)(now_us_h - iis2mdc_latest_si.time_us) < 500000u;
+                mag_st = fresh ? SH_OK : SH_DEGRADED;
+            } else if (have_mmc_si) {
+                const bool fresh = (uint32_t)(now_us_h - mmc_latest_si.time_us) < 500000u;
+                mag_st = fresh ? SH_OK : SH_DEGRADED;
+            }
+            sh = shSet(sh, SH_MAG_SHIFT, mag_st);
 
             // GNSS — OK needs a 3D fix + enough sats (+ horizontal accuracy,
             // but only when that gate is enabled: 0 is a "disabled" sentinel).
@@ -4386,8 +4521,10 @@ static void loop_fc()
             lt_loop_count = 0;
 
             // Sensor data flow diagnostic
-            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu bmp=%lu bmp_bad=%lu iis=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
+            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu (win n=%.1f max=%lu) bmp=%lu bmp_bad=%lu iis=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
                           (unsigned long)dbg_ism6_reads,
+                          dbg_ism6_passes ? (double)dbg_ism6_reads / (double)dbg_ism6_passes : 0.0,
+                          (unsigned long)dbg_ism6_win_max,
                           (unsigned long)dbg_bmp_reads,
                           (unsigned long)dbg_bmp_bad_reads,
                           (unsigned long)dbg_iis2mdc_reads,
@@ -4396,11 +4533,41 @@ static void loop_fc()
                           have_ism6_si ? (double)ism6_latest_si.gyro_z : 0.0,
                           gpio_get_level((gpio_num_t)config::ISM6HG256_INT));
             dbg_ism6_reads = 0;
+            dbg_ism6_passes = 0;
+            dbg_ism6_win_max = 0;
             dbg_bmp_reads = 0;
             dbg_bmp_bad_reads = 0;
             dbg_iis2mdc_reads = 0;
             dbg_gnss_reads = 0;
             // (FC's [MMC DIAG] block dropped — part not fitted.)
+
+            // IIS2MDC poll health (#1111).  Quiet while healthy: printed only
+            // when a read failed this second, the chip is stalled, or a stall
+            // began/ended since the last print.  ok/fail are per-second
+            // deltas; stalls/rec are lifetime; worst is the longest single
+            // attempt (read or stall probe) since boot — how much of the IMU
+            // poll loop one failing mag transaction costs.
+            if (sensor_collector.isIIS2MDCActive())
+            {
+                static IIS2MDCDebugSnapshot prev_iis_snap = {};
+                IIS2MDCDebugSnapshot now_iis_snap;
+                sensor_collector.getIIS2MDCDebugSnapshot(now_iis_snap);
+                const uint32_t iis_fail_delta = now_iis_snap.read_fail - prev_iis_snap.read_fail;
+                if (iis_fail_delta != 0 || now_iis_snap.stalled ||
+                    now_iis_snap.stall_events != prev_iis_snap.stall_events ||
+                    now_iis_snap.recoveries   != prev_iis_snap.recoveries)
+                {
+                    ESP_LOGW(TAG, "[MAG DIAG] iis2mdc read ok/fail=%lu/%lu stalls=%lu rec=%lu "
+                                  "worst=%lu us%s",
+                                  (unsigned long)(now_iis_snap.read_ok - prev_iis_snap.read_ok),
+                                  (unsigned long)iis_fail_delta,
+                                  (unsigned long)now_iis_snap.stall_events,
+                                  (unsigned long)now_iis_snap.recoveries,
+                                  (unsigned long)now_iis_snap.read_max_us,
+                                  now_iis_snap.stalled ? " STALLED" : "");
+                }
+                prev_iis_snap = now_iis_snap;
+            }
         }
     }
 

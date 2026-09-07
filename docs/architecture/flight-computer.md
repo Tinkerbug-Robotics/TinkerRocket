@@ -87,7 +87,9 @@ the flight logic inside is gated to `FLIGHT_LOOP_UPDATE_RATE` (1000 Hz).
    pre-flight states and then *freezes* at `PRELAUNCH` — see Gotchas.
 4. **Update the EKF** (every other pass, so 500 Hz).
 5. **Poll the Out Computer over I2C** for a pending command — skipped in flight.
-6. **Dispatch that command** — roughly 60 handlers, the largest block in the file.
+6. **Dispatch that command** — roughly 60 handlers, the largest block in the file. It
+   runs only on a pass that polled: it is the tail of the poll transaction, so between
+   polls, and for the whole of a real flight, it is a no-op.
 7. **Run kinematic checks**: launch, apogee, and landing detection with per-sensor health
    feeding an adaptive quorum.
 8. **Run the state machine**, including pyro servicing and the control law.
@@ -122,7 +124,9 @@ it. A rocket that has left the pad is in flight whether or not the software appr
 
 `LANDED` is terminal. It sets `post_flight_lockout`, which is re-asserted at the top of
 the state machine on every pass, so no command and no re-triggered launch detect can
-start a second flight without a reboot (#317).
+start a second flight without a reboot (#317). The simulator's Stop command is the one
+deliberate re-arm, and it counts only when a sim flight was started this boot; a Stop
+that reaches a real flight's `LANDED` is ignored (#1113).
 
 `MAG_CALIBRATION` is a bench-only state entered by app command and refused in
 `PRELAUNCH`/`INFLIGHT`/`LANDED`. While in it, kinematic checks are skipped, EKF init is
@@ -199,7 +203,12 @@ Two links, opposite directions, different roles.
 **I2S carries telemetry out.** The FC is master TX, streaming packed sensor frames
 continuously. A sender task on core 0 owns the write so the flight loop never blocks on
 it. During an OTA the link flips: the FC becomes slave RX and receives a firmware image
-through the same pins.
+through the same pins. The Out Computer's finish or abort command ends that session — or,
+if neither ever arrives (a dropped command, an Out Computer reboot mid-transfer), the FC
+ends it itself: no accepted image byte for 30 s once the Out Computer has released the
+clock, and a new begin supersedes a session that is still open (#1116). Left open, the
+flipped link means no telemetry out, the navigation filter paused and the flight loop
+throttled, with no way back short of a battery pull.
 
 **I2C carries commands in.** The FC is master and polls the Out Computer every 250 ms,
 reading a combined `[status][optional config]` response of exactly 96 bytes. The protocol
@@ -236,6 +245,17 @@ each command across several polls for I2C reliability, and that field mirrors wh
 is currently reporting. Clearing it at dispatch makes the reset fire between polls and
 every repeat re-executes the command. The dedup key is `last_processed_cmd`, and it
 resets only when the OC actually reports 0.
+
+**A config retry means the next poll, not the next loop pass.** A config handler that
+finds no config frame in the read clears the dedup key so that the OC's next delivery —
+which re-stages the frame — gets another attempt. That only works because the dispatch
+block runs solely on the pass that polled. `out_pending_command` is written by nothing but
+the poll, so a dispatch that ran on every pass re-fired about a millisecond later against
+the same stale bytes and spent ~38 ms per pass inside `readConfigFrame()` — a ~26 Hz
+flight loop for the rest of the OC's repeat window, and for the rest of the flight once a
+real `INFLIGHT` stopped the poll (#1112). Each served command also gets a retry budget of
+three; after that the key keeps the command until the OC reports 0, so a frame the OC
+dropped, or an OC that stopped answering, cannot be re-read forever.
 
 **Attitude drifts on the pad and that is not a bug.** Sitting vertical puts the vehicle
 at an Euler-angle singularity, so roll and yaw trade off against each other freely while

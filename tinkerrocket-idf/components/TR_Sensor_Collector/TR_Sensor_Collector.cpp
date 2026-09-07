@@ -8,9 +8,6 @@
 #include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#ifdef ESP_PLATFORM
-#include <esp_task_wdt.h>
-#endif
 
 static const char* SC_TAG = "SENSORS";
 
@@ -107,7 +104,8 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     iis2mdc_data_ready = false;
     gnss_data_ready = false;
     gnss_sat_data_ready = false;
-    iis2mdc_last_sample_us = 0;
+    iis2mdc_gate.reset(time_us());   // seed from NOW, not 0 — see iis2mdc_poll_gate.h
+    iis2mdc_read_max_us = 0;
     bmp585_irq_pending_count = 0;
     mmc5983ma_irq_pending_count = 0;
     ism6_isr_fired = false;
@@ -673,23 +671,26 @@ void SensorCollector::pollIMUdata(void* parameter)
             }
         }
 
-        // #1110: the pad calibration is serviced here too, by the bus owner.
-        // Open a requested window; close an open one once its deadline has
-        // passed.  The close is checked on every wake — 100 ms at worst, on
-        // the notify timeout — so a dead DRDY line still ends the window and
-        // answers the flight task instead of leaving it waiting.
-        if (self->cal_request_pending_)
+        // #1110/#1114: the pad calibration is serviced here too, by the bus
+        // owner, while the flight task keeps flying.  Open a requested window
+        // (restarting one the flight task re-requested under it); close an
+        // open one once its deadline has passed.  The close is checked on
+        // every wake — 100 ms at worst, on the notify timeout — so a dead
+        // DRDY line still ends the window and answers the flight task.
         {
-            self->cal_request_pending_ = false;
-            self->cal_sums_ = SensorCalSums{};
-            self->cal_deadline_us_ = time_us() + CAL_WINDOW_US;
-            self->cal_active_ = true;
-        }
-        if (self->cal_active_ &&
-            (int32_t)(time_us() - self->cal_deadline_us_) >= 0)
-        {
-            self->cal_active_ = false;
-            xSemaphoreGive(self->cal_done_sem_);
+            const uint32_t cal_now_us = time_us();
+            if (self->cal_window_.open(self->cal_request_seq_, cal_now_us, CAL_WINDOW_US))
+            {
+                self->cal_sums_ = SensorCalSums{};
+            }
+            uint32_t cal_done_seq = 0;
+            if (self->cal_window_.close(cal_now_us, cal_done_seq))
+            {
+                // Stamp the answer before the give: the flight task's take
+                // orders its reads of cal_done_seq_ and cal_sums_ after this.
+                self->cal_done_seq_ = cal_done_seq;
+                xSemaphoreGive(self->cal_done_sem_);
+            }
         }
 
         // === ISM6HG256 FIRST — highest rate sensor, latency-critical ===
@@ -756,34 +757,30 @@ void SensorCollector::pollIMUdata(void* parameter)
                 }
                 self->pt_last_ism6_time_us = this_time;
 
-                if (self->cal_active_)
+                if (self->cal_window_.active && read_st == TR_ISM6HG256_OK)
                 {
-                    // #1110: calibration window open — this sample belongs to
-                    // the calibrator, not the queue.  The consumer is blocked
-                    // in calibrateGyro() for the whole window, so enqueueing
-                    // would only run up the drop gauge behind the logged
-                    // IMU_DROP flag (#474); the old suspend fed it nothing
-                    // either.  Sum the raw values (g_raw, before the offset
-                    // subtract above), and only a read the driver accepted.
-                    if (read_st == TR_ISM6HG256_OK)
-                    {
-                        self->cal_sums_.g[0]  += g_raw.x;
-                        self->cal_sums_.g[1]  += g_raw.y;
-                        self->cal_sums_.g[2]  += g_raw.z;
-                        self->cal_sums_.lg[0] += lg_raw.x;
-                        self->cal_sums_.lg[1] += lg_raw.y;
-                        self->cal_sums_.lg[2] += lg_raw.z;
-                        self->cal_sums_.hg[0] += hg_raw.x;
-                        self->cal_sums_.hg[1] += hg_raw.y;
-                        self->cal_sums_.hg[2] += hg_raw.z;
-                        self->cal_sums_.count++;
-                    }
+                    // #1110/#1114: calibration window open — the calibrator
+                    // gets this sample TOO.  Sum the raw values (g_raw,
+                    // before the offset subtract above), and only a read the
+                    // driver accepted.  The queue still gets it below: the
+                    // flight loop keeps consuming through the window (#1114),
+                    // so the log, the EKF and launch detection see no hole.
+                    self->cal_sums_.g[0]  += g_raw.x;
+                    self->cal_sums_.g[1]  += g_raw.y;
+                    self->cal_sums_.g[2]  += g_raw.z;
+                    self->cal_sums_.lg[0] += lg_raw.x;
+                    self->cal_sums_.lg[1] += lg_raw.y;
+                    self->cal_sums_.lg[2] += lg_raw.z;
+                    self->cal_sums_.hg[0] += hg_raw.x;
+                    self->cal_sums_.hg[1] += hg_raw.y;
+                    self->cal_sums_.hg[2] += hg_raw.z;
+                    self->cal_sums_.count++;
                 }
                 // Enqueue the sample; on a full queue drop the OLDEST so the
                 // freshest data always lands (control reads the tail).  A
                 // nonzero drop counter means the consumer stalled for longer
                 // than ISM6_QUEUE_DEPTH samples — visible in [SENSOR] diag.
-                else if (xQueueSend(self->ism6Queue, &self->ism6hg256_data, 0) != pdTRUE)
+                if (xQueueSend(self->ism6Queue, &self->ism6hg256_data, 0) != pdTRUE)
                 {
                     ISM6HG256Data discard;
                     (void)xQueueReceive(self->ism6Queue, &discard, 0);
@@ -934,29 +931,79 @@ void SensorCollector::pollIMUdata(void* parameter)
         }
 
         // === IIS2MDC — time-gated I2C poll at ODR (default 100 Hz) ===
-        // No DRDY pin yet; we throttle reads to IIS2MDC_PERIOD_US so we don't
-        // spam the I2C bus from the ~1 kHz polling task. BDU is on, so a
-        // partial read across an internal sample boundary returns the prior
-        // complete sample instead of tearing.
+        // No DRDY pin in the poll path; we throttle reads to the chip's ODR
+        // so we don't spam the I2C bus from the DRDY-paced (~2-4 kHz) IMU
+        // loop. BDU is on, so a partial read across an internal sample
+        // boundary returns the prior complete sample instead of tearing.
+        //
+        // #1111: the gate advances on EVERY attempt, not only a successful
+        // one.  It used to advance inside the success branch, so once the
+        // chip stopped answering the blocking read was re-issued on every
+        // DRDY wake — and this loop reads the ISM6 once per iteration, so
+        // each retry's transfer time (up to the driver's timeout on a wedged
+        // bus) came straight out of the IMU sample rate, with nothing marked
+        // unhealthy.  After STALL_FAILS consecutive failures the gate drops
+        // to a backed-off WHO_AM_I probe (reviveIIS2MDC), and the boot
+        // configuration is re-applied on the way back so a chip that browned
+        // out (CFG/OFFSET regs back at power-on defaults = idle mode) does
+        // not return "answering" but parked.
         if (self->iis2mdc_active)
         {
             const uint32_t iis2_now_us = time_us();
-            if ((int32_t)(iis2_now_us - self->iis2mdc_last_sample_us) >=
-                (int32_t)IIS2MDC_PERIOD_US)
+            if (self->iis2mdc_gate.due(iis2_now_us))
             {
-                IIS2MDC_RawData iis2_raw = {};
-                if (self->iis2mdc.readRawXYZ(&iis2_raw) == TR_IIS2MDC_OK)
+                self->iis2mdc_gate.markAttempt(iis2_now_us);
+                const uint32_t iis2_fails_before = self->iis2mdc_gate.consec_fails;
+
+                bool iis2_ok = false;
+                if (!self->iis2mdc_gate.stalled)
                 {
-                    if (xSemaphoreTake(self->iis2mdcDataSemaphore, 0) == pdTRUE)
+                    IIS2MDC_RawData iis2_raw = {};
+                    iis2_ok = (self->iis2mdc.readRawXYZ(&iis2_raw) == TR_IIS2MDC_OK);
+                    if (iis2_ok)
                     {
-                        self->iis2mdc_data.time_us = iis2_now_us;
-                        self->iis2mdc_data.mag_x = iis2_raw.x;
-                        self->iis2mdc_data.mag_y = iis2_raw.y;
-                        self->iis2mdc_data.mag_z = iis2_raw.z;
-                        self->iis2mdc_data_ready = true;
-                        xSemaphoreGive(self->iis2mdcDataSemaphore);
+                        if (xSemaphoreTake(self->iis2mdcDataSemaphore, 0) == pdTRUE)
+                        {
+                            self->iis2mdc_data.time_us = iis2_now_us;
+                            self->iis2mdc_data.mag_x = iis2_raw.x;
+                            self->iis2mdc_data.mag_y = iis2_raw.y;
+                            self->iis2mdc_data.mag_z = iis2_raw.z;
+                            self->iis2mdc_data_ready = true;
+                            xSemaphoreGive(self->iis2mdcDataSemaphore);
+                        }
                     }
-                    self->iis2mdc_last_sample_us = iis2_now_us;
+                }
+                else
+                {
+                    iis2_ok = self->reviveIIS2MDC();
+                }
+
+                const uint32_t iis2_elapsed = time_us() - iis2_now_us;
+                if (iis2_elapsed > self->iis2mdc_read_max_us)
+                {
+                    self->iis2mdc_read_max_us = iis2_elapsed;
+                }
+
+                switch (self->iis2mdc_gate.onResult(iis2_ok))
+                {
+                    case Iis2mdcPollGate::EV_STALLED:
+                        ESP_LOGW(SC_TAG, "IIS2MDC STALLED: %lu consecutive read failures "
+                                         "(last attempt %lu us) — probing at %lu ms, backing "
+                                         "off to %lu ms (#1111)",
+                                 (unsigned long)self->iis2mdc_gate.consec_fails,
+                                 (unsigned long)iis2_elapsed,
+                                 (unsigned long)(Iis2mdcPollGate::STALL_RETRY_MIN_US / 1000u),
+                                 (unsigned long)(Iis2mdcPollGate::STALL_RETRY_MAX_US / 1000u));
+                        break;
+                    case Iis2mdcPollGate::EV_RECOVERED:
+                        ESP_LOGI(SC_TAG, "IIS2MDC recovered (stall #%lu after %lu failed "
+                                         "attempts) — reconfigured 100 Hz continuous, BDU on%s",
+                                 (unsigned long)self->iis2mdc_gate.stall_events,
+                                 (unsigned long)iis2_fails_before,
+                                 self->iis2mdc_offset_set ? ", hard-iron offset re-applied" : "");
+                        break;
+                    default:
+                        break;
                 }
             }
         }
@@ -1106,7 +1153,44 @@ bool SensorCollector::getIIS2MDCData(IIS2MDCData& iis2mdc_out)
 bool SensorCollector::setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz)
 {
     if (!iis2mdc_active) return false;
+    // #1111: remember the offset before writing it — if the chip is stalled
+    // the write fails now, and reviveIIS2MDC() re-applies this on the way back.
+    iis2mdc_offset_cx = cx;
+    iis2mdc_offset_cy = cy;
+    iis2mdc_offset_cz = cz;
+    iis2mdc_offset_set = true;
     return iis2mdc.setHardIronOffset(cx, cy, cz) == TR_IIS2MDC_OK;
+}
+
+// #1111: stall probe, run from pollIMUdata at the gate's back-off cadence.
+// WHO_AM_I first (one byte — the cheapest possible bus touch); then the boot
+// configuration, because the likeliest reason a chip stopped answering is a
+// brown-out, and a brown-out leaves it at power-on defaults: idle mode, no
+// BDU, OFFSET regs zero — a chip that ACKs every read and never updates.
+// begin()'s soft-reset is deliberately not repeated: a chip that reset itself
+// is already clean, and one that merely lost bus arbitration keeps its state.
+// Only a fully re-applied configuration counts as recovered.
+bool SensorCollector::reviveIIS2MDC()
+{
+    if (!iis2mdc.isConnected()) return false;
+    if (iis2mdc.configure() != TR_IIS2MDC_OK) return false;
+    if (iis2mdc_offset_set &&
+        iis2mdc.setHardIronOffset(iis2mdc_offset_cx, iis2mdc_offset_cy, iis2mdc_offset_cz)
+            != TR_IIS2MDC_OK)
+    {
+        return false;
+    }
+    return true;
+}
+
+void SensorCollector::getIIS2MDCDebugSnapshot(IIS2MDCDebugSnapshot &snapshot_out) const
+{
+    snapshot_out.read_ok      = iis2mdc_gate.read_ok;
+    snapshot_out.read_fail    = iis2mdc_gate.read_fail;
+    snapshot_out.stall_events = iis2mdc_gate.stall_events;
+    snapshot_out.recoveries   = iis2mdc_gate.recoveries;
+    snapshot_out.read_max_us  = iis2mdc_read_max_us;
+    snapshot_out.stalled      = iis2mdc_active && iis2mdc_gate.stalled;
 }
 
 bool SensorCollector::getGNSSData(GNSSData& gnss_out)
@@ -1204,18 +1288,21 @@ void SensorCollector::resetPollTimingSnapshot()
     pt_gnss_over_10ms = 0;
 }
 
-// --- Pad calibration (#1110: measured by the IMU poll task) ---
-// calibrateGyro() posts a request; pollIMUdata — the only task allowed to
-// touch the SPI bus once it is running (#475) — sums every ISM6 sample it
-// reads for CAL_WINDOW_US and gives cal_done_sem_.  The sums become offsets
-// here, via sensor_cal_math.h:
+// --- Pad calibration (#1110: measured by the IMU poll task; #1114: without
+// stopping the flight task) ---
+// startCalibration() posts a request seq; pollIMUdata — the only task allowed
+// to touch the SPI bus once it is running (#475) — sums every ISM6 sample it
+// reads for CAL_WINDOW_US, stamps cal_done_seq_ and gives cal_done_sem_.
+// pollCalibration(), called once per flight-loop pass, turns the sums into
+// offsets via sensor_cal_math.h when the answer to ITS request lands:
 //  • Gyro: zero-rate offset, subtracted from every sample by the poll task.
 //  • Accel: high-g cross-calibrated against low-g → body-frame bias,
 //    subtracted by SensorConverter during conversion (#572: scaled from the
 //    CONFIGURED full scales, never literals).
 //  • Gravity magnitude from low-g: a plausibility gate on the whole result.
-// Must be called when the rocket is stationary (e.g. on the launch pad).
-bool SensorCollector::calibrateGyro(float rotation_z_deg)
+// The rocket must be stationary for the whole window (e.g. on the launch
+// pad); the caller cancels the moment it stops being so.
+bool SensorCollector::startCalibration(float rotation_z_deg)
 {
     if (!use_ism6hg256)
     {
@@ -1227,50 +1314,69 @@ bool SensorCollector::calibrateGyro(float rotation_z_deg)
         ESP_LOGW(SC_TAG, "IMU poll task not running — skipping calibration");
         return false;
     }
-
-    ESP_LOGI(SC_TAG, "Calibrating sensors (%lu ms window, every ISM6 sample)...",
-             (unsigned long)(CAL_WINDOW_US / 1000));
-
-    // A window that closed after a previous timeout may have left a stale
-    // completion behind; consume it so it cannot end this window early.
-    (void)xSemaphoreTake(cal_done_sem_, 0);
-    cal_request_pending_ = true;
-
-    // Wait for the poll task to close the window.  Short slices keep the
-    // task WDT fed — the flight task is subscribed (5 s timeout, see
-    // main.cpp esp_task_wdt_reconfigure) and only feeds it at the top of
-    // loop_fc().  Guard on subscription so this is a no-op on host/sim
-    // builds where the task isn't registered with the WDT.  The overall
-    // bound only trips if the poll task is not running at all: a live one
-    // closes the window at the deadline even with a dead DRDY line.
-    const uint32_t wait_t0_ms  = time_ms();
-    const uint32_t wait_max_ms = CAL_WINDOW_US / 1000 + 2000;
-    for (;;)
+    const uint32_t seq = cal_session_.start();
+    if (seq == 0)
     {
-        const bool done = (xSemaphoreTake(cal_done_sem_, pdMS_TO_TICKS(500)) == pdTRUE);
-#ifdef ESP_PLATFORM
-        if (esp_task_wdt_status(nullptr) == ESP_OK) {
-            esp_task_wdt_reset();
-        }
-#endif
-        if (done) break;
-        if ((uint32_t)(time_ms() - wait_t0_ms) > wait_max_ms)
-        {
-            cal_request_pending_ = false;  // never serviced — withdraw it
-            ESP_LOGE(SC_TAG, "Calibration timed out (poll task not servicing requests) "
-                             "— previous calibration kept");
-            return false;
-        }
+        ESP_LOGW(SC_TAG, "Calibration already running — request ignored");
+        return false;
     }
 
-    // The poll task wrote cal_sums_ before giving the semaphore and will not
-    // touch it again until the next request.
+    // A window cancelled earlier may have left its completion behind.  Its
+    // seq would be refused anyway; consuming the token here keeps it from
+    // costing pollCalibration() an extra pass.
+    (void)xSemaphoreTake(cal_done_sem_, 0);
+    cal_rotation_z_deg_ = rotation_z_deg;
+    cal_started_ms_     = time_ms();
+    cal_request_seq_    = seq;   // the request, in one store
+
+    ESP_LOGI(SC_TAG, "Calibrating sensors (%lu ms window, every ISM6 sample; "
+                     "the flight loop keeps running)...",
+             (unsigned long)(CAL_WINDOW_US / 1000));
+    return true;
+}
+
+void SensorCollector::cancelCalibration()
+{
+    if (!cal_session_.waiting()) return;
+    cal_session_.cancel();
+    // The poll task finishes its window on its own; the answer carries a seq
+    // nobody is waiting for and pollCalibration() drops it.
+    ESP_LOGW(SC_TAG, "Calibration cancelled — previous calibration kept");
+}
+
+SensorCalPoll SensorCollector::pollCalibration()
+{
+    if (!cal_session_.waiting()) return SensorCalPoll::Idle;
+
+    if (xSemaphoreTake(cal_done_sem_, 0) != pdTRUE)
+    {
+        // Only a poll task that is not running at all leaves this
+        // unanswered: a live one closes the window at the deadline even with
+        // a dead DRDY line.
+        if ((uint32_t)(time_ms() - cal_started_ms_) > CAL_WINDOW_US / 1000 + 2000)
+        {
+            cal_session_.cancel();
+            ESP_LOGE(SC_TAG, "Calibration timed out (poll task not servicing requests) "
+                             "— previous calibration kept");
+            return SensorCalPoll::Rejected;
+        }
+        return SensorCalPoll::Running;
+    }
+    if (!cal_session_.accept(cal_done_seq_))
+    {
+        // A late answer from a window cancelled before this request; ours is
+        // still open.
+        return SensorCalPoll::Running;
+    }
+
+    // The poll task wrote cal_sums_ before stamping the seq and giving the
+    // semaphore, and will not touch it again until the next request.
     SensorCalResult r;
-    if (!sensor_cal::compute(cal_sums_, rotation_z_deg,
+    if (!sensor_cal::compute(cal_sums_, cal_rotation_z_deg_,
                              ism6_low_g_fs_g_, ism6_high_g_fs_g_, r))
     {
         ESP_LOGW(SC_TAG, "No IMU samples in the calibration window — previous calibration kept");
-        return false;
+        return SensorCalPoll::Rejected;
     }
     if (!sensor_cal::gravityPlausible(r.gravity_mag))
     {
@@ -1279,7 +1385,7 @@ bool SensorCollector::calibrateGyro(float rotation_z_deg)
                          "was moving; previous calibration kept",
                  (double)r.gravity_mag, (double)sensor_cal::kGravityMinMs2,
                  (double)sensor_cal::kGravityMaxMs2, (unsigned long)cal_sums_.count);
-        return false;
+        return SensorCalPoll::Rejected;
     }
 
     // Commit.  Nothing above touched the live offsets, so a rejected run
@@ -1301,7 +1407,7 @@ bool SensorCollector::calibrateGyro(float rotation_z_deg)
     ESP_LOGI(SC_TAG, "HG bias:           %.3f, %.3f, %.3f m/s²",
              (double)hg_bias_x, (double)hg_bias_y, (double)hg_bias_z);
     ESP_LOGI(SC_TAG, "Gravity magnitude: %.3f m/s²", (double)cal_gravity_mag);
-    return true;
+    return SensorCalPoll::Committed;
 }
 
 void IRAM_ATTR SensorCollector::onISM6HG256Int1Trampoline(void* /*arg*/)

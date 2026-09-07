@@ -616,6 +616,20 @@ static inline bool nsFlagSet(uint8_t flags, uint8_t mask)
     return (flags & mask) != 0U;
 }
 
+// #1113: a sim Stop (cmd 7) is only meaningful against a simulated flight.
+// Received during a REAL flight it would end the flight log here and now (the
+// descent unlogged) and hand the flight side a SIM_STOP_CMD it could only act
+// on after touchdown — where, until #1113, that Stop ended the terminal LANDED
+// lockout.  The flight side now ignores a Stop with no sim flight behind it;
+// refusing here keeps the log intact and is the second layer.  A sim flight
+// must stay stoppable mid-air, so NSF_SIM_ACTIVE exempts it.  Both fields
+// come from the same NON_SENSOR_MSG frame, so they cannot disagree.
+static inline bool simStopIsStrayInflight()
+{
+    return latest_rocket_state == INFLIGHT &&
+           !nsFlagSet(latest_non_sensor.flags, NSF_SIM_ACTIVE);
+}
+
 // ==========================================================================
 // SECTION: Battery sampling and state of charge (OC L982-1080, verbatim)
 // ==========================================================================
@@ -1514,8 +1528,12 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     // mid-flight they would deliver at landing — a delayed FIRE pulse firing
     // while the recovery crew walks up is the stale-command hazard this gate
     // refuses. The flight side's lockout gate is the second layer.
-    if ((cmd == 1 || cmd == 23 || cmd == 28 || cmd == 35 || cmd == 36) &&
-        latest_rocket_state == INFLIGHT)
+    // cmd 7 (#1113) joins with a carve-out, see simStopIsStrayInflight(): a
+    // sim Stop during a real flight would end the log now and re-arm the
+    // flight side at touchdown; a sim flight stays stoppable.
+    if (((cmd == 1 || cmd == 23 || cmd == 28 || cmd == 35 || cmd == 36) &&
+         latest_rocket_state == INFLIGHT) ||
+        (cmd == 7 && simStopIsStrayInflight()))
     {
         uplink_inflight_refusals++;
         ESP_LOGW("LORA", "UPLINK cmd=%u refused: rocket INFLIGHT (undeliverable"
@@ -3961,10 +3979,18 @@ static void comms_loop()
         }
         else if (ble_cmd == 7)
         {
-            logger.endLogging();
-            flightlogEndFlight();
-            mini_link::sendCommand(SIM_STOP_CMD, nullptr, 0);
-            ESP_LOGI("OC", "SIM Stop queued for flight side (logging ended)");
+            if (simStopIsStrayInflight())
+            {
+                // #1113: see the uplink twin.
+                ESP_LOGW("OC", "SIM Stop refused: rocket INFLIGHT and not simulating (#1113)");
+            }
+            else
+            {
+                logger.endLogging();
+                flightlogEndFlight();
+                mini_link::sendCommand(SIM_STOP_CMD, nullptr, 0);
+                ESP_LOGI("OC", "SIM Stop queued for flight side (logging ended)");
+            }
         }
         else if (ble_cmd == 15)
         {

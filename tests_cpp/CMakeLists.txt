@@ -188,6 +188,18 @@ target_include_directories(test_kinematic_checks PRIVATE
 target_link_libraries(test_kinematic_checks GTest::gtest_main)
 gtest_discover_tests(test_kinematic_checks)
 
+# ---------- test_iis2mdc_poll_gate ----------
+# The IIS2MDC attempt gate (#1111): a failed read advances the gate like a
+# successful one, five in a row stall it into a 1->32 s back-off probe, and
+# the clock seed survives a begin() long after boot.  Header-only and
+# IDF-free; the I2C transfers it paces are bench-only.
+add_executable(test_iis2mdc_poll_gate test_iis2mdc_poll_gate.cpp)
+target_include_directories(test_iis2mdc_poll_gate PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector
+)
+target_link_libraries(test_iis2mdc_poll_gate GTest::gtest_main)
+gtest_discover_tests(test_iis2mdc_poll_gate)
+
 # ---------- test_control_mixer ----------
 add_executable(test_control_mixer test_control_mixer.cpp
     ${LIB_DIR}/TR_ControlMixer/TR_ControlMixer.cpp
@@ -259,6 +271,35 @@ target_include_directories(test_sensor_cal_math PRIVATE
 )
 target_link_libraries(test_sensor_cal_math GTest::gtest_main)
 gtest_discover_tests(test_sensor_cal_math)
+
+# ---------- test_sensor_cal_session (#1114) ----------
+# The request/answer handshake around the pad-calibration window: the flight
+# task posts a seq and keeps flying, the poll task answers with it, a cancel
+# drops the answer, and the refusal rule that keeps a flying rocket out of it.
+# Header-only and IDF-free; the semaphore between the two tasks is the one
+# part that needs a rocket.
+add_executable(test_sensor_cal_session test_sensor_cal_session.cpp)
+target_include_directories(test_sensor_cal_session PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_sensor_cal_session GTest::gtest_main)
+gtest_discover_tests(test_sensor_cal_session)
+
+# ---------- test_imu_drain_window (#1191) ----------
+# Statistics over the IMU samples the flight loop drains between two
+# estimator passes: the raw-count mean (the anti-alias step the freshest-
+# sample pick never had), the per-sensor-axis max |raw| behind the low-g
+# near-rail switch, and the centre-of-window stamp.  Pure header in
+# TR_Sensor_Collector beside sensor_cal_math.h; needs only the packed sample
+# struct from TR_RocketComputerTypes.
+add_executable(test_imu_drain_window test_imu_drain_window.cpp)
+target_include_directories(test_imu_drain_window PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_imu_drain_window GTest::gtest_main)
+gtest_discover_tests(test_imu_drain_window)
 
 # ---------- test_orientation ----------
 # Board→rocket mounting orientation utilities (discrete 24-code set,
@@ -758,6 +799,22 @@ target_include_directories(test_oc_cmd_session_gate PRIVATE
 target_link_libraries(test_oc_cmd_session_gate GTest::gtest_main)
 gtest_discover_tests(test_oc_cmd_session_gate)
 
+# ---------- test_oc_cmd_dedup (#1112) ----------
+# The FC's OC-command dedup key and config-retry budget. The dispatch block
+# runs only on the pass that polled, so a config handler's "retry on next
+# poll" re-arms it for the next poll rather than the next ~1 ms loop pass
+# (which used to re-run readConfigFrame() at ~26 Hz against the same stale
+# mirror, and forever once a real INFLIGHT stopped the poll); each served
+# command gets CFG_RETRY_LIMIT retries. Pure header beside oc_cmd_session_gate.h.
+add_executable(test_oc_cmd_dedup test_oc_cmd_dedup.cpp)
+target_include_directories(test_oc_cmd_dedup PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_oc_cmd_dedup GTest::gtest_main)
+gtest_discover_tests(test_oc_cmd_dedup)
+
 # ---------- test_mram_dirty_policy ----------
 # Host-side test for the #417 sink-mode dirty-marker gate: the marker means
 # "logging was activated" (launch detect / manual cmd-23 start), not "a log
@@ -1075,3 +1132,33 @@ target_include_directories(test_ota_relay_policy PRIVATE
 )
 target_link_libraries(test_ota_relay_policy GTest::gtest_main)
 gtest_discover_tests(test_ota_relay_policy)
+
+# ---------- test_fc_ota_session_policy (#1116) ----------
+# The FC's own exit from an OTA image session that nobody ends: the I2S link
+# was flipped to slave RX for the image and only an OC-delivered FINISH/ABORT
+# flipped it back, so a dropped command (or an OC reboot) left the FC without
+# telemetry or EKF until a battery pull. The decision — no accepted image byte
+# for 30 s, once the OC has released the clock — is the policy; it includes
+# the OC's ota_relay_policy.h to pin that the OC's watchdog fires first.
+add_executable(test_fc_ota_session_policy test_fc_ota_session_policy.cpp)
+target_include_directories(test_fc_ota_session_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_fc_ota_session_policy GTest::gtest_main)
+gtest_discover_tests(test_fc_ota_session_policy)
+
+# ---------- test_cmd_queue_admit_policy (#1116) ----------
+# The OC half: the relay queue holds two slots back for OTA_FINISH_CMD /
+# OTA_ABORT_CMD, the FC's only way out of image mode, so a queue full of a
+# profile sync can no longer drop them. Pure apart from the shared command-id
+# constants.
+add_executable(test_cmd_queue_admit_policy test_cmd_queue_admit_policy.cpp)
+target_include_directories(test_cmd_queue_admit_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_cmd_queue_admit_policy GTest::gtest_main)
+gtest_discover_tests(test_cmd_queue_admit_policy)

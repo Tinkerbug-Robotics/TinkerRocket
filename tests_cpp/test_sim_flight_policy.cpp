@@ -18,6 +18,13 @@
 //   * the dry-fire predicate is LATCHED for the flight, because the sim steps
 //     its physics inside the FC's IMU read, so servicePyroChannels() runs
 //     once with isSimActive() already false before the edge is handled.
+//
+// #1113 adds a third, pinned here too: a SIM_STOP_CMD acts only on a sim
+// flight.  The Stop handler resets the flight state and clears the #317
+// post-flight lockout with no state gate of its own, so a stray Stop — a
+// broadcast uplink meant for another vehicle, a cmd 7 queued mid-flight and
+// delivered at touchdown, a stale app banner — used to end a REAL flight's
+// terminal LANDED with a failed channel's e-match still live.
 
 #include <gtest/gtest.h>
 #include "sim_flight_policy.h"
@@ -31,6 +38,7 @@ constexpr uint8_t LANDED   = 4;
 using sim_flight::Edge;
 using sim_flight::classify;
 using sim_flight::simulated;
+using sim_flight::stopApplies;
 
 // ── The edge rule ───────────────────────────────────────────────────────────
 
@@ -146,6 +154,95 @@ TEST(SimFlightPolicy, aUserStopIsNotCountedTwice)
     const bool sim_active_after_stop = false;
     prev_active = sim_active_after_stop;   // the re-sync inside the reset
     EXPECT_EQ(classify(prev_active, sim_active_after_stop, false), Edge::None);
+}
+
+// ── The Stop gate (#1113) ───────────────────────────────────────────────────
+
+TEST(SimFlightPolicy, aStopWithNoSimThisRunIsAStray)
+{
+    // The #1113 case: a real flight has landed — post_flight_lockout set, one
+    // channel maybe still holding a live e-match — no sim ever started this
+    // boot, and a cmd 7 arrives: broadcast, queued at launch and delivered at
+    // touchdown, or a stale app banner.  Nothing to stop; the lockout holds.
+    EXPECT_FALSE(stopApplies(/*latched=*/false, /*sim_active=*/false))
+        << "a real flight's LANDED must stay terminal";
+}
+
+TEST(SimFlightPolicy, aStopMidSimApplies)
+{
+    EXPECT_TRUE(stopApplies(/*latched=*/true, /*sim_active=*/true));
+}
+
+TEST(SimFlightPolicy, aStopAfterAFlownOutSimApplies)
+{
+    // The case the handler always promised to serve: the sim completed, the
+    // FC holds LANDED to validate the lockout, isSimActive() is false — and
+    // the Stop is how the user re-arms.  Only the latch tells this apart from
+    // a real landing.
+    EXPECT_TRUE(stopApplies(/*latched=*/true, /*sim_active=*/false));
+}
+
+TEST(SimFlightPolicy, aStopInTheStartTickApplies)
+{
+    // The mini drains its whole command queue in one pass, so a START and a
+    // STOP can be handled in the same tick — before the edge handler at the
+    // end of the pass has latched.  The active sim alone must carry the Stop.
+    EXPECT_TRUE(stopApplies(/*latched=*/false, /*sim_active=*/true));
+}
+
+TEST(SimFlightPolicy, aRealLandingAfterAStoppedSimIsStillTerminal)
+{
+    // One boot: a sim run, stopped by the user, then a real flight — and a
+    // stray Stop after the real landing.  Track the two pieces of FC state
+    // the rules read.
+    bool prev_active = false;
+    bool latched     = false;
+
+    // Sim start edge: reset + latch.
+    ASSERT_EQ(classify(prev_active, true, false), Edge::Start);
+    latched     = true;
+    prev_active = true;
+
+    // User Stop mid-sim: applies.  resetFlightStateForSim("stop") drops the
+    // latch and re-syncs the edge detector to the now-idle sim.
+    ASSERT_TRUE(stopApplies(latched, true));
+    latched     = false;
+    prev_active = false;
+    EXPECT_EQ(classify(prev_active, false, false), Edge::None);
+
+    // The real flight: no edge, nothing latched, every pyro decision live.
+    EXPECT_EQ(classify(prev_active, false, false), Edge::None);
+    EXPECT_FALSE(simulated(latched, false));
+
+    // Real landing (post_flight_lockout set), then the stray Stop: nothing to
+    // stop, and the lockout must hold.
+    EXPECT_FALSE(stopApplies(latched, false))
+        << "a stray Stop after a real landing must not re-arm";
+}
+
+TEST(SimFlightPolicy, aFlownOutSimIsReArmedByStopAndNotByASecondOne)
+{
+    bool prev_active = false;
+    bool latched     = false;
+
+    ASSERT_EQ(classify(prev_active, true, false), Edge::Start);
+    latched     = true;
+    prev_active = true;
+
+    // The sim flies out: the FC reaches LANDED, the hold sees it, the sim
+    // goes idle.  Hold LANDED — and the latch stays, because nothing reset.
+    ASSERT_EQ(classify(prev_active, false, /*fc_landed=*/true),
+              Edge::EndedLanded);
+    prev_active = false;
+    EXPECT_TRUE(simulated(latched, false));
+
+    // The user's Stop from LANDED is the re-arm: it applies, and the reset
+    // drops the latch.
+    ASSERT_TRUE(stopApplies(latched, false));
+    latched = false;
+
+    // A repeat (the BS retry train, a second tap) has nothing left to reset.
+    EXPECT_FALSE(stopApplies(latched, false));
 }
 
 }  // namespace

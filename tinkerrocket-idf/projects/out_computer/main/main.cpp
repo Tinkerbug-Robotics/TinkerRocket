@@ -66,6 +66,7 @@ static inline std::string itos(int v)
 #include "dedup_reboot_policy.h"
 #include "cmd_queue_dedupe_policy.h"  // #837 item 11: pyro tests key on channel
 #include "cmd_queue_session_policy.h" // #1105: retire one-shots when the FC reports a boot
+#include "cmd_queue_admit_policy.h"   // #1116: two slots held back for OTA_FINISH/ABORT
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -79,6 +80,7 @@ static inline std::string itos(int v)
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
 #include <RocketComputerTypes.h>
+#include <RollProfileGate.h>    // #1115: shared roll-profile acceptance gate (host-tested)
 #include <TR_INA230.h>
 #include <TR_FlightLog.h>
 #include <SnapshotTailScan.h>   // #846: boot re-seed of the snapshot cache
@@ -622,12 +624,16 @@ static void setPendingCommandWithConfig(uint8_t cmd, uint8_t msg_type,
             return;
         }
     }
-    if (cmd_queue_count >= CMD_QUEUE_DEPTH)
+    // #1116: the two commands that end an FC OTA image session have two slots
+    // held back for them (cmd_queue_admit_policy.h). A full queue used to drop
+    // the FINISH/ABORT that is the FC's only way out of slave-RX image mode.
+    if (!cmdQueueAdmits(cmd, cmd_queue_count, CMD_QUEUE_DEPTH))
     {
+        const size_t queued = cmd_queue_count;
         cmd_queue_drops++;
         portEXIT_CRITICAL(&cmd_queue_mux);
-        ESP_LOGW("OC", "FC cmd queue FULL — dropped cmd 0x%02X (drops=%lu)",
-                 (unsigned)cmd, (unsigned long)cmd_queue_drops);
+        ESP_LOGW("OC", "FC cmd queue FULL — dropped cmd 0x%02X (queued=%u, drops=%lu)",
+                 (unsigned)cmd, (unsigned)queued, (unsigned long)cmd_queue_drops);
         return;
     }
     if (front)
@@ -1439,6 +1445,20 @@ static uint8_t       guid_tgt_pub_rc     = 0xFF;
 static inline bool nsFlagSet(uint8_t flags, uint8_t mask)
 {
     return (flags & mask) != 0U;
+}
+
+// #1113: a sim Stop (cmd 7) is only meaningful against a simulated flight.
+// Received during a REAL flight it would end the flight log here and now (the
+// descent unlogged) and hand the flight side a SIM_STOP_CMD it could only act
+// on after touchdown — where, until #1113, that Stop ended the terminal LANDED
+// lockout.  The flight side now ignores a Stop with no sim flight behind it;
+// refusing here keeps the log intact and is the second layer.  A sim flight
+// must stay stoppable mid-air, so NSF_SIM_ACTIVE exempts it.  Both fields
+// come from the same NON_SENSOR_MSG frame, so they cannot disagree.
+static inline bool simStopIsStrayInflight()
+{
+    return latest_rocket_state == INFLIGHT &&
+           !nsFlagSet(latest_non_sensor.flags, NSF_SIM_ACTIVE);
 }
 
 // ==========================================================================
@@ -3698,6 +3718,14 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 case OTA_RELAY_ABORTED:       state = "aborted"; terminal = true; break;
                 default: break;
             }
+            // #1116: a terminal status means the FC is back in master TX with
+            // no session — nothing is left to flip for. Clear the pre-flip
+            // arming here as well as on our own finish/abort paths: the FC now
+            // ends a session by itself (its watchdog, or a BEGIN superseding a
+            // stale one), and a READY armed on this side with no OC-side
+            // teardown to clear it would flip us to master TX at the FC's next
+            // silence (a reboot), with no session — the #834 item 7 hazard.
+            if (terminal) ocOtaRelayClearPendingFlip();
             // Dedupe identical consecutive FC resends (see last_relay_* above):
             // keep the per-frame serial log (confirms the resends arrived over
             // I2S) but only re-notify the app when the status actually changes.
@@ -5120,8 +5148,12 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     // cont test's momentary ARM) firing on the ground while the recovery crew
     // walks up is exactly the stale-command hazard this gate refuses. The
     // FC's own lockout gate is the second layer, not a reason to skip this.
-    if ((cmd == 1 || cmd == 23 || cmd == 28 || cmd == 35 || cmd == 36) &&
-        latest_rocket_state == INFLIGHT)
+    // cmd 7 (#1113) joins with a carve-out, see simStopIsStrayInflight(): a
+    // sim Stop during a real flight would end the log now and re-arm the
+    // flight side at touchdown; a sim flight stays stoppable.
+    if (((cmd == 1 || cmd == 23 || cmd == 28 || cmd == 35 || cmd == 36) &&
+         latest_rocket_state == INFLIGHT) ||
+        (cmd == 7 && simStopIsStrayInflight()))
     {
         uplink_inflight_refusals++;
         ESP_LOGW("LORA", "UPLINK cmd=%u refused: rocket INFLIGHT (undeliverable"
@@ -9278,10 +9310,18 @@ static void loop_oc()
         }
         else if (ble_cmd == 7)
         {
-            logger.endLogging();
-            flightlogEndFlight();
-            setPendingCommand(SIM_STOP_CMD);
-            ESP_LOGI("OC", "SIM Stop queued for FlightComputer (logging ended)");
+            if (simStopIsStrayInflight())
+            {
+                // #1113: see the uplink twin.
+                ESP_LOGW("OC", "SIM Stop refused: rocket INFLIGHT and not simulating (#1113)");
+            }
+            else
+            {
+                logger.endLogging();
+                flightlogEndFlight();
+                setPendingCommand(SIM_STOP_CMD);
+                ESP_LOGI("OC", "SIM Stop queued for FlightComputer (logging ended)");
+            }
         }
         else if (ble_cmd == 15)
         {
@@ -9666,9 +9706,37 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(RollProfileData))
             {
-                                setPendingCommandWithConfig(ROLL_PROFILE_PENDING, ROLL_PROFILE_MSG, payload, sizeof(RollProfileData));
-                ESP_LOGI("BLE", "Roll profile (%d waypoints) queued for RocketComputer",
-                              payload[0]);
+                // #1115: refuse an out-of-range profile HERE, so a garbage
+                // waypoint never reaches the FC's NVS at all.  The FC gates it
+                // again on both of its own acceptance points — this is not
+                // redundancy for its own sake: the OC is the only hop that can
+                // refuse the frame while the operator is still standing at the
+                // pad with the app open, and it keeps the whole exchange out
+                // of the flight task.  Neither app clamps the free-text angle
+                // or time field (iOS `Float($0.angle) ?? 0`, Android
+                // `f32(w.angleDeg)`), so a ten-digit typo or a pasted "inf"
+                // arrives verbatim.  REJECT, never clamp — see RollProfileGate.h.
+                RollProfileData incoming;
+                memcpy(&incoming, payload, sizeof(RollProfileData));
+                const RollProfileRc prof_rc = rollProfileRc(incoming);
+                if (prof_rc != ROLL_PROF_OK)
+                {
+                    ESP_LOGW("BLE", "Roll profile REJECTED (%s) — not relayed to RocketComputer",
+                                  rollProfileRcName(prof_rc));
+                    for (uint8_t i = 0; i < MAX_ROLL_WAYPOINTS &&
+                                        i < incoming.num_waypoints; ++i)
+                    {
+                        ESP_LOGW("BLE", "  offered WP%d: t=%.1fs angle=%.1f",
+                                      i, (double)incoming.waypoints[i].time_s,
+                                      (double)incoming.waypoints[i].angle_deg);
+                    }
+                }
+                else
+                {
+                    setPendingCommandWithConfig(ROLL_PROFILE_PENDING, ROLL_PROFILE_MSG, payload, sizeof(RollProfileData));
+                    ESP_LOGI("BLE", "Roll profile (%d waypoints) queued for RocketComputer",
+                                  payload[0]);
+                }
             }
             else
             {

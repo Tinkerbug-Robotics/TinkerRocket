@@ -16,8 +16,9 @@
 // ARM/FIRE outputs on the bench, and no way to reach the FC until the
 // 10-minute flight backstop.
 //
-// Two rules close it.  Both are pure, so tests_cpp/test_sim_flight_policy.cpp
-// pins them instead of trusting them.
+// Two rules close it, and #1113 adds a third — whether a SIM_STOP has a sim
+// flight to act on at all.  All are pure, so
+// tests_cpp/test_sim_flight_policy.cpp pins them instead of trusting them.
 
 #include <cstdint>
 
@@ -59,6 +60,25 @@ constexpr Edge classify(bool prev_active, bool curr_active, bool fc_landed)
 constexpr bool simulated(bool sim_flight_latched, bool sim_active)
 {
     return sim_flight_latched || sim_active;
+}
+
+/// #1113: does a SIM_STOP_CMD have a sim flight to act on?  The Stop handler
+/// resets the whole flight state to READY and clears the #317 post-flight
+/// lockout — it is the one command that deliberately re-arms — and it has no
+/// state gate of its own (LANDED still polls).  So it must run ONLY when this
+/// boot's flight state was produced by the sim: the sim is still active (a
+/// Stop mid-flight), or it was started this run and has since gone idle (the
+/// flown-out sim holding LANDED, which the Stop is how the user re-arms from).
+/// With neither, the Stop is a stray — a broadcast uplink meant for the bench
+/// rocket, a cmd 7 queued during a real flight and delivered on the first poll
+/// after touchdown, an app whose SIM MODE banner never cleared — and honouring
+/// it ended a REAL flight's terminal LANDED with the deployment latches
+/// cleared and a failed channel's e-match still live.  Same predicate as
+/// simulated(): the latch is what tells a flown-out sim from a real landing,
+/// because isSimActive() is false for both.
+constexpr bool stopApplies(bool sim_flight_latched, bool sim_active)
+{
+    return simulated(sim_flight_latched, sim_active);
 }
 
 }  // namespace sim_flight

@@ -1,9 +1,15 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <cstring>
+#include <initializer_list>
+#include <limits>
 #include <map>
+#include <set>
+#include <string>
+#include <utility>
 #include "RocketComputerTypes.h"
 #include "GuidancePointGate.h"
+#include "RollProfileGate.h"
 
 // Verify packed struct sizes match the SIZE_OF_* constants.
 // These must stay in sync because the I2S framing, binary log parser,
@@ -2131,4 +2137,186 @@ TEST(RocketComputerTypes, GnssSatSelect_EmptyLeavesHeaderTimesAlone) {
     EXPECT_EQ(out.num_blocks, 0);
     EXPECT_EQ(out.time_us, 7u);
     EXPECT_EQ(out.itow_ms, 9u);
+}
+
+
+// ==========================================================================
+// #1115 — roll-profile acceptance gate and the degree wrap (RollProfileGate.h)
+// ==========================================================================
+//
+// wrap180f() used to be two unbounded while-loops.  It runs on the FC's
+// highest-priority ~1 kHz flight task, under a 5 s panic-on-expiry task WDT,
+// on a target taken verbatim from an unvalidated BLE waypoint — so the
+// TERMINATION tests below are the point of this block, not a formality: every
+// one of them hung forever against the old implementation, which meant an
+// in-flight reboot loop for the rest of the flight.
+//
+// gtest has no "this call returned" assertion, so termination is pinned the
+// only way it can be: the test calls the function.  A regression does not
+// fail these tests, it hangs the suite, and CI kills it.
+
+TEST(RollProfileGate, Wrap180_TerminatesAndBoundsHugeAndNonFinite) {
+    // Every value here made ZERO progress in the old loop (ulp > 720 above
+    // 2^33 ≈ 8.59e9, so `a -= 360.0f` rounds straight back to `a`), or, for
+    // 1e8, took ~278k iterations inside a 1 ms budget.
+    const float huge[] = {
+        8.59e9f, 1e10f, 1e30f, 3.4e38f,
+        -8.59e9f, -1e10f, -1e30f, -3.4e38f,
+        1e8f, -1e8f,
+    };
+    for (float a : huge) {
+        const float w = wrap180f(a);
+        EXPECT_TRUE(std::isfinite(w)) << a;
+        EXPECT_GE(w, -180.0f) << a;
+        EXPECT_LE(w,  180.0f) << a;
+    }
+    // Non-finite → 0 (the safe target / zero rate error), never a hang.
+    EXPECT_EQ(wrap180f(std::numeric_limits<float>::infinity()),  0.0f);
+    EXPECT_EQ(wrap180f(-std::numeric_limits<float>::infinity()), 0.0f);
+    EXPECT_EQ(wrap180f(std::numeric_limits<float>::quiet_NaN()), 0.0f);
+}
+
+TEST(RollProfileGate, Wrap180_InRangeIsBitPreserved) {
+    // fmodf is exact, so the identity path must not perturb a value that is
+    // already in range — including the ±180 endpoints, which the old loops
+    // also left alone (they tested strict > / <).  A target that drifted by an
+    // ulp per tick would be a silent behaviour change on every flight.
+    const float same[] = {0.0f, -0.0f, 1.0f, -1.0f, 179.9f, -179.9f,
+                          180.0f, -180.0f, 0.1f, 123.456f, -123.456f};
+    for (float a : same) {
+        EXPECT_FLOAT_EQ(wrap180f(a), a) << a;
+    }
+}
+
+TEST(RollProfileGate, Wrap180_WrapsToTheEquivalentAngle) {
+    EXPECT_FLOAT_EQ(wrap180f(190.0f),  -170.0f);
+    EXPECT_FLOAT_EQ(wrap180f(-190.0f),  170.0f);
+    EXPECT_FLOAT_EQ(wrap180f(360.0f),     0.0f);
+    EXPECT_FLOAT_EQ(wrap180f(-360.0f),   -0.0f);
+    EXPECT_FLOAT_EQ(wrap180f(540.0f),   180.0f);
+    EXPECT_FLOAT_EQ(wrap180f(720.0f),     0.0f);
+    // The bound of what the gate accepts still wraps to a sane target.
+    EXPECT_FLOAT_EQ(wrap180f(-720.0f),   -0.0f);
+    // A wrapped value is congruent mod 360 with its input.
+    for (float a = -1000.0f; a <= 1000.0f; a += 7.5f) {
+        const float w = wrap180f(a);
+        EXPECT_NEAR(std::remainder(a - w, 360.0f), 0.0f, 1e-3f) << a;
+        EXPECT_GE(w, -180.0f) << a;
+        EXPECT_LE(w,  180.0f) << a;
+    }
+}
+
+// --- rollProfileRc / rollProfileSane ---
+
+static RollProfileData rollProfileOf(
+    std::initializer_list<std::pair<float, float>> wps) {
+    RollProfileData p{};
+    p.num_waypoints = (uint8_t)wps.size();
+    uint8_t i = 0;
+    for (const auto &w : wps) {
+        p.waypoints[i].time_s    = w.first;
+        p.waypoints[i].angle_deg = w.second;
+        p.waypoints[i].mode      = ROLL_SEG_ANGLE;
+        ++i;
+    }
+    return p;
+}
+
+TEST(RollProfileGate, Sane_AcceptsAnOrdinaryProfile) {
+    EXPECT_TRUE(rollProfileSane(rollProfileOf({{0.0f, 0.0f},
+                                               {1.5f, 90.0f},
+                                               {3.0f, -45.0f}})));
+    // Equal times are legal: that is how the target steps discontinuously.
+    EXPECT_TRUE(rollProfileSane(rollProfileOf({{1.0f, 0.0f}, {1.0f, 90.0f}})));
+    // The accepted bounds themselves are accepted (reject is > , not >=).
+    EXPECT_TRUE(rollProfileSane(rollProfileOf({{0.0f, ROLL_WP_MAX_ABS_ANGLE_DEG},
+                                               {ROLL_WP_MAX_TIME_S,
+                                                -ROLL_WP_MAX_ABS_ANGLE_DEG}})));
+}
+
+TEST(RollProfileGate, Sane_EmptyProfileIsValidRateOnly) {
+    // num_waypoints == 0 is the documented empty profile AND the fail-safe
+    // both callers fall back to, so it must never itself be a rejection —
+    // otherwise the NVS gate would reject its own replacement.
+    RollProfileData p{};
+    EXPECT_TRUE(rollProfileSane(p));
+    EXPECT_EQ(rollProfileRc(p), ROLL_PROF_OK);
+}
+
+TEST(RollProfileGate, Sane_RejectsTheAnglesThatHungTheFlightLoop) {
+    const float inf = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    // The reachable operator typo: ten digits on the numeric keypad.
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{0.0f, 9999999999.0f}})),
+              ROLL_PROF_REJ_ANGLE);
+    // A pasted "1e30" / "inf" — both parse in the iOS field, neither clamps.
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{0.0f, 1e30f}})), ROLL_PROF_REJ_ANGLE);
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{0.0f, inf}})),   ROLL_PROF_REJ_ANGLE);
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{0.0f, -inf}})),  ROLL_PROF_REJ_ANGLE);
+    // NaN never hung, but propagated as the commanded roll target through the
+    // PID for the whole flight, which is worse than a refusal.
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{0.0f, nan}})),   ROLL_PROF_REJ_ANGLE);
+    // Just past the bound.
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{0.0f, 720.5f}})),  ROLL_PROF_REJ_ANGLE);
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{0.0f, -720.5f}})), ROLL_PROF_REJ_ANGLE);
+    // A bad angle anywhere in the profile sinks the whole frame, not just
+    // that waypoint — a partially-applied profile is a shape nobody drew.
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{0.0f, 0.0f},
+                                           {1.0f, 45.0f},
+                                           {2.0f, inf}})), ROLL_PROF_REJ_ANGLE);
+}
+
+TEST(RollProfileGate, Sane_RejectsBadTimes) {
+    const float inf = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{-1.0f, 0.0f}})), ROLL_PROF_REJ_TIME);
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{inf, 0.0f}})),   ROLL_PROF_REJ_TIME);
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{nan, 0.0f}})),   ROLL_PROF_REJ_TIME);
+    // Milliseconds sent as seconds — the unit error the bound exists for.
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{2500.0f, 0.0f}})), ROLL_PROF_REJ_TIME);
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{ROLL_WP_MAX_TIME_S + 1.0f, 0.0f}})),
+              ROLL_PROF_REJ_TIME);
+}
+
+TEST(RollProfileGate, Sane_RejectsOutOfOrderTimes) {
+    // roll_profile_query() walks waypoints in order and takes the first
+    // segment ending ahead of t_flight, so a descending pair silently skips
+    // waypoints instead of flying them.
+    EXPECT_EQ(rollProfileRc(rollProfileOf({{0.0f, 0.0f},
+                                           {3.0f, 45.0f},
+                                           {1.0f, 90.0f}})), ROLL_PROF_REJ_ORDER);
+}
+
+TEST(RollProfileGate, Sane_RejectsAnImpossibleWaypointCount) {
+    RollProfileData p{};
+    p.num_waypoints = MAX_ROLL_WAYPOINTS + 1;
+    EXPECT_EQ(rollProfileRc(p), ROLL_PROF_REJ_COUNT);
+    p.num_waypoints = 255;
+    EXPECT_EQ(rollProfileRc(p), ROLL_PROF_REJ_COUNT);
+}
+
+TEST(RollProfileGate, Sane_IgnoresTheUnusedWaypointTail) {
+    // The wire frame is fixed-size: 8 waypoint slots always ride, and the
+    // query never reads past num_waypoints.  A stale float left in the tail by
+    // a previous, longer profile must not sink a good short one.
+    RollProfileData p = rollProfileOf({{0.0f, 0.0f}, {1.0f, 90.0f}});
+    for (uint8_t i = 2; i < MAX_ROLL_WAYPOINTS; ++i) {
+        p.waypoints[i].time_s    = std::numeric_limits<float>::quiet_NaN();
+        p.waypoints[i].angle_deg = 1e30f;
+    }
+    EXPECT_TRUE(rollProfileSane(p));
+}
+
+TEST(RollProfileGate, RcNames_AreDistinctAndNonEmpty) {
+    // The log line names the failing rule; a duplicated or empty tag would
+    // make a field report unactionable.
+    const RollProfileRc all[] = {ROLL_PROF_OK, ROLL_PROF_REJ_COUNT,
+                                 ROLL_PROF_REJ_TIME, ROLL_PROF_REJ_ORDER,
+                                 ROLL_PROF_REJ_ANGLE};
+    std::set<std::string> seen;
+    for (RollProfileRc rc : all) {
+        const std::string n = rollProfileRcName(rc);
+        EXPECT_FALSE(n.empty());
+        EXPECT_TRUE(seen.insert(n).second) << n;
+    }
 }

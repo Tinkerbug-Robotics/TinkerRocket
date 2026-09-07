@@ -9,6 +9,7 @@
 
 // Libraries
 #include <TR_Sensor_Collector.h>
+#include <imu_drain_window.h>     // #1191: mean + worst-sample stats over each IMU drain pass
 #include <TR_Sensor_Collector_Sim.h>
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -29,6 +30,7 @@
 #include <TR_ControlMixer.h>
 #include <RocketComputerTypes.h>
 #include <GuidancePointGate.h>    // #435: pure cmd-28 acceptance gate (host-tested)
+#include <RollProfileGate.h>      // #1115: total wrap180f + roll-profile acceptance gate (host-tested)
 #include <TR_OTA_Receiver.h>      // FC-side OTA relay receiver (#8 Phase 4)
 #include <TR_OTA_Backend_esp.h>
 #include <esp_system.h>           // esp_restart after a verified relayed OTA
@@ -42,6 +44,8 @@
 #include "boot_cue_policy.h"     // #1188: boot LED cue decision table
 #include "sim_flight_policy.h"   // #1104: sim edge rule + latched dry-fire predicate (TR_Sensor_Collector_Sim)
 #include "oc_cmd_session_gate.h" // #1105: no replay of one-shot commands across an FC boot
+#include "fc_ota_session_policy.h" // #1116: the FC's own exit from an OTA image session nobody ends
+#include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
 #include <esp_private/gpio.h>      // gpio_func_sel
@@ -253,6 +257,15 @@ static uint32_t ekf_tick_counter = 0;
 
 // --- Converted SI values (latest sample of each sensor) ---
 static ISM6HG256DataSI ism6_latest_si = {};
+// #1191: low-g near-rail verdict for the estimator pass, taken from the drain
+// window's WORST raw sample per sensor axis (imu_drain_window.h says why not
+// the mean, and why sensor axes rather than body axes).  Set where the window
+// is averaged, consumed by the low-g/high-g channel switch in the EKF-input
+// block; retained across passes that drain nothing, exactly as ism6_latest_si
+// is.  The bar is the same 15.5 g the body-frame test used, in raw LSB.
+static bool ism6_low_g_near_rail = false;
+static constexpr int32_t kLowGNearRailLsb =
+    imu_drain::nearRailLsb((float)config::ISM6_LOW_G_FS_G, 0.5f);
 static BMP585DataSI bmp_latest_si = {};
 // #260: source-validity bounds for BMP585 pressure (Pa).  Wide enough to pass any
 // real flight pressure; because they're finite bounds, the same comparison also
@@ -324,7 +337,11 @@ static GroundRefFreeze::State ground_ref_freeze;   // #1108
 static bool out_ready = false;
 static uint32_t out_ready_request_time_ms = 0;
 static uint8_t out_pending_command = 0U;
-static uint8_t last_processed_cmd = 0U;  // dedup: ignore OutComputer repeats
+// #1112: the dedup key (last_processed_cmd: ignore the OC's repeat deliveries)
+// and the per-command config-retry budget.  The dispatch runs only on the
+// pass that polled, and a config handler's "retry on next poll" re-arms it
+// for the next POLL, never the next loop pass (see oc_cmd_dedup.h).
+static OcCmdDedup oc_cmd_dedup;
 // #1105: a one-shot actuating command is executed only on a 0 -> cmd edge
 // observed THIS boot; one already being served when the FC came up belongs
 // to the previous session and is refused (see oc_cmd_session_gate.h).
@@ -1026,6 +1043,29 @@ static bool readConfigFrame(uint8_t expected_type,
     return false;
 }
 
+// #1112: a config-pending handler found no config frame in this poll's read.
+// Re-arm the dispatch for the NEXT poll — never the next loop pass — while
+// the per-command retry budget lasts, and log which.  The OC re-stages the
+// frame on each of its repeat deliveries, so the next poll's combined read is
+// a genuine second chance; re-reading the same staged bytes ~1 ms later, as
+// the old `last_processed_cmd = 0` at every call site did, was not (see
+// oc_cmd_dedup.h for the storm that caused).
+static void cfgRetryOnNextPoll(const char* what)
+{
+    if (oc_cmd_dedup.armRetry())
+    {
+        ESP_LOGW(TAG, "[%s] Config not in this read, will retry on next poll (%u/%u)",
+                 what, (unsigned)oc_cmd_dedup.retries,
+                 (unsigned)OcCmdDedup::CFG_RETRY_LIMIT);
+    }
+    else
+    {
+        ESP_LOGW(TAG, "[%s] Config not in this read and the retry budget (%u) is "
+                      "spent — giving up until the OC clears the command (#1112)",
+                 what, (unsigned)OcCmdDedup::CFG_RETRY_LIMIT);
+    }
+}
+
 // ── Pyro channel helpers ─────────────────────────────────────────────────────
 
 // Per-channel pin lookups (indexed 0..3).
@@ -1410,13 +1450,6 @@ struct RollProfileQuery
     uint8_t mode;
 };
 
-static inline float wrap180f(float a)
-{
-    while (a > 180.0f)  a -= 360.0f;
-    while (a < -180.0f) a += 360.0f;
-    return a;
-}
-
 static RollProfileQuery roll_profile_query(float t_flight_s)
 {
     RollProfileQuery out{};
@@ -1434,10 +1467,13 @@ static RollProfileQuery roll_profile_query(float t_flight_s)
     {
         return out;
     }
-    // After last waypoint: hold last angle
+    // After last waypoint: hold last angle.  #1115: wrapped like the
+    // interpolated branch below, so EVERY exit of this query is a target in
+    // [-180, 180] and the logged / commanded value cannot depend on which
+    // branch produced it.
     if (t_flight_s >= roll_profile.waypoints[n - 1].time_s)
     {
-        out.angle_deg = roll_profile.waypoints[n - 1].angle_deg;
+        out.angle_deg = wrap180f(roll_profile.waypoints[n - 1].angle_deg);
         out.mode      = ROLL_SEG_ANGLE;
         return out;
     }
@@ -1459,7 +1495,7 @@ static RollProfileQuery roll_profile_query(float t_flight_s)
             return out;
         }
     }
-    out.angle_deg = roll_profile.waypoints[n - 1].angle_deg;
+    out.angle_deg = wrap180f(roll_profile.waypoints[n - 1].angle_deg);
     out.mode      = ROLL_SEG_ANGLE;
     return out;
 }
@@ -1609,6 +1645,13 @@ static uint32_t fc_ota_gap        = 0;   // valid frames ahead of bytesWritten (
 static uint32_t fc_ota_write_fail = 0;   // writeChunk() errors
 static uint32_t fc_ota_written_frames = 0;  // frames accepted in order
 static volatile uint32_t fc_ota_rx_cb_count = 0;  // I2S RX cb ticks; teardown silence detect
+// #1116: session watchdog inputs (fc_ota_session_policy.h). Stamped at the flip,
+// advanced by fcOtaServiceSessionWatchdog() from loop_fc on every pass in data mode.
+static uint32_t fc_ota_last_progress_ms = 0;   // bytesWritten last advanced
+static uint32_t fc_ota_last_rx_ms       = 0;   // fc_ota_rx_cb_count last advanced
+static uint32_t fc_ota_progress_ref     = 0;   // bytesWritten behind fc_ota_last_progress_ms
+static uint32_t fc_ota_rx_ref           = 0;   // fc_ota_rx_cb_count behind fc_ota_last_rx_ms
+static uint32_t fc_ota_stall_log_ms     = 0;   // throttles the "stalled, OC still clocking" line
 
 static inline IRAM_ATTR void fcOtaRingPush(uint8_t b)
 {
@@ -1744,6 +1787,15 @@ static void fcFlipToRx()
         i2s_stream.registerRecvCallback(fcOtaRecvCallback, nullptr);
     if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
     ESP_LOGW(TAG, "[OTA] I2S -> slave RX for image (%s)", esp_err_to_name(e));
+    // #1116: arm the session watchdog from the flip. The first accepted byte
+    // is still ~1 s away (the OC waits for our silence, flips, warms up, then
+    // releases "ready" to the app), which the 30 s window absorbs.
+    const uint32_t flip_ms  = time_ms();
+    fc_ota_progress_ref     = (uint32_t)fc_ota_receiver.bytesWritten();
+    fc_ota_rx_ref           = fc_ota_rx_cb_count;
+    fc_ota_last_progress_ms = flip_ms;
+    fc_ota_last_rx_ms       = flip_ms;
+    fc_ota_stall_log_ms     = flip_ms;
 }
 
 // Revert slave-RX -> master-TX (normal telemetry + status). Called before
@@ -1760,6 +1812,107 @@ static void fcRevertToTx()
     fc_ota_data_mode = false;           // i2sSenderTask resumes
     if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
     ESP_LOGW(TAG, "[OTA] I2S -> master TX (%s)", esp_err_to_name(e));
+}
+
+// Wait for the OC to stop driving BCLK before we seize it as master TX: both
+// ends are push-pull on one wire, and a terminal status sent into that
+// contention is garbled and lost. "Stopped" == the slave-RX DMA callback has
+// been silent for 20 consecutive 5 ms samples (~100 ms); `max_iters` caps the
+// wait (FINISH allows ~2 s for the OC's post-FINISH drain; ABORT and the #1116
+// watchdog ~600 ms — the unhappy paths must not stall the flight loop).
+// Returns true if the silence was actually seen.
+static bool fcOtaWaitForOcQuiet(int max_iters)
+{
+    uint32_t last_cb = fc_ota_rx_cb_count;
+    int quiet = 0;
+    for (int i = 0; i < max_iters && quiet < 20; i++)
+    {
+        delay_ms(5);
+        const uint32_t cb = fc_ota_rx_cb_count;
+        if (cb == last_cb) { quiet++; }
+        else { quiet = 0; last_cb = cb; }
+    }
+    return quiet >= 20;
+}
+
+// RX diagnostics summary (bench): which failure mode stalled a session?
+//   write_fail>0       -> flash-write error (not a transport issue)
+//   gap>0, crc_fail~0  -> frames lost/reordered (forward-only pump)
+//   crc_fail high      -> I2S signal integrity (back off BCLK)
+static void fcOtaLogRxDiag()
+{
+    ESP_LOGW(TAG, "[OTA RX] frames_ok=%u gap=%u crc_fail=%u write_fail=%u ring_ovf=%u",
+             (unsigned)fc_ota_written_frames, (unsigned)fc_ota_gap,
+             (unsigned)fc_ota_crc_fail, (unsigned)fc_ota_write_fail,
+             (unsigned)fc_ota_ring_ovf);
+}
+
+// End an image session without finalizing it: give the link back to master
+// TX (after the bounded quiet wait) and discard the staged image. No status
+// is sent here because the callers differ on that: the ABORT handler and the
+// #1116 watchdog report ABORTED, while a BEGIN that supersedes a stale
+// session must stay silent — a terminal status would end the relay session
+// the OC has just opened for that BEGIN.
+static void fcOtaTearDownSession()
+{
+    if (fc_ota_data_mode)
+    {
+        fcOtaWaitForOcQuiet(120);   // ~100 ms quiet, <=600 ms cap
+        fcRevertToTx();
+    }
+    (void)fc_ota_receiver.abort();
+}
+
+// #1116: the session watchdog. loop_fc calls this on every pass while in data
+// mode. Progress is an accepted in-order image byte; RX activity is the
+// slave-RX DMA callback, which the OC keeps ticking (idle fill) for as long
+// as it is master. fc_ota_session_policy.h says why both are needed.
+static void fcOtaServiceSessionWatchdog(uint32_t now_ms)
+{
+    if (!fc_ota_data_mode) return;
+    const uint32_t written = (uint32_t)fc_ota_receiver.bytesWritten();
+    if (written != fc_ota_progress_ref)
+    {
+        fc_ota_progress_ref     = written;
+        fc_ota_last_progress_ms = now_ms;
+    }
+    const uint32_t cb = fc_ota_rx_cb_count;
+    if (cb != fc_ota_rx_ref)
+    {
+        fc_ota_rx_ref     = cb;
+        fc_ota_last_rx_ms = now_ms;
+    }
+
+    using FcOtaSessionPolicy::Verdict;
+    const Verdict v = FcOtaSessionPolicy::evaluate(true, now_ms,
+                                                   fc_ota_last_progress_ms,
+                                                   fc_ota_last_rx_ms);
+    const uint32_t stalled_ms = (uint32_t)(now_ms - fc_ota_last_progress_ms);
+    if (v == Verdict::Continue)
+    {
+        // Stalled, but the OC still holds the clock: it is pumping and nothing
+        // is landing. Its own FINISH/ABORT or stall watchdog ends this; say so
+        // every 10 s so the wait is visible on the bench.
+        if (stalled_ms >= FcOtaSessionPolicy::kNoProgressTimeoutMs &&
+            (uint32_t)(now_ms - fc_ota_stall_log_ms) >= 10000U)
+        {
+            fc_ota_stall_log_ms = now_ms;
+            ESP_LOGW(TAG, "[OTA] no image byte accepted for %u s but the OC is still clocking "
+                          "the link — holding (bytes_written=%u/%u; seized regardless at %u s)",
+                     (unsigned)(stalled_ms / 1000U), (unsigned)written,
+                     (unsigned)fc_ota_total_size,
+                     (unsigned)(FcOtaSessionPolicy::kNoProgressHardCapMs / 1000U));
+        }
+        return;
+    }
+    ESP_LOGE(TAG, "[OTA] session abandoned: no image byte accepted for %u s and the link "
+                  "is %s (bytes_written=%u/%u) — reverting to master TX (#1116)",
+             (unsigned)(stalled_ms / 1000U),
+             v == Verdict::AbandonLinkQuiet ? "quiet" : "still clocked",
+             (unsigned)written, (unsigned)fc_ota_total_size);
+    fcOtaLogRxDiag();
+    fcOtaTearDownSession();
+    sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
 }
 
 // ==========================================================================
@@ -3910,10 +4063,29 @@ static void setup_fc()
         if (prof_len == sizeof(RollProfileData))
         {
             prefs.getBytes("prof", &roll_profile, sizeof(RollProfileData));
-            // Clamp num_waypoints to valid range
-            if (roll_profile.num_waypoints > MAX_ROLL_WAYPOINTS)
+            // #1115: belt-and-braces gate.  The wire handler already refuses an
+            // out-of-range profile, so the only way to arrive here out of range
+            // is a corrupt / stale NVS record (or one written by firmware from
+            // before that handler existed); fail SAFE to rate-only rather than
+            // fly it.  Same rationale as the guidance aim point in
+            // applyGuidanceConfig().  num_waypoints = 0 is the documented empty
+            // profile: the fins null roll rate for the whole flight, which is
+            // the behaviour of an unconfigured vehicle.  The record is left in
+            // NVS rather than erased so the operator can still read back what
+            // was stored, and so a firmware rollback does not silently lose it.
+            const RollProfileRc prof_rc = rollProfileRc(roll_profile);
+            if (prof_rc != ROLL_PROF_OK)
             {
-                roll_profile.num_waypoints = MAX_ROLL_WAYPOINTS;
+                ESP_LOGW(TAG, "NVS roll profile REJECTED (%s) — forcing rate-only",
+                              rollProfileRcName(prof_rc));
+                for (uint8_t i = 0; i < MAX_ROLL_WAYPOINTS &&
+                                    i < roll_profile.num_waypoints; ++i)
+                {
+                    ESP_LOGW(TAG, "  stored WP%d: t=%.1fs angle=%.1f°", i,
+                                  (double)roll_profile.waypoints[i].time_s,
+                                  (double)roll_profile.waypoints[i].angle_deg);
+                }
+                roll_profile = RollProfileData{};   // num_waypoints = 0
             }
             ESP_LOGI(TAG, "NVS roll profile: %d waypoints", roll_profile.num_waypoints);
             for (uint8_t i = 0; i < roll_profile.num_waypoints; ++i)
@@ -4932,6 +5104,10 @@ static void loop_fc()
     if (fc_ota_data_mode)
     {
         vTaskDelay(pdMS_TO_TICKS(5));
+        // #1116: the session's own way out if the FINISH/ABORT that should end
+        // it never arrives. Deliberately outside every state gate: the I2C
+        // poll that delivers those commands is skipped INFLIGHT (#1121).
+        fcOtaServiceSessionWatchdog(time_ms());
     }
 
     // ==========================================================================
@@ -4941,19 +5117,30 @@ static void loop_fc()
     // Poll as fast as possible so high-rate sensor frames are not dropped by
     // loop-period gating.
     static uint32_t dbg_ism6_reads = 0, dbg_bmp_reads = 0, dbg_bmp_bad_reads = 0, dbg_mmc_reads = 0, dbg_iis2mdc_reads = 0, dbg_gnss_reads = 0;
+    // #1191: drain passes that handed the estimators a sample, and the largest
+    // window seen.  The [SENSOR] line prints reads/passes — the mean N behind
+    // the anti-alias figure — and the worst backlog.
+    static uint32_t dbg_ism6_passes = 0, dbg_ism6_win_max = 0;
 
-    // Drain ALL pending IMU samples each iteration.  The chip runs at
-    // ISM6HG256_UPDATE_RATE (1920 Hz) — about two samples per ~1 ms loop pass —
-    // and every one is logged to I2S so the recorded IMU rate follows the chip
-    // ODR, not the loop rate (single-slot handoff used to cap it at ~980/s).
-    // The control/EKF path converts only the FRESHEST drained sample: guidance,
-    // kinematics and the EKF all keep running at loop rate exactly as before.
+    // Drain ALL pending IMU samples each iteration.  The chip runs at the
+    // configured ODR (3840 Hz to deployment under IMU_RATE_DYNAMIC, 960 Hz
+    // after) — several samples per ~2 ms loop pass — and every one is logged
+    // to I2S so the recorded IMU rate follows the chip ODR, not the loop rate
+    // (single-slot handoff used to cap it at ~980/s).
+    // The control/EKF path gets the MEAN of the drained samples (#1191).  It
+    // used to take the freshest one: a 1-in-N decimation with no anti-alias
+    // step, which handed the 2026-08-29 boost's ~800 Hz motor tone to the EKF
+    // and the roll P-term folded to ~192 Hz at full amplitude.  The mean is an
+    // N-tap boxcar at the ODR — about -15 dB at 800 Hz, under 1 % at 30 Hz,
+    // under a millisecond of delay (imu_drain_window.h).  Guidance, kinematics
+    // and the EKF keep running at loop rate exactly as before, and the logged
+    // stream is untouched.
     {
-        bool ism6_new_this_iter = false;
+        ImuDrainWindow ism6_win;
         while (sensor_collector.getISM6HG256Data(ism6hg256_data))
         {
             dbg_ism6_reads++;
-            ism6_new_this_iter = true;
+            ism6_win.add(ism6hg256_data);
 
             memcpy(ism6hg256_data_buffer,
                    &ism6hg256_data,
@@ -4964,16 +5151,25 @@ static void loop_fc()
                                SIZE_OF_ISM6HG256_DATA);
         }
 
-        if (ism6_new_this_iter)
+        ISM6HG256Data ism6_mean_raw = {};
+        if (ism6_win.mean(ism6_mean_raw))
         {
-            sensor_converter.convertISM6HG256Data(ism6hg256_data, ism6_latest_si);
+            dbg_ism6_passes++;
+            if (ism6_win.n > dbg_ism6_win_max) dbg_ism6_win_max = ism6_win.n;
+
+            sensor_converter.convertISM6HG256Data(ism6_mean_raw, ism6_latest_si);
             have_ism6_si = true;
+            // The low-g near-rail verdict comes from the window's WORST raw
+            // sample per sensor axis, not from the mean the converter was
+            // just handed: an average of clipped samples is still biased.
+            ism6_low_g_near_rail = ism6_win.lowGNearRail(kLowGNearRailLsb);
 
             // Feed the live low-g accel to the mag calibrator so each
             // incoming mag sample can be bucketed by physical orientation
             // (issue #96 follow-up).  Raw int16 LSB units share the same
             // sign convention as the mag direction-wedge encoding.  The
-            // freshest sample is sufficient — the mag runs at 100 Hz.
+            // freshest sample (still in ism6hg256_data after the drain) is
+            // sufficient — the mag runs at 100 Hz.
             mag_calibrator.setLiveAccel(ism6hg256_data.acc_low_raw.x,
                                         ism6hg256_data.acc_low_raw.y,
                                         ism6hg256_data.acc_low_raw.z);
@@ -5288,12 +5484,14 @@ static void loop_fc()
             const float az = (float)ism6_latest_si.low_g_acc_z;
             roll_rate_dps = (float)ism6_latest_si.gyro_x;
 
-            // Switch to high-G channel when any low-G axis approaches saturation
-            static constexpr float kLowGSatThreshMps2 =
-                (config::ISM6_LOW_G_FS_G - 0.5f) * 9.80665f;
-            const bool low_g_near_sat = (fabsf(ax) > kLowGSatThreshMps2) ||
-                                        (fabsf(ay) > kLowGSatThreshMps2) ||
-                                        (fabsf(az) > kLowGSatThreshMps2);
+            // Switch to the high-g channel when the low-g part is near its
+            // rail.  #1191: the verdict is the drain window's worst raw sample
+            // per SENSOR axis (set where the window is averaged), not a test
+            // on the body-frame means above.  An average of clipped samples
+            // is still biased, and with the -45 deg mount a single-axis rail
+            // reads 11.3 g on two body axes, under the 15.5 g bar the
+            // body-frame test applied.
+            const bool low_g_near_sat = ism6_low_g_near_rail;
             const float hx = (float)ism6_latest_si.high_g_acc_x;
             const float hy = (float)ism6_latest_si.high_g_acc_y;
             const float hz = (float)ism6_latest_si.high_g_acc_z;
@@ -5791,12 +5989,16 @@ static void loop_fc()
         const bool recovery_poll_window =
             recovery_gate_active &&
             recovery_arm_state.verdict == RecoveryArmGate::Verdict::Locked;
+        // #1112: the command dispatch below runs only on a pass that polled —
+        // it is the tail of this poll transaction, not a free-running block.
+        bool oc_polled = false;
         if ((rocket_state != INFLIGHT || sensor_collector.isSimActive() ||
              recovery_poll_window)
             && (now_ms - out_ready_request_time_ms) > 250U
             && (int32_t)(now_ms - i2c_resync_grace_until_ms) >= 0)
         {
             out_ready_request_time_ms = now_ms;
+            oc_polled = true;
 
             xSemaphoreTake(i2c_bus_mutex, portMAX_DELAY);
 
@@ -5952,21 +6154,25 @@ static void loop_fc()
         // ==========================================================================
         // SECTION: Command dispatch from the Out Computer
         // ==========================================================================
-        // Dedup: OutComputer repeats each command for 5 polls for I2C
-        // reliability.  Process only the first delivery.  out_pending_command
-        // mirrors the OC's reported command (set every poll above, including 0),
-        // so it stays non-zero for the whole repeat window — we must NOT clear
-        // it at dispatch, or the reset below would fire between polls and every
-        // repeat would re-execute.  last_processed_cmd resets only when the OC
-        // actually reports 0 (repeat window done), freeing the same command to
-        // be issued again later.
-        if (out_pending_command == 0U)
+        // Dedup: OutComputer repeats each command for several polls
+        // (CMD_REPEAT_LIMIT) for I2C reliability.  Process only the first
+        // delivery.  out_pending_command mirrors the OC's reported command (set
+        // every poll above, including 0), so it stays non-zero for the whole
+        // repeat window — we must NOT clear it at dispatch, or the reset would
+        // fire between polls and every repeat would re-execute.  The dedup key
+        // (oc_cmd_dedup.last_processed_cmd) resets only when the OC actually
+        // reports 0 (repeat window done), freeing the same command to be issued
+        // again later.
+        //
+        // #1112: the whole block runs only on a pass that polled (oc_polled).
+        // The mirror is written only by the poll, so between polls nothing here
+        // can change — and a config handler's "retry on next poll" (which
+        // clears the key) used to re-fire on the very next ~1 ms pass against
+        // the same stale bytes, ~38 ms of readConfigFrame() per pass, until the
+        // OC cleared the command — or forever, once the poll had stopped (real
+        // INFLIGHT, the #402 quiet window).  See oc_cmd_dedup.h.
+        if (oc_cmd_dedup.take(oc_polled, out_pending_command) != 0U)
         {
-            last_processed_cmd = 0U;  // reset once OutComputer clears
-        }
-        if (out_pending_command != 0U && out_pending_command != last_processed_cmd)
-        {
-            last_processed_cmd = out_pending_command;
             ESP_LOGI(TAG, "[I2C RX] pending_command=0x%02X", (unsigned)out_pending_command);
             if (!oc_cmd_gate.admits(out_pending_command))
             {
@@ -6087,8 +6293,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    last_processed_cmd = 0U;  // retry on next poll
-                    ESP_LOGW(TAG, "[SERVO CFG] Config not in this read, will retry");
+                    cfgRetryOnNextPoll("SERVO CFG");   // #1112
                 }
             }
             else if (out_pending_command == PID_CONFIG_PENDING)
@@ -6119,8 +6324,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    last_processed_cmd = 0U;  // retry on next poll
-                    ESP_LOGW(TAG, "[PID CFG] Config not in this read, will retry");
+                    cfgRetryOnNextPoll("PID CFG");   // #1112
                 }
             }
             else if (out_pending_command == SERVO_CTRL_ENABLE)
@@ -6159,8 +6363,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    last_processed_cmd = 0U;  // retry on next poll
-                    ESP_LOGW(TAG, "[SIM CFG] Config not in this read, will retry");
+                    cfgRetryOnNextPoll("SIM CFG");   // #1112
                 }
             }
             else if (out_pending_command == SIM_START_CMD)
@@ -6231,9 +6434,32 @@ static void loop_fc()
                 // (#1104).  Works whether the sim is still airborne (delivered
                 // mid-flight via the #393 INFLIGHT-poll exception) or already
                 // LANDED.
-                sensor_collector.stopSim();
-                resetFlightStateForSim("stop");
-                ESP_LOGI(TAG, "[SIM] Stop cmd received — flight state reset (#393)");
+                //
+                // #1113: but ONLY against a sim flight.  This reset clears the
+                // #317 post-flight lockout — it is the one command that
+                // deliberately re-arms — and this handler has no state gate
+                // (LANDED still polls), so a Stop that reached a REAL flight's
+                // terminal LANDED (a broadcast uplink meant for the bench
+                // rocket, a cmd 7 queued mid-flight and delivered on the first
+                // poll after touchdown, an app whose SIM MODE banner never
+                // cleared) dropped the FC to READY with the deployment latches
+                // cleared and a failed channel's e-match still live.  The
+                // latch is what tells a flown-out sim (Stop must still work)
+                // from a real landing (it must not): isSimActive() is false
+                // for both.  sim_flight_policy.h pins the rule.
+                if (sim_flight::stopApplies(sim_flight_latched,
+                                            sensor_collector.isSimActive()))
+                {
+                    sensor_collector.stopSim();
+                    resetFlightStateForSim("stop");
+                    ESP_LOGI(TAG, "[SIM] Stop cmd received — flight state reset (#393)");
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "[SIM] Stop ignored: no sim flight this run "
+                                  "(state=%u post_flight_lockout=%d) (#1113)",
+                             (unsigned)rocket_state, (int)post_flight_lockout);
+                }
             }
             else if (out_pending_command == GROUND_TEST_START)
             {
@@ -6265,41 +6491,43 @@ static void loop_fc()
             else if (out_pending_command == GYRO_CAL_CMD)
             {
                 ESP_LOGI(TAG, "[CAL] Sensor calibration requested...");
-                // #1110: the collector runs the window inside its IMU poll
-                // task and says whether a result was measured and committed.
-                // On false it kept the previous offsets, so the converter,
-                // the OC payload and NVS already hold what the rocket is
-                // using — nothing to re-apply and nothing to save.
-                if (sensor_collector.calibrateGyro(config::ISM6HG256_ROT_Z_DEG))
+                // #1110: the collector measures the window inside its IMU
+                // poll task.  #1114: this loop no longer waits the ~10 s for
+                // it — the request is posted here and the answer is collected
+                // by the "Pad calibration completion" block after this
+                // dispatch chain, so launch detection, the EKF, the state
+                // machine and the deployment channels keep running through
+                // the window.  A rocket that is flying, has flown, or has
+                // just left the pad is refused: a tap that lands after
+                // ignition must never open a window.
+                const char* cal_refusal =
+                    sensor_cal::refusal(rocket_state, kinematics.launch_flag);
+                if (cal_refusal != nullptr)
                 {
-                    sensor_converter.setHighGBias(sensor_collector.hg_bias_x,
-                                                  sensor_collector.hg_bias_y,
-                                                  sensor_collector.hg_bias_z);
-                    // Propagate bias to OutComputer via status query payload
-                    out_status_query_data.hg_bias_x_cmss = encodeHgBiasCmss(sensor_collector.hg_bias_x);
-                    out_status_query_data.hg_bias_y_cmss = encodeHgBiasCmss(sensor_collector.hg_bias_y);
-                    out_status_query_data.hg_bias_z_cmss = encodeHgBiasCmss(sensor_collector.hg_bias_z);
-                    // Persist to NVS — high-g bias + gyro zero-rate bias (#132).
-                    prefs.begin("cal", false);
-                    prefs.putFloat("hgbx", sensor_collector.hg_bias_x);
-                    prefs.putFloat("hgby", sensor_collector.hg_bias_y);
-                    prefs.putFloat("hgbz", sensor_collector.hg_bias_z);
-                    prefs.putShort("gx", sensor_collector_hw.gyro_cal_x);
-                    prefs.putShort("gy", sensor_collector_hw.gyro_cal_y);
-                    prefs.putShort("gz", sensor_collector_hw.gyro_cal_z);
-                    prefs.end();
-                    ESP_LOGI(TAG, "[CAL] Sensor calibration complete (saved to NVS)");
+                    ESP_LOGW(TAG, "[CAL] Sensor calibration REFUSED: %s — previous calibration kept",
+                             cal_refusal);
+                    publishSensorCalFromNVS();
                 }
-                else
+                else if (sensor_collector.calibrationInProgress())
                 {
-                    ESP_LOGE(TAG, "[CAL] Sensor calibration FAILED — previous calibration kept "
-                                  "(the SENSORS log above says why)");
+                    // The open window answers for this tap too: its
+                    // completion publishes.  Publishing the stored cal now
+                    // would resolve the app's pending snapshot to the OLD
+                    // values first.
+                    ESP_LOGW(TAG, "[CAL] Sensor calibration already running — request ignored");
                 }
-                // Push the stored result up either way so the app's pending
-                // snapshot resolves to the values the rocket is actually
-                // using.  The status frame carries no failure field, so a
-                // failed run reads as a re-send of the old calibration there.
-                publishSensorCalFromNVS();
+                else if (!sensor_collector.startCalibration(config::ISM6HG256_ROT_Z_DEG))
+                {
+                    // Not started: no IMU, poll task down, or a sim running —
+                    // the SENSORS/SIM line above says which.  Nothing
+                    // changed; push the stored result so the app's pending
+                    // snapshot resolves to the values the rocket is actually
+                    // using.  The status frame carries no failure field, so
+                    // it reads as a re-send of the old calibration there.
+                    ESP_LOGE(TAG, "[CAL] Sensor calibration NOT STARTED — previous calibration kept "
+                                  "(the log line above says why)");
+                    publishSensorCalFromNVS();
+                }
             }
             // Issue #96 — magnetometer hard-iron cal: start / abort / accept / retry.
             // Entry refused only from INFLIGHT (everything else is fair game).
@@ -6760,6 +6988,24 @@ static void loop_fc()
                 }
                 else
                 {
+                    if (fc_ota_data_mode)
+                    {
+                        // #1116: a BEGIN while an image session is still open is
+                        // the operator's retry after a session nobody ended (the
+                        // OC's FINISH/ABORT was dropped, or the OC rebooted mid-
+                        // transfer). begin() used to refuse it with AlreadyActive,
+                        // and that refusal rode the idle I2S sender — so the retry
+                        // could never work either. Supersede the old session
+                        // instead, silently: no ABORTED status, because a terminal
+                        // status would end the relay session the OC has just
+                        // opened for THIS begin.
+                        ESP_LOGW(TAG, "[OTA] BEGIN while a session is still open "
+                                      "(bytes_written=%u/%u) — superseding it (#1116)",
+                                 (unsigned)fc_ota_receiver.bytesWritten(),
+                                 (unsigned)fc_ota_total_size);
+                        fcOtaLogRxDiag();
+                        fcOtaTearDownSession();
+                    }
                     delay_ms(1);
                     uint8_t hdr[36];
                     size_t  hlen = 0;
@@ -6813,28 +7059,13 @@ static void loop_fc()
                     // driving BCLK (reverted to slave RX). Otherwise both ends drive
                     // BCLK = contention and the terminal status is garbled — and the
                     // final frame is lost. Silence == the I2S RX callback stops firing.
-                    uint32_t last_cb = fc_ota_rx_cb_count;
-                    int quiet = 0;
-                    for (int i = 0; i < 400 && quiet < 20; i++)   // ~100 ms quiet, <=2 s cap
-                    {
-                        delay_ms(5);
-                        const uint32_t cb = fc_ota_rx_cb_count;
-                        if (cb == last_cb) { quiet++; }
-                        else { quiet = 0; last_cb = cb; }
-                    }
+                    fcOtaWaitForOcQuiet(400);   // ~100 ms quiet, <=2 s cap
                     fcRevertToTx();
 
                     ESP_LOGW(TAG, "[OTA] FINISH (bytes_written=%u/%u)",
                              (unsigned)fc_ota_receiver.bytesWritten(),
                              (unsigned)fc_ota_total_size);
-                    // RX diagnostics summary (bench): which failure mode stalled it?
-                    //   write_fail>0  -> flash-write error (not a transport issue)
-                    //   gap>0, crc_fail~0 -> frames lost/reordered (forward-only pump)
-                    //   crc_fail high -> I2S signal integrity (back off BCLK)
-                    ESP_LOGW(TAG, "[OTA RX] frames_ok=%u gap=%u crc_fail=%u write_fail=%u ring_ovf=%u",
-                             (unsigned)fc_ota_written_frames, (unsigned)fc_ota_gap,
-                             (unsigned)fc_ota_crc_fail, (unsigned)fc_ota_write_fail,
-                             (unsigned)fc_ota_ring_ovf);
+                    fcOtaLogRxDiag();   // which failure mode stalled it, if any
                     const TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
                     if (e == TR_OTA_Receiver::Error::Ok)
                     {
@@ -6866,30 +7097,18 @@ static void loop_fc()
             }
             else if (out_pending_command == OTA_ABORT_CMD)
             {
+                // #834 items 6/7 (review): wait for the OC to stop driving BCLK
+                // before seizing it, exactly as the FINISH path above does and
+                // for the same reason — otherwise both ends drive BCLK/WS. This
+                // used to be unreachable in practice because nothing staged
+                // OTA_ABORT_CMD while the OC was (or was about to be) master;
+                // the OC's disconnect/stall/flip-fail recovery now does, so the
+                // abort path needs the same handshake. Shorter cap than FINISH:
+                // an abort is already the unhappy path and must not stall the
+                // flight loop. (#1116: the wait, the revert and the discard live
+                // in fcOtaTearDownSession, shared with the session watchdog.)
                 ESP_LOGW(TAG, "[OTA] ABORT");
-                if (fc_ota_data_mode)
-                {
-                    // #834 items 6/7 (review): wait for the OC to stop driving
-                    // BCLK before seizing it, exactly as the FINISH path above
-                    // does and for the same reason — otherwise both ends drive
-                    // BCLK/WS. This used to be unreachable in practice because
-                    // nothing staged OTA_ABORT_CMD while the OC was (or was
-                    // about to be) master; the OC's disconnect/stall/flip-fail
-                    // recovery now does, so the abort path needs the same
-                    // handshake. Shorter cap than FINISH: an abort is already
-                    // the unhappy path and must not stall the flight loop.
-                    uint32_t last_cb = fc_ota_rx_cb_count;
-                    int quiet = 0;
-                    for (int i = 0; i < 120 && quiet < 20; i++)   // ~100 ms quiet, <=600 ms cap
-                    {
-                        delay_ms(5);
-                        const uint32_t cb = fc_ota_rx_cb_count;
-                        if (cb == last_cb) { quiet++; }
-                        else { quiet = 0; last_cb = cb; }
-                    }
-                    fcRevertToTx();  // back to TX so status rides I2S
-                }
-                (void)fc_ota_receiver.abort();
+                fcOtaTearDownSession();
                 sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
             }
             else if (out_pending_command == GAIN_SCHED_ENABLE)
@@ -7251,8 +7470,7 @@ static void loop_fc()
                     }
                     else
                     {
-                        // Config not in this read — allow retry on next poll
-                        last_processed_cmd = 0U;
+                        cfgRetryOnNextPoll("SERVO TEST");   // #1112
                     }
                 }
             }
@@ -7278,30 +7496,61 @@ static void loop_fc()
                                     cfg_payload, sizeof(cfg_payload), cfg_len)
                     && cfg_len >= sizeof(RollProfileData))
                 {
-                    memcpy(&roll_profile, cfg_payload, sizeof(RollProfileData));
-                    // Clamp to valid range
-                    if (roll_profile.num_waypoints > MAX_ROLL_WAYPOINTS)
+                    // #1115: validate BEFORE adopting or persisting.  REJECT,
+                    // never clamp — a clamped profile flies a shape the
+                    // operator never drew and never sees, whereas a rejection
+                    // keeps the previous profile and names the failing rule in
+                    // the log.
+                    //
+                    // The config report is re-sent below so it carries what the
+                    // rocket actually holds rather than what was just offered.
+                    // Both apps' syncers ADOPT that report (rocket wins) rather
+                    // than re-pushing on a mismatch, so the refused waypoint is
+                    // replaced by the real one in the editor — but note they
+                    // adopt on ATTACH, not on every report, so an operator who
+                    // stays connected sees the correction on the next attach.
+                    // Adopt-not-repush is also why a rejection cannot turn into
+                    // a push loop between app and rocket.
+                    RollProfileData incoming;
+                    memcpy(&incoming, cfg_payload, sizeof(RollProfileData));
+                    const RollProfileRc prof_rc = rollProfileRc(incoming);
+                    if (prof_rc != ROLL_PROF_OK)
                     {
-                        roll_profile.num_waypoints = MAX_ROLL_WAYPOINTS;
+                        ESP_LOGW(TAG, "[ROLL PROF] REJECTED (%s) — keeping %d waypoints",
+                                      rollProfileRcName(prof_rc),
+                                      roll_profile.num_waypoints);
+                        for (uint8_t i = 0; i < MAX_ROLL_WAYPOINTS &&
+                                            i < incoming.num_waypoints; ++i)
+                        {
+                            ESP_LOGW(TAG, "  offered WP%d: t=%.1fs angle=%.1f°", i,
+                                          (double)incoming.waypoints[i].time_s,
+                                          (double)incoming.waypoints[i].angle_deg);
+                        }
+                        // Re-send the report so the app sees the profile that
+                        // is actually loaded, not the one it just offered.
+                        config_report_dirty = true; log_next_report_send = true;   // #915
                     }
-                    // Persist to NVS
-                    prefs.begin("rollp", false);
-                    prefs.putBytes("prof", &roll_profile, sizeof(RollProfileData));
-                    config_report_dirty = true; log_next_report_send = true;   // #915
-                    prefs.end();
-                    ESP_LOGI(TAG, "[ROLL PROF] Set %d waypoints (saved to NVS)",
-                                  roll_profile.num_waypoints);
-                    for (uint8_t i = 0; i < roll_profile.num_waypoints; ++i)
+                    else
                     {
-                        ESP_LOGI(TAG, "  WP%d: t=%.1fs angle=%.1f°", i,
-                                      (double)roll_profile.waypoints[i].time_s,
-                                      (double)roll_profile.waypoints[i].angle_deg);
+                        roll_profile = incoming;
+                        // Persist to NVS
+                        prefs.begin("rollp", false);
+                        prefs.putBytes("prof", &roll_profile, sizeof(RollProfileData));
+                        config_report_dirty = true; log_next_report_send = true;   // #915
+                        prefs.end();
+                        ESP_LOGI(TAG, "[ROLL PROF] Set %d waypoints (saved to NVS)",
+                                      roll_profile.num_waypoints);
+                        for (uint8_t i = 0; i < roll_profile.num_waypoints; ++i)
+                        {
+                            ESP_LOGI(TAG, "  WP%d: t=%.1fs angle=%.1f°", i,
+                                          (double)roll_profile.waypoints[i].time_s,
+                                          (double)roll_profile.waypoints[i].angle_deg);
+                        }
                     }
                 }
                 else
                 {
-                    last_processed_cmd = 0U;  // retry on next poll
-                    ESP_LOGW(TAG, "[ROLL PROF] Config not in this read, will retry");
+                    cfgRetryOnNextPoll("ROLL PROF");   // #1112
                 }
             }
             else if (out_pending_command == ROLL_PROFILE_CLEAR)
@@ -7669,7 +7918,7 @@ static void loop_fc()
                     }
                     else
                     {
-                        last_processed_cmd = 0U;  // retry on next poll
+                        cfgRetryOnNextPoll("SERVO REPLAY");   // #1112
                     }
                 }
             }
@@ -7731,10 +7980,77 @@ static void loop_fc()
         }
 
         // Release exclusive bus access now that the query exchange and any
-        // follow-up config reads (readConfigFrame) are complete.
-        if (i2c_bus_mutex != nullptr && xSemaphoreGetMutexHolder(i2c_bus_mutex) == xTaskGetCurrentTaskHandle())
+        // follow-up config reads (readConfigFrame) are complete.  The take is
+        // in the poll block and #1112 keeps the dispatch on that same pass, so
+        // the give pairs with it by construction.
+        if (oc_polled)
         {
             xSemaphoreGive(i2c_bus_mutex);
+        }
+
+        // ==========================================================================
+        // SECTION: Pad calibration completion (#1114)
+        // ==========================================================================
+        // The IMU poll task is measuring the window GYRO_CAL_CMD posted above
+        // while this loop keeps flying.  Collect the answer here, once per
+        // pass — or drop the window the moment the rocket stops being on the
+        // pad.  launch_flag is the detector's own verdict; rocket_state
+        // covers a launch it did not call (a sim, a restored flight).  Either
+        // way the calibrator is being fed motion, so its answer is discarded
+        // unseen and the previous calibration stays live.  Until #1114 the
+        // flight task sat inside the calibrator for the whole window: a motor
+        // lit during an on-pad cal was a boost nobody sampled — no launch
+        // detect, no INFLIGHT, no deployment.
+        if (sensor_collector.calibrationInProgress())
+        {
+            const char* cal_cancel =
+                sensor_cal::refusal(rocket_state, kinematics.launch_flag);
+            if (cal_cancel != nullptr)
+            {
+                sensor_collector.cancelCalibration();
+                ESP_LOGW(TAG, "[CAL] Sensor calibration CANCELLED: %s — previous calibration kept",
+                         cal_cancel);
+                publishSensorCalFromNVS();
+            }
+            else
+            {
+                switch (sensor_collector.pollCalibration())
+                {
+                    case SensorCalPoll::Committed:
+                        sensor_converter.setHighGBias(sensor_collector.hg_bias_x,
+                                                      sensor_collector.hg_bias_y,
+                                                      sensor_collector.hg_bias_z);
+                        // Propagate bias to OutComputer via status query payload
+                        out_status_query_data.hg_bias_x_cmss = encodeHgBiasCmss(sensor_collector.hg_bias_x);
+                        out_status_query_data.hg_bias_y_cmss = encodeHgBiasCmss(sensor_collector.hg_bias_y);
+                        out_status_query_data.hg_bias_z_cmss = encodeHgBiasCmss(sensor_collector.hg_bias_z);
+                        // Persist to NVS — high-g bias + gyro zero-rate bias (#132).
+                        prefs.begin("cal", false);
+                        prefs.putFloat("hgbx", sensor_collector.hg_bias_x);
+                        prefs.putFloat("hgby", sensor_collector.hg_bias_y);
+                        prefs.putFloat("hgbz", sensor_collector.hg_bias_z);
+                        prefs.putShort("gx", sensor_collector_hw.gyro_cal_x);
+                        prefs.putShort("gy", sensor_collector_hw.gyro_cal_y);
+                        prefs.putShort("gz", sensor_collector_hw.gyro_cal_z);
+                        prefs.end();
+                        ESP_LOGI(TAG, "[CAL] Sensor calibration complete (saved to NVS)");
+                        publishSensorCalFromNVS();
+                        break;
+                    case SensorCalPoll::Rejected:
+                        // The previous offsets are untouched, so the
+                        // converter, the OC payload and NVS already hold what
+                        // the rocket is using — nothing to re-apply, nothing
+                        // to save.  Publish so the app's pending snapshot
+                        // resolves; the frame carries no failure field, so it
+                        // reads as a re-send of the old calibration there.
+                        ESP_LOGE(TAG, "[CAL] Sensor calibration FAILED — previous calibration kept "
+                                      "(the SENSORS log above says why)");
+                        publishSensorCalFromNVS();
+                        break;
+                    default:
+                        break;   // Running: nothing to do this pass
+                }
+            }
         }
 
         // ==========================================================================
@@ -9072,9 +9388,21 @@ static void loop_fc()
             }
             sh = shSet(sh, SH_EKF_SHIFT, ekf_st);
 
-            // Mag — present (cal-residual refinement is a follow-up; amber-only).
-            sh = shSet(sh, SH_MAG_SHIFT,
-                       (have_iis2mdc_si || have_mmc_si) ? SH_OK : SH_NA);
+            // Mag — present + fresh (cal-residual refinement is a follow-up;
+            // amber-only).  #1111: have_*_si latches on the first sample, so
+            // presence alone stayed OK for the rest of the flight after the
+            // chip stopped answering; a stalled or rail-less mag now reads
+            // DEGRADED once its last sample is 500 ms old (the baro's window;
+            // 50 missed samples at 100 Hz).
+            SensorHealthState mag_st = SH_NA;
+            if (have_iis2mdc_si) {
+                const bool fresh = (uint32_t)(now_us_h - iis2mdc_latest_si.time_us) < 500000u;
+                mag_st = fresh ? SH_OK : SH_DEGRADED;
+            } else if (have_mmc_si) {
+                const bool fresh = (uint32_t)(now_us_h - mmc_latest_si.time_us) < 500000u;
+                mag_st = fresh ? SH_OK : SH_DEGRADED;
+            }
+            sh = shSet(sh, SH_MAG_SHIFT, mag_st);
 
             // GNSS — OK needs a 3D fix + enough sats (+ horizontal accuracy,
             // but only when that gate is enabled: config::GNSS_MAX_HACC_M == 0
@@ -9222,8 +9550,10 @@ static void loop_fc()
             lt_loop_count = 0;
 
             // Sensor data flow diagnostic
-            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu bmp=%lu bmp_bad=%lu mmc=%lu iis=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
+            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu (win n=%.1f max=%lu) bmp=%lu bmp_bad=%lu mmc=%lu iis=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
                           (unsigned long)dbg_ism6_reads,
+                          dbg_ism6_passes ? (double)dbg_ism6_reads / (double)dbg_ism6_passes : 0.0,
+                          (unsigned long)dbg_ism6_win_max,
                           (unsigned long)dbg_bmp_reads,
                           (unsigned long)dbg_bmp_bad_reads,
                           (unsigned long)dbg_mmc_reads,
@@ -9233,11 +9563,41 @@ static void loop_fc()
                           have_ism6_si ? (double)ism6_latest_si.gyro_z : 0.0,
                           gpio_get_level((gpio_num_t)config::ISM6HG256_INT));
             dbg_ism6_reads = 0;
+            dbg_ism6_passes = 0;
+            dbg_ism6_win_max = 0;
             dbg_bmp_reads = 0;
             dbg_bmp_bad_reads = 0;
             dbg_mmc_reads = 0;
             dbg_iis2mdc_reads = 0;
             dbg_gnss_reads = 0;
+
+            // IIS2MDC poll health (#1111).  Quiet while healthy: printed only
+            // when a read failed this second, the chip is stalled, or a stall
+            // began/ended since the last print.  ok/fail are per-second
+            // deltas; stalls/rec are lifetime; worst is the longest single
+            // attempt (read or stall probe) since boot — how much of the IMU
+            // poll loop one failing mag transaction costs.
+            if (sensor_collector.isIIS2MDCActive())
+            {
+                static IIS2MDCDebugSnapshot prev_iis_snap = {};
+                IIS2MDCDebugSnapshot now_iis_snap;
+                sensor_collector.getIIS2MDCDebugSnapshot(now_iis_snap);
+                const uint32_t iis_fail_delta = now_iis_snap.read_fail - prev_iis_snap.read_fail;
+                if (iis_fail_delta != 0 || now_iis_snap.stalled ||
+                    now_iis_snap.stall_events != prev_iis_snap.stall_events ||
+                    now_iis_snap.recoveries   != prev_iis_snap.recoveries)
+                {
+                    ESP_LOGW(TAG, "[MAG DIAG] iis2mdc read ok/fail=%lu/%lu stalls=%lu rec=%lu "
+                                  "worst=%lu us%s",
+                                  (unsigned long)(now_iis_snap.read_ok - prev_iis_snap.read_ok),
+                                  (unsigned long)iis_fail_delta,
+                                  (unsigned long)now_iis_snap.stall_events,
+                                  (unsigned long)now_iis_snap.recoveries,
+                                  (unsigned long)now_iis_snap.read_max_us,
+                                  now_iis_snap.stalled ? " STALLED" : "");
+                }
+                prev_iis_snap = now_iis_snap;
+            }
 
             // MMC5983MA-specific diagnostic — we've been seeing mmc=0 reads/s
             // with no visible cause from the [SENSOR] line alone. This surfaces

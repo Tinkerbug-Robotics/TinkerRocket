@@ -10,6 +10,7 @@
 #include <TR_BMP585.h>
 #include <TR_MMC5983MA.h>
 #include <TR_IIS2MDC.h>
+#include "iis2mdc_poll_gate.h"
 // GNSS driver is a compile-time seam: the rocket-computer boards carry a
 // u-blox receiver, the mini carries a Quectel LC86G. Both drivers expose the
 // identical begin/pollNewPVT/getGNSSData surface and produce the same
@@ -23,6 +24,7 @@
 #endif
 #include <RocketComputerTypes.h>
 #include "sensor_cal_math.h"
+#include "sensor_cal_session.h"
 
 typedef struct
 {
@@ -76,6 +78,20 @@ typedef struct
     uint8_t last_ctrl1;
     uint8_t last_ctrl2;
 } MMC5983MADebugSnapshot;
+
+// #1111: IIS2MDC poll health.  read_ok/read_fail count attempts (a stall
+// probe counts as an attempt); stall_events/recoveries count transitions;
+// read_max_us is the longest single attempt since boot — the number that
+// says how much of the IMU poll loop one failing mag transaction costs.
+typedef struct
+{
+    uint32_t read_ok;
+    uint32_t read_fail;
+    uint32_t stall_events;
+    uint32_t recoveries;
+    uint32_t read_max_us;
+    bool stalled;
+} IIS2MDCDebugSnapshot;
 
 class SensorCollector
 {
@@ -153,14 +169,26 @@ public:
     void getPollTimingSnapshot(PollTimingSnapshot &snapshot_out) const;
     void resetPollTimingSnapshot();
 
-    // Pad calibration: gyro zero-rate + high-g accel cross-cal against low-g.
-    // Blocks the caller for CAL_WINDOW_US (~10 s) while pollIMUdata — the
-    // sole owner of the SPI bus — sums every ISM6 sample it reads (#1110).
-    // Returns true when a result was measured and committed.  Returns false,
-    // leaving the previous offsets untouched, when the poll task produced no
-    // samples inside the window or the low-g gravity magnitude failed the
-    // plausibility band in sensor_cal_math.h.
-    bool calibrateGyro(float rotation_z_deg = 0.0f);
+    // Pad calibration: gyro zero-rate + high-g accel cross-cal against low-g,
+    // measured by pollIMUdata — the sole owner of the SPI bus — over a
+    // CAL_WINDOW_US (~10 s) window (#1110) while the caller keeps running
+    // (#1114): the flight loop never waits on it.
+    //   startCalibration()      post the request.  False (nothing started)
+    //                           when there is no ISM6, the poll task is not
+    //                           running, or a window is already outstanding.
+    //   pollCalibration()       once per loop pass.  Running until the window
+    //                           closes, then exactly one Committed (new
+    //                           offsets live) or Rejected (previous offsets
+    //                           kept: no samples in the window, or the low-g
+    //                           gravity magnitude failed the plausibility
+    //                           band in sensor_cal_math.h).
+    //   cancelCalibration()     drop the outstanding window — its answer is
+    //                           discarded when it lands.  Nothing changes.
+    //   calibrationInProgress() a window is outstanding.
+    bool          startCalibration(float rotation_z_deg = 0.0f);
+    SensorCalPoll pollCalibration();
+    void          cancelCalibration();
+    bool          calibrationInProgress() const { return cal_session_.waiting(); }
     int16_t gyro_cal_x;
     int16_t gyro_cal_y;
     int16_t gyro_cal_z;
@@ -185,7 +213,12 @@ public:
     // the IIS2MDC isn't active or the I2C write failed.  Issue #96.
     bool setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
 
-    // Calibration results (populated by calibrateGyro)
+    // #1111: IIS2MDC poll health.  Stalled = the chip failed STALL_FAILS
+    // consecutive reads and the poll is down to the backed-off probe.
+    bool isIIS2MDCStalled() const { return iis2mdc_active && iis2mdc_gate.stalled; }
+    void getIIS2MDCDebugSnapshot(IIS2MDCDebugSnapshot &snapshot_out) const;
+
+    // Calibration results (populated by pollCalibration() on Committed)
     float hg_bias_x = 0.0f, hg_bias_y = 0.0f, hg_bias_z = 0.0f;  // m/s², body frame
     float cal_gravity_mag = 0.0f;  // measured gravity magnitude from low-g (m/s²)
 
@@ -206,23 +239,31 @@ private:
     // between transactions. The ISM6 uses spi_device_polling_transmit, so
     // only the poll task may touch the chip once it is running (#475).
     volatile uint16_t ism6_rate_pending_ = 0;
-    // #1110: the pad calibration is serviced by pollIMUdata as well.
-    // calibrateGyro() (flight task, core 1) posts cal_request_pending_ and
-    // blocks on cal_done_sem_; the poll task opens a CAL_WINDOW_US window,
-    // sums every ISM6 sample into cal_sums_ instead of enqueueing it, and
-    // gives the semaphore once the deadline has passed — even if DRDY has
-    // gone quiet, so the flight task always gets an answer.  It used to
+    // #1110/#1114: the pad calibration is serviced by pollIMUdata as well.
+    // startCalibration() (flight task, core 1) posts a request seq and
+    // returns; the poll task opens a CAL_WINDOW_US window, sums every ISM6
+    // sample into cal_sums_ — still enqueueing it, the flight loop keeps
+    // consuming — and at the deadline stamps cal_done_seq_ and gives
+    // cal_done_sem_, even if DRDY has gone quiet, so the flight task always
+    // gets an answer.  pollCalibration() takes the semaphore with no wait
+    // and accepts the answer only if its seq is the one outstanding, so a
+    // window cancelled by a launch can never commit.  It used to
     // vTaskSuspend() the poll task from the other core and drive the bus
     // itself: a suspend landing inside a BMP585/MMC5983MA transaction froze
     // the SPI bus lock (calibration blocked forever, task-WDT reboot on the
     // pad) or left that chip select asserted for the whole calibration (two
-    // slaves on MISO, garbage offsets saved to NVS).
+    // slaves on MISO, garbage offsets saved to NVS).  Then (#1110) it
+    // blocked the flight task for the whole window: a motor lit inside it
+    // was a launch nobody detected.
     static constexpr uint32_t CAL_WINDOW_US = 10'000'000;  // the ~10 s the old 1000 x 10 ms loop took; the app's spinner is a 12 s timer
-    volatile bool     cal_request_pending_ = false;  // flight task -> poll task; a lone flag with no payload to order
-    bool              cal_active_ = false;           // poll-task private: window open
-    uint32_t          cal_deadline_us_ = 0;          // poll-task private
-    SensorCalSums     cal_sums_;                     // written by the poll task; read by the flight task only after cal_done_sem_
-    SemaphoreHandle_t cal_done_sem_ = nullptr;       // created in begin(); given once per window
+    volatile uint32_t cal_request_seq_ = 0;   // flight task -> poll task: the latest request.  One 32-bit store IS the request; nothing else to order
+    volatile uint32_t cal_done_seq_    = 0;   // poll task -> flight task: the window just closed.  Written before the give, read after the take
+    SensorCalWindow   cal_window_;            // poll-task private
+    SensorCalSession  cal_session_;           // flight-task private
+    float             cal_rotation_z_deg_ = 0.0f;  // flight-task private, captured by startCalibration()
+    uint32_t          cal_started_ms_ = 0;         // flight-task private: bound on a poll task that never answers
+    SensorCalSums     cal_sums_;              // written by the poll task while its window is open; read by the flight task only for the seq it accepted
+    SemaphoreHandle_t cal_done_sem_ = nullptr;   // created in begin(); given once per window
     uint8_t BMP585_CS;
     uint8_t BMP585_INT;
     uint16_t BMP585_UPDATE_RATE;
@@ -333,9 +374,18 @@ private:
     SemaphoreHandle_t iis2mdcDataSemaphore;
     SemaphoreHandle_t gnssDataSemaphore;
 
-    // Time-gated polling state for IIS2MDC (no DRDY pin yet).
-    uint32_t iis2mdc_last_sample_us = 0;
-    static constexpr uint32_t IIS2MDC_PERIOD_US = 10000;  // 100 Hz, matches default ODR
+    // Time-gated polling state for IIS2MDC (no DRDY pin in the poll path).
+    // #1111: attempt gate + stall back-off; see iis2mdc_poll_gate.h.
+    Iis2mdcPollGate iis2mdc_gate;
+    uint32_t iis2mdc_read_max_us = 0;   // worst single attempt (read or probe) since boot
+    // Last hard-iron offset programmed via setIIS2MDCHardIronOffset(), re-applied
+    // when the chip comes back from a stall (a brown-out resets OFFSET_X/Y/Z).
+    // Written by the app task, read by the poll task on recovery; a torn
+    // triple is harmless (the next cal apply rewrites all three).
+    bool    iis2mdc_offset_set = false;
+    int16_t iis2mdc_offset_cx = 0, iis2mdc_offset_cy = 0, iis2mdc_offset_cz = 0;
+    // Stall probe: WHO_AM_I, then the boot configuration (and the offset).
+    bool reviveIIS2MDC();
     TaskHandle_t pollIMUTaskHandle;
     TaskHandle_t pollGNSSTaskHandle = nullptr;
 

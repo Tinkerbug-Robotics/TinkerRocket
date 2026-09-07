@@ -65,24 +65,37 @@ void SensorCollectorSim::resetPollTimingSnapshot()
 // Calibration (no-op — sim data is synthetic, no real bias to correct)
 // ============================================================================
 
-bool SensorCollectorSim::calibrateGyro(float rotation_z_deg)
+bool SensorCollectorSim::startCalibration(float rotation_z_deg)
 {
     if (isSimActive())
     {
-        Serial.println("[SIM] calibrateGyro called — no-op in sim mode");
-        // Nothing measured and nothing changed; the caller re-saves what it
-        // already holds, exactly as before the verdict existed.
-        return true;
+        // Nothing to measure and nothing changes; the caller re-publishes
+        // the stored calibration, which is what the rocket keeps using.
+        Serial.println("[SIM] startCalibration refused — no-op in sim mode, stored calibration kept");
+        return false;
     }
     // Sim not active — delegate to real hardware
-    const bool ok = real_.calibrateGyro(rotation_z_deg);
-    // Copy results so FlightComputer can read them from the wrapper.  A
-    // rejected run leaves real_'s values as they were, so this is a no-op then.
-    hg_bias_x       = real_.hg_bias_x;
-    hg_bias_y       = real_.hg_bias_y;
-    hg_bias_z       = real_.hg_bias_z;
-    cal_gravity_mag  = real_.cal_gravity_mag;
-    return ok;
+    return real_.startCalibration(rotation_z_deg);
+}
+
+SensorCalPoll SensorCollectorSim::pollCalibration()
+{
+    const SensorCalPoll v = real_.pollCalibration();
+    if (v == SensorCalPoll::Committed)
+    {
+        // Copy results so FlightComputer can read them from the wrapper.  A
+        // rejected run leaves real_'s values as they were: nothing to copy.
+        hg_bias_x       = real_.hg_bias_x;
+        hg_bias_y       = real_.hg_bias_y;
+        hg_bias_z       = real_.hg_bias_z;
+        cal_gravity_mag = real_.cal_gravity_mag;
+    }
+    return v;
+}
+
+void SensorCollectorSim::cancelCalibration()
+{
+    real_.cancelCalibration();
 }
 
 bool SensorCollectorSim::setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz)
@@ -95,6 +108,11 @@ bool SensorCollectorSim::setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_
         return false;
     }
     return real_.setIIS2MDCHardIronOffset(cx, cy, cz);
+}
+
+void SensorCollectorSim::getIIS2MDCDebugSnapshot(IIS2MDCDebugSnapshot& snapshot_out) const
+{
+    real_.getIIS2MDCDebugSnapshot(snapshot_out);
 }
 
 // ============================================================================
