@@ -82,6 +82,10 @@ void FakeNandBackend::injectProgramFailOnce(uint32_t block, uint32_t page_in_blo
     program_fail_once_.insert({block, page_in_block});
 }
 
+void FakeNandBackend::clearReadErrors() {
+    read_error_persistent_.clear();
+}
+
 void FakeNandBackend::injectReadErrorPersistent(uint32_t block, uint32_t page_in_block) {
     read_error_persistent_.insert({block, page_in_block});
 }

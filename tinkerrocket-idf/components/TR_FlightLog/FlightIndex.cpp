@@ -104,8 +104,11 @@ void FlightIndex::clear() {
 FlightIndex::SnapshotInfo FlightIndex::inspect(TR_NandBackend& nand, uint32_t block) const {
     SnapshotInfo info;
     auto buf = allocSnapshotBuf();
-    if (!buf) return info;
-    if (!nand.readPage(block, 0, buf.get())) return info;
+    if (!buf) { info.read_failed = true; return info; }          // #1126: OOM
+    if (!nand.readPage(block, 0, buf.get())) {
+        info.read_failed = true;                                  // #1126
+        return info;
+    }
 
     MetadataHeader hdr;
     std::memcpy(&hdr, buf.get(), sizeof(hdr));
@@ -121,6 +124,7 @@ FlightIndex::SnapshotInfo FlightIndex::inspect(TR_NandBackend& nand, uint32_t bl
     for (size_t p = 1; p < pages_needed; ++p) {
         if (!nand.readPage(block, static_cast<uint32_t>(p),
                            buf.get() + p * page_size)) {
+            info.read_failed = true;                              // #1126
             return info;
         }
     }
@@ -172,7 +176,14 @@ Status FlightIndex::load(TR_NandBackend& nand,
     clear();
     last_sequence_ = 0;
 
-    if (!a.valid && !s.valid) return Status::Ok;  // fresh chip, empty index
+    if (!a.valid && !s.valid) {
+        // #1126: only a chip whose copies were both READ and found blank is a
+        // fresh chip. If either read failed, the index is unknown, not empty —
+        // reporting Ok here makes the boot path treat every stored flight as an
+        // orphan and merge them into one synthetic entry.
+        if (a.read_failed || s.read_failed) return Status::BackendFailed;
+        return Status::Ok;  // fresh chip, empty index
+    }
 
     uint32_t pick_block;
     if (a.valid && s.valid) {

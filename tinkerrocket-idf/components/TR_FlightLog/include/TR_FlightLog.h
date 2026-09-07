@@ -179,6 +179,13 @@ public:
 
     // --- Introspection / test surface ---
     bool          isInitialized() const { return initialized_; }
+
+    // #1127: true when begin()'s brownout-recovery scan failed. The stored
+    // flights stay listable, readable and DELETABLE — deleting is the remedy
+    // when the scan failed because the index was full — but prepareFlight()
+    // and writeFrame() refuse, because the orphaned range is unresolved and a
+    // new allocation could land on it.
+    bool          recoveryFailed() const { return recovery_failed_; }
     const Config& config() const        { return cfg_; }
     // #671: runtime geometry captured from the backend at begin(). Valid only
     // after begin(); before it these return the legacy figures. The flush
@@ -196,6 +203,7 @@ private:
     FlightIndex        index_         = {};
     Config             cfg_           = {};
     bool               initialized_   = false;
+    bool               recovery_failed_ = false;   // #1127
 
     uint32_t active_flight_id_    = 0;
     uint32_t active_start_block_  = 0;

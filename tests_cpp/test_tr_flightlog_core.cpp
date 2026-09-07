@@ -2613,3 +2613,184 @@ TEST(TRFlightLogConcurrency, FlushAndBleOpsAreSerialized) {
             << "unterminated filename at entry " << i;
     }
 }
+
+// ================================================================
+// #1126 / #1127 — a failure to READ the index must not look like a fresh
+// chip, and a failure to RECOVER must not take the whole surface offline.
+// ================================================================
+
+// #1126: inspect() returns the same default SnapshotInfo{valid=false} for five
+// different causes — alloc failure, readPage failure, bad magic, oversized
+// entry_count and CRC mismatch — and load() then reads "neither copy valid" as
+// "fresh chip, empty index" and returns Ok. On a populated chip a transient
+// read failure therefore presents as an empty index, and the caller proceeds to
+// treat every stored flight as unindexed.
+TEST(FlightIndexLoad, BackendReadFailureIsNotAFreshChip) {
+    FakeNandBackend nand;
+
+    // Populate and persist a real index.
+    {
+        FlightIndex idx;
+        ASSERT_EQ(idx.append(makeEntry(1, "flight_1.bin", 10, 2, 4096)), Status::Ok);
+        ASSERT_EQ(idx.append(makeEntry(2, "flight_2.bin", 12, 2, 4096)), Status::Ok);
+        ASSERT_EQ(idx.save(nand, META_A, META_B), Status::Ok);
+    }
+
+    // Both copies are physically present but unreadable.
+    nand.injectReadErrorPersistent(META_A, 0);
+    nand.injectReadErrorPersistent(META_B, 0);
+
+    FlightIndex idx2;
+    const Status st = idx2.load(nand, META_A, META_B);
+
+    // Ok here is the defect: it is indistinguishable from a genuinely blank
+    // chip, and every caller treats it as one.
+    EXPECT_NE(st, Status::Ok)
+        << "a read failure on both index copies must not report Ok";
+    EXPECT_EQ(st, Status::BackendFailed);
+    EXPECT_EQ(idx2.size(), 0u);
+}
+
+// A genuinely blank chip must still be Ok — the fix must not turn a fresh chip
+// into an error.
+TEST(FlightIndexLoad, TrulyBlankChipStillLoadsOk) {
+    FakeNandBackend nand;
+    FlightIndex idx;
+    EXPECT_EQ(idx.load(nand, META_A, META_B), Status::Ok);
+    EXPECT_EQ(idx.size(), 0u);
+}
+
+// A corrupt-but-readable snapshot is also not a backend failure: the bytes
+// arrived, they just did not parse. begin() tolerates CrcMismatch by design.
+TEST(FlightIndexLoad, CorruptSnapshotIsDistinguishedFromReadFailure) {
+    FakeNandBackend nand;
+    {
+        FlightIndex idx;
+        ASSERT_EQ(idx.append(makeEntry(1, "flight_1.bin", 10, 2, 4096)), Status::Ok);
+        ASSERT_EQ(idx.save(nand, META_A, META_B), Status::Ok);
+    }
+    // Corrupt the payload without touching readability: clear bits in the
+    // entry area so the CRC no longer matches (program only clears 1->0).
+    std::vector<uint8_t> page(NAND_PAGE_SIZE, 0xFF);
+    ASSERT_TRUE(nand.readPage(META_A, 0, page.data()));
+    page[sizeof(tr_flightlog::MetadataHeader) + 4] = 0x00;
+    ASSERT_TRUE(nand.programPage(META_A, 0, page.data()));
+
+    FlightIndex idx2;
+    const Status st = idx2.load(nand, META_A, META_B);
+    EXPECT_NE(st, Status::BackendFailed)
+        << "a parse/CRC failure is not a backend read failure";
+}
+
+// #1126, end to end: the damage is not the empty index, it is what the boot
+// path then does with it — brownout recovery sees every stored flight as an
+// orphan, merges the runs into one synthetic entry and saves that over both
+// index copies, after which the real flights are gone.
+TEST(TRFlightLogBrownout, IndexReadFailureDoesNotDestroyStoredFlights) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+
+    // Boot 1 — fly and finalize two flights.
+    {
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+        uint8_t payload[64];
+        std::memset(payload, 0xC3, sizeof(payload));
+        for (int f = 0; f < 2; ++f) {
+            uint32_t fid = 0;
+            ASSERT_EQ(fl.prepareFlight(fid), Status::Ok);
+            for (int i = 0; i < 40; ++i) {
+                ASSERT_EQ(fl.writeFrame(payload, sizeof(payload)), Status::Ok);
+            }
+            char name[32];
+            std::snprintf(name, sizeof(name), "flight_%d.bin", f);
+            ASSERT_EQ(fl.finalizeFlight(name, 40 * 64), Status::Ok);
+        }
+        ASSERT_EQ(fl.index().size(), 2u);
+    }
+
+    // Boot 2 — both index copies unreadable. begin() must refuse rather than
+    // proceed on an empty index.
+    {
+        TR_FlightLog fl2;
+        nand.injectReadErrorPersistent(META_A, 0);
+        nand.injectReadErrorPersistent(META_B, 0);
+        const Status st = fl2.begin(nand, TR_FlightLog::Config{}, &store);
+        EXPECT_NE(st, Status::Ok)
+            << "begin() must not proceed when the index could not be read";
+    }
+
+    // Boot 3 — the fault clears (contents intact; reset() would blank the chip).
+    nand.clearReadErrors();
+    {
+        TR_FlightLog fl3;
+        ASSERT_EQ(fl3.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+        EXPECT_EQ(fl3.index().size(), 2u)
+            << "a transient index read failure destroyed stored flights";
+    }
+}
+
+// #1127: begin() sets initialized_ = false on ANY non-Ok from
+// scanForBrownoutRecovery(). initialized_ gates listFlights, readFlightPage,
+// deleteFlight and renameFlight as well as the write path — so a single failed
+// recovery takes the stored flights offline AND removes the delete that would
+// free the space causing the failure. It repeats identically every boot.
+TEST(TRFlightLogBrownout, RecoveryFailureKeepsStoredFlightsManageable) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+
+    // Boot 1 — one finalized flight (goes in the index), then a second flight
+    // left unfinalized so the next boot has an orphan run to recover.
+    {
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+        uint8_t payload[64];
+        std::memset(payload, 0x5A, sizeof(payload));
+
+        uint32_t fid = 0;
+        ASSERT_EQ(fl.prepareFlight(fid), Status::Ok);
+        for (int i = 0; i < 40; ++i) {
+            ASSERT_EQ(fl.writeFrame(payload, sizeof(payload)), Status::Ok);
+        }
+        ASSERT_EQ(fl.finalizeFlight("keeper.bin", 40 * 64), Status::Ok);
+
+        ASSERT_EQ(fl.prepareFlight(fid), Status::Ok);
+        for (int i = 0; i < 40; ++i) {
+            ASSERT_EQ(fl.writeFrame(payload, sizeof(payload)), Status::Ok);
+        }
+        // No finalizeFlight — the brownout.
+    }
+
+    // Boot 2 — recovery finds the orphan, appends an entry, and fails to
+    // persist it. Whichever copy save() targets, the first program fails.
+    TR_FlightLog fl2;
+    nand.injectProgramFailOnce(META_A, 0);
+    nand.injectProgramFailOnce(META_B, 0);
+    const Status st = fl2.begin(nand, TR_FlightLog::Config{}, &store);
+    ASSERT_NE(st, Status::Ok) << "test precondition: recovery must have failed";
+
+    // The failure is real and must be reported — but it must not disarm the
+    // management surface. The operator has to be able to see the flight that
+    // is already on the chip, download it, and delete it to free space.
+    EXPECT_TRUE(fl2.isInitialized())
+        << "a failed recovery scan must not take the whole log surface offline";
+
+    FlightIndexEntry listed[8]{};
+    const size_t n = fl2.listFlights(listed, 8, 0, 8);
+    EXPECT_GE(n, 1u) << "stored flights must remain listable after a failed recovery";
+
+    EXPECT_EQ(fl2.deleteFlight("keeper.bin"), Status::Ok)
+        << "delete is the remedy for the index-full case that causes this; "
+           "gating it on the same flag makes the failure self-sustaining";
+
+    // The other half of the contract: the surface stays readable, but the
+    // orphaned range is unresolved, so no NEW flight may start. This is what
+    // keeps ocStorageHealth() red — the scorecard must not go green just
+    // because the log surface is initialized again.
+    EXPECT_TRUE(fl2.recoveryFailed());
+    uint32_t fid_after = 0;
+    EXPECT_EQ(fl2.prepareFlight(fid_after), Status::RecoveryPending)
+        << "a new flight must not be allocated over an unresolved orphan run";
+    uint8_t p2[16]{};
+    EXPECT_EQ(fl2.writeFrame(p2, sizeof(p2)), Status::RecoveryPending);
+}

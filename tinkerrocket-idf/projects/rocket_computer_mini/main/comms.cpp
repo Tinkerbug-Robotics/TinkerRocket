@@ -132,6 +132,11 @@ static SensorHealthState ocStorageHealth()
     // an inapplicable one — NA hides the row in the app's go/no-go.  See the
     // OC comment for the full history.
     if (!flightlog.isInitialized()) return SH_BAD;
+    // #1127: a failed recovery scan now LEAVES the log surface initialized so
+    // the stored flights can be downloaded and deleted — but no new flight can
+    // be logged this boot, which is exactly the silent loss the note above
+    // exists to surface. Keep it red.
+    if (flightlog.recoveryFailed()) return SH_BAD;
     TR_LogToFlashStats s = {};
     logger.getStats(s);
     const uint32_t free_blocks = flightlog.bitmap().countInState(tr_flightlog::BLOCK_FREE);
