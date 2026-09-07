@@ -414,10 +414,38 @@ void TR_ServoControl::controlAngle(float target_roll_deg,
                                    float kp_angle,
                                    float rate_cap_dps) {
     // ── Outer loop: angle error → rate command ──
-    // Wrap angle error to [-180, +180] degrees
+    // Wrap angle error to [-180, +180] degrees.
+    //
+    // #1115: this wrap must be TOTAL.  It used to be
+    //     while (angle_error >  180.0f) angle_error -= 360.0f;
+    //     while (angle_error < -180.0f) angle_error += 360.0f;
+    // which makes no progress at all once |angle_error| >= 2^33 (ulp exceeds
+    // 720, so the subtraction rounds straight back) or for ±inf, and burns
+    // ~278k iterations for a merely large 1e8.  This runs on the FC's
+    // highest-priority ~1 kHz flight task under a 5 s panic-on-expiry task
+    // WDT, so a single bad input rebooted the vehicle mid-flight.  BOTH
+    // inputs can supply one: target_roll_deg from an unvalidated roll-profile
+    // waypoint, and actual_roll_deg from an atan2f over a NaN quaternion.
+    //
+    // Non-finite → 0 error → zero rate command, i.e. the inner loop holds
+    // zero roll rate.  That is the same thing the controller does whenever
+    // the angle loop is not engaged, so a garbage attitude degrades to
+    // null-roll instead of driving the PID with a NaN.
+    //
+    // std::fmod is exact, so an error already in range is bit-preserved.  Kept in
+    // step with wrap180f() in TR_RocketComputerTypes/RollProfileGate.h, which
+    // is the same policy for the FC's profile target; this component is a
+    // generic servo library and deliberately does not depend on the rocket's
+    // wire types, so the guard is duplicated rather than shared.  Both copies
+    // are pinned by host tests (test_servo_control, test_rocket_computer_types).
     float angle_error = target_roll_deg - actual_roll_deg;
-    while (angle_error > 180.0f)  angle_error -= 360.0f;
-    while (angle_error < -180.0f) angle_error += 360.0f;
+    if (!std::isfinite(angle_error)) {
+        angle_error = 0.0f;
+    } else {
+        angle_error = std::fmod(angle_error, 360.0f);   // exact; (-360, +360)
+        if (angle_error >  180.0f) angle_error -= 360.0f;
+        if (angle_error < -180.0f) angle_error += 360.0f;
+    }
     float rate_cmd = kp_angle * angle_error;  // deg/s
 
     // Cap the outer-loop rate command. With a 180 deg wrapped error and

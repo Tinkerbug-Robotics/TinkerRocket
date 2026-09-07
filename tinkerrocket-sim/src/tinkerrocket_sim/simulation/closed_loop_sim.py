@@ -1023,18 +1023,34 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                             # the first waypoint; lerp the target along the
                             # shortest wrapped arc between waypoints (per-wp
                             # modes ignored); hold the last angle afterwards.
+                            # #1115 parity: TOTAL wrap, matching wrap180f() in
+                            # TR_RocketComputerTypes/RollProfileGate.h.  The
+                            # firmware's two while-loops stalled on a huge or
+                            # non-finite waypoint angle and wedged the flight
+                            # task; the loops here stall the same way (a double
+                            # stops progressing above ~2^62, and never moves for
+                            # inf).  math.fmod is exact, so an angle already in
+                            # range is unchanged, ±180 included.
                             def _wrap180(a):
-                                while a > 180.0: a -= 360.0
-                                while a < -180.0: a += 360.0
+                                a = float(a)
+                                if not math.isfinite(a):
+                                    return 0.0
+                                a = math.fmod(a, 360.0)
+                                if a > 180.0:
+                                    a -= 360.0
+                                elif a < -180.0:
+                                    a += 360.0
                                 return a
                             if t < _wps[0][0]:
                                 target_angle = 0.0
                                 seg_mode = "null_rate"
                             elif t >= _wps[-1][0]:
-                                target_angle = _wps[-1][1]
+                                # Wrapped like the interpolated branch, matching
+                                # the firmware's hold-last-angle exits (#1115).
+                                target_angle = _wrap180(_wps[-1][1])
                                 seg_mode = "angle"
                             else:
-                                target_angle = _wps[-1][1]
+                                target_angle = _wrap180(_wps[-1][1])
                                 seg_mode = "angle"
                                 for i in range(len(_wps) - 1):
                                     (t0w, a0w), (t1w, a1w) = _wps[i][:2], _wps[i + 1][:2]

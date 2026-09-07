@@ -29,6 +29,7 @@
 #include <TR_ControlMixer.h>
 #include <RocketComputerTypes.h>
 #include <GuidancePointGate.h>    // #435: pure cmd-28 acceptance gate (host-tested)
+#include <RollProfileGate.h>      // #1115: total wrap180f + roll-profile acceptance gate (host-tested)
 #include <TR_OTA_Receiver.h>      // FC-side OTA relay receiver (#8 Phase 4)
 #include <TR_OTA_Backend_esp.h>
 #include <esp_system.h>           // esp_restart after a verified relayed OTA
@@ -1402,13 +1403,6 @@ struct RollProfileQuery
     uint8_t mode;
 };
 
-static inline float wrap180f(float a)
-{
-    while (a > 180.0f)  a -= 360.0f;
-    while (a < -180.0f) a += 360.0f;
-    return a;
-}
-
 static RollProfileQuery roll_profile_query(float t_flight_s)
 {
     RollProfileQuery out{};
@@ -1426,10 +1420,13 @@ static RollProfileQuery roll_profile_query(float t_flight_s)
     {
         return out;
     }
-    // After last waypoint: hold last angle
+    // After last waypoint: hold last angle.  #1115: wrapped like the
+    // interpolated branch below, so EVERY exit of this query is a target in
+    // [-180, 180] and the logged / commanded value cannot depend on which
+    // branch produced it.
     if (t_flight_s >= roll_profile.waypoints[n - 1].time_s)
     {
-        out.angle_deg = roll_profile.waypoints[n - 1].angle_deg;
+        out.angle_deg = wrap180f(roll_profile.waypoints[n - 1].angle_deg);
         out.mode      = ROLL_SEG_ANGLE;
         return out;
     }
@@ -1451,7 +1448,7 @@ static RollProfileQuery roll_profile_query(float t_flight_s)
             return out;
         }
     }
-    out.angle_deg = roll_profile.waypoints[n - 1].angle_deg;
+    out.angle_deg = wrap180f(roll_profile.waypoints[n - 1].angle_deg);
     out.mode      = ROLL_SEG_ANGLE;
     return out;
 }
@@ -3947,10 +3944,29 @@ static void setup_fc()
         if (prof_len == sizeof(RollProfileData))
         {
             prefs.getBytes("prof", &roll_profile, sizeof(RollProfileData));
-            // Clamp num_waypoints to valid range
-            if (roll_profile.num_waypoints > MAX_ROLL_WAYPOINTS)
+            // #1115: belt-and-braces gate.  The wire handler already refuses an
+            // out-of-range profile, so the only way to arrive here out of range
+            // is a corrupt / stale NVS record (or one written by firmware from
+            // before that handler existed); fail SAFE to rate-only rather than
+            // fly it.  Same rationale as the guidance aim point in
+            // applyGuidanceConfig().  num_waypoints = 0 is the documented empty
+            // profile: the fins null roll rate for the whole flight, which is
+            // the behaviour of an unconfigured vehicle.  The record is left in
+            // NVS rather than erased so the operator can still read back what
+            // was stored, and so a firmware rollback does not silently lose it.
+            const RollProfileRc prof_rc = rollProfileRc(roll_profile);
+            if (prof_rc != ROLL_PROF_OK)
             {
-                roll_profile.num_waypoints = MAX_ROLL_WAYPOINTS;
+                ESP_LOGW(TAG, "NVS roll profile REJECTED (%s) — forcing rate-only",
+                              rollProfileRcName(prof_rc));
+                for (uint8_t i = 0; i < MAX_ROLL_WAYPOINTS &&
+                                    i < roll_profile.num_waypoints; ++i)
+                {
+                    ESP_LOGW(TAG, "  stored WP%d: t=%.1fs angle=%.1f°", i,
+                                  (double)roll_profile.waypoints[i].time_s,
+                                  (double)roll_profile.waypoints[i].angle_deg);
+                }
+                roll_profile = RollProfileData{};   // num_waypoints = 0
             }
             ESP_LOGI(TAG, "NVS roll profile: %d waypoints", roll_profile.num_waypoints);
             for (uint8_t i = 0; i < roll_profile.num_waypoints; ++i)
@@ -7329,24 +7345,56 @@ static void loop_fc()
                                     cfg_payload, sizeof(cfg_payload), cfg_len)
                     && cfg_len >= sizeof(RollProfileData))
                 {
-                    memcpy(&roll_profile, cfg_payload, sizeof(RollProfileData));
-                    // Clamp to valid range
-                    if (roll_profile.num_waypoints > MAX_ROLL_WAYPOINTS)
+                    // #1115: validate BEFORE adopting or persisting.  REJECT,
+                    // never clamp — a clamped profile flies a shape the
+                    // operator never drew and never sees, whereas a rejection
+                    // keeps the previous profile and names the failing rule in
+                    // the log.
+                    //
+                    // The config report is re-sent below so it carries what the
+                    // rocket actually holds rather than what was just offered.
+                    // Both apps' syncers ADOPT that report (rocket wins) rather
+                    // than re-pushing on a mismatch, so the refused waypoint is
+                    // replaced by the real one in the editor — but note they
+                    // adopt on ATTACH, not on every report, so an operator who
+                    // stays connected sees the correction on the next attach.
+                    // Adopt-not-repush is also why a rejection cannot turn into
+                    // a push loop between app and rocket.
+                    RollProfileData incoming;
+                    memcpy(&incoming, cfg_payload, sizeof(RollProfileData));
+                    const RollProfileRc prof_rc = rollProfileRc(incoming);
+                    if (prof_rc != ROLL_PROF_OK)
                     {
-                        roll_profile.num_waypoints = MAX_ROLL_WAYPOINTS;
+                        ESP_LOGW(TAG, "[ROLL PROF] REJECTED (%s) — keeping %d waypoints",
+                                      rollProfileRcName(prof_rc),
+                                      roll_profile.num_waypoints);
+                        for (uint8_t i = 0; i < MAX_ROLL_WAYPOINTS &&
+                                            i < incoming.num_waypoints; ++i)
+                        {
+                            ESP_LOGW(TAG, "  offered WP%d: t=%.1fs angle=%.1f°", i,
+                                          (double)incoming.waypoints[i].time_s,
+                                          (double)incoming.waypoints[i].angle_deg);
+                        }
+                        // Re-send the report so the app sees the profile that
+                        // is actually loaded, not the one it just offered.
+                        config_report_dirty = true; log_next_report_send = true;   // #915
                     }
-                    // Persist to NVS
-                    prefs.begin("rollp", false);
-                    prefs.putBytes("prof", &roll_profile, sizeof(RollProfileData));
-                    config_report_dirty = true; log_next_report_send = true;   // #915
-                    prefs.end();
-                    ESP_LOGI(TAG, "[ROLL PROF] Set %d waypoints (saved to NVS)",
-                                  roll_profile.num_waypoints);
-                    for (uint8_t i = 0; i < roll_profile.num_waypoints; ++i)
+                    else
                     {
-                        ESP_LOGI(TAG, "  WP%d: t=%.1fs angle=%.1f°", i,
-                                      (double)roll_profile.waypoints[i].time_s,
-                                      (double)roll_profile.waypoints[i].angle_deg);
+                        roll_profile = incoming;
+                        // Persist to NVS
+                        prefs.begin("rollp", false);
+                        prefs.putBytes("prof", &roll_profile, sizeof(RollProfileData));
+                        config_report_dirty = true; log_next_report_send = true;   // #915
+                        prefs.end();
+                        ESP_LOGI(TAG, "[ROLL PROF] Set %d waypoints (saved to NVS)",
+                                      roll_profile.num_waypoints);
+                        for (uint8_t i = 0; i < roll_profile.num_waypoints; ++i)
+                        {
+                            ESP_LOGI(TAG, "  WP%d: t=%.1fs angle=%.1f°", i,
+                                          (double)roll_profile.waypoints[i].time_s,
+                                          (double)roll_profile.waypoints[i].angle_deg);
+                        }
                     }
                 }
                 else
