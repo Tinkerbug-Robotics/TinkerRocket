@@ -104,7 +104,8 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     iis2mdc_data_ready = false;
     gnss_data_ready = false;
     gnss_sat_data_ready = false;
-    iis2mdc_last_sample_us = 0;
+    iis2mdc_gate.reset(time_us());   // seed from NOW, not 0 — see iis2mdc_poll_gate.h
+    iis2mdc_read_max_us = 0;
     bmp585_irq_pending_count = 0;
     mmc5983ma_irq_pending_count = 0;
     ism6_isr_fired = false;
@@ -930,29 +931,79 @@ void SensorCollector::pollIMUdata(void* parameter)
         }
 
         // === IIS2MDC — time-gated I2C poll at ODR (default 100 Hz) ===
-        // No DRDY pin yet; we throttle reads to IIS2MDC_PERIOD_US so we don't
-        // spam the I2C bus from the ~1 kHz polling task. BDU is on, so a
-        // partial read across an internal sample boundary returns the prior
-        // complete sample instead of tearing.
+        // No DRDY pin in the poll path; we throttle reads to the chip's ODR
+        // so we don't spam the I2C bus from the DRDY-paced (~2-4 kHz) IMU
+        // loop. BDU is on, so a partial read across an internal sample
+        // boundary returns the prior complete sample instead of tearing.
+        //
+        // #1111: the gate advances on EVERY attempt, not only a successful
+        // one.  It used to advance inside the success branch, so once the
+        // chip stopped answering the blocking read was re-issued on every
+        // DRDY wake — and this loop reads the ISM6 once per iteration, so
+        // each retry's transfer time (up to the driver's timeout on a wedged
+        // bus) came straight out of the IMU sample rate, with nothing marked
+        // unhealthy.  After STALL_FAILS consecutive failures the gate drops
+        // to a backed-off WHO_AM_I probe (reviveIIS2MDC), and the boot
+        // configuration is re-applied on the way back so a chip that browned
+        // out (CFG/OFFSET regs back at power-on defaults = idle mode) does
+        // not return "answering" but parked.
         if (self->iis2mdc_active)
         {
             const uint32_t iis2_now_us = time_us();
-            if ((int32_t)(iis2_now_us - self->iis2mdc_last_sample_us) >=
-                (int32_t)IIS2MDC_PERIOD_US)
+            if (self->iis2mdc_gate.due(iis2_now_us))
             {
-                IIS2MDC_RawData iis2_raw = {};
-                if (self->iis2mdc.readRawXYZ(&iis2_raw) == TR_IIS2MDC_OK)
+                self->iis2mdc_gate.markAttempt(iis2_now_us);
+                const uint32_t iis2_fails_before = self->iis2mdc_gate.consec_fails;
+
+                bool iis2_ok = false;
+                if (!self->iis2mdc_gate.stalled)
                 {
-                    if (xSemaphoreTake(self->iis2mdcDataSemaphore, 0) == pdTRUE)
+                    IIS2MDC_RawData iis2_raw = {};
+                    iis2_ok = (self->iis2mdc.readRawXYZ(&iis2_raw) == TR_IIS2MDC_OK);
+                    if (iis2_ok)
                     {
-                        self->iis2mdc_data.time_us = iis2_now_us;
-                        self->iis2mdc_data.mag_x = iis2_raw.x;
-                        self->iis2mdc_data.mag_y = iis2_raw.y;
-                        self->iis2mdc_data.mag_z = iis2_raw.z;
-                        self->iis2mdc_data_ready = true;
-                        xSemaphoreGive(self->iis2mdcDataSemaphore);
+                        if (xSemaphoreTake(self->iis2mdcDataSemaphore, 0) == pdTRUE)
+                        {
+                            self->iis2mdc_data.time_us = iis2_now_us;
+                            self->iis2mdc_data.mag_x = iis2_raw.x;
+                            self->iis2mdc_data.mag_y = iis2_raw.y;
+                            self->iis2mdc_data.mag_z = iis2_raw.z;
+                            self->iis2mdc_data_ready = true;
+                            xSemaphoreGive(self->iis2mdcDataSemaphore);
+                        }
                     }
-                    self->iis2mdc_last_sample_us = iis2_now_us;
+                }
+                else
+                {
+                    iis2_ok = self->reviveIIS2MDC();
+                }
+
+                const uint32_t iis2_elapsed = time_us() - iis2_now_us;
+                if (iis2_elapsed > self->iis2mdc_read_max_us)
+                {
+                    self->iis2mdc_read_max_us = iis2_elapsed;
+                }
+
+                switch (self->iis2mdc_gate.onResult(iis2_ok))
+                {
+                    case Iis2mdcPollGate::EV_STALLED:
+                        ESP_LOGW(SC_TAG, "IIS2MDC STALLED: %lu consecutive read failures "
+                                         "(last attempt %lu us) — probing at %lu ms, backing "
+                                         "off to %lu ms (#1111)",
+                                 (unsigned long)self->iis2mdc_gate.consec_fails,
+                                 (unsigned long)iis2_elapsed,
+                                 (unsigned long)(Iis2mdcPollGate::STALL_RETRY_MIN_US / 1000u),
+                                 (unsigned long)(Iis2mdcPollGate::STALL_RETRY_MAX_US / 1000u));
+                        break;
+                    case Iis2mdcPollGate::EV_RECOVERED:
+                        ESP_LOGI(SC_TAG, "IIS2MDC recovered (stall #%lu after %lu failed "
+                                         "attempts) — reconfigured 100 Hz continuous, BDU on%s",
+                                 (unsigned long)self->iis2mdc_gate.stall_events,
+                                 (unsigned long)iis2_fails_before,
+                                 self->iis2mdc_offset_set ? ", hard-iron offset re-applied" : "");
+                        break;
+                    default:
+                        break;
                 }
             }
         }
@@ -1102,7 +1153,44 @@ bool SensorCollector::getIIS2MDCData(IIS2MDCData& iis2mdc_out)
 bool SensorCollector::setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz)
 {
     if (!iis2mdc_active) return false;
+    // #1111: remember the offset before writing it — if the chip is stalled
+    // the write fails now, and reviveIIS2MDC() re-applies this on the way back.
+    iis2mdc_offset_cx = cx;
+    iis2mdc_offset_cy = cy;
+    iis2mdc_offset_cz = cz;
+    iis2mdc_offset_set = true;
     return iis2mdc.setHardIronOffset(cx, cy, cz) == TR_IIS2MDC_OK;
+}
+
+// #1111: stall probe, run from pollIMUdata at the gate's back-off cadence.
+// WHO_AM_I first (one byte — the cheapest possible bus touch); then the boot
+// configuration, because the likeliest reason a chip stopped answering is a
+// brown-out, and a brown-out leaves it at power-on defaults: idle mode, no
+// BDU, OFFSET regs zero — a chip that ACKs every read and never updates.
+// begin()'s soft-reset is deliberately not repeated: a chip that reset itself
+// is already clean, and one that merely lost bus arbitration keeps its state.
+// Only a fully re-applied configuration counts as recovered.
+bool SensorCollector::reviveIIS2MDC()
+{
+    if (!iis2mdc.isConnected()) return false;
+    if (iis2mdc.configure() != TR_IIS2MDC_OK) return false;
+    if (iis2mdc_offset_set &&
+        iis2mdc.setHardIronOffset(iis2mdc_offset_cx, iis2mdc_offset_cy, iis2mdc_offset_cz)
+            != TR_IIS2MDC_OK)
+    {
+        return false;
+    }
+    return true;
+}
+
+void SensorCollector::getIIS2MDCDebugSnapshot(IIS2MDCDebugSnapshot &snapshot_out) const
+{
+    snapshot_out.read_ok      = iis2mdc_gate.read_ok;
+    snapshot_out.read_fail    = iis2mdc_gate.read_fail;
+    snapshot_out.stall_events = iis2mdc_gate.stall_events;
+    snapshot_out.recoveries   = iis2mdc_gate.recoveries;
+    snapshot_out.read_max_us  = iis2mdc_read_max_us;
+    snapshot_out.stalled      = iis2mdc_active && iis2mdc_gate.stalled;
 }
 
 bool SensorCollector::getGNSSData(GNSSData& gnss_out)

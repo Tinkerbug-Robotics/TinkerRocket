@@ -110,6 +110,11 @@ bool SensorCollectorSim::setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_
     return real_.setIIS2MDCHardIronOffset(cx, cy, cz);
 }
 
+void SensorCollectorSim::getIIS2MDCDebugSnapshot(IIS2MDCDebugSnapshot& snapshot_out) const
+{
+    real_.getIIS2MDCDebugSnapshot(snapshot_out);
+}
+
 // ============================================================================
 // Sim Control
 // ============================================================================

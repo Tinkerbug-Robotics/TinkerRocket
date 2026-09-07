@@ -4399,9 +4399,22 @@ static void loop_fc()
             }
             sh = shSet(sh, SH_EKF_SHIFT, ekf_st);
 
-            // Mag — present (cal-residual refinement is a follow-up; amber-only).
-            sh = shSet(sh, SH_MAG_SHIFT,
-                       (have_iis2mdc_si || have_mmc_si) ? SH_OK : SH_NA);
+            // Mag — present + fresh (cal-residual refinement is a follow-up;
+            // amber-only).  #1111: have_iis2mdc_si latches on the first
+            // sample, so presence alone stayed OK for the rest of the flight
+            // after the chip stopped answering; a stalled or rail-less mag
+            // now reads DEGRADED once its last sample is 500 ms old (the
+            // baro's window; 50 missed samples at 100 Hz).  have_mmc_si is
+            // const false on this board — the compiler folds that branch.
+            SensorHealthState mag_st = SH_NA;
+            if (have_iis2mdc_si) {
+                const bool fresh = (uint32_t)(now_us_h - iis2mdc_latest_si.time_us) < 500000u;
+                mag_st = fresh ? SH_OK : SH_DEGRADED;
+            } else if (have_mmc_si) {
+                const bool fresh = (uint32_t)(now_us_h - mmc_latest_si.time_us) < 500000u;
+                mag_st = fresh ? SH_OK : SH_DEGRADED;
+            }
+            sh = shSet(sh, SH_MAG_SHIFT, mag_st);
 
             // GNSS — OK needs a 3D fix + enough sats (+ horizontal accuracy,
             // but only when that gate is enabled: 0 is a "disabled" sentinel).
@@ -4527,6 +4540,34 @@ static void loop_fc()
             dbg_iis2mdc_reads = 0;
             dbg_gnss_reads = 0;
             // (FC's [MMC DIAG] block dropped — part not fitted.)
+
+            // IIS2MDC poll health (#1111).  Quiet while healthy: printed only
+            // when a read failed this second, the chip is stalled, or a stall
+            // began/ended since the last print.  ok/fail are per-second
+            // deltas; stalls/rec are lifetime; worst is the longest single
+            // attempt (read or stall probe) since boot — how much of the IMU
+            // poll loop one failing mag transaction costs.
+            if (sensor_collector.isIIS2MDCActive())
+            {
+                static IIS2MDCDebugSnapshot prev_iis_snap = {};
+                IIS2MDCDebugSnapshot now_iis_snap;
+                sensor_collector.getIIS2MDCDebugSnapshot(now_iis_snap);
+                const uint32_t iis_fail_delta = now_iis_snap.read_fail - prev_iis_snap.read_fail;
+                if (iis_fail_delta != 0 || now_iis_snap.stalled ||
+                    now_iis_snap.stall_events != prev_iis_snap.stall_events ||
+                    now_iis_snap.recoveries   != prev_iis_snap.recoveries)
+                {
+                    ESP_LOGW(TAG, "[MAG DIAG] iis2mdc read ok/fail=%lu/%lu stalls=%lu rec=%lu "
+                                  "worst=%lu us%s",
+                                  (unsigned long)(now_iis_snap.read_ok - prev_iis_snap.read_ok),
+                                  (unsigned long)iis_fail_delta,
+                                  (unsigned long)now_iis_snap.stall_events,
+                                  (unsigned long)now_iis_snap.recoveries,
+                                  (unsigned long)now_iis_snap.read_max_us,
+                                  now_iis_snap.stalled ? " STALLED" : "");
+                }
+                prev_iis_snap = now_iis_snap;
+            }
         }
     }
 

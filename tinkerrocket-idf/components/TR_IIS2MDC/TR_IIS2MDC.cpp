@@ -1,6 +1,14 @@
 #include <TR_IIS2MDC.h>
 
-static constexpr uint32_t I2C_TIMEOUT_MS = 50;
+// Per-transfer timeout.  The IDF-v6 i2c_master_* API takes MILLISECONDS, not
+// ticks (#297) — the old pdMS_TO_TICKS(50) only read as 50 ms because the tick
+// is 1 kHz.  The longest transfer here is the 6-byte OUT burst: ~0.25 ms at
+// 400 kHz.  10 ms is a 40x margin that still covers the mini's wait for the
+// bus mutex behind an INA230 transaction, and it caps what one failed attempt
+// can cost the IMU poll loop (#1111): on a wedged peripheral the driver waits
+// this long for a completion interrupt, and after a NACK it busy-waits up to
+// this long for the bus to go idle.
+static constexpr uint32_t I2C_TIMEOUT_MS = 10;
 
 // CFG_REG_A bit positions
 static constexpr uint8_t CFG_A_COMP_TEMP_EN = (1U << 7);
@@ -181,14 +189,14 @@ TR_IIS2MDCStatus TR_IIS2MDC::setHardIronOffset(int16_t cx, int16_t cy, int16_t c
 TR_IIS2MDCStatus TR_IIS2MDC::writeRegister(uint8_t reg, uint8_t value)
 {
     uint8_t buf[2] = { reg, value };
-    esp_err_t err = i2c_master_transmit(_dev, buf, 2, pdMS_TO_TICKS(I2C_TIMEOUT_MS));
+    esp_err_t err = i2c_master_transmit(_dev, buf, 2, I2C_TIMEOUT_MS);
     return (err == ESP_OK) ? TR_IIS2MDC_OK : TR_IIS2MDC_ERROR;
 }
 
 TR_IIS2MDCStatus TR_IIS2MDC::readRegister(uint8_t reg, uint8_t *value)
 {
     esp_err_t err = i2c_master_transmit_receive(_dev, &reg, 1, value, 1,
-                                                 pdMS_TO_TICKS(I2C_TIMEOUT_MS));
+                                                 I2C_TIMEOUT_MS);
     return (err == ESP_OK) ? TR_IIS2MDC_OK : TR_IIS2MDC_ERROR;
 }
 
@@ -196,6 +204,6 @@ TR_IIS2MDCStatus TR_IIS2MDC::readRegisters(uint8_t reg, uint8_t *buf, size_t len
 {
     // IIS2MDC auto-increments the sub-address on multi-byte reads (datasheet 6.1.1).
     esp_err_t err = i2c_master_transmit_receive(_dev, &reg, 1, buf, len,
-                                                 pdMS_TO_TICKS(I2C_TIMEOUT_MS));
+                                                 I2C_TIMEOUT_MS);
     return (err == ESP_OK) ? TR_IIS2MDC_OK : TR_IIS2MDC_ERROR;
 }
