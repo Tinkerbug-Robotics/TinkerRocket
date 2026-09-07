@@ -52,6 +52,11 @@ public:
     // Make readPage() at (block, page) return false every time.
     void injectReadErrorPersistent(uint32_t block, uint32_t page_in_block);
 
+    // Clear only the injected read errors, leaving stored contents and bad
+    // blocks intact — models a transient fault that goes away, which reset()
+    // cannot express because it blanks the chip.
+    void clearReadErrors();
+
     // Inspect raw storage (for tests that need to check what was actually written).
     const uint8_t* peekPage(uint32_t block, uint32_t page_in_block) const;
 

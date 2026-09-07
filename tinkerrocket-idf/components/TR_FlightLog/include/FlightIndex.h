@@ -45,7 +45,11 @@ public:
     FlightIndex() = default;
 
     // Pull the freshest valid snapshot from the backend. If neither copy is
-    // valid (fresh chip), leaves the index empty and returns Ok.
+    // valid because both are genuinely blank (fresh chip), leaves the index
+    // empty and returns Ok. If either copy could not be READ, returns
+    // BackendFailed rather than an empty index (#1126) — the caller must not
+    // mistake an unreadable index for an empty one and treat every stored
+    // flight as unindexed.
     Status load(TR_NandBackend& nand, uint32_t block_active, uint32_t block_shadow);
 
     // Persist to the older of the two copies; increments the sequence counter.
@@ -75,6 +79,11 @@ private:
     // and its CRC matches; otherwise returns false with out_valid=false.
     struct SnapshotInfo {
         bool     valid = false;
+        // #1126: set when the copy could not be READ (allocation or backend
+        // failure), as opposed to being read successfully and rejected (blank,
+        // bad magic, oversized entry_count, CRC mismatch). The difference
+        // matters: "unreadable" must never be reported as "fresh chip".
+        bool     read_failed = false;
         uint32_t sequence = 0;
         uint32_t entry_count = 0;
     };

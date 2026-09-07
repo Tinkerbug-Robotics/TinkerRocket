@@ -175,9 +175,18 @@ Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
     // short. Safe to run every boot — a no-op when nothing is orphaned.
     Status recov_st = scanForBrownoutRecovery();
     if (recov_st != Status::Ok) {
-        initialized_ = false;
+        // #1127: report the failure, but do NOT un-initialise. initialized_
+        // gates listFlights/readFlightPage/deleteFlight/renameFlight as well
+        // as the write path, so clearing it took the stored flights offline
+        // AND removed the delete that frees the space causing an index-full
+        // failure — self-sustaining across every subsequent boot, recoverable
+        // only by a reflash. The write path is gated on recovery_failed_
+        // instead, which is the half that is genuinely unsafe: the orphaned
+        // range is unresolved, so a new allocation could land on it.
+        recovery_failed_ = true;
         return recov_st;
     }
+    recovery_failed_ = false;
     return Status::Ok;
 }
 
@@ -492,6 +501,7 @@ Status TR_FlightLog::prepareFlight(uint32_t& flight_id_out) {
 
 Status TR_FlightLog::prepareFlightLocked(uint32_t& flight_id_out) {
     if (!initialized_) return Status::NotInitialized;
+    if (recovery_failed_) return Status::RecoveryPending;   // #1127
     if (flight_active_)  return Status::Error;  // already flying — never evict an active flight
 
     // #315: rolling-buffer auto-eviction. Before picking a range, reclaim space
@@ -573,6 +583,9 @@ Status TR_FlightLog::writeFrame(const uint8_t* payload, size_t payload_len) {
     if (lk_dt > wf_lock_wait_max_us_) wf_lock_wait_max_us_ = lk_dt;
     wf_lock_wait_sum_us_ = wf_lock_wait_sum_us_ + lk_dt;
     if (!initialized_)   return Status::NotInitialized;
+    // #1127: defence in depth — prepareFlight() already refuses while a
+    // recovery is pending, so flight_active_ cannot be set in this state.
+    if (recovery_failed_) return Status::RecoveryPending;
     if (!flight_active_) return Status::Error;
     if (payload == nullptr && payload_len != 0) return Status::OutOfRange;
     if (payload_len > payloadPerPage()) return Status::OutOfRange;

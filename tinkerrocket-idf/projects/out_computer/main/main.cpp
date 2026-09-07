@@ -201,6 +201,11 @@ static SensorHealthState ocStorageHealth()
     // so NA is never legitimate once boot completes — report BAD and let the
     // scorecard go red.
     if (!flightlog.isInitialized()) return SH_BAD;
+    // #1127: a failed recovery scan now LEAVES the log surface initialized so
+    // the stored flights can be downloaded and deleted — but no new flight can
+    // be logged this boot, which is exactly the silent loss the note above
+    // exists to surface. Keep it red.
+    if (flightlog.recoveryFailed()) return SH_BAD;
     TR_LogToFlashStats s = {};
     logger.getStats(s);
     const uint32_t free_blocks = flightlog.bitmap().countInState(tr_flightlog::BLOCK_FREE);
@@ -7382,9 +7387,27 @@ void initPeripherals()
             // is reachable), but flight logging is DEAD this boot — every frame
             // will be dropped. ocStorageHealth() reports SH_BAD for this state
             // so the pre-launch scorecard goes red instead of grey N/A.
-            ESP_LOGE("FLIGHTLOG", "begin failed: %s — flight logging DEAD this "
-                     "boot (all frames will drop); storage health = BAD",
-                     tr_flightlog::to_string(st));
+            //
+            // #1127: a failed brownout-recovery scan is the one begin() failure
+            // that leaves the stored flights reachable — the index loaded, only
+            // the orphan scan failed — so say so. Downloading and deleting a
+            // flight is exactly how an operator clears an index-full failure,
+            // and the old wording told them the opposite.
+            if (flightlog.recoveryFailed() && flightlog.isInitialized())
+            {
+                ESP_LOGE("FLIGHTLOG", "begin failed: %s — recovery scan failed, "
+                         "so NO NEW FLIGHT can be logged this boot; storage "
+                         "health = BAD. The %zu flight(s) already on the chip "
+                         "are still listable, downloadable and deletable — "
+                         "delete one to clear an index-full failure",
+                         tr_flightlog::to_string(st), flightlog.index().size());
+            }
+            else
+            {
+                ESP_LOGE("FLIGHTLOG", "begin failed: %s — flight logging DEAD this "
+                         "boot (all frames will drop); storage health = BAD",
+                         tr_flightlog::to_string(st));
+            }
         }
     }
 

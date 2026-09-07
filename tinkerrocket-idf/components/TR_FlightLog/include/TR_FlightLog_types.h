@@ -64,6 +64,9 @@ enum class Status : uint8_t {
     NotInitialized,
     BackendFailed,    // underlying NAND op failed
     PartialFlight,    // recovery: last flight had no finalized index entry
+    RecoveryPending,  // #1127: brownout recovery failed; stored flights are
+                      // readable and deletable, but no NEW flight may start
+                      // until the orphaned range is resolved
 };
 
 constexpr const char* to_string(Status s) {
@@ -77,6 +80,7 @@ constexpr const char* to_string(Status s) {
         case Status::NotInitialized:  return "NotInitialized";
         case Status::BackendFailed:   return "BackendFailed";
         case Status::PartialFlight:   return "PartialFlight";
+        case Status::RecoveryPending: return "RecoveryPending";
     }
     return "?";
 }
