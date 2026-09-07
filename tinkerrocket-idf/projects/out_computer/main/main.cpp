@@ -80,6 +80,7 @@ static inline std::string itos(int v)
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
 #include <RocketComputerTypes.h>
+#include <RollProfileGate.h>    // #1115: shared roll-profile acceptance gate (host-tested)
 #include <TR_INA230.h>
 #include <TR_FlightLog.h>
 #include <SnapshotTailScan.h>   // #846: boot re-seed of the snapshot cache
@@ -9694,9 +9695,37 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(RollProfileData))
             {
-                                setPendingCommandWithConfig(ROLL_PROFILE_PENDING, ROLL_PROFILE_MSG, payload, sizeof(RollProfileData));
-                ESP_LOGI("BLE", "Roll profile (%d waypoints) queued for RocketComputer",
-                              payload[0]);
+                // #1115: refuse an out-of-range profile HERE, so a garbage
+                // waypoint never reaches the FC's NVS at all.  The FC gates it
+                // again on both of its own acceptance points — this is not
+                // redundancy for its own sake: the OC is the only hop that can
+                // refuse the frame while the operator is still standing at the
+                // pad with the app open, and it keeps the whole exchange out
+                // of the flight task.  Neither app clamps the free-text angle
+                // or time field (iOS `Float($0.angle) ?? 0`, Android
+                // `f32(w.angleDeg)`), so a ten-digit typo or a pasted "inf"
+                // arrives verbatim.  REJECT, never clamp — see RollProfileGate.h.
+                RollProfileData incoming;
+                memcpy(&incoming, payload, sizeof(RollProfileData));
+                const RollProfileRc prof_rc = rollProfileRc(incoming);
+                if (prof_rc != ROLL_PROF_OK)
+                {
+                    ESP_LOGW("BLE", "Roll profile REJECTED (%s) — not relayed to RocketComputer",
+                                  rollProfileRcName(prof_rc));
+                    for (uint8_t i = 0; i < MAX_ROLL_WAYPOINTS &&
+                                        i < incoming.num_waypoints; ++i)
+                    {
+                        ESP_LOGW("BLE", "  offered WP%d: t=%.1fs angle=%.1f",
+                                      i, (double)incoming.waypoints[i].time_s,
+                                      (double)incoming.waypoints[i].angle_deg);
+                    }
+                }
+                else
+                {
+                    setPendingCommandWithConfig(ROLL_PROFILE_PENDING, ROLL_PROFILE_MSG, payload, sizeof(RollProfileData));
+                    ESP_LOGI("BLE", "Roll profile (%d waypoints) queued for RocketComputer",
+                                  payload[0]);
+                }
             }
             else
             {

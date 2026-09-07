@@ -14,6 +14,8 @@
 // mock clock, advanced explicitly per tick.
 
 #include <gtest/gtest.h>
+#include <cmath>
+#include <limits>
 #include <Arduino.h>  // host shim: setMockMicros()
 #include "TR_ServoControl_ledc_mult.h"
 
@@ -183,6 +185,75 @@ TEST_F(ServoControlTest, RollReverseMaskZeroDrivesAllServosAlike) {
     for (int i = 0; i < 4; ++i) EXPECT_EQ(servo.getServoPulseUs(i), expected);
     EXPECT_EQ(servo.getRollCmdUs(), expected);
     EXPECT_EQ(servo.getRollReverseMask(), 0);
+}
+
+
+
+// ---------- #1115: the angle-error wrap must be TOTAL ----------
+//
+// controlAngle()'s wrap used to be two unbounded while-loops.  `a -= 360.0f`
+// makes no progress once |a| >= 2^33 (ulp exceeds 720, so the subtraction
+// rounds straight back), and none at all for ±inf.  This runs on the FC's
+// highest-priority ~1 kHz flight task under a 5 s panic-on-expiry task WDT,
+// so a single bad input wedged the vehicle and rebooted it mid-flight —
+// then again after every snapshot recovery, for the rest of the flight.
+//
+// BOTH arguments can supply one.  target_roll_deg came from an unvalidated
+// roll-profile waypoint (fixed at its own acceptance points, RollProfileGate.h);
+// actual_roll_deg is an atan2f over the EKF quaternion, which no gate here
+// owns.  So this component must be safe on its own, and these tests pin that
+// independently of the profile gate.
+//
+// Termination is pinned the only way gtest can: a regression does not fail
+// these tests, it hangs the suite.
+
+TEST_F(ServoControlTest, ControlAngleTerminatesOnAHugeTarget) {
+    // Every value made zero progress in the old loop (1e8 merely took ~278k
+    // iterations inside a 1 ms tick budget).
+    const float huge[] = {1e8f, 8.59e9f, 1e10f, 1e30f, 3.4e38f,
+                          -1e8f, -8.59e9f, -1e10f, -1e30f, -3.4e38f};
+    for (float t : huge) {
+        tick();
+        servo.controlAngle(t, 0.0f, 0.0f, 50.0f, 2.0f, 60.0f);
+        const float cmd = servo.getRollCmdDeg();
+        EXPECT_TRUE(std::isfinite(cmd)) << t;
+        EXPECT_GE(cmd, MIN_CMD) << t;
+        EXPECT_LE(cmd, MAX_CMD) << t;
+    }
+}
+
+TEST_F(ServoControlTest, ControlAngleNonFiniteTargetCommandsNullRate) {
+    // A non-finite error degrades to zero error -> zero rate command, which is
+    // exactly what the controller does when the angle loop is not engaged.
+    // The alternative — the old NaN path, which never hung — drove the inner
+    // PID with a NaN setpoint for the whole flight.
+    const float inf = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    for (float t : {inf, -inf, nan}) {
+        tick();
+        servo.controlAngle(t, 0.0f, /*roll_rate_dps=*/0.0f, 50.0f, 2.0f, 60.0f);
+        EXPECT_TRUE(std::isfinite(servo.getRollCmdDeg()));
+        EXPECT_NEAR(servo.getRollCmdDeg(), 0.0f, 1e-4f);
+    }
+}
+
+TEST_F(ServoControlTest, ControlAngleNonFiniteMeasuredRollCommandsNullRate) {
+    // The other input: actual_roll_deg is atan2f over the EKF quaternion, so a
+    // NaN attitude reaches this function with a perfectly valid target.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    tick();
+    servo.controlAngle(45.0f, nan, 0.0f, 50.0f, 2.0f, 60.0f);
+    EXPECT_TRUE(std::isfinite(servo.getRollCmdDeg()));
+    EXPECT_NEAR(servo.getRollCmdDeg(), 0.0f, 1e-4f);
+}
+
+TEST_F(ServoControlTest, ControlAngleStillWrapsLargeButOrdinaryErrors) {
+    // The wrap has to keep MEANING, not just terminate: a target the profile
+    // gate accepts at its bound (±720) must still fly the shortest arc.
+    // 710 - 0 = 710 -> -10, so rate_cmd = 2 * -10 = -20 -> output +20.
+    tick();
+    servo.controlAngle(710.0f, 0.0f, 0.0f, 50.0f, 2.0f, 60.0f);
+    EXPECT_NEAR(servo.getRollCmdDeg(), 20.0f, 1e-3f);
 }
 
 }  // namespace
