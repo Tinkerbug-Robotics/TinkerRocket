@@ -248,11 +248,15 @@ would suppress `PRELAUNCH → INFLIGHT` and pyro servicing for an entire flight 
 drogue, no main, ballistic return. Launch detection now clears any active test as a
 failsafe (#363). A bench false positive merely drops you back into `READY`, which is safe.
 
-**The EKF decimation gate must be computed before GNSS is consumed.** The filter runs
-every other pass, and marking a fix consumed on an off tick loses it — the acceptance
-gate goes false before any EKF tick sees the fix, and the else-branch then injects a
-zeroed measurement with a never-processed timestamp, corrupting position, velocity, and
-heading aiding (#367).
+**The EKF is handed the last accepted GNSS fix, unchanged, on every tick.** The filter
+fuses each fix's timestamp once and skips a repeat, so which fixes have been consumed is
+tracked in one place: the filter. The loop used to keep its own consumed markers and,
+once they said seen, pass an all-zero position and velocity under the marker's
+timestamp. Whenever the two disagreed the filter fused a lat=0/lon=0/vel=0 fix: first on
+decimation-off ticks (#367), then on ticks where a frozen IMU timestamp skips the whole
+EKF update before its GNSS block (#1107). The feed lives in `EkfGnssFeed.h` in the EKF
+component and the mini shares it. Never hand the filter a placeholder: a real fix, or
+the previous one again.
 
 **`sdkconfig` is generated and untracked, and it overrides `sdkconfig.defaults`.** Same
 trap as the other firmwares: editing the defaults file does nothing while a stale
