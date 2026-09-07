@@ -151,9 +151,9 @@ constexpr uint16_t LAUNCH_ACCEL_FALLBACK_COUNT = 250;    // sustained samples (~
 // stale): latches on 28 of 31, a median 830 ms and at most 1991 ms after
 // ignition; the three misses are logs that end before the vehicle reaches
 // 15 m.  Launched from READY, with the datum re-seeding through
-// GroundRefFreeze instead of frozen at PRELAUNCH, it is 845 ms median, the
-// datum is held ~65 ms after ignition, and the pad reference it flies with
-// is within 0.3 m of the pre-launch mean.  The two logged no-boost ground
+// GroundRefFreeze instead of frozen at PRELAUNCH, it is 848 ms median, the
+// datum is held ~125 ms after ignition, and the pad reference it flies with
+// is within 1 m of the pre-launch mean.  The two logged no-boost ground
 // sessions never latch.
 constexpr float    LAUNCH_BARO_RATE_MPS = 10.0f;  // filtered climb rate, every tick of the run
 constexpr float    LAUNCH_BARO_ALT_M    = 15.0f;  // filtered altitude, every tick of the run

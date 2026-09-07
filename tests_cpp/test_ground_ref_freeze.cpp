@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 #include <cmath>
-#include <random>
 #include "GroundRefFreeze.h"
 
 // #1108: may the barometric ground reference follow the current sample?  The
@@ -15,6 +14,18 @@ namespace {
 constexpr float    P0     = 101325.0f;
 constexpr float    PA_PER_M = 12.0f;        // near sea level
 constexpr uint32_t BARO_DT_US = 4167;       // ~240 Hz BMP585
+
+// Reproducible Gaussian-ish noise: xorshift32 uniforms summed twelve at a time
+// (Irwin-Hall), additions and one multiply only, so the sequence is bit-
+// identical on every platform.  std::normal_distribution is NOT: libstdc++ and
+// libc++ draw different sequences for the same seed, which is how this test
+// passed on a Mac and failed in CI.
+struct Noise {
+    uint32_t x;
+    explicit Noise(uint32_t seed) : x(seed) {}
+    float uniform() { x ^= x << 13; x ^= x >> 17; x ^= x << 5; return (float)(x >> 8) * (1.0f / 16777216.0f); }
+    float gaussian() { float s = -6.0f; for (int i = 0; i < 12; ++i) s += uniform(); return s; }
+};
 
 // Run a pressure-vs-time function through the helper at the baro rate and
 // return the first FreezeEdge time (or -1) and the last verdict.
@@ -53,15 +64,17 @@ TEST(GroundRefFreeze, CarryAtOneMetrePerSecondTracks) {
 }
 
 // Sensor noise: 3 Pa one-sigma on a still pad (BMP585 is ~2) for ten minutes
-// must never hold.  With the ends of the window averaged the rate is ~10 Pa/s
-// one-sigma here, six sigma under the bar; a single-sample rate at a 40 Pa/s
-// bar false-held every few seconds when this was first written.
+// must never hold.  With the ends of the window averaged the rate is ~12 Pa/s
+// one-sigma here, so the 80 Pa/s bar is ~7 sigma; at 60 Pa/s CI caught one
+// hold in ten minutes, and a single-sample rate at a 40 Pa/s bar false-held
+// every few seconds.  Two seeds, so the margin is not a property of one draw.
 TEST(GroundRefFreeze, StillPadWithNoiseNeverHolds) {
-    State st;
-    std::mt19937 rng(7);
-    std::normal_distribution<float> noise(0.0f, 3.0f);
-    const DriveResult r = drive(st, [&](uint32_t) { return P0 + noise(rng); }, 600u * 1000000u);
-    EXPECT_EQ(r.freezes, 0) << "first at t=" << r.first_freeze_us;
+    for (uint32_t seed : {7u, 20260907u}) {
+        State st;
+        Noise noise(seed);
+        const DriveResult r = drive(st, [&](uint32_t) { return P0 + 3.0f * noise.gaussian(); }, 600u * 1000000u);
+        EXPECT_EQ(r.freezes, 0) << "seed " << seed << ": first at t=" << r.first_freeze_us;
+    }
 }
 
 // A launch: 3 g net from a standing start.  The datum must be held within the
@@ -78,7 +91,7 @@ TEST(GroundRefFreeze, LaunchHoldsEarlyAndRollsBackToThePad) {
     const DriveResult r = drive(st, climb, 2000000u, 1000000u);
     ASSERT_GE(r.first_freeze_us, 0);
     const float t_hold_s = (r.first_freeze_us - 1000000) * 1e-6f;
-    EXPECT_LT(t_hold_s, 0.5f) << "held at +" << t_hold_s << " s";
+    EXPECT_LT(t_hold_s, 0.6f) << "held at +" << t_hold_s << " s";
     EXPECT_NEAR(r.rollback, P0, 1.5f * PA_PER_M) << "rollback must be the pad, within ~1.5 m";
     EXPECT_EQ(r.last, Verdict::Frozen) << "still climbing, still held";
 }

@@ -34,12 +34,16 @@
 // This is not a launch detector.  It answers "may the datum move right now",
 // nothing more; the launch decision stays in TR_KinematicChecks.  The rate is
 // taken between the mean of the three oldest and the three newest entries in
-// the window, not between two single samples: BMP585 samples are ~2 Pa noisy,
-// which is ~11 Pa/s one-sigma across a 250 ms window sample-to-sample and
-// ~6.5 Pa/s with the averaging, so the 60 Pa/s bar is ~9 sigma from a still
-// pad (a single-sample 40 Pa/s bar false-held every few seconds on the host
-// test).  60 Pa/s is ~5 m/s of climb: a 2 g-net launch crosses it about
-// 350 ms after ignition, a hand-carried airframe never does.
+// the window, not between two single samples.  Sizing against noise: BMP585
+// samples are ~2 Pa noisy; the host test uses 3 Pa.  Averaging three entries
+// at each end also shortens the span between the two means to ~0.2 s, so the
+// rate is ~12 Pa/s one-sigma at 3 Pa -- averaging more does not help, the
+// span shrinks as fast as the noise does.  The 80 Pa/s bar is therefore
+// ~7 sigma: a still pad never trips it (at 60 Pa/s, ~5 sigma, CI caught one
+// false hold in ten simulated minutes; a single-sample 40 Pa/s bar false-held
+// every few seconds).  80 Pa/s is ~6.7 m/s of climb: a 2 g-net launch crosses
+// it about 450 ms after ignition and the rollback covers that; a hand-carried
+// airframe never does.
 //
 // Pure and host-tested (tests_cpp/test_ground_ref_freeze.cpp); the FC and the
 // mini share it.
@@ -49,7 +53,7 @@
 
 namespace GroundRefFreeze {
 
-constexpr float    FREEZE_PA_S = 60.0f;    // ~5 m/s of climb near sea level
+constexpr float    FREEZE_PA_S = 80.0f;    // ~6.7 m/s of climb near sea level
 constexpr uint32_t WINDOW_US   = 250000u;  // rate is measured over this span
 constexpr uint32_t SPACING_US  = 25000u;   // history entries at least this far apart
 constexpr int      HISTORY     = 12;       // 12 x 25 ms > WINDOW_US
