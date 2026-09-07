@@ -950,6 +950,20 @@ target_include_directories(test_flight_token_policy PRIVATE
 target_link_libraries(test_flight_token_policy GTest::gtest_main)
 gtest_discover_tests(test_flight_token_policy)
 
+# ---------- test_inflight_refusal_policy (#1162) ----------
+# The INFLIGHT hold behind the OC's cmd-8 power-off and self-OTA veto: a live
+# FC saying INFLIGHT always refuses, a silent one refuses until the FC's own
+# MAX_FLIGHT_TIME has elapsed since the OC first saw INFLIGHT. The load-bearing
+# rows are the silent ones -- the 3 s freshness term this replaces opened the
+# gate during an FC reboot. Pure header in the OC project.
+add_executable(test_inflight_refusal_policy test_inflight_refusal_policy.cpp)
+target_include_directories(test_inflight_refusal_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_inflight_refusal_policy GTest::gtest_main)
+gtest_discover_tests(test_inflight_refusal_policy)
+
 # ---------- test_flush_iter_ledger (#510) ----------
 # Host-side test for the flush-task per-iteration accounting: section sums,
 # clamped unaccounted/drain-other arithmetic, and the WARN/INFO classification
