@@ -43,6 +43,7 @@ FLIGHT_SECTIONS = [
     'id="globe"',
     'id="rocket_state"',
     'id="power"',
+    'id="vibration"',
     'id="deployment"',
     'id="barometer"',
     'id="parser_stats"',

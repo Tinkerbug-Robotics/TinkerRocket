@@ -71,6 +71,7 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         roll,
         apogee,
         sample_rates,
+        vibration,
         stability,
         health,
         power,
@@ -116,6 +117,10 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         # a sensor that logged short makes every number above it thinner than
         # it looks, so it belongs where the numbers are read.
         ("sample_rates",      sample_rates.analyze,      LEVEL_FLIGHT),
+        # What the IMU was measuring besides the vehicle: the motor, the mounts,
+        # and anything loose. Before health because a railed gyro or an
+        # impact-like boost is a health finding the verdicts do not make.
+        ("vibration",         vibration.analyze,         LEVEL_FLIGHT),
         ("health",            health.analyze,            LEVEL_FLIGHT),
         # The trace behind the battery verdict, and the record's ending: whether
         # the pack was drawn down, sagged, chattered, or was simply cut.

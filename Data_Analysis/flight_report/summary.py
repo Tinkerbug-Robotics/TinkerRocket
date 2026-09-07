@@ -202,4 +202,13 @@ def compute_summary(flight) -> list[dict[str, Any]]:
     if pack is not None:
         cells.append(_cell("Pack minimum", pack["v_min"], "V", 2, pack["hint"]))
 
+    # --- Boost vibration -----------------------------------------------------
+    # Same lazy import, same reason. The number is the longitudinal RMS above
+    # 100 Hz under thrust: the motor's contribution, which is what a flyer
+    # comparing two motors or two mounts wants first.
+    from .modules.vibration import boost_summary
+    vib = boost_summary(flight)
+    if vib is not None:
+        cells.append(_cell("Boost vibration", vib["rms_hp_x"], "m/s²", 1, vib["hint"]))
+
     return cells
