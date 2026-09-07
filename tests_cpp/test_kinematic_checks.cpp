@@ -789,9 +789,14 @@ TEST_F(KinematicChecksTest, Landing_RollRate25dps_DoesNotTrigger) {
     EXPECT_FALSE(kc.alt_landed_flag);
 }
 
+// The fast-path tests below set apogee by hand.  Since #1103 the impact gate
+// also demands that the barometer has SEEN the flight (max_altitude > 15 m),
+// so each one states that precondition explicitly; the blocked-port tests
+// further down are the ones that leave it unmet.
 TEST_F(KinematicChecksTest, Landing_FastPath_ImpactTriggers) {
-    // apogee + low altitude + >15g for 5 consecutive samples -> landed
+    // apogee + has flown + low altitude + >15g for 5 consecutive samples -> landed
     kc.apogee_flag = true;
+    kc.max_altitude = 100.0f;
     for (int i = 0; i < 10; i++) {
         setMockMillis(1000 + i);
         callFlight(5.0f, 200.0f, -10.0f, 0.0f);  // ~20g, 5m alt
@@ -812,6 +817,7 @@ TEST_F(KinematicChecksTest, Landing_FastPath_GatedOnAltitude) {
     // Apogee + impact-magnitude accel at altitude (e.g. ejection at apogee)
     // -> NO trigger because pressure_altitude > 20m
     kc.apogee_flag = true;
+    kc.max_altitude = 100.0f;
     for (int i = 0; i < 50; i++) {
         setMockMillis(1000 + i);
         callFlight(100.0f, 200.0f, -10.0f, 0.0f);
@@ -822,6 +828,7 @@ TEST_F(KinematicChecksTest, Landing_FastPath_GatedOnAltitude) {
 TEST_F(KinematicChecksTest, Landing_FastPath_BelowG_NoTrigger) {
     // Apogee + low altitude but accel below 15 g threshold -> NO trigger
     kc.apogee_flag = true;
+    kc.max_altitude = 100.0f;
     for (int i = 0; i < 50; i++) {
         setMockMillis(1000 + i);
         callFlight(5.0f, 100.0f, -10.0f, 0.0f);  // ~10g, below threshold
@@ -833,6 +840,7 @@ TEST_F(KinematicChecksTest, Landing_FastPath_BriefSpike_CounterResets) {
     // Single high-g sample then back to quiet -> count resets, no trigger.
     // Verifies the noise-rejection behavior of the consecutive-sample gate.
     kc.apogee_flag = true;
+    kc.max_altitude = 100.0f;
     setMockMillis(1000);
     callFlight(5.0f, 200.0f, -10.0f, 0.0f);  // 1 sample at impact magnitude
     for (int i = 0; i < 100; i++) {
@@ -840,6 +848,68 @@ TEST_F(KinematicChecksTest, Landing_FastPath_BriefSpike_CounterResets) {
         callFlight(5.0f, 9.81f, 0.0f, 0.0f);  // back to gravity floor
     }
     EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+// ── #1103: impact must not be believed from a barometer that never saw the flight ──
+
+// A blocked or taped static port: apogee is voted from the EKF / GNSS / pitch
+// voters, pressure altitude sits at ~0 all flight, and the ejection charge's
+// shock at apogee looks exactly like ground impact to the altitude window.
+// It must NOT latch impact or landed -- that used to end the flight at apogee
+// altitude with the main still Idle.
+TEST_F(KinematicChecksTest, Landing_FastPath_BlockedPort_ShockAtApogeeDoesNotLatch) {
+    for (int i = 0; i < 500; i++) {            // "flight" as the baro sees it: flat
+        setMockMillis(i * 2);
+        callFlight(0.0f, 9.81f, 0.0f, 0.0f);
+    }
+    ASSERT_LT(kc.max_altitude, 1.0f) << "a sealed port never sees the climb";
+    kc.apogee_flag = true;                      // the other voters saw it
+    for (int i = 0; i < 20; i++) {
+        setMockMillis(2000 + i);
+        callFlight(0.0f, 300.0f, -10.0f, 0.0f); // ~30 g ejection shock, 20 ticks
+    }
+    EXPECT_FALSE(kc.impact_flag);
+    EXPECT_FALSE(kc.alt_landed_flag);
+    // ...and it stays that way through the real touchdown shock too: LANDED
+    // for this flight comes from the quiescence path, not from impact.
+    for (int i = 0; i < 20; i++) {
+        setMockMillis(60000 + i);
+        callFlight(0.0f, 300.0f, -10.0f, 0.0f);
+    }
+    EXPECT_FALSE(kc.impact_flag);
+}
+
+// A leaky bay that only crept to 40 m of indicated altitude: the shock during
+// descent still reads 60 m and is refused by the 20 m window, the shock at
+// touchdown reads 5 m and latches.  The has-flown bar does not get in the way
+// of a real landing once the baro has seen anything like a flight.
+TEST_F(KinematicChecksTest, Landing_FastPath_LeakyPort_LatchesOnlyAtTouchdown) {
+    kc.apogee_flag = true;
+    kc.max_altitude = 40.0f;
+    for (int i = 0; i < 20; i++) {
+        setMockMillis(1000 + i);
+        callFlight(60.0f, 300.0f, -10.0f, 0.0f);
+    }
+    EXPECT_FALSE(kc.impact_flag) << "60 m indicated is outside the ground window";
+    for (int i = 0; i < 10; i++) {
+        setMockMillis(60000 + i);
+        callFlight(5.0f, 300.0f, -10.0f, 0.0f);
+    }
+    EXPECT_TRUE(kc.impact_flag);
+    EXPECT_TRUE(kc.alt_landed_flag);
+}
+
+// The bar itself: 14 m of peak is not a flight, 16 m is.
+TEST_F(KinematicChecksTest, Landing_FastPath_HasFlownBarBoundary) {
+    kc.apogee_flag = true;
+    kc.max_altitude = 14.0f;
+    for (int i = 0; i < 10; i++) { setMockMillis(1000 + i); callFlight(5.0f, 200.0f, -10.0f, 0.0f); }
+    EXPECT_FALSE(kc.impact_flag);
+    kc.reset();
+    kc.apogee_flag = true;
+    kc.max_altitude = 16.0f;
+    for (int i = 0; i < 10; i++) { setMockMillis(1000 + i); callFlight(5.0f, 200.0f, -10.0f, 0.0f); }
+    EXPECT_TRUE(kc.impact_flag);
 }
 
 // ── Test for issue #192: landing sub-flag counters reset on apogee rising edge ──

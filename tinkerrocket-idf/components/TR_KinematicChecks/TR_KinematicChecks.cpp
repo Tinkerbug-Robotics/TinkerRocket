@@ -7,8 +7,26 @@ namespace {
 // 218 g. 15 g cleanly separates them with no false positives in descent.
 // Gated on apogee + low altitude so launch (~7 g) and ejection (~22 g at
 // apogee) cannot trigger.
+//
+// #1103: the low-altitude gate is BAROMETRIC, and a blocked or taped static
+// port pins pressure altitude near zero for the whole flight -- so the
+// ejection charge's own shock at apogee satisfied it, impact latched, the FC
+// declared LANDED two seconds later at apogee altitude, safed the pyro rail
+// and the main never fired: the #834 GNSS main backstop, written for exactly
+// that flight, was never reached.  Replayed over the corpus with the baro
+// flattened, 13 of the 19 logged flights with a detected apogee carry a >=5
+// tick run above 15 g after apogee, and on 12 of those the real roll rate lets
+// the LANDED debounce fire 2-35 s later.  So impact also requires that the
+// barometer has SEEN the flight: max_altitude above LANDING_IMPACT_MIN_PEAK_M,
+// the same "rocket must have flown" bar the baro-stable voter uses.  A sealed
+// port never gets there, so the shock cannot latch and LANDED comes from the
+// baro-independent quiescence path after touchdown; a leaky port that creeps
+// past it then fails the 20 m window during descent and passes at touchdown.
+// Every logged flight exceeds 15 m within ~0.2-1.6 s of launch (lowest peak
+// 27 m, on a log cut at T+0.45 s), so a healthy baro is unaffected.
 constexpr float    LANDING_IMPACT_G       = 15.0f;
 constexpr float    LANDING_IMPACT_ALT_M   = 20.0f;
+constexpr float    LANDING_IMPACT_MIN_PEAK_M = 15.0f;  // the baro must have seen the flight (#1103)
 constexpr uint16_t LANDING_IMPACT_COUNT   = 5;       // ~5 ms at 1 kHz
 constexpr float    G_MS2                  = 9.80665f;
 
@@ -520,8 +538,11 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // The baro rate-gate upstream already filters glitch spikes, but the
     // defensive ``palt > -10`` lower bound mirrors the gate's intent so
     // this path is robust even if the gate is bypassed in future.
+    // "Ground proximity" is barometric, so it also demands that the baro has
+    // seen the flight (#1103) -- a flat one satisfies the window all flight.
     // One-shot latch — impact_flag stays true once a real impact fires.
     if (apogee_flag
+     && max_altitude > LANDING_IMPACT_MIN_PEAK_M
      && pressure_altitude > -10.0f
      && pressure_altitude < LANDING_IMPACT_ALT_M
      && acc_mag > LANDING_IMPACT_G * G_MS2)
