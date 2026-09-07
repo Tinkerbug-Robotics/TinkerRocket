@@ -274,6 +274,21 @@ target_include_directories(test_sensor_cal_session PRIVATE
 target_link_libraries(test_sensor_cal_session GTest::gtest_main)
 gtest_discover_tests(test_sensor_cal_session)
 
+# ---------- test_imu_drain_window (#1191) ----------
+# Statistics over the IMU samples the flight loop drains between two
+# estimator passes: the raw-count mean (the anti-alias step the freshest-
+# sample pick never had), the per-sensor-axis max |raw| behind the low-g
+# near-rail switch, and the centre-of-window stamp.  Pure header in
+# TR_Sensor_Collector beside sensor_cal_math.h; needs only the packed sample
+# struct from TR_RocketComputerTypes.
+add_executable(test_imu_drain_window test_imu_drain_window.cpp)
+target_include_directories(test_imu_drain_window PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_imu_drain_window GTest::gtest_main)
+gtest_discover_tests(test_imu_drain_window)
+
 # ---------- test_orientation ----------
 # Board→rocket mounting orientation utilities (discrete 24-code set,
 # quaternion round-trips, gravity nose snap, pad attitude init).
