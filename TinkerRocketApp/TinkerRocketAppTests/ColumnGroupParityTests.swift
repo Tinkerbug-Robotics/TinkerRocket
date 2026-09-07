@@ -63,6 +63,7 @@ final class ColumnGroupParityTests: XCTestCase {
             "Pyro 1 Continuity", "Pyro 4 Continuity",
             "Pyro 1 Fired", "Pyro 4 Fired",
             "Reboot Recovery", "FC Guidance Enabled", "EKF Ticks",
+            "EKF Shock Gate Trips",
         ]
         for name in hidden {
             XCTAssertTrue(grouped.contains(name), "\(name) is written but not plottable")

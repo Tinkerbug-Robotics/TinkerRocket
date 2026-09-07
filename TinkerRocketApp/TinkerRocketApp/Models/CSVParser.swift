@@ -81,7 +81,8 @@ struct FlightCSVData {
             "Pyro 1 Fired", "Pyro 2 Fired", "Pyro 3 Fired", "Pyro 4 Fired"
         ]),
         ("Diagnostics", [
-            "EKF Ticks"
+            "EKF Ticks",
+            "EKF Shock Gate Trips"   // #1190
         ])
     ]
 

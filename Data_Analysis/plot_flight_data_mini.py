@@ -235,11 +235,12 @@ FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'  # +pyro_status byte (#34)
 FMT_NONSENSOR_44 = '<I hhhhh iii iii BB h B B'  # +apogee_flags byte (#142/#143)
 FMT_NONSENSOR_48 = '<I hhhhh iii iii BB h B B I'  # +uint32 sensor_health (#303)
 FMT_NONSENSOR_50 = '<I hhhhh iii iii BB h B B I H'  # +uint16 ekf_ticks (#529)
+FMT_NONSENSOR_52 = '<I hhhhh iii iii BB h B B I H H'  # +uint16 shock_gate_trips (#1190)
 # #296: lengths we know how to decode. An unrecognized NonSensor length means the
 # struct grew without updating this parser — warn loudly (once each) below instead
 # of silently dropping every record (the #227 failure shape). Add the new length
 # + a FMT_NONSENSOR_<len> when NonSensorData grows.
-NONSENSOR_KNOWN_LENS = (42, 43, 44, 48, 50)
+NONSENSOR_KNOWN_LENS = (42, 43, 44, 48, 50, 52)
 _warned_nonsensor_lens = set()
 # OutStatusQueryData: 16 bytes (v2) / 26 bytes (v3, +b2r orientation)
 FMT_STATUS_QUERY = '<B H H hh B hhh'
@@ -639,7 +640,14 @@ def parse_binary_file(filepath):
                 # apogee_flags byte — lets consumers distinguish "voted False"
                 # from "never recorded" (#529 replay gate fallback).
                 ekf_ticks = None
-                if msg_len == 50:
+                shock_gate_trips = None
+                if msg_len == 52:
+                    fields = struct.unpack(FMT_NONSENSOR_52, payload)
+                    pyro_status = fields[15]
+                    apogee_flags_b = fields[16]
+                    ekf_ticks = fields[18]
+                    shock_gate_trips = fields[19]
+                elif msg_len == 50:
                     fields = struct.unpack(FMT_NONSENSOR_50, payload)
                     pyro_status = fields[15]
                     apogee_flags_b = fields[16]
@@ -745,6 +753,12 @@ def parse_binary_file(filepath):
                     # None on logs that predate the field.  The replay derives
                     # the achieved EKF rate from this instead of a constant.
                     "ekf_ticks":          ekf_ticks,
+                    # #1190: EKF shock-gate trips — update ticks behind which
+                    # a raw IMU sample had a gyro or accelerometer axis at its
+                    # rail, and whose attitude was held.  A tick count (uint16 wrap): the delta between
+                    # consecutive records places each trip to ~2 ms.  None on
+                    # logs that predate the 52-byte layout.
+                    "shock_gate_trips":   shock_gate_trips,
                 })
 
             elif msg_type == MSG_NON_SENSOR:

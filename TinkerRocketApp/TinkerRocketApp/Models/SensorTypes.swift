@@ -581,7 +581,7 @@ nonisolated struct IIS2MDCData {
     }
 }
 
-// Non-Sensor Data (43/44/48/50-byte layouts, oldest → newest)
+// Non-Sensor Data (43/44/48/50/52-byte layouts, oldest → newest)
 // Wire layout mirrors C++ NonSensorData in RocketComputerTypes.h — bump the
 // size guard + add the matching field here whenever a byte is appended.
 nonisolated struct NonSensorData {
@@ -638,9 +638,17 @@ nonisolated struct NonSensorData {
     // predate the field — 0 is a real value (EKF not yet initialized).
     let ekf_ticks: UInt16?
 
+    // #1190 (52-byte layout): EKF shock-gate trips — update ticks behind which
+    // a raw IMU sample had a gyro or accelerometer axis at its rail, and whose
+    // attitude propagation was held.  A tick
+    // count, uint16 wrap; a step in it marks a shock the filter refused to
+    // integrate.  nil on logs that predate the field — 0 is a real value.
+    let shock_gate_trips: UInt16?
+
     init(from data: Data) throws {
         // Accept every layout since 43 bytes (pre-#142/#143 legacy) — 44
-        // (+apogee_flags), 48 (+sensor_health), 50 (+ekf_ticks, #529).
+        // (+apogee_flags), 48 (+sensor_health), 50 (+ekf_ticks, #529),
+        // 52 (+shock_gate_trips, #1190).
         // apogee_flags reads as 0 on legacy logs, which matches the
         // historical "we never recorded these bits" behavior.
         guard data.count >= 43 else {
@@ -683,6 +691,8 @@ nonisolated struct NonSensorData {
         } else {
             ekf_ticks = nil
         }
+        // #1190: shock_gate_trips follows ekf_ticks at offset 50.
+        shock_gate_trips = data.count >= 52 ? data.readUInt16LE(at: &offset) : nil
     }
 }
 
@@ -977,6 +987,10 @@ nonisolated struct NonSensorDataSI {
     // verbatim for the CSV so the achieved EKF rate is recoverable from an app
     // export.  nil on logs that predate the 50-byte layout.
     let ekf_ticks: UInt16?
+
+    // #1190: EKF shock-gate trips, carried through verbatim for the CSV.  nil
+    // on logs that predate the 52-byte layout.
+    let shock_gate_trips: UInt16?
 }
 
 // MARK: - Parsing Errors

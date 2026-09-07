@@ -180,11 +180,11 @@ class CsvGeneratorTest {
             "Apogee Detector: Pitch,Apogee Flag (Master),Launch Flag,Deployed Flag," +
             "Pyro 1 Continuity,Pyro 2 Continuity,Pyro 3 Continuity,Pyro 4 Continuity," +
             "Pyro 1 Fired,Pyro 2 Fired,Pyro 3 Fired,Pyro 4 Fired," +
-            "Reboot Recovery,FC Guidance Enabled,EKF Ticks\n"
+            "Reboot Recovery,FC Guidance Enabled,EKF Ticks,EKF Shock Gate Trips\n"
         assertEquals(expected, CsvGenerator().buildCsvHeader())
         // #514 regression: no column name may ever contain a comma — the
         // writer does not quote fields and readers split rows blind.
-        assertEquals(63, expected.trimEnd('\n').split(",").size)
+        assertEquals(64, expected.trimEnd('\n').split(",").size)   // #1190: +EKF Shock Gate Trips
     }
 
     // ------------------------------------------------------------------
@@ -243,7 +243,7 @@ class CsvGeneratorTest {
             "5.5,0," +
             "0,0,0,0,0,0,0," +
             "1,1,0,0,0,0,0,0," +
-            "0,0,1234"
+            "0,0,1234,"   // #1190: EKF Shock Gate Trips blank on a 50-byte NonSensor
         assertEquals(expected, rows[0])
     }
 

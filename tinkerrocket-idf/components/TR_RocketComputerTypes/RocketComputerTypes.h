@@ -1601,10 +1601,18 @@ typedef struct __attribute__((packed))
     // the loop rate or EKF_DECIMATION moves.
     uint16_t ekf_ticks;
 
+    // #1190: EKF shock-gate trips — update ticks behind which a raw IMU sample
+    // had a gyro or high-g accelerometer SENSOR axis at its rail, and whose
+    // attitude propagation was held for it.  Counts ticks, so at the 500 Hz NonSensor
+    // cadence the delta between consecutive records places every trip to
+    // ~2 ms; wraps at 2^16.  0 on a clean flight; the 2026-08-29 nose burst
+    // would have read 14 here.
+    uint16_t shock_gate_trips;
+
 } NonSensorData;
 
-static_assert(sizeof(NonSensorData) == 50,
-              "NonSensorData must be 50 bytes");
+static_assert(sizeof(NonSensorData) == 52,
+              "NonSensorData must be 52 bytes");
 
 // ── Sensor health scorecard (#303) ──────────────────────────────────────────
 // 2 bits per item packed into NonSensorData.sensor_health (FC→OC) and
@@ -3371,7 +3379,7 @@ static_assert(offsetof(GNSSSatData, num_svs) == 8, "GNSSSatData.num_svs moved");
 static_assert(offsetof(GNSSSatData, num_blocks) == 9, "GNSSSatData.num_blocks moved");
 static_assert(offsetof(GNSSSatData, sat) == GNSS_SAT_HEADER_BYTES, "GNSSSatData.sat moved");
 
-static_assert(sizeof(NonSensorData) == 50, "NonSensorData wire size");
+static_assert(sizeof(NonSensorData) == 52, "NonSensorData wire size");   // #1190: +shock_gate_trips
 static_assert(offsetof(NonSensorData, time_us) == 0, "NonSensorData.time_us moved");
 static_assert(offsetof(NonSensorData, q0) == 4, "NonSensorData.q0 moved");
 static_assert(offsetof(NonSensorData, q1) == 6, "NonSensorData.q1 moved");

@@ -150,8 +150,8 @@ that changes size fails the build rather than corrupting a log silently.
 | `RollProfileData` | 76 |
 | `LoRaFastData` | 55 |
 | `LoRaFastData` | 55 |
-| `NonSensorData` | 50 |
-| `NonSensorData` | 50 |
+| `NonSensorData` | 52 |
+| `NonSensorData` | 52 |
 | `GuidanceConfigData` | 45 |
 | `GNSSData` | 42 |
 | `GNSSData` | 42 |

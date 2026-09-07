@@ -1,7 +1,7 @@
 package com.tinkerbug.tinkerrocket.protocol
 
 /**
- * NonSensorData — msg 0xA5 (Mini boards), 43/44/48/50-byte length ladder
+ * NonSensorData — msg 0xA5 (Mini boards), 43/44/48/50/52-byte length ladder
  * (oldest → newest).  Wire layout mirrors C++ NonSensorData in
  * RocketComputerTypes.h.
  *
@@ -14,6 +14,8 @@ package com.tinkerbug.tinkerrocket.protocol
  *  - 50 B  +ekf_ticks (#529) — [ekfTicks] is NULL below 50 bytes, never 0:
  *    0 is a real counter value ("EKF not yet initialized"), so the null-vs-0
  *    distinction is semantic (the replay tool derives EKF rate from deltas).
+ *  - 52 B  +shock_gate_trips (#1190) — [shockGateTrips] is NULL below 52
+ *    bytes, never 0: 0 is a real value (a clean flight).
  */
 public data class NonSensorData(
     val timeUs: Long,           // u32
@@ -55,6 +57,12 @@ public data class NonSensorData(
     // #529 (50-byte layout): free-running EKF update-tick counter (u16 wrap).
     // null on logs that predate the field — 0 is a real value.
     val ekfTicks: Int?,
+
+    // #1190 (52-byte layout): EKF shock-gate trips — update ticks behind which
+    // a raw IMU sample had a gyro or accelerometer axis at its rail, and whose
+    // attitude propagation was held.
+    // u16 wrap; null on logs that predate the field — 0 is a real value.
+    val shockGateTrips: Int?,
 ) {
     public companion object {
         /** Oldest accepted layout (pre-#142/#143 legacy). */
@@ -63,6 +71,8 @@ public data class NonSensorData(
         public const val SIZE_APOGEE_FLAGS: Int = 44
         /** +sensor_health (#303, never surfaced) +ekf_ticks (#529). */
         public const val SIZE_EKF_TICKS: Int = 50
+        /** +shock_gate_trips (#1190). */
+        public const val SIZE_SHOCK_GATE_TRIPS: Int = 52
 
         /** Returns null on a wrong-size payload (skip, don't throw), mirroring iOS throw-and-caller-skips. */
         public fun decode(payload: ByteArray): NonSensorData? {
@@ -90,6 +100,9 @@ public data class NonSensorData(
             } else {
                 ekfTicks = null
             }
+            // #1190: shock_gate_trips follows ekf_ticks at offset 50.
+            val shockGateTrips: Int? =
+                if (payload.size >= SIZE_SHOCK_GATE_TRIPS) b.u16() else null
 
             return NonSensorData(
                 timeUs = timeUs,
@@ -103,6 +116,7 @@ public data class NonSensorData(
                 pyroStatus = pyroStatus,
                 apogeeFlags = apogeeFlags,
                 ekfTicks = ekfTicks,
+                shockGateTrips = shockGateTrips,
             )
         }
     }

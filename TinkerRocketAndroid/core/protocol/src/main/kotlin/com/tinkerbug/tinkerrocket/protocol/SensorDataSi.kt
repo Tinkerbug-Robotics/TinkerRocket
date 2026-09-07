@@ -152,4 +152,8 @@ public data class NonSensorDataSi(
     // verbatim for the CSV so the achieved EKF rate is recoverable from an app
     // export.  null on logs that predate the 50-byte layout.
     val ekfTicks: Int?,
+
+    // #1190: EKF shock-gate trips, carried through verbatim for the CSV.
+    // null on logs that predate the 52-byte layout.
+    val shockGateTrips: Int?,
 )

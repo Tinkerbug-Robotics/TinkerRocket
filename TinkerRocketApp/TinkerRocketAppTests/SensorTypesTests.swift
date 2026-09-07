@@ -81,4 +81,21 @@ final class SensorTypesTests: XCTestCase {
         XCTAssertNil(try NonSensorData(from: Data(count: 44)).ekf_ticks)
         XCTAssertNil(try NonSensorData(from: Data(count: 48)).ekf_ticks)
     }
+
+    func testNonSensorData_Size52_ShockGateTripsDecodes() throws {
+        // #1190: 52-byte layout appends uint16 shock_gate_trips after ekf_ticks.
+        var bytes = [UInt8](repeating: 0, count: 52)
+        bytes[48] = 0x34; bytes[49] = 0x12   // ekf_ticks = 0x1234
+        bytes[50] = 0x0E; bytes[51] = 0x00   // shock_gate_trips = 14
+        let raw = try NonSensorData(from: Data(bytes))
+        XCTAssertEqual(raw.ekf_ticks, 0x1234)
+        XCTAssertEqual(raw.shock_gate_trips, 14)
+    }
+
+    func testNonSensorData_PreShockGateLayoutsDecodeNil() throws {
+        // 50-byte and shorter layouts predate shock_gate_trips: nil, not 0 —
+        // 0 is a real value (a clean flight).
+        XCTAssertNil(try NonSensorData(from: Data(count: 50)).shock_gate_trips)
+        XCTAssertNil(try NonSensorData(from: Data(count: 48)).shock_gate_trips)
+    }
 }

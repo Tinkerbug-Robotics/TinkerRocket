@@ -32,6 +32,20 @@ struct EkfIMUData {
     uint32_t time_us = 0;
     double acc_x = 0, acc_y = 0, acc_z = 0;    // m/s^2  (FRD body frame)
     double gyro_x = 0, gyro_y = 0, gyro_z = 0; // deg/s  (FRD body frame)
+    // #1190: is any SENSOR axis of the gyro / the accelerometer at its rail in
+    // the raw samples this update stands for?  Only the caller can answer:
+    // the filter sees one sample per tick — since #1191 the mean of the
+    // samples drained since the last one — in body axes after the mount
+    // rotation, so a rail on a few samples averages away, and with the 45°
+    // mount a single railed axis reads 0.71× on two body axes while a
+    // magnitude bar at the rail trips on nothing saturated (the low-g reads
+    // 15.5 g of magnitude with 11 g on each of two axes under thrust).  The
+    // drain window keeps the per-sensor-axis max in raw counts and sets these
+    // (imu_drain_window.h).  Either flag trips the shock gate; nothing else
+    // does — a value inside the sensor's range is a measurement, whatever the
+    // airframe it happens to be flying on can do.
+    bool gyro_railed  = false;
+    bool accel_railed = false;
 };
 
 /// GNSS input in ECEF coordinates (used by simulation)
@@ -212,6 +226,52 @@ public:
 
     uint32_t gyroBiasGateTrips() const { return gbias_gate_trips_; }
     uint32_t gyroBiasClipCount() const { return gbias_clip_count_; }
+
+    // ─── #1190: shock gate — a saturated IMU is not measuring rotation ────
+    //
+    // 2026-08-29, J570W, V9 nose computer: at T+0.76 s the nose took a 120 ms
+    // mechanical burst — 94 g on the high-g accelerometer at 660-690 Hz — and
+    // the gyro went wild with it, to 4492 dps against a ±4000 dps full scale.
+    // timeUpdate() integrates whatever rate it is handed (the exponential map
+    // is exact for a railed one too), so the logged pitch stepped 76° → 38°
+    // across the burst and stayed there to apogee.  The vehicle had not
+    // rotated: the filter's own velocity stayed within ~7° of vertical and the
+    // thrust vector within 2° of body +X before and after.  Nothing could pull
+    // it back — accel/mag updates are gated off for the whole ascent
+    // (use_ahrs_acc) and the GNSS attitude rows are cos⁴(pitch)-gated near
+    // vertical.
+    //
+    // The ONLY criterion is saturation, per sensor axis: the caller reports
+    // through EkfIMUData::gyro_railed / accel_railed that some raw sample since
+    // the previous update had a gyro or accelerometer axis at its rail (see the
+    // struct for why the filter cannot judge that itself, and why a magnitude
+    // bar would be wrong).  A value inside the sensor's range is never gated —
+    // these computers fly other rockets, and what this airframe can or cannot
+    // do says nothing about theirs.  On a trip, and for `settle_us` after the
+    // last one, the quaternion is HELD — the rotation-vector propagation runs
+    // with zero rate — while velocity, position and the covariance prediction
+    // carry on and every measurement update still runs.  The settle window
+    // bridges the gaps between rail samples inside one burst (22.5 ms was the
+    // longest on 2026-08-29) and covers the ring-down after the last one
+    // (~11 ms there).
+    //
+    // Honesty: the attitude variance grows by (SHOCK_HOLD_RATE_SIGMA · T / 2)²
+    // over a hold of T seconds — the rotation that may have happened
+    // unobserved, in the half-angle units of the error state — so the next
+    // accel/GNSS update pulls harder and the scorecard can see it.
+    //
+    // `trips` counts update ticks whose sample tripped a criterion (it reaches
+    // the flight log and the scorecard); `hold ticks` counts ticks whose
+    // rotation was held, trips plus the settle window.
+
+    // Settle window in µs (default 50 ms).  Configuration, so it survives
+    // init() like the declination does.
+    void setShockGateSettle(uint32_t settle_us) { shock_settle_us_ = settle_us; }
+    uint32_t shockGateTrips()     const { return shock_gate_trips_; }
+    uint32_t shockGateHoldTicks() const { return shock_hold_ticks_; }
+    // True when the last update held the quaternion (it tripped, or fell inside
+    // the settle window after a trip).
+    bool shockGateHeld() const { return shock_hold_active_; }
 
     // ─── Bulk state save/restore (reboot recovery) ─────────────────
     void getState(EkfStateSnapshot& s) const {
@@ -545,6 +605,21 @@ private:
 
     uint32_t gbias_gate_trips_ = 0;   // updates whose gyro-bias coupling was cut
     uint32_t gbias_clip_count_ = 0;   // times the bound actually bit
+
+    // ── #1190 shock gate (documented on the public API above) ──────────────
+    uint32_t shock_settle_us_     = 50000u;
+    uint32_t shock_trip_us_       = 0;       // stamp of the last tripped update
+    bool     shock_hold_armed_    = false;   // inside the settle window of a trip
+    bool     shock_hold_active_   = false;   // the last update held the quaternion
+    float    shock_held_s_        = 0.0f;    // length of the current hold, for the variance growth
+    uint32_t shock_gate_trips_    = 0;
+    uint32_t shock_hold_ticks_    = 0;
+    // The rate the vehicle is allowed to have reached unobserved while held.
+    // Outside the burst the 2026-08-29 boost never exceeded 200 dps of gyro
+    // norm and the real low-frequency motion was a few deg/s; 100 dps over
+    // that whole 120 ms burst is a 12° (1σ) hole, under the scorecard's
+    // EKF_ATT_VAR_OK.
+    static constexpr float SHOCK_HOLD_RATE_SIGMA_RPS = 100.0f * (float)(M_PI / 180.0);
 
     // Helper methods
     void Quat2Euler(float q[4], float euler[3]);

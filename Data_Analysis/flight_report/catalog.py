@@ -1124,6 +1124,18 @@ _P(
         "wrap. Frozen at 0 until the EKF initialises on the first good fix.",
 )
 _P(
+    "NonSensor.shock_gate_trips", "EKF shock-gate trips",
+    kind=KIND_COUNTER,
+    note=
+        "Count of EKF update ticks behind which a raw IMU sample had a gyro or accelerometer axis "
+        "at its rail, and whose attitude propagation was held (#1190). A step in this counter marks a shock the filter refused to integrate; the "
+        "2026-08-29 nose burst would read 14.",
+    caution=
+        "Present only on the 52-byte layout, None before it. Wraps at 2^16. It counts ticks, not "
+        "events: one 120 ms burst is a dozen trips, and the hold outlasts the last trip by the "
+        "settle window.",
+)
+_P(
     "NonSensor.sensor_health", "Sensor health word",
     kind=KIND_RAW,
     note=

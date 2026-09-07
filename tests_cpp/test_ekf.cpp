@@ -1102,3 +1102,289 @@ TEST(EkfInitReset, FreshFilterReportsZeroedEstimates) {
         EXPECT_FLOAT_EQ(b[i], 0.0f) << "aBias_mps2_["  << i << "] uninitialised";
     }
 }
+
+// ====================================================================
+// #1190 — shock gate: a saturated IMU is not measuring rotation
+//
+// 2026-08-29, Rolly Polly V on a J570W, V9 nose computer: a 120 ms mechanical
+// burst drove the gyro to 4492 dps against a ±4000 dps full scale.
+// timeUpdate() integrated it and the logged pitch stepped 76° → 38° for the
+// rest of the flight; the vehicle had not rotated (its velocity stayed within
+// ~7° of vertical, the thrust vector within 2° of body +X).  With accel/mag
+// gated off for the ascent and the GNSS attitude rows cos⁴-gated near
+// vertical, nothing could pull it back.
+//
+// The ONLY criterion is saturation, per sensor axis, and only the caller can
+// judge it (the drain window on the FC, from raw counts): the filter is handed
+// the window mean in body axes, where a rail averages away and a magnitude bar
+// over-trips with nothing saturated.  So these tests drive the gate through
+// EkfIMUData::gyro_railed / accel_railed, as the flight loop does.
+// ====================================================================
+
+namespace shock1190 {
+
+constexpr double G0 = 9.80665;
+// 490 Hz — the FC's EKF cadence (EKF_DECIMATION = 2 on a ~980 Hz loop).
+constexpr uint32_t TICK_US = 2041;
+
+// One flight-phase sample: specific force `ax` along the nose, rate `gy` about
+// body Y (the pitch axis of a nose-up vehicle), everything else zero.
+static EkfIMUData imu(uint32_t t, double ax_mps2, double gy_dps) {
+    EkfIMUData d;
+    d.time_us = t;
+    d.acc_x = ax_mps2; d.acc_y = 0.0; d.acc_z = 0.0;
+    d.gyro_x = 0.0; d.gyro_y = gy_dps; d.gyro_z = 0.0;
+    return d;
+}
+
+// The same sample with the caller's verdict attached: what the drain window
+// reports when a raw sample behind this mean had an axis at its rail.
+static EkfIMUData railedGyro(uint32_t t, double ax_mps2, double gy_dps) {
+    EkfIMUData d = imu(t, ax_mps2, gy_dps);
+    d.gyro_railed = true;
+    return d;
+}
+static EkfIMUData railedAccel(uint32_t t, double ax_mps2, double gy_dps) {
+    EkfIMUData d = imu(t, ax_mps2, gy_dps);
+    d.accel_railed = true;
+    return d;
+}
+
+// A flight-phase update: use_ahrs_acc = false (INFLIGHT gates accel and mag
+// off) and the GNSS fix FROZEN at one stamp, which the filter fuses only once
+// — so the attitude is pure gyro integration, exactly the ascent's situation.
+static void step(GpsInsEKF& ekf, uint32_t t, uint32_t gnss_t, const EkfIMUData& d) {
+    ekf.update(false, d, makeStationaryGNSS(gnss_t), makeNoseUpMag(t));
+}
+
+// Settle on a consistent pad, then freeze the fix.  Returns the fix stamp.
+static uint32_t launch(GpsInsEKF& ekf, uint32_t& t) {
+    settleNoseUp(ekf, t);
+    return t;
+}
+
+// `n` ticks of `d` (re-stamped each tick).
+static void run(GpsInsEKF& ekf, uint32_t& t, uint32_t gnss_t, int n, EkfIMUData d) {
+    for (int i = 0; i < n; i++) {
+        t += TICK_US;
+        d.time_us = t;
+        step(ekf, t, gnss_t, d);
+    }
+}
+
+}  // namespace shock1190
+
+using namespace shock1190;
+
+TEST(EkfShockGate1190, RailedGyroDoesNotRotateTheAttitude) {
+    // The acceptance case from the issue: 100 ms with one gyro axis pinned at
+    // full scale (the drain window says so) while the accelerometer reads
+    // 80 g.  Unfixed this integrates 400° of pitch; held it must stay within 2°.
+    GpsInsEKF ekf; uint32_t t = 0;
+    const uint32_t g = launch(ekf, t);
+    float q0[4]; ekf.getQuaternion(q0);
+
+    run(ekf, t, g, 49, railedGyro(t, 80.0 * G0, 4000.0));    // 49 × 2.041 ms = 100 ms
+
+    float q1[4]; ekf.getQuaternion(q1);
+    EXPECT_LT(tqGeodesicDeg(q0, q1), 2.0f);
+    EXPECT_EQ(ekf.shockGateTrips(), 49u);                    // every tick tripped
+    EXPECT_TRUE(ekf.shockGateHeld());
+}
+
+TEST(EkfShockGate1190, WithoutTheCallersVerdictTheSameRailIntegrates) {
+    // The filter judges NO magnitude of its own — 4000 dps with 80 g and no
+    // verdict is integrated as rotation.  That is the pre-fix filter, and it is
+    // also the contract: the caller's per-sensor-axis verdict is the only
+    // criterion (a body-frame magnitude bar would trip with nothing saturated).
+    GpsInsEKF ekf; uint32_t t = 0;
+    const uint32_t g = launch(ekf, t);
+    float q0[4]; ekf.getQuaternion(q0);
+
+    run(ekf, t, g, 49, imu(t, 80.0 * G0, 4000.0));
+
+    float q1[4]; ekf.getQuaternion(q1);
+    EXPECT_GT(tqGeodesicDeg(q0, q1), 30.0f);                 // 400° of rotation ≡ 40° geodesic
+    EXPECT_EQ(ekf.shockGateTrips(), 0u);
+    EXPECT_FALSE(ekf.shockGateHeld());
+}
+
+TEST(EkfShockGate1190, RailedGyroAtOneGIsHeldToo) {
+    // A rail with the accelerometer at 1 g: saturation is saturation whatever
+    // the accelerometer says.
+    GpsInsEKF ekf; uint32_t t = 0;
+    const uint32_t g = launch(ekf, t);
+    float q0[4]; ekf.getQuaternion(q0);
+
+    run(ekf, t, g, 49, railedGyro(t, G0, 4000.0));
+
+    float q1[4]; ekf.getQuaternion(q1);
+    EXPECT_LT(tqGeodesicDeg(q0, q1), 2.0f);
+    EXPECT_EQ(ekf.shockGateTrips(), 49u);
+}
+
+TEST(EkfShockGate1190, RailedAccelerometerHoldsAPlausibleRate) {
+    // 30 dps is a rate the vehicle could have — but with an accelerometer axis
+    // at its rail the IMU is being shocked beyond what it can measure, and the
+    // gyro is not reporting the vehicle.  The accelerometer verdict alone holds.
+    GpsInsEKF ekf; uint32_t t = 0;
+    const uint32_t g = launch(ekf, t);
+    float q0[4]; ekf.getQuaternion(q0);
+
+    run(ekf, t, g, 49, railedAccel(t, 250.0 * G0, 30.0));    // unfixed: 3°
+
+    float q1[4]; ekf.getQuaternion(q1);
+    EXPECT_LT(tqGeodesicDeg(q0, q1), 0.3f);
+    EXPECT_EQ(ekf.shockGateTrips(), 49u);
+}
+
+TEST(EkfShockGate1190, UnsaturatedFlightNeverTrips) {
+    // A 500 dps roll under 13 g of thrust for 2 s, and then a 90 g shock with
+    // 2000 dps on the pitch axis — large, but inside the sensors' ranges, so
+    // no verdict arrives and nothing is gated: a value the sensor can measure
+    // is a measurement, on any rocket.
+    GpsInsEKF ekf; uint32_t t = 0;
+    const uint32_t g = launch(ekf, t);
+    float q0[4]; ekf.getQuaternion(q0);
+
+    EkfIMUData d = imu(t, 13.0 * G0, 0.0);
+    d.gyro_x = 500.0;
+    run(ekf, t, g, 980, d);                                  // 2.0 s
+    run(ekf, t, g, 10, imu(t, 90.0 * G0, 2000.0));
+
+    float q1[4]; ekf.getQuaternion(q1);
+    EXPECT_EQ(ekf.shockGateTrips(), 0u);
+    EXPECT_FALSE(ekf.shockGateHeld());
+    EXPECT_GT(tqGeodesicDeg(q0, q1), 10.0f);                 // it did rotate
+}
+
+TEST(EkfShockGate1190, HoldReleasesAfterTheSettleWindowAndIntegrationResumes) {
+    GpsInsEKF ekf; uint32_t t = 0;
+    const uint32_t g = launch(ekf, t);
+
+    // One tripped tick, then quiet.
+    run(ekf, t, g, 1, railedGyro(t, 80.0 * G0, 4000.0));
+    const uint32_t trip_t = t;
+    EXPECT_TRUE(ekf.shockGateHeld());
+    EXPECT_EQ(ekf.shockGateHoldTicks(), 1u);
+
+    // Held while inside the 50 ms window, released at its end.
+    while ((t + TICK_US) - trip_t < 50000u) {
+        run(ekf, t, g, 1, imu(t, G0, 0.0));
+        EXPECT_TRUE(ekf.shockGateHeld()) << "released early at +" << (t - trip_t) << " us";
+    }
+    run(ekf, t, g, 1, imu(t, G0, 0.0));
+    EXPECT_FALSE(ekf.shockGateHeld()) << "still held at +" << (t - trip_t) << " us";
+    EXPECT_EQ(ekf.shockGateTrips(), 1u);
+    // 1 trip tick + the ticks with elapsed < 50 ms (24 of them at 2.041 ms).
+    EXPECT_GE(ekf.shockGateHoldTicks(), 24u);
+    EXPECT_LE(ekf.shockGateHoldTicks(), 26u);
+
+    // A real 10 dps pitch rate for 1 s is integrated again: ~10°.
+    float q0[4]; ekf.getQuaternion(q0);
+    run(ekf, t, g, 490, imu(t, G0, 10.0));
+    float q1[4]; ekf.getQuaternion(q1);
+    EXPECT_NEAR(tqGeodesicDeg(q0, q1), 10.0f, 1.0f);
+}
+
+TEST(EkfShockGate1190, SettleWindowBridgesTheGapsInsideABurst) {
+    // The 2026-08-29 burst had rail samples spread over 61 ms, up to 22.5 ms
+    // apart, with wild sub-rail output in between.  Model it as one railed tick
+    // every 20 ms with a "plausible" 30 dps between them: the 50 ms window must
+    // hold straight through (unfixed: 3° from the in-between ticks alone),
+    // while a 5 ms window would let most of them integrate.
+    auto burst = [](GpsInsEKF& ekf, uint32_t& t, uint32_t g) {
+        for (int k = 0; k < 5; k++) {
+            run(ekf, t, g, 1, railedGyro(t, 80.0 * G0, 4000.0));
+            run(ekf, t, g, 9, imu(t, G0, 30.0));            // ~18 ms of "quiet"
+        }
+    };
+    {
+        GpsInsEKF ekf; uint32_t t = 0;
+        const uint32_t g = launch(ekf, t);
+        float q0[4]; ekf.getQuaternion(q0);
+        burst(ekf, t, g);
+        float q1[4]; ekf.getQuaternion(q1);
+        EXPECT_LT(tqGeodesicDeg(q0, q1), 0.3f);
+        EXPECT_EQ(ekf.shockGateHoldTicks(), 50u);            // every tick of the burst
+    }
+    {
+        GpsInsEKF ekf; uint32_t t = 0;
+        const uint32_t g = launch(ekf, t);
+        ekf.setShockGateSettle(5000u);
+        float q0[4]; ekf.getQuaternion(q0);
+        burst(ekf, t, g);
+        float q1[4]; ekf.getQuaternion(q1);
+        EXPECT_GT(tqGeodesicDeg(q0, q1), 1.5f);              // most of the 30 dps got in
+        EXPECT_LT(ekf.shockGateHoldTicks(), 25u);
+    }
+}
+
+TEST(EkfShockGate1190, EitherVerdictHoldsWithNothingInTheMagnitudes) {
+    // Since #1191 the filter is handed the drain-window MEAN: a rail on a few
+    // of the window's samples is invisible in what arrives here.  Either
+    // verdict must hold the attitude on its own, with unremarkable values.
+    for (int which = 0; which < 2; which++) {
+        GpsInsEKF ekf; uint32_t t = 0;
+        const uint32_t g = launch(ekf, t);
+        float q0[4]; ekf.getQuaternion(q0);
+
+        EkfIMUData d = imu(t, G0, 30.0);                     // nothing in the magnitudes
+        if (which == 0) d.gyro_railed = true; else d.accel_railed = true;
+        run(ekf, t, g, 49, d);
+
+        float q1[4]; ekf.getQuaternion(q1);
+        EXPECT_LT(tqGeodesicDeg(q0, q1), 0.3f) << "flag " << which;
+        EXPECT_EQ(ekf.shockGateTrips(), 49u) << "flag " << which;
+    }
+}
+
+TEST(EkfShockGate1190, AttitudeVarianceGrowsWithTheHold) {
+    // A hold of T seconds ends (σ · T / 2)² wider on each attitude axis: the
+    // rotation that may have happened unobserved, in the half-angle units of
+    // the error state.  σ = 100 dps, T = 100 ms → (0.0873 rad)² = 0.00762.
+    GpsInsEKF ekf; uint32_t t = 0;
+    const uint32_t g = launch(ekf, t);
+    float c0[3]; ekf.getCovOrient(c0);
+
+    run(ekf, t, g, 49, railedGyro(t, G0, 0.0));             // hold with no rate at all
+
+    float c1[3]; ekf.getCovOrient(c1);
+    const float expect = std::pow(0.5f * 100.0f * (float)M_PI / 180.0f * 0.1f, 2.0f);
+    for (int i = 0; i < 3; i++)
+        EXPECT_NEAR(c1[i] - c0[i], expect, 0.15f * expect) << "axis " << i;
+
+    // And a quiet filter does not grow like that.
+    GpsInsEKF quiet; uint32_t tq = 0;
+    const uint32_t gq = launch(quiet, tq);
+    float q0c[3]; quiet.getCovOrient(q0c);
+    run(quiet, tq, gq, 49, imu(tq, G0, 0.0));
+    float q1c[3]; quiet.getCovOrient(q1c);
+    for (int i = 0; i < 3; i++)
+        EXPECT_LT(q1c[i] - q0c[i], 0.1f * expect) << "axis " << i;
+}
+
+TEST(EkfShockGate1190, CountersResetOnInitAndTheSettleSurvivesIt) {
+    GpsInsEKF ekf; uint32_t t = 0;
+    ekf.setShockGateSettle(5000u);                           // a distinctive window
+    uint32_t g = launch(ekf, t);
+    run(ekf, t, g, 5, railedGyro(t, G0, 1500.0));
+    ASSERT_EQ(ekf.shockGateTrips(), 5u);
+    ASSERT_TRUE(ekf.shockGateHeld());
+
+    ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    EXPECT_EQ(ekf.shockGateTrips(), 0u);
+    EXPECT_EQ(ekf.shockGateHoldTicks(), 0u);
+    EXPECT_FALSE(ekf.shockGateHeld());
+
+    // One trip, then the 5 ms window: held for 2 more ticks (elapsed 2.0 and
+    // 4.1 ms), released on the third — 50 ms would have held ~25.
+    g = t;
+    run(ekf, t, g, 1, railedGyro(t, G0, 0.0));
+    run(ekf, t, g, 2, imu(t, G0, 0.0));
+    EXPECT_TRUE(ekf.shockGateHeld());
+    run(ekf, t, g, 1, imu(t, G0, 0.0));
+    EXPECT_FALSE(ekf.shockGateHeld());
+    EXPECT_EQ(ekf.shockGateTrips(), 1u);
+    EXPECT_EQ(ekf.shockGateHoldTicks(), 3u);
+}

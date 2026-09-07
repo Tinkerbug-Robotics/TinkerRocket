@@ -248,6 +248,18 @@ static ISM6HG256DataSI ism6_latest_si = {};
 static bool ism6_low_g_near_rail = false;
 static constexpr int32_t kLowGNearRailLsb =
     imu_drain::nearRailLsb((float)config::ISM6_LOW_G_FS_G, 0.5f);
+// #1190: the EKF shock gate's verdicts for the NEXT EKF tick — a gyro or
+// high-g accelerometer SENSOR axis at its rail in any raw sample of the drain
+// window (imu_drain_window.h: why per sensor axis and why the window's worst
+// sample, not the mean the EKF is handed).  Sticky across the drain passes
+// between two EKF ticks (EKF_DECIMATION), so a rail seen on an EKF-off pass
+// still reaches the filter; cleared once an EKF tick has been offered them.
+static bool ism6_gyro_rail_pending  = false;
+static bool ism6_accel_rail_pending = false;
+static constexpr int32_t kGyroRailLsb =
+    imu_drain::gyroFsFractionLsb(config::EKF_SHOCK_GYRO_RAIL_FRAC);
+static constexpr int32_t kAccelRailLsb =
+    imu_drain::accelFsFractionLsb(config::EKF_SHOCK_ACCEL_RAIL_FRAC);
 static BMP585DataSI bmp_latest_si = {};
 // #260: source-validity bounds for BMP585 pressure (Pa).  Finite bounds also
 // reject NaN/Inf.  Downstream trust gates use a tighter 25-125 kPa window.
@@ -2475,6 +2487,9 @@ void flight_setup()
         static_cast<ISM6HighGFullScale>(config::ISM6_HIGH_G_FS_G),
         static_cast<ISM6GyroFullScale>(config::ISM6_GYRO_FS_DPS));
     sensor_converter.configureISM6HG256RotationZ(config::ISM6HG256_ROT_Z_DEG);
+    // #1190: the EKF's shock gate settle window.  The saturation verdicts
+    // themselves come from the drain window (kGyroRailLsb / kAccelRailLsb).
+    ekf.setShockGateSettle(config::EKF_SHOCK_SETTLE_MS * 1000u);
     sensor_converter.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
     sensor_collector.configureSimIis2mdcRotation(config::IIS2MDC_ROT_Z_DEG);
@@ -2905,6 +2920,10 @@ static void loop_fc()
             // sample per sensor axis, not from the mean the converter was
             // just handed: an average of clipped samples is still biased.
             ism6_low_g_near_rail = ism6_win.lowGNearRail(kLowGNearRailLsb);
+            // #1190: and the shock gate's two verdicts, from the same worst
+            // samples.  OR-ed, not assigned: they wait for the next EKF tick.
+            if (ism6_win.gyroAbove(kGyroRailLsb))   ism6_gyro_rail_pending  = true;
+            if (ism6_win.highGAbove(kAccelRailLsb)) ism6_accel_rail_pending = true;
             // Latest-wins cache for the comms side (one copy per drain pass,
             // not per sample — the cache is a latest-state snapshot, the log
             // stream above carries every sample).  The freshest raw sample is
@@ -3259,6 +3278,10 @@ static void loop_fc()
             ekf_imu.gyro_x =  (double)ism6_latest_si.gyro_x;
             ekf_imu.gyro_y = -(double)ism6_latest_si.gyro_y;
             ekf_imu.gyro_z = -(double)ism6_latest_si.gyro_z;
+            // #1190: the drain window's verdicts on the raw samples behind this
+            // mean — a saturated axis the mean cannot show.
+            ekf_imu.gyro_railed  = ism6_gyro_rail_pending;
+            ekf_imu.accel_railed = ism6_accel_rail_pending;
 
             // #297: collect a short recent window of EKF-frame gyro so the EKF
             // bias seed (wBias = mean gyro, valid because the pad is
@@ -3540,6 +3563,30 @@ static void loop_fc()
                 const bool use_ahrs_acc = (rocket_state != INFLIGHT) || post_apogee;
                 ekf.update(use_ahrs_acc, ekf_imu, ekf_gnss, ekf_mag);
 
+                // #1190: say so when the shock gate trips — at most once a
+                // second.  On the pad that is the rocket being knocked; in
+                // flight it is the 2026-08-29 nose burst (gyro to 4492 dps),
+                // which put 38° into the pitch for the rest of the flight
+                // before the gate existed.
+                {
+                    static uint32_t shock_trips_logged = 0;
+                    static uint32_t shock_log_ms       = 0;
+                    const uint32_t trips = ekf.shockGateTrips();
+                    if (trips != shock_trips_logged &&
+                        (shock_log_ms == 0 || (now_ms - shock_log_ms) >= 1000U))
+                    {
+                        shock_trips_logged = trips;
+                        shock_log_ms       = now_ms;
+                        ESP_LOGW(TAG, "[EKF] shock gate: %lu trips, attitude held %lu ticks "
+                                      "(window: gyro rail=%d accel rail=%d, |a|=%.1f g) (#1190)",
+                                 (unsigned long)trips,
+                                 (unsigned long)ekf.shockGateHoldTicks(),
+                                 ekf_imu.gyro_railed ? 1 : 0,
+                                 ekf_imu.accel_railed ? 1 : 0,
+                                 (double)(accel_norm / 9.80665f));
+                    }
+                }
+
                 // Barometer measurement update.  Freshness is tracked by
                 // BaroGatePolicy against the sample's own timestamp, NOT the
                 // loop-lifetime bmp_new_for_kf flag (#450).
@@ -3604,6 +3651,16 @@ static void loop_fc()
                 lt_ekf_count++;
                 ekf_tick_counter++;
                 if (ekf_us > lt_ekf_max_us) lt_ekf_max_us = ekf_us;
+            }
+
+            // #1190: the pending shock-gate verdicts described the samples up
+            // to this EKF tick and were offered to it; collect afresh for the
+            // next one.  (Cleared whether or not the filter was initialised, so
+            // a knock during setup cannot hold the first update after init.)
+            if (run_ekf_this_tick)
+            {
+                ism6_gyro_rail_pending  = false;
+                ism6_accel_rail_pending = false;
             }
 
             // ── Extract EKF outputs (only after init) ──
@@ -4258,6 +4315,8 @@ static void loop_fc()
         non_sensor_data.time_us = logic_now_us;
         // #529: achieved-EKF-cadence witness; stays 0 until the EKF initializes.
         non_sensor_data.ekf_ticks = (uint16_t)ekf_tick_counter;
+        // #1190: shock-gate trips (update ticks whose attitude was held).
+        non_sensor_data.shock_gate_trips = (uint16_t)ekf.shockGateTrips();
         if (ekf_initialized) {
             float imu_quat[4];
             ekf.getQuaternion(imu_quat);
@@ -4394,6 +4453,24 @@ static void loop_fc()
                     gbias_trip_seen_ms != 0 && (now_ms - gbias_trip_seen_ms) < 5000U;
 
                 if ((!ekf.gyroBiasHealthy() || gbias_tripping_recently) && ekf_st == SH_OK) {
+                    ekf_st = SH_DEGRADED;
+                }
+
+                // #1190: the shock gate is holding the attitude (a gyro or
+                // accelerometer axis at its rail inside its settle window) or
+                // has tripped in the last 5 s.  On the pad that is the rocket being
+                // knocked about; in flight, the attitude just spent a window
+                // not integrating.  Amber, like the gate above.
+                static uint32_t last_shock_trips   = 0;
+                static uint32_t shock_trip_seen_ms = 0;
+                const uint32_t shock_now = ekf.shockGateTrips();
+                if (shock_now != last_shock_trips) {
+                    last_shock_trips   = shock_now;
+                    shock_trip_seen_ms = now_ms;
+                }
+                const bool shock_recent =
+                    shock_trip_seen_ms != 0 && (now_ms - shock_trip_seen_ms) < 5000U;
+                if ((ekf.shockGateHeld() || shock_recent) && ekf_st == SH_OK) {
                     ekf_st = SH_DEGRADED;
                 }
             }
@@ -4627,7 +4704,7 @@ static void loop_fc()
             // #508: trips/clips make a laundered bias visible on the console
             // — a healthy pad shows 0/0.
             ESP_LOGI(TAG, "[EKF DIAG] mag[%s]=%.1fuT(%s) gyro_bias=[%.3f,%.3f,%.3f]dps "
-                          "(sig=%.2f trips=%u clips=%u %s)",
+                          "(sig=%.2f trips=%u clips=%u %s) shock=%u/%u",
                           mag_src,
                           (double)mag_uT,
                           mag_status,
@@ -4637,7 +4714,9 @@ static void loop_fc()
                           (double)ekf.gyroBiasSigmaMaxDps(),
                           (unsigned)ekf.gyroBiasGateTrips(),
                           (unsigned)ekf.gyroBiasClipCount(),
-                          ekf.gyroBiasHealthy() ? "OK" : "NO-GO");
+                          ekf.gyroBiasHealthy() ? "OK" : "NO-GO",
+                          (unsigned)ekf.shockGateTrips(),        // #1190 trips / held ticks
+                          (unsigned)ekf.shockGateHoldTicks());
         }
     }
 

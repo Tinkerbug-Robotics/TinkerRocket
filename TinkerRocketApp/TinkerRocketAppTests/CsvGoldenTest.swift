@@ -72,6 +72,6 @@ final class CsvGoldenTest: XCTestCase {
         // Structural sanity pins (also documents the fixture's shape).
         let lines = generatedCsv.components(separatedBy: "\n").filter { !$0.isEmpty }
         XCTAssertEqual(lines.count, 161 + 1, "expected 161 data rows + header")
-        XCTAssertEqual(lines[0].components(separatedBy: ",").count, 63, "63 columns")
+        XCTAssertEqual(lines[0].components(separatedBy: ",").count, 64, "64 columns")   // #1190: +EKF Shock Gate Trips
     }
 }

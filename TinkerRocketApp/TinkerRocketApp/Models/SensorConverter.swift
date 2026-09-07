@@ -422,7 +422,8 @@ nonisolated class SensorConverter {
             reboot_recovery: false,
             guidance_enabled: false,
             deployed_flag: false,
-            ekf_ticks: nil
+            ekf_ticks: nil,
+            shock_gate_trips: nil
         )
     }
 
@@ -535,7 +536,8 @@ nonisolated class SensorConverter {
             reboot_recovery:  reboot_recovery,
             guidance_enabled: guidance_enabled,
             deployed_flag:    deployed_flag,
-            ekf_ticks:        raw.ekf_ticks   // #529
+            ekf_ticks:        raw.ekf_ticks,   // #529
+            shock_gate_trips: raw.shock_gate_trips   // #1190
         )
     }
 }

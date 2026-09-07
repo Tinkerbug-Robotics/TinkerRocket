@@ -42,7 +42,7 @@ class CsvGoldenTest {
         }
         val lines = csv.split("\n").filter { it.isNotEmpty() }
         assertEquals(162, lines.size, "161 data rows + header")
-        assertEquals(63, lines[0].split(",").size, "63 columns")
+        assertEquals(64, lines[0].split(",").size, "64 columns")   // #1190: +EKF Shock Gate Trips
     }
 
     @Test
