@@ -122,7 +122,9 @@ it. A rocket that has left the pad is in flight whether or not the software appr
 
 `LANDED` is terminal. It sets `post_flight_lockout`, which is re-asserted at the top of
 the state machine on every pass, so no command and no re-triggered launch detect can
-start a second flight without a reboot (#317).
+start a second flight without a reboot (#317). The simulator's Stop command is the one
+deliberate re-arm, and it counts only when a sim flight was started this boot; a Stop
+that reaches a real flight's `LANDED` is ignored (#1113).
 
 `MAG_CALIBRATION` is a bench-only state entered by app command and refused in
 `PRELAUNCH`/`INFLIGHT`/`LANDED`. While in it, kinematic checks are skipped, EKF init is

@@ -1479,9 +1479,32 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
         // edge with the flight in LANDED) is never mistaken for one.
         // resetFlightStateForSim() re-syncs the edge detector, so the
         // stopSim() just above is not counted a second time there (#1104).
-        sensor_collector.stopSim();
-        resetFlightStateForSim("stop");
-        ESP_LOGI(TAG, "[SIM] Stop cmd received — flight state reset (#393)");
+        //
+        // #1113: but ONLY against a sim flight.  This reset clears the #317
+        // post-flight lockout — the one command that deliberately re-arms —
+        // and a real INFLIGHT discards frames but LANDED does not, so a Stop
+        // that reached a REAL flight's terminal LANDED (a broadcast uplink
+        // meant for the bench rocket, an app whose SIM MODE banner never
+        // cleared) dropped the flight to READY with the deployment latches
+        // cleared and a failed channel's e-match still live.  The latch is
+        // what tells a flown-out sim (Stop must still work) from a real
+        // landing (it must not): isSimActive() is false for both.  The queue
+        // drains whole in one pass, so a START and a STOP can land in the
+        // same tick before the edge handler has latched — the active sim
+        // carries that one.  sim_flight_policy.h pins the rule.
+        if (sim_flight::stopApplies(sim_flight_latched,
+                                    sensor_collector.isSimActive()))
+        {
+            sensor_collector.stopSim();
+            resetFlightStateForSim("stop");
+            ESP_LOGI(TAG, "[SIM] Stop cmd received — flight state reset (#393)");
+        }
+        else
+        {
+            ESP_LOGW(TAG, "[SIM] Stop ignored: no sim flight this run "
+                          "(state=%u post_flight_lockout=%d) (#1113)",
+                     (unsigned)rocket_state, (int)post_flight_lockout);
+        }
     }
     else if (cmd.type == GROUND_TEST_START || cmd.type == GROUND_TEST_STOP)
     {

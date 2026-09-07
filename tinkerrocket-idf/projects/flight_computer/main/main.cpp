@@ -6144,9 +6144,32 @@ static void loop_fc()
                 // (#1104).  Works whether the sim is still airborne (delivered
                 // mid-flight via the #393 INFLIGHT-poll exception) or already
                 // LANDED.
-                sensor_collector.stopSim();
-                resetFlightStateForSim("stop");
-                ESP_LOGI(TAG, "[SIM] Stop cmd received — flight state reset (#393)");
+                //
+                // #1113: but ONLY against a sim flight.  This reset clears the
+                // #317 post-flight lockout — it is the one command that
+                // deliberately re-arms — and this handler has no state gate
+                // (LANDED still polls), so a Stop that reached a REAL flight's
+                // terminal LANDED (a broadcast uplink meant for the bench
+                // rocket, a cmd 7 queued mid-flight and delivered on the first
+                // poll after touchdown, an app whose SIM MODE banner never
+                // cleared) dropped the FC to READY with the deployment latches
+                // cleared and a failed channel's e-match still live.  The
+                // latch is what tells a flown-out sim (Stop must still work)
+                // from a real landing (it must not): isSimActive() is false
+                // for both.  sim_flight_policy.h pins the rule.
+                if (sim_flight::stopApplies(sim_flight_latched,
+                                            sensor_collector.isSimActive()))
+                {
+                    sensor_collector.stopSim();
+                    resetFlightStateForSim("stop");
+                    ESP_LOGI(TAG, "[SIM] Stop cmd received — flight state reset (#393)");
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "[SIM] Stop ignored: no sim flight this run "
+                                  "(state=%u post_flight_lockout=%d) (#1113)",
+                             (unsigned)rocket_state, (int)post_flight_lockout);
+                }
             }
             else if (out_pending_command == GROUND_TEST_START)
             {
