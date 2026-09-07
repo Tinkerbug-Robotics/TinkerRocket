@@ -133,7 +133,10 @@ idf.py -B build_v9 -DTR_BOARD_V9=1 build
 
 `TR_BOARD_V9=1` is the board in `hardware/rocket-computer/` (its title block reads V9, V10
 at HEAD). `TR_BOARD_V8=1` is the older bench boards, whose PCB was never committed;
-`TR_BOARD_V7=1` is the legacy board.
+`TR_BOARD_V7=1` is the legacy board. `TR_BOARD_M1=1` is `hardware/rocket-computer-mini/`,
+whose flight computer is an ESP32-S3 rather than a P4 — its overlay changes the chip
+target, so it needs a build dir of its own (`-B build_m1`) and rewrites
+`dependencies.lock` to `target: esp32s3`; revert that file after a local M1 build.
 
 The flag is mandatory here — and only here — because the failure mode is pyrotechnic and
 silent. V8 and V9 disagree on the ARM pin (5 vs 16) and swap the FIRE pins of channels 2
@@ -144,7 +147,8 @@ bleed that still lights a test LED. The boot log prints the map it was built wit
 (`[BOARD] pin map:` / `[BOARD] pyro:`); check it against the board before arming anything.
 
 The out computer takes `-DTR_BOARD_V9=1` too, though on that MCU it selects the same pins
-as V8 — pass it anyway so both halves of a pair are built with one flag.
+as V8 — pass it anyway so both halves of a pair are built with one flag. The same goes for
+`-DTR_BOARD_M1=1`: both halves of the mini are built with it.
 
 ### Building the base station
 

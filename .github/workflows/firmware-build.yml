@@ -35,6 +35,15 @@ jobs:
           - project: out_computer
             board: V9
             flags: -B build_v9 -DTR_BOARD_V9=1
+          # rocket-computer-mini — the board at fab (rocket-computer-mini-v1.0.1)
+          # — is a two-ESP32-S3 board that runs THIS project and flight_computer
+          # with -DTR_BOARD_M1=1, not the single-MCU rocket_computer_mini
+          # project below, which targets a shape that was never fabbed (#1188).
+          # M1 shares the V9 PSRAM overlay but has its own pin map: the radio is
+          # on-board SPI and there is no GNSS/LoRa rail switch of its own.
+          - project: out_computer
+            board: M1
+            flags: -B build_m1 -DTR_BOARD_M1=1
           # pyro_channel_test drives squib FETs by hand and was not built by CI
           # at all. Its flag is mandatory too (#834): V7's PYRO1 FIRE pin is
           # PYRO_ARM on V9, so a flagless build armed the board on the keypress
@@ -75,6 +84,15 @@ jobs:
           - project: flight_computer
             board: V9
             flags: -B build_v9 -DTR_BOARD_V9=1
+          # M1 is the one flight computer that is NOT an ESP32-P4: rocket-
+          # computer-mini's FC is an ESP32-S3, so sdkconfig.defaults.m1 changes
+          # CONFIG_IDF_TARGET as well as the pin map, and the project CMakeLists
+          # forces the target into a build dir of its own. Nothing but a bench
+          # Mac had built it until #1188 — the board being built was the only
+          # firmware target not in this matrix.
+          - project: flight_computer
+            board: M1
+            flags: -B build_m1 -DTR_BOARD_M1=1
 
     steps:
       - uses: actions/checkout@v5
