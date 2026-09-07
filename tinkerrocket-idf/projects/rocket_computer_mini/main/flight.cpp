@@ -1517,38 +1517,41 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
     else if (cmd.type == GYRO_CAL_CMD)
     {
         ESP_LOGI(TAG, "[CAL] Sensor calibration requested...");
-        // #1110: the collector runs the window inside its IMU poll task and
-        // says whether a result was measured and committed.  On false it kept
-        // the previous offsets, so the converter and NVS already hold what
-        // the rocket is using — nothing to re-apply and nothing to save.
-        if (sensor_collector.calibrateGyro(config::ISM6HG256_ROT_Z_DEG))
+        // #1110: the collector measures the window inside its IMU poll task.
+        // #1114: the flight loop no longer waits the ~10 s for it — the
+        // request is posted here and the answer is collected by the "Pad
+        // calibration completion" block in loop_fc(), so launch detection,
+        // the EKF, the state machine and the deployment channels keep
+        // running through the window.  A rocket that is flying, has flown,
+        // or has just left the pad is refused: a tap that lands after
+        // ignition must never open a window.
+        const char* cal_refusal =
+            sensor_cal::refusal(rocket_state, kinematics.launch_flag);
+        if (cal_refusal != nullptr)
         {
-            sensor_converter.setHighGBias(sensor_collector.hg_bias_x,
-                                          sensor_collector.hg_bias_y,
-                                          sensor_collector.hg_bias_z);
-            // (FC also echoed the bias into the OC status-query payload — the
-            // mini's comms side reads it back via SENSOR_CAL_STATUS below.)
-            // Persist to NVS — high-g bias + gyro zero-rate bias (#132).
-            prefs.begin("cal", false);
-            prefs.putFloat("hgbx", sensor_collector.hg_bias_x);
-            prefs.putFloat("hgby", sensor_collector.hg_bias_y);
-            prefs.putFloat("hgbz", sensor_collector.hg_bias_z);
-            prefs.putShort("gx", sensor_collector_hw.gyro_cal_x);
-            prefs.putShort("gy", sensor_collector_hw.gyro_cal_y);
-            prefs.putShort("gz", sensor_collector_hw.gyro_cal_z);
-            prefs.end();
-            ESP_LOGI(TAG, "[CAL] Sensor calibration complete (saved to NVS)");
+            ESP_LOGW(TAG, "[CAL] Sensor calibration REFUSED: %s — previous calibration kept",
+                     cal_refusal);
+            publishSensorCalFromNVS();
         }
-        else
+        else if (sensor_collector.calibrationInProgress())
         {
-            ESP_LOGE(TAG, "[CAL] Sensor calibration FAILED — previous calibration kept "
-                          "(the SENSORS log above says why)");
+            // The open window answers for this tap too: its completion
+            // publishes.  Publishing the stored cal now would resolve the
+            // app's pending snapshot to the OLD values first.
+            ESP_LOGW(TAG, "[CAL] Sensor calibration already running — request ignored");
         }
-        // Push the stored result up either way so the app's pending snapshot
-        // resolves to the values the rocket is actually using.  The status
-        // frame carries no failure field, so a failed run reads as a re-send
-        // of the old calibration there.
-        publishSensorCalFromNVS();
+        else if (!sensor_collector.startCalibration(config::ISM6HG256_ROT_Z_DEG))
+        {
+            // Not started: no IMU, poll task down, or a sim running — the
+            // SENSORS/SIM line above says which.  Nothing changed; push the
+            // stored result so the app's pending snapshot resolves to the
+            // values the rocket is actually using.  The status frame carries
+            // no failure field, so it reads as a re-send of the old
+            // calibration there.
+            ESP_LOGE(TAG, "[CAL] Sensor calibration NOT STARTED — previous calibration kept "
+                          "(the log line above says why)");
+            publishSensorCalFromNVS();
+        }
     }
     // Issue #96 — magnetometer hard-iron cal: start / abort / accept / retry.
     // Entry refused only from INFLIGHT.  With #216 the MAG_CALIBRATION state
@@ -3627,6 +3630,70 @@ static void loop_fc()
                     continue;
                 }
                 handleCommandFrame(cmd, now_ms);
+            }
+        }
+
+        // ==========================================================================
+        // SECTION: Pad calibration completion (#1114)
+        // ==========================================================================
+        // The IMU poll task is measuring the window GYRO_CAL_CMD posted from
+        // handleCommandFrame() while this loop keeps flying.  Collect the
+        // answer here, once per pass — or drop the window the moment the
+        // rocket stops being on the pad.  launch_flag is the detector's own
+        // verdict; rocket_state covers a launch it did not call (a sim, a
+        // restored flight).  Either way the calibrator is being fed motion,
+        // so its answer is discarded unseen and the previous calibration
+        // stays live.  Until #1114 the flight task sat inside the calibrator
+        // for the whole window: a motor lit during an on-pad cal was a boost
+        // nobody sampled — no launch detect, no INFLIGHT, no deployment.
+        if (sensor_collector.calibrationInProgress())
+        {
+            const char* cal_cancel =
+                sensor_cal::refusal(rocket_state, kinematics.launch_flag);
+            if (cal_cancel != nullptr)
+            {
+                sensor_collector.cancelCalibration();
+                ESP_LOGW(TAG, "[CAL] Sensor calibration CANCELLED: %s — previous calibration kept",
+                         cal_cancel);
+                publishSensorCalFromNVS();
+            }
+            else
+            {
+                switch (sensor_collector.pollCalibration())
+                {
+                    case SensorCalPoll::Committed:
+                        sensor_converter.setHighGBias(sensor_collector.hg_bias_x,
+                                                      sensor_collector.hg_bias_y,
+                                                      sensor_collector.hg_bias_z);
+                        // (FC also echoes the bias into the OC status-query
+                        // payload — the mini's comms side reads it back via
+                        // SENSOR_CAL_STATUS below.)
+                        // Persist to NVS — high-g bias + gyro zero-rate bias (#132).
+                        prefs.begin("cal", false);
+                        prefs.putFloat("hgbx", sensor_collector.hg_bias_x);
+                        prefs.putFloat("hgby", sensor_collector.hg_bias_y);
+                        prefs.putFloat("hgbz", sensor_collector.hg_bias_z);
+                        prefs.putShort("gx", sensor_collector_hw.gyro_cal_x);
+                        prefs.putShort("gy", sensor_collector_hw.gyro_cal_y);
+                        prefs.putShort("gz", sensor_collector_hw.gyro_cal_z);
+                        prefs.end();
+                        ESP_LOGI(TAG, "[CAL] Sensor calibration complete (saved to NVS)");
+                        publishSensorCalFromNVS();
+                        break;
+                    case SensorCalPoll::Rejected:
+                        // The previous offsets are untouched, so the
+                        // converter and NVS already hold what the rocket is
+                        // using — nothing to re-apply, nothing to save.
+                        // Publish so the app's pending snapshot resolves; the
+                        // frame carries no failure field, so it reads as a
+                        // re-send of the old calibration there.
+                        ESP_LOGE(TAG, "[CAL] Sensor calibration FAILED — previous calibration kept "
+                                      "(the SENSORS log above says why)");
+                        publishSensorCalFromNVS();
+                        break;
+                    default:
+                        break;   // Running: nothing to do this pass
+                }
             }
         }
 

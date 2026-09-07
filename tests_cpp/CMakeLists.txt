@@ -260,6 +260,20 @@ target_include_directories(test_sensor_cal_math PRIVATE
 target_link_libraries(test_sensor_cal_math GTest::gtest_main)
 gtest_discover_tests(test_sensor_cal_math)
 
+# ---------- test_sensor_cal_session (#1114) ----------
+# The request/answer handshake around the pad-calibration window: the flight
+# task posts a seq and keeps flying, the poll task answers with it, a cancel
+# drops the answer, and the refusal rule that keeps a flying rocket out of it.
+# Header-only and IDF-free; the semaphore between the two tasks is the one
+# part that needs a rocket.
+add_executable(test_sensor_cal_session test_sensor_cal_session.cpp)
+target_include_directories(test_sensor_cal_session PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_sensor_cal_session GTest::gtest_main)
+gtest_discover_tests(test_sensor_cal_session)
+
 # ---------- test_orientation ----------
 # Board→rocket mounting orientation utilities (discrete 24-code set,
 # quaternion round-trips, gravity nose snap, pad attitude init).
