@@ -19,7 +19,9 @@
 > added to the shared library after V1.0.0; **the board keeps its own copies and must not be
 > updated from the library before this run.**
 >
-> As of the V1.0.1 tag. The gerbers in `gerbers/` are plotted from it.
+> As of the V1.0.1 tag, plus the [#1167](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1167)
+> decisions recorded 2026-09-07 in A3, B2, B4–B7 and the rationale below. Those changed text only,
+> not the board: the gerbers in `gerbers/` are still plotted from the tag.
 >
 > Standing rule: **never send this file to a fab house or an assembler with a `<TBD>` in it.**
 > There are none as of 2026-09-04; if one reappears, it is a number that does not exist yet. The `README` warns specifically
@@ -79,13 +81,8 @@ A2. SURFACE FINISH: ENIG. REQUIRED FOR THE 0.5 mm PITCH 24-BALL
 A3. VIAS: FILLED WITH NON-CONDUCTIVE EPOXY AND PLATED OVER
     (CAPPED), IPC-4761 TYPE VII.
     *** VIA-IN-PAD IS MANDATORY ON THIS BOARD, NOT OPTIONAL. ***
-    THE GNSS MODULE (U5) CARRIES A VIA IN EVERY GROUND PAD THAT
-    HAS ONE AS A DELIBERATE HEAT PATH INTO A BLIND JOINT PLANE.
-    (LAYOUT NOTE, NOT A FAB INSTRUCTION: PADS 32 AND 33 HAVE NO
-    VIA TODAY - MEASURED 2026-09-04. PADS 18, 30 AND 34 DO, AND
-    THIS NOTE NAMED THEM IN ERROR UNTIL NOW. PAD 32 IS A CORNER
-    OF THE ARRAY, SO IT IS THE MORE USEFUL OF THE TWO TO STITCH.
-    ACCEPTED AS-IS FOR THIS RUN.) AN
+    THE GNSS MODULE (U5) CARRIES A VIA IN 24 OF ITS 26 GROUND
+    PADS AS A DELIBERATE HEAT PATH INTO A BLIND JOINT PLANE. AN
     UNPLUGGED BARREL DRAINS THE JOINT IT SITS IN, AND THAT JOINT
     CANNOT BE INSPECTED OR REWORKED. IF THIS LINE IS NOT ON THE
     QUOTE, THE BOARD IS NOT BUILDABLE.
@@ -170,7 +167,8 @@ B2. *** U5 - THE 24 INTERIOR JOINTS ARE BLIND. THE 12
     1.2 mm PER SIDE, SO USE AN ANGLED VIEW (ROUGHLY 30-40 DEG
     OFF THE BOARD), NOT TOP-DOWN AOI.
     THE 24 INTERIOR ARRAY JOINTS LIE UNDER THE MODULE PCB AND
-    CANNOT BE SEEN BY ANY METHOD - B5 IS THEIR ONLY TEST.
+    CANNOT BE SEEN BY ANY METHOD, AND V1 HAS NO TEST THAT
+    REACHES THEM (B5).
     26 OF THE 36 PADS ARE GROUND,
     SO A COLD GROUND JOINT IS ALSO ELECTRICALLY SILENT ON A
     NORMAL CONTINUITY CHECK.
@@ -189,8 +187,12 @@ B3. *** U5 GETS ONE REFLOW CYCLE. THAT IS THE DATASHEET
     AND U5 IS NOT TO BE REFLOWED TWICE FOR ANY REASON.
 
 B4. PROFILE TO U5'S JOINTS, NOT TO THE BOARD TOP.
-    THERMOCOUPLE THE WITNESS PADS (B5) AND HOLD QUECTEL'S
-    LIMITS *AT THOSE PADS*:
+    THERE ARE NO WITNESS PADS (B5). THERMOCOUPLE THE EXPOSED
+    TOE OF A PERIMETER LAND - PADS 1-12 RUN 1.00 mm PAST THE
+    MODULE PCB EDGE (B2) - AND HOLD QUECTEL'S LIMITS *AT THAT
+    JOINT*. THAT READING IS THE PERIMETER, WHICH LEADS THE 24
+    INTERIOR JOINTS; THEY ARE UNMEASURED, AND THE EXTENDED SOAK
+    BELOW IS WHAT CLOSES THAT GAP:
       RAMP-TO-SOAK SLOPE      0-3 C/s
       SOAK 150 C TO 200 C     70-120 s
       TIME ABOVE 217 C        40-70 s
@@ -207,19 +209,26 @@ B4. PROFILE TO U5'S JOINTS, NOT TO THE BOARD TOP.
     HOTTER PEAK IS NOT AVAILABLE AS A SUBSTITUTE.
 
 B5. *** U5 INTERIOR JOINTS ARE NOT ELECTRICALLY TESTABLE. ***
-    !!! THE WITNESS-PAD SCHEME DESCRIBED BELOW WAS NEVER BUILT.
-    THE BOARD HAS NO TEST POINTS, AND EVERY U5 GROUND PAD IS
-    TIED TO THE POUR THROUGH ITS OWN VIA, SO NO PAIR OF PADS
-    ISOLATES A JOINT. X-RAY IS THE ONLY ACCEPTANCE METHOD FOR
-    THE 24 BLIND INTERIOR JOINTS UNTIL WITNESS PADS ARE ACTUALLY
-    DRAWN. DECIDE WHICH BEFORE COMMITTING TO A BATCH. !!!
-    (UNBUILT SCHEME, RETAINED SO IT CAN BE IMPLEMENTED:)
-    FIVE OF U5'S GROUND PADS ARE ISOLATED FROM THE POUR AND
-    ROUTED OUT TO TEST PADS (NOT YET DRAWN). CONTINUITY BETWEEN ANY
-    PAIR RUNS THROUGH ONE JOINT, THE MODULE'S INTERNAL GROUND,
-    AND ANOTHER JOINT. MEASURE ALL PAIRS. A PAD THAT READS OPEN
-    AGAINST ALL THE OTHERS IS A COLD JOINT ON THAT PAD.
-    THIS IS THE ONLY TEST THAT SEES THESE JOINTS.
+    THE BOARD HAS NO WITNESS PADS AND NO TEST POINTS. EVERY U5
+    GROUND PAD IS TIED TO THE POUR, SO NO PAIR OF PADS ISOLATES
+    A JOINT, AND A COLD INTERIOR JOINT IS SILENT ON ANY
+    CONTINUITY CHECK.
+    DECIDED 2026-09-07 (#1167): V1 IS BUILT WITHOUT WITNESS
+    PADS - THERE IS NO ROOM ON A 22.55 mm BOARD TO ROUTE FIVE
+    PADS OUT TO A TEST FIELD. ON THIS RUN THE 24 INTERIOR JOINTS
+    ARE INSPECTED BY X-RAY IF THAT IS AVAILABLE, AND OTHERWISE
+    NOT AT ALL: THE FIRST ARTICLES ARE THE TEST. A MODULE WITH
+    GOOD PERIMETER JOINTS (B2) BUT A COLD GROUND ARRAY CAN
+    STILL TALK AND FIX, SO TREAT WEAK GNSS SIGNAL ON A FIRST
+    ARTICLE AS A SOLDERING SUSPECT, NOT ONLY AN ANTENNA ONE.
+    IF THAT APPEARS, REOPEN #1167 AND DRAW THE SCHEME BELOW ON
+    THE NEXT SPIN.
+    (SCHEME NOT BUILT ON V1, RETAINED FOR THE NEXT SPIN:)
+    FIVE OF U5'S GROUND PADS ISOLATED FROM THE POUR AND ROUTED
+    OUT TO TEST PADS. CONTINUITY BETWEEN ANY PAIR RUNS THROUGH
+    ONE JOINT, THE MODULE'S INTERNAL GROUND, AND ANOTHER JOINT.
+    MEASURE ALL PAIRS. A PAD THAT READS OPEN AGAINST ALL THE
+    OTHERS IS A COLD JOINT ON THAT PAD.
     FOUR PADS ARE THE ARRAY CORNERS (13, 17, 32, 36) AND ONE
     IS THE NEAREST-TO-CENTRE PAD - USE 20 OR 29. THERE IS NO
     CENTRE PAD: THE SIX MIDDLE POSITIONS ARE THE ANTENNA FEED
@@ -234,25 +243,33 @@ B6. *** BUILT FOR THE OVEN. LIMITED REWORK ONLY. ***
     CASTELLATION IS ACCESSIBLE TO A FINE IRON FROM THE SIDE.
     A COLD JOINT ANYWHERE IN THE 24-PAD INTERIOR ARRAY IS NOT
     REACHABLE AND THE BOARD IS SCRAP.
-    BUILD THE FIRST ARTICLES AS A QUALIFICATION RUN AND CLEAR
-    B5 BEFORE COMMITTING TO A BATCH - NOTE B5 CURRENTLY MEANS
-    X-RAY OF THE 24 INTERIOR JOINTS, NOT A CONTINUITY TEST,
-    BECAUSE THE WITNESS PADS DO NOT EXIST.
+    BUILD THE FIRST ARTICLES AS A QUALIFICATION RUN. WITH NO
+    WITNESS PADS ON V1 (B5), CLEARING A FIRST ARTICLE MEANS
+    X-RAY OF THE 24 INTERIOR JOINTS IF THAT IS AVAILABLE, AND
+    OTHERWISE A MODULE THAT ACQUIRES AND HOLDS A FIX AT SIGNAL
+    LEVELS THE PROJECT'S OTHER GNSS INSTALLATIONS SEE. DO NOT
+    COMMIT TO A BATCH ON A FIRST ARTICLE THAT HAS NOT BEEN
+    THROUGH THAT.
 
 B7a. J8 (SMA EDGE CONNECTOR) IS HAND SOLDERED AFTER BOTH
-    REFLOW PASSES. IT STRADDLES THE BOARD EDGE AND ITS TWO
-    TOP-SIDE PADS CARRY PASTE APERTURES IN THE FOOTPRINT - DO
-    NOT PASTE THEM. THE TOP STENCIL CANNOT SEAT OVER A FITTED
-    CONNECTOR, AND PASTE REFLOWED ONTO EMPTY PADS HAS TO BE
-    CLEANED OFF BEFORE THE PART CAN GO ON.
+    REFLOW PASSES, AND IT IS NOT A PASS-1 PART (B7). IT
+    STRADDLES THE BOARD EDGE - THREE PADS ON B.Cu (1, G1, G2)
+    AND TWO ON F.Cu (G3, G4) - AND THE FOOTPRINT PUTS A PASTE
+    APERTURE ON ALL FIVE, SO THE V1 STENCILS HAVE THEM. MASK
+    THOSE FIVE APERTURES ON THE STENCIL. IF THEY ARE PRINTED
+    ANYWAY THE PADS COME OUT OF REFLOW PRE-TINNED, AND THAT
+    SOLDER IS RE-FLOWED, NOT FOUGHT, WHEN THE CONNECTOR IS
+    FITTED. J8 IS ALSO LISTED IN THE POSITION FILE (BOTTOM
+    SIDE) - SKIP IT AT PLACEMENT.
 
 B7. BOTTOM-SIDE PARTS AT OR OVER THE INVERTED-PASS WEIGHT
     LIMIT (30 g/in2 OF LAND):
       U16  900 MHz LORA MODULE  12.0 mm2 ->  0.56 g
-      J8   SMA EDGE             26.2 mm2 ->  1.22 g
       J2   TERMINAL BLOCK       64.0 mm2 ->  2.98 g
     THESE NEED ADHESIVE DOTS BEFORE THE FIRST PASS, OR HAND
-    ATTACH AFTER THE SECOND.
+    ATTACH AFTER THE SECOND. J8 (SMA EDGE, 26.2 mm2 -> 1.22 g)
+    IS IN THE SAME CLASS AND IS ALREADY HAND ATTACHED AFTER THE
+    SECOND PASS (B7a) - IT IS NEVER ON THE BOARD FOR PASS 1.
 
 B8. C130 (5 F 2.7 V RADIAL SUPERCAPACITOR, 10 mm DIA x 20 mm,
     5 mm LEAD PITCH, MOUNTED LYING DOWN) IS THE ONLY THROUGH-
@@ -272,8 +289,8 @@ B8. C130 (5 F 2.7 V RADIAL SUPERCAPACITOR, 10 mm DIA x 20 mm,
 ## Why each item is here
 
 **A3 — via protection is load-bearing on this board.** On the rocket computer and the LoRa board,
-filled-and-capped is a cost adder worth confirming on the quote. Here it is a build gate. `U5`'s
-ground pads each carry a via *on purpose*.
+filled-and-capped is a cost adder worth confirming on the quote. Here it is a build gate. 24 of
+`U5`'s 26 ground pads carry a via *on purpose*; the two that do not are explained below.
 
 The plane that matters is **`In1.Cu`, 0.0994 mm below `F.Cu`** on the A1 stackup — not the far side
 of the board. Through that prepreg an interior ground pad's own 1.00 mm² of land conducts about
@@ -295,6 +312,15 @@ soak in B4 is what actually drains the lag; the vias make draining it possible.
 
 An unplugged barrel turns each of those vias from a heat path into a drain, on a joint nobody can
 see and nobody can fix.
+
+**Pads 32 and 33 have no via in the pad, by decision (2026-09-07,
+[#1167](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1167)).** Pad 32 sits over the
+`V_MCU_2S` pour on `B.Cu`, which is only 1.35 mm wide at that point; a 0.30 mm via's antipad would
+take 0.58 mm out of that high-current copper. A via under pad 33 lands on the 0.40 mm `VBUS` track
+on the same layer. Neither pad is orphaned: both are solid to the `F.Cu` pour, pad 32's nearest
+ground via clips its edge, and pad 33's is 0.06 mm off its corner. The review's original list
+(18, 30, 33, 34) was the pre-fab-gate board; 18, 30 and 34 were stitched on 2026-09-04. Accepted as
+built; revisit only if the first articles show `U5` soldering trouble.
 
 **A4 — two RF feeds, not one.** The mini carries a 2.4 GHz chip antenna and a 900 MHz radio feed
 to an SMA edge connector. The rocket computer's notes list one impedance-controlled feed; copying
@@ -326,33 +352,42 @@ toe beyond the PCB edge. They carry `RXD`, `TXD`, `VCC`, `V_BCKP`, `1PPS` and tw
 signal on the part. The antenna's 1.2 mm overhang means they are not visible from directly above,
 but an angled view sees them, which is what castellations are for.
 
-That leaves the 24-pad interior array as the genuinely blind population, all of it ground. B5 is
-their only test and it is aimed at exactly them — the four array corners and a near-centre pad.
-Combined with 26 of 36 pads being ground, an ordinary electrical check cannot distinguish a sound
-module from one hanging on its ten signal joints — those work or they do not, and the ground array
-stays silent either way. The witness pads are the only incoming inspection that reaches the interior
-array, which is why B5 is worded as mandatory rather than advisory.
+That leaves the 24-pad interior array as the genuinely blind population, all of it ground. The
+witness-pad scheme in B5 was aimed at exactly them — the four array corners and a near-centre pad —
+because with 26 of 36 pads being ground, an ordinary electrical check cannot distinguish a sound
+module from one hanging on its ten signal joints; those work or they do not, and the ground array
+stays silent either way.
+
+**V1 does not have the witness pads** (decided 2026-09-07,
+[#1167](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1167)). Routing five isolated pads
+out to a test field needs room a 22.55 mm board does not have, so on this run the interior array is
+inspected by X-ray if the assembler has it and otherwise not at all, and the first articles' GNSS
+performance is the evidence. The scheme stays in B5 so it can be drawn on the next spin if those
+articles say it is needed.
 
 **B3, B7 — the second pass fully remelts the first.** Pass 2 takes the whole board above liquidus,
 so every bottom-side joint is liquid for 45–90 s with nothing but surface tension holding the part.
-`U5` is far too heavy for that, which fixes it to the top side — and that in turn puts `U16`, `J8`
-and `J2` on the inverted pass, all three at or under their own weight budget. The datasheet then
+`U5` is far too heavy for that, which fixes it to the top side — and that in turn puts `U16` and
+`J2` on the inverted pass, both at or under their own weight budget, with `J8` off the reflow line
+altogether (B7a). The datasheet then
 makes it a requirement rather than an inference: max. reflow cycle is **1**, and Quectel asks for
 the module to be mounted only after the opposite side has been reflowed.
 
 **That 45–90 s figure now conflicts with B4 and the conflict is real.** Quectel caps time above
 217 °C at 70 s and applies it to *every* joint on the board, hottest and coldest. A pass-2 profile
 that leaves bottom-side joints liquid for 90 s is outside that limit even if `U5`'s own lagging
-joints land inside it. Pass 2 has to be developed against both ends at once — long enough at the
-witness pads, short enough at the bottom-side joints — and that is a profiling exercise for the
-qualification run in B6, not something that can be settled from the file.
+joints land inside it. Pass 2 has to be developed against both ends at once — long enough at
+`U5`'s joints, read at a perimeter toe per B4 with the interior lagging it, short enough at the
+bottom-side joints — and that is a profiling exercise for the qualification run in B6, not
+something that can be settled from the file.
 
 **B6 — the recovery path is narrower than the last board's, not absent.** The GNSS daughterboard's
 SAM-M10Q was recovered by reworking `U1` wholesale. That is not available here: one reflow cycle
 means `U5` cannot be lifted and refitted. What *is* available is the castellation — a cold joint on
 any of pads 1–12 is reachable with a fine iron in place, and those twelve carry every signal. A cold
 joint in the 24-pad interior array is unreachable and scraps the board. The first build is still a
-qualification run, because B5 is the only thing that finds the unreachable failures.
+qualification run; without witness pads on V1 the only signal the interior array gives is how the
+module performs, which is why B5 and B6 treat a weak first article as a soldering suspect.
 
 **U5's ten non-ground pads — settled against the datasheet, and none of them may be grounded.**
 Recorded because the schematic is already right and the temptation to "improve" it is real: a
@@ -377,8 +412,18 @@ and without cutting `In1`.
 
 ## Still open
 
-- **Witness pad locations (B5).** Five ground pads, four LGA corners plus one centre, routed out to
-  an accessible test field. Positions depend on the outline.
+- ~~**Witness pad locations (B5).**~~ **Decided 2026-09-07 — not on V1**
+  ([#1167](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1167)). There is no room on the
+  22.55 mm outline to route five isolated pads out to a test field, so V1 is built without them and
+  the first articles carry the risk; see B5 and B6. It comes back only if those articles show `U5`
+  soldering trouble, in which case the next spin draws the scheme retained in B5.
+- **`J8` paste apertures (B7a) — next spin.** The shared `Footprints:CON-SMA-EDGE-S` footprint
+  pastes all five pads, and on every board that uses it (`lora-daughterboard`, `base-station-mini`,
+  this one) two of them are on the face opposite the connector. Both position files shipped so far
+  (this board's V1.0.1 and the LoRa v3 package) also list `J8` as a machine-placed part. Decide per
+  board whether the connector is reflowed or hand-fitted, then either strip the far-side apertures in
+  the library or give this board its own variant. The V1 stencils already carry them; B7a covers
+  this run.
 - **Impedance track widths (A4).** Both feeds, once the stackup is confirmed against the fab's
   actual template.
 - **`U14` land pattern.** The Abracon chip antenna replaced the TDK part; its land is derived from
