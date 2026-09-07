@@ -38,6 +38,7 @@
 #include <esp_attr.h>            // RTC_NOINIT_ATTR for the #848 power-hold latch flag
 #include "pwr_hold_policy.h"     // #848: boot reconciliation decision table
 #include "sim_flight_policy.h"   // #1104: sim edge rule + latched dry-fire predicate (TR_Sensor_Collector_Sim)
+#include "oc_cmd_session_gate.h" // #1105: no replay of one-shot commands across an FC boot
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
 #include <esp_private/gpio.h>      // gpio_func_sel
@@ -320,6 +321,10 @@ static bool out_ready = false;
 static uint32_t out_ready_request_time_ms = 0;
 static uint8_t out_pending_command = 0U;
 static uint8_t last_processed_cmd = 0U;  // dedup: ignore OutComputer repeats
+// #1105: a one-shot actuating command is executed only on a 0 -> cmd edge
+// observed THIS boot; one already being served when the FC came up belongs
+// to the previous session and is refused (see oc_cmd_session_gate.h).
+static OcCmdSessionGate oc_cmd_gate;
 static bool end_flight_sent = false;
 static OutStatusQueryData out_status_query_data = {};
 
@@ -4017,9 +4022,18 @@ static void setup_fc()
                 && resp_payload_len >= 1)
             {
                 if (resp_payload[0] != 0) { out_ready = true; }
-                if (resp_payload_len >= 2 && resp_payload[1] != 0)
+                if (resp_payload_len >= 2)
                 {
-                    out_pending_command = resp_payload[1];
+                    // #1105: this boot's first look at the serving slot goes
+                    // to the session gate. A non-zero command is still adopted
+                    // here; whether it may EXECUTE is decided at dispatch,
+                    // where a one-shot that was already being served when this
+                    // boot started is refused rather than replayed.
+                    oc_cmd_gate.observe(resp_payload[1]);
+                    if (resp_payload[1] != 0)
+                    {
+                        out_pending_command = resp_payload[1];
+                    }
                 }
                 i2c_query_ok++;
             }
@@ -5707,6 +5721,7 @@ static void loop_fc()
                         if (resp_payload_len >= 2)
                         {
                             out_pending_command = resp_payload[1];
+                            oc_cmd_gate.observe(resp_payload[1]);   // #1105
                         }
                         memcpy(cfg_read_cache, combined_buf + 10,
                                COMBINED_READ_SIZE - 10);
@@ -5819,7 +5834,21 @@ static void loop_fc()
         {
             last_processed_cmd = out_pending_command;
             ESP_LOGI(TAG, "[I2C RX] pending_command=0x%02X", (unsigned)out_pending_command);
-            if (out_pending_command == CAMERA_START)
+            if (!oc_cmd_gate.admits(out_pending_command))
+            {
+                // #1105: this one-shot was already being served when this boot
+                // started — the OC's repeat window froze across an FC reset, or
+                // it was tapped while the FC was still booting. Either way it
+                // was issued to a session that no longer exists: consumed into
+                // the dedup key above, never executed. The OC clears the slot
+                // after its remaining repeats and serves an idle poll, after
+                // which a FRESH command of the same id is admitted as normal.
+                ESP_LOGW(TAG, "[I2C RX] one-shot cmd 0x%02X REFUSED: it was already being "
+                              "served when this boot started (previous FC session) — "
+                              "not replayed (#1105)",
+                         (unsigned)out_pending_command);
+            }
+            else if (out_pending_command == CAMERA_START)
             {
                 cameraStart(now_ms);
             }

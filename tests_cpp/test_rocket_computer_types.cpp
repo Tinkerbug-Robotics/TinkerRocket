@@ -64,6 +64,34 @@ TEST(RocketComputerTypes, FcBootStepContract) {
     EXPECT_EQ(all, 0x0Fu) << "degraded bits must not overlap";
 }
 
+// #1105: the one-shot actuating set both ends consult at an FC session
+// boundary (FC: oc_cmd_session_gate.h refuses one served before this boot's
+// first idle poll; OC: cmd_queue_session_policy.h retires them when the FC
+// reports a boot). Pinned by value so a command id cannot silently join or
+// leave the set.
+TEST(RocketComputerTypes, OneShotActuatingSet) {
+    const uint8_t in_set[] = {PYRO_FIRE_TEST, PYRO_CONT_TEST, SERVO_TEST_PENDING,
+                              SERVO_REPLAY_PENDING, GROUND_TEST_START, SIM_START_CMD};
+    for (uint8_t c : in_set) {
+        EXPECT_TRUE(cmdIsOneShotActuating(c)) << "cmd 0x" << std::hex << (unsigned)c;
+    }
+    // Stops must never be refused; configs, desired states and cal/OTA session
+    // steps are idempotent to deliver twice; 0 is the idle slot.
+    const uint8_t not_in_set[] = {0, SERVO_TEST_STOP, SERVO_REPLAY_STOP, GROUND_TEST_STOP,
+                                  SIM_STOP_CMD, SERVO_CONFIG_PENDING, PID_CONFIG_PENDING,
+                                  SIM_CONFIG_PENDING, PYRO_CONFIG_PENDING, ROLL_PROFILE_PENDING,
+                                  CAMERA_START, CAMERA_STOP, SOUNDS_ENABLE, GYRO_CAL_CMD,
+                                  MAG_CAL_START, OTA_BEGIN_PENDING, RECOVERY_END_PENDING};
+    for (uint8_t c : not_in_set) {
+        EXPECT_FALSE(cmdIsOneShotActuating(c)) << "cmd 0x" << std::hex << (unsigned)c;
+    }
+    int members = 0;
+    for (int c = 0; c < 256; c++) {
+        if (cmdIsOneShotActuating((uint8_t)c)) members++;
+    }
+    EXPECT_EQ(members, 6) << "a new one-shot must be added here deliberately";
+}
+
 // #281/#278: the flight-log storage verdict the OC folds into sensor_health.  A
 // full/failing NAND silently dropped the 2026-06-25 guided flight; these pin the
 // thresholds and the bit slot so the pre-launch go/no-go can trust them.

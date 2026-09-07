@@ -158,6 +158,17 @@ filter sees a reset edge between back-to-back identical ids.
 With the rail off the queue simply holds. Connecting and configuring before power-on
 works by design — the whole sync drains in order once the FC boots.
 
+The queue also outlives the FC itself, which is right for a sync and wrong for a
+one-shot. The serving slot advances only on polls the OC receives, so an FC reset inside
+a command's three-poll repeat window freezes the slot on that command, and the rebooted
+FC would read it back as new — for a test fire, a second pulse with no operator action
+(#1105). Commands that fire, arm or move something (`cmdIsOneShotActuating`) are
+therefore retired from the slot and the queue as soon as the FC's boot-progress frames
+report a new session; a config keeps its place. The FC refuses such a command
+independently: a one-shot is executed only on a 0 → cmd edge observed since its own
+boot, and the idle poll between commands guarantees every command issued to a live
+session has one.
+
 ## The flight log
 
 Logging is a session with an explicit lifecycle: `prepareLogFile()` →
