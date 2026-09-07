@@ -243,12 +243,12 @@ The authoritative list is the dispatch chain itself. A few worth knowing:
 | 1 | Toggle camera recording | off ok |
 | 2 | File list (paginated, 5/page) | off ok |
 | 3 | Delete file — refused while `INFLIGHT` | off ok |
-| 8 | **Toggle** the FC power rail | either |
+| 8 | Set the FC power rail (payload byte 1/0; a bare cmd 8 is the legacy **toggle**). An OFF is refused while `INFLIGHT`, and since #1162 the refusal holds through a *silent* FC until the FC's own 10-minute flight timeout could have elapsed since the OC first saw `INFLIGHT` (`inflight_refusal_policy.h`) — the 3 s telemetry-freshness term that used to be the escape hatch opened the gate during an FC reboot | either |
 | 9 | Phone time sync (for log filenames) | off ok |
 | 23 | Toggle logging | on |
 | 40–42 | Set unit name / network id / rocket id | either |
 | 68 | "LoRa off" — mute/un-mute every LoRa transmit; refused mid-`INFLIGHT` | either |
-| 70–72 | OTA begin / finish / abort, handled inside `TR_BLE_To_APP` before the chain — the OC's own image (target 0) or relayed to the FC (target 1); a self-flash is refused while `INFLIGHT` (#1106) | off ok (self); on (FC relay) |
+| 70–72 | OTA begin / finish / abort, handled inside `TR_BLE_To_APP` before the chain — the OC's own image (target 0) or relayed to the FC (target 1); a self-flash is refused while `INFLIGHT` (#1106), under the same silent-FC hold as cmd 8 | off ok (self); on (FC relay) |
 
 Connection parameters are policy, not default: the OC explicitly requests a slow
 interval (200 ms, latency 4) while the rail is off and a fast one (30 ms) for

@@ -68,6 +68,7 @@ static inline std::string itos(int v)
 #include "cmd_queue_dedupe_policy.h"  // #837 item 11: pyro tests key on channel
 #include "cmd_queue_session_policy.h" // #1105: retire one-shots when the FC reports a boot
 #include "cmd_queue_admit_policy.h"   // #1116: two slots held back for OTA_FINISH/ABORT
+#include "inflight_refusal_policy.h"  // #1162: INFLIGHT gates hold through a silent FC
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -963,6 +964,9 @@ static uint32_t snapshot_seed_bytes = 0;
 // clock of its own and, now that a failed recovery no longer clears it
 // (#834-3), can hold an INFLIGHT frame indefinitely.
 static constexpr uint32_t kSnapshotServeTtlMs = 600000;  // = FC MAX_FLIGHT_TIME
+static_assert(kSnapshotServeTtlMs == InflightRefusalPolicy::kMaxFlightTimeMs,
+              "#1162: the snapshot serve-TTL and the silent-FC INFLIGHT hold "
+              "bound the same flight");
 static uint32_t snapshot_cache_ms = 0;                   // millis() at last write
 // Guards the cache against a torn read: the I2S parser task (core 1, prio 6)
 // writes it while loop_oc (prio 5) can be serving a GET from I2C ingress.
@@ -1313,6 +1317,12 @@ static bool latest_non_sensor_valid = false;
 // continuity included, is republished from that snapshot at full rate whether
 // the FC is alive or not.
 static uint32_t latest_non_sensor_rx_ms = 0;
+// #1162: millis() when the OC first saw INFLIGHT for the current flight (the
+// non-INFLIGHT -> INFLIGHT edge in processFrame). The stamp above answers "is
+// the FC talking?"; this one answers "could the rocket still be flying?", and
+// bounds the cmd-8 / self-OTA refusals through a SILENT FC — see
+// inflight_refusal_policy.h for why the first alone was a hole.
+static uint32_t inflight_entry_ms = 0;
 
 // FC boot progress (FC_BOOT_STATUS_MSG), live only during the FC's setup_fc.
 // Deliberately NOT cleared when boot completes: the last frame carries the
@@ -3247,6 +3257,34 @@ static void ocOtaTxFeederTask(void *)
     }
 }
 
+// #1162: the one INFLIGHT hold behind cmd 8's power-off and the self-OTA veto
+// below. Two stamps answer two questions: latest_non_sensor_rx_ms, "is the FC
+// talking?", and inflight_entry_ms, "could the rocket still be flying?". The
+// policy header explains why the first alone was a hole. Reads a bool, an
+// enum and two aligned 32-bit statics the I2S parser task writes (atomic on
+// the S3); callers run on loop_oc or the NimBLE host task, and a one-frame-
+// stale answer is the worst case.
+struct InflightHold
+{
+    bool     refuse;
+    uint32_t fc_age_ms;      // since the last NonSensorData frame
+    uint32_t hold_left_ms;   // silent-FC hold remaining (0 once expired)
+};
+static InflightHold inflightHold()
+{
+    const uint32_t now_ms       = millis();
+    const uint32_t fc_age_ms    = now_ms - latest_non_sensor_rx_ms;
+    const bool     fc_fresh     = latest_non_sensor_valid &&
+                                  fc_age_ms <= config::FC_FRAME_STALE_MS;
+    const uint32_t inflight_age = now_ms - inflight_entry_ms;
+    InflightHold h;
+    h.refuse       = InflightRefusalPolicy::refuse(latest_rocket_state == INFLIGHT,
+                                                   fc_fresh, inflight_age);
+    h.fc_age_ms    = fc_age_ms;
+    h.hold_left_ms = InflightRefusalPolicy::holdRemainingMs(inflight_age);
+    return h;
+}
+
 // #1106: the OC's veto on flashing ITS OWN image. OTA_BEGIN/OTA_FINISH for
 // target==0 never reach loop_oc's dispatch — TR_BLE_To_APP handles them in
 // place on the NimBLE host task — so until this the only INFLIGHT gate in the
@@ -3256,23 +3294,22 @@ static void ocOtaTxFeederTask(void *)
 // quiesceStorageForRestart(): flight log closed, both downlinks dead, the #846
 // NAND-tail snapshot source gone, and on V7/V8 the FC rail drops with the reset
 // (PWR_HOLD_PIN = -1). Same rule as cmd 8's refuse_off below: INFLIGHT only —
-// PRELAUNCH is where every GNSS-locked bench sits — and only while the FC frame
-// is FRESH, because latest_rocket_state never ages and an FC that died
-// mid-flight must not refuse every OTA until a battery pull. Runs on the NimBLE
-// host task: it reads a bool and two aligned 32-bit statics the loop task
-// writes (atomic on the S3), and a one-frame-stale answer is the worst case.
+// PRELAUNCH is where every GNSS-locked bench sits — held through a SILENT FC
+// until the flight-time bound in inflight_refusal_policy.h expires (#1162:
+// latest_rocket_state never ages, and the 3 s freshness term that used to be
+// the escape hatch opened this veto during an FC reboot). Runs on the NimBLE
+// host task; see inflightHold() for what it reads.
 static bool ocOtaSelfFlashPermitted(void* /*ctx*/)
 {
-    const bool fc_state_fresh =
-        latest_non_sensor_valid &&
-        (uint32_t)(millis() - latest_non_sensor_rx_ms) <= config::FC_FRAME_STALE_MS;
-    const bool refuse = fc_state_fresh && latest_rocket_state == INFLIGHT;
-    if (refuse)
+    const InflightHold hold = inflightHold();
+    if (hold.refuse)
     {
-        ESP_LOGW("BLE", "OC self-OTA REFUSED: rocket is INFLIGHT (FC frame %lu ms ago)",
-                 (unsigned long)(millis() - latest_non_sensor_rx_ms));
+        ESP_LOGW("BLE", "OC self-OTA REFUSED: rocket is INFLIGHT (FC frame %lu ms ago, "
+                        "silent-FC hold %lu s left)",
+                 (unsigned long)hold.fc_age_ms,
+                 (unsigned long)(hold.hold_left_ms / 1000U));
     }
-    return !refuse;
+    return !hold.refuse;
 }
 
 // #383: OTA_BEGIN handoff from the NimBLE host task to the loop task —
@@ -3939,6 +3976,16 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             latest_non_sensor_valid = true;
             latest_non_sensor_rx_ms = millis();   // #831
             fc_ns_since_boot = true;   // boot sequence over — real state is flowing
+            // #1162: stamp the INFLIGHT entry BEFORE publishing the state, so
+            // a reader on another task that sees INFLIGHT always sees this
+            // flight's stamp. A restored flight that re-enters INFLIGHT with
+            // no non-INFLIGHT frame between keeps its original stamp, which
+            // is the launch-side (conservative) end of the bound.
+            if ((RocketState)latest_non_sensor.rocket_state == INFLIGHT &&
+                prev_state != INFLIGHT)
+            {
+                inflight_entry_ms = latest_non_sensor_rx_ms;
+            }
             latest_rocket_state = (RocketState)latest_non_sensor.rocket_state;
             // Update the flight-freeze sticky flag whenever the state
             // changes (issue #71).  Safe to call on every frame — the
@@ -9537,21 +9584,27 @@ static void loop_oc()
             // the FC's only NAND-side snapshot source while it is still
             // flying. Gating removes that trade-off rather than weakening the
             // quiesce.
-            // Freshness is load-bearing: latest_rocket_state NEVER AGES, and
-            // cmd 8 is the OC's only reset path. Gating on the latched value
-            // alone means an FC that died mid-flight — exactly when you most
-            // want to recover the OC — would refuse every power-off for the
-            // rest of the boot, with no way out but a battery pull.
-            const bool fc_state_fresh =
-                latest_non_sensor_valid &&
-                (uint32_t)(millis() - latest_non_sensor_rx_ms) <= config::FC_FRAME_STALE_MS;
-            const bool refuse_off = !want_on && was_on && fc_state_fresh &&
-                                    latest_rocket_state == INFLIGHT;
+            // The escape hatch is load-bearing too: latest_rocket_state NEVER
+            // AGES, and cmd 8 is the OC's only reset path, so gating on the
+            // latched value alone means an FC that died mid-flight — exactly
+            // when you most want to recover the OC — would refuse every
+            // power-off for the rest of the boot, with no way out but a
+            // battery pull. #1162: that hatch used to be the 3 s
+            // FC_FRAME_STALE_MS freshness term, which opened the gate during
+            // an FC panic/WDT reboot (~10 s of setup_fc with no NonSensorData)
+            // while the rocket was still under canopy — on V7/V8 a power-off
+            // then cut the rebooting FC's rail. The hatch is now the
+            // flight-time bound in inflight_refusal_policy.h: a live FC saying
+            // INFLIGHT is always refused, a silent one until no flight could
+            // remain.
+            const InflightHold hold = inflightHold();
+            const bool refuse_off = !want_on && was_on && hold.refuse;
             if (refuse_off)
             {
                 ESP_LOGW("BLE", "Power off REFUSED: rocket is INFLIGHT "
-                                "(FC frame %lu ms ago)",
-                         (unsigned long)(millis() - latest_non_sensor_rx_ms));
+                                "(FC frame %lu ms ago, silent-FC hold %lu s left)",
+                         (unsigned long)hold.fc_age_ms,
+                         (unsigned long)(hold.hold_left_ms / 1000U));
             }
             else if (want_on == was_on)
             {
