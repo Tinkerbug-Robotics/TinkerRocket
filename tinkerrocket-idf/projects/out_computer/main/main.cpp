@@ -3046,6 +3046,34 @@ static void ocOtaTxFeederTask(void *)
     }
 }
 
+// #1106: the OC's veto on flashing ITS OWN image. OTA_BEGIN/OTA_FINISH for
+// target==0 never reach loop_oc's dispatch — TR_BLE_To_APP handles them in
+// place on the NimBLE host task — so until this the only INFLIGHT gate in the
+// OTA path was the FC's, which covers only the relayed (target==1) image. A
+// mid-flight self-OTA erases a partition (1-2 s of cache-off flash that stalls
+// the I2S parser and the NAND flush task), then reboots through
+// quiesceStorageForRestart(): flight log closed, both downlinks dead, the #846
+// NAND-tail snapshot source gone, and on V7/V8 the FC rail drops with the reset
+// (PWR_HOLD_PIN = -1). Same rule as cmd 8's refuse_off below: INFLIGHT only —
+// PRELAUNCH is where every GNSS-locked bench sits — and only while the FC frame
+// is FRESH, because latest_rocket_state never ages and an FC that died
+// mid-flight must not refuse every OTA until a battery pull. Runs on the NimBLE
+// host task: it reads a bool and two aligned 32-bit statics the loop task
+// writes (atomic on the S3), and a one-frame-stale answer is the worst case.
+static bool ocOtaSelfFlashPermitted(void* /*ctx*/)
+{
+    const bool fc_state_fresh =
+        latest_non_sensor_valid &&
+        (uint32_t)(millis() - latest_non_sensor_rx_ms) <= config::FC_FRAME_STALE_MS;
+    const bool refuse = fc_state_fresh && latest_rocket_state == INFLIGHT;
+    if (refuse)
+    {
+        ESP_LOGW("BLE", "OC self-OTA REFUSED: rocket is INFLIGHT (FC frame %lu ms ago)",
+                 (unsigned long)(millis() - latest_non_sensor_rx_ms));
+    }
+    return !refuse;
+}
+
 // #383: OTA_BEGIN handoff from the NimBLE host task to the loop task —
 // the loop task enqueues the header via setPendingCommandWithConfig().
 // volatile flag is sufficient: single producer (BLE task), single
@@ -8123,6 +8151,8 @@ static void setup_oc()
     // Relay target==1 (Flight Computer) OTA to the FC over I2C (#8 Phase 4).
     ble_app.setOtaRelayDelegate(ocOtaRelayBegin, ocOtaRelayFinish, ocOtaRelayAbort,
                                 ocOtaRelayData, nullptr);
+    // #1106: veto a self-OTA (target==0) while the FC reports INFLIGHT.
+    ble_app.setOtaPermitCallback(ocOtaSelfFlashPermitted, nullptr);
 
     if (boot_rail_restored || boot_token_restore)
     {

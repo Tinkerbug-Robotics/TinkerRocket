@@ -244,6 +244,7 @@ The authoritative list is the dispatch chain itself. A few worth knowing:
 | 23 | Toggle logging | on |
 | 40–42 | Set unit name / network id / rocket id | either |
 | 68 | "LoRa off" — mute/un-mute every LoRa transmit; refused mid-`INFLIGHT` | either |
+| 70–72 | OTA begin / finish / abort, handled inside `TR_BLE_To_APP` before the chain — the OC's own image (target 0) or relayed to the FC (target 1); a self-flash is refused while `INFLIGHT` (#1106) | off ok (self); on (FC relay) |
 
 Connection parameters are policy, not default: the OC explicitly requests a slow
 interval (200 ms, latency 4) while the rail is off and a fast one (30 ms) for

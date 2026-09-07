@@ -13,6 +13,7 @@
 #include "config.h"
 #include "flight.h"
 #include "mini_link.h"
+#include "sim_flight_policy.h"   // #1104: sim edge rule + latched dry-fire predicate (TR_Sensor_Collector_Sim)
 
 #include <TR_NVS.h>
 #include <TR_Sensor_Collector.h>
@@ -363,6 +364,15 @@ static void applyImuRateForFlightPhase()
 static bool mach_locked_out = false;    // promoted from baro block for apogee voting
 static bool gps_new_for_kc = false;     // new GPS sample available for kinematic checks
 static bool prev_sim_active = false;
+// #1104: true from the sim START edge until the next resetFlightStateForSim().
+// The pyro dry-fire gate and the snapshot's sim stamp key on this (OR'd with
+// isSimActive(), see sim_flight::simulated) rather than on isSimActive()
+// alone: the sim can drop to SIM_IDLE while the flight is still INFLIGHT —
+// #971's 30 s give-up when landing detection never fires — and in the loop
+// pass where that happens servicePyroChannels() runs BEFORE the falling edge
+// is handled, so a sampled isSimActive() reads "live flight" for one tick.  A
+// latch cannot.
+static bool sim_flight_latched = false;
 static Preferences prefs;
 
 // --- Inflight reboot recovery ---
@@ -628,6 +638,15 @@ static void pyroPrelaunchContTest(uint32_t /*now_ms*/)
 // global ARM-pin level from the union of all channel demands.
 static void servicePyroChannels(uint32_t now_ms)
 {
+    // SIM DRY-FIRE gate, decided ONCE per pass and LATCHED for the flight
+    // (#1104): the sim steps its physics inside our IMU read, so on the pass
+    // in which it gives up (#971, flight still INFLIGHT) isSimActive() is
+    // already false here — one tick before the edge handler at the end of the
+    // flight loop resets the flight.  Sampled, that tick would drive real
+    // ARM/FIRE outputs.
+    const bool dry = sim_flight::simulated(sim_flight_latched,
+                                           sensor_collector.isSimActive());
+
     // Detect apogee (N-1 of N voting in TR_KinematicChecks)
     if (!pyro_apogee_detected && kinematics.apogee_flag) {
         pyro_apogee_detected = true;
@@ -696,7 +715,7 @@ static void servicePyroChannels(uint32_t now_ms)
         // channel now" regardless of sim state.
         if (ch.state == PyroChState::ArmSettle &&
             (now_ms - ch.phase_start_ms) >= config::PYRO_ARM_SETTLE_MS) {
-            if (!sensor_collector.isSimActive()) {
+            if (!dry) {
                 gpio_set_level((gpio_num_t)PYRO_FIRE_PINS[i], 1);
             }
             ch.state          = PyroChState::Firing;
@@ -741,11 +760,10 @@ static void servicePyroChannels(uint32_t now_ms)
             break;
         }
     }
-    pyroSetArmLocked(any_demand && !sensor_collector.isSimActive());
+    pyroSetArmLocked(any_demand && !dry);
 
     portEXIT_CRITICAL(&pyro_spinlock);
 
-    const bool dry = sensor_collector.isSimActive();
     for (int i = 0; i < 4; ++i) {
         if (just_fired[i]) ESP_LOGW(TAG, "[PYRO] CH%d %s at alt=%.1f m",
                                     i + 1, dry ? "DRY-FIRED (sim)" : "FIRED",
@@ -776,8 +794,11 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.rocket_state = (override_state != 0xFF) ? override_state : (uint8_t)rocket_state;
     // v4: latch sim mode into the snapshot — isSimActive() is false after a
     // reboot, so the restore path can only learn this from the snapshot
-    // itself (and refuses to restore when set).
-    snap.sim_flight   = sensor_collector.isSimActive() ? 1 : 0;
+    // itself (and refuses to restore when set).  #1104: OR'd with the
+    // flight-long latch, so the pass in which the sim gives up (isSimActive()
+    // already false, flight still INFLIGHT) cannot stamp a real-flight snapshot.
+    snap.sim_flight   = sim_flight::simulated(sim_flight_latched,
+                                              sensor_collector.isSimActive()) ? 1 : 0;
 
     snap.flight_elapsed_ms  = now_ms - launch_time_millis;
     snap.apogee_elapsed_ms  = pyro_apogee_detected
@@ -1201,15 +1222,24 @@ static void publishSensorCalFromNVS()
 // SECTION: Simulator re-arm
 // ==========================================================================
 // #393: reset the flight state machine for a sim run.  Used on the sim START
-// edge (fresh run — the sim's equivalent of a reboot) and on an explicit sim
-// STOP (SIM_STOP_CMD → abort back to READY).  Deliberately NOT called on the
-// sim's natural completion (SIM_LANDED → SIM_IDLE auto-stop), so a flown-out
-// sim still holds LANDED to validate the post-flight lockout.
+// edge (fresh run — the sim's equivalent of a reboot), on an explicit sim
+// STOP (SIM_STOP_CMD → abort back to READY), and (#1104) on a sim that ended
+// with the flight NOT in LANDED — the #971 give-up — which is treated exactly
+// like a Stop.  Deliberately NOT called on the sim's natural completion
+// (SIM_LANDED → SIM_IDLE with the flight in LANDED), so a flown-out sim still
+// holds LANDED to validate the post-flight lockout.
 static void resetFlightStateForSim(const char* edge)
 {
     // Also resets GNSS state: the sim injects synthetic GNSS (fix=3, sats=12);
     // a stale copy would otherwise immediately re-trip READY -> PRELAUNCH.
     pyroSafeAll();
+    // #1104: whichever edge brought us here, the flight the sim was driving is
+    // over.  Drop the dry-fire latch (the START edge re-sets it right after
+    // this returns) and re-sync the edge detector, so the handler at the end
+    // of the flight loop does not ALSO see a user Stop's stopSim() as a
+    // falling edge and reset a second time.
+    sim_flight_latched = false;
+    prev_sim_active    = sensor_collector.isSimActive();
     rocket_state = READY;
     post_flight_lockout = false;  // #317: a deliberate sim start/stop re-arms
     ground_pressure_found = false;
@@ -1413,8 +1443,11 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
     else if (cmd.type == SIM_STOP_CMD)
     {
         // #393: an explicit Stop aborts the sim flight back to READY.
-        // Reset here (not on the isSimActive falling edge) so it fires only
-        // for a real user Stop, never a naturally-completed sim.
+        // Reset here, the moment the command arrives, so a Stop never waits
+        // on the edge handler — and so a naturally-completed sim (falling
+        // edge with the flight in LANDED) is never mistaken for one.
+        // resetFlightStateForSim() re-syncs the edge detector, so the
+        // stopSim() just above is not counted a second time there (#1104).
         sensor_collector.stopSim();
         resetFlightStateForSim("stop");
         ESP_LOGI(TAG, "[SIM] Stop cmd received — flight state reset (#393)");
@@ -3955,17 +3988,51 @@ static void loop_fc()
         // ==========================================================================
         // SECTION: Simulator re-arm and diagnostics
         // ==========================================================================
-        // ---- Re-arm on a NEW sim run, NOT when a sim ends (#317) ----
+        // ---- Re-arm on a NEW sim run; hold LANDED on a flown-out one (#317) ----
         // A sim flight that reaches LANDED must STAY landed — terminal,
         // exactly like real hardware — so the sim faithfully validates the
         // post-flight lockout. Re-arm on the RISING edge of sim-active (the
         // deliberate start of a new run).  An explicit Stop is handled in the
-        // SIM_STOP_CMD handler instead (#393).
+        // SIM_STOP_CMD handler (#393).
+        //
+        // #1104: the falling edge is NOT always the natural completion.  The
+        // SIM_LANDED hold gives up after sim_landed::HOLD_MAX_MS (#971) when
+        // landing detection never fires, and drops to SIM_IDLE with the
+        // flight still INFLIGHT.  Left there, this is a LIVE flight on the
+        // bench: the dry-fire gate keyed off isSimActive() would drive real
+        // ARM/FIRE outputs (a TIME_AFTER_APOGEE delay still counting from the
+        // simulated apogee needs no motion at all), and the command drain
+        // above discards everything in a non-sim INFLIGHT, so a Stop cannot
+        // reach us until the 10-minute backstop.  So the rule keys on OUR
+        // state, not on the sim's reason: a falling edge in LANDED is the
+        // flown-out sim (hold); any other falling edge is treated exactly
+        // like a user Stop.  sim_flight_policy.h pins it.
+        //
+        // #971: tell the sim what state we are ACTUALLY in, so its SIM_LANDED
+        // hold ends on the real transition instead of running to its 30 s
+        // backstop.  The FC got this in PR #972; this port never did, which
+        // is why every mini sim used to end by "gave up".
+        sensor_collector.noteRocketState((uint8_t)rocket_state);
+
         {
             const bool curr_sim_active = sensor_collector.isSimActive();
-            if (!prev_sim_active && curr_sim_active)
+            switch (sim_flight::classify(prev_sim_active, curr_sim_active,
+                                         rocket_state == LANDED))
             {
-                resetFlightStateForSim("start");
+                case sim_flight::Edge::Start:
+                    resetFlightStateForSim("start");
+                    sim_flight_latched = true;   // cleared by the next reset
+                    break;
+                case sim_flight::Edge::EndedEarly:
+                    ESP_LOGE(TAG, "[SIM] ended with the flight still in state %u — "
+                                  "treating it as Stop: pyros safed, flight "
+                                  "state reset (#1104)",
+                             (unsigned)rocket_state);
+                    resetFlightStateForSim("ended early");
+                    break;
+                case sim_flight::Edge::EndedLanded:   // flown out: hold LANDED
+                case sim_flight::Edge::None:
+                    break;
             }
             prev_sim_active = curr_sim_active;
         }
