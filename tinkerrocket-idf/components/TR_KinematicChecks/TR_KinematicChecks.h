@@ -29,6 +29,14 @@ public:
                          bool  baro_healthy = true);
 
     bool launch_flag;
+    // #1102: which detector latched launch_flag, and what the barometer claimed
+    // on that tick -- read at INFLIGHT entry for the log.  An AccelOnly latch
+    // with launch_baro_healthy == true is the blocked-static-port signature
+    // (sensor fresh and in range, altitude never moved).  Stays None when the
+    // caller sets launch_flag directly (reboot-recovery restore).
+    enum class LaunchPath : uint8_t { None = 0, BaroClimb = 1, AccelOnly = 2 };
+    LaunchPath launch_path;
+    bool       launch_baro_healthy;
     bool alt_landed_flag;       // Voted master landed
     bool alt_apogee_flag;       // Test 2: baro altitude decreasing
     bool vel_u_apogee_flag;     // Test 1: EKF velocity negative

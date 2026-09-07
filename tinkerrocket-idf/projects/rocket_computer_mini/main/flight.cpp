@@ -1337,6 +1337,30 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     portEXIT_CRITICAL(&pyro_spinlock);
     ESP_LOGI(TAG, "[STATE] %s -> INFLIGHT (ground_p=%.0f)",
                   from_state, (double)ground_pressure_pa);
+    // #1102: which detector latched, and what the barometer claimed on that
+    // tick.  An accel-only latch with a HEALTHY barometer means it was fresh
+    // and in range but never saw the climb -- the blocked-static-port
+    // signature.  Apogee then rests on the EKF/GNSS/pitch voters and the main
+    // on the GNSS backstop (#834), so say so where the operator can read it.
+    switch (kinematics.launch_path)
+    {
+        case TR_KinematicChecks::LaunchPath::BaroClimb:
+            ESP_LOGI(TAG, "[LAUNCH] latched by accel + baro-confirmed climb");
+            break;
+        case TR_KinematicChecks::LaunchPath::AccelOnly:
+            if (kinematics.launch_baro_healthy)
+                ESP_LOGW(TAG, "[LAUNCH] latched by the accel-only fallback with a "
+                              "HEALTHY barometer that showed no climb -- suspect a "
+                              "blocked/taped static port (#1102); recovery will run "
+                              "on the baro-independent paths only");
+            else
+                ESP_LOGW(TAG, "[LAUNCH] latched by the accel-only fallback, "
+                              "barometer UNHEALTHY (dead or stale, #258)");
+            break;
+        default:
+            ESP_LOGI(TAG, "[LAUNCH] launch_flag set outside the detector");
+            break;
+    }
 }
 
 // ==========================================================================

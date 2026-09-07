@@ -42,34 +42,68 @@ constexpr float    GPS_VEL_APOGEE_DESCENT_MPS = 1.0f;
 // tighter than the landing vote's 5 s gate, which is a slower ground event.
 constexpr uint32_t GPS_APOGEE_FRESH_MS     = 500;
 
-// Launch accel-only fallback (#258): when the baro is INVALID, latch launch on
-// sustained high-G alone.  Deliberately a much higher bar than the baro-
-// confirmed path (3 g vs 2 g, 250 vs 50 samples) so handling/transport can't
-// fake it — a missed launch means recovery never arms (ballistic), so we
-// over-confirm.  Gated on !baro_healthy, so accel never decides launch while
-// the baro is valid.
+// Launch accel-only fallback (#258, ungated in #1102): latch launch on
+// sustained high-G alone -- LAUNCH_ACCEL_FALLBACK_COUNT consecutive samples
+// above LAUNCH_ACCEL_FALLBACK_MS2.  launch_count_hi is zeroed by ANY sample at
+// or below that bar, and both counters by a sample <= 20 m/s2, so it takes a
+// quarter second of UNINTERRUPTED >3 g.  Deliberately a much higher bar than
+// the baro-confirmed path (3 g vs 2 g, 250 vs 50 samples): a missed launch
+// means recovery never arms (ballistic), so we over-confirm rather than never
+// confirm.
+//
+// NOT gated on baro health.  #258 originally allowed this branch only while
+// !baro_healthy ("accel never decides launch while the baro is valid").
+// #1102: a blocked or taped static port keeps the sensor fresh and in range --
+// baro_healthy stays TRUE -- while indicated altitude never moves, so the
+// primary cannot see a climb and the gated fallback could not fire either.
+// The FC sat in PRELAUNCH for the whole flight: no pyro servicing, no drogue,
+// no main, and no flight log, because NSF_LAUNCH never rose.  The gate bought
+// nothing on a truthful barometer, because the primary latches long before
+// this counter fills: across the 31 logged boosts in the TestFlights corpus
+// (2026-03..08, replayed by Data_Analysis/analyze_launch_fallback.py) the
+// primary latched a median 60 ms and at most 265 ms after ignition, while this
+// fallback would have latched at 262-390 ms on most motors and at 558 and
+// 956 ms on the two slowest.  Which path latched, and what the barometer
+// claimed on that tick, is recorded in launch_path / launch_baro_healthy for
+// the INFLIGHT-entry log: AccelOnly with a healthy baro is the blocked-port
+// signature.  The 3 g bar still leaves low-thrust motors (thrust-to-weight
+// under ~3) uncovered; that is unchanged from #258.
 //
 // The counter is in flight-loop iterations, and the flight-logic block is
 // gated at flight_loop_period = 1e6 / config::FLIGHT_LOOP_UPDATE_RATE
 // (main.cpp:208, 4051) = 1 kHz, so 250 samples is ~250 ms of wall clock.
 // Halved from 500 (~500 ms): a short-burn motor's thrust curve tapers, so the
 // *continuous* >3 g window is shorter than the burn time, and a 500 ms gate
-// could sit out an entire small-motor boost and never latch — the exact
-// ballistic outcome the fallback exists to prevent.  Both counters reset on a
-// single sample <= 20 m/s2, so it takes a quarter second of UNINTERRUPTED >3 g.
-// A restrained motor burn reads ~1 g (thrust balanced by the rail nets out of
-// specific force), a drop is 0 g in free fall and milliseconds at impact, and
-// linear hand motion, bumps and vibration are oscillatory — they cross back
-// through the 2 g reset floor and can never accumulate.
+// could sit out an entire small-motor boost and never latch -- the exact
+// ballistic outcome the fallback exists to prevent.  The same corpus replay
+// shows the 250-sample window survives boost vibration on every logged
+// flight: the shortest clean >3 g run inside a real boost was 376 ms, where a
+// 1 s hold (RecoveryArmGate's boost arm, #1179) carries only 2 flights in 27.
 //
-// The one non-boost stimulus that is NOT oscillatory is sustained ROTATION:
-// centripetal acceleration is steady, so swinging the airframe with the board
-// ~1 m from the pivot at ~5.5 m/s holds 30 m/s2 for as long as the swing lasts.
-// A quarter second of that clears the bar.  Unquantified on a real prep bench,
-// and the halving is what brings it into reach — but it is not load-bearing on
-// its own: entering INFLIGHT arms nothing (enterInflight leaves ARM low and all
-// channels Idle), both pyro triggers are apogee-gated, and the apogee vote needs
-// burnout_detected, which a nose-up airframe cannot produce.
+// Ground false positives.  A restrained motor burn reads ~1 g (thrust
+// balanced by the rail nets out of specific force), a drop is 0 g in free
+// fall and milliseconds at impact, and linear hand motion, bumps and
+// vibration are oscillatory -- they cross back through the reset floor and
+// can never accumulate.  The one non-oscillatory stimulus is sustained
+// ROTATION: centripetal acceleration is steady, so swinging the airframe with
+// the board ~1 m from the pivot at ~5.5 m/s holds 30 m/s2 for as long as the
+// swing lasts, and a quarter second of that clears the bar.  With the baro
+// gate gone that swing is a live false positive on every bench, not only a
+// dead-baro one.  A pitch/yaw-rate reject was evaluated against the corpus
+// and NOT adopted: it passes every real boost only at >= 250 dps, which still
+// admits a swing with the board more than ~1.5 m from the pivot, and the
+// 2026-05-17 54 mm boost drove the gyro into +/-1500 dps sign-flipping
+// vibration garbage from 127 ms after ignition, so a rate reset delayed that
+// flight's latch by 240 ms -- inside the very window this fallback serves.
+//
+// What contains a false INFLIGHT on the ground today: entering INFLIGHT arms
+// nothing, both pyro triggers are apogee-gated, and the apogee vote needs
+// burnout_detected plus two voters (EKF altitude above 15 m, a GNSS descent,
+// or a 30 m barometric drop), so nothing can fire; the flight ends at the
+// 10-minute timeout in terminal LANDED and costs a power cycle.  That
+// containment is apogee-shaped.  A future staging or air-start trigger fired
+// on launch+time MUST carry its own port-independent evidence of flight
+// (integrated velocity, altitude gain) rather than trust launch_flag alone.
 constexpr float    LAUNCH_ACCEL_FALLBACK_MS2   = 30.0f;  // ~3 g
 constexpr uint16_t LAUNCH_ACCEL_FALLBACK_COUNT = 250;    // sustained samples (~250 ms at 1 kHz)
 
@@ -141,6 +175,8 @@ constexpr uint8_t  QUIESCENT_COUNT_MAX      = 45;
 TR_KinematicChecks::TR_KinematicChecks()
 {
     launch_flag = false;
+    launch_path = LaunchPath::None;
+    launch_baro_healthy = false;
     alt_landed_flag = false;
     alt_apogee_flag = false;
     vel_u_apogee_flag = false;
@@ -204,6 +240,8 @@ TR_KinematicChecks::TR_KinematicChecks()
 void TR_KinematicChecks::reset()
 {
     launch_flag = false;
+    launch_path = LaunchPath::None;
+    launch_baro_healthy = false;
     alt_landed_flag = false;
     alt_apogee_flag = false;
     vel_u_apogee_flag = false;
@@ -321,6 +359,7 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // 50 consecutive readings of >20 m/s^2 (~42ms at 1200 Hz) AND
     // Kalman-filtered altitude rate > 1.0 m/s (confirms actual upward motion).
     // This rejects handling bumps which produce short accel spikes but no altitude change.
+    // Or, failing that, the accel-only fallback below (#258/#1102).
     if (launch_flag == false)
     {
         if (acc_mag > 20.0)
@@ -333,18 +372,23 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             if (launch_count > 50 && d_alt_est_ > 1.0)
             {
                 // Primary: accel + baro-confirmed climb (fast).
-                launch_flag = true;
+                launch_flag         = true;
+                launch_path         = LaunchPath::BaroClimb;
+                launch_baro_healthy = baro_healthy;
             }
-            else if (!baro_healthy &&
-                     launch_count_hi > LAUNCH_ACCEL_FALLBACK_COUNT)
+            else if (launch_count_hi > LAUNCH_ACCEL_FALLBACK_COUNT)
             {
-                // #258 accel-only fallback — ONLY when the baro is invalid.
-                // On a healthy baro this branch is unreachable (the primary
-                // latches first), so accel never decides launch unless the baro
-                // can't.  A quarter second of sustained >3 g with a dead baro is
-                // an unambiguous boost; latching here is what keeps recovery from
-                // never arming (ballistic) on a baro failure.
-                launch_flag = true;
+                // #258/#1102 accel-only fallback: a quarter second of
+                // UNINTERRUPTED >3 g with no baro-confirmed climb.  Deliberately
+                // NOT gated on baro health -- see LAUNCH_ACCEL_FALLBACK_MS2 for
+                // why (a blocked static port is "healthy" and flat).  On a
+                // truthful barometer the primary has already latched long before
+                // this counter fills, so this branch only ever decides when the
+                // barometer is dead OR lying; which of the two is recorded for
+                // the INFLIGHT-entry log.
+                launch_flag         = true;
+                launch_path         = LaunchPath::AccelOnly;
+                launch_baro_healthy = baro_healthy;
             }
         }
         else
