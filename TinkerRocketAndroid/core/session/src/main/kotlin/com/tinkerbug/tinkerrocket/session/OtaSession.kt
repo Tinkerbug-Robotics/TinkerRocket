@@ -128,7 +128,12 @@ public class OtaSession(
             return
         }
 
-        // 2. OTA_BEGIN, then wait for the firmware to accept it.
+        // 2. OTA_BEGIN, then wait for the firmware to accept it.  Forget the
+        // cached status first: the wait must only ever read a status the
+        // device sent AFTER this begin.  A verify_failed left over from the
+        // previous run on this connection otherwise failed it on the first
+        // poll, in 0 ms, with a stale token (#1049).
+        begin.clearOtaStatus()
         begin.sendCommandFrame(Commands.otaBegin(targetIsFc, image.size.toLong(), sha))
         val beginTimeout = if (targetIsFc) BEGIN_TIMEOUT_FC_MS else BEGIN_TIMEOUT_MS
         if (!awaitOtaState(OtaStatusUpdate.State.READY, beginTimeout)) {
@@ -143,6 +148,13 @@ public class OtaSession(
             } else {
                 State.Failed("Device did not accept OTA_BEGIN within ${beginTimeout / 1000}s")
             }
+            // Every failure exit after OTA_BEGIN aborts, so the device and the
+            // app agree the session is over (#1049).  A begin the device never
+            // answered may still have opened one: locally that keeps the OC's
+            // gauge poll gated, and on the relay path the OC raises its
+            // session flags before the FC answers, so a silent FC can be left
+            // parked in OTA data mode with nothing but this to release it.
+            sessionLookup()?.sendBareCommand(BleCommandId.OTA_ABORT)
             return
         }
 
@@ -212,6 +224,10 @@ public class OtaSession(
             } else {
                 State.Failed("Device did not finalize OTA within ${finishTimeout / 1000}s")
             }
+            // Same rule as the begin failures: the session is over on both
+            // sides (#1049).  Harmless after a verify_failed the firmware has
+            // already aborted; decisive after a finish it never answered.
+            sessionLookup()?.sendBareCommand(BleCommandId.OTA_ABORT)
             return
         }
 

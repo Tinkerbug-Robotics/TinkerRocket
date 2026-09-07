@@ -3,7 +3,7 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 31,959 lines across 81 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 31,984 lines across 81 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
@@ -31,7 +31,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [NetworkMonitor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/NetworkMonitor.swift) | 52 | `NetworkMonitor`, `OfflinePill` |
 
 
-## `Models/` — 40 files, 15,277 lines
+## `Models/` — 40 files, 15,302 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -62,8 +62,8 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [RocketProfile.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/RocketProfile.swift) | 406 | `RollSegmentMode`, `RollWaypoint`, `MagCalData`, `SensorCalData`, `RocketProfile` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Fin calibration (#449) · Backward-compatible decoding |
 | [BSLogCSVGenerator.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BSLogCSVGenerator.swift) | 385 | — |
+| [OTASession.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTASession.swift) | 376 | `OTASession` |
 | [PreflightChecklist.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/PreflightChecklist.swift) | 376 | `PreflightItemKind`, `PreflightItem`, `PreflightMaster`, `PreflightRocketConfig`, `FailableUUID`, `PreflightAutoStatus`, +3 more |
-| [OTASession.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTASession.swift) | 360 | `OTASession` |
 | [KnownDeviceStore.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/KnownDeviceStore.swift) | 325 | `DeviceIdentityPusher`, `KnownDevice`, `KnownDeviceStore` |
 | [CSVParser.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/CSVParser.swift) | 316 | `FlightCSVData`, `CSVParserError`, `CSVParser` |
 | [RocketProfileStore.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/RocketProfileStore.swift) | 296 | `RocketProfileStore` |
@@ -85,7 +85,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [UserDisconnectLedger.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/UserDisconnectLedger.swift) | 46 | `UserDisconnectLedger` |
 | [AppBuildStamp.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/AppBuildStamp.swift) | 43 | `AppBuildStamp` |
 | [OTAStatus.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTAStatus.swift) | 42 | `OTAStatusUpdate` |
-| [OTALink.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTALink.swift) | 24 | `OTALink` |
+| [OTALink.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTALink.swift) | 33 | `OTALink` |
 | [FrequencyScanSample.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FrequencyScanSample.swift) | 15 | `FrequencyScanSample` |
 
 
@@ -136,4 +136,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 81 files, 31,959 lines.
+Total: 81 files, 31,984 lines.
