@@ -18,6 +18,13 @@ struct TelemetryData: Codable {
     // those is something we measured.
     var cam_current: Float?           // Camera rail current A  (nil = not measured)
     var servo_current: Float?         // Servo rail current A   (nil = not measured)
+    // #1166: the +3V3 hold-up capacitor (V_SCAP) sense, rocket OC direct link
+    // only. nil = the key was absent: this board has no such sense (V7/V8/V9,
+    // a base station, a relayed rocket — the LoRa frames do not carry it).
+    // The verdict is the firmware's, because the out computer owns the boot
+    // clock the "still low after the charge window" rule needs.
+    var scap_voltage: Float?          // V_SCAP volts (nil = not measured)
+    var holdup_state: Int?            // "hup" raw HoldupState (nil = not reported)
     var voltage: Float?               // Battery voltage V
     var latitude: Double?             // GPS latitude degrees
     var longitude: Double?            // GPS longitude degrees
@@ -430,6 +437,8 @@ struct TelemetryData: Codable {
         case current = "cur"
         case cam_current = "ccur"      // #850
         case servo_current = "scur"    // #850
+        case scap_voltage = "vsc"      // #1166
+        case holdup_state = "hup"      // #1166
         case voltage = "vol"
         case latitude = "lat"
         case longitude = "lon"
@@ -507,6 +516,10 @@ struct TelemetryData: Codable {
         // fitted") rather than becoming 0 ("measured zero amps").
         cam_current = try c.decodeIfPresent(Float.self, forKey: .cam_current)
         servo_current = try c.decodeIfPresent(Float.self, forKey: .servo_current)
+        // #1166: same absent-is-nil rule; "hup" is an integer key so it goes
+        // through flexInt like every other one (#571).
+        scap_voltage = try c.decodeIfPresent(Float.self, forKey: .scap_voltage)
+        holdup_state = flexInt(.holdup_state)
         voltage = try c.decodeIfPresent(Float.self, forKey: .voltage)
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
@@ -612,6 +625,44 @@ struct TelemetryData: Codable {
 
     var camCurrentDisplay: String { Self.railAmpsDisplay(cam_current) }
     var servoCurrentDisplay: String { Self.railAmpsDisplay(servo_current) }
+
+    // MARK: - Hold-up capacitor (#1166)
+
+    /// The out computer's verdict on the +3V3 hold-up capacitor, mirroring
+    /// the firmware's ScapHoldupPolicy::HoldupState wire values ("hup").
+    /// Android twin: `TelemetryData.HoldupState`.
+    enum HoldupState: Int {
+        case charging = 1     // below threshold, charge window still open
+        case charged = 2
+        case low = 3          // still low after the window, or fell: the advisory
+        case noReading = 4    // the sense exists but the ADC did not answer
+    }
+
+    /// nil when the frame carried no verdict: no sense on this board, or a
+    /// relayed/BS frame.  An unknown raw value is also no verdict, never a
+    /// crash.
+    var holdupState: HoldupState? {
+        guard let raw = holdup_state else { return nil }
+        return HoldupState(rawValue: raw)
+    }
+
+    /// The dashboard advisory line, or nil when there is nothing to say.
+    /// Only LOW and NO READING speak; CHARGING and CHARGED stay quiet, per
+    /// the house rule that an advisory renders only when it has something
+    /// to say.  Android twin: `holdupAdvisoryText`.
+    var holdupAdvisoryText: String? {
+        switch holdupState {
+        case .low:
+            if let v = scap_voltage {
+                return String(format: "Backup cap not charged — %.2f V", v)
+            }
+            return "Backup cap not charged"
+        case .noReading:
+            return "Backup cap sense — no reading"
+        default:
+            return nil
+        }
+    }
 
     var voltageDisplay: String {
         if let voltage = voltage {

@@ -185,4 +185,11 @@ struct board_pins
     static constexpr float IMON_GAIN_A_PER_A  = 95.3e-6f;  // TPS22811 GIMON typ
     static constexpr float CAM_IMON_R_OHM     = 2000.0f;   // R85 (PR #728)
     static constexpr float SERVO_IMON_R_OHM   = 1000.0f;   // R88
+    // --- Hold-up capacitor sense: not on this processor (#1166) ---
+    // V9 has no supercap. On V10 the sense lands on the P4 (pad 18,
+    // GPIO17), not on this processor.
+    // -1 = the OC samples nothing, reports no cap voltage and no verdict,
+    // and the apps render the absent keys as "no such sense" — never as
+    // an empty cap. Contract shared with board_m1.h, where it is GPIO8.
+    static constexpr int SCAP_ADC_PIN = -1;
 };

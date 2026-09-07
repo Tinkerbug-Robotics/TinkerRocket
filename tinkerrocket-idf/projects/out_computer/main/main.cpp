@@ -58,6 +58,7 @@ static inline std::string itos(int v)
 #include "ota_relay_policy.h"   // #834 items 6/7: I2S relay recovery timing
 #include "rail_restore_policy.h"  // #825: boot rail re-assert decision
 #include "flight_token_policy.h"  // #1176: tier-2 rail decision from a durable token
+#include "scap_holdup_policy.h"   // #1166: hold-up cap verdict + console log cadence
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
 #include <esp_adc/adc_oneshot.h>  // #850: camera/servo IMON reads
@@ -1509,18 +1510,38 @@ static constexpr uint8_t POWER_BAD_READ_LIMIT = 3;
 // Sampled on the existing 100 Hz INA230 tick, so this adds NO new wakeup and
 // does not disturb light sleep (#519) — only ~240 us of conversion inside a
 // tick that already blocks ~700 us polling the INA230's CVRF.
-static adc_oneshot_unit_handle_t rail_adc_unit = nullptr;
-static adc_cali_handle_t         rail_adc_cali = nullptr;
-static bool                      rail_adc_ready = false;
+// One ADC1 unit handle, shared by every ADC1 consumer in this file: the IMON
+// channels here and the hold-up cap sense below (#1166). adc_oneshot_new_unit
+// refuses a second registration of the same unit, so whichever init runs
+// first creates it and the other reuses it. Channels and calibration stay
+// per-consumer, because the two differ in attenuation.
+static adc_oneshot_unit_handle_t adc1_unit = nullptr;
+
+static adc_oneshot_unit_handle_t adc1Unit()
+{
+    if (adc1_unit == nullptr)
+    {
+        adc_oneshot_unit_init_cfg_t unit_cfg = {};
+        unit_cfg.unit_id  = ADC_UNIT_1;
+        unit_cfg.ulp_mode = ADC_ULP_MODE_DISABLE;
+        if (adc_oneshot_new_unit(&unit_cfg, &adc1_unit) != ESP_OK) adc1_unit = nullptr;
+    }
+    return adc1_unit;
+}
+
+// ESP32-S3 ADC1: GPIO1..GPIO10 are ADC1_CH0..CH9, i.e. channel = GPIO - 1
+// (so CAM_IMON GPIO8 = CH7, SERVO_IMON GPIO9 = CH8, V_SCAP_ADC GPIO8 = CH7).
+// ADC1 is not the WiFi-shared unit, so there is no contention with the BLE
+// controller; ADC2 (GPIO11-20) is unusable with the radio up.
+static inline adc_channel_t adc1ChannelForGpio(int gpio)
+{
+    return (adc_channel_t)(gpio - 1);
+}
+
+static adc_cali_handle_t rail_adc_cali = nullptr;
+static bool              rail_adc_ready = false;
 
 static constexpr adc_atten_t kRailAtten = ADC_ATTEN_DB_0;
-
-// GPIO8 = ADC1_CH7, GPIO9 = ADC1_CH8 on the ESP32-S3. ADC1 is not the
-// WiFi-shared unit, so there is no contention with the BLE controller.
-static inline adc_channel_t railChannelForGpio(int gpio)
-{
-    return (gpio == 8) ? ADC_CHANNEL_7 : ADC_CHANNEL_8;
-}
 
 static void initRailCurrentAdc()
 {
@@ -1531,10 +1552,7 @@ static void initRailCurrentAdc()
         return;
     }
 
-    adc_oneshot_unit_init_cfg_t unit_cfg = {};
-    unit_cfg.unit_id  = ADC_UNIT_1;
-    unit_cfg.ulp_mode = ADC_ULP_MODE_DISABLE;
-    if (adc_oneshot_new_unit(&unit_cfg, &rail_adc_unit) != ESP_OK)
+    if (adc1Unit() == nullptr)
     {
         ESP_LOGE("OC", "[IMON] ADC unit init failed — rail currents unavailable");
         return;
@@ -1545,8 +1563,8 @@ static void initRailCurrentAdc()
     chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
     if constexpr (config::CAM_IMON_GPIO >= 0)
     {
-        if (adc_oneshot_config_channel(rail_adc_unit,
-                                       railChannelForGpio(config::CAM_IMON_GPIO),
+        if (adc_oneshot_config_channel(adc1_unit,
+                                       adc1ChannelForGpio(config::CAM_IMON_GPIO),
                                        &chan_cfg) != ESP_OK)
         {
             ESP_LOGE("OC", "[IMON] camera channel config failed");
@@ -1555,8 +1573,8 @@ static void initRailCurrentAdc()
     }
     if constexpr (config::SERVO_IMON_GPIO >= 0)
     {
-        if (adc_oneshot_config_channel(rail_adc_unit,
-                                       railChannelForGpio(config::SERVO_IMON_GPIO),
+        if (adc_oneshot_config_channel(adc1_unit,
+                                       adc1ChannelForGpio(config::SERVO_IMON_GPIO),
                                        &chan_cfg) != ESP_OK)
         {
             ESP_LOGE("OC", "[IMON] servo channel config failed");
@@ -1600,11 +1618,11 @@ static float readRailAmps(int gpio, float r_ohm)
     // without meaningfully extending the tick.
     constexpr int kSamples = 4;
     int mv_sum = 0, taken = 0;
-    const adc_channel_t ch = railChannelForGpio(gpio);
+    const adc_channel_t ch = adc1ChannelForGpio(gpio);
     for (int i = 0; i < kSamples; ++i)
     {
         int raw = 0;
-        if (adc_oneshot_read(rail_adc_unit, ch, &raw) != ESP_OK) continue;
+        if (adc_oneshot_read(adc1_unit, ch, &raw) != ESP_OK) continue;
         int mv = 0;
         if (adc_cali_raw_to_voltage(rail_adc_cali, raw, &mv) != ESP_OK) continue;
         mv_sum += mv;
@@ -1614,6 +1632,187 @@ static float readRailAmps(int gpio, float r_ohm)
 
     const float volts = ((float)mv_sum / (float)taken) * 0.001f;
     return volts / (config::IMON_GAIN_A_PER_A * r_ohm);
+}
+
+// ---------------------------------------------------------------------------
+// #1166: hold-up capacitor sense (net V_SCAP_ADC).
+//
+// V_SCAP / 2 through R125 / R126 (100 k / 100 k) with C144 100 nF at the pad,
+// into SCAP_ADC_PIN (mini: OC GPIO8 = ADC1_CH7). The TPS61094 (U47) terminates
+// the 5 F cap (C130) at 2.5 V and its clean-charge bound is VIN - 800 mV, about
+// 2.67 V, so the pin sees at most ~1.33 V. That rules out the 2.5 dB step: its
+// ~1250 mV full scale on the S3 saturates at exactly the termination voltage,
+// the one reading this node exists to provide. 6 dB (~1750 mV) covers the
+// worst case with ~30 % headroom and still spends three-quarters of the range
+// (#1022's corrected advice).
+//
+// Why the OC watches it at all: a converter that never enters its charging
+// state leaves +3V3 fine, VBUCK_OK high and the board behaving normally, right
+// up until the pack bounces and the bridge is not there (#999 was one way to
+// get a board like that). Nothing else on the board reports it.
+//
+// Sampled once a second from the 1 s stats tick in BOTH power modes: the
+// charge ramp happens with the flight-computer rail OFF, in the minutes right
+// after the pack goes on, and that tick already wakes for the BLE push, so
+// this adds no wakeup of its own (#519). The verdict and the console cadence
+// are the pure policy in scap_holdup_policy.h; this block only reads the pin.
+//
+// Boards whose OC has no V_SCAP sense (V7/V8/V9: SCAP_ADC_PIN = -1) compile
+// the monitor out and report nothing; the apps render the absent keys as "no
+// such sense", never as an empty cap.
+static adc_cali_handle_t     scap_adc_cali  = nullptr;
+static bool                  scap_adc_ready = false;
+static constexpr adc_atten_t kScapAtten     = ADC_ATTEN_DB_6;
+// R125 / R126 — 1 % parts, so the ratio is good to ~2 % (~50 mV at 2.5 V).
+static constexpr float       kScapDividerRatio = 2.0f;
+// The 6 dB curve is characterised to ~1750 mV on the S3. A pin above this
+// means the divider or VCHG is not what this file assumes and the volts
+// reported are clipped — say so once rather than report a confident number.
+static constexpr int         kScapPinCeilingMv = 1600;
+
+static ScapHoldupPolicy::HoldupState scap_state = ScapHoldupPolicy::HU_NOT_REPORTED;
+static float scap_volts = NAN;   // latest V_SCAP sample; NaN = no reading
+
+static void initScapAdc()
+{
+    if constexpr (config::SCAP_ADC_PIN < 0)
+    {
+        ESP_LOGI("PWR", "[SCAP] no hold-up cap sense on this board");
+        return;
+    }
+    else
+    {
+        adc_oneshot_unit_handle_t unit = adc1Unit();
+        if (unit == nullptr)
+        {
+            ESP_LOGE("PWR", "[SCAP] ADC unit init failed — hold-up cap voltage unavailable");
+            return;
+        }
+        adc_oneshot_chan_cfg_t chan_cfg = {};
+        chan_cfg.atten    = kScapAtten;
+        chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+        if (adc_oneshot_config_channel(unit, adc1ChannelForGpio(config::SCAP_ADC_PIN),
+                                       &chan_cfg) != ESP_OK)
+        {
+            ESP_LOGE("PWR", "[SCAP] channel config failed — hold-up cap voltage unavailable");
+            return;
+        }
+        // Per-attenuation curve, exactly as the IMON path warns: this one is
+        // 6 dB, that one 0 dB, and they cannot share a handle.
+        adc_cali_curve_fitting_config_t cali_cfg = {};
+        cali_cfg.unit_id  = ADC_UNIT_1;
+        cali_cfg.atten    = kScapAtten;
+        cali_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+        if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &scap_adc_cali) != ESP_OK)
+        {
+            ESP_LOGE("PWR", "[SCAP] ADC calibration unavailable (no eFuse cal data?) — "
+                            "reporting no hold-up cap voltage rather than an uncalibrated guess");
+            return;
+        }
+        scap_adc_ready = true;
+        ESP_LOGI("PWR", "[SCAP] hold-up cap sense ready: GPIO%d (ADC1_CH%d), 6 dB, /%.0f divider; "
+                        "advisory if V_SCAP < %.2f V after %lu s",
+                 config::SCAP_ADC_PIN, (int)adc1ChannelForGpio(config::SCAP_ADC_PIN),
+                 (double)kScapDividerRatio, (double)ScapHoldupPolicy::kChargedV,
+                 (unsigned long)(ScapHoldupPolicy::kWindowMs / 1000u));
+    }
+}
+
+// V_SCAP in volts, or NaN when the sense is compiled out, failed to come up,
+// or did not answer this time. NaN rather than 0 for the same reason as
+// readRailAmps: an empty cap and a dead sense must stay distinguishable.
+static float readScapVolts()
+{
+    if constexpr (config::SCAP_ADC_PIN < 0)
+    {
+        return NAN;
+    }
+    else
+    {
+        if (!scap_adc_ready) return NAN;
+
+        // Eight samples. The node is a 50 k source even with C144 at the pad —
+        // the reservoir is what makes the SAR's sample-and-hold honest, and
+        // averaging halves the converter's own noise on top of it. ~0.3 ms
+        // once a second.
+        constexpr int kSamples = 8;
+        int mv_sum = 0, taken = 0;
+        const adc_channel_t ch = adc1ChannelForGpio(config::SCAP_ADC_PIN);
+        for (int i = 0; i < kSamples; ++i)
+        {
+            int raw = 0;
+            if (adc_oneshot_read(adc1_unit, ch, &raw) != ESP_OK) continue;
+            int mv = 0;
+            if (adc_cali_raw_to_voltage(scap_adc_cali, raw, &mv) != ESP_OK) continue;
+            mv_sum += mv;
+            ++taken;
+        }
+        if (taken == 0) return NAN;
+
+        const int pin_mv = mv_sum / taken;
+        static bool warned_ceiling = false;
+        if (pin_mv > kScapPinCeilingMv && !warned_ceiling)
+        {
+            warned_ceiling = true;
+            ESP_LOGW("PWR", "[SCAP] pin at %d mV, above the %d mV the 6 dB range is good for — "
+                            "the divider or VCHG is not what this build assumes; volts are clipped",
+                     pin_mv, kScapPinCeilingMv);
+        }
+        return (float)pin_mv * 0.001f * kScapDividerRatio;
+    }
+}
+
+// Once per stats tick (1 s), both power modes: read the cap, run the verdict,
+// and write the console record of the charge ramp. The record IS the
+// first-article test — from a cold pack-on the cap climbs ~20 mV/s, crosses
+// 2.2 V near t+110 s and terminates near 2.5 V at t+125 s, and every one of
+// those numbers (charge current from the slope, termination accuracy, time to
+// charged) is readable straight from these lines.
+static void serviceScapMonitor()
+{
+    if constexpr (config::SCAP_ADC_PIN < 0)
+    {
+        return;
+    }
+    else
+    {
+        using namespace ScapHoldupPolicy;
+        static bool     have_logged   = false;
+        static float    last_logged_v = NAN;
+        static uint32_t last_log_ms   = 0;
+
+        const uint32_t    now  = millis();
+        const float       v    = readScapVolts();
+        const HoldupState prev = scap_state;
+        const HoldupState st   = next(prev, v, now);
+        scap_volts = v;
+        scap_state = st;
+
+        const bool changed = (st != prev);
+        if (!shouldLog(changed, have_logged, v, last_logged_v, now, last_log_ms)) return;
+        have_logged   = true;
+        last_logged_v = v;
+        last_log_ms   = now;
+
+        const unsigned long t_s = (unsigned long)(now / 1000u);
+        if (st == HU_LOW && changed)
+        {
+            // The whole point of the monitor: from every other signal on the
+            // board a hold-up that is not there looks exactly like one that is.
+            ESP_LOGW("PWR", "[SCAP] ADVISORY: hold-up cap LOW — V_SCAP %.2f V at t+%lus "
+                            "(charged is >= %.2f V). The +3V3 bridge is not there if the "
+                            "pack bounces (#1166)",
+                     (double)v, t_s, (double)kChargedV);
+        }
+        else if (st == HU_NO_READING)
+        {
+            ESP_LOGW("PWR", "[SCAP] no reading from the hold-up cap sense at t+%lus", t_s);
+        }
+        else
+        {
+            ESP_LOGI("PWR", "[SCAP] V_SCAP %.3f V at t+%lus — %s", (double)v, t_s, name(st));
+        }
+    }
 }
 
 static bool commitPowerSample(float bus_v, float current_a)
@@ -6298,6 +6497,11 @@ static void printStats()
     const uint32_t dt = now - last_stats_ms;
     last_stats_ms = now;
 
+    // #1166: the hold-up cap sense rides this tick in BOTH power modes —
+    // the charge ramp is exactly the rail-off window, and the tick already
+    // wakes for the BLE push, so this costs no wakeup of its own.
+    serviceScapMonitor();
+
     // --- Low-power mode: send minimal BLE telemetry only ---
     if (!pwr_pin_on)
     {
@@ -6328,6 +6532,12 @@ static void printStats()
             ble_telem.current = NAN;
             ble_telem.voltage = NAN;
         }
+        // #1166: the hold-up cap sense is independent of the INA230, so it is
+        // filled outside that validity gate — and this rail-off path is where
+        // the cap actually charges, so it must ride here, not only when the
+        // FC is up (the #850 gap in mirror image).
+        ble_telem.scap_voltage = scap_volts;
+        ble_telem.holdup_state = (uint8_t)scap_state;
         ble_telem.latitude = NAN;
         ble_telem.longitude = NAN;
         ble_telem.gdop = NAN;
@@ -6796,6 +7006,9 @@ static void printStats()
         ble_telem.cam_current   = p.cam_current;
         ble_telem.servo_current = p.servo_current;
     }
+    // #1166: hold-up cap sense, both power modes (see the low-power path).
+    ble_telem.scap_voltage = scap_volts;
+    ble_telem.holdup_state = (uint8_t)scap_state;
     if (latest_gnss_valid)
     {
         ble_telem.latitude = latest_gnss_si.lat;
@@ -8167,6 +8380,10 @@ static void setup_oc()
     // whether or not the gauge answered, so a dead or absent INA230 does not
     // also cost the camera/servo current readings.
     initRailCurrentAdc();
+    // #1166: same independence for the hold-up cap sense; it shares the ADC1
+    // unit with the IMON channels and takes its first sample on the first
+    // stats tick, so the charge ramp is logged from the top of the boot.
+    initScapAdc();
 
     // #519: the OC owns its connection-parameter policy — slow (200 ms, latency 4)
     // while the rail is off to save idle power, fast (30 ms) once it comes on for

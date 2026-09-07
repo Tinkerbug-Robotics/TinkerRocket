@@ -12,7 +12,7 @@
 > | 2. Pin assignments | **Corrected in place below** (2026-09-04). The table is the only part of this file that tracks the board. |
 > | 3. Pyro arming | **RETRACTED IN FULL.** There is no charge pump, no `ARM_CLK`, and no hardware one-shot. Arming is now two static consent lines. See [`arm-watchdog-rework.md`](arm-watchdog-rework.md). |
 > | 4. `CAP_ACTIVE` handler | **RETRACTED IN FULL.** No `U40`, no `R127`, no LM66100. The signal is `VBUCK_OK` and its polarity is inverted. See [`holdup-tps61094-rework.md`](holdup-tps61094-rework.md); the parking and shedding *order* in that section is still the right shape. |
-> | 5. Supercap charge gate | **Intent stands, every number is wrong.** Corrected inline. |
+> | 5. Supercap charge gate | **Telemetry half implemented 2026-09-07 (#1166); the arm gate is not.** Numbers corrected inline. |
 > | 6. Behaviour that needs no code | **Stands, except** the "cut itself" and "re-enable bounce" bullets, which describe `U45`. |
 > | 7. Open verifications | **RETRACTED.** Every row names a deleted part. |
 
@@ -183,8 +183,21 @@ normal operation, re-enable TX.
 ## 5. Supercap charge gate — REQUIRED for arming, recommended elsewhere
 
 `V_SCAP_ADC` is V_SCAP ÷ 2 (100 k / 100 k, `R125`/`R126`) on **out-computer
-GPIO8** (pad 13), with `C144` 100 nF at the pin: full scale ~1.25 V at the pin for a
-2.5 V cap — configure ADC attenuation accordingly and calibrate the 2:1 ratio.
+GPIO8** (pad 13), with `C144` 100 nF at the pin: ~1.25 V at the pin for the 2.5 V
+termination, up to ~1.33 V at the VIN − 800 mV bound. Use the **6 dB** attenuation
+step, not the 1.25 V-full-scale one — that one saturates exactly at the reading this
+node exists to provide (#1022).
+
+> **Implemented 2026-09-07 (#1166), out-computer firmware, M1 build:** the OC samples
+> `V_SCAP` once a second from boot (`serviceScapMonitor()`, 6 dB, eight-sample
+> average, ÷2), logs the charge ramp on the console (`[SCAP] V_SCAP x.xxx V at t+Ns —
+> CHARGING/CHARGED`, a line per ~50 mV of movement or per minute), sends the volts
+> and the verdict over direct BLE (`vsc` / `hup`), and both apps draw one quiet line
+> under the state banner — "Backup cap not charged — x.xx V" — when the cap is still
+> below **2.2 V three minutes after boot** (or fell below 2.1 V later). The verdict is
+> the pure policy in `out_computer/main/scap_holdup_policy.h`, host-tested. It is an
+> advisory, not an arm block, and it is not on the LoRa relay path. **The pre-arm gate
+> below is NOT implemented.**
 
 - **Pre-arm check:** refuse pyro arm (and fail the preflight-checklist step)
   until the hold-up cap is charged. **The 3.1 V threshold this line used to give is

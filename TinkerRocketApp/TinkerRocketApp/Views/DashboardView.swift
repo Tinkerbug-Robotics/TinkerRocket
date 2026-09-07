@@ -753,6 +753,27 @@ struct ConnectedDashboardView: View {
                     .buttonStyle(.plain)
                     .opacity(staleOpacity)
                 }
+
+                // #1166: the +3V3 hold-up capacitor never charged (or fell),
+                // by the out computer's own verdict.  Same shape and rule as
+                // the two lines above — advisory only, never an arm block,
+                // never a recolour of the state banner.  Direct links only:
+                // the LoRa frames do not carry the verdict, so a relay can
+                // only ever be silent here, not wrong.  Renders nothing while
+                // the cap is charging or charged; a hold-up that silently is
+                // not there looks exactly like one that is from every other
+                // signal on the board, which is why this line exists.
+                if !device.isBaseStation,
+                   let holdupText = device.telemetry.holdupAdvisoryText {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bolt.slash")
+                        Text(holdupText)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity)
+                    .opacity(staleOpacity)
+                }
             }
 
             // #557: the FC lost its GNSS module and is flying a baro+IMU-only

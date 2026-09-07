@@ -72,7 +72,20 @@ static_assert(board_pins::LORA_CS_PIN >= 0 && board_pins::LORA_SPI_SCK >= 0,
 // already been bitten by an RXEN left floating in RX.
 static_assert(board_pins::LORA_RXEN_PIN >= 0,
               "board_m1.h: L_RXEN reaches a GPIO on this board and must be driven");
+// #1166: the hold-up cap sense (V_SCAP_ADC, R125/R126) reaches this processor
+// on the mini, and its verdict is the only thing on the board that reports a
+// hold-up that silently is not there. Setting it to -1 here would compile the
+// monitor out and bring that silence back.
+static_assert(board_pins::SCAP_ADC_PIN >= 0,
+              "board_m1.h: V_SCAP_ADC reaches the out computer on the mini and must be read (#1166)");
 #endif
+
+// Wherever the hold-up cap sense exists it must sit on ADC1 (GPIO1-10 on the
+// S3): ADC2 is unusable with the radio up, and a wrong pad reads a floating
+// input as a verdict.
+static_assert(board_pins::SCAP_ADC_PIN < 0 ||
+              (board_pins::SCAP_ADC_PIN >= 1 && board_pins::SCAP_ADC_PIN <= 10),
+              "SCAP_ADC_PIN must be an ADC1 pad (GPIO1-10) or -1 (#1166)");
 
 #if TR_BOARD_V9
 static_assert(board_pins::MRAM_CS < 0,

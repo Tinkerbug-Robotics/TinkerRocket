@@ -749,4 +749,45 @@ class TelemetryDataTest {
         assertEquals("340 mA", railAmpsDisplay(0.34f))
         assertEquals("\u2014", railAmpsDisplay(null))
     }
+
+    // ── Hold-up capacitor (#1166) ─────────────────────────────────────────
+
+    /** The keys are absent on every board without the sense; that is no verdict, not a verdict. */
+    @Test
+    fun holdup_absentKeysDecodeAsNull() {
+        val t = decodeOk("""{"soc":85.0,"vol":7.4}""")
+        assertNull(t.scapVoltage)
+        assertNull(t.holdupStateRaw)
+        assertNull(t.holdupState)
+        assertNull(t.holdupAdvisoryText)
+    }
+
+    @Test
+    fun holdup_presentKeysDecode() {
+        val t = decodeOk("""{"vsc":2.43,"hup":2}""")
+        assertEquals(2.43f, t.scapVoltage!!, 0.001f)
+        assertEquals(TelemetryData.HoldupState.CHARGED, t.holdupState)
+        assertNull(t.holdupAdvisoryText)   // charged has nothing to say
+    }
+
+    /** Only LOW and NO_READING produce a line; the charging window is quiet. */
+    @Test
+    fun holdup_advisoryOnlyWhenLowOrUnreadable() {
+        assertNull(decodeOk("""{"vsc":0.31,"hup":1}""").holdupAdvisoryText)
+        assertEquals("Backup cap not charged \u2014 0.31 V",
+                     decodeOk("""{"vsc":0.31,"hup":3}""").holdupAdvisoryText)
+        assertEquals("Backup cap not charged", decodeOk("""{"hup":3}""").holdupAdvisoryText)
+        assertEquals("Backup cap sense \u2014 no reading", decodeOk("""{"hup":4}""").holdupAdvisoryText)
+    }
+
+    /** "hup" is an integer key: float/string drift decodes (#571); an unknown value is no verdict. */
+    @Test
+    fun holdup_stateToleratesDriftAndUnknownValues() {
+        assertEquals(TelemetryData.HoldupState.LOW, decodeOk("""{"hup":"3"}""").holdupState)
+        assertEquals(TelemetryData.HoldupState.LOW, decodeOk("""{"hup":3.0}""").holdupState)
+        val u = decodeOk("""{"hup":9}""")
+        assertEquals(9, u.holdupStateRaw)
+        assertNull(u.holdupState)
+        assertNull(u.holdupAdvisoryText)
+    }
 }

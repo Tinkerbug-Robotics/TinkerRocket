@@ -936,6 +936,19 @@ target_include_directories(test_flight_token_policy PRIVATE
 target_link_libraries(test_flight_token_policy GTest::gtest_main)
 gtest_discover_tests(test_flight_token_policy)
 
+# ---------- test_scap_holdup_policy (#1166) ----------
+# The hold-up capacitor verdict: a converter that never charges the supercap
+# leaves +3V3 fine and nothing reporting it, so the OC turns "V_SCAP still
+# flat after the charge window" into an advisory. Pure header in the OC
+# project; the ADC read stays in main.cpp.
+add_executable(test_scap_holdup_policy test_scap_holdup_policy.cpp)
+target_include_directories(test_scap_holdup_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_scap_holdup_policy GTest::gtest_main)
+gtest_discover_tests(test_scap_holdup_policy)
+
 # ---------- test_flush_iter_ledger (#510) ----------
 # Host-side test for the flush-task per-iteration accounting: section sums,
 # clamped unaccounted/drain-other arithmetic, and the WARN/INFO classification

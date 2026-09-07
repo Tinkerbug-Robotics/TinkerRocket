@@ -209,9 +209,14 @@ at 3.3 V nominal the worst-low 3.224 V leaves only 74 mV even with OSEL at 3.0.
 same `U47`, `R134` 4.75 k, `R135` 6.65 k, `R136` 22.1 k, and `DEF` tied high. It
 carries the same defect and wants the same one-resistor fix.
 
-Open on #999: log `V_SCAP` from cold start on the first article to confirm the cap
-actually charges, and add a preflight advisory if it is still low a few minutes
-after power-on, so any future silent failure is visible.
+Split out of #999 as #1166 and **implemented 2026-09-07** in the out-computer
+firmware (M1 build): `V_SCAP` is sampled once a second from boot and the charge
+ramp is logged on the console (`[SCAP] V_SCAP x.xxx V at t+Ns — CHARGING`, a
+line per ~50 mV or per minute), the volts and a verdict ride direct BLE, and a
+cap still below 2.2 V three minutes after power-on raises a quiet advisory line
+in both apps. The first-article charge profile — charge current from the slope,
+termination voltage, time to 2.2 V — is read straight off those lines; record
+the per-board spread here once a few boards have run (bench item in #1211).
 
 ## VBUCK_OK made usable (2026-09-03 — mini drawn; V10 NOT reviewed)
 

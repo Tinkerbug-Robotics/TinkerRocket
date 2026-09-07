@@ -153,6 +153,13 @@ public data class TelemetryData(
     // identical at zero and only one of them is a measurement.
     val camCurrent: Float? = null,            // "ccur" Camera rail current A
     val servoCurrent: Float? = null,          // "scur" Servo rail current A
+    // #1166: the +3V3 hold-up capacitor (V_SCAP) sense, rocket OC direct link
+    // only. null = the key was absent: this board has no such sense (V7/V8/V9,
+    // a base station, a relayed rocket — the LoRa frames do not carry it).
+    // The verdict is the firmware's, because the out computer owns the boot
+    // clock the "still low after the charge window" rule needs.
+    val scapVoltage: Float? = null,           // "vsc"  V_SCAP volts
+    val holdupStateRaw: Int? = null,          // "hup"  raw HoldupState (null = not reported)
     val voltage: Float? = null,               // "vol"  Battery voltage V
     val latitude: Double? = null,             // "lat"  GPS latitude degrees
     val longitude: Double? = null,            // "lon"  GPS longitude degrees
@@ -286,6 +293,43 @@ public data class TelemetryData(
             // out-of-range value.
             String.format(java.util.Locale.ROOT, "%.1f%%", it.coerceIn(0f, 100f) + 0f)
         } ?: "—"
+
+    // ── Hold-up capacitor (#1166) ─────────────────────────────────────────
+    /**
+     * The out computer's verdict on the +3V3 hold-up capacitor, mirroring the
+     * firmware's ScapHoldupPolicy::HoldupState wire values ("hup").
+     * iOS twin: `TelemetryData.HoldupState`.
+     */
+    public enum class HoldupState(public val raw: Int) {
+        CHARGING(1),     // below threshold, charge window still open
+        CHARGED(2),
+        LOW(3),          // still low after the window, or fell: the advisory
+        NO_READING(4);   // the sense exists but the ADC did not answer
+
+        public companion object {
+            /** Unknown raw values read as no verdict, mirroring iOS `HoldupState(rawValue:)`. */
+            public fun fromRaw(raw: Int): HoldupState? = entries.firstOrNull { it.raw == raw }
+        }
+    }
+
+    /** null when the frame carried no verdict: no sense on this board, or a relayed/BS frame. */
+    public val holdupState: HoldupState?
+        get() = holdupStateRaw?.let { HoldupState.fromRaw(it) }
+
+    /**
+     * The dashboard advisory line, or null when there is nothing to say. Only
+     * LOW and NO_READING speak; CHARGING and CHARGED stay quiet, per the house
+     * rule that an advisory renders only when it has something to say.
+     * iOS twin: `holdupAdvisoryText`.
+     */
+    public val holdupAdvisoryText: String?
+        get() = when (holdupState) {
+            HoldupState.LOW -> scapVoltage?.let {
+                String.format(java.util.Locale.ROOT, "Backup cap not charged \u2014 %.2f V", it)
+            } ?: "Backup cap not charged"
+            HoldupState.NO_READING -> "Backup cap sense \u2014 no reading"
+            else -> null
+        }
 
     // ── Telemetry freshness (#95) ─────────────────────────────────────────
     public enum class DataStatus(public val raw: Int) {
@@ -716,6 +760,8 @@ public data class TelemetryData(
             current = strictFloat(json, "cur"),
             camCurrent = strictFloat(json, "ccur"),      // #850
             servoCurrent = strictFloat(json, "scur"),    // #850
+            scapVoltage = strictFloat(json, "vsc"),      // #1166
+            holdupStateRaw = flexInt(json, "hup"),       // #1166: integer key, drift-tolerant (#571)
             voltage = strictFloat(json, "vol"),
             latitude = strictDouble(json, "lat"),
             longitude = strictDouble(json, "lon"),

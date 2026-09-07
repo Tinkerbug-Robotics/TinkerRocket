@@ -42,6 +42,15 @@ public:
         // claimed a measured zero on hardware that has no monitor at all.
         float cam_current   = NAN;  // Camera rail current A  (NaN = not measured)
         float servo_current = NAN;  // Servo rail current A   (NaN = not measured)
+        // #1166: the +3V3 hold-up capacitor (V_SCAP) sense, rocket OC only.
+        // Same absent-key contract as the rail currents: NaN drops "vsc", and
+        // 0 is the reserved "not reported" value for "hup" (ScapHoldupPolicy::
+        // HU_NOT_REPORTED), so a zero-initialised builder — V7/V8/V9 OC, the
+        // base station, relayed rockets, the single-MCU mini — emits neither
+        // key and the apps show nothing. The verdict is the OC's because it
+        // owns the boot clock the "still low after the window" rule needs.
+        float   scap_voltage = NAN; // V_SCAP volts (NaN = not measured)
+        uint8_t holdup_state = 0;   // "hup": 1 charging, 2 charged, 3 low, 4 no reading
         float voltage;          // Battery voltage V
         double latitude;        // GPS latitude degrees
         double longitude;       // GPS longitude degrees

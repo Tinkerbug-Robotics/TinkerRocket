@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.SignalCellularOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -260,6 +261,35 @@ fun DashboardScreen(
                 )
                 Text(
                     "  LoRa off — no telemetry downlink",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tr.statusWarn,
+                )
+            }
+        }
+
+        // #1166: the +3V3 hold-up capacitor never charged (or fell), by the
+        // out computer's own verdict.  Same shape and rule as the two lines
+        // above — advisory only, never an arm block, never a recolour of the
+        // state banner.  Direct links only: the LoRa frames do not carry the
+        // verdict, so a relay can only ever be silent here, not wrong.
+        // Renders nothing while the cap is charging or charged; a hold-up
+        // that silently is not there looks exactly like one that is from
+        // every other signal on the board, which is why this line exists.
+        val holdupText = telemetry.holdupAdvisoryText
+        if (!session.isBaseStation && holdupText != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.FlashOff,
+                    contentDescription = null,
+                    tint = tr.statusWarn,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "  $holdupText",
                     style = MaterialTheme.typography.labelMedium,
                     color = tr.statusWarn,
                 )

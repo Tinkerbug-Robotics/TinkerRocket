@@ -126,6 +126,14 @@ struct board_pins
     // the INA230 on the power bus (VBAT_CON) and does not need a second
     // opinion about the buck. The pad that carried the OC's VBUCK_OK on the
     // earlier revision is GPIO34, and it is bare now.
+    //
+    // Read once a second from boot by serviceScapMonitor() in main.cpp
+    // (#1166): the charge ramp is logged to the console, the volts and the
+    // verdict ride the BLE telemetry ("vsc" / "hup"), and a cap still flat
+    // three minutes after power-on raises the app's advisory line. The
+    // divider is 100 k / 100 k with C144 100 nF at this pad, and the
+    // attenuation is 6 dB — the 2.5 dB step saturates exactly at the 2.5 V
+    // termination (#1022).
     static constexpr int SCAP_ADC_PIN = 8;       // V_SCAP_ADC (CONFIRMED; ADC1_CH7)
 
     // --- I2C slave (commands from the FlightComputer) ---

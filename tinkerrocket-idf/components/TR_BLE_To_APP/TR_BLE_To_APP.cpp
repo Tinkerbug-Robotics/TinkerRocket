@@ -2022,6 +2022,19 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("ccur", data.cam_current, 2);
     addFloat("scur", data.servo_current, 2);
 
+    // #1166: hold-up capacitor sense. "vsc" is V_SCAP in volts, "hup" the
+    // out computer's verdict on it (1 charging, 2 charged, 3 low = the
+    // advisory, 4 no reading). Both absent on any board without the sense:
+    // NaN drops "vsc" and 0 is the reserved "not reported" value for "hup",
+    // so V7/V8/V9, the base station and relayed rockets pay zero bytes and
+    // the apps draw the advisory line only on a 3 or a 4. Here in Tier 2
+    // with the other #850-era power diagnostics rather than in Tier 3: the
+    // line is a pad-time go/no-go input, not link housekeeping.
+    addFloat("vsc", data.scap_voltage, 2);
+    if (data.holdup_state != 0) {
+        addUint("hup", data.holdup_state);
+    }
+
     // ── Tier 3: diagnostics / link / base station (first to drop) ─────────
 
     // LoRa signal quality (NaN on direct connection — will be omitted)
