@@ -5,6 +5,8 @@
 // so this is the one thing on the board that says which.
 #include <gtest/gtest.h>
 #include "holdup_policy.h"
+#include <SPI.h>       // host shim: SPI_MODE0, which the OC config.h names
+#include "config.h"    // the SHIPPED HOLDUP_* constants (TR_BOARD_M1 from CMake)
 #include <cmath>
 
 using namespace holdup_policy;
@@ -142,4 +144,73 @@ TEST(HoldupPolicy1166, ADischargeRidingTheCapLogsEverySecond)
         if (traceDue(false, true, v, last, ms, last_ms, 0.05f, 60u * kSecond)) { ++lines; last = v; last_ms = ms; }
     }
     EXPECT_EQ(lines, 10);
+}
+
+// The local kBarV / kAdvisory above are what the cases are written against;
+// this ties them to the values the M1 build actually ships, so a config.h
+// edit cannot leave the suite proving the wrong window.
+TEST(HoldupPolicy1166, TheSuiteMirrorsTheShippedConstants)
+{
+    EXPECT_FLOAT_EQ(kBarV, config::HOLDUP_CHARGED_V);
+    EXPECT_EQ(kAdvisory, config::HOLDUP_LOW_ADVISORY_MS);
+    EXPECT_FLOAT_EQ(0.05f, config::HOLDUP_TRACE_DELTA_V);
+    EXPECT_EQ(60u * kSecond, config::HOLDUP_TRACE_PERIOD_MS);
+    EXPECT_GE(config::SCAP_ADC_PIN, 0);   // the mini reads it (config.h asserts this too)
+}
+
+TEST(HoldupPolicy1166, TheGraceWindowOutlastsTheSlowCornerOfTheRamp)
+{
+    // A healthy board with a fat cap on a weak charge current must never see
+    // a false advisory before it crosses the bar.  EDLC capacitance runs to
+    // +30 %, and the ICHG code about -10 %: 6.5 F at 90 mA is the slow corner.
+    const double c_max_f  = 5.0 * 1.30;
+    const double i_min_a  = 0.100 * 0.90;
+    const double t_bar_s  = c_max_f * config::HOLDUP_CHARGED_V / i_min_a;   // ~159 s
+    EXPECT_GE(config::HOLDUP_LOW_ADVISORY_MS, (uint32_t)(t_bar_s * 1000.0) + 15u * kSecond)
+        << "window " << config::HOLDUP_LOW_ADVISORY_MS << " ms vs the slow corner crossing at "
+        << t_bar_s << " s";
+
+    // And the tracker driven through exactly that ramp from a cold start:
+    // CHARGING all the way to the bar, then CHARGED, never NOT_CHARGING.
+    Tracker t;
+    const float slope_v_per_s = (float)(i_min_a / c_max_f);   // ~13.8 mV/s
+    bool charged = false;
+    uint32_t first_charged_ms = 0;
+    for (uint32_t ms = kSecond; ms <= 400u * kSecond; ms += kSecond)
+    {
+        float v = slope_v_per_s * (float)(ms / kSecond);
+        if (v > 2.5f) v = 2.5f;
+        const uint8_t s = t.update(v, ms, config::HOLDUP_CHARGED_V, config::HOLDUP_LOW_ADVISORY_MS);
+        EXPECT_NE(s, NOT_CHARGING) << "false advisory at +" << ms / kSecond << " s on the slow corner";
+        if (s == CHARGED && !charged) { charged = true; first_charged_ms = ms; }
+    }
+    EXPECT_TRUE(charged);
+    EXPECT_LT(first_charged_ms, config::HOLDUP_LOW_ADVISORY_MS);
+
+    // The nominal ramp (100 mA into 5 F, 20 mV/s) sits well inside the window.
+    EXPECT_LT(5.0 * config::HOLDUP_CHARGED_V / 0.100 * 1000.0, config::HOLDUP_LOW_ADVISORY_MS * 0.7);
+}
+
+TEST(HoldupPolicy1166, ThePinCeilingSitsBetweenTheWorstCaseCapAndTheRangeEnd)
+{
+    // Clean charge terminates no higher than VIN - 800 mV = 2.665 V at the
+    // 3.465 V rail, so the pad never legitimately exceeds that over the
+    // divider; the 6 dB range is characterised to ~1750 mV on the S3.  The
+    // over-range warning must fire only above the first and never wait for
+    // the second.
+    const int worst_pad_mv = (int)(2.665 / (double)config::SCAP_DIVIDER_RATIO * 1000.0 + 0.5);
+    EXPECT_GT(config::HOLDUP_PIN_CEILING_MV, worst_pad_mv);
+    EXPECT_LE(config::HOLDUP_PIN_CEILING_MV, 1750);
+    // ...and a charged cap at termination is comfortably readable.
+    EXPECT_LT(2.5 / (double)config::SCAP_DIVIDER_RATIO * 1000.0, config::HOLDUP_PIN_CEILING_MV);
+}
+
+TEST(HoldupPolicy1166, TracePeriodSurvivesUptimeWrap)
+{
+    // The window wrap is covered above; the trace period uses the same
+    // unsigned arithmetic and must not go quiet, or chatter, across it.
+    const uint32_t period = 60u * kSecond;
+    const uint32_t last   = 0xFFFFFFFFu - 10u * kSecond;
+    EXPECT_FALSE(traceDue(false, true, 2.5f, 2.5f, last + 30u * kSecond, last, 0.05f, period));  // wrapped, 30 s
+    EXPECT_TRUE(traceDue(false, true, 2.5f, 2.5f, last + period, last, 0.05f, period));           // wrapped, 60 s
 }
