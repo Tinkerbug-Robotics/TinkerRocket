@@ -274,12 +274,16 @@ neither table nor report should be hand-edited.
 | u-blox ZED-F9P (ArduSimple) | conducted | 515 m/s | 80 km † | independent | 0.1-1.0 s |
 | Air530 (AT6558R) | conducted | none to 900 m/s | 10 km ‡ | n/a -- no velocity gate | n/a |
 | u-blox NEO-M8T | conducted | 515 m/s | 50 km § | independent | 0.9-3.1 s |
+| Quescan M10 (u-blox M10) | radiated, Faraday cage | 515 m/s | 80 km † | independent | 0.1-5.0 s |
+| Beitian BN-182 (u-blox M10) | radiated, Faraday cage | 505 m/s ¶ | 80 km † | independent | 0.5-11.3 s |
 
 † Slow to close: this part held a fix 2-3 s past the limit on both flights, about 400-600 m of overshoot above 80 km with position still being published. The threshold itself is normal.
 
 ‡ Not an export gate. This ceiling sits below the COCOM altitude, and the receiver stops publishing there for reasons unrelated to export control.
 
 § The u-blox dynamic model's own altitude ceiling, not an export gate. Airborne <4 g is specified at 50,000 m; no u-blox model goes higher, so this part's export behavior above it cannot be measured.
+
+¶ Rests on a single closing edge, so it is bracketed only to the width of one navigation epoch. This part was slow enough to re-open that the gate had not cleared before the next window, leaving no fix to close again.
 
 **SkyTraq PX1125R** (2026-08-19, ~70 dB pad + DC block into RF_IN, TX gain 44-47): Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified.
 
@@ -290,6 +294,10 @@ neither table nor report should be hand-edited.
 **Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): EVERYTHING FIRST RECORDED FOR THIS PART WAS WRONG, and dwell tests corrected it. It has NO velocity gate: it held a fix to 900 m/s at 5 km on t1_velramp (reporting 899), and 100% of epochs at every 90 s dwell from 495 to 530 m/s on vel_stair. What it has is an ALTITUDE ceiling at 10-11 km -- 100% fix at 8 km, 91% at 10 km, 0% at 11/12/13 km on 90 s dwells, and 9.90->10.25 km on a 354 m/s ramp with 11 satellites either side. That ceiling is far below the COCOM altitude, so it is not an export gate at all. The flight profiles read as a latent velocity gate only because they cross 10 km at high speed: the spaceshot transition happens while speed is DECREASING (1334 -> 1304 m/s) as altitude rises through 9.83 -> 11.15 km, which no velocity gate can do. Re-open latency is not defined for this part because there is no COCOM gate to re-open: on blockdur it held a fix at 560 m/s for 148 continuous seconds, dropping only 1 s at the sharp 130 m/s^2 transition. The 31-134 s 'recoveries' seen on flights were simply the vehicle descending back through the 10-11 km ceiling. The 18 s C/N0 blanking accompanies withholding (19/677 epochs while withholding vs 0/170 while publishing on gentle_alt).
 
 **u-blox NEO-M8T** (2026-08-20, 70 dB pad, TX gain 38): Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for flight use and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behavior is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behavior. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.
+
+**Quescan M10 (u-blox M10)** (2026-08-28, antenna, TX gain 26): A bare u-blox M10 die on a third-party carrier: ROM SPG 5.10, hardware 000A0000, PROTVER 34.10, and it answers the full private protocol down to SEC-UNIQID. It reports no MOD= string, which is what a raw chip does rather than a u-blox-branded module. Gate behavior is in family -- velocity around 515, altitude at 80 km, limits independent -- but it is the slowest part measured on the ALTITUDE gate: +2.3 s to close and 4.7-5.0 s to re-open, against 0.7-1.7 s elsewhere, which is why both its brackets inverted. Flown on the same ephemeris, start time and launch site as the SAM-M10Q, ZED-F9P and NEO-M8T, so its satellite geometry is directly comparable rather than merely similar. One velocity edge closed a single epoch early, blocking at 510 m/s, while every other edge on this part is consistent with 515; at 29 m/s^2 an epoch is 29 m/s wide, so that is quantization rather than a lower threshold.
+
+**Beitian BN-182 (u-blox M10)** (2026-08-28, antenna, TX gain 20): The same u-blox M10 die and firmware as the Quescan -- identical MON-VER, different chip serial (dee2c50fbf vs c8bf908e28) -- flown on the same ephemeris, start time and launch site. It behaves like its MIRROR IMAGE on recovery: fast on altitude (1.0 s) and slow on velocity (10.1 s), where the Quescan is slow on altitude (5.0 s) and fast on velocity (0.1 s). On three of four velocity windows it does not re-open when speed drops below 515 but waits until 328-410 m/s, with 9-13 satellites held throughout, so it is the gate rather than re-acquisition. Transmit level is NOT the cause: a control flight at gain 26, matching the Quescan, reproduced every latency to the tenth of a second (0.5 / 1.0 / 10.1 s) and every shut lag. What differs and was not controlled is configuration in the modules' own flash -- this one runs GPS+Galileo+BeiDou with GLONASS off, the Quescan has GLONASS enabled, and CFG-NAVSPG holds more than the dynamic model. The practical lesson is that the same chip does not predict gate behavior: two M10 modules from different vendors differ by two orders of magnitude on velocity-gate recovery, and no datasheet says which you are buying.
 
 Across the four parts that implement a velocity gate at all the limit brackets
 to **(514, 516] m/s**, and wherever an altitude gate is genuinely COCOM it sits
@@ -337,6 +345,130 @@ reading anything into it.
 For contrast, the SAM-M10Q and NEO-M8T have **zero** in-envelope blocked epochs
 on descent (0/418 and 0/392), and the PX1125R's 57 are all at 2-4 satellites --
 the bench C/N0 oscillation, not the receiver.
+
+## Quescan M10, radiated (2026-08-28)
+
+A **bare u-blox M10 die on a third-party carrier**: `ROM SPG 5.10`, hardware
+`000A0000`, `PROTVER=34.10`, answering the full private protocol down to
+`SEC-UNIQID`, `MON-RF`, `MON-HW`, `MON-GNSS` and `MON-COMMS` at correct payload
+sizes. It reports **no `MOD=` string**, which is what a raw chip does rather
+than a u-blox-branded module. Found at **38400 baud**, the M9/M10 UART default,
+emitting NMEA only. TX gain **26**, off a broad plateau: 12-13 satellites and
+44-47 dBHz from gain 14 to 47, no compression at the top.
+
+| Capture | Result |
+|---|---|
+| `quescan_m10_spaceshot` | 3 windows, recovered 0.5 / 5.0 / 0.1 s |
+| `quescan_m10_gentle_alt` | 3 windows, recovered 0.3 / 4.7 / 0.9 s |
+
+Gate behavior is in family -- velocity around 515, altitude at 80 km, limits
+independent -- but it is **the slowest part measured on the altitude gate**:
++2.3 s to close and 4.7-5.0 s to re-open against 0.7-1.7 s everywhere else,
+which is why both its brackets invert.
+
+**Flown on the same ephemeris, start time and launch site as the SAM-M10Q,
+ZED-F9P and NEO-M8T**, so its satellite geometry is directly comparable rather
+than merely similar.
+
+### Three receivers, one sky, the same two satellites
+
+| | GPS:11 @ 70 deg | GPS:24 @ 51 deg | r(sin elev, dC/N0) | >=45 deg | <30 deg |
+|---|---|---|---|---|---|
+| ZED-F9P | 36 -> 0 dBHz | 34 -> 0 dBHz | -0.67 | -35 dB | +10 dB |
+| NEO-M8T | (same sky) | (same sky) | -0.45 | -28 dB | -3 dB |
+| Quescan M10 | 42 -> 24 dBHz | 39 -> 11 dBHz | -0.44 | -23 dB | -3 dB |
+
+Because the geometry was matched, all three lose **the same two physical
+satellites** rather than merely showing three separate correlations. The
+acceleration control holds here too: at 2.0 g, r = **+0.31** and >=45 deg at
+**+7 dB** -- the effect vanishes, as on the other two.
+
+One velocity edge closed a single epoch early, blocking at 510 m/s while every
+other edge on this part is consistent with 515. At 29 m/s^2 an epoch is 29 m/s
+wide, so that is quantization rather than a lower threshold -- and it is why
+`receiver_table.py` now estimates the threshold from the **median of every
+measured edge** instead of `max(fix)`/`min(blocked)`, which one sample can drag
+a whole rounding step.
+
+## Beitian BN-182, radiated (2026-08-28)
+
+**The same u-blox M10 die and firmware as the Quescan** -- identical MON-VER,
+different chip serial (`dee2c50fbf` vs `c8bf908e28`) -- on another vendor's
+board, flown on the same ephemeris, start time and launch site. Found at
+**115200 baud**, NMEA only. TX gain **20**.
+
+| Capture | Result |
+|---|---|
+| `beitian_bn182_spaceshot` | 3 windows, recovered 0.5 / 1.0 / **10.1** s |
+| `beitian_bn182_gentle_alt` | 3 windows, recovered **11.3** / 0.7 / **9.9** s |
+| `beitian_bn182_spaceshot_g26` | control at gain 26 -- see below |
+
+### Two modules, one die, mirror-image recovery
+
+| | w1 velocity | w2 altitude | w3 velocity |
+|---|---|---|---|
+| Beitian BN-182 | 0.5 s | **1.0 s** | **10.1 s** |
+| Quescan M10 | 0.5 s | **5.0 s** | **0.1 s** |
+
+The Beitian is fast on altitude and slow on velocity; the Quescan is the
+reverse. On three of four velocity windows the Beitian does not re-open when
+speed falls below 515 but waits until **328-410 m/s**, with 9-13 satellites held
+throughout, so it is the gate rather than re-acquisition.
+
+**Transmit level is not the cause.** A control flight at gain 26, matching the
+Quescan and identical in every other respect, reproduced every latency to the
+tenth of a second and every shut lag:
+
+    gain 26    0.5 s   1.0 s   10.1 s
+    gain 20    0.5 s   1.0 s   10.1 s
+
+That is worth knowing beyond this part: **re-open latency is not measuring
+signal level** on any row of the table.
+
+What differs and was not controlled is configuration in the modules' own flash.
+This one runs GPS+Galileo+BeiDou with GLONASS off; the Quescan has GLONASS
+enabled; and `CFG-NAVSPG` holds a good deal more than the dynamic model. Dumping
+and diffing both modules' `CFG-NAVSPG` and `CFG-SIGNAL` blocks would settle it,
+and needs no transmission at all.
+
+**The practical lesson: the same chip does not predict gate behavior.** Two M10
+modules from different vendors differ by two orders of magnitude on
+velocity-gate recovery, and no datasheet says which you are buying.
+
+### Two estimator bugs this exposed
+
+The table first reported **410 m/s** for this part's velocity gate. That was the
+estimator averaging *opening* edges -- but on a receiver that takes 10 s to
+re-open, the vehicle has shed 180 m/s by then, so those edges measure latency,
+not threshold. `receiver_table.py` now uses **closing edges only**, reduced to
+per-edge midpoints before the median, which is also robust to the coarse 15 g
+crossing where one epoch spans 118 m/s.
+
+Fixing that dropped the Quescan to 510 while the estimator function still said
+515 -- because a **second copy** of the rule had been created inside
+`receiver_table.py` and only one was updated. That is the same drift already
+fixed once between this file and `replot_all.py`. `vel_cell` now delegates to
+`velocity_threshold`; one implementation, called from everywhere.
+
+The Beitian's 505 carries a footnote: it rests on a **single closing edge**,
+because on the other windows the gate had not re-opened and there was no fix
+left to close. One epoch at that boost is 29 m/s wide, so it is consistent with
+515 but not independently resolved.
+
+### A guard the runner now has
+
+The first attempt at these flights was invalid and would not have looked it.
+RAM-layer configuration does not survive a power cycle, and a receiver behind a
+USB-UART bridge power-cycles whenever the bridge does -- so between its gain
+sweep and its flight the Beitian silently reverted to NMEA with `DYNMODEL=0`,
+which is *portable*, ceiling ~12 km. That would have been measured and written
+up as a 12 km altitude gate, exactly the NEO-M8T trap, and nothing downstream
+would have flagged it. `run_radiated.py` now refuses to transmit unless NAV-PVT
+and NAV-SAT are on the wire and NMEA is quiet.
+
+The same reversion also invalidated the gain sweeps that chose the level: they
+had counted satellites from NMEA GSV rather than UBX NAV-SAT, which is why
+"14 satellites at gain 8" became 4 in flight.
 
 ## Experiments still owed on the first four receivers
 
@@ -389,7 +521,8 @@ one receiver connects at a time.
 
 **No receiver loses its POSITION during the burn on this bench. Individual
 satellites are a different story, and the ones it loses are exactly the ones
-carrying the most Doppler.**
+carrying the most Doppler.** Measured on four receivers with `boost_sats.py`;
+written up as section 06 of the report.
 
 The dynamics themselves are real and correctly injected. `spaceshot` peaks at
 132 m/s^2 (13.5 g), which is **695 Hz/s** of L1 Doppler rate against a peak shift
@@ -418,23 +551,56 @@ tracked satellite:
 Acceleration is the control. Same geometry, same scenario, 4.5x less
 acceleration:
 
-| | peak | r(sin elev, dC/N0) | >=45 deg | <30 deg |
-|---|---|---|---|---|
-| ZED-F9P spaceshot | 13.5 g | **-0.67** | **-35 dB** | +10 dB |
-| ZED-F9P gentle_alt | 2.0 g | +0.54 | +8 dB | +2 dB |
-| NEO-M8T spaceshot | 13.5 g | **-0.45** | **-28 dB** | -3 dB |
-| NEO-M8T gentle_alt | 2.0 g | -- | 0 dB | 0 dB |
+`boost_sats.py` recomputes this from the raw NAV-SAT in any capture, so it now
+covers every receiver that reports per-satellite elevation -- four of the seven.
+The other three cannot answer the question: the Air530 speaks NMEA, the PX1125R
+SkyTraq binary, and the SAM-M10Q archive comes through the console diagnostic
+that synthesized elevation as zero (see the planned trial below).
 
-Two independent receivers show it at 13.5 g and neither shows it at 2.0 g. Every
-channel is transmitted at equal power (`-p`), so the elevation dependence has to
-be receiver-side. This is Doppler-rate stress on the tracking loops, and the rig
-does reproduce it.
+    python3 boost_sats.py results/zed_f9p_spaceshot.log.gz \
+                          results/zed_f9p_spaceshot.scenario.json
+
+| | peak | r(sin elev, dC/N0) | >=45 deg | <30 deg | lost |
+|---|---|---|---|---|---|
+| ZED-F9P spaceshot | 13.5 g | **-0.71** | **-38 dB** | +2 dB | 3 |
+| ZED-F9P gentle_alt | 2.0 g | +0.35 | +3 dB | +0 dB | 0 |
+| NEO-M8T spaceshot | 13.5 g | **-0.84** | **-20 dB** | -4 dB | 0 |
+| NEO-M8T gentle_alt | 2.0 g | -- | +0 dB | +0 dB | 0 |
+| Quescan M10 spaceshot | 13.5 g | **-0.50** | **-24 dB** | -6 dB | 0 |
+| Quescan M10 gentle_alt | 2.0 g | +0.28 | +6 dB | +0 dB | 0 |
+| Beitian BN-182 spaceshot | 13.5 g | **-0.59** | **-19 dB** | +4 dB | 0 |
+| Beitian BN-182 gentle_alt | 2.0 g | +0.41 | +4 dB | +0 dB | 0 |
+
+**Four independent receivers show it at 13.5 g and none shows it at 2.0 g**, where
+the correlation does not merely weaken but comes back positive on every part.
+Every channel is transmitted at equal power (`-p`), so the elevation dependence
+has to be receiver-side. This is Doppler-rate stress on the tracking loops, and
+the rig does reproduce it.
+
+The ranking is consistent even where the outcome is not. GPS:11 (70 deg) and
+GPS:24 (51 deg) are the two worst-hit satellites on all four parts -- -39/-38 on
+the ZED-F9P, -16/-25 on the NEO-M8T, -15/-32 on the Quescan, -12/-26 on the
+Beitian -- but only the ZED-F9P actually drops any of them.
 
 Caveats: n=2 in the >=45 deg band, because that geometry simply does not put
-many satellites overhead, and the result is sensitive to how the burn window and
-baseline are chosen -- a first pass with a slightly different window showed no
-effect at all. What makes it credible is two receivers agreeing and the
-effect reversing with acceleration.
+many satellites overhead; all four parts are u-blox, spanning three generations
+(M8, M10, F9) but one vendor; and the result is sensitive to how the burn window
+and baseline are chosen -- a first pass with a slightly different window showed
+no effect at all. `boost_sats.py` fixes the windows (baseline is the 60 s of pad
+time ending 5 s before ignition, burn starts 1 s after) so the choice is at least
+the same for every part. The earlier hand-computed pass gave -0.67 and -0.45 for
+the two receivers it covered, against -0.71 and -0.84 here; the signs and the
+reversal are robust, the second decimal is not.
+
+The NEO-M8T deserves its own asterisk: it reports a flat 51 dBHz for all 13
+satellites on the pad -- one distinct value, against 10 on the ZED-F9P -- so its
+reported carrier is clamped at the top of its range at this injection level. Its
+baseline therefore carries no per-satellite information and its delta is just the
+burn value minus a constant, which is why its r moved furthest between passes
+(-0.45 to -0.84). The sign still means what it says, but read that row as a
+ranking of burn C/N0 by elevation rather than a change from a measured baseline.
+Backing the injection level off until its pad C/N0 spreads would settle it. What makes it credible is four
+receivers agreeing and the effect reversing with acceleration.
 
 **The SAM-M10Q could not be checked this way, and now can.** Its archived
 captures come through the `[COCOM] S` console diagnostic, which logged

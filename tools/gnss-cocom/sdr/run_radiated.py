@@ -103,6 +103,45 @@ def stop_tx(tx):
         tx.kill()
 
 
+def preflight(port, baud, expect_dynmodel=8):
+    """Refuse to fly a receiver that is not in the state we think it is.
+
+    Configuration written to the RAM layer -- which is what this rig does, so a
+    bench part goes home as its owner left it -- does not survive a power cycle,
+    and a receiver on a USB-UART bridge power-cycles whenever the bridge does.
+    A Beitian M10 silently reverted between its gain sweep and its flight: back
+    to NMEA, NAV-PVT and NAV-SAT off, and DYNMODEL back to 0 (portable, whose
+    ~12 km ceiling would have been measured and written up as an altitude gate.)
+
+    Nothing downstream would have flagged it. correlate.py reads whatever
+    arrives, and a portable-model ceiling looks exactly like a gate. Fourteen
+    minutes of transmission, and a plausible wrong number at the end of it.
+    """
+    import serial
+    from ublox_binary import iter_frames, CLS_NAV, MSG_NAV_PVT, MSG_NAV_SAT
+    try:
+        with serial.Serial(port, baud, timeout=0.3) as ser:
+            time.sleep(0.3)
+            ser.reset_input_buffer()
+            buf = bytearray()
+            t0 = time.time()
+            while time.time() - t0 < 3.0:
+                buf.extend(ser.read(ser.in_waiting or 1))
+    except Exception as exc:
+        return [f"cannot open {port}: {exc}"]
+
+    raw = bytes(buf)
+    seen = {(c, m) for c, m, _ in iter_frames(bytearray(raw))}
+    problems = []
+    if (CLS_NAV, MSG_NAV_PVT) not in seen:
+        problems.append("no UBX NAV-PVT on the wire")
+    if (CLS_NAV, MSG_NAV_SAT) not in seen:
+        problems.append("no UBX NAV-SAT on the wire (no per-satellite C/N0 or elevation)")
+    if raw.count(b"$G") > 5:
+        problems.append(f"NMEA still enabled ({raw.count(b'$G')} sentences in 3 s)")
+    return problems
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -114,6 +153,8 @@ def main() -> int:
     ap.add_argument("--freq", type=int, default=1575420000)
     ap.add_argument("--rate", type=int, default=2600000)
     ap.add_argument("--seconds", type=float, help="override capture length")
+    ap.add_argument("--skip-preflight", action="store_true",
+                    help="transmit without checking the receiver's output first")
     ap.add_argument("--listen-only", action="store_true",
                     help="tap the receiver without transmitting, to check wiring")
     args = ap.parse_args()
@@ -137,6 +178,18 @@ def main() -> int:
         meta = json.loads(sc.read_text()) if sc.exists() else None
 
     dur = args.seconds or (meta["duration_s"] + 15 if meta else 120)
+
+    if not args.listen_only and not args.skip_preflight:
+        bad = preflight(args.port, args.baud)
+        if bad:
+            print("!! the receiver is not configured for this measurement:")
+            for b in bad:
+                print(f"     {b}")
+            print("   Run ubx_config.py before flying, or pass --skip-preflight to\n"
+                  "   transmit anyway. RAM-layer configuration does not survive a\n"
+                  "   power cycle, and the bridge power-cycles with the receiver.")
+            return 1
+        print("# preflight: UBX NAV-PVT and NAV-SAT present, NMEA quiet")
 
     tx = None
     if not args.listen_only:
