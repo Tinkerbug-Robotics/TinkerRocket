@@ -13,6 +13,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -190,6 +191,10 @@ class OtaSessionTest {
         assertIs<OtaSession.State.Failed>(st)
         assertTrue("OTA_BEGIN" in st.reason)
         assertEquals(0, r.fw.otaChunks.size, "no chunks before the firmware says ready")
+        assertTrue(
+            r.fw.commandFrames.any { it[0].toInt() == BleCommandId.OTA_ABORT },
+            "a begin the device never answered is aborted, so a session it may have opened is closed (#1049)",
+        )
     }
 
     @Test
@@ -211,6 +216,72 @@ class OtaSessionTest {
         assertIs<OtaSession.State.Failed>(st)
         assertEquals("Device refused OTA_BEGIN: inflight_refused", st.reason)
         assertEquals(0, r.fw.otaChunks.size, "no chunks after a refused begin")
+        assertTrue(
+            r.fw.commandFrames.any { it[0].toInt() == BleCommandId.OTA_ABORT },
+            "every failure exit after OTA_BEGIN aborts (#1049)",
+        )
+    }
+
+    // ── #1049: the cached status must not outlive the run ────────────────
+
+    @Test
+    fun retryAfterFinishVerifyFailed_beginReadsOnlyAFreshStatus() = runTest {
+        // The cached ota_status lived for the whole connection and nothing
+        // cleared it.  After a finish-stage verify_failed the next run's
+        // begin wait read that stale value on its first poll and failed in
+        // 0 ms with "did not accept OTA_BEGIN within 5s" — for a begin the
+        // firmware was in fact accepting.
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        assertIs<OtaSession.State.Verifying>(r.ota.state.value)
+        val abortsBefore = r.fw.commandFrames.count { it[0].toInt() == BleCommandId.OTA_ABORT }
+        r.fw.emitOtaStatus("verify_failed", err = "sha_mismatch")
+        advanceTimeBy(200); runCurrent()
+        val failed = r.ota.state.value
+        assertIs<OtaSession.State.Failed>(failed)
+        assertEquals("Verify failed: sha_mismatch", failed.reason)
+        assertEquals(
+            abortsBefore + 1,
+            r.fw.commandFrames.count { it[0].toInt() == BleCommandId.OTA_ABORT },
+            "a finish-stage failure tells the device the session is over",
+        )
+
+        // "Flash another firmware".  The fake never answers the abort, so the
+        // stale verify_failed is still the last status this session saw.
+        r.ota.reset()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        assertNull(r.sessionRef()?.otaStatus?.value, "cache forgotten at OTA_BEGIN")
+        assertIs<OtaSession.State.Loading>(r.ota.state.value, "still waiting, not failed in 0 ms")
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        assertIs<OtaSession.State.Verifying>(r.ota.state.value, "the second run pumped and finished")
+    }
+
+    @Test
+    fun retryAfterBeginRefusal_beginReadsOnlyAFreshStatus() = runTest {
+        // The same trap from the other refusal: a rocket that refused in
+        // flight (#1106) and is retried on the same connection after landing
+        // must wait for the new verdict, not replay the old one.
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("verify_failed", err = "inflight_refused")
+        advanceTimeBy(200); runCurrent()
+        assertIs<OtaSession.State.Failed>(r.ota.state.value)
+
+        r.ota.reset()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        assertIs<OtaSession.State.Loading>(r.ota.state.value, "still waiting, not failed in 0 ms")
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        assertIs<OtaSession.State.Verifying>(r.ota.state.value)
     }
 
     @Test
@@ -227,6 +298,10 @@ class OtaSessionTest {
         val st = r.ota.state.value
         assertIs<OtaSession.State.Failed>(st)
         assertTrue("finalize" in st.reason)
+        assertTrue(
+            r.fw.commandFrames.any { it[0].toInt() == BleCommandId.OTA_ABORT },
+            "a finish the device never answered is aborted (#1049)",
+        )
     }
 
     @Test

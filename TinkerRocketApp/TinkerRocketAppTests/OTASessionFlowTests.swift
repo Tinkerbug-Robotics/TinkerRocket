@@ -50,6 +50,7 @@ final class OTASessionFlowTests: XCTestCase {
         }
         func sendOtaFinish() { finishCount += 1 }
         func sendOtaAbort() { abortCount += 1 }
+        func clearOtaStatus() { otaStatus = nil }
     }
 
     /// Holder so the session's lookup tracks swaps — the fleet-recreates-the-
@@ -176,6 +177,8 @@ final class OTASessionFlowTests: XCTestCase {
         XCTAssertTrue(reason.contains("OTA_BEGIN"), reason)
         XCTAssertTrue(reason.contains("5s"), "reports the UNSCALED local window: \(reason)")
         XCTAssertEqual(link.chunks.count, 0, "no chunks before the firmware says ready")
+        XCTAssertGreaterThanOrEqual(link.abortCount, 1,
+            "a begin the device never answered is aborted, so a session it may have opened is closed (#1049)")
     }
 
     func testBeginRefused_reportsTheFirmwareTokenNotTheTimeout() async throws {
@@ -195,6 +198,63 @@ final class OTASessionFlowTests: XCTestCase {
         try await waitUntil("begin refusal") { self.failureReason(session.state) != nil }
         XCTAssertEqual(failureReason(session.state), "Device refused OTA_BEGIN: inflight_refused")
         XCTAssertEqual(link.chunks.count, 0, "no chunks after a refused begin")
+        XCTAssertGreaterThanOrEqual(link.abortCount, 1, "every failure exit after OTA_BEGIN aborts (#1049)")
+    }
+
+    // MARK: - #1049: the cached status must not outlive the run
+
+    func testRetryAfterFinishVerifyFailed_beginReadsOnlyAFreshStatus() async throws {
+        // The cached ota_status lived for the whole connection and nothing
+        // cleared it. After a finish-stage verify_failed the next run's begin
+        // wait read that stale value on its first poll and failed in 0 ms with
+        // "did not accept OTA_BEGIN within 5s" — for a begin the firmware was
+        // in fact accepting.
+        let link = ScriptedLink()
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("finish") { link.finishCount == 1 }
+        let abortsBefore = link.abortCount
+        link.otaStatus = OTAStatusUpdate(state: .verifyFailed, bytes: 600, err: "sha_mismatch", fw: nil)
+        try await waitUntil("verify failure") { self.failureReason(session.state) != nil }
+        let reason = failureReason(session.state) ?? ""
+        XCTAssertTrue(reason.contains("sha_mismatch"), reason)
+        XCTAssertEqual(link.abortCount, abortsBefore + 1,
+                       "a finish-stage failure tells the device the session is over")
+
+        // "Try again". The scripted link never answers the abort, so the
+        // stale verify_failed is still the last status this session saw.
+        session.reset()
+        session.start(data: image(600))
+        try await waitUntil("second begin") { link.beginCalls.count == 2 }
+        XCTAssertNil(link.otaStatus, "cache forgotten at OTA_BEGIN")
+        XCTAssertNil(failureReason(session.state), "still waiting, not failed in 0 ms")
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("second finish") { link.finishCount == 2 }
+        XCTAssertEqual(session.state, .verifying, "the second run pumped and finished")
+    }
+
+    func testRetryAfterBeginRefusal_beginReadsOnlyAFreshStatus() async throws {
+        // The same trap from the other refusal: a rocket that refused in
+        // flight (#1106) and is retried on the same connection after landing
+        // must wait for the new verdict, not replay the old one.
+        let link = ScriptedLink()
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .verifyFailed, bytes: 0, err: "inflight_refused", fw: nil)
+        try await waitUntil("refusal") { self.failureReason(session.state) != nil }
+
+        session.reset()
+        session.start(data: image(600))
+        try await waitUntil("second begin") { link.beginCalls.count == 2 }
+        XCTAssertNil(failureReason(session.state), "still waiting, not failed in 0 ms")
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("second finish") { link.finishCount == 1 }
+        XCTAssertEqual(session.state, .verifying)
     }
 
     func testFinishNeverAcked_failsAfterFinishTimeout() async throws {
@@ -210,6 +270,7 @@ final class OTASessionFlowTests: XCTestCase {
         let reason = failureReason(session.state) ?? ""
         XCTAssertTrue(reason.contains("finalize"), reason)
         XCTAssertTrue(reason.contains("15s"), "local finish window in the message: \(reason)")
+        XCTAssertGreaterThanOrEqual(link.abortCount, 1, "a finish the device never answered is aborted (#1049)")
     }
 
     func testFcFinishWindowOutlastsTheLocalOne() async throws {

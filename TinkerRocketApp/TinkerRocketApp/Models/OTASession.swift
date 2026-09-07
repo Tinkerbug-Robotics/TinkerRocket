@@ -148,6 +148,11 @@ final class OTASession: ObservableObject {
             state = .failed(reason: "Device disconnected before OTA_BEGIN")
             return
         }
+        // Forget the cached status first: the wait below must only ever read
+        // a status the device sent AFTER this begin. A verify_failed left over
+        // from the previous run on this connection otherwise failed it on the
+        // first poll, in 0 ms, with a stale token (#1049).
+        beginDevice.clearOtaStatus()
         beginDevice.sendOtaBegin(targetIsFC: targetIsFC, totalSize: UInt32(fileData.count), sha256: sha)
 
         // ---- 3. Wait for status=ready ----
@@ -168,6 +173,13 @@ final class OTASession: ObservableObject {
             } else {
                 state = .failed(reason: "Device did not accept OTA_BEGIN within \(Int(beginTimeoutS))s")
             }
+            // Every failure exit after OTA_BEGIN aborts, so the device and the
+            // app agree the session is over (#1049). A begin the device never
+            // answered may still have opened one: locally that keeps the OC's
+            // gauge poll gated, and on the relay path the OC raises its
+            // session flags before the FC answers, so a silent FC can be left
+            // parked in OTA data mode with nothing but this to release it.
+            device?.sendOtaAbort()
             return
         }
 
@@ -268,6 +280,10 @@ final class OTASession: ObservableObject {
             } else {
                 state = .failed(reason: "Device did not finalize OTA within \(Int(finishTimeoutS))s")
             }
+            // Same rule as the begin failures: the session is over on both
+            // sides (#1049). Harmless after a verify_failed the firmware has
+            // already aborted; decisive after a finish it never answered.
+            device?.sendOtaAbort()
             return
         }
 

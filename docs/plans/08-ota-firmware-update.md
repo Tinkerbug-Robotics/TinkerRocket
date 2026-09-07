@@ -180,12 +180,14 @@ phone                                            device
 
 | Trigger | Firmware response | Phone reaction |
 |---|---|---|
-| SHA mismatch in `OTA_FINISH` | `verify_failed`, `esp_ota_abort`, no boot change | Surface error, allow retry from picker |
+| SHA mismatch in `OTA_FINISH` | `verify_failed`, `esp_ota_abort`, no boot change | Send `OTA_ABORT`, surface error, allow retry from picker |
 | Out-of-order or out-of-range chunk offset | `verify_failed: bad_offset`, `esp_ota_abort` | Treat as fatal; abort + restart from scratch |
 | Phone-side disconnect mid-stream | (device times out after 30s of no chunks, calls `esp_ota_abort`) | On reconnect, send `OTA_ABORT` defensively then start fresh |
 | Power loss mid-flash | (no change — `ota_1` is half-written but unused; bootloader still boots `ota_0`) | Restart OTA from scratch |
 | `OTA_BEGIN` while a session is active | `esp_ota_abort` prior session, start new | (initiated by phone; phone considers prior session lost) |
-| `OTA_BEGIN` refused (`bad_payload`, `bad_target`, or `inflight_refused` — the OC will not flash its own image while the FC reports INFLIGHT, #1106) | `verify_failed` with the token in `err`; no session opened | Report `Device refused OTA_BEGIN: <err>` — the token, not the begin timeout; allow retry from picker |
+| `OTA_BEGIN` refused (`bad_payload`, `bad_target`, or `inflight_refused` — the OC will not flash its own image while the FC reports INFLIGHT, #1106) | `verify_failed` with the token in `err`; no session opened | Send `OTA_ABORT`, report `Device refused OTA_BEGIN: <err>` — the token, not the begin timeout; allow retry from picker |
+
+Two phone-side rules hold across every row (#1049): the phone forgets its cached `ota_status` immediately before each `OTA_BEGIN`, so the begin wait only ever reads a status sent after that begin — a `verify_failed` left over from the previous run on the same connection used to fail the next run in 0 ms; and every failure exit after `OTA_BEGIN` sends `OTA_ABORT`, so the device and the phone agree the session is over (a begin or finish the device never answered may still have opened one, and on the FC relay the OC raises its session flags before the FC answers).
 
 ### 2.6 Throughput estimate
 

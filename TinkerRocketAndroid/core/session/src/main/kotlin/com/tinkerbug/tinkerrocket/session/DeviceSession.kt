@@ -241,6 +241,17 @@ public class DeviceSession(
     private val _otaStatus = MutableStateFlow<OtaStatusUpdate?>(null)
     public val otaStatus: StateFlow<OtaStatusUpdate?> = _otaStatus.asStateFlow()
 
+    /**
+     * Forget the last `ota_status`.  OtaSession calls this right before a new
+     * OTA_BEGIN goes out, so its begin wait can only read a status the device
+     * sent AFTER that begin.  The cache otherwise keeps a `verify_failed` from
+     * the previous run for the life of the connection, and the next run's wait
+     * read it on its first poll and failed in 0 ms with a stale token (#1049).
+     */
+    public fun clearOtaStatus() {
+        _otaStatus.value = null
+    }
+
     // ── Frequency scan ───────────────────────────────────────────────────
 
     private val _scanSamples = MutableStateFlow<List<FrequencyScanSample>>(emptyList())
