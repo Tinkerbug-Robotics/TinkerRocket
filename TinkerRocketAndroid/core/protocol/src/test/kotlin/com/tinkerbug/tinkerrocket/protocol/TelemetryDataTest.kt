@@ -749,4 +749,34 @@ class TelemetryDataTest {
         assertEquals("340 mA", railAmpsDisplay(0.34f))
         assertEquals("\u2014", railAmpsDisplay(null))
     }
+
+    // --- Hold-up supercap (#1166) ---
+
+    @Test
+    fun holdup_presentKeysDecode() {
+        val t = decodeOk("""{"soc":85.0,"scap":2.47,"hu":2}""")
+        assertEquals(2.47f, t.scapVoltage!!, 0.001f)
+        assertEquals(HoldupState.CHARGED, HoldupState.fromCode(t.holdupState))
+        assertNull(t.holdupAdvisoryText)
+    }
+
+    /** V7/V8/V9 and every relayed frame: no sense line, no key, no line. */
+    @Test
+    fun holdup_absentKeysStayNull() {
+        val t = decodeOk("""{"soc":85.0}""")
+        assertNull(t.scapVoltage)
+        assertNull(t.holdupState)
+        assertNull(t.holdupAdvisoryText)
+    }
+
+    @Test
+    fun holdup_advisoryOnlyWhenNotCharging() {
+        assertNull(decodeOk("""{"scap":0.8,"hu":1}""").holdupAdvisoryText)
+        assertEquals(
+            "Hold-up backup not charged — 0.31 V",
+            decodeOk("""{"scap":0.31,"hu":3}""").holdupAdvisoryText,
+        )
+        // "hu" as a float: the flexInt tolerance every integer key has.
+        assertEquals("Hold-up backup not charged", decodeOk("""{"hu":3.0}""").holdupAdvisoryText)
+    }
 }

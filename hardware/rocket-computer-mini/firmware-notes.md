@@ -182,6 +182,11 @@ normal operation, re-enable TX.
 
 ## 5. Supercap charge gate — REQUIRED for arming, recommended elsewhere
 
+> **#1166 (2026-09-07): shipped as an advisory, not an arm gate.** The issue that
+> split this out of #999 asked for "not an arm block, and not a recolour of the
+> rocket state"; the pre-arm refusal below was not adopted. What the out computer
+> does now is in the telemetry bullet.
+
 `V_SCAP_ADC` is V_SCAP ÷ 2 (100 k / 100 k, `R125`/`R126`) on **out-computer
 GPIO8** (pad 13), with `C144` 100 nF at the pin: full scale ~1.25 V at the pin for a
 2.5 V cap — configure ADC attenuation accordingly and calibrate the 2:1 ratio.
@@ -195,10 +200,19 @@ GPIO8** (pad 13), with `C144` 100 nF at the pin: full scale ~1.25 V at the pin f
   **two minutes** to reach 2.5 V (not the 5.5 min through 33 Ω this line used to
   claim — `R120` is gone). Without the gate, a quick cycle-and-launch flies with no
   hold-up and nothing would say so.
-- **Telemetry:** report V_SCAP (or a charged/charging flag) in sensor_health so
-  the app can show "backup charging, n%". Adding a logged field means a log
-  format version bump — batch it with the next format change rather than
-  spending one on this.
+- **Telemetry (#1166, shipped on the out computer):** `V_SCAP` is read once a
+  second on the INA230 tick (ADC1_CH7, `ADC_ATTEN_DB_6`, its own calibration
+  curve), traced on the console as `[HOLDUP] +N s V_SCAP=x.xx V (state)` — every
+  5 s for the first 5 min of uptime, every 60 s after, and on every change of
+  verdict — and sent over BLE as `scap` (volts) and `hu` (1 charging, 2 charged,
+  3 never charged: under 2.2 V for three minutes, measured from boot on a cold
+  start and from the last charged reading after a drain). Both apps render
+  `hu` 3 as one quiet advisory line under the state banner. `sensor_health` is
+  full, which is why these are keys of their own; the LoRa relay does not carry
+  them, so the line is direct-link only. The flight log does not carry V_SCAP
+  yet: adding a logged field means a log format version bump — batch it with
+  the next format change (a `POWERData` v3 with `scap_mv` is the natural home)
+  rather than spending one on this.
 
 ## 6. Behaviour that needs no code — but must be tested
 

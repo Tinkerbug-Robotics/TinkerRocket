@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.SignalCellularOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -260,6 +261,32 @@ fun DashboardScreen(
                 )
                 Text(
                     "  LoRa off — no telemetry downlink",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tr.statusWarn,
+                )
+            }
+        }
+
+        // #1166: the hold-up supercap never charged — the out computer says so
+        // once V_SCAP has sat under its charged bar for the grace window.  Same
+        // quiet line and the same rule as the LoRa-off advisory: never a
+        // recolour, never an arm block.  Direct links only — the LoRa relay
+        // does not carry the key, so on a base station it is simply absent.
+        val holdupText = telemetry.holdupAdvisoryText
+        if (!session.isBaseStation && holdupText != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.BatteryAlert,
+                    contentDescription = null,
+                    tint = tr.statusWarn,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "  $holdupText",
                     style = MaterialTheme.typography.labelMedium,
                     color = tr.statusWarn,
                 )

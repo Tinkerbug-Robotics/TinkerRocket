@@ -204,6 +204,27 @@ struct config : board_pins
     static constexpr uint8_t DEFAULT_NETWORK_ID = 0;
     static constexpr uint8_t DEFAULT_ROCKET_ID  = 1;
     static constexpr const char* DEVICE_TYPE     = "R";  // "R" = rocket
+
+    // --- #1166: hold-up supercap health (rocket-computer-mini) ---
+    // SCAP_ADC_PIN / SCAP_DIVIDER_RATIO come from the board header (-1 on
+    // boards without the sense line).  The TPS61094 charges C130 (5 F) at
+    // 100 mA to a 2.5 V termination — about two minutes from empty — and
+    // nothing else on the board reports whether it did (holdup_policy.h).
+    //   CHARGED_V: at or above this the backup is there (2.2 V of the 2.5 V
+    //     termination is 77 % of the energy).
+    //   LOW_ADVISORY_MS: after this long continuously under CHARGED_V the OC
+    //     reports NOT_CHARGING — one advisory line in the app, never an arm
+    //     block.  Measured from boot on a cold start and from the last charged
+    //     reading otherwise, so a cap a hold-up event just drained gets its
+    //     recharge time before anyone is told.
+    //   TRACE_*: the [HOLDUP] console line — every FAST_MS for the first
+    //     RAMP_MS of uptime (the first-article cold-start trace), every
+    //     SLOW_MS after, and on every change of verdict.
+    static constexpr float    HOLDUP_CHARGED_V       = 2.2f;
+    static constexpr uint32_t HOLDUP_LOW_ADVISORY_MS = 180000u;
+    static constexpr uint32_t HOLDUP_TRACE_RAMP_MS   = 300000u;
+    static constexpr uint32_t HOLDUP_TRACE_FAST_MS   = 5000u;
+    static constexpr uint32_t HOLDUP_TRACE_SLOW_MS   = 60000u;
 };
 
 #endif

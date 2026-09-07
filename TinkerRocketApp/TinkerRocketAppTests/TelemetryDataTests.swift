@@ -514,4 +514,34 @@ final class SizeDropDecodeTests: XCTestCase {
         let t = try decode(#"{"st":"PRELAUNCH","szd":12}"#)
         XCTAssertNil(t.netid_drops)
     }
+
+    // MARK: - Hold-up supercap (#1166)
+
+    func testHoldup_PresentKeysDecode() throws {
+        let json = #"{"soc": 85.0, "scap": 2.47, "hu": 2}"#
+        let t = try JSONDecoder().decode(TelemetryData.self, from: Data(json.utf8))
+        XCTAssertEqual(t.scap_voltage ?? 0, 2.47, accuracy: 0.001)
+        XCTAssertEqual(t.holdupState, .charged)
+        XCTAssertNil(t.holdupAdvisoryText)
+    }
+
+    func testHoldup_AbsentKeysStayNil() throws {
+        // V7/V8/V9 and every relayed frame: no sense line, no key, no line.
+        let t = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"soc": 85.0}"#.utf8))
+        XCTAssertNil(t.scap_voltage)
+        XCTAssertNil(t.holdup_state)
+        XCTAssertNil(t.holdupAdvisoryText)
+    }
+
+    func testHoldup_AdvisoryOnlyWhenNotCharging() throws {
+        let charging = try JSONDecoder().decode(TelemetryData.self,
+                                                from: Data(#"{"scap": 0.8, "hu": 1}"#.utf8))
+        XCTAssertNil(charging.holdupAdvisoryText)
+        let failed = try JSONDecoder().decode(TelemetryData.self,
+                                              from: Data(#"{"scap": 0.31, "hu": 3}"#.utf8))
+        XCTAssertEqual(failed.holdupAdvisoryText, "Hold-up backup not charged — 0.31 V")
+        // "hu" as a float: the #571 tolerance every integer key has.
+        let loose = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"hu": 3.0}"#.utf8))
+        XCTAssertEqual(loose.holdupAdvisoryText, "Hold-up backup not charged")
+    }
 }

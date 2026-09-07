@@ -58,6 +58,7 @@ static inline std::string itos(int v)
 #include "ota_relay_policy.h"   // #834 items 6/7: I2S relay recovery timing
 #include "rail_restore_policy.h"  // #825: boot rail re-assert decision
 #include "flight_token_policy.h"  // #1176: tier-2 rail decision from a durable token
+#include "holdup_policy.h"        // #1166: the verdict on the hold-up supercap
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
 #include <esp_adc/adc_oneshot.h>  // #850: camera/servo IMON reads
@@ -1616,6 +1617,148 @@ static float readRailAmps(int gpio, float r_ohm)
     return volts / (config::IMON_GAIN_A_PER_A * r_ohm);
 }
 
+// ---------------------------------------------------------------------------
+//  #1166: hold-up supercap voltage (net V_SCAP_ADC, rocket-computer-mini)
+//
+//  R125/R126 halve V_SCAP onto SCAP_ADC_PIN (ADC1_CH7 on the M1), C144 at the
+//  pin.  The TPS61094 terminates the cap at 2.5 V, so the pad sees ~1.25 V
+//  plus the converter's tolerance: ADC_ATTEN_DB_6 (~0-1.75 V) is the
+//  narrowest range that cannot clip it, and it needs its own calibration
+//  curve — the IMON channels above run at DB_0 and the curve is per-atten.
+//  Read once a second inside the existing 100 Hz INA230 tick, so this adds
+//  no wakeup and does not disturb light sleep (#519).  The verdict on the
+//  reading (charging / charged / never charged) is holdup_policy.h; it goes
+//  to the app as the "hu" telemetry key, to the console as the [HOLDUP]
+//  trace the first-article cold-start log asks for, and nowhere else — no
+//  arm block.  Boards without the sense line (SCAP_ADC_PIN < 0) skip all of
+//  it and their telemetry never carries the keys.
+// ---------------------------------------------------------------------------
+static adc_cali_handle_t      scap_adc_cali  = nullptr;
+static bool                   scap_adc_ready = false;
+static constexpr adc_atten_t  kScapAtten     = ADC_ATTEN_DB_6;
+static float                  holdup_scap_v  = NAN;     // latest cap voltage; NaN until read
+static holdup_policy::Tracker holdup_tracker;
+static_assert((uint8_t)holdup_policy::CHARGING     == (uint8_t)TR_BLE_To_APP::HOLDUP_CHARGING &&
+              (uint8_t)holdup_policy::CHARGED      == (uint8_t)TR_BLE_To_APP::HOLDUP_CHARGED &&
+              (uint8_t)holdup_policy::NOT_CHARGING == (uint8_t)TR_BLE_To_APP::HOLDUP_NOT_CHARGING,
+              "holdup_policy::State must mirror TR_BLE_To_APP::HoldupState — it is the wire value");
+
+// ESP32-S3: ADC1_CHn is GPIO(n+1) for GPIO1-10 (the IMON helper above is the
+// two-pin special case of this).
+static inline adc_channel_t adc1ChannelForGpio(int gpio)
+{
+    return (adc_channel_t)((int)ADC_CHANNEL_0 + (gpio - 1));
+}
+
+static void initHoldupAdc()
+{
+    if (config::SCAP_ADC_PIN < 0) return;   // no sense line on this board
+
+    if (rail_adc_unit == nullptr)
+    {
+        adc_oneshot_unit_init_cfg_t unit_cfg = {};
+        unit_cfg.unit_id  = ADC_UNIT_1;
+        unit_cfg.ulp_mode = ADC_ULP_MODE_DISABLE;
+        if (adc_oneshot_new_unit(&unit_cfg, &rail_adc_unit) != ESP_OK)
+        {
+            ESP_LOGE("OC", "[HOLDUP] ADC unit init failed — V_SCAP unavailable");
+            return;
+        }
+    }
+    adc_oneshot_chan_cfg_t chan_cfg = {};
+    chan_cfg.atten    = kScapAtten;
+    chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_oneshot_config_channel(rail_adc_unit,
+                                   adc1ChannelForGpio(config::SCAP_ADC_PIN),
+                                   &chan_cfg) != ESP_OK)
+    {
+        ESP_LOGE("OC", "[HOLDUP] V_SCAP channel config failed");
+        return;
+    }
+    adc_cali_curve_fitting_config_t cali_cfg = {};
+    cali_cfg.unit_id  = ADC_UNIT_1;
+    cali_cfg.atten    = kScapAtten;
+    cali_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &scap_adc_cali) != ESP_OK)
+    {
+        ESP_LOGE("OC", "[HOLDUP] ADC calibration unavailable (no eFuse cal data?) — "
+                       "reporting no V_SCAP rather than an uncalibrated guess");
+        return;
+    }
+    scap_adc_ready = true;
+    ESP_LOGI("OC", "[HOLDUP] V_SCAP sense on GPIO%d (x%.1f divider): charged at %.2f V, "
+                   "advisory after %lu s under it (#1166)",
+             config::SCAP_ADC_PIN, (double)config::SCAP_DIVIDER_RATIO,
+             (double)config::HOLDUP_CHARGED_V,
+             (unsigned long)(config::HOLDUP_LOW_ADVISORY_MS / 1000u));
+}
+
+// Cap voltage in volts, or NaN when unavailable.  Eight samples: the 50 k
+// source is buffered by C144, so this is only about the ADC's own noise.
+static float readHoldupVolts()
+{
+    if (!scap_adc_ready) return NAN;
+    constexpr int kSamples = 8;
+    int mv_sum = 0, taken = 0;
+    const adc_channel_t ch = adc1ChannelForGpio(config::SCAP_ADC_PIN);
+    for (int i = 0; i < kSamples; ++i)
+    {
+        int raw = 0, mv = 0;
+        if (adc_oneshot_read(rail_adc_unit, ch, &raw) != ESP_OK) continue;
+        if (adc_cali_raw_to_voltage(scap_adc_cali, raw, &mv) != ESP_OK) continue;
+        mv_sum += mv;
+        ++taken;
+    }
+    if (taken == 0) return NAN;
+    return ((float)mv_sum / (float)taken) * 0.001f * config::SCAP_DIVIDER_RATIO;
+}
+
+// Once a second: read, judge, and keep the [HOLDUP] console trace — dense
+// through the ~2 min charge ramp, sparse after, and at once on any change of
+// verdict.  A NOT CHARGING verdict is a warning; everything else is info.
+static void serviceHoldup(uint32_t now_ms)
+{
+    if (!scap_adc_ready) return;
+    static bool     ever_read     = false;
+    static uint32_t last_read_ms  = 0;
+    static bool     ever_traced   = false;
+    static uint32_t last_trace_ms = 0;
+    static uint8_t  last_state    = holdup_policy::NONE;
+    if (ever_read && (uint32_t)(now_ms - last_read_ms) < 1000u) return;
+    ever_read    = true;
+    last_read_ms = now_ms;
+
+    holdup_scap_v = readHoldupVolts();
+    const uint8_t st = holdup_tracker.update(holdup_scap_v, now_ms,
+                                             config::HOLDUP_CHARGED_V,
+                                             config::HOLDUP_LOW_ADVISORY_MS);
+    const bool changed = (st != last_state);
+    const bool due = holdup_policy::traceDue(now_ms, last_trace_ms, ever_traced,
+                                             config::HOLDUP_TRACE_RAMP_MS,
+                                             config::HOLDUP_TRACE_FAST_MS,
+                                             config::HOLDUP_TRACE_SLOW_MS);
+    if (changed || due)
+    {
+        ever_traced   = true;
+        last_trace_ms = now_ms;
+        if (st == holdup_policy::NOT_CHARGING)
+        {
+            ESP_LOGW("OC", "[HOLDUP] +%lu s V_SCAP=%.2f V — hold-up cap NOT CHARGING: under the "
+                           "%.2f V bar for %lu s, the brownout bridge is not there (#1166)",
+                     (unsigned long)(now_ms / 1000u), (double)holdup_scap_v,
+                     (double)config::HOLDUP_CHARGED_V,
+                     (unsigned long)(config::HOLDUP_LOW_ADVISORY_MS / 1000u));
+        }
+        else
+        {
+            ESP_LOGI("OC", "[HOLDUP] +%lu s V_SCAP=%.2f V (%s)",
+                     (unsigned long)(now_ms / 1000u), (double)holdup_scap_v,
+                     holdup_policy::stateName(st));
+        }
+    }
+    last_state = st;
+}
+
 static bool commitPowerSample(float bus_v, float current_a)
 {
     static uint8_t consec_bad = 0;
@@ -1662,6 +1805,10 @@ static bool commitPowerSample(float bus_v, float current_a)
 
 static void readINA230Power()
 {
+    // #1166: the hold-up cap rides this tick (one read a second of it), on
+    // both power states and whether or not the INA230 is answering.
+    serviceHoldup(millis());
+
     if (!ina230_ok) return;
 
     // Trigger a single shunt+bus conversion (INA auto-powers-down after)
@@ -6328,6 +6475,9 @@ static void printStats()
             ble_telem.current = NAN;
             ble_telem.voltage = NAN;
         }
+        // #1166: hold-up cap voltage + verdict (NaN / 0 = not on this board).
+        ble_telem.scap_voltage = holdup_scap_v;
+        ble_telem.holdup_state = holdup_tracker.state;
         ble_telem.latitude = NAN;
         ble_telem.longitude = NAN;
         ble_telem.gdop = NAN;
@@ -6796,6 +6946,9 @@ static void printStats()
         ble_telem.cam_current   = p.cam_current;
         ble_telem.servo_current = p.servo_current;
     }
+    // #1166: hold-up cap voltage + verdict (NaN / 0 = not on this board).
+    ble_telem.scap_voltage = holdup_scap_v;
+    ble_telem.holdup_state = holdup_tracker.state;
     if (latest_gnss_valid)
     {
         ble_telem.latitude = latest_gnss_si.lat;
@@ -8167,6 +8320,7 @@ static void setup_oc()
     // whether or not the gauge answered, so a dead or absent INA230 does not
     // also cost the camera/servo current readings.
     initRailCurrentAdc();
+    initHoldupAdc();   // #1166: V_SCAP on the same ADC unit, its own attenuation
 
     // #519: the OC owns its connection-parameter policy — slow (200 ms, latency 4)
     // while the rail is off to save idle power, fast (30 ms) once it comes on for

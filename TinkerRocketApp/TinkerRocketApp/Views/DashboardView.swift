@@ -753,6 +753,25 @@ struct ConnectedDashboardView: View {
                     .buttonStyle(.plain)
                     .opacity(staleOpacity)
                 }
+
+                // #1166: the hold-up supercap never charged — the out computer
+                // says so once V_SCAP has sat under its charged bar for the
+                // grace window.  Same quiet line and the same rule as the
+                // LoRa-off advisory: never a recolour, never an arm block.  A
+                // hold-up that is silently absent looks exactly like one that
+                // is there, right up until the pack bounces.  Direct links
+                // only — the LoRa relay does not carry the key.
+                if !device.isBaseStation,
+                   let holdupText = device.telemetry.holdupAdvisoryText {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bolt.slash")
+                        Text(holdupText)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity)
+                    .opacity(staleOpacity)
+                }
             }
 
             // #557: the FC lost its GNSS module and is flying a baro+IMU-only

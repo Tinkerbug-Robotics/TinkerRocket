@@ -180,6 +180,10 @@ struct board_pins
     // BOTH channels near 0.286 V at their design currents (camera 1.5 A,
     // servo 3 A per high-side-switch-design.md). Nothing reads these yet;
     // staged so the first implementation cannot inherit the 2.2 k scale.
+    // #1166: no hold-up supercap sense line on this processor (the V10's
+    // V_SCAP_ADC goes to the flight computer; V7/V8/V9 have no hold-up).
+    static constexpr int   SCAP_ADC_PIN       = -1;
+    static constexpr float SCAP_DIVIDER_RATIO = 1.0f;    // unused with no pin
     static constexpr int   CAM_IMON_GPIO      = 8;         // CAM_IMON, ADC1_CH7
     static constexpr int   SERVO_IMON_GPIO    = 9;         // SERVO_IMON, ADC1_CH8
     static constexpr float IMON_GAIN_A_PER_A  = 95.3e-6f;  // TPS22811 GIMON typ

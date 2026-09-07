@@ -127,6 +127,10 @@ struct board_pins
     // opinion about the buck. The pad that carried the OC's VBUCK_OK on the
     // earlier revision is GPIO34, and it is bare now.
     static constexpr int SCAP_ADC_PIN = 8;       // V_SCAP_ADC (CONFIRMED; ADC1_CH7)
+    // R125 / R126 100 k / 100 k: the pin sees V_SCAP / 2, so a 2.5 V
+    // termination is 1.25 V at the pad.  C144 100 nF at the pin (#1022) lets
+    // the 50 k source drive the SAR sample-and-hold.
+    static constexpr float SCAP_DIVIDER_RATIO = 2.0f;
 
     // --- I2C slave (commands from the FlightComputer) ---
     static constexpr int I2C_SDA_PIN = 5;    // ESP_SDA (CONFIRMED)
