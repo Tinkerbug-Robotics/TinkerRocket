@@ -524,6 +524,20 @@ target_include_directories(test_sim_landed_hold PRIVATE
 target_link_libraries(test_sim_landed_hold GTest::gtest_main)
 gtest_discover_tests(test_sim_landed_hold)
 
+# ---------- test_sim_flight_policy ----------
+# #1104: the sim can end while the FC is still INFLIGHT (#971's 30 s give-up),
+# and the FC only acted on the rising edge of isSimActive() — so the pyro
+# dry-fire gate turned off and the I2C command poll stopped, with real
+# ARM/FIRE outputs live on the bench. The edge rule and the latched dry-fire
+# predicate are pure, so they are pinned here rather than trusted.
+add_executable(test_sim_flight_policy test_sim_flight_policy.cpp)
+target_include_directories(test_sim_flight_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Sensor_Collector_Sim
+)
+target_link_libraries(test_sim_flight_policy GTest::gtest_main)
+gtest_discover_tests(test_sim_flight_policy)
+
 # ---------- test_modem_rail_sequence ----------
 # #700: the host drove the LoRa daughterboard's UART while its rail was gated
 # off (floating ground on V8, dead rail on V9 — same phantom feed either way).
