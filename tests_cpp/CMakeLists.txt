@@ -929,8 +929,13 @@ gtest_discover_tests(test_rail_restore_policy)
 # running from the last charged reading after a drain. Pure header in the OC
 # project; the ADC read and the telemetry key stay in main.cpp.
 add_executable(test_holdup_policy test_holdup_policy.cpp)
+# The suite also includes the OC config.h as the M1 build sees it, so the
+# window/bar cases are tied to the shipped HOLDUP_* constants rather than to
+# local copies of them (test_bs_storage_policy / test_fc_gnss_reset_map pattern).
+target_compile_definitions(test_holdup_policy PRIVATE TR_BOARD_M1=1)
 target_include_directories(test_holdup_policy PRIVATE
     ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
     ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
 )
 target_link_libraries(test_holdup_policy GTest::gtest_main)
