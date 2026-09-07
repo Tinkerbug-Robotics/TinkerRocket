@@ -26,6 +26,7 @@
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
+#include <GroundRefFreeze.h>   // #1108: hold the ground datum while the vehicle is moving
 #include <BurnoutDetector.h>       // shared burnout detector (#197/#256)
 #include <DeploymentDetector.h>    // shared recovery-deployment detector
 #include <RecoveryArmGate.h>        // #1176: arming gate for a restored flight
@@ -286,6 +287,7 @@ static bool     gnss_absent_mode    = false;
 static bool     gnss_absent_flight  = false;
 static uint32_t gnss_absent_dwell_ms = 0;
 static bool ground_pressure_found = false;
+static GroundRefFreeze::State ground_ref_freeze;   // #1108
 // MINI: on the FC this latched only after the out computer answered the first
 // I2C status poll.  The comms side here is in-process and is initialized
 // BEFORE flightTask is created (power-on order in main.cpp), so it is simply
@@ -1243,6 +1245,7 @@ static void resetFlightStateForSim(const char* edge)
     rocket_state = READY;
     post_flight_lockout = false;  // #317: a deliberate sim start/stop re-arms
     ground_pressure_found = false;
+    GroundRefFreeze::reset(ground_ref_freeze);   // #1108
     // MINI: the FC cleared out_ready here and re-latched it on the next OC
     // poll.  There is no poll to re-latch from — out_ready is const true.
     end_flight_sent = false;
@@ -1365,6 +1368,36 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     portEXIT_CRITICAL(&pyro_spinlock);
     ESP_LOGI(TAG, "[STATE] %s -> INFLIGHT (ground_p=%.0f)",
                   from_state, (double)ground_pressure_pa);
+    // #1102: which detector latched, and what the barometer claimed on that
+    // tick.  An accel-only latch with a HEALTHY barometer means it was fresh
+    // and in range but never saw the climb -- the blocked-static-port
+    // signature.  Apogee then rests on the EKF/GNSS/pitch voters and the main
+    // on the GNSS backstop (#834), so say so where the operator can read it.
+    switch (kinematics.launch_path)
+    {
+        case TR_KinematicChecks::LaunchPath::BaroClimb:
+            ESP_LOGI(TAG, "[LAUNCH] latched by accel + baro-confirmed climb");
+            break;
+        case TR_KinematicChecks::LaunchPath::AccelOnly:
+            if (kinematics.launch_baro_healthy)
+                ESP_LOGW(TAG, "[LAUNCH] latched by the accel-only fallback with a "
+                              "HEALTHY barometer that showed no climb -- suspect a "
+                              "blocked/taped static port (#1102); recovery will run "
+                              "on the baro-independent paths only");
+            else
+                ESP_LOGW(TAG, "[LAUNCH] latched by the accel-only fallback, "
+                              "barometer UNHEALTHY (dead or stale, #258)");
+            break;
+        case TR_KinematicChecks::LaunchPath::BaroOnly:
+            ESP_LOGW(TAG, "[LAUNCH] latched by the baro-only fallback with the IMU "
+                          "stale or absent (#1108); no burnout detect and no apogee "
+                          "vote -- apogee rests on the baro backstop, the main on "
+                          "the baro gate");
+            break;
+        default:
+            ESP_LOGI(TAG, "[LAUNCH] launch_flag set outside the detector");
+            break;
+    }
 }
 
 // ==========================================================================
@@ -3025,8 +3058,41 @@ static void loop_fc()
                  rocket_state == READY ||
                  rocket_state == MAG_CALIBRATION))
             {
-                ground_pressure_pa = bmp_latest_si.pressure;
-                ground_pressure_found = true;
+                // #1108: hold the datum while the pressure is moving faster
+                // than weather or handling can move it.  A launch from READY
+                // (or INITIALIZATION) would otherwise carry the reference up
+                // with it, and the baro-only launch fallback -- the only path
+                // to INFLIGHT with a stale IMU -- could never see the climb.
+                // On the freeze edge the reference rolls back to the
+                // pre-motion pressure so the detection latency is not paid as
+                // an AGL error for the rest of the flight.
+                switch (GroundRefFreeze::step(ground_ref_freeze,
+                                              bmp_latest_si.time_us,
+                                              bmp_latest_si.pressure))
+                {
+                    case GroundRefFreeze::Verdict::Track:
+                        ground_pressure_pa = bmp_latest_si.pressure;
+                        ground_pressure_found = true;
+                        break;
+                    case GroundRefFreeze::Verdict::FreezeEdge:
+                    {
+                        ground_pressure_pa = ground_ref_freeze.rollback_pa;
+                        ground_pressure_found = true;
+                        // A gusty pad can trip this now and then; say so at
+                        // most every 10 s rather than once per hold.
+                        static uint32_t last_hold_log_ms = 0;
+                        if (last_hold_log_ms == 0 || now_ms - last_hold_log_ms >= 10000U)
+                        {
+                            last_hold_log_ms = now_ms;
+                            ESP_LOGW(TAG, "[BARO] ground reference held: pressure moving "
+                                          "%.0f Pa/s before PRELAUNCH (#1108)",
+                                     (double)ground_ref_freeze.rate_pa_s);
+                        }
+                        break;
+                    }
+                    case GroundRefFreeze::Verdict::Frozen:
+                        break;
+                }
             }
             if (bmp_latest_si.pressure > 0.0f && ground_pressure_pa > 0.0f)
             {
@@ -3574,7 +3640,8 @@ static void loop_fc()
                                        mach_locked_out,
                                        (float)gnss_latest_si.vel_u,
                                        ekf_healthy,
-                                       baro_healthy);
+                                       baro_healthy,
+                                       ism6_fresh_kc);   // #1108 imu_healthy
 
             // #834 item 4: step the main-deploy gate where baro_healthy is in
             // scope; the pyro service later in this same pass only reads it.

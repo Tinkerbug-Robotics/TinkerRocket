@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include "TR_KinematicChecks.h"
+#include "fixtures/boost_20260517_rp54.h"
+#include "GroundRefFreeze.h"
 
 // TR_KinematicChecks depends on millis() via the host shim.
 // Tests must call setMockMillis() to advance time.
@@ -24,11 +26,13 @@ protected:
     void callFlight(float alt, float acc_mag, float vel_u, float roll_rate = 0.0f,
                     float gps_alt = 0.0f, bool new_gps = false,
                     float pitch_rad = 1.57f, bool burnout = false, bool baro_lockout = false,
-                    float gps_vel_u = 0.0f, bool ekf_healthy = true, bool baro_healthy = true) {
+                    float gps_vel_u = 0.0f, bool ekf_healthy = true, bool baro_healthy = true,
+                    bool imu_healthy = true) {
         float pos[3] = {0, 0, alt};
         float vel[3] = {0, 0, vel_u};
         kc.kinematicChecks(alt, acc_mag, pos, vel, roll_rate, true, gps_alt, new_gps,
-                           pitch_rad, burnout, baro_lockout, gps_vel_u, ekf_healthy, baro_healthy);
+                           pitch_rad, burnout, baro_lockout, gps_vel_u, ekf_healthy, baro_healthy,
+                           imu_healthy);
     }
 };
 
@@ -49,6 +53,8 @@ TEST_F(KinematicChecksTest, Launch_SustainedAccel) {
         callFlight(alt, 25.0f, 10.0f); // high accel, positive velocity
     }
     EXPECT_TRUE(kc.launch_flag);
+    EXPECT_EQ(kc.launch_path, TR_KinematicChecks::LaunchPath::BaroClimb);
+    EXPECT_TRUE(kc.launch_baro_healthy);
 }
 
 TEST_F(KinematicChecksTest, Launch_BriefSpike_NoTrigger) {
@@ -79,6 +85,8 @@ TEST_F(KinematicChecksTest, Launch_DeadBaro_AccelOnlyFallbackFires) {
                    /*ekf_healthy=*/true, /*baro_healthy=*/false);
     }
     EXPECT_TRUE(kc.launch_flag);
+    EXPECT_EQ(kc.launch_path, TR_KinematicChecks::LaunchPath::AccelOnly);
+    EXPECT_FALSE(kc.launch_baro_healthy);   // the #258 case: the baro was dead
 }
 
 // Baro invalid but only ~150 samples of >3 g (< 250) -> fallback must NOT fire.
@@ -123,15 +131,244 @@ TEST_F(KinematicChecksTest, Launch_DeadBaro_FallbackBoundary) {
     EXPECT_TRUE(kc.launch_flag) << "251 samples must latch";
 }
 
-// Explicit goal: accel must NOT decide launch while the baro is VALID.
-// Static-fire / clamped case — healthy baro shows no climb, sustained >3 g.
-TEST_F(KinematicChecksTest, Launch_HealthyBaro_HighGNoClimb_NoLaunch) {
+// ── #1102: the fallback is NOT gated on baro health ──
+//
+// A blocked or taped static port leaves the barometer fresh and in range
+// (baro_healthy == true) while indicated altitude never moves.  The primary
+// cannot see a climb, and the #258 fallback used to be gated off exactly here,
+// so the FC never left PRELAUNCH.  Sustained >3 g must latch regardless, and
+// the latch must record that the baro was "healthy" and silent — that is the
+// blocked-port signature the INFLIGHT-entry log reports.
+TEST_F(KinematicChecksTest, Launch_HealthyFlatBaro_SustainedHighG_AccelOnlyLatches) {
     for (int i = 0; i < 600; i++) {
+        setMockMillis(i * 2);
+        callFlight(0.0f, 35.0f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
+                   true, /*baro_healthy=*/true);
+        if (i == 249) EXPECT_FALSE(kc.launch_flag) << "bar is 250 samples, not fewer";
+        if (i == 251) EXPECT_TRUE(kc.launch_flag)  << "must latch as soon as the bar is met";
+    }
+    EXPECT_TRUE(kc.launch_flag);
+    EXPECT_EQ(kc.launch_path, TR_KinematicChecks::LaunchPath::AccelOnly);
+    EXPECT_TRUE(kc.launch_baro_healthy);
+}
+
+// Ungating the branch must not lower the bar: short high-G with a healthy,
+// flat baro still does not launch...
+TEST_F(KinematicChecksTest, Launch_HealthyFlatBaro_ShortHighG_NoLaunch) {
+    for (int i = 0; i < 150; i++) {
         setMockMillis(i * 2);
         callFlight(0.0f, 35.0f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
                    true, /*baro_healthy=*/true);
     }
     EXPECT_FALSE(kc.launch_flag);
+}
+
+// ...nor does an oscillating stimulus (the handling / vibration case), however
+// long it goes on — the reset floor still zeroes the counters.
+TEST_F(KinematicChecksTest, Launch_HealthyFlatBaro_InterruptedHighG_NeverLatches) {
+    for (int i = 0; i < 2000; i++) {
+        setMockMillis(i * 2);
+        const float acc = (i % 201 == 200) ? 15.0f : 35.0f;
+        callFlight(0.0f, acc, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
+                   true, /*baro_healthy=*/true);
+    }
+    EXPECT_FALSE(kc.launch_flag);
+}
+
+// ...nor does the primary's 2 g floor on its own: above 20 m/s2 but below the
+// 30 m/s2 fallback bar, a flat baro means no launch no matter how long.
+TEST_F(KinematicChecksTest, Launch_HealthyFlatBaro_BelowFallbackBar_NoLaunch) {
+    for (int i = 0; i < 600; i++) {
+        setMockMillis(i * 2);
+        callFlight(0.0f, 25.0f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
+                   true, /*baro_healthy=*/true);
+    }
+    EXPECT_FALSE(kc.launch_flag);
+}
+
+// #1102 on real data.  The noisiest logged boost (2026-05-17 Rolly Polly
+// 54 mm: +/-300 m/s2 of motor vibration about the thrust level, gyro driven
+// into garbage) with the barometer replaced by a healthy-but-flat one, i.e. a
+// taped static port.  One sample per flight-loop tick, the FC's own channel
+// pick, generated by Data_Analysis/analyze_launch_fallback.py.  The fallback
+// must latch inside the 873 ms burn and not before the bar is met.
+TEST_F(KinematicChecksTest, Launch_RealBoost_BlockedPort_AccelOnlyLatchesInsideTheBurn) {
+    int latched_at = -1;
+    for (int i = 0; i < kBoost20260517Rp54_n; i++) {
+        setMockMillis(kBoost20260517Rp54_t_ms[i]);
+        callFlight(0.0f, kBoost20260517Rp54_accel[i], 0.0f, 0.0f, 0.0f, false, 1.57f,
+                   false, false, 0.0f, true, /*baro_healthy=*/true);
+        if (kc.launch_flag && latched_at < 0) latched_at = i;
+    }
+    ASSERT_GE(latched_at, 0) << "a real boost with a blocked port must still latch";
+    const int ms_after_ignition = (int)kBoost20260517Rp54_t_ms[latched_at]
+                                - (int)kBoost20260517Rp54_t_ms[kBoost20260517Rp54_boost0];
+    EXPECT_GE(ms_after_ignition, 250);   // never before the bar
+    EXPECT_LE(ms_after_ignition, 400);   // corpus replay measured +300 ms; burnout is +873
+    EXPECT_EQ(kc.launch_path, TR_KinematicChecks::LaunchPath::AccelOnly);
+    EXPECT_TRUE(kc.launch_baro_healthy);
+}
+
+// The same flight as flown: real accel AND the real barometer, which does see
+// the climb.  The primary wins well before the accel fallback counter can
+// fill, and says so.  This is the argument for dropping the gate — on a
+// truthful baro the fallback never gets to decide.
+TEST_F(KinematicChecksTest, Launch_RealBoost_AsFlown_PrimaryWinsAndRecordsPath) {
+    int latched_at = -1;
+    for (int i = 0; i < kBoost20260517Rp54_n; i++) {
+        setMockMillis(kBoost20260517Rp54_t_ms[i]);
+        float pos[3] = {0, 0, 0}, vel[3] = {0, 0, 0};
+        kc.kinematicChecks(kBoost20260517Rp54_palt[i], kBoost20260517Rp54_accel[i], pos, vel, 0.0f,
+                           kBoost20260517Rp54_baro_new[i] != 0);
+        if (kc.launch_flag && latched_at < 0) latched_at = i;
+    }
+    ASSERT_GE(latched_at, 0);
+    const int ms_after_ignition = (int)kBoost20260517Rp54_t_ms[latched_at]
+                                - (int)kBoost20260517Rp54_t_ms[kBoost20260517Rp54_boost0];
+    EXPECT_LT(ms_after_ignition, 250) << "the FC's own flag rose at +96 ms on this flight";
+    EXPECT_EQ(kc.launch_path, TR_KinematicChecks::LaunchPath::BaroClimb);
+    EXPECT_TRUE(kc.launch_baro_healthy);
+}
+
+// ── #1108: baro-only fallback when the IMU is stale or absent ──
+//
+// Every latch above sits inside `acc_mag > 20`, and the FC passes 0 for a
+// stale IMU, so an IMU that died on the pad made INFLIGHT unreachable while
+// the barometer recorded the whole flight.  A sustained filtered climb, well
+// off the pad and still rising across the run, must latch on its own — but
+// ONLY with the IMU unusable (see the constant's comment: a barometric false
+// launch is not contained the way an accel one is).
+
+// Helper: a dead-IMU tick with the given pressure altitude.
+#define DEAD_IMU_TICK(alt) \
+    callFlight((alt), 0.0f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f, \
+               true, /*baro_healthy=*/true, /*imu_healthy=*/false)
+
+// A 20 m/s climb with no IMU: latches after the altitude bar (15 m) plus the
+// 250-tick run, and records the baro-only path.
+TEST_F(KinematicChecksTest, Launch_DeadIMU_SustainedClimb_BaroOnlyLatches) {
+    int latched_at = -1;
+    for (int i = 0; i < 3000; i++) {
+        setMockMillis(i);
+        DEAD_IMU_TICK(20.0f * i * 1e-3f);
+        if (kc.launch_flag && latched_at < 0) latched_at = i;
+    }
+    ASSERT_GE(latched_at, 0);
+    // 15 m at 20 m/s is 750 ms; the run then needs 250 more, plus filter lag.
+    EXPECT_GE(latched_at, 1000);
+    EXPECT_LE(latched_at, 1200);
+    EXPECT_EQ(kc.launch_path, TR_KinematicChecks::LaunchPath::BaroOnly);
+    EXPECT_TRUE(kc.launch_baro_healthy);
+}
+
+// A lift, stairs or a car on a grade: 3 m/s for 20 s reaches 60 m and never
+// launches, because the rate bar is 10 m/s.
+TEST_F(KinematicChecksTest, Launch_DeadIMU_LiftSpeedClimb_NoLaunch) {
+    for (int i = 0; i < 20000; i++) {
+        setMockMillis(i);
+        DEAD_IMU_TICK(3.0f * i * 1e-3f);
+    }
+    EXPECT_FALSE(kc.launch_flag);
+}
+
+// Fast but shallow: 20 m/s up to 12 m, then flat.  Never above the 15 m bar
+// while climbing, so no run ever starts.
+TEST_F(KinematicChecksTest, Launch_DeadIMU_ShallowClimb_NoLaunch) {
+    for (int i = 0; i < 5000; i++) {
+        setMockMillis(i);
+        const float alt = i < 600 ? 20.0f * i * 1e-3f : 12.0f;
+        DEAD_IMU_TICK(alt);
+    }
+    EXPECT_FALSE(kc.launch_flag);
+}
+
+// A pressure step (a door, HVAC, an ejection-charge ground test in the bay):
+// 30 m in one sample, held for a second, then back.  The rate gate rejects
+// the step, then accepts it after MAX_CONSEC_BARO_REJECTS, and the filter's
+// rate and altitude both swing while it converges — but the raw reading sits
+// flat at 30 m, so the gain term refuses the run.  Tested at both signs.
+TEST_F(KinematicChecksTest, Launch_DeadIMU_PressureStep_NoLaunch) {
+    for (int i = 0; i < 4000; i++) {
+        setMockMillis(i);
+        const float alt = (i >= 1000 && i < 2000) ? 30.0f : 0.0f;
+        DEAD_IMU_TICK(alt);
+    }
+    EXPECT_FALSE(kc.launch_flag);
+    kc.reset();
+    for (int i = 0; i < 4000; i++) {
+        setMockMillis(i);
+        const float alt = (i >= 1000 && i < 2000) ? 8.0f : 0.0f;
+        DEAD_IMU_TICK(alt);
+    }
+    EXPECT_FALSE(kc.launch_flag);
+}
+
+// The gate: a working IMU that shows no boost vetoes the barometer.  Same
+// 20 m/s climb, IMU fresh at 1 g — the car-window case — must NOT launch.
+TEST_F(KinematicChecksTest, Launch_HealthyIMU_ClimbAlone_NoLaunch) {
+    for (int i = 0; i < 3000; i++) {
+        setMockMillis(i);
+        callFlight(20.0f * i * 1e-3f, 9.81f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
+                   true, /*baro_healthy=*/true, /*imu_healthy=*/true);
+    }
+    EXPECT_FALSE(kc.launch_flag);
+}
+
+// #1108 on real data, PRELAUNCH case (datum frozen on the pad): the 2026-05-17
+// 54 mm boost with the IMU replaced by a dead one.  The real barometer trace
+// must latch the baro-only path inside the log, well after the 15 m bar.
+TEST_F(KinematicChecksTest, Launch_RealBoost_DeadIMU_BaroOnlyLatches) {
+    int latched_at = -1;
+    for (int i = 0; i < kBoost20260517Rp54_n; i++) {
+        setMockMillis(kBoost20260517Rp54_t_ms[i]);
+        float pos[3] = {0, 0, 0}, vel[3] = {0, 0, 0};
+        kc.kinematicChecks(kBoost20260517Rp54_palt[i], 0.0f, pos, vel, 0.0f,
+                           kBoost20260517Rp54_baro_new[i] != 0, 0.0f, false, 1.57f, false, false,
+                           0.0f, true, /*baro_healthy=*/true, /*imu_healthy=*/false);
+        if (kc.launch_flag && latched_at < 0) latched_at = i;
+    }
+    ASSERT_GE(latched_at, 0) << "a real boost with a dead IMU must still latch";
+    const int ms_after_ignition = (int)kBoost20260517Rp54_t_ms[latched_at]
+                                - (int)kBoost20260517Rp54_t_ms[kBoost20260517Rp54_boost0];
+    EXPECT_GE(ms_after_ignition, 500);    // never before the vehicle is well off the pad
+    EXPECT_LE(ms_after_ignition, 1300);   // corpus replay: see the constant's comment
+    EXPECT_EQ(kc.launch_path, TR_KinematicChecks::LaunchPath::BaroOnly);
+}
+
+// #1108 on real data, READY case: the datum re-seeds from every sample the way
+// INITIALIZATION / READY do, through GroundRefFreeze, exactly as main.cpp does
+// it.  The freeze must catch the climb early, roll the datum back to the pad,
+// and the baro-only path must then latch off a datum that is within a couple
+// of metres of the true pad pressure.
+TEST_F(KinematicChecksTest, Launch_RealBoost_DeadIMU_FromReady_DatumHeldThenBaroOnlyLatches) {
+    GroundRefFreeze::State gr;
+    float ref = kBoost20260517Rp54_p_pa[0];
+    int latched_at = -1, held_at = -1;
+    for (int i = 0; i < kBoost20260517Rp54_n; i++) {
+        setMockMillis(kBoost20260517Rp54_t_ms[i]);
+        if (!kc.launch_flag) {
+            switch (GroundRefFreeze::step(gr, kBoost20260517Rp54_t_ms[i] * 1000u, kBoost20260517Rp54_p_pa[i])) {
+                case GroundRefFreeze::Verdict::Track:      ref = kBoost20260517Rp54_p_pa[i]; break;
+                case GroundRefFreeze::Verdict::FreezeEdge: ref = gr.rollback_pa; if (held_at < 0) held_at = i; break;
+                case GroundRefFreeze::Verdict::Frozen:     break;
+            }
+        }
+        const float palt = 44330.0f * (1.0f - powf(kBoost20260517Rp54_p_pa[i] / ref, 1.0f / 5.255f));
+        float pos[3] = {0, 0, 0}, vel[3] = {0, 0, 0};
+        kc.kinematicChecks(palt, 0.0f, pos, vel, 0.0f,
+                           kBoost20260517Rp54_baro_new[i] != 0, 0.0f, false, 1.57f, false, false,
+                           0.0f, true, /*baro_healthy=*/true, /*imu_healthy=*/false);
+        if (kc.launch_flag && latched_at < 0) latched_at = i;
+    }
+    ASSERT_GE(held_at, 0) << "the datum must be held during the boost";
+    ASSERT_GE(latched_at, 0) << "a launch from READY with a dead IMU must still latch";
+    const int t0 = (int)kBoost20260517Rp54_t_ms[kBoost20260517Rp54_boost0];
+    EXPECT_LE((int)kBoost20260517Rp54_t_ms[held_at] - t0, 600) << "held late";
+    EXPECT_GE(latched_at, held_at);
+    EXPECT_EQ(kc.launch_path, TR_KinematicChecks::LaunchPath::BaroOnly);
+    // datum error vs the pad mean, in metres
+    const float datum_err_m = 44330.0f * (1.0f - powf(ref / kBoost20260517Rp54_p_ref, 1.0f / 5.255f));
+    EXPECT_LT(fabsf(datum_err_m), 3.0f) << "datum drifted " << datum_err_m << " m";
 }
 
 TEST_F(KinematicChecksTest, MaxAltitude_SpikeRejection) {
@@ -496,6 +733,8 @@ TEST_F(KinematicChecksTest, Reset_ClearsAll) {
     kc.reset();
 
     EXPECT_FALSE(kc.launch_flag);
+    EXPECT_EQ(kc.launch_path, TR_KinematicChecks::LaunchPath::None);
+    EXPECT_FALSE(kc.launch_baro_healthy);
     EXPECT_FALSE(kc.alt_landed_flag);
     EXPECT_FALSE(kc.alt_apogee_flag);
     EXPECT_FALSE(kc.vel_u_apogee_flag);

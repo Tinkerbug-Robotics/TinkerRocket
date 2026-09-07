@@ -26,9 +26,19 @@ public:
                          bool  baro_locked_out = false,
                          float gps_vel_u = 0.0f,
                          bool  ekf_healthy = true,
-                         bool  baro_healthy = true);
+                         bool  baro_healthy = true,
+                         bool  imu_healthy = true);
 
     bool launch_flag;
+    // #1102: which detector latched launch_flag, and what the barometer claimed
+    // on that tick -- read at INFLIGHT entry for the log.  An AccelOnly latch
+    // with launch_baro_healthy == true is the blocked-static-port signature
+    // (sensor fresh and in range, altitude never moved).  Stays None when the
+    // caller sets launch_flag directly (reboot-recovery restore).  BaroOnly
+    // (#1108) is the IMU-stale path: a sustained barometric climb alone.
+    enum class LaunchPath : uint8_t { None = 0, BaroClimb = 1, AccelOnly = 2, BaroOnly = 3 };
+    LaunchPath launch_path;
+    bool       launch_baro_healthy;
     bool alt_landed_flag;       // Voted master landed
     bool alt_apogee_flag;       // Test 2: baro altitude decreasing
     bool vel_u_apogee_flag;     // Test 1: EKF velocity negative
@@ -52,6 +62,8 @@ private:
 
     uint16_t launch_count;
     uint16_t launch_count_hi;   // #258 sustained-high-G counter for the accel-only launch fallback
+    uint16_t launch_count_baro; // #1108 sustained-climb counter for the baro-only launch fallback
+    float    launch_baro_start_alt_;  // rate-gated raw altitude when the current baro-only run began
     uint32_t landing_check_time;
     float landing_look_back_alt;
     uint32_t landing_check_dt;
