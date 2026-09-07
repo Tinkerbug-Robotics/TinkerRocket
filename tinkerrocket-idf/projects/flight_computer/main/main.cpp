@@ -41,6 +41,7 @@
 #include "pwr_hold_policy.h"     // #848: boot reconciliation decision table
 #include "sim_flight_policy.h"   // #1104: sim edge rule + latched dry-fire predicate (TR_Sensor_Collector_Sim)
 #include "oc_cmd_session_gate.h" // #1105: no replay of one-shot commands across an FC boot
+#include "fc_ota_session_policy.h" // #1116: the FC's own exit from an OTA image session nobody ends
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
 #include <esp_private/gpio.h>      // gpio_func_sel
@@ -1600,6 +1601,13 @@ static uint32_t fc_ota_gap        = 0;   // valid frames ahead of bytesWritten (
 static uint32_t fc_ota_write_fail = 0;   // writeChunk() errors
 static uint32_t fc_ota_written_frames = 0;  // frames accepted in order
 static volatile uint32_t fc_ota_rx_cb_count = 0;  // I2S RX cb ticks; teardown silence detect
+// #1116: session watchdog inputs (fc_ota_session_policy.h). Stamped at the flip,
+// advanced by fcOtaServiceSessionWatchdog() from loop_fc on every pass in data mode.
+static uint32_t fc_ota_last_progress_ms = 0;   // bytesWritten last advanced
+static uint32_t fc_ota_last_rx_ms       = 0;   // fc_ota_rx_cb_count last advanced
+static uint32_t fc_ota_progress_ref     = 0;   // bytesWritten behind fc_ota_last_progress_ms
+static uint32_t fc_ota_rx_ref           = 0;   // fc_ota_rx_cb_count behind fc_ota_last_rx_ms
+static uint32_t fc_ota_stall_log_ms     = 0;   // throttles the "stalled, OC still clocking" line
 
 static inline IRAM_ATTR void fcOtaRingPush(uint8_t b)
 {
@@ -1735,6 +1743,15 @@ static void fcFlipToRx()
         i2s_stream.registerRecvCallback(fcOtaRecvCallback, nullptr);
     if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
     ESP_LOGW(TAG, "[OTA] I2S -> slave RX for image (%s)", esp_err_to_name(e));
+    // #1116: arm the session watchdog from the flip. The first accepted byte
+    // is still ~1 s away (the OC waits for our silence, flips, warms up, then
+    // releases "ready" to the app), which the 30 s window absorbs.
+    const uint32_t flip_ms  = time_ms();
+    fc_ota_progress_ref     = (uint32_t)fc_ota_receiver.bytesWritten();
+    fc_ota_rx_ref           = fc_ota_rx_cb_count;
+    fc_ota_last_progress_ms = flip_ms;
+    fc_ota_last_rx_ms       = flip_ms;
+    fc_ota_stall_log_ms     = flip_ms;
 }
 
 // Revert slave-RX -> master-TX (normal telemetry + status). Called before
@@ -1751,6 +1768,107 @@ static void fcRevertToTx()
     fc_ota_data_mode = false;           // i2sSenderTask resumes
     if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
     ESP_LOGW(TAG, "[OTA] I2S -> master TX (%s)", esp_err_to_name(e));
+}
+
+// Wait for the OC to stop driving BCLK before we seize it as master TX: both
+// ends are push-pull on one wire, and a terminal status sent into that
+// contention is garbled and lost. "Stopped" == the slave-RX DMA callback has
+// been silent for 20 consecutive 5 ms samples (~100 ms); `max_iters` caps the
+// wait (FINISH allows ~2 s for the OC's post-FINISH drain; ABORT and the #1116
+// watchdog ~600 ms — the unhappy paths must not stall the flight loop).
+// Returns true if the silence was actually seen.
+static bool fcOtaWaitForOcQuiet(int max_iters)
+{
+    uint32_t last_cb = fc_ota_rx_cb_count;
+    int quiet = 0;
+    for (int i = 0; i < max_iters && quiet < 20; i++)
+    {
+        delay_ms(5);
+        const uint32_t cb = fc_ota_rx_cb_count;
+        if (cb == last_cb) { quiet++; }
+        else { quiet = 0; last_cb = cb; }
+    }
+    return quiet >= 20;
+}
+
+// RX diagnostics summary (bench): which failure mode stalled a session?
+//   write_fail>0       -> flash-write error (not a transport issue)
+//   gap>0, crc_fail~0  -> frames lost/reordered (forward-only pump)
+//   crc_fail high      -> I2S signal integrity (back off BCLK)
+static void fcOtaLogRxDiag()
+{
+    ESP_LOGW(TAG, "[OTA RX] frames_ok=%u gap=%u crc_fail=%u write_fail=%u ring_ovf=%u",
+             (unsigned)fc_ota_written_frames, (unsigned)fc_ota_gap,
+             (unsigned)fc_ota_crc_fail, (unsigned)fc_ota_write_fail,
+             (unsigned)fc_ota_ring_ovf);
+}
+
+// End an image session without finalizing it: give the link back to master
+// TX (after the bounded quiet wait) and discard the staged image. No status
+// is sent here because the callers differ on that: the ABORT handler and the
+// #1116 watchdog report ABORTED, while a BEGIN that supersedes a stale
+// session must stay silent — a terminal status would end the relay session
+// the OC has just opened for that BEGIN.
+static void fcOtaTearDownSession()
+{
+    if (fc_ota_data_mode)
+    {
+        fcOtaWaitForOcQuiet(120);   // ~100 ms quiet, <=600 ms cap
+        fcRevertToTx();
+    }
+    (void)fc_ota_receiver.abort();
+}
+
+// #1116: the session watchdog. loop_fc calls this on every pass while in data
+// mode. Progress is an accepted in-order image byte; RX activity is the
+// slave-RX DMA callback, which the OC keeps ticking (idle fill) for as long
+// as it is master. fc_ota_session_policy.h says why both are needed.
+static void fcOtaServiceSessionWatchdog(uint32_t now_ms)
+{
+    if (!fc_ota_data_mode) return;
+    const uint32_t written = (uint32_t)fc_ota_receiver.bytesWritten();
+    if (written != fc_ota_progress_ref)
+    {
+        fc_ota_progress_ref     = written;
+        fc_ota_last_progress_ms = now_ms;
+    }
+    const uint32_t cb = fc_ota_rx_cb_count;
+    if (cb != fc_ota_rx_ref)
+    {
+        fc_ota_rx_ref     = cb;
+        fc_ota_last_rx_ms = now_ms;
+    }
+
+    using FcOtaSessionPolicy::Verdict;
+    const Verdict v = FcOtaSessionPolicy::evaluate(true, now_ms,
+                                                   fc_ota_last_progress_ms,
+                                                   fc_ota_last_rx_ms);
+    const uint32_t stalled_ms = (uint32_t)(now_ms - fc_ota_last_progress_ms);
+    if (v == Verdict::Continue)
+    {
+        // Stalled, but the OC still holds the clock: it is pumping and nothing
+        // is landing. Its own FINISH/ABORT or stall watchdog ends this; say so
+        // every 10 s so the wait is visible on the bench.
+        if (stalled_ms >= FcOtaSessionPolicy::kNoProgressTimeoutMs &&
+            (uint32_t)(now_ms - fc_ota_stall_log_ms) >= 10000U)
+        {
+            fc_ota_stall_log_ms = now_ms;
+            ESP_LOGW(TAG, "[OTA] no image byte accepted for %u s but the OC is still clocking "
+                          "the link — holding (bytes_written=%u/%u; seized regardless at %u s)",
+                     (unsigned)(stalled_ms / 1000U), (unsigned)written,
+                     (unsigned)fc_ota_total_size,
+                     (unsigned)(FcOtaSessionPolicy::kNoProgressHardCapMs / 1000U));
+        }
+        return;
+    }
+    ESP_LOGE(TAG, "[OTA] session abandoned: no image byte accepted for %u s and the link "
+                  "is %s (bytes_written=%u/%u) — reverting to master TX (#1116)",
+             (unsigned)(stalled_ms / 1000U),
+             v == Verdict::AbandonLinkQuiet ? "quiet" : "still clocked",
+             (unsigned)written, (unsigned)fc_ota_total_size);
+    fcOtaLogRxDiag();
+    fcOtaTearDownSession();
+    sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
 }
 
 // ==========================================================================
@@ -4848,6 +4966,10 @@ static void loop_fc()
     if (fc_ota_data_mode)
     {
         vTaskDelay(pdMS_TO_TICKS(5));
+        // #1116: the session's own way out if the FINISH/ABORT that should end
+        // it never arrives. Deliberately outside every state gate: the I2C
+        // poll that delivers those commands is skipped INFLIGHT (#1121).
+        fcOtaServiceSessionWatchdog(time_ms());
     }
 
     // ==========================================================================
@@ -6696,6 +6818,24 @@ static void loop_fc()
                 }
                 else
                 {
+                    if (fc_ota_data_mode)
+                    {
+                        // #1116: a BEGIN while an image session is still open is
+                        // the operator's retry after a session nobody ended (the
+                        // OC's FINISH/ABORT was dropped, or the OC rebooted mid-
+                        // transfer). begin() used to refuse it with AlreadyActive,
+                        // and that refusal rode the idle I2S sender — so the retry
+                        // could never work either. Supersede the old session
+                        // instead, silently: no ABORTED status, because a terminal
+                        // status would end the relay session the OC has just
+                        // opened for THIS begin.
+                        ESP_LOGW(TAG, "[OTA] BEGIN while a session is still open "
+                                      "(bytes_written=%u/%u) — superseding it (#1116)",
+                                 (unsigned)fc_ota_receiver.bytesWritten(),
+                                 (unsigned)fc_ota_total_size);
+                        fcOtaLogRxDiag();
+                        fcOtaTearDownSession();
+                    }
                     delay_ms(1);
                     uint8_t hdr[36];
                     size_t  hlen = 0;
@@ -6749,28 +6889,13 @@ static void loop_fc()
                     // driving BCLK (reverted to slave RX). Otherwise both ends drive
                     // BCLK = contention and the terminal status is garbled — and the
                     // final frame is lost. Silence == the I2S RX callback stops firing.
-                    uint32_t last_cb = fc_ota_rx_cb_count;
-                    int quiet = 0;
-                    for (int i = 0; i < 400 && quiet < 20; i++)   // ~100 ms quiet, <=2 s cap
-                    {
-                        delay_ms(5);
-                        const uint32_t cb = fc_ota_rx_cb_count;
-                        if (cb == last_cb) { quiet++; }
-                        else { quiet = 0; last_cb = cb; }
-                    }
+                    fcOtaWaitForOcQuiet(400);   // ~100 ms quiet, <=2 s cap
                     fcRevertToTx();
 
                     ESP_LOGW(TAG, "[OTA] FINISH (bytes_written=%u/%u)",
                              (unsigned)fc_ota_receiver.bytesWritten(),
                              (unsigned)fc_ota_total_size);
-                    // RX diagnostics summary (bench): which failure mode stalled it?
-                    //   write_fail>0  -> flash-write error (not a transport issue)
-                    //   gap>0, crc_fail~0 -> frames lost/reordered (forward-only pump)
-                    //   crc_fail high -> I2S signal integrity (back off BCLK)
-                    ESP_LOGW(TAG, "[OTA RX] frames_ok=%u gap=%u crc_fail=%u write_fail=%u ring_ovf=%u",
-                             (unsigned)fc_ota_written_frames, (unsigned)fc_ota_gap,
-                             (unsigned)fc_ota_crc_fail, (unsigned)fc_ota_write_fail,
-                             (unsigned)fc_ota_ring_ovf);
+                    fcOtaLogRxDiag();   // which failure mode stalled it, if any
                     const TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
                     if (e == TR_OTA_Receiver::Error::Ok)
                     {
@@ -6802,30 +6927,18 @@ static void loop_fc()
             }
             else if (out_pending_command == OTA_ABORT_CMD)
             {
+                // #834 items 6/7 (review): wait for the OC to stop driving BCLK
+                // before seizing it, exactly as the FINISH path above does and
+                // for the same reason — otherwise both ends drive BCLK/WS. This
+                // used to be unreachable in practice because nothing staged
+                // OTA_ABORT_CMD while the OC was (or was about to be) master;
+                // the OC's disconnect/stall/flip-fail recovery now does, so the
+                // abort path needs the same handshake. Shorter cap than FINISH:
+                // an abort is already the unhappy path and must not stall the
+                // flight loop. (#1116: the wait, the revert and the discard live
+                // in fcOtaTearDownSession, shared with the session watchdog.)
                 ESP_LOGW(TAG, "[OTA] ABORT");
-                if (fc_ota_data_mode)
-                {
-                    // #834 items 6/7 (review): wait for the OC to stop driving
-                    // BCLK before seizing it, exactly as the FINISH path above
-                    // does and for the same reason — otherwise both ends drive
-                    // BCLK/WS. This used to be unreachable in practice because
-                    // nothing staged OTA_ABORT_CMD while the OC was (or was
-                    // about to be) master; the OC's disconnect/stall/flip-fail
-                    // recovery now does, so the abort path needs the same
-                    // handshake. Shorter cap than FINISH: an abort is already
-                    // the unhappy path and must not stall the flight loop.
-                    uint32_t last_cb = fc_ota_rx_cb_count;
-                    int quiet = 0;
-                    for (int i = 0; i < 120 && quiet < 20; i++)   // ~100 ms quiet, <=600 ms cap
-                    {
-                        delay_ms(5);
-                        const uint32_t cb = fc_ota_rx_cb_count;
-                        if (cb == last_cb) { quiet++; }
-                        else { quiet = 0; last_cb = cb; }
-                    }
-                    fcRevertToTx();  // back to TX so status rides I2S
-                }
-                (void)fc_ota_receiver.abort();
+                fcOtaTearDownSession();
                 sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
             }
             else if (out_pending_command == GAIN_SCHED_ENABLE)
