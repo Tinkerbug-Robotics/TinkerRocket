@@ -941,6 +941,20 @@ target_include_directories(test_main_deploy_gate PRIVATE
 target_link_libraries(test_main_deploy_gate GTest::gtest_main)
 gtest_discover_tests(test_main_deploy_gate)
 
+# ---------- test_ground_ref_freeze (#1108) ----------
+# May the barometric ground reference follow the current sample?  Before
+# PRELAUNCH the FC re-seeds the datum every pass; this helper holds it while
+# the pressure moves at launch rates so the baro-only launch fallback can see
+# a climb from READY, and rolls the datum back to the pre-motion pressure.
+# Pure header in the shared TR_KinematicChecks component.
+add_executable(test_ground_ref_freeze test_ground_ref_freeze.cpp)
+target_include_directories(test_ground_ref_freeze PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/components/TR_KinematicChecks
+)
+target_link_libraries(test_ground_ref_freeze GTest::gtest_main)
+gtest_discover_tests(test_ground_ref_freeze)
+
 # ---------- test_recovery_arm_gate (#1176) ----------
 # May a flight restored by reboot recovery arm a deployment channel? Default-deny,
 # opened only by live this-boot evidence of motion that ground handling cannot

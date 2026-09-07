@@ -107,6 +107,59 @@ constexpr uint32_t GPS_APOGEE_FRESH_MS     = 500;
 constexpr float    LAUNCH_ACCEL_FALLBACK_MS2   = 30.0f;  // ~3 g
 constexpr uint16_t LAUNCH_ACCEL_FALLBACK_COUNT = 250;    // sustained samples (~250 ms at 1 kHz)
 
+// Launch baro-only fallback (#1108): with the IMU stale or absent, latch launch
+// on a sustained barometric climb alone.  The mirror image of #258: every
+// launch latch above sits inside `acc_mag > 20`, and the call site passes 0
+// for a stale IMU (#259), so an IMU that died on the pad -- a loose FPC, a
+// sensor-rail brownout, a config loss -- made INFLIGHT unreachable while the
+// barometer recorded the whole flight: no pyro servicing, no drogue, no main,
+// no flight log.  The dead-IMU recovery chain #556 built (the Layer-2 baro
+// apogee backstop, then the baro main gate) was one link short: nothing could
+// enter it.
+//
+// The bar: LAUNCH_BARO_COUNT consecutive ticks with the filtered rate above
+// LAUNCH_BARO_RATE_MPS AND the filtered altitude above LAUNCH_BARO_ALT_M,
+// counter zeroed on any miss, and the altitude must have RISEN by at least
+// LAUNCH_BARO_GAIN_M across the run.  Nothing on the ground does that: lifts
+// and stairs are 1-3 m/s, a car on a grade ~2 m/s, an aircraft cabin ~2.5 m/s
+// equivalent, and pressure steps (a door, HVAC, an ejection-charge ground test
+// in the bay) are single-sample spikes the rate gate above rejects -- and if
+// one is large enough to be accepted after MAX_CONSEC_BARO_REJECTS, the gain
+// term catches it: the filter's rate and altitude both swing while it
+// converges, but the raw reading sits flat at the new level, and the gain is
+// measured on the raw reading.  Any real
+// rocket clears 15 m within ~1.3 s even at 2 g net and is past 10 m/s by then.
+//
+// GATED on !imu_healthy, unlike the accel fallback, and the asymmetry is
+// deliberate.  An accel false launch is contained: the apogee vote needs
+// altitude evidence an accelerometer cannot supply.  A barometric false
+// launch is NOT, because the barometer is also the apogee evidence.  An
+// airframe powered up in a car with a window opened at speed sees ~500 Pa of
+// Bernoulli suction -- a 40 m "climb" at tens of m/s -- and the same
+// barometer "descends" when the window shuts, which is a Layer-2 apogee.
+// With a working IMU saying there was no boost, the barometer must not decide
+// launch on its own.  With no IMU there is nothing to consult, and the
+// alternative is a ballistic return.  (The freshness test is 100 ms, so an
+// IMU that still answers, slowly, keeps this path shut.  Known gap.)
+//
+// READY / INITIALIZATION re-seed the ground reference every pass, which
+// makes pressure_altitude identically 0 there; this path is blind in those
+// states unless the datum stops tracking, which is GroundRefFreeze.h's job.
+//
+// Corpus (Data_Analysis/analyze_launch_fallback.py --baro-only: this detector,
+// compiled from this tree, over the 31 logged boosts with the IMU forced
+// stale): latches on 28 of 31, a median 830 ms and at most 1991 ms after
+// ignition; the three misses are logs that end before the vehicle reaches
+// 15 m.  Launched from READY, with the datum re-seeding through
+// GroundRefFreeze instead of frozen at PRELAUNCH, it is 845 ms median, the
+// datum is held ~65 ms after ignition, and the pad reference it flies with
+// is within 0.3 m of the pre-launch mean.  The two logged no-boost ground
+// sessions never latch.
+constexpr float    LAUNCH_BARO_RATE_MPS = 10.0f;  // filtered climb rate, every tick of the run
+constexpr float    LAUNCH_BARO_ALT_M    = 15.0f;  // filtered altitude, every tick of the run
+constexpr float    LAUNCH_BARO_GAIN_M   = 2.0f;   // net rise across the run (rejects a reseed transient)
+constexpr uint16_t LAUNCH_BARO_COUNT    = 250;    // ticks (~250 ms at 1 kHz)
+
 // Baro settle window after burnout. Thrust tail-off can snap the bay pressure
 // back from its boost-suction offset (7/05 V2 F1: indicated altitude fell 15 m
 // in 0.25 s at burnout while climbing at 46 m/s), which satisfies the baro
@@ -186,6 +239,8 @@ TR_KinematicChecks::TR_KinematicChecks()
     apogee_backstop_flag = false;
     launch_count = 0;
     launch_count_hi = 0;
+    launch_count_baro = 0;
+    launch_baro_start_alt_ = 0.0f;
     max_altitude = 0.0f;
     max_speed = 0.0f;
     landing_check_time = 0;
@@ -251,6 +306,8 @@ void TR_KinematicChecks::reset()
     apogee_backstop_flag = false;
     launch_count = 0;
     launch_count_hi = 0;
+    launch_count_baro = 0;
+    launch_baro_start_alt_ = 0.0f;
     max_altitude = 0.0f;
     max_speed = 0.0f;
     landing_check_time = 0;
@@ -301,7 +358,8 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                                          bool  baro_locked_out,
                                          float gps_vel_u,
                                          bool  ekf_healthy,
-                                         bool  baro_healthy)
+                                         bool  baro_healthy,
+                                         bool  imu_healthy)
 {
     // Snapshot apogee_flag so the rising-edge reset below sees the
     // state *before* this tick's apogee voting fires (#192).
@@ -395,6 +453,35 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         {
             launch_count = 0;
             launch_count_hi = 0;
+        }
+
+        // #1108 baro-only fallback -- ONLY while the IMU is unusable (stale or
+        // absent), see LAUNCH_BARO_RATE_MPS for why that gate stays.  A
+        // sustained filtered climb, already well off the pad, that keeps
+        // rising across the whole run.
+        if (!launch_flag)
+        {
+            const bool climbing = d_alt_est_ > LAUNCH_BARO_RATE_MPS &&
+                                  alt_est    > LAUNCH_BARO_ALT_M;
+            if (!imu_healthy && climbing)
+            {
+                // The gain term reads the rate-gated RAW altitude, not the
+                // filter: after a pressure step the filter's rate and altitude
+                // both move while the raw reading sits flat at the new level.
+                if (launch_count_baro == 0) launch_baro_start_alt_ = pressure_altitude;
+                launch_count_baro++;
+                if (launch_count_baro > LAUNCH_BARO_COUNT &&
+                    pressure_altitude - launch_baro_start_alt_ > LAUNCH_BARO_GAIN_M)
+                {
+                    launch_flag         = true;
+                    launch_path         = LaunchPath::BaroOnly;
+                    launch_baro_healthy = baro_healthy;
+                }
+            }
+            else
+            {
+                launch_count_baro = 0;
+            }
         }
     }
 
