@@ -7361,6 +7361,23 @@ static void loop_fc()
                              pyro_config.ch3_enabled, pyro_config.ch3_trigger_mode, (double)pyro_config.ch3_trigger_value,
                              pyro_config.ch4_enabled, pyro_config.ch4_trigger_mode, (double)pyro_config.ch4_trigger_value);
                 }
+                else
+                {
+                    // #1117: this handler was the only config-pending handler
+                    // with no else. The dedup consumed the command on the first
+                    // delivery, so the OC's two remaining repeats — still
+                    // carrying the frame — were skipped, and the deployment
+                    // configuration was dropped for good. The FC then flew on
+                    // whatever its own NVS held at boot, which on a freshly
+                    // flashed or NVS-erased board is all four channels
+                    // DISABLED: servicePyroChannels() leaves every channel in
+                    // Idle, neither drogue nor main fires, ballistic return.
+                    // Nothing revealed it either — the app's config_pyro
+                    // readback is the OC echoing its own cache, and the pyro
+                    // scorecard bits read SH_NA, which the app excludes from
+                    // go/no-go.
+                    cfgRetryOnNextPoll("PYRO CFG");   // #1112
+                }
             }
             else if (out_pending_command == PYRO_CONT_TEST)
             {
