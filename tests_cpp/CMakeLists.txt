@@ -1024,6 +1024,25 @@ target_include_directories(test_sensor_staleness_policy PRIVATE
 target_link_libraries(test_sensor_staleness_policy GTest::gtest_main)
 gtest_discover_tests(test_sensor_staleness_policy)
 
+# ---------- test_i2s_link_budget (#1137 item 13) ----------
+# The FC->OC link budget lived only in a config.h comment and went stale twice.
+# Derived here from the real sizeof()s and rates so a struct that grows on the
+# link fails a test instead of silently dropping frames in flight.
+add_executable(test_i2s_link_budget test_i2s_link_budget.cpp)
+target_include_directories(test_i2s_link_budget PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+# config.h refuses to compile without a board revision (a wrong pyro map fires
+# the wrong channel silently, so there is deliberately no default). The link
+# budget is identical on every revision — the rates and wire sizes are shared —
+# so V9 is picked here simply because one has to be.
+target_compile_definitions(test_i2s_link_budget PRIVATE TR_BOARD_V9=1)
+target_link_libraries(test_i2s_link_budget GTest::gtest_main)
+gtest_discover_tests(test_i2s_link_budget)
+
 # ---------- test_test_mode_gate_policy (#1137 item 5) ----------
 add_executable(test_test_mode_gate_policy test_test_mode_gate_policy.cpp)
 target_include_directories(test_test_mode_gate_policy PRIVATE
