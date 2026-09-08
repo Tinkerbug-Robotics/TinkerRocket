@@ -794,6 +794,50 @@ struct RailRtcState { uint32_t magic; uint8_t rail_on; uint8_t deliberate_off;
 static constexpr uint32_t kRailRtcMagic = 0x5241494D;  // "RAIM" (v2: +attempts)
 RTC_NOINIT_ATTR static RailRtcState rail_rtc;
 static bool boot_rail_restored = false;  // this boot re-asserted the FC rail
+
+// #1147 item 7: the operating LoRa channel this session is actually using,
+// carried across an in-flight reboot in RTC memory.
+//
+// The #136 boot override forces every boot back to the factory rendezvous
+// preset, which is right for a ground boot -- the BS finds us there and uses
+// the cmd-10 transactional flow to move us.  It is wrong for a boot that
+// resumes a LIVE FLIGHT: the rocket comes back transmitting on 915.0 MHz while
+// the BS is still listening on the session channel, and because the frequency
+// lock re-latches on the first INFLIGHT frame, the cmd-10 retune that would fix
+// it is refused for the rest of the flight.
+//
+// Restored on a TOKEN restore only, not on every rail restore.  A bare
+// #825 rail re-assert can be a ground-side fault reset, where the rendezvous
+// preset is the correct and useful behaviour; the #1176 flight token is the
+// only signal that actually says "you were flying", so it is the only one
+// allowed to suppress the rendezvous reset.
+struct LoraSessionRtc { uint32_t magic; float freq_mhz; float bw_khz;
+                        uint8_t sf; uint8_t cr; int8_t tx_dbm; };
+static constexpr uint32_t kLoraSessionRtcMagic = 0x4C534553;  // "LSES"
+RTC_NOINIT_ATTR static LoraSessionRtc lora_session_rtc;
+
+// Stamp the channel we are operating on, so a restore boot can come back to it.
+static inline void loraSessionRtcStore(float freq_mhz, uint8_t sf, float bw_khz,
+                                       uint8_t cr, int8_t tx_dbm)
+{
+    lora_session_rtc.magic    = kLoraSessionRtcMagic;
+    lora_session_rtc.freq_mhz = freq_mhz;
+    lora_session_rtc.bw_khz   = bw_khz;
+    lora_session_rtc.sf       = sf;
+    lora_session_rtc.cr       = cr;
+    lora_session_rtc.tx_dbm   = tx_dbm;
+}
+
+// Usable only if the magic survived (RTC_NOINIT is garbage on a cold boot) and
+// the frequency is a real one -- a rendezvous-valued blob carries no
+// information and must not suppress the rendezvous reset.
+static inline bool loraSessionRtcUsable()
+{
+    return lora_session_rtc.magic == kLoraSessionRtcMagic &&
+           lora_session_rtc.freq_mhz > 100.0f &&
+           lora_session_rtc.freq_mhz < 1000.0f &&
+           lora_session_rtc.freq_mhz != LORA_FACTORY_RENDEZVOUS_MHZ;
+}
 // #825: the restore's cmd-8-ON side effects (initPeripherals etc.) must run
 // on the SAME core as the normal path — the I2S RX GDMA interrupt is
 // allocated on the calling core, and setup_oc runs on core 0 (the BT core)
@@ -5763,6 +5807,12 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
             }
             prefs.end();
 
+            // #1147 item 7: this is the session channel the BS just moved us
+            // to.  Stamp it in RTC memory so an in-flight reboot resumes here
+            // instead of on the rendezvous preset the BS is not listening on.
+            loraSessionRtcStore(lora_freq_mhz, lora_sf, lora_bw_khz,
+                                lora_cr, lora_tx_power);
+
             ESP_LOGI("LORA", "UPLINK LoRa reconfigured + saved: %.1f MHz SF%u BW%.0f CR%u %d dBm",
                           (double)lora_freq_mhz, (unsigned)lora_sf,
                           (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
@@ -5793,7 +5843,24 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // hopping off mid-PRELAUNCH or back on once the operator clears
         // the override.  Persist to NVS so the setting survives reboot.
         const bool new_disabled = (payload[0] != 0);
-        if (!new_disabled && currentHopDwell() == 0)
+        if (new_disabled != lora_hop_disabled &&
+            !loraHopChangeAllowed(new_disabled, freq_locked_for_flight))
+        {
+            // #1147 item 5: the in-flight frequency lock covers cmd 10 and the
+            // rendezvous cycle but never covered this one, so a broadcast
+            // hop-enable (the BS sends cmd 17 with target_rid 0xFF) moved an
+            // AIRBORNE rocket onto a per-packet schedule 1.5 s later —
+            // shouldHopInState(INFLIGHT) is true, so nothing downstream
+            // objected.  A disable is still honoured; see the predicate.
+            //
+            // Conditioned on an actual CHANGE so the BS's cmd-17 resync train
+            // (serviceHopModeResync re-pushes the mode it already holds) stays
+            // silent against a rocket that took off hopping — that is a no-op,
+            // not an attempt to move an airborne rocket, and logging it as a
+            // refusal every resync would bury the real one.
+            ESP_LOGW("LORA", "UPLINK Hop enable REFUSED: frequency locked for flight (#1147)");
+        }
+        else if (!new_disabled && currentHopDwell() == 0)
         {
             // #150: this modulation can't fit one packet inside the FCC
             // dwell budget — refuse the enable so we cannot be commanded
@@ -7951,11 +8018,34 @@ void initPeripherals()
         // anymore — the link mode is user-selected (app picker → BS →
         // uplink cmd 17) and honors NVS across reboots.  Schema v4
         // wiped any stale pre-#150 hopdis, and the default is 1 (fixed).
-        lora_freq_mhz     = LORA_FACTORY_RENDEZVOUS_MHZ;
-        lora_sf           = LORA_FACTORY_RENDEZVOUS_SF;
-        lora_bw_khz       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
-        lora_cr           = LORA_FACTORY_RENDEZVOUS_CR;
-        lora_tx_power     = LORA_FACTORY_RENDEZVOUS_TX_DBM;
+        // #1147 item 7: except on a boot that is resuming a live flight.
+        // Coming back on the rendezvous preset there means transmitting where
+        // the BS is not listening, and the frequency lock re-latches on the
+        // first INFLIGHT frame, so the cmd-10 retune that would fix it is
+        // refused for the rest of the flight.  Token restores only -- a bare
+        // rail restore can be a ground fault reset, where the rendezvous reset
+        // is the behaviour we want.
+        if (boot_token_restore && loraSessionRtcUsable())
+        {
+            lora_freq_mhz = lora_session_rtc.freq_mhz;
+            lora_sf       = lora_session_rtc.sf;
+            lora_bw_khz   = lora_session_rtc.bw_khz;
+            lora_cr       = lora_session_rtc.cr;
+            lora_tx_power = lora_session_rtc.tx_dbm;
+            ESP_LOGW("CFG", "#1147: flight-token restore — resuming the SESSION "
+                            "channel %.1f MHz SF%u BW%.0f CR%u %d dBm instead of "
+                            "the rendezvous preset (the BS is listening there)",
+                     (double)lora_freq_mhz, (unsigned)lora_sf,
+                     (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
+        }
+        else
+        {
+            lora_freq_mhz     = LORA_FACTORY_RENDEZVOUS_MHZ;
+            lora_sf           = LORA_FACTORY_RENDEZVOUS_SF;
+            lora_bw_khz       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
+            lora_cr           = LORA_FACTORY_RENDEZVOUS_CR;
+            lora_tx_power     = LORA_FACTORY_RENDEZVOUS_TX_DBM;
+        }
 
         // Channel-set restore (#40 / #41 phase 3): skip-mask pushed by
         // the BS via cmd 15.  Skip-mask is keyed off the BW it was
@@ -8405,6 +8495,14 @@ static void setup_oc()
 
     if (!boot_rail_restored && !boot_token_restore)
     {
+        // #1147 item 7: a normal boot starts a fresh session, so any session
+        // channel left in RTC memory describes a flight that is over.  Wipe it
+        // here rather than trusting the magic alone -- RTC_NOINIT can survive a
+        // brownout deep enough to have lost the flight it belonged to, and
+        // resuming a stale channel would be worse than the rendezvous reset
+        // this whole change exists to suppress.
+        lora_session_rtc.magic = 0;
+
         pinMode(config::PWR_PIN, OUTPUT);
         digitalWrite(config::PWR_PIN, LOW);   // Start with power rail OFF
         if (config::GPS_PWR_PIN >= 0)  // -1: board has no separate GPS rail (#411)
@@ -8503,11 +8601,34 @@ static void setup_oc()
         // sees the rendezvous values rather than stale NVS.  #150: the
         // hopdis override is gone — link mode honors NVS (see the
         // peripheral-init comment).
-        lora_freq_mhz     = LORA_FACTORY_RENDEZVOUS_MHZ;
-        lora_sf           = LORA_FACTORY_RENDEZVOUS_SF;
-        lora_bw_khz       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
-        lora_cr           = LORA_FACTORY_RENDEZVOUS_CR;
-        lora_tx_power     = LORA_FACTORY_RENDEZVOUS_TX_DBM;
+        // #1147 item 7: except on a boot that is resuming a live flight.
+        // Coming back on the rendezvous preset there means transmitting where
+        // the BS is not listening, and the frequency lock re-latches on the
+        // first INFLIGHT frame, so the cmd-10 retune that would fix it is
+        // refused for the rest of the flight.  Token restores only -- a bare
+        // rail restore can be a ground fault reset, where the rendezvous reset
+        // is the behaviour we want.
+        if (boot_token_restore && loraSessionRtcUsable())
+        {
+            lora_freq_mhz = lora_session_rtc.freq_mhz;
+            lora_sf       = lora_session_rtc.sf;
+            lora_bw_khz   = lora_session_rtc.bw_khz;
+            lora_cr       = lora_session_rtc.cr;
+            lora_tx_power = lora_session_rtc.tx_dbm;
+            ESP_LOGW("CFG", "#1147: flight-token restore — resuming the SESSION "
+                            "channel %.1f MHz SF%u BW%.0f CR%u %d dBm instead of "
+                            "the rendezvous preset (the BS is listening there)",
+                     (double)lora_freq_mhz, (unsigned)lora_sf,
+                     (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
+        }
+        else
+        {
+            lora_freq_mhz     = LORA_FACTORY_RENDEZVOUS_MHZ;
+            lora_sf           = LORA_FACTORY_RENDEZVOUS_SF;
+            lora_bw_khz       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
+            lora_cr           = LORA_FACTORY_RENDEZVOUS_CR;
+            lora_tx_power     = LORA_FACTORY_RENDEZVOUS_TX_DBM;
+        }
 
         prefs.begin("servo", false);
         if (prefs.isKey("b1"))

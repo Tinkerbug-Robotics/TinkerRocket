@@ -1267,3 +1267,71 @@ TEST_F(KinematicChecksTest, Landing_DeadBaro_QuiescenceStillNeedsAQuietIMU) {
     EXPECT_FALSE(kc.quiescent_flag) << "a <50% duty cycle cannot climb a leaky counter";
     EXPECT_FALSE(kc.alt_landed_flag);
 }
+
+// ── #1137 item 7: a stale IMU must not cast the gyro-quiet vote ──
+//
+// main.cpp force-fails the accel evidence when the IMU is stale (it feeds
+// 0.0f for acc_mag) but passes roll_rate through untouched, and have_ism6_si
+// latches on the first read and never clears -- so roll_rate holds the LAST
+// sample taken before the sensor went quiet, forever.
+//
+// That is not enough to keep the vote from latching.  With accel_1g force
+// failed the tally is baro_stable + gyro_quiet + accel_1g = 3 available, and
+// the rule is `passed >= available - 1`, so baro_stable plus a gyro_quiet
+// cast on a frozen number is a complete 2-of-3 landing.
+TEST_F(KinematicChecksTest, Landing_StaleImu_GyroQuietMustNotVote) {
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    ASSERT_GT(kc.max_altitude, 15.0f);
+    kc.apogee_flag = true;
+
+    // IMU stale: main.cpp substitutes 0.0f accel (fails accel_1g and every
+    // quiescent/impact path) but roll_rate is the frozen last-known 5 dps.
+    for (int second = 0; second < 10; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(5.0f, 0.0f, 0.0f, 5.0f, 0.0f, false, 1.57f, false,
+                       false, 0.0f, true, /*baro_healthy=*/true,
+                       /*imu_healthy=*/false);
+        }
+    }
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+// ── #1137 item 7, the other half: a dead IMU must not strand the flight ──
+//
+// Gating the two IMU detectors could have pushed every dead-IMU flight onto
+// the 10-minute MAX_FLIGHT_TIME_MS backstop -- which would still end the
+// flight, but that backstop exists for detection FAILURE and spends ten
+// minutes with the squibs live to get there.  A landing the detectors can
+// actually see should not be routed through it.
+// Treating them as UNAVAILABLE rather than FAILING is what keeps a path open:
+// baro_stable and gps_stationary are then the whole ballot, and both must
+// pass.  A stale-IMU landing is still a landing when two independent,
+// altitude- and position-aware detectors agree on it.
+TEST_F(KinematicChecksTest, Landing_StaleImu_BaroPlusGpsStillLands) {
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f, 0.0f, float(i), true);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    ASSERT_GT(kc.max_altitude, 15.0f);
+    kc.apogee_flag = true;
+
+    // Stale IMU (0.0f accel substituted by the caller, gyro frozen at a value
+    // that would have vetoed) but a live GPS reporting a stationary vehicle.
+    for (int second = 0; second < 10; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(5.0f, 0.0f, 0.0f, 90.0f, 5.0f, true, 1.57f, false,
+                       false, 0.0f, true, /*baro_healthy=*/true,
+                       /*imu_healthy=*/false);
+        }
+    }
+    EXPECT_TRUE(kc.alt_landed_flag);
+}

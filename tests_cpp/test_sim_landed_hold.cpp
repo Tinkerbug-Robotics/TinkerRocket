@@ -3,15 +3,27 @@
 // The sim held SIM_LANDED for a fixed 9000 ms, chosen from a comment that
 // budgeted 5 s for alt_landed_flag plus a 2 s debounce and assumed 2 s of
 // margin.  Measured on flight_20260827_122854 the flag took 7.0 s, and the FC
-// wants the flag held for STRICTLY MORE than 2000 ms on top — so 9000 ms was
+// wanted the flag held for STRICTLY MORE than 2000 ms on top — so 9000 ms was
 // exactly the requirement and the transition missed by a margin of zero, on
-// every sim flight, silently.
+// every sim flight, silently.  (#1137 item 8 has since made that comparison
+// `>=`; the hold is dynamic either way, so the margin no longer rides on it.)
 //
 // Nothing compared those two numbers, which is why it went unnoticed.  These
 // tests are that comparison.
 
 #include <gtest/gtest.h>
 #include "sim_landed_hold.h"
+#include "landing_transition_policy.h"
+
+// #1137 item 8 moved the dwell into landing_transition_policy.h and relaxed
+// the comparison from `> 2000U` to `>= kDwellMs`.  FC_LANDED_DEBOUNCE_MS is
+// now a MIRROR of that constant, and a mirror nobody checks is how #971
+// happened in the first place -- two numbers that had to agree, in two files,
+// with nothing comparing them.  This is the comparison.
+static_assert(sim_landed::FC_LANDED_DEBOUNCE_MS ==
+                  landing_transition::kDwellMs,
+              "sim_landed_hold.h's debounce mirror has drifted from "
+              "landing_transition_policy.h's kDwellMs");
 
 namespace {
 
