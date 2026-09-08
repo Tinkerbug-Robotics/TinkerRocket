@@ -1146,6 +1146,12 @@ static bool    hop_active_        = false;
 static uint8_t hop_idx_           = 0;
 static uint8_t hop_bootstrap_left_ = 0;
 static bool    hop_needs_retune_  = false;
+
+// #1147 item 2: true while the slow-rendezvous state machine has the radio
+// parked (on the rendezvous channel AND the rendezvous modulation).  Declared
+// here because serviceLoRa() runs long before rendezvous_state is defined;
+// see the definition next to that state machine.
+static bool rendezvousOwnsRadio();
 // Link mode (#106 origin, user-facing since #150): when true, hopping is
 // suppressed even in PRELAUNCH/INFLIGHT/LANDED and we stay on
 // lora_freq_mhz.  Set by the BS via LORA_CMD_SET_HOP_DISABLED (cmd 17),
@@ -4217,9 +4223,22 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // changes (issue #71).  Safe to call on every frame — the
             // function only flips the bool on INFLIGHT / READY edges.
             updateFreqLockFromState(latest_rocket_state);
-            // Drive the per-packet hop state machine off the same edge
-            // (issues #40 / #41).  Pure function; idempotent per state.
-            updateHopFromState(latest_rocket_state);
+            // #1147 item 1: the hop state machine is NOT driven from here any
+            // more.  This runs on the I2S Parse task (core 1, prio 6), which
+            // preempts loop_oc (core 1, prio 5) at an arbitrary instruction —
+            // including while loop_oc owns the radio — and the comment this
+            // replaces was wrong on both counts: updateHopFromState() is not
+            // pure, and its ON->OFF branch calls lora_comms.reconfigure() and
+            // startReceive() directly when a rendezvous visit is in progress.
+            // Nothing in TR_RadioLink locks, so that was a driver call racing
+            // another driver call on the same object.
+            //
+            // loop_oc now re-evaluates the hop state from latest_rocket_state
+            // on every pass instead.  The edge is picked up within one loop
+            // iteration, and every radio call ends up on the task that owns
+            // the radio.  latest_rocket_state itself is a single enum written
+            // here and read there, which is the existing cross-task pattern
+            // in this file.
 
             // Latch the moment we entered READY so the slow-rendezvous
             // silence timer has a fair starting point.  Boot-time READY
@@ -4957,14 +4976,39 @@ static void serviceLoRa()
     // Honour any pending hop retune as soon as the radio is idle.  The
     // post-TX path below sets hop_needs_retune_ when the previous TX
     // completed, since send() returns when the TX *starts*, not when it
-    // finishes — canSend() going true is our "TX done" signal.  Skip
-    // during a rendezvous visit; the radio is being managed by
-    // serviceHopFallback() in that case.
+    // finishes — canSend() going true is our "TX done" signal.
+    //
+    // #1147 item 2: skip while EITHER radio-owning state machine has it.
+    // This used to check only hop_fallback_state, but the slow rendezvous
+    // (rendezvous_state) is a separate machine that also parks the radio —
+    // and it sets the whole rendezvous SF/BW/CR/power tuple, not just the
+    // frequency.  hopToFrequencyMHz() moves ONLY the frequency, so retuning
+    // underneath a rendezvous visit left the radio on the operating channel
+    // with the rendezvous modulation still applied: a pair neither end
+    // listens on.
+    //
+    // #1147 item 3: clear the flag only if the retune actually happened.
+    // hop_needs_retune_ is the ONLY mechanism that gets the radio back onto
+    // lora_freq_mhz when hopping stops, and at the ON->OFF transition there
+    // is no later hop boundary to heal a miss — so discarding the return
+    // stranded the rocket on its last hop channel for the whole recovery.
+    // The comment below already spelled out that exact consequence.  Leaving
+    // the flag set simply retries next pass, which is what the IRadioLink
+    // contract expects of a false return.
     if (hop_needs_retune_ && lora_comms.canSend() &&
-        hop_fallback_state == HopFallbackState::NORMAL)
+        hop_fallback_state == HopFallbackState::NORMAL &&
+        !rendezvousOwnsRadio())
     {
-        (void)lora_comms.hopToFrequencyMHz(hopTargetFreqMHz());
-        hop_needs_retune_ = false;
+        if (lora_comms.hopToFrequencyMHz(hopTargetFreqMHz()))
+        {
+            hop_needs_retune_ = false;
+        }
+        else
+        {
+            ESP_LOGW("LORA", "[HOP] retune to %.2f MHz FAILED — still owed, "
+                             "retrying next pass (#1147)",
+                     (double)hopTargetFreqMHz());
+        }
     }
 
     // "LoRa off": every transmit path stops here.  Placed AFTER service() and
@@ -6320,6 +6364,15 @@ enum class RocketRendezvousState : uint8_t {
 };
 
 static RocketRendezvousState rendezvous_state = RocketRendezvousState::IDLE;
+
+// #1147 item 2 (declared far above, next to hop_needs_retune_).  ON_SAVED is
+// deliberately included: the machine still owns the radio during that phase
+// and will move it again when the phase ends, so a retune slipped in there
+// would be silently undone.
+static bool rendezvousOwnsRadio()
+{
+    return rendezvous_state != RocketRendezvousState::IDLE;
+}
 static uint32_t rendezvous_phase_start_ms = 0;
 
 // #105 follow-up: tightened from 30 s / 120 s to 15 s for both triggers so
@@ -9245,6 +9298,19 @@ static void loop_oc()
         // the rocket has been silent in READY for a long time, so the base
         // station's Phase-A recovery has a meeting point (issue #71).
         LOOP_STALL_INSTR("serviceRocketRendezvous", serviceRocketRendezvous());
+
+        // #1147 item 1: re-evaluate the hop state from the FC's latest
+        // reported state, on the task that owns the radio.  processFrame()
+        // used to do this from the I2S Parse task, which could call
+        // reconfigure()/startReceive() underneath loop_oc mid-transaction.
+        // Unconditional and idempotent: the OFF->ON and ON->OFF branches
+        // inside only fire on an actual edge, so a steady state costs one
+        // predicate per pass.  Placed here rather than above serviceLoRa() to
+        // leave the existing service ordering untouched; the cost is that a
+        // retune this edge owes is honoured on the NEXT pass instead of the
+        // current one.  That is a sub-millisecond delay on a transition that
+        // used to be applied immediately but from the wrong task.
+        updateHopFromState(latest_rocket_state);
 
         // #150: deferred hop-enable (see the cmd-17 handler) — activate
         // once the BS's mirror-retry train has finished so the bootstrap
