@@ -62,4 +62,33 @@ inline uint32_t holdRemainingMs(uint32_t inflight_age_ms)
     return inflight_age_ms < kMaxFlightTimeMs ? kMaxFlightTimeMs - inflight_age_ms : 0;
 }
 
+// #1147 items 8 and 9: WHICH commands the INFLIGHT rule covers.
+//
+// The #383 rule was written into processUplinkCommand's refusal list and never
+// applied to the BLE half, so the same command is refused over LoRa and
+// accepted over Bluetooth. Shared here so the two dispatches cannot drift
+// again — the list was already extended once (#1130 added 5 and 6) and only
+// the LoRa site moved.
+//
+//   1  camera on/off        — the FC cannot receive it until after landing, and
+//                             a CAMERA_START delivered on the first post-landing
+//                             poll powers the camera on with no stop armed
+//   5  sim config           — #1130
+//   6  sim start            — #1130: resets the flight state the #317 terminal
+//                             LANDED lockout exists to protect
+//   23 logging toggle       — #1159
+//   28 guidance target      — DELIBERATELY EXEMPT on the BLE side, see below
+//   35 pyro continuity test — #1147 item 9
+//   36 pyro test fire       — #1147 item 9
+//
+// 28 is on the LoRa list but is deliberately NOT refused on the BLE path: its
+// rejection is echoed to the app via guid_target, which is the feedback the
+// LoRa path cannot give. Callers gate 28 themselves; this predicate reports
+// membership of the rule, and the BLE cmd-28 site documents its exemption.
+inline bool refusedInflight(uint8_t cmd)
+{
+    return cmd == 1 || cmd == 5 || cmd == 6 || cmd == 23 ||
+           cmd == 28 || cmd == 35 || cmd == 36;
+}
+
 }  // namespace InflightRefusalPolicy

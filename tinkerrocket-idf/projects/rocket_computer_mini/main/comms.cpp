@@ -1539,6 +1539,10 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     // #1130: 5 and 6 (simulation start/stop) belong here too — a sim START
     // uplinked during a REAL flight is accepted, queued and applied, resetting
     // the flight state the #317 terminal-LANDED lockout exists to protect.
+    // #1147 items 8/9: this list is the twin of the out computer's, which now
+    // lives in its inflight_refusal_policy.h (refusedInflight). Kept inline
+    // here because the mini is a standalone project that shares no policy
+    // headers with out_computer — if you change one list, change both.
     if (((cmd == 1 || cmd == 5 || cmd == 6 || cmd == 23 || cmd == 28 ||
           cmd == 35 || cmd == 36) &&
          latest_rocket_state == INFLIGHT) ||
@@ -3974,10 +3978,21 @@ static void comms_loop()
         // a fresh if, as in the OC; the code sets are disjoint).
         if (ble_cmd == 5)
         {
+            // Covered by no finding, found while fixing #1147 items 8/9:
+            // #1130 added 5 and 6 to the LoRa refusal list because a sim START
+            // delivered during a real flight resets the flight state the #317
+            // terminal LANDED lockout exists to protect. The BLE twins had no
+            // state gate at all.
+            const bool sim_refused_inflight = (latest_rocket_state == INFLIGHT);
+            if (sim_refused_inflight)
+            {
+                uplink_inflight_refusals++;
+                ESP_LOGW("BLE", "Simulation config refused: rocket is INFLIGHT (#1130)");
+            }
             // Configure simulation: [mass_g:4][thrust_n:4][burn_s:4][descent_rate_mps:4]
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
-            if (plen >= 12)
+            if (!sim_refused_inflight && plen >= 12)
             {
                 SimConfigData sim_cfg;
                 float mass_g;
@@ -3999,8 +4014,21 @@ static void comms_loop()
         }
         else if (ble_cmd == 6)
         {
-            mini_link::sendCommand(SIM_START_CMD, nullptr, 0);
-            ESP_LOGI("OC", "SIM Start queued for flight side");
+            // Covered by no finding, found while fixing #1147 items 8/9:
+            // #1130 added 5 and 6 to the LoRa refusal list because a sim START
+            // delivered during a real flight resets the flight state the #317
+            // terminal LANDED lockout exists to protect. The BLE twins had no
+            // state gate at all.
+            if (latest_rocket_state == INFLIGHT)
+            {
+                uplink_inflight_refusals++;
+                ESP_LOGW("BLE", "Simulation start refused: rocket is INFLIGHT (#1130)");
+            }
+            else
+            {
+                mini_link::sendCommand(SIM_START_CMD, nullptr, 0);
+                ESP_LOGI("OC", "SIM Start queued for flight side");
+            }
         }
         else if (ble_cmd == 7)
         {
@@ -4275,6 +4303,14 @@ static void comms_loop()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro continuity test: invalid channel %u", ch);
+            } else if (latest_rocket_state == INFLIGHT) {
+                // #1147 item 9: the LoRa twin refuses this while INFLIGHT; the
+                // BLE half never inherited the rule. Single MCU, so
+                // latest_rocket_state is this board's OWN live state and a
+                // plain test is the whole gate — no #1162-style silent-FC bound
+                // is meaningful here.
+                ble_app.sendPyroTestRefusal(35, ch, 2 /* rocket INFLIGHT */);
+                ESP_LOGW("BLE", "Pyro continuity test CH%u refused: rocket is INFLIGHT (#1147)", ch);
             } else if (!mini_link::commandShutterOpen()) {
                 // Shutter closed (rail off / power transition): sendCommand
                 // would drop this silently — unlike the OC's queue the mini
@@ -4296,6 +4332,14 @@ static void comms_loop()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro test fire: invalid channel %u", ch);
+            } else if (latest_rocket_state == INFLIGHT) {
+                // #1147 item 9: the LoRa twin refuses this while INFLIGHT; the
+                // BLE half never inherited the rule. Single MCU, so
+                // latest_rocket_state is this board's OWN live state and a
+                // plain test is the whole gate — no #1162-style silent-FC bound
+                // is meaningful here.
+                ble_app.sendPyroTestRefusal(36, ch, 2 /* rocket INFLIGHT */);
+                ESP_LOGW("BLE", "Pyro test fire CH%u refused: rocket is INFLIGHT (#1147)", ch);
             } else if (!mini_link::commandShutterOpen()) {
                 // Shutter closed: same 0xCE refusal as the continuity branch
                 // above (and as the OC) so the app's abort flow works

@@ -92,3 +92,59 @@ TEST(InflightRefusalPolicy, ReleaseAndRemainingAgree) {
         EXPECT_EQ(refuse(true, false, age), holdRemainingMs(age) > 0) << age;
     }
 }
+
+// ---------------------------------------------------------------------------
+// #1147 items 8 and 9 — WHICH commands the INFLIGHT rule covers.
+//
+// The #383 rule was written into processUplinkCommand's refusal list and never
+// applied to the BLE half, so the same command was refused over LoRa and
+// accepted over Bluetooth. The list has already been extended once (#1130 added
+// 5 and 6) with only the LoRa site moving, which is the drift this predicate
+// exists to stop.
+// ---------------------------------------------------------------------------
+
+TEST(InflightRefusedSet, CoversEveryCommandOnTheRule) {
+    for (uint8_t cmd : {1, 5, 6, 23, 28, 35, 36}) {
+        EXPECT_TRUE(InflightRefusalPolicy::refusedInflight(cmd))
+            << "cmd " << (int)cmd << " is on the INFLIGHT rule and must be refused";
+    }
+}
+
+TEST(InflightRefusedSet, LeavesEverythingElseAlone) {
+    // A sample across the id space, including neighbours of the refused ids so
+    // an off-by-one in a future edit shows up here.
+    for (uint8_t cmd : {0, 2, 3, 4, 7, 8, 14, 22, 24, 27, 29, 34, 37, 45, 67, 70}) {
+        EXPECT_FALSE(InflightRefusalPolicy::refusedInflight(cmd))
+            << "cmd " << (int)cmd << " must not be blanket-refused";
+    }
+}
+
+TEST(InflightRefusedSet, SimCommandsAreOnTheRule) {
+    // #1130's reason, pinned: a sim START delivered during a real flight resets
+    // the flight state that the #317 terminal-LANDED lockout exists to protect.
+    EXPECT_TRUE(InflightRefusalPolicy::refusedInflight(5));
+    EXPECT_TRUE(InflightRefusalPolicy::refusedInflight(6));
+}
+
+TEST(InflightRefusedSet, PyroTestsAreOnTheRule) {
+    EXPECT_TRUE(InflightRefusalPolicy::refusedInflight(35));
+    EXPECT_TRUE(InflightRefusalPolicy::refusedInflight(36));
+}
+
+TEST(InflightRefusedSet, TwentyEightIsMembershipNotAnInstruction) {
+    // 28 (guidance target) IS on the rule and the LoRa path refuses it. The BLE
+    // path deliberately does not: its rejection is echoed to the app via
+    // guid_target, which is feedback the LoRa path cannot give. This test pins
+    // that 28 is a member, so a future sweep reading the predicate does not
+    // "discover" the BLE exemption and remove it as a bug.
+    EXPECT_TRUE(InflightRefusalPolicy::refusedInflight(28));
+}
+
+TEST(InflightRefusedSet, MembershipIsIndependentOfTheHoldDecision) {
+    // Two orthogonal questions: IS this command on the rule, and DOES the rule
+    // currently bind. Composing them is the caller's job.
+    EXPECT_TRUE(InflightRefusalPolicy::refusedInflight(36));
+    EXPECT_FALSE(InflightRefusalPolicy::refuse(/*state_inflight=*/false,
+                                               /*fc_frame_fresh=*/true, 0));
+    EXPECT_TRUE(InflightRefusalPolicy::refuse(true, true, 0));
+}

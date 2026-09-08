@@ -215,8 +215,8 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 1 |  | Camera: payload[0] = desired state (1 = on, 0 = off), same semantics as the LoRa uplink (processUplinkCommand… |
 | 2 |  | Send file list with pagination (5 files per page). Encoder lives in wire_format:: and is byte-tested against… |
 | 3 |  | Delete file, then return the refreshed page-0 listing |
-| 5 |  | Configure simulation: [mass_g:4][thrust_n:4][burn_s:4][descent_rate_mps:4] |
-| 6 |  |  |
+| 5 |  | Found while fixing #1147 items 8/9, covered by no finding: #1130 added 5 and 6 to the LoRa refusal list… |
+| 6 |  | Found while fixing #1147 items 8/9, covered by no finding: #1130 added 5 and 6 to the LoRa refusal list… |
 | 7 |  |  |
 | 8 |  | Power rail: payload[0] = desired state (1 = on, 0 = off), same semantics as cmds 1/23. A blind toggle inverts… |
 | 9 |  | Phone time sync: [year_lo][year_hi][month][day][hour][minute][second] |
@@ -266,8 +266,8 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 68 | `LORA_CMD_SET_TX_DISABLED` | "LoRa off": [disabled:1] — 1 mutes every LoRa transmit, 0 resumes. Same constant (and therefore the same… |
 | 69 |  | #1176 step 6 — the operator's manual end of a restored flight. BLE ONLY, by decision: this number is… |
 
-> 10 of these have no comment in the dispatch and so no
-> description here: 6, 7, 15, 16, 21, 51, 52, 53, 54, 57. Adding a comment to the branch
+> 9 of these have no comment in the dispatch and so no
+> description here: 7, 15, 16, 21, 51, 52, 53, 54, 57. Adding a comment to the branch
 > fills this table in.
 
 ### app to Base Station
