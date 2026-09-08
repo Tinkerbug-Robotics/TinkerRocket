@@ -53,13 +53,19 @@ struct OcCmdDedup
     uint8_t last_processed_cmd = 0;  // executed this serving window (0 = none)
     uint8_t retry_cmd = 0;           // the command the retry budget belongs to
     uint8_t retries   = 0;           // armRetry() calls granted for retry_cmd
+    // #1137 item 4: the OC's serving-window epoch this key belongs to (0 = the
+    // OC does not send one).  See take().
+    uint8_t last_epoch = 0;
 
     // Call once per loop pass. `polled` says whether this pass ran the OC
     // poll block — the mirror may or may not have been refreshed by it (a
     // failed read leaves it stale, which is fine: the OC serves the same
     // command for the whole window). `pending` is the mirrored command byte.
     // Returns the command to dispatch on this pass, or 0.
-    uint8_t take(bool polled, uint8_t pending)
+    /// `epoch` is the OC's serving-window number from status payload byte 2
+    /// (#1137 item 4), or 0 when the OC does not send one -- an older OC
+    /// build, or the idle poll itself.
+    uint8_t take(bool polled, uint8_t pending, uint8_t epoch = 0)
     {
         if (!polled)
         {
@@ -68,13 +74,29 @@ struct OcCmdDedup
         if (pending == 0)
         {
             last_processed_cmd = 0;   // the OC cleared its slot: window done
+            last_epoch = 0;
             retry_cmd = 0;
             retries   = 0;
             return 0;
         }
-        if (pending == last_processed_cmd)
+
+        // #1137 item 4: a repeat delivery is one from the SAME serving window,
+        // and the epoch is what names the window.  Dedup used to key on the
+        // command id alone, which meant the single idle (cmd=0) poll between
+        // two windows was the only thing separating them -- while the command
+        // itself was delivered three times.  One lost read of that poll and
+        // the next command was discarded as a duplicate whenever it happened
+        // to carry the same id.
+        //
+        // With an epoch the idle poll stops being load bearing.  Without one
+        // (an OC that predates this) the old rule still applies, so a mixed
+        // pair of firmwares behaves exactly as it did before.
+        const bool repeat = (epoch != 0)
+            ? (epoch == last_epoch && last_processed_cmd != 0)
+            : (pending == last_processed_cmd);
+        if (repeat)
         {
-            return 0;   // a repeat delivery of the command already executed
+            return 0;
         }
         if (pending != retry_cmd)
         {
@@ -82,6 +104,7 @@ struct OcCmdDedup
             retries   = 0;
         }
         last_processed_cmd = pending;
+        last_epoch         = epoch;
         return pending;
     }
 
