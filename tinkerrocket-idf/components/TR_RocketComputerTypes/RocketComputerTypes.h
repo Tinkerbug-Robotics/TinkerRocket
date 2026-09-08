@@ -3488,6 +3488,38 @@ static_assert(sizeof(LoRaChannelSetSelection) == 1 + LORA_SKIP_MASK_MAX_BYTES,
 
 static constexpr size_t SIZE_OF_LORA_FAST       = sizeof(LoRaFastData);
 static constexpr size_t SIZE_OF_LORA_SLOW       = sizeof(LoRaSlowData);
+
+// How many NUL pad bytes a name beacon needs so its length cannot be mistaken
+// for a telemetry frame (#1147 item 4).
+//
+// The beacon is [0xBE][network_id][rocket_id][unit_name...] with no length
+// field, and the base station tells beacons from telemetry PURELY by length:
+// `rx_len >= 3 && rx_len != SIZE_OF_LORA_FAST && rx_len != SIZE_OF_LORA_SLOW
+// && rx_buf[0] == LORA_BEACON_SYNC`.  SIZE_OF_LORA_SLOW is 22, so a
+// 19-character rocket name produced exactly 22 bytes and fell through to the
+// telemetry branch, where ver_type is read from unit_name[2] and almost never
+// matches LORA_PROTO_VERSION -- so the beacon was counted as a version
+// mismatch and logged as "rocket and base station flashed from different
+// builds".  A rocket whose owner named it with 19 characters simply never
+// appeared in the base station's rocket list.
+//
+// Padding with NUL rather than changing the framing keeps every base station
+// already in the field working: the BS copies rx_len - 3 bytes into a buffer
+// and NUL-terminates, so an embedded NUL just ends the C string one byte
+// early -- the name it displays is unchanged.
+//
+// Loops rather than returning a flat 1 so that a future frame size landing on
+// beacon_len + 1 cannot silently reintroduce the collision.
+static inline size_t loraBeaconPadBytes(size_t beacon_len)
+{
+    size_t pad = 0;
+    while ((beacon_len + pad) == SIZE_OF_LORA_FAST ||
+           (beacon_len + pad) == SIZE_OF_LORA_SLOW)
+    {
+        pad++;
+    }
+    return pad;
+}
 // Airtime, dwell and the BS's RX reserve must all be budgeted against the
 // LARGER frame, or a schedule sized on the slow one under-counts the fast one
 // and walks into the occupancy limit. There is exactly one right answer here,

@@ -5142,9 +5142,24 @@ static void sendLoRaBeacon()
     if (name_len > sizeof(beacon) - 3) name_len = sizeof(beacon) - 3;
     memcpy(&beacon[3], unit_name, name_len);
 
+    // #1147 item 4: the base station tells a beacon from telemetry purely by
+    // LENGTH, so a 19-character name made the beacon exactly SIZE_OF_LORA_SLOW
+    // (22 B) and it was parsed as a SLOW frame, failed the protocol-version
+    // check on unit_name[2], and was logged as a firmware mismatch.  A rocket
+    // named with 19 characters never appeared in the BS's list at all.  Pad
+    // with NUL past any colliding length: the BS copies rx_len - 3 bytes and
+    // NUL-terminates, so the embedded NUL just ends the string early and every
+    // base station already in the field reads the same name it always did.
+    size_t beacon_len = 3 + name_len;
+    const size_t pad = loraBeaconPadBytes(beacon_len);
+    for (size_t i = 0; i < pad && beacon_len < sizeof(beacon); ++i)
+    {
+        beacon[beacon_len++] = 0;
+    }
+
     last_beacon_ms = now_ms;
     lora_in_rx_mode = false;
-    lora_comms.send(beacon, 3 + name_len);
+    lora_comms.send(beacon, beacon_len);
 }
 
 // ==========================================================================
@@ -6649,8 +6664,21 @@ static void printLoRaPayloadDebug()
         return;
     }
 
-    // Always FAST here: the debug dump wants the position/attitude picture,
-    // and a SLOW frame would leave most of the printed fields at zero.
+    // #1147 item 6: BOTH frames, into the same struct.
+    //
+    // This used to build only a FAST frame, with a comment claiming "a SLOW
+    // frame would leave most of the printed fields at zero".  It was exactly
+    // backwards.  Since the #850 two-frame split, max_alt, max_speed, voltage,
+    // current and soc live ONLY in LoRaSlowData, and unpackLoRaFast
+    // deliberately does not touch fields it does not carry (the base station
+    // depends on that for its forward-fill accumulator).  With a
+    // zero-initialised struct and no accumulator here, those five printed as
+    // hard zeros on every stats line regardless of the real values — a
+    // diagnostic that quietly lied about the battery.
+    //
+    // The unpackers being additive is precisely what makes this work: FAST
+    // first for the position/attitude picture, then SLOW over the top for the
+    // fields it owns.
     uint8_t payload[SIZE_OF_LORA_BUDGET] = {0};
     size_t  payload_len = 0;
     if (!buildLoRaPayload(payload, lora_tx_seq, LORA_FRAME_FAST, payload_len))
@@ -6660,6 +6688,13 @@ static void printLoRaPayloadDebug()
 
     LoRaDataSI decoded = {};
     sensor_converter.unpackLoRaFastBytes(payload, decoded);
+
+    uint8_t slow_payload[SIZE_OF_LORA_BUDGET] = {0};
+    size_t  slow_len = 0;
+    if (buildLoRaPayload(slow_payload, lora_tx_seq, LORA_FRAME_SLOW, slow_len))
+    {
+        sensor_converter.unpackLoRaSlowBytes(slow_payload, decoded);
+    }
     ESP_LOGI("LORA", "LoRa tx sats/pdop=%u/%.1f | ecef(m)=%.0f,%.0f,%.0f | alt/rate/max/mspd=%.1f/%.1f/%.1f/%.1f",
                   (unsigned)decoded.num_sats,
                   (double)decoded.pdop,
