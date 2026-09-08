@@ -1268,6 +1268,10 @@ static bool    cfg_servo_enabled = true;
 // #1149 item 2: BMP samples rejected by the shared pressure band. Mirrors the
 // FC's dbg_bmp_bad_reads so a link or sensor fault is countable at both ends.
 static uint32_t oc_bmp_bad_reads = 0;
+// #1147 items 8/9: BLE commands refused because the rocket is INFLIGHT. The
+// LoRa path has counted these since #383 (uplink_inflight_refusals); the BLE
+// path had no refusals to count.
+static uint32_t ble_inflight_refusals = 0;
 static bool    cfg_gain_sched   = true;
 static bool    cfg_use_angle_ctrl = false;
 static uint16_t cfg_roll_delay_ms  = 0;
@@ -5525,8 +5529,10 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     // the FC's first post-landing poll, where it resets the flight state — the
     // #317 terminal-LANDED lockout is exactly what that must not do. cmd 7's
     // own stray-stop case is handled by simStopIsStrayInflight() (#1113).
-    if (((cmd == 1 || cmd == 5 || cmd == 6 || cmd == 23 || cmd == 28 ||
-          cmd == 35 || cmd == 36) &&
+    // #1147 items 8/9: membership now lives in InflightRefusalPolicy so the BLE
+    // dispatch applies the SAME list. It was extended once already (#1130 added
+    // 5 and 6) and only this site moved.
+    if ((InflightRefusalPolicy::refusedInflight(cmd) &&
          latest_rocket_state == INFLIGHT) ||
         (cmd == 7 && simStopIsStrayInflight()))
     {
@@ -9380,7 +9386,22 @@ static void loop_oc()
             const size_t   plen    = ble_app.getCommandPayloadLength();
             const bool want_on = (plen >= 1) ? (payload[0] != 0)
                                              : !camera_recording_requested;
-            if (want_on != camera_recording_requested || !camera_state_known)
+            // #1147 item 8: the LoRa twin refuses cmd 1 while INFLIGHT; the BLE
+            // half accepted it, flipped the reported state immediately, and
+            // queued a command the FC cannot receive until after landing —
+            // where a CAMERA_START then powers the camera on with NO STOP
+            // ARMED, because the FC's cameraStop() early-returns on
+            // !camera_recording so the LANDED auto-stop never schedules one.
+            // The flag mutation is deliberately skipped too: leaving it alone
+            // makes the app's toggle correct again on the next telemetry
+            // frame, since iOS renders telemetry.camera_recording directly.
+            if (inflightHold().refuse)
+            {
+                ble_inflight_refusals++;
+                ESP_LOGW("BLE", "Camera command refused: rocket is INFLIGHT "
+                                "(the FC cannot receive it until landing) (#1147)");
+            }
+            else if (want_on != camera_recording_requested || !camera_state_known)
             {
                 // #825: after a boot rail restore the flag is a guess (our
                 // reset zeroed it; the FC kept running) — forward the first
@@ -9826,10 +9847,21 @@ static void loop_oc()
         // Flight simulator commands — relay to FlightComputer via I2C
         if (ble_cmd == 5)
         {
+            // Found while fixing #1147 items 8/9, covered by no finding: #1130
+            // added 5 and 6 to the LoRa refusal list because a sim START
+            // delivered post-landing resets the flight state the #317 terminal
+            // LANDED lockout exists to protect — and the BLE twins had no
+            // state gate at all. Same rule, same bounded hold.
+            const bool sim_refused_inflight = inflightHold().refuse;
+            if (sim_refused_inflight)
+            {
+                ble_inflight_refusals++;
+                ESP_LOGW("BLE", "Simulation config refused: rocket is INFLIGHT (#1130)");
+            }
             // Configure simulation: [mass_g:4][thrust_n:4][burn_s:4][descent_rate_mps:4]
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
-            if (plen >= 12)
+            if (!sim_refused_inflight && plen >= 12)
             {
                 SimConfigData sim_cfg;
                 float mass_g;
@@ -9849,8 +9881,22 @@ static void loop_oc()
         }
         else if (ble_cmd == 6)
         {
-            setPendingCommand(SIM_START_CMD);
-            ESP_LOGI("OC", "SIM Start queued for FlightComputer");
+            // Found while fixing #1147 items 8/9, covered by no finding: #1130
+            // added 5 and 6 to the LoRa refusal list because a sim START
+            // delivered post-landing resets the flight state the #317 terminal
+            // LANDED lockout exists to protect — and the BLE twins had no
+            // state gate at all. Same rule, same bounded hold.
+            const bool sim_refused_inflight = inflightHold().refuse;
+            if (sim_refused_inflight)
+            {
+                ble_inflight_refusals++;
+                ESP_LOGW("BLE", "Simulation start refused: rocket is INFLIGHT (#1130)");
+            }
+            else
+            {
+                setPendingCommand(SIM_START_CMD);
+                ESP_LOGI("OC", "SIM Start queued for FlightComputer");
+            }
         }
         else if (ble_cmd == 7)
         {
@@ -10576,6 +10622,16 @@ static void loop_oc()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro continuity test: invalid channel %u", ch);
+            } else if (inflightHold().refuse) {
+                // #1147 item 9: the LoRa twin of this command refuses while
+                // INFLIGHT; the BLE half never inherited the rule. Reachable
+                // even though both shipped apps hide the buttons in flight —
+                // via the command ring drained after the state flipped, an
+                // older or third-party app, or a stale telemetry state.
+                // Uses #1162's BOUNDED hold, not a raw INFLIGHT test, so a
+                // silent FC still releases once no flight could remain.
+                ble_app.sendPyroTestRefusal(35, ch, 2 /* rocket INFLIGHT */);
+                ESP_LOGW("BLE", "Pyro continuity test CH%u refused: rocket is INFLIGHT (#1147)", ch);
             } else if (!pwr_pin_on) {
                 // Rail off: the FC queue would HOLD this and deliver the
                 // momentary ARM pulse at the next power-on (see the queue
@@ -10596,6 +10652,16 @@ static void loop_oc()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro test fire: invalid channel %u", ch);
+            } else if (inflightHold().refuse) {
+                // #1147 item 9: the LoRa twin of this command refuses while
+                // INFLIGHT; the BLE half never inherited the rule. Reachable
+                // even though both shipped apps hide the buttons in flight —
+                // via the command ring drained after the state flipped, an
+                // older or third-party app, or a stale telemetry state.
+                // Uses #1162's BOUNDED hold, not a raw INFLIGHT test, so a
+                // silent FC still releases once no flight could remain.
+                ble_app.sendPyroTestRefusal(36, ch, 2 /* rocket INFLIGHT */);
+                ESP_LOGW("BLE", "Pyro test fire CH%u refused: rocket is INFLIGHT (#1147)", ch);
             } else if (!pwr_pin_on) {
                 // Rail off: the FC queue would HOLD this and FIRE the channel
                 // at the next power-on — a latent fire delivered while someone
