@@ -1847,9 +1847,14 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
     // don't change mid-flight or mid-cal.
     else if (cmd.type == MAG_CAL_APPLY_MSG)
     {
-        if (rocket_state != READY)
+        // #1138 item 4 (mirrors the FC): the stated hazard is "mid-flight or
+        // mid-cal", which is exactly isCommandLockoutState.  Requiring READY
+        // also refused PRELAUNCH — the automatic outdoor ground state that
+        // MAG_CAL_START admits on purpose, so the push was refused in the one
+        // state a field cal actually happens in.
+        if (isCommandLockoutState(rocket_state) || post_flight_lockout)
         {
-            ESP_LOGW(TAG, "[MAGCAL] apply refused: state=%u (require READY)",
+            ESP_LOGW(TAG, "[MAGCAL] apply refused: state=%u (INFLIGHT/MAG_CALIBRATION, or post-flight)",
                      (unsigned)rocket_state);
         }
         else if (cmd.len >= sizeof(MagCalApplyData))
@@ -1900,9 +1905,14 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
     // NVS and applies it.  Gated to READY like the pad cal.
     else if (cmd.type == SENSOR_CAL_APPLY_MSG)
     {
-        if (rocket_state != READY)
+        // #1138 item 4 (mirrors the FC): the stated hazard is "mid-flight or
+        // mid-cal", which is exactly isCommandLockoutState.  Requiring READY
+        // also refused PRELAUNCH — the automatic outdoor ground state that
+        // MAG_CAL_START admits on purpose, so the push was refused in the one
+        // state a field cal actually happens in.
+        if (isCommandLockoutState(rocket_state) || post_flight_lockout)
         {
-            ESP_LOGW(TAG, "[SENSORCAL] apply refused: state=%u (require READY)",
+            ESP_LOGW(TAG, "[SENSORCAL] apply refused: state=%u (INFLIGHT/MAG_CALIBRATION, or post-flight)",
                      (unsigned)rocket_state);
         }
         else if (cmd.len >= sizeof(SensorCalApplyData))

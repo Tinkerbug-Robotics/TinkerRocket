@@ -5480,7 +5480,14 @@ static void loop_fc()
     // OFFSET regs and let the calibrator's own state machine flip
     // back to REVIEW with reject_code = MAG_CAL_REJECT_VERIFY_FAILED
     // so iOS surfaces the right error.
-    if (mag_cal_verify_active)
+    // #1138 item 2: and only while we are still IN the calibration.  This
+    // ran at loop top level with no state term, so a MAG_CAL_ACCEPT that
+    // armed the 60 s verify window followed by anything that moved the state
+    // (a sim start, which resets to READY without clearing the window) left a
+    // timer armed that would later force-write rocket_state = READY — from
+    // INFLIGHT, if the window was still open. The two BLE handlers for this
+    // same window are already guarded exactly this way.
+    if (mag_cal_verify_active && rocket_state == MAG_CALIBRATION)
     {
         const int64_t now = esp_timer_get_time();
         if (mag_cal_verify_eval_now ||
@@ -6845,6 +6852,22 @@ static void loop_fc()
 
                     ESP_LOGI(TAG, "[MAGCAL] start: entering MAG_CALIBRATION (from state=%u)",
                              (unsigned)rocket_state);
+                    // #1138 item 3: the test-mode chain runs AHEAD of the
+                    // flight state machine, so a ground/servo test left active
+                    // keeps calling setServoAngles() every pass and the
+                    // MAG_CALIBRATION case never gets to hold the fins still.
+                    // The gate is one-directional — GROUND_TEST_START refuses
+                    // MAG_CALIBRATION via isCommandLockoutState, but
+                    // MAG_CAL_START only refused INFLIGHT/LANDED — so the
+                    // operator can enter cal from a live ground test and the
+                    // stow below is overwritten on the very next tick, while
+                    // the tumble is sampled against moving fins.  Force them
+                    // off the same way the #363 failsafe does.
+                    ground_test_active  = false;
+                    servo_test_active   = false;
+                    servo_replay_active = false;
+                    roll_rate_pid_standalone.reset();
+
                     rocket_state = MAG_CALIBRATION;
                     mag_calibrator.start();
                     // #1118: stamp the session so it has a way out that does
@@ -7112,13 +7135,24 @@ static void loop_fc()
             // Issue #132 — app pushes a saved cal from the active rocket profile
             // back into FC NVS.  Bypasses the sampling / sphere-fit flow entirely
             // but writes the same NVS keys as MAG_CAL_ACCEPT so the boot-time
-            // load path is identical.  Gated to READY (same as MAG_CAL_START) so
-            // the IIS2MDC OFFSET registers don't change mid-flight or mid-cal.
+            // load path is identical.  #1138 item 4: refused only where the
+            // stated hazard actually is — mid-flight or mid-cal, i.e.
+            // isCommandLockoutState — plus post-flight.  It used to require
+            // READY, which was NOT "same as MAG_CAL_START" (that admits READY,
+            // PRELAUNCH and MAG_CALIBRATION) and refused the profile push in
+            // PRELAUNCH, the state a field cal is actually done in.
             else if (out_pending_command == MAG_CAL_APPLY_PENDING)
             {
-                if (rocket_state != READY)
+                // #1138 item 4: the stated hazard is "mid-flight or mid-cal",
+                // which is exactly isCommandLockoutState.  Requiring READY
+                // also refused PRELAUNCH — the automatic outdoor ground state
+                // (4 sats + 3 s, no operator action), which MAG_CAL_START
+                // itself admits on purpose because refusing it "would refuse
+                // mag cal in the field essentially always".  So the push was
+                // refused in the one state a field cal actually happens in.
+                if (isCommandLockoutState(rocket_state) || post_flight_lockout)
                 {
-                    ESP_LOGW(TAG, "[MAGCAL] apply refused: state=%u (require READY)",
+                    ESP_LOGW(TAG, "[MAGCAL] apply refused: state=%u (INFLIGHT/MAG_CALIBRATION, or post-flight)",
                              (unsigned)rocket_state);
                 }
                 else
@@ -7178,9 +7212,16 @@ static void loop_fc()
             // into NVS and applies it.  Gated to READY like the pad cal.
             else if (out_pending_command == SENSOR_CAL_APPLY_PENDING)
             {
-                if (rocket_state != READY)
+                // #1138 item 4: the stated hazard is "mid-flight or mid-cal",
+                // which is exactly isCommandLockoutState.  Requiring READY
+                // also refused PRELAUNCH — the automatic outdoor ground state
+                // (4 sats + 3 s, no operator action), which MAG_CAL_START
+                // itself admits on purpose because refusing it "would refuse
+                // mag cal in the field essentially always".  So the push was
+                // refused in the one state a field cal actually happens in.
+                if (isCommandLockoutState(rocket_state) || post_flight_lockout)
                 {
-                    ESP_LOGW(TAG, "[SENSORCAL] apply refused: state=%u (require READY)",
+                    ESP_LOGW(TAG, "[SENSORCAL] apply refused: state=%u (INFLIGHT/MAG_CALIBRATION, or post-flight)",
                              (unsigned)rocket_state);
                 }
                 else
