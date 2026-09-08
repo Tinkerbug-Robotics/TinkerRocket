@@ -310,8 +310,9 @@ static BMP585DataSI bmp_latest_si = {};
 // real flight pressure; because they're finite bounds, the same comparison also
 // rejects NaN and +/-Inf (which fail every finite compare).  Downstream trust
 // gates (kinematics/scorecard) use a tighter 25-125 kPa window.
-static constexpr float BMP_PRESSURE_MIN_PA = 1000.0f;
-static constexpr float BMP_PRESSURE_MAX_PA = 120000.0f;
+// #1149 item 2: BMP_PRESSURE_MIN_PA / MAX_PA now live in
+// RocketComputerTypes.h so the flight computer and the out computer
+// cannot drift apart on what a trustworthy sample is.
 static MMC5983MADataSI mmc_latest_si = {};
 static GNSSDataSI gnss_latest_si = {};
 static bool have_ism6_si = false;

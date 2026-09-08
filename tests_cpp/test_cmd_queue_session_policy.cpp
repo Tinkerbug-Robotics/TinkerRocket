@@ -181,3 +181,108 @@ TEST(CmdQueueSessionPolicy, RecordCapIsHonouredButTheCountIsNot)
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// #1149 item 1 — priority commands must stay FIFO among THEMSELVES.
+//
+// PYRO_CONT_TEST / PYRO_FIRE_TEST jump the queue so they precede the app's
+// ~13-command profile sync. The old insert did an unconditional push-front,
+// which made them a STACK: two tests enqueued before the first was served were
+// delivered newest-first, reversing the operator's channel order and letting a
+// FIRE overtake a CONT test they tapped earlier. Since #837 item 11 the dedupe
+// key includes the channel byte, so per-channel tests each take a slot instead
+// of collapsing into one — which is what made the reversal reachable.
+//
+// This models the ring arithmetic the OC uses, so the wrap cases are covered.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr size_t kFrontDepth = 20;
+
+struct MiniEntry { uint8_t cmd = 0; uint8_t tag = 0; };
+
+struct MiniQueue {
+    MiniEntry ring[kFrontDepth];
+    size_t head = 0;
+    size_t count = 0;
+
+    void push(uint8_t cmd, uint8_t tag) {
+        MiniEntry e{cmd, tag};
+        if (cmdIsFrontPriority(cmd)) {
+            size_t front_run = 0;
+            while (front_run < count && cmdIsFrontPriority(ring[(head + front_run) % kFrontDepth].cmd)) {
+                front_run++;
+            }
+            for (size_t i = count; i > front_run; --i) {
+                ring[(head + i) % kFrontDepth] = ring[(head + i - 1) % kFrontDepth];
+            }
+            ring[(head + front_run) % kFrontDepth] = e;
+        } else {
+            ring[(head + count) % kFrontDepth] = e;
+        }
+        count++;
+    }
+    MiniEntry pop() {
+        MiniEntry e = ring[head];
+        head = (head + 1) % kFrontDepth;
+        count--;
+        return e;
+    }
+};
+
+}  // namespace
+
+TEST(CmdQueueFrontOrder, PriorityCommandsKeepTheOperatorsOrder) {
+    MiniQueue q;
+    q.push(PYRO_CONT_TEST, 1);   // operator taps channel 1 first
+    q.push(PYRO_CONT_TEST, 2);
+    q.push(PYRO_CONT_TEST, 3);
+    EXPECT_EQ(q.pop().tag, 1) << "the first tap must be delivered first";
+    EXPECT_EQ(q.pop().tag, 2);
+    EXPECT_EQ(q.pop().tag, 3);
+}
+
+TEST(CmdQueueFrontOrder, AFireDoesNotOvertakeAnEarlierContTest) {
+    MiniQueue q;
+    q.push(PYRO_CONT_TEST, 10);
+    q.push(PYRO_FIRE_TEST, 11);
+    EXPECT_EQ(q.pop().cmd, PYRO_CONT_TEST);
+    EXPECT_EQ(q.pop().cmd, PYRO_FIRE_TEST);
+}
+
+TEST(CmdQueueFrontOrder, PriorityStillPrecedesTheProfileSync) {
+    MiniQueue q;
+    for (uint8_t i = 0; i < 5; ++i) q.push(0x40 + i, i);   // ordinary sync burst
+    q.push(PYRO_CONT_TEST, 99);
+    EXPECT_EQ(q.pop().tag, 99) << "a priority command must still jump the queue";
+    EXPECT_EQ(q.pop().tag, 0)  << "and the sync burst must keep its own order";
+    EXPECT_EQ(q.pop().tag, 1);
+}
+
+TEST(CmdQueueFrontOrder, OrdinaryCommandsAreUntouchedByAFrontInsert) {
+    MiniQueue q;
+    for (uint8_t i = 0; i < 6; ++i) q.push(0x50 + i, i);
+    q.push(PYRO_FIRE_TEST, 200);
+    (void)q.pop();                       // the priority one
+    for (uint8_t i = 0; i < 6; ++i) {
+        EXPECT_EQ(q.pop().tag, i) << "the shift corrupted the ordinary tail at " << (int)i;
+    }
+}
+
+TEST(CmdQueueFrontOrder, SurvivesRingWrap) {
+    MiniQueue q;
+    // Drive head deep into the ring so the insert and the shift both wrap.
+    for (uint8_t i = 0; i < 18; ++i) q.push(0x60, i);
+    for (uint8_t i = 0; i < 18; ++i) (void)q.pop();
+    ASSERT_EQ(q.count, 0u);
+
+    q.push(0x61, 1);
+    q.push(0x61, 2);
+    q.push(PYRO_CONT_TEST, 7);
+    q.push(PYRO_CONT_TEST, 8);
+    EXPECT_EQ(q.pop().tag, 7);
+    EXPECT_EQ(q.pop().tag, 8);
+    EXPECT_EQ(q.pop().tag, 1);
+    EXPECT_EQ(q.pop().tag, 2);
+}

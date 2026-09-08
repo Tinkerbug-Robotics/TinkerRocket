@@ -1097,6 +1097,23 @@ typedef struct
     float temperature;
 } BMP585DataSI;
 
+// #260 / #1149 item 2: the band a BMP585 pressure sample must fall in to be
+// trusted at all. Wide on purpose — it only has to exclude a dead or
+// SPI-corrupted read, not bound real flight pressure; because the bounds are
+// finite the same comparison also rejects NaN and +/-Inf, which fail every
+// finite compare. Downstream trust gates (kinematics, scorecard) use a tighter
+// 25-125 kPa window.
+//
+// Shared because BOTH ends need it and they drifted: the flight computer
+// range-checked the sample before letting it touch its own altitude math but
+// still transmitted the raw frame, and the out computer's
+// updateDerivedAltitudeFromBMP() gated only on `p <= 0`. One corrupted frame
+// therefore poisoned the OC's ground baseline, pressure_alt and max_alt — the
+// last of which is latched, so it never recovered — and those are what the
+// LoRa builder and the BLE telemetry report.
+static constexpr float BMP_PRESSURE_MIN_PA = 1000.0f;
+static constexpr float BMP_PRESSURE_MAX_PA = 120000.0f;
+
 // --- ISM6HG256 IMU Data ---
 typedef struct __attribute__((packed))
 {
