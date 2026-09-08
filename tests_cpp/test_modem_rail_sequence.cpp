@@ -25,6 +25,17 @@ using modem_rail::Step;
 // The rules are trivial, which is the point: they were violated because nothing
 // wrote them down. UartModemBackend now executes these sequences rather than
 // open-coding an order per call site.
+//
+// #1163: that last sentence was written before it was true. The commit that
+// introduced these sequences converted failClosed() and the link-init failure
+// exit, but left TWO of serviceReattach()'s three exits open-coding
+// `gpio_set_level(act_pin, 0)` — dropping the rail with the UART still
+// attached and, on the probe-deadline path, still transmitting. It is true
+// now: runRailStep() is the only writer of act_pin in UartModemBackend.cpp,
+// which `git grep -n act_pin` will show. That property is checked by
+// inspection rather than here — no tests_cpp target links the backend (it
+// needs driver/gpio.h, driver/uart.h, FreeRTOS and TR_UART_Link), so this file
+// pins the ORDER and the code review pins the call sites.
 
 TEST(ModemRailSequence, PowerDownStopsDrivingBeforeTheRailGoes) {
     EXPECT_EQ(modem_rail::kPowerDownLen, 2u);

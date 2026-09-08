@@ -102,11 +102,13 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
     cfg_cr_ = cr;
     cfg_tx_power_ = tx_power;
 
-    if (cfg.act_pin >= 0)
-    {
-        gpio_set_direction((gpio_num_t)cfg.act_pin, GPIO_MODE_OUTPUT);
-        gpio_set_level((gpio_num_t)cfg.act_pin, 1);  // power the daughterboard
-    }
+    // #1163: through railUp() like every other rail change, so runRailStep()
+    // is the ONLY writer of act_pin in this file and a future reader cannot
+    // find a second, differently-ordered way to move the rail.  The AttachUart
+    // half is a no-op here — attachModemUart() self-guards on link_open_, and
+    // link_.begin() below is what opens the link — which preserves the #700
+    // ordering note that follows.
+    railUp(cfg.act_pin);   // power the daughterboard
     // #700: the rail goes up BEFORE link_.begin() below configures the UART
     // pins, so the host never drives an unpowered module.  Keep that order —
     // every failure path from here parks the pins before dropping the rail.
@@ -623,7 +625,19 @@ void UartModemBackend::serviceReattach(uint32_t now_ms)
                 // is the one failure a power cycle provably cannot fix, and
                 // re-arming here would drop a 22 dBm module in and out every
                 // 60 s for the rest of the flight while logging on every reply.
-                if (cfg_.act_pin >= 0) gpio_set_level((gpio_num_t)cfg_.act_pin, 0);
+                // #1163 item 2: railDown(), not a bare level write.  The UART
+                // is ATTACHED and driving here — Backoff called railUp()
+                // ({RailUp, AttachUart}) and this branch is only reached after
+                // link_.poll() consumed a reply to the MSG_GET_IDENTITY sent
+                // two lines above — so dropping the rail without the
+                // kPowerDown ParkUart step leaves TX driving a module with no
+                // supply.  That is a feed path through the protection diodes
+                // on a resistor-less line, and #700 exists precisely to stop
+                // it.  Worse here than at the deadline exit below: this state
+                // is TERMINAL (Reattach::Off), so the un-parked pins stay that
+                // way for the rest of the session rather than until the next
+                // attempt.
+                railDown(cfg_.act_pin);
                 reattach_state_ = Reattach::Off;
                 ESP_LOGE(TAG, "re-attach: modem answered with an incompatible "
                               "protocol version — radio permanently disabled");
@@ -634,7 +648,15 @@ void UartModemBackend::serviceReattach(uint32_t now_ms)
             {
                 // Unpower again between attempts so the next one is a real power
                 // cycle rather than another poke at a stuck part.
-                if (cfg_.act_pin >= 0) gpio_set_level((gpio_num_t)cfg_.act_pin, 0);
+                //
+                // #1163 item 1: through railDown(), so the pinned kPowerDown
+                // order {ParkUart, RailDown} is honoured.  The open-coded
+                // level write skipped ParkUart while the UART was attached and
+                // actively transmitting, which is the exact hole #700 closed
+                // everywhere else.  parkModemUart() self-guards on link_open_,
+                // and the Backoff case's railUp() re-attaches the pins for the
+                // next attempt, so this is safe to call here.
+                railDown(cfg_.act_pin);
                 armReattach(now_ms);
             }
             return;
