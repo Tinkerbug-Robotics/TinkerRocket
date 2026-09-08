@@ -4423,7 +4423,22 @@ static void setup_fc()
         // #267: apply the physical fin-angle <-> pulse calibration so commanded
         // fin degrees map to real deflection (not the command-clamp span).
         // From NVS if the app has set it, else the config default.
-        servo_control.setFinCalibration(nvs_fin_min_deg, nvs_fin_max_deg);
+        //
+        // #1137 item 2: this used to be the unguarded path.  A degenerate pair
+        // written by an earlier SERVO_CONFIG (the wire handler skipped the
+        // apply but persisted the values anyway) was applied here without a
+        // check, freezing all four fins at the pulse midpoint for the flight.
+        // setFinCalibration() now validates and keeps its previous value, so
+        // the airframe falls back to the built-in default instead.
+        if (!servo_control.setFinCalibration(nvs_fin_min_deg, nvs_fin_max_deg))
+        {
+            ESP_LOGE(TAG, "[SERVO] NVS fin calibration is unusable "
+                          "(min=%.2f max=%.2f) — flying the built-in default "
+                          "%.2f/%.2f. Re-send Fin Travel from the app.",
+                     (double)nvs_fin_min_deg, (double)nvs_fin_max_deg,
+                     (double)servo_control.getFinMinDeg(),
+                     (double)servo_control.getFinMaxDeg());
+        }
         if (nvs_servo_timing_changed)
         {
             servo_control.setServoTiming(nvs_servo_hz, nvs_servo_min, nvs_servo_max);
@@ -6376,11 +6391,29 @@ static void loop_fc()
                     {
                         servo_control.setBias(i, cfg.bias_us[i]);
                     }
+                    // #1137 item 2: decided ONCE, and used for both the apply
+                    // and the persist below.  Previously the apply was skipped
+                    // for a degenerate pair but NVS was written regardless, so
+                    // the value the FC had just refused was the one it restored
+                    // at the next boot — and that restore had no guard at all.
+                    const bool fin_cal_ok = TR_ServoControl::finCalibrationValid(
+                        cfg.fin_min_deg, cfg.fin_max_deg);
+                    if (!fin_cal_ok)
+                    {
+                        ESP_LOGE(TAG, "[SERVO CFG] fin travel REJECTED: min=%.2f "
+                                      "max=%.2f (span must be finite and >= %.1f "
+                                      "deg). Not applied, not saved — the "
+                                      "previous calibration stands.",
+                                 (double)cfg.fin_min_deg, (double)cfg.fin_max_deg,
+                                 (double)TR_ServoControl::kMinFinSpanDeg);
+                    }
                     if (rocket_state != INFLIGHT)
                     {
                         servo_control.setServoTiming(cfg.hz, cfg.min_us, cfg.max_us);
-                        // #267: apply fin-angle calibration (skip a degenerate span)
-                        if (cfg.fin_max_deg != cfg.fin_min_deg)
+                        // #267: apply fin-angle calibration (the setter itself
+                        // refuses a degenerate span; fin_cal_ok is the same
+                        // predicate, asked early so the persist can share it).
+                        if (fin_cal_ok)
                             servo_control.setFinCalibration(cfg.fin_min_deg, cfg.fin_max_deg);
                     }
                     else
@@ -6420,8 +6453,16 @@ static void loop_fc()
                     prefs.putShort("hz", cfg.hz);
                     prefs.putShort("min", cfg.min_us);
                     prefs.putShort("max", cfg.max_us);
-                    prefs.putFloat("fmin", cfg.fin_min_deg);
-                    prefs.putFloat("fmax", cfg.fin_max_deg);
+                    // #1137 item 2: never persist a pair the FC just refused.
+                    // The INFLIGHT-deferred case still writes, deliberately —
+                    // deferring the live apply while letting a VALID config
+                    // take effect at the next boot is the existing contract;
+                    // what was wrong was persisting an INVALID one.
+                    if (fin_cal_ok)
+                    {
+                        prefs.putFloat("fmin", cfg.fin_min_deg);
+                        prefs.putFloat("fmax", cfg.fin_max_deg);
+                    }
                     config_report_dirty = true; log_next_report_send = true;   // #915: biases 2-4 + fin travel
                     prefs.end();
                     ESP_LOGI(TAG, "[SERVO CFG] Saved to NVS");

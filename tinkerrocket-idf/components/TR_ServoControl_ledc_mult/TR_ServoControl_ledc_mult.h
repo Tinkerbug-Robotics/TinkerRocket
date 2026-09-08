@@ -120,7 +120,29 @@ public:
     // at servo_min_us and at servo_max_us.  Decouples the deg->us scale from the
     // command clamp (min_cmd/max_cmd) so a commanded fin angle maps to the pulse
     // that produces that *physical* deflection.
-    void setFinCalibration(float finMinDeg, float finMaxDeg);
+    //
+    // #1137 item 2: VALIDATED here rather than at the call sites.  A degenerate
+    // pair (equal, inverted or non-finite) makes usFromFinDeg() take its
+    // span == 0 escape hatch and return the raw pulse midpoint for every
+    // commanded angle, while setServoAngles() clamps every command to that one
+    // value -- four fins frozen at centre for a whole flight.  The wire path
+    // guarded against it; the NVS boot restore did not, and the wire path
+    // persisted the rejected pair anyway, so a single bad SERVO_CONFIG armed
+    // the next flight.  Guarding the setter covers every caller by
+    // construction.  Returns false and KEEPS the previous calibration on
+    // rejection, so a bad value degrades to the last good one rather than to a
+    // dead airframe.
+    bool setFinCalibration(float finMinDeg, float finMaxDeg);
+
+    // Smallest fin travel that can be a real airframe.  Below this the deg->us
+    // scale is so steep that a 1 deg command saturates the servo, which is
+    // indistinguishable from the frozen-fin failure this rejects.
+    static constexpr float kMinFinSpanDeg = 2.0f;
+
+    /// Pure predicate, exposed so callers can decide whether to PERSIST a pair
+    /// without having to apply it first (the SERVO_CONFIG handler needs exactly
+    /// this, since it writes to NVS even while INFLIGHT defers the apply).
+    static bool finCalibrationValid(float finMinDeg, float finMaxDeg);
     float getFinMinDeg() const { return fin_min_deg_; }
     float getFinMaxDeg() const { return fin_max_deg_; }
 

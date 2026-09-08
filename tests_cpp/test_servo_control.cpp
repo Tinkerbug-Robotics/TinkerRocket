@@ -257,3 +257,89 @@ TEST_F(ServoControlTest, ControlAngleStillWrapsLargeButOrdinaryErrors) {
 }
 
 }  // namespace
+
+// ── #1137 item 2: a degenerate fin calibration must never be stored ──
+//
+// usFromFinDeg() has a `span_deg == 0` escape hatch that returns the raw pulse
+// midpoint, and setServoAngles() clamps every command into [fin_min, fin_max].
+// Store min == max and the two together freeze all four fins at centre for the
+// whole flight while the controller happily computes commands nobody obeys.
+// The wire path used to guard against it and the NVS boot restore did not, so
+// the guard now lives in the setter where both paths pass through.
+
+TEST_F(ServoControlTest, FinCalibration_AcceptsARealAirframe) {
+    EXPECT_TRUE(servo.setFinCalibration(-45.0f, 45.0f));
+    EXPECT_FLOAT_EQ(servo.getFinMinDeg(), -45.0f);
+    EXPECT_FLOAT_EQ(servo.getFinMaxDeg(),  45.0f);
+}
+
+TEST_F(ServoControlTest, FinCalibration_RejectsZeroSpanAndKeepsThePrevious) {
+    ASSERT_TRUE(servo.setFinCalibration(-30.0f, 30.0f));
+    EXPECT_FALSE(servo.setFinCalibration(12.0f, 12.0f));
+    // The previous calibration must survive -- falling back to the last good
+    // value is the whole point; zeroing it would be the failure being fixed.
+    EXPECT_FLOAT_EQ(servo.getFinMinDeg(), -30.0f);
+    EXPECT_FLOAT_EQ(servo.getFinMaxDeg(),  30.0f);
+}
+
+TEST_F(ServoControlTest, FinCalibration_RejectsAnInvertedSpan) {
+    ASSERT_TRUE(servo.setFinCalibration(-30.0f, 30.0f));
+    EXPECT_FALSE(servo.setFinCalibration(30.0f, -30.0f));
+    EXPECT_FLOAT_EQ(servo.getFinMinDeg(), -30.0f);
+}
+
+TEST_F(ServoControlTest, FinCalibration_RejectsNonFiniteValues) {
+    ASSERT_TRUE(servo.setFinCalibration(-30.0f, 30.0f));
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(servo.setFinCalibration(nan, 30.0f));
+    EXPECT_FALSE(servo.setFinCalibration(-30.0f, nan));
+    EXPECT_FALSE(servo.setFinCalibration(-inf, inf));
+    EXPECT_FLOAT_EQ(servo.getFinMinDeg(), -30.0f);
+    EXPECT_FLOAT_EQ(servo.getFinMaxDeg(),  30.0f);
+}
+
+TEST_F(ServoControlTest, FinCalibration_RejectsATooNarrowSpan) {
+    // Just under the floor is refused, exactly the floor is accepted.  A span
+    // this small is not a real airframe: a 1 deg command already saturates the
+    // servo, which looks the same from outside as the frozen-fin failure.
+    ASSERT_TRUE(servo.setFinCalibration(-30.0f, 30.0f));
+    EXPECT_FALSE(servo.setFinCalibration(
+        0.0f, TR_ServoControl::kMinFinSpanDeg - 0.1f));
+    EXPECT_FLOAT_EQ(servo.getFinMinDeg(), -30.0f);
+    EXPECT_TRUE(servo.setFinCalibration(0.0f, TR_ServoControl::kMinFinSpanDeg));
+    EXPECT_FLOAT_EQ(servo.getFinMaxDeg(), TR_ServoControl::kMinFinSpanDeg);
+}
+
+TEST_F(ServoControlTest, FinCalibration_PredicateMatchesTheSetter) {
+    // finCalibrationValid() is what the SERVO_CONFIG handler consults to decide
+    // whether to PERSIST, without applying first (it must not apply INFLIGHT).
+    // If the two ever disagree, a value could be saved that the setter refuses
+    // -- which is precisely the bug this closes.
+    const float cases[][2] = {
+        {-60.0f, 60.0f}, {0.0f, 2.0f}, {12.0f, 12.0f}, {30.0f, -30.0f},
+        {0.0f, 1.9f},    {-1.0f, 1.0f}, {0.0f, 0.0f},
+    };
+    for (const auto &c : cases) {
+        TR_ServoControl fresh{1, 2, 3, 4, 0, 0, 0, 0, 50, 1000, 2000,
+                              KP, KI, KD, MIN_CMD, MAX_CMD};
+        const bool predicate = TR_ServoControl::finCalibrationValid(c[0], c[1]);
+        const bool applied   = fresh.setFinCalibration(c[0], c[1]);
+        EXPECT_EQ(predicate, applied) << "min=" << c[0] << " max=" << c[1];
+    }
+}
+
+TEST_F(ServoControlTest, FinCalibration_DegenerateSpanWouldHaveFrozenTheFins) {
+    // Demonstrates the consequence the guard prevents, by driving the mapping
+    // directly through the accepted path and then showing that the refused
+    // pair leaves the good mapping intact.
+    const float angles[4] = {30.0f, 30.0f, 30.0f, 30.0f};
+    ASSERT_TRUE(servo.setFinCalibration(-60.0f, 60.0f));
+    servo.setServoAngles(angles);
+    const int commanded = servo.getServoPulseUs(0);
+
+    ASSERT_FALSE(servo.setFinCalibration(5.0f, 5.0f));
+    servo.setServoAngles(angles);
+    EXPECT_EQ(servo.getServoPulseUs(0), commanded)
+        << "the refused calibration changed the fin mapping anyway";
+}
