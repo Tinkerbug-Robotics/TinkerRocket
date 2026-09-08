@@ -45,6 +45,7 @@
 #include "sim_flight_policy.h"   // #1104: sim edge rule + latched dry-fire predicate (TR_Sensor_Collector_Sim)
 #include "oc_cmd_session_gate.h" // #1105: no replay of one-shot commands across an FC boot
 #include "fc_ota_session_policy.h" // #1116: the FC's own exit from an OTA image session nobody ends
+#include "roll_control_mode_policy.h" // #1137 item 6: which roll law runs this tick
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
@@ -8974,7 +8975,15 @@ static void loop_fc()
                         // dependency), instead of a stabilizeP() attitude jump
                         // slamming the fins.  Logged on transition so a
                         // flight/bench run shows if the gate ever fired.
-                        const bool ekf_ctrl_healthy = ekf.isHealthy();
+                        // #1137 item 6: `ekf_initialized` was missing here. It is
+                        // present in the quorum predicate above and in angle mode
+                        // below, but not in this gate — and isHealthy() answers
+                        // "has it diverged recently", not "has it ever run". A
+                        // launch with no GNSS fix therefore took the gain-schedule
+                        // branch with speed pinned at 0, which is the schedule's
+                        // MAXIMUM gain, instead of the pure-gyro fallback that
+                        // exists for exactly this case.
+                        const bool ekf_ctrl_healthy = ekf_initialized && ekf.isHealthy();
                         static bool ekf_ctrl_healthy_prev = true;
                         if (ekf_ctrl_healthy != ekf_ctrl_healthy_prev) {
                             ESP_LOGW(TAG, "[CTRL] EKF health %s — roll control %s",
@@ -9125,8 +9134,12 @@ static void loop_fc()
                             // Profile-mode lookup is only meaningful when angle
                             // control is enabled and the EKF is initialized.
                             const float t_flight = (float)(now_ms - launch_time_millis) / 1000.0f;
+                            // #1137 item 6: ekf_initialized is now folded into
+                            // ekf_ctrl_healthy, so the explicit term here is
+                            // redundant rather than contradictory. Kept for
+                            // readability; the policy header is the source of truth.
                             const bool angle_mode_active =
-                                use_angle_control && ekf_initialized && ekf_ctrl_healthy; // #265
+                                use_angle_control && ekf_ctrl_healthy; // #265
                             RollProfileQuery seg = {0.0f, ROLL_SEG_NULL_RATE};
                             if (angle_mode_active)
                             {
