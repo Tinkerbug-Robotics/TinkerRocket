@@ -391,6 +391,10 @@ static bool out_ready = false;
 static uint32_t out_ready_last_ms = 0;
 static uint32_t out_ready_request_time_ms = 0;
 static uint8_t out_pending_command = 0U;
+// #1137 item 4: the OC's serving-window epoch for the command mirrored above
+// (status payload byte 2; 0 when idle, or when the OC predates the byte).
+// Mirrored on exactly the same reads as the command so the two cannot skew.
+static uint8_t out_pending_epoch = 0U;
 // #1112: the dedup key (last_processed_cmd: ignore the OC's repeat deliveries)
 // and the per-command config-retry budget.  The dispatch runs only on the
 // pass that polled, and a config handler's "retry on next poll" re-arms it
@@ -4376,6 +4380,8 @@ static void setup_fc()
                 if (resp_payload[0] & OUT_STATUS_TOKEN_POWERED_BIT) noteOcSelfPowered();
                 if (resp_payload_len >= 2)
                 {
+                    out_pending_epoch =
+                        (resp_payload_len >= 3) ? resp_payload[2] : 0U;  // #1137
                     // #1105: this boot's first look at the serving slot goes
                     // to the session gate. A non-zero command is still adopted
                     // here; whether it may EXECUTE is decided at dispatch,
@@ -6235,6 +6241,10 @@ static void loop_fc()
                         if (resp_payload_len >= 2)
                         {
                             out_pending_command = resp_payload[1];
+                            // #1137 item 4: absent on an older OC, which leaves
+                            // this 0 and takes the legacy id-only dedup path.
+                            out_pending_epoch =
+                                (resp_payload_len >= 3) ? resp_payload[2] : 0U;
                             oc_cmd_gate.observe(resp_payload[1]);   // #1105
                         }
                         memcpy(cfg_read_cache, combined_buf + 10,
@@ -6349,7 +6359,8 @@ static void loop_fc()
         // the same stale bytes, ~38 ms of readConfigFrame() per pass, until the
         // OC cleared the command — or forever, once the poll had stopped (real
         // INFLIGHT, the #402 quiet window).  See oc_cmd_dedup.h.
-        if (oc_cmd_dedup.take(oc_polled, out_pending_command) != 0U)
+        if (oc_cmd_dedup.take(oc_polled, out_pending_command,
+                              out_pending_epoch) != 0U)
         {
             ESP_LOGI(TAG, "[I2C RX] pending_command=0x%02X", (unsigned)out_pending_command);
             if (!oc_cmd_gate.admits(out_pending_command))

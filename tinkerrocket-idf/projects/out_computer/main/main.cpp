@@ -694,6 +694,34 @@ static void setPendingCommand(uint8_t cmd)
 // sync drains in ~13 s instead of ~20 s ((3+1 idle) x 250 ms per command).
 static const uint8_t CMD_REPEAT_LIMIT = 3;
 static uint8_t cmd_delivery_count = 0;
+// #1137 item 4: which SERVING WINDOW the byte above belongs to.  Bumped once
+// per command popped into the serving slot — not per repeat delivery — and
+// served as status payload byte 2 so the FC can dedup on (epoch, cmd) rather
+// than on the command id alone.
+//
+// Why that mattered: command delivery is triple-redundant (CMD_REPEAT_LIMIT)
+// but the idle poll that separates two commands was served EXACTLY ONCE, and
+// the FC cleared its dedup key only on observing that one cmd=0.  A single
+// failed or garbled read of that poll made the FC discard the next command as
+// a duplicate whenever it happened to carry the same id — the two halves of
+// the protocol had wildly asymmetric reliability, and only the fragile half
+// could wedge the channel.  With an epoch the idle poll stops being load
+// bearing: the next window is a different number whether or not the gap was
+// seen.
+//
+// Repeating the idle gap CMD_REPEAT_LIMIT times would also have closed it, but
+// at a cost the comment above deliberately tuned away: a queued 13-command
+// profile sync would go from ~13 s back to ~19.5 s.  The epoch costs one byte
+// and no time.
+//
+// 0 is reserved to mean "idle / no window", so the counter skips it on wrap.
+static uint8_t cmd_serve_epoch = 0;
+
+static inline void bumpCmdServeEpoch()
+{
+    cmd_serve_epoch++;
+    if (cmd_serve_epoch == 0) cmd_serve_epoch = 1;   // never 0: that means idle
+}
 // #1105: latched by the FC_BOOT_STATUS_MSG handler (I2S parser task) and
 // consumed at the top of queueOutStatusResponse() (loop task, the serving
 // slot's only writer). Set means "the FC has reported a boot since the last
@@ -3004,6 +3032,7 @@ static void queueOutStatusResponse(bool ready)
                 cmd_queue_head = (cmd_queue_head + 1) % CMD_QUEUE_DEPTH;
                 cmd_queue_count--;
                 cmd_delivery_count = 0;
+                bumpCmdServeEpoch();   // #1137 item 4: a new serving window
             }
             portEXIT_CRITICAL(&cmd_queue_mux);
         }
@@ -3029,7 +3058,11 @@ static void queueOutStatusResponse(bool ready)
     // a session the OC started by itself from a flight token, the #1188 cue
     // bit — never without ready, so an FC reading `!= 0` still sees exactly
     // "ready" (RocketComputerTypes.h, outStatusByte).
-    uint8_t payload[2] = { outStatusByte(ready, boot_token_powered), cmd };
+    // #1137 item 4: byte 2 is the serving-window epoch (0 while idle).  An FC
+    // that predates it reads payload_len >= 2 and simply never sees the byte,
+    // so this is additive on the wire.
+    uint8_t payload[3] = { outStatusByte(ready, boot_token_powered), cmd,
+                           (cmd != 0U) ? cmd_serve_epoch : (uint8_t)0 };
     size_t frame_len = 0;
     if (!TR_I2C_Interface::packMessage(OUT_STATUS_RESPONSE,
                                        payload,
