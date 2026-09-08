@@ -2611,8 +2611,34 @@ static constexpr uint32_t XFER_REPRINT_EVERY_MS  = 15000;
 // esp_pm locks are counting, and every begin has a matching end on every path
 // (the download loop breaks out, it never returns), so the PM lock cannot leak
 // and strand us at full power.
+//
+// #917: this pause makes the OC structurally DEAF to the FC for its duration —
+// a ~20 MB flight at the measured ~35 KB/s is about ten minutes — so a launch
+// that happens inside the window is not observed at all. The existing INFLIGHT
+// refusal cannot cover it: that is a request-time check on a state which is
+// frozen by the very operation it guards.
+//
+// This does NOT prevent it. Per the maintainer's 2026-08-25 assessment the
+// defect needs an unusual operator action to reach (starting a multi-minute
+// transfer and then flying the vehicle it is reading from), while every
+// preventive fix touches the ingest path that records the flight — a poor
+// trade. What is fixed here is the property that makes it nasty: the SILENCE.
+// The blind window is now recorded and, if the vehicle moved across it, said
+// out loud.
+static bool     phone_io_pre_launch_latched = false;
+static uint8_t  phone_io_pre_state          = 0;
+static uint32_t phone_io_pause_started_ms   = 0;
+static bool     phone_io_blind_check_pending = false;
+static uint32_t oc_blind_window_launches     = 0;   // surfaced in diagnostics
+
 static inline void beginPhoneIO()
 {
+    // #917: snapshot what the FC was doing before we stop listening.
+    phone_io_pre_launch_latched  = nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
+    phone_io_pre_state           = (uint8_t)latest_rocket_state;
+    phone_io_pause_started_ms    = millis();
+    phone_io_blind_check_pending = true;
+
     i2s_ingest_paused = true;
     flash_op_active   = true;
     phoneIoPmAcquire();
@@ -2624,6 +2650,40 @@ static inline void endPhoneIO()
     i2s_ingest_paused = false;
     flash_op_active   = false;
     phoneIoPmRelease();
+    // The verdict cannot be reached here: the backlog was just discarded, so
+    // what the FC did during the pause is only knowable from the first RESUMED
+    // frame. ocPhoneIoBlindWindowCheck() runs there.
+}
+
+// #917: called on the first frame parsed after a phone-IO pause ends. If the
+// vehicle launched — or flew and landed — while the OC was deaf, say so
+// loudly, because the flight log for that ascent does not exist and nothing
+// else would ever mention it.
+static void ocPhoneIoBlindWindowCheck()
+{
+    if (!phone_io_blind_check_pending) return;
+    phone_io_blind_check_pending = false;
+
+    const bool now_launched = nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
+    const uint32_t blind_ms = millis() - phone_io_pause_started_ms;
+    if (now_launched && !phone_io_pre_launch_latched)
+    {
+        oc_blind_window_launches++;
+        ESP_LOGE("OC", "#917: the rocket LAUNCHED during a %lu ms phone-IO pause "
+                       "(state %u -> %u). I2S ingest was suppressed for the whole "
+                       "transfer, so the boost phase was never received and the "
+                       "flight log for it does not exist. Any log opened now starts "
+                       "mid-flight or not at all.",
+                 (unsigned long)blind_ms, (unsigned)phone_io_pre_state,
+                 (unsigned)latest_rocket_state);
+    }
+    else if (blind_ms > 5000UL)
+    {
+        ESP_LOGW("OC", "#917: %lu ms phone-IO pause ended; no launch observed "
+                       "across it (state %u -> %u)",
+                 (unsigned long)blind_ms, (unsigned)phone_io_pre_state,
+                 (unsigned)latest_rocket_state);
+    }
 }
 
 // ==========================================================================
@@ -4009,6 +4069,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 inflight_entry_ms = latest_non_sensor_rx_ms;
             }
             latest_rocket_state = (RocketState)latest_non_sensor.rocket_state;
+            ocPhoneIoBlindWindowCheck();   // #917: first frame after a pause
             // Update the flight-freeze sticky flag whenever the state
             // changes (issue #71).  Safe to call on every frame — the
             // function only flips the bool on INFLIGHT / READY edges.
