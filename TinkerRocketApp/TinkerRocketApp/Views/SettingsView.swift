@@ -1567,22 +1567,9 @@ struct SettingsView: View {
                 (p.pyro3Enabled, p.pyro3TriggerMode, p.pyro3TriggerValue),
                 (p.pyro4Enabled, p.pyro4TriggerMode, p.pyro4TriggerValue),
             ])
-            // Mirror into rocketConfig so the dashboard pyro tiles update live.
-            if var cfg = device.rocketConfig {
-                cfg.pyro1Enabled = p.pyro1Enabled
-                cfg.pyro1TriggerMode = p.pyro1TriggerMode
-                cfg.pyro1TriggerValue = p.pyro1TriggerValue
-                cfg.pyro2Enabled = p.pyro2Enabled
-                cfg.pyro2TriggerMode = p.pyro2TriggerMode
-                cfg.pyro2TriggerValue = p.pyro2TriggerValue
-                cfg.pyro3Enabled = p.pyro3Enabled
-                cfg.pyro3TriggerMode = p.pyro3TriggerMode
-                cfg.pyro3TriggerValue = p.pyro3TriggerValue
-                cfg.pyro4Enabled = p.pyro4Enabled
-                cfg.pyro4TriggerMode = p.pyro4TriggerMode
-                cfg.pyro4TriggerValue = p.pyro4TriggerValue
-                device.rocketConfig = cfg
-            }
+            // #1078: the mirror now lives inside sendPyroConfig, so every
+            // caller gets it — including the whole-profile push, which is where
+            // it was missing.
         }
         showApplied($pyroApplied)
     }

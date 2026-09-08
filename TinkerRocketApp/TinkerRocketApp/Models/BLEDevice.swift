@@ -1081,6 +1081,36 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             payload.append(Data(bytes: &v, count: 4))
         }
         sendRawCommand(34, payload: payload)
+        // #1078: mirror the write into the cache, like every other config
+        // sender that owns a cached field (sendImuRateConfig,
+        // sendImuOrientationConfig). This was the one exception, and the
+        // whole-profile push calls it — so after "Send All Settings to Rocket",
+        // or the automatic push when the active profile is switched on a
+        // connected rocket, the dashboard pyro tiles and the pyro sheet kept
+        // showing the PREVIOUS readback of a safety-relevant control.
+        //
+        // It propagates: PyroConfigSheet.loadCurrent() seeds from this same
+        // cache and saveAndSend() re-sends all four channels from it, so
+        // editing one channel after a push silently reverted the other three on
+        // the rocket AND in the saved profile.
+        //
+        // Guarded on a non-nil rocketConfig so a device that has never been
+        // read is not handed fabricated truth.
+        if var cfg = rocketConfig {
+            cfg.pyro1Enabled = channels[0].enabled
+            cfg.pyro1TriggerMode = channels[0].mode
+            cfg.pyro1TriggerValue = channels[0].value
+            cfg.pyro2Enabled = channels[1].enabled
+            cfg.pyro2TriggerMode = channels[1].mode
+            cfg.pyro2TriggerValue = channels[1].value
+            cfg.pyro3Enabled = channels[2].enabled
+            cfg.pyro3TriggerMode = channels[2].mode
+            cfg.pyro3TriggerValue = channels[2].value
+            cfg.pyro4Enabled = channels[3].enabled
+            cfg.pyro4TriggerMode = channels[3].mode
+            cfg.pyro4TriggerValue = channels[3].value
+            rocketConfig = cfg
+        }
     }
 
     // Continuity-test pending window (#411 UX). A manual PYRO_CONT_TEST

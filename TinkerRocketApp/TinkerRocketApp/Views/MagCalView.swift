@@ -56,6 +56,26 @@ struct MagCalView: View {
     /// never start a fresh run.  Reset per navigation (fresh @State).
     @State private var ranCalThisSession = false
 
+    /// #1037: the last cal sub-state actually seen, and a once-guard for the
+    /// teardown abort.
+    ///
+    /// iOS sent MAG_CAL_ABORT only from three deliberate taps and had no
+    /// teardown hook. This view is a NavigationLink push inside the Settings
+    /// sheet and nothing sets interactiveDismissDisabled, so a swipe-down on
+    /// that sheet destroyed it without telling the rocket — leaving the FC in
+    /// MAG_CALIBRATION with the IIS2MDC OFFSET registers ZEROED, launch detect
+    /// inhibited, the EKF unable to initialise and pyro servicing dead until a
+    /// reboot or until the operator reopened the screen and tapped Cancel.
+    /// Android has aborted on every teardown since its first version
+    /// (DisposableEffect onDispose + BackHandler).
+    ///
+    /// Gated on these remembered values rather than on live `status`, for the
+    /// reason MagCalScreen.kt records: the live status comes from 5 Hz FC
+    /// telemetry and can be nil or stale at exactly the moment teardown
+    /// happens.
+    @State private var lastSeenSubType: MagCalSubType? = nil
+    @State private var teardownAbortSent = false
+
 
     var body: some View {
         Form {
@@ -89,6 +109,7 @@ struct MagCalView: View {
             if let st = newStatus?.subType, st == .sampling || st == .review || st == .verifying {
                 ranCalThisSession = true
             }
+            if let st = newStatus?.subType { lastSeenSubType = st }   // #1037
             // #148 verify-window |B| accumulators.  Update on every
             // status frame received while VERIFYING; reset when we
             // leave VERIFYING so the next entry starts fresh.
@@ -109,6 +130,22 @@ struct MagCalView: View {
             guard let s = newStatus, s.subType == .applied,
                   !device.unitID.isEmpty, let id = store.activeId else { return }
             store.update(id) { $0.magCal = MagCalData(status: s, unitID: device.unitID) }
+        }
+        .onDisappear {
+            // #1037: the uncontrolled exits — a swipe-down on the hosting
+            // Settings sheet above all — do not run the toolbar buttons. The
+            // buttons stay the fast path; this is the net under them.
+            //
+            // VERIFYING is deliberately included even though it self-resolves
+            // (the proposed offsets are already on the chip and the FC's 60 s
+            // timer either commits or falls back to REVIEW): aborting there is
+            // harmless and the flag cannot always tell the states apart at
+            // teardown. SAMPLING and REVIEW are the ones with no auto-exit,
+            // and they are where the rocket sits for the whole tumble.
+            guard ranCalThisSession, !teardownAbortSent,
+                  lastSeenSubType != .applied else { return }
+            teardownAbortSent = true
+            device.sendMagCalAbort()
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
