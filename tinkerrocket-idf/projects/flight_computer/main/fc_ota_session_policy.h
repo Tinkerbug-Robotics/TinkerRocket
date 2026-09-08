@@ -82,4 +82,39 @@ inline Verdict evaluate(bool data_mode, uint32_t now_ms,
     return Verdict::Continue;
 }
 
+// --------------------------------------------------------------------------
+// The stable-run window fcMaybeMarkOtaValid() already used.
+inline constexpr uint32_t kStableRunMs = 10000;
+
+// #1123: when may a freshly OTA'd image cancel its own rollback?
+//
+// fcMaybeMarkOtaValid() used elapsed time alone: ~10 s of loop_fc ticks and
+// the rollback net was gone. Nothing consulted the links. But the flight
+// computer has NO update path of its own — every image arrives through the out
+// computer (BLE -> I2C OTA_BEGIN_PENDING -> I2S image pump) — so an image whose
+// I2S TX config, I2C master poll or frame CRC is broken ticks the loop happily
+// for 10 s, marks itself valid, and permanently removes both the telemetry link
+// AND the only way to replace it. The board is then only recoverable by opening
+// the airframe and flashing over USB.
+//
+// docs/plans/08-ota-firmware-update.md:331 states the contract this restores —
+// "the new image marks itself valid only after publishing its first I2S frame
+// back to OC" — and §4 calls the round-trip gate "deliberately strong". The
+// OC's own maybeMarkOtaValid() already honours it (called under
+// isConnected() / after a successful sendTelemetry).
+//
+// Both links are required, because either one alone leaves the image
+// unreplaceable: I2S carries telemetry to the OC, I2C carries the commands that
+// start the next update.
+//
+// This is "not yet", never "never": the caller re-evaluates every tick, so a
+// slow OC bring-up only delays validation. An image that never satisfies it
+// stays PENDING_VERIFY and rolls back at the next reset, which is the point.
+inline bool mayCancelRollback(uint32_t uptime_ms,
+                              bool     out_ready,
+                              uint32_t i2s_frames_accepted)
+{
+    return uptime_ms >= kStableRunMs && out_ready && i2s_frames_accepted > 0;
+}
+
 }  // namespace FcOtaSessionPolicy
