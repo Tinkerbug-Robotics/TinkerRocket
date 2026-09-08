@@ -257,3 +257,91 @@ TEST(BleCommandRing, StartsEmpty) {
     EXPECT_FALSE(ring.full());
     EXPECT_EQ(ring.size(), 0u);
 }
+
+// ---------------------------------------------------------------------------
+// #1124: commands belong to the connection that sent them.
+//
+// onDisconnect() tore down every other per-connection field (MTU, DLE, subscribe
+// flag, conn handle, pending conn-param request, in-flight OTA) but left the
+// ring untouched, and loop_oc drains it with no connection gate. A cmd 36 the
+// operator tapped during a multi-second stall, saw ignored, and walked away
+// from could therefore fire a deployment channel with nobody connected.
+// ---------------------------------------------------------------------------
+
+TEST(BleCommandRing, ClearDropsEveryQueuedCommand) {
+    CommandRing ring;
+    for (uint8_t i = 1; i <= 5; ++i) {
+        PendingCommand e{};
+        e.cmd = i;
+        ASSERT_TRUE(ring.push(e));
+    }
+    ASSERT_EQ(ring.size(), 5u);
+
+    ring.clear();
+
+    EXPECT_TRUE(ring.empty());
+    EXPECT_EQ(ring.size(), 0u);
+    PendingCommand out{};
+    out.cmd = 0xEE;
+    EXPECT_FALSE(ring.pop(out));
+    EXPECT_EQ(out.cmd, 0xEE) << "pop on a cleared ring must leave the output untouched";
+}
+
+TEST(BleCommandRing, ClearedRingAcceptsTheNextConnectionsBurst) {
+    CommandRing ring;
+    // A stalled loop leaves the previous connection's burst queued...
+    for (uint8_t i = 1; i <= 13; ++i) {
+        PendingCommand e{};
+        e.cmd = i;
+        ASSERT_TRUE(ring.push(e));
+    }
+    ring.clear();  // the link drops
+
+    // ...and the next connection's own sync burst must fit and drain cleanly,
+    // with nothing from the dead link in front of it.
+    for (uint8_t i = 100; i < 113; ++i) {
+        PendingCommand e{};
+        e.cmd = i;
+        ASSERT_TRUE(ring.push(e)) << "cleared ring must have full depth available";
+    }
+    for (uint8_t i = 100; i < 113; ++i) {
+        PendingCommand out{};
+        ASSERT_TRUE(ring.pop(out));
+        EXPECT_EQ(out.cmd, i) << "a command from the previous connection survived";
+    }
+    EXPECT_TRUE(ring.empty());
+}
+
+TEST(BleCommandRing, ClearDoesNotResurrectStaleEntriesAfterWrap) {
+    // clear() resets head_/count_ without wiping the backing array. Prove a
+    // subsequent push/pop cycle cannot surface a pre-clear payload.
+    CommandRing ring;
+    PendingCommand fire{};
+    fire.cmd = 36;                       // the pyro test fire
+    std::strcpy(fire.download_name, "secret.bin");
+    fire.payload[0] = 0xAB;
+    fire.payload_len = 1;
+    ASSERT_TRUE(ring.push(fire));
+    ring.clear();
+
+    PendingCommand benign{};
+    benign.cmd = 1;
+    ASSERT_TRUE(ring.push(benign));
+    PendingCommand out{};
+    ASSERT_TRUE(ring.pop(out));
+    EXPECT_EQ(out.cmd, 1u);
+    EXPECT_EQ(out.payload_len, 0u);
+    EXPECT_STREQ(out.download_name, "");
+}
+
+TEST(BleCommandRing, ClearOnEmptyIsANoOp) {
+    CommandRing ring;
+    ring.clear();
+    EXPECT_TRUE(ring.empty());
+    PendingCommand e{};
+    e.cmd = 7;
+    EXPECT_TRUE(ring.push(e));
+    PendingCommand out{};
+    ASSERT_TRUE(ring.pop(out));
+    EXPECT_EQ(out.cmd, 7u);
+}
