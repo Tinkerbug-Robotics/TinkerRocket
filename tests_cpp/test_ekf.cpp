@@ -1388,3 +1388,119 @@ TEST(EkfShockGate1190, CountersResetOnInitAndTheSettleSurvivesIt) {
     EXPECT_EQ(ekf.shockGateTrips(), 1u);
     EXPECT_EQ(ekf.shockGateHoldTicks(), 3u);
 }
+
+// ── #1135: two heading aids that fused things they should not have ──
+
+// A GNSS fix that is CLIMBING vertically at 60 m/s with a small horizontal
+// component — the boost geometry. Horizontal speed clears the caller's
+// vh_sq > 9 gate, so the course update runs, but the course itself is
+// essentially noise: the nose is vertical, so it carries almost no azimuth.
+static EkfGNSSDataLLA makeClimbingGNSS(uint32_t time_us, float vn, float ve) {
+    EkfGNSSDataLLA g;
+    g.time_us = time_us;
+    g.lat_rad = LAT_RAD; g.lon_rad = LON_RAD; g.alt_m = ALT_M;
+    g.vel_n_mps = vn; g.vel_e_mps = ve; g.vel_d_mps = -60.0;
+    return g;
+}
+
+TEST_F(EKFTest, CourseHeadingIsNotFusedNearVertical) {
+    // #1135 item 1. velCourseHeadingUpdate's own comment says it "sees only
+    // ~sin(tilt) of an azimuth/roll error — weak when vertical", but nothing
+    // acted on that: H = 2*d with d a unit vector at every attitude, so the
+    // update landed at full strength with a constant R. On a vertical boost a
+    // GNSS course that disagrees with the nose azimuth would drag heading.
+    ekf.init(makeNoseUpIMU(0), makeStationaryGNSS(0), makeNoseUpMag(0));
+    uint32_t t = 0;
+    for (int i = 0; i < 2000; i++) { t += 2000;
+        ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t)); }
+    float q_ref[4]; ekf.getQuaternion(q_ref);
+
+    // Ramp the climb in over ~1 s so the GNSS velocity DERIVATIVE stays small:
+    // accelMatchHeadingUpdate keys off d/dt of the GNSS NED velocity, and a
+    // step change would fire that aid too and confound this test. Then hold
+    // the velocity constant, which lets gnssAccelLP_NE_ decay toward zero and
+    // leaves the course aid as the only heading input under test.
+    const float vn = 5.0f, ve = 5.0f;   // |vh| = 7.07 m/s, clears vh_sq > 9
+    for (int i = 0; i < 500; i++) { t += 2000;
+        const float f = (float)(i + 1) / 500.0f;
+        ekf.update(true, makeNoseUpIMU(t),
+                   makeClimbingGNSS(t, vn * f, ve * f), makeNoseUpMag(t)); }
+    for (int i = 0; i < 4000; i++) { t += 2000;
+        ekf.update(true, makeNoseUpIMU(t), makeClimbingGNSS(t, vn, ve),
+                   makeNoseUpMag(t)); }
+    float q_fin[4]; ekf.getQuaternion(q_fin);
+
+    // Measured on this scenario: 178.57 deg before the tilt gate, 7.20 deg
+    // after -- and 7.20 deg is exactly what the filter does with the course
+    // aid removed entirely, so the gate makes it a true no-op near vertical.
+    // The residual is the filter responding to a 60 m/s climb through the
+    // velocity states, not this aid. The bound sits between the two.
+    EXPECT_LT(tqGeodesicDeg(q_fin, q_ref), 15.0f)
+        << "a near-vertical GNSS course dragged the attitude";
+}
+
+TEST_F(EKFTest, CourseHeadingStillFusesWhenTilted) {
+    // The other half: the gate must not disable the aid where it IS
+    // informative. Tilted well past the threshold, a disagreeing course must
+    // still move heading — otherwise this "fix" would be a silent removal.
+    ekf.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+    uint32_t t = 0;
+    for (int i = 0; i < 2000; i++) { t += 2000;
+        ekf.update(true, makeStationaryIMU(t), makeStationaryGNSS(t),
+                   makeStationaryMag(t)); }
+    float q_ref[4]; ekf.getQuaternion(q_ref);
+
+    // makeStationaryIMU is nose-horizontal (specific force on +Z), so cp ~ 1.
+    for (int i = 0; i < 4000; i++) { t += 2000;
+        ekf.update(true, makeStationaryIMU(t), makeClimbingGNSS(t, 20.0f, 20.0f),
+                   makeStationaryMag(t)); }
+    float q_fin[4]; ekf.getQuaternion(q_fin);
+    EXPECT_GT(tqGeodesicDeg(q_fin, q_ref), 0.5f)
+        << "the course aid stopped working where it is genuinely observable";
+}
+
+// A stationary rail tilted a few degrees off vertical. The specific force is
+// still ~1 g along the (tilted) nose, and the vehicle is not moving, so the
+// GNSS-derived horizontal acceleration is zero.
+static EkfIMUData makeTiltedRailIMU(uint32_t time_us, float tilt_deg) {
+    const float th = tilt_deg * (float)M_PI / 180.0f;
+    EkfIMUData imu;
+    imu.time_us = time_us;
+    // Nose mostly up: axial carries cos(tilt) of g, lateral carries sin(tilt).
+    imu.acc_x = 9.807 * std::cos(th);
+    imu.acc_y = 9.807 * std::sin(th);
+    imu.acc_z = 0.0;
+    imu.gyro_x = 0.0; imu.gyro_y = 0.0; imu.gyro_z = 0.0;
+    return imu;
+}
+
+TEST_F(EKFTest, AccelMatchDoesNotFuseAStationaryTiltedRail) {
+    // #1135 item 2. accelMatchHeadingUpdate rotated only the LATERAL body
+    // force (axial zeroed) into NED and compared it against gnssAccelLP_NE_,
+    // which is the derivative of the GNSS NED velocity -- total kinematic
+    // acceleration. Gravity is vertical in NED, so its horizontal components
+    // are the horizontal projection of the WHOLE rotated specific force. The
+    // two sides were different quantities, and on a stationary tilted rail the
+    // dropped axial term is essentially all of g: its horizontal projection is
+    // g*sin(tilt), about 0.86 m/s^2 at 5 deg, against a true horizontal
+    // acceleration of zero. The filter read that as heading error and fused it
+    // while the vehicle sat still on the pad.
+    ekf.init(makeTiltedRailIMU(0, 5.0f), makeStationaryGNSS(0), makeNoseUpMag(0));
+    uint32_t t = 0;
+    for (int i = 0; i < 2000; i++) { t += 2000;
+        ekf.update(true, makeTiltedRailIMU(t, 5.0f), makeStationaryGNSS(t),
+                   makeNoseUpMag(t)); }
+    float q_ref[4]; ekf.getQuaternion(q_ref);
+
+    for (int i = 0; i < 6000; i++) { t += 2000;
+        ekf.update(true, makeTiltedRailIMU(t, 5.0f), makeStationaryGNSS(t),
+                   makeNoseUpMag(t)); }
+    float q_fin[4]; ekf.getQuaternion(q_fin);
+
+    // NOTE (#1135 item 2): this passes both with and without the axial-term
+    // correction, because the existing `meas_h < 0.5f` gate already stops the
+    // update running on a truly stationary rail -- the issue's headline
+    // scenario is not reachable. Kept as a characterisation test of that gate.
+    EXPECT_LT(tqGeodesicDeg(q_fin, q_ref), 2.0f)
+        << "attitude drifted while sitting still on a tilted rail";
+}

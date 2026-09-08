@@ -1051,10 +1051,38 @@ void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
 // attitude tilt-comp, so it has none of the in-flight circularity that
 // destabilized the mag update. NOTE: it observes the NOSE direction, so near
 // vertical it sees only ~sin(tilt) of an azimuth/roll error — weak when vertical.
+// #1135 item 1: admissibility and weighting for the GNSS course-heading aid.
+// kCourseMinCosTilt is cos(tilt-from-vertical) below which the nose azimuth is
+// not meaningfully observable in the course — ~15 deg of tilt.  Larger than
+// magMeasUpdate's 0.03 (#480) on purpose: that gate avoids atan2(~0,~0) float
+// garbage, this one is about the measurement carrying no azimuth information.
+static constexpr float kCourseMinCosTilt = 0.26f;   // ~15 deg from vertical
+static constexpr float kCourseR          = 0.05f;   // ~13 deg course noise (rad^2)
+static constexpr float kCourseRCeiling   = 1.0f;    // bound the 1/cp^2 inflation
+
 void GpsInsEKF::velCourseHeadingUpdate(const float vMeas_NED[3]) {
     float T_NED2B[3][3];
     Quat2DCM(T_NED2B, quat_BL_);
     const float d[3] = { T_NED2B[0][2], T_NED2B[1][2], T_NED2B[2][2] };
+
+    // #1135 item 1: how much azimuth this measurement can actually see.
+    //
+    // cp is the nose axis projected onto the horizontal plane — cos(tilt from
+    // vertical).  The comment above says the update "sees only ~sin(tilt) of
+    // an azimuth/roll error — weak when vertical", but nothing acted on it:
+    // H = 2*d, where d is the body image of NED-down and is a UNIT vector at
+    // every attitude, so |H| = 2 and S = 4*d'Pd + R_course regardless of tilt.
+    // A near-vertical course was therefore fused at full strength with a
+    // constant R — on the one attitude a rocket spends its boost phase in.
+    //
+    // magMeasUpdate carries both guards this needs and cites #480 for why: an
+    // outright skip where psi_pred degenerates, and an attitude-dependent R
+    // outside it.  Here the measurement is not merely numerically singular
+    // near vertical, it is genuinely uninformative, so the skip threshold is
+    // physical (~15 deg of tilt) rather than the 2 deg the mag needs.
+    const float cp = std::sqrt(T_NED2B[0][0]*T_NED2B[0][0] +
+                               T_NED2B[0][1]*T_NED2B[0][1]);
+    if (cp < kCourseMinCosTilt) return;
 
     const float psi_meas = std::atan2(vMeas_NED[1], vMeas_NED[0]);     // course (E,N)
     const float psi_pred = std::atan2(T_NED2B[0][1], T_NED2B[0][0]);   // nose azimuth
@@ -1063,7 +1091,11 @@ void GpsInsEKF::velCourseHeadingUpdate(const float vMeas_NED[3]) {
     while (y >  (float)M_PI) y -= 2.0f * (float)M_PI;
     while (y < -(float)M_PI) y += 2.0f * (float)M_PI;
 
-    const float R_course = 0.05f;   // ~13° course noise (rad²)
+    // Report the sin^2(tilt) information loss in the model rather than in a
+    // comment: the azimuth error visible in the course scales with cp, so its
+    // variance scales as 1/cp^2, bounded so a marginal geometry inflates R
+    // rather than producing an unusable number.
+    const float R_course = std::min(kCourseR / (cp * cp), kCourseRCeiling);
     const int   hidx[3] = {6, 7, 8};
     const float hval[3] = {2.0f*d[0], 2.0f*d[1], 2.0f*d[2]};
     applyScalarMeasUpdate(hidx, hval, 3, y, R_course, 1e-9f, /*gate_gyro_bias=*/true);
@@ -1076,7 +1108,19 @@ void GpsInsEKF::velCourseHeadingUpdate(const float vMeas_NED[3]) {
 // the one DOF the velocity course cannot see near vertical (rolling the body
 // does not move the nose, but it does rotate the lateral force in the world).
 // Only the LATERAL body force is used (axial/nose component zeroed) so boost
-// thrust doesn't dominate; caller gates on a clear lateral force in both frames.
+// thrust doesn't dominate; caller gates on a clear lateral force in both
+// frames.
+//
+// #1135 item 2 (INVESTIGATED, NOT CHANGED): the prediction here is lateral-only
+// while aWorldHoriz is d/dt of the GNSS NED velocity, i.e. TOTAL kinematic
+// acceleration, which does contain the axial projection.  The two sides are
+// therefore not the same quantity.  Subtracting the modelled axial projection
+// from the measurement was implemented and measured on a 10-deg-tilted 3 g
+// boost with 20 Hz GNSS: attitude error 25.27 deg before, 26.20 deg after —
+// no improvement, marginally worse.  Reverted rather than shipped.  See #1135
+// for the numbers; the mismatch is real in the code but no scenario has yet
+// been found where correcting it helps, so it needs flight data, not a
+// code-reading argument.
 void GpsInsEKF::accelMatchHeadingUpdate(const float aMeas[3], const float aWorldHoriz[2]) {
     float T_NED2B[3][3];
     Quat2DCM(T_NED2B, quat_BL_);
