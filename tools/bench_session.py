@@ -123,9 +123,10 @@ class SerialTail(threading.Thread):
 
     daemon = True
 
-    def __init__(self, port, baud, timeline):
+    def __init__(self, port, baud, timeline, label=None):
         super().__init__()
         self.port, self.baud, self.timeline = port, baud, timeline
+        self.label = label
         self.stop_flag = threading.Event()
         self.error = None
 
@@ -144,7 +145,7 @@ class SerialTail(threading.Thread):
             s.dtr = False
             s.rts = False
         except Exception as exc:                      # noqa: BLE001
-            self.error = f"serial open failed: {exc}"
+            self.error = f"serial open failed on {self.port}: {exc}"
             return
 
         buf = b""
@@ -160,6 +161,11 @@ class SerialTail(threading.Thread):
                     line, buf = buf.split(b"\n", 1)
                     text = line.decode("utf-8", "replace").rstrip("\r")
                     if text:
+                        # A labelled line reads "[BS] I (123) ...", so a script can
+                        # aim an assertion at one console with ^\[BS\] while an
+                        # unlabelled single-port run keeps its bare text.
+                        if self.label:
+                            text = f"[{self.label}] {text}"
                         self.timeline.add("serial", text)
         try:
             s.close()
@@ -587,13 +593,17 @@ async def main_async(args):
         print(f"{args.script}: {steps} steps, no script errors")
         return 0
 
-    tail = None
-    if args.port:
-        tail = SerialTail(args.port, args.baud, tl)
+    tails = []
+    for spec in args.port:
+        path, _, label = spec.partition(":")
+        tail = SerialTail(path, args.baud, tl, label or None)
         tail.start()
+        tails.append(tail)
+    if tails:
         await asyncio.sleep(0.5)
-        if tail.error:
-            print(f"WARNING: {tail.error} — continuing BLE-only", file=sys.stderr)
+        for tail in tails:
+            if tail.error:
+                print(f"WARNING: {tail.error} — continuing without it", file=sys.stderr)
 
     sess = Session(args, tl)
     aborted = None
@@ -611,7 +621,7 @@ async def main_async(args):
             await sess.disconnect()
         except Exception:                             # noqa: BLE001
             pass
-        if tail:
+        for tail in tails:
             tail.stop_flag.set()
             tail.join(timeout=2)
         if args.out:
@@ -640,7 +650,10 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--name", default="TR-R", help="BLE name substring")
     p.add_argument("--address", help="CoreBluetooth peripheral UUID")
-    p.add_argument("--port", help="serial console, e.g. /dev/cu.usbmodem2101")
+    p.add_argument("--port", action="append", default=[],
+                   help="serial console as PATH or PATH:LABEL; repeatable, so one "
+                        "run can watch the rocket and the base station together "
+                        "(labelled lines read '[BS] I (123) ...')")
     p.add_argument("--baud", type=int, default=115200)
     p.add_argument("--script", required=True, help="test script path")
     p.add_argument("--out", help="directory for timeline.jsonl + console.log")
