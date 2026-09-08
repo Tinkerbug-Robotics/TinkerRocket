@@ -71,6 +71,34 @@ struct RocketProfileView: View {
                 renamingId = nil
             }
         }
+        // #1262: this MUST hang off the List, not off the row inside the
+        // ForEach. A presentation attached to a row dies with that row, and
+        // tapping the swipe action closes the swipe — which re-renders the row
+        // and tore this dialog down before it could be tapped, making
+        // swipe-delete impossible. (Long-press -> context menu presented fine,
+        // because no swipe teardown follows it, which is what made the bug look
+        // intermittent.) The two alerts above are attached here for the same
+        // reason; keep all three together.
+        .confirmationDialog(
+            "Delete this rocket profile?",
+            isPresented: Binding(get: { pendingDeleteId != nil },
+                                 set: { if !$0 { pendingDeleteId = nil } }),
+            titleVisibility: .visible
+        ) {
+            // Look the name up rather than capturing a row's `profile`: the
+            // dialog now outlives any single row.
+            if let id = pendingDeleteId,
+               let doomed = store.profiles.first(where: { $0.id == id }) {
+                Button("Delete \(doomed.name)", role: .destructive) {
+                    deleteProfile(id)
+                    pendingDeleteId = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingDeleteId = nil }
+        } message: {
+            Text("Its calibrations and preflight checklist are deleted too. "
+                 + "This cannot be undone.")
+        }
         .sheet(isPresented: $showSettings) {
             if let device { SettingsView(device: device) }
         }
@@ -126,21 +154,6 @@ struct RocketProfileView: View {
             Button(role: .destructive) { pendingDeleteId = profile.id } label: {
                 Label("Delete", systemImage: "trash")
             }
-        }
-        .confirmationDialog(
-            "Delete this rocket profile?",
-            isPresented: Binding(get: { pendingDeleteId == profile.id },
-                                 set: { if !$0 { pendingDeleteId = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("Delete \(profile.name)", role: .destructive) {
-                deleteProfile(profile.id)
-                pendingDeleteId = nil
-            }
-            Button("Cancel", role: .cancel) { pendingDeleteId = nil }
-        } message: {
-            Text("Its calibrations and preflight checklist are deleted too. "
-                 + "This cannot be undone.")
         }
     }
 
