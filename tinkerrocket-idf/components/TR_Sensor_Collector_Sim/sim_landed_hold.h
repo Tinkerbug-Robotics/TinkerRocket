@@ -20,13 +20,16 @@ namespace sim_landed
 // at 1 Hz — far slower than the 5 s the old comment assumed.
 inline constexpr uint32_t MEASURED_FLAG_LATCH_MS = 7000;
 
-// flight_computer/main.cpp: INFLIGHT -> LANDED needs the flag held for
-// STRICTLY MORE than this (`now_ms - landed_candidate_start_millis > 2000U`).
+// INFLIGHT -> LANDED needs the flag held this long.  Since #1137 item 8 the
+// dwell lives in landing_transition_policy.h as kDwellMs and the comparison
+// is `>=`, not the old strictly-greater `> 2000U`; the duration is unchanged,
+// and this mirror is kept so the arithmetic below stays readable.  (It is a
+// mirror, not the source: the policy header owns the number.)
 inline constexpr uint32_t FC_LANDED_DEBOUNCE_MS = 2000;
 
 // The old fixed hold: exactly MEASURED_FLAG_LATCH_MS + FC_LANDED_DEBOUNCE_MS.
-// Against a strictly-greater comparison that is a margin of ZERO, which is why
-// no sim flight ever reached LANDED.
+// Against the strictly-greater comparison of the day that was a margin of
+// ZERO, which is why no sim flight ever reached LANDED.
 inline constexpr uint32_t LEGACY_HOLD_MS = 9000;
 
 // Backstop only.  The hold normally ends the moment the FC reports LANDED;

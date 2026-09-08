@@ -20,6 +20,7 @@
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
+#include <landing_transition_policy.h> // #1137 items 7-8: the LANDED dwell and bounded gyro veto
 #include <sensor_staleness_policy.h> // #1137 items 10/12: debounced scorecard staleness
 #include <GroundRefFreeze.h>   // #1108: hold the ground datum while the vehicle is moving
 #include <RecoveryArmGate.h>   // #1176: arming gate for a restored flight
@@ -353,8 +354,11 @@ static inline bool isCommandLockoutState(RocketState s)
 static uint32_t launch_time_millis = 0;
 static uint32_t prelaunch_time_millis = 0;
 static uint32_t valid_gnss_start_millis = 0;
-static uint32_t landed_candidate_start_millis = 0;
-static bool landed_candidate_active = false;  // #297: explicit flag (0 collided with now_ms==0)
+// #1137 item 8: the INFLIGHT -> LANDED dwell, gyro veto and reset arm all
+// live in landing_transition_policy.h now (host-tested).  It carries the
+// #297 explicit-active flag internally, so 0 no longer collides with
+// now_ms == 0.
+static landing_transition::State landed_debounce;
 static bool gnss_started = false;
 
 // #557 GNSS-absent degraded flight.  A dead/deaf-UART module makes the GNSS
@@ -4879,7 +4883,7 @@ static void resetFlightStateForSim(const char* edge)
     out_ready = false;
     end_flight_sent = false;
     landed_actions_done = false;
-    landed_candidate_active = false;   // #297
+    landed_debounce = landing_transition::State{};   // #297, #1137
     kinematics.reset();
     ekf_initialized = false;
     have_ref_pos = false;
@@ -5081,7 +5085,7 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     max_alt_m = 0.0f;
     max_speed_mps = 0.0f;
     landed_actions_done = false;
-    landed_candidate_active = false;   // #297
+    landed_debounce = landing_transition::State{};   // #297, #1137
     // Clear apogee/landing flags so they start clean at launch.
     // launch_flag is intentionally preserved (it got us here).
     // Per #142/#143: the original reset cleared only baro and
@@ -9254,28 +9258,18 @@ static void loop_fc()
                         guidance_active = false;
                     }
                 }
-                const bool landing_conditions =
-                    kinematics.alt_landed_flag && (fabsf(roll_rate_dps) < 30.0f);
-                if (landing_conditions)
+                // #1137 item 8.  ism6_fresh is the live-IMU test; roll_rate_dps
+                // itself is frozen at its last value once the sensor stops
+                // answering, so the veto must not be evaluated on it alone.
+                if (landing_transition::step(landed_debounce,
+                                             kinematics.alt_landed_flag,
+                                             ism6_fresh,
+                                             roll_rate_dps,
+                                             now_ms) ==
+                    landing_transition::Action::Land)
                 {
-                    if (!landed_candidate_active)   // #297: bool, not a now_ms==0 sentinel
-                    {
-                        landed_candidate_start_millis = now_ms;
-                        landed_candidate_active = true;
-                    }
-                    if (now_ms - landed_candidate_start_millis > 2000U)
-                    {
-                        rocket_state = LANDED;
-                        ESP_LOGI(TAG, "[STATE] INFLIGHT -> LANDED");
-                    }
-                }
-                else if (landed_candidate_active &&
-                         (now_ms - landed_candidate_start_millis > 2500U))
-                {
-                    // Only reset debounce timer if conditions have been false
-                    // for >500ms beyond the 2s window — prevents single-frame
-                    // noise from restarting the entire landing countdown.
-                    landed_candidate_active = false;
+                    rocket_state = LANDED;
+                    ESP_LOGI(TAG, "[STATE] INFLIGHT -> LANDED");
                 }
 
                 // #1176: a restored flight that the arming interlock has

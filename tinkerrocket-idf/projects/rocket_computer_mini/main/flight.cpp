@@ -27,6 +27,7 @@
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
+#include <landing_transition_policy.h> // #1137 items 7-8: the LANDED dwell and bounded gyro veto
 #include <sensor_staleness_policy.h> // #1137 items 10/12: debounced scorecard staleness
 #include <GroundRefFreeze.h>   // #1108: hold the ground datum while the vehicle is moving
 #include <BurnoutDetector.h>       // shared burnout detector (#197/#256)
@@ -299,8 +300,10 @@ static inline bool isCommandLockoutState(RocketState s)
 static uint32_t launch_time_millis = 0;
 static uint32_t prelaunch_time_millis = 0;
 static uint32_t valid_gnss_start_millis = 0;
-static uint32_t landed_candidate_start_millis = 0;
-static bool landed_candidate_active = false;  // #297: explicit flag (0 collided with now_ms==0)
+// #1137 item 8: mirrors the FC — the dwell, gyro veto and reset arm live in
+// landing_transition_policy.h, which carries the #297 explicit-active flag
+// internally so 0 no longer collides with now_ms == 0.
+static landing_transition::State landed_debounce;
 static bool gnss_started = false;
 
 // #557 GNSS-absent degraded flight — see the FC source for the three-flag
@@ -1274,7 +1277,7 @@ static void resetFlightStateForSim(const char* edge)
     // poll.  There is no poll to re-latch from — out_ready is const true.
     end_flight_sent = false;
     landed_actions_done = false;
-    landed_candidate_active = false;   // #297
+    landed_debounce = landing_transition::State{};   // #297, #1137
     kinematics.reset();
     ekf_initialized = false;
     have_ref_pos = false;
@@ -1356,7 +1359,7 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     max_alt_m = 0.0f;
     max_speed_mps = 0.0f;
     landed_actions_done = false;
-    landed_candidate_active = false;   // #297
+    landed_debounce = landing_transition::State{};   // #297, #1137
     // Clear apogee/landing flags so they start clean at launch.
     // launch_flag is intentionally preserved (it got us here).
     // Per #142/#143: the original reset cleared only baro and velocity flags,
@@ -4138,28 +4141,18 @@ static void loop_fc()
 
                 // (FC ran the whole roll/guidance control block here.)
 
-                const bool landing_conditions =
-                    kinematics.alt_landed_flag && (fabsf(roll_rate_dps) < 30.0f);
-                if (landing_conditions)
+                // #1137 item 8.  ism6_fresh is the live-IMU test; roll_rate_dps
+                // itself is frozen at its last value once the sensor stops
+                // answering, so the veto must not be evaluated on it alone.
+                if (landing_transition::step(landed_debounce,
+                                             kinematics.alt_landed_flag,
+                                             ism6_fresh,
+                                             roll_rate_dps,
+                                             now_ms) ==
+                    landing_transition::Action::Land)
                 {
-                    if (!landed_candidate_active)   // #297: bool, not a now_ms==0 sentinel
-                    {
-                        landed_candidate_start_millis = now_ms;
-                        landed_candidate_active = true;
-                    }
-                    if (now_ms - landed_candidate_start_millis > 2000U)
-                    {
-                        rocket_state = LANDED;
-                        ESP_LOGI(TAG, "[STATE] INFLIGHT -> LANDED");
-                    }
-                }
-                else if (landed_candidate_active &&
-                         (now_ms - landed_candidate_start_millis > 2500U))
-                {
-                    // Only reset debounce timer if conditions have been false
-                    // for >500ms beyond the 2s window — prevents single-frame
-                    // noise from restarting the entire landing countdown.
-                    landed_candidate_active = false;
+                    rocket_state = LANDED;
+                    ESP_LOGI(TAG, "[STATE] INFLIGHT -> LANDED");
                 }
 
                 // Safety timeout: force LANDED if flight exceeds 10 minutes

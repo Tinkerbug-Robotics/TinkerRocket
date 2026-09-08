@@ -591,6 +591,7 @@ add_executable(test_sim_landed_hold test_sim_landed_hold.cpp)
 target_include_directories(test_sim_landed_hold PRIVATE
     ${SHIM_DIR}
     ${LIB_DIR}/TR_Sensor_Collector_Sim
+    ${LIB_DIR}/TR_KinematicChecks   # #1137: pin the FC_LANDED_DEBOUNCE_MS mirror
 )
 target_link_libraries(test_sim_landed_hold GTest::gtest_main)
 gtest_discover_tests(test_sim_landed_hold)
@@ -1032,6 +1033,18 @@ target_include_directories(test_test_mode_gate_policy PRIVATE
 )
 target_link_libraries(test_test_mode_gate_policy GTest::gtest_main)
 gtest_discover_tests(test_test_mode_gate_policy)
+
+# ---------- test_landing_transition_policy (#1137 items 7-8) ----------
+# Pure header: the LANDED dwell, the sustained-false reset arm and the bounded
+# gyro veto, none of which could be exercised without a flight before.
+add_executable(test_landing_transition_policy test_landing_transition_policy.cpp)
+target_include_directories(test_landing_transition_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_KinematicChecks
+)
+target_link_libraries(test_landing_transition_policy GTest::gtest_main)
+gtest_discover_tests(test_landing_transition_policy)
 
 # ---------- test_roll_control_mode_policy (#1137 item 6) ----------
 # Pure header, no ESP/Arduino deps — the roll-control mode choice was extracted
