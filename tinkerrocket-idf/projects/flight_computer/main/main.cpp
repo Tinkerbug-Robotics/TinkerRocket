@@ -4472,9 +4472,21 @@ static void setup_fc()
         }
         if (nvs_servo_timing_changed)
         {
-            servo_control.setServoTiming(nvs_servo_hz, nvs_servo_min, nvs_servo_max);
-            ESP_LOGI(TAG, "Applied NVS servo timing: hz=%d min=%d max=%d",
-                          nvs_servo_hz, nvs_servo_min, nvs_servo_max);
+            // #1141 item 3: an NVS value written before this guard existed is
+            // applied here unguarded, so check it on the way in.  The setter
+            // keeps the built-in config::SERVO_* timing on refusal.
+            if (servo_control.setServoTiming(nvs_servo_hz, nvs_servo_min, nvs_servo_max))
+            {
+                ESP_LOGI(TAG, "Applied NVS servo timing: hz=%d min=%d max=%d",
+                              nvs_servo_hz, nvs_servo_min, nvs_servo_max);
+            }
+            else
+            {
+                ESP_LOGE(TAG, "[SERVO] NVS servo timing is unusable (hz=%d "
+                              "min=%d max=%d) — flying the built-in default. "
+                              "Re-send servo timing from the app.",
+                         nvs_servo_hz, nvs_servo_min, nvs_servo_max);
+            }
         }
         servo_control.setSetpoint(config::ROLL_RATE_SET_POINT);
         if (gain_sched_enabled)
@@ -6453,9 +6465,24 @@ static void loop_fc()
                                  (double)cfg.fin_min_deg, (double)cfg.fin_max_deg,
                                  (double)TR_ServoControl::kMinFinSpanDeg);
                     }
+                    // #1141 item 3: decided once, and shared with the persist
+                    // below — the same shape as fin_cal_ok above.  hz == 0
+                    // silently relaxes every fin (the duty product goes to 0,
+                    // which is what idle() does) and a negative hz wraps it to
+                    // an arbitrary value; both used to be applied and saved.
+                    const bool servo_timing_ok = TR_ServoControl::servoTimingValid(
+                        cfg.hz, cfg.min_us, cfg.max_us);
+                    if (!servo_timing_ok)
+                    {
+                        ESP_LOGE(TAG, "[SERVO CFG] timing REJECTED: hz=%d min=%d "
+                                      "max=%d. Not applied, not saved — the "
+                                      "previous timing stands.",
+                                 cfg.hz, cfg.min_us, cfg.max_us);
+                    }
                     if (rocket_state != INFLIGHT)
                     {
-                        servo_control.setServoTiming(cfg.hz, cfg.min_us, cfg.max_us);
+                        if (servo_timing_ok)
+                            servo_control.setServoTiming(cfg.hz, cfg.min_us, cfg.max_us);
                         // #267: apply fin-angle calibration (the setter itself
                         // refuses a degenerate span; fin_cal_ok is the same
                         // predicate, asked early so the persist can share it).
@@ -6496,9 +6523,15 @@ static void loop_fc()
                     prefs.putShort("b2", cfg.bias_us[1]);
                     prefs.putShort("b3", cfg.bias_us[2]);
                     prefs.putShort("b4", cfg.bias_us[3]);
-                    prefs.putShort("hz", cfg.hz);
-                    prefs.putShort("min", cfg.min_us);
-                    prefs.putShort("max", cfg.max_us);
+                    // #1141 item 3: never persist a timing the servo layer
+                    // refused — otherwise the next boot restores it unguarded,
+                    // exactly the shape #1137 item 2 closed for fin travel.
+                    if (servo_timing_ok)
+                    {
+                        prefs.putShort("hz", cfg.hz);
+                        prefs.putShort("min", cfg.min_us);
+                        prefs.putShort("max", cfg.max_us);
+                    }
                     // #1137 item 2: never persist a pair the FC just refused.
                     // The INFLIGHT-deferred case still writes, deliberately —
                     // deferring the live apply while letting a VALID config
@@ -8784,6 +8817,18 @@ static void loop_fc()
         // ground-handling re-trigger of launch-detect tries to make is overridden
         // (no re-arm, no second flight).
         if (post_flight_lockout) rocket_state = LANDED;
+
+        // #1141 item 2: service the neutral settle on EVERY pass, before the
+        // state switch.  The two calls this replaces lived inside `case READY`
+        // and `case PRELAUNCH`, but beginNeutralSettle() is also reached from
+        // the SERVO_CONFIG trim preview and the SERVO_TEST_STOP path, neither
+        // of which is confined to those two states — so a settle started
+        // elsewhere had no path to completion, and the fins stayed 6 degrees
+        // past neutral and ENERGISED for the rest of the session.  The
+        // component now also carries its own deadline, so a missed hold window
+        // still finishes rather than latching the overshoot.
+        if (servo_enabled) servo_control.serviceNeutralSettle(now_ms);
+
         switch (rocket_state)
         {
             case INITIALIZATION:
@@ -8882,7 +8927,6 @@ static void loop_fc()
                 // started by the boot sweep above or a pad trim; a no-op
                 // otherwise.  Runs before the relax gate so it completes within
                 // the wake window.
-                if (servo_enabled) servo_control.serviceNeutralSettle(now_ms);
 
                 // Relax the servos on the pad: cut the pulse train so the
                 // digital servos stop drawing ~150 mA of holding current while
@@ -8965,7 +9009,6 @@ static void loop_fc()
 
                 // Advance an in-progress anti-backlash neutral settle (#407),
                 // e.g. a trim applied while sitting in PRELAUNCH; no-op otherwise.
-                if (servo_enabled) servo_control.serviceNeutralSettle(now_ms);
 
                 // Stay relaxed through the pad wait; the INFLIGHT control path
                 // re-drives (and so re-energises) the servos the instant

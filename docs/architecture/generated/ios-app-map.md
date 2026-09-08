@@ -3,7 +3,7 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 32,192 lines across 81 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 32,205 lines across 81 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
@@ -89,7 +89,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [FrequencyScanSample.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FrequencyScanSample.swift) | 15 | `FrequencyScanSample` |
 
 
-## `Views/` — 30 files, 15,673 lines
+## `Views/` — 30 files, 15,686 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -118,7 +118,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [MagCalSphereView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/MagCalSphereView.swift) | 355 | `MagCalSphereView` |
 | [FirmwareUpdateView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FirmwareUpdateView.swift) | 323 | `FirmwareUpdateView`, `FirmwareUpdateContent`, `LabeledRow` |
 | [FrequencyScanView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FrequencyScanView.swift) | 305 | `FrequencyScanView` |
-| [RocketProfileView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/RocketProfileView.swift) | 279 | `RocketProfileView`, `SyncStatusRow` |
+| [RocketProfileView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/RocketProfileView.swift) | 292 | `RocketProfileView`, `SyncStatusRow` |
 | [FinLayoutView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FinLayoutView.swift) | 258 | `FinLayoutView` |
 | [PreflightRunView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PreflightRunView.swift) | 254 | `PreflightRunView`, `PreflightAdvisoryRow` |
 | [SaveAreaView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/SaveAreaView.swift) | 245 | `RegionPickerMap`, `SaveAreaView` |
@@ -136,4 +136,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 81 files, 32,192 lines.
+Total: 81 files, 32,205 lines.

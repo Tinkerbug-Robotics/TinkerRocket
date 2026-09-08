@@ -343,3 +343,144 @@ TEST_F(ServoControlTest, FinCalibration_DegenerateSpanWouldHaveFrozenTheFins) {
     EXPECT_EQ(servo.getServoPulseUs(0), commanded)
         << "the refused calibration changed the fin mapping anyway";
 }
+
+// ── #1141: four defects in the servo layer ──
+
+TEST_F(ServoControlTest, StowParksAtTheCalibratedFinZeroNotTheRawMidpoint) {
+    // #1141 item 1. stowControl() used to call setPulse(0), which writes
+    // servo_mid_us_ = (min+max)/2 + bias -- a number that knows nothing about
+    // the #267 fin calibration. usFromFinDeg(0) equals that midpoint only when
+    // the calibration is symmetric. With 1000/2000 us and a [-10,+30] cal,
+    // fin-zero is 1250 us against a 1500 us midpoint: a standing 25%-of-travel
+    // deflection on all four fins, held for the whole descent, on the one path
+    // whose entire job is to stow them.
+    ASSERT_TRUE(servo.setFinCalibration(-10.0f, 30.0f));
+
+    const float zeros[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    servo.setServoAngles(zeros);
+    int commanded[4];
+    for (int i = 0; i < 4; ++i) commanded[i] = servo.getServoPulseUs(i);
+
+    servo.stowControl();
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(servo.getServoPulseUs(i), commanded[i])
+            << "stow disagreed with a commanded 0 deg on servo " << i;
+    }
+    EXPECT_NE(commanded[0], (1000 + 2000) / 2)
+        << "this cal must be asymmetric or the test proves nothing";
+}
+
+TEST_F(ServoControlTest, StowMatchesTheMidpointForASymmetricCalibration) {
+    // The unchanged case: with a symmetric cal the two paths agree, so this
+    // fix is a no-op on an airframe whose travel is centred.
+    ASSERT_TRUE(servo.setFinCalibration(-45.0f, 45.0f));
+    servo.stowControl();
+    EXPECT_EQ(servo.getServoPulseUs(0), (1000 + 2000) / 2);
+}
+
+TEST_F(ServoControlTest, ANeutralSettleCompletesOnceServiced) {
+    // #1141 item 2. The component half was always correct: given a service
+    // call past the hold, the settle finishes. The defect was that the two
+    // service call sites lived inside `case READY` and `case PRELAUNCH` while
+    // beginNeutralSettle() is also reached from the SERVO_CONFIG trim preview
+    // and SERVO_TEST_STOP -- so a settle begun in another state was never
+    // serviced and the fins stayed 6 deg past neutral, energised, for the rest
+    // of the session. That half is fixed in main.cpp (the service call is now
+    // unconditional); this pins the contract it relies on.
+    ASSERT_TRUE(servo.setFinCalibration(-45.0f, 45.0f));
+    servo.beginNeutralSettle(0);
+    ASSERT_TRUE(servo.isNeutralSettling());
+    const int overshoot_us = servo.getServoPulseUs(0);
+
+    servo.serviceNeutralSettle(TR_ServoControl::kNeutralSettleHoldMs - 1);
+    EXPECT_TRUE(servo.isNeutralSettling()) << "settled before the hold elapsed";
+    EXPECT_EQ(servo.getServoPulseUs(0), overshoot_us);
+
+    servo.serviceNeutralSettle(TR_ServoControl::kNeutralSettleHoldMs);
+    EXPECT_FALSE(servo.isNeutralSettling());
+    EXPECT_EQ(servo.getServoPulseUs(0), (1000 + 2000) / 2);
+}
+
+TEST_F(ServoControlTest, IdleAbandonsAnInProgressSettle) {
+    // Relaxing the rail supersedes the settle; leaving the flag set would let
+    // a later service tick re-energise fins that were deliberately relaxed.
+    servo.beginNeutralSettle(0);
+    ASSERT_TRUE(servo.isNeutralSettling());
+    servo.idle();
+    EXPECT_FALSE(servo.isNeutralSettling());
+}
+
+TEST_F(ServoControlTest, StowAbandonsAnInProgressSettle) {
+    servo.beginNeutralSettle(0);
+    ASSERT_TRUE(servo.isNeutralSettling());
+    servo.stowControl();
+    EXPECT_FALSE(servo.isNeutralSettling());
+}
+
+TEST_F(ServoControlTest, ServoTimingValid_RejectsWhatIsNotATiming) {
+    // #1141 item 3. The duty math is pulse_us * servo_hz * max_duty / 1e6, so
+    // hz == 0 puts every channel at 0% duty -- no rising edge, no pulse train,
+    // which is exactly what idle() does. A negative hz casts to ~4.29e9 and
+    // wraps the 32-bit product to an arbitrary duty. Both arrived off the wire
+    // and were applied without a word.
+    EXPECT_FALSE(TR_ServoControl::servoTimingValid(0, 1000, 2000));
+    EXPECT_FALSE(TR_ServoControl::servoTimingValid(-50, 1000, 2000));
+    EXPECT_FALSE(TR_ServoControl::servoTimingValid(50, 2000, 1000));   // inverted
+    EXPECT_FALSE(TR_ServoControl::servoTimingValid(50, 1000, 1050));   // span too small
+    EXPECT_FALSE(TR_ServoControl::servoTimingValid(5000, 1000, 2000)); // absurd rate
+    EXPECT_TRUE(TR_ServoControl::servoTimingValid(50, 1000, 2000));
+    EXPECT_TRUE(TR_ServoControl::servoTimingValid(333, 900, 2100));
+}
+
+TEST_F(ServoControlTest, RejectedServoTimingKeepsThePrevious) {
+    ASSERT_TRUE(servo.setServoTiming(50, 1000, 2000));
+    ASSERT_TRUE(servo.setFinCalibration(-45.0f, 45.0f));
+    servo.stowControl();
+    const int before = servo.getServoPulseUs(0);
+
+    EXPECT_FALSE(servo.setServoTiming(0, 1000, 2000));
+    servo.stowControl();
+    EXPECT_EQ(servo.getServoPulseUs(0), before)
+        << "a refused timing changed the pulse anyway";
+    EXPECT_EQ(servo.getServoMinUs(), 1000);
+    EXPECT_EQ(servo.getServoMaxUs(), 2000);
+}
+
+TEST_F(ServoControlTest, GainScheduleDoesNotLeakIntoTheRateNullFallback) {
+    // #1141 item 4. applyGainSchedule() mutates the live PID gains in place and
+    // nothing on the unscheduled path put them back, so on the
+    // ekf_ctrl_healthy FALLING edge the flight loop switched to control() --
+    // the pure-gyro fallback that exists BECAUSE the EKF is untrustworthy --
+    // and ran it on gains still scaled by the last healthy tick, up to the 3x
+    // GAIN_SCHEDULE_SCALE_CAP.
+    //
+    // P-only fixture (KP=1, KI=KD=0), so the output is the scaled rate error.
+    servo.enableGainSchedule(/*v_ref=*/95.0f, /*v_min=*/30.0f);
+
+    tick();
+    servo.controlWithGainSchedule(10.0f, /*velocity_ms=*/30.0f);   // scale -> cap
+    const float scheduled = servo.getRollCmdDeg();
+
+    tick();
+    servo.control(10.0f);                                          // the fallback
+    const float fallback = servo.getRollCmdDeg();
+
+    EXPECT_LT(std::fabs(fallback), std::fabs(scheduled))
+        << "the fallback inherited the schedule's gains";
+    EXPECT_NEAR(std::fabs(fallback), 10.0f, 0.5f)
+        << "the fallback should run at the unscaled 1x gain";
+}
+
+TEST_F(ServoControlTest, ResetPidAlsoRestoresBaseGains) {
+    servo.enableGainSchedule(95.0f, 30.0f);
+    tick();
+    servo.controlWithGainSchedule(10.0f, 30.0f);
+    servo.resetPID();
+    // pid.reset() re-arms the dt bootstrap, so the next call returns 0 by
+    // design (see SetUp) — burn it, then assert on a steady-state tick.
+    tick();
+    servo.control(10.0f);
+    tick();
+    servo.control(10.0f);
+    EXPECT_NEAR(std::fabs(servo.getRollCmdDeg()), 10.0f, 0.5f);
+}

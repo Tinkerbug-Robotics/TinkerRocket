@@ -106,7 +106,25 @@ public:
 
     // Runtime configuration setters
     void setBias(int servoIndex, int biasUs);
-    void setServoTiming(int hz, int minUs, int maxUs);
+    // #1141 item 3: VALIDATED, and reports whether it applied.  An unchecked
+    // hz of 0 silently relaxes every fin (duty = pulse*hz*max/1e6 == 0, which
+    // is exactly what idle() does); a negative one wraps the 32-bit duty
+    // product to an arbitrary value.  Both arrived straight off the wire.
+    // Returns false and KEEPS the previous timing on rejection, so a caller
+    // can decline to persist what the servo layer refused.
+    bool setServoTiming(int hz, int minUs, int maxUs);
+
+    /// Pure predicate, exposed so a caller can decide whether to PERSIST a
+    /// timing without applying it first (the OC caches config it never runs).
+    static bool servoTimingValid(int hz, int minUs, int maxUs);
+
+    // Bounds for the above.  Deliberately generous — this rejects values that
+    // are not servo timings at all, not values that are merely unusual.
+    static constexpr int kMinServoHz     = 40;
+    static constexpr int kMaxServoHz     = 400;
+    static constexpr int kMinPulseUs     = 500;
+    static constexpr int kMaxPulseUs     = 2500;
+    static constexpr int kMinPulseSpanUs = 200;
     void setPIDGains(float kp, float ki, float kd);
     void setPIDLimits(float minCmd, float maxCmd);
     // See TR_PID::setDerivativeFilterCutoffHz — rejects measurement noise
@@ -279,6 +297,10 @@ private:
 
     // Previous gain schedule scale factor (for I-term reset on large changes)
     float prev_gain_scale_ = 1.0f;
+    // #1141 item 4: whether applyGainSchedule() has scaled the live PID gains
+    // away from the base set, so the unscheduled paths can put them back.
+    bool  schedule_applied_ = false;
+    void  restoreBaseGains();
 
     // True while idle() has stopped the pulse train.  Cleared by any drive
     // (setPulse/setServoAngles), which re-asserts a real duty and so resumes
