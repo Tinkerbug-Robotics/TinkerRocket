@@ -46,6 +46,7 @@
 #include "oc_cmd_session_gate.h" // #1105: no replay of one-shot commands across an FC boot
 #include "fc_ota_session_policy.h" // #1116: the FC's own exit from an OTA image session nobody ends
 #include "roll_control_mode_policy.h" // #1137 item 6: which roll law runs this tick
+#include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
@@ -6597,9 +6598,16 @@ static void loop_fc()
             }
             else if (out_pending_command == GROUND_TEST_START)
             {
-                if (isCommandLockoutState(rocket_state)) {
-                    ESP_LOGW(TAG, "[GROUND TEST] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
-                             (unsigned)rocket_state);
+                // #1137 item 5: post_flight_lockout added, mirroring
+                // PYRO_FIRE_TEST. Both apps already gate this on on-pad state,
+                // so this makes the firmware agree with the UI instead of
+                // relying on the UI to be the gate.
+                if (TestModeGatePolicy::testCommandRefused(
+                        isCommandLockoutState(rocket_state), post_flight_lockout)) {
+                    ESP_LOGW(TAG, "[GROUND TEST] Rejected — state=%u post_flight_lockout=%d "
+                                  "(no test commands while INFLIGHT, in MAG_CALIBRATION, "
+                                  "or after the flight has landed)",
+                             (unsigned)rocket_state, post_flight_lockout ? 1 : 0);
                 } else {
                     ground_test_active = true;
                     roll_rate_pid_standalone.reset();
@@ -7617,9 +7625,16 @@ static void loop_fc()
             }
             else if (out_pending_command == SERVO_TEST_PENDING)
             {
-                if (isCommandLockoutState(rocket_state)) {
-                    ESP_LOGW(TAG, "[SERVO TEST] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
-                             (unsigned)rocket_state);
+                // #1137 item 5: post_flight_lockout added, mirroring
+                // PYRO_FIRE_TEST. Both apps already gate this on on-pad state,
+                // so this makes the firmware agree with the UI instead of
+                // relying on the UI to be the gate.
+                if (TestModeGatePolicy::testCommandRefused(
+                        isCommandLockoutState(rocket_state), post_flight_lockout)) {
+                    ESP_LOGW(TAG, "[SERVO TEST] Rejected — state=%u post_flight_lockout=%d "
+                                  "(no test commands while INFLIGHT, in MAG_CALIBRATION, "
+                                  "or after the flight has landed)",
+                             (unsigned)rocket_state, post_flight_lockout ? 1 : 0);
                 } else {
                     delay_ms(1);
                     uint8_t cfg_payload[8];
@@ -8066,9 +8081,16 @@ static void loop_fc()
             }
             else if (out_pending_command == SERVO_REPLAY_PENDING)
             {
-                if (isCommandLockoutState(rocket_state)) {
-                    ESP_LOGW(TAG, "[SERVO REPLAY] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
-                             (unsigned)rocket_state);
+                // #1137 item 5: post_flight_lockout added, mirroring
+                // PYRO_FIRE_TEST. Both apps already gate this on on-pad state,
+                // so this makes the firmware agree with the UI instead of
+                // relying on the UI to be the gate.
+                if (TestModeGatePolicy::testCommandRefused(
+                        isCommandLockoutState(rocket_state), post_flight_lockout)) {
+                    ESP_LOGW(TAG, "[SERVO REPLAY] Rejected — state=%u post_flight_lockout=%d "
+                                  "(no test commands while INFLIGHT, in MAG_CALIBRATION, "
+                                  "or after the flight has landed)",
+                             (unsigned)rocket_state, post_flight_lockout ? 1 : 0);
                 } else {
                     delay_ms(1);
                     uint8_t cfg_payload[sizeof(ServoReplayData)];
@@ -8479,8 +8501,14 @@ static void loop_fc()
         // launch is detected with any test mode active, force the test off (and
         // stow) here as a failsafe so the flight logic takes over. A bench false
         // positive merely exits the test into READY/PRELAUNCH, which is safe.
-        if (kinematics.launch_flag &&
-            (ground_test_active || servo_test_active || servo_replay_active))
+        // #1137 item 5: qualified by post_flight_lockout. launch_flag is
+        // LATCHED and never cleared for the rest of the session, so after
+        // touchdown this block was still firing — cancelling any test the
+        // operator started, ~5 ms in, with a log line claiming a launch.
+        if (TestModeGatePolicy::launchFailsafeShouldCancel(
+                kinematics.launch_flag,
+                ground_test_active || servo_test_active || servo_replay_active,
+                post_flight_lockout))
         {
             ESP_LOGW(TAG, "[SAFETY] Launch detected with a test mode active -- "
                           "clearing test mode so flight logic runs (#363)");
@@ -8503,7 +8531,14 @@ static void loop_fc()
         // fetch, leaving both ends configured as I2S slaves with nobody driving
         // BCLK. #363 covered the three test modes and said nothing about this
         // one.
-        if (kinematics.launch_flag && fc_ota_data_mode)
+        // #1137 item 5: the same qualifier, and here it fixes a live
+        // regression this failsafe introduced on 2026-09-07. OTA_BEGIN
+        // documents LANDED as admissible and neither app gates the button, so
+        // from #1121 every FC update pushed to a landed board — including a
+        // bench sim flown out to LANDED, which is how one would test it — was
+        // aborted within ~5 ms of BEGIN.
+        if (TestModeGatePolicy::launchFailsafeShouldCancel(
+                kinematics.launch_flag, fc_ota_data_mode, post_flight_lockout))
         {
             ESP_LOGW(TAG, "[SAFETY] Launch detected during an OTA image session -- "
                           "aborting the update and restoring the telemetry link "
