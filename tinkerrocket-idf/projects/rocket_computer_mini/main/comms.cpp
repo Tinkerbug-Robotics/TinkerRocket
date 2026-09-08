@@ -1536,7 +1536,11 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     // cmd 7 (#1113) joins with a carve-out, see simStopIsStrayInflight(): a
     // sim Stop during a real flight would end the log now and re-arm the
     // flight side at touchdown; a sim flight stays stoppable.
-    if (((cmd == 1 || cmd == 23 || cmd == 28 || cmd == 35 || cmd == 36) &&
+    // #1130: 5 and 6 (simulation start/stop) belong here too — a sim START
+    // uplinked during a REAL flight is accepted, queued and applied, resetting
+    // the flight state the #317 terminal-LANDED lockout exists to protect.
+    if (((cmd == 1 || cmd == 5 || cmd == 6 || cmd == 23 || cmd == 28 ||
+          cmd == 35 || cmd == 36) &&
          latest_rocket_state == INFLIGHT) ||
         (cmd == 7 && simStopIsStrayInflight()))
     {
@@ -3686,9 +3690,25 @@ static void comms_loop()
             }
             else if (logger.isLoggingActive())
             {
-                logger.endLogging();
-                flightlogEndFlight();
-                ESP_LOGI("OC_CMD", "Logging STOPPED (manual)");
+                // #1159: the LoRa twin of cmd 23 refuses while INFLIGHT; this
+                // BLE path had no state gate, and stopping is an immediate
+                // local action — one tap mid-flight ended the NAND record on
+                // the spot, with no restart (the auto-start is the one-shot
+                // NSF_LAUNCH edge, long past). Unlike the out computer this is
+                // a single-MCU board, so latest_rocket_state is its OWN live
+                // state and cannot go stale behind a silent link: a plain
+                // INFLIGHT test is the whole gate, with no #1162-style
+                // silent-FC bound needed.
+                if (latest_rocket_state == INFLIGHT)
+                {
+                    ESP_LOGW("OC_CMD", "Logging STOP REFUSED: rocket is INFLIGHT (#1159)");
+                }
+                else
+                {
+                    logger.endLogging();
+                    flightlogEndFlight();
+                    ESP_LOGI("OC_CMD", "Logging STOPPED (manual)");
+                }
             }
             else
             {

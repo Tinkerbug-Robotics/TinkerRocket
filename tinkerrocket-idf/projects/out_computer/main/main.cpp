@@ -3340,6 +3340,21 @@ static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* s
     oc_ota_warmup_since_ms        = 0;
     oc_ota_revert_to_rx_requested = false;
     oc_ota_total_size             = total_size;
+    // #1161: nothing may be stashed for a flight computer that is not powered.
+    // The FC command queue deliberately HOLDS with the rail off and the cmd-8
+    // power-ON path does not clear it, so a stash here is delivered to the next
+    // FC boot — typically the power-on at the pad — where it erases ota_1 and
+    // flips the I2S link, costing ~11 s of no telemetry, no downlink and no
+    // NSF_LAUNCH edge. Refused here rather than staged and dropped later so the
+    // operator's attempt fails now, while they are still at the bench.
+    if (!pwr_pin_on)
+    {
+        ESP_LOGW("OC", "OTA relay: OTA_BEGIN REFUSED — the flight computer rail "
+                       "is OFF, so this image could only be delivered at the next "
+                       "power-on (#1161). Power the rocket on first.");
+        ota_begin_stage_pending = false;
+        return;
+    }
     // #383: this callback runs on the NimBLE host task. The enqueue itself
     // is task-safe now (#476: payload passed by argument), but keep the
     // loop-task handoff so the OTA state resets and the enqueue happen in
@@ -5376,7 +5391,13 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     // cmd 7 (#1113) joins with a carve-out, see simStopIsStrayInflight(): a
     // sim Stop during a real flight would end the log now and re-arm the
     // flight side at touchdown; a sim flight stays stoppable.
-    if (((cmd == 1 || cmd == 23 || cmd == 28 || cmd == 35 || cmd == 36) &&
+    // #1130: 5 and 6 (simulation start/stop) belong on this list too. A sim
+    // START uplinked during a REAL flight is accepted, queued, and delivered on
+    // the FC's first post-landing poll, where it resets the flight state — the
+    // #317 terminal-LANDED lockout is exactly what that must not do. cmd 7's
+    // own stray-stop case is handled by simStopIsStrayInflight() (#1113).
+    if (((cmd == 1 || cmd == 5 || cmd == 6 || cmd == 23 || cmd == 28 ||
+          cmd == 35 || cmd == 36) &&
          latest_rocket_state == INFLIGHT) ||
         (cmd == 7 && simStopIsStrayInflight()))
     {
@@ -9129,13 +9150,36 @@ static void loop_oc()
     if (ota_begin_stage_pending)
     {
         ota_begin_stage_pending = false;
-        uint8_t ota_hdr[36];
-        memcpy(ota_hdr, (const void*)&ota_begin_total_size_staged, 4);
-        memcpy(ota_hdr + 4, ota_begin_sha256_staged, 32);
-        setPendingCommandWithConfig(OTA_BEGIN_PENDING, OTA_BEGIN_MSG,
-                                    ota_hdr, sizeof(ota_hdr));
-        ESP_LOGI("OC", "OTA relay: staged OTA_BEGIN for FC (size=%u)",
-                 (unsigned)ota_begin_total_size_staged);
+        // #1161: the FC command queue deliberately HOLDS with the rail off and
+        // is not cleared by the cmd-8 power-ON path, so staging here with no
+        // rail gate handed the next FC boot a stale OTA_BEGIN. That FC erases
+        // ota_1 and flips its I2S to slave RX, so the OC follows it to master
+        // TX and idle-fills until the 10 s stall timeout: ~11 s with no
+        // telemetry, no LoRa downlink and no NSF_LAUNCH edge — at the pad, on
+        // the power-on the operator does just before flying. The queue header
+        // documents exactly this hazard for pyro tests and refuses them at
+        // every entry point; OTA_BEGIN never got the guard. ocOtaRelayBegin()
+        // refuses at receipt; this is the second gate, for a rail that dropped
+        // between the request and this staging pass.
+        if (!pwr_pin_on)
+        {
+            ESP_LOGW("OC", "OTA relay: OTA_BEGIN DISCARDED — the FC rail is off, "
+                           "so this would be delivered at the next power-on "
+                           "instead (#1161). Power the rocket on and retry.");
+            // Deliberately NOT `return`: this block runs inside loop_oc, and
+            // bailing out of the whole iteration would skip the telemetry,
+            // LoRa and I2C service below it. Just do not stage the command.
+        }
+        else
+        {
+            uint8_t ota_hdr[36];
+            memcpy(ota_hdr, (const void*)&ota_begin_total_size_staged, 4);
+            memcpy(ota_hdr + 4, ota_begin_sha256_staged, 32);
+            setPendingCommandWithConfig(OTA_BEGIN_PENDING, OTA_BEGIN_MSG,
+                                        ota_hdr, sizeof(ota_hdr));
+            ESP_LOGI("OC", "OTA relay: staged OTA_BEGIN for FC (size=%u)",
+                     (unsigned)ota_begin_total_size_staged);
+        }
     }
 
     // ==========================================================================
@@ -9206,9 +9250,32 @@ static void loop_oc()
             }
             else if (!want_on)
             {
-                logger.endLogging();
-                flightlogEndFlight();
-                ESP_LOGI("OC_CMD", "Logging STOPPED (manual)");
+                // #1159: the LoRa twin of this command refuses cmd 23 while
+                // INFLIGHT; the BLE path had no state gate at all, and this is
+                // an OC-LOCAL action that takes effect immediately rather than
+                // being queued for the FC. One tap mid-flight ended the NAND
+                // record on the spot — and nothing restarts it, because the
+                // auto-start is the one-shot NSF_LAUNCH rising edge, long past.
+                // Apogee and every deployment event after the tap were lost
+                // while telemetry kept streaming, so nothing looked wrong.
+                //
+                // Uses the #1162 policy rather than a raw INFLIGHT test so a
+                // silent FC still has a way out: the hold is bounded by flight
+                // time, after which no flight could still be in progress.
+                const InflightHold hold = inflightHold();
+                if (hold.refuse)
+                {
+                    ESP_LOGW("OC_CMD", "Logging STOP REFUSED: rocket is INFLIGHT "
+                                       "(FC frame %lu ms ago, silent-FC hold %lu s left) (#1159)",
+                             (unsigned long)hold.fc_age_ms,
+                             (unsigned long)(hold.hold_left_ms / 1000u));
+                }
+                else
+                {
+                    logger.endLogging();
+                    flightlogEndFlight();
+                    ESP_LOGI("OC_CMD", "Logging STOPPED (manual)");
+                }
             }
             else
             {
