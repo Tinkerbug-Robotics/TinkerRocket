@@ -72,6 +72,12 @@ else()
 endif()
 set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}+${TR_BUILD_DATE}")
 
+# #1125: the same board suffix reaches the compiler, so the OTA receiver can
+# refuse an image built for a different board. CMake stays the single source of
+# truth — a second copy in config.h would drift, and this value decides whether
+# a firmware image is installed.
+add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
+
 # Board revision has to reach sdkconfig, not just the compiler. M1
 # (rocket-computer-mini) is the only flight computer that is NOT an ESP32-P4 —
 # its FC is an ESP32-S3RH2 — so the overlay changes CONFIG_IDF_TARGET as well

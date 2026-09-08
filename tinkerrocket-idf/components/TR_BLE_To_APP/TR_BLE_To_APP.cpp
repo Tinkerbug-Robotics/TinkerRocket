@@ -173,6 +173,22 @@ TR_BLE_To_APP::TR_BLE_To_APP(const char* device_name)
     device_name_[MAX_DEVICE_NAME_LEN] = '\0';
 
     ota_receiver_.setStatusCallback(&TR_BLE_To_APP::otaStatusCallback, this);
+
+    // #1125: refuse an image built for another project or another board.
+    // The project name comes from the RUNNING app (stable — it is the CMake
+    // project() name, not the version string), and the board suffix from
+    // TR_BOARD_OTA_SUFFIX, which the project CMakeLists derives from the same
+    // TR_BOARD_SUFFIX it stamps into PROJECT_VER. Deliberately NOT read back
+    // out of the running image's own version: PROJECT_VER is configure-time,
+    // so an incremental build keeps the previous string, and a stale value must
+    // not be able to decide whether firmware installs.
+#ifdef TR_BOARD_OTA_SUFFIX
+    {
+        const esp_app_desc_t* self = esp_app_get_description();
+        ota_receiver_.setExpectedIdentity(self ? self->project_name : nullptr,
+                                          TR_BOARD_OTA_SUFFIX);
+    }
+#endif
 }
 
 void TR_BLE_To_APP::setName(const char* name)
@@ -2153,6 +2169,7 @@ static const char* ota_err_token(TR_OTA_Receiver::Error e)
         case E::ShaMismatch:         return "sha_mismatch";
         case E::EndFailed:           return "end_failed";
         case E::SetBootFailed:       return "set_boot_failed";
+        case E::ImageIdentityMismatch: return "image_identity_mismatch";   // #1125
     }
     return "unknown";
 }

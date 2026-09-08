@@ -59,6 +59,12 @@ else()
 endif()
 set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}${TR_BENCH_SUFFIX}+${TR_BUILD_DATE}")
 
+# #1125: the same board suffix reaches the compiler, so the OTA receiver can
+# refuse an image built for a different board. CMake stays the single source of
+# truth — a second copy in config.h would drift, and this value decides whether
+# a firmware image is installed.
+add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
+
 # Board revision has to reach sdkconfig, not just the compiler (#822): V9/V10
 # enables the S3RH2's in-package PSRAM and V7/V8 must NOT, because those boards
 # have no PSRAM part and would spend every boot failing to find one. Since

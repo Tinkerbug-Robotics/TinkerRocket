@@ -7072,6 +7072,26 @@ static void loop_fc()
                         uint32_t total_size = 0;
                         memcpy(&total_size, hdr, 4);
                         ESP_LOGW(TAG, "[OTA] BEGIN size=%u — erasing ota_1", (unsigned)total_size);
+                        // #1125: refuse an image built for another project or
+                        // another board before a byte reaches ota_1. This
+                        // matters most here: PYRO_ARM is GPIO5 on V8 and GPIO16
+                        // on V9, and on V9 GPIO5 is the rail latch — so a -v8
+                        // image on a V9 board arms the power-hold pin, never
+                        // asserts the real ARM line, still shows normal
+                        // continuity on the pad, and cannot fire a channel at
+                        // apogee. The board suffix comes from
+                        // TR_BOARD_OTA_SUFFIX (CMake, same source as
+                        // PROJECT_VER) rather than from the running image's own
+                        // version string, which is configure-time and goes
+                        // stale on an incremental build.
+#ifdef TR_BOARD_OTA_SUFFIX
+                        {
+                            const esp_app_desc_t* self = esp_app_get_description();
+                            fc_ota_receiver.setExpectedIdentity(
+                                self ? self->project_name : nullptr,
+                                TR_BOARD_OTA_SUFFIX);
+                        }
+#endif
                         const TR_OTA_Receiver::Error e = fc_ota_receiver.begin(total_size, hdr + 4);
                         if (e == TR_OTA_Receiver::Error::Ok)
                         {

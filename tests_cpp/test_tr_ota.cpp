@@ -336,3 +336,167 @@ TEST(TrOta, ShaShimMatchesKnownVector)
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// #1125 — image identity.
+//
+// Nothing in the OTA path inspected the incoming image: begin() takes a size
+// and a SHA, writeChunk() checks ordering, and esp_ota_end() validates the
+// header, segment layout and chip id — none of which distinguishes a
+// flight-computer image built for V8 from one built for V9. They differ where
+// it matters most: PYRO_ARM is GPIO5 on V8 and GPIO16 on V9, and on V9 GPIO5 is
+// the rail latch, so a -v8 image on a V9 board arms the power-hold pin and
+// never asserts the real ARM line. Continuity still reads normal on the pad and
+// no channel can conduct at apogee.
+// ---------------------------------------------------------------------------
+
+// Build an image whose app descriptor names `project` and `version`, at the
+// real offset (image header + first segment header = byte 32).
+std::vector<uint8_t> make_image_with_desc(size_t n,
+                                          const char* project,
+                                          const char* version,
+                                          uint32_t magic = 0xABCD5432u)
+{
+    std::vector<uint8_t> v = make_image(n);
+    const size_t off = R::APP_DESC_OFFSET;
+    // magic @0, version @16, project_name @48 within the descriptor
+    std::memcpy(v.data() + off, &magic, sizeof(magic));
+    std::memset(v.data() + off + 16, 0, 32);
+    std::memset(v.data() + off + 48, 0, 32);
+    std::strncpy((char*)v.data() + off + 16, version, 31);
+    std::strncpy((char*)v.data() + off + 48, project, 31);
+    return v;
+}
+
+// Push the whole image in one chunk and report what the receiver said.
+E push_all(R& rx, const std::vector<uint8_t>& img)
+{
+    return rx.writeChunk(0, img.data(), img.size());
+}
+
+TEST(TrOtaIdentity, MatchingProjectAndBoardIsAccepted)
+{
+    FakeOTABackend be;
+    R rx(be);
+    rx.setExpectedIdentity("out_computer", "-v9");
+    auto img = make_image_with_desc(1024, "out_computer", "abc1234-v9+20260907-1200");
+    auto hash = sha256_of(img);
+
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data()));
+    EXPECT_EQ(E::Ok, push_all(rx, img));
+    EXPECT_EQ(E::Ok, rx.finish());
+    EXPECT_EQ(S::ReadyToBoot, rx.state());
+}
+
+TEST(TrOtaIdentity, WrongBoardSuffixIsRefusedAndNothingIsFlashed)
+{
+    FakeOTABackend be;
+    R rx(be);
+    rx.setExpectedIdentity("flight_computer", "-v9");
+    // The exact scenario: a -v8 flight-computer image offered to a V9 board.
+    auto img = make_image_with_desc(1024, "flight_computer", "abc1234-v8+20260907-1200");
+    auto hash = sha256_of(img);
+
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data()));
+    EXPECT_EQ(E::ImageIdentityMismatch, push_all(rx, img));
+    EXPECT_EQ(S::VerifyFailed, rx.state());
+    EXPECT_EQ(1, be.abort_calls);
+    EXPECT_FALSE(be.boot_set);
+    EXPECT_TRUE(be.bytes.empty()) << "a refused image must not reach the flash at all";
+}
+
+TEST(TrOtaIdentity, WrongProjectIsRefused)
+{
+    FakeOTABackend be;
+    R rx(be);
+    rx.setExpectedIdentity("flight_computer", "-v9");
+    // An out-computer image offered to the flight computer: same board, wrong app.
+    auto img = make_image_with_desc(1024, "out_computer", "abc1234-v9+20260907-1200");
+    auto hash = sha256_of(img);
+
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data()));
+    EXPECT_EQ(E::ImageIdentityMismatch, push_all(rx, img));
+    EXPECT_FALSE(be.boot_set);
+}
+
+TEST(TrOtaIdentity, MissingDescriptorMagicIsRefused)
+{
+    FakeOTABackend be;
+    R rx(be);
+    rx.setExpectedIdentity("out_computer", "-v9");
+    auto img = make_image_with_desc(1024, "out_computer", "abc1234-v9+x", 0xDEADBEEFu);
+    auto hash = sha256_of(img);
+
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data()));
+    EXPECT_EQ(E::ImageIdentityMismatch, push_all(rx, img))
+        << "an image with no identifiable app descriptor must not be installed";
+}
+
+TEST(TrOtaIdentity, CheckSurvivesChunkingAcrossTheDescriptor)
+{
+    // The descriptor spans bytes 32..288, so a small first chunk must not let
+    // a wrong image through — the check waits until enough bytes have arrived.
+    FakeOTABackend be;
+    R rx(be);
+    rx.setExpectedIdentity("flight_computer", "-v9");
+    auto img = make_image_with_desc(1024, "flight_computer", "abc1234-v8+20260907-1200");
+    auto hash = sha256_of(img);
+
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data()));
+    EXPECT_EQ(E::Ok, rx.writeChunk(0, img.data(), 20));    // header not complete yet
+    EXPECT_EQ(E::Ok, rx.writeChunk(20, img.data() + 20, 100));
+    // this chunk completes the descriptor
+    EXPECT_EQ(E::ImageIdentityMismatch, rx.writeChunk(120, img.data() + 120, 400));
+    EXPECT_FALSE(be.boot_set);
+}
+
+TEST(TrOtaIdentity, BenchSuffixBetweenBoardAndDateStillMatches)
+{
+    // out_computer stamps "<sha><board><bench>+<date>", so the board suffix is
+    // not necessarily last.
+    FakeOTABackend be;
+    R rx(be);
+    rx.setExpectedIdentity("out_computer", "-v9");
+    auto img = make_image_with_desc(1024, "out_computer", "abc1234-v9-bench+20260907-1200");
+    auto hash = sha256_of(img);
+
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data()));
+    EXPECT_EQ(E::Ok, push_all(rx, img));
+    EXPECT_EQ(E::Ok, rx.finish());
+}
+
+TEST(TrOtaIdentity, UnsetIdentityLeavesBehaviourUnchanged)
+{
+    // Every existing caller and test predates the check; with no expected
+    // identity set, an image with no descriptor at all must still install.
+    FakeOTABackend be;
+    R rx(be);
+    auto img = make_image(1024);
+    auto hash = sha256_of(img);
+
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data()));
+    EXPECT_EQ(E::Ok, push_all(rx, img));
+    EXPECT_EQ(E::Ok, rx.finish());
+    EXPECT_TRUE(be.boot_set);
+}
+
+TEST(TrOtaIdentity, ASecondSessionRechecksIdentity)
+{
+    // identity_done_ is per-session: a refused image must not leave the next
+    // session believing it has already been checked.
+    FakeOTABackend be;
+    R rx(be);
+    rx.setExpectedIdentity("flight_computer", "-v9");
+
+    auto bad = make_image_with_desc(1024, "flight_computer", "abc-v8+d");
+    auto bad_hash = sha256_of(bad);
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)bad.size(), bad_hash.data()));
+    ASSERT_EQ(E::ImageIdentityMismatch, push_all(rx, bad));
+
+    auto good = make_image_with_desc(1024, "flight_computer", "abc-v9+d");
+    auto good_hash = sha256_of(good);
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)good.size(), good_hash.data()));
+    EXPECT_EQ(E::Ok, push_all(rx, good));
+    EXPECT_EQ(E::Ok, rx.finish());
+    EXPECT_TRUE(be.boot_set);
+}
