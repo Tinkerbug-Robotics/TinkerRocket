@@ -1,0 +1,69 @@
+# #1211 / #1112 (PR #1207) + #1117 (PR #1230), part 1 of 2 — the retry path.
+#
+# Rig: V9 pair, S1 -> F (FLIGHT COMPUTER console). OC on the "-cfgdrop" TEST image.
+#
+# cmd 200 = [count][type]: drop the next `count` config frames OF THAT TYPE at
+# pack time. The type matters — an untyped arm is eaten by whatever config frame
+# is served first, which is how an earlier run showed no retry at all for a
+# single armed drop. SERVO_CONFIG_MSG = 0xB0, PYRO_CONFIG_MSG = 0xCE.
+#
+# Budget arithmetic: armRetry() returns false only once retries >= 3, so THREE
+# drops produce (1/3)(2/3)(3/3) and then a success. Exhausting the budget needs
+# a FOURTH failure — hence 5 drops for the give-up cases.
+#
+# Sets pyro configuration only. Nothing is fired; nothing is on the terminals.
+
+note === #1112 A: one dropped SERVO config retries once, then succeeds ===
+mark
+send 200 01b0
+sleep 1
+send 12 000000000000000038004c046c070000f0c10000f041
+expect_serial 15 \[SERVO CFG\] Config not in this read, will retry on next poll \(1/3\)
+expect_serial 15 \[SERVO CFG\] bias=\[0,0,0,0\] hz=56 min=1100 max=1900
+refute_serial_since retry budget \(3\) is spent
+
+note === #1112 B: five drops exhaust the budget and say so ===
+mark
+send 200 05b0
+sleep 1
+send 12 000000000000000038004c046c070000f0c10000f041
+expect_serial 20 \[SERVO CFG\] Config not in this read, will retry on next poll \(1/3\)
+expect_serial 20 \[SERVO CFG\] Config not in this read, will retry on next poll \(3/3\)
+expect_serial 20 retry budget \(3\) is spent — giving up until the OC clears the command
+# #1112's point: no ~26 Hz storm of re-reads, and no IMU samples lost to it.
+refute_serial_since \[CFG READ\] attempt ([1-9][0-9]+|[4-9])
+refute_serial_since imu_q_drops=[1-9]
+
+note === #1117 A: one dropped PYRO config retries, then applies the values ===
+mark
+send 200 01ce
+sleep 1
+send 34 010000000000010166661843010000000040000000000000
+expect_serial 15 \[PYRO CFG\] Config not in this read, will retry on next poll \(1/3\)
+expect_serial 15 \[PYRO CFG\] ch1=1/0/0.0  ch2=1/1/152.4  ch3=1/0/2.0  ch4=0/0/0.0
+
+note === #1117 B: five drops exhaust the pyro budget too ===
+mark
+send 200 05ce
+sleep 1
+send 34 010000000000010166661843010000000040000000000000
+expect_serial 20 \[PYRO CFG\] Config not in this read, will retry on next poll \(3/3\)
+expect_serial 20 retry budget \(3\) is spent — giving up until the OC clears the command
+
+note === #1117 C, regression: a healthy link must not retry at all ===
+mark
+send 34 010000000000010166661843010000000040000000000000
+expect_serial 15 \[PYRO CFG\] ch1=1/0/0.0  ch2=1/1/152.4  ch3=1/0/2.0  ch4=0/0/0.0
+refute_serial_since \[PYRO CFG\] Config not in this read
+
+note === Power-cycle the FC so part 2 can read its NVS back ===
+# This KILLS this console: with S1 on F the console IS the FC's own USB
+# peripheral, so dropping its rail ends the session's serial for good. Part 2
+# re-attaches (which resets the FC) and reads the fresh boot log.
+send 8 00
+sleep 8
+disconnect
+sleep 2
+connect
+send 8 01
+note === done — run part 2 next ===
