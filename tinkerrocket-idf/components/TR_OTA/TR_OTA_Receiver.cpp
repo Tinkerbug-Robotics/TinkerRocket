@@ -34,6 +34,8 @@ void TR_OTA_Receiver::resetSession()
     bytes_written_ = 0;
     last_error_ = Error::Ok;
     std::memset(expected_sha_, 0, sizeof(expected_sha_));
+    identity_done_ = false;          // #1125: per-session
+    hdr_len_ = 0;
     freeShaCtx();
 }
 
@@ -130,10 +132,63 @@ TR_OTA_Receiver::Error TR_OTA_Receiver::begin(uint32_t total_size, const uint8_t
     std::memcpy(expected_sha_, sha256, sizeof(expected_sha_));
     initShaCtx();
 
+    identity_done_ = false;          // #1125: a fresh session re-checks
+    hdr_len_ = 0;
     state_ = State::Writing;
     last_error_ = Error::Ok;
     notify();
     return Error::Ok;
+}
+
+void TR_OTA_Receiver::setExpectedIdentity(const char* project_name, const char* board_suffix)
+{
+    exp_project_[0] = '\0';
+    exp_suffix_[0]  = '\0';
+    if (project_name && project_name[0])
+    {
+        std::strncpy(exp_project_, project_name, sizeof(exp_project_) - 1);
+        exp_project_[sizeof(exp_project_) - 1] = '\0';
+    }
+    if (board_suffix && board_suffix[0])
+    {
+        std::strncpy(exp_suffix_, board_suffix, sizeof(exp_suffix_) - 1);
+        exp_suffix_[sizeof(exp_suffix_) - 1] = '\0';
+    }
+}
+
+// #1125. Layout of esp_app_desc_t, which we parse by offset rather than by
+// including esp_app_format.h so the component stays host-testable:
+//   0  magic (u32)   4  secure_version (u32)   8  reserv1[2] (u32)
+//   16 version[32]   48 project_name[32]       80 time[16]  96 date[16]
+//   112 idf_ver[32]  144 app_elf_sha256[32]    176 reserv2[20]
+bool TR_OTA_Receiver::checkImageIdentity()
+{
+    if (exp_project_[0] == '\0' && exp_suffix_[0] == '\0') return true;  // disabled
+
+    const uint8_t* d = hdr_ + APP_DESC_OFFSET;
+    uint32_t magic = 0;
+    std::memcpy(&magic, d, sizeof(magic));
+    if (magic != APP_DESC_MAGIC) return false;   // not an app image we can identify
+
+    char version[33]      = {0};
+    char project_name[33] = {0};
+    std::memcpy(version,      d + 16, 32);
+    std::memcpy(project_name, d + 48, 32);
+    version[32] = '\0';
+    project_name[32] = '\0';
+
+    if (exp_project_[0] && std::strncmp(project_name, exp_project_, sizeof(exp_project_)) != 0)
+    {
+        return false;
+    }
+    // The version is "<sha><board suffix>[<bench suffix>]+<date>"; the board
+    // suffixes in use (-v7 -v8 -v9 -m1) are not substrings of one another, so a
+    // plain search is unambiguous and survives the optional bench suffix.
+    if (exp_suffix_[0] && std::strstr(version, exp_suffix_) == nullptr)
+    {
+        return false;
+    }
+    return true;
 }
 
 TR_OTA_Receiver::Error TR_OTA_Receiver::writeChunk(uint32_t offset, const uint8_t* data, size_t len)
@@ -160,6 +215,29 @@ TR_OTA_Receiver::Error TR_OTA_Receiver::writeChunk(uint32_t offset, const uint8_
         backend_.abort();
         notify();
         return Error::SizeOverflow;
+    }
+
+    // #1125: snapshot the head of the image so the app descriptor can be
+    // identified. Runs before the backend write, so a wrong-board image is
+    // refused rather than half-flashed.
+    if (!identity_done_ && hdr_len_ < sizeof(hdr_))
+    {
+        const size_t want = sizeof(hdr_) - hdr_len_;
+        const size_t take = (len < want) ? len : want;
+        std::memcpy(hdr_ + hdr_len_, data, take);
+        hdr_len_ += take;
+        if (hdr_len_ >= sizeof(hdr_))
+        {
+            identity_done_ = true;
+            if (!checkImageIdentity())
+            {
+                last_error_ = Error::ImageIdentityMismatch;
+                state_ = State::VerifyFailed;
+                backend_.abort();
+                notify();
+                return Error::ImageIdentityMismatch;
+            }
+        }
     }
 
     int rc = backend_.write(data, len);

@@ -3495,6 +3495,8 @@ static const char* fcOtaErrToken(uint8_t e)
         case TR_OTA_Receiver::Error::ShaMismatch:      return "fc_sha_mismatch";
         case TR_OTA_Receiver::Error::EndFailed:        return "fc_end_failed";
         case TR_OTA_Receiver::Error::SetBootFailed:    return "fc_set_boot_failed";
+        case TR_OTA_Receiver::Error::ImageIdentityMismatch:
+                                                       return "fc_image_identity_mismatch";  // #1125
         // Ok-with-VERIFY_FAILED shouldn't happen; report it rather than imply a
         // specific cause, and keep the legacy token for anything unrecognised
         // (an FC newer than this OC could add a code we don't know yet).
