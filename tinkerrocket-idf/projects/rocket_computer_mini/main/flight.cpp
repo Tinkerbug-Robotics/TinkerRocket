@@ -263,8 +263,9 @@ static constexpr int32_t kAccelRailLsb =
 static BMP585DataSI bmp_latest_si = {};
 // #260: source-validity bounds for BMP585 pressure (Pa).  Finite bounds also
 // reject NaN/Inf.  Downstream trust gates use a tighter 25-125 kPa window.
-static constexpr float BMP_PRESSURE_MIN_PA = 1000.0f;
-static constexpr float BMP_PRESSURE_MAX_PA = 120000.0f;
+// #1149 item 2: BMP_PRESSURE_MIN_PA / MAX_PA now live in
+// RocketComputerTypes.h so the flight computer and the out computer
+// cannot drift apart on what a trustworthy sample is.
 // MMC5983MA is not fitted on the mini.  The SI slot stays (zeroed, never
 // written) so the EKF mag-source fallback and the health scorecard port
 // unchanged from the FC.

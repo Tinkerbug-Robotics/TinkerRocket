@@ -44,6 +44,14 @@ struct CmdQueueRetired
     uint8_t sel;   // first payload byte (the pyro tests' channel); 0 if no payload
 };
 
+// #1149 item 1: the two commands that jump the queue for immediacy. Shared so
+// the insert path and the front-run scan that keeps them FIFO among themselves
+// cannot disagree about what counts as priority.
+inline bool cmdIsFrontPriority(uint8_t cmd)
+{
+    return cmd == PYRO_FIRE_TEST || cmd == PYRO_CONT_TEST;
+}
+
 // Drop every one-shot actuating entry from the FIFO ring [head, head+count)
 // mod N, preserving the order of the survivors; head is unchanged, count is
 // updated. Entry must expose `cmd`, `cfg_len` and `cfg[]` (QueuedCommand does).
