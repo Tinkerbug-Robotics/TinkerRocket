@@ -1,0 +1,42 @@
+# #1211 / #1161 (PR #1238) — an FC-relay OTA offered while the FC rail is OFF
+# must be REFUSED outright, not queued for delivery at the next power-on.
+#
+# Rig: V9 pair, S1 -> O (OUT COMPUTER console), flight pack in.
+# cmd 70 = OTA_BEGIN [target u8][size u32][sha256 32] — target 1 = FC relay.
+#
+# The refusal is the easy half. The half that matters is what happens NEXT:
+# before this PR the stale command was delivered at the following power-on,
+# which in the field is the one at the pad. So the rail is brought back up and
+# the FC boot is checked for any sign it went into image mode.
+
+note === Take the FC rail down ===
+mark
+send 8 00
+sleep 10
+disconnect
+sleep 2
+connect
+wait_tlm 30 st!=NONE
+expect_serial_since PWR_PIN OFF, waiting for power-on command
+
+note === #1161: OTA_BEGIN for the FC while its rail is OFF must be refused ===
+mark
+send 70 0100350c000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 OTA relay: OTA_BEGIN REFUSED — the flight computer rail
+# NB: "BLE: OTA_BEGIN target=1 (FC relay): size=..." is the BLE layer logging
+# RECEIPT, printed 1 ms before the OC refuses — it is not acceptance, so it is
+# the wrong thing to refute. Acceptance is staging/BEGIN/I2S-flip, refuted below.
+refute_serial_since OTA relay: staged
+
+note === The half that matters: the FC must boot NORMALLY afterwards ===
+mark
+send 8 01
+sleep 25
+# No stale OTA delivered at power-on: no BEGIN, no image-mode I2S flip.
+refute_serial_since \[OTA\] BEGIN
+refute_serial_since \[OTA\] I2S
+refute_serial_since OTA relay: staged
+# And the link really came back: FC frames flowing and telemetry alive.
+expect_serial 20 I2C_RX: Got [0-9]+ bytes from FC
+expect_tlm_nogap 12 2.5
+note === done ===

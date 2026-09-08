@@ -1,0 +1,59 @@
+# #1211 — sim-flight batch on the OC console: #1159, #1106, plus the state-side
+# evidence for #1113 and #1104 (their FC log lines need S1 on F; the state
+# transitions they assert are visible in telemetry from either position).
+#
+# Rig: V9 pair, S1 -> O (OUT COMPUTER console), flight pack in.
+# cmd 5 = SimConfigData [mass_g f32][thrust_N f32][burn_s f32][descent_mps f32]
+#         -> 883 g on a ~G77 for 1.6 s, descending 15 m/s.
+# cmd 6/7 = sim start/stop. cmd 23 = logging (00 = stop). cmd 70 = OTA_BEGIN.
+#
+# SAFETY: cmd 70 is sent ONLY while INFLIGHT, where it is refused before any
+# flash work. Sent on the ground it would be PERMITTED, and esp_ota_begin()
+# erases the spare OTA slot — so the wait_tlm below is load-bearing, not tidiness.
+
+note === #1113 part A: a Stop with NO sim run this boot must be refused ===
+mark
+send 7
+# OC-side this is only refused when INFLIGHT-and-not-simulating; on the ground it
+# is passed to the FC, which logs the refusal. State must not move either way.
+refute_tlm 5 st==INFLIGHT
+
+note === Start the sim and reach INFLIGHT ===
+mark
+send 5 00c05c4400009a42cdcccc3f00007041
+expect_serial 10 SIM Config queued
+send 6
+expect_serial 10 SIM Start queued for FlightComputer
+wait_tlm 40 st==INFLIGHT
+expect_tlm 40 st==INFLIGHT
+expect_tlm 40 fs.SIM_ACTIVE==1
+
+note === #1159: Stop Logging mid-flight must be REFUSED ===
+mark
+send 23 00
+expect_serial 10 Logging STOP REFUSED: rocket is INFLIGHT
+refute_serial_since Logging STOPPED \(manual\)
+
+note === #1106: self-OTA must be REFUSED while INFLIGHT ===
+mark
+send 70 0000350c000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 OC self-OTA REFUSED: rocket is INFLIGHT
+refute_serial_since OTA_BEGIN: size=
+
+note === #1104: watch the sim fly out; the FC must not be left INFLIGHT ===
+# Let it fly. Apogee then 15 m/s descent; LANDED should arrive well inside this.
+mark
+wait_tlm 180 st==LANDED
+expect_tlm 180 st==LANDED
+expect_tlm 30 fs.SIM_ACTIVE==0
+
+note === #1159 regression: after landing the SAME tap must work ===
+mark
+send 23 00
+expect_serial 10 Logging STOPPED \(manual\)
+
+note === #1113 part B: Stop after a flown-out sim must re-arm to READY ===
+mark
+send 7
+expect_tlm 30 st==READY
+note === done ===

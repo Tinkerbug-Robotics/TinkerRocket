@@ -1,0 +1,76 @@
+# #1211 — FC-console pass: closes #1113 part A, #1114's sim-during-cal
+# cancellation, #1110's full dozen taps, and #1118(a)'s LANDED refusal.
+#
+# Rig: V9 pair, S1 -> F (FLIGHT COMPUTER console), flight pack in.
+# Every line asserted here is FC-side. Opening the port resets the FC, which is
+# what makes the "no sim flight this run" check below meaningful — it must be
+# FIRST, before anything starts a sim.
+
+note === #1113 part A: a Stop with NO sim run this FC boot must be ignored ===
+mark
+send 7
+expect_serial 15 \[SIM\] Stop ignored: no sim flight this run
+refute_serial_since \[SIM\] Stop cmd received
+
+note === #1114 part 4: a sim launch during a cal must CANCEL the cal ===
+mark
+send 21
+expect_serial 10 Calibrating sensors \(10000 ms window
+# Start the sim ~2 s into the 10 s window so launch detect fires inside it.
+sleep 2
+send 5 00c05c4400009a42cdcccc3f0000c841
+send 6
+expect_serial 15 \[CAL\] Sensor calibration CANCELLED: launch detected — previous calibration kept
+# The cancelled window must NOT go on to save anything.
+refute_serial_since \[CAL\] Sensor calibration complete
+# ...and the sim must fly normally regardless.
+expect_tlm 40 st==INFLIGHT
+expect_tlm 40 fs.SIM_ACTIVE==1
+
+note === Fly it out; then #1114/#1118(a): cal is refused in LANDED ===
+mark
+wait_tlm 180 st==LANDED
+expect_tlm 180 st==LANDED
+send 21
+expect_serial 10 \[CAL\] Sensor calibration REFUSED: LANDED — previous calibration kept
+send 50
+expect_serial 10 \[MAGCAL\] start refused: state=[0-9]+ \(INFLIGHT and LANDED
+
+note === Re-arm to READY for the tap series ===
+mark
+send 7
+expect_serial 15 \[SIM\] Stop cmd received — flight state reset
+expect_tlm 30 st==READY
+
+note === #1110: a full dozen back-to-back calibration windows ===
+mark
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+refute_serial_since polling transaction is not terminated
+refute_serial_since ESP-ROM:esp32p4
+refute_serial_since imu_q_drops=[1-9]
+refute_serial_since \[CAL\] Sensor calibration FAILED
+expect_serial 10 \[SENSOR\] reads/s: ism6=[0-9]+ .*bmp=[1-9][0-9]* .*iis=[1-9][0-9]*
+note === done ===

@@ -1,0 +1,48 @@
+# #1211 / #1115 — roll-profile range check, OC-CONSOLE half (PR #1213).
+#
+# Rig: V9 pair, S1 -> O (OUT COMPUTER console). This is where the item's line
+# lives: the OC refuses an out-of-range profile and never relays it, so the
+# operator is stopped while still at the pad. The FC's own validator is a
+# backstop the app path cannot reach — an earlier run on the FC console saw
+# nothing at all, which is the correct negative result but not this evidence.
+#
+# cmd 26 = RollProfileData, 76 B: [num_wp u8][pad 3][8 x {t f32, angle f32, mode u8}].
+# NOT the 68 B the generated protocol reference describes (it drops the mode
+# byte); a short frame fails cfg_len >= sizeof(RollProfileData) and is ignored.
+
+note === Baseline: a VALID 2-waypoint profile is accepted and relayed ===
+mark
+send 26 02000000000000000000000000000020410000b44200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 Roll profile \(2 waypoints\) queued for RocketComputer
+
+note === angle = +inf: REJECTED at the OC, never relayed ===
+mark
+send 26 02000000000000000000000000000020410000807f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 Roll profile REJECTED \(waypoint angle\) — not relayed to RocketComputer
+refute_serial 2 Roll profile \(.*\) queued
+
+note === angle = 9999999999 (|a| > 720): REJECTED ===
+mark
+send 26 0200000000000000000000000000002041f902155000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 Roll profile REJECTED \(waypoint angle\) — not relayed to RocketComputer
+
+note === time = 700 s (> 600): REJECTED ===
+mark
+send 26 0200000000000000000000000000002f440000b44200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 Roll profile REJECTED \(waypoint time\) — not relayed to RocketComputer
+
+note === decreasing waypoint times: REJECTED ===
+mark
+send 26 020000000000204100000000000000a0400000b44200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 Roll profile REJECTED \(time order\) — not relayed to RocketComputer
+
+note === count = 9 (> 8): REJECTED ===
+mark
+send 26 09000000000000000000000000000020410000b44200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 Roll profile REJECTED \(waypoint count\) — not relayed to RocketComputer
+
+note === Regression: a valid profile is still accepted after all five rejects ===
+mark
+send 26 02000000000000000000000000000020410000b44200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 Roll profile \(2 waypoints\) queued for RocketComputer
+note === done ===

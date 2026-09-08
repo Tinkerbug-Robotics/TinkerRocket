@@ -1,0 +1,58 @@
+# #1211 / #1114 (PR #1212) + #1110 (PR #1204) — pad calibration no longer blocks
+# the flight loop, and is measured by the IMU poll task.
+#
+# Rig: V9 pair, S1 -> F (FLIGHT COMPUTER console — every [CAL] line is FC-side).
+# cmd 21 = GYRO_CAL_CMD, the app's "Calibrate" button.
+# The window is CAL_WINDOW_US = 10 s.
+
+note === #1114 single cal: window opens, feed stays alive, completes to NVS ===
+mark
+send 21
+expect_serial 10 Calibrating sensors \(10000 ms window, every ISM6 sample; the flight loop keeps running\)
+# The load-bearing check: before PR #1212 the BLE feed went dead for the whole
+# 10 s. Telemetry runs ~5 Hz, so require >=2 Hz and NO gap longer than 1 s.
+expect_tlm_nogap 12 2.5
+expect_serial 15 \[CAL\] Sensor calibration complete \(saved to NVS\)
+# #1110: the gyro average must come from the poll task at the live ODR.
+expect_serial 5 Gyro offsets:
+# #1110: the IDF polling-lock symptom that the old in-loop path could provoke.
+refute_serial_since polling transaction is not terminated
+# #1114: no IMU samples may be lost across the window (NSF2_FC_IMU_DROP).
+refute_serial_since imu_q_drops=[1-9]
+# ...and no reboot: a fresh boot banner would mean the cal crashed the FC.
+refute_serial_since ESP-ROM:esp32p4
+
+note === #1114 double tap INSIDE the window: second is ignored, ONE status frame ===
+mark
+send 21
+expect_serial 10 Calibrating sensors \(10000 ms window
+sleep 2
+send 21
+expect_serial 10 \[CAL\] Sensor calibration already running — request ignored
+expect_serial 20 \[CAL\] Sensor calibration complete \(saved to NVS\)
+sleep 2
+# SENSOR_CAL_STATUS (#132) is a file-ops frame with a 0xCB discriminator.
+# Two taps must still produce exactly ONE status frame, at the end.
+expect_fileops cb 1
+refute_serial_since imu_q_drops=[1-9]
+
+note === #1110 repeat taps: a dozen windows back to back, no reboot, no stall ===
+mark
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+send 21
+sleep 12
+refute_serial_since polling transaction is not terminated
+refute_serial_since ESP-ROM:esp32p4
+refute_serial_since imu_q_drops=[1-9]
+# Sensors must still be streaming after all of it (BMP and mag, per #1110).
+expect_serial 10 \[SENSOR\] reads/s: ism6=[0-9]+ .*bmp=[1-9][0-9]* .*iis=[1-9][0-9]*
+note === done ===

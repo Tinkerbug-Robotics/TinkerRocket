@@ -1,0 +1,17 @@
+# Pre-flight for any base-station session: are both consoles landing in one
+# timeline, and is the BS actually hearing the rocket over LoRa?
+#
+# Run this FIRST. A rocket that cold-booted comes up with the FC rail OFF
+# (`OutComputer ready (PWR_PIN OFF, waiting for power-on command)`), which means
+# initPeripherals() never ran and LoRa was never initialised — the BS then hears
+# nothing and every uplink test fails for a reason that has nothing to do with
+# the fix under test. Fix with a rail-up first:
+#   bench_ble_cmd.py --name "RC V9" --cmd 8 --payload 01
+#
+# The BS advertises as `nimble`, NOT as its configured name, so connect to it by
+# address (bench_ble_cmd.py --scan to find it) rather than by --name.
+note === link check: both consoles + the LoRa downlink ===
+mark
+expect_serial 45 ^\[BS\] .*\[RX\] [A-Z]+ \| alt=
+expect_serial 20 ^\[RKT\] .*OC
+refute_serial_since ^\[BS\] .*\[RX\] Drop

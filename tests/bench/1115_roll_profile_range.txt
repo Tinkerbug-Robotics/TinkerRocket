@@ -1,0 +1,48 @@
+# #1211 / #1115 — roll-profile waypoints are range-checked; a bad profile is
+# REJECTED (never clamped) and the previous profile survives.  Merged d58e3a9b.
+#
+# Rig: V9 pair, S1 -> F (FLIGHT COMPUTER console — the [ROLL PROF] lines are FC-side).
+# cmd 26 = RollProfileData, 76 bytes: [num_wp u8][pad 3][8 x {time f32, angle f32, mode u8}].
+# NB the generated protocol reference omits the per-waypoint mode byte and so
+# describes a 68-byte frame; the FC requires cfg_len >= sizeof(RollProfileData)
+# = 76, and a short frame is silently ignored rather than rejected.
+#
+# Bounds under test (RollProfileGate.h): |angle| <= 720 deg, time in [0, 600] s,
+# times non-decreasing, count <= 8 — each non-finite value caught by isfinite.
+
+note === Baseline: a VALID 2-waypoint profile must be accepted ===
+mark
+send 26 02000000000000000000000000000020410000b44200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 \[ROLL PROF\] Set 2 waypoints \(saved to NVS\)
+
+note === angle = +inf must be REJECTED, keeping the 2 valid waypoints ===
+mark
+send 26 02000000000000000000000000000020410000807f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 \[ROLL PROF\] REJECTED \(waypoint angle\) — keeping 2 waypoints
+refute_serial 2 \[ROLL PROF\] Set
+
+note === angle = 9999999999 (|a| > 720) must be REJECTED ===
+mark
+send 26 0200000000000000000000000000002041f902155000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 \[ROLL PROF\] REJECTED \(waypoint angle\) — keeping 2 waypoints
+
+note === time = 700 s (> 600) must be REJECTED ===
+mark
+send 26 0200000000000000000000000000002f440000b44200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 \[ROLL PROF\] REJECTED \(waypoint time\) — keeping 2 waypoints
+
+note === decreasing times must be REJECTED ===
+mark
+send 26 020000000000204100000000000000a0400000b44200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 \[ROLL PROF\] REJECTED \(time order\) — keeping 2 waypoints
+
+note === count = 9 (> 8 max) must be REJECTED ===
+mark
+send 26 09000000000000000000000000000020410000b44200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 \[ROLL PROF\] REJECTED \(waypoint count\) — keeping 2 waypoints
+
+note === Regression: a valid profile is still accepted after all those rejects ===
+mark
+send 26 02000000000000000000000000000020410000b44200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+expect_serial 10 \[ROLL PROF\] Set 2 waypoints \(saved to NVS\)
+note === done ===

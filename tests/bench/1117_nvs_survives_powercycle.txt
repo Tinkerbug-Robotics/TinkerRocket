@@ -1,0 +1,22 @@
+# #1211 / #1117 part 2 of 2 — the configuration must come back from the FC's
+# OWN NVS after a power cycle.
+#
+# Rig: V9 pair, S1 -> F. Run AFTER part 1, which set ch3 on and power-cycled
+# the FC. Attaching the serial port resets the FC, so this run gets a fresh
+# boot log to read `NVS pyro:` out of.
+#
+# Why this check exists: no pyro readback is FC-sourced (#1231), so an OC
+# echoing its own cache would look identical to the FC really holding the
+# configuration. The FC's boot-time NVS line is the only honest evidence.
+
+note === The FC must load ch3=1/0/2.0 from its own NVS at boot ===
+# NO `mark` here, deliberately. The boot line lands ~1 s in, when the serial
+# attach resets the FC — before the BLE connect and therefore before any mark a
+# script could set. The default origin of 0.0 is the only one that sees it.
+expect_serial 60 NVS pyro: ch1=1/0/0.0  ch2=1/1/152.4  ch3=1/0/2.0  ch4=0/0/0.0
+
+note === Restore the board's original pyro configuration ===
+mark
+send 34 010000000000010166661843000000000000000000000000
+expect_serial 25 \[PYRO CFG\] ch1=1/0/0.0  ch2=1/1/152.4  ch3=0/0/0.0  ch4=0/0/0.0
+note === done ===

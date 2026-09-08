@@ -1,0 +1,53 @@
+# #1211 / #1130 (PR #1238) — a sim START uplinked while the rocket is INFLIGHT
+# must be REFUSED outright, not queued for delivery at the first post-landing
+# poll (where it reset the flight state and defeated the #317 lockout).
+#
+# Rig: V9 on its FLIGHT PACK (LoRa needs VBATT) *and* on USB with S1 -> O, plus
+# the flag-2 base station on USB. BLE goes to the BASE STATION, not the rocket:
+#   --name "BaseStation V4"
+#   --port <V9>:RKT --port <BS>:BS
+# The rocket's state is read from the BS's own [RX] lines over LoRa, so no BLE
+# link to the rocket is needed — and the refusal is logged on the ROCKET, which
+# is why both consoles are tailed.
+#
+# BS BLE cmds: 5 = sim config (16 B, relayed as uplink 5), 6 = sim start, 7 = stop.
+
+note === The BS must be hearing the rocket before any of this means anything ===
+mark
+# Wait for a state that can actually accept a sim start — the rocket reports
+# INIT for the first few seconds after a rail-up and would refuse one there.
+expect_serial 90 ^\[BS\] .*\[RX\] (READY|PRELAUNCH) \| alt=
+
+note === On the ground: an uplinked sim config + start must be ACCEPTED ===
+mark
+send 5 00c05c4400009a42cdcccc3f0000c841
+expect_serial 15 ^\[BS\] .*\[BLE->UPLINK\] Sim config
+send 6
+expect_serial 15 ^\[BS\] .*\[BLE->UPLINK\] Sim start
+expect_serial 20 ^\[RKT\] .*UPLINK Sim start queued for FlightComputer
+refute_serial_since ^\[RKT\] .*UPLINK cmd=6 refused
+
+note === The rocket flies: wait for INFLIGHT on the downlink ===
+mark
+expect_serial 60 ^\[BS\] .*\[RX\] INFLIGHT \| alt=
+
+note === #1130: a SECOND sim start, now INFLIGHT, must be REFUSED ===
+mark
+send 6
+expect_serial 20 ^\[RKT\] .*UPLINK cmd=6 refused: rocket INFLIGHT
+# Nothing may be queued for the FC by that refused command.
+refute_serial_since ^\[RKT\] .*UPLINK Sim start queued for FlightComputer
+
+note === The half that matters: nothing is delivered after landing either ===
+expect_serial 180 ^\[BS\] .*\[RX\] LANDED \| alt=
+# The mark goes AFTER touchdown, not before: the refutations below must look at
+# the post-landing window only. Marking first makes them search back across the
+# whole descent, where an INFLIGHT frame at 464 m is correct and expected.
+mark
+# Watch well past the first post-landing poll. Before this PR the queued start
+# arrived here and reset the flight state out of terminal LANDED.
+sleep 25
+refute_serial_since ^\[RKT\] .*UPLINK Sim start queued for FlightComputer
+refute_serial_since ^\[RKT\] .*\[SIM\] Start cmd received
+refute_serial_since ^\[BS\] .*\[RX\] (INFLIGHT|READY|PRELAUNCH) \| alt=
+note === done ===

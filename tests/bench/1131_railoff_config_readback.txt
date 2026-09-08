@@ -1,0 +1,75 @@
+# #1211 / #1131 — the rail-OFF config readback reports STORED deployment config,
+# not compile-time defaults.  PR #1232.
+#
+# Rig: V9 pair, USB-C on J6, S1 -> O (Out Computer console), flight pack PLUGGED IN.
+# The pack matters: rail-off with the pack in is the documented case this fails in.
+# Run:
+#   python3 tools/bench_session.py --name TR-R --port /dev/cu.usbmodem2101 \
+#       --script tests/bench/1131_railoff_config_readback.txt --out runs/1131
+#
+# Scope note: this script drives the ROOT-CAUSE half — that the readback after a
+# rail-off reports what is stored.  The "dangerous half" (a single-channel edit
+# from the app must not wipe the other three) is a read-modify-write in the APP,
+# so sending the frame from here would bypass the very behaviour under test.
+# That half needs the phone; it is called out in the run report, not faked here.
+
+note === Baseline: rail ON, configure ch1 drogue-at-apogee and ch2 main at 150 m ===
+wait_tlm 20 st!=NONE
+
+# cmd 34 = PyroConfigData, 4 x {enabled u8, mode u8, value f32} packed.
+# ch1 enabled/TIME_AFTER_APOGEE/+0.0 s, ch2 enabled/ALTITUDE_ON_DESCENT/150.0 m.
+send 34 010000000000010166661843000000000000000000000000
+expect_serial 10 \[PYRO CFG\]|Pyro config
+sleep 2
+
+note === Readback with the rail ON: the stored values must come back ===
+mark
+send 20
+expect_tlm 10 type==config_pyro
+expect_tlm 10 p1e==true
+expect_tlm 10 p2e==true
+expect_tlm 10 p2m==1
+expect_tlm 10 p2v==152.4
+health
+
+note === Power the rail OFF (cmd 8 payload 00); the OC restarts with the rail down ===
+# `mark` sets the search origin: everything the reboot prints from here on is
+# inside the window the *_since / expect_order assertions below look at.  The
+# forward-looking expect_serial cannot see these — by the time the script gets
+# to them the boot lines have long scrolled past.
+mark
+send 8 00
+# The OC restarts here, so the link drops with it. Retake it before reading back.
+sleep 10
+disconnect
+sleep 2
+connect
+wait_tlm 30 st!=NONE
+
+note === THE CHECK: rail OFF, readback must still report ch1 and ch2 as configured ===
+# Before PR #1232 all four read "Disabled" here.
+# NB: no `mark` here — the one before the power-off must stay in force so the
+# reboot's boot lines remain inside the expect_order window below.
+send 20
+expect_tlm 15 type==config_pyro
+expect_tlm 15 p1e==true
+expect_tlm 15 p2e==true
+expect_tlm 15 p2m==1
+expect_tlm 15 p2v==152.4
+
+note === Ordering proof: the NVS load must run in setup_oc, BEFORE any rail line ===
+expect_serial_since CFG: NVS Pyro:
+expect_serial_since CFG: NVS Camera type:
+expect_order CFG: NVS Pyro: || PWR_PIN|FC rail
+expect_order CFG: NVS Camera type: || PWR_PIN|FC rail
+
+note === Rail back ON: initPeripherals re-reads, and that re-read is idempotent ===
+send 8 01
+sleep 14
+mark
+send 20
+expect_tlm 15 p1e==true
+expect_tlm 15 p2e==true
+expect_tlm 15 p2v==152.4
+health
+note === done; check console.log for NVS-Pyro-before-PWR_PIN ordering ===

@@ -92,3 +92,7 @@ TinkerRocketApp/DerivedData/
 # (docs/android-release-signing.md); belt-and-suspenders for a mis-placed file.
 *.keystore
 *.jks
+
+# Bench run artifacts (tools/bench_session.py --out): timestamped console dumps
+# and timelines. The evidence that matters is quoted into the tracking issue.
+runs/

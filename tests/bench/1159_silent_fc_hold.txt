@@ -1,0 +1,52 @@
+# #1211 / #1159 second half (PR #1238) — the silent-FC escape hatch.
+#
+# A mid-flight "Stop Logging" tap is refused while INFLIGHT. #1162 made that
+# refusal survive a SILENT FC: latest_rocket_state never ages, and the hold is
+# bounded by FLIGHT TIME (~600 s), not by the 3 s frame-freshness term that used
+# to be the way out. This proves the refusal still stands when the FC has gone
+# quiet for far longer than 3 s.
+#
+# STATUS 2026-09-08: NOT RUN — BLOCKED. There is no accessible way to hold the
+# FC in reset on this bench. SW2 on the central_processing_p4 sheet is the BOOT
+# button, not reset (owner-confirmed), and the board is not reachable in its
+# current test fixture, so FC_CHIP_PU cannot be pulled low by hand. The script
+# below is complete and should work as written once a reset is exposed.
+#
+# Rig: V9 on its flight pack + USB, S1 -> O (OUT COMPUTER console).
+# OPERATOR ACTION REQUIRED mid-run: hold the flight computer in reset when the
+# script says so, and release when it says so. The script waits for the FC's
+# frames to actually stop rather than trusting the timing of the press.
+#
+# Descent is 3 m/s, giving ~200 s of INFLIGHT — a wide window for a human
+# to hold and release a button on a wall-clock cue.
+
+note === Fly a sim to INFLIGHT with logging running ===
+mark
+send 5 00c05c4400009a42cdcccc3f00004040
+send 6
+wait_tlm 40 st==INFLIGHT
+expect_tlm 40 st==INFLIGHT
+expect_tlm 40 fs.LOGGING_ACTIVE==1
+
+note ===  >>> HOLD THE FC IN RESET NOW — keep holding until told <<<  ===
+# Wait for 12 s with no FC frames at all. 12 s is chosen so the refusal below
+# must report a frame age of five digits (>= 10000 ms), which is decisively
+# past the old 3 s freshness term rather than merely past it.
+wait_quiet I2C_RX: Got 12 90
+
+note === #1159/#1162: the refusal must STILL hold with the FC silent ===
+mark
+send 23 00
+expect_serial 15 Logging STOP REFUSED: rocket is INFLIGHT
+# Five-digit frame age proves the 3 s freshness term is not what is holding it.
+expect_serial 15 FC frame [0-9]{5,} ms ago
+# ...and the bound is flight time: a hold with hundreds of seconds still to run.
+expect_serial 15 silent-FC hold [0-9]+ s left
+refute_serial_since Logging STOPPED \(manual\)
+# The log itself never stopped.
+refute_tlm 5 fs.LOGGING_ACTIVE==0
+
+note ===  >>> RELEASE THE FC RESET NOW <<<  ===
+mark
+expect_serial 90 I2C_RX: Got [0-9]+ bytes from FC
+note === done — the FC is back; stop the sim by hand afterwards if needed ===

@@ -1,0 +1,42 @@
+# #1211 / #923 (PR #923) — "LoRa off" mute mode, and the half that had never
+# been demonstrated: UN-muting a muted rocket from the base station.
+#
+# The whole point of the design is that a muted rocket stops transmitting but
+# KEEPS LISTENING, so the ground can call it back. Nothing had ever proved the
+# call-back path worked; a bug there means a rocket muted on the pad is
+# unrecoverable without physically reaching it.
+#
+# Rig: V9 on its flight pack + USB (S1 -> O), flag-2 base station on USB.
+#   --address <BS>  --port <V9>:RKT --port <BS>:BS
+# BS cmd 50 = BLE_BS_CMD_RELAY_TO_ROCKET, payload [rid][inner_cmd][inner_payload].
+#   mute   -> rid 1, cmd 68 (0x44), payload 01  = 014401
+#   unmute -> rid 1, cmd 68 (0x44), payload 00  = 014400
+#
+# Muting is REFUSED while INFLIGHT by design, so this runs on the ground.
+# Recovery if the un-mute half fails: the rocket is still reachable on its own
+# BLE — bench_ble_cmd.py --name "RC V9" --cmd 68 --payload 00.
+
+note === The BS must be hearing the rocket first ===
+mark
+expect_serial 90 ^\[BS\] .*\[RX\] (READY|PRELAUNCH|INIT) \| alt=
+
+note === Mute over the air ===
+mark
+send 50 014401
+expect_serial 15 ^\[BS\] .*\[BLE->UPLINK\] Relay cmd=68 -> rid=1
+expect_serial 20 ^\[RKT\] .*\[LORA\] Transmit MUTED \(UPLINK\)
+expect_serial 20 ^\[RKT\] .*still listening for uplink
+
+note === The rocket must now be SILENT on the air ===
+refute_serial 20 ^\[BS\] .*\[RX\] [A-Z]+ \| alt=
+
+note === THE demonstration: call it back from the ground ===
+mark
+send 50 014400
+expect_serial 15 ^\[BS\] .*\[BLE->UPLINK\] Relay cmd=68 -> rid=1
+# The muted rocket heard an uplink it could only have received while silent.
+expect_serial 25 ^\[RKT\] .*\[LORA\] Transmit UNMUTED \(UPLINK\)
+expect_serial 25 ^\[RKT\] .*telemetry and beacon resume
+# ...and the downlink really comes back.
+expect_serial 30 ^\[BS\] .*\[RX\] [A-Z]+ \| alt=
+note === done ===
