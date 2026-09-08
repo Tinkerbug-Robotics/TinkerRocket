@@ -5631,19 +5631,7 @@ static void loop_bs()
         if (payload_len >= 1)
         {
             const bool new_disabled = (payload[0] != 0);
-            if (new_disabled != lora_hop_disabled &&
-                !loraHopChangeAllowed(new_disabled, freqLockedForFlight()))
-            {
-                // #1147 item 5: same gate the rocket now applies, applied here
-                // too so the command never goes out.  This one matters more
-                // than the rocket-side half: buildUplinkPacket defaults to
-                // target_rid 0xFF, so an operator enabling hopping for a rocket
-                // on the pad was broadcasting it to every airborne rocket on
-                // the network.  sendCurrentConfig() snaps the app's picker back.
-                ESP_LOGW(TAG, "[BLE] Hop enable REFUSED: frequency locked for flight (#1147)");
-                sendCurrentConfig();
-            }
-            else if (!new_disabled && currentHopDwell() == 0)
+            if (!new_disabled && currentHopDwell() == 0)
             {
                 // #150: the current modulation can't fit one packet inside
                 // the FCC dwell budget — refuse the enable and re-send
