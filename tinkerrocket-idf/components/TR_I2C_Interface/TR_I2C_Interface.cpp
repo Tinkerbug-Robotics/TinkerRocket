@@ -109,7 +109,7 @@ esp_err_t TR_I2C_Interface::beginSlave(int sda_pin,
     // the staged TX response shared between writeToSlave() and slaveTxTask().
     // _dev_mux (#402) serializes slaveTxTask's i2c_slave_write against the
     // del/re-create in resetSlaveTx().
-    _rx_queue     = xQueueCreate(4, sizeof(size_t));
+    _rx_queue     = xQueueCreate(SLAVE_RX_SLOTS, sizeof(uint8_t));   // #1134: slot indices
     _tx_req_queue = xQueueCreate(4, sizeof(uint8_t));
     _tx_mux       = xSemaphoreCreateMutex();
     _dev_mux      = xSemaphoreCreateMutex();
@@ -127,7 +127,9 @@ esp_err_t TR_I2C_Interface::beginSlave(int sda_pin,
         return err;
     }
 
-    memset(_slave_rx_buf, 0, SLAVE_RX_BUF_SIZE);
+    memset(_slave_rx_slots, 0, sizeof(_slave_rx_slots));   // #1134
+    _slave_rx_head  = 0;
+    _slave_rx_drops = 0;
 
     // Start the TX service task. Pin it to the core this runs on — the slave
     // ISR is allocated on the same core, so on_request -> task wakeups stay
@@ -229,9 +231,18 @@ esp_err_t TR_I2C_Interface::resetSlaveTx()
 // ---------------------------------------------------------------------------
 //  Slave on_receive ISR (V2): master finished a write transaction.
 //  edata->buffer is driver-owned and reused on the next receive, so copy the
-//  payload into our class-scoped _slave_rx_buf and post the byte count to
-//  _rx_queue. Single-buffer: a second master write before readFromSlave()
-//  consumes the first overwrites it — acceptable at the FC->OC poll rate.
+//  payload into the next ring slot and post that slot's INDEX to _rx_queue.
+//
+//  #1134: this used to be one shared buffer plus a queue of byte counts, with
+//  a comment calling the overwrite "acceptable at the FC->OC poll rate".  It
+//  was not merely lossy — it was a REPLAY: each queued count re-parsed
+//  whatever the single buffer held at read time, so N queued counts delivered
+//  N copies of the NEWEST frame.  On the OC every one of those copies looks
+//  like a fresh OUT_STATUS_QUERY and advances the command serving slot, so a
+//  short backlog spends a command's entire CMD_REPEAT_LIMIT window in
+//  milliseconds instead of across three polls, and the FC can miss it
+//  entirely.  A full ring now DROPS the oldest arrival and counts it, which
+//  is a visible loss rather than an invisible duplication.
 // ---------------------------------------------------------------------------
 bool IRAM_ATTR TR_I2C_Interface::slaveReceiveISR(
     i2c_slave_dev_handle_t channel,
@@ -247,8 +258,23 @@ bool IRAM_ATTR TR_I2C_Interface::slaveReceiveISR(
     {
         copy_len = SLAVE_RX_BUF_SIZE;
     }
-    memcpy(self->_slave_rx_buf, edata->buffer, copy_len);
-    xQueueSendFromISR(self->_rx_queue, &copy_len, &xHigherPriorityTaskWoken);
+
+    const uint8_t slot = self->_slave_rx_head;
+    SlaveRxFrame &f = self->_slave_rx_slots[slot];
+    memcpy(f.bytes, edata->buffer, copy_len);
+    f.len = static_cast<uint16_t>(copy_len);
+
+    if (xQueueSendFromISR(self->_rx_queue, &slot, &xHigherPriorityTaskWoken) != pdTRUE)
+    {
+        // Ring full: this frame is lost.  Say so — the whole point of the
+        // change is that a backlog must not turn into a replay.
+        self->_slave_rx_drops++;
+    }
+    else
+    {
+        self->_slave_rx_head =
+            static_cast<uint8_t>((slot + 1u) % SLAVE_RX_SLOTS);
+    }
 
     return xHigherPriorityTaskWoken == pdTRUE;
 }
@@ -441,23 +467,32 @@ int TR_I2C_Interface::readFromSlave(uint8_t* out_buf,
         return -1;
     }
 
-    // The on_receive ISR already copied the master-write payload into
-    // _slave_rx_buf and posted its byte count. The V2 driver auto-re-arms via
-    // its internal RX ring, so there is no explicit re-arming here.
-    size_t rx_len = 0;
-    if (xQueueReceive(_rx_queue, &rx_len, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    // The on_receive ISR already copied the master-write payload into a ring
+    // slot and posted that slot's index. The V2 driver auto-re-arms via its
+    // internal RX ring, so there is no explicit re-arming here.
+    //
+    // #1134: parse THIS slot's bytes with THIS slot's length, so a queued
+    // frame is the frame that arrived rather than whatever landed last.
+    uint8_t slot = 0;
+    if (xQueueReceive(_rx_queue, &slot, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
     {
         return 0; // no data available
     }
+    if (slot >= SLAVE_RX_SLOTS)
+    {
+        return 0;
+    }
+    const SlaveRxFrame &frame = _slave_rx_slots[slot];
+    const size_t rx_len = frame.len;
 
     // Determine valid data length from frame protocol:
     // SOF(4) + type(1) + len(1) + payload(len) + CRC(2)
     size_t valid_len = 0;
     if (rx_len >= 6 &&
-        _slave_rx_buf[0] == SOF0 && _slave_rx_buf[1] == SOF1 &&
-        _slave_rx_buf[2] == SOF2 && _slave_rx_buf[3] == SOF3)
+        frame.bytes[0] == SOF0 && frame.bytes[1] == SOF1 &&
+        frame.bytes[2] == SOF2 && frame.bytes[3] == SOF3)
     {
-        size_t payload_len = _slave_rx_buf[5];
+        size_t payload_len = frame.bytes[5];
         valid_len = 4 + 1 + 1 + payload_len + 2; // SOF + type + len + payload + CRC
         if (valid_len > rx_len)
         {
@@ -475,7 +510,7 @@ int TR_I2C_Interface::readFromSlave(uint8_t* out_buf,
     }
 
     size_t copy_len = (valid_len < out_buf_capacity) ? valid_len : out_buf_capacity;
-    memcpy(out_buf, _slave_rx_buf, copy_len);
+    memcpy(out_buf, frame.bytes, copy_len);
     return static_cast<int>(copy_len);
 }
 
