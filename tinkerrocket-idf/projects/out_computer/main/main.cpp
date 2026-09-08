@@ -7236,410 +7236,432 @@ void initPeripherals()
     log_cfg.flush_task_hook = flightlogFlushTaskHook;
     log_cfg.dirty_marker_addr = config::MRAM_DIRTY_MARKER_ADDR;  // #274: sink-mode dirty marker
 
-    if (!logger.begin(SPI, log_cfg))
+    const bool logger_ok = logger.begin(SPI, log_cfg);
+    if (!logger_ok)
     {
         // Non-obvious on the RAM-ring path: begin() also fails when the 64 KB
-        // internal-RAM ring can't be allocated. That leaves
-        // peripherals_initialized false and flightlog uninitialized, so
-        // ocStorageHealth() reports SH_BAD and the pre-launch scorecard goes
-        // red — the operator does find out. Keep it that way.
-        ESP_LOGE("PWR", "TR_LogToFlash begin failed");
-        return;
+        // internal-RAM ring can't be allocated. ocStorageHealth() reports
+        // SH_BAD (flightlog is never initialized below) so the pre-launch
+        // scorecard goes red — the operator does find out.
+        //
+        // #1132: this used to `return`, which skipped the LoRa bring-up, the
+        // I2S slave RX channel and parse task, the deferred I2C-slave join and
+        // `peripherals_initialized = true`. A NAND that would not mount took
+        // out the downlink and the whole FC<->OC link, not just logging — and
+        // nothing retried, because the 1 Hz RX retry is armed inside the
+        // channel bring-up this return skipped, and the only re-entry (cmd 8)
+        // is refused while the FC reports INFLIGHT. On the #825 rail-restore
+        // path that is a rocket under canopy with no tracking downlink.
+        // The logging bring-up below is skipped; everything after it still
+        // runs, matching how the adjacent flightlog.begin() failure is already
+        // handled ("deliberately non-fatal (BLE/downlink still run so the
+        // fault is reachable)").
+        ESP_LOGE("PWR", "TR_LogToFlash begin failed — flight logging is DEAD "
+                        "this boot, but LoRa, the I2S link and the I2C command "
+                        "path still come up (#1132)");
     }
 
-    // #822: V9/V10 deleted the MRAM (U12, MR25H10) — the S3RH2's in-package
-    // PSRAM replaced it — so board_v9.h sets MRAM_CS = -1 and TR_LogToFlash
-    // falls back to a heap RAM ring. Flight logging is unaffected (the ring
-    // still feeds the NAND flush task), but two things that live in the MRAM
-    // region are GONE on those boards, not degraded:
-    //
-    //   * #104 in-flight reboot recovery. The FC asks for its last snapshot
-    //     with GET_FLIGHT_SNAPSHOT after a brownout/panic; the handler reads it
-    //     out of MRAM, so with no MRAM there is nothing to answer with and the
-    //     FC skips recovery.
-    //   * #274 dirty-ring replay. The marker sits in the same region, so an
-    //     unclean shutdown can no longer be detected, and the volatile ring
-    //     would not have survived the reset anyway.
-    //
-    // Both failures are otherwise completely silent — mramRawWrite/Read just
-    // return false, nothing logs, nothing goes red — so the first evidence
-    // would be a flight that browned out and never came back. Say it once,
-    // loudly, at boot instead. The replacement design already exists on the
-    // mini (snapshots written into the NAND log stream, recovered by a
-    // tail-scan at boot); porting it to the OC/FC pair is the real fix.
-    // #822: cross-check the board flag against the silicon, unconditionally —
-    // this is the generalisation of the bug that motivated board_v9.h. A wrong
-    // -DTR_BOARD_* flag has no runtime symptom on this MCU (the pin maps are
-    // identical), so the only thing that can catch it is asking the chip.
+    // #1132: everything in this block needs a live logger — the SPI bus and
+    // the bad-block bitmap are initialized by logger.begin(), so flightlog,
+    // the MRAM replay, the snapshot re-seed and the flush task all depend on
+    // it. Skipped wholesale when the logger is dead; the radio and link
+    // bring-up after it is not.
+    if (logger_ok)
     {
-        const int psram_mb = s3PsramCapMb();
-        if (psram_mb < 0)
+        // #822: V9/V10 deleted the MRAM (U12, MR25H10) — the S3RH2's in-package
+        // PSRAM replaced it — so board_v9.h sets MRAM_CS = -1 and TR_LogToFlash
+        // falls back to a heap RAM ring. Flight logging is unaffected (the ring
+        // still feeds the NAND flush task), but two things that live in the MRAM
+        // region are GONE on those boards, not degraded:
+        //
+        //   * #104 in-flight reboot recovery. The FC asks for its last snapshot
+        //     with GET_FLIGHT_SNAPSHOT after a brownout/panic; the handler reads it
+        //     out of MRAM, so with no MRAM there is nothing to answer with and the
+        //     FC skips recovery.
+        //   * #274 dirty-ring replay. The marker sits in the same region, so an
+        //     unclean shutdown can no longer be detected, and the volatile ring
+        //     would not have survived the reset anyway.
+        //
+        // Both failures are otherwise completely silent — mramRawWrite/Read just
+        // return false, nothing logs, nothing goes red — so the first evidence
+        // would be a flight that browned out and never came back. Say it once,
+        // loudly, at boot instead. The replacement design already exists on the
+        // mini (snapshots written into the NAND log stream, recovered by a
+        // tail-scan at boot); porting it to the OC/FC pair is the real fix.
+        // #822: cross-check the board flag against the silicon, unconditionally —
+        // this is the generalisation of the bug that motivated board_v9.h. A wrong
+        // -DTR_BOARD_* flag has no runtime symptom on this MCU (the pin maps are
+        // identical), so the only thing that can catch it is asking the chip.
         {
-            ESP_LOGI("PWR", "In-package PSRAM per eFuse: unreadable");
-        }
-        else if (psram_mb == 0)
-        {
-            ESP_LOGI("PWR", "In-package PSRAM per eFuse: none");
-        }
-        else
-        {
-            ESP_LOGI("PWR", "In-package PSRAM per eFuse: %d MB", psram_mb);
-        }
-
-        // Disagreements are build/flash mistakes, not hardware faults, so they
-        // are worth shouting about while someone is still at the bench.
-        if (config::RING_IN_PSRAM && psram_mb == 0)
-        {
-            ESP_LOGE("PWR", "BOARD FLAG SAYS PSRAM, SILICON SAYS NONE — this is "
-                            "not a V9/V10 board, or it was built -DTR_BOARD_V9=1 "
-                            "by mistake. Ring falls back to internal RAM.");
-        }
-        else if (!config::RING_IN_PSRAM && psram_mb > 0)
-        {
-            ESP_LOGW("PWR", "This chip has %d MB of in-package PSRAM that the "
-                            "selected board map does not use. Expected on a V7/V8 "
-                            "board (MRAM is fitted); if this IS a V9/V10 board, it "
-                            "was built with the wrong -DTR_BOARD_* flag.", psram_mb);
-        }
-    }
-
-    if (!logger.isMramEnabled())
-    {
-        TR_LogToFlashStats mram_st = {};
-        logger.getStats(mram_st);
-        ESP_LOGW("PWR", "========================================");
-        ESP_LOGW("PWR", "NO MRAM ON THIS BOARD (MRAM_CS = -1).");
-        ESP_LOGW("PWR", "  Log ring: %lu KB of %s, VOLATILE.",
-                 (unsigned long)(mram_st.ring_size / 1024),
-                 logger.isRingInPsram() ? "in-package PSRAM" : "internal RAM");
-        ESP_LOGW("PWR", "  In-flight reboot recovery (#104): RAM cache + NAND");
-        ESP_LOGW("PWR", "  tail-scan (#846) — no longer MRAM-dependent.");
-        ESP_LOGW("PWR", "  Dirty-ring replay (#274): UNAVAILABLE.");
-        ESP_LOGW("PWR", "  Expected on V9/V10. On a V8 board this means the");
-        ESP_LOGW("PWR", "  image was built with the wrong -DTR_BOARD_* flag.");
-        ESP_LOGW("PWR", "========================================");
-        // #822: PSRAM is the ring's intended home on V9/V10. Landing on
-        // internal RAM instead means either CONFIG_SPIRAM is off or the part
-        // did not come up — the ring is then ~8x smaller than designed, which
-        // is exactly the kind of quiet downgrade this block exists to prevent.
-        if (config::RING_IN_PSRAM && !logger.isRingInPsram())
-        {
-            ESP_LOGE("PWR", "  ^ THIS BOARD EXPECTED A PSRAM RING AND DID NOT "
-                            "GET ONE — see the PSRAM init line earlier in this "
-                            "boot log.");
-        }
-    }
-
-    // --- TR_FlightLog begin (issue #50) -------------------------------------
-    // SPI bus + physical bad-block bitmap are initialized by logger.begin();
-    // flightlog.begin() loads the newest-valid of the dual-copy index from the
-    // metadata blocks, plus the 3-state block bitmap. #398: the bitmap now
-    // persists to NAND (metadata blocks [2]/[3], = 2046/2047) instead of NVS,
-    // so prepareFlight/extend/bad-block saves never hit internal flash and can't
-    // trigger the NVS-compaction cache-disable that stalled core 1.
-    flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
-    {
-        tr_flightlog::TR_FlightLog::Config fl_cfg{};
-        // #671: geometry is runtime — logger.begin() resolved the chip from
-        // RDID, and everything below is denominated in ITS blocks. Region and
-        // metadata come from the chip's block count (top four blocks are
-        // metadata), which is what the Config sentinels would also derive —
-        // but the auto-evict target and the bitmap-store bind() below need
-        // the concrete numbers before flightlog.begin(), so fill explicitly.
-        const auto& ngeom = logger.nandGeometry();
-        fl_cfg.flight_region_end = static_cast<uint16_t>(ngeom.block_count - 4);
-        for (int i = 0; i < 4; ++i)
-            fl_cfg.metadata_blocks[i] = static_cast<uint16_t>(ngeom.block_count - 4 + i);
-        // #398 / #492 / #671: the 3840 Hz stream makes larger files, so
-        // pre-allocate 80 blocks up front — ~20 MB on the V8 bench part
-        // (256 KB blocks), ~10 MB on V9's GD5F2GQ5UE (128 KB blocks); both
-        // cover a typical flight (~156 KB/s x 60 s = ~9.4 MB) without the
-        // extend path's in-flight erase hiccup.
-        fl_cfg.prealloc_blocks = 80;
-        // #315: rolling-buffer auto-eviction. When the card fills, prepareFlight
-        // reclaims space at arm time by deleting the oldest finalized flight(s)
-        // — never the in-progress one — down to a free-block headroom floor, so
-        // the operator never hand-deletes and the pre-launch storage verdict
-        // stays green. Destructive by nature (an un-downloaded flight can be
-        // dropped), so it's a deliberate opt-in; it's surfaced via a log line +
-        // the RSS_FLAG_AUTO_EVICTED storage-stats bit, never silent. Target ~10%
-        // of the flight region (~2.5 preallocs of headroom).
-        constexpr uint32_t kAutoEvictTargetFreePct = 10;
-        fl_cfg.auto_evict_oldest = true;
-        fl_cfg.auto_evict_target_free_blocks = static_cast<uint16_t>(
-            static_cast<uint32_t>(fl_cfg.flight_region_end - fl_cfg.flight_region_start) *
-            kAutoEvictTargetFreePct / 100u);
-        flightlog_bitmap_store.bind(&flightlog_backend,
-                                    fl_cfg.metadata_blocks[2],
-                                    fl_cfg.metadata_blocks[3]);
-        auto st = flightlog.begin(flightlog_backend,
-                                  fl_cfg,
-                                  &flightlog_bitmap_store);
-        if (st == tr_flightlog::Status::Ok)
-        {
-            ESP_LOGI("FLIGHTLOG", "up: %zu flight(s) in index, %zu bad blocks",
-                     flightlog.index().size(),
-                     flightlog.bitmap().countInState(tr_flightlog::BLOCK_BAD));
-        }
-        else
-        {
-            // #566: deliberately non-fatal (BLE/downlink still run so the fault
-            // is reachable), but flight logging is DEAD this boot — every frame
-            // will be dropped. ocStorageHealth() reports SH_BAD for this state
-            // so the pre-launch scorecard goes red instead of grey N/A.
-            //
-            // #1127: a failed brownout-recovery scan is the one begin() failure
-            // that leaves the stored flights reachable — the index loaded, only
-            // the orphan scan failed — so say so. Downloading and deleting a
-            // flight is exactly how an operator clears an index-full failure,
-            // and the old wording told them the opposite.
-            if (flightlog.recoveryFailed() && flightlog.isInitialized())
+            const int psram_mb = s3PsramCapMb();
+            if (psram_mb < 0)
             {
-                ESP_LOGE("FLIGHTLOG", "begin failed: %s — recovery scan failed, "
-                         "so NO NEW FLIGHT can be logged this boot; storage "
-                         "health = BAD. The %zu flight(s) already on the chip "
-                         "are still listable, downloadable and deletable — "
-                         "delete one to clear an index-full failure",
-                         tr_flightlog::to_string(st), flightlog.index().size());
+                ESP_LOGI("PWR", "In-package PSRAM per eFuse: unreadable");
+            }
+            else if (psram_mb == 0)
+            {
+                ESP_LOGI("PWR", "In-package PSRAM per eFuse: none");
             }
             else
             {
-                ESP_LOGE("FLIGHTLOG", "begin failed: %s — flight logging DEAD this "
-                         "boot (all frames will drop); storage health = BAD",
-                         tr_flightlog::to_string(st));
+                ESP_LOGI("PWR", "In-package PSRAM per eFuse: %d MB", psram_mb);
+            }
+
+            // Disagreements are build/flash mistakes, not hardware faults, so they
+            // are worth shouting about while someone is still at the bench.
+            if (config::RING_IN_PSRAM && psram_mb == 0)
+            {
+                ESP_LOGE("PWR", "BOARD FLAG SAYS PSRAM, SILICON SAYS NONE — this is "
+                                "not a V9/V10 board, or it was built -DTR_BOARD_V9=1 "
+                                "by mistake. Ring falls back to internal RAM.");
+            }
+            else if (!config::RING_IN_PSRAM && psram_mb > 0)
+            {
+                ESP_LOGW("PWR", "This chip has %d MB of in-package PSRAM that the "
+                                "selected board map does not use. Expected on a V7/V8 "
+                                "board (MRAM is fitted); if this IS a V9/V10 board, it "
+                                "was built with the wrong -DTR_BOARD_* flag.", psram_mb);
             }
         }
-    }
 
-    // #274: if the previous session left unflushed frames in the non-volatile
-    // MRAM ring (dirty sink-mode boot), replay the surviving ring through the
-    // sink into a recovered flight so the touchdown data isn't wiped. Runs after
-    // flightlog.begin() (the sink needs an allocated flight) and before the flush
-    // task / normal logging start — the sink writes synchronously.
-    if (logger.hasPendingMramRecovery())
-    {
-        uint32_t fid = 0;
-        if (flightlog.prepareFlight(fid) == tr_flightlog::Status::Ok)
+        if (!logger.isMramEnabled())
         {
-            const uint32_t bytes = logger.drainMramToSink();
-            char name[40];
-            snprintf(name, sizeof(name), "flight_mram_recovered_%lu.bin",
-                     (unsigned long)fid);
-            const auto fst = flightlog.finalizeFlight(name, bytes);
-            ESP_LOGW("FLIGHTLOG", "#274: MRAM recovery -> %s (%lu B): %s",
-                     name, (unsigned long)bytes, tr_flightlog::to_string(fst));
-        }
-        else
-        {
-            ESP_LOGE("FLIGHTLOG", "#274: MRAM recovery — prepareFlight failed (no space?)");
-        }
-        logger.finishMramRecovery();
-    }
-
-    // #1176: retire the V7/V8 MRAM snapshot slot on any boot that is NOT a
-    // recovery context.
-    //
-    // Until now the only thing that cleared that slot for a flight which never
-    // reached LANDED was the FC's setup-time clearFlightSnapshot()
-    // (flight_computer/main.cpp:4279) — a clear that fires precisely on the
-    // boots the token work is about to reclassify as possible recoveries. Left
-    // as it was, loosening the FC predicate would remove the slot's only
-    // retirement for that case and leave an INFLIGHT frame sitting in
-    // non-volatile memory indefinitely, answerable to any later fault reset.
-    //
-    // So retirement moves to the party that always runs, always knows the boot
-    // context, and does not need the FC to be powered at all. This strictly
-    // strengthens the current firmware on its own: today a flight that ended
-    // by a battery pull leaves a live INFLIGHT slot until some later boot
-    // happens to clear it.
-    //
-    // The MRAM is the V7/V8 store; V9/V10 have no MRAM part and are covered by
-    // the #846 NVS once-marker below.
-    if (logger.isMramEnabled() && !boot_rail_restored && !boot_token_restore)
-    {
-        uint8_t zeroed[kSnapFrameLen] = {};
-        if (logger.mramRawWrite(config::SNAPSHOT_REGION_BASE,
-                                zeroed, sizeof(zeroed)))
-        {
-            ESP_LOGI("FLIGHTLOG", "#1176: MRAM snapshot slot retired — this boot "
-                                  "is not a recovery context");
-        }
-        else
-        {
-            // Loud, because the consequence is a stale INFLIGHT frame that
-            // outlives the flight it belongs to.
-            ESP_LOGE("FLIGHTLOG", "#1176: FAILED to retire the MRAM snapshot "
-                                  "slot — a stale in-flight frame may survive "
-                                  "into a later boot");
-        }
-    }
-
-    // #846: re-seed the RAM snapshot cache from the NAND log stream — the
-    // OC-also-reset half of in-flight reboot recovery on no-MRAM boards. The
-    // snapshot frames rode the flight log (every received frame is enqueued
-    // byte-exact), and the brownout scanner inside flightlog.begin() has
-    // already recovered the un-finalized flight as flight_recovered_<id>.bin.
-    //
-    // The staleness defense is an NVS once-marker (id + final_bytes, since
-    // ids are reused after deletes), and it is load-bearing: without it a
-    // recovered flight could answer an FC panic weeks later with INFLIGHT and
-    // re-arm pyro on the ground. Three rules make it airtight:
-    //   * the marker is written on CONSUMPTION (after the frame is actually
-    //     served) or on DECLINE — never merely on seeding, or a second reset
-    //     before the FC asks would burn the flight's only chance;
-    //   * a POWERON boot still MARKS (without seeding): a cold start is
-    //     exactly when an old recovered flight must be retired, and a crash
-    //     whose next boot is a full pack dropout would otherwise leave it
-    //     unmarked for some later fault reset to seed from;
-    //   * NVS unavailable => do not seed at all (fail CLOSED — with no way to
-    //     record consumption, seeding could repeat indefinitely).
-    // The seeded frame must itself be INFLIGHT: a stream ending in the FC's
-    // LANDED clear means the flight is over. The FC re-validates
-    // magic/version/INFLIGHT/CRC32/sim regardless, so this is belt on braces.
-    if (!logger.isMramEnabled() && flightlog.isInitialized())
-    {
-        // #1176: "is this a recovery context?" is now answered by the token,
-        // not by the reset reason. The old test asked ESP_RST_POWERON, which
-        // is both unsound (the S3 aliases chip-brownout to it) and wrong in the
-        // other direction (the operator's own power-off produces ESP_RST_SW and
-        // was therefore misclassified as a recovery context -- #1157).
-        const bool cold_boot = !boot_rail_restored && !boot_token_restore;
-        uint32_t best_id = 0;
-        int best_idx = -1;
-        uint32_t newest_id = 0;
-        for (size_t i = 0; i < flightlog.index().size(); ++i)
-        {
-            const auto& e = flightlog.index().at(i);
-            if (e.flight_id > newest_id) newest_id = e.flight_id;
-            if (strncmp(e.filename, "flight_recovered_", 17) == 0 &&
-                e.flight_id >= best_id)
+            TR_LogToFlashStats mram_st = {};
+            logger.getStats(mram_st);
+            ESP_LOGW("PWR", "========================================");
+            ESP_LOGW("PWR", "NO MRAM ON THIS BOARD (MRAM_CS = -1).");
+            ESP_LOGW("PWR", "  Log ring: %lu KB of %s, VOLATILE.",
+                     (unsigned long)(mram_st.ring_size / 1024),
+                     logger.isRingInPsram() ? "in-package PSRAM" : "internal RAM");
+            ESP_LOGW("PWR", "  In-flight reboot recovery (#104): RAM cache + NAND");
+            ESP_LOGW("PWR", "  tail-scan (#846) — no longer MRAM-dependent.");
+            ESP_LOGW("PWR", "  Dirty-ring replay (#274): UNAVAILABLE.");
+            ESP_LOGW("PWR", "  Expected on V9/V10. On a V8 board this means the");
+            ESP_LOGW("PWR", "  image was built with the wrong -DTR_BOARD_* flag.");
+            ESP_LOGW("PWR", "========================================");
+            // #822: PSRAM is the ring's intended home on V9/V10. Landing on
+            // internal RAM instead means either CONFIG_SPIRAM is off or the part
+            // did not come up — the ring is then ~8x smaller than designed, which
+            // is exactly the kind of quiet downgrade this block exists to prevent.
+            if (config::RING_IN_PSRAM && !logger.isRingInPsram())
             {
-                best_id = e.flight_id;
-                best_idx = (int)i;
+                ESP_LOGE("PWR", "  ^ THIS BOARD EXPECTED A PSRAM RING AND DID NOT "
+                                "GET ONE — see the PSRAM init line earlier in this "
+                                "boot log.");
             }
         }
-        if (best_idx >= 0 && best_id == newest_id)
+
+        // --- TR_FlightLog begin (issue #50) -------------------------------------
+        // SPI bus + physical bad-block bitmap are initialized by logger.begin();
+        // flightlog.begin() loads the newest-valid of the dual-copy index from the
+        // metadata blocks, plus the 3-state block bitmap. #398: the bitmap now
+        // persists to NAND (metadata blocks [2]/[3], = 2046/2047) instead of NVS,
+        // so prepareFlight/extend/bad-block saves never hit internal flash and can't
+        // trigger the NVS-compaction cache-disable that stalled core 1.
+        flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
         {
-            const auto& e = flightlog.index().at((size_t)best_idx);
-            Preferences rp;
-            if (!rp.begin("snaprec", false))
+            tr_flightlog::TR_FlightLog::Config fl_cfg{};
+            // #671: geometry is runtime — logger.begin() resolved the chip from
+            // RDID, and everything below is denominated in ITS blocks. Region and
+            // metadata come from the chip's block count (top four blocks are
+            // metadata), which is what the Config sentinels would also derive —
+            // but the auto-evict target and the bitmap-store bind() below need
+            // the concrete numbers before flightlog.begin(), so fill explicitly.
+            const auto& ngeom = logger.nandGeometry();
+            fl_cfg.flight_region_end = static_cast<uint16_t>(ngeom.block_count - 4);
+            for (int i = 0; i < 4; ++i)
+                fl_cfg.metadata_blocks[i] = static_cast<uint16_t>(ngeom.block_count - 4 + i);
+            // #398 / #492 / #671: the 3840 Hz stream makes larger files, so
+            // pre-allocate 80 blocks up front — ~20 MB on the V8 bench part
+            // (256 KB blocks), ~10 MB on V9's GD5F2GQ5UE (128 KB blocks); both
+            // cover a typical flight (~156 KB/s x 60 s = ~9.4 MB) without the
+            // extend path's in-flight erase hiccup.
+            fl_cfg.prealloc_blocks = 80;
+            // #315: rolling-buffer auto-eviction. When the card fills, prepareFlight
+            // reclaims space at arm time by deleting the oldest finalized flight(s)
+            // — never the in-progress one — down to a free-block headroom floor, so
+            // the operator never hand-deletes and the pre-launch storage verdict
+            // stays green. Destructive by nature (an un-downloaded flight can be
+            // dropped), so it's a deliberate opt-in; it's surfaced via a log line +
+            // the RSS_FLAG_AUTO_EVICTED storage-stats bit, never silent. Target ~10%
+            // of the flight region (~2.5 preallocs of headroom).
+            constexpr uint32_t kAutoEvictTargetFreePct = 10;
+            fl_cfg.auto_evict_oldest = true;
+            fl_cfg.auto_evict_target_free_blocks = static_cast<uint16_t>(
+                static_cast<uint32_t>(fl_cfg.flight_region_end - fl_cfg.flight_region_start) *
+                kAutoEvictTargetFreePct / 100u);
+            flightlog_bitmap_store.bind(&flightlog_backend,
+                                        fl_cfg.metadata_blocks[2],
+                                        fl_cfg.metadata_blocks[3]);
+            auto st = flightlog.begin(flightlog_backend,
+                                      fl_cfg,
+                                      &flightlog_bitmap_store);
+            if (st == tr_flightlog::Status::Ok)
             {
-                ESP_LOGW("FLIGHTLOG", "#846: snaprec NVS unavailable — not "
-                         "re-seeding (cannot track consumption)");
+                ESP_LOGI("FLIGHTLOG", "up: %zu flight(s) in index, %zu bad blocks",
+                         flightlog.index().size(),
+                         flightlog.bitmap().countInState(tr_flightlog::BLOCK_BAD));
             }
             else
             {
-                const uint32_t done_id = rp.getUInt("done_id", 0);
-                const uint32_t done_by = rp.getUInt("done_by", 0);
-                const bool already = (done_id == e.flight_id &&
-                                      done_by == e.final_bytes);
-                if (already)
+                // #566: deliberately non-fatal (BLE/downlink still run so the fault
+                // is reachable), but flight logging is DEAD this boot — every frame
+                // will be dropped. ocStorageHealth() reports SH_BAD for this state
+                // so the pre-launch scorecard goes red instead of grey N/A.
+                //
+                // #1127: a failed brownout-recovery scan is the one begin() failure
+                // that leaves the stored flights reachable — the index loaded, only
+                // the orphan scan failed — so say so. Downloading and deleting a
+                // flight is exactly how an operator clears an index-full failure,
+                // and the old wording told them the opposite.
+                if (flightlog.recoveryFailed() && flightlog.isInitialized())
                 {
-                    // Nothing to do — this flight was seeded-and-served or
-                    // declined on an earlier boot.
-                }
-                else if (cold_boot)
-                {
-                    // Retire it without seeding: a cold start is not a
-                    // recovery context, and leaving it unmarked would let a
-                    // later fault reset seed from an arbitrarily old flight.
-                    rp.putUInt("done_id", e.flight_id);
-                    rp.putUInt("done_by", e.final_bytes);
-                    ESP_LOGI("FLIGHTLOG", "#846: %s retired on a cold boot "
-                             "(not a recovery context)", e.filename);
+                    ESP_LOGE("FLIGHTLOG", "begin failed: %s — recovery scan failed, "
+                             "so NO NEW FLIGHT can be logged this boot; storage "
+                             "health = BAD. The %zu flight(s) already on the chip "
+                             "are still listable, downloadable and deletable — "
+                             "delete one to clear an index-full failure",
+                             tr_flightlog::to_string(st), flightlog.index().size());
                 }
                 else
                 {
-                    // Window buffer sized for the MAX per-page payload so one
-                    // readFlightPage can always fill it at any chip geometry.
-                    static uint8_t scan_buf[(4096 - 16) + kSnapFrameLen];
-                    constexpr uint32_t kTailWindow = 64u * 1024u;
-                    uint8_t last_f[kSnapFrameLen] = {};
-                    uint8_t best_f[kSnapFrameLen] = {};
-                    const bool got = tr_flightlog::tailScanForFrame(
-                        flightlog, e.filename, e.final_bytes, SNAPSHOT_MSG,
-                        (uint8_t)sizeof(FlightSnapshotData), kTailWindow,
-                        last_f, scan_buf, sizeof(scan_buf),
-                        best_f, offsetof(FlightSnapshotData, flight_elapsed_ms));
-                    // The LAST frame decides whether the flight ended (a
-                    // LANDED clear means it did); the HIGHEST-elapsed frame is
-                    // the one to restore from, because an I2S DMA replay can
-                    // leave an older snapshot sitting after a newer one in the
-                    // stream — the same staleness the #383 guard blocks live.
-                    const bool ended = !got || !snapshotServable(last_f, 0);
-                    if (got && !ended && snapshotServable(best_f, 0))
+                    ESP_LOGE("FLIGHTLOG", "begin failed: %s — flight logging DEAD this "
+                             "boot (all frames will drop); storage health = BAD",
+                             tr_flightlog::to_string(st));
+                }
+            }
+        }
+
+        // #274: if the previous session left unflushed frames in the non-volatile
+        // MRAM ring (dirty sink-mode boot), replay the surviving ring through the
+        // sink into a recovered flight so the touchdown data isn't wiped. Runs after
+        // flightlog.begin() (the sink needs an allocated flight) and before the flush
+        // task / normal logging start — the sink writes synchronously.
+        if (logger.hasPendingMramRecovery())
+        {
+            uint32_t fid = 0;
+            if (flightlog.prepareFlight(fid) == tr_flightlog::Status::Ok)
+            {
+                const uint32_t bytes = logger.drainMramToSink();
+                char name[40];
+                snprintf(name, sizeof(name), "flight_mram_recovered_%lu.bin",
+                         (unsigned long)fid);
+                const auto fst = flightlog.finalizeFlight(name, bytes);
+                ESP_LOGW("FLIGHTLOG", "#274: MRAM recovery -> %s (%lu B): %s",
+                         name, (unsigned long)bytes, tr_flightlog::to_string(fst));
+            }
+            else
+            {
+                ESP_LOGE("FLIGHTLOG", "#274: MRAM recovery — prepareFlight failed (no space?)");
+            }
+            logger.finishMramRecovery();
+        }
+
+        // #1176: retire the V7/V8 MRAM snapshot slot on any boot that is NOT a
+        // recovery context.
+        //
+        // Until now the only thing that cleared that slot for a flight which never
+        // reached LANDED was the FC's setup-time clearFlightSnapshot()
+        // (flight_computer/main.cpp:4279) — a clear that fires precisely on the
+        // boots the token work is about to reclassify as possible recoveries. Left
+        // as it was, loosening the FC predicate would remove the slot's only
+        // retirement for that case and leave an INFLIGHT frame sitting in
+        // non-volatile memory indefinitely, answerable to any later fault reset.
+        //
+        // So retirement moves to the party that always runs, always knows the boot
+        // context, and does not need the FC to be powered at all. This strictly
+        // strengthens the current firmware on its own: today a flight that ended
+        // by a battery pull leaves a live INFLIGHT slot until some later boot
+        // happens to clear it.
+        //
+        // The MRAM is the V7/V8 store; V9/V10 have no MRAM part and are covered by
+        // the #846 NVS once-marker below.
+        if (logger.isMramEnabled() && !boot_rail_restored && !boot_token_restore)
+        {
+            uint8_t zeroed[kSnapFrameLen] = {};
+            if (logger.mramRawWrite(config::SNAPSHOT_REGION_BASE,
+                                    zeroed, sizeof(zeroed)))
+            {
+                ESP_LOGI("FLIGHTLOG", "#1176: MRAM snapshot slot retired — this boot "
+                                      "is not a recovery context");
+            }
+            else
+            {
+                // Loud, because the consequence is a stale INFLIGHT frame that
+                // outlives the flight it belongs to.
+                ESP_LOGE("FLIGHTLOG", "#1176: FAILED to retire the MRAM snapshot "
+                                      "slot — a stale in-flight frame may survive "
+                                      "into a later boot");
+            }
+        }
+
+        // #846: re-seed the RAM snapshot cache from the NAND log stream — the
+        // OC-also-reset half of in-flight reboot recovery on no-MRAM boards. The
+        // snapshot frames rode the flight log (every received frame is enqueued
+        // byte-exact), and the brownout scanner inside flightlog.begin() has
+        // already recovered the un-finalized flight as flight_recovered_<id>.bin.
+        //
+        // The staleness defense is an NVS once-marker (id + final_bytes, since
+        // ids are reused after deletes), and it is load-bearing: without it a
+        // recovered flight could answer an FC panic weeks later with INFLIGHT and
+        // re-arm pyro on the ground. Three rules make it airtight:
+        //   * the marker is written on CONSUMPTION (after the frame is actually
+        //     served) or on DECLINE — never merely on seeding, or a second reset
+        //     before the FC asks would burn the flight's only chance;
+        //   * a POWERON boot still MARKS (without seeding): a cold start is
+        //     exactly when an old recovered flight must be retired, and a crash
+        //     whose next boot is a full pack dropout would otherwise leave it
+        //     unmarked for some later fault reset to seed from;
+        //   * NVS unavailable => do not seed at all (fail CLOSED — with no way to
+        //     record consumption, seeding could repeat indefinitely).
+        // The seeded frame must itself be INFLIGHT: a stream ending in the FC's
+        // LANDED clear means the flight is over. The FC re-validates
+        // magic/version/INFLIGHT/CRC32/sim regardless, so this is belt on braces.
+        if (!logger.isMramEnabled() && flightlog.isInitialized())
+        {
+            // #1176: "is this a recovery context?" is now answered by the token,
+            // not by the reset reason. The old test asked ESP_RST_POWERON, which
+            // is both unsound (the S3 aliases chip-brownout to it) and wrong in the
+            // other direction (the operator's own power-off produces ESP_RST_SW and
+            // was therefore misclassified as a recovery context -- #1157).
+            const bool cold_boot = !boot_rail_restored && !boot_token_restore;
+            uint32_t best_id = 0;
+            int best_idx = -1;
+            uint32_t newest_id = 0;
+            for (size_t i = 0; i < flightlog.index().size(); ++i)
+            {
+                const auto& e = flightlog.index().at(i);
+                if (e.flight_id > newest_id) newest_id = e.flight_id;
+                if (strncmp(e.filename, "flight_recovered_", 17) == 0 &&
+                    e.flight_id >= best_id)
+                {
+                    best_id = e.flight_id;
+                    best_idx = (int)i;
+                }
+            }
+            if (best_idx >= 0 && best_id == newest_id)
+            {
+                const auto& e = flightlog.index().at((size_t)best_idx);
+                Preferences rp;
+                if (!rp.begin("snaprec", false))
+                {
+                    ESP_LOGW("FLIGHTLOG", "#846: snaprec NVS unavailable — not "
+                             "re-seeding (cannot track consumption)");
+                }
+                else
+                {
+                    const uint32_t done_id = rp.getUInt("done_id", 0);
+                    const uint32_t done_by = rp.getUInt("done_by", 0);
+                    const bool already = (done_id == e.flight_id &&
+                                          done_by == e.final_bytes);
+                    if (already)
                     {
-                        portENTER_CRITICAL(&snapshot_cache_mux);
-                        memcpy(snapshot_cache, best_f, kSnapFrameLen);
-                        snapshot_cache_valid = true;
-                        snapshot_cache_ms = millis();
-                        portEXIT_CRITICAL(&snapshot_cache_mux);
-                        snapshot_seed_pending_mark = true;
-                        snapshot_seed_id = e.flight_id;
-                        snapshot_seed_bytes = e.final_bytes;
-                        ESP_LOGW("FLIGHTLOG", "#846: snapshot cache re-seeded "
-                                 "from %s (%lu B) — in-flight reboot recovery "
-                                 "armed for the FC's next ask",
-                                 e.filename, (unsigned long)e.final_bytes);
+                        // Nothing to do — this flight was seeded-and-served or
+                        // declined on an earlier boot.
+                    }
+                    else if (cold_boot)
+                    {
+                        // Retire it without seeding: a cold start is not a
+                        // recovery context, and leaving it unmarked would let a
+                        // later fault reset seed from an arbitrarily old flight.
+                        rp.putUInt("done_id", e.flight_id);
+                        rp.putUInt("done_by", e.final_bytes);
+                        ESP_LOGI("FLIGHTLOG", "#846: %s retired on a cold boot "
+                                 "(not a recovery context)", e.filename);
                     }
                     else
                     {
-                        // Declined: nothing found, or the stream's last word
-                        // was a LANDED clear / an out-of-bounds elapsed. Mark
-                        // now — a rescan next boot would decline identically.
-                        rp.putUInt("done_id", e.flight_id);
-                        rp.putUInt("done_by", e.final_bytes);
-                        ESP_LOGW("FLIGHTLOG", "#846: no in-flight snapshot in "
-                                 "the tail of %s — recovery not re-seeded",
-                                 e.filename);
+                        // Window buffer sized for the MAX per-page payload so one
+                        // readFlightPage can always fill it at any chip geometry.
+                        static uint8_t scan_buf[(4096 - 16) + kSnapFrameLen];
+                        constexpr uint32_t kTailWindow = 64u * 1024u;
+                        uint8_t last_f[kSnapFrameLen] = {};
+                        uint8_t best_f[kSnapFrameLen] = {};
+                        const bool got = tr_flightlog::tailScanForFrame(
+                            flightlog, e.filename, e.final_bytes, SNAPSHOT_MSG,
+                            (uint8_t)sizeof(FlightSnapshotData), kTailWindow,
+                            last_f, scan_buf, sizeof(scan_buf),
+                            best_f, offsetof(FlightSnapshotData, flight_elapsed_ms));
+                        // The LAST frame decides whether the flight ended (a
+                        // LANDED clear means it did); the HIGHEST-elapsed frame is
+                        // the one to restore from, because an I2S DMA replay can
+                        // leave an older snapshot sitting after a newer one in the
+                        // stream — the same staleness the #383 guard blocks live.
+                        const bool ended = !got || !snapshotServable(last_f, 0);
+                        if (got && !ended && snapshotServable(best_f, 0))
+                        {
+                            portENTER_CRITICAL(&snapshot_cache_mux);
+                            memcpy(snapshot_cache, best_f, kSnapFrameLen);
+                            snapshot_cache_valid = true;
+                            snapshot_cache_ms = millis();
+                            portEXIT_CRITICAL(&snapshot_cache_mux);
+                            snapshot_seed_pending_mark = true;
+                            snapshot_seed_id = e.flight_id;
+                            snapshot_seed_bytes = e.final_bytes;
+                            ESP_LOGW("FLIGHTLOG", "#846: snapshot cache re-seeded "
+                                     "from %s (%lu B) — in-flight reboot recovery "
+                                     "armed for the FC's next ask",
+                                     e.filename, (unsigned long)e.final_bytes);
+                        }
+                        else
+                        {
+                            // Declined: nothing found, or the stream's last word
+                            // was a LANDED clear / an out-of-bounds elapsed. Mark
+                            // now — a rescan next boot would decline identically.
+                            rp.putUInt("done_id", e.flight_id);
+                            rp.putUInt("done_by", e.final_bytes);
+                            ESP_LOGW("FLIGHTLOG", "#846: no in-flight snapshot in "
+                                     "the tail of %s — recovery not re-seeded",
+                                     e.filename);
+                        }
                     }
+                    rp.end();
                 }
-                rp.end();
             }
         }
-    }
 
-    // -------------------------------------------------------------------
-    // DIAGNOSTIC ONE-SHOT — wipes the entire filesystem at boot.
-    // Flip FORMAT_FS_ON_BOOT to 1, rebuild, flash, boot once, set
-    // back to 0, rebuild, flash.  Or leave it on if you want every
-    // boot to start with a clean FS (for stress testing).
-    // LEAVES ALL EXISTING FLIGHT LOGS PERMANENTLY DELETED.
-    //
-    // Rationale: confirm whether the multi-hundred-ms LFS stalls we've
-    // been chasing (#47) come from accumulated file-metadata bloat on
-    // the chip vs from inherent LFS-on-NAND behaviour.  If stalls
-    // vanish on a fresh FS, we know fill-up is the cause and can plan
-    // the custom log-layer rewrite.  Turn back off once confirmed.
-    #define FORMAT_FS_ON_BOOT 0   // ← flip to 1 to wipe the chip at boot
-    #if FORMAT_FS_ON_BOOT
-    ESP_LOGW("LOG", "============================================");
-    ESP_LOGW("LOG", "   FORMAT_FS_ON_BOOT IS SET!");
-    ESP_LOGW("LOG", "   WIPING ALL FLIGHT LOGS.");
-    ESP_LOGW("LOG", "============================================");
-    delay(500);  // make sure the warning hits the serial log before we wipe
-    if (!logger.formatFilesystem())
-    {
-        ESP_LOGE("LOG", "Format failed — continuing with whatever state exists");
-    }
-    else
-    {
-        ESP_LOGW("LOG", "Format complete — filesystem is now empty");
-    }
-    #endif
-    // -------------------------------------------------------------------
+        // -------------------------------------------------------------------
+        // DIAGNOSTIC ONE-SHOT — wipes the entire filesystem at boot.
+        // Flip FORMAT_FS_ON_BOOT to 1, rebuild, flash, boot once, set
+        // back to 0, rebuild, flash.  Or leave it on if you want every
+        // boot to start with a clean FS (for stress testing).
+        // LEAVES ALL EXISTING FLIGHT LOGS PERMANENTLY DELETED.
+        //
+        // Rationale: confirm whether the multi-hundred-ms LFS stalls we've
+        // been chasing (#47) come from accumulated file-metadata bloat on
+        // the chip vs from inherent LFS-on-NAND behaviour.  If stalls
+        // vanish on a fresh FS, we know fill-up is the cause and can plan
+        // the custom log-layer rewrite.  Turn back off once confirmed.
+        #define FORMAT_FS_ON_BOOT 0   // ← flip to 1 to wipe the chip at boot
+        #if FORMAT_FS_ON_BOOT
+        ESP_LOGW("LOG", "============================================");
+        ESP_LOGW("LOG", "   FORMAT_FS_ON_BOOT IS SET!");
+        ESP_LOGW("LOG", "   WIPING ALL FLIGHT LOGS.");
+        ESP_LOGW("LOG", "============================================");
+        delay(500);  // make sure the warning hits the serial log before we wipe
+        if (!logger.formatFilesystem())
+        {
+            ESP_LOGE("LOG", "Format failed — continuing with whatever state exists");
+        }
+        else
+        {
+            ESP_LOGW("LOG", "Format complete — filesystem is now empty");
+        }
+        #endif
+        // -------------------------------------------------------------------
 
-    // Start the NAND flush task on Core 0 — decouples LittleFS writes from
-    // the main loop so the RAM ring can buffer during NAND stalls.
-    logger.startFlushTask(/* core */ 0, /* stackSize */ 8192, /* priority */ 1);
+        // Start the NAND flush task on Core 0 — decouples LittleFS writes from
+        // the main loop so the RAM ring can buffer during NAND stalls.
+        logger.startFlushTask(/* core */ 0, /* stackSize */ 8192, /* priority */ 1);
 
-    TR_LogToFlashRecoveryInfo recovery = {};
-    logger.getRecoveryInfo(recovery);
-    if (recovery.recovered)
-    {
-        ESP_LOGI("LOG", "Startup recovery wrote %lu bytes to %s",
-                      (unsigned long)recovery.recovered_bytes,
-                      recovery.filename);
+        TR_LogToFlashRecoveryInfo recovery = {};
+        logger.getRecoveryInfo(recovery);
+        if (recovery.recovered)
+        {
+            ESP_LOGI("LOG", "Startup recovery wrote %lu bytes to %s",
+                          (unsigned long)recovery.recovered_bytes,
+                          recovery.filename);
+        }
     }
 
     vTaskDelay(1);  // feed watchdog after NAND init
