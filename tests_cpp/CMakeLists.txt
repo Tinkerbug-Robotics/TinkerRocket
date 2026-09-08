@@ -1011,6 +1011,18 @@ target_include_directories(test_log_to_flash_sink PRIVATE
 target_link_libraries(test_log_to_flash_sink GTest::gtest_main)
 gtest_discover_tests(test_log_to_flash_sink)
 
+# ---------- test_roll_control_mode_policy (#1137 item 6) ----------
+# Pure header, no ESP/Arduino deps — the roll-control mode choice was extracted
+# out of the flight loop precisely so the table could be pinned on the host.
+add_executable(test_roll_control_mode_policy test_roll_control_mode_policy.cpp)
+target_include_directories(test_roll_control_mode_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_roll_control_mode_policy GTest::gtest_main)
+gtest_discover_tests(test_roll_control_mode_policy)
+
 # ---------- test_sim_pad_align (#508) ----------
 # Header-only pure math (no ESP/Arduino deps), so there is no component .cpp to
 # compile — the alignment solve was extracted out of SensorCollectorSim precisely
