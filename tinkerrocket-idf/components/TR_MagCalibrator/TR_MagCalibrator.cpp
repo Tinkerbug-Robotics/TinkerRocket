@@ -253,7 +253,7 @@ bool MagCalibrator::evaluateVerify(float& worst_uT)
     // Pass — APPLIED is the terminal good state; FC writes NVS next.
     state_ = State::APPLIED;
 #ifdef ESP_PLATFORM
-    ESP_LOGI(TAG, "verify PASS: |B| min=%.1f max=%.1f range=%.1f (n=%u, cov=%u/26)",
+    ESP_LOGI(TAG, "verify PASS: |B| min=%.1f max=%.1f range=%.1f (n=%u, cov=%u/32)",
              (double)verify_min_uT_, (double)verify_max_uT_, (double)range_uT,
              (unsigned)verify_n_samples_, (unsigned)cov_bins);
 #endif
@@ -376,7 +376,7 @@ bool MagCalibrator::computeFit()
     runFit();
     state_ = State::REVIEW;
 #ifdef ESP_PLATFORM
-    ESP_LOGI(TAG, "user-triggered fit complete: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT cov=%u/26 reject=%u (n=%u)",
+    ESP_LOGI(TAG, "user-triggered fit complete: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT cov=%u/32 reject=%u (n=%u)",
              (int)fit_cx_, (int)fit_cy_, (int)fit_cz_,
              (double)fit_R_uT_, (double)fit_residual_uT_,
              (unsigned)__builtin_popcount(coverage_mask_),
@@ -527,9 +527,18 @@ uint8_t MagCalibrator::directionWedge(int16_t x, int16_t y, int16_t z)
     const float uy = (float)((double)y / r);
     const float uz = (float)((double)z / r);
 
+    return wedgeFromUnit(ux, uy, uz);
+}
+
+uint8_t MagCalibrator::wedgeFromUnit(float ux, float uy, float uz)
+{
     // Voronoi assignment: pick the cell center with maximum dot product
     // against the normalized sample direction.  32 dot products + max
     // is ~100 cycles on ESP32-P4, easily under the per-sample budget.
+    //
+    // #1138 item 1: factored out of directionWedge() so runFit() can use the
+    // SAME 32-cell scheme on its fit-centred unit vectors, instead of the
+    // legacy 3x3x3 cube binning it used to overwrite the mask with.
     float bestD = -2.0f;
     uint8_t bestI = 0;
     for (uint8_t i = 0; i < NUM_ACCEL_WEDGES; i++) {
@@ -692,14 +701,23 @@ void MagCalibrator::runFit()
             const double ux = dx / r;
             const double uy = dy / r;
             const double uz = dz / r;
-            constexpr double T = 0.4;
-            auto bin = [](double v) -> int {
-                return (v < -T) ? 0 : (v > T) ? 2 : 1;
-            };
-            const uint8_t wedge = (uint8_t)(bin(ux) * 9 + bin(uy) * 3 + bin(uz));
-            if (wedge < 27) post_fit_mask |= (1u << wedge);
+            // #1138 item 1: the SAME 32-cell Voronoi scheme every other
+            // reader of this mask uses.  This block used to bin into a
+            // 3x3x3 cube (27 wedges, a 0.4 threshold per axis) and assign
+            // the result straight to coverage_mask_ — so from runFit()
+            // onwards the published mask meant something completely
+            // different from the one accumulated during sampling, while
+            // coverage_bins (its popcount), the wire field and the iOS
+            // REVIEW coverage row all kept reading it as 32-cell.
+            const uint8_t wedge = wedgeFromUnit((float)ux, (float)uy, (float)uz);
+            if (wedge < NUM_ACCEL_WEDGES) post_fit_mask |= (1u << wedge);
         });
         coverage_mask_ = post_fit_mask;
+        // The sample buffer is frozen from REVIEW on, so every cell is now
+        // either fully covered or not represented at all — there is no
+        // "partially filled" state left to report.  Clearing it restores the
+        // documented invariant that the two masks are disjoint.
+        partial_mask_ = 0;
     }
 
     // Gate the fit.  R and residual are the direct, quantitative

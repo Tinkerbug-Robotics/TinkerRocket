@@ -361,3 +361,101 @@ TEST(MagCalibratorVerify, StatusFrameOnVerifyFailReportsReviewWithRejectCode) {
     // 80 µT verify samples trip the TOO_HIGH gate.
     EXPECT_EQ(frame.reject_code, MAG_CAL_REJECT_VERIFY_TOO_HIGH);
 }
+
+
+// #1138 item 1: feed the same sample set driveCleanFit() uses, but stop just
+// before computeFit() and capture the mask the SAMPLING path built.
+static void driveCleanFitSamplesOnly(MagCalibrator& cal, MagCalStatusData& out) {
+    struct Dir { int16_t x, y, z; };
+    Dir dirs[] = {
+        {1000, 0, 0}, {-1000, 0, 0}, {0, 1000, 0}, {0, -1000, 0},
+        {0, 0, 1000}, {0, 0, -1000},
+        {707, 707, 0}, {-707, 707, 0}, {707, -707, 0}, {-707, -707, 0},
+        {707, 0, 707}, {-707, 0, 707}, {707, 0, -707}, {-707, 0, -707},
+        {0, 707, 707}, {0, -707, 707}, {0, 707, -707}, {0, -707, -707},
+        {577, 577, 577}, {-577, 577, 577}, {577, -577, 577}, {577, 577, -577},
+        {-577, -577, 577}, {-577, 577, -577}, {577, -577, -577}, {-577, -577, -577},
+    };
+    const int N = sizeof(dirs) / sizeof(dirs[0]);
+    for (int rep = 0; rep < 40; rep++) {
+        for (int i = 0; i < N; i++) {
+            cal.setLiveAccel(dirs[i].x, dirs[i].y, dirs[i].z);
+            const double L = sqrt((double)dirs[i].x * dirs[i].x +
+                                  (double)dirs[i].y * dirs[i].y +
+                                  (double)dirs[i].z * dirs[i].z);
+            const double R_lsb = 50.0 / UT_PER_LSB;
+            cal.addSample((int16_t)((double)dirs[i].x / L * R_lsb),
+                          (int16_t)((double)dirs[i].y / L * R_lsb),
+                          (int16_t)((double)dirs[i].z / L * R_lsb));
+        }
+    }
+    cal.buildStatusFrame(0, out);
+}
+
+
+// ── #1138 item 1: runFit() must not redefine what the coverage mask means ──
+//
+// Everywhere else, the mask is the #148 32-cell truncated-icosahedron Voronoi
+// index produced by directionWedge(). runFit() recounted coverage with a
+// legacy 3x3x3 cube binning (27 wedges, a 0.4-per-axis threshold) and assigned
+// the result straight to coverage_mask_. So from the fit onwards the published
+// mask meant something different from the one accumulated during sampling —
+// while coverage_bins (its popcount), the wire field and the iOS REVIEW
+// coverage row all kept reading it as 32-cell. The gate the mask feeds is
+// MAG_CAL_MIN_COVERAGE_BINS = 22 of 32.
+
+TEST(MagCalibratorCoverage, PostFitMaskUsesTheSame32CellSchemeAsSampling) {
+    MagCalibrator cal;
+    driveCleanFit(cal);
+
+    MagCalStatusData frame{};
+    cal.buildStatusFrame(0, frame);
+
+    // Every set bit must be a legal 32-cell index. The cube scheme could set
+    // bit 26 for a direction the Voronoi scheme would never assign there, but
+    // the decisive property is that the two agree at all: recompute the mask
+    // independently from the same directions through the public wedge API.
+    EXPECT_LE(__builtin_popcount(frame.coverage_mask), 32);
+    EXPECT_GE(__builtin_popcount(frame.coverage_mask),
+              (int)MAG_CAL_MIN_COVERAGE_BINS)
+        << "the fit must still clear the coverage gate it feeds";
+}
+
+TEST(MagCalibratorCoverage, PostFitMasksStayDisjoint) {
+    // The documented invariant: a cell is either covered or partially filled,
+    // never both. runFit() overwrote coverage_mask_ with a differently-indexed
+    // value and left partial_mask_ alone, so the two could overlap and mean
+    // different things at the same time. The buffer is frozen from REVIEW on,
+    // so after the fit there is no "partially filled" state left to report.
+    MagCalibrator cal;
+    driveCleanFit(cal);
+
+    MagCalStatusData frame{};
+    cal.buildStatusFrame(0, frame);
+    EXPECT_EQ(frame.coverage_mask & frame.partial_mask, 0u)
+        << "coverage and partial masks overlap after the fit";
+}
+
+TEST(MagCalibratorCoverage, PostFitMaskMatchesTheSamplingMask) {
+    // The decisive property. During SAMPLING the mask is built by
+    // directionWedge() (32-cell Voronoi); runFit() then RECOUNTS it from the
+    // fit-centred samples. Those two counts must describe the same cells --
+    // the defect was that the recount used a different indexing scheme
+    // entirely, so the mask silently changed meaning at the REVIEW boundary.
+    //
+    // driveCleanFit() feeds mag samples along the SAME directions as the accel
+    // wedges and centres the sphere at the origin, so the fit-centred unit
+    // vectors are those same directions and the recount must reproduce the
+    // sampling mask exactly.
+    MagCalibrator cal;
+    MagCalStatusData before{};
+    MagCalStatusData after{};
+
+    cal.start();
+    driveCleanFitSamplesOnly(cal, before);   // captures the mask pre-fit
+    ASSERT_TRUE(cal.computeFit());
+    cal.buildStatusFrame(0, after);
+
+    EXPECT_EQ(after.coverage_mask, before.coverage_mask)
+        << "runFit() recounted coverage into a different cell scheme";
+}

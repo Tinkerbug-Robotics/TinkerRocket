@@ -245,6 +245,10 @@ private:
     // Map a unit-vector direction to a wedge index 0..25.  Returns
     // 26 (= invalid) if the input is the zero vector.
     static uint8_t directionWedge(int16_t x, int16_t y, int16_t z);
+    /// #1138 item 1: the Voronoi cell for an already-normalised direction.
+    /// Shared by directionWedge() (live sampling) and runFit() (post-fit
+    /// recount) so the two cannot disagree about what the mask means.
+    static uint8_t wedgeFromUnit(float ux, float uy, float uz);
 
     // Run the sphere fit on the current sample buffer.  Sets fit_*.  No-op
     // if n_samples_ < MAG_CAL_MIN_SAMPLES.
