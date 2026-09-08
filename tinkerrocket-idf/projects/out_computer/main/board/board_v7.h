@@ -16,6 +16,10 @@ struct board_pins
     // Dedicated GPS enable rail, toggled in lockstep with PWR_PIN.
     // -1 = no separate GPS rail on this board (call sites skip it).
     static constexpr int GPS_PWR_PIN = 33;
+    // #1168: no supervised-arm consent stage on this board — the arm FET is
+    // driven by the FC alone. Only the mini's rework-4 splits the arm across
+    // both processors. -1 = not present, same sentinel as GPS_PWR_PIN.
+    static constexpr int ARM_CONSENT_PIN = -1;
 
     // --- Power monitoring (INA230 @ 0x40, always-on I2C bus) ---
     static constexpr int PWR_SDA = 7;
