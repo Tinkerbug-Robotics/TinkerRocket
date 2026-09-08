@@ -9919,7 +9919,8 @@ static void loop_fc()
                                SIZE_OF_NON_SENSOR_DATA);
 
             // Send guidance telemetry during guided coast, at
-            // config::GUIDANCE_TELEM_RATE_HZ (500 = lockstep with NonSensor).
+            // config::GUIDANCE_TELEM_RATE_HZ (250 = every second NonSensor
+            // frame since #1137 item 13 — see the I2S link budget in config.h).
             if (guidance_active)
             {
                 static uint32_t guid_telem_counter = 0;

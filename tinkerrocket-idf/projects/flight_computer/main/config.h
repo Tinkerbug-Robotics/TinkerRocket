@@ -152,21 +152,57 @@ struct config : board_pins
     // regardless of loop rate (~980/s); control/EKF/guidance still consume
     // the freshest sample at loop rate.  Link budget on the 44100 Hz I2S
     // (176.4 KB/s): ISM6 framed = rate x 30 B, so 1920 -> ~58 KB/s and
-    // 3840 -> ~115 KB/s; with all other streams total inflow is ~99 KB/s
-    // at 1920 and ~156 KB/s (88%) at 3840 — no link bump needed, verified
-    // against the post-#467/#469 OC budgets (parser ~10x headroom, MRAM
-    // staging ~8% duty, NAND flush ~50% duty at 3840).  Bench gauges for
+    // 3840 -> ~115 KB/s.
+    //
+    // #1137 item 13: the old note here claimed "~156 KB/s (88%) at 3840" and
+    // was stale in two ways — it budgeted NonSensorData at 24 B (it is 52 B
+    // now, after #529's ekf_ticks and #1190's shock_gate_trips) and predated
+    // GuidanceTelem entirely.  Re-derived from the current wire sizes, at the
+    // shipped IMU_RATE_DYNAMIC boost rate of 3840 Hz, framed = payload + 8
+    // (MAX_FRAME = 4+1+1+payload+2), during a GUIDED coast:
+    //
+    //   ISM6        (22+8) x 3840 = 115,200
+    //   NonSensor   (52+8) x  500 =  30,000
+    //   BMP585      (12+8) x  500 =  10,000
+    //   GuidanceTelem (19+8) x 250 =  6,750   <- was 13,500 at 500 Hz
+    //   FlightSnapshot (224+8) x 10 =  2,320
+    //   IIS2MDC     (10+8) x  100 =   1,800
+    //   GNSS        (42+8) x   18 =     900
+    //   POWER                     ~=     220
+    //                               -------
+    //                               167,190 B/s = 94.8% of 176,400
+    //
+    // At the previous GUIDANCE_TELEM_RATE_HZ of 500 that total was 173,940 B/s
+    // = 98.6%, i.e. under 1.5% of headroom on the one phase of flight the
+    // guidance data exists to record.  Frames past the limit are dropped
+    // silently by enqueueI2STx, so the failure mode is a guided coast whose
+    // telemetry thins out with no error anywhere.  Non-guided flight is
+    // unaffected either way (GuidanceTelem is not emitted).
+    //
+    // Verified against the post-#467/#469 OC budgets (parser ~10x headroom,
+    // MRAM staging ~8% duty, NAND flush ~50% duty at 3840).  Bench gauges for
     // any new rate: [GAP DIAG] imu_q_drops, FC I2S enqueue drops, OC
-    // rx_ovf/ring_peak, and the .bin per-type rates.
+    // rx_ovf/ring_peak, and the .bin per-type rates.  RE-DERIVE THIS BLOCK
+    // whenever a struct on the link grows — that is exactly how it went stale.
     static constexpr uint16_t ISM6HG256_UPDATE_RATE = 1920;
     static constexpr uint16_t NON_SENSOR_UPDATE_RATE = 500;
     // Guidance telemetry (GUIDANCE_TELEM_MSG) log rate while guidance is active.
     // Emitted from inside the NonSensor TX block, so it must divide
-    // NON_SENSOR_UPDATE_RATE; 500 = lockstep with NonSensor/roll_cmd (frames
-    // time-aligned 1:1). The guidance law recomputes once per flight-loop
-    // iteration (~980 Hz, on the freshest IMU sample), so values are fresh at
-    // any rate up to NON_SENSOR_UPDATE_RATE.
-    static constexpr uint16_t GUIDANCE_TELEM_RATE_HZ = 500;
+    // NON_SENSOR_UPDATE_RATE; 250 = every second NonSensor frame.
+    //
+    // #1137 item 13: was 500 (lockstep with NonSensor/roll_cmd), chosen for
+    // 1:1 frame alignment without re-deriving the I2S budget above — which put
+    // a guided coast at 98.6% of the link.  250 Hz buys back 6.75 KB/s and
+    // takes it to 94.8%.  Nothing reads this stream at 500 Hz: the guidance
+    // law recomputes once per flight-loop iteration (~980 Hz, on the freshest
+    // IMU sample), so the values are equally fresh at any rate up to
+    // NON_SENSOR_UPDATE_RATE, and 250 Hz is still 4x the 60 Hz the flight
+    // report renders.  The 1:1 alignment was a convenience, not a requirement
+    // — every consumer keys off the frame's own timestamp.
+    static constexpr uint16_t GUIDANCE_TELEM_RATE_HZ = 250;
+    static_assert(NON_SENSOR_UPDATE_RATE % GUIDANCE_TELEM_RATE_HZ == 0,
+                  "GUIDANCE_TELEM_RATE_HZ must divide NON_SENSOR_UPDATE_RATE — "
+                  "the emit is a modulo counter inside the NonSensor TX block");
     static_assert(GUIDANCE_TELEM_RATE_HZ >= 1 &&
                   GUIDANCE_TELEM_RATE_HZ <= NON_SENSOR_UPDATE_RATE,
                   "GUIDANCE_TELEM_RATE_HZ must be in [1, NON_SENSOR_UPDATE_RATE]");
