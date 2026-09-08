@@ -166,6 +166,33 @@ static int64_t mag_cal_verify_start_us = 0;
 static bool    mag_cal_verify_eval_now = false;
 static int16_t mag_cal_prior_cx = 0, mag_cal_prior_cy = 0, mag_cal_prior_cz = 0;
 static bool    mag_cal_session_active = false;
+
+// #1118: MAG_CALIBRATION suppresses launch detection (kinematicChecks() is
+// skipped for the whole state so a hand tumble cannot latch launch_flag), and
+// the state had no timeout, no auto-exit and no #363-style failsafe. A session
+// left open — a mis-tap on the pad, or any of the four documented app-side
+// strand paths — meant that if the motor was lit, launch_flag could never
+// latch, enterInflight() was never called, servicePyroChannels() never ran and
+// the OC never opened a flight log: no drogue, no main, no data.
+//
+// Two independent ways out that do not depend on the app:
+//   * a session timeout, and
+//   * a launch failsafe that is deliberately tumble-proof. It cannot key on
+//     launch_flag (the detector is off), so it watches barometric altitude
+//     instead: pressure_altitude_m is still computed every pass during cal,
+//     and a hand tumble on the pad cannot produce tens of metres of sustained
+//     climb.
+static uint32_t mag_cal_start_ms      = 0;
+static float    mag_cal_entry_alt_m   = 0.0f;
+static bool     mag_cal_entry_alt_ok  = false;
+static uint32_t mag_cal_climb_since_ms = 0;
+
+// Generous — a careful cal is minutes of deliberate rotation — but bounded.
+static constexpr uint32_t MAGCAL_SESSION_TIMEOUT_MS = 15u * 60u * 1000u;
+// Tens of metres, as #1118 specifies: far above tumble/handling noise and far
+// below the altitude at which a deployment decision matters.
+static constexpr float    MAGCAL_LAUNCH_ALT_M       = 30.0f;
+static constexpr uint32_t MAGCAL_LAUNCH_HOLD_MS     = 1000u;
 static bool    mag_cal_verify_active  = false;
 // Safety timeout for the verify window — was originally a 5 s auto-
 // dispatch but #148 turned verify into a user-driven step (the iOS
@@ -4894,6 +4921,28 @@ static void resetFlightStateForSim(const char* edge)
 // (state flip, per-flight resets, EKF/guidance degraded-mode handling).
 // Factored out of the PRELAUNCH case so the #382 READY-launch fallback
 // promotes through the IDENTICAL path and the two can never drift.
+// #1118: end a mag-cal session and roll the chip back to the prior offsets.
+// Factored out of the MAG_CAL_ABORT handler so the timeout and the launch
+// failsafe cannot drift from it — leaving the OFFSET regs zeroed is what makes
+// a stranded session corrupt the magnetometer as well as inhibit launch.
+static void magCalEndSession(const char* why)
+{
+    if (mag_cal_session_active && sensor_collector.isIIS2MDCActive())
+    {
+        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
+            mag_cal_prior_cx, mag_cal_prior_cy, mag_cal_prior_cz);
+        ESP_LOGI(TAG, "[MAGCAL] %s — restored prior OFFSET (%d,%d,%d) %s",
+                 why, (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
+                 (int)mag_cal_prior_cz, ok ? "OK" : "FAIL");
+    }
+    mag_cal_session_active  = false;
+    mag_cal_verify_active   = false;
+    mag_cal_entry_alt_ok    = false;
+    mag_cal_climb_since_ms  = 0;
+    mag_calibrator.abort();
+    mag_cal_status_dirty    = true;
+}
+
 static void enterInflight(uint32_t now_ms, const char* from_state)
 {
     rocket_state = INFLIGHT;
@@ -6598,9 +6647,19 @@ static void loop_fc()
             // waiting for the 5 Hz cadence.
             else if (out_pending_command == MAG_CAL_START)
             {
-                if (rocket_state == INFLIGHT)
+                // #1118: PRELAUNCH stays allowed on purpose — it is the
+                // automatic outdoor ground state (4 sats + 3 s, no operator
+                // action), so refusing it would refuse mag cal in the field
+                // essentially always. Every exit path lands in READY, which is
+                // the demotion #1118 asks for: the pad gates are re-run from
+                // scratch afterwards. LANDED is refused because the
+                // post-flight lockout re-asserts it on the next pass anyway,
+                // leaving the state flipping back while mag_cal_session_active
+                // stayed true.
+                if (rocket_state == INFLIGHT || rocket_state == LANDED)
                 {
-                    ESP_LOGW(TAG, "[MAGCAL] start refused: INFLIGHT");
+                    ESP_LOGW(TAG, "[MAGCAL] start refused: state=%u (INFLIGHT and LANDED "
+                                  "are not calibration states)", (unsigned)rocket_state);
                 }
                 else
                 {
@@ -6639,6 +6698,12 @@ static void loop_fc()
                              (unsigned)rocket_state);
                     rocket_state = MAG_CALIBRATION;
                     mag_calibrator.start();
+                    // #1118: stamp the session so it has a way out that does
+                    // not depend on the app ever sending MAG_CAL_ABORT.
+                    mag_cal_start_ms       = now_ms;
+                    mag_cal_entry_alt_m    = pressure_altitude_m;
+                    mag_cal_entry_alt_ok   = (ground_pressure_pa > 0.0f);
+                    mag_cal_climb_since_ms = 0;
                     mag_cal_session_active = true;
                     mag_cal_status_dirty = true;
 
@@ -6687,18 +6752,7 @@ static void loop_fc()
                 // chip (regardless of which sub-state we're aborting from).
                 // Same code path for "abort during sampling", "abort during
                 // review", and "abort during verifying".
-                if (mag_cal_session_active && sensor_collector.isIIS2MDCActive())
-                {
-                    const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
-                        mag_cal_prior_cx, mag_cal_prior_cy, mag_cal_prior_cz);
-                    ESP_LOGI(TAG, "[MAGCAL] abort — restored prior OFFSET (%d,%d,%d) %s",
-                             (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
-                             (int)mag_cal_prior_cz, ok ? "OK" : "FAIL");
-                }
-                mag_cal_session_active = false;
-                mag_cal_verify_active = false;
-                mag_calibrator.abort();
-                mag_cal_status_dirty = true;
+                magCalEndSession("abort");   // #1118: shared teardown
                 if (rocket_state == MAG_CALIBRATION) rocket_state = READY;
                 // Calibrator is now in ABORTED — leave it there.  iOS
                 // treats .aborted and .idle the same (introSection).
@@ -9226,6 +9280,58 @@ static void loop_fc()
                 //     true for MAG_CALIBRATION.
                 //   * The servo PWM is stowed at MAG_CAL_START entry and
                 //     no servo-control loop runs from this case body.
+                //
+                // #1118 — the two ways out that do NOT depend on the app.
+                // Everything above is a safety property while the operator is
+                // present; together they were also the hazard, because a
+                // session nobody ends inhibits launch detection and pyro
+                // servicing for as long as it lasts.
+
+                // (a) Launch failsafe. It cannot key on kinematics.launch_flag
+                // — the detector is skipped for this whole state — so it
+                // watches barometric altitude, which is still computed every
+                // pass. A hand tumble on the pad cannot produce tens of metres
+                // of sustained climb; a lit motor produces it in well under a
+                // second. This is the #363 equivalent the state was missing.
+                if (mag_cal_entry_alt_ok && ground_pressure_pa > 0.0f)
+                {
+                    const float climb_m = pressure_altitude_m - mag_cal_entry_alt_m;
+                    if (climb_m >= MAGCAL_LAUNCH_ALT_M)
+                    {
+                        if (mag_cal_climb_since_ms == 0) mag_cal_climb_since_ms = now_ms;
+                        if (now_ms - mag_cal_climb_since_ms >= MAGCAL_LAUNCH_HOLD_MS)
+                        {
+                            ESP_LOGE(TAG, "[MAGCAL] LAUNCH DETECTED during calibration "
+                                          "(+%.1f m for %u ms) — abandoning the session "
+                                          "and entering INFLIGHT (#1118)",
+                                     (double)climb_m,
+                                     (unsigned)(now_ms - mag_cal_climb_since_ms));
+                            magCalEndSession("launch during calibration");
+                            enterInflight(now_ms, "MAG_CALIBRATION");
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        mag_cal_climb_since_ms = 0;   // must be sustained
+                    }
+                }
+
+                // (b) Session timeout. The four documented app-side strand
+                // paths (system back, top-bar tab, disconnect chevron,
+                // rotation/split-screen) all leave the FC here with the
+                // OFFSET regs zeroed and no cal screen on the phone.
+                if (mag_cal_start_ms != 0 &&
+                    (now_ms - mag_cal_start_ms) >= MAGCAL_SESSION_TIMEOUT_MS)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] session timed out after %u ms with no "
+                                  "abort or accept — restoring prior offsets and "
+                                  "returning to READY (#1118)",
+                             (unsigned)(now_ms - mag_cal_start_ms));
+                    magCalEndSession("session timeout");
+                    mag_cal_start_ms = 0;
+                    rocket_state = READY;
+                }
                 break;
             }
             default:
