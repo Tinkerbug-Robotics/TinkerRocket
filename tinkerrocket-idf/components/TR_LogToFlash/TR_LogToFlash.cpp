@@ -504,7 +504,27 @@ void TR_LogToFlash::endLogging()
     // (returns logging_active || end_flight_requested) then never goes
     // false. That made the BLE cmd=23 toggle handler stuck on "stop" after
     // a normal LANDED-triggered drain.
-    if (!logging_active && !file_open) return;
+    // #1148 item 1: the guard used to require BOTH flags false, so the
+    // PRELAUNCH pre-created state (file_open true, logging_active false — the
+    // flush task opens the session ahead of the flight) fell through and
+    // latched end_flight_requested. Nothing could then clear it: the flush
+    // task's clearing block needs logging_active, which is false, so
+    // enqueueFrame() rejected every frame for the rest of the power session
+    // while isLoggingActive() kept returning true. Three OC call sites reach
+    // here with no isLoggingActive() guard — the BLE Sim Stop handler, the
+    // LoRa uplink cmd 7 handler and the END_FLIGHT frame handler — so an
+    // operator ending a flight that never started bricked the logger for the
+    // next one, silently.
+    //
+    // A session that is not logging has nothing to drain, so the request is
+    // meaningless: clear it rather than latch it. The pre-created file stays
+    // open on purpose — that is what it is for, and the next real flight uses
+    // it.
+    if (!logging_active)
+    {
+        end_flight_requested = false;
+        return;
+    }
     end_flight_requested = true;
 }
 
@@ -1367,7 +1387,7 @@ void TR_LogToFlash::nandSetFeature(uint8_t addr, uint8_t val)
     spi->endTransaction();
 }
 
-bool TR_LogToFlash::nandWaitReady(uint32_t timeout_us)
+bool TR_LogToFlash::nandWaitReady(uint32_t timeout_us, uint8_t* out_status)
 {
     const uint32_t t0 = micros();
     while (true)
@@ -1379,6 +1399,7 @@ bool TR_LogToFlash::nandWaitReady(uint32_t timeout_us)
 
         if ((st & STAT_OIP) == 0)
         {
+            if (out_status) *out_status = st;   // #1148 item 2: carries the ECC field
             return true;
         }
         if ((micros() - t0) > timeout_us)
@@ -1498,8 +1519,23 @@ bool TR_LogToFlash::nandReadPage(uint32_t rowPageAddr, uint8_t* out, uint32_t le
     spi->endTransaction();
     spiRelease();
 
-    if (!nandWaitReady())  // acquires/releases per poll internally
+    uint8_t nand_st = 0;
+    if (!nandWaitReady(2'000'000, &nand_st))  // acquires/releases per poll internally
     {
+        return false;
+    }
+    // #1148 item 2: the on-die ECC result rides the same status byte as OIP and
+    // was previously read and thrown away, so an UNCORRECTABLE error returned
+    // garbage as success — and every read-side bad-block path in this component
+    // (lfsBlockRead's markBlockBad, scanBadBlocksAtBoot's "any read error on
+    // page 0 is a dead-block signal") was dead code because nandReadPage could
+    // only fail on an OIP timeout. Correctable errors are NOT failures: the
+    // data is good and the part fixed it. Semantics mirror the vendored,
+    // silicon-validated spi_nand_flash driver (is_ecc_error), including the
+    // FORESEE parts' linear 3-bit field.
+    if (nandEccUncorrectable(geom_.ecc_kind, nand_st))
+    {
+        nand_ecc_uncorrectable_++;
         return false;
     }
 
@@ -1545,9 +1581,17 @@ bool TR_LogToFlash::nandReadBytesAt(uint32_t rowPageAddr, uint32_t column,
     spi->endTransaction();
     spiRelease();
 
-    if (!nandWaitReady())
+    uint8_t nand_st = 0;
+    if (!nandWaitReady(2'000'000, &nand_st))
     {
         return false;  // treat a stuck page-read as a suspect block
+    }
+    // #1148 item 2: same ECC gate as nandReadPage — an uncorrectable page must
+    // not be streamed out as good data. Correctable errors are not failures.
+    if (nandEccUncorrectable(geom_.ecc_kind, nand_st))
+    {
+        nand_ecc_uncorrectable_++;
+        return false;
     }
 
     // Stage 2: stream `len` bytes out of the cache starting at `column`.
