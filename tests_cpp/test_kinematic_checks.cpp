@@ -23,6 +23,14 @@ protected:
     }
 
     // Helper: call with flight-like data
+    // #574: drive a specific EKF speed (gps_stationary is an EKF-speed proxy).
+    void callFlightVel(float alt, float acc_mag, float ekf_speed, float roll_rate,
+                       bool imu_healthy) {
+        float pos[3] = {0, 0, alt};
+        float vel[3] = {ekf_speed, 0.0f, 0.0f};
+        kc.kinematicChecks(alt, acc_mag, pos, vel, roll_rate, true, alt, true,
+                           1.57f, false, false, 0.0f, true, true, imu_healthy);
+    }
     void callFlight(float alt, float acc_mag, float vel_u, float roll_rate = 0.0f,
                     float gps_alt = 0.0f, bool new_gps = false,
                     float pitch_rad = 1.57f, bool burnout = false, bool baro_lockout = false,
@@ -1302,18 +1310,21 @@ TEST_F(KinematicChecksTest, Landing_StaleImu_GyroQuietMustNotVote) {
     EXPECT_FALSE(kc.alt_landed_flag);
 }
 
-// ── #1137 item 7, the other half: a dead IMU must not strand the flight ──
+// ── #574: what a dead IMU actually leaves behind ──
 //
-// Gating the two IMU detectors could have pushed every dead-IMU flight onto
-// the 10-minute MAX_FLIGHT_TIME_MS backstop -- which would still end the
-// flight, but that backstop exists for detection FAILURE and spends ten
-// minutes with the squibs live to get there.  A landing the detectors can
-// actually see should not be routed through it.
-// Treating them as UNAVAILABLE rather than FAILING is what keeps a path open:
-// baro_stable and gps_stationary are then the whole ballot, and both must
-// pass.  A stale-IMU landing is still a landing when two independent,
-// altitude- and position-aware detectors agree on it.
-TEST_F(KinematicChecksTest, Landing_StaleImu_BaroPlusGpsStillLands) {
+// This test was written for #1137 item 7 (PR #1250) on the belief that
+// baro_stable + gps_stationary remained a workable two-detector ballot when
+// the IMU is unavailable.  That was wrong, and #574 is why: gps_stationary is
+// an EKF SPEED proxy despite its name, and the EKF is IMU-driven, so on a real
+// dead-IMU flight it holds the boost velocity rather than zero.  Feeding a
+// zero velocity here made the test agree with a fallback that does not exist.
+//
+// Kept, re-aimed, and renamed: it now pins that the ballot still works when
+// the EKF velocity is genuinely zero -- which is a real case (an IMU that dies
+// while the vehicle is already stationary, so the filter's last estimate is
+// the truth) -- and the two tests below cover the case that actually strands
+// a flight.
+TEST_F(KinematicChecksTest, Landing_StaleImu_WithAZeroedEkfVelocityStillLands) {
     for (int i = 0; i < 80; i++) {
         setMockMillis(i * 2);
         callFlight(float(i), 25.0f, 10.0f, 0.0f, float(i), true);
@@ -1334,4 +1345,103 @@ TEST_F(KinematicChecksTest, Landing_StaleImu_BaroPlusGpsStillLands) {
         }
     }
     EXPECT_TRUE(kc.alt_landed_flag);
+}
+
+// ── #574: the flight this issue is about ──
+//
+// A dead IMU freezes the EKF velocity near the boost value (the 2026-07-21 HIL
+// bench measured ~260 m/s), so gps_stationary fails permanently; impact and
+// quiescent both read acc_mag and are equally dead.  Every route to
+// alt_landed_flag was therefore IMU-dependent, and the vehicle sat in INFLIGHT
+// until the 600 s MAX_FLIGHT_TIME_MS timeout -- servos driving,
+// post_flight_lockout unset, log unfinalised, for ten minutes after touchdown.
+TEST_F(KinematicChecksTest, Landing_DeadImu_FrozenEkfVelocity_StillLands) {
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f, 0.0f, float(i), true);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    ASSERT_GT(kc.max_altitude, 15.0f);
+    kc.apogee_flag = true;
+
+    // The bench reality: 0.0f accel substituted by the caller, gyro frozen,
+    // and an EKF velocity stuck at boost speed.
+    for (int second = 0; second < 40; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlightVel(5.0f, 0.0f, 260.0f, 90.0f, /*imu_healthy=*/false);
+        }
+    }
+    EXPECT_TRUE(kc.alt_landed_flag);
+    EXPECT_TRUE(kc.baro_landed_flag) << "it must be the baro-only path that fired";
+}
+
+TEST_F(KinematicChecksTest, Landing_DeadImu_UnderCanopyDoesNotLand) {
+    // The safety property the 30 s dwell and the 2 m/s gate exist for.  A
+    // canopy descent changes pressure altitude by 5-20 m per 1 s tick, an
+    // order of magnitude outside BARO_STABLE_DELTA_MAX, so baro_stable_pass
+    // fails every tick and the counter never climbs -- however long the
+    // descent lasts.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f, 0.0f, float(i), true);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    kc.apogee_flag = true;
+
+    float alt = 400.0f;
+    for (int second = 0; second < 60; second++) {   // a full minute under canopy
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlightVel(alt, 0.0f, 260.0f, 90.0f, /*imu_healthy=*/false);
+        }
+        alt -= 7.0f;   // ~7 m/s under canopy
+    }
+    EXPECT_FALSE(kc.alt_landed_flag) << "landed while still descending";
+    EXPECT_FALSE(kc.baro_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_DeadImu_DeadBaroCannotLand) {
+    // Both sensors gone: no evidence remains and the 600 s timeout is the
+    // correct answer, not a landing.  baro_healthy is what enforces that -- a
+    // dead barometer holds its last reading, which looks maximally stable.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f, 0.0f, float(i), true);
+    }
+    kc.apogee_flag = true;
+    for (int second = 0; second < 40; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            float pos[3] = {0, 0, 5.0f};
+            float vel[3] = {260.0f, 0, 0};
+            kc.kinematicChecks(5.0f, 0.0f, pos, vel, 90.0f, true, 0.0f, false,
+                               1.57f, false, false, 0.0f, true,
+                               /*baro_healthy=*/false, /*imu_healthy=*/false);
+        }
+    }
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_HealthyImuFlightIsUnchangedByTheBaroPath) {
+    // The gate is !imu_healthy precisely so a normal flight takes exactly the
+    // code it always did.  A healthy landing must still come from the vote,
+    // within its ~4 s budget, and never from the 30 s baro-only path.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f, 0.0f, float(i), true);
+    }
+    kc.apogee_flag = true;
+    for (int second = 0; second < 7; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(5.0f, 9.81f, 0.0f, 15.0f);
+        }
+    }
+    EXPECT_TRUE(kc.alt_landed_flag);
+    EXPECT_FALSE(kc.baro_landed_flag) << "the baro-only path fired on a healthy flight";
 }

@@ -241,6 +241,34 @@ constexpr float    QUIESCENT_GYRO_DPS       = 5.0f;
 constexpr float    QUIESCENT_ACCEL_TOL_MS2  = 0.49f;    // ≈ 0.05 g
 constexpr uint8_t  QUIESCENT_COUNT_HI       = 30;       // ~30 s net quiet
 constexpr uint8_t  QUIESCENT_COUNT_MAX      = 45;
+
+// #574: the IMU-independent landing path.
+//
+// Every other route to alt_landed_flag needs the IMU.  impact reads acc_mag;
+// quiescent reads acc_mag and roll_rate; gyro_quiet and accel_1g are IMU
+// detectors by definition; and gps_stationary, despite its name, is an EKF
+// SPEED proxy -- and the EKF is driven by the IMU, so on a dead-IMU flight it
+// holds the boost velocity (~260 m/s on the 2026-07-21 HIL bench) and can
+// never pass.  That left the 600 s MAX_FLIGHT_TIME_MS timeout as the only way
+// a dead-IMU flight reached LANDED, with the servos driving, post_flight_lockout
+// unset and the log unfinalised for ten minutes after touchdown.
+//
+// baro_stable_pass is already a complete statement that the vehicle is on the
+// ground: barometer alive, pressure altitude inside +/-50 m of the pad, the
+// airframe has actually flown (max_altitude > 15 m), and |dpalt| < 2 m over
+// the 1 s slow-detector tick.  A canopy descent cannot satisfy the last of
+// those -- terminal velocity is 5-20 m/s, so dpalt is 5-20 m per tick, an
+// order of magnitude outside the gate.  What it lacks is permission to decide
+// alone, which the vote withholds on the general principle that one detector
+// is not a quorum.
+//
+// So this grants that permission in exactly the case where no quorum is
+// reachable: the IMU is not answering, so the other four detectors are
+// unavailable rather than merely failing.  The price of deciding on one
+// detector is paid in dwell -- 30 net seconds, the same budget the #824
+// quiescent path uses, against the vote's 4.
+constexpr uint8_t  BARO_LANDED_COUNT_HI     = 30;       // ~30 s net baro-stable
+constexpr uint8_t  BARO_LANDED_COUNT_MAX    = 45;
 }
 
 TR_KinematicChecks::TR_KinematicChecks()
@@ -275,11 +303,13 @@ TR_KinematicChecks::TR_KinematicChecks()
     gps_stationary_flag = false;
     accel_1g_flag = false;
     quiescent_flag = false;
+    baro_landed_flag = false;   // #574
     baro_stable_count_ = 0;
     gyro_quiet_count_ = 0;
     gps_stationary_count_ = 0;
     accel_1g_count_ = 0;
     quiescent_count_ = 0;
+    baro_landed_count_ = 0;   // #574
     max_gps_altitude_ = 0.0f;
     gps_apogee_count_ = 0;
     gps_available_ = false;
@@ -341,11 +371,13 @@ void TR_KinematicChecks::reset()
     gps_stationary_flag = false;
     accel_1g_flag = false;
     quiescent_flag = false;
+    baro_landed_flag = false;   // #574
     baro_stable_count_ = 0;
     gyro_quiet_count_ = 0;
     gps_stationary_count_ = 0;
     accel_1g_count_ = 0;
     quiescent_count_ = 0;
+    baro_landed_count_ = 0;   // #574
     max_gps_altitude_ = 0.0f;
     gps_apogee_count_ = 0;
     gps_available_ = false;
@@ -676,6 +708,29 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         }
         if (quiescent_count_ >= QUIESCENT_COUNT_HI) quiescent_flag = true;
         else if (quiescent_count_ == 0)             quiescent_flag = false;
+
+        // Sub 6: Baro-only landing (#574).  See BARO_LANDED_COUNT_HI above for
+        // why one detector is allowed to decide here and nowhere else.
+        //
+        // Deliberately gated on !imu_healthy.  With a live IMU the ordinary
+        // vote reaches quorum in ~4 s and this path must not shorten, lengthen
+        // or otherwise perturb it -- a healthy flight takes exactly the code it
+        // always did.  This exists only for the flight that would otherwise
+        // wait out the 600 s timeout.
+        //
+        // baro_stable_pass is reused verbatim rather than re-derived, so the
+        // barometer-health argument above Sub 1 covers this path too: a dead
+        // baro frozen at an in-band reading reads as maximally stable, and
+        // baro_healthy is what stops it being handed a landing for free.  With
+        // both sensors dead there is no evidence left and the timeout is the
+        // correct answer.
+        if (!imu_healthy && apogee_flag && baro_stable_pass) {
+            if (baro_landed_count_ < BARO_LANDED_COUNT_MAX) baro_landed_count_++;
+        } else {
+            if (baro_landed_count_ > 0) baro_landed_count_--;
+        }
+        if (baro_landed_count_ >= BARO_LANDED_COUNT_HI) baro_landed_flag = true;
+        else if (baro_landed_count_ == 0)               baro_landed_flag = false;
     }
 
     // --- Voting: impact alone fires; otherwise N-1 of N over slow flags.
@@ -686,6 +741,12 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     {
         if (impact_flag)
         {
+            alt_landed_flag = true;
+        }
+        else if (baro_landed_flag)
+        {
+            // #574: baro-only, IMU-dead.  Kept out of the vote for the same
+            // reason quiescent is -- it works precisely where the vote cannot.
             alt_landed_flag = true;
         }
         else if (quiescent_flag)

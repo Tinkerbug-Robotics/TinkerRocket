@@ -53,6 +53,7 @@ public:
     bool gps_stationary_flag;   // EKF speed near zero (GPS fresh)
     bool accel_1g_flag;         // acc_mag near 1 g
     bool quiescent_flag;        // #824 sustained stillness; baro-independent
+    bool baro_landed_flag;      // #574 IMU-independent; baro-only, IMU-dead only
     float max_altitude;
     float max_speed;
     float alt_est;    // Filtered altitude (m)
@@ -78,6 +79,7 @@ private:
     uint8_t gps_stationary_count_;
     uint8_t accel_1g_count_;
     uint8_t quiescent_count_;
+    uint8_t baro_landed_count_;   // #574
 
     // GPS apogee test state
     float max_gps_altitude_;
