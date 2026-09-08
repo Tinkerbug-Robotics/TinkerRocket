@@ -1,0 +1,58 @@
+# #1211 / #1159 (PR #1238) — a mid-flight "Stop Logging" tap must be REFUSED,
+# and the same tap must work once the flight is over.
+#
+# Rig: V9 pair, S1 -> O (OUT COMPUTER console), flight pack in.
+#
+# The console line alone is NOT sufficient evidence here: the OC runs at ~82%
+# core-1 utilisation during a logging sim flight and DROPS log lines under that
+# load (an earlier run lost this very refusal). So the load-bearing assertion is
+# the telemetry bit `fs.LOGGING_ACTIVE`, which must stay 1 across every tap —
+# that is the thing the defect actually broke (the NAND record ended on the
+# spot). Three taps are sent so a dropped line is unlikely to hide all three.
+#
+# NB `fs` is the BLE-only bitfield from buildTelemetryJSON, NOT the
+# NonSensorData.flags table in the generated protocol reference: LOGGING_ACTIVE
+# is b6 and SIM_ACTIVE is b8 here.
+
+note === Fly a sim to INFLIGHT with logging running ===
+mark
+send 5 00c05c4400009a42cdcccc3f00007041
+send 6
+wait_tlm 40 st==INFLIGHT
+expect_tlm 40 st==INFLIGHT
+expect_tlm 40 fs.SIM_ACTIVE==1
+expect_tlm 40 fs.LOGGING_ACTIVE==1
+
+note === #1159: three mid-flight Stop-Logging taps, all must be refused ===
+mark
+send 23 00
+sleep 3
+send 23 00
+sleep 3
+send 23 00
+sleep 3
+expect_serial 10 Logging STOP REFUSED: rocket is INFLIGHT
+refute_serial_since Logging STOPPED \(manual\)
+# The real proof, immune to a dropped console line: the log never stopped.
+refute_tlm 5 fs.LOGGING_ACTIVE==0
+
+note === Fly it out ===
+mark
+wait_tlm 180 st==LANDED
+expect_tlm 180 st==LANDED
+
+note === #1159 regression: with the flight over, the gate must be LIFTED ===
+# After landing the logger has already auto-stopped, so a bare stop correctly
+# answers "already STOPPED". Start it and stop it to prove the refusal is gone.
+mark
+send 23 01
+expect_serial 10 Logging STARTED \(manual\)
+sleep 2
+send 23 00
+expect_serial 10 Logging STOPPED \(manual\)
+refute_serial_since Logging STOP REFUSED
+
+note === Reset for the next run ===
+send 7
+expect_tlm 30 st==READY
+note === done ===
