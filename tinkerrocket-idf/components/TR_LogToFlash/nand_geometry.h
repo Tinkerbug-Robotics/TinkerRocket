@@ -38,12 +38,24 @@
 // bitmap blobs are length-checked. A geometry flap on the same die would
 // CRC-fail every page and discard the bitmaps.
 
+// #1148 item 2: how this part reports on-die ECC in the status byte after a
+// PAGEREAD. Mirrors the vendored spi_nand_flash driver, which is the
+// silicon-validated reference (src/nand_impl.c is_ecc_error): a 2-bit field is
+// the driver's default for GigaDevice and Macronix, while the FORESEE/Longsys
+// parts use a 3-bit LINEAR bit-count that the generic 3-bit packing would
+// misread (nand_foresee.c).
+enum class NandEccKind : uint8_t {
+    TwoBitPacked = 0,   // STAT[5:4]: 0 ok, 1 corrected, 2 UNCORRECTABLE
+    ForeseeLinear3 = 1, // STAT[6:4]: 0 ok, 1..6 corrected, 7 UNCORRECTABLE
+};
+
 struct NandGeometry
 {
     uint32_t page_size;       // main-array bytes per page (spare excluded)
     uint32_t pages_per_blk;
     uint32_t block_count;
     const char* name;         // for the boot log
+    NandEccKind ecc_kind;     // #1148 item 2
 
     constexpr uint32_t blockSize() const { return page_size * pages_per_blk; }
     // 1-bit-per-block bad-block bitmap length (TR_LogToFlash's NVS blob).
@@ -61,7 +73,8 @@ constexpr uint32_t NAND_BLOCK_COUNT_MAX = 2048;
 // The legacy / unknown-ID fallback: the F35SQB004G numbers that were the
 // compile-time geometry before #671.
 constexpr NandGeometry NAND_GEOMETRY_LEGACY = {4096, 64, 2048,
-                                               "legacy/unknown (F35SQB004G-compatible)"};
+                                               "legacy/unknown (F35SQB004G-compatible)",
+                                               NandEccKind::ForeseeLinear3};
 
 // chip_id is (MID << 8) | DID as nandInit() builds it — one DID byte only
 // (that is all the driver captures; parts with 2-byte DIDs truncate — the
@@ -73,13 +86,13 @@ inline bool nandGeometryForId(uint16_t chip_id, NandGeometry* out)
     switch (chip_id)
     {
         case 0xCD53:  // FORESEE F35SQB004G — the V8 bench part (#492)
-            *out = {4096, 64, 2048, "F35SQB004G (4Gbit)"};
+            *out = {4096, 64, 2048, "F35SQB004G (4Gbit)", NandEccKind::ForeseeLinear3};
             return true;
         case 0xC852:  // GigaDevice GD5F2GQ5UE — V9/V10 rocket computer
-            *out = {2048, 64, 2048, "GD5F2GQ5UE (2Gbit)"};
+            *out = {2048, 64, 2048, "GD5F2GQ5UE (2Gbit)", NandEccKind::TwoBitPacked};
             return true;
         case 0xC851:  // GigaDevice GD5F1GQ5UE — rocket computer mini
-            *out = {2048, 64, 1024, "GD5F1GQ5UE (1Gbit)"};
+            *out = {2048, 64, 1024, "GD5F1GQ5UE (1Gbit)", NandEccKind::TwoBitPacked};
             return true;
         case 0xC2F5:  // Macronix MX35UF4G24AD-Z4I8 — V7 rocket computer.
             // Geometry-identical to the legacy fallback; listed only to keep
@@ -87,12 +100,25 @@ inline bool nandGeometryForId(uint16_t chip_id, NandGeometry* out)
             // -Z4I8 suffix (DID 0xF5) is single-plane; the plain
             // MX35UF4G24AD (DID 0xB5) is a 2-plane part this driver cannot
             // address — never add a 0xC2B5 entry.
-            *out = {4096, 64, 2048, "MX35UF4G24AD-Z4I8 (4Gbit)"};
+            *out = {4096, 64, 2048, "MX35UF4G24AD-Z4I8 (4Gbit)", NandEccKind::TwoBitPacked};
             return true;
         default:
             *out = NAND_GEOMETRY_LEGACY;
             return false;
     }
+}
+
+// Returns true when the status byte reports an UNCORRECTABLE ECC error, i.e.
+// the page's data cannot be trusted. Correctable errors return false — the
+// data is good; the caller may count them as a wear signal.
+inline bool nandEccUncorrectable(NandEccKind kind, uint8_t status)
+{
+    if (kind == NandEccKind::ForeseeLinear3)
+    {
+        return ((status >> 4) & 0x7u) == 0x7u;
+    }
+    // 2-bit packed: STAT[5:4] == 0b10 is "not corrected".
+    return ((status >> 4) & 0x3u) == 0x2u;
 }
 
 static_assert(NAND_GEOMETRY_LEGACY.page_size <= NAND_PAGE_SIZE_MAX, "max covers legacy");

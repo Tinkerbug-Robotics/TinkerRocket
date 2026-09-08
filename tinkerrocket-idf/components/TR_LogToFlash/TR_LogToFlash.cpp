@@ -504,7 +504,27 @@ void TR_LogToFlash::endLogging()
     // (returns logging_active || end_flight_requested) then never goes
     // false. That made the BLE cmd=23 toggle handler stuck on "stop" after
     // a normal LANDED-triggered drain.
-    if (!logging_active && !file_open) return;
+    // #1148 item 1: the guard used to require BOTH flags false, so the
+    // PRELAUNCH pre-created state (file_open true, logging_active false — the
+    // flush task opens the session ahead of the flight) fell through and
+    // latched end_flight_requested. Nothing could then clear it: the flush
+    // task's clearing block needs logging_active, which is false, so
+    // enqueueFrame() rejected every frame for the rest of the power session
+    // while isLoggingActive() kept returning true. Three OC call sites reach
+    // here with no isLoggingActive() guard — the BLE Sim Stop handler, the
+    // LoRa uplink cmd 7 handler and the END_FLIGHT frame handler — so an
+    // operator ending a flight that never started bricked the logger for the
+    // next one, silently.
+    //
+    // A session that is not logging has nothing to drain, so the request is
+    // meaningless: clear it rather than latch it. The pre-created file stays
+    // open on purpose — that is what it is for, and the next real flight uses
+    // it.
+    if (!logging_active)
+    {
+        end_flight_requested = false;
+        return;
+    }
     end_flight_requested = true;
 }
 
@@ -1367,7 +1387,7 @@ void TR_LogToFlash::nandSetFeature(uint8_t addr, uint8_t val)
     spi->endTransaction();
 }
 
-bool TR_LogToFlash::nandWaitReady(uint32_t timeout_us)
+bool TR_LogToFlash::nandWaitReady(uint32_t timeout_us, uint8_t* out_status)
 {
     const uint32_t t0 = micros();
     while (true)
@@ -1379,6 +1399,7 @@ bool TR_LogToFlash::nandWaitReady(uint32_t timeout_us)
 
         if ((st & STAT_OIP) == 0)
         {
+            if (out_status) *out_status = st;   // #1148 item 2: carries the ECC field
             return true;
         }
         if ((micros() - t0) > timeout_us)

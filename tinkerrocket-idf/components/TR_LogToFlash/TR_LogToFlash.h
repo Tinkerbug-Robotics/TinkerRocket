@@ -619,7 +619,12 @@ private:
     void nandWREN();
     uint8_t nandGetFeature(uint8_t addr);
     void nandSetFeature(uint8_t addr, uint8_t val);
-    bool nandWaitReady(uint32_t timeout_us = 2'000'000);
+    // #1148 item 2: out_status receives the final FEAT_STAT byte, which carries
+    // the on-die ECC result as well as OIP. It used to be read and discarded,
+    // so an uncorrectable ECC error returned garbage as success.
+    bool nandWaitReady(uint32_t timeout_us = 2'000'000, uint8_t* out_status = nullptr);
+    // Count of pages whose ECC could not be corrected (#1148 item 2).
+    uint32_t nand_ecc_uncorrectable_ = 0;
     bool nandEraseBlock(uint32_t blockIndex);
     bool nandProgramPage(uint32_t rowPageAddr, const uint8_t* data, uint32_t len);
     bool nandReadPage(uint32_t rowPageAddr, uint8_t* out, uint32_t len);
