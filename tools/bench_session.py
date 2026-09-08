@@ -35,6 +35,7 @@ Script directives (one per line, '#' comments, blank lines ignored):
   refute_serial_since <regex>         PASS if NO line since `mark` matched
   expect_order <regexA> || <regexB>   PASS if A's first match precedes B's
   expect_fileops <hexprefix> <n>      PASS on exactly n file-ops frames since mark
+  wait_quiet <regex> <quiet_s> <timeout>  wait until regex stops appearing
   disconnect / connect                drop and retake the BLE link (#1124)
 
 Conditions read the telemetry JSON:
@@ -442,6 +443,30 @@ class Session:
             detail += f"; gaps >1s: {gaps}"
         self.record("PASS" if hz >= min_hz and not gaps else "FAIL", directive, detail)
 
+    async def wait_quiet(self, pattern, quiet_s, timeout, directive):
+        """Wait until nothing has matched `pattern` for `quiet_s` seconds.
+
+        Synchronises a script with a human action whose timing it cannot
+        control: "hold the FC in reset" becomes "wait until the FC's frames
+        stop", which is the condition under test anyway.
+        """
+        rx = re.compile(pattern)
+        deadline = time.time() + timeout
+        last_hit_t = None          # timeline seconds of the newest match
+        while time.time() < deadline:
+            now_t = time.time() - self.tl.t0
+            for ev in self.tl.since(0.0, {"serial"}):
+                if rx.search(ev["text"]) and (last_hit_t is None or ev["t"] > last_hit_t):
+                    last_hit_t = ev["t"]
+            if last_hit_t is not None and (now_t - last_hit_t) >= quiet_s:
+                self.record("PASS", directive,
+                            f"{pattern!r} quiet for {now_t - last_hit_t:.1f}s")
+                return True
+            await asyncio.sleep(0.2)
+        self.record("FAIL", directive,
+                    f"{pattern!r} never went quiet for {quiet_s}s within {timeout}s")
+        return False
+
     async def send(self, cmd, payload_hex, directive):
         payload = bytes.fromhex(payload_hex) if payload_hex else b""
         frame = bytes([cmd]) + payload
@@ -502,6 +527,9 @@ class Session:
             elif verb == "expect_order":
                 a, b = rest.split("||")
                 self.check_order(a.strip(), b.strip(), where)
+            elif verb == "wait_quiet":
+                pat, quiet, tmo = rest.rsplit(" ", 2)
+                await self.wait_quiet(pat.strip(), float(quiet), float(tmo), where)
             elif verb == "expect_fileops":
                 pre, _, n = rest.rpartition(" ")
                 hits = [e for e in self.tl.since(self.mark, {"fileops"})
@@ -531,7 +559,7 @@ def validate(lines):
              "expect_tlm", "refute_tlm", "wait_tlm", "expect_tlm_rate",
              "disconnect", "connect", "health", "mark",
              "expect_serial_since", "refute_serial_since", "expect_order",
-             "expect_fileops", "expect_tlm_nogap"}
+             "expect_fileops", "expect_tlm_nogap", "wait_quiet"}
     problems, steps = [], 0
     for lineno, raw in enumerate(lines, 1):
         line = raw.split("#", 1)[0].strip()
@@ -572,6 +600,9 @@ def validate(lines):
             elif verb == "expect_fileops":
                 pre, _, n = rest.rpartition(" ")
                 int(n); bytes.fromhex(pre.strip())
+            elif verb == "wait_quiet":
+                pat, quiet, tmo = rest.rsplit(" ", 2)
+                re.compile(pat.strip()); float(quiet); float(tmo)
         except SystemExit as exc:
             problems.append(f"line {lineno}: {exc}")
         except Exception as exc:                      # noqa: BLE001
