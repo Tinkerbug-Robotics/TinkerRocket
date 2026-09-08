@@ -3067,7 +3067,7 @@ static void queueOutStatusResponse(bool ready)
     // #1137 item 4: byte 2 is the serving-window epoch (0 while idle).  An FC
     // that predates it reads payload_len >= 2 and simply never sees the byte,
     // so this is additive on the wire.
-    uint8_t payload[3] = { outStatusByte(ready, boot_token_powered), cmd,
+    uint8_t payload[OUT_STATUS_PAYLOAD_BYTES] = { outStatusByte(ready, boot_token_powered), cmd,
                            (cmd != 0U) ? cmd_serve_epoch : (uint8_t)0 };
     size_t frame_len = 0;
     if (!TR_I2C_Interface::packMessage(OUT_STATUS_RESPONSE,

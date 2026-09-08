@@ -893,6 +893,27 @@ static_assert(sizeof(OutStatusQueryData) == 42,
 // "ready" on any firmware pairing, and an old FC simply never sees the cue.
 static constexpr uint8_t OUT_STATUS_READY_BIT         = 0x01;
 static constexpr uint8_t OUT_STATUS_TOKEN_POWERED_BIT = 0x02;
+
+// Payload width of OUT_STATUS_RESPONSE: [status byte][pending cmd][serve epoch].
+//
+// This exists because the two ends drifted once and the link died silently.
+// #1137 item 4 grew the OC's payload from 2 to 3 to carry the serving epoch,
+// but the FC's receive buffer stayed 2 — and unpackMessage refuses a payload
+// wider than the destination, so EVERY status read failed to unpack. The FC
+// then saw no served command at all: no config, no calibration, no sim start,
+// no OTA, while telemetry and BLE looked perfectly healthy because those do
+// not travel this way. Both ends now size their buffers from this constant, so
+// widening the payload cannot leave one side behind again.
+static constexpr size_t OUT_STATUS_PAYLOAD_BYTES = 3;
+
+// On-wire width of that frame: [SOF 4][type 1][len 1][payload][CRC 2].
+//
+// unpackMessage() demands an EXACT length match (frame_len != expected_len ->
+// reject), so a reader that hardcodes the old width rejects every frame after
+// the payload grows — which is precisely how the 2->3 byte change killed the
+// link. The config frame the OC appends starts at this offset too, so a stale
+// literal here silently misaligns that read as well.
+static constexpr size_t OUT_STATUS_FRAME_BYTES = 4 + 1 + 1 + OUT_STATUS_PAYLOAD_BYTES + 2;
 static inline uint8_t outStatusByte(bool ready, bool token_powered)
 {
     if (!ready) return 0;

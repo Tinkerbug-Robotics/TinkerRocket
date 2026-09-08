@@ -4365,10 +4365,10 @@ static void setup_fc()
         if (read_err == ESP_OK)
         {
             uint8_t resp_type = 0;
-            uint8_t resp_payload[2] = {};
+            uint8_t resp_payload[OUT_STATUS_PAYLOAD_BYTES] = {};
             size_t  resp_payload_len = 0;
             if (TR_I2C_Interface::unpackMessage(
-                    init_buf, 10,
+                    init_buf, OUT_STATUS_FRAME_BYTES,
                     resp_type, resp_payload, sizeof(resp_payload),
                     resp_payload_len, true)
                 && resp_type == OUT_STATUS_RESPONSE
@@ -6261,10 +6261,10 @@ static void loop_fc()
                 if (read_err == ESP_OK)
                 {
                     uint8_t resp_type = 0;
-                    uint8_t resp_payload[2] = {};
+                    uint8_t resp_payload[OUT_STATUS_PAYLOAD_BYTES] = {};
                     size_t  resp_payload_len = 0;
                     if (TR_I2C_Interface::unpackMessage(
-                            combined_buf, 10,
+                            combined_buf, OUT_STATUS_FRAME_BYTES,
                             resp_type, resp_payload, sizeof(resp_payload),
                             resp_payload_len, true)
                         && resp_type == OUT_STATUS_RESPONSE
@@ -6302,9 +6302,11 @@ static void loop_fc()
                                 (resp_payload_len >= 3) ? resp_payload[2] : 0U;
                             oc_cmd_gate.observe(resp_payload[1]);   // #1105
                         }
-                        memcpy(cfg_read_cache, combined_buf + 10,
-                               COMBINED_READ_SIZE - 10);
-                        cfg_read_cache_len = COMBINED_READ_SIZE - 10;
+                        memcpy(cfg_read_cache,
+                               combined_buf + OUT_STATUS_FRAME_BYTES,
+                               COMBINED_READ_SIZE - OUT_STATUS_FRAME_BYTES);
+                        cfg_read_cache_len =
+                            COMBINED_READ_SIZE - OUT_STATUS_FRAME_BYTES;
                     }
                 }
 
