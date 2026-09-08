@@ -315,6 +315,29 @@ TR_OTA_Receiver::Error TR_OTA_Receiver::abort()
     {
         backend_.abort();
     }
+    else if (state_ == State::ReadyToBoot)
+    {
+        // #1142 item 2: finish() has already called setBootPartition(), so
+        // otadata points at the new image RIGHT NOW.  Resetting to Idle here
+        // told the app the update was cancelled while the next reset — a
+        // watchdog, a brownout, the operator power-cycling because the app
+        // said "idle" — would still boot the image they just cancelled.  On a
+        // flight computer that is a different firmware than the one the
+        // operator believes is loaded.
+        //
+        // The window is real and reachable: handleOtaFinish() arms the restart
+        // 500 ms out, and BLE cmd 72 (abort) is dispatched in-place on the
+        // NimBLE host task, which cancels that restart — so the vehicle keeps
+        // running the old image with otadata pointing at the new one until
+        // something resets it.
+        if (backend_.restoreBootPartition() != 0)
+        {
+            // Could not put it back.  Stay in ReadyToBoot and say so — the
+            // reboot IS still coming, and reporting Idle would be a lie.
+            notify();
+            return Error::BootAlreadyCommitted;
+        }
+    }
     resetSession();
     notify();
     return Error::Ok;

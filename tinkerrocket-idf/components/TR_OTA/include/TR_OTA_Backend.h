@@ -21,6 +21,12 @@ public:
     virtual int write(const uint8_t* data, size_t len) = 0;
     virtual int end() = 0;
     virtual int setBootPartition() = 0;
+
+    /// #1142 item 2: undo setBootPartition() — point otadata back at the
+    /// partition we are RUNNING FROM.  abort() from ReadyToBoot used to report
+    /// Idle while otadata was already switched, so the next reset booted the
+    /// image the operator had just cancelled.  Returns 0 on success.
+    virtual int restoreBootPartition() = 0;
     virtual void abort() = 0;
 };
 

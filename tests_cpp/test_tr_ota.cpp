@@ -500,3 +500,76 @@ TEST(TrOtaIdentity, ASecondSessionRechecksIdentity)
     EXPECT_EQ(E::Ok, rx.finish());
     EXPECT_TRUE(be.boot_set);
 }
+
+// ── #1142 item 2: abort() from ReadyToBoot must put otadata back ──
+//
+// finish() calls backend_.setBootPartition() and then enters ReadyToBoot, so by
+// that point the next reset boots the NEW image. abort() skipped the backend
+// entirely outside Writing/VerifyFailed, reset to Idle and told the app the
+// session was gone -- while otadata still pointed at the cancelled update. The
+// header even promised "Always safe; resets to Idle."
+//
+// The window is reachable: handleOtaFinish() arms the restart 500 ms out, and
+// BLE cmd 72 is dispatched in-place on the NimBLE host task, cancelling it. The
+// vehicle then keeps running the old image with otadata pointing at the new one
+// until anything resets it -- a watchdog, a brownout, or the operator power
+// cycling precisely because the app said "idle".
+
+TEST(OtaAbortFromReadyToBoot, RestoresTheBootPartition) {
+    FakeOTABackend backend;
+    TR_OTA_Receiver rx(backend);
+
+    auto img  = make_image(256);
+    auto hash = sha256_of(img);
+    ASSERT_EQ(rx.begin((uint32_t)img.size(), hash.data()),
+              TR_OTA_Receiver::Error::Ok);
+    ASSERT_EQ(rx.writeChunk(0, img.data(), (uint16_t)img.size()),
+              TR_OTA_Receiver::Error::Ok);
+    ASSERT_EQ(rx.finish(), TR_OTA_Receiver::Error::Ok);
+    ASSERT_EQ(rx.state(), TR_OTA_Receiver::State::ReadyToBoot);
+    ASSERT_TRUE(backend.boot_set) << "finish() should have committed the switch";
+
+    EXPECT_EQ(rx.abort(), TR_OTA_Receiver::Error::Ok);
+    EXPECT_EQ(backend.restore_boot_calls, 1);
+    EXPECT_FALSE(backend.boot_set) << "otadata still points at the cancelled image";
+    EXPECT_EQ(rx.state(), TR_OTA_Receiver::State::Idle);
+}
+
+TEST(OtaAbortFromReadyToBoot, SaysSoWhenItCannotRestore) {
+    // If the restore fails the session must NOT claim to be idle -- the reboot
+    // really is still coming, and the operator needs to know that rather than
+    // being shown a cancelled update.
+    FakeOTABackend backend;
+    TR_OTA_Receiver rx(backend);
+
+    auto img  = make_image(256);
+    auto hash = sha256_of(img);
+    ASSERT_EQ(rx.begin((uint32_t)img.size(), hash.data()),
+              TR_OTA_Receiver::Error::Ok);
+    ASSERT_EQ(rx.writeChunk(0, img.data(), (uint16_t)img.size()),
+              TR_OTA_Receiver::Error::Ok);
+    ASSERT_EQ(rx.finish(), TR_OTA_Receiver::Error::Ok);
+
+    backend.restore_boot_rc = -1;
+    EXPECT_EQ(rx.abort(), TR_OTA_Receiver::Error::BootAlreadyCommitted);
+    EXPECT_EQ(rx.state(), TR_OTA_Receiver::State::ReadyToBoot)
+        << "reported idle while otadata still points at the new image";
+}
+
+TEST(OtaAbortFromReadyToBoot, OtherStatesAreUnchanged) {
+    // The Writing path must keep calling backend.abort() and must NOT touch the
+    // boot partition -- nothing has been committed there.
+    FakeOTABackend backend;
+    TR_OTA_Receiver rx(backend);
+
+    auto img  = make_image(256);
+    auto hash = sha256_of(img);
+    ASSERT_EQ(rx.begin((uint32_t)img.size(), hash.data()),
+              TR_OTA_Receiver::Error::Ok);
+    ASSERT_EQ(rx.writeChunk(0, img.data(), 128), TR_OTA_Receiver::Error::Ok);
+
+    EXPECT_EQ(rx.abort(), TR_OTA_Receiver::Error::Ok);
+    EXPECT_EQ(backend.abort_calls, 1);
+    EXPECT_EQ(backend.restore_boot_calls, 0);
+    EXPECT_EQ(rx.state(), TR_OTA_Receiver::State::Idle);
+}
