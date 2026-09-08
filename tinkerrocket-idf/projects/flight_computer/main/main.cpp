@@ -44,6 +44,7 @@
 #include <esp_attr.h>            // RTC_NOINIT_ATTR for the #848 power-hold latch flag
 #include "pwr_hold_policy.h"     // #848: boot reconciliation decision table
 #include "boot_cue_policy.h"     // #1188: boot LED cue decision table
+#include "pwr_hold_release_policy.h" // #1137 item 9: the LANDED hold-release test
 #include "sim_flight_policy.h"   // #1104: sim edge rule + latched dry-fire predicate (TR_Sensor_Collector_Sim)
 #include "oc_cmd_session_gate.h" // #1105: no replay of one-shot commands across an FC boot
 #include "fc_ota_session_policy.h" // #1116: the FC's own exit from an OTA image session nobody ends
@@ -382,6 +383,12 @@ static uint32_t gnss_absent_dwell_ms = 0;
 static bool ground_pressure_found = false;
 static GroundRefFreeze::State ground_ref_freeze;   // #1108
 static bool out_ready = false;
+// #1137 item 9: WHEN the OC last answered a status poll.  out_ready itself is a
+// set-once latch (cleared only by resetFlightStateForSim), and the poll that
+// sets it is skipped for the whole INFLIGHT phase, so at landing the latch says
+// whether the OC was alive BEFORE launch.  Anything that needs "is the OC alive
+// NOW" has to consult this stamp, not the latch.
+static uint32_t out_ready_last_ms = 0;
 static uint32_t out_ready_request_time_ms = 0;
 static uint8_t out_pending_command = 0U;
 // #1112: the dedup key (last_processed_cmd: ignore the OC's repeat deliveries)
@@ -3333,19 +3340,32 @@ static inline void serviceBootReadyChirp(uint32_t now_ms)
 
 static inline void serviceHeartbeatBeep(uint32_t now_ms)
 {
-    if (!config::HEARTBEAT_BEEP_IN_FLIGHT &&
-        (rocket_state == INFLIGHT || rocket_state == LANDED))
-    {
-        return;
-    }
     if ((now_ms - last_heartbeat_beep_ms) < config::HEARTBEAT_BEEP_INTERVAL_MS)
     {
         return;
     }
     last_heartbeat_beep_ms = now_ms;
 
-    // Keep heartbeat LED indication independent from sound enable.
+    // Keep heartbeat LED indication independent from sound enable — and, since
+    // #1137 item 1, from the flight state too.  The state gate used to sit
+    // ABOVE this line, so suppressing the in-flight BEEP also suppressed the
+    // blue LED, and it did so for LANDED as well as INFLIGHT.  The other two
+    // indicators carry nothing: RED_LED_PIN is driven HIGH once at boot and
+    // never touched again, and serviceBlueLedFlash only renders what this
+    // triggers.  So after touchdown the airframe went completely dark, and
+    // LANDED is terminal (post_flight_lockout re-asserts it every pass), so it
+    // stayed dark until a reboot — precisely when someone is out in a field
+    // looking for it.
     triggerBlueLedFlash(now_ms);
+
+    // The beep, and only the beep, is what HEARTBEAT_BEEP_IN_FLIGHT gates, and
+    // only INFLIGHT: config.h documents the knob as "Set true if you also want
+    // periodic beeps during INFLIGHT" and says nothing about LANDED.  A landed
+    // rocket is the case the locator beep exists for.
+    if (!config::HEARTBEAT_BEEP_IN_FLIGHT && rocket_state == INFLIGHT)
+    {
+        return;
+    }
 
     if (!enable_sounds || !piezo_pwm_ready)
     {
@@ -4350,7 +4370,7 @@ static void setup_fc()
                 && resp_type == OUT_STATUS_RESPONSE
                 && resp_payload_len >= 1)
             {
-                if (resp_payload[0] != 0) { out_ready = true; }
+                if (resp_payload[0] != 0) { out_ready = true; out_ready_last_ms = millis(); }
                 // #1188: the OC's second status bit — this session began with
                 // the OC raising our rail from a flight token.
                 if (resp_payload[0] & OUT_STATUS_TOKEN_POWERED_BIT) noteOcSelfPowered();
@@ -4613,6 +4633,7 @@ static void setup_fc()
                                 // the #848/#859 hold reconciliation just below,
                                 // which would otherwise inherit a stale false.
                                 out_ready = true;
+                                out_ready_last_ms = millis();   // #1137 item 9
                             } else {
                                 ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
                                          (unsigned long)snap.magic, snap.rocket_state,
@@ -4627,6 +4648,7 @@ static void setup_fc()
                                     answered_no_flight = true;
                                 }
                                 out_ready = true;   // the OC answered
+                                out_ready_last_ms = millis();   // #1137 item 9
                             }
                             break;
                         }
@@ -6191,6 +6213,7 @@ static void loop_fc()
                         if (resp_payload[0] != 0)
                         {
                             out_ready = true;
+                            out_ready_last_ms = now_ms;   // #1137 item 9
                             // #848: the OC is provably alive — an orphaned
                             // power hold kept for a dead OC hands the rail
                             // back now (never during a flight).
@@ -9363,17 +9386,43 @@ static void loop_fc()
                     // must NOT release: the hold is what keeps this downed
                     // rocket's GNSS downlink alive. The out_ready latch in the
                     // status-poll path releases it the moment the OC appears.
-                    if (out_ready)
+                    // #1137 item 9: out_ready alone is not evidence the OC is
+                    // alive NOW.  It is a set-once latch, and the status poll
+                    // that sets it is gated off for the entire INFLIGHT phase
+                    // — so for any rocket whose OC answered on the pad it is
+                    // unconditionally true here, including one whose OC died
+                    // at burnout.  Releasing then drives GPIO5 low, the rail
+                    // decays through R84/C105 in ~0.8 s, and the downed
+                    // rocket's GNSS downlink dies: the exact case the comment
+                    // above says the hold exists to protect.
+                    //
+                    // So require an answer stamped AFTER launch.  At the LANDED
+                    // transition itself there has not been one — the poll only
+                    // re-opens now that the state is no longer INFLIGHT — so a
+                    // healthy rocket takes the keep branch for a moment and the
+                    // orphan-keep reconciliation hands the rail back within a
+                    // poll or two.  Erring towards keeping the hold is the safe
+                    // direction: the cost is a battery pull, and the cost of
+                    // the other error is a rocket that goes silent where it
+                    // landed.
+                    const bool oc_alive_since_launch =
+                        pwr_hold::ocAliveSinceLaunch(out_ready, out_ready_last_ms,
+                                                     launch_time_millis);
+                    if (oc_alive_since_launch)
                     {
                         pwrHoldRelease("landed");
                     }
                     else
                     {
                         pwr_hold_orphan_keep = true;
-                        ESP_LOGE(TAG, "[PWR] LANDED with the OC not answering — "
-                                      "KEEPING the power hold for recovery "
+                        ESP_LOGE(TAG, "[PWR] LANDED with no OC answer since "
+                                      "launch (out_ready=%d last_ms=%lu launch_ms=%lu) "
+                                      "— KEEPING the power hold for recovery "
                                       "tracking (battery pull to power off; "
-                                      "auto-releases if the OC comes back).");
+                                      "auto-releases if the OC comes back).",
+                                 out_ready ? 1 : 0,
+                                 (unsigned long)out_ready_last_ms,
+                                 (unsigned long)launch_time_millis);
                     }
                     clearFlightSnapshot();  // prevent stale recovery on next boot
                     if (servo_enabled)

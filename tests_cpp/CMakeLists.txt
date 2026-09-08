@@ -1024,6 +1024,18 @@ target_include_directories(test_sensor_staleness_policy PRIVATE
 target_link_libraries(test_sensor_staleness_policy GTest::gtest_main)
 gtest_discover_tests(test_sensor_staleness_policy)
 
+# ---------- test_pwr_hold_release_policy (#1137 item 9) ----------
+# Whether the FC may hand its rail back at LANDED. Pure, and the wraparound
+# case is not something a bench can produce.
+add_executable(test_pwr_hold_release_policy test_pwr_hold_release_policy.cpp)
+target_include_directories(test_pwr_hold_release_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_pwr_hold_release_policy GTest::gtest_main)
+gtest_discover_tests(test_pwr_hold_release_policy)
+
 # ---------- test_i2s_link_budget (#1137 item 13) ----------
 # The FC->OC link budget lived only in a config.h comment and went stale twice.
 # Derived here from the real sizeof()s and rates so a struct that grows on the
