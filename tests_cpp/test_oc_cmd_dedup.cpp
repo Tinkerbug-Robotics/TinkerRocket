@@ -164,3 +164,99 @@ TEST(OcCmdDedup, IdlePollResetsKeyAndBudget)
 }
 
 }  // namespace
+
+// ── #1137 item 4: the idle poll must stop being load bearing ──
+//
+// The OC delivers every command CMD_REPEAT_LIMIT (3) times and the idle
+// (cmd=0) poll that separates two commands EXACTLY ONCE, while the FC cleared
+// its dedup key only on observing that one idle. So the command half of the
+// protocol was triple-redundant and the window-separator half was single-shot,
+// and only the fragile half could wedge the channel: one failed read of that
+// poll and the next command was discarded as a duplicate whenever it happened
+// to carry the same id.
+//
+// The OC now stamps each serving window with an epoch (status payload byte 2,
+// never 0), so a new window is identifiable whether or not the gap was seen.
+
+TEST(OcCmdDedup, LostIdlePollNoLongerSwallowsTheNextIdenticalCommand) {
+    OcCmdDedup d;
+    // Window 1: command 12, delivered three times.
+    EXPECT_EQ(d.take(true, 12, 1), 12);
+    EXPECT_EQ(d.take(true, 12, 1), 0);
+    EXPECT_EQ(d.take(true, 12, 1), 0);
+    // The single idle poll is LOST — the read failed, so the FC never sees it.
+    // Window 2 is the same command id, and must still execute.
+    EXPECT_EQ(d.take(true, 12, 2), 12);
+}
+
+TEST(OcCmdDedup, LostIdlePollWithoutAnEpochStillSwallowsIt) {
+    // The pre-fix behaviour, kept reachable for an OC that predates the byte.
+    // Documented rather than desired: it is why the epoch exists.
+    OcCmdDedup d;
+    EXPECT_EQ(d.take(true, 12), 12);
+    EXPECT_EQ(d.take(true, 12), 0);
+    EXPECT_EQ(d.take(true, 12), 0);
+    EXPECT_EQ(d.take(true, 12), 0) << "no epoch: the id-only rule still applies";
+}
+
+TEST(OcCmdDedup, RepeatsWithinAWindowAreStillDeduped) {
+    // The epoch must not turn the repeat deliveries into three executions --
+    // that is the whole reason the dedup exists.
+    OcCmdDedup d;
+    int executed = 0;
+    for (int i = 0; i < 3; ++i) if (d.take(true, 40, 7) != 0) executed++;
+    EXPECT_EQ(executed, 1);
+}
+
+TEST(OcCmdDedup, TheIdlePollStillResetsWhenItIsSeen) {
+    OcCmdDedup d;
+    EXPECT_EQ(d.take(true, 12, 1), 12);
+    EXPECT_EQ(d.take(true, 0, 0), 0);      // idle, seen
+    EXPECT_EQ(d.take(true, 12, 2), 12);    // next window executes
+}
+
+TEST(OcCmdDedup, DifferentCommandsInBackToBackWindowsBothExecute) {
+    // The case that always worked (different ids), pinned so the epoch change
+    // cannot regress it.
+    OcCmdDedup d;
+    EXPECT_EQ(d.take(true, 12, 1), 12);
+    EXPECT_EQ(d.take(true, 13, 2), 13);
+    EXPECT_EQ(d.take(true, 13, 2), 0);
+}
+
+TEST(OcCmdDedup, EpochWrapsPastZeroWithoutCollidingWithIdle) {
+    // The OC's counter skips 0 on wrap because 0 means "idle / no window".
+    // Two consecutive windows numbered 255 then 1 must both execute.
+    OcCmdDedup d;
+    EXPECT_EQ(d.take(true, 12, 255), 12);
+    EXPECT_EQ(d.take(true, 12, 255), 0);
+    EXPECT_EQ(d.take(true, 12, 1), 12);
+}
+
+TEST(OcCmdDedup, RetryBudgetStillWorksUnderEpochDedup) {
+    // armRetry() re-arms by clearing last_processed_cmd; under the epoch rule
+    // that has to keep meaning "dispatch this again on the next poll", or the
+    // #1112 config-retry path silently stops working.
+    OcCmdDedup d;
+    ASSERT_EQ(d.take(true, 12, 4), 12);
+    ASSERT_TRUE(d.armRetry());
+    EXPECT_EQ(d.take(true, 12, 4), 12) << "same window, but a retry was armed";
+}
+
+TEST(OcCmdDedup, RetryBudgetIsStillBoundedUnderEpochDedup) {
+    OcCmdDedup d;
+    ASSERT_EQ(d.take(true, 12, 4), 12);
+    int granted = 0;
+    for (int i = 0; i < 10; ++i) {
+        if (!d.armRetry()) break;
+        granted++;
+        (void)d.take(true, 12, 4);
+    }
+    EXPECT_EQ(granted, OcCmdDedup::CFG_RETRY_LIMIT);
+    EXPECT_EQ(d.take(true, 12, 4), 0) << "budget spent: no further dispatch";
+}
+
+TEST(OcCmdDedup, NoDispatchWithoutAPollEvenWithAFreshEpoch) {
+    OcCmdDedup d;
+    EXPECT_EQ(d.take(false, 12, 9), 0);
+}
