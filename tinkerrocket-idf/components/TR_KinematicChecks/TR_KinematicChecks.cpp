@@ -591,14 +591,25 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         else if (baro_stable_count_ == 0)                baro_stable_flag = false;
 
         // Sub 2: Gyro-quiet — roll_rate (future: generalize to all axes).
-        const bool gyro_quiet_pass = (fabs(roll_rate) < GYRO_QUIET_DPS);
-        if (gyro_quiet_pass) {
-            if (gyro_quiet_count_ < LANDING_SLOW_COUNT_MAX) gyro_quiet_count_++;
-        } else {
-            if (gyro_quiet_count_ > 0) gyro_quiet_count_--;
+        //
+        // #1137: only when the gyro is actually answering.  roll_rate is
+        // refreshed under `if (have_ism6_si)`, and have_ism6_si latches on the
+        // first successful read and never clears, so a stale IMU leaves the
+        // last sample frozen in place indefinitely.  Frozen quiet, that number
+        // is a landing vote cast by a sensor that stopped reporting.  The
+        // counter is FROZEN rather than decayed: a 100 ms dropout should not
+        // erase four seconds of legitimately accumulated quiet, and the vote
+        // below stops counting this detector while the IMU is stale anyway.
+        if (imu_healthy) {
+            const bool gyro_quiet_pass = (fabs(roll_rate) < GYRO_QUIET_DPS);
+            if (gyro_quiet_pass) {
+                if (gyro_quiet_count_ < LANDING_SLOW_COUNT_MAX) gyro_quiet_count_++;
+            } else {
+                if (gyro_quiet_count_ > 0) gyro_quiet_count_--;
+            }
+            if (gyro_quiet_count_ >= LANDING_SLOW_COUNT_HI) gyro_quiet_flag = true;
+            else if (gyro_quiet_count_ == 0)                gyro_quiet_flag = false;
         }
-        if (gyro_quiet_count_ >= LANDING_SLOW_COUNT_HI) gyro_quiet_flag = true;
-        else if (gyro_quiet_count_ == 0)                gyro_quiet_flag = false;
 
         // Sub 3: GPS-stationary — EKF speed proxy; excluded if GPS stale.
         if (gps_available_ && (millis() - last_gps_time_ms_) < 5000)
@@ -616,15 +627,20 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             else if (gps_stationary_count_ == 0)                gps_stationary_flag = false;
         }
 
-        // Sub 4: Accel-1g floor.
-        const bool accel_1g_pass = (fabs(acc_mag - G_MS2) < ACCEL_1G_TOLERANCE_MS2);
-        if (accel_1g_pass) {
-            if (accel_1g_count_ < LANDING_SLOW_COUNT_MAX) accel_1g_count_++;
-        } else {
-            if (accel_1g_count_ > 0) accel_1g_count_--;
+        // Sub 4: Accel-1g floor.  #1137: IMU-derived, so same gate as Sub 2.
+        // The caller already substitutes 0.0f for acc_mag while the IMU is
+        // stale, which would decay this counter to zero over a dropout the
+        // rocket is otherwise flying straight through.
+        if (imu_healthy) {
+            const bool accel_1g_pass = (fabs(acc_mag - G_MS2) < ACCEL_1G_TOLERANCE_MS2);
+            if (accel_1g_pass) {
+                if (accel_1g_count_ < LANDING_SLOW_COUNT_MAX) accel_1g_count_++;
+            } else {
+                if (accel_1g_count_ > 0) accel_1g_count_--;
+            }
+            if (accel_1g_count_ >= LANDING_SLOW_COUNT_HI) accel_1g_flag = true;
+            else if (accel_1g_count_ == 0)                accel_1g_flag = false;
         }
-        if (accel_1g_count_ >= LANDING_SLOW_COUNT_HI) accel_1g_flag = true;
-        else if (accel_1g_count_ == 0)                accel_1g_flag = false;
 
         // Sub 5: Extended quiescence — deliberately NOT one of the votes
         // below; it is an independent path to landed that survives a dead
@@ -649,6 +665,7 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         const bool quiescent_alt_ok = (!baro_healthy ||
                                        landing_altitude_change < BARO_STABLE_DELTA_MAX);
         const bool quiescent_pass = (apogee_flag &&
+                                     imu_healthy &&   // #1137: both gyro and
                                      quiescent_alt_ok &&
                                      fabs(roll_rate) < QUIESCENT_GYRO_DPS &&
                                      fabs(acc_mag - G_MS2) < QUIESCENT_ACCEL_TOL_MS2);
@@ -685,13 +702,28 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             uint8_t available = 0;
             uint8_t passed = 0;
 
+            // #1137: an IMU-derived detector with no IMU is UNAVAILABLE, not
+            // failing -- exactly how a stale GPS has always been treated.  The
+            // distinction matters because the rule below is `passed >=
+            // available - 1`: force-failing the two IMU votes would leave
+            // baro_stable carrying a 2-of-3 quorum on its own, which is how a
+            // frozen gyro used to complete a landing.  Dropping them instead
+            // leaves baro_stable + gps_stationary, both of which still have to
+            // pass.  With neither an IMU nor a GPS `available` falls to 1 and
+            // the >= 2 floor below refuses to call it a landing at all.
             available++; if (baro_stable_flag) passed++;
-            available++; if (gyro_quiet_flag)  passed++;
+            if (imu_healthy)
+            {
+                available++; if (gyro_quiet_flag) passed++;
+            }
             if (gps_available_ && (millis() - last_gps_time_ms_) < 5000)
             {
                 available++; if (gps_stationary_flag) passed++;
             }
-            available++; if (accel_1g_flag) passed++;
+            if (imu_healthy)
+            {
+                available++; if (accel_1g_flag) passed++;
+            }
 
             // baro_stable is mandatory, not merely one vote among equals
             // (#824).  It is the only altitude-aware detector in the set:
