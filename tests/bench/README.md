@@ -4,6 +4,40 @@ Hardware-in-the-loop regression tests that exercise real firmware on real
 boards over BLE.  Run manually before flight days and on PRs that touch
 LoRa / base station / logging code.
 
+## `*.txt` scripts + `tools/bench_session.py` (issue #1211)
+
+The `.txt` files here are scripts for `tools/bench_session.py`, which holds one
+BLE connection, tails one or two serial consoles, merges both into a timestamped
+timeline, and scores assertions PASS/FAIL.  They were written to work the #1211
+bench-validation backlog, and each one names the issue it covers in its header
+along with the rig it needs.
+
+```
+python3 tools/bench_session.py --name "RC V9" --port /dev/cu.usbmodem101:FC \
+    --script tests/bench/1114_1110_pad_calibration.txt --out runs/1114
+```
+
+`--dry-run` parse-checks a script with no hardware attached — worth running
+before every bench session, because a typo that only surfaces halfway through a
+live run costs a board setup.
+
+Two facts make most of the backlog reachable without a phone:
+
+* BLE and the serial console are **independent**.  The V9's S1 switch only picks
+  which MCU you can *watch*; BLE reaches the Out Computer either way.  So point
+  S1 at the console whose log lines the test quotes, and drive everything over
+  BLE.
+* Nearly every "tap X in the app" step is a raw BLE command id (21 = Calibrate,
+  5/6/7 = sim config/start/stop, 8 = power rail, 20 = config readback,
+  23 = logging, 26 = roll profile, 34 = pyro config, 68 = LoRa mute).
+
+`runs/` is gitignored; the evidence from each session is quoted into #1211.
+
+**Overlap worth knowing:** `1130_uplink_sim_start_inflight.txt` drives a sim
+through the base station's uplink relay (BS BLE cmd 5 then 6) — the same
+mechanism `test_lora_log_capture.py` uses below.  That script got there first;
+the #1130 one exists to test the INFLIGHT *refusal*, not the happy path.
+
 ## `test_lora_log_capture.py` (issue #137)
 
 End-to-end test that verifies the BS captures a complete LoRa CSV across a
