@@ -80,8 +80,8 @@ private:
 
     // --- Slave callbacks (ESP-IDF V2 slave driver; run in ISR context) ----
     // on_receive: master finished writing to us. The driver-owned buffer is
-    // reused on the next receive, so we memcpy it into _slave_rx_buf and post
-    // the byte count to _rx_queue for readFromSlave() to pick up.
+    // reused on the next receive, so we memcpy it into the next free slot of
+    // _slave_rx_slots and post that slot's index to _rx_queue (#1134).
     static bool IRAM_ATTR slaveReceiveISR(i2c_slave_dev_handle_t channel,
                                           const i2c_slave_rx_done_event_data_t *edata,
                                           void *user_data);
@@ -111,12 +111,36 @@ private:
     // Slave mode handles
     i2c_slave_dev_handle_t _slave_dev;
 
-    // Slave RX: on_receive ISR copies the received frame into _slave_rx_buf
-    // and posts its byte count to _rx_queue; readFromSlave() dequeues + parses
+    // Slave RX: on_receive ISR copies the received frame into a free ring slot
+    // and posts its INDEX to _rx_queue; readFromSlave() dequeues + parses
     // the framed message (SOF + len) from it.
-    QueueHandle_t _rx_queue;
+    // #1134: a ring of whole FRAMES, not a single buffer plus a queue of
+    // lengths.  The old shape posted only the byte count and had the ISR
+    // memcpy every arrival into one shared buffer, so N queued counts
+    // re-delivered whatever frame happened to be in that buffer at read time
+    // — N copies of the NEWEST frame, and the older ones silently gone.  On
+    // the OC that turns one burst of master writes into several deliveries of
+    // the same OUT_STATUS_QUERY, each of which advances the command serving
+    // slot, burning a command's whole CMD_REPEAT_LIMIT window in the time it
+    // takes to drain the queue instead of across three polls.
+    QueueHandle_t _rx_queue;                       // carries slot indices
     static constexpr size_t SLAVE_RX_BUF_SIZE = 256;
-    uint8_t _slave_rx_buf[SLAVE_RX_BUF_SIZE];
+    static constexpr size_t SLAVE_RX_SLOTS    = 4;
+    struct SlaveRxFrame {
+        uint16_t len;
+        uint8_t  bytes[SLAVE_RX_BUF_SIZE];
+    };
+    SlaveRxFrame _slave_rx_slots[SLAVE_RX_SLOTS];
+    volatile uint8_t  _slave_rx_head = 0;          // ISR-owned write cursor
+    volatile uint32_t _slave_rx_drops = 0;         // frames lost to a full ring
+
+public:
+    /// #1134: frames the slave RX ring had to discard because the consumer
+    /// did not drain in time.  Non-zero means data was LOST — which is the
+    /// honest outcome — rather than silently replayed.
+    uint32_t slaveRxDrops() const { return _slave_rx_drops; }
+
+private:
 
     // Slave TX: writeToSlave() stages the latest response into _tx_buf under
     // _tx_mux. on_request posts a token to _tx_req_queue; slaveTxTask() wakes,

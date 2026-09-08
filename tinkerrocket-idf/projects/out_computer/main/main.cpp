@@ -4725,14 +4725,34 @@ static void parseCmdRing()
 // into a separate command ring buffer (not the I2S telemetry ring).
 static void serviceI2CIngress()
 {
+    // #1134: DRAIN, don't dribble.  One read per loop pass meant a burst of
+    // master writes was consumed one frame per iteration, so a backlog sat in
+    // the ring while the serving slot advanced underneath it.  Bounded by the
+    // ring depth so this can never spin: readFromSlave() returns 0 the moment
+    // the queue is empty, and the ring holds at most SLAVE_RX_SLOTS frames.
     uint8_t inbuf[256];
-    const int n = i2c_interface.readFromSlave(inbuf, sizeof(inbuf), 0);
-    if (n > 0)
+    for (int guard = 0; guard < 8; ++guard)
     {
+        const int n = i2c_interface.readFromSlave(inbuf, sizeof(inbuf), 0);
+        if (n <= 0) break;
         ESP_LOGI("I2C_RX", "Got %d bytes from FC", n);
         for (int i = 0; i < n; ++i)
             cmdPush(inbuf[i]);
         parseCmdRing();
+    }
+
+    // #1134: a non-zero count means the slave ring overflowed and frames were
+    // DISCARDED — which is the honest outcome, but it must not be silent.
+    // Report it on change only; this runs at loop rate.
+    static uint32_t last_rx_drops = 0;
+    const uint32_t rx_drops = i2c_interface.slaveRxDrops();
+    if (rx_drops != last_rx_drops)
+    {
+        ESP_LOGW("I2C_RX", "slave RX ring overflowed — %lu frame(s) dropped "
+                           "since boot (was %lu). The FC is writing faster "
+                           "than loop_oc drains (#1134).",
+                 (unsigned long)rx_drops, (unsigned long)last_rx_drops);
+        last_rx_drops = rx_drops;
     }
 }
 

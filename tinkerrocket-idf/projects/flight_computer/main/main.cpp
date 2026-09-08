@@ -4617,8 +4617,27 @@ static void setup_fc()
                     (void)i2c_interface.sendMessage(I2C_TX_RESYNC, nullptr, 0);
                     continue;
                 }
-                // SOF scan — same defensive pattern as the [CFG READ] path.
-                for (size_t off = 0; off + kRespFrameLen <= sizeof(buf); off++) {
+                // #1139 item 1: this was a "defensive SOF scan" that could
+                // never scan anything.  masterRead() fetches exactly
+                // kRespFrameLen bytes into a buffer with 16 bytes of slack,
+                // and the loop was bounded by sizeof(buf) — so off ran 1..16,
+                // every one of them straddling the untouched zero tail where
+                // the CRC cannot validate.  It was dead code for all off > 0,
+                // i.e. for exactly the misalignment it was written to recover
+                // from, while reading as though misalignment were handled.
+                //
+                // Since the read length equals the frame length, offset 0 is
+                // the only offset that can hold a frame, so the scan is now
+                // stated as the single check it always was.  (The [CFG READ]
+                // path at the top of this file bounds by actual_read and the
+                // mini bounds by `avail`; both read MORE than one frame, which
+                // is what makes a scan meaningful there.  Reading extra bytes
+                // here would change what the OC's slave TX ring is asked to
+                // clock out mid-recovery, which is not a change to make on
+                // this path.)
+                bool frame_seen = false;
+                {
+                    constexpr size_t off = 0;
                     if (buf[off] == 0xAA && buf[off+1] == 0x55 &&
                         buf[off+2] == 0xAA && buf[off+3] == 0x55 &&
                         buf[off+4] == SNAPSHOT_MSG) {
@@ -4668,9 +4687,23 @@ static void setup_fc()
                                 out_ready = true;   // the OC answered
                                 out_ready_last_ms = millis();   // #1137 item 9
                             }
-                            break;
+                            frame_seen = true;
                         }
                     }
+                }
+                if (!frame_seen) {
+                    // #1139 item 1: a read that COMPLETED but carried no
+                    // frame used to fall through in total silence — no log,
+                    // no RESYNC — so a desynced OC slave TX ring produced
+                    // kRecoveryAttempts identical quiet failures and the
+                    // flight was abandoned with nothing said. The failed-read
+                    // branch above already treats this as a desync signature;
+                    // a dry read is the same evidence.
+                    ESP_LOGW(TAG, "[RECOVERY] read OK but no SNAPSHOT frame "
+                                  "(first bytes %02X %02X %02X %02X %02X) — "
+                                  "asking the OC to reset its slave TX ring",
+                             buf[0], buf[1], buf[2], buf[3], buf[4]);
+                    (void)i2c_interface.sendMessage(I2C_TX_RESYNC, nullptr, 0);
                 }
             }
         }
@@ -6194,6 +6227,9 @@ static void loop_fc()
         // #1112: the command dispatch below runs only on a pass that polled —
         // it is the tail of this poll transaction, not a free-running block.
         bool oc_polled = false;
+        // #1120 item 1: set when this pass sent an I2C_TX_RESYNC, so the rest
+        // of the pass puts nothing else on a bus the OC is tearing down.
+        bool resync_just_sent = false;
         if ((rocket_state != INFLIGHT || sensor_collector.isSimActive() ||
              recovery_poll_window)
             && (now_ms - out_ready_request_time_ms) > 250U
@@ -6306,6 +6342,18 @@ static void loop_fc()
                         i2c_resync_grace_until_ms = now_ms + config::I2C_RESYNC_GRACE_MS;
                         i2c_resync_active = true;
                         query_pending = false;  // pipeline state is stale after the quiet window
+                        // #1120 item 1: and this iteration must send nothing
+                        // more.  i2c_resync_grace_until_ms only gates the
+                        // NEXT pass's entry condition, so the RESYNC used to
+                        // be followed immediately by the 50-byte
+                        // OUT_STATUS_QUERY (and, every ~8 polls, FC_IDENTITY)
+                        // on the very bus the OC is about to tear down and
+                        // re-create.  resetSlaveTx()'s own contract says the
+                        // caller "guarantees bus idle ... a reset racing an
+                        // in-flight read destroys that read" — so the grace
+                        // window opened with the exact traffic it exists to
+                        // prevent.
+                        resync_just_sent = true;
                         ESP_LOGW(TAG, "[I2C] RESYNC sent — bus quiet for %u ms",
                                       (unsigned)config::I2C_RESYNC_GRACE_MS);
                     }
@@ -6315,12 +6363,18 @@ static void loop_fc()
             // ── Step 2: SEND the next query ──
             // OC will process this and pre-load its response before the
             // next poll iteration reads it.
-            esp_err_t send_err = i2c_interface.sendMessage(
-                OUT_STATUS_QUERY,
-                reinterpret_cast<const uint8_t*>(&out_status_query_data),
-                sizeof(out_status_query_data),
-                10);
-            if (send_err == ESP_OK) { query_pending = true; }
+            //
+            // #1120 item 1: skipped entirely on the pass that just sent a
+            // RESYNC — the quiet window starts now, not on the next entry.
+            if (!resync_just_sent)
+            {
+                esp_err_t send_err = i2c_interface.sendMessage(
+                    OUT_STATUS_QUERY,
+                    reinterpret_cast<const uint8_t*>(&out_status_query_data),
+                    sizeof(out_status_query_data),
+                    10);
+                if (send_err == ESP_OK) { query_pending = true; }
+            }
 
             // Push the FC firmware version to the OC every ~8 polls (~2 s) so it
             // can relay it to the app (config "fc_identity"); the app uses it to
@@ -6339,7 +6393,8 @@ static void loop_fc()
             // gap across ISM6/BMP/NonSensor together. The version can't change on a
             // bench sim and the OC already cached it from the pre-sim READY/
             // PRELAUNCH pushes, so there is nothing to relay mid-sim.
-            if (!fc_ota_data_mode && !sensor_collector.isSimActive())
+            if (!fc_ota_data_mode && !sensor_collector.isSimActive() &&
+                !resync_just_sent)   // #1120 item 1: silence means silence
             {
                 static uint32_t fc_id_throttle = 1000;  // fire on first poll, then ~2 s
                 if (++fc_id_throttle >= 8)
