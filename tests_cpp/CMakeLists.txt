@@ -1011,6 +1011,18 @@ target_include_directories(test_log_to_flash_sink PRIVATE
 target_link_libraries(test_log_to_flash_sink GTest::gtest_main)
 gtest_discover_tests(test_log_to_flash_sink)
 
+# ---------- test_sensor_staleness_policy (#1137 items 10, 12) ----------
+# The scorecard's go/no-go debounce: it has to fire on a wedged sensor and not
+# chatter on a healthy one, and neither could be exercised without hardware.
+add_executable(test_sensor_staleness_policy test_sensor_staleness_policy.cpp)
+target_include_directories(test_sensor_staleness_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_sensor_staleness_policy GTest::gtest_main)
+gtest_discover_tests(test_sensor_staleness_policy)
+
 # ---------- test_test_mode_gate_policy (#1137 item 5) ----------
 add_executable(test_test_mode_gate_policy test_test_mode_gate_policy.cpp)
 target_include_directories(test_test_mode_gate_policy PRIVATE

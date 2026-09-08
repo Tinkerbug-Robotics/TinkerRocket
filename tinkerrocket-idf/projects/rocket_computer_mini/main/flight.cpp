@@ -27,6 +27,7 @@
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
+#include <sensor_staleness_policy.h> // #1137 items 10/12: debounced scorecard staleness
 #include <GroundRefFreeze.h>   // #1108: hold the ground datum while the vehicle is moving
 #include <BurnoutDetector.h>       // shared burnout detector (#197/#256)
 #include <DeploymentDetector.h>    // shared recovery-deployment detector
@@ -4009,9 +4010,25 @@ static void loop_fc()
             case READY:
             {
                 // (FC serviced the servo neutral-settle + pad relax here.)
+                // #1137 item 12 (mirrors the FC): the "held a fix for 3 s"
+                // clause needs a fix that is still arriving.  Without this it
+                // meant "3 s since the first fix of the session", because
+                // valid_gnss_start_millis is stamped only on the first 3D fix
+                // ever.  Re-armed on the rising edge of freshness.
+                constexpr uint32_t GNSS_READY_STALE_US = 2000000u;  // 2 s
+                const bool gnss_fresh =
+                    have_gnss_si &&
+                    (uint32_t)(time_us() - gnss_latest_si.time_us) < GNSS_READY_STALE_US;
+                static bool gnss_fresh_prev = false;
+                if (gnss_fresh && !gnss_fresh_prev && gnss_started)
+                {
+                    valid_gnss_start_millis = now_ms;
+                }
+                gnss_fresh_prev = gnss_fresh;
+
                 const bool gnss_ready = gnss_started &&
+                                        gnss_fresh &&
                                         (now_ms > valid_gnss_start_millis + 3000U) &&
-                                        have_gnss_si &&
                                         (gnss_latest_si.num_sats >= 4U);
                 if (out_ready && gnss_ready)
                 {
@@ -4401,12 +4418,21 @@ static void loop_fc()
             const uint32_t now_us_h = time_us();
 
             // Baro — in BMP585 range + fresh (mirrors #257 baro_healthy).
+            // #1137 item 10 (mirrors the FC): stale is BAD, not DEGRADED --
+            // the flight predicates these claim to mirror are binary, and the
+            // app's hardFault rollup only reds on `.bad`.  Debounced 2 s to
+            // assert / 5 s to clear so one missed poll cannot strobe the
+            // operator's go/no-go light.
+            static sensor_staleness::State baro_stale_dbnc;
+            static sensor_staleness::State imu_stale_dbnc;
+
             SensorHealthState baro_st = SH_BAD;
             if (have_bmp_si) {
                 const bool fresh = (uint32_t)(now_us_h - bmp_latest_si.time_us) < 500000u;
+                const bool stale = sensor_staleness::step(baro_stale_dbnc, fresh, now_ms);
                 const bool inrange = bmp_latest_si.pressure > 25000.0f &&
                                      bmp_latest_si.pressure < 125000.0f;
-                baro_st = inrange ? (fresh ? SH_OK : SH_DEGRADED) : SH_BAD;
+                baro_st = (inrange && !stale) ? SH_OK : SH_BAD;
             }
             sh = shSet(sh, SH_BARO_SHIFT, baro_st);
 
@@ -4414,7 +4440,8 @@ static void loop_fc()
             SensorHealthState imu_st = SH_BAD;
             if (have_ism6_si) {
                 const bool fresh = (uint32_t)(now_us_h - ism6_latest_si.time_us) < 100000u;
-                imu_st = fresh ? SH_OK : SH_DEGRADED;
+                imu_st = sensor_staleness::step(imu_stale_dbnc, fresh, now_ms)
+                         ? SH_BAD : SH_OK;
             }
             sh = shSet(sh, SH_IMU_SHIFT, imu_st);
 
@@ -4497,11 +4524,24 @@ static void loop_fc()
             // GNSS — OK needs a 3D fix + enough sats (+ horizontal accuracy,
             // but only when that gate is enabled: 0 is a "disabled" sentinel).
             // DEGRADED = 3D fix but marginal; BAD = no 3D fix.
+            // #1137 item 12 (mirrors the FC): and fresh.  have_gnss_si latches
+            // and gnss_latest_si keeps its last value forever, so a receiver
+            // that died after one 3D fix read SH_OK for the session.  DEGRADED
+            // rather than BAD -- a dead GNSS does not ground the rocket, but
+            // it must not read green.
+            static sensor_staleness::State gnss_stale_dbnc;
+            const bool gnss_sh_fresh =
+                have_gnss_si &&
+                (uint32_t)(now_us_h - gnss_latest_si.time_us) < 2000000u;
+            const bool gnss_sh_stale =
+                sensor_staleness::step(gnss_stale_dbnc, gnss_sh_fresh, now_ms);
+
             SensorHealthState gnss_st = SH_BAD;
             if (have_gnss_si && gnss_latest_si.fix_mode >= 3U) {
                 const bool sh_hacc_ok = (config::GNSS_MAX_HACC_M <= 0.0f) ||
                                         (gnss_latest_si.horizontal_accuracy < config::GNSS_MAX_HACC_M);
-                gnss_st = (gnss_latest_si.num_sats >= config::GNSS_MIN_SATS && sh_hacc_ok)
+                gnss_st = (!gnss_sh_stale &&
+                           gnss_latest_si.num_sats >= config::GNSS_MIN_SATS && sh_hacc_ok)
                           ? SH_OK : SH_DEGRADED;
             }
             sh = shSet(sh, SH_GNSS_SHIFT, gnss_st);

@@ -20,6 +20,7 @@
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
+#include <sensor_staleness_policy.h> // #1137 items 10/12: debounced scorecard staleness
 #include <GroundRefFreeze.h>   // #1108: hold the ground datum while the vehicle is moving
 #include <RecoveryArmGate.h>   // #1176: arming gate for a restored flight
 #include <BurnoutDetector.h>      // shared burnout detector (#197/#256)
@@ -8775,9 +8776,29 @@ static void loop_fc()
                     (int32_t)(now_ms - servo_pad_wake_until_ms) >= 0)
                     servo_control.idle();
 
+                // #1137 item 12: the "held a fix for 3 s" clause needs a fix
+                // that is still arriving.  gnss_latest_si keeps its last value
+                // forever and valid_gnss_start_millis is stamped only on the
+                // FIRST 3D fix ever (guarded by `if (!gnss_started)`), so
+                // without a freshness test this degenerated into "3 s since
+                // the first fix of the session" -- a receiver that died at
+                // T-10 minutes still promoted READY -> PRELAUNCH.  The dwell
+                // is re-armed on the rising edge of freshness so a recovered
+                // receiver has to hold the fix for a real 3 s.
+                constexpr uint32_t GNSS_READY_STALE_US = 2000000u;  // 2 s @ ~10 Hz
+                const bool gnss_fresh =
+                    have_gnss_si &&
+                    (uint32_t)(time_us() - gnss_latest_si.time_us) < GNSS_READY_STALE_US;
+                static bool gnss_fresh_prev = false;
+                if (gnss_fresh && !gnss_fresh_prev && gnss_started)
+                {
+                    valid_gnss_start_millis = now_ms;
+                }
+                gnss_fresh_prev = gnss_fresh;
+
                 const bool gnss_ready = gnss_started &&
+                                        gnss_fresh &&
                                         (now_ms > valid_gnss_start_millis + 3000U) &&
-                                        have_gnss_si &&
                                         (gnss_latest_si.num_sats >= 4U);
                 if (out_ready && gnss_ready)
                 {
@@ -9620,12 +9641,31 @@ static void loop_fc()
             const uint32_t now_us_h = time_us();
 
             // Baro — in BMP585 range + fresh (mirrors #257 baro_healthy).
+            //
+            // #1137 item 10: stale is BAD, not DEGRADED.  These two entries
+            // always claimed to mirror the flight loop's binary predicates,
+            // and the flight loop treats a sensor that has stopped answering
+            // as dead -- a stale baro fails baro_healthy, and a stale IMU
+            // feeds 0.0f to kinematicChecks, which disables the #258
+            // accel-only launch fallback and burnout detection.  Reporting
+            // that as amber let iOS's readiness rollup (hardFault is built
+            // from `.bad` alone) show "caution" for a rocket the FC had
+            // already given up on.  Now the mirror is real, which also makes
+            // SH_DEGRADED unreachable for these two by design: the underlying
+            // predicate has no middle value to report.
+            //
+            // Debounced (2 s to assert, 5 s to clear) so a single missed poll
+            // cannot strobe the operator's go/no-go light.
+            static sensor_staleness::State baro_stale_dbnc;
+            static sensor_staleness::State imu_stale_dbnc;
+
             SensorHealthState baro_st = SH_BAD;
             if (have_bmp_si) {
                 const bool fresh = (uint32_t)(now_us_h - bmp_latest_si.time_us) < 500000u;
+                const bool stale = sensor_staleness::step(baro_stale_dbnc, fresh, now_ms);
                 const bool inrange = bmp_latest_si.pressure > 25000.0f &&
                                      bmp_latest_si.pressure < 125000.0f;
-                baro_st = inrange ? (fresh ? SH_OK : SH_DEGRADED) : SH_BAD;
+                baro_st = (inrange && !stale) ? SH_OK : SH_BAD;
             }
             sh = shSet(sh, SH_BARO_SHIFT, baro_st);
 
@@ -9633,7 +9673,8 @@ static void loop_fc()
             SensorHealthState imu_st = SH_BAD;
             if (have_ism6_si) {
                 const bool fresh = (uint32_t)(now_us_h - ism6_latest_si.time_us) < 100000u;
-                imu_st = fresh ? SH_OK : SH_DEGRADED;
+                imu_st = sensor_staleness::step(imu_stale_dbnc, fresh, now_ms)
+                         ? SH_BAD : SH_OK;
             }
             sh = shSet(sh, SH_IMU_SHIFT, imu_st);
 
@@ -9725,11 +9766,28 @@ static void loop_fc()
             // but only when that gate is enabled: config::GNSS_MAX_HACC_M == 0
             // is a "disabled" sentinel, so comparing against it would make OK
             // unreachable).  DEGRADED = 3D fix but marginal; BAD = no 3D fix.
+            //
+            // #1137 item 12: and fresh.  have_gnss_si latches on the first
+            // sample and gnss_latest_si keeps its last value forever, so
+            // without this a receiver that died right after acquiring one 3D
+            // fix reported SH_OK for the rest of the session -- to the app and
+            // over the LoRa relay.  DEGRADED rather than BAD: unlike the baro
+            // and the IMU, a dead GNSS does not ground the rocket (the app's
+            // hardFault rollup deliberately excludes it, and #557 covers the
+            // fly-without-GNSS case separately), but it must not read green.
+            static sensor_staleness::State gnss_stale_dbnc;
+            const bool gnss_sh_fresh =
+                have_gnss_si &&
+                (uint32_t)(now_us_h - gnss_latest_si.time_us) < 2000000u;
+            const bool gnss_sh_stale =
+                sensor_staleness::step(gnss_stale_dbnc, gnss_sh_fresh, now_ms);
+
             SensorHealthState gnss_st = SH_BAD;
             if (have_gnss_si && gnss_latest_si.fix_mode >= 3U) {
                 const bool hacc_ok = (config::GNSS_MAX_HACC_M <= 0.0f) ||
                                      (gnss_latest_si.horizontal_accuracy < config::GNSS_MAX_HACC_M);
-                gnss_st = (gnss_latest_si.num_sats >= config::GNSS_MIN_SATS && hacc_ok)
+                gnss_st = (!gnss_sh_stale &&
+                           gnss_latest_si.num_sats >= config::GNSS_MIN_SATS && hacc_ok)
                           ? SH_OK : SH_DEGRADED;
             }
             sh = shSet(sh, SH_GNSS_SHIFT, gnss_st);
