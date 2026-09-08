@@ -193,3 +193,51 @@ TEST(FcOtaSessionPolicy, SurvivesMillisWraparound)
     const uint32_t now = (uint32_t)(stop + kNoProgressTimeoutMs);
     EXPECT_EQ(evaluate(true, now, stop, (uint32_t)(now - 10)), Verdict::Continue);
 }
+
+// ---------------------------------------------------------------------------
+// #1123 — a freshly OTA'd image may only cancel its own rollback once the OC
+// link is PROVEN, not merely once it has ticked for 10 s.
+//
+// The flight computer has no update path of its own: every image arrives
+// through the out computer (BLE -> I2C OTA_BEGIN_PENDING -> I2S image pump). So
+// an image whose I2S TX config, I2C master poll or frame CRC is broken used to
+// tick the loop happily for 10 s, mark itself valid, and permanently remove
+// both the telemetry link AND the only way to replace itself — recoverable only
+// by opening the airframe and flashing over USB.
+//
+// docs/plans/08-ota-firmware-update.md:331 is the contract this restores.
+// ---------------------------------------------------------------------------
+
+TEST(FcOtaMarkValid, TimeAloneIsNotEnough) {
+    // The exact defect: a long, stable, completely mute run.
+    EXPECT_FALSE(FcOtaSessionPolicy::mayCancelRollback(60000, false, 0));
+}
+
+TEST(FcOtaMarkValid, BothLinksAndTheWindowAreRequired) {
+    const uint32_t ok = FcOtaSessionPolicy::kStableRunMs;
+    EXPECT_TRUE (FcOtaSessionPolicy::mayCancelRollback(ok,     true,  1));
+    EXPECT_FALSE(FcOtaSessionPolicy::mayCancelRollback(ok - 1, true,  1)) << "window";
+    EXPECT_FALSE(FcOtaSessionPolicy::mayCancelRollback(ok,     false, 1)) << "no I2C round trip";
+    EXPECT_FALSE(FcOtaSessionPolicy::mayCancelRollback(ok,     true,  0)) << "no I2S frame accepted";
+}
+
+TEST(FcOtaMarkValid, EitherLinkAloneIsInsufficient) {
+    // Either one alone still leaves the image unreplaceable: I2S carries
+    // telemetry to the OC, I2C carries the commands that start the next update.
+    EXPECT_FALSE(FcOtaSessionPolicy::mayCancelRollback(30000, true,  0));
+    EXPECT_FALSE(FcOtaSessionPolicy::mayCancelRollback(30000, false, 50));
+}
+
+TEST(FcOtaMarkValid, IsNotYetRatherThanNever) {
+    // The caller re-evaluates every tick, so a slow OC bring-up only delays
+    // validation — the same inputs later must succeed.
+    EXPECT_FALSE(FcOtaSessionPolicy::mayCancelRollback(12000, false, 0));
+    EXPECT_TRUE (FcOtaSessionPolicy::mayCancelRollback(45000, true,  3));
+}
+
+TEST(FcOtaMarkValid, AHealthyImageValidatesAtTheWindow) {
+    // The normal case must not regress: a working image has both links well
+    // before 10 s, so it validates the moment the window closes.
+    EXPECT_TRUE(FcOtaSessionPolicy::mayCancelRollback(FcOtaSessionPolicy::kStableRunMs,
+                                                      true, 400));
+}

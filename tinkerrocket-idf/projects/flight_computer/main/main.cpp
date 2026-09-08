@@ -3440,10 +3440,36 @@ static inline void fcMaybeMarkOtaValid()
     static int64_t first_us = 0;                 // first tick after setup_fc() completed
     const int64_t now = esp_timer_get_time();
     if (first_us == 0) { first_us = now; return; }
-    if ((now - first_us) < 10LL * 1000000LL) return;   // need ~10 s of healthy running
+
+    // #1123: elapsed time alone is not proof this image works. The FC has no
+    // update path of its own — every image arrives through the OC — so an image
+    // whose I2S TX config, I2C master poll or frame CRC is broken would tick
+    // the loop happily for 10 s, cancel its own rollback, and permanently
+    // remove BOTH the telemetry link and the only way to replace itself.
+    // Requires the round trip the plan document specifies: out_ready (the OC
+    // answered an I2C poll) and at least one I2S frame the OC accepted.
+    // Re-evaluated every tick, so a slow OC bring-up only delays validation;
+    // an image that never satisfies it stays PENDING_VERIFY and rolls back at
+    // the next reset, which is the point.
+    const uint32_t uptime_ms = (uint32_t)((now - first_us) / 1000LL);
+    if (!FcOtaSessionPolicy::mayCancelRollback(uptime_ms, out_ready, i2s_tx_ok))
+    {
+        static bool waiting_logged = false;
+        if (uptime_ms >= FcOtaSessionPolicy::kStableRunMs && !waiting_logged)
+        {
+            waiting_logged = true;
+            ESP_LOGW(TAG, "[OTA] image ran %u ms but the OC link is not proven "
+                          "(out_ready=%d i2s_tx_ok=%lu) — rollback stays armed "
+                          "until both hold (#1123)",
+                     (unsigned)uptime_ms, out_ready ? 1 : 0,
+                     (unsigned long)i2s_tx_ok);
+        }
+        return;
+    }
     const esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
     if (err == ESP_OK)
-        ESP_LOGW(TAG, "[OTA] new image validated after 10 s stable run; rollback cancelled");
+        ESP_LOGW(TAG, "[OTA] new image validated: %u ms stable AND the OC link is proven (out_ready, i2s_tx_ok=%lu); rollback cancelled (#1123)",
+                 (unsigned)uptime_ms, (unsigned long)i2s_tx_ok);
     else
         ESP_LOGE(TAG, "[OTA] mark_app_valid_cancel_rollback failed: %s", esp_err_to_name(err));
     fc_ota_pending_verify = false;
@@ -8460,6 +8486,28 @@ static void loop_fc()
             servo_test_active   = false;
             servo_replay_active = false;
             if (servo_enabled) servo_control.stowControl();
+        }
+
+        // #1121: the same failsafe, for the fourth mode that suppresses the
+        // flight. OTA_BEGIN is deliberately admitted in PRELAUNCH, and while
+        // fc_ota_data_mode is set the I2S link is reversed to slave RX, the
+        // sender task idles, loop_fc sleeps 5 ms a pass and the EKF tick is
+        // hard-forced off. The flag is cleared in exactly two places — the
+        // OTA_FINISH and OTA_ABORT branches — both reached only through the
+        // OC's I2C command poll, and the poll gate stops polling the moment the
+        // state machine reaches INFLIGHT. So a launch during an update left the
+        // link reversed for the WHOLE flight: no telemetry, no logging, no EKF,
+        // and the OC's own stall watchdog stages an abort the FC can never
+        // fetch, leaving both ends configured as I2S slaves with nobody driving
+        // BCLK. #363 covered the three test modes and said nothing about this
+        // one.
+        if (kinematics.launch_flag && fc_ota_data_mode)
+        {
+            ESP_LOGW(TAG, "[SAFETY] Launch detected during an OTA image session -- "
+                          "aborting the update and restoring the telemetry link "
+                          "(#1121)");
+            (void)fc_ota_receiver.abort();
+            fcRevertToTx();
         }
 
         if (ground_test_active)
