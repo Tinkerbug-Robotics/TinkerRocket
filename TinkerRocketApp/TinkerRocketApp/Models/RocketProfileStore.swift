@@ -94,11 +94,36 @@ final class RocketProfileStore: ObservableObject {
         update(id) { $0.name = newName }
     }
 
+    /// #1043: the id `delete(_:)` fell back to when it removed the ACTIVE
+    /// profile.
+    ///
+    /// The fallback keeps the UI on something, but it is not a user choice —
+    /// `profiles` is name-sorted, so the successor is the alphabetically first
+    /// profile, not one the operator picked. `ActiveRocketSyncer` subscribes to
+    /// `$activeId` and treats any change as the explicit "make this rocket fly
+    /// these settings" act, so without this marker a swipe-to-delete at the pad
+    /// pushed another airframe's gains, fin layout, IMU orientation and PYRO
+    /// TRIGGER MODES to the connected board and rebound the board to it.
+    ///
+    /// Consumed by the syncer through the same seam it already uses for its own
+    /// late bind (`selfSelectedProfileId`).
+    private(set) var deleteFallbackActiveId: UUID?
+
+    /// Consume the marker. Idempotent.
+    func clearDeleteFallbackMarker() {
+        deleteFallbackActiveId = nil
+    }
+
     func delete(_ id: UUID) {
         profiles.removeAll { $0.id == id }
         try? FileManager.default.removeItem(at: fileURL(id))
         if activeId == id {
-            setActive(profiles.first?.id)
+            let successor = profiles.first?.id
+            // Set BEFORE the assignment: `activeId` is @Published, so the
+            // syncer's subscriber runs synchronously off setActive and has to
+            // see the marker already in place.
+            deleteFallbackActiveId = successor
+            setActive(successor)
         }
     }
 
@@ -121,6 +146,11 @@ final class RocketProfileStore: ObservableObject {
     }
 
     func setActive(_ id: UUID?) {
+        // #1043: an explicit setActive is a user choice by definition, so any
+        // pending delete-fallback marker for a DIFFERENT id is stale. delete()
+        // sets the marker to the same id it is about to pass here, so this does
+        // not clear its own.
+        if deleteFallbackActiveId != id { deleteFallbackActiveId = nil }
         activeId = id
         persistActiveId()
     }

@@ -220,6 +220,17 @@ final class ActiveRocketSyncer: ObservableObject {
             selfSelectedProfileId = nil
             return
         }
+        // #1043: the store fell back to a surviving profile because the ACTIVE
+        // one was deleted. Also not a user choice — `profiles` is name-sorted,
+        // so this is the alphabetically first profile, and pushing it would
+        // send another airframe's pyro trigger modes to a connected board and
+        // rebind the board to it, off a swipe with no confirmation.
+        if let fallback = store.deleteFallbackActiveId, store.activeId == fallback {
+            store.clearDeleteFallbackMarker()
+            selfSelectedProfileId = nil
+            return
+        }
+        store.clearDeleteFallbackMarker()
         selfSelectedProfileId = nil
         suggestedProfileId = nil   // user has chosen; drop the hint
         createdProfileName = nil
