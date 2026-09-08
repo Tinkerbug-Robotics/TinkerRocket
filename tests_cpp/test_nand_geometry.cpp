@@ -10,6 +10,8 @@
 
 #include "nand_geometry.h"
 
+#include <ios>
+
 TEST(NandGeometry, ForeseeF35SQB004G_IsTheLegacyBenchPart) {
     NandGeometry g{};
     EXPECT_TRUE(nandGeometryForId(0xCD53, &g));
@@ -105,4 +107,75 @@ TEST(NandGeometry, EveryTablePartFitsTheStaticMaxima) {
         EXPECT_GT(g.page_size, 16u);
         EXPECT_GE(g.blockSize(), 6160u);
     }
+}
+
+// ---------------------------------------------------------------------------
+// #1148 item 2 — on-die ECC status decoding.
+//
+// nandReadPage()/nandReadBytesAt() waited for OIP to clear and discarded the
+// status byte, so an UNCORRECTABLE ECC error returned garbage as success. That
+// also made every read-side bad-block path in the component dead code:
+// lfsBlockRead's markBlockBad and scanBadBlocksAtBoot's "any read error on page
+// 0 is a dead-block signal" could never fire, because a read could only fail on
+// a 2-second OIP timeout.
+//
+// Semantics mirror the vendored, silicon-validated spi_nand_flash driver
+// (src/nand_impl.c is_ecc_error): a 2-bit packed field for GigaDevice and
+// Macronix, and a 3-bit LINEAR bit-count for the FORESEE/Longsys parts, which
+// the generic 3-bit packing would misread.
+// ---------------------------------------------------------------------------
+
+TEST(NandEcc, TwoBitPackedOnlyFailsOnNotCorrected) {
+    // STAT[5:4]: 0 = ok, 1 = corrected, 2 = UNCORRECTABLE, 3 = corrected(max)
+    EXPECT_FALSE(nandEccUncorrectable(NandEccKind::TwoBitPacked, 0x00));
+    EXPECT_FALSE(nandEccUncorrectable(NandEccKind::TwoBitPacked, 0x10));  // 1
+    EXPECT_TRUE (nandEccUncorrectable(NandEccKind::TwoBitPacked, 0x20));  // 2
+    EXPECT_FALSE(nandEccUncorrectable(NandEccKind::TwoBitPacked, 0x30));  // 3
+}
+
+TEST(NandEcc, ForeseeLinearOnlyFailsAtSeven) {
+    // STAT[6:4] is a linear bit-count: 0 ok, 1..6 corrected, 7 uncorrectable.
+    for (uint8_t v = 0; v <= 6; ++v) {
+        EXPECT_FALSE(nandEccUncorrectable(NandEccKind::ForeseeLinear3,
+                                          (uint8_t)(v << 4)))
+            << "linear value " << (int)v << " is a CORRECTED read, not a failure";
+    }
+    EXPECT_TRUE(nandEccUncorrectable(NandEccKind::ForeseeLinear3, 0x70));
+}
+
+TEST(NandEcc, ForeseeValueTwoIsNotMisreadAsUncorrectable) {
+    // The whole reason the FORESEE part needs its own branch: under the 2-bit
+    // packing, ECCS=2 means "not corrected". Under FORESEE's linear count it
+    // means 4 bits were corrected successfully. Reading it the generic way
+    // would fail good pages and, through markBlockBad, retire good blocks.
+    EXPECT_TRUE (nandEccUncorrectable(NandEccKind::TwoBitPacked,   0x20));
+    EXPECT_FALSE(nandEccUncorrectable(NandEccKind::ForeseeLinear3, 0x20));
+}
+
+TEST(NandEcc, OtherStatusBitsDoNotAffectTheVerdict) {
+    // OIP/EFAIL/PFAIL live in the low nibble and must not leak into the ECC
+    // field's interpretation.
+    EXPECT_TRUE (nandEccUncorrectable(NandEccKind::TwoBitPacked, 0x2F));
+    EXPECT_FALSE(nandEccUncorrectable(NandEccKind::TwoBitPacked, 0x0F));
+    EXPECT_TRUE (nandEccUncorrectable(NandEccKind::ForeseeLinear3, 0x7F));
+}
+
+TEST(NandEcc, EveryTablePartCarriesAnEccKind) {
+    // A part added to the table without an ecc_kind would silently get
+    // TwoBitPacked and, on a FORESEE-style part, fail good reads.
+    struct { uint16_t id; NandEccKind kind; } expect[] = {
+        {0xCD53, NandEccKind::ForeseeLinear3},   // FORESEE F35SQB004G
+        {0xC852, NandEccKind::TwoBitPacked},     // GigaDevice GD5F2GQ5UE
+        {0xC851, NandEccKind::TwoBitPacked},     // GigaDevice GD5F1GQ5UE
+        {0xC2F5, NandEccKind::TwoBitPacked},     // Macronix MX35UF4G24AD-Z4I8
+    };
+    for (const auto& e : expect) {
+        NandGeometry g{};
+        ASSERT_TRUE(nandGeometryForId(e.id, &g)) << std::hex << e.id;
+        EXPECT_EQ(g.ecc_kind, e.kind) << std::hex << e.id;
+    }
+    // The unknown-id fallback is the FORESEE-compatible legacy part.
+    NandGeometry g{};
+    EXPECT_FALSE(nandGeometryForId(0x0000, &g));
+    EXPECT_EQ(g.ecc_kind, NandEccKind::ForeseeLinear3);
 }

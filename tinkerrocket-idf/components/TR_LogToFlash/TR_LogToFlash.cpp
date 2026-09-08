@@ -1519,8 +1519,23 @@ bool TR_LogToFlash::nandReadPage(uint32_t rowPageAddr, uint8_t* out, uint32_t le
     spi->endTransaction();
     spiRelease();
 
-    if (!nandWaitReady())  // acquires/releases per poll internally
+    uint8_t nand_st = 0;
+    if (!nandWaitReady(2'000'000, &nand_st))  // acquires/releases per poll internally
     {
+        return false;
+    }
+    // #1148 item 2: the on-die ECC result rides the same status byte as OIP and
+    // was previously read and thrown away, so an UNCORRECTABLE error returned
+    // garbage as success — and every read-side bad-block path in this component
+    // (lfsBlockRead's markBlockBad, scanBadBlocksAtBoot's "any read error on
+    // page 0 is a dead-block signal") was dead code because nandReadPage could
+    // only fail on an OIP timeout. Correctable errors are NOT failures: the
+    // data is good and the part fixed it. Semantics mirror the vendored,
+    // silicon-validated spi_nand_flash driver (is_ecc_error), including the
+    // FORESEE parts' linear 3-bit field.
+    if (nandEccUncorrectable(geom_.ecc_kind, nand_st))
+    {
+        nand_ecc_uncorrectable_++;
         return false;
     }
 
@@ -1566,9 +1581,17 @@ bool TR_LogToFlash::nandReadBytesAt(uint32_t rowPageAddr, uint32_t column,
     spi->endTransaction();
     spiRelease();
 
-    if (!nandWaitReady())
+    uint8_t nand_st = 0;
+    if (!nandWaitReady(2'000'000, &nand_st))
     {
         return false;  // treat a stuck page-read as a suspect block
+    }
+    // #1148 item 2: same ECC gate as nandReadPage — an uncorrectable page must
+    // not be streamed out as good data. Correctable errors are not failures.
+    if (nandEccUncorrectable(geom_.ecc_kind, nand_st))
+    {
+        nand_ecc_uncorrectable_++;
+        return false;
     }
 
     // Stage 2: stream `len` bytes out of the cache starting at `column`.

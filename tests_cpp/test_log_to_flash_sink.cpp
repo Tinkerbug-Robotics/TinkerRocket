@@ -366,3 +366,63 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<GeomCase>& i) { return i.param.name; });
 
 }  // namespace
+
+// ─── #1148 item 1: endLogging() in the pre-created state ───────────────────
+//
+// endLogging()'s idempotence guard bailed only when BOTH logging_active and
+// file_open were false. The PRELAUNCH pre-created state — the flush task opens
+// the session ahead of the flight, so file_open is true while logging_active is
+// still false — fell through and latched end_flight_requested. Nothing could
+// clear it: the flush task's clearing block is gated on logging_active, which is
+// false. enqueueFrame() then rejected every frame for the rest of the power
+// session while isLoggingActive() kept returning true.
+//
+// Three OC call sites reach endLogging() with no isLoggingActive() guard — the
+// BLE Sim Stop handler, the LoRa uplink cmd 7 handler and the END_FLIGHT frame
+// handler — so an operator ending a flight that never started bricked the
+// logger for the NEXT one, silently.
+
+TEST_P(LogToFlashSink, EndLoggingInThePreCreatedStateDoesNotBrickTheLogger)
+{
+    lf_.startFlushTask();
+    lf_.prepareLogFile();
+    pumpFlushTask();                      // file pre-created; NOT activated
+    ASSERT_FALSE(lf_.isLoggingActive());
+
+    // The operator hits Sim Stop / end-flight in PRELAUNCH.
+    lf_.endLogging();
+
+    // Checked BEFORE pumping: the latch is set synchronously by endLogging(),
+    // and pumping afterwards would let the flush task's pre-create block open
+    // the next session, which is a different question.
+    EXPECT_FALSE(lf_.isLoggingActive())
+        << "endLogging() on a session that was never activated latched "
+           "end_flight_requested with no path to clear it";
+
+    // And the real damage: the next flight must still be able to log.
+    lf_.startLogging();
+    pumpFlushTask();
+    ASSERT_TRUE(lf_.isLoggingActive());
+
+    const uint32_t before = stats().bytes_written_nand;
+    frames_.push(lf_, 4u * chunk());
+    pumpFlushTask();
+    EXPECT_GT(stats().bytes_written_nand, before)
+        << "frames were still being rejected — the latch survived";
+
+    lf_.endLogging();
+    pumpFlushTask();
+    EXPECT_FALSE(lf_.isLoggingActive());
+}
+
+TEST_P(LogToFlashSink, EndLoggingIsStillIdempotentFromIdle)
+{
+    // The case the guard was originally written for (#the cmd-23 toggle):
+    // calling it with nothing open at all must stay a no-op.
+    lf_.startFlushTask();
+    pumpFlushTask();
+    ASSERT_FALSE(lf_.isLoggingActive());
+    lf_.endLogging();
+    pumpFlushTask();
+    EXPECT_FALSE(lf_.isLoggingActive());
+}
