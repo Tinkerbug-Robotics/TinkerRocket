@@ -5729,8 +5729,14 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // Servo control enable/disable from BaseStation
         bool enabled = (payload[0] != 0);
         cfg_servo_enabled = enabled;
+        // #1158: same persistence as the BLE twin — the setting must survive an
+        // OC-only reset, or the OC reports it back as enabled and the app's
+        // "rocket wins" adoption re-arms it.
+        prefs.begin("servo", false);
+        prefs.putBool("sen", enabled);
+        prefs.end();
         setPendingCommand(enabled ? SERVO_CTRL_ENABLE : SERVO_CTRL_DISABLE);
-        ESP_LOGI("LORA", "UPLINK Servo control: %s", enabled ? "ENABLE" : "DISABLE");
+        ESP_LOGI("LORA", "UPLINK Servo control: %s (saved to NVS)", enabled ? "ENABLE" : "DISABLE");
     }
     else if (cmd == 22 && payload_len >= 1)
     {
@@ -7856,6 +7862,7 @@ void initPeripherals()
         cfg_servo_hz    = prefs.getShort("hz",  cfg_servo_hz);
         cfg_servo_min   = prefs.getShort("min", cfg_servo_min);
         cfg_servo_max   = prefs.getShort("max", cfg_servo_max);
+        cfg_servo_enabled = prefs.getBool("sen", cfg_servo_enabled);   // #1158
         prefs.end();
         ESP_LOGI("CFG", "NVS Servo cache: bias=%d hz=%d min=%d max=%d",
             cfg_servo_bias1, cfg_servo_hz, cfg_servo_min, cfg_servo_max);
@@ -8381,6 +8388,11 @@ static void setup_oc()
             cfg_pid_max     = prefs.getFloat("maxcmd",  20.0f);
             cfg_gain_sched  = prefs.getBool("gs", false);
         }
+        // #1158: OUTSIDE the isKey("b1") guard. That guard asks whether servo
+        // GEOMETRY was ever saved; the enable flag is independent, and an
+        // operator who disabled servo control without ever touching the trim
+        // values would otherwise still get the true default back.
+        cfg_servo_enabled = prefs.getBool("sen", cfg_servo_enabled);
         prefs.end();
 
         prefs.begin("guid", false);
@@ -10076,8 +10088,29 @@ static void loop_oc()
             {
                 bool enabled = (payload[0] != 0);
                 cfg_servo_enabled = enabled;
+                // #1158: persist it. cfg_servo_enabled was the only one of
+                // three sibling settings handled neither way — cfg_gain_sched
+                // is written to OC NVS by cmd 22 and reloaded at boot,
+                // cfg_guidance_en is adopted from the FC's live bit every
+                // NonSensor frame, and this one was RAM-only, re-initialising
+                // to TRUE on every OC reboot. The FC persists it
+                // (prefs "servo_en"), so after any OC-only reset — a cmd-8
+                // power-off is an esp_restart() of the OC by design, and a
+                // brownout or self-OTA does the same — the two boards
+                // disagreed and the OC is the one the app believes. The app's
+                // "rocket wins" adoption then overwrote the profile with true
+                // and the next push sent cmd 14 ENABLE, silently re-arming fin
+                // control the operator had deliberately disabled.
+                //
+                // Adoption from the FC is not available: ConfigReportData's
+                // flags are only F_SOUNDS and F_ORIENT_FROM_NVS, and the
+                // F_SERVO_ENABLED bit lives in FlightSettingsData, which the
+                // OC classifies log-only.
+                prefs.begin("servo", false);
+                prefs.putBool("sen", enabled);
+                prefs.end();
                 setPendingCommand(enabled ? SERVO_CTRL_ENABLE : SERVO_CTRL_DISABLE);
-                ESP_LOGI("BLE", "Servo control: %s (pending for RocketComputer)",
+                ESP_LOGI("BLE", "Servo control: %s (pending for RocketComputer, saved to NVS)",
                               enabled ? "ENABLE" : "DISABLE");
             }
         }
