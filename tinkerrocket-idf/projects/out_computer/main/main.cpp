@@ -8069,6 +8069,42 @@ static void initI2CSlave()
 // ==========================================================================
 static void setup_oc()
 {
+    // #1168: BEFORE anything that can raise PWR_PIN — the #825 block below
+    // does exactly that — withdraw arm consent.
+    //
+    // The mini's rework-4 arm requires BOTH processors: FC_ARM (FC GPIO44) and
+    // OC_ARM_EN (this pin) each feed a series element, and the arm FET conducts
+    // only when both are high. Two boot defaults worked against that. FC GPIO44
+    // is U0RXD, so it carries the ROM console's weak pull-up from power-on
+    // until the FC configures the pad — and this pin FLOATED from reset,
+    // because nothing ever drove it. A floating gate on a consent transistor is
+    // not a consent decision, and it was the only thing holding back an
+    // actively-pulled-high arm line: a single-fault-from-armed state on every
+    // cold start.
+    //
+    // Driven low here and left low. There is deliberately no path that raises
+    // it yet: consent belongs to flight software that has an actual reason to
+    // arm, and inventing one here would collapse the design back to the
+    // single-processor arm the rework removed. Until that exists the mini
+    // cannot fire a channel, which is the correct default and is what the M1
+    // bench section of #1211 already assumes.
+    if (config::ARM_CONSENT_PIN >= 0)
+    {
+        gpio_set_level((gpio_num_t)config::ARM_CONSENT_PIN, 0);   // stage 0 first
+        gpio_config_t arm_cfg = {};
+        arm_cfg.pin_bit_mask = 1ULL << config::ARM_CONSENT_PIN;
+        arm_cfg.mode         = GPIO_MODE_OUTPUT;
+        arm_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+        arm_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        arm_cfg.intr_type    = GPIO_INTR_DISABLE;
+        gpio_config(&arm_cfg);
+        gpio_set_level((gpio_num_t)config::ARM_CONSENT_PIN, 0);
+        ESP_LOGW("PYRO", "arm consent (OC_ARM_EN, GPIO%d) driven LOW at boot — "
+                         "the supervised arm needs both processors and nothing "
+                         "raises consent yet, so no channel can arm (#1168)",
+                 (int)config::ARM_CONSENT_PIN);
+    }
+
     // #825: FIRST thing, before NVS init and the 500 ms boot delay burn the
     // R84/C105 window (~0.8 s from the chip reset) — if the previous session
     // had the FC rail ON and this reset was not a real power-on or the
