@@ -605,7 +605,7 @@ static void setPendingCommandWithConfig(uint8_t cmd, uint8_t msg_type,
     entry.cfg_len = (uint8_t)len;
     if (len > 0 && data != nullptr) memcpy(entry.cfg, data, len);
 
-    const bool front = (cmd == PYRO_FIRE_TEST || cmd == PYRO_CONT_TEST);
+    const bool front = cmdIsFrontPriority(cmd);
 
     portENTER_CRITICAL(&cmd_queue_mux);
     // Dedupe: replace the payload of an already-queued entry describing the
@@ -645,8 +645,34 @@ static void setPendingCommandWithConfig(uint8_t cmd, uint8_t msg_type,
     }
     if (front)
     {
-        cmd_queue_head = (cmd_queue_head + CMD_QUEUE_DEPTH - 1) % CMD_QUEUE_DEPTH;
-        cmd_queue[cmd_queue_head] = entry;
+        // #1149 item 1: insert AFTER the priority entries already queued, not
+        // before them. The old unconditional push-front made these a STACK: two
+        // pyro tests enqueued before the first was served were delivered
+        // newest-first, so the operator's channel order reversed and a FIRE
+        // could overtake a CONT test they tapped earlier. Since #837 item 11
+        // the dedupe key includes the channel byte, so per-channel tests each
+        // take a slot instead of collapsing into one — which is what made the
+        // reversal reachable. Each served command holds ~1 s of polls, so
+        // anything tapped inside that window queues behind and was reordered.
+        //
+        // The front run is RECOMPUTED rather than tracked in a counter:
+        // cmdQueueRetireOneShots() compacts this ring and can remove front
+        // entries, so a counter would have to be maintained correctly by every
+        // mutation. Scanning is O(queued) with queued <= CMD_QUEUE_DEPTH (20).
+        size_t front_run = 0;
+        while (front_run < cmd_queue_count &&
+               cmdIsFrontPriority(cmd_queue[(cmd_queue_head + front_run) % CMD_QUEUE_DEPTH].cmd))
+        {
+            front_run++;
+        }
+        // Shift the normal-priority tail right by one, from the back, so an
+        // entry is never overwritten before it has been moved.
+        for (size_t i = cmd_queue_count; i > front_run; --i)
+        {
+            cmd_queue[(cmd_queue_head + i) % CMD_QUEUE_DEPTH] =
+                cmd_queue[(cmd_queue_head + i - 1) % CMD_QUEUE_DEPTH];
+        }
+        cmd_queue[(cmd_queue_head + front_run) % CMD_QUEUE_DEPTH] = entry;
     }
     else
     {
@@ -1239,6 +1265,9 @@ static float   cfg_pid_kd  = 0.0003f;
 static float   cfg_pid_min = -20.0f;
 static float   cfg_pid_max = 20.0f;
 static bool    cfg_servo_enabled = true;
+// #1149 item 2: BMP samples rejected by the shared pressure band. Mirrors the
+// FC's dbg_bmp_bad_reads so a link or sensor fault is countable at both ends.
+static uint32_t oc_bmp_bad_reads = 0;
 static bool    cfg_gain_sched   = true;
 static bool    cfg_use_angle_ctrl = false;
 static uint16_t cfg_roll_delay_ms  = 0;
@@ -1446,6 +1475,22 @@ static uint8_t       imu_orient_pub_mode = 0xFF;
 // feeds, and the app keeps saying it cannot verify those groups.
 static ConfigReportData fc_config_report = {};
 static bool             fc_config_report_valid = false;
+// #1149 item 3: the same treatment last_query_cfg got, for the same reason.
+// This 169-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
+// prio 6) and was read field-by-field by loop_oc (core 1, prio 5) through a
+// reference held across dozens of statements and three String builds. The
+// parser strictly preempts loopTask, so a config readback could mix two report
+// generations — servo trim from one, fin layout from the next.
+static portMUX_TYPE fc_config_report_mux = portMUX_INITIALIZER_UNLOCKED;
+static inline ConfigReportData snapshotConfigReport(bool* valid_out)
+{
+    portENTER_CRITICAL(&fc_config_report_mux);
+    const ConfigReportData snap = fc_config_report;
+    const bool valid = fc_config_report_valid;
+    portEXIT_CRITICAL(&fc_config_report_mux);
+    if (valid_out) *valid_out = valid;
+    return snap;
+}
 static volatile bool    fc_config_report_dirty = false;
 
 // FC's guidance-target echo (#435), mirrored from the v5 status query and
@@ -2279,8 +2324,20 @@ static void updateDerivedAltitudeFromBMP()
     BMP585DataSI bmp_si = {};
     sensor_converter.convertBMP585Data(latest_bmp_raw, bmp_si);
     const float p = bmp_si.pressure;
-    if (p <= 0.0f)
+    // #1149 item 2: the same band the FC applies before letting a sample touch
+    // its own altitude math (#260). The FC range-checks, then transmits the RAW
+    // frame regardless of its own verdict — so a sample it rejected still
+    // arrived here, where the only gate was `p <= 0`.
+    //
+    // One corrupted frame was permanent: while not INFLIGHT it becomes
+    // ground_pressure_pa with no bounds check, and max_alt_m is LATCHED with
+    // std::max behind a -500..100000 m output gate that a garbage baseline
+    // sails through. Both are what the LoRa builder and the BLE telemetry
+    // report, so the flight's max altitude was wrong on the wire and never
+    // recovered. Finite bounds also reject NaN and +/-Inf.
+    if (!(p >= BMP_PRESSURE_MIN_PA && p <= BMP_PRESSURE_MAX_PA))
     {
+        oc_bmp_bad_reads++;
         return;
     }
 
@@ -3641,8 +3698,10 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 memcmp((const uint8_t*)&incoming + sizeof(incoming.time_us),
                        (const uint8_t*)&fc_config_report + sizeof(incoming.time_us),
                        sizeof(incoming) - sizeof(incoming.time_us)) != 0;
+            portENTER_CRITICAL(&fc_config_report_mux);   // #1149 item 3
             fc_config_report = incoming;
             fc_config_report_valid = true;
+            portEXIT_CRITICAL(&fc_config_report_mux);
             if (changed) fc_config_report_dirty = true;
         }
         return;
@@ -3840,9 +3899,12 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 // overwritten from here every time it comes up.  The gate is
                 // the FC's own provenance bit, not a version number, so an
                 // FC that has genuinely never been told still gets healed.
+                bool heal_valid = false;
+                const ConfigReportData heal_snap =
+                    snapshotConfigReport(&heal_valid);   // #1149 item 3
                 const bool fc_remembers_orient =
-                    fc_config_report_valid &&
-                    (fc_config_report.flags &
+                    heal_valid &&
+                    (heal_snap.flags &
                      (1U << ConfigReportData::F_ORIENT_FROM_NVS)) != 0U;
                 if (!fc_remembers_orient &&
                     cfg_imu_orient != IMU_ORIENT_AUTO &&
@@ -5083,11 +5145,13 @@ static void sendImuOrientation()
     // Reporting the OC's cache unconditionally was a lie waiting to happen —
     // reflash the OC alone and it would tell the app AUTO while the FC flew a
     // manual clocking out of its own NVS.
+    bool orient_valid = false;
+    const ConfigReportData orient_snap = snapshotConfigReport(&orient_valid);   // #1149 item 3
     const bool fc_remembers =
-        fc_config_report_valid &&
-        (fc_config_report.flags & (1U << ConfigReportData::F_ORIENT_FROM_NVS)) != 0U;
+        orient_valid &&
+        (orient_snap.flags & (1U << ConfigReportData::F_ORIENT_FROM_NVS)) != 0U;
     const uint8_t reported_set =
-        fc_remembers ? fc_config_report.imu_orient_setting : cfg_imu_orient;
+        fc_remembers ? orient_snap.imu_orient_setting : cfg_imu_orient;
     char buf[112];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"imu_orient\",\"code\":%u,\"mode\":%u,\"name\":\"%s\",\"set\":%u}",
@@ -5153,7 +5217,11 @@ static void sendGuidTarget()
 static void sendConfigExtras()
 {
     if (!fc_config_report_valid) return;
-    const ConfigReportData &r = fc_config_report;
+    // #1149 item 3: a COPY, not a reference to the live global — the parser
+    // task can replace it between any two of the reads below.
+    bool r_valid = false;
+    const ConfigReportData r = snapshotConfigReport(&r_valid);
+    (void)r_valid;
 
     // 1) Servo trim 2-4, fin travel, fin layout, sounds.
     String j = "{\"type\":\"config_servo\"";
