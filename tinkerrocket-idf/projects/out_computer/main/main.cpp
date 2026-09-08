@@ -7194,6 +7194,87 @@ static void printStats()
 // ==========================================================================
 // Initialize peripherals that are behind the PWR_PIN power rail.
 // Called once when power is first turned on (deferred from setup).
+// #1131: the OC's cached deployment-channel, camera, IMU-orientation and
+// IMU-rate config, read from NVS.
+//
+// These used to be read ONLY here inside initPeripherals(), i.e. only once the
+// FC rail was switched on — but the app can connect and read config with the
+// rail OFF (that is documented behaviour, and sendCurrentConfig() is called
+// from outside loop_oc's pwr_pin_on gate). So a phone connecting to a powered-
+// down stack was told all four deployment channels were DISABLED, trigger mode
+// 0, value 0.0 — the compile-time defaults — for a rocket that was in fact
+// configured. Worse, editing any single channel from the dashboard pushes all
+// four back from that readback, which wrote the wiped set into the OC cache,
+// into OC NVS, into the FC's queued config and into the saved profile.
+//
+// setup_oc() already had an early-load block for exactly this reason ("so
+// config readback on first connect is correct") covering servo/PID/roll/
+// guidance/identity, and the same argument was written down for
+// lora_tx_disabled. Pyro, camera, orientation and IMU rate were simply never
+// added to it. Now both call sites share this one loader.
+static void loadCachedPeripheralConfigFromNvs()
+{
+    // Load cached camera type from NVS
+    prefs.begin("cam", false);
+    cfg_camera_type = prefs.getUChar("type", cfg_camera_type);
+    prefs.end();
+    ESP_LOGI("CFG", "NVS Camera type: %u (%s)", cfg_camera_type,
+             cfg_camera_type == CAM_TYPE_GOPRO ? "GoPro" :
+             cfg_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
+
+    // Load cached IMU mounting orientation setting from NVS.  A MANUAL
+    // value gets pushed to the FC by the status-query self-heal once
+    // the FC starts polling — no explicit boot staging needed.
+    prefs.begin("orient", false);
+    cfg_imu_orient = prefs.getUChar("set", cfg_imu_orient);
+    prefs.end();
+    ESP_LOGI("CFG", "NVS IMU orientation: %s",
+             cfg_imu_orient == IMU_ORIENT_AUTO
+                 ? "AUTO" : orientCodeName(cfg_imu_orient));
+
+    // Load cached IMU logging rate.  Readback/cache only — the FC owns
+    // application (its own NVS survives FC reboots independently).
+    prefs.begin("imurate", false);
+    {
+        const uint16_t nvs_rate = prefs.getUShort("hz", cfg_imu_rate);
+        // Whitelist on read: a corrupted value must not be relayed to the
+        // FC or echoed to the app as if it were a real setting.
+        if (imuRateSettingValid(nvs_rate)) cfg_imu_rate = nvs_rate;
+        else ESP_LOGW("CFG", "NVS IMU logging rate %u invalid — keeping default",
+                      (unsigned)nvs_rate);
+    }
+    prefs.end();
+    if (imuRateIsDynamic(cfg_imu_rate))
+        ESP_LOGI("CFG", "NVS IMU logging rate: DYNAMIC");
+    else
+        ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
+
+    // Load cached pyro config from NVS (4 channels)
+    prefs.begin("pyro", true);
+    size_t pyro_sz = prefs.getBytesLength("cfg");
+    if (pyro_sz == sizeof(PyroConfigData)) {
+        PyroConfigData pcfg;
+        prefs.getBytes("cfg", &pcfg, sizeof(pcfg));
+        const uint8_t en[4]   = { pcfg.ch1_enabled,      pcfg.ch2_enabled,
+                                  pcfg.ch3_enabled,      pcfg.ch4_enabled };
+        const uint8_t mode[4] = { pcfg.ch1_trigger_mode, pcfg.ch2_trigger_mode,
+                                  pcfg.ch3_trigger_mode, pcfg.ch4_trigger_mode };
+        const float   val[4]  = { pcfg.ch1_trigger_value, pcfg.ch2_trigger_value,
+                                  pcfg.ch3_trigger_value, pcfg.ch4_trigger_value };
+        for (int i = 0; i < 4; ++i) {
+            cfg_pyro_enabled[i]       = en[i];
+            cfg_pyro_trigger_mode[i]  = mode[i];
+            cfg_pyro_trigger_value[i] = val[i];
+        }
+    }
+    prefs.end();
+    ESP_LOGI("CFG", "NVS Pyro: ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
+             cfg_pyro_enabled[0], cfg_pyro_trigger_mode[0], (double)cfg_pyro_trigger_value[0],
+             cfg_pyro_enabled[1], cfg_pyro_trigger_mode[1], (double)cfg_pyro_trigger_value[1],
+             cfg_pyro_enabled[2], cfg_pyro_trigger_mode[2], (double)cfg_pyro_trigger_value[2],
+             cfg_pyro_enabled[3], cfg_pyro_trigger_mode[3], (double)cfg_pyro_trigger_value[3]);
+}
+
 void initPeripherals()
 {
     if (peripherals_initialized) return;
@@ -7789,65 +7870,7 @@ void initPeripherals()
         prefs.end();
         ESP_LOGI("CFG", "NVS Guidance: %s", cfg_guidance_en ? "ON" : "OFF");
 
-        // Load cached camera type from NVS
-        prefs.begin("cam", false);
-        cfg_camera_type = prefs.getUChar("type", cfg_camera_type);
-        prefs.end();
-        ESP_LOGI("CFG", "NVS Camera type: %u (%s)", cfg_camera_type,
-                 cfg_camera_type == CAM_TYPE_GOPRO ? "GoPro" :
-                 cfg_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
-
-        // Load cached IMU mounting orientation setting from NVS.  A MANUAL
-        // value gets pushed to the FC by the status-query self-heal once
-        // the FC starts polling — no explicit boot staging needed.
-        prefs.begin("orient", false);
-        cfg_imu_orient = prefs.getUChar("set", cfg_imu_orient);
-        prefs.end();
-        ESP_LOGI("CFG", "NVS IMU orientation: %s",
-                 cfg_imu_orient == IMU_ORIENT_AUTO
-                     ? "AUTO" : orientCodeName(cfg_imu_orient));
-
-        // Load cached IMU logging rate.  Readback/cache only — the FC owns
-        // application (its own NVS survives FC reboots independently).
-        prefs.begin("imurate", false);
-        {
-            const uint16_t nvs_rate = prefs.getUShort("hz", cfg_imu_rate);
-            // Whitelist on read: a corrupted value must not be relayed to the
-            // FC or echoed to the app as if it were a real setting.
-            if (imuRateSettingValid(nvs_rate)) cfg_imu_rate = nvs_rate;
-            else ESP_LOGW("CFG", "NVS IMU logging rate %u invalid — keeping default",
-                          (unsigned)nvs_rate);
-        }
-        prefs.end();
-        if (imuRateIsDynamic(cfg_imu_rate))
-            ESP_LOGI("CFG", "NVS IMU logging rate: DYNAMIC");
-        else
-            ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
-
-        // Load cached pyro config from NVS (4 channels)
-        prefs.begin("pyro", true);
-        size_t pyro_sz = prefs.getBytesLength("cfg");
-        if (pyro_sz == sizeof(PyroConfigData)) {
-            PyroConfigData pcfg;
-            prefs.getBytes("cfg", &pcfg, sizeof(pcfg));
-            const uint8_t en[4]   = { pcfg.ch1_enabled,      pcfg.ch2_enabled,
-                                      pcfg.ch3_enabled,      pcfg.ch4_enabled };
-            const uint8_t mode[4] = { pcfg.ch1_trigger_mode, pcfg.ch2_trigger_mode,
-                                      pcfg.ch3_trigger_mode, pcfg.ch4_trigger_mode };
-            const float   val[4]  = { pcfg.ch1_trigger_value, pcfg.ch2_trigger_value,
-                                      pcfg.ch3_trigger_value, pcfg.ch4_trigger_value };
-            for (int i = 0; i < 4; ++i) {
-                cfg_pyro_enabled[i]       = en[i];
-                cfg_pyro_trigger_mode[i]  = mode[i];
-                cfg_pyro_trigger_value[i] = val[i];
-            }
-        }
-        prefs.end();
-        ESP_LOGI("CFG", "NVS Pyro: ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
-                 cfg_pyro_enabled[0], cfg_pyro_trigger_mode[0], (double)cfg_pyro_trigger_value[0],
-                 cfg_pyro_enabled[1], cfg_pyro_trigger_mode[1], (double)cfg_pyro_trigger_value[1],
-                 cfg_pyro_enabled[2], cfg_pyro_trigger_mode[2], (double)cfg_pyro_trigger_value[2],
-                 cfg_pyro_enabled[3], cfg_pyro_trigger_mode[3], (double)cfg_pyro_trigger_value[3]);
+        loadCachedPeripheralConfigFromNvs();
     }
 
     if (config::USE_LORA_RADIO)
@@ -8313,6 +8336,11 @@ static void setup_oc()
         cfg_kp_angle       = prefs.getFloat("kpang", 0.0f);  // #253 (<=0 = fw default)
         cfg_iwind_dps      = prefs.getFloat("iwind", -1.0f); // #253 (<0 = fw default)
         prefs.end();
+
+        // #1131: pyro / camera / IMU-orientation / IMU-rate caches, so the
+        // rail-OFF config readback tells the truth about the deployment
+        // configuration instead of reporting the compile-time defaults.
+        loadCachedPeripheralConfigFromNvs();
 
         // Early identity load (so config readback on first connect is correct)
         uint8_t mac[6];
