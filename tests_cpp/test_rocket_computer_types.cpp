@@ -2377,3 +2377,77 @@ TEST(LoraHopChangeAllowed, PrelaunchStillAllowsAnEnable) {
     ASSERT_FALSE(locked);
     EXPECT_TRUE(loraHopChangeAllowed(false, locked));
 }
+
+// ── #1147 item 4: a name beacon must never look like a telemetry frame ──
+//
+// The beacon carries no length field, and the base station disambiguates
+// beacon from telemetry PURELY by length. SIZE_OF_LORA_SLOW is 22, and the
+// beacon is 3 + strlen(name), so a 19-character rocket name produced exactly
+// 22 bytes: the beacon fell through to the telemetry branch, read ver_type
+// from unit_name[2], failed the protocol-version check and was logged as a
+// firmware mismatch. That rocket never appeared in the BS's list.
+
+TEST(LoraBeaconPadBytes, NineteenCharacterNameIsThePathologicalCase) {
+    // 3 + 19 == SIZE_OF_LORA_SLOW: the exact reported collision.
+    ASSERT_EQ(SIZE_OF_LORA_SLOW, 22u);
+    EXPECT_EQ(loraBeaconPadBytes(3 + 19), 1u);
+    EXPECT_NE(3 + 19 + loraBeaconPadBytes(3 + 19), SIZE_OF_LORA_SLOW);
+}
+
+TEST(LoraBeaconPadBytes, OrdinaryNamesAreNotPadded) {
+    // Padding costs a byte of airtime, so it must apply only where needed.
+    for (size_t name_len = 1; name_len <= 20; ++name_len) {
+        const size_t len = 3 + name_len;
+        if (len == SIZE_OF_LORA_SLOW || len == SIZE_OF_LORA_FAST) continue;
+        EXPECT_EQ(loraBeaconPadBytes(len), 0u) << "padded a safe name_len "
+                                               << name_len;
+    }
+}
+
+TEST(LoraBeaconPadBytes, NoReachableNameLengthCanCollideAfterPadding) {
+    // The property that actually matters. unit_name is char[24], so an old
+    // NVS value can be up to 23 characters; walk every reachable length.
+    for (size_t name_len = 0; name_len <= 23; ++name_len) {
+        const size_t len = 3 + name_len + loraBeaconPadBytes(3 + name_len);
+        EXPECT_NE(len, SIZE_OF_LORA_FAST) << "name_len " << name_len;
+        EXPECT_NE(len, SIZE_OF_LORA_SLOW) << "name_len " << name_len;
+    }
+}
+
+TEST(LoraBeaconPadBytes, PaddingWouldStepPastTwoAdjacentFrameSizes) {
+    // The loop is not decoration: if a future frame size ever landed one byte
+    // above another, a flat "+1" would move the collision rather than remove
+    // it. Verified by construction against the current sizes -- padding a
+    // length that is already SIZE_OF_LORA_FAST must clear BOTH.
+    const size_t len = SIZE_OF_LORA_FAST + loraBeaconPadBytes(SIZE_OF_LORA_FAST);
+    EXPECT_NE(len, SIZE_OF_LORA_FAST);
+    EXPECT_NE(len, SIZE_OF_LORA_SLOW);
+}
+
+TEST(LoraBeaconPadBytes, TheBaseStationStillReadsTheSameName) {
+    // The reason NUL is the pad byte. The BS copies rx_len - 3 bytes and
+    // NUL-terminates, so an embedded NUL ends the C string one byte early and
+    // every base station already in the field displays the unchanged name.
+    const char name[] = "RollyPollyTheThird";   // 18 chars
+    char nineteen[20];
+    snprintf(nineteen, sizeof(nineteen), "%s!", name);   // 19 chars
+    ASSERT_EQ(strlen(nineteen), 19u);
+
+    uint8_t beacon[32] = {};
+    beacon[0] = LORA_BEACON_SYNC;
+    beacon[1] = 0;
+    beacon[2] = 7;
+    memcpy(&beacon[3], nineteen, 19);
+    size_t len = 3 + 19;
+    len += loraBeaconPadBytes(len);          // the OC's padding, verbatim
+    ASSERT_EQ(len, 23u);
+
+    // The base station's extraction, verbatim.
+    char received[24] = {};
+    size_t name_len = len - 3;
+    if (name_len >= sizeof(received)) name_len = sizeof(received) - 1;
+    memcpy(received, &beacon[3], name_len);
+    received[name_len] = '\0';
+
+    EXPECT_STREQ(received, nineteen);
+}
