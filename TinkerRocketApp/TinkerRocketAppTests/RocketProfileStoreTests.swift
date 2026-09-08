@@ -115,6 +115,83 @@ final class RocketProfileStoreTests: XCTestCase {
         XCTAssertEqual(store.activeId, b.id)
     }
 
+    // MARK: - #1043: the delete fallback is not a user choice
+
+    /// `delete(_:)` keeps moving `activeId` to a survivor, but it now says so.
+    /// `ActiveRocketSyncer` treats any `activeId` change as the explicit "make
+    /// this rocket fly these settings" act and pushes 13 config frames plus
+    /// calibration to a connected board — so without this marker, a swipe at
+    /// the pad sent another airframe's PYRO TRIGGER MODES to the rocket and
+    /// rebound the board to it.
+    func testDeletingTheActiveProfileMarksTheFallback() {
+        let store = makeStore()
+        let a = store.add(name: "A")
+        let b = store.add(name: "B")
+        store.setActive(a.id)
+        XCTAssertNil(store.deleteFallbackActiveId)
+
+        store.delete(a.id)
+        XCTAssertEqual(store.activeId, b.id)
+        XCTAssertEqual(store.deleteFallbackActiveId, b.id,
+                       "the successor must be flagged as a fallback, not a user choice")
+    }
+
+    /// Deleting a profile that is NOT active changes nothing about the active
+    /// one, so there is no fallback to mark.
+    func testDeletingAnInactiveProfileMarksNothing() {
+        let store = makeStore()
+        let a = store.add(name: "A")
+        let b = store.add(name: "B")
+        store.setActive(a.id)
+        store.delete(b.id)
+        XCTAssertEqual(store.activeId, a.id)
+        XCTAssertNil(store.deleteFallbackActiveId)
+    }
+
+    /// Deleting the last profile leaves no successor — iOS then hits the same
+    /// no-profile guard as Android and pushes nothing, which is why the
+    /// divergence only ever appeared when a profile survived.
+    func testDeletingTheLastProfileLeavesNoFallback() {
+        let store = makeStore()
+        let a = store.add(name: "A")
+        store.setActive(a.id)
+        store.delete(a.id)
+        XCTAssertNil(store.activeId)
+        XCTAssertNil(store.deleteFallbackActiveId)
+    }
+
+    /// An explicit pick IS a user choice, and must clear a stale marker so the
+    /// next switch pushes normally.
+    func testExplicitSetActiveClearsTheFallbackMarker() {
+        let store = makeStore()
+        let a = store.add(name: "A")
+        let b = store.add(name: "B")
+        let c = store.add(name: "C")
+        store.setActive(a.id)
+        store.delete(a.id)
+        XCTAssertNotNil(store.deleteFallbackActiveId)
+
+        store.setActive(c.id)
+        XCTAssertNil(store.deleteFallbackActiveId,
+                     "picking a profile by hand must not be mistaken for a delete fallback")
+        XCTAssertEqual(store.activeId, c.id)
+        _ = b
+    }
+
+    /// The marker is consumed once; a second read must not suppress a real
+    /// later switch.
+    func testClearingTheMarkerIsIdempotent() {
+        let store = makeStore()
+        let a = store.add(name: "A")
+        _ = store.add(name: "B")
+        store.setActive(a.id)
+        store.delete(a.id)
+        store.clearDeleteFallbackMarker()
+        XCTAssertNil(store.deleteFallbackActiveId)
+        store.clearDeleteFallbackMarker()
+        XCTAssertNil(store.deleteFallbackActiveId)
+    }
+
     func testSetActivePersistsAcrossReload() {
         let store = makeStore()
         store.add(name: "A")

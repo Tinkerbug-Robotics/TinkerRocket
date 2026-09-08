@@ -24,6 +24,10 @@ struct RocketProfileView: View {
     @State private var renamingId: UUID?
     @State private var renameText = ""
     @State private var showSettings = false
+    // #1043: iOS had no delete confirmation where Android has an AlertDialog,
+    // and the delete sits on the same view as the live-connection section — a
+    // swipe at the pad was one gesture away from re-configuring the rocket.
+    @State private var pendingDeleteId: UUID?
 
     private var isConnectedRocket: Bool {
         guard let device else { return false }
@@ -108,7 +112,7 @@ struct RocketProfileView: View {
             }
         }
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) { deleteProfile(profile.id) } label: {
+            Button(role: .destructive) { pendingDeleteId = profile.id } label: {
                 Label("Delete", systemImage: "trash")
             }
         }
@@ -119,9 +123,24 @@ struct RocketProfileView: View {
             Button { store.duplicate(profile.id) } label: {
                 Label("Duplicate", systemImage: "plus.square.on.square")
             }
-            Button(role: .destructive) { deleteProfile(profile.id) } label: {
+            Button(role: .destructive) { pendingDeleteId = profile.id } label: {
                 Label("Delete", systemImage: "trash")
             }
+        }
+        .confirmationDialog(
+            "Delete this rocket profile?",
+            isPresented: Binding(get: { pendingDeleteId == profile.id },
+                                 set: { if !$0 { pendingDeleteId = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete \(profile.name)", role: .destructive) {
+                deleteProfile(profile.id)
+                pendingDeleteId = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDeleteId = nil }
+        } message: {
+            Text("Its calibrations and preflight checklist are deleted too. "
+                 + "This cannot be undone.")
         }
     }
 
