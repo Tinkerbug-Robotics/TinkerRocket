@@ -147,6 +147,32 @@ static inline bool loraTxMuteChangeAllowed(bool want_disabled, uint8_t s)
     return loraTxMuteChangeAllowed(want_disabled, (RocketState)s);
 }
 
+// Whether a requested LoRa frequency-HOP change may be applied (#1147 item 5).
+//
+// Same asymmetry as the mute rule above, for the same reason, on the other
+// axis.  cmd 17 does not change whether the rocket transmits; it changes WHICH
+// CHANNEL it transmits on.  Enabling hopping moves the rocket off its fixed
+// operating channel onto a per-packet schedule, with a bootstrap handoff that
+// the base station has to catch — the #150 bench note records a missed
+// bootstrap costing ~60 s of link darkness, and 60 s mid-flight is 60 s of a
+// flight, on the only link that says where the rocket is.
+//
+// So an ENABLE is refused once the frequency is locked for flight, which is
+// exactly the rule cmd 10 (retune) and the rendezvous cycle already follow.  A
+// DISABLE stays allowed in every state: it can only pin the rocket to the
+// channel it is already using, never move it somewhere the BS is not
+// listening, and refusing it would strand a rocket that took off hopping.
+//
+// The base station sends cmd 17 as a broadcast (target_rid 0xFF), so without
+// this an operator configuring one rocket on the pad retunes every airborne
+// rocket on the network.  Shared by the OC uplink handler, the BS BLE handler
+// and the host tests so the three cannot drift.
+static inline bool loraHopChangeAllowed(bool want_disabled,
+                                        bool freq_locked_for_flight)
+{
+    return want_disabled || !freq_locked_for_flight;
+}
+
 // ============================================================================
 // Channel-set generator for per-packet frequency hopping (issues #40 / #41)
 // ============================================================================

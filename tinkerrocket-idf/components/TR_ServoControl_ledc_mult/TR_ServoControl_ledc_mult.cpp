@@ -138,9 +138,26 @@ int TR_ServoControl::usFromFinDeg(float fin_deg) const {
     return servo_min_us + static_cast<int>(norm * (servo_max_us - servo_min_us));
 }
 
-void TR_ServoControl::setFinCalibration(float finMinDeg, float finMaxDeg) {
+bool TR_ServoControl::finCalibrationValid(float finMinDeg, float finMaxDeg) {
+    if (!std::isfinite(finMinDeg) || !std::isfinite(finMaxDeg)) return false;
+    return (finMaxDeg - finMinDeg) >= kMinFinSpanDeg;
+}
+
+bool TR_ServoControl::setFinCalibration(float finMinDeg, float finMaxDeg) {
+    // #1137 item 2: reject rather than store.  See the header for why this
+    // lives in the setter and not at the two call sites.
+    if (!finCalibrationValid(finMinDeg, finMaxDeg)) {
+        ESP_LOGE("TR_ServoControl",
+                 "[FIN CAL] REJECTED min=%.2f max=%.2f (span must be finite and "
+                 ">= %.1f deg) — keeping min=%.2f max=%.2f. Fins would have been "
+                 "frozen at centre for the whole flight.",
+                 (double)finMinDeg, (double)finMaxDeg, (double)kMinFinSpanDeg,
+                 (double)fin_min_deg_, (double)fin_max_deg_);
+        return false;
+    }
     fin_min_deg_ = finMinDeg;
     fin_max_deg_ = finMaxDeg;
+    return true;
 }
 
 // Boot "servos alive" check.  Wiggles each servo individually, in order
