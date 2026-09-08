@@ -17,6 +17,7 @@ public:
     int write_rc           = 0;
     int end_rc             = 0;
     int set_boot_rc        = 0;
+    int restore_boot_rc    = 0;   // #1142 item 2
     bool fail_write_after_n = false;   // if true, write returns -100 after `write_fail_threshold` bytes
     size_t write_fail_threshold = 0;
 
@@ -29,6 +30,7 @@ public:
     bool   ended_once = false;
     int    begin_calls = 0;
     int    abort_calls = 0;
+    int    restore_boot_calls = 0;   // #1142 item 2
     std::vector<uint8_t> bytes;   // exactly the data passed through write()
 
     int begin(size_t image_size) override
@@ -65,6 +67,15 @@ public:
     {
         if (set_boot_rc != 0) return set_boot_rc;
         boot_set = true;
+        return 0;
+    }
+
+    // #1142 item 2: points otadata back at the running image.
+    int restoreBootPartition() override
+    {
+        ++restore_boot_calls;
+        if (restore_boot_rc != 0) return restore_boot_rc;
+        boot_set = false;
         return 0;
     }
 

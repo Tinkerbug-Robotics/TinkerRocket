@@ -117,4 +117,26 @@ inline bool mayCancelRollback(uint32_t uptime_ms,
     return uptime_ms >= kStableRunMs && out_ready && i2s_frames_accepted > 0;
 }
 
+// #1122 item 1: how often to retry a master-TX channel we failed to re-create.
+//
+// fcRevertToTx() ends the I2S channel and re-begins it as master TX.  If that
+// begin fails the channel is GONE — TR_I2S_Stream::end() nulls chan_handle_,
+// and every writeFrame()/writeIdleFill() then returns ESP_ERR_INVALID_STATE —
+// but fc_ota_data_mode was cleared regardless, so i2sSenderTask happily resumes
+// pushing into nothing.  Silent, permanent, and with no route back: nothing
+// else on the FC ever calls beginMasterTx again.
+//
+// This mirrors OtaRelayPolicy::shouldRetryRx on the OC, which exists for the
+// same failure on the other direction of the same link.  `tx_broken` is the
+// honest state ("we have no working master TX"), deliberately separate from
+// fc_ota_data_mode ("we are deliberately in slave RX for a relay") — conflating
+// the two is what left the OC with no way back before that fix.
+inline constexpr uint32_t kTxRetryIntervalMs = 1000;
+
+inline bool shouldRetryTx(bool tx_broken, uint32_t now_ms, uint32_t last_try_ms)
+{
+    if (!tx_broken) return false;
+    return (uint32_t)(now_ms - last_try_ms) >= kTxRetryIntervalMs;
+}
+
 }  // namespace FcOtaSessionPolicy

@@ -37,6 +37,8 @@ public:
         SetBootFailed,          // backend->setBootPartition() returned non-zero
         ImageIdentityMismatch,  // #1125: the incoming image's app descriptor names a
                                 // different project or a different board revision
+        BootAlreadyCommitted,   // #1142 item 2: abort() from ReadyToBoot could not
+                                // put otadata back — the new image WILL boot
     };
 
     // Optional status callback. Fired synchronously inside begin/writeChunk/
@@ -89,7 +91,14 @@ public:
     // session is aborted internally — state becomes VerifyFailed.
     Error finish();
 
-    // Cancel an in-flight session. Always safe; resets to Idle.
+    // Cancel an in-flight session.
+//
+// #1142 item 2: NOT unconditionally "resets to Idle", which is what this said
+// before.  From ReadyToBoot the boot partition has already been committed by
+// finish(), so abort() must put otadata back before it may claim the session is
+// gone.  If that restore fails the state stays ReadyToBoot and
+// Error::BootAlreadyCommitted is returned, so the caller can tell the operator
+// the reboot is still coming rather than showing them "idle".
     Error abort();
 
     State  state()         const { return state_; }

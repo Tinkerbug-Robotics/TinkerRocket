@@ -74,6 +74,25 @@ int TR_OTA_Backend_esp::setBootPartition()
     return 0;
 }
 
+int TR_OTA_Backend_esp::restoreBootPartition()
+{
+    // #1142 item 2.  esp_ota_set_boot_partition() has already rewritten otadata
+    // by the time a session reaches ReadyToBoot, and there is no "undo" — the
+    // only way back is to point it at the partition we are executing from.
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    if (!running) return -1;
+    esp_err_t err = esp_ota_set_boot_partition(running);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "restore boot partition to '%s': %s",
+                 running->label, esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGW(TAG, "OTA boot partition RESTORED to the running image '%s' — "
+                  "the cancelled update will not boot", running->label);
+    return 0;
+}
+
 void TR_OTA_Backend_esp::abort()
 {
     if (session_active_)

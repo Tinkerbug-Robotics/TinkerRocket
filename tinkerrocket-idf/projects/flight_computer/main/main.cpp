@@ -1683,6 +1683,11 @@ static void sendOtaRelayStatusRobust(uint8_t state, uint8_t err, uint32_t bytes_
 // idles while fc_ota_data_mode is set.
 static SemaphoreHandle_t fc_i2s_mutex = nullptr;
 static volatile bool fc_ota_data_mode = false;   // flipped to slave RX for the image
+// #1122 item 1: whether the FC currently has NO working master-TX channel.
+// Deliberately separate from fc_ota_data_mode ("we are in slave RX on purpose")
+// — conflating the two is what left the OC with no way back before its own fix.
+static volatile bool fc_i2s_tx_broken   = false;
+static uint32_t      fc_i2s_tx_last_try_ms = 0;
 static uint32_t fc_ota_total_size = 0;            // expected image size (from BEGIN)
 
 // Image RX ring: filled by the I2S recv callback (ISR), drained by
@@ -1858,18 +1863,61 @@ static void fcFlipToRx()
 
 // Revert slave-RX -> master-TX (normal telemetry + status). Called before
 // finalizing/aborting so the terminal status rides the normal I2S path.
-static void fcRevertToTx()
+// Caller holds fc_i2s_mutex.  Mirrors ocBeginSlaveRxLocked() on the OC — same
+// failure, other direction of the same link.
+static esp_err_t fcBeginMasterTxLocked(const char* why)
 {
-    if (fc_i2s_mutex) xSemaphoreTake(fc_i2s_mutex, portMAX_DELAY);
-    i2s_stream.end();
     const esp_err_t e = i2s_stream.beginMasterTx(config::I2S_BCLK_PIN,
                                                  config::I2S_WS_PIN,
                                                  config::I2S_DOUT_PIN,
                                                  config::I2S_FSYNC_PIN,
                                                  config::I2S_SAMPLE_RATE);
+    if (e == ESP_OK)
+    {
+        if (fc_i2s_tx_broken)
+            ESP_LOGW(TAG, "[OTA] I2S master TX restored (%s)", why);
+        fc_i2s_tx_broken = false;
+    }
+    else
+    {
+        // #1122 item 1: the channel is GONE, not merely unhappy.  end() nulled
+        // chan_handle_ and beginMasterTx's error exits delete it again, so
+        // every writeFrame()/writeIdleFill() now returns ESP_ERR_INVALID_STATE
+        // — silently, because i2sSenderTask does not check.  Leave the pins
+        // un-driven rather than half-configured by the aborted master setup,
+        // and latch the state so loop_fc can keep trying; nothing else on the
+        // FC ever calls beginMasterTx again.
+        i2s_stream.end();
+        fc_i2s_tx_broken = true;
+        ESP_LOGE(TAG, "[OTA] I2S master TX begin FAILED (%s): %s — no telemetry "
+                      "or status to the OC until this succeeds; retrying",
+                 why, esp_err_to_name(e));
+    }
+    fc_i2s_tx_last_try_ms = time_ms();
+    return e;
+}
+
+static void fcRevertToTx()
+{
+    if (fc_i2s_mutex) xSemaphoreTake(fc_i2s_mutex, portMAX_DELAY);
+    i2s_stream.end();
+    const esp_err_t e = fcBeginMasterTxLocked("revert");
     fc_ota_data_mode = false;           // i2sSenderTask resumes
     if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
     ESP_LOGW(TAG, "[OTA] I2S -> master TX (%s)", esp_err_to_name(e));
+}
+
+// #1122 item 1: the route back.  Runs every pass, OUTSIDE the fc_ota_data_mode
+// block, because the broken state outlives the flag that caused it.
+static void fcServiceI2sTxRecovery()
+{
+    if (!FcOtaSessionPolicy::shouldRetryTx(fc_i2s_tx_broken, time_ms(),
+                                           fc_i2s_tx_last_try_ms))
+        return;
+    if (fc_i2s_mutex) xSemaphoreTake(fc_i2s_mutex, portMAX_DELAY);
+    i2s_stream.end();
+    (void)fcBeginMasterTxLocked("retry");
+    if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
 }
 
 // Wait for the OC to stop driving BCLK before we seize it as master TX: both
@@ -5295,6 +5343,13 @@ static void loop_fc()
         // poll that delivers those commands is skipped INFLIGHT (#1121).
         fcOtaServiceSessionWatchdog(time_ms());
     }
+
+    // #1122 item 1: OUTSIDE the block above on purpose — fc_ota_data_mode is
+    // cleared by fcRevertToTx() whether or not the master-TX channel came
+    // back, so the broken state outlives the flag that produced it.  Gating
+    // the retry on fc_ota_data_mode would mean the one path that can recover
+    // the link is only reachable while we are still in the mode we just left.
+    fcServiceI2sTxRecovery();
 
     // ==========================================================================
     // SECTION: Sensor drain and conversion

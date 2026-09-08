@@ -19,6 +19,7 @@ public:
     int  write(const uint8_t* data, size_t len) override;
     int  end() override;
     int  setBootPartition() override;
+    int  restoreBootPartition() override;   // #1142 item 2
     void abort() override;
 
 private:
