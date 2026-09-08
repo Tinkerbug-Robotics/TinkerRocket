@@ -108,7 +108,9 @@ stateDiagram-v2
     INFLIGHT --> LANDED: descent + settled
     LANDED --> [*]: terminal until reboot
     READY --> MAG_CALIBRATION: app command
-    MAG_CALIBRATION --> READY: accept / abort
+    PRELAUNCH --> MAG_CALIBRATION: app command
+    MAG_CALIBRATION --> READY: accept / abort / session timeout
+    MAG_CALIBRATION --> INFLIGHT: baro launch failsafe
 ```
 
 `READY → PRELAUNCH` is the gate that says the vehicle is genuinely ready to fly: the
@@ -121,6 +123,19 @@ met — no GNSS lock, Out Computer not answering — the FC does not refuse to f
 promotes straight to `INFLIGHT` through the same entry path in a degraded mode: guidance
 off, reference-position freeze skipped, ground pressure taken from whatever the pad gave
 it. A rocket that has left the pad is in flight whether or not the software approves.
+
+`MAG_CALIBRATION` is entered from `READY` or `PRELAUNCH` — `PRELAUNCH` is the automatic
+outdoor ground state (4 sats + 3 s, no operator action), so refusing it would refuse mag
+cal in the field essentially always. `INFLIGHT` and `LANDED` are refused. Every exit lands
+in `READY`, so the pad gates are re-run from scratch afterwards.
+
+While in the state, `kinematicChecks()` is skipped so the operator's tumble cannot latch
+`launch_flag` (#216). That is a safety property while the operator is present and a hazard
+if the session is never ended, because launch detection and pyro servicing are both off —
+so the state has two exits that do not depend on the app (#1118): a session timeout, and a
+launch failsafe that watches barometric altitude rather than `launch_flag`, since the
+detector is off. A hand tumble cannot produce tens of metres of sustained climb; a lit
+motor produces it in well under a second.
 
 `LANDED` is terminal. It sets `post_flight_lockout`, which is re-asserted at the top of
 the state machine on every pass, so no command and no re-triggered launch detect can
