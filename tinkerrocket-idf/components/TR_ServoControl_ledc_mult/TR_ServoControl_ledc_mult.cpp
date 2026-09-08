@@ -102,6 +102,8 @@ void TR_ServoControl::setSetpoint(float setpoint) {
 }
 
 void TR_ServoControl::control(float roll_rate) {
+    // #1141 item 4: the unscheduled rate-null path must run on BASE gains.
+    restoreBaseGains();
     controlToSetpoint(pid_setpoint, roll_rate);
 }
 
@@ -211,10 +213,33 @@ void TR_ServoControl::serviceWiggle(uint32_t now_ms) {
 }
 
 void TR_ServoControl::stowControl() {
-    setPulse(0);
+    // #1141 item 1: the CALIBRATED fin-zero, not the raw pulse midpoint.
+    //
+    // setPulse(0) fans out to servo_mid_us_, which is ((min_us+max_us)/2 +
+    // bias) and knows nothing about the #267 fin calibration.  usFromFinDeg(0)
+    // only equals that midpoint when the calibration happens to be symmetric:
+    // with 1000/2000 us and a [-10, +30] deg cal, fin-zero is 1250 us against
+    // a 1500 us midpoint — a standing 25%-of-travel deflection on all four
+    // fins, held for the whole descent, on the path that exists to stow them.
+    //
+    // Everything else in this file already treats the raw midpoint as wrong:
+    // begin() was moved off it, and main.cpp chains beginNeutralSettle() onto
+    // the boot wiggle for exactly this reason.  Going through setServoAngles()
+    // also picks up the fin-range clamp, the per-servo bias and
+    // saturateCommand(), so stow and every other neutral command agree.
+    const float neutral[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    setServoAngles(neutral);
+
+    // #1141 item 2: an unserviced settle must not outlive the stow that
+    // superseded it, or serviceNeutralSettle() would later re-drive the fins.
+    neutral_settle_active_ = false;
 }
 
 void TR_ServoControl::idle() {
+    // #1141 item 2: relaxing the rail supersedes any settle in progress.
+    // Leaving the flag set would let a later serviceNeutralSettle() re-energise
+    // fins that were deliberately relaxed.
+    neutral_settle_active_ = false;
     // Already relaxed — don't re-issue the duty writes every loop tick.
     if (is_idle_) return;
     // 0% duty holds the GPIO low for the whole period: no rising edge, so the
@@ -268,6 +293,14 @@ void TR_ServoControl::beginNeutralSettle(uint32_t now_ms) {
     setServoAngles(overshoot);
     neutral_settle_active_ = true;
     neutral_settle_at_ms_  = now_ms + kNeutralSettleHoldMs;
+    // #1141 item 2: completion is the CALLER's job, and main.cpp now services
+    // this on every pass rather than only inside `case READY` / `case
+    // PRELAUNCH`.  A component-side deadline was considered and deliberately
+    // NOT added: any such bound is necessarily later than the hold it would
+    // back up, so it could only ever fire on a tick where the hold check had
+    // already completed the settle — dead code that reads as a safeguard.
+    // What the component can usefully do is ensure a settle never outlives a
+    // command that supersedes it, which idle() and stowControl() now do.
 }
 
 void TR_ServoControl::serviceNeutralSettle(uint32_t now_ms) {
@@ -333,7 +366,32 @@ void TR_ServoControl::setBias(int servoIndex, int biasUs) {
     servo_mid_us_[servoIndex] = ((servo_min_us + servo_max_us) / 2) + biasUs;
 }
 
-void TR_ServoControl::setServoTiming(int hz, int minUs, int maxUs) {
+bool TR_ServoControl::servoTimingValid(int hz, int minUs, int maxUs) {
+    // #1141 item 3.  The duty math is
+    //     duty = pulse_us * servo_hz * max_duty / 1000000
+    // so hz == 0 gives duty 0 on every channel — indistinguishable from idle(),
+    // i.e. no pulse train and four relaxed fins, applied silently from a wire
+    // value.  A negative hz casts to ~4.29e9 and the 32-bit product wraps to an
+    // arbitrary duty.  Neither is a servo timing; both were accepted.
+    if (hz < kMinServoHz || hz > kMaxServoHz) return false;
+    if (minUs < kMinPulseUs || maxUs > kMaxPulseUs) return false;
+    if (maxUs - minUs < kMinPulseSpanUs) return false;
+    return true;
+}
+
+bool TR_ServoControl::setServoTiming(int hz, int minUs, int maxUs) {
+    // #1141 item 3: reject rather than apply.  Mirrors setFinCalibration()'s
+    // contract (#1137 item 2) — the previous timing stands, and the caller is
+    // told so it can decline to persist the value.
+    if (!servoTimingValid(hz, minUs, maxUs)) {
+        ESP_LOGE("SERVO",
+                 "[TIMING] REJECTED hz=%d min=%d max=%d (need %d-%d Hz, "
+                 "%d-%d us, span >= %d) — keeping hz=%d min=%d max=%d",
+                 hz, minUs, maxUs, kMinServoHz, kMaxServoHz,
+                 kMinPulseUs, kMaxPulseUs, kMinPulseSpanUs,
+                 servo_hz, servo_min_us, servo_max_us);
+        return false;
+    }
     servo_hz = hz;
     servo_min_us = minUs;
     servo_max_us = maxUs;
@@ -349,10 +407,20 @@ void TR_ServoControl::setServoTiming(int hz, int minUs, int maxUs) {
         timer_conf.timer_num       = LEDC_TIMERS[i];
         timer_conf.freq_hz         = static_cast<uint32_t>(hz);
         timer_conf.clk_cfg         = LEDC_AUTO_CLK;
-        ledc_timer_config(&timer_conf);
+        // #1141 item 3: begin() shouts when this fails and says why — "a silent
+        // failure here leaves one servo dead with everything else healthy
+        // (command path fine, no pulse on the pad)".  The same call was
+        // discarded here, on the path an operator uses to change timing.
+        const esp_err_t terr = ledc_timer_config(&timer_conf);
+        if (terr != ESP_OK) {
+            ESP_LOGE("SERVO", "[TIMING] servo %d LEDC timer reconfig FAILED at "
+                              "%d Hz: %s — that channel keeps the OLD period",
+                     i, hz, esp_err_to_name(terr));
+        }
     }
     // Re-center servos with new timing
     setPulse(0);
+    return true;
 }
 
 void TR_ServoControl::setPIDGains(float kp, float ki, float kd) {
@@ -380,6 +448,8 @@ void TR_ServoControl::setPIDIntegralSeparationThreshold(float threshold) {
 }
 
 void TR_ServoControl::resetPID() {
+    // #1141 item 4: a reset that leaves scaled gains in place is not a reset.
+    restoreBaseGains();
     pid.reset();
 }
 
@@ -391,10 +461,10 @@ void TR_ServoControl::enableGainSchedule(float v_ref, float v_min) {
 
 void TR_ServoControl::disableGainSchedule() {
     gain_schedule_enabled = false;
-    // Restore base gains
-    pid.setKp(kp_base);
-    pid.setKi(ki_base);
-    pid.setKd(kd_base);
+    // Restore base gains (#1141 item 4: through the one restore path, so the
+    // schedule_applied_ latch and the integrator are handled consistently).
+    schedule_applied_ = true;
+    restoreBaseGains();
 }
 
 void TR_ServoControl::applyGainSchedule(float velocity_ms) {
@@ -417,11 +487,37 @@ void TR_ServoControl::applyGainSchedule(float velocity_ms) {
     pid.setKp(kp_base * scale);
     pid.setKi(ki_base * scale);
     pid.setKd(kd_base * scale);
+    schedule_applied_ = true;   // #1141 item 4
+}
+
+void TR_ServoControl::restoreBaseGains() {
+    // #1141 item 4.  applyGainSchedule() mutates the PID in place and the only
+    // writer that ever put the unscaled gains back was disableGainSchedule(),
+    // reachable solely from the GAIN_SCHED_DISABLE command.  So on the
+    // ekf_ctrl_healthy FALLING edge the flight loop switches to control() --
+    // the pure-gyro rate-null path that exists precisely because the EKF is no
+    // longer trustworthy -- and runs it on gains still scaled by whatever the
+    // last healthy tick computed, up to GAIN_SCHEDULE_SCALE_CAP (3x).  The
+    // safe fallback inherited the unsafe path's gains.
+    if (!schedule_applied_) return;
+    pid.setKp(kp_base);
+    pid.setKi(ki_base);
+    pid.setKd(kd_base);
+    prev_gain_scale_ = 1.0f;
+    // The schedule resets the integrator on a >0.1 scale change for the same
+    // reason: a term accumulated under one gain is meaningless under another.
+    pid.resetIntegral();
+    schedule_applied_ = false;
 }
 
 void TR_ServoControl::controlWithGainSchedule(float roll_rate, float velocity_ms) {
     applyGainSchedule(velocity_ms);
-    control(roll_rate);
+    // #1141 item 4: controlToSetpoint(), NOT control().  control() now restores
+    // the base gains on entry — that is the whole point of the fix — so
+    // delegating to it here would undo the schedule this function just applied.
+    // controlAngle() already calls the inner loop directly for its own reasons;
+    // this now matches it.
+    controlToSetpoint(pid_setpoint, roll_rate);
 }
 
 void TR_ServoControl::controlAngle(float target_roll_deg,
