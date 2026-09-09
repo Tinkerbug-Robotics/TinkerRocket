@@ -94,6 +94,16 @@ PYBIND11_MODULE(_ekf, m) {
              py::arg("decl_rad"))
         .def("set_gps_noise_scale", &GpsInsEKF::setGpsNoiseScale,
              py::arg("scale"))
+        // #1135 item 1: the course aid's per-sample R and its floor/cap, so a
+        // replay can log how hard the aid is being weighted at each epoch.
+        // #1135: the aids' own precondition — a replay must be able to set it
+        // or it reproduces the pre-#1283 filter, not the shipped one.
+        .def("set_nose_first_flight", &GpsInsEKF::setNoseFirstFlight,
+             py::arg("nose_first"))
+        .def("get_nose_first_flight", &GpsInsEKF::getNoseFirstFlight)
+        .def("course_heading_r", &GpsInsEKF::courseHeadingR)
+        .def("set_course_noise", &GpsInsEKF::setCourseNoise,
+             py::arg("r_floor"), py::arg("r_ceiling"))
         .def("get_gps_noise_scale", &GpsInsEKF::getGpsNoiseScale)
         // #1190 shock gate: the settle window and its counters.
         .def("set_shock_gate_settle", &GpsInsEKF::setShockGateSettle, py::arg("settle_us"))

@@ -1062,8 +1062,10 @@ void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
 // Same scalar-heading Kalman as magMeasUpdate (H ∝ body-down d), but the
 // measurement comes from the GNSS velocity — independent of the mag and of the
 // attitude tilt-comp, so it has none of the in-flight circularity that
-// destabilized the mag update. NOTE: it observes the NOSE direction, so near
-// vertical it sees only ~sin(tilt) of an azimuth/roll error — weak when vertical.
+// destabilized the mag update. It observes the NOSE direction, so near vertical
+// it sees only ~sin(tilt) of an azimuth/roll error — #1135 item 1: that used to
+// be a comment while the model fused at a flat 13° σ regardless. It is now in
+// the model, via courseHeadingR() below.
 void GpsInsEKF::velCourseHeadingUpdate(const float vMeas_NED[3]) {
     float T_NED2B[3][3];
     Quat2DCM(T_NED2B, quat_BL_);
@@ -1076,10 +1078,48 @@ void GpsInsEKF::velCourseHeadingUpdate(const float vMeas_NED[3]) {
     while (y >  (float)M_PI) y -= 2.0f * (float)M_PI;
     while (y < -(float)M_PI) y += 2.0f * (float)M_PI;
 
-    const float R_course = 0.05f;   // ~13° course noise (rad²)
+    // #1135 item 1: R is per-sample, not constant — see the derivation on
+    // R_course_ in the header.  The old fixed 0.05 rad² claimed 13° at every
+    // attitude and every speed, including a near-vertical rocket whose course
+    // is wind and whose nose is not.
     const int   hidx[3] = {6, 7, 8};
     const float hval[3] = {2.0f*d[0], 2.0f*d[1], 2.0f*d[2]};
-    applyScalarMeasUpdate(hidx, hval, 3, y, R_course, 1e-9f, /*gate_gyro_bias=*/true);
+    applyScalarMeasUpdate(hidx, hval, 3, y, courseHeadingR(), 1e-9f, /*gate_gyro_bias=*/true);
+}
+
+// ─── Course-aid per-sample measurement noise (#1135 item 1) ──────────
+// σ_ψ ≈ (wind + α(q)·V) / V_h, with α(q) = α_ref·q_ref/q.  Everything comes
+// from state the filter already holds: NED velocity and geodetic altitude.
+// Density is the ISA troposphere/lower-stratosphere profile — this only has
+// to be right to a few tens of percent, because it enters a noise term that
+// is itself an order-of-magnitude judgement.
+float GpsInsEKF::courseHeadingR() const {
+    const float vn = vEst_NED_mps_[0], ve = vEst_NED_mps_[1], vd = vEst_NED_mps_[2];
+    const float vh = std::sqrt(vn*vn + ve*ve);
+    const float v  = std::sqrt(vn*vn + ve*ve + vd*vd);
+
+    const float h = (float)pEst_D_rrm_[2];
+    float rho;
+    if (h < 11000.0f) {
+        // ISA troposphere: T = 288.15 - 0.0065h, ρ = ρ0(T/T0)^4.2559
+        const float t_ratio = std::max(1.0f - 2.25577e-5f * h, 0.05f);
+        rho = 1.225f * std::pow(t_ratio, 4.2559f);
+    } else {
+        // Isothermal above the tropopause; scale height ≈ 6341 m.
+        rho = 0.36391f * std::exp(-(h - 11000.0f) / 6341.6f);
+    }
+    rho = std::max(rho, 1e-4f);
+
+    const float q = 0.5f * rho * v * v;
+    // α ∝ 1/q is unbounded as q → 0.  Cap it at a right angle: past that the
+    // "angle between nose and velocity" has stopped being a small-angle
+    // quantity and the aid is off anyway (R hits its ceiling well before).
+    const float alpha = std::min(COURSE_AOA_REF_RAD * COURSE_Q_REF_PA / std::max(q, 1.0f),
+                                 (float)M_PI_2);
+    const float sigma = (COURSE_WIND_MPS + alpha * v)
+                      / std::max(vh, COURSE_VH_FLOOR_MPS);
+
+    return std::min(std::max(sigma * sigma, R_course_), R_course_ceiling_);
 }
 
 // ─── Heading update by body↔world lateral-acceleration matching ─────

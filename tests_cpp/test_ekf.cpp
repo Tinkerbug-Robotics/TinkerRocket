@@ -1442,3 +1442,108 @@ TEST(EkfShockGate1190, CountersResetOnInitAndTheSettleSurvivesIt) {
     EXPECT_EQ(ekf.shockGateTrips(), 1u);
     EXPECT_EQ(ekf.shockGateHoldTicks(), 3u);
 }
+
+// ===========================================================================
+// #1135 item 1 — the course aid's per-sample measurement noise.
+//
+// The old model fused course-over-ground as a nose azimuth at a flat 0.05 rad²
+// (~13° σ) at every attitude and every speed. courseHeadingR() replaces that
+// with the two things that actually break the nose≈velocity premise: wind
+// (which the HORIZONTAL speed scales) and loss of aerodynamic restoring
+// authority as dynamic pressure falls. These tests pin the behaviour at the
+// regimes the four 2026-08-29 flights live in.
+// ===========================================================================
+namespace course1135 {
+
+// Deg → rad for readability in the expectations below.
+static float sig_deg(float R) { return (float)(std::sqrt((double)R) * 180.0 / M_PI); }
+
+static GpsInsEKF at(double alt_m, float vn, float ve, float vd) {
+    GpsInsEKF ekf;
+    ekf.setPosition(LAT_RAD, LON_RAD, alt_m);
+    ekf.setVelocity(vn, ve, vd);
+    return ekf;
+}
+
+}  // namespace course1135
+
+using namespace course1135;
+
+TEST(EkfCourseAid1135, HealthyMidCoastKeepsTheTunedFloor) {
+    // 45° flight path at 100 m/s in thick air: the premise holds, the aid
+    // should weigh exactly as it always did.
+    GpsInsEKF ekf = at(500.0, 70.7f, 0.0f, -70.7f);
+    EXPECT_NEAR(ekf.courseHeadingR(), 0.05f, 1e-6f);
+}
+
+TEST(EkfCourseAid1135, NearVerticalIsDeWeightedByTheWindGeometry) {
+    // The review's case: 200 m/s, 3° of tilt → 10.5 m/s of horizontal speed.
+    // A 5 m/s wind is then half the horizontal speed, so the course carries
+    // tens of degrees of azimuth error, not 13°.
+    GpsInsEKF ekf = at(500.0, 10.5f, 0.0f, -199.7f);
+    const float R = ekf.courseHeadingR();
+    EXPECT_GT(R, 0.05f);                 // above the floor
+    EXPECT_GT(sig_deg(R), 25.0f);        // and by a lot
+    EXPECT_LT(sig_deg(R), 40.0f);
+}
+
+TEST(EkfCourseAid1135, SlowingTowardApogeeDeWeightsThroughDynamicPressure) {
+    // Same 45° geometry, but at 25 m/s: q has fallen ~16x, so the trim angle
+    // of attack the vehicle can hold has grown by the same factor.
+    GpsInsEKF fast = at(500.0, 70.7f, 0.0f, -70.7f);
+    GpsInsEKF slow = at(500.0, 17.7f, 0.0f, -17.7f);
+    EXPECT_NEAR(fast.courseHeadingR(), 0.05f, 1e-6f);   // still on the floor
+    EXPECT_GT(slow.courseHeadingR(), fast.courseHeadingR());
+    EXPECT_GT(sig_deg(slow.courseHeadingR()), 20.0f);   // ~24°, not 13°
+    EXPECT_LT(sig_deg(slow.courseHeadingR()), 40.0f);
+}
+
+TEST(EkfCourseAid1135, ThinAirDeWeightsAtTheSameSpeed) {
+    // The owner's case: on a high flight the body stops following the velocity
+    // vector as the air thins, at a speed that was perfectly well behaved low
+    // down.  Same velocity, 15 km up.
+    GpsInsEKF low  = at(500.0,   35.0f, 0.0f, -35.0f);
+    GpsInsEKF high = at(15000.0, 35.0f, 0.0f, -35.0f);
+    EXPECT_GT(high.courseHeadingR(), low.courseHeadingR());
+}
+
+TEST(EkfCourseAid1135, DensityFallsMonotonicallyThroughTheTropopause) {
+    // The ISA profile is piecewise; the seam at 11 km must not step.
+    float prev = -1.0f;
+    for (double h = 0.0; h <= 20000.0; h += 500.0) {
+        GpsInsEKF ekf = at(h, 35.0f, 0.0f, -35.0f);
+        const float R = ekf.courseHeadingR();
+        EXPECT_TRUE(std::isfinite(R));
+        EXPECT_GE(R, prev - 1e-6f) << "non-monotonic at " << h << " m";
+        prev = R;
+    }
+    // And the seam itself is continuous to well under a percent.
+    GpsInsEKF below = at(10999.0, 35.0f, 0.0f, -35.0f);
+    GpsInsEKF above = at(11001.0, 35.0f, 0.0f, -35.0f);
+    EXPECT_NEAR(below.courseHeadingR(), above.courseHeadingR(),
+                0.01f * above.courseHeadingR());
+}
+
+TEST(EkfCourseAid1135, StraightUpIsCappedNotInfinite) {
+    // V_h → 0 is where the old flat R was most wrong and where a naive 1/V_h
+    // diverges.  The cap turns the update into a no-op instead of a NaN.
+    GpsInsEKF ekf = at(500.0, 0.0f, 0.0f, -200.0f);
+    const float R = ekf.courseHeadingR();
+    EXPECT_TRUE(std::isfinite(R));
+    EXPECT_NEAR(R, 4.0f, 1e-6f);
+}
+
+TEST(EkfCourseAid1135, FloorAndCeilingAreHonoured) {
+    GpsInsEKF ekf = at(500.0, 0.0f, 0.0f, -200.0f);
+    ekf.setCourseNoise(0.02f, 0.5f);
+    EXPECT_NEAR(ekf.courseHeadingR(), 0.5f, 1e-6f);
+    ekf.setVelocity(70.7f, 0.0f, -70.7f);
+    EXPECT_NEAR(ekf.courseHeadingR(), 0.02f, 1e-6f);
+}
+
+TEST(EkfCourseAid1135, RIsFiniteAtZeroVelocityAndZeroAltitude) {
+    GpsInsEKF ekf = at(0.0, 0.0f, 0.0f, 0.0f);
+    EXPECT_TRUE(std::isfinite(ekf.courseHeadingR()));
+    GpsInsEKF deep = at(-400.0, 0.0f, 0.0f, 0.0f);   // below sea level
+    EXPECT_TRUE(std::isfinite(deep.courseHeadingR()));
+}

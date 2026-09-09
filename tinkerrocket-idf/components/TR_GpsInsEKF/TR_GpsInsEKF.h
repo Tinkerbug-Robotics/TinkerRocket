@@ -280,6 +280,16 @@ public:
     // Settle window in µs (default 50 ms).  Configuration, so it survives
     // init() like the declination does.
     void setShockGateSettle(uint32_t settle_us) { shock_settle_us_ = settle_us; }
+
+    /// #1135 item 1: course-aid noise floor and cap (rad²).  Exposed so the
+    /// sim and host tests can drive the adaptive model to its limits.
+    void setCourseNoise(float r_floor, float r_ceiling) {
+        R_course_ = r_floor; R_course_ceiling_ = r_ceiling;
+    }
+    /// Effective per-sample R the course aid would use right now (rad²),
+    /// from the current state.  Public so a replay can log the weighting
+    /// without reaching into the update.
+    float courseHeadingR() const;
     uint32_t shockGateTrips()     const { return shock_gate_trips_; }
     uint32_t shockGateHoldTicks() const { return shock_hold_ticks_; }
     // True when the last update held the quaternion (it tripped, or fell inside
@@ -514,6 +524,48 @@ private:
     // the AHRS bandwidth plus pad vibration margin.
     float sigma_mag_uT_ = 0.5f;
     float sigma_accel_mps2_ = 0.05f;
+
+    // ── Course-heading aid noise model (#1135 item 1) ────────────────────
+    //
+    // velCourseHeadingUpdate fuses course over ground as a NOSE azimuth. That
+    // premise — nose along the velocity vector — is not a property of the
+    // vehicle, it is a property of the flight regime, and the filter can tell
+    // which regime it is in from state it already carries.
+    //
+    // Two things break it, and both are computable here:
+    //
+    //  1. WIND. The nose trims to the AIR-relative velocity; the course is the
+    //     GROUND-relative one. They differ by the wind, and the azimuth error
+    //     that produces is set by the HORIZONTAL speed, not the total: near
+    //     vertical the horizontal component is small and a crosswind swings
+    //     the course through a large angle while the nose barely moves. At
+    //     200 m/s and 3° of tilt the horizontal speed is 10.5 m/s, so a 10 m/s
+    //     crosswind puts the course ~45° off the nose — fused today at 13° σ.
+    //
+    //  2. DYNAMIC PRESSURE. The restoring moment that holds angle of attack
+    //     small scales with q = ½ρV². As the vehicle slows toward apogee, or
+    //     as ρ falls on a high flight, the same disturbing moment buys a
+    //     larger trim AoA — so the expected AoA goes as 1/q. That AoA is an
+    //     angle between the nose and the velocity vector, and it reaches the
+    //     azimuth through the same V/V_h geometry as the wind term.
+    //
+    // Combined, per sample, as a 1σ heading error:
+    //     σ_ψ ≈ (COURSE_WIND_MPS + α(q)·V) / max(V_h, COURSE_VH_FLOOR_MPS)
+    //     α(q) = COURSE_AOA_REF_RAD · COURSE_Q_REF_PA / max(q, tiny)
+    // floored at R_course_ so the tuned base still rules in the good regime,
+    // and capped at R_course_ceiling_ so S stays finite when V_h → 0 (the
+    // update is then effectively a no-op, which is the honest answer: a
+    // vertical rocket's course carries no azimuth information).
+    //
+    // This replaces nothing else: the post-apogee cut-off (setNoseFirstFlight)
+    // is a separate, harder fact — under a canopy the premise is not weak, it
+    // is false — and stays.
+    float R_course_ = 0.05f;          // rad², ~13° — GNSS course noise, the floor
+    float R_course_ceiling_ = 4.0f;   // rad², ~115° — effectively a no-op
+    static constexpr float COURSE_WIND_MPS    = 5.0f;    // assumed wind aloft, 1σ
+    static constexpr float COURSE_VH_FLOOR_MPS = 1.0f;   // keeps the divide finite
+    static constexpr float COURSE_AOA_REF_RAD = 0.035f;  // ~2° of AoA at q_ref
+    static constexpr float COURSE_Q_REF_PA    = 1000.0f; // ≈ 40 m/s at sea level
 
     // Magnetic declination (rad, EAST-positive); added to the measured magnetic
     // heading to yield a true-north heading.  Set from GPS+WMM at fix; 0 until.
