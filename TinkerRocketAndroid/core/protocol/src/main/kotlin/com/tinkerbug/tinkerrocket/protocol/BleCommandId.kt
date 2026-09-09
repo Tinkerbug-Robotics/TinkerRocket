@@ -113,4 +113,18 @@ public object BleCommandId {
     public const val OTA_BEGIN: Int = 70           // [target u8][size u32][sha256 32 B]
     public const val OTA_FINISH: Int = 71
     public const val OTA_ABORT: Int = 72
+
+    /**
+     * #1271: acknowledge the blind-window launch record, clearing
+     * RSS_FLAG_BLIND_LAUNCH (RocketStorageStats.blindLaunch) on the out
+     * computer and its NVS copy.
+     *
+     * BLE only, deliberately absent from the LoRa uplink table: it erases the
+     * only record that a flight's data was lost, so it should require physical
+     * proximity rather than being reachable from a ground station.
+     *
+     * The out computer refuses the clear if a further loss latched after the
+     * storage frame the operator acted on; the next frame then re-shows it.
+     */
+    public const val ACK_BLIND_LAUNCH: Int = 73
 }

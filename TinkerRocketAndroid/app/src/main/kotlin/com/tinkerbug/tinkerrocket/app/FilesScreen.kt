@@ -125,6 +125,15 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
         val bsStorage by session.bsStorage.collectAsState()
         StorageCard(session.isBaseStation, rocketStorage, bsStorage)
 
+        // #1271: ABOVE/OUTSIDE StorageCard's own `initialized` gate on purpose.
+        // StorageCard bails with `else -> return` when the flight log did not
+        // come up, and that is exactly the state in which a lost flight most
+        // needs saying. An advisory, never a go/no-go input: the vehicle is
+        // fine, a past dataset is gone.
+        if (!session.isBaseStation && rocketStorage?.blindLaunch == true) {
+            BlindLaunchAdvisory(onAcknowledge = { session.ackBlindLaunch() })
+        }
+
         // iOS totalPages: rocket flightCount is authoritative (also kills the
         // phantom next page an exactly-full single page would imply); the BS
         // reports no count → discovered mode.
@@ -600,3 +609,37 @@ private suspend fun downloadAndConvert(
 
 private fun shareCsvIfPresent(context: Context, file: FileInfo) =
     FlightCache.shareCsv(context, csvFileFor(context, file.name))
+
+/**
+ * #1271: a launch was lost to a phone-IO blind window — the rocket flew while
+ * the app was transferring files, so the out computer never received the
+ * ascent. Persisted on the board, so it survives the power cycle between the
+ * lost flight and the operator connecting to download.
+ *
+ * Acknowledging does not optimistically clear the flag locally: the next 0xCC
+ * storage frame is the confirmation, and the out computer refuses the clear
+ * outright if a further loss landed after the frame this tap was based on.
+ */
+@Composable
+private fun BlindLaunchAdvisory(onAcknowledge: () -> Unit) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "A launch was not recorded",
+                style = MaterialTheme.typography.bodyMedium,
+                color = tr.statusIdle,
+            )
+            Text(
+                "The rocket launched while the app was transferring files, so the "
+                    + "flight computer's data for that ascent was never received. "
+                    + "It cannot be recovered.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            TextButton(onClick = onAcknowledge) { Text("Acknowledge") }
+        }
+    }
+}

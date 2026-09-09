@@ -1459,6 +1459,24 @@ static constexpr uint8_t RSS_FLAG_INITIALIZED  = (1u << 0);  // flight log up
 // buffer reclaimed space to arm a flight). Surfaces the event so a silently
 // dropped-then-reclaimed card is observable in the app's storage view.
 static constexpr uint8_t RSS_FLAG_AUTO_EVICTED = (1u << 1);
+// #1271/#917: at least one launch was lost to a phone-IO blind window, and the
+// operator has not acknowledged it. NOTE this is RocketStorageStatsData bit 2,
+// NOT BaseStationStorageStatsData bit 2 (BSS_FLAG_RETRIED, below) — the two
+// structs share a notify characteristic behind 0xCC/0xCD discriminators and
+// their bit 2s mean unrelated things.
+//
+// Unlike RSS_FLAG_AUTO_EVICTED this one is NOT per-session: it is persisted in
+// NVS on the out computer and survives the power cycle between the lost flight
+// and the operator connecting to download, which is the whole point — the
+// counter it replaces was RAM-only and read nowhere, so a flight lost this way
+// was indistinguishable from a flight that was simply never flown. Cleared by
+// an explicit acknowledgement (BLE command 73), not by time or by flying again.
+//
+// The out computer sets it only when the window was long enough to have
+// swallowed the ascent; a short pause merely clips the front of a log that
+// still exists, because the OC's launch edge is delayed rather than missed.
+// See out_computer/main/blind_window_policy.h for that rule.
+static constexpr uint8_t RSS_FLAG_BLIND_LAUNCH = (1u << 2);
 
 // BS→app flash-space stats for the base station's own log filesystem.  Rides the
 // file_ops characteristic behind a 0xCD discriminator.  Bytes (not blocks) since

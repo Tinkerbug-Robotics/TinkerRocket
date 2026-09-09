@@ -1708,7 +1708,49 @@ struct StorageBarView: View {
                      total: s.totalBytes,
                      autoEvicted: s.autoEvicted)
             }
+
+            // #1271: OUTSIDE the `initialized` gate above, deliberately. This
+            // says a past flight's data was lost, which is independent of
+            // whether the log surface is up right now — and if the log failed
+            // to initialise, the whole card disappears, which is exactly the
+            // state in which the operator most needs to be told.
+            if let s = device.rocketStorage, s.blindLaunch {
+                blindLaunchAdvisory()
+            }
         }
+    }
+
+    // #1271: a launch was lost to a phone-IO blind window. An advisory line,
+    // NOT a go/no-go input: the vehicle is fine, a past dataset is missing —
+    // and per the house rule a new status line sits below the state, it never
+    // recolors the state banner.
+    //
+    // We deliberately do NOT locally clear `blindLaunch` on tap. If the write
+    // failed, echoing success here would hide it — the exact silence this
+    // feature exists to remove. The next storage frame (~3 s) is the
+    // confirmation, and the out computer refuses the clear outright if a
+    // further loss landed after the frame this tap was based on.
+    @ViewBuilder
+    private func blindLaunchAdvisory() -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundColor(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("A launch was not recorded")
+                    .font(.subheadline).fontWeight(.medium)
+                Text("The rocket launched while the app was transferring files, "
+                     + "so the flight computer's data for that ascent was never "
+                     + "received. It cannot be recovered.")
+                    .font(.caption).foregroundColor(.secondary)
+                Button("Acknowledge") {
+                    device.sendRawCommand(73)
+                }
+                .font(.caption)
+                .padding(.top, 2)
+            }
+            Spacer()
+        }
+        .padding(12)
     }
 
     private func card(title: String, subtitle: String,

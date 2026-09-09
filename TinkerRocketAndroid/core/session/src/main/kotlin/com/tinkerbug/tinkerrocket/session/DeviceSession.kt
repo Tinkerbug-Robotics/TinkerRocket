@@ -1037,6 +1037,19 @@ public class DeviceSession(
     }
 
     /**
+     * #1271: acknowledge that a launch was lost to a phone-IO blind window.
+     *
+     * Deliberately does NOT locally clear `rocketStorage.blindLaunch`. Echoing
+     * success would hide a failed clear, which is exactly the silence this
+     * feature exists to remove — and the out computer legitimately REFUSES the
+     * clear when a further loss landed after the frame the operator acted on.
+     * The next 0xCC storage frame (~3 s) is the confirmation either way.
+     */
+    public fun ackBlindLaunch() {
+        sendCommandFrame(Commands.ackBlindLaunch())
+    }
+
+    /**
      * #159 power-on press: lights the busy state and arms a 3 min watchdog
      * before commanding the rail ON.  Cleared by the first pwr_pin_on
      * telemetry frame, by the watchdog (a genuinely-dropped command), or by

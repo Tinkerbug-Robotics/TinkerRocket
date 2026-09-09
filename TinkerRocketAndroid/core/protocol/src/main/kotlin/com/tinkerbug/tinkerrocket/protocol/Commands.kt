@@ -105,6 +105,13 @@ public object Commands {
         frame(BleCommandId.LORA_TX_DISABLE_OC) { bool(disabled) }
 
     /**
+     * cmd 73 — acknowledge the blind-window launch record (#1271). No payload:
+     * the out computer clears only up to what it has actually reported, so the
+     * app does not need to (and cannot) name a count — the flag is one bit.
+     */
+    public fun ackBlindLaunch(): ByteArray = frame(BleCommandId.ACK_BLIND_LAUNCH) {}
+
+    /**
      * cmd 12 — ServoConfigData, 22 B (#267 grew it from 14):
      * `[bias_us i16 ×4][hz i16][min_us i16][max_us i16][fin_min_deg f32][fin_max_deg f32]`.
      * Missing bias entries pad with 0, extras are ignored (iOS indexes 0..<4).

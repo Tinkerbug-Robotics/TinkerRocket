@@ -740,6 +740,20 @@ target_include_directories(test_piezo_wave_policy PRIVATE
 target_link_libraries(test_piezo_wave_policy GTest::gtest_main)
 gtest_discover_tests(test_piezo_wave_policy)
 
+# ---------- test_blind_window_policy ----------
+# #1271/#917: a launch during a BLE-download pause. The OC's launch edge is
+# DELAYED by the pause rather than missed, so a short window leaves a log that
+# merely starts late — only a long one loses the flight. These pin the duration
+# floor and the sim exclusion, both of which exist to stop a persistent
+# operator-facing warning firing when nothing was actually lost.
+add_executable(test_blind_window_policy test_blind_window_policy.cpp)
+target_include_directories(test_blind_window_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_blind_window_policy GTest::gtest_main)
+gtest_discover_tests(test_blind_window_policy)
+
 # ---------- test_gnss_framing ----------
 # GNSS bring-up baud detection used to accept ANY byte, so a 9600 stream sampled
 # at 38400 read as "alive" and ran a ~3 s recovery branch per wrong baud (bench
