@@ -97,6 +97,7 @@ fun ScannerScreen(
     val discovered by fleet.discoveredDevices.collectAsState()
     val scanning by fleet.isScanning.collectAsState()
     val status by fleet.statusMessage.collectAsState()
+    val reconnecting by fleet.isReconnecting.collectAsState()
     val tr = TrTheme.colors
 
     Column(
@@ -180,6 +181,17 @@ fun ScannerScreen(
                 text = status,
                 modifier = Modifier.weight(1f),
             )
+            // #1088: the only way to stop a reconnect ladder. disconnect()
+            // cannot reach one (it needs the device in the fleet map, and that
+            // map is empty for the ladder's whole run), so a ladder the
+            // operator has given up on ran to its end with the scanner
+            // unusable underneath it.
+            if (reconnecting) {
+                TrCompactButton(
+                    "Stop", tr.statusWarn,
+                    onClick = { fleet.cancelAllReconnects() },
+                )
+            }
         }
 
         TrCard {
