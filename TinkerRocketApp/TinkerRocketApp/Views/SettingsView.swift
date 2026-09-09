@@ -1473,7 +1473,23 @@ struct SettingsView: View {
         v == v.rounded() ? String(Int(v)) : String(v)
     }
 
-    private func parseDouble(_ s: String, fallback: Double) -> Double { Double(s) ?? fallback }
+    /// #1079: `Double(String)` accepts "inf"/"infinity"/"nan" case-insensitively
+    /// and returns infinity for any literal that overflows — a plain run of
+    /// digits does it. The servo and roll apply paths then narrow with
+    /// `Int(...)`, which TRAPS on a non-finite Double and kills the app. Every
+    /// numeric settings field goes through here, so one guard covers them all;
+    /// a rejected entry falls back, which is what Android's `toIntOrNull()`
+    /// already did.
+    private func parseDouble(_ s: String, fallback: Double) -> Double {
+        guard let d = Double(s), d.isFinite else { return fallback }
+        return d
+    }
+
+    /// Float twin of `parseDouble` — same non-finite guard (#1079).
+    private func parseFloat(_ s: String, fallback: Float) -> Float {
+        guard let f = Float(s), f.isFinite else { return fallback }
+        return f
+    }
 
     // MARK: - Helpers
 
@@ -1609,14 +1625,16 @@ struct SettingsView: View {
     }
 
     private func applyRollControlConfig() {
-        let delayMs = UInt16(clamping: Int(Double(sRollDelayMs) ?? Double(profile.rollDelayMs)))
-        let rateCap = max(0, Float(sRateCapDps) ?? profile.rateCapDps)
-        let kpAngle = max(0, Float(sKpAngle) ?? profile.kpAngle)
-        let iwind   = max(0, Float(sIntegralSep) ?? profile.integralSepThreshold)
+        // #1079: parseDouble/parseFloat, never the bare initialisers — an
+        // "inf" here reached `Int(...)` and trapped.
+        let delayMs = UInt16(clamping: Int(parseDouble(sRollDelayMs, fallback: Double(profile.rollDelayMs))))
+        let rateCap = max(0, parseFloat(sRateCapDps, fallback: profile.rateCapDps))
+        let kpAngle = max(0, parseFloat(sKpAngle, fallback: profile.kpAngle))
+        let iwind   = max(0, parseFloat(sIntegralSep, fallback: profile.integralSepThreshold))
         // Clamped to the firmware's accepted range: the FC rejects anything
         // above it outright, and a gate that never opens means no roll control
         // for the whole flight.
-        let minSpeed = min(300, max(0, Float(sRollMinSpeed) ?? profile.rollMinSpeedMps))
+        let minSpeed = min(300, max(0, parseFloat(sRollMinSpeed, fallback: profile.rollMinSpeedMps)))
         let useAngle = profile.useAngleControl
         updateProfile {
             $0.rollDelayMs = delayMs
@@ -1644,18 +1662,18 @@ struct SettingsView: View {
     }
 
     private func applyGuidanceConfig() {
-        let navGain    = max(0, Float(sPnNavGain)    ?? profile.pnNavGain)
-        let maxAccel   = max(0, Float(sPnMaxAccel)   ?? profile.pnMaxAccel)
-        let accelToFin = max(0, Float(sPnAccelToFin) ?? profile.pnAccelToFin)
-        let maxFin     = max(0, Float(sPnMaxFin)     ?? profile.pnMaxFinDeg)
-        let minSpeed   = max(0, Float(sPnMinSpeed)   ?? profile.pnMinSpeed)
+        let navGain    = max(0, parseFloat(sPnNavGain,    fallback: profile.pnNavGain))
+        let maxAccel   = max(0, parseFloat(sPnMaxAccel,   fallback: profile.pnMaxAccel))
+        let accelToFin = max(0, parseFloat(sPnAccelToFin, fallback: profile.pnAccelToFin))
+        let maxFin     = max(0, parseFloat(sPnMaxFin,     fallback: profile.pnMaxFinDeg))
+        let minSpeed   = max(0, parseFloat(sPnMinSpeed,   fallback: profile.pnMinSpeed))
         let coastDelay = profile.pnCoastDelayMs  // inert in FW; guidance activation = rollDelayMs (Activation Delay)
-        let targetAlt  = max(0, Float(sPnTargetAlt)  ?? profile.pnTargetAltM)
+        let targetAlt  = max(0, parseFloat(sPnTargetAlt,  fallback: profile.pnTargetAltM))
         // Station-keep gains (#534).  Same floor-of-0 idiom as the rest — note
         // Float("nan") survives it; the FC's (0, 10] gates are the real guard and
         // they log on rejection.  Both laws' values are sent every time.
-        let kpPos      = max(0, Float(sPnKpPos)      ?? profile.pnKpPos)
-        let kdVel      = max(0, Float(sPnKdVel)      ?? profile.pnKdVel)
+        let kpPos      = max(0, parseFloat(sPnKpPos,      fallback: profile.pnKpPos))
+        let kdVel      = max(0, parseFloat(sPnKdVel,      fallback: profile.pnKdVel))
         updateProfile {
             $0.pnNavGain = navGain; $0.pnMaxAccel = maxAccel; $0.pnAccelToFin = accelToFin
             $0.pnMaxFinDeg = maxFin; $0.pnMinSpeed = minSpeed; $0.pnCoastDelayMs = coastDelay
