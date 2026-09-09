@@ -195,22 +195,39 @@ public class RealBleTransport(
         // Service discovery + characteristic resolution is part of connect():
         // above the seam the link is "connected" only when usable (iOS folds
         // discovery into the choreography the same way).
-        val g = gatt!!
-        val discovered = CompletableDeferred<Int>()
-        pendingDiscovery = discovered
-        check(g.discoverServices()) { "discoverServices() refused" }
-        val dStatus = try {
-            withTimeout(DISCOVERY_TIMEOUT_MS) { discovered.await() }
-        } finally {
-            pendingDiscovery = null
-        }
-        if (dStatus != 0) throw BleTransportException("service discovery failed, status $dStatus")
+        //
+        // #1065: every throw below happens with the LINK UP and `gatt`
+        // non-null, and the two close sites above only cover the pre-link
+        // failures. FleetManager.tryConnect catches the exception and drops
+        // the transport object — which was only ever a local — leaving an
+        // ACL-connected BluetoothGatt nothing in the app holds a reference to,
+        // for the life of the process. It also holds one of the platform's
+        // seven client slots and keeps the peripheral from advertising as
+        // connectable to anything else. Leave the transport in the same state
+        // a failed connect leaves it, which is what tryConnect assumes.
+        try {
+            val g = gatt!!
+            val discovered = CompletableDeferred<Int>()
+            pendingDiscovery = discovered
+            check(g.discoverServices()) { "discoverServices() refused" }
+            val dStatus = try {
+                withTimeout(DISCOVERY_TIMEOUT_MS) { discovered.await() }
+            } finally {
+                pendingDiscovery = null
+            }
+            if (dStatus != 0) throw BleTransportException("service discovery failed, status $dStatus")
 
-        val service = g.getService(UUID.fromString(TrCharacteristic.SERVICE_UUID))
-            ?: throw BleTransportException("TinkerRocket service missing")
-        for (tc in TrCharacteristic.entries) {
-            chars[tc] = service.getCharacteristic(UUID.fromString(tc.uuid))
-                ?: throw BleTransportException("characteristic ${tc.name} missing")
+            val service = g.getService(UUID.fromString(TrCharacteristic.SERVICE_UUID))
+                ?: throw BleTransportException("TinkerRocket service missing")
+            for (tc in TrCharacteristic.entries) {
+                chars[tc] = service.getCharacteristic(UUID.fromString(tc.uuid))
+                    ?: throw BleTransportException("characteristic ${tc.name} missing")
+            }
+        } catch (t: Throwable) {
+            gatt?.close()
+            gatt = null
+            chars.clear()
+            throw t
         }
         emit(TransportEvent.Connected(DEFAULT_MTU))
     }

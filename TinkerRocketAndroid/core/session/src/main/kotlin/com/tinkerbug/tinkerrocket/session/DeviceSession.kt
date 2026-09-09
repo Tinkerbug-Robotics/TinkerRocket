@@ -413,14 +413,39 @@ public class DeviceSession(
         // discarded, which is what kept every past session alive.
         eventsJob = sessionScope.launch { transport.events.collect { onTransportEvent(it) } }
         return sessionScope.launch {
+            // #1066: the choreography is no longer all-or-nothing. Four of
+            // these steps can throw (requestMtu and the three CCCDs), and a
+            // throw used to abandon every step after it while _isConnected had
+            // already been set true on the first line — a silent "Connected"
+            // session with no notifications and no readback, which nothing
+            // retries because the link is up. iOS subscribes each
+            // characteristic independently in its discovery callback, never
+            // requests an MTU, and fires its readback from an unconditional
+            // asyncAfter, so one failed subscription costs only that
+            // characteristic. Same shape here, with one exception: TELEMETRY
+            // is load-bearing, so if it fails we drop the transport and let
+            // FleetManager's ladder rebuild the link rather than sit in a
+            // half-connected state.
+            //
+            // A bigger MTU is an optimisation — never worth the telemetry
+            // subscription.
+            runCatching { transport.requestMtu(REQUESTED_MTU) }
+            val telemetryUp = runCatching {
+                transport.enableNotifications(TrCharacteristic.TELEMETRY)
+            }.isSuccess
+            if (!telemetryUp) {
+                // Not connected in any useful sense; the ladder takes over.
+                runCatching { transport.disconnect() }
+                return@launch
+            }
             _isConnected.value = true
-            transport.requestMtu(REQUESTED_MTU)
-            transport.enableNotifications(TrCharacteristic.TELEMETRY)
             // Time sync FIRST — the firmware stamps log/file timestamps from
             // it, so it must land before anything else can start file I/O.
             sendTimeSyncNow()
-            transport.enableNotifications(TrCharacteristic.FILE_OPS)
-            transport.enableNotifications(TrCharacteristic.FILE_TRANSFER)
+            // File transfers are the only thing these two carry: losing one
+            // must not cost telemetry, the readback or the focus pin.
+            runCatching { transport.enableNotifications(TrCharacteristic.FILE_OPS) }
+            runCatching { transport.enableNotifications(TrCharacteristic.FILE_TRANSFER) }
             startRssiTicker()
             delay(CONNECT_CONFIG_DELAY_MS)
             writeCommand(Commands.bare(BleCommandId.REQUEST_CONFIG))
@@ -440,6 +465,20 @@ public class DeviceSession(
      * new one on the next connect and never revives this one.
      */
     public fun close() {
+        // #1053: run the per-connection teardown HERE, not from the transport
+        // event. FleetManager registers its disconnect watcher UNDISPATCHED
+        // before connect(), so it takes slot 0 on the transport's SharedFlow
+        // and its handleDisconnect closes this session — cancelling
+        // sessionScope — before this session's own (later, plain-launch)
+        // collector is resumed. onDisconnect() was therefore unreachable in
+        // production: a drop mid-download left the suspended caller waiting
+        // forever, the announcer kept its one-shot flags, and isConnected
+        // stayed true. Idempotent and safe on a session that never started;
+        // completing the download's deferred still works after the cancel
+        // because the awaiting coroutine lives on the fleet scope. The
+        // TransportEvent.Disconnected route stays for standalone/replay users
+        // that have no fleet watcher.
+        onDisconnect()
         sessionScope.cancel()
     }
 

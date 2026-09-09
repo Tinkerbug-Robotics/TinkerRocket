@@ -431,6 +431,15 @@ public class FleetManager<S : Any>(
      * a disconnect watcher, and the connect-time cmd-45 focus re-push.
      */
     private fun adopt(deviceId: String, advertisedName: String, transport: BleTransport) {
+        // #1064: never orphan a session by overwriting its map entry. If an
+        // adoption for this device is already live on a DIFFERENT transport,
+        // release it here — the map is the only reference either one has.
+        _devices.value[deviceId]?.let { existing ->
+            if (existing.transport !== transport) {
+                sessionFactory.close(existing.session)
+                runCatching { existing.transport.disconnect() }
+            }
+        }
         val generation = (generations[deviceId] ?: 0) + 1
         generations[deviceId] = generation
 
@@ -535,6 +544,17 @@ public class FleetManager<S : Any>(
     public fun resumeLastSession() {
         val last = lastSession.loadLastConnected() ?: return
         if (_devices.value.isNotEmpty()) return          // already connected
+        // #1064: a reconnect ladder for this device is already doing exactly
+        // what a resume would do. _devices is EMPTY for the whole run of a
+        // ladder (handleDisconnect removes the device before starting it), so
+        // the guard above does not cover this — and MainActivity re-runs
+        // resumeLastSession on every configuration change (no
+        // android:configChanges in the manifest). A rotation mid-ladder
+        // therefore ran tryConnect(autoConnect = true) alongside the ladder's
+        // tryConnect(autoConnect = false) for the same device; both can
+        // succeed, and the second adopt() used to overwrite the map entry,
+        // orphaning the first session with its GATT still open.
+        if (reconnectJobs[last.deviceId]?.isActive == true) return
         resumeJob?.cancel()
         resumeJob = scope.launch {
             try {

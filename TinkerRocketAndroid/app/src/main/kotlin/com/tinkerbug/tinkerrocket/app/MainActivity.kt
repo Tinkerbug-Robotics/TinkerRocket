@@ -201,6 +201,7 @@ class MainActivity : ComponentActivity() {
                                     2 -> MapTab(
                                         container = container,
                                         session = activeDevice.session,
+                                        deviceKey = activeDevice.deviceId,   // #1056: reset only for another device
                                     )
                                     else -> SettingsScreen(
                                         store = container.profileStore,
