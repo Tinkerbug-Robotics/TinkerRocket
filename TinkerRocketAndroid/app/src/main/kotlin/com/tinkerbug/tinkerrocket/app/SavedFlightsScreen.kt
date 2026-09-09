@@ -26,6 +26,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.material3.AlertDialog
 
 /**
  * Flights already downloaded to this phone — browsable with nothing connected.
@@ -46,7 +47,10 @@ fun SavedFlightsScreen(onBack: () -> Unit) {
 
     // Re-listed on every entry: a download that happened while connected must
     // show up here without an app restart.
-    val flights = remember { FlightCache.listSavedFlights(context) }
+    // #1080: a delete has to re-list, so this is state rather than a one-shot
+    // remember.
+    var flights by remember { mutableStateOf(FlightCache.listSavedFlights(context)) }
+    var flightToDelete by remember { mutableStateOf<FlightCache.SavedFlight?>(null) }
 
     var chartCsv by remember { mutableStateOf<File?>(null) }
     chartCsv?.let { csv ->
@@ -85,9 +89,37 @@ fun SavedFlightsScreen(onBack: () -> Unit) {
                     flight = flight,
                     onChart = { flight.csv?.let { chartCsv = it } },
                     onShare = { FlightCache.shareFlight(context, listOf(flight.bin, flight.csv, FlightCache.summaryFileFor(context, flight.name))) },
+                    onDelete = { flightToDelete = flight },
                 )
             }
         }
+    }
+
+    // #1080: confirm first — this is the only copy once the board's has been
+    // deleted, and the wording says WHERE it is being deleted from (the Files
+    // screen's Delete is the device one).
+    flightToDelete?.let { doomed ->
+        AlertDialog(
+            onDismissRequest = { flightToDelete = null },
+            title = { Text("Delete from this phone?") },
+            text = {
+                Text(
+                    "\"${doomed.displayName}\" and its CSV will be removed from this " +
+                        "phone. The copy on the rocket is not affected — delete that from " +
+                        "the Files screen while connected.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    FlightCache.deleteSavedFlight(context, doomed)
+                    flights = FlightCache.listSavedFlights(context)
+                    flightToDelete = null
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { flightToDelete = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 
@@ -96,6 +128,7 @@ private fun SavedFlightRow(
     flight: FlightCache.SavedFlight,
     onChart: () -> Unit,
     onShare: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
@@ -126,6 +159,8 @@ private fun SavedFlightRow(
                 // to say why its buttons are dead rather than just disabling them.
                 OutlinedButton(onClick = onChart, enabled = flight.hasCsv) { Text("Chart") }
                 OutlinedButton(onClick = onShare, enabled = flight.hasAnyFile) { Text("Share") }   // #1067: bin-only flights export too
+                // #1080: the third verb — see FlightCache.deleteSavedFlight.
+                OutlinedButton(onClick = onDelete) { Text("Delete") }
             }
         }
     }

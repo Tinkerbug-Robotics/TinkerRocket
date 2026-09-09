@@ -741,6 +741,96 @@ class DeviceSessionTest {
         assertTrue(h.fw.ops.none { it == "write:COMMAND:20" }, "no readback on a dead link")
     }
 
+    // ── Sim stop + ground test (#1061 #1084) ─────────────────────────────
+
+    @Test
+    fun stopSimulation_relaysToTheFocusedRocketOnABaseStationLink() = runTest {
+        val h = startedSession(type = BleDeviceType.BASE_STATION, focusSeed = 3) {
+            configIdentityJson = null
+        }
+        advanceTimeBy(1000)
+        runCurrent()
+        h.session.markSimLaunched()
+        runCurrent()
+        h.session.stopSimulation()
+        runCurrent()
+        // #1061: wrapped for rocket 3 — a bare cmd 7 on a BS link would hit
+        // whoever the BS is pinned to, or nobody.
+        val last = h.fw.commandFrames.last()
+        assertContentEquals(Commands.relayToRocket(3, Commands.bare(BleCommandId.SIM_STOP)), last)
+        assertFalse(h.session.simLaunched.value, "the banner clears with the send")
+    }
+
+    @Test
+    fun stopSimulation_sendsBareOnADirectRocketLink() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        h.session.markSimLaunched()
+        h.session.stopSimulation()
+        runCurrent()
+        assertContentEquals(Commands.bare(BleCommandId.SIM_STOP), h.fw.commandFrames.last())
+    }
+
+    @Test
+    fun simLatch_advancesOnRelayedFramesToo() = runTest {
+        // #1061: the latch sat below the relayed-path return, so on a BS link
+        // it never advanced and the banner could not clear itself.
+        val h = startedSession(type = BleDeviceType.BASE_STATION) { configIdentityJson = null }
+        runCurrent()
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 1)
+        runCurrent()
+        h.session.markSimLaunched()
+        runCurrent()
+        assertTrue(h.session.simLaunched.value)
+        h.fw.emitTelemetry(state = "BOOST", sourceRocketId = 1)
+        runCurrent()
+        assertTrue(h.session.simLaunched.value, "still running")
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 1)
+        runCurrent()
+        assertFalse(h.session.simLaunched.value, "sim over -> banner clears")
+    }
+
+    @Test
+    fun groundTest_startsAndStops_andNeverOnABaseStationLink() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        h.session.setGroundTestActive(true)
+        runCurrent()
+        assertTrue(h.session.groundTestActive.value)
+        assertContentEquals(Commands.bare(BleCommandId.GROUND_TEST_START), h.fw.commandFrames.last())
+        h.session.setGroundTestActive(false)
+        runCurrent()
+        assertFalse(h.session.groundTestActive.value)
+        assertContentEquals(Commands.bare(BleCommandId.GROUND_TEST_STOP), h.fw.commandFrames.last())
+
+        // A BS link has no dispatch for 15/16 — refuse rather than send.
+        val bs = startedSession(type = BleDeviceType.BASE_STATION) { configIdentityJson = null }
+        advanceTimeBy(1000)
+        runCurrent()
+        val before = bs.fw.commandFrames.size
+        bs.session.setGroundTestActive(true)
+        runCurrent()
+        assertFalse(bs.session.groundTestActive.value)
+        assertEquals(before, bs.fw.commandFrames.size)
+    }
+
+    @Test
+    fun groundTestFlag_dropsOnDisconnect() = runTest {
+        // The FC keeps running its mix, but this app can no longer stop it —
+        // so it must not keep offering to (#1084).
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        h.session.setGroundTestActive(true)
+        runCurrent()
+        assertTrue(h.session.groundTestActive.value)
+        h.session.close()
+        runCurrent()
+        assertFalse(h.session.groundTestActive.value)
+    }
+
     // ── Sim banner latch ─────────────────────────────────────────────────
 
     @Test

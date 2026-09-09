@@ -155,6 +155,12 @@ fun DashboardScreen(
     // ground test is allowed to move control surfaces.
     val simLaunched by session.simLaunched.collectAsState()
     val onPad = telemetry.state == "READY" || telemetry.state == "PRELAUNCH"
+    val groundTestActive by session.groundTestActive.collectAsState()
+    // #1061: the rocket's REPORTED sim bit OR the local launch latch. The
+    // latch alone dies on a BLE reconnect (a new DeviceSession per reconnect),
+    // which would make the Stop control vanish mid-sim; telemetry keeps the
+    // banner up as long as the sim actually runs. Same rule as iOS (#393).
+    val simBannerVisible = simLaunched || telemetry.simActive
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -411,6 +417,67 @@ fun DashboardScreen(
             }
         }
 
+        // #1061: SIM MODE banner with its own Stop. Android launched
+        // simulations and then showed nothing at all: it decoded the sim bit
+        // and never read it, and had no sender for SIM_STOP anywhere — so a
+        // simulated flight was indistinguishable from a real one on screen,
+        // and the only way to end one was to power-cycle the rocket.
+        if (simBannerVisible) {
+            com.tinkerbug.tinkerrocket.app.theme.TrCard {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "SIM MODE",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = tr.statusWarn,
+                        )
+                        Text(
+                            "This flight is simulated — the rocket is not moving.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
+                        "Stop sim", tr.statusWarn, { session.stopSimulation() },
+                    )
+                }
+            }
+        }
+
+        // #1084: Ground Test runs the FC's closed-loop bench mix and has NO
+        // idle or link-loss timeout — its only failsafe is launch detection —
+        // so the banner carrying Stop is part of the feature, not decoration.
+        if (groundTestActive) {
+            com.tinkerbug.tinkerrocket.app.theme.TrCard {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "GROUND TEST",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = tr.statusWarn,
+                        )
+                        Text(
+                            "The fins are being driven by the flight controller. " +
+                                "Keep clear.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
+                        "Stop test", tr.statusWarn, { session.setGroundTestActive(false) },
+                    )
+                }
+            }
+        }
+
         // Status card (iOS StatusFlagsView port): camera + logging badges,
         // active file, BS silence-close countdown.  Before the flag chips —
         // the iOS order (StatusFlagsView, then FlightEventFlagsView).
@@ -643,7 +710,18 @@ fun DashboardScreen(
                         // vacuously satisfied rather than omitted by oversight.
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
                             "Servo test", tr.servoTest, { onTool("servo") },
-                            enabled = onPad && !simLaunched,
+                            enabled = onPad && !simLaunched && !groundTestActive,
+                        )
+                        // #1084: cmds 15/16, direct links only — the base
+                        // station has no dispatch for them, so on a relay link
+                        // this would be a tap that goes nowhere (iOS hides it
+                        // there for the same reason). Same three gates as iOS's
+                        // canStartGroundTest.
+                        com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
+                            if (groundTestActive) "Stop test" else "Ground test",
+                            if (groundTestActive) tr.statusWarn else tr.servoTest,
+                            { session.setGroundTestActive(!groundTestActive) },
+                            enabled = groundTestActive || (onPad && !simLaunched),
                         )
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
                             "Mag cal", tr.myDevices, { onTool("magcal") })
