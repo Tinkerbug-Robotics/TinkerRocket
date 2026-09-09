@@ -409,6 +409,45 @@ class FleetManagerTest {
         assertTrue(newTransport.writes.isEmpty(), "fleet must not push cmd 45 at adopt")
     }
 
+    // ------------------------------------------------ resume vs ladder (#1064)
+
+    @Test
+    fun resumeLastSession_yieldsToARunningReconnectLadder() = runTest {
+        val h = fleetHarness()
+        discoverAndConnect(h, "aa:01", "TR-R-Atlas")
+        h.lastSession.saveLastConnected("aa:01", "TR-R-Atlas")
+        val connectsBefore = h.transports.calls.size
+        // An unexpected drop starts the ladder; _devices is empty for its whole
+        // run, so resumeLastSession's "already connected" guard does not apply.
+        h.transports.lastFor("aa:01").dropUnexpectedly()
+        runCurrent()
+        assertTrue(h.fleet.devices.value.isEmpty())
+        // A configuration change re-runs MainActivity.onCreate → resume.
+        h.fleet.resumeLastSession()
+        runCurrent()
+        assertEquals(connectsBefore, h.transports.calls.size, "the resume did not start a second connect")
+        // The ladder still gets its device back.
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(1, h.fleet.devices.value.size)
+        assertEquals(2, assertNotNull(h.fleet.devices.value["aa:01"]).generation)
+    }
+
+    @Test
+    fun adopt_releasesASupersededSessionInsteadOfOrphaningIt() = runTest {
+        val h = fleetHarness()
+        discoverAndConnect(h, "aa:01", "TR-R-Atlas")
+        val first = h.transports.lastFor("aa:01")
+        val firstSession = assertNotNull(h.fleet.devices.value["aa:01"]).session
+        // A second connect for the same device (the #1064 race, forced).
+        h.fleet.connect("aa:01")
+        runCurrent()
+        val second = h.transports.lastFor("aa:01")
+        assertTrue(second !== first)
+        assertTrue(h.sessions.closed.contains(firstSession), "the superseded session is closed")
+        assertEquals(1, first.disconnectCalls, "and its transport is disconnected, not orphaned")
+    }
+
     // ------------------------------------------- foreground BS pair (#390)
 
     @Test

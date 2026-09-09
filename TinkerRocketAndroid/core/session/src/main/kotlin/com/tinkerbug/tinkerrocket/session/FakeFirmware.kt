@@ -114,21 +114,30 @@ public class FakeFirmware(
     private val _events = MutableSharedFlow<TransportEvent>(extraBufferCapacity = 1024)
     override val events: Flow<TransportEvent> = _events
 
-    private val notifying = mutableSetOf<TrCharacteristic>()
+    /** Characteristics whose CCCD write succeeded (#1066 asserts on this). */
+    public val notifying: MutableSet<TrCharacteristic> = mutableSetOf()
     private var stagedFileOpsRead: ByteArray = ByteArray(0)
 
     override suspend fun connect() {
         ops += "connect"
     }
 
+    /** #1066: make `requestMtu` throw, the way a real stack can. */
+    public var failMtu: Boolean = false
+
+    /** #1066: characteristics whose CCCD write throws. */
+    public val failCccdFor: MutableSet<TrCharacteristic> = mutableSetOf()
+
     override suspend fun requestMtu(target: Int): Int {
         ops += "mtu:$target"
+        if (failMtu) throw IllegalStateException("requestMtu refused")
         check(_events.tryEmit(TransportEvent.MtuChanged(mtu)))
         return mtu
     }
 
     override suspend fun enableNotifications(char: TrCharacteristic) {
         ops += "cccd:${char.name}"
+        if (char in failCccdFor) throw IllegalStateException("CCCD write failed for $char")
         notifying += char
     }
 

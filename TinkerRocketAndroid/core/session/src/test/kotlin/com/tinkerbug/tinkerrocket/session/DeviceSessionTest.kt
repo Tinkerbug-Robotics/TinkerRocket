@@ -668,6 +668,79 @@ class DeviceSessionTest {
         assertEquals("Nova", assertNotNull(store.device("u-2")).name)
     }
 
+    // ── Connection lifecycle (#1053 #1066) ───────────────────────────────
+
+    @Test
+    fun close_runsTheDisconnectTeardown_withoutATransportEvent() = runTest {
+        // #1053: FleetManager closes the session from its own UNDISPATCHED
+        // watcher, which cancels sessionScope before the session's collector
+        // ever sees TransportEvent.Disconnected — so close() must do the
+        // teardown itself. Modelled here by never firing the event.
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        assertTrue(h.session.isConnected.value)
+        h.session.close()
+        runCurrent()
+        assertFalse(h.session.isConnected.value, "the wipe ran")
+        assertNull(h.session.rocketConfig.value)
+    }
+
+    @Test
+    fun close_failsAnInFlightDownload_insteadOfHangingTheCaller() = runTest {
+        val h = startedSession {
+            deviceFiles += FakeFirmware.FakeFile("flight_001.bin", ByteArray(4096))
+            downloadScript = FakeFirmware.DownloadScript(stallAfterChunks = 1)
+        }
+        advanceTimeBy(1000)
+        runCurrent()
+        val result = async { h.session.downloadFile("flight_001.bin") }
+        runCurrent()
+        advanceTimeBy(50)
+        runCurrent()
+        h.session.close()
+        runCurrent()
+        assertEquals(DownloadResult.Disconnected, result.await())
+    }
+
+    @Test
+    fun choreography_survivesAFailedMtuAndAFailedFileCccd() = runTest {
+        // #1066: one failed step used to abandon every step after it while
+        // isConnected was already true — a "Connected" session with no
+        // readback and no focus pin.
+        val h = startedSession(type = BleDeviceType.BASE_STATION, focusSeed = 4) {
+            failMtu = true
+            failCccdFor += TrCharacteristic.FILE_OPS
+            configIdentityJson =
+                """{"type":"config_identity","uid":"b1","un":"BS","nid":1,"dt":"B"}"""
+        }
+        advanceTimeBy(1000)
+        runCurrent()
+        assertTrue(h.session.isConnected.value)
+        val commandOps = h.fw.ops.filter { it.startsWith("write:COMMAND") }
+        assertEquals(
+            listOf("write:COMMAND:9", "write:COMMAND:20", "write:COMMAND:45"),
+            commandOps,
+            "time sync, readback and the focus pin all still land",
+        )
+        assertTrue(h.fw.notifying.contains(TrCharacteristic.FILE_TRANSFER),
+            "a failed FILE_OPS CCCD does not cost FILE_TRANSFER")
+    }
+
+    @Test
+    fun choreography_dropsTheLinkWhenTelemetryCannotSubscribe() = runTest {
+        // Telemetry is the one load-bearing step: better to hand the link back
+        // to the reconnect ladder than to sit "Connected" with no data.
+        val h = startedSession {
+            failCccdFor += TrCharacteristic.TELEMETRY
+        }
+        advanceTimeBy(1000)
+        runCurrent()
+        assertFalse(h.session.isConnected.value)
+        assertTrue(h.fw.ops.contains("disconnect"), "the transport is handed back")
+        assertTrue(h.fw.ops.none { it == "write:COMMAND:20" }, "no readback on a dead link")
+    }
+
     // ── Sim banner latch ─────────────────────────────────────────────────
 
     @Test
