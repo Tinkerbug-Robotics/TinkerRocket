@@ -78,3 +78,69 @@ final class CSVParserTests: XCTestCase {
         XCTAssertEqual(data.columns["Roll (deg)"], [2.0])
     }
 }
+
+// MARK: - #1081 streaming parse + preview ceiling (twins of CsvParserTest, #636)
+
+final class CSVParserStreamingTests: XCTestCase {
+
+    private func write(_ csv: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stream-\(UUID().uuidString).csv")
+        try csv.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    /// 1000 Hz source (1 ms apart), capped to 100 Hz -> every 10th row.
+    /// "flag" latches partway through, like Launch/Apogee/Landed in a real
+    /// log — the property that makes striding safe.
+    func testMaxSampleHzThinsByTimeAndPreservesLatchedFlags() throws {
+        let rows = 1000, latchAt = 400
+        var csv = "Time (ms),v,flag\n"
+        for i in 0..<rows { csv += "\(i),\(i * 2),\(i >= latchAt ? 1 : 0)\n" }
+        let url = try write(csv)
+
+        let full = try CSVParser.parse(url: url)
+        let thin = try CSVParser.parse(url: url, maxSampleHz: 100.0)
+
+        XCTAssertEqual(full.rowCount, rows)
+        XCTAssertEqual(thin.rowCount, 100, "1000 rows at 1 ms, capped to 100 Hz")
+
+        XCTAssertEqual(thin.columns["Time (ms)"]![0], 0.0)
+        XCTAssertEqual(thin.columns["Time (ms)"]![1], 10.0)
+        XCTAssertEqual(thin.columns["v"]![1], 20.0, "values stay aligned to their row")
+
+        let flag = thin.columns["flag"]!
+        XCTAssertTrue(flag.contains(1.0), "latched flag lost by decimation")
+        XCTAssertEqual(flag.first, 0.0)
+        XCTAssertEqual(flag.last, 1.0)
+    }
+
+    func testMaxSampleHzNilKeepsEveryRow() throws {
+        let csv = "Time (ms),v\n" + (0..<50).map { "\($0),\($0)" }.joined(separator: "\n")
+        let url = try write(csv)
+        XCTAssertEqual(try CSVParser.parse(url: url, maxSampleHz: nil).rowCount, 50)
+        XCTAssertEqual(try CSVParser.parse(url: url).rowCount, 50)
+    }
+
+    /// The streaming reader must produce exactly what the whole-file parser
+    /// did: a line split across two 64 KB chunks is one row, not two.
+    func testChunkBoundaryDoesNotSplitARow() throws {
+        // Rows of ~40 bytes; 2000 of them straddle the 64 KB boundary many times.
+        var csv = "Time (ms),a,b\n"
+        for i in 0..<2000 { csv += "\(i),\(String(repeating: "7", count: 20)).5,\(i)\n" }
+        let url = try write(csv)
+        let d = try CSVParser.parse(url: url)
+        XCTAssertEqual(d.rowCount, 2000)
+        XCTAssertEqual(d.columns["b"]![1999], 1999.0)
+        XCTAssertEqual(d.columns["a"]![1999], 77777777777777777777.5, accuracy: 1e5)
+    }
+
+    func testCRLFAndUnparseableTimeAreHandled() throws {
+        let url = try write("Time (ms),v\r\n0,1\r\nabc,2\r\n5,3\r\n")
+        // Unparseable time keeps the row; CRLF does not poison the last field.
+        let thin = try CSVParser.parse(url: url, maxSampleHz: 100.0)
+        XCTAssertEqual(thin.rowCount, 2, "row 0 kept, 'abc' kept, 5 ms dropped under a 10 ms interval")
+        XCTAssertEqual(thin.columns["v"]![0], 1.0)
+    }
+}
+

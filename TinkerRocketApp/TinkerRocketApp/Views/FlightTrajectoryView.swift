@@ -706,7 +706,9 @@ struct FlightTrajectoryView: View {
             let url = flight.csvURL
             let type = flight.type
             let data = try await Task.detached(priority: .userInitiated) {
-                try CSVParser.parse(url: url)
+                // #1081: same preview ceiling as the chart (Android reuses one
+                // capped parse for both; this is the iOS equivalent).
+                try CSVParser.parse(url: url, maxSampleHz: CSVParser.previewSampleHz)
             }.value
 
             let points = extractTrackPoints(from: data, type: type)
