@@ -87,9 +87,21 @@ class MainActivity : ComponentActivity() {
                     val active by fleet.activeDeviceId.collectAsState()
                     val activeDevice = active?.let { devices[it] }
 
-                    // Re-checked on every recomposition; the fleet's own state
-                    // changes tick this often enough during a flash.
-                    val otaInFlight = container.runningOta()
+                    // #1063: OBSERVE the session's state, don't just read a
+                    // plain map. runningOta() over a non-snapshot mutableMapOf
+                    // did not invalidate this branch when the session left
+                    // isRunning, so a failed OTA kept OtaProgressScreen up
+                    // with the reason it wrote never reaching the operator.
+                    // Holding the candidate and collecting its state makes the
+                    // `when` below re-evaluate on every transition.
+                    val otaCandidate = container.runningOta() ?: container.lastOta()
+                    val otaState by (otaCandidate?.state
+                        ?: kotlinx.coroutines.flow.MutableStateFlow(
+                            com.tinkerbug.tinkerrocket.session.OtaSession.State.Idle,
+                        )).collectAsState()
+                    val otaInFlight = otaCandidate?.takeIf {
+                        otaState !is com.tinkerbug.tinkerrocket.session.OtaSession.State.Idle
+                    }
 
                     // Voice and profile sync for the REAL fleet are bound at
                     // process scope in AppContainer, not here: a LaunchedEffect
