@@ -39,3 +39,24 @@ CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 # radiates into a via.
 CONFIG_BT_ENABLED=n
 CONFIG_ESP_WIFI_ENABLED=n
+
+# === Brownout: the selector is NOT the same voltage on both targets ===
+# sdkconfig.defaults pins CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5 and calls it "the
+# most-lenient level (2.42V)". That is true on the ESP32-P4 and FALSE here,
+# because the two chips number the levels in OPPOSITE directions:
+#
+#            SEL_5     SEL_6     SEL_7
+#   P4       2.42 V    2.52 V    2.60 V   <- higher selector = higher threshold
+#   S3       2.67 V    2.56 V    2.44 V   <- higher selector = LOWER threshold
+#
+# So the inherited SEL_5 gives this processor 2.67 V: not the most lenient
+# level but a STRICTER one than the S3's own default (SEL_7), and 0.23 V above
+# what the out computer runs on the very same +3V3 rail (its build takes the
+# S3 default). The mini FC would therefore brown out first in any supply decay
+# and throw away a quarter-volt of the TPS61094 hold-up tail it was supposed
+# to have. Pin the S3's actually-most-lenient level, which also matches the OC.
+#
+# The P4's servo-PWM-init trip that motivated the original pin does not apply:
+# it is a different detector on a different die, and this processor's rail is
+# behind U30 rather than shared with the servo rail.
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=y
