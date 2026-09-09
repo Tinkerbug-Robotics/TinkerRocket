@@ -26,7 +26,7 @@
 
 import Foundation
 
-struct EspAppImage: Equatable {
+nonisolated struct EspAppImage: Equatable {
     let chipId: Int
     let minChipRevFull: Int
     let maxChipRevFull: Int
@@ -56,7 +56,7 @@ struct EspAppImage: Equatable {
     var boardSuffix: String? { EspImage.boardSuffix(of: version) }
 }
 
-enum EspImageVerdict: Equatable {
+nonisolated enum EspImageVerdict: Equatable {
     case ok(EspAppImage)
     /// Flashable, but say this first.
     case warn(EspAppImage, String)
@@ -73,7 +73,7 @@ enum EspImageVerdict: Equatable {
     var isRefusal: Bool { if case .refuse = self { return true }; return false }
 }
 
-enum EspImage {
+nonisolated enum EspImage {
     static let projectFC = "flight_computer"
     static let projectOC = "out_computer"
     static let projectBS = "base_station"
