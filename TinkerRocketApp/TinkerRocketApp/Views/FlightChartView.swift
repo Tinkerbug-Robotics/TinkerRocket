@@ -348,7 +348,9 @@ struct FlightChartView: View {
         do {
             let url = flight.csvURL
             let data = try await Task.detached(priority: .userInitiated) {
-                try CSVParser.parse(url: url)
+                // #1081: the chart draws ~2000 points per series; parse at the
+                // preview ceiling, streaming, like Android (#636).
+                try CSVParser.parse(url: url, maxSampleHz: CSVParser.previewSampleHz)
             }.value
 
             await MainActor.run {

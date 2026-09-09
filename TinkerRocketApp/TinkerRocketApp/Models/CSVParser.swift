@@ -193,53 +193,103 @@ class CSVParser {
         return repaired
     }
 
-    /// Parse a CSV file into columnar FlightCSVData.
+    /// #1081 / #636: the chart and trajectory screens parse a flight for a
+    /// preview that draws at most ~2000 points per series, yet the FC logs the
+    /// IMU at 1920-3840 Hz — a 96-second flight is a 72 MB, ~500k-row CSV.
+    /// Android measured that on the bench: reading it whole OOM-killed the
+    /// app twice, streaming alone took ~3.5 min to open, and a 100 Hz ceiling
+    /// charts it in ~6 s. That change landed on Android only. Same ceiling
+    /// here, for the same preview screens; full-rate parses stay available.
+    nonisolated static let previewSampleHz: Double = 100.0
+
+    /// Parse a CSV file into columnar FlightCSVData at full rate.
     /// Call from a background Task for large files.
     nonisolated static func parse(url: URL) throws -> FlightCSVData {
-        let content = try String(contentsOf: url, encoding: .utf8)
-        let lines = content.split(separator: "\n", omittingEmptySubsequences: true)
+        return try parse(url: url, maxSampleHz: nil)
+    }
 
-        guard !lines.isEmpty else {
-            throw CSVParserError.emptyFile
-        }
+    /// Parse a CSV file, streaming it in 64 KB chunks rather than reading it
+    /// whole, growing the columns rather than reserving the full row count,
+    /// and — when `maxSampleHz` is given — keeping at most one row per
+    /// interval judged on the LEADING time field alone, so a skipped row
+    /// costs one comma search instead of a 63-way split. Twin of Android's
+    /// `CsvParser.parse(lines:maxSampleHz:)`.
+    ///
+    /// Striding is safe because of how this CSV is shaped (verified on real
+    /// logs, both sides): every column is forward-filled, so a dropped row
+    /// never loses a slow signal like GNSS; and every event column LATCHES
+    /// (Launch, Apogee, Landed, Pyro Fired hold once set), so a stride cannot
+    /// step over an event — it only quantises its transition to the interval.
+    /// A sensor that pulsed for a single row would not survive this.
+    nonisolated static func parse(url: URL, maxSampleHz: Double?) throws -> FlightCSVData {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
 
-        let headerLine = lines[0]
-        let rawHeaders = headerLine.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
-        let headers = repairSplitHeaderNames(rawHeaders)
-        let columnCount = headers.count
+        let minIntervalMs: Double? = maxSampleHz.flatMap { $0 > 0 ? 1000.0 / $0 : nil }
+        var lastKeptMs = -Double.infinity
 
-        guard columnCount > 0 else {
-            throw CSVParserError.noHeader
-        }
+        var headers: [String] = []
+        var columnCount = 0
+        var columns: [[Double]] = []
+        var sawAnyLine = false
 
-        let dataLines = lines.dropFirst()
-        let rowCount = dataLines.count
-
-        // Pre-allocate columnar arrays
-        var columns: [[Double]] = Array(repeating: [], count: columnCount)
-        for i in 0..<columnCount {
-            columns[i].reserveCapacity(rowCount)
-        }
-
-        // Parse all rows in a single pass
-        for line in dataLines {
+        // One row. Mirrors the whole-file parser's rules exactly: fields
+        // that fail Double() become NaN, short rows are padded, over-long
+        // rows are truncated (#236).
+        func consume(_ line: Substring) throws {
+            if line.isEmpty { return }                     // omittingEmptySubsequences
+            sawAnyLine = true
+            if columnCount == 0 && headers.isEmpty {
+                let raw = line.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+                headers = repairSplitHeaderNames(raw)
+                columnCount = headers.count
+                guard columnCount > 0 else { throw CSVParserError.noHeader }
+                columns = Array(repeating: [], count: columnCount)
+                return
+            }
+            if let minInterval = minIntervalMs {
+                // Read ONLY the leading time field; skipping is the whole point.
+                let head = line.firstIndex(of: ",").map { line[line.startIndex..<$0] } ?? line
+                if let t = Double(head.trimmingCharacters(in: .whitespaces)) {
+                    if t - lastKeptMs < minInterval { return }
+                    lastKeptMs = t
+                }
+                // Unparseable time: keep the row rather than silently drop it.
+            }
             let fields = line.split(separator: ",", omittingEmptySubsequences: false)
             for col in 0..<min(fields.count, columnCount) {
-                if let value = Double(fields[col]) {
-                    columns[col].append(value)
-                } else {
-                    columns[col].append(.nan)
-                }
+                columns[col].append(Double(fields[col]) ?? .nan)
             }
-            // Pad short rows.  min() guards over-long rows (more fields than the
-            // header — e.g. garbled LoRa telemetry like "166.65.5" splitting into
-            // extra fields): bare `fields.count..<columnCount` traps with
-            // "Range requires lowerBound <= upperBound" when fields.count >
-            // columnCount (#236).  Extra fields were already consumed above.
             for col in min(fields.count, columnCount)..<columnCount {
                 columns[col].append(.nan)
             }
         }
+
+        // Chunked read with a carried partial line. Slices are cheap; only the
+        // tail after the last newline is copied forward.
+        var carry = Data()
+        while true {
+            guard let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty else { break }
+            var buf: Data
+            if carry.isEmpty { buf = chunk } else { buf = carry; buf.append(chunk); carry = Data() }
+            var cursor = buf.startIndex
+            while let nl = buf[cursor...].firstIndex(of: 0x0A) {
+                var line = Substring(String(decoding: buf[cursor..<nl], as: UTF8.self))
+                if line.hasSuffix("\r") { line = line.dropLast() }
+                try consume(line)
+                cursor = buf.index(after: nl)
+            }
+            if cursor < buf.endIndex { carry = Data(buf[cursor...]) }
+        }
+        if !carry.isEmpty {
+            var line = Substring(String(decoding: carry, as: UTF8.self))
+            if line.hasSuffix("\r") { line = line.dropLast() }
+            try consume(line)
+        }
+
+        guard sawAnyLine else { throw CSVParserError.emptyFile }
+        guard columnCount > 0 else { throw CSVParserError.noHeader }
+        let rowCount = columns.first?.count ?? 0
 
         // Build dictionary keyed by column name
         var dict: [String: [Double]] = [:]
