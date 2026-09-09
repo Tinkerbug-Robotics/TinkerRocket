@@ -1,0 +1,42 @@
+# #1211 / #1126 + #1127 — the flight index got stricter about failure; prove the
+# HAPPY PATH did not get stricter too (PR #1226).
+#
+# Rig: V9 pair, S1 -> O (the index, the storage health and their logging are
+# all OC-side). Rail ON. A chip with SEVERAL FLIGHTS ALREADY ON IT — that is
+# the whole point, and this board has them.
+#
+# The risk in #1226 is a FALSE REFUSAL, not a missed one: FlightIndex::load()
+# now returns BackendFailed (and begin() refuses) when a metadata copy cannot
+# be READ, where it used to report an empty index. Both defects are already
+# covered by host tests at all three geometries, so what the bench owes is the
+# regression side only.
+#
+# Deliberately NOT attempted: provoking either failure path. A NAND read error
+# and a recovery-scan failure are what the host tests INJECT; reaching them on
+# a bench needs a deliberately corrupted chip, and the item says so.
+#
+# What a regression would look like here: `up: 0 flight(s)` on a populated
+# chip, or any `begin failed: BackendFailed`. Both are findings, not passes.
+
+# NO mark, deliberately. The index line is printed during boot — and boot
+# happens while the harness is still taking the BLE link, BEFORE the first
+# directive runs. The *_since origin defaults to the start of the run, so
+# leaving it alone covers the boot; setting a mark here would NARROW the
+# window past the very line being asserted, which is how this first read as a
+# failure on a board that was doing exactly the right thing.
+note === boot the OC and read the index it built ===
+send 8 01
+sleep 30
+
+# N must be non-zero on this chip, and must match what the app lists.
+expect_serial_since FLIGHTLOG: up: [1-9][0-9]* flight\(s\) in index
+refute_serial_since begin failed
+refute_serial_since up: 0 flight\(s\) in index
+
+# ocStorageHealth() gained a SECOND SH_BAD return, on recoveryFailed(). A
+# healthy board must not trip it — including while the deferred recovery scan
+# of #1279 is still running, which is a state that did not exist when #1226
+# was written.
+expect_tlm 30 h.STORAGE==OK
+refute_tlm 20 h.STORAGE==BAD
+note === done — download byte count is checked separately ===
