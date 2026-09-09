@@ -98,6 +98,16 @@ final class LandingPredictor: ObservableObject {
     /// Cached values to suppress redundant work on every BLE notification.
     private var lastWindFetchAt: Date?
     private var lastWindFetchLocation: (lat: Double, lon: Double)?
+    /// #1051: one request at a time — the old guard let every preflight frame
+    /// launch another until the first fetch succeeded.
+    private var windFetchInFlight = false
+    /// #1051: after a failure, no retry before this (45 s, not the next frame).
+    private var windRetryNotBefore: Date?
+    private let windRetryAfterFailureS: TimeInterval = 45
+    /// The fetch seam (tests inject a stub; production is the Open-Meteo fetch).
+    var windFetcher: (Double, Double, Date) async throws -> WindProfile = { lat, lon, t in
+        try await fetchWinds(lat: lat, lon: lon, timeUTC: t)
+    }
     private var landed: Bool = false
 
     /// Freshness window for the GNSS-position substitution during descent.
@@ -123,6 +133,7 @@ final class LandingPredictor: ObservableObject {
     }
 
     func detach() {
+        windFetchInFlight = false   // #1051: a detached predictor must not stay 'busy'
         cancellables.removeAll()
         device = nil
         profileStore = nil
@@ -259,30 +270,42 @@ final class LandingPredictor: ObservableObject {
         let preflight = (state == "READY" || state == "PRELAUNCH" ||
                          state == "UNKNOWN")
         guard preflight else { return }
-
+        // #1051: one request at a time, and a failure backs off instead of
+        // retrying on the next frame. The old guard's last clause was
+        // `windProfile != nil`, so until the first fetch SUCCEEDED every
+        // preflight frame launched another request — at the telemetry rate,
+        // for as long as the map was open on a pad with no data connection.
+        // The timestamp is the suppressor now; a failure clears it and arms
+        // the backoff instead.
+        if windFetchInFlight { return }
+        if let retry = windRetryNotBefore, now < retry { return }
         // Already have a recent fetch at roughly this location?  Skip.
         if let last = lastWindFetchAt,
            let where_ = lastWindFetchLocation,
            now.timeIntervalSince(last) < windRefetchAfterS,
-           abs(where_.lat - lat) < 0.01 && abs(where_.lon - lon) < 0.01,
-           windProfile != nil {
+           abs(where_.lat - lat) < 0.01 && abs(where_.lon - lon) < 0.01 {
             return
         }
-
+        windFetchInFlight = true
         lastWindFetchAt = now
         lastWindFetchLocation = (lat, lon)
-
+        let fetcher = windFetcher
+        let backoff = windRetryAfterFailureS
         Task { [weak self] in
             do {
-                let wp = try await fetchWinds(lat: lat, lon: lon,
-                                              timeUTC: Date())
+                let wp = try await fetcher(lat, lon, Date())
                 await MainActor.run {
                     self?.windProfile = wp
                     self?.windFetchError = nil
+                    self?.windRetryNotBefore = nil
+                    self?.windFetchInFlight = false
                 }
             } catch {
                 await MainActor.run {
                     self?.windFetchError = error.localizedDescription
+                    self?.windRetryNotBefore = Date().addingTimeInterval(backoff)
+                    self?.lastWindFetchAt = nil
+                    self?.windFetchInFlight = false
                 }
             }
         }
