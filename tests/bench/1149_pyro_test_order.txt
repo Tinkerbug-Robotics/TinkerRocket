@@ -1,0 +1,38 @@
+# #1211 / #1149 item 1 (PR #1242) — queued pyro tests keep the operator's order.
+#
+# Rig: V9 pair, S1 -> F (FLIGHT COMPUTER console — [PYRO CONT TEST] names the
+# channel; the OC logs all three under one command byte, so the order is not
+# distinguishable there). Rail ON. Dummy loads on ch1/ch2 (4-8 kΩ); ch3 bare,
+# which is fine — the ORDER is under test, not the continuity result.
+#
+# NEVER a live igniter. cmd 35 = continuity test [channel], cmd 36 = test fire.
+#
+# Before this PR the three came out 3, 2, 1 — a LIFO queue — and a FIRE tapped
+# after a CONT could overtake it.
+
+note === rail on ===
+send 8 01
+sleep 22
+
+note === #1149: CONT on ch1, ch2, ch3 back to back (~40 ms apart) ===
+mark
+send 35 01
+send 35 02
+send 35 03
+sleep 12
+expect_serial 15 \[PYRO CONT TEST\] CH1
+expect_serial 15 \[PYRO CONT TEST\] CH2
+expect_serial 15 \[PYRO CONT TEST\] CH3
+# The actual assertion: they were SERVICED in the operator's order.
+expect_order \[PYRO CONT TEST\] CH1 || \[PYRO CONT TEST\] CH2
+expect_order \[PYRO CONT TEST\] CH2 || \[PYRO CONT TEST\] CH3
+
+note === the mixed case: a CONT then a FIRE — CONT must be served first ===
+mark
+send 35 01
+send 36 02
+sleep 14
+expect_serial 15 \[PYRO CONT TEST\] CH1
+expect_serial 15 \[PYRO FIRE TEST\] CH2 fired
+expect_order \[PYRO CONT TEST\] CH1 || \[PYRO FIRE TEST\] CH2 fired
+note === done ===
