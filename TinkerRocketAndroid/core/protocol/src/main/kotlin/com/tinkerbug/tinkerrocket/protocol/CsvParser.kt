@@ -377,6 +377,18 @@ public object CsvParser {
      */
     private fun parseFieldStrict(field: String): Double {
         if (field.isEmpty()) return Double.NaN
+        // #1090: the port decision said no writer emits these. One does —
+        // CsvGenerator.formatFixed returns "inf"/"-inf"/"nan" for a non-finite
+        // value, and the pressure-altitude column is written unguarded — so a
+        // round trip through our OWN generator turned an infinity into NaN
+        // here while iOS's `Double(_:)` parsed it back. Accept exactly the
+        // three spellings that generator can produce; everything else below
+        // still maps to NaN.
+        when (field) {
+            "nan" -> return Double.NaN
+            "inf" -> return Double.POSITIVE_INFINITY
+            "-inf" -> return Double.NEGATIVE_INFINITY
+        }
         for (c in field) {
             when (c) {
                 in '0'..'9', '+', '-', '.', 'e', 'E' -> Unit

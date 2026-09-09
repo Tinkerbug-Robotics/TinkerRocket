@@ -15,6 +15,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import com.tinkerbug.tinkerrocket.protocol.Commands
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 
 /**
  * THE defaults pin: every RocketProfile default must equal the firmware
@@ -237,6 +238,30 @@ class RocketProfileStoreTest {
         store.update(p.id) { it.copy(pidKp = 0.5f) }
         val reloaded = RocketProfileStore(dir, active) { 0 }
         assertEquals(0.5f, reloaded.profiles.value.single().pidKp)
+    }
+
+    @Test
+    fun duplicate_dropsTheBoardBindingAndItsCalibrations() {
+        // #1058: the calibrations are board-specific and must leave with the
+        // board binding, as they do on iOS — a copy that keeps a mag cal
+        // tagged with the source board reports a board mismatch forever.
+        val (store, _) = tempStore()
+        val added = store.add("Kit")
+        store.update(added.id) {
+            it.copy(
+                lastUsedUnitID = "a1b2",
+                magCal = MagCalData(-321, 456, -789, 48.2f, 3.7f, "a1b2", 1_000),
+            )
+        }
+        val src = assertNotNull(store.profiles.value.firstOrNull { it.id == added.id })
+        val copy = assertNotNull(store.duplicate(src.id))
+        assertEquals("Kit copy", copy.name, "iOS naming")
+        assertNull(copy.lastUsedUnitID)
+        assertNull(copy.magCal)
+        assertNull(copy.sensorCal)
+        // The source keeps everything.
+        val reloaded = assertNotNull(store.profiles.value.firstOrNull { it.id == src.id })
+        assertEquals("a1b2", reloaded.magCal?.calibratedOnUnitID)
     }
 
     @Test
@@ -1058,5 +1083,38 @@ class WireWidthBoundsTest {
         assertFailsWith<IllegalArgumentException> {
             Commands.rollControlConfig(false, 70000, 60f, 2f, 40f, 0f)
         }
+    }
+}
+
+/**
+ * #1090: the readback comparison must round exactly as the firmware
+ * serialises — `snprintf("%.*f", decimals, (double)v)` — or a profile whose
+ * value sits on a rounding edge is "different" on one platform and identical
+ * on the other, and gets silently overwritten on every connect.
+ */
+class ReadbackRoundingTest {
+
+    @Test
+    fun tiesRoundToEven_likeTheFirmwaresPrintf() {
+        // -20.25f is exactly representable; C (and Swift's String(format:))
+        // give "-20.2", Java's String.format would give "-20.3".
+        assertTrue(ActiveRocketSyncer.same(-20.25f, -20.2f, 1))
+        assertFalse(ActiveRocketSyncer.same(-20.25f, -20.3f, 1))
+        assertTrue(ActiveRocketSyncer.same(0.125f, 0.1f, 1))
+        assertTrue(ActiveRocketSyncer.same(2.675f, 2.67f, 2))
+    }
+
+    @Test
+    fun nonTieEdgeThatUsedToDiffer() {
+        // -20.05f is really -20.049999…, so "%.1f" is "-20.0" — the case the
+        // old iOS Float multiply rounded to -201 and called different.
+        assertTrue(ActiveRocketSyncer.same(-20.05f, -20.0f, 1))
+    }
+
+    @Test
+    fun genuineDifferencesAreStillDifferences() {
+        assertFalse(ActiveRocketSyncer.same(0.12f, 0.13f, 2))
+        assertFalse(ActiveRocketSyncer.same(1.0f, 2.0f, 0))
+        assertTrue(ActiveRocketSyncer.same(0.1234f, 0.1234f, 4))
     }
 }

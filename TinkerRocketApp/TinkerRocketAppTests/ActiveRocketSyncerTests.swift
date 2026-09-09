@@ -404,4 +404,21 @@ final class ActiveRocketSyncerTests: XCTestCase {
         XCTAssertEqual(data.residualUT, 1.2, accuracy: 1e-4)
         XCTAssertEqual(data.calibratedOnUnitID, "BOARD9")
     }
+
+    // MARK: - #1090 readback rounding
+
+    func testSameRoundsLikeTheFirmwaresPrintf() {
+        // The firmware serialises with snprintf("%.*f", …): ties to even on
+        // the exact binary value. The old Float-multiply form made -20.05
+        // compute to exactly -200.5, round away from zero to -201, and report
+        // a difference the rocket never had — "Updated from this rocket" on
+        // every single connect.
+        XCTAssertTrue(ActiveRocketSyncer.same(-20.05, -20.0, decimals: 1))
+        XCTAssertTrue(ActiveRocketSyncer.same(-20.25, -20.2, decimals: 1))
+        XCTAssertFalse(ActiveRocketSyncer.same(-20.25, -20.3, decimals: 1))
+        XCTAssertTrue(ActiveRocketSyncer.same(0.125, 0.1, decimals: 1))
+        XCTAssertTrue(ActiveRocketSyncer.same(2.675, 2.67, decimals: 2))
+        XCTAssertFalse(ActiveRocketSyncer.same(0.12, 0.13, decimals: 2))
+        XCTAssertTrue(ActiveRocketSyncer.same(0.1234, 0.1234, decimals: 4))
+    }
 }

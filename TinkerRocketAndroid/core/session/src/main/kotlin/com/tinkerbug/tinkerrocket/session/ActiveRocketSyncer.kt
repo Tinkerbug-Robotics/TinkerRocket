@@ -961,11 +961,21 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
          * Equal once both sides are rounded to the decimals the value is
          * serialised at in the readback JSON.
          */
-        public fun same(a: Float, b: Float, decimals: Int): Boolean {
-            var scale = 1.0
-            repeat(decimals) { scale *= 10.0 }
-            return Math.round(a * scale) == Math.round(b * scale)
-        }
+        public fun same(a: Float, b: Float, decimals: Int): Boolean =
+            quantise(a, decimals) == quantise(b, decimals)
+
+        /**
+         * #1090: the firmware's own serialisation, exactly —
+         * `snprintf("%.*f", decimals, (double)v)`, which rounds ties to even
+         * on the value's exact binary expansion. `String.format("%.1f", …)`
+         * rounds ties UP (-20.25f -> "-20.3" where C gives "-20.2"), so it
+         * cannot be used here; BigDecimal over the widened Double sees the
+         * same bits the firmware's printf does. Same helper shape
+         * CsvGenerator.formatFixed already uses for the same reason.
+         */
+        private fun quantise(v: Float, decimals: Int): java.math.BigDecimal =
+            java.math.BigDecimal(v.toDouble())
+                .setScale(decimals, java.math.RoundingMode.HALF_EVEN)
 
         /** Pure cal-sync decision, shared by mag + sensor cal (testable). */
         public sealed interface CalAction {

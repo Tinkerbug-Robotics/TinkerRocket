@@ -52,10 +52,21 @@ public class RocketProfileStore(
         val source = _profiles.value.firstOrNull { it.id == id } ?: return null
         val copy = source.copy(
             id = UUID.randomUUID(),
-            name = dedupedName(source.name),
+            // #1058: "<name> copy", matching iOS — "Kit 2" read like a second
+            // rocket rather than a copy of one.
+            name = dedupedName("${source.name} copy"),
             createdAtMs = nowMs(),
             updatedAtMs = nowMs(),
             lastUsedUnitID = null,
+            // #1058: the calibrations are BOARD-specific and stay behind with
+            // the board binding above, as they do on iOS. Keeping them made
+            // every copy carry a mag cal tagged with the source board's unit
+            // id, which the syncer then reports as a board mismatch on the
+            // first connect — a permanent advisory on a profile that never had
+            // a calibration of its own. (A duplicate that IS for the same
+            // board re-imports its cal in one tap.)
+            magCal = null,
+            sensorCal = null,
         )
         _profiles.value = sorted(_profiles.value + copy)
         save(copy)

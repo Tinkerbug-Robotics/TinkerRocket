@@ -317,6 +317,38 @@ final class PreflightChecklistTests: XCTestCase {
         XCTAssertEqual(decoded, master)
     }
 
+    // MARK: - #1090 lenient decode
+
+    func testOneMalformedExtraItemDoesNotDiscardTheWholeConfig() throws {
+        // One bad id used to throw out of PreflightRocketConfig.init, and
+        // PreflightStore.load()'s `try?` then dropped the entire per-rocket
+        // config: exclusions, extras, run order and checked state, silently.
+        let json = """
+        {"profileId":"\(UUID().uuidString)",
+         "disabledMasterIds":["\(UUID().uuidString)"],
+         "extraItems":[{"id":"not-a-uuid","title":"Bad","detail":"","kind":"manual"},
+                       {"id":"\(UUID().uuidString)","title":"Good","detail":"","kind":"manual"}],
+         "orderedIds":[],"checked":{},"updatedAt":0}
+        """
+        let cfg = try JSONDecoder().decode(PreflightRocketConfig.self,
+                                           from: Data(json.utf8))
+        XCTAssertEqual(cfg.extraItems.count, 1, "only the malformed item is dropped")
+        XCTAssertEqual(cfg.extraItems.first?.title, "Good")
+        XCTAssertEqual(cfg.disabledMasterIds.count, 1, "the rest of the config survives")
+    }
+
+    func testOneMalformedMasterItemKeepsTheRestOfTheList() throws {
+        let json = """
+        {"items":[{"id":"nope","title":"Bad","detail":"","kind":"manual"},
+                  {"id":"\(UUID().uuidString)","title":"Good","detail":"","kind":"manual"}],
+         "updatedAt":0}
+        """
+        let master = try JSONDecoder().decode(PreflightMaster.self,
+                                              from: Data(json.utf8))
+        XCTAssertEqual(master.items.count, 1)
+        XCTAssertEqual(master.items.first?.title, "Good")
+    }
+
     // MARK: - #878 deployment-redundancy advisory
 
     private func profile(_ channels: [(Bool, UInt8)]) -> RocketProfile {
