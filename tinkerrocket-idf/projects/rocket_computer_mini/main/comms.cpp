@@ -16,6 +16,8 @@
 #include <cstring>
 #include <cmath>
 #include <cstdio>
+#include <WallClock.h>    // #1155 item 3: phone-synced time with a calendar carry
+#include <JsonEscape.h>   // #1155 item 4: unit name in the identity readback
 #include <string>
 #include <algorithm>
 #include <esp_pm.h>
@@ -328,25 +330,17 @@ static void flightlogEndFlight()
     char name[28];  // matches FlightIndexEntry::filename[28]
     if (phone_time_valid)
     {
-        uint32_t elapsed_s = (millis() - phone_sync_millis) / 1000;
-        uint32_t total_s = (uint32_t)phone_utc_hour * 3600U +
-                           (uint32_t)phone_utc_minute * 60U +
-                           (uint32_t)phone_utc_second + elapsed_s;
-        uint16_t y = phone_utc_year;
-        uint8_t  mo = phone_utc_month;
-        uint8_t  d = phone_utc_day;
-        if (total_s >= 86400U)
-        {
-            d += (uint8_t)(total_s / 86400U);  // day rollover within a month — good enough
-            total_s %= 86400U;
-        }
-        uint8_t h  = (uint8_t)(total_s / 3600U);
-        uint8_t mi = (uint8_t)((total_s % 3600U) / 60U);
-        uint8_t s  = (uint8_t)(total_s % 60U);
+        // #1155 item 3: sync + elapsed with a real calendar carry (WallClock.h).
+        // The old arithmetic added whole days onto the synced day-of-month
+        // without carrying into the month, and wrapped at 256 days.
+        const tr_wall_clock::Civil now = tr_wall_clock::advance(
+            { phone_utc_year, phone_utc_month, phone_utc_day,
+              phone_utc_hour, phone_utc_minute, phone_utc_second },
+            (millis() - phone_sync_millis) / 1000);
         std::snprintf(name, sizeof(name),
                       "flight_%04u%02u%02u_%02u%02u%02u.bin",
-                      (unsigned)y, (unsigned)mo, (unsigned)d,
-                      (unsigned)h, (unsigned)mi, (unsigned)s);
+                      (unsigned)now.year, (unsigned)now.month, (unsigned)now.day,
+                      (unsigned)now.hour, (unsigned)now.minute, (unsigned)now.second);
     }
     else
     {
@@ -1418,7 +1412,7 @@ static void sendCurrentConfig()
     String j = "{\"type\":\"config\"";
     j += ",\"irate\":"; j += itos(cfg_imu_rate);
     // LoRa settings
-    j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 1);
+    j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
     j += ",\"lsf\":"; j += itos(lora_sf);
     j += ",\"lbw\":"; j += fmtf(lora_bw_khz, 0);
     j += ",\"lcr\":"; j += itos(lora_cr);
@@ -1452,6 +1446,11 @@ static void sendCurrentConfig()
     // the app-descriptor version (PROJECT_VER: git sha + board suffix).
     const esp_app_desc_t* app_desc = esp_app_get_description();
     const char* fw_ver = (app_desc && app_desc->version[0]) ? app_desc->version : "unknown";
+    // #1155 item 4: the name is operator-supplied; a '"' or '\\' in it made
+    // this frame unparseable on both phones. Escaped (never truncated —
+    // 2 * sizeof covers every byte escaping); cmd 40 also refuses such names.
+    char un_esc[2 * sizeof(unit_name)];
+    (void)tr_json::escapeInto(un_esc, sizeof(un_esc), unit_name);
     char id_buf[192];
     snprintf(id_buf, sizeof(id_buf),
              "{\"type\":\"config_identity\""
@@ -1461,7 +1460,7 @@ static void sendCurrentConfig()
              ",\"rid\":%u"
              ",\"dt\":\"%s\""
              ",\"fw\":\"%s\"}",
-             unit_id_hex, unit_name,
+             unit_id_hex, un_esc,
              (unsigned)network_id, (unsigned)rocket_id,
              config::DEVICE_TYPE,
              fw_ver);
@@ -1834,8 +1833,18 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
             ESP_LOGI("OC", "[HOP] Pause extended: +%u ms", (unsigned)dur_ms);
             return;
         }
+        // #1155 item 10: never spin out a packet's airtime inside the main
+        // loop (the stall #398 removed from the slow-rendezvous helpers, which
+        // pass wait_for_tx=false). Mid-TX the base station's retry lands us here
+        // again in a moment; a false from a non-blocking reconfigure is a fault.
+        if (!lora_comms.canSend())
+        {
+            ESP_LOGW("LORA", "UPLINK Cmd 16: radio busy (mid-TX) — not reconfiguring; the base station retries");
+            return;
+        }
         if (!lora_comms.reconfigure(lora_freq_mhz, lora_sf, lora_bw_khz,
-                                     lora_cr, lora_tx_power))
+                                     lora_cr, lora_tx_power,
+                                     /*wait_for_tx=*/false))
         {
             ESP_LOGE("LORA", "UPLINK Cmd 16: reconfigure to lora_freq_mhz failed");
             return;
@@ -1930,7 +1939,10 @@ static void serviceLoRaUplink()
     lora_comms.pollDio1();
 
     // Non-blocking poll for uplink packet
-    uint8_t rx_buf[32];
+    // #1155 item 11: sized to the shared air-frame bound. readPacket() DROPS a
+    // frame longer than this buffer, and at 32 bytes the base station's
+    // BW=125 channel-set push (33 on air) never arrived.
+    uint8_t rx_buf[LORA_UPLINK_MAX_PACKET];
     size_t rx_len = 0;
 
     if (lora_comms.readPacket(rx_buf, sizeof(rx_buf), rx_len))
@@ -2183,11 +2195,16 @@ static void serviceHopFallback()
             if ((now - ref) < trigger) return;
 
             // Trigger: visit the shared hardcoded rendezvous (#105).
+            // #1155 item 10: these visits run INFLIGHT; a blocking reconfigure
+            // sat in waitTxIdle() for the in-flight packet's airtime. Mid-TX,
+            // come back next pass — the trigger condition persists.
+            if (!lora_comms.canSend()) return;
             if (!lora_comms.reconfigure(LORA_FACTORY_RENDEZVOUS_MHZ,
                                          LORA_FACTORY_RENDEZVOUS_SF,
                                          LORA_FACTORY_RENDEZVOUS_BW_KHZ,
                                          LORA_FACTORY_RENDEZVOUS_CR,
-                                         LORA_FACTORY_RENDEZVOUS_TX_DBM))
+                                         LORA_FACTORY_RENDEZVOUS_TX_DBM,
+                                         /*wait_for_tx=*/false))
             {
                 ESP_LOGE("OC", "[HOP] Visit failed: reconfigure to rendezvous mode");
                 return;
@@ -2208,8 +2225,10 @@ static void serviceHopFallback()
 
             // Visit done: back to saved params, restart hopping with a fresh
             // bootstrap so the BS sees a clean transition packet.
+            if (!lora_comms.canSend()) return;   // #1155 item 10: mid-TX, retry next pass
             if (!lora_comms.reconfigure(lora_freq_mhz, lora_sf, lora_bw_khz,
-                                         lora_cr, lora_tx_power))
+                                         lora_cr, lora_tx_power,
+                                         /*wait_for_tx=*/false))
             {
                 ESP_LOGE("OC", "[HOP] Visit failed: reconfigure back to saved params");
                 // Stay in VISITING_RENDEZVOUS; retry on next call.
@@ -2475,6 +2494,11 @@ static void printStats()
         // after a post-OTA reboot + app reconnect — the critical place to
         // validate the new image (#8).
         if (ble_app.isConnected()) maybeMarkOtaValid();
+        // #1155 item 16: keep the task-CPU profiler's baseline fresh while we
+        // sit here, else the first active-mode window divided a whole rail-off
+        // period of run time by 1 s (percentages in the thousands,
+        // core1_util=0%). dt 0 = re-snapshot only, no line printed.
+        logTaskCpuDeltas(0);
         return;
     }
 
@@ -2527,21 +2551,17 @@ static void printStats()
             ts_year == 2025 && ts_month == 1 && ts_day == 1 &&
             ts_hour == 12 && ts_minute == 0)
         {
-            uint32_t elapsed_s = (millis() - phone_sync_millis) / 1000;
-            uint32_t total_s = (uint32_t)phone_utc_hour * 3600U +
-                               (uint32_t)phone_utc_minute * 60U +
-                               (uint32_t)phone_utc_second + elapsed_s;
-            ts_year   = phone_utc_year;
-            ts_month  = phone_utc_month;
-            ts_day    = phone_utc_day;
-            if (total_s >= 86400U)
-            {
-                ts_day += (uint8_t)(total_s / 86400U);
-                total_s %= 86400U;
-            }
-            ts_hour   = (uint8_t)(total_s / 3600U);
-            ts_minute = (uint8_t)((total_s % 3600U) / 60U);
-            ts_second = (uint8_t)(total_s % 60U);
+            // #1155 item 3: same calendar carry as the flight filename.
+            const tr_wall_clock::Civil now = tr_wall_clock::advance(
+                { phone_utc_year, phone_utc_month, phone_utc_day,
+                  phone_utc_hour, phone_utc_minute, phone_utc_second },
+                (millis() - phone_sync_millis) / 1000);
+            ts_year   = now.year;
+            ts_month  = now.month;
+            ts_day    = now.day;
+            ts_hour   = now.hour;
+            ts_minute = now.minute;
+            ts_second = now.second;
         }
 
         logger.setFileTimestamp(logger.currentFilename(),
@@ -2607,11 +2627,11 @@ static void printStats()
                   (unsigned long)ring_drop_oldest_delta,
                   (unsigned long)ring_bad_sof_delta,
                   (unsigned long)s.ring_bad_sof_clears);
-    ESP_LOGI("LOG", "logging=%c file=%s page=%lu block=%lu prog_fail=%lu erase_fail=%lu",
+    // #1155 item 15: page/block were never updated after begin() and printed
+    // "page=0 block=1" for the whole flight — a wedged-writer look-alike.
+    ESP_LOGI("LOG", "logging=%c file=%s prog_fail=%lu erase_fail=%lu",
                   s.logging_active ? 'Y' : 'N',
                   logger.currentFilename(),
-                  (unsigned long)s.nand_page,
-                  (unsigned long)s.nand_block,
                   (unsigned long)s.nand_prog_fail,
                   (unsigned long)s.nand_erase_fail);
     if (config::USE_LORA_RADIO)
@@ -4395,7 +4415,15 @@ static void comms_loop()
             // Set unit name — payload is UTF-8 string, max 20 bytes
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
-            if (plen > 0 && plen <= 20)
+            if (plen > 0 && plen <= 20 &&
+                !tr_json::isPlainString((const char*)payload, plen))
+            {
+                // #1155 item 4: a quote, backslash or control byte would break the
+                // config_identity readback both apps parse strictly. Refused here so
+                // the advertising name and the LoRa beacon stay plain as well.
+                ESP_LOGW("BLE", "Unit name refused: quote, backslash or control byte in payload");
+            }
+            else if (plen > 0 && plen <= 20)
             {
                 char new_name[24];
                 memcpy(new_name, payload, plen);

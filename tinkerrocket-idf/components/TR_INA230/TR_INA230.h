@@ -3,6 +3,7 @@
 
 #include <compat.h>
 #include <driver/i2c_master.h>
+#include <TR_INA230_Cal.h>     // #1155 item 17: the CAL arithmetic, host-testable
 
 // ---------------------------------------------------------------------------
 //  Status codes
@@ -124,6 +125,9 @@ public:
     /// Compute and program CAL from shunt resistance and desired current-LSB.
     ///   r_shunt_ohm   = shunt resistance in ohms  (e.g. 0.002 for 2 mOhm)
     ///   current_lsb_A = desired current LSB in amps (e.g. 0.001 for 1 mA)
+    /// Returns TR_INA230_ERROR (and programs nothing) for non-positive or NaN
+    /// inputs and for a CAL that would round to 0; a CAL above 0x7FFF is
+    /// clamped — see tr_ina230::computeCalibration (#1155 item 17).
     TR_INA230Status calibrate(float r_shunt_ohm, float current_lsb_A);
 
     // ---- Data read -------------------------------------------------------

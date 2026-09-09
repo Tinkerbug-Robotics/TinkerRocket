@@ -1,4 +1,5 @@
 #include "TR_LoRa_Comms.h"
+#include "LoRaDio1Policy.h"   // #1155 item 7: who a DIO1 edge belongs to
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <cmath>
@@ -100,9 +101,18 @@ bool TR_LoRa_Comms::begin(const Config& cfg, bool debug)
     (void)radio_->setBandwidth(cfg.bandwidth_khz);
     (void)radio_->setSpreadingFactor(cfg.spreading_factor);
     (void)radio_->setCodingRate(cfg.coding_rate);
-    if (cfg.syncword_private)
+    // #1155 item 8: symmetric with applyFrameParams(). The public case used to
+    // fall through and keep the PRIVATE default SX126x::begin() installs, so
+    // "syncword_private = false" in the config was silently ignored — on one
+    // of the three layers the docs say keep two users at the same field apart.
     {
-        (void)radio_->setSyncWord(RADIOLIB_SX126X_SYNC_WORD_PRIVATE);
+        const int16_t sw_st = radio_->setSyncWord(cfg.syncword_private
+                                                      ? RADIOLIB_SX126X_SYNC_WORD_PRIVATE
+                                                      : RADIOLIB_SX126X_SYNC_WORD_PUBLIC);
+        if (sw_st != RADIOLIB_ERR_NONE && debug_)
+        {
+            ESP_LOGE(TAG, "begin setSyncWord failed: %d", sw_st);
+        }
     }
     (void)radio_->setPreambleLength(cfg.preamble_len);
     (void)radio_->setOutputPower(cfg.tx_power_dbm);
@@ -129,6 +139,13 @@ bool TR_LoRa_Comms::begin(const Config& cfg, bool debug)
 void TR_LoRa_Comms::service()
 {
     if (!enabled_ || radio_ == nullptr)
+    {
+        return;
+    }
+    // #1155 item 7: a scan owns the radio end to end. send() and startScan()
+    // already refuse each other, so tx_done_ cannot legitimately fire here;
+    // this keeps a stray edge from running finishTransmit() under a dwell.
+    if (isScanActive())
     {
         return;
     }
@@ -358,14 +375,22 @@ void TR_LoRa_Comms::pollDio1()
     // Check DIO1 pin state directly
     if (gpio_get_level((gpio_num_t)dio1_pin_) == 1)
     {
-        isr_count_ = isr_count_ + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
-        if (rx_mode_)
+        // #1155 item 7: classify from the transmit state, not rx_mode_ — a
+        // packet decoded on a scan dwell (rx_mode_ false, nothing in flight)
+        // used to be booked as a transmit completion. The pin stays high for
+        // the rest of an unowned dwell, so only count an edge we assign.
+        const lora_dio1::Owner owner = lora_dio1::classify(tx_ongoing_, rx_mode_);
+        if (owner != lora_dio1::Owner::None)
         {
-            rx_done_ = true;
+            isr_count_ = isr_count_ + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
         }
-        else
+        if (owner == lora_dio1::Owner::Tx)
         {
             tx_done_ = true;
+        }
+        else if (owner == lora_dio1::Owner::Rx)
+        {
+            rx_done_ = true;
         }
     }
     portENABLE_INTERRUPTS();
@@ -851,13 +876,17 @@ void IRAM_ATTR TR_LoRa_Comms::onDio1ISR()
     if (instance_ != nullptr)
     {
         instance_->isr_count_ = instance_->isr_count_ + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
-        if (instance_->rx_mode_)
-        {
-            instance_->rx_done_ = true;
-        }
-        else
+        // #1155 item 7: see LoRaDio1Policy.h — a transmit in flight owns the
+        // edge, else an armed receiver, else (scan dwell / retune) nobody.
+        const lora_dio1::Owner owner =
+            lora_dio1::classify(instance_->tx_ongoing_, instance_->rx_mode_);
+        if (owner == lora_dio1::Owner::Tx)
         {
             instance_->tx_done_ = true;
+        }
+        else if (owner == lora_dio1::Owner::Rx)
+        {
+            instance_->rx_done_ = true;
         }
     }
 }

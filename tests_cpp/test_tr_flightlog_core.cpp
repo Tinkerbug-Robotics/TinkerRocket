@@ -2794,3 +2794,67 @@ TEST(TRFlightLogBrownout, RecoveryFailureKeepsStoredFlightsManageable) {
     uint8_t p2[16]{};
     EXPECT_EQ(fl2.writeFrame(p2, sizeof(p2)), Status::RecoveryPending);
 }
+
+// ---------------------------------------------------------------------------
+// #1155 item 13: a delete whose index persist fails must not remove the
+// flight from the listing.
+// ---------------------------------------------------------------------------
+TEST(TRFlightLogDelete, FailedIndexSaveKeepsTheFlight) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    TR_FlightLog::Config cfg;
+    cfg.prealloc_blocks = 4;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    const uint32_t start = fl.activeStartBlock();
+    ASSERT_EQ(fl.finalizeFlight("flight_001.bin", 100), Status::Ok);
+
+    // save() targets the older-or-invalid index copy; arm a one-shot program
+    // failure on page 0 of BOTH copies so whichever the delete picks fails.
+    nand.injectProgramFailOnce(fl.config().metadata_blocks[0], 0);
+    nand.injectProgramFailOnce(fl.config().metadata_blocks[1], 0);
+    EXPECT_EQ(fl.deleteFlight("flight_001.bin"), Status::BackendFailed);
+
+    // Still listed, block still held: RAM, NAND and bitmap agree. (finalize
+    // already released the unused tail of the 4-block preallocation, so the
+    // flight owns exactly its first block here — same as the happy-path test.)
+    ASSERT_EQ(fl.index().size(), 1u);
+    EXPECT_NE(fl.index().findByFilename("flight_001.bin"), nullptr);
+    EXPECT_EQ(fl.bitmap().get(start), BLOCK_ALLOCATED);
+
+    // The retry lands once the fault has passed.
+    ASSERT_EQ(fl.deleteFlight("flight_001.bin"), Status::Ok);
+    EXPECT_EQ(fl.index().size(), 0u);
+    for (uint32_t b = start; b < start + 4; ++b) {
+        EXPECT_EQ(fl.bitmap().get(b), BLOCK_FREE) << "block " << b;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #1155 item 19: a filename the entry cannot hold is refused, not truncated.
+// ---------------------------------------------------------------------------
+TEST(TRFlightLogFinalize, RejectsFilenameLongerThanTheEntry) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    TR_FlightLog::Config cfg;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+
+    // 28 characters: the OC's pre-#1155 MRAM-recovery name from id 10 on,
+    // which strncpy cut to "flight_mram_recovered_10.bi".
+    const char* too_long = "flight_mram_recovered_10.bin";
+    ASSERT_EQ(std::strlen(too_long), sizeof(FlightIndexEntry::filename));
+    EXPECT_EQ(fl.finalizeFlight(too_long, 100), Status::OutOfRange);
+    EXPECT_TRUE(fl.isFlightActive());          // nothing was closed under a bad name
+    EXPECT_EQ(fl.index().size(), 0u);
+    EXPECT_EQ(fl.finalizeFlight(nullptr, 100), Status::OutOfRange);
+
+    // The longest legal form and the new recovery prefix both fit.
+    ASSERT_EQ(fl.finalizeFlight("flight_20260909_143005.bin", 100), Status::Ok);
+    EXPECT_FALSE(fl.isFlightActive());
+    EXPECT_STREQ(fl.index().at(0).filename, "flight_20260909_143005.bin");
+}

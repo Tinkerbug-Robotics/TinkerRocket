@@ -167,7 +167,6 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     rb_overruns = rb_highwater = 0;
     rb_drop_oldest_bytes = 0;
     rb_bad_sof_clears = 0;
-    nand_page = nand_block = 0;
     nand_bytes_written = 0;
     nand_prog_fail = nand_erase_fail = 0;
     nand_prog_ops = nand_erase_ops = 0;
@@ -575,8 +574,6 @@ void TR_LogToFlash::getStats(TR_LogToFlashStats& out) const
     out.nand_prog_ops = nand_prog_ops;
     out.nand_erase_ops = nand_erase_ops;
     out.logging_active = logging_active;
-    out.nand_page = nand_page;
-    out.nand_block = log_curr_block;
 
     out.write_max_us = write_max_us_;
     out.sync_max_us = sync_max_us_;
@@ -2519,7 +2516,19 @@ uint32_t TR_LogToFlash::scanBadBlocksAtBoot()
 
 void TR_LogToFlash::runStartupRecovery()
 {
-    const bool lfs_dirty  = checkDirtyOnStartup();   // LittleFS marker (non-sink)
+    // #1155 item 14: the LittleFS marker is only ever SET in non-sink mode, and
+    // clearDirty() never removes it in sink mode — so a /.dirty left behind by
+    // a pre-sink firmware fell through to the legacy MRAM->LittleFS dump below
+    // on EVERY boot (127 KB written, then a clearDirty() that touched only the
+    // MRAM word), forever. In sink mode the marker means nothing: ignore it,
+    // and retire it once so the filesystem stops carrying it.
+    bool lfs_dirty = checkDirtyOnStartup();          // LittleFS marker (non-sink)
+    if (cfg.write_sink != nullptr && lfs_dirty)
+    {
+        lfs_remove(&lfs, "/.dirty");
+        lfs_dirty = false;
+        if (cfg.debug) ESP_LOGW(TAG, "Stale LittleFS dirty marker retired (sink mode).");
+    }
     const bool mram_dirty = checkMramDirty();        // #274: MRAM marker (sink mode)
 
     if (!lfs_dirty && !mram_dirty)

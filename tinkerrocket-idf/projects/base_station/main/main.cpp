@@ -57,6 +57,11 @@
 #include <TR_MP2672.h>
 #include <TR_BQ27Z746.h>
 #include <RocketComputerTypes.h>
+#include <JsonEscape.h>           // #1155 item 4: unit name in the identity readback
+// #1155 item 11: the queue's packet bound and the rocket's receive buffer are
+// the same number, or a command the queue accepts is one the rocket drops.
+static_assert(bs_uplink_queue::kMaxPacket == LORA_UPLINK_MAX_PACKET,
+              "bs_uplink_queue::kMaxPacket must equal LORA_UPLINK_MAX_PACKET");
 
 static const char* TAG = "BS";
 
@@ -2368,7 +2373,7 @@ static void sendCurrentConfig()
              ",\"kp\":%.4f,\"ki\":%.4f,\"kd\":%.4f"
              ",\"pmn\":%.1f,\"pmx\":%.1f"
              ",\"sen\":%s"
-             ",\"lf\":%.1f,\"lsf\":%u,\"lbw\":%.0f,\"lcr\":%u,\"lpw\":%d"
+             ",\"lf\":%.3f,\"lsf\":%u,\"lbw\":%.0f,\"lcr\":%u,\"lpw\":%d"
              ",\"lhd\":%s,\"lhdw\":%u}",
              (int)cfg_servo_bias1, (int)cfg_servo_hz,
              (int)cfg_servo_min, (int)cfg_servo_max,
@@ -2397,6 +2402,11 @@ static void sendCurrentConfig()
     // Message 2: device identity ("config_identity" type)
     const esp_app_desc_t* app_desc = esp_app_get_description();
     const char* fw_ver = (app_desc && app_desc->version[0]) ? app_desc->version : "unknown";
+    // #1155 item 4: the name is operator-supplied; a '"' or '\\' in it made
+    // this frame unparseable on both phones. Escaped (never truncated —
+    // 2 * sizeof covers every byte escaping); cmd 40 also refuses such names.
+    char un_esc[2 * sizeof(unit_name)];
+    (void)tr_json::escapeInto(un_esc, sizeof(un_esc), unit_name);
     char id_buf[192];
     snprintf(id_buf, sizeof(id_buf),
              "{\"type\":\"config_identity\""
@@ -2405,7 +2415,7 @@ static void sendCurrentConfig()
              ",\"nid\":%u"
              ",\"dt\":\"%s\""
              ",\"fw\":\"%s\"}",
-             unit_id_hex, unit_name,
+             unit_id_hex, un_esc,
              (unsigned)network_id,
              config::DEVICE_TYPE,
              fw_ver);
@@ -5712,7 +5722,15 @@ static void loop_bs()
         // Set unit name — payload is UTF-8 string, max 20 bytes
         const uint8_t* payload = ble_app.getCommandPayload();
         const size_t plen = ble_app.getCommandPayloadLength();
-        if (plen > 0 && plen <= 20)
+        if (plen > 0 && plen <= 20 &&
+            !tr_json::isPlainString((const char*)payload, plen))
+        {
+            // #1155 item 4: a quote, backslash or control byte would break the
+            // config_identity readback both apps parse strictly. Refused here so
+            // the advertising name and the LoRa beacon stay plain as well.
+            ESP_LOGW("BLE", "Unit name refused: quote, backslash or control byte in payload");
+        }
+        else if (plen > 0 && plen <= 20)
         {
             char new_name[24];
             memcpy(new_name, payload, plen);

@@ -1315,3 +1315,51 @@ target_include_directories(test_cmd_queue_admit_policy PRIVATE
 )
 target_link_libraries(test_cmd_queue_admit_policy GTest::gtest_main)
 gtest_discover_tests(test_cmd_queue_admit_policy)
+
+# ---------- test_wall_clock (#1155 item 3) ----------
+# Flight filenames are "phone sync + elapsed"; the day carry used to stop at
+# the month boundary and wrap at 256 days. WallClock.h is pure integer
+# arithmetic shared by the OC and the mini.
+add_executable(test_wall_clock test_wall_clock.cpp)
+target_include_directories(test_wall_clock PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_wall_clock GTest::gtest_main)
+gtest_discover_tests(test_wall_clock)
+
+# ---------- test_json_escape (#1155 item 4) ----------
+# A unit name with a quote or backslash used to make the config_identity
+# readback unparseable on both phones. JsonEscape.h is the escaper the three
+# readbacks use and the validator cmd 40 uses.
+add_executable(test_json_escape test_json_escape.cpp)
+target_include_directories(test_json_escape PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_BLE_To_APP
+)
+target_link_libraries(test_json_escape GTest::gtest_main)
+gtest_discover_tests(test_json_escape)
+
+# ---------- test_lora_dio1_policy (#1155 item 7) ----------
+# A packet decoded during a spectrum-scan dwell was booked as a transmit
+# completion. The DIO1 owner rule is three lines; the test pins the
+# scan-dwell case that mattered.
+add_executable(test_lora_dio1_policy test_lora_dio1_policy.cpp)
+target_include_directories(test_lora_dio1_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LoRa_Comms
+)
+target_link_libraries(test_lora_dio1_policy GTest::gtest_main)
+gtest_discover_tests(test_lora_dio1_policy)
+
+# ---------- test_ina230_cal (#1155 item 17) ----------
+# The INA230 CAL narrowed to uint16_t before the clamp, so an out-of-range
+# value wrapped into a plausible one. TR_INA230_Cal.h is the arithmetic on its
+# own; the driver (I2C) is not compiled here.
+add_executable(test_ina230_cal test_ina230_cal.cpp)
+target_include_directories(test_ina230_cal PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_INA230
+)
+target_link_libraries(test_ina230_cal GTest::gtest_main)
+gtest_discover_tests(test_ina230_cal)

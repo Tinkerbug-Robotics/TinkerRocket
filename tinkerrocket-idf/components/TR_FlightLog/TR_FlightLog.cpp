@@ -744,6 +744,15 @@ Status TR_FlightLog::finalizeFlight(const char* filename, uint32_t final_bytes) 
     uint32_t used_blocks = (span_pages + g_ppb_ - 1) / g_ppb_;
     if (used_blocks > active_n_blocks_) used_blocks = active_n_blocks_;
 
+    // #1155 item 19: refuse a name the entry cannot hold rather than strncpy
+    // it down to 27 characters — the OC's old MRAM-recovery name overflowed
+    // from id 10 and lost its ".bin" mid-extension. The flight stays active
+    // (nothing is lost: an unindexed range with valid page headers is what
+    // the boot-time orphan recovery re-adopts), and the caller gets a status
+    // it can log instead of a file the apps cannot recognise.
+    if (filename == nullptr || std::strlen(filename) > sizeof(FlightIndexEntry::filename) - 1) {
+        return Status::OutOfRange;
+    }
     FlightIndexEntry entry{};
     entry.magic       = FLGT_MAGIC;
     entry.flight_id   = active_flight_id_;
@@ -870,11 +879,24 @@ Status TR_FlightLog::deleteFlightLocked(const char* filename) {
 
     const uint16_t start_block = entry->start_block;
     const uint16_t n_blocks    = entry->n_blocks;
+    // #1155 item 13: keep a copy for rollback — removeByFilename shifts the
+    // array and invalidates `entry`.
+    const FlightIndexEntry saved = *entry;
 
     if (!index_.removeByFilename(filename)) return Status::NotFound;
 
     Status st = index_.save(*nand_, cfg_.metadata_blocks[0], cfg_.metadata_blocks[1]);
-    if (st != Status::Ok) return st;
+    if (st != Status::Ok) {
+        // Mirror finalizeFlight: a failed persist must leave the RAM index, the
+        // on-NAND index and the bitmap all agreeing the flight still exists.
+        // Before this the entry was gone from RAM with its blocks still
+        // ALLOCATED, and the cmd-3 handler rebuilt the listing from that RAM
+        // index, so the app saw the file vanish on a delete that failed.
+        // Re-appended at the end: eviction picks the smallest flight_id, not
+        // a position, so order does not matter.
+        (void)index_.append(saved);
+        return st;
+    }
 
     // Release the blocks for reuse. markFreeRange skips BAD blocks so any
     // runtime-discovered bad blocks inside the flight remain excluded.

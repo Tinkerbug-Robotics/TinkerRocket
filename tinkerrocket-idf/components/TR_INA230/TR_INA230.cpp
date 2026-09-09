@@ -104,18 +104,15 @@ TR_INA230Status TR_INA230::setCalibration(uint16_t cal)
 
 TR_INA230Status TR_INA230::calibrate(float r_shunt_ohm, float current_lsb_A)
 {
-    // #297: guard the divide — a zero/negative LSB or shunt yields inf/NaN and a
-    // bogus calibration that would read a flat 0 A while still reporting OK.
-    if (current_lsb_A <= 0.0f || r_shunt_ohm <= 0.0f)
+    // #297 guarded the divide; #1155 item 17 moved the arithmetic into
+    // TR_INA230_Cal.h so the clamp happens in float BEFORE the narrowing
+    // (a CAL >= 65536 used to wrap modulo 65536 and pass the clamp) and a
+    // CAL of 0 is refused instead of programmed.
+    uint16_t cal = 0;
+    if (!tr_ina230::computeCalibration(r_shunt_ohm, current_lsb_A, cal))
         return TR_INA230_ERROR;
 
     _current_lsb_A = current_lsb_A;
-
-    // CAL = 0.00512 / (Current_LSB * R_SHUNT)   (Equation 1)
-    float cal_f = 0.00512f / (current_lsb_A * r_shunt_ohm);
-    uint16_t cal = (uint16_t)cal_f;
-    if (cal > 0x7FFF) cal = 0x7FFF;
-
     return setCalibration(cal);
 }
 

@@ -26,6 +26,9 @@ namespace bs_uplink_queue {
 // Wire format v2: [0xCA][network_id][target_rid][next_channel_idx][cmd][len][payload...]
 inline constexpr size_t kHeaderBytes = 6;
 inline constexpr size_t kMaxPacket   = 40;  // cmd 15 channel-set push needs 27 payload at BW=125
+// == LORA_UPLINK_MAX_PACKET in RocketComputerTypes.h, which sizes the rocket's
+// receive buffer; main.cpp static_asserts the two agree (#1155 item 11). This
+// header stays self-contained (no include) so its host test stays minimal.
 // 1 byte of slack, matching the pre-FIFO bound so #286's reject threshold is unchanged.
 inline constexpr size_t kMaxPayload  = kMaxPacket - kHeaderBytes - 1;  // 33
 
