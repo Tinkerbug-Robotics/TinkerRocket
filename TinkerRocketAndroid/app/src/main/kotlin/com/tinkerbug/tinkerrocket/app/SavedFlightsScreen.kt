@@ -105,6 +105,18 @@ private fun SavedFlightRow(
                     if (flight.hasCsv) "" else " · .bin only (not converted)",
                 style = MaterialTheme.typography.bodySmall,
             )
+            // #1091 item 4: the same four numbers iOS's Flight Summary shows.
+            flight.summary?.let { s ->
+                val parts = listOfNotNull(
+                    s.maxAltitudeM?.let { String.format(Locale.US, "Max alt %.0f m", it) },
+                    s.maxSpeedMps?.let { String.format(Locale.US, "Max speed %.0f m/s", it) },
+                    s.burnoutTimeS?.let { String.format(Locale.US, "Burnout %.1f s", it) },
+                    s.apogeeTimeS?.let { String.format(Locale.US, "Apogee %.1f s", it) },
+                )
+                if (parts.isNotEmpty()) {
+                    Text(parts.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                }
+            }
             Row(
                 Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -119,9 +131,11 @@ private fun SavedFlightRow(
     }
 }
 
+// #1091 item 1: one unit base on both phones — iOS's binary KB/MB
+// (FlightLogsView.formatFileSize), not 1000-based kB.
 private fun formatSize(bytes: Long): String = when {
-    bytes >= 1_000_000 -> String.format(Locale.US, "%.1f MB", bytes / 1_000_000.0)
-    bytes >= 1_000 -> String.format(Locale.US, "%.1f kB", bytes / 1_000.0)
+    bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
     else -> "$bytes B"
 }
 

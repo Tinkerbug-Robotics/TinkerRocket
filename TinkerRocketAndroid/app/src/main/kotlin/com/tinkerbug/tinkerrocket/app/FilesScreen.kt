@@ -593,6 +593,14 @@ private suspend fun downloadAndConvert(
                 val csv = BsLogCsvGenerator().writeCsv(result.bytes)
                 csvFileFor(context, file.name).writeText(csv)
                 "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV"
+            } else if (file.name.startsWith("lora_") && file.name.endsWith(".csv")) {
+                // #1062: a base-station log written before a53d337 (2026-08-25)
+                // is ASCII CSV with no TRBSLOG magic. iOS copies it straight into
+                // the CSV cache; this branch was never ported, so the rocket
+                // parser ran, found no frames, and the row reported "CSV failed"
+                // with no Share or Chart while the bytes sat in BinaryCache.
+                csvFileFor(context, file.name).writeBytes(result.bytes)
+                "Saved ${file.name} (${result.bytes.size / 1000} kB) — legacy CSV, cached as-is"
             } else {
                 val (csv, summary) = CsvGenerator().writeCsv(result.bytes)
                 csvFileFor(context, file.name).writeText(csv)

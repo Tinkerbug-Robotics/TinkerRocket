@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
 import java.io.File
+import com.tinkerbug.tinkerrocket.protocol.FlightSummary
 
 /**
  * On-phone flight storage — the iOS FileCache mirror.
@@ -27,8 +28,11 @@ internal object FlightCache {
     fun binFileFor(context: Context, name: String): File =
         File(binDir(context), name)
 
+    // #1062: a legacy base-station log is ALREADY a .csv (pre-a53d337 boards
+    // wrote ASCII); appending a second extension pointed hasCsv, Share and
+    // Chart at a "lora_003.csv.csv" that was never written.
     fun csvFileFor(context: Context, name: String): File =
-        File(csvDir(context), name.removeSuffix(".bin") + ".csv")
+        File(csvDir(context), if (name.endsWith(".csv")) name else name.removeSuffix(".bin") + ".csv")
 
     fun summaryFileFor(context: Context, name: String): File =
         File(csvDir(context), name.removeSuffix(".bin") + ".json")
@@ -47,6 +51,8 @@ internal object FlightCache {
         val csv: File?,
         val sizeBytes: Long,
         val lastModified: Long,
+        /** #1091 item 4: the headline numbers from the `.json` sidecar, when present. */
+        val summary: FlightSummary? = null,
     ) {
         val displayName: String get() = name.removeSuffix(".bin")
         val hasCsv: Boolean get() = csv != null
@@ -82,6 +88,8 @@ internal object FlightCache {
                 // what a "how big was this flight" glance means.
                 sizeBytes = bin?.length() ?: csv?.length() ?: 0L,
                 lastModified = maxOf(bin?.lastModified() ?: 0L, csv?.lastModified() ?: 0L),
+                summary = summaryFileFor(context, name).takeIf { it.exists() }
+                    ?.let { runCatching { FlightSummary.fromJson(it.readText()) }.getOrNull() },
             )
         }.sortedByDescending { it.lastModified }
     }
