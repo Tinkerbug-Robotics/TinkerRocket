@@ -316,4 +316,38 @@ final class PreflightChecklistTests: XCTestCase {
         let decoded = try JSONDecoder().decode(PreflightMaster.self, from: data)
         XCTAssertEqual(decoded, master)
     }
+
+    // MARK: - #878 deployment-redundancy advisory
+
+    private func profile(_ channels: [(Bool, UInt8)]) -> RocketProfile {
+        var p = RocketProfile(name: "Redundancy")
+        for (i, c) in channels.enumerated() {
+            switch i {
+            case 0: p.pyro1Enabled = c.0; p.pyro1TriggerMode = c.1
+            case 1: p.pyro2Enabled = c.0; p.pyro2TriggerMode = c.1
+            case 2: p.pyro3Enabled = c.0; p.pyro3TriggerMode = c.1
+            default: p.pyro4Enabled = c.0; p.pyro4TriggerMode = c.1
+            }
+        }
+        return p
+    }
+
+    func testAdvisoryFiresWhenEveryEnabledChannelIsAltitudeOnDescent() {
+        let one = PreflightChecklist.deploymentRedundancyAdvisory(profile([(true, 1)]))
+        XCTAssertNotNil(one)
+        XCTAssertTrue(one!.contains("time-after-apogee"))
+        XCTAssertNotNil(PreflightChecklist.deploymentRedundancyAdvisory(profile([(true, 1), (true, 1)])))
+    }
+
+    func testAdvisoryClearsWhenATimeAfterApogeeChannelIsEnabled() {
+        // #257: apogee detection is a baro-independent quorum.
+        XCTAssertNil(PreflightChecklist.deploymentRedundancyAdvisory(profile([(true, 1), (true, 0)])))
+        XCTAssertNil(PreflightChecklist.deploymentRedundancyAdvisory(profile([(true, 0)])))
+    }
+
+    func testAdvisoryIsSilentWithNoChannelsAndNoProfile() {
+        XCTAssertNil(PreflightChecklist.deploymentRedundancyAdvisory(profile([])))
+        XCTAssertNil(PreflightChecklist.deploymentRedundancyAdvisory(nil))
+        XCTAssertNil(PreflightChecklist.deploymentRedundancyAdvisory(profile([(false, 1), (false, 1)])))
+    }
 }
