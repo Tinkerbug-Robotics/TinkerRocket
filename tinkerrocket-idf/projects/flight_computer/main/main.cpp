@@ -1708,6 +1708,23 @@ static TaskHandle_t fc_ota_parser_task = nullptr;
 static uint32_t fc_ota_crc_fail   = 0;   // frames that failed CRC (resync drops)
 static uint32_t fc_ota_gap        = 0;   // valid frames ahead of bytesWritten (skipped)
 static uint32_t fc_ota_write_fail = 0;   // writeChunk() errors
+// #1267: the FIRST fatal writeChunk() error, latched for loop_fc to act on.
+// 0 == none (Error::Ok is 0 and is never latched).
+//
+// writeChunk() only fails for conditions that cannot heal: the image is for
+// another board, it overflows the slot, or the flash write failed. There is no
+// retry — the sender moves on, so every later chunk lands as a gap and the
+// session is already dead. Before this, the FC kept accepting the rest of the
+// image anyway (~60 s of it) and the real reason was then overwritten by
+// whatever FINISH reported, which is SessionNotActive by that point. The
+// operator was told "session not active" for an image built for the wrong
+// board.
+//
+// Latched rather than acted on here: this runs in the OTA parser task, and the
+// teardown has to wait for the OC to stop driving BCLK (see fcOtaWaitForOcQuiet)
+// before seizing the bus, which is blocking work that belongs in loop_fc — the
+// same place the #1116 watchdog and #1121's launch abort already do it.
+static volatile uint8_t fc_ota_fatal_err = 0;
 static uint32_t fc_ota_written_frames = 0;  // frames accepted in order
 static volatile uint32_t fc_ota_rx_cb_count = 0;  // I2S RX cb ticks; teardown silence detect
 // #1116: session watchdog inputs (fc_ota_session_policy.h). Stamped at the flip,
@@ -1799,6 +1816,9 @@ static void fcOtaParseRing()
                     fc_ota_write_fail++;
                     ESP_LOGE(TAG, "[OTA] writeChunk @%u (%uB) failed: %d",
                              (unsigned)off, (unsigned)img_len, (int)e);
+                    // #1267: keep the FIRST error — anything after it is a
+                    // consequence, and the first one is the real cause.
+                    if (fc_ota_fatal_err == 0) { fc_ota_fatal_err = (uint8_t)e; }
                 }
                 else
                 {
@@ -1837,6 +1857,7 @@ static void fcFlipToRx()
     fc_ota_ring_ovf = 0;                // reset RX diagnostics for this session
     fc_ota_crc_fail = 0;
     fc_ota_gap = 0;
+    fc_ota_fatal_err = 0;   // #1267
     fc_ota_write_fail = 0;
     fc_ota_written_frames = 0;
     fc_ota_data_mode = true;            // i2sSenderTask idles from here on
@@ -1978,6 +1999,56 @@ static void fcOtaTearDownSession()
 static void fcOtaServiceSessionWatchdog(uint32_t now_ms)
 {
     if (!fc_ota_data_mode) return;
+
+    // #1267: a fatal chunk error ends the session NOW, with the real reason.
+    // Waiting for FINISH means transferring an image that can never be written
+    // (~60 s) and then reporting SessionNotActive instead of the actual cause.
+    // Same teardown the #1116 watchdog uses, so the bus is handed back only
+    // after the OC stops driving BCLK — a terminal status sent into that
+    // contention is garbled and lost.
+    if (fc_ota_fatal_err != 0)
+    {
+        const uint8_t err = fc_ota_fatal_err;
+        ESP_LOGE(TAG, "[OTA] fatal chunk error %u — ending the session now and "
+                      "reporting it, rather than streaming an image that cannot "
+                      "be written (bytes_written=%u/%u) (#1267)",
+                 (unsigned)err, (unsigned)fc_ota_receiver.bytesWritten(),
+                 (unsigned)fc_ota_total_size);
+        fcOtaLogRxDiag();
+        const uint32_t written_at_fail = (uint32_t)fc_ota_receiver.bytesWritten();
+
+        // Report over I2C, NOT I2S — this is the whole point of #1267.
+        //
+        // The image link is reversed right now: the OC is master TX pumping
+        // chunks and does not revert to slave RX until its own FINISH/ABORT, so
+        // it physically cannot hear an I2S status sent here. That is why the
+        // real cause used to be lost and the operator was shown whatever FINISH
+        // reported ~60 s later — SessionNotActive, which says nothing about an
+        // image built for the wrong board.
+        //
+        // The I2C command channel keeps working throughout a transfer (measured
+        // 931 successful status queries and zero failures across a failed one),
+        // and the OC's OTA_STATUS_MSG handler is transport-agnostic: a terminal
+        // state ends the relay session and relays fcOtaErrToken(err) to the app.
+        // This is also what OTA_STATUS_MSG's own definition already specifies —
+        // "once the link flips for the image pump it rides I2C instead".
+        //
+        // Sent BEFORE the teardown, while the OC is still pumping and listening
+        // on I2C; the teardown then frees our side.
+        OtaRelayStatusData st;
+        st.state         = OTA_RELAY_VERIFY_FAILED;
+        st.err           = err;
+        st.bytes_written = written_at_fail;
+        (void)i2c_interface.sendMessage(OTA_STATUS_MSG,
+                                        (const uint8_t*)&st, sizeof(st));
+
+        fcOtaTearDownSession();
+        // fcFlipToRx() clears the latch when the NEXT session starts, but do not
+        // leave a stale one sitting here in the meantime.
+        fc_ota_fatal_err = 0;
+        return;
+    }
+
     const uint32_t written = (uint32_t)fc_ota_receiver.bytesWritten();
     if (written != fc_ota_progress_ref)
     {
