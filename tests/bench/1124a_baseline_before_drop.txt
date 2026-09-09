@@ -1,0 +1,27 @@
+# #1211 / #1124 phase A — baseline, taken BEFORE the app touches the link.
+#
+# Rig: V9 pair, S1 -> O (the OC console: BLE, its command ring and the
+# disconnect handler all live on the OC, so every line phase B needs is
+# OC-side). Rail ON. **Dummy load on ch1 (4-8 kohm). NEVER a live igniter.**
+#
+# Establishes that ch1 has NOT fired before the test, so a set CH1_FIRED bit
+# afterwards can only have come from the queued command this item is about.
+# The pyro "ps" bitfield is ARMED then a (cont, fired) PAIR per channel, and
+# it is latched by the FC itself — a better witness than a current probe,
+# which cannot see a 200 ms pulse that happened while nobody was watching.
+
+note === rail on (the download needs it, and so does continuity) ===
+send 8 01
+# The rail-on triggers the deferred peripheral init, which since #1279 spends
+# its full 90 s recovery budget on the orphaned run this board carries before
+# giving up and letting the rail come up. Wait it out.
+sleep 110
+
+note === baseline: ch1 loaded and NOT fired ===
+# Continuity is not in the first frames after the rail settles — the FC has to
+# sample it — so give this one room. 20 s timed out while the very next
+# assertion saw the same field populated.
+expect_tlm 60 ps.CH1_CONT==1
+expect_tlm 20 ps.CH1_FIRED==0
+expect_tlm 20 ps.ARMED==0
+note === done — the link is now free for the app ===

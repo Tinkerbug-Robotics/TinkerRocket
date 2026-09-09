@@ -1,0 +1,30 @@
+# #1211 / #1124 phase C — the drop killed the command and wedged nothing.
+#
+# Rig: V9 pair, S1 -> O. Rail ON. Phone app force-stopped and Bluetooth back
+# on, so the harness can take the link again.
+# **Dummy load on ch1 (4-8 kohm). NEVER a live igniter.**
+#
+# Two things, in this order and for different reasons.
+#
+# First the safety claim. The item asks for a current probe that stays flat;
+# ps.CH1_FIRED is strictly better, because the FC latches it at the moment it
+# drives the pin and it survives until a reset — so it still answers "did this
+# channel fire?" minutes later, which a probe nobody was watching cannot.
+# Phase A proved the bit was clear beforehand.
+#
+# Then the regression side: this fix DROPS commands that used to survive, so
+# the channel must still work on a deliberate tap. A wedged queue or a stuck
+# ARM would show up here and not in the refutation above.
+
+note === no late fire: the queued command really is gone, not merely delayed ===
+send 8 01
+sleep 22
+expect_tlm 20 ps.CH1_FIRED==0
+refute_tlm 30 ps.CH1_FIRED==1
+
+note === and nothing is wedged: a deliberate tap still fires ch1 ===
+mark
+send 36 01
+sleep 8
+expect_tlm 25 ps.CH1_FIRED==1
+note === done ===
