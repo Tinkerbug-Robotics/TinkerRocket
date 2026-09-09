@@ -6278,6 +6278,10 @@ static void loop_fc()
                 // filter of its gravity reference and freezes the velocity estimate.
                 const bool post_apogee = kinematics.apogee_flag;
                 const bool use_ahrs_acc = (rocket_state != INFLIGHT) || post_apogee;
+                // #1135: the GNSS heading aids assume nose-first flight, which
+                // ends at apogee (canopy from here on). The filter cannot see
+                // that; this can.
+                ekf.setNoseFirstFlight(!post_apogee);
                 ekf.update(use_ahrs_acc, ekf_imu, ekf_gnss, ekf_mag);
 
                 // #1190: say so when the shock gate trips — at most once a
