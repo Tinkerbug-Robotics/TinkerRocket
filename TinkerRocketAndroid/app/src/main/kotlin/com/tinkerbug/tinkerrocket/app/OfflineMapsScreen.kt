@@ -266,8 +266,13 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
             getMapAsync { map ->
                 map.moveCamera(CameraUpdateFactory.newLatLngZoom(initialCenter, 12.0))
                 map.addOnCameraIdleListener {
-                    centerLat = map.cameraPosition.target?.latitude ?: centerLat
-                    centerLon = map.cameraPosition.target?.longitude ?: centerLon
+                    // #1045: the centre is part of what is being downloaded.
+                    // Letting the map keep writing it mid-run made the saved
+                    // manifest describe an area the tiles are not for.
+                    if (downloader.phase.value != TileDownloader.Phase.DOWNLOADING) {
+                        centerLat = map.cameraPosition.target?.latitude ?: centerLat
+                        centerLon = map.cameraPosition.target?.longitude ?: centerLon
+                    }
                 }
                 mapRef = map
             }
@@ -319,6 +324,9 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
                 selected = source,
                 options = DOWNLOADABLE_SOURCES,
                 onSelect = { source = it },
+                // #1045: frozen for the run, as on iOS — the source is part of
+                // what is being fetched, not a live preference.
+                enabled = phase != TileDownloader.Phase.DOWNLOADING,
             )
         }
 
@@ -334,10 +342,15 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
         }
 
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            SliderRow("Radius", "%.1f km".format(radiusKm), radiusKm, 1.0..20.0) { radiusKm = (it * 2).toInt() / 2.0 }
+            val inputsEnabled = phase != TileDownloader.Phase.DOWNLOADING   // #1045
+            SliderRow(
+                "Radius", "%.1f km".format(radiusKm), radiusKm, 1.0..20.0,
+                enabled = inputsEnabled,
+            ) { radiusKm = (it * 2).toInt() / 2.0 }
             SliderRow(
                 "Detail (max zoom)", "z$effectiveMaxZoom", maxZoom,
                 13.0..source.maxZoom.toDouble().coerceAtLeast(13.0),
+                enabled = inputsEnabled,
             ) { maxZoom = it.toInt().toDouble() }
 
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -398,15 +411,30 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
             } else {
                 Button(
                     onClick = {
+                        // #1045: snapshot EVERYTHING the manifest row will
+                        // record, beside the name that already was. The
+                        // completion callback runs minutes later and used to
+                        // read the live Compose state, so a slider or source
+                        // moved during the run was written into a row
+                        // describing tiles that were never fetched — an
+                        // offline area the map then renders as blank where the
+                        // manifest says it is covered. iOS hoisted the same
+                        // values in dc1bc29; the Android half was never done.
                         val regionName = name.ifBlank { defaultName }
-                        downloader.start(spec, source.key) { tileCount, byteCount ->
+                        val downloadedSpec = spec
+                        val downloadedSource = source.key
+                        val downloadedLat = centerLat
+                        val downloadedLon = centerLon
+                        val downloadedRadiusM = radiusKm * 1000
+                        val downloadedMaxZoom = effectiveMaxZoom
+                        downloader.start(downloadedSpec, downloadedSource) { tileCount, byteCount ->
                             container.regionStore.add(
                                 OfflineRegion(
                                     name = regionName,
-                                    lat = centerLat, lon = centerLon,
-                                    radiusMeters = radiusKm * 1000,
-                                    minZoom = 10, maxZoom = effectiveMaxZoom,
-                                    source = source.key,
+                                    lat = downloadedLat, lon = downloadedLon,
+                                    radiusMeters = downloadedRadiusM,
+                                    minZoom = 10, maxZoom = downloadedMaxZoom,
+                                    source = downloadedSource,
                                     tileCount = tileCount, bytes = byteCount,
                                     savedAtMs = System.currentTimeMillis(),
                                 ),
@@ -426,6 +454,8 @@ private fun SliderRow(
     valueLabel: String,
     value: Double,
     range: ClosedFloatingPointRange<Double>,
+    /** #1045: frozen while a download is running — it defines what is being fetched. */
+    enabled: Boolean = true,
     onChange: (Double) -> Unit,
 ) {
     Column {
@@ -437,6 +467,7 @@ private fun SliderRow(
             value = value.toFloat(),
             onValueChange = { onChange(it.toDouble()) },
             valueRange = range.start.toFloat()..range.endInclusive.toFloat(),
+            enabled = enabled,
         )
     }
 }

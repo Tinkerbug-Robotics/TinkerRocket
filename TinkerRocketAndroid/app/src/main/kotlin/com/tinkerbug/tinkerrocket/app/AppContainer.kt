@@ -142,6 +142,16 @@ class AppContainer(app: Application) {
     fun runningOta(): com.tinkerbug.tinkerrocket.session.OtaSession? =
         otaSessions.values.firstOrNull { it.isRunning }
 
+    /**
+     * #1063: the session that was running, so its TERMINAL state can be shown.
+     * [runningOta] goes null the instant an OTA fails, which is exactly when
+     * the operator needs to read why.
+     */
+    fun lastOta(): com.tinkerbug.tinkerrocket.session.OtaSession? =
+        otaSessions.values.firstOrNull {
+            it.state.value !is com.tinkerbug.tinkerrocket.session.OtaSession.State.Idle
+        }
+
     fun otaSessionFor(deviceId: String): com.tinkerbug.tinkerrocket.session.OtaSession =
         otaSessions.getOrPut(deviceId) {
             com.tinkerbug.tinkerrocket.session.OtaSession(

@@ -37,6 +37,7 @@ import com.tinkerbug.tinkerrocket.session.OtaSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.activity.compose.BackHandler
 
 /**
  * OTA firmware update — port of iOS FirmwareUpdateView: pick a .bin via
@@ -321,12 +322,26 @@ private fun humanBytes(n: Long): String = when {
 @Composable
 fun OtaProgressScreen(ota: OtaSession) {
     val state by ota.state.collectAsState()
+    // #1063: a terminal state is not "in progress", and the don't-power-cycle
+    // line below is actively wrong once the run is over.
+    val terminal = state is OtaSession.State.Failed ||
+        state is OtaSession.State.Verified ||
+        state is OtaSession.State.RollbackDetected
+    BackHandler(enabled = terminal) { ota.reset() }
     Column(
         Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Firmware update in progress", style = MaterialTheme.typography.titleLarge)
+        Text(
+            when {
+                state is OtaSession.State.Failed -> "Firmware update failed"
+                state is OtaSession.State.Verified -> "Firmware updated"
+                state is OtaSession.State.RollbackDetected -> "Firmware did not take"
+                else -> "Firmware update in progress"
+            },
+            style = MaterialTheme.typography.titleLarge,
+        )
         when (val s = state) {
             is OtaSession.State.Uploading -> {
                 Text("${humanBytes(s.bytesSent)} / ${humanBytes(s.totalBytes)}", fontFamily = FontFamily.Monospace)
@@ -343,17 +358,45 @@ fun OtaProgressScreen(ota: OtaSession) {
                 CircularProgressIndicator()
                 Text("Device rebooting — waiting for it to come back…")
             }
+            // #1063: the three terminal states used to fall into the `else`
+            // below — a spinner and "Working…" under a header that still said
+            // "in progress", with the reason OtaSession had written (which
+            // names the remedy) never shown at all.
+            is OtaSession.State.Failed -> {
+                Text(
+                    s.reason,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            is OtaSession.State.Verified -> {
+                Text("Now running ${s.newVersion}", fontFamily = FontFamily.Monospace)
+            }
+            is OtaSession.State.RollbackDetected -> {
+                Text(
+                    "The device came back on ${s.version} — the same firmware it " +
+                        "had before, so the new image did not boot and the " +
+                        "bootloader reverted. Nothing is broken; try the flash " +
+                        "again, and if it repeats the image is the problem.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             else -> {
                 CircularProgressIndicator()
                 Text("Working…")
             }
         }
-        Text(
-            "Keep the phone near the device. Don't power-cycle it — the " +
-                "bootloader keeps the previous firmware and reverts to it if " +
-                "the new image doesn't boot.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (terminal) {
+            Button(onClick = { ota.reset() }) { Text("Dismiss") }
+        } else {
+            Text(
+                "Keep the phone near the device. Don't power-cycle it — the " +
+                    "bootloader keeps the previous firmware and reverts to it if " +
+                    "the new image doesn't boot.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

@@ -186,13 +186,15 @@ internal fun TileSourcePickerButton(
     options: List<TileSource>,
     onSelect: (TileSource) -> Unit,
     modifier: Modifier = Modifier,
+    /** #1045: the Save Area screen freezes this for the run of a download. */
+    enabled: Boolean = true,
 ) {
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
         TrPickerButton(
             label = selected.displayName,
             icon = selected.pickerIcon,
-            onClick = { open = true },
+            onClick = { if (enabled) open = true },
         )
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             options.forEach { option ->
