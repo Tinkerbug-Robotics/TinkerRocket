@@ -438,4 +438,31 @@ class DeviceTypeFromNameTest {
         // if iOS ever fixes the heuristic, change both together.
         assertEquals(BleDeviceType.BASE_STATION, BleDeviceType.fromName("SUBSONIC"))
     }
+
+    // ── #1057: the provisioning gate ─────────────────────────────────────
+
+    @Test
+    fun provisioningGate_promptsOncePerDevice_andNeverBeforeTheIdentityReadback() {
+        val store = KnownDeviceStore(InMemoryKnownStorage(), nowEpochMillis = { 0L })
+        // Before the readback there is no unit id, and the gate must stay shut
+        // — an empty id reads as provisioned precisely so the sheet cannot pop
+        // on a device the app cannot address yet.
+        assertTrue(store.isProvisioned(""))
+        // A device that has reported its identity but was never set up.
+        store.deviceDidReportIdentity(
+            unitID = "u-1", name = "TR-R-New", deviceType = BleDeviceType.ROCKET,
+            networkID = 0, rocketID = 1, pusher = null,
+        )
+        assertFalse(store.isProvisioned("u-1"), "#1057: this is the prompt")
+        store.markProvisioned("u-1")
+        assertTrue(store.isProvisioned("u-1"), "and it does not prompt twice")
+        // Forgetting it makes it new again — what DeviceManagerScreen has
+        // always promised and could not deliver with no caller of either side.
+        store.forget("u-1")
+        store.deviceDidReportIdentity(
+            unitID = "u-1", name = "TR-R-New", deviceType = BleDeviceType.ROCKET,
+            networkID = 0, rocketID = 1, pusher = null,
+        )
+        assertFalse(store.isProvisioned("u-1"))
+    }
 }
