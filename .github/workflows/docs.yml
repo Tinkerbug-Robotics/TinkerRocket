@@ -46,6 +46,15 @@ jobs:
       - name: Check the protocol reference matches the wire definitions
         run: python3 tools/gen_protocol_reference.py --check
 
+      # #916. Over-declaring boot-NOR size boot-loops a board before app_main,
+      # so no runtime assertion can catch it and no host test can either. What
+      # a static check CAN catch is the tell that preceded the last occurrence:
+      # a declaration that does not cover its own partition table, or two
+      # processors on one physical board disagreeing about the part fitted to
+      # it. Cheap, and it runs on every PR because this job is not path-filtered.
+      - name: Check the boot-NOR declarations against the partition tables
+        run: python3 tinkerrocket-idf/tools/check_flash_declarations.py
+
       # Runs even if a generator check above failed, so one PR surfaces every
       # documentation problem at once instead of one per push.
       - name: Check the prose agrees with the source
