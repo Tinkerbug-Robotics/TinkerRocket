@@ -103,6 +103,26 @@ internal object FlightCache {
      * No-op if none of the files exist. `file_paths.xml` already exposes all
      * of filesDir, so BinaryCache needs no manifest change.
      */
+    /**
+     * #1080: delete one downloaded flight from THIS PHONE — the .bin, the
+     * .csv and the summary sidecar together, the way iOS's swipe-to-delete
+     * does. Both platforms store downloads in durable storage on purpose (a
+     * purgeable cache dir would lose a flight the operator has not exported
+     * yet), so nothing reclaims the space on its own: before this the only
+     * remedy on Android was Settings -> Clear storage, which also takes the
+     * profiles, the checklists and the offline map tiles with it.
+     *
+     * Deliberately NOT a device delete: the board keeps its copy (BLE cmd 3
+     * is the other verb, on the Files screen).
+     */
+    fun deleteSavedFlight(context: Context, flight: SavedFlight) {
+        listOfNotNull(
+            flight.bin,
+            flight.csv,
+            summaryFileFor(context, flight.name).takeIf { it.exists() },
+        ).forEach { runCatching { it.delete() } }
+    }
+
     fun shareFlight(context: Context, files: List<File?>) {
         val present = files.filterNotNull().filter { it.exists() }
         if (present.isEmpty()) return
