@@ -13,6 +13,8 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.tinkerbug.tinkerrocket.protocol.Commands
+import kotlin.test.assertFailsWith
 
 /**
  * THE defaults pin: every RocketProfile default must equal the firmware
@@ -38,6 +40,7 @@ class FirmwareDefaultsTest {
     fun servoDefaults_matchConfigH() {
         assertEquals(0, p.servoBias1)                // config.h:139-142 SERVO_BIAS_N (#561)
         assertEquals(0, p.servoBias4)
+        assertEquals(0, p.imuRateHz)                 // RocketComputerTypes.h IMU_RATE_DYNAMIC (#1046)
         assertEquals(333, p.servoHz)                 // config.h:144 SERVO_HZ
         assertEquals(1000, p.servoMinUs)             // config.h:145 SERVO_MIN_US
         assertEquals(2000, p.servoMaxUs)             // config.h:146 SERVO_MAX_US
@@ -158,7 +161,7 @@ class RocketProfileCodecTest {
         assertNotNull(decoded)
         assertEquals(2, decoded.cameraType)          // clamped into 0..2
         assertEquals(0, decoded.imuOrientSetting)    // not 0..23 and not auto
-        assertEquals(1920, decoded.imuRateHz)        // off the ODR whitelist
+        assertEquals(0, decoded.imuRateHz)           // off the ODR whitelist -> the DYNAMIC default (#1046)
         assertEquals(1, decoded.pyro1TriggerMode)    // clamped into 0..1
         assertEquals(1, decoded.pyro2TriggerMode)    // valid, untouched
     }
@@ -957,5 +960,49 @@ class SyncGateTest {
         assertIs<ActiveRocketSyncer.Companion.CalAction.Push>(
             ActiveRocketSyncer.magCalSyncAction(cal, "A1B2C3"),
         )
+    }
+
+}
+/**
+ * #1054: the settings integers that reach the wire as i16/u16 cannot be
+ * stored — or encoded — outside that width. The screen used to show 40000
+ * for a Servo Hz whose cmd-12 frame carried -25536.
+ */
+class WireWidthBoundsTest {
+
+    @Test
+    fun decoder_clampsTheWireWidthFields() {
+        val json = """
+            {"id":"p1","name":"Over","createdMs":0,"servoHz":40000,"servoMinUs":-40000,
+             "servoMaxUs":32767,"rollDelayMs":70000,"pnCoastDelayMs":-5}
+        """.trimIndent()
+        val p = assertNotNull(RocketProfileCodec.decode(json, nowMs = 0))
+        assertEquals(32767, p.servoHz)
+        assertEquals(-32768, p.servoMinUs)
+        assertEquals(32767, p.servoMaxUs, "an in-range value is untouched")
+        assertEquals(65535, p.rollDelayMs)
+        assertEquals(0, p.pnCoastDelayMs)
+    }
+
+    @Test
+    fun encoders_acceptEveryClampedValue() {
+        // Whatever the decoder can produce, the encoder must take.
+        for (v in listOf(-32768, -1, 0, 1, 333, 32767)) {
+            assertTrue(Commands.servoConfig(listOf(v, v, v, v), v, v, v, 0f, 0f).isNotEmpty())
+        }
+        for (v in listOf(0, 1, 65535)) {
+            assertTrue(Commands.rollControlConfig(false, v, 60f, 2f, 40f, 0f).isNotEmpty())
+        }
+    }
+
+    @Test
+    fun encoder_refusesAValueItWouldHaveTruncated() {
+        // #1054: loud, not silent — 40000 used to encode as -25536.
+        assertFailsWith<IllegalArgumentException> {
+            Commands.servoConfig(listOf(0, 0, 0, 0), 40000, 1000, 2000, 0f, 0f)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Commands.rollControlConfig(false, 70000, 60f, 2f, 40f, 0f)
+        }
     }
 }
