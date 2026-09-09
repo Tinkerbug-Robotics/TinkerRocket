@@ -295,6 +295,15 @@ public class DeviceSession(
 
     private val _simLaunched = MutableStateFlow(false)
     public val simLaunched: StateFlow<Boolean> = _simLaunched.asStateFlow()
+
+    /**
+     * #1084: ground test (cmds 15/16) is running, as far as this app knows.
+     * Local state exactly like iOS's `groundTestActive` — the firmware
+     * publishes no bit for it, and its only failsafe is launch detection, so
+     * the app must keep the Stop control on screen itself.
+     */
+    private val _groundTestActive = MutableStateFlow(false)
+    public val groundTestActive: StateFlow<Boolean> = _groundTestActive.asStateFlow()
     private var simSawNonReady = false
 
     // ── Power-on watchdog (#159) ─────────────────────────────────────────
@@ -496,6 +505,9 @@ public class DeviceSession(
         _currentPage.value = 0
         _hasMoreFiles.value = false
         clearSimBannerNow()
+        // #1084: this app can no longer stop a running ground test, so it must
+        // not keep offering to. iOS drops the flag with the BLEDevice.
+        _groundTestActive.value = false
         clearPoweringOnNow()
         _rocketConfig.value = null
         // iOS equivalent is implicit: BLEDevice is recreated per connection,
@@ -661,21 +673,17 @@ public class DeviceSession(
                 // only (#390).
                 telemetryAnnouncer?.processTelemetry(data)
             }
+            // #1061: the sim latch has to see RELAYED frames too. It sat
+            // below the `return` above, so on a base-station link it never
+            // advanced — the banner it drives could never clear itself, which
+            // is why the latch's one consumer was hidden on BS links rather
+            // than shown. Run it on the focused rocket's frames here.
+            if (rid == _focusRocketId.value) advanceSimLatch(data)
             recomputeEffective()
             return
         }
 
-        // Sim-banner latch: launched → wait for a non-READY state, then the
-        // return to READY clears the banner (iOS markSimLaunched flow).
-        if (_simLaunched.value) {
-            if (data.state != "READY" && data.state != "INITIALIZATION") {
-                simSawNonReady = true
-            }
-            if (simSawNonReady && data.state == "READY") {
-                _simLaunched.value = false
-                simSawNonReady = false
-            }
-        }
+        advanceSimLatch(data)
         _telemetry.value = data
         // #159: the rocket finished flushing and powered on — drop the busy
         // state (guarded inside clearPoweringOn via StateFlow dedup).
@@ -1000,6 +1008,22 @@ public class DeviceSession(
         }
     }
 
+    /**
+     * #1061: launched → wait for a non-READY state, then the return to READY
+     * clears the banner (iOS markSimLaunched flow). Runs on direct AND
+     * focused-relay frames.
+     */
+    private fun advanceSimLatch(data: TelemetryData) {
+        if (!_simLaunched.value) return
+        if (data.state != "READY" && data.state != "INITIALIZATION") {
+            simSawNonReady = true
+        }
+        if (simSawNonReady && data.state == "READY") {
+            _simLaunched.value = false
+            simSawNonReady = false
+        }
+    }
+
     private fun refreshFocusedRelayFreshness(now: Long = clock()) {
         val focus = _focusRocketId.value
         val remote = if (isBaseStation && focus != null) remoteMap[focus] else null
@@ -1288,6 +1312,42 @@ public class DeviceSession(
         sessionScope.launch {
             _simLaunched.value = true
             simSawNonReady = false
+        }
+    }
+
+    /**
+     * #1061: stop a running simulation. On a base-station link the stop is
+     * addressed to the FOCUSED rocket through the cmd-50 relay envelope — a
+     * bare cmd 7 there would be relayed to whoever the BS is pinned to (or
+     * dropped), and on a pad with two rockets simulating, a broadcast stop
+     * would hit the neighbour. iOS does exactly this.
+     */
+    public fun stopSimulation() {
+        sessionScope.launch {
+            val focus = _focusRocketId.value
+            val frame = if (isBaseStation && focus != null) {
+                Commands.relayToRocket(focus, Commands.bare(BleCommandId.SIM_STOP))
+            } else {
+                Commands.bare(BleCommandId.SIM_STOP)
+            }
+            writeCommand(frame)
+            clearSimBannerNow()
+        }
+    }
+
+    /**
+     * #1084: start/stop the FC's closed-loop bench mix (cmds 15/16). Direct
+     * links only — the base station has no dispatch for 15/16, so on a relay
+     * link this would be a tap that goes nowhere (iOS hides the control there
+     * for the same reason).
+     */
+    public fun setGroundTestActive(active: Boolean) {
+        if (isBaseStation) return
+        sessionScope.launch {
+            writeCommand(Commands.bare(
+                if (active) BleCommandId.GROUND_TEST_START else BleCommandId.GROUND_TEST_STOP,
+            ))
+            _groundTestActive.value = active
         }
     }
 
