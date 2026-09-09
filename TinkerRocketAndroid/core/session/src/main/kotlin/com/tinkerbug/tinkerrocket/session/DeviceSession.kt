@@ -114,6 +114,25 @@ public class DeviceSession(
      * of blanking until the next valid fix.
      */
     private val fixLookup: ((RocketKey) -> LastValidRocketFix?)? = null,
+    /**
+     * #1040 focus hand-off (iOS `BLEFleet.setFocus` writes `bsFocus` BEFORE it
+     * pushes cmd 45): invoked on every focus change this session makes on its
+     * own — the operator's tap ([setFocusRocket]) and the #1052 self-heal —
+     * so the fleet's sticky map moves with it and a reconnect re-seeds the
+     * CORRECT pin. Without it the map kept the first rocket heard and every
+     * link bounce silently re-pinned the old one (base station included, via
+     * the choreography's cmd 45). Wire to [FleetManager.recordFocus].
+     */
+    private val onUserFocus: ((Int) -> Unit)? = null,
+    /**
+     * #1041 identity hand-off (iOS: `deviceType` is a `didSet` on the fleet's
+     * OWN BLEDevice, so voice/profile routing re-runs on the readback).
+     * Invoked with the parsed config_identity and this session as the
+     * [DeviceIdentityPusher]; wire to [FleetManager.onIdentityReadback], which
+     * updates the FleetDevice record AND folds into the registry. When set,
+     * this session does NOT push to [knownDevices] itself — the fleet does.
+     */
+    private val onIdentity: ((ConfigIdentityMsg, DeviceIdentityPusher) -> Unit)? = null,
 ) : DeviceIdentityPusher {
 
     // ── Connection / link state ──────────────────────────────────────────
@@ -288,6 +307,13 @@ public class DeviceSession(
 
     private val _focusRocketId = MutableStateFlow<Int?>(null)
     public val focusRocketId: StateFlow<Int?> = _focusRocketId.asStateFlow()
+    /**
+     * #1052 focus-pin self-heal (iOS `focusPinGraceUntil`): session-clock
+     * deadline before which the pin cannot be healed away. Armed by every pin
+     * write — auto-latch, seed, user switch, heal — so a rocket that has merely
+     * not transmitted since reconnect keeps focus until it has had its chance.
+     */
+    private var focusPinGraceUntilMs: Long? = null
 
     private val remoteMap = LinkedHashMap<Int, RelayedRocket>()
     private val _remoteRockets = MutableStateFlow<List<RelayedRocket>>(emptyList())
@@ -569,11 +595,21 @@ public class DeviceSession(
             val fix = onRocketFix?.invoke(
                 data, RocketKey(_identity.value.networkId ?: 0, rid))
 
-            // #390: sticky first-heard focus — never moves on its own after
-            // this; the user (or the fleet re-seed) switches it.
+            // #390: sticky first-heard focus — the user (or the fleet re-seed)
+            // switches it, and since #1052 a DANGLING pin heals itself: once the
+            // grace window has passed, a pinned rocket that has been silent for
+            // FOCUS_PIN_STALE_AFTER_MS loses focus to the rocket being relayed
+            // now. iOS BLEDevice does exactly this; without it the app pushed
+            // the stale pin as cmd 45 on every reconnect, which DISABLES the
+            // base station's own 30 s auto-fallback — nothing below the app
+            // could recover either, and the flight was watched on the wrong
+            // rocket. Both guards are load-bearing (see shouldHealFocusPin).
             if (_focusRocketId.value == null) {
                 _focusRocketId.value = rid
+                focusPinGraceUntilMs = now + FOCUS_PIN_GRACE_MS
                 onAutoFocus?.invoke(rid)
+            } else if (shouldHealFocusPin(rid, now)) {
+                applyFocus(rid)
             }
             if (rid == _focusRocketId.value) {
                 _telemetry.value = data
@@ -635,17 +671,25 @@ public class DeviceSession(
         )
         _identity.value = next
         recomputeEffective()
-        // Fold into the registry + push queued offline edits (iOS:
-        // fleet?.knownDevices.deviceDidReportIdentity; empty-uid guard is in
-        // the store).
-        knownDevices?.deviceDidReportIdentity(
-            unitID = next.unitId,
-            name = next.unitName,
-            deviceType = next.deviceType,
-            networkID = next.networkId,
-            rocketID = next.rocketId,
-            pusher = this,
-        )
+        // #1041: hand the readback to the fleet, which updates ITS record (the
+        // one voice routing and the foreground-BS pick read — frozen at the
+        // connect-time guess before this) and folds into the registry. Only a
+        // fleet-less session (standalone/replay) folds into the registry here.
+        val fleetHook = onIdentity
+        if (fleetHook != null) {
+            fleetHook(msg, this)
+        } else {
+            // (iOS: fleet?.knownDevices.deviceDidReportIdentity; empty-uid
+            // guard is in the store.)
+            knownDevices?.deviceDidReportIdentity(
+                unitID = next.unitId,
+                name = next.unitName,
+                deviceType = next.deviceType,
+                networkID = next.networkId,
+                rocketID = next.rocketId,
+                pusher = this,
+            )
+        }
     }
 
     private fun onImuOrient(msg: ImuOrientMsg) {
@@ -954,6 +998,10 @@ public class DeviceSession(
      */
     public fun seedFocusRocket(rocketId: Int) {
         _focusRocketId.value = rocketId
+        // #1052: a re-seeded pin is a deliberate choice too — without the grace
+        // the heal fires on the first relayed frame after adopt(), when the
+        // roster is still empty, and steals focus on every single reconnect.
+        focusPinGraceUntilMs = clock() + FOCUS_PIN_GRACE_MS
     }
 
     /**
@@ -962,18 +1010,47 @@ public class DeviceSession(
      * refresh the staleness overlay, and push the pin (cmd 45) to the BS.
      */
     public fun setFocusRocket(rocketId: Int) {
-        sessionScope.launch {
-            _focusRocketId.value = rocketId
-            remoteMap[rocketId]?.let { _telemetry.value = it.telemetry }
-            // #140 re-latch from the fleet cache (iOS BLEFleet.setFocus):
-            // the newly focused rocket's last known position shows
-            // immediately instead of blanking until its next valid fix.
+        sessionScope.launch { applyFocus(rocketId) }
+    }
+
+    /**
+     * The one pin-writing path for a switch this session decides (the
+     * operator's tap and the #1052 heal). Session dispatcher only.
+     */
+    private fun applyFocus(rocketId: Int) {
+        _focusRocketId.value = rocketId
+        focusPinGraceUntilMs = clock() + FOCUS_PIN_GRACE_MS
+        remoteMap[rocketId]?.let { _telemetry.value = it.telemetry }
+        // #140 re-latch from the fleet cache (iOS BLEFleet.setFocus), and
+        // #1042: ASSIGN the lookup result, null included — iOS does a plain
+        // assignment. The old `?.let` skipped the write on a cache miss, so a
+        // switch to a rocket that has never had a usable fix left the
+        // PREVIOUS rocket's coordinates on the bearing card and the map marker
+        // for as long as the new one stayed under four satellites.
+        _lastValidRocketFix.value =
             fixLookup?.invoke(RocketKey(_identity.value.networkId ?: 0, rocketId))
-                ?.let { _lastValidRocketFix.value = it }
-            refreshFocusedRelayFreshness()
-            recomputeEffective()
-            writeCommand(Commands.setFocusRocket(rocketId))
-        }
+        refreshFocusedRelayFreshness()
+        recomputeEffective()
+        // #1040: the fleet's sticky map first, then the wire — iOS order.
+        onUserFocus?.invoke(rocketId)
+        sessionScope.launch { writeCommand(Commands.setFocusRocket(rocketId)) }
+    }
+
+    /**
+     * #1052: heal a dangling pin? Only when (a) the grace window since the
+     * last pin write has passed AND (b) the pinned rocket has not been relayed
+     * for [FOCUS_PIN_STALE_AFTER_MS] (a rocket never heard this session counts
+     * as stale — the post-reconnect case). (a) stops a rocket that merely has
+     * not transmitted yet from losing focus to whoever speaks first; (b) stops
+     * a stale roster entry from propping up a pin for a rocket that has been
+     * off the air for minutes. iOS BLEDevice's relayed-frame branch verbatim.
+     */
+    private fun shouldHealFocusPin(heardRid: Int, now: Long): Boolean {
+        val pinned = _focusRocketId.value ?: return false
+        if (pinned == heardRid) return false
+        if (now < (focusPinGraceUntilMs ?: Long.MIN_VALUE)) return false
+        val lastSeen = remoteMap[pinned]?.lastSeenMs ?: return true
+        return now - lastSeen >= FOCUS_PIN_STALE_AFTER_MS
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -1309,6 +1386,12 @@ public class DeviceSession(
 
         /** iOS 2.0 s RSSI poll (also drives the #390 staleness overlay). */
         public const val RSSI_POLL_MS: Long = 2_000
+
+        /** iOS `BLEDevice.focusPinGraceInterval` — no heal for 20 s after any pin write (#1052). */
+        public const val FOCUS_PIN_GRACE_MS: Long = 20_000
+
+        /** iOS `BLEDevice.focusPinStaleAfter` — the pinned rocket counts as gone after 15 s of silence (#1052). */
+        public const val FOCUS_PIN_STALE_AFTER_MS: Long = 15_000
 
         /** Mirrors the BS firmware's BLE_TELEMETRY_STALE_MS. */
         public const val RELAY_STALE_THRESHOLD_MS: Long = 3_000

@@ -363,7 +363,9 @@ fun DashboardScreen(
             val lastFix by session.lastValidRocketFix.collectAsState()
             DirectionToRocketCard(
                 phoneLocation = phoneLocation,
-                fix = lastFix,
+                // #1042: never point the arrow at a rocket other than the
+                // focused one — the fix carries its rocketId for this.
+                fix = lastFix?.takeIf { it.rocketId == focusRocketId },
                 rocketAltM = (telemetry.gnssAlt ?: telemetry.pressureAlt)?.toDouble(),
             )
         }

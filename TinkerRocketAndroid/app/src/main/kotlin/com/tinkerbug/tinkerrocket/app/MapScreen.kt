@@ -111,10 +111,18 @@ fun MapScreen(
         MapLibre.setConnected(true)
     }
 
-    val fix by (
+    val latchedFix by (
         session?.lastValidRocketFix
             ?: kotlinx.coroutines.flow.MutableStateFlow(null)
         ).collectAsState()
+    val focusRocketId by (
+        session?.focusRocketId
+            ?: kotlinx.coroutines.flow.MutableStateFlow<Int?>(null)
+        ).collectAsState()
+    // #1042: on a base-station link the marker is the FOCUSED rocket — a fix
+    // latched for another rocket must not be drawn as it (a direct rocket link
+    // has one rocket and no focus, so it passes through).
+    val fix = latchedFix?.takeIf { session?.isBaseStation != true || it.rocketId == focusRocketId }
     val prediction by (
         predictor?.prediction
             ?: kotlinx.coroutines.flow.MutableStateFlow<LandingPrediction?>(null)
