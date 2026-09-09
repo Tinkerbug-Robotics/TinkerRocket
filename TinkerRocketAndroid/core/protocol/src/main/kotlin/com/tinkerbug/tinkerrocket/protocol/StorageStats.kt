@@ -13,7 +13,8 @@ package com.tinkerbug.tinkerrocket.protocol
  * Rocket NAND flight-log usage, in 256 KB blocks (wire = 15 bytes, LE packed):
  *   [0..1] u16 flight_region_blocks  [2..3] u16 used  [4..5] u16 free
  *   [6..7] u16 bad  [8..9] u16 system  [10..11] u16 flight_count
- *   [12..13] u16 block_size_kb  [14] u8 flags(bit0=initialized, bit1=auto-evicted)
+ *   [12..13] u16 block_size_kb
+ *   [14] u8 flags(bit0=initialized, bit1=auto-evicted, bit2=blind-launch)
  */
 public data class RocketStorageStats(
     val flightRegionBlocks: Int,
@@ -30,6 +31,20 @@ public data class RocketStorageStats(
      * (RSS_FLAG_AUTO_EVICTED, bit1).
      */
     val autoEvicted: Boolean,
+    /**
+     * #1271/#917: at least one launch was lost to a phone-IO blind window and the
+     * operator has not acknowledged it (RSS_FLAG_BLIND_LAUNCH, bit2 — the ROCKET
+     * struct's bit2, unrelated to `BSS_FLAG_RETRIED` below).
+     *
+     * Unlike [autoEvicted] this is NOT per-session: the out computer persists it
+     * in NVS so it survives the power cycle between the lost flight and the
+     * operator connecting to download, which is when anyone finds out. Cleared
+     * only by command 73.
+     *
+     * Reported independently of [initialized] — render it outside any
+     * `initialized` gate, because a failed log bring-up is when it matters most.
+     */
+    val blindLaunch: Boolean,
 ) {
     private val blockBytes: Long get() = blockSizeKb.toLong() * 1024
 
@@ -66,6 +81,7 @@ public data class RocketStorageStats(
                 blockSizeKb = blockSizeKb,
                 initialized = (flags and 0x01) != 0,
                 autoEvicted = (flags and 0x02) != 0,
+                blindLaunch = (flags and 0x04) != 0,
             )
         }
     }

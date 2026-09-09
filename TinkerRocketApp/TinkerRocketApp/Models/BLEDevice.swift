@@ -356,6 +356,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // copy must not bridge sessions (it could "confirm" a send made
         // over a new connection to a rebooted FC).
         guidanceTargetEcho = nil
+        // #1271: storage stats are per-connection live state and were never
+        // cleared here. That was harmless while every field was a volatile
+        // block count, but `blindLaunch` is a latched warning — a stale copy
+        // would keep asserting a lost flight against a board that has since
+        // been acknowledged, or against a DIFFERENT rocket on the next
+        // connect. The OC re-sends within ~3 s of any live link.
+        rocketStorage = nil
+        bsStorage = nil
         // Power state is unknown again until the next session's first frame
         // (#377). Reconnects build a new BLEDevice anyway; this covers the
         // state-restoration path that reuses one.

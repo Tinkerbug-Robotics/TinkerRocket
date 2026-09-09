@@ -56,7 +56,8 @@ static inline std::string itos(int v)
 
 #include "config.h"
 #include "ota_relay_policy.h"   // #834 items 6/7: I2S relay recovery timing
-#include "rail_restore_policy.h"  // #825: boot rail re-assert decision
+#include "rail_restore_policy.h"
+#include "blind_window_policy.h"   // #1271: what a phone-IO blind window actually cost  // #825: boot rail re-assert decision
 #include "flight_token_policy.h"  // #1176: tier-2 rail decision from a durable token
 #include "holdup_policy.h"        // #1166: the verdict on the hold-up supercap
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
@@ -2768,7 +2769,40 @@ static bool     phone_io_pre_launch_latched = false;
 static uint8_t  phone_io_pre_state          = 0;
 static uint32_t phone_io_pause_started_ms   = 0;
 static bool     phone_io_blind_check_pending = false;
-static uint32_t oc_blind_window_launches     = 0;   // surfaced in diagnostics
+// #1271: how many launches this board has lost to a phone-IO blind window,
+// and whether the operator has acknowledged them.
+//
+// This used to be a bare RAM counter described as "surfaced in diagnostics"
+// that nothing ever read, and that died at the next power cycle — so a flight
+// lost this way was indistinguishable from one that was never flown by the
+// time the operator recovered the rocket and connected to download. It is now
+// persisted and rides RSS_FLAG_BLIND_LAUNCH on the storage-stats notify.
+//
+// NVS DISCIPLINE. The default `nvs` partition is 20 KB and already carries
+// eleven namespaces; nvs_flash_init() erases the WHOLE partition on
+// ESP_ERR_NVS_NO_FREE_PAGES (see setup_oc), so a chatty writer here would
+// eventually wipe its own record along with everything else. Two guards: the
+// write happens only on a genuine latch (a real lost flight, gated by
+// BlindWindowPolicy), and it stops entirely once the stored count reaches
+// kBlindWindowMaxPersisted — past that the exact number stops mattering and
+// only the flag does.
+static constexpr const char* kBlindWindowNvsNs  = "blindwin";   // NOT "lora": that namespace is prefs.clear()ed on a schema bump
+static constexpr const char* kBlindWindowNvsKey = "lost";
+static constexpr uint32_t    kBlindWindowMaxPersisted = 255;
+static uint32_t oc_blind_window_launches = 0;   // persisted; 0 = nothing outstanding
+
+// Staged out of the frame-parse path. ocPhoneIoBlindWindowCheck() runs from
+// processFrame(), which is reached from BOTH the "I2S Parse" task and
+// loop_oc's serviceI2CIngress — neither is a place to open NVS. Same shape as
+// the #1176 token staging above; serviced from loop_oc.
+// What the app has actually been SHOWN. The acknowledgement clears only up to
+// this, so a loss that latched after the frame the operator acted on is not
+// erased unread. This lives here rather than on the wire because the flag is a
+// single bit — the app cannot tell us a count it was never sent.
+static uint32_t oc_blind_window_reported = 0;
+static volatile bool blind_window_write_pending = false;
+static uint32_t      blind_window_pending_value = 0;
+static portMUX_TYPE  blind_window_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static inline void beginPhoneIO()
 {
@@ -2794,35 +2828,107 @@ static inline void endPhoneIO()
     // frame. ocPhoneIoBlindWindowCheck() runs there.
 }
 
-// #917: called on the first frame parsed after a phone-IO pause ends. If the
-// vehicle launched — or flew and landed — while the OC was deaf, say so
-// loudly, because the flight log for that ascent does not exist and nothing
-// else would ever mention it.
+// #917/#1271: called on the first frame parsed after a phone-IO pause ends,
+// to say what the pause cost. The verdict itself lives in
+// blind_window_policy.h; this only carries it out.
+//
+// #1271 corrected the old message here, which claimed unconditionally that
+// "the flight log for it does not exist". That is only true when the window
+// was long enough to swallow the ascent: the OC's launch edge in loop_oc is
+// DELAYED by the pause, not missed, so a short window leaves a log that
+// exists and starts late. The distinction did not matter while this was one
+// ESP_LOGE nobody reads; it matters now that a lost flight latches a warning
+// the operator has to acknowledge.
 static void ocPhoneIoBlindWindowCheck()
 {
     if (!phone_io_blind_check_pending) return;
     phone_io_blind_check_pending = false;
 
     const bool now_launched = nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
+    const bool sim_active   = nsFlagSet(latest_non_sensor.flags, NSF_SIM_ACTIVE);
     const uint32_t blind_ms = millis() - phone_io_pause_started_ms;
-    if (now_launched && !phone_io_pre_launch_latched)
+
+    using BlindWindowPolicy::Verdict;
+    const Verdict v = BlindWindowPolicy::classify(
+        now_launched, phone_io_pre_launch_latched, sim_active, blind_ms);
+
+    switch (v)
     {
+    case Verdict::LaunchLost:
         oc_blind_window_launches++;
         ESP_LOGE("OC", "#917: the rocket LAUNCHED during a %lu ms phone-IO pause "
                        "(state %u -> %u). I2S ingest was suppressed for the whole "
-                       "transfer, so the boost phase was never received and the "
-                       "flight log for it does not exist. Any log opened now starts "
-                       "mid-flight or not at all.",
+                       "transfer and the backlog was discarded, so the ascent was "
+                       "never received. Any log opened now starts mid-flight or "
+                       "not at all. Flagged to the app (#1271) until acknowledged.",
                  (unsigned long)blind_ms, (unsigned)phone_io_pre_state,
                  (unsigned)latest_rocket_state);
-    }
-    else if (blind_ms > 5000UL)
-    {
+        // Stage the write; loop_oc performs it. See blindWindowServiceWrite().
+        if (oc_blind_window_launches <= kBlindWindowMaxPersisted)
+        {
+            portENTER_CRITICAL(&blind_window_mux);
+            blind_window_pending_value = oc_blind_window_launches;
+            portEXIT_CRITICAL(&blind_window_mux);
+            blind_window_write_pending = true;
+        }
+        break;
+
+    case Verdict::LaunchClipped:
+        // Not latched: the log exists, it just begins late.
+        ESP_LOGW("OC", "#917: the rocket launched during a SHORT %lu ms phone-IO "
+                       "pause (state %u -> %u). The launch edge is delayed rather "
+                       "than lost, so the flight log exists with roughly that much "
+                       "missing from the front. Not flagged.",
+                 (unsigned long)blind_ms, (unsigned)phone_io_pre_state,
+                 (unsigned)latest_rocket_state);
+        break;
+
+    case Verdict::LaunchSim:
+        // A sim sets NSF_LAUNCH exactly as a real flight does. Say it, but
+        // never latch: otherwise every bench run of this feature's own test
+        // procedure leaves an acknowledgement-required warning behind.
+        ESP_LOGW("OC", "#917: a SIMULATED launch ran during a %lu ms phone-IO "
+                       "pause (state %u -> %u). Sim data is not flagged.",
+                 (unsigned long)blind_ms, (unsigned)phone_io_pre_state,
+                 (unsigned)latest_rocket_state);
+        break;
+
+    case Verdict::NoLaunchLong:
         ESP_LOGW("OC", "#917: %lu ms phone-IO pause ended; no launch observed "
                        "across it (state %u -> %u)",
                  (unsigned long)blind_ms, (unsigned)phone_io_pre_state,
                  (unsigned)latest_rocket_state);
+        break;
+
+    case Verdict::Quiet:
+    default:
+        break;
     }
+}
+
+// Performs the staged NVS write. Called from loop_oc — deliberately not from
+// the flight-log flush task, which only exists when the logger came up.
+static void blindWindowServiceWrite()
+{
+    if (!blind_window_write_pending) return;
+    blind_window_write_pending = false;
+
+    uint32_t value;
+    portENTER_CRITICAL(&blind_window_mux);
+    value = blind_window_pending_value;
+    portEXIT_CRITICAL(&blind_window_mux);
+
+    Preferences p;
+    if (!p.begin(kBlindWindowNvsNs, false))
+    {
+        ESP_LOGE("OC", "#1271: could not open the blind-window namespace — this "
+                       "lost flight will not be reported after a power cycle");
+        return;
+    }
+    p.putUInt(kBlindWindowNvsKey, value);
+    p.end();
+    ESP_LOGW("OC", "#1271: blind-window loss count persisted (%lu)",
+             (unsigned long)value);
 }
 
 // ==========================================================================
@@ -6997,6 +7103,17 @@ static void printStats()
                 if (flightlog.autoEvictedCount() > 0)  // #315: rolling-buffer evicted this session
                     rss.flags |= RSS_FLAG_AUTO_EVICTED;
             }
+            // #1271: DELIBERATELY outside the isInitialized() guard above. A
+            // blind-window loss is a fact about a past flight, not about the
+            // current state of the log surface — and if the flight log failed
+            // to come up, the operator needs this MORE, not less. Inside the
+            // guard it would vanish in exactly the degraded state that follows
+            // a failure.
+            if (oc_blind_window_launches > 0)
+            {
+                rss.flags |= RSS_FLAG_BLIND_LAUNCH;
+                oc_blind_window_reported = oc_blind_window_launches;
+            }
             ble_app.sendStorageStats(0xCC, reinterpret_cast<const uint8_t*>(&rss), sizeof(rss));
         }
     }
@@ -7620,6 +7737,27 @@ static void loadCachedPeripheralConfigFromNvs()
         ESP_LOGI("CFG", "NVS IMU logging rate: DYNAMIC");
     else
         ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
+
+    // #1271: outstanding blind-window losses, carried across the power cycle
+    // between the lost flight and the operator connecting to download. This
+    // is the whole reason the record is persisted rather than a RAM counter:
+    // by the time anyone looks, the board has been off.
+    {
+        Preferences p;
+        if (p.begin(kBlindWindowNvsNs, true))   // read-only: do not create the namespace on a clean board
+        {
+            oc_blind_window_launches = p.getUInt(kBlindWindowNvsKey, 0);
+            p.end();
+        }
+        if (oc_blind_window_launches > 0)
+        {
+            ESP_LOGE("OC", "#1271: %lu launch(es) were lost to a phone-IO blind "
+                           "window and have not been acknowledged. The app is "
+                           "showing this on the storage view; BLE command 73 "
+                           "clears it.",
+                     (unsigned long)oc_blind_window_launches);
+        }
+    }
 
     // Load cached pyro config from NVS (4 channels)
     prefs.begin("pyro", true);
@@ -11160,7 +11298,60 @@ static void loop_oc()
                 ble_app.sendRecoveryEndResult(0);
             }
         }
+        else if (ble_cmd == 73)
+        {
+            // #1271 — the operator acknowledges the blind-window loss(es).
+            //
+            // BLE ONLY, and deliberately absent from processUplinkCommand: this
+            // clears the only record that flight data was lost, so it should
+            // require someone standing at the rocket rather than being reachable
+            // over the radio link.
+            //
+            // Clears only up to what the app was actually SHOWN. The operator
+            // taps on the strength of a storage frame up to ~3 s old; if a
+            // further loss latched in between, clearing it would destroy the
+            // very notice this exists to deliver. Refusing is safe — the next
+            // frame re-shows the flag and they can tap again.
+            if (oc_blind_window_launches == 0)
+            {
+                ESP_LOGI("OC", "#1271: blind-window ack ignored — nothing outstanding");
+            }
+            else if (oc_blind_window_reported < oc_blind_window_launches)
+            {
+                ESP_LOGW("OC", "#1271: blind-window ack REFUSED as stale — %lu "
+                               "outstanding but only %lu had been reported. A "
+                               "further loss landed after the frame you acted on; "
+                               "the next storage update will show it.",
+                         (unsigned long)oc_blind_window_launches,
+                         (unsigned long)oc_blind_window_reported);
+            }
+            else
+            {
+                const uint32_t cleared = oc_blind_window_launches;
+                oc_blind_window_launches = 0;
+                oc_blind_window_reported = 0;
+                Preferences bp;
+                if (bp.begin(kBlindWindowNvsNs, false))
+                {
+                    bp.remove(kBlindWindowNvsKey);
+                    bp.end();
+                    ESP_LOGW("OC", "#1271: blind-window record acknowledged and "
+                                   "cleared (%lu loss(es))", (unsigned long)cleared);
+                }
+                else
+                {
+                    // RAM is already clear so the flag drops off the wire and the
+                    // tap visibly takes effect — but it returns at the next boot.
+                    // Say so rather than let it reappear inexplicably.
+                    ESP_LOGE("OC", "#1271: acknowledged, but the NVS clear FAILED "
+                                   "— this warning will return after a reboot");
+                }
+            }
+        }
     }
+
+    // #1271: perform any NVS write staged by the frame-parse path.
+    blindWindowServiceWrite();
 
     LOOP_STALL_INSTR("printStats", printStats());
 

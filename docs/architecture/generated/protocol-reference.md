@@ -208,7 +208,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-53 commands.
+54 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -265,6 +265,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 67 |  | IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0) or a whitelisted ISM6HG256 ODR (960/1920/3840).… |
 | 68 | `LORA_CMD_SET_TX_DISABLED` | "LoRa off": [disabled:1] — 1 mutes every LoRa transmit, 0 resumes. Same constant (and therefore the same… |
 | 69 |  | #1176 step 6 — the operator's manual end of a restored flight. BLE ONLY, by decision: this number is… |
+| 73 |  | #1271 — the operator acknowledges the blind-window loss(es). BLE ONLY, and deliberately absent from… |
 
 > 9 of these have no comment in the dispatch and so no
 > description here: 7, 15, 16, 21, 51, 52, 53, 54, 57. Adding a comment to the branch
