@@ -57,7 +57,8 @@ final class MapAnnotationReconcileTests: XCTestCase {
     private func makeCoordinator() -> RocketMapView.Coordinator {
         RocketMapView.Coordinator(
             RocketMapView(tileSource: .constant(.appleStandard),
-                          region: .constant(MKCoordinateRegion()))
+                          region: .constant(MKCoordinateRegion()),
+                          followRocket: .constant(true))
         )
     }
 
