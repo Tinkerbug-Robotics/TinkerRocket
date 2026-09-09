@@ -82,6 +82,7 @@ static inline std::string itos(int v)
 #include <TR_Orientation.h>
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
+#include <BleDownloadChunk.h>   // #1160: how a log frame goes into a download chunk
 #include <RocketComputerTypes.h>
 #include <RollProfileGate.h>    // #1115: shared roll-profile acceptance gate (host-tested)
 #include <TR_INA230.h>
@@ -10103,8 +10104,18 @@ static void loop_oc()
                         break;  // Incomplete frame — will carry over to next read
                     }
 
-                    // Complete frame found — flush BLE buffer if this frame won't fit
-                    if (ble_used > 0 && ble_used + frame_size > chunk_data_size)
+                    // Complete frame found. #1160: decide how it goes out. The
+                    // old rule flushed only while the stage was non-empty, so a
+                    // frame larger than chunk_data_size arriving at an EMPTY
+                    // stage was appended and sent whole — an over-MTU
+                    // notification NimBLE truncates while returning success.
+                    // SNAPSHOT_MSG is 232 B at 10 Hz; the common iOS MTU of 185
+                    // fits 175. Chunks are opaque byte ranges to the apps, so
+                    // an oversized frame is streamed in pieces instead.
+                    const tr_ble::AppendPlan plan =
+                        tr_ble::planAppend(ble_used, frame_size, chunk_data_size);
+
+                    if (plan.flush_first)
                     {
                         const uint32_t t_ble = micros();
                         const bool sent = ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, false);
@@ -10122,9 +10133,36 @@ static void loop_oc()
                         ble_used = 0;
                     }
 
-                    // Append frame to BLE buffer
-                    memcpy(ble_buf + ble_used, read_buf + pos, frame_size);
-                    ble_used += frame_size;
+                    if (plan.direct_pieces == 0)
+                    {
+                        // Append frame to BLE buffer
+                        memcpy(ble_buf + ble_used, read_buf + pos, frame_size);
+                        ble_used += frame_size;
+                    }
+                    else
+                    {
+                        // Larger than any chunk: stream it straight from read_buf
+                        // as consecutive pieces. Offsets stay contiguous, which is
+                        // all the apps check.
+                        size_t off = 0;
+                        for (size_t i = 0; i < plan.direct_pieces && !send_failed; ++i)
+                        {
+                            const size_t piece = tr_ble::pieceLen(frame_size, chunk_data_size, i);
+                            const uint32_t t_ble = micros();
+                            const bool sent = ble_app.sendFileChunk(bytes_sent, read_buf + pos + off, piece, false);
+                            ble_us += (uint32_t)(micros() - t_ble);
+                            if (!sent)
+                            {
+                                ESP_LOGE("BLE", "BLE send failed mid-transfer (piece %u/%u of a %u B frame), aborting download",
+                                         (unsigned)(i + 1), (unsigned)plan.direct_pieces, (unsigned)frame_size);
+                                send_failed = true;
+                                break;
+                            }
+                            bytes_sent += piece;
+                            off += piece;
+                        }
+                        if (send_failed) break;
+                    }
                     frames_sent++;
                     pos += frame_size;
                 }

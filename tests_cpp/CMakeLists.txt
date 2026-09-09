@@ -538,6 +538,20 @@ target_include_directories(test_ble_chunk_size PRIVATE
 target_link_libraries(test_ble_chunk_size GTest::gtest_main)
 gtest_discover_tests(test_ble_chunk_size)
 
+# ---------- test_ble_download_chunk ----------
+# #1160 / #1155 item 2: a log frame larger than the chunk capacity used to be
+# appended and sent whole at an empty stage — an over-MTU notification NimBLE
+# truncates while returning success. BleDownloadChunk.h is pure integer
+# arithmetic, so the rule and the exhaustive no-payload-exceeds-chunk property
+# are tested on the host.
+add_executable(test_ble_download_chunk test_ble_download_chunk.cpp)
+target_include_directories(test_ble_download_chunk PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_BLE_To_APP
+)
+target_link_libraries(test_ble_download_chunk GTest::gtest_main)
+gtest_discover_tests(test_ble_download_chunk)
+
 # ---------- test_mram_probe ----------
 # #826: the MRAM ring used to be selected from a CS pin number alone, so a
 # board with no MRAM part logged every flight from a floating SPI bus into

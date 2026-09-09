@@ -1511,6 +1511,26 @@ void TR_BLE_To_APP::sendFileList(const String& files_json)
     // Store JSON in member variable so it persists
     file_list_json_ = files_json;
 
+    // #1144 item 1: the one file-ops JSON path that never had the guard
+    // sendConfigJSON/sendTelemetryJSON have. A full page (FILES_PER_PAGE = 5,
+    // ~53 B per entry, ~270 B) does not fit an ATT MTU of 185; NimBLE trims
+    // the notification to the MTU and returns 0, so the app parsed truncated
+    // JSON while this logged the full length as sent. Skip and say so. The
+    // page size itself is a wire contract shared with both apps (they compute
+    // page counts from it), so it is not derived from the MTU here.
+    {
+        const size_t max_notify = maxNotifyBytes();
+        if (file_list_json_.length() > max_notify)
+        {
+            ESP_LOGW(BLE_TAG, "File list JSON %u B > MTU limit %u (mtu=%u), SKIPPING — "
+                              "a truncated page is unparseable; the app will time out "
+                              "this page instead",
+                     (unsigned)file_list_json_.length(), (unsigned)max_notify,
+                     (unsigned)effectiveMtu());
+            return;
+        }
+    }
+
     int rc = notify_data(conn_handle_, file_ops_val_handle_,
                          (const uint8_t*)file_list_json_.c_str(),
                          file_list_json_.length());
@@ -1667,6 +1687,28 @@ bool TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
     // Build chunk packet: [offset(4)][length(2)][flags(1)][data(N)]
     const size_t header_size = 7;
     const size_t packet_size = header_size + len;
+
+    // #1160 / #1155 item 2: refuse an over-MTU packet rather than let the
+    // controller clip it. NimBLE's ble_att_tx_dflt() calls
+    // ble_att_truncate_to_mtu(), drops the excess and RETURNS 0, so without
+    // this the chunk "succeeds", the caller counts the bytes as sent, and the
+    // app receives a header promising more bytes than arrived. Every other
+    // notify path already checks maxNotifyBytes(); this was the one that
+    // carries the data. maxNotifyBytes() reads the same live per-connection
+    // MTU the stack truncates against, so this can never refuse a packet that
+    // would have survived.
+    {
+        const size_t max_notify = maxNotifyBytes();
+        if (packet_size > max_notify)
+        {
+            ESP_LOGE(BLE_TAG, "File chunk %u B (data %u) > MTU limit %u (mtu=%u) — "
+                              "REFUSED, not truncated. The caller sized this chunk "
+                              "against a different MTU.",
+                     (unsigned)packet_size, (unsigned)len, (unsigned)max_notify,
+                     (unsigned)effectiveMtu());
+            return false;
+        }
+    }
 
     // Reallocate buffer if needed (persistent across calls)
     if (chunk_buffer_size_ < packet_size)
