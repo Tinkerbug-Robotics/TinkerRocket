@@ -192,7 +192,17 @@ class BLEFleet: NSObject, ObservableObject {
     private let serviceUUID = CBUUID(string: "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
 
     // Reconnection state
-    private var reconnectAttempts: Int = 0
+    /// #1087: PER-PERIPHERAL attempt counts. One fleet-wide counter meant
+    /// `didConnect` on any device zeroed it for all of them, and — with
+    /// CoreBluetooth's `connect()` having no timeout — a single-device dropout
+    /// parked on attempt 1 forever: the backoff, the 8-attempt cap and the
+    /// "Searching…" endgame were unreachable, while the operator read
+    /// "Reconnecting (1/8)…" for the whole outage.
+    private var reconnectAttempts: [UUID: Int] = [:]
+    /// #1087: the timeout CoreBluetooth does not have. Without it an attempt
+    /// never resolves and the ladder never advances.
+    private var reconnectWatchdogs: [UUID: Timer] = [:]
+    private let connectAttemptTimeout: TimeInterval = 12
     private let maxReconnectAttempts = 8   // #291: was 3 (~7 s); raised for flight dropouts
     private var lastPeripheralIdentifier: UUID?
     /// Peripherals the USER asked to disconnect, awaiting their
@@ -629,7 +639,8 @@ extension BLEFleet: CBCentralManagerDelegate {
                        didConnect peripheral: CBPeripheral) {
         let name = peripheral.name ?? "Unknown"
         print("Connected to \(name)")
-        reconnectAttempts = 0
+        reconnectAttempts[peripheral.identifier] = 0
+        reconnectWatchdogs.removeValue(forKey: peripheral.identifier)?.invalidate()
         // Connection resolved — the BLEDevice now owns the peripheral (#173).
         connectingPeripherals[peripheral.identifier] = nil
         // Any pending user-disconnect marker for this peripheral is now stale:
@@ -671,7 +682,8 @@ extension BLEFleet: CBCentralManagerDelegate {
         }
 
         if userInitiatedDisconnects.consume(peripheral.identifier) {
-            reconnectAttempts = 0
+            reconnectAttempts[peripheral.identifier] = 0
+            reconnectWatchdogs.removeValue(forKey: peripheral.identifier)?.invalidate()
             statusMessage = "Disconnected"
             discoveredDevices = []
             if devices.isEmpty {
@@ -681,28 +693,58 @@ extension BLEFleet: CBCentralManagerDelegate {
         }
 
         // Attempt automatic reconnection
-        if reconnectAttempts < maxReconnectAttempts {
-            reconnectAttempts += 1
-            statusMessage = "Reconnecting (\(reconnectAttempts)/\(maxReconnectAttempts))..."
-            // #291: cap the backoff — 2^(n-1) blows up fast once the cap is raised.
-            let delay = min(8.0, pow(2.0, Double(reconnectAttempts - 1)))
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self = self, self.device(for: peripheral) == nil else { return }
-                // Retain across the reconnect attempt too (#173).
-                self.connectingPeripherals[peripheral.identifier] = peripheral
-                self.centralManager.connect(peripheral, options: nil)
-            }
-        } else {
-            // #291: don't abandon the flight after a handful of tries. CB
-            // connect() has no timeout — it completes whenever the peripheral
-            // returns to range — so leave a connect pending AND fall back to
-            // scanning so a returning device re-pairs automatically, instead of
-            // the old dead-end ("Disconnected" + cleared list).
-            reconnectAttempts = 0
+        scheduleReconnect(peripheral)
+    }
+
+    /// #1087: one rung of the reconnect ladder for ONE peripheral.
+    ///
+    /// Each attempt is armed with a watchdog, because `centralManager.connect`
+    /// has no timeout of its own — it completes whenever the peripheral comes
+    /// back. Without one, attempt 1 parks and every later rung (and the
+    /// endgame) is dead code. Android's ladder advances because its
+    /// `tryConnect` is bounded by `withTimeout(CONNECT_TIMEOUT_MS)`.
+    private func scheduleReconnect(_ peripheral: CBPeripheral) {
+        let id = peripheral.identifier
+        let attempt = (reconnectAttempts[id] ?? 0) + 1
+        guard attempt <= maxReconnectAttempts else {
+            // #291: don't abandon the flight after a handful of tries. Leave a
+            // connect pending AND fall back to scanning so a returning device
+            // re-pairs automatically, instead of the old dead-end
+            // ("Disconnected" + cleared list). No watchdog here: the parked
+            // connect IS the strategy once the ladder is spent.
+            reconnectAttempts[id] = 0
+            reconnectWatchdogs.removeValue(forKey: id)?.invalidate()
             statusMessage = "Searching for \(peripheral.name ?? "rocket")…"
-            connectingPeripherals[peripheral.identifier] = peripheral
+            connectingPeripherals[id] = peripheral
             centralManager.connect(peripheral, options: nil)
             startScanning()
+            return
+        }
+        reconnectAttempts[id] = attempt
+        statusMessage = "Reconnecting (\(attempt)/\(maxReconnectAttempts))..."
+        // #291: cap the backoff — 2^(n-1) blows up fast once the cap is raised.
+        let delay = min(8.0, pow(2.0, Double(attempt - 1)))
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self = self, self.device(for: peripheral) == nil else { return }
+            // Retain across the reconnect attempt too (#173).
+            self.connectingPeripherals[id] = peripheral
+            self.centralManager.connect(peripheral, options: nil)
+            self.armConnectWatchdog(peripheral)
+        }
+    }
+
+    /// Give up on the pending connect and take the next rung (#1087).
+    private func armConnectWatchdog(_ peripheral: CBPeripheral) {
+        let id = peripheral.identifier
+        reconnectWatchdogs.removeValue(forKey: id)?.invalidate()
+        reconnectWatchdogs[id] = Timer.scheduledTimer(withTimeInterval: connectAttemptTimeout,
+                                                      repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            self.reconnectWatchdogs.removeValue(forKey: id)
+            guard self.device(for: peripheral) == nil else { return }
+            self.centralManager.cancelPeripheralConnection(peripheral)
+            self.connectingPeripherals[id] = nil
+            self.scheduleReconnect(peripheral)
         }
     }
 
@@ -712,7 +754,15 @@ extension BLEFleet: CBCentralManagerDelegate {
         print("Failed to connect: \(error?.localizedDescription ?? "Unknown error")")
         // Connection attempt resolved (failed) — release the strong ref (#173).
         connectingPeripherals[peripheral.identifier] = nil
+        reconnectWatchdogs.removeValue(forKey: peripheral.identifier)?.invalidate()
         userInitiatedDisconnects.forget(peripheral.identifier)
+        // #1087: this used to dead-end here, so a failure mid-ladder ended the
+        // ladder — take the next rung instead. (A first, user-initiated
+        // connect has no attempt recorded, so this starts at 1 and the
+        // "Connection failed" message is what the operator sees first.)
         statusMessage = "Connection failed"
+        if reconnectAttempts[peripheral.identifier] != nil {
+            scheduleReconnect(peripheral)
+        }
     }
 }

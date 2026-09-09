@@ -107,6 +107,10 @@ public class FleetManager<S : Any>(
     private val _devices = MutableStateFlow<Map<String, FleetDevice<S>>>(linkedMapOf())
     public val devices: StateFlow<Map<String, FleetDevice<S>>> = _devices.asStateFlow()
 
+    /** #1088: true while any reconnect ladder is running — drives the Stop control. */
+    private val _reconnecting = MutableStateFlow(false)
+    public val isReconnecting: StateFlow<Boolean> = _reconnecting.asStateFlow()
+
     private val _linkActive = MutableStateFlow(false)
 
     /**
@@ -138,8 +142,9 @@ public class FleetManager<S : Any>(
      * superseded.
      */
     private fun refreshLinkActive() {
-        _linkActive.value = _devices.value.isNotEmpty() ||
-            reconnectJobs.values.any { it.isActive }
+        val laddering = reconnectJobs.values.any { it.isActive }
+        _linkActive.value = _devices.value.isNotEmpty() || laddering
+        _reconnecting.value = laddering   // #1088
     }
 
     /** Which device the dashboard is currently showing. */
@@ -330,9 +335,27 @@ public class FleetManager<S : Any>(
         val list = _discoveredDevices.value
         val idx = list.indexOfFirst { it.deviceId == adv.deviceId }
         _discoveredDevices.value = if (idx >= 0) {
-            // Re-discovery updates RSSI only; the first-seen name sticks
-            // (iOS parity).
-            list.toMutableList().also { it[idx] = it[idx].copy(rssi = adv.rssi) }
+            // #1088: a genuinely ADVERTISED name upgrades the row, as iOS has
+            // done since BLEFleet.swift:607 — the "first-seen name sticks"
+            // comment claimed parity it never had. The first record of a
+            // freshly powered board often carries no local name (it does not
+            // fit alongside the service UUID until the scan response arrives),
+            // so the row stuck at "Unknown" for the whole scan and the type
+            // hint stayed unresolved with it. A null name never overwrites,
+            // so the row cannot flap back.
+            list.toMutableList().also { cur ->
+                val row = cur[idx]
+                cur[idx] = if (adv.advertisedName != null && adv.advertisedName != row.name) {
+                    row.copy(
+                        name = adv.advertisedName,
+                        knownType = knownDevices.deviceTypeForAdvertisedName(adv.advertisedName)
+                            ?: row.knownType,
+                        rssi = adv.rssi,
+                    )
+                } else {
+                    row.copy(rssi = adv.rssi)
+                }
+            }
         } else {
             list + DiscoveredDevice(
                 deviceId = adv.deviceId,
@@ -383,6 +406,31 @@ public class FleetManager<S : Any>(
         val dev = _devices.value[deviceId] ?: return
         pendingUserDisconnects.add(deviceId)
         dev.transport.disconnect()
+    }
+
+    /**
+     * #1088: give up on a reconnect ladder the operator no longer wants.
+     * [disconnect] cannot do it — it needs the device in [devices], and
+     * `_devices` is empty for a ladder's whole run — so until now a ladder ran
+     * to its end (or forever, in the endgame) with no way to stop it. Also
+     * clears the resume hint, since a cancelled reconnect is the operator
+     * saying "not this one".
+     */
+    public fun cancelReconnect(deviceId: String) {
+        val job = reconnectJobs.remove(deviceId) ?: return
+        job.cancel()
+        pendingUserDisconnects.remove(deviceId)
+        _statusMessage.value = "Reconnect cancelled"
+        refreshLinkActive()
+    }
+
+    /** Cancel every running reconnect ladder (the scanner's Stop control). */
+    public fun cancelAllReconnects() {
+        if (reconnectJobs.none { it.value.isActive }) return
+        reconnectJobs.values.forEach { it.cancel() }
+        reconnectJobs.clear()
+        _statusMessage.value = "Reconnect cancelled"
+        refreshLinkActive()
     }
 
     /** Disconnect all devices (convenience for single-device mode). */
@@ -613,7 +661,14 @@ public class FleetManager<S : Any>(
      * `autoConnect=true` transport.  Never autoConnect blind from a MAC.
      */
     private fun launchReconnectLadder(deviceId: String, name: String) {
-        reconnectJobs[deviceId]?.cancel()
+        // #1088: idempotent. A ladder's own attempts produce Disconnected
+        // events of their own (a connect that reaches the link and then fails
+        // discovery, for one), and each used to CANCEL the running ladder and
+        // start a new one at attempt 1 with a fresh 8-attempt budget — so the
+        // "Reconnecting (n/8)" the operator reads could sit at 1 indefinitely
+        // and the endgame was unreachable. The running ladder already has the
+        // name it started with; leave it alone.
+        if (reconnectJobs[deviceId]?.isActive == true) return
         reconnectJobs[deviceId] = scope.launch {
             for (attempt in 1..MAX_RECONNECT_ATTEMPTS) {
                 _statusMessage.value = "Reconnecting ($attempt/$MAX_RECONNECT_ATTEMPTS)..."
