@@ -42,6 +42,13 @@ struct CachedFlight: Identifiable {
     // Reusable formatters — DateFormatter is expensive to allocate
     private static let utcDateFormatter: DateFormatter = {
         let f = DateFormatter()
+        // #1091 item 2: a fixed-format parse must not follow the user's
+        // locale or calendar. Without en_US_POSIX the 12/24-hour override
+        // makes "HH" return nil and both lists fall back to raw filenames;
+        // without .gregorian a Buddhist or Japanese region calendar parses
+        // a Date off by the era. Android pins both (Locale.ROOT, STRICT).
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
         f.dateFormat = "yyyyMMddHHmmss"
         f.timeZone = TimeZone(identifier: "UTC")
         return f
@@ -52,6 +59,10 @@ struct CachedFlight: Identifiable {
         f.dateStyle = .short
         f.timeStyle = .short
         f.timeZone = .current
+        // #1091 item 2: display stays localized, but on the Gregorian
+        // calendar the parsed Date is on — the locale's own calendar is
+        // for rendering, not for round-tripping a filename timestamp.
+        f.calendar = Calendar(identifier: .gregorian)
         return f
     }()
 
@@ -496,9 +507,15 @@ nonisolated class FileCache {
                 continue
             }
 
-            // Get file attributes
+            // Get file attributes. #1091 item 1: the displayed size is the
+            // .bin's — what came off the board — falling back to the CSV
+            // only when the binary is gone, matching Android's
+            // FlightCache.listSavedFlights. It used to be the CSV rendering,
+            // 5-8x larger, so the same flight read as a different size on
+            // each phone.
             let resourceValues = try? csvURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            let size = UInt64(resourceValues?.fileSize ?? 0)
+            let binSize = binaryURL.flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }
+            let size = UInt64(binSize ?? resourceValues?.fileSize ?? 0)
             let modDate = resourceValues?.contentModificationDate
 
             // Parse flight summary JSON if available

@@ -106,7 +106,21 @@ final class OfflineRegionStore: ObservableObject {
     convenience init() {
         let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        self.init(directory: base)
+        // #1091 item 3: the tiles live under OfflineTiles, which is the only
+        // backup-excluded tree in the app; the manifest sat beside it in the
+        // backed-up root. After an iCloud restore Offline Maps listed every
+        // saved area for imagery that was not on disk, and nothing
+        // reconciled. Keep the manifest with the tiles so both survive or
+        // neither does. Existing installs: move the old manifest once.
+        let tiles = base.appendingPathComponent("OfflineTiles")
+        let oldURL = base.appendingPathComponent("offline_regions.json")
+        let newURL = tiles.appendingPathComponent("offline_regions.json")
+        let fm = FileManager.default
+        if fm.fileExists(atPath: oldURL.path) && !fm.fileExists(atPath: newURL.path) {
+            try? fm.createDirectory(at: tiles, withIntermediateDirectories: true)
+            try? fm.moveItem(at: oldURL, to: newURL)
+        }
+        self.init(directory: tiles)
     }
 
     var totalBytes: Int64 { regions.reduce(0) { $0 + $1.bytes } }
