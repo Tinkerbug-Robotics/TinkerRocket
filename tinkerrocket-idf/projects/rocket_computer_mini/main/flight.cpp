@@ -3345,8 +3345,12 @@ static void loop_fc()
                 const double m2 = mag_x_frd * mag_x_frd
                                 + mag_y_frd * mag_y_frd
                                 + mag_z_frd * mag_z_frd;
-                // Earth field at surface is ~25–65 µT; widen to 15–80 µT.
-                if (m2 >= (15.0 * 15.0) && m2 <= (80.0 * 80.0)) {
+                // #1304: validity moved into the EKF, which tests the
+                // magnitude against WMM's total intensity for our position
+                // instead of a fixed window.  Pass everything finite through.
+                (void)m2;
+                if (std::isfinite(mag_x_frd) && std::isfinite(mag_y_frd) &&
+                    std::isfinite(mag_z_frd)) {
                     ekf_mag.time_us = mag_time_us;
                     ekf_mag.mag_x = mag_x_frd;
                     ekf_mag.mag_y = mag_y_frd;
@@ -3534,6 +3538,7 @@ static void loop_fc()
                     // config constant if the GNSS date is implausible.
                     {
                         float decl_deg = config::MAGNETIC_DECLINATION_DEG;
+                        double decimal_year_for_wmm = (double)TR_GeoMag::WMM_EPOCH;
                         const uint16_t yr = gnss_latest_si.year;
                         if (yr >= 2020 && yr <= 2035) {
                             static const int mdays[12] =
@@ -3545,6 +3550,7 @@ static void loop_fc()
                             if (leap && gnss_latest_si.month > 2) doy += 1;
                             const double decimal_year =
                                 (double)yr + (double)(doy - 1) / (leap ? 366.0 : 365.0);
+                            decimal_year_for_wmm = decimal_year;
                             const float decl_rad = TR_GeoMag::declinationRad(
                                 ref_lat_rad, ref_lon_rad, ref_alt_m, decimal_year);
                             decl_deg = decl_rad * (180.0f / (float)M_PI);
@@ -3553,6 +3559,22 @@ static void loop_fc()
                         ESP_LOGI(TAG, "[EKF] Declination %.2f deg (WMM2025, %u-%02u-%02u)",
                                       (double)decl_deg, gnss_latest_si.year,
                                       gnss_latest_si.month, gnss_latest_si.day);
+
+                        // #1304: same evaluation, full vector — the field the
+                        // magnetometer should be reading here, which is what the
+                        // validity gate now compares against.
+                        {
+                            const double dy = (yr >= 2020 && yr <= 2035)
+                                ? decimal_year_for_wmm : (double)TR_GeoMag::WMM_EPOCH;
+                            float ref_ned_uT[3];
+                            TR_GeoMag::fieldNED_uT(ref_lat_rad, ref_lon_rad,
+                                                   ref_alt_m, dy, ref_ned_uT);
+                            ekf.setMagReference(ref_ned_uT);
+                            ESP_LOGI(TAG, "[EKF] Mag reference %.1f µT %s",
+                                     (double)ekf.getMagReferenceTotal_uT(),
+                                     ekf.getMagReferenceValid() ? "accepted"
+                                                                : "REJECTED");
+                        }
                     }
                     ekf_initialized = true;
                     if (degraded_init) {

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "TR_GpsInsEKF.h"
+#include "TR_GeoMag.h"
 #include <cmath>
 
 // ---------- Helpers ----------
@@ -86,6 +87,9 @@ protected:
 static void runEastCourse(GpsInsEKF& ekf, bool nose_first, float (&q_out)[4]) {
     uint32_t t = 0;
     ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    // #1281/#1282: the aids ship OFF. This test is about the nose-first gate
+    // in front of the course aid, so turn the aid on to have something to gate.
+    ekf.setGnssHeadingAids(GpsInsEKF::GnssHeadingAids::Fuse);
     ekf.setNoseFirstFlight(nose_first);
     for (int i = 1; i <= 250; ++i) {
         t += 2000;                                   // 500 Hz IMU, GNSS on every tick
@@ -94,6 +98,40 @@ static void runEastCourse(GpsInsEKF& ekf, bool nose_first, float (&q_out)[4]) {
         ekf.update(/*use_ahrs_acc=*/false, makeNoseUpIMU(t), gnss, makeNoseUpMag(t));
     }
     ekf.getQuaternion(q_out);
+}
+
+TEST(EKFHeadingAidGate, BothGnssAidsAreOffByDefault) {
+    // #1281/#1282: neither aid survived measurement against the four
+    // 2026-08-29 flights, so the shipped default fuses neither. A caller has
+    // to ask for them, which is what a replay harness does when scoring them.
+    GpsInsEKF ekf;
+    EXPECT_EQ(ekf.getGnssHeadingAids(), GpsInsEKF::GnssHeadingAids::Off);
+}
+
+TEST(EKFHeadingAidGate, WithTheAidsOffTheEastCourseMovesNothing) {
+    // Same 90°-innovation setup as the gate test below, but with the shipped
+    // default: a due-east course against a nose-north attitude must not move
+    // the solution at all, whatever the nose-first flag says.
+    GpsInsEKF ref;
+    uint32_t t0 = 0;
+    ref.init(makeNoseUpIMU(t0), makeStationaryGNSS(t0), makeNoseUpMag(t0));
+    float q0[4]; ref.getQuaternion(q0);
+
+    for (bool nose_first : {true, false}) {
+        GpsInsEKF ekf;
+        uint32_t t = 0;
+        ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+        ekf.setNoseFirstFlight(nose_first);       // aids left at their default
+        for (int i = 1; i <= 250; ++i) {
+            t += 2000;
+            EkfGNSSDataLLA gnss = makeStationaryGNSS(t);
+            gnss.vel_e_mps = 20.0f;
+            ekf.update(false, makeNoseUpIMU(t), gnss, makeNoseUpMag(t));
+        }
+        float q[4]; ekf.getQuaternion(q);
+        EXPECT_LT(tqGeodesicDeg(q, q0), 2.0f)
+            << "aids off, nose_first=" << nose_first;
+    }
 }
 
 TEST(EKFHeadingAidGate, DefaultsToNoseFirstSoAnUnawareCallerIsUnchanged) {
@@ -1441,4 +1479,207 @@ TEST(EkfShockGate1190, CountersResetOnInitAndTheSettleSurvivesIt) {
     EXPECT_FALSE(ekf.shockGateHeld());
     EXPECT_EQ(ekf.shockGateTrips(), 1u);
     EXPECT_EQ(ekf.shockGateHoldTicks(), 3u);
+}
+
+// ===========================================================================
+// #1304 — the two gates in front of magMeasUpdate.
+//
+// The numbers below are the four 2026-08-29 BARC L2 flights, measured. Site
+// field: WMM2025 gives 49.9 µT total at 64.8° inclination, which the flights
+// independently confirm (sphere-fit radii 47.9–51.8 µT; pad dip check mean
+// 64.4°). Pad magnitudes as logged, and after subtracting each flight's own
+// fitted hard iron:
+//
+//   flight            raw |B|   corrected |B|   raw dip error
+//   Rolly Polly V     214.2       51.0            52.8 deg
+//   RIM-66             69.6       51.1             5.6
+//   Rolly Polly 54     60.6       45.3             1.6
+//   Eagle Claw         76.0       46.5            17.4
+//
+// The old 15–80 µT window rejected Rolly Polly V at every sample in every
+// phase and accepted Eagle Claw, whose field direction was 17 deg wrong.
+// ===========================================================================
+namespace maggate1304 {
+
+static void setBarcReference(GpsInsEKF& ekf) {
+    // WMM2025 at 39.4689 N, 75.2918 W: N/E/D in µT.
+    float ned[3];
+    TR_GeoMag::fieldNED_uT(39.4689 * M_PI / 180.0, -75.2918 * M_PI / 180.0,
+                           0.0, 2026.7, ned);
+    ekf.setMagReference(ned);
+}
+
+// A vehicle tilted 30 deg from vertical. The heading update is skipped within
+// ~2 deg of vertical by design (#480: the accel-derived roll is atan2(noise,
+// noise) there), so anything testing whether the mag update RAN has to tilt.
+//   d (body-frame down) = (-cos30, 0, sin30); specific force at rest = -d*g.
+static EkfIMUData makeTiltedIMU(uint32_t t, double extra_ax_mps2 = 0.0) {
+    EkfIMUData d;
+    d.time_us = t;
+    d.acc_x = 0.8660 * 9.807 + extra_ax_mps2;
+    d.acc_y = 0.0;
+    d.acc_z = -0.5000 * 9.807;
+    d.gyro_x = 0.0; d.gyro_y = 0.0; d.gyro_z = 0.0;
+    return d;
+}
+// Magnitude 47.4 µT — inside the 15 % band around the site's 49.9 µT, with a
+// real horizontal component so the heading is observable.
+static EkfMagData makeTiltedMag(uint32_t t) {
+    EkfMagData m;
+    m.time_us = t;
+    m.mag_x = -40.0; m.mag_y = 5.0; m.mag_z = 25.0;
+    return m;
+}
+
+// init() always seats the pad attitude nose-UP, and the heading update is
+// skipped within ~2 deg of vertical by design (#480). So a test that needs the
+// mag update to actually run has to place the state at a tilt afterwards.
+// 30 deg from vertical = 60 deg about body Y: q = (cos30, 0, sin30, 0).
+static void initTilted30(GpsInsEKF& ekf, uint32_t t) {
+    ekf.init(makeTiltedIMU(t), makeStationaryGNSS(t), makeTiltedMag(t));
+    ekf.setQuaternion(0.86603f, 0.0f, 0.50000f, 0.0f);
+}
+
+// A body-frame mag vector of a chosen magnitude, direction fixed and arbitrary.
+static EkfMagData magOfMagnitude(uint32_t t, float total_uT) {
+    EkfMagData m;
+    m.time_us = t;
+    const float u[3] = {0.42f, 0.10f, 0.90f};      // |u| ~= 1.0
+    const float n = std::sqrt(u[0]*u[0] + u[1]*u[1] + u[2]*u[2]);
+    m.mag_x = total_uT * u[0] / n;
+    m.mag_y = total_uT * u[1] / n;
+    m.mag_z = total_uT * u[2] / n;
+    return m;
+}
+
+}  // namespace maggate1304
+using namespace maggate1304;
+
+TEST(EkfMagGate1304, WithNoReferenceTheLegacyWindowStillApplies) {
+    // A filter that never gets a fix must behave exactly as it did before.
+    GpsInsEKF ekf;
+    EXPECT_FALSE(ekf.getMagReferenceValid());
+}
+
+TEST(EkfMagGate1304, ReferenceIsAcceptedOnlyWhenItLooksLikeEarthsField) {
+    GpsInsEKF ekf;
+    setBarcReference(ekf);
+    EXPECT_TRUE(ekf.getMagReferenceValid());
+    EXPECT_NEAR(ekf.getMagReferenceTotal_uT(), 49.9f, 2.0f);
+
+    // A model that returned nT, or nothing, must not be trusted.
+    const float nT[3]   = {20000.0f, -5000.0f, 45000.0f};
+    const float zero[3] = {0.0f, 0.0f, 0.0f};
+    ekf.setMagReference(nT);   EXPECT_FALSE(ekf.getMagReferenceValid());
+    ekf.setMagReference(zero); EXPECT_FALSE(ekf.getMagReferenceValid());
+}
+
+TEST(EkfMagGate1304, TheFourFlightsAreJudgedByWhatTheirFieldActuallyIs) {
+    GpsInsEKF ekf;
+    setBarcReference(ekf);
+    const float ref = ekf.getMagReferenceTotal_uT();
+    const float tol = 0.15f * ref;
+    struct Case { const char* name; float raw; float corrected; };
+    const Case flights[] = {
+        {"Rolly Polly V", 214.2f, 51.0f},
+        {"RIM-66",         69.6f, 51.1f},
+        {"Rolly Polly 54", 60.6f, 45.3f},
+        {"Eagle Claw",     76.0f, 46.5f},
+    };
+    for (const auto& f : flights) {
+        // Uncalibrated: refused, and said so loudly.
+        EXPECT_GT(std::fabs(f.raw - ref), tol) << f.name << " raw should FAIL";
+        // Hard iron removed: accepted.
+        EXPECT_LE(std::fabs(f.corrected - ref), tol) << f.name << " corrected should PASS";
+    }
+    // The specific inversion the old window got wrong.
+    EXPECT_LT(214.2f, 80.0f * 3.0f);                  // rpv sat far outside 15–80
+    EXPECT_TRUE(76.0f > 15.0f && 76.0f < 80.0f);      // eagle sat inside it
+}
+
+TEST(EkfMagGate1304, AnUncalibratedSampleIsRejectedAndFlagged) {
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    setBarcReference(ekf);
+    for (int i = 1; i <= 20; ++i) {
+        t += 2000;
+        ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t),
+                   magOfMagnitude(t, 214.2f));           // Rolly Polly V, raw
+    }
+    EXPECT_TRUE(ekf.getMagCalSuspect());
+    EXPECT_NEAR(ekf.getMagMagnitudeError_uT(), 214.2f - ekf.getMagReferenceTotal_uT(), 1.0f);
+
+    for (int i = 1; i <= 20; ++i) {
+        t += 2000;
+        ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t),
+                   magOfMagnitude(t, 51.0f));            // same flight, corrected
+    }
+    EXPECT_FALSE(ekf.getMagCalSuspect());
+}
+
+TEST(EkfMagGate1304, TheMagIsNoLongerGatedOffByBoostAccelerations) {
+    // The coupling this removes: accel_valid demanded 0.5-1.5 g, which under
+    // boost is never true, so magMeasUpdate never ran on ascent. Feed a
+    // consistent mag with 6 g of thrust on the nose and the attitude must
+    // still be pulled toward the mag's heading.
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    initTilted30(ekf, t);
+    setBarcReference(ekf);
+    float q_before[4]; ekf.getQuaternion(q_before);
+
+    // Rotate the mag's horizontal pair: a heading the filter disagrees with.
+    EkfMagData turned = makeTiltedMag(0);
+    const double mx = turned.mag_x, my = turned.mag_y;
+    turned.mag_x = -my; turned.mag_y = mx;
+
+    for (int i = 1; i <= 400; ++i) {
+        t += 2000;
+        turned.time_us = t;
+        ekf.update(/*use_ahrs_acc=*/false, makeTiltedIMU(t, 6.0 * 9.807),
+                   makeStationaryGNSS(t), turned);
+    }
+    float q_after[4]; ekf.getQuaternion(q_after);
+    EXPECT_GT(tqGeodesicDeg(q_after, q_before), 2.0f)
+        << "the mag update never ran under boost acceleration";
+    EXPECT_TRUE(ekf.isHealthy());
+}
+
+TEST(EkfMagGate1304, ABoostSampleThatFailsTheMagnitudeGateStillMovesNothing) {
+    // Decoupling from the accelerometer must not mean accepting anything: the
+    // Rolly Polly V case (214 uT of uncorrected hard iron) has to stay refused
+    // under exactly the same boost conditions.
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    initTilted30(ekf, t);
+    setBarcReference(ekf);
+    float q_before[4]; ekf.getQuaternion(q_before);
+    for (int i = 1; i <= 400; ++i) {
+        t += 2000;
+        ekf.update(false, makeTiltedIMU(t, 6.0 * 9.807), makeStationaryGNSS(t),
+                   magOfMagnitude(t, 214.2f));
+    }
+    float q_after[4]; ekf.getQuaternion(q_after);
+    EXPECT_LT(tqGeodesicDeg(q_after, q_before), 0.5f);
+    EXPECT_TRUE(ekf.getMagCalSuspect());
+}
+
+TEST(EkfMagGate1304, StateTiltPathKeepsTheSolutionFinite) {
+    // The accelerometer is useless (free fall) for a long stretch; the update
+    // must run off the filter's own attitude without NaNs or divergence.
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    initTilted30(ekf, t);
+    setBarcReference(ekf);
+    EkfIMUData ff = makeTiltedIMU(0);
+    ff.acc_x = 0.0; ff.acc_y = 0.0; ff.acc_z = 0.0;     // coast: no specific force
+    for (int i = 1; i <= 2000; ++i) {
+        t += 2000;
+        ff.time_us = t;
+        ekf.update(false, ff, makeStationaryGNSS(t), makeTiltedMag(t));
+    }
+    EXPECT_TRUE(ekf.isHealthy());
+    float q[4]; ekf.getQuaternion(q);
+    for (int i = 0; i < 4; ++i) EXPECT_TRUE(std::isfinite(q[i]));
 }

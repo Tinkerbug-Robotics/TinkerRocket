@@ -65,11 +65,20 @@ def _coast_median_rate(gap_deg):
 
 
 def test_moderate_lash_degrades_roll_null():
-    # 2 deg of lash: the loop limit-cycles instead of settling into the 5 dps
-    # band, and the coast residual grows well past the rigid-linkage ~1.4 dps
-    # (still bounded — the controller fights through the slack).
+    # 2 deg of lash: the coast residual grows past the rigid-linkage figure,
+    # still bounded — the controller fights through the slack.
+    #
+    # #1281/#1282: this used to assert `settle is None`, i.e. that 2 deg of lash
+    # stopped the loop reaching the 5 dps band at all. That was only true while
+    # the GNSS heading aids were fused. With them off (the shipped default) the
+    # rigid-linkage baseline itself moved from 1.34 to 6.41 dps and 2 deg of
+    # lash settles at ~5.2 s, so the settling-time verdict no longer separates
+    # the cases. The coast residual still does, and monotonically:
+    #     rigid  6.41 dps | 2 deg  9.31 dps | 10 deg  38.04 dps
+    # so that is what this now measures. The severe case below is unchanged.
+    rigid, _ = _coast_median_rate(0.0)
     med, settle = _coast_median_rate(2.0)
-    assert settle is None
+    assert med > rigid * 1.3
     assert 5.0 < med < 25.0
 
 

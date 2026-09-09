@@ -140,6 +140,60 @@ public:
     void setNoseFirstFlight(bool nose_first) { noseFirstFlight_ = nose_first; }
     bool getNoseFirstFlight() const { return noseFirstFlight_; }
 
+    // ── #1304: the magnetometer's validity reference ────────────────────
+    //
+    // The old gate asked whether |B| fell in 15–80 µT.  That is not a validity
+    // test, it is a hard-iron detector with the wrong threshold: on the four
+    // 2026-08-29 flights it rejected a magnetometer that recovers the site's
+    // field to 0.4 µT once its offset is subtracted, and accepted one whose
+    // field direction was 17° wrong.  A correctly calibrated magnetometer reads
+    // the SAME magnitude at every attitude, and the model knows what that
+    // magnitude is here.  So the test becomes: does |m| match WMM's total
+    // intensity at our position?  Attitude-free, needs no accelerometer, and
+    // the discrepancy is a direct bound on the leftover hard iron.
+    //
+    // Set from the same place declination is set (FC main, on a good fix).
+    // Until then magRefValid_ is false and the legacy window is used, so a
+    // filter that never gets a fix behaves exactly as before.
+    void setMagReference(const float ned_uT[3]);
+    bool  getMagReferenceValid() const { return magRefValid_; }
+    float getMagReferenceTotal_uT() const { return magRefTotal_uT_; }
+
+    /// Tolerance on |m| as a fraction of the reference total intensity.
+    void setMagMagnitudeTolerance(float frac) { magMagTolFrac_ = frac; }
+
+    /// Last |‖m‖ − ‖B_ref‖| in µT, and whether the last sample failed the
+    /// magnitude test.  The FC turns these into the pre-launch mag health
+    /// state, so an uncalibrated magnetometer is visible on the pad instead of
+    /// silently never being fused.
+    float getMagMagnitudeError_uT() const { return magMagErr_uT_; }
+    bool  getMagCalSuspect() const { return magCalSuspect_; }
+
+    /// Magnetometer samples actually FUSED, and samples refused by the
+    /// magnitude gate.  Free-running, reset only by init().  Post-flight the
+    /// pair answers "was the mag ever used, and if not, why" without having to
+    /// re-derive it from the raw samples.
+    uint32_t getMagFusedCount()    const { return magFusedCount_; }
+    uint32_t getMagRejectedCount() const { return magRejectedCount_; }
+
+    // ── #1281/#1282/#1135: the two GNSS-derived heading aids ────────────
+    //
+    // Both are OFF by default.  Neither survived measurement against the four
+    // 2026-08-29 flights: the course aid was fusing a frozen GNSS velocity
+    // through a whole boost at 13° assumed sigma, and the accel-match aid
+    // compares a gravity-dominated body lateral force against a thrust-
+    // dominated world acceleration, giving ~90° innovations at 26° assumed
+    // sigma.  They stay in the tree because they are the only thing that has
+    // ever nulled roll under a saturated gyro in the sim, and because a replay
+    // must be able to turn them on to measure them — see the follow-up issue.
+    //
+    // Everything a replay needs to score them offline is already logged (GNSS
+    // velocity, body specific force, the EKF quaternion), so switching them
+    // off costs no post-flight information.
+    enum class GnssHeadingAids : uint8_t { Off = 0, Fuse = 1 };
+    void setGnssHeadingAids(GnssHeadingAids mode) { gnssHeadingAids_ = mode; }
+    GnssHeadingAids getGnssHeadingAids() const { return gnssHeadingAids_; }
+
     /// Inject known position (lat_rad, lon_rad, alt_m) and reset pos covariance.
     void setPosition(double lat_rad, double lon_rad, double alt_m) {
         pEst_D_rrm_[0] = lat_rad; pEst_D_rrm_[1] = lon_rad; pEst_D_rrm_[2] = alt_m;
@@ -347,7 +401,13 @@ private:
     void timeUpdate();
     void measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]);
     void accelMeasUpdate(const float aMeas[3]);
-    void magMeasUpdate(const float aMeas[3], const float magMeas[3]);
+    /// #1304: `accel_is_gravity` says whether aMeas may be used as the tilt
+    /// reference.  When false the tilt comes from the filter's own attitude
+    /// instead, so the mag no longer needs the accelerometer to be in its
+    /// 0.5–1.5 g window — which it never is under boost and rarely is in
+    /// coast, which is why the mag was switched off for the whole of ascent.
+    void magMeasUpdate(const float aMeas[3], const float magMeas[3],
+                       bool accel_is_gravity);
     // Heading update from the GNSS velocity course (direction of travel ≈ nose
     // heading at low AoA). Independent of mag/attitude tilt-comp (no
     // circularity). Caller gates on sufficient horizontal speed.
@@ -514,6 +574,23 @@ private:
     // the AHRS bandwidth plus pad vibration margin.
     float sigma_mag_uT_ = 0.5f;
     float sigma_accel_mps2_ = 0.05f;
+
+    // ── #1304 magnetometer reference + verdict ──────────────────────────
+    float magRef_NED_uT_[3] = {0.0f, 0.0f, 0.0f};
+    float magRefTotal_uT_    = 0.0f;
+    bool  magRefValid_       = false;
+    // 0.15 → a sample may sit 15 % off the model's total intensity. At BARC's
+    // ~50 µT that is 7.5 µT, which bounds the residual hard iron to the same,
+    // and the per-sample R below charges for whatever discrepancy is actually
+    // seen, so a marginal sample is fused weakly rather than at full weight.
+    float magMagTolFrac_     = 0.15f;
+    float magMagErr_uT_      = 0.0f;
+    bool  magCalSuspect_     = false;
+    uint32_t magFusedCount_    = 0;
+    uint32_t magRejectedCount_ = 0;
+
+    // #1281/#1282: both GNSS heading aids default OFF — see setGnssHeadingAids().
+    GnssHeadingAids gnssHeadingAids_ = GnssHeadingAids::Off;
 
     // Magnetic declination (rad, EAST-positive); added to the measured magnetic
     // heading to yield a true-north heading.  Set from GPS+WMM at fix; 0 until.

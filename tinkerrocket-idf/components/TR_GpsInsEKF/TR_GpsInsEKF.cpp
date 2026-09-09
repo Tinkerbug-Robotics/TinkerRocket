@@ -127,6 +127,8 @@ void GpsInsEKF::resetFilterState() {
     magTimePrev_        = 0;
     baroTimePrev_       = 0;
     prevGnssSampleUs_   = 0;
+    magFusedCount_      = 0;
+    magRejectedCount_   = 0;
     haveGnssAccel_      = false;
     prevGnssVel_NED_[0] = prevGnssVel_NED_[1] = prevGnssVel_NED_[2] = 0.0f;
     gnssAccelLP_NE_[0]  = gnssAccelLP_NE_[1]  = 0.0f;
@@ -242,12 +244,23 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
     float aMeas[3] = {(float)imu_data.acc_x, (float)imu_data.acc_y, (float)imu_data.acc_z};
     float magMeas[3] = {(float)mag_data.mag_x, (float)mag_data.mag_y, (float)mag_data.mag_z};
 
-    // 3. Magnetometer sanity check (15–80 µT range)
+    // 3. Magnetometer validity (#1304).  With a WMM reference this asks the
+    //    only attitude-free question worth asking — does the measured field
+    //    have the magnitude the model says it should have here? — which is a
+    //    direct bound on the leftover hard iron.  Without a reference (no fix
+    //    yet) it falls back to the legacy 15–80 µT window.
     bool mag_valid = true;
     {
-        float mag_sq = magMeas[0]*magMeas[0] + magMeas[1]*magMeas[1] + magMeas[2]*magMeas[2];
-        if (mag_sq < 225.0f || mag_sq > 6400.0f) {
+        const float mag_sq = magMeas[0]*magMeas[0] + magMeas[1]*magMeas[1]
+                           + magMeas[2]*magMeas[2];
+        if (!std::isfinite(mag_sq)) {
             mag_valid = false;
+        } else if (magRefValid_ && magRefTotal_uT_ > 1.0f) {
+            magMagErr_uT_ = std::fabs(std::sqrt(mag_sq) - magRefTotal_uT_);
+            mag_valid = (magMagErr_uT_ <= magMagTolFrac_ * magRefTotal_uT_);
+            magCalSuspect_ = !mag_valid;
+        } else {
+            mag_valid = (mag_sq >= 225.0f && mag_sq <= 6400.0f);
         }
     }
 
@@ -321,9 +334,17 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
     //    baroMeasUpdate) — the mag delivers ~98 Hz while this runs every EKF
     //    tick (~480 Hz), and re-fusing one sample N times contracts yaw
     //    covariance N-fold faster than the sensor's real information rate.
-    if (mag_valid && accel_valid && mag_data.time_us != magTimePrev_) {
+    //    #1304: no longer gated on accel_valid.  The accelerometer is still
+    //    the preferred tilt reference and is used whenever it is a valid
+    //    gravity measurement; when it is not, the filter's own attitude
+    //    supplies the tilt.  The old coupling switched the one absolute-heading
+    //    sensor off for the entire ascent — 2.9 %–43.8 % of ascent samples
+    //    passed the 0.5–1.5 g window on the four 2026-08-29 flights — which is
+    //    exactly where the gyro is integrating hardest.
+    if (mag_data.time_us != magTimePrev_) {
         magTimePrev_ = mag_data.time_us;
-        magMeasUpdate(aMeas, magMeas);
+        if (mag_valid) { ++magFusedCount_;    magMeasUpdate(aMeas, magMeas, accel_valid); }
+        else           { ++magRejectedCount_; }
     }
 
     // 10. GNSS measurement update
@@ -342,7 +363,8 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
         //      saturated-gyro sim, because near vertical a large innovation is
         //      as often the aid correcting a broken attitude as it is noise.
         const float vh_sq = vMeas_NED[0]*vMeas_NED[0] + vMeas_NED[1]*vMeas_NED[1];
-        if (noseFirstFlight_ && vh_sq > (3.0f*3.0f)) velCourseHeadingUpdate(vMeas_NED);
+        if (gnssHeadingAids_ == GnssHeadingAids::Fuse &&
+            noseFirstFlight_ && vh_sq > (3.0f*3.0f)) velCourseHeadingUpdate(vMeas_NED);
 
         // 10c. Accel-match heading aiding — differentiate the GNSS velocity to
         //      a world horizontal acceleration (low-passed), then match it to
@@ -359,7 +381,8 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
                 const float lp = 0.3f;
                 gnssAccelLP_NE_[0] += lp * (aN_raw - gnssAccelLP_NE_[0]);
                 gnssAccelLP_NE_[1] += lp * (aE_raw - gnssAccelLP_NE_[1]);
-                if (noseFirstFlight_) accelMatchHeadingUpdate(aMeas, gnssAccelLP_NE_);
+                if (gnssHeadingAids_ == GnssHeadingAids::Fuse && noseFirstFlight_)
+                    accelMatchHeadingUpdate(aMeas, gnssAccelLP_NE_);
             }
         }
         prevGnssVel_NED_[0] = vMeas_NED[0];
@@ -967,20 +990,41 @@ void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
 // the magnetometer owns heading; their measurement Jacobians are orthogonal in
 // the attitude block, so the two updates are complementary, not competing.
 
-void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
+void GpsInsEKF::setMagReference(const float ned_uT[3]) {
+    for (int i = 0; i < 3; ++i) magRef_NED_uT_[i] = ned_uT[i];
+    magRefTotal_uT_ = std::sqrt(ned_uT[0]*ned_uT[0] + ned_uT[1]*ned_uT[1]
+                              + ned_uT[2]*ned_uT[2]);
+    // Guard against a model that returned nothing useful: a zero or absurd
+    // total would either disable the mag forever or accept anything.
+    magRefValid_ = std::isfinite(magRefTotal_uT_) &&
+                   magRefTotal_uT_ > 20.0f && magRefTotal_uT_ < 70.0f;
+}
+
+void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3],
+                              bool accel_is_gravity) {
     // Body-down unit vector from the current attitude (= aGrav_B / G); this is
     // both the leveling reference and the heading-error axis (H below).
     float T_NED2B[3][3];
     Quat2DCM(T_NED2B, quat_BL_);
     const float d[3] = { T_NED2B[0][2], T_NED2B[1][2], T_NED2B[2][2] };
 
-    // ── Measured magnetic heading: tilt-compensate the body mag with the
-    //    accelerometer (independent of the quaternion's yaw → no circularity).
+    // ── Measured magnetic heading: tilt-compensate the body mag with a DOWN
+    //    direction.  Preferred source is the accelerometer, which is
+    //    independent of the quaternion's yaw and so carries no circularity.
+    //    #1304: when the accelerometer is not a gravity measurement — under
+    //    thrust, or in coast where specific force is near zero — the tilt
+    //    comes from the filter's own attitude instead. `d` IS that direction:
+    //    it is NED-down expressed in the body frame. The yaw the update
+    //    corrects does not rotate `d`, so using it here still leaves psi_meas
+    //    free of the state's yaw; what it does introduce is a dependence on
+    //    the state's ROLL, and the R term below charges for exactly that.
     const float aN = std::sqrt(aMeas[0]*aMeas[0] + aMeas[1]*aMeas[1] + aMeas[2]*aMeas[2]);
-    if (aN < 0.01f) return;
+    if (accel_is_gravity && aN < 0.01f) return;
     // Down direction in body = -accel/|accel| (specific force at rest opposes
     // modeled gravity-in-body; same sign convention as accelMeasUpdate).
-    const float dmx = -aMeas[0]/aN, dmy = -aMeas[1]/aN, dmz = -aMeas[2]/aN;
+    const float dmx = accel_is_gravity ? -aMeas[0]/aN : d[0];
+    const float dmy = accel_is_gravity ? -aMeas[1]/aN : d[1];
+    const float dmz = accel_is_gravity ? -aMeas[2]/aN : d[2];
     // Roll/pitch from the measured down vector (FRD): d = (-sθ, sφcθ, cφcθ).
     const float roll  = std::atan2(dmy, dmz);
     const float pitch = std::atan2(-dmx, std::sqrt(dmy*dmy + dmz*dmz));
@@ -1032,10 +1076,35 @@ void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
     //    with the same geometry as the propagation above (δψ ≈
     //    (Bv/|Bh|)·δb_lat/(g·cosθ)) — design notes in #483.
     const float Bv   = -mx*sp + my*sr*cp + mz*cr*cp;         // vertical field, level frame
-    const float sroll = (sigma_accel_mps2_ / aN) / std::max(cp, 0.02f);
-    const float r_eff_raw = 2.0f*sigma_mag_uT_*sigma_mag_uT_/Bh2
-                          + sroll*sroll*(Bv*Bv)/Bh2;
-    const float R_eff = std::min(std::max(r_eff_raw, R_mag_), R_mag_ceiling_);
+    // Roll noise of whichever tilt reference was used.  Accelerometer: the
+    // #480 propagation, singular as pitch → ±90°.  Filter attitude: the
+    // state's own roll 1σ, i.e. 2·√P on the half-angle error state at index 6
+    // (xk[6..8] = δθ/2), with no 1/cp amplification — a state is not a
+    // projection, so it does not degenerate the same way.
+    const float sroll = accel_is_gravity
+        ? (sigma_accel_mps2_ / aN) / std::max(cp, 0.02f)
+        : std::min(2.0f * std::sqrt(std::max(P_[6][6], 0.0f)), 1.0f);
+    // #1304: whatever the measured magnitude misses the model's total
+    // intensity by is a LOWER BOUND on the residual hard iron, and a hard iron
+    // of that size lying in the horizontal plane rotates the heading by
+    // asin(Δ/|B_h|).  A sample that only just passed the validity gate is
+    // therefore fused weakly instead of at full weight.
+    float r_cal = 0.0f;
+    if (magRefValid_) {
+        const float Bh   = std::sqrt(Bh2);
+        const float frac = std::min(magMagErr_uT_ / std::max(Bh, 1e-3f), 1.0f);
+        const float dpsi = std::asin(frac);
+        r_cal = dpsi * dpsi;
+    }
+    // The floor and the ceiling are the #480 tuning of the GEOMETRY terms —
+    // R_mag_ceiling_ (~14° σ) exists so S stays finite at exact vertical. The
+    // calibration penalty is added AFTER that clamp, deliberately: a sample
+    // that only just cleared the magnitude gate can be worth 20°+ on its own,
+    // and discounting that down to the geometry ceiling would re-admit exactly
+    // the over-trusted bad measurement this change exists to stop.
+    const float r_geom = 2.0f*sigma_mag_uT_*sigma_mag_uT_/Bh2
+                       + sroll*sroll*(Bv*Bv)/Bh2;
+    const float R_eff = std::min(std::max(r_geom, R_mag_), R_mag_ceiling_) + r_cal;
 
     // ── Predicted heading (yaw) from the state quaternion (true-NED frame).
     //    Computed from T_NED2B directly (euler_BL_rad_ is a cycle stale here).

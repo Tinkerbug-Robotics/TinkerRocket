@@ -135,12 +135,16 @@ gtest_discover_tests(test_uart_link_codec)
 # ============================================================
 
 # ---------- test_ekf ----------
+# #1304: the magnetometer validity gate is referenced to the WMM field, so the
+# EKF tests evaluate the real model rather than a hardcoded site constant.
 add_executable(test_ekf test_ekf.cpp
     ${LIB_DIR}/TR_GpsInsEKF/TR_GpsInsEKF.cpp
+    ${LIB_DIR}/TR_GeoMag/TR_GeoMag.cpp
 )
 target_include_directories(test_ekf PRIVATE
     ${SHIM_DIR}
     ${LIB_DIR}/TR_GpsInsEKF
+    ${LIB_DIR}/TR_GeoMag
 )
 target_link_libraries(test_ekf GTest::gtest_main)
 gtest_discover_tests(test_ekf)

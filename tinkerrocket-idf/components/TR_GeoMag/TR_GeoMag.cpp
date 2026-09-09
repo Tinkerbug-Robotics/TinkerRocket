@@ -168,7 +168,11 @@ Model& model() {
 
 }  // namespace
 
-float declinationRad(double lat_rad, double lon_rad, double alt_m, double decimal_year) {
+// One evaluation, all three geodetic components (nT).  declinationRad() and
+// fieldNED_uT() are both thin wrappers so there is exactly one copy of the
+// spherical-harmonic sum and the geodetic rotation.
+static void evalFieldNED_nT(double lat_rad, double lon_rad, double alt_m,
+                            double decimal_year, double out_nT[3]) {
     const Model& M = model();
 
     // Clamp the epoch to the model's valid range (extrapolation only degrades).
@@ -258,12 +262,26 @@ float declinationRad(double lat_rad, double lon_rad, double alt_m, double decima
     if (st == 0.0) bp = bpp;
     else           bp /= st;
 
-    // Spherical → geodetic field components (North, East).  Declination needs
-    // only the horizontal pair.
-    const double bx = -bt * ca - br * sa;   // geodetic north
-    const double by = bp;                   // east
+    // Spherical → geodetic field components (geomag70's rotation).  All three:
+    // the horizontal pair gives declination, the full vector gives the total
+    // intensity and inclination the validity gate needs.
+    out_nT[0] = -bt * ca - br * sa;   // geodetic north
+    out_nT[1] =  bp;                  // east
+    out_nT[2] =  bt * sa - br * ca;   // down
+}
 
-    return (float)std::atan2(by, bx);       // declination, radians (east +)
+float declinationRad(double lat_rad, double lon_rad, double alt_m, double decimal_year) {
+    double b[3];
+    evalFieldNED_nT(lat_rad, lon_rad, alt_m, decimal_year, b);
+    return (float)std::atan2(b[1], b[0]);   // declination, radians (east +)
+}
+
+void fieldNED_uT(double lat_rad, double lon_rad, double alt_m, double decimal_year,
+                 float out_ned_uT[3]) {
+    double b[3];
+    evalFieldNED_nT(lat_rad, lon_rad, alt_m, decimal_year, b);
+    // WMM coefficients are nT; the magnetometer path is µT everywhere.
+    for (int i = 0; i < 3; ++i) out_ned_uT[i] = (float)(b[i] * 1e-3);
 }
 
 }  // namespace TR_GeoMag

@@ -19,6 +19,16 @@ PYBIND11_MODULE(_ekf, m) {
           py::arg("decimal_year"),
           "Magnetic declination in radians (east-positive), WMM2025.");
 
+    // #1304: the full field, so a replay can hand the filter the same
+    // validity reference the firmware computes at fix. Returns (N, E, D) µT.
+    m.def("geomag_field_ned_uT", [](double lat_rad, double lon_rad, double alt_m,
+                                    double decimal_year) {
+        float b[3];
+        TR_GeoMag::fieldNED_uT(lat_rad, lon_rad, alt_m, decimal_year, b);
+        return py::make_tuple(b[0], b[1], b[2]);
+    }, py::arg("lat_rad"), py::arg("lon_rad"), py::arg("alt_m"),
+       py::arg("decimal_year"));
+
     // Expose under the old Python names for backward-compatibility
     py::class_<EkfIMUData>(m, "IMUData")
         .def(py::init<>())
@@ -92,6 +102,31 @@ PYBIND11_MODULE(_ekf, m) {
              py::arg("vn"), py::arg("ve"), py::arg("vd"))
         .def("set_declination", &GpsInsEKF::setDeclination,
              py::arg("decl_rad"))
+        // #1303/#1304: the magnetometer's validity reference and verdict, and
+        // the on/off switch for the two GNSS heading aids — a replay has to be
+        // able to turn the aids back on to score them against flight data.
+        .def("set_mag_reference", [](GpsInsEKF& self, float n, float e, float d) {
+            const float ned[3] = {n, e, d};
+            self.setMagReference(ned);
+        }, py::arg("north_uT"), py::arg("east_uT"), py::arg("down_uT"))
+        .def("mag_reference_valid", &GpsInsEKF::getMagReferenceValid)
+        .def("mag_reference_total_uT", &GpsInsEKF::getMagReferenceTotal_uT)
+        .def("mag_magnitude_error_uT", &GpsInsEKF::getMagMagnitudeError_uT)
+        .def("mag_cal_suspect", &GpsInsEKF::getMagCalSuspect)
+        .def("mag_fused_count", &GpsInsEKF::getMagFusedCount)
+        .def("mag_rejected_count", &GpsInsEKF::getMagRejectedCount)
+        .def("set_mag_magnitude_tolerance", &GpsInsEKF::setMagMagnitudeTolerance,
+             py::arg("frac"))
+        .def("set_gnss_heading_aids", [](GpsInsEKF& self, bool fuse) {
+            self.setGnssHeadingAids(fuse ? GpsInsEKF::GnssHeadingAids::Fuse
+                                         : GpsInsEKF::GnssHeadingAids::Off);
+        }, py::arg("fuse"))
+        .def("gnss_heading_aids_enabled", [](const GpsInsEKF& self) {
+            return self.getGnssHeadingAids() == GpsInsEKF::GnssHeadingAids::Fuse;
+        })
+        .def("set_nose_first_flight", &GpsInsEKF::setNoseFirstFlight,
+             py::arg("nose_first"))
+        .def("get_nose_first_flight", &GpsInsEKF::getNoseFirstFlight)
         .def("set_gps_noise_scale", &GpsInsEKF::setGpsNoiseScale,
              py::arg("scale"))
         .def("get_gps_noise_scale", &GpsInsEKF::getGpsNoiseScale)
