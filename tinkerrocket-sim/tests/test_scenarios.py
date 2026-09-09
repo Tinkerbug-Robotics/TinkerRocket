@@ -58,12 +58,23 @@ def test_scenario_c_boost_roll_disturbance():
     assert 115.0 < s['peak_roll_rate_dps'] < 150.0
     # Controller nulls the kick back down and holds through coast.
     assert abs(s['final_roll_rate_dps']) < 8.0
-    assert _coast(df)['roll_rate_dps'].abs().median() < 6.0
+    # #1281/#1282: the two GNSS heading aids ship OFF, and this is what that
+    # costs here. Measured on this scenario, rigid linkage:
+    #     aids fused   coast median 1.34 dps, settle 4.54 s, final 1.46 dps
+    #     aids off     coast median 6.41 dps, settle 5.69 s, final 0.35 dps
+    # The loop still nulls the kick — it ends TIGHTER than before — but it
+    # converges more slowly and holds a looser median through coast, because in
+    # the sim the course aid is genuinely informative about roll near vertical.
+    # On the four 2026-08-29 flights the same measurement is not: Rolly Polly V
+    # was fusing a frozen 3.4 m/s velocity solution through a 6 g boost. The
+    # sim's GNSS velocity has no noise model, which is exactly what #1281 exists
+    # to fix; until it does, the vehicle's configuration wins here.
+    assert _coast(df)['roll_rate_dps'].abs().median() < 7.5
     # Settles to within 5 dps within a few seconds of the kick.
     settle = M.settling_time(df['time'].to_numpy(), df['roll_rate_dps'].to_numpy(),
                              target=0.0, tol=5.0,
                              start_time=cfg.roll_kick_time_s + 0.05)
-    assert settle is not None and settle < 6.0
+    assert settle is not None and settle < 6.5
     assert s['fin_saturation_pct'] == 0.0
 
 

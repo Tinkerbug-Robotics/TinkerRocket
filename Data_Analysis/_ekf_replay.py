@@ -103,7 +103,15 @@ def build_event_list(records):
         events.append((r["time_us"], "gnss", r))
     for r in records["BMP585"]:
         events.append((r["time_us"], "baro", r))
+    # #1304: the magnetometer.  This used to read ONLY the old-PCB MMC5983MA,
+    # so every V8/V9/mini log — which writes the IIS2MDC stream instead —
+    # replayed with no magnetometer input at all, silently. Any replay-derived
+    # attitude on a modern log was therefore gyro + GNSS only, whatever the
+    # vehicle actually did. Both streams now feed the filter; a log carries one
+    # or the other, and the parser has already rotated both into board frame.
     for r in records["MMC5983MA"]:
+        events.append((r["time_us"], "mag", r))
+    for r in records["IIS2MDC"]:
         events.append((r["time_us"], "mag", r))
     events.sort(key=lambda e: e[0])
     return events

@@ -150,6 +150,22 @@ static bool    mag_cal_status_dirty   = false;  // true → publish on next tick
 static int16_t pending_mag_cx = 0, pending_mag_cy = 0, pending_mag_cz = 0;
 static bool    pending_mag_apply = false;
 
+// #1303: program the stored hard iron, clearing the pending flag ONLY on a
+// real success.  Called at boot and retried from the flight loop until it
+// takes, so a magnetometer that comes up late still flies calibrated.
+static bool applyPendingMagOffset(const char* why)
+{
+    if (!pending_mag_apply) return true;
+    if (!sensor_collector.isIIS2MDCActive()) return false;
+    const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
+                        pending_mag_cx, pending_mag_cy, pending_mag_cz);
+    if (ok) pending_mag_apply = false;
+    ESP_LOGI(TAG, "IIS2MDC OFFSET applied (%s): (%d,%d,%d) %s",
+             why, (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz,
+             ok ? "OK" : "FAILED");
+    return ok;
+}
+
 // Mag-cal session state.
 //
 // mag_cal_session_active: true between MAG_CAL_START and either a
@@ -4519,13 +4535,21 @@ static void setup_fc()
 
     // Apply mag hard-iron offset to the IIS2MDC chip now that begin() has
     // finished its softReset (which zeroes OFFSET_X/Y/Z).  Issue #96.
-    if (pending_mag_apply && sensor_collector.isIIS2MDCActive())
+    // #1303: this used to be the ONE attempt.  If the chip was not up at this
+    // instant — the stall #1111 exists for — the stored hard iron was never
+    // programmed, never retried, and never mentioned: the log line lives
+    // inside the `if`, so the flight simply flew uncalibrated with no trace.
+    // reviveIIS2MDC() could not save it either, because it re-applies
+    // iis2mdc_offset_*, which only setIIS2MDCHardIronOffset() ever writes.
+    // Now the flag stays raised until a write actually succeeds, and the loop
+    // retries it (see applyPendingMagOffset below).
+    if (pending_mag_apply)
     {
-        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
-                          pending_mag_cx, pending_mag_cy, pending_mag_cz);
-        ESP_LOGI(TAG, "IIS2MDC OFFSET applied: (%d,%d,%d) %s",
-                 (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz,
-                 ok ? "OK" : "FAILED");
+        if (!applyPendingMagOffset("boot")) {
+            ESP_LOGW(TAG, "IIS2MDC OFFSET (%d,%d,%d) NOT applied at boot "
+                          "(chip not active) — will retry",
+                     (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz);
+        }
     }
 
     // Apply restored gyro zero-rate bias now that begin() is done (#132).
@@ -6043,11 +6067,16 @@ static void loop_fc()
                 have_mag_si = true;
             }
             if (have_mag_si) {
-                const double m2 = mag_x_frd * mag_x_frd
-                                + mag_y_frd * mag_y_frd
-                                + mag_z_frd * mag_z_frd;
-                // Earth field at surface is ~25–65 µT; widen to 15–80 µT.
-                if (m2 >= (15.0 * 15.0) && m2 <= (80.0 * 80.0)) {
+                // #1304: the 15–80 µT window that used to sit here was a
+                // hard-iron detector wearing a validity gate's clothes, and it
+                // dropped the sample before the filter ever saw it — so an
+                // uncalibrated magnetometer was indistinguishable from an
+                // absent one, on the pad and in the log alike.  Validity now
+                // belongs to the EKF, which compares the magnitude against
+                // WMM's total intensity for our actual position and reports
+                // the discrepancy.  Pass everything finite through.
+                if (std::isfinite(mag_x_frd) && std::isfinite(mag_y_frd) &&
+                    std::isfinite(mag_z_frd)) {
                     ekf_mag.time_us = mag_time_us;
                     ekf_mag.mag_x = mag_x_frd;
                     ekf_mag.mag_y = mag_y_frd;
@@ -6232,6 +6261,7 @@ static void loop_fc()
                     // constant if the GNSS date is implausible.
                     {
                         float decl_deg = config::MAGNETIC_DECLINATION_DEG;
+                        double decimal_year_for_wmm = (double)TR_GeoMag::WMM_EPOCH;
                         const uint16_t yr = gnss_latest_si.year;
                         if (yr >= 2020 && yr <= 2035) {
                             static const int mdays[12] =
@@ -6243,6 +6273,7 @@ static void loop_fc()
                             if (leap && gnss_latest_si.month > 2) doy += 1;
                             const double decimal_year =
                                 (double)yr + (double)(doy - 1) / (leap ? 366.0 : 365.0);
+                            decimal_year_for_wmm = decimal_year;
                             const float decl_rad = TR_GeoMag::declinationRad(
                                 ref_lat_rad, ref_lon_rad, ref_alt_m, decimal_year);
                             decl_deg = decl_rad * (180.0f / (float)M_PI);
@@ -6251,6 +6282,31 @@ static void loop_fc()
                         ESP_LOGI(TAG, "[EKF] Declination %.2f deg (WMM2025, %u-%02u-%02u)",
                                       (double)decl_deg, gnss_latest_si.year,
                                       gnss_latest_si.month, gnss_latest_si.day);
+
+                        // #1304: the same model evaluation also gives the field
+                        // the magnetometer SHOULD be reading here.  That is the
+                        // only attitude-free test of whether the hard iron has
+                        // actually been removed, and it replaces the fixed
+                        // 15–80 µT window — which on the 2026-08-29 flights
+                        // rejected a magnetometer good to 0.4 µT once corrected,
+                        // and accepted one whose field direction was 17° wrong.
+                        // Until this lands the filter keeps the legacy window,
+                        // so a session that never gets a fix is unchanged.
+                        {
+                            const double dy = (yr >= 2020 && yr <= 2035)
+                                ? decimal_year_for_wmm : (double)TR_GeoMag::WMM_EPOCH;
+                            float ref_ned_uT[3];
+                            TR_GeoMag::fieldNED_uT(ref_lat_rad, ref_lon_rad,
+                                                   ref_alt_m, dy, ref_ned_uT);
+                            ekf.setMagReference(ref_ned_uT);
+                            ESP_LOGI(TAG, "[EKF] Mag reference %.1f µT "
+                                          "(N %.1f E %.1f D %.1f) %s",
+                                     (double)ekf.getMagReferenceTotal_uT(),
+                                     (double)ref_ned_uT[0], (double)ref_ned_uT[1],
+                                     (double)ref_ned_uT[2],
+                                     ekf.getMagReferenceValid() ? "accepted"
+                                                                : "REJECTED");
+                        }
                     }
                     ekf_initialized = true;
                     if (degraded_init) {
@@ -10233,7 +10289,21 @@ static void loop_fc()
                 const bool fresh = (uint32_t)(now_us_h - mmc_latest_si.time_us) < 500000u;
                 mag_st = fresh ? SH_OK : SH_DEGRADED;
             }
+            // #1304: the "cal-residual refinement" this comment used to defer.
+            // A present, fresh magnetometer whose field magnitude does not match
+            // the model is not healthy — it is uncalibrated, and it will not be
+            // fused.  Amber, on the pad, where it can still be fixed.
+            if (mag_st == SH_OK && ekf.getMagReferenceValid() && ekf.getMagCalSuspect()) {
+                mag_st = SH_DEGRADED;
+            }
             sh = shSet(sh, SH_MAG_SHIFT, mag_st);
+
+            // #1303: keep trying to program a stored hard iron that could not be
+            // written at boot (chip not up yet).  Cheap, one I2C write, and only
+            // while something is actually pending.
+            if (pending_mag_apply && !mag_cal_session_active) {
+                applyPendingMagOffset("retry");
+            }
 
             // GNSS — OK needs a 3D fix + enough sats (+ horizontal accuracy,
             // but only when that gate is enabled: config::GNSS_MAX_HACC_M == 0
