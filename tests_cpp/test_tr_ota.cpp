@@ -573,3 +573,30 @@ TEST(OtaAbortFromReadyToBoot, OtherStatesAreUnchanged) {
     EXPECT_EQ(backend.restore_boot_calls, 0);
     EXPECT_EQ(rx.state(), TR_OTA_Receiver::State::Idle);
 }
+
+// #1156 item 3 — the StatusCb contract: "fired whenever state_ or last_error_
+// changes". writeChunk's session-not-active path changed last_error_ and
+// returned without notifying; TR_BLE_To_APP::onFileTransferWrite relies on
+// the callback for its status, so a chunk arriving with no session open
+// produced no BLE status at all.
+namespace {
+struct CbLog { int calls = 0; E last_err = E::Ok; S last_state = S::Idle; };
+void cbSink(void* ctx, S state, E err, size_t) {
+    auto* l = static_cast<CbLog*>(ctx); l->calls++; l->last_err = err; l->last_state = state;
+}
+}
+
+TEST(TrOta, WriteChunkWithNoSessionNotifiesSessionNotActive)
+{
+    FakeOTABackend be;
+    R rx(be);
+    CbLog log;
+    rx.setStatusCallback(&cbSink, &log);
+
+    auto img = make_image(64);
+    EXPECT_EQ(E::SessionNotActive, rx.writeChunk(0, img.data(), img.size()));
+    EXPECT_EQ(1, log.calls) << "last_error_ changed, so the callback must fire";
+    EXPECT_EQ(E::SessionNotActive, log.last_err);
+    EXPECT_EQ(S::Idle, log.last_state) << "state is unchanged by a stray chunk";
+}
+

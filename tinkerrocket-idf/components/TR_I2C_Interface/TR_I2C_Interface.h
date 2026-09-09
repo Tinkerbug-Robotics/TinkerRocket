@@ -42,11 +42,6 @@ public:
 
     esp_err_t sendStartLoggingMsg(uint32_t timeout_ms = 1000) const;
     esp_err_t sendEndOfFlightMsg(uint32_t timeout_ms = 1000) const;
-    bool getOutReady(uint8_t* out_command = nullptr,
-                     uint32_t timeout_ms = 100) const;
-    bool getOutReady(const OutStatusQueryData& query_data,
-                     uint8_t* out_command = nullptr,
-                     uint32_t timeout_ms = 100) const;
     esp_err_t masterRead(uint8_t* out_buf,
                          size_t len,
                          uint32_t timeout_ms = 10) const;
@@ -73,6 +68,7 @@ public:
                               bool verify_crc = true);
 
 private:
+    void teardownSlaveSync();   // #1156 item 1: beginSlave() failure-path cleanup
     static constexpr uint8_t SOF0 = 0xAA;
     static constexpr uint8_t SOF1 = 0x55;
     static constexpr uint8_t SOF2 = 0xAA;

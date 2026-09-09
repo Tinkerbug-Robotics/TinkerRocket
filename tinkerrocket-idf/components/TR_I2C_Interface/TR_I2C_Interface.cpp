@@ -124,6 +124,9 @@ esp_err_t TR_I2C_Interface::beginSlave(int sda_pin,
     esp_err_t err = createSlaveDevice();
     if (err != ESP_OK)
     {
+        // #1156 item 1: all-or-nothing. The queues and mutexes above would
+        // otherwise leak on every failed attempt.
+        teardownSlaveSync();
         return err;
     }
 
@@ -140,11 +143,34 @@ esp_err_t TR_I2C_Interface::beginSlave(int sda_pin,
                                                  xPortGetCoreID());
     if (task_ok != pdPASS)
     {
-        ESP_LOGE(TAG, "Failed to create I2C slave TX task");
+        // #1156 item 1: the slave device is live and both ISR callbacks are
+        // registered, but nothing will ever service on_request. Left like
+        // this, every FC master read holds SCL until the driver's stretch
+        // protect timer, and the OC's non-retry latch then describes "a slave
+        // that wedges every read" rather than "no slave on the bus". Tear the
+        // device down so the failure is the honest one.
+        ESP_LOGE(TAG, "Failed to create I2C slave TX task — removing the slave "
+                      "device so the bus is not left with an unserviced request path");
+        if (_slave_dev != nullptr)
+        {
+            (void)i2c_del_slave_device(_slave_dev);
+            _slave_dev = nullptr;
+        }
+        teardownSlaveSync();
         return ESP_ERR_NO_MEM;
     }
 
     return ESP_OK;
+}
+
+// #1156 item 1: release the slave-side queues and mutexes created at the top
+// of beginSlave(). Only called on beginSlave()'s failure paths.
+void TR_I2C_Interface::teardownSlaveSync()
+{
+    if (_rx_queue)     { vQueueDelete(_rx_queue);         _rx_queue = nullptr; }
+    if (_tx_req_queue) { vQueueDelete(_tx_req_queue);     _tx_req_queue = nullptr; }
+    if (_tx_mux)       { vSemaphoreDelete(_tx_mux);       _tx_mux = nullptr; }
+    if (_dev_mux)      { vSemaphoreDelete(_dev_mux);      _dev_mux = nullptr; }
 }
 
 // ---------------------------------------------------------------------------
@@ -444,13 +470,6 @@ esp_err_t TR_I2C_Interface::sendEndOfFlightMsg(uint32_t timeout_ms) const
                        timeout_ms);
 }
 
-bool TR_I2C_Interface::getOutReady(uint8_t* out_command,
-                                   uint32_t timeout_ms) const
-{
-    OutStatusQueryData empty = {};
-    empty.format_version = 1;
-    return getOutReady(empty, out_command, timeout_ms);
-}
 
 // ---------------------------------------------------------------------------
 //  Slave: read data that was received from master
@@ -563,47 +582,11 @@ esp_err_t TR_I2C_Interface::masterRead(uint8_t* out_buf,
                               pdMS_TO_TICKS(timeout_ms));
 }
 
-// ---------------------------------------------------------------------------
-//  Master: getOutReady
-// ---------------------------------------------------------------------------
-bool TR_I2C_Interface::getOutReady(const OutStatusQueryData& query_data,
-                                   uint8_t* out_command,
-                                   uint32_t timeout_ms) const
-{
-    (void)query_data;   // query is now sent by the caller
-    (void)timeout_ms;   // only the short read timeout is used
-
-    uint8_t rx_frame[10] = {};
-    bool got_response = false;
-    static constexpr uint32_t READ_TIMEOUT_MS = 2;
-
-    esp_err_t read_err = masterRead(rx_frame, sizeof(rx_frame), READ_TIMEOUT_MS);
-    if (read_err == ESP_OK)
-    {
-        uint8_t rx_type = 0;
-        uint8_t payload[2] = {0, 0};
-        size_t payload_len = 0;
-        if (unpackMessage(rx_frame,
-                          sizeof(rx_frame),
-                          rx_type,
-                          payload,
-                          sizeof(payload),
-                          payload_len,
-                          true))
-        {
-            if ((rx_type == OUT_STATUS_RESPONSE) && (payload_len >= 1))
-            {
-                if (out_command != nullptr)
-                {
-                    *out_command = (payload_len >= 2) ? payload[1] : 0U;
-                }
-                got_response = (payload[0] != 0U);
-            }
-        }
-    }
-
-    return got_response;
-}
+// #1156 item 2: getOutReady() (both overloads) is gone. It issued a fixed
+// 10-byte master read against a slave that stages FC_COMBINED_READ_SIZE (96,
+// or 232 for the snapshot) — and this file's own INVARIANT block explains why
+// a short read permanently misaligns every subsequent transfer (#399). It had
+// no callers; the FC's status query is the sanctioned poll.
 
 // ---------------------------------------------------------------------------
 //  Frame pack/unpack (static, unchanged)

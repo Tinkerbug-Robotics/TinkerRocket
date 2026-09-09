@@ -261,7 +261,7 @@ uint32_t i2s_tx_fail = 0;
 int i2s_last_tx_err = ESP_OK;
 uint32_t i2c_query_ok = 0;
 uint32_t i2c_query_fail = 0;
-uint32_t i2c_gor_max_us = 0;  // peak getOutReady() duration per diagnostic window
+uint32_t i2c_gor_max_us = 0;  // peak status-query (I2C master read) duration per diagnostic window
 uint32_t i2s_tx_ism6_ok = 0;
 uint32_t i2s_tx_ism6_fail = 0;
 uint32_t i2s_tx_bmp_ok = 0;
@@ -993,7 +993,7 @@ static bool servoPinsValid()
 }
 
 // Read a config data frame from OutComputer's I2C slave TX buffer.
-// Called after getOutReady() returns a config-pending command.
+// Called after the OC status query returns a config-pending command.
 //
 // The ESP32 I2C slave driver consumes 1 extra byte from the TX FIFO
 // during compound (repeated-START) transactions.  This means the config
