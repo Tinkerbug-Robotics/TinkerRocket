@@ -1,0 +1,42 @@
+# #1211 / #1124 phase B — a queued BLE command dies with the connection that
+# sent it (PR #1227, merged). **Dummy load on ch1, never a live match.**
+#
+# Rig: V9 pair, S1 -> O. Rail ON. Run with --no-ble: the PHONE must own the
+# link, because only a real app download stalls loop_oc for long enough and
+# only a real radio-off drops the link the way this item means. BLE is
+# single-connection, so the harness stays off the radio and scores the
+# console alone.
+#
+# The sequence, driven on the phone while this runs:
+#   1. connect the app
+#   2. start a flight-log download — this holds loop_oc for the whole transfer,
+#      so every later BLE write only lands in the command ring
+#   3. tap deployment-channel test fire on ch1; nothing happens, because the
+#      loop is inside the download
+#   4. `adb shell svc bluetooth disable` — a genuine radio-off. NOT the app's
+#      Disconnect button, which is a clean teardown the app may pace
+#      differently, and which could drain the ring before the drop.
+#
+# Before PR #1227 onDisconnect() tore down every other per-connection field
+# but left the 16-deep ring intact, and loop_oc drained it with no connection
+# gate — so the download aborted, the loop returned, and the next 20 ms
+# iteration popped the queued fire. pwr_pin_on was still true BECAUSE THE
+# DOWNLOAD REQUIRED IT, so the channel fired seconds-to-minutes after the tap
+# with nobody connected and someone possibly walking towards the rocket.
+# #804's rail-off refusal does not cover this: it gates on !pwr_pin_on.
+
+note === waiting on the phone: connect, download, tap fire ch1, radio off ===
+mark
+
+# Positive control: the download really did start, so loop_oc really was
+# stalled and the fire tap really did land in the ring rather than executing.
+expect_serial 300 BLE: Download file request:
+
+expect_serial 300 Device DISCONNECTED, reason=
+# N must be at least 1 — the firmware only logs this when dropped > 0, and the
+# leading [1-9] keeps a hypothetical "dropped 0" from ever reading as a pass.
+expect_serial 30 dropped [1-9][0-9]* queued command\(s\) on disconnect \(#1124\)
+
+expect_order BLE: Download file request: || Device DISCONNECTED, reason=
+expect_order Device DISCONNECTED, reason= || dropped [1-9][0-9]* queued command
+note === done — phase C re-reads the pyro state over BLE ===

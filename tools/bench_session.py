@@ -42,6 +42,7 @@ Conditions read the telemetry JSON:
   st==INFLIGHT        state string
   nsat>=4             any numeric key
   fs.SIM_ACTIVE==1    named bit of the BLE fs field (NOT NonSensorData.flags)
+  ps.CH1_FIRED==0     named bit of the BLE ps field (ARMED, then cont/fired pairs)
   h.STORAGE==OK       named 2-bit SensorHealthState field
 Ops: == != >= <= > <
 
@@ -82,6 +83,18 @@ NSF_BITS = {
     "LAUNCH": 0, "VEL_APOGEE": 1, "ALT_APOGEE": 2, "ALT_LANDED": 3,
     "PWR_PIN_ON": 4, "CAMERA_RECORDING": 5, "LOGGING_ACTIVE": 6,
     "BS_LOGGING_ACTIVE": 7, "SIM_ACTIVE": 8, "BURNOUT": 9,
+}
+
+# The BLE telemetry "ps" bitfield — buildTelemetryJSON() again.  One ARMED bit
+# then a (cont, fired) PAIR per channel, so the shifts are NOT one-per-channel.
+# ps==10 on a board with dummy loads on 1 and 2 is CH1_CONT|CH2_CONT, and a
+# test fire on 2 takes it to 26.
+PS_BITS = {
+    "ARMED": 0,
+    "CH1_CONT": 1, "CH1_FIRED": 2,
+    "CH2_CONT": 3, "CH2_FIRED": 4,
+    "CH3_CONT": 5, "CH3_FIRED": 6,
+    "CH4_CONT": 7, "CH4_FIRED": 8,
 }
 
 # Sensor health: two bits per sensor at these shifts.
@@ -196,6 +209,15 @@ def cond_holds(frame, cond):
         have = (int(frame["fs"]) >> NSF_BITS[name]) & 1
         return compare(have, op, int(want))
 
+    if key.startswith("ps."):
+        name = key[3:]
+        if name not in PS_BITS:
+            raise SystemExit(f"unknown pyro bit {name!r}; known: {sorted(PS_BITS)}")
+        if "ps" not in frame:
+            return False          # absent != zero, same trap as "fs"
+        have = (int(frame["ps"]) >> PS_BITS[name]) & 1
+        return compare(have, op, int(want))
+
     if key.startswith("h."):
         name = key[2:].removeprefix("SH_")
         if name not in SH_SHIFTS:
@@ -276,6 +298,13 @@ class Session:
         self.tl.add("fileops", data.hex())
 
     async def connect(self):
+        # #1124 needs the APP to hold the link (only a real app download stalls
+        # loop_oc, and only a real radio-off drops it the way the test means),
+        # and BLE is single-connection — so the harness has to stay off the
+        # radio and score the console alone.
+        if self.args.no_ble:
+            self.tl.add("ble", "serial-only run (--no-ble): the link belongs to another central")
+            return
         if self.dev is None:
             self.dev = await self.find()
         label = getattr(self.dev, "name", self.dev)
@@ -290,6 +319,8 @@ class Session:
         self.tl.add("ble", f"connected to {label}")
 
     async def disconnect(self):
+        if self.args.no_ble:
+            return
         if self.client and self.client.is_connected:
             await self.client.disconnect()
         self.tl.add("ble", "disconnected")
@@ -624,6 +655,22 @@ async def main_async(args):
         print(f"SCRIPT ERROR  {prob}", file=sys.stderr)
     if problems:
         return 2
+    # A directive that needs the radio would otherwise sit there doing nothing
+    # and be scored a pass, which is the one outcome a bench harness must never
+    # produce.  Refuse the run instead.
+    if args.no_ble:
+        needs_radio = {"send", "expect_tlm", "refute_tlm", "wait_tlm",
+                       "expect_tlm_rate", "expect_tlm_nogap", "expect_fileops",
+                       "connect", "disconnect", "health"}
+        offenders = [(i + 1, ln.split()[0]) for i, ln in enumerate(script)
+                     if ln.strip() and not ln.lstrip().startswith("#")
+                     and ln.split()[0] in needs_radio]
+        for lineno, verb in offenders:
+            print(f"SCRIPT ERROR  line {lineno}: '{verb}' needs the BLE link, "
+                  f"but this is a --no-ble run", file=sys.stderr)
+        if offenders:
+            return 2
+
     if args.dry_run:
         print(f"{args.script}: {steps} steps, no script errors")
         return 0
@@ -684,6 +731,9 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--name", default="TR-R", help="BLE name substring")
+    p.add_argument("--no-ble", action="store_true",
+                   help="tail the console only; take no BLE link. For tests where "
+                        "another central (the phone app) must own the connection.")
     p.add_argument("--address", help="CoreBluetooth peripheral UUID")
     p.add_argument("--port", action="append", default=[],
                    help="serial console as PATH or PATH:LABEL; repeatable, so one "
