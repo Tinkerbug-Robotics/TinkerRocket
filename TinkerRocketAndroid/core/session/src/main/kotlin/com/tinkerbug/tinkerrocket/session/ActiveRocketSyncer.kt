@@ -617,6 +617,37 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         _magCalAdvisory.value = CalAdvisory.None
     }
 
+    /**
+     * #1059: import the SENSOR cal the rocket is already holding, the mirror
+     * of [importRocketCalIntoActiveProfile]. iOS has had both; Android had
+     * only the mag one, so the sensor-cal card rendered
+     * `RocketHasUnsavedCal` — "the rocket has a calibration this profile
+     * doesn't" — with no Import button and an instruction to run a
+     * calibration the app cannot start. Same empty-unit-id guard: the identity
+     * readback lands LATER than the status frame that offers the import, and a
+     * cal tagged "" would take WarnMismatch on every subsequent connect.
+     */
+    public fun importRocketSensorCalIntoActiveProfile(nowMs: Long) {
+        val s = session ?: return
+        val st = store ?: return
+        val profile = st.activeProfile ?: return
+        val status = s.sensorCalStatus.value ?: return
+        if (!status.valid) return
+        val unitId = s.identity.value.unitId
+        if (unitId.isEmpty()) return
+        st.update(profile.id) {
+            it.copy(
+                sensorCal = SensorCalData(
+                    gyroX = status.gyroX, gyroY = status.gyroY, gyroZ = status.gyroZ,
+                    hgX = status.hgX, hgY = status.hgY, hgZ = status.hgZ,
+                    calibratedOnUnitID = unitId,
+                    calibratedAtMs = nowMs,
+                ),
+            )
+        }
+        _sensorCalAdvisory.value = CalAdvisory.None
+    }
+
     public companion object {
         public const val SYNCED_DELAY_MS: Long = 800
 

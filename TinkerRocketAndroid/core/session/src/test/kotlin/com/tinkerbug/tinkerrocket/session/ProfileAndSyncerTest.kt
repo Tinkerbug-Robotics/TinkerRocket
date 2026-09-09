@@ -549,6 +549,60 @@ class ActiveRocketSyncerTest {
         assertEquals("boardA", r.store.activeProfile?.magCal?.calibratedOnUnitID)
     }
 
+    /**
+     * #1059: the SENSOR cal has the same import as the mag cal now. Android
+     * had only the mag half, so the card said "the rocket has a calibration
+     * this profile doesn't (run calibration to save one)" with no Import
+     * button and no way to run one.
+     */
+    @Test
+    fun sensorCalImport_tagsTheCalWithTheBoardId() = runTest {
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        r.fw.emitFileOpsFrame(
+            r.fw.sensorCalStatusFrame(gyroX = 11, gyroY = -22, gyroZ = 33, hgZ = 9.75f),
+        )
+        runCurrent()
+        r.syncer.importRocketSensorCalIntoActiveProfile(nowMs = 7)
+        runCurrent()
+        val cal = assertNotNull(r.store.activeProfile?.sensorCal)
+        assertEquals(11, cal.gyroX)
+        assertEquals(-22, cal.gyroY)
+        assertEquals(9.75f, cal.hgZ)
+        assertEquals("boardA", cal.calibratedOnUnitID)
+        assertEquals(7, cal.calibratedAtMs)
+        assertIs<ActiveRocketSyncer.CalAdvisory.None>(r.syncer.sensorCalAdvisory.value)
+    }
+
+    @Test
+    fun sensorCalImport_refusesAnInvalidCalAndAnEmptyBoardId() = runTest {
+        // An invalid cal is not a cal; and a cal tagged "" would take
+        // WarnMismatch on every later connect (the mag twin above).
+        val r = rig(identityJson = null)
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        r.fw.emitFileOpsFrame(r.fw.sensorCalStatusFrame(valid = false, gyroX = 1))
+        runCurrent()
+        r.syncer.importRocketSensorCalIntoActiveProfile(nowMs = 7)
+        runCurrent()
+        assertNull(r.store.activeProfile?.sensorCal, "invalid: nothing stored")
+        r.fw.emitFileOpsFrame(r.fw.sensorCalStatusFrame(gyroX = 5))
+        runCurrent()
+        r.syncer.importRocketSensorCalIntoActiveProfile(nowMs = 8)
+        runCurrent()
+        assertNull(r.store.activeProfile?.sensorCal, "valid but no board id yet: still nothing")
+        r.fw.emitTelemetryJson(
+            """{"type":"config_identity","uid":"boardA","un":"Atlas","nid":5,"rid":1,"dt":"R"}""",
+        )
+        runCurrent()
+        r.syncer.importRocketSensorCalIntoActiveProfile(nowMs = 9)
+        runCurrent()
+        assertEquals("boardA", r.store.activeProfile?.sensorCal?.calibratedOnUnitID)
+    }
+
     @Test
     fun profileSwitch_rePushes() = runTest {
         val r = rig()
