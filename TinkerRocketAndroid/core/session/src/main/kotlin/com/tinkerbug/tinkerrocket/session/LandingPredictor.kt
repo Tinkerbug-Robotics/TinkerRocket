@@ -19,6 +19,9 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import kotlin.math.abs
 import kotlin.math.pow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Live in-flight landing-point prediction (issue #156) — port of iOS
@@ -38,7 +41,13 @@ import kotlin.math.pow
 public class LandingPredictor(
     private val scope: CoroutineScope,
     private val windFetcher: suspend (lat: Double, lon: Double) -> WindProfile? = { lat, lon ->
-        fetchOpenMeteoWinds(lat, lon, System.currentTimeMillis())
+        // #1044: fetchOpenMeteoWinds is blocking HttpURLConnection (15 s
+        // connect + 15 s read). This class runs on the fleet scope — ONE
+        // thread that also decodes every BLE notification, runs the announcer
+        // and writes every command — so without the hop one wind fetch froze
+        // telemetry, callouts and arm/disarm for up to 30 s, and re-froze on
+        // every frame while it failed. Drift Cast already did it this way.
+        withContext(Dispatchers.IO) { fetchOpenMeteoWinds(lat, lon, System.currentTimeMillis()) }
     },
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -62,9 +71,32 @@ public class LandingPredictor(
 
     /** Refetch the wind profile if older than this and still on the pad. */
     private val windRefetchAfterMs = 3_600_000L
+    /** #1051: one request at a time (iOS twin: `windFetchInFlight`). */
+    private var windFetchInFlight = false
+    /** #1051: after a failure, no retry before this session-clock instant. */
+    private var windRetryNotBeforeMs: Long? = null
+    private val windRetryAfterFailureMs = 45_000L
+    /** #1056: which device the retained prediction/wind belong to; another one resets them. */
+    private var attachedDeviceKey: String? = null
 
-    public fun attach(session: DeviceSession, profileStore: RocketProfileStore) {
-        detach()
+    /**
+     * Subscribe to a session. #1056: iOS `attach` swaps the subscription and
+     * clears NOTHING; this used to open with [detach], which also nulled the
+     * pinned prediction, the cached wind profile and the fetch stamp — and the
+     * map re-attaches on every new DeviceSession (one per reconnect) and on
+     * every tab switch. A BLE drop mid-descent therefore flew the rest of the
+     * flight with zero wind, because the prefetch never runs off the pad. The
+     * state now survives; only attaching a DIFFERENT device ([deviceKey])
+     * resets it — see [reset].
+     */
+    public fun attach(
+        session: DeviceSession,
+        profileStore: RocketProfileStore,
+        deviceKey: String = session.connectedDeviceName,
+    ) {
+        if (attachedDeviceKey != null && attachedDeviceKey != deviceKey) reset()
+        attachedDeviceKey = deviceKey
+        cancelJobs()
         this.session = session
         this.profileStore = profileStore
         landed = false
@@ -73,16 +105,31 @@ public class LandingPredictor(
         }
     }
 
+    /** Unsubscribe only (#1056): the prediction and the wind profile survive. */
     public fun detach() {
-        jobs.forEach { it.cancel() }
-        jobs.clear()
+        cancelJobs()
         session = null
         profileStore = null
+    }
+
+    /** Forget everything — for a different rocket, never for a reconnect. */
+    public fun reset() {
+        detach()
+        attachedDeviceKey = null
         _prediction.value = null
         _windProfile.value = null
         _windFetchError.value = null
         landed = false
         lastWindFetchAtMs = null
+        windRetryNotBeforeMs = null
+    }
+
+    private fun cancelJobs() {
+        // toList(): a cancelled fetch job removes itself from [jobs] in its
+        // completion handler, synchronously, during cancel().
+        jobs.toList().forEach { it.cancel() }
+        jobs.clear()
+        windFetchInFlight = false
     }
 
     // ── Telemetry handling (iOS handleTelemetry verbatim) ────────────────
@@ -182,27 +229,51 @@ public class LandingPredictor(
         val preflight = t.state == "READY" || t.state == "PRELAUNCH" || t.state == "UNKNOWN"
         if (!preflight) return
 
+        // #1051: one request at a time, and a failure backs off instead of
+        // retrying on the next frame. The old guard's last clause was "we
+        // already have a profile", so until the first fetch SUCCEEDED every
+        // preflight frame launched another request — at the telemetry rate,
+        // for as long as the map was open on a pad with no data connection.
+        // The timestamp is now the suppressor in both cases; a failure clears
+        // it and arms the backoff instead.
+        if (windFetchInFlight) return
+        windRetryNotBeforeMs?.let { if (now < it) return }
         val last = lastWindFetchAtMs
         if (last != null && now - last < windRefetchAfterMs &&
-            abs(lastWindFetchLat - lat) < 0.01 && abs(lastWindFetchLon - lon) < 0.01 &&
-            _windProfile.value != null
+            abs(lastWindFetchLat - lat) < 0.01 && abs(lastWindFetchLon - lon) < 0.01
         ) {
             return
         }
+        windFetchInFlight = true
         lastWindFetchAtMs = now
         lastWindFetchLat = lat
         lastWindFetchLon = lon
-
-        jobs += scope.launch {
-            runCatching { windFetcher(lat, lon) }
-                .onSuccess { wp ->
-                    if (wp != null) {
-                        _windProfile.value = wp
-                        _windFetchError.value = null
-                    }
-                }
-                .onFailure { _windFetchError.value = it.message ?: "wind fetch failed" }
+        val job = scope.launch {
+            var profile: WindProfile? = null
+            var failure: Throwable? = null
+            try {
+                profile = windFetcher(lat, lon)
+            } catch (e: CancellationException) {
+                windFetchInFlight = false
+                throw e
+            } catch (e: Exception) {
+                failure = e
+            }
+            windFetchInFlight = false
+            if (profile != null) {
+                _windProfile.value = profile
+                _windFetchError.value = null
+                windRetryNotBeforeMs = null
+            } else {
+                // A null from the fetcher is a silent HTTP/parse failure —
+                // surface it like a thrown one (#1051), and back off.
+                _windFetchError.value = failure?.message ?: "wind fetch failed"
+                windRetryNotBeforeMs = clock() + windRetryAfterFailureMs
+                lastWindFetchAtMs = null
+            }
         }
+        jobs += job
+        job.invokeOnCompletion { jobs.remove(job) }
     }
 }
 
