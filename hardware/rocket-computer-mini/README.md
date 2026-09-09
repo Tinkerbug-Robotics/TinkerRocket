@@ -94,11 +94,27 @@ otherwise. The S3 has `SOC_RTCIO_PIN_COUNT = 22`, covering **GPIO0–GPIO21**, a
 > first panic reset. That reintroduces #825 with no error to notice it by.
 
 The decay window is unchanged from `rocket-computer`: `R84` 100 k and `C105`
-10 µF give roughly 1.4 s from 3.3 V to `U30`'s enable threshold. Note the decay
-is on the *enable* node, not on `V_MCU_SWTCH` — `U30` is a load switch, so its
-output stays at full rail until the enable crosses the threshold and then
-collapses. The flight computer is fully powered for the whole window, with no
-brownout race on the way down.
+10 µF give roughly **0.9 s**, not the 1.4 s this section used to state. With
+`tau` = 100 k x 10 µF = 1.0 s, a node starting at 3.3 V less a `BAV170M` drop
+(~0.4 V at the 28 µA `R84` pulls) and `U30`'s `V_ENF` of 1.13 V, the window is
+`1.0 s x ln(2.9 / 1.13)` = 0.94 s. The old figure reproduces only as
+`ln(3.3 / 0.8)` — dropping the diode drop *and* using a 0.8 V threshold. `C105`
+is an 0402 6.3 V X5R biased at ~2.9 V, where a ~50% DC-bias loss is typical, so
+the window in practice is nearer **0.45 s**.
+
+Note the decay is on the *enable* node, not on `V_MCU_SWTCH` — `U30` is a load
+switch, so its output stays at full rail until the enable crosses the threshold
+and then collapses. The flight computer is fully powered for the whole window,
+with no brownout race on the way down.
+
+**The window is not load-bearing in flight.** Once `pwrHoldAssert()` has run,
+`GPIO17` drives the enable through `D9` itself and nothing is decaying; an out-
+computer reset is covered with zero gap, which is the whole point of #825. The
+window only applies on the ground, before launch detect, where the out computer
+alone drives the enable — and there a dropped rail is the *designed* behaviour,
+because a flight computer that cannot be powered off on the pad is an operator
+trap. #1270 weighed growing `C105` and closed without a part change for exactly
+this reason.
 
 One difference from `rocket-computer`, and it favours this board: there the
 radio has its own switch, so a flight-computer hold does not keep it alive.

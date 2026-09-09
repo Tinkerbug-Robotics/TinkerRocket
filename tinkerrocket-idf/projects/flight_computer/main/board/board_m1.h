@@ -243,10 +243,26 @@ struct board_pins
     // LOW and high-Z are electrically identical through the diode — an anode
     // cannot pull the rail down — so this pin can only ever ADD power. Every
     // glitch is harmless and "release" just hands the rail back to the OC's
-    // PWR_PIN. R84 (100 k) and C105 (10 uF) hold the enable up roughly 1.4 s
-    // after the last driver lets go; note the decay is on the ENABLE node,
-    // not on V_MCU_SWTCH, so we stay at full rail for the whole window and
-    // then drop sharply — there is no brownout race on the way down.
+    // PWR_PIN. R84 (100 k) and C105 (10 uF) hold the enable up for roughly
+    // 0.9 s after the last driver lets go — NOT the 1.4 s this comment used
+    // to claim. tau = 100 k x 10 uF = 1.0 s, the node starts at 3.3 V minus a
+    // BAV170M drop (~0.4 V at the 28 uA R84 pulls) and has to fall to U30's
+    // V_ENF, so t = 1.0 s x ln(2.9/1.13) = 0.94 s. The old 1.4 s reproduces
+    // only as ln(3.3/0.8): no diode drop AND a 0.8 V threshold, two errors
+    // pushing the same way. Derate C105 for DC bias — it is an 0402 6.3 V
+    // X5R sitting at ~2.9 V, which typically costs half its capacitance —
+    // and the real window is nearer 0.45 s.
+    //
+    // Note the decay is on the ENABLE node, not on V_MCU_SWTCH, so we stay at
+    // full rail for the whole window and then drop sharply — there is no
+    // brownout race on the way down.
+    //
+    // None of this is load-bearing in flight: once pwrHoldAssert() has run,
+    // GPIO17 holds the node itself and no decay is in progress. The window
+    // only matters on the ground, where the OC alone drives the enable — and
+    // there a dropped rail is the DESIGNED behaviour (see pwrHoldAssert's
+    // "NEVER asserted on the ground"). See #1270 for why the part was left
+    // as-is.
     //
     // *** THIS PIN MUST STAY INSIDE GPIO0-21. ***
     // The assert is drive HIGH + gpio_hold_en, and on the ESP32-S3 that only

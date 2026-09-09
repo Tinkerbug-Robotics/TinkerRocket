@@ -60,6 +60,13 @@ CONFIG_ESP32P4_REV_MIN_100=y
 
 # Brownout: IDF 5.5 defaults the P4 detector to 2.6V (LVL_SEL_7), which trips
 # during servo-PWM init on this board. Pin to the most-lenient level (2.42V).
+#
+# TARGET-SPECIFIC. The selector numbering is reversed between the P4 and the
+# S3, so this line does NOT mean "most lenient" on every flight_computer
+# build: P4 SEL_5/6/7 = 2.42/2.52/2.60 V, S3 SEL_5/6/7 = 2.67/2.56/2.44 V.
+# The mini's FC is an S3 and overrides this in sdkconfig.defaults.m1 — see
+# there. Anything added below that is a voltage-, pad- or die-specific
+# constant needs the same check before it is assumed to be portable.
 CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5=y
 
 # Main task stack: the 5.5 default (3584 B) overflows FC's synchronous sensor
