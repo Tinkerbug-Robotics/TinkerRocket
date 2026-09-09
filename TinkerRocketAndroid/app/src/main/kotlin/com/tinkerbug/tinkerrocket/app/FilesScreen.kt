@@ -321,10 +321,10 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
                             csvEpoch++      // a CSV may now exist for this row
                         }
                     },
-                    onShare = { shareCsvIfPresent(context, file) },
+                    onShare = { shareFlightFiles(context, file) },
                     onChart = { chartCsv = csvFileFor(context, file.name) },
                     hasCsv = remember(file.name, csvEpoch) {
-                        csvFileFor(context, file.name).exists()
+                        FlightCache.isCachedComplete(context, file.name, file.size)   // #854: size-aware, not existence-only
                     },
                     selecting = selecting,
                     selected = file.name in selection,
@@ -607,8 +607,16 @@ private suspend fun downloadAndConvert(
     else -> "Download failed: $result"
 }
 
-private fun shareCsvIfPresent(context: Context, file: FileInfo) =
-    FlightCache.shareCsv(context, csvFileFor(context, file.name))
+// #1067: the .bin is what the post-flight tools read; share all three.
+private fun shareFlightFiles(context: Context, file: FileInfo) =
+    FlightCache.shareFlight(
+        context,
+        listOf(
+            binFileFor(context, file.name),
+            csvFileFor(context, file.name),
+            FlightCache.summaryFileFor(context, file.name),
+        ),
+    )
 
 /**
  * #1271: a launch was lost to a phone-IO blind window — the rocket flew while

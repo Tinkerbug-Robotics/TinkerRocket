@@ -5,6 +5,9 @@ import java.math.RoundingMode
 import kotlin.math.pow
 import kotlin.math.sqrt
 
+/** #1099: null for NaN/±inf, which the JSON writer refuses. */
+internal fun Double?.finiteOrNull(): Double? = this?.takeIf { it.isFinite() }
+
 /**
  * Device type auto-detected from binary log data — port of iOS `DeviceType`.
  */
@@ -381,11 +384,13 @@ public class CsvGenerator {
             ?.let { FlightSettingsData.decode(it.payload) }
             ?.let { FlightSettings.from(it) }
 
+        // #1099: a non-finite value cannot be JSON-encoded; sanitise where the
+        // numbers are made, as iOS's CSVGenerator does, so the two stay twins.
         return FlightSummary(
-            maxAltitudeM = maxPressureAlt,
-            maxSpeedMps = maxSpeed,
-            burnoutTimeS = burnoutTime,
-            apogeeTimeS = apogeeTime,
+            maxAltitudeM = maxPressureAlt.finiteOrNull(),
+            maxSpeedMps = maxSpeed.finiteOrNull(),
+            burnoutTimeS = burnoutTime.finiteOrNull(),
+            apogeeTimeS = apogeeTime.finiteOrNull(),
             settings = flightSettings,
         )
     }

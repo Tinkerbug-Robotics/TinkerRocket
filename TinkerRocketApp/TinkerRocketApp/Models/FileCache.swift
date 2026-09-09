@@ -8,6 +8,15 @@
 
 import Foundation
 
+/// #1077: the four top-level summary numbers, decoded independently of the
+/// settings block so a stale nested schema cannot blank the row.
+private struct FlightSummaryHeadline: Decodable {
+    let max_altitude_m: Double?
+    let max_speed_mps: Double?
+    let burnout_time_s: Double?
+    let apogee_time_s: Double?
+}
+
 // MARK: - CachedFlight Model
 
 enum CachedFlightType {
@@ -326,6 +335,16 @@ nonisolated class FileCache {
         return getCachedDirectCSV(filename) != nil
     }
 
+    /// #854 item 2: a direct CSV is transferred byte-for-byte, so "cached"
+    /// means present AT THE SIZE THE BOARD ADVERTISES. Existence alone let a
+    /// short transfer render as complete until the cache was cleared.
+    func isDirectCSVCached(_ filename: String, expectedSize: UInt32) -> Bool {
+        guard let url = getCachedDirectCSV(filename) else { return false }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let cachedSize = (attrs?[.size] as? UInt64) ?? 0
+        return cachedSize == UInt64(expectedSize)
+    }
+
     // MARK: - Flight Caching Status
 
     /// Check if a flight is fully cached (both binary and CSV exist)
@@ -487,13 +506,19 @@ nonisolated class FileCache {
             var maxSpd: Double? = nil
             var burnoutT: Double? = nil
             var apogeeT: Double? = nil
+            // #1077: decode the four headline numbers on their own. The
+            // nested `settings` block has grown fields over time, and a
+            // sidecar written before a field existed used to take the whole
+            // decode down with it — so every flight cached between
+            // 2026-05-22 and 07-27 showed no altitude, speed or apogee.
+            // The headline struct never touches `settings`.
             if let sURL = summaryURL,
                let data = try? Data(contentsOf: sURL),
-               let summary = try? JSONDecoder().decode(FlightSummary.self, from: data) {
-                maxAlt = summary.max_altitude_m
-                maxSpd = summary.max_speed_mps
-                burnoutT = summary.burnout_time_s
-                apogeeT = summary.apogee_time_s
+               let head = try? JSONDecoder().decode(FlightSummaryHeadline.self, from: data) {
+                maxAlt = head.max_altitude_m
+                maxSpd = head.max_speed_mps
+                burnoutT = head.burnout_time_s
+                apogeeT = head.apogee_time_s
             }
 
             results.append(CachedFlight(

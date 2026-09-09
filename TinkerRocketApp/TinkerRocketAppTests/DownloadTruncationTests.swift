@@ -119,3 +119,55 @@ final class DownloadTruncationTests: XCTestCase {
         XCTAssertNil(url)
     }
 }
+
+// MARK: - #1077 summary decode fallbacks
+
+/// Sidecars written between 2026-05-22 and 07-27 predate `dynamic_rate` and
+/// `profile_semantics`. The synthesized decoder threw keyNotFound on either,
+/// and FileCache decoded the whole summary in one `try?` — so every one of
+/// those flights showed no altitude, speed or apogee. The settings structs now
+/// fall back to the documented pre-field values.
+final class SummaryDecodeFallbackTests: XCTestCase {
+
+    private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+        try JSONDecoder().decode(type, from: Data(json.utf8))
+    }
+
+    func testIMUSettingsWithoutDynamicRateDecodesAsFixedRate() throws {
+        let s = try decode(IMUSettings.self, """
+            {"gyro_fs_dps": 2000, "low_g_fs_g": 16, "high_g_fs_g": 400, "update_rate_hz": 960}
+            """)
+        XCTAssertFalse(s.dynamic_rate, "absent means the then-fixed build rate")
+        XCTAssertEqual(s.update_rate_hz, 960)
+        XCTAssertNil(s.mounting)
+    }
+
+    func testIMUSettingsWithDynamicRateIsHonoured() throws {
+        let s = try decode(IMUSettings.self, """
+            {"gyro_fs_dps": 2000, "low_g_fs_g": 16, "high_g_fs_g": 400, "dynamic_rate": true}
+            """)
+        XCTAssertTrue(s.dynamic_rate)
+    }
+
+    private let rollWithoutSemantics = """
+        {"mode": "angle", "kp": 0.04, "ki": 0.0, "kd": 0.001, "d_lpf_hz": 20.0,
+         "kp_angle": 2.0, "cmd_limit_min_deg": -10.0, "cmd_limit_max_deg": 10.0,
+         "delay_ms": 500, "rate_cap_dps": 180.0, "roll_rate_set_point": 0.0,
+         "guidance_enabled": false,
+         "gain_schedule": {"enabled": false, "v_ref": 100.0, "v_min": 20.0, "scale_cap": 4.0},
+         "profile": []}
+        """
+
+    func testRollControlSettingsWithoutProfileSemanticsDecodesAsStep() throws {
+        let s = try decode(RollControlSettings.self, rollWithoutSemantics)
+        XCTAssertEqual(s.profile_semantics, "step", "absent means the documented pre-v4 semantics")
+        XCTAssertNil(s.min_speed_mps, "pre-speed-gate sidecars have no min_speed_mps")
+        XCTAssertEqual(s.mode, "angle")
+    }
+
+    func testRollControlSettingsWithProfileSemanticsIsHonoured() throws {
+        let json = rollWithoutSemantics.replacingOccurrences(of: "\"profile\": []", with: "\"profile\": [], \"profile_semantics\": \"ramp\"")
+        let s = try decode(RollControlSettings.self, json)
+        XCTAssertEqual(s.profile_semantics, "ramp")
+    }
+}

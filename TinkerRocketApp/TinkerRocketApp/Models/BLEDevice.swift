@@ -1549,6 +1549,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     func downloadFile(_ filename: String, completion: @escaping (URL?) -> Void) {
+        // #1076: a second request while a transfer is in flight used to
+        // overwrite downloadingFilename, downloadedData and the completion
+        // handler. The first file's bytes then landed under the second name
+        // and its handler was never called, so its row sat on a spinner for
+        // the rest of the connection. The firmware does not save us here —
+        // cmd 4 is refused only INFLIGHT; the second request just queues
+        // while the first keeps streaming. Refuse it, like Android's
+        // DownloadResult.Busy.
+        if isDownloading {
+            print("[DOWNLOAD] refused \(filename): \(downloadingFilename ?? "?") is still transferring")
+            completion(nil)
+            return
+        }
         guard let characteristic = commandCharacteristic,
               let peripheral = peripheral else {
             completion(nil)
@@ -1693,6 +1706,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     private func failDownload() {
         downloadStallTimer?.invalidate()
         downloadStallTimer = nil
+        // #1076: whatever else happens, no filename is left in .downloading
+        // with no handler that will ever resolve it.
+        if let f = downloadingFilename {
+            DispatchQueue.main.async { [weak self] in
+                if self?.downloadStates[f] == .downloading { self?.downloadStates[f] = .failed }
+            }
+        }
         let handler = downloadCompletionHandler
         downloadingFilename = nil
         downloadedData = Data()
@@ -1798,9 +1818,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 }
                 let tempSummary = FileManager.default.temporaryDirectory
                     .appendingPathComponent(summaryTempName)
-                try generator.writeSummary(summary, to: tempSummary)
-                let _ = try FileCache.shared.cacheSummary(at: tempSummary, for: filename)
+                // #1099: cache the CSV FIRST. The summary sidecar is a
+                // convenience; when encoding it threw, the whole conversion
+                // was reported failed and the CSV — the thing the operator
+                // actually wanted — was discarded, while the row went on to
+                // show a green check with the download disabled. Now the CSV
+                // is kept and the sidecar is best-effort.
                 let cachedURL = try FileCache.shared.cacheCSV(at: tempCSV, for: filename)
+                do {
+                    try generator.writeSummary(summary, to: tempSummary)
+                    _ = try FileCache.shared.cacheSummary(at: tempSummary, for: filename)
+                } catch {
+                    print("[CSV] summary sidecar FAILED for \(filename) — the CSV is cached; "
+                          + "the row will show no headline numbers: \(error.localizedDescription)")
+                }
                 DispatchQueue.main.async { completion(cachedURL) }
             } catch {
                 // Loud, and attributable to the file. The .bin is already
@@ -1830,6 +1861,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if filename.hasSuffix(".bin") {
                 return FileCache.shared.isDirectCSVCached(String(filename.dropLast(4)) + ".csv")
                     ? .completed : .notDownloaded
+            }
+            // #854 item 2: a direct CSV is transferred as-is, so when the board
+            // advertises a size, the cached file counts only if it matches —
+            // mirroring the rocket branch below. Anything live (downloading,
+            // generating, failed) passes through; only a stale .completed on
+            // a wrong-sized file is refused, so a short transfer stays
+            // re-pullable instead of rendering as complete forever.
+            if let deviceFile = files.first(where: { $0.name == filename }), deviceFile.size > 0 {
+                if FileCache.shared.isDirectCSVCached(filename, expectedSize: deviceFile.size) {
+                    return .completed
+                }
+                if let live = downloadStates[filename], live != .completed { return live }
+                return .notDownloaded
             }
             if FileCache.shared.isDirectCSVCached(filename) { return .completed }
         } else if let deviceFile = files.first(where: { $0.name == filename }) {
