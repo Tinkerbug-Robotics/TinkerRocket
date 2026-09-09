@@ -61,8 +61,11 @@ stateDiagram-v2
 
 In the **idle** state only BLE is running. Peripheral init is deferred entirely —
 NAND, MRAM, LoRa and I2S are not even initialized — so the board sits at roughly a
-milliamp and a pack lasts weeks on the pad. The app can still connect, read config,
-and download previous flights in this state.
+milliamp and a pack lasts weeks on the pad. The app can still connect and read
+config in this state — but not list, download or delete flights: the flight-log
+surface is brought up by `initPeripherals()`, which runs only when the rail comes
+on, so a rail-off file list answers `[]` and a download is refused with `EOF|ABORT`
+(both logged since #1145). Power the rail on first.
 
 In the **active** state the rail is closed, the FC boots, and the OC starts doing all
 four of its jobs at once.
@@ -241,8 +244,8 @@ The authoritative list is the dispatch chain itself. A few worth knowing:
 | Cmd | Effect | Rail |
 |---|---|---|
 | 1 | Toggle camera recording | off ok |
-| 2 | File list (paginated, 5/page) | off ok |
-| 3 | Delete file — refused while `INFLIGHT` | off ok |
+| 2 | File list (paginated, 5/page) — answers `[]` with the rail off (log not initialised; logged, #1145) | on |
+| 3 | Delete file — refused while `INFLIGHT`; refused with the rail off (log not initialised) | on |
 | 8 | Set the FC power rail (payload byte 1/0; a bare cmd 8 is the legacy **toggle**). An OFF is refused while `INFLIGHT`, and since #1162 the refusal holds through a *silent* FC until the FC's own 10-minute flight timeout could have elapsed since the OC first saw `INFLIGHT` (`inflight_refusal_policy.h`) — the 3 s telemetry-freshness term that used to be the escape hatch opened the gate during an FC reboot | either |
 | 9 | Phone time sync (for log filenames) | off ok |
 | 23 | Toggle logging | on |

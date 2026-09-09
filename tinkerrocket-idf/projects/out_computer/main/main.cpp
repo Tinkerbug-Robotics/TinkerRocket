@@ -125,6 +125,12 @@ static inline void maybeMarkOtaValid()
 // ==========================================================================
 static TR_I2C_Interface i2c_interface(config::I2C_ADDRESS);
 static bool i2c_slave_initialized = false;
+// #1134 overflow count already reported. File scope (#1145 item 1) so a
+// phone-IO pause — which overflows the 4-slot ring BY CONSTRUCTION, the FC
+// polling at 4 Hz into a ring nobody drains for the length of a download —
+// can rebaseline it instead of tripping the "FC is writing faster than
+// loop_oc drains" warning on every transfer.
+static uint32_t i2c_rx_drops_seen = 0;
 static TR_I2S_Stream i2s_stream;
 static TR_LogToFlash logger;
 
@@ -2821,6 +2827,32 @@ static inline void endPhoneIO()
 {
     // Drain while the ISR is still suppressed — race-free.
     rx_tail = rx_head;
+    // #1145 item 1: the I2C slave RX ring was never drained here. The FC keeps
+    // polling OUT_STATUS_QUERY at 4 Hz through the pause while
+    // serviceI2CIngress() is suppressed, so on resume loop_oc served the
+    // queued polls back-to-back in a few milliseconds — and each one advanced
+    // the serving-slot lifecycle (3 stagings + the idle poll) into a single
+    // latched TX buffer the FC had not read once. A command queued during a
+    // download was consumed by stale polls and silently dropped. Discard the
+    // stale polls (the FC re-polls in 250 ms; nothing durable rides a query)
+    // and rebaseline the overflow counter the pause itself drove up.
+    if (i2c_slave_initialized)
+    {
+        uint8_t scratch[256];   // = TR_I2C_Interface::SLAVE_RX_BUF_SIZE (private)
+        unsigned discarded = 0;
+        while (discarded < 8 && i2c_interface.readFromSlave(scratch, sizeof scratch, 0) > 0)
+        {
+            discarded++;
+        }
+        const uint32_t drops = i2c_interface.slaveRxDrops();
+        if (discarded > 0 || drops != i2c_rx_drops_seen)
+        {
+            ESP_LOGI("OC", "phone-IO pause ended: %u stale FC poll(s) discarded, "
+                           "%lu ring overflow(s) during the pause (expected)",
+                     discarded, (unsigned long)(drops - i2c_rx_drops_seen));
+        }
+        i2c_rx_drops_seen = drops;
+    }
     i2s_ingest_paused = false;
     flash_op_active   = false;
     phoneIoPmRelease();
@@ -3236,9 +3268,31 @@ static void queueOutStatusResponse(bool ready)
         }
     }
 
-    // Non-blocking (timeout=0): if the TX ringbuffer is full, drop this
-    // response — the next query cycle will generate a fresh one.
-    i2c_interface.writeToSlave(tx_buf, I2C_TX_SIZE, 0);
+    // Non-blocking (timeout=0): if the TX stage cannot be taken right now
+    // (the TX service task holds the mutex, or the slave is mid-#402 reset),
+    // this response is dropped and the next query cycle generates a fresh one.
+    //
+    // #1145 item 2: that drop used to be invisible to the serving-slot state
+    // machine below, which advanced anyway — so a dropped stage cost one of
+    // the command's CMD_REPEAT_LIMIT deliveries, and a dropped idle-gap stage
+    // left the previous frame latched with cmd still set. (#1137 item 4's
+    // serving epoch has since made the FC immune to the second half; the
+    // first half is still a lost delivery.) A dropped stage now leaves the
+    // slot exactly as it was, so the SAME frame is re-staged on the next poll.
+    const int staged = i2c_interface.writeToSlave(tx_buf, I2C_TX_SIZE, 0);
+    if (staged != (int)I2C_TX_SIZE)
+    {
+        static uint32_t stage_drop_log_ms = 0;
+        const uint32_t now_ms = millis();
+        if (now_ms - stage_drop_log_ms > 1000U)
+        {
+            stage_drop_log_ms = now_ms;
+            ESP_LOGW("OC", "I2C TX stage dropped (rc=%d) for cmd 0x%02X — not counted "
+                           "as a delivery; re-staging on the next poll",
+                     staged, (unsigned)cmd);
+        }
+        return;
+    }
 
     // Repeat each command for CMD_REPEAT_LIMIT polls so the FlightComputer
     // has multiple chances to receive it; then clear the serving slot and
@@ -4851,15 +4905,14 @@ static void serviceI2CIngress()
     // #1134: a non-zero count means the slave ring overflowed and frames were
     // DISCARDED — which is the honest outcome, but it must not be silent.
     // Report it on change only; this runs at loop rate.
-    static uint32_t last_rx_drops = 0;
     const uint32_t rx_drops = i2c_interface.slaveRxDrops();
-    if (rx_drops != last_rx_drops)
+    if (rx_drops != i2c_rx_drops_seen)
     {
         ESP_LOGW("I2C_RX", "slave RX ring overflowed — %lu frame(s) dropped "
                            "since boot (was %lu). The FC is writing faster "
                            "than loop_oc drains (#1134).",
-                 (unsigned long)rx_drops, (unsigned long)last_rx_drops);
-        last_rx_drops = rx_drops;
+                 (unsigned long)rx_drops, (unsigned long)i2c_rx_drops_seen);
+        i2c_rx_drops_seen = rx_drops;
     }
 }
 
@@ -8917,18 +8970,32 @@ static void setup_oc()
             cfg_servo_hz    = prefs.getUShort("hz",  50);
             cfg_servo_min   = prefs.getUShort("min", 1000);
             cfg_servo_max   = prefs.getUShort("max", 2000);
-            cfg_pid_kp      = prefs.getFloat("kp",    0.04f);
-            cfg_pid_ki      = prefs.getFloat("ki",    0.001f);
-            cfg_pid_kd      = prefs.getFloat("kd",    0.0003f);
-            cfg_pid_min     = prefs.getFloat("mincmd", -20.0f);
-            cfg_pid_max     = prefs.getFloat("maxcmd",  20.0f);
-            cfg_gain_sched  = prefs.getBool("gs", false);
         }
         // #1158: OUTSIDE the isKey("b1") guard. That guard asks whether servo
         // GEOMETRY was ever saved; the enable flag is independent, and an
         // operator who disabled servo control without ever touching the trim
         // values would otherwise still get the true default back.
         cfg_servo_enabled = prefs.getBool("sen", cfg_servo_enabled);
+        prefs.end();
+
+        // #1145 item 4: the PID gains and the gain-schedule flag live in the
+        // "pid" namespace under kp/ki/kd/mn/mx/gs — that is what cachePIDConfig()
+        // and BLE cmd 22 write. This block used to read them from "servo" under
+        // "mincmd"/"maxcmd", so every read missed and returned the literal
+        // passed as the default; for the gains that literal happened to equal
+        // the static initialiser, but for gain scheduling it was `false`
+        // against a `true` default, silently inverting it — and
+        // initPeripherals() then read the flag with THIS corrupted value as
+        // its default, so a rocket that never had cmd 22 pushed reported gain
+        // scheduling OFF for the whole session. Same keys and same
+        // current-value defaults as initPeripherals() now.
+        prefs.begin("pid", false);
+        cfg_pid_kp     = prefs.getFloat("kp", cfg_pid_kp);
+        cfg_pid_ki     = prefs.getFloat("ki", cfg_pid_ki);
+        cfg_pid_kd     = prefs.getFloat("kd", cfg_pid_kd);
+        cfg_pid_min    = prefs.getFloat("mn", cfg_pid_min);
+        cfg_pid_max    = prefs.getFloat("mx", cfg_pid_max);
+        cfg_gain_sched = prefs.getBool("gs", cfg_gain_sched);
         prefs.end();
 
         prefs.begin("guid", false);
@@ -9836,6 +9903,17 @@ static void loop_oc()
         {
             // Send file list with pagination (5 files per page). Encoder lives
             // in wire_format:: and is byte-tested against golden fixtures.
+            // #1145 item 5: with the rail off the flight log is never
+            // initialised (initPeripherals() runs only on the rail-on paths),
+            // so this answers "[]" — by design, but it used to do so silently
+            // and the docs said the opposite. Say it, once per request.
+            if (!flightlog.isInitialized())
+            {
+                ESP_LOGW("BLE", "File list requested with the flight log not "
+                                "initialised (rail off): the list is EMPTY by "
+                                "design — power the rail on (cmd 8) to list, "
+                                "download or delete flights (#1145)");
+            }
             beginPhoneIO();
             uint8_t page = ble_app.getFileListPage();
             String json = flightlogBuildFileListJson(page).c_str();
@@ -9957,6 +10035,18 @@ static void loop_oc()
         if (download_filename.length() > 0 && latest_rocket_state == INFLIGHT)
         {
             ESP_LOGW("BLE", "Download '%s' refused: rocket INFLIGHT",
+                     download_filename.c_str());
+            (void)ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
+            download_filename = "";
+        }
+        // #1145 item 5: with the rail off the flight log is never initialised,
+        // so every read returned NotInitialized and the loop took the abort
+        // path with nothing in the log naming the cause. Refuse up front and
+        // say why — the same EOF|ABORT the app already handles.
+        if (download_filename.length() > 0 && !flightlog.isInitialized())
+        {
+            ESP_LOGW("BLE", "Download '%s' refused: flight log not initialised "
+                            "(rail off) — power the rail on (cmd 8) first (#1145)",
                      download_filename.c_str());
             (void)ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             download_filename = "";
