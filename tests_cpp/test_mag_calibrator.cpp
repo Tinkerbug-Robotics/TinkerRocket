@@ -459,3 +459,128 @@ TEST(MagCalibratorCoverage, PostFitMaskMatchesTheSamplingMask) {
     EXPECT_EQ(after.coverage_mask, before.coverage_mask)
         << "runFit() recounted coverage into a different cell scheme";
 }
+
+// ===========================================================================
+// The fit itself. Everything above exercises the state machine and the
+// coverage tessellation; none of it checks that the sphere fit RECOVERS A
+// KNOWN OFFSET, which is the arithmetic the whole feature rests on, or pins
+// the sign convention that decides whether programming the result into the
+// chip's OFFSET registers removes the hard iron or doubles it.
+//
+// The real case that motivated this: the Rolly Polly V nosecone board flew
+// 2026-08-29 with a 210 µT hard iron — about four times Earth's field, stable
+// to 1.6 µT across the flight, almost entirely on one body axis. Sphere-fitting
+// that flight's own samples recovers the site field to 0.4 µT and its dip to
+// 1.7°, so the offset is fully correctable. These tests pin that the
+// calibrator would in fact have recovered it.
+// ===========================================================================
+namespace fitmath {
+
+// Drive a fit over a sphere of radius R_uT CENTRED AT (cx, cy, cz) raw LSB —
+// i.e. a magnetometer with that hard iron on it. Same direction set and sample
+// counts as driveCleanFit, which is centred at the origin.
+void driveOffsetFit(MagCalibrator& cal, int cx, int cy, int cz, float R_uT) {
+    cal.start();
+    struct Dir { int16_t x, y, z; };
+    Dir dirs[] = {
+        {1000, 0, 0}, {-1000, 0, 0}, {0, 1000, 0}, {0, -1000, 0},
+        {0, 0, 1000}, {0, 0, -1000},
+        {707, 707, 0}, {-707, 707, 0}, {707, -707, 0}, {-707, -707, 0},
+        {707, 0, 707}, {-707, 0, 707}, {707, 0, -707}, {-707, 0, -707},
+        {0, 707, 707}, {0, -707, 707}, {0, 707, -707}, {0, -707, -707},
+        {577, 577, 577}, {-577, 577, 577}, {577, -577, 577}, {577, 577, -577},
+        {-577, -577, 577}, {-577, 577, -577}, {577, -577, -577}, {-577, -577, -577},
+    };
+    const int N = sizeof(dirs) / sizeof(dirs[0]);
+    const double R_lsb = R_uT / UT_PER_LSB;
+    for (int rep = 0; rep < 40; rep++) {
+        for (int i = 0; i < N; i++) {
+            cal.setLiveAccel(dirs[i].x, dirs[i].y, dirs[i].z);
+            const double L = sqrt((double)dirs[i].x * dirs[i].x +
+                                  (double)dirs[i].y * dirs[i].y +
+                                  (double)dirs[i].z * dirs[i].z);
+            // Earth field along this direction, PLUS the hard iron.
+            const int16_t mx = (int16_t)(cx + (double)dirs[i].x / L * R_lsb);
+            const int16_t my = (int16_t)(cy + (double)dirs[i].y / L * R_lsb);
+            const int16_t mz = (int16_t)(cz + (double)dirs[i].z / L * R_lsb);
+            cal.addSample(mx, my, mz);
+        }
+    }
+    ASSERT_TRUE(cal.computeFit());
+}
+
+}  // namespace fitmath
+using namespace fitmath;
+
+TEST(MagCalibratorFit, RecoversAKnownHardIron) {
+    // 20 µT of hard iron, arbitrary direction, on a 50 µT field.
+    const int cx = 133, cy = -67, cz = 40;      // ~20/10/6 µT at 0.15 µT/LSB
+    MagCalibrator cal;
+    driveOffsetFit(cal, cx, cy, cz, 50.0f);
+    int16_t fx, fy, fz; float R, res; uint8_t reject;
+    cal.getResult(fx, fy, fz, R, res, reject);
+    EXPECT_EQ((int)reject, (int)MAG_CAL_OK);
+    EXPECT_NEAR((int)fx, cx, 3);
+    EXPECT_NEAR((int)fy, cy, 3);
+    EXPECT_NEAR((int)fz, cz, 3);
+    EXPECT_NEAR(R, 50.0f, 1.0f);
+    EXPECT_LT(res, 1.0f);
+}
+
+TEST(MagCalibratorFit, TheSignIsSubtractNotAdd) {
+    // THE test that matters for the chip. The IIS2MDC OFFSET registers are
+    // SUBTRACTED from the raw output, so the fitted centre must be programmed
+    // as-is. If the convention were inverted, taking the fit at face value
+    // would DOUBLE the hard iron rather than remove it — and on the pad that
+    // reads as a plausible-looking number, not an obvious failure.
+    const int cx = 133, cy = -67, cz = 40;
+    MagCalibrator cal;
+    driveOffsetFit(cal, cx, cy, cz, 50.0f);
+    int16_t fx, fy, fz; float R, res; uint8_t reject;
+    cal.getResult(fx, fy, fz, R, res, reject);
+
+    // A raw sample: Earth field along +X plus the hard iron, as the chip sees it.
+    const double R_lsb = 50.0 / UT_PER_LSB;
+    const double raw[3] = { cx + R_lsb, (double)cy, (double)cz };
+
+    auto mag_uT = [](double x, double y, double z) {
+        return sqrt(x*x + y*y + z*z) * UT_PER_LSB;
+    };
+    // Uncorrected it is far from the field magnitude.
+    EXPECT_GT(mag_uT(raw[0], raw[1], raw[2]), 60.0);
+    // SUBTRACTING the fit — what the chip does — lands on the field.
+    EXPECT_NEAR(mag_uT(raw[0] - fx, raw[1] - fy, raw[2] - fz), 50.0, 1.0);
+    // ADDING it does not. This is the assertion that fails if the sign flips.
+    EXPECT_GT(fabs(mag_uT(raw[0] + fx, raw[1] + fy, raw[2] + fz) - 50.0), 5.0);
+}
+
+TEST(MagCalibratorFit, RecoversTheRollyPollyVMagnitude) {
+    // 210 µT on one axis — the real 2026-08-29 nosecone offset, four times
+    // Earth's field. 210 / 0.15 = 1400 LSB, comfortably inside the int16 the
+    // OFFSET registers hold, so this is correctable rather than merely large.
+    const int cy = -1394;                       // ~209 µT on -Y, as measured
+    MagCalibrator cal;
+    driveOffsetFit(cal, 0, cy, 145, 50.3f);
+    int16_t fx, fy, fz; float R, res; uint8_t reject;
+    cal.getResult(fx, fy, fz, R, res, reject);
+    EXPECT_EQ((int)reject, (int)MAG_CAL_OK)
+        << "a 210 uT offset must not be rejected — the fit's R and residual "
+           "gates are about field quality, not offset size";
+    EXPECT_NEAR((int)fy, cy, 5);
+    EXPECT_NEAR(R, 50.3f, 1.0f);
+    EXPECT_LT(res, 1.5f);
+}
+
+TEST(MagCalibratorFit, AnOffsetBeyondTheRegisterRangeStillFitsAsInt16) {
+    // The OFFSET registers are int16 in raw LSB, so the largest correctable
+    // hard iron is 32767 LSB = 4915 uT. Well past anything a rocket carries,
+    // but the fit must not silently wrap on the way there.
+    const int cx = 20000;                       // 3000 uT
+    MagCalibrator cal;
+    driveOffsetFit(cal, cx, 0, 0, 50.0f);
+    int16_t fx, fy, fz; float R, res; uint8_t reject;
+    cal.getResult(fx, fy, fz, R, res, reject);
+    EXPECT_NEAR((int)fx, cx, 10);
+    EXPECT_GT((int)fx, 0) << "sign wrapped through int16";
+    EXPECT_NEAR(R, 50.0f, 1.5f);
+}
