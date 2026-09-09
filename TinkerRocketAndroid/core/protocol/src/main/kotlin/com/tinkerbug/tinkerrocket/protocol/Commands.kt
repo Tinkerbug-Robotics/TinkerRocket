@@ -609,13 +609,29 @@ internal class LeWriter(initialCapacity: Int = 64) {
 
     fun bool(v: Boolean): Unit = u8(if (v) 0x01 else 0x00)
 
-    fun u16(v: Int) {
+    private fun put16(v: Int) {
         ensure(2)
         buf[size++] = v.toByte()
         buf[size++] = (v ushr 8).toByte()
     }
 
-    fun i16(v: Int): Unit = u16(v)
+    // #1054: fail loudly instead of keeping the low two bytes. A silently
+    // narrowed value is indistinguishable on the wire from one the operator
+    // asked for — a Servo Hz of 40000 encoded as -25536 while the screen still
+    // read 40000. Every caller bounds its input (WireBounds at the controls and
+    // in the profile decoder, the scan screen at its send site), so these only
+    // fire on a NEW caller that forgot to. Each width gets its OWN check: i16
+    // used to delegate here, so a value that only fits unsigned slipped through
+    // a signed field.
+    fun u16(v: Int) {
+        require(v in 0..65535) { "u16 out of range: $v" }
+        put16(v)
+    }
+
+    fun i16(v: Int) {
+        require(v in -32768..32767) { "i16 out of range: $v" }
+        put16(v and 0xFFFF)
+    }
 
     fun u32(v: Long) {
         ensure(4)

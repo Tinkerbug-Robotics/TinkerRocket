@@ -181,9 +181,11 @@ public class FleetManager<S : Any>(
     /**
      * #390: per-base-station radio focus (rocketID), keyed by [deviceId] so
      * it survives session recreation on reconnect.  Auto-latched to the first
-     * rocket a BS hears ([noteAutoFocus]); switched explicitly by the user
-     * ([setFocus]).  Pushed to the BS via cmd 45 (RAM-only on the BS, so it
-     * is re-pushed on every (re)connect).
+     * rocket a BS hears ([noteAutoFocus]); moved by every switch the session
+     * makes on its own — the operator's tap and the #1052 heal — through
+     * [recordFocus] (#1040), or by [setFocus] from fleet-level callers.  Pushed
+     * to the BS via cmd 45 (RAM-only on the BS, so it is re-pushed on every
+     * (re)connect — which is exactly why this map must never be stale).
      */
     private val _bsFocus = MutableStateFlow<Map<String, Int>>(emptyMap())
     public val bsFocus: StateFlow<Map<String, Int>> = _bsFocus.asStateFlow()
@@ -450,6 +452,10 @@ public class FleetManager<S : Any>(
         // push raced the choreography and double-sent (Phase 2 review).
         val session = sessionFactory.create(
             deviceId, advertisedName, generation, transport,
+            // #1041: the session starts from the type the fleet resolved above
+            // (registry hint > registry name > prefix > legacy), not from a
+            // re-parse of the advertised name that discards the registry.
+            initialDeviceType = deviceType,
             seedFocusRocket = _bsFocus.value[deviceId],
         )
         val device = FleetDevice(
@@ -768,14 +774,26 @@ public class FleetManager<S : Any>(
     }
 
     /**
-     * User-driven focus switch for one base station.  Updates the sticky map
-     * and pushes the pin to the BS (cmd 45) so hop-follow / stale re-push /
-     * uplink targeting move with it.  The session-side re-mirror (cached
-     * telemetry + latched fix, so the dashboard doesn't wait for the next
-     * frame) is the DeviceSession's job — it observes [bsFocus].
+     * #1040: record a focus switch the SESSION has already applied and pushed
+     * (its [DeviceSession.setFocusRocket] and the #1052 heal go through this via
+     * the `onUserFocus` hook).  Map only — no cmd 45, the session sent it.
+     * This is what keeps the reconnect re-seed ([adopt]) on the rocket the
+     * operator actually chose; before it the map still held the first rocket
+     * heard, and every link bounce re-pinned that one on the base station too.
+     */
+    public fun recordFocus(deviceId: String, rocketId: Int) {
+        _bsFocus.value = _bsFocus.value + (deviceId to rocketId)
+    }
+
+    /**
+     * Fleet-level focus switch for one base station: [recordFocus] plus the
+     * cmd-45 push, for callers that do not go through the session (tests, a
+     * future fleet-wide heal).  The session-side re-mirror (cached telemetry
+     * + latched fix) only happens on the session's own path — the app's
+     * roster tap uses [DeviceSession.setFocusRocket], which does both.
      */
     public fun setFocus(deviceId: String, rocketId: Int) {
-        _bsFocus.value = _bsFocus.value + (deviceId to rocketId)
+        recordFocus(deviceId, rocketId)
         sendCommandFrame(deviceId, Commands.setFocusRocket(rocketId))
     }
 
@@ -896,6 +914,8 @@ public interface FleetSessionFactory<S : Any> {
         advertisedName: String,
         generation: Int,
         transport: BleTransport,
+        /** #1041: the device type the fleet resolved for this connect — seed it, do not re-derive it. */
+        initialDeviceType: BleDeviceType,
         seedFocusRocket: Int?,
     ): S
 

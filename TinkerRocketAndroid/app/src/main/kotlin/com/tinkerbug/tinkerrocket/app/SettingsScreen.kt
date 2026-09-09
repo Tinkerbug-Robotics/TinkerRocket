@@ -69,6 +69,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.Locale
+import com.tinkerbug.tinkerrocket.session.WireBounds
 
 /**
  * Phase 5 settings — iOS SettingsView port.  Rules carried over:
@@ -354,10 +355,10 @@ fun SettingsScreen(
             SegmentedPicker(listOf("Manual", "Pad auto-detect"), if (auto) 1 else 0) { i ->
                 if (i == 1 && !auto) {
                     savedOrientCode = active.imuOrientSetting
-                    edit(ConfigGroup.IMU) { it.copy(imuOrientSetting = 0xFF) }
+                    edit(ConfigGroup.IMU_ORIENT) { it.copy(imuOrientSetting = 0xFF) }
                 } else if (i == 0 && auto) {
                     val restore = savedOrientCode ?: 0
-                    edit(ConfigGroup.IMU) { it.copy(imuOrientSetting = restore) }
+                    edit(ConfigGroup.IMU_ORIENT) { it.copy(imuOrientSetting = restore) }
                 }
             }
             if (!auto) {
@@ -365,12 +366,12 @@ fun SettingsScreen(
                 FieldRow {
                     DropdownField(
                         "Nose axis", listOf("+X", "-X", "+Y", "-Y", "+Z", "-Z"), code / 4,
-                        { a -> edit(ConfigGroup.IMU) { it.copy(imuOrientSetting = a * 4 + code % 4) } },
+                        { a -> edit(ConfigGroup.IMU_ORIENT) { it.copy(imuOrientSetting = a * 4 + code % 4) } },
                         Modifier.weight(1f),
                     )
                     DropdownField(
                         "Fin clocking", listOf("0°", "90°", "180°", "270°"), code % 4,
-                        { c -> edit(ConfigGroup.IMU) { it.copy(imuOrientSetting = (code / 4) * 4 + c) } },
+                        { c -> edit(ConfigGroup.IMU_ORIENT) { it.copy(imuOrientSetting = (code / 4) * 4 + c) } },
                         Modifier.weight(1f),
                     )
                 }
@@ -394,7 +395,7 @@ fun SettingsScreen(
             val rates = listOf(0, 960, 1920, 3840)   // Dynamic + ISM6HG256 ODR steps
             val rateIdx = rates.indexOf(active.imuRateHz)
             SegmentedPicker(listOf("Dynamic", "1k", "2k", "4k"), rateIdx) { i ->
-                edit(ConfigGroup.IMU) { it.copy(imuRateHz = rates[i]) }
+                edit(ConfigGroup.IMU_RATE) { it.copy(imuRateHz = rates[i]) }
             }
             Caption(
                 if (rateIdx == 0) {
@@ -511,7 +512,10 @@ fun SettingsScreen(
                     }
                 }
                 FieldRow {
-                    NumField("Roll delay ms", active.rollDelayMs.toString(), Modifier.weight(1f)) { s ->
+                    NumField(
+                        "Roll delay ms", active.rollDelayMs.toString(), Modifier.weight(1f),
+                        range = WireBounds.U16,
+                    ) { s ->
                         s.toIntOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rollDelayMs = v) } }
                     }
                     NumField("Min speed m/s", fmt(active.rollMinSpeedMps), Modifier.weight(1f)) { s ->
@@ -556,13 +560,22 @@ fun SettingsScreen(
                     }
                 }
                 FieldRow {
-                    NumField("Hz", active.servoHz.toString(), Modifier.weight(1f)) { s ->
+                    NumField(
+                        "Hz", active.servoHz.toString(), Modifier.weight(1f),
+                        range = WireBounds.I16,
+                    ) { s ->
                         s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoHz = v) } }
                     }
-                    NumField("Min µs", active.servoMinUs.toString(), Modifier.weight(1f)) { s ->
+                    NumField(
+                        "Min µs", active.servoMinUs.toString(), Modifier.weight(1f),
+                        range = WireBounds.I16,
+                    ) { s ->
                         s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoMinUs = v) } }
                     }
-                    NumField("Max µs", active.servoMaxUs.toString(), Modifier.weight(1f)) { s ->
+                    NumField(
+                        "Max µs", active.servoMaxUs.toString(), Modifier.weight(1f),
+                        range = WireBounds.I16,
+                    ) { s ->
                         s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoMaxUs = v) } }
                     }
                     // #449: travel is the editable quantity; fin angles derive.
@@ -684,7 +697,10 @@ fun SettingsScreen(
                         NumField("Target alt m", fmt(active.pnTargetAltM), Modifier.weight(1f)) { s ->
                             s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnTargetAltM = v) } }
                         }
-                        NumField("Coast ms", active.pnCoastDelayMs.toString(), Modifier.weight(1f)) { s ->
+                        NumField(
+                            "Coast ms", active.pnCoastDelayMs.toString(), Modifier.weight(1f),
+                            range = WireBounds.U16,
+                        ) { s ->
                             s.toIntOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnCoastDelayMs = v) } }
                         }
                     }
@@ -1012,12 +1028,24 @@ private fun NumField(
     value: String,
     modifier: Modifier = Modifier,
     keyboard: KeyboardType = KeyboardType.Decimal,
+    /**
+     * #1054: the wire width this field is encoded at, when it has one. An
+     * entry outside it is CLAMPED on commit, so the value stored (and pushed)
+     * is the value the field then shows — before this the screen kept 40000
+     * for a Servo Hz whose frame carried -25536. Null for the fields that are
+     * floats on the wire and have no such edge.
+     */
+    range: IntRange? = null,
     onCommit: (String) -> Unit,
 ) {
     var text by remember(value) { mutableStateOf(value) }
     var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
-    val pending by androidx.compose.runtime.rememberUpdatedState(Triple(text, value, onCommit))
+    val commit: (String) -> Unit = { entered ->
+        val clamped = range?.let { r -> entered.toIntOrNull()?.coerceIn(r)?.toString() } ?: entered
+        onCommit(clamped)
+    }
+    val pending by androidx.compose.runtime.rememberUpdatedState(Triple(text, value, commit))
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
             val (t, v, commit) = pending
@@ -1032,7 +1060,7 @@ private fun NumField(
         keyboardOptions = KeyboardOptions(keyboardType = keyboard, imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
         modifier = modifier.onFocusChanged { st ->
-            if (focused && !st.isFocused && text != value) onCommit(text)
+            if (focused && !st.isFocused && text != value) commit(text)
             focused = st.isFocused
         },
     )

@@ -65,7 +65,12 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
      */
     public enum class ConfigGroup {
         SERVO, PID, SERVO_ENABLE, GAIN_SCHEDULE, ROLL_CONTROL, ROLL_PROFILE,
-        GUIDANCE, FIN_LAYOUT, CAMERA, IMU, SOUNDS, PYRO,
+        // #1095: orientation and logging rate are separate frames and separate
+        // controls; one group sent BOTH on every edit, so changing the mounting
+        // orientation also re-pushed the IMU rate (and vice versa). iOS sends
+        // per field. Inert today because the two profile fields are only ever
+        // written by their own controls — split before that stops being true.
+        GUIDANCE, FIN_LAYOUT, CAMERA, IMU_ORIENT, IMU_RATE, SOUNDS, PYRO,
     }
 
     /** Cal is board-specific — it can't be blindly pushed. */
@@ -529,10 +534,8 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 rollReverse = profile.finRollReverse,
             )?.let { s.sendCommandFrame(it) }
             ConfigGroup.CAMERA -> s.sendCommandFrame(Commands.cameraConfig(profile.cameraType))
-            ConfigGroup.IMU -> {
-                s.sendCommandFrame(Commands.imuOrient(profile.imuOrientSetting))
-                s.sendCommandFrame(Commands.imuRate(profile.imuRateHz))
-            }
+            ConfigGroup.IMU_ORIENT -> s.sendCommandFrame(Commands.imuOrient(profile.imuOrientSetting))
+            ConfigGroup.IMU_RATE -> s.sendCommandFrame(Commands.imuRate(profile.imuRateHz))
             ConfigGroup.SOUNDS -> s.sendCommandFrame(Commands.soundsEnable(profile.soundsEnabled))
             ConfigGroup.PYRO -> {
                 val channels = listOf(

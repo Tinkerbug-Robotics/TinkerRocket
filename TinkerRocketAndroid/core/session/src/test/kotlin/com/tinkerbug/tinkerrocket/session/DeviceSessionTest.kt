@@ -22,6 +22,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.tinkerbug.tinkerrocket.protocol.ConfigIdentityMsg
 
 /**
  * DeviceSession behavior against the scripted [FakeFirmware], all under
@@ -36,6 +37,11 @@ class DeviceSessionTest {
     private fun TestScope.startedSession(
         type: BleDeviceType = BleDeviceType.ROCKET,
         focusSeed: Int? = null,
+        onUserFocus: ((Int) -> Unit)? = null,
+        onIdentity: ((ConfigIdentityMsg, DeviceIdentityPusher) -> Unit)? = null,
+        onRocketFix: ((TelemetryData, RocketKey) -> LastValidRocketFix?)? = null,
+        fixLookup: ((RocketKey) -> LastValidRocketFix?)? = null,
+        knownDevices: KnownDeviceStore? = null,
         configure: FakeFirmware.() -> Unit = {},
     ): Harness {
         val fw = FakeFirmware(backgroundScope).apply(configure)
@@ -45,6 +51,11 @@ class DeviceSessionTest {
             connectedDeviceName = "TR-Test",
             initialDeviceType = type,
             clock = { currentTime },
+            knownDevices = knownDevices,
+            onUserFocus = onUserFocus,
+            onIdentity = onIdentity,
+            onRocketFix = onRocketFix,
+            fixLookup = fixLookup,
         )
         focusSeed?.let { session.seedFocusRocket(it) }
         session.start()
@@ -500,6 +511,161 @@ class DeviceSessionTest {
         runCurrent()
         assertEquals("BOOST", h.session.telemetry.value.state)
         assertEquals(listOf(2), h.fw.focusPins)
+    }
+
+    // ── Focus pin: user switch, fix re-latch, self-heal (#1040 #1042 #1052) ──
+
+    /** A fleet-cache stand-in: one fix per rocket id, keyed the way the fleet keys it. */
+    private class FixCache {
+        val fixes = mutableMapOf<Int, LastValidRocketFix>()
+        fun record(t: TelemetryData, key: RocketKey): LastValidRocketFix? {
+            LastValidRocketFix.fromTelemetry(t, key.rocketId, 0L)?.let { fixes[key.rocketId] = it }
+            return fixes[key.rocketId]
+        }
+        fun lookup(key: RocketKey): LastValidRocketFix? = fixes[key.rocketId]
+    }
+
+    @Test
+    fun setFocusRocket_reportsTheSwitchToTheFleet_beforeTheWire() = runTest {
+        val notified = mutableListOf<Int>()
+        val h = startedSession(type = BleDeviceType.BASE_STATION, onUserFocus = { notified += it }) {
+            configIdentityJson = null
+        }
+        runCurrent()
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 1)
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 2)
+        runCurrent()
+        assertEquals(emptyList<Int>(), notified, "the auto-latch is noteAutoFocus's, not this hook's")
+        h.session.setFocusRocket(2)
+        runCurrent()
+        // #1040: the fleet's sticky map hears about it (it used to hear nothing,
+        // so every reconnect re-seeded and re-pushed rocket 1).
+        assertEquals(listOf(2), notified)
+        assertEquals(listOf(2), h.fw.focusPins)
+    }
+
+    @Test
+    fun setFocusRocket_toARocketWithNoFix_clearsTheLatchedFix() = runTest {
+        val cache = FixCache()
+        val h = startedSession(
+            type = BleDeviceType.BASE_STATION,
+            onRocketFix = cache::record, fixLookup = cache::lookup,
+        ) { configIdentityJson = null }
+        runCurrent()
+        // Rocket 1 recovered with a good fix; rocket 2 under canopy with 3 sats.
+        h.fw.emitTelemetryJson("""{"st":"LANDED","rid":1,"lat":33.7,"lon":-118.4,"nsat":8}""")
+        h.fw.emitTelemetryJson("""{"st":"DESCENT","rid":2,"lat":33.9,"lon":-118.1,"nsat":3}""")
+        runCurrent()
+        assertEquals(1, h.session.focusRocketId.value)
+        assertEquals(1, assertNotNull(h.session.lastValidRocketFix.value).rocketId)
+        // Tap rocket 2: #1042 — the arrow/marker must NOT keep pointing at rocket 1.
+        h.session.setFocusRocket(2)
+        runCurrent()
+        assertNull(h.session.lastValidRocketFix.value, "a cache miss blanks the fix, iOS-style")
+        // Back to rocket 1: its fix re-latches from the cache.
+        h.session.setFocusRocket(1)
+        runCurrent()
+        assertEquals(33.7, assertNotNull(h.session.lastValidRocketFix.value).latitude, 1e-9)
+    }
+
+    @Test
+    fun focusPin_healsToTheLiveRocket_onceGraceHasPassedAndThePinIsStale() = runTest {
+        val notified = mutableListOf<Int>()
+        val h = startedSession(type = BleDeviceType.BASE_STATION, onUserFocus = { notified += it }) {
+            configIdentityJson = null
+        }
+        runCurrent()
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 1)   // t=0: auto-latch 1
+        runCurrent()
+        // Rocket 1 goes silent; rocket 2 is relayed every 5 s.
+        repeat(7) {
+            advanceTimeBy(5_000)
+            h.fw.emitTelemetry(state = "BOOST", sourceRocketId = 2)
+            runCurrent()
+            if (currentTime < DeviceSession.FOCUS_PIN_GRACE_MS) {
+                assertEquals(1, h.session.focusRocketId.value, "no heal inside the grace window (t=$currentTime)")
+            }
+        }
+        // t=35 s: past the 20 s grace, rocket 1 silent for 35 s ≥ 15 s → healed.
+        assertEquals(2, h.session.focusRocketId.value)
+        assertEquals("BOOST", h.session.telemetry.value.state, "mirror moved with the pin")
+        assertEquals(listOf(2), notified, "#1040: the fleet map is healed too, or adopt() resurrects the wedge")
+        // [1] is the connect choreography's re-pin of the auto-latch (1 s after
+        // cmd 20); [2] is the heal's own push.
+        assertEquals(listOf(1, 2), h.fw.focusPins, "cmd 45 re-pins the base station")
+    }
+
+    @Test
+    fun focusPin_holdsWhileThePinnedRocketIsStillHeard() = runTest {
+        val h = startedSession(type = BleDeviceType.BASE_STATION) { configIdentityJson = null }
+        runCurrent()
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 1)
+        runCurrent()
+        // Two rockets alternating for a minute: the sticky pin never moves.
+        repeat(12) {
+            advanceTimeBy(5_000)
+            h.fw.emitTelemetry(state = "READY", sourceRocketId = 1)
+            h.fw.emitTelemetry(state = "BOOST", sourceRocketId = 2)
+            runCurrent()
+        }
+        assertEquals(1, h.session.focusRocketId.value)
+        // Only the connect choreography's re-pin of the auto-latch — no heal push.
+        assertEquals(listOf(1), h.fw.focusPins, "no heal → no second cmd 45")
+    }
+
+    @Test
+    fun seededFocus_isProtectedByTheGrace_thenHealsIfNeverHeard() = runTest {
+        // Reconnect re-seed (iOS BLEFleet.adopt): rocket 7 pinned before start.
+        val h = startedSession(type = BleDeviceType.BASE_STATION, focusSeed = 7) {
+            configIdentityJson = null
+        }
+        advanceTimeBy(1000)
+        runCurrent()
+        // Rocket 3 speaks first after the reconnect — inside the grace the pin holds.
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 3)
+        runCurrent()
+        assertEquals(7, h.session.focusRocketId.value)
+        advanceTimeBy(10_000)
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 3)
+        runCurrent()
+        assertEquals(7, h.session.focusRocketId.value)
+        // 25 s in: rocket 7 has never been heard this session → stale → heal.
+        advanceTimeBy(15_000)
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 3)
+        runCurrent()
+        assertEquals(3, h.session.focusRocketId.value)
+    }
+
+    // ── Identity readback hand-off (#1041) ───────────────────────────────
+
+    @Test
+    fun configIdentity_goesToTheFleetHook_andNotToTheRegistryTwice() = runTest {
+        val seen = mutableListOf<ConfigIdentityMsg>()
+        val store = KnownDeviceStore(InMemoryKnownStorage(), nowEpochMillis = { 0L })
+        val h = startedSession(
+            knownDevices = store,
+            onIdentity = { msg, _ -> seen += msg },
+        ) {
+            configIdentityJson = """{"type":"config_identity","uid":"u-1","un":"Atlas","nid":2,"rid":1,"dt":"R"}"""
+        }
+        advanceTimeBy(1000)
+        runCurrent()
+        assertEquals(1, seen.size)
+        assertEquals("u-1", seen.single().unitId)
+        assertEquals("Atlas", h.session.identity.value.unitName)
+        // With a fleet hook the session leaves the registry to the fleet.
+        assertNull(store.device("u-1"), "registry fold is the fleet's job when the hook is wired")
+    }
+
+    @Test
+    fun configIdentity_withoutAFleet_stillFoldsIntoTheRegistry() = runTest {
+        val store = KnownDeviceStore(InMemoryKnownStorage(), nowEpochMillis = { 0L })
+        startedSession(knownDevices = store) {
+            configIdentityJson = """{"type":"config_identity","uid":"u-2","un":"Nova","nid":2,"rid":2,"dt":"R"}"""
+        }
+        advanceTimeBy(1000)
+        runCurrent()
+        assertEquals("Nova", assertNotNull(store.device("u-2")).name)
     }
 
     // ── Sim banner latch ─────────────────────────────────────────────────
