@@ -7424,6 +7424,14 @@ static void printStats()
     ESP_LOGI("OC", "i2s dma reads/bytes=%lu/%llu",
                   (unsigned long)i2s_dma_reads,
                   (unsigned long long)i2s_dma_bytes);
+    // #1149 item 2: oc_bmp_bad_reads was incremented and then read by nothing —
+    // not logged, not in telemetry, not in the storage stats. Its own comment
+    // promised a fault "countable at both ends", and the bench item asks the
+    // operator to confirm it reads 0 on a healthy board, which was not possible
+    // to do at all. The FC surfaces its half on the [SENSOR] line (bmp_bad=N);
+    // this is the OC's, on the stats block that already carries the rest.
+    ESP_LOGI("OC", "bmp_bad_reads=%lu (pressure samples rejected by the shared band)",
+                  (unsigned long)oc_bmp_bad_reads);
     ESP_LOGI("OC", "i2s dma_rx=%.1f KB/s | ring_drops=%lu | cmd_drops=%lu | parser_drops resync/len/crc=%llu/%llu/%lu",
                   (double)raw_rx_kbs,
                   (unsigned long)rx_ring_overflow_drops,
