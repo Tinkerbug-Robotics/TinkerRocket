@@ -50,6 +50,7 @@
 #include "fc_ota_session_policy.h" // #1116: the FC's own exit from an OTA image session nobody ends
 #include "roll_control_mode_policy.h" // #1137 item 6: which roll law runs this tick
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
+#include "piezo_wave_policy.h"      // #732 item 3b: the square-wave table that cannot latch the coil on
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
@@ -699,11 +700,29 @@ static bool enable_sounds = config::ENABLE_SOUNDS;
 static bool ready_chirp_played = false;
 static uint32_t last_heartbeat_beep_ms = 0;
 static bool piezo_pwm_ready = false;
-static bool piezo_wave_active = false;
-static bool piezo_pin_high = false;
-static volatile int64_t piezo_wave_end_us = 0;
+// #732 item 3b: the wave state moved into PiezoWavePolicy::State and every
+// transition is serialised on piezo_mux. It used to be three loose statics
+// mutated from both the main task and the esp_timer task (different cores on
+// the P4) with no interlock, which let a stop and a toggle interleave and
+// leave the coil DC-energised. piezo_wave_end_us was also a torn read waiting
+// to happen: a 64-bit write from piezoStart() against a 64-bit read in the
+// callback is two words on a 32-bit core.
+static portMUX_TYPE piezo_mux = portMUX_INITIALIZER_UNLOCKED;
+static PiezoWavePolicy::State piezo_wave;
 static esp_timer_handle_t piezo_toggle_timer = nullptr;
 static uint32_t piezo_half_period_us = 0;
+
+// Apply a PinAction. Never called for PinAction::None, which means "the pin
+// is not ours to write this transition".
+static inline void piezoApply(PiezoWavePolicy::PinAction a)
+{
+    if (a == PiezoWavePolicy::PinAction::None)
+    {
+        return;
+    }
+    gpio_set_level((gpio_num_t)config::PIEZO_PIN,
+                   a == PiezoWavePolicy::PinAction::DriveHigh ? 1 : 0);
+}
 static bool blue_led_flash_active = false;
 static uint32_t blue_led_flash_end_ms = 0;
 
@@ -2752,25 +2771,21 @@ static void publishSensorCalFromNVS()
 // ==========================================================================
 static void piezoToggleCb(void *)
 {
-    if (!piezo_wave_active)
-    {
-        return;
-    }
-    const int64_t now_us = esp_timer_get_time();
-    if (now_us >= piezo_wave_end_us)
-    {
-        piezo_wave_active = false;
-        piezo_pin_high = false;
-        gpio_set_level((gpio_num_t)config::PIEZO_PIN, 0);
-        if (piezo_toggle_timer != nullptr)
-        {
-            (void)esp_timer_stop(piezo_toggle_timer);
-        }
-        return;
-    }
+    // Runs on the esp_timer task. Everything that reads or writes the wave
+    // state — including the GPIO write — happens under piezo_mux, so this can
+    // no longer straddle a piezoStop() on the other core. esp_timer_stop()
+    // takes a lock of its own and is therefore deferred outside the section.
+    bool stop_timer = false;
+    portENTER_CRITICAL(&piezo_mux);
+    const PiezoWavePolicy::PinAction act =
+        PiezoWavePolicy::onTick(piezo_wave, esp_timer_get_time(), stop_timer);
+    piezoApply(act);
+    portEXIT_CRITICAL(&piezo_mux);
 
-    piezo_pin_high = !piezo_pin_high;
-    gpio_set_level((gpio_num_t)config::PIEZO_PIN, piezo_pin_high ? 1 : 0);
+    if (stop_timer && piezo_toggle_timer != nullptr)
+    {
+        (void)esp_timer_stop(piezo_toggle_timer);
+    }
 }
 
 static bool initPiezoTimer()
@@ -2788,16 +2803,33 @@ static bool initPiezoTimer()
 
 static inline void piezoStop()
 {
-    piezo_wave_active = false;
-    piezo_pin_high = false;
+    // Clear the wave and drive low as ONE atomic step. Previously these were
+    // separated by the esp_timer_stop() call, and the pin was additionally
+    // guarded on piezo_pwm_ready — so on a board where the timer never
+    // initialised, a stop asserted nothing at all. The safe level is now
+    // asserted unconditionally; a pin we never drove is already low.
+    portENTER_CRITICAL(&piezo_mux);
+    piezoApply(PiezoWavePolicy::onStop(piezo_wave));
+    portEXIT_CRITICAL(&piezo_mux);
+
+    // Safe to run after the section: any callback that fires in between sees
+    // active == false and returns PinAction::None without touching the pin.
     if (piezo_toggle_timer != nullptr)
     {
         (void)esp_timer_stop(piezo_toggle_timer);
     }
-    if (piezo_pwm_ready)
-    {
-        gpio_set_level((gpio_num_t)(config::PIEZO_PIN), 0);
-    }
+}
+
+// Synchronised read of "is a beep in progress". Reading piezo_wave.active
+// bare would race the esp_timer task's write; the worst case is only a
+// dropped or doubled heartbeat beep, but the state is now owned by the mux
+// and reading it any other way invites someone to do the same with the pin.
+static inline bool piezoWaveActive()
+{
+    portENTER_CRITICAL(&piezo_mux);
+    const bool a = piezo_wave.active;
+    portEXIT_CRITICAL(&piezo_mux);
+    return a;
 }
 
 // #382: no now_us parameter — every caller passed a 32-bit-truncated
@@ -2819,16 +2851,17 @@ static inline void piezoStart(uint32_t freq_hz, uint32_t duration_ms)
         piezo_half_period_us = 50U;
     }
     const int64_t now_us64 = esp_timer_get_time();
-    piezo_wave_end_us = now_us64 + ((int64_t)duration_ms * 1000LL);
-    piezo_pin_high = false;
-    piezo_wave_active = true;
-    gpio_set_level((gpio_num_t)(config::PIEZO_PIN), 0);
+    // Stop the old wave BEFORE publishing the new one, so a stale callback
+    // cannot consume the new end time with the old half-period still armed.
+    (void)esp_timer_stop(piezo_toggle_timer);
+    portENTER_CRITICAL(&piezo_mux);
+    piezoApply(PiezoWavePolicy::onStart(piezo_wave, now_us64, duration_ms));
+    portEXIT_CRITICAL(&piezo_mux);
     // Same wrapping-ms domain as serviceBlueLedFlash's now_ms (both derive
     // (uint32_t)(esp_timer_get_time()/1000)), so the wrap-safe signed
     // comparison there stays correct.
     triggerBlueLedFlash((uint32_t)(now_us64 / 1000LL));
 
-    (void)esp_timer_stop(piezo_toggle_timer);
     if (esp_timer_start_periodic(piezo_toggle_timer, piezo_half_period_us) != ESP_OK)
     {
         piezoStop();
@@ -3494,7 +3527,7 @@ static inline void serviceHeartbeatBeep(uint32_t now_ms)
     {
         return;
     }
-    if (boot_chirp_phase != BootChirpPhase::Idle || piezo_wave_active)
+    if (boot_chirp_phase != BootChirpPhase::Idle || piezoWaveActive())
     {
         return;
     }
