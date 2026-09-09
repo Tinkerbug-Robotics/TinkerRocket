@@ -38,6 +38,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.activity.compose.BackHandler
+import com.tinkerbug.tinkerrocket.protocol.EspImage
+import com.tinkerbug.tinkerrocket.protocol.EspImageVerdict
 
 /**
  * OTA firmware update — port of iOS FirmwareUpdateView: pick a .bin via
@@ -70,6 +72,33 @@ fun FirmwareUpdateScreen(
     // A rocket's BLE peer is the OC, which can relay the image on to the FC.
     // A base station has no FC, so it only ever flashes itself.
     var targetIsFc by remember { mutableStateOf(false) }
+
+    // #773: what the picked image actually IS, checked before a byte goes over
+    // BLE. The far end validates only size and SHA-256, and the OC and the base
+    // station are both ESP32-S3 with byte-identical app slots — so a
+    // base-station image pushed to an out computer is accepted by both ends
+    // today, and only rollback catches it, and only if it fails to boot.
+    //
+    // The expected program depends on the target, so this recomputes when the
+    // target chip changes. The flight computer's chip differs by board
+    // (ESP32-P4 on V9, ESP32-S3 on the mini), so it is left unchecked rather
+    // than warning on every mini.
+    val expectedProject = when {
+        session.isBaseStation -> EspImage.PROJECT_BS
+        targetIsFc -> EspImage.PROJECT_FC
+        else -> EspImage.PROJECT_OC
+    }
+    val expectedChipId = if (targetIsFc && !session.isBaseStation) null else 0x0009
+    val verdict = remember(pickedBytes, expectedProject, identity.firmwareVersion) {
+        pickedBytes?.let {
+            EspImage.check(
+                it,
+                expectedProject = expectedProject,
+                expectedChipId = expectedChipId,
+                runningVersion = if (targetIsFc) null else identity.firmwareVersion,
+            )
+        }
+    }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -141,6 +170,7 @@ fun FirmwareUpdateScreen(
                 pickError?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
+                verdict?.let { ImageVerdictBlock(it) }
                 OutlinedButton(
                     enabled = !busy,
                     // .bin has no registered MIME type; */* with the SAF picker
@@ -177,7 +207,10 @@ fun FirmwareUpdateScreen(
 
         // ── Action / status ──────────────────────────────────────────────
         when (val s = state) {
-            is OtaSession.State.Idle -> FlashButton(pickedBytes, connected) {
+            is OtaSession.State.Idle -> FlashButton(
+                pickedBytes,
+                connected && verdict !is EspImageVerdict.Refuse,
+            ) {
                 ota.start(it, targetIsFc)
             }
 
@@ -263,6 +296,41 @@ fun FirmwareUpdateScreen(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/** #773: what the image says it is, and whether it belongs on this unit. */
+@Composable
+private fun ImageVerdictBlock(verdict: EspImageVerdict) {
+    val img = when (verdict) {
+        is EspImageVerdict.Ok -> verdict.image
+        is EspImageVerdict.Warn -> verdict.image
+        is EspImageVerdict.Refuse -> verdict.image
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        if (img != null) {
+            OtaRow("Program", img.projectName)
+            OtaRow("Version", img.version)
+            OtaRow("Built for", img.chipName)
+            OtaRow("Built", "${img.buildDate} ${img.buildTime}")
+        }
+        when (verdict) {
+            is EspImageVerdict.Ok -> Text(
+                "Matches this unit",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            is EspImageVerdict.Warn -> Text(
+                verdict.reason,
+                color = MaterialTheme.colorScheme.tertiary,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            is EspImageVerdict.Refuse -> Text(
+                verdict.reason,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 

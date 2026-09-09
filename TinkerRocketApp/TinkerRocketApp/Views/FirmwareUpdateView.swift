@@ -37,6 +37,11 @@ private struct FirmwareUpdateContent: View {
     @State private var pickedFileName: String = ""
     @State private var pickedFileSha: String = ""   // SHA-256 of the picked file, for build-machine comparison
     @State private var targetIsFC = false   // #14: relay the OTA to the Flight Computer via the OC
+    // #773: what the picked image actually IS, checked before a byte goes over
+    // BLE. Recomputed when the target changes, because the expected program
+    // depends on which unit is being flashed.
+    @State private var pickedFileData: Data?
+    @State private var imageVerdict: EspImageVerdict?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -76,6 +81,9 @@ private struct FirmwareUpdateContent: View {
                         .foregroundColor(.secondary)
                         .font(.subheadline)
                 }
+                if let verdict = imageVerdict {
+                    imageVerdictView(verdict)
+                }
                 Button(action: { showingFilePicker = true }) {
                     HStack {
                         Image(systemName: "doc.badge.plus")
@@ -103,6 +111,7 @@ private struct FirmwareUpdateContent: View {
                     }
                     .pickerStyle(.segmented)
                     .disabled(isInProgress)
+                    .onChange(of: targetIsFC) { _ in revalidateImage() }
                 }
             }
 
@@ -215,7 +224,59 @@ private struct FirmwareUpdateContent: View {
         // disabled it and re-picking the file was the sole way back to .idle —
         // after a failure that reads as "the app is stuck", and it makes the
         // obvious response to a transient failure (press it again) impossible.
-        .disabled(pickedFileURL == nil || !device.isConnected || isCompletedState)
+        // #773: a refused image is not flashable. The far end validates only
+        // size and SHA-256, and the out computer and base station are both
+        // ESP32-S3 with identical app slots — so if this does not stop it,
+        // nothing does until the wrong image fails to boot.
+        .disabled(pickedFileURL == nil || !device.isConnected || isCompletedState
+                  || (imageVerdict?.isRefusal ?? false))
+    }
+
+    // #773: what the image says it is, and whether it belongs on this unit.
+    @ViewBuilder
+    private func imageVerdictView(_ verdict: EspImageVerdict) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let img = verdict.image {
+                LabeledRow(label: "Program", value: img.projectName, mono: true)
+                LabeledRow(label: "Version", value: img.version, mono: true)
+                LabeledRow(label: "Built for", value: img.chipName)
+                LabeledRow(label: "Built", value: "\(img.buildDate) \(img.buildTime)")
+            }
+            switch verdict {
+            case .ok:
+                Label("Matches this unit", systemImage: "checkmark.seal")
+                    .font(.footnote).foregroundColor(.green)
+            case .warn(_, let why):
+                Label(why, systemImage: "exclamationmark.triangle")
+                    .font(.footnote).foregroundColor(.orange)
+            case .refuse(_, let why):
+                Label(why, systemImage: "xmark.octagon")
+                    .font(.footnote).foregroundColor(.red)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// Which program the connected unit should be running, and the chip it is
+    /// on. The flight computer's chip differs by board (ESP32-P4 on V9, S3 on
+    /// the mini), so it is left unchecked rather than warning on every mini.
+    private var expectedProject: String {
+        if device.isBaseStation { return EspImage.projectBS }
+        return targetIsFC ? EspImage.projectFC : EspImage.projectOC
+    }
+    private var expectedChipId: Int? {
+        if device.isBaseStation { return 0x0009 }
+        return targetIsFC ? nil : 0x0009
+    }
+
+    private func revalidateImage() {
+        guard let data = pickedFileData else { imageVerdict = nil; return }
+        imageVerdict = EspImage.check(data,
+                                      expectedProject: expectedProject,
+                                      expectedChipId: expectedChipId,
+                                      runningVersion: targetIsFC
+                                          ? device.fcFirmwareVersion
+                                          : device.firmwareVersion)
     }
 
     private var isTerminalState: Bool {
@@ -280,9 +341,12 @@ private struct FirmwareUpdateContent: View {
             if let data = try? Data(contentsOf: url) {
                 pickedFileSha = Data(SHA256.hash(data: data))
                     .map { String(format: "%02x", $0) }.joined()
+                pickedFileData = data
             } else {
                 pickedFileSha = ""
+                pickedFileData = nil
             }
+            revalidateImage()   // #773
             // Re-arm after a completed/failed run: clearing the terminal state
             // back to .idle re-enables the Flash button for this new file.
             if isTerminalState { session.reset() }

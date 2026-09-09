@@ -86,7 +86,7 @@ if(TR_BOARD_V9 OR TR_BOARD_M1)
     # CONFIG_* lines are what apply here.
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
     if(TR_BOARD_M1)
-        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, shared with M1)")
+        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, 16 MB boot NOR, shared with M1)")
     else()
         message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, 16 MB boot NOR)")
     endif()
