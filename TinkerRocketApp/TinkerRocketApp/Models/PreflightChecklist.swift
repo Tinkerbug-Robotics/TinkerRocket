@@ -125,7 +125,7 @@ struct PreflightMaster: Codable, Equatable {
         // whole master list away on one malformed item, and PreflightStore's
         // `try?` then fell back to the built-in default master — the
         // operator's edits gone with no message.
-        items = Self.lenientItems(c, .items)
+        items = lenientItems(c, .items)
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
 }
@@ -183,7 +183,7 @@ struct PreflightRocketConfig: Codable, Equatable {
         // and an item with a new identity no longer matches its own `checked`
         // and `orderedIds` entries — it is present but inert); Android drops
         // it too since #1090.
-        extraItems = Self.lenientItems(c, .extraItems)
+        extraItems = lenientItems(c, .extraItems)
         orderedIds = Self.lenientUUIDs(c, .orderedIds)
         checked = try c.decodeIfPresent([String: Date].self, forKey: .checked) ?? [:]
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
@@ -194,13 +194,6 @@ struct PreflightRocketConfig: Codable, Equatable {
     private static func lenientUUIDs(_ c: KeyedDecodingContainer<CodingKeys>,
                                      _ key: CodingKeys) -> [UUID] {
         let raw = (try? c.decodeIfPresent([FailableUUID].self, forKey: key)) ?? nil
-        return raw?.compactMap(\.value) ?? []
-    }
-
-    /// #1090: drop only the malformed element, never the whole array.
-    fileprivate static func lenientItems(_ c: KeyedDecodingContainer<CodingKeys>,
-                                         _ key: CodingKeys) -> [PreflightItem] {
-        let raw = (try? c.decodeIfPresent([FailableItem].self, forKey: key)) ?? nil
         return raw?.compactMap(\.value) ?? []
     }
 
@@ -215,6 +208,15 @@ struct PreflightRocketConfig: Codable, Equatable {
 private struct FailableItem: Decodable {
     let value: PreflightItem?
     init(from decoder: Decoder) { value = try? PreflightItem(from: decoder) }
+}
+
+/// #1090: drop only the malformed element, never the whole array. Free and
+/// generic because both PreflightMaster and PreflightRocketConfig decode item
+/// arrays and each has its own CodingKeys.
+private func lenientItems<K: CodingKey>(_ c: KeyedDecodingContainer<K>,
+                                        _ key: K) -> [PreflightItem] {
+    let raw = (try? c.decodeIfPresent([FailableItem].self, forKey: key)) ?? nil
+    return raw?.compactMap(\.value) ?? []
 }
 
 private struct FailableUUID: Decodable {
