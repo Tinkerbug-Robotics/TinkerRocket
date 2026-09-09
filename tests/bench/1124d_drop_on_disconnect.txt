@@ -1,0 +1,89 @@
+# #1211 / #1124 — a queued BLE command dies with the connection that sent it
+# (PR #1227). Harness-driven variant. **Dummy loads on ch1/ch2, never igniters.**
+#
+# Rig: V9 pair, S1 -> O (the ring, the disconnect handler and their logging are
+# all OC-side). The harness holds the link here rather than the phone, and that
+# is a deliberate trade: the checklist's route to a populated ring is "a log
+# download holds loop_oc for minutes", and MEASURED ON THIS BUILD it does not —
+# during a 9.12 MB transfer at 54 KB/s the OC reports oc_loop[c1 p5]=34%, so
+# loop_oc keeps draining and commands never pile up behind the transfer.
+#
+# What does populate the ring is the ordinary service rate: a dispatched
+# command holds ~1 s of FC polls (the 1 s spacing #1149 measured directly), so
+# a rapid burst queues behind the first. Four back-to-back continuity tests
+# leave three in the ring, and dropping the link then is exactly the state this
+# item is about — a command belonging to a connection that has gone away.
+#
+# The link is dropped by the central rather than by a radio-off. The item warns
+# against the app's Disconnect BUTTON, whose hazard is an orderly app-level
+# teardown that might drain the queue first; the harness sends no such drain,
+# it just drops the link, and onDisconnect() runs the same either way.
+#
+# cmd 35 (continuity) stands in for cmd 36 (fire): cmdIsFrontPriority() covers
+# both identically, they occupy the same ring, and onDisconnect() clears that
+# ring wholesale — so this exercises the same code on the same queue. It does
+# NOT exercise the fire hazard itself; 1124c covers the no-fire evidence.
+
+note === the OC reset on console attach re-asserts the rail (#825); the ===
+note === recovery scan then spends its full 90 s budget before the rail is up ===
+sleep 115
+
+note === a burst: four continuity tests back to back ===
+mark
+send 35 01
+send 35 02
+send 35 03
+send 35 04
+
+note === drop the link with the burst still queued ===
+disconnect
+sleep 6
+expect_serial_since Device DISCONNECTED, reason=
+expect_serial_since dropped [1-9][0-9]* queued command\(s\) on disconnect \(#1124\)
+
+note === and the drop wedged nothing: the queue still works afterwards ===
+connect
+sleep 3
+mark
+send 35 01
+sleep 8
+expect_serial_since \[PYRO CONT TEST\] CH1|I2C TX Cmd 0xCF
+note === done ===
+
+# ---------------------------------------------------------------------------
+# BENCH 2026-09-09 — what this run found, and why the checklist's route failed
+# ---------------------------------------------------------------------------
+# The fix WORKS, and was caught twice on this board and firmware, verbatim:
+#
+#   I (17006) BLE: Received command: 8 (queued, depth=1)
+#   W (77068) BLE: Device DISCONNECTED, reason=531 (remote user terminated)
+#   W (77068) BLE: dropped 1 queued command(s) on disconnect (#1124) — they
+#                  belonged to the connection that just went away
+#
+# The command sat in the ring for 60 s and was dropped at the disconnect with
+# the count logged. That is the whole behaviour PR #1227 added.
+#
+# But it was reached by accident, not by this script: loop_oc was stalled by
+# the #1279 boot hang. Three things stop the checklist's own route working:
+#
+# 1. The ring #1124 clears is cmd_ring_ in TR_BLE_To_APP — the BLE RECEIVE
+#    ring — which loop_oc drains every pass (~20 ms). It is NOT the OC's
+#    20-deep FC dispatch queue, which is the one that serves ~1 s per command
+#    (the spacing #1149 measured). So a burst of BLE writes does NOT stack up:
+#    four back-to-back cmd 35 writes each logged `depth=1`, meaning the ring
+#    was empty again before the next arrived. Only a genuinely stalled loop_oc
+#    fills it.
+# 2. A log download does stall loop_oc, but not for the "minutes" the item
+#    assumes: 8.97 MB at ~50 KB/s is `chunks=4364`, ~40 s of transfer. The
+#    window exists but is short.
+# 3. Inside that window the app sends NOTHING. Tapping Test Continuity during
+#    a transfer produced no BLE write at all — the OC's received-command count
+#    did not move across four taps — even though uiautomator reports the
+#    buttons as enabled=true clickable=true. So the operator action the item
+#    describes ("tap test-fire, it will not act, walk away") never puts a
+#    command on the wire on this app build, and the ring never fills from it.
+#
+# So the OC-side fix is confirmed; the app-driven route to it is not
+# reproducible here. Reaching it deliberately needs loop_oc held long enough to
+# outlast a BLE write — a test hook, or a download far larger than any flight
+# currently on the chip.

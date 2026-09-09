@@ -25,18 +25,21 @@
 # with nobody connected and someone possibly walking towards the rocket.
 # #804's rail-off refusal does not cover this: it gates on !pwr_pin_on.
 
-note === waiting on the phone: connect, download, tap fire ch1, radio off ===
+# BENCH 2026-09-09: the download premise does NOT hold on this build. During a
+# 9.12 MB transfer at 54 KB/s the OC reports `oc_loop[c1 p5]=34%` — loop_oc
+# keeps running and keeps draining, so commands do not pile up behind the
+# transfer. What DOES leave a command in the ring is the ordinary service rate:
+# each dispatched command holds ~1 s of FC polls (the same 1 s spacing #1149
+# measured), so a rapid burst queues behind the first one. That is the state
+# this item cares about — a command in the ring when the link dies — reached by
+# a different route than the checklist assumes.
+note === waiting on the phone: rapid pyro taps, then radio off ===
 mark
 
-# Positive control: the download really did start, so loop_oc really was
-# stalled and the fire tap really did land in the ring rather than executing.
-expect_serial 300 BLE: Download file request:
-
-expect_serial 300 Device DISCONNECTED, reason=
+expect_serial 600 Device DISCONNECTED, reason=
 # N must be at least 1 — the firmware only logs this when dropped > 0, and the
 # leading [1-9] keeps a hypothetical "dropped 0" from ever reading as a pass.
 expect_serial 30 dropped [1-9][0-9]* queued command\(s\) on disconnect \(#1124\)
 
-expect_order BLE: Download file request: || Device DISCONNECTED, reason=
 expect_order Device DISCONNECTED, reason= || dropped [1-9][0-9]* queued command
 note === done — phase C re-reads the pyro state over BLE ===

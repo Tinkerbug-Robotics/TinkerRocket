@@ -12,10 +12,16 @@
 
 note === rail on (the download needs it, and so does continuity) ===
 send 8 01
-sleep 22
+# The rail-on triggers the deferred peripheral init, which since #1279 spends
+# its full 90 s recovery budget on the orphaned run this board carries before
+# giving up and letting the rail come up. Wait it out.
+sleep 110
 
 note === baseline: ch1 loaded and NOT fired ===
-expect_tlm 20 ps.CH1_CONT==1
+# Continuity is not in the first frames after the rail settles — the FC has to
+# sample it — so give this one room. 20 s timed out while the very next
+# assertion saw the same field populated.
+expect_tlm 60 ps.CH1_CONT==1
 expect_tlm 20 ps.CH1_FIRED==0
 expect_tlm 20 ps.ARMED==0
 note === done — the link is now free for the app ===
