@@ -99,6 +99,13 @@ struct PreflightRunView: View {
                 ProgressView(value: Double(progress.done),
                              total: Double(max(progress.total, 1)))
                     .tint(progress.isComplete ? .green : .orange)
+                // #878: one quiet line, never a block — see
+                // PreflightChecklist.deploymentRedundancyAdvisory.
+                if let advisory = PreflightChecklist.deploymentRedundancyAdvisory(profile) {
+                    Text(advisory)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
             }
 
             Section {

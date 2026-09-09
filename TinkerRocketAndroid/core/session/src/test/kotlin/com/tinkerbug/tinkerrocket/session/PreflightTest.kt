@@ -9,6 +9,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertNotNull
 
 /**
  * Pre-flight checklist: effective-list composition (live master template +
@@ -17,6 +18,69 @@ import kotlin.test.assertTrue
  * PreflightChecklistTests / PreflightStoreTests.
  */
 class PreflightTest {
+
+    // ── #878: deployment-redundancy advisory ─────────────────────────────
+
+    private fun profileWith(
+        vararg channels: Pair<Boolean, Int>,
+    ): RocketProfile {
+        var p = RocketProfile.makeDefault("Redundancy", nowMs = 0)
+        channels.forEachIndexed { i, (enabled, mode) ->
+            p = when (i) {
+                0 -> p.copy(pyro1Enabled = enabled, pyro1TriggerMode = mode)
+                1 -> p.copy(pyro2Enabled = enabled, pyro2TriggerMode = mode)
+                2 -> p.copy(pyro3Enabled = enabled, pyro3TriggerMode = mode)
+                else -> p.copy(pyro4Enabled = enabled, pyro4TriggerMode = mode)
+            }
+        }
+        return p
+    }
+
+    @Test
+    fun advisory_firesWhenEveryEnabledChannelIsAltitudeOnDescent() {
+        val one = assertNotNull(
+            PreflightChecklist.deploymentRedundancyAdvisory(
+                profileWith(true to 1, false to 0, false to 0, false to 0),
+            ),
+        )
+        assertTrue(one.contains("time-after-apogee"), "the advisory names the remedy")
+        // Two altitude channels are still one failure away from no main.
+        assertNotNull(
+            PreflightChecklist.deploymentRedundancyAdvisory(
+                profileWith(true to 1, true to 1, false to 0, false to 0),
+            ),
+        )
+    }
+
+    @Test
+    fun advisory_clearsWhenATimeAfterApogeeChannelIsEnabled() {
+        // #257: apogee detection is a baro-independent quorum, so this path
+        // survives the failure the advisory is about.
+        assertNull(
+            PreflightChecklist.deploymentRedundancyAdvisory(
+                profileWith(true to 1, true to 0, false to 0, false to 0),
+            ),
+        )
+        assertNull(
+            PreflightChecklist.deploymentRedundancyAdvisory(
+                profileWith(true to 0, false to 0, false to 0, false to 0),
+            ),
+        )
+    }
+
+    @Test
+    fun advisory_isSilentWithNoChannelsAndNoProfile() {
+        // "No deployment configured" is a different statement — the pyro
+        // checklist items already make it.
+        assertNull(PreflightChecklist.deploymentRedundancyAdvisory(profileWith()))
+        assertNull(PreflightChecklist.deploymentRedundancyAdvisory(null))
+        // A DISABLED altitude channel does not speak either.
+        assertNull(
+            PreflightChecklist.deploymentRedundancyAdvisory(
+                profileWith(false to 1, false to 1, false to 1, false to 1),
+            ),
+        )
+    }
 
     private fun manual(title: String) = PreflightItem(title = title)
 

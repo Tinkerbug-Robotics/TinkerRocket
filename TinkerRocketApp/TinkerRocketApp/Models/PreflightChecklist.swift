@@ -365,6 +365,40 @@ enum PreflightChecklist {
 
     /// Pyro channels (1–4) enabled in the profile — the set continuity and
     /// arming are judged against.
+    /// `PyroTriggerMode` — 0 = time after apogee, 1 = altitude on descent.
+    private static let triggerAltitudeOnDescent: UInt8 = 1
+
+    private static func triggerMode(_ p: RocketProfile, channel: Int) -> UInt8 {
+        switch channel {
+        case 1:  return p.pyro1TriggerMode
+        case 2:  return p.pyro2TriggerMode
+        case 3:  return p.pyro3TriggerMode
+        default: return p.pyro4TriggerMode
+        }
+    }
+
+    /// #878: one line when every enabled deployment channel fires on ALTITUDE.
+    ///
+    /// After #877 the main-deploy trigger declines to fire when BOTH altitude
+    /// sources are gone (a dead barometer AND unusable GNSS) — deliberately: a
+    /// main released at an unknown altitude is a range-safety problem. That
+    /// leaves a residual no-deploy, and a rocket that never releases its main
+    /// descends on drogue at 20-30 m/s. Firmware cannot close it, so the
+    /// mitigation is to say so while the operator can still add a channel.
+    ///
+    /// A TIME_AFTER_APOGEE channel alongside it clears the advisory: that path
+    /// never touches the barometer, and apogee detection is a baro-independent
+    /// quorum (#257). Advisory only — never a block. Nil when no channel is
+    /// enabled: the pyro checklist items already cover that.
+    static func deploymentRedundancyAdvisory(_ p: RocketProfile?) -> String? {
+        guard let p = p else { return nil }
+        let channels = enabledPyroChannels(p)
+        guard !channels.isEmpty else { return nil }
+        guard channels.allSatisfy({ triggerMode(p, channel: $0) == triggerAltitudeOnDescent })
+        else { return nil }
+        return "Every enabled deployment channel fires on altitude. If the barometer and GNSS are both lost the rocket has no way to release its main — add a time-after-apogee channel so one failure is not the whole recovery."
+    }
+
     static func enabledPyroChannels(_ p: RocketProfile) -> [Int] {
         var channels: [Int] = []
         if p.pyro1Enabled { channels.append(1) }
