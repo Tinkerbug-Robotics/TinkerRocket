@@ -2170,9 +2170,14 @@ TEST(TRFlightLogBrownout, RecoveryDefersWhenTheBudgetExpiresInsideASingleRun) {
         ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
         uint32_t id = 0;
         ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
-        std::vector<uint8_t> payload(2048, 0xA5);
-        for (int i = 0; i < 400; ++i)
-            ASSERT_EQ(fl.writeFrame(payload.data(), payload.size()), Status::Ok);
+        // A few small frames are enough: prepareFlight allocates the whole
+        // prealloc run, so the orphaned run is already many blocks long
+        // whatever is written into it. Sizing the write to fill the run
+        // instead overflows the smaller geometries CI also runs (gd1g/gd2g),
+        // where writeFrame returns NoSpace long before the run is full.
+        uint8_t payload[64] = {0};
+        for (int i = 0; i < 10; ++i)
+            ASSERT_EQ(fl.writeFrame(payload, sizeof(payload)), Status::Ok);
         // no finalizeFlight() — the range stays orphaned
     }
 
@@ -2181,11 +2186,14 @@ TEST(TRFlightLogBrownout, RecoveryDefersWhenTheBudgetExpiresInsideASingleRun) {
     {
         TR_FlightLog fl2;
         TR_FlightLog::Config cfg;
-        // step 1000: t0=1000, the boundary check reads 2000 (elapsed 1000, NOT
-        // over 1500 — the run is entered), and the first in-run check reads
-        // 3000 (elapsed 2000, over). So the budget can only bite mid-run.
-        cfg.recovery_budget_ms = 1500;
-        cfg.now_ms = []() -> uint32_t { fake_now += 1000; return fake_now; };
+        // The clock advances a little on every read, so elapsed time is really
+        // a count of budget checks. Deliberately NOT tuned to a single call:
+        // entering the run costs one check (elapsed 100, far under budget),
+        // while crossing 600 needs six, which only the per-block checks can
+        // deliver. A test that hinged on one call either way would flip on any
+        // future change to how often the scan reads the clock.
+        cfg.recovery_budget_ms = 600;
+        cfg.now_ms = []() -> uint32_t { fake_now += 100; return fake_now; };
         ASSERT_EQ(fl2.begin(nand, cfg, &store), Status::Ok);
 
         // No entry may be synthesized from a partial scan — that is the whole
