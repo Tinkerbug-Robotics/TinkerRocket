@@ -98,6 +98,10 @@ fun SettingsScreen(
     val createdProfileName by syncer.createdProfileName.collectAsState()
     val unreportedGroups by syncer.unreportedGroups.collectAsState()
     val active = activeId?.let { id -> profiles.firstOrNull { it.id == id } }
+    // #1072: the roll sub-mode to restore when the control mode comes back
+    // from Guidance (iOS's savedRollUsesAngle). Null until the operator has
+    // switched at least once this visit — the profile's own value stands then.
+    var savedRollUsesAngle by remember { mutableStateOf<Boolean?>(null) }
 
     // #361 analog: never subscribe this screen to raw telemetry — the jog
     // gate collects a distinct-until-changed Boolean, so recomposition only
@@ -196,7 +200,13 @@ fun SettingsScreen(
         CalBanner("Mag cal", magAdvisory, onImport = {
             fleetScope.launch { syncer.importRocketCalIntoActiveProfile(System.currentTimeMillis()) }
         })
-        CalBanner("Sensor cal", sensorAdvisory, onImport = null)
+        // #1059: the sensor cal can be imported now, like the mag cal above.
+        // Running one on the pad is still iOS-only — see the caption in
+        // CalBanner, which no longer tells the operator to do something this
+        // app cannot do.
+        CalBanner("Sensor cal", sensorAdvisory, onImport = {
+            fleetScope.launch { syncer.importRocketSensorCalIntoActiveProfile(System.currentTimeMillis()) }
+        })
 
         // #915: the rocket keeps its own settings unless the user asks
         // otherwise, so say plainly which ones the app cannot check and put
@@ -491,7 +501,49 @@ fun SettingsScreen(
 
             // ── Roll control (iOS Control-tab "Roll Control" section) ────
             Section("Roll control") {
-                ToggleRow("Angle control", active.useAngleControl) { v ->
+                // #1072: iOS makes this a top-level CONTROL MODE — Roll Control
+                // or Guidance — because the two are exclusive in the firmware:
+                // guidance rate-nulls roll in every phase, so a profile with
+                // both on describes a flight the rocket will not fly. Android
+                // had two independent toggles, so the operator could ask for
+                // both and get neither explanation. Switching to Guidance
+                // stashes the roll sub-mode and restores it on the way back,
+                // exactly as controlModeBinding does.
+                SegmentedPicker(
+                    listOf("Roll control", "Guidance"),
+                    if (active.guidanceEnabled) 1 else 0,
+                ) { i ->
+                    if (i == 1) {
+                        savedRollUsesAngle = active.useAngleControl
+                        edit(ConfigGroup.GUIDANCE) {
+                            it.copy(guidanceEnabled = true, useAngleControl = false)
+                        }
+                        edit(ConfigGroup.ROLL_CONTROL) { it }
+                    } else {
+                        val restore = savedRollUsesAngle
+                        edit(ConfigGroup.GUIDANCE) {
+                            it.copy(
+                                guidanceEnabled = false,
+                                useAngleControl = restore ?: it.useAngleControl,
+                            )
+                        }
+                        edit(ConfigGroup.ROLL_CONTROL) { it }
+                    }
+                }
+                Caption(
+                    if (active.guidanceEnabled) {
+                        "Guidance steers the airframe; roll is rate-nulled (held at zero " +
+                            "spin) in every phase, so the roll profile below is not followed."
+                    } else {
+                        "Roll control only — the fins hold or track roll, and no guidance " +
+                            "law runs."
+                    },
+                )
+                ToggleRow(
+                    "Angle control",
+                    active.useAngleControl,
+                    enabled = !active.guidanceEnabled,
+                ) { v ->
                     edit(ConfigGroup.ROLL_CONTROL) { it.copy(useAngleControl = v) }
                 }
                 Caption(
@@ -674,15 +726,56 @@ fun SettingsScreen(
             }
 
             // ── Guidance ─────────────────────────────────────────────────
+            // #1072: the law selector and its per-law tuning were missing
+            // entirely, so station-keeping was reachable on Android only by
+            // adopting a rocket already configured that way — and once
+            // adopted, its two gains could not be edited. The syncer has
+            // always SENT every field from the profile; only the controls
+            // were absent.
             Section("Guidance") {
-                ToggleRow("Guidance enabled", active.guidanceEnabled) { v ->
-                    edit(ConfigGroup.GUIDANCE) { it.copy(guidanceEnabled = v) }
-                }
                 if (active.guidanceEnabled) {
-                    FieldRow {
-                        NumField("Nav gain", fmt(active.pnNavGain), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnNavGain = v) } }
+                    SegmentedPicker(
+                        listOf("Proportional Nav", "Station-Keep"),
+                        active.pnGuidanceLaw.coerceIn(0, 1),
+                    ) { i ->
+                        edit(ConfigGroup.GUIDANCE) { it.copy(pnGuidanceLaw = i) }
+                    }
+                    Caption(
+                        "Station-keep is a PD regulator that flies straight up over the aim " +
+                            "point — no closest-approach singularity. PN steers toward a " +
+                            "target altitude and is the legacy law.",
+                    )
+                    Caption(
+                        "Aim point is currently the pad (overhead); wind-compensated aim " +
+                            "points arrive with Drift Cast.",
+                    )
+                    // Per-law tuning. The other law's values stay in the
+                    // profile and keep going out on the wire, so switching
+                    // laws never zeroes its tune (iOS guidanceLawFields).
+                    if (active.pnGuidanceLaw == 0) {
+                        FieldRow {
+                            NumField("Target alt m", fmt(active.pnTargetAltM), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnTargetAltM = v) } }
+                            }
+                            NumField("Nav gain (N)", fmt(active.pnNavGain), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnNavGain = v) } }
+                            }
                         }
+                        Caption(
+                            "Aim-point altitude above the pad. Set near (or modestly above) " +
+                                "expected apogee — aiming far above weakens guidance.",
+                        )
+                    } else {
+                        FieldRow {
+                            NumField("Pos gain (kp) 1/s²", fmt(active.pnKpPos), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnKpPos = v) } }
+                            }
+                            NumField("Vel gain (kd) 1/s", fmt(active.pnKdVel), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnKdVel = v) } }
+                            }
+                        }
+                    }
+                    FieldRow {
                         NumField("Max accel", fmt(active.pnMaxAccel), Modifier.weight(1f)) { s ->
                             s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMaxAccel = v) } }
                         }
@@ -694,16 +787,16 @@ fun SettingsScreen(
                         NumField("Min speed", fmt(active.pnMinSpeed), Modifier.weight(1f)) { s ->
                             s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMinSpeed = v) } }
                         }
-                        NumField("Target alt m", fmt(active.pnTargetAltM), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnTargetAltM = v) } }
-                        }
-                        NumField(
-                            "Coast ms", active.pnCoastDelayMs.toString(), Modifier.weight(1f),
-                            range = WireBounds.U16,
-                        ) { s ->
-                            s.toIntOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnCoastDelayMs = v) } }
+                        NumField("Accel→fin °", fmt(active.pnAccelToFin), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnAccelToFin = v) } }
                         }
                     }
+                    Caption(
+                        "Engages at the Activation Delay after launch (shared with roll " +
+                            "control), not after burnout.",
+                    )
+                } else {
+                    Caption("Switch the control mode above to Guidance to configure it.")
                 }
             }
         }
@@ -922,8 +1015,12 @@ private fun CalBanner(label: String, advisory: CalAdvisory, onImport: (() -> Uni
             } else {
                 Card {
                     Text(
-                        "$label: the rocket has a calibration this profile doesn't " +
-                            "(run calibration to save one).",
+                        // #1059: no longer "run calibration to save one" — that
+                        // is an instruction this app cannot carry out, and with
+                        // Import wired for both cals this branch is now only
+                        // reached with no connected session to import from.
+                        "$label: the rocket has a calibration this profile doesn't. " +
+                            "Connect to the rocket to import it.",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(12.dp),
                     )

@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import com.tinkerbug.tinkerrocket.protocol.SensorCalStatus
 
 /**
  * Scripted [BleTransport] modeling an OC / BS peripheral for virtual-time
@@ -298,6 +299,29 @@ public class FakeFirmware(
         p[1 + 9] = (instFieldUtX10 ushr 8).toByte()
         // offsets / R / residual left 0
         p[1 + 20] = rejectCode.toByte()
+        return p
+    }
+
+    /**
+     * `[0xCB][valid u8][gyro i16 x3][hg f32 x3]` sensor-cal status frame
+     * (#1059 — the twin of [magCalStatusFrame]).
+     */
+    public fun sensorCalStatusFrame(
+        valid: Boolean = true,
+        gyroX: Int = 0, gyroY: Int = 0, gyroZ: Int = 0,
+        hgX: Float = 0f, hgY: Float = 0f, hgZ: Float = 0f,
+    ): ByteArray {
+        val p = ByteArray(1 + SensorCalStatus.SIZE)
+        p[0] = 0xCB.toByte()
+        p[1] = if (valid) 1 else 0
+        fun i16(at: Int, v: Int) { p[at] = v.toByte(); p[at + 1] = (v ushr 8).toByte() }
+        fun f32(at: Int, v: Float) {
+            val b = java.lang.Float.floatToIntBits(v)
+            p[at] = b.toByte(); p[at + 1] = (b ushr 8).toByte()
+            p[at + 2] = (b ushr 16).toByte(); p[at + 3] = (b ushr 24).toByte()
+        }
+        i16(2, gyroX); i16(4, gyroY); i16(6, gyroZ)
+        f32(8, hgX); f32(12, hgY); f32(16, hgZ)
         return p
     }
 
