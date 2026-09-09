@@ -1682,6 +1682,12 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         // block: 0xA0-0xFD is full (see RocketComputerTypes.h).
         MT(GNSS_SAT_MSG),
         MT(RECOVERY_END_PENDING),
+        // #1156 item 7: the base station's own log records. They share the
+        // one 8-bit `type` space and the same packMessage framing, and they
+        // are what took 0xFC/0xFD — but they were never in this registry, so
+        // a new FC<->OC code assigned to either value passed every guard.
+        MT(BS_LORA_RX_MSG),
+        MT(BS_EVENT_MSG),
     };
 #undef MT
 
@@ -1713,7 +1719,11 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //      full, it opens the 0x90-0x9F block — see RocketComputerTypes.h.
     // 94 = 93 + RECOVERY_END_PENDING (#1176 step 6), the second code in that
     //      same 0x90 block.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 94u)
+    // 96 = 94 + BS_LORA_RX_MSG (0xFC) + BS_EVENT_MSG (0xFD), the base-station
+    //      log records that had taken "the last two free codes" without being
+    //      registered (#1156 item 7). The 0xA0-0xFD space is FULL; new codes
+    //      go in the 0x90 block.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 96u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

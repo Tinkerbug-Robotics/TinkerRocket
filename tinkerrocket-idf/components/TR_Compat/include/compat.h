@@ -60,8 +60,16 @@ static inline void yield(void)
 #ifndef INPUT
 #define INPUT  GPIO_MODE_INPUT
 #endif
+// #1156 item 5: INPUT and INPUT_PULLUP used to expand to the SAME token, so
+// pinMode()'s `mode == INPUT_PULLUP` test was true for a plain INPUT and every
+// input pin configured through this shim got a ~45 k pull-up to 3V3 — with no
+// way to ask for a high-Z input at all. Distinct sentinels outside gpio_mode_t
+// (which is 0..4) that pinMode() maps back to GPIO_MODE_INPUT plus the pull.
 #ifndef INPUT_PULLUP
-#define INPUT_PULLUP GPIO_MODE_INPUT
+#define INPUT_PULLUP   0x80
+#endif
+#ifndef INPUT_PULLDOWN
+#define INPUT_PULLDOWN 0x81
 #endif
 #ifndef HIGH
 #define HIGH 1
@@ -72,12 +80,13 @@ static inline void yield(void)
 
 static inline void pinMode(uint8_t pin, uint8_t mode)
 {
+    const bool pull_up   = (mode == INPUT_PULLUP);
+    const bool pull_down = (mode == INPUT_PULLDOWN);
     gpio_config_t cfg = {};
     cfg.pin_bit_mask = 1ULL << pin;
-    cfg.mode         = (gpio_mode_t)mode;
-    cfg.pull_up_en   = (mode == INPUT_PULLUP) ? GPIO_PULLUP_ENABLE
-                                               : GPIO_PULLUP_DISABLE;
-    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    cfg.mode         = (pull_up || pull_down) ? GPIO_MODE_INPUT : (gpio_mode_t)mode;
+    cfg.pull_up_en   = pull_up   ? GPIO_PULLUP_ENABLE   : GPIO_PULLUP_DISABLE;
+    cfg.pull_down_en = pull_down ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE;
     gpio_config(&cfg);
 }
 
@@ -271,7 +280,17 @@ public:
         if (!dev_ || !size) return;
         /* Both TX and RX buffers must be DMA-capable on ESP32-P4 */
         uint8_t *dma = (uint8_t *)heap_caps_malloc(size * 2, MALLOC_CAP_DMA);
-        if (!dma) return;
+        if (!dma)
+        {
+            // #1156 item 6: this is void, so the failure had no channel — the
+            // caller read back the command bytes it had just written as if
+            // they were the device's answer. Say so, and poison the buffer so
+            // a failed read cannot pass for an all-zero response.
+            ESP_LOGE("SPI", "transfer: DMA bounce alloc (%lu B) failed — buffer poisoned",
+                     (unsigned long)(size * 2));
+            memset(buf, 0xFF, size);
+            return;
+        }
         uint8_t *tx = dma;
         uint8_t *rx = dma + size;
         memcpy(tx, buf, size);
@@ -287,6 +306,7 @@ public:
     /* Separate TX/RX buffers */
     void transferBytes(const uint8_t *txBuf, uint8_t *rxBuf, uint32_t size)
     {
+        if (!dev_ || !size) { ESP_LOGE("SPI", "transferBytes: dev_ is NULL!"); return; }   // #1156 item 6
         spi_transaction_t t = {};
         t.length    = size * 8;
         t.tx_buffer = txBuf;
@@ -297,6 +317,7 @@ public:
     /* Write-only (no read) */
     void writeBytes(const uint8_t *data, uint32_t size)
     {
+        if (!dev_ || !size) { ESP_LOGE("SPI", "writeBytes: dev_ is NULL!"); return; }   // #1156 item 6
         spi_transaction_t t = {};
         t.length    = size * 8;
         t.tx_buffer = data;

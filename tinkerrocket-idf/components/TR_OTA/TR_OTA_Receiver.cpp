@@ -195,7 +195,14 @@ TR_OTA_Receiver::Error TR_OTA_Receiver::writeChunk(uint32_t offset, const uint8_
 {
     if (state_ != State::Writing)
     {
+        // #1156 item 3: the StatusCb contract says the callback fires whenever
+        // state_ OR last_error_ changes, and onFileTransferWrite relies on it
+        // ("writeChunk pushes its own status via the receiver callback on
+        // failure"). This was the one error path that changed last_error_ and
+        // returned without notifying, so chunks arriving with no session open
+        // produced no BLE status at all.
         last_error_ = Error::SessionNotActive;
+        notify();
         return Error::SessionNotActive;
     }
 

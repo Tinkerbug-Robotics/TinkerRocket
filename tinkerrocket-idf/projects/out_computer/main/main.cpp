@@ -4801,7 +4801,9 @@ static IRAM_ATTR bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user
         dma_dump_done = true;
     }
 
-    // Push DMA bytes into ring buffer using rxPush() which drops oldest
+    // Push DMA bytes into ring buffer using rxPush(), which drops the NEWEST
+    // byte on overflow (#383: the ISR must never advance rx_tail, which the
+    // parser owns with a non-atomic RMW; #1156 item 4 corrected this comment)
     // byte on overflow (instead of discarding the rest of the DMA buffer).
     for (size_t i = 0; i < len; i++)
     {

@@ -140,9 +140,15 @@ Two behaviors in this path are easy to misread as bugs:
   immediately without touching the ring. FC sensor data during a phone transfer is
   uninteresting (the rocket is not flying), and parsing it would compete with BLE and
   flash for core 1. See `i2sRecvCallback`.
-- **The ring drops oldest, not newest.** `rxPush` overwrites the tail on overflow, so a
-  burst costs you the oldest bytes rather than the whole DMA buffer. Overflow is
-  counted and surfaced in the stats block.
+- **The ring drops NEWEST, not oldest (#383).** `rxPush` refuses the incoming byte when
+  the ring is full and never touches `rx_tail`: the parser advances `rx_tail` with a
+  non-atomic read-modify-write, and the bulk-resync in `parseRxStream` reads the ring
+  span directly on the strength of "only the parser moves the tail". An ISR that
+  overwrote the tail would race both. So a burst costs the newest bytes, not the oldest;
+  the DMA buffer is still consumed rather than discarded whole. Overflow is counted
+  (`rx_ring_overflow_drops`, surfaced as `ring_drops`) and means NEWEST bytes lost.
+  This paragraph and the comment at the DMA-callback site said the opposite until
+  #1156 item 4.
 
 ### Commands out
 
