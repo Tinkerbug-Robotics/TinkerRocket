@@ -64,20 +64,26 @@ import org.maplibre.geojson.Polygon
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
+import java.util.Locale
 
 /**
  * Map tab router: rocket map → Offline Maps manager → Save Area sheet
  * (iOS: OfflineMapsView + SaveAreaView, shared entry from the Rocket Map).
  */
 @Composable
-fun MapTab(container: AppContainer, session: DeviceSession?) {
+fun MapTab(container: AppContainer, session: DeviceSession?, deviceKey: String? = null) {
     var route by remember { mutableStateOf("map") }
 
     // Landing predictor follows the map's lifecycle (iOS: attach onAppear,
     // detach onDisappear) — telemetry-rate work only runs while it's shown.
-    val predictor = remember { com.tinkerbug.tinkerrocket.session.LandingPredictor(container.fleetScope) }
-    DisposableEffect(session) {
-        session?.let { predictor.attach(it, container.profileStore) }
+    // #1056: the predictor is the container's, not this tab's. MapTab is torn
+    // down on every tab switch and re-attached on every reconnect (a new
+    // DeviceSession each time), and a `remember`ed predictor lost its pinned
+    // prediction and cached wind on both. attach() re-subscribes and keeps
+    // the state; only a DIFFERENT device (deviceKey) resets it.
+    val predictor = container.landingPredictor
+    DisposableEffect(session, deviceKey) {
+        session?.let { predictor.attach(it, container.profileStore, deviceKey = deviceKey ?: it.connectedDeviceName) }
         onDispose { predictor.detach() }
     }
 
@@ -242,7 +248,7 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
     val tileCount = TileMath.tileCount(spec)
     val estMb = tileCount * ESTIMATED_TILE_BYTES / 1_048_576.0
     val tooBig = estMb > 200
-    val defaultName = "Area %.3f, %.3f".format(centerLat, centerLon)
+    val defaultName = String.format(Locale.ROOT, "Area %.3f, %.3f", centerLat, centerLon)   // #1055
 
     // Recording the region belongs to the downloader (it hands us the
     // totals when it succeeds), because it outlives this screen — backing

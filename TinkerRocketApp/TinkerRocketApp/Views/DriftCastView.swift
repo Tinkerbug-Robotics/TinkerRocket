@@ -526,9 +526,12 @@ struct DriftCastView: View {
     )
     @State private var tapMode: TapMode = .launch
 
-    // Input fields (persisted).  Launch/landing re-seed from the phone's GPS on
-    // each open (applyCurrentLocation); the persisted values are the fallback
-    // when no GPS fix is available, and hold any edits made within a session.
+    // Input fields (persisted).  The LAUNCH point re-seeds from the phone's
+    // GPS on each open (applyCurrentLocation — the phone is at the pad); the
+    // LANDING point is the saved target and is seeded only while blank
+    // (#1075, Android's DriftCastScreen is the reference).  The persisted
+    // values are the fallback when no GPS fix is available, and hold any
+    // edits made within a session.
     @AppStorage("dc_launchLat") private var launchLat: String = ""
     @AppStorage("dc_launchLon") private var launchLon: String = ""
     @AppStorage("dc_landingLat") private var landingLat: String = ""
@@ -638,9 +641,10 @@ struct DriftCastView: View {
                 seedFromActiveProfile()
             }
             .onDisappear { locationManager.stopUpdates() }
-            // Seed the launch/landing points from the first GPS fix, but only
-            // while they're still blank — never clobber a value the user typed
-            // or one restored from a previous session.
+            // Seed from the first GPS fix once per open: the launch point every
+            // time, the landing point only while it is still blank (#1075) —
+            // never clobber a target the user typed or one restored from a
+            // previous session.
             .onReceive(locationManager.$userLocation) { coord in
                 guard let coord = coord, !didAutoSeed else { return }
                 didAutoSeed = true
@@ -961,15 +965,22 @@ struct DriftCastView: View {
         }
     }
 
-    /// Center the map on the phone's current location and seed launch+landing to
-    /// it. Called once per open from the first GPS fix (see the onReceive guard),
-    /// so "current location" is the default each time the tool opens — unless the
-    /// user has already tapped/used GPS this session.
+    /// Center the map on the phone's current location and seed the launch point
+    /// to it — and the landing point only while it is blank. Called once per open
+    /// from the first GPS fix (see the onReceive guard), so "current location" is
+    /// the launch default each time the tool opens — unless the user has already
+    /// tapped/used GPS this session.
     private func applyCurrentLocation(_ coord: CLLocationCoordinate2D) {
         let lat = String(format: "%.6f", coord.latitude)
         let lon = String(format: "%.6f", coord.longitude)
         launchLat = lat;  launchLon = lon
-        landingLat = lat; landingLon = lon
+        // #1075: these are @AppStorage fields and this runs on EVERY open, so an
+        // unconditional write replaced a landing target saved in an earlier
+        // session with the phone's own position. Android only seeds a blank
+        // field; do the same.
+        if landingLat.isEmpty || landingLon.isEmpty {
+            landingLat = lat; landingLon = lon
+        }
         mapRegion = MKCoordinateRegion(
             center: coord,
             span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)

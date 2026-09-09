@@ -78,6 +78,14 @@ class AppContainer(app: Application) {
 
     /** Phone GPS + heading (ref-counted; consumers start/stop). */
     val phoneLocation = PhoneLocationManager(app)
+    /**
+     * #1056: ONE landing predictor for the app, attached by the Map tab while
+     * it is shown and detached (subscription only) when it is not, so the
+     * pinned prediction and the cached wind profile outlive tab switches and
+     * reconnects. iOS holds its predictor the same way (a @StateObject above
+     * the map).
+     */
+    val landingPredictor = com.tinkerbug.tinkerrocket.session.LandingPredictor(fleetScope)
 
     /** GitHub-releases update check (plan §1); throttled + failure-silent. */
     val updateChecker = UpdateChecker(app)
