@@ -409,6 +409,64 @@ class FleetManagerTest {
         assertTrue(newTransport.writes.isEmpty(), "fleet must not push cmd 45 at adopt")
     }
 
+    // ------------------------------------------ discovery + ladder (#1088)
+
+    @Test
+    fun scanRow_upgradesItsNameWhenARealOneArrives() = runTest {
+        val h = fleetHarness()
+        // The registry knows this board by name (a device provisioned earlier),
+        // so the row's type hint can resolve as soon as the name arrives.
+        h.knownDevices.deviceDidReportIdentity(
+            unitID = "b-1", name = "TR-B-Ground", deviceType = BleDeviceType.BASE_STATION,
+            networkID = 1, rocketID = 0, pusher = null,
+        )
+        h.fleet.scan()
+        runCurrent()
+        // The first record of a freshly powered board often carries no local
+        // name — it does not fit beside the service UUID until the scan
+        // response arrives.
+        h.scanner.emissions.emit(BleAdvertisement("aa:01", null, -70))
+        runCurrent()
+        assertEquals("Unknown", h.fleet.discoveredDevices.value.single().name)
+        h.scanner.emissions.emit(BleAdvertisement("aa:01", "TR-B-Ground", -60))
+        runCurrent()
+        val row = h.fleet.discoveredDevices.value.single()
+        assertEquals("TR-B-Ground", row.name, "#1088: the row upgrades")
+        assertEquals(-60, row.rssi)
+        assertEquals(BleDeviceType.BASE_STATION, row.knownType, "and the type resolves with it")
+        // A record with NO name never overwrites the learned one, so the row
+        // cannot flap between the two sources.
+        h.scanner.emissions.emit(BleAdvertisement("aa:01", null, -55))
+        runCurrent()
+        assertEquals("TR-B-Ground", h.fleet.discoveredDevices.value.single().name)
+    }
+
+    @Test
+    fun cancelAllReconnects_stopsALadderNothingElseCouldReach() = runTest {
+        val h = fleetHarness()
+        discoverAndConnect(h, "aa:01", "TR-R-Atlas")
+        h.transports.failAllConnects = true          // keep the ladder running
+        h.transports.lastFor("aa:01").dropUnexpectedly()
+        runCurrent()
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertTrue(h.fleet.isReconnecting.value)
+        assertTrue(h.fleet.linkActive.value)
+        // disconnect() cannot reach it: the fleet map is empty for the whole
+        // run of a ladder, which is exactly why #1088 needed a cancel.
+        h.fleet.disconnect("aa:01")
+        runCurrent()
+        assertTrue(h.fleet.isReconnecting.value, "disconnect() is a no-op here")
+        h.fleet.cancelAllReconnects()
+        runCurrent()
+        assertFalse(h.fleet.isReconnecting.value)
+        assertFalse(h.fleet.linkActive.value)
+        val settled = h.transports.calls.size
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(settled, h.transports.calls.size, "a cancelled ladder makes no more attempts")
+    }
+
     // ------------------------------------------------ resume vs ladder (#1064)
 
     @Test

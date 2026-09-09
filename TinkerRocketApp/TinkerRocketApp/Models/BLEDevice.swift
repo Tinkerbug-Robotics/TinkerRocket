@@ -328,6 +328,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func onDisconnect() {
         isConnected = false
         stopRSSITimer()
+        // #1087: the transport cannot deliver another chunk, so resolve the
+        // transfer now. Before this, a download dropped before its first chunk
+        // never resolved AT ALL (downloadFile arms no timer; the stall timer
+        // is only armed from the non-EOF chunk branch), and one dropped after
+        // a chunk fell to the 3 s stall timer, which reports failure only when
+        // an expected size is known — otherwise it wrote the truncated bytes
+        // and handed the caller a URL: a partial flight cached as a complete
+        // one. Android has failed the download from its teardown since #1053.
+        if isDownloading { failDownload() }
         drainOtaReadyContinuation()
         telemetryCharacteristic = nil
         commandCharacteristic = nil

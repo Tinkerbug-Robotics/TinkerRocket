@@ -112,6 +112,15 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             userLocation = loc.coordinate
             if loc.verticalAccuracy >= 0 {
                 userAltitude = loc.altitude
+            } else {
+                // #1087: negative vertical accuracy means the ALTITUDE is
+                // invalid, exactly as the horizontal branch below treats
+                // horizontalAccuracy. Without the else the last good altitude
+                // stayed published: cmd 47 kept sending it and the recovery
+                // arrow kept showing "N Up/Down" long after the fix degraded.
+                // Android rebuilds its PhoneFix per callback, so it has always
+                // yielded null here.
+                userAltitude = nil
             }
             // Negative means the fix is invalid, per CLLocation — publish nil
             // rather than a negative "accuracy" that would log as garbage.
