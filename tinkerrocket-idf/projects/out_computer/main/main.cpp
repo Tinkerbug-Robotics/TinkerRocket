@@ -3,6 +3,8 @@
 // ==========================================================================
 #include <compat.h>
 #include <cstring>
+#include <WallClock.h>    // #1155 item 3: phone-synced time with a calendar carry
+#include <JsonEscape.h>   // #1155 item 4: unit name in the identity readback
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -459,25 +461,17 @@ static void flightlogEndFlight()
     char name[28];  // matches FlightIndexEntry::filename[28]
     if (phone_time_valid)
     {
-        uint32_t elapsed_s = (millis() - phone_sync_millis) / 1000;
-        uint32_t total_s = (uint32_t)phone_utc_hour * 3600U +
-                           (uint32_t)phone_utc_minute * 60U +
-                           (uint32_t)phone_utc_second + elapsed_s;
-        uint16_t y = phone_utc_year;
-        uint8_t  mo = phone_utc_month;
-        uint8_t  d = phone_utc_day;
-        if (total_s >= 86400U)
-        {
-            d += (uint8_t)(total_s / 86400U);  // days rolling over within a month — good enough
-            total_s %= 86400U;
-        }
-        uint8_t h  = (uint8_t)(total_s / 3600U);
-        uint8_t mi = (uint8_t)((total_s % 3600U) / 60U);
-        uint8_t s  = (uint8_t)(total_s % 60U);
+        // #1155 item 3: sync + elapsed with a real calendar carry (WallClock.h).
+        // The old arithmetic added whole days onto the synced day-of-month
+        // without carrying into the month, and wrapped at 256 days.
+        const tr_wall_clock::Civil now = tr_wall_clock::advance(
+            { phone_utc_year, phone_utc_month, phone_utc_day,
+              phone_utc_hour, phone_utc_minute, phone_utc_second },
+            (millis() - phone_sync_millis) / 1000);
         std::snprintf(name, sizeof(name),
                       "flight_%04u%02u%02u_%02u%02u%02u.bin",
-                      (unsigned)y, (unsigned)mo, (unsigned)d,
-                      (unsigned)h, (unsigned)mi, (unsigned)s);
+                      (unsigned)now.year, (unsigned)now.month, (unsigned)now.day,
+                      (unsigned)now.hour, (unsigned)now.minute, (unsigned)now.second);
     }
     else
     {
@@ -1432,6 +1426,37 @@ static bool latest_iis2mdc_valid = false;
 static bool latest_ism6_valid = false;
 static bool latest_bmp_valid = false;
 static GNSSDataSI latest_gnss_si = {};
+// #1155 item 12: latest_ism6_raw / latest_non_sensor / latest_gnss_si are
+// written by the I2S parser task (prio 6) and read by loop_oc (prio 5, same
+// core) to build LoRa and BLE telemetry. The structs are packed, so a
+// multi-byte field is a byte-wise access the parser can preempt half-way
+// through — a torn sample went out on the air. #569 gave last_query_cfg a
+// critical-section snapshot for exactly this hazard; these caches now have
+// the same one. The writer holds the mux for a ~40 B copy at up to 1920 Hz;
+// each builder takes ONE snapshot per frame and works on the copy. (The
+// parser's own reads right after its memcpy need no lock — same task.)
+static portMUX_TYPE latest_sample_mux = portMUX_INITIALIZER_UNLOCKED;
+static inline ISM6HG256Data snapshotIsm6Raw()
+{
+    portENTER_CRITICAL(&latest_sample_mux);
+    const ISM6HG256Data snap = latest_ism6_raw;
+    portEXIT_CRITICAL(&latest_sample_mux);
+    return snap;
+}
+static inline NonSensorData snapshotNonSensor()
+{
+    portENTER_CRITICAL(&latest_sample_mux);
+    const NonSensorData snap = latest_non_sensor;
+    portEXIT_CRITICAL(&latest_sample_mux);
+    return snap;
+}
+static inline GNSSDataSI snapshotGnssSi()
+{
+    portENTER_CRITICAL(&latest_sample_mux);
+    const GNSSDataSI snap = latest_gnss_si;
+    portEXIT_CRITICAL(&latest_sample_mux);
+    return snap;
+}
 static bool latest_gnss_valid = false;
 static bool latest_power_valid = false;
 static bool latest_non_sensor_valid = false;
@@ -2562,8 +2587,14 @@ static inline void cmdConsume(size_t n)
 {
     cmd_tail = (cmd_tail + n) % CMD_RING_SIZE;
 }
-static size_t rx_head = 0;
-static size_t rx_tail = 0;
+// #1155 item 6: shared between the I2S DMA ISR (writes rx_head) and the parser
+// task (writes rx_tail) — volatile like fc_ota_head/fc_ota_tail on the FC, and
+// every length computation snapshots each index ONCE. rxLen() used to read
+// rx_head twice; a wrap landing between the reads made the unsigned
+// subtraction underflow to ~4 GB and the parser proceeded on data that had
+// not arrived.
+static volatile size_t rx_head = 0;
+static volatile size_t rx_tail = 0;
 static volatile uint32_t rx_ring_overflow_drops = 0; // ring full in ISR callback
 
 // High-water mark of rx_ring fill since the last LOG TIMING reset.  Updated
@@ -2581,8 +2612,8 @@ static uint32_t dedup_drops_lt = 0;              // ts strictly less than prev (
 static uint32_t dedup_drops_eq = 0;              // ts exactly equal to prev (byte-duplicate)
 static uint32_t dedup_replay_drops = 0;          // #468: >10 s backstep, unconfirmed (replayed TX descriptor)
 static uint32_t stale_drops = 0;                 // stale timestamp rejects
-static uint32_t raw_i2c_reads = 0;
-static uint64_t raw_i2c_bytes = 0;
+static uint32_t i2s_dma_reads = 0;
+static uint64_t i2s_dma_bytes = 0;
 static uint32_t msg_count_query = 0;
 static uint32_t msg_count_ism6 = 0;
 static uint32_t msg_count_bmp = 0;
@@ -2616,7 +2647,7 @@ static uint32_t prev_msg_count_logonly = 0;   // #569
 static uint32_t last_stats_ms = 0;
 static uint64_t prev_bytes_rx = 0;
 static uint64_t prev_bytes_nand = 0;
-static uint64_t prev_raw_i2c_bytes = 0;
+static uint64_t prev_i2s_dma_bytes = 0;
 static uint32_t prev_ring_overruns = 0;
 static uint32_t prev_ring_drop_oldest_bytes = 0;
 static uint32_t prev_ring_bad_sof_clears = 0;
@@ -2624,8 +2655,9 @@ static uint32_t interval_ring_fill_peak = 0;
 
 static inline size_t rxLen()
 {
-    if (rx_head >= rx_tail) return rx_head - rx_tail;
-    return RX_STREAM_RING - (rx_tail - rx_head);
+    const size_t h = rx_head;
+    const size_t t = rx_tail;
+    return (h >= t) ? (h - t) : (RX_STREAM_RING - (t - h));
 }
 
 static inline IRAM_ATTR void rxPush(uint8_t b)
@@ -2647,9 +2679,8 @@ static inline IRAM_ATTR void rxPush(uint8_t b)
     rx_ring[rx_head] = b;
     rx_head = next;
     // High-water tracking — non-atomic but only one ISR context produces.
-    const uint32_t fill = (rx_head >= rx_tail)
-                            ? (rx_head - rx_tail)
-                            : (RX_STREAM_RING - (rx_tail - rx_head));
+    const size_t   t    = rx_tail;   // one read: the parser advances it under us
+    const uint32_t fill = (next >= t) ? (next - t) : (RX_STREAM_RING - (t - next));
     if (fill > rx_ring_peak_fill) rx_ring_peak_fill = fill;
 }
 
@@ -3504,6 +3535,18 @@ static void ocFlipToTx()
 static void ocRevertToRx()
 {
     if (!oc_ota_tx_mode || oc_i2s_mutex == nullptr) return;
+    // #1155 item 1: a FINISH tail can still be queued for the feeder (the app
+    // sends FINISH right behind the last data chunk), and the fixed settle
+    // below raced it: with the tail unpumped the channel was torn down and
+    // the frames sat in oc_ota_tx_queue until the NEXT session, which pumped
+    // them at the FC before offset 0 — a gap count its own diagnostic guide
+    // reads as a transport fault. Wait, bounded, for the queue to drain; the
+    // abort paths reset the queue first, so they pass straight through.
+    for (int i = 0; i < 100 && oc_ota_tx_queue != nullptr &&
+                    uxQueueMessagesWaiting(oc_ota_tx_queue) > 0; ++i)
+    {
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
     // Settle before tearing down TX: let the last pumped image frames fully
     // clock out of the DMA to the FC (a few ms at the OTA BCLK), and catch any
     // chunk that arrived just after FINISH (oc_ota_tx_mode is still true here,
@@ -3519,8 +3562,21 @@ static void ocRevertToRx()
     // tx_mode and kept no record, so a failed revert was silent and permanent.
     oc_ota_tx_mode       = false;
     oc_ota_last_chunk_ms = 0;
+    // Anything still queued belongs to the session that just ended. Discard
+    // it here, under the mutex the feeder takes before every pump, so it can
+    // never lead the next session's image (#1155 item 1).
+    UBaseType_t stranded = 0;
+    if (oc_ota_tx_queue != nullptr)
+    {
+        stranded = uxQueueMessagesWaiting(oc_ota_tx_queue);
+        if (stranded > 0) xQueueReset(oc_ota_tx_queue);
+    }
     xSemaphoreGive(oc_i2s_mutex);
     ESP_LOGW("OC", "OTA relay: I2S -> slave RX (%s)", esp_err_to_name(e));
+    if (stranded > 0)
+    {
+        ESP_LOGW("OC", "OTA relay: %u stranded frame(s) discarded on revert", (unsigned)stranded);
+    }
 }
 
 // Pump one relayed BLE chunk to the FC. Splits into <= (MAX_PAYLOAD-4)-byte
@@ -3700,6 +3756,9 @@ static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* s
     oc_ota_frames_pumped          = 0;
     oc_ota_feed_sent              = 0;
     oc_ota_feed_idle              = 0;
+    // #1155 item 1: a new session starts with an empty feeder queue whatever
+    // the last one left behind (the feeder is idle here — tx_mode is false).
+    if (oc_ota_tx_queue != nullptr) xQueueReset(oc_ota_tx_queue);
     oc_ota_await_flip             = false;
     oc_ota_relay_ready_pending    = false;
     oc_ota_warmup_since_ms        = 0;
@@ -3756,6 +3815,10 @@ static void ocOtaRelayFinish(void* /*ctx*/)
 }
 static void ocOtaRelayAbort(void* /*ctx*/)
 {
+    // #1155 item 1: nothing queued is wanted after an abort — drop it now so
+    // the revert does not wait for it to be pumped at an FC that has already
+    // reverted (xQueueReset is safe against the feeder mid-receive).
+    if (oc_ota_tx_queue != nullptr) xQueueReset(oc_ota_tx_queue);
     setPendingCommand(OTA_ABORT_CMD);
     ocOtaRelayClearPendingFlip();
     oc_ota_revert_to_rx_requested = true;
@@ -4192,7 +4255,9 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         msg_count_ism6++;
         if (payload_len >= sizeof(ISM6HG256Data))
         {
+            portENTER_CRITICAL(&latest_sample_mux);   // #1155 item 12
             memcpy(&latest_ism6_raw, payload, sizeof(ISM6HG256Data));
+            portEXIT_CRITICAL(&latest_sample_mux);
             latest_ism6_valid = true;
         }
     }
@@ -4354,7 +4419,13 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (payload_len >= sizeof(GNSSData))
         {
             memcpy(&latest_gnss_raw, payload, sizeof(GNSSData));
-            sensor_converter.convertGNSSData(latest_gnss_raw, latest_gnss_si);
+            {
+                GNSSDataSI si = {};
+                sensor_converter.convertGNSSData(latest_gnss_raw, si);
+                portENTER_CRITICAL(&latest_sample_mux);   // #1155 item 12
+                latest_gnss_si = si;
+                portEXIT_CRITICAL(&latest_sample_mux);
+            }
             latest_gnss_valid = true;
         }
     }
@@ -4364,7 +4435,9 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (payload_len >= sizeof(NonSensorData))
         {
             const RocketState prev_state = latest_rocket_state;
+            portENTER_CRITICAL(&latest_sample_mux);   // #1155 item 12
             memcpy(&latest_non_sensor, payload, sizeof(NonSensorData));
+            portEXIT_CRITICAL(&latest_sample_mux);
             latest_non_sensor_valid = true;
             latest_non_sensor_rx_ms = millis();   // #831
             fc_ns_since_boot = true;   // boot sequence over — real state is flowing
@@ -4803,15 +4876,16 @@ static IRAM_ATTR bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user
 
     // Push DMA bytes into ring buffer using rxPush(), which drops the NEWEST
     // byte on overflow (#383: the ISR must never advance rx_tail, which the
-    // parser owns with a non-atomic RMW; #1156 item 4 corrected this comment)
-    // byte on overflow (instead of discarding the rest of the DMA buffer).
+    // parser owns with a non-atomic RMW; #1156 item 4 corrected this comment).
     for (size_t i = 0; i < len; i++)
     {
         rxPush(buf[i]);
     }
 
-    raw_i2c_reads++;
-    raw_i2c_bytes += (uint64_t)len;
+    // #1155 item 18: these count I2S DMA callbacks/bytes and were printed as
+    // "i2c raw" — pointing a bench session at the wrong bus.
+    i2s_dma_reads++;
+    i2s_dma_bytes += (uint64_t)len;
 
     // Notify parser task that data is available
     BaseType_t wake = pdFALSE;
@@ -4929,6 +5003,10 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t 
                              uint8_t frame_type, size_t& out_len)
 {
     out_len = 0;
+    // #1155 item 12: one coherent sample of each cache per frame.
+    const NonSensorData ns      = snapshotNonSensor();
+    const GNSSDataSI    gnss    = snapshotGnssSi();
+    const ISM6HG256Data ism_raw = snapshotIsm6Raw();
     if (out_payload == nullptr)
     {
         return false;
@@ -4991,13 +5069,13 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t 
 
     if (latest_gnss_valid)
     {
-        lora.num_sats = latest_gnss_si.num_sats;
-        lora.pdop = latest_gnss_si.pdop;
-        lora.horizontal_accuracy = latest_gnss_si.horizontal_accuracy;
+        lora.num_sats = gnss.num_sats;
+        lora.pdop = gnss.pdop;
+        lora.horizontal_accuracy = gnss.horizontal_accuracy;
 
-        coord.geodeticToECEF(latest_gnss_si.lat * TR_Coordinates::DEG2RAD,
-                             latest_gnss_si.lon * TR_Coordinates::DEG2RAD,
-                             latest_gnss_si.alt,
+        coord.geodeticToECEF(gnss.lat * TR_Coordinates::DEG2RAD,
+                             gnss.lon * TR_Coordinates::DEG2RAD,
+                             gnss.alt,
                              lora.ecef_x,
                              lora.ecef_y,
                              lora.ecef_z);
@@ -5009,18 +5087,18 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t 
     // #835 item 9: relay sim mode over LoRa.  The direct-BLE path already
     // reports it ("fs" bit 8); without this the base station affirmatively
     // reported sim_active=false for a synthetic flight.
-    lora.sim_active     = nsFlagSet(latest_non_sensor.flags, NSF_SIM_ACTIVE);
+    lora.sim_active     = nsFlagSet(ns.flags, NSF_SIM_ACTIVE);
 
     if (latest_non_sensor_valid)
     {
-        lora.q0 = (float)latest_non_sensor.q0 / 10000.0f;
-        lora.q1 = (float)latest_non_sensor.q1 / 10000.0f;
-        lora.q2 = (float)latest_non_sensor.q2 / 10000.0f;
-        lora.q3 = (float)latest_non_sensor.q3 / 10000.0f;
-        lora.launch_flag = nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
-        lora.vel_u_apogee_flag = nsFlagSet(latest_non_sensor.flags, NSF_VEL_APOGEE);
-        lora.alt_apogee_flag = nsFlagSet(latest_non_sensor.flags, NSF_ALT_APOGEE);
-        lora.alt_landed_flag = nsFlagSet(latest_non_sensor.flags, NSF_ALT_LANDED);
+        lora.q0 = (float)ns.q0 / 10000.0f;
+        lora.q1 = (float)ns.q1 / 10000.0f;
+        lora.q2 = (float)ns.q2 / 10000.0f;
+        lora.q3 = (float)ns.q3 / 10000.0f;
+        lora.launch_flag = nsFlagSet(ns.flags, NSF_LAUNCH);
+        lora.vel_u_apogee_flag = nsFlagSet(ns.flags, NSF_VEL_APOGEE);
+        lora.alt_apogee_flag = nsFlagSet(ns.flags, NSF_ALT_APOGEE);
+        lora.alt_landed_flag = nsFlagSet(ns.flags, NSF_ALT_LANDED);
 
         // #191: EKF ENU velocity components — the app's ascent landing
         // prediction integrates [vE,vN,vU].  Euler angles + instantaneous
@@ -5028,10 +5106,10 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t 
         // from the quaternion / these components in unpackLoRa), which is
         // what keeps the frame at 65 B ≤ the 66 B the #150 dwell table
         // was validated at.
-        lora.vel_e = (float)latest_non_sensor.e_vel / 100.0f;
-        lora.vel_n = (float)latest_non_sensor.n_vel / 100.0f;
-        lora.vel_u = (float)latest_non_sensor.u_vel / 100.0f;
-        lora.burnout_detected = nsFlagSet(latest_non_sensor.flags, NSF_BURNOUT);
+        lora.vel_e = (float)ns.e_vel / 100.0f;
+        lora.vel_n = (float)ns.n_vel / 100.0f;
+        lora.vel_u = (float)ns.u_vel / 100.0f;
+        lora.burnout_detected = nsFlagSet(ns.flags, NSF_BURNOUT);
     }
 
     // #390: board→rocket orientation rides flags2 bits 1-7 so the base
@@ -5070,7 +5148,7 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t 
     if (latest_ism6_valid)
     {
         ISM6HG256DataSI ism_si = {};
-        sensor_converter.convertISM6HG256Data(latest_ism6_raw, ism_si);
+        sensor_converter.convertISM6HG256Data(ism_raw, ism_si);
         lora.acc_x = (float)ism_si.low_g_acc_x;
         lora.acc_y = (float)ism_si.low_g_acc_y;
         lora.acc_z = (float)ism_si.low_g_acc_z;
@@ -5100,7 +5178,7 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t 
         // #303: relay the FC's health verdicts and OR in the battery state (the
         // FC leaves battery N/A — only the OC reads POWERData).  2S-pack
         // thresholds; tunable, and #272 may refine the low-voltage policy.
-        uint32_t sh = latest_non_sensor_valid ? latest_non_sensor.sensor_health : 0u;
+        uint32_t sh = latest_non_sensor_valid ? ns.sensor_health : 0u;
         lora.sensor_health = shSet(sh, SH_BATT_SHIFT, shBatteryState(power_si.voltage));
     }
 
@@ -5109,7 +5187,7 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t 
     // Seed from the bits already assembled above (battery, when power was valid).
     {
         uint32_t sh = latest_power_valid ? lora.sensor_health
-                     : (latest_non_sensor_valid ? latest_non_sensor.sensor_health : 0u);
+                     : (latest_non_sensor_valid ? ns.sensor_health : 0u);
         lora.sensor_health = shSet(sh, SH_STORAGE_SHIFT, ocStorageHealth());
     }
 
@@ -5634,7 +5712,7 @@ static void sendCurrentConfig()
     j += ",\"camt\":"; j += itos(cfg_camera_type);
     j += ",\"irate\":"; j += itos(cfg_imu_rate);
     // LoRa settings
-    j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 1);
+    j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
     j += ",\"lsf\":"; j += itos(lora_sf);
     j += ",\"lbw\":"; j += fmtf(lora_bw_khz, 0);
     j += ",\"lcr\":"; j += itos(lora_cr);
@@ -5667,6 +5745,11 @@ static void sendCurrentConfig()
     // Message 3: device identity ("config_identity" type)
     const esp_app_desc_t* app_desc = esp_app_get_description();
     const char* fw_ver = (app_desc && app_desc->version[0]) ? app_desc->version : "unknown";
+    // #1155 item 4: the name is operator-supplied; a '"' or '\\' in it made
+    // this frame unparseable on both phones. Escaped (never truncated —
+    // 2 * sizeof covers every byte escaping); cmd 40 also refuses such names.
+    char un_esc[2 * sizeof(unit_name)];
+    (void)tr_json::escapeInto(un_esc, sizeof(un_esc), unit_name);
     char id_buf[192];
     snprintf(id_buf, sizeof(id_buf),
              "{\"type\":\"config_identity\""
@@ -5676,7 +5759,7 @@ static void sendCurrentConfig()
              ",\"rid\":%u"
              ",\"dt\":\"%s\""
              ",\"fw\":\"%s\"}",
-             unit_id_hex, unit_name,
+             unit_id_hex, un_esc,
              (unsigned)network_id, (unsigned)rocket_id,
              config::DEVICE_TYPE,
              fw_ver);
@@ -6341,8 +6424,18 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // From any other fallback state (NORMAL or mid VISITING_RENDEZVOUS)
         // we move to PAUSED_FOR_SCAN.  Reconfigure with the operating
         // preset on lora_freq_mhz; this is *not* a rendezvous visit.
+        // #1155 item 10: never spin out a packet's airtime inside the main
+        // loop (the stall #398 removed from the slow-rendezvous helpers, which
+        // pass wait_for_tx=false). Mid-TX the base station's retry lands us here
+        // again in a moment; a false from a non-blocking reconfigure is a fault.
+        if (!lora_comms.canSend())
+        {
+            ESP_LOGW("LORA", "UPLINK Cmd 16: radio busy (mid-TX) — not reconfiguring; the base station retries");
+            return;
+        }
         if (!lora_comms.reconfigure(lora_freq_mhz, lora_sf, lora_bw_khz,
-                                     lora_cr, lora_tx_power))
+                                     lora_cr, lora_tx_power,
+                                     /*wait_for_tx=*/false))
         {
             ESP_LOGE("LORA", "UPLINK Cmd 16: reconfigure to lora_freq_mhz failed");
             return;
@@ -6449,7 +6542,10 @@ static void serviceLoRaUplink()
     lora_comms.pollDio1();
 
     // Non-blocking poll for uplink packet
-    uint8_t rx_buf[32];
+    // #1155 item 11: sized to the shared air-frame bound. readPacket() DROPS a
+    // frame longer than this buffer, and at 32 bytes the base station's
+    // BW=125 channel-set push (33 on air) never arrived.
+    uint8_t rx_buf[LORA_UPLINK_MAX_PACKET];
     size_t rx_len = 0;
 
     if (lora_comms.readPacket(rx_buf, sizeof(rx_buf), rx_len))
@@ -6793,11 +6889,16 @@ static void serviceHopFallback()
             // reconfigure() switches BW/SF/CR/freq atomically (with
             // rollback on failure) — same machinery as slow_rendezvous
             // so the radio handling is identical and well-tested.
+            // #1155 item 10: these visits run INFLIGHT; a blocking reconfigure
+            // sat in waitTxIdle() for the in-flight packet's airtime. Mid-TX,
+            // come back next pass — the trigger condition persists.
+            if (!lora_comms.canSend()) return;
             if (!lora_comms.reconfigure(LORA_FACTORY_RENDEZVOUS_MHZ,
                                          LORA_FACTORY_RENDEZVOUS_SF,
                                          LORA_FACTORY_RENDEZVOUS_BW_KHZ,
                                          LORA_FACTORY_RENDEZVOUS_CR,
-                                         LORA_FACTORY_RENDEZVOUS_TX_DBM))
+                                         LORA_FACTORY_RENDEZVOUS_TX_DBM,
+                                         /*wait_for_tx=*/false))
             {
                 ESP_LOGE("OC", "[HOP] Visit failed: reconfigure to rendezvous mode");
                 return;
@@ -6820,8 +6921,10 @@ static void serviceHopFallback()
             // restart hopping with a fresh bootstrap so the BS sees a
             // clean transition packet on lora_freq_mhz with
             // next_channel_idx = 0.
+            if (!lora_comms.canSend()) return;   // #1155 item 10: mid-TX, retry next pass
             if (!lora_comms.reconfigure(lora_freq_mhz, lora_sf, lora_bw_khz,
-                                         lora_cr, lora_tx_power))
+                                         lora_cr, lora_tx_power,
+                                         /*wait_for_tx=*/false))
             {
                 ESP_LOGE("OC", "[HOP] Visit failed: reconfigure back to saved params");
                 // Stay in VISITING_RENDEZVOUS; will retry on next call.
@@ -7124,6 +7227,11 @@ static void printStats()
         // validate the new image. Gate on a live connection so we only cancel
         // rollback once we've proven BLE works end-to-end with a client (#8).
         if (ble_app.isConnected()) maybeMarkOtaValid();
+        // #1155 item 16: keep the task-CPU profiler's baseline fresh while we
+        // sit here, else the first active-mode window divided a whole rail-off
+        // period of run time by 1 s (percentages in the thousands,
+        // core1_util=0%). dt 0 = re-snapshot only, no line printed.
+        logTaskCpuDeltas(0);
         return;
     }
 
@@ -7190,21 +7298,17 @@ static void printStats()
             ts_year == 2025 && ts_month == 1 && ts_day == 1 &&
             ts_hour == 12 && ts_minute == 0)
         {
-            uint32_t elapsed_s = (millis() - phone_sync_millis) / 1000;
-            uint32_t total_s = (uint32_t)phone_utc_hour * 3600U +
-                               (uint32_t)phone_utc_minute * 60U +
-                               (uint32_t)phone_utc_second + elapsed_s;
-            ts_year   = phone_utc_year;
-            ts_month  = phone_utc_month;
-            ts_day    = phone_utc_day;
-            if (total_s >= 86400U)
-            {
-                ts_day += (uint8_t)(total_s / 86400U);
-                total_s %= 86400U;
-            }
-            ts_hour   = (uint8_t)(total_s / 3600U);
-            ts_minute = (uint8_t)((total_s % 3600U) / 60U);
-            ts_second = (uint8_t)(total_s % 60U);
+            // #1155 item 3: same calendar carry as the flight filename.
+            const tr_wall_clock::Civil now = tr_wall_clock::advance(
+                { phone_utc_year, phone_utc_month, phone_utc_day,
+                  phone_utc_hour, phone_utc_minute, phone_utc_second },
+                (millis() - phone_sync_millis) / 1000);
+            ts_year   = now.year;
+            ts_month  = now.month;
+            ts_day    = now.day;
+            ts_hour   = now.hour;
+            ts_minute = now.minute;
+            ts_second = now.second;
         }
 
         logger.setFileTimestamp(logger.currentFilename(),
@@ -7218,20 +7322,20 @@ static void printStats()
     }
     const uint64_t rx_delta = s.bytes_received - prev_bytes_rx;
     const uint64_t nand_delta = s.bytes_written_nand - prev_bytes_nand;
-    const uint64_t raw_i2c_delta = raw_i2c_bytes - prev_raw_i2c_bytes;
+    const uint64_t i2s_dma_delta = i2s_dma_bytes - prev_i2s_dma_bytes;
     const uint32_t ring_overrun_delta = s.ring_overruns - prev_ring_overruns;
     const uint32_t ring_drop_oldest_delta = s.ring_drop_oldest_bytes - prev_ring_drop_oldest_bytes;
     const uint32_t ring_bad_sof_delta = s.ring_bad_sof_clears - prev_ring_bad_sof_clears;
     prev_bytes_rx = s.bytes_received;
     prev_bytes_nand = s.bytes_written_nand;
-    prev_raw_i2c_bytes = raw_i2c_bytes;
+    prev_i2s_dma_bytes = i2s_dma_bytes;
     prev_ring_overruns = s.ring_overruns;
     prev_ring_drop_oldest_bytes = s.ring_drop_oldest_bytes;
     prev_ring_bad_sof_clears = s.ring_bad_sof_clears;
 
     const float rx_kbs = (dt > 0) ? ((float)rx_delta / (float)dt) : 0.0f;
     const float wr_kbs = (dt > 0) ? ((float)nand_delta / (float)dt) : 0.0f;
-    const float raw_rx_kbs = (dt > 0) ? ((float)raw_i2c_delta / (float)dt) : 0.0f;
+    const float raw_rx_kbs = (dt > 0) ? ((float)i2s_dma_delta / (float)dt) : 0.0f;
     const uint32_t d_query = msg_count_query - prev_msg_count_query;
     const uint32_t d_ism6 = msg_count_ism6 - prev_msg_count_ism6;
     const uint32_t d_bmp = msg_count_bmp - prev_msg_count_bmp;
@@ -7317,21 +7421,21 @@ static void printStats()
                   (unsigned long)ring_drop_oldest_delta,
                   (unsigned long)ring_bad_sof_delta,
                   (unsigned long)s.ring_bad_sof_clears);
-    ESP_LOGI("OC", "i2c raw reads/bytes=%lu/%llu",
-                  (unsigned long)raw_i2c_reads,
-                  (unsigned long long)raw_i2c_bytes);
-    ESP_LOGI("OC", "i2c raw_rx=%.1f KB/s | ring_drops=%lu | cmd_drops=%lu | parser_drops resync/len/crc=%llu/%llu/%lu",
+    ESP_LOGI("OC", "i2s dma reads/bytes=%lu/%llu",
+                  (unsigned long)i2s_dma_reads,
+                  (unsigned long long)i2s_dma_bytes);
+    ESP_LOGI("OC", "i2s dma_rx=%.1f KB/s | ring_drops=%lu | cmd_drops=%lu | parser_drops resync/len/crc=%llu/%llu/%lu",
                   (double)raw_rx_kbs,
                   (unsigned long)rx_ring_overflow_drops,
                   (unsigned long)cmd_ring_drop_count,
                   (unsigned long long)parser_resync_drops,
                   (unsigned long long)parser_len_drops,
                   (unsigned long)frames_bad_crc);
-    ESP_LOGI("LOG", "logging=%c file=%s page=%lu block=%lu prog_fail=%lu erase_fail=%lu",
+    // #1155 item 15: page/block were never updated after begin() and printed
+    // "page=0 block=1" for the whole flight — a wedged-writer look-alike.
+    ESP_LOGI("LOG", "logging=%c file=%s prog_fail=%lu erase_fail=%lu",
                   s.logging_active ? 'Y' : 'N',
                   logger.currentFilename(),
-                  (unsigned long)s.nand_page,
-                  (unsigned long)s.nand_block,
                   (unsigned long)s.nand_prog_fail,
                   (unsigned long)s.nand_erase_fail);
     ESP_LOGI("CFG", "cfg fs=%u/%u/%u rot_z(ism/mmc)=%.2f/%.2f deg v%u",
@@ -7379,7 +7483,7 @@ static void printStats()
                          prev_stale = 0;
         static uint64_t prev_dma_bytes = 0;
         uint32_t d_cb = dma_cb_count - prev_dma_cb;
-        uint64_t d_bytes = raw_i2c_bytes - prev_dma_bytes;
+        uint64_t d_bytes = i2s_dma_bytes - prev_dma_bytes;
         uint32_t d_ovf = rx_ring_overflow_drops - prev_ring_ovf;
         uint32_t d_stale = stale_drops - prev_stale;
         uint32_t d_dedup_eq = dedup_drops_eq - prev_dedup_eq;
@@ -7446,7 +7550,7 @@ static void printStats()
         }
 
         prev_dma_cb = dma_cb_count;
-        prev_dma_bytes = raw_i2c_bytes;
+        prev_dma_bytes = i2s_dma_bytes;
         prev_ring_ovf = rx_ring_overflow_drops;
         prev_dedup_eq = dedup_drops_eq;
         prev_dedup_lt = dedup_drops_lt;
@@ -7532,6 +7636,10 @@ static void printStats()
 
     // Send telemetry to BLE app
     TR_BLE_To_APP::TelemetryData ble_telem = {};
+    // #1155 item 12: one coherent sample of each cache for this frame.
+    const NonSensorData ns      = snapshotNonSensor();
+    const GNSSDataSI    gnss    = snapshotGnssSi();
+    const ISM6HG256Data ism_raw = snapshotIsm6Raw();
     ble_telem.soc = NAN;
     ble_telem.current = NAN;
     ble_telem.voltage = NAN;
@@ -7572,10 +7680,10 @@ static void printStats()
     ble_telem.holdup_state = holdup_tracker.state;
     if (latest_gnss_valid)
     {
-        ble_telem.latitude = latest_gnss_si.lat;
-        ble_telem.longitude = latest_gnss_si.lon;
-        ble_telem.gdop = latest_gnss_si.pdop;
-        ble_telem.num_sats = (int)latest_gnss_si.num_sats;
+        ble_telem.latitude = gnss.lat;
+        ble_telem.longitude = gnss.lon;
+        ble_telem.gdop = gnss.pdop;
+        ble_telem.num_sats = (int)gnss.num_sats;
     }
     ble_telem.state = rocketStateToString(latest_rocket_state);
     ble_telem.camera_recording = camera_recording_requested;
@@ -7591,14 +7699,14 @@ static void printStats()
     ble_telem.altitude_rate = pressure_alt_rate_mps;
     // #191: EKF ENU velocity + burnout for the app's ascent prediction
     // (direct-BLE path; the LoRa path relays the same via LoRaData).
-    ble_telem.vel_e = (float)latest_non_sensor.e_vel / 100.0f;
-    ble_telem.vel_n = (float)latest_non_sensor.n_vel / 100.0f;
-    ble_telem.vel_u = (float)latest_non_sensor.u_vel / 100.0f;
-    ble_telem.burnout_flag = nsFlagSet(latest_non_sensor.flags, NSF_BURNOUT);
+    ble_telem.vel_e = (float)ns.e_vel / 100.0f;
+    ble_telem.vel_n = (float)ns.n_vel / 100.0f;
+    ble_telem.vel_u = (float)ns.u_vel / 100.0f;
+    ble_telem.burnout_flag = nsFlagSet(ns.flags, NSF_BURNOUT);
     if (latest_ism6_valid)
     {
         ISM6HG256DataSI ism_si = {};
-        sensor_converter.convertISM6HG256Data(latest_ism6_raw, ism_si);
+        sensor_converter.convertISM6HG256Data(ism_raw, ism_si);
         ble_telem.low_g_x = ism_si.low_g_acc_x;
         ble_telem.low_g_y = ism_si.low_g_acc_y;
         ble_telem.low_g_z = ism_si.low_g_acc_z;
@@ -7610,16 +7718,16 @@ static void printStats()
         ble_telem.gyro_z = ism_si.gyro_z;
     }
     // Attitude quaternion from FlightComputer
-    ble_telem.q0 = (float)latest_non_sensor.q0 / 10000.0f;
-    ble_telem.q1 = (float)latest_non_sensor.q1 / 10000.0f;
-    ble_telem.q2 = (float)latest_non_sensor.q2 / 10000.0f;
-    ble_telem.q3 = (float)latest_non_sensor.q3 / 10000.0f;
-    ble_telem.roll_cmd = (float)latest_non_sensor.roll_cmd / 100.0f;
+    ble_telem.q0 = (float)ns.q0 / 10000.0f;
+    ble_telem.q1 = (float)ns.q1 / 10000.0f;
+    ble_telem.q2 = (float)ns.q2 / 10000.0f;
+    ble_telem.q3 = (float)ns.q3 / 10000.0f;
+    ble_telem.roll_cmd = (float)ns.roll_cmd / 100.0f;
     // Sensor health scorecard (#303) — direct-BLE path (no LoRa hop): take the
     // FC's bits and fold in the OC-owned battery verdict.  The FC never reads the
     // pack, so without this the operator would see battery = N/A on a direct link.
     {
-        uint32_t sh = latest_non_sensor.sensor_health;
+        uint32_t sh = ns.sensor_health;
         if (latest_power_valid) {
             POWERDataSI p = {};
             sensor_converter.convertPowerData(latest_power_raw, p);
@@ -7680,17 +7788,17 @@ static void printStats()
     ble_telem.bs_voltage = NAN;
     ble_telem.bs_current = NAN;
     // Flight event flags
-    ble_telem.launch_flag       = nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
-    ble_telem.vel_u_apogee_flag = nsFlagSet(latest_non_sensor.flags, NSF_VEL_APOGEE);
-    ble_telem.alt_apogee_flag   = nsFlagSet(latest_non_sensor.flags, NSF_ALT_APOGEE);
-    ble_telem.alt_landed_flag   = nsFlagSet(latest_non_sensor.flags, NSF_ALT_LANDED);
-    ble_telem.sim_active        = nsFlagSet(latest_non_sensor.flags, NSF_SIM_ACTIVE);  // #393
+    ble_telem.launch_flag       = nsFlagSet(ns.flags, NSF_LAUNCH);
+    ble_telem.vel_u_apogee_flag = nsFlagSet(ns.flags, NSF_VEL_APOGEE);
+    ble_telem.alt_apogee_flag   = nsFlagSet(ns.flags, NSF_ALT_APOGEE);
+    ble_telem.alt_landed_flag   = nsFlagSet(ns.flags, NSF_ALT_LANDED);
+    ble_telem.sim_active        = nsFlagSet(ns.flags, NSF_SIM_ACTIVE);  // #393
     ble_telem.pwr_pin_on        = pwr_pin_on;
     // Pyro channel status from NonSensorData (single shared armed bit
     // mirrors the live ARM pin; 4 per-channel cont/fired bits).
-    ble_telem.pyro_armed = nsFlagSet(latest_non_sensor.flags, NSF_PYRO_ARMED);
+    ble_telem.pyro_armed = nsFlagSet(ns.flags, NSF_PYRO_ARMED);
     {
-        const uint8_t ps = latest_non_sensor.pyro_status;
+        const uint8_t ps = ns.pyro_status;
         ble_telem.pyro_cont[0]  = (ps & PSF_CH1_CONT)  != 0;
         ble_telem.pyro_fired[0] = (ps & PSF_CH1_FIRED) != 0;
         ble_telem.pyro_cont[1]  = (ps & PSF_CH2_CONT)  != 0;
@@ -8091,7 +8199,11 @@ void initPeripherals()
             {
                 const uint32_t bytes = logger.drainMramToSink();
                 char name[40];
-                snprintf(name, sizeof(name), "flight_mram_recovered_%lu.bin",
+                // #1155 item 19: "flight_mram_recovered_%lu.bin" was 28+ chars
+                // from id 10 and finalizeFlight's strncpy cut it mid-extension;
+                // this form fits FlightIndexEntry::filename to 8-digit ids and
+                // finalizeFlight now refuses (OutOfRange) instead of truncating.
+                snprintf(name, sizeof(name), "flight_mramrec_%lu.bin",
                          (unsigned long)fid);
                 const auto fst = flightlog.finalizeFlight(name, bytes);
                 ESP_LOGW("FLIGHTLOG", "#274: MRAM recovery -> %s (%lu B): %s",
@@ -8612,14 +8724,19 @@ static void initI2CSlave()
     if (err != ESP_OK)
     {
         ESP_LOGE("PWR", "I2C slave init failed: %s", esp_err_to_name(err));
-        i2c_slave_init_failed = true;  // don't retry — beginSlave leaks on failure
+        i2c_slave_init_failed = true;  // latched: a persistent fault would otherwise retry every loop pass (beginSlave is all-or-nothing since #1156)
         return;
     }
     ESP_LOGI("PWR", "I2C slave addr=0x%02X SDA=%d SCL=%d (deferred init OK)",
              config::I2C_ADDRESS, config::I2C_SDA_PIN, config::I2C_SCL_PIN);
 
-    // Pre-fill TX ringbuffer so the first master read has data
-    queueOutStatusResponse(true);
+    // #1155 item 5: NO pre-filled status response here. The FC's poll is
+    // pipelined read-then-query and skips the read until it has sent a query
+    // (query_pending), so a staged frame is always overwritten before any
+    // master read — but the call was not free: queueOutStatusResponse() pops
+    // the first queued command into the serving slot and counts one of its
+    // CMD_REPEAT_LIMIT deliveries, at a moment the FC cannot read. The NOTE at
+    // the end of initPeripherals() said as much.
 
     i2c_slave_initialized = true;
 }
@@ -9661,6 +9778,7 @@ static void loop_oc()
                            "abandoning and reverting to slave RX",
                      (unsigned)OtaRelayPolicy::kRelayStallTimeoutMs);
             oc_ota_last_chunk_ms          = 0;   // disarm before the revert
+            if (oc_ota_tx_queue != nullptr) xQueueReset(oc_ota_tx_queue);   // #1155 item 1
             setPendingCommand(OTA_ABORT_CMD);
             oc_ota_revert_to_rx_requested = true;
             // End the BLE-side session too. A stall with the link still UP
@@ -11224,7 +11342,15 @@ static void loop_oc()
             // Set unit name — payload is UTF-8 string, max 20 bytes
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
-            if (plen > 0 && plen <= 20)
+            if (plen > 0 && plen <= 20 &&
+                !tr_json::isPlainString((const char*)payload, plen))
+            {
+                // #1155 item 4: a quote, backslash or control byte would break the
+                // config_identity readback both apps parse strictly. Refused here so
+                // the advertising name and the LoRa beacon stay plain as well.
+                ESP_LOGW("BLE", "Unit name refused: quote, backslash or control byte in payload");
+            }
+            else if (plen > 0 && plen <= 20)
             {
                 char new_name[24];
                 memcpy(new_name, payload, plen);

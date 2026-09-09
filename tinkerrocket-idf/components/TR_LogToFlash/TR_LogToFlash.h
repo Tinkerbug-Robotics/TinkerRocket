@@ -99,8 +99,9 @@ struct TR_LogToFlashStats
     uint32_t nand_prog_ops = 0;
     uint32_t nand_erase_ops = 0;
     bool logging_active = false;
-    uint32_t nand_page = 0;
-    uint32_t nand_block = 0;
+    // (#1155 item 15: nand_page/nand_block were reported here but never
+    // updated after begin() — the OC's periodic line printed page=0 block=1
+    // for the whole flight. TR_FlightLog owns the real cursor.)
 
     // Interval-peak wall times for slow NAND/LFS operations (µs).
     // Useful for catching the cause of a multi-hundred-ms stall — each of
@@ -374,8 +375,6 @@ private:
     uint32_t staging_flushes_ = 0;
 
     // NAND/log state
-    uint32_t nand_page = 0;
-    uint32_t nand_block = 0;
     uint64_t nand_bytes_written = 0;
     uint32_t nand_prog_fail = 0;
     uint32_t nand_erase_fail = 0;
@@ -394,9 +393,6 @@ private:
     volatile bool logging_active = false;
     volatile bool start_logging_requested = false;
     volatile bool end_flight_requested = false;
-    uint32_t log_start_block = 1;
-    uint32_t log_curr_block = 1;
-    bool log_block_erased = false;
 
     // page staging. Statically MAX-sized (#671): only the first
     // geom_.page_size bytes are ever staged per chunk; the flush arithmetic

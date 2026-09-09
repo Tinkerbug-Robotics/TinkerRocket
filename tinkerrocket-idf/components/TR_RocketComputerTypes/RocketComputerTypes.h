@@ -300,6 +300,16 @@ static constexpr uint8_t LORA_CMD_CHANNEL_SET     = 15;   // uplink cmd: rendezv
 static constexpr uint8_t LORA_CMD_HOP_PAUSE       = 16;   // uplink cmd: park on lora_freq_mhz for N ms (#90)
 static constexpr uint16_t LORA_HOP_PAUSE_MAX_MS   = 60000; // server-side cap on cmd 16 duration
 static constexpr uint8_t LORA_CMD_SET_HOP_DISABLED = 17;  // uplink cmd: 1 byte payload, 0=hopping enabled (default), 1=disabled (fixed-frequency mode for diagnostics, #106)
+// #1155 item 11: ONE bound for an uplink air frame, shared by the base
+// station's queue (bs_uplink_queue::kMaxPacket, static_asserted equal in
+// base_station/main.cpp) and the rocket receive buffers. Wire format
+// [0xCA][nid][rid][next_ch][cmd][len][payload...] — 6 header bytes, so the
+// largest deliverable payload is LORA_UPLINK_MAX_PACKET - 6. The rocket read
+// buffer was 32 bytes while the queue accepted 39-byte packets, and
+// readPacket() DROPS (never truncates) a frame longer than its buffer — so the
+// BW=125 channel-set push (27 payload bytes, 33 on air) never reached the
+// rocket, and the only trace was the generic rx_len_drop counter.
+static constexpr size_t  LORA_UPLINK_MAX_PACKET   = 40;
 // LoRa transmit mute ("LoRa off").  1 byte payload: 1 = radio silent, 0 =
 // transmitting (the default).  ONE number for two transports: the app sends
 // it straight to a rocket over BLE, and the base station relays the same
