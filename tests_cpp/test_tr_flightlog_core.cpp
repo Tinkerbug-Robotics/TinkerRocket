@@ -2212,6 +2212,87 @@ TEST(TRFlightLogBrownout, RecoveryDefersWhenTheBudgetExpiresInsideASingleRun) {
     EXPECT_NE(std::strstr(fl3.index().at(0).filename, "recovered"), nullptr);
 }
 
+TEST(TRFlightLogBrownout, DeferredRecoveryLandsExactlyWhereTheSynchronousScanDoes) {
+    // #1279 follow-up: deferring must change WHEN the scan runs, never WHAT it
+    // concludes. Same orphan, both routes, identical end state.
+    auto make_orphan = [](FakeNandBackend& nand, MemoryBitmapStore& store) {
+        TR_FlightLog fl;
+        EXPECT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+        uint32_t id = 0;
+        EXPECT_EQ(fl.prepareFlight(id), Status::Ok);
+        uint8_t payload[64] = {0};
+        for (int i = 0; i < 10; ++i)
+            EXPECT_EQ(fl.writeFrame(payload, sizeof(payload)), Status::Ok);
+        // no finalizeFlight() — the range stays orphaned
+    };
+
+    FakeNandBackend nand_sync;  MemoryBitmapStore store_sync;
+    FakeNandBackend nand_def;   MemoryBitmapStore store_def;
+    make_orphan(nand_sync, store_sync);
+    make_orphan(nand_def,  store_def);
+
+    TR_FlightLog sync_fl;
+    ASSERT_EQ(sync_fl.begin(nand_sync, TR_FlightLog::Config{}, &store_sync), Status::Ok);
+    ASSERT_FALSE(sync_fl.recoveryDeferred());
+
+    TR_FlightLog def_fl;
+    TR_FlightLog::Config cfg;
+    cfg.defer_recovery = true;
+    ASSERT_EQ(def_fl.begin(nand_def, cfg, &store_def), Status::Ok);
+    // begin() returned WITHOUT scanning: that is the whole point.
+    EXPECT_TRUE(def_fl.recoveryDeferred());
+    EXPECT_EQ(def_fl.index().size(), 0u);
+    // And the object is already usable — allocation safety never depended on
+    // the scan, because an orphaned run is ALLOCATED and findContiguousFree
+    // only hands out FREE blocks.
+    EXPECT_EQ(def_fl.bitmap().get(TR_FlightLog::Config{}.flight_region_start),
+              BLOCK_ALLOCATED);
+
+    ASSERT_EQ(def_fl.runDeferredRecovery(), Status::Ok);
+    EXPECT_FALSE(def_fl.recoveryDeferred());
+
+    // Same conclusion, down to the synthesized filename and block accounting.
+    ASSERT_EQ(def_fl.index().size(), sync_fl.index().size());
+    ASSERT_EQ(def_fl.index().size(), 1u);
+    EXPECT_STREQ(def_fl.index().at(0).filename, sync_fl.index().at(0).filename);
+    EXPECT_EQ(def_fl.index().at(0).n_blocks,    sync_fl.index().at(0).n_blocks);
+    EXPECT_EQ(def_fl.index().at(0).final_bytes, sync_fl.index().at(0).final_bytes);
+}
+
+TEST(TRFlightLogBrownout, DeferredRecoveryRunsToCompletionRegardlessOfTheBudget) {
+    // The budget exists to stop the scan holding up the caller that is waiting
+    // on begin(). A deferred scan holds up nobody, so it must NOT be enforced —
+    // otherwise a run larger than the budget stays unresolved for ever, which
+    // is the #1279 failure mode this whole change exists to remove.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    {
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        uint8_t payload[64] = {0};
+        for (int i = 0; i < 10; ++i)
+            ASSERT_EQ(fl.writeFrame(payload, sizeof(payload)), Status::Ok);
+    }
+
+    static uint32_t fake_now;
+    fake_now = 0;
+    TR_FlightLog fl2;
+    TR_FlightLog::Config cfg;
+    cfg.defer_recovery     = true;
+    // A clock that blows this budget on the very first check. The synchronous
+    // path would defer the run (see RecoveryDefersWhenTheBudgetExpires...);
+    // the deferred path must ignore it and finish.
+    cfg.recovery_budget_ms = 1;
+    cfg.now_ms = []() -> uint32_t { fake_now += 100000; return fake_now; };
+    ASSERT_EQ(fl2.begin(nand, cfg, &store), Status::Ok);
+    ASSERT_EQ(fl2.runDeferredRecovery(), Status::Ok);
+
+    EXPECT_EQ(fl2.index().size(), 1u);
+    EXPECT_NE(std::strstr(fl2.index().at(0).filename, "recovered"), nullptr);
+}
+
 TEST(TRFlightLogFinalize, BadBlockMidFlightKeepsAllDataAndBlocks) {
     // #276 sibling (finalize path): a finalized flight (no brownout) that hit a
     // runtime bad block must size n_blocks from the physical span. Sizing the

@@ -8145,6 +8145,15 @@ void initPeripherals()
             fl_cfg.auto_evict_target_free_blocks = static_cast<uint16_t>(
                 static_cast<uint32_t>(fl_cfg.flight_region_end - fl_cfg.flight_region_start) *
                 kAutoEvictTargetFreePct / 100u);
+            // #1279 follow-up: do NOT scan for orphaned runs on this thread.
+            // begin() is reached from loop_oc, which is also the only thing
+            // that dispatches BLE commands — so a scan that takes minutes (a
+            // large orphaned run does) meant the rocket could not be powered
+            // on at all until it finished. The 90 s budget bounded that but
+            // could not remove it, and a run bigger than the budget was
+            // re-scanned and re-abandoned every boot, so it never resolved.
+            // The scan now runs on its own task below, to completion.
+            fl_cfg.defer_recovery = true;
             flightlog_bitmap_store.bind(&flightlog_backend,
                                         fl_cfg.metadata_blocks[2],
                                         fl_cfg.metadata_blocks[3]);
@@ -8156,6 +8165,29 @@ void initPeripherals()
                 ESP_LOGI("FLIGHTLOG", "up: %zu flight(s) in index, %zu bad blocks",
                          flightlog.index().size(),
                          flightlog.bitmap().countInState(tr_flightlog::BLOCK_BAD));
+
+                // One-shot, lowest useful priority, on the core that is not
+                // running the flight-critical loop. It takes the flight-log
+                // lock only in short bursts (never across the page reads), so
+                // writeFrame and the download path are not stalled behind it,
+                // and it exits as soon as the scan is done. Allocation is safe
+                // meanwhile without any gate: an orphaned run is ALLOCATED and
+                // findContiguousFree only hands out FREE blocks.
+                if (flightlog.recoveryDeferred())
+                {
+                    xTaskCreatePinnedToCore(
+                        [](void*) {
+                            ESP_LOGI("FLIGHTLOG", "deferred recovery: starting "
+                                     "(the board is already usable)");
+                            const auto rst = flightlog.runDeferredRecovery();
+                            if (rst != tr_flightlog::Status::Ok) {
+                                ESP_LOGE("FLIGHTLOG", "deferred recovery failed: %d",
+                                         (int)rst);
+                            }
+                            vTaskDelete(nullptr);
+                        },
+                        "fl_recovery", 4096, nullptr, 1, nullptr, 0);
+                }
             }
             else
             {
