@@ -726,6 +726,20 @@ target_include_directories(test_baro_gate_policy PRIVATE
 target_link_libraries(test_baro_gate_policy GTest::gtest_main)
 gtest_discover_tests(test_baro_gate_policy)
 
+# ---------- test_piezo_wave_policy ----------
+# #732 item 3b: piezoStop() on the main task could interleave with
+# piezoToggleCb() on the esp_timer task (a different core on the P4) and leave
+# PIEZO_PIN latched HIGH with the timer already cancelled — DC through the
+# ~16 ohm LS1 coil (~200 mA / 0.7 W, hardware review I51) until the next beep
+# or a reboot. piezo_wave_policy.h is pure, so this just adds the FC main dir.
+add_executable(test_piezo_wave_policy test_piezo_wave_policy.cpp)
+target_include_directories(test_piezo_wave_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+)
+target_link_libraries(test_piezo_wave_policy GTest::gtest_main)
+gtest_discover_tests(test_piezo_wave_policy)
+
 # ---------- test_gnss_framing ----------
 # GNSS bring-up baud detection used to accept ANY byte, so a 9600 stream sampled
 # at 38400 read as "alive" and ran a ~3 s recovery branch per wrong baud (bench
