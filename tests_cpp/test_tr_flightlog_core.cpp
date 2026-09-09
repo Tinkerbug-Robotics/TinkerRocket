@@ -2152,6 +2152,58 @@ TEST(TRFlightLogBrownout, RecoveryDefersWhenTimeBudgetExceeded) {
     EXPECT_NE(std::strstr(fl3.index().at(0).filename, "recovered"), nullptr);
 }
 
+TEST(TRFlightLogBrownout, RecoveryDefersWhenTheBudgetExpiresInsideASingleRun) {
+    // #1279: the budget used to be tested ONLY at run boundaries, so it could
+    // not interrupt a run once started. One long orphaned run therefore ran to
+    // completion however long it took — and on the OC that scan sits in front
+    // of loop_oc's BLE command dispatch, so the board advertised, accepted a
+    // connection, queued the app's power-on and never acted on it. Bench
+    // 2026-09-09: still scanning at 300 s against the 90 s budget.
+    //
+    // The clock here passes the boundary check and then expires a block or two
+    // into the run, which is the case the old code had no way to notice.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+
+    {  // Crash a flight -> one orphaned ALLOCATED run, several blocks long.
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        std::vector<uint8_t> payload(2048, 0xA5);
+        for (int i = 0; i < 400; ++i)
+            ASSERT_EQ(fl.writeFrame(payload.data(), payload.size()), Status::Ok);
+        // no finalizeFlight() — the range stays orphaned
+    }
+
+    static uint32_t fake_now;
+    fake_now = 0;
+    {
+        TR_FlightLog fl2;
+        TR_FlightLog::Config cfg;
+        // step 1000: t0=1000, the boundary check reads 2000 (elapsed 1000, NOT
+        // over 1500 — the run is entered), and the first in-run check reads
+        // 3000 (elapsed 2000, over). So the budget can only bite mid-run.
+        cfg.recovery_budget_ms = 1500;
+        cfg.now_ms = []() -> uint32_t { fake_now += 1000; return fake_now; };
+        ASSERT_EQ(fl2.begin(nand, cfg, &store), Status::Ok);
+
+        // No entry may be synthesized from a partial scan — that is the whole
+        // reason the old code refused to stop mid-run.
+        EXPECT_EQ(fl2.index().size(), 0u);
+        // And the run must be left exactly as found, so the next boot sees it.
+        EXPECT_EQ(fl2.bitmap().get(TR_FlightLog::Config{}.flight_region_start),
+                  BLOCK_ALLOCATED);
+    }
+
+    // With time to finish, the same range still recovers normally — the defer
+    // is a pause, not a loss.
+    TR_FlightLog fl3;
+    ASSERT_EQ(fl3.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    ASSERT_EQ(fl3.index().size(), 1u);
+    EXPECT_NE(std::strstr(fl3.index().at(0).filename, "recovered"), nullptr);
+}
+
 TEST(TRFlightLogFinalize, BadBlockMidFlightKeepsAllDataAndBlocks) {
     // #276 sibling (finalize path): a finalized flight (no brownout) that hit a
     // runtime bad block must size n_blocks from the physical span. Sizing the

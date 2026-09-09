@@ -140,6 +140,10 @@ Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
         seedBitmapFromBackend();
     }
 
+    FL_LOGI("begin: bitmap %s (%lu blocks, %lu B)",
+            restored ? "restored" : "seeded fresh",
+            (unsigned long)g_blocks_, (unsigned long)ser_len);
+
     Status idx_st = index_.load(*nand_, cfg_.metadata_blocks[0], cfg_.metadata_blocks[1]);
     if (idx_st != Status::Ok && idx_st != Status::CrcMismatch) return idx_st;
     // CrcMismatch on a fresh chip (or both copies corrupt) is recoverable;
@@ -170,6 +174,13 @@ Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
     if (!restored || promoted > 0) persistBitmap();
 
     initialized_ = true;
+
+    // #1279: one line per phase. A hang anywhere in this function used to be
+    // completely silent — the last thing on the console was the caller's
+    // banner — which is why localising one needed four boots and a source
+    // read. Each of these is once per boot.
+    FL_LOGI("begin: index loaded (%zu flight(s)), %zu block(s) promoted; "
+            "recovery scan next", index_.size(), promoted);
 
     // Recover any flights that were in progress when the last boot was cut
     // short. Safe to run every boot — a no-op when nothing is orphaned.
@@ -218,6 +229,11 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
                                                           cfg_.flight_region_start);
     uint32_t blocks_scanned = 0;
 
+    FL_LOGI("recovery: scanning blocks %lu..%lu (budget %lu ms)",
+            (unsigned long)cfg_.flight_region_start,
+            (unsigned long)cfg_.flight_region_end,
+            (unsigned long)cfg_.recovery_budget_ms);
+
     uint32_t b = cfg_.flight_region_start;
     while (b < cfg_.flight_region_end) {
         // Budget is checked only at run boundaries: each run is scanned to
@@ -260,7 +276,24 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         uint32_t valid_pages         = 0;   // #276: count of magic+CRC pages
         bool     saw_any             = false;
 
+        bool over_budget = false;
         for (uint32_t i = 0; i < run_len; ++i) {
+            // #1279: the budget must bite INSIDE the run as well. Checked only
+            // at run boundaries it cannot interrupt a single long one, and a
+            // boot that meets one never reaches loop_oc's BLE command dispatch
+            // — the board then advertises, accepts a connection, and queues the
+            // app's power-on for ever while looking perfectly alive. Observed
+            // on the bench 2026-09-09: still scanning at 300 s against a 90 s
+            // budget, with the FC rail never asserted.
+            if (cfg_.recovery_budget_ms != 0 &&
+                now() - t0 > cfg_.recovery_budget_ms) {
+                FL_LOGW("recovery: %lu ms budget hit %lu block(s) into the run at "
+                        "%lu — abandoning it un-indexed for the next boot",
+                        (unsigned long)cfg_.recovery_budget_ms,
+                        (unsigned long)i, (unsigned long)run_start);
+                over_budget = true;
+                break;
+            }
             if (++blocks_scanned % 256 == 0) {
                 FL_LOGI("recovery: scanned %lu/%lu blocks (%lu ms)",
                         (unsigned long)blocks_scanned, (unsigned long)region_blocks,
@@ -316,6 +349,13 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
             // absorbed without starving IDLE1 and tripping task_wdt.
             yield_to_scheduler();
         }
+
+        // A partially scanned run tells us nothing: `saw_any` false means "not
+        // found YET", not "not there", so neither branch below may run. Leave
+        // the blocks ALLOCATED and un-indexed — precisely the state this scan
+        // looks for — and the next boot picks the run up again. Same contract
+        // the boundary check already had, just honoured mid-run too.
+        if (over_budget) break;
 
         if (!saw_any) {
             // No recoverable data in this range — release it.
