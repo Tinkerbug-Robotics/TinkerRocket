@@ -111,7 +111,7 @@ private struct FirmwareUpdateContent: View {
                     }
                     .pickerStyle(.segmented)
                     .disabled(isInProgress)
-                    .onChange(of: targetIsFC) { _, _ in revalidateImage() }
+                    .onChange(of: targetIsFC) { _ in revalidateImage() }
                 }
             }
 
