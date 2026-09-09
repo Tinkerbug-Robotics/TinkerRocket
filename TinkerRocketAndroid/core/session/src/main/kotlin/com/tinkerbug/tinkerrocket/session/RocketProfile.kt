@@ -27,6 +27,20 @@ import java.util.UUID
  * epoch dates as Double seconds since 2001-01-01, uppercase UUID strings,
  * nil fields omitted) so profiles could round-trip across platforms.
  */
+/**
+ * #1054: the wire widths the settings integers are encoded at. The screen used
+ * to show 40000 for a Servo Hz field whose cmd-12 frame carried -25536, because
+ * the encoder kept the low two bytes; the controls, the decoder and the encoder
+ * now agree on these bounds. iOS's fields are natively Int16/UInt16, so these
+ * ARE its bounds. (Top level rather than in RocketProfile's companion: a
+ * classifier declared inside a companion is only reachable as
+ * `RocketProfile.Companion.WireBounds`.)
+ */
+public object WireBounds {
+    public val I16: IntRange = Short.MIN_VALUE.toInt()..Short.MAX_VALUE.toInt()
+    public val U16: IntRange = 0..65535
+}
+
 public data class RocketProfile(
     // Identity / meta
     val id: UUID = UUID.randomUUID(),
@@ -66,7 +80,12 @@ public data class RocketProfile(
     val pnGuidanceLaw: Int = 0,            // config::GUIDANCE_LAW_DEFAULT
     val cameraType: Int = 2,               // config::CAMERA_TYPE (RunCam)
     val imuOrientSetting: Int = 0,         // manual identity; 0xFF = auto
-    val imuRateHz: Int = 1920,
+    // #1046: RocketComputerTypes.h IMU_RATE_DYNAMIC — the 3840 Hz-to-deployment
+    // then 960 Hz schedule the firmware and iOS both default to. This said a
+    // fixed 1920 Hz, so a fresh Android profile pushed a rate no other side of
+    // the six-way lockstep would have chosen, and the decode fallback below
+    // turned a missing/off-whitelist stored value into 1920 as well.
+    val imuRateHz: Int = 0,
 
     // Servo (#561: bias defaults 0 — a generic default must not carry trim)
     val servoBias1: Int = 0,
@@ -318,8 +337,14 @@ public object RocketProfileCodec {
         fun uuid(key: String): UUID? =
             o.str(key)?.let { runCatching { UUID.fromString(it) }.getOrNull() }
 
-        val servoMinUs = o.int("servoMinUs") ?: d.servoMinUs
-        val servoMaxUs = o.int("servoMaxUs") ?: d.servoMaxUs
+        // #1054: these five reach the wire as i16/u16. The controls clamp on
+        // entry now, but a profile written before that (or hand-edited /
+        // imported JSON) can still carry a value the encoder would have to
+        // narrow — clamp on the way in so the profile can never hold a value
+        // the rocket cannot be told, which is what Commands.u16/i16 now
+        // require. Same widths iOS's Int16/UInt16(clamping:) uses.
+        val servoMinUs = (o.int("servoMinUs") ?: d.servoMinUs).coerceIn(WireBounds.I16)
+        val servoMaxUs = (o.int("servoMaxUs") ?: d.servoMaxUs).coerceIn(WireBounds.I16)
         val finSlots = o.intList("finServoAtSlot") ?: d.finServoAtSlot
         val finRev = o.boolList("finReverse") ?: d.finReverse
         val finRollRev = o.boolList("finRollReverse") ?: d.finRollReverse
@@ -335,7 +360,7 @@ public object RocketProfileCodec {
             servoControlEnabled = o.bool("servoControlEnabled") ?: d.servoControlEnabled,
             gainScheduleEnabled = o.bool("gainScheduleEnabled") ?: d.gainScheduleEnabled,
             useAngleControl = o.bool("useAngleControl") ?: d.useAngleControl,
-            rollDelayMs = o.int("rollDelayMs") ?: d.rollDelayMs,
+            rollDelayMs = (o.int("rollDelayMs") ?: d.rollDelayMs).coerceIn(WireBounds.U16),
             rollMinSpeedMps = o.float("rollMinSpeedMps") ?: d.rollMinSpeedMps,
             rateCapDps = o.float("rateCapDps") ?: d.rateCapDps,
             kpAngle = o.float("kpAngle") ?: d.kpAngle,
@@ -345,7 +370,7 @@ public object RocketProfileCodec {
             pnAccelToFin = o.float("pnAccelToFin") ?: d.pnAccelToFin,
             pnMaxFinDeg = o.float("pnMaxFinDeg") ?: d.pnMaxFinDeg,
             pnMinSpeed = o.float("pnMinSpeed") ?: d.pnMinSpeed,
-            pnCoastDelayMs = o.int("pnCoastDelayMs") ?: d.pnCoastDelayMs,
+            pnCoastDelayMs = (o.int("pnCoastDelayMs") ?: d.pnCoastDelayMs).coerceIn(WireBounds.U16),
             pnTargetAltM = o.float("pnTargetAltM") ?: d.pnTargetAltM,
             pnTargetMode = o.int("pnTargetMode") ?: d.pnTargetMode,
             pnTargetE = o.float("pnTargetE") ?: d.pnTargetE,
@@ -368,7 +393,7 @@ public object RocketProfileCodec {
             servoBias2 = o.int("servoBias2") ?: d.servoBias2,
             servoBias3 = o.int("servoBias3") ?: d.servoBias3,
             servoBias4 = o.int("servoBias4") ?: d.servoBias4,
-            servoHz = o.int("servoHz") ?: d.servoHz,
+            servoHz = (o.int("servoHz") ?: d.servoHz).coerceIn(WireBounds.I16),
             servoMinUs = servoMinUs,
             servoMaxUs = servoMaxUs,
             // #449: legacy finMinDeg/finMaxDeg keys deliberately NOT read.

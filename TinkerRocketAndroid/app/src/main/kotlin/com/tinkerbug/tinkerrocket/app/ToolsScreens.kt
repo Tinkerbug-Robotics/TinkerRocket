@@ -405,7 +405,11 @@ fun FreqScanScreen(session: DeviceSession, onBack: () -> Unit) {
             onClick = {
                 session.startFrequencyScan(
                     startMHz = start.toFloat(), stopMHz = stop.toFloat(),
-                    stepKHz = step.toInt(), dwellMs = dwell.toInt(),
+                    // #1054: both are u16 on the wire; clamp here so the frame
+                    // carries what the field shows (the firmware clamps dwell
+                    // again on arrival, but 70000 ms must not become 4464).
+                    stepKHz = step.toInt().coerceIn(0, 65535),
+                    dwellMs = dwell.toInt().coerceIn(0, 65535),
                 )
             },
             modifier = Modifier.fillMaxWidth(),
