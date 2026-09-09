@@ -89,6 +89,33 @@ public data class FlightSummary(
     /** Pretty-printed sidecar JSON — same keys/values as iOS `writeSummary`. */
     public fun toJson(): String =
         prettyJson.encodeToString(JsonObject.serializer(), toJsonObject())
+
+    public companion object {
+        /**
+         * #1091 item 4: read the sidecar back. Android wrote this file on every
+         * download and never read it, so the Saved Flights row showed size and
+         * date where iOS shows Max Altitude / Max Speed / Burnout / Apogee.
+         *
+         * Headline numbers only. The nested `settings` block has grown fields
+         * over time and is deliberately NOT decoded here — a stale nested
+         * schema blanked every iOS row for two months (#1077) — so a summary
+         * with any four of these keys always renders.
+         */
+        public fun fromJson(text: String): FlightSummary? = try {
+            val obj = Json.parseToJsonElement(text) as? JsonObject ?: return null
+            fun d(key: String): Double? =
+                (obj[key] as? JsonPrimitive)?.content?.toDoubleOrNull()?.takeIf { it.isFinite() }
+            FlightSummary(
+                maxAltitudeM = d("max_altitude_m"),
+                maxSpeedMps = d("max_speed_mps"),
+                burnoutTimeS = d("burnout_time_s"),
+                apogeeTimeS = d("apogee_time_s"),
+                settings = null,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
 }
 
 // MARK: - Flight Settings (#165)

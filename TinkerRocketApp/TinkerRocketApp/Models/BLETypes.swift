@@ -28,6 +28,13 @@ struct FileInfo: Identifiable, Codable, Equatable {
 
     private static let utcDateFormatter: DateFormatter = {
         let f = DateFormatter()
+        // #1091 item 2: a fixed-format parse must not follow the user's
+        // locale or calendar. Without en_US_POSIX the 12/24-hour override
+        // makes "HH" return nil and both lists fall back to raw filenames;
+        // without .gregorian a Buddhist or Japanese region calendar parses
+        // a Date off by the era. Android pins both (Locale.ROOT, STRICT).
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
         f.dateFormat = "yyyyMMddHHmmss"
         f.timeZone = TimeZone(identifier: "UTC")
         return f
@@ -38,6 +45,10 @@ struct FileInfo: Identifiable, Codable, Equatable {
         f.dateStyle = .short
         f.timeStyle = .short
         f.timeZone = .current
+        // #1091 item 2: display stays localized, but on the Gregorian
+        // calendar the parsed Date is on — the locale's own calendar is
+        // for rendering, not for round-tripping a filename timestamp.
+        f.calendar = Calendar(identifier: .gregorian)
         return f
     }()
 
