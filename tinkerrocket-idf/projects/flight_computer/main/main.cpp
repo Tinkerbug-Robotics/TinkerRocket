@@ -499,13 +499,13 @@ static bool camera_gate_on = false;
 // ==========================================================================
 // Deferred camera-stop sequence (see cameraStop / serviceCameraStop).
 //   Idle → DelayBeforeStop (30 s post-LANDED)
-//     → RunCam: RunCamToggleSent (500 ms after toggle, then power off) → Idle
+//     → RunCam: RunCamStopSent (STOP_RECORDING + resends, finalize, power off) → Idle
 //     → GoPro:  GoProStopPress (shutter held) → GoProFinalize (file close,
 //               then gate off + park) → Idle
 enum class CameraStopPhase : uint8_t {
     Idle,
     DelayBeforeStop,
-    RunCamToggleSent,
+    RunCamStopSent,   // #1153: STOP_RECORDING sent, resending then finalizing
     GoProStopPress,   // stop press asserted, waiting out GOPRO_STOP_PULSE_MS
     GoProFinalize,    // press released, letting the camera close the file
 };
@@ -558,6 +558,8 @@ static uint32_t camera_start_due_ms = 0;
 static uint32_t camera_start_power_ms = 0;       // when RUNCAM_PWR_PIN went high
 static uint32_t camera_probe_deadline_ms = 0;    // stop polling, record blind
 static uint8_t  camera_record_resends_left = 0;  // remaining START_RECORDING resends
+static uint8_t  camera_stop_resends_left   = 0;  // #1153: remaining STOP_RECORDING resends
+static bool     camera_stop_finalizing     = false;  // #1153: in the finalize wait
 static uint8_t  camera_power_retries_left = 0;   // remaining power-cycle attempts
 static uint8_t runtime_camera_type = config::CAMERA_TYPE;  // can be overridden via BLE
 static bool servo_enabled = false;
@@ -2929,6 +2931,9 @@ static bool runcam_uart_ready = false;
 // power-button toggle: on the bench unit the toggle only blips the LED without
 // holding record, whereas START_RECORDING holds it (#234).
 static constexpr uint16_t RUNCAM_FEAT_START_RECORDING = 0x0040;
+// #1153 item 1: the matching stop capability, so the log can say whether the
+// unit advertises it rather than leaving a silent stop unexplained.
+static constexpr uint16_t RUNCAM_FEAT_STOP_RECORDING  = 0x0080;
 static uint16_t runcam_features = 0;
 
 static void runcamUartPark();    // defined below with runcamUartAttach
@@ -2967,7 +2972,14 @@ static void initRunCam()
              (unsigned long)config::RUNCAM_BAUD);
 }
 
-static void sendRunCamToggle()
+// #1153 item 1: RETIRED as a control path.  This is the power-button toggle;
+// the start path abandoned it for START_RECORDING (#234, "only blips the LED
+// without holding record") and the stop path now uses STOP_RECORDING, so
+// nothing should reach for a command whose effect depends on what state the
+// camera was already in.  Kept compiled (and referenced by the CRC note below)
+// rather than deleted, because RUNCAM_PWR_CMD is the worked example that
+// documents runCamCrc8's expected output.
+[[maybe_unused]] static void sendRunCamToggle()
 {
     if (!config::USE_RUNCAM || !runcam_uart_ready)
         return;
@@ -3045,6 +3057,28 @@ static void sendRunCamStartRecording()
     if (!config::USE_RUNCAM || !runcam_uart_ready)
         return;
     uint8_t rec[4] = {0xCC, 0x01, 0x03, 0x00};
+    rec[3] = runCamCrc8(rec, 3);
+    uart_write_bytes(RUNCAM_UART_PORT, rec, sizeof(rec));
+}
+
+// STOP_RECORDING (CAMERA_CONTROL 0x04) — #1153 item 1.
+//
+// The stop path used to send RUNCAM_PWR_CMD, the power-button toggle, which is
+// the very command the START path documents itself as avoiding: "on the bench
+// unit the toggle only blips the LED without holding record" (#234).  A
+// command that does not reliably HOLD record is not one that reliably ENDS it
+// either, and the rail was cut 500 ms later regardless — so a unit that
+// ignored the toggle had its power pulled mid-write, and one that honoured it
+// got 500 ms to close a file the GoPro is given ten seconds for.
+//
+// 0x04 is also idempotent, which the toggle is not: re-sending a toggle that
+// DID land turns the camera back on.  That is why this can be resent and the
+// old command could not.
+static void sendRunCamStopRecording()
+{
+    if (!config::USE_RUNCAM || !runcam_uart_ready)
+        return;
+    uint8_t rec[4] = {0xCC, 0x01, 0x04, 0x00};
     rec[3] = runCamCrc8(rec, 3);
     uart_write_bytes(RUNCAM_UART_PORT, rec, sizeof(rec));
 }
@@ -3195,10 +3229,20 @@ static inline void serviceCameraStop(uint32_t now_ms)
             // A stop can land mid-retry (pins parked); reattach the UART
             // unconditionally so the toggle actually transmits.
             runcamUartAttach();
-            sendRunCamToggle();
-            ESP_LOGI(TAG, "RunCam toggle sent — power-off in 500 ms");
-            camera_stop_phase = CameraStopPhase::RunCamToggleSent;
-            camera_stop_due_ms = now_ms + 500U;  // let the stop command process
+            // #1153 item 1: STOP_RECORDING, not the power-button toggle the
+            // start path abandoned as blip-only (#234).  Resent like the start
+            // is — 0x04 is idempotent, so a repeat is harmless, whereas a
+            // repeated toggle would switch the camera back ON.
+            sendRunCamStopRecording();
+            camera_stop_resends_left = config::RUNCAM_STOP_RESENDS;
+            ESP_LOGI(TAG, "RunCam STOP_RECORDING sent%s — %u resend(s), then "
+                          "power-off in %lu ms (file finalize)",
+                     (runcam_features & RUNCAM_FEAT_STOP_RECORDING)
+                         ? "" : " (unit did not advertise 0x0080)",
+                     (unsigned)config::RUNCAM_STOP_RESENDS,
+                     (unsigned long)config::RUNCAM_FINALIZE_MS);
+            camera_stop_phase = CameraStopPhase::RunCamStopSent;
+            camera_stop_due_ms = now_ms + config::RUNCAM_RECORD_RESEND_MS;
         }
         else
         {
@@ -3210,6 +3254,8 @@ static inline void serviceCameraStop(uint32_t now_ms)
             runcamUartPark();
             cameraGateSet(false);
             camera_recording = false;
+            camera_stop_resends_left = 0;   // #1153
+            camera_stop_finalizing   = false;  // #1153
             camera_stop_phase = CameraStopPhase::Idle;
         }
     }
@@ -3230,14 +3276,38 @@ static inline void serviceCameraStop(uint32_t now_ms)
         cameraGateSet(false);
         ESP_LOGI(TAG, "Camera STOP (GoPro) — powered off, shutter parked");
         camera_recording = false;
+        camera_stop_resends_left = 0;   // #1153
+        camera_stop_finalizing   = false;  // #1153
         camera_stop_phase = CameraStopPhase::Idle;
     }
-    else  // RunCamToggleSent
+    else  // RunCamStopSent
     {
+        // #1153 item 1: drain the resends first, then wait out the finalize
+        // window before the rail goes.  The old path cut power 500 ms after a
+        // single toggle; the GoPro arm above has always been given
+        // GOPRO_FINALIZE_MS to close its file, and cameraStop() is called with
+        // CAMERA_STOP_DELAY_MS (30 s) at LANDED, so these seconds are inside a
+        // wait the operator already serves.
+        if (camera_stop_resends_left > 0)
+        {
+            camera_stop_resends_left--;
+            sendRunCamStopRecording();
+            camera_stop_due_ms = now_ms + config::RUNCAM_RECORD_RESEND_MS;
+            return;
+        }
+        if (!camera_stop_finalizing)
+        {
+            camera_stop_finalizing = true;
+            camera_stop_due_ms = now_ms + config::RUNCAM_FINALIZE_MS;
+            return;
+        }
+        camera_stop_finalizing = false;
         runcamUartPark();  // park first: unpowered camera, nothing may feed it
         cameraGateSet(false);
         ESP_LOGI(TAG, "Camera STOP (RunCam) — powered off, pins parked");
         camera_recording = false;
+        camera_stop_resends_left = 0;   // #1153
+        camera_stop_finalizing   = false;  // #1153
         camera_stop_phase = CameraStopPhase::Idle;
     }
 }
@@ -3255,6 +3325,10 @@ static void cameraAbortAndPowerOff(const char* why)
                             camera_recording || camera_gate_on;
     camera_start_phase = CameraStartPhase::Idle;
     camera_stop_phase  = CameraStopPhase::Idle;
+    // #1153: an abort supersedes a stop in progress — leaving these set would
+    // let the next stop skip its resends or its finalize wait.
+    camera_stop_resends_left = 0;
+    camera_stop_finalizing   = false;
     goproShutterPark();
     runcamUartPark();
     cameraGateSet(false);
