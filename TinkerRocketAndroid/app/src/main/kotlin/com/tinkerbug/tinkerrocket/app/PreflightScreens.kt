@@ -448,6 +448,15 @@ fun PreflightRunScreen(
                     modifier = Modifier.fillMaxWidth(),
                     color = if (progress.isComplete) tr.statusOk else tr.statusWarn,
                 )
+                // #878: one quiet line, never a block — see
+                // PreflightChecklist.deploymentRedundancyAdvisory.
+                PreflightChecklist.deploymentRedundancyAdvisory(profile)?.let { advisory ->
+                    Text(
+                        advisory,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = tr.statusWarn,
+                    )
+                }
             }
         }
 

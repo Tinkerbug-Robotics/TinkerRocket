@@ -313,6 +313,41 @@ public object PreflightChecklist {
         if (p.pyro3Enabled) add(3)
         if (p.pyro4Enabled) add(4)
     }
+
+    /** `PyroTriggerMode` — 0 = time after apogee, 1 = altitude on descent. */
+    private const val TRIGGER_ALTITUDE_ON_DESCENT = 1
+
+    private fun triggerModeOf(p: RocketProfile, channel: Int): Int = when (channel) {
+        1 -> p.pyro1TriggerMode
+        2 -> p.pyro2TriggerMode
+        3 -> p.pyro3TriggerMode
+        else -> p.pyro4TriggerMode
+    }
+
+    /**
+     * #878: one line when every enabled deployment channel fires on ALTITUDE.
+     *
+     * After #877 the main-deploy trigger declines to fire when BOTH altitude
+     * sources are gone (a dead barometer AND unusable GNSS) — deliberately: a
+     * main released at an unknown altitude is a range-safety problem. That
+     * leaves a residual no-deploy, and a rocket that never releases its main
+     * descends on drogue at 20-30 m/s. Firmware cannot close it — with no
+     * altitude it has nothing honest to fire on — so the mitigation is to say
+     * so while the operator can still add a channel.
+     *
+     * A TIME_AFTER_APOGEE channel alongside it clears the advisory: that path
+     * never touches the barometer, and apogee detection is a baro-independent
+     * quorum (#257). Advisory only — never a block (the quiet-advisory rule).
+     * Null when no channel is enabled: "no deployment configured" is a
+     * different statement, and the pyro checklist items already say it.
+     */
+    public fun deploymentRedundancyAdvisory(p: RocketProfile?): String? {
+        val profile = p ?: return null
+        val channels = enabledPyroChannels(profile)
+        if (channels.isEmpty()) return null
+        if (channels.any { triggerModeOf(profile, it) != TRIGGER_ALTITUDE_ON_DESCENT }) return null
+        return "Every enabled deployment channel fires on altitude. If the barometer and GNSS are both lost the rocket has no way to release its main — add a time-after-apogee channel so one failure is not the whole recovery."
+    }
 }
 
 /**

@@ -153,6 +153,29 @@ fun FinLayoutEditor(
             modifier = Modifier.fillMaxWidth(),
         )
 
+        // #1069: the WHOLE-AIRFRAME roll reversal (iOS FinLayoutView's
+        // "Reverse roll direction"). Android had only the per-fin toggle,
+        // labelled "Reverse roll" — which reads exactly like this control. An
+        // operator whose rocket rolled the wrong way flipped it on the
+        // selected fin and believed it fixed: roll still commanded the same
+        // direction, now at about half authority with one servo fighting the
+        // other three. Reads ON only when all four bits are set (a mixed
+        // state — one fin overridden below — reads OFF); switching it on
+        // normalises all four. Same wire field as the per-fin toggle,
+        // FinConfigData.roll_reverse_mask.
+        ToggleRowSmall(
+            "Reverse roll direction",
+            rollReverse.size == 4 && rollReverse.all { it },
+        ) { v -> onSetRollReverse(List(4) { v }) }
+        Text(
+            "Use this when the rocket rolls the wrong way — it flips roll on all " +
+                "four fins at once. The per-fin Reverse roll below is only for a " +
+                "single mis-linked servo: flipping one fin makes it fight the other " +
+                "three (weaker roll, same direction) rather than reversing roll.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
         // Selected-fin editor
         Row(
             Modifier.fillMaxWidth(),
@@ -196,7 +219,7 @@ fun FinLayoutEditor(
                 onSetReverse(reverse.toMutableList().also { it[selectedServo - 1] = v })
             }
         }
-        ToggleRowSmall("Reverse roll", rollReverse.getOrElse(selectedServo - 1) { false }) { v ->
+        ToggleRowSmall("Reverse roll (this fin only)", rollReverse.getOrElse(selectedServo - 1) { false }) { v ->
             if (selectedServo - 1 in rollReverse.indices) {
                 onSetRollReverse(rollReverse.toMutableList().also { it[selectedServo - 1] = v })
             }

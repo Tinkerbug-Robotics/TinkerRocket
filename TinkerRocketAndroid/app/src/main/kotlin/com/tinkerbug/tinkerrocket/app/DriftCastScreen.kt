@@ -63,6 +63,7 @@ import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
+import java.util.Locale
 
 /**
  * Reverse Drift Cast planner (iOS DriftCastView, 2D scope — the 3D
@@ -92,7 +93,11 @@ fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
     }
     val phoneFix by container.phoneLocation.location.collectAsState()
 
-    fun pref(key: String, def: String) = prefs.getString(key, def) ?: def
+    // #1055: every field here is numeric. Installs on a decimal-comma locale
+    // persisted "55,67890" (the default-locale .format), which the parsers
+    // below cannot read back — normalise on read so those users recover
+    // without retyping.
+    fun pref(key: String, def: String) = (prefs.getString(key, def) ?: def).replace(',', '.')
     var launchLat by remember { mutableStateOf(pref("launchLat", "")) }
     var launchLon by remember { mutableStateOf(pref("launchLon", "")) }
     var landingLat by remember { mutableStateOf(pref("landingLat", "")) }
@@ -164,8 +169,8 @@ fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
         val f = phoneFix ?: return@LaunchedEffect
         if (didAutoSeed) return@LaunchedEffect
         didAutoSeed = true
-        if (launchLat.isBlank()) { launchLat = "%.5f".format(f.lat); launchLon = "%.5f".format(f.lon) }
-        if (landingLat.isBlank()) { landingLat = "%.5f".format(f.lat); landingLon = "%.5f".format(f.lon) }
+        if (launchLat.isBlank()) { launchLat = fmtCoord(f.lat); launchLon = fmtCoord(f.lon) }
+        if (landingLat.isBlank()) { landingLat = fmtCoord(f.lat); landingLon = fmtCoord(f.lon) }
         persist()
     }
 
@@ -245,11 +250,11 @@ fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
         val map = mapRef ?: return@LaunchedEffect
         map.addOnMapClickListener { latLng ->
             if (tapModeLaunch) {
-                launchLat = "%.5f".format(latLng.latitude)
-                launchLon = "%.5f".format(latLng.longitude)
+                launchLat = fmtCoord(latLng.latitude)
+                launchLon = fmtCoord(latLng.longitude)
             } else {
-                landingLat = "%.5f".format(latLng.latitude)
-                landingLon = "%.5f".format(latLng.longitude)
+                landingLat = fmtCoord(latLng.latitude)
+                landingLon = fmtCoord(latLng.longitude)
             }
             persist()
             refreshOverlays()
@@ -277,9 +282,9 @@ fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
             TextButton(onClick = {
                 phoneFix?.let { f ->
                     if (tapModeLaunch) {
-                        launchLat = "%.5f".format(f.lat); launchLon = "%.5f".format(f.lon)
+                        launchLat = fmtCoord(f.lat); launchLon = fmtCoord(f.lon)
                     } else {
-                        landingLat = "%.5f".format(f.lat); landingLon = "%.5f".format(f.lon)
+                        landingLat = fmtCoord(f.lat); landingLon = fmtCoord(f.lon)
                     }
                     persist()
                 }
@@ -376,11 +381,11 @@ fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
                         r.infeasibleReason?.let {
                             Text(it, style = MaterialTheme.typography.bodySmall, color = tr.statusBad)
                         }
-                        MetricRow("Steering", "%.1f° @ %.0f°".format(r.steeringAngleDeg, r.steeringBearingDeg))
-                        MetricRow("Guidance point", "%.5f, %.5f".format(r.guidanceLat, r.guidanceLon))
-                        MetricRow("Verification error", "%.0f m".format(r.landingErrorM))
-                        MetricRow("Total drift", "%.0f m".format(r.totalDriftM))
-                        MetricRow("Descent time", "%.0f s".format(r.totalDescentTimeS))
+                        MetricRow("Steering", rootFmt("%.1f° @ %.0f°", r.steeringAngleDeg, r.steeringBearingDeg))
+                        MetricRow("Guidance point", rootFmt("%.6f, %.6f", r.guidanceLat, r.guidanceLon))
+                        MetricRow("Verification error", rootFmt("%.0f m", r.landingErrorM))
+                        MetricRow("Total drift", rootFmt("%.0f m", r.totalDriftM))
+                        MetricRow("Descent time", rootFmt("%.0f s", r.totalDescentTimeS))
                         MetricRow("Wind layers", "${r.windProfile.layers.size}")
                     }
                 }
@@ -431,6 +436,19 @@ private fun MetricRow(label: String, value: String) {
 
 private fun fmtD(d: Double): String =
     if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
+
+/**
+ * #1055: a coordinate the screen can read back on EVERY phone. The Kotlin
+ * `"%.5f".format(x)` extension formats in the JVM default locale, so on a
+ * decimal-comma locale (da, de, fr, es, most of Europe and South America) it
+ * wrote "55,67890" and `toDoubleOrNull()` returned null — Drift Cast was
+ * unusable there. iOS uses `String(format: "%.6f")`, which is
+ * locale-independent; match its width too (%.5f was ~a metre coarser).
+ */
+private fun fmtCoord(d: Double): String = String.format(Locale.ROOT, "%.6f", d)
+
+/** Display-only numbers rendered locale-independently (the Metric rows). */
+private fun rootFmt(fmt: String, vararg args: Any?): String = String.format(Locale.ROOT, fmt, *args)
 
 private const val DC_LAUNCH_SRC = "dc-launch-src"
 private const val DC_LANDING_SRC = "dc-landing-src"
