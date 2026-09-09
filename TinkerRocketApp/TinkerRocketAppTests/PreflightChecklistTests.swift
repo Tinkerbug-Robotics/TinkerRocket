@@ -317,7 +317,6 @@ final class PreflightChecklistTests: XCTestCase {
         XCTAssertEqual(decoded, master)
     }
 
-<<<<<<< HEAD
     // MARK: - #1090 lenient decode
 
     func testOneMalformedExtraItemDoesNotDiscardTheWholeConfig() throws {
@@ -348,7 +347,8 @@ final class PreflightChecklistTests: XCTestCase {
                                               from: Data(json.utf8))
         XCTAssertEqual(master.items.count, 1)
         XCTAssertEqual(master.items.first?.title, "Good")
-=======
+    }
+
     // MARK: - #878 deployment-redundancy advisory
 
     private func profile(_ channels: [(Bool, UInt8)]) -> RocketProfile {
@@ -381,6 +381,5 @@ final class PreflightChecklistTests: XCTestCase {
         XCTAssertNil(PreflightChecklist.deploymentRedundancyAdvisory(profile([])))
         XCTAssertNil(PreflightChecklist.deploymentRedundancyAdvisory(nil))
         XCTAssertNil(PreflightChecklist.deploymentRedundancyAdvisory(profile([(false, 1), (false, 1)])))
->>>>>>> origin/main
     }
 }
