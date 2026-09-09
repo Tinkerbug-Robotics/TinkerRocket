@@ -435,12 +435,23 @@ fun DashboardScreen(
                     // missing here.  The banner carries the words; the dots
                     // below stay the glanceable per-sensor detail.
                     ReadinessBanner(telemetry.flightReadiness)
-                    Row(
-                        Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        telemetry.sensorHealthRows.forEach { row ->
-                            HealthDot(row.name, row.state)
+                    // #1070: WRAP, never scroll. Six core sensors + Storage +
+                    // one per configured pyro channel is nine dots on a
+                    // two-pyro flight, and the trailing ones sat off the right
+                    // edge of a phone inside a scroll row that gave no hint it
+                    // could scroll — while this row is what answers "why does
+                    // the banner say Do not fly". iOS wrapped at six on the
+                    // bench 2026-08-22 (HealthDotRow); same balanced split
+                    // here, so nine dots read 5+4 rather than 6+3.
+                    val healthRows = telemetry.sensorHealthRows
+                    val lineCount = ((healthRows.size + HEALTH_DOTS_PER_LINE - 1) /
+                        HEALTH_DOTS_PER_LINE).coerceAtLeast(1)
+                    val perLine = ((healthRows.size + lineCount - 1) / lineCount).coerceAtLeast(1)
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        healthRows.chunked(perLine).forEach { line ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                line.forEach { row -> HealthDot(row.name, row.state) }
+                            }
                         }
                     }
                 }
@@ -795,6 +806,9 @@ private fun FlagChip(label: String, on: Boolean) {
             .padding(horizontal = 8.dp, vertical = 5.dp),
     )
 }
+
+/** #1070: iOS HealthDotRow.maxPerLine — keeps a line legible on the narrowest phone. */
+private const val HEALTH_DOTS_PER_LINE = 6
 
 @Composable
 private fun HealthDot(name: String, state: TelemetryData.SensorHealth) {
