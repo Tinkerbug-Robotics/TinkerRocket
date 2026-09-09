@@ -385,11 +385,15 @@ nonisolated class CSVGenerator {
             .flatMap { try? FlightSettingsData(from: $0.payload) }
             .map { FlightSettings(from: $0) }
 
+        // #1099: a non-finite value cannot be JSON-encoded, and it used to
+        // surface as a thrown encode that discarded the CSV. Sanitise where
+        // the numbers are made, not where they are written; Android's
+        // CsvGenerator does the same so the two stay twins.
         return FlightSummary(
-            max_altitude_m: maxPressureAlt,
-            max_speed_mps: maxSpeed,
-            burnout_time_s: burnoutTime,
-            apogee_time_s: apogeeTime,
+            max_altitude_m: finiteOrNil(maxPressureAlt),
+            max_speed_mps: finiteOrNil(maxSpeed),
+            burnout_time_s: finiteOrNil(burnoutTime),
+            apogee_time_s: finiteOrNil(apogeeTime),
             settings: flightSettings
         )
     }
@@ -725,6 +729,12 @@ nonisolated struct FlightSummary: Codable, Sendable {
 /// gains (e.g. 0.04, not 0.039999999105930) instead of float32→Double noise.
 /// `nonisolated` (pure math, no shared state) so the nonisolated `FlightSettings`
 /// initializers can call it without a main-actor hop under default MainActor isolation.
+/// #1099: nil for NaN/±inf, which JSONEncoder refuses.
+private nonisolated func finiteOrNil(_ v: Double?) -> Double? {
+    guard let v, v.isFinite else { return nil }
+    return v
+}
+
 private nonisolated func sigFig(_ v: Float, _ digits: Int = 6) -> Double {
     let d = Double(v)
     if d == 0 || !d.isFinite { return d }
@@ -786,6 +796,31 @@ nonisolated struct RollControlSettings: Codable, Sendable {
     let gain_schedule: GainScheduleSettings
     let profile_semantics: String  // "ramp" (fw v4+: lerp between waypoints) or "step" (pre-v4)
     let profile: [RollWaypointJSON]
+
+    // #1077: `profile_semantics` was added mid-2026. A sidecar written before
+    // it existed has no such key, and the synthesized decoder threw
+    // keyNotFound — taking the whole summary, headline numbers included,
+    // down with it. Absent means the documented pre-v4 value. Every field
+    // added to this block from now on needs the same treatment.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode                = try c.decode(String.self, forKey: .mode)
+        kp                  = try c.decode(Double.self, forKey: .kp)
+        ki                  = try c.decode(Double.self, forKey: .ki)
+        kd                  = try c.decode(Double.self, forKey: .kd)
+        d_lpf_hz            = try c.decode(Double.self, forKey: .d_lpf_hz)
+        kp_angle            = try c.decode(Double.self, forKey: .kp_angle)
+        cmd_limit_min_deg   = try c.decode(Double.self, forKey: .cmd_limit_min_deg)
+        cmd_limit_max_deg   = try c.decode(Double.self, forKey: .cmd_limit_max_deg)
+        delay_ms            = try c.decode(Int.self, forKey: .delay_ms)
+        min_speed_mps       = try c.decodeIfPresent(Double.self, forKey: .min_speed_mps)
+        rate_cap_dps        = try c.decode(Double.self, forKey: .rate_cap_dps)
+        roll_rate_set_point = try c.decode(Double.self, forKey: .roll_rate_set_point)
+        guidance_enabled    = try c.decode(Bool.self, forKey: .guidance_enabled)
+        gain_schedule       = try c.decode(GainScheduleSettings.self, forKey: .gain_schedule)
+        profile_semantics   = try c.decodeIfPresent(String.self, forKey: .profile_semantics) ?? "step"
+        profile             = try c.decodeIfPresent([RollWaypointJSON].self, forKey: .profile) ?? []
+    }
 
     init(from raw: FlightSettingsData) {
         // The firmware only runs the angle cascade when use_angle_control is
@@ -928,6 +963,21 @@ nonisolated struct IMUSettings: Codable, Sendable {
     /// Board→rocket mounting orientation (v2 settings frames). nil on
     /// pre-orientation logs, which always meant the +X-nose mounting.
     let mounting: MountingSettings?
+}
+
+// #1077: `dynamic_rate` was added mid-2026; a sidecar without it must decode
+// as the then-fixed rate (false), not fail. Extension so the memberwise
+// initialiser the generator uses stays available.
+extension IMUSettings {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        gyro_fs_dps    = try c.decode(Int.self, forKey: .gyro_fs_dps)
+        low_g_fs_g     = try c.decode(Int.self, forKey: .low_g_fs_g)
+        high_g_fs_g    = try c.decode(Int.self, forKey: .high_g_fs_g)
+        update_rate_hz = try c.decodeIfPresent(Int.self, forKey: .update_rate_hz)
+        dynamic_rate   = try c.decodeIfPresent(Bool.self, forKey: .dynamic_rate) ?? false
+        mounting       = try c.decodeIfPresent(MountingSettings.self, forKey: .mounting)
+    }
 }
 
 nonisolated struct MountingSettings: Codable, Sendable {

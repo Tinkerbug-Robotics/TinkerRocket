@@ -50,6 +50,8 @@ internal object FlightCache {
     ) {
         val displayName: String get() = name.removeSuffix(".bin")
         val hasCsv: Boolean get() = csv != null
+        /** #1067: a bin-only flight (converter failed) is still exportable. */
+        val hasAnyFile: Boolean get() = bin != null || csv != null
     }
 
     /**
@@ -84,19 +86,47 @@ internal object FlightCache {
         }.sortedByDescending { it.lastModified }
     }
 
-    /** Share a converted CSV through the app's FileProvider. No-op if absent. */
-    fun shareCsv(context: Context, csv: File?) {
-        if (csv == null || !csv.exists()) return
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", csv)
+    /**
+     * #1067: share a flight as every file that exists for it — the raw `.bin`,
+     * the converted `.csv` and the `.json` summary — through the app's
+     * FileProvider, as iOS does. The post-flight tools take the `.bin` as
+     * their only input; sharing the CSV alone stranded every Android log on
+     * the phone, and once the board copy was deleted that was the only copy.
+     * No-op if none of the files exist. `file_paths.xml` already exposes all
+     * of filesDir, so BinaryCache needs no manifest change.
+     */
+    fun shareFlight(context: Context, files: List<File?>) {
+        val present = files.filterNotNull().filter { it.exists() }
+        if (present.isEmpty()) return
+        val uris = ArrayList(present.map {
+            FileProvider.getUriForFile(context, "${context.packageName}.files", it)
+        })
+        val label = present.firstOrNull { it.name.endsWith(".bin") }?.name ?: present.first().name
         context.startActivity(
             Intent.createChooser(
-                Intent(Intent.ACTION_SEND).apply {
-                    type = "text/csv"
-                    putExtra(Intent.EXTRA_STREAM, uri)
+                Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                    type = "*/*"
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 },
-                "Share ${csv.name}",
+                "Share ${label.removeSuffix(".bin")}",
             ),
         )
+    }
+
+    /**
+     * #854 item 2: "already downloaded" used to be `csv.exists()`, so a short
+     * transfer that got written rendered as complete forever, with no way to
+     * re-pull until the cache was cleared. The download keeps the raw bytes
+     * (`binFileFor`), so when the board advertises a size, the cached copy
+     * counts only if it matches — the same rule as iOS's
+     * `isFlightCached(_:expectedSize:)`. With no advertised size, existence
+     * is all there is to go on.
+     */
+    fun isCachedComplete(context: Context, name: String, expectedSize: Long): Boolean {
+        if (!csvFileFor(context, name).exists()) return false
+        if (expectedSize <= 0L) return true
+        val raw = binFileFor(context, name)
+        return raw.exists() && raw.length() == expectedSize
     }
 }

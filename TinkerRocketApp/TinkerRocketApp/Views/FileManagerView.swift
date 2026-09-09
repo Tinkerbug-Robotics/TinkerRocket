@@ -509,6 +509,9 @@ struct FileRow: View {
 
     private var downloadButtonDisabled: Bool {
         if !device.isConnected { return true }
+        // #1076: one transfer at a time — do not offer the tap that would
+        // have wedged the first row.
+        if device.isDownloading { return true }
         let state = device.getDownloadState(for: file.name)
         return state == .downloading || state == .generatingCSV || state == .completed
     }

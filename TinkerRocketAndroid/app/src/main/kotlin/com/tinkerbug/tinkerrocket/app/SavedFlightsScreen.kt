@@ -84,7 +84,7 @@ fun SavedFlightsScreen(onBack: () -> Unit) {
                 SavedFlightRow(
                     flight = flight,
                     onChart = { flight.csv?.let { chartCsv = it } },
-                    onShare = { FlightCache.shareCsv(context, flight.csv) },
+                    onShare = { FlightCache.shareFlight(context, listOf(flight.bin, flight.csv, FlightCache.summaryFileFor(context, flight.name))) },
                 )
             }
         }
@@ -113,7 +113,7 @@ private fun SavedFlightRow(
                 // A .bin whose conversion failed is still listed, so the row has
                 // to say why its buttons are dead rather than just disabling them.
                 OutlinedButton(onClick = onChart, enabled = flight.hasCsv) { Text("Chart") }
-                OutlinedButton(onClick = onShare, enabled = flight.hasCsv) { Text("Share") }
+                OutlinedButton(onClick = onShare, enabled = flight.hasAnyFile) { Text("Share") }   // #1067: bin-only flights export too
             }
         }
     }
