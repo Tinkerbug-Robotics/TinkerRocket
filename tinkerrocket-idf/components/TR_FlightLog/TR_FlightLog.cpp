@@ -262,10 +262,21 @@ Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
                                                           cfg_.flight_region_start);
     uint32_t blocks_scanned = 0;
 
-    FL_LOGI("recovery: scanning blocks %lu..%lu (budget %lu ms)",
-            (unsigned long)cfg_.flight_region_start,
-            (unsigned long)cfg_.flight_region_end,
-            (unsigned long)cfg_.recovery_budget_ms);
+    // Say which regime this is. Printing the budget unconditionally is worse
+    // than useless on a deferred scan: it is the one line someone reads to
+    // work out why a scan stopped, and there the budget is not enforced at all.
+    if (enforce_budget && cfg_.recovery_budget_ms != 0) {
+        FL_LOGI("recovery: scanning blocks %lu..%lu (budget %lu ms)",
+                (unsigned long)cfg_.flight_region_start,
+                (unsigned long)cfg_.flight_region_end,
+                (unsigned long)cfg_.recovery_budget_ms);
+    } else {
+        FL_LOGI("recovery: scanning blocks %lu..%lu (no budget — %s)",
+                (unsigned long)cfg_.flight_region_start,
+                (unsigned long)cfg_.flight_region_end,
+                enforce_budget ? "budget disabled by config"
+                               : "deferred, so nothing is waiting on it");
+    }
 
     uint32_t b = cfg_.flight_region_start;
     while (b < cfg_.flight_region_end) {
