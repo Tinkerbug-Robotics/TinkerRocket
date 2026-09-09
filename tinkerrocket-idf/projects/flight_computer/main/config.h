@@ -304,6 +304,15 @@ struct config : board_pins
     static constexpr uint32_t RUNCAM_BOOT_MAX_MS      = 8000;  // give up, record blind
     static constexpr uint32_t RUNCAM_PROBE_INTERVAL_MS = 250;  // poll cadence
     static constexpr uint32_t RUNCAM_PROBE_READ_MS    = 60;    // per-probe RX wait
+    // #1153 item 1: the RunCam needs its own finalize window, like the GoPro's.
+    // The stop used to cut the rail 500 ms after a power-button TOGGLE — a
+    // command the start path had already abandoned as blip-only (#234) — so a
+    // camera that was still writing lost the tail of the file, and one that
+    // ignored the toggle kept recording until the rail died under it.  Seconds
+    // are free here: cameraStop() is invoked with CAMERA_STOP_DELAY_MS (30 s)
+    // at LANDED, so the finalize is inside a window the operator already waits.
+    static constexpr uint32_t RUNCAM_FINALIZE_MS      = 5000;  // stop -> gate off
+    static constexpr uint8_t  RUNCAM_STOP_RESENDS     = 2;     // extra STOP sends
     static constexpr uint8_t  RUNCAM_RECORD_RESENDS   = 2;     // extra START sends
     static constexpr uint32_t RUNCAM_RECORD_RESEND_MS = 150;   // resend spacing
     // Battery-only starts leave the camera dark (no LED, UART silent) even
