@@ -24,8 +24,13 @@ class FleetSessionCompositionTest {
     /** TransportFactory minting one FakeFirmware per connection attempt. */
     private class FirmwareFactory(private val scope: CoroutineScope) : TransportFactory {
         val created = mutableListOf<FakeFirmware>()
+        /** Identity readback the NEXT minted firmware answers cmd 20 with (null = FakeFirmware's default). */
+        var pendingIdentityJson: String? = null
         override fun create(deviceId: String, autoConnect: Boolean): BleTransport =
-            FakeFirmware(scope).also { created += it }
+            FakeFirmware(scope).also { fw ->
+                pendingIdentityJson?.let { fw.configIdentityJson = it }
+                created += fw
+            }
     }
 
     private class ScriptedScanner : BleScanner {
@@ -50,15 +55,19 @@ class FleetSessionCompositionTest {
                 advertisedName: String,
                 generation: Int,
                 transport: BleTransport,
+                initialDeviceType: BleDeviceType,
                 seedFocusRocket: Int?,
             ): DeviceSession {
                 val session = DeviceSession(
                     scope = backgroundScope,
                     transport = transport,
                     connectedDeviceName = advertisedName,
+                    initialDeviceType = initialDeviceType,
                     clock = { currentTime },
                     knownDevices = store,
                     onAutoFocus = { rid -> fleet.noteAutoFocus(deviceId, rid) },
+                    onUserFocus = { rid -> fleet.recordFocus(deviceId, rid) },
+                    onIdentity = { msg, pusher -> fleet.onIdentityReadback(deviceId, msg, pusher) },
                     onRocketFix = fleet::recordRocketFix,
                     fixLookup = fleet::lastValidRocketFix,
                 )
@@ -142,5 +151,71 @@ class FleetSessionCompositionTest {
         fw.emitTelemetryJson("""{"st":"LANDED","rid":1}""")
         runCurrent()
         assertEquals(33.7, assertNotNull(session.lastValidRocketFix.value).latitude, 1e-9)
+    }
+
+    // ── #1040 / #1041: what the session decides reaches the fleet ─────────
+
+    @Test
+    fun userFocusSwitch_survivesReconnect_andRepinsTheChosenRocket() = runTest {
+        val c = composed()
+        // The readback must keep this link a base station, or the relayed
+        // path (and with it the auto-latch) is skipped after 1 s.
+        c.transports.pendingIdentityJson =
+            """{"type":"config_identity","uid":"b1","un":"Ground","nid":1,"dt":"B"}"""
+        connectBs(c)
+        advanceTimeBy(1000)
+        runCurrent()
+        val fw1 = c.transports.created.last()
+        // Rocket 1 is heard first → sticky auto-focus 1 on the fleet map.
+        fw1.emitTelemetryJson("""{"st":"READY","rid":1}""")
+        runCurrent()
+        assertEquals(1, c.fleet.focusFor("bs:01"))
+        // The operator taps rocket 2 in the roster: session-level switch.
+        val session1 = assertNotNull(c.fleet.devices.value["bs:01"]).session
+        session1.setFocusRocket(2)
+        runCurrent()
+        // #1040: the FLEET map moved too (before this it still said 1).
+        assertEquals(2, c.fleet.focusFor("bs:01"))
+        // Link bounces → a NEW session is seeded from the map and its
+        // choreography re-pushes cmd 45 — for rocket 2, not rocket 1.
+        fw1.fireDisconnect()
+        runCurrent()
+        advanceTimeBy(1000)
+        runCurrent()
+        advanceTimeBy(1000)
+        runCurrent()
+        val fresh = c.transports.created.last()
+        val dev = assertNotNull(c.fleet.devices.value["bs:01"])
+        assertEquals(2, dev.generation)
+        assertEquals(2, dev.session.focusRocketId.value, "re-seeded from the user's choice")
+        assertEquals(listOf(2), fresh.focusPins, "cmd 45 carries the user's rocket, not the first heard")
+    }
+
+    @Test
+    fun identityReadback_updatesTheFleetRecord_notJustTheSession() = runTest {
+        val c = composed()
+        // Advertised as a rocket; the config_identity readback says base station.
+        c.fleet.scan(userInitiated = true)
+        runCurrent()
+        c.scanner.flow.tryEmit(BleAdvertisement(deviceId = "x:01", advertisedName = "TR-R-Guess", rssi = -60))
+        runCurrent()
+        c.transports.pendingIdentityJson =
+            """{"type":"config_identity","uid":"u-9","un":"REALLY-A-BS","nid":4,"dt":"B","fw":"1.2.3"}"""
+        c.fleet.connect("x:01")
+        runCurrent()
+        val before = assertNotNull(c.fleet.devices.value["x:01"])
+        assertEquals(BleDeviceType.ROCKET, before.deviceType, "connect-time guess from the name")
+        assertEquals(BleDeviceType.ROCKET, before.session.identity.value.deviceType, "#1041: the session starts from the fleet's seed")
+        advanceTimeBy(1000)   // cmd 20 → identity readback
+        runCurrent()
+        val after = assertNotNull(c.fleet.devices.value["x:01"])
+        // #1041: the fleet's OWN record follows the readback (voice routing and
+        // the foreground-BS pick read this; it used to stay frozen at the guess).
+        assertEquals(BleDeviceType.BASE_STATION, after.deviceType)
+        assertEquals("REALLY-A-BS", after.unitName)
+        assertEquals("u-9", after.unitId)
+        assertEquals(BleDeviceType.BASE_STATION, after.session.identity.value.deviceType)
+        // And the registry got it exactly once (through the fleet).
+        assertEquals("REALLY-A-BS", c.fleet.knownDevices.device("u-9")?.name)
     }
 }

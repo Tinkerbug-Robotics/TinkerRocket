@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
+import com.tinkerbug.tinkerrocket.session.BleDeviceType
 
 /**
  * Virtual Rocket (né demo mode): the SAME fleet/session/UI stack over
@@ -36,13 +37,17 @@ fun buildDemoFleet(context: android.content.Context, scope: CoroutineScope): Fle
             advertisedName: String,
             generation: Int,
             transport: BleTransport,
+            initialDeviceType: BleDeviceType,
             seedFocusRocket: Int?,
         ): DeviceSession {
             val session = DeviceSession(
                 scope = scope,
                 transport = transport,
                 connectedDeviceName = advertisedName,
+                initialDeviceType = initialDeviceType,
                 onAutoFocus = { rid -> fleet.noteAutoFocus(deviceId, rid) },
+                onUserFocus = { rid -> fleet.recordFocus(deviceId, rid) },
+                onIdentity = { msg, pusher -> fleet.onIdentityReadback(deviceId, msg, pusher) },
                 onRocketFix = fleet::recordRocketFix,
                 fixLookup = fleet::lastValidRocketFix,
             )

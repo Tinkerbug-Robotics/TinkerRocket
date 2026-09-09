@@ -118,7 +118,13 @@ class FakeTransportFactory(private val currentTime: () -> Long) : TransportFacto
 
 /** Opaque per-connection session stand-in (the DeviceSession port slots in
  *  behind the same FleetSessionFactory seam). */
-class FakeSession(val deviceId: String, val generation: Int, val seededFocus: Int? = null)
+class FakeSession(
+    val deviceId: String,
+    val generation: Int,
+    val seededFocus: Int? = null,
+    /** #1041: the type the fleet resolved and seeded. */
+    val seededType: BleDeviceType? = null,
+)
 
 class FakeSessionFactory : FleetSessionFactory<FakeSession> {
     val created = mutableListOf<FakeSession>()
@@ -129,8 +135,9 @@ class FakeSessionFactory : FleetSessionFactory<FakeSession> {
         advertisedName: String,
         generation: Int,
         transport: BleTransport,
+        initialDeviceType: BleDeviceType,
         seedFocusRocket: Int?,
-    ): FakeSession = FakeSession(deviceId, generation, seedFocusRocket).also { created += it }
+    ): FakeSession = FakeSession(deviceId, generation, seedFocusRocket, initialDeviceType).also { created += it }
 
     override fun close(session: FakeSession) {
         closed += session

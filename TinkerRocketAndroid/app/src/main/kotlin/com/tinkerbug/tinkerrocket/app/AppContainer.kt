@@ -214,14 +214,18 @@ class AppContainer(app: Application) {
                 advertisedName: String,
                 generation: Int,
                 transport: BleTransport,
+                initialDeviceType: BleDeviceType,
                 seedFocusRocket: Int?,
             ): DeviceSession {
                 val session = DeviceSession(
                     scope = fleetScope,
                     transport = transport,
                     connectedDeviceName = advertisedName,
+                    initialDeviceType = initialDeviceType,   // #1041: the fleet's seed
                     knownDevices = knownDevices,
                     onAutoFocus = { rid -> fleetRef.noteAutoFocus(deviceId, rid) },
+                    onUserFocus = { rid -> fleetRef.recordFocus(deviceId, rid) },   // #1040
+                    onIdentity = { msg, pusher -> fleetRef.onIdentityReadback(deviceId, msg, pusher) },   // #1041
                     onRocketFix = fleetRef::recordRocketFix,
                     fixLookup = fleetRef::lastValidRocketFix,
                 )
@@ -308,8 +312,10 @@ class AppContainer(app: Application) {
         //
         // Keying on `devices` alone is enough here, unlike iOS: a disconnect
         // empties the map, and an identity readback that resolves a device's
-        // role REPLACES its entry (handleIdentity copies the record), so both
-        // edges emit. activeDeviceId is combined in for the syncer, which
+        // role REPLACES its entry (FleetManager.onIdentityReadback copies the
+        // record — wired through the session's onIdentity hook since #1041;
+        // before that nothing called it and the role stayed frozen at the
+        // connect-time guess), so both edges emit. activeDeviceId is combined in for the syncer, which
         // follows the active chip rather than the direct link.
         fleetScope.launch {
             combine(fleet.devices, fleet.activeDeviceId) { _, _ -> Unit }

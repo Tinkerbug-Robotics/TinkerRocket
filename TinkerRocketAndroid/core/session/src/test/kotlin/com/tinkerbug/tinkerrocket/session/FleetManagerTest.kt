@@ -349,6 +349,30 @@ class FleetManagerTest {
     }
 
     @Test
+    fun recordFocus_movesTheMapWithoutPushing() = runTest {
+        // #1040: the session pushes cmd 45 itself; the fleet only records the
+        // choice so the next adopt() re-seeds the rocket the operator picked.
+        val h = fleetHarness()
+        discoverAndConnect(h, "bs:01", "TR-B-Ground")
+        h.fleet.noteAutoFocus("bs:01", rocketId = 1)
+        runCurrent()
+        val transport = h.transports.lastFor("bs:01")
+        val pushesBefore = transport.writes.size
+        h.fleet.recordFocus("bs:01", rocketId = 2)
+        runCurrent()
+        assertEquals(2, h.fleet.focusFor("bs:01"))
+        assertEquals(pushesBefore, transport.writes.size, "recordFocus never writes cmd 45")
+        // …and it is what a reconnect seeds from.
+        transport.dropUnexpectedly()
+        runCurrent()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(2, h.sessions.created.last().seededFocus)
+        // #1041: the fleet's resolved type rides along into the session seed.
+        assertEquals(BleDeviceType.BASE_STATION, h.sessions.created.last().seededType)
+    }
+
+    @Test
     fun setFocus_userSwitch_overwritesAndPushes() = runTest {
         val h = fleetHarness()
         discoverAndConnect(h, "bs:01", "TR-B-Ground")
