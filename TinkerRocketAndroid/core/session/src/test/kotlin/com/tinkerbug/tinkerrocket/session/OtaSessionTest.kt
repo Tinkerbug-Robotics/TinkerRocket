@@ -243,7 +243,8 @@ class OtaSessionTest {
         advanceTimeBy(200); runCurrent()
         val failed = r.ota.state.value
         assertIs<OtaSession.State.Failed>(failed)
-        assertEquals("Verify failed: sha_mismatch", failed.reason)
+        // #1094: the byte counts iOS has always printed.
+        assertEquals("Verify failed: sha_mismatch — device took 0 of 600 B", failed.reason)
         assertEquals(
             abortsBefore + 1,
             r.fw.commandFrames.count { it[0].toInt() == BleCommandId.OTA_ABORT },
