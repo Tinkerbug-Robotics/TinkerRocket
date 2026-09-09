@@ -260,6 +260,46 @@ fun MapScreen(
             }
         }
 
+        // #1068: the marker's own facts. iOS's pin opens a callout reading
+        // "N sats • Ns ago"; Android's marker is a bare 9 px circle with no
+        // callout, click listener or text layer, so a marker frozen on a fix
+        // from four minutes ago looked exactly like a live one — on the screen
+        // used to walk to a rocket. Rendered as a plate under the prediction
+        // badge rather than a MapLibre SymbolLayer (which needs a sprite and a
+        // font stack for one line of text); deliberate divergence, recorded in
+        // the ledger: the same facts, always visible instead of on a tap.
+        fix?.let { f ->
+            var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(f) {
+                while (true) {
+                    nowMs = System.currentTimeMillis()
+                    delay(1000)
+                }
+            }
+            val ageS = max(0L, (nowMs - f.fixEpochMillis) / 1000)
+            TrMapPlate(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(
+                        start = TrSpacing.rowSpacing,
+                        top = if (prediction != null) TrSpacing.rowSpacing * 3 else TrSpacing.rowSpacing,
+                    ),
+            ) {
+                Text(
+                    "⌖ ${f.numSats} sats · ${formatFixAge(ageS)} ago",
+                    style = MaterialTheme.typography.labelMedium,
+                    // Same staleness grading the prediction badge uses, so a
+                    // stale marker cannot read as live.
+                    color = when {
+                        ageS < 5 -> tr.statusOk
+                        ageS < 30 -> tr.statusMarginal
+                        else -> tr.statusBad
+                    },
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                )
+            }
+        }
+
         // Floating controls, iOS MapView.swift arrangement: source menu over
         // recenter, top-trailing, each a 44dp glyph on a plate.
         Column(
@@ -493,6 +533,14 @@ private fun installPhoneDot(style: Style, fix: PhoneLocationManager.PhoneFix?, c
         ),
     )
 }
+
+/**
+ * #1068: iOS's `formatAge` — bare seconds under a minute, M:SS above. Avoids
+ * the "0:05" noise of a longer formatter on fresh fixes, where seconds are the
+ * only thing that matters.
+ */
+private fun formatFixAge(seconds: Long): String =
+    if (seconds < 60) "${seconds}s" else "%d:%02d".format(seconds / 60, seconds % 60)
 
 private fun installRocketMarker(style: Style, lat: Double?, lon: Double?, c: TrColors) {
     val feature = if (lat != null && lon != null) {

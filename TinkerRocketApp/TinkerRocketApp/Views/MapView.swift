@@ -52,6 +52,9 @@ struct RocketMapView: UIViewRepresentable {
     /// lower, and stays frozen once latched; 0 draws nothing.
     var predictedUncertaintyRadiusM: Double = 0
     @Binding var region: MKCoordinateRegion
+    /// #1068: cleared when the operator pans, so the camera stops tracking the
+    /// rocket until Recenter asks for it back.
+    @Binding var followRocket: Bool
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
@@ -237,6 +240,14 @@ struct RocketMapView: UIViewRepresentable {
                 for recognizer in gestureRecognizers {
                     if recognizer.state == .began || recognizer.state == .changed {
                         userIsInteracting = true
+                        // #1068: a pan is the operator taking the camera. Stop
+                        // following until they ask for it back (Recenter).
+                        // Deferred off this callback: it runs inside a map
+                        // region update, and writing SwiftUI state there is
+                        // the same hazard regionDidChangeAnimated documents.
+                        DispatchQueue.main.async { [weak self] in
+                            self?.parent.followRocket = false
+                        }
                         return
                     }
                 }
@@ -338,6 +349,13 @@ struct MapView: View {
         span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
     )
     @State private var hasInitializedRegion = false
+    /// #1068: keep following the rocket after the first fix, until the
+    /// operator pans. `hasInitializedRegion` latched on that first fix and the
+    /// camera then never moved again for the rest of the visit — a rocket
+    /// drifting under canopy walked straight off the screen, and the only way
+    /// to see it was the Recenter button, once per drift. Android has followed
+    /// since its map shipped; this is the same rule, gesture-break included.
+    @State private var followRocket = true
     @State private var hasCenteredOnPhone = false
     @State private var showOfflineMaps = false
 
@@ -363,7 +381,8 @@ struct MapView: View {
                     predictedLandingSubtitle: predictedSubtitle(now: context.date),
                     predictedDescentTrack: descentTrackCoords(),
                     predictedUncertaintyRadiusM: landingPredictor.prediction?.uncertaintyMeters ?? 0,
-                    region: $region
+                    region: $region,
+                    followRocket: $followRocket
                 )
             }
             .ignoresSafeArea(edges: .bottom)
@@ -436,8 +455,9 @@ struct MapView: View {
                         .shadow(radius: 2)
                 }
 
-                // Re-center on rocket
+                // Re-center on rocket — and resume following it (#1068).
                 Button(action: {
+                    followRocket = true
                     centerOnRocket()
                 }) {
                     Image(systemName: "location.fill")
@@ -459,6 +479,12 @@ struct MapView: View {
             if !hasInitializedRegion {
                 centerOnRocket()
                 hasInitializedRegion = true
+            } else if followRocket {
+                // #1068: track it. centerOnRocket() re-spans, which would
+                // fight a zoom the operator chose, so pan only.
+                if let coordinate = rocketCoordinate {
+                    region = MKCoordinateRegion(center: coordinate, span: region.span)
+                }
             }
         }
         .onReceive(locationManager.$userLocation) { _ in
