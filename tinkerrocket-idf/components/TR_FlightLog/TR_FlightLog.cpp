@@ -182,9 +182,20 @@ Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
     FL_LOGI("begin: index loaded (%zu flight(s)), %zu block(s) promoted; "
             "recovery scan next", index_.size(), promoted);
 
+    // #1279 follow-up: hand the scan back to the caller to run on its own
+    // time. Everything above is done — the index and bitmap are loaded and
+    // reconciled — so the object is fully usable for reads, writes and
+    // allocation; only the reconciliation of orphaned runs is outstanding.
+    if (cfg_.defer_recovery) {
+        recovery_deferred_ = true;
+        recovery_failed_   = false;
+        FL_LOGI("begin: recovery scan DEFERRED to the caller (#1279)");
+        return Status::Ok;
+    }
+
     // Recover any flights that were in progress when the last boot was cut
     // short. Safe to run every boot — a no-op when nothing is orphaned.
-    Status recov_st = scanForBrownoutRecovery();
+    Status recov_st = scanForBrownoutRecovery(/*enforce_budget=*/true);
     if (recov_st != Status::Ok) {
         // #1127: report the failure, but do NOT un-initialise. initialized_
         // gates listFlights/readFlightPage/deleteFlight/renameFlight as well
@@ -201,7 +212,29 @@ Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
     return Status::Ok;
 }
 
-Status TR_FlightLog::scanForBrownoutRecovery() {
+Status TR_FlightLog::runDeferredRecovery() {
+    if (!initialized_)       return Status::NotInitialized;
+    if (!recovery_deferred_) return Status::Ok;   // nothing was deferred
+
+    // Budget OFF on purpose. The 90 s ceiling exists so the scan cannot hold
+    // up the caller that is waiting on it; here nobody is waiting, and letting
+    // it run to completion is the entire point — a run larger than the budget
+    // is exactly the case that could never resolve itself before (#1279).
+    const Status st = scanForBrownoutRecovery(/*enforce_budget=*/false);
+
+    recovery_deferred_ = false;
+    recovery_failed_   = (st != Status::Ok);
+    if (st == Status::Ok) {
+        FL_LOGI("deferred recovery complete: %zu flight(s) in index",
+                index_.size());
+    } else {
+        FL_LOGW("deferred recovery FAILED (%d) — the write path is now gated "
+                "on recovery_failed_ (#1127)", (int)st);
+    }
+    return st;
+}
+
+Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
     if (!initialized_) return Status::NotInitialized;
 
     // A block is "orphaned" if it's ALLOCATED but not covered by any index
@@ -239,7 +272,8 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         // Budget is checked only at run boundaries: each run is scanned to
         // completion (a partial scan would synthesize a wrong-length entry), so
         // an over-budget pass leaves the remaining orphaned runs for next boot.
-        if (cfg_.recovery_budget_ms != 0 && now() - t0 > cfg_.recovery_budget_ms) {
+        if (enforce_budget && cfg_.recovery_budget_ms != 0 &&
+            now() - t0 > cfg_.recovery_budget_ms) {
             FL_LOGW("recovery: %lu ms budget hit at block %lu/%lu — deferring the "
                     "rest to next boot",
                     (unsigned long)cfg_.recovery_budget_ms,
@@ -247,9 +281,19 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
                     (unsigned long)region_blocks);
             break;
         }
-        if (bitmap_.get(b) != BLOCK_ALLOCATED || is_in_index(b)) {
-            ++b;
-            continue;
+        // #1279 follow-up: this runs concurrently with writeFrame and the
+        // download path once it is deferred to a task, so every touch of
+        // bitmap_/index_ is under the object lock. The lock is taken in SHORT
+        // bursts and never across the page reads below, which are the slow
+        // part — a held lock there would stall the flush task for ~0.6 s per
+        // block. The NAND layer serialises its own SPI access, so the reads
+        // themselves need no lock from us.
+        {
+            FlightLogLockGuard guard(mutex_);
+            if (bitmap_.get(b) != BLOCK_ALLOCATED || is_in_index(b)) {
+                ++b;
+                continue;
+            }
         }
         // Found the start of an orphaned run. Walk forward.
         const uint32_t run_start = b;
@@ -261,10 +305,13 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         // half (#276). The bad block is skipped when scanning pages (below) and
         // walked over on read (readFlightPage). Recovery runs every boot, so two
         // distinct un-indexed flights never coexist to be wrongly merged here.
-        while (b < cfg_.flight_region_end &&
-               (bitmap_.get(b) == BLOCK_ALLOCATED || bitmap_.get(b) == BLOCK_BAD) &&
-               !is_in_index(b)) {
-            ++b;
+        {
+            FlightLogLockGuard guard(mutex_);
+            while (b < cfg_.flight_region_end &&
+                   (bitmap_.get(b) == BLOCK_ALLOCATED || bitmap_.get(b) == BLOCK_BAD) &&
+                   !is_in_index(b)) {
+                ++b;
+            }
         }
         const uint32_t run_len = b - run_start;
 
@@ -285,7 +332,7 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
             // app's power-on for ever while looking perfectly alive. Observed
             // on the bench 2026-09-09: still scanning at 300 s against a 90 s
             // budget, with the FC rail never asserted.
-            if (cfg_.recovery_budget_ms != 0 &&
+            if (enforce_budget && cfg_.recovery_budget_ms != 0 &&
                 now() - t0 > cfg_.recovery_budget_ms) {
                 FL_LOGW("recovery: %lu ms budget hit %lu block(s) into the run at "
                         "%lu — abandoning it un-indexed for the next boot",
@@ -300,7 +347,10 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
                         (unsigned long)(now() - t0));
             }
             const uint32_t blk = run_start + i;
-            if (bitmap_.get(blk) == BLOCK_BAD) continue;
+            {
+                FlightLogLockGuard guard(mutex_);
+                if (bitmap_.get(blk) == BLOCK_BAD) continue;
+            }
 
             // Fast-path: read just the first page of the block. If its header
             // doesn't carry FPAG_MAGIC, no writeFrame ever ran in this block
@@ -359,6 +409,7 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
 
         if (!saw_any) {
             // No recoverable data in this range — release it.
+            FlightLogLockGuard guard(mutex_);
             bitmap_.markFreeRange(run_start, run_len);
             bitmap_dirty = true;
             continue;
@@ -390,9 +441,13 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         entry.n_blocks    = static_cast<uint16_t>(used_blocks);  // trimmed; was run_len (full ~32 MB)
         entry.final_bytes = valid_pages * PAYLOAD_PER_PAGE;
 
-        Status st = index_.append(entry);
+        Status st;
+        {
+            FlightLogLockGuard guard(mutex_);
+            st = index_.append(entry);
+            if (st == Status::Ok) index_dirty = true;
+        }
         if (st != Status::Ok) return st;
-        index_dirty = true;
 
         // Trim the unused tail of the recovered range back to FREE, exactly like
         // finalizeFlight. Without this a brownout flight permanently holds its
@@ -400,16 +455,21 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         // data each (the 2026-06-25 silent log-loss / #281 root cause).
         const uint32_t free_count = run_len - used_blocks;
         if (free_count > 0) {
+            FlightLogLockGuard guard(mutex_);
             bitmap_.markFreeRange(run_start + used_blocks, free_count);
             bitmap_dirty = true;
         }
     }
 
     if (index_dirty) {
+        FlightLogLockGuard guard(mutex_);
         Status st = index_.save(*nand_, cfg_.metadata_blocks[0], cfg_.metadata_blocks[1]);
         if (st != Status::Ok) return st;
     }
-    if (bitmap_dirty) persistBitmap();
+    if (bitmap_dirty) {
+        FlightLogLockGuard guard(mutex_);
+        persistBitmap();
+    }
     return Status::Ok;
 }
 

@@ -61,6 +61,24 @@ public:
         // the card keeps a rolling buffer instead of evicting one flight per arm.
         // Clamped to the flight region; 0 means "reclaim only just enough to fit".
         uint16_t auto_evict_target_free_blocks = 0;
+
+        // #1279 follow-up: run the boot recovery scan OFF the caller's thread.
+        // begin() then returns as soon as the bitmap and index are loaded, and
+        // the caller drives the scan later via runDeferredRecovery() from a
+        // task of its own. Default OFF, so every existing caller (the mini,
+        // the host tests) keeps the synchronous behaviour unchanged.
+        //
+        // Why this exists: the scan walks the whole flight region reading
+        // pages, and on a large orphaned run that is minutes. Synchronously,
+        // that time is stolen from whatever called begin() — on the out
+        // computer, the loop task that also dispatches every BLE command, so
+        // the rocket could not be powered on at all until it finished (#1279).
+        // The 90 s budget bounds the damage but cannot remove it, and it also
+        // means a run bigger than the budget is re-scanned and re-abandoned on
+        // every boot, so it never resolves. Deferring fixes both: the caller
+        // comes up immediately, and the scan can then be allowed to RUN TO
+        // COMPLETION because it is no longer holding anything up.
+        bool     defer_recovery                = false;
     };
 
     TR_FlightLog() = default;
@@ -186,6 +204,25 @@ public:
     // and writeFrame() refuse, because the orphaned range is unresolved and a
     // new allocation could land on it.
     bool          recoveryFailed() const { return recovery_failed_; }
+
+    // #1279 follow-up. True between a defer_recovery begin() and the
+    // runDeferredRecovery() that completes it — the index and bitmap are
+    // usable, but orphaned runs have not been reconciled yet.
+    //
+    // NOT a write gate, deliberately. Allocation safety does not depend on the
+    // scan: findContiguousFree only ever hands out BLOCK_FREE blocks, and an
+    // orphaned run is BLOCK_ALLOCATED, so a new flight cannot land on one
+    // whether or not recovery has run. What the scan adds is RECOVERING the
+    // data in those runs and freeing their unused tails.
+    bool          recoveryDeferred() const { return recovery_deferred_; }
+
+    // Run the deferred scan to completion. Call from a task that can afford
+    // minutes; it takes the object lock only in short bursts (never across the
+    // page reads), so writeFrame and the download path are not stalled behind
+    // it. No-op unless begin() deferred. The budget is deliberately NOT
+    // enforced here — it exists to stop the scan holding up a caller, and a
+    // deferred scan holds up nobody.
+    Status        runDeferredRecovery();
     const Config& config() const        { return cfg_; }
     // #671: runtime geometry captured from the backend at begin(). Valid only
     // after begin(); before it these return the legacy figures. The flush
@@ -204,6 +241,7 @@ private:
     Config             cfg_           = {};
     bool               initialized_   = false;
     bool               recovery_failed_ = false;   // #1127
+    bool               recovery_deferred_ = false; // #1279 follow-up
 
     uint32_t active_flight_id_    = 0;
     uint32_t active_start_block_  = 0;
@@ -300,7 +338,7 @@ private:
     // finalizeFlight ran. For each, walk the PageHeader magic/CRC32 to find
     // the last valid page, synthesize a partial FlightIndexEntry, and persist.
     // Orphaned ranges with no valid pages are released back to FREE.
-    Status scanForBrownoutRecovery();
+    Status scanForBrownoutRecovery(bool enforce_budget);
 };
 
 }  // namespace tr_flightlog
