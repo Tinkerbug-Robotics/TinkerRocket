@@ -1,0 +1,71 @@
+# #1211 / #1149 item 1 (PR #1242) — queued pyro tests keep the operator's order.
+#
+# Rig: V9 pair, S1 -> F (FLIGHT COMPUTER console — [PYRO CONT TEST] names the
+# channel; the OC logs all three under one command byte, so the order is not
+# distinguishable there). Rail ON. Dummy loads on ch1/ch2 (4-8 kΩ); ch3 bare,
+# which is fine — the ORDER is under test, not the continuity result.
+#
+# NEVER a live igniter. cmd 35 = continuity test [channel], cmd 36 = test fire.
+#
+# Before this PR the three came out 3, 2, 1 — a LIFO queue — and a FIRE tapped
+# after a CONT could overtake it.
+
+note === rail on ===
+send 8 01
+sleep 22
+
+note === #1149: CONT on ch1, ch2, ch3 back to back (~40 ms apart) ===
+mark
+send 35 01
+send 35 02
+send 35 03
+sleep 12
+expect_serial 15 \[PYRO CONT TEST\] CH1
+expect_serial 15 \[PYRO CONT TEST\] CH2
+expect_serial 15 \[PYRO CONT TEST\] CH3
+# The actual assertion: they were SERVICED in the operator's order.
+expect_order \[PYRO CONT TEST\] CH1 || \[PYRO CONT TEST\] CH2
+expect_order \[PYRO CONT TEST\] CH2 || \[PYRO CONT TEST\] CH3
+
+note === the mixed case: a CONT then a FIRE — CONT must be served first ===
+mark
+send 35 01
+send 36 02
+sleep 14
+expect_serial 15 \[PYRO CONT TEST\] CH1
+expect_serial 15 \[PYRO FIRE TEST\] CH2 fired
+expect_order \[PYRO CONT TEST\] CH1 || \[PYRO FIRE TEST\] CH2 fired
+note === done ===
+
+# --------------------------------------------------------------------------
+# Item 1's third clause: "with the app mid profile-sync, a pyro test must
+# still jump ahead of the remaining sync commands."
+#
+# cmdIsFrontPriority() (cmd_queue_session_policy.h) is true for exactly
+# PYRO_CONT_TEST and PYRO_FIRE_TEST, and setPendingCommandWithConfig inserts
+# those after the existing front run rather than at the tail. Stand in for the
+# app's connect-time sync burst with two DISTINCT config operations — the
+# queue dedupes by operation, so a repeat of one command would collapse into
+# a single slot instead of queueing — then tap a continuity test.
+#
+# The FC names every dispatch as "[I2C RX] pending_command=0xNN", which is the
+# ordering evidence:
+#   0xB4 SIM_CONFIG_PENDING   — sent first, so already serving (~1 s of polls)
+#   0xCD PYRO_CONFIG_PENDING  — sent second, still queued
+#   0xCF PYRO_CONT_TEST       — sent LAST, must be served SECOND
+# Tail order (0xB4, 0xCD, 0xCF) would mean the pyro test did not jump.
+
+note === profile-sync stand-in: two config ops, then a pyro test ===
+mark
+send 5 0000fa44000048429a99993e0000c03f
+send 34 010000002042000000000000000000000000000000000000
+send 35 01
+sleep 12
+expect_serial_since \[I2C RX\] pending_command=0xB4
+expect_serial_since \[I2C RX\] pending_command=0xCD
+expect_serial_since \[I2C RX\] pending_command=0xCF
+# The sync really was in flight when the test was tapped...
+expect_order pending_command=0xB4 || pending_command=0xCF
+# ...and the pyro test, sent LAST, overtook the config still queued behind it.
+expect_order pending_command=0xCF || pending_command=0xCD
+note === done ===

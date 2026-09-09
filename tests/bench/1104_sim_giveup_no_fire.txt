@@ -1,0 +1,154 @@
+# #1211 / #1104 — a sim that ends still INFLIGHT is a Stop, and the dry-fire
+# gate is latched (PR #1197, merged e3a7f58).
+#
+# Rig: V9 pair, S1 -> F (FC console: the sim, the state machine and the pyro
+# state machine all live on the FC). Rail ON.
+# **Dummy load on ch1 (4-8 kohm). NEVER a live igniter.**
+#
+# The case under test is NOT the ordinary sim. Bench sims end at the natural
+# LANDED edge, which is Edge::EndedLanded and holds — the wrong edge. This
+# needs #971's 30 s SIM_LANDED give-up: a landing the vote CANNOT latch.
+#
+# How to force it. The landing vote requires baro_stable_pass, and that
+# requires max_altitude > BARO_STABLE_MAX_ALT_MIN (15 m,
+# TR_KinematicChecks.cpp) — "the rocket must have flown". A sim whose apogee
+# stays under 15 m therefore can never latch a landing, the hold runs its
+# full 30 s, and the sim drops to SIM_IDLE with the FC still INFLIGHT. The
+# baro-independent quiescence path needs ~30 s of its own and cannot beat the
+# hold. Launch detection is unaffected: its primary path is 50 samples above
+# 20 m/s^2 plus a baro-confirmed climb, with no altitude floor at all.
+#
+# But that floor is NOT only on the landing vote, and a first attempt at this
+# (300 g / 11.7 N / 0.45 s, apogee 11 m) failed because of it. Two of the four
+# apogee voters carry the SAME 15 m gate — vel_pass needs position[2] > 15,
+# baro_pass needs alt_est > 15 — so a flight low enough to block the landing
+# also blocks them. That run reached the give-up perfectly and detected no
+# apogee at all, which makes the pyro half of this item vacuous: a
+# TIME_AFTER_APOGEE channel is armed by pyro_apogee_detected, so with no
+# apogee nothing could have fired whatever the firmware did.
+#
+# The two voters WITHOUT an altitude gate carry it instead:
+#   Test 3, GNSS Doppler — gps_vel_u < -1.0 m/s, 4 samples, no altitude gate
+#                          ("that lag is the bug"); descent at 2 m/s gives ~63.
+#   Test 4, pitch        — pitch_rad < -0.087 (5 deg past horizontal), 6 samples.
+# Two passing voters would meet both the `passed >= 2` floor and `need` (N-2
+# with four available). MEASURED ON THE BENCH: they cannot both pass here, and
+# the pyro clause of this item is therefore NOT REACHABLE through the sim at
+# all. See the block below.
+#
+# Pitch is the hard one, and it is bought with a SLOW flight, not a big one.
+# The gravity turn is M_grav = mass * g * sin(pitch) * CP_CG_DIST against an
+# aero damping moment proportional to q_dyn/v, i.e. to v. Less speed is less
+# damping, so a low, slow coast turns the nose FASTER. At 300 g / 11 m of
+# apogee the nose only reached +5 deg and Test 4 never passed (bench run 1,
+# which the model reproduces to 0.1 deg). Dropping to a 1.7 m apogee swings
+# it to -46 deg and holds it past -5 deg for ~0.23 s — some 230 loop samples
+# against the 6 the vote needs.
+#
+# Mass is NOT the lever it looks like. I_TRANSVERSE is a fixed 0.02, so mass
+# raises pitch authority without raising inertia, and the pitch oscillator
+# stiffens as sqrt(mass): by 30 kg it is under-damped at ~33 rad/s and the
+# sim's own gyro encoding saturates (the model says 2015 deg/s against the
+# +/-2000 dps range). Bench run 2 confirmed it — 30 kg gave +1.8 deg at
+# apogee, no better than 300 g. 2 kg keeps the peak rate near 480 deg/s,
+# comfortably inside range.
+#
+# 2 kg / 50 N / 0.3 s is then 25 m/s^2 of specific force (launch latches on
+# the primary path), burnout 4.6 m/s, apogee ~1.7 m — far below the 15 m
+# floor, so no amount of drift can creep it over — and a 1.5 m/s descent,
+# which is both past the GNSS voter's -1.0 m/s threshold and slow enough to
+# give it ~20 samples where it needs 4.
+#
+# ---------------------------------------------------------------------------
+# WHY THE PYRO CLAUSE OF #1104 CANNOT BE TESTED THROUGH THE SIM
+# ---------------------------------------------------------------------------
+# The sim reaches exactly the trajectory it is asked for — the board logs
+# "Phase: DESCENT (apogee ~2m, pitch=-45.3 deg)", matching the model to about
+# a degree — and the give-up fires every time. Apogee still never latches,
+# and three runs show why. Under the 15 m ceiling the give-up REQUIRES:
+#
+#   vel   — blocked outright: vel_pass needs position[2] > 15.
+#   baro  — blocked outright: baro_pass needs alt_est > 15, and pairing it
+#           with alt_est < max_altitude - 5 would need max_altitude > 20.
+#   pitch — the vote reads imu_rpy[1], the EKF's pitch, NOT the sim's. With
+#           the board flat on the bench and the sim pad-aligned onto that
+#           resting attitude, telemetry shows the EKF pitch sitting at +86 to
+#           +88 deg throughout, while the sim's own pitch swings to -45. It
+#           never approaches the -5 deg threshold. Moreover the EKF reads
+#           DEGRADED for the whole flight (OK only ~1.5 s after touchdown, on
+#           a flight lasting 1.6 s), and ekf_healthy gates the vel and pitch
+#           voters OUT of `available` entirely.
+#   gps   — this one passes, but `passed >= 2` is an absolute floor, so one
+#           voter can never carry the vote.
+#
+# So no flight that reaches the give-up can latch apogee. And the coupling is
+# not incidental: alt_landed_flag is itself gated on apogee_flag, so a
+# never-latched apogee is precisely WHY the landing vote cannot fire and the
+# hold runs out. The give-up is reachable only in flights where apogee was
+# never detected — and a TIME_AFTER_APOGEE channel is armed only by
+# pyro_apogee_detected. The two halves of the checklist item are mutually
+# exclusive through this path.
+#
+# The refutation at the end is therefore kept as a REGRESSION GUARD, not as
+# evidence: it is necessary, not sufficient. Proving the armed-and-counting
+# case needs a real flight (or a test hook that stamps pyro_apogee_detected),
+# not the stock sim.
+#
+# ch1 is armed TIME_AFTER_APOGEE at 40 s, deliberately LONGER than the ~32 s
+# from apogee to give-up, so the delay is still COUNTING when the sim ends.
+# That is the whole hazard: before PR #1197 the FC handled only the RISING
+# edge of isSimActive(), so the give-up left it INFLIGHT with the dry-fire
+# gate sampling an isSimActive() that had just gone false — and a delay
+# counting from a SIMULATED apogee needs no motion at all to expire. The
+# channel fired for real, on a bench, with nobody flying and no way to send
+# a Stop (the I2C status poll is skipped in a non-sim INFLIGHT) short of the
+# 600 s backstop.
+
+note === rail on ===
+send 8 01
+sleep 22
+
+note === ch1 = TIME_AFTER_APOGEE @ 40 s; ch2-4 disabled ===
+mark
+send 34 010000002042000000000000000000000000000000000000
+sleep 4
+expect_serial_since \[PYRO CFG\] ch1=1/0/40\.0
+
+note === sim profile: apogee ~1.7 m, slow enough that the nose tips past horizontal ===
+mark
+send 5 0000fa44000048429a99993e0000c03f
+sleep 4
+expect_serial_since SIM: Config: mass=2\.000kg thrust=50\.0N
+
+note === sim start: 5 s prelaunch, 0.3 s boost, ~0.5 s coast, ~1.1 s descent ===
+mark
+send 6
+# The other phase lines are Serial.println(), which does not reach this
+# console at all — only the ESP_LOG lines do. This one is ESP_LOGI, and it
+# prints the two numbers the profile is built around: apogee and pitch.
+expect_serial 25 SIM: Phase: DESCENT \(apogee
+expect_serial_since \[STATE\] .* -> INFLIGHT
+# Kept UNSCORED (a note, not an assertion) because it cannot pass: see the
+# header. If a future firmware change ever makes apogee latch under 15 m,
+# this run's console will show the line and the item becomes testable.
+note --- apogee is NOT expected to latch here; see the header for why ---
+
+note === the hold must run its full 30 s and GIVE UP, not end at LANDED ===
+expect_serial 45 SIM: Complete \(gave up after
+refute_serial_since SIM: Complete \(FC reached LANDED
+
+note === #1104: the give-up is classified EndedEarly and treated as a Stop ===
+expect_serial 10 \[SIM\] ended with the FC still in state
+expect_serial 10 \[STATE\] Sim ended early -> READY
+
+note === ...and the FC is actually out of INFLIGHT, not just logging it ===
+mark
+expect_tlm 25 st!=INFLIGHT
+# The precondition, from the board: the flight really did stay under the 15 m
+# floor, which is the only reason the landing vote could not latch.
+expect_tlm 25 malt<15
+
+note === regression guard, NOT proof: ch1 is enabled at 40 s but was never ===
+note === armed, because apogee never latched. Necessary, not sufficient.   ===
+refute_serial 45 \[PYRO\] CH1 .*FIRED
+note === done ===

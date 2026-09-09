@@ -349,7 +349,11 @@ class Session:
     @staticmethod
     def board_ms(text):
         """Milliseconds from an ESP log prefix like 'I (1354) TAG: ...'."""
-        m = re.match(r"^[EWIDV] \((\d+)\)", text)
+        # Tolerate the "[LABEL] " prefix a multi-port capture prepends; without
+        # this the board clock is never found on a labelled run and ordering
+        # silently degrades to wall-clock arrival, which is the very artefact
+        # board time exists to avoid.
+        m = re.match(r"^(?:\[[^\]]+\]\s*)?[EWIDV] \((\d+)\)", text)
         return int(m.group(1)) if m else None
 
     def check_order(self, pat_a, pat_b, directive):
