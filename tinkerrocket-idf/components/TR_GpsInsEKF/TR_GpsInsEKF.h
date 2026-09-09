@@ -127,6 +127,19 @@ public:
     void setDeclination(float dec_rad) { declination_rad_ = dec_rad; }
     float getDeclination() const { return declination_rad_; }
 
+    /// #1135: whether the vehicle is still flying nose-first. Both GNSS-derived
+    /// heading aids (velCourseHeadingUpdate, accelMatchHeadingUpdate) assume
+    /// velocity direction ≈ nose direction; that holds under thrust and coast
+    /// and is false under a canopy, where velocity is wind drift and the
+    /// "lateral force" is swing. On four real flights 72–90 % of those aids'
+    /// fusions happened on descent with ~90° mean innovation — noise, fused at
+    /// full weight. The filter cannot see deployment; the caller can, so it
+    /// clears this from its apogee/deployment flag. Defaults to true, so a
+    /// caller that never sets it (the sim harness) is unchanged. This is not a
+    /// plausibility test on any measurement — it is the aids' own precondition.
+    void setNoseFirstFlight(bool nose_first) { noseFirstFlight_ = nose_first; }
+    bool getNoseFirstFlight() const { return noseFirstFlight_; }
+
     /// Inject known position (lat_rad, lon_rad, alt_m) and reset pos covariance.
     void setPosition(double lat_rad, double lon_rad, double alt_m) {
         pEst_D_rrm_[0] = lat_rad; pEst_D_rrm_[1] = lon_rad; pEst_D_rrm_[2] = alt_m;
@@ -432,6 +445,9 @@ private:
     uint32_t prevGnssSampleUs_   = 0;
     bool     haveGnssAccel_      = false;
     float    gnssAccelLP_NE_[2]  = {0,0};   // low-passed world horizontal accel
+
+    // #1135: see setNoseFirstFlight(). Gates both GNSS-derived heading aids.
+    bool     noseFirstFlight_    = true;
 
     // #257/#265 health: counts down (one per timeUpdate) after stabilizeP()
     // repairs a non-finite covariance — a genuine divergence — keeping

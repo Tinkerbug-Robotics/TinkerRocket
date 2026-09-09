@@ -76,6 +76,60 @@ protected:
 
 // ---------- Tests ----------
 
+// #1135 — the GNSS-derived heading aids are gated on nose-first flight.
+//
+// The course aid treats the GNSS course-over-ground as a nose-azimuth
+// measurement. Here the vehicle is nose-up in its init attitude and is
+// handed a GNSS velocity due EAST at 20 m/s (well past the 3 m/s course
+// gate), so the aid, if applied, sees a ~90° innovation and pulls the
+// attitude. With nose-first flight cleared it must do nothing at all.
+static void runEastCourse(GpsInsEKF& ekf, bool nose_first, float (&q_out)[4]) {
+    uint32_t t = 0;
+    ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    ekf.setNoseFirstFlight(nose_first);
+    for (int i = 1; i <= 250; ++i) {
+        t += 2000;                                   // 500 Hz IMU, GNSS on every tick
+        EkfGNSSDataLLA gnss = makeStationaryGNSS(t);
+        gnss.vel_e_mps = 20.0f;                      // course = east, nose azimuth ≈ north
+        ekf.update(/*use_ahrs_acc=*/false, makeNoseUpIMU(t), gnss, makeNoseUpMag(t));
+    }
+    ekf.getQuaternion(q_out);
+}
+
+TEST(EKFHeadingAidGate, DefaultsToNoseFirstSoAnUnawareCallerIsUnchanged) {
+    // The sim harness never sets the flag; both aids must behave as before.
+    GpsInsEKF ekf;
+    EXPECT_TRUE(ekf.getNoseFirstFlight());
+    ekf.setNoseFirstFlight(false);
+    EXPECT_FALSE(ekf.getNoseFirstFlight());
+    ekf.setNoseFirstFlight(true);
+    EXPECT_TRUE(ekf.getNoseFirstFlight());
+}
+
+TEST(EKFHeadingAidGate, CourseAidIsSkippedOncePastApogee) {
+    GpsInsEKF ekf_on, ekf_off;
+    float q_on[4], q_off[4];
+    runEastCourse(ekf_on,  /*nose_first=*/true,  q_on);
+    runEastCourse(ekf_off, /*nose_first=*/false, q_off);
+
+    // Identical inputs; the only difference is the gate. If the aid ran in
+    // both cases (the pre-#1135 behaviour) the two solutions are identical
+    // and this fails — that is the regression this test exists for.
+    const float d = tqGeodesicDeg(q_on, q_off);
+    EXPECT_GT(d, 5.0f) << "the course aid moved the attitude by " << d
+                       << " deg regardless of the nose-first flag";
+
+    // And the gated filter is not merely different — it is untouched by the
+    // 90° innovation: with no gyro rate and the AHRS correction off, only the
+    // heading aids and the (consistent) mag can move attitude, so it must
+    // stay within a small angle of where it started.
+    GpsInsEKF ref;
+    uint32_t t = 0;
+    ref.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    float q0[4]; ref.getQuaternion(q0);
+    EXPECT_LT(tqGeodesicDeg(q_off, q0), 2.0f);
+}
+
 TEST_F(EKFTest, Init_LLA_SetsPosition) {
     uint32_t t = 0;
     ekf.init(makeStationaryIMU(t), makeStationaryGNSS(t), makeStationaryMag(t));

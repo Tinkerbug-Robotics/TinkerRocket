@@ -331,13 +331,26 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
         timeWeekPrev_ = gnss_time_us;
         measUpdate(pMeas_D_rrm, vMeas_NED);
         // 10b. GNSS course-over-ground heading aiding — only with enough
-        //      horizontal speed for a well-defined course (else it's noise).
+        //      horizontal speed for a well-defined course (else it's noise),
+        //      and only while still flying nose-first (#1135): under a canopy
+        //      the course is wind drift and says nothing about the nose. On
+        //      four real flights 69–82 % of these fusions were on descent with
+        //      ~90° mean innovation, fused at full weight. Removing them cost
+        //      ≤ 1.9° of ascent attitude on the worst flight and 0.0° on the
+        //      rest; every belief-based alternative (tilt gate, innovation
+        //      gate, R-inflation) rewrote ascent by 27–90° or regressed the
+        //      saturated-gyro sim, because near vertical a large innovation is
+        //      as often the aid correcting a broken attitude as it is noise.
         const float vh_sq = vMeas_NED[0]*vMeas_NED[0] + vMeas_NED[1]*vMeas_NED[1];
-        if (vh_sq > (3.0f*3.0f)) velCourseHeadingUpdate(vMeas_NED);
+        if (noseFirstFlight_ && vh_sq > (3.0f*3.0f)) velCourseHeadingUpdate(vMeas_NED);
 
         // 10c. Accel-match heading aiding — differentiate the GNSS velocity to
         //      a world horizontal acceleration (low-passed), then match it to
         //      the body lateral specific force to observe the roll DOF.
+        //      The low-pass keeps running while gated so it is warm if the
+        //      flag is ever re-raised; only the fusion is skipped (#1135 —
+        //      64–90 % of these were on descent, where the "lateral force" is
+        //      canopy swing).
         if (haveGnssAccel_ && prevGnssSampleUs_ != 0) {
             const float dtg = (float)(t_us - prevGnssSampleUs_) * 1e-6f;
             if (dtg > 0.005f && dtg < 0.5f) {
@@ -346,7 +359,7 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
                 const float lp = 0.3f;
                 gnssAccelLP_NE_[0] += lp * (aN_raw - gnssAccelLP_NE_[0]);
                 gnssAccelLP_NE_[1] += lp * (aE_raw - gnssAccelLP_NE_[1]);
-                accelMatchHeadingUpdate(aMeas, gnssAccelLP_NE_);
+                if (noseFirstFlight_) accelMatchHeadingUpdate(aMeas, gnssAccelLP_NE_);
             }
         }
         prevGnssVel_NED_[0] = vMeas_NED[0];
