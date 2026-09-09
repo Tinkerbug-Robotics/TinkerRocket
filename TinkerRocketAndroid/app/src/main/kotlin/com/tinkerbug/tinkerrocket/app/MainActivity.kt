@@ -77,6 +77,18 @@ class MainActivity : ComponentActivity() {
                     com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem provides unitSystem,
                 ) {
                 Surface(Modifier.fillMaxSize().statusBarsPadding()) {
+                    // #1057: the scanner is not reachable until a network name
+                    // exists. Without it the app sits on network ID 0 — the
+                    // firmware's factory default AND the app's "unset"
+                    // sentinel — so it pushes nothing to a new device and
+                    // every mismatch surface stays gated off, which is
+                    // invisible until the day an iOS-provisioned rocket has to
+                    // talk to an Android-set-up base station.
+                    val onboarded by container.networkStore.onboarded.collectAsState()
+                    if (!onboarded) {
+                        OnboardingScreen(onContinue = { container.networkStore.setNetwork(it) })
+                        return@Surface
+                    }
                     val granted by permissionsGranted
                     var demoFleet by remember {
                         mutableStateOf<FleetManager<DeviceSession>?>(null)
@@ -87,9 +99,52 @@ class MainActivity : ComponentActivity() {
                     val active by fleet.activeDeviceId.collectAsState()
                     val activeDevice = active?.let { devices[it] }
 
-                    // Re-checked on every recomposition; the fleet's own state
-                    // changes tick this often enough during a flash.
-                    val otaInFlight = container.runningOta()
+                    // #1057: first-connect provisioning. The identity readback
+                    // lands ~1 s after connect and carries the board's unit id;
+                    // the registry says whether this app has ever set that
+                    // board up. Both halves already existed — isProvisioned /
+                    // markProvisioned had no callers outside their unit tests.
+                    val provisioningIdentity by (
+                        activeDevice?.session?.identity
+                            ?: kotlinx.coroutines.flow.MutableStateFlow(
+                                com.tinkerbug.tinkerrocket.session.DeviceIdentity(),
+                            )
+                        ).collectAsState()
+                    var provisioningDismissedFor by remember { mutableStateOf<String?>(null) }
+                    val appNetworkId by container.networkStore.id.collectAsState()
+                    val needsProvisioning = activeDevice != null &&
+                        provisioningIdentity.unitId.isNotEmpty() &&
+                        provisioningIdentity.unitId != provisioningDismissedFor &&
+                        !container.knownDevices.isProvisioned(provisioningIdentity.unitId)
+                    if (needsProvisioning && activeDevice != null) {
+                        DeviceProvisioningDialog(
+                            unitId = provisioningIdentity.unitId,
+                            initialName = provisioningIdentity.unitName
+                                .ifEmpty { activeDevice.advertisedName },
+                            initialRocketId = provisioningIdentity.rocketId ?: 1,
+                            isBaseStation = activeDevice.session.isBaseStation,
+                            appNetworkId = appNetworkId,
+                            store = container.knownDevices,
+                            pusher = activeDevice.session,
+                            onDone = { provisioningDismissedFor = provisioningIdentity.unitId },
+                        )
+                    }
+
+                    // #1063: OBSERVE the session's state, don't just read a
+                    // plain map. runningOta() over a non-snapshot mutableMapOf
+                    // did not invalidate this branch when the session left
+                    // isRunning, so a failed OTA kept OtaProgressScreen up
+                    // with the reason it wrote never reaching the operator.
+                    // Holding the candidate and collecting its state makes the
+                    // `when` below re-evaluate on every transition.
+                    val otaCandidate = container.runningOta() ?: container.lastOta()
+                    val otaState by (otaCandidate?.state
+                        ?: kotlinx.coroutines.flow.MutableStateFlow(
+                            com.tinkerbug.tinkerrocket.session.OtaSession.State.Idle,
+                        )).collectAsState()
+                    val otaInFlight = otaCandidate?.takeIf {
+                        otaState !is com.tinkerbug.tinkerrocket.session.OtaSession.State.Idle
+                    }
 
                     // Voice and profile sync for the REAL fleet are bound at
                     // process scope in AppContainer, not here: a LaunchedEffect

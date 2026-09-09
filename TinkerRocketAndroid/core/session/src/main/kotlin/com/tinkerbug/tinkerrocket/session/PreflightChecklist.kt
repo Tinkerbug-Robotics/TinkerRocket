@@ -383,12 +383,22 @@ public object PreflightCodec {
         put("kind", JsonPrimitive(item.kind.wire))
     }
 
-    private fun decodeItem(el: JsonObject): PreflightItem = PreflightItem(
-        id = el.uuid("id") ?: UUID.randomUUID(),
-        title = el.str("title") ?: "",
-        detail = el.str("detail") ?: "",
-        kind = PreflightItemKind.fromWire(el.str("kind")),
-    )
+    /**
+     * #1090: a malformed id DROPS the item rather than substituting a fresh
+     * UUID. A repaired item has an identity nothing else in the file refers
+     * to, so its `checked` timestamp and its place in `orderedIds` are both
+     * lost anyway — it comes back as an unchecked step at the end of the list,
+     * which reads as corruption rather than recovery. iOS drops it too.
+     */
+    private fun decodeItem(el: JsonObject): PreflightItem? {
+        val id = el.uuid("id") ?: return null
+        return PreflightItem(
+            id = id,
+            title = el.str("title") ?: "",
+            detail = el.str("detail") ?: "",
+            kind = PreflightItemKind.fromWire(el.str("kind")),
+        )
+    }
 
     private fun decodeItems(el: JsonArray?): List<PreflightItem> =
         el?.mapNotNull { (it as? JsonObject)?.let(::decodeItem) }.orEmpty()

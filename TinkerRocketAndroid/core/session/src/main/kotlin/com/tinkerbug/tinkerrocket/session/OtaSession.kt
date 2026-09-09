@@ -178,7 +178,9 @@ public class OtaSession(
                 // rather than pushing the remaining megabyte at a dead session.
                 val st = sessionLookup()?.otaStatus?.value
                 if (st?.state == OtaStatusUpdate.State.VERIFY_FAILED) {
-                    _state.value = State.Failed("Device rejected chunk: ${st.err ?: "unknown"}")
+                    _state.value = State.Failed(
+                        "Device rejected chunk: ${st.err ?: "unknown"} — device took ${st.bytes} of ${image.size} B",
+                    )
                     sessionLookup()?.sendBareCommand(BleCommandId.OTA_ABORT)
                     return
                 }
@@ -192,9 +194,20 @@ public class OtaSession(
                 val end = minOf(offset + chunkSize, image.size)
                 val chunk = image.copyOfRange(offset, end)
                 val isLast = end == image.size
-                val ok = runCatching {
+                // #1094: a user cancel resumes the cancelled write as a
+                // CancellationException, and `runCatching` catches Throwable —
+                // so cancel()'s own "Cancelled" state was overwritten with
+                // "Chunk write failed at offset N" and a SECOND OTA_ABORT was
+                // sent. Which message the operator ended up reading was a
+                // cross-thread race. Let cancellation through untouched.
+                val ok = try {
                     live.writeOtaChunk(Commands.otaChunkFrame(offset.toLong(), chunk, isLast))
-                }.isSuccess
+                    true
+                } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    false
+                }
                 if (!ok) {
                     _state.value = State.Failed("Chunk write failed at offset $offset")
                     sessionLookup()?.sendBareCommand(BleCommandId.OTA_ABORT)
@@ -220,7 +233,11 @@ public class OtaSession(
         if (!awaitOtaState(OtaStatusUpdate.State.READY_TO_BOOT, finishTimeout)) {
             val st = sessionLookup()?.otaStatus?.value
             _state.value = if (st?.state == OtaStatusUpdate.State.VERIFY_FAILED) {
-                State.Failed("Verify failed: ${st.err ?: "unknown"}")
+                // #1094: the byte count separates the two faults the token
+                // alone does not — short of the image size means the relay
+                // dropped chunks, the full size with a SHA failure means they
+                // arrived corrupted (iOS prints the same pair).
+                State.Failed("Verify failed: ${st.err ?: "unknown"} — device took ${st.bytes} of ${image.size} B")
             } else {
                 State.Failed("Device did not finalize OTA within ${finishTimeout / 1000}s")
             }
@@ -233,10 +250,19 @@ public class OtaSession(
 
         // 5. Device reboots ~500 ms after ready_to_boot.  A destroyed session
         // (lookup returns null) counts as disconnected.
+        //
+        // #1094: only the BLE peer's OWN firmware makes the link drop. On an
+        // FC relay the peer is the out computer, which does not reboot — the
+        // FC does, behind it — so there is no disconnect to wait for and this
+        // burned the full timeout on every FC flash, with the screen reading
+        // "Rebooting" while the FC was in fact rebooting normally. iOS has
+        // gated both post-finish waits on the target since its own fix.
         _state.value = State.Rebooting
-        awaitPredicate(DISCONNECT_TIMEOUT_MS) {
-            val s = sessionLookup()
-            s == null || !s.isConnected.value
+        if (!targetIsFc) {
+            awaitPredicate(DISCONNECT_TIMEOUT_MS) {
+                val s = sessionLookup()
+                s == null || !s.isConnected.value
+            }
         }
 
         // 6. Reconnect — the fleet builds a NEW session for the same device,

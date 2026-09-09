@@ -142,6 +142,16 @@ class AppContainer(app: Application) {
     fun runningOta(): com.tinkerbug.tinkerrocket.session.OtaSession? =
         otaSessions.values.firstOrNull { it.isRunning }
 
+    /**
+     * #1063: the session that was running, so its TERMINAL state can be shown.
+     * [runningOta] goes null the instant an OTA fails, which is exactly when
+     * the operator needs to read why.
+     */
+    fun lastOta(): com.tinkerbug.tinkerrocket.session.OtaSession? =
+        otaSessions.values.firstOrNull {
+            it.state.value !is com.tinkerbug.tinkerrocket.session.OtaSession.State.Idle
+        }
+
     fun otaSessionFor(deviceId: String): com.tinkerbug.tinkerrocket.session.OtaSession =
         otaSessions.getOrPut(deviceId) {
             com.tinkerbug.tinkerrocket.session.OtaSession(
@@ -346,11 +356,22 @@ class AppNetworkStore(app: Application) {
     private val _id = kotlinx.coroutines.flow.MutableStateFlow(prefs.getInt("networkID", 0))
     val id: kotlinx.coroutines.flow.StateFlow<Int> = _id
 
+    /**
+     * #1057: has the operator ever chosen a network name? A stored non-empty
+     * name IS the completed onboarding — one fact, one source. (iOS keeps a
+     * separate `hasOnboarded` flag because its name lives in @AppStorage with
+     * no other writer; here Device Manager can set the name too, and that
+     * counts as onboarded just the same.)
+     */
+    private val _onboarded = kotlinx.coroutines.flow.MutableStateFlow(_name.value.isNotEmpty())
+    val onboarded: kotlinx.coroutines.flow.StateFlow<Boolean> = _onboarded
+
     fun setNetwork(name: String) {
         val id = com.tinkerbug.tinkerrocket.session.NetworkIdentity.networkIdForName(name)
         _name.value = name
         _id.value = id
         prefs.edit().putString("networkName", name).putInt("networkID", id).apply()
+        _onboarded.value = name.isNotEmpty()
     }
 }
 

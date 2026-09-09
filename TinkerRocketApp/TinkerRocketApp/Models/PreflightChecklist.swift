@@ -121,7 +121,11 @@ struct PreflightMaster: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        items = try c.decodeIfPresent([PreflightItem].self, forKey: .items) ?? []
+        // #1090: per ELEMENT, like the id arrays. A strict decode threw the
+        // whole master list away on one malformed item, and PreflightStore's
+        // `try?` then fell back to the built-in default master — the
+        // operator's edits gone with no message.
+        items = lenientItems(c, .items)
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
 }
@@ -170,7 +174,16 @@ struct PreflightRocketConfig: Codable, Equatable {
         // PreflightStore.load() then discards the WHOLE config — exclusions,
         // extras, checked state all lost for one bad string.
         disabledMasterIds = Self.lenientUUIDs(c, .disabledMasterIds)
-        extraItems = try c.decodeIfPresent([PreflightItem].self, forKey: .extraItems) ?? []
+        // #1090: the id arrays either side of this line have decoded leniently
+        // since the port; this one threw, and PreflightStore.load() swallows
+        // the throw with `continue` — so ONE malformed id reverted that
+        // airframe to the untouched master list, losing its exclusions, extra
+        // steps, run order and checked state silently. A malformed item is
+        // DROPPED rather than repaired with a fresh UUID (Android did that,
+        // and an item with a new identity no longer matches its own `checked`
+        // and `orderedIds` entries — it is present but inert); Android drops
+        // it too since #1090.
+        extraItems = lenientItems(c, .extraItems)
         orderedIds = Self.lenientUUIDs(c, .orderedIds)
         checked = try c.decodeIfPresent([String: Date].self, forKey: .checked) ?? [:]
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
@@ -192,6 +205,20 @@ struct PreflightRocketConfig: Codable, Equatable {
 /// Per-entry tolerant UUID decode: a malformed string or non-string entry
 /// decodes as nil (skipped by the caller) instead of throwing and taking
 /// the whole file down with it.
+private struct FailableItem: Decodable {
+    let value: PreflightItem?
+    init(from decoder: Decoder) { value = try? PreflightItem(from: decoder) }
+}
+
+/// #1090: drop only the malformed element, never the whole array. Free and
+/// generic because both PreflightMaster and PreflightRocketConfig decode item
+/// arrays and each has its own CodingKeys.
+private func lenientItems<K: CodingKey>(_ c: KeyedDecodingContainer<K>,
+                                        _ key: K) -> [PreflightItem] {
+    let raw = (try? c.decodeIfPresent([FailableItem].self, forKey: key)) ?? nil
+    return raw?.compactMap(\.value) ?? []
+}
+
 private struct FailableUUID: Decodable {
     let value: UUID?
     init(from decoder: Decoder) {

@@ -727,9 +727,21 @@ final class ActiveRocketSyncer: ObservableObject {
 
     /// Equal once both sides are rounded to the decimals the value is
     /// serialised at in the readback JSON.
+    ///
+    /// #1090: compare the two values EXACTLY as the firmware serialises them —
+    /// `snprintf("%.*f", decimals, (double)v)` — which is what this comment
+    /// always claimed. The old form did a Float multiply and `.rounded()`
+    /// (ties away from zero) while Android widened to Double and used
+    /// `Math.round` (ties up), so the two platforms disagreed in two separate
+    /// ways: a profile holding -20.05 against a rocket reporting "%.1f"
+    /// "-20.0" made iOS compute exactly -200.5, round to -201, conclude the
+    /// profile differed, overwrite it and show "Updated from this rocket" on
+    /// EVERY connect, while Android stayed quiet. `String(format:)` is the C
+    /// formatter, so this is the firmware's own rounding, ties included;
+    /// Android matches it with BigDecimal/HALF_EVEN (its `String.format`
+    /// rounds ties UP and would not agree).
     static func same(_ a: Float, _ b: Float, decimals: Int) -> Bool {
-        let scale = powf(10, Float(decimals))
-        return (a * scale).rounded() == (b * scale).rounded()
+        String(format: "%.\(decimals)f", a) == String(format: "%.\(decimals)f", b)
     }
 
     // MARK: - Mag cal
@@ -779,7 +791,15 @@ final class ActiveRocketSyncer: ObservableObject {
     /// with this board's id.  Called from the UI when the user accepts the
     /// `rocketHasUnsavedCal` advisory.
     func importRocketCalIntoActiveProfile() {
+        // #1074: `BLEDevice.unitID` is a non-optional String that starts "" and
+        // is only filled by the config_identity readback ~1 s after connect.
+        // Importing before it lands tagged the calibration with an EMPTY board
+        // id, which no later board can match — so the profile carried a cal
+        // that read as "saved on another board" forever. Android has refused
+        // this since 1a54eb4; the advisory stays up, so the operator can
+        // accept again a moment later.
         guard let device, let store,
+              !device.unitID.isEmpty,
               let profile = store.activeProfile,
               let status = device.magCalStatus, status.subType == .applied
         else { return }
@@ -828,7 +848,9 @@ final class ActiveRocketSyncer: ObservableObject {
     }
 
     func importRocketSensorCalIntoActiveProfile() {
+        // #1074: same empty-unit-id guard as the mag-cal import above.
         guard let device, let store,
+              !device.unitID.isEmpty,
               let profile = store.activeProfile,
               let status = device.sensorCalStatus, status.valid
         else { return }
