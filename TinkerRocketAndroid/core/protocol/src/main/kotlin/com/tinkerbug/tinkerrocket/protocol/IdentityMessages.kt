@@ -61,10 +61,19 @@ public data class ConfigIdentityMsg(
  */
 public data class FcIdentityMsg(
     val fcFirmwareVersion: String?,   // "fc_fw"
+    // #773 step 2: what each BOARD says it is, from its own NVS, as distinct
+    // from what its image was built for. Null or empty means unprovisioned —
+    // never treat that as agreement with anything.
+    val fcBoardRev: String? = null,   // "fc_board"
+    val ocBoardRev: String? = null,   // "oc_board"
 ) {
     public companion object {
         public fun parse(json: JsonObject): FcIdentityMsg =
-            FcIdentityMsg(fcFirmwareVersion = JsonBridging.nsString(json, "fc_fw"))
+            FcIdentityMsg(
+                fcFirmwareVersion = JsonBridging.nsString(json, "fc_fw"),
+                fcBoardRev = JsonBridging.nsString(json, "fc_board")?.ifEmpty { null },
+                ocBoardRev = JsonBridging.nsString(json, "oc_board")?.ifEmpty { null },
+            )
     }
 }
 

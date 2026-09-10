@@ -73,7 +73,11 @@ nonisolated enum EspImageVerdict: Equatable {
     var isRefusal: Bool { if case .refuse = self { return true }; return false }
 }
 
-nonisolated enum EspImage {
+nonisolated private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+enum EspImage {
     static let projectFC = "flight_computer"
     static let projectOC = "out_computer"
     static let projectBS = "base_station"
@@ -133,10 +137,17 @@ nonisolated enum EspImage {
     /// is an ESP32-P4 on the V9 board and an ESP32-S3 on the mini, so a chip
     /// mismatch warns rather than refuses, and the running version is the box's
     /// own claim about itself.
+    /// #773 step 2: `provisionedBoard` is what the BOARD says it is, read from
+    /// its own NVS and untouched by an OTA. When present it WINS over
+    /// `runningVersion`, because the running version is the image's claim and a
+    /// wrongly flashed board repeats that wrong claim forever. The fallback is
+    /// kept for a board that has never been provisioned; the warning says which
+    /// source it used, so a fallback comparison is never read as authoritative.
     static func check(_ data: Data,
                       expectedProject: String,
                       expectedChipId: Int? = nil,
-                      runningVersion: String? = nil) -> EspImageVerdict {
+                      runningVersion: String? = nil,
+                      provisionedBoard: String? = nil) -> EspImageVerdict {
         guard let img = parse(data) else {
             return .refuse(nil, "This file is not an ESP-IDF firmware image. "
                               + "Pick the .bin produced by the build, not a .zip, "
@@ -154,9 +165,18 @@ nonisolated enum EspImage {
             let wantName = EspAppImage.chipNames[want] ?? String(format: "chip 0x%04X", want)
             warnings.append("built for \(img.chipName), but this unit is normally \(wantName)")
         }
-        if let running = runningVersion.flatMap(boardSuffix(of:)),
-           let picked = img.boardSuffix, running != picked {
-            warnings.append("built for board \(picked), but this unit reports \(running)")
+        let provisioned = provisionedBoard?
+            .trimmingCharacters(in: .whitespaces).lowercased()
+            .nilIfEmpty
+        let fromVersion = runningVersion.flatMap(boardSuffix(of:))
+        if let picked = img.boardSuffix {
+            if let p = provisioned, p != picked {
+                warnings.append("built for board \(picked), but this board is provisioned as \(p)")
+            } else if provisioned == nil, let v = fromVersion, v != picked {
+                warnings.append("built for board \(picked), but this unit's firmware "
+                              + "reports \(v) (board not provisioned, so this is the "
+                              + "image's own claim)")
+            }
         }
         return warnings.isEmpty ? .ok(img) : .warn(img, warnings.joined(separator: "; "))
     }

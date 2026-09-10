@@ -40,6 +40,7 @@
 #include <esp_timer.h>
 #include <esp_ota_ops.h>          // Layer 4: esp_ota_mark_app_valid_cancel_rollback (#8/#13)
 #include <esp_app_desc.h>         // esp_app_get_description() for FC_IDENTITY version push (#8)
+#include <BoardIdentity.h>       // #773 step 2: provisioned board revision
 #include <driver/gpio.h>
 #include <esp_attr.h>            // RTC_NOINIT_ATTR for the #848 power-hold latch flag
 #include "pwr_hold_policy.h"     // #848: boot reconciliation decision table
@@ -148,6 +149,11 @@ static bool    mag_cal_status_dirty   = false;  // true → publish on next tick
 // so a calibrated boot has to defer the chip-side write until after begin()
 // completes.  Loaded from NVS in setup(); applied after sensor_collector.begin().
 static int16_t pending_mag_cx = 0, pending_mag_cy = 0, pending_mag_cz = 0;
+// #773 step 2: what this BOARD says it is, read from NVS at boot. Empty when
+// the board has never been provisioned, which is a distinct, reportable state
+// and must never read as agreement with anything.
+static char    provisioned_board_rev[board_identity::kMaxRev + 1] = {0};
+
 static bool    pending_mag_apply = false;
 
 // #1303: program the stored hard iron, clearing the pending flag ONLY on a
@@ -4360,6 +4366,53 @@ static void setup_fc()
     // below.  The converter offset is set here too even though the IIS2MDC
     // chip handles its own subtraction; this lets a single NVS schema cover
     // both mag chips without divergence.
+    // #773 step 2: what this BOARD says it is, as opposed to what this IMAGE
+    // was built for. Written once when the board is provisioned (BLE cmd 74)
+    // and untouched by an OTA, so it stays true across a reflash — which the
+    // version string and TR_BOARD_REV_STR cannot, both being properties of the
+    // image. Absent means unprovisioned, and that is reported as its own state
+    // rather than guessed at.
+    {
+        prefs.begin("board", true);   // read-only
+        char raw[32] = {0};
+        // getBytes, not a string API: TR_NVS has no getString, and the value
+        // is stored as raw bytes by the provisioning command below. Bounded to
+        // sizeof(raw) - 1 so the result is always NUL-terminated even if a
+        // corrupt entry has no terminator of its own.
+        if (prefs.isKey("rev"))
+        {
+            const size_t n = prefs.getBytes("rev", raw, sizeof(raw) - 1);
+            raw[(n < sizeof(raw) - 1) ? n : sizeof(raw) - 1] = '\0';
+        }
+        prefs.end();
+        board_identity::normalizeRev(raw, provisioned_board_rev,
+                                     sizeof(provisioned_board_rev));
+        if (provisioned_board_rev[0] != '\0')
+        {
+            const bool agrees = board_identity::revsMatch(provisioned_board_rev,
+                                                          TR_BOARD_REV_STR);
+            ESP_LOGI(TAG, "#773: board provisioned as %s; this image is built "
+                          "for %s — %s",
+                     provisioned_board_rev, TR_BOARD_REV_STR,
+                     agrees ? "agree" : "*** MISMATCH ***");
+            if (!agrees)
+            {
+                ESP_LOGE(TAG, "#773: this image was built for a different board "
+                              "than the one it is running on. The board is the "
+                              "authority here — the image's own version string "
+                              "cannot tell you this, which is why the board is "
+                              "provisioned separately.");
+            }
+        }
+        else
+        {
+            ESP_LOGW(TAG, "#773: board not provisioned — no stored revision. "
+                          "The app can only fall back to what this image "
+                          "asserts (%s), which a wrong flash gets wrong.",
+                     TR_BOARD_REV_STR);
+        }
+    }
+
     prefs.begin("mag_cal", false);
     if (prefs.isKey("ver"))
     {
@@ -6697,9 +6750,18 @@ static void loop_fc()
                     fc_id_throttle = 0;
                     const esp_app_desc_t* d = esp_app_get_description();
                     const char* v = (d && d->version[0]) ? d->version : "unknown";
+                    // #773 step 2: the version string says what this IMAGE was
+                    // built for, which is circular — a wrongly flashed board
+                    // reports the wrong board forever. Append the revision the
+                    // BOARD itself was provisioned with, so the two can be
+                    // compared. Rides this same variable-length message: an OC
+                    // that predates it reads up to the NUL and never notices.
+                    char id_payload[64];
+                    const size_t id_len = board_identity::encodePayload(
+                        v, provisioned_board_rev, id_payload, sizeof(id_payload));
                     (void)i2c_interface.sendMessage(
-                        FC_IDENTITY, reinterpret_cast<const uint8_t*>(v),
-                        strlen(v), 10);
+                        FC_IDENTITY, reinterpret_cast<const uint8_t*>(id_payload),
+                        id_len, 10);
                 }
             }
 

@@ -80,6 +80,7 @@ static inline std::string itos(int v)
 #include <IRadioLink.h>
 #include <LoRaDirectBackend.h>
 #include <UartModemBackend.h>
+#include <BoardIdentity.h>       // #773 step 2: provisioned board revision
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_Orientation.h>
 #include <TR_Coordinates.h>
@@ -1588,6 +1589,12 @@ static inline OutStatusQueryData snapshotQueryCfg()
 // version (the OC's "fw" never changes on an FC-only update). Re-published when
 // it changes mid-connection (an FC OTA never drops the OC<->app BLE link).
 static char          fc_fw_version[40]  = {0};
+// #773 step 2: what each BOARD says it is, as distinct from what its image was
+// built for. Empty means unprovisioned, which is reported as its own state and
+// never as agreement. The FC's arrives on the FC_IDENTITY message; the OC's is
+// its own NVS.
+static char          fc_board_rev[board_identity::kMaxRev + 1] = {0};
+static char          oc_board_rev[board_identity::kMaxRev + 1] = {0};
 static volatile bool fc_identity_dirty  = false;
 
 // FC's active board→rocket mounting orientation, mirrored from the v3
@@ -4004,13 +4011,19 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     // OC<->app BLE link, so the connect-time "fc_identity" won't refresh itself.
     if (type == FC_IDENTITY)
     {
+        // #773 step 2: the payload is now "<version>\0<board rev>". An FC that
+        // predates that sends only the version, and decodePayload leaves the
+        // revision empty — which is exactly "unprovisioned", the honest answer.
         char incoming[sizeof(fc_fw_version)] = {0};
-        size_t n = (payload_len < sizeof(incoming) - 1) ? payload_len
-                                                        : sizeof(incoming) - 1;
-        if (n > 0) memcpy(incoming, payload, n);
-        if (strncmp(incoming, fc_fw_version, sizeof(fc_fw_version)) != 0)
+        char incoming_rev[sizeof(fc_board_rev)] = {0};
+        board_identity::decodePayload(
+            reinterpret_cast<const char*>(payload), payload_len,
+            incoming, sizeof(incoming), incoming_rev, sizeof(incoming_rev));
+        if (strncmp(incoming, fc_fw_version, sizeof(fc_fw_version)) != 0 ||
+            strncmp(incoming_rev, fc_board_rev, sizeof(fc_board_rev)) != 0)
         {
             memcpy(fc_fw_version, incoming, sizeof(fc_fw_version));
+            memcpy(fc_board_rev, incoming_rev, sizeof(fc_board_rev));
             fc_identity_dirty = true;
         }
         return;
@@ -5561,11 +5574,20 @@ static void serviceConfigReadbackQueue()
 static void sendFcIdentity()
 {
     const char* fc_fw = fc_fw_version[0] ? fc_fw_version : "unknown";
-    char buf[80];
+    // #773 step 2: both boards' PROVISIONED revisions ride along. Empty stays
+    // empty rather than becoming "unknown" — the app must be able to tell "this
+    // board says it is a V9" from "this board has never been asked", and a
+    // placeholder string would erase that difference.
+    char buf[160];
     snprintf(buf, sizeof(buf),
-             "{\"type\":\"fc_identity\",\"fc_fw\":\"%s\"}", fc_fw);
+             "{\"type\":\"fc_identity\",\"fc_fw\":\"%s\","
+             "\"fc_board\":\"%s\",\"oc_board\":\"%s\"}",
+             fc_fw, fc_board_rev, oc_board_rev);
     enqueueConfigReadback(String(buf));   // #398 item 3
-    ESP_LOGI("CFG", "Queued fc_identity (fc_fw=%s)", fc_fw);
+    ESP_LOGI("CFG", "Queued fc_identity (fc_fw=%s fc_board=%s oc_board=%s)",
+             fc_fw,
+             fc_board_rev[0] ? fc_board_rev : "unprovisioned",
+             oc_board_rev[0] ? oc_board_rev : "unprovisioned");
 }
 
 // Publish the FC's active board→rocket mounting orientation as its own
@@ -8822,6 +8844,25 @@ static void initI2CSlave()
 // ==========================================================================
 static void setup_oc()
 {
+    // #773 step 2: what this BOARD says it is, before anything else uses it.
+    // Written once by BLE cmd 74 and untouched by an OTA, so it survives a
+    // reflash — unlike the image's own version string, which a wrong flash
+    // gets wrong forever. Absent means unprovisioned, reported as its own
+    // state rather than guessed at.
+    {
+        prefs.begin("board", true);
+        char raw[32] = {0};
+        if (prefs.isKey("rev"))
+        {
+            const size_t n = prefs.getBytes("rev", raw, sizeof(raw) - 1);
+            raw[(n < sizeof(raw) - 1) ? n : sizeof(raw) - 1] = '\0';
+        }
+        prefs.end();
+        board_identity::normalizeRev(raw, oc_board_rev, sizeof(oc_board_rev));
+        ESP_LOGI("OC", "#773: out computer board = %s",
+                 oc_board_rev[0] ? oc_board_rev : "unprovisioned");
+    }
+
     // #1168: BEFORE anything that can raise PWR_PIN — the #825 block below
     // does exactly that — withdraw arm consent.
     //
@@ -11628,6 +11669,58 @@ static void loop_oc()
                                "it decides, and it refuses unless the vehicle is "
                                "demonstrably still");
                 ble_app.sendRecoveryEndResult(0);
+            }
+        }
+        else if (ble_cmd == 74)
+        {
+            // #773 step 2 — provision this OUT COMPUTER's board revision.
+            //
+            // BLE ONLY, like cmd 73 above and for the same reason: this writes
+            // the one value that says what the hardware IS, and it should need
+            // someone standing at the rocket rather than being reachable over
+            // the radio.
+            //
+            // Payload: [force][ascii revision...]. force != 0 overwrites an
+            // existing value. Without it an already-provisioned board refuses,
+            // because silently re-stamping identity is how a board ends up
+            // claiming to be something it is not — which is the whole failure
+            // this feature exists to make visible.
+            //
+            // This provisions the OC only. The FC reads its own NVS and is a
+            // separate board with a separate identity; a command that set both
+            // from one place would defeat the point of having two.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t   plen74  = ble_app.getCommandPayloadLength();
+            char want[board_identity::kMaxRev + 1] = {0};
+            const bool force = (plen74 > 0) && (payload[0] != 0);
+            if (plen74 > 1)
+            {
+                char raw[32] = {0};
+                const size_t n = ((plen74 - 1) < sizeof(raw) - 1)
+                               ? (plen74 - 1) : sizeof(raw) - 1;
+                memcpy(raw, payload + 1, n);
+                board_identity::normalizeRev(raw, want, sizeof(want));
+            }
+            if (want[0] == '\0')
+            {
+                ESP_LOGW("OC", "#773: cmd 74 refused — no usable revision in the "
+                               "payload (expected [force][ascii], e.g. 00 'V9')");
+            }
+            else if (oc_board_rev[0] != '\0' && !force)
+            {
+                ESP_LOGW("OC", "#773: cmd 74 refused — this board is already "
+                               "provisioned as %s. Re-send with force=1 if that "
+                               "is genuinely wrong.", oc_board_rev);
+            }
+            else
+            {
+                prefs.begin("board", false);
+                prefs.putBytes("rev", want, strlen(want));
+                prefs.end();
+                ESP_LOGI("OC", "#773: out computer provisioned as %s%s",
+                         want, force ? " (forced)" : "");
+                memcpy(oc_board_rev, want, sizeof(oc_board_rev));
+                fc_identity_dirty = true;   // re-publish so the app sees it now
             }
         }
         else if (ble_cmd == 73)

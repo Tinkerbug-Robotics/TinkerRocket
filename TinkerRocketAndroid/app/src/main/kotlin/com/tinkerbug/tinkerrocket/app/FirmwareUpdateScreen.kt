@@ -89,13 +89,18 @@ fun FirmwareUpdateScreen(
         else -> EspImage.PROJECT_OC
     }
     val expectedChipId = if (targetIsFc && !session.isBaseStation) null else 0x0009
-    val verdict = remember(pickedBytes, expectedProject, identity.firmwareVersion) {
+    val verdict = remember(pickedBytes, expectedProject, identity.firmwareVersion,
+                           identity.fcBoardRev, identity.ocBoardRev) {
         pickedBytes?.let {
             EspImage.check(
                 it,
                 expectedProject = expectedProject,
                 expectedChipId = expectedChipId,
                 runningVersion = if (targetIsFc) null else identity.firmwareVersion,
+                // #773 step 2: the board's own answer, which beats the image's
+                // claim about itself. Android can supply this for the FC too,
+                // where it has no firmware version to fall back on.
+                provisionedBoard = if (targetIsFc) identity.fcBoardRev else identity.ocBoardRev,
             )
         }
     }

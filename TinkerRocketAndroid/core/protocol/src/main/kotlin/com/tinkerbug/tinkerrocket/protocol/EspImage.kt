@@ -128,11 +128,21 @@ public object EspImage {
      * mismatch is a warning rather than a refusal, and the running version is
      * the box's own claim about itself.
      */
+    /**
+     * #773 step 2: [provisionedBoard] is what the BOARD says it is, read from
+     * its own NVS and untouched by an OTA. When present it WINS over
+     * [runningVersion], because the running version is the image's claim and a
+     * wrongly flashed board repeats that wrong claim forever. The fallback is
+     * kept for a board that has never been provisioned, where the circular
+     * value is still better than nothing — but the warning says which source it
+     * used, so nobody reads a fallback comparison as authoritative.
+     */
     public fun check(
         bytes: ByteArray,
         expectedProject: String,
         expectedChipId: Int? = null,
         runningVersion: String? = null,
+        provisionedBoard: String? = null,
     ): EspImageVerdict {
         val img = parse(bytes)
             ?: return EspImageVerdict.Refuse(
@@ -155,12 +165,19 @@ public object EspImage {
             warnings += "built for ${img.chipName}, but this unit is normally " +
                 (EspAppImage.CHIP_NAMES[expectedChipId] ?: "chip 0x%04X".format(expectedChipId))
         }
-        val running = runningVersion?.let {
+        val provisioned = provisionedBoard?.trim()?.lowercase()?.ifEmpty { null }
+        val fromVersion = runningVersion?.let {
             Regex("-([vV]\\d+)(?:[+\\-]|$)").find(it)?.groupValues?.get(1)?.lowercase()
         }
         val picked = img.boardSuffix
-        if (running != null && picked != null && running != picked) {
-            warnings += "built for board $picked, but this unit reports $running"
+        if (picked != null) {
+            if (provisioned != null && provisioned != picked) {
+                warnings += "built for board $picked, but this board is provisioned as $provisioned"
+            } else if (provisioned == null && fromVersion != null && fromVersion != picked) {
+                warnings += "built for board $picked, but this unit's firmware " +
+                    "reports $fromVersion (board not provisioned, so this is the " +
+                    "image's own claim)"
+            }
         }
         return if (warnings.isEmpty()) EspImageVerdict.Ok(img)
         else EspImageVerdict.Warn(img, warnings.joinToString("; "))

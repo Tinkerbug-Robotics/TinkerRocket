@@ -123,4 +123,56 @@ final class EspImageTests: XCTestCase {
         XCTAssertEqual(img.version, "v1")
         XCTAssertEqual(img.idfVersion, "v6.0.1-dirty")
     }
+
+    // MARK: - #773 step 2: the provisioned revision beats the image's own claim
+
+    func testTheProvisionedBoardWinsOverTheRunningVersion() {
+        // The scenario the feature exists for: a V9 board wrongly flashed with
+        // a V8 image reports v8 forever, so comparing against the RUNNING
+        // version happily agrees with the mistake. The board's own answer
+        // catches it.
+        let v8 = image(project: "flight_computer", version: "abc-v8+1", chipId: 0x0012)
+        let v = EspImage.check(v8, expectedProject: EspImage.projectFC,
+                               runningVersion: "0000000-v8+20260901-0900",
+                               provisionedBoard: "v9")
+        guard case .warn(_, let why) = v else { return XCTFail("expected warn, got \(v)") }
+        XCTAssertTrue(why.contains("provisioned as v9"))
+    }
+
+    func testAProvisionedBoardThatAgreesIsSilent() {
+        let v = EspImage.check(
+            image(project: "flight_computer", version: "abc-v9+1", chipId: 0x0012),
+            expectedProject: EspImage.projectFC,
+            runningVersion: "0000000-v8+1", provisionedBoard: "V9")
+        guard case .ok = v else { return XCTFail("expected ok, got \(v)") }
+    }
+
+    func testWithoutAProvisionedBoardItFallsBackAndSaysSo() {
+        let v = EspImage.check(
+            image(project: "flight_computer", version: "abc-v8+1", chipId: 0x0012),
+            expectedProject: EspImage.projectFC,
+            runningVersion: "0000000-v9+1", provisionedBoard: nil)
+        guard case .warn(_, let why) = v else { return XCTFail("expected warn, got \(v)") }
+        XCTAssertTrue(why.contains("not provisioned"))
+        XCTAssertTrue(why.contains("image's own claim"))
+    }
+
+    func testAnEmptyProvisionedStringIsTreatedAsUnprovisioned() {
+        let v = EspImage.check(
+            image(project: "flight_computer", version: "abc-v8+1", chipId: 0x0012),
+            expectedProject: EspImage.projectFC,
+            runningVersion: "0000000-v9+1", provisionedBoard: "  ")
+        guard case .warn(_, let why) = v else { return XCTFail("expected warn, got \(v)") }
+        XCTAssertTrue(why.contains("not provisioned"))
+    }
+
+    func testAnImageWithNoBoardSuffixIsNeverBoardWarned() {
+        // rocket_computer_mini carries no suffix; there is nothing to compare
+        // and inventing a mismatch would be worse than saying nothing.
+        let v = EspImage.check(
+            image(project: "rocket_computer_mini", version: "abc+20260909-2043", chipId: 0x0009),
+            expectedProject: EspImage.projectMini,
+            expectedChipId: 0x0009, provisionedBoard: "v9")
+        guard case .ok = v else { return XCTFail("expected ok, got \(v)") }
+    }
 }
