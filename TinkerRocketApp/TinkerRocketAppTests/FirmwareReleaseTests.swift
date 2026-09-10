@@ -98,13 +98,31 @@ final class FirmwareReleaseTests: XCTestCase {
             FirmwareReleaseLocator.releasesURL: Data(listing(rel("fw-v1.0.0")).utf8),
             "https://example.test/fw-v1.0.0/manifest.json": Data(manifestJson.utf8),
         ]).latestManifest()
-        XCTAssertEqual(r?.0.tag, "fw-v1.0.0")
-        XCTAssertEqual(r?.1.images.count, 1)
+        XCTAssertEqual(r?.release.tag, "fw-v1.0.0")
+        XCTAssertEqual(r?.manifest.images.count, 1)
+        // The raw text comes back too, so a cache stores what it verified
+        // rather than a re-serialization that could differ from it.
+        XCTAssertEqual(r?.manifestJSON, manifestJson)
+    }
+
+    func testAReleaseRoundTripsThroughItsOwnListingJSON() {
+        // The cache writes this and reads it back through the SAME parser the
+        // network path uses, so there is one codec for release JSON rather
+        // than two that can disagree. Quoting matters: an asset name or URL
+        // with a quote or backslash in it must survive.
+        let original = FirmwareRelease(
+            tag: "fw-v1.0.0", isPrerelease: true,
+            assets: ["manifest.json": "https://example.test/a b/manifest.json",
+                     "odd\"name.bin": "https://example.test/x\\y.bin"])
+        let back = FirmwareReleaseLocator
+            .firmwareReleases(original.toListingJSON(), includePrereleases: true)
+        XCTAssertEqual(back.count, 1)
+        XCTAssertEqual(back.first, original)
     }
 
     func testNoNetworkIsNilNotAThrow() async {
         let r = await repo([:]).latestManifest()
-        XCTAssertNil(r?.0)
+        XCTAssertNil(r?.release)
     }
 
     func testAVerifiedDownloadReturnsTheBytes() async throws {

@@ -130,8 +130,31 @@ class FirmwareReleaseTest {
             "https://example.test/fw-v1.0.0/manifest.json" to manifestJson.encodeToByteArray(),
         )).latestManifest()
         assertNotNull(r)
-        assertEquals("fw-v1.0.0", r.first.tag)
-        assertEquals(1, r.second.images.size)
+        assertEquals("fw-v1.0.0", r.release.tag)
+        assertEquals(1, r.manifest.images.size)
+        // The raw text comes back too, so a cache stores what it verified
+        // rather than a re-serialization that could differ from it.
+        assertEquals(manifestJson, r.manifestJson)
+    }
+
+    @Test
+    fun `a release round-trips through its own listing JSON`(): Unit = runSync {
+        // The cache writes this and reads it back through the SAME parser the
+        // network path uses, so there is one codec for release JSON rather
+        // than two that can disagree. Quoting matters: an asset name or URL
+        // with a quote or backslash in it must survive.
+        val original = FirmwareRelease(
+            tag = "fw-v1.0.0",
+            isPrerelease = true,
+            assets = mapOf(
+                "manifest.json" to "https://example.test/a b/manifest.json",
+                "odd\"name.bin" to "https://example.test/x\\y.bin",
+            ),
+        )
+        val back = FirmwareReleaseLocator
+            .firmwareReleases(original.toListingJson(), includePrereleases = true)
+            .single()
+        assertEquals(original, back)
     }
 
     @Test

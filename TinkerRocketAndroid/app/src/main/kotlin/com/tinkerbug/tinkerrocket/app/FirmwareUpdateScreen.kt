@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.protocol.FirmwareImage
 import com.tinkerbug.tinkerrocket.protocol.FirmwareRepository
 import com.tinkerbug.tinkerrocket.session.DeviceSession
+import com.tinkerbug.tinkerrocket.session.FirmwareCache
 import com.tinkerbug.tinkerrocket.session.FirmwareCatalogSession
 import com.tinkerbug.tinkerrocket.session.HttpFirmwareFetch
 import com.tinkerbug.tinkerrocket.session.OtaSession
@@ -82,6 +83,11 @@ fun FirmwareUpdateScreen(
         FirmwareCatalogSession(
             FirmwareRepository(HttpFirmwareFetch.fetch, HttpFirmwareFetch.sha256),
             scope,
+            // Internal storage, not the cache dir: Android reclaims cacheDir
+            // under pressure, and firmware fetched at home specifically to
+            // survive a field with no signal is the last thing that should
+            // evaporate on the drive there.
+            FirmwareCache(java.io.File(context.filesDir, "firmware"), HttpFirmwareFetch.sha256),
         )
     }
     val catalogState by catalog.state.collectAsState()
@@ -226,6 +232,10 @@ fun FirmwareUpdateScreen(
                         )
                     },
                     onDownload = { catalog.download(it) },
+                    onPrefetch = {
+                        (catalogState as? FirmwareCatalogSession.State.Ready)
+                            ?.let { catalog.prefetch(it.images) }
+                    },
                     onDismiss = { catalog.reset() },
                 )
             }
@@ -378,6 +388,7 @@ private fun CatalogBlock(
     busy: Boolean,
     onCheck: () -> Unit,
     onDownload: (FirmwareImage) -> Unit,
+    onPrefetch: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     when (state) {
@@ -400,6 +411,18 @@ private fun CatalogBlock(
                 "Release ${state.release.tag}",
                 style = MaterialTheme.typography.bodyMedium,
             )
+            if (state.offline) {
+                // The images are real and still verified on the way out; it is
+                // the CATALOG that may be older than what has since been
+                // published, and the operator should know which they are
+                // looking at rather than assume it is current.
+                Text(
+                    "Offline — showing what this phone downloaded earlier. " +
+                        "A newer release may exist.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (state.alreadyRunning) {
                 // Not hidden and not blocked: re-flashing the running version
                 // is a legitimate repair. It just should not look like an
@@ -435,12 +458,52 @@ private fun CatalogBlock(
                 ) {
                     Text(
                         (if (img == state.best) "✓ " else "") +
-                            "${img.summary} · ${humanBytes(img.sizeBytes)}",
+                            "${img.summary} · ${humanBytes(img.sizeBytes)}" +
+                            // What is already on the phone, so the operator can
+                            // see at a glance what a dead signal still leaves.
+                            (if (img.sha256 in state.held) " · on this phone" else ""),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
             }
-            TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancel") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // The "do this at home" action, which is what makes a field
+                // with no signal survivable at all.
+                OutlinedButton(enabled = !busy, onClick = onPrefetch) {
+                    Text("Download all for offline use", style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancel") }
+            }
+        }
+
+        is FirmwareCatalogSession.State.Prefetching -> Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(Modifier.padding(2.dp))
+            Text(
+                "Downloading ${state.index} of ${state.total}: ${state.image.file}…",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
+        is FirmwareCatalogSession.State.Prefetched -> Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                "${state.stored} image(s) ready offline · ${humanBytes(state.bytesHeld)} on this phone",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (state.failed.isNotEmpty()) {
+                // Named rather than counted: knowing WHICH one is missing is
+                // what lets someone retry the one that matters before leaving.
+                Text(
+                    "Could not download: ${state.failed.joinToString(", ")}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            OutlinedButton(enabled = !busy, onClick = onCheck) { Text("Back to the list") }
         }
 
         is FirmwareCatalogSession.State.Downloading -> Row(
