@@ -2453,6 +2453,31 @@ static void updateDerivedAltitudeFromBMP()
     if (!(p >= BMP_PRESSURE_MIN_PA && p <= BMP_PRESSURE_MAX_PA))
     {
         oc_bmp_bad_reads++;
+        // #1149 item 2: this counter used to be incremented and read by NOTHING
+        // — not logged, not in telemetry, not in the storage stats — while its
+        // own comment promised a fault "countable at both ends" mirroring the
+        // FC's dbg_bmp_bad_reads. The bench item asks the operator to confirm
+        // it reads 0 on a healthy board, which was not possible at all.
+        //
+        // Reported HERE rather than on a periodic line, for two reasons. A
+        // healthy board should say nothing, so "0" needs no line and a silent
+        // log IS the pass. And the obvious periodic home — the OC stats block —
+        // is gated on config::VERBOSE_DEBUG and so never prints in a shipping
+        // build, which is exactly the trap that left this unreadable before.
+        // Rate-limited because a stuck sensor would otherwise flood at sample
+        // rate; the count carries the true total.
+        {
+            static uint32_t last_bad_log_ms = 0;
+            const uint32_t now_bad_ms = millis();
+            if (oc_bmp_bad_reads == 1 ||
+                (uint32_t)(now_bad_ms - last_bad_log_ms) >= 10000u) {
+                last_bad_log_ms = now_bad_ms;
+                ESP_LOGW("OC", "bmp_bad_reads=%lu — pressure sample outside the "
+                               "shared band (p=%.0f Pa); the FC counts its half "
+                               "as bmp_bad on the [SENSOR] line (#1149)",
+                         (unsigned long)oc_bmp_bad_reads, (double)p);
+            }
+        }
         return;
     }
 
@@ -7424,14 +7449,6 @@ static void printStats()
     ESP_LOGI("OC", "i2s dma reads/bytes=%lu/%llu",
                   (unsigned long)i2s_dma_reads,
                   (unsigned long long)i2s_dma_bytes);
-    // #1149 item 2: oc_bmp_bad_reads was incremented and then read by nothing —
-    // not logged, not in telemetry, not in the storage stats. Its own comment
-    // promised a fault "countable at both ends", and the bench item asks the
-    // operator to confirm it reads 0 on a healthy board, which was not possible
-    // to do at all. The FC surfaces its half on the [SENSOR] line (bmp_bad=N);
-    // this is the OC's, on the stats block that already carries the rest.
-    ESP_LOGI("OC", "bmp_bad_reads=%lu (pressure samples rejected by the shared band)",
-                  (unsigned long)oc_bmp_bad_reads);
     ESP_LOGI("OC", "i2s dma_rx=%.1f KB/s | ring_drops=%lu | cmd_drops=%lu | parser_drops resync/len/crc=%llu/%llu/%lu",
                   (double)raw_rx_kbs,
                   (unsigned long)rx_ring_overflow_drops,
