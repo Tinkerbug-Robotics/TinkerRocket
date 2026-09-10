@@ -78,6 +78,7 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         rocket_state,
         barometer,
         lora_link,
+        motor,
         parser_stats,
         timing,
         settings,
@@ -117,6 +118,12 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         # a sensor that logged short makes every number above it thinner than
         # it looks, so it belongs where the numbers are read.
         ("sample_rates",      sample_rates.analyze,      LEVEL_FLIGHT),
+        # Back without its entry form (#750): every row is measured from the
+        # log, and the impulse is quoted per kilogram because that is what an
+        # accelerometer can know. It sits after the kinematics it is derived
+        # from, and before the health sections that are about the airframe
+        # rather than the motor.
+        ("motor",             motor.analyze,             LEVEL_FLIGHT),
         # What the IMU was measuring besides the vehicle: the motor, the mounts,
         # and anything loose. Before health because a railed gyro or an
         # impact-like boost is a health finding the verdicts do not make.
