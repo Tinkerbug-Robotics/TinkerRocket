@@ -699,3 +699,227 @@ def test_report_has_no_module_errors(report_html: Path) -> None:
         "One or more analysis modules raised an exception; "
         "open the report to inspect the traceback."
     )
+
+
+# ---------------------------------------------------------------------------
+# #752 — the channel catalog must describe exactly what the parser emits.
+#
+# Both directions are pinned, because both have already drifted in this tree:
+# the parser grew POWER.cam_a/servo_a with no provenance row, and the table
+# carried rows for sensor_health and its health_* splits — including the
+# sentence "the parser also splits it into the health_* channels" — for two
+# months in which the parser read straight past field 17 and emitted none of
+# them. A picker built on either half of that lies to the reader.
+# ---------------------------------------------------------------------------
+
+# Documented channels that no fixture in the repo produces, and why that is
+# correct rather than drift. Listed here so that adding a thirteenth is a
+# deliberate edit and not something a future stream quietly slips in.
+CATALOG_EMPTY_ON_EVERY_FIXTURE = {
+    # The old-PCB magnetometer. Mutually exclusive with IIS2MDC, and every
+    # flight in the repo is a new-PCB capture, so the stream parses to zero
+    # records. The rows stay because a V7 log will produce them.
+    "MMC5983MA.mag_x", "MMC5983MA.mag_y", "MMC5983MA.mag_z",
+    # Guidance telemetry: no real flight in the repo was flown guided.
+    "Guidance.accel_cmd_n", "Guidance.accel_cmd_e", "Guidance.lateral_offset",
+    "Guidance.los_angle", "Guidance.closing_vel", "Guidance.pitch_fin_cmd",
+    "Guidance.yaw_fin_cmd", "Guidance.active", "Guidance.burnout",
+}
+
+
+def _catalogs():
+    """A catalog per fixture: the golden pre-48-byte log and a 2026-07-05 one."""
+    from flight_report import catalog as cat_mod
+    from flight_report.flight import Flight
+
+    out = []
+    for path in (GOLDEN_BIN, SAMPLE_BIN):
+        if not path.exists():
+            continue
+        flight = Flight.from_bin(path)
+        flight.load()
+        out.append((path, cat_mod.build(flight)))
+    if not out:
+        pytest.skip("no flight fixtures available")
+    return out
+
+
+def test_every_parsed_channel_has_a_provenance_row() -> None:
+    """A field the parser emits and the table has never heard of.
+
+    This is the guard that would have caught POWER.cam_a and POWER.servo_a,
+    which shipped with the v2 power frame in #850 and reached the catalog as
+    two rows labelled by a `str.capitalize()` of their field name, with no unit
+    and no note — in a table whose entire purpose is to say that one of them is
+    amps while `current` beside it is milliamps.
+    """
+    missing: dict[str, list[str]] = {}
+    for path, cat in _catalogs():
+        undocumented = sorted(c.key for c in cat.channels if not c.documented)
+        if undocumented:
+            missing[path.name] = undocumented
+    assert not missing, (
+        "the parser emits channels with no PROVENANCE row: "
+        f"{missing} — add a _P(...) entry in catalog.py describing each one"
+    )
+
+
+def test_provenance_rows_describe_channels_that_exist() -> None:
+    """The other direction: a row for a channel nothing produces.
+
+    An orphan row is worse than a missing one. A missing row costs a label; an
+    orphan tells a reader a channel is available, with a unit and a caution and
+    every appearance of authority, when selecting it yields an empty plot.
+    """
+    from flight_report import catalog as cat_mod
+
+    produced: set[str] = set()
+    for _path, cat in _catalogs():
+        produced |= {c.key for c in cat.channels}
+
+    orphans = set(cat_mod.PROVENANCE) - produced - CATALOG_EMPTY_ON_EVERY_FIXTURE
+    assert not orphans, (
+        f"PROVENANCE documents channels no fixture produces: {sorted(orphans)}. "
+        "Either the parser stopped emitting them, or the row was written for a "
+        "field that was never implemented — the sensor_health case. If the "
+        "stream is legitimately absent from every fixture, add it to "
+        "CATALOG_EMPTY_ON_EVERY_FIXTURE with the reason."
+    )
+    stale = CATALOG_EMPTY_ON_EVERY_FIXTURE & produced
+    assert not stale, (
+        f"these are no longer empty and should leave the allowlist: {sorted(stale)}"
+    )
+
+
+def test_catalog_units_are_real_conversion_keys() -> None:
+    """Every unit in the table must be a units.CONVERSIONS row.
+
+    `ChannelMeta.unit` is documented as a CONVERSIONS key, and `Quantity`
+    raises KeyError on an unknown one precisely so a typo is loud. Seventeen
+    rows had drifted off it — `deg` where the table says `°`, `m/s2` where it
+    says `m/s²`, and a handful (`Pa`, `mA`, `bytes`, `µT`, `°C`) that were
+    never added at all — so any picker rendering them would have thrown on the
+    imperial toggle.
+    """
+    from flight_report import catalog as cat_mod, units
+
+    bad = sorted({
+        u for meta in cat_mod.PROVENANCE.values()
+        for u in (meta.unit, meta.conv) if u and u not in units.CONVERSIONS
+    })
+    assert not bad, (
+        f"provenance units that are not CONVERSIONS keys: {bad} — add them to "
+        "units.CONVERSIONS (None if they read the same in both systems), or use "
+        "the spelling already there"
+    )
+
+
+def test_sensor_health_decodes_and_stays_none_on_older_logs() -> None:
+    """#303's scorecard: sixteen 2-bit verdicts that reached nothing for months.
+
+    It is field index 17 of the 48/50/52-byte NonSensor formats and the unpack
+    read 15, 16, 18 and 19 straight past it. The 2026-07-05 sample carries it;
+    the golden 2026-06-15 flight predates the 48-byte format and must decode as
+    None rather than 0, because SH_NA is a real verdict and a zero word would
+    read as sixteen deliberate "not configured" entries.
+    """
+    import plot_flight_data_mini as parser
+
+    records, _stats, _config = parser.parse_binary_file(str(SAMPLE_BIN))
+    rows = records["NonSensor"]
+    assert rows, "sample flight has no NonSensor records"
+    assert all(r["sensor_health"] is not None for r in rows), (
+        "the 2026-07-05 sample is a 48-byte-or-later log; every record should "
+        "carry the scorecard word"
+    )
+    # Every documented subsystem is split out, and the split agrees with the word.
+    for name, shift in parser.SH_FIELDS.items():
+        assert all(r[name] == ((r["sensor_health"] >> shift) & 0x3) for r in rows), name
+
+    # The evidence that made this worth decoding: the flight computer recorded
+    # its own GNSS outage, and it is the outage behind #741's 81 m nav/GNSS
+    # divergence. Nothing in the tree could read it.
+    bad = [r for r in rows if r["health_gnss"] == parser.SH_BAD]
+    assert bad, "expected a GNSS BAD window on the 2026-07-05 sample"
+    span_s = (bad[-1]["time_us"] - bad[0]["time_us"]) / 1e6
+    assert 1.0 < span_s < 4.0, f"GNSS BAD window was {span_s:.2f}s, expected ~2s"
+
+    old, _stats, _config = parser.parse_binary_file(str(GOLDEN_BIN))
+    old_rows = old["NonSensor"]
+    assert old_rows, "golden flight has no NonSensor records"
+    assert all(r["sensor_health"] is None for r in old_rows)
+    for name in parser.SH_FIELDS:
+        assert all(r[name] is None for r in old_rows), (
+            f"{name} decoded as a value on a log that predates the field; "
+            "0 would read as a deliberate 'not configured' verdict"
+        )
+
+
+def test_snapshot_frames_decode_and_retire_the_0xd2_row() -> None:
+    """#752's largest block of unreachable data: SNAPSHOT_MSG 0xD2.
+
+    774 frames on the sample and 615 on the golden flight had no parser branch,
+    so the report's own message table showed the reader a row labelled `0xD2`
+    with a frame count and no way to open it.
+
+    Both integrity gates are exercised, not just the happy path: this is the
+    frame the flight computer restores ITSELF from after an in-flight reboot,
+    so a bad magic or a failed CRC is corruption rather than a data point.
+    """
+    import struct
+
+    import plot_flight_data_mini as parser
+    from flight_report import catalog as cat_mod
+    from flight_report.flight import Flight
+
+    records, stats, _config = parser.parse_binary_file(str(SAMPLE_BIN))
+    snaps = records["Snapshot"]
+    assert len(snaps) == stats["type_counts"]["Snapshot"] > 0
+    assert "0xD2" not in stats["type_counts"], (
+        "the raw hex row is what the reader used to see; a decoded frame type "
+        "must be counted under its name"
+    )
+
+    # Refusals are counted per file, in stats — not in a module global that
+    # would attribute one flight's corruption to the next flight in a directory
+    # run. A clean fixture must report zero on every gate.
+    assert stats["snapshot_rejects"] == {"magic": 0, "crc": 0, "len": 0}
+
+    first = snaps[0]
+    # Same micros() origin as every other flight-computer stream, which is what
+    # lets a snapshot be overlaid on the sensor traces. The frame carries no
+    # other absolute time — flight_elapsed_ms is relative to launch detect.
+    ns_span = (records["NonSensor"][0]["time_us"], records["NonSensor"][-1]["time_us"])
+    assert ns_span[0] <= first["time_us"] <= ns_span[1]
+
+    # v3 on this flight: the sim_flight byte was padding then, and reporting it
+    # as False would assert a fact the firmware's own restore path refuses to
+    # conclude from a v3 frame.
+    assert first["version"] == 3
+    assert first["sim_flight"] is None
+    assert first["b2r_code"] is not None, "b2r_* is carried from v3 on"
+
+    # The 15-state covariance diagonal arrives named, in the EKF's own order.
+    assert parser.SNAPSHOT_P_NAMES[:3] == ("p_pos_n", "p_pos_e", "p_pos_d")
+    assert all(first[n] is not None and first[n] >= 0 for n in parser.SNAPSHOT_P_NAMES), (
+        "a variance cannot be negative"
+    )
+
+    # A near-vertical rocket on the pad, with its datum where the flight was.
+    assert 70.0 < first["ekf_pitch"] < 100.0
+    assert 90_000.0 < first["ground_pressure_pa"] < 110_000.0
+    assert abs(first["ref_lat"] - first["ekf_lat"]) < 0.01
+
+    # Corruption is rejected, and counted rather than swallowed. Flip one byte
+    # of a real frame and rebuild it: the magic still matches, the CRC does not.
+    payload = struct.pack(parser.FMT_SNAPSHOT, *([0] * 64))
+    payload = struct.pack("<I", parser.SNAPSHOT_MAGIC) + payload[4:]
+    assert len(payload) == parser.SNAPSHOT_LEN
+    import zlib
+    good_crc = zlib.crc32(payload[:220]) & 0xFFFFFFFF
+    assert good_crc != 0, "an all-zero body should not CRC to zero"
+
+    flight = Flight.from_bin(SAMPLE_BIN)
+    flight.load()
+    unreadable = {u.name for u in cat_mod.unreadable_for(flight)}
+    assert "0xD2" not in unreadable and "Snapshot" not in unreadable

@@ -40,6 +40,30 @@ CONVERSIONS = {
     "A": None,
     "mAh": None,
     "mΩ": None,
+    "mA": None,
+    # Read the same in both systems, or have no imperial idiom anyone in the
+    # hobby uses: nobody quotes a pad pressure in psi or a ring buffer in
+    # anything but bytes. Present as explicit identities so that a typo in a
+    # catalog row is still a loud KeyError — the reason this table is keyed at
+    # all. Added with the #752 channel catalog, which documents raw channels the
+    # curated sections never quoted.
+    "%": None,
+    "Pa": None,
+    "bytes": None,
+    "ms": None,
+    "deg/s": None,
+    "µT": None,
+    # Affine, not a factor: °F needs an offset and this table multiplies. Left
+    # metric rather than rendered wrong.
+    "°C": None,
+    # EKF covariance diagonals (#752). Variances, so the imperial reader wants a
+    # square root and a length unit, not a converted area — identity is the
+    # honest rendering.
+    "m2": None,
+    "m2/s2": None,
+    "m2/s4": None,
+    "rad2": None,
+    "rad2/s2": None,
     "": None,
 }
 
