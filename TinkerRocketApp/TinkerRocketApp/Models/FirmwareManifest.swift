@@ -14,7 +14,7 @@
 
 import Foundation
 
-struct FirmwareImage: Equatable {
+nonisolated struct FirmwareImage: Equatable {
     let file: String
     let project: String
     let version: String
@@ -37,7 +37,7 @@ struct FirmwareImage: Equatable {
     }
 }
 
-struct FirmwareManifest: Equatable {
+nonisolated struct FirmwareManifest: Equatable {
     let manifestVersion: Int
     let tag: String
     let images: [FirmwareImage]
@@ -112,7 +112,7 @@ struct FirmwareManifest: Equatable {
 /// would leave an operator with a board provisioned wrongly, or not at all,
 /// unable to flash anything — and the flash button still refuses a wrong
 /// project, which is the case that actually matters.
-enum FirmwareCatalog {
+nonisolated enum FirmwareCatalog {
 
     static func forUnit(_ manifest: FirmwareManifest,
                         expectedProject: String,
@@ -155,6 +155,6 @@ enum FirmwareCatalog {
     }
 }
 
-private extension String {
+nonisolated private extension String {
     var nilIfEmptyManifest: String? { isEmpty ? nil : self }
 }

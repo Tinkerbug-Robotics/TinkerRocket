@@ -77,7 +77,7 @@ nonisolated private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
-enum EspImage {
+nonisolated enum EspImage {
     static let projectFC = "flight_computer"
     static let projectOC = "out_computer"
     static let projectBS = "base_station"
