@@ -43,6 +43,12 @@ private struct FirmwareUpdateContent: View {
     @State private var pickedFileData: Data?
     @State private var imageVerdict: EspImageVerdict?
 
+    // #773 step 4c: the other way to get an image — a published release,
+    // instead of a file the operator had to build or be sent. It ends by
+    // adopting the download as the picked file, so a downloaded image and a
+    // hand-picked one go through exactly the same verdict and flash path.
+    @StateObject private var catalog = FirmwareCatalogSession()
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
 
@@ -93,6 +99,9 @@ private struct FirmwareUpdateContent: View {
                 .buttonStyle(.bordered)
                 .padding(.top, 4)
                 .disabled(isInProgress)
+
+                Divider().padding(.vertical, 4)
+                catalogView
             }
 
             // ----- Target picker (#14) -----
@@ -318,6 +327,116 @@ private struct FirmwareUpdateContent: View {
         case .idle, .verified, .rollbackDetected, .failed: return false
         default: return true
         }
+    }
+
+    // MARK: - Published releases (#773 step 4c)
+
+    /// The published-release source, rendered from `catalog.state` and nothing
+    /// else.
+    ///
+    /// Every image the release holds for this unit is listed, not just the
+    /// best one. The catalog ranks a matching board first and an unsuffixed
+    /// image second, but it deliberately refuses to DEFAULT to a revision this
+    /// board is not — so when `best` is nil the list is still here for a
+    /// deliberate choice, with the reason said out loud rather than an empty
+    /// panel.
+    @ViewBuilder
+    private var catalogView: some View {
+        switch catalog.state {
+        case .idle:
+            Button(action: startCheck) {
+                HStack {
+                    Image(systemName: "arrow.down.circle")
+                    Text("Check for a published release…")
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(isInProgress)
+
+        case .checking:
+            HStack(spacing: 8) { ProgressView(); Text("Looking for a release…").font(.subheadline) }
+
+        case .ready(let release, let images, let best, let alreadyRunning):
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Release \(release.tag)").font(.subheadline)
+                if alreadyRunning {
+                    // Not hidden and not blocked: re-flashing the running
+                    // version is a legitimate repair. It just should not look
+                    // like an update when it is not one.
+                    Text("This unit already runs this build — flashing it again is a re-flash, not an update.")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+                if best == nil {
+                    Text("Nothing in this release is built for this board, so none is offered by default. Choose one only if you know it fits.")
+                        .font(.caption).foregroundColor(.red)
+                }
+                ForEach(images, id: \.file) { img in
+                    Button { catalog.download(img) } label: {
+                        HStack {
+                            if img == best { Image(systemName: "checkmark") }
+                            Text("\(img.summary) · \(byteCountString(Int(img.sizeBytes)))")
+                                .font(.caption)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isInProgress)
+                }
+                Button("Cancel") { catalog.reset() }.font(.caption)
+            }
+
+        case .downloading(let image):
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Downloading \(image.file)…").font(.subheadline)
+            }
+
+        // Terminal only for an instant: adoptDownload picks the bytes up and
+        // resets the session.
+        case .downloaded(let release, let image, let bytes):
+            Text("Downloaded \(image.file)").font(.caption)
+                .onAppear { adoptDownload(release: release, image: image, bytes: bytes) }
+
+        case .failed(let reason):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(reason).font(.caption).foregroundColor(.red)
+                Button("Try again", action: startCheck).font(.caption)
+            }
+        }
+    }
+
+    private func startCheck() {
+        catalog.check(
+            expectedProject: expectedProject,
+            provisionedBoard: targetIsFC ? device.fcBoardRev : device.ocBoardRev,
+            runningVersion: targetIsFC ? device.fcFirmwareVersion : device.firmwareVersion
+        )
+    }
+
+    /// Adopt a verified download as the picked file.
+    ///
+    /// Written to a temp file rather than flashed from memory because the OTA
+    /// session takes a URL — and routing it through the same field as a
+    /// hand-picked file means EspImage.check reads the DOWNLOADED image's own
+    /// header, so the manifest that described it is never the last word on
+    /// what is about to be flashed.
+    private func adoptDownload(release: FirmwareRelease, image: FirmwareImage, bytes: Data) {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(image.file)
+        do {
+            try bytes.write(to: url, options: .atomic)
+        } catch {
+            catalog.reset()
+            return
+        }
+        pickedFileURL = url
+        pickedFileName = "\(image.file) (\(release.tag))"
+        pickedFileSize = bytes.count
+        pickedFileSha = Data(SHA256.hash(data: bytes)).map { String(format: "%02x", $0) }.joined()
+        pickedFileData = bytes
+        revalidateImage()
+        if isTerminalState { session.reset() }
+        catalog.reset()
     }
 
     // MARK: - File picker
