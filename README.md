@@ -422,7 +422,7 @@ Validates sensor rates, frame integrity, timestamp health, and data completeness
 
 ### CI/CD
 
-Twelve GitHub Actions workflows run automatically, each path-filtered to what it covers:
+Thirteen GitHub Actions workflows run automatically, each path-filtered to what it covers:
 
 | Workflow | What it does |
 |----------|--------------|
@@ -432,6 +432,7 @@ Twelve GitHub Actions workflows run automatically, each path-filtered to what it
 | **unit-tests.yml** | pytest for `tests/unit/` and `tests/test_roll_profile_semantics.py` — the Python ports of firmware logic (apogee detector, landing detector, mag-scale auto-select) and the base-station binary log reader, whose field offsets are asserted against the C structs in `RocketComputerTypes.h` |
 | **ios-tests.yml** | XCTest for `TinkerRocketApp/` |
 | **android-tests.yml** | Pure-JVM JUnit for `TinkerRocketAndroid/` (protocol/session/maps modules) against the same golden-vector corpus the C++ and iOS suites consume |
+| **firmware-release.yml** | Firmware images and a manifest on `fw-v*` tag push — builds the eleven flashable configurations (`pyro_channel_test` is excluded as a bench tool), reads each image's own `esp_app_desc_t` to build the manifest rather than trusting the build matrix, refuses a `flight_computer` image built on the guidance stub, and fails unless all eleven are present. Manual dry run available, which stops before publishing (#773) |
 | **android-release.yml** | Signed release APK on `android-v*` tag push — JVM suite, then `assembleRelease` signed from repo secrets, with an `apksigner` gate that fails if the APK came out debug-signed (see `docs/android-release-signing.md`) |
 | **flight-report-tests.yml** | Flight-report tooling — the Python suite, plus a Node job for the Explore panel, whose choice of what to draw is made in JavaScript and so is tested there |
 | **pages.yml** | Publishes the browser-based analysis tool to GitHub Pages on pushes to `main`. Builds `Data_Analysis/webtool/payload/` rather than shipping it — it is gitignored, and a committed copy would drift from the source the browser actually runs |
