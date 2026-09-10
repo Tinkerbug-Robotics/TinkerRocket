@@ -1,0 +1,49 @@
+# #1211 / #1145 — OC command dispatch after a phone-IO pause (PR #1284).
+#
+# Rig: V9 pair, S1 -> O (every line this item names is OC-side). Rail ON except
+# where check (4) says otherwise.
+#
+# This file documents the sequence; the runs are driven by hand because a
+# single BLE central cannot both hold the transfer and be the harness. The
+# download comes from tools/ble_flight_download.py and, for check (1),
+# tools/ble_inject_during_download.py — the OC cannot tell either from the app.
+#
+# BENCH 2026-09-10 (main e1a4bee): ALL FOUR PASS.
+#
+# (1) A config push injected 104 kB into a 6.46 MB transfer:
+#       I  (27735) BLE: Received command: 34 (queued, depth=1)
+#       I (216102) BLE: Download complete: 6460942 bytes in 191.4s
+#       I (216104) OC: phone-IO pause ended: 4 stale FC poll(s) discarded, ...
+#       I (216137) BLE: Pyro config: ... (NVS wrote 24 bytes)
+#     188 s in the ring, dispatched 33 ms after the pause ended. The transfer
+#     came off byte-exact (6,460,942 B = the index figure, gaps=0).
+#     NOT observed: the FC-side config-applied line, which is on the other
+#     console. The values pushed matched the ones already set, so an apply
+#     would not have been distinguishable anyway — the OC-side ordering above
+#     is what demonstrates the mechanism.
+#
+# (2) Exactly one #1145 line, and ZERO occurrences of the #1134 false alarm
+#     `slave RX ring overflowed`:
+#       phone-IO pause ended: 4 stale FC poll(s) discarded, 895 ring
+#       overflow(s) during the pause (expected)
+#     The overflows are real and are supposed to be there; the old build
+#     warned about them after every download.
+#     (A second line also contains "phone-IO pause ended" — the #917
+#     no-launch-observed one. Count the #1145 wording, not the substring.)
+#
+# (3) Boot log on a board that has never had cmd 22 pushed:
+#       CFG: NVS PID cache: Kp=0.1200 Ki=0.0100 Kd=0.0000 [-20.0,20.0] GS=ON
+#     ON is the compiled default; the old code read the flag from the wrong
+#     namespace and inverted it.
+#
+# (4) Rail OFF, both halves verbatim:
+#       BLE: File list requested with the flight log not initialised (rail
+#       off): the list is EMPTY by design — power the rail on (cmd 8) to list,
+#       download or delete flights (#1145)
+#       BLE: Download \'flight_7.bin\' refused: flight log not initialised
+#       (rail off) — power the rail on (cmd 8) first (#1145)
+#     The client saw an ABORT it handled, not a hang.
+#
+# RIG NOTE: cmd 8 payload 00 RESETS the OC ("Power off: resetting OC for clean
+# idle state (#9)"), which re-enumerates USB and kills a console capture. Start
+# the capture AFTER the rail-off, or check (4) records nothing.
