@@ -136,6 +136,28 @@ Goal (per the "S3 up first at minimal power" intent): when only S3 (+3V3) is pow
 
 ---
 
+## USB-only power: what is live, and what is not — ACCEPTED AS-BUILT (#669, 2026-09-09)
+
+USB VBUS enters only at TPS2121 IN1 and feeds V_MCU_2S → +3V3; nothing back-feeds
+VBATT. So on USB-only power the whole VBATT rail is dead: camera J4.2, GNSS FL1,
+LoRa FL2/J5.2, servos J3.15/16, pyro charge R20. Logic, sensors, BLE and NAND
+logging all stay live.
+
+**Camera recording now requires the battery.** The old "RunCam records on USB"
+bench workflow does not exist on V9 and is not coming back — accepted, because
+camera inrush now lands on the pack behind the eFuse and C15's 330 µF rather
+than on the shared logic rail, which IS the brownout fix. A USB→camera diode-OR
+was considered and declined: it would put a path back into a rail whose
+isolation is the reason the fix works. Record-start inrush on battery is
+bench-unproven — see #1211.
+
+**The pyro store still reaches ~2.5–2.7 V on USB**, through the four continuity
+pull-ups forward-biasing their fire-FET body diodes into V_CAP (~210 µA, τ ≈ 125 s,
+30–35 mJ, ~2.4 A into 1 Ω — above typical all-fire). Accepted and documented
+rather than fixed: the two candidate changes were re-referencing R8/R10/R12/R18
+to V_CAP, and a 2.2–4.7 kΩ bleed on V_CAP that would cost 2–4 mA continuously in
+flight. **Do not connect e-matches during a USB-only bench session.**
+
 ## Bench checklist before committing V9
 
 1. TPS2121 reverse-blocking hold-up with the new 330 µF on VCC — confirm VCC holds while VBATT (IN1) sags and no disruptive switchover occurs with no USB present. (Startup inrush already calc-verified ~27 mA ≪ ILIM — see Change 1.)
