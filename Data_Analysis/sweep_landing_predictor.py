@@ -7,10 +7,18 @@ landing error vs the LoRa-truth landing.  Produces:
 
   - per-flight error-vs-T_loss curve, colored by phase (ASCENT / drogue / main)
   - 4-up grid combining all flights
-  - aggregate CSV at test_data/landing_pred_sweep.csv
+  - aggregate CSV at test_data/landing_pred_sweep_<dataset>.csv
+
+Output names are derived from the input directory. They used to be fixed, so
+pointing this at any set other than 2026_05_17 silently overwrote that set's
+results — including `test_data/landing_pred_sweep.csv`, which is COMMITTED as
+the #185 baseline and is what #552's skill comparison is measured against. A
+run on a second flight set would leave the right filename holding the wrong
+flights, with nothing in the file to say so.
 
 Usage:
     python sweep_landing_predictor.py [<flights_dir>] [--step 0.5]
+    python sweep_landing_predictor.py <dir> --out-csv a.csv --out-png b.png
 """
 
 from __future__ import annotations
@@ -40,6 +48,16 @@ from landing_predictor import (snapshot_at, predict_landing, actual_landing_enu,
 
 DEFAULT_FLIGHTS_DIR = ("/Users/christianpedersen/Documents/Hobbies/ModelRockets/"
                        "TestFlights/2026_05_17")
+
+# The committed #185 baseline, from the 2026_05_17 set. Never a default output
+# target: a run must not be able to replace it without being asked to.
+BASELINE_CSV = "landing_pred_sweep.csv"
+
+
+def _dataset_slug(flights_dir: Path) -> str:
+    """A filename-safe tag for one flight set, e.g. '2026_07_05 CENJARS'."""
+    name = flights_dir.resolve().name or "flights"
+    return "".join(c if (c.isalnum() or c in "-_") else "_" for c in name).strip("_").lower()
 
 
 @dataclass
@@ -228,7 +246,21 @@ def main():
                    help="T_loss step (s)")
     p.add_argument("--utc-offset-h", type=float, default=-4.0)
     p.add_argument("--no-show", action="store_true")
+    p.add_argument("--out-csv", type=Path, default=None,
+                   help="Aggregate CSV path. Default: test_data/"
+                        "landing_pred_sweep_<dataset>.csv")
+    p.add_argument("--out-png", type=Path, default=None,
+                   help="Grid chart path. Default: plots/"
+                        "landing_pred_sweep_<dataset>.png")
     args = p.parse_args()
+
+    slug = _dataset_slug(args.flights_dir)
+    out_csv = args.out_csv or (_HERE / "test_data" / f"landing_pred_sweep_{slug}.csv")
+    out_png = args.out_png or (_HERE.parent / "plots" / f"landing_pred_sweep_{slug}.png")
+    if out_csv.name == BASELINE_CSV and args.out_csv is None:
+        print(f"Refusing to write the committed baseline {BASELINE_CSV} implicitly; "
+              f"pass --out-csv to mean it.", file=sys.stderr)
+        return 1
 
     flight_dirs = sorted([d for d in args.flights_dir.iterdir() if d.is_dir()])
     sweeps = []
@@ -247,9 +279,9 @@ def main():
         print("No flights to plot")
         return 1
 
-    plot_grid(sweeps,
-              _HERE.parent / "plots" / "landing_pred_sweep_2026_05_17.png")
-    write_csv(sweeps, _HERE / "test_data" / "landing_pred_sweep.csv")
+    plot_grid(sweeps, out_png)
+    write_csv(sweeps, out_csv)
+    print(f"\nWrote {out_png}\n      {out_csv}")
     print_aggregate(sweeps)
 
     if not args.no_show:
