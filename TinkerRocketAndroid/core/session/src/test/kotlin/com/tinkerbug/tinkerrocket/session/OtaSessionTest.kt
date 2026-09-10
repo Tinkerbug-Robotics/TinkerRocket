@@ -12,6 +12,7 @@ import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -34,8 +35,19 @@ class OtaSessionTest {
     private fun TestScope.rig(
         identityJson: String? =
             """{"type":"config_identity","uid":"oc1","un":"Rocket","nid":5,"rid":1,"dt":"R","fw":"v1-old"}""",
+        /**
+         * The FLIGHT computer's own version.  It rides a separate
+         * `"type":"fc_identity"` message — the connected device's
+         * config_identity "fw" is the OUT computer's and never moves on an
+         * FC-only update — so an FC-targeted test that seeds the version into
+         * identityJson leaves versionFor(targetIsFc=true) empty.
+         */
+        fcIdentityJson: String? = null,
     ): Rig {
-        val fw = FakeFirmware(backgroundScope).apply { configIdentityJson = identityJson }
+        val fw = FakeFirmware(backgroundScope).apply {
+            configIdentityJson = identityJson
+            this.fcIdentityJson = fcIdentityJson
+        }
         var session: DeviceSession? = DeviceSession(
             scope = backgroundScope,
             transport = fw,
@@ -56,6 +68,26 @@ class OtaSessionTest {
 
     /** Deterministic image; 64 B is the firmware-plausibility floor. */
     private fun image(n: Int) = ByteArray(n) { (it % 251).toByte() }
+
+    /**
+     * A byte array EspImage.parse accepts, carrying [version] in its
+     * `esp_app_desc_t` — the layout is documented on EspImage: image magic
+     * 0xE9 at 0, app-desc magic 0xABCD5432 at 32, version[32] at 32+16.
+     *
+     * [image] above is deliberately NOT one of these: a file with no readable
+     * descriptor is the fallback path, and the pre-#1337 tests exercise it.
+     */
+    private fun espImage(version: String, n: Int = 600): ByteArray {
+        val b = ByteArray(n) { (it % 251).toByte() }
+        b[0] = 0xE9.toByte()
+        // app-desc magic, little endian
+        b[32] = 0x32; b[33] = 0x54; b[34] = 0xCD.toByte(); b[35] = 0xAB.toByte()
+        val v = version.toByteArray(Charsets.US_ASCII)
+        require(v.size < 32) { "version must fit esp_app_desc_t.version[32]" }
+        for (i in v.indices) b[48 + i] = v[i]
+        b[48 + v.size] = 0
+        return b
+    }
 
     // ── Happy path ───────────────────────────────────────────────────────
 
@@ -158,6 +190,117 @@ class OtaSessionTest {
         val st = r.ota.state.value
         assertIs<OtaSession.State.RollbackDetected>(st)
         assertEquals("v1-old", st.version)
+    }
+
+    /**
+     * #1337.  Bench 2026-09-10: a relay flash landed byte-exact
+     * (`state=3 err=0 bytes=647280`), the FC rebooted cleanly, and the app
+     * announced "Rollback detected — the new image likely failed to boot".
+     * The image was built from the same commit the FC was already running, so
+     * the version string did not change and the old check read that as a
+     * bootloader revert.  Success is "running the image we sent", not "the
+     * string moved".
+     */
+    @Test
+    fun sameVersionImage_landsSuccessfully_verifiesInsteadOfCryingRollback() = runTest {
+        val v = "e1a4bee-v9+20260910-1020"
+        val r = rig(
+            identityJson =
+                """{"type":"config_identity","uid":"oc1","un":"Rocket","nid":5,"rid":1,"dt":"R","fw":"oc-unchanged"}""",
+            fcIdentityJson = """{"type":"fc_identity","fc_fw":"$v"}""",
+        )
+        advanceTimeBy(1_200); runCurrent()
+
+        // Flash the FC an image carrying exactly the version it already runs.
+        r.ota.start(espImage(v), targetIsFc = true)
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        r.fw.emitOtaStatus("ready_to_boot")
+        advanceTimeBy(200); runCurrent()
+
+        // An FC relay never drops the BLE link — the peer is the OC.  The FC
+        // reboots behind it and reports the same string back.
+        advanceTimeBy(OtaSession.FW_TIMEOUT_FC_MS + 1_500); runCurrent()
+
+        val st = r.ota.state.value
+        assertIs<OtaSession.State.Verified>(
+            st,
+            "a same-version image that landed is a success, not a rollback",
+        )
+        assertEquals(v, st.newVersion)
+    }
+
+    /**
+     * The other half of #1337: narrowing the rollback verdict must not delete
+     * it.  When the image carried a DIFFERENT version and the device comes
+     * back on the old one, the bootloader really did revert.
+     */
+    @Test
+    fun realImage_deviceBackOnOldVersion_stillReportsRollback() = runTest {
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(espImage("v2-new"))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        r.fw.emitOtaStatus("ready_to_boot")
+        advanceTimeBy(200); runCurrent()
+
+        r.swapSession(null)
+        advanceTimeBy(300); runCurrent()
+        val fresh = FakeFirmware(backgroundScope).apply {
+            configIdentityJson =
+                """{"type":"config_identity","uid":"oc1","un":"Rocket","nid":5,"rid":1,"dt":"R","fw":"v1-old"}"""
+        }
+        val back = DeviceSession(
+            scope = backgroundScope, transport = fresh,
+            connectedDeviceName = "TR-R-Rocket", clock = { currentTime },
+        )
+        back.start()
+        r.swapSession(back)
+        advanceTimeBy(OtaSession.FW_TIMEOUT_MS + 1_500); runCurrent()
+
+        val st = r.ota.state.value
+        assertIs<OtaSession.State.RollbackDetected>(st)
+        assertEquals("v1-old", st.version)
+    }
+
+    /**
+     * #1337 secondary: the Rebooting screen promised a reconnect on an FC
+     * flash, where #1094 had already (correctly) stopped waiting for one.
+     */
+    @Test
+    fun rebootingState_saysWhetherAReconnectIsActuallyAwaited() = runTest {
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600), targetIsFc = true)
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        r.fw.emitOtaStatus("ready_to_boot")
+        advanceTimeBy(200); runCurrent()
+
+        val fcState = r.ota.state.value
+        assertIs<OtaSession.State.Rebooting>(fcState)
+        assertFalse(
+            fcState.awaitingReconnect,
+            "the BLE peer on an FC relay is the OC, which does not reboot",
+        )
+
+        // A local flash does drop the link, so it does wait.
+        val r2 = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r2.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r2.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        r2.fw.emitOtaStatus("ready_to_boot")
+        advanceTimeBy(200); runCurrent()
+
+        val localState = r2.ota.state.value
+        assertIs<OtaSession.State.Rebooting>(localState)
+        assertTrue(localState.awaitingReconnect)
     }
 
     @Test

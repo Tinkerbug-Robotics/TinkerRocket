@@ -175,7 +175,14 @@ private struct FirmwareUpdateContent: View {
 
         case .rebooting:
             VStack(alignment: .leading, spacing: 8) {
-                ProgressView("Device rebooting — waiting for reconnect (60 s)…")
+                // #1337: an FC relay never drops this link — the peer is the
+                // out computer, which stays up while the FC reboots behind it.
+                // Promising a reconnect there misdescribes the wait.
+                ProgressView(
+                    session.targetIsFC
+                        ? "Flight computer rebooting — waiting for it to report in…"
+                        : "Device rebooting — waiting for reconnect (60 s)…"
+                )
             }
 
         case .verified(let newVersion):
