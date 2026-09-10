@@ -784,4 +784,67 @@ class TelemetryDataTest {
         assertNull(HoldupState.fromCode(9))
         assertNull(decodeOk("""{"hu":9}""").holdupAdvisoryText)
     }
+
+    // ── #412: the LoRa daughterboard's identity and the OC's verdict ──────
+    // Both were console-only, so from the phone a radio-dead rocket looked
+    // exactly like a quiet one. iOS twin: TelemetryDataModemTests.
+
+    @Test
+    fun `modem keys decode`() {
+        val t = decodeOk("""{"mst":1,"mfw":"8f73e281-v8+20260909-1835"}""")
+        assertEquals(1, t.modemState)
+        assertEquals("8f73e281-v8+20260909-1835", t.modemFirmware)
+    }
+
+    @Test
+    fun `a board with no daughterboard says nothing at all`() {
+        // The OC omits both keys rather than sending a zero, so null must mean
+        // "not applicable" and must NOT produce an advisory line.
+        val t = decodeOk("""{"soc":85.0}""")
+        assertNull(t.modemState)
+        assertNull(t.modemFirmware)
+        assertNull(t.modemAdvisoryText)
+    }
+
+    @Test
+    fun `a healthy modem is silent`() {
+        assertNull(decodeOk("""{"mst":1}""").modemAdvisoryText)
+    }
+
+    @Test
+    fun `the two faults are told apart`() {
+        // They are separate because the fix differs: 3 is a reflash of the
+        // daughterboard, 2 is a cable, a rail or a dead board.
+        assertEquals(
+            "Radio daughterboard not answering — no LoRa",
+            decodeOk("""{"mst":2}""").modemAdvisoryText,
+        )
+        assertEquals(
+            "Radio daughterboard firmware mismatch — no LoRa",
+            decodeOk("""{"mst":3}""").modemAdvisoryText,
+        )
+    }
+
+    @Test
+    fun `mst as a float, the flexInt tolerance every integer key has`() {
+        assertEquals(
+            "Radio daughterboard firmware mismatch — no LoRa",
+            decodeOk("""{"mst":3.0}""").modemAdvisoryText,
+        )
+    }
+
+    @Test
+    fun `an unknown state code stays silent rather than inventing a fault`() {
+        assertNull(decodeOk("""{"mst":9}""").modemAdvisoryText)
+    }
+
+    @Test
+    fun `a state with no firmware string still decodes`() {
+        // The modem can be absent, in which case it never identified itself
+        // and the OC omits mfw while still reporting mst.
+        val t = decodeOk("""{"mst":2}""")
+        assertEquals(2, t.modemState)
+        assertNull(t.modemFirmware)
+        assertEquals("Radio daughterboard not answering — no LoRa", t.modemAdvisoryText)
+    }
 }

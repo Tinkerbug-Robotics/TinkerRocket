@@ -24,6 +24,11 @@ struct TelemetryData: Codable {
     // link (LoRa does not carry it).  Rendered as one quiet advisory line.
     var scap_voltage: Float?
     var holdup_state: Int?
+    // #412: the LoRa daughterboard's own firmware version ("mfw") and the out
+    // computer's verdict on it ("mst"). Direct link only — a protocol mismatch
+    // disables the radio, so the fault cannot announce itself over LoRa.
+    var modem_fw: String?
+    var modem_state: Int?
     var voltage: Float?               // Battery voltage V
     var latitude: Double?             // GPS latitude degrees
     var longitude: Double?            // GPS longitude degrees
@@ -255,6 +260,24 @@ struct TelemetryData: Codable {
     /// cap that never charged speaks, and so does a sense that exists but
     /// does not answer — a dead ADC must not be silence either.  Charging and
     /// charged stay quiet.  Android twin: `holdupAdvisoryText(Int?, Float?)`.
+    // #412: the out computer's verdict on the LoRa daughterboard ("mst").
+    // Absent entirely on boards with no daughterboard, so nil means "not
+    // applicable", never "fine".
+    enum ModemState: Int { case up = 1, absent = 2, incompatible = 3 }
+    var modemState: ModemState? { modem_state.flatMap(ModemState.init(rawValue:)) }
+    /// One quiet advisory line, or nil when there is nothing to say. `up` is
+    /// silent. The two faults are kept apart because the fix differs: a
+    /// mismatch is a reflash, an absent modem is a cable, a rail or a dead
+    /// board. Either way the radio is off, which is why this only ever
+    /// arrives over the direct link. Android twin: `modemAdvisoryText(Int?)`.
+    var modemAdvisoryText: String? {
+        switch modemState {
+        case .absent:       return "Radio daughterboard not answering — no LoRa"
+        case .incompatible: return "Radio daughterboard firmware mismatch — no LoRa"
+        case .up, .none:    return nil
+        }
+    }
+
     var holdupAdvisoryText: String? {
         switch holdupState {
         case .notCharging:
@@ -459,6 +482,8 @@ struct TelemetryData: Codable {
         case servo_current = "scur"    // #850
         case scap_voltage = "scap"     // #1166
         case holdup_state = "hu"       // #1166
+        case modem_fw = "mfw"          // #412
+        case modem_state = "mst"       // #412
         case voltage = "vol"
         case latitude = "lat"
         case longitude = "lon"

@@ -200,6 +200,11 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
         ESP_LOGE(TAG, "modem protocol v%u != host v%u — radio disabled "
                       "(mismatched daughterboard pair?)",
                  identity_.protocol_version, PROTOCOL_VERSION);
+        // #412: latch it here too. The runtime path at onFrame() already does,
+        // and without this the begin()-path mismatch — the common one, since a
+        // mismatched pair is mismatched from power-on — reported as "absent"
+        // to the app, which points at a cable when the fix is a reflash.
+        modem_incompatible_ = true;
         return failClosed(true);
     }
     ESP_LOGI(TAG, "modem up: chip=%u fw=%.32s max_tx=%ddBm band=%.0f-%.0fMHz",

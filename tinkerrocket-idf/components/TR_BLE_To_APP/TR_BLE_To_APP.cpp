@@ -2113,6 +2113,19 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("scap", data.scap_voltage, 2);
     if (data.holdup_state != 0) { addUint("hu", data.holdup_state); }
 
+    // #412: the daughterboard modem. Absent on every board that has no
+    // daughterboard — state 0 is not emitted and the fw string stays empty —
+    // so the direct-radio boards pay nothing, same shape as "hu" above.
+    // "mst" 2 (absent) and 3 (protocol mismatch) are deliberately separate:
+    // 3 is a matched-pair problem a reflash fixes, 2 is a cable, a rail or a
+    // dead board. Both mean the radio is off, which is why this rides the
+    // DIRECT link — a mismatch cannot announce itself over LoRa.
+    if (data.modem_state != 0)
+    {
+        addUint("mst", data.modem_state);
+        if (data.modem_fw[0] != '\0') { addString("mfw", data.modem_fw); }
+    }
+
     // ── Tier 3: diagnostics / link / base station (first to drop) ─────────
 
     // LoRa signal quality (NaN on direct connection — will be omitted)
