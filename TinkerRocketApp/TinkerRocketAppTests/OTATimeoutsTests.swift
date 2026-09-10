@@ -97,9 +97,20 @@ final class OTATimeoutsTests: XCTestCase {
         XCTAssertEqual(
             OTATimeouts.fcRelayPaceDelay(bytesSent: oneSecond, elapsed: 5.0), 0)
 
-        // The rate enforced is the one measured working on the bench: iOS ran
-        // the relay at 11.4 kB/s, Android at ~68 kB/s wedged the OC's mbuf pool.
-        XCTAssertTrue((11_000...13_000).contains(rate),
-                      "cap should sit at iOS's proven-good relay rate, was \(rate) B/s")
+        // The cap has to stay under what the OC can drain, and the bench
+        // measured where that is (#811, 2026-09-10, 647,472 B over the relay):
+        //
+        //   12 KB/s  53.0 s  qdepth peak 2                 clean
+        //   20 KB/s  31.3 s  qdepth peak 3                 clean   <- shipped
+        //   30 KB/s  20.7 s  qdepth 13 at startup only     clean
+        //   40 KB/s  15.2 s  qdepth 16 sustained, 4 ACL alloc failures
+        //
+        // Lower bound: the rate iOS was already proven to run at, so this can
+        // never regress below something known to work. Upper bound: where the
+        // OC's 16-frame feed queue saturates and NimBLE starts failing ACL
+        // allocations — the #627 wedge, reproduced deliberately at 40.
+        XCTAssertTrue((11_000...30_000).contains(rate),
+                      "cap must stay between iOS's proven-good rate and the measured "
+                      + "point where the OC's feed queue saturates, was \(rate) B/s")
     }
 }

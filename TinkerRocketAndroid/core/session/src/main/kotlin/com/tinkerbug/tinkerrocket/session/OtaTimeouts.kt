@@ -65,8 +65,29 @@ public object OtaTimeouts {
      * works; Android pumps ~68 kB/s and it fails. iOS was never *correct*, only
      * slow enough to stay under a limit nobody had written down. This writes it
      * down — nearly a no-op on iOS, the actual fix on Android.
+     *
+     * BENCH-MEASURED 2026-09-10 (#811), V9 pair, 647,472 B image over the
+     * relay, OC console captured. The cap is what sets the transfer time —
+     * `image / cap` — and the idle-fill everyone kept trying to optimise is
+     * just `1 - cap/50KB` falling out of it:
+     *
+     *   cap      pump    idle   qdepth peak        mbuf failures
+     *   12 KB/s  53.0 s  77%    2                  0
+     *   20 KB/s  31.3 s  62%    3                  0    <- here
+     *   30 KB/s  20.7 s  41%    13 (startup only)  0
+     *   40 KB/s  15.2 s  19%    16 (full)          4    <- over the edge
+     *
+     * At 40 the OC's 16-frame feed queue saturates and NimBLE starts failing
+     * ACL allocations — the #627 signature above, reproduced deliberately.
+     * 30 also worked, with the queue empty in steady state; 20 is chosen over
+     * it because these are ONE RUN EACH, on one board, one image, Android
+     * only, and #627's lesson is exactly that such a number does not
+     * generalise. 20 nearly halves the transfer with the queue barely touched.
+     *
+     * If more is wanted, the 16-frame queue is the lever rather than this
+     * constant: it is ~54 ms deep at drain rate and it is what saturates.
      */
-    public const val FC_RELAY_MAX_BYTES_PER_SEC: Long = 12_000
+    public const val FC_RELAY_MAX_BYTES_PER_SEC: Long = 20_000
 
     /**
      * How long to wait before sending the next chunk to keep the FC-relay pump
