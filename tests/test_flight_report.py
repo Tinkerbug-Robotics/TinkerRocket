@@ -923,3 +923,129 @@ def test_snapshot_frames_decode_and_retire_the_0xd2_row() -> None:
     flight.load()
     unreadable = {u.name for u in cat_mod.unreadable_for(flight)}
     assert "0xD2" not in unreadable and "Snapshot" not in unreadable
+
+
+# ---------------------------------------------------------------------------
+# #750 — Motor Performance, back without its entry form.
+#
+# The section was removed in #751 because two required-looking inputs (liftoff
+# mass, motor designation) stood between dropping a log and reading a report.
+# The rows that need neither are the point of bringing it back, so what is
+# pinned here is that none of them ask for anything.
+# ---------------------------------------------------------------------------
+
+# Ground truth for SAMPLE_BIN, given by the flyer 2026-08-10 and recorded in
+# examples/flights/README.md: Rolly Polly 54 mm, liftoff mass 0.883 kg, G77.
+# Neither number is in the log or the sidecar, which is the whole problem —
+# they are here so the log-only figures can be checked against a known answer.
+SAMPLE_MASS_KG = 0.883
+SAMPLE_MOTOR = "G77"
+
+
+def _motor(bin_path, metadata=None):
+    from flight_report.flight import Flight
+    from flight_report.modules import motor
+
+    flight = Flight.from_bin(bin_path)
+    flight.load()
+    if metadata:
+        flight.metadata = dict(metadata)
+    return motor.analyze(flight)
+
+
+def test_motor_section_measures_the_burn_with_no_input_at_all() -> None:
+    """Every row that does not need a mass, from an empty metadata dict.
+
+    This is the regression the removal was about: the section used to render a
+    warning telling the reader to go back and fill in a form. Dropping a file
+    has to be enough.
+    """
+    result = _motor(SAMPLE_BIN)
+    assert result.error is None
+    for row in ("Burn time", "Peak acceleration", "Average acceleration",
+                "Thrust-to-weight at peak", "Impulse per kg", "Speed at burnout"):
+        assert row in result.metrics, f"{row} should not need an input"
+    assert not result.warnings, f"a form-free run should warn about nothing: {result.warnings}"
+    assert "typed in" in result.note
+
+    # Thrust-to-weight needs no mass because the accelerometer already divided
+    # by it — specific force over g IS the ratio. If this ever starts reading a
+    # mass, that identity has been broken.
+    tw = result.metrics["Thrust-to-weight at peak"]
+    peak_g = result.metrics["Peak acceleration"]
+    assert abs(tw.value - peak_g.value) < 1e-9
+
+
+def test_motor_impulse_is_per_kilogram_and_agrees_with_the_known_flight() -> None:
+    """The measured burn, checked against a motor whose class we actually know.
+
+    SAMPLE_BIN flew on a G77 at 0.883 kg. Nothing in the log says so, so this is
+    a real check rather than a tautology: the impulse-per-kg figure has to put
+    that mass in the G window, and multiplying it out has to land in G's
+    80-160 N·s band.
+    """
+    result = _motor(SAMPLE_BIN)
+    j_per_kg = result.metrics["Impulse per kg"].value
+    assert 50.0 < j_per_kg < 200.0, j_per_kg
+
+    # G is 80-160 N·s, and 0.883 kg is what it flew at.
+    impulse = j_per_kg * SAMPLE_MASS_KG
+    assert 80.0 < impulse <= 160.0, (
+        f"{impulse:.0f} N·s puts a known G77 outside class G"
+    )
+
+    # And the row that hands the reader that conclusion without asking for the
+    # mass must name G over a window containing it.
+    windows = result.metrics["Class by liftoff mass"]
+    g_window = [w for w in windows.split(" · ") if w.startswith("G ")]
+    assert g_window, windows
+    lo, hi = (float(x) for x in g_window[0].split()[1].replace("kg", "").split("-"))
+    assert lo <= SAMPLE_MASS_KG <= hi, f"{SAMPLE_MASS_KG} kg not in the G window {lo}-{hi}"
+
+
+def test_motor_uses_a_supplied_mass_without_ever_asking_for_one() -> None:
+    """The seam kept alive by the removal: metadata still works if a caller has it.
+
+    Flight.metadata and the worker's pass-through were deliberately left in
+    place when the form went. A caller that already knows the mass gets the
+    newton-second rows; nothing in the shipped UI sends it, and the module does
+    not prompt.
+    """
+    result = _motor(SAMPLE_BIN, {"mass_kg": SAMPLE_MASS_KG, "motor": SAMPLE_MOTOR})
+    assert result.metrics["Measured class"] == "G", "a G77 should measure as class G"
+    assert result.metrics["Motor"] == SAMPLE_MOTOR
+    assert not result.warnings, "the declared and measured class agree; nothing to say"
+
+    # Average thrust is the number in the designation: a G77 averages 77 N. The
+    # measurement is net of drag, so it must come in under that — but not wildly.
+    thrust = result.metrics["Average thrust"].value
+    assert 0.6 * 77.0 < thrust < 77.0, (
+        f"{thrust:.0f} N against a nominal 77 N — either the integral is wrong or "
+        "the drag deduction is not what the section claims"
+    )
+
+    # A mass outside 0.01-500 kg is a typo, not a vehicle, and must not reach
+    # the arithmetic.
+    for typo in (0.0, -1.0, 5000.0, "heavy", None):
+        degraded = _motor(SAMPLE_BIN, {"mass_kg": typo})
+        assert "Measured impulse" not in degraded.metrics, typo
+        assert "Impulse per kg" in degraded.metrics, "the log-only rows still stand"
+
+
+def test_motor_flags_a_motor_that_does_not_match_the_burn() -> None:
+    """The cross-check that made the section worth having."""
+    result = _motor(SAMPLE_BIN, {"mass_kg": SAMPLE_MASS_KG, "motor": "J500"})
+    assert result.warnings, "a two-class gap should be called out"
+    assert "J500" in result.warnings[0] and "class G" in result.warnings[0]
+
+
+def test_motor_degrades_rather_than_crashes_without_a_measurable_burn() -> None:
+    """GOLDEN_BIN opens at 8.1 g, already under thrust — there is no liftoff.
+
+    The section must say so and return cleanly. A module that raises here would
+    take its section down in every report generated from a partial capture.
+    """
+    result = _motor(GOLDEN_BIN)
+    assert result.error is None
+    assert not result.metrics
+    assert result.warnings and "burn window" in result.warnings[0]

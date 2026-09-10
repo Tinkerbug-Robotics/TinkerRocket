@@ -32,6 +32,7 @@ CONVERSIONS = {
     "s": None,
     "G": None,
     "N·s": None,   # impulse: SI either way
+    "N·s/kg": None,  # impulse per unit mass (#750): SI either way
     "N": None,     # thrust: SI either way
     "kg": (2.204622622, "lb", 3),
     "°": None,
