@@ -214,7 +214,8 @@ fun FirmwareUpdateScreen(
         when (val s = state) {
             is OtaSession.State.Idle -> FlashButton(
                 pickedBytes,
-                connected && verdict !is EspImageVerdict.Refuse,
+                connected = connected,
+                refused = verdict is EspImageVerdict.Refuse,
             ) {
                 ota.start(it, targetIsFc)
             }
@@ -339,10 +340,30 @@ private fun ImageVerdictBlock(verdict: EspImageVerdict) {
     }
 }
 
+/**
+ * The two reasons the button is off are kept apart deliberately.
+ *
+ * [connected] used to arrive as `connected && verdict !is Refuse`, so a
+ * refused image printed "Not connected" under a Device card that said
+ * Connected — the screen contradicting itself about a live link while the
+ * real reason ("this image is base_station, but you are updating
+ * out_computer") sat in red immediately above. Seen on the bench 2026-09-10
+ * against a V9 at −41 dBm.
+ *
+ * A refusal prints nothing here: its own explanation is already on screen,
+ * and that is what iOS's FirmwareUpdateView does too — it disables on
+ * `!device.isConnected || imageVerdict?.isRefusal` as separate terms and
+ * never conflates the message.
+ */
 @Composable
-private fun FlashButton(bytes: ByteArray?, connected: Boolean, onFlash: (ByteArray) -> Unit) {
+private fun FlashButton(
+    bytes: ByteArray?,
+    connected: Boolean,
+    refused: Boolean,
+    onFlash: (ByteArray) -> Unit,
+) {
     Button(
-        enabled = bytes != null && connected,
+        enabled = bytes != null && connected && !refused,
         onClick = { bytes?.let(onFlash) },
         modifier = Modifier.fillMaxWidth(),
     ) { Text("Flash firmware") }
