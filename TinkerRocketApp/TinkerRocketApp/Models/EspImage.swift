@@ -88,9 +88,23 @@ nonisolated enum EspImage {
     private static let appDescOffset = 32
     private static let minLength = 32 + 256
 
+    /// Shared with `image_info.py`'s `board_of` and Android's `BOARD_SUFFIX_RE`.
+    ///
+    /// The letter is NOT always `v`. Each project's CMakeLists stamps its own
+    /// TR_BOARD_SUFFIX, and three shapes are in use: `-v7/-v8/-v9` (flight
+    /// computer, out computer, base station), `-m1` (the flight and out
+    /// computer builds for the rocket-computer-mini), and `-b1` (the mini's
+    /// own single-MCU project, when TR_MINI_BOARD is set).
+    ///
+    /// This matched only `-v` until 2026-09-10, so every `-m1` image parsed as
+    /// "no board" — read by the catalog as "applies everywhere" when it is the
+    /// one image that applies to exactly one board.
+    static let boardSuffixPattern = "-[vmb][0-9]+([+\\-]|$)"
+
     static func boardSuffix(of version: String) -> String? {
-        guard let r = version.range(of: "-[vV][0-9]+([+\\-]|$)",
-                                    options: .regularExpression) else { return nil }
+        guard let r = version.range(of: EspImage.boardSuffixPattern,
+                                    options: [.regularExpression, .caseInsensitive])
+        else { return nil }
         var s = String(version[r]).dropFirst()             // drop the leading "-"
         if let last = s.last, last == "+" || last == "-" { s = s.dropLast() }
         return s.lowercased()

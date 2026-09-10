@@ -57,6 +57,49 @@ class EspImageTest {
     }
 
     @Test
+    fun `the mini's flight computer image is labelled, not universal`() {
+        // The suffix letter is not always `v`. This parsed as "no board" until
+        // 2026-09-10, so the catalog read the one image that fits exactly one
+        // board as the image that fits every board — and offered it as the
+        // default to an out-of-the-box V7/V8/V9 whose revision is unknown.
+        // The firmware never had the bug: TR_OTA_Receiver strstr's "-m1" and
+        // refused, so the app proposed a flash the board then rejected.
+        val img = EspImage.parse(
+            image("flight_computer", "7410cdc6-dirty-m1+20260909-2043", 0x0009)
+        )!!
+        assertEquals("m1", img.boardSuffix)
+    }
+
+    @Test
+    fun `a base station image carries its revision`() {
+        // Two base-station images ship in every release and they are not
+        // interchangeable — V2 is an 8 MB board, V3 a 16 MB one with a
+        // different partition table. Neither carried a suffix until
+        // base_station/CMakeLists.txt started stamping one.
+        val img = EspImage.parse(
+            image("base_station", "abc1234-v3+20260910-0950", 0x0009)
+        )!!
+        assertEquals("v3", img.boardSuffix)
+    }
+
+    @Test
+    fun `the mini's own project labels itself with -b`() {
+        val img = EspImage.parse(
+            image("rocket_computer_mini", "7410cdc6-b1+20260909-2043", 0x0009)
+        )!!
+        assertEquals("b1", img.boardSuffix)
+    }
+
+    @Test
+    fun `the date tail is not mistaken for a board suffix`() {
+        // The build date is "+20260909-2043"; a laxer pattern reads "-2043".
+        val img = EspImage.parse(
+            image("rocket_computer_mini", "7410cdc6-dirty+20260909-2043", 0x0009)
+        )!!
+        assertNull(img.boardSuffix)
+    }
+
+    @Test
     fun `a build with no board suffix reports none`() {
         val img = EspImage.parse(
             image("rocket_computer_mini", "7410cdc6-dirty+20260909-2043", 0x0009)
