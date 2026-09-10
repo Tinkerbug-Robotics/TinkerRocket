@@ -37,6 +37,18 @@ public data class OtaStatusUpdate(
         /** Chunks landing; [OtaStatusUpdate.bytes] is cumulative. */
         WRITING("writing"),
 
+        /**
+         * FINISH accepted; the device is doing the terminal work — validating
+         * the staged image and setting the boot partition — and is blocked
+         * while it does. It will follow with [READY_TO_BOOT] or
+         * [VERIFY_FAILED].
+         *
+         * Firmware older than 2026-09-10 never sends this: it goes
+         * [WRITING] -> silence -> terminal, which is why the finish wait must
+         * still work when this never arrives.
+         */
+        VERIFYING("verifying"),
+
         /** Finish OK; device about to esp_restart. */
         READY_TO_BOOT("ready_to_boot"),
 

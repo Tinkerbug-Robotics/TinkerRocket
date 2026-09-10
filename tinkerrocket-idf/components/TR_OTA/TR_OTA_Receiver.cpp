@@ -273,6 +273,15 @@ TR_OTA_Receiver::Error TR_OTA_Receiver::finish()
         return Error::SessionNotActive;
     }
 
+    // Everything from here is terminal work the caller cannot interrupt and
+    // the device cannot report on: shaFinalAndCompare() is cheap (the digest
+    // was accumulated chunk by chunk), but backend_.end() is esp_ota_end(),
+    // which re-reads and validates the whole staged image, and it blocks.
+    // Announce that we have the image and are working on it BEFORE going
+    // quiet — see State::Verifying for why silence alone is not good enough.
+    state_ = State::Verifying;
+    notify();
+
     if (bytes_written_ != total_size_)
     {
         last_error_ = Error::SizeMismatch;

@@ -2501,6 +2501,7 @@ static constexpr uint8_t OTA_RELAY_READY_TO_BOOT = 3;  // verified, rebooting (L
 static constexpr uint8_t OTA_RELAY_VERIFY_FAILED = 4;  // begin/verify error (see err)
 static constexpr uint8_t OTA_RELAY_ABORTED       = 5;  // session aborted
 static constexpr uint8_t OTA_RELAY_DATA_READY    = 6;  // FC flipped to I2S slave-RX; OC may start
+static constexpr uint8_t OTA_RELAY_VERIFYING     = 7;  // FINISH accepted; blocking verify running
                                                        // the image pump (Layer 3 flip handshake)
 
 struct __attribute__((packed)) OtaRelayStatusData {

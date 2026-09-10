@@ -281,19 +281,24 @@ final class OTASession: ObservableObject {
         // went on to finish, reboot and run the new image, but the app had
         // already declared failure.
         let finishTimeoutS = OTATimeouts.seconds(.finish, targetIsFC: targetIsFC)
-        do {
-            try await awaitOtaState(.readyToBoot, timeout: finishTimeoutS)
-        } catch is CancellationError {
-            return   // as at the begin wait: cancel() already reported and aborted
-        } catch {
+        let outcome = await awaitFinish(timeout: finishTimeoutS)
+        if outcome != .ready {
+            if outcome == .cancelled {
+                return   // as at the begin wait: cancel() already reported and aborted
+            }
             if let st = device?.otaStatus, st.state == .verifyFailed {
                 // Byte count included deliberately: short of the image size means
                 // the relay dropped chunks, the full size with a SHA failure means
                 // they arrived corrupted. Two very different faults that the error
                 // token alone doesn't separate on a rocket with no serial access.
                 state = .failed(reason: "Verify failed: \(st.err ?? "unknown") — device took \(st.bytes) of \(fileData.count) B")
+            } else if outcome == .timedOutVerifying {
+                // The device said it was working and then stopped saying
+                // anything. Distinct from silence, and the operator should be
+                // told which: this one means do not power-cycle yet.
+                state = .failed(reason: "Device reported verifying but did not finish within \(Int(finishTimeoutS))s of its last update")
             } else {
-                state = .failed(reason: "Device did not finalize OTA within \(Int(finishTimeoutS))s")
+                state = .failed(reason: "Device did not finalize OTA within \(Int(finishTimeoutS))s and reported no progress")
             }
             // Same rule as the begin failures: the session is over on both
             // sides (#1049). Harmless after a verify_failed the firmware has
@@ -369,6 +374,44 @@ final class OTASession: ObservableObject {
     /// CancellationError once the task is cancelled — callers return on it.
     /// Reads `device?.otaStatus` directly each iteration so a BLEDevice
     /// reconnect (new instance) is picked up automatically.
+    /// What the finish wait ended on. Twin of Kotlin `FinishOutcome`.
+    enum FinishOutcome { case ready, verifyFailed, timedOutVerifying, timedOutSilent, cancelled }
+
+    /// Wait for the device to finish, giving it more time whenever it proves
+    /// it is still working.
+    ///
+    /// `timeout` is a NO-PROGRESS budget, not a total: every time the device
+    /// reports a state it has not just reported, the budget starts again. A
+    /// device that is demonstrably alive is therefore never cut off by a
+    /// clock, which is the whole point — the app cannot see inside
+    /// `esp_ota_end()`, so the only honest question it can ask is "has this
+    /// device said anything lately", not "has it taken too long".
+    ///
+    /// Works unchanged against firmware that never sends `verifying`: nothing
+    /// resets the budget, so it behaves exactly as the old fixed wait did. It
+    /// also generalises for free — if the firmware later reports progress
+    /// repeatedly during the verify, each report extends the wait with no
+    /// change here.
+    private func awaitFinish(timeout: TimeInterval) async -> FinishOutcome {
+        var lastSeen = device?.otaStatus?.state
+        var sawVerifying = lastSeen == .verifying
+        var deadline = Date().addingTimeInterval(timeout * timeScale)
+        while Date() < deadline {
+            if Task.isCancelled { return .cancelled }
+            let seen = device?.otaStatus?.state
+            if seen == .readyToBoot { return .ready }
+            if seen == .verifyFailed { return .verifyFailed }
+            if seen != lastSeen {
+                lastSeen = seen
+                if seen == .verifying { sawVerifying = true }
+                deadline = Date().addingTimeInterval(timeout * timeScale)   // alive; start again
+                continue
+            }
+            try? await Task.sleep(nanoseconds: UInt64(OTATimeouts.pollSeconds * timeScale * 1_000_000_000))
+        }
+        return sawVerifying ? .timedOutVerifying : .timedOutSilent
+    }
+
     private func awaitOtaState(_ expected: OTAStatusUpdate.State, timeout: TimeInterval) async throws {
         struct TimedOut: Error {}
         let deadline = Date().addingTimeInterval(timeout * timeScale)

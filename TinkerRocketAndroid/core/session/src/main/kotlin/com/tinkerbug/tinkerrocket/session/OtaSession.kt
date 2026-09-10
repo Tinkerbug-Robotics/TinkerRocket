@@ -230,7 +230,8 @@ public class OtaSession(
         _state.value = State.Verifying
         sessionLookup()?.sendBareCommand(BleCommandId.OTA_FINISH)
         val finishTimeout = if (targetIsFc) FINISH_TIMEOUT_FC_MS else FINISH_TIMEOUT_MS
-        if (!awaitOtaState(OtaStatusUpdate.State.READY_TO_BOOT, finishTimeout)) {
+        val outcome = awaitFinish(finishTimeout)
+        if (outcome != FinishOutcome.READY) {
             val st = sessionLookup()?.otaStatus?.value
             _state.value = if (st?.state == OtaStatusUpdate.State.VERIFY_FAILED) {
                 // #1094: the byte count separates the two faults the token
@@ -238,8 +239,19 @@ public class OtaSession(
                 // dropped chunks, the full size with a SHA failure means they
                 // arrived corrupted (iOS prints the same pair).
                 State.Failed("Verify failed: ${st.err ?: "unknown"} — device took ${st.bytes} of ${image.size} B")
+            } else if (outcome == FinishOutcome.TIMED_OUT_VERIFYING) {
+                // The device said it was working and then stopped saying
+                // anything. Distinct from silence, and the operator should be
+                // told which: this one means do not power-cycle yet.
+                State.Failed(
+                    "Device reported verifying but did not finish " +
+                        "within ${finishTimeout / 1000}s of its last update",
+                )
             } else {
-                State.Failed("Device did not finalize OTA within ${finishTimeout / 1000}s")
+                State.Failed(
+                    "Device did not finalize OTA within ${finishTimeout / 1000}s " +
+                        "and reported no progress",
+                )
             }
             // Same rule as the begin failures: the session is over on both
             // sides (#1049).  Harmless after a verify_failed the firmware has
@@ -300,6 +312,51 @@ public class OtaSession(
     }
 
     /** Poll until the firmware reports [expected]; verify_failed fails fast. */
+    /** What the finish wait ended on. */
+    internal enum class FinishOutcome { READY, VERIFY_FAILED, TIMED_OUT_VERIFYING, TIMED_OUT_SILENT }
+
+    /**
+     * Wait for the device to finish, giving it more time whenever it proves it
+     * is still working.
+     *
+     * [timeoutMs] is a NO-PROGRESS budget, not a total: every time the device
+     * reports a state it has not just reported, the budget starts again. A
+     * device that is demonstrably alive is therefore never cut off by a clock,
+     * which is the whole point — the app cannot see inside `esp_ota_end()`, so
+     * the only honest question it can ask is "has this device said anything
+     * lately", not "has it taken too long".
+     *
+     * Works unchanged against firmware that never sends `verifying`: nothing
+     * resets the budget, so it behaves exactly as the old fixed wait did. It
+     * also generalises for free — if the firmware later reports progress
+     * repeatedly during the verify, each report extends the wait with no
+     * change here.
+     */
+    private suspend fun awaitFinish(timeoutMs: Long): FinishOutcome {
+        var waited = 0L
+        var lastSeen = sessionLookup()?.otaStatus?.value?.state
+        var sawVerifying = lastSeen == OtaStatusUpdate.State.VERIFYING
+        while (waited < timeoutMs) {
+            if (!scope.isActive) return FinishOutcome.TIMED_OUT_SILENT
+            val seen = sessionLookup()?.otaStatus?.value?.state
+            when (seen) {
+                OtaStatusUpdate.State.READY_TO_BOOT -> return FinishOutcome.READY
+                OtaStatusUpdate.State.VERIFY_FAILED -> return FinishOutcome.VERIFY_FAILED
+                else -> {}
+            }
+            if (seen != lastSeen) {
+                lastSeen = seen
+                if (seen == OtaStatusUpdate.State.VERIFYING) sawVerifying = true
+                waited = 0L      // it is alive; start the budget again
+                continue
+            }
+            delay(POLL_MS)
+            waited += POLL_MS
+        }
+        return if (sawVerifying) FinishOutcome.TIMED_OUT_VERIFYING
+        else FinishOutcome.TIMED_OUT_SILENT
+    }
+
     private suspend fun awaitOtaState(expected: OtaStatusUpdate.State, timeoutMs: Long): Boolean {
         var waited = 0L
         while (waited < timeoutMs) {

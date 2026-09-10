@@ -317,7 +317,10 @@ TEST(TrOta, StatusCallbackFiresOnStateTransitions)
     EXPECT_EQ(1, c.calls);
 
     rx.finish();
-    EXPECT_EQ(2, c.calls);
+    // Two: Verifying before the blocking work starts, then ReadyToBoot after
+    // it. The first one is #773's verify heartbeat — see
+    // FinishAnnouncesVerifyingBeforeItGoesQuiet for why it exists.
+    EXPECT_EQ(3, c.calls);
     EXPECT_EQ(S::ReadyToBoot, c.last_state);
     EXPECT_EQ(64u, c.last_bytes);
 }
@@ -584,6 +587,82 @@ struct CbLog { int calls = 0; E last_err = E::Ok; S last_state = S::Idle; };
 void cbSink(void* ctx, S state, E err, size_t) {
     auto* l = static_cast<CbLog*>(ctx); l->calls++; l->last_err = err; l->last_state = state;
 }
+}
+
+// #773 — the verify heartbeat. finish() blocks in esp_ota_end() re-reading the
+// staged image, and on the OC that blocks the BLE command path, so the device
+// is mute for the whole verify. An app waiting on the terminal state could not
+// tell a busy device from a dead one and had only a clock; the clock was
+// outgrown three times, most recently on the bench flashing fw-v0.0.1-rc1,
+// where an 815 kB image and a 770 kB image both outlasted it and the app
+// reported failure on flashes that committed and booted.
+namespace {
+struct StateLog {
+    std::vector<S> states;
+};
+void stateSink(void* ctx, S state, E, size_t) {
+    static_cast<StateLog*>(ctx)->states.push_back(state);
+}
+}
+
+TEST(TrOta, FinishAnnouncesVerifyingBeforeItGoesQuiet)
+{
+    FakeOTABackend be;
+    R rx(be);
+    StateLog log;
+    rx.setStatusCallback(&stateSink, &log);
+
+    auto img  = make_image(512);
+    auto hash = sha256_of(img);
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data()));
+    ASSERT_EQ(E::Ok, rx.writeChunk(0, img.data(), img.size()));
+    log.states.clear();
+
+    ASSERT_EQ(E::Ok, rx.finish());
+
+    ASSERT_GE(log.states.size(), 2u);
+    EXPECT_EQ(S::Verifying, log.states.front())
+        << "the device must say it has the image before the blocking work";
+    EXPECT_EQ(S::ReadyToBoot, log.states.back());
+}
+
+TEST(TrOta, AFailedVerifyIsStillPrecededByVerifying)
+{
+    // The operator learns the difference between "never answered" and
+    // "answered, then failed" from this ordering, so it must hold on the
+    // failure path too — not just the happy one.
+    FakeOTABackend be;
+    R rx(be);
+    StateLog log;
+    rx.setStatusCallback(&stateSink, &log);
+
+    auto img  = make_image(256);
+    auto hash = sha256_of(img);
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data()));
+    ASSERT_EQ(E::Ok, rx.writeChunk(0, img.data(), 128));
+    log.states.clear();
+
+    // Short of total_size_ -> SizeMismatch, the relay-dropped-chunks fault.
+    EXPECT_EQ(E::SizeMismatch, rx.finish());
+
+    ASSERT_GE(log.states.size(), 2u);
+    EXPECT_EQ(S::Verifying, log.states.front());
+    EXPECT_EQ(S::VerifyFailed, log.states.back());
+}
+
+TEST(TrOta, VerifyingIsNotTerminalAndDoesNotTouchTheBootPartition)
+{
+    // A heartbeat that committed anything would be worse than no heartbeat.
+    FakeOTABackend be;
+    R rx(be);
+    auto img  = make_image(256);
+    auto hash = sha256_of(img);
+    ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data()));
+    ASSERT_EQ(E::Ok, rx.writeChunk(0, img.data(), 128));
+
+    EXPECT_EQ(E::SizeMismatch, rx.finish());
+    EXPECT_FALSE(be.boot_set) << "nothing may be committed on a failed verify";
+    EXPECT_FALSE(be.ended_once) << "the size check still runs before esp_ota_end()";
 }
 
 TEST(TrOta, WriteChunkWithNoSessionNotifiesSessionNotActive)

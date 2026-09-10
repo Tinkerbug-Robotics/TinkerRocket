@@ -4433,6 +4433,10 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                     }
                     break;
                 case OTA_RELAY_WRITING:       state = "writing"; break;
+                // NOT terminal: the FC is mid-verify and will follow with
+                // ready_to_boot or verify_failed. Relaying it keeps the app's
+                // no-progress deadline alive across the FC's blocking verify.
+                case OTA_RELAY_VERIFYING:     state = "verifying"; break;
                 case OTA_RELAY_READY_TO_BOOT: state = "ready_to_boot"; terminal = true; break;
                 case OTA_RELAY_VERIFY_FAILED: state = "verify_failed"; err = fcOtaErrToken(st.err); terminal = true; break;
                 case OTA_RELAY_ABORTED:       state = "aborted"; terminal = true; break;

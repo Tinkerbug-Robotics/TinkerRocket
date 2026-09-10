@@ -2290,6 +2290,9 @@ void TR_BLE_To_APP::otaStatusCallback(void* user, TR_OTA_Receiver::State state,
     {
         case S::Idle:         state_str = "idle";          break;
         case S::Writing:      state_str = "ready";         break;
+        // Not terminal: ota_session_active_ deliberately stays set (only Idle
+        // and VerifyFailed clear it above), because the device is mid-flash.
+        case S::Verifying:    state_str = "verifying";     break;
         case S::ReadyToBoot:  state_str = "ready_to_boot"; {
             // The "fw" in this status reflects the firmware ABOUT to boot
             // (i.e., the freshly-flashed image). We can't read it from the
