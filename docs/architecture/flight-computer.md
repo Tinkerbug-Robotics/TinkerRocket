@@ -211,6 +211,29 @@ sensing, and an arm/fire pair. They are serviced only from the `INFLIGHT` state,
 The initialization sequence is deliberately hand-rolled — see Gotchas. This is the one
 part of the FC that can do something irreversible to a person standing nearby.
 
+### The energy store is NOT inert on USB-only power
+
+Accepted as-built on V9, 2026-09-09 (#669). Do not connect e-matches during a
+USB-only bench session.
+
+The charge path is battery-only by design — R20 hangs on VBATT, which only the
+pack reaches. But with V_CAP at 0 V and the logic domain powered, which USB
+does power, each of the four continuity pull-ups (R8/R10/R12/R18, 49.9 kΩ to
+the 3.3 V rail) forward-biases its own fire-FET body diode into the V_CAP bank.
+That is roughly 210 µA total, charging the 10 mF bank with a time constant near
+125 s toward about **2.5–2.7 V** — some **30–35 mJ**, deliverable at about
+**2.4 A** into a 1 Ω match, which is above typical e-match all-fire current.
+
+So on a USB bench session only the control-side faults stand between that store
+and ignition. The energy side is not the guard it is often assumed to be.
+
+Two circuit fixes were considered for a future spin and both were declined for
+now: re-referencing the continuity pull-ups to V_CAP (kills the path, no flight
+cost) and a 2.2–4.7 kΩ bleed across V_CAP (costs 2–4 mA continuously from the
+pack in flight). The accepted position is that this is documented and worked
+around procedurally. If the pull-up reference is ever revisited for another
+reason, moving it to V_CAP closes this for free.
+
 ## Talking to the Out Computer
 
 Two links, opposite directions, different roles.
