@@ -60,8 +60,11 @@ expect_tlm 15 p2v==152.4
 note === Ordering proof: the NVS load must run in setup_oc, BEFORE any rail line ===
 expect_serial_since CFG: NVS Pyro:
 expect_serial_since CFG: NVS Camera type:
-expect_order CFG: NVS Pyro: || PWR_PIN|FC rail
-expect_order CFG: NVS Camera type: || PWR_PIN|FC rail
+# _if_present, not plain expect_order: the claim is "the config load came
+# before any rail line", and a boot that prints no rail line at all satisfies
+# it. Everywhere else B is part of the assertion and a missing B is a failure.
+expect_order_if_present CFG: NVS Pyro: || PWR_PIN|FC rail
+expect_order_if_present CFG: NVS Camera type: || PWR_PIN|FC rail
 
 note === Rail back ON: initPeripherals re-reads, and that re-read is idempotent ===
 send 8 01

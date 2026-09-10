@@ -1,0 +1,53 @@
+# #1211 / #1148 item 1 — the end-of-flight latch (PR #1236, merged).
+#
+# Rig: V9 pair, S1 -> O (the flight log, its byte counters and the storage
+# stats are OC-side). Rail ON. Needs a GNSS fix: the FC enters PRELAUNCH
+# automatically on 4 sats, and PRELAUNCH is the state in which the flush task
+# PRE-CREATES the log file without activating it. That pre-created-but-idle
+# file is the precondition for the whole item.
+#
+# The defect: an end-of-flight sent BEFORE any launch latched
+# `end_flight_requested` with nothing able to clear it, so every frame of the
+# NEXT flight was silently dropped — while the app still showed logging ACTIVE.
+# A flight that reports itself as recording and writes nothing is the worst
+# shape this can fail in, which is why it is worth the bench time.
+#
+# BLE cmd 7 (Sim Stop) is used as the end-of-flight; the item notes cmd 7, the
+# LoRa uplink and the END_FLIGHT frame all reach the same call.
+
+note === rail on, wait for the FC to reach PRELAUNCH on its own ===
+send 8 01
+sleep 30
+expect_tlm 60 st==PRELAUNCH
+
+note === end-of-flight BEFORE any launch — this is the latch under test ===
+mark
+send 7
+sleep 10
+
+note === now fly normally: 300 g / 11.7 N / 2 s, apogee ~232 m ===
+send 5 0000964333333b41000000400000a040
+sleep 4
+send 6
+sleep 20
+# Logging must actually be ACTIVE and actually be WRITING. Before the fix the
+# first of these was true and the second was not, which is precisely the trap.
+expect_tlm 60 fs.LOGGING_ACTIVE==1
+
+note === let it land and finalize, then prove bytes really landed ===
+sleep 100
+# The authoritative check is the finalize line's own byte count, NOT telemetry
+# frx — frx is a windowed counter and tops out around 300 kB while the closed
+# file is ~8 MB, so a threshold on it says nothing useful.
+#
+# TWO finalizes are expected and both matter:
+#   flight_N.bin (0 bytes)      the file PRE-CREATED at PRELAUNCH, closed by
+#                               the end-of-flight above — correctly empty
+#   flight_N+1.bin (>=1e6 bytes) the flight AFTER it, which is the whole point:
+#                               before PR #1236 this one was 0 bytes too, while
+#                               the app still showed logging ACTIVE
+expect_serial_since finalizeFlight OK \(deferred\): flight_[0-9]+\.bin \(0 bytes
+expect_serial_since finalizeFlight OK \(deferred\): flight_[0-9]+\.bin \([1-9][0-9]{6,} bytes
+refute_tlm 20 fdr>0
+refute_serial_since unrecoverable pages\)[^,]*[1-9]
+note === done ===

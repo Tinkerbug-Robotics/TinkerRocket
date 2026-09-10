@@ -34,6 +34,8 @@ Script directives (one per line, '#' comments, blank lines ignored):
   expect_serial_since <regex>         PASS if a line since `mark` matched (history)
   refute_serial_since <regex>         PASS if NO line since `mark` matched
   expect_order <regexA> || <regexB>   PASS if A's first match precedes B's
+                                      (BOTH must appear; a missing B is a FAIL)
+  expect_order_if_present A || B      as above, but a missing B is a PASS
   expect_fileops <hexprefix> <n>      PASS on exactly n file-ops frames since mark
   wait_quiet <regex> <quiet_s> <timeout>  wait until regex stops appearing
   disconnect / connect                drop and retake the BLE link (#1124)
@@ -387,12 +389,21 @@ class Session:
         m = re.match(r"^(?:\[[^\]]+\]\s*)?[EWIDV] \((\d+)\)", text)
         return int(m.group(1)) if m else None
 
-    def check_order(self, pat_a, pat_b, directive):
+    def check_order(self, pat_a, pat_b, directive, b_optional=False):
         """PASS when the FIRST match of A precedes the first match of B.
 
         #1131 turns on exactly this: the NVS config load must happen inside
         setup_oc, i.e. BEFORE any rail line — an ordering a regex alone cannot
         express, and the whole point of the fix.
+
+        B ABSENT is two different claims, so it takes two directives.  For
+        #1131 "nothing printed a rail line at all" satisfies "the config load
+        came first", and expect_order_if_present says so.  For everything else
+        B is part of what is being asserted — #1124's `dropped N queued
+        command(s)` must actually happen — and a missing B is a failure.
+        This used to pass unconditionally, and during the #1124 bench run it
+        reported PASS while printing "never appeared" in its own detail line:
+        an ordering assertion that cannot fail is worse than no assertion.
         """
         rx_a, rx_b = re.compile(pat_a), re.compile(pat_b)
         first_a = next((e for e in self.serial_since_mark() if rx_a.search(e["text"])), None)
@@ -400,10 +411,10 @@ class Session:
         if first_a is None:
             self.record("FAIL", directive, f"{pat_a!r} never appeared")
         elif first_b is None:
-            # B absent is not an ordering failure: on this board the rail-off
-            # path may simply not print a rail line at all.
-            self.record("PASS", directive,
-                        f"{pat_a!r} at t={first_a['t']}; {pat_b!r} never appeared")
+            self.record("PASS" if b_optional else "FAIL", directive,
+                        f"{pat_a!r} at t={first_a['t']}; {pat_b!r} never appeared"
+                        + ("" if b_optional else
+                           " — use expect_order_if_present if B is genuinely optional"))
         else:
             ms_a, ms_b = self.board_ms(first_a["text"]), self.board_ms(first_b["text"])
             if ms_a is not None and ms_b is not None:
@@ -559,9 +570,10 @@ class Session:
             elif verb in ("expect_serial_since", "refute_serial_since"):
                 self.check_serial_since(rest.strip(),
                                         verb == "expect_serial_since", where)
-            elif verb == "expect_order":
+            elif verb in ("expect_order", "expect_order_if_present"):
                 a, b = rest.split("||")
-                self.check_order(a.strip(), b.strip(), where)
+                self.check_order(a.strip(), b.strip(), where,
+                                 b_optional=(verb == "expect_order_if_present"))
             elif verb == "wait_quiet":
                 pat, quiet, tmo = rest.rsplit(" ", 2)
                 await self.wait_quiet(pat.strip(), float(quiet), float(tmo), where)
@@ -591,6 +603,7 @@ def validate(lines):
     this runs the same parse the executor does and reports every problem at once.
     """
     known = {"note", "sleep", "send", "expect_serial", "refute_serial",
+             "expect_order_if_present",
              "expect_tlm", "refute_tlm", "wait_tlm", "expect_tlm_rate",
              "disconnect", "connect", "health", "mark",
              "expect_serial_since", "refute_serial_since", "expect_order",
@@ -629,7 +642,7 @@ def validate(lines):
                 float(win); float(hz)
             elif verb in ("expect_serial_since", "refute_serial_since"):
                 re.compile(rest.strip())
-            elif verb == "expect_order":
+            elif verb in ("expect_order", "expect_order_if_present"):
                 a, b = rest.split("||")
                 re.compile(a.strip()); re.compile(b.strip())
             elif verb == "expect_fileops":
