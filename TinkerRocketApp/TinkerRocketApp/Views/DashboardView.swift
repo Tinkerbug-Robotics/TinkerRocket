@@ -772,6 +772,23 @@ struct ConnectedDashboardView: View {
                     .frame(maxWidth: .infinity)
                     .opacity(staleOpacity)
                 }
+
+                // #412: the LoRa daughterboard is absent or its firmware does
+                // not match.  Same rule again — one quiet line, no recolour,
+                // no arm block.  Direct links only, and necessarily so: both
+                // states mean the radio is off, so this cannot arrive over
+                // LoRa.  Absent on every board without a daughterboard.
+                if !device.isBaseStation,
+                   let modemText = device.telemetry.modemAdvisoryText {
+                    HStack(spacing: 6) {
+                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                        Text(modemText)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity)
+                    .opacity(staleOpacity)
+                }
             }
 
             // #557: the FC lost its GNSS module and is flying a baro+IMU-only

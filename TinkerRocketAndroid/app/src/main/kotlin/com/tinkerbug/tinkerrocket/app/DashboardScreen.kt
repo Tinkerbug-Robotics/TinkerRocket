@@ -299,6 +299,33 @@ fun DashboardScreen(
             }
         }
 
+        // #412: the LoRa daughterboard is absent, or its firmware does not
+        // match ours.  Same rule again — one quiet line, no recolour, no arm
+        // block.  Direct links only, and necessarily so: both states mean the
+        // radio is off, so this cannot arrive over LoRa.  Absent entirely on
+        // boards with no daughterboard, so nothing shows on V7/V8/V9 or the
+        // mini.  iOS twin: DashboardView.swift, next to the hold-up line.
+        val modemText = telemetry.modemAdvisoryText
+        if (!session.isBaseStation && modemText != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.SignalCellularOff,
+                    contentDescription = null,
+                    tint = tr.statusWarn,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "  $modemText",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tr.statusWarn,
+                )
+            }
+        }
+
         // Power section — #377: never offer the blind cmd-8 toggle until the
         // first telemetry frame of this session confirmed the power state.
         //

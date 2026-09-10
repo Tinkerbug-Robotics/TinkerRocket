@@ -504,6 +504,23 @@ static TR_BLE_To_APP ble_app("TinkerRocket");
 // below is untouched; the unused backend is never begun.
 static LoRaDirectBackend lora_direct_backend;
 static UartModemBackend lora_modem_backend;
+
+// #412: copy the daughterboard's identity and the OC's verdict on it into the
+// BLE telemetry. Called from both places that fill ble_telem so the two cannot
+// drift. On a direct-radio board this leaves modem_state 0 and the emitter
+// omits both keys, so nothing changes for V7/V8/V9 or the mini.
+//
+// The wire does not guarantee a NUL inside fw_version[32], so the copy is
+// bounded and terminated here rather than trusting the sender.
+static void fillModemTelem(TR_BLE_To_APP::TelemetryData& t)
+{
+    if (!config::USE_UART_RADIO_MODEM) return;
+    t.modem_state = lora_modem_backend.modemStatusCode();
+    const char* fw = lora_modem_backend.modemFirmware();
+    size_t n = 0;
+    while (n < sizeof(t.modem_fw) - 1 && n < 32 && fw[n] != '\0') { t.modem_fw[n] = fw[n]; ++n; }
+    t.modem_fw[n] = '\0';
+}
 static IRadioLink& lora_comms =
     config::USE_UART_RADIO_MODEM
         ? static_cast<IRadioLink&>(lora_modem_backend)
@@ -7216,6 +7233,7 @@ static void printStats()
         // #1166: hold-up cap voltage + verdict (NaN / 0 = not on this board).
         ble_telem.scap_voltage = holdup_scap_v;
         ble_telem.holdup_state = holdup_tracker.state;
+        fillModemTelem(ble_telem);
         ble_telem.latitude = NAN;
         ble_telem.longitude = NAN;
         ble_telem.gdop = NAN;
@@ -7703,6 +7721,7 @@ static void printStats()
     // #1166: hold-up cap voltage + verdict (NaN / 0 = not on this board).
     ble_telem.scap_voltage = holdup_scap_v;
     ble_telem.holdup_state = holdup_tracker.state;
+    fillModemTelem(ble_telem);
     if (latest_gnss_valid)
     {
         ble_telem.latitude = gnss.lat;

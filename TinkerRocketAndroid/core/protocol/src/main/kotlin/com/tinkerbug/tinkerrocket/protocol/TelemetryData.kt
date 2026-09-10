@@ -159,6 +159,11 @@ public data class TelemetryData(
     // link (LoRa does not carry it).  Rendered as one quiet advisory line.
     val scapVoltage: Float? = null,           // "scap" Hold-up cap voltage V
     val holdupState: Int? = null,             // "hu"   HoldupState code
+    // #412: the LoRa daughterboard's own firmware version and the OC's verdict
+    // on it. Direct link only — a protocol mismatch disables the radio, so the
+    // fault cannot announce itself over LoRa.
+    val modemFirmware: String? = null,        // "mfw"  daughterboard fw string
+    val modemState: Int? = null,              // "mst"  ModemState code
     val voltage: Float? = null,               // "vol"  Battery voltage V
     val latitude: Double? = null,             // "lat"  GPS latitude degrees
     val longitude: Double? = null,            // "lon"  GPS longitude degrees
@@ -427,6 +432,9 @@ public data class TelemetryData(
 
     /** #1166: the one quiet advisory line for a hold-up cap that never charged, or null. */
     public val holdupAdvisoryText: String? get() = holdupAdvisoryText(holdupState, scapVoltage)
+
+    /** #412: see [modemAdvisoryText]. */
+    public val modemAdvisoryText: String? get() = modemAdvisoryText(modemState)
 
     /** Channel 1..4; NA = not configured (and for out-of-range channels). */
     public fun pyroHealth(channel: Int): SensorHealth {
@@ -727,6 +735,8 @@ public data class TelemetryData(
             servoCurrent = strictFloat(json, "scur"),    // #850
             scapVoltage = strictFloat(json, "scap"),     // #1166
             holdupState = flexInt(json, "hu"),           // #1166
+            modemFirmware = strictString(json, "mfw"),   // #412
+            modemState = flexInt(json, "mst"),           // #412
             voltage = strictFloat(json, "vol"),
             latitude = strictDouble(json, "lat"),
             longitude = strictDouble(json, "lon"),
@@ -816,6 +826,24 @@ public enum class HoldupState(public val code: Int) {
  * answer — a dead ADC must not be silence either.  Charging and charged stay
  * quiet.  iOS twin: `TelemetryData.holdupAdvisoryText`.
  */
+/**
+ * #412: the out computer's verdict on the LoRa daughterboard, as one quiet
+ * line — or null when there is nothing to say.
+ *
+ * `up` is silent, and so is a null code, which means the board has no
+ * daughterboard at all rather than that one is fine. The two faults are kept
+ * apart because the fix differs: a mismatch is a reflash of the daughterboard,
+ * an absent modem is a cable, a rail or a dead board. Either way the radio is
+ * off, which is why this only ever arrives over the direct link.
+ *
+ * iOS twin: `TelemetryData.modemAdvisoryText`.
+ */
+public fun modemAdvisoryText(state: Int?): String? = when (state) {
+    2 -> "Radio daughterboard not answering — no LoRa"
+    3 -> "Radio daughterboard firmware mismatch — no LoRa"
+    else -> null
+}
+
 public fun holdupAdvisoryText(state: Int?, scapVolts: Float?): String? = when (HoldupState.fromCode(state)) {
     HoldupState.NOT_CHARGING ->
         if (scapVolts != null) {

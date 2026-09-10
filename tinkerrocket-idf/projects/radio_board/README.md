@@ -84,6 +84,39 @@ idf.py -p <port> flash monitor
 Console and programming are over USB-C (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG`);
 UART0 is unconnected on this board, and the host UART owns its own pins.
 
+### Updates are USB-only — decided, not defaulted (#412)
+
+**This board is updated over its own USB-C (J2). There is no over-the-air or
+host-tunnelled path, and that is a decision rather than an omission.**
+
+The alternative was a UART-tunnelled update, with the out computer staging an
+image and driving it over the same 4-pin link it already uses for telemetry —
+mirroring how it stages the flight computer's OTA today. The groundwork for it
+is deliberately in place and stays in place: `partitions.csv` carries a 1.5 MB
+OTA pair against a ~280 kB app (its own comment says the pair exists so #412
+needs no repartition later), and the modem protocol has plenty of unused
+message codes. It was not built because the recovery story here is already the
+strongest one available.
+
+**Recovery from a bad flash.** Plug into J2. The S3's native USB-Serial-JTAG
+peripheral reaches the ROM bootloader with **no strapping pin to hold and no
+buttons**, so `esptool` can reset into download mode over the same cable that
+does normal programming. A failed flash is a re-plug, not a dead board — which
+is the failure mode a tunnelled update would exist to avoid.
+
+**Requirement fed back to the airframe.** J2 must be reachable on an assembled
+vehicle, or the board must be removable without disturbing the antenna feed.
+That is the one thing this decision depends on, and it is a mechanical
+constraint, not a firmware one.
+
+**What the host still tells you.** The out computer reads the modem's identity
+at every attach and now carries two facts to the app over the direct BLE link
+(#412): `mfw`, the daughterboard's own firmware string, and `mst`, its verdict —
+1 up, 2 absent, 3 protocol mismatch. Both faults show as one quiet line on the
+dashboard. They ride the *direct* link by necessity: either state means the
+radio is off, so neither can announce itself over LoRa. A mismatch is a reflash
+of this board; an absent modem is a cable, a rail or a dead board.
+
 ### Hardware constraints (enforced, not just documented)
 
 - **No Wi-Fi, no BLE, ever.** The S3's `LNA_IN` is left floating with no

@@ -93,6 +93,32 @@ public:
     // Modem-side identity captured from BOOT/IDENTITY (fw version, chip,
     // capabilities) — surfaced for status/logging.
     const radio_modem::ModemIdentityData& identity() const { return identity_; }
+
+    // ── #412: what the app is told about the daughterboard ───────────────
+    //
+    // Both facts already reach the console and stop there, so a radio-dead
+    // rocket looked identical to a quiet one from the phone. These are what
+    // the OC copies into its BLE telemetry.
+    //
+    //   1 = up            the modem answered and its protocol matches
+    //   2 = absent        configured, but nothing answered
+    //   3 = incompatible  it ANSWERED and its protocol version does not match
+    //
+    // 0 is reserved for "this board has no daughterboard", which the OC
+    // signals by never filling the field — a direct-radio board pays nothing.
+    // 2 and 3 are worth separating: 3 is a matched-pair problem a reflash
+    // fixes, 2 is a cable, a rail or a dead board, and the re-attach probe
+    // treats them differently for exactly that reason.
+    uint8_t modemStatusCode() const
+    {
+        if (modem_incompatible_) return 3;
+        return modem_alive_ ? 1 : 2;
+    }
+
+    /// The modem's own version string, or "" if it never identified itself.
+    /// NUL-termination is not guaranteed on the wire, so callers must bound
+    /// the copy at sizeof(identity().fw_version).
+    const char* modemFirmware() const { return identity_.fw_version; }
     bool modemAlive() const { return modem_alive_; }
 
 private:

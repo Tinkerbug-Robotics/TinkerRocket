@@ -64,6 +64,14 @@ public:
         // one that is, which is why the verdict travels at all.
         float   scap_voltage = NAN;
         uint8_t holdup_state = 0;
+        // #412: the LoRa daughterboard's own firmware version and the OC's
+        // verdict on it. Both were console-only, so from the phone a
+        // radio-dead rocket was indistinguishable from a quiet one.
+        // 0 = no daughterboard on this board (nothing emitted, so V7/V8/V9
+        // and the mini pay nothing), 1 = up, 2 = absent, 3 = protocol
+        // mismatch. Empty fw string = it never identified itself.
+        char    modem_fw[33] = {0};
+        uint8_t modem_state = 0;
         float voltage;          // Battery voltage V
         double latitude;        // GPS latitude degrees
         double longitude;       // GPS longitude degrees
