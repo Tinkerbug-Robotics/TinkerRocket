@@ -32,7 +32,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.tinkerbug.tinkerrocket.protocol.FirmwareImage
+import com.tinkerbug.tinkerrocket.protocol.FirmwareRepository
 import com.tinkerbug.tinkerrocket.session.DeviceSession
+import com.tinkerbug.tinkerrocket.session.FirmwareCatalogSession
+import com.tinkerbug.tinkerrocket.session.HttpFirmwareFetch
 import com.tinkerbug.tinkerrocket.session.OtaSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -69,6 +73,18 @@ fun FirmwareUpdateScreen(
     var pickedName by remember { mutableStateOf<String?>(null) }
     var pickedBytes by remember { mutableStateOf<ByteArray?>(null) }
     var pickError by remember { mutableStateOf<String?>(null) }
+
+    // #773 step 4c: the other way to get an image — a published release,
+    // instead of a file the operator had to build or be sent. It ends by
+    // setting pickedBytes, so a downloaded image and a hand-picked one go
+    // through exactly the same verdict and the same flash path below.
+    val catalog = remember {
+        FirmwareCatalogSession(
+            FirmwareRepository(HttpFirmwareFetch.fetch, HttpFirmwareFetch.sha256),
+            scope,
+        )
+    }
+    val catalogState by catalog.state.collectAsState()
     // A rocket's BLE peer is the OC, which can relay the image on to the FC.
     // A base station has no FC, so it only ever flashes itself.
     var targetIsFc by remember { mutableStateOf(false) }
@@ -103,6 +119,18 @@ fun FirmwareUpdateScreen(
                 provisionedBoard = if (targetIsFc) identity.fcBoardRev else identity.ocBoardRev,
             )
         }
+    }
+
+    // A verified download becomes the picked image. Deliberately routed through
+    // the same field rather than flashed directly: EspImage.check then reads
+    // the DOWNLOADED image's own header, so the manifest that described it is
+    // never the last word on what is about to be flashed.
+    androidx.compose.runtime.LaunchedEffect(catalogState) {
+        val done = catalogState as? FirmwareCatalogSession.State.Downloaded ?: return@LaunchedEffect
+        pickedBytes = done.bytes
+        pickedName = "${done.image.file} (${done.release.tag})"
+        pickError = null
+        catalog.reset()
     }
 
     val picker = rememberLauncherForActivityResult(
@@ -182,6 +210,24 @@ fun FirmwareUpdateScreen(
                     // is what actually lets the user reach a firmware file.
                     onClick = { picker.launch(arrayOf("*/*")) },
                 ) { Text(if (bytes == null) "Choose .bin…" else "Choose a different file…") }
+
+                androidx.compose.material3.HorizontalDivider()
+                CatalogBlock(
+                    state = catalogState,
+                    busy = busy,
+                    onCheck = {
+                        catalog.check(
+                            expectedProject = expectedProject,
+                            provisionedBoard =
+                                if (targetIsFc) identity.fcBoardRev else identity.ocBoardRev,
+                            runningVersion =
+                                if (targetIsFc) identity.fcFirmwareVersion
+                                else identity.firmwareVersion,
+                        )
+                    },
+                    onDownload = { catalog.download(it) },
+                    onDismiss = { catalog.reset() },
+                )
             }
         }
 
@@ -306,6 +352,109 @@ fun FirmwareUpdateScreen(
 }
 
 /** #773: what the image says it is, and whether it belongs on this unit. */
+/**
+ * #773 step 4c: the published-release source, rendered from
+ * [FirmwareCatalogSession.State] and nothing else.
+ *
+ * Every image the release holds for this unit is listed, not just the best
+ * one. The catalog ranks a matching board first and an unsuffixed image
+ * second, but it deliberately refuses to DEFAULT to a revision this board is
+ * not — so when `best` is null the list is still here for a deliberate
+ * choice, with the reason said out loud rather than an empty panel.
+ */
+@Composable
+private fun CatalogBlock(
+    state: FirmwareCatalogSession.State,
+    busy: Boolean,
+    onCheck: () -> Unit,
+    onDownload: (FirmwareImage) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    when (state) {
+        is FirmwareCatalogSession.State.Idle -> OutlinedButton(
+            enabled = !busy, onClick = onCheck,
+        ) { Text("Check for a published release…") }
+
+        is FirmwareCatalogSession.State.Checking -> Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(Modifier.padding(2.dp))
+            Text("Looking for a release…", style = MaterialTheme.typography.bodySmall)
+        }
+
+        is FirmwareCatalogSession.State.Ready -> Column(
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                "Release ${state.release.tag}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (state.alreadyRunning) {
+                // Not hidden and not blocked: re-flashing the running version
+                // is a legitimate repair. It just should not look like an
+                // update when it is not one.
+                Text(
+                    "This unit already runs this build — flashing it again is a re-flash, not an update.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (state.best == null) {
+                Text(
+                    "Nothing in this release is built for this board, so none is " +
+                        "offered by default. Choose one only if you know it fits.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            state.images.forEach { img ->
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = { onDownload(img) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        (if (img == state.best) "✓ " else "") +
+                            "${img.summary} · ${humanBytes(img.sizeBytes)}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancel") }
+        }
+
+        is FirmwareCatalogSession.State.Downloading -> Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(Modifier.padding(2.dp))
+            Text(
+                "Downloading ${state.image.file}…",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
+        // Terminal only for an instant: the screen picks the bytes up and
+        // resets the session, so this is what a stray recomposition sees.
+        is FirmwareCatalogSession.State.Downloaded -> Text(
+            "Downloaded ${state.image.file}",
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        is FirmwareCatalogSession.State.Failed -> Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                state.reason,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            OutlinedButton(enabled = !busy, onClick = onCheck) { Text("Try again") }
+        }
+    }
+}
+
 @Composable
 private fun ImageVerdictBlock(verdict: EspImageVerdict) {
     val img = when (verdict) {
