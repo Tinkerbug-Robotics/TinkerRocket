@@ -87,10 +87,16 @@ namespace imu_drain
 struct ImuDrainWindow
 {
     // Sums and maxima are raw LSB in SENSOR axes, one triple per channel.
-    // 32-bit sums hold 65,536 full-scale samples.  The collector's queue is
-    // 256 deep and drops the oldest when full, so a single drain pass can
-    // never hand over more than ~256 samples plus the few the poll task adds
-    // while the drain runs.
+    // 32-bit sums hold 65,536 full-scale samples.
+    //
+    // #1326: the window now spans the CONSUMER's period, not one drain pass —
+    // the FC fills it every loop_fc() iteration and closes it in the
+    // flight-logic gate — so the old bound ("a drain pass can never hand over
+    // more than the ~256-deep queue") no longer describes it.  The real bound
+    // is the samples that arrive between two estimator ticks: ~4 at a 3840 Hz
+    // ODR against a ~978 Hz gate.  Overflowing 65,536 would need the gate to
+    // not fire for ~17 s at that ODR, which is far beyond any loop stall the
+    // task watchdog would let stand.
     int32_t  sum_lg[3] = {0, 0, 0};   // low-g accel
     int32_t  sum_hg[3] = {0, 0, 0};   // high-g accel
     int32_t  sum_gy[3] = {0, 0, 0};   // gyro
