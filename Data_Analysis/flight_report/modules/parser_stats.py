@@ -9,6 +9,7 @@ the affected samples are simply missing.
 
 from __future__ import annotations
 
+from .. import catalog
 from ..flight import Flight
 from ..registry import AnalysisResult
 
@@ -27,8 +28,24 @@ def analyze(flight: Flight) -> AnalysisResult:
 
     counts = stats.get("type_counts") or {}
     if counts:
-        result.metrics = {name: f"{count:,}" for name, count
-                          in sorted(counts.items(), key=lambda kv: -kv[1])}
+        # #752: a row here used to read "0xD2 — 774 frames" and stop, which reads
+        # as a sensor nobody recognised rather than as data this tool throws
+        # away. Name the ones the parser produced nothing from, and why.
+        try:
+            _unreadable_list = catalog.unreadable_for(flight)
+        except Exception:
+            _unreadable_list = []
+        reasons = {u.name: u.reason for u in _unreadable_list}
+        result.metrics = {
+            name: (f"{count:,} — {reasons[name]}" if name in reasons else f"{count:,}")
+            for name, count in sorted(counts.items(), key=lambda kv: -kv[1])
+        }
+        n_undecoded = sum(1 for u in _unreadable_list if not u.decoded_elsewhere)
+        if n_undecoded:
+            result.note = (
+                f"{n_undecoded} message type(s) in this log have no decoder — their frames "
+                "are counted but nothing in this report is built from them."
+            )
     if not result.metrics:
         result.warnings.append("The parser reported no message counts for this log.")
         return result
@@ -55,4 +72,29 @@ def analyze(flight: Flight) -> AnalysisResult:
             f"({100.0 * bad / total:.2f}%). Those samples are missing from the "
             "record the rest of this report is built on."
         )
+
+    # #752: a snapshot frame that fails its magic or CRC is corruption, not a
+    # data point — this is the frame the FC restores ITSELF from after an
+    # in-flight reboot, so it is worth saying out loud when one is refused.
+    rej = stats.get("snapshot_rejects") or {}
+    n_rej = sum(rej.values())
+    if n_rej:
+        parts = [f"{v:,} {k}" for k, v in rej.items() if v]
+        result.warnings.append(
+            f"{n_rej:,} flight-snapshot frame(s) were refused ({', '.join(parts)}) "
+            "and are absent from the snapshot stream. A magic or checksum failure "
+            "means the frame was corrupted; the flight computer would have "
+            "rejected the same frame as a recovery source."
+        )
+
+    # Fields the parser reads off the wire and then discards. They are absent
+    # from every record, so no amount of looking will find them — saying so is
+    # the difference between a known gap and an invisible one.
+    if catalog.DROPPED_FIELDS:
+        result.groups.append({
+            "name": "Decoded, then discarded",
+            "rows": [(text.split(" — ")[0], text.split(" — ", 1)[1]
+                      if " — " in text else "")
+                     for text in catalog.DROPPED_FIELDS],
+        })
     return result

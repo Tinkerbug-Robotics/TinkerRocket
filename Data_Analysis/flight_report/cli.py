@@ -12,6 +12,7 @@ matplotlib.use("Agg")  # render off-screen; no display required
 import matplotlib.pyplot as plt
 plt.rcParams["figure.max_open_warning"] = 0  # we batch ~30 figures intentionally
 
+from . import catalog
 from .discover import DEFAULT_DISCOVERY_ROOT, discover, filter_flights
 from .flight import Flight
 from .registry import LEVEL_FLIGHT, modules_for, run_module
@@ -89,7 +90,53 @@ def main(argv: list[str] | None = None) -> int:
     p_list = sub.add_parser("list", help="Discover flights without running analysis.")
     p_list.add_argument("path", nargs="?", default=None)
 
+    # #752: what is actually IN one log, built by walking its parsed records
+    # rather than from a static schema — so it can never advertise a channel this
+    # firmware version did not write. Greps, and pastes into an issue.
+    p_fields = sub.add_parser(
+        "fields", help="List every channel in one flight, with provenance.")
+    p_fields.add_argument("path", help="A flight_*.bin file.")
+    p_fields.add_argument("--json", action="store_true",
+                          help="Machine-readable output instead of the text block.")
+
     args = p.parse_args(argv)
+
+    if args.cmd == "fields":
+        bin_path = Path(args.path)
+        if not bin_path.is_file():
+            print(f"Not a file: {bin_path}", file=sys.stderr)
+            return 1
+        flight = Flight.from_bin(bin_path)
+        flight.load()
+        cat = catalog.build(flight)
+        if args.json:
+            import json
+            print(json.dumps({
+                "flight": str(bin_path),
+                "channels": [
+                    {
+                        "stream": c.stream, "field": c.field, "label": c.label,
+                        "unit": c.meta.unit, "kind": c.meta.kind,
+                        "documented": c.documented, "empty": c.is_empty,
+                        "n_present": c.n_present, "n_total": c.n_total,
+                        "rate_hz": c.rate_hz,
+                        "t_start_s": c.t_start_s, "t_end_s": c.t_end_s,
+                        "vmin": c.vmin, "vmax": c.vmax,
+                        "shown_in": list(c.meta.shown_in),
+                        "derived_in": list(c.meta.derived_in),
+                        "note": c.meta.note, "caution": c.meta.caution,
+                    }
+                    for c in cat.channels
+                ],
+                "unreadable": [
+                    {"name": u.name, "count": u.count, "reason": u.reason}
+                    for u in cat.unreadable
+                ],
+                "dropped": list(cat.dropped),
+            }, indent=2))
+        else:
+            print(catalog.format_text(cat))
+        return 0
 
     if args.cmd == "list":
         flights = filter_flights(discover(args.path))

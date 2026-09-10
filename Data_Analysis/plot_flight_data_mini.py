@@ -24,6 +24,7 @@ Usage:
 
 import sys
 import struct
+import zlib
 import os
 import math
 import numpy as np
@@ -90,6 +91,7 @@ MSG_POWER             = 0xA6
 MSG_START_LOGGING     = 0xA7
 MSG_END_FLIGHT        = 0xA8
 MSG_IIS2MDC           = 0xD1  # new-PCB IIS2MDC magnetometer raw frame
+MSG_SNAPSHOT          = 0xD2  # FlightSnapshotData: FC crash-recovery state, 10 Hz during INFLIGHT
 MSG_LOG_BUFFER_STATS  = 0xE2  # OC self-emitted ring-buffer snapshot (~1 Hz)
 MSG_LORA              = 0xF1
 MSG_LORA_UPLINK       = 0xF9  # OC-self-emitted uplink RSSI/SNR record
@@ -120,6 +122,7 @@ MSG_NAMES = {
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
     MSG_IIS2MDC:          "IIS2MDC",
+    MSG_SNAPSHOT:         "Snapshot",
     MSG_FLIGHT_SETTINGS:  "FlightSettings",
     MSG_NON_SENSOR:       "NonSensor",
     MSG_POWER:            "POWER",
@@ -141,6 +144,7 @@ MSG_EXPECTED_LEN = {
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
     MSG_IIS2MDC:           10,   # IIS2MDCData (new PCB rev)
+    MSG_SNAPSHOT:          224,  # FlightSnapshotData (v2-v4 are all 224 B; version gates meaning, not size)
     MSG_NON_SENSOR:        None,  # 42 (legacy) or 43 (with pyro_status byte)
     MSG_POWER:            (10, 14),  # #850: v2 appends cam_ma + servo_ma
     MSG_START_LOGGING:     None,  # variable / no payload
@@ -247,6 +251,26 @@ FMT_STATUS_QUERY = '<B H H hh B hhh'
 FMT_STATUS_QUERY_B2R = '<BB hhhh'  # b2r_code, b2r_mode, quat×10000 (payload[16:26])
 # LogBufferStatsData: 28 bytes (time_us + 6× uint32 ring counters)
 FMT_LOG_BUFFER_STATS = '<I IIIIII'
+
+# FlightSnapshotData (SNAPSHOT_MSG 0xD2), 224 bytes packed — the FC's periodic
+# crash-recovery state, sent to the OC at 10 Hz through INFLIGHT and logged.
+# RocketComputerTypes.h:3297.  Every shipped version is 224 bytes: v3 reclaimed
+# two pad bytes for the board->rocket orientation and v4 reclaimed a third for
+# sim_flight, so `version` gates MEANING, not layout, and older frames are
+# decoded with the reclaimed fields as None rather than as zeros.
+FMT_SNAPSHOT = ('<I BBBB III BBBBB BBB f ddd BBBB 3d 3f 4f 3f 3f 15f I 3f 4h I')
+SNAPSHOT_LEN = 224
+SNAPSHOT_MAGIC = 0xF1A75A7E
+# The EKF's 15 error states, in P_diag order (TR_GpsInsEKF.cpp:96-108): position,
+# velocity, attitude, accel bias, gyro bias — three each.  Named here so the
+# covariance diagonal arrives as fifteen meaningful channels rather than p[0..14].
+SNAPSHOT_P_NAMES = (
+    "p_pos_n", "p_pos_e", "p_pos_d",
+    "p_vel_n", "p_vel_e", "p_vel_d",
+    "p_att_x", "p_att_y", "p_att_z",
+    "p_abias_x", "p_abias_y", "p_abias_z",
+    "p_gbias_x", "p_gbias_y", "p_gbias_z",
+)
 # GuidanceTelemData (GUIDANCE_TELEM_MSG 0xCA). Current 19-byte layout:
 #   time_us, accel_cmd_n/e (m/s² ×100), lateral_offset (cm), los_angle (deg ×100),
 #   closing_vel (m/s ×100), pitch_fin_cmd/yaw_fin_cmd (deg ×100), guid_flags.
@@ -305,6 +329,61 @@ PSF_CH3_CONT  = (1 << 4)
 PSF_CH3_FIRED = (1 << 5)
 PSF_CH4_CONT  = (1 << 6)
 PSF_CH4_FIRED = (1 << 7)
+
+# ---------- Sensor health scorecard (#303) ----------
+# 2 bits per subsystem (SensorHealthState) inside the uint32
+# NonSensorData.sensor_health, carried from the 48-byte wire format on.  Keep the
+# shifts in sync with SH_*_SHIFT in
+# tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h:1716-1757.
+#
+# The word was decoded off the wire from the day the 48-byte format landed and then
+# dropped on the floor: it is field index 17 of FMT_NONSENSOR_48/_50/_52 and the
+# unpack below read 15, 16, 18 and 19 straight past it.  It is the flight
+# computer's own verdict on every subsystem — the one field that says what the FC
+# *thought* was wrong — so it is split out here rather than left for each caller to
+# shift by hand.
+SH_NA, SH_OK, SH_DEGRADED, SH_BAD = 0, 1, 2, 3
+SH_STATE_NAMES = {SH_NA: "n/a", SH_OK: "ok", SH_DEGRADED: "degraded", SH_BAD: "bad"}
+# record-dict key -> bit shift.  Order is the firmware's, so anything walking this
+# dict lists the subsystems the way the operator's pre-launch card does.
+SH_FIELDS = {
+    "health_baro":    0,
+    "health_imu":     2,
+    "health_ekf":     4,   # init + isHealthy + covariance converged
+    "health_mag":     6,
+    "health_gnss":    8,   # fix health
+    "health_batt":   10,   # OC-owned, from POWERData
+    # Config-GATED: SH_NA = channel not configured for this flight.  OK =
+    # continuity present, DEGRADED = configured but not yet tested, BAD =
+    # configured, tested, open.  This is the set that feeds the operator's
+    # go/no-go, which is why an unconfigured channel reads n/a rather than open.
+    "health_pyro1":  12,
+    "health_pyro2":  14,
+    "health_pyro3":  16,
+    "health_pyro4":  18,
+    # #281/#278 — BAD means the NAND will not record the flight.
+    "health_storage": 20,
+    # #557: DISTINCT from health_gnss.  This reports that the FC committed to the
+    # baro+IMU-only EKF path because the module failed bring-up, so there is no
+    # absolute position at all.  SH_BAD = degraded mode active, SH_NA = normal.
+    "health_gnss_absent": 22,
+    # Bench 2026-08-17: MEASURED continuity, reported for every channel whether or
+    # not it is configured — the ungated twin of health_pyroN above.  SH_NA = never
+    # tested this session, OK = continuity, BAD = tested and open; DEGRADED unused.
+    # All four n/a together means the log predates the field, in which case fall
+    # back to health_pyroN.  Do NOT rewrite one from the other: the gated pair
+    # answers "is this flight's deployment train ready", these answer "what did the
+    # wire actually measure".
+    "health_pyro1_meas": 24,
+    "health_pyro2_meas": 26,
+    "health_pyro3_meas": 28,
+    "health_pyro4_meas": 30,
+}
+
+
+def sh_get(word, shift):
+    """One 2-bit SensorHealthState out of a sensor_health word."""
+    return (word >> shift) & 0x3
 
 
 # ---------- Board→rocket orientation ----------
@@ -419,6 +498,7 @@ def parse_binary_file(filepath):
         "POWER":          [],
         "LogBufferStats": [],
         "Guidance":       [],
+        "Snapshot":       [],
     }
 
     config = {
@@ -461,6 +541,11 @@ def parse_binary_file(filepath):
         "good_crc": 0,
         "bad_crc": 0,
         "type_counts": {},
+        # #752: snapshot frames refused by the magic or CRC gate, and frames
+        # whose length no shipped version matches. Per file, in stats, rather
+        # than a module counter — the CLI parses a directory in one process and
+        # a global would attribute one flight's corruption to the next.
+        "snapshot_rejects": {"magic": 0, "crc": 0, "len": 0},
     }
 
     # We'll collect raw ISM6 data and apply conversion after parsing,
@@ -641,21 +726,28 @@ def parse_binary_file(filepath):
                 # from "never recorded" (#529 replay gate fallback).
                 ekf_ticks = None
                 shock_gate_trips = None
+                # None (not 0) on logs predating the 48-byte format: SH_NA is a
+                # real verdict ("not configured"), so a zero word would read as a
+                # scorecard of sixteen deliberate n/a rather than no scorecard.
+                sensor_health = None
                 if msg_len == 52:
                     fields = struct.unpack(FMT_NONSENSOR_52, payload)
                     pyro_status = fields[15]
                     apogee_flags_b = fields[16]
+                    sensor_health = fields[17]
                     ekf_ticks = fields[18]
                     shock_gate_trips = fields[19]
                 elif msg_len == 50:
                     fields = struct.unpack(FMT_NONSENSOR_50, payload)
                     pyro_status = fields[15]
                     apogee_flags_b = fields[16]
+                    sensor_health = fields[17]
                     ekf_ticks = fields[18]
                 elif msg_len == 48:
                     fields = struct.unpack(FMT_NONSENSOR_48, payload)
                     pyro_status = fields[15]
                     apogee_flags_b = fields[16]
+                    sensor_health = fields[17]
                 elif msg_len == 44:
                     fields = struct.unpack(FMT_NONSENSOR_44, payload)
                     pyro_status = fields[15]
@@ -759,6 +851,17 @@ def parse_binary_file(filepath):
                     # consecutive records places each trip to ~2 ms.  None on
                     # logs that predate the 52-byte layout.
                     "shock_gate_trips":   shock_gate_trips,
+                    # #303: the FC's own scorecard.  Carried raw *and* split into
+                    # one 0-3 state per subsystem, because the whole point of the
+                    # field is per-subsystem: a caller asking "when did the baro go
+                    # bad" should not have to know the bit layout.  All None
+                    # together on pre-48-byte logs (see sensor_health above).
+                    "sensor_health":      sensor_health,
+                    **{
+                        name: (None if sensor_health is None
+                               else sh_get(sensor_health, shift))
+                        for name, shift in SH_FIELDS.items()
+                    },
                 })
 
             elif msg_type == MSG_NON_SENSOR:
@@ -791,6 +894,109 @@ def parse_binary_file(filepath):
                         "cam_a":    (fields[4] / 1000.0) if v2 else None,
                         "servo_a":  (fields[5] / 1000.0) if v2 else None,
                     })
+
+            elif msg_type == MSG_SNAPSHOT and msg_len == SNAPSHOT_LEN:
+                # #752: the FC's crash-recovery snapshot, 10 Hz through INFLIGHT.
+                # 774 frames sat in the example log with no decoder, showing up in
+                # the parser table as a bare "0xD2" row.
+                #
+                # Two integrity gates before anything is believed, because this
+                # frame is the one the FC restores ITSELF from after a reboot: a
+                # frame that fails either is not a data point, it is corruption,
+                # and averaging it into a covariance trace would be worse than
+                # dropping it.  Counted so the report can say how many went.
+                f = struct.unpack(FMT_SNAPSHOT, payload)
+                if f[0] != SNAPSHOT_MAGIC:
+                    stats["snapshot_rejects"]["magic"] += 1
+                elif (zlib.crc32(payload[:220]) & 0xFFFFFFFF) != f[63]:
+                    stats["snapshot_rejects"]["crc"] += 1
+                else:
+                    version = f[1]
+                    # v3 reclaimed the orientation bytes and v4 reclaimed
+                    # sim_flight, both from pad.  On an older frame those bytes
+                    # are padding zeros, and reporting 0 would assert a fact the
+                    # firmware itself refuses to conclude — its restore path
+                    # rejects a v3 frame outright precisely because it "can't
+                    # prove it wasn't a sim flight".  None, not 0.
+                    sim_flight = f[3] if version >= 4 else None
+                    b2r_code = f[13] if version >= 3 else None
+                    b2r_mode = f[14] if version >= 3 else None
+                    b2r_q = ([f[59 + i] / 10000.0 for i in range(4)]
+                             if version >= 3 else [None] * 4)
+                    records["Snapshot"].append({
+                        # ekf_t_prev_us, the EKF's last time-update stamp. Verified
+                        # against this log's NonSensor span: same micros() origin as
+                        # every other FC stream, so snapshots overlay the sensor
+                        # traces directly. The frame carries no other absolute time —
+                        # flight_elapsed_ms is relative to launch detect.
+                        "time_us":              f[55],
+                        "version":              version,
+                        "rocket_state":         f[2],
+                        "sim_flight":           sim_flight,
+                        "flight_elapsed_ms":    f[5],
+                        "apogee_elapsed_ms":    f[6],
+                        "burnout_elapsed_ms":   f[7],
+                        "pyro_apogee_detected": bool(f[8]),
+                        "snap_pyro1_fired":     bool(f[9]),
+                        "snap_pyro2_fired":     bool(f[10]),
+                        "snap_pyro3_fired":     bool(f[11]),
+                        "snap_pyro4_fired":     bool(f[12]),
+                        "b2r_code":             b2r_code,
+                        "b2r_mode":             b2r_mode,
+                        "ref_datum_converged":  bool(f[15]),
+                        "ground_pressure_pa":   f[16],
+                        # Reference datum: radians on the wire, degrees here to
+                        # match the GNSS stream — a lat channel that reads 0.66
+                        # beside one that reads 37.9 is a trap, not a feature.
+                        "ref_lat":              math.degrees(f[17]),
+                        "ref_lon":              math.degrees(f[18]),
+                        "ref_alt_m":            f[19],
+                        "ekf_initialized":      bool(f[20]),
+                        "snap_guidance_enabled": bool(f[21]),
+                        "snap_burnout_detected": bool(f[22]),
+                        "servo_enabled":        bool(f[23]),
+                        "ekf_lat":              math.degrees(f[24]),
+                        "ekf_lon":              math.degrees(f[25]),
+                        "ekf_alt_m":            f[26],
+                        "ekf_vel_n":            f[27],
+                        "ekf_vel_e":            f[28],
+                        "ekf_vel_d":            f[29],
+                        "ekf_q0":               f[30],
+                        "ekf_q1":               f[31],
+                        "ekf_q2":               f[32],
+                        "ekf_q3":               f[33],
+                        "ekf_accel_bias_x":     f[34],
+                        "ekf_accel_bias_y":     f[35],
+                        "ekf_accel_bias_z":     f[36],
+                        # rad/s on the wire; degrees/s here, because every other
+                        # gyro channel in this parser is dps and a bias that has to
+                        # be unit-converted before it can be compared against the
+                        # rate it corrects is a bias nobody will check.
+                        "ekf_gyro_bias_x":      math.degrees(f[37]),
+                        "ekf_gyro_bias_y":      math.degrees(f[38]),
+                        "ekf_gyro_bias_z":      math.degrees(f[39]),
+                        # Covariance DIAGONAL only (the full 15x15 does not fit one
+                        # I2S frame). Variances, so sqrt() for a 1-sigma.
+                        **{name: f[40 + i] for i, name in enumerate(SNAPSHOT_P_NAMES)},
+                        "ekf_roll":             math.degrees(f[56]),
+                        "ekf_pitch":            math.degrees(f[57]),
+                        "ekf_yaw":              math.degrees(f[58]),
+                        "b2r_q0":               b2r_q[0],
+                        "b2r_q1":               b2r_q[1],
+                        "b2r_q2":               b2r_q[2],
+                        "b2r_q3":               b2r_q[3],
+                    })
+
+            elif msg_type == MSG_SNAPSHOT:
+                # Wrong length for every shipped version — the struct changed
+                # without this parser. Warn rather than drop silently (#296).
+                stats["snapshot_rejects"]["len"] += 1
+                if "snapshot_len" not in _warned_nonsensor_lens:
+                    _warned_nonsensor_lens.add("snapshot_len")
+                    sys.stderr.write(
+                        f"WARNING: Snapshot frame length {msg_len} B, expected "
+                        f"{SNAPSHOT_LEN} — records dropped. Update FMT_SNAPSHOT "
+                        f"after a FlightSnapshotData change.\n")
 
             elif msg_type == MSG_LOG_BUFFER_STATS:
                 # OC self-emitted ring snapshot, ~1 Hz while logging.

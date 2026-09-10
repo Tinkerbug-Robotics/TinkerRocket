@@ -44,6 +44,16 @@ KIND_RAW = "raw"
 # turn into records is reported to the user as unreadable.
 _CONTROL_FRAMES = frozenset({"StartLogging", "EndFlight", "OUT_STATUS_QUERY"})
 
+# Frame types that ARE decoded, just not into a `records` stream, so the channel
+# walk cannot see them. Without this the inventory would report a frame the
+# report already renders as one nothing can read — the same class of false
+# statement the provenance table exists to prevent.
+_DECODED_ELSEWHERE = {
+    "FlightSettings":
+        "decoded, and it drives the Settings section; one configuration record "
+        "rather than a series, so there is no channel to plot",
+}
+
 
 @dataclass(frozen=True)
 class ChannelMeta:
@@ -112,11 +122,16 @@ class Channel:
 
 @dataclass
 class Unreadable:
-    """A frame type present in the log that the parser produced nothing from."""
+    """A frame type present in the log that produced no plottable channel."""
 
     name: str            # "0xD2", or a name from MSG_NAMES that has no decoder
     count: int
     reason: str
+    # True when the frame IS decoded, just not into `records`. Saying "no
+    # decoder" about a frame the report already renders would be its own lie —
+    # FlightSettings drives the whole Settings section from
+    # config["flight_settings_frames"] and never appears in a stream.
+    decoded_elsewhere: bool = False
 
 
 @dataclass
@@ -197,6 +212,30 @@ _P(
         "This is a piecewise-linear lookup of the same bus voltage against a 2S LiPo curve, not "
         "coulomb counting, so it sags and recovers with load. On any other supply it clamps: 5 V "
         "bench runs report a flat 0%.",
+    shown_in=()
+)
+_P(
+    "POWER.cam_a", "Camera rail current",
+    unit="A",
+    note=
+        "Per-rail current draw on the camera switch, from the v2 (14-byte) POWER frame added in "
+        "#850. Logged as uint16 milliamps and divided by 1000 here, so this channel is AMPS.",
+    caution=
+        "Note the unit disagreement with POWER.current on the same stream, which is milliamps: one "
+        "is scaled here and one is not. None (not 0) on v1 logs that predate the rail monitors — a "
+        "board without the hardware must not draw a flat 0 A line. All four example flights are v1, "
+        "so this channel is empty on every fixture in the repo.",
+    shown_in=()
+)
+_P(
+    "POWER.servo_a", "Servo rail current",
+    unit="A",
+    note=
+        "Per-rail current draw on the servo supply, from the v2 (14-byte) POWER frame added in "
+        "#850. uint16 milliamps on the wire, divided by 1000 here — amps, like cam_a.",
+    caution=
+        "Same two traps as cam_a: amps while POWER.current beside it is milliamps, and None rather "
+        "than 0 on pre-#850 logs. Empty on every fixture in the repo.",
     shown_in=()
 )
 
@@ -1197,7 +1236,9 @@ _P(
 _P(
     "NonSensor.health_pyro1", "Health: pyro 1",
     kind=KIND_ENUM,
-    note="Pre-launch verdict for pyro channel 1.",
+    note=
+        "Pre-launch verdict for pyro channel 1, config-gated: it answers whether THIS flight's "
+        "deployment train is ready. health_pyro1_meas is the ungated measured twin.",
     caution=
         "The scale inverts here: 0 = channel not configured, 2 = configured but continuity untested, "
         "3 = configured with NO continuity. Reading 0 as \"fine\" inverts the go/no-go.",
@@ -1205,7 +1246,9 @@ _P(
 _P(
     "NonSensor.health_pyro2", "Health: pyro 2",
     kind=KIND_ENUM,
-    note="Pre-launch verdict for pyro channel 2.",
+    note=
+        "Pre-launch verdict for pyro channel 2, config-gated: it answers whether THIS flight's "
+        "deployment train is ready. health_pyro2_meas is the ungated measured twin.",
     caution=
         "Same inverted scale as channel 1: 0 means the channel was not configured at all, 2 "
         "configured but untested, 3 configured and failing continuity.",
@@ -1213,7 +1256,9 @@ _P(
 _P(
     "NonSensor.health_pyro3", "Health: pyro 3",
     kind=KIND_ENUM,
-    note="Pre-launch verdict for pyro channel 3.",
+    note=
+        "Pre-launch verdict for pyro channel 3, config-gated: it answers whether THIS flight's "
+        "deployment train is ready. health_pyro3_meas is the ungated measured twin.",
     caution=
         "Inverted per-channel scale: 0 is \"not configured\" rather than healthy, 2 is configured but "
         "continuity untested, 3 is configured with no continuity.",
@@ -1221,7 +1266,9 @@ _P(
 _P(
     "NonSensor.health_pyro4", "Health: pyro 4",
     kind=KIND_ENUM,
-    note="Pre-launch verdict for pyro channel 4.",
+    note=
+        "Pre-launch verdict for pyro channel 4, config-gated: it answers whether THIS flight's "
+        "deployment train is ready. health_pyro4_meas is the ungated measured twin.",
     caution=
         "Read on the inverted per-channel scale: 0 = not configured for this flight, 2 = configured "
         "but untested, 3 = configured and no continuity. A 0 is not a pass.",
@@ -1246,6 +1293,439 @@ _P(
         "Inverted against the rest of the family: 3 means the degraded mode is ACTIVE, 0 means normal "
         "(not \"no verdict\"), 1 and 2 never occur. At 3 there is no absolute position at all.",
 )
+_P(
+    "NonSensor.health_pyro1_meas", "Pyro 1 continuity (measured)",
+    kind=KIND_ENUM,
+    note=
+        "What the wire actually measured on pyro channel 1, reported whether or not the channel was "
+        "configured for this flight: 0 never tested, 1 continuity present, 3 tested and open. This is "
+        "the ungated twin of health_pyro1, which is deliberately config-gated because it feeds the "
+        "operator's go/no-go.",
+    caution=
+        "All four measured channels reading 0 together means the log PREDATES the field (added "
+        "2026-08-17), not that nothing was tested — fall back to health_pyro1. Never rewrite one "
+        "from the other: this answers \"what did the wire measure\", health_pyro1 answers \"is this "
+        "flight's deployment train ready\", and a bench-tested empty channel differs between them. "
+        "2 (degraded) never occurs here.",
+)
+_P(
+    "NonSensor.health_pyro2_meas", "Pyro 2 continuity (measured)",
+    kind=KIND_ENUM,
+    note=
+        "What the wire actually measured on pyro channel 2, reported whether or not the channel was "
+        "configured for this flight: 0 never tested, 1 continuity present, 3 tested and open. This is "
+        "the ungated twin of health_pyro2, which is deliberately config-gated because it feeds the "
+        "operator's go/no-go.",
+    caution=
+        "All four measured channels reading 0 together means the log PREDATES the field (added "
+        "2026-08-17), not that nothing was tested — fall back to health_pyro2. Never rewrite one "
+        "from the other: this answers \"what did the wire measure\", health_pyro2 answers \"is this "
+        "flight's deployment train ready\", and a bench-tested empty channel differs between them. "
+        "2 (degraded) never occurs here.",
+)
+_P(
+    "NonSensor.health_pyro3_meas", "Pyro 3 continuity (measured)",
+    kind=KIND_ENUM,
+    note=
+        "What the wire actually measured on pyro channel 3, reported whether or not the channel was "
+        "configured for this flight: 0 never tested, 1 continuity present, 3 tested and open. This is "
+        "the ungated twin of health_pyro3, which is deliberately config-gated because it feeds the "
+        "operator's go/no-go.",
+    caution=
+        "All four measured channels reading 0 together means the log PREDATES the field (added "
+        "2026-08-17), not that nothing was tested — fall back to health_pyro3. Never rewrite one "
+        "from the other: this answers \"what did the wire measure\", health_pyro3 answers \"is this "
+        "flight's deployment train ready\", and a bench-tested empty channel differs between them. "
+        "2 (degraded) never occurs here.",
+)
+_P(
+    "NonSensor.health_pyro4_meas", "Pyro 4 continuity (measured)",
+    kind=KIND_ENUM,
+    note=
+        "What the wire actually measured on pyro channel 4, reported whether or not the channel was "
+        "configured for this flight: 0 never tested, 1 continuity present, 3 tested and open. This is "
+        "the ungated twin of health_pyro4, which is deliberately config-gated because it feeds the "
+        "operator's go/no-go.",
+    caution=
+        "All four measured channels reading 0 together means the log PREDATES the field (added "
+        "2026-08-17), not that nothing was tested — fall back to health_pyro4. Never rewrite one "
+        "from the other: this answers \"what did the wire measure\", health_pyro4 answers \"is this "
+        "flight's deployment train ready\", and a bench-tested empty channel differs between them. "
+        "2 (degraded) never occurs here.",
+)
+
+
+# ---------------------------------------------------------------------------
+# FlightSnapshotData (SNAPSHOT_MSG 0xD2) — the flight computer's crash-recovery
+# state, emitted to the OutComputer at 10 Hz for the whole of INFLIGHT and
+# logged there. Decoded from #752: 774 frames sat in the example log with no
+# parser branch, appearing to the reader as a row labelled "0xD2".
+#
+# Two properties make this stream unlike the sensor streams. It exists only
+# between launch detect and landing, so it is short and starts at t0 rather than
+# at power-on. And it is the only stream the firmware reads BACK: after an
+# in-flight reboot the FC restores itself from the last valid frame, which is
+# why the parser checks the magic and the CRC32 before believing a record.
+_P(
+    "Snapshot.version", "Snapshot format version",
+    kind=KIND_ENUM,
+    note=
+        "Wire version of the snapshot struct: 2 four-channel pyro, 3 adds the board-to-rocket "
+        "orientation, 4 adds the sim_flight flag. All three are 224 bytes — later versions reclaimed "
+        "padding, so the version gates MEANING, not layout.",
+    caution=
+        "A constant per flight, so it plots as a flat line; it is here to explain why b2r_* and "
+        "sim_flight are empty on an older log, not to be plotted.",
+)
+_P(
+    "Snapshot.rocket_state", "Rocket state (snapshot)",
+    kind=KIND_ENUM,
+    note="The flight state the FC held when the snapshot was built, on the same scale as the "
+         "NonSensor state channel.",
+    caution=
+        "Sampled at 10 Hz against NonSensor's ~500 Hz, so a transition here can lag the same "
+        "transition there by up to 100 ms. Read state changes off NonSensor.",
+)
+_P(
+    "Snapshot.sim_flight", "Simulated flight flag",
+    kind=KIND_BOOL,
+    note=
+        "Set when the snapshot was built during a SIMULATED flight (v4+). The FC's restore path "
+        "refuses these outright: resuming a sim snapshot would re-enter LIVE INFLIGHT with the pyro "
+        "dry-fire gate off.",
+    caution=
+        "None, not False, on v2/v3 logs — that byte was padding then, and the firmware itself "
+        "declines to conclude a v3 frame was a live flight. Reading None as False inverts the one "
+        "safety property this field exists for.",
+)
+_P(
+    "Snapshot.flight_elapsed_ms", "Flight elapsed (snapshot)",
+    unit="ms", kind=KIND_COUNTER,
+    note="Milliseconds since launch detect, as the FC counted them when it built this frame.",
+    caution=
+        "Relative to launch, while this stream's time axis is the FC's micros() clock. The two "
+        "differ by the launch-detect offset — do not treat this as a timestamp.",
+)
+_P(
+    "Snapshot.apogee_elapsed_ms", "Apogee elapsed (snapshot)",
+    unit="ms", kind=KIND_COUNTER,
+    note="Milliseconds from launch to the FC's apogee call, carried so a rebooted FC knows apogee "
+         "already happened.",
+    caution="Zero until apogee is declared, so the step off zero IS the apogee call.",
+)
+_P(
+    "Snapshot.burnout_elapsed_ms", "Burnout elapsed (snapshot)",
+    unit="ms", kind=KIND_COUNTER,
+    note="Milliseconds from launch to burnout detect, same carry-across-reboot purpose as apogee.",
+    caution="Zero until burnout is detected; the step off zero is the event.",
+)
+_P(
+    "Snapshot.pyro_apogee_detected", "Apogee detected (snapshot)",
+    kind=KIND_BOOL,
+    note="The FC's master apogee verdict at snapshot time — the same vote NonSensor carries as "
+         "apogee_flag.",
+    caution="10 Hz, so use NonSensor.apogee_flag for the moment of the call and this only to see "
+            "what a recovering FC would have believed.",
+)
+_P(
+    "Snapshot.snap_pyro1_fired", "Pyro 1 fired (snapshot)",
+    kind=KIND_BOOL,
+    note="Channel 1 fired, as recorded in the snapshot so a rebooted FC does not re-fire it.",
+    caution=
+        "Deliberately named apart from NonSensor.pyro1_fired: same fact, different rate and "
+        "different purpose. A disagreement between them across a reboot is exactly what this "
+        "channel is for.",
+)
+_P(
+    "Snapshot.snap_pyro2_fired", "Pyro 2 fired (snapshot)",
+    kind=KIND_BOOL,
+    note="Channel 2 fired, carried across a reboot to suppress a re-fire.",
+    caution="The 10 Hz twin of NonSensor.pyro2_fired — compare, do not substitute.",
+)
+_P(
+    "Snapshot.snap_pyro3_fired", "Pyro 3 fired (snapshot)",
+    kind=KIND_BOOL,
+    note="Channel 3 fired, carried across a reboot to suppress a re-fire.",
+    caution="The 10 Hz twin of NonSensor.pyro3_fired — compare, do not substitute.",
+)
+_P(
+    "Snapshot.snap_pyro4_fired", "Pyro 4 fired (snapshot)",
+    kind=KIND_BOOL,
+    note="Channel 4 fired, carried across a reboot to suppress a re-fire.",
+    caution="The 10 Hz twin of NonSensor.pyro4_fired — compare, do not substitute.",
+)
+_P(
+    "Snapshot.b2r_code", "Board-to-rocket orientation code",
+    kind=KIND_ENUM,
+    note=
+        "The discrete mounting orientation active at launch (v3+), snapshotted because the "
+        "quaternion, velocities and biases below were all estimated in that rocket frame.",
+    caution=
+        "None on v2 logs. A restore that got this wrong would silently invalidate every EKF field "
+        "in the frame, which is why it is restored before them.",
+)
+_P(
+    "Snapshot.b2r_mode", "Board-to-rocket orientation mode",
+    kind=KIND_ENUM,
+    note="How the orientation was arrived at (auto, exact, manual), v3+.",
+    caution="None on v2 logs.",
+)
+_P(
+    "Snapshot.ref_datum_converged", "Pad datum converged",
+    kind=KIND_BOOL,
+    note=
+        "Whether ref_alt_m came from a converged pad average (#834 item 4). The GNSS main-deploy "
+        "backstop compares against ref_alt_m, and an under-converged datum has been measured 132 m "
+        "off — past the backstop's margin.",
+    caution=
+        "False on every older log, which is the fail-safe reading: it disables the backstop rather "
+        "than trusting a datum whose evidence was never recorded.",
+)
+_P(
+    "Snapshot.ground_pressure_pa", "Ground reference pressure",
+    unit="Pa",
+    note="The pad pressure the FC's altitude solution is referenced to — the zero of every AGL "
+         "number in the flight.",
+    caution=
+        "A pad constant, so a step in it mid-flight means the reference was re-established, not "
+        "that the weather changed.",
+)
+_P(
+    "Snapshot.ref_lat", "Pad latitude (snapshot)",
+    unit="°",
+    note="Launch-site latitude datum. Radians on the wire; the parser converts to degrees to match "
+         "the GNSS stream.",
+    caution="A pad constant. Its distance from GNSS.lat at t0 is a datum error, not motion.",
+)
+_P(
+    "Snapshot.ref_lon", "Pad longitude (snapshot)",
+    unit="°",
+    note="Launch-site longitude datum, converted from radians for the same reason as ref_lat.",
+    caution="A pad constant, not a track.",
+)
+_P(
+    "Snapshot.ref_alt_m", "Pad altitude datum",
+    unit="m",
+    note="Launch-site altitude the main-deploy GNSS backstop measures against.",
+    caution="Trustworthy only when ref_datum_converged is true — see that channel.",
+)
+_P(
+    "Snapshot.ekf_initialized", "EKF initialised",
+    kind=KIND_BOOL,
+    note="Whether the filter had initialised when the frame was built.",
+    caution="False makes every EKF channel in the same record meaningless rather than merely "
+            "uncertain — filter it before plotting any of them.",
+)
+_P(
+    "Snapshot.snap_guidance_enabled", "Guidance enabled (snapshot)",
+    kind=KIND_BOOL,
+    note="Guidance armed at snapshot time; the 10 Hz twin of NonSensor.guidance_enabled.",
+)
+_P(
+    "Snapshot.snap_burnout_detected", "Burnout detected (snapshot)",
+    kind=KIND_BOOL,
+    note="Burnout declared at snapshot time. Pairs with burnout_elapsed_ms, which says when.",
+)
+_P(
+    "Snapshot.servo_enabled", "Servo output enabled",
+    kind=KIND_BOOL,
+    note="Whether the fin servos were live when the frame was built.",
+    caution="Carried in no other stream — this is the only record of the servo enable through a "
+            "flight.",
+)
+_P(
+    "Snapshot.ekf_lat", "EKF latitude",
+    unit="°",
+    note=
+        "The filter's own position estimate, converted from radians. This is the EKF solution, NOT "
+        "the GNSS fix: the two are separate channels and their difference is the quantity #741 is "
+        "about.",
+    caution=
+        "Plotting this against GNSS.lat is the intended use, but they are on different rates and "
+        "different streams — overlay them on their own time vectors rather than resampling.",
+)
+_P(
+    "Snapshot.ekf_lon", "EKF longitude",
+    unit="°",
+    note="The filter's longitude estimate, converted from radians. See ekf_lat.",
+    caution="Not the GNSS fix. Compare against GNSS.lon deliberately, never substitute.",
+)
+_P(
+    "Snapshot.ekf_alt_m", "EKF altitude",
+    unit="m",
+    note="The filter's altitude estimate in metres above the ellipsoid, on the same datum as "
+         "ref_alt_m.",
+    caution="Ellipsoidal and absolute — not the barometric AGL the report plots elsewhere. The two "
+            "differ by the pad datum plus the geoid, and neither offset is small.",
+)
+_P(
+    "Snapshot.ekf_vel_n", "EKF velocity North",
+    unit="m/s",
+    note="North component of the filter's NED velocity estimate.",
+    caution=
+        "The EKF's own estimate, not the GNSS Doppler velocity. On a V9 nose the GNSS velocity "
+        "collapses through boost, so the two diverging there is the known installation deficit, not "
+        "a filter fault.",
+)
+_P(
+    "Snapshot.ekf_vel_e", "EKF velocity East",
+    unit="m/s",
+    note="East component of the filter's NED velocity estimate.",
+    caution="Filter estimate, not GNSS. See ekf_vel_n.",
+)
+_P(
+    "Snapshot.ekf_vel_d", "EKF velocity Down",
+    unit="m/s", conv="m/s:fps",
+    note="Down component of the filter's NED velocity estimate, so a CLIMB is negative.",
+    caution=
+        "Sign trap: NED means down-positive, and every other vertical rate in this report is "
+        "up-positive. Negate before comparing against a climb rate.",
+)
+_P(
+    "Snapshot.ekf_q0", "EKF quaternion w",
+    note="Scalar part of the body-to-NED attitude quaternion held by the filter.",
+    caution=
+        "Scalar-FIRST here. Plotting a quaternion component on its own says little; it is carried so "
+        "an attitude can be reconstructed exactly, which the cached Euler angles cannot do near "
+        "gimbal lock.",
+)
+_P("Snapshot.ekf_q1", "EKF quaternion x",
+   note="Vector x of the body-to-NED attitude quaternion.",
+   caution="Scalar-first convention — this is the SECOND element. See ekf_q0.")
+_P("Snapshot.ekf_q2", "EKF quaternion y",
+   note="Vector y of the body-to-NED attitude quaternion.",
+   caution="Scalar-first convention. See ekf_q0.")
+_P("Snapshot.ekf_q3", "EKF quaternion z",
+   note="Vector z of the body-to-NED attitude quaternion.",
+   caution="Scalar-first convention. See ekf_q0.")
+_P(
+    "Snapshot.ekf_accel_bias_x", "Accel bias X (EKF)",
+    unit="m/s²",
+    note="The filter's estimate of the X accelerometer bias, in the rocket frame.",
+    caution=
+        "An ESTIMATE that the filter is free to move, not a calibration constant. It absorbs "
+        "whatever the filter cannot otherwise explain, so a walking bias is a symptom, not a "
+        "measurement of the sensor.",
+)
+_P("Snapshot.ekf_accel_bias_y", "Accel bias Y (EKF)", unit="m/s²",
+   note="The filter's estimate of the Y accelerometer bias, in the rocket frame.",
+   caution="A free filter state, not a calibration. See ekf_accel_bias_x.")
+_P("Snapshot.ekf_accel_bias_z", "Accel bias Z (EKF)", unit="m/s²",
+   note="The filter's estimate of the Z accelerometer bias, in the rocket frame.",
+   caution="A free filter state, not a calibration. See ekf_accel_bias_x.")
+_P(
+    "Snapshot.ekf_gyro_bias_x", "Gyro bias X (EKF)",
+    unit="deg/s",
+    note=
+        "The filter's estimate of the X gyro bias. Radians per second on the wire; the parser "
+        "converts to degrees per second so it can be compared against the gyro rates directly.",
+    caution=
+        "Whatever this holds at launch is frozen in and integrates into heading for the rest of the "
+        "flight — the pad value matters more than the flight value.",
+)
+_P("Snapshot.ekf_gyro_bias_y", "Gyro bias Y (EKF)", unit="deg/s",
+   note="The filter's Y gyro bias estimate, converted from rad/s to dps by the parser.",
+   caution="Frozen in at launch — see ekf_gyro_bias_x.")
+_P("Snapshot.ekf_gyro_bias_z", "Gyro bias Z (EKF)", unit="deg/s",
+   note="The filter's Z gyro bias estimate, converted from rad/s to dps by the parser.",
+   caution="Frozen in at launch — see ekf_gyro_bias_x.")
+_P(
+    "Snapshot.p_pos_n", "Covariance: position N",
+    unit="m2",
+    note=
+        "Diagonal of the filter's error covariance for North position — a VARIANCE, so take the "
+        "square root for a 1-sigma in metres.",
+    caution=
+        "The diagonal only: the full 15x15 does not fit one I2S frame. Off-diagonals are not zero "
+        "in flight, they are simply not carried, so this understates the joint uncertainty and "
+        "cannot be turned back into an error ellipse.",
+)
+_P("Snapshot.p_pos_e", "Covariance: position E", unit="m2",
+   note="Error variance for East position; sqrt for a 1-sigma.",
+   caution="Diagonal only — see p_pos_n.")
+_P("Snapshot.p_pos_d", "Covariance: position D", unit="m2",
+   note="Error variance for Down position; sqrt for a 1-sigma.",
+   caution="Diagonal only — see p_pos_n.")
+_P("Snapshot.p_vel_n", "Covariance: velocity N", unit="m2/s2",
+   note="Error variance for North velocity; sqrt for a 1-sigma in m/s.",
+   caution="Diagonal only — see p_pos_n.")
+_P("Snapshot.p_vel_e", "Covariance: velocity E", unit="m2/s2",
+   note="Error variance for East velocity; sqrt for a 1-sigma in m/s.",
+   caution="Diagonal only — see p_pos_n.")
+_P("Snapshot.p_vel_d", "Covariance: velocity D", unit="m2/s2",
+   note="Error variance for Down velocity; sqrt for a 1-sigma in m/s.",
+   caution="Diagonal only — see p_pos_n.")
+_P(
+    "Snapshot.p_att_x", "Covariance: attitude X",
+    unit="rad2",
+    note="Error variance for the X attitude error state; sqrt for a 1-sigma in radians.",
+    caution=
+        "Radians squared, and the attitude error state is a half-angle — a sigma read off here is "
+        "not directly an angle error in degrees. Diagonal only, as with the position block.",
+)
+_P("Snapshot.p_att_y", "Covariance: attitude Y", unit="rad2",
+   note="Error variance for the Y attitude error state.",
+   caution="Half-angle error state, diagonal only — see p_att_x.")
+_P("Snapshot.p_att_z", "Covariance: attitude Z", unit="rad2",
+   note="Error variance for the Z attitude error state.",
+   caution="Half-angle error state, diagonal only — see p_att_x.")
+_P("Snapshot.p_abias_x", "Covariance: accel bias X", unit="m2/s4",
+   note="Error variance for the X accelerometer bias state.",
+   caution="Diagonal only — see p_pos_n.")
+_P("Snapshot.p_abias_y", "Covariance: accel bias Y", unit="m2/s4",
+   note="Error variance for the Y accelerometer bias state.",
+   caution="Diagonal only — see p_pos_n.")
+_P("Snapshot.p_abias_z", "Covariance: accel bias Z", unit="m2/s4",
+   note="Error variance for the Z accelerometer bias state.",
+   caution="Diagonal only — see p_pos_n.")
+_P(
+    "Snapshot.p_gbias_x", "Covariance: gyro bias X",
+    unit="rad2/s2",
+    note="Error variance for the X gyro bias state, in (rad/s) squared — NOT converted to dps like "
+         "the bias estimate itself.",
+    caution=
+        "Gyro bias is only weakly observable on a stationary pad, so this shrinking says the filter "
+        "grew confident, not that the bias was measured. Diagonal only.",
+)
+_P("Snapshot.p_gbias_y", "Covariance: gyro bias Y", unit="rad2/s2",
+   note="Error variance for the Y gyro bias state, in (rad/s) squared.",
+   caution="Weakly observable on the pad, diagonal only — see p_gbias_x.")
+_P("Snapshot.p_gbias_z", "Covariance: gyro bias Z", unit="rad2/s2",
+   note="Error variance for the Z gyro bias state, in (rad/s) squared.",
+   caution="Weakly observable on the pad, diagonal only — see p_gbias_x.")
+_P(
+    "Snapshot.ekf_roll", "EKF roll",
+    unit="°",
+    note=
+        "The filter's cached Euler roll, converted from radians. Body-to-local (ZYX), the same "
+        "convention as the NonSensor Euler triple derived from the quaternion.",
+    caution=
+        "A CACHED value, so near gimbal lock it can disagree with what ekf_q0..q3 imply — the "
+        "quaternion is the authority. And per #514 this is not the app CSV's Roll, which is a "
+        "body-Z azimuth.",
+)
+_P("Snapshot.ekf_pitch", "EKF pitch", unit="°",
+   note="The filter's cached Euler pitch, converted from radians (ZYX, body-to-local).",
+   caution="Cached — the quaternion is the authority near gimbal lock. See ekf_roll.")
+_P("Snapshot.ekf_yaw", "EKF yaw", unit="°",
+   note="The filter's cached Euler yaw, converted from radians (ZYX, body-to-local).",
+   caution="Cached — the quaternion is the authority near gimbal lock. See ekf_roll.")
+_P(
+    "Snapshot.b2r_q0", "Board-to-rocket quaternion w",
+    note=
+        "Scalar part of the board-to-rocket rotation active at launch (v3+), decoded from an int16 "
+        "scaled by 10000. Authoritative where the discrete b2r_code cannot express the mounting.",
+    caution="None on v2 logs. Scalar-first, like the EKF quaternion.",
+)
+_P("Snapshot.b2r_q1", "Board-to-rocket quaternion x",
+   note="Vector x of the launch board-to-rocket rotation, int16 x10000 on the wire.",
+   caution="None on v2 logs. Scalar-first — this is the second element.")
+_P("Snapshot.b2r_q2", "Board-to-rocket quaternion y",
+   note="Vector y of the launch board-to-rocket rotation, int16 x10000 on the wire.",
+   caution="None on v2 logs. Scalar-first.")
+_P("Snapshot.b2r_q3", "Board-to-rocket quaternion z",
+   note="Vector z of the launch board-to-rocket rotation, int16 x10000 on the wire.",
+   caution="None on v2 logs. Scalar-first.")
 
 
 # ---------------------------------------------------------------------------
@@ -1335,6 +1815,11 @@ def _unreadable(stats: dict[str, Any], records: dict[str, list]) -> list[Unreada
     for name, count in sorted(stats.get("type_counts", {}).items(), key=lambda kv: -kv[1]):
         if name in _CONTROL_FRAMES or records.get(name):
             continue
+        if name in _DECODED_ELSEWHERE:
+            out.append(Unreadable(name=name, count=count,
+                                  reason=_DECODED_ELSEWHERE[name],
+                                  decoded_elsewhere=True))
+            continue
         if name.startswith("0x"):
             reason = "no decoder — the frame type is not in the parser's message table"
         else:
@@ -1356,6 +1841,15 @@ DROPPED_FIELDS: tuple[str, ...] = (
     "NonSensor.apogee_flags bit 5 (NSF2_ORIENT_THRUST_MISMATCH) — the constant "
     "is defined but never decoded into a field.",
 )
+
+
+def unreadable_for(flight: "Flight") -> list[Unreadable]:
+    """Just the undecodable frame types, without building a whole catalog.
+
+    `parser_stats` needs this to label its message table and has no use for the
+    channel walk, which is the expensive half.
+    """
+    return _unreadable(flight.stats or {}, flight.records or {})
 
 
 def build(flight: "Flight") -> Catalog:
