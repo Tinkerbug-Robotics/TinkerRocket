@@ -1,0 +1,53 @@
+# #1211 / #1191 — the EKF and the roll controller get the MEAN of the drained
+# IMU samples, not the last sample (PR #1214).
+#
+# Rig: V9 pair, S1 -> F (the [SENSOR] and [GAP DIAG] lines are FC-side). Rail
+# ON so the FC is in READY, where the dynamic IMU rate runs the BOOST ODR — the
+# state this check is defined for, because at the idle ODR the window would be
+# short for an uninteresting reason.
+#
+# What the line has to say, per the item:
+#   ism6=~3840          the boost ODR is actually running
+#   win n=7.x           the boxcar length behind the -15 dB replay figure.
+#                       n near 1.0 means the queue is NOT being drained in
+#                       batches, i.e. the averaging is not happening at all.
+#   max=<single digits> a max in the hundreds means the loop stalled
+#   imu_q_drops=0       on [GAP DIAG]: nothing was thrown away
+#
+# The other halves of the item need hardware this bench does not have: the
+# roll-control step response and the tap test both need servos on the airframe,
+# and the mini repeat is tracked in #1316. This covers the [SENSOR] check only.
+
+note === rail on, let the FC settle into READY at the boost ODR ===
+send 8 01
+sleep 35
+mark
+note === give the 1 Hz [SENSOR]/[GAP DIAG] lines time to repeat ===
+sleep 25
+
+expect_serial_since \[SENSOR\] reads/s: ism6=3[6-9][0-9][0-9]
+expect_serial_since \[GAP DIAG\].*imu_q_drops=0
+refute_serial_since imu_q_drops=[1-9]
+note === done — n and max are read from the captured lines ===
+
+# BENCH 2026-09-10 — the ODR and imu_q_drops halves PASS; `n` does NOT, and
+# that is a real finding, filed as #1326.
+#
+#   state      ism6/s   win n   max
+#   READY      ~3760     1.0    14-16
+#   INFLIGHT   ~3760     1.2    17-20     (over a full 232 m sim flight)
+#
+# #1211 expects n=7.x with max in single digits. n is
+# dbg_ism6_reads/dbg_ism6_passes, so passes/s = 3760/1.0 = ~3760 — and that is
+# NOT the consumer's rate. The drain window closes at main.cpp:5582, OUTSIDE
+# the flight-logic gate at :5857, so it runs every loop_fc() pass; ekf.update
+# (:6341) and kinematicChecks (:8806) are INSIDE it at ~978/s. Each window
+# therefore holds ~1 sample and the mean averages nothing, while ~2.8 of every
+# 3.8 means are overwritten before the EKF reads one.
+#
+# Note the trap that hides this: `[TIMING] loop: cnt=978/s` is the FLIGHT-LOGIC
+# rate — lt_loop_count++ lives inside the gate — not the loop_fc() iteration
+# rate. Deriving the real cadence from reads/n is the only way to see it.
+#
+# max=15-24 shows the machinery is sound: when the loop stalls, samples do
+# accumulate and the window spans them.
