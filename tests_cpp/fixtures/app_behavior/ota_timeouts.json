@@ -28,9 +28,9 @@
     {
       "name": "finish",
       "crossesRelay": true,
-      "localMs": 15000,
+      "localMs": 45000,
       "fcMs": 60000,
-      "why": "FC drains the I2S ring, writes the tail, SHA-256s the image and sets the boot partition"
+      "why": "FC drains the I2S ring, writes the tail, SHA-256s the image and sets the boot partition. The LOCAL window covers only the SHA-256 over the image plus setting the boot partition, the bytes having already arrived — and 15 s was not enough for it. Bench 2026-09-10 flashing fw-v0.0.1-rc1: an 815 kB out-computer image and a 770 kB base-station image were BOTH still verifying when the window expired, so the app reported 'Device did not finalize OTA within 15s' on two flashes that then committed and booted correctly. There is no wire state between writing and ready_to_boot, so the app cannot distinguish 'still hashing' from 'died' and the clock has to be generous."
     },
     {
       "name": "fwPublish",
