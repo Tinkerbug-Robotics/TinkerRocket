@@ -928,7 +928,31 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 // per-module-lifetime resource; when enabled, writes only ever target a
 // module whose OTP reads fully BLANK, at most once per module (NVS guard +
 // the blocklist below).
-static constexpr bool kOtpAutoProgram = true;
+//
+// ── OFF since 2026-09-09 (#717), by owner decision.  Two facts settled it. ──
+//
+// 1. The benefit is not there.  The comment above measureGnssRate() says it
+//    outright — "WHAT THIS BUYS IS UNMEASURED" — and the measurement that
+//    followed found four flights on DEFAULT-clock modules each delivering the
+//    full 18.18 Hz while tracking 16–29 satellites.  The "~10 Hz with four
+//    constellations" ceiling that justified burning OTP is not real.
+//
+// 2. The record is nought for two.  Every module this has ever written to is
+//    now on the blocklist below — B9A8090FB454 and FB80A88FA854 — and no
+//    module has ever been confirmed successfully programmed.  A third module
+//    (F6DBAF8FA854) reads BLANK while NVS says a write was attempted, and the
+//    guard cannot tell "never sent" from "sent and lost", so we do not even
+//    know whether that budget was spent.
+//
+// Burning an irreversible, once-or-twice-per-lifetime resource on first boot,
+// for a benefit measurement says is already present, at a 0/2 success rate, is
+// not a default worth keeping.  The read-only path still runs at every boot
+// and still logs the state, so nothing is lost diagnostically.
+//
+// To re-enable: measure what the high clock actually changes in flight first,
+// then flip this and fix the state tracking in #717 items 1–3 so a failed
+// write is distinguishable from one that never left the buffer.
+static constexpr bool kOtpAutoProgram = false;
 
 // Modules that must NEVER be auto-programmed, by UBX-SEC-UNIQID unique chip
 // ID.  This travels with the FIRMWARE: the once-ever NVS guard lives on one
@@ -1026,8 +1050,12 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
 
     if (!kOtpAutoProgram)
     {
-        ESP_LOGW(TAG, "OTP auto-programming DISABLED in this build (read-only "
-                      "diagnostics) — running at default clock");
+        // Not a warning: this is the shipped default (#717), and the default
+        // clock was measured delivering the full requested rate. Info level so
+        // a boot log that is working correctly does not read as a fault.
+        ESP_LOGI(TAG, "OTP blank; auto-programming is off by default (#717) — "
+                      "running at the default clock, which measured 18.18 Hz "
+                      "at 16–29 sats across four flights");
         return true;
     }
 
