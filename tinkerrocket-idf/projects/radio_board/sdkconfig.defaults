@@ -1,45 +1,47 @@
 CONFIG_IDF_TARGET="esp32s3"
 
-# Flash — 8 MB, settled from the as-built board: U22 = W25Q64JVXGIQ (64 Mbit).
-# This was previously 8 MB for a guess ("devkits are >=8MB, final part TBD");
-# it is now 8 MB for a reason. A later board revision fits a W25Q128 (16 MB) —
-# 8 MB is the safe value for both, since an 8 MB image runs on a 16 MB part
-# while the reverse bricks the boot. Do not raise this to match a schematic
-# without checking which board is in your hand. (Reading the flash part off a
-# stale field is the OC's 128-of-512 MB mistake, #492.)
+# Flash — 4 MB, which is the smallest standard size that fits this project's
+# own partition table (partitions.csv ends at 0x320000, 3.2 MB). That is the
+# rule for every build in the tree since #916/#1314, owner decision 2026-09-09,
+# and `tinkerrocket-idf/tools/check_flash_declarations.py` enforces it in CI —
+# so this line is machine-checked and does not need defending in prose.
 #
-# That paragraph was right and got overwritten anyway. A 2026-08-22 sweep
-# raised the whole fleet to 16 MB on the strength of the CURRENT schematic —
-# hardware/lora-daughterboard fits a GD25Q128ESIG — and appended its reasoning
-# below this block without removing the argument against it, leaving the file
-# asserting both. Reverted 2026-08-24. Unlike the rocket computer this project
-# has no board-revision flag to fork on, so the one declaration it gets has to
-# be the one that boots on every board, and that is 8 MB.
+# Why that direction: over-declaring is the only failure that bricks. The
+# bootloader reads a size the chip does not have and the board loops before
+# app_main, where no runtime assertion can reach it. Under-declaring is
+# harmless — the boot log says so out loud ("Detected size(8192k) larger than
+# the size in the binary image header(4096k)") and carries on.
 #
-# THE FLEET IS MIXED — corrected 2026-08-27. This block used to say "the
-# as-built LoRa Board V3 is the only radio board that has ever run this
-# firmware: the 16 MB first article is unflashable (dead flash, still open)".
-# That is no longer true. Measured during a flight-readiness pass, both fitted
-# daughterboards flashed and booted first time:
+# READ THIS BEFORE "FIXING" THE NUMBER. Everything below this line used to be
+# a long argument for 8 MB, ending "THE 8 MB DECLARATION STAYS". #1314 changed
+# the declaration to 4 MB and left that argument standing, so the file spent a
+# day asserting one thing and doing another — which is exactly the shape that
+# invites someone to flip the line back and quietly undo the rule. The 8 MB
+# reasoning is not wrong so much as superseded: 8 MB was chosen as the value
+# that boots on both an 8 MB and a 16 MB part, and 4 MB satisfies that same
+# requirement strictly better while also fitting a 4 MB bench devkit.
+#
+# The part fitted is NOT the input to this number. Do not raise it to match a
+# schematic, a BOM, or a chip you read off a board — that is the #492 mistake
+# (the OC's 128-of-512 MB field) in a place where it bricks instead of merely
+# misreporting. If this project ever outgrows 3.2 MB, grow partitions.csv and
+# let the guard tell you the new size.
+#
+# THE FLEET IS MIXED, and that is not an argument against the above — it is why
+# a single conservative declaration is right for a project with no
+# board-revision flag to fork on. Measured, four articles so far:
 #
 #   V8 pair  E0:72:A1:CA:F6:7C   8 MB  (GigaDevice c8:6517)
 #   V9 pair  E0:72:A1:CA:F6:40  16 MB
+#            E0:72:A1:CA:F6:48   8 MB  (GigaDevice c8:6517) — bench 2026-09-10
+#   first article  ...:F6:50           — unflashable, boot NOR never answers
 #
-# Whatever ails the unflashable first article, it is not true of every 16 MB
-# board. Do not repeat that claim.
+# The first article's failure is NOT true of every 16 MB board: its siblings
+# flash and boot first time. Do not repeat that claim.
 #
-# THE 8 MB DECLARATION STAYS, and the mixed fleet is exactly why: it is the one
-# value that boots on both, since an 8 MB image runs on a 16 MB part while the
-# reverse bricks the boot. Nothing wants the space either — partitions.csv ends
-# at 0x320000 (3.2 MB), deliberately, so the same image flashes onto a bench
-# devkit too.
-#
-# So the old conclusion survives its own stale premise: what changed is that
-# 8 MB is now load-bearing for a board that EXISTS, not insurance against a
-# hypothetical one. If this project ever does need the space, give it the
-# TR_BOARD_*-style flag and sdkconfig.defaults.<rev> overlay that
-# flight_computer and out_computer use, rather than flipping this line — a
-# single declaration cannot serve both parts once it exceeds 8 MB.
+# If this project ever does need a per-board size, give it the TR_BOARD_*-style
+# flag and sdkconfig.defaults.<rev> overlay that flight_computer and
+# out_computer use, rather than flipping this line.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
