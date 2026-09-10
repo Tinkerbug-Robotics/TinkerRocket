@@ -88,6 +88,27 @@ def test_board_suffix_is_read_from_the_version_string():
     assert image_info.board_of("abc+20260909-1835") is None
 
 
+def test_the_suffix_letter_is_not_always_v():
+    """`-m1` and `-b1` are board suffixes too, and used to read as no board.
+
+    The flight-computer and out-computer builds for the rocket-computer-mini
+    stamp `-m1`; the mini's own project stamps `-b<n>` when TR_MINI_BOARD is
+    set. Both parsed as None until 2026-09-10, so a release manifest labelled
+    the one image that fits exactly one board as fitting every board, and the
+    app's catalog offered it as a default it should never have been.
+    """
+    assert image_info.board_of("7410cdc6-dirty-m1+20260909-2043") == "m1"
+    assert image_info.board_of("abc-M1+1") == "m1"
+    assert image_info.board_of("7410cdc6-b1+20260909-2043") == "b1"
+    # Both base-station images ship in every release and are not
+    # interchangeable — 8 MB vs 16 MB with a different partition table.
+    assert image_info.board_of("abc1234-v2+20260910-0950") == "v2"
+    assert image_info.board_of("abc1234-v3+20260910-0950") == "v3"
+    # The date tail stays out of it: "+20260909-2043" has a "-2043" in it, and
+    # a letter class wide enough to catch a digit run would read that as a board.
+    assert image_info.board_of("7410cdc6-dirty+20260909-2043") is None
+
+
 def test_manifest_sorts_and_labels(tmp_path):
     a = make_image(tmp_path, "oc.bin", project="out_computer",
                    version="aaa-v9+1", chip_id=0x0009)

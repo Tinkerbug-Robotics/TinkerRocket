@@ -37,18 +37,32 @@ public data class EspAppImage(
     public val chipName: String get() = CHIP_NAMES[chipId] ?: "chip 0x%04X".format(chipId)
 
     /**
-     * Board revision the image asserts, from the `-v9` in a version string like
-     * `537dc3ff-dirty-v9+20260909-1835`. Null when the build carries no suffix
-     * (the mini's single-MCU project does not).
+     * Board revision the image asserts, from the suffix in a version string
+     * like `537dc3ff-dirty-v9+20260909-1835`. Null when the build carries no
+     * suffix at all.
+     *
+     * The letter is NOT always `v`. Each project's CMakeLists stamps its own
+     * TR_BOARD_SUFFIX, and three shapes are in use: `-v7/-v8/-v9` (flight
+     * computer, out computer, base station), `-m1` (the flight and out
+     * computer builds for the rocket-computer-mini), and `-b1` (the mini's
+     * own single-MCU project, when TR_MINI_BOARD is set).
+     *
+     * This matched only `-v` until 2026-09-10, so every `-m1` image parsed as
+     * "no board" — read by the catalog as "applies everywhere" when it is the
+     * one image that applies to exactly one board.
      *
      * This is what the image CLAIMS, which is not the same as what the board
      * is — a wrongly flashed board reports the wrong revision forever. Good
      * enough to warn on, never to decide on.
      */
     public val boardSuffix: String? get() =
-        Regex("-([vV]\\d+)(?:[+\\-]|$)").find(version)?.groupValues?.get(1)?.lowercase()
+        BOARD_SUFFIX_RE.find(version)?.groupValues?.get(1)?.lowercase()
 
     public companion object {
+        /** Shared with `image_info.py`'s `board_of` and iOS's `boardSuffixPattern`. */
+        internal val BOARD_SUFFIX_RE: Regex =
+            Regex("-([vmb]\\d+)(?:[+\\-]|$)", RegexOption.IGNORE_CASE)
+
         public val CHIP_NAMES: Map<Int, String> = mapOf(
             0x0000 to "ESP32", 0x0002 to "ESP32-S2", 0x0005 to "ESP32-C3",
             0x0009 to "ESP32-S3", 0x000C to "ESP32-C2", 0x000D to "ESP32-C6",

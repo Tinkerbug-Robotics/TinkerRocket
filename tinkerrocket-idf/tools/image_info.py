@@ -86,14 +86,29 @@ def parse(path: str | Path) -> dict:
 
 
 def board_of(version: str) -> str | None:
-    """The board revision the image ASSERTS, from a `-v9` in its version string.
+    """The board revision the image ASSERTS, from the `-v9` in its version string.
 
     None when the build carries no suffix. This is the image's own claim, which
     is not the same as the board it is on — a wrongly flashed board reports the
     wrong revision forever — so it is a label, never a gate.
+
+    THE LETTER IS NOT ALWAYS `v`. The projects stamp three shapes, all set in
+    their own CMakeLists from the same TR_BOARD_SUFFIX that reaches the
+    compiler as TR_BOARD_OTA_SUFFIX:
+
+      -v7 -v8 -v9   flight_computer, out_computer, base_station
+      -m1           flight_computer, out_computer, on the rocket-computer-mini
+      -b1           rocket_computer_mini, when TR_MINI_BOARD is set
+
+    This matched only `-v` until 2026-09-10, so every `-m1` image came out of
+    the manifest with no board at all — labelled "applies everywhere" when it
+    is the one image that applies to exactly one board. The firmware's own
+    check never had the bug (TR_OTA_Receiver strstr's the whole suffix), so a
+    mini image aimed at a V9 was refused by the board while the app offered it
+    as a valid choice.
     """
     import re
-    m = re.search(r"-([vV]\d+)(?:[+\-]|$)", version)
+    m = re.search(r"-([vmb]\d+)(?:[+\-]|$)", version, re.IGNORECASE)
     return m.group(1).lower() if m else None
 
 

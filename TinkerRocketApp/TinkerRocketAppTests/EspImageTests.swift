@@ -48,6 +48,45 @@ final class EspImageTests: XCTestCase {
         XCTAssertEqual(img.boardSuffix, "v9")
     }
 
+    func testTheMinisFlightComputerImageIsLabelledNotUniversal() {
+        // The suffix letter is not always `v`. This parsed as "no board" until
+        // 2026-09-10, so the catalog read the one image that fits exactly one
+        // board as the image that fits every board — and offered it as the
+        // default to an out-of-the-box V7/V8/V9 whose revision is unknown.
+        // The firmware never had the bug: TR_OTA_Receiver strstr's "-m1" and
+        // refused, so the app proposed a flash the board then rejected.
+        let img = EspImage.parse(image(project: "flight_computer",
+                                       version: "7410cdc6-dirty-m1+20260909-2043",
+                                       chipId: 0x0009))!
+        XCTAssertEqual(img.boardSuffix, "m1")
+    }
+
+    func testABaseStationImageCarriesItsRevision() {
+        // Two base-station images ship in every release and they are not
+        // interchangeable — V2 is an 8 MB board, V3 a 16 MB one with a
+        // different partition table. Neither carried a suffix until
+        // base_station/CMakeLists.txt started stamping one.
+        let img = EspImage.parse(image(project: "base_station",
+                                       version: "abc1234-v3+20260910-0950",
+                                       chipId: 0x0009))!
+        XCTAssertEqual(img.boardSuffix, "v3")
+    }
+
+    func testTheMinisOwnProjectLabelsItselfWithB() {
+        let img = EspImage.parse(image(project: "rocket_computer_mini",
+                                       version: "7410cdc6-b1+20260909-2043",
+                                       chipId: 0x0009))!
+        XCTAssertEqual(img.boardSuffix, "b1")
+    }
+
+    func testTheDateTailIsNotMistakenForABoardSuffix() {
+        // The build date is "+20260909-2043"; a laxer pattern reads "-2043".
+        let img = EspImage.parse(image(project: "rocket_computer_mini",
+                                       version: "7410cdc6-dirty+20260909-2043",
+                                       chipId: 0x0009))!
+        XCTAssertNil(img.boardSuffix)
+    }
+
     func testABuildWithNoBoardSuffixReportsNone() {
         let img = EspImage.parse(image(project: "rocket_computer_mini",
                                        version: "7410cdc6-dirty+20260909-2043",
