@@ -51,6 +51,14 @@ final class OTASession: ObservableObject {
     private(set) var preFlashFirmwareVersion: String = ""
     private(set) var imageSize: Int = 0
     private(set) var imageSha256Hex: String = ""
+    /// Version from the picked image's own `esp_app_desc_t`, or "" when the
+    /// file carries no readable descriptor. What the flash is verified
+    /// AGAINST (#1337) — see the terminal decision in `runFlow`.
+    private(set) var imageVersion: String = ""
+    /// Whether the run in flight targets the FLIGHT computer. #1337: only a
+    /// flash of the BLE peer's OWN firmware drops the link, so the reboot
+    /// wait means different things on the two paths and the UI must say so.
+    private(set) var targetIsFC: Bool = false
 
     private var task: Task<Void, Never>?
 
@@ -142,8 +150,12 @@ final class OTASession: ObservableObject {
         }
 
         let sha = Data(SHA256.hash(data: fileData))
+        self.targetIsFC = targetIsFC
         imageSize = fileData.count
         imageSha256Hex = sha.map { String(format: "%02x", $0) }.joined()
+        // What this image says it IS. Empty for a file with no readable app
+        // descriptor, which the terminal decision falls back for.
+        imageVersion = EspImage.parse(fileData)?.version ?? ""
         // An FC OTA changes the *FC's* version (relayed as fcFirmwareVersion);
         // the OC's own firmwareVersion is untouched by an FC-only update — so the
         // rollback check must compare the right device's version for the chosen
@@ -346,25 +358,41 @@ final class OTASession: ObservableObject {
         // is slow) and pushes FC_IDENTITY — so give it a much wider window.
         let preFlash = preFlashFirmwareVersion
         let fwTimeout = OTATimeouts.seconds(.fwPublish, targetIsFC: targetIsFC)
-        let gotNewFw = await waitFor(timeout: fwTimeout) { [weak self] in
+        //
+        // #1337: success is "the device is running the image we SENT", not
+        // "the version string changed". An image built from the same commit as
+        // the running one is an ordinary thing to flash — a retry after a
+        // failed transfer, a rebuild with no intervening commit, pushing a
+        // release onto a board already on it — and it leaves postFw == preFlash
+        // on a COMPLETELY successful flash. Comparing against `preFlash` alone
+        // read that as a bootloader revert and told the operator their board
+        // would not boot the image. Comparing against the image's own version
+        // makes the same-build case decidable and narrows the rollback verdict
+        // to the one case where it is sound.
+        let want = imageVersion
+        _ = await waitFor(timeout: fwTimeout) { [weak self] in
             let fw = (targetIsFC ? self?.device?.fcFirmwareVersion
                                  : self?.device?.firmwareVersion) ?? ""
             guard !fw.isEmpty else { return false }
-            return fw != preFlash
+            return fw == want || fw != preFlash
         }
         if Task.isCancelled { return }   // see cancel(): a cancelled wait is not a rollback
         let postFw = (targetIsFC ? device?.fcFirmwareVersion
                                  : device?.firmwareVersion) ?? ""
-        if !gotNewFw {
-            if postFw == preFlash && !postFw.isEmpty {
-                state = .rollbackDetected(version: preFlash)
-            } else {
-                state = .failed(reason: "Reconnected but device didn't publish a new firmware version within \(Int(fwTimeout))s")
-            }
-            return
+        if postFw.isEmpty {
+            state = .failed(reason: "Reconnected but device didn't publish a firmware version within \(Int(fwTimeout))s")
+        } else if !want.isEmpty && postFw == want {
+            // Running what we sent. Conclusive whether or not it moved.
+            state = .verified(newVersion: postFw)
+        } else if postFw == preFlash {
+            // Back on the pre-flash version. Sound as a revert only because
+            // the image carried a different one (or carried none we could read).
+            state = .rollbackDetected(version: preFlash)
+        } else {
+            // Neither sent nor previously running. Odd, but it is new — which
+            // is what this check called success before #1337.
+            state = .verified(newVersion: postFw)
         }
-
-        state = .verified(newVersion: postFw)
     }
 
     // MARK: - Wait helpers

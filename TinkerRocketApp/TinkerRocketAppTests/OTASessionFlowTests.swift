@@ -68,6 +68,21 @@ final class OTASessionFlowTests: XCTestCase {
 
     private func image(_ n: Int) -> Data { Data((0..<n).map { UInt8($0 % 251) }) }
 
+    /// A Data EspImage.parse accepts, carrying `version` in its
+    /// `esp_app_desc_t`: image magic 0xE9 at 0, app-desc magic 0xABCD5432 at
+    /// 32, version[32] at 32+16. `image(_:)` above is deliberately NOT one —
+    /// a file with no readable descriptor is the fallback path.
+    private func espImage(_ version: String, _ n: Int = 600) -> Data {
+        var b = [UInt8]((0..<n).map { UInt8($0 % 251) })
+        b[0] = 0xE9
+        b[32] = 0x32; b[33] = 0x54; b[34] = 0xCD; b[35] = 0xAB
+        let v = Array(version.utf8)
+        precondition(v.count < 32, "version must fit esp_app_desc_t.version[32]")
+        for (i, c) in v.enumerated() { b[48 + i] = c }
+        b[48 + v.count] = 0
+        return Data(b)
+    }
+
     /// Poll a predicate on the main actor; real-time ceiling generous enough
     /// for CI (all scaled windows are ≤ 600 ms).
     private func waitUntil(_ what: String = "",
@@ -135,6 +150,54 @@ final class OTASessionFlowTests: XCTestCase {
         let session = makeSession(box)
 
         session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("finish") { link.finishCount == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .readyToBoot, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("rebooting") { session.state == .rebooting }
+
+        box.link = nil
+        try await Task.sleep(nanoseconds: 40_000_000)
+        box.link = ScriptedLink(firmwareVersion: "v1-old")   // bootloader rolled back
+
+        try await waitUntil("rollback verdict") {
+            session.state == .rollbackDetected(version: "v1-old")
+        }
+    }
+
+    /// #1337. Bench 2026-09-10: a relay flash landed byte-exact
+    /// (`state=3 err=0 bytes=647280`) and the FC rebooted cleanly, but the app
+    /// announced a rollback — the image was built from the same commit the FC
+    /// already ran, so the version string did not move and the old check read
+    /// that as a bootloader revert. Success is "running the image we sent".
+    func testSameVersionImage_landsSuccessfully_verifiesInsteadOfCryingRollback() async throws {
+        let v = "e1a4bee-v9+20260910-1020"
+        let link = ScriptedLink(firmwareVersion: "oc-unchanged", fcFirmwareVersion: v)
+        let box = LinkBox(link)
+        let session = makeSession(box)
+
+        // Flash the FC an image carrying exactly the version it already runs.
+        session.start(data: espImage(v), targetIsFC: true)
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("finish") { link.finishCount == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .readyToBoot, bytes: 0, err: nil, fw: nil)
+
+        // An FC relay never drops this link — the peer is the OC — so there is
+        // no swap here. The FC reboots and reports the same string back.
+        try await waitUntil("verified, not rollback") {
+            session.state == .verified(newVersion: v)
+        }
+    }
+
+    /// The other half of #1337: narrowing the rollback verdict must not delete
+    /// it. A DIFFERENT image version coming back as the old one is a revert.
+    func testRealImage_deviceBackOnOldVersion_stillReportsRollback() async throws {
+        let link = ScriptedLink(firmwareVersion: "v1-old")
+        let box = LinkBox(link)
+        let session = makeSession(box)
+
+        session.start(data: espImage("v2-new"))
         try await waitUntil("begin") { link.beginCalls.count == 1 }
         link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
         try await waitUntil("finish") { link.finishCount == 1 }

@@ -2,6 +2,7 @@ package com.tinkerbug.tinkerrocket.session
 
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
+import com.tinkerbug.tinkerrocket.protocol.EspImage
 import com.tinkerbug.tinkerrocket.protocol.OtaStatusUpdate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -48,10 +49,20 @@ public class OtaSession(
         public data class Uploading(val bytesSent: Long, val totalBytes: Long) : State
         /** OTA_FINISH sent, awaiting ready_to_boot. */
         public data object Verifying : State
-        /** Disconnected; waiting for the device to come back. */
-        public data object Rebooting : State
+        /**
+         * The device is rebooting.  [awaitingReconnect] is false on an FC
+         * relay: the BLE peer is the out computer, which does not reboot, so
+         * there is no link drop to wait through (#1094) and saying otherwise
+         * misdescribes the wait to the operator (#1337).
+         */
+        public data class Rebooting(val awaitingReconnect: Boolean) : State
         public data class Verified(val newVersion: String) : State
-        /** Post-reboot firmware is the SAME as pre-flash — the image didn't take. */
+        /**
+         * The device came back on the pre-flash version while the image we
+         * sent carried a DIFFERENT one — the bootloader reverted.  A same-
+         * version image can never land here; see the terminal decision in
+         * [runFlow] (#1337).
+         */
         public data class RollbackDetected(val version: String) : State
         public data class Failed(val reason: String) : State
     }
@@ -64,6 +75,14 @@ public class OtaSession(
     public var imageSize: Int = 0
         private set
     public var imageSha256Hex: String = ""
+        private set
+
+    /**
+     * Version string from the picked image's own `esp_app_desc_t`, or "" when
+     * the file carries no readable app descriptor.  This is what the flash is
+     * verified AGAINST (#1337) — see step 7.
+     */
+    public var imageVersion: String = ""
         private set
 
     private var job: Job? = null
@@ -98,6 +117,7 @@ public class OtaSession(
         preFlashVersion = ""
         imageSize = 0
         imageSha256Hex = ""
+        imageVersion = ""
         _state.value = State.Idle
     }
 
@@ -115,6 +135,9 @@ public class OtaSession(
         val sha = sha256(image)
         imageSize = image.size
         imageSha256Hex = sha.joinToString("") { "%02x".format(it) }
+        // What this image says it IS.  Empty for a file with no readable app
+        // descriptor, which step 7 falls back to the old heuristic for.
+        imageVersion = EspImage.parse(image)?.version.orEmpty()
 
         // An FC OTA changes the FC's version (relayed as fcFirmwareVersion);
         // the OC's own firmwareVersion is untouched — so the rollback check
@@ -269,7 +292,7 @@ public class OtaSession(
         // burned the full timeout on every FC flash, with the screen reading
         // "Rebooting" while the FC was in fact rebooting normally. iOS has
         // gated both post-finish waits on the target since its own fix.
-        _state.value = State.Rebooting
+        _state.value = State.Rebooting(awaitingReconnect = !targetIsFc)
         if (!targetIsFc) {
             awaitPredicate(DISCONNECT_TIMEOUT_MS) {
                 val s = sessionLookup()
@@ -286,20 +309,44 @@ public class OtaSession(
             return
         }
 
-        // 7. Wait for the new version to publish.  A local OTA republishes
-        // config_identity on reconnect (fast); an FC OTA keeps the OC link up
-        // and can't report until the FC itself finishes rebooting.
+        // 7. Wait for the device to publish the version it is now running.
+        //
+        // #1337: success is "the device is running the image we SENT", not
+        // "the version string changed".  Flashing an image built from the same
+        // commit as the running one is an ordinary thing to do — a retry after
+        // a failed transfer, a rebuild with no intervening commit, pushing a
+        // release onto a board already on it — and it leaves post == pre on a
+        // COMPLETELY successful flash.  Comparing against `pre` alone read that
+        // as a bootloader revert and told the operator their board would not
+        // boot the image, which invites a power-cycle and a re-flash of a board
+        // that is fine.  Comparing against the image's own version instead
+        // makes the same-build case decidable, and narrows the rollback verdict
+        // to the one case where it is sound.
         val fwTimeout = if (targetIsFc) FW_TIMEOUT_FC_MS else FW_TIMEOUT_MS
         val pre = preFlashVersion
-        val gotNew = awaitPredicate(fwTimeout) {
+        val want = imageVersion
+        val settled = awaitPredicate(fwTimeout) {
             val fw = versionFor(targetIsFc)
-            !fw.isNullOrEmpty() && fw != pre
+            !fw.isNullOrEmpty() && (fw == want || fw != pre)
         }
         val post = versionFor(targetIsFc).orEmpty()
         _state.value = when {
-            gotNew -> State.Verified(post)
-            // Same version back = the bootloader rolled us back to the old image.
-            post.isNotEmpty() && post == pre -> State.RollbackDetected(pre)
+            post.isEmpty() -> State.Failed(
+                "Reconnected but device didn't publish a firmware version " +
+                    "within ${fwTimeout / 1000}s",
+            )
+            // Running what we sent.  Conclusive whether or not it differs from
+            // what was there before.
+            want.isNotEmpty() && post == want -> State.Verified(post)
+            // Back on the pre-flash version while the image carried a different
+            // one: the bootloader really did revert.
+            want.isNotEmpty() && post == pre -> State.RollbackDetected(pre)
+            // No readable app descriptor, so `want` tells us nothing — fall
+            // back to the string-change heuristic this check used before #1337.
+            want.isEmpty() && post == pre -> State.RollbackDetected(pre)
+            // Something neither sent nor previously running.  Odd, but it is
+            // new, and that is what the old check called success.
+            settled -> State.Verified(post)
             else -> State.Failed(
                 "Reconnected but device didn't publish a new firmware version " +
                     "within ${fwTimeout / 1000}s",

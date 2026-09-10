@@ -312,7 +312,17 @@ fun FirmwareUpdateScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CircularProgressIndicator(Modifier.padding(2.dp))
-                Text("Device rebooting — waiting for reconnect (60 s)…")
+                // #1337: only a flash of the BLE peer's OWN firmware drops the
+                // link.  On an FC relay the peer is the out computer, which
+                // stays up while the FC reboots behind it, so there is no
+                // reconnect to wait through and promising one misreads the wait.
+                Text(
+                    if (s.awaitingReconnect) {
+                        "Device rebooting — waiting for reconnect (60 s)…"
+                    } else {
+                        "Flight computer rebooting — waiting for it to report in…"
+                    },
+                )
             }
 
             is OtaSession.State.Verified -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
