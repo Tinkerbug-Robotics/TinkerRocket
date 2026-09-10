@@ -154,6 +154,33 @@ enum CfgAck : uint8_t
     CFG_ACK_REJECTED = 2,
 };
 
+// ModemStatusData::config_fail_reason bits (#1173).  Read ONLY when config_ok
+// is CFG_ACK_REJECTED; zero there means the modem rejected without saying why.
+//
+// One bit per path that can actually set it in handleSetConfig() — they are
+// three different events and they want three different responses.  #1173 also
+// listed "a scan owned the radio" and "a setter failed after begin()"; no code
+// path reaches either today, so no bit is allocated for them. A future one
+// takes 0x08 upward rather than reusing these.
+enum CfgFailReason : uint8_t
+{
+    // reconfigure() returned false: the requested modulation is illegal for
+    // this part, and TR_LoRa_Comms rolled the radio back to the previous one
+    // and left it up.  The host should stop asking for this modulation.
+    CFG_FAIL_MODULATION  = 0x01,
+    // applyFrameParams() returned false: the requested modulation IS live and
+    // the preamble/CRC/gain/syncword are still the previous ones.  The quieter
+    // and nastier of the two — the link passes traffic while the host's
+    // airtime model counts symbols that are not being sent.  Note this is the
+    // case where freq and SF read back CORRECT, so the on-air comparison in
+    // modem_config_ack.h cannot catch it and only this bit explains the "no".
+    CFG_FAIL_FRAME_PARAMS = 0x02,
+    // begin() failed: the radio never came up and nothing is on the air. The
+    // most severe, and distinct from the two above, which both leave a live
+    // radio behind.
+    CFG_FAIL_RADIO_DOWN   = 0x04,
+};
+
 struct __attribute__((packed)) ModemStatusData
 {
     uint32_t uptime_ms;
@@ -186,7 +213,16 @@ struct __attribute__((packed)) ModemStatusData
     // SET_CONFIG's result, so a periodic poll still tells the truth.
     uint8_t config_ok;   // CfgAck: 0 = unknown (legacy image), 1 = applied,
                          //         2 = rejected / rolled back
-    uint8_t reserved[2];
+    // #1173: WHICH half was rejected.  A CfgFailReason bitmask, meaningful
+    // only when config_ok == CFG_ACK_REJECTED, and taken from the two spare
+    // bytes so this struct stays 52 and the static_assert below is untouched.
+    //
+    // No polarity trap here, unlike config_ok: a pre-#911 image zero-fills
+    // this byte, but it can never send CFG_ACK_REJECTED either, so the field
+    // is simply never read on such a link.  Zero from a modem that DID reject
+    // means "rejected, reason not reported", which is the honest reading.
+    uint8_t config_fail_reason;
+    uint8_t reserved[1];
 };
 static_assert(sizeof(ModemStatusData) == 52, "ModemStatusData must be 52 bytes");
 

@@ -274,6 +274,10 @@ static void sendIdentity(uint8_t msg_type)
 // #835 item 7: result of the most recent SET_CONFIG.  Starts true so a STATUS
 // polled before any config is not reported as a failure.
 static bool last_set_config_ok = true;
+// #1173: WHICH half failed, for the wire rather than only the log.  Zero
+// whenever last_set_config_ok is true, so a STATUS never carries a stale
+// reason behind a successful config.
+static uint8_t last_set_config_fail_reason = 0;
 
 static void sendStatus()
 {
@@ -300,6 +304,9 @@ static void sendStatus()
     st.current_freq_mhz = radio.currentFrequencyMHz();
     st.current_sf = radio.currentSpreadingFactor();
     st.config_ok = last_set_config_ok ? CFG_ACK_APPLIED : CFG_ACK_REJECTED;
+    // #1173: only meaningful alongside CFG_ACK_REJECTED, and cleared on
+    // success so it cannot outlive the rejection it describes.
+    st.config_fail_reason = last_set_config_ok ? 0 : last_set_config_fail_reason;
     uart_link.sendFrame(MSG_STATUS, reinterpret_cast<const uint8_t*>(&st),
                         sizeof(st));
 }
@@ -371,12 +378,14 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
     memcpy(&d, payload, sizeof(d));
     // #835 item 7: tracks whether this SET_CONFIG actually reached the air.
     bool cfg_ok = true;
-    // Which half failed, for the log only.  Three paths reach the rejection
-    // warning below and they are not the same event: the radio can be down,
-    // rolled back, or running the NEW modulation with a stale frame format.
-    // The wire still carries only CFG_ACK_REJECTED — see #1173 for putting the
-    // reason in ModemStatusData where a host can act on it.
+    // Which half failed.  Three paths reach the rejection warning below and
+    // they are not the same event: the radio can be down, rolled back, or
+    // running the NEW modulation with a stale frame format.  #1173 put this on
+    // the wire as well as in the log — `fail_reason` is the machine-readable
+    // half of `fail_what` and the two are set together, deliberately, so they
+    // cannot drift into disagreeing about the same failure.
     const char* fail_what = "";
+    uint8_t fail_reason = 0;
 
     // Clamp to module capability — hosts should already respect IDENTITY,
     // but a matched-pair mismatch must degrade, not transmit out of spec.
@@ -392,6 +401,7 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
         radio_up = radio.begin(radioConfigFromMsg(d), config::DEBUG);
         cfg_ok = radio_up;
         fail_what = "begin() failed - the LLCC68 is down, nothing is on the air";
+        fail_reason = CFG_FAIL_RADIO_DOWN;
     }
     else
     {
@@ -418,6 +428,7 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
             // link that is otherwise up and passing traffic.
             fail_what = "frame params rejected - the NEW modulation IS live, "
                         "with the PREVIOUS preamble/CRC/gain/syncword";
+            fail_reason = CFG_FAIL_FRAME_PARAMS;
         }
         else
         {
@@ -428,6 +439,7 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
             cfg_ok = false;
             fail_what = "modulation rejected - radio rolled back to the "
                         "previous one and is still up";
+            fail_reason = CFG_FAIL_MODULATION;
         }
     }
     if (radio_up && d.start_rx)
@@ -437,13 +449,15 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
     // #835 item 7: publish the result BEFORE the ack, so the STATUS the host
     // is waiting on carries this config's outcome rather than the previous.
     last_set_config_ok = cfg_ok;
+    last_set_config_fail_reason = cfg_ok ? 0 : fail_reason;
     if (!cfg_ok)
     {
         ESP_LOGW(TAG, "SET_CONFIG REJECTED (%.3f MHz SF%u BW%u CR%u) — %s; "
-                      "acking with config_ok=%u (CFG_ACK_REJECTED)",
+                      "acking with config_ok=%u (CFG_ACK_REJECTED) "
+                      "config_fail_reason=0x%02X",
                  (double)d.freq_mhz, (unsigned)d.spreading_factor,
                  (unsigned)d.bandwidth_khz, (unsigned)d.coding_rate,
-                 fail_what, (unsigned)CFG_ACK_REJECTED);
+                 fail_what, (unsigned)CFG_ACK_REJECTED, (unsigned)fail_reason);
     }
     sendStatus();  // config paths always get a status echo as the ack
 }
