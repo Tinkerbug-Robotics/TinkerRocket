@@ -363,7 +363,7 @@ private struct FirmwareUpdateContent: View {
         case .checking:
             HStack(spacing: 8) { ProgressView(); Text("Looking for a release…").font(.subheadline) }
 
-        case .ready(let release, let images, let best, let alreadyRunning):
+        case .ready(let release, let images, let best, let alreadyRunning, let boardKnown):
             VStack(alignment: .leading, spacing: 6) {
                 Text("Release \(release.tag)").font(.subheadline)
                 if alreadyRunning {
@@ -374,7 +374,12 @@ private struct FirmwareUpdateContent: View {
                         .font(.caption).foregroundColor(.secondary)
                 }
                 if best == nil {
-                    Text("Nothing in this release is built for this board, so none is offered by default. Choose one only if you know it fits.")
+                    // Different problem, different sentence: an unknown board
+                    // cannot be ranked at all, and guessing there recommended
+                    // the mini's image to a V9 (#773, bench 2026-09-10).
+                    Text(boardKnown
+                         ? "Nothing in this release is built for this board, so none is offered by default. Choose one only if you know it fits."
+                         : "This unit has not reported which board revision it is, so none is recommended. Choose the one matching your hardware.")
                         .font(.caption).foregroundColor(.red)
                 }
                 ForEach(images, id: \.file) { img in

@@ -144,12 +144,28 @@ public object FirmwareCatalog {
     }
 
     /**
-     * The single image to offer by default, or null when nothing in the
-     * manifest is for this unit at all.
+     * The single image to offer by default, or null when this manifest holds
+     * nothing that can be recommended for this unit.
      *
-     * Returns null rather than a guess when the board is known and no image
-     * matches it: offering the wrong revision as the default is how a wrong
-     * flash happens, and the full list is still there for a deliberate choice.
+     * Null rather than a guess in BOTH of the cases where a guess would be
+     * one: when the board is known and no image matches it, and — the one the
+     * bench found — when the board is NOT known and every candidate is
+     * board-specific.
+     *
+     * That second case used to return the first candidate, which after the
+     * board-agnostic sort means whichever board sorts first alphabetically.
+     * On a real V9 out computer against fw-v0.1.0 that recommended the
+     * ROCKET-COMPUTER-MINI image, `m1` beating `v8` and `v9` on nothing but
+     * spelling, with a tick beside it (#773, 2026-09-10). Boards provisioned
+     * before #773 step 2 report no revision at all, so this is the ordinary
+     * state of existing hardware, not an edge case.
+     *
+     * An unsuffixed image IS still recommended to an unknown board: a project
+     * that ships exactly one build (radio_board, the mini's own) applies
+     * everywhere by construction, and there is nothing to get wrong.
+     *
+     * The full list is always still there for a deliberate choice — refusing
+     * to guess is not the same as refusing to show.
      */
     public fun best(
         manifest: FirmwareManifest,
@@ -160,7 +176,9 @@ public object FirmwareCatalog {
         val candidates = forUnit(manifest, expectedProject, want)
         if (candidates.isEmpty()) return null
         val head = candidates.first()
-        if (want == null) return head
+        // head.board == null means the sort found a universal image and put it
+        // first, which is a legitimate recommendation either way.
+        if (want == null) return if (head.board == null) head else null
         return if (head.board == want || head.board == null) head else null
     }
 }

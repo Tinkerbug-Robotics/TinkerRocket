@@ -123,11 +123,55 @@ class FirmwareManifestTest {
     }
 
     @Test
-    fun `an unprovisioned board still gets a default`() {
-        // Null board: a circular guess beats nothing, and EspImage.check still
-        // warns at flash time.
-        assertNotNull(FirmwareCatalog.best(full, EspImage.PROJECT_FC, null))
-        assertNotNull(FirmwareCatalog.best(full, EspImage.PROJECT_FC, "  "))
+    fun `an unknown board gets no default when every image is board-specific`() {
+        // This test used to assert the opposite — "a circular guess beats
+        // nothing, and EspImage.check still warns at flash time". The bench
+        // disproved the first half on 2026-09-10: against fw-v0.1.0 on a real
+        // V9 out computer, the guess was the ROCKET-COMPUTER-MINI image,
+        // because with no board to match the sort falls back to the board
+        // string and `m1` beats `v8` and `v9` on spelling alone. It was
+        // presented with a tick, as the recommendation.
+        //
+        // A wrong recommendation is worse than none: it is the one an operator
+        // in a hurry takes. The warning at flash time is a backstop, not a
+        // reason to point at the wrong file first — and it is only a warning.
+        //
+        // Boards provisioned before #773 step 2 report no revision, so this is
+        // the ordinary state of existing hardware rather than an edge case.
+        assertNull(FirmwareCatalog.best(full, EspImage.PROJECT_FC, null))
+        assertNull(FirmwareCatalog.best(full, EspImage.PROJECT_FC, "  "))
+        // ...and the list is still there, which is the whole point: refusing
+        // to guess is not refusing to show.
+        assertEquals(4, FirmwareCatalog.forUnit(full, EspImage.PROJECT_FC, null).size)
+    }
+
+    @Test
+    fun `an unknown board still gets a suffixless image`() {
+        // A project shipping exactly one build applies everywhere by
+        // construction, so there is nothing to get wrong and no reason to
+        // withhold it.
+        assertEquals(
+            "rocket_computer_mini",
+            FirmwareCatalog.best(full, EspImage.PROJECT_MINI, null)?.project,
+        )
+    }
+
+    @Test
+    fun `a version string is enough to identify the board`() {
+        // What the app had all along and was not using: the unit's running
+        // firmware says which board it is. EspImage.boardSuffix reads it, and
+        // that is what turns the unknown-board case above back into a match.
+        assertEquals("v9", EspImage.boardSuffix("e1a4bee4-v9+20260910-1112"))
+        assertEquals("m1", EspImage.boardSuffix("f204e64-m1+20260910-1230"))
+        assertNull(EspImage.boardSuffix("f204e64+20260910-1230"))
+        assertNull(EspImage.boardSuffix(null))
+        assertEquals(
+            "v9",
+            FirmwareCatalog.best(
+                full, EspImage.PROJECT_FC,
+                EspImage.boardSuffix("e1a4bee4-v9+20260910-1112"),
+            )?.board,
+        )
     }
 
     @Test

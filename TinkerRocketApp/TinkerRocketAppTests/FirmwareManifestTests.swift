@@ -102,10 +102,46 @@ final class FirmwareManifestTests: XCTestCase {
                                                provisionedBoard: "v12").isEmpty)
     }
 
-    func testAnUnprovisionedBoardStillGetsADefault() {
-        XCTAssertNotNil(FirmwareCatalog.best(full, expectedProject: EspImage.projectFC))
-        XCTAssertNotNil(FirmwareCatalog.best(full, expectedProject: EspImage.projectFC,
-                                             provisionedBoard: "  "))
+    func testAnUnknownBoardGetsNoDefaultWhenEveryImageIsBoardSpecific() {
+        // This test used to assert the opposite. The bench disproved it on
+        // 2026-09-10: against fw-v0.1.0 on a real V9 out computer, the guess
+        // was the ROCKET-COMPUTER-MINI image, because with no board to match
+        // the sort falls back to the board string and `m1` beats `v8` and `v9`
+        // on spelling alone. It was presented with a tick, as the
+        // recommendation.
+        //
+        // A wrong recommendation is worse than none: it is the one an operator
+        // in a hurry takes. The warning at flash time is a backstop, not a
+        // reason to point at the wrong file first — and it is only a warning.
+        //
+        // Boards provisioned before #773 step 2 report no revision, so this is
+        // the ordinary state of existing hardware rather than an edge case.
+        XCTAssertNil(FirmwareCatalog.best(full, expectedProject: EspImage.projectFC))
+        XCTAssertNil(FirmwareCatalog.best(full, expectedProject: EspImage.projectFC,
+                                          provisionedBoard: "  "))
+        // ...and the list is still there, which is the whole point: refusing
+        // to guess is not refusing to show.
+        XCTAssertEqual(FirmwareCatalog.forUnit(full, expectedProject: EspImage.projectFC).count, 4)
+    }
+
+    func testAnUnknownBoardStillGetsASuffixlessImage() {
+        // A project shipping exactly one build applies everywhere by
+        // construction, so there is nothing to get wrong and no reason to
+        // withhold it.
+        XCTAssertEqual(FirmwareCatalog.best(full, expectedProject: EspImage.projectMini)?.project,
+                       "rocket_computer_mini")
+    }
+
+    func testAVersionStringIsEnoughToIdentifyTheBoard() {
+        // What the app had all along and was not using: the unit's running
+        // firmware says which board it is.
+        XCTAssertEqual(EspImage.boardSuffix(of: "e1a4bee4-v9+20260910-1112"), "v9")
+        XCTAssertEqual(EspImage.boardSuffix(of: "f204e64-m1+20260910-1230"), "m1")
+        XCTAssertNil(EspImage.boardSuffix(of: "f204e64+20260910-1230"))
+        XCTAssertEqual(
+            FirmwareCatalog.best(full, expectedProject: EspImage.projectFC,
+                                 provisionedBoard: EspImage.boardSuffix(of: "e1a4bee4-v9+20260910-1112"))?.board,
+            "v9")
     }
 
     func testASuffixlessImageAppliesToAnyBoard() {

@@ -1,5 +1,6 @@
 package com.tinkerbug.tinkerrocket.session
 
+import com.tinkerbug.tinkerrocket.protocol.EspImage
 import com.tinkerbug.tinkerrocket.protocol.FirmwareCatalog
 import com.tinkerbug.tinkerrocket.protocol.FirmwareFetch
 import com.tinkerbug.tinkerrocket.protocol.FirmwareImage
@@ -49,6 +50,14 @@ public class FirmwareCatalogSession(
             val best: FirmwareImage?,
             /** True when [best] is already what the unit is running. */
             val alreadyRunning: Boolean,
+            /**
+             * Whether the unit's board revision could be established at all —
+             * provisioned, or read out of its running version. When it could
+             * not, a null [best] means "nobody knows what this is", which is a
+             * different thing to tell an operator than "this release has
+             * nothing for your board".
+             */
+            val boardKnown: Boolean,
         ) : State
 
         public data class Downloading(val image: FirmwareImage) : State
@@ -102,20 +111,30 @@ public class FirmwareCatalogSession(
             }
             val (rel, manifest) = found
             release = rel
-            val images = FirmwareCatalog.forUnit(manifest, expectedProject, provisionedBoard)
+            // The board the unit is provisioned with, or failing that the one
+            // its running firmware claims to be. EspImage.check has always
+            // used exactly this fallback; the catalog was never given it, so
+            // on a board provisioned before #773 step 2 — which is every board
+            // in the field — it ranked with nothing to rank on. See
+            // FirmwareCatalog.best for what that produced on the bench.
+            val effectiveBoard = provisionedBoard?.trim()?.ifEmpty { null }
+                ?: EspImage.boardSuffix(runningVersion)
+
+            val images = FirmwareCatalog.forUnit(manifest, expectedProject, effectiveBoard)
             if (images.isEmpty()) {
                 _state.value = State.Failed(
                     "Release ${rel.tag} carries no $expectedProject image.",
                 )
                 return@launch
             }
-            val best = FirmwareCatalog.best(manifest, expectedProject, provisionedBoard)
+            val best = FirmwareCatalog.best(manifest, expectedProject, effectiveBoard)
             _state.value = State.Ready(
                 release = rel,
                 images = images,
                 best = best,
                 alreadyRunning = best != null && runningVersion != null &&
                     best.version == runningVersion,
+                boardKnown = effectiveBoard != null,
             )
         }
     }
