@@ -564,6 +564,11 @@ struct TelemetryData: Codable {
         // #1166: absent stays nil ("no sense line / relay"), never 0.
         scap_voltage = try c.decodeIfPresent(Float.self, forKey: .scap_voltage)
         holdup_state = flexInt(.holdup_state)
+        // #412: absent stays nil ("no daughterboard on this board"), never 0.
+        // flexInt for the same reason every integer key uses it (#571): one
+        // field emitted as a float would otherwise throw and lose the frame.
+        modem_state = flexInt(.modem_state)
+        modem_fw = try c.decodeIfPresent(String.self, forKey: .modem_fw)
         voltage = try c.decodeIfPresent(Float.self, forKey: .voltage)
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
