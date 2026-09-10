@@ -143,6 +143,7 @@ Firmware notifies JSON status as state changes. All replies use the `"type":"ota
 ```json
 {"type":"ota_status","state":"ready","slot":1}
 {"type":"ota_status","state":"writing","bytes":131072}
+{"type":"ota_status","state":"verifying","bytes":647280}
 {"type":"ota_status","state":"verify_failed","err":"sha_mismatch"}
 {"type":"ota_status","state":"verify_failed","err":"write_failed"}
 {"type":"ota_status","state":"aborted"}
@@ -150,6 +151,25 @@ Firmware notifies JSON status as state changes. All replies use the `"type":"ota
 ```
 
 `writing` is rate-limited to ≤ 2 Hz to avoid drowning the notify queue mid-flash.
+
+`verifying` (#773, 2026-09-10) is sent once, immediately before the device
+starts the terminal work `OTA_FINISH` triggers: `esp_ota_end()` re-reads and
+validates the staged image, then the boot partition is set. That work blocks —
+on the out computer it blocks the BLE command path itself — so the device is
+mute from then until it is done, and this is the last thing it can say.
+
+Without it the sequence is `writing` → silence → terminal, and an app waiting
+on the terminal state cannot tell a device that is busy from one that died: it
+has only a clock. That clock was outgrown twice — #627 on the relay path, and
+again on 2026-09-10 flashing `fw-v0.0.1-rc1`, where an 815 kB out-computer
+image and a 770 kB base-station image both outlasted the local window and the
+app reported failure on flashes that committed and booted.
+
+Both apps therefore treat the finish window as a NO-PROGRESS budget rather than
+a total: any status the device sends restarts it. Firmware older than this
+sends nothing, so the budget never restarts and the wait behaves exactly as the
+old fixed one did. On the relay path the FC mirrors it as `OTA_RELAY_VERIFYING`
+and the out computer renders it into the same token.
 
 Each JSON message must stay under `MTU - 3` bytes — already enforced for the existing config JSONs by the guard at [TR_BLE_To_APP.cpp:800](../../tinkerrocket-idf/components/TR_BLE_To_APP/TR_BLE_To_APP.cpp:800). All `ota_status` messages above fit easily within 185-byte MTU.
 

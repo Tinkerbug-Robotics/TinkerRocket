@@ -278,6 +278,75 @@ final class OTASessionFlowTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(link.abortCount, 1, "a finish the device never answered is aborted (#1049)")
     }
 
+    /// The local finish window in this suite's compressed time, in nanoseconds.
+    private var scaledLocalFinishNs: UInt64 {
+        UInt64(OTATimeouts.seconds(.finish, targetIsFC: false) / 200.0 * 1_000_000_000)
+    }
+
+    func testVerifyingRestartsTheFinishBudget() async throws {
+        // #773: the finish window is a NO-PROGRESS budget, not a total. A
+        // device that keeps saying it is working must never be cut off — the
+        // app cannot see inside esp_ota_end(), so "has it said anything
+        // lately" is the only honest question it can ask.
+        let link = ScriptedLink()
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("verifying") { session.state == .verifying }
+
+        // Sit most of the budget, then prove we are alive.
+        try await Task.sleep(nanoseconds: scaledLocalFinishNs * 7 / 10)
+        link.otaStatus = OTAStatusUpdate(state: .verifying, bytes: 0, err: nil, fw: nil)
+
+        // Past the point the old fixed window would have given up.
+        try await Task.sleep(nanoseconds: scaledLocalFinishNs * 7 / 10)
+        XCTAssertNil(failureReason(session.state),
+                     "the heartbeat restarted the budget, so this is not a timeout")
+
+        link.otaStatus = OTAStatusUpdate(state: .readyToBoot, bytes: 0, err: nil, fw: nil)
+        try await Task.sleep(nanoseconds: 40_000_000)
+        XCTAssertNil(failureReason(session.state), "finish completed")
+    }
+
+    func testOlderFirmwareThatSaysNothingStillTimesOutTheSameWay() async throws {
+        // Firmware from before the heartbeat goes ready -> silence -> terminal.
+        // Nothing restarts the budget, so the wait must behave exactly as the
+        // old fixed one did — this is the compatibility the change rests on.
+        let link = ScriptedLink()
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("verifying") { session.state == .verifying }
+
+        try await waitUntil("finish timeout") { self.failureReason(session.state) != nil }
+        let reason = failureReason(session.state) ?? ""
+        XCTAssertTrue(reason.contains("no progress"),
+                      "says the device never reported: \(reason)")
+    }
+
+    func testADeviceThatGoesQuietAfterVerifyingSaysWhichFailureItWas() async throws {
+        // The two silences mean different things to an operator: nothing at
+        // all may be a lost FINISH, whereas stopping mid-verify means the
+        // image may already be committed — do not power-cycle yet.
+        let link = ScriptedLink()
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("verifying") { session.state == .verifying }
+        link.otaStatus = OTAStatusUpdate(state: .verifying, bytes: 0, err: nil, fw: nil)
+
+        try await waitUntil("finish timeout") { self.failureReason(session.state) != nil }
+        let reason = failureReason(session.state) ?? ""
+        XCTAssertTrue(reason.contains("verifying"),
+                      "names what the device last said: \(reason)")
+    }
+
     func testFcFinishWindowOutlastsTheLocalOne() async throws {
         // Bench 2026-07-28: a real 591.7 kB FC flash was still running when
         // the 15 s local window expired — the FC finished and ran the new

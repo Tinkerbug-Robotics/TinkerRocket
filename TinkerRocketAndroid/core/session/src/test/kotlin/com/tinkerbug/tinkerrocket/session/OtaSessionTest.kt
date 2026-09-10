@@ -306,6 +306,82 @@ class OtaSessionTest {
     }
 
     @Test
+    fun verifyingRestartsTheFinishBudget() = runTest {
+        // #773: the finish window is a NO-PROGRESS budget, not a total. A
+        // device that keeps saying it is working must never be cut off — the
+        // app cannot see inside esp_ota_end(), so "has it said anything
+        // lately" is the only honest question it can ask.
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        assertIs<OtaSession.State.Verifying>(r.ota.state.value)
+
+        // Sit almost the whole budget, then prove we are alive.
+        advanceTimeBy(OtaSession.FINISH_TIMEOUT_MS - 1_000); runCurrent()
+        r.fw.emitOtaStatus("verifying")
+        advanceTimeBy(200); runCurrent()
+
+        // Past the point the old fixed window would have given up.
+        advanceTimeBy(OtaSession.FINISH_TIMEOUT_MS - 1_000); runCurrent()
+        assertIs<OtaSession.State.Verifying>(
+            r.ota.state.value,
+            "the heartbeat restarted the budget, so this is not a timeout",
+        )
+
+        r.fw.emitOtaStatus("ready_to_boot")
+        advanceTimeBy(200); runCurrent()
+        assertTrue(
+            r.ota.state.value !is OtaSession.State.Failed,
+            "finish completed: ${r.ota.state.value}",
+        )
+    }
+
+    @Test
+    fun olderFirmwareThatSaysNothingStillTimesOutTheSameWay() = runTest {
+        // Firmware from before the heartbeat goes ready -> silence -> terminal.
+        // Nothing restarts the budget, so the wait must behave exactly as the
+        // old fixed one did — this is the compatibility the change rests on.
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        assertIs<OtaSession.State.Verifying>(r.ota.state.value)
+
+        advanceTimeBy(OtaSession.FINISH_TIMEOUT_MS - 2_000); runCurrent()
+        assertIs<OtaSession.State.Verifying>(r.ota.state.value, "not yet")
+
+        advanceTimeBy(3_000); runCurrent()
+        val st = r.ota.state.value
+        assertIs<OtaSession.State.Failed>(st)
+        assertTrue("no progress" in st.reason, "says the device never reported: ${st.reason}")
+    }
+
+    @Test
+    fun aDeviceThatGoesQuietAfterVerifyingSaysWhichFailureItWas() = runTest {
+        // The two silences mean different things to an operator: nothing at
+        // all may be a lost FINISH, whereas stopping mid-verify means the
+        // image may already be committed — do not power-cycle yet.
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        r.fw.emitOtaStatus("verifying")
+        advanceTimeBy(200); runCurrent()
+
+        advanceTimeBy(OtaSession.FINISH_TIMEOUT_MS + 500); runCurrent()
+        val st = r.ota.state.value
+        assertIs<OtaSession.State.Failed>(st)
+        assertTrue("verifying" in st.reason, "names what the device last said: ${st.reason}")
+    }
+
+    @Test
     fun fcFinishWindowOutlastsTheLocalOne() = runTest {
         // Bench 2026-07-28: a real 591.7 kB FC flash was still running when the
         // 15 s local window expired — the FC finished, rebooted and ran the new

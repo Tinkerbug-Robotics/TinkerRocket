@@ -19,6 +19,24 @@ public:
     enum class State : uint8_t {
         Idle,           // No session
         Writing,        // begin() succeeded, chunks accepted
+        // finish() accepted and the terminal work is running: esp_ota_end()
+        // re-reads and validates the staged image, then the boot partition is
+        // set. That work BLOCKS the caller — on the OC it blocks the BLE
+        // command path — so the device cannot say anything more until it is
+        // done. This state is emitted before it starts, which is the only
+        // moment available to say "I have it, I am working on it".
+        //
+        // Why it matters: without it the wire goes Writing -> silence ->
+        // ReadyToBoot, and an app waiting on the terminal state cannot tell a
+        // device that is busy from one that died. It had only a clock, and the
+        // clock was outgrown three times (#627, then #773's bench run, where
+        // an 815 kB image and a 770 kB image both outlasted the window and the
+        // app reported failure on flashes that committed and booted).
+        //
+        // In-process only: nothing serializes this enum. The FC mirrors it
+        // onto the wire as OTA_RELAY_VERIFYING and the OC renders it as the
+        // "verifying" ota_status token.
+        Verifying,
         ReadyToBoot,    // finish() OK; caller may esp_restart()
         VerifyFailed,   // terminal — abort() to return to Idle
     };

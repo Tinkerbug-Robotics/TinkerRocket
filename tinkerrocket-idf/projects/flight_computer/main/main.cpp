@@ -7834,6 +7834,18 @@ static void loop_fc()
                              (unsigned)fc_ota_receiver.bytesWritten(),
                              (unsigned)fc_ota_total_size);
                     fcOtaLogRxDiag();   // which failure mode stalled it, if any
+                    // finish() blocks in esp_ota_end() re-reading the staged
+                    // image, and this MCU has no status callback wired (every
+                    // relay status here is sent explicitly), so say it before
+                    // going quiet. The relay adds its own latency on top of
+                    // the verify, which makes the silent gap longer on this
+                    // path than on the OC's — the app must not read it as a
+                    // dead FC. Plain send, not the robust resend: a dropped
+                    // heartbeat costs the app nothing but a longer wait, and
+                    // the ~1.4 s resend would be spent before the verify even
+                    // starts.
+                    sendOtaRelayStatus(OTA_RELAY_VERIFYING, 0,
+                                       (uint32_t)fc_ota_receiver.bytesWritten());
                     const TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
                     if (e == TR_OTA_Receiver::Error::Ok)
                     {

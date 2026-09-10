@@ -8,6 +8,12 @@ struct OTAStatusUpdate: Equatable {
     enum State: String {
         case ready              // OTA_BEGIN accepted, awaiting chunks
         case writing            // chunks landing; `bytes` is cumulative
+        // FINISH accepted; the device is doing the terminal work (validating
+        // the staged image, setting the boot partition) and is blocked while
+        // it does. Followed by readyToBoot or verifyFailed. Firmware older
+        // than 2026-09-10 never sends it — writing -> silence -> terminal —
+        // so the finish wait must still work when it never arrives.
+        case verifying
         case readyToBoot        = "ready_to_boot"   // finish OK; device about to esp_restart
         case verifyFailed       = "verify_failed"   // terminal — see `err`
         case aborted            // OTA_ABORT acknowledged
