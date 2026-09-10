@@ -6,7 +6,7 @@
     "Each suite asserts its own platform's table equals this file, so changing",
     "one platform's numbers without the other fails that platform's build.",
     "",
-    "This is APP BEHAVIOUR, not a wire format — nothing here is transmitted, so",
+    "This is APP BEHAVIOUR, not a wire format \u2014 nothing here is transmitted, so",
     "it lives outside fixtures/wire/ (which the freshness gtest owns) alongside",
     "csv_golden/ and telemetry_captured/.",
     "",
@@ -30,7 +30,7 @@
       "crossesRelay": true,
       "localMs": 45000,
       "fcMs": 60000,
-      "why": "FC drains the I2S ring, writes the tail, SHA-256s the image and sets the boot partition. The LOCAL window is NOT device-side verification — the bench measured that at 380 ms (out-computer console 2026-09-10: OTA_FINISH at t=43.71 s, ready to boot at t=44.09 s, on an 815,696 B image). It is the tail of the transfer still draining out of the phone's BLE stack after the pump loop returned: the app stopped writing ~26 s before the device saw FINISH. The device reports writing at 2 Hz with a climbing byte count throughout, so the no-progress budget in awaitFinish is what carries this and the number here only has to cover the largest gap between updates. 15 s was not enough: an 815 kB out-computer image and a 770 kB base-station image both outlasted it and the app reported failure on flashes that committed and booted."
+      "why": "FC drains the I2S ring, writes the tail, SHA-256s the image and sets the boot partition. The LOCAL window is NOT device-side verification \u2014 the bench measured that at 380 ms (out-computer console 2026-09-10: OTA_FINISH at t=43.71 s, ready to boot at t=44.09 s, on an 815,696 B image). It is the tail of the transfer still draining out of the phone's BLE stack after the pump loop returned: the app stopped writing ~26 s before the device saw FINISH. The device reports writing at 2 Hz with a climbing byte count throughout, so the no-progress budget in awaitFinish is what carries this and the number here only has to cover the largest gap between updates. 15 s was not enough: an 815 kB out-computer image and a 770 kB base-station image both outlasted it and the app reported failure on flashes that committed and booted."
     },
     {
       "name": "fwPublish",
@@ -55,7 +55,6 @@
     }
   ],
   "pollMs": 50,
-
   "_fcRelayPumpComment": [
     "Ceiling on the chunk pump for FC-relay OTAs ONLY; a local OC OTA stays",
     "uncapped (it writes straight to flash, no relay, and runs happily at",
@@ -64,18 +63,19 @@
     "#627: on the relay path the OC re-sends each chunk to the FC over I2S. Pump",
     "faster than it can drain and the 16-deep feed queue fills, receive buffers",
     "stop being retired, NimBLE's ACL mbuf pool exhausts and the BLE link wedges",
-    "— thousands of 'ACL buf alloc failed' / 'MBUF alloc stuck', then the OC",
+    "\u2014 thousands of 'ACL buf alloc failed' / 'MBUF alloc stuck', then the OC",
     "simply stops receiving (bench 2026-07-28: enq frozen at 3418 for 135 s).",
     "The FC then sees a hole and, being forward-only, discards everything after.",
     "",
     "Bench-measured on the same board and image: iOS pumps 11.4 kB/s and the",
     "relay works; Android pumps ~68 kB/s and it fails. iOS was never CORRECT",
     "here, just slow enough to stay under an unstated limit. 12000 keeps the",
-    "proven-good rate for both platforms and makes it explicit — on iOS this is",
+    "proven-good rate for both platforms and makes it explicit \u2014 on iOS this is",
     "very nearly a no-op, on Android it is the fix.",
     "",
     "A 591.7 kB FC image therefore takes ~50 s to upload, which is why the FC",
-    "finish window is 60 s (see the finish stage above)."
+    "finish window is 60 s (see the finish stage above).",
+    "BENCH-MEASURED 2026-09-10 (#811), V9 pair, 647,472 B image, OC console captured: 12 KB/s -> 53.0 s pump / 77% idle / qdepth peak 2; 20 -> 31.3 s / 62% / 3; 30 -> 20.7 s / 41% / 13 at startup only; 40 -> 15.2 s / 19% / qdepth 16 sustained with 'ACL buf alloc failed', the #627 signature. Raised 12 -> 20. 30 also worked with the queue empty in steady state, but these are one run each on one board, one image, Android only, and #627's whole lesson is that such a number does not generalise. The 16-frame feed queue (out_computer/main.cpp) is the lever beyond this."
   ],
-  "fcRelayMaxBytesPerSec": 12000
+  "fcRelayMaxBytesPerSec": 20000
 }

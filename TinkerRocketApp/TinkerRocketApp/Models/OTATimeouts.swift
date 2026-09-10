@@ -51,7 +51,13 @@ enum OTATimeouts {
     /// works; Android pumps ~68 kB/s and it fails. iOS was never *correct*
     /// here, only slow enough to stay under a limit nobody had written down.
     /// This writes it down — nearly a no-op on iOS, the actual fix on Android.
-    static let fcRelayMaxBytesPerSec: Double = 12_000
+    /// Bench-measured 2026-09-10 (#811): the cap sets the transfer time, and
+    /// the I2S idle-fill is `1 - cap/50KB` falling out of it. 12 KB/s took
+    /// 53.0 s, 20 took 31.3 s, 30 took 20.7 s, and 40 took 15.2 s but
+    /// saturated the OC's 16-frame feed queue with `ACL buf alloc failed` —
+    /// the #627 signature. 20 is chosen over 30 because those are single runs
+    /// on one board, one image, Android only. Table in OtaTimeouts.kt.
+    static let fcRelayMaxBytesPerSec: Double = 20_000
 
     /// Seconds to wait before the next chunk to hold the FC-relay pump under
     /// `fcRelayMaxBytesPerSec`.
