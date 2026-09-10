@@ -3,7 +3,7 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 33,770 lines across 85 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 33,793 lines across 85 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
@@ -31,7 +31,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [NetworkMonitor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/NetworkMonitor.swift) | 52 | `NetworkMonitor`, `OfflinePill` |
 
 
-## `Models/` — 44 files, 16,671 lines
+## `Models/` — 44 files, 16,694 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -56,7 +56,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Telemetry handling · Wind prefetch · DriftCast adapter · Uncertainty model (#191 item 2) · Ascent ballistic (#191 item 1) |
 | [DriftCastEngine.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/DriftCastEngine.swift) | 506 | `WindLayer`, `WindProfile`, `TrackPoint`, `GuidanceResult`, `OpenMeteoResponse`, `OpenMeteoHourly`, +1 more |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Data Structures · Geo Utilities · Standard Atmosphere · Wind API (Open-Meteo) · Descent Simulation · Main Orchestration |
-| [OTASession.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTASession.swift) | 470 | `OTASession` |
+| [OTASession.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTASession.swift) | 488 | `OTASession` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Flow · Wait helpers |
 | [BLETypes.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BLETypes.swift) | 456 | `PyroTestRefusal`, `FileInfo`, `DownloadState`, `DiscoveredDevice`, `RocketConfig` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | #915 config report · Guidance-target echo (#435) |
@@ -82,7 +82,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [MessageParser.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/MessageParser.swift) | 151 | — |
 | [FirmwareCatalogSession.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FirmwareCatalogSession.swift) | 139 | `FirmwareCatalogSession` |
 | [StorageStats.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/StorageStats.swift) | 121 | `RocketStorageStats`, `BaseStationStorageStats` |
-| [OTATimeouts.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTATimeouts.swift) | 93 | `OTAStage`, `OTATimeouts` |
+| [OTATimeouts.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTATimeouts.swift) | 98 | `OTAStage`, `OTATimeouts` |
 | [OtaWriteGate.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OtaWriteGate.swift) | 90 | `OtaWriteGate` |
 | [PhoneFixCodec.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/PhoneFixCodec.swift) | 62 | — |
 | [LastValidRocketFix.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/LastValidRocketFix.swift) | 56 | `LastValidRocketFix` |
@@ -143,4 +143,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 85 files, 33,770 lines.
+Total: 85 files, 33,793 lines.

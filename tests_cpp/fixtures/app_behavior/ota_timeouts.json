@@ -30,7 +30,7 @@
       "crossesRelay": true,
       "localMs": 45000,
       "fcMs": 60000,
-      "why": "FC drains the I2S ring, writes the tail, SHA-256s the image and sets the boot partition. The LOCAL window covers only the SHA-256 over the image plus setting the boot partition, the bytes having already arrived — and 15 s was not enough for it. Bench 2026-09-10 flashing fw-v0.0.1-rc1: an 815 kB out-computer image and a 770 kB base-station image were BOTH still verifying when the window expired, so the app reported 'Device did not finalize OTA within 15s' on two flashes that then committed and booted correctly. There is no wire state between writing and ready_to_boot, so the app cannot distinguish 'still hashing' from 'died' and the clock has to be generous."
+      "why": "FC drains the I2S ring, writes the tail, SHA-256s the image and sets the boot partition. The LOCAL window is NOT device-side verification — the bench measured that at 380 ms (out-computer console 2026-09-10: OTA_FINISH at t=43.71 s, ready to boot at t=44.09 s, on an 815,696 B image). It is the tail of the transfer still draining out of the phone's BLE stack after the pump loop returned: the app stopped writing ~26 s before the device saw FINISH. The device reports writing at 2 Hz with a climbing byte count throughout, so the no-progress budget in awaitFinish is what carries this and the number here only has to cover the largest gap between updates. 15 s was not enough: an 815 kB out-computer image and a 770 kB base-station image both outlasted it and the app reported failure on flashes that committed and booted."
     },
     {
       "name": "fwPublish",

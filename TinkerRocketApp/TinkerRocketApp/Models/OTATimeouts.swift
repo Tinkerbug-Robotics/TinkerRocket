@@ -73,14 +73,19 @@ enum OTATimeouts {
         // FC drains the I2S ring, writes the tail, SHA-256s the image and sets
         // the boot partition — every status hop crossing the relay.
         //
-        // The LOCAL window is not about the relay: by the time finish is sent
-        // the bytes are already there, and only the SHA-256 over the whole
-        // image and setting the boot partition remain. 15 s was not enough.
-        // Bench 2026-09-10 on fw-v0.0.1-rc1: an 815 kB out-computer image and
-        // a 770 kB base-station image were both still verifying when the
-        // window expired, so the app reported failure on two flashes that then
-        // committed and booted. Same failure #627 fixed on the FC path; the
-        // local path kept the old number and the images grew into it.
+        // The LOCAL window is NOT device-side verification: the bench measured
+        // that at 380 ms. It is the tail of the transfer still draining out of
+        // the phone's BLE stack after the pump loop has returned — the app
+        // stopped writing ~26 s before the device logged OTA_FINISH on an
+        // 815,696 B image (console, 2026-09-10). The device reports `writing`
+        // at 2 Hz throughout, so the no-progress budget in
+        // OTASession.awaitFinish is what actually carries this, and the number
+        // below only has to cover the largest gap between updates.
+        //
+        // 15 s was not enough: an 815 kB out-computer image and a 770 kB
+        // base-station image both outlasted it and the app reported failure on
+        // flashes that committed and booted. Same failure #627 fixed on the FC
+        // path; the local path kept the old number and the images grew into it.
         case .finish:     return targetIsFC ? 60.0 : 45.0
         // FC reboots, then the OC re-queries its identity before the new
         // version can reach the app.

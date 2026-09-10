@@ -26,12 +26,17 @@ public:
         // done. This state is emitted before it starts, which is the only
         // moment available to say "I have it, I am working on it".
         //
-        // Why it matters: without it the wire goes Writing -> silence ->
-        // ReadyToBoot, and an app waiting on the terminal state cannot tell a
-        // device that is busy from one that died. It had only a clock, and the
-        // clock was outgrown three times (#627, then #773's bench run, where
-        // an 815 kB image and a 770 kB image both outlasted the window and the
-        // app reported failure on flashes that committed and booted).
+        // Measured on the bench 2026-09-10, out-computer console, 815,696 B
+        // image: OTA_FINISH at t=43.71 s, ready to boot at t=44.09 s. So the
+        // blocking work is 380 ms — far less than the finish window suggests.
+        // What fills that window is the tail of the TRANSFER draining out of
+        // the phone's BLE stack: the app stopped pumping ~26 s before this MCU
+        // saw FINISH.
+        //
+        // This state is therefore not what rescues a slow flash — the 2 Hz
+        // `writing` updates and their climbing byte count do that. What it
+        // uniquely says is "I have the whole image and am committing it",
+        // which separates a lost OTA_FINISH from a slow one.
         //
         // In-process only: nothing serializes this enum. The FC mirrors it
         // onto the wire as OTA_RELAY_VERIFYING and the OC renders it as the

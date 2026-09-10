@@ -449,6 +449,71 @@ class OtaSessionTest {
     }
 
     @Test
+    fun aMovingByteCountKeepsTheFinishWaitAlive() = runTest {
+        // THE BENCH CASE, out-computer console 2026-09-10 against an
+        // 815,696 B image:
+        //
+        //   [ 5.87] OTA_BEGIN: size=815696
+        //   [ 9.10] OTA begin: partition 'ota_1'        <- 3.2 s erase
+        //   [43.71] OTA_FINISH (bytes_written=815696)   <- 34.6 s RECEIVING
+        //   [44.09] OTA: ready to boot                  <- 0.38 s finish work
+        //
+        // The app stopped pumping ~26 s before the device saw FINISH — its
+        // writes drain out of the phone's BLE stack long after the pump loop
+        // returns. So this window is spent watching a transfer still arriving,
+        // and the device says so twice a second in `writing` updates whose
+        // BYTE COUNT climbs while the state does not change. Keying on the
+        // state alone made all of that invisible.
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        assertIs<OtaSession.State.Verifying>(r.ota.state.value)
+
+        // Four windows' worth of elapsed time, each punctuated by the 2 Hz
+        // update a live transfer produces.
+        var written = 100_000L
+        repeat(4) {
+            advanceTimeBy(OtaSession.FINISH_TIMEOUT_MS - 1_000); runCurrent()
+            written += 50_000L
+            r.fw.emitOtaStatus("writing", bytes = written)
+            advanceTimeBy(200); runCurrent()
+        }
+        assertIs<OtaSession.State.Verifying>(
+            r.ota.state.value,
+            "bytes were still climbing, so this was never a stall",
+        )
+
+        r.fw.emitOtaStatus("ready_to_boot")
+        advanceTimeBy(200); runCurrent()
+        assertTrue(r.ota.state.value !is OtaSession.State.Failed)
+    }
+
+    @Test
+    fun aStuckByteCountStillTimesOut() = runTest {
+        // The other half, and the reason this is progress rather than mere
+        // chatter: a device repeating the SAME byte count is not making any,
+        // and must still fail. Otherwise a wedged transfer waits forever.
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+
+        repeat(3) {
+            r.fw.emitOtaStatus("writing", bytes = 250_000L)   // same number every time
+            advanceTimeBy(OtaSession.FINISH_TIMEOUT_MS / 3); runCurrent()
+        }
+        advanceTimeBy(OtaSession.FINISH_TIMEOUT_MS); runCurrent()
+
+        val st = r.ota.state.value
+        assertIs<OtaSession.State.Failed>(st)
+    }
+
+    @Test
     fun verifyingRestartsTheFinishBudget() = runTest {
         // #773: the finish window is a NO-PROGRESS budget, not a total. A
         // device that keeps saying it is working must never be cut off — the
