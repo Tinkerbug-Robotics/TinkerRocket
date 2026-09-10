@@ -31,8 +31,13 @@ final class FirmwareCatalogSession: ObservableObject {
         /// first. `best` is nil when the unit's board is known and nothing in
         /// the release matches it — the list is still offered, because
         /// refusing to guess is not the same as refusing to show.
+        /// `boardKnown` is whether the unit's board revision could be
+        /// established at all — provisioned, or read out of its running
+        /// version. When it could not, a nil `best` means "nobody knows what
+        /// this is", which is a different thing to tell an operator than
+        /// "this release has nothing for your board".
         case ready(release: FirmwareRelease, images: [FirmwareImage],
-                   best: FirmwareImage?, alreadyRunning: Bool)
+                   best: FirmwareImage?, alreadyRunning: Bool, boardKnown: Bool)
         case downloading(image: FirmwareImage)
         /// Bytes that matched the manifest's size and SHA-256. Terminal.
         case downloaded(release: FirmwareRelease, image: FirmwareImage, bytes: Data)
@@ -75,17 +80,28 @@ final class FirmwareCatalogSession: ObservableObject {
             if Task.isCancelled { return }
             let (rel, manifest) = found
             release = rel
+            // The board the unit is provisioned with, or failing that the one
+            // its running firmware claims to be. EspImage.check has always
+            // used exactly this fallback; the catalog was never given it, so
+            // on a board provisioned before #773 step 2 — which is every board
+            // in the field — it ranked with nothing to rank on. See
+            // FirmwareCatalog.best for what that produced on the bench.
+            let trimmed = provisionedBoard?.trimmingCharacters(in: .whitespaces)
+            let effectiveBoard = (trimmed?.isEmpty == false ? trimmed : nil)
+                ?? EspImage.boardSuffix(of: runningVersion ?? "")
+
             let images = FirmwareCatalog.forUnit(manifest, expectedProject: expectedProject,
-                                                 provisionedBoard: provisionedBoard)
+                                                 provisionedBoard: effectiveBoard)
             guard !images.isEmpty else {
                 state = .failed(reason: "Release \(rel.tag) carries no \(expectedProject) image.")
                 return
             }
             let best = FirmwareCatalog.best(manifest, expectedProject: expectedProject,
-                                            provisionedBoard: provisionedBoard)
+                                            provisionedBoard: effectiveBoard)
             state = .ready(release: rel, images: images, best: best,
                            alreadyRunning: best != nil && runningVersion != nil
-                               && best?.version == runningVersion)
+                               && best?.version == runningVersion,
+                           boardKnown: effectiveBoard != nil)
         }
     }
 

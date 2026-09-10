@@ -99,6 +99,22 @@ public object EspImage {
     public const val PROJECT_BS: String = "base_station"
     public const val PROJECT_MINI: String = "rocket_computer_mini"
 
+    /**
+     * The board revision a version string asserts, e.g. `v9` from
+     * `e1a4bee4-v9+20260910-1112`. Null when there is none to read.
+     *
+     * The twin of iOS's `EspImage.boardSuffix(of:)`, which existed there and
+     * not here — so the Android callers that wanted a board out of a version
+     * had nothing to call, and did without.
+     *
+     * This is the image's or the unit's own CLAIM, which is not the same as
+     * what the hardware is: a wrongly flashed board reports the wrong revision
+     * until it is flashed again. Good enough to rank and to warn on, never to
+     * decide on.
+     */
+    public fun boardSuffix(version: String?): String? =
+        version?.let { EspAppImage.BOARD_SUFFIX_RE.find(it)?.groupValues?.get(1)?.lowercase() }
+
     private fun u16(b: ByteArray, o: Int): Int =
         (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8)
 

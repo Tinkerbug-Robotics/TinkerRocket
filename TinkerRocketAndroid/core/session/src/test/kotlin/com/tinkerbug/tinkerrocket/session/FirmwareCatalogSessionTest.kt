@@ -71,6 +71,72 @@ class FirmwareCatalogSessionTest {
     }
 
     @Test
+    fun `an unprovisioned unit is identified by the firmware it is running`() = runTest {
+        // THE BENCH CASE, 2026-09-10. A real V9 out computer against
+        // fw-v0.1.0: no provisioned board (it predates #773 step 2, as every
+        // board in the field does), three board-specific images, and the
+        // catalog recommended `m1` — the ROCKET-COMPUTER-MINI image — with a
+        // tick beside it, because with nothing to rank on the sort fell back
+        // to the board string and `m1` beats `v8` and `v9` on spelling.
+        //
+        // The unit had been saying which board it was the whole time, in the
+        // version string the screen displays two rows above.
+        val (s, scope) = rig(ok(manifest(
+            imageJson("out_computer", "m1", 64, "abc-m1+1"),
+            imageJson("out_computer", "v8", 64, "abc-v8+1"),
+            imageJson("out_computer", "v9", 64, "abc-v9+1"),
+        )))
+        s.check(
+            EspImage.PROJECT_OC,
+            provisionedBoard = null,
+            runningVersion = "e1a4bee4-v9+20260910-1112",
+        )
+        scope.runCurrent()
+
+        val st = s.state.value
+        assertIs<FirmwareCatalogSession.State.Ready>(st)
+        assertEquals("v9", st.best?.board, "the running version says v9, so v9 it is")
+        assertTrue(st.boardKnown)
+    }
+
+    @Test
+    fun `a unit that says nothing about its board gets no recommendation`() = runTest {
+        // Nothing provisioned and nothing readable in the version — a pre-#8
+        // image, or a board flashed with a suffixless build. Ranking is
+        // impossible, so recommend nothing rather than the alphabet.
+        val (s, scope) = rig(ok(manifest(
+            imageJson("out_computer", "m1", 64, "abc-m1+1"),
+            imageJson("out_computer", "v9", 64, "abc-v9+1"),
+        )))
+        s.check(EspImage.PROJECT_OC, provisionedBoard = null, runningVersion = "abc123+20260910")
+        scope.runCurrent()
+
+        val st = s.state.value
+        assertIs<FirmwareCatalogSession.State.Ready>(st)
+        assertNull(st.best, "no basis to choose, so no tick")
+        assertEquals(2, st.images.size, "still listed for a deliberate choice")
+        assertTrue(!st.boardKnown, "and the screen can say WHY there is no default")
+    }
+
+    @Test
+    fun `a provisioned board still wins over the running version`() = runTest {
+        // Provisioning is the board's own answer; the version is the image's
+        // claim about itself, and a wrongly flashed board claims the wrong
+        // thing until it is flashed again. EspImage.check has always ordered
+        // them this way and the catalog now matches.
+        val (s, scope) = rig(ok(manifest(
+            imageJson("out_computer", "v8", 64, "abc-v8+1"),
+            imageJson("out_computer", "v9", 64, "abc-v9+1"),
+        )))
+        s.check(EspImage.PROJECT_OC, provisionedBoard = "v8", runningVersion = "abc-v9+1")
+        scope.runCurrent()
+
+        val st = s.state.value
+        assertIs<FirmwareCatalogSession.State.Ready>(st)
+        assertEquals("v8", st.best?.board, "the board's answer, not the image's claim")
+    }
+
+    @Test
     fun `no network says so, and does not blame the firmware`() = runTest {
         // At a launch site the overwhelmingly likely cause is no signal.
         // Telling an operator their firmware is missing sends them looking in

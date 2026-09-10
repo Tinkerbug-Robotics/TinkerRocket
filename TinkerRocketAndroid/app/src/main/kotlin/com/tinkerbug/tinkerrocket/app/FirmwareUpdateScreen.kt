@@ -412,8 +412,17 @@ private fun CatalogBlock(
             }
             if (state.best == null) {
                 Text(
-                    "Nothing in this release is built for this board, so none is " +
-                        "offered by default. Choose one only if you know it fits.",
+                    if (state.boardKnown) {
+                        "Nothing in this release is built for this board, so none is " +
+                            "offered by default. Choose one only if you know it fits."
+                    } else {
+                        // Different problem, different sentence: we do not know
+                        // what this board is, so we cannot rank the images at
+                        // all. Guessing here recommended the mini's image to a
+                        // V9 (#773, bench 2026-09-10).
+                        "This unit has not reported which board revision it is, so " +
+                            "none is recommended. Choose the one matching your hardware."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )

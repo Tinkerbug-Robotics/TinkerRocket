@@ -59,13 +59,72 @@ final class FirmwareCatalogSessionTests: XCTestCase {
         s.check(expectedProject: EspImage.projectOC, provisionedBoard: "v9")
         try await settle(s)
 
-        guard case .ready(let rel, let images, let best, let running) = s.state else {
+        guard case .ready(let rel, let images, let best, let running, _) = s.state else {
             return XCTFail("expected ready, got \(s.state)")
         }
         XCTAssertEqual(rel.tag, "fw-v1.0.0")
         XCTAssertEqual(images.count, 2)
         XCTAssertEqual(best?.board, "v9", "the unit's own revision leads")
         XCTAssertFalse(running)
+    }
+
+    func testAnUnprovisionedUnitIsIdentifiedByTheFirmwareItIsRunning() async throws {
+        // THE BENCH CASE, 2026-09-10. A real V9 out computer against
+        // fw-v0.1.0: no provisioned board (it predates #773 step 2, as every
+        // board in the field does), three board-specific images, and the
+        // catalog recommended `m1` — the ROCKET-COMPUTER-MINI image — with a
+        // tick beside it, because with nothing to rank on the sort fell back
+        // to the board string and `m1` beats `v8` and `v9` on spelling.
+        //
+        // The unit had been saying which board it was the whole time, in the
+        // version string the screen displays two rows above.
+        let s = session(manifest([imageJson("out_computer", "m1", size: 64, version: "abc-m1+1"),
+                                  imageJson("out_computer", "v8", size: 64, version: "abc-v8+1"),
+                                  imageJson("out_computer", "v9", size: 64, version: "abc-v9+1")]))
+        s.check(expectedProject: EspImage.projectOC, provisionedBoard: nil,
+                runningVersion: "e1a4bee4-v9+20260910-1112")
+        try await settle(s)
+
+        guard case .ready(_, _, let best, _, let boardKnown) = s.state else {
+            return XCTFail("expected ready, got \(s.state)")
+        }
+        XCTAssertEqual(best?.board, "v9", "the running version says v9, so v9 it is")
+        XCTAssertTrue(boardKnown)
+    }
+
+    func testAUnitThatSaysNothingAboutItsBoardGetsNoRecommendation() async throws {
+        // Nothing provisioned and nothing readable in the version — a pre-#8
+        // image, or a board flashed with a suffixless build. Ranking is
+        // impossible, so recommend nothing rather than the alphabet.
+        let s = session(manifest([imageJson("out_computer", "m1", size: 64, version: "abc-m1+1"),
+                                  imageJson("out_computer", "v9", size: 64, version: "abc-v9+1")]))
+        s.check(expectedProject: EspImage.projectOC, provisionedBoard: nil,
+                runningVersion: "abc123+20260910")
+        try await settle(s)
+
+        guard case .ready(_, let images, let best, _, let boardKnown) = s.state else {
+            return XCTFail("expected ready, got \(s.state)")
+        }
+        XCTAssertNil(best, "no basis to choose, so no tick")
+        XCTAssertEqual(images.count, 2, "still listed for a deliberate choice")
+        XCTAssertFalse(boardKnown, "and the screen can say WHY there is no default")
+    }
+
+    func testAProvisionedBoardStillWinsOverTheRunningVersion() async throws {
+        // Provisioning is the board's own answer; the version is the image's
+        // claim about itself, and a wrongly flashed board claims the wrong
+        // thing until it is flashed again. EspImage.check has always ordered
+        // them this way and the catalog now matches.
+        let s = session(manifest([imageJson("out_computer", "v8", size: 64, version: "abc-v8+1"),
+                                  imageJson("out_computer", "v9", size: 64, version: "abc-v9+1")]))
+        s.check(expectedProject: EspImage.projectOC, provisionedBoard: "v8",
+                runningVersion: "abc-v9+1")
+        try await settle(s)
+
+        guard case .ready(_, _, let best, _, _) = s.state else {
+            return XCTFail("expected ready, got \(s.state)")
+        }
+        XCTAssertEqual(best?.board, "v8", "the board's answer, not the image's claim")
     }
 
     func testNoNetworkSaysSoAndDoesNotBlameTheFirmware() async throws {
@@ -98,7 +157,7 @@ final class FirmwareCatalogSessionTests: XCTestCase {
         s.check(expectedProject: EspImage.projectOC, provisionedBoard: "v12")
         try await settle(s)
 
-        guard case .ready(_, let images, let best, _) = s.state else {
+        guard case .ready(_, let images, let best, _, _) = s.state else {
             return XCTFail("expected ready, got \(s.state)")
         }
         XCTAssertEqual(images.count, 1, "still offered for a deliberate choice")
@@ -111,7 +170,7 @@ final class FirmwareCatalogSessionTests: XCTestCase {
                 runningVersion: "abc-v9+1")
         try await settle(s)
 
-        guard case .ready(_, _, _, let running) = s.state else {
+        guard case .ready(_, _, _, let running, _) = s.state else {
             return XCTFail("expected ready, got \(s.state)")
         }
         XCTAssertTrue(running, "re-flashing is allowed, but say it is a re-flash")
@@ -123,7 +182,7 @@ final class FirmwareCatalogSessionTests: XCTestCase {
                         assets: ["https://x.test/fw-v1.0.0/oc.bin": bytes])
         s.check(expectedProject: EspImage.projectOC, provisionedBoard: "v9")
         try await settle(s)
-        guard case .ready(_, _, let best, _) = s.state, let img = best else {
+        guard case .ready(_, _, let best, _, _) = s.state, let img = best else {
             return XCTFail("expected ready")
         }
         s.download(img)
@@ -142,7 +201,7 @@ final class FirmwareCatalogSessionTests: XCTestCase {
                         sha256: String(repeating: "b", count: 64))
         s.check(expectedProject: EspImage.projectOC, provisionedBoard: "v9")
         try await settle(s)
-        guard case .ready(_, _, let best, _) = s.state, let img = best else {
+        guard case .ready(_, _, let best, _, _) = s.state, let img = best else {
             return XCTFail("expected ready")
         }
         s.download(img)
@@ -157,7 +216,7 @@ final class FirmwareCatalogSessionTests: XCTestCase {
                         assets: ["https://x.test/fw-v1.0.0/oc.bin": Data?.none])
         s.check(expectedProject: EspImage.projectOC, provisionedBoard: "v9")
         try await settle(s)
-        guard case .ready(_, _, let best, _) = s.state, let img = best else {
+        guard case .ready(_, _, let best, _, _) = s.state, let img = best else {
             return XCTFail("expected ready")
         }
         s.download(img)
