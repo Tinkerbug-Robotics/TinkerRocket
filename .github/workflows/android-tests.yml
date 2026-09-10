@@ -12,11 +12,13 @@ on:
     paths:
       - 'TinkerRocketAndroid/**'
       - 'tests_cpp/fixtures/wire/**'
+      - 'tools/check_android_tests_ran.py'
       - '.github/workflows/android-tests.yml'
   pull_request:
     paths:
       - 'TinkerRocketAndroid/**'
       - 'tests_cpp/fixtures/wire/**'
+      - 'tools/check_android_tests_ran.py'
       - '.github/workflows/android-tests.yml'
 
 jobs:
@@ -38,3 +40,13 @@ jobs:
       - name: Run JVM unit tests (golden walk included)
         run: ./gradlew --no-daemon test
         working-directory: TinkerRocketAndroid
+
+      # JUnit 5 does not run a test method whose return type is not void, and
+      # nothing reports that it didn't: the step above stays green with fewer
+      # cases than the sources declare. Kotlin gets there by accident -- an
+      # expression-bodied @Test ending in assertIs/assertNotNull returns the
+      # narrowed value -- and FirmwareReleaseTest shipped 2 of 13 cases that
+      # way (#773 step 4b). So, per module: every @Test under src/test must be
+      # in the JUnit XML the step above just wrote.
+      - name: Every declared @Test ran
+        run: python3 tools/check_android_tests_ran.py
