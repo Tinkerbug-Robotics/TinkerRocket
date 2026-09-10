@@ -269,7 +269,12 @@ final class OTASessionFlowTests: XCTestCase {
         try await waitUntil("finish timeout") { self.failureReason(session.state) != nil }
         let reason = failureReason(session.state) ?? ""
         XCTAssertTrue(reason.contains("finalize"), reason)
-        XCTAssertTrue(reason.contains("15s"), "local finish window in the message: \(reason)")
+        // Read the window from the table rather than repeating the number: it
+        // has now moved twice (#627 stretched the FC path, #773 the local one),
+        // and a literal here fails the build for the wrong reason each time.
+        let localFinish = Int(OTATimeouts.seconds(.finish, targetIsFC: false))
+        XCTAssertTrue(reason.contains("\(localFinish)s"),
+                      "local finish window in the message: \(reason)")
         XCTAssertGreaterThanOrEqual(link.abortCount, 1, "a finish the device never answered is aborted (#1049)")
     }
 
