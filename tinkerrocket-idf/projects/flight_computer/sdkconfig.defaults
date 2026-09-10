@@ -96,11 +96,22 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 #    and the low-power path belongs to the OC (#519: EXT_CRYS + BT LP clock
 #    + XT-WDT).  If FC light-sleep is ever wanted, this is the first switch.
 #
-# 3) Boot NOR: V9 fits W25Q128JVSIQ (16 MB) and this file now declares 16 MB.
-#    NOTE the partition table (partitions.csv) still tops out near 6.4 MB, so
-#    the upper half is unused — deliberately, since raising it would fork the
-#    layout per hardware generation (V8 bench boards may carry 8 MB parts).
-#    Also note IDF does NOT re-apply defaults to an existing sdkconfig: an
-#    old build dir keeps building 8 MB and logs "Detected size(16384k) larger
-#    than the size in the binary image header(8192k)".  Delete the stale
-#    sdkconfig (the OC keeps one per build dir, #822) to pick this up.
+# 3) Boot NOR: V9 fits a W25Q128JVSIQ (16 MB) and this file declares 8 MB —
+#    CONFIG_ESPTOOLPY_FLASHSIZE_8MB above.  That is correct and deliberate,
+#    not an oversight, and it is ENFORCED: tools/check_flash_declarations.py
+#    requires the declared size to be the smallest standard size that fits the
+#    partition table, and partitions.csv tops out near 6.32 MB.  Declaring
+#    16 MB would fail that guard, and on any board that turns out to carry an
+#    8 MB part it boot-loops inside the bootloader before firmware runs — the
+#    #883 regression, fixed 2026-08-24 by forking the declaration per board
+#    revision.  Under-declaring simply leaves the upper half unused, which is
+#    the safe direction.
+#
+#    Raising the partition table to use the other 8 MB is the change that
+#    would justify declaring 16 MB, and it is not worth forking the layout per
+#    hardware generation until something needs the space (V8 bench boards may
+#    carry 8 MB parts).
+#
+#    (An earlier version of this note claimed the file "now declares 16 MB".
+#    It never did — corrected 2026-09-10.  The whole point of this block is
+#    that the next person can trust what it says.)
