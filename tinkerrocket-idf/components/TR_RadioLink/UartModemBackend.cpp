@@ -288,19 +288,26 @@ bool UartModemBackend::pushConfig(float freq_mhz, uint8_t sf, float bw_khz,
             // boot then begin()s the illegal pair and disables the radio.
             // The rule itself lives in modem_config_ack.h so it can be unit
             // tested without a modem; see test_modem_config_ack.cpp.
-            if (!modem_config_ack::accepted(
-                    modem_config_ack::Ack{last_status_.config_ok,
-                                          last_status_.current_freq_mhz,
-                                          last_status_.current_sf},
+            const modem_config_ack::Ack ack{last_status_.config_ok,
+                                            last_status_.current_freq_mhz,
+                                            last_status_.current_sf,
+                                            last_status_.config_fail_reason};
+            if (!modem_config_ack::accepted(ack,
                     modem_config_ack::Want{freq_mhz, sf}))
             {
+                // #1173: say WHICH half. Without the reason this line can read
+                // as a contradiction — a frame-params rejection reports the
+                // asked-for freq and SF back, because they really are live.
+                const char* why = modem_config_ack::reason_text(ack);
                 ESP_LOGE(TAG, "config NOT applied: asked %.3f MHz SF%u, modem "
-                              "reports %.3f MHz SF%u (config_ok=%u) — radio is "
-                              "on its previous modulation; not caching",
+                              "reports %.3f MHz SF%u (config_ok=%u"
+                              " reason=0x%02X)%s%s; not caching",
                          (double)freq_mhz, (unsigned)sf,
                          (double)last_status_.current_freq_mhz,
                          (unsigned)last_status_.current_sf,
-                         (unsigned)last_status_.config_ok);
+                         (unsigned)last_status_.config_ok,
+                         (unsigned)last_status_.config_fail_reason,
+                         *why ? " — " : "", why);
                 return false;
             }
             cfg_freq_mhz_ = freq_mhz;

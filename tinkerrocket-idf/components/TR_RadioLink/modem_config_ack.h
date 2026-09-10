@@ -34,7 +34,44 @@ struct Ack
     uint8_t config_ok;          // ModemStatusData::config_ok (CfgAck)
     float   on_air_freq_mhz;    // ModemStatusData::current_freq_mhz
     uint8_t on_air_sf;          // ModemStatusData::current_sf
+    uint8_t fail_reason = 0;    // ModemStatusData::config_fail_reason (#1173)
 };
+
+/// Why the modem said no, in words. "" when there is nothing to explain.
+///
+/// Pure and defaulted so every existing Ack{...} call site keeps compiling and
+/// simply reports no reason — which is exactly what a legacy modem sends.
+///
+/// The case this exists for: CFG_FAIL_FRAME_PARAMS. There the requested
+/// modulation IS on the air, so `accepted()`'s freq/SF comparison passes and
+/// the operator's log reads "config NOT applied: asked 915.000 SF8, modem
+/// reports 915.000 SF8" — a flat contradiction with no way to tell that the
+/// preamble/CRC/gain/syncword are the ones that did not take.
+static inline const char* reason_text(const Ack& ack)
+{
+    if (ack.config_ok != radio_modem::CFG_ACK_REJECTED || ack.fail_reason == 0)
+    {
+        return "";
+    }
+    // Radio-down first: it subsumes the others, and it is the only one that
+    // leaves nothing at all on the air.
+    if (ack.fail_reason & radio_modem::CFG_FAIL_RADIO_DOWN)
+    {
+        return "the radio failed to start - nothing is on the air";
+    }
+    if (ack.fail_reason & radio_modem::CFG_FAIL_MODULATION)
+    {
+        return "the modulation was refused - the radio rolled back to its "
+               "previous one and is still up";
+    }
+    if (ack.fail_reason & radio_modem::CFG_FAIL_FRAME_PARAMS)
+    {
+        return "the modulation IS live, but the frame format "
+               "(preamble/CRC/gain/syncword) was not applied - airtime "
+               "accounting on this link is now wrong";
+    }
+    return "rejected for a reason this host does not recognise";
+}
 
 struct Want
 {

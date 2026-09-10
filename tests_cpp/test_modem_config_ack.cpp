@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <string.h>
 #include "modem_config_ack.h"
 
 using modem_config_ack::Ack;
@@ -63,4 +64,88 @@ TEST(ModemConfigAck, FloatRoundTripDoesNotSpuriouslyReject) {
     // exact compare would reject configs that really did apply.
     EXPECT_TRUE(accepted(Ack{radio_modem::CFG_ACK_APPLIED, 915.0004f, kSF}, Want{kF, kSF}));
     EXPECT_FALSE(accepted(Ack{radio_modem::CFG_ACK_APPLIED, 915.05f, kSF}, Want{kF, kSF}));
+}
+
+// --- #1173: which half was rejected ----------------------------------------
+//
+// The reason byte is diagnostics, so the first thing to pin is that it changes
+// NO verdict: pushConfig must still fail on CFG_ACK_REJECTED whatever the
+// reason says, and a reason must never rescue a rejection or cause one.
+
+TEST(ModemConfigAck, TheReasonByteNeverChangesTheVerdict) {
+    // Every reason, and a nonsense one, against an otherwise perfect ack.
+    for (uint8_t r : {uint8_t{0},
+                      uint8_t{radio_modem::CFG_FAIL_MODULATION},
+                      uint8_t{radio_modem::CFG_FAIL_FRAME_PARAMS},
+                      uint8_t{radio_modem::CFG_FAIL_RADIO_DOWN},
+                      uint8_t{0x80}}) {
+        EXPECT_FALSE(accepted(Ack{radio_modem::CFG_ACK_REJECTED, kF, kSF, r},
+                              Want{kF, kSF})) << "reason " << unsigned(r);
+        EXPECT_TRUE(accepted(Ack{radio_modem::CFG_ACK_APPLIED, kF, kSF, r},
+                             Want{kF, kSF})) << "reason " << unsigned(r);
+    }
+}
+
+TEST(ModemConfigAck, FrameParamFailureIsTheOneTheOnAirCompareCannotSee) {
+    // The whole reason this field is worth a byte. The requested modulation IS
+    // live, so freq and SF read back exactly right and the on-air comparison
+    // is happy — only config_ok says no, and only the reason says why.
+    const Ack ack{radio_modem::CFG_ACK_REJECTED, kF, kSF,
+                  radio_modem::CFG_FAIL_FRAME_PARAMS};
+    EXPECT_FALSE(accepted(ack, Want{kF, kSF}));
+    // Strip the rejection and the same numbers would have passed — which is
+    // exactly why the operator's log used to read as a contradiction.
+    EXPECT_TRUE(accepted(Ack{radio_modem::CFG_ACK_APPLIED, kF, kSF, 0},
+                         Want{kF, kSF}));
+    EXPECT_NE(strstr(reason_text(ack), "frame format"), nullptr) << reason_text(ack);
+    EXPECT_NE(strstr(reason_text(ack), "IS live"), nullptr) << reason_text(ack);
+}
+
+TEST(ModemConfigAck, EachFailurePathReadsAsItsOwnEvent) {
+    const Ack down{radio_modem::CFG_ACK_REJECTED, kF, kSF,
+                   radio_modem::CFG_FAIL_RADIO_DOWN};
+    const Ack rolled{radio_modem::CFG_ACK_REJECTED, kF, kSF,
+                     radio_modem::CFG_FAIL_MODULATION};
+    EXPECT_NE(strstr(reason_text(down), "nothing is on the air"), nullptr) << reason_text(down);
+    EXPECT_NE(strstr(reason_text(rolled), "rolled back"), nullptr) << reason_text(rolled);
+    // Three distinct paths must not collapse into one string — that collapse
+    // is the defect this issue is about.
+    EXPECT_STRNE(reason_text(down), reason_text(rolled));
+}
+
+TEST(ModemConfigAck, RadioDownWinsWhenMoreThanOneBitIsSet) {
+    // A modem that sets several has one thing worth saying first: there is
+    // nothing on the air at all, which subsumes any complaint about WHICH
+    // modulation or frame format failed to take.
+    const Ack many{radio_modem::CFG_ACK_REJECTED, kF, kSF,
+                   uint8_t(radio_modem::CFG_FAIL_RADIO_DOWN |
+                           radio_modem::CFG_FAIL_MODULATION |
+                           radio_modem::CFG_FAIL_FRAME_PARAMS)};
+    EXPECT_NE(strstr(reason_text(many), "nothing is on the air"), nullptr) << reason_text(many);
+}
+
+TEST(ModemConfigAck, NoReasonIsReportedWhereThereIsNothingToExplain) {
+    // A legacy modem zero-fills the byte and can never send REJECTED, so the
+    // field is simply never read on such a link — and an applied config has
+    // nothing to explain even if a stale reason were somehow present.
+    EXPECT_STREQ(reason_text(Ack{radio_modem::CFG_ACK_UNKNOWN, kF, kSF, 0}), "");
+    EXPECT_STREQ(reason_text(Ack{radio_modem::CFG_ACK_APPLIED, kF, kSF,
+                                 radio_modem::CFG_FAIL_MODULATION}), "");
+    // Rejected with no reason is the honest "it said no and did not say why".
+    EXPECT_STREQ(reason_text(Ack{radio_modem::CFG_ACK_REJECTED, kF, kSF, 0}), "");
+    // An unrecognised bit is reported as unrecognised, not silently dropped.
+    EXPECT_NE(strstr(reason_text(Ack{radio_modem::CFG_ACK_REJECTED, kF, kSF, 0x80}),
+                     "does not recognise"), nullptr);
+}
+
+TEST(ModemStatusWire, TheReasonByteCameOutOfTheSpareBytes) {
+    // #1173's constraint: take a spare byte, do not grow the struct. If this
+    // ever fails, every deployed modem and host disagree about the layout of
+    // everything after it.
+    static_assert(sizeof(radio_modem::ModemStatusData) == 52,
+                  "ModemStatusData must stay 52 bytes");
+    radio_modem::ModemStatusData st = {};
+    st.config_fail_reason = radio_modem::CFG_FAIL_FRAME_PARAMS;
+    EXPECT_EQ(st.config_fail_reason, 0x02);
+    EXPECT_EQ(sizeof(st.reserved), 1u);
 }

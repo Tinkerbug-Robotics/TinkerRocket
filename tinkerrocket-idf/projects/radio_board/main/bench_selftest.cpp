@@ -381,6 +381,62 @@ static void testRadioRxPath(TR_LoRa_Comms& radio, Results& r)
 
 // ---------------------------------------------------------------------------
 
+// #1173: the reason byte is only worth a wire byte if the failures it
+// separates are actually reachable and actually different on real silicon.
+// The mapping from these two booleans to CFG_FAIL_* bits and operator text is
+// host-tested (tests_cpp/test_modem_config_ack.cpp); what needs a radio is the
+// claim that the part refuses one config and accepts another, and that a
+// refusal leaves the radio UP on its previous modulation rather than dead.
+//
+// Receive-only, like everything else here: reconfigure() and applyFrameParams()
+// program registers, they do not key the PA.
+static void testConfigRejection(TR_LoRa_Comms& radio, Results& r)
+{
+    ESP_LOGI(TAG, "SET_CONFIG rejection paths (#1173, register writes only):");
+
+    const float base_f = radio.currentFrequencyMHz();
+    const uint8_t base_sf = radio.currentSpreadingFactor();
+    ESP_LOGI(TAG, "   starting at %.3f MHz SF%u", (double)base_f,
+             (unsigned)base_sf);
+
+    // A legal modulation must be accepted, or nothing below means anything —
+    // this is the control, and it is also what proves the radio was healthy
+    // going in rather than already wedged.
+    const bool legal = radio.reconfigure(base_f, 9, 250.0f, 5, 12);
+    r.check(legal, "a legal modulation is accepted (SF9 BW250)");
+
+    // SF12 is a legal LoRa spreading factor, so a host-side range check waves
+    // it through — and the LLCC68 does not implement it. That gap is exactly
+    // the case CFG_FAIL_MODULATION exists to name.
+    const bool sf12 = radio.reconfigure(base_f, 12, 250.0f, 5, 12);
+    r.check(!sf12, "SF12 is refused by the part (CFG_FAIL_MODULATION path)");
+
+    // The refusal must be a ROLLBACK, not a death: TR_LoRa_Comms restores the
+    // previous modulation and leaves the radio up, which is why config_ok had
+    // to become tri-state in #835 and why radio_enabled alone lies here.
+    r.check(radio.currentSpreadingFactor() == 9,
+            "a refused modulation rolls back (still SF9, radio still up)");
+
+    // Out of band is the other half of the same path, and worth checking
+    // separately: it fails in setFrequency rather than setSpreadingFactor.
+    const bool oob = radio.reconfigure(100.0f, 9, 250.0f, 5, 12);
+    r.check(!oob, "an out-of-band frequency is refused (100 MHz)");
+    r.check(radio.currentSpreadingFactor() == 9,
+            "the out-of-band refusal also rolls back");
+
+    // The frame-format half is a SEPARATE call and can fail on its own, which
+    // is the whole reason the two need different bits: this one leaves the
+    // requested modulation live and only the frame format stale.
+    const bool frame_ok = radio.applyFrameParams(8, true, false, false);
+    r.check(frame_ok, "frame params apply independently of the modulation");
+
+    // Put it back the way it was found. Everything above is register writes,
+    // so this is a full restore, not a best effort.
+    const bool restored = radio.reconfigure(base_f, base_sf, 250.0f, 5, 12);
+    r.check(restored && radio.currentSpreadingFactor() == base_sf,
+            "restored to the boot modulation");
+}
+
 int runSelfTest(TR_UART_Link& link, TR_LoRa_Comms& radio, uart_port_t port,
                 bool radio_up)
 {
@@ -392,6 +448,7 @@ int runSelfTest(TR_UART_Link& link, TR_LoRa_Comms& radio, uart_port_t port,
     if (radio_up)
     {
         testRadioRxPath(radio, r);
+        testConfigRejection(radio, r);
     }
     else
     {
