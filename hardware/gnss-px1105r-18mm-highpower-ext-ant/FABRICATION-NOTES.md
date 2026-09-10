@@ -15,18 +15,8 @@ brevity as "the rest is default".
 
 ## The rule
 
-`AR = aperture area / (aperture perimeter × foil thickness)`, floor **0.66**,
-computed from the **aperture** and not the pad — apertures carry KiCad's
-`solder_paste_margin` and `solder_paste_margin_ratio`, and some are drawn as
-polygons on the paste layer rather than as pads, so a pad-only scan misses them.
-
-Two boards are deliberate exceptions to the 100 µm default, both recorded in
-their own files: `rocket-computer-mini` at **80 µm** (its 24-ball WLCSP flash
-falls to AR 0.64 at 100 µm) and `gnss-sam10m8-18mm-hv` at **120 µm** (a u-blox
-requirement, UBX-22020019 R02 §4.4.1, not an area-ratio limit).
-
-The numbers above come from the analysis on #959, which parsed pad geometry and
-paste-layer membership straight from the `.kicad_pcb` for all eight boards. There
-is no automated check: a pad-only scan would miss the polygon apertures, and
-missing those is exactly what made two rows of that analysis 13 µm optimistic
-until they were re-scanned. Recompute by hand if a footprint changes.
+Stencil thickness, the area-ratio floor and the paste-coverage convention are
+repo-wide and live in one place: **[`hardware/SOLDER-PASTE-CONVENTION.md`](../SOLDER-PASTE-CONVENTION.md)**
+(#959, #906). The short version is that this board takes the 100 µm default,
+apertures must clear AR 0.66 at that thickness, and coverage stays at full pad
+unless a named mechanism justifies reducing it.
