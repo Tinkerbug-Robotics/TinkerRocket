@@ -319,6 +319,11 @@ static ISM6HG256DataSI ism6_latest_si = {};
 // block; retained across passes that drain nothing, exactly as ism6_latest_si
 // is.  The bar is the same 15.5 g the body-frame test used, in raw LSB.
 static bool ism6_low_g_near_rail = false;
+// #1326: the IMU drain window lives here because its two halves run at
+// DIFFERENT rates — the drain below fills it every loop_fc() pass (~3760/s on
+// a V9), and the flight-logic gate closes it at the estimator rate (~978/s).
+// Closing it per drain pass is what made #1214's mean average a single sample.
+static ImuDrainWindow fc_ism6_win;
 static constexpr int32_t kLowGNearRailLsb =
     imu_drain::nearRailLsb((float)config::ISM6_LOW_G_FS_G, 0.5f);
 // #1190: the EKF shock gate's verdicts for the NEXT EKF tick — a gyro or
@@ -5632,11 +5637,28 @@ static void loop_fc()
     // and the EKF keep running at loop rate exactly as before, and the logged
     // stream is untouched.
     {
-        ImuDrainWindow ism6_win;
+        // #1326: the window is PERSISTENT across loop_fc() passes and is closed
+        // on the CONSUMER's boundary, in the flight-logic gate below — not here.
+        //
+        // Closing it here is what made #1214's mean inert.  This drain runs
+        // every loop_fc() pass, ungated, at ~3760/s on a V9; ekf.update() and
+        // kinematicChecks() run inside the flight-logic gate at ~978/s.  So a
+        // per-pass window held about ONE sample (bench 2026-09-10 measured
+        // `win n=1.0` in READY and 1.2 across a whole sim flight, against the
+        // 7.x the fix was specified for), the "mean" was that single sample,
+        // and roughly 2.8 of every 3.8 means were overwritten before the EKF
+        // ever read one.  The estimator still took 1 sample in ~3.84 with no
+        // anti-alias step — the original #1191 defect at a smaller ratio.
+        //
+        // Spanning the consumer's period instead makes the boxcar exactly the
+        // samples that arrived since the EKF last ran, which is what the -15 dB
+        // figure in imu_drain_window.h describes.
+        bool ism6_drained_this_pass = false;
         while (sensor_collector.getISM6HG256Data(ism6hg256_data))
         {
             dbg_ism6_reads++;
-            ism6_win.add(ism6hg256_data);
+            fc_ism6_win.add(ism6hg256_data);
+            ism6_drained_this_pass = true;
 
             memcpy(ism6hg256_data_buffer,
                    &ism6hg256_data,
@@ -5647,33 +5669,18 @@ static void loop_fc()
                                SIZE_OF_ISM6HG256_DATA);
         }
 
-        ISM6HG256Data ism6_mean_raw = {};
-        if (ism6_win.mean(ism6_mean_raw))
+        if (ism6_drained_this_pass)
         {
-            dbg_ism6_passes++;
-            if (ism6_win.n > dbg_ism6_win_max) dbg_ism6_win_max = ism6_win.n;
-
-            sensor_converter.convertISM6HG256Data(ism6_mean_raw, ism6_latest_si);
-            have_ism6_si = true;
-            // The low-g near-rail verdict comes from the window's WORST raw
-            // sample per sensor axis, not from the mean the converter was
-            // just handed: an average of clipped samples is still biased.
-            ism6_low_g_near_rail = ism6_win.lowGNearRail(kLowGNearRailLsb);
-            // #1190: and the shock gate's two verdicts, from the same worst
-            // samples.  OR-ed, not assigned: they wait for the next EKF tick.
-            if (ism6_win.gyroAbove(kGyroRailLsb))   ism6_gyro_rail_pending  = true;
-            if (ism6_win.highGAbove(kAccelRailLsb)) ism6_accel_rail_pending = true;
-
-            // Feed the live low-g accel to the mag calibrator so each
-            // incoming mag sample can be bucketed by physical orientation
-            // (issue #96 follow-up).  Raw int16 LSB units share the same
-            // sign convention as the mag direction-wedge encoding.  The
-            // freshest sample (still in ism6hg256_data after the drain) is
-            // sufficient — the mag runs at 100 Hz.
+            // Deliberately still per-DRAIN, not per-window: the mag runs at
+            // 100 Hz and wants the freshest orientation it can get, and this
+            // never depended on the mean.  Keeping it here leaves its cadence
+            // exactly as it was (issue #96 follow-up).  Raw int16 LSB units
+            // share the sign convention of the mag direction-wedge encoding.
             mag_calibrator.setLiveAccel(ism6hg256_data.acc_low_raw.x,
                                         ism6hg256_data.acc_low_raw.y,
                                         ism6hg256_data.acc_low_raw.z);
         }
+
     }
 
     if (sensor_collector.getBMP585Data(bmp585_data))
@@ -5911,6 +5918,34 @@ static void loop_fc()
     {
         lt_loop_count++;
         last_flight_loop_update_time = logic_now_us;
+
+        // #1326: close the IMU drain window HERE — this is the consumer's
+        // boundary, so the boxcar spans exactly the samples that arrived since
+        // the estimators last ran.  See the drain above for why closing it
+        // per-pass made the mean a no-op.
+        {
+            ISM6HG256Data ism6_mean_raw = {};
+            if (fc_ism6_win.mean(ism6_mean_raw))
+            {
+                dbg_ism6_passes++;
+                if (fc_ism6_win.n > dbg_ism6_win_max) dbg_ism6_win_max = fc_ism6_win.n;
+
+                sensor_converter.convertISM6HG256Data(ism6_mean_raw, ism6_latest_si);
+                have_ism6_si = true;
+                // The low-g near-rail verdict comes from the window's WORST raw
+                // sample per sensor axis, not from the mean the converter was
+                // just handed: an average of clipped samples is still biased.
+                ism6_low_g_near_rail = fc_ism6_win.lowGNearRail(kLowGNearRailLsb);
+                // #1190: and the shock gate's two verdicts, from the same worst
+                // samples.  OR-ed, not assigned: they wait for the next EKF tick.
+                if (fc_ism6_win.gyroAbove(kGyroRailLsb))   ism6_gyro_rail_pending  = true;
+                if (fc_ism6_win.highGAbove(kAccelRailLsb)) ism6_accel_rail_pending = true;
+            }
+            // Start the next window whether or not anything was in it, so a
+            // period that drained nothing cannot leave stale samples to be
+            // averaged into the following one.
+            fc_ism6_win.reset();
+        }
 
         // ### Pressure altitude calculation (for kinematic checks) ###
         const uint32_t now_ms = time_ms();
