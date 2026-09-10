@@ -1367,3 +1367,15 @@ target_include_directories(test_ina230_cal PRIVATE
 )
 target_link_libraries(test_ina230_cal GTest::gtest_main)
 gtest_discover_tests(test_ina230_cal)
+
+# ---------- test_board_identity (#773 step 2) ----------
+# Board identity that survives a reflash: normalising a revision string,
+# comparing a provisioned value against what an image asserts, and the
+# FC->OC payload encoding that rides the existing FC_IDENTITY message.
+add_executable(test_board_identity test_board_identity.cpp)
+target_include_directories(test_board_identity PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_board_identity GTest::gtest_main)
+gtest_discover_tests(test_board_identity)

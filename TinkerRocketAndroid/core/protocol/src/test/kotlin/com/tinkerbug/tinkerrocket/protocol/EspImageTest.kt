@@ -130,4 +130,65 @@ class EspImageTest {
         assertEquals("v1", img.version)
         assertEquals("v6.0.1-dirty", img.idfVersion)
     }
+
+    // ── #773 step 2: the provisioned revision beats the image's own claim ──
+
+    @Test
+    fun `the provisioned board wins over the running version`() {
+        // The scenario the whole feature exists for: a V9 board that was
+        // wrongly flashed with a V8 image reports v8 forever, so comparing the
+        // picked image against the RUNNING version would happily agree with
+        // the mistake. The board's own answer catches it.
+        val v8image = image("flight_computer", "abc-v8+1", 0x0012)
+        val v = EspImage.check(
+            v8image, EspImage.PROJECT_FC,
+            runningVersion = "0000000-v8+20260901-0900",   // the wrong flash, agreeing with itself
+            provisionedBoard = "v9",
+        )
+        assertIs<EspImageVerdict.Warn>(v)
+        assertTrue(v.reason.contains("provisioned as v9"))
+    }
+
+    @Test
+    fun `a provisioned board that agrees is silent`() {
+        val v = EspImage.check(
+            image("flight_computer", "abc-v9+1", 0x0012),
+            EspImage.PROJECT_FC, runningVersion = "0000000-v8+1", provisionedBoard = "V9",
+        )
+        assertIs<EspImageVerdict.Ok>(v)
+    }
+
+    @Test
+    fun `without a provisioned board it falls back and says so`() {
+        val v = EspImage.check(
+            image("flight_computer", "abc-v8+1", 0x0012),
+            EspImage.PROJECT_FC, runningVersion = "0000000-v9+1", provisionedBoard = null,
+        )
+        assertIs<EspImageVerdict.Warn>(v)
+        assertTrue(v.reason.contains("not provisioned"))
+        assertTrue(v.reason.contains("image's own claim"))
+    }
+
+    @Test
+    fun `an empty provisioned string is treated as unprovisioned`() {
+        // The firmware sends "" rather than omitting the key when a board has
+        // never been provisioned; that must not compare as a board named "".
+        val v = EspImage.check(
+            image("flight_computer", "abc-v8+1", 0x0012),
+            EspImage.PROJECT_FC, runningVersion = "0000000-v9+1", provisionedBoard = "  ",
+        )
+        assertIs<EspImageVerdict.Warn>(v)
+        assertTrue(v.reason.contains("not provisioned"))
+    }
+
+    @Test
+    fun `an image with no board suffix is never board-warned`() {
+        // rocket_computer_mini carries no suffix; there is nothing to compare,
+        // and inventing a mismatch would be worse than saying nothing.
+        val v = EspImage.check(
+            image("rocket_computer_mini", "abc+20260909-2043", 0x0009),
+            EspImage.PROJECT_MINI, expectedChipId = 0x0009, provisionedBoard = "v9",
+        )
+        assertIs<EspImageVerdict.Ok>(v)
+    }
 }

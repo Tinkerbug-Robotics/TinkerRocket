@@ -271,12 +271,17 @@ private struct FirmwareUpdateContent: View {
 
     private func revalidateImage() {
         guard let data = pickedFileData else { imageVerdict = nil; return }
+        // #773 step 2: the provisioned revision is the board's own answer and
+        // beats the running version, which is the image's claim about itself.
         imageVerdict = EspImage.check(data,
                                       expectedProject: expectedProject,
                                       expectedChipId: expectedChipId,
                                       runningVersion: targetIsFC
                                           ? device.fcFirmwareVersion
-                                          : device.firmwareVersion)
+                                          : device.firmwareVersion,
+                                      provisionedBoard: targetIsFC
+                                          ? device.fcBoardRev
+                                          : device.ocBoardRev)
     }
 
     private var isTerminalState: Bool {

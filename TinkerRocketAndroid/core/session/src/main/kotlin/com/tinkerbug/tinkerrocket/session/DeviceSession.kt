@@ -589,9 +589,15 @@ public class DeviceSession(
             }
             is TelemetryCharMessage.ConfigIdentity -> onConfigIdentity(msg.msg)
             is TelemetryCharMessage.FcIdentity -> {
-                msg.msg.fcFirmwareVersion?.let {
-                    _identity.value = _identity.value.copy(fcFirmwareVersion = it)
-                }
+                // #773 step 2: the board revisions ride the same message. Each
+                // is folded in only when present, so an OC that predates them
+                // leaves the previous value alone rather than clearing it.
+                val cur = _identity.value
+                _identity.value = cur.copy(
+                    fcFirmwareVersion = msg.msg.fcFirmwareVersion ?: cur.fcFirmwareVersion,
+                    fcBoardRev = msg.msg.fcBoardRev ?: cur.fcBoardRev,
+                    ocBoardRev = msg.msg.ocBoardRev ?: cur.ocBoardRev,
+                )
             }
             is TelemetryCharMessage.ImuOrient -> onImuOrient(msg.msg)
             is TelemetryCharMessage.GuidTarget -> {
@@ -1520,6 +1526,15 @@ public data class DeviceIdentity(
     val firmwareVersion: String = "",
     /** FC's own fw stamp, OC-relayed (#8 Phase 4); FC OTA rollback compares THIS. */
     val fcFirmwareVersion: String = "",
+    /**
+     * #773 step 2: the revision each board was PROVISIONED with, from its own
+     * NVS, surviving an OTA. Null when the board never was — which is a real
+     * state, not a missing value, and must never read as agreement. Distinct
+     * from anything in [firmwareVersion], which is the image's claim about
+     * itself and stays wrong forever on a wrongly flashed board.
+     */
+    val fcBoardRev: String? = null,
+    val ocBoardRev: String? = null,
 )
 
 /** One rocket seen via this base-station link's LoRa relay (iOS RemoteRocket). */

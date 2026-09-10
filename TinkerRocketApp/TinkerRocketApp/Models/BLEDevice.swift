@@ -157,6 +157,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// compare THIS — the connected device's `firmwareVersion` is the OC's and
     /// never changes when only the FC is updated.
     @Published var fcFirmwareVersion: String = ""
+    /// #773 step 2: the revision each board was PROVISIONED with, nil when it
+    /// never was. Distinct from the image's own claim, which a wrong flash
+    /// gets wrong forever.
+    @Published var fcBoardRev: String?
+    @Published var ocBoardRev: String?
 
     /// Latest OTA status frame from the device (#8 phase 2). Driven by
     /// ota_status JSON notifications on the file-ops characteristic.
@@ -2320,7 +2325,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            dict["type"] as? String == "fc_identity" {
             if let fcFw = dict["fc_fw"] as? String { fcFirmwareVersion = fcFw }
-            print("[CFG] FC identity: fc_fw=\(fcFirmwareVersion)")
+            // #773 step 2: what each BOARD says it is, from its own NVS, as
+            // distinct from what its image was built for. An empty string is
+            // "unprovisioned" and must stay nil rather than becoming "".
+            fcBoardRev = (dict["fc_board"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ocBoardRev = (dict["oc_board"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            print("[CFG] FC identity: fc_fw=\(fcFirmwareVersion) "
+                  + "fc_board=\(fcBoardRev ?? "unprovisioned") "
+                  + "oc_board=\(ocBoardRev ?? "unprovisioned")")
             return
         }
 
