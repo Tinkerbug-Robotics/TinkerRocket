@@ -101,8 +101,8 @@ every earlier one is 8 MB.**
 | rocket-computer | V9 / V10 | U13 / U16 `GD25Q128ESIG` | 16 MB | BOM; and a V9 FC logged `Detected size(16384k)` against an 8 MB header |
 | base-station | V1, V2 | `W25Q64` | 8 MB | BOM history + confirmed by the board owner 2026-08-24 ("latest version only is 16 MB, others are 8") |
 | base-station | V3 (PCB V5/V6) | U1 `GD25Q128ESIG` | 16 MB | BOM |
-| lora-daughterboard | as-built V3 | U22 `W25Q64JVXGIQ` | 8 MB | the board the firmware was written against |
-| lora-daughterboard | current artwork | U22 `GD25Q128ESIG` | 16 MB | BOM — first article is unflashable, so untested |
+| lora-daughterboard | as-built V3 | U22 `W25Q64JVXGIQ` | 8 MB | the board the firmware was written against; **measured** on two articles — `E0:72:A1:CA:F6:7C` and `E0:72:A1:CA:F6:48`, both GigaDevice `c8:6517` |
+| lora-daughterboard | current artwork | U22 `GD25Q128ESIG` | 16 MB | **measured** 2026-08-27 — `E0:72:A1:CA:F6:40` flashed and booted `radio up, listening at 915.0 MHz SF8`. (The row used to say "first article is unflashable, so untested"; that article is one dead board, not the revision.) |
 | rocket-computer-mini | first article | U13 `GD25Q128ESIG` | 16 MB | BOM; board postdates the swap. **No hardware exists yet to measure** (2026-08-24) |
 | base-station-mini | first article | U1 `GD25Q128ESIG` | 16 MB | BOM; board postdates the swap. **Unmeasured** |
 
