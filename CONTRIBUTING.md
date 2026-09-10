@@ -107,6 +107,22 @@ Note the gap no guard closes: **two branches can each take the same free number*
 CI independently, and collide only at merge. If someone else is adding commands at the
 same time, agree on numbers first.
 
+### Writing Kotlin tests
+
+JUnit 5 does not run a `@Test` method whose return type is not void, and nothing tells
+you. Kotlin gets there in one keyword: an expression-bodied test takes the type of its
+last expression, and `assertIs<T>` and `assertNotNull` both return the value they
+narrowed, so
+
+```kotlin
+@Test fun `a bad image is refused`() = runSync { ...; assertIs<FirmwareFetch.Corrupt>(got) }
+```
+
+is a method returning `FirmwareFetch.Corrupt` and never runs — the suite stays green with
+one case fewer than the file declares. Write `(): Unit =` on every expression-bodied test.
+CI counts: `android-tests.yml` fails if a module's `@Test` count differs from what its
+JUnit XML reports (`python3 tools/check_android_tests_ran.py`, after `./gradlew test`).
+
 ### Editing documentation
 
 Some docs are generated and must not be hand-edited — anything under

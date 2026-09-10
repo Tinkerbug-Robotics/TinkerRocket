@@ -53,6 +53,12 @@ jobs:
         run: ./gradlew --no-daemon test
         working-directory: TinkerRocketAndroid
 
+      # The same gate android-tests.yml applies: JUnit 5 skips a non-void test
+      # method without a word, and a suite that is green with cases silently
+      # missing must not release either.
+      - name: Every declared @Test ran
+        run: python3 tools/check_android_tests_ran.py
+
       - name: Decode release keystore
         env:
           TR_ANDROID_KEYSTORE_B64: ${{ secrets.TR_ANDROID_KEYSTORE_B64 }}
