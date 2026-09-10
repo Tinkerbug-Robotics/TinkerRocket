@@ -1,0 +1,51 @@
+{
+  "manifest_version": 1,
+  "tag": "fw-v1.0.0",
+  "images": [
+    {
+      "file": "flight_computer-V9.bin",
+      "project": "flight_computer",
+      "version": "3d1f5ca2-dirty-v9+20260910-0010",
+      "chip_id": 18,
+      "chip": "ESP32-P4",
+      "min_chip_rev_full": 100,
+      "max_chip_rev_full": 199,
+      "idf_version": "v6.0.1-dirty",
+      "build_date": "Sep  9 2026",
+      "build_time": "20:11:03",
+      "size": 645568,
+      "sha256": "a10a5ed5f6dbf3f60aab3b3376a1fd5f54fceb00cd9f0fde08a73eeadde62519",
+      "board": "v9"
+    },
+    {
+      "file": "out_computer-V9.bin",
+      "project": "out_computer",
+      "version": "3d1f5ca2-dirty-v9+20260910-0012",
+      "chip_id": 9,
+      "chip": "ESP32-S3",
+      "min_chip_rev_full": 0,
+      "max_chip_rev_full": 99,
+      "idf_version": "v6.0.1-dirty",
+      "build_date": "Sep  9 2026",
+      "build_time": "20:13:04",
+      "size": 815632,
+      "sha256": "72061af62e8c654d8fdc4d13556b1a2b87ac2d50c1f2ed3fa801c84cd8073f6f",
+      "board": "v9"
+    },
+    {
+      "file": "rocket_computer_mini-default.bin",
+      "project": "rocket_computer_mini",
+      "version": "3d1f5ca2-dirty+20260910-0014",
+      "chip_id": 9,
+      "chip": "ESP32-S3",
+      "min_chip_rev_full": 0,
+      "max_chip_rev_full": 99,
+      "idf_version": "v6.0.1-dirty",
+      "build_date": "Sep  9 2026",
+      "build_time": "20:15:00",
+      "size": 874400,
+      "sha256": "9abec670f23cdb0e764a7a963f1ba4fdbfdefed100b06da03224e32121b254eb",
+      "board": null
+    }
+  ]
+}
