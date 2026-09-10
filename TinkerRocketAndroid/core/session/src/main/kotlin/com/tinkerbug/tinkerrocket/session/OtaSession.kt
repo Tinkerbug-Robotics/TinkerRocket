@@ -380,20 +380,38 @@ public class OtaSession(
      * change here.
      */
     private suspend fun awaitFinish(timeoutMs: Long): FinishOutcome {
+        // Progress is the STATE AND THE BYTE COUNT, not the state alone.
+        //
+        // Bench 2026-09-10, out-computer console against an 815,696 B image:
+        //
+        //   [ 5.87] OTA_BEGIN: size=815696
+        //   [ 9.10] OTA begin: partition 'ota_1'        <- 3.2 s erase
+        //   [43.71] OTA_FINISH (bytes_written=815696)   <- 34.6 s RECEIVING
+        //   [44.09] OTA: ready to boot                  <- 0.38 s finish work
+        //
+        // The app had stopped pumping ~26 s before the device saw FINISH: its
+        // writes sit in the phone's BLE stack and drain long after the pump
+        // loop returns. So the finish window is spent watching a transfer that
+        // is still arriving, not a device that is verifying — the verify is
+        // 380 ms. Keying only on the state made every one of those 2 Hz
+        // `writing` updates invisible, because writing -> writing is not a
+        // change, and the budget ran down against a device that was visibly
+        // working.
         var waited = 0L
-        var lastSeen = sessionLookup()?.otaStatus?.value?.state
-        var sawVerifying = lastSeen == OtaStatusUpdate.State.VERIFYING
+        var last = sessionLookup()?.otaStatus?.value?.let { it.state to it.bytes }
+        var sawVerifying = last?.first == OtaStatusUpdate.State.VERIFYING
         while (waited < timeoutMs) {
             if (!scope.isActive) return FinishOutcome.TIMED_OUT_SILENT
-            val seen = sessionLookup()?.otaStatus?.value?.state
-            when (seen) {
+            val st = sessionLookup()?.otaStatus?.value
+            when (st?.state) {
                 OtaStatusUpdate.State.READY_TO_BOOT -> return FinishOutcome.READY
                 OtaStatusUpdate.State.VERIFY_FAILED -> return FinishOutcome.VERIFY_FAILED
                 else -> {}
             }
-            if (seen != lastSeen) {
-                lastSeen = seen
-                if (seen == OtaStatusUpdate.State.VERIFYING) sawVerifying = true
+            val seen = st?.let { it.state to it.bytes }
+            if (seen != last) {
+                last = seen
+                if (st?.state == OtaStatusUpdate.State.VERIFYING) sawVerifying = true
                 waited = 0L      // it is alive; start the budget again
                 continue
             }

@@ -158,18 +158,34 @@ validates the staged image, then the boot partition is set. That work blocks —
 on the out computer it blocks the BLE command path itself — so the device is
 mute from then until it is done, and this is the last thing it can say.
 
-Without it the sequence is `writing` → silence → terminal, and an app waiting
-on the terminal state cannot tell a device that is busy from one that died: it
-has only a clock. That clock was outgrown twice — #627 on the relay path, and
-again on 2026-09-10 flashing `fw-v0.0.1-rc1`, where an 815 kB out-computer
-image and a 770 kB base-station image both outlasted the local window and the
-app reported failure on flashes that committed and booted.
+**How long that actually is, measured.** Out-computer console, 2026-09-10, an
+815,696 B image:
 
-Both apps therefore treat the finish window as a NO-PROGRESS budget rather than
-a total: any status the device sends restarts it. Firmware older than this
-sends nothing, so the budget never restarts and the wait behaves exactly as the
-old fixed one did. On the relay path the FC mirrors it as `OTA_RELAY_VERIFYING`
-and the out computer renders it into the same token.
+```
+[ 5.87] OTA_BEGIN: size=815696
+[ 9.10] OTA begin: partition 'ota_1'        <- 3.2 s erase
+[43.71] OTA_FINISH (bytes_written=815696)   <- 34.6 s RECEIVING
+[44.09] OTA: ready to boot                  <- 0.38 s of terminal work
+```
+
+So the blocking work is **380 ms**, not the seconds the window suggests. What
+fills the finish window is the tail of the TRANSFER: the app stopped pumping
+about 26 s before the device saw `OTA_FINISH`, because its writes sit in the
+phone's BLE stack and drain long after the pump loop returns.
+
+That is why both apps treat the finish window as a NO-PROGRESS budget rather
+than a total, and why progress means **the state and the byte count** — the
+device reports `writing` at 2 Hz with a climbing `bytes` throughout the drain,
+and keying on the state alone makes all of it invisible, since `writing` →
+`writing` is not a change. A device repeating the same byte count is not making
+progress and must still time out.
+
+`verifying` remains worth sending: it is the one moment the device can say "I
+have the whole image and am committing it", which is the difference between a
+lost `OTA_FINISH` and a slow one. Firmware older than this sends nothing, and
+the wait still works — the `writing` updates carry it. On the relay path the FC
+mirrors it as `OTA_RELAY_VERIFYING` and the out computer renders it into the
+same token.
 
 Each JSON message must stay under `MTU - 3` bytes — already enforced for the existing config JSONs by the guard at [TR_BLE_To_APP.cpp:800](../../tinkerrocket-idf/components/TR_BLE_To_APP/TR_BLE_To_APP.cpp:800). All `ota_status` messages above fit easily within 185-byte MTU.
 

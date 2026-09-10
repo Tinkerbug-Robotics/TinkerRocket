@@ -346,6 +346,63 @@ final class OTASessionFlowTests: XCTestCase {
         UInt64(OTATimeouts.seconds(.finish, targetIsFC: false) / 200.0 * 1_000_000_000)
     }
 
+    func testAMovingByteCountKeepsTheFinishWaitAlive() async throws {
+        // THE BENCH CASE, out-computer console 2026-09-10 against an
+        // 815,696 B image:
+        //
+        //   [ 5.87] OTA_BEGIN: size=815696
+        //   [ 9.10] OTA begin: partition 'ota_1'        <- 3.2 s erase
+        //   [43.71] OTA_FINISH (bytes_written=815696)   <- 34.6 s RECEIVING
+        //   [44.09] OTA: ready to boot                  <- 0.38 s finish work
+        //
+        // The app stopped pumping ~26 s before the device saw FINISH — its
+        // writes drain out of the phone's BLE stack long after the pump loop
+        // returns. So this window is spent watching a transfer still arriving,
+        // and the device says so twice a second in `writing` updates whose
+        // BYTE COUNT climbs while the state does not change. Keying on the
+        // state alone made all of that invisible.
+        let link = ScriptedLink()
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("verifying") { session.state == .verifying }
+
+        var written = 100_000
+        for _ in 0..<4 {
+            try await Task.sleep(nanoseconds: scaledLocalFinishNs * 7 / 10)
+            written += 50_000
+            link.otaStatus = OTAStatusUpdate(state: .writing, bytes: written, err: nil, fw: nil)
+        }
+        XCTAssertNil(failureReason(session.state),
+                     "bytes were still climbing, so this was never a stall")
+
+        link.otaStatus = OTAStatusUpdate(state: .readyToBoot, bytes: written, err: nil, fw: nil)
+        try await Task.sleep(nanoseconds: 40_000_000)
+        XCTAssertNil(failureReason(session.state))
+    }
+
+    func testAStuckByteCountStillTimesOut() async throws {
+        // The other half, and the reason this is progress rather than mere
+        // chatter: a device repeating the SAME byte count is not making any,
+        // and must still fail. Otherwise a wedged transfer waits forever.
+        let link = ScriptedLink()
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(600))
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("verifying") { session.state == .verifying }
+
+        for _ in 0..<3 {
+            link.otaStatus = OTAStatusUpdate(state: .writing, bytes: 250_000, err: nil, fw: nil)
+            try await Task.sleep(nanoseconds: scaledLocalFinishNs / 3)
+        }
+        try await waitUntil("finish timeout") { self.failureReason(session.state) != nil }
+        XCTAssertNotNil(failureReason(session.state))
+    }
+
     func testVerifyingRestartsTheFinishBudget() async throws {
         // #773: the finish window is a NO-PROGRESS budget, not a total. A
         // device that keeps saying it is working must never be cut off — the

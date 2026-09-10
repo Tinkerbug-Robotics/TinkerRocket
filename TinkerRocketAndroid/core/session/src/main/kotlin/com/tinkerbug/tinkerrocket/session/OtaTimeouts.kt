@@ -87,21 +87,20 @@ public object OtaTimeouts {
         // FC drains the I2S ring, writes the tail, SHA-256s the image and sets
         // the boot partition — every status hop crossing the relay.
         //
-        // The LOCAL window is not about the relay at all: by the time FINISH is
-        // sent the bytes are already there, and all that is left is the SHA-256
-        // over the whole image plus setting the boot partition. 15 s was not
-        // enough for that. Bench 2026-09-10, flashing fw-v0.0.1-rc1: an 815 kB
-        // out-computer image and a 770 kB base-station image were BOTH still
-        // verifying when the window expired, so the app reported
-        // "Device did not finalize OTA within 15s" on two flashes that then
-        // committed and booted correctly. Same failure #627 fixed on the FC
-        // path in 2026-07; the local path kept the old number and the images
-        // grew into it.
+        // The LOCAL window is NOT device-side verification: the bench measured that at
+        // 380 ms. It is the tail of the transfer still draining out of the phone's
+        // BLE stack after the pump loop has returned — the app stopped writing ~26 s
+        // before the device logged OTA_FINISH on an 815,696 B image (console,
+        // 2026-09-10). The device reports `writing` at 2 Hz throughout, so the
+        // no-progress budget in OtaSession.awaitFinish is what actually carries this,
+        // and the number below only has to cover the largest gap between updates.
         //
-        // There is no wire state between WRITING and READY_TO_BOOT, so the app
-        // cannot tell "still hashing" from "died" — a clock is all it has, and
-        // it must be generous. 45 s stays under the FC's 60 s, which the
-        // crossesRelay contract requires.
+        // 15 s was not enough: on 2026-09-10 an 815 kB out-computer image and a
+        // 770 kB base-station image both outlasted it and the app reported
+        // "Device did not finalize OTA within 15s" on flashes that committed and
+        // booted. Same failure #627 fixed on the FC path in 2026-07; the local
+        // path kept the old number and the images grew into it. 45 s stays under
+        // the FC's 60 s, which the crossesRelay contract requires.
         OtaStage.FINISH -> if (targetIsFc) 60_000 else 45_000
         // FC reboots, then the OC re-queries its identity before the new
         // version can reach the app.

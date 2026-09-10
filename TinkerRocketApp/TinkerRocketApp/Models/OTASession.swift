@@ -421,17 +421,35 @@ final class OTASession: ObservableObject {
     /// repeatedly during the verify, each report extends the wait with no
     /// change here.
     private func awaitFinish(timeout: TimeInterval) async -> FinishOutcome {
-        var lastSeen = device?.otaStatus?.state
-        var sawVerifying = lastSeen == .verifying
+        // Progress is the STATE AND THE BYTE COUNT, not the state alone.
+        //
+        // Bench 2026-09-10, out-computer console against an 815,696 B image:
+        //
+        //   [ 5.87] OTA_BEGIN: size=815696
+        //   [ 9.10] OTA begin: partition 'ota_1'        <- 3.2 s erase
+        //   [43.71] OTA_FINISH (bytes_written=815696)   <- 34.6 s RECEIVING
+        //   [44.09] OTA: ready to boot                  <- 0.38 s finish work
+        //
+        // The app had stopped pumping ~26 s before the device saw FINISH: its
+        // writes sit in the phone's BLE stack and drain long after the pump
+        // loop returns. So the finish window is spent watching a transfer that
+        // is still arriving, not a device that is verifying — the verify is
+        // 380 ms. Keying only on the state made every one of those 2 Hz
+        // `writing` updates invisible, because writing -> writing is not a
+        // change, and the budget ran down against a device that was visibly
+        // working.
+        var last = device?.otaStatus.map { ($0.state, $0.bytes) }
+        var sawVerifying = last?.0 == .verifying
         var deadline = Date().addingTimeInterval(timeout * timeScale)
         while Date() < deadline {
             if Task.isCancelled { return .cancelled }
-            let seen = device?.otaStatus?.state
-            if seen == .readyToBoot { return .ready }
-            if seen == .verifyFailed { return .verifyFailed }
-            if seen != lastSeen {
-                lastSeen = seen
-                if seen == .verifying { sawVerifying = true }
+            let st = device?.otaStatus
+            if st?.state == .readyToBoot { return .ready }
+            if st?.state == .verifyFailed { return .verifyFailed }
+            let seen = st.map { ($0.state, $0.bytes) }
+            if seen?.0 != last?.0 || seen?.1 != last?.1 {
+                last = seen
+                if st?.state == .verifying { sawVerifying = true }
                 deadline = Date().addingTimeInterval(timeout * timeScale)   // alive; start again
                 continue
             }
