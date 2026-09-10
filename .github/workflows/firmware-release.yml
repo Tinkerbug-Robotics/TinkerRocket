@@ -180,6 +180,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A tag with anything after the version — fw-v0.0.1-rc1, fw-v1.0.0-beta
+          # — publishes as a prerelease. `gh release create` does NOT infer this
+          # from the tag, so without the flag an -rc1 goes out as the newest
+          # full release and every app in the field offers it as an update.
+          # Both apps' FirmwareReleaseLocator skips prereleases unless asked, so
+          # this is what makes a live release testable without shipping it.
+          VERSION="${GITHUB_REF_NAME#fw-v}"
+          PRERELEASE=""
+          case "$VERSION" in
+            *-*) PRERELEASE="--prerelease"
+                 echo "tag $GITHUB_REF_NAME has a suffix — publishing as a PRERELEASE" ;;
+            *)   echo "tag $GITHUB_REF_NAME is a full release" ;;
+          esac
           gh release create "$GITHUB_REF_NAME" artifacts/*.bin artifacts/manifest.json \
             --title "TinkerRocket firmware ${GITHUB_REF_NAME#fw-}" \
-            --generate-notes
+            --generate-notes $PRERELEASE
