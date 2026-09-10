@@ -35,8 +35,36 @@ public data class FirmwareRelease(
 
     public fun urlFor(image: FirmwareImage): String? = assets[image.file]
 
+    /**
+     * This release in the shape [FirmwareReleaseLocator.firmwareReleases]
+     * parses — a one-element `/releases` response.
+     *
+     * A cache writes this and reads it back through the same parser the
+     * network path uses, so there is one codec for release JSON rather than
+     * two that can disagree. Round-tripped by test.
+     */
+    public fun toListingJson(): String {
+        val assetsJson = assets.entries.joinToString(",") { (name, url) ->
+            """{"name":${quote(name)},"browser_download_url":${quote(url)}}"""
+        }
+        return """[{"tag_name":${quote(tag)},"prerelease":$isPrerelease,"assets":[$assetsJson]}]"""
+    }
+
     public companion object {
         public const val MANIFEST_ASSET: String = "manifest.json"
+
+        private fun quote(s: String): String = buildString {
+            append('"')
+            for (c in s) when (c) {
+                '"' -> append("\\\"")
+                '\\' -> append("\\\\")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
+            }
+            append('"')
+        }
     }
 }
 
@@ -136,20 +164,30 @@ public sealed class FirmwareFetch {
  * [sha256] hashes bytes — supplied by the platform, since neither Kotlin/JVM
  * nor Swift has one in the common surface this module targets.
  */
+public data class FetchedCatalog(
+    val release: FirmwareRelease,
+    val manifest: FirmwareManifest,
+    /**
+     * Exactly the bytes [manifest] was parsed from, so a cache stores what it
+     * actually verified rather than a re-serialization that could differ.
+     */
+    val manifestJson: String,
+)
+
 public class FirmwareRepository(
     private val fetch: suspend (String) -> ByteArray?,
     private val sha256: (ByteArray) -> String,
 ) {
-    public suspend fun latestManifest(includePrereleases: Boolean = false):
-        Pair<FirmwareRelease, FirmwareManifest>? {
+    public suspend fun latestManifest(includePrereleases: Boolean = false): FetchedCatalog? {
         val listing = fetch(FirmwareReleaseLocator.RELEASES_URL) ?: return null
         val release = FirmwareReleaseLocator.newest(
             listing.decodeToString(), includePrereleases,
         ) ?: return null
         val url = release.manifestUrl ?: return null
         val body = fetch(url) ?: return null
-        val manifest = FirmwareManifest.parse(body.decodeToString()) ?: return null
-        return release to manifest
+        val text = body.decodeToString()
+        val manifest = FirmwareManifest.parse(text) ?: return null
+        return FetchedCatalog(release, manifest, text)
     }
 
     /**

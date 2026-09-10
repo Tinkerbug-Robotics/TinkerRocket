@@ -34,6 +34,37 @@ nonisolated struct FirmwareRelease: Equatable {
     var manifestURL: String? { assets[FirmwareRelease.manifestAsset] }
 
     func url(for image: FirmwareImage) -> String? { assets[image.file] }
+
+    /// This release in the shape `FirmwareReleaseLocator.firmwareReleases`
+    /// parses — a one-element `/releases` response.
+    ///
+    /// A cache writes this and reads it back through the same parser the
+    /// network path uses, so there is one codec for release JSON rather than
+    /// two that can disagree. Round-tripped by test.
+    func toListingJSON() -> String {
+        let assetsJSON = assets.map { name, url in
+            "{\"name\":\(Self.quote(name)),\"browser_download_url\":\(Self.quote(url))}"
+        }.joined(separator: ",")
+        return "[{\"tag_name\":\(Self.quote(tag)),\"prerelease\":\(isPrerelease),"
+            + "\"assets\":[\(assetsJSON)]}]"
+    }
+
+    private static func quote(_ s: String) -> String {
+        var out = "\""
+        for c in s.unicodeScalars {
+            switch c {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            default:
+                if c.value < 0x20 { out += String(format: "\\u%04x", c.value) }
+                else { out.unicodeScalars.append(c) }
+            }
+        }
+        return out + "\""
+    }
 }
 
 nonisolated enum FirmwareReleaseLocator {
@@ -108,6 +139,14 @@ nonisolated enum FirmwareReleaseLocator {
     }
 }
 
+nonisolated struct FetchedCatalog {
+    let release: FirmwareRelease
+    let manifest: FirmwareManifest
+    /// Exactly the bytes `manifest` was parsed from, so a cache stores what it
+    /// actually verified rather than a re-serialization that could differ.
+    let manifestJSON: String
+}
+
 /// What a download attempt produced.
 nonisolated enum FirmwareFetch: Equatable {
     case ok(Data)
@@ -151,8 +190,7 @@ nonisolated struct FirmwareRepository {
         return data
     }
 
-    func latestManifest(includePrereleases: Bool = false)
-        async -> (FirmwareRelease, FirmwareManifest)? {
+    func latestManifest(includePrereleases: Bool = false) async -> FetchedCatalog? {
         guard let listing = await fetch(FirmwareReleaseLocator.releasesURL),
               let release = FirmwareReleaseLocator.newest(
                   listing, includePrereleases: includePrereleases),
@@ -160,7 +198,8 @@ nonisolated struct FirmwareRepository {
               let body = await fetch(url),
               let manifest = FirmwareManifest.parse(body)
         else { return nil }
-        return (release, manifest)
+        return FetchedCatalog(release: release, manifest: manifest,
+                              manifestJSON: String(decoding: body, as: UTF8.self))
     }
 
     /// Download one image and prove it is the one the manifest described.

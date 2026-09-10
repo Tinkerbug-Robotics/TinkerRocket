@@ -22,11 +22,22 @@ import kotlin.test.assertTrue
 class FirmwareCatalogSessionTest {
 
     private val sha = "a".repeat(64)
+    private val imageBytes = ByteArray(64) { (it % 251).toByte() }
 
-    private fun imageJson(project: String, board: String?, size: Int, version: String) =
+    private fun realSha(b: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(b)
+            .joinToString("") { "%02x".format(it) }
+
+    private fun imageJson(
+        project: String,
+        board: String?,
+        size: Int,
+        version: String,
+        imageSha: String = sha,
+    ) =
         """{"file":"$project${board?.let { "-$it" } ?: ""}.bin","project":"$project",
            "version":"$version","chip_id":9,"chip":"ESP32-S3","size":$size,
-           "sha256":"$sha"${board?.let { ",\"board\":\"$it\"" } ?: ""}}"""
+           "sha256":"$imageSha"${board?.let { ",\"board\":\"$it\"" } ?: ""}}"""
 
     private fun manifest(vararg images: String) =
         """{"manifest_version":1,"tag":"fw-v1.0.0","images":[${images.joinToString(",")}]}"""
@@ -40,10 +51,11 @@ class FirmwareCatalogSessionTest {
     private fun rig(
         responses: Map<String, ByteArray?>,
         sha256: (ByteArray) -> String = { sha },
+        cache: FirmwareCache? = null,
     ): Pair<FirmwareCatalogSession, TestScope> {
         val scope = TestScope()
         return FirmwareCatalogSession(
-            FirmwareRepository(fetch = { responses[it] }, sha256 = sha256), scope,
+            FirmwareRepository(fetch = { responses[it] }, sha256 = sha256), scope, cache,
         ) to scope
     }
 
@@ -134,6 +146,102 @@ class FirmwareCatalogSessionTest {
         val st = s.state.value
         assertIs<FirmwareCatalogSession.State.Ready>(st)
         assertEquals("v8", st.best?.board, "the board's answer, not the image's claim")
+    }
+
+    @Test
+    fun `a phone that fetched at home still lists at a field with no signal`() = runTest {
+        // #773's acceptance line: "can pre-download at home for a field with
+        // no signal". Images alone would not do it — with no network the app
+        // cannot LIST anything, so it could not offer what it already holds.
+        val dir = java.nio.file.Files.createTempDirectory("fwsess").toFile()
+        val store = FirmwareCache(dir) { realSha(it) }
+        val body = manifest(imageJson("out_computer", "v9", 64, "abc-v9+1"))
+
+        // At home, with a signal.
+        val (online, s1) = rig(ok(body), sha256 = { realSha(it) }, cache = store)
+        online.check(EspImage.PROJECT_OC, provisionedBoard = "v9"); s1.runCurrent()
+        assertIs<FirmwareCatalogSession.State.Ready>(online.state.value)
+
+        // At the field, with none at all.
+        val (offline, s2) = rig(emptyMap(), sha256 = { realSha(it) }, cache = store)
+        offline.check(EspImage.PROJECT_OC, provisionedBoard = "v9"); s2.runCurrent()
+
+        val st = offline.state.value
+        assertIs<FirmwareCatalogSession.State.Ready>(st)
+        assertEquals("fw-v1.0.0", st.release.tag)
+        assertEquals("v9", st.best?.board)
+        assertTrue(st.offline, "and it says so, because the catalog may be stale")
+    }
+
+    @Test
+    fun `no signal and nothing cached says both halves`() = runTest {
+        // Distinct from the above: telling someone to check their connection
+        // when they never downloaded anything sends them to fix the wrong
+        // thing, and vice versa.
+        val (s, scope) = rig(emptyMap())
+        s.check(EspImage.PROJECT_OC, provisionedBoard = "v9")
+        scope.runCurrent()
+
+        val st = s.state.value
+        assertIs<FirmwareCatalogSession.State.Failed>(st)
+        assertTrue("nothing has been downloaded" in st.reason, st.reason)
+        assertTrue("before leaving" in st.reason, st.reason)
+    }
+
+    @Test
+    fun `a cached image is used without touching the network`() = runTest {
+        val dir = java.nio.file.Files.createTempDirectory("fwsess").toFile()
+        val store = FirmwareCache(dir) { realSha(it) }
+        val body = manifest(
+            imageJson("out_computer", "v9", 64, "abc-v9+1", imageSha = realSha(imageBytes)),
+        )
+
+        val (online, s1) = rig(
+            ok(body, mapOf("https://x.test/fw-v1.0.0/oc.bin" to imageBytes)),
+            sha256 = { realSha(it) }, cache = store,
+        )
+        online.check(EspImage.PROJECT_OC, provisionedBoard = "v9"); s1.runCurrent()
+        val ready = online.state.value as FirmwareCatalogSession.State.Ready
+        online.download(ready.best!!); s1.runCurrent()
+        assertIs<FirmwareCatalogSession.State.Downloaded>(online.state.value)
+
+        // Now with the asset unreachable — the cache must carry it.
+        val (offline, s2) = rig(ok(body), sha256 = { realSha(it) }, cache = store)
+        offline.check(EspImage.PROJECT_OC, provisionedBoard = "v9"); s2.runCurrent()
+        val r2 = offline.state.value as FirmwareCatalogSession.State.Ready
+        assertTrue(r2.held.contains(realSha(imageBytes)), "the list shows it is held")
+        offline.download(r2.best!!); s2.runCurrent()
+
+        val st = offline.state.value
+        assertIs<FirmwareCatalogSession.State.Downloaded>(st)
+        assertTrue(st.bytes.contentEquals(imageBytes))
+    }
+
+    @Test
+    fun `prefetch stores what it can and reports what it could not`() = runTest {
+        // Three of four onto the phone before leaving beats an all-or-nothing
+        // refusal, so one bad image does not sink the run.
+        val dir = java.nio.file.Files.createTempDirectory("fwsess").toFile()
+        val store = FirmwareCache(dir) { realSha(it) }
+        val body = manifest(
+            imageJson("out_computer", "v9", 64, "abc-v9+1", imageSha = realSha(imageBytes)),
+            imageJson("out_computer", "v8", 64, "abc-v8+1"),
+        )
+        val (s, scope) = rig(
+            ok(body, mapOf(
+                "https://x.test/fw-v1.0.0/oc.bin" to imageBytes,   // v9 asset present
+            )),
+            sha256 = { realSha(it) }, cache = store,
+        )
+        s.check(EspImage.PROJECT_OC, provisionedBoard = "v9"); scope.runCurrent()
+        val ready = s.state.value as FirmwareCatalogSession.State.Ready
+        s.prefetch(ready.images); scope.runCurrent()
+
+        val st = s.state.value
+        assertIs<FirmwareCatalogSession.State.Prefetched>(st)
+        assertEquals(1, st.stored, "the one whose asset was reachable")
+        assertEquals(1, st.failed.size, "and the one that was not is named")
+        assertTrue(st.bytesHeld > 0)
     }
 
     @Test

@@ -363,9 +363,18 @@ private struct FirmwareUpdateContent: View {
         case .checking:
             HStack(spacing: 8) { ProgressView(); Text("Looking for a release…").font(.subheadline) }
 
-        case .ready(let release, let images, let best, let alreadyRunning, let boardKnown):
+        case .ready(let release, let images, let best, let alreadyRunning, let boardKnown,
+                    let offline, let held):
             VStack(alignment: .leading, spacing: 6) {
                 Text("Release \(release.tag)").font(.subheadline)
+                if offline {
+                    // The images are real and still verified on the way out; it
+                    // is the CATALOG that may be older than what has since been
+                    // published, and the operator should know which they are
+                    // looking at rather than assume it is current.
+                    Text("Offline — showing what this phone downloaded earlier. A newer release may exist.")
+                        .font(.caption).foregroundColor(.secondary)
+                }
                 if alreadyRunning {
                     // Not hidden and not blocked: re-flashing the running
                     // version is a legitimate repair. It just should not look
@@ -386,7 +395,11 @@ private struct FirmwareUpdateContent: View {
                     Button { catalog.download(img) } label: {
                         HStack {
                             if img == best { Image(systemName: "checkmark") }
-                            Text("\(img.summary) · \(byteCountString(Int(img.sizeBytes)))")
+                            Text("\(img.summary) · \(byteCountString(Int(img.sizeBytes)))"
+                                 // What is already on the phone, so the operator
+                                 // can see at a glance what a dead signal still
+                                 // leaves them.
+                                 + (held.contains(img.sha256) ? " · on this phone" : ""))
                                 .font(.caption)
                             Spacer()
                         }
@@ -394,13 +407,38 @@ private struct FirmwareUpdateContent: View {
                     .buttonStyle(.bordered)
                     .disabled(isInProgress)
                 }
-                Button("Cancel") { catalog.reset() }.font(.caption)
+                HStack {
+                    // The "do this at home" action, which is what makes a field
+                    // with no signal survivable at all.
+                    Button("Download all for offline use") { catalog.prefetch(images) }
+                        .font(.caption)
+                    Button("Cancel") { catalog.reset() }.font(.caption)
+                }
             }
 
         case .downloading(let image):
             HStack(spacing: 8) {
                 ProgressView()
                 Text("Downloading \(image.file)…").font(.subheadline)
+            }
+
+        case .prefetching(let image, let index, let total):
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Downloading \(index) of \(total): \(image.file)…").font(.subheadline)
+            }
+
+        case .prefetched(_, let stored, let failed, let bytesHeld):
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(stored) image(s) ready offline · \(byteCountString(Int(bytesHeld))) on this phone")
+                    .font(.caption)
+                if !failed.isEmpty {
+                    // Named rather than counted: knowing WHICH one is missing is
+                    // what lets someone retry the one that matters before leaving.
+                    Text("Could not download: \(failed.joined(separator: ", "))")
+                        .font(.caption).foregroundColor(.red)
+                }
+                Button("Back to the list", action: startCheck).font(.caption)
             }
 
         // Terminal only for an instant: adoptDownload picks the bytes up and
