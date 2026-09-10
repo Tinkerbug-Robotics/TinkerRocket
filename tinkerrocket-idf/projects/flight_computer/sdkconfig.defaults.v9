@@ -22,4 +22,3 @@
 # ever does cross 8 MB, it has to move into a V9-only table the same way, or
 # V7/V8 stop building (gen_esp32part.py refuses a table larger than the
 # declared flash, which is the safe way for that mistake to surface).
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y

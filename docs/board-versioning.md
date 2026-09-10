@@ -106,18 +106,39 @@ every earlier one is 8 MB.**
 | rocket-computer-mini | first article | U13 `GD25Q128ESIG` | 16 MB | BOM; board postdates the swap. **No hardware exists yet to measure** (2026-08-24) |
 | base-station-mini | first article | U1 `GD25Q128ESIG` | 16 MB | BOM; board postdates the swap. **Unmeasured** |
 
-**How firmware handles it.** Each project declares the *smallest* part it might
-meet in `sdkconfig.defaults`, and the revisions known to carry the big part
-raise it in a per-board overlay picked by the project `CMakeLists.txt` from the
-board flag — the same mechanism `out_computer` uses for V9 PSRAM:
+**How firmware handles it — changed 2026-09-09 (#916).** Each project now
+declares the smallest standard flash size that fits **its own partition table**,
+not the size of the part fitted to the board. Sizing to the table means an image
+is safe on any board carrying at least that much flash, which is the direction
+that matters: over-declaring boot-loops a board before `app_main`, where nothing
+at runtime can catch it, while under-declaring is harmless and merely leaves the
+top of the part unaddressable.
+
+That removed the per-revision fork entirely for `flight_computer` and
+`out_computer`. Both share ONE `partitions.csv` across V7/V8/V9/M1 — ending at
+6.06 MB and 6.14 MB — so the 16 MB overlays were buying nothing at all, while
+being exactly the thing that has gone wrong twice: the V7 boot loop below, and
+rocket-computer-mini's two processors declaring different sizes for one board.
+
+`base_station` keeps its overlay, because `partitions_v3.csv` genuinely needs
+16 MB. The rule is "size to the table", not "always 8 MB".
+
+`tinkerrocket-idf/tools/check_flash_declarations.py` enforces this in the Docs
+job on every PR: it fails on a declaration that does not cover its table, on one
+with headroom above it, and on two processors of one board disagreeing. If a
+table grows past its size, the check fails and the fix is to raise that
+project's declaration — that is the workflow, not a bypass.
+
+The overlay mechanism itself still exists for other settings — it is the same
+one `out_computer` uses for V9 PSRAM:
 
 | project | base | overlay |
 |---|---|---|
 | `flight_computer` | 8 MB | `sdkconfig.defaults.v9` → 16 MB (`-DTR_BOARD_V9=1`) |
 | `out_computer` | 8 MB | `sdkconfig.defaults.v9` → 16 MB (`-DTR_BOARD_V9=1`) |
 | `base_station` | 8 MB + `partitions.csv` | `sdkconfig.defaults.v3` → 16 MB + `partitions_v3.csv` (`-DTR_BS_BOARD=3`) |
-| `radio_board` | 8 MB | none — no board flag exists, so 8 MB has to cover both revisions |
-| `rocket_computer_mini` | 16 MB | none — only one revision, and it postdates the swap |
+| `radio_board` | 4 MB | none — table ends at 3.13 MB, and 4 MB is safe on both the 8 MB as-built and the 16 MB artwork |
+| `rocket_computer_mini` | 8 MB | none — table ends at 6.13 MB; the fitted part is 16 MB but nothing addresses the top half |
 
 The base value is deliberately the safe one, so a forgotten or unsupported flag
 costs a big board the top of its part rather than costing a small board its

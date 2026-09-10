@@ -60,21 +60,3 @@ CONFIG_ESP_WIFI_ENABLED=n
 # it is a different detector on a different die, and this processor's rail is
 # behind U30 rather than shared with the servo rail.
 CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=y
-
-# === Boot NOR: 16 MB, the same part the out computer declares ===
-# #916. Without this line the M1 flight computer inherits sdkconfig.defaults'
-# 8 MB while the out computer on the SAME BOARD takes the .v9 overlay's 16 MB
-# — two MCUs, one board, disagreeing about the part fitted to it. The board's
-# own BOM settles it: line 59 fits TWO W25Q128JVYIQ (U13 and U33, quantity 2),
-# and a W25Q128 is 128 Mbit = 16 MB. So 16 MB is the truth for both.
-#
-# Nothing was breaking: under-declaring is the benign direction (the image
-# boots, the partition table ends at 0x610000 and fits either way), it just
-# made half the fitted part unaddressable and left the pair inconsistent.
-# Over-declaring is the direction that boot-loops a board, which is what the
-# fork-per-revision in ec2a0728 exists to prevent — see docs/board-versioning.md.
-#
-# tools/check_flash_declarations.py now asserts both halves of this: that every
-# declaration covers its own partition table, and that the two processors of a
-# dual-MCU board declare the same size.
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y

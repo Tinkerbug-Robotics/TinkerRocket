@@ -40,7 +40,7 @@ CONFIG_IDF_TARGET="esp32s3"
 # TR_BOARD_*-style flag and sdkconfig.defaults.<rev> overlay that
 # flight_computer and out_computer use, rather than flipping this line — a
 # single declaration cannot serve both parts once it exceeds 8 MB.
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
 # PSRAM stays OFF — hardware constraint, not a preference, and it holds for

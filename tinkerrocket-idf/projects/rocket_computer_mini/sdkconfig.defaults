@@ -104,7 +104,7 @@ CONFIG_ESP_PHY_MAC_BB_PD=y
 #   python tools/check_flash_size.py --port PORT --build-dir projects/rocket_computer_mini/build
 # Partition table ends at 0x620000, so if the part does turn out to be 8 MB the
 # fix is one line here and nothing else moves.
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
 # === FreeRTOS ===

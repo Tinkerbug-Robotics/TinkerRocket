@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
-"""#916: check every board's declared boot-NOR size, statically.
+"""#916: enforce the boot-NOR declaration policy, statically.
 
-Two failure modes, opposite directions and very different consequences:
+POLICY (owner decision, 2026-09-09): every build declares the SMALLEST standard
+flash size that fits its own partition table — not the size of the part fitted
+to the board.
 
-  UNDER-declared (smaller than the partition table needs) — IDF's own
-  gen_esp32part.py catches this at build time, but only for configurations CI
-  actually builds, and only once the table is generated.
+Why that way round. Over-declaring is the only direction that bricks: the
+bootloader reads a size the chip does not have and the board loops before
+app_main, where no runtime assertion can reach it. Under-declaring is harmless;
+it just leaves the top of the part unaddressable. Sizing to the TABLE rather
+than to the PART means an image is safe on any board carrying at least that
+much flash, which removed the per-revision fork entirely for flight_computer
+and out_computer — they share one partition table across V7/V8/V9/M1, so the
+16 MB overlays were buying nothing at all.
 
-  OVER-declared (larger than the part fitted) — the bootloader reads a flash
-  size the chip does not have and the board boot-loops before app_main, so no
-  runtime assertion can catch it. This is what ec2a0728 fixed by forking the
-  declaration per board revision. A static check cannot know what part is
-  fitted either, but it CAN catch the tell that preceded the last occurrence:
-  two processors on one board disagreeing about the same board's flash.
+That fork is what went wrong twice: the original V7 boot loop (ec2a0728), and
+rocket-computer-mini's two processors declaring different sizes for one board.
 
-So this asserts:
-  1. every project x board overlay declares at least what its own partition
-     table ends at, and
-  2. the processor pairs that share a physical board declare the same size.
+So this asserts, for every project x board overlay:
+  1. the declaration covers its own partition table, and
+  2. it is the SMALLEST standard size that does — no headroom, because headroom
+     is the failure direction, and
+  3. processors sharing a physical board agree.
+
+If a partition table ever grows past its current size, this fails and the fix
+is to raise that project's declaration to the next standard size. That is the
+intended workflow, not a bypass.
 
 Run from anywhere; paths are resolved relative to this file.
 """
@@ -52,6 +60,16 @@ BUILDS = [
 # rocket-computer-mini's BOM line 59 fits TWO W25Q128JVYIQ (U13 and U33), so
 # both are 16 MB and the two declarations must agree.
 BOARD_PAIRS = [("rocket-computer-mini", "flight_computer M1", "out_computer M1")]
+
+# The sizes esptool/IDF can declare. The policy picks the smallest that fits.
+STANDARD_MB = (1, 2, 4, 8, 16, 32, 64)
+
+
+def smallest_fitting_mb(end_bytes: int) -> int | None:
+    for mb in STANDARD_MB:
+        if mb * 1024 * 1024 >= end_bytes:
+            return mb
+    return None
 
 
 def resolve(project: str, files: list[str]) -> tuple[int | None, str | None]:
@@ -103,11 +121,23 @@ def main() -> int:
             print(f"{label:26s} {size_mb:8d}M {'(built-in)':>11s}")
             continue
         end = table_end(project, table)
-        print(f"{label:26s} {size_mb:8d}M {end:#11x}  {table}")
-        if end > size_mb * 1024 * 1024:
+        want = smallest_fitting_mb(end)
+        flag = "" if want == size_mb else f"   <-- policy says {want}M"
+        print(f"{label:26s} {size_mb:8d}M {end:#11x}  {table}{flag}")
+        if want is None:
+            failures.append(f"{label}: table ends at {end:#x}, beyond any standard flash size")
+        elif size_mb < want:
             failures.append(
                 f"{label}: partition table ends at {end:#x} but only "
-                f"{size_mb} MB is declared — the image will not fit"
+                f"{size_mb} MB is declared — the image will not fit. "
+                f"Raise it to {want} MB."
+            )
+        elif size_mb > want:
+            failures.append(
+                f"{label}: declares {size_mb} MB for a table ending at {end:#x}, "
+                f"which needs only {want} MB. Headroom is the direction that "
+                f"boot-loops a board carrying a smaller part — declare {want} MB. "
+                f"If the table is meant to grow, grow it first."
             )
 
     for board, a, b in BOARD_PAIRS:
@@ -123,7 +153,8 @@ def main() -> int:
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
         return 1
-    print("\nOK — every declaration covers its own table, and paired processors agree")
+    print("\nOK — every declaration is the smallest standard size fitting its own\n"
+          "     partition table, and paired processors agree")
     return 0
 
 

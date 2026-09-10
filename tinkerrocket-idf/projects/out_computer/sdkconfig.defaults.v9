@@ -19,7 +19,6 @@
 # that direction is only wasteful, while 16 MB against the 8 MB part V7/V8
 # actually carry is a bootloader-level boot loop with no firmware log at all.
 # Same argument as PSRAM below — a board fact, so it lives per board.
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
 # === PSRAM: the log ring's real home on V9/V10 (#822) ===
 # U15 is an ESP32-S3RH2 with 2 MB of in-package QUAD PSRAM. That part was not
