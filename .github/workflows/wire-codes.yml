@@ -25,8 +25,12 @@ on:
       # against the Kotlin command table — hard parity gate (android-port §2.2).
       - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
       - 'TinkerRocketAndroid/core/protocol/**'
+      # #1086: the default-locale String.format guard scans the whole app + core.
+      - 'TinkerRocketAndroid/app/src/main/**/*.kt'
+      - 'TinkerRocketAndroid/core/session/**/*.kt'
       - 'tools/check_ble_command_ids.py'
       - 'tools/check_dispatch_admits.py'
+      - 'tools/check_no_default_locale_format.py'
       - '.github/workflows/wire-codes.yml'
   pull_request:
     paths:
@@ -44,8 +48,12 @@ on:
       # against the Kotlin command table — hard parity gate (android-port §2.2).
       - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
       - 'TinkerRocketAndroid/core/protocol/**'
+      # #1086: the default-locale String.format guard scans the whole app + core.
+      - 'TinkerRocketAndroid/app/src/main/**/*.kt'
+      - 'TinkerRocketAndroid/core/session/**/*.kt'
       - 'tools/check_ble_command_ids.py'
       - 'tools/check_dispatch_admits.py'
+      - 'tools/check_no_default_locale_format.py'
       - '.github/workflows/wire-codes.yml'
 
 jobs:
@@ -67,3 +75,13 @@ jobs:
       - name: Check every handled OC message type is admitted
         if: '!cancelled()'
         run: python3 tools/check_dispatch_admits.py
+
+      # #1086: ban the default-locale Kotlin String.format EXTENSION under
+      # app/ and core/. "%.1f".format(x) uses Locale.getDefault(), so a
+      # comma-decimal phone prints "55,3" where iOS prints "55.3" and the two
+      # apps' screenshots stop being comparable — and an integer/%d format
+      # emits localized digit glyphs (ar-EG). Fifty-plus sites only stay fixed
+      # with a guard. Use String.format(Locale.ROOT, ...) instead.
+      - name: Check no default-locale String.format extension (app + core)
+        if: '!cancelled()'
+        run: python3 tools/check_no_default_locale_format.py

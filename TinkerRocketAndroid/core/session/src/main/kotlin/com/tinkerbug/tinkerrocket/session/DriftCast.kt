@@ -8,6 +8,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
+import java.util.Locale
 
 /**
  * Drift-cast descent engine — port of iOS DriftCastEngine.swift (which
@@ -257,8 +258,8 @@ public fun computeGuidancePoint(
     val infeasibleReason = if (feasible) {
         null
     } else {
-        "Steering angle %.1f° exceeds maximum %.1f°. ".format(steeringAngle, maxSteeringDeg) +
-            "The guidance point is %.0f m from the pad at bearing %.0f°. ".format(horizDistM, steeringBrg) +
+        String.format(Locale.ROOT, "Steering angle %.1f° exceeds maximum %.1f°. ", steeringAngle, maxSteeringDeg) +
+            String.format(Locale.ROOT, "The guidance point is %.0f m from the pad at bearing %.0f°. ", horizDistM, steeringBrg) +
             "Try a closer landing point, higher apogee, or increase max steering."
     }
 

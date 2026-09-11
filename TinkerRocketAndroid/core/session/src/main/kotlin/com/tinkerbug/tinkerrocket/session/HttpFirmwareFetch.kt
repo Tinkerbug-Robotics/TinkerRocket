@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URI
 import java.security.MessageDigest
+import java.util.Locale
 
 /**
  * The network and hash a [com.tinkerbug.tinkerrocket.protocol.FirmwareRepository]
@@ -53,6 +54,6 @@ public object HttpFirmwareFetch {
 
     public val sha256: (ByteArray) -> String = { bytes ->
         MessageDigest.getInstance("SHA-256").digest(bytes)
-            .joinToString("") { "%02x".format(it) }
+            .joinToString("") { String.format(Locale.ROOT, "%02x", it) }
     }
 }

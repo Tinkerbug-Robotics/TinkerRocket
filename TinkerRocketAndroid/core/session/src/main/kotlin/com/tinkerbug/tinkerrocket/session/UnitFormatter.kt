@@ -1,6 +1,7 @@
 package com.tinkerbug.tinkerrocket.session
 
 import java.util.Locale
+import com.tinkerbug.tinkerrocket.protocol.formatFixed
 
 /**
  * Display-unit formatting, ported from the iOS `UnitFormatter` (#160) —
@@ -14,7 +15,21 @@ public object UnitFormatter {
     private const val FEET_PER_MILE: Double = 5280.0
     private const val STANDARD_GRAVITY: Double = 9.80665
 
-    private fun f(fmt: String, v: Double): String = String.format(Locale.ROOT, fmt, v)
+    // #1086: round ties-to-even (printf / iOS), not HALF_UP. String.format
+    // rounds `%f` HALF_UP, so a frame carrying an exact .5 printed one metre
+    // higher on Android than iOS. `fmt` here is always "%.<N>f<suffix>" (every
+    // call site below), so split the decimals and the unit suffix off and run
+    // the number through the shared formatFixed (BigDecimal HALF_EVEN, the same
+    // routine the CSV uses). Falls back to String.format for any fmt that is
+    // not that shape, which none currently is.
+    private val fixedFmt = Regex("""%\.(\d+)f(.*)""", RegexOption.DOT_MATCHES_ALL)
+    private fun f(fmt: String, v: Double): String {
+        val m = fixedFmt.matchEntire(fmt)
+            ?: return String.format(Locale.ROOT, fmt, v)
+        val decimals = m.groupValues[1].toInt()
+        val suffix = m.groupValues[2]
+        return formatFixed(v, decimals) + suffix
+    }
 
     // ── Altitude ─────────────────────────────────────────────────────────
     // Never switches to miles: rocket apogees routinely exceed 5280 ft and

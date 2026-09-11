@@ -45,6 +45,7 @@ import kotlinx.coroutines.withContext
 import androidx.activity.compose.BackHandler
 import com.tinkerbug.tinkerrocket.protocol.EspImage
 import com.tinkerbug.tinkerrocket.protocol.EspImageVerdict
+import java.util.Locale
 
 /**
  * OTA firmware update — port of iOS FirmwareUpdateView: pick a .bin via
@@ -632,8 +633,8 @@ private fun OtaRow(label: String, value: String) {
 }
 
 private fun humanBytes(n: Long): String = when {
-    n >= 1_048_576 -> "%.2f MB".format(n / 1_048_576.0)
-    n >= 1024 -> "%.1f kB".format(n / 1024.0)
+    n >= 1_048_576 -> String.format(Locale.ROOT, "%.2f MB", n / 1_048_576.0)
+    n >= 1024 -> String.format(Locale.ROOT, "%.1f kB", n / 1024.0)
     else -> "$n B"
 }
 

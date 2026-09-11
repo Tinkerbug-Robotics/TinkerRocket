@@ -1107,7 +1107,7 @@ private fun StatusCard(telemetry: TelemetryData, isBaseStation: Boolean) {
                     else -> tr.statusBad
                 }
                 Text(
-                    "Auto-close in %d:%02d".format(remaining / 60, remaining % 60),
+                    String.format(Locale.ROOT, "Auto-close in %d:%02d", remaining / 60, remaining % 60),
                     style = MaterialTheme.typography.bodySmall,
                     color = color,
                 )
