@@ -14,6 +14,7 @@
  * and returns true:
  *
  *     lfs_mount        succeeds — begin() skips its format-and-retry path
+ *                      (unless lfs_host_stub_fail_mount is set, see below)
  *     lfs_file_open    succeeds — the /.health_check probe reads as healthy
  *     lfs_file_close   succeeds
  *     lfs_remove       succeeds — the health-check file is cleaned up
@@ -36,9 +37,19 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *config)
     return 0;
 }
 
+/* #1228: while non-zero, every mount fails with LFS_ERR_CORRUPT.  begin()
+ * then formats (which succeeds here) and mounts again (which fails again),
+ * so it returns false from its "Mount after format failed" path — the same
+ * exit a NAND that does not answer takes on target, with the ring and both
+ * mutexes already allocated.  That is the state a retried begin() has to
+ * cope with, and it was not reachable through this stub before.  A test
+ * clears it before the retry. */
+int lfs_host_stub_fail_mount = 0;
+
 int lfs_mount(lfs_t *lfs, const struct lfs_config *config)
 {
     (void)lfs; (void)config;
+    if (lfs_host_stub_fail_mount) return LFS_ERR_CORRUPT;
     return 0;
 }
 

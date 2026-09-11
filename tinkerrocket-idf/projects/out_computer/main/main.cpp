@@ -72,6 +72,7 @@ static inline std::string itos(int v)
 #include "cmd_queue_session_policy.h" // #1105: retire one-shots when the FC reports a boot
 #include "cmd_queue_admit_policy.h"   // #1116: two slots held back for OTA_FINISH/ABORT
 #include "inflight_refusal_policy.h"  // #1162: INFLIGHT gates hold through a silent FC
+#include "logger_retry_policy.h"      // #1228: retrying a flight logger that failed to come up
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -1118,6 +1119,16 @@ static bool camera_state_known = true;              // Power rail state — star
 // engaged" — a level test would clear the very request the operator just made.
 static bool fc_camera_engaged_prev = false;
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
+// #1228: the flight-logger half of initPeripherals() has a life of its own.
+// peripherals_initialized says the radio and the FC link are up; oc_logger_ok
+// says TR_LogToFlash::begin() succeeded. Since #1132 the first no longer
+// implies the second, and since #1228 a second initPeripherals() call with the
+// first true and the second false re-enters ONLY the logging half. The two
+// stamps are loop_oc's bookkeeping for LoggerRetryPolicy: retries taken, and
+// the millis() before which the next one is not due.
+static bool     oc_logger_ok            = false;
+static uint8_t  oc_logger_retries_spent = 0;
+static uint32_t oc_logger_retry_due_ms  = 0;
 
 // ==========================================================================
 // SECTION: LoRa frequency lock and channel hopping
@@ -8068,14 +8079,36 @@ static void loadCachedPeripheralConfigFromNvs()
              cfg_pyro_enabled[3], cfg_pyro_trigger_mode[3], (double)cfg_pyro_trigger_value[3]);
 }
 
-void initPeripherals()
+// #1228: the logging half of initPeripherals(), on its own so it can be
+// retried without re-running the radio and link half.
+//
+// #1132 made a dead logger non-fatal — the LoRa bring-up, the I2S slave RX
+// channel and the deferred I2C join now run around it — and in doing so it set
+// peripherals_initialized on that path, which is the flag that had made a later
+// initPeripherals() call re-run everything, logger.begin() included. That
+// retry was mostly unreachable (a cmd-8 power-off is an esp_restart(), so the
+// next power-on is a fresh boot anyway, and it is refused while INFLIGHT), but
+// a NAND that fails once on a marginal rail and mounts on the second try is a
+// plausible case. So the logging half gets its own retry: initPeripherals()
+// re-enters this function alone when peripherals_initialized && !oc_logger_ok,
+// and loop_oc decides when (logger_retry_policy.h).
+//
+// Everything a live logger depends on lives here: the SPI bus, the TR_LogToFlash
+// config and begin(), and the block that needs a mounted store — flightlog,
+// the MRAM replay, the snapshot re-seed and the flush task. Returns whether
+// logger.begin() succeeded; oc_logger_ok mirrors it.
+static bool initLoggingSubsystem()
 {
-    if (peripherals_initialized) return;
-
-    ESP_LOGI("PWR", "Initializing peripherals...");
-
-    SPI.begin(config::SPI_SCK, config::SPI_MISO, config::SPI_MOSI);
-    delay(20);
+    // The bus is the logger's alone on this board (the V7 SPI LoRa has its own
+    // host), so it belongs here — begun once: compat's SPIClass::begin() just
+    // logs an already-initialised error on a second call.
+    static bool spi_bus_begun = false;
+    if (!spi_bus_begun)
+    {
+        SPI.begin(config::SPI_SCK, config::SPI_MISO, config::SPI_MOSI);
+        delay(20);
+        spi_bus_begun = true;
+    }
 
     TR_LogToFlashConfig log_cfg = {};
     log_cfg.nand_cs = config::NAND_CS;
@@ -8110,7 +8143,31 @@ void initPeripherals()
     log_cfg.flush_task_hook = flightlogFlushTaskHook;
     log_cfg.dirty_marker_addr = config::MRAM_DIRTY_MARKER_ADDR;  // #274: sink-mode dirty marker
 
+#if defined(TR_OC_BENCH_FAIL_LOGGER_BEGIN) && (TR_OC_BENCH_FAIL_LOGGER_BEGIN > 0)
+    // Bench fault injection — main/CMakeLists.txt; only in a -bench image. The
+    // first N calls are reported as failed WITHOUT calling begin(), so the
+    // retry that follows is the board's first real begin(). What this proves
+    // on hardware is the OC's plumbing (guard, schedule, INFLIGHT deferral,
+    // storage health recovering); what it does not is TR_LogToFlash's own
+    // re-entrancy after a genuine failure, which test_log_to_flash_begin_retry
+    // covers on the host.
+    static uint8_t bench_fail_logger_begin_left = TR_OC_BENCH_FAIL_LOGGER_BEGIN;
+    bool logger_ok = false;
+    if (bench_fail_logger_begin_left > 0)
+    {
+        bench_fail_logger_begin_left--;
+        ESP_LOGE("PWR", "BENCH FAULT (TR_OC_BENCH_FAIL_LOGGER_BEGIN): reporting "
+                        "logger.begin() as FAILED without calling it (%u more to go)",
+                 (unsigned)bench_fail_logger_begin_left);
+    }
+    else
+    {
+        logger_ok = logger.begin(SPI, log_cfg);
+    }
+#else
     const bool logger_ok = logger.begin(SPI, log_cfg);
+#endif
+    oc_logger_ok = logger_ok;
     if (!logger_ok)
     {
         // Non-obvious on the RAM-ring path: begin() also fails when the 64 KB
@@ -8130,9 +8187,33 @@ void initPeripherals()
         // runs, matching how the adjacent flightlog.begin() failure is already
         // handled ("deliberately non-fatal (BLE/downlink still run so the
         // fault is reachable)").
-        ESP_LOGE("PWR", "TR_LogToFlash begin failed — flight logging is DEAD "
-                        "this boot, but LoRa, the I2S link and the I2C command "
-                        "path still come up (#1132)");
+        //
+        // #1228: and it IS retried now — initPeripherals()'s guard re-enters
+        // this function alone, on loop_oc's schedule. The next attempt is
+        // stamped here so the schedule has one owner: an initial failure and
+        // a failed retry both land on this line.
+        const uint32_t retry_in_ms =
+            LoggerRetryPolicy::delayBeforeRetryMs(oc_logger_retries_spent);
+        if (retry_in_ms > 0)
+        {
+            oc_logger_retry_due_ms = millis() + retry_in_ms;
+            ESP_LOGE("PWR", "TR_LogToFlash begin failed — flight logging is DEAD "
+                            "until a retry succeeds; LoRa, the I2S link and the "
+                            "I2C command path still come up (#1132). Retry %u of "
+                            "%u in %lu s, deferred while a flight is in progress "
+                            "(#1228)",
+                     (unsigned)(oc_logger_retries_spent + 1),
+                     (unsigned)LoggerRetryPolicy::kMaxRetries,
+                     (unsigned long)(retry_in_ms / 1000U));
+        }
+        else
+        {
+            ESP_LOGE("PWR", "TR_LogToFlash begin failed on the last retry (%u of "
+                            "%u) — flight logging stays DEAD until the next power "
+                            "cycle; storage health = BAD (#1228)",
+                     (unsigned)oc_logger_retries_spent,
+                     (unsigned)LoggerRetryPolicy::kMaxRetries);
+        }
     }
 
     // #1132: everything in this block needs a live logger — the SPI bus and
@@ -8573,6 +8654,67 @@ void initPeripherals()
                           recovery.filename);
         }
     }
+
+    return logger_ok;
+}
+
+void initPeripherals()
+{
+    if (peripherals_initialized)
+    {
+        if (oc_logger_ok) return;
+
+        // #1228: the radio and the FC link are up; only the logger is not.
+        // Re-enter the logging half alone. Refused while a flight is in
+        // progress — this re-enters NAND bring-up, which can hold loop_oc (the
+        // downlink) for seconds — with the same INFLIGHT policy as the cmd-8
+        // power-off, silent-FC hold included. loop_oc already defers before
+        // calling; this is the guarantee for any caller.
+        const InflightHold hold = inflightHold();
+        if (hold.refuse)
+        {
+            ESP_LOGW("PWR", "#1228: logger retry REFUSED: rocket is INFLIGHT "
+                            "(FC frame %lu ms ago, silent-FC hold %lu s left)",
+                     (unsigned long)hold.fc_age_ms,
+                     (unsigned long)(hold.hold_left_ms / 1000U));
+            return;
+        }
+        if (oc_logger_retries_spent >= LoggerRetryPolicy::kMaxRetries)
+        {
+            ESP_LOGW("PWR", "#1228: logger retry budget (%u) already spent — "
+                            "dead until the next power cycle",
+                     (unsigned)LoggerRetryPolicy::kMaxRetries);
+            return;
+        }
+        oc_logger_retries_spent++;
+        ESP_LOGW("PWR", "#1228: retrying the flight logger (retry %u of %u); the "
+                        "radio and the FC link are up and are not touched",
+                 (unsigned)oc_logger_retries_spent,
+                 (unsigned)LoggerRetryPolicy::kMaxRetries);
+        const uint32_t t0_ms = millis();
+        const bool ok = initLoggingSubsystem();
+        const uint32_t took_ms = millis() - t0_ms;
+        if (ok)
+        {
+            const SensorHealthState sh = ocStorageHealth();
+            ESP_LOGW("PWR", "#1228: flight logger RECOVERED on retry %u after %lu ms "
+                            "— storage health %s",
+                     (unsigned)oc_logger_retries_spent, (unsigned long)took_ms,
+                     sh == SH_OK       ? "OK" :
+                     sh == SH_DEGRADED ? "DEGRADED" :
+                     sh == SH_BAD      ? "BAD" : "N/A");
+        }
+        else
+        {
+            ESP_LOGE("PWR", "#1228: logger retry %u failed after %lu ms",
+                     (unsigned)oc_logger_retries_spent, (unsigned long)took_ms);
+        }
+        return;
+    }
+
+    ESP_LOGI("PWR", "Initializing peripherals...");
+
+    initLoggingSubsystem();
 
     vTaskDelay(1);  // feed watchdog after NAND init
 
@@ -9988,6 +10130,51 @@ static void loop_oc()
             i2s_stream.end();          // drop whatever half-state is there
             ocBeginSlaveRxLocked("retry");
             xSemaphoreGive(oc_i2s_mutex);
+        }
+
+        // #1228: a flight logger that failed to come up is retried from here,
+        // on LoggerRetryPolicy's schedule — three attempts over ~100 s,
+        // deferred (not spent) while a flight is in progress, after LANDED
+        // (the #317 lockout would refuse the recovered logger a session this
+        // boot anyway) and during an FC OTA relay. initPeripherals() re-enters
+        // only the logging half and holds its own INFLIGHT refusal; this block
+        // decides WHEN, so the stall of seconds a NAND bring-up costs lands
+        // where the cmd-8 power-on already puts one.
+        if (peripherals_initialized && !oc_logger_ok)
+        {
+            const bool flight_hold = inflightHold().refuse ||
+                                     latest_rocket_state == LANDED;
+            const bool ota_relay   = oc_ota_tx_mode || oc_ota_await_flip;
+            // Logged once per REASON, not once per pass: a flight that lands
+            // with the retry still deferred moves from "flight in progress"
+            // to "LANDED", and the console should say so.
+            static const char* deferral_logged = nullptr;
+            switch (LoggerRetryPolicy::decide(oc_logger_ok, oc_logger_retries_spent,
+                                              millis(), oc_logger_retry_due_ms,
+                                              flight_hold, ota_relay))
+            {
+                case LoggerRetryPolicy::Verdict::Retry:
+                    deferral_logged = nullptr;
+                    vTaskDelay(1);  // feed watchdog before long init
+                    initPeripherals();
+                    break;
+                case LoggerRetryPolicy::Verdict::Deferred:
+                {
+                    const char* reason =
+                        ota_relay ? "FC OTA relay in progress" :
+                        latest_rocket_state == LANDED
+                            ? "LANDED, no new flight log this boot (#317)"
+                            : "flight in progress";
+                    if (reason != deferral_logged)
+                    {
+                        deferral_logged = reason;
+                        ESP_LOGW("PWR", "#1228: logger retry due but deferred: %s", reason);
+                    }
+                    break;
+                }
+                default:   // Idle, Wait, Exhausted: nothing to do this pass
+                    break;
+            }
         }
     }
 

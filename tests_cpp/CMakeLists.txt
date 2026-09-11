@@ -1096,6 +1096,37 @@ target_include_directories(test_log_to_flash_sink PRIVATE
 target_link_libraries(test_log_to_flash_sink GTest::gtest_main)
 gtest_discover_tests(test_log_to_flash_sink)
 
+# ---------- test_log_to_flash_begin_retry (#1228) ----------
+# begin() re-entered after a failure: the OC retries a NAND that would not
+# mount at power-on.  Same harness as test_log_to_flash_sink; the LFS stub's
+# lfs_host_stub_fail_mount knob drives begin() down its real mount-failure
+# exit, and the host_shim's live-object counters prove the retry reuses the
+# mutexes and the ring slot instead of leaking a set per attempt.
+add_executable(test_log_to_flash_begin_retry
+    test_log_to_flash_begin_retry.cpp
+    fakes/lfs_host_stub.c
+    ${LIB_DIR}/TR_LogToFlash/TR_LogToFlash.cpp
+)
+target_include_directories(test_log_to_flash_begin_retry PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LogToFlash
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/CRC
+)
+target_link_libraries(test_log_to_flash_begin_retry GTest::gtest_main)
+gtest_discover_tests(test_log_to_flash_begin_retry)
+
+# ---------- test_logger_retry_policy (#1228) ----------
+# The OC's bounded, deferrable schedule for retrying that begin().
+add_executable(test_logger_retry_policy test_logger_retry_policy.cpp)
+target_include_directories(test_logger_retry_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_logger_retry_policy GTest::gtest_main)
+gtest_discover_tests(test_logger_retry_policy)
+
 # ---------- test_sensor_staleness_policy (#1137 items 10, 12) ----------
 # The scorecard's go/no-go debounce: it has to fire on a wedged sensor and not
 # chatter on a healthy one, and neither could be exercised without hardware.

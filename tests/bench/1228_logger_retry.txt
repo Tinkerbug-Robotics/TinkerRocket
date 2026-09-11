@@ -1,0 +1,87 @@
+# #1211 / #1228 — a flight logger that failed to come up is retried on the
+# ground, and only the logging half of initPeripherals() is re-entered.
+#
+# Rig: V9 pair, S1 -> O (every line quoted here is OC-side). Rail OFF at the
+# start: the cmd-8 power-on is the entry point. No GNSS fix needed.
+#
+# IMAGE. This needs the bench fault image — the V9's NAND sits on the always-on
+# +3V3 rail and cannot be made to fail for real:
+#
+#   cd tinkerrocket-idf/projects/out_computer
+#   idf.py -B build_bench -DTR_BOARD_V9=1 -DTR_OC_BENCH_DEBUG=1 \
+#          -DTR_OC_BENCH_FAIL_LOGGER_BEGIN=2 build flash
+#
+# The first TWO logger.begin() calls are reported as failed without being
+# made: the power-on's, then retry 1 at +10 s. Retry 2 is due 30 s after that
+# (+40 s from power-on); a sim flight is started so that it straddles the due
+# time, which holds the retry — without spending it — first for INFLIGHT and
+# then for LANDED. cmd 7 takes the FC out of LANDED, the hold lifts, and retry
+# 2 runs a REAL begin(): the board's first, so this is also the ordinary V9
+# bring-up landing a few seconds later than usual. Never fly a -bench image.
+#
+# What each block proves (the issue's three "done when" lines):
+#   power-on failure     the schedule is armed; LoRa, I2S and I2C still came up
+#   retry 1              initPeripherals() re-entered ONLY the logging half —
+#                        no second "Initializing peripherals", no second I2S
+#                        or LoRa bring-up line
+#   deferred (flight)    the INFLIGHT hold, attempt not spent
+#   deferred (LANDED)    the #317 hold, same
+#   retry 2 RECOVERED    a real begin() on the retry; h.STORAGE goes BAD -> OK
+#                        without a reboot
+#
+# What this cannot prove: TR_LogToFlash's own re-entrancy after a GENUINE
+# failure (ring and mutexes already allocated). The fault hook skips the call,
+# so that half lives in tests_cpp/test_log_to_flash_begin_retry.cpp.
+
+note === rail on: the first begin() is faulted, everything else comes up ===
+mark
+send 8 01
+expect_serial 20 BENCH FAULT \(TR_OC_BENCH_FAIL_LOGGER_BEGIN\).*\(1 more to go\)
+expect_serial 10 TR_LogToFlash begin failed .* Retry 1 of 3 in 10 s
+expect_serial 30 LoRa NVS:
+expect_serial 30 I2S slave RX ready
+expect_serial 10 Peripherals initialized\.
+
+note === retry 1 at +10 s: faulted again; the radio/link half is NOT re-run ===
+# The origin is set here, a few seconds after power-on, so the +10 s retry
+# cannot land before it (the harness searches forward from the last mark).
+mark
+expect_serial 25 1228: retrying the flight logger \(retry 1 of 3\)
+expect_serial 5 BENCH FAULT .*\(0 more to go\)
+expect_serial 5 1228: logger retry 1 failed
+expect_serial_since Retry 2 of 3 in 30 s
+refute_serial_since Initializing peripherals\.\.\.
+refute_serial_since I2S slave RX ready
+refute_serial_since LoRa NVS:
+expect_tlm 30 h.STORAGE==BAD
+health
+
+note === a sim flight straddles retry 2's due time (+40 s): deferred, not spent ===
+# 300 g / 11.7 N / 2 s, apogee ~232 m — the 1148 profile; lands on its own.
+send 5 0000964333333b41000000400000a040
+sleep 4
+send 6
+expect_tlm 30 st==INFLIGHT
+mark
+expect_serial 40 1228: logger retry due but deferred: flight in progress
+refute_serial_since 1228: retrying the flight logger
+
+note === landed: still deferred, now for the 317 lockout reason ===
+wait_tlm 180 st==LANDED
+expect_serial 15 1228: logger retry due but deferred: LANDED
+refute_serial_since 1228: retrying the flight logger
+expect_tlm 20 h.STORAGE==BAD
+
+note === cmd 7 takes the FC out of LANDED: the hold lifts, retry 2 runs for real ===
+mark
+send 7
+expect_tlm 30 st!=LANDED
+expect_serial 15 1228: retrying the flight logger \(retry 2 of 3\)
+expect_serial 60 1228: flight logger RECOVERED on retry 2 after
+expect_serial_since FLIGHTLOG.*up: [0-9]+ flight\(s\) in index
+expect_tlm 30 h.STORAGE!=BAD
+health
+refute_serial_since Initializing peripherals\.\.\.
+refute_serial_since I2S slave RX ready
+refute_serial_since LoRa NVS:
+note === done ===

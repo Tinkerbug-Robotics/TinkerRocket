@@ -203,9 +203,10 @@ public:
     /// GUARANTEES on true: the calling task owns spi_mutex_ for the rest of
     /// this boot, CS is HIGH, and no byte is on the wire. Every runtime
     /// transaction sits inside a spiAcquire()/spiRelease() pair and every such
-    /// pair raises CS before releasing; the only two beginTransaction() calls
-    /// outside a pair (mramProbe, nandInit) run single-threaded inside begin(),
-    /// long before startFlushTask(). A flush task caught "mid-operation" is
+    /// pair raises CS before releasing — since #1228 that includes the MRAM
+    /// probe and the RDID read inside begin(), which used to run bare because
+    /// begin() was single-threaded; it can now be re-entered after a failure
+    /// with the parser task live. A flush task caught "mid-operation" is
     /// inside nandWaitReady(), which re-acquires per poll, so it parks there
     /// rather than clocking anything.
     ///
@@ -232,6 +233,11 @@ public:
     bool formatFilesystem();  // WARNING: Erases all files!
     const char* currentFilename() const;
     bool isLoggingActive() const;
+    /// #1228: true once begin() has returned true this boot. A logger whose
+    /// begin() failed is INERT — enqueueFrame() refuses, service() returns,
+    /// startFlushTask() refuses — until a later begin() succeeds, which the OC
+    /// now attempts on the ground. Read from other tasks (the I2S parser).
+    bool hasBegun() const { return begun_; }
     void setFileTimestamp(const char* filename, uint16_t year, uint8_t month, uint8_t day,
                           uint8_t hour, uint8_t minute, uint8_t second);
 
@@ -573,6 +579,7 @@ private:
     TaskHandle_t spi_park_owner_ = nullptr;
     void spiAcquire();
     void spiRelease();
+    void releaseLfsBuffers();   // #1228: free AND null the four LFS allocations
 
     // MRAM SPI interface (MR25H10)
     SPISettings spi_mram;
@@ -593,6 +600,13 @@ private:
     TaskHandle_t flush_task_ = nullptr;
     volatile bool flush_task_running_ = false;
     volatile bool flush_task_stop_ = false;     // Signal flush task to exit
+    // #1228: set at the END of a successful begin(), cleared on every entry.
+    // Gates the touchpoints other tasks reach (the I2S parser's enqueueFrame,
+    // loop_oc's service). Volatile like the flags above: written on the task
+    // that runs begin(), read on the parser task. Airtight for a RETRY because
+    // a retry only follows a failure, and after a failure this is already
+    // false — there is no in-flight push to race the re-initialisation.
+    volatile bool begun_ = false;
 
     static void flushTaskEntry(void* param);    // FreeRTOS task entry (static)
     void flushTaskLoop();                        // Instance method called by entry

@@ -109,3 +109,24 @@ if(TR_OC_BENCH_DEBUG)
                     "the USB console survives; idle current ~22 mA instead of "
                     "~1 mA. Version string carries '-bench'. Do NOT fly this.")
 endif()
+
+# #1228 bench fault injection:
+#   idf.py -B build_bench -DTR_BOARD_V9=1 -DTR_OC_BENCH_DEBUG=1 -DTR_OC_BENCH_FAIL_LOGGER_BEGIN=1 build
+#
+# Reports the first N calls of TR_LogToFlash::begin() as FAILED without making
+# them, so the logger-retry path (initPeripherals() re-entering only its
+# logging half on LoggerRetryPolicy's schedule) can be watched on a board whose
+# NAND sits on the always-on +3V3 rail and cannot be made to fail for real.
+# Requires the bench-debug flag, so the image carries the "-bench" stamp: a
+# flight image must never be able to pretend its logger is dead.
+if(TR_OC_BENCH_FAIL_LOGGER_BEGIN)
+    if(NOT TR_OC_BENCH_DEBUG)
+        message(FATAL_ERROR "out_computer: TR_OC_BENCH_FAIL_LOGGER_BEGIN is a bench "
+                            "fault hook and needs -DTR_OC_BENCH_DEBUG=1 alongside it.")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        TR_OC_BENCH_FAIL_LOGGER_BEGIN=${TR_OC_BENCH_FAIL_LOGGER_BEGIN})
+    message(WARNING "out_computer: BENCH FAULT — the first "
+                    "${TR_OC_BENCH_FAIL_LOGGER_BEGIN} logger.begin() call(s) are "
+                    "reported as failed (#1228). Do NOT fly this.")
+endif()
