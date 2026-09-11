@@ -1357,6 +1357,16 @@ target_include_directories(test_tx_frame_policy PRIVATE
 target_link_libraries(test_tx_frame_policy GTest::gtest_main)
 gtest_discover_tests(test_tx_frame_policy)
 
+# ---------- test_i2c_slave_recovery_policy (#1151) ----------
+# The OC's retry for a slave device it failed to re-create. Header-only policy;
+# the IDF-side imperative half stays in out_computer/main.cpp.
+add_executable(test_i2c_slave_recovery_policy test_i2c_slave_recovery_policy.cpp)
+target_include_directories(test_i2c_slave_recovery_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_i2c_slave_recovery_policy GTest::gtest_main)
+gtest_discover_tests(test_i2c_slave_recovery_policy)
+
 # ---------- test_ota_relay_policy (#834 items 6/7) ----------
 # Timing for the OC's I2S relay recovery: how often to retry a failed slave-RX
 # begin, and when to abandon a relay whose app has stopped pumping. Pure header

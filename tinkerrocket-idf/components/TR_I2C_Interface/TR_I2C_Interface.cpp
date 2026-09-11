@@ -160,6 +160,9 @@ esp_err_t TR_I2C_Interface::beginSlave(int sda_pin,
         return ESP_ERR_NO_MEM;
     }
 
+    // #1151: from here a slave device is WANTED. resetSlaveTx() keys off this,
+    // not off _slave_dev, so a failed re-create stays retryable.
+    _slave_wanted = true;
     return ESP_OK;
 }
 
@@ -227,29 +230,54 @@ esp_err_t TR_I2C_Interface::createSlaveDevice()
 // ---------------------------------------------------------------------------
 esp_err_t TR_I2C_Interface::resetSlaveTx()
 {
-    if (_slave_dev == nullptr || _dev_mux == nullptr)
+    // #1151: the guard is on "a device is WANTED", not on "a device exists".
+    // It used to be the latter, which made this function one-way: it nulls
+    // _slave_dev before re-creating, createSlaveDevice() also nulls it on both
+    // of its error exits, and the old guard then refused every later call —
+    // including the next I2C_TX_RESYNC, which is precisely the event that
+    // wants a retry. One ESP_ERR_NO_MEM under heap pressure killed the FC<->OC
+    // command path for the rest of the power cycle: no camera, no deployment
+    // config or continuity test, no sim stop, no mag-cal, no orientation push,
+    // no snapshot service on a later FC reboot — while telemetry, LoRa and BLE
+    // all kept working, so nothing else signalled it.
+    if (!_slave_wanted || _dev_mux == nullptr)
     {
         return ESP_ERR_INVALID_STATE;
     }
     xSemaphoreTake(_dev_mux, portMAX_DELAY);
 
     uint8_t tok;
-    while (xQueueReceive(_tx_req_queue, &tok, 0) == pdTRUE) {}
+    if (_tx_req_queue != nullptr)
+        while (xQueueReceive(_tx_req_queue, &tok, 0) == pdTRUE) {}
 
-    esp_err_t err = i2c_del_slave_device(_slave_dev);
-    _slave_dev = nullptr;
-    if (err != ESP_OK)
+    // Absent already (a previous re-create failed) — nothing to delete, go
+    // straight to the create that is still owed.
+    if (_slave_dev != nullptr)
     {
-        ESP_LOGE(TAG, "resetSlaveTx: del failed: %s", esp_err_to_name(err));
-        xSemaphoreGive(_dev_mux);
-        return err;
+        const esp_err_t derr = i2c_del_slave_device(_slave_dev);
+        _slave_dev = nullptr;
+        if (derr != ESP_OK)
+        {
+            // The handle is not ours to reuse after a failed delete, and
+            // _slave_dev is already null, so the next call retries the create.
+            ESP_LOGE(TAG, "resetSlaveTx: del failed: %s", esp_err_to_name(derr));
+            xSemaphoreGive(_dev_mux);
+            return derr;
+        }
     }
 
-    err = createSlaveDevice();
+    esp_err_t err = createSlaveDevice();
     xSemaphoreGive(_dev_mux);
     if (err == ESP_OK)
     {
         ESP_LOGW(TAG, "slave TX path reset (desync recovery, #402)");
+    }
+    else
+    {
+        // #1151: still wanted, still missing — the caller retries.
+        ESP_LOGE(TAG, "resetSlaveTx: re-create FAILED (%s) — no I2C slave on the "
+                      "bus, so this board accepts no commands until a retry "
+                      "succeeds", esp_err_to_name(err));
     }
     return err;
 }
