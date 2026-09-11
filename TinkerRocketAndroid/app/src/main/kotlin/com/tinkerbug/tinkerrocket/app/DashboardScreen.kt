@@ -22,6 +22,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryAlert
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.SignalCellularOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -767,6 +769,15 @@ fun DashboardScreen(
             }
         }
 
+        // #1096: link + write-rate diagnostics (iOS DataRatesView twin).  The
+        // firmware emits rxk/wrk/frx/fdr every frame and both apps decode all
+        // four, but Android rendered none of them.  fdr is the FC→OC frame-drop
+        // counter: a nonzero, climbing value means the inter-board link is
+        // losing sensor data mid-flight.  Collapsed by default so it never
+        // crowds the primary cards; promoting fdr to a live "link degraded"
+        // advisory is a follow-up (see #1096).
+        LinkDiagnosticsCard(telemetry)
+
     }
 }
 
@@ -945,6 +956,53 @@ private fun Banner(text: String, color: Color) {
             .background(color.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
             .padding(horizontal = 16.dp, vertical = 10.dp),
     )
+}
+
+/**
+ * #1096: iOS DataRatesView twin.  The FC emits four link/write diagnostics on
+ * every telemetry frame — rxk (I2C RX kB/s), wrk (flash write kB/s), frx
+ * (frames received) and fdr (FC→OC frames dropped).  Both apps decoded all
+ * four and neither showed them; DataRatesView existed on iOS but was never
+ * instantiated, and Android had no twin.  fdr is the one with flight meaning:
+ * a nonzero, climbing count is the inter-board link losing sensor data during
+ * boost.  Collapsed by default so it stays out of the way on the pad.
+ */
+@Composable
+private fun LinkDiagnosticsCard(telemetry: TelemetryData) {
+    var expanded by remember { mutableStateOf(false) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Link diagnostics", style = MaterialTheme.typography.titleMedium)
+                Icon(
+                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                )
+            }
+            if (expanded) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    DiagStat("RX", telemetry.rxKbs?.let { String.format(Locale.ROOT, "%.1f kB/s", it) } ?: "N/A", Modifier.weight(1f))
+                    DiagStat("Write", telemetry.wrKbs?.let { String.format(Locale.ROOT, "%.1f kB/s", it) } ?: "N/A", Modifier.weight(1f))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    DiagStat("Frames RX", telemetry.framesRx.toString(), Modifier.weight(1f))
+                    DiagStat("Frames dropped", telemetry.framesDrop.toString(), Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagStat(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(label, style = MaterialTheme.typography.labelMedium)
+        Text(value, style = MaterialTheme.typography.titleMedium)
+    }
 }
 
 @Composable

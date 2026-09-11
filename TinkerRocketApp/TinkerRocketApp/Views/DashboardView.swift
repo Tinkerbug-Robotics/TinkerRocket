@@ -1043,6 +1043,22 @@ struct RocketTelemetryCards: View {
                     HealthCardView(telemetry: telemetry, staleAgeSec: staleAgeSec)
                         .opacity(staleOpacity)
                 }
+
+                // #1096: link + write-rate diagnostics.  The firmware emits
+                // rxk/wrk/frx/fdr on every frame and both apps decode all four,
+                // but DataRatesView was never instantiated, so they showed
+                // nowhere.  fdr is the FC→OC frame-drop counter: a nonzero,
+                // climbing value means the inter-board link is losing sensor
+                // data mid-flight.  Kept behind a collapsed disclosure so it
+                // never crowds the primary cards; promoting fdr to a live
+                // "link degraded" advisory is a follow-up (see #1096).
+                if showRocketViews {
+                    DisclosureGroup("Link diagnostics") {
+                        DataRatesView(telemetry: telemetry)
+                    }
+                    .font(.subheadline)
+                    .opacity(staleOpacity)
+                }
             }
         }
     }
