@@ -1918,6 +1918,10 @@ static void fcOtaParserTask(void*)
 
 // Flip master-TX -> slave-RX to receive the image. Called from the OTA_BEGIN
 // handler after the READY resends have drained over the still-TX link.
+// #1122: fcFlipToRx() hands the link straight back when beginSlaveRx fails,
+// so it needs the revert ahead of its own definition.
+static void fcRevertToTx();
+
 static void fcFlipToRx()
 {
     // Let the queued OTA_RELAY_READY resends fully clock out before flipping.
@@ -1945,6 +1949,25 @@ static void fcFlipToRx()
         i2s_stream.registerRecvCallback(fcOtaRecvCallback, nullptr);
     if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
     ESP_LOGW(TAG, "[OTA] I2S -> slave RX for image (%s)", esp_err_to_name(e));
+    if (e != ESP_OK)
+    {
+        // #1122: the other half of the same finding as fcRevertToTx(). On
+        // failure beginSlaveRx has already deleted the channel, so there is no
+        // I2S at all — and fc_ota_data_mode was set true above, which idles
+        // i2sSenderTask. The #1116 watchdog does eventually rescue this (no RX
+        // callback means fc_ota_rx_cb_count never advances, so it reaches
+        // AbandonLinkQuiet), but only after kNoProgressTimeoutMs — 30 s of a
+        // vehicle emitting nothing, for a failure that is known right here.
+        // Give the link straight back instead; the caller's session is over
+        // either way.
+        ESP_LOGE(TAG, "[OTA] slave RX begin FAILED (%s) — no I2S channel; "
+                      "reverting to master TX now rather than waiting out the "
+                      "%u s session watchdog (#1122)",
+                 esp_err_to_name(e),
+                 (unsigned)(FcOtaSessionPolicy::kNoProgressTimeoutMs / 1000U));
+        fcRevertToTx();
+        return;
+    }
     // #1116: arm the session watchdog from the flip. The first accepted byte
     // is still ~1 s away (the OC waits for our silence, flips, warms up, then
     // releases "ready" to the app), which the 30 s window absorbs.
