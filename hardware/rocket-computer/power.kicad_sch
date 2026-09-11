@@ -8499,16 +8499,6 @@
 	)
 	(wire
 		(pts
-			(xy 63.5 170.18) (xy 63.5 187.325)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ae8ecf4e-105a-4835-884f-984b01ea0af8")
-	)
-	(wire
-		(pts
 			(xy 61.595 59.055) (xy 61.595 61.595)
 		)
 		(stroke
@@ -12250,7 +12240,7 @@
 				)
 			)
 		)
-		(property "Value" "10 k"
+		(property "Value" "1 k"
 			(at 156.845 97.79 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12293,7 +12283,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0710KL"
+		(property "MPN" "RC0402FR-071KL"
 			(at 153.035 97.79 0)
 			(hide yes)
 			(show_name no)
@@ -15541,109 +15531,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:C")
-		(at 63.5 166.37 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "9056b832-6d7a-4537-a229-50cd4a1eafb9")
-		(property "Reference" "C45"
-			(at 63.5 163.83 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "1 uF"
-			(at 63.5 168.91 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 64.4652 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 63.5 166.37 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Unpolarized capacitor"
-			(at 63.5 166.37 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CL05A105KO5NNNC"
-			(at 63.5 166.37 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Samsung"
-			(at 63.5 166.37 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "754cf92f-e7c5-478a-974c-a86a1a12d990")
-		)
-		(pin "2"
-			(uuid "f587d8c5-7e61-4129-b829-68d4eafd953e")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "C45")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Device:R_US")
 		(at 212.09 50.8 180)
 		(unit 1)
@@ -15768,7 +15655,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "390 pF"
+		(property "Value" "10 nF"
 			(at 55.245 125.095 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15812,7 +15699,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL05C391JB5NNNC"
+		(property "MPN" "CL05B103KB5NNNC"
 			(at 55.245 122.555 0)
 			(hide yes)
 			(show_name no)
@@ -22546,6 +22433,84 @@
 					(size 1.27 1.27)
 				)
 				(justify left)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 63.5 162.56 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "6fe668ba-56a0-46b4-a527-67c8528d7c8d")
+		(property "Reference" "#PWR0705"
+			(at 63.5 168.91 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 65.405 167.005 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 63.5 162.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 63.5 162.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 63.5 162.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "5593973d-869a-4893-b326-d6a0a0d19009")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "#PWR0705")
+					(unit 1)
+				)
 			)
 		)
 	)
