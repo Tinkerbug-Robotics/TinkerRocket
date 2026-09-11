@@ -62,6 +62,13 @@ public:
                                 // different project or a different board revision
         BootAlreadyCommitted,   // #1142 item 2: abort() from ReadyToBoot could not
                                 // put otadata back — the new image WILL boot
+        RelayRingOverflow,      // #1154 item 13: the FC's I2S ingest ring dropped
+                                // bytes during an FC-relay session. Never returned
+                                // by this class — the relay layer reports it in
+                                // place of the SizeMismatch it would otherwise
+                                // present as, because the OC image pump is
+                                // forward-only and a single dropped byte ends the
+                                // session with no retransmit.
     };
 
     // Optional status callback. Fired synchronously inside begin/writeChunk/

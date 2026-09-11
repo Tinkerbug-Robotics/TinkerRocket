@@ -17,6 +17,18 @@ static const char* SC_TAG = "SENSORS";
 // function parameters called `now_ms` / `now_us` throughout this file.
 static inline uint32_t time_ms() { return (uint32_t)(esp_timer_get_time() / 1000); }
 static inline uint32_t time_us() { return (uint32_t)esp_timer_get_time(); }
+// #1154 item 10: int16 difference that clamps instead of wrapping.  Both
+// operands are int16 and the result is stored in an int16 field, so the
+// promotion to int is not enough on its own — the narrowing conversion is
+// where the sign flips.
+static inline int16_t satSubI16(int16_t a, int16_t b)
+{
+    const int32_t d = (int32_t)a - (int32_t)b;
+    if (d > INT16_MAX) return INT16_MAX;
+    if (d < INT16_MIN) return INT16_MIN;
+    return (int16_t)d;
+}
+
 static inline void     delay_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
 
 SensorCollector* SensorCollector::ism6hg256_instance = nullptr;
@@ -736,9 +748,18 @@ void SensorCollector::pollIMUdata(void* parameter)
                 self->ism6hg256_data.acc_high_raw.y = hg_raw.y;
                 self->ism6hg256_data.acc_high_raw.z = hg_raw.z;
 
-                self->ism6hg256_data.gyro_raw.x = g_raw.x - self->gyro_cal_x;
-                self->ism6hg256_data.gyro_raw.y = g_raw.y - self->gyro_cal_y;
-                self->ism6hg256_data.gyro_raw.z = g_raw.z - self->gyro_cal_z;
+                // #1154 item 10: saturate, do not wrap.  The operands are
+                // int16 and the difference is stored back into an int16, so a
+                // rail-pinned sample minus a positive offset used to wrap the
+                // SIGN — a full-negative rate reading as full-positive.  That
+                // is the worst possible failure for the one sample class the
+                // EKF shock gate cares about (#1190 gates on saturation
+                // precisely because a railed axis is uninformative), and a
+                // roll controller reading a sign-flipped rate would drive the
+                // wrong way.  Clamping keeps a railed sample railed.
+                self->ism6hg256_data.gyro_raw.x = satSubI16(g_raw.x, self->gyro_cal_x);
+                self->ism6hg256_data.gyro_raw.y = satSubI16(g_raw.y, self->gyro_cal_y);
+                self->ism6hg256_data.gyro_raw.z = satSubI16(g_raw.z, self->gyro_cal_z);
 
                 // Track ISM6 timestamp gaps
                 const uint32_t this_time = self->start_time;

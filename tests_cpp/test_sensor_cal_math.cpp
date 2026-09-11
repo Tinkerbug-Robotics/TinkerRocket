@@ -200,3 +200,67 @@ TEST(SensorCalMath, MisoContentionGarbageIsRejected)
     EXPECT_GT(r.gravity_mag, 20.0f * kG);
     EXPECT_FALSE(sensor_cal::gravityPlausible(r.gravity_mag));
 }
+
+// --- #1154 item 10: the gyro zero-rate subtraction must saturate ------------
+//
+// The poll task stores `g_raw - gyro_cal` back into an int16 field. Both
+// operands are int16, so the promotion to int is not enough on its own: the
+// narrowing conversion on assignment is where the sign flips. A rail-pinned
+// sample minus a positive offset used to come out full-POSITIVE.
+//
+// This matters most for exactly the samples that matter least as data. #1190's
+// shock gate keys on saturation because a railed axis is uninformative — but a
+// railed axis that has silently changed sign is worse than uninformative, and
+// a roll controller reading it would drive the wrong way.
+
+namespace {
+int16_t satSubI16Ref(int16_t a, int16_t b) {
+    const int32_t d = (int32_t)a - (int32_t)b;
+    if (d > INT16_MAX) return INT16_MAX;
+    if (d < INT16_MIN) return INT16_MIN;
+    return (int16_t)d;
+}
+int16_t wrapSubI16(int16_t a, int16_t b) { return (int16_t)(a - b); }  // the old behaviour
+}
+
+TEST(GyroOffsetSaturation, ARailedSampleKeepsItsSign) {
+    // The bug, in one line: full-negative rate, a positive zero-rate offset.
+    EXPECT_EQ(wrapSubI16(INT16_MIN, 200), 32568)
+        << "precondition: the old arithmetic really did flip the sign";
+    EXPECT_EQ(satSubI16Ref(INT16_MIN, 200), INT16_MIN);
+    // And the mirror case.
+    EXPECT_EQ(satSubI16Ref(INT16_MAX, -200), INT16_MAX);
+}
+
+TEST(GyroOffsetSaturation, OrdinaryReadingsAreUntouched) {
+    // Saturation must not disturb the normal path — this runs on every sample.
+    for (int16_t raw : {int16_t(0), int16_t(1000), int16_t(-1000),
+                        int16_t(30000), int16_t(-30000)}) {
+        for (int16_t off : {int16_t(0), int16_t(50), int16_t(-50)}) {
+            const int32_t exact = (int32_t)raw - (int32_t)off;
+            if (exact >= INT16_MIN && exact <= INT16_MAX) {
+                EXPECT_EQ(satSubI16Ref(raw, off), (int16_t)exact) << raw << "," << off;
+            }
+        }
+    }
+}
+
+TEST(GyroOffsetSaturation, TheResultIsNeverFartherFromZeroThanTheRail) {
+    // Swept: no input pair can produce a value outside int16, and none can
+    // cross zero that the exact arithmetic would not have crossed.
+    for (int32_t raw = INT16_MIN; raw <= INT16_MAX; raw += 337) {
+        for (int16_t off : {int16_t(INT16_MIN), int16_t(-1000), int16_t(0),
+                            int16_t(1000), int16_t(INT16_MAX)}) {
+            const int16_t got = satSubI16Ref((int16_t)raw, off);
+            const int32_t exact = raw - (int32_t)off;
+            if (exact > INT16_MAX)      EXPECT_EQ(got, INT16_MAX);
+            else if (exact < INT16_MIN) EXPECT_EQ(got, INT16_MIN);
+            else                        EXPECT_EQ(got, (int16_t)exact);
+            // The sign may only differ from the exact result when the exact
+            // result was out of range — never otherwise.
+            if (exact >= INT16_MIN && exact <= INT16_MAX) {
+                EXPECT_EQ((got < 0), (exact < 0)) << raw << "," << off;
+            }
+        }
+    }
+}

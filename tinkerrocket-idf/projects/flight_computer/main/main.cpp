@@ -1492,8 +1492,16 @@ static void servicePyroChannels(uint32_t now_ms)
     // CONT; we just don't bother re-sampling outside fire windows.)
     if (pyro_arm_pin_state) {
         for (int i = 0; i < 4; ++i) {
-            if (pyro_ch[i].state == PyroChState::ArmSettle ||
-                pyro_ch[i].state == PyroChState::Firing) {
+            // #1154 item 5: ArmSettle ONLY.  A read taken during Firing is
+            // meaningless — the high-side FET is sourcing V_CAP into the
+            // squib, so the sense node reads "open" whether or not the charge
+            // was ever there.  Including Firing meant the last value latched
+            // for a fired channel was that mid-pulse read, overwriting the one
+            // electrically valid in-flight sample: the ArmSettle tick, with
+            // ARM high and FIRE still low.  Leave it latched through Firing
+            // and Done; a post-fire verdict would need a fresh read a settled
+            // interval AFTER the pulse, not during it.
+            if (pyro_ch[i].state == PyroChState::ArmSettle) {
                 pyro_ch[i].cont       = pyroContFromRaw(
                                           gpio_get_level((gpio_num_t)PYRO_CONT_PINS[i]));
                 pyro_ch[i].cont_known = true;
@@ -1790,8 +1798,16 @@ static inline IRAM_ATTR void fcOtaRingPush(uint8_t b)
     // tore the index and corrupted fcOtaRingLen/framing. Same ISR-touches-tail
     // hazard the OC eliminated in #383 (see OC rxPush) — with the ISR owning
     // only head and the parser owning only tail this is a true SPSC ring.
-    // Dropping newest is safe here: chunks are CRC-framed and offset-ordered,
-    // so a lost byte costs one chunk resend, same as drop-oldest did.
+    // #1154 item 13: drop-newest vs drop-oldest does NOT matter here, and not
+    // for the reason this comment used to give ("a lost byte costs one chunk
+    // resend"). There is no chunk resend. The OC pump is forward-only — each
+    // BLE chunk goes over I2S exactly once (five copies of offset 0, one of
+    // everything else) — so any byte lost from this ring tears or CRC-fails
+    // its frame, bytesWritten() stops advancing at that offset, every later
+    // frame is counted as a gap, and the session ends at FINISH. That is why
+    // the ring is sized to make overflow unreachable, and why an overflow is
+    // reported as its own terminal error rather than as the SizeMismatch it
+    // would otherwise present as.
     const size_t next = (fc_ota_head + 1) % FC_OTA_RING;
     if (next == fc_ota_tail)
     {
@@ -2963,9 +2979,18 @@ static void goproShutterClaim()
     if ((config::CAM_SHUTTER_PIN < 0) || !camera_gate_on)
         return;
     gpio_reset_pin((gpio_num_t)config::CAM_SHUTTER_PIN);
+    // #1154 item 3: stage the RELEASED level BEFORE enabling the drive.
+    // gpio_reset_pin() does not clear the pad's GPIO_OUT bit, and on the first
+    // GoPro start after a cold boot nothing has written a level here yet — so
+    // GPIO_OUT still holds its reset value 0.  Enabling OUTPUT_OD first
+    // therefore drove the shutter line to ground for the microseconds until
+    // the level write, briefly PRESSING the button this function exists to
+    // release.  A level write on a non-output pad only stages GPIO_OUT, so
+    // doing it first takes the pad from high-Z straight to OD-released.
+    // Same pre-stage-then-enable order as safePyroOutputInit().
+    gpio_set_level((gpio_num_t)config::CAM_SHUTTER_PIN, 1);  // OD high = released
     gpio_set_direction((gpio_num_t)config::CAM_SHUTTER_PIN, GPIO_MODE_OUTPUT_OD);
     gpio_set_pull_mode((gpio_num_t)config::CAM_SHUTTER_PIN, GPIO_FLOATING);
-    gpio_set_level((gpio_num_t)config::CAM_SHUTTER_PIN, 1);  // OD high = released
 }
 
 // THE interlock.  Asserting with the gate open does not press a button — on V8
@@ -6275,14 +6300,32 @@ static void loop_fc()
             // skipped on the "off" ticks.  The EKF's internal dt tracking
             // (tPrev_us_) automatically accounts for the longer interval.
             // (run_ekf_this_tick is computed above, before the GNSS gate — #367.)
-            if (!ekf_initialized && rocket_state != MAG_CALIBRATION)
+            // #1154 item 8: this used to read
+            //   if (!ekf_initialized && rocket_state != MAG_CALIBRATION) {init}
+            //   else if (run_ekf_this_tick) {update}
+            // which folds two conditions into one gate, and the fold has a hole:
+            // uninitialised AND in MAG_CALIBRATION fell through to the UPDATE
+            // branch, running ekf.update() at 500 Hz on a filter init() had
+            // never touched. tPrev_us_ was still the constructor's 0, so the
+            // first tick integrated a multi-thousand-second dt (clamped to
+            // 0.1 s); pEst_D_rrm_ was (0,0,0), so a GNSS fix passing gate 1 ran
+            // a full measUpdate() with an innovation of thousands of km.
+            // Reachable whenever mag cal starts before the EKF has initialised
+            // — indoors with no fix, or right after an orientation change,
+            // which clears ekf_initialized. The two conditions are now
+            // separate: MAG_CALIBRATION inhibits the estimator ENTIRELY, as the
+            // architecture doc says it does.
+            if (rocket_state == MAG_CALIBRATION)
+            {
+                // Neither init nor update. A tumble violates the "stationary at
+                // init" assumption (#216), and an uninitialised filter has
+                // nothing valid to update. Both resume when the cal session
+                // ends and rocket_state returns to READY.
+            }
+            else if (!ekf_initialized)
             {
                 // Gate 3: only init with high-quality GNSS (tight h_acc + low vel)
-                // Issue #216 — also gate against MAG_CALIBRATION so a tumble
-                // (which violates the EKF's "stationary at init" assumption,
-                // and can also set kinematics flags we'd rather not pick up)
-                // can't trigger an init.  EKF init resumes naturally after
-                // the cal session ends and rocket_state returns to READY.
+                // Issue #216's MAG_CALIBRATION gate now lives one level up.
                 // #557: degraded init — when the GNSS module is absent (dead/
                 // deaf UART) initialize the EKF from baro + IMU only, so attitude
                 // + vertical velocity (hence the velocity/pitch apogee voters and
@@ -7081,23 +7124,15 @@ static void loop_fc()
             }
             else if (out_pending_command == SIM_START_CMD)
             {
-                // If config and start commands arrived close together (e.g. via LoRa relay),
-                // the start may have overwritten the config command before we read it.
-                // Try reading any pending config frame before starting the sim.
-                {
-                    delay_ms(5);
-                    uint8_t cfg_payload[16];
-                    size_t  cfg_len = 0;
-                    if (readConfigFrame(SIM_CONFIG_MSG, sizeof(SimConfigData),
-                                        cfg_payload, sizeof(cfg_payload), cfg_len)
-                        && cfg_len >= sizeof(SimConfigData))
-                    {
-                        SimConfigData cfg;
-                        memcpy(&cfg, cfg_payload, sizeof(cfg));
-                        sensor_collector.configureSim(cfg);
-                        ESP_LOGI(TAG, "[SIM] Config frame recovered on start cmd");
-                    }
-                }
+                // #1154 item 12: there used to be a speculative
+                // readConfigFrame(SIM_CONFIG_MSG) here, to recover a config the
+                // start command "may have overwritten". That premise died with
+                // #366: the OC's single pending slot became a queue, SIM_CONFIG
+                // is enqueued WITH its payload, and every host stages SIM_START
+                // bare — so the read could never succeed, and it cost three
+                // doomed attempts, ~36 ms of delay_ms() inside the top-priority
+                // flight task, and two unsolicited 96-byte master reads on every
+                // sim start. A lost config is handled by the defaults below.
                 if (!sensor_collector.isSimConfigured()) {
                     // Config cmd was lost (e.g. LoRa relay) — use sensible defaults
                     SimConfigData defaults = {};
@@ -7857,7 +7892,21 @@ static void loop_fc()
                     // starts.
                     sendOtaRelayStatus(OTA_RELAY_VERIFYING, 0,
                                        (uint32_t)fc_ota_receiver.bytesWritten());
-                    const TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
+                    TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
+                    // #1154 item 13: a ring overflow is the CAUSE, and it would
+                    // otherwise surface as SizeMismatch — the symptom, which
+                    // sends whoever is debugging a stalled relay looking for a
+                    // dropped BLE chunk on the phone side instead of an ingest
+                    // stall on this side. Name it.
+                    if (e != TR_OTA_Receiver::Error::Ok && fc_ota_ring_ovf > 0)
+                    {
+                        ESP_LOGE(TAG, "[OTA] finish failed with %u byte(s) dropped by "
+                                      "the I2S ingest ring — the relay stalled here, "
+                                      "not on the phone; reporting RelayRingOverflow "
+                                      "instead of %d",
+                                 (unsigned)fc_ota_ring_ovf, (int)e);
+                        e = TR_OTA_Receiver::Error::RelayRingOverflow;
+                    }
                     if (e == TR_OTA_Receiver::Error::Ok)
                     {
                         // Robust resend spans ~1.4 s, which also gives the app
@@ -10550,7 +10599,13 @@ static void loop_fc()
                           (unsigned long)pt.bmp_max_us,
                           (unsigned long)pt.mmc_max_us,
                           (unsigned long)pt.ism6_read_max_us);
-            ESP_LOGI(TAG, "[GAP DIAG] gaps>10ms=%lu worst=%lu us | gnss calls=%lu >1ms=%lu >5ms=%lu >10ms=%lu | imu_q_drops=%lu",
+            // #1154 item 14: every counter on this line is per-second except
+            // imu_q_drops, which resetPollTimingSnapshot() deliberately does
+            // NOT clear — it is zeroed once at the top of loop_fc and is
+            // cumulative from there, so that a stall stays visible after the
+            // second it happened in.  Labelled rather than reset: making it
+            // per-second would destroy exactly that property.
+            ESP_LOGI(TAG, "[GAP DIAG] gaps>10ms=%lu worst=%lu us | gnss calls=%lu >1ms=%lu >5ms=%lu >10ms=%lu | imu_q_drops=%lu (cumulative)",
                           (unsigned long)pt.gap_count,
                           (unsigned long)pt.gap_worst_us,
                           (unsigned long)pt.gnss_calls,
