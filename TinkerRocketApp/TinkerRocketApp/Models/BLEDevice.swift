@@ -2630,7 +2630,17 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             pendingAutoApply = false
             if let quiet = samples.min(by: { $0.rssiDbm < $1.rssiDbm }) {
                 print("[FREQ] Auto-applying quietest channel: \(quiet.freqMHz) MHz (\(quiet.rssiDbm) dBm)")
-                _ = autoApplyFrequency(quiet.freqMHz)
+                // #1096: latch the flag only when the apply actually lands, so
+                // FrequencyScanView's "a quiet channel was auto-selected" banner
+                // tells the truth. Dormant today: triggerAutoChannelSelectIfNeeded
+                // is a deliberate no-op since #136 and pendingAutoApply is never
+                // set true, so this branch does not run yet. Wiring it here (rather
+                // than deleting the flag) completes the scaffold the maintainer kept
+                // for #150, so the banner is correct the moment #150 re-enables the
+                // scan-and-move flow.
+                if autoApplyFrequency(quiet.freqMHz) {
+                    hasAutoSelectedChannel = true
+                }
             }
         }
     }
