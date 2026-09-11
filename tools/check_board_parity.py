@@ -126,11 +126,12 @@ EXEMPT = {
         'parts (2026-08-29) await placement. Gate it once the layout is '
         'complete.',
     'rocket-computer':
-        'supervised-arm rework 3 + TPS61094 hold-up (2026-08-29) await the V10 '
-        'layout pass: 17 symbols are schematic-only (C130, C140-C142, D16, L11, '
-        'R125/R126, R132-R138, U46/U47). THIS BOARD FLIES — re-gate it the '
-        'moment the rework is placed, and do not let anything else ride in '
-        'behind the exemption. Tracked in #966.',
+        'TPS61094 hold-up (2026-08-29), rework-4 arm (2026-09-05) and the '
+        '2026-09-11 power-parity pass await the V10 layout pass: 20 symbols '
+        'are schematic-only (C130, C141-C144, L11, Q12-Q14, R125/R126, R132, '
+        'R134-R140, U47). THIS BOARD FLIES — re-gate it the moment the rework '
+        'is placed, and do not let anything else ride in behind the '
+        'exemption. Pick-up list in #1180.',
 }
 
 
