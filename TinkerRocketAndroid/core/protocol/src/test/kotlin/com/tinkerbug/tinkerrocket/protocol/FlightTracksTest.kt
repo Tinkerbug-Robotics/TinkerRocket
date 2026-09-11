@@ -223,4 +223,43 @@ class FlightTracksTest {
         ))
         assertEquals(listOf(1600.0, 1700.0), gnssTrack(data).map { it.u })
     }
+
+    @Test
+    fun `an all-zero EKF track (filter never initialised) reads as empty, not a stacked-marker line`() {
+        // #1092: Position East/North/Up are all 0.0 when the FC never set
+        // ekf_initialized, and there is no GNSS fix either. The old size-based
+        // isEmpty drew a zero-extent line with Launch/Landing/Apogee on one
+        // point; it must now fall through to "no position data".
+        val t = flightTracks(csv(mapOf(
+            "Position East (m)" to listOf(0.0, 0.0, 0.0),
+            "Position North (m)" to listOf(0.0, 0.0, 0.0),
+            "Position Up (m)" to listOf(0.0, 0.0, 0.0),
+        )))
+        assertTrue(t.isEmpty, "an all-zero EKF track has no drawable path")
+    }
+
+    @Test
+    fun `a real track starting at (0,0) is NOT rejected`() {
+        // The guard is extent-based, not a per-row (0,0) reject — a launch pad
+        // at ENU origin is legitimate (rocketCsv starts at 0,0).
+        val t = flightTracks(rocketCsv())
+        assertTrue(!t.isEmpty, "a track that moves away from (0,0) still draws")
+        assertTrue(t.primary.size >= 2)
+    }
+
+    @Test
+    fun `a degenerate EKF track does not out-rank a real GNSS track`() {
+        // EKF all-zeros but GNSS present: primary must be the GNSS path, not
+        // the degenerate EKF one.
+        val t = flightTracks(csv(mapOf(
+            "Position East (m)" to listOf(0.0, 0.0, 0.0),
+            "Position North (m)" to listOf(0.0, 0.0, 0.0),
+            "Position Up (m)" to listOf(0.0, 0.0, 0.0),
+            "Latitude (deg)" to listOf(padLat, padLat + 0.001, padLat + 0.002),
+            "Longitude (deg)" to listOf(padLon, padLon + 0.001, padLon + 0.002),
+            "Pressure Altitude (m)" to listOf(0.0, 50.0, 0.0),
+        )))
+        assertTrue(!t.isEmpty)
+        assertEquals(t.gnss, t.primary, "GNSS should carry the markers when EKF is degenerate")
+    }
 }
