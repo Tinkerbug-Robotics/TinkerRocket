@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.SignalCellularOff
 import androidx.compose.material3.Button
@@ -41,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
@@ -54,6 +56,7 @@ import com.tinkerbug.tinkerrocket.protocol.pyroContinuityOf
 import com.tinkerbug.tinkerrocket.protocol.railAmpsDisplay   // #850
 import com.tinkerbug.tinkerrocket.protocol.showStateBanner
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
+import com.tinkerbug.tinkerrocket.protocol.ReadinessHold
 import com.tinkerbug.tinkerrocket.session.FleetDevice
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.UnitFormatter
@@ -147,6 +150,9 @@ fun DashboardScreen(
     val identity by session.identity.collectAsState()
     val hasTelemetry by session.hasReceivedTelemetry.collectAsState()
     val dataStatus by session.effectiveDataStatus.collectAsState()
+    // #1039: the freshness AGE, not just the status. It already reaches the
+    // pyro tiles; the go/no-go banner is the one consumer that never got it.
+    val dataAgeMs by session.effectiveDataAgeMs.collectAsState()
     val rssi by session.connectedRssi.collectAsState()
     val poweringOn by session.poweringOn.collectAsState()
     val remoteRockets by session.remoteRockets.collectAsState()
@@ -228,6 +234,26 @@ fun DashboardScreen(
         // them broke the iOS twin.
         if (showStateBanner(dataStatus, session.isBaseStation)) {
             RocketStateBanner(telemetry)
+        }
+
+        // #1082: the FC's "GNSS absent, flying degraded" verdict (sensor_health
+        // bit 22, #557) — decoded into gnssAbsentMode since forever and
+        // consumed by nothing on Android. This is the iOS GnssAbsentBannerView
+        // twin, in the same slot: after the state banner, before the preflight
+        // advisory.
+        //
+        // It is NOT the GNSS fix dot. A dead module looks, through fix health
+        // alone, exactly like a receiver still hunting satellites — so it reads
+        // as "wait longer" rather than "this flight has no position". The one
+        // other Android surface that names it is the FC boot line, and that is
+        // gone before the pad on a direct link and never sent at all over a
+        // relay, so without this there is no surface.
+        //
+        // Its own banner in the caution colour: it never recolours the state
+        // banner, which sensor health owns.
+        if (telemetry.gnssAbsentMode &&
+            dataStatus != TelemetryData.DataStatus.SYNCING) {
+            GnssAbsentBanner()
         }
 
         // Pre-flight checklist advisory: one quiet progress line for the
@@ -523,14 +549,30 @@ fun DashboardScreen(
 
         // Sensor health scorecard (#303) — shown once the frame carries it.
         if (telemetry.hasSensorHealth) {
-            Card(Modifier.fillMaxWidth()) {
+            // #1039: dim the whole card while the verdict is held, so a stale
+            // scorecard does not sit at full strength beside live ones. iOS
+            // applies the same opacity to HealthCardView.
+            val healthHeld = dataStatus == TelemetryData.DataStatus.STALE
+            Card(
+                Modifier
+                    .fillMaxWidth()
+                    .alpha(if (healthHeld) ReadinessHold.HELD_OPACITY else 1f)
+            ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Sensor health", style = MaterialTheme.typography.titleMedium)
                     // Go/no-go banner (iOS HealthCardView port) — the rollup
                     // was in TelemetryData all along; only the verdict UI was
                     // missing here.  The banner carries the words; the dots
                     // below stay the glanceable per-sensor detail.
-                    ReadinessBanner(telemetry.flightReadiness)
+                    // #1039: hand the banner the staleness age so it stops
+                    // asserting a verdict once the stream is no longer live.
+                    // Non-null ONLY when stale — that presence is the hold
+                    // condition, matching iOS's isHeld(staleAgeSec:).
+                    ReadinessBanner(
+                        telemetry.flightReadiness,
+                        if (dataStatus == TelemetryData.DataStatus.STALE)
+                            dataAgeMs / 1000.0 else null,
+                    )
                     // #1070: WRAP, never scroll. Six core sensors + Storage +
                     // one per configured pyro channel is nine dots on a
                     // two-pyro flight, and the trailing ones sat off the right
@@ -1176,15 +1218,24 @@ private fun StatusCard(telemetry: TelemetryData, isBaseStation: Boolean) {
 
 /** iOS HealthCardView go/no-go banner: tinted row carrying the rollup verdict. */
 @Composable
-private fun ReadinessBanner(readiness: TelemetryData.FlightReadiness) {
+private fun ReadinessBanner(
+    readiness: TelemetryData.FlightReadiness,
+    staleAgeSec: Double? = null,
+) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
-    val color = when (readiness) {
+    // #1039: once the stream is not live the app stops asserting a verdict
+    // altogether — grey, an hourglass-equivalent glyph, and words that say the
+    // judgement is HELD rather than offering a stale one. The rule itself is
+    // ReadinessHold in :core:protocol so it is testable and so both platforms
+    // point at one definition.
+    val held = ReadinessHold.isHeld(staleAgeSec)
+    val color = if (held) tr.statusIdle else when (readiness) {
         TelemetryData.FlightReadiness.READY -> tr.statusOk
         TelemetryData.FlightReadiness.CAUTION -> tr.statusWarn
         TelemetryData.FlightReadiness.NOT_READY -> tr.statusBad
         TelemetryData.FlightReadiness.UNKNOWN -> tr.statusIdle
     }
-    val glyph = when (readiness) {
+    val glyph = if (held) "…" else when (readiness) {
         TelemetryData.FlightReadiness.READY -> "✓"
         TelemetryData.FlightReadiness.CAUTION -> "⚠"
         TelemetryData.FlightReadiness.NOT_READY -> "✕"
@@ -1200,7 +1251,7 @@ private fun ReadinessBanner(readiness: TelemetryData.FlightReadiness) {
     ) {
         Text(glyph, color = color, style = MaterialTheme.typography.titleMedium)
         Text(
-            readiness.label,
+            ReadinessHold.label(readiness, staleAgeSec),
             color = color,
             style = MaterialTheme.typography.titleSmall,
         )
@@ -1320,7 +1371,16 @@ internal fun StorageCard(
     bs: com.tinkerbug.tinkerrocket.protocol.BaseStationStorageStats?,
 ) {
     val (title, subtitle, used, reserved, free, total, autoEvicted) = when {
-        isBaseStation && bs != null && bs.totalBytes > 0 -> {
+        // #1083: admit the UNMOUNTED frame too. The firmware reports
+        // total_bytes == 0 in exactly the state where the mounted bit is clear
+        // (bsQueryStorage zeroes total and returns false on both mount-failure
+        // paths, and its return value IS the mounted bit), so !mounted and
+        // total == 0 always arrive together — and gating on total > 0 alone
+        // skipped the card in precisely the state the warning below exists for.
+        // The operator saw no card at all, read it as "stats not in yet", and
+        // flew a session that logged nothing. A NAND failure that demotes to
+        // SPIFFS is unaffected: SPIFFS mounts and reports a nonzero total.
+        isBaseStation && bs != null && (bs.totalBytes > 0 || !bs.mounted) -> {
             // iOS backendName: 0 = internal flash, 2 = external NAND,
             // anything else = SD card.
             val backend = when (bs.backend) {
@@ -1398,51 +1458,57 @@ internal fun StorageCard(
                     color = tr.orientWarn,
                 )
             }
-            // Segment bar: used | reserved | free, weighted by bytes — the
-            // iOS capsule with a hairline outline.
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(14.dp)
-                    .clip(RoundedCornerShape(7.dp))
-                    .border(0.5.dp, Color(0x66777777), RoundedCornerShape(7.dp)),
-            ) {
-                val t = total.coerceAtLeast(1)
-                @Composable
-                fun seg(bytes: Long, color: Color) {
-                    val w = bytes.toFloat() / t
-                    if (w > 0f) {
-                        Box(
-                            Modifier
-                                .weight(w.coerceAtLeast(0.001f))
-                                .fillMaxHeight()
-                                .background(color),
-                        )
+            // #1083: an unmounted volume reports all zeros, so the capsule
+            // renders empty and the legend reads "Free 0 B" — a precise
+            // description of nothing. The card keeps its title, the "Not
+            // mounted" subtitle and the warning above; the numbers go away.
+            if (!bsUnmounted) {
+                // Segment bar: used | reserved | free, weighted by bytes — the
+                // iOS capsule with a hairline outline.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(14.dp)
+                        .clip(RoundedCornerShape(7.dp))
+                        .border(0.5.dp, Color(0x66777777), RoundedCornerShape(7.dp)),
+                ) {
+                    val t = total.coerceAtLeast(1)
+                    @Composable
+                    fun seg(bytes: Long, color: Color) {
+                        val w = bytes.toFloat() / t
+                        if (w > 0f) {
+                            Box(
+                                Modifier
+                                    .weight(w.coerceAtLeast(0.001f))
+                                    .fillMaxHeight()
+                                    .background(color),
+                            )
+                        }
                     }
+                    seg(used, usedColor)
+                    seg(reserved, reservedColor)
+                    seg(free, freeColor)
                 }
-                seg(used, usedColor)
-                seg(reserved, reservedColor)
-                seg(free, freeColor)
-            }
-            // iOS legend: 10dp rounded swatch + "<label> <bytes>" caption.
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                @Composable
-                fun legend(color: Color, label: String, bytes: Long) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Box(Modifier.size(10.dp).background(color, RoundedCornerShape(2.dp)))
-                        Text(
-                            "$label ${fmtBytes(bytes)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                // iOS legend: 10dp rounded swatch + "<label> <bytes>" caption.
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    @Composable
+                    fun legend(color: Color, label: String, bytes: Long) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Box(Modifier.size(10.dp).background(color, RoundedCornerShape(2.dp)))
+                            Text(
+                                "$label ${fmtBytes(bytes)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
+                    legend(usedColor, "Used", used)
+                    if (reserved > 0) legend(reservedColor, "Reserved", reserved)
+                    legend(freeColor, "Free", free)
                 }
-                legend(usedColor, "Used", used)
-                if (reserved > 0) legend(reservedColor, "Reserved", reserved)
-                legend(freeColor, "Free", free)
             }
             if (autoEvicted) {
                 // #315 rolling buffer: surface that data rolled off at arm
@@ -1466,6 +1532,55 @@ private data class StorageRow(
     val total: Long,
     val autoEvicted: Boolean,
 )
+
+/**
+ * #1082: iOS GnssAbsentBannerView twin — the flight computer's "GNSS absent,
+ * flying degraded" verdict (sensor_health bit 22, #557).
+ *
+ * Deliberately its own banner in the caution colour rather than a recolour of
+ * the state banner: sensor health owns that colour, and this is a statement
+ * about what the FLIGHT can still do, not about the rocket's state. Wording is
+ * kept identical to iOS so an operator reading either phone is told the same
+ * thing — including the second half, which is the part that stops this reading
+ * as "abort": apogee, deployment and landing detection are all unaffected.
+ */
+@Composable
+private fun GnssAbsentBanner() {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(tr.statusWarn.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.LocationOff,
+                contentDescription = null,
+                tint = tr.statusWarn,
+            )
+            Text(
+                "NO GNSS \u2014 DEGRADED FLIGHT",
+                color = tr.statusWarn,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        Text(
+            "Flying on baro + IMU only: no position or ground track, landing " +
+                "prediction and guidance are off. Apogee, deployment and " +
+                "landing detection are unaffected.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+    }
+}
 
 /**
  * iOS RocketStateView twin (#382 display-only mapping): the wire states

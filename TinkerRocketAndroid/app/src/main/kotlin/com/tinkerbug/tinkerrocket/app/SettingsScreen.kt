@@ -299,6 +299,56 @@ fun SettingsScreen(
         // Unlike iOS, firmware update is its own screen here rather than a row
         // inside Settings, so nothing that still works with the rail off is
         // lost behind this gate.
+        // #1038: over a BASE-STATION link this screen used to render the full
+        // editor. Every edit persisted to the profile and called
+        // syncer.pushGroup, which returns early on a base-station session
+        // WITHOUT sending a frame — and the dashboard's pyro card then read the
+        // trigger text back out of that same profile, so the un-sent value
+        // rendered as though the rocket had confirmed it. Nothing on screen
+        // said otherwise: the sync badge parks at Idle for a base station and
+        // draws nothing.
+        //
+        // Worse than a lost edit. On the next DIRECT connect, adoptRocketConfig
+        // overwrites the pyro fields from the rocket's own report, so the edit
+        // vanishes silently. (pushGroup's docstring still promises the offline
+        // edit "rides out on the next connect via the whole-profile push", but
+        // post-#915 that push survives only an explicit mid-connection profile
+        // switch, not a plain reconnect.)
+        //
+        // So: read-only, with iOS SettingsView.baseStationSections' wording.
+        // Deliberately NOT done by widening the directLink gates below — their
+        // !isBaseStation scope is load-bearing for the reason stated there.
+        // Pushing config over the BS relay is a separate design question
+        // (BLE_BS_CMD_RELAY_TO_ROCKET exists) and not what this fixes.
+        if (session != null && connected && session.isBaseStation) {
+            Section("Active Rocket") {
+                Text(
+                    active?.name ?: "None selected",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    "Settings are stored per rocket in the app. To change them, " +
+                        "connect directly to the rocket computer over Bluetooth.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (active != null) {
+                Section("Summary") {
+                    SummaryRow("Control mode", active.controlModeLabel)
+                    SummaryRow("Camera", when (active.cameraType) {
+                        0 -> "None"; 1 -> "GoPro"; else -> "RunCam"
+                    })
+                    SummaryRow("IMU mounting", if (active.imuOrientSetting == 0xFF) "Auto"
+                                               else "Code ${active.imuOrientSetting}")
+                    SummaryRow("Gain scheduling", if (active.gainScheduleEnabled) "On" else "Off")
+                    SummaryRow("Mag cal", if (active.magCal == null) "Not saved" else "Saved")
+                    SummaryRow("Sensor cal", if (active.sensorCal == null) "Not saved" else "Saved")
+                }
+            }
+            return@Column
+        }
+
         val directLink = session != null && connected && !session.isBaseStation
         if (directLink && hasTelemetry && !powerOn) {
             GateNotice(
@@ -1047,6 +1097,22 @@ private fun GateNotice(title: String, body: String) {
                 textAlign = TextAlign.Center,
             )
         }
+    }
+}
+
+/** #1038: read-only label/value row for the base-station Summary section. */
+@Composable
+private fun SummaryRow(label: String, value: String) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
