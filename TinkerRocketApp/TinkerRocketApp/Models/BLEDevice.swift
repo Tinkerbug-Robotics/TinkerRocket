@@ -219,6 +219,33 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Roster freshness for direct rocket links reads this.
     private(set) var lastTelemetryAt: Date?
 
+    /// #1085: when a frame last arrived with the MTU-trim flag set.
+    ///
+    /// `TR_BLE_To_APP` holds seven bytes back so `"tr"` always fits when it has
+    /// to drop fields — "so the partial frame isn't a silent blackout" — and
+    /// this app decoded the flag into `fields_trimmed` and never read it.
+    /// Without it the dropped keys fall back to their decode defaults and the
+    /// dashboard renders a rocket whose sensors stopped.
+    @Published private(set) var lastFieldsTrimmedAt: Date?
+
+    /// Whether the trim advisory should render right now.
+    ///
+    /// Held past the last trimmed frame because the flag toggles with payload
+    /// size frame to frame, so a per-frame render would flicker at telemetry
+    /// rate. Android twin: `TrimAdvisory.isShowing`.
+    static let trimAdvisoryHoldMs: UInt32 = 5000
+
+    /// Android twin: `TrimAdvisory.TEXT`. The useful half is what it says the
+    /// blanks are NOT.
+    static let trimAdvisoryText =
+        "Frame trimmed for link bandwidth — blank values are not sensor failures"
+
+    var showTrimAdvisory: Bool {
+        guard let seen = lastFieldsTrimmedAt else { return false }
+        return nowProvider().timeIntervalSince(seen) * 1000
+            <= Double(Self.trimAdvisoryHoldMs)
+    }
+
     /// #390: with the relay mirror pinned to the focused rocket, the BS's
     /// periodic stale re-push can describe a DIFFERENT rocket (old firmware
     /// re-pushes the last-heard one) and get dropped by the pin — freezing
@@ -2413,6 +2440,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 self.hasReceivedTelemetry = true
             }
             self.lastTelemetryAt = Date()
+            // #1085: stamp the trim flag so the advisory can hold past it.
+            if newTelemetry.fields_trimmed {
+                self.lastFieldsTrimmedAt = self.lastTelemetryAt
+            }
 
             // If telemetry has a source_rocket_id, it's relayed via base station
             // → route to RemoteRocket; only the FOCUSED rocket mirrors into

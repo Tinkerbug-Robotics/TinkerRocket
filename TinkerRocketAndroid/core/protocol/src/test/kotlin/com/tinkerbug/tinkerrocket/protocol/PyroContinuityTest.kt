@@ -38,7 +38,9 @@ class PyroContinuityTest {
         isConnected: Boolean = true,
         dataStatus: TelemetryData.DataStatus = TelemetryData.DataStatus.LIVE,
         isBaseStation: Boolean = false,
-    ) = pyroContinuityOf(t, channel, isConnected, dataStatus, isBaseStation)
+        // #1060: fresh by default so every pre-existing case reads as it did.
+        telemetryAgeMs: Long? = 0L,
+    ) = pyroContinuityOf(t, channel, isConnected, dataStatus, isBaseStation, telemetryAgeMs)
 
     // ── The defect ──────────────────────────────────────────────────────
 
@@ -155,5 +157,58 @@ class PyroContinuityTest {
         for (ch in listOf(0, 5, -1)) {
             assertNotEquals(PyroContinuity.PRESENT, verdict(t, ch))
         }
+    }
+
+    // ── #1060: connected is not the same as talking ─────────────────────
+
+    @Test
+    fun aStalledButConnectedLinkStopsReportingContinuity() {
+        // The reported case. The OC holds the BLE connection up and stops
+        // notifying — during a flight-log download, whose read loop runs
+        // inside loop_oc and blocks the telemetry send. dataStatus stays LIVE
+        // because nothing recomputes it, so before #1060 the last frame's
+        // green CONT was held for as long as the connection stood. On an ARMED
+        // rocket that is a safety readout asserting a measurement it does not
+        // have.
+        val t = measured(1 to TelemetryData.SensorHealth.OK)
+        assertEquals(PyroContinuity.PRESENT, verdict(t, 1, telemetryAgeMs = 0L))
+        assertEquals(PyroContinuity.PRESENT, verdict(t, 1, telemetryAgeMs = 2_999L))
+        assertEquals(PyroContinuity.NO_DATA, verdict(t, 1, telemetryAgeMs = 3_001L))
+        assertEquals(PyroContinuity.NO_DATA, verdict(t, 1, telemetryAgeMs = 60_000L))
+    }
+
+    @Test
+    fun neverHavingHeardAFrameIsNoDataNotAgeZero() {
+        // null means "no frame has ever arrived", which is emphatically not
+        // "the last frame arrived just now". Treating it as age zero is how a
+        // zero-init struct becomes a green tile.
+        val t = measured(1 to TelemetryData.SensorHealth.OK)
+        assertEquals(PyroContinuity.NO_DATA, verdict(t, 1, telemetryAgeMs = null))
+    }
+
+    @Test
+    fun theStaleVerdictOverridesEveryChannelStateIncludingOpen() {
+        // Staleness is not "keep the scary half". It withdraws the reading in
+        // both directions, exactly as a disconnect does — a stale OPEN is no
+        // more a measurement than a stale PRESENT.
+        val t = measured(
+            1 to TelemetryData.SensorHealth.OK,
+            2 to TelemetryData.SensorHealth.BAD,
+            3 to TelemetryData.SensorHealth.NA,
+        )
+        for (ch in 1..3) {
+            assertEquals(
+                PyroContinuity.NO_DATA,
+                verdict(t, ch, telemetryAgeMs = 5_000L),
+                "channel $ch",
+            )
+        }
+    }
+
+    @Test
+    fun theThresholdMatchesTheOneIosCarries() {
+        // f25af04 put 3000 ms on the iOS side. If these drift apart, the two
+        // apps disagree about whether a continuity readout is a measurement.
+        assertEquals(3000L, TELEMETRY_STALE_THRESHOLD_MS)
     }
 }

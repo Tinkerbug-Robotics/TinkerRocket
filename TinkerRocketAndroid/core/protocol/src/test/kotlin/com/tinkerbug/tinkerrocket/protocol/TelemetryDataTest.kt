@@ -847,4 +847,42 @@ class TelemetryDataTest {
         assertNull(t.modemFirmware)
         assertEquals("Radio daughterboard not answering — no LoRa", t.modemAdvisoryText)
     }
+
+    // ── #1071: no fix is not the null island ────────────────────────────
+
+    @Test
+    fun `coordinatesDisplay says N A when there is no fix`() {
+        // Null is the NORMAL state here, not an error: the emitters skip
+        // lat/lon entirely when the value is NaN, and every source sets NaN
+        // with no fix. The dashboard used to format this with `?: 0.0`, which
+        // printed 0.000000, 0.000000 — a point in the Gulf of Guinea — in the
+        // same six-decimal monospace a real position uses.
+        val t = assertNotNull(TelemetryData.decode("""{"st":"READY"}"""))
+        assertEquals("N/A", t.coordinatesDisplay)
+    }
+
+    @Test
+    fun `coordinatesDisplay needs BOTH halves before it prints a position`() {
+        val latOnly = assertNotNull(TelemetryData.decode("""{"st":"READY","lat":37.5}"""))
+        assertEquals("N/A", latOnly.coordinatesDisplay)
+        val lonOnly = assertNotNull(TelemetryData.decode("""{"st":"READY","lon":-122.3}"""))
+        assertEquals("N/A", lonOnly.coordinatesDisplay)
+    }
+
+    @Test
+    fun `a real fix prints six decimals, matching iOS`() {
+        val t = assertNotNull(
+            TelemetryData.decode("""{"st":"READY","lat":37.421998,"lon":-122.084}"""),
+        )
+        assertEquals("37.421998, -122.084000", t.coordinatesDisplay)
+    }
+
+    @Test
+    fun `a genuine zero coordinate is still rendered, not swallowed`() {
+        // The fix is about ABSENCE, not about the value zero. A rocket
+        // genuinely at 0,0 must still read as a position — otherwise this
+        // trades one wrong answer for another.
+        val t = assertNotNull(TelemetryData.decode("""{"st":"READY","lat":0.0,"lon":0.0}"""))
+        assertEquals("0.000000, 0.000000", t.coordinatesDisplay)
+    }
 }
