@@ -380,6 +380,31 @@ raises the same `pin_to_pin` note the grounded `IMON` pin already did, because
 the symbol types both as outputs (the #680 hygiene list). The mini's ERC
 drops by one (the same `U9` mismatch) and its netlist is unchanged.
 
+### 6.5 #721 — the eFuse's power-good and the INA230's alert reach the out computer
+
+Decided 2026-09-11 (owner, on the recommendations): spend the S3's last two
+free pins on both signals, listener is the out computer, the alert gets an
+external pull-up, U18's own PG is skipped.
+
+| signal | source | S3 pin | pull-up | idle / asserted |
+|---|---|---|---|---|
+| `PG_RAIL` | `U19` pin 13 (eFuse PG, open drain) | GPIO17, pad 23 | `R59` 100 k → +3V3 (existing) | high / **low = VBATT is off** (UVLO, overcurrent, thermal) |
+| `INA_ALERT` | `U23` pin 3 (INA230 ALERT, open drain) | GPIO18, pad 24 | `R142` 100 k → +3V3 (new) | high / **low = programmed limit crossed** (active-low default, APOL = 0) |
+
+Both pull-ups are on `+3V3`, which the supercap holds, so the pins read
+truthfully during the very hold-up event they are meant to explain. Neither
+pin is a strap; both default to inputs with no internal pull, so the external
+pull-ups define them through reset. GPIO17/18 are ADC2-only pins, irrelevant
+for a logic read. What is spent: the S3 now has no clean spare left; the four
+JTAG pads are the next reserve.
+
+Firmware, still open on #721: `board_v10.h` with `PG_RAIL_PIN = 17` and
+`INA_ALERT_PIN = 18` (−1 on V9); a falling-edge latch on `PG_RAIL` into
+RTC-retained memory, written to the flight log as the reboot cause on the next
+boot; the INA230 alert threshold set below the eFuse's UVLO-equivalent current
+so `INA_ALERT` fires first, logged as a warning. Layout: two traces, ~20 mm
+each, on the pass.
+
 ### 6.3 #677 — mis-connection protection
 
 Reverse battery is closed by `Q11` (AONR21321, ±25 V gate) with `CR2` deleted;
