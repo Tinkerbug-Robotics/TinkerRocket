@@ -86,8 +86,13 @@ aerodynamics:
 #   mag:  update_rate_hz 1000, noise_sigma 0.5 uT, mounting_rotation_z_deg 180
 #         earth field at ~38N: x 22.0, y 5.0, z 42.0 uT (N/E/D)
 #         NOTE MagModel has no mounting-rotation parameter at all.
-#   gnss: update_rate_hz 25, pos_noise_ne_m 3.0, pos_noise_d_m 6.0,
-#         vel_noise_ne_mps 0.5, vel_noise_d_mps 1.0
+#   gnss: update_rate_hz 18.18, pos_noise_ne_m 3.0, pos_noise_d_m 6.0,
+#         vel_noise_ne_mps 0.4, vel_noise_d_mps 0.6
+#         #1281: rate and velocity noise are MEASURED from the stationary
+#         spans of tests/test_data/flight_20260615_{162929,165000,171305}.bin
+#         (18.18 Hz / 55.0 ms; vel NE 0.378, D 0.568 pooled). Position noise
+#         is NOT measured-matched: real is NE 2.73 / D 4.11 m against the
+#         3.0 / 6.0 here — the D axis is a separate question.
 #
 # --- Simulation settings (superseded by SimConfig) -------------------------
 #   physics_dt 1.0e-4, control_dt 8.333e-4, duration 30.0,

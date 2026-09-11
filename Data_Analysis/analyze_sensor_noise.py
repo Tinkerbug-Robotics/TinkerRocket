@@ -312,11 +312,11 @@ def analyze():
         print(f"  Real pos noise D:  {d_m.std():.2f} m")
         print(f"  Sim pNoiseSigma_D_m:  6.0 m")
         print(f"  Real vel noise NE: {np.sqrt(vel_n.std()**2 + vel_e.std()**2)/math.sqrt(2):.3f} m/s (per-axis)")
-        print(f"  Sim vNoiseSigma_NE_mps: 0.5 m/s")
+        print(f"  Sim vNoiseSigma_NE_mps: 0.4 m/s")   # #1281: measured 0.378
         print(f"  Real vel noise D:  {vel_u.std():.3f} m/s")
-        print(f"  Sim vNoiseSigma_D_mps:  1.0 m/s")
+        print(f"  Sim vNoiseSigma_D_mps:  0.6 m/s")   # #1281: measured 0.568
         print(f"  Real GNSS rate:    {gnss_rate:.1f} Hz")
-        print(f"  Sim GNSS rate:     25 Hz")
+        print(f"  Sim GNSS rate:     18.18 Hz")       # #1281: measured 55.0 ms
 
     if n_pad_baro > 10:
         print("\n  --- Barometer ---")
