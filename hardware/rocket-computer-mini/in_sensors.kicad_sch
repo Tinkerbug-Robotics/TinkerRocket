@@ -128,7 +128,7 @@
 						)
 					)
 				)
-				(pin power_out line
+				(pin power_in line
 					(at 15.24 -7.62 180)
 					(length 7.62)
 					(name "VSS"
@@ -218,7 +218,7 @@
 						)
 					)
 				)
-				(pin power_out line
+				(pin power_in line
 					(at 15.24 -7.62 180)
 					(length 7.62)
 					(name "VSS"
@@ -236,7 +236,7 @@
 						)
 					)
 				)
-				(pin power_out line
+				(pin power_in line
 					(at 15.24 -7.62 180)
 					(length 7.62)
 					(name "VSS"
@@ -3540,7 +3540,7 @@
 						)
 					)
 				)
-				(pin power_out line
+				(pin power_in line
 					(at 20.32 -6.35 180)
 					(length 7.62)
 					(name "GND"
@@ -3576,7 +3576,7 @@
 						)
 					)
 				)
-				(pin power_out line
+				(pin power_in line
 					(at 20.32 -3.81 180)
 					(length 7.62)
 					(name "GND"
@@ -11461,5 +11461,29 @@
 				)
 			)
 		)
+	)
+	(no_connect
+		(at 82.55 162.56)
+		(uuid "ada757b2-963b-4b95-bd32-9f2b0308e17d")
+	)
+	(no_connect
+		(at 158.75 73.025)
+		(uuid "ca9f5b42-a288-40a5-b5fe-dfbdfe384b18")
+	)
+	(no_connect
+		(at 224.79 131.445)
+		(uuid "805fe190-bd89-4d66-b62b-8655d151e110")
+	)
+	(no_connect
+		(at 252.095 48.26)
+		(uuid "9007130d-8205-422e-aa52-c96a08387c12")
+	)
+	(no_connect
+		(at 216.535 45.72)
+		(uuid "35daa7b7-a788-4613-a46a-cce8fbfc4025")
+	)
+	(no_connect
+		(at 216.535 55.88)
+		(uuid "bd1b065a-814b-406b-a8a2-ad490627189c")
 	)
 )
