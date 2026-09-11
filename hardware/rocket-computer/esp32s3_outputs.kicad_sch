@@ -4729,13 +4729,29 @@
 	)
 	(wire
 		(pts
-			(xy 213.995 27.305) (xy 224.79 27.305)
+			(xy 213.995 27.305) (xy 219.71 27.305)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "489198f2-0c3f-4a04-b4e1-6f065399eb4e")
+		(uuid "6eef33ed-b0ab-42db-816e-c93bd03f27bd")
+	)
+	(wire
+		(pts
+			(xy 219.71 27.305) (xy 224.79 27.305)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5141138c-8443-4257-bd57-53960ce102e8")
+	)
+	(junction
+		(at 219.71 27.305)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "5080ab3a-6e91-40cb-8c6f-ed69914428f2")
 	)
 	(wire
 		(pts
@@ -14012,6 +14028,187 @@
 					(size 1.27 1.27)
 				)
 				(justify left)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 219.71 31.115 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "5afb741b-6883-4586-ad0e-18e6d7dfe192")
+		(property "Reference" "C145"
+			(at 219.71 22.86 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "100 nF"
+			(at 219.71 25.4 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 219.71 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 219.71 31.115 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 219.71 31.115 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 219.71 31.115 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 219.71 31.115 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "b3c173db-2c5d-4543-ac7c-1af8a86720b8")
+		)
+		(pin "2"
+			(uuid "47225030-bb39-482e-aeb0-c29c6093b910")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
+					(reference "C145")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 219.71 34.925 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "252c64ef-fefd-4f57-8323-335cb41cb363")
+		(property "Reference" "#PWR0704"
+			(at 219.71 41.275 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 221.615 38.735 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 219.71 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 219.71 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 219.71 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "bfc7ba52-c133-4260-b60b-7a31de5a5021")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
+					(reference "#PWR0704")
+					(unit 1)
+				)
 			)
 		)
 	)
