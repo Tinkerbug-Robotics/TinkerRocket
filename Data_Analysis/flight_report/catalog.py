@@ -1163,6 +1163,20 @@ _P(
         "wrap. Frozen at 0 until the EKF initialises on the first good fix.",
 )
 _P(
+    "FcStatus.fc_camera_engaged", "FC camera engaged",
+    note=
+        "The flight computer's OWN camera state, reported at 5 Hz on FC_STATUS_MSG: rail up, "
+        "start sequence running, or recording. Distinct from the out computer's "
+        "camera_recording_requested, which is only what it last asked for.",
+    caution=
+        "This exists because the two can disagree. The FC drops the camera by itself on a sim "
+        "reset, a camera-type change, or a start with no type, and before #1154 item 4 it told "
+        "nobody — the app kept showing 'recording' and the next press was swallowed. 'Engaged' is "
+        "deliberately wider than 'recording': it goes true when the rail comes up, several hundred "
+        "ms before a GoPro or RunCam actually rolls, so a short true pulse is a start attempt, not "
+        "proof anything was filmed. Absent on logs predating the message.",
+)
+_P(
     "NonSensor.shock_gate_trips", "EKF shock-gate trips",
     kind=KIND_COUNTER,
     note=
