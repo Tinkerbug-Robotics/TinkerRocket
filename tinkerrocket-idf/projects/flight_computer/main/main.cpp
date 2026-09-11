@@ -1492,8 +1492,16 @@ static void servicePyroChannels(uint32_t now_ms)
     // CONT; we just don't bother re-sampling outside fire windows.)
     if (pyro_arm_pin_state) {
         for (int i = 0; i < 4; ++i) {
-            if (pyro_ch[i].state == PyroChState::ArmSettle ||
-                pyro_ch[i].state == PyroChState::Firing) {
+            // #1154 item 5: ArmSettle ONLY.  A read taken during Firing is
+            // meaningless — the high-side FET is sourcing V_CAP into the
+            // squib, so the sense node reads "open" whether or not the charge
+            // was ever there.  Including Firing meant the last value latched
+            // for a fired channel was that mid-pulse read, overwriting the one
+            // electrically valid in-flight sample: the ArmSettle tick, with
+            // ARM high and FIRE still low.  Leave it latched through Firing
+            // and Done; a post-fire verdict would need a fresh read a settled
+            // interval AFTER the pulse, not during it.
+            if (pyro_ch[i].state == PyroChState::ArmSettle) {
                 pyro_ch[i].cont       = pyroContFromRaw(
                                           gpio_get_level((gpio_num_t)PYRO_CONT_PINS[i]));
                 pyro_ch[i].cont_known = true;
@@ -2963,9 +2971,18 @@ static void goproShutterClaim()
     if ((config::CAM_SHUTTER_PIN < 0) || !camera_gate_on)
         return;
     gpio_reset_pin((gpio_num_t)config::CAM_SHUTTER_PIN);
+    // #1154 item 3: stage the RELEASED level BEFORE enabling the drive.
+    // gpio_reset_pin() does not clear the pad's GPIO_OUT bit, and on the first
+    // GoPro start after a cold boot nothing has written a level here yet — so
+    // GPIO_OUT still holds its reset value 0.  Enabling OUTPUT_OD first
+    // therefore drove the shutter line to ground for the microseconds until
+    // the level write, briefly PRESSING the button this function exists to
+    // release.  A level write on a non-output pad only stages GPIO_OUT, so
+    // doing it first takes the pad from high-Z straight to OD-released.
+    // Same pre-stage-then-enable order as safePyroOutputInit().
+    gpio_set_level((gpio_num_t)config::CAM_SHUTTER_PIN, 1);  // OD high = released
     gpio_set_direction((gpio_num_t)config::CAM_SHUTTER_PIN, GPIO_MODE_OUTPUT_OD);
     gpio_set_pull_mode((gpio_num_t)config::CAM_SHUTTER_PIN, GPIO_FLOATING);
-    gpio_set_level((gpio_num_t)config::CAM_SHUTTER_PIN, 1);  // OD high = released
 }
 
 // THE interlock.  Asserting with the gate open does not press a button — on V8
@@ -10550,7 +10567,13 @@ static void loop_fc()
                           (unsigned long)pt.bmp_max_us,
                           (unsigned long)pt.mmc_max_us,
                           (unsigned long)pt.ism6_read_max_us);
-            ESP_LOGI(TAG, "[GAP DIAG] gaps>10ms=%lu worst=%lu us | gnss calls=%lu >1ms=%lu >5ms=%lu >10ms=%lu | imu_q_drops=%lu",
+            // #1154 item 14: every counter on this line is per-second except
+            // imu_q_drops, which resetPollTimingSnapshot() deliberately does
+            // NOT clear — it is zeroed once at the top of loop_fc and is
+            // cumulative from there, so that a stall stays visible after the
+            // second it happened in.  Labelled rather than reset: making it
+            // per-second would destroy exactly that property.
+            ESP_LOGI(TAG, "[GAP DIAG] gaps>10ms=%lu worst=%lu us | gnss calls=%lu >1ms=%lu >5ms=%lu >10ms=%lu | imu_q_drops=%lu (cumulative)",
                           (unsigned long)pt.gap_count,
                           (unsigned long)pt.gap_worst_us,
                           (unsigned long)pt.gnss_calls,

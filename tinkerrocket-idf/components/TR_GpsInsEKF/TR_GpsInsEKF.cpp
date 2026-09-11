@@ -46,7 +46,20 @@ GpsInsEKF::GpsInsEKF() {
     // Fs — 15x15
     std::memset(Fs_, 0, sizeof(Fs_));
     Fs_[0][3]=1; Fs_[1][4]=1; Fs_[2][5]=1;
-    Fs_[5][2]=-2.0f*G/EARTH_RADIUS;
+    // #1154 item 1: the sign was negative, which models the vertical channel
+    // as DECAYING when it is physically unstable.  The error-state convention
+    // is fixed by how corrections are applied — measUpdate() forms y[2] on NED
+    // down and applies pEst_D_rrm_[2] -= xk[2], so x2 = delta(down) =
+    // -delta(altitude).  With g(h) = g0(1 - 2h/R) and h = -D, g(D) =
+    // g0(1 + 2D/R), hence d(vdot_D)/d(D) = +2g0/R.
+    //
+    // Kept rather than deleted, though the state propagation uses a CONSTANT G
+    // with no altitude dependence, so a gravity gradient that exists only in
+    // the Jacobian is inconsistent either way.  At +3.07e-6 s^-2 the time
+    // constant is ~570 s against a 60 s flight with baro and GNSS aiding, so
+    // this changes no flight outcome; it is fixed because a wrong sign in a
+    // covariance model is a trap for whoever reads it next.
+    Fs_[5][2]=+2.0f*G/EARTH_RADIUS;
     Fs_[6][12]=-0.5f; Fs_[7][13]=-0.5f; Fs_[8][14]=-0.5f;
     Fs_[9][9]=-1.0f/aMarkovTau_s;
     Fs_[10][10]=-1.0f/aMarkovTau_s;
