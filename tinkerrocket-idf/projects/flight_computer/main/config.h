@@ -109,6 +109,16 @@ static_assert(board_pins::USE_IIS2MDC &&
               board_pins::IIS2MDC_SDA >= 0 && board_pins::IIS2MDC_SCL >= 0,
               "board_m1.h: the mini's magnetometer belongs to the flight computer — "
               "USE_IIS2MDC on, with real MAG_SDA/MAG_SCL pins");
+// U3 on this board is a QST QMC5883P, not an ST IIS2MDC (#797).  The driver
+// behind the IIS2MDC-named slot is a build-time choice (TR_Sensor_Collector's
+// TR_MAG_DRIVER_QMC5883P seam, #1312) and CMakeLists.txt makes it for M1.  An
+// M1 image built without it drives the QMC5883P with ST register addresses —
+// the chip ID never matches, the board simply has no magnetometer — and
+// stamps every log with the IIS2MDC count scale, 5.6x off.  Refuse to build
+// that rather than find out on the pad.
+#if !defined(TR_MAG_DRIVER_QMC5883P) || !TR_MAG_DRIVER_QMC5883P
+#error "board_m1.h: U3 is a QMC5883P — an M1 build needs TR_MAG_DRIVER_QMC5883P=1 (flight_computer/CMakeLists.txt sets it under TR_BOARD_M1; #1312)"
+#endif
 #endif
 
 struct config : board_pins
@@ -117,9 +127,17 @@ struct config : board_pins
     // ### SPI parameters (pins in board header) ###
     static constexpr uint32_t SPI_SPEED = 10'000'000; // 10 MHz
 
-    // ### IIS2MDC I2C parameters (pins in board header) ###
+    // ### Magnetometer I2C parameters (pins in board header) ###
+    // The slot keeps its IIS2MDC name on every board; the part behind it is
+    // the TR_Sensor_Collector seam's choice (#1312).  Both parts have one
+    // fixed 7-bit address: ST IIS2MDC 0x1E (no SAD pin), QST QMC5883P 0x2C
+    // (datasheet 5.4 — other addresses are "contact factory").
     static constexpr uint32_t IIS2MDC_I2C_FREQ_HZ = 400'000;
-    static constexpr uint8_t IIS2MDC_I2C_ADDR = 0x1E;
+#if defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
+    static constexpr uint8_t IIS2MDC_I2C_ADDR = 0x2C;   // QMC5883P
+#else
+    static constexpr uint8_t IIS2MDC_I2C_ADDR = 0x1E;   // IIS2MDC
+#endif
 
     // ### Data Update Rates (Hz) ###
     static constexpr uint16_t FLIGHT_LOOP_UPDATE_RATE = 1000;

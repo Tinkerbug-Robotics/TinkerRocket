@@ -8,11 +8,12 @@
 static const char* TAG = "MAGCAL";
 #endif
 
-// IIS2MDC native sensitivity: 0.15 µT/LSB (datasheet 9.13).  The
-// calibrator works in raw int16 counts so the fit can be programmed
-// directly into OFFSET_X/Y/Z without scaling round-trips; this constant
-// only shows up where we need µT for the R-band gate or BLE telemetry.
-static constexpr float IIS2MDC_LSB_TO_uT = 0.15f;
+// The calibrator works in raw int16 counts so the fit can be programmed
+// directly into the chip without scaling round-trips; the count→µT scale
+// (lsb_to_uT_, default the IIS2MDC's 0.15 — MAG_UT_PER_LSB_IIS2MDC) only
+// shows up where µT are needed: the R-band gate, the residual gate, the
+// verify |B| band and the status frame.  #1312: the mini's QMC5883P counts
+// are 100/3750 µT/LSB, and the FC sets that through setCountScale().
 
 // Gaussian-elimination 4×4 solver (in-place; A is destroyed).  Returns
 // false if the matrix is singular (degenerate sample geometry, e.g. all
@@ -68,6 +69,7 @@ MagCalibrator::MagCalibrator()
       accel_x_(0), accel_y_(0), accel_z_(0),
       accel_valid_(false),
       state_(State::IDLE),
+      lsb_to_uT_((float)MAG_UT_PER_LSB_IIS2MDC),
       verify_min_uT_(0.0f), verify_max_uT_(0.0f),
       verify_n_samples_(0),
       verify_coverage_mask_(0),
@@ -75,6 +77,14 @@ MagCalibrator::MagCalibrator()
 {
     memset(wedge_count_, 0, sizeof(wedge_count_));
     memset(wedge_write_, 0, sizeof(wedge_write_));
+}
+
+void MagCalibrator::setCountScale(float uT_per_lsb)
+{
+    // A zero or negative scale would turn every µT gate into a no-op or a
+    // certain reject; keep the previous value rather than store nonsense.
+    if (!(uT_per_lsb > 0.0f)) return;
+    lsb_to_uT_ = uT_per_lsb;
 }
 
 void MagCalibrator::start()
@@ -291,9 +301,9 @@ bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
         last_y_ = y;
         last_z_ = z;
 
-        const float fx = (float)x * IIS2MDC_LSB_TO_uT;
-        const float fy = (float)y * IIS2MDC_LSB_TO_uT;
-        const float fz = (float)z * IIS2MDC_LSB_TO_uT;
+        const float fx = (float)x * lsb_to_uT_;
+        const float fy = (float)y * lsb_to_uT_;
+        const float fz = (float)z * lsb_to_uT_;
         const float B = sqrtf(fx*fx + fy*fy + fz*fz);
 
         if (verify_n_samples_ == 0) {
@@ -396,9 +406,9 @@ void MagCalibrator::getProgress(uint16_t& sample_count,
     // — the IIS2MDC chip's OFFSET registers haven't been programmed yet
     // during cal, so this includes the hard-iron contribution.  After
     // accept(), boot-time apply zeroes the offset out of the raw stream.
-    const float fx = (float)last_x_ * IIS2MDC_LSB_TO_uT;
-    const float fy = (float)last_y_ * IIS2MDC_LSB_TO_uT;
-    const float fz = (float)last_z_ * IIS2MDC_LSB_TO_uT;
+    const float fx = (float)last_x_ * lsb_to_uT_;
+    const float fy = (float)last_y_ * lsb_to_uT_;
+    const float fz = (float)last_z_ * lsb_to_uT_;
     inst_field_uT = sqrtf(fx*fx + fy*fy + fz*fz);
 }
 
@@ -453,9 +463,9 @@ void MagCalibrator::buildStatusFrame(uint32_t time_us, MagCalStatusData& out) co
 
     // Instantaneous field magnitude (most recent sample).
     {
-        const float fx = (float)last_x_ * IIS2MDC_LSB_TO_uT;
-        const float fy = (float)last_y_ * IIS2MDC_LSB_TO_uT;
-        const float fz = (float)last_z_ * IIS2MDC_LSB_TO_uT;
+        const float fx = (float)last_x_ * lsb_to_uT_;
+        const float fy = (float)last_y_ * lsb_to_uT_;
+        const float fz = (float)last_z_ * lsb_to_uT_;
         const float mag_uT = sqrtf(fx*fx + fy*fy + fz*fz);
         const float mag_x10 = mag_uT * 10.0f;
         out.inst_field_uT_x10 = (mag_x10 < 0.0f) ? 0u
@@ -660,8 +670,8 @@ void MagCalibrator::runFit()
     const double rms_counts = sqrt(rss / (double)n_samples_);
 
     // Scale to µT for gating + reporting.
-    const float R_uT = (float)R * IIS2MDC_LSB_TO_uT;
-    const float res_uT = (float)rms_counts * IIS2MDC_LSB_TO_uT;
+    const float R_uT = (float)R * lsb_to_uT_;
+    const float res_uT = (float)rms_counts * lsb_to_uT_;
 
     // Clamp offsets to int16 so OFFSET_X/Y/Z can hold them.  A clamp here
     // means the underlying offset is bigger than the chip's tracking

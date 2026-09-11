@@ -221,6 +221,17 @@ target_include_directories(test_iis2mdc_poll_gate PRIVATE
 target_link_libraries(test_iis2mdc_poll_gate GTest::gtest_main)
 gtest_discover_tests(test_iis2mdc_poll_gate)
 
+# ---------- test_qmc5883p_regs ----------
+# The mini's magnetometer (#1312): register packing pinned to the QMC5883P
+# datasheet's worked examples, the ±8 G scale MAG_TYPE_QMC5883P promises, and
+# the saturating software hard-iron subtract.  Header-only and IDF-free.
+add_executable(test_qmc5883p_regs test_qmc5883p_regs.cpp)
+target_include_directories(test_qmc5883p_regs PRIVATE
+    ${LIB_DIR}/TR_QMC5883P
+)
+target_link_libraries(test_qmc5883p_regs GTest::gtest_main)
+gtest_discover_tests(test_qmc5883p_regs)
+
 # ---------- test_control_mixer ----------
 add_executable(test_control_mixer test_control_mixer.cpp
     ${LIB_DIR}/TR_ControlMixer/TR_ControlMixer.cpp

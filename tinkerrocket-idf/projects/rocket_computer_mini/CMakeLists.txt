@@ -10,6 +10,11 @@ set(EXCLUDE_COMPONENTS "TR_GuidancePN TR_GuidancePN_Stub")
 # wide definition, same mechanism as flight_computer's TR_GUIDANCE_AVAILABLE.
 add_compile_definitions(TR_GNSS_DRIVER_LC86=1)
 
+# The magnetometer is a QST QMC5883P since the #797 part swap, not the
+# IIS2MDC the FC ancestry assumes: same seam mechanism, swapping the
+# TR_QMC5883P driver into the collector's IIS2MDC-named slot (#1312).
+add_compile_definitions(TR_MAG_DRIVER_QMC5883P=1)
+
 # Embed git short-sha + build timestamp into the firmware image header
 # (esp_app_desc.version), max 32 chars. Read at runtime via
 # esp_app_get_description()->version and surfaced in BLE config_identity's

@@ -355,8 +355,8 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     // behaves exactly as before.
     if (use_iis2mdc)
     {
-        ESP_LOGI(SC_TAG, "Probing for IIS2MDC on I2C SDA=%d SCL=%d addr=0x%02X...",
-                 (int)IIS2MDC_SDA, (int)IIS2MDC_SCL, (unsigned)IIS2MDC_I2C_ADDR);
+        ESP_LOGI(SC_TAG, "Probing for %s on I2C SDA=%d SCL=%d addr=0x%02X...",
+                 MAG_NAME, (int)IIS2MDC_SDA, (int)IIS2MDC_SCL, (unsigned)IIS2MDC_I2C_ADDR);
 
         // Mini seam: an app-supplied bus (shared with the INA230) arrives via
         // the ctor; only create our own when none was provided.
@@ -379,22 +379,35 @@ void SensorCollector::begin(uint8_t imu_execution_core)
                      esp_err_to_name(bus_err));
             iis2mdc_bus = nullptr;
         }
-        else if (iis2mdc.begin(iis2mdc_bus, IIS2MDC_I2C_FREQ_HZ) == TR_IIS2MDC_OK)
+        else if (iis2mdc.begin(iis2mdc_bus, IIS2MDC_I2C_FREQ_HZ) == MAG_DRIVER_OK)
         {
-            // Configure: 100 Hz continuous, high-resolution, offset cancel on,
-            // BDU on, DRDY pin off (we'll add interrupt routing in a follow-up).
-            if (iis2mdc.configure() != TR_IIS2MDC_OK)
+            // Configure with the driver's defaults — 100 Hz on either part,
+            // the cadence the poll gate below assumes.  IIS2MDC: continuous,
+            // high-resolution, offset cancel on, BDU on, DRDY pin off.
+            // QMC5883P (#1312): normal mode, +/-8 G, set/reset on.
+            if (iis2mdc.configure() != MAG_DRIVER_OK)
             {
-                ESP_LOGE(SC_TAG, "IIS2MDC configuration failed, stopping.");
+                ESP_LOGE(SC_TAG, "%s configuration failed, stopping.", MAG_NAME);
                 while (1) { delay_ms(1000); }
             }
 
             iis2mdc_active = true;
-            ESP_LOGI(SC_TAG, "IIS2MDC found and initialized (100 Hz continuous, BDU on)");
-            ESP_LOGI(SC_TAG, "MMC5983MA path skipped — IIS2MDC is the magnetometer on this "
+            ESP_LOGI(SC_TAG, "%s found and initialized (%s)", MAG_NAME, MAG_CONFIG_NOTE);
+            ESP_LOGI(SC_TAG, "MMC5983MA path skipped — %s is the magnetometer on this "
                              "board (shared pin %d owned by I2C SDA)",
-                     (int)IIS2MDC_SDA);
+                     MAG_NAME, (int)IIS2MDC_SDA);
 
+#if defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
+            // No offset registers on this part: the hard iron lives in the
+            // driver, and softReset() inside begin() just zeroed it — the
+            // same contract the register dump below checks on the IIS2MDC.
+            {
+                int16_t ox = 0, oy = 0, oz = 0;
+                iis2mdc.getHardIronOffset(&ox, &oy, &oz);
+                ESP_LOGI(SC_TAG, "QMC5883P hard-iron offset (driver): (%d,%d,%d)",
+                         (int)ox, (int)oy, (int)oz);
+            }
+#else
             // Dump OFFSET_X/Y/Z hard-iron correction registers — should be all
             // zero after softReset(); non-zero values would be subtracted from
             // every reading and could explain a fixed offset.
@@ -406,6 +419,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             ESP_LOGI(SC_TAG,
                 "IIS2MDC OFFSET regs: X=%02X%02X Y=%02X%02X Z=%02X%02X",
                 off[1], off[0], off[3], off[2], off[5], off[4]);
+#endif
 
             // Sanity print — read a few samples to confirm the part is alive.
             // Continuous mode at 100 Hz means a fresh sample is ready every 10 ms.
@@ -413,15 +427,15 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             for (int s = 0; s < 5; s++)
             {
                 float x_uT = 0.0f, y_uT = 0.0f, z_uT = 0.0f;
-                if (iis2mdc.readFieldsXYZ_uT(&x_uT, &y_uT, &z_uT) == TR_IIS2MDC_OK)
+                if (iis2mdc.readFieldsXYZ_uT(&x_uT, &y_uT, &z_uT) == MAG_DRIVER_OK)
                 {
                     const float mag = sqrtf(x_uT * x_uT + y_uT * y_uT + z_uT * z_uT);
-                    ESP_LOGI(SC_TAG, "IIS2MDC sample %d: x=%.2f y=%.2f z=%.2f uT  |B|=%.2f uT",
-                             s, (double)x_uT, (double)y_uT, (double)z_uT, (double)mag);
+                    ESP_LOGI(SC_TAG, "%s sample %d: x=%.2f y=%.2f z=%.2f uT  |B|=%.2f uT",
+                             MAG_NAME, s, (double)x_uT, (double)y_uT, (double)z_uT, (double)mag);
                 }
                 else
                 {
-                    ESP_LOGW(SC_TAG, "IIS2MDC sample %d read failed", s);
+                    ESP_LOGW(SC_TAG, "%s sample %d read failed", MAG_NAME, s);
                 }
                 delay_ms(15);
             }
@@ -430,12 +444,12 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         {
             if (use_mmc5983ma)
             {
-                ESP_LOGI(SC_TAG, "IIS2MDC not detected — falling back to MMC5983MA");
+                ESP_LOGI(SC_TAG, "%s not detected — falling back to MMC5983MA", MAG_NAME);
             }
             else
             {
-                ESP_LOGW(SC_TAG, "IIS2MDC not detected and this board has no "
-                                 "MMC5983MA fallback — NO MAGNETOMETER");
+                ESP_LOGW(SC_TAG, "%s not detected and this board has no "
+                                 "MMC5983MA fallback — NO MAGNETOMETER", MAG_NAME);
             }
             // Tear down the bus so the pins are released (on V7 this frees
             // shared pin 13 for SPI CS use). Never tear down a shared,
@@ -979,8 +993,8 @@ void SensorCollector::pollIMUdata(void* parameter)
                 bool iis2_ok = false;
                 if (!self->iis2mdc_gate.stalled)
                 {
-                    IIS2MDC_RawData iis2_raw = {};
-                    iis2_ok = (self->iis2mdc.readRawXYZ(&iis2_raw) == TR_IIS2MDC_OK);
+                    MagRawData iis2_raw = {};
+                    iis2_ok = (self->iis2mdc.readRawXYZ(&iis2_raw) == MAG_DRIVER_OK);
                     if (iis2_ok)
                     {
                         if (xSemaphoreTake(self->iis2mdcDataSemaphore, 0) == pdTRUE)
@@ -1008,19 +1022,22 @@ void SensorCollector::pollIMUdata(void* parameter)
                 switch (self->iis2mdc_gate.onResult(iis2_ok))
                 {
                     case Iis2mdcPollGate::EV_STALLED:
-                        ESP_LOGW(SC_TAG, "IIS2MDC STALLED: %lu consecutive read failures "
+                        ESP_LOGW(SC_TAG, "%s STALLED: %lu consecutive read failures "
                                          "(last attempt %lu us) — probing at %lu ms, backing "
                                          "off to %lu ms (#1111)",
+                                 MAG_NAME,
                                  (unsigned long)self->iis2mdc_gate.consec_fails,
                                  (unsigned long)iis2_elapsed,
                                  (unsigned long)(Iis2mdcPollGate::STALL_RETRY_MIN_US / 1000u),
                                  (unsigned long)(Iis2mdcPollGate::STALL_RETRY_MAX_US / 1000u));
                         break;
                     case Iis2mdcPollGate::EV_RECOVERED:
-                        ESP_LOGI(SC_TAG, "IIS2MDC recovered (stall #%lu after %lu failed "
-                                         "attempts) — reconfigured 100 Hz continuous, BDU on%s",
+                        ESP_LOGI(SC_TAG, "%s recovered (stall #%lu after %lu failed "
+                                         "attempts) — reconfigured %s%s",
+                                 MAG_NAME,
                                  (unsigned long)self->iis2mdc_gate.stall_events,
                                  (unsigned long)iis2_fails_before,
+                                 MAG_CONFIG_NOTE,
                                  self->iis2mdc_offset_set ? ", hard-iron offset re-applied" : "");
                         break;
                     default:
@@ -1180,7 +1197,7 @@ bool SensorCollector::setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t c
     iis2mdc_offset_cy = cy;
     iis2mdc_offset_cz = cz;
     iis2mdc_offset_set = true;
-    return iis2mdc.setHardIronOffset(cx, cy, cz) == TR_IIS2MDC_OK;
+    return iis2mdc.setHardIronOffset(cx, cy, cz) == MAG_DRIVER_OK;
 }
 
 // #1111: stall probe, run from pollIMUdata at the gate's back-off cadence.
@@ -1194,10 +1211,10 @@ bool SensorCollector::setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t c
 bool SensorCollector::reviveIIS2MDC()
 {
     if (!iis2mdc.isConnected()) return false;
-    if (iis2mdc.configure() != TR_IIS2MDC_OK) return false;
+    if (iis2mdc.configure() != MAG_DRIVER_OK) return false;
     if (iis2mdc_offset_set &&
         iis2mdc.setHardIronOffset(iis2mdc_offset_cx, iis2mdc_offset_cy, iis2mdc_offset_cz)
-            != TR_IIS2MDC_OK)
+            != MAG_DRIVER_OK)
     {
         return false;
     }

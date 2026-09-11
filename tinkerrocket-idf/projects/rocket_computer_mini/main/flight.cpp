@@ -1165,11 +1165,9 @@ static void logOutStatusQuery()
     q.iis2mdc_rot_z_cdeg =
         (int16_t)lroundf(sensor_converter.iis2mdcRotationZDeg() * 100.0f);
     // tgt_* stay zeroed: no guidance stack (GUID_TGT_NONE / GUID_RC_NONE = 0).
-#ifdef TR_MAG_DRIVER_QMC5883P
-    q.mag_type = MAG_TYPE_QMC5883P;   // #797 mag — counts at 100/3750 µT/LSB
-#else
-    q.mag_type = MAG_TYPE_IIS2MDC;    // counts at 0.15 µT/LSB
-#endif
+    // #1312: stamped from the collector's seam — QMC5883P here (100/3750
+    // µT/LSB) — never from a local #ifdef the build might not define.
+    q.mag_type = SensorCollector::MAG_TYPE;
     (void)mini_link::logFrame(OUT_STATUS_QUERY,
                               reinterpret_cast<const uint8_t*>(&q),
                               (uint8_t)sizeof(q));
@@ -2521,6 +2519,10 @@ void flight_setup()
     // themselves come from the drain window (kGyroRailLsb / kAccelRailLsb).
     ekf.setShockGateSettle(config::EKF_SHOCK_SETTLE_MS * 1000u);
     sensor_converter.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
+    // #1312: count scale of the mag stream from the collector's seam (the
+    // QMC5883P here), for the converter and the calibrator alike.
+    sensor_converter.configureMagType(SensorCollector::MAG_TYPE);
+    mag_calibrator.setCountScale(SensorCollector::MAG_LSB_TO_uT);
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
     sensor_collector.configureSimIis2mdcRotation(config::IIS2MDC_ROT_Z_DEG);
 
