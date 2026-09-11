@@ -1631,7 +1631,8 @@ private fun FlightSummaryCard(telemetry: TelemetryData) {
                 Text("Attitude", style = caption, modifier = Modifier.width(70.dp))
                 listOf(roll, pitch, yaw).forEach { v ->
                     Text(
-                        v?.let { String.format(Locale.ROOT, "%.0f°", it) } ?: "—",
+                        // #1093: match iOS attitude precision (one decimal).
+                        v?.let { String.format(Locale.ROOT, "%.1f°", it) } ?: "—",
                         style = caption.copy(fontFamily = mono),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                         modifier = Modifier.weight(1f),
@@ -1653,6 +1654,7 @@ private fun FlightSummaryCard(telemetry: TelemetryData) {
  */
 @Composable
 private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: Boolean) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Card(Modifier.fillMaxWidth()) {
         Column(
             Modifier.fillMaxWidth().padding(16.dp),
@@ -1666,7 +1668,15 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
                     SignalBar(
                         fraction = SignalQuality.loraFill(lora),
                         quality = SignalQuality.forLoraRssi(lora),
-                        value = lora?.let { String.format(Locale.ROOT, "%.0f", it) } ?: "——",
+                        // #1093: append the hop channel to the RSSI value, as
+                        // iOS does ("%.0f ch%d", DashboardView loraText). Both
+                        // fields ride the relay; the channel says the pair is
+                        // walking the hop schedule.
+                        value = lora?.let { r ->
+                            telemetry.hopChannel?.let { ch ->
+                                String.format(Locale.ROOT, "%.0f ch%d", r, ch)
+                            } ?: String.format(Locale.ROOT, "%.0f", r)
+                        } ?: "——",
                         label = "LoRa",
                     )
                 }
@@ -1682,6 +1692,19 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
                     value = bleRssi?.let { "$it" } ?: "——",
                     label = "BLE",
                 )
+            }
+
+            // #1093: SNR is decoded ("snr") and relayed by the base station but
+            // was rendered nowhere on Android — iOS shows it as a DataItem row.
+            // A degrading link showed only a moving RSSI number with no SNR.
+            if (isBaseStation) {
+                telemetry.snr?.let { snr ->
+                    Text(
+                        "SNR ${String.format(Locale.ROOT, "%.1f", snr)} dB",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             // LoRa drop counters (#838 item 4).  Both are recency-windowed by
@@ -1713,7 +1736,9 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
                             "and base station were flashed from different builds; " +
                             "re-flash both",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        // #1093: caution rung, matching iOS's orange + triangle
+                        // rather than a hard red error for a protocol mismatch.
+                        color = tr.statusWarn,
                     )
                 }
             }

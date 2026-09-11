@@ -273,8 +273,17 @@ bool SensorCollectorSim::getISM6HG256Data(ISM6HG256Data& data_out)
 
     if (!have_data) return false;
 
-    // Real IMU data arrived at the hardware rate — step physics and replace values
+    // Real IMU data arrived at the hardware rate — step physics and replace
+    // VALUES.  The sample keeps its own time_us: real_ stamped it in the core-0
+    // poll task when the SPI read happened, and that is the clock a real
+    // flight's log carries.  Restamping here with the loop's micros() (what
+    // this did until #910) made every flight-loop stall look like a
+    // simultaneous multi-sensor outage — the loop drains the IMU queue late,
+    // so the backlog all took the drain time — and made a sim's sample rate
+    // meaningless as a benchmark against a real flight.  now_us is still the
+    // right clock for stepping the physics, which is per drain, not per sample.
     const uint32_t now_us = micros();
+    const uint32_t sample_us = data_out.time_us;
     const float dt = (float)(now_us - last_step_us_) * 1.0e-6f;
     last_step_us_ = now_us;
     const float clamped_dt = (dt > 0.1f) ? 0.1f : dt;
@@ -302,7 +311,7 @@ bool SensorCollectorSim::getISM6HG256Data(ISM6HG256Data& data_out)
     }
 #endif
 
-    encodeISM6(now_us, data_out);
+    encodeISM6(sample_us, data_out);
     return true;
 }
 
@@ -315,7 +324,7 @@ bool SensorCollectorSim::getBMP585Data(BMP585Data& data_out)
     if (!have_data) return false;
 
     // Replace with simulated pressure/temperature
-    encodeBMP585(micros(), data_out);
+    encodeBMP585(data_out.time_us, data_out);   // value swap only; the stamp is the sensor's (#910)
     return true;
 }
 
@@ -328,7 +337,7 @@ bool SensorCollectorSim::getMMC5983MAData(MMC5983MAData& data_out)
     if (!have_data) return false;
 
     // Replace with simulated magnetometer
-    encodeMMC5983MA(micros(), data_out);
+    encodeMMC5983MA(data_out.time_us, data_out);   // value swap only; the stamp is the sensor's (#910)
     return true;
 }
 
@@ -346,7 +355,7 @@ bool SensorCollectorSim::getIIS2MDCData(IIS2MDCData& data_out)
     // sim's flying attitude every sample — a sustained innovation the
     // heading-axis gyro bias absorbed (~±20–200 dps at sim start depending
     // on bench orientation, decaying all flight).
-    encodeIIS2MDC(micros(), data_out);
+    encodeIIS2MDC(data_out.time_us, data_out);   // value swap only; the stamp is the sensor's (#910)
     return true;
 }
 
@@ -358,9 +367,10 @@ bool SensorCollectorSim::getGNSSData(GNSSData& data_out)
 
     if (have_data)
     {
-        // Real GNSS data arrived — consume it and replace with simulated values
+        // Real GNSS data arrived — consume it and replace with simulated values,
+        // keeping the receiver's own stamp (#910, as for the IMU above).
         last_gnss_real_us_ = micros();
-        encodeGNSS(micros(), data_out);
+        encodeGNSS(data_out.time_us, data_out);
         return true;
     }
 

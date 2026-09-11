@@ -14553,4 +14553,52 @@
 			)
 		)
 	)
+	(global_label "PG_RAIL"
+		(shape input)
+		(at 212.725 88.9 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "28267708-8293-4080-a208-45e73249f3ce")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 212.725 88.9 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(global_label "INA_ALERT"
+		(shape input)
+		(at 212.725 91.44 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "28aa7d27-ec22-43dc-b527-8ec2fcfc927f")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 212.725 91.44 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
 )

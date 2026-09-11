@@ -86,6 +86,12 @@ private class DemoTransportFactory(
         fw.configIdentityJson =
             """{"type":"config_identity","uid":"demo0001","un":"Virtual Base Station",""" +
                 """"nid":7,"dt":"B","fw":"demo+sim"}"""
+        // #1100: a base station has no pyro, and a real one answers cmd 20 with
+        // config + config_identity only (sendCurrentConfig, base_station
+        // main.cpp). Drop the FakeFirmware default config_pyro so the virtual
+        // BS matches the hardware and the two platform demos are interchangeable
+        // for side-by-side comparison.
+        fw.configPyroJson = null
         // A real downloadable flight log: the emitter's synthetic golden
         // flight, bundled from the corpus as an asset.
         runCatching {

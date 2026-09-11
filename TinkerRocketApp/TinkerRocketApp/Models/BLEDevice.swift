@@ -1414,7 +1414,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             sendRelayCommand(targetRocketID: rid, innerCommand: 23,
                              innerPayload: Data([on ? 1 : 0]))
         } else {
-            sendCommand(23)
+            // #1089: send the DESIRED state, not the blind toggle. The bare
+            // sendCommand(23) form (firmware "legacy app compat", flips from
+            // current state) was abandoned everywhere else after the 2026-08-16
+            // bench — ControlsView and Android's toggleLoggingWithState both
+            // send the byte. The stop side of the pyro test is gated only on
+            // startedLoggingForTest, so a blind toggle there could START a
+            // fresh log instead of stopping one if the session ended by other
+            // means between T-5 and stop.
+            sendRawCommand(23, payload: Data([on ? 1 : 0]))
         }
     }
 

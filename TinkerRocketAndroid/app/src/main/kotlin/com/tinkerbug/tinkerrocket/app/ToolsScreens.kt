@@ -46,6 +46,7 @@ import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.RocketProfileStore
+import com.tinkerbug.tinkerrocket.session.UnitFormatter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -166,6 +167,25 @@ fun SimulationScreen(session: DeviceSession, onBack: () -> Unit) {
     var thrustN by remember { mutableStateOf(prefs.getString("thrustNewtons", "40")!!) }
     var burnS by remember { mutableStateOf(prefs.getString("burnTimeSeconds", "1.5")!!) }
     var descentMps by remember { mutableStateOf(prefs.getString("descentRateMps", "5.0")!!) }
+    // #1073: honour the app-wide unit setting like iOS SimulationView. The
+    // stored value stays canonical m/s (it goes on the wire, Commands.kt:54-61);
+    // descentDisplay is what the user edits, in the display unit. Re-synced when
+    // the unit system changes, mirroring iOS syncDescentRateText/commitDescentRate.
+    val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
+    var descentDisplay by remember {
+        mutableStateOf(
+            (descentMps.toDoubleOrNull()?.let { UnitFormatter.speedValue(it, units) }
+                ?: 5.0).let { if (it == it.toLong().toDouble()) it.toLong().toString()
+                              else String.format(java.util.Locale.ROOT, "%.2f", it) }
+        )
+    }
+    LaunchedEffect(units) {
+        descentMps.toDoubleOrNull()?.let { mps ->
+            val d = UnitFormatter.speedValue(mps, units)
+            descentDisplay = if (d == d.toLong().toDouble()) d.toLong().toString()
+                             else String.format(java.util.Locale.ROOT, "%.2f", d)
+        }
+    }
     var launching by remember { mutableStateOf(false) }
     var confirmLaunch by remember { mutableStateOf(false) }
 
@@ -196,7 +216,13 @@ fun SimulationScreen(session: DeviceSession, onBack: () -> Unit) {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SimField("Burn s", burnS, Modifier.weight(1f)) { burnS = it; persist() }
-                    SimField("Descent m/s", descentMps, Modifier.weight(1f)) { descentMps = it; persist() }
+                    SimField("Descent ${UnitFormatter.speedUnit(units)}", descentDisplay, Modifier.weight(1f)) {
+                        descentDisplay = it
+                        it.toDoubleOrNull()?.let { d ->
+                            descentMps = UnitFormatter.speedToMps(d, units).toString()
+                            persist()
+                        }
+                    }
                 }
             }
         }
@@ -207,8 +233,8 @@ fun SimulationScreen(session: DeviceSession, onBack: () -> Unit) {
                     massGrams.toFloatOrNull(), thrustN.toFloatOrNull(),
                     burnS.toFloatOrNull(), descentMps.toFloatOrNull(),
                 )
-                EstRow("Burnout Speed", est?.let { "%.0f m/s".format(it.maxSpeed) } ?: "—")
-                EstRow("Max Altitude", est?.let { "%.0f m".format(it.maxAlt) } ?: "—")
+                EstRow("Burnout Speed", est?.let { UnitFormatter.speed(it.maxSpeed.toDouble(), units, decimals = 0) } ?: "—")
+                EstRow("Max Altitude", est?.let { UnitFormatter.altitude(it.maxAlt.toDouble(), units) } ?: "—")
                 EstRow("Flight Duration", est?.let { "%.0f s".format(it.totalTime) } ?: "—")
             }
         }

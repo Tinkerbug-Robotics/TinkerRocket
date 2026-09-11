@@ -238,6 +238,11 @@ it stays on `VBATT` as accepted. GNSS stays on `VBATT` by decision (§1.3).
 
 ### 4.1 Layout (owner)
 
+> **Consolidated 2026-09-11 into issue #1365**, the single V10 layout
+> pick-up list (it also absorbed #1180, #867, #868, #676, #679 and the layout
+> halves of #680). The items below are kept as this note's record; the issue
+> is the list to work from.
+
 - `R140` 0402 across `V_BUCK` — beside `R137`/`R138`.
 - `C144` 0805 — beside `C17` at `U47` pins 9/10.
 - The hold-up block still sits off the A4 page at x ≈ 300–440 mm; the
@@ -379,6 +384,31 @@ hang from, `U9`'s cached-symbol mismatch is gone, and `NRETRY` grounded now
 raises the same `pin_to_pin` note the grounded `IMON` pin already did, because
 the symbol types both as outputs (the #680 hygiene list). The mini's ERC
 drops by one (the same `U9` mismatch) and its netlist is unchanged.
+
+### 6.5 #721 — the eFuse's power-good and the INA230's alert reach the out computer
+
+Decided 2026-09-11 (owner, on the recommendations): spend the S3's last two
+free pins on both signals, listener is the out computer, the alert gets an
+external pull-up, U18's own PG is skipped.
+
+| signal | source | S3 pin | pull-up | idle / asserted |
+|---|---|---|---|---|
+| `PG_RAIL` | `U19` pin 13 (eFuse PG, open drain) | GPIO17, pad 23 | `R59` 100 k → +3V3 (existing) | high / **low = VBATT is off** (UVLO, overcurrent, thermal) |
+| `INA_ALERT` | `U23` pin 3 (INA230 ALERT, open drain) | GPIO18, pad 24 | `R142` 100 k → +3V3 (new) | high / **low = programmed limit crossed** (active-low default, APOL = 0) |
+
+Both pull-ups are on `+3V3`, which the supercap holds, so the pins read
+truthfully during the very hold-up event they are meant to explain. Neither
+pin is a strap; both default to inputs with no internal pull, so the external
+pull-ups define them through reset. GPIO17/18 are ADC2-only pins, irrelevant
+for a logic read. What is spent: the S3 now has no clean spare left; the four
+JTAG pads are the next reserve.
+
+Firmware, still open on #721: `board_v10.h` with `PG_RAIL_PIN = 17` and
+`INA_ALERT_PIN = 18` (−1 on V9); a falling-edge latch on `PG_RAIL` into
+RTC-retained memory, written to the flight log as the reboot cause on the next
+boot; the INA230 alert threshold set below the eFuse's UVLO-equivalent current
+so `INA_ALERT` fires first, logged as a warning. Layout: two traces, ~20 mm
+each, on the pass.
 
 ### 6.3 #677 — mis-connection protection
 

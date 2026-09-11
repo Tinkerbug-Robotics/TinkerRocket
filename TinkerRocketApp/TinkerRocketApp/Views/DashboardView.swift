@@ -2866,6 +2866,12 @@ struct ControlsView: View {
                 .foregroundColor(.white)
                 .cornerRadius(10)
             }
+            // #1089: on a base-station link with nothing focused, a bare cmd 1
+            // makes the BS recompute the target from its own guessed state and
+            // broadcast the toggle to every rocket in range. Disable it, the
+            // same guard the rocket-log button below already carries. Android
+            // greys both.
+            .disabled(device.isBaseStation && device.focusRocketID == nil)
 
             // Rocket flash recording and the BS CSV are separate controls
             // (phone-tested): the rocket starts NOT logging while the BS
