@@ -23,6 +23,7 @@
 #include <freertos/task.h>
 
 #include <RadioModemProtocol.h>
+#include <tx_frame_policy.h>
 #include <TR_LoRa_Comms.h>
 #include <TR_UART_Link.h>
 
@@ -248,11 +249,70 @@ static void logRadioProbe(const RadioProbe& p)
                   "its boot. Suspect a damaged die or a bad NRST/SPI joint.");
 }
 
+// #1152: credit returns that sendFrame() could not queue.  TR_UART_Link::
+// sendFrame returns false when the driver TX ring cannot take the 10-byte
+// frame inside its 20 ms timeout — a burst of RX_FRAMEs into a stalled host
+// will do it — and the old code discarded that bool, losing the credit
+// outright.  The host then recovered only via its 3 s TX watchdog.
+//
+// Sized at TX_QUEUE_CAPACITY because that is provably enough: the host may
+// have at most that many unanswered seqs outstanding, so at most that many
+// results can be owed at once.  An overflow here would mean the credit window
+// itself is broken, so it is counted and logged rather than silently wrapped.
+static TxResultData pending_results[TX_QUEUE_CAPACITY];
+static uint8_t  pending_head = 0;
+static uint8_t  pending_used = 0;
+static uint32_t pending_dropped = 0;
+
+static void queuePendingResult(const TxResultData& res)
+{
+    if (pending_used >= TX_QUEUE_CAPACITY)
+    {
+        if (pending_dropped == 0)
+        {
+            ESP_LOGE(TAG, "credit-return backlog full (%u) — seq %u LOST; the "
+                          "host will stall until its TX watchdog fires",
+                     (unsigned)TX_QUEUE_CAPACITY, (unsigned)res.seq);
+        }
+        pending_dropped++;
+        return;
+    }
+    pending_results[(pending_head + pending_used) % TX_QUEUE_CAPACITY] = res;
+    pending_used++;
+}
+
 static void sendTxResult(uint8_t seq, bool ok)
 {
     const TxResultData res = {seq, static_cast<uint8_t>(ok ? 1 : 0)};
-    uart_link.sendFrame(MSG_TX_RESULT,
-                        reinterpret_cast<const uint8_t*>(&res), sizeof(res));
+    // Order matters as much as delivery: if anything is already waiting, this
+    // result queues BEHIND it rather than overtaking it on the wire.
+    if (pending_used == 0 &&
+        uart_link.sendFrame(MSG_TX_RESULT,
+                            reinterpret_cast<const uint8_t*>(&res), sizeof(res)))
+    {
+        return;
+    }
+    queuePendingResult(res);
+}
+
+// Drain the backlog.  Called from the main loop rather than from serviceTx(),
+// which returns early when the radio is down — and a down radio is exactly
+// when rejections come thickest, so a retry living in there would never run
+// when it is needed most.
+static void servicePendingTxResults()
+{
+    while (pending_used > 0)
+    {
+        const TxResultData& res = pending_results[pending_head];
+        if (!uart_link.sendFrame(MSG_TX_RESULT,
+                                 reinterpret_cast<const uint8_t*>(&res),
+                                 sizeof(res)))
+        {
+            return;  // ring still backed up; try again next pass
+        }
+        pending_head = (pending_head + 1) % TX_QUEUE_CAPACITY;
+        pending_used--;
+    }
 }
 
 // ---- Outbound status/identity ----------------------------------------------
@@ -339,26 +399,25 @@ static TR_LoRa_Comms::Config radioConfigFromMsg(const RadioConfigData& d)
 
 static void handleTxFrame(const uint8_t* payload, size_t len)
 {
-    if (len < sizeof(TxFrameHeader) + 1)
+    // #1152: the rule lives in tx_frame_policy.h so it can be unit tested
+    // without a modem.  The guard here used to be `len < sizeof(TxFrameHeader)
+    // + 1` — i.e. len < 2 — justified as "no seq to answer", which is wrong for
+    // len == 1: the seq IS on the wire and the frame was answerable.  Silently
+    // dropping it leaked a credit, and eight of those stop the host dead.
+    const tx_frame_policy::Verdict verdict =
+        tx_frame_policy::admit(len, radio_up, txq_used, TX_QUEUE_CAPACITY);
+    if (verdict == tx_frame_policy::Verdict::DropNoSeq)
     {
-        return;  // no seq to answer — malformed, drop
+        return;  // no seq byte on the wire at all — the ONE unanswerable case
     }
     const uint8_t seq = payload[0];
+    if (tx_frame_policy::owesResult(verdict))
+    {
+        sendTxResult(seq, false);
+        return;
+    }
     const uint8_t* air = payload + sizeof(TxFrameHeader);
     const size_t air_len = len - sizeof(TxFrameHeader);
-
-    if (air_len > MAX_AIR_FRAME || !radio_up)
-    {
-        sendTxResult(seq, false);
-        return;
-    }
-    if (txq_used >= TX_QUEUE_CAPACITY)
-    {
-        // Host exceeded its credit window (or credits desynced) — reject so
-        // the credit is returned rather than leaked.
-        sendTxResult(seq, false);
-        return;
-    }
 
     TxEntry& e = tx_queue[(txq_head + txq_used) % TX_QUEUE_CAPACITY];
     e.seq = seq;
@@ -688,6 +747,7 @@ extern "C" void app_main(void)
             }
         }
 
+        servicePendingTxResults();
         serviceTx();
         serviceRx();
         serviceScanResult();

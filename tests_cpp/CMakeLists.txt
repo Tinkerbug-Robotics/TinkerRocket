@@ -1278,6 +1278,16 @@ target_include_directories(test_modem_config_ack PRIVATE
 target_link_libraries(test_modem_config_ack GTest::gtest_main)
 gtest_discover_tests(test_modem_config_ack)
 
+# ---------- test_tx_frame_policy (#1152) ----------
+# Which TX_FRAMEs the modem accepts, and which rejections still owe the host a
+# credit return. Pure header in TR_UART_Link so the "every accepted seq is
+# answered" invariant can be swept without a modem or a UART.
+add_executable(test_tx_frame_policy test_tx_frame_policy.cpp)
+target_include_directories(test_tx_frame_policy PRIVATE
+    ${CMAKE_SOURCE_DIR}/../tinkerrocket-idf/components/TR_UART_Link)
+target_link_libraries(test_tx_frame_policy GTest::gtest_main)
+gtest_discover_tests(test_tx_frame_policy)
+
 # ---------- test_ota_relay_policy (#834 items 6/7) ----------
 # Timing for the OC's I2S relay recovery: how often to retry a failed slave-RX
 # begin, and when to abandon a relay whose app has stopped pumping. Pure header
