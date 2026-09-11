@@ -1711,6 +1711,29 @@ _P("Snapshot.ekf_yaw", "EKF yaw", unit="°",
    note="The filter's cached Euler yaw, converted from radians (ZYX, body-to-local).",
    caution="Cached — the quaternion is the authority near gimbal lock. See ekf_roll.")
 _P(
+    "Snapshot.snap_max_alt_m", "Snapshot max altitude",
+    unit="m",
+    note=
+        "The flight's running maximum altitude as the FC held it when the snapshot was written. "
+        "Carried so an in-flight reboot can restore it (#1154 item 9) — without it a recovered "
+        "flight reported the highest point of its DESCENT as the apogee.",
+    caution=
+        "v5 snapshots only; None on v4 and older, which did not carry it. These twelve bytes were "
+        "ekf_euler before v5, so a decoder that ignores `version` will read Euler angles as "
+        "altitudes. Not an independent apogee measurement — it is the same running max the live "
+        "telemetry reports, so it agrees with the flight's own max_alt rather than confirming it.",
+)
+_P(
+    "Snapshot.snap_max_speed_mps", "Snapshot max speed",
+    unit="m/s",
+    note=
+        "The flight's running maximum speed at snapshot time, restored across an in-flight reboot "
+        "alongside snap_max_alt_m.",
+    caution=
+        "v5 snapshots only; None on v4 and older. Same reused bytes and the same caveat as "
+        "snap_max_alt_m — it mirrors the live running maximum, it does not independently verify it.",
+)
+_P(
     "Snapshot.b2r_q0", "Board-to-rocket quaternion w",
     note=
         "Scalar part of the board-to-rocket rotation active at launch (v3+), decoded from an int16 "
