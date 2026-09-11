@@ -45,6 +45,20 @@ final class VirtualRocketDriver {
 
     func start() {
         device.onConnect()
+        // #1100: a real base station answers cmd 20 with a `config` frame AND
+        // `config_identity` (sendCurrentConfig, base_station main.cpp). The
+        // virtual device emitted only config_identity, so it was the unfaithful
+        // side on that frame and did not match the Android demo. Emit both, in
+        // the firmware's order (config first), with the same values as Android's
+        // DEFAULT_CONFIG_JSON so the two demos are interchangeable for
+        // side-by-side comparison. No config_pyro — a base station has none.
+        feed("""
+            {"type":"config","sb1":0,"shz":333,"smn":1000,"smx":2000,\
+            "kp":0.08,"ki":0.005,"kd":0.003,"pmn":-10.0,"pmx":10.0,\
+            "sen":true,"gs":true,"ac":false,"rdly":0,"rmspd":0.0,"rcap":60.0,"kpang":2.0,\
+            "iwind":40.0,"ge":false,"camt":2,"irate":1920,"lf":915.0,"lsf":8,\
+            "lbw":250.0,"lcr":5,"lpw":17,"lhd":false,"lhdw":400,"ltxd":false}
+            """)
         // Identity through the same demux a real readback uses.
         feed("""
             {"type":"config_identity","uid":"virtual1","un":"Virtual Base Station",\
