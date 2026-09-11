@@ -96,12 +96,45 @@ TEST(RecoveryArmGate, DrogueDescentOpensOnTheDescentArm)
 
 TEST(RecoveryArmGate, BoostOpensOnTheAccelerationArm)
 {
+    // The hold is the launch detector's own accel-only fallback: 3 g for a
+    // quarter second (owner's ruling 2026-09-11, #1179). A live boost opens
+    // it at exactly 250 ms and not a tick before.
     State st; reset(st, 0);
     Inputs in = still();
     in.accel_norm_ms2 = 120.0f;                 // ~12 g, a live boost
-    run(st, in, 0, 1500);
+    uint32_t t = run(st, in, 0, 240);
+    EXPECT_FALSE(armingPermitted(st));
+    run(st, in, t, 20);                         // ticks at 240 and 250 ms
     EXPECT_TRUE(armingPermitted(st));
     EXPECT_EQ(st.opened_by, Arm::Boost);
+}
+
+TEST(RecoveryArmGate, BoostHoldIsTheLaunchDetectorsFallback)
+{
+    // The same numbers TR_KinematicChecks.cpp latches launch on
+    // (LAUNCH_ACCEL_FALLBACK_MS2 / _COUNT, 250 samples at 1 kHz); a
+    // static_assert there pins the two together. Stated here as well, where
+    // the gate's own tests live, so a change is a deliberate one.
+    const Config cfg;
+    EXPECT_FLOAT_EQ(cfg.boost_ms2, 30.0f);
+    EXPECT_EQ(cfg.boost_hold_ms, 250u);
+}
+
+TEST(RecoveryArmGate, AShortBurnMotorStillOpensTheBoostArm)
+{
+    // Why the hold was relaxed from 1 s: on 25 of 27 corpus flights the
+    // specific force is above 3 g for only 0.4-1.5 s after ignition, so a
+    // reboot at T+0.5 s had under a second of thrust left and the arm never
+    // opened. Here: 400 ms of thrust after the reboot, then the tail.
+    State st; reset(st, 0);
+    Inputs in = still();
+    in.accel_norm_ms2 = 40.0f;                  // ~4 g, a tapering burn
+    uint32_t t = run(st, in, 0, 400);
+    EXPECT_TRUE(armingPermitted(st));
+    EXPECT_EQ(st.opened_by, Arm::Boost);
+    in.accel_norm_ms2 = 20.0f;                  // thrust tail, under the bar
+    run(st, in, t, 2000);
+    EXPECT_TRUE(armingPermitted(st));           // Open is latched
 }
 
 TEST(RecoveryArmGate, BaroDeadUnderDrogueStillOpensOnSpin)
@@ -171,16 +204,19 @@ TEST(RecoveryArmGate, DroppingTheRocketDoesNotArm)
 TEST(RecoveryArmGate, CarryingAndBumpingDoesNotArm)
 {
     // Handling is transient; every arm requires an unbroken hold, so bumps
-    // and jostling reset the accumulators before they can mature.
+    // and jostling reset the accumulators before they can mature. A knock is
+    // oscillatory and crosses back through the reset floor inside a quarter
+    // second (#258's handling analysis), which is what the boost arm's 250 ms
+    // hold rests on; 100 ms above the bar is a hard one.
     State st; reset(st, 0);
     Inputs in = still();
     uint32_t t = 0;
     for (int i = 0; i < 40; ++i)
     {
         in.accel_norm_ms2 = 45.0f;  in.gyro_norm_dps = 300.0f;   // a jolt
-        t = run(st, in, t, 300);
+        t = run(st, in, t, 100);
         in.accel_norm_ms2 = 9.71f;  in.gyro_norm_dps = 20.0f;    // settle
-        t = run(st, in, t, 700);
+        t = run(st, in, t, 900);
     }
     EXPECT_FALSE(armingPermitted(st));
 }

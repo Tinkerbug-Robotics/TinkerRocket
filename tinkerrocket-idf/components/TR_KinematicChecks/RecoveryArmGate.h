@@ -57,11 +57,30 @@
 //   A1 descent   5 m/s held 1 s  = 5 m of continuous drop.  A dropped rocket
 //                reaches the rate but hits the ground first; sustaining it
 //                needs a fall of more than 5 m.  SAFE.
-//   A2 boost     30 m/s^2 held 1 s.  MARGINAL, and knowingly so: #258's
-//                launch-detect analysis records that a sustained SWING holds
-//                centripetal >3 g steadily, which is the one non-oscillatory
-//                false positive at this bar.  Bumps, knocks and carrying all
-//                cross the reset floor and can never accumulate.
+//   A2 boost     30 m/s^2 held 250 ms — the launch detector's own accel-only
+//                fallback (#258), by owner's ruling 2026-09-11: the evidence
+//                that latches launch on a normal flight is enough to say a
+//                restored one is under thrust.  Relaxed from 1 s (#1179) on a
+//                measurement, and not the one the issue expected: the 1 s hold
+//                carried 2 of 27 corpus flights because these motors hold
+//                >3 g for only 0.4-1.5 s after ignition, so the hold outlived
+//                the THRUST; the vibration dips were 1-7 samples wide and
+//                beside the point.  At 250 ms a reboot at T+0.5 s opens on
+//                this arm in 20 of 27 flights, median 0.25 s after the reboot,
+//                and no corpus flight is left locked past apogee (the 1 s
+//                hold left one).  Numbers in docs/plans/1176 §6.
+//                MARGINAL, and knowingly so, exactly as the launch fallback
+//                is: a sustained SWING holds centripetal >3 g steadily and a
+//                quarter second of it clears the bar, and the shorter hold
+//                also admits a hard upward THROW of a light airframe (about
+//                5 m/s), which 1 s (20 m/s) did not.  Bumps, knocks and
+//                carrying are oscillatory and cross the reset floor inside a
+//                quarter second (#258's analysis), so they still cannot
+//                accumulate.  A false Open costs more here than a false
+//                INFLIGHT — entering INFLIGHT arms nothing, while Open hands a
+//                restored apogee to a due channel after apogee_arm_ms — which
+//                is why the 2 g / 50 ms baro-corroborated launch path was NOT
+//                adopted: a brisk lift satisfies it.
 //   A4 GNSS      5 m/s vertical.  Not producible on the ground at all, but
 //                unavailable for the first ~30 s, so it is a late corroborator
 //                rather than a primary arm.
@@ -104,8 +123,12 @@ struct Config {
     // --- Arming evidence.  Rates and accelerations only; see the header note.
     float    descent_mps      = 5.0f;    // A1, magnitude, down-positive sense
     uint32_t descent_hold_ms  = 1000;
+    // A2 is the launch detector's accel-only fallback (3 g for a quarter
+    // second, LAUNCH_ACCEL_FALLBACK_* in TR_KinematicChecks.cpp), and a
+    // static_assert there keeps the two identical.  See the audit above for
+    // why it was relaxed from 1 s on 2026-09-11.
     float    boost_ms2        = 30.0f;   // A2, |specific force|
-    uint32_t boost_hold_ms    = 1000;
+    uint32_t boost_hold_ms    = 250;
     float    gnss_mps         = 5.0f;    // A4, |vertical speed|
     uint32_t gnss_hold_ms     = 1000;
     float    freefall_ms2     = 3.0f;    // A5, |specific force| BELOW this
