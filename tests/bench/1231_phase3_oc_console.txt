@@ -1,0 +1,94 @@
+# #1231 phase 3 — S1 -> O (OUT COMPUTER console), both boards on the new firmware, OC on
+# the "-bench-cfgdrop" image.  The OC's own view: the divergence line when its cache and
+# the FC's copy part ways (at rail-on, and on a dropped frame), the "matches again" line
+# when they meet, and the dropped-frame case end to end.
+#
+# Timing rules learned on 2026-09-11: (1) never arm the hook while a previous command
+# may still be inside its 3-delivery window — a 3 s settle first; (2) lines that land
+# within milliseconds of each other are checked from history (mark + _since) after one
+# forward wait, never as a chain of forward waits.
+note === 3p: create a divergence with the hook — the OC cache moves to D, the FC keeps what it has ===
+wait_tlm 25 st!=NONE
+send 8 01
+sleep 12
+wait_tlm 20 fs.PWR_PIN_ON==1
+sleep 3
+mark
+send 200 03ce
+sleep 1
+send 34 01000000404000000000000001010000c843000000000000
+expect_serial 20 \[TEST\] config frame type=0xCE DROPPED at pack time \(cfgdrop hook, delivery 3 of 3 armed\)
+sleep 1
+expect_serial_since \[TEST\] config frame type=0xCE DROPPED at pack time \(cfgdrop hook, delivery 1 of 3 armed\)
+expect_serial_since Cmd 0xCD cleared after 3 deliveries
+expect_serial_since \[TEST\] cfgdrop hook disarmed
+sleep 6
+expect_serial_since FC deployment config differs from OC cache — FC\(nvs\)=\[0/0/0\.0 1/1/250\.0 0/0/0\.0 1/0/5\.0\] OC=\[1/0/3\.0 0/0/0\.0 1/1/400\.0 0/0/0\.0\]
+refute_serial_since Queued pyro config readback
+note === 3a: rail cycle — the OC comes up fresh; the FC (E) reports, the cache (D) differs; the first report must say so ===
+send 8 00
+sleep 10
+disconnect
+sleep 2
+connect
+wait_tlm 30 st!=NONE
+mark
+send 8 01
+sleep 14
+wait_tlm 20 fs.PWR_PIN_ON==1
+expect_serial_since FC deployment config differs from OC cache — FC\(nvs\)=\[0/0/0\.0 1/1/250\.0 0/0/0\.0 1/0/5\.0\] OC=\[1/0/3\.0 0/0/0\.0 1/1/400\.0 0/0/0\.0\]
+mark
+send 20
+expect_serial 15 Queued pyro config readback \(\d+ bytes, from FC report\)
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==fc
+expect_tlm 15 fnv==true
+expect_tlm 15 p1e==false
+expect_tlm 15 p2v==250.0
+expect_tlm 15 p4e==true
+note === 3b: align — push C on a healthy link; the FC applies it, the OC re-publishes, and the two agree ===
+sleep 3
+mark
+send 34 010000000040010100004843000000000000000000000000
+sleep 4
+expect_serial_since FC deployment config matches OC cache again
+expect_serial_since Queued pyro config readback \(\d+ bytes, from FC report\)
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==fc
+expect_tlm 15 p1v==2.0
+expect_tlm 15 p2v==200.0
+refute_serial_since \[TEST\]
+note === 3c: three deliveries dropped — the FC never receives E; no echo; the OC logs the divergence; readback stays C ===
+sleep 3
+mark
+send 200 03ce
+sleep 1
+send 34 000000000000010100007a4300000000000001000000a040
+expect_serial 20 \[TEST\] config frame type=0xCE DROPPED at pack time \(cfgdrop hook, delivery 3 of 3 armed\)
+sleep 1
+expect_serial_since \[TEST\] config frame type=0xCE DROPPED at pack time \(cfgdrop hook, delivery 1 of 3 armed\)
+expect_serial_since Cmd 0xCD cleared after 3 deliveries
+expect_serial_since \[TEST\] cfgdrop hook disarmed
+sleep 6
+expect_serial_since FC deployment config differs from OC cache — FC\(nvs\)=\[1/0/2\.0 1/1/200\.0 0/0/0\.0 0/0/0\.0\] OC=\[0/0/0\.0 1/1/250\.0 0/0/0\.0 1/0/5\.0\]
+refute_serial_since Queued pyro config readback
+refute_tlm 1 p2v==250.0
+send 20
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==fc
+expect_tlm 15 p1v==2.0
+expect_tlm 15 p2v==200.0
+expect_tlm 15 p4e==false
+note === 3d: the same edit on a healthy link lands, is echoed, and the two agree again ===
+sleep 3
+mark
+send 34 000000000000010100007a4300000000000001000000a040
+sleep 4
+expect_serial_since FC deployment config matches OC cache again
+expect_serial_since Queued pyro config readback \(\d+ bytes, from FC report\)
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==fc
+expect_tlm 15 p2v==250.0
+expect_tlm 15 p4e==true
+refute_serial_since \[TEST\]
+note === phase 3 done ===

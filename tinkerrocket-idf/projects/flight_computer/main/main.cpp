@@ -468,7 +468,7 @@ static uint8_t b2r_setting = IMU_ORIENT_AUTO;
 static bool b2r_setting_from_nvs = false;
 
 // #915 full config report.  Set by any handler that changes a field the
-// report carries; drained in loop_fc so the 169-byte enqueue never happens
+// report carries; drained in loop_fc so the 193-byte enqueue never happens
 // inside the I2C command path the OC is waiting on.  Declared up here rather
 // than beside buildConfigReport() because persistOrientSetting() — which sits
 // with the orientation code above it — is one of the setters.
@@ -763,6 +763,12 @@ static uint32_t blue_led_flash_end_ms = 0;
 // back to Idle/Done. Spinlock protects all pyro state and GPIO ops.
 static portMUX_TYPE pyro_spinlock = portMUX_INITIALIZER_UNLOCKED;
 static PyroConfigData pyro_config = {};  // zeroed = all four disabled
+// True once pyro_config is a stored record — loaded from NVS at boot, or a
+// config frame applied (and written to NVS) this boot — rather than the
+// zeroed default above.  Reported to the OC as F_PYRO_FROM_NVS (#1231) so
+// the app can tell "all four deliberately disabled" from "never been told":
+// on the wire the two are the same 24 bytes.
+static bool pyro_config_from_nvs = false;
 
 // ==========================================================================
 // SECTION: Pyro channel state
@@ -2520,7 +2526,7 @@ static void sendFlightSettings()
 // makes it survive an OC that rebooted on its own — with request/response the
 // OC would have to know to ask again, and it has no way to know it missed one.
 
-// Repeat cadence while not INFLIGHT.  169 bytes every 5 s against a 22 kHz
+// Repeat cadence while not INFLIGHT.  193 bytes every 5 s against a 22 kHz
 // I2S stream is noise; the point is bounded staleness after an OC reboot, not
 // throughput.
 static constexpr uint32_t CONFIG_REPORT_PERIOD_MS = 5000;
@@ -2533,6 +2539,7 @@ static void buildConfigReport(ConfigReportData &r)
     r.imu_orient_setting = b2r_setting;
     if (enable_sounds) r.flags |= (1U << ConfigReportData::F_SOUNDS);
     if (b2r_setting_from_nvs) r.flags |= (1U << ConfigReportData::F_ORIENT_FROM_NVS);
+    if (pyro_config_from_nvs)  r.flags |= (1U << ConfigReportData::F_PYRO_FROM_NVS);   // #1231
 
     for (int i = 0; i < 4; ++i) {
         r.servo.bias_us[i] = (int16_t)servo_control.getServoBiasUs(i);
@@ -2571,6 +2578,10 @@ static void buildConfigReport(ConfigReportData &r)
     r.guidance.guidance_law     = pn_guidance_law;
 
     r.roll = roll_profile;
+
+    // #1231: the live struct servicePyroChannels() reads, not a copy of the
+    // last frame — the whole point is that the two can differ.
+    r.pyro = pyro_config;
 }
 
 static void sendConfigReport()
@@ -2590,7 +2601,8 @@ static void sendConfigReport()
         log_next_report_send = false;
         ESP_LOGI(TAG, "[CFG] Config report sent: orient=%s(%s) sounds=%s "
                       "bias=[%d,%d,%d,%d] fin=[%.0f,%.0f,%.0f,%.0f] rev=0x%X/0x%X "
-                      "guid=%s wp=%u",
+                      "guid=%s wp=%u "
+                      "pyro(%s)=[%u/%u/%.1f %u/%u/%.1f %u/%u/%.1f %u/%u/%.1f]",
                  b2r_setting == IMU_ORIENT_AUTO ? "AUTO" : orientCodeName(b2r_setting),
                  b2r_setting_from_nvs ? "nvs" : "dflt",
                  enable_sounds ? "on" : "off",
@@ -2600,7 +2612,12 @@ static void sendConfigReport()
                  (double)r.fin.azimuth_deg[2], (double)r.fin.azimuth_deg[3],
                  (unsigned)r.fin.reverse_mask, (unsigned)r.fin.roll_reverse_mask,
                  r.guidance.enable ? "on" : "off",
-                 (unsigned)r.roll.num_waypoints);
+                 (unsigned)r.roll.num_waypoints,
+                 pyro_config_from_nvs ? "nvs" : "dflt",
+                 r.pyro.ch1_enabled, r.pyro.ch1_trigger_mode, (double)r.pyro.ch1_trigger_value,
+                 r.pyro.ch2_enabled, r.pyro.ch2_trigger_mode, (double)r.pyro.ch2_trigger_value,
+                 r.pyro.ch3_enabled, r.pyro.ch3_trigger_mode, (double)r.pyro.ch3_trigger_value,
+                 r.pyro.ch4_enabled, r.pyro.ch4_trigger_mode, (double)r.pyro.ch4_trigger_value);
     }
 }
 
@@ -4555,6 +4572,7 @@ static void setup_fc()
     size_t pyro_cfg_sz = prefs.getBytesLength("cfg");
     if (pyro_cfg_sz == sizeof(PyroConfigData)) {
         prefs.getBytes("cfg", &pyro_config, sizeof(pyro_config));
+        pyro_config_from_nvs = true;   // #1231
         ESP_LOGI(TAG, "NVS pyro: ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
                  pyro_config.ch1_enabled, pyro_config.ch1_trigger_mode, (double)pyro_config.ch1_trigger_value,
                  pyro_config.ch2_enabled, pyro_config.ch2_trigger_mode, (double)pyro_config.ch2_trigger_value,
@@ -5865,7 +5883,7 @@ static void loop_fc()
     // SECTION: Full config report (#915)
     // ==========================================================================
     // Drained here rather than sent from the I2C command handlers: those run
-    // inside the OC's poll window, and a 169-byte enqueue there would sit in
+    // inside the OC's poll window, and a 193-byte enqueue there would sit in
     // the same path the OC is waiting on.
     serviceConfigReport();
 
@@ -8173,6 +8191,14 @@ static void loop_fc()
                     prefs.begin("pyro", false);
                     prefs.putBytes("cfg", &pyro_config, sizeof(pyro_config));
                     prefs.end();
+                    pyro_config_from_nvs = true;
+                    // #1231: the report carries pyro_config, so the app's
+                    // config_pyro tiles are re-drawn from what the FC now
+                    // holds — the echo the #1078 optimistic mirror stood in
+                    // for.  A frame that never lands sends no echo, and the
+                    // tiles then keep showing the FC's previous values,
+                    // which is the divergence made visible.
+                    config_report_dirty = true; log_next_report_send = true;
                     ESP_LOGI(TAG, "[PYRO CFG] ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
                              pyro_config.ch1_enabled, pyro_config.ch1_trigger_mode, (double)pyro_config.ch1_trigger_value,
                              pyro_config.ch2_enabled, pyro_config.ch2_trigger_mode, (double)pyro_config.ch2_trigger_value,

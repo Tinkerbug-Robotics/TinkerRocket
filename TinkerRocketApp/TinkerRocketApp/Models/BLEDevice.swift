@@ -1118,7 +1118,17 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         //
         // Guarded on a non-nil rocketConfig so a device that has never been
         // read is not handed fabricated truth.
-        if var cfg = rocketConfig {
+        //
+        // #1231: NOT mirrored when the readback is the flight computer's own
+        // copy and the FC is up to echo the write.  The FC's config report
+        // re-draws the tiles once it applies the frame, and a frame it never
+        // applied then leaves them on its previous values — the divergence
+        // this readback exists to make visible, which an optimistic mirror
+        // would paint over.  The mirror stays for the cases with no echo to
+        // wait for: the OC's cache (rail off, older FC firmware) and an OC
+        // that predates the source key.
+        if var cfg = rocketConfig,
+           !(cfg.pyroIsFlightComputerSourced && telemetry.pwr_pin_on) {
             cfg.pyro1Enabled = channels[0].enabled
             cfg.pyro1TriggerMode = channels[0].mode
             cfg.pyro1TriggerValue = channels[0].value
@@ -2199,6 +2209,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 cfg.pyro4Enabled = existing.pyro4Enabled
                 cfg.pyro4TriggerMode = existing.pyro4TriggerMode
                 cfg.pyro4TriggerValue = existing.pyro4TriggerValue
+                cfg.pyroSource = existing.pyroSource                                  // #1231
+                cfg.pyroStoredOnFlightComputer = existing.pyroStoredOnFlightComputer
                 // #915: the config report rides its own frames, so a `config`
                 // rebuild must carry it over — same reason as the pyro fields
                 // above. Without this a re-sent readback would reset the app
@@ -2229,6 +2241,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.pyro4Enabled = dict["p4e"] as? Bool ?? cfg.pyro4Enabled
             cfg.pyro4TriggerMode = UInt8(dict["p4m"] as? Int ?? Int(cfg.pyro4TriggerMode))
             cfg.pyro4TriggerValue = parseFloat(dict["p4v"]) ?? cfg.pyro4TriggerValue
+            // #1231: where these came from.  No key = an OC that predates it,
+            // which is NOT the same as the OC's cache: only "oc" positively
+            // says the flight computer was not consulted.
+            cfg.pyroSource = PyroConfigSource(rawValue: dict["src"] as? String ?? "") ?? .unknown
+            cfg.pyroStoredOnFlightComputer =
+                cfg.pyroSource == .flightComputer ? (dict["fnv"] as? Bool) : nil
             self.rocketConfig = cfg
             return
         }

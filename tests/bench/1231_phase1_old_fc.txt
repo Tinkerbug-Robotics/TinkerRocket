@@ -1,0 +1,54 @@
+# #1231 phase 1 — S1 -> O (OUT COMPUTER console). New OC ("-bench-cfgdrop" image),
+# the FC still on pre-#1231 firmware (its report is v1, 169 bytes, no pyro block).
+# Proves: the v1 report is accepted as a prefix (the #915 extras are still served),
+# config_pyro comes from the OC cache and SAYS so, rail-off readback likewise.
+note === phase 1a: rail on, first report in ===
+wait_tlm 25 st!=NONE
+send 8 01
+sleep 12
+wait_tlm 20 fs.PWR_PIN_ON==1
+sleep 6
+note === 1b: readback under a v1 (pre-#1231) FC report ===
+mark
+send 20
+expect_tlm 15 type==fc_identity
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==oc
+expect_tlm 15 type==config_servo
+expect_tlm 15 type==config_guid
+expect_tlm 15 type==config_roll
+expect_serial_since Queued pyro config readback \(\d+ bytes, from OC cache\)
+expect_serial_since Queued config_servo readback
+refute_serial_since Config report version \d+ .*unsupported
+note === 1c: baseline deployment config A (ch1 1.0 s after apogee, ch2 150 m) ===
+mark
+send 34 01000000803f010100001643000000000000000000000000
+expect_serial 15 Pyro config: ch1=1/0/1\.0  ch2=1/1/150\.0
+sleep 3
+send 20
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==oc
+expect_tlm 15 p1e==true
+expect_tlm 15 p2m==1
+expect_tlm 15 p2v==150.0
+note === 1d: rail OFF (the OC restarts) — the readback is the OC cache and says so ===
+mark
+send 8 00
+sleep 10
+disconnect
+sleep 2
+connect
+wait_tlm 30 st!=NONE
+send 20
+# Forward wait, not _since: after the reboot the console re-enumerates and its
+# lines can trail the BLE frames by a couple of seconds (seen 2026-09-11).
+expect_serial 15 Queued pyro config readback \(\d+ bytes, from OC cache\)
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==oc
+expect_tlm 15 p1e==true
+expect_tlm 15 p2v==150.0
+note === 1e: rail back on for phase 2 ===
+send 8 01
+sleep 12
+wait_tlm 20 fs.PWR_PIN_ON==1
+note === phase 1 done ===

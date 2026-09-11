@@ -595,6 +595,23 @@ static uint8_t serving_cfg_type = 0;
 static uint8_t serving_cfg_len  = 0;
 static uint8_t serving_cfg[sizeof(RollProfileData)] = {};
 static bool    cmd_idle_gap_pending = false;    // serve one cmd=0 poll between commands
+#if defined(TR_TEST_CFG_DROP)
+// Bench-only hook (the "-cfgdrop" image; -DTR_TEST_CFG_DROP=1).  BLE cmd 200
+// [count][type] arms the next `count` config frames OF THAT TYPE to be
+// dropped at pack time, reproducing the #569 fit-drop on demand: a config
+// the OC logs as served that never reaches the FC.  First built for the
+// #1112 / #1117 retry bench and lost with that session; re-created for the
+// #1231 bench, where it is how "a frame the FC never applied" is produced.
+// Keyed on cmd_delivery_count — the OC's own notion of a delivery, which
+// advances only when a stage is ACCEPTED — not on a per-pack decrement: a
+// refused stage re-packs on the next query, and the first version of this
+// hook burned three armed drops inside ONE FC poll (bench, 2026-09-11).  So
+// `count` is "drop the first `count` deliveries of the next command of that
+// type"; the OC serves a command CMD_REPEAT_LIMIT (3) times, and the hook
+// disarms itself when that command is retired.
+static volatile uint8_t test_cfg_drop_count = 0;
+static volatile uint8_t test_cfg_drop_type  = 0;
+#endif
 
 // Enqueue a command for the FC with its config payload passed explicitly
 // (#476: the old shared staging globals leaked stale payloads into
@@ -1439,6 +1456,26 @@ static void stageImuRateConfig()
 static bool    cfg_pyro_enabled[4]      = { false, false, false, false };
 static uint8_t cfg_pyro_trigger_mode[4] = { 0, 0, 0, 0 };
 static float   cfg_pyro_trigger_value[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+// #1231: the cache as the wire struct, so it can be compared byte-for-byte
+// against the FC's reported copy and fed to the same readback builder.
+static PyroConfigData pyroCacheAsData()
+{
+    PyroConfigData c = {};
+    c.ch1_enabled = cfg_pyro_enabled[0] ? 1U : 0U; c.ch1_trigger_mode = cfg_pyro_trigger_mode[0]; c.ch1_trigger_value = cfg_pyro_trigger_value[0];
+    c.ch2_enabled = cfg_pyro_enabled[1] ? 1U : 0U; c.ch2_trigger_mode = cfg_pyro_trigger_mode[1]; c.ch2_trigger_value = cfg_pyro_trigger_value[1];
+    c.ch3_enabled = cfg_pyro_enabled[2] ? 1U : 0U; c.ch3_trigger_mode = cfg_pyro_trigger_mode[2]; c.ch3_trigger_value = cfg_pyro_trigger_value[2];
+    c.ch4_enabled = cfg_pyro_enabled[3] ? 1U : 0U; c.ch4_trigger_mode = cfg_pyro_trigger_mode[3]; c.ch4_trigger_value = cfg_pyro_trigger_value[3];
+    return c;
+}
+// "e/m/v e/m/v e/m/v e/m/v", the shape the FC's own [PYRO CFG] line uses.
+static void formatPyroCfg(char* buf, size_t n, const PyroConfigData& c)
+{
+    snprintf(buf, n, "%u/%u/%.1f %u/%u/%.1f %u/%u/%.1f %u/%u/%.1f",
+             c.ch1_enabled, c.ch1_trigger_mode, (double)c.ch1_trigger_value,
+             c.ch2_enabled, c.ch2_trigger_mode, (double)c.ch2_trigger_value,
+             c.ch3_enabled, c.ch3_trigger_mode, (double)c.ch3_trigger_value,
+             c.ch4_enabled, c.ch4_trigger_mode, (double)c.ch4_trigger_value);
+}
 
 // Device identity (loaded from NVS "identity" namespace)
 static char    unit_id_hex[9] = {0};           // last 4 bytes of MAC as "a1b2c3d4"
@@ -1626,27 +1663,34 @@ static uint8_t       imu_orient_pub_mode = 0xFF;
 // FC's full config report (#915), mirrored from CONFIG_REPORT_MSG.  This is
 // the ONLY source for the settings the app could not otherwise see — servo
 // trim 2-4, fin travel, fin layout, the PN guidance parameters, the roll
-// waypoints, sounds and the orientation SETTING.  Held in RAM only, never
+// waypoints, sounds and the orientation SETTING — and, since v2 (#1231), the
+// only FC-sourced copy of the deployment configuration.  Held in RAM only, never
 // NVS: a stale report served after an OC reboot would be a confident lie
 // about a vehicle we have not heard from, and the FC re-pushes every few
 // seconds anyway.  Until the first one lands the OC omits the frames it
 // feeds, and the app keeps saying it cannot verify those groups.
 static ConfigReportData fc_config_report = {};
 static bool             fc_config_report_valid = false;
+// #1231: false for a v1 (#915) report, whose pyro block is absent — a v1
+// sender's zeroed `pyro` must never be served as "all four disabled".
+static bool             fc_config_report_has_pyro = false;
 // #1149 item 3: the same treatment last_query_cfg got, for the same reason.
-// This 169-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
+// This 193-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
 // prio 6) and was read field-by-field by loop_oc (core 1, prio 5) through a
 // reference held across dozens of statements and three String builds. The
 // parser strictly preempts loopTask, so a config readback could mix two report
 // generations — servo trim from one, fin layout from the next.
 static portMUX_TYPE fc_config_report_mux = portMUX_INITIALIZER_UNLOCKED;
-static inline ConfigReportData snapshotConfigReport(bool* valid_out)
+static inline ConfigReportData snapshotConfigReport(bool* valid_out,
+                                                    bool* has_pyro_out = nullptr)
 {
     portENTER_CRITICAL(&fc_config_report_mux);
     const ConfigReportData snap = fc_config_report;
     const bool valid = fc_config_report_valid;
+    const bool has_pyro = fc_config_report_has_pyro;
     portEXIT_CRITICAL(&fc_config_report_mux);
     if (valid_out) *valid_out = valid;
+    if (has_pyro_out) *has_pyro_out = has_pyro;
     return snap;
 }
 static volatile bool    fc_config_report_dirty = false;
@@ -3328,6 +3372,18 @@ static void queueOutStatusResponse(bool ready)
     {
         uint8_t cfg_frame[MAX_FRAME];
         size_t  cfg_frame_len = 0;
+#if defined(TR_TEST_CFG_DROP)
+        if (test_cfg_drop_count > 0 && serving_cfg_type == test_cfg_drop_type
+            && cmd_delivery_count < test_cfg_drop_count)
+        {
+            ESP_LOGW("OC", "[TEST] config frame type=0x%02X DROPPED at pack time "
+                           "(cfgdrop hook, delivery %u of %u armed) — the FC will "
+                           "see the command with no frame",
+                     (unsigned)serving_cfg_type,
+                     (unsigned)(cmd_delivery_count + 1U), (unsigned)test_cfg_drop_count);
+        }
+        else
+#endif
         if (TR_I2C_Interface::packMessage(serving_cfg_type,
                                            serving_cfg,
                                            serving_cfg_len,
@@ -3403,6 +3459,13 @@ static void queueOutStatusResponse(bool ready)
             ESP_LOGI("OC", "I2C TX Cmd 0x%02X cleared after %u deliveries (queued=%u)",
                           (unsigned)cmd, (unsigned)cmd_delivery_count,
                           (unsigned)cmd_queue_count);
+#if defined(TR_TEST_CFG_DROP)
+            if (test_cfg_drop_count > 0 && serving_cfg_type == test_cfg_drop_type)
+            {
+                test_cfg_drop_count = 0;   // one command's worth; never leak into the next
+                ESP_LOGW("OC", "[TEST] cfgdrop hook disarmed — the armed command was retired");
+            }
+#endif
             pending_out_command = 0U;
             serving_cfg_len = 0;
             serving_cfg_type = 0;
@@ -4060,38 +4123,87 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     // FC_IDENTITY above.
     if (type == CONFIG_REPORT_MSG)
     {
-        if (payload_len >= sizeof(ConfigReportData))
+        // Version byte first, then the length that version implies.  v1
+        // (#915, 169 bytes) is a byte-exact prefix of v2 (#1231, 193 bytes:
+        // + the live deployment configuration), so a v1 sender is still
+        // accepted — with no pyro block to serve — rather than refused.  The
+        // FC image is relayed through the OC, so an OC updated ahead of its
+        // FC is the normal OTA order; refusing v1 would put every #915 group
+        // back on the app's can't-verify list for that whole window.
+        constexpr size_t kV1Bytes   = offsetof(ConfigReportData, pyro);
+        constexpr size_t kVersionAt = offsetof(ConfigReportData, version);
+        const uint8_t ver = (payload_len > kVersionAt) ? payload[kVersionAt] : 0xFF;
+        ConfigReportData incoming = {};
+        bool has_pyro = false;
+        if (ver == ConfigReportData::VERSION && payload_len >= sizeof(ConfigReportData))
         {
-            ConfigReportData incoming;
             memcpy(&incoming, payload, sizeof(incoming));
-            if (incoming.version != ConfigReportData::VERSION)
+            has_pyro = true;
+        }
+        else if (ver == 1U && payload_len >= kV1Bytes)
+        {
+            memcpy(&incoming, payload, kV1Bytes);   // pyro stays zeroed, and is never served
+        }
+        else
+        {
+            // An FC newer than this OC, or a short frame.  Refuse rather than
+            // reinterpret: every field after a layout change would be
+            // silently misparsed, and the app would show it as verified.
+            static uint8_t warned_version = 0xFF;
+            if (warned_version != ver)
             {
-                // An FC newer or older than this OC.  Refuse rather than
-                // reinterpret: every field after a layout change would be
-                // silently misparsed, and the app would show it as verified.
-                static uint8_t warned_version = 0xFF;
-                if (warned_version != incoming.version)
-                {
-                    warned_version = incoming.version;
-                    ESP_LOGW("CFG", "Config report version %u unsupported "
-                                    "(expect %u) — ignoring",
-                             (unsigned)incoming.version,
-                             (unsigned)ConfigReportData::VERSION);
-                }
-                return;
+                warned_version = ver;
+                ESP_LOGW("CFG", "Config report version %u (%u bytes) unsupported "
+                                "(expect %u, %u bytes) — ignoring",
+                         (unsigned)ver, (unsigned)payload_len,
+                         (unsigned)ConfigReportData::VERSION,
+                         (unsigned)sizeof(ConfigReportData));
             }
-            // time_us changes on every push, so compare everything EXCEPT it —
-            // otherwise the 5 s repeat would re-publish to the app forever.
-            const bool changed =
-                !fc_config_report_valid ||
-                memcmp((const uint8_t*)&incoming + sizeof(incoming.time_us),
-                       (const uint8_t*)&fc_config_report + sizeof(incoming.time_us),
-                       sizeof(incoming) - sizeof(incoming.time_us)) != 0;
-            portENTER_CRITICAL(&fc_config_report_mux);   // #1149 item 3
-            fc_config_report = incoming;
-            fc_config_report_valid = true;
-            portEXIT_CRITICAL(&fc_config_report_mux);
-            if (changed) fc_config_report_dirty = true;
+            return;
+        }
+        // time_us changes on every push, so compare everything EXCEPT it —
+        // otherwise the 5 s repeat would re-publish to the app forever.
+        const bool changed =
+            !fc_config_report_valid ||
+            memcmp((const uint8_t*)&incoming + sizeof(incoming.time_us),
+                   (const uint8_t*)&fc_config_report + sizeof(incoming.time_us),
+                   sizeof(incoming) - sizeof(incoming.time_us)) != 0;
+        portENTER_CRITICAL(&fc_config_report_mux);   // #1149 item 3
+        fc_config_report = incoming;
+        fc_config_report_valid = true;
+        fc_config_report_has_pyro = has_pyro;
+        portEXIT_CRITICAL(&fc_config_report_mux);
+        if (changed) fc_config_report_dirty = true;
+
+        // #1231: the one place both copies of the deployment configuration
+        // are in hand.  Compared on EVERY report, logged when a divergence
+        // appears (or the FC's side moves while one stands) and once when it
+        // closes — so a cmd-34 write the FC never received shows up on the
+        // next 5 s repeat, not only when the FC's copy changes.  The cache
+        // is deliberately NOT overwritten from here: it is what the phone
+        // last pushed (and what the rail-off readback serves, #1131), the
+        // report is what the FC holds, and the app is told the second —
+        // with its source — so the operator sees it.
+        if (has_pyro)
+        {
+            static bool diverged = false;
+            const PyroConfigData cache = pyroCacheAsData();
+            const bool differs = memcmp(&cache, &incoming.pyro, sizeof(cache)) != 0;
+            if (differs && (!diverged || changed))
+            {
+                char fc_s[64], oc_s[64];
+                formatPyroCfg(fc_s, sizeof(fc_s), incoming.pyro);
+                formatPyroCfg(oc_s, sizeof(oc_s), cache);
+                ESP_LOGW("CFG", "FC deployment config differs from OC cache — "
+                                "FC(%s)=[%s] OC=[%s]; the app is shown the FC's",
+                         (incoming.flags & (1U << ConfigReportData::F_PYRO_FROM_NVS)) ? "nvs" : "dflt",
+                         fc_s, oc_s);
+            }
+            else if (!differs && diverged)
+            {
+                ESP_LOGI("CFG", "FC deployment config matches OC cache again");
+            }
+            diverged = differs;
         }
         return;
     }
@@ -5612,7 +5724,9 @@ static void sendLoRaBeacon()
 // report frames = 9.  At the old cap of 8 the ninth enqueue evicted the
 // oldest — the main "config" frame — and the app silently never received it.
 // Raise this WITH the burst, or the drop is invisible except for one warning
-// line on a console nobody is watching on the pad.
+// line on a console nobody is watching on the pad.  The report-dirty path
+// (extras + config_pyro = 4) could land in the SAME pass as a connect burst;
+// sendCurrentConfig() clears the dirty flag so the two never stack.
 static constexpr uint8_t  CFG_RB_CAP     = 12;
 static constexpr uint32_t CFG_RB_PACE_MS = 20;   // >= negotiated max conn interval
 static String   cfg_rb_queue[CFG_RB_CAP];
@@ -5831,8 +5945,62 @@ static void sendConfigExtras()
              (unsigned)w.length(), (unsigned)n);
 }
 
+// #1231: the deployment configuration readback.  Served from the FC's live
+// config report whenever the FC is up and has sent one that carries it (a
+// v2 report); the OC's own cache — what the phone last pushed, reloaded from
+// NVS after a reboot (#1131) — stands in only with the rail off or under a
+// pre-#1231 FC.  "src" tells the app which it got, so it can say when the
+// tiles are NOT showing what the FC will fire on; "fnv" (FC-sourced only)
+// whether the FC's copy is a stored record or the all-disabled default of a
+// board that has never been told.
+//
+// pwr_pin_on is checked as well as the report's validity.  The OC resets on
+// power-off, so a held report cannot normally outlive the FC that sent it,
+// but the boot-time rail restore (#825) is one path where rail state and
+// cache disagree for a moment — and "FC not running" must never be served
+// as "FC confirms".
+static void sendPyroConfigReadback()
+{
+    bool valid = false, has_pyro = false;
+    const ConfigReportData r = snapshotConfigReport(&valid, &has_pyro);
+    const bool from_fc = pwr_pin_on && valid && has_pyro;
+    const PyroConfigData c = from_fc ? r.pyro : pyroCacheAsData();
+    const uint8_t en[4]   = { c.ch1_enabled,       c.ch2_enabled,
+                              c.ch3_enabled,       c.ch4_enabled };
+    const uint8_t mode[4] = { c.ch1_trigger_mode,  c.ch2_trigger_mode,
+                              c.ch3_trigger_mode,  c.ch4_trigger_mode };
+    const float   val[4]  = { c.ch1_trigger_value, c.ch2_trigger_value,
+                              c.ch3_trigger_value, c.ch4_trigger_value };
+    String p = "{\"type\":\"config_pyro\"";
+    static const char* PE_KEYS[4] = { "p1e", "p2e", "p3e", "p4e" };
+    static const char* PM_KEYS[4] = { "p1m", "p2m", "p3m", "p4m" };
+    static const char* PV_KEYS[4] = { "p1v", "p2v", "p3v", "p4v" };
+    for (int i = 0; i < 4; ++i) {
+        p += ",\""; p += PE_KEYS[i]; p += "\":"; p += en[i] ? "true" : "false";
+        p += ",\""; p += PM_KEYS[i]; p += "\":"; p += itos(mode[i]);
+        p += ",\""; p += PV_KEYS[i]; p += "\":"; p += fmtf(val[i], 1);
+    }
+    p += ",\"src\":\""; p += from_fc ? "fc" : "oc"; p += "\"";
+    if (from_fc) {
+        p += ",\"fnv\":";
+        p += (r.flags & (1U << ConfigReportData::F_PYRO_FROM_NVS)) ? "true" : "false";
+    }
+    p += "}";
+    enqueueConfigReadback(p);   // #398 item 3
+    ESP_LOGI("CFG", "Queued pyro config readback (%u bytes, from %s)",
+             (unsigned)p.length(), from_fc ? "FC report" : "OC cache");
+}
+
 static void sendCurrentConfig()
 {
+    // The whole burst re-states the FC report, so a re-publish the report
+    // handler may have queued while nothing was connected is redundant now.
+    // Cleared BEFORE the snapshots below: a report that changes after them
+    // sets it again and goes out on the next pass.  Left set, the connect
+    // pass would enqueue 9 + 4 frames against the 12-deep readback ring and
+    // evict the main "config" frame (see CFG_RB_CAP).
+    fc_config_report_dirty = false;
+
     // Split config into two smaller JSON messages to stay within MTU limits.
     // Message 1: servo/PID/LoRa config ("config" type)
     String j = "{\"type\":\"config\"";
@@ -5876,19 +6044,9 @@ static void sendCurrentConfig()
     enqueueConfigReadback(j);   // #398 item 3: paced drain in loop_oc, no delay()
     ESP_LOGI("CFG", "Queued config readback (%u bytes)", (unsigned)j.length());
 
-    // Message 2: pyro config ("config_pyro" type) — 4 channels
-    String p = "{\"type\":\"config_pyro\"";
-    static const char* PE_KEYS[4] = { "p1e", "p2e", "p3e", "p4e" };
-    static const char* PM_KEYS[4] = { "p1m", "p2m", "p3m", "p4m" };
-    static const char* PV_KEYS[4] = { "p1v", "p2v", "p3v", "p4v" };
-    for (int i = 0; i < 4; ++i) {
-        p += ",\""; p += PE_KEYS[i]; p += "\":"; p += cfg_pyro_enabled[i]      ? "true" : "false";
-        p += ",\""; p += PM_KEYS[i]; p += "\":"; p += itos(cfg_pyro_trigger_mode[i]);
-        p += ",\""; p += PV_KEYS[i]; p += "\":"; p += fmtf(cfg_pyro_trigger_value[i], 1);
-    }
-    p += "}";
-    enqueueConfigReadback(p);   // #398 item 3
-    ESP_LOGI("CFG", "Queued pyro config readback (%u bytes)", (unsigned)p.length());
+    // Message 2: pyro config ("config_pyro" type) — 4 channels, from the FC's
+    // report when it can be (#1231), else the OC cache.
+    sendPyroConfigReadback();
 
     // Message 3: device identity ("config_identity" type)
     const esp_app_desc_t* app_desc = esp_app_get_description();
@@ -10268,6 +10426,10 @@ static void loop_oc()
     {
         fc_config_report_dirty = false;
         sendConfigExtras();
+        // #1231: the report carries the deployment configuration too, so a
+        // pyro write the FC applied (or one it never received — the frame
+        // then re-states the FC's previous values) reaches the tiles here.
+        sendPyroConfigReadback();
     }
 
     // Service the BLE library's poll-style work — currently just the OTA
@@ -11306,9 +11468,9 @@ static void loop_oc()
                 // control the operator had deliberately disabled.
                 //
                 // Adoption from the FC is not available: ConfigReportData's
-                // flags are only F_SOUNDS and F_ORIENT_FROM_NVS, and the
-                // F_SERVO_ENABLED bit lives in FlightSettingsData, which the
-                // OC classifies log-only.
+                // flags are only F_SOUNDS, F_ORIENT_FROM_NVS and (#1231)
+                // F_PYRO_FROM_NVS, and the F_SERVO_ENABLED bit lives in
+                // FlightSettingsData, which the OC classifies log-only.
                 prefs.begin("servo", false);
                 prefs.putBool("sen", enabled);
                 prefs.end();
@@ -11605,6 +11767,21 @@ static void loop_oc()
                 (void)applyLoRaTxMute(payload[0] != 0, "BLE");
             }
         }
+#if defined(TR_TEST_CFG_DROP)
+        else if (ble_cmd == 200)
+        {
+            // Bench-only: arm config-frame drops, see test_cfg_drop_count.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 2)
+            {
+                test_cfg_drop_count = payload[0];
+                test_cfg_drop_type  = payload[1];
+                ESP_LOGW("BLE", "[TEST] armed %u config-frame drop(s) of type 0x%02X (cfgdrop hook)",
+                         (unsigned)payload[0], (unsigned)payload[1]);
+            }
+        }
+#endif
         else if (ble_cmd == 34)
         {
             // Pyro config: 4 × {enabled:1, mode:1, value:4f} = 24 bytes

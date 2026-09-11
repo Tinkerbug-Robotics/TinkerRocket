@@ -172,6 +172,20 @@ nonisolated struct RocketGuidanceExtras: Equatable {
     var guidanceLaw: UInt8
 }
 
+/// Source of a `config_pyro` readback (#1231).  Raw values are the wire
+/// spelling of the frame's `"src"` key.
+///
+/// The OC's `config_pyro` frame used to be the OC echoing its own cache —
+/// never the flight computer's live `pyro_config`, the struct that actually
+/// fires — so a divergence between the two was invisible on every screen.
+/// Now the OC serves the FC's copy whenever the FC is up and reporting, and
+/// its own cache only with the rail off or under older FC firmware.
+enum PyroConfigSource: String, Equatable {
+    case unknown                        // pre-#1231 out computer: no `src` key
+    case outComputerCache = "oc"
+    case flightComputer = "fc"
+}
+
 struct RocketConfig {
     var servoBias1: Int16 = 0   // #561: match RocketProfile/config.h (was 85 → ~10° servo-1 trim)
     var servoHz: Int16 = 333
@@ -248,6 +262,18 @@ struct RocketConfig {
     /// rate-only.  The two must not be conflated: one means "we don't know",
     /// the other means "we know, and there are none".
     var rollWaypoints: [ReportedRollWaypoint]?
+
+    // MARK: - #1231 deployment-config provenance
+
+    /// Where the pyro fields above came from.  See `PyroConfigSource`.
+    var pyroSource: PyroConfigSource = .unknown
+    /// FC-sourced only (`"fnv"`): false = the flight computer holds no stored
+    /// deployment configuration and is reporting its all-disabled default —
+    /// which looks exactly like four channels somebody switched off, and is
+    /// not.  nil when the source is not the FC.
+    var pyroStoredOnFlightComputer: Bool? = nil
+    /// True when the pyro tiles show what the flight computer will fire on.
+    var pyroIsFlightComputerSourced: Bool { pyroSource == .flightComputer }
 
     /// Setting groups this rocket does not report back.  Empty once the
     /// config report has landed; the pre-#915 list on firmware that can't

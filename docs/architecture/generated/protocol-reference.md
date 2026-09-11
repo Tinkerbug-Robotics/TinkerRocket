@@ -119,7 +119,7 @@ this list is CI-enforced for uniqueness.
 | `0xF4` | `I2C_TX_RESYNC` | — |  |
 | `0xF9` | `LORA_UPLINK_MSG` | OC → log | OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log |
 | `0xFA` | `FC_BOOT_STATUS_MSG` | FC → OC | FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only |
-| `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 169-byte ConfigReportData, everything the app's config |
+| `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 193-byte ConfigReportData, everything the app's config |
 | `0x90` | `GNSS_SAT_MSG` | FC → OC | FC→OC over I2S: GNSSSatData, per-satellite C/N0 at every GNSS |
 | `0x91` | `RECOVERY_END_PENDING` | OC → FC |  |
 | `0xFC` | `BS_LORA_RX_MSG` | FC → OC | BS→self: BsLoRaRxHeader + the raw LoRa frame, one per received packet |
@@ -141,7 +141,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `FlightSnapshotData` | 224 |
 | `FlightSettingsData` | 223 |
 | `GNSSSatData` | 202 |
-| `ConfigReportData` | 169 |
+| `ConfigReportData` | 193 |
 | `RollProfileData` | 76 |
 | `RollProfileData` | 76 |
 | `LoRaFastData` | 55 |
@@ -205,7 +205,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-55 commands.
+56 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -264,6 +264,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 69 |  | #1176 step 6 — the operator's manual end of a restored flight. BLE ONLY, by decision: this number is… |
 | 73 |  | #1271 — the operator acknowledges the blind-window loss(es). BLE ONLY, and deliberately absent from… |
 | 74 |  | #773 step 2 — provision this OUT COMPUTER's board revision. BLE ONLY, like cmd 73 above and for the same… |
+| 200 |  | Bench-only: arm config-frame drops, see test_cfg_drop_count |
 
 > 9 of these have no comment in the dispatch and so no
 > description here: 7, 15, 16, 21, 51, 52, 53, 54, 57. Adding a comment to the branch

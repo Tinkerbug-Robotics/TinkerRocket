@@ -216,3 +216,108 @@ and the warning that would matter on a pad.
 - The OC-only-reflash divergence case above.
 - Two free message codes left in the OC↔FC space. The next one needs an
   escape/extended encoding, not a thirteenth constant.
+
+## #1231 — the deployment configuration joins the report (2026-09-11)
+
+Split out of #1117 by the #1225 triage as the one change that makes #1117,
+#1131 and #1078 *detectable*. Each of those had its own fix; none of them gave
+the operator a way to see the deployment configuration the FC actually holds,
+because nothing on any screen was sourced from the FC's live `pyro_config`:
+the app's `config_pyro` readback was the OC echoing its own cache, the #915
+report had no pyro member, `FLIGHT_SETTINGS_MSG` is log-only, and the gated
+scorecard bits read `SH_NA`.
+
+### The wire
+
+`ConfigReportData` v2: `PyroConfigData pyro` appended after `roll`, 193 bytes,
+`F_PYRO_FROM_NVS` (bit 2) set when the FC's copy is a stored record. Appended,
+not inserted, so **v1 is a byte-exact prefix of v2** and the OC accepts both —
+copying a v1 frame by `offsetof(pyro)` and serving it with no pyro block —
+rather than refusing it. The FC image is relayed through the OC, so an OC
+updated ahead of its FC is the normal OTA order; the strict version check the
+v1 handler had would have put every #915 group back on the app's can't-verify
+list for that whole window. The prefix is pinned by a `static_assert` and the
+host layout test.
+
+The FC marks the report dirty on an applied pyro frame (it was the one config
+handler that did not), and reports the LIVE struct `servicePyroChannels()`
+reads, not a copy of the last frame.
+
+### What the OC serves, and from where
+
+`config_pyro` is built from the FC's report whenever the rail is on and a v2
+report is held; the OC's cache stands in only with the rail off or under a
+pre-#1231 FC. The frame carries `src` (`"fc"` / `"oc"`) and, FC-sourced only,
+`fnv`. Two things the OC deliberately does **not** do:
+
+- **It does not overwrite its cache from the report.** The cache is what the
+  phone last pushed and what the rail-off readback serves (#1131); the report
+  is what the FC holds. When they differ the OC logs one line per changed
+  report — `FC deployment config differs from OC cache` — and the app is
+  shown the FC's copy, with its source.
+- **It does not self-heal.** The orientation precedent re-pushes the OC's
+  record when the FC says it has never been told; doing the same for the
+  deployment configuration would be the OC silently writing what fires. That
+  is a flight-safety behaviour choice, not a visibility fix, and is left for
+  the owner to decide separately. With `fnv` on the wire the app can at least
+  say "the flight computer has no stored deployment config" instead of
+  rendering four channels that look switched off.
+
+The report-dirty path now sends four frames (the three extras plus
+`config_pyro`), which could land in the same `loop_oc` pass as a connect burst
+and overflow the 12-deep readback ring; `sendCurrentConfig()` clears the dirty
+flag before its own snapshots so the two never stack.
+
+### The apps
+
+Both decode `src`/`fnv` into `RocketConfig.pyroSource` and
+`pyroStoredOnFlightComputer`, carry them across a `config` rebuild the way the
+pyro fields already were, and render one quiet caption under the pyro card
+only when the tiles are *not* the FC's own stored configuration.
+
+The #1078 optimistic mirror had to yield. With FC-sourced tiles, a write the
+FC never applied produces no echo and an unchanged report — so a mirror that
+painted the new values in would re-create exactly the invisible divergence
+this issue exists to remove. The mirror now applies only when there is no echo
+to wait for: the OC cache, an OC that predates the key, or the rail off.
+
+### Bench validation (V9 pair, 2026-09-11)
+
+All five #1211 checks ran on the V9 pair (`tests/bench/1231_phase*.txt`, driven by
+`tools/bench_session.py`; boot lines via `tools/bench_capture_boot.py`, which
+resets the board deliberately since the harness attaches without a reset).
+
+- **Mixed versions** (new OC, pre-#1231 FC): the 169-byte v1 report was
+  accepted, `config_servo`/`config_guid`/`config_roll` were still served, and
+  `config_pyro` carried `"src":"oc"` with `Queued pyro config readback (…, from
+  OC cache)` on the OC console — rail on, and after a rail-off reboot.
+- **FC-sourced readback**: the new FC loaded A from NVS, its first report logged
+  `pyro(nvs)=[1/0/1.0 1/1/150.0 …]`, and the readback carried `"src":"fc","fnv":true`.
+  An edit was applied (`[PYRO CFG] …`), re-reported, and re-published to the
+  phone unsolicited, with no retry line.
+- **Erased FC NVS**: `NVS pyro: none (all four disabled)`, report `pyro(dflt)=[…]`,
+  readback `"fnv":false` with all four disabled. The OC's orientation self-heal
+  re-pushed `+X` to the erased FC at the same time; pyro was left at its default,
+  the asymmetry this design leaves open on purpose.
+- **Hand-written FC record** (ch1 off, ch2 300 m, ch3 2.0 s, written with
+  `nvs_partition_gen.py` + `esptool write_flash 0x9000`) while the OC cache held
+  something else: the readback showed the FC's record, and so did the **Android
+  app's pyro tiles** (bench build on the Pixel) with no caption. After the app's own
+  Power off, the tiles showed the OC's copy under "Flight computer is off. Showing
+  the out computer's stored copy.", and returned to the FC's record on Power on.
+- **Dropped frame** (`-DTR_TEST_CFG_DROP=1` OC image, BLE cmd 200 `03 ce`): three
+  deliveries dropped 250 ms apart, `Cmd 0xCD cleared after 3 deliveries`, the hook
+  disarmed itself, no `config_pyro` was published, the OC logged `FC deployment
+  config differs from OC cache — FC(nvs)=[C] OC=[E]` on the next 5 s report, and a
+  cmd-20 readback still showed C with `"src":"fc"`. The same edit on a healthy link
+  landed, logged `matches OC cache again`, and was re-published.
+
+Two things the bench corrected on the way. The divergence line is now evaluated on
+every report and logged on the *transition* into divergence (a cache write the FC
+never received would otherwise never be logged, since the FC's copy does not
+change). And the first version of the drop hook decremented once per staging
+attempt; the FC reads the staged buffer up to three times per poll, so three
+armed drops were spent inside one poll — it now keys on the OC's own delivery
+counter and disarms when the command is retired. One sequencing rule for the
+scripts: never arm the hook while the previous command may still be inside its
+three-delivery window.

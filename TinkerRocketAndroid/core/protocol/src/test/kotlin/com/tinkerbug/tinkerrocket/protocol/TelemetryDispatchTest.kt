@@ -292,6 +292,35 @@ class TelemetryDispatchTest {
     }
 
     @Test
+    fun `config_pyro carries its source and the FC stored flag`() {
+        // #1231: FC-sourced, and the FC is reporting its never-configured
+        // default — "fnv" only means something on that branch.
+        var cfg = pyro(
+            """{"type":"config_pyro","p1e":true,"p1m":0,"p1v":1.0,"src":"fc","fnv":false}""",
+            previous = null,
+        )
+        assertEquals(PyroConfigSource.FLIGHT_COMPUTER, cfg.pyroSource)
+        assertEquals(false, cfg.pyroStoredOnFlightComputer)
+        assertTrue(cfg.pyroIsFlightComputerSourced)
+
+        // A `config` rebuild carries provenance over with the pyro fields.
+        cfg = config("""{"type":"config","shz":333}""", cfg)
+        assertEquals(PyroConfigSource.FLIGHT_COMPUTER, cfg.pyroSource)
+        assertEquals(false, cfg.pyroStoredOnFlightComputer)
+
+        // The OC's own cache: fnv is ignored there.
+        cfg = pyro("""{"type":"config_pyro","p1e":true,"src":"oc","fnv":true}""", cfg)
+        assertEquals(PyroConfigSource.OUT_COMPUTER_CACHE, cfg.pyroSource)
+        assertNull(cfg.pyroStoredOnFlightComputer)
+
+        // An out computer that predates the key.
+        cfg = pyro("""{"type":"config_pyro","p1e":true}""", cfg)
+        assertEquals(PyroConfigSource.UNKNOWN, cfg.pyroSource)
+        assertNull(cfg.pyroStoredOnFlightComputer)
+        assertEquals(PyroConfigSource.UNKNOWN, PyroConfigSource.fromWire("bogus"))
+    }
+
+    @Test
     fun `config then config_pyro then config keeps both sides`() {
         // The real connect-time sequence: OC pushes config, then config_pyro,
         // then a later refresh pushes config again — pyro must survive it.

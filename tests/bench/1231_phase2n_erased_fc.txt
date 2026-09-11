@@ -1,0 +1,15 @@
+# #1231 phase 2n — S1 -> F. Run right after the FC's NVS was ERASED (or hand-written to B).
+# Erased: the FC reports its all-disabled default with fnv=false, and the readback says so.
+note === 2n: erased FC NVS — never-configured is reported as such ===
+wait_tlm 25 st!=NONE
+send 8 01
+sleep 12
+wait_tlm 20 fs.PWR_PIN_ON==1
+mark
+send 20
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==fc
+expect_tlm 15 fnv==false
+expect_tlm 15 p1e==false
+expect_tlm 15 p2e==false
+note === phase 2n done ===

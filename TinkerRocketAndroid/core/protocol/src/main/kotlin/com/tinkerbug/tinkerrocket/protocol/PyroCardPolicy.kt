@@ -93,4 +93,35 @@ public object PyroCardPolicy {
         armed -> "Pyro Channels — ARMED"
         else -> "Pyro Channels"
     }
+
+    /**
+     * #1231 provenance advisory under the tiles — iOS `pyroProvenanceNote`
+     * twin.  One quiet line, only when the tiles are NOT showing what the
+     * flight computer will fire on, or it holds nothing at all.  null = the
+     * tiles are the FC's own stored configuration, which needs no caption.
+     * Never on a relay: those tiles are the active profile by construction.
+     */
+    public fun provenanceNote(
+        isBaseStation: Boolean,
+        config: RocketConfig?,
+        powerPinOn: Boolean,
+    ): String? {
+        if (isBaseStation) return null
+        val cfg = config ?: return null
+        return when (cfg.pyroSource) {
+            PyroConfigSource.FLIGHT_COMPUTER ->
+                if (cfg.pyroStoredOnFlightComputer == false) {
+                    "Flight computer has no stored deployment config. Send settings to set one."
+                } else {
+                    null
+                }
+            PyroConfigSource.OUT_COMPUTER_CACHE ->
+                if (powerPinOn) {
+                    "Not confirmed by the flight computer."
+                } else {
+                    "Flight computer is off. Showing the out computer's stored copy."
+                }
+            PyroConfigSource.UNKNOWN -> "Not confirmed by the flight computer."
+        }
+    }
 }

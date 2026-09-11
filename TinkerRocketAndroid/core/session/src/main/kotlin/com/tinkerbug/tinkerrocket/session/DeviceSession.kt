@@ -1311,11 +1311,21 @@ public class DeviceSession(
      * readback already exists (iOS `if var cfg = device.rocketConfig`):
      * fabricating a config here would render the un-pushed fields as
      * device-reported truth when the device has reported nothing yet.
+     *
+     * #1231: NOT mirrored when the readback is the flight computer's own copy
+     * and the FC is up to echo the write.  The FC's config report re-draws
+     * the tiles once it applies the frame, and a frame it never applied then
+     * leaves them on its previous values — the divergence that readback
+     * exists to make visible, which an optimistic mirror would paint over.
+     * The mirror stays for the cases with no echo to wait for: the OC's cache
+     * (rail off, older FC firmware) and an OC that predates the source key.
+     * Same gate as iOS `sendPyroConfig`.
      */
     public fun mirrorPyroConfig(channels: List<PyroChannelConfig>) {
         if (channels.size != 4) return
         sessionScope.launch {
             val cfg = _rocketConfig.value ?: return@launch
+            if (cfg.pyroIsFlightComputerSourced && _telemetry.value.pwrPinOn) return@launch
             _rocketConfig.value = cfg.copy(
                 pyro1Enabled = channels[0].enabled,
                 pyro1TriggerMode = channels[0].mode,
