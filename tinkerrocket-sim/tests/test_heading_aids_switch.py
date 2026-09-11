@@ -26,8 +26,13 @@ def test_the_switch_round_trips():
     assert ekf.gnss_heading_aids_enabled() is False
 
 
-def _roll_metrics(fuse):
-    """Run the boost-roll-disturbance scenario with the aids forced on/off."""
+def _roll_metrics(fuse, seed=None):
+    """Run the boost-roll-disturbance scenario with the aids forced on/off.
+
+    `seed` overrides the scenario's own sensor_seed. It exists because the
+    single-seed answer is not the answer — see
+    test_the_aids_effect_on_the_roll_null_is_within_seed_noise.
+    """
     import tinkerrocket_sim.simulation.closed_loop_sim as C
     original = _ekf.GpsInsEKF
 
@@ -39,6 +44,8 @@ def _roll_metrics(fuse):
     _ekf.GpsInsEKF = Patched
     try:
         cfg = S.roll_boost_disturbance_config()
+        if seed is not None:
+            cfg = dataclasses.replace(cfg, sensor_seed=seed)
         df = C.run_closed_loop(S.build_rollypolly_iii(), cfg).df
     finally:
         _ekf.GpsInsEKF = original
@@ -51,34 +58,56 @@ def _roll_metrics(fuse):
     return float(coast['roll_rate_dps'].abs().median()), settle
 
 
-def test_switching_the_aids_on_tightens_the_coast_roll_null():
-    # Measured 2026-09-11: 6.41 dps with the aids off, 4.26 dps with them fused.
-    #
-    # This number was 1.34 dps until #1135 item 2 corrected accelMatchHeadingUpdate
-    # to rotate the FULL body specific force into NED rather than only its lateral
-    # part. That is an identity, not a tuning choice — gravity is purely vertical
-    # in NED, so the horizontal components of the rotated specific force ARE the
-    # horizontal kinematic acceleration the measurement side carries. The host
-    # tests are where that is pinned (tests_cpp/test_ekf_heading_aids.cpp): under
-    # the old model a rocket sitting still on a 5° rail moved its own attitude 61°
-    # from GNSS noise, and a tilted boost disagreed 48° with a measurement
-    # generated from its own attitude. Both are now ~0.
-    #
-    # So the aid got MORE correct and this metric got worse, which is the whole
-    # point of #1281: the sim's GNSS velocity carries no noise, so its
-    # differentiated acceleration is a clean signal the vehicle does not have.
-    # On the four 2026-08-29 flights the same aid's innovations are uniform noise
-    # (circular resultant 0.09 on Rolly Polly V's fast ascent). The old model was
-    # being rewarded here for reading a quantity that does not exist in flight.
-    #
-    # The claim this test can still honestly make is the direction: with a
-    # noise-free GNSS the loop does lean on these aids. Its magnitude is not
-    # evidence about the vehicle until #1281 gives the sim a real noise model.
-    off_med, _ = _roll_metrics(False)
-    on_med, _ = _roll_metrics(True)
-    assert on_med < off_med
-    assert on_med < 5.0
-    assert 4.0 < off_med < 9.0
+def test_the_aids_effect_on_the_roll_null_is_within_seed_noise():
+    """#1281: the sim cannot sign these aids, and never could.
+
+    This test used to assert `on_med < off_med` and `on_med < 3.0`, from a
+    single measurement on `sensor_seed=42`: 6.41 dps with the aids off, 1.34
+    with them fused. That looked like a 5 dps effect. It is one draw.
+
+    Swept across 17 seeds, the aids' effect on the coast roll null is:
+
+        sim as it was (25 Hz, 0.5/1.0 m/s)   mean delta +0.02 +/- 1.94 dps
+                                            (t = +0.03, aid helps on 9/17)
+        sim as measured (18.18 Hz, 0.4/0.6) mean delta +0.27 +/- 1.84 dps
+                                            (t = +0.60, aid helps on 8/17)
+
+    Both are indistinguishable from zero against a seed-to-seed spread of
+    ~1.9 dps, and seed 42 is a 1.1-sigma draw of the old distribution. So the
+    sim never supported "switching the aids on tightens the roll null" — a
+    coin flip did, and three thresholds were calibrated against it (the two
+    PR #1308 relaxed, and the one this test used to carry).
+
+    That is this issue's actual finding. It is NOT that the sim lacked GNSS
+    velocity noise: the sim already carried 0.5 m/s of NE velocity noise, and
+    differentiated at 25 Hz that is MORE acceleration noise than the real
+    receiver produces at 18.18 Hz, not less (17.7 vs 9.7 m/s^2).
+
+    What this test can honestly assert is the null: the mean effect is small
+    compared with the spread, so no single-seed comparison may be used to
+    argue these aids help or hurt. Score them against a flight with a roll
+    reference instead (#1309).
+    """
+    deltas = []
+    for seed in range(1, 9):
+        off_med, _ = _roll_metrics(False, seed)
+        on_med, _ = _roll_metrics(True, seed)
+        deltas.append(on_med - off_med)
+    mean = sum(deltas) / len(deltas)
+    spread = (sum((d - mean) ** 2 for d in deltas) / (len(deltas) - 1)) ** 0.5
+
+    # The effect is small next to the seed noise. Measured |mean| is 0.02-0.84
+    # across configurations and seed sets; the spread is ~1.9.
+    assert abs(mean) < 1.5, (
+        f"the aids now show a directional effect on the roll null "
+        f"(mean {mean:+.2f} dps over {len(deltas)} seeds, spread {spread:.2f}) — "
+        f"if that is real it changes #1309's scoring plan, so measure it before "
+        f"relaxing this bound")
+    # And it is genuinely a spread, not a constant: if every seed agreed, the
+    # effect would be systematic and the assertion above would be the wrong test.
+    assert spread > 0.3, (
+        f"the per-seed spread collapsed to {spread:.2f} dps — the aids' effect "
+        f"became deterministic, which is not what any measurement here found")
 
 
 def test_the_default_path_matches_the_explicitly_disabled_path():
