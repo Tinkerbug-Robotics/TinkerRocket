@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
+import java.util.Locale
 
 /**
  * Finding the firmware release on GitHub, and fetching from it (#773 step 4).
@@ -61,7 +62,7 @@ public data class FirmwareRelease(
                 '\n' -> append("\\n")
                 '\r' -> append("\\r")
                 '\t' -> append("\\t")
-                else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
+                else -> if (c < ' ') append(String.format(Locale.ROOT, "\\u%04x", c.code)) else append(c)
             }
             append('"')
         }

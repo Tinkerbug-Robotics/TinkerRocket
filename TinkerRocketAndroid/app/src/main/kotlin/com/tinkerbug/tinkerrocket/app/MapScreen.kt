@@ -64,6 +64,7 @@ import org.maplibre.geojson.Polygon
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
+import java.util.Locale
 
 /**
  * Rocket map — Phase 6 S2 spike shape, kept as the RocketMapView slot.
@@ -252,7 +253,7 @@ fun MapScreen(
             }
             TrMapPlate(Modifier.align(Alignment.TopStart).padding(TrSpacing.rowSpacing)) {
                 Text(
-                    "⚑ landing ±%.0f m · T+%ds ago".format(p.uncertaintyMeters, ageS),
+                    String.format(Locale.ROOT, "⚑ landing ±%.0f m · T+%ds ago", p.uncertaintyMeters, ageS),
                     style = MaterialTheme.typography.labelMedium,
                     color = color,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
@@ -540,7 +541,7 @@ private fun installPhoneDot(style: Style, fix: PhoneLocationManager.PhoneFix?, c
  * only thing that matters.
  */
 private fun formatFixAge(seconds: Long): String =
-    if (seconds < 60) "${seconds}s" else "%d:%02d".format(seconds / 60, seconds % 60)
+    if (seconds < 60) "${seconds}s" else String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60)
 
 private fun installRocketMarker(style: Style, lat: Double?, lon: Double?, c: TrColors) {
     val feature = if (lat != null && lon != null) {

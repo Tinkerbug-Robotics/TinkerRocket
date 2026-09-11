@@ -176,7 +176,7 @@ fun OfflineMapsScreen(container: AppContainer, onBack: () -> Unit, onAdd: () -> 
                     Column(Modifier.weight(1f)) {
                         Text(r.name, style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            "${"%.1f".format(r.radiusMeters / 1000)} km · z${r.minZoom}–${r.maxZoom} · " +
+                            "${String.format(Locale.ROOT, "%.1f", r.radiusMeters / 1000)} km · z${r.minZoom}–${r.maxZoom} · " +
                                 "${formatMb(r.bytes)} · ${r.tileSource?.displayName ?: r.source}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -206,7 +206,7 @@ fun OfflineMapsScreen(container: AppContainer, onBack: () -> Unit, onAdd: () -> 
 
 private fun formatMb(bytes: Long): String {
     val mb = bytes / 1_048_576.0
-    return if (mb < 0.1) "0 MB" else "%.0f MB".format(mb)
+    return if (mb < 0.1) "0 MB" else String.format(Locale.ROOT, "%.0f MB", mb)
 }
 
 // ── Save Area ───────────────────────────────────────────────────────────
@@ -344,7 +344,7 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val inputsEnabled = phase != TileDownloader.Phase.DOWNLOADING   // #1045
             SliderRow(
-                "Radius", "%.1f km".format(radiusKm), radiusKm, 1.0..20.0,
+                "Radius", String.format(Locale.ROOT, "%.1f km", radiusKm), radiusKm, 1.0..20.0,
                 enabled = inputsEnabled,
             ) { radiusKm = (it * 2).toInt() / 2.0 }
             SliderRow(
@@ -356,7 +356,7 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Estimate", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
-                    "~$tileCount tiles · ~%.0f MB".format(estMb),
+                    String.format(Locale.ROOT, "~$tileCount tiles · ~%.0f MB", estMb),
                     fontFamily = FontFamily.Monospace,
                     color = if (tooBig) tr.statusWarn else MaterialTheme.colorScheme.onSurface,
                 )
@@ -394,7 +394,7 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "$done / $total tiles · %.0f MB".format(bytes / 1_048_576.0) +
+                    String.format(Locale.ROOT, "$done / $total tiles · %.0f MB", bytes / 1_048_576.0) +
                         // Visible AS IT HAPPENS: the screen closes on success,
                         // so this is the only place a partly-covered area can
                         // admit it.

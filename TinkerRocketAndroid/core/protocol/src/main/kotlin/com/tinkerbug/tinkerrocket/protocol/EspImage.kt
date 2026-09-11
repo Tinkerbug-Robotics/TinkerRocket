@@ -1,4 +1,5 @@
 package com.tinkerbug.tinkerrocket.protocol
+import java.util.Locale
 
 /**
  * ESP-IDF application-image header, and whether a picked `.bin` belongs on the
@@ -34,7 +35,7 @@ public data class EspAppImage(
     val idfVersion: String,
 ) {
     /** Human name for [chipId], or "chip 0x..." for one this app does not know. */
-    public val chipName: String get() = CHIP_NAMES[chipId] ?: "chip 0x%04X".format(chipId)
+    public val chipName: String get() = CHIP_NAMES[chipId] ?: String.format(Locale.ROOT, "chip 0x%04X", chipId)
 
     /**
      * Board revision the image asserts, from the suffix in a version string
@@ -193,7 +194,7 @@ public object EspImage {
         val warnings = mutableListOf<String>()
         if (expectedChipId != null && img.chipId != expectedChipId) {
             warnings += "built for ${img.chipName}, but this unit is normally " +
-                (EspAppImage.CHIP_NAMES[expectedChipId] ?: "chip 0x%04X".format(expectedChipId))
+                (EspAppImage.CHIP_NAMES[expectedChipId] ?: String.format(Locale.ROOT, "chip 0x%04X", expectedChipId))
         }
         val provisioned = provisionedBoard?.trim()?.lowercase()?.ifEmpty { null }
         val fromVersion = runningVersion?.let {

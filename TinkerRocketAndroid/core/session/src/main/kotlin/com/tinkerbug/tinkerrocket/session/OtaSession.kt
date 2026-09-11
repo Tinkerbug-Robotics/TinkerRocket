@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.security.MessageDigest
+import java.util.Locale
 
 /**
  * Drives an OTA upload end-to-end — port of iOS OTASession.swift:
@@ -134,7 +135,7 @@ public class OtaSession(
         }
         val sha = sha256(image)
         imageSize = image.size
-        imageSha256Hex = sha.joinToString("") { "%02x".format(it) }
+        imageSha256Hex = sha.joinToString("") { String.format(Locale.ROOT, "%02x", it) }
         // What this image says it IS.  Empty for a file with no readable app
         // descriptor, which step 7 falls back to the old heuristic for.
         imageVersion = EspImage.parse(image)?.version.orEmpty()

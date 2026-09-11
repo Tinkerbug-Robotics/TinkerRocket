@@ -22,6 +22,7 @@ import kotlin.math.min
 import kotlin.math.pow
 import com.tinkerbug.tinkerrocket.protocol.flightTracks
 import com.tinkerbug.tinkerrocket.protocol.Trajectory3D.V3
+import java.util.Locale
 
 /**
  * FlightTrajectory 2D (plan §1: the SceneKit 3D view projects to a 2D
@@ -155,7 +156,7 @@ fun TrajectoryCanvas(data: FlightCsvData) {
         val y0 = size.height - 10.dp.toPx()
         drawLine(labelColor, Offset(8.dp.toPx(), y0), Offset(8.dp.toPx() + barPx, y0), strokeWidth = 2.dp.toPx())
         val barLabel = textMeasurer.measure(
-            if (niceM >= 1000) "%.0f km".format(niceM / 1000) else "%.0f m".format(niceM),
+            if (niceM >= 1000) String.format(Locale.ROOT, "%.0f km", niceM / 1000) else String.format(Locale.ROOT, "%.0f m", niceM),
             TextStyle(fontSize = 10.sp, color = labelColor),
         )
         drawText(barLabel, topLeft = Offset(8.dp.toPx(), y0 - barLabel.size.height - 2.dp.toPx()))

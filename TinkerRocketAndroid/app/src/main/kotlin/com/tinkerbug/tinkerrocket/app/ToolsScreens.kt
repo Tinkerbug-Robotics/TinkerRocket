@@ -52,6 +52,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import java.util.Locale
 
 /**
  * Phase 7 utility tools — ports of iOS ServoTestView, SimulationView, and
@@ -111,7 +112,7 @@ fun ServoTestScreen(session: DeviceSession, profiles: RocketProfileStore?, onBac
                     ) {
                         Text("Servo ${i + 1}", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "%.1f°".format(angles[i]),
+                            String.format(Locale.ROOT, "%.1f°", angles[i]),
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -207,9 +208,9 @@ fun SimulationScreen(session: DeviceSession, onBack: () -> Unit) {
                     massGrams.toFloatOrNull(), thrustN.toFloatOrNull(),
                     burnS.toFloatOrNull(), descentMps.toFloatOrNull(),
                 )
-                EstRow("Burnout Speed", est?.let { "%.0f m/s".format(it.maxSpeed) } ?: "—")
-                EstRow("Max Altitude", est?.let { "%.0f m".format(it.maxAlt) } ?: "—")
-                EstRow("Flight Duration", est?.let { "%.0f s".format(it.totalTime) } ?: "—")
+                EstRow("Burnout Speed", est?.let { String.format(Locale.ROOT, "%.0f m/s", it.maxSpeed) } ?: "—")
+                EstRow("Max Altitude", est?.let { String.format(Locale.ROOT, "%.0f m", it.maxAlt) } ?: "—")
+                EstRow("Flight Duration", est?.let { String.format(Locale.ROOT, "%.0f s", it.totalTime) } ?: "—")
             }
         }
         if (confirmLaunch) {
@@ -395,7 +396,7 @@ fun FreqScanScreen(session: DeviceSession, onBack: () -> Unit) {
                 EstRow("Channels", if (channels in 1..128) "$channels" else "$channels (max 128)")
                 EstRow(
                     "Est. Duration",
-                    if (durationMs < 1000) "%.0f ms".format(durationMs) else "%.1f s".format(durationMs / 1000),
+                    if (durationMs < 1000) String.format(Locale.ROOT, "%.0f ms", durationMs) else String.format(Locale.ROOT, "%.1f s", durationMs / 1000),
                 )
             }
         }
@@ -432,7 +433,7 @@ fun FreqScanScreen(session: DeviceSession, onBack: () -> Unit) {
                     if (quiet != null) {
                         EstRow(
                             "Quietest channel",
-                            "%.2f MHz · %d dB".format(quiet.freqMhz, REFERENCE_DBM - quiet.rssiDbm),
+                            String.format(Locale.ROOT, "%.2f MHz · %d dB", quiet.freqMhz, REFERENCE_DBM - quiet.rssiDbm),
                         )
                         val noisy = samples.count { (REFERENCE_DBM - it.rssiDbm) < QUIET_MARGIN_DB }
                         EstRow("Below $QUIET_MARGIN_DB dB margin", "$noisy of ${samples.size}")
@@ -496,7 +497,7 @@ private fun ScanChart(points: List<Pair<Double, Int>>) {
         val style = TextStyle(fontSize = 9.sp, color = labelColor)
         for (i in 0..4) {
             val f = lo + span * i / 4
-            val label = textMeasurer.measure("%.0f".format(f), style)
+            val label = textMeasurer.measure(String.format(Locale.ROOT, "%.0f", f), style)
             drawText(
                 label,
                 topLeft = Offset(

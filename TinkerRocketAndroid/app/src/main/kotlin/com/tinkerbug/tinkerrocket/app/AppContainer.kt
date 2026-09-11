@@ -24,6 +24,7 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.Locale
 
 /**
  * Manual DI (android-port plan §1 — no Hilt): ~10 app-scoped singletons with
@@ -221,7 +222,7 @@ class AppContainer(app: Application) {
             ?: return@runCatching null
         java.security.MessageDigest.getInstance("SHA-1")
             .digest(signer.toByteArray())
-            .joinToString("") { "%02X".format(it) }
+            .joinToString("") { String.format(Locale.ROOT, "%02X", it) }
     }.getOrNull()
 
     val fleet: FleetManager<DeviceSession> = run {

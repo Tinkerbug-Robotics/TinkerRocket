@@ -42,6 +42,7 @@ import com.tinkerbug.tinkerrocket.session.DeviceSession
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import java.util.Locale
 
 /**
  * Magnetometer hard-iron calibration (#96/#148/#206) — port of iOS
@@ -323,11 +324,11 @@ private fun ReviewSection(
                 color = if (ok) tr.statusOk else tr.statusWarn,
                 style = MaterialTheme.typography.bodyMedium,
             )
-            MetricRowM("Earth field |R|", "%.1f µT".format(s.fieldRUt))
-            MetricRowM("RMS residual", "%.1f µT".format(s.residualUt))
+            MetricRowM("Earth field |R|", String.format(Locale.ROOT, "%.1f µT", s.fieldRUt))
+            MetricRowM("RMS residual", String.format(Locale.ROOT, "%.1f µT", s.residualUt))
             MetricRowM("Coverage", "${s.coverageBins} / 32 wedges")
             MetricRowM(
-                "Offset |c|", "%.1f µT".format(s.centerMagnitudeUt),
+                "Offset |c|", String.format(Locale.ROOT, "%.1f µT", s.centerMagnitudeUt),
                 valueColor = if (s.centerWarning != MagCalStatus.CenterWarning.OK) tr.statusWarn else null,
             )
             if (s.centerWarning != MagCalStatus.CenterWarning.OK) {
@@ -398,17 +399,17 @@ private fun VerifyingSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            MetricRowM("Current |B|", "%.1f µT".format(s.instantaneousFieldUt))
+            MetricRowM("Current |B|", String.format(Locale.ROOT, "%.1f µT", s.instantaneousFieldUt))
             GateRow(
-                "Min observed", verifyMin?.let { "%.1f µT".format(it) } ?: "—",
+                "Min observed", verifyMin?.let { String.format(Locale.ROOT, "%.1f µT", it) } ?: "—",
                 if (verifyMin == null) null else verifyMin >= MagCalConst.VERIFY_MIN_UT,
             )
             GateRow(
-                "Max observed", verifyMax?.let { "%.1f µT".format(it) } ?: "—",
+                "Max observed", verifyMax?.let { String.format(Locale.ROOT, "%.1f µT", it) } ?: "—",
                 if (verifyMax == null) null else verifyMax <= MagCalConst.VERIFY_MAX_UT,
             )
             GateRow(
-                "Spread", if (verifyMin == null) "—" else "%.1f µT".format(spread),
+                "Spread", if (verifyMin == null) "—" else String.format(Locale.ROOT, "%.1f µT", spread),
                 if (verifyMin == null) null else tight,
             )
             GateRow(

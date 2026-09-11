@@ -30,6 +30,7 @@ import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
 import com.tinkerbug.tinkerrocket.protocol.flightTracks
+import java.util.Locale
 
 /**
  * The ONE shared orbit-camera scene (plan §1: all SceneKit views project to
@@ -260,7 +261,7 @@ fun Trajectory3DCanvas(data: FlightCsvData) {
             SceneMarker(it.landing, Color(0xFF52CF66), "Landing"),
             SceneMarker(
                 it.apogee, Color(0xFF4DABF7), "Apogee",
-                sublabel = "%.0f m AGL".format(it.apogee.u - groundU), radiusDp = 6.0,
+                sublabel = String.format(Locale.ROOT, "%.0f m AGL", it.apogee.u - groundU), radiusDp = 6.0,
             ),
         )
     } ?: emptyList()
@@ -338,7 +339,7 @@ fun DriftCast3DCanvas(r: GuidanceResult) {
             SceneMarker(landing, Color(0xFF52CF66), "Landing"),
             SceneMarker(
                 guidance, Color(0xFF4DABF7), "Guidance",
-                sublabel = "%.0f m AGL".format(apogeeM), radiusDp = 6.0,
+                sublabel = String.format(Locale.ROOT, "%.0f m AGL", apogeeM), radiusDp = 6.0,
             ),
         ),
         extraLines = listOf(

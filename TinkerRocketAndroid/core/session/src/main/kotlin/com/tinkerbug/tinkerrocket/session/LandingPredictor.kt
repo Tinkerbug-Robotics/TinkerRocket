@@ -22,6 +22,7 @@ import kotlin.math.pow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
+import java.util.Locale
 
 /**
  * Live in-flight landing-point prediction (issue #156) — port of iOS
@@ -370,7 +371,7 @@ public fun fetchOpenMeteoWinds(lat: Double, lon: Double, nowMs: Long): WindProfi
             parseOpenMeteoWinds(
                 conn.inputStream.readBytes().decodeToString(),
                 hourUtc = hour, lat = lat, lon = lon,
-            )?.copy(fetchTime = "${dateStr}T%02d:00Z".format(hour))
+            )?.copy(fetchTime = String.format(Locale.ROOT, "${dateStr}T%02d:00Z", hour))
         } finally {
             conn.disconnect()
         }

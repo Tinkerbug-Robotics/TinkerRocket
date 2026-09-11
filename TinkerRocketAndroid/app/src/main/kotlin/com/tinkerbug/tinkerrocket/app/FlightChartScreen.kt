@@ -53,6 +53,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
 /**
  * Post-flight data chart — port of iOS FlightChartView on a custom Compose
@@ -221,7 +222,7 @@ fun FlightChartScreen(csvFile: File, onBack: () -> Unit) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            "🔍 %.1fs – %.1fs".format(visibleX.lower, visibleX.upper),
+                            String.format(Locale.ROOT, "🔍 %.1fs – %.1fs", visibleX.lower, visibleX.upper),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -344,7 +345,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawChart(
         val xVal = xDomain.lower + xDomain.span * i / 4
         val xPx = px(xVal)
         drawLine(gridColor, Offset(xPx, 0f), Offset(xPx, plotH), strokeWidth = 1f)
-        val label = textMeasurer.measure("%.1f".format(xVal), labelStyle)
+        val label = textMeasurer.measure(String.format(Locale.ROOT, "%.1f", xVal), labelStyle)
         drawText(
             label,
             topLeft = Offset(
@@ -391,9 +392,9 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawChart(
 }
 
 private fun compactNumber(v: Double): String = when {
-    kotlin.math.abs(v) >= 10_000 -> "%.0f".format(v)
-    kotlin.math.abs(v) >= 100 -> "%.1f".format(v)
-    else -> "%.2f".format(v)
+    kotlin.math.abs(v) >= 10_000 -> String.format(Locale.ROOT, "%.0f", v)
+    kotlin.math.abs(v) >= 100 -> String.format(Locale.ROOT, "%.1f", v)
+    else -> String.format(Locale.ROOT, "%.2f", v)
 }
 
 // ── Column picker ───────────────────────────────────────────────────────
