@@ -28999,7 +28999,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin power_in line
 				(at 15.24 -7.62 180)
 				(length 7.62)
 				(name "VSS"
@@ -46317,7 +46317,7 @@
 					)
 				)
 			)
-			(pin power_in line
+			(pin power_out line
 				(at 17.78 -10.16 180)
 				(length 5.08)
 				(name "VFB1/VO1"
@@ -46335,7 +46335,7 @@
 					)
 				)
 			)
-			(pin power_in line
+			(pin power_out line
 				(at 17.78 -12.7 180)
 				(length 5.08)
 				(name "VFB2/VO2"
@@ -46353,7 +46353,7 @@
 					)
 				)
 			)
-			(pin power_in line
+			(pin power_out line
 				(at 17.78 -15.24 180)
 				(length 5.08)
 				(name "VFB3/VO3"
@@ -46371,7 +46371,7 @@
 					)
 				)
 			)
-			(pin power_in line
+			(pin power_out line
 				(at 17.78 -17.78 180)
 				(length 5.08)
 				(name "VFB4/VO4"
@@ -47177,7 +47177,7 @@
 					)
 				)
 			)
-			(pin power_in line
+			(pin power_out line
 				(at 25.4 40.64 180)
 				(length 5.08)
 				(name "VDD_SPI"
@@ -55148,7 +55148,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin power_in line
 				(at 20.32 -6.35 180)
 				(length 7.62)
 				(name "GND"
@@ -55184,7 +55184,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin power_in line
 				(at 20.32 -3.81 180)
 				(length 7.62)
 				(name "GND"
@@ -56898,7 +56898,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin power_in line
 				(at 19.05 -5.08 180)
 				(length 7.62)
 				(name "GND"
@@ -56916,7 +56916,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin power_in line
 				(at 19.05 -7.62 180)
 				(length 7.62)
 				(name "GND"
@@ -70926,7 +70926,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin power_in line
 				(at 40.64 -11.43 180)
 				(length 7.62)
 				(name "GND"
@@ -92178,7 +92178,7 @@
 					)
 				)
 			)
-			(pin power_in line
+			(pin passive line
 				(at 11.43 7.62 180)
 				(length 5.08)
 				(name "SW"
@@ -92214,7 +92214,7 @@
 					)
 				)
 			)
-			(pin open_collector line
+			(pin passive line
 				(at -12.7 -7.62 0)
 				(length 5.08)
 				(name "PG"
@@ -93468,7 +93468,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin passive line
 				(at 12.7 12.7 180)
 				(length 5.08)
 				(name "ST"
@@ -94952,7 +94952,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin passive line
 				(at 17.78 7.62 180)
 				(length 5.08)
 				(name "IMON"
@@ -94988,7 +94988,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin input line
 				(at -17.78 7.62 0)
 				(length 5.08)
 				(name "NRETRY"
@@ -95098,7 +95098,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin power_out line
 				(at 17.78 17.78 180)
 				(length 5.08)
 				(name "OUT"
@@ -95116,7 +95116,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin passive line
 				(at 17.78 17.78 180)
 				(length 5.08)
 				(hide yes)
@@ -95135,7 +95135,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin passive line
 				(at 17.78 17.78 180)
 				(length 5.08)
 				(hide yes)
@@ -95154,7 +95154,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin passive line
 				(at 17.78 17.78 180)
 				(length 5.08)
 				(hide yes)
@@ -95173,7 +95173,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin passive line
 				(at 17.78 17.78 180)
 				(length 5.08)
 				(hide yes)
@@ -95192,7 +95192,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin passive line
 				(at 17.78 17.78 180)
 				(length 5.08)
 				(hide yes)
@@ -95211,7 +95211,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin passive line
 				(at 17.78 17.78 180)
 				(length 5.08)
 				(hide yes)
@@ -95230,7 +95230,7 @@
 					)
 				)
 			)
-			(pin output line
+			(pin passive line
 				(at 17.78 17.78 180)
 				(length 5.08)
 				(hide yes)
@@ -97760,7 +97760,7 @@
 					)
 				)
 			)
-			(pin power_in line
+			(pin passive line
 				(at 17.78 -15.24 180)
 				(length 5.08)
 				(hide yes)
@@ -107481,7 +107481,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin passive line
 				(at 12.7 5.08 180)
 				(length 2.54)
 				(name "VOUT"
@@ -108455,6 +108455,354 @@
 					(effects
 						(font
 							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+		)
+		(embedded_fonts no)
+	)
+	(symbol "AONR21321"
+		(pin_names
+			(offset 1.016)
+		)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(duplicate_pin_numbers_are_jumpers no)
+		(property "Reference" "U"
+			(at -12.7 16.24 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Value" "AONR21321"
+			(at -12.7 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Footprint" "Footprints:TRANS_CSD25404Q3"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "AONR21321"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Texas Instruments"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MF" "Texas Instruments"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Description_1" "-20V, P ch NexFET MOSFET, single SON 3x3, 6.5mOhm 8-VSON-CLIP -55 to 150"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Package" "VSON-CLIP-8 Texas Instruments"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Price" "None"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "MP" "AONR21321"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Availability" "Warning"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Purchase-URL" "https://pricing.snapeda.com/search/part/CSD25404Q3/?ref=eda"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(symbol "AONR21321_0_0"
+			(rectangle
+				(start -12.7 15.24)
+				(end 6.985 2.54)
+				(stroke
+					(width 0.41)
+					(type default)
+				)
+				(fill
+					(type background)
+				)
+			)
+			(pin bidirectional line
+				(at 12.7 12.7 180)
+				(length 5.715)
+				(name "S"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+				(number "1"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at 12.7 10.16 180)
+				(length 5.715)
+				(name "S"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+				(number "2"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at 12.7 7.62 180)
+				(length 5.715)
+				(name "S"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+				(number "3"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at -17.78 5.08 0)
+				(length 5.08)
+				(name "G"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+				(number "4"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -17.78 12.7 0)
+				(length 5.08)
+				(name "D"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+				(number "5"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -17.78 10.16 0)
+				(length 5.08)
+				(name "D"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+				(number "6"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -17.78 7.62 0)
+				(length 5.08)
+				(name "D"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+				(number "7"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -17.78 12.7 0)
+				(length 5.08)
+				(name "D"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+				(number "8"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -17.78 12.7 0)
+				(length 5.08)
+				(name "PAD"
+					(effects
+						(font
+							(size 1.016 1.016)
+						)
+					)
+				)
+				(number "9"
+					(effects
+						(font
+							(size 1.016 1.016)
 						)
 					)
 				)

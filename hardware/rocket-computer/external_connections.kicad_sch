@@ -7402,26 +7402,6 @@
 	)
 	(wire
 		(pts
-			(xy 216.535 26.67) (xy 231.775 26.67)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "47ccfa86-3fb9-4b0c-9caa-9a29958bda75")
-	)
-(wire
-		(pts
-			(xy 51.435 132.08) (xy 50.165 132.08)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "4badfa76-166a-440f-8b94-43703d5a0fc9")
-	)
-	(wire
-		(pts
 			(xy 130.81 136.525) (xy 140.97 136.525)
 		)
 		(stroke
@@ -7462,16 +7442,6 @@
 	)
 	(wire
 		(pts
-			(xy 116.84 31.115) (xy 116.84 31.75)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "51742b04-9d1d-479a-b9f2-b00b3ae2c37f")
-	)
-	(wire
-		(pts
 			(xy 217.805 65.405) (xy 217.805 76.2)
 		)
 		(stroke
@@ -7479,16 +7449,6 @@
 			(type default)
 		)
 		(uuid "5337a27e-c210-4a85-b499-d105be370f07")
-	)
-	(wire
-		(pts
-			(xy 193.675 22.86) (xy 189.23 22.86)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "58706571-3af0-4250-9347-16173304a993")
 	)
 	(wire
 		(pts
@@ -7902,16 +7862,6 @@
 	)
 	(wire
 		(pts
-			(xy 116.84 31.75) (xy 114.935 31.75)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "9148b995-be14-461c-bb17-5c08531ee46a")
-	)
-	(wire
-		(pts
 			(xy 227.33 68.58) (xy 227.33 69.215)
 		)
 		(stroke
@@ -8322,16 +8272,6 @@
 	)
 	(wire
 		(pts
-			(xy 227.965 105.41) (xy 223.52 105.41)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "bcaf2215-d556-4937-83ae-fe79b4c85409")
-	)
-	(wire
-		(pts
 			(xy 161.925 86.995) (xy 165.735 86.995)
 		)
 		(stroke
@@ -8699,16 +8639,6 @@
 			(type default)
 		)
 		(uuid "e465f234-976c-4a7c-b026-e512d8900c6e")
-	)
-	(wire
-		(pts
-			(xy 248.92 109.22) (xy 250.825 109.22)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e6f79775-1a96-41bb-a3e2-c97cf5f1dbc5")
 	)
 	(wire
 		(pts
@@ -10890,83 +10820,6 @@
 			(project "rocket-computer"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
 					(reference "#PWR0194")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:VCC")
-		(at 116.84 31.115 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "097cd409-5f11-4445-9dc5-c8e9f5ec7011")
-		(property "Reference" "#PWR028"
-			(at 116.84 34.925 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "VBATT"
-			(at 116.84 27.305 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 116.84 31.115 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 116.84 31.115 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"VCC\""
-			(at 116.84 31.115 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "cc0960ca-9cb2-4a68-a1ba-802f8b8b183e")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "#PWR028")
 					(unit 1)
 				)
 			)
@@ -20128,5 +19981,15 @@
 			(justify left bottom)
 		)
 		(uuid "ee50073f-c2c2-48c0-8952-233b972947c0")
+	)
+	(wire
+		(pts
+			(xy 216.535 26.67) (xy 231.775 26.67)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "47ccfa86-3fb9-4b0c-9caa-9a29958bda75")
 	)
 )

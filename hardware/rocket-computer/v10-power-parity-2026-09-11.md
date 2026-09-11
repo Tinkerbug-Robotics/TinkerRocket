@@ -419,3 +419,60 @@ the straight "A"-suffix part numbers, the catalogue-naming trap and the
 pad-1-to-pad-1 check are in [`../cables.md`](../cables.md) and fab note B10.
 A reversal-tolerant LoRa pinout is recorded there as a future-spin option, not
 planned.
+
+### 6.6 #680 — the ERC error floor, 62 → 0, with no net touched
+
+What the 62 were: 38 deliberately unused pins without no-connect flags, 12
+power inputs on nets with no power output, 12 pin-type clashes. None was
+electrical; all of them buried anything real. The netlist is byte-identical
+before and after on every board this touched.
+
+**Pin-type conventions**, applied to the shared library
+(`symbols/Custom.kicad_sym`) and to every cached copy that instantiates the
+symbol, so nothing drifts when a board is next synced:
+
+- An IC ground is a *power input* (ISM6HG256X, IIS2MDC, BMP585, MX35UF4G24AD;
+  the W25Q128 caches were stale against a library that already said so).
+- Exactly one *power output* per output net: `U47` VOUT pin 10 and the eFuse's
+  OUT pins 18–24 become passive; eFuse OUT 17 becomes the power output that
+  drives `VBATT`.
+- The P4's internal-LDO outputs VFB/VO 71–74 are power outputs — they drive
+  `VDDO_FLASH`, `VDDO_PSRAM`, `VDDO_3`, `VDDO_4`.
+- The S3's VDD_SPI (29) is a power output. On every board in this repo it
+  feeds only its own decoupling (and the base-station-mini's external flash):
+  the in-package-flash configuration, where the pin is the regulator's output.
+- Tied-off open-drain pins are passive here: eFuse IMON, TPS2121 ST, TLV62569
+  PG. The eFuse's NRETRY is an input. TLV62569 SW is passive.
+- The TPS62152's hidden thermal-pad pin 16 is passive. It was a *hidden power
+  input*, which KiCad treats as an implicit global label named after the pin —
+  that was the whole GND/PGND `multiple_net_names` warning.
+
+**Six PWR_FLAGs** (`#FLG01`–`#FLG06`): `GND` (on `#PWR0705`), `V_BUCK` (an
+inductor output), `Net-(J6-VBUS)`, `Net-(U1-VCC)` (through `R3`),
+`Net-(U15-VDD3P3)` (through `L4`), `ESP_VDD_HP` (through `L8`). Each was
+rendered and checked for text collisions; the V_BUCK one sits in the off-page
+hold-up block, whose `V_BUCK`/`VBUCK_OK` labels already overlap `R138`'s
+value — pre-existing, for the owner's tidy-up of that block.
+
+**38 no-connect flags** on the pins the two reviews had already cleared as
+deliberately unused: `S1` spare poles, `U1` HSD, `U14` antenna dummy pads, the
+S3's JTAG/UART0/spare GPIOs, the P4's MIPI CSI/DSI, DP/DM and GPIO5, `J6` SBU.
+
+**Housekeeping**: `AONR21321` added to the library (it lived only as a cached
+symbol); six stray wire stubs and an orphan `VBATT` symbol removed from the
+External Connections sheet (three stubs overlapped pin lines, three dangled).
+
+Numbers, `--severity-all`: V10 62 → **0** errors, 997 → 983 warnings (841
+`endpoint_off_grid` and 44 `lib_symbol_mismatch` remain — the mismatches are
+pre-existing property differences such as `Footprints:` vs `ESP32-S3:` on the
+S3). Through the shared symbols: mini 40 → 33, base-station 47 → 46,
+base-station-mini 40 → 39, LoRa daughterboard 34 → 33. What the mini still
+carries is its own: QMC5883P/BMP581 grounds typed as power outputs, no flags on
+VBUS, `U1` VCC, both VDD3P3 nets, `V_BUCK` and `U19` IN, and 24 unflagged
+no-connects.
+
+Trap for the record: one wire block in `external_connections.kicad_sch` is
+hand-formatted without its leading tab, so a text-anchored delete removed a
+*different* wire (the CAM_IMON wire at `U26` pin 9). The netlist diff caught
+it before anything was committed. Rule: anchor a headless delete on the block
+and assert the target lies inside it — and never skip the netlist diff.
