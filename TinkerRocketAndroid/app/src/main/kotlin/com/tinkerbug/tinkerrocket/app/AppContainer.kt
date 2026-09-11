@@ -336,7 +336,14 @@ class AppContainer(app: Application) {
         // connect-time guess), so both edges emit. activeDeviceId is combined in for the syncer, which
         // follows the active chip rather than the direct link.
         fleetScope.launch {
-            combine(fleet.devices, fleet.activeDeviceId) { _, _ -> Unit }
+            // #1098: also re-route when the foreground base station changes,
+            // as iOS does (it merges $devices and $foregroundBSID). Dormant
+            // today — nothing calls FleetManager.setForegroundBS yet, so
+            // foregroundBSID is permanently null and foregroundBaseStation()
+            // degenerates to a function of `devices` — but wiring it now, while
+            // the reasoning is fresh, keeps voice from silently following the
+            // wrong base station the moment the pair switcher lands.
+            combine(fleet.devices, fleet.activeDeviceId, fleet.foregroundBSID) { _, _, _ -> Unit }
                 .collect { routeDeviceBindings(fleet) }
         }
     }
