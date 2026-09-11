@@ -626,6 +626,22 @@ public class DeviceSession(
         val rid = data.sourceRocketId
         if (rid != null && rid > 0 && isBaseStation) {
             val now = clock()
+            // #1036: the base station re-pushes the focused rocket's CACHED
+            // frame every 2 s and tags it STALE once the underlying LoRa packet
+            // is older than 3 s — but the re-push still carries the rocket id.
+            // Stamping lastSeen off it made every "is the rocket still there"
+            // age bounded by that 2 s period, so it could never cross a 3 s
+            // threshold for as long as the base station held the slot, and the
+            // slots are never released. A rocket that has gone off the air
+            // stays "heard just now" forever.
+            //
+            // So the frame is still ADOPTED — the cached values should keep
+            // rendering — but it does not refresh the clock that answers "when
+            // did we last actually hear this rocket". A missing "ds" decodes as
+            // live (TelemetryData.kt), so older base-station firmware stamps
+            // exactly as it does today. iOS carries the identical guard in
+            // RemoteRocket.updateTelemetry; the two must not diverge.
+            val heardNow = data.dataStatus == TelemetryData.DataStatus.LIVE
             val existing = remoteMap[rid]
             remoteMap[rid] = if (existing != null) {
                 existing.copy(
@@ -634,13 +650,16 @@ public class DeviceSession(
                     // an empty relayed name never clobbers a learned one.
                     unitName = data.sourceUnitName?.takeIf { it.isNotEmpty() }
                         ?: existing.unitName,
-                    lastSeenMs = now,
+                    lastSeenMs = if (heardNow) now else existing.lastSeenMs,
                 )
             } else {
                 RelayedRocket(
                     rocketId = rid,
                     unitName = data.sourceUnitName ?: "",
                     telemetry = data,
+                    // First sighting: even a stale re-push tells us the rocket
+                    // existed, and leaving this at 0 would render as decades of
+                    // age. Stamp it once, then let the guard above hold it.
                     lastSeenMs = now,
                 )
             }

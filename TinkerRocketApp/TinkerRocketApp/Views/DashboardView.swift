@@ -1720,7 +1720,18 @@ struct StorageBarView: View {
     var body: some View {
         Group {
             if device.isBaseStation {
-                if let s = device.bsStorage, s.totalBytes > 0 {
+                // #1083: admit the UNMOUNTED frame too. The firmware reports
+                // totalBytes == 0 in exactly the state where the mounted bit is
+                // clear — bsQueryStorage() zeroes total and returns false on
+                // both mount-failure paths, and its return value IS the mounted
+                // bit — so !mounted and total == 0 always arrive on the same
+                // frame. Gating on total > 0 alone therefore skipped this card
+                // in precisely the state its "not mounted" warning exists for:
+                // the operator saw no card, read it as "stats not in yet", and
+                // flew a session that logged nothing at all. A NAND failure
+                // that demotes to SPIFFS is unaffected — SPIFFS mounts and
+                // reports a nonzero total, so that warning already fired.
+                if let s = device.bsStorage, s.totalBytes > 0 || !s.mounted {
                     // #761 / #760 (Android): the base station demotes to the
                     // ~2 MB internal SPIFFS partition for the whole boot if any
                     // step of its NAND bring-up fails — then keeps logging, into
@@ -1812,12 +1823,19 @@ struct StorageBarView: View {
                         + "Capacity is ~2 MB instead of 512 MB. Power-cycle the "
                         + "base station before flying.")
             }
-            StorageSegmentBar(used: used, reserved: reserved, free: free, total: total)
-            HStack(spacing: 14) {
-                legend(.orange, "Used", used)
-                if reserved > 0 { legend(Color(.systemGray2), "Reserved", reserved) }
-                legend(.green, "Free", free)
-                Spacer()
+            // #1083: an unmounted volume reports all zeros, so the bar renders
+            // empty and the legend reads "Free 0 B" — a precise description of
+            // nothing, sitting under a warning that says nothing is being
+            // logged. The card keeps its title, the "Not mounted" subtitle and
+            // the warning; the numbers go away.
+            if !unmounted {
+                StorageSegmentBar(used: used, reserved: reserved, free: free, total: total)
+                HStack(spacing: 14) {
+                    legend(.orange, "Used", used)
+                    if reserved > 0 { legend(Color(.systemGray2), "Reserved", reserved) }
+                    legend(.green, "Free", free)
+                    Spacer()
+                }
             }
             // #315: rolling-buffer note. When the card fills, the OC auto-deletes
             // the oldest flight(s) at arm time to make room — surface it so the
