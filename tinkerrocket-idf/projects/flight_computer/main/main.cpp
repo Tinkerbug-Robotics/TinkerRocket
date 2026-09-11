@@ -915,8 +915,18 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
         ekf.getCovDiag(diag_tmp);
         memcpy(snap.ekf_P_diag, diag_tmp, sizeof(diag_tmp));
         snap.ekf_t_prev_us = s.t_prev_us;
-        memcpy(snap.ekf_euler,       s.euler,       sizeof(snap.ekf_euler));
+        // v5: s.euler is no longer carried — it is a cache of s.quat above,
+        // and setState() derives it on restore. Its 12 bytes now hold the
+        // flight maxima below.
     }
+
+    // #1154 item 9: the running flight maxima. These live outside the
+    // ekf_initialized guard on purpose — they are measured from baro and the
+    // nav solution and keep climbing whether or not the filter ever started,
+    // so a flight that reboots before EKF init still reports a real apogee.
+    snap.max_alt_m     = max_alt_m;
+    snap.max_speed_mps = max_speed_mps;
+    snap.reserved_v5   = 0.0f;
 
     snap.crc32 = computeSnapshotCRC(snap);
 }
@@ -5140,6 +5150,24 @@ static void setup_fc()
                          orientCodeName(snap.b2r_code), (unsigned)snap.b2r_mode);
             }
 
+            // #1154 item 9: restore the flight maxima. Without this a flight
+            // that rebooted after apogee reported the highest point of its
+            // DESCENT as the apogee — the recovered flight's own telemetry
+            // disagreed with its log.
+            //
+            // Seed KINEMATICS, not just the file-scope mirrors: the flight
+            // loop reassigns max_alt_m/max_speed_mps from kinematics every
+            // tick, so restoring only the mirrors would be silently undone on
+            // the very next pass. kinematics owns these; the mirrors follow.
+            // fmaxf rather than assignment because the live values can already
+            // have advanced past the snapshot in the ticks before we get here.
+            kinematics.max_altitude = fmaxf(kinematics.max_altitude, snap.max_alt_m);
+            kinematics.max_speed    = fmaxf(kinematics.max_speed,    snap.max_speed_mps);
+            max_alt_m     = kinematics.max_altitude;
+            max_speed_mps = kinematics.max_speed;
+            ESP_LOGW(TAG, "[RECOVERY] flight maxima restored: alt %.1f m, speed %.1f m/s",
+                     (double)max_alt_m, (double)max_speed_mps);
+
             // Restore control state
             ekf_initialized  = snap.ekf_initialized;
             guidance_enabled = snap.guidance_enabled;
@@ -5161,7 +5189,9 @@ static void setup_fc()
                 // Zero P here; setCovFromDiag fills the diagonal below.
                 memset(ekf_state.P, 0, sizeof(ekf_state.P));
                 ekf_state.t_prev_us = snap.ekf_t_prev_us;
-                memcpy(ekf_state.euler,       snap.ekf_euler,       sizeof(ekf_state.euler));
+                // v5: euler is not on the wire any more. setState() derives it
+                // from the restored quaternion, so leaving it zero here is
+                // correct rather than lossy.
                 ekf.setState(ekf_state);
                 // Copy diag to a local before passing to the float(&)[15]
                 // reference — packed-struct fields can't bind directly.
@@ -9284,10 +9314,23 @@ static void loop_fc()
                 last_external_roll_cmd_deg = roll_fin_cmd;
 
                 // 4-fin mix via the configured fin layout (servo→azimuth + reverse).
-                // #382: use the runtime clamp (app-tunable via guidance config,
-                // same as the in-flight path) — the compile-time constant made
-                // a bench ground test not match an app-tuned flight clamp.
-                float max_fin = pn_max_fin_deg;
+                // #382: use the runtime clamp (app-tunable), not a compile-time
+                // constant, so a bench test matches an app-tuned flight clamp.
+                //
+                // #1154 item 7: WHICH runtime clamp depends on the mode, because
+                // the two ground-test modes shadow two different flight paths.
+                // Roll+Guidance mirrors the in-flight guidance path, which mixes
+                // through pn_max_fin_deg (15 deg default). Roll Only mirrors the
+                // in-flight roll-only path, which is servo_control.control() —
+                // that never reaches mixToFins, so its only clamp is the roll
+                // PID's own max_cmd (20 deg default). Using pn_max_fin_deg for
+                // both made the Roll Only bench gate saturate at 15 deg where
+                // the flying rocket saturates at 20, i.e. 25% early, which is
+                // exactly the case the bench exists to rehearse. Both PIDs carry
+                // identical limits (applyRollPidGains sets them together), so
+                // reading servo_control's is reading the flight roll-only clamp.
+                float max_fin = guidance_enabled ? pn_max_fin_deg
+                                                 : servo_control.getMaxCmd();
                 float deflections[4];
                 control_mixer.mixToFins(roll_fin_cmd, pitch_fin, yaw_fin, max_fin, deflections);
                 servo_control.setServoAngles(deflections);
@@ -9296,9 +9339,13 @@ static void loop_fc()
                 static uint32_t gt_last_print_ms = 0;
                 if (now_ms - gt_last_print_ms >= 1000U) {
                     gt_last_print_ms = now_ms;
-                    ESP_LOGI(TAG, "[GT] mode=%s pitch_fin=%.1f yaw_fin=%.1f roll_fin=%.1f",
+                    // #1154 item 7: the clamp is printed because it is now
+                    // mode-dependent — this line is how the bench confirms a
+                    // Roll Only test is saturating where the flight path does.
+                    ESP_LOGI(TAG, "[GT] mode=%s pitch_fin=%.1f yaw_fin=%.1f roll_fin=%.1f max_fin=%.1f",
                                   guidance_enabled ? "GUIDANCE" : "ROLL_ONLY",
-                                  (double)pitch_fin, (double)yaw_fin, (double)roll_fin_cmd);
+                                  (double)pitch_fin, (double)yaw_fin, (double)roll_fin_cmd,
+                                  (double)max_fin);
                 }
             }
             else if (servo_enabled)

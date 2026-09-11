@@ -456,6 +456,26 @@ Board file, verified 2026-08-30:
   violations and 372 unconnected pads, which is the expected shape for a placed,
   unrouted board.
 
+**ERC (2026-09-11, `--severity-all`): 10 errors, and every one of them is a
+spare pad on the out computer** (GPIO9/12/34/39–45), left unflagged on purpose
+— see *Open items* below. The other 23 of the floor this sheet used to carry
+were noise and are gone, with the netlist byte-identical before and after: the
+QMC5883P and BMP581 grounds are power inputs (they were typed as power outputs,
+which is what made every ground pin argue with every other), `TPS259631DDAR`
+and `AONR21321` are in the shared library instead of living only in this
+sheet's cache, seven PWR_FLAGs mark the nets fed through an inductor, a resistor
+or a connector (`GND`, `VBAT_CON`, `V_BUCK`, VBUS, `U1` VCC, both VDD3P3 nets),
+and the pins both reviews cleared as unused carry no-connect flags (the
+octal-SPI pads on both processors, the GNSS module's reset, external-antenna
+and antenna-detect pads, the IMU's second interrupt, the radio's DIO3, the
+INA230's ALERT, the USB-C sideband pair). The pin-type conventions are the
+ones recorded in
+[`../rocket-computer/v10-power-parity-2026-09-11.md`](../rocket-computer/v10-power-parity-2026-09-11.md)
+§6.6; this board shares those symbols. Left as drawn: 704 off-grid endpoint
+warnings — most of the power sheet sits on a half-grid offset — and the
+borrowed P-FET/NAND symbols, the missing `ARM_GATE` label and the empty title
+blocks from #1030.
+
 Not reviewed, not fabbed, no tag. Firmware exists —
 [`tinkerrocket-idf/projects/rocket_computer_mini`](../../tinkerrocket-idf/projects/rocket_computer_mini/)
 carries the **single-MCU** merge, with a board map netlist-verified against the

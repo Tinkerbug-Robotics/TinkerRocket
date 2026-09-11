@@ -3367,9 +3367,12 @@ static_assert(sizeof(GuidanceTelemData) == 19, "GuidanceTelemData must be 19 byt
 struct __attribute__((packed)) FlightSnapshotData
 {
     static constexpr uint32_t MAGIC   = 0xF1A75A7E;  // distinct from old NVS magic (0xF1A7C0DE)
-    static constexpr uint8_t  VERSION = 4;           // v2: 4-channel pyro layout, no per-channel ARM
+    static constexpr uint8_t  VERSION = 5;           // v2: 4-channel pyro layout, no per-channel ARM
                                                      // v3: board→rocket orientation (b2r_*)
                                                      // v4: sim_flight flag (reclaimed from pad)
+                                                     // v5: max_alt_m + max_speed_mps
+                                                     //     (reclaimed from ekf_euler, same offsets;
+                                                     //      size stays 224, meaning changes)
 
     // --- Header ---
     uint32_t magic;
@@ -3435,7 +3438,29 @@ struct __attribute__((packed)) FlightSnapshotData
     float    ekf_gyro_bias[3];
     float    ekf_P_diag[15];      // diagonal of P[15][15]
     uint32_t ekf_t_prev_us;
-    float    ekf_euler[3];
+
+    // --- v5: reclaimed from ekf_euler[3], exactly in its place ------------
+    // ekf_euler was a CACHE. EkfStateSnapshot documents it as "cached Euler
+    // angles", and the filter recomputes it from quat_BL_ via Quat2Euler on
+    // every update — so carrying it cost 12 wire bytes to ship a value the
+    // receiver can derive from ekf_quat above. setState() now derives it on
+    // restore, the same way it already rebuilds the DCM from the quaternion
+    // (#386), which also makes an inconsistent euler/quat pair unspellable.
+    //
+    // Spending those 12 bytes here rather than appending is deliberate:
+    // sizeof(FlightSnapshotData) IS MAX_PAYLOAD (224), so growing this struct
+    // moves the wire-wide frame ceiling and forces an I2S frame-size ripple
+    // across FC + OC + mini — the cost this file twice refuses to pay (see
+    // guid_tgt_e_m and roll_min_speed_dmps). Reusing the slot keeps the size
+    // and EVERY other field offset identical, so v4 and v5 differ in meaning
+    // only, which is the contract the Python decoder already relies on.
+    //
+    // #1154 item 9: the running flight maxima. Without these a reboot-
+    // recovered flight reported an apogee measured only from the reboot
+    // onward, because max_alt_m/max_speed_mps restart at 0 on boot.
+    float    max_alt_m;           // v5 (was ekf_euler[0])
+    float    max_speed_mps;       // v5 (was ekf_euler[1])
+    float    reserved_v5;         // v5 (was ekf_euler[2]) — spare, writes 0
 
     // Board→rocket quaternion ×10000 (v3) — authoritative rotation,
     // covers AUTO_EXACT mountings the discrete code can't express.
