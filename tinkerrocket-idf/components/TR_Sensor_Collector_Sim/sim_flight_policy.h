@@ -81,4 +81,30 @@ constexpr bool stopApplies(bool sim_flight_latched, bool sim_active)
     return simulated(sim_flight_latched, sim_active);
 }
 
+/// #1153 item 3: may a SIM_START_CMD start a run?  `command_lockout_state` is
+/// isCommandLockoutState(rocket_state) — INFLIGHT or MAG_CALIBRATION — the
+/// term every other test-class command (ground test, servo test, pyro test,
+/// OTA entry) already refuses on.  The sim start had no state gate at all,
+/// and it could reach both states:
+///   * INFLIGHT: the only INFLIGHT that polls for commands is a SIM flight
+///     (#393), so a Start there is a second Start under a running run.
+///     startSim() rewinds the physics to the pad while the FC stays INFLIGHT
+///     with launch latched — the vehicle it is flying vanishes from under
+///     it.  Stop first; the Stop is the reset.
+///   * MAG_CALIBRATION: the operator is tumbling the rocket with the chip's
+///     hard-iron OFFSET registers zeroed for sampling.  The Start edge reset
+///     the flight state to READY without ending the session, so the sampling
+///     feed (gated on the state) stopped, the session could never complete,
+///     and nothing restored the priors: every later flight in that boot flew
+///     an uncalibrated magnetometer whose readings the EKF's magnitude gate
+///     rejected outright — heading aiding silently dead.
+/// post_flight_lockout is deliberately NOT a term, unlike
+/// TestModeGatePolicy::testCommandRefused: a Start from a flown-out sim's
+/// LANDED is the ordinary re-run, and its Start edge is the reset that
+/// re-arms it (#317).
+constexpr bool startRefused(bool command_lockout_state)
+{
+    return command_lockout_state;
+}
+
 }  // namespace sim_flight

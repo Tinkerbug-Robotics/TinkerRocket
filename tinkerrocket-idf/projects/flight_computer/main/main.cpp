@@ -5279,6 +5279,35 @@ static void setup_fc()
 
             // Mark launch flag so kinematic checks don't re-trigger launch detection
             kinematics.launch_flag = true;
+            // #1153 item 2: and the apogee latch, from the same field
+            // pyro_apogee_detected was restored from above.  The kinematics
+            // flag is the master vote pyro_apogee_detected is DERIVED from
+            // (one tick later, in servicePyroChannels), so a flight that
+            // rebooted past apogee came back with the two disagreeing — pyro
+            // true, kinematics false — and everything that reads the
+            // kinematics one behaved as if the vehicle were still climbing:
+            // the AHRS accel correction stayed off (post_apogee, in the EKF
+            // tick), the GNSS heading aids kept assuming nose-first flight
+            // (#1135), NSF2_MASTER_APOGEE read clear, and every landing
+            // detector — impact, the vote, quiescence, baro-only — was gated
+            // shut until a vote re-derived apogee from this boot's data.
+            // Above 15 m with a healthy barometer that takes about a second
+            // (the post-burnout settle); below it, or after a touchdown
+            // reboot, there is nothing left to vote on, and LANDED then came
+            // only from the #1176 refutation (30 s of stillness) or the
+            // flight timeout.
+            //
+            // The sub-flags stay false, exactly as enterInflight() leaves
+            // them: they are live votes and re-derive on this boot's data.
+            // The deployment triggers are NOT touched by this — they consume
+            // pyro_apogee_detected through the #1176 interlock, and the
+            // restored apogee stays withheld from them until the gate has
+            // seen live evidence of flight.
+            if (snap.pyro_apogee_detected) {
+                kinematics.apogee_flag = true;
+                ESP_LOGW(TAG, "[RECOVERY] apogee latch restored — landing "
+                              "detection and post-apogee estimation active");
+            }
         }
 
         // Clear the stale snapshot only on a POSITIVE "there is no flight"
@@ -5357,6 +5386,10 @@ static void setup_fc()
     fcBootStatus(FCB_COMPLETE);
 }
 
+// Defined with the INFLIGHT-entry section below; resetFlightStateForSim()
+// needs it first (#1153 item 3).
+static void magCalEndSession(const char* why);
+
 // ==========================================================================
 // SECTION: Simulator re-arm
 // ==========================================================================
@@ -5384,6 +5417,22 @@ static void resetFlightStateForSim(const char* edge)
     // machine armed — and with the sim driving rocket_state to INFLIGHT, that
     // armed machine takes the in-flight blind-record shortcuts.
     cameraAbortAndPowerOff("sim reset");
+    // #1153 item 3: a sim reset is the sim's equivalent of a reboot, and a
+    // reboot ends a mag-cal session — the RAM side is gone and the chip comes
+    // back up on the persisted offsets.  Do the same.  A Start cannot reach
+    // this from MAG_CALIBRATION any more (SIM_START is refused there), but a
+    // Stop or the #971 give-up can, for a session opened from READY while a
+    // sim sat on its synthetic pad.  Before this the reset wrote
+    // rocket_state = READY and touched none of the session: the OFFSET
+    // registers MAG_CAL_START zeroed stayed at zero, the sampling feed (gated
+    // on the state) stopped so the session could never complete, and nothing
+    // restored the priors — every later flight in this boot flew an
+    // uncalibrated magnetometer that the EKF's magnitude gate rejected
+    // outright, so heading aiding was silently dead.
+    if (mag_cal_session_active || rocket_state == MAG_CALIBRATION) {
+        magCalEndSession("sim reset");
+        mag_cal_start_ms = 0;
+    }
     rocket_state = READY;
     post_flight_lockout = false;  // #317: a deliberate sim start/stop re-arms
     ground_pressure_found = false;
@@ -7197,6 +7246,24 @@ static void loop_fc()
                 {
                     cfgRetryOnNextPoll("SIM CFG");   // #1112
                 }
+            }
+            else if (out_pending_command == SIM_START_CMD &&
+                     sim_flight::startRefused(isCommandLockoutState(rocket_state)))
+            {
+                // #1153 item 3: the one test-class command that had no state
+                // gate.  INFLIGHT here can only be a sim's own flight (#393),
+                // so this is a second Start under a running run — Stop first;
+                // the Stop is the reset.  In MAG_CALIBRATION the Start edge
+                // used to reset the flight state to READY without ending the
+                // session, leaving the chip's OFFSET registers at the zero
+                // MAG_CAL_START programmed for the rest of the boot (see
+                // resetFlightStateForSim, which now also ends the session on
+                // the paths that can still reach it).  sim_flight_policy.h
+                // pins the rule.
+                ESP_LOGW(TAG, "[SIM] Start refused: state=%u (no sim start while "
+                              "INFLIGHT or in MAG_CALIBRATION — stop the running "
+                              "sim or end the calibration first) (#1153)",
+                         (unsigned)rocket_state);
             }
             else if (out_pending_command == SIM_START_CMD)
             {
