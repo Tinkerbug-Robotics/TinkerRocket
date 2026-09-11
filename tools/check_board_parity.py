@@ -127,11 +127,11 @@ EXEMPT = {
         'complete.',
     'rocket-computer':
         'TPS61094 hold-up (2026-08-29), rework-4 arm (2026-09-05) and the '
-        '2026-09-11 power-parity pass await the V10 layout pass: 20 symbols '
-        'are schematic-only (C130, C141-C144, L11, Q12-Q14, R125/R126, R132, '
-        'R134-R140, U47). THIS BOARD FLIES — re-gate it the moment the rework '
+        '2026-09-11 schematic passes await the V10 layout pass: 26 symbols '
+        'are schematic-only (C130, C141-C148, L11, Q12-Q14, R125/R126, R132, '
+        'R134-R142, U47). THIS BOARD FLIES — re-gate it the moment the rework '
         'is placed, and do not let anything else ride in behind the '
-        'exemption. Pick-up list in #1180.',
+        'exemption. Consolidated pick-up list in #1365.',
 }
 
 
