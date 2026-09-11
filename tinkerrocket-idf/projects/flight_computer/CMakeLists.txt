@@ -105,6 +105,14 @@ if(TR_BOARD_M1)
     # main/CMakeLists.txt asserts the result after resolution.
     set(IDF_TARGET "esp32s3" CACHE STRING "M1 flight computer is an ESP32-S3" FORCE)
     message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.m1 (ESP32-S3 target, PSRAM on)")
+    # The mini's magnetometer (U3) is a QST QMC5883P, not the IIS2MDC every
+    # other board carries (#797).  This swaps the TR_QMC5883P driver into
+    # TR_Sensor_Collector's IIS2MDC-named slot and stamps the log's mag_type
+    # accordingly (#1312).  Project-wide, like TR_GNSS_DRIVER_LC86 on the
+    # mini, because the seam lives in a component; config.h refuses an M1
+    # build that lacks it.
+    add_compile_definitions(TR_MAG_DRIVER_QMC5883P=1)
+    message(STATUS "flight_computer: magnetometer driver QMC5883P (TR_MAG_DRIVER_QMC5883P=1)")
 elseif(TR_BOARD_V9)
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
     message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (16 MB boot NOR)")

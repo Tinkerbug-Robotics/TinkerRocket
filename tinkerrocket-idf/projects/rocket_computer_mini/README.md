@@ -157,11 +157,15 @@ against a fresh netlist export), so the board map stands:
 
 - **BMP585 → BMP581**: no firmware change needed — the Bosch BMP5 driver
   accepts both chip IDs (0x50/0x51), and the register map is shared.
-- **IIS2MDC → QMC5883P**: the magnetometer driver does NOT exist yet. Until
-  it does, the collector's IIS2MDC probe fails cleanly into the established
-  no-magnetometer path: the EKF flies on GNSS-course + accel-match heading,
-  and the scorecard shows SH_MAG absent. Mag calibration flows are inert.
-  The QMC5883P driver + collector seam is tracked as its own follow-up.
+- **IIS2MDC → QMC5883P**: driven by the
+  [`TR_QMC5883P`](../../components/TR_QMC5883P/) component through
+  `TR_Sensor_Collector`'s `TR_MAG_DRIVER_QMC5883P` seam, which this project's
+  CMakeLists defines (#1312). Same 100 Hz poll into the same IIS2MDC-named
+  count stream; the hard-iron offset is subtracted in the driver, so logged
+  counts are corrected exactly as the IIS2MDC's in-chip offset corrects them.
+  The count scale (100/3750 µT/LSB at ±8 G) is published once by the seam
+  and read by the converter, the calibrator, the sim and the `mag_type`
+  stamp. The chip→board rotation is still a bench item (below).
 
 ## Before first flight — bench items this port cannot settle
 

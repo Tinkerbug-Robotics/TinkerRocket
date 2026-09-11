@@ -45,6 +45,16 @@ public:
     void configureMMC5983MARotationZ(float rotation_z_deg);
     void configureIIS2MDCRotationZ(float rotation_z_deg);
 
+    // #1312: which chip is behind the IIS2MDC-named count stream — a
+    // MAG_TYPE_* value.  Sets the count→µT scale convertIIS2MDCData() uses:
+    // MAG_TYPE_IIS2MDC (the default, 0.15 µT/LSB) or MAG_TYPE_QMC5883P
+    // (100/3750 at ±8 G).  The FC sets it from SensorCollector::MAG_TYPE;
+    // the OC from the FC's OUT_STATUS_QUERY v6 mag_type, so both ends scale
+    // the same counts the same way.  An unknown value falls back to the
+    // IIS2MDC, as a pre-v6 log reader would.
+    void configureMagType(uint8_t mag_type);
+    uint8_t magType() const { return mag_type_; }
+
     // Board→rocket mounting rotation (row-major 3x3, v_rocket = R * v_board).
     // Applied LAST in every vector conversion (after the per-chip Z rotation
     // and after bias subtraction, both of which are board-frame facts fixed
@@ -122,6 +132,10 @@ private:
     float ism6_rot_z_rad       = 0.0f;
     float mmc_rot_z_rad        = 0.0f;
     float iis2mdc_rot_z_rad    = 0.0f;
+
+    // #1312: scale of the IIS2MDC-named count stream (see configureMagType).
+    uint8_t mag_type_           = MAG_TYPE_IIS2MDC;
+    double  iis2mdc_uT_per_lsb_ = MAG_UT_PER_LSB_IIS2MDC;
 
     // High-g accelerometer bias (m/s², body frame)
     float hg_bias_x_ = 0.0f, hg_bias_y_ = 0.0f, hg_bias_z_ = 0.0f;

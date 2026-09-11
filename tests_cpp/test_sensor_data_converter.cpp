@@ -361,3 +361,44 @@ TEST_F(SensorConverterB2RTest, Magnetometers_GetSameRotation) {
     EXPECT_NEAR(iis_si.mag_x_uT, 60.0, 0.1);
     EXPECT_NEAR(iis_si.mag_z_uT, 0.0, 0.1);
 }
+
+// #1312: the IIS2MDC-named stream is scaled per the chip behind it.
+TEST(SensorConverterMagType, TheQmcScaleIsSelectedByMagType) {
+    SensorConverter conv;
+    IIS2MDCData iis{};
+    iis.mag_x = 3750;                   // one gauss of QMC5883P counts
+    IIS2MDCDataSI si{};
+
+    // Default: the big board's IIS2MDC, 0.15 µT/LSB — unchanged behaviour.
+    EXPECT_EQ(conv.magType(), MAG_TYPE_IIS2MDC);
+    conv.convertIIS2MDCData(iis, si);
+    EXPECT_NEAR(si.mag_x_uT, 562.5, 1e-6);
+
+    // The mini: 3750 LSB is 1 G is 100 µT.
+    conv.configureMagType(MAG_TYPE_QMC5883P);
+    EXPECT_EQ(conv.magType(), MAG_TYPE_QMC5883P);
+    conv.convertIIS2MDCData(iis, si);
+    EXPECT_NEAR(si.mag_x_uT, 100.0, 1e-6);
+
+    // A value no firmware stamps falls back to the IIS2MDC, as a pre-v6 log
+    // reader would, and magType() reports what the conversion is doing.
+    conv.configureMagType(0x7F);
+    EXPECT_EQ(conv.magType(), MAG_TYPE_IIS2MDC);
+    conv.convertIIS2MDCData(iis, si);
+    EXPECT_NEAR(si.mag_x_uT, 562.5, 1e-6);
+}
+
+TEST(SensorConverterMagType, TheScaleIsAppliedBeforeRotationAndB2R) {
+    // A 90° sensor→board rotation and a +Z-nose mounting must compose the same
+    // way on QMC counts as on IIS2MDC counts — only the scale differs.
+    SensorConverter conv;
+    conv.configureMagType(MAG_TYPE_QMC5883P);
+    conv.configureIIS2MDCRotationZ(90.0f);
+    IIS2MDCData iis{};
+    iis.mag_x = 1875;                   // 50 µT on sensor X
+    IIS2MDCDataSI si{};
+    conv.convertIIS2MDCData(iis, si);
+    EXPECT_NEAR(si.mag_x_uT, 0.0, 1e-3);
+    EXPECT_NEAR(si.mag_y_uT, 50.0, 1e-3);   // sensor +X → board +Y
+    EXPECT_NEAR(si.mag_z_uT, 0.0, 1e-3);
+}

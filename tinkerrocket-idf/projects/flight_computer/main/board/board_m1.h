@@ -55,7 +55,10 @@
 // not: the single-MCU mini shared it onto the power-monitor bus to save two
 // pins, and the second processor left it stranded on the out computer, which
 // has no magnetometer driver at all. Moving it here cost two spare pads and
-// closed that gap. Build this project with -DTR_MAG_DRIVER_QMC5883P.
+// closed that gap. The part is a QST QMC5883P, driven by the TR_QMC5883P
+// component through TR_Sensor_Collector's TR_MAG_DRIVER_QMC5883P seam;
+// CMakeLists.txt defines that flag for this board and config.h refuses an
+// M1 build without it (#1312).
 struct board_pins
 {
     // --- Sensor SPI bus (IMU + barometer) ---
@@ -80,9 +83,10 @@ struct board_pins
     static constexpr int MMC5983MA_CS = -1;    // not fitted on the mini
     static constexpr int BMP585_CS = 9;        // BMP585_CS   (pad 14)
     static constexpr int ISM6HG256_CS = 4;      // ISM6HG256_CS (pad 9)
-    // Magnetometer I2C. U3 is a QMC5883P, reached through the TR_IIS2MDC
-    // component's TR_MAG_DRIVER_QMC5883P seam (#797) — hence the constant
-    // names. Its own bus, like rocket-computer's IIS2MDCTR_SCL/SDA: the part,
+    // Magnetometer I2C. U3 is a QST QMC5883P (fixed address 0x2C), driven by
+    // TR_QMC5883P through TR_Sensor_Collector's TR_MAG_DRIVER_QMC5883P seam
+    // (#1312) — the IIS2MDC_* names are the slot's, not the part's. Its own
+    // bus, like rocket-computer's IIS2MDCTR_SCL/SDA: the part,
     // its master and its pull-ups (R117/R118, 5.11 k) are all on
     // V_MCU_SWTCH, so nothing drives a pad whose supply is down.
     static constexpr int IIS2MDC_SDA = 1;     // MAG_SDA (CONFIRMED)
@@ -95,7 +99,7 @@ struct board_pins
     static constexpr bool USE_MMC5983MA = false;  // not fitted
     static constexpr bool USE_GNSS = true;
     static constexpr bool USE_ISM6HG256 = true;
-    static constexpr bool USE_IIS2MDC = true;     // QMC5883P via the #797 seam
+    static constexpr bool USE_IIS2MDC = true;     // the mag slot; a QMC5883P behind it (#1312)
 
     // --- Sensor interrupts ---
     // GPIO47/48 serve OCTAL PSRAM only; this part is quad, so they behave as

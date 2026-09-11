@@ -1314,6 +1314,21 @@ TEST(RocketComputerTypes, OutStatusQuery_MagType_V6) {
     EXPECT_EQ(MAG_TYPE_QMC5883P, 1);
 }
 
+TEST(RocketComputerTypes, MagTypeScales) {
+    // #1312: the one firmware copy of the two count scales, and the reader
+    // convention for a value nobody defined — it decodes as the big board.
+    EXPECT_DOUBLE_EQ(MAG_UT_PER_LSB_IIS2MDC, 0.15);
+    EXPECT_DOUBLE_EQ(MAG_UT_PER_LSB_QMC5883P, 100.0 / 3750.0);
+    EXPECT_DOUBLE_EQ(magTypeUtPerLsb(MAG_TYPE_IIS2MDC), 0.15);
+    EXPECT_DOUBLE_EQ(magTypeUtPerLsb(MAG_TYPE_QMC5883P), 100.0 / 3750.0);
+    EXPECT_DOUBLE_EQ(magTypeUtPerLsb(0xFF), 0.15);
+    // The double is what SensorConverter multiplies by — 3750 IIS2MDC counts
+    // must still come out as exactly the 562.5 µT the old constant gave.
+    EXPECT_EQ(3750.0 * magTypeUtPerLsb(MAG_TYPE_IIS2MDC), 3750.0 * 0.15);
+    static_assert(magTypeUtPerLsb(MAG_TYPE_QMC5883P) < magTypeUtPerLsb(MAG_TYPE_IIS2MDC),
+                  "usable in constant expressions (the collector static_asserts on it)");
+}
+
 // The FC's cmd-28 acceptance gate (GuidancePointGate.h) as a pure function —
 // each reject path, the gate ORDER, and the radius boundary are pinned here
 // (MramDirtyPolicy precedent: policy-as-pure-function, host-tested).

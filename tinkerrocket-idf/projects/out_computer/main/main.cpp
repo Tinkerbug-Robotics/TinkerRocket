@@ -4234,6 +4234,11 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 (float)last_query_cfg.ism6_rot_z_cdeg / 100.0f);
             sensor_converter.configureMMC5983MARotationZ(
                 (float)last_query_cfg.mmc_rot_z_cdeg / 100.0f);
+            // #1312: scale the IIS2MDC-named stream as the chip the FC says
+            // it drives (format v6+); an older FC is a big-board IIS2MDC.
+            sensor_converter.configureMagType(
+                last_query_cfg.format_version >= 6 ? last_query_cfg.mag_type
+                                                   : MAG_TYPE_IIS2MDC);
             // Apply high-g bias from FlightComputer calibration (format v2+)
             if (last_query_cfg.format_version >= 2)
             {

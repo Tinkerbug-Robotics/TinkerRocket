@@ -828,10 +828,28 @@ static inline void loraSelectChannelSet(
 // per log instead of assuming the big board's chip:
 //   IIS2MDC  — 0.15 µT/LSB (ST datasheet 9.13), big board V8+
 //   QMC5883P — 100/3750 µT/LSB at ±8 G (QST Table 2), rocket-computer-mini
-//              via the TR_MAG_DRIVER_QMC5883P seam (#797)
+//              via TR_Sensor_Collector's TR_MAG_DRIVER_QMC5883P seam, which
+//              swaps the TR_QMC5883P driver into the IIS2MDC-named slot (#1312)
 // Logs older than v6 carry no field; readers assume IIS2MDC.
 static constexpr uint8_t MAG_TYPE_IIS2MDC  = 0;
 static constexpr uint8_t MAG_TYPE_QMC5883P = 1;
+
+// The count→µT scale each MAG_TYPE stands for (#1312).  Firmware's one copy
+// of the two numbers: SensorCollector publishes the chip it drives,
+// SensorConverter and MagCalibrator take their scale from here, and the OC
+// applies the FC's stamp.  Data_Analysis/plot_flight_data_mini.py carries the
+// same two values for the log reader.  Double, because the converter has
+// always multiplied by a double 0.15 and the IIS2MDC path must stay
+// bit-identical; float consumers (the calibrator, the collector) narrow it.
+static constexpr double MAG_UT_PER_LSB_IIS2MDC  = 0.15;              // 1.5 mgauss/LSB
+static constexpr double MAG_UT_PER_LSB_QMC5883P = 100.0 / 3750.0;   // 3750 LSB/G at ±8 G
+static constexpr double magTypeUtPerLsb(uint8_t mag_type)
+{
+    // Unknown → IIS2MDC: the pre-v6 reader convention, and what a zeroed
+    // frame decodes as.
+    return (mag_type == MAG_TYPE_QMC5883P) ? MAG_UT_PER_LSB_QMC5883P
+                                           : MAG_UT_PER_LSB_IIS2MDC;
+}
 
 // Payload sent with OUT_STATUS_QUERY so the OUT processor can configure
 // its SensorConverter consistently with the FlightComputer.

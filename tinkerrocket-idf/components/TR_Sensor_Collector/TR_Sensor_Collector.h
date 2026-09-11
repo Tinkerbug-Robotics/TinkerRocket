@@ -9,7 +9,23 @@
 #include <TR_ISM6HG256.h>
 #include <TR_BMP585.h>
 #include <TR_MMC5983MA.h>
+// Magnetometer driver is a compile-time seam as well (#1312).  rocket-computer
+// V8+ carries an ST IIS2MDC; rocket-computer-mini's U3 is a QST QMC5883P
+// (#797).  TR_QMC5883P mirrors TR_IIS2MDC's call surface — begin / configure
+// / readRawXYZ / setHardIronOffset — and hands out the same int16 counts into
+// the same IIS2MDCData, so the selection is the type alone and the slot keeps
+// its IIS2MDC name everywhere downstream (isIIS2MDCActive, IIS2MDC_MSG, the
+// mag_cal NVS record, ...).  What the counts MEAN differs — 100/3750 µT/LSB
+// against 0.15 — and that is published once, as SensorCollector::MAG_TYPE /
+// MAG_LSB_TO_uT below, for the converter, the calibrator, the sim and the
+// OUT_STATUS_QUERY stamp to read instead of each carrying its own #ifdef.
+// Projects opt in with add_compile_definitions(TR_MAG_DRIVER_QMC5883P=1);
+// default is the IIS2MDC, unchanged.
+#if defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
+#include <TR_QMC5883P.h>
+#else
 #include <TR_IIS2MDC.h>
+#endif
 #include "iis2mdc_poll_gate.h"
 // GNSS driver is a compile-time seam: the rocket-computer boards carry a
 // u-blox receiver, the mini carries a Quectel LC86G. Both drivers expose the
@@ -96,6 +112,30 @@ typedef struct
 class SensorCollector
 {
 public:
+    // --- The magnetometer seam (see the include block above) ---
+#if defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
+    typedef TR_QMC5883P      MagDriver;
+    typedef QMC5883P_RawData MagRawData;
+    static constexpr int         MAG_DRIVER_OK   = TR_QMC5883P_OK;
+    static constexpr uint8_t     MAG_TYPE        = MAG_TYPE_QMC5883P;
+    static constexpr float       MAG_LSB_TO_uT   = QMC5883P_LSB_TO_uT;
+    static constexpr const char* MAG_NAME        = "QMC5883P";
+    static constexpr const char* MAG_CONFIG_NOTE = "100 Hz normal mode, +/-8 G, set/reset on, no BDU: tear-checked reads";
+#else
+    typedef TR_IIS2MDC       MagDriver;
+    typedef IIS2MDC_RawData  MagRawData;
+    static constexpr int         MAG_DRIVER_OK   = TR_IIS2MDC_OK;
+    static constexpr uint8_t     MAG_TYPE        = MAG_TYPE_IIS2MDC;
+    static constexpr float       MAG_LSB_TO_uT   = IIS2MDC_LSB_TO_uT;
+    static constexpr const char* MAG_NAME        = "IIS2MDC";
+    static constexpr const char* MAG_CONFIG_NOTE = "100 Hz continuous, BDU on";
+#endif
+    // The scale the seam publishes has to be the one MAG_TYPE promises log
+    // readers; RocketComputerTypes.h carries the wire-side copy (a double —
+    // the driver's is a float, hence the tolerance rather than ==).
+    static_assert(MAG_LSB_TO_uT - magTypeUtPerLsb(MAG_TYPE) < 1e-6 &&
+                  magTypeUtPerLsb(MAG_TYPE) - MAG_LSB_TO_uT < 1e-6,
+                  "SensorCollector::MAG_LSB_TO_uT disagrees with magTypeUtPerLsb(MAG_TYPE)");
 
     /** GNSS high-perf-clock OTP state at boot; a gnss_otp::* constant.
      *  Board-agnostic: the LC86 driver reports NOT_M10 (#837 item 6). */
@@ -209,8 +249,10 @@ public:
     // paths all have no input in that case — the caller should say so loudly.
     bool isBaroOnline() const { return use_bmp585 && bmp585_online_; }
 
-    // Program IIS2MDC OFFSET_X/Y/Z hard-iron registers.  Returns false if
-    // the IIS2MDC isn't active or the I2C write failed.  Issue #96.
+    // Program IIS2MDC OFFSET_X/Y/Z hard-iron registers — or, behind the
+    // QMC5883P seam, the driver's software offset: same raw-LSB units, same
+    // effect on the count stream (#1312).  Returns false if the mag isn't
+    // active or the I2C write failed.  Issue #96.
     bool setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
 
     // #1111: IIS2MDC poll health.  Stalled = the chip failed STALL_FAILS
@@ -304,7 +346,7 @@ private:
     TR_ISM6HG256 ism6hg256;
     TR_BMP585 bmp585;
     TR_MMC5983MA mmc5983ma;
-    TR_IIS2MDC iis2mdc;
+    MagDriver iis2mdc;   // the IIS2MDC-named slot; the type is the seam's choice
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     TR_GNSSReceiverLC86Serial gnss_receiver;
 #else
