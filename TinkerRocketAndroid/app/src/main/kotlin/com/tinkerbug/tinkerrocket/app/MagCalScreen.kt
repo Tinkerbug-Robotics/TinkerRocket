@@ -341,7 +341,11 @@ private fun ReviewSection(
             }
             MetricRowM("Offset X/Y/Z (raw)", "${s.offsetX} / ${s.offsetY} / ${s.offsetZ}")
             Text(
-                "0.15 µT per LSB. The chip subtracts these from every sample once accepted.",
+                // #1093: show the decoded scale, not a hardcoded 0.15 — iOS uses
+                // %.4g of s.utPerLsb, which follows the board's real mag scale.
+                String.format(java.util.Locale.ROOT,
+                    "%.4g µT per LSB. The chip subtracts these from every sample once accepted.",
+                    s.utPerLsb),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
