@@ -1458,3 +1458,32 @@ target_include_directories(test_board_identity PRIVATE
 )
 target_link_libraries(test_board_identity GTest::gtest_main)
 gtest_discover_tests(test_board_identity)
+
+# ---------- test_storage_health_policy (#1235 items 3 and 4) ----------
+# The flight-log storage verdict on the pre-launch scorecard. The free-block
+# input has to be the flight REGION's count (the whole-die count sat 36 high and
+# shifted both trip points), and a V9/V10 PSRAM ring that fell back to the
+# 64 KB internal ring has to reach the verdict at all. The older fold-ins
+# (#566, #1127, #281, #826) are pinned here for the first time too.
+add_executable(test_storage_health_policy test_storage_health_policy.cpp)
+target_include_directories(test_storage_health_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_storage_health_policy GTest::gtest_main)
+gtest_discover_tests(test_storage_health_policy)
+
+# ---------- test_landed_lockout_policy (#317, #1235 item 5) ----------
+# The OC's post-LANDED flight-log lockout. It has to hold through an FC-only
+# reset after a real landing (the FC's own lockout is plain RAM) and clear on
+# the two departures that genuinely are the FC's sim reset. A bench cannot
+# reset one MCU of a two-MCU board on cue; this table can.
+add_executable(test_landed_lockout_policy test_landed_lockout_policy.cpp)
+target_include_directories(test_landed_lockout_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_landed_lockout_policy GTest::gtest_main)
+gtest_discover_tests(test_landed_lockout_policy)

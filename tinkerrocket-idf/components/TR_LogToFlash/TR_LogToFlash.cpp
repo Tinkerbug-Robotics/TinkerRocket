@@ -199,6 +199,7 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
 
     rb_head = rb_tail = rb_count = 0;
     rb_overruns = rb_highwater = 0;
+    rb_interval_peak = 0;
     rb_drop_oldest_bytes = 0;
     rb_bad_sof_clears = 0;
     nand_bytes_written = 0;
@@ -597,6 +598,7 @@ void TR_LogToFlash::getStats(TR_LogToFlashStats& out) const
     out.ring_size = ring_size_;
     out.ring_fill = rb_count;
     out.ring_highwater = rb_highwater;
+    out.ring_interval_peak = rb_interval_peak;   // #1235 item 6
     out.ring_overruns = rb_overruns;
     out.ring_drop_oldest_bytes = rb_drop_oldest_bytes;
     out.ring_bad_sof_clears = rb_bad_sof_clears;
@@ -632,6 +634,10 @@ void TR_LogToFlash::getStats(TR_LogToFlashStats& out) const
 
 void TR_LogToFlash::resetIntervalTimings()
 {
+    // #1235 item 6: the next window starts at the level the ring holds NOW —
+    // that is a fill the window genuinely observes, and zero would report an
+    // idle-but-full ring as empty until the next push.
+    rb_interval_peak = rb_count;
     write_max_us_ = 0;
     sync_max_us_ = 0;
     erase_max_us_ = 0;
@@ -1299,6 +1305,13 @@ bool TR_LogToFlash::ringPushLocked(const uint8_t* data, uint32_t len)
     if (new_count > rb_highwater)
     {
         rb_highwater = new_count;
+    }
+    // #1235 item 6: the per-window twin. Same unlocked read-modify-write as
+    // rb_highwater — only this path raises it, and the stats reader's reset
+    // racing one push can at worst lose that push's level at the window edge.
+    if (new_count > rb_interval_peak)
+    {
+        rb_interval_peak = new_count;
     }
     return true;
 }
