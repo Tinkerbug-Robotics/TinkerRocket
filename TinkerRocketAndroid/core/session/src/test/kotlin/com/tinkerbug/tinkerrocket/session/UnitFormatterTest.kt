@@ -70,4 +70,21 @@ class UnitFormatterTest {
         // Negative that rounds to zero keeps its sign, like printf.
         assertEquals("-0 m", UnitFormatter.altitude(-0.2, m))
     }
+
+    @Test
+    fun `speedValue round-trips through the display unit (#1073)`() {
+        val m = UnitSystem.METRIC
+        val i = UnitSystem.IMPERIAL
+        // metric is identity
+        assertEquals(5.0, UnitFormatter.speedValue(5.0, m), 0.0001)
+        assertEquals(5.0, UnitFormatter.speedToMps(5.0, m), 0.0001)
+        // imperial: 5 m/s == 16.404 ft/s, and back
+        assertEquals(16.404, UnitFormatter.speedValue(5.0, i), 0.001)
+        assertEquals(5.0, UnitFormatter.speedToMps(16.404, i), 0.001)
+        // the field round-trip the Simulation screen relies on: edit in the
+        // display unit, store canonical m/s, get the same number back.
+        val storedMps = UnitFormatter.speedToMps(
+            UnitFormatter.speedValue(7.3, i), i)
+        assertEquals(7.3, storedMps, 0.0001)
+    }
 }

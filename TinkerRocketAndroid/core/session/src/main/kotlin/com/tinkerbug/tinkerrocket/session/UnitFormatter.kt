@@ -76,6 +76,17 @@ public object UnitFormatter {
     public fun speedUnit(system: UnitSystem): String =
         if (system == UnitSystem.METRIC) "m/s" else "ft/s"
 
+    /** Scale a speed into the display unit without formatting, for a field the
+     *  user edits (iOS `mpsToDisplay`). Keeps the stored value canonical m/s;
+     *  added for the Simulation descent-rate field round-trip (#1073). */
+    public fun speedValue(mps: Double, system: UnitSystem): Double =
+        if (system == UnitSystem.METRIC) mps else mps * FEET_PER_METER
+
+    /** Inverse of [speedValue] (iOS `displayToMps`) — parse a user entry in the
+     *  display unit back to canonical m/s. */
+    public fun speedToMps(display: Double, system: UnitSystem): Double =
+        if (system == UnitSystem.METRIC) display else display / FEET_PER_METER
+
     // ── Acceleration (g in imperial) ─────────────────────────────────────
 
     public fun acceleration(mps2: Double, system: UnitSystem, decimals: Int = 2): String =

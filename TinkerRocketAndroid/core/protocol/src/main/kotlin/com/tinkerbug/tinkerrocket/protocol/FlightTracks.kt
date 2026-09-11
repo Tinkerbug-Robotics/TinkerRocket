@@ -28,15 +28,47 @@ public data class FlightTracks(
     public val ekf: List<V3>,
     public val gnss: List<V3>,
 ) {
-    /** Nothing to draw at all — neither solution is present. */
-    public val isEmpty: Boolean get() = ekf.size < 2 && gnss.size < 2
+    /** Nothing meaningful to draw — neither solution has a path.
+     *
+     * #1092: "a path" is size >= 2 AND non-degenerate. A log where the EKF
+     * never initialized carries all-zero Position East/North/Up columns
+     * (main.cpp fills them only under `if (ekf_initialized)`), which passed the
+     * old `size < 2` test and drew a zero-extent line with Launch/Landing/
+     * Apogee stacked on one point. It now reads as empty, so the screen falls
+     * through to "No position data" — matching iOS's "No GPS data in this
+     * flight". NOT a per-row `e == 0 && n == 0` reject: an ENU (0,0) is the
+     * launch pad, a legitimate first sample (see rocketCsv in the tests). */
+    public val isEmpty: Boolean get() = !ekf.hasPath() && !gnss.hasPath()
 
-    /** The track that carries the flight's markers: EKF when it exists. */
+    /** The track that carries the flight's markers: EKF when it has a path,
+     *  else GNSS. A degenerate (zero-extent) EKF track no longer wins over a
+     *  real GNSS one, which is why this checks hasPath() rather than size. */
     public val primary: List<V3>
-        get() = if (ekf.size >= 2) ekf else gnss
+        get() = if (ekf.hasPath()) ekf else gnss
 
     /** Every point either track contributes, for extent/scaling. */
     public val all: List<V3> get() = ekf + gnss
+}
+
+// #1092: a track "has a path" when it has at least two points AND spans more
+// than a hair on some axis. A track that is two-or-more identical points (the
+// all-zero EKF columns of an uninitialised-filter log) has no path — drawing
+// it stacks every marker on one point instead of saying there is no data.
+private const val TRACK_SPAN_EPS_M: Double = 1e-6
+
+private fun List<V3>.hasPath(): Boolean {
+    if (size < 2) return false
+    var minE = this[0].e; var maxE = minE
+    var minN = this[0].n; var maxN = minN
+    var minU = this[0].u; var maxU = minU
+    for (p in this) {
+        if (p.e < minE) minE = p.e; if (p.e > maxE) maxE = p.e
+        if (p.n < minN) minN = p.n; if (p.n > maxN) maxN = p.n
+        if (p.u < minU) minU = p.u; if (p.u > maxU) maxU = p.u
+    }
+    return (maxE - minE) > TRACK_SPAN_EPS_M ||
+        (maxN - minN) > TRACK_SPAN_EPS_M ||
+        (maxU - minU) > TRACK_SPAN_EPS_M
 }
 
 /** Both solutions, GNSS anchored to the EKF track's first sample. */
