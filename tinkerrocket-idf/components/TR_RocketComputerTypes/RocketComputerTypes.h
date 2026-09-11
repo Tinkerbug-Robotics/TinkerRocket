@@ -1393,6 +1393,42 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(FcBootStatusData) == 4,
               "FcBootStatusData must be 4 bytes");
 
+// ── FcStatusData (FC_STATUS_MSG 0x92, ~5 Hz) ────────────────────────────────
+// #1154 item 4.  The FC's own truth about hardware the OC can otherwise only
+// REQUEST.  The out computer tracks the camera as camera_recording_requested:
+// what it last asked for.  The FC can drop the camera by itself — a sim reset,
+// a camera-type change, or a start serviced with no type all run
+// cameraAbortAndPowerOff() — and nothing told the OC.  Its belief stayed true,
+// the app kept rendering "recording", and because the next press computes
+// want_on = !camera_recording_requested, that press resolved to "turn off" an
+// already-off camera and did nothing the operator could see.
+//
+// A periodic frame rather than a one-shot event on abort: a repeated truth is
+// self-healing, so a dropped frame costs 200 ms of staleness instead of a
+// permanently wrong belief.  5 Hz because this changes a few times per flight
+// — see the FC_STATUS_MSG comment for why NonSensorData's 500 Hz was not an
+// option.
+//
+// `flags` is a byte rather than a bool so the next FC-truth signal is free.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;   // FC clock at send — same micros() origin as every
+                        // other FC stream, so this overlays the sensor traces
+    uint8_t  flags;     // FCS_* bits below
+} FcStatusData;
+static_assert(sizeof(FcStatusData) == 5,
+              "FcStatusData must be 5 bytes");
+
+// "Engaged", deliberately wider than "recording": the rail is up and the start
+// sequence is running from the moment of the request, but camera_recording only
+// becomes true once that sequence finishes (a GoPro boot plus shutter press, or
+// a RunCam probe ladder — hundreds of ms either way).  A bare camera_recording
+// mirror would report OFF for that whole window and invite the OC to clear the
+// request it had just issued.  This matches the composite
+// cameraAbortAndPowerOff() itself uses to decide the camera was active, so the
+// two agree by construction.
+static constexpr uint8_t FCS_CAMERA_ENGAGED = (1u << 0);
+
 // Ordered: the app may render a progress bar from step/FCB_STEP_COUNT.  Append
 // only — the apps map unknown values to a generic "starting up".
 enum FcBootStep : uint8_t
@@ -2250,6 +2286,21 @@ static constexpr uint8_t GNSS_SAT_MSG        = 0x90;  // FC→OC over I2S: GNSSS
 // exactly that reason and opened this block. One convention beats two
 // defensible ones.
 static constexpr uint8_t RECOVERY_END_PENDING = 0x91;
+
+// FC→OC over I2S: FcStatusData, the FC's own truth about hardware the OC can
+// otherwise only *request*.  ~5 Hz (#1154 item 4).
+//
+// In the 0x90 block for the reason RECOVERY_END_PENDING gives, and at 5 Hz for
+// a measured one.  The obvious home was a bit in NonSensorData, and that does
+// not fit: NonSensorData ships at 500 Hz, so one byte there costs 500 B/s, and
+// the guided-coast I2S budget was already at 94.8% of the 176,400 B/s link
+// with 390 B/s to spare.  Adding it measured 95.06% and tripped the 0.95 guard
+// in test_i2s_link_budget, whose whole point is that above the line
+// enqueueI2STx starts dropping frames and says nothing.  A camera bit changes
+// a few times per flight; sending it 500 times a second was never the right
+// shape.  At 5 Hz the same signal costs well under 100 B/s.
+static constexpr uint8_t FC_STATUS_MSG       = 0x92;
+
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
 static constexpr uint8_t ISM6HG256_MSG       = 0xA2;
@@ -3316,9 +3367,12 @@ static_assert(sizeof(GuidanceTelemData) == 19, "GuidanceTelemData must be 19 byt
 struct __attribute__((packed)) FlightSnapshotData
 {
     static constexpr uint32_t MAGIC   = 0xF1A75A7E;  // distinct from old NVS magic (0xF1A7C0DE)
-    static constexpr uint8_t  VERSION = 4;           // v2: 4-channel pyro layout, no per-channel ARM
+    static constexpr uint8_t  VERSION = 5;           // v2: 4-channel pyro layout, no per-channel ARM
                                                      // v3: board→rocket orientation (b2r_*)
                                                      // v4: sim_flight flag (reclaimed from pad)
+                                                     // v5: max_alt_m + max_speed_mps
+                                                     //     (reclaimed from ekf_euler, same offsets;
+                                                     //      size stays 224, meaning changes)
 
     // --- Header ---
     uint32_t magic;
@@ -3384,7 +3438,29 @@ struct __attribute__((packed)) FlightSnapshotData
     float    ekf_gyro_bias[3];
     float    ekf_P_diag[15];      // diagonal of P[15][15]
     uint32_t ekf_t_prev_us;
-    float    ekf_euler[3];
+
+    // --- v5: reclaimed from ekf_euler[3], exactly in its place ------------
+    // ekf_euler was a CACHE. EkfStateSnapshot documents it as "cached Euler
+    // angles", and the filter recomputes it from quat_BL_ via Quat2Euler on
+    // every update — so carrying it cost 12 wire bytes to ship a value the
+    // receiver can derive from ekf_quat above. setState() now derives it on
+    // restore, the same way it already rebuilds the DCM from the quaternion
+    // (#386), which also makes an inconsistent euler/quat pair unspellable.
+    //
+    // Spending those 12 bytes here rather than appending is deliberate:
+    // sizeof(FlightSnapshotData) IS MAX_PAYLOAD (224), so growing this struct
+    // moves the wire-wide frame ceiling and forces an I2S frame-size ripple
+    // across FC + OC + mini — the cost this file twice refuses to pay (see
+    // guid_tgt_e_m and roll_min_speed_dmps). Reusing the slot keeps the size
+    // and EVERY other field offset identical, so v4 and v5 differ in meaning
+    // only, which is the contract the Python decoder already relies on.
+    //
+    // #1154 item 9: the running flight maxima. Without these a reboot-
+    // recovered flight reported an apogee measured only from the reboot
+    // onward, because max_alt_m/max_speed_mps restart at 0 on boot.
+    float    max_alt_m;           // v5 (was ekf_euler[0])
+    float    max_speed_mps;       // v5 (was ekf_euler[1])
+    float    reserved_v5;         // v5 (was ekf_euler[2]) — spare, writes 0
 
     // Board→rocket quaternion ×10000 (v3) — authoritative rotation,
     // covers AUTO_EXACT mountings the discrete code can't express.

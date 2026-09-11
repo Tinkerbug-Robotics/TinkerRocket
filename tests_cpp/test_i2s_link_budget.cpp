@@ -43,6 +43,12 @@ double guidedCoastInflow()
          + framed(sizeof(FlightSnapshotData), 10.0)
          + framed(sizeof(IIS2MDCData),     100.0)
          + framed(sizeof(GNSSData),        (double)config::GNSS_UPDATE_RATE)
+         // #1154 item 4: the FC's camera truth. Counted here because that is
+         // the whole reason it is a 5 Hz message and not a byte in the 500 Hz
+         // NonSensorData — the byte version measured 95.06% and tripped the
+         // line below. A stream the budget does not know about is how this
+         // block went stale twice before.
+         + framed(sizeof(FcStatusData),    (double)config::FC_STATUS_RATE_HZ)
          + 220.0;   // POWERData, ~15 Hz
 }
 

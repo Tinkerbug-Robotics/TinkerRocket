@@ -186,6 +186,13 @@ struct config : board_pins
     // whenever a struct on the link grows — that is exactly how it went stale.
     static constexpr uint16_t ISM6HG256_UPDATE_RATE = 1920;
     static constexpr uint16_t NON_SENSOR_UPDATE_RATE = 500;
+
+    // #1154 item 4: FC_STATUS_MSG cadence.  5 Hz, sub-rated off the NonSensor
+    // tick.  The camera state it carries changes a few times per flight, and
+    // NonSensorData's 500 Hz was measured unaffordable: one byte there costs
+    // 500 B/s and the guided-coast I2S budget had 390 B/s of headroom.
+    static constexpr uint32_t FC_STATUS_RATE_HZ  = 5;
+    static constexpr uint32_t FC_STATUS_PERIOD_US = 1000000UL / FC_STATUS_RATE_HZ;
     // Guidance telemetry (GUIDANCE_TELEM_MSG) log rate while guidance is active.
     // Emitted from inside the NonSensor TX block, so it must divide
     // NON_SENSOR_UPDATE_RATE; 250 = every second NonSensor frame.

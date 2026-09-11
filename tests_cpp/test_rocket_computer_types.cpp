@@ -41,6 +41,11 @@ TEST(RocketComputerTypes, KnownSizes) {
     // two sizes.
     EXPECT_EQ(SIZE_OF_POWER_DATA_V1,  10u);
     EXPECT_EQ(sizeof(NonSensorData),  52u);  // #1190: +uint16 shock_gate_trips (2 B) after #529's ekf_ticks
+    // #1154 item 4: the FC's own camera truth, 5 Hz on FC_STATUS_MSG.
+    // Deliberately NOT a byte in NonSensorData — see FcStatusData.
+    EXPECT_EQ(sizeof(FcStatusData),    5u);
+    EXPECT_EQ(offsetof(FcStatusData, time_us), 0u);
+    EXPECT_EQ(offsetof(FcStatusData, flags),   4u);
     EXPECT_EQ(sizeof(LoRaFrameHeader), 7u);   // #850: shared prefix, both frames
     EXPECT_EQ(sizeof(LoRaFastData),   55u);  // #850: 5-of-6 slots
     EXPECT_EQ(sizeof(LoRaSlowData),   22u);  // #850: 1-of-6 slots
@@ -1161,7 +1166,13 @@ TEST(RocketComputerTypes, FlightSnapshotData_Layout) {
     EXPECT_EQ(sizeof(FlightSnapshotData), (size_t)MAX_PAYLOAD);
     // v4: sim_flight reclaimed from the header pad.  Restore paths refuse
     // any other version — a v3 frame can't prove it wasn't a sim flight.
-    EXPECT_EQ(FlightSnapshotData::VERSION, 4u);
+    // v5 (#1154 item 9): max_alt_m + max_speed_mps reclaimed from ekf_euler,
+    // IN PLACE. The size and every other offset below are unchanged on
+    // purpose — growing this struct would move MAX_PAYLOAD and ripple the
+    // I2S frame size across FC + OC + mini. Exact-equality version gates in
+    // both restore paths mean a v4 frame is refused, which is required here:
+    // the same twelve bytes mean something different now.
+    EXPECT_EQ(FlightSnapshotData::VERSION, 5u);
 
     EXPECT_EQ(offsetof(FlightSnapshotData, magic),               0u);
     EXPECT_EQ(offsetof(FlightSnapshotData, version),             4u);
@@ -1189,7 +1200,11 @@ TEST(RocketComputerTypes, FlightSnapshotData_Layout) {
     EXPECT_EQ(offsetof(FlightSnapshotData, ekf_quat),           96u);
     EXPECT_EQ(offsetof(FlightSnapshotData, ekf_P_diag),        136u);
     EXPECT_EQ(offsetof(FlightSnapshotData, ekf_t_prev_us),     196u);
-    EXPECT_EQ(offsetof(FlightSnapshotData, ekf_euler),         200u);
+    // v5: these three occupy ekf_euler's exact 12 bytes (200..211), which is
+    // what keeps b2r_q, crc32 and sizeof below identical to v4.
+    EXPECT_EQ(offsetof(FlightSnapshotData, max_alt_m),         200u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, max_speed_mps),     204u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, reserved_v5),       208u);
     EXPECT_EQ(offsetof(FlightSnapshotData, b2r_q),             212u);
     // CRC32 covers everything before it — both computeSnapshotCRC()
     // implementations hash [0, offsetof(crc32)).
