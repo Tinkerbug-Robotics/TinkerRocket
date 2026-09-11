@@ -106420,7 +106420,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin power_in line
 				(at 20.32 -6.35 180)
 				(length 7.62)
 				(name "GND"
@@ -106438,7 +106438,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin power_in line
 				(at 20.32 -3.81 180)
 				(length 7.62)
 				(name "GND"
@@ -106865,7 +106865,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin power_in line
 				(at 15.24 -7.62 180)
 				(length 7.62)
 				(name "VSS"
@@ -106883,7 +106883,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin power_in line
 				(at 15.24 -7.62 180)
 				(length 7.62)
 				(name "VSS"
@@ -106901,7 +106901,7 @@
 					)
 				)
 			)
-			(pin power_out line
+			(pin power_in line
 				(at 15.24 -7.62 180)
 				(length 7.62)
 				(name "VSS"
@@ -108645,7 +108645,7 @@
 					(type background)
 				)
 			)
-			(pin bidirectional line
+			(pin passive line
 				(at 12.7 12.7 180)
 				(length 5.715)
 				(name "S"
@@ -108663,7 +108663,7 @@
 					)
 				)
 			)
-			(pin bidirectional line
+			(pin passive line
 				(at 12.7 10.16 180)
 				(length 5.715)
 				(name "S"
@@ -108699,7 +108699,7 @@
 					)
 				)
 			)
-			(pin bidirectional line
+			(pin passive line
 				(at -17.78 5.08 0)
 				(length 5.08)
 				(name "G"
@@ -108717,7 +108717,7 @@
 					)
 				)
 			)
-			(pin input line
+			(pin passive line
 				(at -17.78 12.7 0)
 				(length 5.08)
 				(name "D"
@@ -108735,7 +108735,7 @@
 					)
 				)
 			)
-			(pin input line
+			(pin passive line
 				(at -17.78 10.16 0)
 				(length 5.08)
 				(name "D"
@@ -108753,7 +108753,7 @@
 					)
 				)
 			)
-			(pin input line
+			(pin passive line
 				(at -17.78 7.62 0)
 				(length 5.08)
 				(name "D"
@@ -108803,6 +108803,258 @@
 					(effects
 						(font
 							(size 1.016 1.016)
+						)
+					)
+				)
+			)
+		)
+		(embedded_fonts no)
+	)
+	(symbol "TPS259631DDAR"
+		(pin_names
+			(offset 0.254)
+		)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(duplicate_pin_numbers_are_jumpers no)
+		(property "Reference" "U"
+			(at 0 23 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "TPS259631DDAR"
+			(at 0 -13 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Footprints:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm_ThermalVias"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" "TPS259631DDAR"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "eFuse 2.7-19V, adjustable ILIM/UVLO/OVLO, auto-retry, SO-8 PowerPAD. Guaranteed-positive UVLO hysteresis (+50mV pin). Pins: 1 GND, 2 dVdt, 3 EN/UVLO, 4 IN, 5 OUT, 6 nFLT, 7 ILM, 8 OVLO, 9 PAD(GND)."
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "ki_keywords" "TPS259631DDAR eFuse"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(symbol "TPS259631DDAR_0_1"
+			(rectangle
+				(start -12.7 -10.16)
+				(end 12.7 20.32)
+				(stroke
+					(width 0.254)
+					(type default)
+				)
+				(fill
+					(type background)
+				)
+			)
+		)
+		(symbol "TPS259631DDAR_1_1"
+			(pin power_in line
+				(at 17.78 -7.62 180)
+				(length 5.08)
+				(name "GND"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at 17.78 2.54 180)
+				(length 5.08)
+				(name "dVdt"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -17.78 12.7 0)
+				(length 5.08)
+				(name "EN/UVLO"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "3"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin power_in line
+				(at -17.78 17.78 0)
+				(length 5.08)
+				(name "IN"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "4"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin power_out line
+				(at 17.78 17.78 180)
+				(length 5.08)
+				(name "OUT"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "5"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin open_collector line
+				(at 17.78 12.7 180)
+				(length 5.08)
+				(name "~{FLT}"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "6"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at -17.78 -2.54 0)
+				(length 5.08)
+				(name "ILM"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "7"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -17.78 2.54 0)
+				(length 5.08)
+				(name "OVLO"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "8"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at 17.78 -7.62 180)
+				(length 5.08)
+				(name "PAD"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "9"
+					(effects
+						(font
+							(size 1.27 1.27)
 						)
 					)
 				)
