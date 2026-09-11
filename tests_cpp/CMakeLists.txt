@@ -314,7 +314,17 @@ add_executable(test_orientation test_orientation.cpp
 target_include_directories(test_orientation PRIVATE
     ${SHIM_DIR}
     ${LIB_DIR}/TR_Orientation
+    # #1095 item 2: the board-default lockstep test needs IMU_ORIENT_AUTO and
+    # the flight computer's config.h.  Only the FC's — the mini declares its
+    # own `namespace config`, so the two config.h files cannot share a TU.
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
 )
+# config.h refuses to compile without a board revision (a wrong pyro map fires
+# the wrong channel silently, so there is deliberately no default). The
+# board-default orientation is shared across revisions, so V9 is picked here
+# simply because one has to be.
+target_compile_definitions(test_orientation PRIVATE TR_BOARD_V9=1)
 target_link_libraries(test_orientation GTest::gtest_main)
 gtest_discover_tests(test_orientation)
 

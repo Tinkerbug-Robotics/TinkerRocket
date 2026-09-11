@@ -161,7 +161,12 @@ class RocketProfileCodecTest {
         )
         assertNotNull(decoded)
         assertEquals(2, decoded.cameraType)          // clamped into 0..2
-        assertEquals(0, decoded.imuOrientSetting)    // not 0..23 and not auto
+        // #1095 item 2: not 0..23 and not auto -> the DECLARED default, which
+        // is now IMU_ORIENT_AUTO. Same rule as imuRateHz below, and it has to
+        // be the default rather than a literal: a hardcoded 0 here would put
+        // this field out of lockstep with config.h and iOS on the corrupt-
+        // record path.
+        assertEquals(RocketProfile.IMU_ORIENT_AUTO, decoded.imuOrientSetting)
         assertEquals(0, decoded.imuRateHz)           // off the ODR whitelist -> the DYNAMIC default (#1046)
         assertEquals(1, decoded.pyro1TriggerMode)    // clamped into 0..1
         assertEquals(1, decoded.pyro2TriggerMode)    // valid, untouched

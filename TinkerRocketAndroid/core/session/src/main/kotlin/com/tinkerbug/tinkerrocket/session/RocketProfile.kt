@@ -79,7 +79,16 @@ public data class RocketProfile(
     val pnKdVel: Float = 1.5f,             // config::PN_KD_VEL_PER_S
     val pnGuidanceLaw: Int = 0,            // config::GUIDANCE_LAW_DEFAULT
     val cameraType: Int = 2,               // config::CAMERA_TYPE (RunCam)
-    val imuOrientSetting: Int = 0,         // manual identity; 0xFF = auto
+    // #1095 item 2: pad auto-detect (IMU_ORIENT_AUTO), in lockstep with the
+    // iOS RocketProfile default and config::BOARD_TO_ROCKET_ORIENT on both
+    // firmwares (docs/protocol-change-checklist.md — a mismatch silently
+    // re-tunes the rocket on connect). Pad gravity resolves the NOSE AXIS
+    // only; rotation ABOUT the nose is unobservable from a vector parallel to
+    // it, so auto leaves the roll clocking to the snap. A manual code 0..23
+    // fixes both and is required when roll control or guidance must know which
+    // way the control surfaces point -- and servoControlEnabled defaults to
+    // true, so a rocket flown on defaults IS roll-controlled.
+    val imuOrientSetting: Int = 0xFF,      // IMU_ORIENT_AUTO (pad auto-detect)
     // #1046: RocketComputerTypes.h IMU_RATE_DYNAMIC — the 3840 Hz-to-deployment
     // then 960 Hz schedule the firmware and iOS both default to. This said a
     // fixed 1920 Hz, so a fresh Android profile pushed a rate no other side of
@@ -385,8 +394,17 @@ public object RocketProfileCodec {
             // stored one.  Clamping here fixes display and wire together
             // (iOS clamps on write via UInt8(clamping:)).
             cameraType = (o.int("cameraType") ?: d.cameraType).coerceIn(0, 2),
+            // #1095 item 2: an out-of-range stored value falls back to the
+            // DECLARED default, not a hardcoded 0. It was 0 while 0 was also
+            // the default; now that the default is IMU_ORIENT_AUTO, a hardcoded
+            // 0 would quietly hand back manual identity and put this field out
+            // of lockstep with config.h and iOS on exactly the corrupt-record
+            // path nobody tests.
             imuOrientSetting = (o.int("imuOrientSetting") ?: d.imuOrientSetting)
-                .let { if (it == RocketProfile.IMU_ORIENT_AUTO || it in 0..23) it else 0 },
+                .let {
+                    if (it == RocketProfile.IMU_ORIENT_AUTO || it in 0..23) it
+                    else d.imuOrientSetting
+                },
             imuRateHz = (o.int("imuRateHz") ?: d.imuRateHz)
                 .let { if (it in RocketProfile.IMU_RATES_HZ) it else d.imuRateHz },
             servoBias1 = o.int("servoBias1") ?: d.servoBias1,

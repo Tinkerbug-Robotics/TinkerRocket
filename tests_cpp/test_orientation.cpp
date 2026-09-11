@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 #include "TR_Orientation.h"
+#include "RocketComputerTypes.h"
+#include "config.h"   // flight_computer/main/config.h
 #include <cmath>
 #include <cstring>
 #include <set>
@@ -529,4 +531,35 @@ TEST(ThrustAxisCheck, NotStarted_NeverFinalizes) {
         EXPECT_FALSE(chk.update(1000 + i * 1000, 8.0f * kG, 0, 0));
     }
     EXPECT_FALSE(chk.done());
+}
+
+// ── #1095 item 2: the board-default lockstep ────────────────────────────────
+//
+// docs/protocol-change-checklist.md requires config.h's default to equal the
+// RocketProfile default in BOTH apps, because a mismatch silently re-tunes the
+// rocket the moment it connects.  C++ cannot read the apps, so this is a
+// TRIPWIRE rather than a proof: changing the constant fails here, and the
+// failure names the two files that have to move with it.
+//
+// Deliberately a test and not a static_assert — BOARD_TO_ROCKET_ORIENT is meant
+// to be editable per board.  The point is that editing it cannot be quiet.
+TEST(Orientation, BoardDefaultIsAutoAndMatchesBothApps) {
+    EXPECT_EQ(config::BOARD_TO_ROCKET_ORIENT, IMU_ORIENT_AUTO)
+        << "The flight computer's board default changed. Move these together:\n"
+        << "  TinkerRocketApp/TinkerRocketApp/Models/RocketProfile.swift  "
+           "(imuOrientSetting)\n"
+        << "  TinkerRocketAndroid/core/session/.../RocketProfile.kt       "
+           "(imuOrientSetting)\n"
+        << "  tinkerrocket-idf/projects/rocket_computer_mini/main/config_flight.inc\n"
+        << "Auto resolves the NOSE AXIS only — roll clocking is unobservable "
+           "from pad gravity, and a roll-controlled airframe needs a manual "
+           "code 0..23.";
+}
+
+// AUTO must stay outside the manual code space, or the sentinel becomes a
+// legal orientation and every `== IMU_ORIENT_AUTO` branch silently changes
+// meaning.  The mini's apply site feeds this constant straight into
+// applyBoardToRocketOrientation, which is where that would bite first.
+TEST(Orientation, AutoSentinelIsNotAValidCode) {
+    EXPECT_GE(IMU_ORIENT_AUTO, ORIENT_CODE_COUNT);
 }

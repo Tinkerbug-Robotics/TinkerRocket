@@ -63,10 +63,22 @@
     // IIS2MDC -> board frame (deg), CCW positive about +Z (#204 method).
     static constexpr float IIS2MDC_ROT_Z_DEG = 90.0f;      // VERIFY on mini layout
 
-    // Board -> rocket mounting orientation (TR_Orientation code, 0-23).
-    // 0 = board +X toward the nose.  Pad-gravity auto-detect refines this at
-    // runtime; this constant is the manual boot default.
-    static constexpr uint8_t BOARD_TO_ROCKET_ORIENT = 0;
+    // Board -> rocket mounting orientation: IMU_ORIENT_AUTO (0xFF) or a
+    // TR_Orientation code 0-23.
+    //
+    // #1095 item 2: pad auto-detect, matching the flight computer's config.h
+    // and the RocketProfile default in both apps (the six-way lockstep in
+    // docs/protocol-change-checklist.md — a mismatch silently re-tunes the
+    // rocket on connect).
+    //
+    // KNOW WHAT AUTO CANNOT DO.  Pad gravity gives the NOSE AXIS only;
+    // rotation ABOUT the nose is unobservable from a vector parallel to it, so
+    // auto leaves the roll clocking to whatever the snap picks.  See the long
+    // note in flight_computer/main/config.h.  The mini drives no fins, so the
+    // clocking it cannot resolve has no control surface to point the wrong
+    // way — which is why auto is a comfortable default HERE and a caveat on
+    // the flight computer.
+    static constexpr uint8_t BOARD_TO_ROCKET_ORIENT = 0xFF;
 
     // ### Pyro timing (pins in board_v1.h) ###
     // One shared arming FET feeds all four squib drivers.  ARM is raised only
