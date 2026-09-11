@@ -6512,6 +6512,11 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         }
         else
         {
+            // #1146 item 2: the driver now restores RX itself on every
+            // reconfigure failure path, but the OC's mirror of that state has
+            // to follow or the next serviceLoRaUplink pass acts on a stale
+            // flag. The #569 fix above was applied only to the success branch.
+            lora_in_rx_mode = lora_comms.isInRxMode();
             ESP_LOGE("LORA", "UPLINK LoRa reconfigure FAILED");
         }
     }
@@ -6847,10 +6852,15 @@ static void serviceLoRaUplink()
     // service() auto-calls startReceive() after TX completion.
     // Sync our tracking flag to avoid a redundant startReceive() that
     // would reset rx_done_ and potentially drop a received packet.
-    if (lora_comms.isInRxMode())
-    {
-        lora_in_rx_mode = true;
-    }
+    //
+    // #1146 item 2: this used to be one-directional — `if (isInRxMode())
+    // lora_in_rx_mode = true;` — so it could raise the flag but never lower
+    // it. Any path that left the driver out of RX without clearing the flag
+    // here (a rejected reconfigure, a failed scan restore) left a stale true,
+    // and the `if (!lora_in_rx_mode) startReceive();` recovery just below was
+    // then suppressed for the rest of the power cycle. The driver's own flag
+    // is the truth; mirror it in both directions.
+    lora_in_rx_mode = lora_comms.isInRxMode();
 
     // Enter RX mode if not already (first call before any TX has occurred)
     if (!lora_in_rx_mode)

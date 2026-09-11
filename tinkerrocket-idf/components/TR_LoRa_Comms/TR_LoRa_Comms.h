@@ -170,6 +170,11 @@ public:
     float getScanStepKHz()  const { return scan_step_khz_; }
 
 private:
+    // #1128: log-and-record a failed ROLLBACK step. A rollback that fails
+    // leaves the chip at neither configuration while cfg_* still reports the
+    // old one; it cannot be repaired from there, so the least it can do is
+    // stop being invisible. Private — callers use reconfigure().
+    void rollbackStep(const char* what, int16_t st);
     static void IRAM_ATTR onDio1ISR();
 
     static TR_LoRa_Comms* instance_;

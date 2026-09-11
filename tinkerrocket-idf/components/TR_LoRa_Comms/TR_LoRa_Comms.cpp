@@ -43,6 +43,45 @@ bool TR_LoRa_Comms::begin(const Config& cfg, bool debug)
         return true;
     }
 
+    // #1133: begin() is a documented RECOVERY path — the radio_board modem
+    // retries a full begin() on every SET_CONFIG, and the host re-pushes every
+    // 2 s for as long as the modem answers radio_enabled=0. That loop is
+    // routine on a board whose LLCC68 is not coming up, and this function used
+    // to `new` three objects on every pass and free none of them.
+    //
+    // Two costs, both fatal given time: roughly a few hundred bytes per pass
+    // at ~30 passes/minute against ~250-300 KB of internal heap (no PSRAM on
+    // the S3) — and IDF builds with exceptions off, so `operator new` aborts
+    // rather than returning null, which panics and reboots the daughterboard
+    // on a fixed period. Worse, a radio_->begin() that gets past findChip and
+    // then fails never has term() called on it, so that attempt's
+    // spi_bus_add_device() handle stays registered; the bus lock has
+    // DEV_NUM_MAX = 6 slots, after which spi_bus_add_device returns
+    // ESP_ERR_NOT_SUPPORTED, EspHal leaves spiDevice NULL and every SPI
+    // transfer silently becomes a no-op — unrecoverable for the boot.
+    //
+    // So release the previous set first. Order matters: drop the ISR before
+    // the object it points into goes away, then term() the Module (which is
+    // what calls EspHal::term() -> spi_bus_remove_device) while hal_ is still
+    // alive, then delete innermost-first.
+    if (radio_ != nullptr)
+    {
+        radio_->clearDio1Action();
+        delete radio_;
+        radio_ = nullptr;
+    }
+    if (module_ != nullptr)
+    {
+        module_->term();
+        delete module_;
+        module_ = nullptr;
+    }
+    if (hal_ != nullptr)
+    {
+        delete hal_;
+        hal_ = nullptr;
+    }
+
     hal_ = new EspHal(cfg.spi_sck, cfg.spi_miso, cfg.spi_mosi, cfg.spi_host);
     module_ = new Module(hal_, cfg.cs_pin, cfg.dio1_pin, cfg.rst_pin, cfg.busy_pin);
     radio_ = new LLCC68(module_);
@@ -97,10 +136,63 @@ bool TR_LoRa_Comms::begin(const Config& cfg, bool debug)
         return false;
     }
 
+    // #1146 item 1: these return codes used to be discarded, and the REQUESTED
+    // values were then latched as last-known-good and begin() returned true —
+    // so the driver, the modem STATUS frame and currentSpreadingFactor() could
+    // all report a modulation that was never on the air. reconfigure() checks
+    // exactly these calls and rolls back; begin() is the same sequence with
+    // the checks removed. LLCC68 rejects any SF outside the current
+    // bandwidth's window (5..9 at BW125, 5..10 at BW250, 5..11 at BW500) and
+    // rejects EVERY SF if the bandwidth is not one of 125/250/500 — and the
+    // header already names SF10/BW125 as an illegal pair, so this is a
+    // combination the callers can and do request.
+    //
+    // Bandwidth and spreading factor are FATAL here, the same as setFrequency
+    // above: a peer cannot demodulate at the wrong SF or BW at all, so a radio
+    // that did not take them is not a degraded link, it is no link. The rest
+    // are recorded and logged but not fatal — coding rate and CRC ride in the
+    // explicit header, and preamble/power/gain degrade the margin rather than
+    // preventing reception. Every cfg_* below is latched only from a call that
+    // actually succeeded.
+    //
     // LLCC68 validates SF against the current BW, so set BW first
-    (void)radio_->setBandwidth(cfg.bandwidth_khz);
-    (void)radio_->setSpreadingFactor(cfg.spreading_factor);
-    (void)radio_->setCodingRate(cfg.coding_rate);
+    st = radio_->setBandwidth(cfg.bandwidth_khz);
+    if (st != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        ESP_LOGE(TAG, "LoRa begin setBandwidth(%.0f) failed: %d — no usable link",
+                 (double)cfg.bandwidth_khz, st);
+        enabled_ = false;
+        stats_.enabled = false;
+        return false;
+    }
+    cfg_bw_khz_ = cfg.bandwidth_khz;
+
+    st = radio_->setSpreadingFactor(cfg.spreading_factor);
+    if (st != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        ESP_LOGE(TAG, "LoRa begin setSpreadingFactor(%u) failed at BW%.0f: %d — "
+                      "no usable link",
+                 (unsigned)cfg.spreading_factor, (double)cfg.bandwidth_khz, st);
+        enabled_ = false;
+        stats_.enabled = false;
+        return false;
+    }
+    cfg_sf_ = cfg.spreading_factor;
+
+    st = radio_->setCodingRate(cfg.coding_rate);
+    if (st != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        ESP_LOGE(TAG, "LoRa begin setCodingRate(%u) failed: %d — leaving the "
+                      "previous coding rate reported",
+                 (unsigned)cfg.coding_rate, st);
+    }
+    else
+    {
+        cfg_cr_ = cfg.coding_rate;
+    }
     // #1155 item 8: symmetric with applyFrameParams(). The public case used to
     // fall through and keep the PRIVATE default SX126x::begin() installs, so
     // "syncword_private = false" in the config was silently ignored — on one
@@ -109,22 +201,45 @@ bool TR_LoRa_Comms::begin(const Config& cfg, bool debug)
         const int16_t sw_st = radio_->setSyncWord(cfg.syncword_private
                                                       ? RADIOLIB_SX126X_SYNC_WORD_PRIVATE
                                                       : RADIOLIB_SX126X_SYNC_WORD_PUBLIC);
-        if (sw_st != RADIOLIB_ERR_NONE && debug_)
+        if (sw_st != RADIOLIB_ERR_NONE)
         {
+            stats_.last_error = sw_st;   // #1146 item 1: was logged, not recorded
             ESP_LOGE(TAG, "begin setSyncWord failed: %d", sw_st);
         }
     }
-    (void)radio_->setPreambleLength(cfg.preamble_len);
-    (void)radio_->setOutputPower(cfg.tx_power_dbm);
-    (void)radio_->setRxBoostedGainMode(cfg.rx_boosted_gain);
-    (void)radio_->setCRC(cfg.crc_on);
+    if ((st = radio_->setPreambleLength(cfg.preamble_len)) != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        ESP_LOGE(TAG, "LoRa begin setPreambleLength(%u) failed: %d",
+                 (unsigned)cfg.preamble_len, st);
+    }
+    if ((st = radio_->setOutputPower(cfg.tx_power_dbm)) != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        ESP_LOGE(TAG, "LoRa begin setOutputPower(%d dBm) failed: %d — leaving "
+                      "the previous power reported",
+                 (int)cfg.tx_power_dbm, st);
+    }
+    else
+    {
+        cfg_tx_power_ = cfg.tx_power_dbm;
+    }
+    if ((st = radio_->setRxBoostedGainMode(cfg.rx_boosted_gain)) != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        ESP_LOGE(TAG, "LoRa begin setRxBoostedGainMode(%d) failed: %d",
+                 (int)cfg.rx_boosted_gain, st);
+    }
+    if ((st = radio_->setCRC(cfg.crc_on)) != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        ESP_LOGE(TAG, "LoRa begin setCRC(%d) failed: %d", (int)cfg.crc_on, st);
+    }
 
-    // Store last-known-good config for rollback on reconfigure failure
+    // Last-known-good for rollback on reconfigure failure. #1146 item 1: the
+    // modulation fields above are latched next to the call that set them, so
+    // only frequency is left — and it returned early on failure.
     cfg_freq_mhz_ = cfg.freq_mhz;
-    cfg_sf_        = cfg.spreading_factor;
-    cfg_bw_khz_    = cfg.bandwidth_khz;
-    cfg_cr_        = cfg.coding_rate;
-    cfg_tx_power_  = cfg.tx_power_dbm;
 
     instance_ = this;
     radio_->setDio1Action(TR_LoRa_Comms::onDio1ISR);
@@ -456,6 +571,19 @@ void TR_LoRa_Comms::serviceTxWatchdog()
 // Runtime reconfiguration
 // ============================================================================
 
+// #1128: a rollback step that fails is the worst case in this whole function —
+// the chip is then at neither the requested config nor the previous one, while
+// cfg_* reports the previous one. It cannot be repaired from here (that is what
+// the rollback WAS), so the least it can do is stop being invisible.
+void TR_LoRa_Comms::rollbackStep(const char* what, int16_t st)
+{
+    if (st == RADIOLIB_ERR_NONE) return;
+    stats_.last_error = st;
+    ESP_LOGE(TAG, "LoRa reconfigure ROLLBACK %s failed: %d — the radio is now at "
+                  "neither configuration and cfg_* no longer describes it; "
+                  "re-begin() or reboot to resynchronise", what, st);
+}
+
 bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_t cr, int8_t tx_power,
                                 bool wait_for_tx)
 {
@@ -502,7 +630,14 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
         if (tx_ongoing_) { return false; }  // TX stuck -- give up
     }
 
-    // Exit RX mode
+    // Exit RX mode. #1146 item 2: remember whether we were in it, because
+    // every failure path below has to put the radio back — hopToFrequencyMHz
+    // already does exactly this and says why. Without it a rejected parameter
+    // left the chip in standby with rx_mode_ false, and the OC's own recovery
+    // could not see it: serviceLoRaUplink syncs the flag one-directionally
+    // (`if (isInRxMode()) lora_in_rx_mode = true;`), so a stale true is never
+    // cleared and `if (!lora_in_rx_mode) startReceive();` never runs.
+    const bool was_rx = rx_mode_;
     rx_mode_ = false;
     rx_done_ = false;
 
@@ -523,6 +658,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     {
         stats_.last_error = st;
         if (debug_) ESP_LOGE(TAG, "LoRa reconfigure setBW failed: %d", st);
+        if (was_rx) (void)startReceive();   // #1146 item 2
         return false;  // Nothing changed, no rollback needed
     }
     steps_done = 1;
@@ -588,11 +724,28 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
 
 rollback:
     // Best-effort restore of the previous configuration.
+    //
+    // #1128: NOT in strict reverse order. The forward path sets BW before SF
+    // precisely because LLCC68 validates SF against the CURRENT bandwidth, and
+    // that constraint does not reverse — undoing SF first evaluates old_sf
+    // against the NEW bandwidth. For a hop from BW250/SF10 to BW125, SF10 is
+    // outside BW125's 5..9 window, so the restore was rejected, the (void)
+    // cast swallowed it, and the chip was left at the NEW spreading factor
+    // with the OLD bandwidth while cfg_sf_/cfg_bw_khz_ — and therefore
+    // currentSpreadingFactor(), the OC's lora_sf and every LORA_UPLINK_MSG
+    // record — still reported the old pair. The downlink is dead from that
+    // moment and only a reboot restores it.
+    //
+    // Restoring BW first makes each step legal against the state it actually
+    // runs in: (old_bw, new_sf) is an intermediate the chip accepts because
+    // setBandwidth does not validate SF, and old_sf is by construction legal
+    // against old_bw — it was the live pair on entry.
     if (debug_) ESP_LOGW(TAG, "LoRa reconfigure rolling back %d steps", steps_done);
-    if (steps_done >= 4) (void)radio_->setCodingRate(old_cr);
-    if (steps_done >= 3) (void)radio_->setFrequency(old_freq);
-    if (steps_done >= 2) (void)radio_->setSpreadingFactor(old_sf);
-    if (steps_done >= 1) (void)radio_->setBandwidth(old_bw);
+    if (steps_done >= 4) rollbackStep("setCodingRate", radio_->setCodingRate(old_cr));
+    if (steps_done >= 3) rollbackStep("setFrequency", radio_->setFrequency(old_freq));
+    if (steps_done >= 1) rollbackStep("setBandwidth", radio_->setBandwidth(old_bw));
+    if (steps_done >= 2) rollbackStep("setSpreadingFactor", radio_->setSpreadingFactor(old_sf));
+    if (was_rx) (void)startReceive();   // #1146 item 2
     return false;
 }
 
@@ -771,9 +924,31 @@ bool TR_LoRa_Comms::startScan(float start_mhz, float stop_mhz, uint16_t step_khz
 // hopToFrequencyMHz() until reboot.
 void TR_LoRa_Comms::finishScan(const char* why)
 {
-    (void)radio_->setFrequency(cfg_freq_mhz_);
-    (void)radio_->startReceive();
-    rx_mode_ = true;
+    // #1146 item 3: this used to discard both return codes and then set
+    // rx_mode_ = true unconditionally, so a failed restore left the driver
+    // claiming RX while the chip sat in standby on a scan channel — and
+    // isInRxMode(), the OC's and BS's only cross-check, confirmed the lie.
+    // Once rx_mode_ is falsely true, pollDio1 routes any DIO1 edge to rx_done_
+    // and readPacket's getIrqFlags() cross-check discards it as spurious
+    // forever; nothing recovers but a completed TX or a reboot.
+    //
+    // Go through the class's own startReceive() wrapper, which is the
+    // documented way to keep the internal flags matching what the rest of the
+    // codebase expects, and let rx_mode_ come from what the radio actually
+    // did. The Done transition stays unconditional — that is the #567
+    // invariant, and it is about the scan state machine, not the RX flag.
+    const int16_t fs_st = radio_->setFrequency(cfg_freq_mhz_);
+    if (fs_st != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = fs_st;
+        ESP_LOGE(TAG, "Scan %s: restoring %.1f MHz failed: %d", why,
+                 (double)cfg_freq_mhz_, fs_st);
+    }
+    if (!startReceive())
+    {
+        ESP_LOGE(TAG, "Scan %s: could not re-enter RX — the radio is in standby "
+                      "and isInRxMode() now says so (#1146)", why);
+    }
     scan_state_ = ScanState::Done;
     if (debug_)
     {
