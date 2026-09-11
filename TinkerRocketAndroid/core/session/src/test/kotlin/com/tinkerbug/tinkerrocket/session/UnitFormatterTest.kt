@@ -54,4 +54,20 @@ class UnitFormatterTest {
         assertEquals("20.0 °C", UnitFormatter.temperature(20.0, m))
         assertEquals("68.0 °F", UnitFormatter.temperature(20.0, i))
     }
+
+    @Test
+    fun `display rounding ties to even, matching iOS and the CSV (#1086 item 6)`() {
+        val m = UnitSystem.METRIC
+        // The reported case: palt = 124.5 must print 124 m (ties-to-even),
+        // NOT 125 (HALF_UP), so two phones on the pad agree with iOS.
+        assertEquals("124 m", UnitFormatter.altitude(124.5, m))
+        // 123.5 ties down to 124 either way — both were already agreeing.
+        assertEquals("124 m", UnitFormatter.altitude(123.5, m))
+        // 125.5 ties to even -> 126.
+        assertEquals("126 m", UnitFormatter.altitude(125.5, m))
+        // The suffix and multi-decimal path still work.
+        assertEquals("1.50 km", UnitFormatter.altitude(1500.0, m))
+        // Negative that rounds to zero keeps its sign, like printf.
+        assertEquals("-0 m", UnitFormatter.altitude(-0.2, m))
+    }
 }
