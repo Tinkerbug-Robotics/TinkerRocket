@@ -44,22 +44,22 @@ Replaced the low-side supervisor+FET LVC with a **high-side smart eFuse** as the
 
 **Power path (as built):** J2.2 (Batt+) → INA230 shunt R24 → `VBAT_CON` → eFuse IN → eFuse OUT → `VBATT` → TPS2121 mux IN2 (+ servos Q9, camera Q3, pyro charge R69). USB → mux IN1. J2.1 (Batt−) → GND. INA230 re-positioned across the new shunt location (IN+ = battery side, IN−/BUS = VBAT_CON) — measures true pack current + voltage. UVLO senses `VBAT_CON` (pack side, upstream of the FET) so it works even when the output is off.
 
-**Pin map (verified):**
+**Pin map — as built on V10 (re-verified from the netlist 2026-09-11; the July table's designators and three of its values had drifted, see #678):**
 
 | Pin | Net / part | Value / note |
 |-----|-----------|--------------|
-| IN (1,2,3,16,pad) | VBAT_CON | CIN = C93 1 µF + C77 100 nF (≥25 V); CR3 CUS10S30 clamp (cathode→IN, anode→GND) |
-| OUT (17–24) | VBATT | COUT = C96 1 µF (≥25 V) |
-| GND (4,5,14,pad) | GND | continuous ground (Pad1=IN, Pad2=GND are separate) |
-| EN/UVLO (6) | R25 1 M (→IN) / R26 210 k (→GND) | **6.34 V falling cutoff / 6.91 V turn-on** (≈3.17 V/cell) |
-| ITIMER (7) | C95 4.3 nF | ~2 ms overcurrent blanking (rides servo inrush) |
-| ILIM (8) | R18 100 Ω | ~14.7 A limit (no cap on this pin) |
+| IN (1,2,3,16,25) | VBAT_CON | CIN = C41 1 µF + C42 100 nF; no input clamp (the CUS10S30 was deleted with CR2, see WORKLIST M-9) |
+| OUT (17–24) | VBATT | COUT = C54 1 µF |
+| GND (4,5,14,26) | GND | continuous ground |
+| EN/UVLO (6) | R44 1 M (→IN) / R45 210 k (→GND), **C94 10 µF deglitch (τ ≈ 1.7 s)** | **6.34 V falling cutoff / 6.91 V turn-on** (≈3.17 V/cell); the deglitch is what rides a firing sag, see `v10-power-parity-2026-09-11.md` §3.3 |
+| ITIMER (7) | C50 10 nF | ~5 ms overcurrent blanking (was recorded as 4.3 nF / ~2 ms; the fitted value is the gentler one) |
+| ILIM (8) | R48 100 Ω | ~14.7 A limit (no cap on this pin) |
 | IMON (9) | GND | unused (INA230 kept for telemetry) |
-| RETRY_DLY (10) | C92 2.2 nF | auto-retry delay |
-| NRETRY (11) | C78 560 nF | finite retries |
+| RETRY_DLY (10) | C46 2.2 nF | ~92 ms between retries (datasheet Table 7-5) |
+| NRETRY (11) | **GND** | **indefinite auto-retry** (owner decision 2026-09-11, #678): the 1 µF that was here computed to ~1800 retries, beyond the last defined quantization bucket, and a finite count ends in latch-off — the one terminal behaviour a flight computer must not have. With RETRY_DLY set and NRETRY grounded the datasheet's fault table reads "auto-retry indefinitely with finite delay" |
 | LDSTRT (12) | GND | load-detect/handshake disabled |
-| PG (13) | R27 100 k → +3V3; PG_RAIL → MCU | main-power-good / fault telemetry |
-| dVdt (15) | C94 8.2 nF | ~21 ms soft-start, ~0.55 A inrush |
+| PG (13) | R59 100 k → +3V3; PG_RAIL unread | main-power-good, wired to no MCU pin yet (#721) |
+| dVdt (15) | C51 10 nF | ~26 ms soft-start ramp (was recorded as 8.2 nF / ~21 ms) |
 
 **Negative-transient clamp:** CR3 (CUS10S30, reused) from GND→IN clamps VIN below ground when the eFuse fast-trips into a short (input-lead L·di/dt). Carries a µs-scale ~30 A pulse — within a 1 A Schottky's surge rating; reverse voltage 30 V ≫ 8.4 V. No output-side clamp needed (OUT pin tolerates −0.8 V and downstream capacitance absorbs any inductive kick).
 

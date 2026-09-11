@@ -11922,7 +11922,7 @@
 				)
 			)
 		)
-		(property "Value" "10 k"
+		(property "Value" "1 k"
 			(at 188.595 61.595 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11965,7 +11965,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0710KL"
+		(property "MPN" "RC0402FR-071KL"
 			(at 184.785 61.595 0)
 			(hide yes)
 			(show_name no)
@@ -17041,7 +17041,7 @@
 				)
 			)
 		)
-		(property "Value" "10 k"
+		(property "Value" "1 k"
 			(at 203.2 61.595 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -17084,7 +17084,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0710KL"
+		(property "MPN" "RC0402FR-071KL"
 			(at 199.39 61.595 0)
 			(hide yes)
 			(show_name no)

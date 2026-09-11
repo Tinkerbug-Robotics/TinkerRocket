@@ -349,6 +349,37 @@ below V_IL before the rail returns. No part changes; the 100 nF this issue
 replaced would have shortened the window ten-fold at the cost of the delay the
 design guide asks for, and is not worth reverting.
 
+### 6.4 #678 — the low-severity sweep, worked through
+
+Every item mapped against the live files; ten were already done by the pre-fab
+close-out or the later reworks (USB VBUS cap `C76`, GNSS/LoRa branch bulk
+`C7`/`C18`, `R73` 2.2 k, both dangling slivers, the co-located via, the 12 pF
+load caps, `U30`'s input cap 1.6 mm away, `C65` at the buck input). This pass
+drew the rest of the schematic-side items and recorded the owner's decisions:
+
+| item | decision / change |
+|---|---|
+| NRETRY `C45` 1 µF (~1800 retries, past the datasheet's last bucket) | **NRETRY tied to GND, `C45` deleted — indefinite auto-retry** with the 92 ms `C46` delay. A finite count ends in latch-off, which is the one terminal state a flight computer must not have; the datasheet's fault-response table gives "auto-retry indefinitely with finite delay" for this pin pair |
+| status LEDs at 10 k (0.05–0.15 mA, invisible outdoors) | **`R65`, `R66`, `R70` → 1 k** (stocked line): ~1.5 mA green on the power LED, ~1.3 mA red, ~0.4 mA blue |
+| `H2`'s plated ring 0.6 mm from the antenna body, on no net | **`H2` → `MountingHole_Pad`, pin 1 to GND.** The other seven holes stay unconnected; H2 alone sits in the antenna's near field. The pad's zone connection on the board is the layout pass's |
+| `C44` soft-start 390 pF (~150 µs, startup in current limit) | `C44` → 10 nF (stocked): ~5 ms soft start, datasheet-class |
+| S3 GPIO0 on the internal pull-up only | `R141` 10 k to `+3V3`, on the wire to the boot button |
+| IMU and baro with no 100 nF (nearest was the magnetometer's at 3–4 mm) | `C146` at U2 VDD, `C147` at U4 VDD, both 100 nF on `V_MCU_SWTCH`; place at pin 8 of each |
+| S3 RF supply with only `C33` 100 nF (guide: 10 µF per RF pin) | `C148` 10 µF on `Net-(U15-VDD3P3)`, converter side of `L4`; place at pins 2/3 |
+| `ISM6HG256_INT2` single-pin net | no-connect flag; the label is gone. P4 GPIO16 is free if a second interrupt is ever wanted |
+| `U9` symbol pin 9 with no pad in the shared TSON footprint | pin 9 renumbered **5** in `Custom.kicad_sym` and in both boards' cached copies — the footprint numbers the drain tab as a second pad 5, so the symbol now matches it and the permanent parity warning is gone on both boards. Netlists unchanged |
+| eFuse timing caps drifted from the ECO record | `power-eco.md` Change 2 table rewritten to the as-built refdes and values |
+| `C59` 1 µF where the ECO wanted 10 µF beside `C56` | **not changed**: a 16 V 10 µF is not a stocked 0402 and the mini's analysis showed the mux imposes no minimum. Open only if the bench shows a switchover dip |
+| SC-32S ESR at the 70 kΩ limit | not changed; the fitted ABS07 is the same class. Bench: 32 k start-up at cold |
+| NAND bulk, crystal placement, USB D+/D− and `CR3` stub, `C43` side (#868), `ESP_VDD_HP` (#867), In3 slivers | layout, on the pass list in §4.1 |
+
+ERC on the V10 after this pass is 1063, all of it the pre-existing classes: the
+new off-grid warnings are the half-grid y of the existing wires the new parts
+hang from, `U9`'s cached-symbol mismatch is gone, and `NRETRY` grounded now
+raises the same `pin_to_pin` note the grounded `IMON` pin already did, because
+the symbol types both as outputs (the #680 hygiene list). The mini's ERC
+drops by one (the same `U9` mismatch) and its netlist is unchanged.
+
 ### 6.3 #677 — mis-connection protection
 
 Reverse battery is closed by `Q11` (AONR21321, ±25 V gate) with `CR2` deleted;
