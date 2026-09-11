@@ -238,6 +238,11 @@ it stays on `VBATT` as accepted. GNSS stays on `VBATT` by decision (§1.3).
 
 ### 4.1 Layout (owner)
 
+> **Consolidated 2026-09-11 into issue #1365**, the single V10 layout
+> pick-up list (it also absorbed #1180, #867, #868, #676, #679 and the layout
+> halves of #680). The items below are kept as this note's record; the issue
+> is the list to work from.
+
 - `R140` 0402 across `V_BUCK` — beside `R137`/`R138`.
 - `C144` 0805 — beside `C17` at `U47` pins 9/10.
 - The hold-up block still sits off the A4 page at x ≈ 300–440 mm; the
