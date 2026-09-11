@@ -5,7 +5,7 @@ Multi-rate scheduling:
     IMU:      1200 Hz
     Baro:     500 Hz
     Mag:      1000 Hz
-    GNSS:     25 Hz
+    GNSS:     18.18 Hz (measured — #1281)
     Control:  at IMU rate (1200 Hz)
 
 Pipeline per IMU tick:
@@ -41,7 +41,21 @@ class SimConfig:
     imu_rate: float = 1200.0
     baro_rate: float = 500.0
     mag_rate: float = 1000.0
-    gnss_rate: float = 25.0
+    # #1281: 18.18 Hz is what the receiver actually delivers — 55.0 ms between
+    # distinct epochs, measured on five flight binaries (four in
+    # examples/flights/ plus a 2026-08-27 bench capture) and recorded in
+    # TR_GNSSReceiverUBlox_Serial.cpp. The sim ran 25 Hz, which is not a
+    # harmless approximation for anything that DIFFERENCES the velocity: the
+    # accel-match heading aid's measurement noise scales as sigma_v/dt, so a
+    # 38 %-short dt overstates it by the same factor.
+    gnss_rate: float = 18.18
+    # Per-axis GNSS velocity noise (m/s, 1 sigma). Measured stationary over the
+    # three real captures in tests/test_data/ (flight_20260615_162929 /
+    # _165000 / _171305), pooled: NE 0.378, D 0.568. The sim carried 0.5 / 1.0.
+    # flight_20260615_170318 is a synthetic fixture — vel_n/vel_e identically
+    # zero, num_sats pinned at 12, pdop pinned at 1.5 — and is excluded.
+    gnss_vel_noise_ne_mps: float = 0.4
+    gnss_vel_noise_d_mps: float = 0.6
     # Seed for the sensor-noise RNGs (None = nondeterministic). Each model
     # gets a distinct derived seed so streams are independent (#459 A/B).
     sensor_seed: int = None
@@ -312,6 +326,8 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     mag = MagModel(rate_hz=config.mag_rate, seed=_seed(2))
     gnss = GNSSModel(
         rate_hz=config.gnss_rate,
+        vel_noise_ne_mps=config.gnss_vel_noise_ne_mps,
+        vel_noise_d_mps=config.gnss_vel_noise_d_mps,
         ref_lat_deg=config.ref_lat_deg,
         ref_lon_deg=config.ref_lon_deg,
         ref_alt_m=config.ref_alt_m,

@@ -736,7 +736,10 @@ void SensorCollectorSim::encodeIIS2MDC(uint32_t time_us, IIS2MDCData& out)
     out.time_us = time_us;
 
     // Same Earth field + body projection as encodeMMC5983MA (#463, corrected #512).
-    static constexpr float COUNTS_PER_UT = 1.0f / 0.15f;   // datasheet 0.15 µT/LSB
+    // Counts at the scale of the chip behind the seam (#1312): 0.15 µT/LSB on
+    // the IIS2MDC, 100/3750 on the mini's QMC5883P — so the converter, which
+    // reads the same seam, reproduces the simulated field on either board.
+    static constexpr float COUNTS_PER_UT = 1.0f / SensorCollector::MAG_LSB_TO_uT;
 
     float body[3];
     sim_sensor_model::fieldInBody(pitch_rad_, B_NORTH, B_EAST, B_DOWN, body);

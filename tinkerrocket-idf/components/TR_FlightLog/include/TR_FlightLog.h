@@ -96,6 +96,16 @@ public:
     const BlockStateBitmap& bitmap() const { return bitmap_; }
     const FlightIndex&      index()  const { return index_; }
 
+    // FREE blocks inside [flight_region_start, flight_region_end) — the space
+    // this layer can actually give a flight. This, not
+    // bitmap().countInState(BLOCK_FREE), is the number to compare against
+    // prealloc_blocks: the whole-die count also holds the always-free
+    // pre-region (LFS) and metadata blocks, so it reads 36 blocks high on
+    // every shipping geometry and moved the OC's SH_BAD trip point from 80
+    // genuinely free blocks to 44 (#1235 item 3). The #315 eviction floor has
+    // always been measured this way; the health verdict now is too.
+    uint32_t regionFreeBlocks() const;
+
     // Active-flight accessors (stable after prepareFlight, before finalizeFlight).
     bool      isFlightActive()     const { return flight_active_; }
     uint32_t  activeFlightId()     const { return active_flight_id_; }

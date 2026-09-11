@@ -4641,6 +4641,13 @@ static void setup_fc()
     ekf.setShockGateSettle(config::EKF_SHOCK_SETTLE_MS * 1000u);
     sensor_converter.configureMMC5983MARotationZ(config::MMC5983MA_ROT_Z_DEG);
     sensor_converter.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
+    // #1312: the count scale of the IIS2MDC-named stream is the chip's, and
+    // the chip is the collector's build-time seam — IIS2MDC here, QMC5883P on
+    // the mini.  The converter (EKF input, WMM gate) and the calibrator (R
+    // band, verify band, status frame) both take it from there; so does the
+    // mag_type stamp below.
+    sensor_converter.configureMagType(SensorCollector::MAG_TYPE);
+    mag_calibrator.setCountScale(SensorCollector::MAG_LSB_TO_uT);
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
     sensor_collector.configureSimIis2mdcRotation(config::IIS2MDC_ROT_Z_DEG);
 
@@ -4697,11 +4704,9 @@ static void setup_fc()
     // v6: adds mag_type — which chip is behind the 0xD1 mag stream, so log
     // analysis picks the right count scale per board.
     out_status_query_data.format_version = 6;
-#ifdef TR_MAG_DRIVER_QMC5883P
-    out_status_query_data.mag_type = MAG_TYPE_QMC5883P;
-#else
-    out_status_query_data.mag_type = MAG_TYPE_IIS2MDC;
-#endif
+    // #1312: stamped from the collector's seam, not from a local #ifdef, so
+    // the log can never say one chip while the driver talks to another.
+    out_status_query_data.mag_type = SensorCollector::MAG_TYPE;
     // Guidance-target echo boot state (#435): no cmd 28 processed yet; the
     // current target is whatever cmd 65 left in NVS (restored above).
     out_status_query_data.tgt_seq     = 0;

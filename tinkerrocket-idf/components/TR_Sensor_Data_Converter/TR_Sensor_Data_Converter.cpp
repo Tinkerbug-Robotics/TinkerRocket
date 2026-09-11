@@ -88,6 +88,21 @@ void SensorConverter::setHighGBias(float bx, float by, float bz)
 #endif
 }
 
+void SensorConverter::configureMagType(uint8_t mag_type)
+{
+    // Normalise the stored type to what the scale actually is, so magType()
+    // never reports a value the conversion is not honouring.
+    mag_type_ = (mag_type == MAG_TYPE_QMC5883P) ? MAG_TYPE_QMC5883P : MAG_TYPE_IIS2MDC;
+    iis2mdc_uT_per_lsb_ = magTypeUtPerLsb(mag_type_);
+#ifdef ESP_PLATFORM
+    if (mag_type != mag_type_)
+    {
+        ESP_LOGW("Converter", "Unknown mag_type %u — scaling the mag stream as IIS2MDC",
+                 (unsigned)mag_type);
+    }
+#endif
+}
+
 void SensorConverter::setMMCOffset(int32_t cx_counts, int32_t cy_counts, int32_t cz_counts)
 {
     if (cx_counts == mmc_offset_cx_ && cy_counts == mmc_offset_cy_ && cz_counts == mmc_offset_cz_)
@@ -294,16 +309,18 @@ void SensorConverter::convertMMC5983MAData(const MMC5983MAData& in, MMC5983MADat
   applyB2R(out.mag_x_uT, out.mag_y_uT, out.mag_z_uT);
 }
 
-// --- IIS2MDC (new-PCB magnetometer) ---
-// Sensitivity per datasheet 9.13: 1.5 mgauss/LSB = 0.15 uT/LSB.  Raw is
+// --- IIS2MDC-named magnetometer stream (IIS2MDC, or the mini's QMC5883P) ---
+// Sensitivity is the chip's (configureMagType, #1312): IIS2MDC datasheet 9.13,
+// 1.5 mgauss/LSB = 0.15 uT/LSB; QMC5883P 100/3750 uT/LSB at ±8 G.  Raw is
 // already signed int16 centered at 0; if the FC has loaded a hard-iron
-// calibration (issue #96), the chip's OFFSET_X/Y/Z registers have already
-// subtracted the offset upstream — no software subtract needed here.
+// calibration (issue #96), it has already been subtracted upstream — by the
+// IIS2MDC's OFFSET_X/Y/Z registers, or by the TR_QMC5883P driver in software
+// — so no subtract is needed here on either part.
 void SensorConverter::convertIIS2MDCData(const IIS2MDCData& in, IIS2MDCDataSI& out)
 {
     out.time_us = in.time_us;
 
-    static constexpr double UT_PER_LSB = 0.15;
+    const double UT_PER_LSB = iis2mdc_uT_per_lsb_;
 
     const double mx = (double)in.mag_x * UT_PER_LSB;
     const double my = (double)in.mag_y * UT_PER_LSB;

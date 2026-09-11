@@ -584,3 +584,164 @@ TEST(MagCalibratorFit, AnOffsetBeyondTheRegisterRangeStillFitsAsInt16) {
     EXPECT_GT((int)fx, 0) << "sign wrapped through int16";
     EXPECT_NEAR(R, 50.0f, 1.5f);
 }
+
+
+// --- #1312: the count scale is the chip's, not a constant ---
+//
+// The mini's QMC5883P counts are 100/3750 µT/LSB; read at the IIS2MDC's 0.15
+// the same sphere is 5.6x too big and every fit is R_TOO_HIGH.  The fit and
+// the offsets stay in counts; only the µT-side gates and telemetry scale.
+
+namespace {
+
+constexpr float QMC_UT_PER_LSB = 100.0f / 3750.0f;
+
+// driveCleanFit()'s 26-direction tumble at 50 µT, in a given count scale.
+void driveSphereAtScale(MagCalibrator& cal, float uT_per_lsb) {
+    cal.start();
+    struct Dir { int16_t x, y, z; };
+    Dir dirs[] = {
+        {1000, 0, 0}, {-1000, 0, 0}, {0, 1000, 0}, {0, -1000, 0},
+        {0, 0, 1000}, {0, 0, -1000},
+        {707, 707, 0}, {-707, 707, 0}, {707, -707, 0}, {-707, -707, 0},
+        {707, 0, 707}, {-707, 0, 707}, {707, 0, -707}, {-707, 0, -707},
+        {0, 707, 707}, {0, -707, 707}, {0, 707, -707}, {0, -707, -707},
+        {577, 577, 577}, {-577, 577, 577}, {577, -577, 577}, {577, 577, -577},
+        {-577, -577, 577}, {-577, 577, -577}, {577, -577, -577}, {-577, -577, -577},
+    };
+    const int N = sizeof(dirs) / sizeof(dirs[0]);
+    const double R_lsb = 50.0 / uT_per_lsb;
+    for (int rep = 0; rep < 40; rep++) {
+        for (int i = 0; i < N; i++) {
+            cal.setLiveAccel(dirs[i].x, dirs[i].y, dirs[i].z);
+            const double L = sqrt((double)dirs[i].x * dirs[i].x +
+                                  (double)dirs[i].y * dirs[i].y +
+                                  (double)dirs[i].z * dirs[i].z);
+            cal.addSample((int16_t)((double)dirs[i].x / L * R_lsb),
+                          (int16_t)((double)dirs[i].y / L * R_lsb),
+                          (int16_t)((double)dirs[i].z / L * R_lsb));
+        }
+    }
+    ASSERT_TRUE(cal.computeFit());
+}
+
+// feedVerifySamples() in a given count scale.
+void feedVerifyAtScale(MagCalibrator& cal, float magnitude_uT, int n_per_dir,
+                       float uT_per_lsb) {
+    int16_t dirs[][3] = {
+        {1000, 0, 0}, {-1000, 0, 0}, {0, 1000, 0}, {0, -1000, 0},
+        {0, 0, 1000}, {0, 0, -1000},
+        {707, 707, 0}, {-707, -707, 0},
+    };
+    const int N = sizeof(dirs) / sizeof(dirs[0]);
+    const double R_lsb = magnitude_uT / uT_per_lsb;
+    for (int rep = 0; rep < n_per_dir; rep++) {
+        for (int i = 0; i < N; i++) {
+            cal.setLiveAccel(dirs[i][0], dirs[i][1], dirs[i][2]);
+            const double L = sqrt((double)dirs[i][0] * dirs[i][0] +
+                                  (double)dirs[i][1] * dirs[i][1] +
+                                  (double)dirs[i][2] * dirs[i][2]);
+            cal.addSample((int16_t)((double)dirs[i][0] / L * R_lsb),
+                          (int16_t)((double)dirs[i][1] / L * R_lsb),
+                          (int16_t)((double)dirs[i][2] / L * R_lsb));
+        }
+    }
+}
+
+}  // namespace
+
+TEST(MagCalibratorScale, DefaultIsTheIIS2MDCAndNonsenseIsIgnored) {
+    MagCalibrator cal;
+    EXPECT_FLOAT_EQ(cal.countScale(), 0.15f);
+    cal.setCountScale(0.0f);
+    EXPECT_FLOAT_EQ(cal.countScale(), 0.15f);
+    cal.setCountScale(-1.0f);
+    EXPECT_FLOAT_EQ(cal.countScale(), 0.15f);
+    cal.setCountScale(QMC_UT_PER_LSB);
+    EXPECT_FLOAT_EQ(cal.countScale(), QMC_UT_PER_LSB);
+}
+
+TEST(MagCalibratorScale, QmcCountsAreRejectedAtTheIIS2MDCScale) {
+    // 50 µT is 1875 QMC counts; at 0.15 µT/LSB that is a 281 µT sphere.  This
+    // is what the mini would have done with the calibrator as it was: no cal
+    // could ever be accepted.
+    MagCalibrator cal;
+    driveSphereAtScale(cal, QMC_UT_PER_LSB);
+    int16_t cx, cy, cz; float R, res; uint8_t reject;
+    cal.getResult(cx, cy, cz, R, res, reject);
+    EXPECT_EQ((int)reject, (int)MAG_CAL_REJECT_R_TOO_HIGH);
+    EXPECT_NEAR(R, 281.25f, 3.0f);
+}
+
+TEST(MagCalibratorScale, QmcCountsFitAtTheQmcScale) {
+    MagCalibrator cal;
+    cal.setCountScale(QMC_UT_PER_LSB);
+    driveSphereAtScale(cal, QMC_UT_PER_LSB);
+    int16_t cx, cy, cz; float R, res; uint8_t reject;
+    cal.getResult(cx, cy, cz, R, res, reject);
+    EXPECT_EQ((int)reject, (int)MAG_CAL_OK);
+    EXPECT_NEAR(R, 50.0f, 1.0f);
+    EXPECT_LT(res, 1.0f);
+    // The offsets are still counts — nothing about them scaled.
+    EXPECT_NEAR((int)cx, 0, 20);
+    EXPECT_NEAR((int)cy, 0, 20);
+    EXPECT_NEAR((int)cz, 0, 20);
+}
+
+TEST(MagCalibratorScale, VerifyAndTheStatusFrameScaleTheSameWay) {
+    MagCalibrator cal;
+    cal.setCountScale(QMC_UT_PER_LSB);
+    driveSphereAtScale(cal, QMC_UT_PER_LSB);
+    ASSERT_TRUE(cal.accept());
+
+    // A clean 50 µT verify pass in QMC counts: inside the 20-70 µT band only
+    // if the verify accumulators use the same scale as the fit gate.
+    feedVerifyAtScale(cal, 50.0f, 30, QMC_UT_PER_LSB);
+    MagCalStatusData frame{};
+    cal.buildStatusFrame(0, frame);
+    EXPECT_NEAR(frame.inst_field_uT_x10 / 10.0f, 50.0f, 1.0f);
+    EXPECT_NEAR(frame.field_R_uT_x10 / 10.0f, 50.0f, 1.0f);
+
+    float worst = -1.0f;
+    EXPECT_TRUE(cal.evaluateVerify(worst));
+    EXPECT_EQ((int)cal.getState(), (int)MagCalibrator::State::APPLIED);
+}
+
+TEST(MagCalibratorScale, TheRollyPollyVHardIronInQmcCounts) {
+    // #1303's 210 µT offset is 7875 QMC counts — the int16 offset the QMC
+    // driver subtracts holds it with room to spare, and the fit recovers it.
+    const int cy = -7838;                       // -209 µT on -Y in QMC counts
+    MagCalibrator cal;
+    cal.setCountScale(QMC_UT_PER_LSB);
+    cal.start();
+    struct Dir { int16_t x, y, z; };
+    Dir dirs[] = {
+        {1000, 0, 0}, {-1000, 0, 0}, {0, 1000, 0}, {0, -1000, 0},
+        {0, 0, 1000}, {0, 0, -1000},
+        {707, 707, 0}, {-707, 707, 0}, {707, -707, 0}, {-707, -707, 0},
+        {707, 0, 707}, {-707, 0, 707}, {707, 0, -707}, {-707, 0, -707},
+        {0, 707, 707}, {0, -707, 707}, {0, 707, -707}, {0, -707, -707},
+        {577, 577, 577}, {-577, 577, 577}, {577, -577, 577}, {577, 577, -577},
+        {-577, -577, 577}, {-577, 577, -577}, {577, -577, -577}, {-577, -577, -577},
+    };
+    const int N = sizeof(dirs) / sizeof(dirs[0]);
+    const double R_lsb = 50.3 / QMC_UT_PER_LSB;
+    for (int rep = 0; rep < 40; rep++) {
+        for (int i = 0; i < N; i++) {
+            cal.setLiveAccel(dirs[i].x, dirs[i].y, dirs[i].z);
+            const double L = sqrt((double)dirs[i].x * dirs[i].x +
+                                  (double)dirs[i].y * dirs[i].y +
+                                  (double)dirs[i].z * dirs[i].z);
+            cal.addSample((int16_t)((double)dirs[i].x / L * R_lsb),
+                          (int16_t)((double)dirs[i].y / L * R_lsb + cy),
+                          (int16_t)((double)dirs[i].z / L * R_lsb + 145));
+        }
+    }
+    ASSERT_TRUE(cal.computeFit());
+    int16_t fx, fy, fz; float R, res; uint8_t reject;
+    cal.getResult(fx, fy, fz, R, res, reject);
+    EXPECT_EQ((int)reject, (int)MAG_CAL_OK);
+    EXPECT_NEAR((int)fy, cy, 5);
+    EXPECT_NEAR((int)fz, 145, 5);
+    EXPECT_NEAR(R, 50.3f, 1.0f);
+}

@@ -53,7 +53,10 @@ struct board_pins
     static constexpr int BMP585_CS = 48;         // BMP585_CS      (pad 36, SPICLK_N)
     static constexpr int BMP585_INT = 41;        // BMP585_INT     (CONFIRMED)
 
-    // --- Magnetometer (IIS2MDC @ 0x1E, on the PWR_SDA/PWR_SCL bus) ---
+    // --- Magnetometer (on the PWR_SDA/PWR_SCL bus) ---
+    // The part is a QST QMC5883P at 0x2C since the #797 swap (it was an
+    // IIS2MDC at 0x1E); the driver is selected by TR_MAG_DRIVER_QMC5883P in
+    // this project's CMakeLists and the address by config_flight.inc (#1312).
     // Its INT/DRDY pin is unconnected on this board — poll only.
     static constexpr int IIS2MDC_INT = -1;       // not wired (CONFIRMED)
 

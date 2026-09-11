@@ -2408,7 +2408,6 @@ static uint64_t prev_bytes_nand = 0;
 static uint32_t prev_ring_overruns = 0;
 static uint32_t prev_ring_drop_oldest_bytes = 0;
 static uint32_t prev_ring_bad_sof_clears = 0;
-static uint32_t interval_ring_fill_peak = 0;
 
 static void printStats()
 {
@@ -2569,10 +2568,6 @@ static void printStats()
                                ts_hour, ts_minute, ts_second);
     }
 
-    if (s.ring_fill > interval_ring_fill_peak)
-    {
-        interval_ring_fill_peak = s.ring_fill;
-    }
     const uint64_t rx_delta = s.bytes_received - prev_bytes_rx;
     const uint64_t nand_delta = s.bytes_written_nand - prev_bytes_nand;
     const uint32_t ring_overrun_delta = s.ring_overruns - prev_ring_overruns;
@@ -2622,7 +2617,7 @@ static void printStats()
                   (unsigned long)s.ring_size,
                   (unsigned long)s.ring_highwater);
     ESP_LOGI("OC", "RING interval peak/overrun/drop_oldest_bytes/bad_sof=%lu/%lu/%lu/%lu (bad_sof_total=%lu)",
-                  (unsigned long)interval_ring_fill_peak,
+                  (unsigned long)s.ring_interval_peak,   // #1235 item 6: a real high-water
                   (unsigned long)ring_overrun_delta,
                   (unsigned long)ring_drop_oldest_delta,
                   (unsigned long)ring_bad_sof_delta,
@@ -2685,7 +2680,7 @@ static void printStats()
              (unsigned long)s.flush_iter_max_us,
              (unsigned long)s.syncs_performed,
              (unsigned long)s.nand_erase_ops,
-             (unsigned long)interval_ring_fill_peak,
+             (unsigned long)s.ring_interval_peak,   // #1235 item 6: tracked in ringPush, not sampled here
              (unsigned long)s.known_bad_blocks,
              (unsigned long)s.bad_block_skips,
              (unsigned long)s.spi_wait_max_us,   // #398: contention on the shared SPI3
@@ -2840,8 +2835,6 @@ static void printStats()
         ESP_LOGI("OC", "Stack HWM: %u bytes free",
                  (unsigned)(hwm * sizeof(StackType_t)));
     }
-
-    interval_ring_fill_peak = s.ring_fill;
 }
 
 // ==========================================================================

@@ -221,6 +221,17 @@ target_include_directories(test_iis2mdc_poll_gate PRIVATE
 target_link_libraries(test_iis2mdc_poll_gate GTest::gtest_main)
 gtest_discover_tests(test_iis2mdc_poll_gate)
 
+# ---------- test_qmc5883p_regs ----------
+# The mini's magnetometer (#1312): register packing pinned to the QMC5883P
+# datasheet's worked examples, the ±8 G scale MAG_TYPE_QMC5883P promises, and
+# the saturating software hard-iron subtract.  Header-only and IDF-free.
+add_executable(test_qmc5883p_regs test_qmc5883p_regs.cpp)
+target_include_directories(test_qmc5883p_regs PRIVATE
+    ${LIB_DIR}/TR_QMC5883P
+)
+target_link_libraries(test_qmc5883p_regs GTest::gtest_main)
+gtest_discover_tests(test_qmc5883p_regs)
+
 # ---------- test_control_mixer ----------
 add_executable(test_control_mixer test_control_mixer.cpp
     ${LIB_DIR}/TR_ControlMixer/TR_ControlMixer.cpp
@@ -1085,6 +1096,37 @@ target_include_directories(test_log_to_flash_sink PRIVATE
 target_link_libraries(test_log_to_flash_sink GTest::gtest_main)
 gtest_discover_tests(test_log_to_flash_sink)
 
+# ---------- test_log_to_flash_begin_retry (#1228) ----------
+# begin() re-entered after a failure: the OC retries a NAND that would not
+# mount at power-on.  Same harness as test_log_to_flash_sink; the LFS stub's
+# lfs_host_stub_fail_mount knob drives begin() down its real mount-failure
+# exit, and the host_shim's live-object counters prove the retry reuses the
+# mutexes and the ring slot instead of leaking a set per attempt.
+add_executable(test_log_to_flash_begin_retry
+    test_log_to_flash_begin_retry.cpp
+    fakes/lfs_host_stub.c
+    ${LIB_DIR}/TR_LogToFlash/TR_LogToFlash.cpp
+)
+target_include_directories(test_log_to_flash_begin_retry PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LogToFlash
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/CRC
+)
+target_link_libraries(test_log_to_flash_begin_retry GTest::gtest_main)
+gtest_discover_tests(test_log_to_flash_begin_retry)
+
+# ---------- test_logger_retry_policy (#1228) ----------
+# The OC's bounded, deferrable schedule for retrying that begin().
+add_executable(test_logger_retry_policy test_logger_retry_policy.cpp)
+target_include_directories(test_logger_retry_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_logger_retry_policy GTest::gtest_main)
+gtest_discover_tests(test_logger_retry_policy)
+
 # ---------- test_sensor_staleness_policy (#1137 items 10, 12) ----------
 # The scorecard's go/no-go debounce: it has to fire on a wedged sensor and not
 # chatter on a healthy one, and neither could be exercised without hardware.
@@ -1416,3 +1458,32 @@ target_include_directories(test_board_identity PRIVATE
 )
 target_link_libraries(test_board_identity GTest::gtest_main)
 gtest_discover_tests(test_board_identity)
+
+# ---------- test_storage_health_policy (#1235 items 3 and 4) ----------
+# The flight-log storage verdict on the pre-launch scorecard. The free-block
+# input has to be the flight REGION's count (the whole-die count sat 36 high and
+# shifted both trip points), and a V9/V10 PSRAM ring that fell back to the
+# 64 KB internal ring has to reach the verdict at all. The older fold-ins
+# (#566, #1127, #281, #826) are pinned here for the first time too.
+add_executable(test_storage_health_policy test_storage_health_policy.cpp)
+target_include_directories(test_storage_health_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_storage_health_policy GTest::gtest_main)
+gtest_discover_tests(test_storage_health_policy)
+
+# ---------- test_landed_lockout_policy (#317, #1235 item 5) ----------
+# The OC's post-LANDED flight-log lockout. It has to hold through an FC-only
+# reset after a real landing (the FC's own lockout is plain RAM) and clear on
+# the two departures that genuinely are the FC's sim reset. A bench cannot
+# reset one MCU of a two-MCU board on cue; this table can.
+add_executable(test_landed_lockout_policy test_landed_lockout_policy.cpp)
+target_include_directories(test_landed_lockout_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_landed_lockout_policy GTest::gtest_main)
+gtest_discover_tests(test_landed_lockout_policy)

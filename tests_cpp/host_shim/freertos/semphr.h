@@ -17,9 +17,29 @@ struct _HostSemaphore {
 
 typedef _HostSemaphore* SemaphoreHandle_t;
 
-inline SemaphoreHandle_t xSemaphoreCreateMutex() { return new _HostSemaphore(); }
+namespace _host_shim {
+/// Mutexes created and not yet deleted.  A component that creates its
+/// mutexes in begin() must not create them AGAIN when begin() is re-entered
+/// after a failure (#1228) — on target that is a heap leak per attempt, and
+/// here it is a count that moved.
+inline int& liveMutexes()
+{
+    static int n = 0;
+    return n;
+}
+}  // namespace _host_shim
 
-inline void vSemaphoreDelete(SemaphoreHandle_t s) { delete s; }
+inline SemaphoreHandle_t xSemaphoreCreateMutex()
+{
+    _host_shim::liveMutexes()++;
+    return new _HostSemaphore();
+}
+
+inline void vSemaphoreDelete(SemaphoreHandle_t s)
+{
+    if (s) _host_shim::liveMutexes()--;
+    delete s;
+}
 
 inline BaseType_t xSemaphoreTake(SemaphoreHandle_t s, TickType_t)
 {

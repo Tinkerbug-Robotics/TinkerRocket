@@ -1,4 +1,5 @@
 #include <TR_KinematicChecks.h>
+#include "RecoveryArmGate.h"
 #include <algorithm>
 
 namespace {
@@ -95,8 +96,11 @@ constexpr uint32_t GPS_APOGEE_FRESH_MS     = 500;
 // could sit out an entire small-motor boost and never latch -- the exact
 // ballistic outcome the fallback exists to prevent.  The same corpus replay
 // shows the 250-sample window survives boost vibration on every logged
-// flight: the shortest clean >3 g run inside a real boost was 376 ms, where a
-// 1 s hold (RecoveryArmGate's boost arm, #1179) carries only 2 flights in 27.
+// flight: the shortest clean >3 g run inside a real boost was 376 ms.
+// RecoveryArmGate's boost arm shares this window since 2026-09-11 (#1179):
+// at its former 1 s hold it carried 2 flights in 27, because these motors
+// hold >3 g for only 0.4-1.5 s after ignition -- the hold outlived the
+// thrust, not the vibration.
 //
 // Ground false positives.  A restrained motor burn reads ~1 g (thrust
 // balanced by the rail nets out of specific force), a drop is 0 g in free
@@ -124,6 +128,15 @@ constexpr uint32_t GPS_APOGEE_FRESH_MS     = 500;
 // (integrated velocity, altitude gain) rather than trust launch_flag alone.
 constexpr float    LAUNCH_ACCEL_FALLBACK_MS2   = 30.0f;  // ~3 g
 constexpr uint16_t LAUNCH_ACCEL_FALLBACK_COUNT = 250;    // sustained samples (~250 ms at 1 kHz)
+
+// The recovery interlock's boost arm IS this predicate (#1179, owner's ruling
+// 2026-09-11): a restored flight may claim it is under thrust on exactly the
+// evidence a normal flight claims launch.  Pinned so neither can drift; the
+// count is flight-loop samples at 1 kHz, i.e. milliseconds.
+static_assert(RecoveryArmGate::Config{}.boost_ms2 == LAUNCH_ACCEL_FALLBACK_MS2,
+              "RecoveryArmGate's boost bar must equal the launch accel fallback");
+static_assert(RecoveryArmGate::Config{}.boost_hold_ms == LAUNCH_ACCEL_FALLBACK_COUNT,
+              "RecoveryArmGate's boost hold must equal the launch accel fallback count (ms at 1 kHz)");
 
 // Launch baro-only fallback (#1108): with the IMU stale or absent, latch launch
 // on a sustained barometric climb alone.  The mirror image of #258: every

@@ -21,7 +21,13 @@
     // the INA230 (one i2c_master bus, created in main.cpp, handle passed into
     // the collector).  The frequency is per-device (scl_speed_hz).
     static constexpr uint32_t IIS2MDC_I2C_FREQ_HZ = 400'000;
-    static constexpr uint8_t IIS2MDC_I2C_ADDR = 0x1E;
+    // The slot keeps its IIS2MDC name; the part is the collector seam's
+    // choice (#1312).  Fixed addresses: QMC5883P 0x2C, IIS2MDC 0x1E.
+#if defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
+    static constexpr uint8_t IIS2MDC_I2C_ADDR = 0x2C;   // QMC5883P (#797)
+#else
+    static constexpr uint8_t IIS2MDC_I2C_ADDR = 0x1E;   // IIS2MDC
+#endif
 
     // ### Data Update Rates (Hz) ###
     static constexpr uint16_t FLIGHT_LOOP_UPDATE_RATE = 1000;

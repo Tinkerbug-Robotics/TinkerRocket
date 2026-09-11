@@ -35,9 +35,69 @@ TR_LogToFlash::TR_LogToFlash()
 
 bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
 {
+    // #1228: begin() is re-enterable after a FAILURE — the OC retries a NAND
+    // that would not mount at power-on — and a no-op after a success. It is
+    // not a re-initialisation: a live logger has a flush task, a mounted LFS
+    // and possibly an open session, none of which this function can unwind.
+    if (begun_)
+    {
+        ESP_LOGW(TAG, "begin() called on a logger that is already up — ignored");
+        return true;
+    }
+
     spi = &spi_in;
     cfg = cfg_in;
     spi_nand = SPISettings(cfg.spi_hz_nand, MSBFIRST, cfg.spi_mode_nand);
+
+    // #1228: release what a previous failed attempt left behind. The ring is
+    // re-allocated below (a retry may find the MRAM this time, or land in
+    // PSRAM where the first attempt fell back to internal RAM); the LFS
+    // buffers are already freed on every failure path, this just makes that
+    // provable. The mutexes are NOT released: they are created once, right
+    // here, before the first SPI transaction, and reused across attempts —
+    // a retry runs with the I2S parser task live, so the MRAM probe and the
+    // RDID read below take the bus like every other transaction instead of
+    // assuming a single thread.
+    if (ring_buf_)
+    {
+        heap_caps_free(ring_buf_);
+        ring_buf_ = nullptr;
+    }
+    ring_in_psram_ = false;
+    ring_size_ = 0;
+    releaseLfsBuffers();
+
+    // SPI bus mutex — created unconditionally.  It used to live inside the
+    // MRAM branch below, which left every NAND transaction unserialized
+    // whenever MRAM was absent: the flush task (Core 0) programs pages while
+    // the BLE download path reads them, and spiAcquire/spiRelease silently
+    // no-op on a null handle.  Nothing caught it because the RAM-ring branch
+    // has never been flown — but it becomes live the moment a board ships
+    // without the MRAM part.  Keeping it unconditional also keeps the #398
+    // spi_wait/spi_hold instrumentation meaningful on both paths.
+    if (!spi_mutex_)
+    {
+        spi_mutex_ = xSemaphoreCreateMutex();
+        if (!spi_mutex_)
+        {
+            if (cfg.debug) ESP_LOGE(TAG, "Failed to create SPI mutex");
+            return false;
+        }
+    }
+
+    // Mutex to serialize ringPush callers and to block clearRing from
+    // running concurrently with an in-flight push (#74). Unconditionally
+    // created — parser + oc_loop can race on Core 1 regardless of ring
+    // backing, so RAM and MRAM paths both need it.
+    if (!push_mutex_)
+    {
+        push_mutex_ = xSemaphoreCreateMutex();
+        if (!push_mutex_)
+        {
+            if (cfg.debug) ESP_LOGE(TAG, "Failed to create push mutex");
+            return false;
+        }
+    }
 
     pinMode(cfg.nand_cs, OUTPUT);
     csHigh(cfg.nand_cs);
@@ -137,34 +197,9 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     }
     ring_prelaunch_cap_ = prelaunchCap();
 
-    // SPI bus mutex — created unconditionally.  It used to live inside the
-    // MRAM branch above, which left every NAND transaction unserialized
-    // whenever MRAM was absent: the flush task (Core 0) programs pages while
-    // the BLE download path reads them, and spiAcquire/spiRelease silently
-    // no-op on a null handle.  Nothing caught it because the RAM-ring branch
-    // has never been flown — but it becomes live the moment a board ships
-    // without the MRAM part.  Keeping it unconditional also keeps the #398
-    // spi_wait/spi_hold instrumentation meaningful on both paths.
-    spi_mutex_ = xSemaphoreCreateMutex();
-    if (!spi_mutex_)
-    {
-        if (cfg.debug) ESP_LOGE(TAG, "Failed to create SPI mutex");
-        return false;
-    }
-
-    // Mutex to serialize ringPush callers and to block clearRing from
-    // running concurrently with an in-flight push (#74). Unconditionally
-    // created — parser + oc_loop can race on Core 1 regardless of ring
-    // backing, so RAM and MRAM paths both need it.
-    push_mutex_ = xSemaphoreCreateMutex();
-    if (!push_mutex_)
-    {
-        if (cfg.debug) ESP_LOGE(TAG, "Failed to create push mutex");
-        return false;
-    }
-
     rb_head = rb_tail = rb_count = 0;
     rb_overruns = rb_highwater = 0;
+    rb_interval_peak = 0;
     rb_drop_oldest_bytes = 0;
     rb_bad_sof_clears = 0;
     nand_bytes_written = 0;
@@ -173,6 +208,10 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     logging_active = false;
     start_logging_requested = false;
     end_flight_requested = false;
+    // #1228: a request raised while the logger was dead is stale by the time
+    // a retry succeeds; the OC's launch edge re-issues the whole lifecycle
+    // (prepare / begin flight / start), so drop it rather than act on half.
+    prepare_file_requested_ = false;
     page_buf_idx = 0;
     bytes_received = 0;
     frames_received = 0;
@@ -241,9 +280,7 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     if (!lfs_read_buffer || !lfs_prog_buffer || !lfs_lookahead_buffer)
     {
         if (cfg.debug) ESP_LOGE(TAG, "Failed to allocate LittleFS buffers");
-        free(lfs_read_buffer);
-        free(lfs_prog_buffer);
-        free(lfs_lookahead_buffer);
+        releaseLfsBuffers();
         return false;
     }
 
@@ -252,9 +289,7 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     if (!lfs_cfg)
     {
         if (cfg.debug) ESP_LOGE(TAG, "Failed to allocate LittleFS config");
-        free(lfs_read_buffer);
-        free(lfs_prog_buffer);
-        free(lfs_lookahead_buffer);
+        releaseLfsBuffers();
         return false;
     }
 
@@ -293,20 +328,14 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
         if (err)
         {
             if (cfg.debug) ESP_LOGE(TAG, "Format failed: %d", err);
-            free(lfs_read_buffer);
-            free(lfs_prog_buffer);
-            free(lfs_lookahead_buffer);
-            free(lfs_cfg);
+            releaseLfsBuffers();
             return false;
         }
         err = lfs_mount(&lfs, lfs_cfg);
         if (err)
         {
             if (cfg.debug) ESP_LOGE(TAG, "Mount after format failed: %d", err);
-            free(lfs_read_buffer);
-            free(lfs_prog_buffer);
-            free(lfs_lookahead_buffer);
-            free(lfs_cfg);
+            releaseLfsBuffers();
             return false;
         }
     }
@@ -324,20 +353,14 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
             if (err)
             {
                 ESP_LOGE(TAG, "Reformat failed: %d", err);
-                free(lfs_read_buffer);
-                free(lfs_prog_buffer);
-                free(lfs_lookahead_buffer);
-                free(lfs_cfg);
+                releaseLfsBuffers();
                 return false;
             }
             err = lfs_mount(&lfs, lfs_cfg);
             if (err)
             {
                 ESP_LOGE(TAG, "Mount after reformat failed: %d", err);
-                free(lfs_read_buffer);
-                free(lfs_prog_buffer);
-                free(lfs_lookahead_buffer);
-                free(lfs_cfg);
+                releaseLfsBuffers();
                 return false;
             }
             ESP_LOGI(TAG, "Filesystem reformatted successfully");
@@ -352,11 +375,18 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     if (cfg.debug) ESP_LOGI(TAG, "LittleFS mounted successfully");
 
     runStartupRecovery();
+    begun_ = true;
     return true;
 }
 
 bool TR_LogToFlash::enqueueFrame(const uint8_t* frame, size_t len)
 {
+    // #1228: a logger whose begin() failed (or is being retried) has nothing
+    // behind this call — refuse before touching the ring or its mutex.
+    if (!begun_)
+    {
+        return false;
+    }
     if (frame == nullptr || len == 0 || len > MAX_FRAME)
     {
         return false;
@@ -529,6 +559,12 @@ void TR_LogToFlash::endLogging()
 
 void TR_LogToFlash::service()
 {
+    // #1228: nothing to service on a logger that never came up — and a launch
+    // edge seen while dead must not open a session on an unmounted store.
+    if (!begun_)
+    {
+        return;
+    }
     // When the flush task is running (Core 0), service() is a no-op on Core 1.
     // The flush task loop handles openLogSession, flushRingToNand,
     // closeLogSession, and the staged-write staleness flush.
@@ -562,6 +598,7 @@ void TR_LogToFlash::getStats(TR_LogToFlashStats& out) const
     out.ring_size = ring_size_;
     out.ring_fill = rb_count;
     out.ring_highwater = rb_highwater;
+    out.ring_interval_peak = rb_interval_peak;   // #1235 item 6
     out.ring_overruns = rb_overruns;
     out.ring_drop_oldest_bytes = rb_drop_oldest_bytes;
     out.ring_bad_sof_clears = rb_bad_sof_clears;
@@ -597,6 +634,10 @@ void TR_LogToFlash::getStats(TR_LogToFlashStats& out) const
 
 void TR_LogToFlash::resetIntervalTimings()
 {
+    // #1235 item 6: the next window starts at the level the ring holds NOW —
+    // that is a fill the window genuinely observes, and zero would report an
+    // idle-but-full ring as empty until the next push.
+    rb_interval_peak = rb_count;
     write_max_us_ = 0;
     sync_max_us_ = 0;
     erase_max_us_ = 0;
@@ -863,6 +904,17 @@ void TR_LogToFlash::spiAcquire()
     spi_hold_start_us_ = now;
 }
 
+// #1228: every failure path in begin() used to free the LFS allocations
+// without nulling them — fine while begin() ran once per boot, a dangling
+// pointer the moment it can run again.
+void TR_LogToFlash::releaseLfsBuffers()
+{
+    free(lfs_read_buffer);      lfs_read_buffer      = nullptr;
+    free(lfs_prog_buffer);      lfs_prog_buffer      = nullptr;
+    free(lfs_lookahead_buffer); lfs_lookahead_buffer = nullptr;
+    free(lfs_cfg);              lfs_cfg              = nullptr;
+}
+
 void TR_LogToFlash::spiRelease()
 {
     if (!spi_mutex_) return;
@@ -882,9 +934,10 @@ bool TR_LogToFlash::parkSpiBusForReset(uint32_t timeout_ms)
 {
     if (!spi_mutex_)
     {
-        // begin() never got as far as creating it, which means begin()
-        // returned false and the flush task was never started. Nothing drives
-        // this bus, so there is nothing to park and the reset is already safe.
+        // begin() has never run: since #1228 the mutex is created on its first
+        // lines, so even a begin() that FAILED leaves one (and then parks it
+        // uncontended below — a failed logger is inert). Nothing drives this
+        // bus, so there is nothing to park and the reset is already safe.
         return true;
     }
     if (spi_park_owner_ != nullptr) return true;          // idempotent
@@ -1001,10 +1054,12 @@ bool TR_LogToFlash::mramProbe()
         return sr;
     };
 
+    spiAcquire();   // #1228: begin() can re-run with the parser task live
     sendCmd(MRAM_WREN);
     const uint8_t sr_set = readStatus();
     sendCmd(MRAM_WRDI);            // leave WEL clear — the safe resting state
     const uint8_t sr_clr = readStatus();
+    spiRelease();
 
     const bool ok = tr::mramProbeVerdict(sr_set, sr_clr);
     if (!ok)
@@ -1250,6 +1305,13 @@ bool TR_LogToFlash::ringPushLocked(const uint8_t* data, uint32_t len)
     if (new_count > rb_highwater)
     {
         rb_highwater = new_count;
+    }
+    // #1235 item 6: the per-window twin. Same unlocked read-modify-write as
+    // rb_highwater — only this path raises it, and the stats reader's reset
+    // racing one push can at worst lose that push's level at the window edge.
+    if (new_count > rb_interval_peak)
+    {
+        rb_interval_peak = new_count;
     }
     return true;
 }
@@ -1620,6 +1682,7 @@ bool TR_LogToFlash::nandReadBytesAt(uint32_t rowPageAddr, uint32_t column,
 
 bool TR_LogToFlash::nandInit()
 {
+    spiAcquire();   // #1228: begin() can re-run with the parser task live
     nandSetFeature(FEAT_PROT, 0x00);
 
     spi->beginTransaction(spi_nand);
@@ -1632,6 +1695,7 @@ bool TR_LogToFlash::nandInit()
     const uint8_t did = spi->transfer(0x00);
     csHigh(cfg.nand_cs);
     spi->endTransaction();
+    spiRelease();
 
     if (cfg.debug)
     {
@@ -2997,6 +3061,14 @@ void TR_LogToFlash::startFlushTask(uint8_t core, uint32_t stackSize, uint8_t pri
     if (flush_task_ != nullptr)
     {
         return;  // Already started
+    }
+    if (!begun_)
+    {
+        // #1228: draining a ring into a store that never mounted. The OC only
+        // calls this inside its logger-ok block; refuse loudly in case a
+        // caller ever does not.
+        ESP_LOGE(TAG, "startFlushTask() refused: begin() has not succeeded");
+        return;
     }
 
     flush_task_stop_ = false;

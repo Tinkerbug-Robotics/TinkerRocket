@@ -1,6 +1,25 @@
 """GNSS (GPS) sensor model.
 
-Provides ECEF position and velocity with Gaussian noise at 25 Hz.
+Provides ECEF position and velocity with Gaussian noise at 18.18 Hz.
+
+Velocity noise and rate are MEASURED, not assumed (#1281). Stationary spans of
+the three real captures in ``tests/test_data/`` (flight_20260615_162929 /
+_165000 / _171305), distinct receiver epochs only:
+
+    rate         18.18 Hz (55.0 ms)   — every log, and five more in firmware
+    velocity     NE 0.378 m/s   D 0.568 m/s   (pooled, 1 sigma)
+    position     NE 2.73 m      D 4.11 m
+
+``flight_20260615_170318.bin`` is a synthetic fixture (vel_n/vel_e identically
+zero, num_sats pinned at 12, pdop pinned at 1.5) and is excluded.
+
+The rate matters to anything that DIFFERENCES this velocity. #1281 was filed on
+the premise that the sim's GNSS velocity was too clean to differentiate, which
+the measurements above do not support: the sim already carried 0.5 m/s of NE
+velocity noise at 25 Hz, i.e. sqrt(2)*0.5/0.04 = 17.7 m/s^2 of differentiated
+noise against the real receiver's sqrt(2)*0.378/0.055 = 9.7. The sim OVERSTATED
+it by 1.8x. The position figures are recorded here but not applied — the D axis
+(sim 6.0 m vs measured 4.11 m) is a separate question from this issue.
 Uses a reference point (launch site LLA) to convert ENU simulation
 coordinates to ECEF for the EKF.
 
@@ -23,9 +42,9 @@ class GNSSModel:
     def __init__(self,
                  pos_noise_ne_m: float = 3.0,
                  pos_noise_d_m: float = 6.0,
-                 vel_noise_ne_mps: float = 0.5,
-                 vel_noise_d_mps: float = 1.0,
-                 rate_hz: float = 25.0,
+                 vel_noise_ne_mps: float = 0.4,   # #1281: measured 0.378
+                 vel_noise_d_mps: float = 0.6,    # #1281: measured 0.568
+                 rate_hz: float = 18.18,          # #1281: measured 55.0 ms
                  ref_lat_deg: float = 38.0,
                  ref_lon_deg: float = -122.0,
                  ref_alt_m: float = 0.0,

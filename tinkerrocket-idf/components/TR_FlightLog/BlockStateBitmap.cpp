@@ -79,8 +79,14 @@ bool BlockStateBitmap::findContiguousFree(uint32_t n_blocks,
 }
 
 size_t BlockStateBitmap::countInState(BlockState state) const {
+    return countInStateRange(state, 0, block_count_);
+}
+
+size_t BlockStateBitmap::countInStateRange(BlockState state,
+                                           uint32_t start, uint32_t end) const {
+    if (end > block_count_) end = block_count_;
     size_t count = 0;
-    for (uint32_t b = 0; b < block_count_; ++b) {
+    for (uint32_t b = start; b < end; ++b) {
         if (get(b) == state) ++count;
     }
     return count;

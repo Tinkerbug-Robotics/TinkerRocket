@@ -380,6 +380,39 @@ they armed at burnout + 2 s rather than during boost. If boost-phase arming is
 wanted, the hold has to become a leaky accumulator rather than an unbroken run
 — the pattern `MainDeployGate`'s stuck-port check already uses.
 
+**Correction, 2026-09-11 — that diagnosis was wrong, and the hold has been
+relaxed.** A per-sample census of the same 27 logs shows the dips are real but
+beside the point: on the L2 nose-cone log they are nine ticks in the whole >3 g
+phase, each 1-7 raw samples (0.3-1.9 ms) wide. What the 1 s hold could not
+survive was the *thrust*. The specific force of these motors stays above 3 g for
+only 0.4-1.5 s after ignition on 25 of 27 flights, so a reboot at T+0.5 s had
+under a second of boost left; the 2 of 27 the arm carried are exactly the two
+flights (both RIM-66 65 mm) whose >3 g phase lasts past T+1.5 s, and a leaky
+accumulator at the same 1 s latch carries the same two. Owner's ruling,
+2026-09-11: the boost arm is the launch detector's own accel-only fallback,
+3 g for 250 ms (`LAUNCH_ACCEL_FALLBACK_*`, pinned by `static_assert`). Measured
+through the real gate at five boost-phase reboot instants:
+
+| Reboot at | 1 s hold: boost carried, open med / max | 250 ms hold: boost carried, open med / max |
+|---|---|---|
+| T+0.25 s | 5 / 27, 2.94 / 7.42 s | 26 / 27, 0.25 / 2.31 s |
+| T+0.5 s (the incident) | 2 / 27, 3.15 / 10.96 s | 20 / 27, 0.25 / 4.82 s |
+| T+0.75 s | 2 / 27, 2.90 / 10.71 s | 13 / 27, 2.00 / 4.78 s |
+| T+1.0 s | 2 / 27, 2.65 / 10.46 s | 7 / 27, 2.05 / 6.67 s |
+| T+1.5 s | 0 / 27, 3.56 / 9.96 s | 2 / 27, 3.52 / 9.96 s |
+
+The gate opens on 27 / 27 at every instant with either hold; the other arms are
+untouched. With the 1 s hold one T+0.5 s reboot (Eagle Claw, 2026-08-29, apogee
+T+3.1 s) stayed locked until T+7.4 s, past apogee; with 250 ms no corpus flight
+is locked past apogee. The cost is in the ground-handling audit: the boost arm
+is now exactly as marginal as the launch fallback — a quarter second of
+sustained swing clears it, and a hard upward throw of a light airframe (about
+5 m/s) now can, where 1 s (20 m/s) made that impossible. Knocks and carrying
+remain oscillatory and cannot accumulate. The 2 g / 50 ms baro-corroborated
+launch path was deliberately not adopted: a brisk lift satisfies it, and a false
+Open on a restored flight fires a due channel one second later, where a false
+INFLIGHT arms nothing.
+
 **The dead-barometer cost is now measured, not reasoned.** With no barometer,
 a mid-descent reboot fails to deploy on **7 of 17 flights**, and the ones that
 succeed wait ~31 s for GNSS. The failures are all short flights (14-22 s total)

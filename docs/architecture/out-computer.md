@@ -197,8 +197,23 @@ ingest stream and a storage medium that occasionally stops to erase a block.
 **Once the vehicle reports `LANDED`, no new flight log can be opened until the OC
 reboots.** Post-flight ground handling can re-trip the FC's launch detect, and without
 the lockout that opens a junk session full of ground data that only closes at power-off
-(#317). A simulator re-arm clears it, since the FC leaving `LANDED` is impossible in a
-real flight.
+(#317). The gate covers both automatic session opens: the `PRELAUNCH` pre-create and
+the `NSF_LAUNCH` auto-start. Only a demonstrable simulator re-arm clears it — a frame
+carrying `NSF_SIM_ACTIVE`, or the end of a `LANDED` that was itself a sim flight. The
+FC leaving `LANDED` on its own is not enough: its `post_flight_lockout` is plain RAM, so
+an FC-only reset walks it back to `PRELAUNCH` with the OC still up, and the OC holds the
+lockout through that (#1235).
+
+**A NAND that fails to mount at power-on is retried, on the ground only (#1228).**
+`initPeripherals()` brings the radio and the FC link up around a dead logger (#1132),
+so the storage row goes red instead of the whole downlink going dark — and the loop
+then re-enters just the logging half, three times over the next ~100 s. The retry is
+deferred, not spent, while the rocket is `INFLIGHT` (it re-enters NAND bring-up, which
+stalls the loop for seconds), after `LANDED` (the lockout above would refuse the
+recovered logger a session anyway) and during an FC OTA relay. A chip still dead after
+three tries stays dead until the next power cycle, which retries from scratch. The
+schedule is `logger_retry_policy.h`; the storage row goes green again the moment a
+retry succeeds.
 
 ## Radios
 

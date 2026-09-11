@@ -72,6 +72,9 @@ static inline std::string itos(int v)
 #include "cmd_queue_session_policy.h" // #1105: retire one-shots when the FC reports a boot
 #include "cmd_queue_admit_policy.h"   // #1116: two slots held back for OTA_FINISH/ABORT
 #include "inflight_refusal_policy.h"  // #1162: INFLIGHT gates hold through a silent FC
+#include "logger_retry_policy.h"      // #1228: retrying a flight logger that failed to come up
+#include "storage_health_policy.h"    // #281/#278, #1235 items 3/4: the storage go/no-go verdict
+#include "landed_lockout_policy.h"    // #317, #1235 item 5: no new log session after LANDED
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -201,41 +204,31 @@ static int s3PsramCapMb()
 // it visible on the pre-launch go/no-go and the live downlink instead.
 static SensorHealthState ocStorageHealth()
 {
-    // #566: an uninitialized flight log is the MOST severe storage state, not
-    // an inapplicable one. flightlog.begin() failing at boot (corrupt index /
-    // metadata read error) is deliberately non-fatal, so the OC runs — but
-    // flightlogWriteSink() then refuses every frame and the #271 drop path
-    // discards ALL flight data. Returning SH_NA here hid exactly the silent
-    // loss this fold-in exists to surface: the app hides the Storage row on
-    // NA and excludes it from the go/no-go, so the operator saw a green
-    // board. There is no logger-disabled OC build (begin() is unconditional),
-    // so NA is never legitimate once boot completes — report BAD and let the
-    // scorecard go red.
-    if (!flightlog.isInitialized()) return SH_BAD;
-    // #1127: a failed recovery scan now LEAVES the log surface initialized so
-    // the stored flights can be downloaded and deleted — but no new flight can
-    // be logged this boot, which is exactly the silent loss the note above
-    // exists to surface. Keep it red.
-    if (flightlog.recoveryFailed()) return SH_BAD;
+    // The decision table — and the history behind each of its limits (#566,
+    // #1127, #281, #826, #1235 items 3 and 4) — lives in storage_health_policy.h
+    // so it is host-tested; this function only gathers the inputs.
+    StorageHealthPolicy::Inputs in;
+    in.flightlog_initialized = flightlog.isInitialized();
+    in.recovery_failed       = flightlog.recoveryFailed();
     TR_LogToFlashStats s = {};
     logger.getStats(s);
-    const uint32_t free_blocks = flightlog.bitmap().countInState(tr_flightlog::BLOCK_FREE);
-    const uint32_t prealloc    = flightlog.config().prealloc_blocks;
-    SensorHealthState st = shStorageState(free_blocks, prealloc, s.nand_prog_fail);
-    // The flight index is a second, independent capacity limit (#281): once it's
-    // full, finalize can't record the flight even with free blocks. Fold it in.
-    const size_t used = flightlog.index().size();
-    const size_t cap  = tr_flightlog::FlightIndex::MAX_ENTRIES;
-    if (used >= cap) st = SH_BAD;
-    else if (used + 4 >= cap && st == SH_OK) st = SH_DEGRADED;
-    // #826: a board configured for an MRAM that did not answer the boot probe.
-    // DEGRADED rather than BAD — frames still reach the NAND, so nothing is
-    // lost, but the ring shrank to internal RAM and brownout recovery is gone
-    // for the session. Folded in here for the same reason as #566 above: this
-    // is precisely the state that used to read green while the part was dead.
-    // Never fires on a board that correctly has no MRAM (MRAM_CS < 0).
-    if (logger.mramProbeFailed() && st == SH_OK) st = SH_DEGRADED;
-    return st;
+    // #1235 item 3: the FLIGHT-REGION free count. bitmap().countInState(FREE)
+    // also counts the always-free LFS pre-region and metadata blocks — 36 on
+    // every shipping geometry — and against prealloc_blocks that read OK or
+    // DEGRADED when the region had less room than the thresholds intend.
+    in.region_free_blocks    = flightlog.regionFreeBlocks();
+    in.prealloc_blocks       = flightlog.config().prealloc_blocks;
+    in.nand_prog_fail        = s.nand_prog_fail;
+    in.index_used            = flightlog.index().size();
+    in.index_capacity        = tr_flightlog::FlightIndex::MAX_ENTRIES;
+    in.mram_probe_failed     = logger.mramProbeFailed();
+    // #1235 item 4: V9/V10's PSRAM ring falling back to the 64 KB internal
+    // ring. The same accessor initPeripherals() already logs from — but that
+    // line is on a console light sleep silences; this reaches the scorecard.
+    in.psram_ring_expected   = config::RING_IN_PSRAM;
+    in.mram_enabled          = logger.isMramEnabled();
+    in.ring_in_psram         = logger.isRingInPsram();
+    return StorageHealthPolicy::verdict(in);
 }
 
 // Stage 3b (issue #50): BLE file-ops re-backed on TR_FlightLog.
@@ -427,7 +420,7 @@ static void flightlogFlushTaskHook(void* /*ctx*/)
                          "to arm; %u free blocks remain",
                          (unsigned)evicted_now,
                          (unsigned)flightlog.lastEvictedFlightId(),
-                         (unsigned)flightlog.bitmap().countInState(tr_flightlog::BLOCK_FREE));
+                         (unsigned)flightlog.regionFreeBlocks());   // #1235 item 3: region, not die
             }
             ESP_LOGI("FLIGHTLOG",
                      "prepareFlight OK (deferred): id=%u, range=[%u..%u), pages=%u",
@@ -841,6 +834,16 @@ static uint8_t lora_cr         = config::LORA_CR;
 static int8_t  lora_tx_power   = config::LORA_TX_POWER_DBM;
 
 static RocketState latest_rocket_state = INITIALIZATION;
+// #317 / #1235 item 5: once the vehicle has reported LANDED, no automatic
+// flight-log session open (the PRELAUNCH pre-create in processFrame, the
+// NSF_LAUNCH auto-start in loop_oc) runs again until the OC reboots or the FC
+// demonstrably re-arms for a simulation. Stepped in processFrame on every
+// NonSensorData frame, right after latest_rocket_state is published, so the
+// PRELAUNCH hook a few lines below it always sees the verdict for THIS frame;
+// loop_oc reads `.locked` the way it reads latest_rocket_state (a single
+// value written on the parse task, read here). Rule and history:
+// landed_lockout_policy.h.
+static LandedLockout::State oc_landed_lockout;
 // #825: rail state retained across resets (RTC memory survives everything
 // except a true power-on). Updated at every rail toggle; deliberate_off is
 // set immediately before the #9 power-off esp_restart() so THAT reboot — the
@@ -1135,6 +1138,16 @@ static bool camera_state_known = true;              // Power rail state — star
 // engaged" — a level test would clear the very request the operator just made.
 static bool fc_camera_engaged_prev = false;
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
+// #1228: the flight-logger half of initPeripherals() has a life of its own.
+// peripherals_initialized says the radio and the FC link are up; oc_logger_ok
+// says TR_LogToFlash::begin() succeeded. Since #1132 the first no longer
+// implies the second, and since #1228 a second initPeripherals() call with the
+// first true and the second false re-enters ONLY the logging half. The two
+// stamps are loop_oc's bookkeeping for LoggerRetryPolicy: retries taken, and
+// the millis() before which the next one is not due.
+static bool     oc_logger_ok            = false;
+static uint8_t  oc_logger_retries_spent = 0;
+static uint32_t oc_logger_retry_due_ms  = 0;
 
 // ==========================================================================
 // SECTION: LoRa frequency lock and channel hopping
@@ -2750,7 +2763,6 @@ static uint64_t prev_i2s_dma_bytes = 0;
 static uint32_t prev_ring_overruns = 0;
 static uint32_t prev_ring_drop_oldest_bytes = 0;
 static uint32_t prev_ring_bad_sof_clears = 0;
-static uint32_t interval_ring_fill_peak = 0;
 
 static inline size_t rxLen()
 {
@@ -4346,6 +4358,11 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 (float)last_query_cfg.ism6_rot_z_cdeg / 100.0f);
             sensor_converter.configureMMC5983MARotationZ(
                 (float)last_query_cfg.mmc_rot_z_cdeg / 100.0f);
+            // #1312: scale the IIS2MDC-named stream as the chip the FC says
+            // it drives (format v6+); an older FC is a big-board IIS2MDC.
+            sensor_converter.configureMagType(
+                last_query_cfg.format_version >= 6 ? last_query_cfg.mag_type
+                                                   : MAG_TYPE_IIS2MDC);
             // Apply high-g bias from FlightComputer calibration (format v2+)
             if (last_query_cfg.format_version >= 2)
             {
@@ -4667,6 +4684,10 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 inflight_entry_ms = latest_non_sensor_rx_ms;
             }
             latest_rocket_state = (RocketState)latest_non_sensor.rocket_state;
+            // #317 / #1235 item 5: the post-LANDED lockout follows the frame
+            // stream in arrival order. Both inputs ride this frame.
+            LandedLockout::step(oc_landed_lockout, latest_rocket_state,
+                                nsFlagSet(latest_non_sensor.flags, NSF_SIM_ACTIVE));
             ocPhoneIoBlindWindowCheck();   // #917: first frame after a pause
             // Update the flight-freeze sticky flag whenever the state
             // changes (issue #71).  Safe to call on every frame — the
@@ -4703,10 +4724,25 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 pressure_alt_rate_mps = 0.0f;
                 ground_pressure_set = false;  // Re-acquire ground pressure for new flight
 
-                // Pre-create log file now so there's no NAND stall at launch
-                logger.prepareLogFile();
-                flightlogBeginFlight();
-                ESP_LOGI("OC", "PRELAUNCH - pre-creating log file");
+                // Pre-create log file now so there's no NAND stall at launch.
+                //
+                // #1235 item 5: under the same #317 lockout as the NSF_LAUNCH
+                // auto-start in loop_oc. This hook had none, so an FC-only
+                // reset after a real landing (its post_flight_lockout is
+                // plain RAM) walked READY -> PRELAUNCH and opened a session
+                // here — and flightlogBeginFlight() can #315-auto-evict the
+                // oldest stored flight to make room for it.
+                if (!oc_landed_lockout.locked)
+                {
+                    logger.prepareLogFile();
+                    flightlogBeginFlight();
+                    ESP_LOGI("OC", "PRELAUNCH - pre-creating log file");
+                }
+                else
+                {
+                    ESP_LOGW("OC", "PRELAUNCH after LANDED: NOT opening a log session "
+                                   "(#317 lockout — reboot the OC to fly again)");
+                }
             }
             // KF-filtered altitude rate from FlightComputer (or sim equivalent)
             pressure_alt_rate_mps = (float)latest_non_sensor.baro_alt_rate_dmps * 0.1f;
@@ -7587,10 +7623,6 @@ static void printStats()
                                ts_hour, ts_minute, ts_second);
     }
 
-    if (s.ring_fill > interval_ring_fill_peak)
-    {
-        interval_ring_fill_peak = s.ring_fill;
-    }
     const uint64_t rx_delta = s.bytes_received - prev_bytes_rx;
     const uint64_t nand_delta = s.bytes_written_nand - prev_bytes_nand;
     const uint64_t i2s_dma_delta = i2s_dma_bytes - prev_i2s_dma_bytes;
@@ -7687,7 +7719,7 @@ static void printStats()
                   (unsigned long)s.ring_size,
                   (unsigned long)s.ring_highwater);
     ESP_LOGI("OC", "RING interval peak/overrun/drop_oldest_bytes/bad_sof=%lu/%lu/%lu/%lu (bad_sof_total=%lu)",
-                  (unsigned long)interval_ring_fill_peak,
+                  (unsigned long)s.ring_interval_peak,   // #1235 item 6: a real high-water
                   (unsigned long)ring_overrun_delta,
                   (unsigned long)ring_drop_oldest_delta,
                   (unsigned long)ring_bad_sof_delta,
@@ -7871,8 +7903,8 @@ static void printStats()
              (unsigned long)s.flush_iter_max_us,
              (unsigned long)s.syncs_performed,
              (unsigned long)s.nand_erase_ops,
-             (unsigned long)interval_ring_fill_peak,
-             (unsigned long)s.known_bad_blocks,
+             (unsigned long)s.ring_interval_peak,   // #1235 item 6: tracked in ringPush like rx_peak
+             (unsigned long)s.known_bad_blocks,     //   is in rxPush — not a 1 Hz sample of ring_fill
              (unsigned long)s.bad_block_skips,
              (unsigned long)d_rx_ovf,
              (unsigned long)cur_rx_peak,
@@ -8110,8 +8142,6 @@ static void printStats()
         ESP_LOGI("OC", "Stack HWM: %u bytes free",
                  (unsigned)(hwm * sizeof(StackType_t)));
     }
-
-    interval_ring_fill_peak = s.ring_fill;
 }
 
 // ==========================================================================
@@ -8221,14 +8251,36 @@ static void loadCachedPeripheralConfigFromNvs()
              cfg_pyro_enabled[3], cfg_pyro_trigger_mode[3], (double)cfg_pyro_trigger_value[3]);
 }
 
-void initPeripherals()
+// #1228: the logging half of initPeripherals(), on its own so it can be
+// retried without re-running the radio and link half.
+//
+// #1132 made a dead logger non-fatal — the LoRa bring-up, the I2S slave RX
+// channel and the deferred I2C join now run around it — and in doing so it set
+// peripherals_initialized on that path, which is the flag that had made a later
+// initPeripherals() call re-run everything, logger.begin() included. That
+// retry was mostly unreachable (a cmd-8 power-off is an esp_restart(), so the
+// next power-on is a fresh boot anyway, and it is refused while INFLIGHT), but
+// a NAND that fails once on a marginal rail and mounts on the second try is a
+// plausible case. So the logging half gets its own retry: initPeripherals()
+// re-enters this function alone when peripherals_initialized && !oc_logger_ok,
+// and loop_oc decides when (logger_retry_policy.h).
+//
+// Everything a live logger depends on lives here: the SPI bus, the TR_LogToFlash
+// config and begin(), and the block that needs a mounted store — flightlog,
+// the MRAM replay, the snapshot re-seed and the flush task. Returns whether
+// logger.begin() succeeded; oc_logger_ok mirrors it.
+static bool initLoggingSubsystem()
 {
-    if (peripherals_initialized) return;
-
-    ESP_LOGI("PWR", "Initializing peripherals...");
-
-    SPI.begin(config::SPI_SCK, config::SPI_MISO, config::SPI_MOSI);
-    delay(20);
+    // The bus is the logger's alone on this board (the V7 SPI LoRa has its own
+    // host), so it belongs here — begun once: compat's SPIClass::begin() just
+    // logs an already-initialised error on a second call.
+    static bool spi_bus_begun = false;
+    if (!spi_bus_begun)
+    {
+        SPI.begin(config::SPI_SCK, config::SPI_MISO, config::SPI_MOSI);
+        delay(20);
+        spi_bus_begun = true;
+    }
 
     TR_LogToFlashConfig log_cfg = {};
     log_cfg.nand_cs = config::NAND_CS;
@@ -8263,7 +8315,31 @@ void initPeripherals()
     log_cfg.flush_task_hook = flightlogFlushTaskHook;
     log_cfg.dirty_marker_addr = config::MRAM_DIRTY_MARKER_ADDR;  // #274: sink-mode dirty marker
 
+#if defined(TR_OC_BENCH_FAIL_LOGGER_BEGIN) && (TR_OC_BENCH_FAIL_LOGGER_BEGIN > 0)
+    // Bench fault injection — main/CMakeLists.txt; only in a -bench image. The
+    // first N calls are reported as failed WITHOUT calling begin(), so the
+    // retry that follows is the board's first real begin(). What this proves
+    // on hardware is the OC's plumbing (guard, schedule, INFLIGHT deferral,
+    // storage health recovering); what it does not is TR_LogToFlash's own
+    // re-entrancy after a genuine failure, which test_log_to_flash_begin_retry
+    // covers on the host.
+    static uint8_t bench_fail_logger_begin_left = TR_OC_BENCH_FAIL_LOGGER_BEGIN;
+    bool logger_ok = false;
+    if (bench_fail_logger_begin_left > 0)
+    {
+        bench_fail_logger_begin_left--;
+        ESP_LOGE("PWR", "BENCH FAULT (TR_OC_BENCH_FAIL_LOGGER_BEGIN): reporting "
+                        "logger.begin() as FAILED without calling it (%u more to go)",
+                 (unsigned)bench_fail_logger_begin_left);
+    }
+    else
+    {
+        logger_ok = logger.begin(SPI, log_cfg);
+    }
+#else
     const bool logger_ok = logger.begin(SPI, log_cfg);
+#endif
+    oc_logger_ok = logger_ok;
     if (!logger_ok)
     {
         // Non-obvious on the RAM-ring path: begin() also fails when the 64 KB
@@ -8283,9 +8359,33 @@ void initPeripherals()
         // runs, matching how the adjacent flightlog.begin() failure is already
         // handled ("deliberately non-fatal (BLE/downlink still run so the
         // fault is reachable)").
-        ESP_LOGE("PWR", "TR_LogToFlash begin failed — flight logging is DEAD "
-                        "this boot, but LoRa, the I2S link and the I2C command "
-                        "path still come up (#1132)");
+        //
+        // #1228: and it IS retried now — initPeripherals()'s guard re-enters
+        // this function alone, on loop_oc's schedule. The next attempt is
+        // stamped here so the schedule has one owner: an initial failure and
+        // a failed retry both land on this line.
+        const uint32_t retry_in_ms =
+            LoggerRetryPolicy::delayBeforeRetryMs(oc_logger_retries_spent);
+        if (retry_in_ms > 0)
+        {
+            oc_logger_retry_due_ms = millis() + retry_in_ms;
+            ESP_LOGE("PWR", "TR_LogToFlash begin failed — flight logging is DEAD "
+                            "until a retry succeeds; LoRa, the I2S link and the "
+                            "I2C command path still come up (#1132). Retry %u of "
+                            "%u in %lu s, deferred while a flight is in progress "
+                            "(#1228)",
+                     (unsigned)(oc_logger_retries_spent + 1),
+                     (unsigned)LoggerRetryPolicy::kMaxRetries,
+                     (unsigned long)(retry_in_ms / 1000U));
+        }
+        else
+        {
+            ESP_LOGE("PWR", "TR_LogToFlash begin failed on the last retry (%u of "
+                            "%u) — flight logging stays DEAD until the next power "
+                            "cycle; storage health = BAD (#1228)",
+                     (unsigned)oc_logger_retries_spent,
+                     (unsigned)LoggerRetryPolicy::kMaxRetries);
+        }
     }
 
     // #1132: everything in this block needs a live logger — the SPI bus and
@@ -8726,6 +8826,67 @@ void initPeripherals()
                           recovery.filename);
         }
     }
+
+    return logger_ok;
+}
+
+void initPeripherals()
+{
+    if (peripherals_initialized)
+    {
+        if (oc_logger_ok) return;
+
+        // #1228: the radio and the FC link are up; only the logger is not.
+        // Re-enter the logging half alone. Refused while a flight is in
+        // progress — this re-enters NAND bring-up, which can hold loop_oc (the
+        // downlink) for seconds — with the same INFLIGHT policy as the cmd-8
+        // power-off, silent-FC hold included. loop_oc already defers before
+        // calling; this is the guarantee for any caller.
+        const InflightHold hold = inflightHold();
+        if (hold.refuse)
+        {
+            ESP_LOGW("PWR", "#1228: logger retry REFUSED: rocket is INFLIGHT "
+                            "(FC frame %lu ms ago, silent-FC hold %lu s left)",
+                     (unsigned long)hold.fc_age_ms,
+                     (unsigned long)(hold.hold_left_ms / 1000U));
+            return;
+        }
+        if (oc_logger_retries_spent >= LoggerRetryPolicy::kMaxRetries)
+        {
+            ESP_LOGW("PWR", "#1228: logger retry budget (%u) already spent — "
+                            "dead until the next power cycle",
+                     (unsigned)LoggerRetryPolicy::kMaxRetries);
+            return;
+        }
+        oc_logger_retries_spent++;
+        ESP_LOGW("PWR", "#1228: retrying the flight logger (retry %u of %u); the "
+                        "radio and the FC link are up and are not touched",
+                 (unsigned)oc_logger_retries_spent,
+                 (unsigned)LoggerRetryPolicy::kMaxRetries);
+        const uint32_t t0_ms = millis();
+        const bool ok = initLoggingSubsystem();
+        const uint32_t took_ms = millis() - t0_ms;
+        if (ok)
+        {
+            const SensorHealthState sh = ocStorageHealth();
+            ESP_LOGW("PWR", "#1228: flight logger RECOVERED on retry %u after %lu ms "
+                            "— storage health %s",
+                     (unsigned)oc_logger_retries_spent, (unsigned long)took_ms,
+                     sh == SH_OK       ? "OK" :
+                     sh == SH_DEGRADED ? "DEGRADED" :
+                     sh == SH_BAD      ? "BAD" : "N/A");
+        }
+        else
+        {
+            ESP_LOGE("PWR", "#1228: logger retry %u failed after %lu ms",
+                     (unsigned)oc_logger_retries_spent, (unsigned long)took_ms);
+        }
+        return;
+    }
+
+    ESP_LOGI("PWR", "Initializing peripherals...");
+
+    initLoggingSubsystem();
 
     vTaskDelay(1);  // feed watchdog after NAND init
 
@@ -9830,21 +9991,17 @@ static void loop_oc()
             // flight log until a reboot. Post-flight ground handling can re-trip
             // the FC launch-detect and would otherwise open a bogus session that
             // only closes on power-off (-> a junk recovered_*.bin full of ground
-            // data). Reset by an OC reboot, or by a sim re-arm — the FC leaving
-            // LANDED, which is impossible in a real flight (terminal lockout).
-            static bool oc_landed_lockout = false;
+            // data).
+            //
+            // #1235 item 5: the lockout is file-scope now (oc_landed_lockout,
+            // stepped in processFrame) so the PRELAUNCH pre-create is under the
+            // same gate, and it no longer clears on ANY departure from LANDED —
+            // "the FC only leaves LANDED on a sim re-arm" was wrong, because an
+            // FC-only reset clears its RAM lockout and walks back to PRELAUNCH
+            // with the OC still up. It clears only on a demonstrable sim re-arm;
+            // landed_lockout_policy.h has the rule. prev_rs_lockout stays: the
+            // #1176 token writes below key on its edges.
             static RocketState prev_rs_lockout = INITIALIZATION;
-            if (latest_rocket_state == LANDED)
-            {
-                oc_landed_lockout = true;
-            }
-            else if (prev_rs_lockout == LANDED)
-            {
-                // #317 sim re-arm: the FC only leaves LANDED on a deliberate new
-                // sim run (real flight is terminal), so clear the lockout to match
-                // the FC's sim-start re-arm and let the new sim flight log.
-                oc_landed_lockout = false;
-            }
             // ── #1176 flight-token write sites ──────────────────────────
             // All on loop_oc, never in the I2S parser task or an ISR: the
             // measured core-1 stall that moved the flightlog bitmap off NVS
@@ -9953,7 +10110,7 @@ static void loop_oc()
             prev_rs_lockout = latest_rocket_state;
             const bool ns_launch = latest_non_sensor_valid &&
                                    nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
-            if (ns_launch && !prev_ns_launch && !oc_landed_lockout)
+            if (ns_launch && !prev_ns_launch && !oc_landed_lockout.locked)
             {
                 // Mirror the cmd 23 lifecycle so a launch detected without a
                 // prior PRELAUNCH transition still gets a flightlog flight
@@ -10141,6 +10298,51 @@ static void loop_oc()
             i2s_stream.end();          // drop whatever half-state is there
             ocBeginSlaveRxLocked("retry");
             xSemaphoreGive(oc_i2s_mutex);
+        }
+
+        // #1228: a flight logger that failed to come up is retried from here,
+        // on LoggerRetryPolicy's schedule — three attempts over ~100 s,
+        // deferred (not spent) while a flight is in progress, after LANDED
+        // (the #317 lockout would refuse the recovered logger a session this
+        // boot anyway) and during an FC OTA relay. initPeripherals() re-enters
+        // only the logging half and holds its own INFLIGHT refusal; this block
+        // decides WHEN, so the stall of seconds a NAND bring-up costs lands
+        // where the cmd-8 power-on already puts one.
+        if (peripherals_initialized && !oc_logger_ok)
+        {
+            const bool flight_hold = inflightHold().refuse ||
+                                     latest_rocket_state == LANDED;
+            const bool ota_relay   = oc_ota_tx_mode || oc_ota_await_flip;
+            // Logged once per REASON, not once per pass: a flight that lands
+            // with the retry still deferred moves from "flight in progress"
+            // to "LANDED", and the console should say so.
+            static const char* deferral_logged = nullptr;
+            switch (LoggerRetryPolicy::decide(oc_logger_ok, oc_logger_retries_spent,
+                                              millis(), oc_logger_retry_due_ms,
+                                              flight_hold, ota_relay))
+            {
+                case LoggerRetryPolicy::Verdict::Retry:
+                    deferral_logged = nullptr;
+                    vTaskDelay(1);  // feed watchdog before long init
+                    initPeripherals();
+                    break;
+                case LoggerRetryPolicy::Verdict::Deferred:
+                {
+                    const char* reason =
+                        ota_relay ? "FC OTA relay in progress" :
+                        latest_rocket_state == LANDED
+                            ? "LANDED, no new flight log this boot (#317)"
+                            : "flight in progress";
+                    if (reason != deferral_logged)
+                    {
+                        deferral_logged = reason;
+                        ESP_LOGW("PWR", "#1228: logger retry due but deferred: %s", reason);
+                    }
+                    break;
+                }
+                default:   // Idle, Wait, Exhausted: nothing to do this pass
+                    break;
+            }
         }
     }
 

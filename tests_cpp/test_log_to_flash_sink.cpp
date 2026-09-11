@@ -426,3 +426,55 @@ TEST_P(LogToFlashSink, EndLoggingIsStillIdempotentFromIdle)
     pumpFlushTask();
     EXPECT_FALSE(lf_.isLoggingActive());
 }
+
+// ─── #1235 item 6: ring_peak is a high-water, not a sample ─────────────────
+//
+// The OC's "ring_peak=" was max(last second's ring_fill, this second's), taken
+// inside printStats — a 1 Hz snapshot that cannot see an excursion the flush
+// task drains between two stats calls, which is the only kind a NAND stall
+// produces.  The peak now rides ringPush like rx_peak rides rxPush.
+
+TEST_P(LogToFlashSink, RingIntervalPeakSurvivesTheDrainThatASampleWouldMiss)
+{
+    openAndActivateViaTask();
+    ASSERT_EQ(stats().ring_fill, 0u);
+
+    // Four full pages and a remainder: the excursion, then the drain.
+    const uint32_t pushed = 4 * chunk() + 500;
+    frames_.push(lf_, pushed);
+    const uint32_t excursion = stats().ring_fill;
+    ASSERT_EQ(excursion, pushed);
+
+    pumpFlushTask();   // the flush task drains the full pages
+
+    const TR_LogToFlashStats s = stats();
+    ASSERT_LT(s.ring_fill, excursion) << "the drain did not run; nothing to observe";
+    // A sample taken now (the old code) reads the post-drain fill.
+    EXPECT_EQ(s.ring_interval_peak, excursion);
+    EXPECT_EQ(s.ring_highwater, excursion);
+}
+
+TEST_P(LogToFlashSink, RingIntervalPeakResetsToTheCurrentFillNotZero)
+{
+    openAndActivateViaTask();
+    frames_.push(lf_, 3 * chunk() + 300);
+    const uint32_t excursion = stats().ring_fill;
+    pumpFlushTask();
+    const uint32_t resting = stats().ring_fill;
+    ASSERT_LT(resting, excursion);
+
+    lf_.resetIntervalTimings();   // printStats does this after every window
+
+    TR_LogToFlashStats s = stats();
+    // The new window starts at the level the ring holds — an idle-but-full
+    // ring must not read as empty until the next push.
+    EXPECT_EQ(s.ring_interval_peak, resting);
+    // The boot-long high-water is a different statistic and is untouched.
+    EXPECT_EQ(s.ring_highwater, excursion);
+
+    // The next push raises the window's peak from there.
+    frames_.push(lf_, kNominalFrame);
+    s = stats();
+    EXPECT_EQ(s.ring_interval_peak, resting + kNominalFrame);
+    EXPECT_EQ(s.ring_highwater, excursion);
+}

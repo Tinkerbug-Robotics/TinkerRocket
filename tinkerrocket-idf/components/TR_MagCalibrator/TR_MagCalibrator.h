@@ -26,10 +26,13 @@
 // center cell is unreachable for a unit vector, leaving 26 wedges; a
 // well-tumbled capture lights up ≥ 18 of them (issue #96 gate).
 //
-// Units: samples come in as raw int16 LSB counts (IIS2MDC: 0.15 µT/LSB).
-// The fit is computed in raw counts and converted to µT only for the
-// review/reject decisions.  This keeps the offset programmable directly
-// into IIS2MDC OFFSET_X/Y/Z without scaling round-trips.
+// Units: samples come in as raw int16 LSB counts of whichever chip feeds
+// addSample() — IIS2MDC 0.15 µT/LSB by default, the mini's QMC5883P
+// 100/3750 via setCountScale() (#1312).  The fit is computed in raw counts
+// and converted to µT only for the review/reject decisions and telemetry.
+// This keeps the offset programmable directly into the chip (IIS2MDC
+// OFFSET_X/Y/Z, or the QMC5883P driver's software offset) without scaling
+// round-trips.
 
 #include <compat.h>
 #include <RocketComputerTypes.h>
@@ -54,6 +57,15 @@ public:
     };
 
     MagCalibrator();
+
+    // #1312: count→µT scale of the chip feeding addSample().  Defaults to
+    // the IIS2MDC's 0.15 µT/LSB; the FC passes SensorCollector::MAG_LSB_TO_uT
+    // at boot.  Only the µT-side gates (R band, residual, verify |B|) and the
+    // status frame's µT fields use it — the fit and the offsets stay in
+    // counts.  Without it a 50 µT sphere in QMC counts (1875 LSB) reads as
+    // 281 µT and every mini calibration is rejected R_TOO_HIGH.
+    void  setCountScale(float uT_per_lsb);
+    float countScale() const { return lsb_to_uT_; }
 
     // Begin sampling.  Clears prior buffer + coverage state.  Safe to call
     // from any internal state — semantically identical to abort() then start().
@@ -218,11 +230,14 @@ private:
 
     State state_;
 
+    // #1312: µT per raw count of the chip feeding addSample() (setCountScale).
+    float lsb_to_uT_;
+
     // #206 post-accept verification accumulators.  Reset on entering
     // VERIFYING via accept(); fed by addSample() while in VERIFYING.
     // verify_min_uT_ / verify_max_uT_ are tracked in µT (post-offset
     // chip subtract is already in raw counts, so the verify path
-    // multiplies by IIS2MDC_LSB_TO_uT once per sample).
+    // multiplies by lsb_to_uT_ once per sample).
     // verify_coverage_mask_ is a parallel mask to coverage_mask_ that
     // only sees post-accept rotation — required to enforce that the
     // user actually rotated the rocket during verify and didn't just

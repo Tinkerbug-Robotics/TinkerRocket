@@ -22,13 +22,30 @@
 #define MALLOC_CAP_INTERNAL (1 << 11)
 #define MALLOC_CAP_DEFAULT  (1 << 12)
 
+namespace _host_shim {
+/// Blocks handed out by heap_caps_malloc and not yet freed.  TR_LogToFlash's
+/// ring is the only capability-heap allocation it makes, so after a failed
+/// begin() followed by a successful one this must read 1, not 2 (#1228).
+inline int& liveHeapCapsBlocks()
+{
+    static int n = 0;
+    return n;
+}
+}  // namespace _host_shim
+
 inline void* heap_caps_malloc(size_t size, uint32_t caps)
 {
     (void)caps;
-    return malloc(size);
+    void* p = malloc(size);
+    if (p) _host_shim::liveHeapCapsBlocks()++;
+    return p;
 }
 
-inline void heap_caps_free(void* p) { free(p); }
+inline void heap_caps_free(void* p)
+{
+    if (p) _host_shim::liveHeapCapsBlocks()--;
+    free(p);
+}
 
 // Reported free space is a fixed plausible number: it only ever reaches an
 // ESP_LOG argument, and a real query would make log lines nondeterministic.
