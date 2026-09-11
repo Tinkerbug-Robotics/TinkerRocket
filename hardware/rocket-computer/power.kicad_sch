@@ -12240,7 +12240,7 @@
 				)
 			)
 		)
-		(property "Value" "1 k"
+		(property "Value" "10 k"
 			(at 156.845 97.79 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12283,7 +12283,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-071KL"
+		(property "MPN" "RC0402FR-0710KL"
 			(at 153.035 97.79 0)
 			(hide yes)
 			(show_name no)
