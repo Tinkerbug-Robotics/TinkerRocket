@@ -35,6 +35,7 @@
 #include <RecoveryArmGate.h>        // #1176: arming gate for a restored flight
 #include <TR_MagCalibrator.h>
 #include <RocketComputerTypes.h>
+#include <BoardIdentity.h>   // #413: flight-log board revision
 #include <TR_FlightLog.h>          // snapshot tail-scan recovery (replaces OC MRAM)
 #include <CRC32.h>
 
@@ -1098,6 +1099,11 @@ static void buildFlightSettings(FlightSettingsData& s)
     // fw_git_sha buffer was zeroed by memset above, so strncpy of at most
     // size-1 chars leaves it NUL-terminated.
     strncpy(s.fw_git_sha, FW_GIT_SHA, sizeof(s.fw_git_sha) - 1);
+
+    // #413: which board produced this log.  This project has no provisioned
+    // NVS revision to prefer, so the value is always the image's own assertion
+    // and is flagged as such — see board_rev_code in RocketComputerTypes.h.
+    s.board_rev_code = board_identity::encodeRevCode(TR_BOARD_REV_STR, true);
 
     // roll_profile stays zeroed (num_waypoints = 0 → rate-only/none).
 

@@ -3051,7 +3051,11 @@ struct __attribute__((packed)) FlightSettingsData
     //  ism6_update_rate_hz as the flown rate, which is exactly what it is up to
     //  the deployment step-down.)
     // v8 appends the roll-control speed gate (roll_min_speed_dmps).
-    static constexpr uint8_t VERSION = 8;
+    // v9 appends board_rev_code (#413): which board produced this log. Until
+    //     now the only hardware hint in a log was fw_git_sha, which is seven
+    //     characters of SHA and nothing else, so Data_Analysis could not tell
+    //     a V7 log from a V9 one without guessing from the flight itself.
+    static constexpr uint8_t VERSION = 9;
 
     // flags bit positions
     static constexpr uint8_t F_USE_ANGLE_CONTROL = 0;  // cascaded angle vs rate-only
@@ -3162,9 +3166,24 @@ struct __attribute__((packed)) FlightSettingsData
     // last of that headroom for resolution a gate does not need — same reason
     // b2r_residual_cdeg and b2r_q are scaled ints.
     uint16_t roll_min_speed_dmps;
+
+    // Which board produced this log (v9+, #413).  board_identity::encodeRevCode
+    // — family in bits 4-6, number in bits 0-3, bit 7 set when the value came
+    // from the IMAGE's build flag rather than the board's provisioned NVS
+    // value.  0 = unknown, which is how every pre-v9 log decodes and exactly
+    // what they are: the field was never recorded.
+    //
+    // One byte rather than a string because this struct is bounded by
+    // MAX_PAYLOAD (224) and had two bytes left.  The string forms of board
+    // identity stay where they already work — FC_IDENTITY over I2S and the BLE
+    // status — and this is only the part a post-flight reader needs.
+    //
+    // Read bit 7 before trusting it: an ASSERTED value is what the image
+    // believed about its own board, and #773 exists because that is circular.
+    uint8_t  board_rev_code;
 };
-static_assert(sizeof(FlightSettingsData) == 222,
-              "FlightSettingsData layout check (v8: roll-control speed gate)");
+static_assert(sizeof(FlightSettingsData) == 223,
+              "FlightSettingsData layout check (v9: board revision)");
 
 // --- Full config report (#915) ---
 // FC→OC over I2S.  Carries exactly what the app's config readback CANNOT

@@ -2436,6 +2436,17 @@ static void buildFlightSettings(FlightSettingsData& s)
     // size-1 chars leaves it NUL-terminated.
     strncpy(s.fw_git_sha, FW_GIT_SHA, sizeof(s.fw_git_sha) - 1);
 
+    // #413: which board produced this log.  Prefer the PROVISIONED revision —
+    // it lives in NVS, survives every OTA, and is the only one that is not
+    // circular.  Fall back to what this image was built for, flagged as
+    // asserted, so a reader can tell "the board says V9" from "the image
+    // thinks it is on a V9".  Unprovisioned boards still get a usable answer
+    // rather than a blank, and a wrong flash is visible instead of silent.
+    s.board_rev_code =
+        (provisioned_board_rev[0] != '\0')
+            ? board_identity::encodeRevCode(provisioned_board_rev, false)
+            : board_identity::encodeRevCode(TR_BOARD_REV_STR, true);
+
     s.roll_profile = roll_profile;
 
     // Board→rocket mounting orientation that actually flew (v2).

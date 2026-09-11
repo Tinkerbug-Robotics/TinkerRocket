@@ -114,3 +114,81 @@ TEST(BoardIdentity, ACorruptNvsValueCannotBecomeAnUnboundedString) {
     EXPECT_EQ(n, kMaxRev);
     EXPECT_EQ(strlen(out), kMaxRev);
 }
+
+// --- #413: the one-byte revision code for the flight log --------------------
+//
+// The log had no way to say which board produced it — fw_git_sha is seven
+// characters of SHA and nothing else — so Data_Analysis could not tell a V7
+// log from a V9 one. One byte was all the headroom FlightSettingsData had
+// against MAX_PAYLOAD, hence a code rather than a string.
+
+TEST(BoardIdentity, RevCodeRoundTripsEveryShippedBoard) {
+    char out[24];
+    struct { const char* rev; uint8_t want; } cases[] = {
+        {"V7", 0x17}, {"V8", 0x18}, {"V9", 0x19}, {"V10", 0x1A},
+        {"M1", 0x21}, {"B1", 0x31},
+    };
+    for (const auto& c : cases) {
+        const uint8_t code = board_identity::encodeRevCode(c.rev, false);
+        EXPECT_EQ(code, c.want) << c.rev;
+        board_identity::revCodeToString(code, out, sizeof(out));
+        EXPECT_STREQ(out, c.rev);
+    }
+}
+
+TEST(BoardIdentity, TheAssertedBitSurvivesAndIsVisible) {
+    // #773's whole point: the image's idea of its own board is circular, so a
+    // log that mixed the two silently would be worse than one carrying
+    // neither. The byte has to say which question it answered.
+    char out[24];
+    const uint8_t provisioned = board_identity::encodeRevCode("V9", false);
+    const uint8_t asserted = board_identity::encodeRevCode("V9", true);
+    EXPECT_NE(provisioned, asserted);
+    EXPECT_EQ(asserted & 0x7F, provisioned);
+    EXPECT_TRUE(asserted & board_identity::kRevAsserted);
+    board_identity::revCodeToString(asserted, out, sizeof(out));
+    EXPECT_STREQ(out, "V9 (asserted)");
+}
+
+TEST(BoardIdentity, TheBuildFlagStringsUsedByTheFirmwareEncode) {
+    // The FC passes TR_BOARD_REV_STR straight in, and those are prose:
+    // "V9/V10" and "M1 (rocket-computer-mini)". normalizeRev cuts at the first
+    // non-alphanumeric, so both reduce to a token. "V9/V10" reducing to V9 is
+    // deliberate — the two share an image, so a V10 board provisioned as "V10"
+    // is a real mismatch and must not be hidden here.
+    char out[24];
+    EXPECT_EQ(board_identity::encodeRevCode("V9/V10", true), 0x99);
+    board_identity::revCodeToString(
+        board_identity::encodeRevCode("M1 (rocket-computer-mini)", true),
+        out, sizeof(out));
+    EXPECT_STREQ(out, "M1 (asserted)");
+}
+
+TEST(BoardIdentity, UnrepresentableRevisionsBecomeUnknownNotAWrongGuess) {
+    // A code that cannot be trusted must read as absent. Every one of these
+    // would be worse as a plausible-looking wrong board than as "unknown".
+    for (const char* bad : {"", "V", "9", "X9", "V0", "V16", "V1A",
+                            (const char*)nullptr}) {
+        EXPECT_EQ(board_identity::encodeRevCode(bad, false),
+                  board_identity::kRevUnknown) << (bad ? bad : "(null)");
+    }
+    char out[24];
+    board_identity::revCodeToString(board_identity::kRevUnknown, out, sizeof(out));
+    EXPECT_STREQ(out, "unknown");
+    // A pre-v9 log decodes as a zeroed byte, and that is exactly right: the
+    // field was never recorded, which is not the same as a board with no name.
+    board_identity::revCodeToString(0x00, out, sizeof(out));
+    EXPECT_STREQ(out, "unknown");
+}
+
+TEST(BoardIdentity, ANibbleOverflowIsRefusedRatherThanWrapped) {
+    // V16 does not fit four bits. Wrapping it would report V0, or worse, V1.
+    EXPECT_EQ(board_identity::encodeRevCode("V16", false),
+              board_identity::kRevUnknown);
+    // V15 is the last one that fits, and must still work.
+    char out[24];
+    const uint8_t code = board_identity::encodeRevCode("V15", false);
+    EXPECT_NE(code, board_identity::kRevUnknown);
+    board_identity::revCodeToString(code, out, sizeof(out));
+    EXPECT_STREQ(out, "V15");
+}

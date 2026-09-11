@@ -187,6 +187,24 @@ _SETTINGS_NOTE = (
 )
 
 
+def _board_rev_text(fs) -> Optional[str]:
+    """The flown board revision, or None when the log predates the field.
+
+    An "(asserted)" value came from the image's own build flag rather than the
+    board's provisioned NVS value, and #773 exists because that is circular: a
+    board flashed with the wrong build reports the wrong revision confidently
+    and forever. Say so rather than presenting both the same way.
+    """
+    name = fsd.board_rev_name(fs["board_rev_code"])
+    if name is None:
+        return None      # pre-v9 log: the field was never recorded
+    if name == "unknown":
+        return "not recorded by this firmware"
+    if name.endswith(" (asserted)"):
+        return name[: -len(" (asserted)")] + " — asserted by the image, not provisioned"
+    return name
+
+
 def analyze(flight: Flight) -> AnalysisResult:
     result = AnalysisResult(name="settings", title="Rocket Settings")
 
@@ -266,6 +284,10 @@ def analyze_system(flight: Flight) -> AnalysisResult:
         _group(g, "Firmware", [
             ("Version", fs["fw_git_sha"] + (" (built with uncommitted changes)" if fs["fw_dirty"] else "")),
             ("Settings frame", f"v{fs['version']}"),
+            # #413: which board produced this log. Before v9 a reader had to
+            # guess from the flight itself — fw_git_sha is the SHA and nothing
+            # else, so a V7 log and a V9 log were indistinguishable.
+            ("Board", _board_rev_text(fs)),
             ("Snapshot taken", f"{(fs['time_us'] - t0) / 1e6:.3f} s into the log" if t0 is not None else None),
         ])
         rate = fs["ism6_update_rate_hz"]

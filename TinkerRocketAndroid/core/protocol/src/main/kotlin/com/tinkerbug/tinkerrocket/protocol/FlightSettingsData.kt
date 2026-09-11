@@ -21,6 +21,8 @@ public data class RollWaypointRaw(
  *  - v5 @ 208: IMU logging rate              (version >= 5 && size >= 210)
  *  - v6 @ 210: flown guidance target (#435)  (version >= 6 && size >= 219)
  *  - v7 @ 219: GNSS OTP clock state (#837 item 6)  (version >= 7 && size >= 220)
+ *  - v8 @ 220: roll-control speed gate              (version >= 8 && size >= 222)
+ *  - v9 @ 222: board revision code (#413)           (version >= 9 && size >= 223)
  */
 public data class FlightSettingsData(
     val timeUs: Long,            // u32
@@ -95,7 +97,41 @@ public data class FlightSettingsData(
      * so null and 0 mean the same thing here.  Stored on the wire as deci-m/s.
      */
     val rollMinSpeedMps: Float? = null,
+    /**
+     * v9+ (#413): which board produced this log, as
+     * `board_identity::encodeRevCode` — family in bits 4-6, number in bits
+     * 0-3, bit 7 set when the value is the IMAGE's own assertion rather than
+     * the board's provisioned NVS value.
+     *
+     * Null on pre-v9 logs, and that is NOT the same as 0: null means the field
+     * was never recorded, 0 means it was recorded and names no board this
+     * reader knows.  Use [boardRevName] rather than decoding it by hand.
+     */
+    val boardRevCode: Int? = null,
 ) {
+    /**
+     * [boardRevCode] as text: "V9", "M1 (asserted)", "unknown", or null when
+     * the log predates the field.  Mirrors `board_identity::revCodeToString`
+     * and `flight_settings.board_rev_name` on the Python side.
+     *
+     * An "(asserted)" value came from the image's own build flag, and #773
+     * exists because that is circular: a board flashed with the wrong build
+     * reports the wrong revision confidently and forever.  Read it as "the
+     * image believed this", not as "the board is this".
+     */
+    public val boardRevName: String? get() {
+        val code = boardRevCode ?: return null
+        val letter = when (code and 0x70) {
+            0x10 -> "V"
+            0x20 -> "M"
+            0x30 -> "B"
+            else -> return "unknown"
+        }
+        val number = code and 0x0F
+        if (number == 0) return "unknown"
+        return letter + number + if (code and 0x80 != 0) " (asserted)" else ""
+    }
+
     public val useAngleControl: Boolean get() = flags and (1 shl F_USE_ANGLE_CONTROL) != 0
     public val gainScheduleEnabled: Boolean get() = flags and (1 shl F_GAIN_SCHEDULE) != 0
     public val guidanceEnabled: Boolean get() = flags and (1 shl F_GUIDANCE) != 0
@@ -251,9 +287,18 @@ public data class FlightSettingsData(
                 rollMinSpeedMps = LeBuffer(payload, 220).u16() / 10.0f
             }
 
+            // v9 board revision at fixed offset 222 (#413). Before this the
+            // only hardware hint in a log was fwGitSha, which is the SHA and
+            // nothing else, so a V7 log and a V9 log read identically.
+            var boardRevCode: Int? = null
+            if (version >= 9 && payload.size >= 223) {
+                boardRevCode = LeBuffer(payload, 222).u8()
+            }
+
             return FlightSettingsData(
                 gnssOtpState = gnssOtpState,
                 rollMinSpeedMps = rollMinSpeedMps,
+                boardRevCode = boardRevCode,
                 timeUs = timeUs,
                 version = version,
                 flags = flags,

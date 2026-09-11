@@ -139,7 +139,7 @@ that changes size fails the build rather than corrupting a log silently.
 | Struct | Bytes |
 |--------|-------|
 | `FlightSnapshotData` | 224 |
-| `FlightSettingsData` | 222 |
+| `FlightSettingsData` | 223 |
 | `GNSSSatData` | 202 |
 | `ConfigReportData` | 169 |
 | `RollProfileData` | 76 |

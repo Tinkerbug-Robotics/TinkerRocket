@@ -285,13 +285,14 @@ final class GoldenVectorTests: XCTestCase {
         XCTAssertEqual(truncated.magUtPerLsb, OutStatusQueryData.iis2mdcUtPerLsb)
     }
 
-    // MARK: - FlightSettings version ladder (v1/v2/v3/v5/v6)
+    // MARK: - FlightSettings version ladder (v1/v2/v3/v5/v6/v7/v8/v9)
 
     func testFlightSettingsLadder() throws {
         for rel in ["logframes/flightsettings_v1_188.bin", "logframes/flightsettings_v2_200.bin",
                     "logframes/flightsettings_v3_208.bin", "logframes/flightsettings_v5_210.bin",
                     "logframes/flightsettings_v6_219.bin", "logframes/flightsettings_v7_220.bin",
-                    "logframes/flightsettings_v8_222.bin"] {
+                    "logframes/flightsettings_v8_222.bin",
+                    "logframes/flightsettings_v9_223.bin"] {
             let side = WireFixtures.sidecar(rel)
             let s = try FlightSettingsData(from: WireFixtures.data(rel))
 
@@ -364,6 +365,45 @@ final class GoldenVectorTests: XCTestCase {
             } else {
                 XCTAssertNil(s.roll_min_speed_mps, rel)
             }
+            // v9 board revision (#413). The canonical fixture carries a
+            // PROVISIONED V9 (0x19, bit 7 clear), so this also pins that the
+            // asserted bit is not set where it should not be — a decoder that
+            // masked it off would pass a value-only check and lose the one
+            // thing the byte exists for.
+            if present >= 223 {
+                XCTAssertEqual(s.board_rev_code.map(Int.init),
+                               side.int("board_rev_code"), rel)
+                XCTAssertEqual(s.boardRevName, "V9", rel)
+            } else {
+                XCTAssertNil(s.board_rev_code, rel)
+                XCTAssertNil(s.boardRevName, rel)
+            }
         }
+    }
+
+    /// #413: the code renders every family, and the asserted bit is visible.
+    /// Mirrors `board_identity::revCodeToString` and Python's
+    /// `flight_settings.board_rev_name`.
+    func testBoardRevisionNameRendersEveryFamily() throws {
+        // Built by rewriting the last byte of the golden rather than by hand:
+        // the initializer parses 223 bytes and a synthetic one would be a
+        // second layout to keep in step.
+        let base = WireFixtures.data("logframes/flightsettings_v9_223.bin")
+        func name(_ code: UInt8) throws -> String? {
+            var bytes = base
+            bytes[bytes.count - 1] = code
+            return try FlightSettingsData(from: bytes).boardRevName
+        }
+        XCTAssertEqual(try name(0x17), "V7")
+        XCTAssertEqual(try name(0x1A), "V10")
+        XCTAssertEqual(try name(0x21), "M1")
+        XCTAssertEqual(try name(0x31), "B1")
+        XCTAssertEqual(try name(0x99), "V9 (asserted)")
+        // "unknown" and nil are different answers: nil is "this log predates
+        // the field", unknown is "it named no board we recognise".
+        XCTAssertEqual(try name(0x00), "unknown")
+        XCTAssertEqual(try name(0x40), "unknown")
+        let v8 = WireFixtures.data("logframes/flightsettings_v8_222.bin")
+        XCTAssertNil(try FlightSettingsData(from: v8).boardRevName)
     }
 }

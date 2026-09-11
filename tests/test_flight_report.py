@@ -642,7 +642,7 @@ def test_settings_use_the_apps_words(report_html: Path) -> None:
 def test_flight_settings_frame_decodes_every_version() -> None:
     """The decoder reads what a frame's length covers and nothing more.
 
-    Built from the struct layout by hand: a full v8 frame decodes every tail,
+    Built from the struct layout by hand: a full v9 frame decodes every tail,
     and the same bytes cut at the v2 length decode the head and the mounting
     orientation and leave the later tails None rather than misreading them.
     """
@@ -653,7 +653,7 @@ def test_flight_settings_frame_decodes_every_version() -> None:
     flags = (1 << fs.F_SERVO_ENABLED) | (1 << fs.F_GAIN_SCHEDULE) | (1 << fs.F_SOUNDS) \
         | (1 << fs.F_IMU_RATE_DYNAMIC)
     head = struct.pack("<IBBH6f2f3ffBHH4hhhhB",
-                       123456, 8, flags, 500,
+                       123456, 9, flags, 500,
                        0.12, 0.01, 0.0, 10.0, -20.0, 20.0,
                        2.0, 60.0,
                        50.0, 25.0, 3.0,
@@ -667,12 +667,13 @@ def test_flight_settings_frame_decodes_every_version() -> None:
         + struct.pack("<ffB", 3.0, 90.0, 0) + bytes(9 * 6)
     tails = struct.pack("<BBh4h", 4, 1, 0, 10000, 0, 0, 0) \
         + struct.pack("<2f", -30.0, 30.0) + struct.pack("<H", 3840) \
-        + struct.pack("<2fB", 0.0, 0.0, 0) + struct.pack("<B", 5) + struct.pack("<H", 250)
+        + struct.pack("<2fB", 0.0, 0.0, 0) + struct.pack("<B", 5) + struct.pack("<H", 250) \
+        + struct.pack("<B", 0x19)   # v9 (#413): provisioned V9
     frame = head + pyro + sha + profile + tails
-    assert len(frame) == 222
+    assert len(frame) == 223
 
     d = fs.decode(frame)
-    assert d["version"] == 8 and d["servo_enabled"] and d["gain_schedule_enabled"]
+    assert d["version"] == 9 and d["servo_enabled"] and d["gain_schedule_enabled"]
     assert d["sounds_enabled"] and d["imu_rate_dynamic"] and not d["guidance_enabled"]
     assert d["roll_delay_ms"] == 500 and abs(d["kp"] - 0.12) < 1e-6
     assert d["servo_bias_us"] == [5, -5, 0, 0] and d["servo_hz"] == 333
@@ -684,11 +685,27 @@ def test_flight_settings_frame_decodes_every_version() -> None:
     assert d["ism6_update_rate_hz"] == 3840
     assert d["gnss_otp_state"] == 5 and fs.gnss_otp_name(5) == "BLOCKLISTED"
     assert d["roll_min_speed_mps"] == 25.0
+    # #413: the log finally says which board produced it. Bit 7 clear = the
+    # PROVISIONED revision from NVS, which is the one that is not circular.
+    assert d["board_rev_code"] == 0x19 and fs.board_rev_name(0x19) == "V9"
 
     v2 = fs.decode(frame[:200])
     assert v2["b2r_code"] == 4 and v2["fin_min_deg"] is None
     assert v2["ism6_update_rate_hz"] is None and v2["roll_min_speed_mps"] is None
     assert v2["gnss_otp_state"] is None
+    assert v2["board_rev_code"] is None
+
+    # A v8 frame is one byte short and must leave the revision None, not read
+    # the roll gate's high byte as a board.
+    v8 = fs.decode(frame[:222])
+    assert v8["roll_min_speed_mps"] == 25.0 and v8["board_rev_code"] is None
+
+    # None and "unknown" are different answers: None is "this log predates the
+    # field", unknown is "it carried one and named no board we recognise".
+    assert fs.board_rev_name(None) is None
+    assert fs.board_rev_name(0x00) == "unknown"
+    assert fs.board_rev_name(0x99) == "V9 (asserted)"
+    assert fs.board_rev_name(0x21) == "M1"
 
 
 def test_report_has_no_module_errors(report_html: Path) -> None:

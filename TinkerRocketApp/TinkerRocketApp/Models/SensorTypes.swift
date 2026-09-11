@@ -23,7 +23,7 @@ enum MessageType: UInt8 {
     case h3lis331 = 0xA9   // Legacy-only high-G accelerometer (10B)
     case cameraStart = 0xAA
     case cameraStop = 0xAB
-    case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2 / 208B v3 / 210B v5 / 219B v6 / 220B v7 / 222B v8) — runtime settings snapshot at launch (#165)
+    case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2 / 208B v3 / 210B v5 / 219B v6 / 220B v7 / 222B v8 / 223B v9) — runtime settings snapshot at launch (#165)
     case iis2mdc = 0xD1    // IIS2MDC magnetometer (new Mini PCB rev, 10B)
     case lora = 0xF1
 }
@@ -216,6 +216,15 @@ nonisolated struct FlightSettingsData {
     /// GNSS high-perf-clock OTP state at boot (v7+, #837 item 6); nil on
     /// pre-v7 logs, where the state was determined and then discarded.
     let gnss_otp_state: UInt8?
+    /// v9+ (#413): which board produced this log, as
+    /// `board_identity::encodeRevCode` — family in bits 4-6, number in bits
+    /// 0-3, bit 7 set when the value is the IMAGE's own assertion rather than
+    /// the board's provisioned NVS value.
+    ///
+    /// nil on pre-v9 logs, which is NOT the same as 0: nil means the field was
+    /// never recorded, 0 means it was recorded and names no board this reader
+    /// knows. Use `boardRevName` rather than decoding it by hand.
+    let board_rev_code: UInt8?
 
     let b2r_code: UInt8?
     let b2r_mode: UInt8?            // 0 default, 1 manual, 2 auto-snap, 3 auto-exact
@@ -387,6 +396,38 @@ nonisolated struct FlightSettingsData {
         } else {
             roll_min_speed_mps = nil
         }
+
+        // v9 board revision at fixed offset 222 (#413). Before this the only
+        // hardware hint in a log was fw_git_sha, which is the SHA and nothing
+        // else, so a V7 log and a V9 log read identically.
+        if version >= 9 && data.count >= 223 {
+            var o = 222
+            board_rev_code = data.readUInt8(at: &o)
+        } else {
+            board_rev_code = nil
+        }
+    }
+
+    /// `board_rev_code` as text: "V9", "M1 (asserted)", "unknown", or nil when
+    /// the log predates the field. Mirrors `board_identity::revCodeToString`
+    /// and Python's `flight_settings.board_rev_name`.
+    ///
+    /// An "(asserted)" value came from the image's own build flag, and #773
+    /// exists because that is circular: a board flashed with the wrong build
+    /// reports the wrong revision confidently and forever. Read it as "the
+    /// image believed this", not as "the board is this".
+    var boardRevName: String? {
+        guard let code = board_rev_code else { return nil }
+        let letter: String
+        switch code & 0x70 {
+        case 0x10: letter = "V"
+        case 0x20: letter = "M"
+        case 0x30: letter = "B"
+        default: return "unknown"
+        }
+        let number = code & 0x0F
+        if number == 0 { return "unknown" }
+        return letter + String(number) + ((code & 0x80) != 0 ? " (asserted)" : "")
     }
 }
 
