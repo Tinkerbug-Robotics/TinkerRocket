@@ -9284,10 +9284,23 @@ static void loop_fc()
                 last_external_roll_cmd_deg = roll_fin_cmd;
 
                 // 4-fin mix via the configured fin layout (servo→azimuth + reverse).
-                // #382: use the runtime clamp (app-tunable via guidance config,
-                // same as the in-flight path) — the compile-time constant made
-                // a bench ground test not match an app-tuned flight clamp.
-                float max_fin = pn_max_fin_deg;
+                // #382: use the runtime clamp (app-tunable), not a compile-time
+                // constant, so a bench test matches an app-tuned flight clamp.
+                //
+                // #1154 item 7: WHICH runtime clamp depends on the mode, because
+                // the two ground-test modes shadow two different flight paths.
+                // Roll+Guidance mirrors the in-flight guidance path, which mixes
+                // through pn_max_fin_deg (15 deg default). Roll Only mirrors the
+                // in-flight roll-only path, which is servo_control.control() —
+                // that never reaches mixToFins, so its only clamp is the roll
+                // PID's own max_cmd (20 deg default). Using pn_max_fin_deg for
+                // both made the Roll Only bench gate saturate at 15 deg where
+                // the flying rocket saturates at 20, i.e. 25% early, which is
+                // exactly the case the bench exists to rehearse. Both PIDs carry
+                // identical limits (applyRollPidGains sets them together), so
+                // reading servo_control's is reading the flight roll-only clamp.
+                float max_fin = guidance_enabled ? pn_max_fin_deg
+                                                 : servo_control.getMaxCmd();
                 float deflections[4];
                 control_mixer.mixToFins(roll_fin_cmd, pitch_fin, yaw_fin, max_fin, deflections);
                 servo_control.setServoAngles(deflections);
@@ -9296,9 +9309,13 @@ static void loop_fc()
                 static uint32_t gt_last_print_ms = 0;
                 if (now_ms - gt_last_print_ms >= 1000U) {
                     gt_last_print_ms = now_ms;
-                    ESP_LOGI(TAG, "[GT] mode=%s pitch_fin=%.1f yaw_fin=%.1f roll_fin=%.1f",
+                    // #1154 item 7: the clamp is printed because it is now
+                    // mode-dependent — this line is how the bench confirms a
+                    // Roll Only test is saturating where the flight path does.
+                    ESP_LOGI(TAG, "[GT] mode=%s pitch_fin=%.1f yaw_fin=%.1f roll_fin=%.1f max_fin=%.1f",
                                   guidance_enabled ? "GUIDANCE" : "ROLL_ONLY",
-                                  (double)pitch_fin, (double)yaw_fin, (double)roll_fin_cmd);
+                                  (double)pitch_fin, (double)yaw_fin, (double)roll_fin_cmd,
+                                  (double)max_fin);
                 }
             }
             else if (servo_enabled)
