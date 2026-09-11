@@ -5,6 +5,121 @@
 	(uuid "c95845b6-ff1d-4fb2-900f-98953663792c")
 	(paper "A4")
 	(lib_symbols
+		(symbol "power:PWR_FLAG"
+			(power global)
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "#FLG"
+				(at 0 1.905 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "PWR_FLAG"
+				(at 0 3.81 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Special symbol for telling ERC where power comes from"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "flag power"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "PWR_FLAG_0_0"
+				(pin power_out line
+					(at 0 0 90)
+					(length 0)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "PWR_FLAG_0_1"
+				(polyline
+					(pts
+						(xy 0 0) (xy 0 1.27) (xy -1.016 1.905) (xy 0 2.54) (xy 1.016 1.905) (xy 0 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Custom:ECS-400-10-37B2-CKY-TR"
 			(pin_names
 				(offset 1.016)
@@ -2234,7 +2349,7 @@
 						)
 					)
 				)
-				(pin power_in line
+				(pin power_out line
 					(at 17.78 -10.16 180)
 					(length 5.08)
 					(name "VFB1/VO1"
@@ -2252,7 +2367,7 @@
 						)
 					)
 				)
-				(pin power_in line
+				(pin power_out line
 					(at 17.78 -12.7 180)
 					(length 5.08)
 					(name "VFB2/VO2"
@@ -2270,7 +2385,7 @@
 						)
 					)
 				)
-				(pin power_in line
+				(pin power_out line
 					(at 17.78 -15.24 180)
 					(length 5.08)
 					(name "VFB3/VO3"
@@ -2288,7 +2403,7 @@
 						)
 					)
 				)
-				(pin power_in line
+				(pin power_out line
 					(at 17.78 -17.78 180)
 					(length 5.08)
 					(name "VFB4/VO4"
@@ -2805,7 +2920,7 @@
 						)
 					)
 				)
-				(pin power_in line
+				(pin passive line
 					(at 11.43 7.62 180)
 					(length 5.08)
 					(name "SW"
@@ -2841,7 +2956,7 @@
 						)
 					)
 				)
-				(pin open_collector line
+				(pin passive line
 					(at -12.7 -7.62 0)
 					(length 5.08)
 					(name "PG"
@@ -3318,7 +3433,7 @@
 						)
 					)
 				)
-				(pin power_out line
+				(pin power_in line
 					(at 22.86 -3.81 0)
 					(length 7.62)
 					(name "GND"
@@ -4941,16 +5056,6 @@
 			(type default)
 		)
 		(uuid "7e3330a0-e3e0-4443-9f14-b811f8a41643")
-	)
-	(wire
-		(pts
-			(xy 262.89 102.87) (xy 262.89 103.505)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "803d6e13-53c0-4ef6-8499-2fa56a5370a8")
 	)
 	(wire
 		(pts
@@ -19868,5 +19973,150 @@
 				(justify right)
 			)
 		)
+	)
+	(symbol
+		(lib_id "power:PWR_FLAG")
+		(at 170.815 173.355 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "d0cf441b-d943-435e-b0fd-80f433450729")
+		(property "Reference" "#FLG06"
+			(at 170.815 171.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "PWR_FLAG"
+			(at 170.815 169.545 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 170.815 173.355 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 170.815 173.355 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Special symbol for telling ERC where power comes from"
+			(at 170.815 173.355 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "54897419-2862-427b-8e30-de21c6f3b560")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
+					(reference "#FLG06")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(no_connect
+		(at 44.45 116.205)
+		(uuid "b1f0b401-d9d3-451b-9261-062d7b6a5e6e")
+	)
+	(no_connect
+		(at 90.17 70.485)
+		(uuid "e2acab9d-e9e1-479c-a792-4866d8619f9f")
+	)
+	(no_connect
+		(at 90.17 62.865)
+		(uuid "4db0ecf5-b627-4a84-b0bd-0d5589fc8ea4")
+	)
+	(no_connect
+		(at 90.17 60.325)
+		(uuid "414180ae-3ec7-46fd-b080-5a2f36a2fc38")
+	)
+	(no_connect
+		(at 90.17 65.405)
+		(uuid "2154c114-36a2-445d-acda-bbf8e3a2eb2f")
+	)
+	(no_connect
+		(at 90.17 67.945)
+		(uuid "1d3634be-0d32-4b43-a162-4007c889acee")
+	)
+	(no_connect
+		(at 90.17 57.785)
+		(uuid "df97c968-6580-476f-bd5f-d4a807cdc223")
+	)
+	(no_connect
+		(at 90.17 55.245)
+		(uuid "6512dc0a-39ca-4718-834b-750db604006a")
+	)
+	(no_connect
+		(at 44.45 55.245)
+		(uuid "fc53d2fb-3adb-4aed-bbbd-9dfb60eef27a")
+	)
+	(no_connect
+		(at 44.45 57.785)
+		(uuid "36b70923-f113-4eea-835b-01d517912830")
+	)
+	(no_connect
+		(at 44.45 67.945)
+		(uuid "5980cdc1-71b1-482a-91c5-24a86b1ddbef")
+	)
+	(no_connect
+		(at 44.45 65.405)
+		(uuid "52c0e329-6789-4750-8906-916ba72fe02b")
+	)
+	(no_connect
+		(at 44.45 60.325)
+		(uuid "b1d41887-55ed-44f2-95d3-d75f93cb3631")
+	)
+	(no_connect
+		(at 44.45 62.865)
+		(uuid "2ef435a8-ae29-4398-841b-c1112b031e7d")
+	)
+	(no_connect
+		(at 44.45 70.485)
+		(uuid "ce860aa5-2b9c-4a45-9179-1195e5911d37")
+	)
+	(no_connect
+		(at 90.17 32.385)
+		(uuid "d96ffd76-4aa7-4c31-b3cf-c21040a098db")
+	)
+	(no_connect
+		(at 90.17 34.925)
+		(uuid "09756159-cdc1-433e-8844-a6f87f40eb15")
 	)
 )
