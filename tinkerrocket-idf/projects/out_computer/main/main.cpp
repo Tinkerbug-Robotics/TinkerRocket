@@ -1111,6 +1111,12 @@ static bool snapshotServable(const uint8_t* frame, uint32_t age_ms)
 // recording, so the explicit-state dedup below must forward the first
 // command instead of "already OFF, ignoring" it. True everywhere else.
 static bool camera_state_known = true;              // Power rail state — starts OFF
+// #1154 item 4: last FCS_CAMERA_ENGAGED seen from the FC, so the adoption in
+// the FC_STATUS_MSG handler can key on the FALLING edge rather than the level.
+// Level would be wrong: a camera command takes up to ~1 s to clear the FC
+// dispatch queue, and for that whole window the FC honestly reports "not
+// engaged" — a level test would clear the very request the operator just made.
+static bool fc_camera_engaged_prev = false;
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 
 // ==========================================================================
@@ -3958,6 +3964,7 @@ static bool isKnownMessageType(uint8_t type)
         case FC_BOOT_STATUS_MSG:     // FC→OC over I2C during setup_fc — boot progress
         case CONFIG_REPORT_MSG:      // FC→OC over I2S — full config report (#915)
         case GNSS_SAT_MSG:           // FC→OC over I2S — per-satellite C/N0 every GNSS epoch, log-only
+        case FC_STATUS_MSG:          // FC→OC over I2S at 5 Hz — the FC's own camera truth (#1154 item 4)
             return true;
         default:
             return false;
@@ -4370,6 +4377,39 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (payload_len >= sizeof(SensorCalStatusData))
         {
             ble_app.sendSensorCalStatus(payload, sizeof(SensorCalStatusData));
+        }
+    }
+    else if (type == FC_STATUS_MSG)
+    {
+        // #1154 item 4: adopt the FC's camera truth.
+        //
+        // camera_recording_requested is what we last ASKED for. The FC can drop
+        // the camera on its own — a sim reset, a camera-type change, or a start
+        // serviced with no type all run cameraAbortAndPowerOff() — and nothing
+        // told us. Our belief stayed true, the app kept rendering "recording",
+        // and because the next press computes want_on =
+        // !camera_recording_requested, it resolved to "turn off" an already-off
+        // camera and did nothing the operator could see.
+        //
+        // Falling edge, and only while we still believe the camera is on:
+        //   - the edge means a request still working through the FC dispatch
+        //     queue is never clobbered (the FC has not engaged yet, so there is
+        //     no edge to fall from);
+        //   - the guard means an ordinary operator stop, where we have already
+        //     cleared the request, produces no log and no work.
+        if (payload_len >= sizeof(FcStatusData))
+        {
+            FcStatusData fcs{};
+            memcpy(&fcs, payload, sizeof(FcStatusData));
+            const bool fc_cam = (fcs.flags & FCS_CAMERA_ENGAGED) != 0;
+            if (fc_camera_engaged_prev && !fc_cam && camera_recording_requested)
+            {
+                camera_recording_requested = false;
+                camera_state_known = true;
+                ESP_LOGW("OC", "[CAMERA] flight computer stopped the camera on its "
+                               "own — adopting its state so the next press turns it ON");
+            }
+            fc_camera_engaged_prev = fc_cam;
         }
     }
     else if (type == FC_BOOT_STATUS_MSG)

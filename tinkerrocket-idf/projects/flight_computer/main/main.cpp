@@ -10546,6 +10546,35 @@ static void loop_fc()
                                non_sensor_data_buffer,
                                SIZE_OF_NON_SENSOR_DATA);
 
+            // #1154 item 4: the FC's own camera truth, at 5 Hz.  Sub-rated off
+            // this block rather than given its own timer, for the reason the
+            // guidance-telemetry send below is: this is the FC's one periodic
+            // I2S tick, so a signal that rides it cannot drift away from the
+            // frame accounting the link budget is built on.  Sent in EVERY
+            // state, not just INFLIGHT — the camera is started and stopped on
+            // the pad, which is exactly where the stale-state bug bit.
+            static uint32_t last_fc_status_tx_us = 0;
+            if ((logic_now_us - last_fc_status_tx_us) >= config::FC_STATUS_PERIOD_US)
+            {
+                last_fc_status_tx_us = logic_now_us;
+                // "Engaged", not "recording" — see FCS_CAMERA_ENGAGED. This is
+                // the same composite cameraAbortAndPowerOff() uses, so the
+                // report and the abort cannot disagree about what "active"
+                // means.
+                const bool camera_engaged =
+                    camera_recording || camera_gate_on ||
+                    (camera_start_phase != CameraStartPhase::Idle);
+                FcStatusData fc_status{};
+                fc_status.time_us = logic_now_us;
+                fc_status.flags   =
+                    (uint8_t)(camera_engaged ? FCS_CAMERA_ENGAGED : 0u);
+                uint8_t fc_status_buf[sizeof(FcStatusData)];
+                memcpy(fc_status_buf, &fc_status, sizeof(fc_status_buf));
+                (void)enqueueI2STx(FC_STATUS_MSG,
+                                   fc_status_buf,
+                                   (uint8_t)sizeof(fc_status_buf));
+            }
+
             // Send guidance telemetry during guided coast, at
             // config::GUIDANCE_TELEM_RATE_HZ (250 = every second NonSensor
             // frame since #1137 item 13 — see the I2S link budget in config.h).

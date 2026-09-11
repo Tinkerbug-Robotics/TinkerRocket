@@ -185,6 +185,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `LoRaFrameHeader` | 7 |
 | `GNSSSatBlock` | 6 |
 | `Vec3i16` | 6 |
+| `FcStatusData` | 5 |
 | `FcBootStatusData` | 4 |
 | `ServoReplayData` | 4 |
 | `i24le_t` | 3 |

@@ -741,6 +741,10 @@ CATALOG_EMPTY_ON_EVERY_FIXTURE = {
     "Guidance.accel_cmd_n", "Guidance.accel_cmd_e", "Guidance.lateral_offset",
     "Guidance.los_angle", "Guidance.closing_vel", "Guidance.pitch_fin_cmd",
     "Guidance.yaw_fin_cmd", "Guidance.active", "Guidance.burnout",
+    # #1154 item 4: FC_STATUS_MSG (0x92) is newer than every fixture in the
+    # repo, so no committed log carries one. The row stays because the next
+    # flight recorded on current firmware will produce it.
+    "FcStatus.fc_camera_engaged",
 }
 
 
