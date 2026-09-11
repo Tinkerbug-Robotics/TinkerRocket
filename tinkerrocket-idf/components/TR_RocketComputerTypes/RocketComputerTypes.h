@@ -2466,7 +2466,7 @@ static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 28-byte Log
 // the I2S telemetry stream exists, which is the whole point — see
 // FcBootStatusData above.  Stops once the FC enters loop_fc().
 static constexpr uint8_t FC_BOOT_STATUS_MSG   = 0xFA;  // FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only
-static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 169-byte ConfigReportData, everything the app's config
+static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 193-byte ConfigReportData, everything the app's config
                                                       // readback cannot otherwise see (#915).  PUSHED, not requested —
                                                       // see the struct comment.  0xFC/0xFD have since gone to the base
                                                       // station's own log records: 0xA0-0xFD is FULL.  New codes open
@@ -3248,6 +3248,11 @@ static_assert(sizeof(FlightSettingsData) == 223,
 // instead of displaying profile values it has no way to check against the
 // vehicle: servo trim 2-4, fin travel, fin layout, the PN guidance
 // parameters, the roll waypoints, sounds, and the orientation SETTING.
+// Since v2 (#1231) also the live deployment configuration: the app's
+// config_pyro readback used to be the OC echoing its own cache, so a
+// divergence between what the operator configured and what the FC would
+// actually fire on (#1117 dropped frame, #1131 rail-off defaults, #1078
+// stale tiles) was invisible on every screen.
 //
 // Why not extend FlightSettingsData: that struct is 219 bytes against a
 // MAX_PAYLOAD of 224, and the fin layout plus the guidance parameters need
@@ -3266,7 +3271,10 @@ static_assert(sizeof(FlightSettingsData) == 223,
 // offsetof pins already guard the internal order.
 struct __attribute__((packed)) ConfigReportData
 {
-    static constexpr uint8_t VERSION = 1;
+    // v1 (#915): 169 bytes, through `roll`.  v2 (#1231): + `pyro`, 193
+    // bytes.  v1 is a byte-exact PREFIX of v2 — the OC accepts both and
+    // simply has no deployment configuration to serve from a v1 sender.
+    static constexpr uint8_t VERSION = 2;
 
     // flags bit positions
     static constexpr uint8_t F_SOUNDS = 0;   // piezo sounds enabled
@@ -3278,6 +3286,13 @@ struct __attribute__((packed)) ConfigReportData
     // the bit, reflashing either board silently loses whichever one's memory
     // the other happened to overwrite.
     static constexpr uint8_t F_ORIENT_FROM_NVS = 1;
+    // Set when `pyro` below is a stored record (the FC's NVS, or a config
+    // frame applied this boot — which is written to NVS in the same step)
+    // rather than the zeroed compile-time default of a board that has never
+    // been told.  Both look like "all four channels disabled" on the wire;
+    // only the first is a configuration somebody chose.  The app renders
+    // the second as an advisory, not as four switched-off channels.
+    static constexpr uint8_t F_PYRO_FROM_NVS = 2;
 
     uint32_t time_us;              // micros() at build — first, so the generic
                                    // frame parser's "timestamp = first 4
@@ -3296,17 +3311,26 @@ struct __attribute__((packed)) ConfigReportData
     FinConfigData      fin;        // ring azimuths + both reverse masks
     GuidanceConfigData guidance;   // enable + every PN / station-keep parameter
     RollProfileData    roll;       // waypoints (num_waypoints == 0 → rate-only)
+    // v2 (#1231).  The FC's LIVE pyro_config — the struct servicePyroChannels()
+    // reads — not a copy of what was last written to it.  Appended after
+    // `roll` so a v1 report stays a prefix; see VERSION.
+    PyroConfigData     pyro;
 };
-static_assert(sizeof(ConfigReportData) == 169,
-              "ConfigReportData layout check (v1, #915)");
+static_assert(sizeof(ConfigReportData) == 193,
+              "ConfigReportData layout check (v2, #1231: v1 169 + PyroConfigData 24)");
 // Nested-struct starts are wire ABI: the OC parses this by memcpy of the
 // whole thing, so a member reordered here silently reinterprets every field
 // after it.
 static_assert(offsetof(ConfigReportData, servo) == 8 &&
               offsetof(ConfigReportData, fin) == 30 &&
               offsetof(ConfigReportData, guidance) == 48 &&
-              offsetof(ConfigReportData, roll) == 93,
+              offsetof(ConfigReportData, roll) == 93 &&
+              offsetof(ConfigReportData, pyro) == 169,
               "ConfigReportData member order is wire ABI");
+// The OC copies a v1 report by this length, so it must equal the whole of
+// the v1 layout — everything before `pyro`.
+static_assert(offsetof(ConfigReportData, pyro) == 169,
+              "v1 ConfigReportData must remain a byte-exact prefix of v2");
 
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the

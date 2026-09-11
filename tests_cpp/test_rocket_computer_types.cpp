@@ -1048,7 +1048,8 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // field after it — and the app would then display the result as VERIFIED,
 // which is worse than the "cannot verify" state this frame exists to remove.
 TEST(RocketComputerTypes, ConfigReportData_Layout) {
-    EXPECT_EQ(sizeof(ConfigReportData), 169u);
+    // v2 (#1231): v1's 169 bytes + the 24-byte PyroConfigData.
+    EXPECT_EQ(sizeof(ConfigReportData), 193u);
     // Rides the same I2S frame path as everything else FC→OC.
     EXPECT_LE(sizeof(ConfigReportData), MAX_PAYLOAD);
 
@@ -1065,6 +1066,12 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(offsetof(ConfigReportData, fin),               30u);
     EXPECT_EQ(offsetof(ConfigReportData, guidance),          48u);
     EXPECT_EQ(offsetof(ConfigReportData, roll),              93u);
+    // #1231: appended AFTER roll, so a v1 report is a byte-exact prefix of
+    // v2 — the OC copies a v1 frame by exactly this many bytes and serves
+    // it without a pyro block.  Move it and a v1 sender is misparsed.
+    EXPECT_EQ(offsetof(ConfigReportData, pyro),             169u);
+    EXPECT_EQ(offsetof(ConfigReportData, pyro) + sizeof(PyroConfigData),
+              sizeof(ConfigReportData));
 
     // The starts are the running sum of the nested sizes — spelled out so a
     // nested struct that grows fails HERE, naming itself, instead of only
@@ -1073,12 +1080,16 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(sizeof(FinConfigData),      18u);
     EXPECT_EQ(sizeof(GuidanceConfigData), 45u);
     EXPECT_EQ(sizeof(RollProfileData),    76u);
+    EXPECT_EQ(sizeof(PyroConfigData),     24u);
 
     // Flag bits are wire ABI: the OC reads F_ORIENT_FROM_NVS to decide
-    // whether to leave the FC's orientation alone or re-push its own.
+    // whether to leave the FC's orientation alone or re-push its own, and
+    // relays F_PYRO_FROM_NVS to the app as "fnv" so an all-disabled report
+    // can be told apart from a board that has never been configured.
     EXPECT_EQ(ConfigReportData::F_SOUNDS,           0u);
     EXPECT_EQ(ConfigReportData::F_ORIENT_FROM_NVS,  1u);
-    EXPECT_EQ(ConfigReportData::VERSION,            1u);
+    EXPECT_EQ(ConfigReportData::F_PYRO_FROM_NVS,    2u);
+    EXPECT_EQ(ConfigReportData::VERSION,            2u);
 }
 
 // --- Flight settings snapshot (#165) ---

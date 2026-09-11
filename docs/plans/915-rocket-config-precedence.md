@@ -216,3 +216,75 @@ and the warning that would matter on a pad.
 - The OC-only-reflash divergence case above.
 - Two free message codes left in the OC↔FC space. The next one needs an
   escape/extended encoding, not a thirteenth constant.
+
+## #1231 — the deployment configuration joins the report (2026-09-11)
+
+Split out of #1117 by the #1225 triage as the one change that makes #1117,
+#1131 and #1078 *detectable*. Each of those had its own fix; none of them gave
+the operator a way to see the deployment configuration the FC actually holds,
+because nothing on any screen was sourced from the FC's live `pyro_config`:
+the app's `config_pyro` readback was the OC echoing its own cache, the #915
+report had no pyro member, `FLIGHT_SETTINGS_MSG` is log-only, and the gated
+scorecard bits read `SH_NA`.
+
+### The wire
+
+`ConfigReportData` v2: `PyroConfigData pyro` appended after `roll`, 193 bytes,
+`F_PYRO_FROM_NVS` (bit 2) set when the FC's copy is a stored record. Appended,
+not inserted, so **v1 is a byte-exact prefix of v2** and the OC accepts both —
+copying a v1 frame by `offsetof(pyro)` and serving it with no pyro block —
+rather than refusing it. The FC image is relayed through the OC, so an OC
+updated ahead of its FC is the normal OTA order; the strict version check the
+v1 handler had would have put every #915 group back on the app's can't-verify
+list for that whole window. The prefix is pinned by a `static_assert` and the
+host layout test.
+
+The FC marks the report dirty on an applied pyro frame (it was the one config
+handler that did not), and reports the LIVE struct `servicePyroChannels()`
+reads, not a copy of the last frame.
+
+### What the OC serves, and from where
+
+`config_pyro` is built from the FC's report whenever the rail is on and a v2
+report is held; the OC's cache stands in only with the rail off or under a
+pre-#1231 FC. The frame carries `src` (`"fc"` / `"oc"`) and, FC-sourced only,
+`fnv`. Two things the OC deliberately does **not** do:
+
+- **It does not overwrite its cache from the report.** The cache is what the
+  phone last pushed and what the rail-off readback serves (#1131); the report
+  is what the FC holds. When they differ the OC logs one line per changed
+  report — `FC deployment config differs from OC cache` — and the app is
+  shown the FC's copy, with its source.
+- **It does not self-heal.** The orientation precedent re-pushes the OC's
+  record when the FC says it has never been told; doing the same for the
+  deployment configuration would be the OC silently writing what fires. That
+  is a flight-safety behaviour choice, not a visibility fix, and is left for
+  the owner to decide separately. With `fnv` on the wire the app can at least
+  say "the flight computer has no stored deployment config" instead of
+  rendering four channels that look switched off.
+
+The report-dirty path now sends four frames (the three extras plus
+`config_pyro`), which could land in the same `loop_oc` pass as a connect burst
+and overflow the 12-deep readback ring; `sendCurrentConfig()` clears the dirty
+flag before its own snapshots so the two never stack.
+
+### The apps
+
+Both decode `src`/`fnv` into `RocketConfig.pyroSource` and
+`pyroStoredOnFlightComputer`, carry them across a `config` rebuild the way the
+pyro fields already were, and render one quiet caption under the pyro card
+only when the tiles are *not* the FC's own stored configuration.
+
+The #1078 optimistic mirror had to yield. With FC-sourced tiles, a write the
+FC never applied produces no echo and an unchanged report — so a mirror that
+painted the new values in would re-create exactly the invisible divergence
+this issue exists to remove. The mirror now applies only when there is no echo
+to wait for: the OC cache, an OC that predates the key, or the rail off.
+
+### Bench validation
+
+Owed; tracked in #1211. The two cases that need hardware: a hand-written FC
+NVS pyro record diverging from the OC's, visible on the tiles with the
+`differs from OC cache` line on the OC console; and a config frame forced to
+drop (the `-DTR_TEST_CFG_DROP=1` OC image from the #1112 bench work) leaving
+the tiles on the FC's previous values instead of the edit.

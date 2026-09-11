@@ -6,6 +6,7 @@ import com.tinkerbug.tinkerrocket.protocol.GuidanceSendFlow
 import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.MagCalStatus
 import com.tinkerbug.tinkerrocket.protocol.MagCalSubType
+import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
@@ -215,6 +216,44 @@ class DeviceSessionTest {
         assertTrue(cfg.pyro2Enabled)
         assertEquals(42f, cfg.pyro4TriggerValue)
         assertEquals(1, cfg.pyro3TriggerMode)
+    }
+
+    /** #1231: the mirror yields to the flight computer's own echo. */
+    @Test
+    fun pyroMirror_yieldsToFlightComputerEcho() = runTest {
+        // The canned cmd-20 readback (p1e true, no source key) would land on
+        // top of the frames below; suppressed, as the mirror test above does.
+        val h = startedSession { configPyroJson = null; configJson = null }
+        runCurrent()
+        val channels = listOf(
+            PyroChannelConfig(true, 1, 150f),
+            PyroChannelConfig(false, 0, 1f),
+            PyroChannelConfig(false, 0, 0f),
+            PyroChannelConfig(false, 0, 0f),
+        )
+        // FC-sourced and the rail is on: the FC's report will echo the write,
+        // so the tiles must NOT jump ahead of it.
+        h.fw.emitTelemetry(pwrPinOn = true)
+        h.fw.emitTelemetryJson("""{"type":"config_pyro","p1e":false,"p1m":0,"p1v":1.0,"src":"fc","fnv":true}""")
+        runCurrent()
+        h.session.mirrorPyroConfig(channels)
+        runCurrent()
+        assertFalse(assertNotNull(h.session.rocketConfig.value).pyro1Enabled)
+
+        // The OC's cache: no echo is coming, so the mirror still applies.
+        h.fw.emitTelemetryJson("""{"type":"config_pyro","p1e":false,"p1m":0,"p1v":1.0,"src":"oc"}""")
+        runCurrent()
+        h.session.mirrorPyroConfig(channels)
+        runCurrent()
+        assertTrue(assertNotNull(h.session.rocketConfig.value).pyro1Enabled)
+
+        // FC-sourced but the rail has since gone off: nothing can echo.
+        h.fw.emitTelemetryJson("""{"type":"config_pyro","p1e":false,"p1m":0,"p1v":1.0,"src":"fc","fnv":true}""")
+        h.fw.emitTelemetry(pwrPinOn = false)
+        runCurrent()
+        h.session.mirrorPyroConfig(channels)
+        runCurrent()
+        assertTrue(assertNotNull(h.session.rocketConfig.value).pyro1Enabled)
     }
 
     // ── Identity readback ────────────────────────────────────────────────

@@ -2572,6 +2572,15 @@ struct PyroChannelsView: View {
                     pyroTileForChannel(4)
                 }
             }
+
+            // #1231: one quiet line, only when the tiles are NOT showing what
+            // the flight computer will fire on — or it holds nothing at all.
+            // Never on a relay: those tiles are the profile by construction.
+            if !relayMode, let note = pyroProvenanceNote {
+                Text(note)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2579,6 +2588,24 @@ struct PyroChannelsView: View {
         .cornerRadius(10)
         .sheet(isPresented: $showPyroSheet) {
             PyroConfigSheet(device: device, channel: editingChannel)
+        }
+    }
+
+    /// #1231 provenance advisory.  nil = the tiles are the flight computer's
+    /// own stored configuration, which needs no caption.
+    private var pyroProvenanceNote: String? {
+        guard let cfg = device.rocketConfig else { return nil }
+        switch cfg.pyroSource {
+        case .flightComputer:
+            return cfg.pyroStoredOnFlightComputer == false
+                ? "Flight computer has no stored deployment config. Send settings to set one."
+                : nil
+        case .outComputerCache:
+            return device.telemetry.pwr_pin_on
+                ? "Not confirmed by the flight computer."
+                : "Flight computer is off. Showing the out computer's stored copy."
+        case .unknown:
+            return "Not confirmed by the flight computer."
         }
     }
 

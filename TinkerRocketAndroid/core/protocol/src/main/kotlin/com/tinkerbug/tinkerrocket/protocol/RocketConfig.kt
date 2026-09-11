@@ -147,7 +147,21 @@ public data class RocketConfig(
      * the other means "we know, and there are none".
      */
     val rollWaypoints: List<ReportedRollWaypoint>? = null,
+    // --- #1231 deployment-config provenance ---
+    /** Where the pyro fields came from; see [PyroConfigSource]. */
+    val pyroSource: PyroConfigSource = PyroConfigSource.UNKNOWN,
+    /**
+     * FC-sourced only (`"fnv"`): false = the flight computer holds no stored
+     * deployment configuration and is reporting its all-disabled default —
+     * which looks exactly like four channels somebody switched off, and is
+     * not.  null when the source is not the FC.
+     */
+    val pyroStoredOnFlightComputer: Boolean? = null,
 ) {
+    /** True when the pyro tiles show what the flight computer will fire on. */
+    public val pyroIsFlightComputerSourced: Boolean
+        get() = pyroSource == PyroConfigSource.FLIGHT_COMPUTER
+
     /**
      * Setting groups this rocket does not report back.  Empty once the config
      * report has landed; the pre-#915 list on firmware that can't send one.
@@ -160,6 +174,28 @@ public data class RocketConfig(
             if (guidanceExtras == null) add("Guidance parameters")
             if (rollWaypoints == null) add("Roll profile")
         }
+}
+
+/**
+ * Source of a `config_pyro` readback (#1231) — port of iOS `PyroConfigSource`.
+ * [wire] is the frame's `"src"` spelling.
+ *
+ * The OC's `config_pyro` frame used to be the OC echoing its own cache —
+ * never the flight computer's live `pyro_config`, the struct that actually
+ * fires — so a divergence between the two was invisible on every screen.  Now
+ * the OC serves the FC's copy whenever the FC is up and reporting, and its own
+ * cache only with the rail off or under older FC firmware.
+ */
+public enum class PyroConfigSource(public val wire: String?) {
+    /** Pre-#1231 out computer: no `src` key. */
+    UNKNOWN(null),
+    OUT_COMPUTER_CACHE("oc"),
+    FLIGHT_COMPUTER("fc");
+
+    public companion object {
+        public fun fromWire(src: String?): PyroConfigSource =
+            values().firstOrNull { it.wire != null && it.wire == src } ?: UNKNOWN
+    }
 }
 
 /**
@@ -262,6 +298,8 @@ public data class ConfigMessage(
             pyro4Enabled = previous?.pyro4Enabled ?: d.pyro4Enabled,
             pyro4TriggerMode = previous?.pyro4TriggerMode ?: d.pyro4TriggerMode,
             pyro4TriggerValue = previous?.pyro4TriggerValue ?: d.pyro4TriggerValue,
+            pyroSource = previous?.pyroSource ?: d.pyroSource,                       // #1231
+            pyroStoredOnFlightComputer = previous?.pyroStoredOnFlightComputer,
             // #915: the config report rides its own frames, so a `config`
             // rebuild must carry it over rather than resetting the app to
             // "this rocket reports nothing" every readback.
@@ -324,6 +362,10 @@ public data class ConfigPyroMessage(
     val p4e: Boolean? = null,
     val p4m: Long? = null,
     val p4v: Float? = null,
+    /** #1231 `"src"`: "fc" / "oc"; null on an OC that predates the key. */
+    val src: String? = null,
+    /** #1231 `"fnv"`: FC-sourced only — the FC's copy is a stored record. */
+    val fnv: Boolean? = null,
 ) {
     /**
      * Port of the iOS `"type":"config_pyro"` handler: base is [previous] (or
@@ -333,6 +375,9 @@ public data class ConfigPyroMessage(
     public fun applyTo(previous: RocketConfig?): RocketConfig {
         val base = previous ?: RocketConfig()
         fun mode(v: Long?, current: Int): Int = (v ?: current.toLong()).coerceIn(0, 0xFF).toInt()
+        // #1231: no key = an OC that predates it, which is NOT the same as the
+        // OC's cache — only "oc" positively says the FC was not consulted.
+        val source = PyroConfigSource.fromWire(src)
         return base.copy(
             pyro1Enabled = p1e ?: base.pyro1Enabled,
             pyro1TriggerMode = mode(p1m, base.pyro1TriggerMode),
@@ -346,6 +391,8 @@ public data class ConfigPyroMessage(
             pyro4Enabled = p4e ?: base.pyro4Enabled,
             pyro4TriggerMode = mode(p4m, base.pyro4TriggerMode),
             pyro4TriggerValue = p4v ?: base.pyro4TriggerValue,
+            pyroSource = source,
+            pyroStoredOnFlightComputer = if (source == PyroConfigSource.FLIGHT_COMPUTER) fnv else null,
         )
     }
 
@@ -364,6 +411,8 @@ public data class ConfigPyroMessage(
             p4e = JsonBridging.nsBool(json, "p4e"),
             p4m = JsonBridging.nsInt(json, "p4m"),
             p4v = JsonBridging.parseFloatIos(json, "p4v"),
+            src = JsonBridging.nsString(json, "src"),
+            fnv = JsonBridging.nsBool(json, "fnv"),
         )
     }
 }

@@ -748,6 +748,16 @@ fun DashboardScreen(
                         tile(3, telemetry.pyro3Cont, PyroCardPolicy.fired(relay, telemetry.pyro3Fired), Modifier.weight(1f))
                         tile(4, telemetry.pyro4Cont, PyroCardPolicy.fired(relay, telemetry.pyro4Fired), Modifier.weight(1f))
                     }
+                    // #1231: one quiet line, only when the tiles are NOT
+                    // showing what the flight computer will fire on — or it
+                    // holds nothing at all.  iOS PyroChannelsView twin.
+                    PyroCardPolicy.provenanceNote(relay, config, telemetry.pwrPinOn)?.let { note ->
+                        Text(
+                            note,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }

@@ -3,6 +3,7 @@ package com.tinkerbug.tinkerrocket.protocol
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -121,5 +122,32 @@ class PyroCardPolicyTest {
         // claiming ARMED from a link that cannot report it would be worse than
         // showing nothing.
         assertEquals("Pyro Channels (via LoRa)", PyroCardPolicy.title(true, armed = true))
+    }
+
+    /**
+     * #1231: the provenance line under the tiles.  Silent exactly when the
+     * tiles are the flight computer's own stored configuration; never on a
+     * relay, whose tiles are the profile by construction.
+     */
+    @Test
+    fun theProvenanceNoteSpeaksOnlyWhenTheTilesAreNotTheFlightComputers() {
+        fun note(cfg: RocketConfig?, power: Boolean = true, relay: Boolean = false) =
+            PyroCardPolicy.provenanceNote(relay, cfg, power)
+
+        assertNull(note(null))
+        val fc = RocketConfig(pyroSource = PyroConfigSource.FLIGHT_COMPUTER,
+                              pyroStoredOnFlightComputer = true)
+        assertNull(note(fc))
+        assertNull(note(fc.copy(pyroStoredOnFlightComputer = null)))
+        assertEquals("Flight computer has no stored deployment config. Send settings to set one.",
+                     note(fc.copy(pyroStoredOnFlightComputer = false)))
+        val oc = RocketConfig(pyroSource = PyroConfigSource.OUT_COMPUTER_CACHE)
+        assertEquals("Not confirmed by the flight computer.", note(oc, power = true))
+        assertEquals("Flight computer is off. Showing the out computer's stored copy.",
+                     note(oc, power = false))
+        assertEquals("Not confirmed by the flight computer.",
+                     note(RocketConfig(pyroSource = PyroConfigSource.UNKNOWN)))
+        assertNull(note(oc, relay = true))
+        assertNull(note(fc.copy(pyroStoredOnFlightComputer = false), relay = true))
     }
 }
