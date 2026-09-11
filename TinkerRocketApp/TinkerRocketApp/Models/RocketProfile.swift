@@ -133,7 +133,18 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     /// manual board→rocket code. Manual fixes the roll clocking the control
     /// surfaces need — required for roll-controlled/guided flights with an
     /// off-axis board; optional for non-controlled flights.
-    var imuOrientSetting: UInt8 = 0   // default: manual identity (+X nose/up); 0xFF = pad auto-detect
+    // #1095 item 2: pad auto-detect, in lockstep with the Android
+    // RocketProfile default and config::BOARD_TO_ROCKET_ORIENT on both
+    // firmwares (docs/protocol-change-checklist.md — a mismatch silently
+    // re-tunes the rocket on connect).
+    //
+    // Pad gravity resolves the NOSE AXIS only: rotation ABOUT the nose is
+    // unobservable from a vector parallel to it, so auto leaves the roll
+    // clocking to whatever the snap picks. A manual code 0...23 fixes both,
+    // and RocketComputerTypes.h requires one "when roll control / guidance
+    // must know which way the control surfaces point". servoControlEnabled
+    // defaults to true, so a rocket flown on defaults IS roll-controlled.
+    var imuOrientSetting: UInt8 = 0xFF   // IMU_ORIENT_AUTO (pad auto-detect)
 
     /// IMU logging rate: `RocketProfile.imuRateDynamic` (0) for the dynamic
     /// mode, or a fixed ISM6HG256 ODR of 960, 1920, or 3840 Hz. Logged samples

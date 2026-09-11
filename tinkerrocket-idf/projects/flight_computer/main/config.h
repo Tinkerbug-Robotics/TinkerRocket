@@ -226,15 +226,36 @@ struct config : board_pins
     // static logs (board+X -> N and board+X -> E, 2026-06-17).
     static constexpr float IIS2MDC_ROT_Z_DEG = 90.0f;
 
-    // Board -> rocket mounting orientation (TR_Orientation code, 0-23).
-    // 0 = board +X toward the nose (the historical assumption).  Set to a
-    // different code when the board is mounted off-axis: nose_sel*4 + clock,
-    // nose_sel 0..5 = +X,-X,+Y,-Y,+Z,-Z, clock = quarter-turns about the
-    // nose.  Applied after the per-chip rotations above, so those stay
-    // PCB facts and this stays an airframe fact.  Pad-gravity auto-detect
-    // and the app-side setting arrive in later phases; until then this
-    // constant is the manual override.
-    static constexpr uint8_t BOARD_TO_ROCKET_ORIENT = 0;
+    // Board -> rocket mounting orientation.  Either IMU_ORIENT_AUTO (0xFF) or
+    // a TR_Orientation code 0-23: nose_sel*4 + clock, nose_sel 0..5 =
+    // +X,-X,+Y,-Y,+Z,-Z, clock = quarter-turns about the nose.  Applied after
+    // the per-chip rotations above, so those stay PCB facts and this stays an
+    // airframe fact.
+    //
+    // This is the value a VIRGIN board uses: main.cpp takes it only when the
+    // "orient" NVS namespace has no "set" key, i.e. when the app has never
+    // configured this board.  Once the app writes one, NVS wins.
+    //
+    // #1095 item 2: the default is pad auto-detect (0xFF), matching the
+    // RocketProfile default in both apps.  The six-way lockstep in
+    // docs/protocol-change-checklist.md means this constant, the iOS
+    // RocketProfile default and the Android RocketProfile default move
+    // together — a mismatch silently re-tunes the rocket on connect.
+    //
+    // KNOW WHAT AUTO CANNOT DO.  Pad gravity gives the NOSE AXIS and nothing
+    // else: rotation ABOUT the nose — the clock quarter-turn — is unobservable
+    // from a gravity vector parallel to it.  A manual code 0-23 fixes both.
+    // So auto-detect resolves which way is up and leaves the roll clocking at
+    // whatever the snap picks, and the roll clocking is exactly what the fin
+    // mixer needs in order to know which way the control surfaces point.
+    // RocketComputerTypes.h states the rule at IMU_ORIENT_AUTO: auto is "fine
+    // for non-controlled flights", and a manual code is "required when roll
+    // control / guidance must know which way the control surfaces point".
+    // servoControlEnabled defaults to TRUE in both apps, so a rocket flown on
+    // defaults is roll-controlled — SET A MANUAL CODE before flying one.
+    // Hardcoded to 0xFF rather than IMU_ORIENT_AUTO because this header is
+    // included without RocketComputerTypes.h; a gtest pins the two equal.
+    static constexpr uint8_t BOARD_TO_ROCKET_ORIENT = 0xFF;
 
     // ### Camera Controls ###
     // Camera type is a RUNTIME property (runtime_camera_type, set over BLE and

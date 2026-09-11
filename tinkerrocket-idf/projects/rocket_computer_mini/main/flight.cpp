@@ -2516,9 +2516,17 @@ void flight_setup()
     sensor_collector.configureSimIis2mdcRotation(config::IIS2MDC_ROT_Z_DEG);
 
     // Board→rocket mounting orientation (converter + sim).
+    //
+    // #1095 item 2: AUTO is now the board default, and AUTO is a SENTINEL, not
+    // a code — feeding 0xFF through as a manual TR_Orientation code would ask
+    // for orientation 255, which does not exist.  Seed identity in DEFAULT
+    // mode and let the pad-gravity estimator replace it a couple of seconds
+    // later, exactly as the flight computer does at its own apply site.
     applyBoardToRocketOrientation(
-        config::BOARD_TO_ROCKET_ORIENT,
-        (config::BOARD_TO_ROCKET_ORIENT == ORIENT_CODE_IDENTITY)
+        (config::BOARD_TO_ROCKET_ORIENT == IMU_ORIENT_AUTO)
+            ? ORIENT_CODE_IDENTITY : config::BOARD_TO_ROCKET_ORIENT,
+        (config::BOARD_TO_ROCKET_ORIENT == IMU_ORIENT_AUTO ||
+         config::BOARD_TO_ROCKET_ORIENT == ORIENT_CODE_IDENTITY)
             ? ORIENT_MODE_DEFAULT : ORIENT_MODE_MANUAL);
 
     // Apply mag hard-iron offset to the IIS2MDC chip now that begin() has
