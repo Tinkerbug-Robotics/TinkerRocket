@@ -50,8 +50,16 @@ public:
                             uint32_t range_end,
                             uint32_t& out_start) const;
 
-    // Aggregate counters for health reporting.
+    // Aggregate counters for health reporting. countInState walks the WHOLE
+    // die — including the pre-region (LFS) and metadata blocks, which are
+    // never allocated and so always read FREE. A caller reasoning about the
+    // flight region (free space for the next flight, eviction headroom) wants
+    // countInStateRange over [flight_region_start, flight_region_end)
+    // instead; feeding the whole-die count to a region threshold shifted the
+    // storage go/no-go by 36 blocks (#1235 item 3). `end` is clamped to the
+    // active block count; an empty or inverted range counts 0.
     size_t countInState(BlockState state) const;
+    size_t countInStateRange(BlockState state, uint32_t start, uint32_t end) const;
 
     // Serialization (round-trip safe).
     void serializeTo(uint8_t* buf, size_t len) const;

@@ -84,6 +84,14 @@ struct TR_LogToFlashStats
     uint32_t ring_size = 0;
     uint32_t ring_fill = 0;
     uint32_t ring_highwater = 0;
+    // #1235 item 6: the highest ring_fill reached since the last
+    // resetIntervalTimings() — tracked in ringPush on every push, like
+    // ring_highwater, so it sees the excursions BETWEEN two stats calls. The
+    // OC's "ring_peak=" used to be max(last second's sample, this second's
+    // sample), a 1 Hz snapshot that could not observe the fill spike a NAND
+    // stall produces and drains within one window. Reset to the CURRENT fill,
+    // not zero, so a full-but-quiet ring does not read as empty for a window.
+    uint32_t ring_interval_peak = 0;
     uint32_t ring_overruns = 0;
     uint32_t ring_drop_oldest_bytes = 0;
     uint32_t ring_bad_sof_clears = 0;   // Issue #46: count of clearRing fires from
@@ -328,6 +336,7 @@ private:
     uint32_t rb_overruns = 0;
     uint32_t rb_drop_oldest_bytes = 0;
     uint32_t rb_highwater = 0;
+    uint32_t rb_interval_peak = 0;   // #1235 item 6: per-window high-water, see resetIntervalTimings()
     uint32_t rb_bad_sof_clears = 0;
 
     // Issue #74 diagnostic: compare total bytes pushed vs popped. A healthy

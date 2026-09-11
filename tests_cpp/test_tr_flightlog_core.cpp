@@ -2999,3 +2999,99 @@ TEST(TRFlightLogFinalize, RejectsFilenameLongerThanTheEntry) {
     EXPECT_FALSE(fl.isFlightActive());
     EXPECT_STREQ(fl.index().at(0).filename, "flight_20260909_143005.bin");
 }
+
+// ---------------------------------------------------------------------------
+// #1235 item 3: the flight-region free count.
+//
+// bitmap().countInState(BLOCK_FREE) walks the whole die, and the 32 LFS
+// pre-region blocks plus the 4 metadata blocks are never allocated by this
+// layer, so they always read FREE — the count sits 36 high on every shipping
+// geometry. The OC fed it to shStorageState() against prealloc_blocks (80) and
+// the BAD trip point moved from 80 genuinely free region blocks to 44.
+// regionFreeBlocks() is the number the thresholds were written for, and the
+// one the #315 eviction floor was already measured against.
+// ---------------------------------------------------------------------------
+
+TEST(BlockStateBitmap, CountInStateRangeIsScopedAndClamped) {
+    BlockStateBitmap bm;
+    bm.setBlockCount(G.blocks);
+    bm.set(10, BLOCK_ALLOCATED);
+    bm.set(11, BLOCK_BAD);
+    bm.set(G.blocks - 1, BLOCK_ALLOCATED);
+
+    // The whole die, both ways.
+    EXPECT_EQ(bm.countInStateRange(BLOCK_FREE, 0, G.blocks), NAND_BLOCK_COUNT - 3);
+    EXPECT_EQ(bm.countInStateRange(BLOCK_FREE, 0, G.blocks), bm.countInState(BLOCK_FREE));
+    EXPECT_EQ(bm.countInStateRange(BLOCK_BAD, 0, G.blocks), 1u);
+    // A window: [10, 12) holds one ALLOCATED and one BAD, no FREE.
+    EXPECT_EQ(bm.countInStateRange(BLOCK_FREE, 10, 12), 0u);
+    EXPECT_EQ(bm.countInStateRange(BLOCK_ALLOCATED, 10, 12), 1u);
+    EXPECT_EQ(bm.countInStateRange(BLOCK_FREE, 12, 20), 8u);
+    // `end` past the die is clamped; empty and inverted ranges count nothing.
+    EXPECT_EQ(bm.countInStateRange(BLOCK_FREE, G.blocks - 2, G.blocks + 100), 1u);
+    EXPECT_EQ(bm.countInStateRange(BLOCK_FREE, 20, 20), 0u);
+    EXPECT_EQ(bm.countInStateRange(BLOCK_FREE, 30, 20), 0u);
+}
+
+TEST(TRFlightLogRegionFree, ExcludesThePreRegionAndMetadataBlocks) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    TR_FlightLog::Config cfg;   // region [32, blocks - 4), metadata in the top four
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+
+    const uint32_t region = fl.config().flight_region_end - fl.config().flight_region_start;
+    ASSERT_EQ(fl.config().flight_region_start, 32u);
+    ASSERT_EQ(NAND_BLOCK_COUNT - fl.config().flight_region_end, 4u);
+
+    EXPECT_EQ(fl.regionFreeBlocks(), region);
+    // The whole-die count is exactly 36 higher: the defect, as arithmetic.
+    EXPECT_EQ(fl.bitmap().countInState(BLOCK_FREE), region + 32u + 4u);
+}
+
+TEST(TRFlightLogRegionFree, FollowsAllocationAndInRegionBadBlocksOnly) {
+    FakeNandBackend nand;
+    nand.injectFactoryBadBlock(3);      // pre-region: invisible to the region count
+    nand.injectFactoryBadBlock(100);    // in-region: one block the region cannot use
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    TR_FlightLog::Config cfg;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    const uint32_t region = fl.config().flight_region_end - fl.config().flight_region_start;
+
+    EXPECT_EQ(fl.regionFreeBlocks(), region - 1);
+    EXPECT_EQ(fl.bitmap().countInState(BLOCK_FREE), region - 1 + 35u);
+
+    // Arming a flight reserves prealloc blocks out of the region...
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    EXPECT_EQ(fl.regionFreeBlocks(), region - 1 - cfg.prealloc_blocks);
+    // ...finalizing trims the unwritten tail back to what the flight used
+    // (one block for a one-page flight), and deleting gives the rest back.
+    ASSERT_EQ(fl.finalizeFlight("flight_001.bin", 4096), Status::Ok);
+    ASSERT_EQ(fl.index().size(), 1u);
+    const uint32_t kept = fl.index().at(0).n_blocks;
+    EXPECT_EQ(kept, 1u);
+    EXPECT_EQ(fl.regionFreeBlocks(), region - 1 - kept);
+    ASSERT_EQ(fl.deleteFlight("flight_001.bin"), Status::Ok);
+    EXPECT_EQ(fl.regionFreeBlocks(), region - 1);
+}
+
+TEST(TRFlightLogRegionFree, ReadsZeroWhenTheRegionIsFullWhileTheDieCountStillReads36) {
+    // The trip-point shift end to end: a region with no room at all, on which
+    // the whole-die count still claims 36 free blocks. With prealloc 4 that
+    // is "room for nine flights" against a region that cannot take one.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 3);   // region [32, 44): exactly three flights
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "flight_001.bin"), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "flight_002.bin"), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "flight_003.bin"), Status::Ok);
+
+    EXPECT_EQ(fl.regionFreeBlocks(), 0u);
+    EXPECT_EQ(fl.bitmap().countInState(BLOCK_FREE), NAND_BLOCK_COUNT - 12u);
+    uint32_t id = 0;
+    EXPECT_EQ(fl.prepareFlight(id), Status::NoSpace);   // the region agrees with itself
+}

@@ -563,6 +563,11 @@ bool TR_FlightLog::evictOldestLocked() {
     return true;
 }
 
+uint32_t TR_FlightLog::regionFreeBlocks() const {
+    return static_cast<uint32_t>(bitmap_.countInStateRange(
+        BLOCK_FREE, cfg_.flight_region_start, cfg_.flight_region_end));
+}
+
 uint32_t TR_FlightLog::evictOldestToTargetLocked() {
     // Cap the requested headroom at the region size so a mis-set target can't
     // spin the loop forever trying to free more blocks than the region holds.
@@ -574,14 +579,9 @@ uint32_t TR_FlightLog::evictOldestToTargetLocked() {
     // Free blocks WITHIN the flight region — not bitmap_.countInState(BLOCK_FREE),
     // which also counts the always-free pre-region (LFS) and metadata blocks and
     // would let the target be met without ever evicting. Scoped so the headroom
-    // floor is measured against the space this layer actually manages.
-    auto region_free = [this]() -> uint32_t {
-        uint32_t f = 0;
-        for (uint32_t b = cfg_.flight_region_start; b < cfg_.flight_region_end; ++b) {
-            if (bitmap_.get(b) == BLOCK_FREE) ++f;
-        }
-        return f;
-    };
+    // floor is measured against the space this layer actually manages
+    // (regionFreeBlocks() — the same count the OC's storage verdict uses since
+    // #1235 item 3, so the two can never disagree about "room for a flight").
 
     uint32_t evicted = 0;
     while (true) {
@@ -594,7 +594,7 @@ uint32_t TR_FlightLog::evictOldestToTargetLocked() {
             cfg_.prealloc_blocks, cfg_.flight_region_start,
             cfg_.flight_region_end, start);
         const bool index_room = index_.size() < FlightIndex::MAX_ENTRIES;
-        const bool meets_target = region_free() >= target_free;
+        const bool meets_target = regionFreeBlocks() >= target_free;
         if (have_run && index_room && meets_target) break;
 
         // Reclaim one more oldest flight; stop if the index holds nothing
