@@ -356,6 +356,16 @@ target_compile_definitions(test_orientation PRIVATE TR_BOARD_V9=1)
 target_link_libraries(test_orientation GTest::gtest_main)
 gtest_discover_tests(test_orientation)
 
+# ---------- test_lora_modulation_policy (#1128) ----------
+# The LLCC68's SF-window-follows-bandwidth rule, which is what makes the order
+# of reconfigure()'s rollback part of its correctness. Header-only.
+add_executable(test_lora_modulation_policy test_lora_modulation_policy.cpp)
+target_include_directories(test_lora_modulation_policy PRIVATE
+    ${LIB_DIR}/TR_LoRa_Comms
+)
+target_link_libraries(test_lora_modulation_policy GTest::gtest_main)
+gtest_discover_tests(test_lora_modulation_policy)
+
 # ---------- test_lora_roundtrip ----------
 # This tests the OutComputer -> BaseStation -> iOS App data pipeline
 add_executable(test_lora_roundtrip test_lora_roundtrip.cpp
