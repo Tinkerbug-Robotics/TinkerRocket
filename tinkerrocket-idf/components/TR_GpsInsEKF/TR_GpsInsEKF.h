@@ -360,7 +360,14 @@ public:
         std::memcpy(wBias_rps_,     s.gyro_bias,   sizeof(wBias_rps_));
         std::memcpy(P_,             s.P,           sizeof(P_));
         tPrev_us_ = s.t_prev_us;
-        std::memcpy(euler_BL_rad_,  s.euler,       sizeof(euler_BL_rad_));
+        // Euler is a CACHE of the quaternion, not independent state — the
+        // filter recomputes it with Quat2Euler on every update.  Derive it
+        // here rather than trusting s.euler, for the same reason the DCM is
+        // rebuilt below (#386) and with the same benefit: a caller cannot
+        // hand setState() an euler/quat pair that disagree.  This is what
+        // let FlightSnapshotData v5 spend ekf_euler's 12 wire bytes on the
+        // flight maxima (#1154 item 9) without growing the frame.
+        Quat2Euler(quat_BL_, euler_BL_rad_);
         // Rebuild DCM from restored quaternion.  Quat2DCM produces T_NED2B;
         // transpose into T_B2NED (#386: this used to store the inverse —
         // latent because timeUpdate() recomputes the DCM every tick, but

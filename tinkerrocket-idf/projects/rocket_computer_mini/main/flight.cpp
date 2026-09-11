@@ -880,8 +880,17 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
         ekf.getCovDiag(diag_tmp);
         memcpy(snap.ekf_P_diag, diag_tmp, sizeof(diag_tmp));
         snap.ekf_t_prev_us = s.t_prev_us;
-        memcpy(snap.ekf_euler,       s.euler,       sizeof(snap.ekf_euler));
+        // v5: s.euler is no longer carried — it is a cache of s.quat above,
+        // and setState() derives it on restore. Its 12 bytes now hold the
+        // flight maxima below.
     }
+
+    // #1154 item 9: the running flight maxima. Outside the ekf_initialized
+    // guard on purpose — they come from the kinematics/baro path and keep
+    // climbing whether or not the filter ever started.
+    snap.max_alt_m     = max_alt_m;
+    snap.max_speed_mps = max_speed_mps;
+    snap.reserved_v5   = 0.0f;
 
     snap.crc32 = computeSnapshotCRC(snap);
 }
@@ -2789,6 +2798,19 @@ void flight_setup()
                          orientCodeName(snap.b2r_code), (unsigned)snap.b2r_mode);
             }
 
+            // #1154 item 9: restore the flight maxima. Seed KINEMATICS, not
+            // just the file-scope mirrors: the flight loop reassigns
+            // max_alt_m/max_speed_mps from kinematics every tick, so restoring
+            // only the mirrors would be silently undone on the next pass.
+            // fmaxf because the live values can already have advanced past the
+            // snapshot before we get here.
+            kinematics.max_altitude = fmaxf(kinematics.max_altitude, snap.max_alt_m);
+            kinematics.max_speed    = fmaxf(kinematics.max_speed,    snap.max_speed_mps);
+            max_alt_m     = kinematics.max_altitude;
+            max_speed_mps = kinematics.max_speed;
+            ESP_LOGW(TAG, "[RECOVERY] flight maxima restored: alt %.1f m, speed %.1f m/s",
+                     (double)max_alt_m, (double)max_speed_mps);
+
             // Restore control state (guidance_enabled/servo_enabled wire
             // fields are ignored — those subsystems do not exist here).
             ekf_initialized  = snap.ekf_initialized;
@@ -2809,7 +2831,9 @@ void flight_setup()
                 // Zero P here; setCovFromDiag fills the diagonal below.
                 memset(ekf_state.P, 0, sizeof(ekf_state.P));
                 ekf_state.t_prev_us = snap.ekf_t_prev_us;
-                memcpy(ekf_state.euler,       snap.ekf_euler,       sizeof(ekf_state.euler));
+                // v5: euler is not on the wire any more. setState() derives it
+                // from the restored quaternion, so leaving it zero here is
+                // correct rather than lossy.
                 ekf.setState(ekf_state);
                 // Copy diag to a local before passing to the float(&)[15]
                 // reference — packed-struct fields can't bind directly.

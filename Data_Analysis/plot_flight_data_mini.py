@@ -144,7 +144,7 @@ MSG_EXPECTED_LEN = {
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
     MSG_IIS2MDC:           10,   # IIS2MDCData (new PCB rev)
-    MSG_SNAPSHOT:          224,  # FlightSnapshotData (v2-v4 are all 224 B; version gates meaning, not size)
+    MSG_SNAPSHOT:          224,  # FlightSnapshotData (v2-v5 are all 224 B; version gates meaning, not size)
     MSG_NON_SENSOR:        None,  # 42 (legacy) or 43 (with pyro_status byte)
     MSG_POWER:            (10, 14),  # #850: v2 appends cam_ma + servo_ma
     MSG_START_LOGGING:     None,  # variable / no payload
@@ -255,9 +255,13 @@ FMT_LOG_BUFFER_STATS = '<I IIIIII'
 # FlightSnapshotData (SNAPSHOT_MSG 0xD2), 224 bytes packed — the FC's periodic
 # crash-recovery state, sent to the OC at 10 Hz through INFLIGHT and logged.
 # RocketComputerTypes.h:3297.  Every shipped version is 224 bytes: v3 reclaimed
-# two pad bytes for the board->rocket orientation and v4 reclaimed a third for
-# sim_flight, so `version` gates MEANING, not layout, and older frames are
-# decoded with the reclaimed fields as None rather than as zeros.
+# two pad bytes for the board->rocket orientation, v4 reclaimed a third for
+# sim_flight, and v5 reclaimed ekf_euler's twelve bytes IN PLACE for the flight
+# maxima (#1154 item 9) — so `version` gates MEANING, not layout, and older
+# frames are decoded with the reclaimed fields as None rather than as zeros.
+# The struct is deliberately never grown: sizeof(FlightSnapshotData) IS
+# MAX_PAYLOAD on the wire, so a bigger snapshot would move the I2S frame size
+# on every board at once.
 FMT_SNAPSHOT = ('<I BBBB III BBBBB BBB f ddd BBBB 3d 3f 4f 3f 3f 15f I 3f 4h I')
 SNAPSHOT_LEN = 224
 SNAPSHOT_MAGIC = 0xF1A75A7E
@@ -923,6 +927,23 @@ def parse_binary_file(filepath):
                     b2r_mode = f[14] if version >= 3 else None
                     b2r_q = ([f[59 + i] / 10000.0 for i in range(4)]
                              if version >= 3 else [None] * 4)
+                    # v5 (#1154 item 9) reclaimed ekf_euler's three floats IN
+                    # PLACE for the flight maxima.  Those twelve bytes mean
+                    # different things either side of the version line while the
+                    # frame size never moved — which is precisely why the format
+                    # string above is still one fixed 224-byte layout and every
+                    # other index here is untouched.  Euler was only ever a
+                    # cache of the quaternion (still at f[30..33]), so nothing
+                    # is lost: a v5 log's attitude is recoverable from ekf_q*.
+                    if version >= 5:
+                        ekf_roll = ekf_pitch = ekf_yaw = None
+                        snap_max_alt_m     = f[56]
+                        snap_max_speed_mps = f[57]
+                    else:
+                        ekf_roll  = math.degrees(f[56])
+                        ekf_pitch = math.degrees(f[57])
+                        ekf_yaw   = math.degrees(f[58])
+                        snap_max_alt_m = snap_max_speed_mps = None
                     records["Snapshot"].append({
                         # ekf_t_prev_us, the EKF's last time-update stamp. Verified
                         # against this log's NonSensor span: same micros() origin as
@@ -978,9 +999,14 @@ def parse_binary_file(filepath):
                         # Covariance DIAGONAL only (the full 15x15 does not fit one
                         # I2S frame). Variances, so sqrt() for a 1-sigma.
                         **{name: f[40 + i] for i, name in enumerate(SNAPSHOT_P_NAMES)},
-                        "ekf_roll":             math.degrees(f[56]),
-                        "ekf_pitch":            math.degrees(f[57]),
-                        "ekf_yaw":              math.degrees(f[58]),
+                        "ekf_roll":             ekf_roll,
+                        "ekf_pitch":            ekf_pitch,
+                        "ekf_yaw":              ekf_yaw,
+                        # v5+: the flight maxima the FC restores after an
+                        # in-flight reboot.  None on v4 and older, where the
+                        # firmware did not carry them at all.
+                        "snap_max_alt_m":       snap_max_alt_m,
+                        "snap_max_speed_mps":   snap_max_speed_mps,
                         "b2r_q0":               b2r_q[0],
                         "b2r_q1":               b2r_q[1],
                         "b2r_q2":               b2r_q[2],
