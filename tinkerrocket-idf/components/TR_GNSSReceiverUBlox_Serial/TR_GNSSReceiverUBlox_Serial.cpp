@@ -108,10 +108,13 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
     // a *retry*), so a live-but-slow module is never cut off mid-sweep.  Compared
     // wrap-safe; boot-time millis() never wraps, but keep the idiom consistent.
     const uint32_t kBeginTimeoutMs   = 60000U;
-    const uint32_t begin_deadline_ms = millis() + kBeginTimeoutMs;
-    auto beginExpired = [&]() -> bool {
-        return (int32_t)(millis() - begin_deadline_ms) >= 0;
-    };
+    // #1136 item 1: published as a member so the stages that run AFTER a link
+    // is up — baud standardisation, configureReceiver, the OTP poll — can stop
+    // at the same deadline. They each used to carry their own unbounded retry
+    // budget, which is how a 60 s promise became a multi-minute boot stall.
+    begin_deadline_ms_ = millis() + kBeginTimeoutMs;
+    if (begin_deadline_ms_ == 0) begin_deadline_ms_ = 1;   // 0 means "unset"
+    auto beginExpired = [this]() -> bool { return beginDeadlineExpired(); };
 
     if (safeboot_n_pin >= 0)
     {
@@ -508,6 +511,17 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         bool switched = false;
         for (uint8_t attempt = 0; attempt < 6; attempt++)
         {
+            // #1136 item 1: six attempts at ~6.8 s each is ~41 s of retries on
+            // a module that answers but will not switch — on top of whatever
+            // the sweep already spent. Stop at the deadline like every other
+            // stage; the collector's GNSS-absent degraded mode is the
+            // documented outcome and it beats holding the FC's boot.
+            if (beginExpired())
+            {
+                ESP_LOGE(TAG, "GNSS baud standardisation timed out after %lu ms; "
+                              "continuing without GNSS", (unsigned long)kBeginTimeoutMs);
+                return false;
+            }
             bool baud_change_requested = false;
             for (uint8_t n = 0; n < 3; n++)
             {
@@ -683,6 +697,14 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
                       "write + reset — continuing at default clock");
     }
 
+    // #1136 item 1: every retry loop below is bounded by begin()'s deadline as
+    // well as its own 8-attempt budget. One failing step costs 8 x (1100 ms
+    // call + 150 ms) = 10 s before returning false, and the whole lambda runs
+    // TWICE around a factoryDefault(5000) + delay(1500) — none of which used to
+    // consult the deadline. `!ok` then returns false exactly as it always did,
+    // so the caller drops into the documented GNSS-absent degraded mode instead
+    // of holding the FC's boot for minutes. delay() is vTaskDelay, so the task
+    // watchdog is fed throughout and the stall was completely silent.
     auto configureReceiver = [&]() -> bool
     {
         bool ok = false;
@@ -690,7 +712,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 
         // Accept both UBX and NMEA on input (for bring-up compatibility).
         ok = false;
-        for (i = 0; i < 8; i++)
+        for (i = 0; i < 8 && !beginDeadlineExpired(); i++)
         {
             if (gnss.setUART1Input((uint8_t)(COM_TYPE_UBX | COM_TYPE_NMEA))) { ok = true; break; }
             ESP_LOGW(TAG, "Failed to set UART1 input protocol mask");
@@ -704,7 +726,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         // byte-by-byte, blocking the sensor polling task for ~10 ms per GNSS
         // poll and causing ISM6/BMP/MMC data gaps.  We only need UBX autoPVT.
         ok = false;
-        for (i = 0; i < 8; i++)
+        for (i = 0; i < 8 && !beginDeadlineExpired(); i++)
         {
             if (gnss.setUART1Output(COM_TYPE_UBX)) { ok = true; break; }
             ESP_LOGW(TAG, "Failed to set UART1 output protocol mask");
@@ -720,7 +742,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         // so the receiver runs at its true ceiling even when the actual
         // rate drops with satellite count.
         ok = false;
-        for (i = 0; i < 8; i++)
+        for (i = 0; i < 8 && !beginDeadlineExpired(); i++)
         {
             if (gnss.enableGNSS(true, SFE_UBLOX_GNSS_ID_GPS, VAL_LAYER_RAM_BBR)) { ok = true; break; }
             ESP_LOGW(TAG, "Failed to enable GPS constellation");
@@ -730,7 +752,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         ESP_LOGI(TAG, "Enabled GPS");
 
         ok = false;
-        for (i = 0; i < 8; i++)
+        for (i = 0; i < 8 && !beginDeadlineExpired(); i++)
         {
             if (gnss.enableGNSS(true, SFE_UBLOX_GNSS_ID_GALILEO, VAL_LAYER_RAM_BBR)) { ok = true; break; }
             ESP_LOGW(TAG, "Failed to enable Galileo constellation");
@@ -740,7 +762,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         ESP_LOGI(TAG, "Enabled Galileo");
 
         ok = false;
-        for (i = 0; i < 8; i++)
+        for (i = 0; i < 8 && !beginDeadlineExpired(); i++)
         {
             if (gnss.enableGNSS(true, SFE_UBLOX_GNSS_ID_GLONASS, VAL_LAYER_RAM_BBR)) { ok = true; break; }
             ESP_LOGW(TAG, "Failed to enable Glonass constellation");
@@ -750,7 +772,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         ESP_LOGI(TAG, "Enabled Glonass");
 
         ok = false;
-        for (i = 0; i < 8; i++)
+        for (i = 0; i < 8 && !beginDeadlineExpired(); i++)
         {
             if (gnss.enableGNSS(true, SFE_UBLOX_GNSS_ID_BEIDOU, VAL_LAYER_RAM_BBR)) { ok = true; break; }
             ESP_LOGW(TAG, "Failed to enable Beidou constellation");
@@ -770,7 +792,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
                 {
                     ESP_LOGI(TAG, "Switching to Full Power (high performance) mode");
                     ok = false;
-                    for (i = 0; i < 8; i++)
+                    for (i = 0; i < 8 && !beginDeadlineExpired(); i++)
                     {
                         if (gnss.setVal8(UBLOX_CFG_PM_OPERATEMODE, 0, VAL_LAYER_RAM_BBR)) { ok = true; break; }
                         ESP_LOGW(TAG, "Failed to set Full Power mode");
@@ -798,7 +820,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         // (>1g), not reacquiring until the rocket slows on descent, which
         // starved the EKF of GNSS through the whole boost+coast.
         ok = false;
-        for (i = 0; i < 8; i++)
+        for (i = 0; i < 8 && !beginDeadlineExpired(); i++)
         {
             if (gnss.setVal8(UBLOX_CFG_NAVSPG_DYNMODEL, DYN_MODEL_AIRBORNE4g)) { ok = true; break; }
             ESP_LOGW(TAG, "Failed to set dynamic model");
@@ -823,7 +845,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         }
 
         ok = false;
-        for (i = 0; i < 8; i++)
+        for (i = 0; i < 8 && !beginDeadlineExpired(); i++)
         {
             if (gnss.setNavigationFrequency(update_rate_hz)) { ok = true; break; }
             ESP_LOGW(TAG, "Failed to set navigation update rate");
@@ -833,7 +855,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         ESP_LOGI(TAG, "Navigation update rate set");
 
         ok = false;
-        for (i = 0; i < 8; i++)
+        for (i = 0; i < 8 && !beginDeadlineExpired(); i++)
         {
             if (gnss.setAutoPVT(true)) { ok = true; break; }
             ESP_LOGW(TAG, "Failed to enable auto PVT");
@@ -872,6 +894,15 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 
     // New modules can be in odd config states. If configuration repeatedly fails,
     // perform a factory default and try one more full configuration pass.
+    // #1136 item 1: configureReceiver() burns 8 x (1100 + 150) ms on the first
+    // step that fails before returning, and it is run twice around a
+    // factoryDefault(5000). Check the deadline before paying that again.
+    if (beginExpired())
+    {
+        ESP_LOGE(TAG, "GNSS configuration timed out after %lu ms; continuing "
+                      "without GNSS", (unsigned long)kBeginTimeoutMs);
+        return false;
+    }
     if (!configureReceiver())
     {
         ESP_LOGW(TAG, "Config failed, applying factory default and retrying...");
@@ -897,7 +928,16 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
             (void)gnss.begin(_uartPort, 1500);
         }
 
-        if (!configureReceiver())
+        // #1136 item 1: configureReceiver() burns 8 x (1100 + 150) ms on the first
+    // step that fails before returning, and it is run twice around a
+    // factoryDefault(5000). Check the deadline before paying that again.
+    if (beginExpired())
+    {
+        ESP_LOGE(TAG, "GNSS configuration timed out after %lu ms; continuing "
+                      "without GNSS", (unsigned long)kBeginTimeoutMs);
+        return false;
+    }
+    if (!configureReceiver())
         {
             ESP_LOGE(TAG, "Configuration failed after factory default");
             return false;
@@ -954,6 +994,26 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 // write is distinguishable from one that never left the buffer.
 static constexpr bool kOtpAutoProgram = false;
 
+// #1136 item 3: has the OTP verification poll been shown to reach the OTP
+// layer on real hardware?
+//
+// It demonstrably did NOT before 2026-09-11: the poll went through
+// getVal32(), whose layer argument is a VAL_LAYER_* bitmask, and the manual's
+// layer byte 0x04 is exactly VAL_LAYER_FLASH — so the library rewrote it to
+// VALGET layer 2 (Flash), a layer the M10 does not have. Every key NAKed on
+// every board, and the code recorded that as BLANK: a positive claim of
+// "unprogrammed", and the only state an irreversible write is allowed from.
+//
+// The poll now goes out at VALGET layer 4 verbatim (getVal32RawLayer), but
+// "the right layer number" is an inference from the manual until a module
+// known to be programmed answers it. A blank module and an unreachable poll
+// are indistinguishable — both NAK everything — so while this is false an
+// all-NAK result is recorded as READ_FAILED rather than BLANK, and no write
+// can proceed from it.
+//
+// Flip to true only after a known-programmed module reads its keys back here.
+static constexpr bool kOtpPollLayerConfirmed = false;
+
 // Modules that must NEVER be auto-programmed, by UBX-SEC-UNIQID unique chip
 // ID.  This travels with the FIRMWARE: the once-ever NVS guard lives on one
 // main board, but GNSS daughter boards migrate between main boards, and a
@@ -991,32 +1051,71 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
     //              the OTP already; NEVER auto-write over it (69-byte budget)
     //   BLANK    — all keys NACK (the unprogrammed signature): the only
     //              state eligible for programming
-    struct OtpKey { uint32_t key; uint32_t expect; };
+    // #1136 item 2: the verify set must match what the burst actually WRITES.
+    // kOtpBurst's frame 2 carries exactly two key/value pairs — 0x40A40005 and
+    // 0x40A4000A (decode it: `05 00 A4 40 | 00 B0 71 0B` and
+    // `0A 00 A4 40 | 00 D8 B8 05`). Keys 0x40A40001 and 0x40A40003 are never
+    // written by this firmware, so the old `matching == 4` predicate could not
+    // be satisfied by a module THIS firmware programmed, no matter how well the
+    // write went. The code's own accounting always said so: the budget comment
+    // above puts the high-perf config at 18 bytes, which is two pairs, not four.
+    //
+    // So 0001/0003 are polled for INFORMATION only and are not part of the
+    // verdict. If the integration manual really does require four keys, then it
+    // is the BURST that is incomplete, and that must be settled against the
+    // manual before another module is programmed — not papered over here.
+    struct OtpKey { uint32_t key; uint32_t expect; bool verdict; };
     static constexpr OtpKey kKeys[] = {
-        {0x40A40001, 0x0B71B000},
-        {0x40A40003, 0x0B71B000},
-        {0x40A40005, 0x0B71B000},
-        {0x40A4000A, 0x05B8D800},
+        {0x40A40001, 0x0B71B000, false},  // not written by kOtpBurst — informational
+        {0x40A40003, 0x0B71B000, false},  // not written by kOtpBurst — informational
+        {0x40A40005, 0x0B71B000, true},   // written by kOtpBurst frame 2
+        {0x40A4000A, 0x05B8D800, true},   // written by kOtpBurst frame 2
     };
-    constexpr uint8_t OTP_LAYER = 0x04;  // layer byte from the manual's poll
+    uint8_t verdict_keys = 0;
+    for (const auto &k : kKeys) if (k.verdict) verdict_keys++;
 
-    uint8_t readable = 0, matching = 0;
+    // #1136 item 3: this is a VALGET LAYER NUMBER, and it must be passed
+    // through unmodified. It used to go to gnss.getVal32(), whose `layer`
+    // argument is a VAL_LAYER_* BITMASK — and 0x04 is exactly VAL_LAYER_FLASH,
+    // so the library re-encoded it to VALGET layer 2 (Flash). The manual's OTP
+    // poll never reached the wire; on a part with no Flash layer every key
+    // NAKed, and the result was read as "unprogrammed" on every board.
+    constexpr uint8_t OTP_VALGET_LAYER = 4;  // layer byte from the manual's poll
+
+    uint8_t readable = 0, matching = 0, verdict_matching = 0;
     for (const auto &k : kKeys)
     {
+        // #1136 item 1: four keys x two tries x (1100 ms poll + 100 ms) is
+        // ~9.6 s, and this function runs twice because of the post-write
+        // recursion. begin()'s deadline was never consulted here, so a module
+        // that NAKs everything paid the full budget while the FC's boot waited.
+        if (beginDeadlineExpired())
+        {
+            ESP_LOGW(TAG, "OTP verification abandoned: begin() deadline reached. "
+                          "The receiver still runs at its default clock; only the "
+                          "OTP state is unknown.");
+            otp_state_ = gnss_otp::READ_FAILED;
+            return true;
+        }
         uint32_t v = 0;
         bool ok = false;
         for (uint8_t i = 0; i < 2 && !ok; i++)
         {
-            ok = gnss.getVal32(k.key, &v, OTP_LAYER, 1100);
+            ok = gnss.getVal32RawLayer(k.key, &v, OTP_VALGET_LAYER, 1100);
             if (!ok) delay(100);
         }
         if (ok)
         {
             readable++;
-            if (v == k.expect) matching++;
-            ESP_LOGI(TAG, "OTP key 0x%08lX = 0x%08lX (%s)",
+            if (v == k.expect)
+            {
+                matching++;
+                if (k.verdict) verdict_matching++;
+            }
+            ESP_LOGI(TAG, "OTP key 0x%08lX = 0x%08lX (%s%s)",
                      (unsigned long)k.key, (unsigned long)v,
-                     v == k.expect ? "expected" : "UNEXPECTED");
+                     v == k.expect ? "expected" : "UNEXPECTED",
+                     k.verdict ? "" : ", informational");
         }
         else
         {
@@ -1024,9 +1123,11 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
         }
     }
 
-    if (matching == 4)
+    if (verdict_matching == verdict_keys)
     {
-        ESP_LOGI(TAG, "High-performance clock OTP config VERIFIED (4/4 keys)");
+        ESP_LOGI(TAG, "High-performance clock OTP config VERIFIED (%u/%u written keys, "
+                      "%u/%u polled keys readable)",
+                 verdict_matching, verdict_keys, readable, (unsigned)(sizeof(kKeys)/sizeof(kKeys[0])));
         // Distinguish "already programmed when we arrived" from "we
         // programmed it on this boot" — the second pass after a write
         // lands here too, and that difference is the whole question.
@@ -1039,13 +1140,45 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
         // Module memory says SOMETHING is programmed but not the expected
         // full config (partial write, or different content).  Never gamble
         // the remaining OTP budget on top of unknown content.
-        ESP_LOGE(TAG, "OTP state PARTIAL/MISMATCHED (%u/4 readable, %u/4 "
-                      "matching) — auto-programming refused; inspect with "
-                      "u-center", readable, matching);
+        ESP_LOGE(TAG, "OTP state PARTIAL/MISMATCHED (%u readable, %u matching, "
+                      "%u/%u written keys matching) — auto-programming refused; "
+                      "inspect with u-center",
+                 readable, matching, verdict_matching, verdict_keys);
         otp_state_ = gnss_otp::PARTIAL;
         return true;
     }
-    ESP_LOGW(TAG, "OTP state BLANK (all keys NACK) — module unprogrammed");
+
+    // #1136 item 3: every key NAKed. That is NOT proof the module is blank — it
+    // is proof we could not read it, and the two are very different things,
+    // because BLANK is the one state an irreversible write is allowed from.
+    //
+    // This path was reached on every board before the layer fix above, so the
+    // old "OTP state BLANK — module unprogrammed" line was never evidence of
+    // anything. Report what is actually known and refuse to program on it.
+    // A truly blank module and a poll that cannot reach the OTP layer produce
+    // the SAME answer: every key NAKs. Nothing in the response distinguishes
+    // them, so the only thing that makes all-NAK mean "blank" is knowing the
+    // poll is landing where it is aimed — and that has never been demonstrated
+    // on this hardware. Until it is, all-NAK is recorded as READ_FAILED and no
+    // write may proceed from it.
+    //
+    // To flip this: put a module KNOWN to be programmed in front of the poll
+    // (FB80A88FA854 on the V9 is the candidate — its NVS guard says a write
+    // already happened) and confirm the four keys read back at VALGET layer 4.
+    // If they do, the poll is proven and this becomes BLANK again.
+    if (!kOtpPollLayerConfirmed)
+    {
+        ESP_LOGW(TAG, "OTP read FAILED (all keys NACK at VALGET layer %u) — the module's "
+                      "OTP contents are UNKNOWN, so it is not eligible for programming. "
+                      "A blank module and an unreachable poll read identically; this "
+                      "poll's layer has not been confirmed against a known-programmed "
+                      "module yet (#1136 item 3).",
+                 (unsigned)OTP_VALGET_LAYER);
+        otp_state_ = gnss_otp::READ_FAILED;
+        return true;
+    }
+
+    ESP_LOGW(TAG, "OTP state BLANK (all keys NACK at a confirmed layer) — module unprogrammed");
     otp_state_ = gnss_otp::BLANK;
 
     if (!kOtpAutoProgram)
@@ -1075,11 +1208,33 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
     // Policy: at most ONE programming attempt per physical module, tracked
     // in FC NVS against the receiver's unique chip ID (UBX-SEC-UNIQID).
     // No readable unique ID → no write, ever.
-    const char *uniq = gnss.getUniqueChipIdStr(nullptr, 1100);
-    if (uniq == nullptr || uniq[0] == '\0')
+    //
+    // #1136 item 4: this guard used to test the STRING getUniqueChipIdStr()
+    // returns, and that test could never fire. The library's buffer is a
+    // function-static pre-initialised to "000000000000"; on a failed poll it
+    // skips the fill loop and returns that buffer anyway — never nullptr, never
+    // empty. So an unidentifiable module sailed past here and got an
+    // irreversible write keyed in NVS under "o000000000000", an id every
+    // unidentifiable module would share.
+    //
+    // Worse than the sentinel: because the buffer is static and only rewritten
+    // on success, a failed read after a successful one returns the PREVIOUS
+    // module's id. Swap daughter boards, fail the second read, and the guard
+    // would cheerfully attribute the new module to the old one's NVS record.
+    //
+    // So gate on the BOOL, which is the only honest signal, and then reject the
+    // all-zero sentinel as well in case a future library returns it on success.
+    UBX_SEC_UNIQID_data_t uniqid_data;
+    const bool uniq_ok = gnss.getUniqueChipId(&uniqid_data, 1100);
+    const char *uniq = uniq_ok ? gnss.getUniqueChipIdStr(&uniqid_data, 1100) : nullptr;
+    if (!uniq_ok || uniq == nullptr || uniq[0] == '\0' ||
+        strcmp(uniq, "000000000000") == 0)
     {
-        ESP_LOGE(TAG, "Cannot read module unique ID — refusing to write OTP "
-                      "(no way to enforce the once-ever guard)");
+        ESP_LOGE(TAG, "Cannot read module unique ID (UBX-SEC-UNIQID %s) — refusing "
+                      "to write OTP: with no identity there is no way to enforce "
+                      "the once-ever guard, and the NVS record would be shared "
+                      "with every other unidentifiable module",
+                 uniq_ok ? "returned the all-zero sentinel" : "poll failed");
         return true;
     }
     // Firmware-resident blocklist first: protects known failed/wedged modules

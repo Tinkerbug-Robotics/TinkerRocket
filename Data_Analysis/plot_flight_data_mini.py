@@ -113,6 +113,7 @@ GNSS_OTP_STATES = {
     5: "BLOCKLISTED",  # BLANK but on kOtpNeverProgram
     6: "PROGRAMMED",   # written THIS boot and verified
     7: "WRITE_FAILED", # written this boot, verify still failed
+    8: "READ_FAILED",  # #1136: the poll failed — contents UNKNOWN, not blank
 }
 
 MSG_NAMES = {

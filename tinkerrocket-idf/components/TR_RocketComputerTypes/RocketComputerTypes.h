@@ -3074,6 +3074,12 @@ static constexpr uint8_t BLANK       = 4;  // all keys NACK: unprogrammed, and l
 static constexpr uint8_t BLOCKLISTED = 5;  // BLANK but on kOtpNeverProgram (a failed write reads BLANK)
 static constexpr uint8_t PROGRAMMED  = 6;  // written THIS boot and verified after the reset
 static constexpr uint8_t WRITE_FAILED = 7; // written this boot, verify still failed
+// #1136 item 3: the verification poll itself failed, so the OTP contents are
+// simply NOT KNOWN. Distinct from BLANK, which is a positive claim that the
+// module is unprogrammed — and the ONE state eligible for an irreversible
+// write. Until 2026-09-11 an unreadable poll was recorded as BLANK, so every
+// log said BLANK whatever the module actually held.
+static constexpr uint8_t READ_FAILED = 8;
 }  // namespace gnss_otp
 
 struct __attribute__((packed)) FlightSettingsData

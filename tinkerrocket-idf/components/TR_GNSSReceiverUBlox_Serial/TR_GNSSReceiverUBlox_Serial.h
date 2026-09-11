@@ -90,6 +90,21 @@ class TR_GNSSReceiverUBloxSerial
         // high clock (#837 item 6).  Now carried into FlightSettingsData v7.
         uint8_t otp_state_ = gnss_otp::UNKNOWN;
 
+        // #1136 item 1: begin()'s bring-up deadline, as an absolute millis()
+        // stamp, so stages OUTSIDE begin() can honour it too. It used to be a
+        // local with a lambda, reachable only from the baud sweeps — every
+        // later stage (baud standardisation, configureReceiver,
+        // ensureHighPerformanceClock) ran its own unbounded retry budget, so a
+        // receiver that answered the handshake and then NAKed configuration
+        // held the whole FC boot for minutes past the 60 s this advertises.
+        // 0 = no deadline set (begin() has not run).
+        uint32_t begin_deadline_ms_ = 0;
+        bool beginDeadlineExpired() const
+        {
+            return begin_deadline_ms_ != 0 &&
+                   (int32_t)(millis() - begin_deadline_ms_) >= 0;
+        }
+
         // Helper: install/reconfigure the UART driver at a given baud rate and pins.
         // Tears down any existing driver first.
         void uartBegin(uint32_t baud, uint8_t rx_pin, uint8_t tx_pin);

@@ -9886,14 +9886,6 @@ const char *DevUBLOXGNSS::getUniqueChipIdStr(UBX_SEC_UNIQID_data_t *data, uint16
 // Configuration of modern u-blox modules is now done via getVal/setVal/delVal, ie protocol v27 and above found on ZED-F9P
 sfe_ublox_status_e DevUBLOXGNSS::getVal(uint32_t key, uint8_t layer, uint16_t maxWait)
 {
-  packetCfg.cls = UBX_CLASS_CFG;
-  packetCfg.id = UBX_CFG_VALGET;
-  packetCfg.len = 4 + 4 * 1; // While multiple keys are allowed, we will send only one key at a time
-  packetCfg.startingSpot = 0;
-
-  // Clear packet payload
-  memset(payloadCfg, 0, packetCfg.len);
-
   // VALGET uses different memory layer definitions to VALSET
   // because it can only return the value for one layer.
   // So we need to fiddle the layer here.
@@ -9913,8 +9905,33 @@ sfe_ublox_status_e DevUBLOXGNSS::getVal(uint32_t key, uint8_t layer, uint16_t ma
     getLayer = 2; // Layer 2 is Flash
   }
 
-  payloadCfg[0] = 0;        // Message Version - set to 0
-  payloadCfg[1] = getLayer; // Layer
+  return getValRawLayer(key, getLayer, maxWait);
+}
+
+// TinkerRocket addition (#1136 item 3): VALGET with the layer NUMBER passed
+// through UNMODIFIED.
+//
+// getVal() above takes a VAL_LAYER_* BITMASK and re-encodes it into the VALGET
+// layer enum. That mapping makes some VALGET layers UNREACHABLE through the
+// bitmask API, and the M10 OTP layer is one of them: the manual's OTP poll
+// wants VALGET layer 4, but 4 is exactly VAL_LAYER_FLASH, so getVal() rewrites
+// it to layer 2 (Flash) and the intended poll never reaches the wire. On a part
+// with no Flash layer every key then NAKs, which reads as "unprogrammed".
+//
+// Callers that need a specific VALGET layer number use this instead. Everything
+// below the layer byte is shared with getVal(), so the two cannot drift.
+sfe_ublox_status_e DevUBLOXGNSS::getValRawLayer(uint32_t key, uint8_t valgetLayer, uint16_t maxWait)
+{
+  packetCfg.cls = UBX_CLASS_CFG;
+  packetCfg.id = UBX_CFG_VALGET;
+  packetCfg.len = 4 + 4 * 1; // While multiple keys are allowed, we will send only one key at a time
+  packetCfg.startingSpot = 0;
+
+  // Clear packet payload
+  memset(payloadCfg, 0, packetCfg.len);
+
+  payloadCfg[0] = 0;            // Message Version - set to 0
+  payloadCfg[1] = valgetLayer;  // Layer, verbatim
 
   // Load key into outgoing payload
   key &= ~UBX_CFG_SIZE_MASK;    // Mask off the size identifer bits
@@ -10000,6 +10017,15 @@ bool DevUBLOXGNSS::getValSigned16(uint32_t key, int16_t *val, uint8_t layer, uin
 bool DevUBLOXGNSS::getVal32(uint32_t key, uint32_t *val, uint8_t layer, uint16_t maxWait)
 {
   bool result = getVal(key, layer, maxWait) == SFE_UBLOX_STATUS_DATA_RECEIVED;
+  if (result)
+    *val = extractLong(&packetCfg, 8);
+  return result;
+}
+// TinkerRocket addition (#1136 item 3): 32-bit read at an explicit VALGET
+// layer number. Same extraction as getVal32(), but the layer is not remapped.
+bool DevUBLOXGNSS::getVal32RawLayer(uint32_t key, uint32_t *val, uint8_t valgetLayer, uint16_t maxWait)
+{
+  bool result = getValRawLayer(key, valgetLayer, maxWait) == SFE_UBLOX_STATUS_DATA_RECEIVED;
   if (result)
     *val = extractLong(&packetCfg, 8);
   return result;

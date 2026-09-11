@@ -600,12 +600,21 @@ public:
 
 protected:
   sfe_ublox_status_e getVal(uint32_t key, uint8_t layer = VAL_LAYER_RAM, uint16_t maxWait = kUBLOXGNSSDefaultMaxWait); // Load payload with response
+  // TinkerRocket (#1136 item 3): VALGET with the layer NUMBER verbatim. The
+  // bitmask API above cannot express every VALGET layer — notably the M10 OTP
+  // layer 4, which collides with VAL_LAYER_FLASH and is silently rewritten to
+  // layer 2. Use these when a specific VALGET layer is required.
+  sfe_ublox_status_e getValRawLayer(uint32_t key, uint8_t valgetLayer, uint16_t maxWait = kUBLOXGNSSDefaultMaxWait);
 public:
   bool getVal8(uint32_t key, uint8_t *val, uint8_t layer = VAL_LAYER_RAM, uint16_t maxWait = kUBLOXGNSSDefaultMaxWait);        // Returns the value at a given key location
   uint8_t getVal8(uint32_t key, uint8_t layer = VAL_LAYER_RAM, uint16_t maxWait = kUBLOXGNSSDefaultMaxWait);                   // Unsafe overload - for backward compatibility only
   bool getVal16(uint32_t key, uint16_t *val, uint8_t layer = VAL_LAYER_RAM, uint16_t maxWait = kUBLOXGNSSDefaultMaxWait);      // Returns the value at a given key location
   uint16_t getVal16(uint32_t key, uint8_t layer = VAL_LAYER_RAM, uint16_t maxWait = kUBLOXGNSSDefaultMaxWait);                 // Unsafe overload - for backward compatibility only
   bool getVal32(uint32_t key, uint32_t *val, uint8_t layer = VAL_LAYER_RAM, uint16_t maxWait = kUBLOXGNSSDefaultMaxWait);      // Returns the value at a given key location
+  // TinkerRocket (#1136 item 3): 32-bit read at an explicit VALGET layer
+  // NUMBER, not a VAL_LAYER_* bitmask. The bitmask cannot express the M10 OTP
+  // layer 4 — 4 IS the Flash bitmask, so getVal32() silently polls Flash.
+  bool getVal32RawLayer(uint32_t key, uint32_t *val, uint8_t valgetLayer, uint16_t maxWait = kUBLOXGNSSDefaultMaxWait);
   uint32_t getVal32(uint32_t key, uint8_t layer = VAL_LAYER_RAM, uint16_t maxWait = kUBLOXGNSSDefaultMaxWait);                 // Unsafe overload - for backward compatibility only
   bool getVal64(uint32_t key, uint64_t *val, uint8_t layer = VAL_LAYER_RAM, uint16_t maxWait = kUBLOXGNSSDefaultMaxWait);      // Returns the value at a given key location
   uint64_t getVal64(uint32_t key, uint8_t layer = VAL_LAYER_RAM, uint16_t maxWait = kUBLOXGNSSDefaultMaxWait);                 // Unsafe overload - for backward compatibility only
