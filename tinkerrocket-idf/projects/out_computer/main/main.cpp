@@ -602,6 +602,23 @@ static uint8_t serving_cfg_type = 0;
 static uint8_t serving_cfg_len  = 0;
 static uint8_t serving_cfg[sizeof(RollProfileData)] = {};
 static bool    cmd_idle_gap_pending = false;    // serve one cmd=0 poll between commands
+#if defined(TR_TEST_CFG_DROP)
+// Bench-only hook (the "-cfgdrop" image; -DTR_TEST_CFG_DROP=1).  BLE cmd 200
+// [count][type] arms the next `count` config frames OF THAT TYPE to be
+// dropped at pack time, reproducing the #569 fit-drop on demand: a config
+// the OC logs as served that never reaches the FC.  First built for the
+// #1112 / #1117 retry bench and lost with that session; re-created for the
+// #1231 bench, where it is how "a frame the FC never applied" is produced.
+// Keyed on cmd_delivery_count — the OC's own notion of a delivery, which
+// advances only when a stage is ACCEPTED — not on a per-pack decrement: a
+// refused stage re-packs on the next query, and the first version of this
+// hook burned three armed drops inside ONE FC poll (bench, 2026-09-11).  So
+// `count` is "drop the first `count` deliveries of the next command of that
+// type"; the OC serves a command CMD_REPEAT_LIMIT (3) times, and the hook
+// disarms itself when that command is retired.
+static volatile uint8_t test_cfg_drop_count = 0;
+static volatile uint8_t test_cfg_drop_type  = 0;
+#endif
 
 // Enqueue a command for the FC with its config payload passed explicitly
 // (#476: the old shared staging globals leaked stale payloads into
@@ -3343,6 +3360,18 @@ static void queueOutStatusResponse(bool ready)
     {
         uint8_t cfg_frame[MAX_FRAME];
         size_t  cfg_frame_len = 0;
+#if defined(TR_TEST_CFG_DROP)
+        if (test_cfg_drop_count > 0 && serving_cfg_type == test_cfg_drop_type
+            && cmd_delivery_count < test_cfg_drop_count)
+        {
+            ESP_LOGW("OC", "[TEST] config frame type=0x%02X DROPPED at pack time "
+                           "(cfgdrop hook, delivery %u of %u armed) — the FC will "
+                           "see the command with no frame",
+                     (unsigned)serving_cfg_type,
+                     (unsigned)(cmd_delivery_count + 1U), (unsigned)test_cfg_drop_count);
+        }
+        else
+#endif
         if (TR_I2C_Interface::packMessage(serving_cfg_type,
                                            serving_cfg,
                                            serving_cfg_len,
@@ -3418,6 +3447,13 @@ static void queueOutStatusResponse(bool ready)
             ESP_LOGI("OC", "I2C TX Cmd 0x%02X cleared after %u deliveries (queued=%u)",
                           (unsigned)cmd, (unsigned)cmd_delivery_count,
                           (unsigned)cmd_queue_count);
+#if defined(TR_TEST_CFG_DROP)
+            if (test_cfg_drop_count > 0 && serving_cfg_type == test_cfg_drop_type)
+            {
+                test_cfg_drop_count = 0;   // one command's worth; never leak into the next
+                ESP_LOGW("OC", "[TEST] cfgdrop hook disarmed — the armed command was retired");
+            }
+#endif
             pending_out_command = 0U;
             serving_cfg_len = 0;
             serving_cfg_type = 0;
@@ -4128,15 +4164,20 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (changed) fc_config_report_dirty = true;
 
         // #1231: the one place both copies of the deployment configuration
-        // are in hand.  Logged when the report changes, not on every 5 s
-        // repeat.  The cache is deliberately NOT overwritten from here: it
-        // is what the phone last pushed (and what the rail-off readback
-        // serves, #1131), the report is what the FC holds, and the app is
-        // told the second — with its source — so the operator sees it.
-        if (changed && has_pyro)
+        // are in hand.  Compared on EVERY report, logged when a divergence
+        // appears (or the FC's side moves while one stands) and once when it
+        // closes — so a cmd-34 write the FC never received shows up on the
+        // next 5 s repeat, not only when the FC's copy changes.  The cache
+        // is deliberately NOT overwritten from here: it is what the phone
+        // last pushed (and what the rail-off readback serves, #1131), the
+        // report is what the FC holds, and the app is told the second —
+        // with its source — so the operator sees it.
+        if (has_pyro)
         {
+            static bool diverged = false;
             const PyroConfigData cache = pyroCacheAsData();
-            if (memcmp(&cache, &incoming.pyro, sizeof(cache)) != 0)
+            const bool differs = memcmp(&cache, &incoming.pyro, sizeof(cache)) != 0;
+            if (differs && (!diverged || changed))
             {
                 char fc_s[64], oc_s[64];
                 formatPyroCfg(fc_s, sizeof(fc_s), incoming.pyro);
@@ -4146,6 +4187,11 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                          (incoming.flags & (1U << ConfigReportData::F_PYRO_FROM_NVS)) ? "nvs" : "dflt",
                          fc_s, oc_s);
             }
+            else if (!differs && diverged)
+            {
+                ESP_LOGI("CFG", "FC deployment config matches OC cache again");
+            }
+            diverged = differs;
         }
         return;
     }
@@ -11519,6 +11565,21 @@ static void loop_oc()
                 (void)applyLoRaTxMute(payload[0] != 0, "BLE");
             }
         }
+#if defined(TR_TEST_CFG_DROP)
+        else if (ble_cmd == 200)
+        {
+            // Bench-only: arm config-frame drops, see test_cfg_drop_count.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 2)
+            {
+                test_cfg_drop_count = payload[0];
+                test_cfg_drop_type  = payload[1];
+                ESP_LOGW("BLE", "[TEST] armed %u config-frame drop(s) of type 0x%02X (cfgdrop hook)",
+                         (unsigned)payload[0], (unsigned)payload[1]);
+            }
+        }
+#endif
         else if (ble_cmd == 34)
         {
             // Pyro config: 4 × {enabled:1, mode:1, value:4f} = 24 bytes

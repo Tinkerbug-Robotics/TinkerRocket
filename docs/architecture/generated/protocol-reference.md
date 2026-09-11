@@ -205,7 +205,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-55 commands.
+56 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -264,6 +264,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 69 |  | #1176 step 6 — the operator's manual end of a restored flight. BLE ONLY, by decision: this number is… |
 | 73 |  | #1271 — the operator acknowledges the blind-window loss(es). BLE ONLY, and deliberately absent from… |
 | 74 |  | #773 step 2 — provision this OUT COMPUTER's board revision. BLE ONLY, like cmd 73 above and for the same… |
+| 200 |  | Bench-only: arm config-frame drops, see test_cfg_drop_count |
 
 > 9 of these have no comment in the dispatch and so no
 > description here: 7, 15, 16, 21, 51, 52, 53, 54, 57. Adding a comment to the branch

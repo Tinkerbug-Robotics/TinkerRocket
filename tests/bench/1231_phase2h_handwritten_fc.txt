@@ -1,0 +1,17 @@
+# #1231 phase 2b — S1 -> F. Run right after B was written into the FC's NVS by hand
+# (ch1 off, ch2 300 m, ch3 2.0 s). The OC cache still holds D from phase 2.
+note === 2h: hand-written FC record B is what the readback shows, not the OC's D ===
+wait_tlm 25 st!=NONE
+send 8 01
+sleep 12
+wait_tlm 20 fs.PWR_PIN_ON==1
+mark
+send 20
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==fc
+expect_tlm 15 fnv==true
+expect_tlm 15 p1e==false
+expect_tlm 15 p2v==300.0
+expect_tlm 15 p3e==true
+expect_tlm 15 p3v==2.0
+note === phase 2h done ===

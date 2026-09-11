@@ -109,3 +109,13 @@ if(TR_OC_BENCH_DEBUG)
                     "the USB console survives; idle current ~22 mA instead of "
                     "~1 mA. Version string carries '-bench'. Do NOT fly this.")
 endif()
+
+# Config-drop test hook (#1112 / #1231 bench):
+#   idf.py -B build_v9_bench -DTR_BOARD_V9=1 -DTR_OC_BENCH_DEBUG=1 -DTR_TEST_CFG_DROP=1 build
+# BLE cmd 200 [count][type] then drops that many config frames of that type at
+# pack time (see test_cfg_drop_count in main.cpp). Bench only.
+if(TR_TEST_CFG_DROP)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE TR_TEST_CFG_DROP=1)
+    message(WARNING "out_computer: CFGDROP test build — BLE cmd 200 can drop config "
+                    "frames to the FC on demand. Bench only, never a rocket.")
+endif()

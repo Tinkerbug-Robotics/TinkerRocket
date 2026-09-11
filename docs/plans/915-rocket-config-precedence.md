@@ -281,10 +281,43 @@ painted the new values in would re-create exactly the invisible divergence
 this issue exists to remove. The mirror now applies only when there is no echo
 to wait for: the OC cache, an OC that predates the key, or the rail off.
 
-### Bench validation
+### Bench validation (V9 pair, 2026-09-11)
 
-Owed; tracked in #1211. The two cases that need hardware: a hand-written FC
-NVS pyro record diverging from the OC's, visible on the tiles with the
-`differs from OC cache` line on the OC console; and a config frame forced to
-drop (the `-DTR_TEST_CFG_DROP=1` OC image from the #1112 bench work) leaving
-the tiles on the FC's previous values instead of the edit.
+All five #1211 checks ran on the V9 pair (`tests/bench/1231_phase*.txt`, driven by
+`tools/bench_session.py`; boot lines via `tools/bench_capture_boot.py`, which
+resets the board deliberately since the harness attaches without a reset).
+
+- **Mixed versions** (new OC, pre-#1231 FC): the 169-byte v1 report was
+  accepted, `config_servo`/`config_guid`/`config_roll` were still served, and
+  `config_pyro` carried `"src":"oc"` with `Queued pyro config readback (…, from
+  OC cache)` on the OC console — rail on, and after a rail-off reboot.
+- **FC-sourced readback**: the new FC loaded A from NVS, its first report logged
+  `pyro(nvs)=[1/0/1.0 1/1/150.0 …]`, and the readback carried `"src":"fc","fnv":true`.
+  An edit was applied (`[PYRO CFG] …`), re-reported, and re-published to the
+  phone unsolicited, with no retry line.
+- **Erased FC NVS**: `NVS pyro: none (all four disabled)`, report `pyro(dflt)=[…]`,
+  readback `"fnv":false` with all four disabled. The OC's orientation self-heal
+  re-pushed `+X` to the erased FC at the same time; pyro was left at its default,
+  the asymmetry this design leaves open on purpose.
+- **Hand-written FC record** (ch1 off, ch2 300 m, ch3 2.0 s, written with
+  `nvs_partition_gen.py` + `esptool write_flash 0x9000`) while the OC cache held
+  something else: the readback showed the FC's record, and so did the **Android
+  app's pyro tiles** (bench build on the Pixel) with no caption. After the app's own
+  Power off, the tiles showed the OC's copy under "Flight computer is off. Showing
+  the out computer's stored copy.", and returned to the FC's record on Power on.
+- **Dropped frame** (`-DTR_TEST_CFG_DROP=1` OC image, BLE cmd 200 `03 ce`): three
+  deliveries dropped 250 ms apart, `Cmd 0xCD cleared after 3 deliveries`, the hook
+  disarmed itself, no `config_pyro` was published, the OC logged `FC deployment
+  config differs from OC cache — FC(nvs)=[C] OC=[E]` on the next 5 s report, and a
+  cmd-20 readback still showed C with `"src":"fc"`. The same edit on a healthy link
+  landed, logged `matches OC cache again`, and was re-published.
+
+Two things the bench corrected on the way. The divergence line is now evaluated on
+every report and logged on the *transition* into divergence (a cache write the FC
+never received would otherwise never be logged, since the FC's copy does not
+change). And the first version of the drop hook decremented once per staging
+attempt; the FC reads the staged buffer up to three times per poll, so three
+armed drops were spent inside one poll — it now keys on the OC's own delivery
+counter and disarms when the command is retired. One sequencing rule for the
+scripts: never arm the hook while the previous command may still be inside its
+three-delivery window.

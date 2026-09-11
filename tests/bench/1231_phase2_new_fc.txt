@@ -1,0 +1,68 @@
+# #1231 phase 2 — S1 -> F (FLIGHT COMPUTER console). New FC flashed, NVS still holding A.
+# Proves: the report carries pyro and the readback is FC-sourced; an edit is echoed by
+# the FC's own report; a frame the FC never receives leaves the readback on the FC's
+# previous values (no optimistic paint-over).
+#
+# Boot-time lines (NVS pyro load, the first "Config report sent") are NOT on the harness
+# timeline — it attaches without resetting the board.  Capture them separately with
+#   python3 tools/bench_capture_boot.py /dev/cu.usbmodem101 18 fc_boot.log
+# which resets the FC deliberately and records its console.  The OC needs the
+# "-bench-cfgdrop" image (see 1231_phase3_oc_console.txt) for 2c.
+# Run 2026-09-11 on the V9 pair: 2a/2b passed (19/19); 2c/2d were then proven from the
+# OC side in phase 3 after the hook's counting was fixed.
+note === 2a: the FC reports A from NVS, the readback is FC-sourced ===
+wait_tlm 25 st!=NONE
+send 8 01
+sleep 12
+wait_tlm 20 fs.PWR_PIN_ON==1
+mark
+send 20
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==fc
+expect_tlm 15 fnv==true
+expect_tlm 15 p1e==true
+expect_tlm 15 p2m==1
+expect_tlm 15 p2v==150.0
+note === 2b: an edit (C) is echoed by the FC's report — unsolicited config_pyro ===
+mark
+send 34 010000000040010100004843000000000000000000000000
+expect_serial 15 \[PYRO CFG\] ch1=1/0/2\.0  ch2=1/1/200\.0
+expect_serial 15 \[CFG\] Config report sent: .*pyro\(nvs\)=\[1/0/2\.0 1/1/200\.0
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==fc
+expect_tlm 15 p1v==2.0
+expect_tlm 15 p2v==200.0
+refute_serial_since \[PYRO CFG\] Config not in this read
+note === 2c: three deliveries dropped — the FC never receives D; no echo; readback still C ===
+# Settle first: arming while the previous command is still inside its 3-delivery
+# window spends the arm on that leftover delivery and the hook disarms itself
+# (phase 3, 2026-09-11).  3 = CMD_REPEAT_LIMIT, so nothing stays armed after.
+sleep 3
+mark
+send 200 03ce
+sleep 1
+send 34 01000000404000000000000001010000c843000000000000
+expect_serial 20 \[PYRO CFG\] Config not in this read, will retry on next poll \(3/3\)
+sleep 1
+expect_serial_since \[PYRO CFG\] Config not in this read, will retry on next poll \(1/3\)
+refute_serial 6 \[PYRO CFG\] ch1=1/0/3\.0
+refute_serial_since \[PYRO CFG\] ch1=1/0/3\.0
+refute_serial_since Config report sent: .*pyro\(nvs\)=\[1/0/3\.0
+refute_tlm 1 p1v==3.0
+send 20
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==fc
+expect_tlm 15 p1v==2.0
+expect_tlm 15 p2v==200.0
+expect_tlm 15 p3e==false
+note === 2d: the same edit with a healthy link lands and is echoed ===
+sleep 3
+mark
+send 34 01000000404000000000000001010000c843000000000000
+expect_serial 15 \[PYRO CFG\] ch1=1/0/3\.0  ch2=0/0/0\.0  ch3=1/1/400\.0
+expect_tlm 15 type==config_pyro
+expect_tlm 15 src==fc
+expect_tlm 15 p1v==3.0
+expect_tlm 15 p3e==true
+refute_serial_since \[PYRO CFG\] Config not in this read
+note === phase 2 done ===

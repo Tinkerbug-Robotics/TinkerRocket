@@ -57,7 +57,15 @@ if(TR_OC_BENCH_DEBUG)
 else()
     set(TR_BENCH_SUFFIX "")
 endif()
-set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}${TR_BENCH_SUFFIX}+${TR_BUILD_DATE}")
+# Config-drop test hook (#1112 / #1231 bench): `-DTR_TEST_CFG_DROP=1` builds the
+# BLE cmd-200 hook that drops config frames to the FC on demand. Stamped for the
+# same reason as -bench: a bench log must never be mistaken for production.
+if(TR_TEST_CFG_DROP)
+    set(TR_CFGDROP_SUFFIX "-cfgdrop")
+else()
+    set(TR_CFGDROP_SUFFIX "")
+endif()
+set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}${TR_BENCH_SUFFIX}${TR_CFGDROP_SUFFIX}+${TR_BUILD_DATE}")
 
 # #1125: the same board suffix reaches the compiler, so the OTA receiver can
 # refuse an image built for a different board. CMake stays the single source of
