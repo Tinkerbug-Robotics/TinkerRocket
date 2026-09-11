@@ -466,10 +466,11 @@ Numbers, `--severity-all`: V10 62 → **0** errors, 997 → 983 warnings (841
 `endpoint_off_grid` and 44 `lib_symbol_mismatch` remain — the mismatches are
 pre-existing property differences such as `Footprints:` vs `ESP32-S3:` on the
 S3). Through the shared symbols: mini 40 → 33, base-station 47 → 46,
-base-station-mini 40 → 39, LoRa daughterboard 34 → 33. What the mini still
-carries is its own: QMC5883P/BMP581 grounds typed as power outputs, no flags on
-VBUS, `U1` VCC, both VDD3P3 nets, `V_BUCK` and `U19` IN, and 24 unflagged
-no-connects.
+base-station-mini 40 → 39, LoRa daughterboard 34 → 33. The mini got the same
+pass the same day (its README, *Status*): 33 → 10, the ten being the out
+computer's spare pads, which its README keeps unflagged on purpose. That pass
+also made the reverse-battery FET's pins passive on both boards — a gate typed
+*bidirectional* warned against every ground driver.
 
 Trap for the record: one wire block in `external_connections.kicad_sch` is
 hand-formatted without its leading tab, so a text-anchored delete removed a
