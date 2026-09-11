@@ -22,7 +22,7 @@ class FlightSettingsGoldenTest {
         "logframes/flightsettings_v1_188.bin", "logframes/flightsettings_v2_200.bin",
         "logframes/flightsettings_v3_208.bin", "logframes/flightsettings_v5_210.bin",
         "logframes/flightsettings_v6_219.bin", "logframes/flightsettings_v7_220.bin",
-        "logframes/flightsettings_v8_222.bin",
+        "logframes/flightsettings_v8_222.bin", "logframes/flightsettings_v9_223.bin",
     )
 
     @Test
@@ -103,7 +103,43 @@ class FlightSettingsGoldenTest {
             } else {
                 assertNull(s.rollMinSpeedMps, rel)
             }
+            // v9 board revision (#413). The canonical fixture carries a
+            // PROVISIONED V9 (0x19, bit 7 clear), so this also pins that the
+            // asserted bit is not set where it should not be — a decoder that
+            // masked it off would pass a value-only check and lose the one
+            // thing the byte is for.
+            if (present >= 223) {
+                assertEquals(side["board_rev_code"]!!.jsonPrimitive.int,
+                    s.boardRevCode, rel)
+                assertEquals("V9", s.boardRevName, rel)
+            } else {
+                assertNull(s.boardRevCode, rel)
+                assertNull(s.boardRevName, rel)
+            }
         }
+    }
+
+    @Test
+    fun `board revision code renders every family and the asserted bit`() {
+        // Mirrors board_identity::revCodeToString and Python's board_rev_name.
+        // Built by copying a decoded golden rather than by hand: the
+        // constructor has thirty-odd parameters and a hand-written call is a
+        // second layout to keep in step, which is the drift this file exists
+        // to prevent.
+        val base = FlightSettingsData.decode(
+            WireFixtures.bytes("logframes/flightsettings_v9_223.bin"))!!
+        fun name(code: Int?) = base.copy(boardRevCode = code).boardRevName
+
+        assertEquals("V7", name(0x17))
+        assertEquals("V10", name(0x1A))
+        assertEquals("M1", name(0x21))
+        assertEquals("B1", name(0x31))
+        assertEquals("V9 (asserted)", name(0x99))
+        // Null and "unknown" are different answers: null is "this log predates
+        // the field", unknown is "it named no board we recognise".
+        assertEquals("unknown", name(0x00))
+        assertEquals("unknown", name(0x40))
+        assertNull(name(null))
     }
 
     @Test

@@ -68,6 +68,7 @@ _RATE = struct.Struct("<H")        # v5 tail at 208
 _GUID = struct.Struct("<2fB")      # v6 tail at 210
 _OTP = struct.Struct("<B")         # v7 tail at 219
 _GATE = struct.Struct("<H")        # v8 tail at 220
+_REV = struct.Struct("<B")         # v9 tail at 222 (#413 board revision)
 
 MIN_LENGTH = 188
 assert _HEAD.size == 76
@@ -139,6 +140,7 @@ def decode(payload: bytes) -> dict[str, Any]:
         "guid_tgt_e_m": None, "guid_tgt_n_m": None, "guid_tgt_src": None,
         "gnss_otp_state": None,
         "roll_min_speed_mps": None,
+        "board_rev_code": None,
     })
     if len(payload) >= 200:
         code, mode, residual_cdeg, *q = _B2R.unpack_from(payload, 188)
@@ -155,6 +157,8 @@ def decode(payload: bytes) -> dict[str, Any]:
         d["gnss_otp_state"] = _OTP.unpack_from(payload, 219)[0]
     if len(payload) >= 222:
         d["roll_min_speed_mps"] = _GATE.unpack_from(payload, 220)[0] / 10.0
+    if len(payload) >= 223:
+        d["board_rev_code"] = _REV.unpack_from(payload, 222)[0]
     return d
 
 
@@ -162,6 +166,35 @@ def orientation_name(code: Optional[int]) -> str:
     if code is None or not 0 <= code < len(ORIENT_NAMES):
         return "?"
     return ORIENT_NAMES[code]
+
+
+# #413 board revision code. Mirrors board_identity::revCodeToString in
+# tinkerrocket-idf/components/TR_RocketComputerTypes/BoardIdentity.h — family in
+# bits 4-6, number in bits 0-3, bit 7 set when the value is the IMAGE's own
+# assertion rather than the board's provisioned NVS value.
+_REV_FAMILIES = {0x10: "V", 0x20: "M", 0x30: "B"}
+_REV_ASSERTED = 0x80
+
+
+def board_rev_name(code: Optional[int]) -> Optional[str]:
+    """"V9", "M1 (asserted)", or None when the log predates the field.
+
+    None and "unknown" are different answers and both are honest: None means
+    this log is older than v9 and never carried a revision; "unknown" means it
+    did carry one and the byte named no board this reader recognises.
+
+    An "(asserted)" value came from the image's own build flag, which #773
+    exists because it is circular — a board flashed with the wrong build
+    reports the wrong revision, confidently. Read it as "the image believed
+    this", not as "the board is this".
+    """
+    if code is None:
+        return None
+    letter = _REV_FAMILIES.get(code & 0x70)
+    number = code & 0x0F
+    if letter is None or number == 0:
+        return "unknown"
+    return f"{letter}{number}" + (" (asserted)" if code & _REV_ASSERTED else "")
 
 
 def gnss_otp_name(state: Optional[int]) -> Optional[str]:

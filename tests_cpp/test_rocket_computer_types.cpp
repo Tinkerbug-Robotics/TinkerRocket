@@ -1083,7 +1083,7 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
 TEST(RocketComputerTypes, FlightSettingsData_Layout) {
     // v2: +12 b2r orientation; v3: +8 fin cal; v5: +2 imu rate;
     // v6: +9 flown guidance target (#435).
-    EXPECT_EQ(sizeof(FlightSettingsData), 222u);
+    EXPECT_EQ(sizeof(FlightSettingsData), 223u);
     // 219 <= MAX_PAYLOAD (224, FlightSnapshotData-bound) — the v6 tail was
     // deliberately E/N+src, not lat/lon+E/N, to stay under this ceiling
     // WITHOUT growing the I2S frame bound.
@@ -1093,7 +1093,9 @@ TEST(RocketComputerTypes, FlightSettingsData_Layout) {
     EXPECT_EQ(offsetof(FlightSettingsData, gnss_otp_state),     219u);
     // v8: roll-control speed gate is the tail, 0.1 m/s units.
     EXPECT_EQ(offsetof(FlightSettingsData, roll_min_speed_dmps), 220u);
-    EXPECT_EQ(FlightSettingsData::VERSION,                      8u);
+    // #413: the v9 tail. One byte, and the struct still fits MAX_PAYLOAD.
+    EXPECT_EQ(offsetof(FlightSettingsData, board_rev_code),     222u);
+    EXPECT_EQ(FlightSettingsData::VERSION,                      9u);
     EXPECT_EQ(offsetof(FlightSettingsData, time_us),            0u);
     EXPECT_EQ(offsetof(FlightSettingsData, version),            4u);
     EXPECT_EQ(offsetof(FlightSettingsData, flags),              5u);

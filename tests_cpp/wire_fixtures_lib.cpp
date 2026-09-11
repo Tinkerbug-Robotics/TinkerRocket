@@ -8,6 +8,7 @@
 #include "wire_fixtures_lib.h"
 
 #include "RocketComputerTypes.h"
+#include "BoardIdentity.h"
 #include "CRC.h"
 #include "TR_Sensor_Data_Converter.h"   // #850: real LoRa packers for the BS log golden
 
@@ -274,6 +275,10 @@ FlightSettingsData canonicalFlightSettings() {
     // v7: a value that is neither 0 nor 1, so a decoder that silently drops
     // the field or reads a neighbouring byte cannot accidentally match.
     s.gnss_otp_state = gnss_otp::BLOCKLISTED;
+    // v9 (#413): a PROVISIONED V9, i.e. the authoritative case with bit 7
+    // clear. Deliberately not zero — a fixture that left this at "unknown"
+    // would let a decoder that ignores the field pass its own golden walk.
+    s.board_rev_code = board_identity::encodeRevCode("V9", false);
     return s;
 }
 
@@ -437,6 +442,7 @@ std::string flightSettingsSidecar(const FlightSettingsData& s, size_t presentByt
     }
     if (presentBytes >= 220) j.u("gnss_otp_state", s.gnss_otp_state);
     if (presentBytes >= 222) j.u("roll_min_speed_dmps", s.roll_min_speed_dmps);
+    if (presentBytes >= 223) j.u("board_rev_code", s.board_rev_code);
     return j.done();
 }
 
@@ -543,21 +549,25 @@ void buildLogframes(Builder& b) {
     // v1 = 188, v2 = 200 (+b2r), v3/v4 = 208 (+fin cal; v4 = semantics only),
     // v5 = 210 (+imu rate), v6 = 219 (+flown guidance target),
     // v7 = 220 (+GNSS OTP clock state, #837 item 6),
-    // v8 = 222 (+roll-control speed gate).
+    // v8 = 222 (+roll-control speed gate),
+    // v9 = 223 (+board revision code, #413).
     const auto fs = canonicalFlightSettings();
     const auto fsFull = bytesOf(fs);
-    b.add("logframes", "flightsettings_v8_222.bin", fsFull,
-          flightSettingsSidecar(fs, 222, fs.version),
-          "FlightSettingsData v8, msg 0xE1; pyro sub-struct pinned by cmd34 fixture");
+    b.add("logframes", "flightsettings_v9_223.bin", fsFull,
+          flightSettingsSidecar(fs, 223, fs.version),
+          "FlightSettingsData v9, msg 0xE1; pyro sub-struct pinned by cmd34 fixture");
+    // The ladder is every SHORTER length a decoder must still accept. v8 joins
+    // it now that it is no longer the newest — a decoder that only handles the
+    // current length is the failure this ladder exists to catch.
     const struct { size_t len; uint8_t ver; } fsLadder[] = {
-        {188, 1}, {200, 2}, {208, 3}, {210, 5}, {219, 6}, {220, 7}};
+        {188, 1}, {200, 2}, {208, 3}, {210, 5}, {219, 6}, {220, 7}, {222, 8}};
     for (const auto& lv : fsLadder) {
         auto img = prefix(fsFull, lv.len);
         img[4] = lv.ver;
         char name[40];
         std::snprintf(name, sizeof(name), "flightsettings_v%u_%zu.bin", lv.ver, lv.len);
         b.add("logframes", name, img, flightSettingsSidecar(fs, lv.len, lv.ver),
-              "FlightSettingsData version-ladder truncation of the v8 image");
+              "FlightSettingsData version-ladder truncation of the v9 image");
     }
 }
 

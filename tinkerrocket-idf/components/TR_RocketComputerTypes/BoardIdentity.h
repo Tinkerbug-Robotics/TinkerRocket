@@ -23,6 +23,8 @@
 
 #include <compat.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 namespace board_identity {
@@ -129,6 +131,92 @@ inline void decodePayload(const char* payload, size_t len,
     memcpy(raw, rev, n);
     raw[n] = '\0';
     normalizeRev(raw, rev_out, rev_len);
+}
+
+// --- One-byte revision code for the flight log (#413) -----------------------
+//
+// The log needs to say which board produced it, and FlightSettingsData has two
+// bytes of headroom against MAX_PAYLOAD. A string will not fit, so the
+// revision is coded into one byte — but only the revision. Everything else
+// about identity stays in the string world above, where it belongs.
+//
+// Layout, low to high:
+//   bits 0-3  the number   (V9 -> 9, V10 -> 10, M1 -> 1)
+//   bits 4-6  the family   (1 = V, 2 = M, 3 = B)
+//   bit  7    ASSERTED: this came from the image's own build flag rather than
+//             from the board's provisioned NVS value.
+//
+// 0x00 is "unknown", which is what every pre-v9 log decodes as and exactly
+// what those logs are — the field was not recorded.
+//
+// WHY THE TOP BIT EXISTS. #773's whole point is that the image's idea of its
+// board is CIRCULAR: a board flashed with the wrong build reports the wrong
+// revision, confidently, forever. The provisioned NVS value is the independent
+// one. A log that quietly mixed the two would be worse than one that carried
+// neither, because a post-flight reader would trust it. So the byte says which
+// question it is answering, and an ASSERTED value should be read as "the image
+// believed this" rather than "the board is this".
+static constexpr uint8_t kRevUnknown   = 0x00;
+static constexpr uint8_t kRevAsserted  = 0x80;  // bit 7
+static constexpr uint8_t kRevFamilyV   = 0x10;
+static constexpr uint8_t kRevFamilyM   = 0x20;
+static constexpr uint8_t kRevFamilyB   = 0x30;
+
+/// Encode a normalised revision string ("V9", "M1", "V10") into the log byte.
+/// Returns kRevUnknown for anything it cannot represent — never a wrong guess.
+inline uint8_t encodeRevCode(const char* rev, bool asserted)
+{
+    char n[kMaxRev + 1];
+    if (normalizeRev(rev, n, sizeof(n)) < 2) return kRevUnknown;
+
+    uint8_t family = 0;
+    switch (n[0])
+    {
+        case 'V': family = kRevFamilyV; break;
+        case 'M': family = kRevFamilyM; break;
+        case 'B': family = kRevFamilyB; break;
+        default:  return kRevUnknown;
+    }
+
+    unsigned num = 0;
+    for (size_t i = 1; n[i] != '\0'; ++i)
+    {
+        if (n[i] < '0' || n[i] > '9') return kRevUnknown;
+        num = num * 10 + (unsigned)(n[i] - '0');
+        if (num > 15) return kRevUnknown;   // does not fit the nibble
+    }
+    if (num == 0) return kRevUnknown;
+
+    return (uint8_t)(family | (uint8_t)num | (asserted ? kRevAsserted : 0));
+}
+
+/// Render a log byte back to "V9" / "M1 (asserted)" / "unknown".
+/// `out` must hold at least 16 bytes.
+inline void revCodeToString(uint8_t code, char* out, size_t out_len)
+{
+    if (out == nullptr || out_len == 0) return;
+    out[0] = '\0';
+    const uint8_t num = (uint8_t)(code & 0x0F);
+    const uint8_t family = (uint8_t)(code & 0x70);
+    char letter = '\0';
+    switch (family)
+    {
+        case kRevFamilyV: letter = 'V'; break;
+        case kRevFamilyM: letter = 'M'; break;
+        case kRevFamilyB: letter = 'B'; break;
+        default: break;
+    }
+    if (letter == '\0' || num == 0)
+    {
+        strncpy(out, "unknown", out_len - 1);
+        out[out_len - 1] = '\0';
+        return;
+    }
+    char buf[16];
+    const char* suffix = (code & kRevAsserted) ? " (asserted)" : "";
+    snprintf(buf, sizeof(buf), "%c%u%s", letter, (unsigned)num, suffix);
+    strncpy(out, buf, out_len - 1);
+    out[out_len - 1] = '\0';
 }
 
 }  // namespace board_identity

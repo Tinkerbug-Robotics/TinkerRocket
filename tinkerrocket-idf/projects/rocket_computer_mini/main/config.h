@@ -10,6 +10,13 @@
 #define TR_MINI_BOARD 1
 #endif
 
+// #413: the string form of the same number, for the flight log's one-byte
+// revision code (board_identity::encodeRevCode). 'B' is the mini family — it
+// is what TR_BOARD_SUFFIX already spells as "-b<n>".
+#define TR_STRINGIFY_(x) #x
+#define TR_STRINGIFY(x) TR_STRINGIFY_(x)
+#define TR_BOARD_REV_STR "B" TR_STRINGIFY(TR_MINI_BOARD)
+
 #if TR_MINI_BOARD == 1
 #include "board/board_v1.h"
 #else
