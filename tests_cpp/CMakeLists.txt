@@ -149,6 +149,23 @@ target_include_directories(test_ekf PRIVATE
 target_link_libraries(test_ekf GTest::gtest_main)
 gtest_discover_tests(test_ekf)
 
+# ---------- test_ekf_heading_aids (#1135) ----------
+# The two GNSS-derived heading aids. They ship OFF, but they stay in the tree to
+# be measured (#1281), and neither had any host coverage. Covers the item-2
+# model fix, and characterises item 1 — whose every proposed remedy was measured
+# and refused — so the verdict is in the tree rather than only in the issue.
+add_executable(test_ekf_heading_aids test_ekf_heading_aids.cpp
+    ${LIB_DIR}/TR_GpsInsEKF/TR_GpsInsEKF.cpp
+    ${LIB_DIR}/TR_GeoMag/TR_GeoMag.cpp
+)
+target_include_directories(test_ekf_heading_aids PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GpsInsEKF
+    ${LIB_DIR}/TR_GeoMag
+)
+target_link_libraries(test_ekf_heading_aids GTest::gtest_main)
+gtest_discover_tests(test_ekf_heading_aids)
+
 # ---------- test_ekf_gnss_feed (#1107) ----------
 # What the flight loop hands the EKF as its GNSS input each tick: the last
 # accepted fix, held unchanged until a newer one arrives — never a zeroed

@@ -415,16 +415,32 @@ private:
     /// coast, which is why the mag was switched off for the whole of ascent.
     void magMeasUpdate(const float aMeas[3], const float magMeas[3],
                        bool accel_is_gravity);
+protected:
+    // #1135: protected rather than private ONLY so tests_cpp/test_ekf_heading_aids
+    // can drive these two directly. Neither had any host coverage, and the
+    // facts worth pinning are one-call facts — a stationary rocket on a tilted
+    // rail predicts a horizontal acceleration, or it does not — which a
+    // whole-filter test can only reach through a multi-second integration that
+    // confounds them with every other update. No production caller outside
+    // this class uses them; the on/off switch is setGnssHeadingAids().
+    //
     // Heading update from the GNSS velocity course (direction of travel ≈ nose
     // heading at low AoA). Independent of mag/attitude tilt-comp (no
     // circularity). Caller gates on sufficient horizontal speed.
     void velCourseHeadingUpdate(const float vMeas_NED[3]);
-    // Heading update by matching the body-frame lateral specific force (aero
-    // side force from AoA/fins) against the GNSS-derived world horizontal
-    // acceleration. The rotation between the two frames IS the roll, so unlike
-    // the velocity course this observes the roll DOF directly — strongest near
-    // vertical with an active lateral force. aWorldHoriz = [aN, aE] (m/s²).
+    // Heading update by matching the body specific force, rotated into NED,
+    // against the GNSS-derived world horizontal acceleration. The rotation
+    // between the two frames IS the roll, so unlike the velocity course this
+    // observes the roll DOF directly — strongest near vertical with an active
+    // lateral force. aWorldHoriz = [aN, aE] (m/s²).
+    //
+    // #1135 item 2: the FULL specific force is rotated, not its lateral part.
+    // Gravity is purely vertical in NED, so the horizontal components of the
+    // rotated specific force are exactly the horizontal kinematic
+    // acceleration — the same quantity aWorldHoriz measures. See the identity
+    // and the four-flight contamination figures at the definition.
     void accelMatchHeadingUpdate(const float aMeas[3], const float aWorldHoriz[2]);
+private:
 
     // Numerical safety net: floor P diagonals at a tiny positive value and
     // cap them at the per-state P_MAX_* values. Call after every path that
