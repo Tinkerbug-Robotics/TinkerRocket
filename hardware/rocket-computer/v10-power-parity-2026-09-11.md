@@ -299,3 +299,62 @@ it stays on `VBATT` as accepted. GNSS stays on `VBATT` by decision (§1.3).
 - The on-page buck-output edit was rendered and inspected; the off-page
   additions were placed by coordinate against a scan of everything within
   20 mm.
+
+## 6. Close-outs from the V9 review list (same day, second pass)
+
+### 6.1 #664 — the S3's VDD_SPI decoupling is now 1 µF + 100 nF
+
+`OUT_VDD_SPI` carried only `C27` 1 µF; the design guide asks for 1 µF + 0.1 µF
+at the pin and there was no pad for the second part. `C145` 100 nF 0402 is
+drawn beside `C27` on the S3 sheet, on the same wire, and goes at U15 pin 29 on
+the layout pass. Everything else in #664 was already true on the fabbed V9:
+the boot flash and the NAND run from `+3V3`, so the pin serves only the
+in-package PSRAM, and `C27` has been 1 µF since the pre-fab close-out.
+
+### 6.2 #665 — CHIP_PU through a rail cycle
+
+Both reset RCs are in copper on V9 (`C25`/`R36` on the S3, `C39`/`R42` on the
+P4, 10 ms each). The residual was the rail off-then-on case on the P4 domain:
+when `U30` turns off, its quick-output-discharge pulls `V_MCU_SWTCH` to
+ground through 250–400 Ω in about a millisecond, while `C39` (1 µF, referenced
+to ground) can only bleed through `R42` into the dead rail at τ = 10 ms. On
+paper `CHIP_PU` stays above the P4's V_IL for ~14 ms, so a rail brought back
+inside that window would ramp with `CHIP_PU` already high — outside the 50 µs
+t_STBL rule.
+
+What bounds it:
+
+- **The window is a coincidence, not a path.** The rail only drops when an
+  out-computer reset outlasts `C105`'s 0.45–0.94 s hold on `POWER_SWITCH`; the
+  re-assert then lands whenever the OC's boot reaches it. For the bad case that
+  instant has to fall inside the 14 ms after the drop — a few percent of the
+  spread even if every miss were uniformly timed — and a re-assert any later
+  finds `CHIP_PU` low and the normal 10 ms delay in force.
+- **The P4's own pad likely collapses the node with the rail.** An input pad
+  clamped to its supply pulls `C39` down through the QOD path in ~0.3 ms, which
+  would make the window moot; the datasheet gives the pin's absolute maximum as
+  a fixed 3.6 V rather than VDD + 0.3, so the clamp is inferred, not specified
+  (the same caveat as #1000 on the mini).
+- **A boot that misses t_STBL is not a hang.** A P4 that fails to come up never
+  asserts `P4_EN_HOLD`, and the out computer's restore policy re-cycles a rail
+  whose flight computer stays silent (#825/#859, and #1129's budget on exactly
+  that loop), so the next cycle starts from a fully discharged `CHIP_PU`. The
+  cost is one extra rail cycle, ~1–2 s, in a case that already involved an OC
+  fault reset.
+
+What settles it: the scope check now on #1211 — `V_MCU_SWTCH` against U17
+pin 103 through (a) an OC panic reset that exercises the restore path and (b)
+a cmd-8 power-off followed by an immediate power-on, confirming `CHIP_PU` is
+below V_IL before the rail returns. No part changes; the 100 nF this issue
+replaced would have shortened the window ten-fold at the cost of the delay the
+design guide asks for, and is not worth reverting.
+
+### 6.3 #677 — mis-connection protection
+
+Reverse battery is closed by `Q11` (AONR21321, ±25 V gate) with `CR2` deleted;
+the PH-2-into-PH-4 mismate cannot happen since the battery moved to a JST-VH;
+the reversed-jumper case is closed as a harness rule rather than a circuit —
+the straight "A"-suffix part numbers, the catalogue-naming trap and the
+pad-1-to-pad-1 check are in [`../cables.md`](../cables.md) and fab note B10.
+A reversal-tolerant LoRa pinout is recorded there as a future-spin option, not
+planned.

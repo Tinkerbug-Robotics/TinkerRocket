@@ -15,6 +15,8 @@ complete sources must be available under the same licence.
 thickness, the area-ratio floor and paste coverage — live in
 [`SOLDER-PASTE-CONVENTION.md`](SOLDER-PASTE-CONVENTION.md) (#959, #906). Every
 board's `FABRICATION-NOTES.md` points there rather than restating them.
+The inter-board jumpers — which part to order and the catalogue-naming trap
+that once cooked a radio — are in [`cables.md`](cables.md) (#677).
 
 ## Boards
 
