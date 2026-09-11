@@ -4,8 +4,15 @@
 `external_connections.kicad_sch`; R20/C12 deleted, V_CAP relabeled VBAT_CON,
 C94 = 4.7 µF, DEF tied to V_BUCK, P4 pad 17 = ARM_CLK, pad 18 = V_SCAP_ADC,
 PIEZZO moved to S3 GPIO13 (pad 18), CAP_ACTIVE on S3 GPIO34 (pad 39); refdes
-match the mini one-for-one). **One manual step remains: the V_BUCK rail split
-at U18** — see the MANUAL SPLICE note on the power sheet. Options B–D below are
+match the mini one-for-one). **The V_BUCK rail split at U18 was completed on
+2026-09-11** — until then the buck output still fed `+3V3` directly and the
+TPS61094's input net held only its own capacitor, so the hold-up as drawn
+could not have worked. The GNSS branch stays on `VBATT` behind `U27` — the
+carriers are built for the pack rail and that reason stands (owner, 2026-09-11)
+— so the deglitch stretch under Option A remains the GNSS protection and
+Option C remains the add-on if a `VBATT` cut is ever seen in a flight log; see
+[`v10-power-parity-2026-09-11.md`](v10-power-parity-2026-09-11.md) for the
+current state and the hold-up numbers. Options B–D below are
 kept for the record. This ports the
 architecture just built into rocket-computer-mini (pack-direct firing, +3V3
 supercap hold-up, 2.9 V hardware cutoff, charge-pump ARM with a latching

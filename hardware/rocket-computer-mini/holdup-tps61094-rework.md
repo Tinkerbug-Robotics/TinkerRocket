@@ -164,7 +164,7 @@ job on this board. Sheet note and bom updated; netlist/ERC verified.
    WSON-12-1EP_3x2mm — verify against TI DSS0012A before fab).
 5. Inductor substitute (if not XGL4020): verify Isat ≥ 4 A class and land fit.
 
-## OSEL lowered to 3.0 V (2026-09-03 — mini drawn; V10 NOT yet)
+## OSEL lowered to 3.0 V (2026-09-03 — drawn on the mini and, the same day, on the V10)
 
 Review finding #999. **The cap was never guaranteed to charge.** The TPS61094
 buck-charges only while `V_BUCK ≥ OSEL target + VBYPASS`, and VBYPASS is specified
@@ -205,9 +205,13 @@ works at 3.0 V beats one that is statistically absent.
 3.6 V absolute maximum shared by everything on the rail. `DEF` must also stay high:
 at 3.3 V nominal the worst-low 3.224 V leaves only 74 mV even with OSEL at 3.0.
 
-**The V10 rocket-computer has the identical circuit and has NOT been changed** —
-same `U47`, `R134` 4.75 k, `R135` 6.65 k, `R136` 22.1 k, and `DEF` tied high. It
-carries the same defect and wants the same one-resistor fix.
+**The V10 rocket-computer carried the identical defect and took the same fix on
+2026-09-03** — `R134` 3.09 k there too, plus `C141` 10 µF → 22 µF so the
+TPS62152's Power-Save-Mode accuracy condition (COUT = 22 µF) actually holds on
+that board. Note that until 2026-09-11 the V10's buck output was not even wired
+to `U47`'s input (the `V_BUCK` rail split at `U18` had been left as a manual
+step); the state of that board is recorded in
+[`../rocket-computer/v10-power-parity-2026-09-11.md`](../rocket-computer/v10-power-parity-2026-09-11.md).
 
 Split out of #999 as #1166 and **implemented 2026-09-07** in the out-computer
 firmware (M1 build): `V_SCAP` is sampled once a second from boot and the charge
@@ -219,7 +223,14 @@ The first-article charge profile — charge current from the slope, termination
 voltage, time to 2.2 V — is read straight off those lines; record the per-board
 spread here once a few boards have run (bench item in #1211).
 
-## VBUCK_OK made usable (2026-09-03 — mini drawn; V10 NOT reviewed)
+## VBUCK_OK made usable (2026-09-03 — mini drawn; the V10 took a different fix on 2026-09-11)
+
+> The V10 cannot take this fix: its `VBUCK_OK` lands on the out computer's
+> GPIO34, which has no ADC, and only one processor sits on the node so the
+> clamp half never applied. It got a 10 kΩ bleed (`R140`) across `V_BUCK`
+> instead, which brings the pin to a definite LOW ~0.4 s after the bypass
+> opens (#1165); details in
+> [`../rocket-computer/v10-power-parity-2026-09-11.md`](../rocket-computer/v10-power-parity-2026-09-11.md).
 
 Review finding #1000. The one divider node fed **both** processors, and that broke
 it in both directions.
@@ -314,8 +325,9 @@ The derating percentages above are typical-part estimates, not vendor curves; th
 
 **V10 shares the topology** — same `U47`, same `C17` as the only 0805 bulk, plus
 three 10 µF 0402s (54.6 µF nameplate). Its hold-up parts are not placed yet, so the
-distance half of this finding does not exist there yet. Apply the same rule when
-that board is laid out, and add the second 0805 at the same time.
+distance half of this finding does not exist there yet. The second 0805 was
+added to the V10 schematic on 2026-09-11 as `C144` (same part as its `C17`); it
+must go beside `C17` at `U47`'s VOUT pins when that board is laid out.
 
 ## EN/MODE are hard-wired, and that is correct (2026-09-03 — documents #1023)
 
