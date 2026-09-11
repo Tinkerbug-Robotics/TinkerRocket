@@ -360,7 +360,7 @@ drew the rest of the schematic-side items and recorded the owner's decisions:
 | item | decision / change |
 |---|---|
 | NRETRY `C45` 1 µF (~1800 retries, past the datasheet's last bucket) | **NRETRY tied to GND, `C45` deleted — indefinite auto-retry** with the 92 ms `C46` delay. A finite count ends in latch-off, which is the one terminal state a flight computer must not have; the datasheet's fault-response table gives "auto-retry indefinitely with finite delay" for this pin pair |
-| status LEDs at 10 k (0.05–0.15 mA, invisible outdoors) | **`R65`, `R66`, `R70` → 1 k** (stocked line): ~1.5 mA green on the power LED, ~1.3 mA red, ~0.4 mA blue |
+| status LEDs at 10 k (0.05–0.15 mA, dim outdoors) | **10 k stays — deliberate (owner, 2026-09-11).** The sweep had them changed to 1 k for one commit; reverted the same day. The low drive is the intended behaviour of these indicators; do not raise it again |
 | `H2`'s plated ring 0.6 mm from the antenna body, on no net | **`H2` → `MountingHole_Pad`, pin 1 to GND.** The other seven holes stay unconnected; H2 alone sits in the antenna's near field. The pad's zone connection on the board is the layout pass's |
 | `C44` soft-start 390 pF (~150 µs, startup in current limit) | `C44` → 10 nF (stocked): ~5 ms soft start, datasheet-class |
 | S3 GPIO0 on the internal pull-up only | `R141` 10 k to `+3V3`, on the wire to the boot button |
