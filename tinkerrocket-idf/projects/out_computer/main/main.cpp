@@ -3989,6 +3989,10 @@ static const char* fcOtaErrToken(uint8_t e)
         case TR_OTA_Receiver::Error::SetBootFailed:    return "fc_set_boot_failed";
         case TR_OTA_Receiver::Error::ImageIdentityMismatch:
                                                        return "fc_image_identity_mismatch";  // #1125
+        case TR_OTA_Receiver::Error::BootAlreadyCommitted:
+                                                       return "fc_boot_already_committed";  // #1142
+        case TR_OTA_Receiver::Error::RelayRingOverflow:
+                                                       return "fc_relay_ring_overflow";     // #1154
         // Ok-with-VERIFY_FAILED shouldn't happen; report it rather than imply a
         // specific cause, and keep the legacy token for anything unrecognised
         // (an FC newer than this OC could add a code we don't know yet).

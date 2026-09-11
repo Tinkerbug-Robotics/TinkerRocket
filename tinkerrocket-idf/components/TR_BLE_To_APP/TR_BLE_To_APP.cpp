@@ -2225,6 +2225,8 @@ static const char* ota_err_token(TR_OTA_Receiver::Error e)
         case E::EndFailed:           return "end_failed";
         case E::SetBootFailed:       return "set_boot_failed";
         case E::ImageIdentityMismatch: return "image_identity_mismatch";   // #1125
+        case E::BootAlreadyCommitted:  return "boot_already_committed";    // #1142
+        case E::RelayRingOverflow:     return "relay_ring_overflow";       // #1154
     }
     return "unknown";
 }
