@@ -381,7 +381,11 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
 
         // 10c. Accel-match heading aiding — differentiate the GNSS velocity to
         //      a world horizontal acceleration (low-passed), then match it to
-        //      the body lateral specific force to observe the roll DOF.
+        //      the body specific force rotated into NED to observe the roll
+        //      DOF. #1135 item 2: the FULL force is rotated, so both sides are
+        //      the same physical quantity (gravity is vertical in NED and drops
+        //      out of the horizontal components) — see the identity at the
+        //      function definition.
         //      The low-pass keeps running while gated so it is warm if the
         //      flag is ever re-raised; only the fusion is skipped (#1135 —
         //      64–90 % of these were on descent, where the "lateral force" is
@@ -1177,13 +1181,37 @@ void GpsInsEKF::accelMatchHeadingUpdate(const float aMeas[3], const float aWorld
     Quat2DCM(T_NED2B, quat_BL_);
     const float d[3] = { T_NED2B[0][2], T_NED2B[1][2], T_NED2B[2][2] };
 
-    // Rotate the body LATERAL specific force (0, a_y, a_z) into NED.
-    const float ay = aMeas[1], az = aMeas[2];
-    const float a_pred_N = T_NED2B[1][0]*ay + T_NED2B[2][0]*az;
-    const float a_pred_E = T_NED2B[1][1]*ay + T_NED2B[2][1]*az;
+    // #1135 item 2: rotate the FULL body specific force into NED, not the
+    // lateral part of it. This is an identity, not a tuning choice.
+    //
+    // The measurement is aWorldHoriz = d/dt of the GNSS NED velocity, i.e. the
+    // horizontal KINEMATIC acceleration. An accelerometer reads f = a - g, so
+    //     T_B2NED * f = a_NED - g_NED,   g_NED = (0, 0, g)
+    // and because gravity is purely vertical in NED it drops out of the two
+    // horizontal components exactly:
+    //     (T_B2NED * f)_N = a_N,   (T_B2NED * f)_E = a_E
+    // With the full force on both sides the prediction and the measurement are
+    // literally the same physical quantity, so the innovation is an attitude
+    // error and nothing else.
+    //
+    // The old comment argued the opposite — "only the LATERAL body force is
+    // used (axial/nose component zeroed) so boost thrust doesn't dominate" —
+    // but zeroing the axial term on the PREDICTION side does not remove its
+    // horizontal projection from the MEASUREMENT side. That left both sides
+    // carrying a different contaminant, each scaling as sin(tilt), measured on
+    // the four 2026-08-29 flights (see #1135):
+    //   - omitted axial term f_x*sin(tilt): 9.4-18.4 m/s^2 on boost, i.e. as
+    //     large as or larger than the entire world-frame measurement;
+    //   - gravity's lateral projection g*sin(tilt), which the world side does
+    //     not have at all: 35-100% of pred_h.
+    // Neither side was the aero side force the aid is documented to observe.
+    // Rotating the whole vector removes both contaminants in one move.
+    const float ax = aMeas[0], ay = aMeas[1], az = aMeas[2];
+    const float a_pred_N = T_NED2B[0][0]*ax + T_NED2B[1][0]*ay + T_NED2B[2][0]*az;
+    const float a_pred_E = T_NED2B[0][1]*ax + T_NED2B[1][1]*ay + T_NED2B[2][1]*az;
     const float pred_h = std::sqrt(a_pred_N*a_pred_N + a_pred_E*a_pred_E);
     const float meas_h = std::sqrt(aWorldHoriz[0]*aWorldHoriz[0] + aWorldHoriz[1]*aWorldHoriz[1]);
-    if (pred_h < 0.5f || meas_h < 0.5f) return;   // need a clear lateral force
+    if (pred_h < 0.5f || meas_h < 0.5f) return;   // need a clear signal on both sides
 
     const float psi_pred = std::atan2(a_pred_E, a_pred_N);
     const float psi_meas = std::atan2(aWorldHoriz[1], aWorldHoriz[0]);
