@@ -37,6 +37,30 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(telemetry.state, "INFLIGHT")
     }
 
+    /// #714: the flight-pack keys, and the one line the dashboards draw from them.
+    func testJSONDecode_FlightPackFieldsAndTheirLine() throws {
+        let t = try JSONDecoder().decode(TelemetryData.self, from: """
+        {"bvol": 4.02, "pvol": 8.31, "pc1": 4.17, "pc2": 4.14}
+        """.data(using: .utf8)!)
+        XCTAssertEqual(try XCTUnwrap(t.pack_voltage), 8.31, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(t.pack_cell1), 4.17, accuracy: 0.001)
+        XCTAssertEqual(t.packDisplay, "Flight pack 8.31 V · cells 4.17 / 4.14 V")
+
+        // Cells more than 0.10 V apart earn a note; the row is never recoloured.
+        let off = try JSONDecoder().decode(TelemetryData.self, from: """
+        {"pvol": 7.90, "pc1": 4.15, "pc2": 3.75}
+        """.data(using: .utf8)!)
+        XCTAssertEqual(off.packDisplay, "Flight pack 7.90 V · cells 4.15 / 3.75 V · differ by 0.40 V")
+
+        // A pack whose mid tap could not be read as a cell: the pack alone.
+        let packOnly = try JSONDecoder().decode(TelemetryData.self, from: "{\"pvol\": 8.31}".data(using: .utf8)!)
+        XCTAssertEqual(packOnly.packDisplay, "Flight pack 8.31 V")
+
+        // No pack on the jack (the firmware omits the keys): nothing to draw.
+        let none = try JSONDecoder().decode(TelemetryData.self, from: "{\"bvol\": 4.02}".data(using: .utf8)!)
+        XCTAssertNil(none.packDisplay)
+    }
+
     func testJSONDecode_IntFieldsTolerateFloatAndString() throws {
         // #571: completes the #293 hardening — EVERY integer key must survive
         // firmware-contract drift emitting it as a float or string. A strict

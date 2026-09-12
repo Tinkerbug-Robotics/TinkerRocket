@@ -125,6 +125,11 @@ struct TelemetryData: Codable {
     var bs_soc: Float?                // Base station SOC %
     var bs_voltage: Float?            // Base station voltage V
     var bs_current: Float?            // Base station current mA
+    // #714: the flight pack on the base station's charger jack, from its own
+    // dividers — absent unless a pack is connected.
+    var pack_voltage: Float?          // "pvol" whole pack V
+    var pack_cell1: Float?            // "pc1"
+    var pack_cell2: Float?            // "pc2"
     // Seconds remaining until the BS silence-timeout closes the active log.
     // Sent only when bs_logging_active is true (BS omits the JSON key
     // otherwise) — nil here = no countdown to show.
@@ -520,6 +525,9 @@ struct TelemetryData: Codable {
         case bs_soc = "bsoc"
         case bs_voltage = "bvol"
         case bs_current = "bcur"
+        case pack_voltage = "pvol"
+        case pack_cell1 = "pc1"
+        case pack_cell2 = "pc2"
         case bs_log_silence_remaining_s = "slrm"
         case imu_orient_packed = "imo"
         // Packed flight-status bitfield (replaces lnch/vapo/aapo/land/pwr/
@@ -615,6 +623,9 @@ struct TelemetryData: Codable {
         bs_soc = try c.decodeIfPresent(Float.self, forKey: .bs_soc)
         bs_voltage = try c.decodeIfPresent(Float.self, forKey: .bs_voltage)
         bs_current = try c.decodeIfPresent(Float.self, forKey: .bs_current)
+        pack_voltage = try c.decodeIfPresent(Float.self, forKey: .pack_voltage)   // #714
+        pack_cell1 = try c.decodeIfPresent(Float.self, forKey: .pack_cell1)
+        pack_cell2 = try c.decodeIfPresent(Float.self, forKey: .pack_cell2)
         bs_log_silence_remaining_s = flexInt(.bs_log_silence_remaining_s).map { UInt16(clamping: $0) }  // #571
         imu_orient_packed = flexInt(.imu_orient_packed)   // #293: tolerant, like fs/ps
         flight_status_bits = flexInt(.flight_status_bits) ?? 0   // #293: tolerant
@@ -795,6 +806,24 @@ struct TelemetryData: Codable {
     /// Same clamp and negative-zero guard as `socDisplay` — the base station's
     /// pack reaches 0 the same way the rocket's does, and would print the same
     /// "-0.0%".
+    /// #714: the flight pack on the base station's charger jack, as one line
+    /// under the Base Stn row — the pack, the two cells, and how far apart
+    /// they are once that is worth saying. Nil when no pack is connected.
+    /// Android renders the identical string.
+    static let packCellDeltaNoteV: Float = 0.10
+    var packDisplay: String? {
+        guard let pack = pack_voltage else { return nil }
+        var s = String(format: "Flight pack %.2f V", pack)
+        if let c1 = pack_cell1, let c2 = pack_cell2 {
+            s += String(format: " · cells %.2f / %.2f V", c1, c2)
+            let delta = abs(c1 - c2)
+            if delta > TelemetryData.packCellDeltaNoteV {
+                s += String(format: " · differ by %.2f V", delta)
+            }
+        }
+        return s
+    }
+
     var bsSocDisplay: String {
         if let soc = bs_soc {
             return String(format: "%.1f%%", min(100, max(0, soc)) + 0)

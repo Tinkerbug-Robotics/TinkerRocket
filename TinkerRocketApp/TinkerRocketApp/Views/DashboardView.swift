@@ -1667,6 +1667,11 @@ struct BatteryView: View {
                            charge: telemetry.bsSocDisplay,
                            voltage: telemetry.bsVoltageDisplay,
                            current: telemetry.bsCurrentDisplay)
+                // #714: the flight pack on the charger jack — one quiet line,
+                // never a recoloured row (Android draws the same string).
+                if let pack = telemetry.packDisplay {
+                    Text(pack).font(.caption).foregroundColor(.secondary)
+                }
             }
         }
         .padding()
@@ -1951,6 +1956,9 @@ struct BSOnlyBatteryView: View {
                        charge: telemetry.bsSocDisplay,
                        voltage: telemetry.bsVoltageDisplay,
                        current: telemetry.bsCurrentDisplay)
+            if let pack = telemetry.packDisplay {   // #714
+                Text(pack).font(.caption).foregroundColor(.secondary)
+            }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)

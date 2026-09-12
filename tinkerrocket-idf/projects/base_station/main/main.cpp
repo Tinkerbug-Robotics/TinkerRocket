@@ -41,6 +41,7 @@
 #include "bs_uplink_queue.h"      // uplink command FIFO (#502)
 #include "bs_uplink_txwin.h"      // TX-in-the-RX-gap window policy (#506)
 #include "bs_battery_soc.h"       // voltage-based SoC fallback (#501)
+#include "bs_pack_sense_policy.h"  // flight-pack dividers -> pack / cells (#714)
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
 #include "bs_storage_policy.h"    // NAND bring-up retry / demotion policy (#761)
 #include "bs_file_list.h"       // top-N file-list window (#835)
@@ -159,6 +160,12 @@ static float bs_voltage = NAN;
 static float bs_soc = NAN;
 static float bs_current = NAN;
 static float bs_temperature = NAN;
+// #714: the external 2S flight pack on the charger jack, from its own
+// dividers. NaN = no pack (or no dividers on this board); the cells are NaN
+// when the mid tap cannot be read as a cell.
+static float bs_pack_voltage = NAN;
+static float bs_pack_cell1   = NAN;
+static float bs_pack_cell2   = NAN;
 // #501: true when bs_soc came from the voltage curve rather than the gauge's own
 // coulomb count, because the gauge's SoC failed the plausibility check.
 static bool  bs_soc_estimated = false;
@@ -1066,25 +1073,69 @@ static void maintainBatteryFets()
 // walk around it. In particular the esp-idf calibration curve is
 // per-attenuation, so if the cali handle cannot be created we report nothing
 // rather than scaling a raw count by a nominal full-scale and hoping.
-static adc_oneshot_unit_handle_t batt_adc_unit = nullptr;
-static adc_cali_handle_t         batt_adc_cali = nullptr;
-static bool                      batt_adc_ready = false;
+//
+// #714 generalised this from one hard-coded channel to every divider the
+// board declares: one ADC1 unit, and per channel its own attenuation, its own
+// calibration handle and its own divider. A second channel could not reuse
+// the first's handle — the curve is per-attenuation, and the pack sense runs
+// at 6 dB where the cell senses run at 12 dB.
+struct AdcSense {
+    const char*       name;
+    int               gpio;        // -1 = the board has no such divider
+    int               atten_db;
+    float             divider;
+    adc_channel_t     channel = ADC_CHANNEL_0;
+    adc_cali_handle_t cali    = nullptr;
+    bool              ready   = false;
+};
+static adc_oneshot_unit_handle_t sense_adc_unit = nullptr;
+static AdcSense batt_sense     {"BATT",     config::BATT_VSENSE_GPIO,     config::BATT_VSENSE_ATTEN_DB,     config::BATT_VSENSE_DIVIDER};
+static AdcSense pack_sense     {"PACK",     config::PACK_VSENSE_GPIO,     config::PACK_VSENSE_ATTEN_DB,     config::PACK_VSENSE_DIVIDER};
+static AdcSense pack_mid_sense {"PACK MID", config::PACK_MID_VSENSE_GPIO, config::PACK_MID_VSENSE_ATTEN_DB, config::PACK_MID_VSENSE_DIVIDER};
 
-static void initBatteryAdc()
+static bool attenFromDb(int db, adc_atten_t* out)
 {
-    adc_oneshot_unit_init_cfg_t unit_cfg = {};
-    unit_cfg.unit_id  = ADC_UNIT_1;             // GPIO1 = ADC1_CH0
-    unit_cfg.ulp_mode = ADC_ULP_MODE_DISABLE;
-    if (adc_oneshot_new_unit(&unit_cfg, &batt_adc_unit) != ESP_OK) {
-        ESP_LOGE(TAG, "[BATT] ADC unit init failed — battery voltage unavailable");
+    switch (db) {
+        case 0:  *out = ADC_ATTEN_DB_0;   return true;
+        case 2:  *out = ADC_ATTEN_DB_2_5; return true;
+        case 6:  *out = ADC_ATTEN_DB_6;   return true;
+        case 12: *out = ADC_ATTEN_DB_12;  return true;
+        default: return false;
+    }
+}
+
+static void initAdcSense(AdcSense& s)
+{
+    if (s.gpio < 0) return;   // not on this board
+
+    if (sense_adc_unit == nullptr) {
+        adc_oneshot_unit_init_cfg_t unit_cfg = {};
+        unit_cfg.unit_id  = ADC_UNIT_1;
+        unit_cfg.ulp_mode = ADC_ULP_MODE_DISABLE;
+        if (adc_oneshot_new_unit(&unit_cfg, &sense_adc_unit) != ESP_OK) {
+            ESP_LOGE(TAG, "[ADC] unit init failed — no divider can be read");
+            return;
+        }
+    }
+
+    // The header names a GPIO; let the driver say which channel that is,
+    // and refuse a pin that is not on ADC1 rather than read the wrong one.
+    adc_unit_t unit = ADC_UNIT_1;
+    if (adc_oneshot_io_to_channel(s.gpio, &unit, &s.channel) != ESP_OK || unit != ADC_UNIT_1) {
+        ESP_LOGE(TAG, "[ADC] %s: GPIO%d is not an ADC1 pin — unavailable", s.name, s.gpio);
+        return;
+    }
+    adc_atten_t atten;
+    if (!attenFromDb(s.atten_db, &atten)) {
+        ESP_LOGE(TAG, "[ADC] %s: %d dB is not an attenuation — unavailable", s.name, s.atten_db);
         return;
     }
 
     adc_oneshot_chan_cfg_t chan_cfg = {};
-    chan_cfg.atten    = (adc_atten_t)ADC_ATTEN_DB_12;
+    chan_cfg.atten    = atten;
     chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
-    if (adc_oneshot_config_channel(batt_adc_unit, ADC_CHANNEL_0, &chan_cfg) != ESP_OK) {
-        ESP_LOGE(TAG, "[BATT] ADC channel config failed — battery voltage unavailable");
+    if (adc_oneshot_config_channel(sense_adc_unit, s.channel, &chan_cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "[ADC] %s: channel config failed — unavailable", s.name);
         return;
     }
 
@@ -1092,41 +1143,83 @@ static void initBatteryAdc()
     // curve is per-atten and mixing them mis-scales every read silently.
     adc_cali_curve_fitting_config_t cali_cfg = {};
     cali_cfg.unit_id  = ADC_UNIT_1;
-    cali_cfg.atten    = (adc_atten_t)ADC_ATTEN_DB_12;
+    cali_cfg.atten    = atten;
     cali_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
-    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &batt_adc_cali) != ESP_OK) {
-        ESP_LOGE(TAG, "[BATT] ADC calibration unavailable (no eFuse cal data?) — "
-                      "reporting no voltage rather than an uncalibrated guess");
+    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &s.cali) != ESP_OK) {
+        ESP_LOGE(TAG, "[ADC] %s: calibration unavailable (no eFuse cal data?) — "
+                      "reporting no voltage rather than an uncalibrated guess", s.name);
         return;
     }
 
-    batt_adc_ready = true;
-    ESP_LOGI(TAG, "[BATT] ADC ready: GPIO%d, divider %.3f, %d dB",
-             config::BATT_VSENSE_GPIO, (double)config::BATT_VSENSE_DIVIDER,
-             config::BATT_VSENSE_ATTEN_DB);
+    s.ready = true;
+    ESP_LOGI(TAG, "[ADC] %s ready: GPIO%d (ADC1_CH%d), divider %.3f, %d dB",
+             s.name, s.gpio, (int)s.channel, (double)s.divider, s.atten_db);
 }
 
-// Returns the cell terminal voltage, or NaN if it cannot be measured.
-static float readBatteryVolts()
+// The voltage at the TOP of the divider, or NaN if it cannot be measured.
+static float readAdcSense(const AdcSense& s)
 {
-    if (!batt_adc_ready) return NAN;
-    // Average a handful: the divider is high-impedance (1M||1M = 500k) and the
-    // 100 nF at the pin is the only reservoir, so single reads are noisy.
+    if (!s.ready) return NAN;
+    // Average a handful: the dividers are high-impedance (up to 1M||1M =
+    // 500k) and the 100 nF at each pin is the only reservoir, so single
+    // reads are noisy.
     constexpr int kSamples = 8;
     int mv_sum = 0, taken = 0;
     for (int i = 0; i < kSamples; ++i) {
         int raw = 0;
-        if (adc_oneshot_read(batt_adc_unit, ADC_CHANNEL_0, &raw) != ESP_OK) continue;
+        if (adc_oneshot_read(sense_adc_unit, s.channel, &raw) != ESP_OK) continue;
         int mv = 0;
-        if (adc_cali_raw_to_voltage(batt_adc_cali, raw, &mv) != ESP_OK) continue;
+        if (adc_cali_raw_to_voltage(s.cali, raw, &mv) != ESP_OK) continue;
         mv_sum += mv;
         ++taken;
     }
     if (taken == 0) return NAN;
-    return ((float)mv_sum / (float)taken) * 0.001f * config::BATT_VSENSE_DIVIDER;
+    return ((float)mv_sum / (float)taken) * 0.001f * s.divider;
+}
+
+static void initSenseAdc()
+{
+    // Each is a no-op on a board that declares no such pin, so this runs
+    // unconditionally: a gauged board simply has nothing to bring up.
+    initAdcSense(batt_sense);
+    initAdcSense(pack_sense);
+    initAdcSense(pack_mid_sense);
+}
+
+// Returns the cell terminal voltage, or NaN if it cannot be measured.
+static float readBatteryVolts() { return readAdcSense(batt_sense); }
+
+// #714: the external 2S flight pack on J4 — PosADC for the whole pack, MidADC
+// for cell 1. What the two pins mean (presence floor, the cell split, a mid
+// tap that is not a cell) is bs_pack_sense, host-tested; this reads them and
+// asks the charger whether it is regulating onto an empty jack.
+static void updatePackSense()
+{
+    if (!pack_sense.ready) return;   // no pack divider on this board, or the ADC is dead: stays NaN
+    const float pos_v = readAdcSense(pack_sense);
+    const float mid_v = readAdcSense(pack_mid_sense);
+    const bool charger_says_absent =
+        config::HAS_PACK_CHARGER && pack_charger.present() && pack_charger.data().battery_absent;
+    const bs_pack_sense::Reading r = bs_pack_sense::derive(pos_v, mid_v, charger_says_absent);
+
+    const bool was_present = !isnan(bs_pack_voltage);
+    bs_pack_voltage = r.pack_v;
+    bs_pack_cell1   = r.cell1_v;
+    bs_pack_cell2   = r.cell2_v;
+    const bool now_present = !isnan(bs_pack_voltage);
+    // Say it on the transition, not every poll.
+    if (now_present && !was_present)
+        ESP_LOGI(TAG, "[PACK] flight pack present: %.2f V (cells %.2f / %.2f)",
+                 (double)bs_pack_voltage, (double)bs_pack_cell1, (double)bs_pack_cell2);
+    else if (!now_present && was_present)
+        ESP_LOGI(TAG, "[PACK] flight pack gone");
 }
 static void updateBattery()
 {
+    // #714: the flight pack on the charger jack rides the same cadence.
+    // First, because the no-gauge branch below returns early.
+    updatePackSense();
+
     // constexpr, not #if: HAS_FUEL_GAUGE is a config struct member, and an
     // #if on an undefined macro silently evaluates to 0 — which would have
     // run the ADC path on the gauged boards too.
@@ -2219,6 +2312,10 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.bs_soc = bs_soc;
     out.bs_voltage = bs_voltage;
     out.bs_current = bs_current;
+    // #714: the flight pack on the charger jack (NaN = omitted).
+    out.bs_pack_voltage = bs_pack_voltage;
+    out.bs_pack_cell1   = bs_pack_cell1;
+    out.bs_pack_cell2   = bs_pack_cell2;
 
     // Flight event flags (from LoRa packet)
     out.launch_flag       = lora.launch_flag;
@@ -4288,9 +4385,12 @@ static void setup_bs()
     // result: a gauged board whose gauge failed to answer should stay silent
     // (its divider does not exist) rather than start reporting a voltage
     // from an unconnected pin.
+    // #714: every divider the board declares — the cell on a no-gauge board,
+    // the flight pack on a board with the charger — comes up here; a board
+    // without a pin declares -1 and skips it.
+    initSenseAdc();
     if constexpr (!config::HAS_FUEL_GAUGE)
     {
-        initBatteryAdc();
         updateBattery();   // seed bs_voltage/bs_soc before the first telemetry
     }
 

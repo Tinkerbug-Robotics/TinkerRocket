@@ -2177,6 +2177,11 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("bsoc", data.bs_soc, 1);
     addFloat("bvol", data.bs_voltage, 2);
     addFloat("bcur", data.bs_current, 0);
+    // #714: the flight pack on the charger jack. NaN skips the key, so a
+    // rocket and a base station with an empty jack cost nothing here.
+    addFloat("pvol", data.bs_pack_voltage, 2);
+    addFloat("pc1",  data.bs_pack_cell1, 2);
+    addFloat("pc2",  data.bs_pack_cell2, 2);
     // Countdown to the silence-timeout close — only emitted while the log
     // is actually open (saves ~10 B per telemetry packet when idle).  iOS
     // renders this next to the Base Stn Log badge so the operator can see

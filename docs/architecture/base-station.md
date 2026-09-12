@@ -33,22 +33,23 @@ entirely** so it can be tested without hardware.
 |---|---|
 | **Chip** | ESP32-S3, dual core |
 | **Entry point** | [`app_main`](../../tinkerrocket-idf/projects/base_station/main/main.cpp) → `setup_bs()`, then a `bs_loop` task spinning `loop_bs()` |
-| **Source** | [`projects/base_station/main/main.cpp`](../../tinkerrocket-idf/projects/base_station/main/main.cpp) (~5,200 lines) + six policy headers |
+| **Source** | [`projects/base_station/main/main.cpp`](../../tinkerrocket-idf/projects/base_station/main/main.cpp) (~5,200 lines) + seven policy headers |
 | **Navigation** | [section map](generated/base-station-map.md) — 22 sections, 6 inside `loop_bs` |
 | **Execution** | one task, `bs_loop`, priority 5, 8 KB stack, core 1 |
 | **Listens** | LoRa 915 MHz, up to 4 rockets tracked simultaneously |
-| **Stores** | CSV per flight on external flash (FAT) |
+| **Stores** | CSV per flight — on SPIFFS (9.94 MB of the 16 MB boot NOR) on the current board; the earlier boards mount an external NAND as FAT |
 | **Talks to your phone** | BLE GATT, 20 commands |
 | **Board** | **V6 hardware** — built as `TR_BS_BOARD=3`. Earlier revisions still build (1, 2) |
 
 ## The policy headers
 
-Six pure-logic headers sit next to `main.cpp`, each extracted so a host-side GoogleTest
+Seven pure-logic headers sit next to `main.cpp`, each extracted so a host-side GoogleTest
 can drive it without a radio, an SD card, or a BLE stack:
 
 | Header | What it decides | Tests |
 |---|---|---|
 | [`bs_battery_soc.h`](../../tinkerrocket-idf/projects/base_station/main/bs_battery_soc.h) | voltage-based state of charge | 21 |
+| [`bs_pack_sense_policy.h`](../../tinkerrocket-idf/projects/base_station/main/bs_pack_sense_policy.h) | the flight-pack dividers into pack and per-cell voltages | 8 |
 | [`bs_uplink_txwin.h`](../../tinkerrocket-idf/projects/base_station/main/bs_uplink_txwin.h) | when a transmit window is open | 19 |
 | [`bs_uplink_queue.h`](../../tinkerrocket-idf/projects/base_station/main/bs_uplink_queue.h) | uplink command FIFO | 14 |
 | [`bs_log_policy.h`](../../tinkerrocket-idf/projects/base_station/main/bs_log_policy.h) | when to open, roll, and close a log | 12 |
@@ -149,7 +150,11 @@ they disagree.
 
 ## Logging
 
-Each flight becomes a timestamped CSV on external flash, mounted FAT. A log opens on
+Each flight becomes a timestamped CSV. On the current board (`TR_BS_BOARD=3`) that lives
+on the SPIFFS partition of the 16 MB boot NOR — 9.94 MB, and there is no other flash on
+the board, so SPIFFS there is the design and not a demotion. The earlier boards mount an
+external SPI NAND as FAT and fall back to a small internal SPIFFS when it fails, which
+`bs_storage_policy` reports as a demotion. A log opens on
 first packet and closes on one of three conditions: an explicit stop, an in-flight safety
 timeout, or five minutes of silence. Writes are flushed periodically rather than per
 packet, since `fflush()` only pushes stdio buffers down to the driver.
@@ -159,15 +164,29 @@ GNSS sentinel. A log opened before that sync gets renamed once the time arrives.
 
 ## Power
 
-The current V6 board carries a **MAX17303G+** gauge and an MP2672 flight-pack charger.
-(Superseded revisions used the MAX17205G or BQ27Z746; the gauge is probed at runtime, so
-it does not depend on the build flag.) `maintainBatteryFets()` keeps the protection FETs enabled —
-the BQ27Z746 ships with `FET_EN=0` and reverts to it on reset, so a fresh gauge presents
-as a dead battery that only works on USB.
+The current board (`TR_BS_BOARD=3`) has **no fuel gauge**. Its own cell is a single 18650
+on a BQ21040 linear charger, read through a 1 M / 1 M divider on GPIO1 (`Volt_Read`, ADC1,
+12 dB) and turned into a state of charge by the voltage curve in `bs_battery_soc.h` — so
+`bsoc` on the app is always an estimate there, and the boot log says so. Every failure on
+that path reports NaN, never a guess: the esp-idf calibration curve is per-attenuation,
+and a read through the wrong handle is silently mis-scaled, which is why each divider
+carries its own calibration handle.
 
-It re-enables only when there is no active safety fault, never overriding a real
-protection event, and separately flags the "commanded on but not conducting" case, which
-is a gate-drive or assembly fault rather than a firmware one.
+The same board carries an MP2672 charger for an external 2S **flight pack** on J4, and
+reads that pack on two more dividers (#714): `PosADC` (GPIO8, 1 M / 180 k, 6 dB) for the
+whole pack and `MidADC` (GPIO9, 100 k / 100 k, 12 dB) for cell 1. `bs_pack_sense_policy.h`
+turns the two into pack and per-cell voltages — under 5 V is an open jack, and the
+charger's `BATTFLOAT` flag vetoes the reading while it is regulating onto an empty jack —
+which reach the app as `pvol` / `pc1` / `pc2` and are drawn as one line under the Base Stn
+battery row, with the cell difference called out once it passes 0.1 V. A pack that arrives
+at the field imbalanced is visible before it flies.
+
+The superseded boards (flags 1, 2) carry a gauge — MAX17205G, BQ27Z746 or MAX17303, probed
+at runtime — and `maintainBatteryFets()` keeps the BQ27Z746's protection FETs enabled: it
+ships with `FET_EN=0` and reverts to it on reset, so a fresh gauge presents as a dead
+battery that only works on USB. It re-enables only when there is no active safety fault,
+never overriding a real protection event, and separately flags the "commanded on but not
+conducting" case, which is a gate-drive or assembly fault rather than a firmware one.
 
 ---
 

@@ -571,6 +571,19 @@ target_include_directories(test_bs_battery_soc PRIVATE
 target_link_libraries(test_bs_battery_soc GTest::gtest_main)
 gtest_discover_tests(test_bs_battery_soc)
 
+# ---------- test_bs_pack_sense_policy ----------
+# Host-side test for the base-station flight-pack sense (#714): the two
+# dividers on the charger jack (PosADC whole pack, MidADC cell 1) into pack
+# and per-cell voltages, with the presence floor and the charger's empty-jack
+# veto. Pure header, so the test just adds base_station/main.
+add_executable(test_bs_pack_sense_policy test_bs_pack_sense_policy.cpp)
+target_include_directories(test_bs_pack_sense_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_pack_sense_policy GTest::gtest_main)
+gtest_discover_tests(test_bs_pack_sense_policy)
+
 # ---------- test_ble_command_ring ----------
 # Host-side test for the shared BLE command intake ring (#517): the intake was a
 # single latch, so a back-to-back command burst (the app's ~13-command connect

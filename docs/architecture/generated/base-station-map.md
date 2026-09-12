@@ -3,40 +3,40 @@
 
 # Base Station -- `main.cpp` navigation map
 
-`tinkerrocket-idf/projects/base_station/main/main.cpp` is 6,009 lines in one translation unit. These are the
+`tinkerrocket-idf/projects/base_station/main/main.cpp` is 6,109 lines in one translation unit. These are the
 `// SECTION:` banners in it, in file order. Indented rows (↳) are regions
 inside a single large function. Line counts include each section's banner
 and leading comments.
 
 | Section | Lines | Span |
 |---------|-------|------|
-| [**Includes, board selection, and compile-time configuration**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L1-L75) | 75 | 1-75 |
-| [**OTA boot validation**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L76-L170) | 95 | 76-170 |
-| [**Peripheral objects and board hardware**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L171-L204) | 34 | 171-204 |
-| [**Uplink queue state**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L205-L241) | 37 | 205-241 |
-| [**External flash and FAT mount**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L242-L638) | 397 | 242-638 |
-| [**LoRa channel hopping**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L639-L707) | 69 | 639-707 |
-| [**Auto-acquire state**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L708-L786) | 79 | 708-786 |
-| [**Multi-rocket tracker**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L787-L1021) | 235 | 787-1021 |
-| [**Battery monitoring and charger FETs**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L1022-L1236) | 215 | 1022-1236 |
-| [**CSV logging: clock, file lifecycle, and writers**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L1237-L1777) | 541 | 1237-1777 |
-| [**BLE file operations (list, delete, download)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L1778-L2052) | 275 | 1778-2052 |
-| [**BLE telemetry frame and console output**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L2053-L2370) | 318 | 2053-2370 |
-| [**Config readback to the app**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L2371-L2440) | 70 | 2371-2440 |
-| [**LoRa uplink to the rocket**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L2441-L2633) | 193 | 2441-2633 |
-| [**Transactional LoRa reconfigure**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L2634-L2905) | 272 | 2634-2905 |
-| [**Silence recovery**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L2906-L3162) | 257 | 2906-3162 |
-| [**Heartbeat to the rocket**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L3163-L3256) | 94 | 3163-3256 |
-| [**Coordinated noise scan and channel set**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L3257-L3880) | 624 | 3257-3880 |
-| [**Auto-acquire**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L3881-L3987) | 107 | 3881-3987 |
-| [**Boot setup**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L3988-L4588) | 601 | 3988-4588 |
-| [**Main loop**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L4589-L5999) | 1,411 | 4589-5999 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [LoRa service and hop management](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L4600-L4663) | 64 | 4600-4663 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Packet receive: beacon, telemetry, tracker](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L4664-L5225) | 562 | 4664-5225 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Log lifecycle timeouts and flush](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L5226-L5330) | 105 | 5226-5330 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Battery read and standalone BLE update](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L5331-L5423) | 93 | 5331-5423 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [BLE command dispatch](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L5424-L5912) | 489 | 5424-5912 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Scan completion and periodic service chain](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L5913-L5999) | 87 | 5913-5999 |
-| [**FreeRTOS entry point**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L6000-L6009) | 10 | 6000-6009 |
+| [**Includes, board selection, and compile-time configuration**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L1-L76) | 76 | 1-76 |
+| [**OTA boot validation**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L77-L177) | 101 | 77-177 |
+| [**Peripheral objects and board hardware**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L178-L211) | 34 | 178-211 |
+| [**Uplink queue state**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L212-L248) | 37 | 212-248 |
+| [**External flash and FAT mount**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L249-L645) | 397 | 249-645 |
+| [**LoRa channel hopping**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L646-L714) | 69 | 646-714 |
+| [**Auto-acquire state**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L715-L793) | 79 | 715-793 |
+| [**Multi-rocket tracker**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L794-L1028) | 235 | 794-1028 |
+| [**Battery monitoring and charger FETs**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L1029-L1329) | 301 | 1029-1329 |
+| [**CSV logging: clock, file lifecycle, and writers**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L1330-L1870) | 541 | 1330-1870 |
+| [**BLE file operations (list, delete, download)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L1871-L2145) | 275 | 1871-2145 |
+| [**BLE telemetry frame and console output**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L2146-L2467) | 322 | 2146-2467 |
+| [**Config readback to the app**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L2468-L2537) | 70 | 2468-2537 |
+| [**LoRa uplink to the rocket**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L2538-L2730) | 193 | 2538-2730 |
+| [**Transactional LoRa reconfigure**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L2731-L3002) | 272 | 2731-3002 |
+| [**Silence recovery**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L3003-L3259) | 257 | 3003-3259 |
+| [**Heartbeat to the rocket**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L3260-L3353) | 94 | 3260-3353 |
+| [**Coordinated noise scan and channel set**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L3354-L3977) | 624 | 3354-3977 |
+| [**Auto-acquire**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L3978-L4084) | 107 | 3978-4084 |
+| [**Boot setup**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L4085-L4688) | 604 | 4085-4688 |
+| [**Main loop**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L4689-L6099) | 1,411 | 4689-6099 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [LoRa service and hop management](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L4700-L4763) | 64 | 4700-4763 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Packet receive: beacon, telemetry, tracker](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L4764-L5325) | 562 | 4764-5325 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Log lifecycle timeouts and flush](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L5326-L5430) | 105 | 5326-5430 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Battery read and standalone BLE update](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L5431-L5523) | 93 | 5431-5523 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [BLE command dispatch](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L5524-L6012) | 489 | 5524-6012 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Scan completion and periodic service chain](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L6013-L6099) | 87 | 6013-6099 |
+| [**FreeRTOS entry point**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/base_station/main/main.cpp#L6100-L6109) | 10 | 6100-6109 |
 
-Total: 22 sections (6 nested) across 6,009 lines.
+Total: 22 sections (6 nested) across 6,109 lines.

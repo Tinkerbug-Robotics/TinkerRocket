@@ -70,4 +70,7 @@ struct board_pins
     static constexpr int   PACK_VSENSE_GPIO     = -1;
     static constexpr float PACK_VSENSE_DIVIDER  = 0.0f;
     static constexpr int   PACK_VSENSE_ATTEN_DB = -1;
+    static constexpr int   PACK_MID_VSENSE_GPIO     = -1;   // no mid tap either (#714)
+    static constexpr float PACK_MID_VSENSE_DIVIDER  = 0.0f;
+    static constexpr int   PACK_MID_VSENSE_ATTEN_DB = -1;
 };

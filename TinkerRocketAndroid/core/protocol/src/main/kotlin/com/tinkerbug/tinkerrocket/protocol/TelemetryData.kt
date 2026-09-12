@@ -241,6 +241,11 @@ public data class TelemetryData(
     val bsSoc: Float? = null,                 // "bsoc"
     val bsVoltage: Float? = null,             // "bvol"
     val bsCurrent: Float? = null,             // "bcur"
+    // #714: the flight pack on the base station's charger jack, from its own
+    // dividers — absent unless a pack is connected.
+    val packVoltage: Float? = null,           // "pvol"
+    val packCell1: Float? = null,             // "pc1"
+    val packCell2: Float? = null,             // "pc2"
     // Seconds until the BS silence-timeout closes the active log; the BS omits
     // the key unless bsLoggingActive — null = no countdown.  (iOS UInt16?)
     val bsLogSilenceRemainingS: Int? = null,  // "slrm"
@@ -306,6 +311,28 @@ public data class TelemetryData(
             } else {
                 "N/A"
             }
+        }
+
+    /**
+     * #714: the flight pack on the base station's charger jack, as one line
+     * under the Base Stn row — the pack, the two cells, and how far apart
+     * they are once that is worth saying. Null when no pack is connected.
+     * iOS renders the identical string.
+     */
+    public val packDisplay: String?
+        get() {
+            val pack = packVoltage ?: return null
+            val sb = StringBuilder(String.format(java.util.Locale.ROOT, "Flight pack %.2f V", pack))
+            val c1 = packCell1
+            val c2 = packCell2
+            if (c1 != null && c2 != null) {
+                sb.append(String.format(java.util.Locale.ROOT, " · cells %.2f / %.2f V", c1, c2))
+                val delta = abs(c1 - c2)
+                if (delta > PACK_CELL_DELTA_NOTE_V) {
+                    sb.append(String.format(java.util.Locale.ROOT, " · differ by %.2f V", delta))
+                }
+            }
+            return sb.toString()
         }
 
     /** The base station's own pack, same formatting rules as [socDisplay]. */
@@ -678,6 +705,9 @@ public data class TelemetryData(
         }
 
         /** Decode a parsed frame; null on a strict-field type mismatch. */
+        /** #714: cells further apart than this get a note on the pack line. */
+        public const val PACK_CELL_DELTA_NOTE_V: Float = 0.10f
+
         public fun decode(json: JsonObject): TelemetryData? = try {
             decodeOrThrow(json)
         } catch (_: FrameTypeMismatch) {
@@ -809,6 +839,9 @@ public data class TelemetryData(
             bsSoc = strictFloat(json, "bsoc"),
             bsVoltage = strictFloat(json, "bvol"),
             bsCurrent = strictFloat(json, "bcur"),
+            packVoltage = strictFloat(json, "pvol"),                    // #714
+            packCell1 = strictFloat(json, "pc1"),
+            packCell2 = strictFloat(json, "pc2"),
             bsLogSilenceRemainingS = flexLong(json, "slrm")?.let(::clampU16),  // #571
             imuOrientPacked = flexInt(json, "imo"),          // #293: tolerant, like fs/ps
             flightStatusBits = flexInt(json, "fs") ?: 0,     // #293: tolerant

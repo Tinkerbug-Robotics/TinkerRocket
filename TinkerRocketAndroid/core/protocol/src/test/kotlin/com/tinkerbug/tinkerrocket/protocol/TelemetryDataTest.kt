@@ -885,4 +885,20 @@ class TelemetryDataTest {
         val t = assertNotNull(TelemetryData.decode("""{"st":"READY","lat":0.0,"lon":0.0}"""))
         assertEquals("0.000000, 0.000000", t.coordinatesDisplay)
     }
+
+    /** #714: the flight-pack keys, and the one line the dashboards draw from them. */
+    @Test
+    fun flightPack_decodesAndRendersOneLine() {
+        val t = assertNotNull(TelemetryData.decode("""{"bvol":4.02,"pvol":8.31,"pc1":4.17,"pc2":4.14}"""))
+        assertEquals(8.31f, t.packVoltage)
+        assertEquals(4.17f, t.packCell1)
+        assertEquals("Flight pack 8.31 V · cells 4.17 / 4.14 V", t.packDisplay)
+        // Cells more than 0.10 V apart earn a note; the row is never recoloured.
+        val off = assertNotNull(TelemetryData.decode("""{"pvol":7.90,"pc1":4.15,"pc2":3.75}"""))
+        assertEquals("Flight pack 7.90 V · cells 4.15 / 3.75 V · differ by 0.40 V", off.packDisplay)
+        // A pack whose mid tap could not be read as a cell: the pack alone.
+        assertEquals("Flight pack 8.31 V", assertNotNull(TelemetryData.decode("""{"pvol":8.31}""")).packDisplay)
+        // No pack on the jack (the firmware omits the keys): nothing to draw.
+        assertNull(assertNotNull(TelemetryData.decode("""{"bvol":4.02}""")).packDisplay)
+    }
 }
