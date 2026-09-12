@@ -17,7 +17,8 @@
 > 5 µm sliver, a drill 6 µm off a ball pad, and a courtyard overlap and a dangling stub from the
 > parts that moved. The five library-copy warnings are the window-paned exposed-pad apertures
 > added to the shared library after V1.0.0; **the board keeps its own copies and must not be
-> updated from the library before this run.**
+> updated from the library before this run.** A sixth, from 2026-09-12, is `U5`: pad 12's paste is
+> window-paned on the board copy only (B1).
 >
 > As of the V1.0.1 tag, plus the [#1167](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1167)
 > decisions recorded 2026-09-07 in A3, B2, B4–B7 and the rationale below. Those changed text only,
@@ -149,14 +150,26 @@ B1. *** STENCIL FOIL 0.08 mm (3 mil), FLAT - NO STEP. ***
     INCLUDING THE 0.30 x 0.30 mm ANTENNA PADS (U14, RATIO 0.94
     AT 0.08 mm), CLEARS COMFORTABLY AT THAT FOIL, SO ONE FLAT
     0.08 mm FOIL SERVES BOTH SIDES.
-    FOUR EXPOSED PADS HAVE A MASK OPENING AND NO STENCIL
-    APERTURE, SO THEY GET NO PASTE: U15 AND U32 (BOTH
-    PROCESSOR THERMAL PADS, 16.8 mm2 EACH), U11 (NAND,
-    15.0 mm2) AND U18 (BUCK, 2.8 mm2). THIS IS AS DRAWN AND
-    HAS BEEN TRUE OF EVERY BOARD IN THIS FAMILY - THE PARTS
-    SOLDER ON THEIR PERIMETER PADS. DO NOT ADD PASTE BY HAND
-    AND DO NOT SUBSTITUTE A STENCIL THAT HAS THEM. C130'S
-    PADS ALSO CARRY NO PASTE, CORRECTLY - IT IS THE ONE
+    EXPOSED PADS, AS PLOTTED (F.Paste GERBER, CHECKED
+    2026-09-12 AGAINST THE V1.0.1 RELEASE ZIP): U15 AND U32
+    (PROCESSOR THERMAL PADS, 16.8 mm2 EACH) ARE WINDOW-PANED,
+    NINE APERTURES, 54 % COVERAGE; U11 (NAND, 15.0 mm2) IS
+    WINDOW-PANED, SIX APERTURES, 76 %. THREE EXPOSED PADS HAVE
+    A MASK OPENING AND NO APERTURE, SO THEY GET NO PASTE: U18
+    (BUCK, 2.8 mm2), U19 (EFUSE, 6.9 mm2) AND U47 (HOLD-UP
+    CONVERTER, 2.7 mm2) - THOSE PARTS SOLDER ON THEIR
+    PERIMETER PADS. DO NOT ADD PASTE BY HAND TO THOSE THREE
+    AND DO NOT SUBSTITUTE A STENCIL THAT HAS THEM. (THIS NOTE
+    SAID "FOUR PADS, NO PASTE, INCLUDING U15/U32/U11" UNTIL
+    2026-09-12; THE V1 STENCILS WERE CUT FROM THE GERBERS AND
+    HAVE THE WINDOW-PANES.)
+    U5 PAD 12 (2.50 x 2.25 mm, THE MODULE'S ONE PAD OVER
+    2 mm2) IS WINDOW-PANED 2 x 2 AT 75 % FROM 2026-09-12 (#960
+    DECISION 4): FOUR 1.08 x 0.97 mm APERTURES, 0.34 / 0.31 mm
+    WEBS, OUTER EDGES ON THE PAD EDGE. THE V1.0.1 STENCILS
+    PREDATE IT AND PRINT PAD 12 1:1. THE OTHER 35 U5 PADS
+    STAY 1:1 - SEE hardware/SOLDER-PASTE-CONVENTION.md.
+    C130'S PADS ALSO CARRY NO PASTE, CORRECTLY - IT IS THE ONE
     THROUGH-HOLE PART AND IS HAND SOLDERED (SEE B8).
 
 B2. *** U5 - THE 24 INTERIOR JOINTS ARE BLIND. THE 12
@@ -458,6 +471,14 @@ and without cutting `In1`.
   at local (−0.60, −0.64), tracks and vias `not_allowed` on all six copper layers, in both the
   library and the board. DRC enforces it; nothing to add. Ground stitching under the module is still
   wanted everywhere else — Quectel asks for a large ground plane on the GND pins — but not there.
+
+- **Pad 12 is window-paned (2026-09-12, #960 decision 4).** The module's one pad over 2 mm² —
+  2.50 × 2.25 mm, the tall GND land at (+7.75, −6.475) — has its paste drawn as four `fp_poly`
+  apertures on `F.Paste` (1.08 × 0.97 mm each, 0.34 / 0.31 mm webs, 74.5 % of the pad) and the
+  pad itself no longer carries `F.Paste`, the same construction as the processors' and the NAND's
+  thermal pads. Board copy only; the shared library footprint is still 1:1, which is the sixth
+  `lib_footprint_mismatch` warning. The 35 other pads stay at 1:1 on purpose — coverage sets
+  standoff, and the convention document argues against spending it on a thermal problem.
 
 - **§5.1.4 wants a ground plane of at least 30 mm × 30 mm around the module,** with no components
   and no interfering vias in it. `U5` is 18.4 mm, so that is ~5.8 mm of clear plane beyond the body
