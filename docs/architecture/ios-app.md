@@ -36,11 +36,15 @@ Three consequences fall out of it:
 - **Push is an act, not a side effect.** The whole profile goes out only when the user
   switches the active profile onto a connected rocket or taps *Send All Settings*.
   Editing a single field still self-applies that field's group immediately (#144).
-- **The app can only verify about half the surface.** The config readback does not echo
-  servo biases 2–4, fin travel, fin layout, roll waypoints, the PN guidance parameters
-  or sounds. Those are shown from the profile and labelled as unverifiable, rather than
-  quietly presented as confirmed. Closing that gap needs a firmware-side full-config
-  report.
+- **What the app can verify is firmware-dependent.** *(Corrected 2026-09-12, #1101 —
+  this used to read "the app can only verify about half the surface" and name servo
+  biases 2–4, fin travel, fin layout, roll waypoints, the PN guidance parameters and
+  sounds as permanently unreported.)* Since `dd659b6` the readback carries the servo,
+  guidance and roll groups, so nothing is unverifiable against current firmware.
+  `RocketConfig.unreportedGroups` computes the list from whichever optional groups
+  came back nil, so an older rocket still names what its firmware omits and those
+  fields are shown from the profile and labelled unverifiable rather than quietly
+  presented as confirmed.
 - **Offline edits no longer ride out silently.** An edit made while disconnected reaches
   the rocket on the next explicit push, not on the next connect.
 
