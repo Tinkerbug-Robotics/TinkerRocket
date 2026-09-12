@@ -28,12 +28,18 @@ GNSS at ~18 Hz; each track therefore carries its own timestamps and neither is
 resampled onto the other. Resampling would invent samples and smooth away
 exactly the disagreement the section is for.
 
-**The filter's ENU origin is not in the log.** Firmware sets it to a running mean
-of pad GNSS fixes, frozen 120 s after the first one, and never writes it to any
-frame or to the sidecar. Python has to reconstruct it to place the nav track on
-a map at all, and the reconstruction error is a real offset that has nothing to
-do with filter quality. It is measured and published as `originResidualM` so a
-reader can tell a datum error from a genuine disagreement.
+**The filter's ENU origin IS in the log — read it, do not rebuild it.** Firmware
+sets it to a running mean of pad GNSS fixes, frozen 120 s after the first one,
+and carries it in every in-flight `Snapshot` record as `ref_lat` / `ref_lon` /
+`ref_alt_m` (with `ref_datum_converged`, #834). This module used to reconstruct
+it by averaging the pad fixes it could see, and #1419 measured what that costs:
+1–7 m on logs with pad time, and 38.8 m on Eagle Claw 2026-08-29, whose log
+starts 0.43 s before launch — the whole nav track shifted bodily, read as
+"divergence". The reconstruction survives only as the fallback for a log with
+no snapshot (pre-snapshot firmware, or one that ended before launch), and the
+spec says which was used (`referenceSource`). `originResidualM` stays: with a
+logged origin it measures how far the two solutions really are apart at launch,
+and a large value is then a finding, not a datum error.
 
 **Altitudes are above the pad, resolved to the globe's datum in the browser.**
 Cesium wants heights above the WGS84 ellipsoid; GNSS reports MSL; the difference
@@ -100,11 +106,37 @@ def _events(flight) -> dict[str, Optional[float]]:
     return markers(flight)
 
 
-def _pad_reference(gnss, t, launch_s) -> Optional[tuple[float, float, float]]:
-    """Mean pad position over the fixes the firmware would have averaged.
+def _logged_reference(recs) -> Optional[tuple[float, float, float, Optional[bool]]]:
+    """The ENU origin the firmware actually used, from the first in-flight
+    Snapshot that carries one — (lat, lon, alt, converged).
 
-    Mirrors the firmware's reference: qualifying fixes from the first one through
-    either 120 s later or launch, whichever comes first.
+    Snapshots are sent at 10 Hz during INFLIGHT and the reference is frozen by
+    then, so the first usable one is the origin every logged e/n/u position is
+    relative to. `ref_datum_converged` (#834) says whether the pad average had
+    settled before it froze; it does not change what the origin IS, only how
+    good a pad position it was, so it is reported and not acted on.
+    """
+    for s in recs.get("Snapshot") or []:
+        lat, lon, alt = s.get("ref_lat"), s.get("ref_lon"), s.get("ref_alt_m")
+        if lat is None or lon is None or alt is None:
+            continue
+        if not (np.isfinite(lat) and np.isfinite(lon) and np.isfinite(alt)):
+            continue
+        if abs(lat) <= _NULL_ISLAND_EPS and abs(lon) <= _NULL_ISLAND_EPS:
+            continue   # a snapshot written before the receiver ever fixed
+        conv = s.get("ref_datum_converged")
+        return (float(lat), float(lon), float(alt), None if conv is None else bool(conv))
+    return None
+
+
+def _pad_reference(gnss, t, launch_s) -> Optional[tuple[float, float, float]]:
+    """FALLBACK: mean pad position over the fixes the firmware would have averaged.
+
+    Only for a log with no in-flight Snapshot (see `_logged_reference`). It
+    mirrors the firmware's reference — qualifying fixes from the first one
+    through either 120 s later or launch, whichever comes first — but it can
+    only average the fixes the log holds, which is why it lands 38.8 m off on
+    a log that starts at launch.
 
     It deliberately does *not* replicate the firmware's extra init gates (minimum
     satellites, horizontal-accuracy and velocity bounds). Those thresholds are
@@ -162,9 +194,9 @@ def _valid_fix(lat, lon, alt, fix) -> np.ndarray:
 def _enu_to_geodetic(east, north, pad_lat, pad_lon, pad_alt) -> tuple[np.ndarray, np.ndarray]:
     """Invert the firmware's spherical small-angle ENU conversion.
 
-    Matching `main.cpp:4429-4435` term for term, including the `+ ref_alt_m` on
-    the radius and the fact that the longitude scaling uses the *pad* latitude
-    rather than the current one. Both matter only slightly here, but the point of
+    Matching the firmware's `guidanceLlaToEnu` term for term, including the
+    `+ ref_alt_m` on the radius and the fact that the longitude scaling uses the
+    *pad* latitude rather than the current one. Both matter only slightly here, but the point of
     inverting the firmware's own formula rather than using a better one is that
     the round trip is exact against what the board actually computed.
     """
@@ -367,7 +399,13 @@ def analyze(flight: Flight) -> AnalysisResult:
     events = _events(flight)
     gnss = recs.get("GNSS") or []
     t_gnss = _t(gnss, t0) if gnss else np.zeros(0)
-    pad = _pad_reference(gnss, t_gnss, events.get("launch"))
+    logged = _logged_reference(recs)
+    if logged is not None:
+        pad = logged[:3]
+        reference_source, reference_converged = "logged", logged[3]
+    else:
+        pad = _pad_reference(gnss, t_gnss, events.get("launch"))
+        reference_source, reference_converged = "reconstructed", None
     if pad is None:
         result.warnings.append(
             "No usable GNSS fix on the pad, so there is no way to say where on "
@@ -406,6 +444,12 @@ def analyze(flight: Flight) -> AnalysisResult:
         "id": "globe-track",
         "title": "Flight path over imagery",
         "pad": {"lat": round(pad[0], 7), "lon": round(pad[1], 7), "mslM": round(pad[2], 1)},
+        # #1419: where the ENU origin came from. "logged" = the firmware's own
+        # frozen reference out of the Snapshot stream, which is what every
+        # e/n/u sample is relative to; "reconstructed" = the pad-fix average
+        # fallback, only right when the log holds the pad minutes.
+        "referenceSource": reference_source,
+        "referenceConverged": reference_converged,
         "tracks": tracks,
     }
 
@@ -422,10 +466,11 @@ def analyze(flight: Flight) -> AnalysisResult:
         # flight, compared at matched *times* rather than matched ordinals — see
         # _horizontal_m. Neither is shown in the report: the tracks are drawn on
         # the same globe, so the reader can see the divergence directly, and the
-        # investigation into what causes it is issue #741 rather than something
-        # a flyer needs narrated. The start figure stays in the spec because it
-        # is the health check on the reconstructed ENU origin — a bad
-        # reconstruction shifts the whole nav track bodily, and a test bounds it.
+        # investigation into what causes it was issue #741 rather than something
+        # a flyer needs narrated. The start figure stays in the spec: with a
+        # reconstructed origin it is the health check on that reconstruction (a
+        # bad one shifts the whole nav track bodily, and a test bounds it); with
+        # a logged origin it is the real launch-time disagreement.
         t_start = max(nav["t"][0], gps["t"][0])
         t_end = min(nav["t"][-1], gps["t"][-1])
         spec["originResidualM"] = round(
