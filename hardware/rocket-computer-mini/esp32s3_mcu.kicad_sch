@@ -4,6 +4,12 @@
 	(generator_version "10.0")
 	(uuid "84c223bd-6973-46fe-9c40-0201ee97056f")
 	(paper "A4")
+	(title_block
+		(title "rocket-computer-mini: MCU - ESP32-S3 Out Computer")
+		(date "2026-09-05")
+		(rev "V1")
+		(company "TinkerRocket")
+	)
 	(lib_symbols
 		(symbol "power:PWR_FLAG"
 			(power global)
@@ -379,7 +385,7 @@
 					(justify left bottom)
 				)
 			)
-			(property "Footprint" "ECS-400-10-37B2-CKY-TR:XTAL_ECS-400-10-37B2-CKY-TR"
+			(property "Footprint" "Footprints:XTAL_ECS-400-10-37B2-CKY-TR"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -700,7 +706,7 @@
 					(justify left top)
 				)
 			)
-			(property "Footprint" "ESP32-S3:IC_ESP32-S3"
+			(property "Footprint" "Footprints:IC_ESP32-S3"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -1837,7 +1843,7 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "Custom:MX35UF4G24AD-Z4I8"
+		(symbol "Custom:GD5F1GQ5UEYIGR"
 			(pin_names
 				(offset 0.254)
 			)
@@ -1856,7 +1862,7 @@
 					)
 				)
 			)
-			(property "Value" "MX35UF4G24AD-Z4I8"
+			(property "Value" "GD5F1GQ5UEYIGR"
 				(at 20.574 5.334 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -1866,7 +1872,7 @@
 					)
 				)
 			)
-			(property "Footprint" "8L_WSON_8x6x3p4x4p3_MAC"
+			(property "Footprint" "Footprints:8L_WSON_8x6x3p4x4p3_MAC"
 				(at 11.684 12.954 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -1878,7 +1884,7 @@
 					)
 				)
 			)
-			(property "Datasheet" ""
+			(property "Datasheet" "GD5F1GQ5UEYIGR"
 				(at 8.382 14.732 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -1890,7 +1896,7 @@
 					)
 				)
 			)
-			(property "Description" ""
+			(property "Description" "SPI NAND flash, WSON-8 8 x 6 mm; pin 9 is the exposed pad"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -1911,7 +1917,7 @@
 					)
 				)
 			)
-			(property "ki_keywords" "MX35UF4G24AD-Z4I8"
+			(property "ki_keywords" "GD5F1GQ5UEYIGR"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -1933,8 +1939,8 @@
 					)
 				)
 			)
-			(symbol "MX35UF4G24AD-Z4I8_0_1"
-				(pin unspecified line
+			(symbol "GD5F1GQ5UEYIGR_0_1"
+				(pin input line
 					(at 0 0 0)
 					(length 7.62)
 					(name "CS#"
@@ -2079,7 +2085,7 @@
 					)
 				)
 			)
-			(symbol "MX35UF4G24AD-Z4I8_1_1"
+			(symbol "GD5F1GQ5UEYIGR_1_1"
 				(rectangle
 					(start 7.62 3.81)
 					(end 33.02 -16.51)
@@ -2091,7 +2097,7 @@
 						(type background)
 					)
 				)
-				(pin unspecified line
+				(pin passive line
 					(at 40.64 -13.97 180)
 					(length 7.62)
 					(name "Pad"
@@ -2155,7 +2161,7 @@
 					(justify bottom)
 				)
 			)
-			(property "Datasheet" ""
+			(property "Datasheet" "https://www.lcsc.com/datasheet/C97606.pdf"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -2166,7 +2172,7 @@
 					)
 				)
 			)
-			(property "Description" ""
+			(property "Description" "Crystal 32.768 kHz, 12.5 pF CL, +/-20 ppm, SMD3215 | Seiko SC-32S | LCSC C97606. Replaces ECS-.327-6-16R-TR (6 pF CL) - the boards load 15 pF caps which present ~9 pF, so the old part was over-loaded and slow; load caps change to 22 pF to present 12.5 pF."
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -12600,7 +12606,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:MX35UF4G24AD-Z4I8")
+		(lib_id "Custom:GD5F1GQ5UEYIGR")
 		(at 26.67 70.485 0)
 		(unit 1)
 		(body_style 1)

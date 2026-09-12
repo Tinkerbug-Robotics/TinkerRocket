@@ -4,6 +4,12 @@
 	(generator_version "10.0")
 	(uuid "707e0406-c94e-4ebf-bc76-6a6e21a4ecde")
 	(paper "A4")
+	(title_block
+		(title "rocket-computer-mini: Pyro")
+		(date "2026-09-05")
+		(rev "V1")
+		(company "TinkerRocket")
+	)
 	(lib_symbols
 		(symbol "74xGxx:74LVC1G17"
 			(exclude_from_sim no)
@@ -528,7 +534,7 @@
 					(justify left bottom)
 				)
 			)
-			(property "Footprint" "TBLH11-350-05-BK:CUI_TBLH11-350-05-BK"
+			(property "Footprint" "Footprints:CUI_TBLH11-350-05-BK"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -805,7 +811,7 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "Custom:TPN4R712MD"
+		(symbol "Custom:WSD20L50DN33"
 			(pin_names
 				(offset 0.254)
 			)
@@ -824,7 +830,7 @@
 					)
 				)
 			)
-			(property "Value" "TPN4R712MD"
+			(property "Value" "WSD20L50DN33"
 				(at 22.86 7.62 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -834,7 +840,7 @@
 					)
 				)
 			)
-			(property "Footprint" "TSON Advance_TOS"
+			(property "Footprint" "Footprints:TSON Advance_TOS"
 				(at 6.985 3.175 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -846,7 +852,7 @@
 					)
 				)
 			)
-			(property "Datasheet" "TPN4R712MD"
+			(property "Datasheet" "WSD20L50DN33"
 				(at 6.985 3.175 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -858,7 +864,7 @@
 					)
 				)
 			)
-			(property "Description" ""
+			(property "Description" "P-channel MOSFET, 8-pin 3.3 x 3.3 mm DFN, drawn as a box: pins 1-3 source, 4 gate, 5-8 drain"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -879,7 +885,7 @@
 					)
 				)
 			)
-			(property "ki_keywords" "TPN4R712MD"
+			(property "ki_keywords" "WSD20L50DN33"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -901,8 +907,8 @@
 					)
 				)
 			)
-			(symbol "TPN4R712MD_0_1"
-				(pin unspecified line
+			(symbol "WSD20L50DN33_0_1"
+				(pin passive line
 					(at 6.985 3.175 0)
 					(length 7.62)
 					(name "SOURCE"
@@ -920,7 +926,7 @@
 						)
 					)
 				)
-				(pin unspecified line
+				(pin passive line
 					(at 6.985 0.635 0)
 					(length 7.62)
 					(name "SOURCE"
@@ -938,7 +944,7 @@
 						)
 					)
 				)
-				(pin unspecified line
+				(pin passive line
 					(at 6.985 -1.905 0)
 					(length 7.62)
 					(name "SOURCE"
@@ -956,7 +962,7 @@
 						)
 					)
 				)
-				(pin unspecified line
+				(pin passive line
 					(at 6.985 -4.445 0)
 					(length 7.62)
 					(name "GATE"
@@ -974,7 +980,7 @@
 						)
 					)
 				)
-				(pin unspecified line
+				(pin passive line
 					(at 38.1 -4.445 180)
 					(length 7.62)
 					(name "DRAIN"
@@ -992,7 +998,7 @@
 						)
 					)
 				)
-				(pin unspecified line
+				(pin passive line
 					(at 38.1 -1.905 180)
 					(length 7.62)
 					(name "DRAIN"
@@ -1010,7 +1016,7 @@
 						)
 					)
 				)
-				(pin unspecified line
+				(pin passive line
 					(at 38.1 0.635 180)
 					(length 7.62)
 					(name "DRAIN"
@@ -1028,7 +1034,7 @@
 						)
 					)
 				)
-				(pin unspecified line
+				(pin passive line
 					(at 38.1 3.175 180)
 					(length 7.62)
 					(name "DRAIN"
@@ -1047,7 +1053,7 @@
 					)
 				)
 			)
-			(symbol "TPN4R712MD_1_1"
+			(symbol "WSD20L50DN33_1_1"
 				(rectangle
 					(start 14.605 5.715)
 					(end 30.48 -6.35)
@@ -5433,7 +5439,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPN4R712MD")
+		(lib_id "Custom:WSD20L50DN33")
 		(at 100.33 99.06 0)
 		(mirror y)
 		(unit 1)
@@ -6328,7 +6334,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPN4R712MD")
+		(lib_id "Custom:WSD20L50DN33")
 		(at 100.33 158.75 0)
 		(mirror y)
 		(unit 1)
@@ -8793,7 +8799,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPN4R712MD")
+		(lib_id "Custom:WSD20L50DN33")
 		(at 191.135 115.57 0)
 		(mirror y)
 		(unit 1)
@@ -10017,7 +10023,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPN4R712MD")
+		(lib_id "Custom:WSD20L50DN33")
 		(at 99.06 35.56 0)
 		(mirror y)
 		(unit 1)

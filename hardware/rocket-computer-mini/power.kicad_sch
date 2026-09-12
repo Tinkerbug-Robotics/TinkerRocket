@@ -4,6 +4,12 @@
 	(generator_version "10.0")
 	(uuid "37810e0c-0232-4200-9d86-dea813827bc6")
 	(paper "A4")
+	(title_block
+		(title "rocket-computer-mini: Power")
+		(date "2026-09-05")
+		(rev "V1")
+		(company "TinkerRocket")
+	)
 	(lib_symbols
 		(symbol "power:PWR_FLAG"
 			(power global)
@@ -986,7 +992,7 @@
 					)
 				)
 			)
-			(property "Footprint" "USC_TOS"
+			(property "Footprint" "Footprints:USC_TOS"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -1328,7 +1334,7 @@
 					)
 				)
 			)
-			(property "Footprint" "TVS-SP05_LTF"
+			(property "Footprint" "Footprints:TVS-SP05_LTF"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -1825,7 +1831,7 @@
 					(justify left bottom)
 				)
 			)
-			(property "Footprint" "TPS2121RUXR:IC_TPS2121RUXR"
+			(property "Footprint" "Footprints:IC_TPS2121RUXR"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3965,7 +3971,7 @@
 					(justify left bottom)
 				)
 			)
-			(property "Footprint" "USB4110GFA:GCT_USB4110GFA"
+			(property "Footprint" "Footprints:GCT_USB4110GFA"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -4405,7 +4411,7 @@
 					(justify left top)
 				)
 			)
-			(property "Footprint" "VLS3012CX-2R2M-1:IND_VLS3012CX-2R2M-1"
+			(property "Footprint" "Footprints:IND_VLS3012CX-2R2M-1"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
