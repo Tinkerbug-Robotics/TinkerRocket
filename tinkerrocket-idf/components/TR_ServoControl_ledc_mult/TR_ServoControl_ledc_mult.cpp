@@ -141,8 +141,10 @@ int TR_ServoControl::usFromFinDeg(float fin_deg) const {
 }
 
 bool TR_ServoControl::finCalibrationValid(float finMinDeg, float finMaxDeg) {
-    if (!std::isfinite(finMinDeg) || !std::isfinite(finMaxDeg)) return false;
-    return (finMaxDeg - finMinDeg) >= kMinFinSpanDeg;
+    // Single definition in ServoConfigGate.h, so the OC's cache and this
+    // driver cannot drift apart (they had, which is the whole of #1141 item 3
+    // as seen from the app).
+    return finCalSane(finMinDeg, finMaxDeg);
 }
 
 bool TR_ServoControl::setFinCalibration(float finMinDeg, float finMaxDeg) {
@@ -367,16 +369,10 @@ void TR_ServoControl::setBias(int servoIndex, int biasUs) {
 }
 
 bool TR_ServoControl::servoTimingValid(int hz, int minUs, int maxUs) {
-    // #1141 item 3.  The duty math is
-    //     duty = pulse_us * servo_hz * max_duty / 1000000
-    // so hz == 0 gives duty 0 on every channel — indistinguishable from idle(),
-    // i.e. no pulse train and four relaxed fins, applied silently from a wire
-    // value.  A negative hz casts to ~4.29e9 and the 32-bit product wraps to an
-    // arbitrary duty.  Neither is a servo timing; both were accepted.
-    if (hz < kMinServoHz || hz > kMaxServoHz) return false;
-    if (minUs < kMinPulseUs || maxUs > kMaxPulseUs) return false;
-    if (maxUs - minUs < kMinPulseSpanUs) return false;
-    return true;
+    // #1141 item 3.  Rationale and bounds live in ServoConfigGate.h, which the
+    // OUT computer also includes — before that the policy existed only here,
+    // where the OC could not reach it, and the OC cached timings this refused.
+    return servoTimingSane(hz, minUs, maxUs);
 }
 
 bool TR_ServoControl::setServoTiming(int hz, int minUs, int maxUs) {

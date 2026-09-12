@@ -52,6 +52,7 @@ add_executable(test_servo_control test_servo_control.cpp
 )
 target_include_directories(test_servo_control PRIVATE
     ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
     ${LIB_DIR}/TR_ServoControl_ledc_mult
     ${LIB_DIR}/TR_PID
 )
@@ -69,12 +70,24 @@ add_executable(test_roll_path_parity test_roll_path_parity.cpp
 )
 target_include_directories(test_roll_path_parity PRIVATE
     ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
     ${LIB_DIR}/TR_ServoControl_ledc_mult
     ${LIB_DIR}/TR_ControlMixer
     ${LIB_DIR}/TR_PID
 )
 target_link_libraries(test_roll_path_parity GTest::gtest_main)
 gtest_discover_tests(test_roll_path_parity)
+
+# ---------- test_servo_config_gate ----------
+# ServoConfigGate.h is header-only and shared by BOTH computers; these tests
+# are what stops the FC's policy and the OC's cache drifting apart again.
+add_executable(test_servo_config_gate test_servo_config_gate.cpp)
+target_include_directories(test_servo_config_gate PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_servo_config_gate GTest::gtest_main)
+gtest_discover_tests(test_servo_config_gate)
 
 # ---------- test_rocket_computer_types ----------
 add_executable(test_rocket_computer_types test_rocket_computer_types.cpp)
