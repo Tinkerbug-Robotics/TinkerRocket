@@ -1924,8 +1924,8 @@ static void fcOtaParserTask(void*)
 
 // Flip master-TX -> slave-RX to receive the image. Called from the OTA_BEGIN
 // handler after the READY resends have drained over the still-TX link.
-// #1122: fcFlipToRx() hands the link straight back when beginSlaveRx fails,
-// so it needs the revert ahead of its own definition.
+// #1122: fcFlipToRx() hands the link straight back and ends the session when
+// beginSlaveRx fails, so it needs the revert ahead of its own definition.
 static void fcRevertToTx();
 
 static void fcFlipToRx()
@@ -1964,14 +1964,33 @@ static void fcFlipToRx()
         // callback means fc_ota_rx_cb_count never advances, so it reaches
         // AbandonLinkQuiet), but only after kNoProgressTimeoutMs — 30 s of a
         // vehicle emitting nothing, for a failure that is known right here.
-        // Give the link straight back instead; the caller's session is over
-        // either way.
+        //
+        // Give the link straight back — and end the session on BOTH ends,
+        // because the revert alone leaves two things open:
+        //   * the receiver: begin() has already opened it, and
+        //     fcRevertToTx() clears fc_ota_data_mode, which is what gates
+        //     both the #1116 watchdog and the "BEGIN supersedes an open
+        //     session" branch. Left like that, every later BEGIN is refused
+        //     with AlreadyActive until the app itself cancels or drops the
+        //     link (the OC forwards either as an abort; its own stall
+        //     watchdog is not armed until it has released "ready", which
+        //     it never will).
+        //   * the OC: our READY armed its wait-for-quiet, which has no
+        //     timeout of its own. Only a terminal status (or the app
+        //     disconnecting) clears it and tells the app the session died.
+        // The revert is direct rather than fcOtaTearDownSession(): its
+        // quiet-wait is for an OC that holds the clock, and this OC is waiting
+        // for us. Our own silence stays at a few ms — well inside the OC's
+        // OTA_FLIP_SILENCE_MS — so it cannot read this as the flip and seize
+        // BCLK against the master TX being re-created.
         ESP_LOGE(TAG, "[OTA] slave RX begin FAILED (%s) — no I2S channel; "
-                      "reverting to master TX now rather than waiting out the "
-                      "%u s session watchdog (#1122)",
+                      "reverting to master TX and ending the session now, "
+                      "rather than waiting out the %u s session watchdog (#1122)",
                  esp_err_to_name(e),
                  (unsigned)(FcOtaSessionPolicy::kNoProgressTimeoutMs / 1000U));
         fcRevertToTx();
+        (void)fc_ota_receiver.abort();
+        sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
         return;
     }
     // #1116: arm the session watchdog from the flip. The first accepted byte
