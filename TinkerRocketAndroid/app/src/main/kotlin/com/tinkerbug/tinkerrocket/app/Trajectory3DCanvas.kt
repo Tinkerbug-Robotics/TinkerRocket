@@ -1,13 +1,16 @@
 package com.tinkerbug.tinkerrocket.app
 
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -15,22 +18,78 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.tinkerbug.tinkerrocket.maps.OfflineTileCache
+import com.tinkerbug.tinkerrocket.maps.SceneGroundTexture
 import com.tinkerbug.tinkerrocket.protocol.FlightCsvData
 import com.tinkerbug.tinkerrocket.protocol.Trajectory3D
 import com.tinkerbug.tinkerrocket.protocol.Trajectory3D.V3
+import com.tinkerbug.tinkerrocket.protocol.firstGnssFix
 import com.tinkerbug.tinkerrocket.session.GuidanceResult
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.tinkerbug.tinkerrocket.protocol.flightTracks
 import java.util.Locale
+
+/**
+ * The offline tile cache the 3D scenes read their ground texture through
+ * (#1092 item 1).  Provided at the app root; null (previews, tests) simply
+ * leaves the wireframe grid.
+ */
+val LocalOfflineTileCache = compositionLocalOf<OfflineTileCache?> { null }
+
+/**
+ * Satellite imagery under a scene's ground plane: the decoded USGS export and
+ * the square it covers, `halfM` metres either side of `centre` (E/N; U is the
+ * scene's ground level).  The image's top row is the north edge.
+ */
+internal class GroundTexture(val bitmap: ImageBitmap, val centre: V3, val halfM: Double)
+
+/**
+ * The ground texture for a scene, cache-first then network, decoded off the
+ * main thread — iOS `SceneGroundTexture.apply`.  Null until it arrives, and
+ * null for good when there is no cache, no reference fix, or no imagery
+ * (offline and never cached; outside USGS coverage), in which case the scene
+ * keeps its grid.
+ */
+@Composable
+internal fun rememberGroundTexture(
+    cache: OfflineTileCache?,
+    refLat: Double?,
+    refLon: Double?,
+    extent: Double,
+    centre: V3?,
+): GroundTexture? {
+    if (cache == null || refLat == null || refLon == null || centre == null) return null
+    val req = remember(refLat, refLon, extent) { SceneGroundTexture.request(refLat, refLon, extent) }
+        ?: return null
+    val bitmap by produceState<ImageBitmap?>(initialValue = null, key1 = req.cacheKey) {
+        value = withContext(Dispatchers.IO) {
+            SceneGroundTexture.load(cache, req)?.let { bytes ->
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            }
+        }
+    }
+    return bitmap?.let { GroundTexture(it, centre, req.halfM) }
+}
+
+/** Mesh subdivisions per side for the textured ground: enough that the
+ *  per-triangle affine fill reads as a perspective plane at any orbit. */
+private const val GROUND_MESH_N = 12
 
 /**
  * The ONE shared orbit-camera scene (plan §1: all SceneKit views project to
@@ -69,6 +128,8 @@ internal fun OrbitSceneCanvas(
      *  the launch pad when the drawn track is only the descent. */
     frameAlso: List<V3> = emptyList(),
     emptyMessage: String = "No track data",
+    /** Satellite imagery under the scene; null keeps the wireframe grid (#1092 item 1). */
+    ground: GroundTexture? = null,
 ) {
     val framing = remember(track, frameAlso) { track + frameAlso }
     val initial = remember(framing) { Trajectory3D.initialCamera(framing) }
@@ -80,6 +141,7 @@ internal fun OrbitSceneCanvas(
     val textMeasurer = rememberTextMeasurer()
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val gridColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+    val meshPaint = remember { android.graphics.Paint().apply { isFilterBitmap = true } }
 
     Canvas(
         Modifier
@@ -119,7 +181,44 @@ internal fun OrbitSceneCanvas(
 
         val groundU = framing.minOf { it.u }
 
+        // ── Ground imagery (#1092 item 1) ────────────────────────────────
+        // The export covers halfM either side of its reference point, so the
+        // quad goes exactly there — not stretched over the grid's square,
+        // which is centred on the camera target instead.  Drawn as an N×N
+        // bitmap mesh whose vertices are the projected ENU grid: each
+        // triangle is filled affinely, so with enough of them the plane reads
+        // as perspective.  If any vertex projects behind the camera the whole
+        // quad is skipped for that frame and the grid stands in; the same
+        // culling the grid lines do per line.
+        var imageryDrawn = false
+        ground?.let { gt ->
+            val n = GROUND_MESH_N
+            val verts = FloatArray((n + 1) * (n + 1) * 2)
+            var ok = true
+            rows@ for (row in 0..n) {
+                val north = gt.centre.n + gt.halfM - 2.0 * gt.halfM * row / n   // image row 0 = north
+                for (col in 0..n) {
+                    val east = gt.centre.e - gt.halfM + 2.0 * gt.halfM * col / n
+                    val p = proj(V3(east, north, groundU))
+                    if (p == null) { ok = false; break@rows }
+                    val k = (row * (n + 1) + col) * 2
+                    verts[k] = p.x.toFloat()
+                    verts[k + 1] = p.y.toFloat()
+                }
+            }
+            if (ok) {
+                drawIntoCanvas { canvas ->
+                    canvas.nativeCanvas.drawBitmapMesh(
+                        gt.bitmap.asAndroidBitmap(), n, n, verts, 0, null, 0, meshPaint,
+                    )
+                }
+                imageryDrawn = true
+            }
+        }
+
         // ── Ground grid ──────────────────────────────────────────────────
+        // Only without imagery: iOS removes its grid node once the texture
+        // is on, and lines over satellite imagery are clutter, not reference.
         val spacing = Trajectory3D.niceGridSpacing(extent)
         val half = extent * 1.5
         val c = cam.center
@@ -134,10 +233,12 @@ internal fun OrbitSceneCanvas(
             lines.add(V3(c.e - half, g, groundU) to V3(c.e + half, g, groundU))
             g += spacing
         }
-        for ((a, b) in lines) {
-            val pa = proj(a) ?: continue
-            val pb = proj(b) ?: continue
-            drawLine(gridColor, pa.o(), pb.o(), strokeWidth = 1f)
+        if (!imageryDrawn) {
+            for ((a, b) in lines) {
+                val pa = proj(a) ?: continue
+                val pb = proj(b) ?: continue
+                drawLine(gridColor, pa.o(), pb.o(), strokeWidth = 1f)
+            }
         }
 
         // ── Extra lines (boost/drop) under the track ─────────────────────
@@ -237,6 +338,7 @@ internal fun OrbitSceneCanvas(
 
 @Composable
 fun Trajectory3DCanvas(data: FlightCsvData) {
+    val tileCache = LocalOfflineTileCache.current
     val tracks = remember(data) { flightTracks(data) }
     val track = remember(tracks) {
         Trajectory3D.downsample(tracks.primary, 700)
@@ -287,6 +389,15 @@ fun Trajectory3DCanvas(data: FlightCsvData) {
         SceneMarker(secondary.last(), Color(0xFF8C8C8C), "GNSS landing", radiusDp = 5.0),
     )
 
+    // #1092 item 1: the ground texture is centred on the log's first fix —
+    // iOS `trackPoints.first` — whose ENU twin is the GNSS track's first
+    // point (gnssTrack anchors it there).  The extent is the one the scene
+    // frames with, so the export covers what the grid would have.
+    val fix = remember(data) { firstGnssFix(data) }
+    val fixEnu = remember(tracks) { tracks.gnss.firstOrNull() }
+    val sceneExtent = remember(track, secondary) { Trajectory3D.extent(track + secondary) }
+    val ground = rememberGroundTexture(tileCache, fix?.lat, fix?.lon, sceneExtent, fixEnu)
+
     OrbitSceneCanvas(
         track = track,
         trackColor = ::trajectoryAltitudeColor,
@@ -297,6 +408,7 @@ fun Trajectory3DCanvas(data: FlightCsvData) {
         // Was "No EKF position data in this log" — true of every base-station
         // LoRa log, and useless: those carry a perfectly good lat/lon track.
         emptyMessage = "No position data in this log",
+        ground = ground,
     )
 }
 
@@ -330,6 +442,11 @@ fun DriftCast3DCanvas(r: GuidanceResult) {
     val guidance = enu(r.guidanceLat, r.guidanceLon, apogeeM)
     val landing = enu(r.forwardLandingLat, r.forwardLandingLon, 0.0)
 
+    // #1092 item 1: imagery centred on the pad, which is the ENU origin here.
+    val tileCache = LocalOfflineTileCache.current
+    val sceneExtent = remember(track) { Trajectory3D.extent(track + launch) }
+    val ground = rememberGroundTexture(tileCache, r.launchLat, r.launchLon, sceneExtent, launch)
+
     OrbitSceneCanvas(
         track = track,                 // descent only — purple
         frameAlso = listOf(launch),    // pad frames the scene, boost is an extraLine
@@ -348,6 +465,7 @@ fun DriftCast3DCanvas(r: GuidanceResult) {
                 Color(0xFF4DABF7).copy(alpha = 0.25f), widthDp = 1.0),
         ),
         emptyMessage = "No descent track",
+        ground = ground,
     )
 }
 

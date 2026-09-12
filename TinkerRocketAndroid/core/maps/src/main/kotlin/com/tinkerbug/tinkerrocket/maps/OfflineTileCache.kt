@@ -23,7 +23,26 @@ public class OfflineTileCache(private val root: File) {
 
     /** Persist tile bytes atomically, creating intermediate directories. */
     public fun store(data: ByteArray, source: String, z: Int, x: Int, y: Int) {
-        val file = fileFor(source, z, x, y)
+        writeAtomic(fileFor(source, z, x, y), data)
+    }
+
+    // ── Keyed blobs (non-tile images: the 3D ground texture) ──────────────
+    // The iOS blob/storeBlob pair (#1092 item 1), same on-disk shape:
+    // <root>/blobs/<key with '/' → '_'>.dat, beside the tile tree so a saved
+    // region's bookkeeping never sees them.
+
+    /** Cached bytes for a keyed blob, or null if not stored. */
+    public fun blob(key: String): ByteArray? =
+        blobFile(key).takeIf { it.isFile }?.readBytes()
+
+    /** Persist a keyed blob atomically. */
+    public fun storeBlob(data: ByteArray, key: String) {
+        writeAtomic(blobFile(key), data)
+    }
+
+    private fun blobFile(key: String) = File(root, "blobs/${key.replace('/', '_')}.dat")
+
+    private fun writeAtomic(file: File, data: ByteArray) {
         file.parentFile?.mkdirs()
         val tmp = File(file.path + ".tmp")
         tmp.writeBytes(data)
