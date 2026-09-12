@@ -100,6 +100,12 @@ PYBIND11_MODULE(_ekf, m) {
              py::arg("lat_rad"), py::arg("lon_rad"), py::arg("alt_m"))
         .def("set_velocity", &GpsInsEKF::setVelocity,
              py::arg("vn"), py::arg("ve"), py::arg("vd"))
+        .def("set_gyro_bias", &GpsInsEKF::setGyroBias,
+             py::arg("x_rps"), py::arg("y_rps"), py::arg("z_rps"), py::arg("var_rps2"),
+             "#1412: inject converged gyro bias + its variance (rad/s, (rad/s)^2).")
+        .def("set_accel_bias", &GpsInsEKF::setAccelBias,
+             py::arg("x"), py::arg("y"), py::arg("z"), py::arg("var"),
+             "#1412: inject converged accel bias + its variance (m/s^2, (m/s^2)^2).")
         .def("set_declination", &GpsInsEKF::setDeclination,
              py::arg("decl_rad"))
         // #1303/#1304: the magnetometer's validity reference and verdict, and

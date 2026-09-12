@@ -218,6 +218,40 @@ def _quat_from_accel_heading(acc_x_frd, acc_y_frd, acc_z_frd, heading_rad):
             cr * cp * sy - sr * sp * cy)
 
 
+def _first_logged_biases(records, t_us):
+    """The firmware's own IMU biases and their covariance at the replay's start.
+
+    #1412: the same #514 argument that seeds the quaternion and the velocity.
+    The firmware initialises its filter on the first good fix, before logging
+    starts, so by the first logged sample the biases have converged over a
+    stretch that cannot be re-run — and unlike the attitude, a fresh filter's
+    bias COVARIANCE is ~6200x the converged one, which is what lets GNSS and
+    baro innovations drive the gyro bias to its clamp inside two seconds.
+
+    FlightSnapshotData carries both (10 Hz).  Returns
+    (gyro_rps, gyro_var, accel, accel_var) or None.  Note the parser hands back
+    ekf_gyro_bias_* in DEG/S (deliberately — it is compared against a dps gyro)
+    while p_gbias_* is the raw variance in (rad/s)^2, so only the state is
+    converted here.
+    """
+    snaps = records.get("Snapshot") or []
+    best = None
+    for s in snaps:
+        if s.get("time_us") is None or not s.get("ekf_initialized", True):
+            continue
+        if "ekf_gyro_bias_x" not in s or "p_gbias_x" not in s:
+            continue
+        if best is None or abs(s["time_us"] - t_us) < abs(best["time_us"] - t_us):
+            best = s
+    if best is None:
+        return None
+    g = tuple(math.radians(best[f"ekf_gyro_bias_{a}"]) for a in "xyz")
+    a = tuple(best[f"ekf_accel_bias_{x}"] for x in "xyz")
+    gv = max(float(best["p_gbias_x"]), float(best["p_gbias_y"]), float(best["p_gbias_z"]))
+    av = max(float(best["p_abias_x"]), float(best["p_abias_y"]), float(best["p_abias_z"]))
+    return g, gv, a, av
+
+
 def build_event_list(records):
     """Merge all sensor records into a single time-sorted event list.
 
@@ -832,6 +866,29 @@ def replay(binary_file, plot_dir=None, align_baro=True, imu_feed="mean",
                 if v_seed is not None:
                     ekf.set_velocity(*v_seed)
 
+                # #1412: and so are the IMU biases, with their covariance.
+                # Without this the replay relearns them from a fresh filter's
+                # prior, whose gyro-bias variance is ~6200x the converged one,
+                # and GNSS + baro innovations drive the gyro bias to its 10
+                # deg/s clamp within two seconds of launch — 14 deg/s of bias
+                # error integrating to 79 deg of attitude by T+8 s on the
+                # 2026-08-29 Rolly Polly 54 mm log, where the firmware's own
+                # bias never left 0.13-0.45 deg/s. Seeding it takes T+5 s from
+                # 45.6 deg to the dead-reckoning floor.
+                b_seed = _first_logged_biases(records, time_us)
+                if b_seed is not None:
+                    (gx, gy, gz), gvar, (ax, ay, az), avar = b_seed
+                    ekf.set_gyro_bias(gx, gy, gz, gvar)
+                    ekf.set_accel_bias(ax, ay, az, avar)
+                    bias_src = (f"biases seeded from the log "
+                                f"(gyro {math.degrees(gx):+.3f},{math.degrees(gy):+.3f},"
+                                f"{math.degrees(gz):+.3f} dps, 1sigma "
+                                f"{math.degrees(math.sqrt(max(gvar, 0.0))):.4f} dps)")
+                else:
+                    bias_src = ("biases NOT seeded — no Snapshot record; the "
+                                "filter must relearn them and its gyro bias may "
+                                "run to the clamp (#1412)")
+
                 # #514: reproduce the firmware's MAGNETIC DECLINATION.
                 #
                 # The mag update is heading-only, and it steers toward
@@ -851,6 +908,7 @@ def replay(binary_file, plot_dir=None, align_baro=True, imu_feed="mean",
 
                 print(f"  EKF initialized at t={t_rel:.2f}s  {align_src}, "
                       f"declination={math.degrees(decl_rad):.2f}°")
+                print(f"    {bias_src}")
                 continue
 
             # This is an EKF tick (the window gate above let it through).

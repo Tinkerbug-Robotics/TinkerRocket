@@ -1850,3 +1850,87 @@ TEST(EKFLandedZupt, IsRateLimitedAndRearmsWhenTheVerdictIsWithdrawn) {
     ekf.landedZeroVelocityUpdate(true,  t + GpsInsEKF::ZUPT_INTERVAL_US + 2000);
     EXPECT_EQ(ekf.zuptCount(), 3u) << "a withdrawn verdict re-arms the next update";
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #1412 — injecting converged IMU biases
+//
+// The replay harness seeds attitude and velocity from the log because the
+// firmware's filter converges before logging starts.  The biases need the
+// same treatment, and the COVARIANCE is the half that matters: a fresh
+// filter's gyro-bias variance is ~6200x a converged one's, and at that gain
+// GNSS and barometer innovations dump their residual into the bias instead of
+// the states that own it.  On the 2026-08-29 Rolly Polly 54 mm log the
+// replayed bias hit the 10 deg/s clamp on all three axes within 2 s of launch
+// while the firmware's stayed at 0.13-0.45 deg/s.
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST(EKFBiasInjection, SetsTheStateAndCollapsesItsCovariance) {
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+
+    float cov0[15];
+    ekf.getCovDiag(cov0);
+    EXPECT_GT(cov0[12], 1e-5f) << "a fresh filter starts with a loose gyro-bias prior";
+
+    const float gx = 0.128f * (float)M_PI / 180.0f;   // the logged flight values
+    const float gy = 0.398f * (float)M_PI / 180.0f;
+    const float gz = 0.144f * (float)M_PI / 180.0f;
+    ekf.setGyroBias(gx, gy, gz, 4.88e-8f);
+    ekf.setAccelBias(-0.056f, 0.387f, 0.400f, 9.29e-5f);
+
+    float gb[3], ab[3], cov[15];
+    ekf.getRotRateBias(gb);
+    ekf.getAccelBias(ab);
+    ekf.getCovDiag(cov);
+    EXPECT_FLOAT_EQ(gb[0], gx);
+    EXPECT_FLOAT_EQ(gb[1], gy);
+    EXPECT_FLOAT_EQ(gb[2], gz);
+    EXPECT_FLOAT_EQ(ab[1], 0.387f);
+    for (int i = 12; i < 15; ++i) EXPECT_FLOAT_EQ(cov[i], 4.88e-8f) << "gyro-bias variance " << i;
+    for (int i = 9; i < 12; ++i)  EXPECT_FLOAT_EQ(cov[i], 9.29e-5f) << "accel-bias variance " << i;
+    EXPECT_LT(cov[12], cov0[12] / 100.0f) << "and it is far tighter than the prior";
+}
+
+TEST(EKFBiasInjection, AConvergedPriorStopsMeasurementsRunningTheBiasAway) {
+    // The behaviour the replay needed. Feed a filter a steady stream of
+    // position/velocity measurements offset from where it thinks it is, and
+    // watch where the correction goes. With a loose prior the gyro bias
+    // absorbs it; with the converged one it does not.
+    auto run = [](bool seed) {
+        GpsInsEKF ekf;
+        uint32_t t = 0;
+        ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+        if (seed) ekf.setGyroBias(0.0f, 0.0f, 0.0f, 4.88e-8f);
+        for (int i = 0; i < 1500; ++i) {
+            t += 2000;
+            EkfGNSSDataLLA g = makeStationaryGNSS(t);
+            g.lat_rad += 30.0 / 6371000.0;          // a persistent 30 m offset
+            g.vel_n_mps = 2.0f;
+            ekf.update(/*use_ahrs_acc=*/false, makeNoseUpIMU(t), g, makeNoseUpMag(t));
+        }
+        float gb[3];
+        ekf.getRotRateBias(gb);
+        return std::max(std::max(std::fabs(gb[0]), std::fabs(gb[1])), std::fabs(gb[2]))
+               * 180.0f / (float)M_PI;
+    };
+    const float loose = run(false);
+    const float tight = run(true);
+    EXPECT_GT(loose, 10.0f * tight)
+        << "the loose prior should absorb far more into the bias; loose " << loose
+        << " dps vs seeded " << tight << " dps";
+    EXPECT_LT(tight, 1.0f) << "a converged prior keeps the bias physical; got " << tight << " dps";
+}
+
+TEST(EKFBiasInjection, TheGyroBiasClampStillApplies) {
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    ekf.setGyroBias(100.0f, -100.0f, 0.0f, 1e-8f);   // absurd, in rad/s
+    float gb[3];
+    ekf.getRotRateBias(gb);
+    const float max_rps = 10.0f * (float)M_PI / 180.0f;
+    EXPECT_NEAR(gb[0],  max_rps, 1e-6f);
+    EXPECT_NEAR(gb[1], -max_rps, 1e-6f);
+}
+
