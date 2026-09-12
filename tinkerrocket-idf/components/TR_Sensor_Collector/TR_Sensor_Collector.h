@@ -389,6 +389,17 @@ private:
     static constexpr UBaseType_t ISM6_QUEUE_DEPTH = 256;
     volatile uint32_t ism6_queue_drops = 0;
 
+    // #1140 item 2: BMP585 interrupts that arrived while this task was not
+    // draining, and were therefore coalesced into one read.
+    //
+    // NOT a data-loss gauge — the part has no FIFO, so the extra interrupts
+    // carried no extra conversions and nothing was lost by collapsing them.
+    // It is a STALL gauge: a nonzero value means the poll task was away long
+    // enough to bank interrupts, and its size is roughly how long in units of
+    // ~2 ms. The drain used to replay one full SPI read per count, so this is
+    // also the count of transactions no longer being spent.
+    volatile uint32_t bmp585_stale_irq_drops = 0;
+
 public:
     // Zero the drop counter (and nothing else).  Called once by the consumer
     // when it begins draining, so the gauge counts only consumer-era drops.
@@ -399,6 +410,11 @@ public:
     // and lose IMU samples — the FC-side witness for the #474 silent hole. Read
     // by the NonSensor builder to set the logged NSF2_FC_IMU_DROP flag.
     uint32_t getIsm6QueueDrops() const { return ism6_queue_drops; }
+
+    // #1140 item 2: coalesced BMP585 interrupts since the last reset. See the
+    // member's comment — a stall gauge, not a data-loss one.
+    uint32_t getBmp585StaleIrqDrops() const { return bmp585_stale_irq_drops; }
+    void resetBmp585StaleIrqDrops() { bmp585_stale_irq_drops = 0; }
 
     // Runtime IMU logging-rate change (user setting, BLE cmd 67): reprograms
     // the ISM6HG256 ODR on all three channels and the derived period. Safe

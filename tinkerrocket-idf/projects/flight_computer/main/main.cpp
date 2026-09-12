@@ -10910,14 +10910,20 @@ static void loop_fc()
             // cumulative from there, so that a stall stays visible after the
             // second it happened in.  Labelled rather than reset: making it
             // per-second would destroy exactly that property.
-            ESP_LOGI(TAG, "[GAP DIAG] gaps>10ms=%lu worst=%lu us | gnss calls=%lu >1ms=%lu >5ms=%lu >10ms=%lu | imu_q_drops=%lu (cumulative)",
+            // #1140 item 2: bmp_coalesced is the BMP585 stall gauge — interrupts
+            // banked while the poll task was away and collapsed into one read.
+            // Not data loss (the part has no FIFO), but it is the same stall
+            // imu_q_drops witnesses from the other side, and it used to be
+            // spent as one redundant SPI transaction each.
+            ESP_LOGI(TAG, "[GAP DIAG] gaps>10ms=%lu worst=%lu us | gnss calls=%lu >1ms=%lu >5ms=%lu >10ms=%lu | imu_q_drops=%lu bmp_coalesced=%lu (cumulative)",
                           (unsigned long)pt.gap_count,
                           (unsigned long)pt.gap_worst_us,
                           (unsigned long)pt.gnss_calls,
                           (unsigned long)pt.gnss_over_1ms,
                           (unsigned long)pt.gnss_over_5ms,
                           (unsigned long)pt.gnss_over_10ms,
-                          (unsigned long)pt.ism6_queue_drops);
+                          (unsigned long)pt.ism6_queue_drops,
+                          (unsigned long)sensor_collector_hw.getBmp585StaleIrqDrops());
             ESP_LOGI(TAG, "[GAP DIAG] i2s enqueue ok/drop=%lu/%lu tx ok/fail=%lu/%lu last_err=%d q_free=%u",
                           (unsigned long)i2s_tx_enqueue_ok,
                           (unsigned long)i2s_tx_enqueue_drop,
