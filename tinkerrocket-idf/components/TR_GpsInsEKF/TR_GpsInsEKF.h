@@ -110,6 +110,65 @@ public:
     /// Barometer-only measurement update
     void baroMeasUpdate(EkfBaroData baro_data);
 
+    /// #1418: zero-velocity update for a landed vehicle.
+    ///
+    /// After touchdown the filter can be left holding a velocity that nothing
+    /// will ever take away.  On Eagle Claw (2026-08-29) the last GNSS fix was
+    /// 6.17 s before the log closed and the IMU had been still for 3 s before
+    /// the landed flag: with no fix there is no velocity measurement at all,
+    /// and a still IMU means the prediction has nothing to subtract either, so
+    /// the horizontal velocity sat FROZEN at 10 m/s and the logged position
+    /// walked 20.9 m off the rocket.  This supplies the missing measurement —
+    /// the landing detector's own verdict, fused as a measurement of zero
+    /// velocity.  Reproduced on the host at 18.1 m, cut to 3.2 m (see
+    /// test_ekf.cpp, EKFLandedZupt).
+    ///
+    /// sigma is the detector's own definition of stationary, not a tuned
+    /// number: the landing vote calls the vehicle stopped below
+    /// GPS_STATIONARY_SPEED_MS = 1 m/s, so ZUPT_SIGMA_MPS = 0.5 puts that
+    /// threshold at 2 sigma.  A tighter sigma would claim more precision than
+    /// the verdict this rests on, and measurably over-corrects: at 0.1 m/s the
+    /// large innovation yanks POSITION through its covariance and the landing
+    /// point ends up 2.6 m out, worse than 0.2 m/s achieves.
+    ///
+    /// Correcting a rocket that is still descending is the cost if the verdict
+    /// is wrong, and it is bounded: GNSS velocity at 18 Hz and 0.3 m/s carries
+    /// 5x the information per second of this at 10 Hz and 0.5 m/s, so under a
+    /// fix a false verdict biases the descent rate by about a sixth and the
+    /// position by metres over the LANDED debounce, never stalling it.  With
+    /// no fix a false verdict freezes the estimate — which is the Eagle Claw
+    /// case, where freezing is the right answer.
+    ///
+    /// There is no feedback with the detector even though its GPS-stationary
+    /// voter reads this filter's speed: alt_landed_flag latches, and the vote
+    /// runs only while it is unset, so a ZUPT cannot help raise the flag that
+    /// enables it.
+    void landedZeroVelocityUpdate(bool landed, uint32_t now_us);
+
+    /// One 3-axis zero-velocity update, unconditional.  Public so a host test
+    /// can exercise the update separately from the rate limiter.
+    ///
+    /// Corrects POSITION and VELOCITY only; attitude and all three bias
+    /// triads are masked out of the gain.  A velocity measurement cannot tell
+    /// an attitude error from an accelerometer bias — both produce the same
+    /// velocity signature — so with the full gain the filter splits the
+    /// correction between them and picks wrongly: on the host it drove a 60
+    /// deg pitch to -46 deg and an accel bias to 1.9 m/s^2 while leaving the
+    /// velocity WORSE than no update at all.  Nothing is lost by masking
+    /// them, because a stale velocity is history rather than evidence about
+    /// the current attitude, and gravity-referenced attitude is
+    /// accelMeasUpdate's job — it is already running here (use_ahrs_acc is
+    /// true post-apogee).  Joseph form is valid for any gain, so the masked
+    /// states simply keep their covariance: reported as unobserved, which
+    /// they are.
+    void zeroVelocityUpdate(float sigma_mps);
+
+    /// How many zero-velocity updates have been applied this filter run.
+    uint32_t zuptCount() const { return zupt_count_; }
+
+    static constexpr float    ZUPT_SIGMA_MPS   = 0.5f;
+    static constexpr uint32_t ZUPT_INTERVAL_US = 100000u;   // 10 Hz
+
     // ─── State injection ────────────────────────────────────────────
     /// Inject a known quaternion (e.g. truth orientation at ignition).
     /// Also resets attitude covariance to near-zero.
@@ -548,9 +607,15 @@ private:
     // the bias. Baro measures altitude: its gyro-bias coupling is incidental, and
     // a large baro innovation during a climb is the filter lagging, not a bad
     // measurement, so gating there would fire constantly for no reason.
+    // k_zero_mask: bit i zeroes K[i], so the correction never reaches state i.
+    // Joseph form is valid for ANY gain, so P stays consistent and a masked
+    // state's covariance is simply not reduced — it is reported as
+    // unobserved, which is what it is.  Same device the #508 gyro-bias gate
+    // uses on K[12..14]; see zeroVelocityUpdate for the #1418 use.
     void applyScalarMeasUpdate(const int* hidx, const float* hval, int hn,
                                float y, float R, float s_min,
-                               bool gate_gyro_bias = false);
+                               bool gate_gyro_bias = false,
+                               uint16_t k_zero_mask = 0);
 
     // Kalman matrices
     float quat_BL_[4];
@@ -575,6 +640,11 @@ private:
 
     // GPS measurement noise scale (1.0 = nominal, >1 during recovery)
     float gpsNoiseScale_ = 1.0f;
+    // #1418: landed zero-velocity update — whether one has fired since the
+    // verdict was raised, when the next may fire, and how many this run.
+    bool     zupt_armed_   = false;
+    uint32_t zupt_next_us_ = 0;
+    uint32_t zupt_count_   = 0;
 
     // Accel gravity-reference measurement noise variance (sigma m/s²)^2
     float R_accel_ = 0.25f;

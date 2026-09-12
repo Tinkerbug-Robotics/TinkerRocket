@@ -1683,3 +1683,170 @@ TEST(EkfMagGate1304, StateTiltPathKeepsTheSolutionFinite) {
     float q[4]; ekf.getQuaternion(q);
     for (int i = 0; i < 4; ++i) EXPECT_TRUE(std::isfinite(q[i]));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #1418 — zero-velocity update after landing
+//
+// The defect these pin is NOT a drift.  On Eagle Claw (2026-08-29) the last
+// GNSS fix came 6.17 s before the log closed and the IMU had been still for
+// 3 s before the landed flag, so the filter had no velocity measurement and
+// no acceleration to integrate: the horizontal velocity sat FROZEN at 10 m/s
+// and carried the logged position 20.9 m off the rocket in the seconds the
+// log had left.  The fixture below is that shape — adopt a velocity under a
+// fix, take the fix away, hold the IMU still — and it reproduces it at 18 m.
+// ═══════════════════════════════════════════════════════════════════════════
+
+namespace zupt_fixture {
+
+// Horizontal distance between two (lat, lon) radian positions, metres.
+static double horizontalM(const double a[3], const double b[3]) {
+    const double dn = (b[0] - a[0]) * 6371000.0;
+    const double de = (b[1] - a[1]) * 6371000.0 * std::cos(a[0]);
+    return std::sqrt(dn * dn + de * de);
+}
+
+static EkfGNSSDataLLA gnssAt(uint32_t time_us, double north_m, float vel_n) {
+    EkfGNSSDataLLA g = makeStationaryGNSS(time_us);
+    g.lat_rad   = LAT_RAD + north_m / 6371000.0;
+    g.vel_n_mps = vel_n;
+    return g;
+}
+
+struct Landing {
+    GpsInsEKF      ekf;
+    uint32_t       t         = 0;
+    EkfGNSSDataLLA last_fix{};     // frozen: a repeated time_us fuses nothing
+    double         truth[3]{};     // where the rocket actually stopped
+};
+
+// Settle stationary for 1 s, then travel `drift_mps` north for 2 s under a
+// live 18 Hz fix, then stop the fix.  The rocket is on the ground from here
+// and the IMU reads a clean 1 g, so nothing can remove the adopted velocity.
+static void arriveWithStaleVelocity(Landing& L, float drift_mps) {
+    L.ekf.init(makeNoseUpIMU(L.t), makeStationaryGNSS(L.t), makeNoseUpMag(L.t));
+    for (int i = 0; i < 500; ++i) {
+        L.t += 2000;
+        L.ekf.update(true, makeNoseUpIMU(L.t), makeStationaryGNSS(L.t), makeNoseUpMag(L.t));
+    }
+    double   north = 0.0;
+    uint32_t t_fix = L.t;
+    EkfGNSSDataLLA fix = makeStationaryGNSS(L.t);
+    for (int i = 0; i < 1000; ++i) {
+        L.t   += 2000;
+        north += drift_mps * 0.002;
+        if (L.t - t_fix >= 55000u) { t_fix = L.t; fix = gnssAt(L.t, north, drift_mps); }
+        L.ekf.update(true, makeNoseUpIMU(L.t), fix, makeNoseUpMag(L.t));
+    }
+    L.last_fix = fix;
+    L.ekf.getPosEst(L.truth);
+}
+
+// Two seconds of flight time left, the span Eagle Claw's log still had.
+// Returns how far the logged position ends up from where the rocket stopped.
+static double runOutTheLog(Landing& L, bool landed) {
+    for (int i = 0; i < 1000; ++i) {
+        L.t += 2000;
+        L.ekf.update(true, makeNoseUpIMU(L.t), L.last_fix, makeNoseUpMag(L.t));
+        L.ekf.landedZeroVelocityUpdate(landed, L.t);
+    }
+    double p[3];
+    L.ekf.getPosEst(p);
+    return horizontalM(L.truth, p);
+}
+
+static float speed(GpsInsEKF& ekf) {
+    float v[3];
+    ekf.getVelEst(v);
+    return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+}
+
+}  // namespace zupt_fixture
+
+TEST(EKFLandedZupt, WithoutTheVerdictAStaleVelocityWalksTheLandingPointOff) {
+    // The control: what the filter does today.  No new fix, a still IMU, and
+    // a velocity that nothing subtracts.
+    zupt_fixture::Landing L;
+    zupt_fixture::arriveWithStaleVelocity(L, 10.0f);
+    EXPECT_GT(zupt_fixture::speed(L.ekf), 9.0f) << "the filter should have adopted the 10 m/s";
+    const double walked = zupt_fixture::runOutTheLog(L, /*landed=*/false);
+    EXPECT_GT(walked, 12.0) << "reproduces Eagle Claw's 20.9 m; measured 18.1 m here";
+    EXPECT_GT(zupt_fixture::speed(L.ekf), 7.0f) << "and the velocity is still frozen, not decaying";
+    EXPECT_EQ(L.ekf.zuptCount(), 0u);
+}
+
+TEST(EKFLandedZupt, TheLandedVerdictStopsTheWalk) {
+    zupt_fixture::Landing L;
+    zupt_fixture::arriveWithStaleVelocity(L, 10.0f);
+    const double walked = zupt_fixture::runOutTheLog(L, /*landed=*/true);
+    EXPECT_LT(walked, 6.0) << "measured 3.2 m against the control's 18.1 m";
+    EXPECT_LT(zupt_fixture::speed(L.ekf), 1.5f) << "and the velocity is being taken away, not held";
+    // Rate-limited to ZUPT_INTERVAL_US, not once per 500 Hz tick.
+    EXPECT_GE(L.ekf.zuptCount(), 19u);
+    EXPECT_LE(L.ekf.zuptCount(), 21u);
+}
+
+TEST(EKFLandedZupt, CorrectsPositionAndVelocityOnlyNotAttitudeOrBias) {
+    // The masking decision, pinned.  A velocity measurement cannot separate an
+    // attitude error from an accel bias; with the full gain the filter splits
+    // the correction between them and picks wrongly (60 deg of pitch went to
+    // -46 deg on the host, with the velocity left worse than no update).
+    zupt_fixture::Landing L;
+    zupt_fixture::arriveWithStaleVelocity(L, 10.0f);
+    float q0[4], ab0[3], gb0[3];
+    L.ekf.getQuaternion(q0); L.ekf.getAccelBias(ab0); L.ekf.getRotRateBias(gb0);
+    const float v_before = zupt_fixture::speed(L.ekf);
+
+    L.ekf.zeroVelocityUpdate(GpsInsEKF::ZUPT_SIGMA_MPS);
+
+    float q1[4], ab1[3], gb1[3];
+    L.ekf.getQuaternion(q1); L.ekf.getAccelBias(ab1); L.ekf.getRotRateBias(gb1);
+    for (int i = 0; i < 4; ++i) EXPECT_FLOAT_EQ(q1[i], q0[i]) << "attitude must not move, component " << i;
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_FLOAT_EQ(ab1[i], ab0[i]) << "accel bias must not move, axis " << i;
+        EXPECT_FLOAT_EQ(gb1[i], gb0[i]) << "gyro bias must not move, axis " << i;
+    }
+    EXPECT_LT(zupt_fixture::speed(L.ekf), v_before) << "but the velocity must";
+}
+
+TEST(EKFLandedZupt, IsSoftEnoughThatARealFixStillWins) {
+    // A false verdict while the rocket is still descending under a live fix.
+    // GNSS velocity at 18 Hz / 0.3 m/s carries ~5x the information per second
+    // of this at 10 Hz / 0.5 m/s, so the fix must keep the descent rate.
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    for (int i = 0; i < 500; ++i) {
+        t += 2000;
+        ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    }
+    uint32_t t_fix = t;
+    for (int i = 0; i < 1000; ++i) {
+        t += 2000;
+        if (t - t_fix >= 55000u) t_fix = t;          // a fresh 18 Hz fix
+        EkfGNSSDataLLA g = makeStationaryGNSS(t_fix);
+        g.vel_d_mps = 6.0f;                          // descending under canopy
+        g.alt_m     = ALT_M - 6.0 * (t * 1e-6 - 1.0);
+        ekf.update(true, makeNoseUpIMU(t), g, makeNoseUpMag(t));
+        ekf.landedZeroVelocityUpdate(/*landed=*/true, t);
+    }
+    float v[3];
+    ekf.getVelEst(v);
+    EXPECT_GT(v[2], 3.0f) << "a false verdict must bias the descent, not stall it; got "
+                          << v[2] << " m/s down (measured 4.0; a hard ZUPT gives 0.1)";
+    EXPECT_GT(ekf.zuptCount(), 0u);
+}
+
+TEST(EKFLandedZupt, IsRateLimitedAndRearmsWhenTheVerdictIsWithdrawn) {
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    ekf.landedZeroVelocityUpdate(true, t);
+    EXPECT_EQ(ekf.zuptCount(), 1u);
+    ekf.landedZeroVelocityUpdate(true, t + 1000);                            // 1 ms later
+    EXPECT_EQ(ekf.zuptCount(), 1u) << "inside the interval: no second update";
+    ekf.landedZeroVelocityUpdate(true, t + GpsInsEKF::ZUPT_INTERVAL_US);     // interval elapsed
+    EXPECT_EQ(ekf.zuptCount(), 2u);
+    ekf.landedZeroVelocityUpdate(false, t + GpsInsEKF::ZUPT_INTERVAL_US + 1000);
+    ekf.landedZeroVelocityUpdate(true,  t + GpsInsEKF::ZUPT_INTERVAL_US + 2000);
+    EXPECT_EQ(ekf.zuptCount(), 3u) << "a withdrawn verdict re-arms the next update";
+}

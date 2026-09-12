@@ -3718,6 +3718,10 @@ static void loop_fc()
                 // that; this can.
                 ekf.setNoseFirstFlight(!post_apogee);
                 ekf.update(use_ahrs_acc, ekf_imu, ekf_gnss, ekf_mag);
+                // #1418: the landing detector's verdict, fused as zero velocity
+                // (soft, rate-limited in the filter) — same as the FC.
+                ekf.landedZeroVelocityUpdate(kinematics.alt_landed_flag || rocket_state == LANDED,
+                                             ekf_imu.time_us);
 
                 // #1190: say so when the shock gate trips — at most once a
                 // second.  On the pad that is the rocket being knocked; in
