@@ -113,6 +113,15 @@ if(TR_BOARD_M1)
     # build that lacks it.
     add_compile_definitions(TR_MAG_DRIVER_QMC5883P=1)
     message(STATUS "flight_computer: magnetometer driver QMC5883P (TR_MAG_DRIVER_QMC5883P=1)")
+    # The mini's GNSS (U5) is a Quectel LC86G on THIS processor's UART, not the
+    # u-blox every other board carries.  The same kind of seam as the
+    # magnetometer above, and it had been missed: only the single-MCU
+    # rocket_computer_mini project set it, so the M1 flight-computer image —
+    # the one that actually flies on the fabbed dual-MCU board — was speaking
+    # UBX at a module that answers NMEA (#1032).  config.h refuses an M1 build
+    # that lacks it.
+    add_compile_definitions(TR_GNSS_DRIVER_LC86=1)
+    message(STATUS "flight_computer: GNSS driver LC86G (TR_GNSS_DRIVER_LC86=1)")
 elseif(TR_BOARD_V9)
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
     message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (16 MB boot NOR)")

@@ -29,6 +29,8 @@ enum class Event : uint8_t
     PVT,          // $PQTMPVT parsed — pvt() holds the new epoch
     EPE,          // $PQTMEPE parsed — accuracies cached for the next PVT
     GGA,          // valid GGA — ggaQuality()/ggaNumSats() refreshed
+    GSV,          // valid GSV — one sentence of a satellites-in-view burst
+                  // folded into the table; see takeSat()
     PAIR_ACK,     // $PAIR001 — ackCommandId()/ackResult()
     QTM_OK,       // $PQTMCFGMSGRATE,OK (write accepted)
     QTM_ERROR,    // $PQTMCFGMSGRATE,ERROR,<code> — qtmErrorCode()
@@ -72,6 +74,26 @@ public:
     // Valid after Event::QTM_ERROR.
     int qtmErrorCode() const { return qtm_err_; }
 
+    // Per-satellite report (#1032): moves a completed satellites-in-view
+    // burst into `out` and clears the ready flag; false when none is waiting.
+    //
+    // GSV is the only C/N0 source this part has — it speaks no UBX, so there
+    // is no NAV-SAT.  What that costs, stated so nobody reads more out of the
+    // record than is in it:
+    //   - cno_dbhz, elev_deg and azim_2deg are real, straight off the wire.
+    //     An empty elevation/azimuth field (a satellite merely being searched
+    //     for) lands as 0, not as a sentinel — GSV has none.
+    //   - flags is ALWAYS 0.  GSV reports no used-in-solution bit, no quality
+    //     indicator, no health and no ephemeris/almanac state; the used bit
+    //     lives in GSA, which cannot be matched back to a GSV entry without
+    //     the NMEA 4.10 <SystemID> field.  Zero here means "not reported",
+    //     NOT "unused" or "unhealthy".
+    //   - itow_ms is the TOW of the most recent $PQTMPVT, so the record pairs
+    //     with that epoch's GNSSData exactly as the u-blox one does.  0
+    //     before the first PVT.
+    // time_us is left for the owner to stamp, matching pvt().
+    bool takeSat(GNSSSatData& out);
+
     // Valid after Event::GGA. Debug/liveness only — GGA is NEVER a fix
     // source here (no vertical velocity; see the PQTMPVT-is-load-bearing
     // rule in TR_GNSSReceiverLC86_Serial.cpp).
@@ -82,6 +104,8 @@ public:
     uint32_t badLines() const { return bad_lines_; }            // checksum/format fails
     uint32_t overlongLines() const { return overlong_lines_; }  // dropped at kMaxLine
     uint32_t truncatedLines() const { return truncated_lines_; } // resynced on '$'
+    uint32_t gsvSentences() const { return gsv_sentences_; }    // GSV lines folded in
+    uint32_t gsvOverflows() const { return gsv_overflows_; }    // entries dropped at kMaxSatBuild
 
 private:
     // NMEA 0183 caps sentences at 82 chars but Quectel's $PQTMPVT runs ~137;
@@ -95,6 +119,15 @@ private:
     Event parsePairAck(const char* const* f, size_t n);
     Event parseQtmCfgMsgRate(const char* const* f, size_t n);
     Event parseGga(const char* const* f, size_t n);
+    Event parseGsv(const char* addr, const char* const* f, size_t n);
+
+    // A GSV burst is one set of sentences per constellation, back to back.
+    // It is closed by the NEXT non-GSV sentence rather than by counting sets:
+    // nothing in the stream says which talker comes last, and the module
+    // emits GGA and $PQTMPVT at the fix rate, so a burst is never the tail of
+    // the stream in practice.
+    void finalizeGsv();
+    void dropTalker(uint8_t gnss_id);
 
     char   line_[kMaxLine + 1];
     size_t line_len_ = 0;
@@ -110,9 +143,24 @@ private:
     uint8_t  gga_quality_  = 0;
     uint8_t  gga_num_sats_ = 0;
 
+    // A four-constellation sky can show more satellites in view than the
+    // record carries; collect generously and let gnssSatSelect() decide what
+    // survives — it keeps every cno > 0 entry first, so truncation only ever
+    // drops satellites with no signal.
+    static constexpr uint8_t kMaxSatBuild = 40;
+
+    GNSSSatBlock build_[kMaxSatBuild] = {};
+    uint8_t     build_n_    = 0;
+    bool        gsv_active_ = false;   // a burst is open, awaiting its closer
+    GNSSSatData sat_        = {};
+    bool        sat_ready_  = false;
+    uint32_t    pvt_tow_ms_ = 0;       // $PQTMPVT <TOW>, ms into the GPS week
+
     uint32_t bad_lines_       = 0;
     uint32_t overlong_lines_  = 0;
     uint32_t truncated_lines_ = 0;
+    uint32_t gsv_sentences_   = 0;
+    uint32_t gsv_overflows_   = 0;
 };
 
 }  // namespace lc86

@@ -332,13 +332,27 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
 
     // ── Sentence selection ($PAIR062 [A §2.4.14]) ───────────────────────
     // Strip the default NMEA chatter (GGA/GLL/GSA/GSV/RMC/VTG all default
-    // on) down to GGA-only: the poll task's <1 ms latency budget is why —
+    // on) down to GGA + GSV: the poll task's <1 ms latency budget is why —
     // see kMaxBytesPerPoll. GGA is kept at the fix rate as a cheap liveness/
     // debug channel (sat count before the first PVT). None of these are
     // load-bearing, so failures WARN and continue.
+    //
+    // GSV is the exception to "strip it": it is the ONLY C/N0 source this
+    // part has (no UBX, so no NAV-SAT), and #1032 needs per-constellation
+    // C/N0 to tell a LoRa/GNSS coexistence problem from a crystal-harmonic
+    // one. It is enabled at a DIVISOR of the fix rate, not at the fix rate:
+    // <Rate> in $PAIR062 is "output once every N fixes" [A §2.4.14], so N =
+    // update_rate_hz lands a burst at about 1 Hz whatever the fix rate, which
+    // is ~500 B/s of extra NMEA against a 512 B/poll drain running at twice
+    // the fix rate. The legal range is 1-20; a fix rate above 20 Hz would
+    // clamp and simply give a faster burst.
+    const unsigned gsv_div = (update_rate_hz >= 1 && update_rate_hz <= 20)
+                                 ? update_rate_hz : 1U;
+    char gsv_body[20];
+    snprintf(gsv_body, sizeof(gsv_body), "PAIR062,3,%u", gsv_div);
+
     static const struct { const char* body; const char* what; } kSentenceSel[] = {
         {"PAIR062,1,0", "GLL off"},
-        {"PAIR062,3,0", "GSV off"},
         {"PAIR062,2,0", "GSA off"},
         {"PAIR062,5,0", "VTG off"},
         {"PAIR062,0,1", "GGA at fix rate"},
@@ -350,6 +364,21 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
         {
             ESP_LOGW(TAG, "Sentence config failed: %s (continuing)", cmd.what);
         }
+    }
+
+    // Separate from the table above so its result can be remembered: a
+    // declined GSV means pollNewSat() must stay quiet rather than hand out a
+    // table nothing refreshes.
+    sat_stream_ok_ = sendPairCommand(gsv_body, 62);
+    if (sat_stream_ok_)
+    {
+        ESP_LOGI(TAG, "GSV every %u fixes (~%u Hz) — per-satellite C/N0 on",
+                 gsv_div, (unsigned)(update_rate_hz / gsv_div));
+    }
+    else
+    {
+        ESP_LOGW(TAG, "GSV enable failed — no per-satellite C/N0 this session "
+                      "(GNSS_SAT_MSG records will be absent)");
     }
 
     // ── $PQTMPVT enable — THE load-bearing config ───────────────────────
@@ -483,6 +512,21 @@ bool TR_GNSSReceiverLC86Serial::pollNewPVT(GNSSData &gnss_data)
 
     if (!new_pvt) return false;  // `gnss_data` untouched (u-blox contract)
     getGNSSData(gnss_data);
+    return true;
+}
+
+bool TR_GNSSReceiverLC86Serial::pollNewSat(GNSSSatData &out)
+{
+    // Harvest only. The collector calls pollNewPVT() first on every pass and
+    // that is what drains the UART and feeds the parser, so by the time we
+    // get here any GSV burst that arrived has already been folded in. Doing
+    // a second read here would race the line reassembly for no gain.
+    if (!sat_stream_ok_) return false;
+    if (!parser_.takeSat(out)) return false;
+
+    // MCU sample time, same clock and same meaning as GNSSData.time_us; the
+    // parser filled itow_ms from the epoch's $PQTMPVT so the two records pair.
+    out.time_us = (uint32_t)esp_timer_get_time();
     return true;
 }
 
