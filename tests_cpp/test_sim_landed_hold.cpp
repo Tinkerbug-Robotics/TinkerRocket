@@ -60,6 +60,25 @@ TEST(SimLandedHold, backstopComfortablyExceedsTheRequirement)
         << "no margin for the 1 Hz quantization on the slow vote";
 }
 
+// #574: the healthy path is not the slowest one.  With the IMU stale from
+// burnout, the ONLY route to LANDED is the baro-only backstop, whose
+// alt_landed dwell is ~30 s -- measured at 30.8 s on a V9 (TR_SIM_DEAD_IMU,
+// 2026-09-12), with LANDED 2 s later.  A backstop sized for the healthy vote
+// expires inside that and the sim gives up before the flag can latch, which is
+// how #574's dead-IMU half sat unverifiable.  Size off the slowest path.
+TEST(SimLandedHold, backstopOutlastsTheDeadImuBaroDwell)
+{
+    // Measured dwell + the FC's state debounce, plus a 1 Hz quantization tick.
+    constexpr uint32_t dead_imu_dwell_ms = 31000;
+    constexpr uint32_t required =
+        dead_imu_dwell_ms + sim_landed::FC_LANDED_DEBOUNCE_MS + 1000;
+    EXPECT_GT(sim_landed::HOLD_MAX_MS, required)
+        << "the backstop must outlast the DEAD-IMU baro dwell, not just the "
+           "healthy vote -- at 30000 it expired within a second of the latch";
+    EXPECT_EQ(decide(INFLIGHT, LANDED, dead_imu_dwell_ms), Exit::Hold)
+        << "the sim must still be holding when the dead-IMU flag latches";
+}
+
 // ── The rule itself ─────────────────────────────────────────────────────────
 
 TEST(SimLandedHold, endsAsSoonAsTheFcReportsLanded)
