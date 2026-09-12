@@ -130,6 +130,13 @@ public:
         float bs_soc;           // Base station battery SOC %
         float bs_voltage;       // Base station battery voltage V
         float bs_current;       // Base station battery current mA (NaN if no sensor)
+        // #714: the external 2S flight pack on the base station's charger
+        // jack, read through its own dividers. NaN — omitted from the JSON —
+        // when no pack is connected, on a rocket, and on any board without
+        // the dividers; the cells are NaN when the mid tap is not a cell.
+        float bs_pack_voltage = NAN;   // whole pack V
+        float bs_pack_cell1   = NAN;   // cell 1 (the mid tap) V
+        float bs_pack_cell2   = NAN;   // cell 2 (pack minus mid) V
         bool  bs_logging_active;// Base station CSV logging active
         // Seconds until the silence-timeout closes the current BS log,
         // when bs_logging_active is true.  Counts down from

@@ -2075,6 +2075,15 @@ private fun BatteryCard(
                     telemetry.bsVoltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
                     telemetry.bsCurrent?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
                 )
+                // #714: the flight pack on the charger jack — one quiet line,
+                // never a recoloured row (iOS draws the same string).
+                telemetry.packDisplay?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }

@@ -115,8 +115,9 @@ struct board_pins
     // (2026-08-09) re-ratioed the divider onto fleet resistor values:
     // R40 300 k -> 1 M, R42 100 k -> 180 k. A full 2S pack (8.4 V) now puts
     // 1.281 V at the pin (was 2.1 V); divider drain drops 21 uA -> 7 uA.
-    // Nothing reads this yet — constants staged so the first implementation
-    // cannot inherit the pre-#728 scale of 4.000.
+    // Read by initSenseAdc()/updatePackSense() in main.cpp (#714); the
+    // constants were staged ahead of that so the first implementation could
+    // not inherit the pre-#728 scale of 4.000.
     static constexpr int   PACK_VSENSE_GPIO       = 8;    // PosADC, ADC1_CH7
     static constexpr float PACK_VSENSE_DIVIDER    = 1180.0f / 180.0f;  // 6.5556 (pre-#728: 4.000)
     // Attenuation chosen deliberately with the new scale: 6 dB. Its ~1.75 V
@@ -125,4 +126,15 @@ struct board_pins
     // per-attenuation — create the adc_cali handle FOR THIS setting; changing
     // one without the other silently mis-scales every read.
     static constexpr int   PACK_VSENSE_ATTEN_DB   = 6;    // ADC_ATTEN_DB_6
+
+    // --- Flight-pack mid-tap sense (net MidADC, external_charger sheet) ---
+    // Cell-1 top -> R50 100 k -> MidADC -> R51 100 k -> GND, with C56 100 nF
+    // at the pin; read on GPIO9 (ADC1_CH8). Cell 2 is the pack minus this.
+    // A full cell (4.2 V) puts 2.1 V at the pin — outside the ~1.75 V
+    // calibrated range at 6 dB — so this channel runs at 12 dB even though
+    // the pack sense beside it runs at 6 dB, and each has its own adc_cali
+    // handle (the curve is per-attenuation).  #714.
+    static constexpr int   PACK_MID_VSENSE_GPIO     = 9;    // MidADC, ADC1_CH8
+    static constexpr float PACK_MID_VSENSE_DIVIDER  = 2.0f; // R50 100k / R51 100k
+    static constexpr int   PACK_MID_VSENSE_ATTEN_DB = 12;   // ADC_ATTEN_DB_12
 };

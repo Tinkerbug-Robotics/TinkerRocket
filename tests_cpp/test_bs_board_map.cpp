@@ -58,6 +58,32 @@ TEST(BsBoardMapV3, AttenuationCoversAFullCell) {
         << at_pin_v << " V at the pin does not fit 6 dB's ~1.75 V range";
 }
 
+// #714. The flight pack on J4 is read on two dividers: PosADC, the whole 2S
+// pack (R40 1 M / R42 180 k since hardware PR #728), and MidADC, the top of
+// cell 1 (R50 100 k / R51 100 k). Netlist: external_charger.kicad_sch.
+TEST(BsBoardMapV3, ReadsTheFlightPackOnTwoDividers) {
+    EXPECT_TRUE(config::HAS_PACK_CHARGER);
+    EXPECT_EQ(config::PACK_VSENSE_GPIO, 8);                  // PosADC, ADC1_CH7
+    EXPECT_NEAR(config::PACK_VSENSE_DIVIDER, 1180.0f / 180.0f, 1e-4);
+    EXPECT_EQ(config::PACK_MID_VSENSE_GPIO, 9);              // MidADC, ADC1_CH8
+    EXPECT_FLOAT_EQ(config::PACK_MID_VSENSE_DIVIDER, 2.0f);
+}
+
+// The two attenuations differ on purpose. A full 8.4 V pack puts 1.281 V on
+// PosADC, inside 6 dB's ~1.75 V calibrated range; a full 4.2 V cell puts
+// 2.1 V on MidADC, outside it — so the mid tap runs at 12 dB, and each
+// channel needs its own adc_cali handle because the curve is per-attenuation.
+TEST(BsBoardMapV3, PackAttenuationsMatchTheirDividers) {
+    const float pos_at_pin = 8.4f / config::PACK_VSENSE_DIVIDER;
+    EXPECT_NEAR(pos_at_pin, 1.281f, 1e-3);
+    EXPECT_LT(pos_at_pin, 1.75f);
+    EXPECT_EQ(config::PACK_VSENSE_ATTEN_DB, 6);
+    const float mid_at_pin = 4.2f / config::PACK_MID_VSENSE_DIVIDER;
+    EXPECT_NEAR(mid_at_pin, 2.1f, 1e-4);
+    EXPECT_GT(mid_at_pin, 1.75f) << "would fit 6 dB, and then it should use it";
+    EXPECT_EQ(config::PACK_MID_VSENSE_ATTEN_DB, 12);
+}
+
 // Item 4. LoRa_EN = GPIO21 -> R18 1k -> TPS61023 EN, R17 100k to +3V3.
 TEST(BsBoardMapV3, HasTheDaughterboardPowerGate) {
     EXPECT_EQ(config::LORA_ACT_PIN, 21);
@@ -78,6 +104,14 @@ TEST(BsBoardMapV3, UartPinsMatchTheConnector) {
 TEST(BsBoardMapGauged, DeclaresAFuelGauge) {
     EXPECT_TRUE(config::HAS_FUEL_GAUGE);
     EXPECT_EQ(config::BATT_VSENSE_GPIO, -1) << "no divider on a gauged board";
+}
+
+// #714: no charger jack on the gauged boards, so no pack dividers — the
+// shared initSenseAdc() skips a -1 and updatePackSense() never runs.
+TEST(BsBoardMapGauged, HasNoFlightPackDividers) {
+    EXPECT_FALSE(config::HAS_PACK_CHARGER);
+    EXPECT_EQ(config::PACK_VSENSE_GPIO, -1);
+    EXPECT_EQ(config::PACK_MID_VSENSE_GPIO, -1);
 }
 
 #endif
