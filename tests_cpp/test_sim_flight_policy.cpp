@@ -38,6 +38,7 @@ constexpr uint8_t LANDED   = 4;
 using sim_flight::Edge;
 using sim_flight::classify;
 using sim_flight::simulated;
+using sim_flight::startRefused;
 using sim_flight::stopApplies;
 
 // ── The edge rule ───────────────────────────────────────────────────────────
@@ -243,6 +244,57 @@ TEST(SimFlightPolicy, aFlownOutSimIsReArmedByStopAndNotByASecondOne)
 
     // A repeat (the BS retry train, a second tap) has nothing left to reset.
     EXPECT_FALSE(stopApplies(latched, false));
+}
+
+// ── The Start gate (#1153 item 3) ───────────────────────────────────────────
+
+TEST(SimFlightPolicy, aStartIsRefusedInTheCommandLockoutStates)
+{
+    // isCommandLockoutState() is INFLIGHT or MAG_CALIBRATION, and the Start
+    // had no state gate at all.  INFLIGHT: the only INFLIGHT that polls for
+    // commands is a sim's own flight (#393), so this is a second Start under
+    // a running run — startSim() would rewind the physics to the pad with the
+    // FC still INFLIGHT and launch latched.  MAG_CALIBRATION: the Start edge
+    // reset the flight state to READY without ending the session, and the
+    // chip's zeroed OFFSET registers stayed zeroed for the rest of the boot.
+    EXPECT_TRUE(startRefused(/*command_lockout_state=*/true));
+}
+
+TEST(SimFlightPolicy, aStartFromAFlownOutSimIsTheOrdinaryReRun)
+{
+    // LANDED with post_flight_lockout set is where every flown-out sim ends,
+    // and a fresh Start from there is how the next run begins: its Start edge
+    // is the reset that re-arms (#317).  The lockout is deliberately not a
+    // term here, unlike TestModeGatePolicy::testCommandRefused — READY,
+    // PRELAUNCH and LANDED all admit the Start.
+    EXPECT_FALSE(startRefused(/*command_lockout_state=*/false));
+}
+
+TEST(SimFlightPolicy, aRestartIsStopThenStart)
+{
+    // Mid-sim the two gates answer opposite questions on purpose: the Stop
+    // applies (it is the reset) and the Start is refused (it would not be).
+    // So "restart" is Stop, then Start — never a bare second Start.
+    const bool latched = true, sim_active = true, inflight_lockout = true;
+    EXPECT_TRUE(stopApplies(latched, sim_active));
+    EXPECT_TRUE(startRefused(inflight_lockout));
+
+    // After the Stop's reset the FC is in READY with the sim idle: the Start
+    // is admitted again, and it is a fresh run (the Start edge fires).
+    EXPECT_FALSE(startRefused(/*command_lockout_state=*/false));
+    EXPECT_EQ(classify(/*prev_active=*/false, /*curr_active=*/true, false),
+              Edge::Start);
+}
+
+TEST(SimFlightPolicy, aRefusedStartNeverProducesTheStartEdge)
+{
+    // A refused Start never calls startSim(), so isSimActive() stays where it
+    // was and the edge handler at the end of the pass sees nothing — the
+    // flight-state reset that used to orphan the mag-cal session cannot run
+    // from a refusal.
+    ASSERT_TRUE(startRefused(/*command_lockout_state=*/true));
+    EXPECT_EQ(classify(/*prev_active=*/false, /*curr_active=*/false, false),
+              Edge::None);
 }
 
 }  // namespace

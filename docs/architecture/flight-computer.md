@@ -144,9 +144,14 @@ deliberate re-arm, and it counts only when a sim flight was started this boot; a
 that reaches a real flight's `LANDED` is ignored (#1113).
 
 `MAG_CALIBRATION` is a bench-only state entered by app command and refused in
-`PRELAUNCH`/`INFLIGHT`/`LANDED`. While in it, kinematic checks are skipped, EKF init is
-inhibited, and pyro servicing cannot run — the user is physically tumbling the rocket,
-and every automatic path that could misread that has to be closed.
+`INFLIGHT`/`LANDED`. While in it, kinematic checks are skipped, EKF init is inhibited, and
+pyro servicing cannot run — the user is physically tumbling the rocket, and every automatic
+path that could misread that has to be closed. Test-class commands are refused in it too,
+and since #1153 that includes the simulator's Start: it used to reset the flight state to
+`READY` underneath the session, which left the magnetometer's hard-iron offsets zeroed
+(sampling runs on raw values) for the rest of the boot. A sim reset that does reach a live
+session — a Stop, or the sim's own give-up — now ends it and restores the persisted
+offsets, as a reboot would.
 
 ## Estimation
 
