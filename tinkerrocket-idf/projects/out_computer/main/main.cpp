@@ -10003,11 +10003,42 @@ static void loop_oc()
                                     INA230_Mode::POWER_DOWN);
             ina_continuous = false;
         }
-        // The restore has proven stable (system up, peripherals in): reset
-        // the brownout retry budget so a LATER fault gets a fresh allowance.
-        rail_rtc.restore_attempts = 0;
+        // #1129: the budget is NOT cleared here any more.
+        //
+        // This block is the first loop_oc pass, right after initPeripherals()
+        // — the OC has been up for roughly the boot delay plus its own init,
+        // and the FC is still inside setup_fc. The load this budget exists to
+        // bound is the FC's: GPS_ACT and servo_control.wiggle() come later in
+        // the FC's own setup, and the FC's comment puts the wiggle alone at
+        // 4.2 s. Clearing here meant every brownout restarted from zero, so
+        // shouldRestore() kept saying yes and the stand-down branch was
+        // unreachable: a sagging pack cycled the FC rail forever instead of
+        // settling into the stable rail-off idle the bound exists to restore.
+        //
+        // Cleared from the loop instead, once the FC has actually been heard
+        // from under that load — see RailRestorePolicy::restoreProven.
         ESP_LOGW("OC", "FC rail restore complete — peripherals re-initialized "
-                       "on the loop core, telemetry resuming.");
+                       "on the loop core, telemetry resuming. Retry budget "
+                       "stays at %u until the FC is heard from under load "
+                       "(#1129).", (unsigned)rail_rtc.restore_attempts);
+    }
+
+    // #1129: hand back a fresh retry budget only once the FC has been heard
+    // from under the restored load. One-shot per boot — the counter is in RTC
+    // memory and this writes it, so it must not run every pass.
+    {
+        static bool restore_budget_cleared = false;
+        if (!restore_budget_cleared &&
+            RailRestorePolicy::restoreProven(boot_rail_restored,
+                                             latest_non_sensor_valid,
+                                             (uint32_t)millis()))
+        {
+            restore_budget_cleared = true;
+            rail_rtc.restore_attempts = 0;
+            ESP_LOGW("OC", "FC rail restore PROVEN — the FC is sending frames "
+                           "with GNSS and servos powered; retry budget reset "
+                           "(#1129)");
+        }
     }
 
     // #846: a boot-re-seeded snapshot is marked consumed only after the FC has
