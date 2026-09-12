@@ -498,6 +498,7 @@ def parse_binary_file(filepath):
     records = {
         "GNSS":           [],
         "GNSS_SAT":       [],
+        "FcStatus":       [],   # 0x92 FcStatusData (#1154 item 4) — appended below; was never initialised
         "ISM6HG256":      [],
         "BMP585":         [],
         "MMC5983MA":      [],
