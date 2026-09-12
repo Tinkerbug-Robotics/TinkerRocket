@@ -149,6 +149,18 @@ Two behaviors in this path are easy to misread as bugs:
   (`rx_ring_overflow_drops`, surfaced as `ring_drops`) and means NEWEST bytes lost.
   This paragraph and the comment at the DMA-callback site said the opposite until
   #1156 item 4.
+- **The pressure altitude has a reference the OC must be told about (#1150).** The OC
+  derives `pressure_alt` from its own copy of the BMP stream against a ground reference
+  it tracks itself, from every baro frame that arrives while the FC is not INFLIGHT. That
+  state is a cache which reads INITIALIZATION until the first NonSensor frame lands, so
+  an OC that reset in flight (#825/#1176) and re-joined the stream used to take its "pad"
+  reference from whichever baro frame beat the first NonSensor frame — at altitude — and
+  reported ~0 m, then negative, for the rest of the flight. The reference is now tracked
+  only while the FC's state is known and not INFLIGHT, and an OC that finds itself
+  INFLIGHT with no reference adopts the FC's own from the `SNAPSHOT_MSG` frame it already
+  caches for reboot recovery, together with the FC's running maxima, once; a nominal
+  flight keeps the reference it tracked itself. Both rules live in
+  `ground_baseline_policy.h` (host-tested), and the mini's comms half shares them.
 
 ### Commands out
 

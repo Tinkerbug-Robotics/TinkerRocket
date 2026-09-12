@@ -1149,6 +1149,21 @@ target_include_directories(test_sensor_staleness_policy PRIVATE
 target_link_libraries(test_sensor_staleness_policy GTest::gtest_main)
 gtest_discover_tests(test_sensor_staleness_policy)
 
+# ---------- test_ground_baseline_policy (#1150) ----------
+# The comms side's ground-pressure reference after an in-flight reset: a baro
+# sample may only become the reference while the flight side's state is KNOWN
+# and not INFLIGHT, and a comms side that is INFLIGHT with no reference adopts
+# the flight side's own from the snapshot it already streams, once. Pure header
+# in TR_RocketComputerTypes, shared by the OC and the mini's comms half.
+add_executable(test_ground_baseline_policy test_ground_baseline_policy.cpp)
+target_include_directories(test_ground_baseline_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_ground_baseline_policy GTest::gtest_main)
+gtest_discover_tests(test_ground_baseline_policy)
+
 # ---------- test_pwr_hold_release_policy (#1137 item 9) ----------
 # Whether the FC may hand its rail back at LANDED. Pure, and the wraparound
 # case is not something a bench can produce.

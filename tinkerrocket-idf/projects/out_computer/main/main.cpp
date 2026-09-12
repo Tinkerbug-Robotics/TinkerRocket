@@ -95,6 +95,7 @@ static inline std::string itos(int v)
 #include <TR_INA230.h>
 #include <TR_FlightLog.h>
 #include <SnapshotTailScan.h>   // #846: boot re-seed of the snapshot cache
+#include <ground_baseline_policy.h>   // #1150: the pad reference after an in-flight OC reset
 #include <TR_NandBackend_esp.h>
 #include <NvsBitmapStore.h>
 #include <NandBitmapStore.h>   // #398: bitmap on NAND (not NVS) — no cache-disable stall
@@ -2570,7 +2571,19 @@ static void updateDerivedAltitudeFromBMP()
     }
 
     // Track baseline pressure while not in-flight so pressure altitude is near zero before launch.
-    if (latest_rocket_state != INFLIGHT)
+    //
+    // #1150: "not in-flight" has to be the FC's word, not the boot default.
+    // latest_rocket_state reads INITIALIZATION until the first NonSensor frame
+    // lands, and after an in-flight OC reset (#825/#1176) this parser re-joins
+    // the FC's stream mid-flight with every dedup baseline at zero -- so the
+    // first BMP frame to beat the first NonSensor frame (same 500 Hz, baro
+    // earlier in each FC loop pass: more often than not) became the "pad"
+    // reference at altitude, and pressure_alt/max_alt were wrong for the rest
+    // of the flight. A flight this OC did not watch from the pad gets its
+    // reference from the FC's own snapshot instead (SNAPSHOT_MSG branch);
+    // until that lands, pressure_alt holds at 0 rather than lying.
+    if (ground_baseline::trackFromBaro(latest_non_sensor_valid,
+                                       latest_rocket_state == INFLIGHT))
     {
         ground_pressure_pa = p;
         ground_pressure_set = true;
@@ -2587,8 +2600,10 @@ static void updateDerivedAltitudeFromBMP()
 
     // Altitude rate now comes from FlightComputer KF via NonSensorData
     // (no local finite-difference needed).
-    // Reject physically impossible altitudes (corrupt I2S frames)
-    if (pressure_alt_m > -500.0f && pressure_alt_m < 100000.0f)
+    // Reject physically impossible altitudes (corrupt I2S frames). The band is
+    // the policy's, so the #1150 snapshot adoption cannot latch what this won't.
+    if (pressure_alt_m > ground_baseline::kMaxAltMinM &&
+        pressure_alt_m < ground_baseline::kMaxAltMaxM)
         max_alt_m = std::max(max_alt_m, pressure_alt_m);
 }
 
@@ -2612,7 +2627,7 @@ static void updateDerivedSpeedFromNonSensor()
     const float speed = sqrtf(e * e + n * n + u * u);
 
     // Reject physically impossible speeds (corrupt I2S frames can produce garbage)
-    if (speed > 1500.0f)
+    if (speed > ground_baseline::kMaxSpeedMps)
         return;
 
     const bool alt_apogee = nsFlagSet(latest_non_sensor.flags, NSF_ALT_APOGEE);
@@ -4691,6 +4706,18 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 inflight_entry_ms = latest_non_sensor_rx_ms;
             }
             latest_rocket_state = (RocketState)latest_non_sensor.rocket_state;
+            // #1150: INFLIGHT with no pad reference means this OC joined the
+            // flight in progress (an in-flight OC reset, or a both-MCU reset
+            // whose FC restored its flight in setup). Say so once per INFLIGHT
+            // entry: pressure_alt holds at 0 until the FC's snapshot supplies
+            // the pad pressure, and that adoption logs itself.
+            if (latest_rocket_state == INFLIGHT && prev_state != INFLIGHT &&
+                !ground_pressure_set)
+            {
+                ESP_LOGW("OC", "#1150: INFLIGHT with no pad reference — this OC "
+                               "joined the flight in progress; pressure_alt holds "
+                               "at 0 until the FC's snapshot supplies one");
+            }
             // #317 / #1235 item 5: the post-LANDED lockout follows the frame
             // stream in arrival order. Both inputs ride this frame.
             LandedLockout::step(oc_landed_lockout, latest_rocket_state,
@@ -4830,6 +4857,55 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             if (!stale_replay)
             {
                 last_snap_elapsed_ms = elapsed_ms;
+                // #1150: the FC's snapshot carries the pad reference and the
+                // running maxima this OC lost if it reset in flight. Adopt
+                // them ONCE when INFLIGHT arrives with no reference of our
+                // own; ground_baseline_policy.h has the rules and the reason
+                // a nominal flight keeps the reference it tracked itself. The
+                // frame passed the link CRC to get here; the policy re-checks
+                // magic and version, so a mismatched FC image is refused and
+                // said once rather than silently trusted.
+                {
+                    FlightSnapshotData snap = {};
+                    memcpy(&snap, payload, sizeof(snap));
+                    ground_baseline::Adoption adopt = {};
+                    switch (ground_baseline::adoptFromSnapshot(ground_pressure_set,
+                                                               snap, adopt))
+                    {
+                        case ground_baseline::Verdict::Adopt:
+                            ground_pressure_pa  = adopt.ground_pressure_pa;
+                            ground_pressure_set = true;
+                            max_alt_m     = std::max(max_alt_m, adopt.max_alt_m);
+                            max_speed_mps = std::max(max_speed_mps, adopt.max_speed_mps);
+                            ESP_LOGW("OC", "#1150: joined a flight in progress — pad "
+                                           "reference %.0f Pa, max_alt %.1f m and "
+                                           "max_speed %.1f m/s adopted from the FC's "
+                                           "snapshot (flight elapsed %lu ms)",
+                                     (double)adopt.ground_pressure_pa,
+                                     (double)max_alt_m, (double)max_speed_mps,
+                                     (unsigned long)elapsed_ms);
+                            break;
+                        case ground_baseline::Verdict::Rejected:
+                        {
+                            static bool rejected_logged = false;
+                            if (!rejected_logged)
+                            {
+                                rejected_logged = true;
+                                ESP_LOGW("OC", "#1150: snapshot refused as a pad "
+                                               "reference (magic 0x%08lx version %u "
+                                               "p0 %.0f Pa) — FC and OC images may "
+                                               "disagree on FlightSnapshotData",
+                                         (unsigned long)snap.magic,
+                                         (unsigned)snap.version,
+                                         (double)snap.ground_pressure_pa);
+                            }
+                            break;
+                        }
+                        case ground_baseline::Verdict::HaveBaseline:
+                        case ground_baseline::Verdict::NotInflight:
+                            break;
+                    }
+                }
                 // #846: RAM cache first — the store that actually serves
                 // GET_FLIGHT_SNAPSHOT now. Same #383 guard protects it.
                 if (frame_len == kSnapFrameLen)
