@@ -136,6 +136,13 @@ class SimConfig:
     # Default off — healthy-servo lash is unmeasured (bench wiggle-test to
     # calibrate); the known-bad servo 3 measured ~10 deg.
     servo_backlash_deg: float = 0.0
+    # Pure transport delay between the controller's output and the servo
+    # seeing it (s): the 56 Hz PWM frame the pulse waits for, the controller
+    # tick to pulse update, and whatever the servo's own electronics add
+    # before the horn starts to move.  0 = none (legacy).  #549: the
+    # 2026-08-29 RP-54 flight fit wants ~50 ms of it on top of servo_tau_s;
+    # without it no first-order servo reproduces the ring-down phase.
+    servo_cmd_delay_s: float = 0.0
 
     # Wind (constant ENU, m/s)
     wind_speed: float = 0.0             # m/s
@@ -431,6 +438,10 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     _servo_deadband_deg = (config.servo_deadband_us *
                            (config.deflection_max - config.deflection_min) / 1000.0)
     _servo_tau_eff = max(config.servo_tau_s, imu_dt)  # tau<=dt -> pure slew limiter
+    # #549: command transport delay as whole IMU ticks, pre-filled with the
+    # neutral command so the first ticks see a still fin, not garbage.
+    _servo_delay_ticks = int(round(config.servo_cmd_delay_s / imu_dt))
+    _servo_delay_fifo = [0.0] * _servo_delay_ticks
     baro_dt = 1.0 / config.baro_rate
     mag_dt = 1.0 / config.mag_rate
     gnss_dt = 1.0 / config.gnss_rate
@@ -1201,7 +1212,14 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                 # holds; servo_tau_s<=imu_dt collapses to the prior slew limiter.
                 # The deadband and dynamics act on the HORN (the servo's own
                 # feedback loop); the fin follows the horn through the lash.
-                err = fin_tab_cmd - servo_horn_deg
+                # #549: the command the servo acts on is the one issued
+                # servo_cmd_delay_s ago (a FIFO of ticks; 0 = this tick's).
+                if _servo_delay_ticks > 0:
+                    _servo_delay_fifo.append(fin_tab_cmd)
+                    delayed_cmd = _servo_delay_fifo.pop(0)
+                else:
+                    delayed_cmd = fin_tab_cmd
+                err = delayed_cmd - servo_horn_deg
                 if abs(err) >= _servo_deadband_deg:
                     rate = err / _servo_tau_eff
                     if rate > config.servo_rate_limit:
