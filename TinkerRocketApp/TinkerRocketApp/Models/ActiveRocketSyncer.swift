@@ -22,12 +22,18 @@
 //  profile onto this board, or pushProfileToRocket() from the UI — and
 //  surfaces the cal advisories (cal is board-specific — see MagCalData).
 //
-//  What the app still can't see: the config readback echoes about half the
-//  editable surface.  Servo trim 2-4, fin travel, fin layout, roll
-//  waypoints, the PN guidance parameters and sounds are not reported, so
-//  the settings screen shows the profile's values for those and cannot
-//  verify them against the rocket.  `unreportedGroups` names them for the
-//  UI; closing that gap needs a firmware-side full-config report.
+//  What the app can't see is FIRMWARE-DEPENDENT, not a fixed list (corrected
+//  #1101 — this used to say the readback echoes "about half the editable
+//  surface" and named servo trim 2-4, fin travel, fin layout, roll waypoints,
+//  the PN guidance parameters and sounds as permanently unreported). Since
+//  dd659b6 the readback carries the servo, guidance and roll groups, so
+//  `unreportedGroups` is empty against current firmware.
+//
+//  It is computed, not hardcoded: RocketConfig.unreportedGroups derives the
+//  list from which optional groups came back nil, so an older rocket still
+//  names what its firmware does not report and the settings screen still
+//  declines to claim it verified those values. Read the property, not this
+//  comment, for what a given board actually echoes.
 //
 
 import Foundation

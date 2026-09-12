@@ -9,10 +9,13 @@ import kotlin.math.roundToLong
  * Wire, log and CSV values stay SI everywhere — this converts only at the point
  * of speech, so nothing about the recorded flight changes with the setting.
  *
- * Scope note: iOS applies [UnitSystem] to its whole UI; Android currently has no
- * unit toggle anywhere, so the app always passes [UnitSystem.METRIC] today. The
- * parameter exists so the announcer is not the thing blocking that port later,
- * and so these strings can be compared against iOS in either system.
+ * Scope note (corrected #1101): this used to say "Android currently has no unit
+ * toggle anywhere, so the app always passes [UnitSystem.METRIC] today". Both
+ * halves are stale. Android has had a unit toggle since the display-units port,
+ * and AppContainer wires the live setting straight through —
+ * `unitSystem = { units.system.value }` — so callouts follow the user's choice
+ * on both platforms. The METRIC default on [FlightAnnouncer]'s parameter is a
+ * test convenience, not what the app passes.
  */
 public enum class UnitSystem {
     METRIC,
