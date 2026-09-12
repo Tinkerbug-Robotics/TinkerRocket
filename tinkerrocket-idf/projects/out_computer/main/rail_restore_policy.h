@@ -41,6 +41,41 @@ namespace RailRestorePolicy {
 // deliberate cmd-8 power-on.
 inline constexpr uint8_t kMaxRestoreAttempts = 3;
 
+// #1129: how long after a restore boot the budget may be cleared.
+//
+// The budget was cleared on the OC's OWN init completing — the first loop_oc
+// pass, right after initPeripherals(), roughly the 500 ms boot delay plus the
+// OC's peripheral init. But the load it exists to bound is the FC's: the FC
+// raises GPS_ACT and runs servo_control.wiggle() later in its own setup, and
+// the FC's own comment puts the wiggle alone at 4.2 s. So the current draw
+// that rail_restore_policy.h names as the trigger arrived strictly AFTER the
+// counter had been zeroed, every attempt started from 0, and the stand-down
+// branch was unreachable. A sagging pack cycled the FC rail forever instead of
+// settling into the stable rail-off idle this bound exists to restore.
+//
+// 12 s clears the FC's wiggle with margin without being so long that a healthy
+// board carries a stale count into a genuinely later fault.
+inline constexpr uint32_t kRestoreProvenMs = 12000;
+
+// Has this restore proven stable enough to hand back a fresh retry budget?
+//
+// Two conditions, and both matter:
+//   fc_frame_seen — a NonSensorData frame has arrived since this boot, which
+//                   means the FC reached its main loop with GNSS and servos
+//                   powered. This is the evidence the OC's own init never was.
+//   uptime        — past the FC's boot transient, so a frame that arrives
+//                   early (a warm FC that never actually dropped) does not
+//                   clear the budget before the load has been applied.
+//
+// Deliberately not "the rail is still on": the rail being on is the premise,
+// not the proof. It is on the whole time the brownout loop is running.
+inline bool restoreProven(bool boot_rail_restored, bool fc_frame_seen,
+                          uint32_t uptime_ms)
+{
+    if (!boot_rail_restored) return false;   // nothing to prove
+    return fc_frame_seen && uptime_ms >= kRestoreProvenMs;
+}
+
 inline bool shouldRestore(bool reset_is_poweron, bool magic_valid,
                           bool rail_was_on, bool deliberate_off,
                           uint8_t restore_attempts)

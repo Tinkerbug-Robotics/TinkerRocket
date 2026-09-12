@@ -3,7 +3,7 @@
 
 # Out Computer -- `main.cpp` navigation map
 
-`tinkerrocket-idf/projects/out_computer/main/main.cpp` is 12,401 lines in one translation unit. These are the
+`tinkerrocket-idf/projects/out_computer/main/main.cpp` is 12,432 lines in one translation unit. These are the
 `// SECTION:` banners in it, in file order. Indented rows (↳) are regions
 inside a single large function. Line counts include each section's banner
 and leading comments.
@@ -38,8 +38,8 @@ and leading comments.
 | [**Diagnostics and periodic statistics**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L7423-L8288) | 866 | 7423-8288 |
 | [**Peripheral initialization (runs on power-on)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L8289-L9350) | 1,062 | 8289-9350 |
 | [**Boot setup (rail off, BLE only)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L9351-L9951) | 601 | 9351-9951 |
-| [**Main loop**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L9952-L12392) | 2,441 | 9952-12392 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [BLE command dispatch](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L10667-L12392) | 1,726 | 10667-12392 |
-| [**FreeRTOS entry point**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L12393-L12401) | 9 | 12393-12401 |
+| [**Main loop**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L9952-L12423) | 2,472 | 9952-12423 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [BLE command dispatch](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L10698-L12423) | 1,726 | 10698-12423 |
+| [**FreeRTOS entry point**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L12424-L12432) | 9 | 12424-12432 |
 
-Total: 30 sections (1 nested) across 12,401 lines.
+Total: 30 sections (1 nested) across 12,432 lines.
