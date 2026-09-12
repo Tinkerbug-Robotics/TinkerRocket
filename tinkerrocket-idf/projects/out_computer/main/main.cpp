@@ -10729,6 +10729,21 @@ static void loop_oc()
     if (ble_cmd != 0)
     {
         ESP_LOGI("OC_CMD", "BLE cmd=%u", (unsigned)ble_cmd);
+        // #1422: a command matching no branch below used to be acknowledged on
+        // the wire, logged here as though it were about to be handled, and then
+        // dropped with nothing further printed — indistinguishable from success.
+        // Found on the bench sending cmd 17 (HOP_DISABLE_BS, a BASE-STATION
+        // command) to a rocket: it did exactly this, twice, and cost three
+        // diagnostic rounds to notice that nothing had happened.
+        //
+        // The dispatch below is TWO separate if/else-if statements, not one, so
+        // neither can carry the verdict alone — a terminal else on the second
+        // would fire for every command the first one handles. Each chain instead
+        // reports whether the command fell past it, and the terminal else on the
+        // last chain turns "past both" into the warning. No command numbers are
+        // listed anywhere here, so adding a branch to either chain needs no
+        // update: the new branch simply stops setting the flag.
+        bool ble_cmd_missed_first_chain = false;
         if (ble_cmd == 1)
         {
             // Camera: payload[0] = desired state (1 = on, 0 = off), same
@@ -10897,6 +10912,10 @@ static void loop_oc()
                 ble_app.sendFileList(json);
                 endPhoneIO();
             }
+        }
+        else
+        {
+            ble_cmd_missed_first_chain = true;   // #1422
         }
 
         // Handle file download requests from BLE app
@@ -12427,6 +12446,18 @@ static void loop_oc()
                                    "— this warning will return after a reboot");
                 }
             }
+        }
+        // #1422: past both chains, so nothing above owns this command. The one
+        // exception is the file download (cmd 4), which TR_BLE_To_APP forwards
+        // but which is driven by getDownloadFilename() above rather than by a
+        // ble_cmd branch, so it never matches either chain. (OTA, 70-72, cannot
+        // reach here at all — TR_BLE_To_APP handles those in place and returns
+        // without queueing.)
+        else if (ble_cmd_missed_first_chain && ble_cmd != 4)
+        {
+            ESP_LOGW("OC_CMD", "BLE cmd=%u has no handler on this device — "
+                     "DROPPED (base-station commands sent to a rocket land here)",
+                     (unsigned)ble_cmd);
         }
     }
 

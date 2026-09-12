@@ -6009,6 +6009,18 @@ static void loop_bs()
             }
         }
     }
+    // #1422: the mirror of the rocket-side gap — a rocket command sent to a
+    // base station was acknowledged and dropped in silence. One chain here, so
+    // one terminal else does it; the `!= 0` is load-bearing, because unlike the
+    // rocket dispatchers this chain is not wrapped in a "command present" guard
+    // and runs on every loop pass. (OTA, 70-72, never reaches it: TR_BLE_To_APP
+    // handles those in place and returns without queueing.)
+    else if (ble_cmd != 0)
+    {
+        ESP_LOGW(TAG, "[BLE] cmd=%u has no handler on this device — DROPPED "
+                 "(rocket commands sent to a base station land here)",
+                 (unsigned)ble_cmd);
+    }
 
     // ==========================================================================
     // SECTION: Scan completion and periodic service chain
