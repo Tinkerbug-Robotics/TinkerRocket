@@ -106,6 +106,35 @@ public fun gnssTrack(
         
 }
 
+/** A geodetic fix, degrees. */
+public data class GeoFix(val lat: Double, val lon: Double)
+
+/**
+ * The first fix [gnssTrack] accepts — same columns, same rejection of the
+ * 0/0 "no fix" rows and of non-finite altitude — so it is the geodetic twin
+ * of `gnssTrack(data).first()`.  The 3D scenes centre their ground texture on
+ * it (#1092 item 1; iOS uses `trackPoints.first`).  Null when the log has no
+ * position columns or no usable fix.
+ */
+public fun firstGnssFix(data: FlightCsvData): GeoFix? {
+    val lat = data.columns["Latitude (deg)"] ?: data.columns["lat"] ?: return null
+    val lon = data.columns["Longitude (deg)"] ?: data.columns["lon"] ?: return null
+    val alt = data.columns["Pressure Altitude (m)"]
+        ?: data.columns["pressure_alt"]
+        ?: data.columns["GNSS Altitude (m)"]
+        ?: data.columns["alt_m"]
+        ?: return null
+    val rows = minOf(lat.size, lon.size, alt.size)
+    for (i in 0 until rows) {
+        val la = lat[i]
+        val lo = lon[i]
+        if (!la.isFinite() || !lo.isFinite() || la == 0.0 || lo == 0.0) continue
+        if (!alt[i].isFinite()) continue
+        return GeoFix(la, lo)
+    }
+    return null
+}
+
 /** Clean finite EKF (E, N, U) triples — the shared source for 2D and 3D. */
 public fun ekfTrack(data: FlightCsvData): List<V3> {
     val e = data.columns["Position East (m)"] ?: emptyList()

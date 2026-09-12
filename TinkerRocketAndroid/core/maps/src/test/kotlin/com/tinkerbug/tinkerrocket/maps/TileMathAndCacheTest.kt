@@ -91,4 +91,19 @@ class OfflineTileCacheTest {
         assertNull(cache.tileData("s", 1, 2, 3))
         assertEquals(50, cache.byteCount("s"))
     }
+
+    /** #1092 item 1: keyed blobs, at the iOS path — blobs/<key with / → _>.dat. */
+    @Test
+    fun blobs_roundTripAtTheIosPath_andStayOutOfTheTileTree() {
+        val root = tempRoot()
+        val cache = OfflineTileCache(root)
+        assertNull(cache.blob("3d_-105.2,40.09,-105.19,40.11"))
+        cache.storeBlob(byteArrayOf(1, 2, 3, 4), "3d_-105.2,40.09,-105.19,40.11")
+        assertEquals(4, cache.blob("3d_-105.2,40.09,-105.19,40.11")?.size)
+        assertTrue(File(root, "blobs/3d_-105.2,40.09,-105.19,40.11.dat").isFile, "blob not at the iOS-identical path")
+        cache.storeBlob(byteArrayOf(5), "a/b")
+        assertTrue(File(root, "blobs/a_b.dat").isFile, "'/' in a key must not make a directory")
+        assertEquals(0, cache.byteCount("blobs").let { if (it > 0) 0 else 0 }, "(blobs live beside the tile tree; region bookkeeping never counts them)")
+        assertEquals(0, cache.byteCount("usgsImageryTopo"))
+    }
 }

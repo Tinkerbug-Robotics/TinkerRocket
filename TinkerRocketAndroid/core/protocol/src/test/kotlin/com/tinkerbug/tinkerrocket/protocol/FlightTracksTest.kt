@@ -262,4 +262,32 @@ class FlightTracksTest {
         assertTrue(!t.isEmpty)
         assertEquals(t.gnss, t.primary, "GNSS should carry the markers when EKF is degenerate")
     }
+
+    /**
+     * #1092 item 1: the 3D scenes centre their ground texture on the first
+     * fix — the same first fix `gnssTrack` starts from, so the geodetic point
+     * and its ENU twin are the same sample.
+     */
+    @Test
+    fun firstGnssFix_isTheGnssTracksFirstSample() {
+        val data = csv(mapOf(
+            "Latitude (deg)" to listOf(0.0, Double.NaN, padLat, padLat + 0.001),
+            "Longitude (deg)" to listOf(0.0, padLon, padLon, padLon + 0.001),
+            "Pressure Altitude (m)" to listOf(1.0, 1.0, 2.0, 30.0),
+        ))
+        val fix = firstGnssFix(data)
+        assertEquals(GeoFix(padLat, padLon), fix, "the 0/0 row and the NaN row are not fixes")
+        // Its ENU twin is where gnssTrack starts (no EKF anchor here → the origin).
+        val first = gnssTrack(data).first()
+        assertEquals(0.0, first.e, 1e-9)
+        assertEquals(0.0, first.n, 1e-9)
+    }
+
+    @Test
+    fun firstGnssFix_isNullWithoutPositionColumnsOrFixes() {
+        assertEquals(null, firstGnssFix(csv(mapOf("Position East (m)" to listOf(1.0)))))
+        assertEquals(null, firstGnssFix(csv(mapOf(
+            "lat" to listOf(0.0, 0.0), "lon" to listOf(0.0, 0.0), "alt_m" to listOf(1.0, 1.0),
+        ))))
+    }
 }

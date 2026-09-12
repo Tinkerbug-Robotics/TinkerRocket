@@ -75,6 +75,7 @@ class MainActivity : ComponentActivity() {
                 val unitSystem by container.units.system.collectAsState()
                 androidx.compose.runtime.CompositionLocalProvider(
                     com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem provides unitSystem,
+                    LocalOfflineTileCache provides container.tileCache,   // #1092 item 1
                 ) {
                 Surface(Modifier.fillMaxSize().statusBarsPadding()) {
                     // #1057: the scanner is not reachable until a network name
