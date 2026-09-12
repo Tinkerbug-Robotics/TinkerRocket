@@ -7,6 +7,7 @@ import com.tinkerbug.tinkerrocket.protocol.ConfigIdentityMsg
 import com.tinkerbug.tinkerrocket.protocol.FileInfo
 import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
 import com.tinkerbug.tinkerrocket.protocol.pyroContinuityOf
+import com.tinkerbug.tinkerrocket.protocol.TrimAdvisory
 import com.tinkerbug.tinkerrocket.protocol.FileOpsDispatch
 import com.tinkerbug.tinkerrocket.protocol.FileOpsMessage
 import com.tinkerbug.tinkerrocket.protocol.FrequencyScanSample
@@ -176,6 +177,31 @@ public class DeviceSession(
     /** When the last telemetry frame (any kind) was decoded on this link. */
     public var lastTelemetryAtMs: Long? = null
         private set
+
+    /**
+     * #1060: milliseconds since the last telemetry frame REACHED THIS PHONE,
+     * or null if none ever has.
+     *
+     * Deliberately not [effectiveDataAgeMs], which is a different quantity —
+     * that one is the relayed rocket's own age stamp off the wire, and on a
+     * direct link it is whatever the FC reported. This is arrival time here,
+     * which is the only thing that can tell "connected and silent" apart from
+     * "connected and talking".
+     *
+     * Advanced by the 2 s RSSI tick as well as by frame arrival, because the
+     * whole point is to keep moving when frames STOP.
+     */
+    private val _telemetryAgeMs = MutableStateFlow<Long?>(null)
+    public val telemetryAgeMs: StateFlow<Long?> = _telemetryAgeMs.asStateFlow()
+
+    /**
+     * #1085: when a frame last arrived with the MTU-trim flag set, and whether
+     * the advisory is currently showing. Held for [TrimAdvisory.HOLD_MS] past
+     * the last one because the flag toggles with payload size frame to frame.
+     */
+    private var lastFieldsTrimmedAtMs: Long? = null
+    private val _trimAdvisoryVisible = MutableStateFlow(false)
+    public val trimAdvisoryVisible: StateFlow<Boolean> = _trimAdvisoryVisible.asStateFlow()
 
     /**
      * #140: the latched last-valid GPS fix for THIS session's rocket (direct
@@ -620,6 +646,8 @@ public class DeviceSession(
         // #377: the flags are now confirmed — flips exactly once per session.
         if (!_hasReceivedTelemetry.value) _hasReceivedTelemetry.value = true
         lastTelemetryAtMs = clock()
+        if (data.fieldsTrimmed) lastFieldsTrimmedAtMs = lastTelemetryAtMs   // #1085
+        refreshTelemetryAge()   // #1060: zero now, and ageing from here
 
         // Relayed via base station → route to the roster; only the FOCUSED
         // rocket mirrors into this session's own telemetry (#390).
@@ -1029,6 +1057,12 @@ public class DeviceSession(
                 // same tick so it advances even when no frames arrive.
                 refreshFocusedRelayFreshness()
                 recomputeEffective()
+                // #1060: and the direct-link continuity verdict, for the same
+                // reason. Nothing in pyroContinuityFlow's other inputs changes
+                // when frames simply stop — a connected-but-silent link leaves
+                // telemetry, effectiveDataStatus and isConnected all untouched
+                // — so without this the age term would never be re-read.
+                refreshTelemetryAge()
             }
         }
     }
@@ -1283,9 +1317,30 @@ public class DeviceSession(
      * link type as fixed for the lifetime of the session.
      */
     public fun pyroContinuityFlow(channel: Int): Flow<PyroContinuity> =
-        combine(telemetry, effectiveDataStatus, isConnected) { t, ds, connected ->
-            pyroContinuityOf(t, channel, connected, ds, isBaseStation)
+        combine(
+            telemetry,
+            effectiveDataStatus,
+            isConnected,
+            // #1060: the 2 s RSSI tick, so the verdict ages with no frames
+            // arriving. distinctUntilChanged below keeps this from recomposing
+            // Compose every tick — only a CHANGE of verdict propagates.
+            telemetryAgeMs,
+        ) { t, ds, connected, age ->
+            pyroContinuityOf(t, channel, connected, ds, isBaseStation, age)
         }.distinctUntilChanged()
+
+    /**
+     * #1060: milliseconds since the last telemetry frame, or null if none has
+     * ever arrived — which is the same answer for continuity purposes, and why
+     * [pyroContinuityOf] treats null as NO_DATA rather than as age zero.
+     */
+    private fun refreshTelemetryAge() {
+        val now = clock()
+        _telemetryAgeMs.value = lastTelemetryAtMs?.let { now - it }
+        // #1085: rides the same tick — the advisory has to expire on its own
+        // when trimmed frames stop arriving, not merely when one arrives.
+        _trimAdvisoryVisible.value = TrimAdvisory.isShowing(lastFieldsTrimmedAtMs, now)
+    }
 
     /**
      * Snapshot of [pyroContinuityFlow] for non-Compose callers. Never use the
@@ -1299,6 +1354,7 @@ public class DeviceSession(
             isConnected.value,
             effectiveDataStatus.value,
             isBaseStation,
+            lastTelemetryAtMs?.let { clock() - it },   // #1060: computed fresh
         )
 
     /**

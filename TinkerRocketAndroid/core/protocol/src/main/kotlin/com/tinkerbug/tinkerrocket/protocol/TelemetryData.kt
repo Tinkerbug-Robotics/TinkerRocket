@@ -280,6 +280,34 @@ public data class TelemetryData(
      * running off USB shows on every line.  Em dash for absent, as elsewhere
      * on this dashboard (iOS says "N/A" here).
      */
+    /**
+     * #1071: lat/lon for display, or "N/A" when there is no fix. iOS twin:
+     * `TelemetryData.coordinatesDisplay`.
+     *
+     * The dashboard used to format this inline with `latitude ?: 0.0`, which
+     * printed `0.000000, 0.000000` in the same six-decimal monospace a real
+     * position uses — a null island off the Gulf of Guinea, rendered as a
+     * measurement. Null is the NORMAL state here, not an error: the emitters
+     * skip `lat`/`lon` entirely when the value is NaN, and every source sets
+     * NaN with no fix, so an absent key is what "no fix yet" looks like on the
+     * wire.
+     *
+     * Em dash is this dashboard's convention for absent elsewhere, but iOS says
+     * "N/A" for these two specifically and a coordinate pair is exactly where
+     * the platforms must not disagree — so this is the one place Android
+     * follows iOS's wording rather than its own.
+     */
+    public val coordinatesDisplay: String
+        get() {
+            val la = latitude
+            val lo = longitude
+            return if (la != null && lo != null) {
+                String.format(java.util.Locale.ROOT, "%.6f, %.6f", la, lo)
+            } else {
+                "N/A"
+            }
+        }
+
     /** The base station's own pack, same formatting rules as [socDisplay]. */
     public val bsSocDisplay: String
         get() = bsSoc?.let {

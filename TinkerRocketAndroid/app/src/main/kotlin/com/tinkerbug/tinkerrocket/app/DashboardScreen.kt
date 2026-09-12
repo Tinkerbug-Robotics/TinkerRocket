@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.SignalCellularOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -55,6 +56,9 @@ import com.tinkerbug.tinkerrocket.protocol.SignalQuality
 import com.tinkerbug.tinkerrocket.protocol.pyroContinuityOf
 import com.tinkerbug.tinkerrocket.protocol.railAmpsDisplay   // #850
 import com.tinkerbug.tinkerrocket.protocol.showStateBanner
+import com.tinkerbug.tinkerrocket.protocol.showValueViews
+import com.tinkerbug.tinkerrocket.protocol.TrimAdvisory
+import com.tinkerbug.tinkerrocket.protocol.showRocketBatteryRow
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.protocol.ReadinessHold
 import com.tinkerbug.tinkerrocket.session.FleetDevice
@@ -153,6 +157,9 @@ fun DashboardScreen(
     // #1039: the freshness AGE, not just the status. It already reaches the
     // pyro tiles; the go/no-go banner is the one consumer that never got it.
     val dataAgeMs by session.effectiveDataAgeMs.collectAsState()
+    // #1060: time since a frame reached this phone — distinct from
+    // effectiveDataAgeMs, which is the relayed rocket's own age stamp.
+    val telemetryAgeMs by session.telemetryAgeMs.collectAsState()
     val rssi by session.connectedRssi.collectAsState()
     val poweringOn by session.poweringOn.collectAsState()
     val remoteRockets by session.remoteRockets.collectAsState()
@@ -268,6 +275,38 @@ fun DashboardScreen(
                 syncer = syncer,
                 onOpen = { onTool("preflight") },
             )
+        }
+
+        // #1085: the frame told us it was trimmed to fit the MTU window, so
+        // say so — the firmware holds seven bytes back specifically so this
+        // flag always fits "so the partial frame isn't a silent blackout", and
+        // until now neither app read it. Without this the dropped keys fall
+        // back to their decode defaults and the dashboard reads as a rocket
+        // whose sensors stopped, mid-flight, while the one field guaranteed to
+        // arrive is the one saying the frame was partial.
+        //
+        // Same rule as the two lines around it: advisory only, never a
+        // recolour of the state banner. Held for a few seconds by the session
+        // because the flag toggles with payload size frame to frame.
+        val trimAdvisory by session.trimAdvisoryVisible.collectAsState()
+        if (trimAdvisory) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.SignalCellularAlt,
+                    contentDescription = null,
+                    tint = tr.statusWarn,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "  ${TrimAdvisory.TEXT}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tr.statusWarn,
+                )
+            }
         }
 
         // "LoRa off": one quiet line, same shape and placement as the
@@ -395,10 +434,25 @@ fun DashboardScreen(
         // iOS section order (screenshots 2026-07-31): the summary sits right
         // after the banners on BS links but after Signal/Battery/IMU on
         // direct links — matched exactly, per link type.
-        if (session.isBaseStation) FlightSummaryCard(telemetry)
+        // #1047: a base station with no rocket caught still pushes a frame so
+        // its own battery/logging/RSSI stay live, and the rocket half of it is
+        // a zero-init struct — but nsat/palt/soc/vol are emitted
+        // unconditionally, so the zeros arrive as readings. iOS has gated
+        // these since the layout was written; Android had ported only
+        // showStateBanner. Hidden, not zeroed: an absent card reads as "no
+        // data yet", a 0.00 V row reads as a flat battery.
+        val showValues = showValueViews(dataStatus)
+        if (session.isBaseStation && showValues) FlightSummaryCard(telemetry)
 
         SignalCard(telemetry, rssi, session.isBaseStation)
-        BatteryCard(telemetry, session.isBaseStation)
+        // #1047: the base station's OWN battery is a true live reading and must
+        // keep rendering — it is what says the BS is up. Only the rocket row is
+        // fabricated, so the row goes, not the card.
+        BatteryCard(
+            telemetry,
+            session.isBaseStation,
+            showRocketRow = showRocketBatteryRow(dataStatus, session.isBaseStation),
+        )
         // #850: rail currents belong with the live telemetry, not only on the
         // pre-power-on screen — a stalling servo is watched WHILE it runs.
         if (telemetry.camCurrent != null || telemetry.servoCurrent != null) {
@@ -407,15 +461,15 @@ fun DashboardScreen(
         // Orientation source is picked strictly by link type (iOS
         // RocketTelemetryCards): BS = relayed flags2 "imo", direct = the
         // imu_orient config readback.  No cross-fallback on either platform.
-        ImuCard(
+        if (showValues) ImuCard(
             telemetry, session.isBaseStation,
             orientationName = if (session.isBaseStation) telemetry.relayedOrientationName else imuOrientName,
             orientationMode = if (session.isBaseStation) telemetry.relayedOrientationMode else imuOrientMode,
         )
 
-        if (!session.isBaseStation) FlightSummaryCard(telemetry)
+        if (!session.isBaseStation && showValues) FlightSummaryCard(telemetry)
 
-        GpsRow(telemetry)
+        if (showValues) GpsRow(telemetry)
 
         // Direction/distance to rocket (BS links only — the recovery walk).
         // Reads the LATCHED lastValidRocketFix, never per-frame lat/lon:
@@ -701,6 +755,10 @@ fun DashboardScreen(
                     isConnected = connected,
                     dataStatus = dataStatus,
                     isBaseStation = session.isBaseStation,
+                    // #1060: connected is not the same as talking. This
+                    // recomposes on the session's 2 s freshness tick, so the
+                    // verdict ages even when no frames arrive.
+                    telemetryAgeMs = telemetryAgeMs,
                 )
                 val (enabled, mode, value) = channelConfig(ch)
                 PyroTile(
@@ -1952,7 +2010,15 @@ private fun SignalBar(
  * "[BATT] 4.18 V | 98% SoC | 456 mA" while the card showed one Rocket row).
  */
 @Composable
-private fun BatteryCard(telemetry: TelemetryData, isBaseStation: Boolean) {
+private fun BatteryCard(
+    telemetry: TelemetryData,
+    isBaseStation: Boolean,
+    // #1047: false while a base station is SYNCING with no rocket caught — the
+    // rocket half of that frame is a zero-init struct, so its row would read
+    // 0.0% / 0.00 V / 0 mA as if measured. Defaulted true so every other
+    // caller and every preview is unchanged.
+    showRocketRow: Boolean = true,
+) {
     val caption = MaterialTheme.typography.bodySmall
     val mono = androidx.compose.ui.text.font.FontFamily.Monospace
 
@@ -1984,12 +2050,17 @@ private fun BatteryCard(telemetry: TelemetryData, isBaseStation: Boolean) {
                     )
                 }
             }
-            row(
-                "Rocket",
-                telemetry.socDisplay,
-                telemetry.voltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
-                telemetry.current?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
-            )
+            // #1047: dropped, not zeroed, while a base station is SYNCING with
+            // no rocket caught — those three values are a zero-init struct, not
+            // a flat pack. The Base Stn row below is a true reading and stays.
+            if (showRocketRow) {
+                row(
+                    "Rocket",
+                    telemetry.socDisplay,
+                    telemetry.voltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
+                    telemetry.current?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
+                )
+            }
             // iOS DashboardView.swift:1294 gates the same row the same way.
             if (isBaseStation) {
                 row(
@@ -2148,10 +2219,10 @@ private fun GpsRow(telemetry: TelemetryData) {
         ) {
             Text("GPS", style = MaterialTheme.typography.titleMedium)
             Text(
-                String.format(
-                    Locale.ROOT, "%.6f, %.6f",
-                    telemetry.latitude ?: 0.0, telemetry.longitude ?: 0.0,
-                ),
+                // #1071: was `latitude ?: 0.0`, which printed the null island
+                // as a six-decimal fix. The formatter is in :core:protocol
+                // beside the iOS twin so both platforms answer identically.
+                telemetry.coordinatesDisplay,
                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily = mono),
                 modifier = Modifier.weight(1f),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,

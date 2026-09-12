@@ -9,6 +9,13 @@ package com.tinkerbug.tinkerrocket.protocol
  * again on the iOS Settings row in #828) — which an operator reads as a dead
  * igniter or an already-fired charge, on a channel that is in fact live.
  */
+/**
+ * #1060: how old the last telemetry frame may be before continuity stops being
+ * a measurement. Matches iOS `BLEDevice.telemetryStaleThresholdMs`; the two
+ * must move together or the platforms disagree about a safety readout.
+ */
+public const val TELEMETRY_STALE_THRESHOLD_MS: Long = 3000L
+
 public enum class PyroContinuity {
     /** Measured: continuity present. */
     PRESENT,
@@ -34,6 +41,10 @@ public enum class PyroContinuity {
  * @param dataStatus the session's EFFECTIVE data status, not
  *   [TelemetryData.dataStatus] — on a relay link the focused rocket can be
  *   stale while the base station's own frames are live.
+ * @param telemetryAgeMs milliseconds since the last telemetry frame, or null
+ *   if none has ever arrived. #1060: a connected link that stops notifying
+ *   leaves [dataStatus] LIVE indefinitely, so without this a green CONT is
+ *   held for as long as the connection stands.
  */
 public fun pyroContinuityOf(
     telemetry: TelemetryData,
@@ -41,8 +52,23 @@ public fun pyroContinuityOf(
     isConnected: Boolean,
     dataStatus: TelemetryData.DataStatus,
     isBaseStation: Boolean,
+    telemetryAgeMs: Long?,
 ): PyroContinuity {
     if (!isConnected || dataStatus != TelemetryData.DataStatus.LIVE) {
+        return PyroContinuity.NO_DATA
+    }
+
+    // #1060: connected is not the same as talking. iOS has carried this guard
+    // since f25af04 (`BLEDevice.swift`, threshold 3000 ms); the Android half
+    // was never ported, and this function took no clock at all.
+    //
+    // The window is narrow but it is the one that matters: a direct link where
+    // the OC holds the BLE connection up and stops sending frames. The BLE
+    // flight-log download is such a path — its `while (!eof)` loop runs inside
+    // loop_oc and blocks the telemetry send. An operator pulling a log off an
+    // ARMED rocket would read a green CONT that is not a current measurement.
+    // Stale-green on a safety readout is the failure direction that matters.
+    if (telemetryAgeMs == null || telemetryAgeMs > TELEMETRY_STALE_THRESHOLD_MS) {
         return PyroContinuity.NO_DATA
     }
 
