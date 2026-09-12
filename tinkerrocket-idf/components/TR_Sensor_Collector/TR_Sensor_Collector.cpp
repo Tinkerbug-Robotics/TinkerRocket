@@ -11,6 +11,42 @@
 
 static const char* SC_TAG = "SENSORS";
 
+// #1140 item 1: the MMC5983MA's CM_FREQ and filter bandwidth are not
+// independent — the datasheet's register table pairs them, and the two sites
+// that configured this part used two different, both partly wrong, ladders.
+//
+// begin() picked BW=400 for every configured rate below 1000, so the shipping
+// 200 Hz configuration programmed CM_FREQ=200 against BW=400, a pairing the
+// table does not list. The 1000 Hz case in that same expression satisfies the
+// analogous rule exactly (BW=800), which is what makes the 200 Hz case look
+// like an oversight rather than a choice. The stall-recovery path then used a
+// third mapping — 400 at >=200, 100 below — so a recovery at a configured
+// 50/100 Hz silently reprogrammed the filter to a bandwidth begin() had never
+// chosen. The two were never reconciled.
+//
+// One derivation, keyed off the frequency actually selected, used by both.
+static inline uint16_t mmcBandwidthForFreq(uint16_t cm_freq_hz)
+{
+    if (cm_freq_hz >= 1000U) return 800U;   // CM_FREQ 1000 pairs with BW 800
+    if (cm_freq_hz >= 200U)  return 200U;   // CM_FREQ 200 pairs with BW 200
+    return 100U;                            // lower rates: the quietest filter
+}
+
+// The continuous-mode frequency for a configured update rate — the identical
+// ternary ladder that used to be written out at both sites.
+static inline uint16_t mmcFreqForRate(uint16_t rate_hz)
+{
+    if (rate_hz >= 1000U) return 1000U;
+    if (rate_hz >= 200U)  return 200U;
+    if (rate_hz >= 100U)  return 100U;
+    if (rate_hz >= 50U)   return 50U;
+    if (rate_hz >= 20U)   return 20U;
+    if (rate_hz >= 10U)   return 10U;
+    if (rate_hz >= 1U)    return 1U;
+    return 0U;
+}
+
+
 // IDF-native timing helpers — replace the Arduino-shim millis()/micros()
 // and delay() that came in via compat.h.  See main.cpp for the same
 // pattern; the `time_*` names avoid colliding with local vars and
@@ -486,14 +522,12 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         (void)mmc5983ma.enableAutomaticSetReset();  // Eliminates hysteresis drift
 
         bool mmc_ok = true;
-        mmc_ok = mmc_ok && mmc5983ma.setFilterBandwidth((MMC5983MA_UPDATE_RATE >= 1000U) ? 800U : 400U);
-        mmc_ok = mmc_ok && mmc5983ma.setContinuousModeFrequency((MMC5983MA_UPDATE_RATE >= 1000U) ? 1000U
-                                                     : (MMC5983MA_UPDATE_RATE >= 200U) ? 200U
-                                                     : (MMC5983MA_UPDATE_RATE >= 100U) ? 100U
-                                                     : (MMC5983MA_UPDATE_RATE >= 50U) ? 50U
-                                                     : (MMC5983MA_UPDATE_RATE >= 20U) ? 20U
-                                                     : (MMC5983MA_UPDATE_RATE >= 10U) ? 10U
-                                                     : (MMC5983MA_UPDATE_RATE >= 1U) ? 1U : 0U);
+        // #1140 item 1: bandwidth derived FROM the selected frequency, so
+        // the datasheet's CM_FREQ/BW pairing holds by construction rather
+        // than by two ladders happening to agree.
+        const uint16_t mmc_freq = mmcFreqForRate(MMC5983MA_UPDATE_RATE);
+        mmc_ok = mmc_ok && mmc5983ma.setFilterBandwidth(mmcBandwidthForFreq(mmc_freq));
+        mmc_ok = mmc_ok && mmc5983ma.setContinuousModeFrequency(mmc_freq);
         mmc_ok = mmc_ok && mmc5983ma.enableContinuousMode();
         mmc_ok = mmc_ok && mmc5983ma.enableInterrupt();
 
@@ -941,17 +975,14 @@ void SensorCollector::pollIMUdata(void* parameter)
                 self->mmc_last_recover_time_us = now_us;
 
                 const bool want_max_rate = (self->MMC5983MA_UPDATE_RATE >= 1000U);
-                const uint16_t freq = want_max_rate ? 1000U
-                                    : (self->MMC5983MA_UPDATE_RATE >= 200U) ? 200U
-                                    : (self->MMC5983MA_UPDATE_RATE >= 100U) ? 100U
-                                    : (self->MMC5983MA_UPDATE_RATE >= 50U) ? 50U
-                                    : (self->MMC5983MA_UPDATE_RATE >= 20U) ? 20U
-                                    : (self->MMC5983MA_UPDATE_RATE >= 10U) ? 10U
-                                    : (self->MMC5983MA_UPDATE_RATE >= 1U) ? 1U : 0U;
-
-                const uint16_t bw = want_max_rate ? 800U
-                                  : (self->MMC5983MA_UPDATE_RATE >= 200U) ? 400U
-                                  : 100U;
+                // #1140 item 1: the SAME derivation begin() uses. This path
+                // had its own frequency ladder AND its own bandwidth rule,
+                // so a recovery at a configured 50/100 Hz left the part
+                // filtered differently from how begin() brought it up.
+                const uint16_t freq = want_max_rate
+                                    ? 1000U
+                                    : mmcFreqForRate(self->MMC5983MA_UPDATE_RATE);
+                const uint16_t bw = mmcBandwidthForFreq(freq);
                 bool recovered = true;
                 recovered = recovered && self->mmc5983ma.setFilterBandwidth(bw);
                 recovered = recovered && self->mmc5983ma.setContinuousModeFrequency(freq);
