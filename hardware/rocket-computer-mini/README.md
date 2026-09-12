@@ -363,12 +363,13 @@ none have been fixed here.
 Re-measured on main `80e1860d` (2026-09-12) with `kicad-cli` at
 `--severity-all`, DRC with `--schematic-parity`. The board file on main is the
 fabbed board: copper and placement identical to the
-`rocket-computer-mini-v1.0.1` tag, only 3D-model references touched since.
+`rocket-computer-mini-v1.0.1` tag; only 3D-model references and `U5` pad 12's
+paste apertures (window-paned 2026-09-12, #960) touched since.
 
 | | at fork | after the rev change | after P4 removal | after the second S3 | **V1.0.1 / main** |
 |---|---|---|---|---|---|
 | ERC (`--severity-all`) | 1012 | 1012 | 823 → 610 | 739 | **795** (10 errors) |
-| DRC (`--severity-all`) | 26 | 28 | 88 | not re-run | **22** (2 errors) |
+| DRC (`--severity-all`) | 26 | 28 | 88 | not re-run | **23** (2 errors) |
 | Schematic parity | 11 | 11 | 8 | not re-run | **0** |
 | Unconnected | 0 | 0 | 0 | not re-run | **0** |
 
@@ -383,12 +384,13 @@ numbers are:
   half-grid offset — 56 `pin_to_pin` and 25 `lib_symbol_mismatch`; the last two
   are the library-hygiene items on
   [#1030](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1030).
-- **DRC 22.** The 2 errors are courtyard overlaps between the fiducials `FID2` /
+- **DRC 23.** The 2 errors are courtyard overlaps between the fiducials `FID2` /
   `FID3` and the connectors `J6` / `J2` they sit beside — accepted; a fiducial
-  inside a connector's courtyard costs nothing. The 20 warnings are silk over
+  inside a connector's courtyard costs nothing. The 21 warnings are silk over
   copper or too near the edge (`C130`'s outline over four pads, `J8` and `J2` at
-  the board edge), three silk overlaps, five `lib_footprint_mismatch` against the
-  shared library and one `lib_footprint_issues` on the logo. No `track_dangling`
+  the board edge), three silk overlaps, six `lib_footprint_mismatch` against the
+  shared library (`U5`'s is pad 12's window-paned paste, a board-copy-only
+  change from 2026-09-12) and one `lib_footprint_issues` on the logo. No `track_dangling`
   or `via_dangling` remain: the P4-era stubs this section used to list were
   cleared in the layout pass, and `U32`, `U33`, `U1`, `S1` and `D9` — once
   schematic-only — are placed and routed.
@@ -440,8 +442,8 @@ after its own review
 ([#993](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/993),
 2026-09-01) and the 2026-09-04 fab gate recorded in
 [`FABRICATION-NOTES.md`](FABRICATION-NOTES.md). The board file on main is that
-board: copper and placement identical to the tag, only 3D-model references
-touched since (checked 2026-09-12).
+board: copper and placement identical to the tag; only 3D-model references and
+`U5` pad 12's paste apertures (#960) touched since (checked 2026-09-12).
 
 Board file, verified 2026-09-12 on main `80e1860d`:
 
@@ -452,8 +454,8 @@ Board file, verified 2026-09-12 on main `80e1860d`:
   0 unconnected, 0 schematic-parity items. The netlist exports **229
   components, 238 nets**, no duplicate references and no single-node nets. (The
   214/205 this paragraph gave on 2026-08-30 was the pre-layout schematic.)
-- **DRC 22 at `--severity-all`**: 2 courtyard-overlap errors (`FID2` inside
-  `J6`'s courtyard, `FID3` inside `J2`'s — accepted) and 20 warnings, itemised
+- **DRC 23 at `--severity-all`**: 2 courtyard-overlap errors (`FID2` inside
+  `J6`'s courtyard, `FID3` inside `J2`'s — accepted) and 21 warnings, itemised
   under *Where the numbers stand now*.
 - **The net names match the schematic** (`VBUCK_OK`, `FC_ARM`, `OC_ARM_EN` and
   the TPS61094 nets are all on the board). Until the 2026-08-30 re-sync the
