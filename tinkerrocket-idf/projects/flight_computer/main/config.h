@@ -793,7 +793,16 @@ struct config : board_pins
     static constexpr bool ENABLE_SOUNDS = false;
     static constexpr uint16_t BLUE_LED_FLASH_MS = 40;
     static constexpr uint32_t HEARTBEAT_BEEP_INTERVAL_MS = 1000;
-    static constexpr uint16_t HEARTBEAT_BEEP_FREQ_HZ = 2200;
+    // #732: LS1 (MLT-8530) is a passive magnetic transducer rated at 2.7 kHz
+    // and sharply peaked there. The old tones — 2200 Hz heartbeat, 2600/1900 Hz
+    // boot chirp, 2600 Hz confirmation — drove it 4-30 % off resonance: thin,
+    // quiet, "not driven right" (bench 2026-08-10). Every tone now sits on
+    // resonance; the boot chirp keeps its two-note shape with the second note
+    // 300 Hz below, still inside the peak. Constants only — the software-timer
+    // bit-bang stays (the servo driver holds all four P4 LEDC timers).
+    static constexpr uint16_t PIEZO_TONE_HZ     = 2700;
+    static constexpr uint16_t PIEZO_TONE_LOW_HZ = 2400;
+    static constexpr uint16_t HEARTBEAT_BEEP_FREQ_HZ = PIEZO_TONE_HZ;
     static constexpr uint16_t HEARTBEAT_BEEP_DURATION_MS = 50;
     // Set true if you also want periodic beeps during INFLIGHT.
     static constexpr bool HEARTBEAT_BEEP_IN_FLIGHT = false;

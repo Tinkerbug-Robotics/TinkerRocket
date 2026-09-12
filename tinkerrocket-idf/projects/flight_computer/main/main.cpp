@@ -3733,7 +3733,7 @@ static inline void startBootReadyChirp(uint32_t now_ms)
     {
         return;
     }
-    piezoStart(2600, 90);
+    piezoStart(config::PIEZO_TONE_HZ, 90);
     boot_chirp_phase = BootChirpPhase::GapAfterBeep1;
     boot_chirp_next_ms = now_ms + 150U; // 90ms beep + 60ms gap
 }
@@ -3747,7 +3747,7 @@ static inline void serviceBootReadyChirp(uint32_t now_ms)
         case BootChirpPhase::GapAfterBeep1:
             if ((int32_t)(now_ms - boot_chirp_next_ms) >= 0)
             {
-                piezoStart(1900, 130);
+                piezoStart(config::PIEZO_TONE_LOW_HZ, 130);
                 boot_chirp_phase = BootChirpPhase::WaitingBeep2End;
                 boot_chirp_next_ms = now_ms + 130U;
             }
@@ -7143,7 +7143,7 @@ static void loop_fc()
                 // Confirmation beep so the user knows it worked
                 if (piezo_pwm_ready)
                 {
-                    piezoStart(2600, 100);
+                    piezoStart(config::PIEZO_TONE_HZ, 100);
                 }
             }
             else if (out_pending_command == SOUNDS_DISABLE)
