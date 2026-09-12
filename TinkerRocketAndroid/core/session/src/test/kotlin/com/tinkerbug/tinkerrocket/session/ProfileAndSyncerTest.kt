@@ -1,5 +1,6 @@
 package com.tinkerbug.tinkerrocket.session
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.currentTime
@@ -13,6 +14,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -631,6 +633,107 @@ class ActiveRocketSyncerTest {
         r.syncer.importRocketSensorCalIntoActiveProfile(nowMs = 9)
         runCurrent()
         assertEquals("boardA", r.store.activeProfile?.sensorCal?.calibratedOnUnitID)
+    }
+
+    /**
+     * #1059 second half: the on-pad RUN.  cmd 21 goes out, the FC's ~10 s
+     * window ends in a SENSOR_CAL_STATUS frame, and that frame lands in the
+     * active profile board-tagged — iOS's pendingCalSnapshot flow, keyed on
+     * the frame instead of a blind 12 s timer.
+     */
+    @Test
+    fun onPadSensorCal_sendsCmd21AndSnapshotsTheAnswer() = runTest {
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val before = r.fw.commandFrames.size
+        val run = async { r.syncer.runOnPadSensorCal { currentTime } }
+        runCurrent()
+        assertEquals(before + 1, r.fw.commandFrames.size, "exactly one frame on the way in")
+        assertEquals(BleCommandId.SENSOR_CAL_RUN, r.fw.commandFrames.last()[0].toInt())
+        assertNull(r.store.activeProfile?.sensorCal, "nothing saved before the answer")
+
+        advanceTimeBy(10_000)
+        r.fw.emitFileOpsFrame(
+            r.fw.sensorCalStatusFrame(gyroX = 11, gyroY = -22, gyroZ = 33, hgZ = 9.75f),
+        )
+        runCurrent()
+        val result = assertIs<ActiveRocketSyncer.SensorCalRun.Answered>(run.await())
+        assertTrue(result.ranWindow, "10 s is a window")
+        assertTrue(result.saved)
+        assertEquals(10_000, result.elapsedMs)
+        val cal = assertNotNull(r.store.activeProfile?.sensorCal)
+        assertEquals(11, cal.gyroX)
+        assertEquals(-22, cal.gyroY)
+        assertEquals(9.75f, cal.hgZ)
+        assertEquals("boardA", cal.calibratedOnUnitID)
+        assertIs<ActiveRocketSyncer.CalAdvisory.None>(r.syncer.sensorCalAdvisory.value)
+    }
+
+    @Test
+    fun onPadSensorCal_aRefusalComesBackAtOnceAndIsNotARun() = runTest {
+        // The FC re-publishes the calibration it already holds, unchanged,
+        // the moment it refuses (launch detected / INFLIGHT / LANDED / window
+        // already open).  The frame has no failure field, so the elapsed time
+        // is the only tell — and a StateFlow would have swallowed the equal
+        // value entirely, which is why the session carries every frame.
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        // The rocket's stored cal as read at connect (cmd 63's answer).
+        r.fw.emitFileOpsFrame(r.fw.sensorCalStatusFrame(gyroX = 5))
+        runCurrent()
+        assertIs<ActiveRocketSyncer.CalAdvisory.RocketHasUnsavedCal>(r.syncer.sensorCalAdvisory.value)
+
+        val run = async { r.syncer.runOnPadSensorCal { currentTime } }
+        runCurrent()
+        advanceTimeBy(300)
+        r.fw.emitFileOpsFrame(r.fw.sensorCalStatusFrame(gyroX = 5))   // byte-identical re-publish
+        runCurrent()
+        val result = assertIs<ActiveRocketSyncer.SensorCalRun.Answered>(run.await())
+        assertFalse(result.ranWindow, "300 ms cannot have measured anything")
+        assertEquals(300, result.elapsedMs)
+        // What the rocket holds is still the calibration it is flying on, so
+        // keeping it is right — and the advisory that offered the import is
+        // cleared, not re-raised by the answer.
+        assertTrue(result.saved)
+        assertEquals(5, r.store.activeProfile?.sensorCal?.gyroX)
+        assertIs<ActiveRocketSyncer.CalAdvisory.None>(r.syncer.sensorCalAdvisory.value)
+    }
+
+    @Test
+    fun onPadSensorCal_noAnswerTimesOutAndLeavesTheProfileAlone() = runTest {
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val run = async { r.syncer.runOnPadSensorCal { currentTime } }
+        runCurrent()
+        advanceTimeBy(ActiveRocketSyncer.SENSOR_CAL_RUN_TIMEOUT_MS + 1)
+        runCurrent()
+        assertIs<ActiveRocketSyncer.SensorCalRun.NoAnswer>(run.await())
+        assertNull(r.store.activeProfile?.sensorCal)
+    }
+
+    @Test
+    fun onPadSensorCal_anAnswerBeforeTheBoardIdIsKeptOnTheRocketButNotSaved() = runTest {
+        // Same guard as the import: a cal tagged "" would take WarnMismatch on
+        // every later connect.  The run reports it so the screen can say why.
+        val r = rig(identityJson = null)
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val run = async { r.syncer.runOnPadSensorCal { currentTime } }
+        runCurrent()
+        advanceTimeBy(10_000)
+        r.fw.emitFileOpsFrame(r.fw.sensorCalStatusFrame(gyroX = 7))
+        runCurrent()
+        val result = assertIs<ActiveRocketSyncer.SensorCalRun.Answered>(run.await())
+        assertTrue(result.ranWindow)
+        assertFalse(result.saved)
+        assertNull(r.store.activeProfile?.sensorCal)
     }
 
     @Test

@@ -278,6 +278,17 @@ public class DeviceSession(
     private val _sensorCalStatus = MutableStateFlow<SensorCalStatus?>(null)
     public val sensorCalStatus: StateFlow<SensorCalStatus?> = _sensorCalStatus.asStateFlow()
 
+    /**
+     * Every sensor-cal status frame as it arrives (#1059).  A pad calibration
+     * the FC refuses re-publishes the calibration it already holds, byte for
+     * byte, and a StateFlow swallows an equal value — so a run that waited on
+     * [sensorCalStatus] would never see that answer.  [sensorCalStatus]
+     * carries the latest; this carries each one (the mag twin is
+     * [magCalFrames]).
+     */
+    private val _sensorCalFrames = MutableSharedFlow<SensorCalStatus>(extraBufferCapacity = 16)
+    public val sensorCalFrames: SharedFlow<SensorCalStatus> = _sensorCalFrames.asSharedFlow()
+
     private val _rocketStorage = MutableStateFlow<RocketStorageStats?>(null)
     public val rocketStorage: StateFlow<RocketStorageStats?> = _rocketStorage.asStateFlow()
 
@@ -821,7 +832,10 @@ public class DeviceSession(
                 _magCalStatus.value = msg.status
                 _magCalFrames.tryEmit(msg.status)
             }
-            is FileOpsMessage.SensorCal -> _sensorCalStatus.value = msg.status
+            is FileOpsMessage.SensorCal -> {
+                _sensorCalStatus.value = msg.status
+                _sensorCalFrames.tryEmit(msg.status)
+            }
             is FileOpsMessage.RocketStorage -> _rocketStorage.value = msg.stats
             is FileOpsMessage.BsStorage -> _bsStorage.value = msg.stats
             is FileOpsMessage.PyroRefusal -> {
