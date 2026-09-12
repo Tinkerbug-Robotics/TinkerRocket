@@ -29,6 +29,9 @@ typedef struct {
 
 psa_status_t psa_crypto_init(void);
 psa_status_t psa_hash_setup(psa_hash_operation_t* operation, psa_algorithm_t alg);
+// Test hook (host shim only): fail psa_hash_update after N calls; -1 = never.
+extern int psa_shim_fail_update_after;
+
 psa_status_t psa_hash_update(psa_hash_operation_t* operation,
                              const uint8_t* input, size_t input_length);
 psa_status_t psa_hash_finish(psa_hash_operation_t* operation,
