@@ -301,6 +301,13 @@ fun MapScreen(
             }
         }
 
+        // #1092 item 3: the OFFLINE pill, iOS MapView.swift:403. Bottom-end so
+        // it cannot collide with the staleness badge (top-start) or the basemap
+        // controls (top-end). Renders nothing while online.
+        OfflinePill(
+            Modifier.align(Alignment.BottomEnd).padding(TrSpacing.rowSpacing),
+        )
+
         // Floating controls, iOS MapView.swift arrangement: source menu over
         // recenter, top-trailing, each a 44dp glyph on a plate.
         Column(

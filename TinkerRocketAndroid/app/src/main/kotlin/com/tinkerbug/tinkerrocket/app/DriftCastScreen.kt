@@ -301,6 +301,12 @@ fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
 
         Box(Modifier.fillMaxWidth().height(300.dp).padding(top = 6.dp)) {
             AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+            // #1092 item 3: iOS DriftCastView.swift:742 carries the same pill.
+            // Top-end, not bottom-end: this map box is a fixed 300 dp, and in
+            // landscape its bottom edge lands at the screen edge, where a
+            // bottom-anchored pill is clipped (seen on the Pixel 8). The top
+            // corner is always on screen and nothing else occupies it here.
+            OfflinePill(Modifier.align(Alignment.TopEnd).padding(8.dp))
         }
 
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
