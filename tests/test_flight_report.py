@@ -309,6 +309,10 @@ def test_globe_carries_both_tracks(report_html: Path) -> None:
     # residual above is a datum error or a real launch-time disagreement.
     assert spec["referenceSource"] in ("logged", "reconstructed")
     assert spec["referenceConverged"] in (True, False, None)
+    # This fixture is exactly the case the gate exists for: real-pad snapshots
+    # beside a GNSS stream frozen at (38, -122). It must fall back, and say so.
+    assert spec["referenceSource"] == "reconstructed"
+    assert "refused" in (spec["referenceNote"] or "")
 
 
 def test_globe_heights_are_above_the_pad(report_html: Path) -> None:
@@ -1089,16 +1093,28 @@ def test_globe_reads_the_logged_origin_before_rebuilding_it() -> None:
     its first fix is not a reference."""
     from flight_report.modules import globe
 
-    logged = globe._logged_reference({"Snapshot": [
+    snaps = {"Snapshot": [
         {"ref_lat": 0.0, "ref_lon": 0.0, "ref_alt_m": 0.0, "ref_datum_converged": False},
         {"ref_lat": 39.4680331, "ref_lon": -75.2929036, "ref_alt_m": 33.4, "ref_datum_converged": True},
         {"ref_lat": 39.5, "ref_lon": -75.3, "ref_alt_m": 40.0, "ref_datum_converged": True},
-    ]})
+    ]}
+    logged, note = globe._logged_reference(snaps)
     assert logged == (39.4680331, -75.2929036, 33.4, True), "the first real reference, not the null-island one"
+    assert note is None
 
-    assert globe._logged_reference({"Snapshot": []}) is None
-    assert globe._logged_reference({}) is None
-    assert globe._logged_reference({"Snapshot": [{"ref_lat": float("nan"), "ref_lon": 1.0, "ref_alt_m": 2.0}]}) is None
+    # The plausibility gate: the logged origin is the mean of the very fixes
+    # the GNSS track starts from, so it must sit within metres of their pad
+    # mean. 38.8 m away (Eagle Claw's reconstruction error) passes; the golden
+    # fixture's real-pad snapshots beside fixes frozen at (38, -122) do not.
+    near = (39.4683812, -75.2928964, 26.4)
+    assert globe._logged_reference(snaps, near)[0] == logged
+    far = (38.0, -122.0, 4.5)
+    rejected, why = globe._logged_reference(snaps, far)
+    assert rejected is None and "refused" in why and "km" in why
+
+    assert globe._logged_reference({"Snapshot": []})[0] is None
+    assert globe._logged_reference({})[0] is None
+    assert globe._logged_reference({"Snapshot": [{"ref_lat": float("nan"), "ref_lon": 1.0, "ref_alt_m": 2.0}]})[0] is None
     # A pre-#834 snapshot with no convergence flag still yields the origin.
-    assert globe._logged_reference({"Snapshot": [{"ref_lat": 40.1, "ref_lon": -105.2, "ref_alt_m": 1500.0}]}) == (40.1, -105.2, 1500.0, None)
+    assert globe._logged_reference({"Snapshot": [{"ref_lat": 40.1, "ref_lon": -105.2, "ref_alt_m": 1500.0}]})[0] == (40.1, -105.2, 1500.0, None)
 

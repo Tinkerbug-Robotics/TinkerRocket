@@ -37,9 +37,14 @@ it by averaging the pad fixes it could see, and #1419 measured what that costs:
 starts 0.43 s before launch — the whole nav track shifted bodily, read as
 "divergence". The reconstruction survives only as the fallback for a log with
 no snapshot (pre-snapshot firmware, or one that ended before launch), and the
-spec says which was used (`referenceSource`). `originResidualM` stays: with a
-logged origin it measures how far the two solutions really are apart at launch,
-and a large value is then a finding, not a datum error.
+spec says which was used (`referenceSource`). One guard: the logged origin is
+the mean of the very fixes the GNSS track starts from, so on any real log the
+two agree to metres; a snapshot origin more than `REF_PLAUSIBLE_M` from the
+fixes' own pad mean is not a reference for THIS GNSS stream (the synthetic
+golden fixture pairs a real pad's snapshots with fixes frozen at 38, -122)
+and the module falls back, saying so in `referenceNote`. `originResidualM`
+stays: with a logged origin it measures how far the two solutions really are
+apart at launch, and a large value is then a finding, not a datum error.
 
 **Altitudes are above the pad, resolved to the globe's datum in the browser.**
 Cesium wants heights above the WGS84 ellipsoid; GNSS reports MSL; the difference
@@ -83,6 +88,10 @@ FIX_3D = 3
 # Firmware freezes the ENU reference this long after the first qualifying fix.
 REF_POS_MAX_AGE_S = 120.0
 
+# A logged origin further than this from the GNSS stream's own pad mean is not
+# the origin of THIS stream (see the docstring); real logs agree to metres.
+REF_PLAUSIBLE_M = 500.0
+
 # Plotting a pre-fix (0, 0) sample runs a leg of the track through the Gulf of
 # Guinea. It is the only sentinel the receiver emits.
 _NULL_ISLAND_EPS = 1e-9
@@ -106,15 +115,20 @@ def _events(flight) -> dict[str, Optional[float]]:
     return markers(flight)
 
 
-def _logged_reference(recs) -> Optional[tuple[float, float, float, Optional[bool]]]:
+def _logged_reference(recs, pad_guess=None):
     """The ENU origin the firmware actually used, from the first in-flight
-    Snapshot that carries one — (lat, lon, alt, converged).
+    Snapshot that carries one — ((lat, lon, alt, converged), note).
 
     Snapshots are sent at 10 Hz during INFLIGHT and the reference is frozen by
     then, so the first usable one is the origin every logged e/n/u position is
     relative to. `ref_datum_converged` (#834) says whether the pad average had
     settled before it froze; it does not change what the origin IS, only how
     good a pad position it was, so it is reported and not acted on.
+
+    `pad_guess` is the GNSS stream's own pad mean (the reconstruction); a
+    logged origin more than REF_PLAUSIBLE_M from it is refused with a note,
+    because it cannot be the origin of these fixes. Returns (None, note) when
+    there is nothing usable.
     """
     for s in recs.get("Snapshot") or []:
         lat, lon, alt = s.get("ref_lat"), s.get("ref_lon"), s.get("ref_alt_m")
@@ -125,8 +139,16 @@ def _logged_reference(recs) -> Optional[tuple[float, float, float, Optional[bool
         if abs(lat) <= _NULL_ISLAND_EPS and abs(lon) <= _NULL_ISLAND_EPS:
             continue   # a snapshot written before the receiver ever fixed
         conv = s.get("ref_datum_converged")
-        return (float(lat), float(lon), float(alt), None if conv is None else bool(conv))
-    return None
+        ref = (float(lat), float(lon), float(alt), None if conv is None else bool(conv))
+        if pad_guess is not None:
+            dn = (ref[0] - pad_guess[0]) * (math.pi / 180.0) * R_EARTH_M
+            de = (ref[1] - pad_guess[1]) * (math.pi / 180.0) * R_EARTH_M * math.cos(math.radians(pad_guess[0]))
+            apart = math.hypot(dn, de)
+            if apart > REF_PLAUSIBLE_M:
+                return None, (f"logged origin refused: {apart / 1000:.0f} km from the GNSS "
+                              "stream's own pad mean, so it is not the origin of these fixes")
+        return ref, None
+    return None, "no in-flight snapshot carries a reference"
 
 
 def _pad_reference(gnss, t, launch_s) -> Optional[tuple[float, float, float]]:
@@ -399,12 +421,13 @@ def analyze(flight: Flight) -> AnalysisResult:
     events = _events(flight)
     gnss = recs.get("GNSS") or []
     t_gnss = _t(gnss, t0) if gnss else np.zeros(0)
-    logged = _logged_reference(recs)
+    rebuilt = _pad_reference(gnss, t_gnss, events.get("launch"))
+    logged, reference_note = _logged_reference(recs, rebuilt)
     if logged is not None:
         pad = logged[:3]
         reference_source, reference_converged = "logged", logged[3]
     else:
-        pad = _pad_reference(gnss, t_gnss, events.get("launch"))
+        pad = rebuilt
         reference_source, reference_converged = "reconstructed", None
     if pad is None:
         result.warnings.append(
@@ -450,6 +473,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         # fallback, only right when the log holds the pad minutes.
         "referenceSource": reference_source,
         "referenceConverged": reference_converged,
+        "referenceNote": reference_note,
         "tracks": tracks,
     }
 
