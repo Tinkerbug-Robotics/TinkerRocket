@@ -865,8 +865,14 @@ fun DashboardScreen(
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
                             "Mag cal", tr.myDevices, { onTool("magcal") })
                     }
+                    // #1050: gated like the servo test beside it — a sim drives
+                    // the fins and discards the real flight state, so it is the
+                    // same hazard class and wants the same on-pad requirement.
+                    // This chip carried no `enabled=` at all.
                     com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                        "Simulate", tr.simulate, { onTool("sim") })
+                        "Simulate", tr.simulate, { onTool("sim") },
+                        enabled = onPad && !simLaunched,
+                    )
                     if (session.isBaseStation) {
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
                             "Freq scan", tr.freqScan, { onTool("scan") })
