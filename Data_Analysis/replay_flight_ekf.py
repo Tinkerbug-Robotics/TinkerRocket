@@ -377,10 +377,24 @@ def check_ekf_version(binary_file):
         print(f"        changed: {ln}")
     print("     This replay runs a DIFFERENT filter than wrote the log. A fidelity")
     print("     FAIL below is EXPECTED, and its attitude output is not comparable.")
-    print(f"     To match the firmware:  git checkout {fw_sha} -- "
-          + " ".join(_EKF_SRC))
-    print("     then rebuild the extension "
-          "(cd tinkerrocket-sim && TR_SKIP_GUIDANCE=1 python setup.py build_ext --inplace).")
+    print("     Skew is not cosmetic: an EKF change can rewrite the attitude wholesale.")
+    print("     Measured on the 2026-08-29 logs (#1412) — #1304 made the mag fuse")
+    print("     whenever it is valid, where the firmware that flew fused it only")
+    print("     alongside a valid gravity reference. The flown filter therefore ran")
+    print("     on gyro alone from launch to apogee; this one does not, and the")
+    print("     replayed attitude is yanked 44 deg within 0.2 s of launch.")
+    print("")
+    print("     To match the firmware, build the WHOLE tool at its commit:")
+    print(f"       git worktree add /tmp/replay-{fw_sha} {fw_sha}")
+    print(f"       cd /tmp/replay-{fw_sha}/tinkerrocket-sim && "
+          "TR_SKIP_GUIDANCE=1 python3 setup.py build_ext --inplace")
+    print(f"       cd /tmp/replay-{fw_sha} && PYTHONPATH=\"$PWD/tinkerrocket-sim/src\" \\")
+    print("         python3 Data_Analysis/replay_flight_ekf.py <log> --plot-dir /tmp/replay-plots")
+    print("     Checking out only the EKF sources into THIS tree does not work: the")
+    print("     pybind bindings and this script call EKF APIs that postdate an older")
+    print("     log (17 of them at b0e4aeb — setShockGateSettle, setMagReference,")
+    print("     setNoseFirstFlight, EkfIMUData::gyro_railed, ...), so the extension")
+    print("     fails to compile. The worktree carries bindings and EKF together.")
     return {"fw_sha": fw_sha, "fw_dirty": fw_dirty, "matched": False,
             "mean_feed": mean_feed}
 
@@ -510,11 +524,10 @@ def replay(binary_file, plot_dir=None, align_baro=True, imu_feed="mean",
            shock_gate=True):
     mode = ("aligned baro+GNSS frame (the FIX)" if align_baro
             else "pad-relative baro (firmware behaviour, the BUG)")
-    if imu_feed not in ("mean", "newest"):
-        raise ValueError(f"imu_feed must be 'mean' or 'newest', not {imu_feed!r}")
+    if imu_feed not in ("auto", "mean", "newest"):
+        raise ValueError(f"imu_feed must be 'auto', 'mean' or 'newest', not {imu_feed!r}")
     print(f"Parsing: {binary_file}")
     print(f"  Baro frame mode: {mode}")
-    print(f"  IMU feed: {'drain-window MEAN (firmware since #1214)' if imu_feed == 'mean' else 'NEWEST drained sample (firmware before #1214)'}")
     print(f"  Shock gate (#1190): {'ON' if shock_gate else 'OFF (pre-fix filter)'}")
     records, stats, config = parse_binary_file(str(binary_file))
     print(f"  Frames: {stats['good_crc']:,} good, {stats['bad_crc']} bad CRC")
@@ -528,7 +541,23 @@ def replay(binary_file, plot_dir=None, align_baro=True, imu_feed="mean",
     print(f"  IMU: {len(records['ISM6HG256']):,}  GNSS: {len(records['GNSS']):,}  "
           f"Baro: {len(records['BMP585']):,}  Mag: {n_iis + n_mmc:,} ({mag_chip})")
 
-    check_ekf_version(binary_file)
+    ver = check_ekf_version(binary_file)
+
+    # The guard already worked out which feed the firmware used; follow it.
+    # The old default was a fixed "mean", so replaying any pre-#1214 log took
+    # the guard's own advice line and then ignored it.
+    if imu_feed == "auto":
+        mean_feed = (ver or {}).get("mean_feed")
+        if mean_feed is None:
+            imu_feed = "mean"
+            feed_why = "guard could not tell — assuming the current firmware"
+        else:
+            imu_feed = "mean" if mean_feed else "newest"
+            feed_why = "chosen from the firmware's commit"
+    else:
+        feed_why = "forced on the command line"
+    print(f"  IMU feed: {'drain-window MEAN (firmware since #1214)' if imu_feed == 'mean' else 'NEWEST drained sample (firmware before #1214)'}"
+          f" — {feed_why}")
 
     # #529: EKF cadence — from the log itself when the firmware recorded its
     # tick counter; the hand-maintained constant only as a legacy fallback.
@@ -825,7 +854,26 @@ def replay(binary_file, plot_dir=None, align_baro=True, imu_feed="mean",
                 continue
 
             # This is an EKF tick (the window gate above let it through).
-            next_ekf_us = time_us + ekf_period_us
+            #
+            # Accumulate the SCHEDULE, never restart it from the sample that
+            # happened to cross it.  Ticks land on the first logged sample at or
+            # after each scheduled instant, so restarting from that sample adds
+            # the leftover every time and quantises the period UP to the sample
+            # grid — always in the same direction.  Measured on the 2026-08-29
+            # Rolly Polly 54 mm log (IMU ~3.9 kHz): 473 Hz against the firmware's
+            # 495 Hz, i.e. the replay skipped 4.4 % of the filter's updates while
+            # printing the firmware's rate as if it had matched it.  Accumulating
+            # gives 494 Hz.  (It did NOT move that log's fidelity — see #1412 —
+            # but "the replay must match this or it is not a replay" is the
+            # premise of this whole file, so it should actually match.)
+            if next_ekf_us is None:
+                next_ekf_us = time_us + ekf_period_us
+            else:
+                next_ekf_us += ekf_period_us
+                # A gap in the log (dropped samples, a pause) must not leave the
+                # schedule behind real time and fire a burst catching up.
+                if next_ekf_us <= time_us:
+                    next_ekf_us = time_us + ekf_period_us
 
             # #514: AHRS accel gate — follow the LOGGED flight state.
             #
@@ -981,37 +1029,73 @@ def replay(binary_file, plot_dir=None, align_baro=True, imu_feed="mean",
                     "p95_deg": float(np.percentile(div, 95)),
                     "n": int(div.size),
                 }
-                ok = fidelity["p95_deg"] <= 5.0
+                # EARLY divergence is the discriminating number, not the mean.
+                # Attitude is uncorrected between launch and apogee (the AHRS
+                # accel gate is shut, and on a pre-#1304 filter so is the mag),
+                # so both solutions dead-reckon there and any difference
+                # compounds.  Once they decorrelate the geodesic angle is
+                # roughly uniform and its mean sits near 90° NO MATTER how good
+                # the replay was early — measured on one 2026-08-29 log (#1412):
+                # 85.6° for a replay already 44° out at T+0.7 s, and 52.9° for
+                # one that is 0.3° out there.  The mean cannot tell them apart.
+                t_in = (t_r[inside] - t_r[inside][0]) / 1e6
+                early = {}
+                for mark in (0.5, 1.0, 2.0, 5.0):
+                    j = int(np.searchsorted(t_in, mark))
+                    if j < div.size:
+                        early[mark] = float(div[j])
+                fidelity["early_deg"] = early
+                # Judge on the first second, where a faithful replay still
+                # tracks and a broken one has already left.  Same 5° bar the
+                # whole-flight p95 used to carry — but somewhere it can be met.
+                probe_s = 1.0 if 1.0 in early else (0.5 if 0.5 in early else None)
+                ok = probe_s is not None and early[probe_s] <= 5.0
+                fidelity["verdict_basis_s"] = probe_s
                 print("\n  ── Replay fidelity vs the FIRMWARE's logged quaternion ──")
                 print(f"     mean {fidelity['mean_deg']:6.2f}°   "
                       f"p95 {fidelity['p95_deg']:6.2f}°   "
                       f"max {fidelity['max_deg']:6.2f}°   (n={fidelity['n']})")
+                print("     (the mean saturates near 90° once the two decorrelate — "
+                      "read the early row, not it)")
+                if early:
+                    print("     early divergence:  " + "   ".join(
+                        f"T+{k:.1f}s {v:6.2f}°" for k, v in sorted(early.items())))
                 # Divergence-vs-time is the diagnostic, not the summary: a replay
                 # that is wrong at t=0 and stays wrong has an init/frame bug, one
                 # that starts at 0 and grows has an integration/rate/bias bug, and
                 # one that steps at a phase boundary has a gate bug.
-                t_in = (t_r[inside] - t_r[inside][0]) / 1e6
                 print("     divergence over time:")
                 for f in (0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0):
                     i = min(int(f * (div.size - 1)), div.size - 1)
                     print(f"       t={t_in[i]:7.2f}s  {div[i]:7.2f}°")
                 if ok:
-                    print("     PASS — the replay reproduces the firmware EKF; "
-                          "conclusions drawn from it are meaningful.")
+                    print(f"     PASS — the replay tracks the firmware through the first "
+                          f"{fidelity['verdict_basis_s']:.1f} s; conclusions about that "
+                          "stretch are meaningful.")
+                    print("     Divergence later, where neither filter is correcting "
+                          "attitude, is expected — judge it against the rows above.")
                 else:
                     print("     *** FAIL *** — this replay does NOT reproduce the "
                           "firmware EKF. Do not draw conclusions from it.")
                     print("     FIRST read the version guard at the top of this run:")
-                    print("       • SKEW    → that's the cause. Check out the "
-                          "firmware's EKF sources (command shown there) and rerun.")
+                    print("       • SKEW    → that's the cause, and it is enough on its own: #1304's")
+                    print("                  mag gating alone moves T+0.7 s from 0.3° to 44° on a")
+                    print("                  2026-08-29 log. Rebuild at the firmware's commit using")
+                    print("                  the worktree recipe shown above.")
                     print("       • UNKNOWN → no sidecar SHA; the log may predate the "
                           "EKF you built. The 2026-06-15 logs are this case — they")
                     print("                  predate #243, which replaced the mag "
                           "heading fusion, so a modern EKF cannot reproduce them.")
-                    print("       • MATCHED → versions agree, so it's a real replay "
-                          "gap: AHRS phase gate, GNSS velocity, EKF rate")
-                    print("                  (derive_ekf_rate_hz / fallback), or units "
-                          "(EkfIMUData gyro is DEG/S, not rad/s).")
+                    print("       • MATCHED → versions agree, so it's a real replay gap. These were each")
+                    print("                  measured and EXCLUDED on the 2026-08-29 logs (#1412), so don't")
+                    print("                  start there: the IMU feed model, the baro frame")
+                    print("                  (--emulate-firmware-baro), baro/IMU timestamp duplication, the")
+                    print("                  quaternion interpolation, the gyro stream itself (it integrates")
+                    print("                  to the logged attitude), GNSS acceptance, and the EKF rate.")
+                    print("                  What survived there was a COAST-ONLY gap that needs baro AND")
+                    print("                  GNSS both present — neither alone reproduces it.")
+                    print("                  Still worth checking on other logs: the AHRS phase gate, GNSS")
+                    print("                  velocity, and units (EkfIMUData gyro is DEG/S, not rad/s).")
     if fidelity is None:
         print("\n  ── Replay fidelity: no logged quaternion in this file "
               "(legacy log) — replay is UNVERIFIED ──")
@@ -1267,11 +1351,12 @@ if __name__ == "__main__":
     parser.add_argument("--emulate-firmware-baro", action="store_true",
                         help="Feed pad-relative baro (no GNSS-frame offset) to "
                              "reproduce the firmware bug at main.cpp:2812.")
-    parser.add_argument("--imu-feed", choices=("mean", "newest"), default="mean",
+    parser.add_argument("--imu-feed", choices=("auto", "mean", "newest"),
+                        default="auto",
                         help="What each EKF tick is handed: the drain-window MEAN "
-                             "(firmware since #1214, default) or the newest drained "
-                             "sample (firmware before it). The version guard says "
-                             "which one wrote the log.")
+                             "(firmware since #1214) or the newest drained sample "
+                             "(firmware before it). Default 'auto' takes whichever "
+                             "the version guard says wrote this log.")
     parser.add_argument("--no-shock-gate", action="store_true",
                         help="Run the pre-#1190 filter: integrate a saturated gyro / "
                              "accelerometer axis as if it were a measurement.")
