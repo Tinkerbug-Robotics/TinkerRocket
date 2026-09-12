@@ -36,7 +36,18 @@ inline constexpr uint32_t LEGACY_HOLD_MS = 9000;
 // this caps the wait when landing detection never fires, so a broken detector
 // cannot hang the sim.  Generous on purpose — the cost of waiting is bench
 // time, and the cost of being too short is this bug.
-inline constexpr uint32_t HOLD_MAX_MS = 30000;
+//
+// Raised 30 s -> 90 s (#574 bench, 2026-09-12).  30 s was generous for the
+// HEALTHY path (slow vote latches ~7 s + 2 s debounce) but it was exactly the
+// DEAD-IMU path's dwell: with the IMU stale from burnout the only route to
+// LANDED is the baro-only backstop, whose alt_landed dwell is ~30 s.  Measured
+// on a V9 with TR_SIM_DEAD_IMU: the flag latched 30.8 s after touchdown and
+// LANDED followed 2 s later — i.e. the old backstop expired within a second of
+// the latch, twice, and the sim gave up first.  #574's dead-IMU half was
+// therefore unobservable in a sim by a margin of zero, the same failure shape
+// the 9 s -> 30 s raise fixed for the healthy path.  Sized off the slowest
+// documented path, not the fastest.
+inline constexpr uint32_t HOLD_MAX_MS = 90000;
 
 enum class Exit : unsigned char
 {
