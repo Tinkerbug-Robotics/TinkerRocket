@@ -878,7 +878,29 @@ void SensorCollector::pollIMUdata(void* parameter)
             {
                 const uint32_t bmp_t0 = time_us();
 
-                while (bmp_pending > 0)
+                // #1140 item 2: ONE read per pass, whatever the backlog.
+                //
+                // The BMP585 has no FIFO. Every extra readCompFrame() returns
+                // the same conversion with a fresh esp_timer stamp, and the
+                // single-slot bmp585_data handoff keeps only the last — so a
+                // backlog of N cost N full SPI transactions to produce one
+                // sample, N-1 of them redundant by construction.
+                //
+                // bmp585_irq_pending_count is an unbounded ISR counter ticking
+                // at ~460-500 Hz. Anything that stops this task banks the whole
+                // interval: calibrateGyro()'s 10 s vTaskSuspend alone leaves
+                // ~4600 pending, and draining that blocked the loop for
+                // ~90-140 ms at 10 MHz SPI. The ISM6 branch runs at most once
+                // per iteration, so the IMU went unread for the entire drain —
+                // a stall producing a fresh gap, on the sensor whose gaps
+                // #474/#910 exist to close.
+                //
+                // The excess is counted rather than discarded silently, the
+                // same way ism6_queue_drops witnesses a consumer stall.
+                if (bmp_pending > 1)
+                {
+                    self->bmp585_stale_irq_drops += (bmp_pending - 1);
+                }
                 {
                     TR_BMP585::BmpCompFrame f = {};
                     if (self->bmp585.readCompFrame(f))
@@ -892,7 +914,7 @@ void SensorCollector::pollIMUdata(void* parameter)
                             xSemaphoreGive(self->bmp585DataSemaphore);
                         }
                     }
-                    bmp_pending--;
+                    bmp_pending = 0;
                 }
 
                 const uint32_t bmp_elapsed = time_us() - bmp_t0;
