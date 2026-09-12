@@ -50,6 +50,14 @@ struct TelemState {
     NonSensorData nonsensor;          // EKF state, flags, rocket state, pyro
     MagCalStatusData mag_cal;
     SensorCalStatusData sensor_cal;
+    // #1150: the flight side's FlightSnapshotData, stored from
+    // saveFlightSnapshot()/clearFlightSnapshot() where the FC used to stream
+    // SNAPSHOT_MSG. The comms side adopts the pad reference and the running
+    // maxima from it when it joined the flight mid-way (a reboot in flight
+    // restores INFLIGHT in flight_setup(), before the loop publishes anything
+    // the comms side could have watched from the pad) -- see
+    // ground_baseline_policy.h.
+    FlightSnapshotData snapshot;
     // esp_timer micros of the last update of each group; 0 = never. The
     // comms side uses these for staleness exactly where the OC used
     // last-frame-received times.
@@ -60,6 +68,7 @@ struct TelemState {
     uint32_t nonsensor_update_us;
     uint32_t mag_cal_update_us;
     uint32_t sensor_cal_update_us;
+    uint32_t snapshot_update_us;
 };
 extern TelemState telem;
 extern portMUX_TYPE telem_mux;

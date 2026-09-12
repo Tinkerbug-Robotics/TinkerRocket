@@ -908,6 +908,10 @@ static void saveFlightSnapshot(uint32_t now_ms)
     (void)mini_link::logFrame(SNAPSHOT_MSG,
                               reinterpret_cast<const uint8_t*>(&snap),
                               (uint8_t)sizeof(snap));
+    // #1150: the comms half reads the pad reference and the running maxima
+    // from here when it joined the flight mid-way, the way the OC reads the
+    // FC's SNAPSHOT_MSG.
+    telemStore(mini_link::telem.snapshot, snap, mini_link::telem.snapshot_update_us);
 }
 
 static void clearFlightSnapshot()
@@ -922,6 +926,9 @@ static void clearFlightSnapshot()
     (void)mini_link::logFrame(SNAPSHOT_MSG,
                               reinterpret_cast<const uint8_t*>(&snap),
                               (uint8_t)sizeof(snap));
+    // #1150: the LANDED clear reaches the comms half too, as it reaches the
+    // OC; the adoption policy sees a non-INFLIGHT frame and takes nothing.
+    telemStore(mini_link::telem.snapshot, snap, mini_link::telem.snapshot_update_us);
 }
 
 // ==========================================================================

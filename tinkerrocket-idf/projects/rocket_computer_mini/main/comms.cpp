@@ -61,6 +61,7 @@ static inline std::string itos(int v)
 #include "comms.h"
 #include "flight.h"
 #include "mini_link.h"
+#include <ground_baseline_policy.h>   // #1150: the pad reference after a mid-flight reboot
 
 #include <TR_I2C_Interface.h>   // packMessage only — no bus
 #include <TR_LogToFlash.h>
@@ -806,7 +807,18 @@ static void updateDerivedAltitudeFromBMP()
 
     // Track baseline pressure while not in-flight so pressure altitude is
     // near zero before launch.
-    if (latest_rocket_state != INFLIGHT)
+    //
+    // #1150: "not in-flight" has to be the flight half's word, not the boot
+    // default. latest_rocket_state reads INITIALIZATION until the first
+    // NonSensor group is seen, flight_setup() restores INFLIGHT before the
+    // loop publishes anything, and serviceTelemFromFlight() reads the baro
+    // group before the NonSensor group -- so after a mid-flight reboot the
+    // first pass took the "pad" reference at altitude every time (the OC
+    // loses the same race more often than not). A flight this half did not
+    // watch from the pad gets its reference from the flight half's snapshot
+    // instead (serviceTelemFromFlight); until then pressure_alt holds at 0.
+    if (ground_baseline::trackFromBaro(latest_non_sensor_valid,
+                                       latest_rocket_state == INFLIGHT))
     {
         ground_pressure_pa = p;
         ground_pressure_set = true;
@@ -824,7 +836,8 @@ static void updateDerivedAltitudeFromBMP()
     // Altitude rate comes from the flight side's KF via NonSensorData.
     // Reject physically impossible altitudes (was: corrupt I2S frames; on
     // the mini a torn/garbage baro read is the only source, keep the guard).
-    if (pressure_alt_m > -500.0f && pressure_alt_m < 100000.0f)
+    if (pressure_alt_m > ground_baseline::kMaxAltMinM &&
+        pressure_alt_m < ground_baseline::kMaxAltMaxM)
         max_alt_m = std::max(max_alt_m, pressure_alt_m);
 }
 
@@ -847,7 +860,7 @@ static void updateDerivedSpeedFromNonSensor()
     const float speed = sqrtf(e * e + n * n + u * u);
 
     // Reject physically impossible speeds.
-    if (speed > 1500.0f)
+    if (speed > ground_baseline::kMaxSpeedMps)
         return;
 
     const bool alt_apogee = nsFlagSet(latest_non_sensor.flags, NSF_ALT_APOGEE);
@@ -975,6 +988,7 @@ static void serviceTelemFromFlight()
 
     static uint32_t seen_baro_us = 0;
     static uint32_t seen_nonsensor_us = 0;
+    static uint32_t seen_snapshot_us = 0;
     static uint32_t pushed_mag_cal_us = 0;
     static uint32_t pushed_sensor_cal_us = 0;
 
@@ -1003,6 +1017,18 @@ static void serviceTelemFromFlight()
         latest_non_sensor = snap.nonsensor;
         latest_non_sensor_valid = true;
         latest_rocket_state = (RocketState)latest_non_sensor.rocket_state;
+        // #1150: INFLIGHT with no pad reference means this half joined the
+        // flight in progress (a reboot whose flight_setup() restored the
+        // flight). Say so once per INFLIGHT entry: pressure_alt holds at 0
+        // until the flight half's snapshot supplies the pad pressure below,
+        // and that adoption logs itself.
+        if (latest_rocket_state == INFLIGHT && prev_state != INFLIGHT &&
+            !ground_pressure_set)
+        {
+            ESP_LOGW("OC", "#1150: INFLIGHT with no pad reference — the comms "
+                           "half joined the flight in progress; pressure_alt "
+                           "holds at 0 until the flight half's snapshot supplies one");
+        }
         // Flight-freeze sticky flag (issue #71) — safe on every update.
         updateFreqLockFromState(latest_rocket_state);
         // Per-packet hop state machine off the same edge (#40/#41).
@@ -1037,6 +1063,52 @@ static void serviceTelemFromFlight()
         // KF-filtered altitude rate from the flight side.
         pressure_alt_rate_mps = (float)latest_non_sensor.baro_alt_rate_dmps * 0.1f;
         updateDerivedSpeedFromNonSensor();
+    }
+
+    // #1150: the flight half's snapshot -- the pad reference and the running
+    // maxima this half lost if the board rebooted in flight. Mirrors the OC's
+    // SNAPSHOT_MSG branch: adopt ONCE when INFLIGHT arrives with no reference
+    // of our own; a comms half that watched the pad keeps what it tracked
+    // (ground_baseline_policy.h). After the NonSensor group so the two log
+    // lines read in order. In-process the magic and version always match, so
+    // Rejected here can only mean the flight half's reference is out of the
+    // BMP band -- worth one line, never a flood.
+    if (snap.snapshot_update_us != 0 && snap.snapshot_update_us != seen_snapshot_us)
+    {
+        seen_snapshot_us = snap.snapshot_update_us;
+        ground_baseline::Adoption adopt = {};
+        switch (ground_baseline::adoptFromSnapshot(ground_pressure_set,
+                                                   snap.snapshot, adopt))
+        {
+            case ground_baseline::Verdict::Adopt:
+                ground_pressure_pa  = adopt.ground_pressure_pa;
+                ground_pressure_set = true;
+                max_alt_m     = std::max(max_alt_m, adopt.max_alt_m);
+                max_speed_mps = std::max(max_speed_mps, adopt.max_speed_mps);
+                ESP_LOGW("OC", "#1150: joined a flight in progress — pad reference "
+                               "%.0f Pa, max_alt %.1f m and max_speed %.1f m/s "
+                               "adopted from the flight half's snapshot (flight "
+                               "elapsed %lu ms)",
+                         (double)adopt.ground_pressure_pa,
+                         (double)max_alt_m, (double)max_speed_mps,
+                         (unsigned long)snap.snapshot.flight_elapsed_ms);
+                break;
+            case ground_baseline::Verdict::Rejected:
+            {
+                static bool rejected_logged = false;
+                if (!rejected_logged)
+                {
+                    rejected_logged = true;
+                    ESP_LOGW("OC", "#1150: snapshot refused as a pad reference "
+                                   "(p0 %.0f Pa outside the BMP band)",
+                             (double)snap.snapshot.ground_pressure_pa);
+                }
+                break;
+            }
+            case ground_baseline::Verdict::HaveBaseline:
+            case ground_baseline::Verdict::NotInflight:
+                break;
+        }
     }
 
     // Issue #96 / #132: cal status frames forwarded verbatim to BLE with the
