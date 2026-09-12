@@ -179,6 +179,15 @@ enum CfgFailReason : uint8_t
     // most severe, and distinct from the two above, which both leave a live
     // radio behind.
     CFG_FAIL_RADIO_DOWN   = 0x04,
+    // #1143 item 1: the requested frequency is outside the band edges this
+    // modem reports in IDENTITY (freq_min_mhz/freq_max_mhz). Distinct from
+    // CFG_FAIL_MODULATION because the radio was never touched: the bare
+    // LLCC68 die accepts 150-960 MHz and would have applied it happily, so
+    // nothing downstream — not the APPLIED ack, not the STATUS echo, not
+    // modem_config_ack::accepted() — could tell that the module was being
+    // driven outside its matching network. Refused before the radio sees it,
+    // so the previous config is still live and untouched.
+    CFG_FAIL_OUT_OF_BAND  = 0x08,
 };
 
 struct __attribute__((packed)) ModemStatusData

@@ -6553,6 +6553,25 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         uint8_t new_cr   = payload[9];
         int8_t  new_pwr  = (int8_t)payload[10];
 
+        // #1143 item 1: these five fields are memcpy'd straight off the air
+        // with no range check, and on success they are written to NVS — so a
+        // corrupt or mistyped uplink could park the rocket on a frequency
+        // outside the module's matching network and make it survive a reboot.
+        // The daughterboard now refuses out-of-band itself, but the OC's own
+        // LLCC68 path has no modem in front of it, and a rocket that has to be
+        // power-cycled to get its radio back is not recoverable from the
+        // ground. Refuse the frame rather than clamp it: a clamped config the
+        // operator did not ask for is a link both ends disagree about.
+        if (!loraFreqInBand(new_freq))
+        {
+            ESP_LOGE("LORA", "UPLINK LoRa reconfigure REFUSED: %.3f MHz is "
+                             "outside the %.0f-%.0f MHz band — ignoring the "
+                             "frame, config unchanged (#1143)",
+                     (double)new_freq, (double)LORA_BAND_MIN_MHZ,
+                     (double)LORA_BAND_MAX_MHZ);
+            return;
+        }
+
         if (lora_comms.reconfigure(new_freq, new_sf, new_bw, new_cr, new_pwr))
         {
             const float old_bw = lora_bw_khz;

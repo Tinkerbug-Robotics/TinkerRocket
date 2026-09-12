@@ -237,6 +237,38 @@ static constexpr uint8_t LORA_NEXT_CH_HOP_OFFSCHEDULE = 0xFE;
 // Moved up here (was further down with the LoRa structs) so
 // loraPickQuietestChannelMHz() below can fall back to it without a
 // forward declaration.
+// #1143 item 1: the band the radio hardware is actually matched for.
+//
+// The E220-900MM22S module's matching network is 850-930 MHz, and the modem
+// reports these same edges in its IDENTITY frame — but until #1143 nothing on
+// either end compared anything against them, and the bare LLCC68 die accepts
+// 150-960 MHz. So an uplinked cmd-10 frequency was applied, acked, cached and
+// written to NVS whatever it said, and a rocket parked outside its matching
+// network survives a reboot. Transmitting into an unmatched network is a PA
+// and antenna problem, not a link-quality one.
+//
+// Shared here rather than per-project because both ends of cmd 10 — the base
+// station that sends it and the out computer that applies it — have to agree
+// on what is legal, and the daughterboard's own copy lives in
+// radio_board/config.h beside the module part number it comes from.
+static constexpr float   LORA_BAND_MIN_MHZ              = 850.0f;
+static constexpr float   LORA_BAND_MAX_MHZ              = 930.0f;
+
+// Is this a frequency the radio hardware is matched for?
+//
+// Deliberately a REFUSAL predicate rather than a clamp helper. Clamping would
+// put the radio on a frequency nobody asked for while the caller cached the
+// one it requested, so the two ends would disagree about what is on the air —
+// which is the failure class the whole config-ack path exists to prevent.
+//
+// NaN is out of band: it fails both comparisons, and a NaN frequency reaching
+// setFrequency() is not something to pass through on the grounds that it is
+// "not less than" the minimum.
+static inline bool loraFreqInBand(float freq_mhz)
+{
+    return freq_mhz >= LORA_BAND_MIN_MHZ && freq_mhz <= LORA_BAND_MAX_MHZ;
+}
+
 static constexpr float   LORA_FACTORY_RENDEZVOUS_MHZ    = 915.0f;
 static constexpr uint8_t LORA_FACTORY_RENDEZVOUS_SF     = 8;
 static constexpr float   LORA_FACTORY_RENDEZVOUS_BW_KHZ = 250.0f;

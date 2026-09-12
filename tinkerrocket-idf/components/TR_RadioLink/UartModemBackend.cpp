@@ -234,6 +234,26 @@ bool UartModemBackend::pushConfig(float freq_mhz, uint8_t sf, float bw_khz,
                                   uint8_t cr, int8_t tx_power, bool start_rx,
                                   uint32_t ack_timeout_ms)
 {
+    // #1143 item 1: honour the band edges IDENTITY reports. README.md states
+    // the contract outright — "Hosts clamp their radio config to the reported
+    // capabilities" — and until now freq_min_mhz/freq_max_mhz were logged once
+    // at attach and compared against nothing, on either end. Refuse rather
+    // than clamp, for the same reason the modem does: clamping would put the
+    // radio somewhere nobody asked for while the caller cached the frequency
+    // it requested.
+    //
+    // Both edges zero means a legacy modem image that does not report them;
+    // skip the check there rather than refusing every config.
+    if ((identity_.freq_min_mhz != 0.0f || identity_.freq_max_mhz != 0.0f) &&
+        (freq_mhz < identity_.freq_min_mhz || freq_mhz > identity_.freq_max_mhz))
+    {
+        ESP_LOGE(TAG, "SET_CONFIG not sent: %.3f MHz is outside the modem's "
+                      "reported %.1f-%.1f MHz band (#1143)",
+                 (double)freq_mhz, (double)identity_.freq_min_mhz,
+                 (double)identity_.freq_max_mhz);
+        return false;
+    }
+
     RadioConfigData d = {};
     d.freq_mhz = freq_mhz;
     d.bandwidth_khz = bw_khz;

@@ -356,6 +356,16 @@ target_compile_definitions(test_orientation PRIVATE TR_BOARD_V9=1)
 target_link_libraries(test_orientation GTest::gtest_main)
 gtest_discover_tests(test_orientation)
 
+# ---------- test_lora_band_policy (#1143) ----------
+# The module's matched band, which IDENTITY reports and nothing enforced.
+add_executable(test_lora_band_policy test_lora_band_policy.cpp)
+target_include_directories(test_lora_band_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_lora_band_policy GTest::gtest_main)
+gtest_discover_tests(test_lora_band_policy)
+
 # ---------- test_lora_modulation_policy (#1128) ----------
 # The LLCC68's SF-window-follows-bandwidth rule, which is what makes the order
 # of reconfigure()'s rollback part of its correctness. Header-only.
