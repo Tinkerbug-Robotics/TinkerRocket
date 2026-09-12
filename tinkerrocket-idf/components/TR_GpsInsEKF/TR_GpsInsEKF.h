@@ -265,6 +265,48 @@ public:
         P_[3][3] = 0.1f; P_[4][4] = 0.1f; P_[5][5] = 0.1f;
     }
 
+    /// #1412: inject known IMU biases with their covariance.
+    ///
+    /// The companion to setQuaternion/setVelocity for the replay harness, and
+    /// it exists for the same reason (#514): the firmware initialises its
+    /// filter on the first good fix, which is BEFORE logging starts, so by the
+    /// first logged sample its biases have converged over an unlogged stretch
+    /// that cannot be re-run.  The log carries them — FlightSnapshotData's
+    /// ekf_gyro_bias / ekf_accel_bias and the p_gbias / p_abias covariance
+    /// diagonal — so they can be seeded rather than relearned.
+    ///
+    /// The covariance is the half that matters.  A fresh filter starts at
+    /// wBiasSigma_Init_rps (1 deg/s), where a converged one logged 0.0127
+    /// deg/s — 6200x in variance — and at that gain GNSS and barometer
+    /// innovations dump their residual into the gyro bias instead of the
+    /// states that own it.  Measured on the 2026-08-29 Rolly Polly 54 mm log:
+    /// the replayed bias hit the 10 deg/s clamp on all three axes within 2 s
+    /// of launch while the firmware's sat at 0.13-0.45 deg/s throughout, and
+    /// that 14 deg/s of bias error integrated to 79 deg of attitude by T+8 s.
+    ///
+    /// Cross-covariances with the seeded states are zeroed, as setQuaternion
+    /// does: a tiny diagonal left beside large off-diagonal terms is not a
+    /// covariance matrix any more.  var_* are variances, not sigmas.
+    void setGyroBias(float x_rps, float y_rps, float z_rps, float var_rps2) {
+        wBias_rps_[0] = x_rps; wBias_rps_[1] = y_rps; wBias_rps_[2] = z_rps;
+        clampGyroBias();
+        for (int i = 12; i <= 14; i++) {
+            for (int j = 0; j < 15; j++) { P_[i][j] = 0.0f; P_[j][i] = 0.0f; }
+            P_[i][i] = var_rps2;
+        }
+        stabilizeP();
+    }
+
+    /// Inject known accelerometer bias with its covariance.  See setGyroBias.
+    void setAccelBias(float x, float y, float z, float var) {
+        aBias_mps2_[0] = x; aBias_mps2_[1] = y; aBias_mps2_[2] = z;
+        for (int i = 9; i <= 11; i++) {
+            for (int j = 0; j < 15; j++) { P_[i][j] = 0.0f; P_[j][i] = 0.0f; }
+            P_[i][i] = var;
+        }
+        stabilizeP();
+    }
+
     // ─── Getters ────────────────────────────────────────────────────
     void getAccelEst(float (&r)[3]) const { r[0]=aEst_B_mps2_[0]; r[1]=aEst_B_mps2_[1]; r[2]=aEst_B_mps2_[2]; }
     void getAccelBias(float (&r)[3]) const { r[0]=aBias_mps2_[0]; r[1]=aBias_mps2_[1]; r[2]=aBias_mps2_[2]; }
