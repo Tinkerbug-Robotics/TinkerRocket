@@ -228,15 +228,26 @@ struct MagCalView: View {
         }
     }
 
-    /// MAG_CAL_START is refused FC-side from INFLIGHT; we also need the
-    /// rocket connected + powered for the cal to do anything useful.
-    /// The button is enabled when all three are true.
+    /// MAG_CAL_START is refused FC-side from INFLIGHT **and LANDED**; we also
+    /// need the rocket connected + powered for the cal to do anything useful.
+    /// The button is enabled when all of those are true.
     private var isStartAllowed: Bool {
         guard device.isConnected, !device.isBaseStation,
               device.telemetry.pwr_pin_on else { return false }
-        // Telemetry state string mirrors the FC's rocket_state enum;
-        // INFLIGHT is the one truly-forbidden case.
+        // Telemetry state string mirrors the FC's rocket_state enum.
+        //
+        // #1138 item 5: LANDED belongs here too, and this button was the
+        // reason the FC-side bug was invisible. After a flight the #317
+        // post-flight lockout re-asserts LANDED at the top of every state
+        // machine pass, so MAG_CAL_START used to set MAG_CALIBRATION and have
+        // it reverted on the same pass: sample ingestion and the 5 Hz status
+        // publish are both gated on the state, so the session reported
+        // SAMPLING exactly once and then never moved again. The FC now refuses
+        // it outright; with the button still enabled the operator would tap
+        // Start, see nothing happen, and have no way to learn that a reboot is
+        // what is required.
         return device.telemetry.state != "INFLIGHT"
+            && device.telemetry.state != "LANDED"
     }
 
     /// Sampling: orientation-progress hero, live direction bars, Compute

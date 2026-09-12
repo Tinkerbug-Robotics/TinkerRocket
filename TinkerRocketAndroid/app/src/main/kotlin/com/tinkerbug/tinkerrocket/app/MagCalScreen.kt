@@ -251,8 +251,19 @@ private fun IntroSection(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-    // Start gate: connected + rocket + powered + not INFLIGHT (FC refuses).
-    val canStart = connected && !session.isBaseStation && powerOn && state != "INFLIGHT"
+    // Start gate: connected + rocket + powered + not INFLIGHT and not LANDED
+    // (the FC refuses both).
+    //
+    // #1138 item 5: LANDED is not cosmetic. After a flight the #317 post-flight
+    // lockout re-asserts LANDED at the top of every state machine pass, so
+    // MAG_CAL_START used to set MAG_CALIBRATION and have it reverted on the
+    // same pass — sample ingestion and the 5 Hz status publish are both gated
+    // on the state, so the session reported SAMPLING once and then never moved.
+    // The FC refuses it outright now; leaving the button enabled would let the
+    // operator tap Start, watch nothing happen, and never learn that a reboot
+    // is what is required. iOS twin: MagCalView.isStartAllowed.
+    val canStart = connected && !session.isBaseStation && powerOn &&
+        state != "INFLIGHT" && state != "LANDED"
     Button(enabled = canStart, onClick = onStart, modifier = Modifier.fillMaxWidth()) {
         Text(if (status?.subType == MagCalSubType.APPLIED) "Recalibrate" else "Start Calibration")
     }
