@@ -32,6 +32,9 @@ class BLEFleet: NSObject, ObservableObject {
     // an unsolicited modal.
     @Published var userInitiatedScan = false
     @Published var statusMessage = "Not connected"
+    /// #1413: why Bluetooth is unavailable, so a view can offer a way forward
+    /// instead of only naming the problem. See BluetoothAvailability.
+    @Published var bluetoothAvailability: BluetoothAvailability = .unknown
     @Published var discoveredDevices: [DiscoveredDevice] = []
 
     /// Currently connected devices (for now, max 1 — multi-connect in PR #4).
@@ -376,7 +379,12 @@ class BLEFleet: NSObject, ObservableObject {
 
     func startScanning(userInitiated: Bool = false) {
         guard centralManager.state == .poweredOn else {
-            statusMessage = "Bluetooth not ready"
+            // #1413: say which way it is not ready. The callers that gate on
+            // bluetoothAvailability.canScan never reach this, but the
+            // automatic paths (reconnect fallback, scan-on-disconnect) do.
+            bluetoothAvailability = BluetoothAvailability(centralManager.state)
+            statusMessage = bluetoothAvailability == .unknown
+                ? "Bluetooth not ready" : bluetoothAvailability.headline
             return
         }
         discoveredDevices = []
@@ -532,6 +540,7 @@ extension BLEFleet: CBCentralManagerDelegate {
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        bluetoothAvailability = BluetoothAvailability(central.state)
         switch central.state {
         case .poweredOn:
             statusMessage = "Bluetooth ready"
@@ -566,14 +575,11 @@ extension BLEFleet: CBCentralManagerDelegate {
             if !resumedAny || anyNotConnected {
                 startScanning()
             }
-        case .poweredOff:
-            statusMessage = "Bluetooth is off"
-        case .unauthorized:
-            statusMessage = "Bluetooth not authorized"
-        case .unsupported:
-            statusMessage = "Bluetooth not supported"
         default:
-            statusMessage = "Bluetooth unknown state"
+            // #1413: every non-ready state, with its headline and its advice
+            // in one place. The strings are unchanged; what is new is that the
+            // views can now see WHICH state it is.
+            statusMessage = bluetoothAvailability.headline
         }
     }
 

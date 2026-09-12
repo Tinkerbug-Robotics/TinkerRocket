@@ -67,6 +67,8 @@ struct UnitsBarView: View {
                 }
 
                 // Add device — explicit scan opens the picker sheet (#394).
+                // #1413: greyed out when Bluetooth cannot scan; the dashboard's
+                // status line is where the reason and the fix are shown.
                 Button {
                     fleet.startScanning(userInitiated: true)
                 } label: {
@@ -77,9 +79,10 @@ struct UnitsBarView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(Color(.systemGray5))
-                    .foregroundColor(.blue)
+                    .foregroundColor(fleet.bluetoothAvailability.canScan ? .blue : .secondary)
                     .cornerRadius(20)
                 }
+                .disabled(!fleet.bluetoothAvailability.canScan)
             }
             .padding(.horizontal, 4)
         }

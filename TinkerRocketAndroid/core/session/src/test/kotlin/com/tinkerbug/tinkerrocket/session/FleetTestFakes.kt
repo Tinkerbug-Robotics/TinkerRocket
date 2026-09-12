@@ -28,7 +28,7 @@ class FakeScanner : BleScanner {
 
     /**
      * Set to make the flow FAIL instead of emitting — what the real scanner
-     * does when the adapter is off ("BLE scanner unavailable"). Left uncaught
+     * does when the adapter is off ("Bluetooth is off", #1413). Left uncaught
      * this used to kill the process (Checkpoint A Group 1).
      */
     var failWith: Throwable? = null

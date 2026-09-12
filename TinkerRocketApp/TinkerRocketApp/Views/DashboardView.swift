@@ -192,6 +192,10 @@ struct DashboardView: View {
                         }
 
                         HStack(spacing: 12) {
+                            // #1413: a scan that cannot run should not offer
+                            // itself. Stop stays live so an in-flight scan can
+                            // always be cancelled.
+                            let canScan = fleet.bluetoothAvailability.canScan
                             Button {
                                 if fleet.isScanning {
                                     fleet.stopScanning()
@@ -203,16 +207,19 @@ struct DashboardView: View {
                                     .fontWeight(.semibold)
                                     .padding(.horizontal, 20)
                                     .padding(.vertical, 12)
-                                    .background(fleet.isScanning ? .red : .green)
+                                    .background(fleet.isScanning ? .red
+                                                : (canScan ? .green : Color(.systemGray3)))
                                     .foregroundColor(.white)
                                     .cornerRadius(TRShape.radiusButton)
                             }
+                            .disabled(!fleet.isScanning && !canScan)
 
                             ConnectionStatusView(
                                 isConnected: false,
                                 isScanning: fleet.isScanning,
                                 statusMessage: fleet.statusMessage,
-                                connectedDeviceName: ""
+                                connectedDeviceName: "",
+                                availability: fleet.bluetoothAvailability
                             )
                         }
 
@@ -1126,6 +1133,9 @@ struct ConnectionStatusView: View {
     // Resolved role, not a name-substring guess: renamed devices carry no
     // type hint in the name, and a rocket called "SUBSONIC" contains "BS".
     var connectedDeviceType: BLEDeviceType = .unknown
+    /// #1413: lets the disconnected state say what to do about it. Defaults to
+    /// .ready so nothing is said unless a caller knows otherwise.
+    var availability: BluetoothAvailability = .ready
 
     private var roleLabel: String {
         switch connectedDeviceType {
@@ -1149,8 +1159,27 @@ struct ConnectionStatusView: View {
                         .foregroundColor(.secondary)
                 }
             } else {
-                Text(statusMessage)
-                    .font(.headline)
+                // #1413: the headline, and under it one quiet line saying what
+                // to do — no recoloured dot, no banner. `advice` is nil
+                // whenever Bluetooth is fine, so this collapses to the old
+                // single line in the ordinary case.
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(statusMessage)
+                        .font(.headline)
+                    if let advice = availability.advice {
+                        Text(advice)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if availability.offersAppSettings,
+                           let url = URL(string: UIApplication.openSettingsURLString) {
+                            Button("Open Settings") {
+                                UIApplication.shared.open(url)
+                            }
+                            .font(.caption)
+                        }
+                    }
+                }
             }
             Spacer()
             if isScanning {

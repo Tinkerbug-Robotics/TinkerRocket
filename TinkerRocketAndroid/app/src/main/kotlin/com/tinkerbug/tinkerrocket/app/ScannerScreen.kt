@@ -40,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +64,7 @@ import com.tinkerbug.tinkerrocket.app.theme.TrSpacing
 import com.tinkerbug.tinkerrocket.app.theme.TrStatusPill
 import com.tinkerbug.tinkerrocket.app.theme.TrTheme
 import com.tinkerbug.tinkerrocket.session.BleDeviceType
+import com.tinkerbug.tinkerrocket.session.BluetoothFix
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.DiscoveredDevice
 import com.tinkerbug.tinkerrocket.session.FleetManager
@@ -99,6 +101,19 @@ fun ScannerScreen(
     val status by fleet.statusMessage.collectAsState()
     val reconnecting by fleet.isReconnecting.collectAsState()
     val tr = TrTheme.colors
+    // #1413: nothing used to ask the adapter anything — the user found out it
+    // was off by tapping Scan and reading the exception. This screen is only
+    // reached with the permission granted (MainActivity gates on it), so the
+    // adapter is the state left to watch.
+    val bluetooth = rememberBluetoothAvailability()
+    val enableBluetooth = rememberBluetoothEnableLauncher()
+    // #1413: clear a "Bluetooth is off" the fleet was left holding once the
+    // radio is back, so the pill stops asserting something that is no longer
+    // true. Keyed on the state, so it fires on the change and not on every
+    // recomposition.
+    LaunchedEffect(bluetooth) {
+        if (bluetooth.canScan) fleet.onBluetoothAvailable()
+    }
 
     Column(
         Modifier
@@ -174,11 +189,12 @@ fun ScannerScreen(
             TrCompactButton(
                 "Scan", tr.scan,
                 onClick = { fleet.scan(userInitiated = true) },
-                enabled = !scanning,
+                // #1413: a scan that cannot run should not offer itself.
+                enabled = !scanning && bluetooth.canScan,
             )
             TrStatusPill(
                 dotColor = if (scanning) tr.statusScanning else tr.statusIdle,
-                text = status,
+                text = if (bluetooth.canScan) status else bluetooth.headline,
                 modifier = Modifier.weight(1f),
             )
             // #1088: the only way to stop a reconnect ladder. disconnect()
@@ -191,6 +207,25 @@ fun ScannerScreen(
                     "Stop", tr.statusWarn,
                     onClick = { fleet.cancelAllReconnects() },
                 )
+            }
+        }
+
+        // #1413: one quiet line under the state, and the switch that fixes it.
+        // No banner, no recoloured dot — the advice is nil whenever Bluetooth
+        // is fine, so this is absent in the ordinary case.
+        bluetooth.advice?.let { advice ->
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    advice,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                bluetooth.fix.label?.let { label ->
+                    TrCompactButton(
+                        label, tr.scan,
+                        onClick = { if (bluetooth.fix == BluetoothFix.ENABLE_BLUETOOTH) enableBluetooth() },
+                    )
+                }
             }
         }
 
@@ -213,7 +248,15 @@ fun ScannerScreen(
                     }
                 } else {
                     Text(
-                        "No devices found. Tap Scan to search.",
+                        // #1413: don't tell someone to tap a button that is
+                        // greyed out. With the radio off, an empty list is not
+                        // a result — it is the consequence, and the advisory
+                        // above already says what to do about it.
+                        if (bluetooth.canScan) {
+                            "No devices found. Tap Scan to search."
+                        } else {
+                            "No devices — ${bluetooth.headline.replaceFirstChar { it.lowercase() }}."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 10.dp),
@@ -301,8 +344,19 @@ private fun DeviceRow(
     }
 }
 
+/**
+ * #1413: [permanentlyDenied] is the difference between "we have not asked yet"
+ * and "you said no twice". In the second case Android auto-denies without
+ * showing a dialog, so the Grant button did nothing whatsoever and the screen
+ * repeated the same first-run copy — the dead end this issue is about. Settings
+ * is the only route left, so offer it.
+ */
 @Composable
-fun PermissionScreen(onRequest: () -> Unit) {
+fun PermissionScreen(
+    permanentlyDenied: Boolean = false,
+    onRequest: () -> Unit,
+    onOpenSettings: () -> Unit = {},
+) {
     Column(
         Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
@@ -314,6 +368,15 @@ fun PermissionScreen(onRequest: () -> Unit) {
                 "Bluetooth. Nearby-devices permission is required.",
             style = MaterialTheme.typography.bodyMedium,
         )
-        Button(onClick = onRequest) { Text("Grant") }
+        if (permanentlyDenied) {
+            Text(
+                "Permission was denied, so Android will not ask again. " +
+                    "Turn on Nearby devices in Settings › Permissions.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Button(onClick = onOpenSettings) { Text("Open Settings") }
+        } else {
+            Button(onClick = onRequest) { Text("Grant") }
+        }
     }
 }

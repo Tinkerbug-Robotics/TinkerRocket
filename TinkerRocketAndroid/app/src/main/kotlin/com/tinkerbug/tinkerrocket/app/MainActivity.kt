@@ -1,7 +1,10 @@
 package com.tinkerbug.tinkerrocket.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -38,14 +41,47 @@ class MainActivity : ComponentActivity() {
 
     private val permissionsGranted = mutableStateOf(false)
 
+    // #1413: whether the system will still show a prompt. Android silently
+    // auto-denies a permanently-denied permission, so after the second refusal
+    // the Grant button did nothing at all and said nothing about why. When this
+    // is true the screen sends the user to Settings instead.
+    private val permissionPermanentlyDenied = mutableStateOf(false)
+
+    private fun refreshPermissionState() {
+        permissionsGranted.value = bleGranted()
+        permissionPermanentlyDenied.value = !permissionsGranted.value &&
+            !shouldShowRequestPermissionRationale(Manifest.permission.BLUETOOTH_SCAN)
+    }
+
+    /** This app's own page in Settings, where its permissions live. */
+    private fun openAppSettings() {
+        startActivity(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", packageName, null),
+            ),
+        )
+    }
+
     private fun bleGranted(): Boolean =
         listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
             .all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
 
     private val requestPermissions =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            permissionsGranted.value = bleGranted()
+            // shouldShowRequestPermissionRationale is only meaningful AFTER a
+            // refusal, so this is the moment to read it (#1413).
+            refreshPermissionState()
         }
+
+    // #1413: granting in Settings and coming back used to leave the user
+    // stranded on the permission screen — permissionsGranted was only ever read
+    // in onCreate and in the launcher callback, and neither runs on that
+    // return. Re-read it on every resume so the app recovers without a relaunch.
+    override fun onResume() {
+        super.onResume()
+        refreshPermissionState()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -189,7 +225,11 @@ class MainActivity : ComponentActivity() {
                     }
 
                     when {
-                        !granted -> PermissionScreen { requestPermissions.launch(blePermissions) }
+                        !granted -> PermissionScreen(
+                            permanentlyDenied = permissionPermanentlyDenied.value,
+                            onRequest = { requestPermissions.launch(blePermissions) },
+                            onOpenSettings = { openAppSettings() },
+                        )
                         // Simple 2-screen state nav; NavHost lands with the
                         // next batch of destinations (plan §4).
                         activeDevice != null -> {
