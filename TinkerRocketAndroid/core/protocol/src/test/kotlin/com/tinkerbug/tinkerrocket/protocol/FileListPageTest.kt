@@ -143,4 +143,56 @@ class FileListPageTest {
         // Hour 25.
         assertNull(date("flight_20260716_253643.bin"))
     }
+
+    // ── #1144: the page size is negotiated, and learned ─────────────────
+
+    @Test
+    fun `a small MTU asks for fewer entries than the historical five`() {
+        // ATT MTU 185 -> 182 B budget -> 3 entries of 56 B worst case.
+        assertEquals(3, FilePageNavigator.perPageForMtu(185))
+        assertEquals(4, FilePageNavigator.perPageForMtu(247))
+    }
+
+    @Test
+    fun `an un-negotiated MTU means unknown, not one entry per page`() {
+        // 23 is the pre-negotiation default the session holds before any
+        // MtuChanged arrives. Reading it as a real budget would make every
+        // session crawl at 1 entry/page for that window, and a link genuinely
+        // stuck at 23 cannot carry one 56-byte entry anyway.
+        assertEquals(FilePageNavigator.FILES_PER_PAGE, FilePageNavigator.perPageForMtu(23))
+        assertEquals(FilePageNavigator.FILES_PER_PAGE, FilePageNavigator.perPageForMtu(0))
+    }
+
+    @Test
+    fun `a device that ignores the per_page byte still pages to the end`() {
+        // THE compatibility case, and the one that broke two existing tests
+        // while this was being written. Firmware predating #1144 serves its
+        // historical 5 whatever we ask for. Judging fullness against our OWN
+        // request — 9 at a large MTU — reads a full 5-entry page as partial
+        // and stops paging at page 0, reporting 5 flights on a device with 50.
+        var observed = FilePageNavigator.FILES_PER_PAGE
+        observed = FilePageNavigator.observePageSize(observed, 5)   // old fw serves 5
+        assertTrue(FileListPage(files = fivefiles(), pageSize = observed).hasMore)
+    }
+
+    @Test
+    fun `a partial last page does not shrink the yardstick`() {
+        // observePageSize is monotonic on purpose: if a 2-entry final page
+        // lowered the size to 2, the NEXT full page of 2 would read as full
+        // and page forever.
+        var observed = FilePageNavigator.FILES_PER_PAGE
+        observed = FilePageNavigator.observePageSize(observed, 5)
+        observed = FilePageNavigator.observePageSize(observed, 2)
+        assertEquals(5, observed)
+        assertFalse(FileListPage(files = twofiles(), pageSize = observed).hasMore)
+    }
+
+    @Test
+    fun `an empty page is never more, whatever the size`() {
+        assertFalse(FileListPage(files = emptyList(), pageSize = 3).hasMore)
+        assertFalse(FileListPage(files = emptyList(), pageSize = 5).hasMore)
+    }
+
+    private fun fivefiles() = (1..5).map { FileInfo("flight_$it.bin", 10L) }
+    private fun twofiles() = (1..2).map { FileInfo("flight_$it.bin", 10L) }
 }

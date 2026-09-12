@@ -164,3 +164,79 @@ TEST(WireFormatFileChunk, EncodeRejectsOversizedLength) {
     EXPECT_EQ(wire::encodeFileChunk(0, huge.data(), huge.size(), false, out, sizeof(out)),
               0u);
 }
+
+// ── #1144: the negotiated file-list page size ───────────────────────────────
+//
+// The page size was a flat 5 on the firmware and both apps with no reference
+// to the link MTU. A five-entry page is ~271 B worst case; an ATT MTU of 185
+// allows 182. #1284 stopped the over-MTU page being SENT, which turned a
+// garbage-parse into no list at all for a phone with four or more flights.
+// cmd 2 now carries an optional per_page the app derives from its own MTU,
+// and the firmware clamps it to what actually fits.
+
+TEST(FileListPageSize, TheWorstCaseEntryMatchesTheStructsOwnBounds) {
+    // 9 + 27 + 9 + 10 + 1: the braces/keys, the longest legal filename
+    // (FlightIndexEntry::filename is 28 B including the NUL), and a uint32
+    // final_bytes at its widest.
+    EXPECT_EQ(tr_flightlog::wire_format::kFileListEntryMaxBytes, 56u);
+
+    // And it really is an upper bound: encode the widest entry the struct can
+    // hold and check the encoder does not exceed it.
+    tr_flightlog::FlightIndexEntry e{};
+    std::memset(e.filename, 'x', sizeof(e.filename) - 1);
+    e.filename[sizeof(e.filename) - 1] = '\0';
+    e.final_bytes = 4294967295u;
+    char buf[256];
+    const size_t n = tr_flightlog::wire_format::encodeFileListJson(&e, 1, buf, sizeof(buf));
+    ASSERT_GT(n, 0u);
+    // n includes the two brackets; the entry itself is n - 2.
+    EXPECT_LE(n - 2, tr_flightlog::wire_format::kFileListEntryMaxBytes);
+}
+
+TEST(FileListPageSize, AnEntryCountAlwaysFitsTheBudgetItWasComputedFor) {
+    // The property that matters: whatever fileListEntriesThatFit returns must
+    // actually encode within the budget, or the caller's own maxNotifyBytes()
+    // guard refuses the page and the operator sees no flights.
+    for (size_t budget = 58; budget <= 600; ++budget) {
+        const size_t n = tr_flightlog::wire_format::fileListEntriesThatFit(budget);
+        ASSERT_GE(n, 1u) << "budget " << budget;
+        const size_t worst =
+            n * tr_flightlog::wire_format::kFileListEntryMaxBytes + (n - 1) + 2;
+        EXPECT_LE(worst, budget) << "budget " << budget << " claimed " << n << " entries";
+    }
+}
+
+TEST(FileListPageSize, TheReportedIphoneCaseNowFits) {
+    // ATT MTU 185 -> maxNotifyBytes 182. Five entries is 281 B worst case and
+    // was refused outright; three is 172 and fits.
+    const size_t budget = 185 - 3;
+    EXPECT_EQ(tr_flightlog::wire_format::fileListEntriesThatFit(budget), 3u);
+    EXPECT_EQ(tr_flightlog::wire_format::clampFileListPerPage(0, budget), 3u);
+    EXPECT_EQ(tr_flightlog::wire_format::clampFileListPerPage(5, budget), 3u);
+}
+
+TEST(FileListPageSize, AnAppThatSendsNoPerPageStillGetsTheHistoricalFive) {
+    // Every shipped app sends only [cmd][page]. Their behaviour must not
+    // change on a link that can carry five entries — this is the whole reason
+    // the byte is optional rather than required.
+    const size_t roomy = 1000;
+    EXPECT_EQ(tr_flightlog::wire_format::clampFileListPerPage(0, roomy),
+              tr_flightlog::wire_format::kFileListDefaultPerPage);
+}
+
+TEST(FileListPageSize, AnAbsurdRequestIsBoundedRatherThanTrusted) {
+    // The app knows its MTU; only this side knows the entry width. A request
+    // of 255 must not become a 14 KB page or a buffer overrun.
+    const size_t roomy = 100000;
+    EXPECT_EQ(tr_flightlog::wire_format::clampFileListPerPage(255, roomy),
+              tr_flightlog::wire_format::kFileListMaxPerPage);
+}
+
+TEST(FileListPageSize, ATinyMtuYieldsOneEntryNotZero) {
+    // Returning 0 would turn "this link cannot carry a page" into "you have no
+    // flights", which is the silent-empty failure this issue exists to remove.
+    // One entry is refused loudly by sendFileList's own guard instead.
+    EXPECT_EQ(tr_flightlog::wire_format::fileListEntriesThatFit(20), 1u);
+    EXPECT_EQ(tr_flightlog::wire_format::clampFileListPerPage(5, 20), 1u);
+}
+

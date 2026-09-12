@@ -32,9 +32,11 @@ struct FileManagerView: View {
         !displayedFiles.isEmpty && displayedFiles.allSatisfy { selection.contains($0.name) }
     }
 
-    // Both firmwares paginate the BLE file list at 5 entries/page
-    // (FILES_PER_PAGE in out_computer + base_station config).
-    private static let filesPerPage = 5
+    // #1144: the page size is negotiated from the link MTU rather than fixed
+    // at 5, and the device may serve a different number than we asked for
+    // (older firmware ignores the request). The page navigator has to count
+    // in whatever the device actually serves, so read it off the device.
+    private var filesPerPage: Int { device.observedFileListPageSize }
 
     /// Authoritative total page count when we know the full file count, else nil.
     /// The rocket's storage stats report `flightCount` (== the flight-log index
@@ -45,7 +47,7 @@ struct FileManagerView: View {
         guard !device.isBaseStation,
               let s = device.rocketStorage, s.initialized else { return nil }
         return FilePageNavigator.totalPages(forFileCount: s.flightCount,
-                                            pageSize: Self.filesPerPage)
+                                            pageSize: filesPerPage)
     }
 
     /// Show the navigator whenever there's more than one page. With a known

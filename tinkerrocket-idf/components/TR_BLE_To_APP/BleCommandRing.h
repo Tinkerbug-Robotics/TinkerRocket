@@ -43,6 +43,10 @@ struct PendingCommand
     uint8_t payload[kMaxPayload] = {};
     size_t  payload_len    = 0;
     uint8_t file_list_page = 0;
+    // #1144: entries the app asked for in this cmd-2 page. 0 means the app
+    // sent no per_page byte, which every shipped app does — the handler then
+    // uses the historical default of 5.
+    uint8_t file_list_per_page = 0;
     char    delete_name[kMaxFilename]   = {};
     char    download_name[kMaxFilename] = {};
 };

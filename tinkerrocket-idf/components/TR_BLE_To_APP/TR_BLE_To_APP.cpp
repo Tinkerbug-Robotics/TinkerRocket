@@ -758,6 +758,7 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
     char    name_local[64];
     bool    have_delete = false, have_download = false;
     int     page_local  = -1;
+    int     per_page_local = -1;   // #1144: -1 = the app did not ask
     uint8_t payload_local[tr_ble::kMaxPayload];
     size_t  payload_len_local = 0;
     bool    have_payload = false;
@@ -770,9 +771,23 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
 
     if (cmd == 2 && length > 1)
     {
-        // Command 2: File list request (optional page number follows)
+        // Command 2: File list request — [cmd][page]{[per_page]}
         page_local = data[1];
-        ESP_LOGI(BLE_TAG, "File list request, page: %u", (unsigned)page_local);
+        // #1144: the optional per_page byte. Every shipped app sends only the
+        // page, so its absence has to keep meaning the historical 5 — the
+        // length check IS the version negotiation, and it costs nothing
+        // because the parser already keyed on length.
+        if (length > 2)
+        {
+            per_page_local = data[2];
+            ESP_LOGI(BLE_TAG, "File list request, page: %u, per_page: %u",
+                     (unsigned)page_local, (unsigned)per_page_local);
+        }
+        else
+        {
+            ESP_LOGI(BLE_TAG, "File list request, page: %u (no per_page — "
+                              "defaulting)", (unsigned)page_local);
+        }
     }
     else if (cmd == 2)
     {
@@ -892,6 +907,7 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
         entry.payload_len = payload_len_local;
     }
     if (page_local >= 0)   entry.file_list_page = (uint8_t)page_local;
+    if (per_page_local >= 0) entry.file_list_per_page = (uint8_t)per_page_local;
     if (have_delete)       strlcpy(entry.delete_name,   name_local, sizeof(entry.delete_name));
     if (have_download)     strlcpy(entry.download_name, name_local, sizeof(entry.download_name));
 
@@ -1461,6 +1477,15 @@ uint8_t TR_BLE_To_APP::getFileListPage()
     uint8_t page = consumed_.file_list_page;
     consumed_.file_list_page = 0;   // "clears after reading" contract
     return page;
+}
+
+// #1144: entries the app asked for, or 0 if it sent no per_page byte. Same
+// clears-after-reading contract as the page, for the same reason (#384).
+uint8_t TR_BLE_To_APP::getFileListPerPage()
+{
+    uint8_t n = consumed_.file_list_per_page;
+    consumed_.file_list_per_page = 0;
+    return n;
 }
 
 String TR_BLE_To_APP::getDeleteFilename()

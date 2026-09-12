@@ -259,6 +259,15 @@ public:
     // Get file list page number (0-based)
     // Clears the page number after reading
     uint8_t getFileListPage();
+    /// #1144: per_page the app requested with cmd 2, or 0 if it sent none
+    /// (every app predating #1144). Clears after reading, like the page.
+    uint8_t getFileListPerPage();
+
+    /// Max payload bytes for one GATT notification = effectiveMtu() - ATT(3),
+    /// with a defensive 20-byte floor. Public since #1144: the file-list page
+    /// size is clamped to what a notification can actually carry, and that
+    /// clamp runs in the caller that builds the page.
+    size_t maxNotifyBytes() const;
 
     // Get raw command payload (for commands that carry data, e.g. sim config)
     // #384: return the loop-task snapshot taken atomically by getCommand(),
@@ -503,10 +512,7 @@ private:
     // exchange completes, the negotiated value after.
     uint16_t effectiveMtu() const;
 
-    // Max payload bytes for one GATT notification = effectiveMtu() - ATT(3),
-    // with a defensive 20-byte floor.  Single source of truth for every
-    // notify-size check (telemetry / config / OTA status / build cap).
-    size_t maxNotifyBytes() const;
+
 
     // Helper to build JSON string
     String buildTelemetryJSON(const TelemetryData& data);

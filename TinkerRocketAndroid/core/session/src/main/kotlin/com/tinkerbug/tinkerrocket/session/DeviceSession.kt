@@ -8,6 +8,7 @@ import com.tinkerbug.tinkerrocket.protocol.FileInfo
 import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
 import com.tinkerbug.tinkerrocket.protocol.pyroContinuityOf
 import com.tinkerbug.tinkerrocket.protocol.TrimAdvisory
+import com.tinkerbug.tinkerrocket.protocol.FilePageNavigator
 import com.tinkerbug.tinkerrocket.protocol.FileOpsDispatch
 import com.tinkerbug.tinkerrocket.protocol.FileOpsMessage
 import com.tinkerbug.tinkerrocket.protocol.FrequencyScanSample
@@ -835,7 +836,15 @@ public class DeviceSession(
             is FileOpsMessage.Ota -> _otaStatus.value = msg.status
             is FileOpsMessage.FileList -> {
                 _files.value = msg.page.files
-                _hasMoreFiles.value = msg.page.hasMore
+                // #1144: "a full page means there is another" is only correct
+                // against the size we ASKED for. The decoder cannot know it —
+                // it sees JSON, not the request — so apply it here, where the
+                // request was made. Comparing against a hardcoded 5 would stop
+                // paging early on a small-MTU link (3/page never equals 5).
+                observedPageSize = FilePageNavigator.observePageSize(
+                    observedPageSize, msg.page.files.size)
+                _hasMoreFiles.value =
+                    msg.page.copy(pageSize = observedPageSize).hasMore
             }
             null -> Unit   // malformed non-scan frame: silently dropped
         }
@@ -850,9 +859,19 @@ public class DeviceSession(
      * READ the file_ops characteristic (the list rides a read, not a
      * notification, on this path) and parse it through the same demux.
      */
+    /**
+     * #1144: the page size travels with the request, derived from the MTU this
+     * session negotiated. What the device SERVES is tracked separately in
+     * [observedPageSize] — the byte is a request, and a device predating #1144
+     * ignores it — because that is what "is this page full" must be judged
+     * against.
+     */
+    private var observedPageSize: Int = FilePageNavigator.FILES_PER_PAGE
+
     public fun requestFileList(page: Int = 0) {
         sessionScope.launch {
-            if (!writeCommand(Commands.fileList(page))) return@launch
+            val perPage = FilePageNavigator.perPageForMtu(_negotiatedMtu.value)
+            if (!writeCommand(Commands.fileList(page, perPage))) return@launch
             _currentPage.value = page
             launch {
                 delay(FILE_LIST_READ_DELAY_MS)

@@ -8,6 +8,7 @@ idf_component_register(
         TR_Sensor_Data_Converter
         TR_Coordinates
         TR_BLE_To_APP
+        TR_FlightLog         # #1144: wire_format file-list page-size constants
         TR_LoRa_Comms
         TR_RadioLink
         TR_MAX17205G

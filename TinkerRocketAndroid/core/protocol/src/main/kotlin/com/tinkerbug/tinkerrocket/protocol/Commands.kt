@@ -30,8 +30,19 @@ public object Commands {
     // ------------------------------------------------------------- file ops
 
     /** cmd 2 — request a page of the on-device file list. `[page u8]`. */
-    public fun fileList(page: Int): ByteArray =
-        frame(BleCommandId.FILE_LIST) { u8(page) }
+    /**
+     * cmd 2 — file list. `[page]` or, since #1144, `[page][per_page]`.
+     *
+     * `perPage == 0` sends the one-byte form, which is what every firmware
+     * predating #1144 expects and what it keeps meaning: the historical 5.
+     * A non-zero value asks for that many entries; the firmware clamps it to
+     * what one notification can carry.
+     */
+    public fun fileList(page: Int, perPage: Int = 0): ByteArray =
+        frame(BleCommandId.FILE_LIST) {
+            u8(page)
+            if (perPage > 0) u8(perPage)
+        }
 
     /** cmd 3 — delete a file by name. `[name utf8]` (no terminator). */
     public fun fileDelete(filename: String): ByteArray =

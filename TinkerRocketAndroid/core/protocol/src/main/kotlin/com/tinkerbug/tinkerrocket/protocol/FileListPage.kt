@@ -70,9 +70,28 @@ public data class FileInfo(
  */
 public data class FileListPage(
     val files: List<FileInfo>,
+    /**
+     * #1144: the page size to judge fullness against — the largest page this
+     * DEVICE has actually served, not the size we asked for.
+     *
+     * The per_page byte is a request, not a contract. A firmware predating
+     * #1144 ignores it and serves its historical 5; a newer one clamps to its
+     * own MTU budget and may serve fewer than asked. Either way our request is
+     * the wrong yardstick, so the caller supplies what it has observed and
+     * this compares against that.
+     *
+     * Defaults to [FILES_PER_PAGE], which is what every device served before
+     * this issue and therefore what an un-observed session should assume.
+     */
+    val pageSize: Int = FILES_PER_PAGE,
 ) {
-    /** iOS: `hasMoreFiles = (fileList.count == 5)`. */
-    public val hasMore: Boolean get() = files.size == FILES_PER_PAGE
+    /**
+     * "A full page means there is another" — against [pageSize], which is what
+     * the device serves rather than what we asked for.
+     *
+     * iOS twin: `hasMoreFiles = (fileList.count >= pageSize)`.
+     */
+    public val hasMore: Boolean get() = files.isNotEmpty() && files.size >= pageSize
 
     public companion object {
         /** Single source of truth is [FilePageNavigator.FILES_PER_PAGE]. */

@@ -1573,10 +1573,58 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - File operations
 
+    // MARK: File-list page size (#1144)
+    //
+    // 5 was hardcoded here, on Android and in three firmwares, with no
+    // reference to the link MTU. A five-entry page is ~281 B worst case; an
+    // ATT MTU of 185 allows 182. The firmware used to let the stack trim the
+    // page (so this app parsed garbage) and since #1284 refuses to send it —
+    // which means an iPhone at 185 with four or more flights got NO list.
+    //
+    // cmd 2 now carries an optional per_page byte derived from the MTU we
+    // negotiated. These mirror `FilePageNavigator` on Android and
+    // `tr_flightlog::wire_format` in the firmware, and must move with them.
+
+    /// `{"name":"` 9 + filename ≤ 27 + `","size":` 9 + ≤ 10 digits + `}` 1.
+    static let fileListEntryMaxBytes = 56
+    static let fileListMaxPerPage = 16
+    static let fileListDefaultPerPage = 5
+
+    /// Entries that fit a notification budget: `n*E + (n-1) + 2 <= budget`.
+    static func fileListEntriesThatFit(_ budgetBytes: Int) -> Int {
+        if budgetBytes < fileListEntryMaxBytes + 2 { return 1 }
+        return (budgetBytes - 1) / (fileListEntryMaxBytes + 1)
+    }
+
+    /// Page size to ask this link for. `maximumWriteValueLength(for:
+    /// .withoutResponse)` is ATT MTU − 3, which is exactly the notification
+    /// budget the firmware computes as `maxNotifyBytes()`.
+    var fileListPerPage: Int {
+        guard let peripheral = peripheral else { return Self.fileListDefaultPerPage }
+        let budget = peripheral.maximumWriteValueLength(for: .withoutResponse)
+        // 20 is the pre-negotiation default (ATT MTU 23). It means "not
+        // negotiated yet", not "this link carries 20 bytes" — guessing low
+        // there would make paging crawl for that window, and a link genuinely
+        // stuck at 23 cannot carry one 56-byte entry anyway.
+        if budget <= 20 { return Self.fileListDefaultPerPage }
+        return min(max(Self.fileListEntriesThatFit(budget), 1), Self.fileListMaxPerPage)
+    }
+
+    /// #1144: the page size the DEVICE serves, learned from what arrives.
+    ///
+    /// The per_page byte is a request, not a contract: firmware predating
+    /// #1144 ignores it and serves 5 whatever we ask. Judging "is this page
+    /// full" against our own request stops paging at page 0 against such a
+    /// device. Monotonic so a partial last page cannot shrink the yardstick.
+    private(set) var observedFileListPageSize = 5
+
     func requestFileList(page: UInt8 = 0) {
         guard let characteristic = commandCharacteristic,
               let peripheral = peripheral else { return }
-        let data = Data([2, page])
+        // #1144: [cmd][page][per_page]. A firmware predating this ignores the
+        // third byte and serves its historical 5, which observedFileListPageSize
+        // then picks up from the page itself.
+        let data = Data([2, page, UInt8(clamping: fileListPerPage)])
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
         currentPage = page
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -2707,7 +2755,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         do {
             let fileList = try jsonDecoder.decode([FileInfo].self, from: data)
             self.files = fileList
-            self.hasMoreFiles = (fileList.count == 5)
+            // #1144: against what the device SERVES, not what we asked for.
+            self.observedFileListPageSize = max(self.observedFileListPageSize,
+                                                fileList.count)
+            self.hasMoreFiles = !fileList.isEmpty
+                && fileList.count >= self.observedFileListPageSize
         } catch {
             print("Failed to parse file list: \(error)")
         }

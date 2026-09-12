@@ -44,6 +44,7 @@
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
 #include "bs_storage_policy.h"    // NAND bring-up retry / demotion policy (#761)
 #include "bs_file_list.h"       // top-N file-list window (#835)
+#include <WireFormat.h>        // #1144: shared file-list page-size arithmetic
 
 #include <TR_LoRa_Comms.h>
 #include <LoRaDirectBackend.h>
@@ -1784,6 +1785,13 @@ static void logPhoneFixEvent(int32_t lat_e7, int32_t lon_e7,
 static void handleFileListCommand()
 {
     uint8_t page = ble_app.getFileListPage();
+    // #1144: the page size is what the app asked for, clamped to what one
+    // notification can carry. 0 means the app sent no per_page byte, which
+    // keeps the historical 5 that every shipped app assumes. The base station
+    // lists SD filenames rather than index entries, but the budget arithmetic
+    // is the same and shares the wire-format constants.
+    const size_t files_per_page = tr_flightlog::wire_format::clampFileListPerPage(
+        ble_app.getFileListPerPage(), ble_app.maxNotifyBytes());
 
     // Stream the WHOLE directory past a window that keeps only the N greatest
     // names (#835 item 5).  This used to read into `FileEntry entries[64]` and
@@ -1792,7 +1800,7 @@ static void handleFileListCommand()
     // flight became unlistable and undownloadable once the directory held 64+
     // files.  N is sized to the requested page, so page 0 is correct for any
     // directory size and only paging depth is bounded.
-    const size_t want = bs_file_list::windowFor(page, config::FILES_PER_PAGE,
+    const size_t want = bs_file_list::windowFor(page, files_per_page,
                                                 config::FILE_LIST_MAX_WINDOW);
     if (want == 0)
     {
@@ -1843,10 +1851,10 @@ static void handleFileListCommand()
 
     // Build JSON.  stat() only the rows we actually emit -- the old code
     // stat()ed every file it collected, which on FAT is a directory walk each.
-    const size_t start = (size_t)page * config::FILES_PER_PAGE;
+    const size_t start = (size_t)page * files_per_page;
     String json = "[";
     size_t emitted = 0;
-    for (size_t i = start; i < window.count() && emitted < config::FILES_PER_PAGE; ++i)
+    for (size_t i = start; i < window.count() && emitted < files_per_page; ++i)
     {
         const char* name = window.at(i);
         if (emitted > 0) json += ",";

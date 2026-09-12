@@ -268,9 +268,21 @@ static bool flightlogReadChunk(const char* filename, uint32_t offset,
 // paginates at FILES_PER_PAGE, and encodes via the byte-stable
 // wire_format::encodeFileListJson helper (golden-fixture tested in Stage 1).
 // Returns the JSON string; caller passes it to ble_app.sendFileList.
-static std::string flightlogBuildFileListJson(uint8_t page)
+static std::string flightlogBuildFileListJson(uint8_t page, size_t per_page,
+                                              size_t max_notify_bytes)
 {
-    static constexpr size_t FILES_PER_PAGE = 5;
+    // #1144: the page size is negotiated, not hardcoded. It used to be a flat
+    // 5 here and on both apps, with no reference to the link MTU — and a
+    // five-entry page is ~271 B worst case against the 182 B an ATT MTU of 185
+    // allows. #1284 stopped that being sent (NimBLE trimmed it and returned
+    // success, so the app parsed garbage), but skipping is not working: a
+    // phone at 185 with four or more flights then received no list at all.
+    //
+    // `per_page` is what the app asked for, derived from the MTU it
+    // negotiated, or 0 when the app sent no per_page byte — which every app
+    // predating this does, so 0 has to keep meaning the historical 5.
+    const size_t FILES_PER_PAGE = tr_flightlog::wire_format::clampFileListPerPage(
+        per_page, max_notify_bytes);
 
     static tr_flightlog::FlightIndexEntry entries[
         tr_flightlog::FlightIndex::MAX_ENTRIES];
@@ -292,7 +304,14 @@ static std::string flightlogBuildFileListJson(uint8_t page)
     const size_t e = (end_raw < total) ? end_raw : total;
     const size_t n = e - s;
 
-    static char json[512];
+    // #1144: sized from the wire-format constants rather than a round number.
+    // encodeFileListJson returns 0 when the buffer is too small, which would
+    // turn "the app asked for a big page" into "you have no flights" — the
+    // exact silent-empty failure this issue is about. 512 was already only
+    // just enough for 5 entries and nowhere near enough for the new ceiling.
+    static char json[tr_flightlog::wire_format::kFileListMaxPerPage *
+                         (tr_flightlog::wire_format::kFileListEntryMaxBytes + 1) +
+                     2];
     const size_t json_len = tr_flightlog::wire_format::encodeFileListJson(
         entries + s, n, json, sizeof(json));
     return std::string(json, json_len);
@@ -10696,7 +10715,8 @@ static void loop_oc()
             }
             beginPhoneIO();
             uint8_t page = ble_app.getFileListPage();
-            String json = flightlogBuildFileListJson(page).c_str();
+            uint8_t per_page = ble_app.getFileListPerPage();   // #1144: 0 = unset
+            String json = flightlogBuildFileListJson(page, per_page, ble_app.maxNotifyBytes()).c_str();
             ble_app.sendFileList(json);
             endPhoneIO();
             ESP_LOGI("BLE", "Sent file list page %u: %u bytes",
@@ -10786,7 +10806,7 @@ static void loop_oc()
             {
                 ESP_LOGW("BLE", "Delete '%s' refused: rocket INFLIGHT",
                          filename.c_str());
-                String json = flightlogBuildFileListJson(/*page=*/0).c_str();
+                String json = flightlogBuildFileListJson(/*page=*/0, /*per_page=*/0, ble_app.maxNotifyBytes()).c_str();
                 ble_app.sendFileList(json);
             }
             else if (filename.length() > 0)
@@ -10794,7 +10814,7 @@ static void loop_oc()
                 beginPhoneIO();
                 auto st = flightlog.deleteFlight(filename.c_str());
                 bool success = (st == tr_flightlog::Status::Ok);
-                String json = flightlogBuildFileListJson(/*page=*/0).c_str();
+                String json = flightlogBuildFileListJson(/*page=*/0, /*per_page=*/0, ble_app.maxNotifyBytes()).c_str();
                 ESP_LOGI("BLE", "Delete '%s': %s", filename.c_str(),
                          success ? "OK" : "FAIL");
                 ble_app.sendFileList(json);
