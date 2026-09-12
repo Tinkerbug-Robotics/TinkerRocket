@@ -710,6 +710,97 @@ TEST_F(KinematicChecksTest, Landing_NotPremature) {
     EXPECT_FALSE(kc.alt_landed_flag); // max_altitude < 15
 }
 
+// ── #1153 item 2: the reboot-recovery seed ──────────────────────────────────
+//
+// Reboot recovery does not replay the flight through kinematicChecks(); it
+// seeds the object directly from the snapshot — launch_flag, the maxima
+// (#1154 item 9) and, since #1153 item 2, the master apogee_flag — and leaves
+// the sub-flags fresh, as enterInflight() does.  These pin what the seeded
+// object then does with this boot's data, and what the un-seeded one (the
+// restore before #1153) could not do.
+
+TEST_F(KinematicChecksTest, Recovery_SeededPastApogee_TouchdownLatchesLanded) {
+    // A snapshot from past apogee: launch latched, apogee latched, the
+    // flight's maximum restored.
+    kc.launch_flag  = true;
+    kc.apogee_flag  = true;
+    kc.max_altitude = 500.0f;
+
+    // Touchdown on the pad's reference: 5 m, stable, ~1 g, quiet.  The slow
+    // vote needs ~4 s of 1 Hz ticks.
+    for (int second = 0; second < 7; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(5.0f, 9.81f, 0.0f, 0.1f);
+        }
+    }
+    EXPECT_TRUE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Recovery_ApogeeNotSeeded_TouchdownNeverLatches) {
+    // The restore before #1153 item 2: launch and the maximum came back,
+    // apogee did not.  The same touchdown trace gives the apogee vote nothing
+    // to work on — the velocity and baro voters both need alt_est above 15 m,
+    // and so does the Layer-2 backstop — so every landing detector stays
+    // gated shut, however long the vehicle sits there.  Such a flight ended
+    // only through the #1176 refutation or the 10-minute flight timeout.
+    kc.launch_flag  = true;
+    kc.max_altitude = 500.0f;
+
+    for (int second = 0; second < 40; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(5.0f, 9.81f, 0.0f, 0.1f, /*gps_alt=*/0.0f, /*new_gps=*/false,
+                       /*pitch_rad=*/1.57f, /*burnout=*/true);
+        }
+    }
+    EXPECT_FALSE(kc.apogee_flag);
+    EXPECT_TRUE(kc.baro_stable_flag) << "the mandatory voter had the evidence";
+    EXPECT_FALSE(kc.alt_landed_flag) << "but the vote is gated on apogee_flag";
+}
+
+TEST_F(KinematicChecksTest, Recovery_SeededPastApogee_QuiescenceCanLatch) {
+    // RecoveryArmGate documents that a restored flight's fresh
+    // TR_KinematicChecks could never latch quiescent_flag, and carries its own
+    // stillness accumulator because of it.  With the apogee seed a flight
+    // restored from past apogee can — the shipped refutation source works
+    // again.  Off the pad reference (a different field), so baro_stable
+    // cannot carry the vote and quiescence is the only route.
+    kc.launch_flag  = true;
+    kc.apogee_flag  = true;
+    kc.max_altitude = 500.0f;
+
+    for (int second = 0; second < 40; second++) {
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(1000 + second * 1000 + i * 2);
+            callFlight(120.0f, 9.80665f, 0.0f, 0.0f);
+        }
+    }
+    EXPECT_FALSE(kc.baro_stable_flag) << "120 m is outside the pad band";
+    EXPECT_TRUE(kc.quiescent_flag);
+    EXPECT_TRUE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Recovery_SeededBeforeApogee_QuiescenceStillCannotLatch) {
+    // A boost or coast reboot restores launch but no apogee, and a board that
+    // then sits still on a bench has no descent to re-derive one from.  This
+    // is the case RecoveryArmGate's own accumulator still exists for.
+    kc.launch_flag = true;
+
+    for (int second = 0; second < 40; second++) {
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(1000 + second * 1000 + i * 2);
+            callFlight(0.0f, 9.80665f, 0.0f, 0.0f, /*gps_alt=*/0.0f, /*new_gps=*/false,
+                       /*pitch_rad=*/1.57f, /*burnout=*/true);
+        }
+    }
+    EXPECT_FALSE(kc.apogee_flag);
+    EXPECT_FALSE(kc.quiescent_flag);
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
 TEST_F(KinematicChecksTest, AltKF_ConvergesToMeasurement) {
     // Feed constant altitude measurements
     for (int i = 0; i < 500; i++) {

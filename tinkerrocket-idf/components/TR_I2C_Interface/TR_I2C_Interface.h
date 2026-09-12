@@ -35,6 +35,14 @@ public:
     // resetting mid-transaction destroys the in-flight read (#279).
     esp_err_t resetSlaveTx();
 
+    /// #1151: is the slave device actually on the bus right now?
+    ///
+    /// resetSlaveTx() can leave it absent (a failed re-create), and in that
+    /// state the OC accepts no commands at all while telemetry, LoRa and BLE
+    /// all keep working — so nothing else signals it. The caller uses this to
+    /// drive the retry and to say so out loud.
+    bool slaveDeviceAlive() const { return _slave_dev != nullptr; }
+
     esp_err_t sendMessage(uint8_t type,
                           const uint8_t *payload,
                           size_t len,
@@ -158,6 +166,11 @@ private:
     // resetSlaveTx() can recreate the device.  _dev_mux serializes
     // slaveTxTask's i2c_slave_write against del/re-create in resetSlaveTx.
     SemaphoreHandle_t _dev_mux = nullptr;
+    // #1151: "a slave device is wanted", set once beginSlave() has built one
+    // and cleared only by a deliberate teardown. resetSlaveTx() keys its entry
+    // guard off THIS rather than off _slave_dev, so a failed re-create leaves
+    // the work owed and retryable instead of latching the interface off.
+    bool   _slave_wanted = false;
     int    _slave_sda = -1;
     int    _slave_scl = -1;
     size_t _slave_rx_len = 0;

@@ -1267,6 +1267,27 @@ static void publishSensorCalFromNVS()
     telemStore(mini_link::telem.sensor_cal, s, mini_link::telem.sensor_cal_update_us);
 }
 
+// #1153 item 3: end a mag-cal session and roll the chip back to the prior
+// offsets.  Factored out of the MAG_CAL_ABORT handler (as the FC's #1118
+// teardown is) so the sim reset below cannot drift from it — leaving the
+// OFFSET registers zeroed is what turns a stranded session into a corrupted
+// magnetometer for the rest of the boot.
+static void magCalEndSession(const char* why)
+{
+    if (mag_cal_session_active && sensor_collector.isIIS2MDCActive())
+    {
+        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
+            mag_cal_prior_cx, mag_cal_prior_cy, mag_cal_prior_cz);
+        ESP_LOGI(TAG, "[MAGCAL] %s — restored prior OFFSET (%d,%d,%d) %s",
+                 why, (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
+                 (int)mag_cal_prior_cz, ok ? "OK" : "FAIL");
+    }
+    mag_cal_session_active = false;
+    mag_cal_verify_active  = false;
+    mag_calibrator.abort();
+    mag_cal_status_dirty   = true;
+}
+
 // ==========================================================================
 // SECTION: Simulator re-arm
 // ==========================================================================
@@ -1289,6 +1310,21 @@ static void resetFlightStateForSim(const char* edge)
     // falling edge and reset a second time.
     sim_flight_latched = false;
     prev_sim_active    = sensor_collector.isSimActive();
+    // #1153 item 3: a sim reset is the sim's equivalent of a reboot, and a
+    // reboot ends a mag-cal session — the RAM side is gone and the chip comes
+    // back up on the persisted offsets.  Do the same.  A Start cannot reach
+    // this from MAG_CALIBRATION any more (SIM_START is refused there), but a
+    // Stop or the #971 give-up can, for a session opened from READY while a
+    // sim sat on its synthetic pad.  Before this the reset wrote
+    // rocket_state = READY and touched none of the session: the OFFSET
+    // registers MAG_CAL_START zeroed stayed at zero, the sampling feed (gated
+    // on the state) stopped so the session could never complete, and nothing
+    // restored the priors — every later flight in this boot flew an
+    // uncalibrated magnetometer that the EKF's magnitude gate rejected
+    // outright, so heading aiding was silently dead.
+    if (mag_cal_session_active || rocket_state == MAG_CALIBRATION) {
+        magCalEndSession("sim reset");
+    }
     rocket_state = READY;
     post_flight_lockout = false;  // #317: a deliberate sim start/stop re-arms
     ground_pressure_found = false;
@@ -1475,6 +1511,24 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
             ESP_LOGW(TAG, "[SIM CFG] short payload (%u < %u)",
                      (unsigned)cmd.len, (unsigned)sizeof(SimConfigData));
         }
+    }
+    else if (cmd.type == SIM_START_CMD &&
+             sim_flight::startRefused(isCommandLockoutState(rocket_state)))
+    {
+        // #1153 item 3: the one test-class command that had no state gate.
+        // The command drain discards everything in a non-sim INFLIGHT, so
+        // INFLIGHT here can only be a sim's own flight — a second Start under
+        // a running run.  Stop first; the Stop is the reset.  In
+        // MAG_CALIBRATION the Start edge used to reset the flight state to
+        // READY without ending the session, leaving the chip's OFFSET
+        // registers at the zero MAG_CAL_START programmed for the rest of the
+        // boot (see resetFlightStateForSim, which now also ends the session
+        // on the paths that can still reach it).  sim_flight_policy.h pins
+        // the rule.
+        ESP_LOGW(TAG, "[SIM] Start refused: state=%u (no sim start while "
+                      "INFLIGHT or in MAG_CALIBRATION — stop the running sim "
+                      "or end the calibration first) (#1153)",
+                 (unsigned)rocket_state);
     }
     else if (cmd.type == SIM_START_CMD)
     {
@@ -1671,18 +1725,7 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
         ESP_LOGI(TAG, "[MAGCAL] abort");
         // Full session ends — restore the prior NVS offsets to the chip
         // (regardless of which sub-state we're aborting from).
-        if (mag_cal_session_active && sensor_collector.isIIS2MDCActive())
-        {
-            const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
-                mag_cal_prior_cx, mag_cal_prior_cy, mag_cal_prior_cz);
-            ESP_LOGI(TAG, "[MAGCAL] abort — restored prior OFFSET (%d,%d,%d) %s",
-                     (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
-                     (int)mag_cal_prior_cz, ok ? "OK" : "FAIL");
-        }
-        mag_cal_session_active = false;
-        mag_cal_verify_active = false;
-        mag_calibrator.abort();
-        mag_cal_status_dirty = true;
+        magCalEndSession("abort");   // #1153 item 3: shared teardown
         if (rocket_state == MAG_CALIBRATION) rocket_state = READY;
         // Calibrator is now in ABORTED — leave it there (iOS treats .aborted
         // and .idle the same); start() on the next session resets cleanly.
@@ -2873,6 +2916,23 @@ void flight_setup()
 
             // Mark launch flag so kinematic checks don't re-trigger launch detection
             kinematics.launch_flag = true;
+            // #1153 item 2: and the apogee latch, from the same field
+            // pyro_apogee_detected was restored from above.  The kinematics
+            // flag is the master vote pyro_apogee_detected is derived from,
+            // and everything that reads it — the AHRS accel correction and
+            // the nose-first heading aids in the EKF tick, NSF2_MASTER_APOGEE,
+            // and every landing detector's apogee gate — otherwise behaved as
+            // if a flight restored past apogee were still climbing, until a
+            // vote re-derived apogee from this boot's data (never, after a
+            // touchdown reboot).  Sub-flags stay false, as enterInflight()
+            // leaves them.  The deployment triggers are untouched: they read
+            // pyro_apogee_detected through the #1176 interlock.  The FC's
+            // restore carries the full rationale.
+            if (snap.pyro_apogee_detected) {
+                kinematics.apogee_flag = true;
+                ESP_LOGW(TAG, "[RECOVERY] apogee latch restored — landing "
+                              "detection and post-apogee estimation active");
+            }
 
             // Restore complete: mark this recovered flight evaluated so a
             // LATER unexpected reboot (after this recovered flight ends)

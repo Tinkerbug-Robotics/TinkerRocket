@@ -727,6 +727,29 @@ struct ConnectedDashboardView: View {
                 }
                 .opacity(staleOpacity)
 
+                // #1085: the frame told us it was trimmed to fit the MTU
+                // window, so say so. The firmware spends payload budget
+                // specifically to guarantee this flag arrives — it holds seven
+                // bytes back "so the partial frame isn't a silent blackout" —
+                // and until now neither app read it. On a small MTU the Tier 1
+                // floor suppresses everything below it, so the frame carries
+                // only the Tier 1 prefix that fit plus "tr":1, and both
+                // dashboards look like a dead rocket during flight.
+                //
+                // Same rule as the lines around it: advisory only, never a
+                // recolour of the state banner. Held a few seconds because the
+                // flag toggles with payload size frame to frame.
+                if device.showTrimAdvisory {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chart.bar.doc.horizontal")
+                        Text(BLEDevice.trimAdvisoryText)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity)
+                    .opacity(staleOpacity)
+                }
+
                 // "LoRa off": one quiet line, same shape and placement as the
                 // preflight advisory and under the same rule — advisory only,
                 // it never recolors the state banner.  Worth a line at all

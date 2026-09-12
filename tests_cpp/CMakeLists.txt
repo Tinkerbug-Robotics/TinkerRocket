@@ -356,6 +356,16 @@ target_compile_definitions(test_orientation PRIVATE TR_BOARD_V9=1)
 target_link_libraries(test_orientation GTest::gtest_main)
 gtest_discover_tests(test_orientation)
 
+# ---------- test_lora_modulation_policy (#1128) ----------
+# The LLCC68's SF-window-follows-bandwidth rule, which is what makes the order
+# of reconfigure()'s rollback part of its correctness. Header-only.
+add_executable(test_lora_modulation_policy test_lora_modulation_policy.cpp)
+target_include_directories(test_lora_modulation_policy PRIVATE
+    ${LIB_DIR}/TR_LoRa_Comms
+)
+target_link_libraries(test_lora_modulation_policy GTest::gtest_main)
+gtest_discover_tests(test_lora_modulation_policy)
+
 # ---------- test_lora_roundtrip ----------
 # This tests the OutComputer -> BaseStation -> iOS App data pipeline
 add_executable(test_lora_roundtrip test_lora_roundtrip.cpp
@@ -1371,6 +1381,16 @@ target_include_directories(test_tx_frame_policy PRIVATE
     ${CMAKE_SOURCE_DIR}/../tinkerrocket-idf/components/TR_UART_Link)
 target_link_libraries(test_tx_frame_policy GTest::gtest_main)
 gtest_discover_tests(test_tx_frame_policy)
+
+# ---------- test_i2c_slave_recovery_policy (#1151) ----------
+# The OC's retry for a slave device it failed to re-create. Header-only policy;
+# the IDF-side imperative half stays in out_computer/main.cpp.
+add_executable(test_i2c_slave_recovery_policy test_i2c_slave_recovery_policy.cpp)
+target_include_directories(test_i2c_slave_recovery_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_i2c_slave_recovery_policy GTest::gtest_main)
+gtest_discover_tests(test_i2c_slave_recovery_policy)
 
 # ---------- test_ota_relay_policy (#834 items 6/7) ----------
 # Timing for the OC's I2S relay recovery: how often to retry a failed slave-RX

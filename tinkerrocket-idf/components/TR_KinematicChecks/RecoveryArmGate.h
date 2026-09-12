@@ -144,21 +144,24 @@ struct Config {
 
     // --- Ground refutation.  POSITIVE stillness evidence only.
     //
-    // TWO SOURCES, because the shipped one cannot fire here.  quiescent_flag
-    // (TR_KinematicChecks) is the calibrated, baro-independent detector
-    // MainDeployGate trusts, and it stays the preferred input — but its
-    // quiescent_pass has `apogee_flag` as a hard conjunct, and a RESTORED
-    // flight starts with a fresh TR_KinematicChecks whose apogee flag is
-    // false.  On the path this gate exists for, that flag can therefore never
-    // latch, and a refutation built only on it is dead code: a stale-token
-    // board would sit INFLIGHT for the full 10-minute flight timeout instead
-    // of the ~30 s the design promises.
+    // TWO SOURCES, because the shipped one cannot always fire here.
+    // quiescent_flag (TR_KinematicChecks) is the calibrated, baro-independent
+    // detector MainDeployGate trusts, and it stays the preferred input — but
+    // its quiescent_pass has `apogee_flag` as a hard conjunct, and a RESTORED
+    // flight starts with a fresh TR_KinematicChecks.  Since #1153 item 2 the
+    // restore seeds that flag from the snapshot, so a flight that rebooted
+    // PAST apogee can latch quiescent_flag again; one restored from boost or
+    // coast still cannot — its apogee flag is false, and on the ground there
+    // is no descent left to re-derive it from.  On that path a refutation
+    // built only on the shipped flag is dead code: a stale-token board would
+    // sit INFLIGHT for the full 10-minute flight timeout instead of the ~30 s
+    // the design promises.
     //
     // So the gate also accumulates the SAME underlying terms itself, minus the
     // apogee conjunct that is wrong for this use (a rocket on the pad being
     // still is exactly the signal we want, not one to suppress).  Thresholds
     // are the shipped ones, deliberately — this reuses the calibration without
-    // depending on a latch that cannot set.
+    // depending on a latch that may not be able to set.
     float    still_gyro_dps   = 5.0f;    // QUIESCENT_GYRO_DPS
     float    still_accel_tol  = 0.49f;   // QUIESCENT_ACCEL_TOL_MS2, ~0.05 g
     float    still_rate_mps   = 0.5f;    // baro rate, when the baro is usable
@@ -314,9 +317,9 @@ inline void step(State& st, const Inputs& in, const Config& cfg = Config{})
 
     // Refutation: sustained, positive stillness, from EITHER source. The
     // shipped detector is preferred and is what a normal flight uses; the
-    // gate's own accumulator is what makes this reachable at all on a restored
-    // flight, whose fresh TR_KinematicChecks can never latch quiescent_flag
-    // (see the Config note).
+    // gate's own accumulator is what makes this reachable on a flight
+    // restored from BEFORE apogee, whose fresh TR_KinematicChecks cannot
+    // latch quiescent_flag (see the Config note).
     if (held(in.quiescent_flag, in.now_ms, cfg.refute_hold_ms, st.quiet_since) ||
         still)
     {

@@ -57,7 +57,8 @@ static inline std::string itos(int v)
 }
 
 #include "config.h"
-#include "ota_relay_policy.h"   // #834 items 6/7: I2S relay recovery timing
+#include "ota_relay_policy.h"            // #834 items 6/7: I2S relay recovery timing
+#include "i2c_slave_recovery_policy.h"   // #1151: I2C slave device re-create retry timing
 #include "rail_restore_policy.h"
 #include "blind_window_policy.h"   // #1271: what a phone-IO blind window actually cost  // #825: boot rail re-assert decision
 #include "flight_token_policy.h"  // #1176: tier-2 rail decision from a durable token
@@ -3530,6 +3531,12 @@ static volatile bool oc_ota_revert_to_rx_requested = false; // set on FINISH/ABO
 // ocRevertToRx(), the only route back to slave RX. This is the honest state.
 static volatile bool oc_i2s_rx_broken     = false;  // no working slave RX
 static uint32_t      oc_i2s_rx_last_try_ms = 0;
+// #1151: the same shape for the I2C slave device. Set when resetSlaveTx()
+// fails to re-create it, cleared when a retry succeeds. While it is set the OC
+// is on the bus but accepts no commands, and nothing else says so.
+static volatile bool oc_i2c_slave_broken   = false;
+static uint32_t      oc_i2c_slave_last_try_ms = 0;
+static uint32_t      oc_i2c_slave_last_log_ms = 0;
 // #834 item 7: last relayed chunk, for the stall watchdog. 0 = not yet armed
 // (the app has not been told "ready", so silence is expected).
 static volatile uint32_t oc_ota_last_chunk_ms = 0;
@@ -5026,9 +5033,20 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         // freshly staged, aligned response.
         ESP_LOGW("OC", "[I2C] RESYNC from FC — resetting slave TX path (#402)");
         const esp_err_t rerr = i2c_interface.resetSlaveTx();
+        oc_i2c_slave_last_try_ms = (uint32_t)(esp_timer_get_time() / 1000);
         if (rerr != ESP_OK)
         {
-            ESP_LOGE("OC", "[I2C] slave TX reset FAILED: %s", esp_err_to_name(rerr));
+            // #1151: latch it as owed rather than logging once and moving on.
+            // loop_oc retries until the device is back; without that, this one
+            // allocation failure ended the FC<->OC command path for the rest
+            // of the power cycle.
+            oc_i2c_slave_broken = true;
+            ESP_LOGE("OC", "[I2C] slave TX reset FAILED: %s — no commands can be "
+                           "served until this succeeds; retrying", esp_err_to_name(rerr));
+        }
+        else
+        {
+            oc_i2c_slave_broken = false;
         }
     }
     else if (type == GUIDANCE_TELEM_MSG ||
@@ -6570,6 +6588,11 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         }
         else
         {
+            // #1146 item 2: the driver now restores RX itself on every
+            // reconfigure failure path, but the OC's mirror of that state has
+            // to follow or the next serviceLoRaUplink pass acts on a stale
+            // flag. The #569 fix above was applied only to the success branch.
+            lora_in_rx_mode = lora_comms.isInRxMode();
             ESP_LOGE("LORA", "UPLINK LoRa reconfigure FAILED");
         }
     }
@@ -6905,10 +6928,15 @@ static void serviceLoRaUplink()
     // service() auto-calls startReceive() after TX completion.
     // Sync our tracking flag to avoid a redundant startReceive() that
     // would reset rx_done_ and potentially drop a received packet.
-    if (lora_comms.isInRxMode())
-    {
-        lora_in_rx_mode = true;
-    }
+    //
+    // #1146 item 2: this used to be one-directional — `if (isInRxMode())
+    // lora_in_rx_mode = true;` — so it could raise the flag but never lower
+    // it. Any path that left the driver out of RX without clearing the flag
+    // here (a rejected reconfigure, a failed scan restore) left a stale true,
+    // and the `if (!lora_in_rx_mode) startReceive();` recovery just below was
+    // then suppressed for the rest of the power cycle. The driver's own flag
+    // is the truth; mirror it in both directions.
+    lora_in_rx_mode = lora_comms.isInRxMode();
 
     // Enter RX mode if not already (first call before any TX has occurred)
     if (!lora_in_rx_mode)
@@ -10374,6 +10402,33 @@ static void loop_oc()
             i2s_stream.end();          // drop whatever half-state is there
             ocBeginSlaveRxLocked("retry");
             xSemaphoreGive(oc_i2s_mutex);
+        }
+
+        // #1151: the I2C slave device, same shape. resetSlaveTx() is now
+        // retry-capable (its guard is "wanted", not "exists"), so keep asking
+        // until the OC can serve commands again. Safe to call from here for
+        // the same reason the RESYNC handler is: the FC suspends all polling
+        // for its grace window after sending RESYNC, and once the device is
+        // absent there is no master read to interrupt anyway.
+        if (I2cSlaveRecoveryPolicy::shouldRetry(oc_i2c_slave_broken, retry_now_ms,
+                                                oc_i2c_slave_last_try_ms))
+        {
+            oc_i2c_slave_last_try_ms = retry_now_ms;
+            const esp_err_t serr = i2c_interface.resetSlaveTx();
+            if (serr == ESP_OK)
+            {
+                oc_i2c_slave_broken = false;
+                ESP_LOGW("OC", "[I2C] slave device restored — commands are being "
+                               "served again (#1151)");
+            }
+            else if (I2cSlaveRecoveryPolicy::shouldComplain(oc_i2c_slave_broken,
+                                                            retry_now_ms,
+                                                            oc_i2c_slave_last_log_ms))
+            {
+                oc_i2c_slave_last_log_ms = retry_now_ms;
+                ESP_LOGE("OC", "[I2C] slave device STILL absent (%s) — this board is "
+                               "accepting no commands (#1151)", esp_err_to_name(serr));
+            }
         }
 
         // #1228: a flight logger that failed to come up is retried from here,
