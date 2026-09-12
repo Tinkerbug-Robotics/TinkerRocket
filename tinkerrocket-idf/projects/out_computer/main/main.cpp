@@ -57,8 +57,8 @@ static inline std::string itos(int v)
 }
 
 #include "config.h"
-#include "ota_relay_policy.h"
-#include "i2c_slave_recovery_policy.h"   // #834 items 6/7: I2S relay recovery timing
+#include "ota_relay_policy.h"            // #834 items 6/7: I2S relay recovery timing
+#include "i2c_slave_recovery_policy.h"   // #1151: I2C slave device re-create retry timing
 #include "rail_restore_policy.h"
 #include "blind_window_policy.h"   // #1271: what a phone-IO blind window actually cost  // #825: boot rail re-assert decision
 #include "flight_token_policy.h"  // #1176: tier-2 rail decision from a durable token
