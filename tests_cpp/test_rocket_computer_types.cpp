@@ -120,6 +120,27 @@ TEST(RocketComputerTypes, StorageHealthVerdict) {
     EXPECT_EQ(shStorageState(0, /*prealloc=*/0, 0), SH_NA);       // logger not configured
 }
 
+// #1029: the battery verdict the OC folds into sensor_health.  The eFuse UVLO
+// re-enables only above ~6.96 V (mini) / 6.91 V (V10), so a pack that trips it
+// on a pyro sag while resting below that stays off for the rest of the flight.
+// Red starts at 7.0 V — where a trip can no longer clear — and green needs
+// 7.2 V (3.6 V/cell).  Nothing gates ARM on this verdict, so the colour IS the
+// warning; these pin the lines so a "harmless" retune cannot quietly reopen the
+// 6.6–6.96 V band that used to show only amber.
+TEST(RocketComputerTypes, BatteryHealthVerdict) {
+    EXPECT_EQ(shBatteryState(8.40f), SH_OK);        // full 2S pack
+    EXPECT_EQ(shBatteryState(7.20f), SH_OK);        // green from 7.2 V
+    EXPECT_EQ(shBatteryState(7.19f), SH_DEGRADED);
+    EXPECT_EQ(shBatteryState(7.00f), SH_DEGRADED);  // amber band 7.0–7.2 V
+    EXPECT_EQ(shBatteryState(6.99f), SH_BAD);       // below the eFuse re-enable point
+    EXPECT_EQ(shBatteryState(6.96f), SH_BAD);       // the mini's re-enable voltage itself
+    EXPECT_EQ(shBatteryState(6.60f), SH_BAD);       // the old red line — still red
+    EXPECT_EQ(shBatteryState(6.38f), SH_BAD);       // the eFuse trip voltage
+    EXPECT_EQ(shBatteryState(0.99f), SH_NA);        // no plausible reading
+    EXPECT_EQ(shBatteryState(0.0f),  SH_NA);
+    EXPECT_EQ(shBatteryState(std::numeric_limits<float>::quiet_NaN()), SH_NA);
+}
+
 TEST(RocketComputerTypes, StorageHealth_BitPosition) {
     EXPECT_EQ(SH_STORAGE_SHIFT, 20u);
     for (uint8_t other : {SH_BARO_SHIFT, SH_IMU_SHIFT, SH_EKF_SHIFT, SH_MAG_SHIFT,
