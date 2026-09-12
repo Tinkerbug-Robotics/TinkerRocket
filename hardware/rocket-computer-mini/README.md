@@ -368,7 +368,7 @@ paste apertures (window-paned 2026-09-12, #960) touched since.
 
 | | at fork | after the rev change | after P4 removal | after the second S3 | **V1.0.1 / main** |
 |---|---|---|---|---|---|
-| ERC (`--severity-all`) | 1012 | 1012 | 823 → 610 | 739 | **795** (10 errors) |
+| ERC (`--severity-all`) | 1012 | 1012 | 823 → 610 | 739 | **737** (10 errors) |
 | DRC (`--severity-all`) | 26 | 28 | 88 | not re-run | **23** (2 errors) |
 | Schematic parity | 11 | 11 | 8 | not re-run | **0** |
 | Unconnected | 0 | 0 | 0 | not re-run | **0** |
@@ -379,11 +379,18 @@ predates the layout. The per-category breakdown of the 2026-08-22 ERC delta
 that used to follow this table is in this file's git history.* What the live
 numbers are:
 
-- **ERC 795.** The 10 errors are the out computer's ten bare spare pads (see
+- **ERC 737.** The 10 errors are the out computer's ten bare spare pads (see
   *Status* below). The warnings are 704 `endpoint_off_grid` — the power sheet's
-  half-grid offset — 56 `pin_to_pin` and 25 `lib_symbol_mismatch`; the last two
-  are the library-hygiene items on
-  [#1030](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1030).
+  half-grid offset — 22 `pin_to_pin` and 1 `lib_symbol_mismatch`, down from 56
+  and 25 before the 2026-09-12 hygiene pass
+  ([#1030](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1030)): the
+  pyro P-FETs and the NAND now carry symbols named for the fitted parts with
+  typed pins, eighteen cached copies that differed from the shared library only
+  by a footprint nickname or a datasheet line were refreshed, and every sheet
+  carries a title block — all with the netlist unchanged. The one mismatch left
+  is `U30`: its cached copy is a differently drawn variant of the load-switch
+  symbol (`TPS22810DRVR_1`, other pin positions), so replacing it means
+  re-wiring the symbol in the editor.
 - **DRC 23.** The 2 errors are courtyard overlaps between the fiducials `FID2` /
   `FID3` and the connectors `J6` / `J2` they sit beside — accepted; a fiducial
   inside a connector's courtyard costs nothing. The 21 warnings are silk over
@@ -482,9 +489,11 @@ INA230's ALERT, the USB-C sideband pair). The pin-type conventions are the
 ones recorded in
 [`../rocket-computer/v10-power-parity-2026-09-11.md`](../rocket-computer/v10-power-parity-2026-09-11.md)
 §6.6; this board shares those symbols. Left as drawn: 704 off-grid endpoint
-warnings — most of the power sheet sits on a half-grid offset — and the
-borrowed P-FET/NAND symbols, the missing `ARM_GATE` label and the empty title
-blocks from #1030.
+warnings — most of the power sheet sits on a half-grid offset. The #1030 items
+went on 2026-09-12 with the netlist unchanged: the borrowed P-FET and NAND
+symbols replaced, the stale cached copies refreshed, a title block on every
+sheet. `ARM_GATE` is a sheet-local label by design, so its net is
+`/Pyro/ARM_GATE` — the name the docs use is the label, the path is KiCad's.
 
 **Firmware is the two-processor pair, and CI builds it.** The fabbed board runs
 [`projects/out_computer`](../../tinkerrocket-idf/projects/out_computer/) and
