@@ -47,7 +47,6 @@ import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.RocketProfileStore
 import com.tinkerbug.tinkerrocket.session.UnitFormatter
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
@@ -271,17 +270,20 @@ fun SimulationScreen(session: DeviceSession, onBack: () -> Unit) {
                         launching = true
                         scope.launch {
                             session.sendTimeSync()
-                            session.sendCommandFrame(
+                            // #1089 item 3: the session addresses the config and
+                            // the start to the focused rocket on a base-station
+                            // link (cmd-50 relay), the form the stop and iOS use;
+                            // this screen no longer picks a wire form. The extra
+                            // second on a BS link is the config's LoRa uplink.
+                            session.startSimulation(
                                 Commands.simConfig(
                                     massGrams = massGrams.toFloat(),
                                     thrustN = thrustN.toFloat(),
                                     burnTimeS = burnS.toFloat(),
                                     descentRateMps = descentMps.toFloat(),
                                 ),
-                            )
-                            delay(if (session.isBaseStation) 1000L else 300L)
-                            session.markSimLaunched()
-                            session.sendBareCommand(BleCommandId.SIM_START)
+                                gapMs = if (session.isBaseStation) 1000L else 300L,
+                            ).join()
                             launching = false
                             onBack()
                         }

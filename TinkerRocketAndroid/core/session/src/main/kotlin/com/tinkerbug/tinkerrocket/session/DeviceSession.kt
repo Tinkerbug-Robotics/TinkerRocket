@@ -1426,6 +1426,31 @@ public class DeviceSession(
     }
 
     /**
+     * #1089 item 3: start a simulation — the config (cmd 5), then after
+     * [gapMs] the start (cmd 6).  On a base-station link both are addressed
+     * to the FOCUSED rocket through the cmd-50 relay envelope, the form
+     * [stopSimulation] and iOS already use.  The bare form left the target to
+     * the base station's own focus resolution (`focusTargetRid()`), which
+     * agrees on current firmware and broadcasts on any without #390 — and
+     * two forms for one message is the kind of drift that stops agreeing
+     * quietly.  The focus is read once so the pair cannot straddle a change.
+     *
+     * Returns the job so a screen can wait for the start to go out before it
+     * closes; the writes stay on the session's own scope.
+     */
+    public fun startSimulation(configFrame: ByteArray, gapMs: Long): Job =
+        sessionScope.launch {
+            val focus = _focusRocketId.value
+            val relay = isBaseStation && focus != null
+            fun wrap(frame: ByteArray) = if (relay) Commands.relayToRocket(focus!!, frame) else frame
+            writeCommand(wrap(configFrame))
+            delay(gapMs)
+            _simLaunched.value = true
+            simSawNonReady = false
+            writeCommand(wrap(Commands.bare(BleCommandId.SIM_START)))
+        }
+
+    /**
      * #1061: stop a running simulation. On a base-station link the stop is
      * addressed to the FOCUSED rocket through the cmd-50 relay envelope — a
      * bare cmd 7 there would be relayed to whoever the BS is pinned to (or

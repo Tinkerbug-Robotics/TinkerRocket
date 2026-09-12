@@ -801,6 +801,50 @@ class DeviceSessionTest {
     }
 
     @Test
+    fun startSimulation_relaysConfigAndStartToTheFocusedRocketOnABaseStationLink() = runTest {
+        // #1089 item 3: iOS wrapped cmd 5 and cmd 6 for the focused rocket;
+        // Android sent them bare and let the BS pick the target.  Same form
+        // now — and the focus is read once, so a focus change inside the gap
+        // cannot send the config to one rocket and the start to another.
+        val h = startedSession(type = BleDeviceType.BASE_STATION, focusSeed = 3) {
+            configIdentityJson = null
+        }
+        advanceTimeBy(1000)
+        runCurrent()
+        val cfg = Commands.simConfig(massGrams = 500f, thrustN = 40f, burnTimeS = 1.5f, descentRateMps = 5f)
+        val job = h.session.startSimulation(cfg, gapMs = 1000)
+        runCurrent()
+        assertContentEquals(Commands.relayToRocket(3, cfg), h.fw.commandFrames.last())
+        assertFalse(h.session.simLaunched.value, "launched is marked with the start, not the config")
+        assertFalse(job.isCompleted)
+        advanceTimeBy(1000)
+        runCurrent()
+        assertContentEquals(
+            Commands.relayToRocket(3, Commands.bare(BleCommandId.SIM_START)),
+            h.fw.commandFrames.last(),
+        )
+        assertTrue(h.session.simLaunched.value)
+        assertTrue(job.isCompleted)
+    }
+
+    @Test
+    fun startSimulation_sendsBareOnADirectRocketLink() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        val cfg = Commands.simConfig(massGrams = 500f, thrustN = 40f, burnTimeS = 1.5f, descentRateMps = 5f)
+        val before = h.fw.commandFrames.size
+        h.session.startSimulation(cfg, gapMs = 300)
+        runCurrent()
+        assertContentEquals(cfg, h.fw.commandFrames.last())
+        advanceTimeBy(300)
+        runCurrent()
+        assertContentEquals(Commands.bare(BleCommandId.SIM_START), h.fw.commandFrames.last())
+        assertEquals(before + 2, h.fw.commandFrames.size, "config and start, nothing else")
+        assertTrue(h.session.simLaunched.value)
+    }
+
+    @Test
     fun stopSimulation_sendsBareOnADirectRocketLink() = runTest {
         val h = startedSession()
         advanceTimeBy(1000)
