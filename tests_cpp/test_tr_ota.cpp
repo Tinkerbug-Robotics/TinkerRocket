@@ -141,6 +141,58 @@ TEST(TrOta, ShaMismatchAbortsBeforeSetBoot)
     EXPECT_EQ(1, be.abort_calls);
 }
 
+// Host-shim test hook (tests_cpp/host_shim/psa_crypto_impl.c). C linkage.
+extern "C" int psa_shim_fail_update_after;
+
+// #1427 / #1142 item 1, one level down. A psa_hash_update() failure PART WAY
+// through the image used to be discarded: the digest then covered only the
+// chunks that hashed, every later chunk still counted toward bytes_written_,
+// and finish() reported ShaMismatch -- "your image is corrupt" -- for an image
+// that was fine on a device whose crypto had failed. Bench 2026-09-12: an OC
+// self-OTA reported `sha_mismatch` at a FULL byte count (824656 of 824656) on
+// two different images, one of which had verified days earlier, while the same
+// app and bytes verified fine over the FC relay.
+//
+// The correct verdict is HashUnavailable: the image is UNVERIFIED, which is a
+// different fact from wrong, and only one of them blames the file.
+TEST(TrOta, MidStreamHashUpdateFailureReportsUnavailableNotMismatch)
+{
+    FakeOTABackend be;
+    R rx(be);
+    auto img = make_image(300);
+    auto hash = sha256_of(img);          // the CORRECT hash for this image
+
+    rx.begin((uint32_t)img.size(), hash.data());
+    // Let the first chunk hash, then break the crypto underneath us.
+    psa_shim_fail_update_after = 1;
+    rx.writeChunk(0, img.data(), 100);
+    rx.writeChunk(100, img.data() + 100, 200);
+    psa_shim_fail_update_after = -1;     // restore before finish()
+
+    // All the bytes arrived and the image is byte-correct, so the ONLY fault
+    // is the device's own hashing. It must not be called a mismatch.
+    EXPECT_EQ(E::HashUnavailable, rx.finish());
+    EXPECT_EQ(S::VerifyFailed, rx.state());
+    EXPECT_FALSE(be.boot_set) << "an unverified image must never be booted";
+    EXPECT_EQ(1, be.abort_calls);
+}
+
+// The genuine-corruption path must still say mismatch, or the fix above would
+// have traded one wrong verdict for another.
+TEST(TrOta, AGenuinelyWrongImageStillReportsMismatch)
+{
+    FakeOTABackend be;
+    R rx(be);
+    auto img = make_image(300);
+    auto hash = sha256_of(img);
+    hash[0] ^= 0xFF;                     // wrong expected hash, healthy crypto
+
+    rx.begin((uint32_t)img.size(), hash.data());
+    rx.writeChunk(0, img.data(), img.size());
+    EXPECT_EQ(E::ShaMismatch, rx.finish());
+    EXPECT_FALSE(be.boot_set);
+}
+
 TEST(TrOta, WriteChunkWithoutBeginReturnsSessionNotActive)
 {
     FakeOTABackend be;

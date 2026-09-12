@@ -91,9 +91,23 @@ void TR_OTA_Receiver::freeShaCtx()
 
 void TR_OTA_Receiver::shaUpdate(const uint8_t* data, size_t len)
 {
-    if (!sha_ctx_) return;
+    if (!sha_ctx_ || sha_unavailable_) return;
     auto* ctx = static_cast<psa_hash_operation_t*>(sha_ctx_);
-    psa_hash_update(ctx, data, len);
+    if (psa_hash_update(ctx, data, len) != PSA_SUCCESS)
+    {
+        // #1142 item 1 caught the SETUP failures — psa_crypto_init, the malloc,
+        // psa_hash_setup — which left sha_ctx_ null and were reported as
+        // ShaMismatch.  This is the same fault one level down, and it was still
+        // being discarded: a per-chunk psa_hash_update() can fail on its own
+        // (it allocates internally, and an OTA is exactly when the heap is
+        // under pressure), after which the digest silently covers only PART of
+        // the image.  Every later chunk still hashes, bytes_written_ still
+        // reaches total_size_, and finish() reports ShaMismatch — telling the
+        // operator their image is corrupt when the image is fine and the
+        // DEVICE is the thing that failed.  Stop hashing and record it: the
+        // image is unverified, which is a different fact from wrong.
+        sha_unavailable_ = true;
+    }
 }
 
 // #1142 item 1: three outcomes, not two. "The hash did not match" and "there
@@ -102,7 +116,11 @@ void TR_OTA_Receiver::shaUpdate(const uint8_t* data, size_t len)
 TR_OTA_Receiver::ShaResult
 TR_OTA_Receiver::shaFinalAndCompare(const uint8_t expected[32])
 {
-    if (!sha_ctx_) return ShaResult::Unavailable;
+    // sha_unavailable_ was write-only until now: #1142 item 1 set it on every
+    // setup failure but nothing ever read it, so the flag it added did not
+    // actually gate anything — the Unavailable verdict came from the null-ctx
+    // test alone, which cannot see a mid-stream update failure.
+    if (!sha_ctx_ || sha_unavailable_) return ShaResult::Unavailable;
     auto* ctx = static_cast<psa_hash_operation_t*>(sha_ctx_);
     uint8_t computed[32];
     size_t computed_len = 0;

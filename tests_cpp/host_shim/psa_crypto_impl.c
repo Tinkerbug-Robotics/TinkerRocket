@@ -9,9 +9,16 @@ psa_status_t psa_crypto_init(void)
     return PSA_SUCCESS;  // nothing to initialize for the host shim
 }
 
+// Test hook: force psa_hash_update() to start failing after N successful
+// calls, so a MID-STREAM crypto failure can be exercised on the host. -1 (the
+// default) never fails. Reset by psa_hash_setup, so each session starts clean.
+int psa_shim_fail_update_after = -1;
+static int psa_shim_update_calls = 0;
+
 psa_status_t psa_hash_setup(psa_hash_operation_t* op, psa_algorithm_t alg)
 {
     (void)alg;  // shim only does SHA-256
+    psa_shim_update_calls = 0;
     if (!op) return (psa_status_t)-1;
     mbedtls_sha256_init(&op->ctx);
     mbedtls_sha256_starts(&op->ctx, 0);  // 0 = SHA-256 (not 224)
@@ -23,6 +30,11 @@ psa_status_t psa_hash_update(psa_hash_operation_t* op,
                              const uint8_t* input, size_t input_length)
 {
     if (!op || !op->active) return (psa_status_t)-1;
+    if (psa_shim_fail_update_after >= 0 &&
+        psa_shim_update_calls++ >= psa_shim_fail_update_after)
+    {
+        return (psa_status_t)-1;
+    }
     mbedtls_sha256_update(&op->ctx, input, input_length);
     return PSA_SUCCESS;
 }
