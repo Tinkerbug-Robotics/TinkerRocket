@@ -162,6 +162,17 @@ fun SimulationScreen(session: DeviceSession, onBack: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("simulation", Context.MODE_PRIVATE) }
     val connected by session.isConnected.collectAsState()
+    // #1050: a simulated flight actively drives the fins and resets the flight
+    // state to READY, discarding the real one and clearing the post-flight
+    // lockout. The firmware refuses it in the lockout states (#1153 item 3),
+    // but LANDED is deliberately allowed there — "a deliberate sim start/stop
+    // re-arms" (#317) — so the on-pad requirement belongs here, exactly as it
+    // already does for the servo test on the dashboard. Without it the
+    // operator can walk up to a rocket that has just landed, tap Launch, and
+    // have it throw away the flight it just made.
+    val telemetry by session.telemetry.collectAsState()
+    val simLaunched by session.simLaunched.collectAsState()
+    val onPad = telemetry.state == "READY" || telemetry.state == "PRELAUNCH"
     val scope = rememberCoroutineScope()
 
     var massGrams by remember { mutableStateOf(prefs.getString("massGrams", "500")!!) }
@@ -282,7 +293,7 @@ fun SimulationScreen(session: DeviceSession, onBack: () -> Unit) {
             )
         }
         Button(
-            enabled = connected && inputsValid && !launching,
+            enabled = connected && inputsValid && !launching && onPad && !simLaunched,
             onClick = {
                 persist()
                 confirmLaunch = true

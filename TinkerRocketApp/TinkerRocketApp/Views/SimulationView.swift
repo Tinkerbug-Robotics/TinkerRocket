@@ -60,7 +60,8 @@ struct SimulationView: View {
                         Label("Launch Simulation", systemImage: "flame")
                             .foregroundColor(.orange)
                     }
-                    .disabled(!device.isConnected || !inputsValid)
+                    .disabled(!device.isConnected || !inputsValid || !isOnPadState
+                              || device.simLaunched)
 
                     if !device.isConnected {
                         Text("Not connected to rocket")
@@ -68,6 +69,19 @@ struct SimulationView: View {
                             .foregroundColor(.red)
                     } else if !inputsValid {
                         Text("All fields must be positive numbers")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    } else if device.simLaunched {
+                        Text("A simulated flight is already running — stop it first")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    } else if !isOnPadState {
+                        // Says WHY, because the dashboard button is gated the
+                        // same way and silently: an operator who reached this
+                        // sheet through the gear beside it has had no signal at
+                        // all until now.
+                        Text("Rocket must be on the pad (READY or PRELAUNCH) — "
+                             + "a simulated flight drives the fins and resets the flight state")
                             .font(.caption)
                             .foregroundColor(.red)
                     }
@@ -143,6 +157,28 @@ struct SimulationView: View {
     // MARK: - Actions
 
     /// Send config then start sim, and dismiss to dashboard
+    /// #1050: the same on-pad term the dashboard's Simulate button carries.
+    ///
+    /// This sheet is reachable by two routes and only one of them was gated.
+    /// The dashboard button requires on-pad state and shows a confirmation; the
+    /// gear immediately beside it opened this sheet with no gate at all, and
+    /// this Launch button fired on `isConnected && inputsValid` alone.
+    ///
+    /// A simulated flight actively drives the fins and calls
+    /// resetFlightStateForSim, which sets rocket_state = READY and clears
+    /// post_flight_lockout — so tapping it on a rocket that has just landed
+    /// discards the flight it just made. Pyros are provably safe during a sim
+    /// (pyroSetArmLocked is held off while sim_active), so this is fin
+    /// actuation on a rocket in hand and a lost flight record, not ignition.
+    ///
+    /// The firmware refuses the genuinely-unsafe states itself (#1153 item 3),
+    /// but LANDED is deliberately allowed there — "#317: a deliberate sim
+    /// start/stop re-arms" — so the on-pad requirement has to live in the UI.
+    private var isOnPadState: Bool {
+        let s = device.telemetry.state
+        return s == "READY" || s == "PRELAUNCH"
+    }
+
     private func launchSim() {
         guard let massG = Float(massGrams),
               let thrustN = Float(thrustNewtons),
