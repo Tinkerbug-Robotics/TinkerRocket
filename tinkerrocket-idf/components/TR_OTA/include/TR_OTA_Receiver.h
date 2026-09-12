@@ -56,6 +56,14 @@ public:
         WriteFailed,            // backend->write() returned non-zero
         SizeMismatch,           // finish() called before total bytes received
         ShaMismatch,            // computed SHA != expected
+        HashUnavailable,        // #1142 item 1: the SHA-256 was never computed —
+                                // psa_crypto_init(), the context malloc,
+                                // psa_hash_setup() or psa_hash_finish() failed.
+                                // Distinct from ShaMismatch on purpose: that one
+                                // means "this image is corrupt", which is a
+                                // statement about the image, and reporting it for
+                                // a local crypto failure sends the operator to
+                                // re-download a file that was never checked.
         EndFailed,              // backend->end() returned non-zero
         SetBootFailed,          // backend->setBootPartition() returned non-zero
         ImageIdentityMismatch,  // #1125: the incoming image's app descriptor names a
@@ -147,6 +155,7 @@ private:
 
     // mbedtls SHA-256 context is opaque so we keep it via a void* + heap
     // allocation to avoid pulling mbedtls into this header.
+    bool  sha_unavailable_ = true;   // #1142 item 1
     void* sha_ctx_ = nullptr;
 
     // #1125 identity check
@@ -166,7 +175,10 @@ private:
     void initShaCtx();
     void freeShaCtx();
     void shaUpdate(const uint8_t* data, size_t len);
-    bool shaFinalAndCompare(const uint8_t expected[32]);
+    // #1142 item 1: Match / Mismatch / Unavailable — "no hash was computed"
+    // is not "the hash did not match".
+    enum class ShaResult : uint8_t { Match, Mismatch, Unavailable };
+    ShaResult shaFinalAndCompare(const uint8_t expected[32]);
 };
 
 #endif // TR_OTA_RECEIVER_H
