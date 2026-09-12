@@ -146,6 +146,9 @@ void GpsInsEKF::resetFilterState() {
     prevGnssVel_NED_[0] = prevGnssVel_NED_[1] = prevGnssVel_NED_[2] = 0.0f;
     gnssAccelLP_NE_[0]  = gnssAccelLP_NE_[1]  = 0.0f;
     frozen_dt_skips_    = 0;
+    zupt_armed_         = false;   // #1418
+    zupt_next_us_       = 0;
+    zupt_count_         = 0;
     dt_s_               = 0.0f;
     euler_BL_rad_[0] = euler_BL_rad_[1] = euler_BL_rad_[2] = 0.0f;
 
@@ -766,7 +769,8 @@ void GpsInsEKF::stabilizeP() {
 // symmetrize), so K = P*H^T*S^-1 can be read from HP^T bit-identically.
 void GpsInsEKF::applyScalarMeasUpdate(const int* hidx, const float* hval,
                                       int hn, float y, float R, float s_min,
-                                      bool gate_gyro_bias)
+                                      bool gate_gyro_bias,
+                                      uint16_t k_zero_mask)
 {
     // HP = H*P (1x15), snapshotted before P is modified
     float HP[15] = {};
@@ -798,6 +802,13 @@ void GpsInsEKF::applyScalarMeasUpdate(const int* hidx, const float* hval,
     }
     if (gate_gyro_bias && gyroBiasGateHeld()) {
         K[12] = 0.0f; K[13] = 0.0f; K[14] = 0.0f;
+    }
+
+    // Caller-declared unobservable states (#1418): same treatment, chosen by
+    // the caller rather than by a gate.
+    if (k_zero_mask) {
+        for (int i = 0; i < 15; i++)
+            if (k_zero_mask & (uint16_t)(1u << i)) K[i] = 0.0f;
     }
 
     // State correction xk = K*y — position via curvature radii, velocity,
@@ -850,6 +861,38 @@ void GpsInsEKF::applyScalarMeasUpdate(const int* hidx, const float* hval,
         }
 
     stabilizeP();
+}
+
+// ─── #1418: zero-velocity update after landing ─────────────────────────
+// Three scalar updates on the velocity states with z = 0.  Position and
+// velocity correct; attitude (6-8) and the bias triads (9-14) are masked out
+// of the gain — see the header for why a velocity measurement must not be
+// allowed to choose between an attitude error and an accel bias.
+void GpsInsEKF::zeroVelocityUpdate(float sigma_mps) {
+    // Bits 6..14: attitude error, accel bias, gyro bias.
+    static constexpr uint16_t ZUPT_K_MASK = 0x7FC0;
+    static_assert(ZUPT_K_MASK == (0x1FFu << 6), "mask must cover states 6-14");
+    const float R = sigma_mps * sigma_mps;
+    for (int i = 0; i < 3; i++) {
+        const int   hidx[1] = {3 + i};
+        const float hval[1] = {1.0f};
+        const float y = 0.0f - vEst_NED_mps_[i];
+        applyScalarMeasUpdate(hidx, hval, 1, y, R, 1e-9f,
+                              /*gate_gyro_bias=*/false, ZUPT_K_MASK);
+    }
+    ++zupt_count_;
+}
+
+void GpsInsEKF::landedZeroVelocityUpdate(bool landed, uint32_t now_us) {
+    if (!landed) {
+        zupt_armed_ = false;   // a withdrawn verdict re-arms the first update
+        return;
+    }
+    // Signed difference so the comparison survives the micros() wrap.
+    if (zupt_armed_ && (int32_t)(now_us - zupt_next_us_) < 0) return;
+    zeroVelocityUpdate(ZUPT_SIGMA_MPS);
+    zupt_armed_   = true;
+    zupt_next_us_ = now_us + ZUPT_INTERVAL_US;
 }
 
 void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {

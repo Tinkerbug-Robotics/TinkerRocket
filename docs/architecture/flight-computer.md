@@ -169,6 +169,19 @@ Two gates are worth knowing:
   recoverable from it. It comes back on after apogee: blanket-disabling it through
   descent starves the filter of its gravity reference and freezes the velocity estimate.
 
+Once the landing detector has called it, the rocket itself becomes a measurement. The
+filter fuses a **zero-velocity update** at 10 Hz for as long as the landed verdict holds
+(#1418), because a landing can leave it holding a velocity that nothing will ever remove:
+with no GNSS fix there is no velocity measurement, and a still airframe gives the
+prediction no acceleration to subtract either. On Eagle Claw (2026-08-29) the last fix
+came 4.2 s before the flag and the horizontal velocity then sat frozen at 10 m/s, walking
+the logged position 20.9 m off the rocket in the two seconds the log had left. The update
+is deliberately soft — its sigma is the detector's own 1 m/s definition of stationary, at
+two sigma — so a fix, which carries about five times the information per second, still
+wins if the verdict is wrong. It corrects position and velocity only: a velocity
+measurement cannot tell an attitude error from an accelerometer bias, and allowed to
+choose between them the filter picks wrongly. Attitude stays the accelerometer's job.
+
 Baro has its own hazard. Above roughly Mach 0.76 the static port reading is unusable, so
 a lockout suppresses barometric apogee voting between 260 m/s (on) and 240 m/s (off).
 
