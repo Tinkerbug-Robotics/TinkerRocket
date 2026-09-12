@@ -6,6 +6,7 @@ import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
 import com.tinkerbug.tinkerrocket.protocol.RollWaypoint
 import com.tinkerbug.tinkerrocket.protocol.MagCalSubType
 import com.tinkerbug.tinkerrocket.protocol.RocketConfig
+import com.tinkerbug.tinkerrocket.protocol.SensorCalStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -19,7 +20,9 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 /**
@@ -629,12 +632,23 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
      */
     public fun importRocketSensorCalIntoActiveProfile(nowMs: Long) {
         val s = session ?: return
-        val st = store ?: return
-        val profile = st.activeProfile ?: return
         val status = s.sensorCalStatus.value ?: return
-        if (!status.valid) return
+        snapshotSensorCal(status, nowMs)
+    }
+
+    /**
+     * Writes [status] into the active profile, tagged with the connected
+     * board.  False when it cannot: an invalid frame is "the rocket holds no
+     * calibration", and the empty-unit-id guard is the one documented on
+     * [importRocketSensorCalIntoActiveProfile].
+     */
+    private fun snapshotSensorCal(status: SensorCalStatus, nowMs: Long): Boolean {
+        val s = session ?: return false
+        val st = store ?: return false
+        val profile = st.activeProfile ?: return false
+        if (!status.valid) return false
         val unitId = s.identity.value.unitId
-        if (unitId.isEmpty()) return
+        if (unitId.isEmpty()) return false
         st.update(profile.id) {
             it.copy(
                 sensorCal = SensorCalData(
@@ -646,10 +660,80 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
             )
         }
         _sensorCalAdvisory.value = CalAdvisory.None
+        return true
+    }
+
+    /** What came of a pad calibration started by [runOnPadSensorCal]. */
+    public sealed interface SensorCalRun {
+        /**
+         * The rocket answered with a status frame.  [ranWindow] is whether it
+         * took long enough to have measured anything: the FC's window is
+         * CAL_WINDOW_US = 10 s, and a refusal — launch detected, INFLIGHT,
+         * LANDED, or a window already open — re-publishes the stored
+         * calibration inside the same second.  The frame carries no failure
+         * field, so the elapsed time is the only tell.  [saved] is whether the
+         * frame went into the active profile; false when it is invalid (the
+         * rocket holds no calibration), when there is no active profile, or
+         * when the board id has not landed yet.
+         */
+        public data class Answered(
+            val status: SensorCalStatus,
+            val elapsedMs: Long,
+            val saved: Boolean,
+        ) : SensorCalRun {
+            public val ranWindow: Boolean get() = elapsedMs >= SENSOR_CAL_WINDOW_MIN_MS
+        }
+
+        /** Nothing came back inside [SENSOR_CAL_RUN_TIMEOUT_MS]. */
+        public data object NoAnswer : SensorCalRun
+
+        /** Not attached to a session. */
+        public data object NotConnected : SensorCalRun
+    }
+
+    /**
+     * #1059 second half: run the on-pad gyro + high-g calibration (cmd 21)
+     * and snapshot what comes back into the active profile — iOS
+     * OnPadCalibrationView.runCalibration.  iOS arms a blind 12 s timer; this
+     * waits for the SENSOR_CAL_STATUS frame that every outcome on the FC ends
+     * with (committed, rejected, refused and cancelled all reach
+     * publishSensorCalFromNVS), so it finishes when the rocket does and can
+     * tell a refusal from a run.
+     *
+     * The subscription is open before the command is written: a refusal comes
+     * straight back and must not slip past.  Any connect-time READ still
+     * outstanding is superseded — whatever arrives now is the answer, and it
+     * is about to be saved, so it must not also raise "the rocket has a
+     * calibration this profile doesn't".
+     */
+    public suspend fun runOnPadSensorCal(clockMs: () -> Long): SensorCalRun {
+        val s = session ?: return SensorCalRun.NotConnected
+        sensorCalReadPending = false
+        val started = clockMs()
+        val frame = withTimeoutOrNull(SENSOR_CAL_RUN_TIMEOUT_MS) {
+            s.sensorCalFrames
+                .onSubscription { s.sendBareCommand(BleCommandId.SENSOR_CAL_RUN) }
+                .first()
+        } ?: return SensorCalRun.NoAnswer
+        val now = clockMs()
+        return SensorCalRun.Answered(frame, now - started, saved = snapshotSensorCal(frame, now))
     }
 
     public companion object {
         public const val SYNCED_DELAY_MS: Long = 800
+
+        /**
+         * #1059: the FC's CAL_WINDOW_US is 10 s and the I2S hop plus the BLE
+         * notify add well under a second; twice that is a rocket that is not
+         * going to answer.
+         */
+        public const val SENSOR_CAL_RUN_TIMEOUT_MS: Long = 20_000
+
+        /**
+         * An answer faster than this cannot have measured a window — it is
+         * the stored calibration re-published on a refusal.
+         */
+        public const val SENSOR_CAL_WINDOW_MIN_MS: Long = 3_000
 
         // Group labels for the "what the rocket disagreed about" line.  Groups,
         // not fields: "PID gains" reads better on a phone than five numbers,
