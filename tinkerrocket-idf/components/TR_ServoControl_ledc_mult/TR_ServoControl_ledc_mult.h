@@ -5,6 +5,10 @@
 #include <compat.h>
 #include <driver/ledc.h>
 #include "TR_PID.h"
+// #1141 item 3 / #1137 item 2: the bounds and the predicates below now live
+// in ServoConfigGate.h so the OUT computer can apply the same policy to the
+// config it caches without linking this driver.  See that header for why.
+#include <ServoConfigGate.h>
 
 class TR_ServoControl {
 public:
@@ -120,11 +124,13 @@ public:
 
     // Bounds for the above.  Deliberately generous — this rejects values that
     // are not servo timings at all, not values that are merely unusual.
-    static constexpr int kMinServoHz     = 40;
-    static constexpr int kMaxServoHz     = 400;
-    static constexpr int kMinPulseUs     = 500;
-    static constexpr int kMaxPulseUs     = 2500;
-    static constexpr int kMinPulseSpanUs = 200;
+    // Defined in ServoConfigGate.h and named here so existing callers and the
+    // host tests keep working; there is exactly ONE definition of each.
+    static constexpr int kMinServoHz     = SERVO_MIN_HZ;
+    static constexpr int kMaxServoHz     = SERVO_MAX_HZ;
+    static constexpr int kMinPulseUs     = SERVO_MIN_PULSE_US;
+    static constexpr int kMaxPulseUs     = SERVO_MAX_PULSE_US;
+    static constexpr int kMinPulseSpanUs = SERVO_MIN_PULSE_SPAN_US;
     void setPIDGains(float kp, float ki, float kd);
     void setPIDLimits(float minCmd, float maxCmd);
     // See TR_PID::setDerivativeFilterCutoffHz — rejects measurement noise
@@ -155,7 +161,7 @@ public:
     // Smallest fin travel that can be a real airframe.  Below this the deg->us
     // scale is so steep that a 1 deg command saturates the servo, which is
     // indistinguishable from the frozen-fin failure this rejects.
-    static constexpr float kMinFinSpanDeg = 2.0f;
+    static constexpr float kMinFinSpanDeg = FIN_MIN_SPAN_DEG;  // ServoConfigGate.h
 
     /// Pure predicate, exposed so callers can decide whether to PERSIST a pair
     /// without having to apply it first (the SERVO_CONFIG handler needs exactly
