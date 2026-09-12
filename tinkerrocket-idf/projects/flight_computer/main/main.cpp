@@ -1729,10 +1729,69 @@ static void sendOtaRelayStatus(uint8_t state, uint8_t err, uint32_t bytes_writte
 // the #165 flight-settings resend (one-shot frame re-emitted on the first few
 // INFLIGHT ticks so a dropped launch frame doesn't lose the record).  Status
 // frames are idempotent — the OC just re-relays the same ota_status and the
-// app keys off the first matching state — so duplicates are harmless.  Safe to
-// block: OTA is refused in flight, and the erase/finish that precedes this
-// already blocked the caller for seconds.  delay_ms() is vTaskDelay-based, so
-// IDLE still pets the task watchdog between sends.
+// app keys off the first matching state — so duplicates are harmless.
+//
+// #1142 item 3: this used to end "delay_ms() is vTaskDelay-based, so IDLE still
+// pets the task watchdog between sends", which was wrong twice.  The WDT is
+// configured with idle_core_mask = 0, so no IDLE task is subscribed and none
+// can pet anything; and a subscribed task's timer is cleared only by its OWN
+// esp_task_wdt_reset().  vTaskDelay yields the CPU, which is a different thing.
+// The flight task is the only subscriber and pets once per loop_fc() RETURN, so
+// every millisecond spent blocking in here counts against the 5 s panic
+// timeout.  This loop now pets as it goes, and the OTA control handlers run
+// inside an FcOtaWdtWindow (below) that also covers the blocking calls no loop
+// of ours can pet from inside.
+// #1142 item 3: a wider watchdog budget for the OTA control handlers.
+//
+// Petting inside our own wait loops covers the delay_ms() spins, but not the
+// two calls that block without ever returning to us: esp_ota_begin()'s erase of
+// the image region, and esp_ota_end() inside finish(), which re-reads and
+// SHA-verifies the staged image. Neither has a callback to pet from, and both
+// are seconds on a ~1 MB image.
+//
+// So widen the timeout for the window rather than disarming the watchdog. The
+// alternative — esp_task_wdt_delete()/re-add around the handlers — leaves a
+// genuine wedge inside an OTA hanging the vehicle forever with no recovery,
+// which is exactly the failure #261 turned trigger_panic on to prevent. A
+// larger-but-finite budget keeps that recovery and just stops it firing on work
+// that is legitimately slow.
+//
+// 30 s is chosen to clear the erase + verify of a full image with margin while
+// staying far below "operator gives up and power-cycles". OTA is ground-only
+// (INFLIGHT is refused, #1106), so a 30 s worst-case hang before the panic
+// reboot costs nothing a flight would notice.
+//
+// RAII rather than paired calls: the FINISH handler has several early exits and
+// an esp_restart() in the success path, and a restored timeout that depends on
+// reaching the bottom of a long else-if chain is a bug waiting to be written.
+static constexpr uint32_t kFcWdtNormalMs = 5000;    // setup() applies this too
+static constexpr uint32_t kFcWdtOtaMs    = 30000;
+
+static void fcWdtSetTimeoutMs(uint32_t ms)
+{
+    esp_task_wdt_config_t cfg = {
+        .timeout_ms = ms,
+        .idle_core_mask = 0,      // unchanged: IDLE starvation here is normal
+        .trigger_panic = true,    // unchanged: #261
+    };
+    (void)esp_task_wdt_reconfigure(&cfg);
+}
+
+struct FcOtaWdtWindow
+{
+    FcOtaWdtWindow()
+    {
+        fcWdtSetTimeoutMs(kFcWdtOtaMs);
+        esp_task_wdt_reset();     // start the wide window from now, not from
+                                  // whatever was already on the clock
+    }
+    ~FcOtaWdtWindow()
+    {
+        esp_task_wdt_reset();     // do not hand the narrow budget a used clock
+        fcWdtSetTimeoutMs(kFcWdtNormalMs);
+    }
+};
+
 static void sendOtaRelayStatusRobust(uint8_t state, uint8_t err, uint32_t bytes_written)
 {
     static constexpr int      kOtaStatusResends = 7;    // + the immediate send = 8 total
@@ -1741,6 +1800,7 @@ static void sendOtaRelayStatusRobust(uint8_t state, uint8_t err, uint32_t bytes_
     for (int i = 0; i < kOtaStatusResends; ++i)
     {
         delay_ms(kOtaStatusGapMs);
+        esp_task_wdt_reset();   // #1142 item 3: 7 x 200 ms of it
         sendOtaRelayStatus(state, err, bytes_written);
     }
 }
@@ -2077,6 +2137,7 @@ static bool fcOtaWaitForOcQuiet(int max_iters)
     for (int i = 0; i < max_iters && quiet < 20; i++)
     {
         delay_ms(5);
+        esp_task_wdt_reset();   // #1142 item 3: up to 2 s at max_iters=400
         const uint32_t cb = fc_ota_rx_cb_count;
         if (cb == last_cb) { quiet++; }
         else { quiet = 0; last_cb = cb; }
@@ -3990,12 +4051,10 @@ static void setup_fc()
     // timeout (deadlock, wedged peripheral), the WDT panics → reboot → snapshot
     // / reboot-recovery, instead of only logging and leaving the highest-priority
     // core-1 task hung and the vehicle dead.
-    esp_task_wdt_config_t wdt_cfg = {
-        .timeout_ms = 5000,
-        .idle_core_mask = 0,       // don't monitor any IDLE tasks
-        .trigger_panic = true,     // #261: hung flight loop -> reboot + recovery
-    };
-    esp_task_wdt_reconfigure(&wdt_cfg);
+    // #1142 item 3: one definition of the normal budget, shared with the OTA
+    // window that temporarily widens it — so the two cannot drift and a
+    // restored timeout is always the one setup() actually chose.
+    fcWdtSetTimeoutMs(kFcWdtNormalMs);
 
     // Quiet the IDF gpio driver — each gpio_config() (CS pins, INT pins,
     // pyro pins) prints a multi-field INFO line that drowns the rest of
@@ -7950,6 +8009,7 @@ static void loop_fc()
             }
             else if (out_pending_command == OTA_BEGIN_PENDING)
             {
+                FcOtaWdtWindow _ota_wdt;   // #1142 item 3
                 // #8 Phase 4: OTA relay from the OC. Refuse unless READY so an
                 // OTA can't start mid-flight (mirrors the cal handlers). Read
                 // the image header (size + sha256) and begin the session
@@ -8041,6 +8101,7 @@ static void loop_fc()
             }
             else if (out_pending_command == OTA_FINISH_CMD)
             {
+                FcOtaWdtWindow _ota_wdt;   // #1142 item 3
                 // Layer 3: the OC pumped the tail of the image just before sending
                 // FINISH; give the parser a moment to drain the last in-flight frames,
                 // then revert the I2S link to master-TX so the terminal status rides
@@ -8054,7 +8115,10 @@ static void loop_fc()
                     // should reach the total (it stalled 1 frame short before this).
                     for (int i = 0; i < 200 &&
                             (uint32_t)fc_ota_receiver.bytesWritten() < fc_ota_total_size; i++)
-                        delay_ms(5);   // up to ~1 s for the tail to land
+                    {
+                        delay_ms(5);            // up to ~1 s for the tail to land
+                        esp_task_wdt_reset();   // #1142 item 3
+                    }
                     // Do NOT seize the bus as master TX until the OC has stopped
                     // driving BCLK (reverted to slave RX). Otherwise both ends drive
                     // BCLK = contention and the terminal status is garbled — and the
@@ -8123,6 +8187,7 @@ static void loop_fc()
             }
             else if (out_pending_command == OTA_ABORT_CMD)
             {
+                FcOtaWdtWindow _ota_wdt;   // #1142 item 3
                 // #834 items 6/7 (review): wait for the OC to stop driving BCLK
                 // before seizing it, exactly as the FINISH path above does and
                 // for the same reason — otherwise both ends drive BCLK/WS. This
