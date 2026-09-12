@@ -2890,7 +2890,15 @@ void flight_setup()
                 memcpy(ekf_state.gyro_bias,   snap.ekf_gyro_bias,   sizeof(ekf_state.gyro_bias));
                 // Zero P here; setCovFromDiag fills the diagonal below.
                 memset(ekf_state.P, 0, sizeof(ekf_state.P));
-                ekf_state.t_prev_us = snap.ekf_t_prev_us;
+                // #1139 item 2: the current epoch, not the stored one — the
+                // mini carries the same restore as the FC and had the same
+                // bug. ekf_t_prev_us is a boot-relative uptime, so copying the
+                // previous boot's value makes the first post-recovery dt wrap
+                // a uint32 and clamp to the 0.1 s ceiling: a 50x oversized
+                // propagation, with Q injected to match, on a filter just
+                // handed a flight mid-descent. See the FC's copy of this
+                // comment in flight_computer/main.cpp for the full reasoning.
+                ekf_state.t_prev_us = (uint32_t)time_us();
                 // v5: euler is not on the wire any more. setState() derives it
                 // from the restored quaternion, so leaving it zero here is
                 // correct rather than lossy.
