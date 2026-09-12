@@ -40,7 +40,8 @@ sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE.parent / "tinkerrocket-sim" / "src"))
 
 from plot_flight_data_mini import parse_binary_file
-from _ekf_replay import replay_binary
+from _ekf_replay import replay_binary, lla_rad_to_enu_m
+from _ekf_logged import logged_binary
 from _wind_profile import fetch_wind
 from landing_predictor import (snapshot_at, predict_landing, actual_landing_enu,
                                 RocketProfile, _infer_flight_datetime_utc,
@@ -75,9 +76,15 @@ class SweepPoint:
 
 
 def sweep_flight(bin_path: Path, step_s: float,
-                 utc_offset_h: float) -> dict:
+                 utc_offset_h: float, source: str = "logged") -> dict:
     records, _, _ = parse_binary_file(str(bin_path))
-    res = replay_binary(records, verbose=False)
+    # #552: "logged" scores the filter the ROCKET ran, which is the state the
+    # app predicts from; "replay" re-runs the EKF on the host and scores that
+    # one instead. The two answer different questions and only the first is the
+    # app's. Replay also inherits whatever fidelity the harness currently has
+    # (#1412), which the logged path does not depend on at all.
+    res = (logged_binary(records, verbose=False) if source == "logged"
+           else replay_binary(records, verbose=False))
     t0_us = res.phases.t0_us
     boost_end_s = ((res.phases.boost_end_us - t0_us)/1e6
                    if res.phases.boost_end_us else 1.0)
@@ -96,6 +103,30 @@ def sweep_flight(bin_path: Path, step_s: float,
             print(f"    (wind fetch failed: {e})")
 
     act_e, act_n, _, act_t = actual_landing_enu(res, _find_lora_csv(bin_path))
+
+    # #552: the skill denominator must not depend on which ENU origin the
+    # chosen source happens to use. The logged origin is the firmware's frozen
+    # pad average; the replay's is the FIRST GNSS fix, a single noisy sample.
+    # On one 2026-07-05 flight those two differ by ~70 m, which moved the
+    # pad-to-landing range from 135 m to 203 m and silently rescaled every
+    # skill score — the exact flight-size artefact this issue exists to avoid.
+    # So measure the range from the GNSS pad mean, in whatever frame is in use.
+    pad_fixes = [g for g in records.get("GNSS", []) if g.get("num_sats", 0) >= 4]
+    launch_us = next((r["time_us"] for r in records.get("NonSensor", [])
+                      if r.get("launch")), None)
+    if launch_us is not None:
+        on_pad = [g for g in pad_fixes if g["time_us"] <= launch_us] or pad_fixes[:20]
+    else:
+        on_pad = pad_fixes[:20]
+    if on_pad:
+        pe, pn = 0.0, 0.0
+        for g in on_pad:
+            e_, n_, _u = lla_rad_to_enu_m(math.radians(g["lat"]), math.radians(g["lon"]),
+                                          g["alt_m"], res.launch_ref)
+            pe += e_; pn += n_
+        pad_e, pad_n = pe / len(on_pad), pn / len(on_pad)
+    else:
+        pad_e = pad_n = 0.0
     profile = RocketProfile()
 
     points: list[SweepPoint] = []
@@ -123,6 +154,7 @@ def sweep_flight(bin_path: Path, step_s: float,
         apogee_s=apogee_s,
         ekf_end_s=ekf_end_s,
         actual=(act_e, act_n, act_t),
+        pad=(pad_e, pad_n),
         wind=wind,
     )
 
@@ -237,6 +269,40 @@ def print_aggregate(sweeps: list[dict]):
         if phase in by_phase_gnss:
             print(f"  {phase:<16}  {'GNSS-pos':<10}  {stat(by_phase_gnss[phase])}")
 
+    # ---- Skill vs "predict the pad" (#552) ----------------------------------
+    # Raw metres cannot be compared across flight sets: a day of short flights
+    # posts small errors for free. The question this issue asks is whether the
+    # prediction beats assuming the rocket lands where it took off, so divide
+    # each flight's median error by its own pad-to-landing range.
+    #
+    #   < 1  beats the naive baseline      >= 1  does not
+    #
+    # The denominator is the whole weakness of the metric: on a flight that
+    # lands 30 m from the pad, an unremarkable 37 m error scores 1.2. Read the
+    # range column before reading the score.
+    print("\nSkill vs a naive \"lands at the pad\" prediction  (<1 beats it, >=1 does not)")
+    print("=" * 70)
+    print(f"  {'flight':<26} {'pad->land':>10}  {'ASCENT':>9} {'DROGUE':>9} {'MAIN':>9}")
+    per_phase_skill: dict[str, list[float]] = {}
+    for sw in sweeps:
+        act_e, act_n, _ = sw["actual"]
+        pad_e, pad_n = sw.get("pad", (0.0, 0.0))
+        rng = math.hypot(act_e - pad_e, act_n - pad_n)
+        cells = []
+        for phase in ["ASCENT", "DESCENT_DROGUE", "DESCENT_MAIN"]:
+            errs = [p.err_m for p in sw["points"] if p.phase == phase]
+            if not errs or rng <= 1.0:
+                cells.append(f"{'-':>9}")
+                continue
+            sk = float(np.median(errs)) / rng
+            per_phase_skill.setdefault(phase, []).append(sk)
+            cells.append(f"{sk:9.2f}")
+        print(f"  {sw['name'][:26]:<26} {rng:9.0f}m  " + " ".join(cells))
+    if per_phase_skill:
+        print(f"  {'MEDIAN ACROSS FLIGHTS':<26} {'':>10}  " + " ".join(
+            f"{np.median(per_phase_skill[p]):9.2f}" if p in per_phase_skill else f"{'-':>9}"
+            for p in ["ASCENT", "DESCENT_DROGUE", "DESCENT_MAIN"]))
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -246,6 +312,11 @@ def main():
                    help="T_loss step (s)")
     p.add_argument("--utc-offset-h", type=float, default=-4.0)
     p.add_argument("--no-show", action="store_true")
+    p.add_argument("--source", choices=("logged", "replay"), default="logged",
+                   help="Where each snapshot comes from. 'logged' (default) uses "
+                        "the filter state the rocket recorded, which is what the "
+                        "app predicts from; 'replay' re-runs the EKF on the host "
+                        "and scores that instead (#552).")
     p.add_argument("--out-csv", type=Path, default=None,
                    help="Aggregate CSV path. Default: test_data/"
                         "landing_pred_sweep_<dataset>.csv")
@@ -265,12 +336,21 @@ def main():
     flight_dirs = sorted([d for d in args.flights_dir.iterdir() if d.is_dir()])
     sweeps = []
     for fd in flight_dirs:
-        bins = sorted(fd.glob("flight_*.bin"))
+        # Recursive: the 2026-08-29 set nests one flight two levels down
+        # ("Rolly Polly V - L2/Flight Data/V9 Nosecone Computer/"), and a
+        # non-recursive glob silently dropped it from every sweep. Largest
+        # file wins when a flight carries more than one log — the other is
+        # typically an MRAM-recovered fragment of a few dozen fixes.
+        bins = sorted(fd.rglob("flight_*.bin"),
+                      key=lambda p: p.stat().st_size, reverse=True)
         if not bins:
             print(f"  (skip {fd.name}: no flight binary)")
             continue
+        if len(bins) > 1:
+            print(f"  ({fd.name}: {len(bins)} logs, using the largest "
+                  f"{bins[0].name}, {bins[0].stat().st_size/1e6:.1f} MB)")
         print(f"Sweeping {fd.name}...")
-        sw = sweep_flight(bins[0], args.step, args.utc_offset_h)
+        sw = sweep_flight(bins[0], args.step, args.utc_offset_h, args.source)
         sweeps.append(sw)
         print(f"  {len(sw['points'])} sample points, "
               f"min err={min(p.err_m for p in sw['points']):.1f}m")
