@@ -8,6 +8,8 @@ III plant:
   (b) roll-angle profile tracking, no disturbance
   (c) roll tracking under a boost-roll perturbation (2026-05-17-like regression)
   (d) sensor degradation — gyro full-scale clipping + GNSS dropout
+  (e) the 2026-08-29 Rolly Polly 54 mm flight on a plant FITTED to its log
+      (#549) — thresholds are the flown numbers plus the fit residual
 
 Thresholds are grounded in observed behavior with margin; runs are seeded so
 CI is deterministic.  Roll pass/fail is stated on the body roll RATE, which is
@@ -216,3 +218,66 @@ def test_scenario_a3_station_keep_offset_target():
     late = guided[guided['time'] > guided['time'].iloc[-1] - 1.5]
     assert np.hypot(late['pn_a_e'], late['pn_a_n']).max() < 10.0
     assert float(guided['speed'].iloc[-1]) < 12.0
+
+
+# --- (e) the 2026-08-29 RP-54 flight on the fitted plant (#549) --------------
+
+def test_scenario_e_rp54_flight_20260829():
+    """The regression #549 asked for: a plant fitted to a logged flight of the
+    current vehicle, pass/fail from what was observed rather than picked.
+
+    Every bracket is [flown value − fit residual, flown value + fit residual]
+    with the residual from scripts/fit_roll_flight.py's closed-loop fit
+    (recorded next to RP54_FLIGHT_20260829), widened to a round number, and
+    with a LOWER edge as well as an upper one: a scenario that stopped
+    exercising the loop — a kick that no longer arrives, a controller that no
+    longer sees the rate — must fail too, not pass by being quiet.  Sensor
+    seeds move these numbers by well under 1 dps (the dynamics are
+    deterministic), so the residual, not the seed, is the tolerance.
+    """
+    cfg = S.roll_flight_20260829_config()
+    df = run_closed_loop(S.build_rollypolly_54(), cfg).df
+    t = df['time'].to_numpy()
+    p = df['roll_rate_dps'].to_numpy()
+    cmd = df['fin_tab_cmd'].to_numpy()
+
+    def window(lo, hi):
+        w = (t >= lo) & (t < hi)
+        return p[w], cmd[w]
+
+    # Sane F52C flight at the 66 deg trajectory proxy (flown 71 m/s; altitude
+    # is not matched by design — the angle buys the coast airspeed, not the apogee).
+    assert 60.0 < df['speed'].max() < 85.0
+    assert 150.0 < df['altitude'].max() < 230.0
+
+    # The burn-phase kick is felt at full size and the tab pins against it, as
+    # flown (+892 dps peak at T+0.50 s, tab at +20 deg from 0.36 s).
+    pk, ck = window(0.15, 0.62)
+    assert 700.0 < np.abs(pk).max() < 1100.0
+    assert M.saturation_pct(ck, -20.0, 20.0) > 10.0
+
+    # The first counter-swing.  Flown RMS 104 dps; the fit under-swings by
+    # 69 dps, so the bracket admits both, and refuses a loop that no longer
+    # swings back at all.
+    ps, _ = window(0.62, 1.2)
+    assert 40.0 < M.rms(ps) < 130.0
+
+    # Ring-down: flown 20.1 dps RMS, residual 7.5.
+    pr, _ = window(1.2, 2.5)
+    assert 10.0 < M.rms(pr) < 30.0
+
+    # Coast: flown 8.7 dps RMS, residual 3.5; late coast flown 2.8, residual 1.1.
+    pc, _ = window(2.5, 4.5)
+    assert 4.0 < M.rms(pc) < 13.0
+    pl, cl = window(4.5, 7.7)
+    assert M.rms(pl) < 5.0
+
+    # The standing trim that cancels the built-in roll misalignment: the
+    # flight held +1.3..+2.3 deg of tab through the coast.
+    assert 1.0 < cl.mean() < 3.0
+
+    # Once the kick is over the loop never pins again — flown: saturated only
+    # between T+0.03 and T+0.65 s.
+    _, c_after = window(1.0, 7.7)
+    assert M.saturation_pct(c_after, -20.0, 20.0) == 0.0
+
