@@ -122,8 +122,18 @@ public class AndroidBleScanner(private val context: Context) : BleScanner {
             if (sinks.isEmpty()) {
                 val manager =
                     context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-                val scanner = manager.adapter?.bluetoothLeScanner
-                    ?: return BleTransportException("BLE scanner unavailable (adapter off?)")
+                // #1413: this message is not a log line — FleetManager puts it
+                // straight into the status pill, so the user was being shown
+                // "BLE scanner unavailable (adapter off?)", question mark and
+                // all. Ask the adapter instead of guessing at it, and say the
+                // answer in words a reader can act on.
+                val adapter = manager.adapter
+                    ?: return BleTransportException("Bluetooth is not available on this device")
+                if (!adapter.isEnabled) {
+                    return BleTransportException("Bluetooth is off")
+                }
+                val scanner = adapter.bluetoothLeScanner
+                    ?: return BleTransportException("Bluetooth scanning is unavailable")
 
                 val cb = object : ScanCallback() {
                     override fun onScanResult(callbackType: Int, result: ScanResult) {

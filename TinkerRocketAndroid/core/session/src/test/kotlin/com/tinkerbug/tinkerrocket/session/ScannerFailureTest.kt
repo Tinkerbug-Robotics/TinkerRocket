@@ -30,7 +30,7 @@ import kotlin.test.assertTrue
  */
 class ScannerFailureTest {
 
-    private class AdapterOff : Exception("BLE scanner unavailable (adapter off?)")
+    private class AdapterOff : Exception("Bluetooth is off")
 
     // ------------------------------------------------------- resumeLastSession
 
@@ -47,9 +47,10 @@ class ScannerFailureTest {
         // have failed this test the way it kills the app.
         assertTrue(h.fleet.devices.value.isEmpty())
         assertEquals(
-            "BLE scanner unavailable (adapter off?)",
+            "Bluetooth is off",
             h.fleet.statusMessage.value,
-            "the failure should be reported, not swallowed silently",
+            "the failure should be reported, not swallowed silently — and #1413: " +
+                "reported in words, since FleetManager puts this string in the status pill",
         )
     }
 

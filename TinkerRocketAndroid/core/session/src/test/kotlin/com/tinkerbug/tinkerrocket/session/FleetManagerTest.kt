@@ -620,12 +620,12 @@ class FleetManagerTest {
 
     @Test
     fun scannerFailure_reportsAndStopsInsteadOfCrashing() = runTest {
-        // The real scanner throws "BLE scanner unavailable (adapter off?)" when
+        // The real scanner throws "Bluetooth is off" (#1413) when
         // the adapter is off.  Uncaught, it escaped scan()'s launch and the
         // default handler killed the process — tapping Scan with Bluetooth off
         // crashed the app outright (bench 2026-07-29, APP CRASH(EXCEPTION)).
         val h = fleetHarness()
-        h.scanner.failWith = IllegalStateException("BLE scanner unavailable (adapter off?)")
+        h.scanner.failWith = IllegalStateException("Bluetooth is off")
 
         h.fleet.scan(userInitiated = true)
         advanceTimeBy(1_000); runCurrent()
@@ -633,16 +633,20 @@ class FleetManagerTest {
         // Survived, and says so rather than pretending to scan forever.
         assertFalse(h.fleet.isScanning.value, "should stop scanning on failure")
         assertFalse(h.fleet.userInitiatedScan.value, "spinner flag must clear too")
-        assertTrue(
-            h.fleet.statusMessage.value.contains("unavailable", ignoreCase = true),
-            "status should surface the reason, was '${h.fleet.statusMessage.value}'",
+        // #1413: the reason, in words a reader can act on. This used to assert
+        // on "unavailable" — the scanner's own developer string, which the
+        // pill was showing to users verbatim, question mark and all.
+        assertEquals(
+            "Bluetooth is off",
+            h.fleet.statusMessage.value,
+            "status should surface the reason in the words the pill will show",
         )
     }
 
     @Test
     fun scannerRecoversOnASubsequentScan_afterAFailure() = runTest {
         val h = fleetHarness()
-        h.scanner.failWith = IllegalStateException("BLE scanner unavailable (adapter off?)")
+        h.scanner.failWith = IllegalStateException("Bluetooth is off")
         h.fleet.scan(userInitiated = true)
         advanceTimeBy(1_000); runCurrent()
         assertFalse(h.fleet.isScanning.value)

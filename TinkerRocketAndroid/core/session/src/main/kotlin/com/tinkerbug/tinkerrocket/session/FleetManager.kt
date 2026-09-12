@@ -287,7 +287,7 @@ public class FleetManager<S : Any>(
                 throw e          // structured cancellation is not a failure
             } catch (e: Exception) {
                 // The scanner flow can fail rather than time out — most often
-                // "BLE scanner unavailable (adapter off?)" when the adapter is
+                // "Bluetooth is off" (#1413 made that message user-facing) when the adapter is
                 // off, but any transport error lands here.  Left uncaught this
                 // escapes the launch and the default handler KILLS THE PROCESS:
                 // tapping Scan with Bluetooth off crashed the app outright
@@ -302,6 +302,24 @@ public class FleetManager<S : Any>(
                 }
             }
         }
+    }
+
+    /**
+     * #1413: the adapter came back.
+     *
+     * Android has no CoreBluetooth state callback, so the radio's comings and
+     * goings never reached this class — a "Bluetooth is off" left behind by a
+     * scan that ran while it was off stayed on the status line after it was
+     * switched back on, reading as a current statement of fact. iOS clears it
+     * in centralManagerDidUpdateState; the Android UI watches
+     * ACTION_STATE_CHANGED and calls this.
+     *
+     * Only clears a stale complaint: a live scan or an existing connection
+     * owns the line and is left alone.
+     */
+    public fun onBluetoothAvailable() {
+        if (_isScanning.value || _devices.value.isNotEmpty()) return
+        _statusMessage.value = "Bluetooth ready"
     }
 
     public fun stopScanning() {
