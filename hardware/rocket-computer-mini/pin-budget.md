@@ -474,6 +474,9 @@ receive-enable is a known failure on this hardware, not a theoretical one.
 
 ## The split
 
+*Both tables below were re-verified row by row against a fresh netlist export on
+2026-09-12 (main `80e1860d`): no drift.*
+
 A second ESP32-S3RH2 was added as the flight computer. The signals this document
 placed did not move pads — they moved *processors*. Everything the flight
 computer owns kept the exact GPIO number assigned above, so the reasoning for

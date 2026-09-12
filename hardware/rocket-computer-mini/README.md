@@ -23,15 +23,17 @@ ESP32-S3. The P4 was removed entirely, leaving the S3 alone for a while; a
 two-processor split is once more the one `rocket-computer` uses — with an S3 on
 both ends instead of an S3 and a P4.
 
-| | at fork | S3 alone | now |
-|---|---|---|---|
-| Parts | 255 | 156 | **196** |
-| Nets | 234 | 139 | **200** |
-| Sheets | 5 | 4 | **5** |
+| | at fork | S3 alone | second S3 (2026-08-22) | V1 as fabbed / main (2026-09-12) |
+|---|---|---|---|---|
+| Parts | 255 | 156 | 196 | **229** |
+| Nets | 234 | 139 | 200 | **238** |
+| Sheets | 5 | 4 | 5 | **5** |
 
-*Parts and nets are netlist component and net counts. The "S3 alone" column
+*Parts and nets are netlist component and net counts; the 229 includes the four
+fiducials and four mounting holes, so 221 parts are fitted. The "S3 alone" column
 supersedes an earlier 190/191 in this table, which was measured before the
-expansion header, camera, servo and piezo came out.*
+expansion header, camera, servo and piezo came out; the last column is the board
+after the arm and hold-up reworks, the 2026-09-03 pin swap and the V1 fab gate.*
 
 ### Who owns what
 
@@ -176,8 +178,8 @@ unnecessary — liveness is a firmware check on the out computer now, and a
 hardware reset line on `CHIP_PU` also blocked flashing the flight computer over
 USB. `FC_CHIP_PU` is back to its reset RC only, and GPIO8 is a spare pad. The
 same change replaced the pack-node veto diode `D16` with `Q14`, which is what
-took the pack voltage off the out computer's GPIO11. `Q14` still has to be
-placed on the board.
+took the pack voltage off the out computer's GPIO11. `Q14` is placed beside `Q12`/`Q13` on the
+front face and routed; the V1 fab carries the consent stage.
 
 ### The link between them
 
@@ -229,22 +231,27 @@ nothing else reaches `VBAT`. And in firmware, every magnetometer driver in the
 tree is built into the flight computer, which could not reach a part on the
 other processor's bus — so the board had no heading source at all.
 
-Both are gone now: `U3` moved to `MAG_SCL`/`MAG_SDA` on the flight computer
-(GPIO37/GPIO36), with `R117`/`R118` (5.11 k) pulled up to `V_MCU_SWTCH` — the
-same rail as the part and its master. `SEN_SCL`/`SEN_SDA` is a pure pack-monitor
+Both are gone now: `U3` moved to `MAG_SCL`/`MAG_SDA` on the flight computer —
+GPIO2/GPIO1 since the 2026-09-03 pin swap; they sat on GPIO37/GPIO36 until then,
+which is where the `ESP_SCL`/`ESP_SDA` link pair lives now — with `R117`/`R118`
+(5.11 k) pulled up to `V_MCU_SWTCH`, the same rail as the part and its master. `SEN_SCL`/`SEN_SDA` is a pure pack-monitor
 bus on `+3V3`, the same shape as `rocket-computer`'s `PWR_SCL`/`PWR_SDA`. No
 passive pull-up crosses the rail boundary any more; every remaining crossing is
 an actively driven signal.
 
-The part exposes no DRDY on this land — every pad but SCL/SDA/VDD/GND is NC —
-so the magnetometer is poll-only. That is the part, not an omission.
+The part exposes no DRDY on this land — every pad but SCL/SDA/VDD/GND and the `C1`
+reservoir pin is NC — so the magnetometer is poll-only. That is the part, not an omission.
 
 **Firmware constraint.** All six of these cross the `+3V3` / `V_MCU_SWTCH`
-boundary, and they are the only signals live during pad standby with the flight
-computer off. The out computer must park every one of them Hi-Z whenever
-`V_MCU_SWTCH` is down, or it injects through the flight computer's ESD diodes
-into the dead rail. This exact failure already bit `rocket-computer` — the
-FC-relay OTA contention, where `i2s_del_channel()` left BCLK/WS/DOUT driven.
+boundary — and they are not the only out-computer signals that do. The radio
+control lines (`L_CS`, `L_RST`, `L_RXEN`, `L_BUSY`, `L_DI01`) and the memory bus
+the NAND shares with the radio (`M_SCK`, `M_MOSI`, `M_MISO`, `M_FLASH_CS`) land
+on parts powered from `V_MCU_SWTCH` too: **fifteen crossings** in all (netlist,
+2026-09-12; this paragraph said six until then). The out computer must park
+every one of them Hi-Z whenever `V_MCU_SWTCH` is down, or it injects through
+the dead parts' ESD diodes into the rail. This exact failure already bit
+`rocket-computer` — the FC-relay OTA contention, where `i2s_del_channel()` left
+BCLK/WS/DOUT driven.
 
 **The out computer's six GPIO numbers are identical to `rocket-computer`'s**, so
 `projects/out_computer` ports across with a board header and nothing else. The
@@ -283,10 +290,11 @@ bus, the power-monitor I2C and USB, and gains twelve spare pads.
 
 ## Design docs
 
-- [`power-budget.md`](power-budget.md) — the 3V3 rail after the reduction, with
-  a GNSS module and the telemetry radio added. Concludes the inherited buck
-  stays, and explains why the ground station's buck-boost must not be copied
-  here.
+- [`power-budget.md`](power-budget.md) — the 3V3 rail: the inherited buck, the
+  hold-up converter that now sits between it and the rail, the loads on both
+  sides of the switch, and what charging the supercap adds. Concludes the
+  inherited buck stays, and explains why the ground station's buck-boost must
+  not be copied here.
 - [`arm-watchdog-rework.md`](arm-watchdog-rework.md) — the 2026-08-28
   supervised-arm design **as proposed**. The window watchdog it specifies was
   removed on 2026-09-02 and the veto diode became `Q14`; read it for the
@@ -298,9 +306,10 @@ bus, the power-monitor I2C and USB, and gains twelve spare pads.
   board**; the pin *assignments* still hold, but they are now split across two
   processors — see *The split* at the end of that document.
 
-Both budgets predate the second processor. `pin-budget.md` has a section
-covering the split; `power-budget.md` has the flight computer added to its load
-table, but its scenario totals have not been re-argued from scratch.
+Both budgets were written for the single-processor board and carry dated
+sections that bring them to the two-processor one: `pin-budget.md` in *The
+split* (re-verified against the netlist 2026-09-12), `power-budget.md` in its
+2026-09-12 rewrite of the rail, the loads and the scenarios.
 
 ## What was and wasn't carried over
 
@@ -319,8 +328,11 @@ Deliberately **not** copied — `rocket-computer`'s seven design documents. All 
 them are records of *that* board, and each would be actively misleading here:
 
 - **The reviews** — `prefab-review-2026-07-30.md`, `prefab-review-2026-08-05.md`
-  and `schematic-review.md`. Carrying them would assert this board has been
-  reviewed when it has not.
+  and `schematic-review.md`. Carrying them would have asserted this board had
+  been reviewed before it was. It has its own review now — tracker
+  [#993](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/993)
+  (2026-09-01, findings #994–#1032) and the 2026-09-04 fab gate — and the
+  parent's reviews are still the parent's.
 - **`WORKLIST.md`** — the closing record of the V9 pre-fab review, written
   against V9's live files. Its board state, its closed items, and its bench list
   describe a board this one will not be.
@@ -348,48 +360,38 @@ none have been fixed here.
 
 ### Where the numbers stand now
 
-> **Stale — these numbers pre-date the current board** and are kept only as the
-> record of the fork. Since they were taken the board has gained the arm rework,
-> the hold-up converter, an 8-layer stackup, the WLCSP flash and the chip
-> antenna, and the PCB has been laid out. Re-measuring them is part of
-> [#1013](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1013).
+Re-measured on main `80e1860d` (2026-09-12) with `kicad-cli` at
+`--severity-all`, DRC with `--schematic-parity`. The board file on main is the
+fabbed board: copper and placement identical to the
+`rocket-computer-mini-v1.0.1` tag, only 3D-model references touched since.
 
+| | at fork | after the rev change | after P4 removal | after the second S3 | **V1.0.1 / main** |
+|---|---|---|---|---|---|
+| ERC (`--severity-all`) | 1012 | 1012 | 823 → 610 | 739 | **795** (10 errors) |
+| DRC (`--severity-all`) | 26 | 28 | 88 | not re-run | **22** (2 errors) |
+| Schematic parity | 11 | 11 | 8 | not re-run | **0** |
+| Unconnected | 0 | 0 | 0 | not re-run | **0** |
 
-| | at fork | after the rev change | after P4 removal | after the second S3 |
-|---|---|---|---|---|
-| ERC (`--severity-all`) | 1012 | 1012 | 823 → 610 | **739** |
-| DRC (`--severity-all`) | 26 | 28 | **88** | not re-run |
-| Schematic parity | 11 | 11 | **8** | not re-run |
-| Unconnected | 0 | 0 | **0** | not re-run |
+*The columns before the last are the record of the fork and of the
+schematic-only period, kept as history; every board-side number in them
+predates the layout. The per-category breakdown of the 2026-08-22 ERC delta
+that used to follow this table is in this file's git history.* What the live
+numbers are:
 
-*The 823 in the third column was measured before the expansion header, camera,
-servo and piezo were removed; the same board measures 610 today, and that 610 is
-the baseline the 735 is a delta against. DRC and parity are unmeasured because
-the second processor is schematic-only so far — **the PCB has not been
-touched**, so every board-side number above is stale by construction.*
-
-The +129 ERC items are all in categories the board already had, and none of them
-is a new wiring defect:
-
-| Added | Why |
-|---|---|
-| 98 `endpoint_off_grid` | inherited with the copied sheet geometry (515 already present) |
-| 19 `pin_not_connected` | spare pads — twelve freed on `U15`, seven unused on `U32`. Deliberately left bare rather than flagged, because they are spares, not decisions |
-| 6 `pin_to_pin` (warning) | the flash symbol types its bus pins *Unspecified*; `U13` already does this against `U15` |
-| 3 `power_pin_not_driven` | power inputs fed through a passive — `L10` into `U32`, `R3` into `U1` — same shape as the five already present |
-| 1 `pin_to_pin` (error) | the flash symbol types GND as a *power output*; identical to `U13`'s existing pair |
-| 2 `lib_symbol_mismatch` | `U33`/`Y3` inherit the cached-symbol drift `U13`/`Y1` already report |
-
-Every pre-existing DRC category went *down* with the parts count. The rise to 88
-is one thing: **66 `track_dangling` + 2 `via_dangling`** — stubs that used to run
-to a P4 pad on nets that still have pads elsewhere, so they survived the
-dead-net sweep.
-
-**Left in place deliberately.** That rewire has now happened — the orphaned
-signals belong to the flight computer — but it happened *in the schematic only*.
-The board still carries the P4-era stubs and has no footprint for `U32`, `U33`,
-`U1`, `S1` or `D9` at all, so the layout pass those stubs were waiting for is
-still outstanding and still the right time to clear them.
+- **ERC 795.** The 10 errors are the out computer's ten bare spare pads (see
+  *Status* below). The warnings are 704 `endpoint_off_grid` — the power sheet's
+  half-grid offset — 56 `pin_to_pin` and 25 `lib_symbol_mismatch`; the last two
+  are the library-hygiene items on
+  [#1030](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1030).
+- **DRC 22.** The 2 errors are courtyard overlaps between the fiducials `FID2` /
+  `FID3` and the connectors `J6` / `J2` they sit beside — accepted; a fiducial
+  inside a connector's courtyard costs nothing. The 20 warnings are silk over
+  copper or too near the edge (`C130`'s outline over four pads, `J8` and `J2` at
+  the board edge), three silk overlaps, five `lib_footprint_mismatch` against the
+  shared library and one `lib_footprint_issues` on the logo. No `track_dangling`
+  or `via_dangling` remain: the P4-era stubs this section used to list were
+  cleared in the layout pass, and `U32`, `U33`, `U1`, `S1` and `D9` — once
+  schematic-only — are placed and routed.
 
 Three stale items were listed here; **all three are now resolved** (2026-09-03):
 
@@ -421,40 +423,46 @@ so neither the `silk_overlap` nor the `silk_over_copper` warning that the longer
 string caused still exists.
 
 The title block arrived from the fork reading `(rev "V9")` — the revision of a
-*different* design's fab release. There is no fab tag or release for this board
-under any revision, and the gerbers in `gerbers/` were plotted on 2026-08-31,
-before the current layout — so nothing that has been sent out corresponds to
-what `V1` names today. Re-plotting them is part of
-[#1013](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1013).
+*different* design's fab release. `V1` has since gone out under its own tags:
+`rocket-computer-mini-v1.0.0` (2026-09-05, merged to main by PR #1172) and
+`rocket-computer-mini-v1.0.1` the same day, after JLCPCB's engineering query
+moved the vias out of the WLCSP ball pads. The GitHub releases carry the gerber
+and assembly zips, plotted from the tagged commit by `tools/plot_gerbers.sh`,
+which refuses a dirty tree and checks the title-block revision against the tag.
+`gerbers/` is gitignored except its `.gitkeep`: whatever it holds locally is a
+working plot, never the release — the stale 2026-08-31 archive that used to sit
+there is gone.
 
 ## Status
 
-**Schematic-complete for the two-processor split; the PCB is placed but not
-routed.** The flight computer, its power switch, the diode-OR enable and the USB
-mux exist in the schematic and export a clean netlist — **214 components, 205
-nets** (2026-08-30, after the arm and TPS61094 hold-up reworks; this paragraph
-said 196/200 before those landed), no duplicate references and no single-node
-nets.
+**Fabricated.** `V1` went out as `rocket-computer-mini-v1.0.1` on 2026-09-05,
+after its own review
+([#993](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/993),
+2026-09-01) and the 2026-09-04 fab gate recorded in
+[`FABRICATION-NOTES.md`](FABRICATION-NOTES.md). The board file on main is that
+board: copper and placement identical to the tag, only 3D-model references
+touched since (checked 2026-09-12).
 
-Board file, verified 2026-08-30:
+Board file, verified 2026-09-12 on main `80e1860d`:
 
-- **All 214 footprints are placed**, inside x 73.2–124.5 / y 103.7–170.1 mm.
-  The import scatter block that used to sit at x > 130 is gone.
-- **The outline is back** — one `Edge.Cuts` shape, 22.5 × 69.5 mm. It had been
-  lost between `0e0f2d5` and `7ad7508` (the pack-direct pyro/supercap WIP
-  commit), which left the file with no board boundary at all for a while.
-- **The net names are re-synced with the schematic.** `CAP_ACTIVE` and
-  `ARM_CLK` are gone; `VBUCK_OK`, `FC_ARM`, `OC_ARM_EN` and the rest
-  of the TPS61094 nets are in. Until this pass the board file lagged the
-  schematic by two reworks — **9 schematic nets had no PCB counterpart and 3 PCB
-  nets no longer existed** — and `kicad-cli pcb drc --schematic-parity` did not
-  flag it, because it reconciles footprints rather than stale net strings. Take
-  pin maps from a `kicad-cli sch export netlist`, never from the board file; an
-  audit run against the stale copy produced three wrong findings before the
-  netlist corrected them.
-- **Nothing is routed yet**: 0 track segments, 2 vias, 12 zones. DRC reports 103
-  violations and 372 unconnected pads, which is the expected shape for a placed,
-  unrouted board.
+- **22.55 × 69.62 mm, 8 layers, 1.630 mm stack**; the stackup and the fab
+  parameters are in `FABRICATION-NOTES.md`.
+- **230 footprints** — the 229 netlist components (221 fitted; `FID1–4` and
+  `H1–4` are not) plus the logo — **2,296 track segments, 598 vias, 26 zones**;
+  0 unconnected, 0 schematic-parity items. The netlist exports **229
+  components, 238 nets**, no duplicate references and no single-node nets. (The
+  214/205 this paragraph gave on 2026-08-30 was the pre-layout schematic.)
+- **DRC 22 at `--severity-all`**: 2 courtyard-overlap errors (`FID2` inside
+  `J6`'s courtyard, `FID3` inside `J2`'s — accepted) and 20 warnings, itemised
+  under *Where the numbers stand now*.
+- **The net names match the schematic** (`VBUCK_OK`, `FC_ARM`, `OC_ARM_EN` and
+  the TPS61094 nets are all on the board). Until the 2026-08-30 re-sync the
+  board file lagged the schematic by two reworks — 9 schematic nets had no PCB
+  counterpart and 3 PCB nets no longer existed — and `kicad-cli pcb drc
+  --schematic-parity` did not flag it, because it reconciles footprints rather
+  than stale net strings. Take pin maps from a `kicad-cli sch export netlist`,
+  never from the board file; an audit run against the stale copy produced three
+  wrong findings before the netlist corrected them.
 
 **ERC (2026-09-11, `--severity-all`): 10 errors, and every one of them is a
 spare pad on the out computer** (GPIO9/12/34/39–45), left unflagged on purpose
@@ -476,18 +484,19 @@ warnings — most of the power sheet sits on a half-grid offset — and the
 borrowed P-FET/NAND symbols, the missing `ARM_GATE` label and the empty title
 blocks from #1030.
 
-Not reviewed, not fabbed, no tag. Firmware exists —
-[`tinkerrocket-idf/projects/rocket_computer_mini`](../../tinkerrocket-idf/projects/rocket_computer_mini/)
-carries the **single-MCU** merge, with a board map netlist-verified against the
-tree as it was before this change (note its README's warning that
-`pin-budget.md`'s assignment table has drifted from the schematic). That merge
-is now the wrong shape for this board: the split needs `projects/out_computer`
-and `projects/flight_computer` board headers instead, which is the reason the
-GPIO numbers above were chosen to match `rocket-computer` wherever an S3 pad
-allowed it.
+**Firmware is the two-processor pair, and CI builds it.** The fabbed board runs
+[`projects/out_computer`](../../tinkerrocket-idf/projects/out_computer/) and
+[`projects/flight_computer`](../../tinkerrocket-idf/projects/flight_computer/)
+with `-DTR_BOARD_M1=1` — a `board_m1.h` in each, netlist-verified on 2026-09-04
+(73 constants, none pointing at an unconnected pad) — and `firmware-build.yml`
+builds both as board `M1`.
+[`projects/rocket_computer_mini`](../../tinkerrocket-idf/projects/rocket_computer_mini/),
+the single-MCU merge, is still built so it does not rot, but it targets a shape
+that was never fabbed (#1188): do not flash it to this board.
 
-Before it goes to fab it needs its own pre-manufacturing review — see *Sending a
-board to fab* in [`../README.md`](../README.md).
+The next spin's checklist is the *Still open* list in `FABRICATION-NOTES.md`;
+the bench items the review collected are on #993 and
+[#1211](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1211).
 
 ### Open items
 
@@ -509,13 +518,16 @@ Each of these is a decision left open rather than an oversight:
   `CEN_D+`; it was not copied, on the grounds that the out computer has never
   had one either. Symmetry, not a defect — but it is an asymmetry with the
   reference design.
-- **The out computer keeps twelve spare pads and the flight computer six.**
-  (ERC reports seven on the flight computer; the seventh is `GPIO26`, which is
-  not usable on this part.) They are left unconnected rather than
-  no-connect-flagged, so ERC reports each one. Flagging them would assert they
-  are permanently unused, which is not the intent.
+- **The out computer keeps twelve spare pads and the flight computer two.**
+  The flight computer's are GPIO47/GPIO48; the 2026-09-03 pin swap spent the
+  rest (`pin-budget.md`, *The split*). Ten of the out computer's (GPIO9, 12, 34,
+  39–45) are left bare rather than no-connect-flagged, so ERC reports each one —
+  flagging them would assert they are permanently unused, which is not the
+  intent. GPIO47/GPIO48 on both processors carry no-connect flags since the
+  2026-09-11 ERC pass, as octal-SPI pads that will never be general-purpose here.
 - **Both processors' spare `GPIO26`** is the quad-PSRAM chip select on this part
   and remains unusable on each — see `pin-budget.md`.
-- **The six link lines are the only signals live during pad standby.** Firmware
+- **Fifteen out-computer signals cross into the switched rail** — the six link
+  lines, the five radio control lines and the four memory-bus lines. Firmware
   must park them Hi-Z while `V_MCU_SWTCH` is down; the hardware does not enforce
   it. See *The link between them*.

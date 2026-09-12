@@ -9,57 +9,70 @@ obvious-looking comparison board is solving a different problem.
 **Status.** Estimate, not a measurement. The topology below is verified against
 the netlist; every current figure is part-class reasoning and none of it is
 datasheet-confirmed. See *Before this is a closed budget* at the end.
+**Rewritten 2026-09-12** for the hold-up converter and the fabbed board; the
+2026-08-22 text is in git history.
 
 ---
 
 ## The rail as built
 
-Verified from the exported netlist at the time of writing:
+Verified from the exported netlist on 2026-09-12 (main `80e1860d`, the board as
+fabbed):
 
 ```
-2S pack ──> mux ──> V_MCU_2S ──> L5 ──> [3V3 buck U18] ──> +3V3
-                                                             │
-                                        ┌────────────────────┤
-                                        │                    │
-                                  load switch U30       direct loads
-                                        │              (out computer U15, its boot
-                                        │               flash and the pack
-                                        │               monitor U23)
-                                        v
-                                  V_MCU_SWTCH ──> flight computer U32 + its flash,
-                                                  IMU, baro, mag, GNSS,
-                                                  LoRa radio, NAND
+2S pack ─> mux U21 ─> V_MCU_2S ─> L5 ─> [buck U18] ─> V_BUCK ─> [hold-up U47] ─> +3V3
+                                                          │                        │
+                                                    supercap C130 5 F        ┌─────┴──────────┐
+                                                    on V_SCAP, via L11       │                │
+                                                                        load switch U30   direct loads:
+                                                                             │            out computer U15,
+                                                                             v            boot flash U13,
+                                                                        V_MCU_SWTCH       pack monitor U23,
+                                                                        flight computer   USB mux U1
+                                                                        U32 + flash U33,
+                                                                        IMU, baro, mag, GNSS,
+                                                                        LoRa radio, NAND U11
 ```
 
-**Both processors are on this rail.** `U30` gates the flight computer as well as
-the peripherals, so the switched branch is now the larger of the two — but it is
-still the same buck, and the budget below is a budget for `U18`.
+Two stages stand between the pack and the rail where the 2026-08-22 version of
+this document had one:
 
-`U18` is a fixed-output synchronous **buck**, 1 A class, feedback tied to ground
-for the internal divider. Its input is the muxed 2S pack rail through `L5`, so
-the input is never below roughly 6.4 V — the pack's own cutoff — against a 3.3 V
-output.
+- **`U18`** is the inherited fixed-output synchronous buck, 1 A class, feedback
+  tied to ground for its internal divider and `DEF` tied high, so it regulates
+  **3.465 V** — the +5 % option — on `V_BUCK`, not 3.3 V. Its input is the muxed
+  pack rail through `L5`, never below roughly 6.4 V (the eFuse's own cutoff), so
+  it is a buck by a factor of two at all times.
+- **`U47`** is the hold-up converter added on 2026-08-29
+  ([`holdup-tps61094-rework.md`](holdup-tps61094-rework.md)). With the pack
+  present it is a **150 mΩ bypass switch** from `V_BUCK` to `+3V3` — the whole
+  rail current flows through it, about 0.1 V of drop at 0.7 A — while it
+  buck-charges the 5 F supercap `C130` on `V_SCAP` at **100 mA to a 2.5 V
+  termination**, about two minutes from empty. When `V_BUCK` collapses it boosts
+  from the cap to a **flat 3.0 V** until the cap is spent: about 21 s at 190 mA,
+  13.6 s at 300 mA. It draws 60 nA once the cap is full.
+
+So `+3V3` is `V_BUCK` less the bypass drop while the pack is present — about
+3.4 V; the hold-up note walks the tolerance stack, with the ESP32-S3's 3.6 V
+ceiling the closest — and 3.0 V on stored energy. **Both processors are on this
+rail.** `U30` gates the flight computer as well as the peripherals, so the
+switched branch is the larger of the two, but it is still the same buck, and the
+budget below is a budget for `U18` with `U47` as a series element and one more
+load.
 
 Sensors do not sit on `+3V3` directly. They hang off `V_MCU_SWTCH`, downstream
 of load switch `U30`, and so still land on this budget.
 
 ## What the rail carries
 
-Direct `+3V3` loads today are the out computer (`U15`), its boot flash (`U13`),
-the current monitor (`U23`) and the load switch `U30`. Behind `U30` sit the
-flight computer (`U32`) and its boot flash (`U33`), all four flight sensors
-(IMU, barometer, magnetometer), the GNSS receiver, the LoRa radio and the
-NAND (`U11`).
+Direct `+3V3` loads are the out computer (`U15`), its boot flash (`U13`), the
+current monitor (`U23`), the USB mux (`U1`) and the load switch `U30`. Behind
+`U30` sit the flight computer (`U32`) and its boot flash (`U33`), all four
+flight sensors — the magnetometer included, on the flight computer's own
+`MAG_SCL`/`MAG_SDA` bus with its pull-ups on the same rail since 2026-08-22 —
+the GNSS receiver, the LoRa radio and the NAND (`U11`). Upstream of the rail,
+on `V_BUCK`, sits the one load that is new: the supercap charger inside `U47`.
 
-**All four flight sensors sit together behind the switch**, the magnetometer
-included: it moved onto the flight computer's own `MAG_SCL`/`MAG_SDA` bus with
-its pull-ups (`R117`/`R118`) on `V_MCU_SWTCH`, so the part, its master and its
-pull-ups share one rail. It briefly ran from `+3V3` instead — a narrower fix
-for the same defect, made while it was still on the out computer's bus. Moving
-the part to the right processor solved it at the root and put it back on the
-sensor rail where it belongs.
-
-With the two additions the inventory becomes:
+With the GNSS module, the radio and the charger added the inventory becomes:
 
 | Load | Condition | Estimate |
 |---|---|---|
@@ -75,6 +88,8 @@ With the two additions the inventory becomes:
 | GNSS module | tracking | ~30 mA |
 | NAND + NOR flash | writing | ~40 mA |
 | Sensors + current monitor | active | ~4 mA |
+| Hold-up converter `U47` | charging the supercap — the first ~2 min after a cold power-up, or after a hold-up event | **100 mA**, drawn on `V_BUCK` |
+| Hold-up converter `U47` | cap charged, bypass | ~0 (60 nA) |
 
 The telemetry radio is the same 900 MHz module already carried by
 [`../lora-daughterboard/`](../lora-daughterboard/) and
@@ -88,6 +103,9 @@ The telemetry radio is the same 900 MHz module already carried by
 | Pad idle | both MCUs idle, radio RX, GNSS tracking, no logging | **~160 mA** |
 | Realistic flight | OC active + BLE, FC active, radio TX, GNSS tracking, logging | **~300 mA** |
 | Worst credible | OC WiFi TX, FC active, radio TX, GNSS acquisition, NAND write | **~605 mA** |
+| Flight computer off, cap charging | as the first row plus `U47` charging `C130` — the two minutes after a pad power-up | **~145 mA** |
+| Pad idle, cap charging | as pad idle plus the charge current | **~260 mA** |
+| Worst credible, cap charging | a launch inside two minutes of power-up — what the hold-up advisory (`hu`, #1166) exists to flag | **~705 mA** |
 
 The flight computer's contribution is a flat ~50 mA in every powered scenario:
 it has no antenna fitted, so it never reaches the WiFi or BLE transmit figures
@@ -102,14 +120,21 @@ biggest open question in this document.
 
 ## Headroom
 
-Against a 1 A-class regulator, worst credible sits near **60 %**, realistic
-flight near **30 %**.
+Against a 1 A-class regulator, worst credible sits near **60 %** — **70 %**
+while the supercap is still charging — and realistic flight near **30 %**.
+`U47`'s bypass switch carries the same current in series and costs only its
+drop, about 0.1 V at 0.7 A; what it can deliver *from the cap* in a hold-up
+event is a different budget, argued in the hold-up note (at the 0.19 A cruise
+load the boost could run the cap down to 0.45 V, and the converter's 0.7 V
+input lockout stops it first).
 
-> **These totals have not been re-argued from first principles since the second
-> processor landed** — the flight computer was added to the inventory and its
-> ~50 mA carried through the arithmetic, nothing more. The headroom conclusion
-> survives the change comfortably, but if this becomes a closed budget the
-> scenarios themselves should be rebuilt rather than incremented.
+> **Incremented, not rebuilt.** The 2026-09-12 rewrite re-read the rail from
+> the fabbed netlist and added the hold-up stage and its charge current; the
+> load figures are still the 2026-08-22 part-class estimates with the flight
+> computer's ~50 mA carried through. The headroom conclusion survives both
+> changes comfortably, but if this becomes a closed budget the scenarios should
+> be rebuilt from datasheet figures rather than incremented again (item 4
+> below).
 
 The comparison that matters is historical rather than absolute. Before the
 reduction this same rail fed the second processor's supply through `U30`, and
@@ -151,33 +176,38 @@ supply even though they share a 3.3 V rail.
 
 ## What the reduction changed
 
-- **One switching regulator instead of two.** The second processor's dedicated
-  buck left with it. One less inductor, one less feedback network, one less
-  switching node near the sensors.
-- **The switched rail lost its purpose.** `V_MCU_SWTCH` is gated by the MCU
-  through `U30`, and its original job was powering the removed processor's
-  supply. It now feeds only the sensors and some clamps. Whether the MCU should
-  still gate its own sensors at boot is a live design question, and is not a
-  power-budget question — see the note on it in [`README.md`](README.md).
+- **One switching regulator instead of two — for a week.** The second
+  processor's dedicated buck left with it; the hold-up converter added on
+  2026-08-29 is a second switcher again, but one that switches only while it
+  charges the cap (about two minutes after a power-up) or rides it, and is a
+  static bypass FET the rest of the time. The hold-up note carries the EMI
+  reasoning.
+- **The switched rail got its purpose back.** `V_MCU_SWTCH` was left gating
+  only the sensors when the P4 went; with the second S3 it again carries a
+  processor — the flight computer, its flash, the sensors, the GNSS receiver,
+  the LoRa radio and the NAND — and its gating is the pad-standby and
+  in-flight-hold mechanism described in [`README.md`](README.md). The
+  2026-08-22 question of whether the MCU should gate its own sensors at boot is
+  answered by that design.
 
 ## Before this is a closed budget
 
 Four things, in the order they affect the answer:
 
 1. **Does the MCU's own radio ever transmit while the telemetry radio does?**
-   This single assumption is roughly 350 mA of the 555 mA worst case. If the two
+   This single assumption is roughly 350 mA of the 605 mA worst case. If the two
    are mutually exclusive in firmware, worst credible falls to about 300 mA and
    the rail is barely working.
 2. **GNSS antenna supply.** If the module needs antenna bias or an external LNA
    feed, that current is not in the table above — it was excluded because the
    configuration is not yet decided, not because it is negligible.
-3. **Branch switching.** Both new loads are described here as sitting on the
-   3V3 rail. Today the equivalent branches are switched, per
-   [`../rocket-computer/high-side-switch-design.md`](../rocket-computer/high-side-switch-design.md).
-   Hard-wiring them costs the ability to power-cycle a hung receiver or radio in
-   flight, and their off-state isolation on the pad. That is a capability
-   decision, not a supply one, and it should be made deliberately rather than
-   fallen into.
+3. **Branch switching — decided 2026-08-22.** The GNSS receiver and the radio
+   sit behind `U30` with the flight computer, on the one switch, and do not get
+   switches of their own (the parent board's per-branch switches are in
+   [`../rocket-computer/high-side-switch-design.md`](../rocket-computer/high-side-switch-design.md)).
+   What that costs — no power-cycling a hung receiver or radio in flight without
+   taking the flight computer down with it — is accepted; see *Open items* in
+   [`README.md`](README.md).
 4. **Confirm the figures.** Every current in this document is part-class
    reasoning. Before anything is committed to layout, replace them with
    datasheet values at 3.3 V and the actual operating modes, and re-run the
@@ -191,10 +221,20 @@ removal, not from the schematic drawing or from prior documents. The 0.5–0.8 A
 historical figure is quoted from the parent board's power ECO, which derived it
 independently and against a board that no longer exists here.
 
+Re-read on 2026-09-12 from a fresh netlist export of the fabbed board (main
+`80e1860d`): the two-stage rail, the hold-up stage and the charge current above
+come from that export and from
+[`holdup-tps61094-rework.md`](holdup-tps61094-rework.md); the load figures were
+not re-measured.
+
 
 ---
 
 # C56 — replacing the bulk polymer with ceramics already on the board
+
+**Done — drawn and fabbed.** `C56` is gone from the netlist; `V_MCU_2S` carries
+`C47`/`C48`/`C49` (22 µF) and `C59` (1 µF), and `L5` is the same 2.2 µH part as
+`L6` on the buck's output. The argument is kept as the record of why.
 
 **Decision.** Delete `C56` (330 µF polymer tantalum, 16 V, ~50 mΩ ESR, 7.3 × 4.3 mm)
 and fit **three 22 µF 16 V X5R 0805** in its place — the part already used at `C8`,
