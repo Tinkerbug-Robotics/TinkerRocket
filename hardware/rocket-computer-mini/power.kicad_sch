@@ -6639,7 +6639,7 @@
 			(embedded_fonts no)
 		)
 	)
-	(text "6 V over coltage"
+	(text "USB over voltage\n6.35 V (OV1)"
 		(exclude_from_sim no)
 		(at 93.98 31.75 0)
 		(effects
@@ -6650,7 +6650,7 @@
 		)
 		(uuid "0739859e-f490-4cd4-8384-3c8aae858b91")
 	)
-	(text "USB power input for testing.\n2S power input for operation.\nNote that camera, servo, and igniters use input voltage \ndirectly, ensure those components will operate at 2s voltages.\nTPS562152 is a micro-amp standby current device, which was \nchosen to support long pad duration with only Out Computer \nrunning."
+	(text "USB power input for testing.\n2S power input for operation.\nIgniters fire from VBAT_CON directly, ahead of the eFuse;\neverything else runs from the eFuse output through the mux.\nThis board has no camera and no servo port.\nTPS62152 (U18) is a micro-amp standby current device, which\nwas chosen to support long pad duration with only Out\nComputer running."
 		(exclude_from_sim no)
 		(at 107.95 124.46 0)
 		(effects
@@ -6696,9 +6696,9 @@
 		)
 		(uuid "32e725f3-a925-52a7-a2bc-2ebca87e2034")
 	)
-	(text "Max current limit of\n5.2 A"
+	(text "TPS2121 current limit\n2.25 A (R64 49.9 k).\nFast trip 2.4x: 5.4 A"
 		(exclude_from_sim no)
-		(at 146.685 73.66 0)
+		(at 146.685 72.4 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6844,9 +6844,9 @@
 		)
 		(uuid "b7909371-4aeb-5b7d-a0cf-f23fc57066c0")
 	)
-	(text "9.6 V over voltage"
+	(text "Battery over voltage\n9.54 V (OV2)"
 		(exclude_from_sim no)
-		(at 92.71 46.355 0)
+		(at 90.5 46.355 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6876,6 +6876,17 @@
 			(justify left)
 		)
 		(uuid "d7af0b07-0e0d-41e0-bb35-b485f66a8afd")
+	)
+	(text "eFuse U19: current limit 0.91 A (R48 1 k). UVLO on at 6.96 V, off at 6.38 V.\nOVLO off at 10.59 V, on again at 9.70 V. All four are set by the R44/R45/R85\ndivider against the 1.2 V rising / 1.1 V falling pin thresholds. Igniters tap\nVBAT_CON ahead of this eFuse, so its limit does not bound a firing pulse."
+		(exclude_from_sim no)
+		(at 83.82 193.8 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "2ff14527-eef5-4bb6-82b4-f69153c0fdd2")
 	)
 	(text "Battery Protection (Undervoltage and Overvoltage)"
 		(exclude_from_sim no)
@@ -6961,7 +6972,7 @@
 		)
 		(uuid "ef9f9b60-5769-42f9-8747-339d7559dd8c")
 	)
-	(text "USB power input for testing\n2S power input for operation\nNote that camera, servo, and igniters use input voltage directly, \nensure those components will operate at 2s voltages"
+	(text "USB power input for testing\n2S power input for operation\nIgniters fire from VBAT_CON directly, ahead of the eFuse;\neverything else runs from the eFuse output through the mux."
 		(exclude_from_sim no)
 		(at 67.945 73.66 0)
 		(effects
