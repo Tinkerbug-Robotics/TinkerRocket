@@ -453,6 +453,37 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
         d.tx_power_dbm = config::RADIO_MAX_TX_POWER_DBM;
     }
 
+    // #1143 item 1: REFUSE an out-of-band frequency; do not clamp it.
+    //
+    // IDENTITY reports freq_min_mhz/freq_max_mhz as this module's capability
+    // band edges, and config.h says reporting them "is the whole point of
+    // IDENTITY" — but until now nothing on either end compared against them.
+    // The bare LLCC68 die accepts 150-960 MHz, so any frequency outside the
+    // E220's 850-930 MHz matching network was applied, acked APPLIED, echoed
+    // back in STATUS, accepted by modem_config_ack::accepted() (which only
+    // checks that the readback matches the request — and it did), cached by
+    // the host and written to NVS. Transmitting into an unmatched network is
+    // an antenna-and-PA problem, not a link-quality one.
+    //
+    // Refused rather than clamped because clamping would put the radio on a
+    // frequency nobody asked for while acking success — the host would cache
+    // the frequency it requested and the two ends would disagree about what
+    // is on the air, which is the failure class this whole ack path exists to
+    // prevent. The radio is not touched, so the previous config stays live.
+    if (d.freq_mhz < config::RADIO_FREQ_MIN_MHZ ||
+        d.freq_mhz > config::RADIO_FREQ_MAX_MHZ)
+    {
+        last_set_config_ok = false;
+        last_set_config_fail_reason = CFG_FAIL_OUT_OF_BAND;
+        ESP_LOGE(TAG, "SET_CONFIG REFUSED: %.3f MHz is outside this module's "
+                      "%.1f-%.1f MHz band — radio NOT touched, previous config "
+                      "still live (#1143)",
+                 (double)d.freq_mhz, (double)config::RADIO_FREQ_MIN_MHZ,
+                 (double)config::RADIO_FREQ_MAX_MHZ);
+        sendStatus();
+        return;
+    }
+
     if (!radio_up)
     {
         // Radio never came up (or wasn't wired at boot) — full begin(), which
@@ -461,6 +492,34 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
         cfg_ok = radio_up;
         fail_what = "begin() failed - the LLCC68 is down, nothing is on the air";
         fail_reason = CFG_FAIL_RADIO_DOWN;
+        // #1143 item 2: read the modulation back off the driver before
+        // believing this branch. begin() used to discard every setter's return
+        // and cache the REQUESTED values as last-known-good, so an illegal
+        // SF/BW pair was acked APPLIED with STATUS reporting a modulation that
+        // was never on the air — and modem_config_ack::accepted(), which
+        // exists to catch exactly that, compares against those same cached
+        // values and so agreed. #1146/PR #1384 fixed the driver (begin() now
+        // fails on a rejected BW or SF and latches only what succeeded); this
+        // is the modem-side backstop, because the recovery branch is the one
+        // place a silent mismatch would be invisible to the host.
+        if (cfg_ok)
+        {
+            const uint8_t got_sf = radio.currentSpreadingFactor();
+            const float   got_f  = radio.currentFrequencyMHz();
+            if (got_sf != d.spreading_factor ||
+                fabsf(got_f - d.freq_mhz) > 0.001f)
+            {
+                cfg_ok = false;
+                fail_what = "begin() reported success but the radio is on a "
+                            "different modulation than was requested";
+                fail_reason = CFG_FAIL_MODULATION;
+                ESP_LOGE(TAG, "SET_CONFIG recovery begin() MISMATCH: asked "
+                              "%.3f MHz SF%u, radio reports %.3f MHz SF%u "
+                              "(#1143)",
+                         (double)d.freq_mhz, (unsigned)d.spreading_factor,
+                         (double)got_f, (unsigned)got_sf);
+            }
+        }
     }
     else
     {
