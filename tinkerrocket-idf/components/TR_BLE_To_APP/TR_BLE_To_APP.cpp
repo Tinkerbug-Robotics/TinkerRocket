@@ -2247,6 +2247,7 @@ static const char* ota_err_token(TR_OTA_Receiver::Error e)
         case E::WriteFailed:         return "write_failed";
         case E::SizeMismatch:        return "size_mismatch";
         case E::ShaMismatch:         return "sha_mismatch";
+        case E::HashUnavailable:     return "hash_unavailable";   // #1142 item 1
         case E::EndFailed:           return "end_failed";
         case E::SetBootFailed:       return "set_boot_failed";
         case E::ImageIdentityMismatch: return "image_identity_mismatch";   // #1125

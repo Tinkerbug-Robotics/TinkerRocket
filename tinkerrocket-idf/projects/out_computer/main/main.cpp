@@ -2755,6 +2755,10 @@ static uint64_t parser_len_drops = 0;
 
 static uint32_t frames_bad_crc = 0;
 static volatile uint32_t dma_cb_count = 0;      // DMA callback invocations
+// #1142 item 4: the same callbacks, counted BEFORE i2s_ingest_paused gates
+// them. dma_cb_count answers "did frames reach the ring"; this one answers
+// "is the FC still clocking the link", which is what the OTA flip needs.
+static volatile uint32_t dma_cb_raw_count = 0;
 static uint32_t dedup_drops_lt = 0;              // ts strictly less than prev (replay / reorder)
 static uint32_t dedup_drops_eq = 0;              // ts exactly equal to prev (byte-duplicate)
 static uint32_t dedup_replay_drops = 0;          // #468: >10 s backstep, unconfirmed (replayed TX descriptor)
@@ -3562,7 +3566,7 @@ static volatile uint32_t oc_ota_last_chunk_ms = 0;
 static uint32_t oc_ota_frames_pumped = 0;                   // diag: frames enqueued by relay cb
 static uint32_t oc_ota_feed_sent     = 0;                   // diag: frames the feeder wrote to I2S
 static uint32_t oc_ota_feed_idle     = 0;                   // diag: idle-fill writes (queue empty)
-static uint32_t oc_ota_silence_ref_count = 0;               // dma_cb_count snapshot for silence detect
+static uint32_t oc_ota_silence_ref_count = 0;               // #1142 item 4: dma_cb_RAW_count snapshot for silence detect
 static uint32_t oc_ota_silence_since_ms  = 0;               // when RX last went quiet
 static uint32_t oc_ota_warmup_since_ms   = 0;               // post-flip RX-lock warmup start (0 = inactive)
 static uint32_t oc_ota_total_size = 0;                      // image size (diag)
@@ -4108,6 +4112,7 @@ static const char* fcOtaErrToken(uint8_t e)
         case TR_OTA_Receiver::Error::WriteFailed:      return "fc_write_failed";
         case TR_OTA_Receiver::Error::SizeMismatch:     return "fc_size_mismatch";
         case TR_OTA_Receiver::Error::ShaMismatch:      return "fc_sha_mismatch";
+        case TR_OTA_Receiver::Error::HashUnavailable:  return "fc_hash_unavailable";  // #1142
         case TR_OTA_Receiver::Error::EndFailed:        return "fc_end_failed";
         case TR_OTA_Receiver::Error::SetBootFailed:    return "fc_set_boot_failed";
         case TR_OTA_Receiver::Error::ImageIdentityMismatch:
@@ -4642,7 +4647,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                     {
                         oc_ota_await_flip          = true;
                         oc_ota_relay_ready_pending = true;
-                        oc_ota_silence_ref_count   = dma_cb_count;
+                        oc_ota_silence_ref_count   = dma_cb_raw_count;   // #1142 item 4
                         oc_ota_silence_since_ms    = (uint32_t)(esp_timer_get_time() / 1000);
                     }
                     break;
@@ -5218,6 +5223,20 @@ static IRAM_ATTR bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user
     // BLE + flash on CPU 1. DMA keeps writing its own internal buffers;
     // we just skip the ring-push + task-notify work. See i2s_ingest_paused
     // declaration for rationale.
+    // #1142 item 4: count the callback BEFORE the pause gate.
+    //
+    // dma_cb_count is deliberately gated — its other readers ask "did frames
+    // reach the ring", and while ingest is paused the honest answer is no. But
+    // the OTA relay's flip uses it for a different question: "has the FC gone
+    // quiet", i.e. has it stopped driving BCLK. A DMA callback firing is
+    // evidence of exactly that, and it fires whether or not we push the frame
+    // on. Reading the gated counter meant a paused ingest — which the OC does
+    // to itself during a BLE log download or flash churn — looked identical to
+    // an FC that had stopped clocking, so the flip to master TX could happen
+    // while the FC was still driving the line. Both ends driving BCLK is the
+    // contention #1116/i2s-flip exists to avoid.
+    dma_cb_raw_count = dma_cb_raw_count + 1;
+
     if (i2s_ingest_paused) return false;
 
     dma_cb_count = dma_cb_count + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
@@ -10106,9 +10125,17 @@ static void loop_oc()
         if (oc_ota_await_flip && !oc_ota_tx_mode)
         {
             const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-            if (dma_cb_count != oc_ota_silence_ref_count)
+            // #1142 item 4: the RAW callback count, not the ingest-gated one.
+            // The question here is "is the FC still driving BCLK", and a DMA
+            // callback fires whether or not we push the frame on. The gated
+            // counter freezes whenever the OC pauses its own ingest — a BLE
+            // log download, flash churn — which made a busy OC look exactly
+            // like a quiet FC and could flip us to master TX while the FC was
+            // still clocking. Both ends driving BCLK is the contention this
+            // wait exists to prevent.
+            if (dma_cb_raw_count != oc_ota_silence_ref_count)
             {
-                oc_ota_silence_ref_count = dma_cb_count;   // still receiving — reset timer
+                oc_ota_silence_ref_count = dma_cb_raw_count;   // still clocking — reset timer
                 oc_ota_silence_since_ms  = now_ms;
             }
             else if ((now_ms - oc_ota_silence_since_ms) >= OTA_FLIP_SILENCE_MS)

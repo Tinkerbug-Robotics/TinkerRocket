@@ -50,10 +50,23 @@ void TR_OTA_Receiver::notify()
 void TR_OTA_Receiver::initShaCtx()
 {
     freeShaCtx();
+    // #1142 item 1: every exit below used to be a silent `return` that left
+    // sha_ctx_ null. shaUpdate() then did nothing for the whole image,
+    // shaFinalAndCompare() returned false, and finish() reported ShaMismatch —
+    // i.e. "your image is corrupt" — after the entire image had been flashed.
+    // The operator re-downloads a file that was never checked, and the real
+    // fault (no crypto, or no heap) is invisible. Record it instead.
+    sha_unavailable_ = true;
     // psa_crypto_init() is idempotent; safe to call on each session start.
-    if (psa_crypto_init() != PSA_SUCCESS) return;
+    if (psa_crypto_init() != PSA_SUCCESS)
+    {
+        return;
+    }
     auto* ctx = static_cast<psa_hash_operation_t*>(std::malloc(sizeof(psa_hash_operation_t)));
-    if (!ctx) return;
+    if (!ctx)
+    {
+        return;
+    }
     static const psa_hash_operation_t kInit = PSA_HASH_OPERATION_INIT;
     *ctx = kInit;
     if (psa_hash_setup(ctx, PSA_ALG_SHA_256) != PSA_SUCCESS)
@@ -62,6 +75,7 @@ void TR_OTA_Receiver::initShaCtx()
         return;
     }
     sha_ctx_ = ctx;
+    sha_unavailable_ = false;
 }
 
 void TR_OTA_Receiver::freeShaCtx()
@@ -82,17 +96,23 @@ void TR_OTA_Receiver::shaUpdate(const uint8_t* data, size_t len)
     psa_hash_update(ctx, data, len);
 }
 
-bool TR_OTA_Receiver::shaFinalAndCompare(const uint8_t expected[32])
+// #1142 item 1: three outcomes, not two. "The hash did not match" and "there
+// is no hash" are different facts and want different words in front of an
+// operator holding a rocket.
+TR_OTA_Receiver::ShaResult
+TR_OTA_Receiver::shaFinalAndCompare(const uint8_t expected[32])
 {
-    if (!sha_ctx_) return false;
+    if (!sha_ctx_) return ShaResult::Unavailable;
     auto* ctx = static_cast<psa_hash_operation_t*>(sha_ctx_);
     uint8_t computed[32];
     size_t computed_len = 0;
     if (psa_hash_finish(ctx, computed, sizeof(computed), &computed_len) != PSA_SUCCESS)
     {
-        return false;
+        return ShaResult::Unavailable;
     }
-    return (computed_len == 32) && (std::memcmp(computed, expected, 32) == 0);
+    if (computed_len != 32) return ShaResult::Unavailable;
+    return (std::memcmp(computed, expected, 32) == 0) ? ShaResult::Match
+                                                      : ShaResult::Mismatch;
 }
 
 TR_OTA_Receiver::Error TR_OTA_Receiver::begin(uint32_t total_size, const uint8_t sha256[32])
@@ -291,13 +311,19 @@ TR_OTA_Receiver::Error TR_OTA_Receiver::finish()
         return Error::SizeMismatch;
     }
 
-    if (!shaFinalAndCompare(expected_sha_))
+    const ShaResult sha = shaFinalAndCompare(expected_sha_);
+    if (sha != ShaResult::Match)
     {
-        last_error_ = Error::ShaMismatch;
+        // #1142 item 1: report which of the two actually happened. Both refuse
+        // the image — an unverified image must never boot — but only one of
+        // them is a statement about the image.
+        const Error e = (sha == ShaResult::Mismatch) ? Error::ShaMismatch
+                                                     : Error::HashUnavailable;
+        last_error_ = e;
         state_ = State::VerifyFailed;
         backend_.abort();
         notify();
-        return Error::ShaMismatch;
+        return e;
     }
 
     int rc = backend_.end();
