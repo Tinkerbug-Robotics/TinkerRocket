@@ -96,9 +96,26 @@ public fun pyroContinuityOf(
         }
     } else {
         // Direct link, firmware predating the measured bits: the raw "ps" cont
-        // bit is all there is, and it genuinely cannot tell open from
-        // untested. Deliberately preserved rather than "improved" into
-        // reporting UNTESTED forever against an older rocket.
-        if (telemetry.pyroCont(channel)) PyroContinuity.PRESENT else PyroContinuity.OPEN
+        // bit is all there is.
+        //
+        // #1048: a SET bit still proves presence — the FC sets it as
+        // `cont_known && cont_state`, so it can only be high on a channel that
+        // was measured and found continuous. A CLEAR bit proves nothing: it
+        // conflates "never measured" with "measured open", and those are the
+        // two states this enum exists to keep apart (#828).
+        //
+        // This used to return OPEN, which renders a confident red "NO CONT" —
+        // an operator reads that as a dead igniter or an already-fired charge,
+        // on a channel that may be perfectly live. iOS has resolved the
+        // identical frame to .untested since 4874a79; the port never happened,
+        // and the old behaviour was pinned by a test rather than merely
+        // missed.
+        //
+        // The cases that are not transient are what decide it: against
+        // firmware predating the measured bits the fallback is permanent, and
+        // the #382 READY->INFLIGHT promotion skips pyroPrelaunchContTest
+        // entirely, so a degraded-mode flight arms with all four channels
+        // unmeasured and the in-flight reveal shows four red badges.
+        if (telemetry.pyroCont(channel)) PyroContinuity.PRESENT else PyroContinuity.UNTESTED
     }
 }

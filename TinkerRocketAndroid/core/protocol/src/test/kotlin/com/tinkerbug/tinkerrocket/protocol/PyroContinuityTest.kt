@@ -114,9 +114,15 @@ class PyroContinuityTest {
             "premise: this frame predates the measured bits",
         )
         assertEquals(PyroContinuity.PRESENT, verdict(t, 1))
-        // Genuinely cannot tell open from untested on this path — pinned so
-        // it is not "improved" into UNTESTED forever against older rockets.
-        assertEquals(PyroContinuity.OPEN, verdict(t, 2))
+        // #1048: a clear bit is UNTESTED, not OPEN. The old assertion pinned
+        // the opposite — the reasoning being that reporting UNTESTED forever
+        // against an older rocket was worse. It is not: OPEN renders a
+        // confident red "NO CONT", which an operator reads as a dead igniter
+        // or a fired charge on a channel that may be live, and the FC sets
+        // this bit as `cont_known && cont_state` so a clear bit cannot
+        // distinguish the two. A set bit still proves presence. iOS twin:
+        // BLEDevice.swift `telemetry.pyroCont(channel:) ? .present : .untested`.
+        assertEquals(PyroContinuity.UNTESTED, verdict(t, 2))
     }
 
     // ── Relay path ──────────────────────────────────────────────────────
