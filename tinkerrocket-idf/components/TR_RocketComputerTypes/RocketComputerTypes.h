@@ -1850,10 +1850,19 @@ static inline uint8_t shGet(uint32_t field, uint8_t shift) {
 // Battery verdict from pack voltage (2S Li-ion).  The OC owns this — the FC
 // never reads the pack — so both OC downlink paths (LoRa relay + direct BLE)
 // classify here to keep the thresholds in one place.  NaN/implausible -> NA.
+//
+// Thresholds (#1029, 2026-09-12).  The eFuse's UVLO re-enables only above
+// ~6.96 V on the mini (R44/R45/R85 on the TPS2596 EN/UVLO pin) and 6.91 V on
+// the V10, so a pack resting below that which sags through the 6.38 V trip
+// on a pyro fire stays off for the rest of the flight, and the board rides
+// the hold-up cap.  Red therefore starts where a trip can no longer clear —
+// BAD below 7.0 V ("Do not fly") — not 0.36 V under it as before (6.6 V).
+// DEGRADED 7.0–7.2 V; OK from 7.2 V (3.6 V/cell).  Nothing refuses ARM on
+// this verdict: it is the operator's go/no-go, so the colour has to say it.
 static inline SensorHealthState shBatteryState(float voltage) {
     if (!(voltage == voltage) || voltage < 1.0f) return SH_NA;  // NaN or no reading
-    if (voltage >= 7.0f) return SH_OK;
-    if (voltage >= 6.6f) return SH_DEGRADED;
+    if (voltage >= 7.2f) return SH_OK;
+    if (voltage >= 7.0f) return SH_DEGRADED;
     return SH_BAD;
 }
 // Flight-log storage verdict (#281/#278).  The OC owns the NAND flight log; the
