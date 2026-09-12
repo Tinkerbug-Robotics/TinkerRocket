@@ -5253,7 +5253,31 @@ static void setup_fc()
                 memcpy(ekf_state.gyro_bias,   snap.ekf_gyro_bias,   sizeof(ekf_state.gyro_bias));
                 // Zero P here; setCovFromDiag fills the diagonal below.
                 memset(ekf_state.P, 0, sizeof(ekf_state.P));
-                ekf_state.t_prev_us = snap.ekf_t_prev_us;
+                // #1139 item 2: stamp the restored filter with the CURRENT
+                // epoch, not the stored one.
+                //
+                // ekf_t_prev_us is a boot-relative esp_timer stamp — an
+                // uptime, not a clock. Copying the previous boot's value into
+                // a filter whose clock restarted at zero makes the first
+                // post-recovery tick compute dt across two epochs: the uint32
+                // subtraction wraps to ~4200 s and TR_GpsInsEKF clamps it to
+                // the 0.1 s ceiling, so the restored state is propagated, and
+                // process noise Q injected, for 100 ms instead of ~2 ms — a
+                // 50x oversized first step on a filter that has just been
+                // handed a flight mid-descent.
+                //
+                // The degenerate case is quieter and no better: if the stored
+                // value happens to equal the first post-recovery IMU stamp,
+                // the #440 frozen-timestamp guard drops the tick instead.
+                //
+                // Every other epoch-relative field in this restore is already
+                // rebased — launch_time_millis, apogee and burnout all go
+                // through `now_ms - snap.*` above — which is what makes this
+                // one a missed case rather than a deliberate model of the
+                // reset gap. Modelling that gap would need the snapshot to
+                // carry an elapsed-since-launch form, and the value would
+                // still have to be rebased.
+                ekf_state.t_prev_us = (uint32_t)time_us();
                 // v5: euler is not on the wire any more. setState() derives it
                 // from the restored quaternion, so leaving it zero here is
                 // correct rather than lossy.
