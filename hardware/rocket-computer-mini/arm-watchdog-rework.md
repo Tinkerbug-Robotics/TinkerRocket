@@ -1,5 +1,20 @@
 # Pyro ARM rework 3: supervised-MCU arm (replaces charge pump + one-shot)
 
+> # SUPERSEDED 2026-09-02 — the circuit below is not the one on the board
+>
+> This note is the 2026-08-28 proposal as drawn. Five days later the window
+> watchdog it specifies (`U46`, `R133`, `C139` and the `WDT_PET` line) was
+> removed from the schematic and the board, and the veto diode `D16` became a
+> second digital transistor, `Q14`. The live arm path is `Q12` (flight computer
+> `FC_ARM`, GPIO44, through `R132` — **100 Ω on the board, not the 5.11 k
+> below**) in series with `Q14` (out computer `OC_ARM_EN`, GPIO11) pulling down
+> `Q13`'s base, which closes `U9` from the pack through `R139`/`R21`; both lines
+> high to arm, either processor dark disarms. The bench list at the end names
+> deleted parts. Read this for the reasoning that retired the charge pump and
+> the one-shot; take the circuit from [`README.md`](README.md) *Arming needs
+> both processors* and the netlist. For the V10 side, see
+> [`../rocket-computer/v10-power-parity-2026-09-11.md`](../rocket-computer/v10-power-parity-2026-09-11.md).
+
 **Status: DRAWN ON BOTH BOARDS 2026-08-28** (mini merged as PR #981; V10 drawn on
 `claude/rocket-v10-arm-rework`, uncommitted). Same refdes on both except the WDT
 bypass (mini C139, V10 **C140** — V10's C139 is a supercap). Supersedes the

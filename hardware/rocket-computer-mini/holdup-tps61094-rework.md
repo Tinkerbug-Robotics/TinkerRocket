@@ -25,7 +25,8 @@ the cap to a flat 3.0 V** instead of letting the rail sag to a 2.9 V cutoff.
 
 Deleted per board: U40, U42, U44, U45, R120 (V10 also R128 — its second 33 R),
 R127 (ST pullup), C134, C136 (CT caps), C137, C138 (V_HOLD decoupling); nets
-V_HOLD and V_UVLO_EN are gone. Added: U47 TPS61094DSSR (WSON-12), L7 2.2 µH
+V_HOLD and V_UVLO_EN are gone. Added: U47 TPS61094DSSR (WSON-12), the boost
+inductor — drawn as `L7`, **`L11` on the board and in the netlist** — 2.2 µH
 (XGL4020-222ME class, Isat ≥ 4 A), R134 3.09 k (OSEL → VOUT 3.0 V), R135 6.65 k
 (VCHG → 2.5 V), R136 22.1 k (ICHG → 100 mA) — all three 1%, values straight from
 the datasheet §8.2.4 reference design — C141 10 µF at VIN, C142 10 µF ceramic at
@@ -42,7 +43,7 @@ lose the first-boot-blip special case.
 
 - **Termination is capped by VIN, not by the cap**: clean constant-current charge
   needs VCHG ≤ VIN − 800 mV; with V_BUCK = 3.465 V that is ~2.66 V ⇒ **VCHG =
-  2.6 V**. (Up to VIN − 500 mV works with end-of-charge taper; 2.9 V was rejected
+  2.6 V** *(superseded the same week: 2.5 V — see* Cap decisions *below)*. (Up to VIN − 500 mV works with end-of-charge taper; 2.9 V was rejected
   — it buys ~25% energy but tapers into the accuracy band and precludes ever
   fitting 2.7 V-rated caps.) This corrects the earlier claim that the cap could
   terminate at ~3.2 V.
@@ -76,7 +77,7 @@ lose the first-boot-blip special case.
   (2.44 V) never sees a legitimate brownout — the rail is 3.0 V until the cap is
   spent, then gone.
 - **EMI**: the converter switches only while charging (~1 min after power-on)
-  and during backup events; 60 nA quiescent otherwise. Keep the L7/SW loop tight
+  and during backup events; 60 nA quiescent otherwise. Keep the L11/SW loop tight
   (layout note on sheet); mag cal unaffected in cruise.
 
 ## Cap decisions (updated 2026-08-29 — DECIDED and drawn)

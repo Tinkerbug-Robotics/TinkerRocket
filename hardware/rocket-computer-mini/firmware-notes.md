@@ -67,7 +67,8 @@ Do this **before** flying the new power stage; it is one config line per image.
 > the LM66100 hold-up chain with a TPS61094. **Section 4 below still describes
 > the LM66100 behaviour and its polarity is now inverted** — read the hold-up
 > rework doc before implementing it. The netlist is the authority for all of
-> this; the PCB file has not been re-synced and still carries the old names.
+> this; the board file was re-synced on 2026-08-30 and fabbed with these names
+> (this line said the PCB still carried the old ones until 2026-09-12).
 
 | Signal | Pin | Notes |
 |---|---|---|
@@ -82,9 +83,10 @@ spare pads left on the flight computer are GPIO47 and GPIO48, which are bare. Th
 GPIO33 and GPIO35, which older tables give for it, are `PYRO4_FIRE` and
 `PYRO2_FIRE` now.
 
-Extend `board_*.h` with all three, then run the netlist parity sweep
-(`kicad-cli` GPIO→net table vs the header — see the board-header parity
-procedure); nothing in CI catches a mismatch.
+`board_m1.h` in both projects carries all three (netlist-verified 2026-09-04);
+re-run the netlist parity sweep (`kicad-cli` GPIO→net table vs the header — see
+the board-header parity procedure) after any pin change, because nothing in CI
+catches a mismatch.
 
 ## 3. Pyro arming — ~~REQUIRED changes to every ARM path~~ RETRACTED
 
