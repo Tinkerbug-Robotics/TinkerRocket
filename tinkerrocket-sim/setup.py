@@ -110,6 +110,10 @@ if (os.path.exists("cpp/mixer/mixer_bindings.cpp") and
 # gain schedule, KP_ANGLE rate cap). Build from shared TR_ServoControl_ledc_mult
 # + TR_PID; needs the host shim for <compat.h> and the stubbed <driver/ledc.h>.
 servo_lib_dir = os.path.join(SHARED_LIB_DIR, "TR_ServoControl_ledc_mult")
+# ServoConfigGate.h (the SERVO_CONFIG acceptance policy, shared with the OC)
+# lives in the header-only types component, and TR_ServoControl_ledc_mult.h
+# includes it.
+types_lib_dir = os.path.join(SHARED_LIB_DIR, "TR_RocketComputerTypes")
 if (os.path.exists("cpp/servo/servo_bindings.cpp") and
         os.path.exists(servo_lib_dir) and os.path.exists(pid_lib_dir)):
     ext_modules.append(
@@ -120,7 +124,8 @@ if (os.path.exists("cpp/servo/servo_bindings.cpp") and
                 os.path.join(pid_lib_dir, "TR_PID.cpp"),
                 "cpp/servo/servo_bindings.cpp",
             ],
-            include_dirs=[SHIM_DIR, servo_lib_dir, pid_lib_dir, "cpp/common"],
+            include_dirs=[SHIM_DIR, servo_lib_dir, types_lib_dir, pid_lib_dir,
+                          "cpp/common"],
             cxx_std=17,
         ),
     )

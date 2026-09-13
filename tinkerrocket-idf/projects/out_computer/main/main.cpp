@@ -92,6 +92,7 @@ static inline std::string itos(int v)
 #include <BleDownloadChunk.h>   // #1160: how a log frame goes into a download chunk
 #include <RocketComputerTypes.h>
 #include <RollProfileGate.h>    // #1115: shared roll-profile acceptance gate (host-tested)
+#include <ServoConfigGate.h>    // #1141 item 3: shared servo-config acceptance gate (host-tested)
 #include <TR_INA230.h>
 #include <TR_FlightLog.h>
 #include <SnapshotTailScan.h>   // #846: boot re-seed of the snapshot cache
@@ -6218,21 +6219,56 @@ static void sendCurrentConfig()
 // Cache servo config to NVS (mirrors what FlightComputer stores)
 static void cacheServoConfig(const uint8_t* payload, size_t len)
 {
-    if (len < 14) return;
+    // The guard was `len < 14` — ServoConfigData's size BEFORE fin travel was
+    // appended — while the memcpy below copies sizeof(sc) == 22.  A 14..21
+    // byte frame therefore read up to 8 bytes past the end of the payload.
+    // Nothing here consumes those bytes, so it never produced a wrong value,
+    // but it is an out-of-bounds read on a buffer that arrives off the wire.
+    if (len < sizeof(ServoConfigData)) return;
     ServoConfigData sc;
     memcpy(&sc, payload, sizeof(sc));
+
+    // Biases are independent of the timing and are never refused, so they are
+    // cached either way — the same split the FC's SERVO_CONFIG handler makes.
     cfg_servo_bias1 = sc.bias_us[0];
-    cfg_servo_hz    = sc.hz;
-    cfg_servo_min   = sc.min_us;
-    cfg_servo_max   = sc.max_us;
     prefs.begin("servo", false);
-    prefs.putShort("b1",  sc.bias_us[0]);
-    prefs.putShort("hz",  sc.hz);
-    prefs.putShort("min", sc.min_us);
-    prefs.putShort("max", sc.max_us);
+    prefs.putShort("b1", sc.bias_us[0]);
+
+    // #1141 item 3, OUT-computer half.  The FC refuses a timing that is not a
+    // servo timing, declines to persist it, and keeps running the previous
+    // one.  This cache is what the cmd-20 readback reports and what BOTH apps
+    // adopt on attach, so caching a refused value showed the operator a
+    // configuration the flight computer was not using — and, because it went
+    // to NVS right here, kept showing it across a power cycle while the FC
+    // came back on the last good value.  Measured on the V9 bench 2026-09-12:
+    // push hz=0, FC logs "timing REJECTED ... the previous timing stands" and
+    // restores hz=56 after a rail cycle, while the readback said "shz":0
+    // before AND after.  REJECT, never clamp — see ServoConfigGate.h.
+    const ServoTimingRc t_rc = servoTimingRc(sc.hz, sc.min_us, sc.max_us);
+    if (t_rc == SERVO_TIMING_OK)
+    {
+        cfg_servo_hz    = sc.hz;
+        cfg_servo_min   = sc.min_us;
+        cfg_servo_max   = sc.max_us;
+        prefs.putShort("hz",  sc.hz);
+        prefs.putShort("min", sc.min_us);
+        prefs.putShort("max", sc.max_us);
+    }
     prefs.end();
-    ESP_LOGI("CFG", "Servo config cached: bias=%d hz=%d min=%d max=%d",
-        sc.bias_us[0], sc.hz, sc.min_us, sc.max_us);
+
+    if (t_rc == SERVO_TIMING_OK)
+    {
+        ESP_LOGI("CFG", "Servo config cached: bias=%d hz=%d min=%d max=%d",
+            sc.bias_us[0], sc.hz, sc.min_us, sc.max_us);
+    }
+    else
+    {
+        ESP_LOGE("CFG", "Servo timing REJECTED (%s): hz=%d min=%d max=%d — not "
+                        "cached, not saved. The readback keeps hz=%d min=%d "
+                        "max=%d, which is what the FC is running.",
+            servoTimingRcName(t_rc), sc.hz, sc.min_us, sc.max_us,
+            cfg_servo_hz, cfg_servo_min, cfg_servo_max);
+    }
 }
 
 // Cache PID config to NVS
