@@ -1269,6 +1269,67 @@ public class DeviceSession(
     }
 
     /**
+     * #624/#150: why a LoRa radio push would be refused right now, or null if
+     * it would go through. Reads this session's own state; the rules live in
+     * [LoraAutoApply] so they can be tested without a link.
+     */
+    public fun loraApplyRefusal(): LoraApplyRefusal? = LoraAutoApply.refusalReason(
+        isBaseStation = isBaseStation,
+        isConnected = isConnected.value,
+        config = _rocketConfig.value,
+        rocketLastSeenMs = _remoteRockets.value.map { it.lastSeenMs },
+        nowMs = clock(),
+    )
+
+    /**
+     * #150 link mode: fixed channel vs frequency hopping (cmd 17).
+     *
+     * Base-station only — the rocket-side firmware rejects this outright, and
+     * the BS is what hands the change on to every tracked rocket. Returns
+     * false without sending when [loraApplyRefusal] has a reason, so a caller
+     * that skips the UI gate still cannot strand a rocket on the old scheme.
+     *
+     * The local echo matches `sendLoraTxDisabled`: it keeps the picker honest
+     * between the write and the firmware's readback, and only edits an
+     * EXISTING readback, because fabricating one would render fields the
+     * device never reported as though it had.
+     */
+    public fun sendLoraHopDisabled(disabled: Boolean): Boolean {
+        if (loraApplyRefusal() != null) return false
+        sendCommandFrame(Commands.loraHopDisabled(disabled))
+        sessionScope.launch {
+            val cfg = _rocketConfig.value ?: return@launch
+            _rocketConfig.value = cfg.copy(loraHopDisabled = disabled)
+        }
+        return true
+    }
+
+    /**
+     * #624: change LoRa TX power (cmd 10), keeping frequency, bandwidth, SF
+     * and CR exactly as the base station reports them.
+     *
+     * Cmd 10 carries the whole radio config, so "change one field" is always
+     * "resend all five". That is why a missing readback is a refusal rather
+     * than something to paper over with defaults: inventing a modulation here
+     * would push settings nobody chose to both ends of the link.
+     *
+     * The firmware side is transactional (#71): the BS relays on the OLD
+     * config, switches, waits for a beacon, and rolls back if none arrives —
+     * so this returns "sent", not "applied". No local echo for that reason;
+     * the readback is the only honest confirmation.
+     */
+    public fun autoApplyTxPower(txPowerDbm: Int): Boolean {
+        if (loraApplyRefusal() != null) return false
+        val cfg = _rocketConfig.value ?: return false
+        val freq = cfg.loraFreqMHz ?: return false
+        val bw = cfg.loraBwKHz ?: return false
+        val sf = cfg.loraSF ?: return false
+        val cr = cfg.loraCR ?: return false
+        sendCommandFrame(Commands.loraConfig(freq, bw, sf, cr, txPowerDbm))
+        return true
+    }
+
+    /**
      * #1271: acknowledge that a launch was lost to a phone-IO blind window.
      *
      * Deliberately does NOT locally clear `rocketStorage.blindLaunch`. Echoing
