@@ -15,12 +15,15 @@ reports "4407 dps" on a +-4000 dps part and calls saturation where there is
 none -- and, worse, misses a genuinely railed axis whose partner happens to
 cancel it.
 
-**The gyro's nominal full scale is NOT the int16 rail.**  ST gives the gyro a
-fixed 0.035 mdps/LSB per dps of full scale (#369), so nominal FS is 28571 LSB
-at every setting and the int16 rail sits at 114.7% of it.  A burst can log
-4492 dps against a "+-4000 dps" full scale without ever reaching 32767, which
-is exactly what the 2026-08-29 nose-cone burst did.  A threshold written as
-32767, or as "FS/32768", would never fire.
+**The gyro's specified range is NOT where the int16 word saturates.**  ST gives
+the gyro a fixed 0.035 mdps/LSB per dps of full scale (#369), so the specified
++-4000 dps range is +-28571 LSB while the word runs on to +-32767 (114.7% of
+it).  Counts above +-28571 are OUT OF SPEC rather than impossible, and the
+2026-08-29 bursts logged 32086 and 31480 on a single sensor axis -- verified on
+the raw log frames with no scaling or rotation applied.  So a threshold written
+as 32767, or as "FS/32768", would never fire.  The gate trips just BELOW the
+spec limit precisely because a reading beyond it has unspecified accuracy: it
+is not a rate, it is a sensor that has stopped measuring.
 """
 from __future__ import annotations
 
@@ -83,8 +86,10 @@ def test_quiet_samples_do_not_trip(tmp_path):
 
 
 def test_a_near_rail_gyro_axis_trips(tmp_path):
-    # 32031 LSB = 4492 dps: the real 2026-08-29 nose burst. Past nominal full
-    # scale, nowhere near the int16 rail.
+    # 32031 LSB: the real 2026-08-29 nose burst, past the specified +-28571
+    # and nowhere near the int16 rail. Quoted as counts, not as a rate -- the
+    # part is out of spec there, so "4492 dps" would be reading a number the
+    # datasheet does not stand behind.
     recs = parse(tmp_path, ism6(1000, gyro=(0, 32031, 0)))
     assert recs[0]["gyro_railed"] is True
 
