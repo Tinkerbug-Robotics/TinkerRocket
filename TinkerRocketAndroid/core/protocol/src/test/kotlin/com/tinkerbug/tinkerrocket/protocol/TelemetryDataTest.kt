@@ -901,4 +901,35 @@ class TelemetryDataTest {
         // No pack on the jack (the firmware omits the keys): nothing to draw.
         assertNull(assertNotNull(TelemetryData.decode("""{"bvol":4.02}""")).packDisplay)
     }
+
+    /**
+     * #552: GNSS horizontal accuracy, the field that says when to distrust a
+     * velocity derived by differencing successive fixes.
+     */
+    @Test
+    fun gnssHorizontalAccuracy_decodesAndDistinguishesAbsentFromGood() {
+        assertEquals(29, assertNotNull(TelemetryData.decode("""{"nsat":4,"hacc":29}""")).gnssHAccM)
+        assertEquals(0, assertNotNull(TelemetryData.decode("""{"nsat":19,"hacc":0}""")).gnssHAccM)
+        // Absent is NOT zero. The firmware omits the key when the receiver has
+        // no equivalent, and a consumer reading that as 0 m would treat the
+        // least trustworthy fixes as the most trustworthy ones.
+        assertNull(assertNotNull(TelemetryData.decode("""{"nsat":19}""")).gnssHAccM)
+    }
+
+    /**
+     * #552: and it is NOT substitutable by satellite count, which is the whole
+     * reason the field had to be added. These are the real 2026-08-29 flights:
+     * Rolly Polly 54 mm was healthy at 5 satellites, Rolly Polly V was not at 4
+     * with 29 m accuracy. No satellite threshold separates those two.
+     */
+    @Test
+    fun satelliteCountAloneCannotSeparateTheHealthyFlightFromTheBadOne() {
+        val healthy = assertNotNull(TelemetryData.decode("""{"nsat":5,"hacc":1}"""))
+        val bad = assertNotNull(TelemetryData.decode("""{"nsat":4,"hacc":29}"""))
+        assertEquals(1, healthy.numSats - bad.numSats, "the counts are one apart")
+        assertTrue(
+            bad.gnssHAccM!! > healthy.gnssHAccM!! * 10,
+            "but the accuracies differ more than tenfold - that is the separation",
+        )
+    }
 }
