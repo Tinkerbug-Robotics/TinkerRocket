@@ -2237,10 +2237,12 @@ struct DataRatesView: View {
 /// illuminating green as each event latches in the fs bitfield.  Born on
 /// Android 2026-07-27; back-ported per docs/design-language.md.  The lit
 /// green matches Android's (Material 800) so the two dashboards read alike.
-/// No LOG chip on iOS: the Status card directly above already carries the
-/// Logging badge + active-file line, so it would be pure duplication.
-/// Android keeps its LOG chip until the camera/logging status section
-/// ports over — it is Android's only logging indicator today (ledger).
+/// No LOG chip on EITHER platform since 2026-07-30: the Status card directly
+/// above already carries the Logging badge + active-file line, so it would be
+/// pure duplication.  (This comment used to say Android still kept its LOG
+/// chip; Android dropped it the same day this view landed —
+/// `DashboardScreen.kt` "re-converged with iOS 2026-07-30", and
+/// docs/design-language.md:58 settles it.)
 struct FlightEventFlagsView: View {
     let telemetry: TelemetryData
 
