@@ -437,9 +437,12 @@ fun PreflightRunScreen(
                         )
                     }
                     if (progress.isComplete) {
-                        // #624: shown only when complete and carrying no text,
-                        // so its absence is the only other signal.
-                        Icon(Icons.Filled.CheckCircle, "Complete", tint = tr.statusOk)
+                        // Decorative, and #1442 was wrong to label it too. It
+                        // claimed the tick "carries no text" -- but the line
+                        // directly above already reads "All N steps complete",
+                        // and only ever says that when this tick is shown. The
+                        // label made TalkBack say "complete" twice in a row.
+                        Icon(Icons.Filled.CheckCircle, null, tint = tr.statusOk)
                     }
                 }
                 LinearProgressIndicator(
@@ -721,8 +724,9 @@ private fun PreflightItemDialog(
     )
 }
 
+// `internal` for the module's Compose tests (#624) -- see DeviceRow.
 @Composable
-private fun PreflightManualRunRow(
+internal fun PreflightManualRunRow(
     item: PreflightItem,
     checked: Boolean,
     onToggle: (Boolean) -> Unit,
@@ -760,8 +764,9 @@ private fun PreflightManualRunRow(
     }
 }
 
+// `internal` for the module's Compose tests (#624) -- see DeviceRow.
 @Composable
-private fun PreflightAutoRunRow(item: PreflightItem, status: PreflightAutoStatus) {
+internal fun PreflightAutoRunRow(item: PreflightItem, status: PreflightAutoStatus) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Row(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
