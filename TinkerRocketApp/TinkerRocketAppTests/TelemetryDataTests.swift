@@ -443,6 +443,35 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(display(42.5), "42.5%")
         XCTAssertEqual(display(nil), "N/A")
     }
+
+    // MARK: - #552 GNSS horizontal accuracy
+
+    /// The field that says when to distrust a velocity derived by differencing
+    /// successive GNSS fixes.
+    func testGnssHorizontalAccuracyDecodesAndDistinguishesAbsentFromGood() throws {
+        let bad = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"nsat":4,"hacc":29}"#.utf8))
+        XCTAssertEqual(bad.gnss_h_acc_m, 29)
+        let good = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"nsat":19,"hacc":0}"#.utf8))
+        XCTAssertEqual(good.gnss_h_acc_m, 0)
+        // Absent is NOT zero. The firmware omits the key when the receiver has
+        // no equivalent, and a consumer reading that as 0 m would treat the
+        // least trustworthy fixes as the most trustworthy ones.
+        let absent = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"nsat":19}"#.utf8))
+        XCTAssertNil(absent.gnss_h_acc_m)
+    }
+
+    /// And it is NOT substitutable by satellite count, which is the whole
+    /// reason the field had to be added. These are the real 2026-08-29
+    /// flights: Rolly Polly 54 mm was healthy at 5 satellites, Rolly Polly V
+    /// was not at 4 with 29 m accuracy. No satellite threshold separates them.
+    func testSatelliteCountAloneCannotSeparateTheHealthyFlightFromTheBadOne() throws {
+        let healthy = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"nsat":5,"hacc":1}"#.utf8))
+        let bad = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"nsat":4,"hacc":29}"#.utf8))
+        XCTAssertEqual(healthy.num_sats - bad.num_sats, 1, "the counts are one apart")
+        XCTAssertGreaterThan(
+            try XCTUnwrap(bad.gnss_h_acc_m), try XCTUnwrap(healthy.gnss_h_acc_m) * 10,
+            "but the accuracies differ more than tenfold - that is the separation")
+    }
 }
 
 // MARK: - #850 rail currents (camera / servo high-side switches)
@@ -575,34 +604,5 @@ final class SizeDropDecodeTests: XCTestCase {
         let future = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"hu": 9}"#.utf8))
         XCTAssertNil(future.holdupState)
         XCTAssertNil(future.holdupAdvisoryText)
-    }
-
-    // MARK: - #552 GNSS horizontal accuracy
-
-    /// The field that says when to distrust a velocity derived by differencing
-    /// successive GNSS fixes.
-    func testGnssHorizontalAccuracyDecodesAndDistinguishesAbsentFromGood() throws {
-        let bad = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"nsat":4,"hacc":29}"#.utf8))
-        XCTAssertEqual(bad.gnss_h_acc_m, 29)
-        let good = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"nsat":19,"hacc":0}"#.utf8))
-        XCTAssertEqual(good.gnss_h_acc_m, 0)
-        // Absent is NOT zero. The firmware omits the key when the receiver has
-        // no equivalent, and a consumer reading that as 0 m would treat the
-        // least trustworthy fixes as the most trustworthy ones.
-        let absent = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"nsat":19}"#.utf8))
-        XCTAssertNil(absent.gnss_h_acc_m)
-    }
-
-    /// And it is NOT substitutable by satellite count, which is the whole
-    /// reason the field had to be added. These are the real 2026-08-29
-    /// flights: Rolly Polly 54 mm was healthy at 5 satellites, Rolly Polly V
-    /// was not at 4 with 29 m accuracy. No satellite threshold separates them.
-    func testSatelliteCountAloneCannotSeparateTheHealthyFlightFromTheBadOne() throws {
-        let healthy = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"nsat":5,"hacc":1}"#.utf8))
-        let bad = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"nsat":4,"hacc":29}"#.utf8))
-        XCTAssertEqual(healthy.num_sats - bad.num_sats, 1, "the counts are one apart")
-        XCTAssertGreaterThan(
-            try XCTUnwrap(bad.gnss_h_acc_m), try XCTUnwrap(healthy.gnss_h_acc_m) * 10,
-            "but the accuracies differ more than tenfold - that is the separation")
     }
 }

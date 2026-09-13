@@ -604,6 +604,10 @@ struct TelemetryData: Codable {
         // BS-relayed stream that made the rocket vanish from the dashboard
         // instead of degrading one field.
         num_sats = flexInt(.num_sats) ?? 0
+        // #552: nil when the key is absent — NOT 0, which would read as a
+        // perfect fix. flexInt tolerates the firmware sending it as a
+        // number or a string, like every other numeric key here.
+        gnss_h_acc_m = flexInt(.gnss_h_acc_m)
         state = try c.decodeIfPresent(String.self, forKey: .state) ?? "UNKNOWN"
         active_file = try c.decodeIfPresent(String.self, forKey: .active_file) ?? ""
         rx_kbs = try c.decodeIfPresent(Float.self, forKey: .rx_kbs)
