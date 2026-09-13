@@ -137,6 +137,7 @@ class FakeOC:
         self.err = err
         self.refuse = refuse
         self.refused = False
+        self.begin_target = None      # the byte that picks WHICH processor
 
     async def __aenter__(self):
         return self
@@ -159,6 +160,7 @@ class FakeOC:
             self.commands.append(data[0])
             if data[0] == probe_mod.CMD_OTA_BEGIN:
                 assert len(data) == 38, "cmd byte + 37-byte payload"
+                self.begin_target = data[1]
                 await asyncio.sleep(0)
                 self._notify({"state": "ready", "bytes": 0})
         elif uuid == probe_mod.FILE_TRANSFER_UUID:
@@ -236,3 +238,47 @@ def test_chunk_size_is_capped_by_the_link_mtu(monkeypatch, tmp_path):
     assert all(ln <= room for _, ln in oc.chunks)
     assert sum(ln for _, ln in oc.chunks) >= probe_mod.IDENTITY_BYTES, \
         "still has to reach a verdict on a small MTU"
+
+
+# --------------------------------------------------------------------------
+# #1425: --target picks WHICH PROCESSOR is offered the image.  Everything
+# above ran only the `fc` path, and FakeOC checked the BEGIN payload's LENGTH
+# but never its first byte -- so a swapped target byte passed the whole suite
+# while offering an FC image to the OC.  The probe never sends OTA_FINISH so
+# nothing commits either way, but the refusal it reports would be the wrong
+# device's, which is precisely the kind of misattribution that made #1425 look
+# like a firmware bug for a day.
+# --------------------------------------------------------------------------
+
+def test_fc_target_is_byte_one(monkeypatch, tmp_path):
+    _, oc = _run(monkeypatch, _args(tmp_path, target="fc"), FakeOC)
+    assert oc.begin_target == 1, "target=fc must set the relay byte"
+
+
+def test_oc_target_is_byte_zero_and_takes_the_unprefixed_token(monkeypatch, tmp_path):
+    """Local self-OTA: byte 0, and the firmware's token has no `fc_` prefix.
+
+    The OC emits `image_identity_mismatch` from TR_BLE_To_APP.cpp; only the
+    relay path adds `fc_` (out_computer/main.cpp). Expecting the prefixed one
+    here would fail against a correctly behaving board.
+    """
+    rc, oc = _run(
+        monkeypatch,
+        _args(tmp_path, target="oc", expect="image_identity_mismatch"),
+        lambda dev: FakeOC(dev, err="image_identity_mismatch"),
+    )
+    assert rc == 0
+    assert oc.begin_target == 0, "target=oc must NOT set the relay byte"
+    assert oc.chunks == [(0, 220), (220, 220)]
+    assert 71 not in oc.commands, "OTA_FINISH must never be sent — it would flash"
+
+
+def test_the_two_targets_do_not_send_the_same_byte(monkeypatch, tmp_path):
+    """The regression that matters: a constant, or a dropped conditional."""
+    _, fc = _run(monkeypatch, _args(tmp_path, target="fc"), FakeOC)
+    _, oc = _run(
+        monkeypatch,
+        _args(tmp_path, target="oc", expect="image_identity_mismatch"),
+        lambda dev: FakeOC(dev, err="image_identity_mismatch"),
+    )
+    assert fc.begin_target != oc.begin_target
