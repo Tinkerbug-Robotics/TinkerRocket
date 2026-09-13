@@ -9591,7 +9591,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -12350,7 +12350,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -12536,7 +12536,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -14217,7 +14217,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -14403,7 +14403,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -17590,7 +17590,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -17776,7 +17776,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "F.Fab")
