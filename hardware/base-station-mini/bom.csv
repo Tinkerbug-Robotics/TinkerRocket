@@ -6,7 +6,7 @@
 5;"C8, C13, C18, C27, C28";"C_0402_1005Metric";5;"1 uF";"CL05A105KO5NNNC";"Samsung";"Fit"
 6;"C10, C15, C19";"C_0402_1005Metric";3;"10 uF";"CL05A106MQ5NUNC";"Samsung";"Fit"
 7;"C11, C21";"C_0402_1005Metric";2;"10 nF";"CL05B103KB5NNNC";"Samsung";"Fit"
-8;"C20, C42, C58, C59, C60, C61, C62";"C_0805_2012Metric";7;"22 uF";"CL21A226KOQNNNE";"Samsung";"Fit"
+8;"C20, C42, C58, C59, C60, C61, C62";"C_0805_2012Metric";7;"22 uF";"CL21A226MOQNNNE";"Samsung";"Fit"
 9;"C88";"C_0402_1005Metric";1;"2.2 nF";"CC0402KRX7R9BB222";"Yageo";"Fit"
 10;"CR1";"TVS-SP05_LTF";1;"SP0503BAHTG";"SP0503BAHTG";"Littelfuse";"Fit"
 11;"D6";"LED_D3.0mm";1;"Green";"XL-302SYGD";"Xinglight";"Fit"
