@@ -121,9 +121,13 @@ public class LandingPredictor(
         _windProfile.value = null
         _windFetchError.value = null
         landed = false
+        velocityHistory = emptyList()
         lastWindFetchAtMs = null
         windRetryNotBeforeMs = null
     }
+
+    /** #552: recent frames, for the GNSS-vs-filter velocity check. */
+    private var velocityHistory: List<GnssVelocityCheck.Sample> = emptyList()
 
     private fun cancelJobs() {
         // toList(): a cancelled fetch job removes itself from [jobs] in its
@@ -159,6 +163,19 @@ public class LandingPredictor(
                 }
             }
             return
+        }
+
+        // #552: the velocity check needs position and filter velocity from the
+        // SAME frame, so record before any branch can return.
+        if (t.velE != null && t.velN != null) {
+            velocityHistory = GnssVelocityCheck.trimmed(
+                velocityHistory,
+                GnssVelocityCheck.Sample(
+                    tMs = now, latDeg = lat, lonDeg = lon,
+                    hAccM = t.gnssHAccM,
+                    velE = t.velE!!.toDouble(), velN = t.velN!!.toDouble(),
+                ),
+            )
         }
 
         val vU = (t.altitudeRate ?: 0f).toDouble()
@@ -207,6 +224,16 @@ public class LandingPredictor(
                     velE = ve, velN = vn, velU = vu,
                     profile = profile, dragK = k, wind = _windProfile.value,
                     nominalLanding = stitched.lastOrNull(),
+                ) +
+                // #552: and what if the velocity being integrated is wrong.
+                LandingCast.ascentVelocitySpreadMeters(
+                    startLat = lat, startLon = lon,
+                    currentAltAglFt = altAglFt,
+                    velE = ve, velN = vn, velU = vu,
+                    profile = profile, dragK = k, wind = _windProfile.value,
+                    nominalLanding = stitched.lastOrNull(),
+                    disagreementMps =
+                        GnssVelocityCheck.evaluate(velocityHistory)?.disagreementMps ?: 0.0,
                 )
         } else {
             return

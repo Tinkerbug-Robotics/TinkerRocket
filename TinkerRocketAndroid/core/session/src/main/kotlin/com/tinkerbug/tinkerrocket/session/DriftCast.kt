@@ -4,6 +4,7 @@ import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -481,6 +482,62 @@ public object LandingCast {
         for (kVariant in listOf(dragK * 0.5, dragK * 1.5)) {
             val (track, _) = simulateAscentThenDescent(
                 startLat, startLon, currentAltAglFt, velE, velN, velU, profile, kVariant, wind,
+            )
+            val l = track.lastOrNull() ?: continue
+            worst = max(worst, DriftCast.haversineM(l.lat, l.lon, nominal.lat, nominal.lon))
+        }
+        return worst
+    }
+
+    /**
+     * #552: velocity term of the ascent uncertainty.
+     *
+     * The drag term above asks "what if my drag model is wrong".  This asks
+     * the question that actually dominated the four 2026-08-29 flights: what
+     * if the VELOCITY I am integrating is wrong.  It is, transiently and by a
+     * lot -- the filter threw a 47 m/s horizontal excursion on RIM-66 with
+     * twelve satellites locked -- and the ascent branch integrates that
+     * velocity all the way to apogee, so the error arrives at the landing
+     * point multiplied by seconds-to-apogee.
+     *
+     * [disagreementMps] comes from [GnssVelocityCheck]: the gap between the
+     * filter's velocity and one differenced from the GNSS positions in the
+     * same frames.  Perturbing along that gap in both directions and taking
+     * the worst displacement re-uses the real predictor, so the term
+     * automatically carries the drag and wind the flight actually has,
+     * exactly as the drag term does.
+     */
+    public fun ascentVelocitySpreadMeters(
+        startLat: Double,
+        startLon: Double,
+        currentAltAglFt: Double,
+        velE: Double,
+        velN: Double,
+        velU: Double,
+        profile: RocketProfile,
+        dragK: Double,
+        wind: WindProfile?,
+        nominalLanding: TrackPoint?,
+        disagreementMps: Double,
+    ): Double {
+        val nominal = nominalLanding ?: return 0.0
+        if (!(disagreementMps > 0.0) || !disagreementMps.isFinite()) return 0.0
+        // Along the horizontal velocity itself: with no GNSS velocity on the
+        // wire the disagreement's direction is not separately observable, and
+        // the flight's own heading is where a speed error does the most work.
+        val speed = hypot(velE, velN)
+        val (uE, uN) = if (speed > 1e-6) {
+            Pair(velE / speed, velN / speed)
+        } else {
+            Pair(1.0, 0.0)
+        }
+        var worst = 0.0
+        for (sign in listOf(-1.0, 1.0)) {
+            val (track, _) = simulateAscentThenDescent(
+                startLat, startLon, currentAltAglFt,
+                velE + sign * disagreementMps * uE,
+                velN + sign * disagreementMps * uN,
+                velU, profile, dragK, wind,
             )
             val l = track.lastOrNull() ?: continue
             worst = max(worst, DriftCast.haversineM(l.lat, l.lon, nominal.lat, nominal.lon))

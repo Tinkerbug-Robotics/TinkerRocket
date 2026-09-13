@@ -110,6 +110,9 @@ final class LandingPredictor: ObservableObject {
     }
     private var landed: Bool = false
 
+    /// #552: recent frames, for the GNSS-vs-filter velocity check.
+    private var velocityHistory: [GnssVelocityCheck.Sample] = []
+
     /// Freshness window for the GNSS-position substitution during descent.
     /// Matches the Python validation default; tunable per-rocket later.
     private let gnssFreshThresholdS: TimeInterval = 2.0
@@ -141,6 +144,7 @@ final class LandingPredictor: ObservableObject {
         windProfile = nil
         windFetchError = nil
         landed = false
+        velocityHistory = []
         lastWindFetchAt = nil
         lastWindFetchLocation = nil
     }
@@ -184,6 +188,17 @@ final class LandingPredictor: ObservableObject {
         let descending = t.past_apogee || vU <= 0.5
 
         guard let profile = profileStore?.activeProfile else { return }
+
+        // #552: the velocity check needs position and filter velocity from the
+        // SAME frame, so record before any branch below can return.
+        if let ve = t.vel_e, let vn = t.vel_n {
+            velocityHistory = GnssVelocityCheck.trimmed(
+                history: velocityHistory,
+                appending: GnssVelocityCheck.Sample(
+                    t: now, latDeg: lat, lonDeg: lon,
+                    hAccM: t.gnss_h_acc_m,
+                    velE: Double(ve), velN: Double(vn)))
+        }
 
         let snapshot = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         // Altitude AGL: pressure_alt is already MSL/baro per the parser;
@@ -236,6 +251,14 @@ final class LandingPredictor: ObservableObject {
                               currentAltAglFt: altAglFt, velocityENUMps: vel,
                               profile: profile, dragK: k, wind: windProfile,
                               nominalLanding: cast.track.last)
+                        // #552: and what if the velocity being integrated is wrong.
+                        + ascentVelocitySpreadMeters(
+                              startLat: snapshot.latitude, startLon: snapshot.longitude,
+                              currentAltAglFt: altAglFt, velocityENUMps: vel,
+                              profile: profile, dragK: k, wind: windProfile,
+                              nominalLanding: cast.track.last,
+                              disagreementMps: GnssVelocityCheck
+                                  .evaluate(history: velocityHistory)?.disagreementMps ?? 0)
         } else {
             return
         }
@@ -528,6 +551,58 @@ func ascentDragSpreadMeters(
         let d = CLLocation(latitude: l.lat, longitude: l.lon)
             .distance(from: nominalLoc)
         worst = max(worst, d)
+    }
+    return worst
+}
+
+/// #552: velocity term of the ascent uncertainty.
+///
+/// `ascentDragSpreadMeters` asks "what if my drag model is wrong".  This asks
+/// the question that actually dominated the four 2026-08-29 flights: what if
+/// the VELOCITY being integrated is wrong.  It is, transiently and by a lot —
+/// the filter threw a 47 m/s horizontal excursion on RIM-66 with twelve
+/// satellites locked — and the ascent branch integrates that velocity all the
+/// way to apogee, so the error reaches the landing point multiplied by
+/// seconds-to-apogee.
+///
+/// `disagreementMps` comes from `GnssVelocityCheck`: the gap between the
+/// filter's velocity and one differenced from the GNSS positions in the same
+/// frames.  Perturbing along that gap in both directions and taking the worst
+/// displacement re-uses the real predictor, so the term automatically carries
+/// the drag and wind the flight actually has, exactly as the drag term does.
+func ascentVelocitySpreadMeters(
+    startLat: Double, startLon: Double,
+    currentAltAglFt: Double,
+    velocityENUMps: (e: Double, n: Double, u: Double),
+    profile: RocketProfile,
+    dragK: Double,
+    wind: WindProfile?,
+    nominalLanding: TrackPoint?,
+    disagreementMps: Double
+) -> Double {
+    guard let nominal = nominalLanding else { return 0 }
+    guard disagreementMps > 0, disagreementMps.isFinite else { return 0 }
+    let nominalLoc = CLLocation(latitude: nominal.lat, longitude: nominal.lon)
+    // Along the horizontal velocity itself: with no GNSS velocity on the wire
+    // the disagreement's direction is not separately observable, and the
+    // flight's own heading is where a speed error does the most work.
+    let speed = (pow(velocityENUMps.e, 2) + pow(velocityENUMps.n, 2)).squareRoot()
+    let unit: (e: Double, n: Double) = speed > 1e-6
+        ? (velocityENUMps.e / speed, velocityENUMps.n / speed)
+        : (1.0, 0.0)
+    var worst = 0.0
+    for sign in [-1.0, 1.0] {
+        let perturbed = (e: velocityENUMps.e + sign * disagreementMps * unit.e,
+                         n: velocityENUMps.n + sign * disagreementMps * unit.n,
+                         u: velocityENUMps.u)
+        let cast = simulateAscentThenDescent(
+            startLat: startLat, startLon: startLon,
+            currentAltAglFt: currentAltAglFt,
+            velocityENUMps: perturbed,
+            profile: profile, dragK: dragK, wind: wind)
+        guard let l = cast.track.last else { continue }
+        worst = max(worst, CLLocation(latitude: l.lat, longitude: l.lon)
+                             .distance(from: nominalLoc))
     }
     return worst
 }
