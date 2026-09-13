@@ -43,6 +43,12 @@ struct TelemetryData: Codable {
     /// 29 m, the derived velocity over-read the truth fourfold. `num_sats`
     /// does NOT substitute — the healthy Rolly Polly 54 mm flight also dropped
     /// to 5 satellites — so this is the field that says when to widen.
+    ///
+    /// Zero is only meaningful WITH a fix. Bench 2026-09-13: with no fix
+    /// the firmware zeroes the whole GNSS block — `nsat` 0, lat/lon 0.0,
+    /// and this 0 — so read it only once `num_sats` shows a usable fix,
+    /// exactly as position already is. With a fix, 0 genuinely is a good
+    /// one (Eagle Claw flew at 0 m on 14+ satellites).
     var gnss_h_acc_m: Int? = nil      // "hacc"
     var state: String = "UNKNOWN"     // Rocket state
     var active_file: String = ""
