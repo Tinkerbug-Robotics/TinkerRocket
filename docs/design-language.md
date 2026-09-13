@@ -74,6 +74,26 @@ which are Compose renderings of the shapes the iOS app is built from.
 | Active basemap | Named on the **bottom-leading attribution plate** (source name bold, provider attribution under it), not on the control that changes it — which is a bare 44pt/44dp glyph |
 | Control column | Top-trailing, source picker above recenter, 44pt/44dp square plates, 12pt/dp gutter. Divergence: Android hides recenter while follow is live (it would be a no-op); iOS always shows it |
 
+## Settings conventions (settled 2026-09-12)
+
+The parity ledger carried a "parked structural decision" here from 2026-08-09
+that described iOS as unifying device + profile settings while Android split
+them. **That was a misreading and it blocked work for a month.** Both apps have
+the same shape: a per-connected-device settings screen, plus a separate global
+device registry ("My Devices") that is reachable only while disconnected on
+*both* platforms. Identity — device name, rocket ID, network ID — is registry
+data on both; iOS's in-settings network row is a shortcut that still writes
+through the registry, which is the single writer either way.
+
+| Element | Rule |
+|---|---|
+| Ownership | **Registry owns identity; settings owns tuning.** Device name, rocket ID and network ID are written only through the known-device store (iOS `KnownDeviceStore`, Android `KnownDeviceStore`), whatever surface the user touched. The rocket *profile* (PID, servo, guidance, roll, fin, pyro, recovery, IMU, camera, sounds) is app-local and pushed per group on edit. A handful of settings are device NVS state and never profile fields: LoRa mute, link mode, TX power |
+| Screen shape | One settings screen per connected device, branching on device type and power state — **not** one screen per known device. iOS branches four ways (base station / no profile / rocket off / rocket); Android applies the same guards in the same order |
+| Base-station branch | Read-only Active Rocket + Summary, then **Link Mode, LoRa Frequency (read-only), LoRa TX Power**, then Network, then Firmware. iOS is canon for this order. These three radio settings are **base-station-only on both platforms**: cmd 17 is refused by rocket-side firmware, and the whole auto-apply path gates on `notBaseStation` |
+| Rocket branch layout | **Deliberate divergence (decision 2026-09-12):** iOS uses a four-way segmented picker (General / Control / Camera / Pyro); Android uses one long scroll. A scrolling settings page is idiomatic on Android and the shipped screen works — this is the "difficult or unnatural" exemption, not drift. Content and order within the scroll still follow iOS |
+| Network mismatch | Fixable **in place while connected** on both (decision 2026-09-12): show the device's network ID against the app's, flag a mismatch, offer a one-tap fix. Android previously detected mismatches only in Device Manager, which is unreachable while connected, so the only route was to disconnect first |
+| Commit discipline | No Apply buttons (#144). Toggles and pickers commit on change; text fields commit on focus loss, and also flush on tab switch and on dismissal. A "Sent" badge appears only when actually connected |
+
 ## Terminology (both platforms)
 
 "Rocket power" (not "FC power"), "Rockets via base station", "focused",
