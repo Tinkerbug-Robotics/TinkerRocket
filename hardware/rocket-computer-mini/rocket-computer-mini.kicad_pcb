@@ -921,6 +921,54 @@
 			(layer "F.SilkS")
 			(uuid "7dd55485-a4f9-4da3-90dd-e4c52478f68e")
 		)
+		(fp_poly
+			(pts
+				(xy 6.5 -7.6) (xy 6.5 -6.63) (xy 7.58 -6.63) (xy 7.58 -7.6)
+			)
+			(stroke
+				(width 0)
+				(type solid)
+			)
+			(fill yes)
+			(layer "F.Paste")
+			(uuid "3c7e9a10-5b2d-4f81-9a6e-1d2c3b4a5f60")
+		)
+		(fp_poly
+			(pts
+				(xy 6.5 -6.32) (xy 6.5 -5.35) (xy 7.58 -5.35) (xy 7.58 -6.32)
+			)
+			(stroke
+				(width 0)
+				(type solid)
+			)
+			(fill yes)
+			(layer "F.Paste")
+			(uuid "8f21b6c4-0e7a-4d93-b5c2-6a7e8d9f0a11")
+		)
+		(fp_poly
+			(pts
+				(xy 7.92 -7.6) (xy 7.92 -6.63) (xy 9 -6.63) (xy 9 -7.6)
+			)
+			(stroke
+				(width 0)
+				(type solid)
+			)
+			(fill yes)
+			(layer "F.Paste")
+			(uuid "a5d0c3e2-7b18-4c6f-8e94-2f3a4b5c6d72")
+		)
+		(fp_poly
+			(pts
+				(xy 7.92 -6.32) (xy 7.92 -5.35) (xy 9 -5.35) (xy 9 -6.32)
+			)
+			(stroke
+				(width 0)
+				(type solid)
+			)
+			(fill yes)
+			(layer "F.Paste")
+			(uuid "d9b4e7f1-2c35-4a08-9d17-7e8f9a0b1c23")
+		)
 		(fp_circle
 			(center -0.6 -0.64)
 			(end 0.65 -0.64)
@@ -977,54 +1025,6 @@
 					(thickness 0.15)
 				)
 			)
-		)
-		(fp_poly
-			(pts
-				(xy 6.5 -7.6) (xy 6.5 -6.63) (xy 7.58 -6.63) (xy 7.58 -7.6)
-			)
-			(stroke
-				(width 0)
-				(type solid)
-			)
-			(fill yes)
-			(layer "F.Paste")
-			(uuid "3c7e9a10-5b2d-4f81-9a6e-1d2c3b4a5f60")
-		)
-		(fp_poly
-			(pts
-				(xy 6.5 -6.32) (xy 6.5 -5.35) (xy 7.58 -5.35) (xy 7.58 -6.32)
-			)
-			(stroke
-				(width 0)
-				(type solid)
-			)
-			(fill yes)
-			(layer "F.Paste")
-			(uuid "8f21b6c4-0e7a-4d93-b5c2-6a7e8d9f0a11")
-		)
-		(fp_poly
-			(pts
-				(xy 7.92 -7.6) (xy 7.92 -6.63) (xy 9 -6.63) (xy 9 -7.6)
-			)
-			(stroke
-				(width 0)
-				(type solid)
-			)
-			(fill yes)
-			(layer "F.Paste")
-			(uuid "a5d0c3e2-7b18-4c6f-8e94-2f3a4b5c6d72")
-		)
-		(fp_poly
-			(pts
-				(xy 7.92 -6.32) (xy 7.92 -5.35) (xy 9 -5.35) (xy 9 -6.32)
-			)
-			(stroke
-				(width 0)
-				(type solid)
-			)
-			(fill yes)
-			(layer "F.Paste")
-			(uuid "d9b4e7f1-2c35-4a08-9d17-7e8f9a0b1c23")
 		)
 		(pad "1" smd roundrect
 			(at -7.75 -5.85)
@@ -9311,6 +9311,7 @@
 				)
 			)
 		)
+		(embedded_fonts no)
 		(model "${KIPRJMOD}/../3dmodels/SOD-523_0P9X1P3_ONS.step"
 			(offset
 				(xyz 0 0 0)
@@ -9322,7 +9323,6 @@
 				(xyz 0 0 0)
 			)
 		)
-		(embedded_fonts no)
 	)
 	(footprint "Capacitor_SMD:C_0402_1005Metric"
 		(layer "F.Cu")
@@ -16611,6 +16611,7 @@
 			(pintype "power_in")
 			(uuid "102feb4f-9436-418b-ab93-9f4613fce097")
 		)
+		(embedded_fonts no)
 		(model "${KICAD10_3DMODEL_DIR}/Package_LGA.3dshapes/ST_HLGA-10_2x2mm_P0.5mm_LayoutBorder3x2y.step"
 			(offset
 				(xyz 0 0 0)
@@ -16622,7 +16623,6 @@
 				(xyz 0 0 0)
 			)
 		)
-		(embedded_fonts no)
 	)
 	(footprint "Resistor_SMD:R_0402_1005Metric"
 		(layer "F.Cu")
@@ -17832,6 +17832,7 @@
 				)
 			)
 		)
+		(embedded_fonts no)
 		(model "${KIPRJMOD}/../3dmodels/SOD-523_0P9X1P3_ONS.step"
 			(offset
 				(xyz 0 0 0)
@@ -17843,7 +17844,6 @@
 				(xyz 0 0 0)
 			)
 		)
-		(embedded_fonts no)
 	)
 	(footprint "Capacitor_SMD:C_0402_1005Metric"
 		(layer "F.Cu")
@@ -18826,6 +18826,7 @@
 			(pintype "bidirectional")
 			(uuid "1d7ffd07-eb4a-4100-bfc6-3c486f40b5b5")
 		)
+		(embedded_fonts no)
 		(model "${KICAD10_3DMODEL_DIR}/Package_LGA.3dshapes/LGA-16_3x3mm_P0.5mm.step"
 			(offset
 				(xyz 0 0 0)
@@ -18837,7 +18838,6 @@
 				(xyz 0 0 0)
 			)
 		)
-		(embedded_fonts no)
 	)
 	(footprint "Resistor_SMD:R_0402_1005Metric"
 		(layer "F.Cu")
@@ -38263,7 +38263,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -39842,7 +39842,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -40036,7 +40036,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -40842,6 +40842,7 @@
 				)
 			)
 		)
+		(embedded_fonts no)
 		(model "${KIPRJMOD}/../3dmodels/SOD-523_0P9X1P3_ONS.step"
 			(offset
 				(xyz 0 0 0)
@@ -40853,7 +40854,6 @@
 				(xyz 0 0 0)
 			)
 		)
-		(embedded_fonts no)
 	)
 	(footprint "Footprints:TSON Advance_TOS"
 		(layer "B.Cu")
@@ -47223,7 +47223,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -47417,7 +47417,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -47611,7 +47611,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -48197,7 +48197,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -52910,6 +52910,7 @@
 				)
 			)
 		)
+		(embedded_fonts no)
 		(model "${KIPRJMOD}/../3dmodels/SOD-523_0P9X1P3_ONS.step"
 			(offset
 				(xyz 0 0 0)
@@ -52921,7 +52922,6 @@
 				(xyz 0 0 0)
 			)
 		)
-		(embedded_fonts no)
 	)
 	(footprint "Resistor_SMD:R_0402_1005Metric"
 		(layer "B.Cu")
@@ -53380,7 +53380,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -53962,7 +53962,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -54156,7 +54156,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -57149,7 +57149,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -58119,7 +58119,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -58701,7 +58701,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -59408,7 +59408,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")

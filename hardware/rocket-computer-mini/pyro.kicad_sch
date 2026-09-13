@@ -5883,7 +5883,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 103.505 161.925 0)
 			(hide yes)
 			(show_name no)
@@ -6188,7 +6188,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 103.505 102.235 0)
 			(hide yes)
 			(show_name no)
@@ -7487,7 +7487,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 194.31 118.745 0)
 			(hide yes)
 			(show_name no)
@@ -10656,7 +10656,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226KOQNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 101.6 38.735 0)
 			(hide yes)
 			(show_name no)
