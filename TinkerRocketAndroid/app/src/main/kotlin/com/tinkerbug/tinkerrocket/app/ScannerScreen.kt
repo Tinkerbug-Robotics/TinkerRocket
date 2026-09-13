@@ -319,7 +319,15 @@ private fun DeviceRow(
                 BleDeviceType.BASE_STATION -> Icons.Filled.CellTower
                 BleDeviceType.UNKNOWN -> Icons.AutoMirrored.Filled.HelpOutline
             },
-            contentDescription = null,
+            // #624: not decorative. The row's text is the device NAME; this
+            // glyph is the only thing that says which KIND of device it is,
+            // and connecting to a base station when you meant the rocket is
+            // the mistake this list exists to prevent.
+            contentDescription = when (type) {
+                BleDeviceType.ROCKET -> "Rocket"
+                BleDeviceType.BASE_STATION -> "Base station"
+                BleDeviceType.UNKNOWN -> "Unknown device type"
+            },
             modifier = Modifier.size(26.dp),
             tint = MaterialTheme.colorScheme.onSurface,
         )
