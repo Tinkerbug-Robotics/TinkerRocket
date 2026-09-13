@@ -3,7 +3,7 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 34,250 lines across 87 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 34,492 lines across 88 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
@@ -31,7 +31,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [NetworkMonitor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/NetworkMonitor.swift) | 52 | `NetworkMonitor`, `OfflinePill` |
 
 
-## `Models/` — 46 files, 17,354 lines
+## `Models/` — 47 files, 17,596 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -48,12 +48,12 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Published state · Rocket roster (#390) · Private state · Voice routing (#829's iOS twin) · Init · Scanning · Connection · Virtual Rocket (iOS twin of Android demo mode, 2026-07-30) · Device lookup · Last-valid rocket fix cache (#140) · CBCentralManagerDelegate |
 | [FlightAnnouncer.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FlightAnnouncer.swift) | 656 | `TelemetryAnnouncer`, `AnnouncerSpeech`, `FlightAnnouncer`, `SystemSpeech` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Seams · Private State · Constants · Init · Main Entry Point · Event Detectors · Horizontal Distance · Speak policy · State Reset · Production speech engine |
+| [LandingPredictor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/LandingPredictor.swift) | 608 | `LandingSnapshotSource`, `LandingPrediction`, `LandingPredictor` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Telemetry handling · Wind prefetch · DriftCast adapter · Uncertainty model (#191 item 2) · Ascent ballistic (#191 item 1) |
 | [FileCache.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FileCache.swift) | 561 | `FlightSummaryHeadline`, `CachedFlightType`, `CachedFlight` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | CachedFlight Model · Device-scoped path helpers · Summary File Caching · Binary File Caching · Direct CSV Caching (for base station LoRa logs that are already CSV) · Flight Caching Status · Delete Cached Flight · List All Cached Flights |
 | [SensorConverter.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/SensorConverter.swift) | 543 | — |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Rotation Configuration · GNSS Conversion · Power Conversion · BMP585 Conversion · ISM6HG256 Conversion · MMC5983MA Conversion · IIS2MDC Conversion (new Mini PCB rev) · Legacy Sensor Conversions · Mini NonSensor Conversion |
-| [LandingPredictor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/LandingPredictor.swift) | 533 | `LandingSnapshotSource`, `LandingPrediction`, `LandingPredictor` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Telemetry handling · Wind prefetch · DriftCast adapter · Uncertainty model (#191 item 2) · Ascent ballistic (#191 item 1) |
 | [DriftCastEngine.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/DriftCastEngine.swift) | 506 | `WindLayer`, `WindProfile`, `TrackPoint`, `GuidanceResult`, `OpenMeteoResponse`, `OpenMeteoHourly`, +1 more |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Data Structures · Geo Utilities · Standard Atmosphere · Wind API (Open-Meteo) · Descent Simulation · Main Orchestration |
 | [OTASession.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTASession.swift) | 488 | `OTASession` |
@@ -79,6 +79,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [EspImage.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/EspImage.swift) | 197 | — |
 | [FirmwareManifest.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FirmwareManifest.swift) | 177 | — |
 | [LocationManager.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/LocationManager.swift) | 175 | `LocationManager` |
+| [GnssVelocityCheck.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/GnssVelocityCheck.swift) | 167 | `GnssVelocityCheck` |
 | [MagCalCells.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/MagCalCells.swift) | 161 | `MagCalCells` |
 | [FirmwareCache.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FirmwareCache.swift) | 160 | — |
 | [MessageParser.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/MessageParser.swift) | 151 | — |
@@ -145,4 +146,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 87 files, 34,250 lines.
+Total: 88 files, 34,492 lines.
