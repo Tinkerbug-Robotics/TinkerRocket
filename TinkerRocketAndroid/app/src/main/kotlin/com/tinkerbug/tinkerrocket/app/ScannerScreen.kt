@@ -296,8 +296,11 @@ fun ScannerScreen(
 
 /** iOS DevicePickerView row: type icon, name + role, signal bars; the row
  *  itself is the connect control. */
+// `internal`, not `private`, so the module's Compose tests can drive this
+// row directly (#624). Kotlin `internal` is visible to the test source set
+// and to nothing outside the module, so this widens no public surface.
 @Composable
-private fun DeviceRow(
+internal fun DeviceRow(
     dev: DiscoveredDevice,
     onConnect: () -> Unit,
 ) {
@@ -319,15 +322,16 @@ private fun DeviceRow(
                 BleDeviceType.BASE_STATION -> Icons.Filled.CellTower
                 BleDeviceType.UNKNOWN -> Icons.AutoMirrored.Filled.HelpOutline
             },
-            // #624: not decorative. The row's text is the device NAME; this
-            // glyph is the only thing that says which KIND of device it is,
-            // and connecting to a base station when you meant the rocket is
-            // the mistake this list exists to prevent.
-            contentDescription = when (type) {
-                BleDeviceType.ROCKET -> "Rocket"
-                BleDeviceType.BASE_STATION -> "Base station"
-                BleDeviceType.UNKNOWN -> "Unknown device type"
-            },
+            // Decorative, and #1442 was wrong to label it. That change argued
+            // "the row's text is the device NAME, so the glyph is the only
+            // thing that says which KIND of device it is" -- but the Column
+            // below prints the kind in words on its own line ("Rocket" /
+            // "Base Station" / "TinkerRocket device"), which the labelled icon
+            // then made TalkBack announce twice. Double-announcement is the
+            // exact fault #1442 cited as its reason for leaving 44 other icons
+            // silent. Caught by StatusIconLabelTest, which is the test setup
+            // #1442 said it needed and did not have.
+            contentDescription = null,
             modifier = Modifier.size(26.dp),
             tint = MaterialTheme.colorScheme.onSurface,
         )
