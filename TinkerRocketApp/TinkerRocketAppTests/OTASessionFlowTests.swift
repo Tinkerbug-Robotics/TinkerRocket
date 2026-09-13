@@ -32,6 +32,16 @@ final class OTASessionFlowTests: XCTestCase {
         var abortCount = 0
         /// Set to N to flip otaStatus to verify_failed as the Nth chunk lands.
         var failAtChunk: Int?
+        /// Flip otaStatus to verify_failed when FINISH is sent, i.e. the
+        /// terminal status arrives AFTER the pump has drained rather than
+        /// during it. Both arrivals are real (#1425): the relay's refusal is
+        /// raced against a pump that may already have run out of image.
+        var failAtFinish = false
+        /// What that flip reports. Defaults keep the existing cases on the
+        /// local-path `bad_offset`; the relay cases script the FC's own token
+        /// and byte count.
+        var failErr = "bad_offset"
+        var failBytes = 0
 
         init(firmwareVersion: String = "v1-old", fcFirmwareVersion: String = "fc-v1-old") {
             self.firmwareVersion = firmwareVersion
@@ -44,11 +54,22 @@ final class OTASessionFlowTests: XCTestCase {
         func sendOtaChunk(offset: UInt32, data: Data, isLast: Bool) async throws {
             chunks.append((offset, data, isLast))
             if let n = failAtChunk, chunks.count >= n {
-                otaStatus = OTAStatusUpdate(state: .verifyFailed, bytes: 0,
-                                            err: "bad_offset", fw: nil)
+                otaStatus = OTAStatusUpdate(state: .verifyFailed, bytes: failBytes,
+                                            err: failErr, fw: nil)
             }
         }
-        func sendOtaFinish() { finishCount += 1 }
+        /// When FINISH was first sent, so a test can measure how long the
+        /// session then took to decide — the difference between reading a
+        /// terminal status and waiting out the finish window.
+        var finishAt: Date?
+        func sendOtaFinish() {
+            finishCount += 1
+            if finishAt == nil { finishAt = Date() }
+            if failAtFinish {
+                otaStatus = OTAStatusUpdate(state: .verifyFailed, bytes: failBytes,
+                                            err: failErr, fw: nil)
+            }
+        }
         func sendOtaAbort() { abortCount += 1 }
         func clearOtaStatus() { otaStatus = nil }
     }
@@ -228,6 +249,98 @@ final class OTASessionFlowTests: XCTestCase {
         XCTAssertTrue(reason.contains("bad_offset"), "surfaces the firmware token: \(reason)")
         XCTAssertGreaterThanOrEqual(link.abortCount, 1, "abort sent on the failure path")
         XCTAssertLessThan(link.chunks.count, 10, "pump stopped near the rejection")
+    }
+
+    // MARK: - #1425 / #1125: a wrong-board image refused over the FC relay
+
+    /// The bench case behind #1125, pinned to the app's own decision.
+    ///
+    /// An FC image built with the wrong board flag is refused by the FC after
+    /// the descriptor completes — measured on hardware 2026-09-12 as
+    /// `{"state":"verify_failed","bytes":220,"err":"fc_image_identity_mismatch"}`
+    /// reaching the app's characteristic 47 ms after the triggering chunk. What
+    /// the operator must then read is that token, not a timeout: #1267/#1273
+    /// exist because "did not finalize within 60s" reads as "it might have
+    /// half-landed" when in fact 220 bytes were accepted and nothing was
+    /// written. The 60 s finish window is the relay's own (OTATimeouts), so a
+    /// missed short-circuit here costs a full minute before a wrong message.
+    func testRelayVerifyFailedMidPump_reportsTheIdentityTokenNotATimeout() async throws {
+        let link = ScriptedLink()
+        link.failAtChunk = 2
+        link.failErr = "fc_image_identity_mismatch"
+        link.failBytes = 220
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(200_000), targetIsFC: true)
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        XCTAssertTrue(link.beginCalls[0].targetIsFC, "the relay path, not a local OC OTA")
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+
+        try await waitUntil("pump failure") { self.failureReason(session.state) != nil }
+        let reason = failureReason(session.state) ?? ""
+        XCTAssertTrue(reason.contains("fc_image_identity_mismatch"),
+                      "the FC's own token, not a generic failure: \(reason)")
+        XCTAssertTrue(reason.contains("220 of 200000 B"),
+                      "carries how little was accepted — a partial transfer and a "
+                      + "corrupt full one are different faults: \(reason)")
+        XCTAssertFalse(reason.contains("did not finalize"),
+                       "the timeout wording is exactly what #1267 was filed for: \(reason)")
+        XCTAssertEqual(link.finishCount, 0, "a refused image never reaches FINISH")
+        XCTAssertGreaterThanOrEqual(link.abortCount, 1, "abort sent on the failure path")
+        XCTAssertLessThan(link.chunks.count, 10, "pump stopped near the rejection")
+    }
+
+    /// The same refusal, arriving AFTER the pump has drained.
+    ///
+    /// This is the arrival the original #1425 report actually represents: the
+    /// app had pushed the whole image and was sitting in the finish wait when
+    /// it gave up at 60 s. Two code paths carry the token — the pump loop's
+    /// check and `awaitFinish`'s — and only the first is covered by the
+    /// mid-pump case above.
+    ///
+    /// **The timing assertion is the load-bearing one here, not the message.**
+    /// Deleting `awaitFinish`'s `verifyFailed` short-circuit does NOT change
+    /// what the operator eventually reads: the terminal-status branch in the
+    /// finish handler still finds the same status and prints the same token.
+    /// It changes only WHEN — the status change resets the no-progress
+    /// deadline, so the session sits for the full relay finish window (60 s
+    /// live, 300 ms at `timeScale`) before saying anything. A message-only
+    /// assertion would pass right through that regression, which is why this
+    /// case measures from FINISH.
+    ///
+    /// Note the wording legitimately differs between the two arrivals ("Device
+    /// rejected chunk" vs "Verify failed"): the phase is real information.
+    /// What must not differ is that the token and the byte count survive.
+    func testRelayVerifyFailedAfterPump_shortCircuitsTheFinishWindow() async throws {
+        let link = ScriptedLink()
+        link.failAtFinish = true
+        link.failErr = "fc_image_identity_mismatch"
+        link.failBytes = 220
+        let session = makeSession(LinkBox(link))
+
+        session.start(data: image(1500), targetIsFC: true)
+        try await waitUntil("begin") { link.beginCalls.count == 1 }
+        link.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+
+        try await waitUntil("finish failure") { self.failureReason(session.state) != nil }
+        let decidedIn = Date().timeIntervalSince(try XCTUnwrap(link.finishAt))
+        let reason = failureReason(session.state) ?? ""
+        XCTAssertEqual(link.finishCount, 1, "the pump drained, so FINISH was sent")
+        // The relay finish window is 60 s; at timeScale that is 300 ms. Reading
+        // the status takes one scaled poll (0.25 ms), so anything approaching
+        // the window means the short-circuit is gone. 100 ms sits 3x under the
+        // window and ~100x over the fast path, which is the widest gap a
+        // wall-clock assertion can take here.
+        XCTAssertLessThan(decidedIn, 0.1,
+                          "decided \(decidedIn)s after FINISH — the 300 ms scaled window "
+                          + "means awaitFinish waited the refusal out instead of reading it")
+        XCTAssertTrue(reason.contains("fc_image_identity_mismatch"),
+                      "the token survives the late arrival: \(reason)")
+        XCTAssertTrue(reason.contains("220 of 1500 B"), reason)
+        XCTAssertFalse(reason.contains("did not finalize"),
+                       "burning the 60 s window and then blaming no-progress is "
+                       + "the #1425 failure mode: \(reason)")
+        XCTAssertGreaterThanOrEqual(link.abortCount, 1, "abort sent on the failure path")
     }
 
     func testBeginNotAccepted_timesOutWithoutPumping() async throws {
