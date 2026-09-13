@@ -19,6 +19,11 @@ on:
       # test_apogee_detector and the landing suites mirror this component's
       # logic in Python; the port has to be re-checked when it moves.
       - 'tinkerrocket-idf/components/TR_KinematicChecks/**'
+      # test_ota_probe drives tools/ota_probe.py end to end, and reads
+      # APP_DESC_OFFSET/SIZE out of the receiver header to check the probe
+      # still sends enough bytes to force an identity verdict.
+      - 'tools/ota_probe.py'
+      - 'tinkerrocket-idf/components/TR_OTA/**'
       - '.github/workflows/unit-tests.yml'
   pull_request:
     paths:
@@ -27,6 +32,8 @@ on:
       - 'tests/test_roll_profile_semantics.py'
       - 'tinkerrocket-idf/components/TR_RocketComputerTypes/**'
       - 'tinkerrocket-idf/components/TR_KinematicChecks/**'
+      - 'tools/ota_probe.py'
+      - 'tinkerrocket-idf/components/TR_OTA/**'
       - '.github/workflows/unit-tests.yml'
 
 jobs:
