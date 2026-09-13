@@ -46,6 +46,19 @@ ISM6_LOW_G_FS_G   = 16     # ±16 g
 ISM6_HIGH_G_FS_G  = 256    # ±256 g
 ISM6_GYRO_FS_DPS  = 4000   # ±4000 dps
 ISM6_ROT_Z_DEG    = -45.0  # sensor → board frame rotation about +Z
+
+# #1190 shock-gate thresholds, mirroring the firmware exactly
+# (imu_drain_window.h gyroFsFractionLsb / accelFsFractionLsb, with
+# config::EKF_SHOCK_GYRO_RAIL_FRAC = EKF_SHOCK_ACCEL_RAIL_FRAC = 0.95).
+#
+# The gyro does NOT map its full scale onto the int16 span — a fixed
+# 0.035 mdps/LSB per dps of FS (#369) — so NOMINAL full scale is 28571 LSB at
+# every FS setting and the int16 rail sits at 114.7% of it.  That is why a
+# near-rail burst logs as 4492 dps against a "±4000 dps" full scale without
+# ever reaching 32767.  The accelerometers DO map FS onto the span.
+EKF_SHOCK_RAIL_FRAC   = 0.95
+ISM6_GYRO_RAIL_LSB    = int(EKF_SHOCK_RAIL_FRAC * (1.0 / 0.035e-3))   # 27142
+ISM6_ACCEL_RAIL_LSB   = int(EKF_SHOCK_RAIL_FRAC * 32768.0)            # 31129
 MMC_ROT_Z_DEG     = 180.0  # sensor → board frame rotation about +Z (old-PCB MMC5983MA)
 IIS2MDC_ROT_Z_DEG = 90.0   # sensor → board frame rotation about +Z (new-PCB IIS2MDC, #204)
 
@@ -1129,8 +1142,24 @@ def parse_binary_file(filepath):
                          gy_x * s_rot + gy_y * c_rot,
                          gy_z)
 
+        # #1190 / #552: the shock gate's saturation verdicts, from the RAW
+        # counts.  It has to be done here, and per SENSOR axis: the rotations
+        # applied above mix axes, so a rotated component reaches sqrt(2)x the
+        # per-axis rail and reads as "4407 dps" against a 4000 dps full scale.
+        # Testing saturation on a rotated value is therefore meaningless.
+        # Without this the replay runs a filter with the shock gate
+        # permanently OFF -- i.e. not the firmware that flew.
+        gyro_railed = (abs(r["gy_x"]) >= ISM6_GYRO_RAIL_LSB or
+                       abs(r["gy_y"]) >= ISM6_GYRO_RAIL_LSB or
+                       abs(r["gy_z"]) >= ISM6_GYRO_RAIL_LSB)
+        accel_railed = (abs(r["hg_x"]) >= ISM6_ACCEL_RAIL_LSB or
+                        abs(r["hg_y"]) >= ISM6_ACCEL_RAIL_LSB or
+                        abs(r["hg_z"]) >= ISM6_ACCEL_RAIL_LSB)
+
         records["ISM6HG256"].append({
             "time_us":     r["time_us"],
+            "gyro_railed":  gyro_railed,
+            "accel_railed": accel_railed,
             "low_acc_x":   low[0],
             "low_acc_y":   low[1],
             "low_acc_z":   low[2],

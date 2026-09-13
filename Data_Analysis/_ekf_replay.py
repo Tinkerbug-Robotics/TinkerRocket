@@ -295,6 +295,14 @@ def replay_binary(records, log_decimation: int = 20,
             imu_d.gyro_x = rec["gyro_x"]
             imu_d.gyro_y = -rec["gyro_y"]
             imu_d.gyro_z = -rec["gyro_z"]
+            # #1190 shock gate. Without these the replay is a filter with the
+            # gate permanently off, which is not the firmware that flew: on
+            # RIM-66 (#552) that is the difference between 43.6 and 29.9 m/s of
+            # median coast velocity error. The flags are per SENSOR axis and
+            # come from the parser, which still has the raw counts -- they
+            # cannot be recovered here, where every value has been rotated.
+            imu_d.gyro_railed = bool(rec.get("gyro_railed", False))
+            imu_d.accel_railed = bool(rec.get("accel_railed", False))
 
             gnss_d = GNSSDataLLA()
             gnss_d.time_us = gnss_counter

@@ -490,7 +490,7 @@ _P(
         "sensitivity (0.14 °/s per count at ±4000 dps), not full-scale/32768.",
     caution=
         "A roll RATE, not the roll ANGLE in NonSensor.roll (a ZYX-Euler angle, #514) — never overlay "
-        "or difference the two. Rails at ±4000 dps on a fast spin.",
+        "or difference the two. Does NOT rail at ±4000 dps: the ST sensitivity puts NOMINAL full scale at 28571 counts and the int16 rail at 114.7% of it, so the part reports past ±4000 and saturates near ±4587 dps (4492 dps was logged 2026-08-29).",
     shown_in=("roll", "roll_pid"),
 )
 _P(
@@ -500,8 +500,34 @@ _P(
         "Angular rate about body Y, roughly pitch rate. Same sensitivity and rotation chain as the "
         "other gyro axes, so X and Y are mixed by the chip rotation.",
     caution=
-        "A rate in °/s, not the NonSensor pitch angle — the two are not comparable. Saturates at the "
-        "same ±4000 dps full scale as the other gyro axes.",
+        "A rate in °/s, not the NonSensor pitch angle — the two are not comparable. Saturates near "
+        "±4587 dps, NOT at the ±4000 dps nominal full scale — see gyro_x.",
+    shown_in=(),
+)
+_P(
+    "ISM6HG256.gyro_railed", "Gyro Saturation Flag (#1190)",
+    kind=KIND_BOOL,
+    note=
+        "True when ANY raw gyro axis in this sample sat at or above 95% of nominal full scale "
+        "(27142 counts, 3800 dps at ±4000) BEFORE any rotation. The flight computer holds the "
+        "attitude quaternion while this is set, because a saturated gyro is not measuring "
+        "rotation; the host replay reads it to model the same filter.",
+    caution=
+        "Derived by the parser, not a logged field — analyses predating it ran the replay with the "
+        "shock gate permanently off. The verdict is per SENSOR axis and cannot be recomputed from "
+        "the rotated gyro_x/y/z beside it: the −45° chip rotation both invents √2× peaks on quiet "
+        "axes and cancels genuinely railed ones.",
+    shown_in=(),
+)
+_P(
+    "ISM6HG256.accel_railed", "High-G Accel Saturation Flag (#1190)",
+    kind=KIND_BOOL,
+    note=
+        "True when any raw HIGH-G accelerometer axis sat at or above 95% of full scale (31129 "
+        "counts, 243 g at ±256 g) before rotation. Same shock-gate role as gyro_railed.",
+    caution=
+        "The high-g channel only. The low-g channel is expected to sit at its ±16 g rail through "
+        "any real boost, so it says nothing about shock.",
     shown_in=(),
 )
 _P(
@@ -511,8 +537,8 @@ _P(
         "Angular rate about body Z, roughly yaw rate. The chip rotation is about this axis, so only "
         "the board-to-rocket quaternion moves it.",
     caution=
-        "A rate in °/s, not the NonSensor yaw/azimuth angle — do not plot them together. Saturates at "
-        "the same ±4000 dps full scale as the other gyro axes.",
+        "A rate in °/s, not the NonSensor yaw/azimuth angle — do not plot them together. Saturates near "
+        "±4587 dps, NOT at the ±4000 dps nominal full scale — see gyro_x.",
     shown_in=(),
 )
 
