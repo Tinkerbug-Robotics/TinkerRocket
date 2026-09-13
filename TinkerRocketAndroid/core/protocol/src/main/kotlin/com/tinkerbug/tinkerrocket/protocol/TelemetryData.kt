@@ -172,6 +172,24 @@ public data class TelemetryData(
     // Ported as-is: decode() never sets it.
     val gdop: Float? = null,
     val numSats: Int = 0,                     // "nsat"
+    /**
+     * #552: GNSS horizontal accuracy in metres, or null when the rocket does
+     * not report it (pre-#552 firmware, or a receiver with no equivalent).
+     *
+     * Null is not "good". The landing radius derives a GNSS velocity by
+     * differencing successive fixes, and that derivative is only as good as
+     * the fixes: on the 2026-08-29 Rolly Polly V flight, where this reached
+     * 29 m, the derived velocity over-read the truth fourfold. `numSats` does
+     * NOT substitute — the healthy Rolly Polly 54 mm flight also dropped to 5
+     * satellites — so this is the field that says when to widen.
+     *
+     * Zero is only meaningful WITH a fix. Bench 2026-09-13: with no
+     * fix the firmware zeroes the whole GNSS block — `nsat` 0, lat/lon
+     * 0.0, and this 0 — so read it only once [numSats] shows a usable
+     * fix, exactly as position already is. With a fix, 0 genuinely is a
+     * good one (Eagle Claw flew at 0 m on 14+ satellites).
+     */
+    val gnssHAccM: Int? = null,               // "hacc"
     val state: String = "UNKNOWN",            // "st"
 
     // FC boot progress, emitted ONLY while the FC is still in setup_fc()
@@ -800,6 +818,7 @@ public data class TelemetryData(
             longitude = strictDouble(json, "lon"),
             // gdop: intentionally NOT decoded — absent from iOS CodingKeys.
             numSats = flexInt(json, "nsat") ?: 0,                       // #571
+            gnssHAccM = flexInt(json, "hacc"),                          // #552
             state = strictString(json, "st") ?: "UNKNOWN",
             fcBootStepRaw = flexInt(json, "bs"),
             fcBootElapsedMs = flexInt(json, "bt"),

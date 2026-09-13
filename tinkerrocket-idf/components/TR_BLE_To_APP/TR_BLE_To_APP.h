@@ -77,6 +77,15 @@ public:
         double longitude;       // GPS longitude degrees
         float gdop;             // GPS dilution of precision
         int num_sats;           // Number of GPS satellites
+        // #552: GNSS horizontal accuracy, metres. The app derives a velocity
+        // by differencing the lat/lon it receives, and that derivative is only
+        // as good as the fixes: on the 2026-08-29 Rolly Polly V flight, with
+        // h_acc reaching 29 m, the derived velocity over-read the truth by 4x
+        // (150 m/s against 37). num_sats does NOT separate that case — the
+        // healthy Rolly Polly 54 mm flight also drops to 5 satellites — so
+        // this is the field that says when to widen the landing radius.
+        // 255 = not reported (the LC86G's $PQTMEPE has no equivalent).
+        uint8_t gnss_h_acc_m = 255;
         const char* state;      // Rocket state string ("READY", "PRELAUNCH", etc.)
         bool camera_recording;  // Camera recording active
         bool logging_active;    // Data logging active

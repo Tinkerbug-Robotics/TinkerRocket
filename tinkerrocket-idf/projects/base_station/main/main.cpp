@@ -2189,6 +2189,14 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.longitude = lon_deg;
     out.gdop = lora.pdop;
     out.num_sats = (int)lora.num_sats;
+    // #552: the relayed rocket's horizontal accuracy. hacc_u8 has been on the
+    // LoRa fast frame all along next to num_sats; it just stopped here.
+    {
+        const float ha = lora.horizontal_accuracy;
+        out.gnss_h_acc_m = (!(ha >= 0.0f)) ? 255u
+                         : (ha > 254.0f)   ? 254u
+                                           : (uint8_t)(ha + 0.5f);
+    }
 
     // Sensor health scorecard bitfield (#303) — relayed straight from the
     // FC/OC LoRa downlink; iOS unpacks the 2-bit-per-sensor states.

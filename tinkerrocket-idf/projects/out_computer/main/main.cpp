@@ -8149,6 +8149,14 @@ static void printStats()
         ble_telem.longitude = gnss.lon;
         ble_telem.gdop = gnss.pdop;
         ble_telem.num_sats = (int)gnss.num_sats;
+        // #552: clamp rather than wrap — a wrapped accuracy reads as a good
+        // fix, which is the one thing this field exists to prevent.
+        {
+            const float ha = gnss.horizontal_accuracy;
+            ble_telem.gnss_h_acc_m = (!(ha >= 0.0f)) ? 255u          // NaN / negative = unknown
+                                   : (ha > 254.0f)   ? 254u
+                                                     : (uint8_t)(ha + 0.5f);
+        }
     }
     ble_telem.state = rocketStateToString(latest_rocket_state);
     ble_telem.camera_recording = camera_recording_requested;

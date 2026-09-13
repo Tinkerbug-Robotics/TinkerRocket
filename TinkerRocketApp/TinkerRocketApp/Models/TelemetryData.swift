@@ -34,6 +34,22 @@ struct TelemetryData: Codable {
     var longitude: Double?            // GPS longitude degrees
     var gdop: Float?                  // GPS dilution of precision
     var num_sats: Int = 0             // Number of GPS satellites
+    /// #552: GNSS horizontal accuracy in metres, nil when the rocket does not
+    /// report it (pre-#552 firmware, or a receiver with no equivalent).
+    ///
+    /// nil is not "good". The landing radius derives a GNSS velocity by
+    /// differencing successive fixes, and that derivative is only as good as
+    /// the fixes: on the 2026-08-29 Rolly Polly V flight, where this reached
+    /// 29 m, the derived velocity over-read the truth fourfold. `num_sats`
+    /// does NOT substitute — the healthy Rolly Polly 54 mm flight also dropped
+    /// to 5 satellites — so this is the field that says when to widen.
+    ///
+    /// Zero is only meaningful WITH a fix. Bench 2026-09-13: with no fix
+    /// the firmware zeroes the whole GNSS block — `nsat` 0, lat/lon 0.0,
+    /// and this 0 — so read it only once `num_sats` shows a usable fix,
+    /// exactly as position already is. With a fix, 0 genuinely is a good
+    /// one (Eagle Claw flew at 0 m on 14+ satellites).
+    var gnss_h_acc_m: Int? = nil      // "hacc"
     var state: String = "UNKNOWN"     // Rocket state
     var active_file: String = ""
     var rx_kbs: Float?                // I2C RX rate kB/s
@@ -493,6 +509,7 @@ struct TelemetryData: Codable {
         case latitude = "lat"
         case longitude = "lon"
         case num_sats = "nsat"
+        case gnss_h_acc_m = "hacc"     // #552
         case state = "st"
         case active_file = "af"
         case rx_kbs = "rxk"
@@ -587,6 +604,10 @@ struct TelemetryData: Codable {
         // BS-relayed stream that made the rocket vanish from the dashboard
         // instead of degrading one field.
         num_sats = flexInt(.num_sats) ?? 0
+        // #552: nil when the key is absent — NOT 0, which would read as a
+        // perfect fix. flexInt tolerates the firmware sending it as a
+        // number or a string, like every other numeric key here.
+        gnss_h_acc_m = flexInt(.gnss_h_acc_m)
         state = try c.decodeIfPresent(String.self, forKey: .state) ?? "UNKNOWN"
         active_file = try c.decodeIfPresent(String.self, forKey: .active_file) ?? ""
         rx_kbs = try c.decodeIfPresent(Float.self, forKey: .rx_kbs)
