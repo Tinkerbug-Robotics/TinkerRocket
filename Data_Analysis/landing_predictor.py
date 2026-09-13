@@ -271,9 +271,32 @@ def actual_landing_enu(result: ReplayResult,
             rows = [r for r in rows
                     if r.get("rocket_id") in (None, "", dominant)]
         # Last row with landed flag set and a usable fix
+        # #552: these used to be string comparisons, a leftover from when the
+        # base-station log was only ever CSV text. bs_log returns TYPED values
+        # for both formats now — `landed` comes back as int 1, which never
+        # equals "1" — so this list was always empty, the function always fell
+        # through to the EKF tail below, and every landing error in the sweep
+        # was measured against the tail of the very filter the prediction was
+        # extrapolated from. That is circular, and it is why the predictor
+        # looked skill-less: its "truth" was its own input.
+        def _truthy(v):
+            if isinstance(v, str):
+                return v.strip() not in ("", "0", "false", "False")
+            return bool(v)
+
+        def _has_fix(r):
+            lat, lon = r.get("lat"), r.get("lon")
+            try:
+                lat, lon = float(lat), float(lon)
+            except (TypeError, ValueError):
+                return False
+            if lat != lat or lon != lon:        # NaN
+                return False
+            return not (lat == 0.0 and lon == 0.0)
+
         landed = [r for r in rows
-                  if r.get("landed", "0") == "1"
-                  and r.get("lat", "nan") not in ("nan", "", "0.0")
+                  if _truthy(r.get("landed", 0))
+                  and _has_fix(r)
                   and float(r.get("num_sats", 0) or 0) >= 4]
         if landed:
             last = landed[-1]

@@ -38,7 +38,7 @@ phone at the pad.
 | **Talks to the FC** | I2S (telemetry in, 22 kHz DMA) + I2C (commands out, 1.2 MHz) |
 | **Talks to the ground** | LoRa 915 MHz at 2 Hz |
 | **Talks to your phone** | BLE GATT, 52 commands |
-| **Stores** | MRAM ring buffer → NAND flash, via `TR_LogToFlash` and `TR_FlightLog` |
+| **Stores** | staging ring → NAND flash, via `TR_LogToFlash` and `TR_FlightLog`. The ring is **MRAM on V8**, **512 KB of in-package PSRAM on V9/V10 and the mini** (#822/#842), 64 KB of internal RAM if neither answers |
 
 ## Two power states
 
@@ -54,13 +54,13 @@ stateDiagram-v2
     Active --> Idle: BLE cmd 8 → esp_restart()
     note right of Active
         initPeripherals() runs here:
-        NAND, MRAM, LoRa, I2C, I2S.
+        NAND, log ring, LoRa, I2C, I2S.
         Blocks the loop for seconds.
     end note
 ```
 
 In the **idle** state only BLE is running. Peripheral init is deferred entirely —
-NAND, MRAM, LoRa and I2S are not even initialized — so the board sits at roughly a
+NAND, the log ring, LoRa and I2S are not even initialized — so the board sits at roughly a
 milliamp and a pack lasts weeks on the pad. The app can still connect and read
 config in this state — but not list, download or delete flights: the flight-log
 surface is brought up by `initPeripherals()`, which runs only when the rail comes
@@ -107,7 +107,7 @@ flowchart TB
         RING["rx_ring — 64 KB"]
         PARSE["I2S Parse task<br/>parseRxStream → processFrame"]
         CACHE["latest_* sample cache"]
-        LOG["TR_LogToFlash<br/>MRAM ring → NAND"]
+        LOG["TR_LogToFlash<br/>staging ring → NAND<br/>PSRAM on V9/V10, MRAM on V8"]
         CMDQ["FC command queue<br/>FIFO, served one per poll"]
     end
 
@@ -201,10 +201,22 @@ Logging is a session with an explicit lifecycle: `prepareLogFile()` →
 either manually (BLE cmd 23) or automatically when the `NSF_LAUNCH` flag appears in the
 FC's NonSensor frames.
 
-Frames go through a RAM staging buffer into an MRAM ring, and a flush task drains the
-ring into NAND in 4080-byte pages. MRAM is there because it absorbs the write burst
-without the erase latency of flash — the ring is the shock absorber between a 22 kHz
-ingest stream and a storage medium that occasionally stops to erase a block.
+Frames go through a RAM staging buffer into a ring, and a flush task drains the ring
+into NAND in 4080-byte pages. The ring is the shock absorber between a 22 kHz ingest
+stream and a storage medium that occasionally stops to erase a block — it absorbs the
+write burst without the erase latency of flash.
+
+**Where that ring lives is per board, and the fallbacks are not equivalent.** V8 uses
+the MRAM part. **V9/V10 and the mini have no MRAM at all** — the S3RH2's in-package
+PSRAM is its designated replacement, so `TR_LogToFlash` allocates a **512 KB** ring
+there (`config::PSRAM_RING_SIZE`, gated on the board header's `RING_IN_PSRAM` with
+`MRAM_CS = -1`). If neither answers, it falls back to **64 KB of internal RAM**
+(`config::RAM_RING_SIZE`) and says so loudly on the boot log rather than degrading
+silently — that fallback costs NAND-stall headroom, and on V8 it also means in-flight
+reboot recovery is unavailable for the session, since that path reads the MRAM. The
+line to read at boot is `Allocated <N> byte PSRAM ring` / `... RAM ring`. Measured on
+the V9 first article: `ring_peak=0` across 140 samples with the FC streaming at
+3840 Hz, so 512 KB is nowhere near a constraint.
 
 **Once the vehicle reports `LANDED`, no new flight log can be opened until the OC
 reboots.** Post-flight ground handling can re-trip the FC's launch detect, and without
@@ -315,7 +327,7 @@ started, and the second one reboots the board. Bench scripts that assume it is
 idempotent will fight you.
 
 **Power-on blocks the loop for seconds.** `initPeripherals()` runs inline in the
-command handler: NAND, MRAM, LoRa, I2C, I2S, plus log recovery. There is no telemetry
+command handler: NAND, the log ring, LoRa, I2C, I2S, plus log recovery. There is no telemetry
 and no BLE responsiveness while it runs. That latency is the reason the app shows a
 spinner rather than appearing to hang.
 

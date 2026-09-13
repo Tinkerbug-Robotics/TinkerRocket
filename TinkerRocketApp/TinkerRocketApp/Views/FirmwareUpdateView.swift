@@ -465,11 +465,13 @@ private struct FirmwareUpdateContent: View {
 
     /// Adopt a verified download as the picked file.
     ///
-    /// Written to a temp file rather than flashed from memory because the OTA
-    /// session takes a URL — and routing it through the same field as a
-    /// hand-picked file means EspImage.check reads the DOWNLOADED image's own
-    /// header, so the manifest that described it is never the last word on
-    /// what is about to be flashed.
+    /// Routing a download through the same fields as a hand-picked file means
+    /// EspImage.check reads the DOWNLOADED image's own header, so the manifest
+    /// that described it is never the last word on what is about to be flashed.
+    /// The temp file is what makes the picked-file UI (name, size, the Flash
+    /// gate) work; since #812 the flash itself goes from `bytes` rather than a
+    /// re-read of that file, so the verified bytes and the sent bytes are one
+    /// and the same on this path too.
     private func adoptDownload(release: FirmwareRelease, image: FirmwareImage, bytes: Data) {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(image.file)
@@ -512,11 +514,31 @@ private struct FirmwareUpdateContent: View {
             // (bad copy off the Mac) or the BLE transfer corrupted it. Reading
             // this against the build machine's sha256sum separates the two
             // before committing to a multi-minute flash.
-            if let data = try? Data(contentsOf: url) {
+            //
+            // #812: read it ONCE, into a heap buffer, and flash that same
+            // buffer (see startFlash). Two separate things were wrong with the
+            // old shape. `Data(contentsOf:)` can memory-map, so an
+            // iCloud-backed file the OS re-materializes reads back different
+            // after it was hashed — the leading hypothesis for the one
+            // unreproduced sha_mismatch, and the reason for the post-pump
+            // re-hash in OTASession step 4b. And the session then re-read the
+            // URL at flash time, so the SHA displayed here — the one the
+            // operator checks against the build machine — was never the SHA of
+            // the bytes actually sent. A second read that differed would have
+            // flashed unverified bytes with every check still green, which is
+            // the dangerous direction to be silent in.
+            //
+            // FileHandle.readToEnd() copies into memory with no mapping behind
+            // it, which is also what the Android twin has always done
+            // (contentResolver.openInputStream(uri).readBytes(), one read).
+            do {
+                let handle = try FileHandle(forReadingFrom: url)
+                defer { try? handle.close() }
+                let data = try handle.readToEnd() ?? Data()
                 pickedFileSha = Data(SHA256.hash(data: data))
                     .map { String(format: "%02x", $0) }.joined()
                 pickedFileData = data
-            } else {
+            } catch {
                 pickedFileSha = ""
                 pickedFileData = nil
             }
@@ -535,7 +557,19 @@ private struct FirmwareUpdateContent: View {
         // starts from .idle. Without this the previous .failed reason would
         // linger behind the new attempt's progress.
         if isTerminalState { session.reset() }
-        session.start(fileURL: url, targetIsFC: targetIsFC)
+        // #812: flash the bytes that were hashed at pick time, not a fresh read
+        // of the file. The SHA on screen — the one compared against the build
+        // machine before committing to a multi-minute flash — is this buffer's,
+        // and so is the EspImage verdict from revalidateImage(); re-reading the
+        // URL here would re-open the gap between what was verified and what is
+        // sent. The URL path stays for the case where the pick-time read failed
+        // outright, so a read error still reports itself through the session's
+        // own "Could not read file" state rather than silently flashing nothing.
+        if let data = pickedFileData {
+            session.start(data: data, targetIsFC: targetIsFC)
+        } else {
+            session.start(fileURL: url, targetIsFC: targetIsFC)
+        }
     }
 
     private func byteCountString(_ bytes: Int) -> String {

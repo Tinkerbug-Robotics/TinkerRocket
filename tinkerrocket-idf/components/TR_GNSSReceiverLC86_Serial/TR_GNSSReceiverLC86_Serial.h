@@ -50,13 +50,21 @@ class TR_GNSSReceiverLC86Serial
         /// Bounded work per call (the collector counts >1 ms polls).
         bool pollNewPVT(GNSSData &data);
 
-        /// Always false: this part has no per-satellite report.  The LC86G
-        /// speaks NMEA plus Quectel's PAIR/PQTM sentences, not UBX, so there
-        /// is no NAV-SAT; the NMEA equivalent (GSV for C/N0, elevation and
-        /// azimuth, GSA for the used flag) is switched OFF in begin() for the
-        /// poll budget.  Present so the collector needs no driver branch; a
-        /// mini flight log therefore carries no GNSS_SAT_MSG records.
-        bool pollNewSat(GNSSSatData &) { return false; }
+        /// Per-satellite report for the latest satellites-in-view burst
+        /// (#1032).  Harvests only — the bytes were already drained and
+        /// parsed by pollNewPVT(), which the collector calls first on the
+        /// same pass; this never touches the UART.
+        ///
+        /// This part speaks NMEA plus Quectel's PAIR/PQTM, not UBX, so there
+        /// is no NAV-SAT and GSV is the only C/N0 source.  begin() enables it
+        /// at roughly 1 Hz (a divisor of the fix rate), not at the fix rate:
+        /// the poll task's latency budget is why, and a coexistence or
+        /// interference question is answered by C/N0 trends, not by 18 Hz of
+        /// them.  So records arrive ~1/s while GNSSData arrives at the fix
+        /// rate — expect far fewer GNSS_SAT_MSG records in a mini log than in
+        /// a V9 one, and see Lc86Parser::takeSat for the fields GSV cannot
+        /// fill (flags is always 0).
+        bool pollNewSat(GNSSSatData &out);
 
     private:
 
@@ -110,6 +118,11 @@ class TR_GNSSReceiverLC86Serial
         // begin() got $PQTMCFGMSGRATE,OK for PQTMPVT. When false, nothing may
         // present as a usable fix (see the vel_d rule in the .cpp).
         bool pvt_stream_ok_ = false;
+
+        // begin() got $PAIR001 Result 0 for the GSV enable. False means the
+        // module declined and pollNewSat() stays silent for the session
+        // rather than reporting a table nothing refreshes.
+        bool sat_stream_ok_ = false;
 
         uint32_t pvt_epochs_ = 0;
 };

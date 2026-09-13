@@ -207,6 +207,12 @@ Event Lc86Parser::parseLine()
     }
 
     const char* addr = fields[0];
+
+    // GSV first: everything else closes an open burst (see finalizeGsv()).
+    const bool is_gsv = (strlen(addr) == 5 && strcmp(addr + 2, "GSV") == 0);
+    if (is_gsv) return parseGsv(addr, fields, nfields);
+    finalizeGsv();
+
     if (strcmp(addr, "PQTMPVT") == 0)        return parsePqtmPvt(fields, nfields);
     if (strcmp(addr, "PQTMEPE") == 0)        return parsePqtmEpe(fields, nfields);
     if (strcmp(addr, "PAIR001") == 0)        return parsePairAck(fields, nfields);
@@ -235,6 +241,15 @@ Event Lc86Parser::parsePqtmPvt(const char* const* f, size_t n)
     }
 
     GNSSData d = {};  // time_us stays 0 — the owner stamps MCU time
+
+    // <TOW> is GPS time of week in MILLISECONDS (the spec's own §2.3.8
+    // example reads 459596000 against a 07:39:38 UTC <Time> and <LeapS> 18 —
+    // 459578 s of UTC week plus the 18 s offset, x1000).  Kept only as the
+    // pairing key for the per-satellite record; GNSSData carries no iTOW.
+    {
+        const long tow = fieldLong(f[2]);
+        pvt_tow_ms_ = (tow > 0) ? (uint32_t)tow : 0;
+    }
 
     const long date = fieldLong(f[3]);  // YYYYMMDD
     d.year  = (uint16_t)(date / 10000);
@@ -344,6 +359,139 @@ Event Lc86Parser::parseQtmCfgMsgRate(const char* const* f, size_t n)
         return Event::QTM_ERROR;
     }
     return Event::OTHER_VALID;
+}
+
+// ── Satellites in view ($--GSV) ─────────────────────────────────────────
+// The only C/N0 source on this part.  See takeSat() in the header for what
+// the resulting record does and does not carry.
+
+// Talker ID → UBX gnssId, so a mini record is directly comparable to a V9's
+// NAV-SAT one.  255 = a talker this table does not know; the entry is still
+// recorded rather than dropped, because its C/N0 is real either way.
+static uint8_t gnssIdFromTalker(const char* addr)
+{
+    if (addr[0] == 'G' && addr[1] == 'P') return 0;  // GPS (and SBAS, see below)
+    if (addr[0] == 'G' && addr[1] == 'A') return 2;  // Galileo
+    if (addr[0] == 'G' && addr[1] == 'B') return 3;  // BeiDou
+    if (addr[0] == 'B' && addr[1] == 'D') return 3;  // BeiDou, pre-4.10 talker
+    if (addr[0] == 'G' && addr[1] == 'Q') return 5;  // QZSS
+    if (addr[0] == 'G' && addr[1] == 'L') return 6;  // GLONASS
+    if (addr[0] == 'G' && addr[1] == 'I') return 7;  // NavIC
+    return 255;
+}
+
+// NMEA hands out one flat PRN space; fold the blocks it reserves back into
+// each constellation's own numbering so sv_id means the same thing here as in
+// a u-blox record.  Anything outside a known block passes through unchanged.
+// `gnss_id` is in/out: the SBAS block re-homes a GP entry onto gnssId 1.
+static uint8_t svIdFromPrn(uint8_t& gnss_id, long prn)
+{
+    if (gnss_id == 0 && prn >= 33 && prn <= 64)    // SBAS rides the GP talker
+    {
+        gnss_id = 1;
+        return (uint8_t)(prn + 87);                // 33..64 → 120..151
+    }
+    if (gnss_id == 6 && prn >= 65 && prn <= 96)  return (uint8_t)(prn - 64);   // GLONASS slot
+    if (gnss_id == 3 && prn >= 201 && prn <= 237) return (uint8_t)(prn - 200); // BeiDou
+    if (gnss_id == 5 && prn >= 193 && prn <= 202) return (uint8_t)(prn - 192); // QZSS
+    return (uint8_t)((prn > 0 && prn < 256) ? prn : 0);
+}
+
+void Lc86Parser::dropTalker(uint8_t gnss_id)
+{
+    uint8_t keep = 0;
+    for (uint8_t i = 0; i < build_n_; i++)
+    {
+        if (build_[i].gnss_id != gnss_id) build_[keep++] = build_[i];
+    }
+    build_n_ = keep;
+}
+
+void Lc86Parser::finalizeGsv()
+{
+    if (!gsv_active_) return;
+    gsv_active_ = false;
+    if (build_n_ == 0) return;
+
+    GNSSSatData out = {};
+    out.itow_ms = pvt_tow_ms_;   // time_us is the owner's to stamp
+    gnssSatSelect(build_, build_n_, out);
+    sat_ = out;
+    sat_ready_ = true;
+    build_n_ = 0;
+}
+
+bool Lc86Parser::takeSat(GNSSSatData& out)
+{
+    if (!sat_ready_) return false;
+    out = sat_;
+    sat_ready_ = false;
+    return true;
+}
+
+Event Lc86Parser::parseGsv(const char* addr, const char* const* f, size_t n)
+{
+    // $--GSV,<NumMsg>,<MsgNum>,<NumSV>,{<SV>,<Elev>,<Azim>,<CNO>} x0..4
+    //        [,<SignalID>]*hh          (NMEA 0183; SignalID is 4.10 and up)
+    if (n < 4)
+    {
+        bad_lines_++;
+        return Event::BAD;
+    }
+    const long num_msg = fieldLong(f[1]);
+    const long msg_num = fieldLong(f[2]);
+    if (num_msg < 1 || msg_num < 1 || msg_num > num_msg)
+    {
+        bad_lines_++;
+        return Event::BAD;
+    }
+
+    const uint8_t talker_id = gnssIdFromTalker(addr);
+
+    // MsgNum 1 restarts THIS constellation's set. Without it a satellite that
+    // has set would linger in the table for as long as the receiver runs,
+    // because nothing else ever removes an entry.
+    if (msg_num == 1)
+    {
+        dropTalker(talker_id);
+        if (talker_id == 0) dropTalker(1);  // SBAS rode in on the same talker
+    }
+
+    // Four satellites per sentence, four fields each, from f[4]. The guard
+    // stops one field short of the end, so a trailing <SignalID> can never be
+    // mistaken for the start of a fifth block.
+    for (size_t base = 4; base + 3 < n; base += 4)
+    {
+        const long prn = fieldLong(f[base]);
+        if (prn <= 0) continue;              // padding on a short last sentence
+
+        if (build_n_ >= kMaxSatBuild)
+        {
+            gsv_overflows_++;
+            break;
+        }
+
+        uint8_t gid = talker_id;
+        GNSSSatBlock& b = build_[build_n_];
+        b.sv_id    = svIdFromPrn(gid, prn);
+        b.gnss_id  = gid;
+        // Elevation is 0..90 unsigned in GSV; an empty field (searching) is
+        // indistinguishable from the horizon and lands as 0.
+        const long elev = fieldLong(f[base + 1]);
+        b.elev_deg = (int8_t)((elev < -90) ? -90 : ((elev > 90) ? 90 : elev));
+        long az = fieldLong(f[base + 2]);
+        while (az < 0)    az += 360;
+        while (az >= 360) az -= 360;
+        b.azim_2deg = (uint8_t)(az / 2);
+        const long cno = fieldLong(f[base + 3]);
+        b.cno_dbhz = (uint8_t)((cno < 0) ? 0 : ((cno > 255) ? 255 : cno));
+        b.flags    = 0;                      // GSV reports none of them
+        build_n_++;
+    }
+
+    gsv_sentences_++;
+    gsv_active_ = true;
+    return Event::GSV;
 }
 
 Event Lc86Parser::parseGga(const char* const* f, size_t n)

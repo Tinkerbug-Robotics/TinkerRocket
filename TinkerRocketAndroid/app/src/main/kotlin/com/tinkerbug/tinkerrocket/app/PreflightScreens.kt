@@ -437,6 +437,11 @@ fun PreflightRunScreen(
                         )
                     }
                     if (progress.isComplete) {
+                        // Decorative, and #1442 was wrong to label it too. It
+                        // claimed the tick "carries no text" -- but the line
+                        // directly above already reads "All N steps complete",
+                        // and only ever says that when this tick is shown. The
+                        // label made TalkBack say "complete" twice in a row.
                         Icon(Icons.Filled.CheckCircle, null, tint = tr.statusOk)
                     }
                 }
@@ -719,8 +724,9 @@ private fun PreflightItemDialog(
     )
 }
 
+// `internal` for the module's Compose tests (#624) -- see DeviceRow.
 @Composable
-private fun PreflightManualRunRow(
+internal fun PreflightManualRunRow(
     item: PreflightItem,
     checked: Boolean,
     onToggle: (Boolean) -> Unit,
@@ -735,7 +741,9 @@ private fun PreflightManualRunRow(
     ) {
         Icon(
             if (checked) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
-            contentDescription = null,
+            // #624: the tick is the whole answer on a checklist row. The text
+            // beside it names the item, never whether it is done.
+            contentDescription = if (checked) "Checked" else "Not checked",
             tint = if (checked) tr.statusOk else MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Column(Modifier.padding(start = 10.dp).weight(1f)) {
@@ -756,21 +764,24 @@ private fun PreflightManualRunRow(
     }
 }
 
+// `internal` for the module's Compose tests (#624) -- see DeviceRow.
 @Composable
-private fun PreflightAutoRunRow(item: PreflightItem, status: PreflightAutoStatus) {
+internal fun PreflightAutoRunRow(item: PreflightItem, status: PreflightAutoStatus) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Row(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         when (status) {
+            // #624: state, not decoration. Pending and not-applicable print a
+            // reason underneath; nothing anywhere says "satisfied" in words.
             is PreflightAutoStatus.Satisfied ->
-                Icon(Icons.Filled.CheckCircle, null, tint = tr.statusOk)
+                Icon(Icons.Filled.CheckCircle, "Satisfied", tint = tr.statusOk)
             is PreflightAutoStatus.Pending ->
-                Icon(Icons.Outlined.Circle, null, tint = tr.statusWarn)
+                Icon(Icons.Outlined.Circle, "Pending", tint = tr.statusWarn)
             is PreflightAutoStatus.NotApplicable ->
                 Icon(
-                    Icons.Filled.RemoveCircleOutline, null,
+                    Icons.Filled.RemoveCircleOutline, "Not applicable",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
         }

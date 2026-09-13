@@ -68,6 +68,39 @@ Wire bytes are not enough. The hand-ported twin logic (guidance-send verdicts, f
 - `docs/protocol-change-checklist.md`: the ordered touch sequence (header → gtest pins → firmware dispatches/JSON builder → regen fixtures → iOS → Android → checker → `Data_Analysis/*.py` sweep → bench), plus a change-type → surface matrix. `tools/preflight_protocol.sh` runs checker + cpp tests + both apps' unit tests locally.
 - New `.github/workflows/android-tests.yml`: JVM-only (`:core:protocol` + `:core:session` tests, lint, assemble) on `ubuntu-latest`, triggered by `TinkerRocketAndroid/**` AND `tests_cpp/fixtures/wire/**`. No emulator job. `ios-tests.yml` gains the fixtures path; `wire-codes.yml` gains the Kotlin paths. Release CI signs and attaches the APK on tag push (keystore in repo secrets, **offline backup of the keystore is part of Phase 0 exit**).
 
+#### `:app` Compose UI tests (added 2026-09-12, #624)
+
+The "no emulator job" rule above left a hole: for the whole of v1.0 nothing in
+`:app` was covered by CI at all. `:core:ble`'s only tests are instrumented ones
+that need the bench hardware, so a UI change could be proven by nothing but
+reading it. #1442 ran into that directly and shipped an accessibility fix it
+could not exercise.
+
+Compose UI tests now run **on the JVM under Robolectric, in `app/src/test/`**,
+inside the existing `./gradlew test` — no emulator, no new CI job, whole suite
+in seconds. Four things make that work, each commented where it lives:
+
+| Where | What |
+|---|---|
+| `app/build.gradle.kts` | `testOptions.unitTests.isIncludeAndroidResources = true`; JUnit **4** deps (Compose's harness and Robolectric are both JUnit 4, so no `useJUnitPlatform()` here); `ui-test-manifest` on `debugImplementation` for the `ComponentActivity` that `createComposeRule()` needs |
+| `app/build.gradle.kts` | `--add-opens` for four `java.base` packages. Robolectric reaches into JDK internals; emulating SDK 36 walks `ApplicationSharedMemory.create`, which without these dies on the first test |
+| `app/build.gradle.kts` | `testReleaseUnitTest` disabled. It would run the suite a second time for nothing, and fail anyway — `ui-test-manifest` is debug-only |
+| `app/src/test/resources/robolectric.properties` | `application=android.app.Application`. The real `TinkerRocketApp.onCreate` builds `AppContainer`, which calls `MapLibre.getInstance()` — JNI with no JVM build, so every test would die in setup |
+
+Composables under test are `internal` rather than `private`; Kotlin `internal`
+reaches the test source set and nothing outside the module.
+
+It earned itself immediately. On its first run `StatusIconLabelTest` caught
+**two** wrong `contentDescription`s that #1442 had added on the reasoning that
+the row carried no other words — the scanner's device-type glyph (the row
+prints "Rocket"/"Base Station" on its own line) and the preflight complete tick
+(the line above it reads "All N steps complete"). Both made TalkBack announce
+the same fact twice, the exact fault #1442 cited for leaving 44 other icons
+silent. Both are `null` again, and the suite pins the rule in both directions.
+
+Caveat: Robolectric fetches its `android-all` runtime jar from Maven on first
+use, so the suite needs network on a cold CI cache.
+
 ---
 
 ## 3. Architecture notes (what makes the port correct, not just present)

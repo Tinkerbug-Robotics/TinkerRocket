@@ -1024,9 +1024,12 @@ private fun SyncStateLine(state: com.tinkerbug.tinkerrocket.session.ActiveRocket
 
 /**
  * The one deliberately shared literal, not a token: iOS hardcodes this exact
- * hex as `litGreen` (DashboardView.swift:1688) so both dashboards' lit flag
- * chips read alike, and docs/design-language.md:58 settles it.  Retiring it is
- * a paired iOS+Android change, never a unilateral Android one.
+ * hex as `FlightEventFlagsView.litGreen` (DashboardView.swift) so both
+ * dashboards' lit flag chips read alike, and docs/design-language.md:58
+ * settles it.  Retiring it is a paired iOS+Android change, never a unilateral
+ * Android one.  Cited by symbol, not by line: the old ":1688" had drifted to
+ * 2247, and a cross-reference nobody can follow is how the parity ledger came
+ * to claim iOS was still missing these chips (#624).
  */
 private val LIT_GREEN = Color(0xFF2E7D32)
 

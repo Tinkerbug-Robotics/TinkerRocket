@@ -53,10 +53,20 @@ import kotlinx.coroutines.launch
  */
 
 // iOS NetworkCopy — keep these strings in lockstep with DeviceTypeIcon.swift.
-private const val SAME_NETWORK_EXPLAINER =
-    "Devices only hear each other on the same network ID."
-private const val DEVICE_MISMATCH_WARNING =
-    "This device is on a different network ID than the app expects — it can't hear your other devices."
+//
+// `internal`, and named after the iOS type, because the Settings screen says
+// the same two things now (#624): the mismatch is fixable in place while
+// connected, and the #150 copy discipline is that one condition is described
+// in one set of words. Two private copies is exactly how that drifts.
+internal object NetworkCopy {
+    const val SAME_NETWORK_EXPLAINER: String =
+        "Devices only hear each other on the same network ID."
+    const val DEVICE_MISMATCH_WARNING: String =
+        "This device is on a different network ID than the app expects — it can't hear your other devices."
+}
+
+private const val SAME_NETWORK_EXPLAINER = NetworkCopy.SAME_NETWORK_EXPLAINER
+private const val DEVICE_MISMATCH_WARNING = NetworkCopy.DEVICE_MISMATCH_WARNING
 
 @Composable
 fun DeviceManagerScreen(

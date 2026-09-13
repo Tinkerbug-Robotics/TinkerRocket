@@ -119,6 +119,16 @@ static_assert(board_pins::USE_IIS2MDC &&
 #if !defined(TR_MAG_DRIVER_QMC5883P) || !TR_MAG_DRIVER_QMC5883P
 #error "board_m1.h: U3 is a QMC5883P — an M1 build needs TR_MAG_DRIVER_QMC5883P=1 (flight_computer/CMakeLists.txt sets it under TR_BOARD_M1; #1312)"
 #endif
+// U5 is a Quectel LC86G, and it is OURS — GNSS_RX/GNSS_TX land on this
+// processor.  Same seam, same trap as the magnetometer above: the receiver
+// driver is a build-time choice (TR_Sensor_Collector's TR_GNSS_DRIVER_LC86)
+// and an M1 image built without it speaks UBX at a module that answers only
+// NMEA and Quectel PAIR/PQTM.  Nothing would ACK, begin() would return false,
+// and the board would fly in the GNSS-absent degraded mode (#557) looking
+// exactly like a dead receiver.  Refuse to build it.
+#if !defined(TR_GNSS_DRIVER_LC86) || !TR_GNSS_DRIVER_LC86
+#error "board_m1.h: U5 is a Quectel LC86G — an M1 build needs TR_GNSS_DRIVER_LC86=1 (flight_computer/CMakeLists.txt sets it under TR_BOARD_M1; #1032)"
+#endif
 #endif
 
 struct config : board_pins

@@ -2189,6 +2189,14 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.longitude = lon_deg;
     out.gdop = lora.pdop;
     out.num_sats = (int)lora.num_sats;
+    // #552: the relayed rocket's horizontal accuracy. hacc_u8 has been on the
+    // LoRa fast frame all along next to num_sats; it just stopped here.
+    {
+        const float ha = lora.horizontal_accuracy;
+        out.gnss_h_acc_m = (!(ha >= 0.0f)) ? 255u
+                         : (ha > 254.0f)   ? 254u
+                                           : (uint8_t)(ha + 0.5f);
+    }
 
     // Sensor health scorecard bitfield (#303) — relayed straight from the
     // FC/OC LoRa downlink; iOS unpacks the 2-bit-per-sensor states.
@@ -6008,6 +6016,18 @@ static void loop_bs()
                 startCoordinatedScan(start_mhz, stop_mhz, step_khz, dwell_ms);
             }
         }
+    }
+    // #1422: the mirror of the rocket-side gap — a rocket command sent to a
+    // base station was acknowledged and dropped in silence. One chain here, so
+    // one terminal else does it; the `!= 0` is load-bearing, because unlike the
+    // rocket dispatchers this chain is not wrapped in a "command present" guard
+    // and runs on every loop pass. (OTA, 70-72, never reaches it: TR_BLE_To_APP
+    // handles those in place and returns without queueing.)
+    else if (ble_cmd != 0)
+    {
+        ESP_LOGW(TAG, "[BLE] cmd=%u has no handler on this device — DROPPED "
+                 "(rocket commands sent to a base station land here)",
+                 (unsigned)ble_cmd);
     }
 
     // ==========================================================================

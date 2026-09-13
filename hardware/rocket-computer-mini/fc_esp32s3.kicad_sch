@@ -3409,7 +3409,7 @@
 			(embedded_fonts no)
 		)
 	)
-	(text "Strapping Pins:\nGPIO 0  (internal pull up)\nGPIO 3  (JTAG selection)\nGPIO 45 (internal pull down)\nGPIO 46 (pull down at boot)\n"
+	(text "Strapping Pins:\nGPIO 0  (internal pull up) - boot button SW2\nGPIO 3  (JTAG selection) - carries VBUCK_OK, held at\n        0.78 x V_BUCK by R137/R138\nGPIO 45 (internal pull down) - drives IND_2 (D11, blue)\n        through R71 10 k to GND, so it cannot lift the strap\nGPIO 46 (pull down at boot) - R111 10 k to GND\n\nUART0 is repurposed: GPIO43 drives IND_1 (D10, red) and\nGPIO44 carries FC_ARM. The console is the USB Serial/JTAG\non GPIO19/20.\n"
 		(exclude_from_sim no)
 		(at 214.63 123.825 0)
 		(effects

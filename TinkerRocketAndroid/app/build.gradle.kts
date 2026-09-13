@@ -128,6 +128,27 @@ android {
         }
     }
 
+    // #624: Compose UI tests run on the JVM under Robolectric, in `src/test`,
+    // NOT as instrumented tests in `src/androidTest`.
+    //
+    // The reason is that they have to run in CI, and CI has no emulator:
+    // android-tests.yml is `./gradlew test` on a plain ubuntu runner. An
+    // instrumented suite would need an emulator step, which is slow and
+    // famously flaky, and until someone adds one the tests would run only on
+    // whatever phone happened to be on a desk. That is the situation this
+    // module was already in -- `:core:ble` has instrumented tests that need
+    // the bench hardware, so in practice nothing about `:app` was verified by
+    // CI at all, and a four-line accessibility change on #1442 could not be
+    // proven without a connected rocket.
+    //
+    // Robolectric needs the merged manifest and the resource table, which is
+    // what this flag hands it.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+
     sourceSets {
         getByName("main") {
             // Demo mode serves the emitter-generated synthetic flight as a
@@ -173,4 +194,49 @@ dependencies {
     // every resolved path; release-only lintVital fails the build without it
     // (InvalidFragmentVersionForActivityResult).
     implementation("androidx.fragment:fragment:1.8.5")
+
+    // ---- #624: Compose UI tests on the JVM (see `testOptions` above) ----
+    //
+    // JUnit 4, not 5, and deliberately: the Compose test harness and
+    // Robolectric are both JUnit 4 `TestRule`/`Runner` machinery, so the
+    // `:core:*` modules' `useJUnitPlatform()` is not applied here. The
+    // repo's own `tools/check_android_tests_ran.py` guard counts `@Test`
+    // annotations against JUnit XML cases and is engine-agnostic, so it
+    // covers this module exactly as it covers the others.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.test:core-ktx:1.6.1")
+    testImplementation("androidx.test.ext:junit-ktx:1.2.1")
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+
+    // Supplies the `ComponentActivity` entry that `createComposeRule()` needs
+    // in the merged manifest. It is a debug-only artifact and must never ship
+    // in a release build, which is why the release unit-test variant is turned
+    // off below rather than this being promoted to `implementation`.
+    debugImplementation(composeBom)
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// #624: `./gradlew test` would otherwise run this module's suite twice, once
+// per build type. The release run would also fail outright -- `ui-test-manifest`
+// is debug-only, so `createComposeRule()` finds no ComponentActivity in the
+// release manifest. Debug and release differ here only in signing and the
+// applicationId suffix, neither of which any UI test observes, so the second
+// run costs emulated-Android startup twice over and proves nothing.
+tasks.matching { it.name == "testReleaseUnitTest" }.configureEach { enabled = false }
+
+// #624: Robolectric reaches into JDK internals that have been closed to the
+// unnamed module since JDK 9, and on JDK 21 the reflection simply throws.
+// Emulating SDK 36 walks `ApplicationSharedMemory.create`, which needs the
+// raw FileDescriptor interceptor, so without these the very first test dies
+// with "Failed to interact with raw FileDescriptor internals". These are
+// Robolectric's own documented arguments, not a local workaround.
+tasks.withType<Test>().configureEach {
+    jvmArgs(
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/java.io=ALL-UNNAMED",
+        "--add-opens=java.base/java.util=ALL-UNNAMED",
+        "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED",
+    )
 }

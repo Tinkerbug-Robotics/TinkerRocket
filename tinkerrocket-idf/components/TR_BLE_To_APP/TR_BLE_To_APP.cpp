@@ -2052,6 +2052,12 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addDouble("lat", data.latitude, 5);
     addDouble("lon", data.longitude, 5);
     addInt("nsat", data.num_sats);
+    // #552: horizontal accuracy, metres. Omitted when not reported (255), so
+    // a board whose receiver has no equivalent costs nothing and the app can
+    // tell "no value" from "a good value". Already travels on the LoRa frame
+    // as hacc_u8 — this is the BLE half that was missing, so the app never
+    // saw it on either link type.
+    if (data.gnss_h_acc_m != 255) { addInt("hacc", (int)data.gnss_h_acc_m); }
 
     // Altitude / vertical rate — apogee tracking, recovery-critical.
     addFloat("palt", data.pressure_alt, 1);

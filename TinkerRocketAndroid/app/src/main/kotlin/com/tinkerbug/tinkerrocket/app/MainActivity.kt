@@ -305,6 +305,11 @@ class MainActivity : ComponentActivity() {
                                         fleetScope = container.fleetScope,
                                         session = activeDevice.session,
                                         preflight = container.preflightStore,
+                                        // #624: lets the Network section fix a
+                                        // drifted device ID without first
+                                        // disconnecting to reach My Devices.
+                                        network = container.networkStore,
+                                        knownDevices = container.knownDevices,
                                     )
                                 }
                             }

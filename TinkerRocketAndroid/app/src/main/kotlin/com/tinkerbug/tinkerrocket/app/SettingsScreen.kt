@@ -54,6 +54,7 @@ import com.tinkerbug.tinkerrocket.app.theme.TrPyroContinuityBadge
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
+import com.tinkerbug.tinkerrocket.session.LoraAutoApply
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.CalAdvisory
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.ConfigGroup
@@ -88,6 +89,12 @@ fun SettingsScreen(
     fleetScope: CoroutineScope,
     session: DeviceSession? = null,
     preflight: com.tinkerbug.tinkerrocket.session.PreflightStore? = null,
+    // #624: the network identity pair, so a device whose network ID has
+    // drifted can be fixed HERE rather than only in Device Manager, which
+    // cannot be opened while connected. Nullable so existing call sites and
+    // tests compile unchanged; the section simply does not render without them.
+    network: AppNetworkStore? = null,
+    knownDevices: com.tinkerbug.tinkerrocket.session.KnownDeviceStore? = null,
 ) {
     val profiles by store.profiles.collectAsState()
     val activeId by store.activeId.collectAsState()
@@ -346,6 +353,20 @@ fun SettingsScreen(
                     SummaryRow("Sensor cal", if (active.sensorCal == null) "Not saved" else "Saved")
                 }
             }
+
+            // #624/#150: the base station's own radio. iOS shows these three
+            // in this order after the summary (SettingsView.loRaSections), and
+            // this branch used to stop right above here -- which is the whole
+            // of what the "settings structural split" turned out to be.
+            //
+            // Base-station only on BOTH platforms, and not a style choice:
+            // rocket-side firmware rejects cmd 17 outright, and cmd 10 is the
+            // base station's transactional relay-and-verify path (#71).
+            LoraSections(session)
+            if (network != null && knownDevices != null) {
+                NetworkSection(session, network, knownDevices)
+            }
+
             return@Column
         }
 
@@ -403,6 +424,15 @@ fun SettingsScreen(
                             "where you would rather not transmit)."
                 },
             )
+        }
+
+        // #624: iOS carries the Network section on the rocket General tab as
+        // well as in the base-station branch, and for the same reason on both:
+        // a drifted network ID is noticed while connected and must be fixable
+        // there. Android's rocket branch is one scroll rather than tabs, so it
+        // sits where the General tab's content ends.
+        if (session != null && network != null && knownDevices != null) {
+            NetworkSection(session, network, knownDevices)
         }
 
         // ── IMU Mounting (iOS General-tab section; raw-int field replaced
@@ -1115,6 +1145,214 @@ private fun SummaryRow(label: String, value: String) {
         )
     }
 }
+
+/**
+ * #624/#150: the base station's radio — link mode, the frequency it settled
+ * on, and TX power. iOS twin: `SettingsView.loRaSections`.
+ *
+ * Everything here is DEVICE state (base-station NVS), never a profile field,
+ * so it is read from the config readback and written straight to the session.
+ *
+ * Both writes are refused rather than silently dropped when the link cannot
+ * carry them, and the reason is printed under the control instead of greying
+ * it in silence: a dead control with no explanation is what makes an operator
+ * think the app is broken, and here the fix is usually "switch the rocket on".
+ */
+@Composable
+internal fun LoraSections(session: DeviceSession) {
+    val config by session.rocketConfig.collectAsState()
+    val connected by session.isConnected.collectAsState()
+    val rockets by session.remoteRockets.collectAsState()
+
+    // Recomputed whenever any input to the decision changes. The beacon age is
+    // a clock read, so this is also refreshed by the readback and roster
+    // updates that arrive at ~1 Hz on a live link -- fresh enough that the
+    // footer does not sit on a stale reason.
+    val refusal = remember(config, connected, rockets) { session.loraApplyRefusal() }
+    val hoppingAvailable = LoraAutoApply.hoppingAvailable(config)
+
+    // Local echo for the picker. The readback is the truth, but it lands a
+    // beat after the write, so hydrating from it unconditionally would snap
+    // the control back under the user's finger. iOS holds hydration for 3 s
+    // after a tap for exactly this; the same trick, expressed as "ignore the
+    // readback until it agrees with what we asked for, or the hold expires".
+    var hopping by remember { mutableStateOf(config?.loraHopDisabled == false) }
+    var touchedAtMs by remember { mutableStateOf(0L) }
+    LaunchedEffect(config?.loraHopDisabled) {
+        val reported = config?.loraHopDisabled ?: return@LaunchedEffect
+        if (System.currentTimeMillis() - touchedAtMs > LINK_MODE_HOLD_MS) hopping = !reported
+    }
+
+    Section("Link Mode") {
+        SegmentedPicker(
+            options = listOf("Fixed Channel", "Frequency Hopping"),
+            selected = if (hopping) 1 else 0,
+        ) { idx ->
+            val wantHopping = idx == 1
+            // Refuse before echoing: an optimistic flip that the session then
+            // declines to send would leave the picker asserting a mode the
+            // link is not in.
+            if (session.sendLoraHopDisabled(!wantHopping)) {
+                touchedAtMs = System.currentTimeMillis()
+                hopping = wantHopping
+            }
+        }
+        Caption(
+            when {
+                refusal != null -> refusal.message
+                !hoppingAvailable && !hopping ->
+                    "Hopping needs a shorter airtime than this modulation allows, so the " +
+                        "firmware would refuse it. Widen the bandwidth or lower the " +
+                        "spreading factor first."
+                hopping ->
+                    "The rocket owns the hop sequence and the base station follows it. " +
+                        "Noisy channels are skipped via the scan mask."
+                else ->
+                    "Both ends stay on one channel for the whole flight. This is the default."
+            }
+        )
+    }
+
+    Section("LoRa Frequency") {
+        // Read-only, as on iOS. The write path is a transaction across both
+        // ends and belongs with the scan that chooses the channel, not with a
+        // free-text field -- see the Frequency Scan tool.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Current")
+            Text(
+                config?.loraFreqMHz?.let { String.format("%.2f MHz", it) } ?: "—",
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Caption(
+            "Both devices meet on the factory channel at boot. Both should report " +
+                "the same frequency.",
+        )
+    }
+
+    Section("LoRa TX Power") {
+        val reported = config?.loraTxPower
+        var power by remember(reported) { mutableStateOf(reported ?: 17) }
+        // Locked while hopping: cmd 10 carries the modulation, and the
+        // firmware refuses to retune mid-hop.
+        val locked = refusal != null || hopping
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Power")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = { if (power > TX_POWER_MIN_DBM) power-- },
+                    enabled = !locked && power > TX_POWER_MIN_DBM,
+                ) { Text("−") }
+                Text(
+                    "$power dBm",
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(
+                    onClick = { if (power < TX_POWER_MAX_DBM) power++ },
+                    enabled = !locked && power < TX_POWER_MAX_DBM,
+                ) { Text("+") }
+            }
+        }
+        // Applied on an explicit tap rather than on every step. iOS debounces
+        // a Stepper by 0.5 s; a debounce here would mean a coroutine per tap
+        // racing the readback, and an operator changing transmit power on a
+        // live link is better served by seeing the value first and committing
+        // it deliberately.
+        TextButton(
+            onClick = { session.autoApplyTxPower(power) },
+            enabled = !locked && power != reported,
+        ) { Text(if (power == reported) "Applied" else "Apply $power dBm") }
+        Caption(
+            when {
+                refusal != null -> refusal.message
+                hopping -> "Transmit power is fixed while hopping."
+                else ->
+                    "The base station relays the change to the rocket, switches, and " +
+                        "rolls back if the rocket does not answer on the new power."
+            }
+        )
+    }
+}
+
+/**
+ * #624: the connected device's network ID against the app's, and a one-tap fix
+ * when they disagree. iOS twin: `SettingsView.networkSection`.
+ *
+ * Android detected nid drift only in Device Manager, which cannot be opened
+ * while connected — so the one moment the operator is most likely to notice
+ * ("why can't the base station hear my rocket?") was the one moment they could
+ * do nothing about it without disconnecting first. Settled 2026-09-12.
+ *
+ * The write goes through [KnownDeviceStore], not straight down the wire, for
+ * the same reason iOS routes it there: the registry is the single writer for
+ * identity edits, so the My Devices record updates now rather than waiting on
+ * the readback echo.
+ */
+@Composable
+internal fun NetworkSection(
+    session: DeviceSession,
+    network: AppNetworkStore,
+    knownDevices: com.tinkerbug.tinkerrocket.session.KnownDeviceStore,
+) {
+    val appName by network.name.collectAsState()
+    val appId by network.id.collectAsState()
+    val identity by session.identity.collectAsState()
+    val connected by session.isConnected.collectAsState()
+
+    // 0 is the unset sentinel, and an unprovisioned device is not a mismatch —
+    // it is a device nobody has told yet, which the provisioning dialog owns.
+    // Flagging it here would put a scary warning on every first connect.
+    val deviceId = identity.networkId
+    val mismatch = appId > 0 && deviceId > 0 && deviceId != appId
+
+    Section("Network") {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(appName.ifEmpty { "Not set" })
+            Text(
+                "ID: ${if (appId > 0) "$appId" else "—"}",
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("This device", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                if (deviceId > 0) "ID: $deviceId" else "ID: —",
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = if (mismatch) com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.statusWarn
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (mismatch) {
+            Text(
+                NetworkCopy.DEVICE_MISMATCH_WARNING,
+                style = MaterialTheme.typography.bodySmall,
+                color = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.statusWarn,
+            )
+            TextButton(
+                onClick = {
+                    knownDevices.setNetworkId(appId, identity.unitId, session)
+                },
+                enabled = connected && identity.unitId.isNotEmpty(),
+            ) { Text("Set device to \"$appName\" (ID $appId)") }
+        } else {
+            Caption(NetworkCopy.SAME_NETWORK_EXPLAINER)
+        }
+    }
+}
+
+/** #150: how long a link-mode tap outranks the config readback. iOS: 3.0 s. */
+private const val LINK_MODE_HOLD_MS = 3_000L
+
+/** Firmware's accepted TX-power range, matching the iOS stepper bounds. */
+private const val TX_POWER_MIN_DBM = -9
+private const val TX_POWER_MAX_DBM = 22
 
 @Composable
 private fun Section(title: String, content: @Composable () -> Unit) {

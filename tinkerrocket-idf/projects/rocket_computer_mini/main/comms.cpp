@@ -3763,6 +3763,11 @@ static void comms_loop()
     if (ble_cmd != 0)
     {
         ESP_LOGI("OC_CMD", "BLE cmd=%u", (unsigned)ble_cmd);
+        // #1422: see the out computer's copy of this. The dispatch below is two
+        // separate if/else-if statements, so each reports whether the command
+        // fell past it and the terminal else on the last one warns. No command
+        // numbers are listed here, so new branches need no update.
+        bool ble_cmd_missed_first_chain = false;
         if (ble_cmd == 1)
         {
             unsupportedBleCmd(ble_cmd, "camera toggle");
@@ -3850,6 +3855,10 @@ static void comms_loop()
                 ble_app.sendFileList(json);
                 endPhoneIO();
             }
+        }
+        else
+        {
+            ble_cmd_missed_first_chain = true;   // #1422
         }
 
         // Handle file download requests from BLE app
@@ -4639,6 +4648,17 @@ static void comms_loop()
         {
             mini_link::sendCommand(SENSOR_CAL_READ, nullptr, 0);
             ESP_LOGI("BLE", "Sensor cal READ -> flight side");
+        }
+        // #1422: past both chains. Cmd 4 (download) is excepted for the same
+        // reason as on the out computer — it is driven by getDownloadFilename()
+        // above, not by a branch. Note the mini legitimately lands here for a
+        // few out-computer-only commands it does not implement (69, 73, 74, 200),
+        // which is exactly the case this warning exists to make visible.
+        else if (ble_cmd_missed_first_chain && ble_cmd != 4)
+        {
+            ESP_LOGW("OC_CMD", "BLE cmd=%u has no handler on this device — "
+                     "DROPPED (base-station commands sent to a rocket land here)",
+                     (unsigned)ble_cmd);
         }
     }
 
