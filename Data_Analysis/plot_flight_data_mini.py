@@ -52,10 +52,17 @@ ISM6_ROT_Z_DEG    = -45.0  # sensor → board frame rotation about +Z
 # config::EKF_SHOCK_GYRO_RAIL_FRAC = EKF_SHOCK_ACCEL_RAIL_FRAC = 0.95).
 #
 # The gyro does NOT map its full scale onto the int16 span — a fixed
-# 0.035 mdps/LSB per dps of FS (#369) — so NOMINAL full scale is 28571 LSB at
-# every FS setting and the int16 rail sits at 114.7% of it.  That is why a
-# near-rail burst logs as 4492 dps against a "±4000 dps" full scale without
-# ever reaching 32767.  The accelerometers DO map FS onto the span.
+# 0.035 mdps/LSB per dps of FS (#369) — so the SPECIFIED ±4000 dps range is
+# ±28571 LSB, and the int16 word keeps going to ±32767 (114.7% of it).
+#
+# So a saturation test keyed on 32767 never fires: the 2026-08-29 bursts logged
+# 32086 and 31480 LSB on a single sensor axis (verified on the raw frames with
+# no scaling or rotation applied). Those counts are ABOVE the specified range,
+# where the part's accuracy is unspecified — which is the point. The gate trips
+# just BELOW the spec limit, at 0.95 of it, because a reading out there is not
+# a rate, it is a sensor that has stopped measuring.
+#
+# The accelerometers DO map FS onto the span, so their fraction is of 32768.
 EKF_SHOCK_RAIL_FRAC   = 0.95
 ISM6_GYRO_RAIL_LSB    = int(EKF_SHOCK_RAIL_FRAC * (1.0 / 0.035e-3))   # 27142
 ISM6_ACCEL_RAIL_LSB   = int(EKF_SHOCK_RAIL_FRAC * 32768.0)            # 31129

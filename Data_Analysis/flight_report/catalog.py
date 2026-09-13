@@ -490,7 +490,10 @@ _P(
         "sensitivity (0.14 °/s per count at ±4000 dps), not full-scale/32768.",
     caution=
         "A roll RATE, not the roll ANGLE in NonSensor.roll (a ZYX-Euler angle, #514) — never overlay "
-        "or difference the two. Does NOT rail at ±4000 dps: the ST sensitivity puts NOMINAL full scale at 28571 counts and the int16 rail at 114.7% of it, so the part reports past ±4000 and saturates near ±4587 dps (4492 dps was logged 2026-08-29).",
+        "or difference the two. The SPECIFIED range is ±4000 dps — but at the ST sensitivity that is "
+        "±28571 counts, and the int16 word does not stop there. Raw counts above ±28571 are "
+        "OUT OF SPEC, not impossible: 32086 was logged on 2026-08-29. Their accuracy is "
+        "unspecified, so treat anything past ±28571 LSB as 'not measuring', never as a rate.",
     shown_in=("roll", "roll_pid"),
 )
 _P(
@@ -500,8 +503,9 @@ _P(
         "Angular rate about body Y, roughly pitch rate. Same sensitivity and rotation chain as the "
         "other gyro axes, so X and Y are mixed by the chip rotation.",
     caution=
-        "A rate in °/s, not the NonSensor pitch angle — the two are not comparable. Saturates near "
-        "±4587 dps, NOT at the ±4000 dps nominal full scale — see gyro_x.",
+        "A rate in °/s, not the NonSensor pitch angle — the two are not comparable. The specified "
+        "range is ±4000 dps (±28571 counts); the int16 word does not saturate there, so raw "
+        "counts can exceed it and be out of spec — see gyro_x.",
     shown_in=(),
 )
 _P(
@@ -537,8 +541,9 @@ _P(
         "Angular rate about body Z, roughly yaw rate. The chip rotation is about this axis, so only "
         "the board-to-rocket quaternion moves it.",
     caution=
-        "A rate in °/s, not the NonSensor yaw/azimuth angle — do not plot them together. Saturates near "
-        "±4587 dps, NOT at the ±4000 dps nominal full scale — see gyro_x.",
+        "A rate in °/s, not the NonSensor yaw/azimuth angle — do not plot them together. The specified "
+        "range is ±4000 dps (±28571 counts); the int16 word does not saturate there, so raw "
+        "counts can exceed it and be out of spec — see gyro_x.",
     shown_in=(),
 )
 
