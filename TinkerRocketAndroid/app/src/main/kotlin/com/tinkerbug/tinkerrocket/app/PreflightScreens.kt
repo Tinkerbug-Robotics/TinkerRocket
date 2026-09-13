@@ -437,7 +437,9 @@ fun PreflightRunScreen(
                         )
                     }
                     if (progress.isComplete) {
-                        Icon(Icons.Filled.CheckCircle, null, tint = tr.statusOk)
+                        // #624: shown only when complete and carrying no text,
+                        // so its absence is the only other signal.
+                        Icon(Icons.Filled.CheckCircle, "Complete", tint = tr.statusOk)
                     }
                 }
                 LinearProgressIndicator(
@@ -735,7 +737,9 @@ private fun PreflightManualRunRow(
     ) {
         Icon(
             if (checked) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
-            contentDescription = null,
+            // #624: the tick is the whole answer on a checklist row. The text
+            // beside it names the item, never whether it is done.
+            contentDescription = if (checked) "Checked" else "Not checked",
             tint = if (checked) tr.statusOk else MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Column(Modifier.padding(start = 10.dp).weight(1f)) {
@@ -764,13 +768,15 @@ private fun PreflightAutoRunRow(item: PreflightItem, status: PreflightAutoStatus
         verticalAlignment = Alignment.CenterVertically,
     ) {
         when (status) {
+            // #624: state, not decoration. Pending and not-applicable print a
+            // reason underneath; nothing anywhere says "satisfied" in words.
             is PreflightAutoStatus.Satisfied ->
-                Icon(Icons.Filled.CheckCircle, null, tint = tr.statusOk)
+                Icon(Icons.Filled.CheckCircle, "Satisfied", tint = tr.statusOk)
             is PreflightAutoStatus.Pending ->
-                Icon(Icons.Outlined.Circle, null, tint = tr.statusWarn)
+                Icon(Icons.Outlined.Circle, "Pending", tint = tr.statusWarn)
             is PreflightAutoStatus.NotApplicable ->
                 Icon(
-                    Icons.Filled.RemoveCircleOutline, null,
+                    Icons.Filled.RemoveCircleOutline, "Not applicable",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
         }
