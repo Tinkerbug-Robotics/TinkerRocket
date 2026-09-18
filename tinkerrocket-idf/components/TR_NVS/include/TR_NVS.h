@@ -34,12 +34,30 @@ public:
             handle_ = 0;
             // A read-only open of a namespace nobody has written yet is an
             // ordinary "nothing saved" — callers seed defaults and move on.
-            // Every other failure means NVS itself is unusable.
+            //
+            // NOT_INITIALIZED is its own case: the partition and everything
+            // in it are intact, this open simply ran before nvs_flash_init()
+            // on this boot. That is a boot-order bug in the caller, and the
+            // old "settings will NOT persist" wording sent the out computer's
+            // #773 board-revision read (PR #1323) looking for a persistence
+            // failure that did not exist — the write had landed fine, the
+            // next boot's read just sat two hundred lines above its own init.
+            //
+            // Every other failure means NVS itself is unusable, and a failed
+            // read-only open loses the stored value (defaults apply), which
+            // is not the same thing as a write that will not persist.
             if (readOnly && err == ESP_ERR_NVS_NOT_FOUND)
                 ESP_LOGD(TAG_, "namespace '%s' not present yet", ns);
+            else if (err == ESP_ERR_NVS_NOT_INITIALIZED)
+                ESP_LOGE(TAG_, "open('%s') failed: %s — this %s ran before "
+                               "nvs_flash_init() on this boot (a boot-order "
+                               "bug; the stored data is intact)",
+                         ns, esp_err_to_name(err), readOnly ? "read" : "write");
             else
-                ESP_LOGE(TAG_, "open('%s') failed: %s — settings will NOT persist",
-                         ns, esp_err_to_name(err));
+                ESP_LOGE(TAG_, "open('%s') failed: %s — %s",
+                         ns, esp_err_to_name(err),
+                         readOnly ? "stored settings cannot be read, defaults apply"
+                                  : "settings will NOT persist");
         }
         return opened_;
     }
