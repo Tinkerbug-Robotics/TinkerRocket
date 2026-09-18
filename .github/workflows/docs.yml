@@ -55,6 +55,18 @@ jobs:
       - name: Check the boot-NOR declarations against the partition tables
         run: python3 tinkerrocket-idf/tools/check_flash_declarations.py
 
+      # #773 / PR #1323. The out computer read its provisioned board revision
+      # at the top of setup_oc(), two hundred lines above its own
+      # nvs_flash_init() -- which is late on purpose, behind the #825 rail
+      # race. The open failed with ESP_ERR_NVS_NOT_INITIALIZED on every boot
+      # and a provisioned board reported "unprovisioned" forever; the base
+      # station shipped the same shape in #500. No host test can compile a
+      # boot function and the wrapper only logs, but a static check can see
+      # a default-partition open sitting ahead of the init in the same body.
+      - name: Check no NVS open precedes nvs_flash_init() in a boot function
+        if: '!cancelled()'
+        run: python3 tinkerrocket-idf/tools/check_nvs_boot_order.py
+
       # Runs even if a generator check above failed, so one PR surfaces every
       # documentation problem at once instead of one per push.
       - name: Check the prose agrees with the source

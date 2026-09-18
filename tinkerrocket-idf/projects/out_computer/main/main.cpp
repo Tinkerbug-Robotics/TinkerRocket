@@ -9416,25 +9416,6 @@ static void initI2CSlave()
 // ==========================================================================
 static void setup_oc()
 {
-    // #773 step 2: what this BOARD says it is, before anything else uses it.
-    // Written once by BLE cmd 74 and untouched by an OTA, so it survives a
-    // reflash — unlike the image's own version string, which a wrong flash
-    // gets wrong forever. Absent means unprovisioned, reported as its own
-    // state rather than guessed at.
-    {
-        prefs.begin("board", true);
-        char raw[32] = {0};
-        if (prefs.isKey("rev"))
-        {
-            const size_t n = prefs.getBytes("rev", raw, sizeof(raw) - 1);
-            raw[(n < sizeof(raw) - 1) ? n : sizeof(raw) - 1] = '\0';
-        }
-        prefs.end();
-        board_identity::normalizeRev(raw, oc_board_rev, sizeof(oc_board_rev));
-        ESP_LOGI("OC", "#773: out computer board = %s",
-                 oc_board_rev[0] ? oc_board_rev : "unprovisioned");
-    }
-
     // #1168: BEFORE anything that can raise PWR_PIN — the #825 block below
     // does exactly that — withdraw arm consent.
     //
@@ -9624,12 +9605,52 @@ static void setup_oc()
         }
     }
 
-    // Ensure NVS is initialised (ESP-IDF on ESP32-P4/S3 may not auto-init)
+    // Ensure NVS is initialised (ESP-IDF on ESP32-P4/S3 may not auto-init).
+    // This is the DEFAULT partition's init, and it is deliberately this late:
+    // everything above it is the #825/#1176 rail decision, which must not grow
+    // a millisecond, and the flight-token partition up there has its own init
+    // that does nothing for this one. Nothing that opens the default partition
+    // may run before this line — see the #773 block below for what happens.
     esp_err_t nvs_err = nvs_flash_init();
     if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
         nvs_flash_erase();
         nvs_err = nvs_flash_init();
+    }
+    if (nvs_err != ESP_OK)
+    {
+        ESP_LOGE("OC", "NVS init failed: %s — settings will NOT persist and the "
+                       "#773 board revision reads as unprovisioned",
+                 esp_err_to_name(nvs_err));
+    }
+
+    // #773 step 2: what this BOARD says it is. Written once by BLE cmd 74 and
+    // untouched by an OTA, so it survives a reflash — unlike the image's own
+    // version string, which a wrong flash gets wrong forever. Absent means
+    // unprovisioned, reported as its own state rather than guessed at.
+    //
+    // HERE, directly after nvs_flash_init(), and not at the top of setup_oc()
+    // where PR #1323 first put it "before anything else uses it". The `board`
+    // namespace lives in the default partition, whose init sits behind the
+    // #825 rail race by design. Read ahead of it, the open failed with
+    // ESP_ERR_NVS_NOT_INITIALIZED on every boot: cmd 74's write landed (NVS
+    // was up by then) but the next boot read too early again, so the board
+    // reported "unprovisioned" forever and the reflash protection this value
+    // exists for was inert (V9 bench, 2026-09-18). Nothing in setup_oc()
+    // consumes oc_board_rev — its readers are sendFcIdentity() on a BLE
+    // connect and cmd 74 itself, both later — so nothing needs it earlier.
+    {
+        prefs.begin("board", true);
+        char raw[32] = {0};
+        if (prefs.isKey("rev"))
+        {
+            const size_t n = prefs.getBytes("rev", raw, sizeof(raw) - 1);
+            raw[(n < sizeof(raw) - 1) ? n : sizeof(raw) - 1] = '\0';
+        }
+        prefs.end();
+        board_identity::normalizeRev(raw, oc_board_rev, sizeof(oc_board_rev));
+        ESP_LOGI("OC", "#773: out computer board = %s",
+                 oc_board_rev[0] ? oc_board_rev : "unprovisioned");
     }
 
     delay(500);
