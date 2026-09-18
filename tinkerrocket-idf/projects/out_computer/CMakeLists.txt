@@ -75,10 +75,17 @@ add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
 
 # Board revision has to reach sdkconfig, not just the compiler (#822): V9/V10
 # enables the S3RH2's in-package PSRAM and V7/V8 must NOT, because those boards
-# have no PSRAM part and would spend every boot failing to find one. Since
-# 2026-08-24 the overlay also carries the boot NOR size, which is the more
-# dangerous of the two: V7/V8 fit an 8 MB W25Q64 (measured) and a 16 MB
-# declaration boot-loops them in the bootloader, before any firmware runs.
+# have no PSRAM part and would spend every boot failing to find one. PSRAM is
+# all the overlay sets. From 2026-08-24 until #916 it also raised the boot NOR
+# declaration to 16 MB for the GD25Q128 V9/V10 carry; since the owner's
+# 2026-09-09 decision every project declares the smallest standard size that
+# fits its OWN partition table, not the part fitted — 8 MB here, from
+# sdkconfig.defaults, on every board — and
+# tinkerrocket-idf/tools/check_flash_declarations.py enforces it.
+# Under-declaring only costs a V9 the top half of its part plus a harmless
+# "Detected size(16384k) larger than ... (8192k)" boot line; over-declaring is
+# the direction that boot-loops an 8 MB V7/V8 inside the bootloader, before
+# any firmware runs.
 #
 # Both lines matter. SDKCONFIG_DEFAULTS picks the overlay; SDKCONFIG moves the
 # GENERATED config into the build dir, because the default is one shared
@@ -94,9 +101,9 @@ if(TR_BOARD_V9 OR TR_BOARD_M1)
     # CONFIG_* lines are what apply here.
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
     if(TR_BOARD_M1)
-        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, 16 MB boot NOR, shared with M1)")
+        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, shared with M1 — boot NOR keeps the base 8 MB declaration, #916)")
     else()
-        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, 16 MB boot NOR)")
+        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on — boot NOR keeps the base 8 MB declaration, #916)")
     endif()
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")

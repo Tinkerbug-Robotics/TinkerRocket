@@ -134,8 +134,8 @@ one `out_computer` uses for V9 PSRAM:
 
 | project | base | overlay |
 |---|---|---|
-| `flight_computer` | 8 MB | `sdkconfig.defaults.v9` → 16 MB (`-DTR_BOARD_V9=1`) |
-| `out_computer` | 8 MB | `sdkconfig.defaults.v9` → 16 MB (`-DTR_BOARD_V9=1`) |
+| `flight_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`) — comments only since #916; the flash size stays the base 8 MB |
+| `out_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`, and M1) — PSRAM only since #916; the flash size stays the base 8 MB |
 | `base_station` | 8 MB + `partitions.csv` | `sdkconfig.defaults.v3` → 16 MB + `partitions_v3.csv` (`-DTR_BS_BOARD=3`) |
 | `radio_board` | 4 MB | none — table ends at 3.13 MB, and 4 MB is safe on both the 8 MB as-built and the 16 MB artwork |
 | `rocket_computer_mini` | 8 MB | none — table ends at 6.13 MB; the fitted part is 16 MB but nothing addresses the top half |
