@@ -83,9 +83,17 @@ add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
 # its FC is an ESP32-S3RH2 — so the overlay changes CONFIG_IDF_TARGET as well
 # as turning on that part's in-package PSRAM.
 #
-# For V9/V10 the overlay instead selects the 16 MB boot NOR (V7/V8 carry an
-# 8 MB W25Q64, measured — see sdkconfig.defaults; a 16 MB declaration on an
-# 8 MB part is a boot loop inside the bootloader, before any firmware runs).
+# For V9/V10 the overlay sets nothing any more. Until #916 it raised the boot
+# NOR declaration to 16 MB for the GD25Q128 those boards carry; since the
+# owner's 2026-09-09 decision every project declares the smallest standard size
+# that fits its OWN partition table, not the part fitted — 8 MB here, from
+# sdkconfig.defaults, on every board — and
+# tinkerrocket-idf/tools/check_flash_declarations.py enforces it.
+# Under-declaring only costs a V9 the top half of its part plus a harmless
+# "Detected size(16384k) larger than ... (8192k)" boot line; over-declaring is
+# the direction that boot-loops an 8 MB V7/V8 inside the bootloader, before
+# any firmware runs. The comments-only overlay stays as the V9 per-board hook,
+# so a future V9-only setting has the same home the M1 branch below uses.
 #
 # Both lines matter, and the second is the one that is easy to leave out.
 # SDKCONFIG_DEFAULTS picks the overlay. SDKCONFIG moves the GENERATED config
@@ -124,7 +132,7 @@ if(TR_BOARD_M1)
     message(STATUS "flight_computer: GNSS driver LC86G (TR_GNSS_DRIVER_LC86=1)")
 elseif(TR_BOARD_V9)
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
-    message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (16 MB boot NOR)")
+    message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (comments only since #916 — boot NOR keeps the base 8 MB declaration, sized to the partition table)")
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
 
