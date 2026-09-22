@@ -468,7 +468,7 @@ static uint8_t b2r_setting = IMU_ORIENT_AUTO;
 static bool b2r_setting_from_nvs = false;
 
 // #915 full config report.  Set by any handler that changes a field the
-// report carries; drained in loop_fc so the 193-byte enqueue never happens
+// report carries; drained in loop_fc so the 194-byte enqueue never happens
 // inside the I2C command path the OC is waiting on.  Declared up here rather
 // than beside buildConfigReport() because persistOrientSetting() — which sits
 // with the orientation code above it — is one of the setters.
@@ -593,6 +593,11 @@ static uint8_t  camera_stop_resends_left   = 0;  // #1153: remaining STOP_RECORD
 static bool     camera_stop_finalizing     = false;  // #1153: in the finalize wait
 static uint8_t  camera_power_retries_left = 0;   // remaining power-cycle attempts
 static uint8_t runtime_camera_type = config::CAMERA_TYPE;  // can be overridden via BLE
+// True once runtime_camera_type is a stored record — loaded from NVS at boot,
+// or a camera frame applied (and written to NVS) this boot — rather than the
+// config::CAMERA_TYPE default.  Reported to the OC as F_CAMERA_FROM_NVS
+// (#1472), the camera twin of pyro_config_from_nvs.
+static bool camera_type_from_nvs = false;
 static bool servo_enabled = false;
 static bool gain_sched_enabled = config::GAIN_SCHEDULE_ENABLED;
 static bool use_angle_control = config::USE_ANGLE_CONTROL;
@@ -2644,7 +2649,7 @@ static void sendFlightSettings()
 // makes it survive an OC that rebooted on its own — with request/response the
 // OC would have to know to ask again, and it has no way to know it missed one.
 
-// Repeat cadence while not INFLIGHT.  193 bytes every 5 s against a 22 kHz
+// Repeat cadence while not INFLIGHT.  194 bytes every 5 s against a 22 kHz
 // I2S stream is noise; the point is bounded staleness after an OC reboot, not
 // throughput.
 static constexpr uint32_t CONFIG_REPORT_PERIOD_MS = 5000;
@@ -2658,6 +2663,7 @@ static void buildConfigReport(ConfigReportData &r)
     if (enable_sounds) r.flags |= (1U << ConfigReportData::F_SOUNDS);
     if (b2r_setting_from_nvs) r.flags |= (1U << ConfigReportData::F_ORIENT_FROM_NVS);
     if (pyro_config_from_nvs)  r.flags |= (1U << ConfigReportData::F_PYRO_FROM_NVS);   // #1231
+    if (camera_type_from_nvs)  r.flags |= (1U << ConfigReportData::F_CAMERA_FROM_NVS); // #1472
 
     for (int i = 0; i < 4; ++i) {
         r.servo.bias_us[i] = (int16_t)servo_control.getServoBiasUs(i);
@@ -2700,6 +2706,9 @@ static void buildConfigReport(ConfigReportData &r)
     // #1231: the live struct servicePyroChannels() reads, not a copy of the
     // last frame — the whole point is that the two can differ.
     r.pyro = pyro_config;
+
+    // #1472: the type cameraStart() dispatches on, for the same reason.
+    r.camera_type = runtime_camera_type;
 }
 
 static void sendConfigReport()
@@ -2720,7 +2729,8 @@ static void sendConfigReport()
         ESP_LOGI(TAG, "[CFG] Config report sent: orient=%s(%s) sounds=%s "
                       "bias=[%d,%d,%d,%d] fin=[%.0f,%.0f,%.0f,%.0f] rev=0x%X/0x%X "
                       "guid=%s wp=%u "
-                      "pyro(%s)=[%u/%u/%.1f %u/%u/%.1f %u/%u/%.1f %u/%u/%.1f]",
+                      "pyro(%s)=[%u/%u/%.1f %u/%u/%.1f %u/%u/%.1f %u/%u/%.1f] "
+                      "cam(%s)=%s",
                  b2r_setting == IMU_ORIENT_AUTO ? "AUTO" : orientCodeName(b2r_setting),
                  b2r_setting_from_nvs ? "nvs" : "dflt",
                  enable_sounds ? "on" : "off",
@@ -2735,7 +2745,10 @@ static void sendConfigReport()
                  r.pyro.ch1_enabled, r.pyro.ch1_trigger_mode, (double)r.pyro.ch1_trigger_value,
                  r.pyro.ch2_enabled, r.pyro.ch2_trigger_mode, (double)r.pyro.ch2_trigger_value,
                  r.pyro.ch3_enabled, r.pyro.ch3_trigger_mode, (double)r.pyro.ch3_trigger_value,
-                 r.pyro.ch4_enabled, r.pyro.ch4_trigger_mode, (double)r.pyro.ch4_trigger_value);
+                 r.pyro.ch4_enabled, r.pyro.ch4_trigger_mode, (double)r.pyro.ch4_trigger_value,
+                 camera_type_from_nvs ? "nvs" : "dflt",
+                 r.camera_type == CAM_TYPE_GOPRO ? "GoPro" :
+                 r.camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
     }
 }
 
@@ -4337,8 +4350,12 @@ static void setup_fc()
     // base-station-linked session could never set it at all.  Persisting it
     // here closes both.
     runtime_camera_type = prefs.getUChar("camt", config::CAMERA_TYPE);
+    camera_type_from_nvs = prefs.isKey("camt");   // #1472
     if (runtime_camera_type > CAM_TYPE_RUNCAM)
+    {
         runtime_camera_type = config::CAMERA_TYPE;  // ignore a corrupt value
+        camera_type_from_nvs = false;               // ...and do not call it a record
+    }
     prefs.end();
     ESP_LOGI(TAG, "NVS: enable_sounds=%s servo_enabled=%s camera_type=%u",
                   enable_sounds ? "true" : "false",
@@ -6128,7 +6145,7 @@ static void loop_fc()
     // SECTION: Full config report (#915)
     // ==========================================================================
     // Drained here rather than sent from the I2C command handlers: those run
-    // inside the OC's poll window, and a 193-byte enqueue there would sit in
+    // inside the OC's poll window, and a 194-byte enqueue there would sit in
     // the same path the OC is waiting on.
     serviceConfigReport();
 
@@ -8367,10 +8384,25 @@ static void loop_fc()
                     prefs.begin("rocket", false);  // read-write
                     prefs.putUChar("camt", runtime_camera_type);
                     prefs.end();
+                    camera_type_from_nvs = true;
+                    // #1472: the report carries the camera type, so the app
+                    // hears what the FC applied — or, for a frame the FC never
+                    // got, keeps hearing the type it is really still in.
+                    config_report_dirty = true; log_next_report_send = true;
                     ESP_LOGI(TAG, "[CFG] Camera type: %u (%s) — saved to NVS",
                              runtime_camera_type,
                              runtime_camera_type == CAM_TYPE_GOPRO ? "GoPro" :
                              runtime_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
+                }
+                else
+                {
+                    // #1472: the #1117 defect, still present here.  With no
+                    // else, the dedup consumed the command on its first
+                    // delivery and the OC's two repeats — still carrying the
+                    // frame — were skipped, so one missed read lost the type
+                    // for good while the OC's NVS already held it — one of the
+                    // three ways #1472 found for the two copies to come apart.
+                    cfgRetryOnNextPoll("CAMERA CFG");   // #1112
                 }
             }
             else if (out_pending_command == ORIENT_CONFIG_PENDING)

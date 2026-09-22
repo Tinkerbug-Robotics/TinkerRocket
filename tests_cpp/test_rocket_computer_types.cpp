@@ -1069,8 +1069,9 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // field after it — and the app would then display the result as VERIFIED,
 // which is worse than the "cannot verify" state this frame exists to remove.
 TEST(RocketComputerTypes, ConfigReportData_Layout) {
-    // v2 (#1231): v1's 169 bytes + the 24-byte PyroConfigData.
-    EXPECT_EQ(sizeof(ConfigReportData), 193u);
+    // v3 (#1472): v2's 193 bytes (v1's 169 + the 24-byte PyroConfigData)
+    // + the one-byte camera type.
+    EXPECT_EQ(sizeof(ConfigReportData), 194u);
     // Rides the same I2S frame path as everything else FC→OC.
     EXPECT_LE(sizeof(ConfigReportData), MAX_PAYLOAD);
 
@@ -1091,7 +1092,14 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     // v2 — the OC copies a v1 frame by exactly this many bytes and serves
     // it without a pyro block.  Move it and a v1 sender is misparsed.
     EXPECT_EQ(offsetof(ConfigReportData, pyro),             169u);
+    // #1472: appended AFTER pyro, so a v2 report is a byte-exact prefix of
+    // v3 — the OC copies a v2 frame by exactly this many bytes and serves
+    // the OC's cached camera type for it.  Move it and a v2 sender is
+    // misparsed, and a v2 FC's zero would read as CAM_TYPE_NONE.
+    EXPECT_EQ(offsetof(ConfigReportData, camera_type),      193u);
     EXPECT_EQ(offsetof(ConfigReportData, pyro) + sizeof(PyroConfigData),
+              offsetof(ConfigReportData, camera_type));
+    EXPECT_EQ(offsetof(ConfigReportData, camera_type) + sizeof(uint8_t),
               sizeof(ConfigReportData));
 
     // The starts are the running sum of the nested sizes — spelled out so a
@@ -1106,11 +1114,13 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     // Flag bits are wire ABI: the OC reads F_ORIENT_FROM_NVS to decide
     // whether to leave the FC's orientation alone or re-push its own, and
     // relays F_PYRO_FROM_NVS to the app as "fnv" so an all-disabled report
-    // can be told apart from a board that has never been configured.
+    // can be told apart from a board that has never been configured, and
+    // F_CAMERA_FROM_NVS (#1472) as "camfnv" for the same reason.
     EXPECT_EQ(ConfigReportData::F_SOUNDS,           0u);
     EXPECT_EQ(ConfigReportData::F_ORIENT_FROM_NVS,  1u);
     EXPECT_EQ(ConfigReportData::F_PYRO_FROM_NVS,    2u);
-    EXPECT_EQ(ConfigReportData::VERSION,            2u);
+    EXPECT_EQ(ConfigReportData::F_CAMERA_FROM_NVS,  3u);
+    EXPECT_EQ(ConfigReportData::VERSION,            3u);
 }
 
 // --- Flight settings snapshot (#165) ---

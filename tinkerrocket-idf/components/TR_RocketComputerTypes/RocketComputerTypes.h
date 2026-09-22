@@ -2525,7 +2525,7 @@ static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 28-byte Log
 // the I2S telemetry stream exists, which is the whole point — see
 // FcBootStatusData above.  Stops once the FC enters loop_fc().
 static constexpr uint8_t FC_BOOT_STATUS_MSG   = 0xFA;  // FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only
-static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 193-byte ConfigReportData, everything the app's config
+static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 194-byte ConfigReportData, everything the app's config
                                                       // readback cannot otherwise see (#915).  PUSHED, not requested —
                                                       // see the struct comment.  0xFC/0xFD have since gone to the base
                                                       // station's own log records: 0xA0-0xFD is FULL.  New codes open
@@ -3311,7 +3311,11 @@ static_assert(sizeof(FlightSettingsData) == 223,
 // config_pyro readback used to be the OC echoing its own cache, so a
 // divergence between what the operator configured and what the FC would
 // actually fire on (#1117 dropped frame, #1131 rail-off defaults, #1078
-// stale tiles) was invisible on every screen.
+// stale tiles) was invisible on every screen.  Since v3 (#1472) also the
+// camera type the FC will act on: the readback's "camt" was the OC's cache
+// too, the apps adopted it into the profile on connect, and "Send all" then
+// wrote it to the FC — which is how a GoPro rocket could be switched to
+// RunCam mode by an OC copy the FC never agreed to.
 //
 // Why not extend FlightSettingsData: that struct is 219 bytes against a
 // MAX_PAYLOAD of 224, and the fin layout plus the guidance parameters need
@@ -3331,9 +3335,14 @@ static_assert(sizeof(FlightSettingsData) == 223,
 struct __attribute__((packed)) ConfigReportData
 {
     // v1 (#915): 169 bytes, through `roll`.  v2 (#1231): + `pyro`, 193
-    // bytes.  v1 is a byte-exact PREFIX of v2 — the OC accepts both and
-    // simply has no deployment configuration to serve from a v1 sender.
-    static constexpr uint8_t VERSION = 2;
+    // bytes.  v3 (#1472): + `camera_type`, 194 bytes.  Each version is a
+    // byte-exact PREFIX of the next — the OC accepts all three and simply
+    // has nothing FC-sourced to serve for the groups an older sender lacks.
+    // An OC OLDER than its FC refuses the newer version outright (it will
+    // not reinterpret a layout it does not know), so a v3 FC behind a
+    // pre-#1472 OC has no report at all until the OC is updated — the OTA
+    // relay updates the OC first, which is the order that never hits this.
+    static constexpr uint8_t VERSION = 3;
 
     // flags bit positions
     static constexpr uint8_t F_SOUNDS = 0;   // piezo sounds enabled
@@ -3352,6 +3361,12 @@ struct __attribute__((packed)) ConfigReportData
     // only the first is a configuration somebody chose.  The app renders
     // the second as an advisory, not as four switched-off channels.
     static constexpr uint8_t F_PYRO_FROM_NVS = 2;
+    // v3 (#1472).  Set when `camera_type` below is a stored record (the FC's
+    // NVS `rocket`/`camt`, or a camera frame applied this boot — written to
+    // NVS in the same step) rather than config::CAMERA_TYPE, the compiled
+    // default of a board that has never been told.  Never set by a v1/v2
+    // sender, which has no `camera_type` at all.
+    static constexpr uint8_t F_CAMERA_FROM_NVS = 3;
 
     uint32_t time_us;              // micros() at build — first, so the generic
                                    // frame parser's "timestamp = first 4
@@ -3374,9 +3389,15 @@ struct __attribute__((packed)) ConfigReportData
     // reads — not a copy of what was last written to it.  Appended after
     // `roll` so a v1 report stays a prefix; see VERSION.
     PyroConfigData     pyro;
+    // v3 (#1472).  The FC's LIVE runtime_camera_type — the value cameraStart()
+    // dispatches on (CAM_TYPE_NONE / GOPRO / RUNCAM) — so the app can show and
+    // adopt the camera mode the FC will actually drive, not the OC's copy of
+    // the last cmd 33 it relayed.  Appended after `pyro` so a v2 report stays
+    // a prefix; see VERSION.
+    uint8_t            camera_type;
 };
-static_assert(sizeof(ConfigReportData) == 193,
-              "ConfigReportData layout check (v2, #1231: v1 169 + PyroConfigData 24)");
+static_assert(sizeof(ConfigReportData) == 194,
+              "ConfigReportData layout check (v3, #1472: v2 193 + camera_type 1)");
 // Nested-struct starts are wire ABI: the OC parses this by memcpy of the
 // whole thing, so a member reordered here silently reinterprets every field
 // after it.
@@ -3384,12 +3405,16 @@ static_assert(offsetof(ConfigReportData, servo) == 8 &&
               offsetof(ConfigReportData, fin) == 30 &&
               offsetof(ConfigReportData, guidance) == 48 &&
               offsetof(ConfigReportData, roll) == 93 &&
-              offsetof(ConfigReportData, pyro) == 169,
+              offsetof(ConfigReportData, pyro) == 169 &&
+              offsetof(ConfigReportData, camera_type) == 193,
               "ConfigReportData member order is wire ABI");
-// The OC copies a v1 report by this length, so it must equal the whole of
-// the v1 layout — everything before `pyro`.
+// The OC copies an older report by these lengths, so each must equal the
+// whole of that version's layout — v1 is everything before `pyro`, v2
+// everything before `camera_type`.
 static_assert(offsetof(ConfigReportData, pyro) == 169,
               "v1 ConfigReportData must remain a byte-exact prefix of v2");
+static_assert(offsetof(ConfigReportData, camera_type) == 193,
+              "v2 ConfigReportData must remain a byte-exact prefix of v3");
 
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the
