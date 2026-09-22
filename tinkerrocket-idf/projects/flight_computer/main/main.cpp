@@ -575,13 +575,16 @@ static CameraStartPhase camera_start_phase = CameraStartPhase::Idle;
 // type-blind, so a camera-type push landing mid-sequence left the RunCam probe
 // and power-cycle retries driving the gate while the FC believed it was in
 // GoPro mode.  Latching the type at arm time makes that race structurally
-// impossible; cameraAbortAndPowerOff() handles the type edge itself.
+// impossible; cameraWindDown() handles the type edge itself.
 static uint8_t camera_seq_type = CAM_TYPE_NONE;
 // Did the GoPro start press actually go out?  A shutter press is a TOGGLE, so
 // a stop that presses without a start having pressed would START a recording
 // rather than end one.  Set when the start press is asserted, cleared when a
 // sequence is armed or abandoned.
 static bool gopro_start_pressed = false;
+// When the start press was released — the stop press waits until
+// GOPRO_MIN_RECORD_MS after it (config.h).
+static uint32_t gopro_start_released_ms = 0;
 static uint32_t camera_start_due_ms = 0;
 static uint32_t camera_start_power_ms = 0;       // when RUNCAM_PWR_PIN went high
 static uint32_t camera_probe_deadline_ms = 0;    // stop polling, record blind
@@ -3408,6 +3411,7 @@ static void cameraStop(uint32_t now_ms, uint32_t delay_ms = 0)
     {
         goproShutterRelease();
         gopro_start_pressed = true;
+        gopro_start_released_ms = now_ms;
     }
     camera_start_phase = CameraStartPhase::Idle;
     camera_stop_phase = CameraStopPhase::DelayBeforeStop;
@@ -3429,7 +3433,8 @@ static inline void serviceCameraStop(uint32_t now_ms)
 
     // Every arm dispatches on camera_seq_type — the type this sequence was
     // ARMED with — so a camera-type push landing mid-stop cannot cross the
-    // wires (it aborts the sequence outright instead; see the 0xCB handler).
+    // wires (the stop simply finishes under the type it was armed with; see
+    // cameraWindDown and the 0xCB handler).
     if (camera_stop_phase == CameraStopPhase::DelayBeforeStop)
     {
         if (camera_seq_type == CAM_TYPE_GOPRO)
@@ -3442,6 +3447,16 @@ static inline void serviceCameraStop(uint32_t now_ms)
             {
                 camera_stop_phase = CameraStopPhase::GoProFinalize;
                 camera_stop_due_ms = now_ms;
+                return;
+            }
+            // Too soon after the start press and the camera may swallow this
+            // one — hold it back (config.h, GOPRO_MIN_RECORD_MS).
+            const uint32_t since_start = now_ms - gopro_start_released_ms;
+            if (since_start < config::GOPRO_MIN_RECORD_MS)
+            {
+                camera_stop_due_ms = gopro_start_released_ms + config::GOPRO_MIN_RECORD_MS;
+                ESP_LOGI(TAG, "GoPro stop press held %lu ms — too soon after the start press",
+                         (unsigned long)(config::GOPRO_MIN_RECORD_MS - since_start));
                 return;
             }
             goproShutterAssert();
@@ -3565,6 +3580,41 @@ static void cameraAbortAndPowerOff(const char* why)
         ESP_LOGW(TAG, "Camera sequence aborted, gate off, pins parked (%s)", why);
 }
 
+// End any camera sequence the way an operator stop does — stop press or
+// STOP_RECORDING, then the finalize wait, THEN power off — for the paths that
+// used to call cameraAbortAndPowerOff() on a live recording (sim reset,
+// camera-type change, FC OTA).  Cutting the gate under a recording camera
+// leaves a large file that was never closed, which is exactly what a bench
+// run produced.  The stop machine dispatches on camera_seq_type, so it
+// finishes under the type the sequence was armed with even after a type push.
+// Only a sequence with nothing recording is aborted outright.
+static void cameraWindDown(uint32_t now_ms, const char* why)
+{
+    if (camera_stop_phase == CameraStopPhase::DelayBeforeStop)
+    {
+        // A scheduled stop (the 30 s post-LANDED one): bring it forward.
+        camera_stop_due_ms = now_ms;
+        ESP_LOGI(TAG, "Camera stop brought forward (%s)", why);
+        serviceCameraStop(now_ms);
+        return;
+    }
+    if (camera_stop_phase != CameraStopPhase::Idle)
+        return;  // already pressing / closing the file — let it finish
+    if (camera_recording)
+    {
+        ESP_LOGI(TAG, "Camera stopping, file finalize before power-off (%s)", why);
+        cameraStop(now_ms);
+        return;
+    }
+    cameraAbortAndPowerOff(why);  // nothing recording; drop a stray gate
+}
+
+// True while a camera stop is still pressing / closing its file.
+static inline bool cameraStopInProgress()
+{
+    return camera_stop_phase != CameraStopPhase::Idle;
+}
+
 // Drives the deferred RunCam start queued by cameraStart, serviced from the
 // main loop so it can't stall the flight task into a watchdog reset (#146).
 // The camera cold-boots and only answers UART once ready, so from BOOT_MIN_MS
@@ -3613,6 +3663,7 @@ static inline void serviceCameraStart(uint32_t now_ms)
         // arm below, where START_RECORDING is idempotent and resending is the
         // reliability fix.  Do not "helpfully" unify the two.
         goproShutterRelease();
+        gopro_start_released_ms = now_ms;
         ESP_LOGI(TAG, "GoPro start press released — recording assumed ON "
                       "(no feedback channel; confirm on the camera)");
         camera_start_phase = CameraStartPhase::Idle;
@@ -5517,8 +5568,10 @@ static void resetFlightStateForSim(const char* edge)
     pwrHoldRelease("sim reset");  // #848: a sim abort exits INFLIGHT without LANDED
     // A sim start/stop used to leave a REAL camera powered and the start phase
     // machine armed — and with the sim driving rocket_state to INFLIGHT, that
-    // armed machine takes the in-flight blind-record shortcuts.
-    cameraAbortAndPowerOff("sim reset");
+    // armed machine takes the in-flight blind-record shortcuts.  The start
+    // machine is disarmed immediately; a live recording gets a proper stop and
+    // file finalize rather than a power cut (it used to be cut mid-file).
+    cameraWindDown(time_ms(), "sim reset");
     // #1153 item 3: a sim reset is the sim's equivalent of a reboot, and a
     // reboot ends a mag-cal session — the RAM side is gone and the chip comes
     // back up on the persisted offsets.  Do the same.  A Start cannot reach
@@ -8062,6 +8115,11 @@ static void loop_fc()
                         uint32_t total_size = 0;
                         memcpy(&total_size, hdr, 4);
                         ESP_LOGW(TAG, "[OTA] BEGIN size=%u — erasing ota_1", (unsigned)total_size);
+                        // The OTA ends in esp_restart(), which drops the
+                        // camera gate.  Start the stop now so the file is
+                        // closed long before the image has finished arriving;
+                        // the restart below waits out any remainder.
+                        cameraWindDown(time_ms(), "FC OTA");
                         // #1125: refuse an image built for another project or
                         // another board before a byte reaches ota_1. This
                         // matters most here: PYRO_ARM is GPIO5 on V8 and GPIO16
@@ -8171,6 +8229,18 @@ static void loop_fc()
                         // reboot (replaces the old fixed 500 ms pre-restart delay).
                         sendOtaRelayStatusRobust(OTA_RELAY_READY_TO_BOOT, 0,
                                                  (uint32_t)fc_ota_receiver.bytesWritten());
+                        // Normally long finished — the stop started at BEGIN.
+                        // Bounded: finalize plus the start-press hold-back and
+                        // a margin, never forever.
+                        const uint32_t cam_wait_start = time_ms();
+                        while (cameraStopInProgress() &&
+                               time_ms() - cam_wait_start <
+                                   config::GOPRO_FINALIZE_MS + config::GOPRO_MIN_RECORD_MS + 2000U)
+                        {
+                            serviceCameraStop(time_ms());
+                            esp_task_wdt_reset();
+                            delay_ms(20);
+                        }
                         esp_restart();
                     }
                     else
@@ -8270,8 +8340,10 @@ static void loop_fc()
                         // A sequence armed under the old type must not keep
                         // running — it owns the shared gate and the shared
                         // signal pins, and would go on driving them while the
-                        // FC believed it was in the other mode.
-                        cameraAbortAndPowerOff("camera type changed");
+                        // FC believed it was in the other mode.  A live
+                        // recording is stopped under its own (latched) type
+                        // and given its finalize; only a start is abandoned.
+                        cameraWindDown(now_ms, "camera type changed");
                     }
                     runtime_camera_type = cam_cfg.camera_type;
                     prefs.begin("rocket", false);  // read-write
