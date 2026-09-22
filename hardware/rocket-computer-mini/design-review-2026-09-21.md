@@ -1566,3 +1566,50 @@ For #1316. Each is a measurement, not a change.
 - Measure the hold-up converter's start-up on USB alone with no supercapacitor fitted.
 - Confirm whether the printer recognised the fiducials cleanly, and ask the assembler
   which foil was actually used.
+
+## Appendix: should the USB-C footprint be changed?
+
+Asked after the review. Answered with measurements from the board file, the fabricated
+V9 and the connector's own drawing.
+
+**The land pattern needs no change.** Pad sizes, positions, the shell pads and the two
+locating holes match the vendor's recommended layout, and the footprint file is
+byte-identical to the V9's copy apart from identifiers. The V9 enumerates. Changing a
+proven land on a hypothesis is the wrong trade.
+
+**The paste apertures are worth one change, and only because this board uses a thinner
+foil.** Every aperture on this connector is drawn 1:1 with its pad. That is correct
+practice, and it is what the V9 carries. But the V9 is printed with the repository's
+default 0.10 mm foil, while this board uses 0.08 mm because of the flash balls, so the
+same aperture yields 20 percent less solder here than on the board that works.
+
+| aperture | foil | paste per signal pin | area ratio | paste gap at 0.5 mm pitch |
+|---|---|---|---|---|
+| 0.30 x 1.15, as drawn | 0.10 mm (V9) | 34.5 nL | 1.19 | 0.200 mm |
+| 0.30 x 1.15, as drawn | 0.08 mm (this board) | 27.6 nL | 1.49 | 0.200 mm |
+| 0.35 x 1.25, proposed | 0.08 mm | 35.0 nL | 1.71 | 0.150 mm |
+
+Transfer was never the problem: the area ratio is far above the 0.66 floor at both foils,
+and it improves as the foil thins. Absolute volume on a 0.30 mm tail is the problem, and
+it is what tolerates a lead that is not perfectly coplanar.
+
+A local paste margin of +0.025 mm on this connector's twelve signal pads takes the
+aperture to 0.35 x 1.25 and restores the V9's deposit almost exactly. It **fits inside the
+existing 0.400 x 1.250 mask opening**, so no paste lands on bare mask, and it leaves
+0.150 mm of paste gap between neighbours. It touches no copper and no other part.
+
+**The other two options in finding 1 are worse.** Window-paning the shell pads to 50 or 60
+percent spends standoff to solve a volume problem elsewhere on the part, which is the
+trade the repository's paste convention argues against. A step stencil over the connector
+would work, but the fabrication notes deliberately went to a flat foil once the part that
+needed a step was no longer fitted, and a step costs money and lead time to solve
+something a local margin solves for nothing.
+
+**Do it after the first article is diagnosed, not before.** If the joints turn out sound
+and the fault was the plug not seating, the connector needs nothing: that cause is already
+addressed by moving it toward the board edge. Changing the aperture now would make the
+next build differ from the one being diagnosed in two ways at once.
+
+One thing that is settled either way: the locating pegs protrude 0.63 mm into a 1.630 mm
+board, so they do not reach the far side. The peg-length question on #1316 can be closed
+on that arithmetic.
