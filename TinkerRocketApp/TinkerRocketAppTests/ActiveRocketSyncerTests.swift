@@ -42,6 +42,7 @@ final class ActiveRocketSyncerTests: XCTestCase {
         c.rollGainsReported = true
         c.guidanceEnabled = p.guidanceEnabled
         c.cameraType = p.cameraType
+        c.cameraSource = .flightComputer   // #1472: current firmware, rail up
         c.imuOrientSetting = p.imuOrientSetting
         c.imuRateHz = p.imuRateHz
         c.pyro1Enabled = p.pyro1Enabled

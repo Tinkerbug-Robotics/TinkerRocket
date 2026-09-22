@@ -321,3 +321,81 @@ armed drops were spent inside one poll — it now keys on the OC's own delivery
 counter and disarms when the command is retired. One sequencing rule for the
 scripts: never arm the hook while the previous command may still be inside its
 three-delivery window.
+
+## #1472 — the camera type joins the report (2026-09-22)
+
+The V9 bench pair, both boards freshly flashed from main `59bf706e`, disagreed
+about the camera: the FC booted `Camera type at boot: 1 (GoPro)`, the OC loaded
+`NVS Camera type: 2 (RunCam)`, and the app's connect-time `"camt"` was the OC's
+copy. #915's "rocket wins" rule then did the rest — the profile adopted RunCam
+on connect, and the next "Send all" (or a profile switch, or a picker tap) would
+have written it to the FC, which drives a GoPro in RunCam mode with no shutter
+press and cuts its power 5 s after a UART stop it ignores.
+
+How the copies came apart, from source (which one fired on the bench is not
+recoverable): cmd 33 writes the OC's NVS the moment it arrives, before the FC
+has applied anything, and the forward is then lost by a cmd-8 power-off inside
+the ~1 s/command drain window (an `esp_restart()` that never drains the RAM
+queue), by a push made with the rail off followed by any OC reset, or by one
+missed FC read — the camera handler was a second #1117, with no read-failure
+branch.
+
+### The wire
+
+`ConfigReportData` v3: `uint8_t camera_type` appended after `pyro`, 194 bytes,
+`F_CAMERA_FROM_NVS` (bit 3). v2 stays a byte-exact prefix and the OC accepts
+v1/v2/v3. The version is bumped (owner's call, 2026-09-22, per the protocol
+checklist) rather than hiding the byte in `_pad`: the cost is that an OC
+**older** than its FC refuses the v3 report outright, so every #915 group and
+the FC-sourced pyro readback are missing until that OC is updated. The OTA
+relay updates the OC first, so only a USB flash of the FC alone hits it.
+
+The FC reports the value `cameraStart()` dispatches on, marks the report dirty
+when a camera frame is applied, and the camera handler gets the #1112 retry.
+
+### What the OC serves, and from where
+
+The camera type rides `config_pyro` as `"camt"` + `"camsrc"` (`"fc"`/`"oc"`) +,
+FC-sourced only, `"camfnv"` — the FC's type whenever the rail is up and a v3
+report is held, the OC's cache otherwise. Not a frame of its own: both apps
+decode an unrecognised `"type"` as a **telemetry** frame (every field is
+optional), so a new frame type would reach any app that predates it as a blank
+telemetry frame on every connect and every config change. `config_pyro` already
+carries provenance, goes out on connect and on every report change, and an older
+app ignores keys it does not know. The main `config` frame's `"camt"` uses the
+same source, so an app that predates `"camsrc"` still adopts the FC's type when
+the rail is up. Same rules as #1231: the OC logs a divergence
+(`FC camera type differs from OC cache`) and never overwrites its cache from the
+report or self-heals.
+
+### The apps
+
+Both parse `camsrc` into `RocketConfig.cameraSource` (`CameraTypeSource`:
+`configFrame` / `outComputerCache` / `flightComputer`; nil on the mini, which
+has no camera). A `config` rebuild keeps a sourced value. **Only a
+flight-computer-sourced camera type is adopted**; otherwise the profile keeps
+its own and "Camera" joins the "Can't verify" line. A one-shot re-adopt fires
+when the FC's type first lands (a phone that connected before power-on).
+
+`unreportedGroups` can now hold "Camera" indefinitely (an OC that predates
+`camsrc`), so the #915 re-adopt keys on the three report groups
+(`configReportGroupsMissing`) instead of an empty list — otherwise an updated
+app would never re-adopt the fin layout, guidance and roll groups from such a
+rocket.
+
+### Not done here
+
+- `camfnv` is on the wire but no app shows it yet.
+- The rest of the `config` frame is still the OC's cache — PID gains, servo
+  timing, servo-enable, gain schedule, roll control and IMU rate — and both apps
+  adopt all of it on connect, so the same loss paths apply (#1158 was servo-enable).
+  `ConfigReportData` has 30 bytes left, not enough for all of them.
+
+### Bench validation — owed
+
+Not run. On the V9 pair: the bench state itself (FC GoPro, OC RunCam) reads
+`"camsrc":"fc","camt":1` and logs the divergence line on the first report; the
+rail-off readback reads `"camsrc":"oc"`; a pre-#1472 OC with a v3 FC logs
+`Config report version 3 ... unsupported`; a `-cfgdrop` camera frame is retried
+(`[CAMERA CFG] Config not in this read, will retry`); and on a phone, "Send all"
+no longer changes the FC's `camt`.

@@ -97,6 +97,12 @@ public data class RocketConfig(
     val rollGainsReported: Boolean = false,
     val guidanceEnabled: Boolean = false,       // "ge"
     val cameraType: Int = 2,                    // u8, "camt"
+    /**
+     * Where [cameraType] came from (#1472); see [CameraTypeSource].  null =
+     * this rocket reports no camera type at all (the mini, which has no
+     * camera) — [cameraType] is then just the default and nothing is claimed.
+     */
+    val cameraSource: CameraTypeSource? = null,
     /** 0xFF auto / 0..23 manual (null = not reported).  NOT carried by the
      *  `config` message — arrives on `imu_orient` ("set"); a `config`
      *  readback therefore resets it to null, exactly like iOS. */
@@ -163,8 +169,29 @@ public data class RocketConfig(
         get() = pyroSource == PyroConfigSource.FLIGHT_COMPUTER
 
     /**
+     * True when [cameraType] is the mode the flight computer will drive
+     * (#1472) — the only camera type the profile may adopt.
+     */
+    public val cameraIsFlightComputerSourced: Boolean
+        get() = cameraSource == CameraTypeSource.FLIGHT_COMPUTER
+
+    /**
+     * True while any of the three #915 config-report groups is still missing.
+     * The connect-time re-adopt waits on exactly this, NOT on
+     * [unreportedGroups] being empty: that list also names the camera (#1472),
+     * which an out computer that predates `"camsrc"` never verifies — waiting
+     * on it would stop the fin layout, guidance and roll groups from ever
+     * being re-adopted from such a rocket.
+     */
+    public val configReportGroupsMissing: Boolean
+        get() = servoExtras == null || guidanceExtras == null || rollWaypoints == null
+
+    /**
      * Setting groups this rocket does not report back.  Empty once the config
      * report has landed; the pre-#915 list on firmware that can't send one.
+     * "Camera" whenever the camera type the rocket reported is not the flight
+     * computer's own (#1472): rail off, a pre-v3 flight computer, or an out
+     * computer that predates the provenance key.
      */
     public val unreportedGroups: List<String>
         get() = buildList {
@@ -173,6 +200,7 @@ public data class RocketConfig(
             }
             if (guidanceExtras == null) add("Guidance parameters")
             if (rollWaypoints == null) add("Roll profile")
+            if (cameraSource != null && !cameraIsFlightComputerSourced) add("Camera")
         }
 }
 
@@ -195,6 +223,39 @@ public enum class PyroConfigSource(public val wire: String?) {
     public companion object {
         public fun fromWire(src: String?): PyroConfigSource =
             values().firstOrNull { it.wire != null && it.wire == src } ?: UNKNOWN
+    }
+}
+
+/**
+ * Where [RocketConfig.cameraType] came from (#1472) — port of iOS
+ * `CameraTypeSource`.
+ *
+ * The `config` frame's `"camt"` has no provenance, and on firmware before
+ * #1472 it was always the out computer's copy of the last cmd 33 it relayed —
+ * which the flight computer may never have applied.  The app adopted it into
+ * the profile on connect and "Send all" then wrote it to the FC, which is how a
+ * GoPro rocket could be switched to RunCam mode.  Since #1472 the camera type
+ * also rides `config_pyro` with a `"camsrc"` key, and only a
+ * flight-computer-sourced value is adopted.
+ */
+public enum class CameraTypeSource {
+    /**
+     * The `config` frame's `"camt"`: no provenance, so never treated as the
+     * flight computer's.  Also all a pre-#1472 out computer ever sends.
+     */
+    CONFIG_FRAME,
+    /** config_pyro `"camsrc":"oc"`. */
+    OUT_COMPUTER_CACHE,
+    /** config_pyro `"camsrc":"fc"`. */
+    FLIGHT_COMPUTER;
+
+    public companion object {
+        /** The `"camsrc"` wire spelling; null for anything else, including absence. */
+        public fun fromWire(src: String?): CameraTypeSource? = when (src) {
+            "fc" -> FLIGHT_COMPUTER
+            "oc" -> OUT_COMPUTER_CACHE
+            else -> null
+        }
     }
 }
 
@@ -274,7 +335,15 @@ public data class ConfigMessage(
             integralSepThreshold = iwind?.takeIf { it >= 0 } ?: d.integralSepThreshold,
             rollGainsReported = rcap?.let { it > 0 } ?: false,
             guidanceEnabled = ge ?: d.guidanceEnabled,
-            cameraType = (camt ?: d.cameraType.toLong()).coerceIn(0, 0xFF).toInt(),
+            // #1472: once config_pyro has said where the camera type came from,
+            // it owns the field — this frame's "camt" says nothing about its
+            // source, and the config_pyro that follows it in the same burst
+            // refreshes the value.  Absent (the mini has no camera) claims
+            // nothing.
+            cameraType = if (previous.cameraIsSourced()) previous!!.cameraType
+                else (camt ?: d.cameraType.toLong()).coerceIn(0, 0xFF).toInt(),
+            cameraSource = if (previous.cameraIsSourced()) previous!!.cameraSource
+                else if (camt != null) CameraTypeSource.CONFIG_FRAME else null,
             imuOrientSetting = d.imuOrientSetting,   // config never carries it (iOS: fresh nil)
             imuRateHz = irate?.takeIf { it in 0..0xFFFF }?.toInt(),
             loraFreqMHz = lf,
@@ -308,6 +377,10 @@ public data class ConfigMessage(
             rollWaypoints = previous?.rollWaypoints,
         )
     }
+
+    private fun RocketConfig?.cameraIsSourced(): Boolean =
+        this?.cameraSource == CameraTypeSource.FLIGHT_COMPUTER ||
+            this?.cameraSource == CameraTypeSource.OUT_COMPUTER_CACHE
 
     public companion object {
         /** Field extraction; never fails (each key individually optional). */
@@ -366,6 +439,10 @@ public data class ConfigPyroMessage(
     val src: String? = null,
     /** #1231 `"fnv"`: FC-sourced only — the FC's copy is a stored record. */
     val fnv: Boolean? = null,
+    /** #1472 camera type, which rides this frame with its own source. */
+    val camt: Long? = null,
+    /** #1472 `"camsrc"`: "fc" / "oc"; null on an OC that predates the key. */
+    val camsrc: String? = null,
 ) {
     /**
      * Port of the iOS `"type":"config_pyro"` handler: base is [previous] (or
@@ -378,6 +455,11 @@ public data class ConfigPyroMessage(
         // #1231: no key = an OC that predates it, which is NOT the same as the
         // OC's cache — only "oc" positively says the FC was not consulted.
         val source = PyroConfigSource.fromWire(src)
+        // #1472: the camera type has its OWN source key (a v2 flight computer
+        // reports pyro but not camera).  Only a frame that says where it came
+        // from may set it; an OC that predates the key leaves it alone.
+        val camSource = CameraTypeSource.fromWire(camsrc)
+        val camSet = camt != null && camSource != null
         return base.copy(
             pyro1Enabled = p1e ?: base.pyro1Enabled,
             pyro1TriggerMode = mode(p1m, base.pyro1TriggerMode),
@@ -393,6 +475,8 @@ public data class ConfigPyroMessage(
             pyro4TriggerValue = p4v ?: base.pyro4TriggerValue,
             pyroSource = source,
             pyroStoredOnFlightComputer = if (source == PyroConfigSource.FLIGHT_COMPUTER) fnv else null,
+            cameraType = if (camSet) camt!!.coerceIn(0, 0xFF).toInt() else base.cameraType,
+            cameraSource = if (camSet) camSource else base.cameraSource,
         )
     }
 
@@ -413,6 +497,8 @@ public data class ConfigPyroMessage(
             p4v = JsonBridging.parseFloatIos(json, "p4v"),
             src = JsonBridging.nsString(json, "src"),
             fnv = JsonBridging.nsBool(json, "fnv"),
+            camt = JsonBridging.nsInt(json, "camt"),
+            camsrc = JsonBridging.nsString(json, "camsrc"),
         )
     }
 }

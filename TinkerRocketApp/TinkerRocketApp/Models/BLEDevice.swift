@@ -2259,7 +2259,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let kpa = parseFloat(dict["kpang"]), kpa > 0 { cfg.kpAngle = kpa }
             if let iw = parseFloat(dict["iwind"]), iw >= 0 { cfg.integralSepThreshold = iw }
             cfg.guidanceEnabled = dict["ge"] as? Bool ?? cfg.guidanceEnabled
-            cfg.cameraType = UInt8(dict["camt"] as? Int ?? Int(cfg.cameraType))
+            // #1472: no provenance on this key — see CameraTypeSource.  Absent
+            // (the mini has no camera) leaves the source nil: nothing claimed.
+            if let camt = dict["camt"] as? Int {
+                cfg.cameraType = UInt8(clamping: camt)
+                cfg.cameraSource = .configFrame
+            }
             if let irate = dict["irate"] as? Int, let hz = UInt16(exactly: irate) {
                 cfg.imuRateHz = hz
             }
@@ -2286,6 +2291,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 cfg.pyro4TriggerValue = existing.pyro4TriggerValue
                 cfg.pyroSource = existing.pyroSource                                  // #1231
                 cfg.pyroStoredOnFlightComputer = existing.pyroStoredOnFlightComputer
+                // #1472: once config_pyro has said where the camera type came
+                // from, it owns the field — this frame's "camt" says nothing
+                // about its source, and the config_pyro that follows it in the
+                // same burst refreshes the value.
+                if existing.cameraSource == .flightComputer
+                    || existing.cameraSource == .outComputerCache {
+                    cfg.cameraType = existing.cameraType
+                    cfg.cameraSource = existing.cameraSource
+                }
                 // #915: the config report rides its own frames, so a `config`
                 // rebuild must carry it over — same reason as the pyro fields
                 // above. Without this a re-sent readback would reset the app
@@ -2322,6 +2336,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.pyroSource = PyroConfigSource(rawValue: dict["src"] as? String ?? "") ?? .unknown
             cfg.pyroStoredOnFlightComputer =
                 cfg.pyroSource == .flightComputer ? (dict["fnv"] as? Bool) : nil
+            // #1472: the camera type rides this frame with its OWN source key
+            // (a v2 flight computer reports pyro but not camera).  Only a
+            // frame that says where it came from may set it; an out computer
+            // that predates the key leaves the `config` frame's value alone.
+            if let camt = dict["camt"] as? Int,
+               let camSource = CameraTypeSource(wire: dict["camsrc"] as? String) {
+                cfg.cameraType = UInt8(clamping: camt)
+                cfg.cameraSource = camSource
+            }
             self.rocketConfig = cfg
             return
         }

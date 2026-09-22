@@ -148,6 +148,14 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
     private var extrasAdoptArmed = false
 
     /**
+     * Armed once per attach when the first adoption found a camera type the
+     * flight computer had not vouched for (#1472) — typically a phone that
+     * connected before power-on.  Fires when a flight-computer-sourced one
+     * lands; never re-armed, so a later user edit isn't mistaken for a report.
+     */
+    private var cameraAdoptArmed = false
+
+    /**
      * Role at attach time.  A renamed device can mis-parse its type from the
      * BLE name until config_identity lands (the SUBSONIC case), so the role
      * isn't final — a role flip falls through to a full re-attach (#375).
@@ -282,6 +290,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         selfSelectedProfileId = null
         orientAdoptArmed = false
         extrasAdoptArmed = false
+        cameraAdoptArmed = false
         _syncState.value = SyncState.Idle
         _magCalAdvisory.value = CalAdvisory.None
         _sensorCalAdvisory.value = CalAdvisory.None
@@ -378,6 +387,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
 
         armOrientationAdopt(s, cfg)
         armExtrasAdopt(s, cfg)
+        armCameraAdopt(s, cfg)
 
         syncCal(profile, s)
     }
@@ -418,14 +428,48 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
      * the report — is not reported as the rocket disagreeing with the phone.
      */
     private fun armExtrasAdopt(s: DeviceSession, cfg: RocketConfig) {
-        if (cfg.unreportedGroups.isEmpty() || extrasAdoptArmed) return
+        // Keyed on the three report groups, not on unreportedGroups: that list
+        // also names the camera (#1472), which an out computer predating
+        // "camsrc" never verifies — see RocketConfig.configReportGroupsMissing.
+        if (!cfg.configReportGroupsMissing || extrasAdoptArmed) return
         extrasAdoptArmed = true
         jobs += scope.launch {
             s.rocketConfig
                 .filterNotNull()
-                .filter { it.unreportedGroups.isEmpty() }
+                .filter { !it.configReportGroupsMissing }
                 .first()
             adoptRocketConfig()
+        }
+    }
+
+    /**
+     * The camera type is adopted only from the flight computer (#1472).  With
+     * the rail off at connect the out computer can only offer its own copy, so
+     * the first adoption leaves the profile's camera alone; adopt the flight
+     * computer's once the rail comes up and its report lands.  Only while it
+     * is unverified, only once, and only on a rocket that reports a camera at
+     * all (the mini has none).
+     */
+    private fun armCameraAdopt(s: DeviceSession, cfg: RocketConfig) {
+        if (cfg.cameraSource == null || cfg.cameraIsFlightComputerSourced || cameraAdoptArmed) return
+        cameraAdoptArmed = true
+        jobs += scope.launch {
+            val reported = s.rocketConfig
+                .filterNotNull()
+                .filter { it.cameraIsFlightComputerSourced }
+                .first()
+            val st = this@ActiveRocketSyncer.store ?: return@launch
+            if (!s.isConnected.value) return@launch
+            // The camera is verifiable now, whether or not the profile differs.
+            _unreportedGroups.value = reported.unreportedGroups
+            val profile = st.activeProfile ?: return@launch
+            if (profile.cameraType == reported.cameraType) return@launch
+            st.update(profile.id) { it.copy(cameraType = reported.cameraType) }
+            if (_createdProfileName.value != null) return@launch
+            val existing = (_syncState.value as? SyncState.Adopted)?.groups.orEmpty()
+            if (GROUP_CAMERA !in existing) {
+                _syncState.value = SyncState.Adopted(existing + GROUP_CAMERA)
+            }
         }
     }
 
@@ -854,7 +898,12 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 changed += GROUP_GUIDANCE_ENABLE
             }
 
-            if (p.cameraType != cfg.cameraType) {
+            // #1472: only the flight computer's own camera type.  Anything else
+            // is the out computer's copy of the last cmd 33 it relayed, which
+            // the FC may never have applied — adopting it made the profile say
+            // RunCam for a GoPro rocket, and the next "Send all" then switched
+            // the FC.
+            if (cfg.cameraIsFlightComputerSourced && p.cameraType != cfg.cameraType) {
                 p = p.copy(cameraType = cfg.cameraType)
                 changed += GROUP_CAMERA
             }

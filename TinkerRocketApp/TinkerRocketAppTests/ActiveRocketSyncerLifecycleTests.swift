@@ -110,7 +110,10 @@ final class ActiveRocketSyncerLifecycleTests: XCTestCase {
 
         let rocket = makeRocket()
         syncer.attach(device: rocket, store: store)
-        reportConfig(rocket, unitID: "BOARD1") { $0.cameraType = 1 }
+        reportConfig(rocket, unitID: "BOARD1") {
+            $0.cameraType = 1
+            $0.cameraSource = .flightComputer   // #1472: only the FC's is adopted
+        }
         settleMainQueue()
 
         XCTAssertEqual(store.activeProfile?.cameraType, 1, "the rocket's value wins")
