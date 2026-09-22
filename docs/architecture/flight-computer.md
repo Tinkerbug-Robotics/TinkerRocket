@@ -313,6 +313,19 @@ real `INFLIGHT` stopped the poll (#1112). Each served command also gets a retry 
 three; after that the key keeps the command until the OC reports 0, so a frame the OC
 dropped, or an OC that stopped answering, cannot be re-read forever.
 
+**A handler that reads a config frame must retry a miss.** The retry is not automatic:
+each handler's `else` has to call `cfgRetryOnNextPoll()`. Leave it out and the key keeps
+the command after the first delivery, the OC's two remaining repeats are skipped as
+duplicates, and the setting is lost for good. Where the app reads the value back from the
+OC's cache (IMU rate, roll control), nothing even shows the loss. #1117 added the call to
+the pyro handler and described pyro as the last one missing it. It was not: orientation,
+IMU rate and camera type had no `else` at all, and both calibration applies, roll control,
+guidance config, guidance point and fin layout had an `else` that only logged.
+`tinkerrocket-idf/tools/check_config_retry.py` now fails the Docs workflow on the shape.
+It lists the few commands that deliberately do not retry (the OTA begin and the two pyro
+ground tests, which are not settings and whose failure the operator sees) and any gap
+still being fixed.
+
 **Attitude drifts on the pad and that is not a bug.** Sitting vertical puts the vehicle
 at an Euler-angle singularity, so roll and yaw trade off against each other freely while
 the quaternion stays perfectly steady. Read the quaternion, not the Euler triple, when
