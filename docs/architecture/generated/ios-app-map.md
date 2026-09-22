@@ -3,7 +3,7 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 34,492 lines across 88 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 34,534 lines across 88 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
@@ -31,7 +31,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [NetworkMonitor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/NetworkMonitor.swift) | 52 | `NetworkMonitor`, `OfflinePill` |
 
 
-## `Models/` — 47 files, 17,596 lines
+## `Models/` — 47 files, 17,638 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -60,7 +60,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Flow · Wait helpers |
 | [BLETypes.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BLETypes.swift) | 482 | `PyroTestRefusal`, `FileInfo`, `DownloadState`, `DiscoveredDevice`, `PyroConfigSource`, `RocketConfig` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | #915 config report · #1231 deployment-config provenance · Guidance-target echo (#435) |
-| [PreflightChecklist.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/PreflightChecklist.swift) | 437 | `PreflightItemKind`, `PreflightItem`, `PreflightMaster`, `PreflightRocketConfig`, `FailableItem`, `FailableUUID`, +4 more |
+| [PreflightChecklist.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/PreflightChecklist.swift) | 479 | `PreflightItemKind`, `PreflightItem`, `PreflightMaster`, `PreflightRocketConfig`, `FailableItem`, `FailableDate`, +5 more |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Item kinds · Items · Master + per-rocket config · Effective list + progress |
 | [RocketProfile.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/RocketProfile.swift) | 417 | `RollSegmentMode`, `RollWaypoint`, `MagCalData`, `SensorCalData`, `RocketProfile` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Fin calibration (#449) · Backward-compatible decoding |
@@ -146,4 +146,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 88 files, 34,492 lines.
+Total: 88 files, 34,534 lines.

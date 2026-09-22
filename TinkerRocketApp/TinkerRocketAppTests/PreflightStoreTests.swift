@@ -268,4 +268,88 @@ final class PreflightStoreTests: XCTestCase {
         XCTAssertTrue(reloaded.master.items.isEmpty)
         XCTAssertEqual(reloaded.config(for: rocket)?.extraItems.map(\.title), ["X"])
     }
+
+    // MARK: - Lenient dates (Android PreflightCodec.dateMs parity)
+
+    /// A hand-checked step is the fact the pad cares about.  One unreadable
+    /// timestamp used to throw out of [String: Date], and load()'s `continue`
+    /// then reverted the whole airframe to the untouched master list.
+    func testMalformedCheckedTimestampKeepsTheTick() throws {
+        let store = makeStore()
+        let rocket = UUID()
+        let kept = store.addMasterItem(PreflightItem(title: "A"))
+        let bad = store.addMasterItem(PreflightItem(title: "B"))
+        store.addExtraItem(PreflightItem(title: "X"), for: rocket)
+        store.setChecked(kept.id, checked: true, for: rocket)
+        store.setChecked(bad.id, checked: true, for: rocket)
+
+        try rewriteConfig(rocket) { json in
+            json.replacingOccurrences(
+                of: "\"\(bad.id.uuidString)\" : ",
+                with: "\"\(bad.id.uuidString)\" : \"not-a-date\", \"_x\" : ")
+        }
+
+        let reloaded = makeStore()
+        // Both ticks survive, and so does the rest of the rocket's diff.
+        XCTAssertTrue(reloaded.isChecked(kept.id, for: rocket))
+        XCTAssertTrue(reloaded.isChecked(bad.id, for: rocket))
+        XCTAssertEqual(reloaded.config(for: rocket)?.extraItems.map(\.title), ["X"])
+    }
+
+    /// Wrong type for the whole key: empty checked state, but the rocket's
+    /// exclusions and extras still load.
+    func testWrongTypedCheckedKeyYieldsNoChecksButKeepsTheDiff() throws {
+        let store = makeStore()
+        let rocket = UUID()
+        let item = store.addMasterItem(PreflightItem(title: "A"))
+        store.addExtraItem(PreflightItem(title: "X"), for: rocket)
+        store.setChecked(item.id, checked: true, for: rocket)
+
+        try rewriteConfig(rocket) { json in
+            let open = json.range(of: "\"checked\" : {")!
+            let close = json.range(of: "}", range: open.upperBound..<json.endIndex)!
+            return json.replacingCharacters(
+                in: open.lowerBound..<close.upperBound, with: "\"checked\" : []")
+        }
+
+        let reloaded = makeStore()
+        XCTAssertFalse(reloaded.isChecked(item.id, for: rocket))
+        XCTAssertEqual(reloaded.config(for: rocket)?.extraItems.map(\.title), ["X"])
+    }
+
+    /// updatedAt is the other strict Date decode: unreadable on a CONFIG cost
+    /// that rocket its whole diff, and on the MASTER cost every rocket its
+    /// template.
+    func testMalformedUpdatedAtKeepsBothFiles() throws {
+        let store = makeStore()
+        let rocket = UUID()
+        let item = store.addMasterItem(PreflightItem(title: "A"))
+        store.addExtraItem(PreflightItem(title: "X"), for: rocket)
+        store.setChecked(item.id, checked: true, for: rocket)
+
+        try rewriteConfig(rocket) { $0.replacingOccurrences(
+            of: "\"updatedAt\" : ", with: "\"updatedAt\" : \"nope\", \"_x\" : ") }
+        let masterURL = tempDir.appendingPathComponent("master.json")
+        try String(contentsOf: masterURL, encoding: .utf8)
+            .replacingOccurrences(of: "\"updatedAt\" : ",
+                                  with: "\"updatedAt\" : \"nope\", \"_x\" : ")
+            .data(using: .utf8)!.write(to: masterURL)
+
+        let reloaded = makeStore()
+        XCTAssertEqual(reloaded.master.items.map(\.title), ["A"])
+        XCTAssertTrue(reloaded.isChecked(item.id, for: rocket))
+        XCTAssertEqual(reloaded.config(for: rocket)?.extraItems.map(\.title), ["X"])
+    }
+
+    /// Rewrite a rocket's config file on disk.  Asserts the edit actually
+    /// changed something — a no-op rewrite would make these tests pass for
+    /// the wrong reason.
+    private func rewriteConfig(_ profileId: UUID,
+                               _ edit: (String) -> String) throws {
+        let url = tempDir.appendingPathComponent("\(profileId.uuidString).json")
+        let before = try String(contentsOf: url, encoding: .utf8)
+        let after = edit(before)
+        XCTAssertNotEqual(before, after, "config rewrite was a no-op")
+        try after.data(using: .utf8)!.write(to: url)
+    }
 }

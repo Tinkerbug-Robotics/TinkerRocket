@@ -126,7 +126,9 @@ struct PreflightMaster: Codable, Equatable {
         // `try?` then fell back to the built-in default master — the
         // operator's edits gone with no message.
         items = lenientItems(c, .items)
-        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        // Same throw, same blast radius as the items above: a strict Date
+        // decode loses the WHOLE master to one bad timestamp.
+        updatedAt = lenientDate(c, .updatedAt) ?? Date()
     }
 }
 
@@ -185,8 +187,15 @@ struct PreflightRocketConfig: Codable, Equatable {
         // it too since #1090.
         extraItems = lenientItems(c, .extraItems)
         orderedIds = Self.lenientUUIDs(c, .orderedIds)
-        checked = try c.decodeIfPresent([String: Date].self, forKey: .checked) ?? [:]
-        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        // The last two strict decodes in this struct, closed for the same
+        // reason as the arrays above: [String: Date] throws on ONE malformed
+        // timestamp, and load()'s `continue` then reverts that airframe to the
+        // untouched master list — exclusions, extras, order and every tick
+        // gone with no message.  Android never could: PreflightCodec.dateMs
+        // takes a fallback instead of failing, so a bad value costs a step its
+        // clock reading, never its tick.
+        checked = Self.lenientChecked(c, .checked)
+        updatedAt = lenientDate(c, .updatedAt) ?? Date()
     }
 
     /// A UUID array where malformed or non-string entries are skipped, and
@@ -195,6 +204,17 @@ struct PreflightRocketConfig: Codable, Equatable {
                                      _ key: CodingKeys) -> [UUID] {
         let raw = (try? c.decodeIfPresent([FailableUUID].self, forKey: key)) ?? nil
         return raw?.compactMap(\.value) ?? []
+    }
+
+    /// Checked state where a malformed timestamp costs that step its CLOCK
+    /// READING, never its tick: the key survives with a fallback of now, which
+    /// is what Android's dateMs already did.  The tick is the fact the pad
+    /// cares about; when it was made is decoration.  A wrong-typed value for
+    /// the whole key yields [:] — never a throw.
+    private static func lenientChecked(_ c: KeyedDecodingContainer<CodingKeys>,
+                                       _ key: CodingKeys) -> [String: Date] {
+        let raw = (try? c.decodeIfPresent([String: FailableDate].self, forKey: key)) ?? nil
+        return raw?.mapValues { $0.value ?? Date() } ?? [:]
     }
 
     func isChecked(_ itemId: UUID) -> Bool {
@@ -217,6 +237,28 @@ private func lenientItems<K: CodingKey>(_ c: KeyedDecodingContainer<K>,
                                         _ key: K) -> [PreflightItem] {
     let raw = (try? c.decodeIfPresent([FailableItem].self, forKey: key)) ?? nil
     return raw?.compactMap(\.value) ?? []
+}
+
+/// Per-entry tolerant Date decode: a malformed or wrong-typed value decodes
+/// as nil (the caller defaults it) instead of throwing.
+private struct FailableDate: Decodable {
+    let value: Date?
+    init(from decoder: Decoder) {
+        // Through the container, not Date(from:), so a date decoding strategy
+        // set on the decoder is still honoured.
+        value = (try? decoder.singleValueContainer())
+            .flatMap { try? $0.decode(Date.self) }
+    }
+}
+
+/// A date that never throws: missing, null or malformed all yield nil for the
+/// caller to default.  Android parity — PreflightCodec.dateMs takes a fallback
+/// rather than failing the file.  Free and generic because both
+/// PreflightMaster and PreflightRocketConfig decode one.
+private func lenientDate<K: CodingKey>(_ c: KeyedDecodingContainer<K>,
+                                       _ key: K) -> Date? {
+    let raw = (try? c.decodeIfPresent(FailableDate.self, forKey: key)) ?? nil
+    return raw?.value
 }
 
 private struct FailableUUID: Decodable {
