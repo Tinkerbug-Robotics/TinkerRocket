@@ -6,6 +6,10 @@ this review was asked first was whether the V10 has pulled in everything the min
 
 ## Read this first: the files reviewed are not the files in git
 
+**Update 2026-09-22:** they are now. The working-copy state reviewed here was committed to
+`main` in `59bf706e` (#1469), so "git HEAD" below means the V10 as it stood before that
+commit. Edits made after that commit are not covered by this review.
+
 The owner's working copy carries uncommitted edits on every schematic sheet and on the
 board. This review is of those live files. The netlist differs from git HEAD by:
 
