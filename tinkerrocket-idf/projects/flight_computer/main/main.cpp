@@ -3400,6 +3400,18 @@ static inline void serviceCameraStop(uint32_t now_ms);
 static void cameraStop(uint32_t now_ms, uint32_t delay_ms = 0)
 {
     if (!camera_recording) return;                            // not recording
+    // An immediate stop overtakes a scheduled one (the 30 s post-LANDED stop).
+    // It used to be dropped as "already stopping", so an operator stop — or
+    // the stop an OC power-off sends and then waits on — did nothing until
+    // the schedule came due, and the OC's bounded wait could run out and cut
+    // the rail just as the scheduled press went out.
+    if (camera_stop_phase == CameraStopPhase::DelayBeforeStop && delay_ms == 0)
+    {
+        ESP_LOGI(TAG, "Camera stop brought forward — a scheduled stop was pending");
+        camera_stop_due_ms = now_ms;
+        serviceCameraStop(now_ms);
+        return;
+    }
     if (camera_stop_phase != CameraStopPhase::Idle) return;  // already stopping
     // A stop during the RunCam boot wait abandons the pending probe;
     // serviceCameraStop powers the camera off regardless.
@@ -3590,19 +3602,13 @@ static void cameraAbortAndPowerOff(const char* why)
 // Only a sequence with nothing recording is aborted outright.
 static void cameraWindDown(uint32_t now_ms, const char* why)
 {
-    if (camera_stop_phase == CameraStopPhase::DelayBeforeStop)
-    {
-        // A scheduled stop (the 30 s post-LANDED one): bring it forward.
-        camera_stop_due_ms = now_ms;
-        ESP_LOGI(TAG, "Camera stop brought forward (%s)", why);
-        serviceCameraStop(now_ms);
-        return;
-    }
-    if (camera_stop_phase != CameraStopPhase::Idle)
-        return;  // already pressing / closing the file — let it finish
     if (camera_recording)
     {
-        ESP_LOGI(TAG, "Camera stopping, file finalize before power-off (%s)", why);
+        // cameraStop() brings a scheduled stop forward and leaves one that is
+        // already pressing / closing the file to finish.
+        if (camera_stop_phase == CameraStopPhase::Idle ||
+            camera_stop_phase == CameraStopPhase::DelayBeforeStop)
+            ESP_LOGI(TAG, "Camera stopping, file finalize before power-off (%s)", why);
         cameraStop(now_ms);
         return;
     }
