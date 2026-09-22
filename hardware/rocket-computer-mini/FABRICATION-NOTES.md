@@ -150,19 +150,31 @@ B1. *** STENCIL FOIL 0.08 mm (3 mil), FLAT - NO STEP. ***
     INCLUDING THE 0.30 x 0.30 mm ANTENNA PADS (U14, RATIO 0.94
     AT 0.08 mm), CLEARS COMFORTABLY AT THAT FOIL, SO ONE FLAT
     0.08 mm FOIL SERVES BOTH SIDES.
-    EXPOSED PADS, AS PLOTTED (F.Paste GERBER, CHECKED
-    2026-09-12 AGAINST THE V1.0.1 RELEASE ZIP): U15 AND U32
-    (PROCESSOR THERMAL PADS, 16.8 mm2 EACH) ARE WINDOW-PANED,
-    NINE APERTURES, 54 % COVERAGE; U11 (NAND, 15.0 mm2) IS
-    WINDOW-PANED, SIX APERTURES, 76 %. THREE EXPOSED PADS HAVE
-    A MASK OPENING AND NO APERTURE, SO THEY GET NO PASTE: U18
-    (BUCK, 2.8 mm2), U19 (EFUSE, 6.9 mm2) AND U47 (HOLD-UP
-    CONVERTER, 2.7 mm2) - THOSE PARTS SOLDER ON THEIR
-    PERIMETER PADS. DO NOT ADD PASTE BY HAND TO THOSE THREE
-    AND DO NOT SUBSTITUTE A STENCIL THAT HAS THEM. (THIS NOTE
-    SAID "FOUR PADS, NO PASTE, INCLUDING U15/U32/U11" UNTIL
-    2026-09-12; THE V1 STENCILS WERE CUT FROM THE GERBERS AND
-    HAVE THE WINDOW-PANES.)
+    *** EVERY EXPOSED PAD ON THIS BOARD IS PASTED. ***
+    PRINT THE STENCIL AS PLOTTED. DO NOT MASK ANY EXPOSED-PAD
+    APERTURE AND DO NOT ADD PASTE BY HAND TO ONE.
+    MEASURED FROM BOTH PASTE LAYERS OF THE BOARD FILE AND THE
+    PLOTTED GERBERS. THE WINDOWED ONES ARE WINDOWED ON PURPOSE:
+      PART  SIDE  PAD mm2  APERTURES  COVERAGE
+      U15     F     16.8       9        54 %   PROCESSOR
+      U32     F     16.8       9        54 %   PROCESSOR
+      U11     F     15.0       6        76 %   NAND
+      U19     B      6.9       4        70 %   EFUSE
+      Q11     B      3.7       4        65 %   PACK FET
+      U23     B      2.9       9        40 %   PACK MONITOR
+      U47     B      2.6       2        84 %   HOLD-UP CONV
+      U30     B      1.6       2        88 %   FC RAIL SWITCH
+      U18     B      2.8       1        40 %   BUCK
+    U18'S SINGLE 1.12 mm2 WINDOW AND U23'S NINE SMALL ONES ARE
+    THE LOWEST COVERAGE ON THE BOARD; THEY ARE STILL PASTE.
+    THE APERTURES FOR U19, Q11, U23, U47 AND U30 ARE DRAWN AS
+    PASTE-ONLY PADS RATHER THAN ON THE COPPER PAD ITSELF, AND
+    THE ONES FOR U15/U32/U11/U18 AS POLYGONS. A SCAN THAT READS
+    ONLY EACH COPPER PAD'S LAYER LIST REPORTS "NO PASTE" FOR
+    ALL OF THEM, WHICH IS WRONG. CHECK BOTH F.Paste AND
+    B.Paste, AND COUNT POLYGONS AND PASTE-ONLY PADS.
+    SIX OF THE NINE ARE ON THE BOTTOM: A CHECK RUN ON F.Paste
+    ALONE SEES NONE OF THEM.
     U5 PAD 12 (2.50 x 2.25 mm, THE MODULE'S ONE PAD OVER
     2 mm2) IS WINDOW-PANED 2 x 2 AT 75 % FROM 2026-09-12 (#960
     DECISION 4): FOUR 1.08 x 0.97 mm APERTURES, 0.34 / 0.31 mm
@@ -348,6 +360,17 @@ the board. With the TDK antenna gone, nothing on the board needs a foil thicker 
 WLCSP needs one no thicker — so one flat 0.08 mm foil serves both sides and no step is required. Note the
 direction of the surprise: the base foil is *thinner* than the 0.10 mm that earlier paste-coverage
 arithmetic assumed, so every coverage percentage converts to less solder than it reads as.
+
+**B1's exposed-pad list is measured from both paste layers, and that is not optional.** The note
+used to say three exposed pads got no paste and told the assembler not to accept a stencil that had
+them. All three are pasted, and so are two more the note never mentioned. The error has one cause
+worth remembering: on this board an exposed pad's aperture is almost never on the copper pad's own
+layer list. For `U19`, `Q11`, `U23`, `U47` and `U30` it is a **separate paste-only pad** sitting
+inside the copper pad, and for `U15`, `U32`, `U11` and `U18` it is a **polygon** on the paste layer.
+Reading each copper pad's `(layers …)` reports "no paste" for every one of them. Six of the nine are
+on the bottom, so a check run against `F.Paste` alone sees none of them either — which is how a note
+written from a front-side check came to describe bottom-side parts. Scan pads, paste-only pads and
+polygons, on both faces, and reconcile against the plotted gerber.
 
 **B5's centre pad had to be renamed.** The clause called for "the centre", but the middle of the
 array is Figure 26's Ø2.4 mm feed keepout — the footprint omits six positions there, so no centre
