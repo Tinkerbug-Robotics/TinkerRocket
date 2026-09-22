@@ -1,0 +1,8 @@
+{
+  "autodeskProduct": "Fusion360",
+  "type": "script",
+  "author": "Christian Pedersen",
+  "description": "Builds the rocket-computer-mini v1.01 reflow-support silicone mold (Mold Max 60) as a parametric Fusion design",
+  "supportedOS": "windows|mac",
+  "editEnabled": true
+}
