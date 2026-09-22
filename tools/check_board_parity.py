@@ -120,19 +120,11 @@ def pcb_refs(board_dir: Path) -> set[str]:
 
 # Boards not gated, and why.  Everything else is gated by DEFAULT, so a new
 # board is covered the day it lands rather than the day someone remembers.
-EXEMPT = {
-    'rocket-computer-mini':
-        'layout in progress — never tagged or fabbed; the TPS61094 hold-up '
-        'parts (2026-08-29) await placement. Gate it once the layout is '
-        'complete.',
-    'rocket-computer':
-        'TPS61094 hold-up (2026-08-29), rework-4 arm (2026-09-05) and the '
-        '2026-09-11 schematic passes await the V10 layout pass: 26 symbols '
-        'are schematic-only (C130, C141-C148, L11, Q12-Q14, R125/R126, R132, '
-        'R134-R142, U47). THIS BOARD FLIES — re-gate it the moment the rework '
-        'is placed, and do not let anything else ride in behind the '
-        'exemption. Consolidated pick-up list in #1365.',
-}
+# Empty since 2026-09-22: the V10 rework is placed (275 of 275 board symbols)
+# and the mini is fabbed and fully placed (229 of 229).  An entry here is a
+# hole in the gate on a board that may fly, so add one only with its reason
+# and the condition that removes it.
+EXEMPT = {}
 
 
 def main() -> int:
