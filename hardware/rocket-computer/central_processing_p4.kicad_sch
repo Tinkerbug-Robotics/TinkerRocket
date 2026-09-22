@@ -5,121 +5,6 @@
 	(uuid "c95845b6-ff1d-4fb2-900f-98953663792c")
 	(paper "A4")
 	(lib_symbols
-		(symbol "power:PWR_FLAG"
-			(power global)
-			(pin_numbers
-				(hide yes)
-			)
-			(pin_names
-				(offset 0)
-				(hide yes)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(in_pos_files yes)
-			(duplicate_pin_numbers_are_jumpers no)
-			(property "Reference" "#FLG"
-				(at 0 1.905 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Value" "PWR_FLAG"
-				(at 0 3.81 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Footprint" ""
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Datasheet" ""
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Description" "Special symbol for telling ERC where power comes from"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "ki_keywords" "flag power"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(symbol "PWR_FLAG_0_0"
-				(pin power_out line
-					(at 0 0 90)
-					(length 0)
-					(name ""
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-			(symbol "PWR_FLAG_0_1"
-				(polyline
-					(pts
-						(xy 0 0) (xy 0 1.27) (xy -1.016 1.905) (xy 0 2.54) (xy 1.016 1.905) (xy 0 1.27)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
 		(symbol "Custom:ECS-400-10-37B2-CKY-TR"
 			(pin_names
 				(offset 1.016)
@@ -3300,7 +3185,7 @@
 			)
 			(embedded_fonts no)
 		)
-				(symbol "Custom:W25Q128JVYIQ"
+		(symbol "Custom:W25Q128JVYIQ"
 			(pin_names
 				(offset 1.016)
 			)
@@ -3453,150 +3338,6 @@
 				)
 			)
 			(symbol "W25Q128JVYIQ_1_1"
-				(pin input line
-					(at -15.24 7.62 0)
-					(length 2.54)
-					(name "/CS"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "B3"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin input line
-					(at -15.24 5.08 0)
-					(length 2.54)
-					(name "CLK"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "D2"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin bidirectional line
-					(at -15.24 2.54 0)
-					(length 2.54)
-					(name "DI(IO0)"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "E2"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin bidirectional line
-					(at 15.24 7.62 180)
-					(length 2.54)
-					(name "DO(IO1)"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "C3"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin bidirectional line
-					(at 15.24 5.08 180)
-					(length 2.54)
-					(name "/WP(IO2)"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "D3"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin bidirectional line
-					(at 15.24 2.54 180)
-					(length 2.54)
-					(name "/HOLD(IO3)"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "C2"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_in line
-					(at 0 12.7 270)
-					(length 2.54)
-					(name "VCC"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "B2"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_in line
-					(at 0 -26.67 90)
-					(length 2.54)
-					(name "GND"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "E3"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
 				(pin no_connect line
 					(at -15.24 -2.54 0)
 					(length 2.54)
@@ -3687,8 +3428,44 @@
 						)
 					)
 				)
+				(pin power_in line
+					(at 0 12.7 270)
+					(length 2.54)
+					(name "VCC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "B2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -15.24 7.62 0)
+					(length 2.54)
+					(name "/CS"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "B3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
 				(pin no_connect line
-					(at -15.24 -15.239999999999998 0)
+					(at -15.24 -15.24 0)
 					(length 2.54)
 					(name "NC"
 						(effects
@@ -3716,6 +3493,42 @@
 						)
 					)
 					(number "C1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at 15.24 2.54 180)
+					(length 2.54)
+					(name "/HOLD(IO3)"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "C2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at 15.24 7.62 180)
+					(length 2.54)
+					(name "DO(IO1)"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "C3"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -3759,6 +3572,42 @@
 						)
 					)
 				)
+				(pin input line
+					(at -15.24 5.08 0)
+					(length 2.54)
+					(name "CLK"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "D2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at 15.24 5.08 180)
+					(length 2.54)
+					(name "/WP(IO2)"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "D3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
 				(pin no_connect line
 					(at 15.24 -5.08 180)
 					(length 2.54)
@@ -3788,6 +3637,42 @@
 						)
 					)
 					(number "E1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at -15.24 2.54 0)
+					(length 2.54)
+					(name "DI(IO0)"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "E2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at 0 -26.67 90)
+					(length 2.54)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "E3"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -3832,7 +3717,7 @@
 					)
 				)
 				(pin no_connect line
-					(at 15.24 -15.239999999999998 180)
+					(at 15.24 -15.24 180)
 					(length 2.54)
 					(name "NC"
 						(effects
@@ -3888,7 +3773,6 @@
 			)
 			(embedded_fonts no)
 		)
-
 		(symbol "Device:C"
 			(pin_numbers
 				(hide yes)
@@ -4852,6 +4736,121 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "power:PWR_FLAG"
+			(power global)
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "#FLG"
+				(at 0 1.905 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "PWR_FLAG"
+				(at 0 3.81 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Special symbol for telling ERC where power comes from"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "flag power"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "PWR_FLAG_0_0"
+				(pin power_out line
+					(at 0 0 90)
+					(length 0)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "PWR_FLAG_0_1"
+				(polyline
+					(pts
+						(xy 0 0) (xy 0 1.27) (xy -1.016 1.905) (xy 0 2.54) (xy 1.016 1.905) (xy 0 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 	)
 	(text "Strapping Pins: \n34, 35, 36, 37, 38"
 		(exclude_from_sim no)
@@ -4901,18 +4900,11 @@
 		)
 		(uuid "ef941635-de3c-4c23-acd7-1ec4cb10b28b")
 	)
-	
 	(junction
 		(at 25.4 73.025)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "07289d78-2e33-486e-b9a5-222ba7d31045")
-	)
-	(junction
-		(at 262.89 103.505)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "0fd70e6e-7a2b-4ada-ab2e-ca3546877f3f")
 	)
 	(junction
 		(at 217.17 90.17)
@@ -4926,7 +4918,6 @@
 		(color 0 0 0 0)
 		(uuid "48edcff4-6115-41b9-aa53-36de9c77b9c7")
 	)
-	
 	(junction
 		(at 232.41 83.185)
 		(diameter 0)
@@ -5059,6 +5050,74 @@
 		(color 0 0 0 0)
 		(uuid "e678c31c-e7ed-4af6-85b0-c3f0b2b2a5bc")
 	)
+	(no_connect
+		(at 90.17 34.925)
+		(uuid "09756159-cdc1-433e-8844-a6f87f40eb15")
+	)
+	(no_connect
+		(at 90.17 67.945)
+		(uuid "1d3634be-0d32-4b43-a162-4007c889acee")
+	)
+	(no_connect
+		(at 90.17 65.405)
+		(uuid "2154c114-36a2-445d-acda-bbf8e3a2eb2f")
+	)
+	(no_connect
+		(at 44.45 62.865)
+		(uuid "2ef435a8-ae29-4398-841b-c1112b031e7d")
+	)
+	(no_connect
+		(at 44.45 57.785)
+		(uuid "36b70923-f113-4eea-835b-01d517912830")
+	)
+	(no_connect
+		(at 90.17 60.325)
+		(uuid "414180ae-3ec7-46fd-b080-5a2f36a2fc38")
+	)
+	(no_connect
+		(at 90.17 62.865)
+		(uuid "4db0ecf5-b627-4a84-b0bd-0d5589fc8ea4")
+	)
+	(no_connect
+		(at 44.45 65.405)
+		(uuid "52c0e329-6789-4750-8906-916ba72fe02b")
+	)
+	(no_connect
+		(at 44.45 67.945)
+		(uuid "5980cdc1-71b1-482a-91c5-24a86b1ddbef")
+	)
+	(no_connect
+		(at 90.17 55.245)
+		(uuid "6512dc0a-39ca-4718-834b-750db604006a")
+	)
+	(no_connect
+		(at 44.45 60.325)
+		(uuid "b1d41887-55ed-44f2-95d3-d75f93cb3631")
+	)
+	(no_connect
+		(at 44.45 116.205)
+		(uuid "b1f0b401-d9d3-451b-9261-062d7b6a5e6e")
+	)
+	(no_connect
+		(at 44.45 70.485)
+		(uuid "ce860aa5-2b9c-4a45-9179-1195e5911d37")
+	)
+	(no_connect
+		(at 90.17 32.385)
+		(uuid "d96ffd76-4aa7-4c31-b3cf-c21040a098db")
+	)
+	(no_connect
+		(at 90.17 57.785)
+		(uuid "df97c968-6580-476f-bd5f-d4a807cdc223")
+	)
+	(no_connect
+		(at 90.17 70.485)
+		(uuid "e2acab9d-e9e1-479c-a792-4866d8619f9f")
+	)
+	(no_connect
+		(at 44.45 55.245)
+		(uuid "fc53d2fb-3adb-4aed-bbbd-9dfb60eef27a")
+	)
 	(wire
 		(pts
 			(xy 203.835 92.71) (xy 211.455 92.71)
@@ -5078,6 +5137,16 @@
 			(type default)
 		)
 		(uuid "091e8efc-f563-4cac-920b-49f88d9fb525")
+	)
+	(wire
+		(pts
+			(xy 45.72 162.56) (xy 45.72 157.48)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "09fb54a4-8557-4cf0-a944-571ee4a73067")
 	)
 	(wire
 		(pts
@@ -5129,7 +5198,6 @@
 		)
 		(uuid "193d61b1-91f9-43b2-bb4e-3525fd5cb4af")
 	)
-	
 	(wire
 		(pts
 			(xy 98.425 172.72) (xy 98.425 173.355)
@@ -5160,7 +5228,6 @@
 		)
 		(uuid "23249bd0-8e1d-4dfa-9dce-048f9f392175")
 	)
-	
 	(wire
 		(pts
 			(xy 118.11 48.26) (xy 118.11 46.99)
@@ -5241,7 +5308,6 @@
 		)
 		(uuid "4c65e652-0847-4854-82d5-df4f04b3cd1b")
 	)
-	
 	(wire
 		(pts
 			(xy 102.87 43.18) (xy 102.87 47.625)
@@ -5392,7 +5458,6 @@
 		)
 		(uuid "856dc0f5-bee0-4c91-a2b5-5629475ceef7")
 	)
-	
 	(wire
 		(pts
 			(xy 169.545 121.285) (xy 196.85 121.285)
@@ -5433,7 +5498,6 @@
 		)
 		(uuid "914a403b-0322-4bdb-9461-4aba396ae066")
 	)
-	
 	(wire
 		(pts
 			(xy 19.05 83.185) (xy 25.4 83.185)
@@ -5563,6 +5627,16 @@
 			(type default)
 		)
 		(uuid "b23880ff-f9d3-4fcd-884c-85899823a7e5")
+	)
+	(wire
+		(pts
+			(xy 45.72 157.48) (xy 49.53 157.48)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b2a42d06-489d-4129-90f8-6a09415b098e")
 	)
 	(wire
 		(pts
@@ -5894,7 +5968,6 @@
 		)
 		(uuid "fba33fee-1db9-4028-8f35-0f6bba7c2d7f")
 	)
-	
 	(wire
 		(pts
 			(xy 118.11 104.14) (xy 118.11 109.22)
@@ -5904,6 +5977,16 @@
 			(type default)
 		)
 		(uuid "fbcd0d5b-0f73-45ec-9766-64da573f510f")
+	)
+	(wire
+		(pts
+			(xy 57.15 157.48) (xy 60.96 157.48)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "fc8b21d4-5784-4266-9bb9-cee74313c07e")
 	)
 	(wire
 		(pts
@@ -6843,6 +6926,30 @@
 			)
 		)
 	)
+	(global_label "FC_CHIP_PU"
+		(shape input)
+		(at 33.02 35.56 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "4c3480e9-0606-466b-b28f-b4dc87584c0b")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 33.02 35.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
 	(global_label "V_SCAP_ADC"
 		(shape input)
 		(at 44.45 118.745 180)
@@ -7083,7 +7190,6 @@
 			)
 		)
 	)
-	
 	(global_label "V_MCU_SWTCH"
 		(shape input)
 		(at 262.89 103.505 90)
@@ -8140,6 +8246,30 @@
 			)
 		)
 	)
+	(global_label "EXP_12"
+		(shape input)
+		(at 90.17 123.825 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "d3309625-0295-46d9-a22f-0a6f9b199a8d")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 100.1703 123.825 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
 	(global_label "VDDO_FLASH"
 		(shape input)
 		(at 271.145 128.27 90)
@@ -8404,7 +8534,6 @@
 			)
 		)
 	)
-
 	(global_label "ESP_VDD_HP"
 		(shape input)
 		(at 222.25 116.205 90)
@@ -8837,7 +8966,7 @@
 			)
 		)
 	)
-		(symbol
+	(symbol
 		(lib_id "Custom:W25Q128JVYIQ")
 		(at 60.96 170.18 0)
 		(unit 1)
@@ -9011,7 +9140,6 @@
 			)
 		)
 	)
-
 	(symbol
 		(lib_id "Device:C")
 		(at 222.25 120.015 0)
@@ -10627,20 +10755,6 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-07499KL"
-			(at 0 0 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects (font (size 1.27 1.27)))
-		)
-		(property "Mfr" "Yageo"
-			(at 0 0 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects (font (size 1.27 1.27)))
-		)
 		(property "Datasheet" ""
 			(at 135.89 26.67 0)
 			(hide yes)
@@ -10654,6 +10768,28 @@
 		)
 		(property "Description" "Resistor, US symbol"
 			(at 135.89 26.67 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07499KL"
+			(at 0 0 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 0 0 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11961,6 +12097,84 @@
 			(project "rocket-computer"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
 					(reference "#PWR0155")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+3V3")
+		(at 60.96 157.48 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "4570fb37-9cb0-4ae7-8703-225559dcd693")
+		(property "Reference" "#PWR0713"
+			(at 60.96 153.924 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 60.96 154.94 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 60.96 157.48 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 60.96 157.48 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 60.96 157.48 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "5d8bf8bd-b59a-48cb-9e10-51fde5f6a90c")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
+					(reference "#PWR0713")
 					(unit 1)
 				)
 			)
@@ -16452,20 +16666,6 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-07499KL"
-			(at 0 0 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects (font (size 1.27 1.27)))
-		)
-		(property "Mfr" "Yageo"
-			(at 0 0 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects (font (size 1.27 1.27)))
-		)
 		(property "Datasheet" ""
 			(at 135.89 40.64 0)
 			(hide yes)
@@ -16479,6 +16679,28 @@
 		)
 		(property "Description" "Resistor, US symbol"
 			(at 135.89 40.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07499KL"
+			(at 0 0 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 0 0 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -17517,6 +17739,83 @@
 			(project "rocket-computer"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
 					(reference "R70")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:PWR_FLAG")
+		(at 170.815 173.355 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "d0cf441b-d943-435e-b0fd-80f433450729")
+		(property "Reference" "#FLG06"
+			(at 170.815 171.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "PWR_FLAG"
+			(at 170.815 169.545 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 170.815 173.355 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 170.815 173.355 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Special symbol for telling ERC where power comes from"
+			(at 170.815 173.355 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "54897419-2862-427b-8e30-de21c6f3b560")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
+					(reference "#FLG06")
 					(unit 1)
 				)
 			)
@@ -19577,20 +19876,6 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402JR-070RL"
-			(at 0 0 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects (font (size 1.27 1.27)))
-		)
-		(property "Mfr" "Yageo"
-			(at 0 0 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects (font (size 1.27 1.27)))
-		)
 		(property "Datasheet" ""
 			(at 154.305 52.07 0)
 			(hide yes)
@@ -19604,6 +19889,28 @@
 		)
 		(property "Description" "Resistor, US symbol"
 			(at 154.305 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402JR-070RL"
+			(at 0 0 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 0 0 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20245,286 +20552,5 @@
 				)
 			)
 		)
-	)
-	(global_label "FC_CHIP_PU"
-		(shape input)
-		(at 33.02 35.56 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "4c3480e9-0606-466b-b28f-b4dc87584c0b")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 33.02 35.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:PWR_FLAG")
-		(at 170.815 173.355 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "d0cf441b-d943-435e-b0fd-80f433450729")
-		(property "Reference" "#FLG06"
-			(at 170.815 171.45 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "PWR_FLAG"
-			(at 170.815 169.545 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 170.815 173.355 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 170.815 173.355 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Special symbol for telling ERC where power comes from"
-			(at 170.815 173.355 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "54897419-2862-427b-8e30-de21c6f3b560")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
-					(reference "#FLG06")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(no_connect
-		(at 44.45 116.205)
-		(uuid "b1f0b401-d9d3-451b-9261-062d7b6a5e6e")
-	)
-	(no_connect
-		(at 90.17 70.485)
-		(uuid "e2acab9d-e9e1-479c-a792-4866d8619f9f")
-	)
-	(no_connect
-		(at 90.17 62.865)
-		(uuid "4db0ecf5-b627-4a84-b0bd-0d5589fc8ea4")
-	)
-	(no_connect
-		(at 90.17 60.325)
-		(uuid "414180ae-3ec7-46fd-b080-5a2f36a2fc38")
-	)
-	(no_connect
-		(at 90.17 65.405)
-		(uuid "2154c114-36a2-445d-acda-bbf8e3a2eb2f")
-	)
-	(no_connect
-		(at 90.17 67.945)
-		(uuid "1d3634be-0d32-4b43-a162-4007c889acee")
-	)
-	(no_connect
-		(at 90.17 57.785)
-		(uuid "df97c968-6580-476f-bd5f-d4a807cdc223")
-	)
-	(no_connect
-		(at 90.17 55.245)
-		(uuid "6512dc0a-39ca-4718-834b-750db604006a")
-	)
-	(no_connect
-		(at 44.45 55.245)
-		(uuid "fc53d2fb-3adb-4aed-bbbd-9dfb60eef27a")
-	)
-	(no_connect
-		(at 44.45 57.785)
-		(uuid "36b70923-f113-4eea-835b-01d517912830")
-	)
-	(no_connect
-		(at 44.45 67.945)
-		(uuid "5980cdc1-71b1-482a-91c5-24a86b1ddbef")
-	)
-	(no_connect
-		(at 44.45 65.405)
-		(uuid "52c0e329-6789-4750-8906-916ba72fe02b")
-	)
-	(no_connect
-		(at 44.45 60.325)
-		(uuid "b1d41887-55ed-44f2-95d3-d75f93cb3631")
-	)
-	(no_connect
-		(at 44.45 62.865)
-		(uuid "2ef435a8-ae29-4398-841b-c1112b031e7d")
-	)
-	(no_connect
-		(at 44.45 70.485)
-		(uuid "ce860aa5-2b9c-4a45-9179-1195e5911d37")
-	)
-	(no_connect
-		(at 90.17 32.385)
-		(uuid "d96ffd76-4aa7-4c31-b3cf-c21040a098db")
-	)
-	(no_connect
-		(at 90.17 34.925)
-		(uuid "09756159-cdc1-433e-8844-a6f87f40eb15")
-	)
-	(wire
-		(pts
-			(xy 45.72 162.56) (xy 45.72 157.48)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "09fb54a4-8557-4cf0-a944-571ee4a73067")
-	)
-	(wire
-		(pts
-			(xy 45.72 157.48) (xy 49.53 157.48)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "b2a42d06-489d-4129-90f8-6a09415b098e")
-	)
-	(wire
-		(pts
-			(xy 57.15 157.48) (xy 60.96 157.48)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "fc8b21d4-5784-4266-9bb9-cee74313c07e")
-	)
-	(symbol
-		(lib_id "power:+3V3")
-		(at 60.96 157.48 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "4570fb37-9cb0-4ae7-8703-225559dcd693")
-		(property "Reference" "#PWR0713"
-			(at 60.96 153.924 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "+3V3"
-			(at 60.96 154.94 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 60.96 157.48 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 60.96 157.48 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 60.96 157.48 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "5d8bf8bd-b59a-48cb-9e10-51fde5f6a90c")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
-					(reference "#PWR0713")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(no_connect
-		(at 90.17 123.825)
-		(uuid "c1aed928-b0ea-4601-9860-374ad8620667")
 	)
 )
