@@ -1159,6 +1159,9 @@ static bool camera_state_known = true;              // Power rail state — star
 // dispatch queue, and for that whole window the FC honestly reports "not
 // engaged" — a level test would clear the very request the operator just made.
 static bool fc_camera_engaged_prev = false;
+// When the last FC_STATUS_MSG arrived (millis), so a flag from an FC that has
+// since gone silent is not trusted (fcCameraEngagedNow).
+static uint32_t fc_status_last_ms = 0;
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 // #1228: the flight-logger half of initPeripherals() has a life of its own.
 // peripherals_initialized says the radio and the FC link are up; oc_logger_ok
@@ -4586,6 +4589,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                                "own — adopting its state so the next press turns it ON");
             }
             fc_camera_engaged_prev = fc_cam;
+            fc_status_last_ms = millis();
         }
     }
     else if (type == FC_BOOT_STATUS_MSG)
@@ -10069,6 +10073,228 @@ static constexpr uint32_t IDLE_LOOP_DELAY_MS = 20;
     }                                                                           \
 } while (0)
 
+// True when the FC reports its camera engaged (recording, stopping or powered)
+// and that report is recent.  An FC that has gone silent — dead, rebooting, or
+// on firmware too old to send FC_STATUS_MSG — gives no reason to wait.
+static bool fcCameraEngagedNow()
+{
+    return fc_camera_engaged_prev && (millis() - fc_status_last_ms) < 1500U;
+}
+
+// Longest a power-off or an OTA reboot waits for the FC to close the camera's
+// file.  Both drop the FC rail, which is a hard power cut to the camera.  The
+// FC's GoPro stop can be held up to 3 s after a fresh start press, then a
+// 200 ms press and a 15 s finalize (a RunCam needs ~5.5 s), plus the
+// command's trip through the FC dispatch queue.
+static constexpr uint32_t POWER_OFF_CAMERA_WAIT_MS = 25000;
+
+// A cmd-8 power-off waiting on the camera (see the cmd-8 handler).
+static bool     power_off_after_camera          = false;
+static uint32_t power_off_after_camera_since_ms = 0;
+
+// The cmd-8 power-off itself: drop the rail, park storage and pins, and reset.
+// Does not return.  The camera must already be stopped (cmd-8 handler).
+static void executePowerOff()
+{
+    pwr_pin_on = false;
+    // Power off: drop the FC rail and reset the OC.
+    //
+    // Surgically tearing down each peripheral on power-off
+    // (I2S DMA + APB lock, SPI bus, I2C master+slave bus,
+    // logger flush task, LittleFS, NAND/MRAM driver state,
+    // dedup filter prev_ts, BLE connection) is error-prone
+    // and leaves residual state that breaks the next
+    // power-on cycle (#9 — observed: I2S APB lock held,
+    // i2c_new_slave_device fails because bus is still
+    // acquired, dedup drops every post-reset frame). A
+    // clean reset gets us to the same idle state as cold
+    // boot (~16 mA baseline, BLE advertising, all driver
+    // state freshly initialised).
+    //
+    // The iOS app already handles the brief disconnect /
+    // reconnect because the existing brownout-on-power-on
+    // hardware quirk exercises the same recovery path.
+    ESP_LOGI("PWR", "Power off: resetting OC for clean idle state (#9)...");
+    // #825: mark this restart as the DELIBERATE power-off so the
+    // boot-time re-assert stands down — boot-time rail-LOW is
+    // load-bearing for this flow (the reset IS the power-off).
+    // #1176: the operator is deliberately powering down, so any
+    // flight is over as far as recovery is concerned. Clear the
+    // token BEFORE the reboot that implements the power-off, or
+    // the next boot would restore the rail the operator just
+    // asked to drop.
+    if (token_nvs_ok)
+    {
+        FlightToken t = {};
+        t.state = FlightTokenPolicy::kTokNone;
+        if (!tokenWrite(t))
+            ESP_LOGE("PWR", "#1176: token clear at power-off FAILED");
+    }
+    rail_rtc = {kRailRtcMagic, 0, 1, 0};
+    digitalWrite(config::PWR_PIN, LOW);
+    if (config::GPS_PWR_PIN >= 0)
+    {
+        digitalWrite(config::GPS_PWR_PIN, LOW);  // drop GNSS rail in lockstep
+    }
+
+    // #834 item 2: get the log onto the NAND before the reset.
+    // AFTER the rail drop on purpose — the wait doubles as
+    // rail-discharge time (PWR_PIN is already LOW) and the FC's
+    // frame source is gone. BEFORE the GPIO teardown below,
+    // because gpio_reset_pin() detaches the pads from the SPI
+    // matrix, after which no NAND command can complete.
+    quiesceStorageForRestart("power-off");
+
+    // Prevent back-feed into peripherals whose VCC is about to
+    // disappear: current from the still-powered OC side through a
+    // peripheral's input ESD diode into its dead rail shows up as
+    // steady draw on the OC's input. gpio_reset_pin detaches the
+    // pad from any peripheral-matrix routing left over from
+    // initPeripherals(); gpio_set_level(0) holds it LOW for the
+    // brief window before the reset. Post-reset IOs default to
+    // high-Z, which is also fine — high-Z is not a back-feed
+    // source. (#9)
+    //
+    // #834 item 2: this list used to name "LoRa, NAND, MRAM" and
+    // lead with the SPI bus. Every part of that was wrong for this
+    // board, verified against the KiCad netlist:
+    //   * U11 (GD5F2GQ5UE SPI NAND — "the flash") has VCC on +3V3,
+    //     generated by U18 (TPS62152) whose EN is tied to its own
+    //     AVIN: ALWAYS ON. It never loses power here, so there is
+    //     no dead rail to protect — and SPI_MISO is an output U11
+    //     DRIVES, so forcing the pad low was a push-pull fight with
+    //     a live chip. (Same reason the FC's I2S pins were moved to
+    //     the high-Z list below.)
+    //   * There is no MRAM on V9/V10 at all (#822) — MRAM_CS is -1.
+    //   * The switched rail V_MCU_SWTCH (U30) feeds the FC (U17)
+    //     and its sensors (U2/U3/U4/U20), none of which are here.
+    //   * LoRa is NOT on V_MCU_SWTCH: it is a J5 daughterboard fed
+    //     from VBATT through U29, enabled by LoRa_ACT, and talks
+    //     over UART — so the pins that genuinely need this are
+    //     LORA_UART_TX/RX, which the old list omitted entirely
+    //     while listing V7-only SPI-LoRa constants that are all -1
+    //     here and skipped. On V9 the loop therefore did nothing
+    //     except fight the flash.
+    // (There is no TPS22918 on this board either; the load
+    // switches are U29/U30 TPS22810 and U26/U28 TPS22811.)
+    //
+    // Split by direction: OC OUTPUTS into a soon-dead peripheral
+    // get driven LOW; anything the peripheral drives is left
+    // high-Z so we never contend with a still-powered part.
+    // LORA_ACT_PIN first: it is U29's enable, so dropping it is
+    // what actually removes the daughterboard's VBATT rail.
+    // Driving LORA_UART_TX low while the module is still powered
+    // would just hold a break condition on a live receiver; the
+    // back-feed this list exists to prevent only becomes possible
+    // once the rail is gone.
+    static const gpio_num_t kSwitchedRailPins[] = {
+        (gpio_num_t)config::LORA_ACT_PIN,      // U29 EN -> LoRa rail
+        (gpio_num_t)config::LORA_UART_TX_PIN,  // OC -> J5 daughterboard
+        (gpio_num_t)config::LORA_SPI_SCK,      // V7 SPI-LoRa (-1 on V8+)
+        (gpio_num_t)config::LORA_SPI_MOSI,
+        (gpio_num_t)config::LORA_CS_PIN,
+        (gpio_num_t)config::LORA_RST_PIN,
+    };
+    // I2S signals from the FC (slave RX on the OC) are handled
+    // separately: they are FC OUTPUTS, and since #848 the FC can
+    // legitimately still be POWERED here (its P4_EN_HOLD latch
+    // during a sim/flight means dropping PWR_PIN no longer cuts
+    // its rail). Driving a live I2S bit clock hard LOW for the
+    // 100 ms below would be a sustained push-pull drive fight.
+    // gpio_reset_pin leaves them high-Z inputs — per the comment
+    // above, high-Z is not a back-feed source, which was the only
+    // reason these were ever in the driven-LOW list (#9).
+    // #834 item 2: the LoRa lines the DAUGHTERBOARD drives join
+    // them, for the same reason — and so do the flash's, which are
+    // simply left alone now: U11 stays powered, and the quiesce
+    // above has parked the SPI mutex with CS HIGH and no byte on
+    // the wire. (The park takes the mutex; it does NOT tear down
+    // the SPI driver — see TR_LogToFlash::parkSpiBusForReset. It
+    // does not need to: nothing can start a transaction while the
+    // bus is parked.)
+    static const gpio_num_t kHighZPins[] = {
+        (gpio_num_t)config::I2S_BCLK_PIN,
+        (gpio_num_t)config::I2S_WS_PIN,
+        (gpio_num_t)config::I2S_DIN_PIN,
+        (gpio_num_t)config::I2S_FSYNC_PIN,
+        (gpio_num_t)config::LORA_UART_RX_PIN,  // J5 -> OC
+        (gpio_num_t)config::LORA_SPI_MISO,     // V7 SPI-LoRa (-1 on V8+)
+        (gpio_num_t)config::LORA_DIO1_PIN,
+        (gpio_num_t)config::LORA_BUSY_PIN,
+    };
+    for (gpio_num_t pin : kSwitchedRailPins) {
+        if ((int)pin < 0) continue;  // peripheral absent on this board (#411)
+        gpio_reset_pin(pin);
+        gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+        gpio_set_pull_mode(pin, GPIO_FLOATING);
+        gpio_set_level(pin, 0);
+    }
+    for (gpio_num_t pin : kHighZPins) {
+        if ((int)pin < 0) continue;
+        gpio_reset_pin(pin);
+        // gpio_reset_pin() ENABLES the internal pull-up, so on its
+        // own it does not give the high-Z this list promises — a
+        // ~45 kOhm pull to 3V3 still injects into an unpowered
+        // peripheral, and still fights a live driver. Float it.
+        gpio_set_pull_mode(pin, GPIO_FLOATING);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(100));   // let rail drop, caps discharge
+    esp_restart();
+    // not reached
+}
+
+// The OTA reboot's camera hold (loop_oc): on the first due pass with the FC
+// reporting its camera engaged, send it a stop; then hold until the FC reports
+// the camera off or POWER_OFF_CAMERA_WAIT_MS runs out.
+static bool     ota_camera_hold          = false;  // cleared when no reboot is due
+static uint32_t ota_camera_hold_since_ms = 0;
+static bool holdOtaRestartForCamera()
+{
+    if (!ota_camera_hold)
+    {
+        if (!fcCameraEngagedNow()) return false;
+        ota_camera_hold = true;
+        ota_camera_hold_since_ms = millis();
+        camera_recording_requested = false;
+        camera_state_known = true;
+        setPendingCommand(CAMERA_STOP);
+        ESP_LOGW("OC", "OTA: reboot held — camera is on; stopping it so its file "
+                       "closes before the rail drops (up to %lu s)",
+                 (unsigned long)(POWER_OFF_CAMERA_WAIT_MS / 1000U));
+        return true;
+    }
+    const uint32_t waited = millis() - ota_camera_hold_since_ms;
+    if (fcCameraEngagedNow() && waited < POWER_OFF_CAMERA_WAIT_MS) return true;
+    ESP_LOGI("OC", "OTA: camera %s after %lu ms — rebooting",
+             fcCameraEngagedNow() ? "STILL ON" : "off", (unsigned long)waited);
+    return false;
+}
+
+// Finish a deferred power-off once the FC reports the camera off, or at the
+// bound.  A power-on in the meantime cancels it (cmd-8 handler), and it is
+// re-checked against the in-flight rule a fresh power-off gets.
+static void servicePowerOffAfterCamera()
+{
+    if (!power_off_after_camera) return;
+    const uint32_t waited = millis() - power_off_after_camera_since_ms;
+    const bool engaged = fcCameraEngagedNow();
+    if (engaged && waited < POWER_OFF_CAMERA_WAIT_MS) return;
+    power_off_after_camera = false;
+    if (inflightHold().refuse)
+    {
+        ESP_LOGW("PWR", "Deferred power off CANCELLED: rocket is INFLIGHT");
+        return;
+    }
+    if (engaged)
+        ESP_LOGW("PWR", "Camera still on after %lu ms — powering off anyway",
+                 (unsigned long)waited);
+    else
+        ESP_LOGI("PWR", "Camera off after %lu ms — powering off",
+                 (unsigned long)waited);
+    executePowerOff();
+}
+
 static void loop_oc()
 {
     // #825: one-shot completion of a boot rail restore, on THIS task/core
@@ -10736,7 +10962,15 @@ static void loop_oc()
     // storage window. Gated on otaRestartDue() (ELAPSED, not merely scheduled)
     // so the ring keeps draining for that whole window and we only quiesce on
     // the pass that will actually restart.
-    if (ble_app.otaRestartDue())
+    // The reboot drops the FC rail, a hard power cut to a recording camera, so
+    // it waits (bounded) for the camera's file to close first.  ble_app.loop()
+    // would fire the restart itself, so it is skipped while held; an OTA_ABORT
+    // clears the due flag and lets it run again.
+    if (ble_app.otaRestartDue() && holdOtaRestartForCamera())
+    {
+        // held — nothing else this pass
+    }
+    else if (ble_app.otaRestartDue())
     {
         // Atomic with the restart on purpose. The quiesce is IRREVERSIBLE (the
         // SPI bus is parked and never handed back, ingest stays paused), while
@@ -10748,7 +10982,12 @@ static void loop_oc()
         ESP_LOGW("OC", "OTA: rebooting now to load new partition (#834 item 2)");
         esp_restart();
     }
-    ble_app.loop();
+    else
+    {
+        ota_camera_hold = false;  // no reboot due (or an OTA_ABORT cleared it)
+        ble_app.loop();
+    }
+    servicePowerOffAfterCamera();
 
     // Check for BLE commands
     // #383: stage a stashed OTA_BEGIN from the loop task (see ocOtaRelayBegin).
@@ -11473,6 +11712,12 @@ static void loop_oc()
                          (unsigned long)hold.fc_age_ms,
                          (unsigned long)(hold.hold_left_ms / 1000U));
             }
+            else if (want_on && power_off_after_camera)
+            {
+                power_off_after_camera = false;
+                ESP_LOGI("BLE", "Deferred power off CANCELLED by a power-on "
+                                "(the camera stop already sent stands)");
+            }
             else if (want_on == was_on)
             {
                 ESP_LOGI("BLE", "Power rail already %s, ignoring",
@@ -11515,154 +11760,27 @@ static void loop_oc()
                     requestFastBLEParams();
                 }
             }
+            else if (power_off_after_camera)
+            {
+                ESP_LOGI("BLE", "Power off already pending on the camera, ignoring");
+            }
+            else if (fcCameraEngagedNow())
+            {
+                // The rail drop cuts the camera's power too.  Close its file
+                // first: ask the FC to stop it, and finish the power-off once
+                // the FC reports it off (servicePowerOffAfterCamera).
+                camera_recording_requested = false;
+                camera_state_known = true;
+                setPendingCommand(CAMERA_STOP);
+                power_off_after_camera = true;
+                power_off_after_camera_since_ms = millis();
+                ESP_LOGW("PWR", "Power off deferred: camera is on — stopping it and "
+                                "waiting for its file to close (up to %lu s)",
+                         (unsigned long)(POWER_OFF_CAMERA_WAIT_MS / 1000U));
+            }
             else
             {
-                pwr_pin_on = false;
-                // Power off: drop the FC rail and reset the OC.
-                //
-                // Surgically tearing down each peripheral on power-off
-                // (I2S DMA + APB lock, SPI bus, I2C master+slave bus,
-                // logger flush task, LittleFS, NAND/MRAM driver state,
-                // dedup filter prev_ts, BLE connection) is error-prone
-                // and leaves residual state that breaks the next
-                // power-on cycle (#9 — observed: I2S APB lock held,
-                // i2c_new_slave_device fails because bus is still
-                // acquired, dedup drops every post-reset frame). A
-                // clean reset gets us to the same idle state as cold
-                // boot (~16 mA baseline, BLE advertising, all driver
-                // state freshly initialised).
-                //
-                // The iOS app already handles the brief disconnect /
-                // reconnect because the existing brownout-on-power-on
-                // hardware quirk exercises the same recovery path.
-                ESP_LOGI("PWR", "Power off: resetting OC for clean idle state (#9)...");
-                // #825: mark this restart as the DELIBERATE power-off so the
-                // boot-time re-assert stands down — boot-time rail-LOW is
-                // load-bearing for this flow (the reset IS the power-off).
-                // #1176: the operator is deliberately powering down, so any
-                // flight is over as far as recovery is concerned. Clear the
-                // token BEFORE the reboot that implements the power-off, or
-                // the next boot would restore the rail the operator just
-                // asked to drop.
-                if (token_nvs_ok)
-                {
-                    FlightToken t = {};
-                    t.state = FlightTokenPolicy::kTokNone;
-                    if (!tokenWrite(t))
-                        ESP_LOGE("PWR", "#1176: token clear at power-off FAILED");
-                }
-                rail_rtc = {kRailRtcMagic, 0, 1, 0};
-                digitalWrite(config::PWR_PIN, LOW);
-                if (config::GPS_PWR_PIN >= 0)
-                {
-                    digitalWrite(config::GPS_PWR_PIN, LOW);  // drop GNSS rail in lockstep
-                }
-
-                // #834 item 2: get the log onto the NAND before the reset.
-                // AFTER the rail drop on purpose — the wait doubles as
-                // rail-discharge time (PWR_PIN is already LOW) and the FC's
-                // frame source is gone. BEFORE the GPIO teardown below,
-                // because gpio_reset_pin() detaches the pads from the SPI
-                // matrix, after which no NAND command can complete.
-                quiesceStorageForRestart("power-off");
-
-                // Prevent back-feed into peripherals whose VCC is about to
-                // disappear: current from the still-powered OC side through a
-                // peripheral's input ESD diode into its dead rail shows up as
-                // steady draw on the OC's input. gpio_reset_pin detaches the
-                // pad from any peripheral-matrix routing left over from
-                // initPeripherals(); gpio_set_level(0) holds it LOW for the
-                // brief window before the reset. Post-reset IOs default to
-                // high-Z, which is also fine — high-Z is not a back-feed
-                // source. (#9)
-                //
-                // #834 item 2: this list used to name "LoRa, NAND, MRAM" and
-                // lead with the SPI bus. Every part of that was wrong for this
-                // board, verified against the KiCad netlist:
-                //   * U11 (GD5F2GQ5UE SPI NAND — "the flash") has VCC on +3V3,
-                //     generated by U18 (TPS62152) whose EN is tied to its own
-                //     AVIN: ALWAYS ON. It never loses power here, so there is
-                //     no dead rail to protect — and SPI_MISO is an output U11
-                //     DRIVES, so forcing the pad low was a push-pull fight with
-                //     a live chip. (Same reason the FC's I2S pins were moved to
-                //     the high-Z list below.)
-                //   * There is no MRAM on V9/V10 at all (#822) — MRAM_CS is -1.
-                //   * The switched rail V_MCU_SWTCH (U30) feeds the FC (U17)
-                //     and its sensors (U2/U3/U4/U20), none of which are here.
-                //   * LoRa is NOT on V_MCU_SWTCH: it is a J5 daughterboard fed
-                //     from VBATT through U29, enabled by LoRa_ACT, and talks
-                //     over UART — so the pins that genuinely need this are
-                //     LORA_UART_TX/RX, which the old list omitted entirely
-                //     while listing V7-only SPI-LoRa constants that are all -1
-                //     here and skipped. On V9 the loop therefore did nothing
-                //     except fight the flash.
-                // (There is no TPS22918 on this board either; the load
-                // switches are U29/U30 TPS22810 and U26/U28 TPS22811.)
-                //
-                // Split by direction: OC OUTPUTS into a soon-dead peripheral
-                // get driven LOW; anything the peripheral drives is left
-                // high-Z so we never contend with a still-powered part.
-                // LORA_ACT_PIN first: it is U29's enable, so dropping it is
-                // what actually removes the daughterboard's VBATT rail.
-                // Driving LORA_UART_TX low while the module is still powered
-                // would just hold a break condition on a live receiver; the
-                // back-feed this list exists to prevent only becomes possible
-                // once the rail is gone.
-                static const gpio_num_t kSwitchedRailPins[] = {
-                    (gpio_num_t)config::LORA_ACT_PIN,      // U29 EN -> LoRa rail
-                    (gpio_num_t)config::LORA_UART_TX_PIN,  // OC -> J5 daughterboard
-                    (gpio_num_t)config::LORA_SPI_SCK,      // V7 SPI-LoRa (-1 on V8+)
-                    (gpio_num_t)config::LORA_SPI_MOSI,
-                    (gpio_num_t)config::LORA_CS_PIN,
-                    (gpio_num_t)config::LORA_RST_PIN,
-                };
-                // I2S signals from the FC (slave RX on the OC) are handled
-                // separately: they are FC OUTPUTS, and since #848 the FC can
-                // legitimately still be POWERED here (its P4_EN_HOLD latch
-                // during a sim/flight means dropping PWR_PIN no longer cuts
-                // its rail). Driving a live I2S bit clock hard LOW for the
-                // 100 ms below would be a sustained push-pull drive fight.
-                // gpio_reset_pin leaves them high-Z inputs — per the comment
-                // above, high-Z is not a back-feed source, which was the only
-                // reason these were ever in the driven-LOW list (#9).
-                // #834 item 2: the LoRa lines the DAUGHTERBOARD drives join
-                // them, for the same reason — and so do the flash's, which are
-                // simply left alone now: U11 stays powered, and the quiesce
-                // above has parked the SPI mutex with CS HIGH and no byte on
-                // the wire. (The park takes the mutex; it does NOT tear down
-                // the SPI driver — see TR_LogToFlash::parkSpiBusForReset. It
-                // does not need to: nothing can start a transaction while the
-                // bus is parked.)
-                static const gpio_num_t kHighZPins[] = {
-                    (gpio_num_t)config::I2S_BCLK_PIN,
-                    (gpio_num_t)config::I2S_WS_PIN,
-                    (gpio_num_t)config::I2S_DIN_PIN,
-                    (gpio_num_t)config::I2S_FSYNC_PIN,
-                    (gpio_num_t)config::LORA_UART_RX_PIN,  // J5 -> OC
-                    (gpio_num_t)config::LORA_SPI_MISO,     // V7 SPI-LoRa (-1 on V8+)
-                    (gpio_num_t)config::LORA_DIO1_PIN,
-                    (gpio_num_t)config::LORA_BUSY_PIN,
-                };
-                for (gpio_num_t pin : kSwitchedRailPins) {
-                    if ((int)pin < 0) continue;  // peripheral absent on this board (#411)
-                    gpio_reset_pin(pin);
-                    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
-                    gpio_set_pull_mode(pin, GPIO_FLOATING);
-                    gpio_set_level(pin, 0);
-                }
-                for (gpio_num_t pin : kHighZPins) {
-                    if ((int)pin < 0) continue;
-                    gpio_reset_pin(pin);
-                    // gpio_reset_pin() ENABLES the internal pull-up, so on its
-                    // own it does not give the high-Z this list promises — a
-                    // ~45 kOhm pull to 3V3 still injects into an unpowered
-                    // peripheral, and still fights a live driver. Float it.
-                    gpio_set_pull_mode(pin, GPIO_FLOATING);
-                }
-
-                vTaskDelay(pdMS_TO_TICKS(100));   // let rail drop, caps discharge
-                esp_restart();
-                // not reached
+                executePowerOff();
             }
 
             // Only on an actual state change — an ignored duplicate must not
@@ -11670,8 +11788,10 @@ static void loop_oc()
             // #834 item 2: a REFUSED off never changed the rail, so it must
             // not claim it did — the epilogue logs the transition, stalls the
             // loop 100 ms and re-pushes config, all of which are wrong (and
-            // mid-flight, actively harmful) on a refusal.
-            if (want_on != was_on && !refuse_off)
+            // mid-flight, actively harmful) on a refusal.  Keyed on the rail
+            // itself, so an off deferred on the camera (still ON) and a
+            // cancel of one do not claim a transition either.
+            if (pwr_pin_on != was_on)
             {
                 ESP_LOGI("BLE", "Power rail: %s%s", pwr_pin_on ? "ON" : "OFF",
                          (plen >= 1) ? "" : " (legacy toggle)");

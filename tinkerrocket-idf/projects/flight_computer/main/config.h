@@ -338,7 +338,15 @@ struct config : board_pins
     static constexpr uint32_t GOPRO_BOOT_MS        = 7000;   // gate up -> first press
     static constexpr uint16_t GOPRO_PULSE_MS       = 200;    // start press width
     static constexpr uint16_t GOPRO_STOP_PULSE_MS  = 200;    // stop press width (separate knob)
-    static constexpr uint32_t GOPRO_FINALIZE_MS    = 10000;  // stop press -> gate off (file close)
+    // 15 s, up from 10 s: a bench run ended with a large, corrupted file, and
+    // closing a long recording is the step whose cost grows with the file.
+    static constexpr uint32_t GOPRO_FINALIZE_MS    = 15000;  // stop press -> gate off (file close)
+    // Start-press release -> earliest stop press.  The press is a TOGGLE and
+    // the camera takes a moment to get a recording under way; a stop press
+    // that lands inside that window (a stop, sim reset or power-off right
+    // after the start) can be swallowed, and the camera then records straight
+    // into the power cut.  The stop is held back, never dropped.
+    static constexpr uint32_t GOPRO_MIN_RECORD_MS  = 3000;
 
     // Time to keep the camera rolling after LANDED before issuing the stop.
     // Captures post-impact footage and, critically, removes the inline
