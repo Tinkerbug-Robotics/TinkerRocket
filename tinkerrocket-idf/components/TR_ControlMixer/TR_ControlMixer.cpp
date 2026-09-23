@@ -12,8 +12,7 @@ TR_ControlMixer::TR_ControlMixer()
       yaw_kp_base_(0.04f),   yaw_ki_base_(0.001f),   yaw_kd_base_(0.0003f),
       gain_sched_enabled_(false),
       v_ref_(95.0f),
-      v_min_(30.0f),
-      prev_gain_scale_(1.0f)
+      v_min_(30.0f)
 {
     for (int i = 0; i < 4; ++i) {
         deflections_[i] = 0.0f;
@@ -57,13 +56,8 @@ void TR_ControlMixer::applyGainSchedule(float speed_mps)
     float scale = v_ratio * v_ratio;
     scale = std::min(scale, 3.0f);  // cap to avoid excessive gains at low speed
 
-    // Reset integral terms when gain scale changes significantly
-    if (fabsf(scale - prev_gain_scale_) > 0.1f) {
-        pitch_rate_pid_.resetIntegral();
-        yaw_rate_pid_.resetIntegral();
-    }
-    prev_gain_scale_ = scale;
-
+    // No integral reset on a scale change: TR_PID holds the I term in output
+    // units, so it is continuous when Ki moves (see TR_PID::setKi).
     pitch_rate_pid_.setKp(pitch_kp_base_ * scale);
     pitch_rate_pid_.setKi(pitch_ki_base_ * scale);
     pitch_rate_pid_.setKd(pitch_kd_base_ * scale);
@@ -176,7 +170,6 @@ void TR_ControlMixer::reset()
     yaw_rate_pid_.reset();
     pitch_fin_cmd_ = 0.0f;
     yaw_fin_cmd_   = 0.0f;
-    prev_gain_scale_ = 1.0f;
     for (int i = 0; i < 4; ++i) {
         deflections_[i] = 0.0f;
     }
