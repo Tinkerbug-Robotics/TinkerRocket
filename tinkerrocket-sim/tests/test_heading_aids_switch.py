@@ -31,7 +31,7 @@ def _roll_metrics(fuse, seed=None):
 
     `seed` overrides the scenario's own sensor_seed. It exists because the
     single-seed answer is not the answer — see
-    test_the_aids_effect_on_the_roll_null_is_within_seed_noise.
+    test_the_aids_do_not_help_the_roll_null.
     """
     import tinkerrocket_sim.simulation.closed_loop_sim as C
     original = _ekf.GpsInsEKF
@@ -58,8 +58,9 @@ def _roll_metrics(fuse, seed=None):
     return float(coast['roll_rate_dps'].abs().median()), settle
 
 
-def test_the_aids_effect_on_the_roll_null_is_within_seed_noise():
-    """#1281: the sim cannot sign these aids, and never could.
+def test_the_aids_do_not_help_the_roll_null():
+    """#1281: the sim could not sign these aids — until the roll loop stopped
+    making its own coast error (2026-09-23, below).
 
     This test used to assert `on_med < off_med` and `on_med < 3.0`, from a
     single measurement on `sensor_seed=42`: 6.41 dps with the aids off, 1.34
@@ -83,10 +84,24 @@ def test_the_aids_effect_on_the_roll_null_is_within_seed_noise():
     differentiated at 25 Hz that is MORE acceleration noise than the real
     receiver produces at 18.18 Hz, not less (17.7 vs 9.7 m/s^2).
 
-    What this test can honestly assert is the null: the mean effect is small
-    compared with the spread, so no single-seed comparison may be used to
-    argue these aids help or hurt. Score them against a flight with a roll
-    reference instead (#1309).
+    That null held while the roll loop carried an error of its own. Until
+    2026-09-23 the firmware's I term was Ki_eff * integral(e), and the V² gain
+    schedule's rising Ki made it unwind a learned trim all through coast: ~6 dps
+    of coast median in this scenario whether the aids were on or off, which is
+    what buried them. With the I term held in fin degrees (TR_PID) the coast
+    median drops to ~2.5 dps, and the aids' effect surfaces — adverse:
+
+        held I term, seeds 1-32    mean delta +0.88 +/- 1.60 dps
+                                  (t = +3.1, aid helps on 11/32)
+        seeds 1-8 (this test)      +1.61 +/- 1.93   (a high draw)
+        scaled I term, seeds 1-32  -0.04 +/- 2.23   (t = -0.1)
+
+    Fusing the aids makes the sim's roll null slightly WORSE. That agrees with
+    shipping them off and changes nothing in #1309, which scores them against a
+    flight with a roll reference, because the sim still has no GNSS velocity
+    noise model to trust here. What this test pins is the direction: the sim
+    must not start claiming the aids help, and the effect stays small next to
+    the seed spread.
     """
     deltas = []
     for seed in range(1, 9):
@@ -96,13 +111,15 @@ def test_the_aids_effect_on_the_roll_null_is_within_seed_noise():
     mean = sum(deltas) / len(deltas)
     spread = (sum((d - mean) ** 2 for d in deltas) / (len(deltas) - 1)) ** 0.5
 
-    # The effect is small next to the seed noise. Measured |mean| is 0.02-0.84
-    # across configurations and seed sets; the spread is ~1.9.
-    assert abs(mean) < 1.5, (
-        f"the aids now show a directional effect on the roll null "
-        f"(mean {mean:+.2f} dps over {len(deltas)} seeds, spread {spread:.2f}) — "
-        f"if that is real it changes #1309's scoring plan, so measure it before "
-        f"relaxing this bound")
+    # Measured +1.61 on these seeds (+0.88 over 32); the spread is ~1.9.
+    assert mean > -0.5, (
+        f"the aids now HELP the sim's roll null (mean {mean:+.2f} dps over "
+        f"{len(deltas)} seeds, spread {spread:.2f}) — that reverses the "
+        f"2026-09-23 measurement and bears on #1309; measure it on 32 seeds")
+    assert mean < 3.0, (
+        f"the aids' cost to the roll null grew to {mean:+.2f} dps over "
+        f"{len(deltas)} seeds (spread {spread:.2f}) — measured +1.61 here and "
+        f"+0.88 over 32 seeds; find out what changed before relaxing this")
     # And it is genuinely a spread, not a constant: if every seed agreed, the
     # effect would be systematic and the assertion above would be the wrong test.
     assert spread > 0.3, (
