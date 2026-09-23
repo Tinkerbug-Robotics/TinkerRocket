@@ -2,9 +2,11 @@
 //
 // Provides just enough of the LEDC (PWM) API for TR_ServoControl_ledc_mult to
 // compile and run on a host toolchain (SIL / unit tests). There is no PWM
-// peripheral on the host, so every ledc_* call is a no-op — but the servo
+// peripheral on the host, so no ledc_* call drives anything — but the servo
 // controller's roll-command math (controlAngle cascade, rate cap, gain
 // schedule, deg->us mapping) is pure and runs exactly as it does on the rocket.
+// The calls are RECORDED (hostLedcLog below) so a test can assert which
+// peripheral operations a servo path asked for, not just the math.
 //
 // Enum *values* mirror the real esp-idf where the servo controller depends on
 // them numerically: notably LEDC_TIMER_12_BIT == 12, because
@@ -69,11 +71,47 @@ typedef int esp_err_t;
 static inline const char* esp_err_to_name(esp_err_t) { return "ESP_OK"; }
 #endif
 
-// No-op stubs (host has no PWM peripheral). Return ESP_OK; the servo
-// controller checks these in begin() and logs (no-op on host) on failure.
-static inline esp_err_t ledc_timer_config(const ledc_timer_config_t*)        { return ESP_OK; }
+// What the code under test asked the peripheral to do.  The distinction that
+// matters on target: ledc_timer_config() ends in ledc_timer_rst(), which
+// restarts the counter mid-frame and so stretches or truncates the pulse in
+// flight on every channel bound to that timer; ledc_set_freq() only rewrites
+// the divider, latched at the next period boundary.  An inline function's
+// static local is one object across every translation unit, so the driver and
+// the test see the same log.
+struct HostLedcLog {
+    int      timer_config_calls = 0;
+    int      set_freq_calls     = 0;
+    int      set_duty_calls     = 0;
+    uint32_t freq_hz[LEDC_TIMER_MAX] = {};
+    uint32_t duty[LEDC_CHANNEL_MAX]  = {};
+};
+inline HostLedcLog& hostLedcLog() { static HostLedcLog log; return log; }
+inline void hostLedcLogReset() { hostLedcLog() = HostLedcLog{}; }
+
+// Stubs (host has no PWM peripheral). Return ESP_OK; the servo controller
+// checks these and logs (no-op on host) on failure.
+static inline esp_err_t ledc_timer_config(const ledc_timer_config_t* conf)
+{
+    HostLedcLog& log = hostLedcLog();
+    ++log.timer_config_calls;
+    if (conf && conf->timer_num < LEDC_TIMER_MAX) log.freq_hz[conf->timer_num] = conf->freq_hz;
+    return ESP_OK;
+}
+static inline esp_err_t ledc_set_freq(ledc_mode_t, ledc_timer_t timer, uint32_t freq_hz)
+{
+    HostLedcLog& log = hostLedcLog();
+    ++log.set_freq_calls;
+    if (timer < LEDC_TIMER_MAX) log.freq_hz[timer] = freq_hz;
+    return ESP_OK;
+}
 static inline esp_err_t ledc_channel_config(const ledc_channel_config_t*)    { return ESP_OK; }
-static inline esp_err_t ledc_set_duty(ledc_mode_t, ledc_channel_t, uint32_t) { return ESP_OK; }
+static inline esp_err_t ledc_set_duty(ledc_mode_t, ledc_channel_t channel, uint32_t duty)
+{
+    HostLedcLog& log = hostLedcLog();
+    ++log.set_duty_calls;
+    if (channel < LEDC_CHANNEL_MAX) log.duty[channel] = duty;
+    return ESP_OK;
+}
 static inline esp_err_t ledc_update_duty(ledc_mode_t, ledc_channel_t)        { return ESP_OK; }
 
 #endif  // HOST_SHIM_DRIVER_LEDC_H
