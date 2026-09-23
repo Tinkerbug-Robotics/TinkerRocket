@@ -9,9 +9,10 @@
 // transition back to rate-null happens exactly on the #265 EKF-health
 // fallback — the safety path — which made the stale setpoint worse.
 //
-// The LEDC calls are no-ops on the host (host_shim/driver/ledc.h); the
-// controller math runs exactly as on the rocket.  micros() is the shim's
-// mock clock, advanced explicitly per tick.
+// The LEDC calls drive nothing on the host but are recorded
+// (host_shim/driver/ledc.h: hostLedcLog); the controller math runs exactly as
+// on the rocket.  micros() is the shim's mock clock, advanced explicitly per
+// tick.
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -444,6 +445,110 @@ TEST_F(ServoControlTest, RejectedServoTimingKeepsThePrevious) {
         << "a refused timing changed the pulse anyway";
     EXPECT_EQ(servo.getServoMinUs(), 1000);
     EXPECT_EQ(servo.getServoMaxUs(), 2000);
+}
+
+// ── setServoTiming(): no counter reset, no motion ──
+//
+// Every SERVO_CONFIG from the app lands in setServoTiming(), rate changed or
+// not.  It used to re-run ledc_timer_config() on all four timers -- on target
+// that ends in ledc_timer_rst(), restarting the counter mid-frame, so a pulse
+// that was high at the time came out stretched by however long it had already
+// been high -- and then setPulse(0), which powered all four fins to the raw
+// midpoint, including from setup_fc when the boot restored a non-default NVS
+// timing.  The shim records peripheral calls, so these pin what the path may
+// ask for, not just the values it stores.
+
+TEST_F(ServoControlTest, UnchangedFrameRateTouchesNoTimerAndMovesNothing) {
+    // SetUp left the fixture at 50 Hz with all four channels driven.
+    int held[4];
+    for (int i = 0; i < 4; ++i) held[i] = servo.getServoPulseUs(i);
+    hostLedcLogReset();
+
+    ASSERT_TRUE(servo.setServoTiming(50, 900, 2100));   // a trim resend: same rate
+
+    const HostLedcLog& log = hostLedcLog();
+    EXPECT_EQ(log.timer_config_calls, 0)
+        << "a timer was reconfigured -- and so reset -- for an unchanged rate";
+    EXPECT_EQ(log.set_freq_calls, 0);
+    EXPECT_EQ(log.set_duty_calls, 0) << "setServoTiming() drove a fin";
+    for (int i = 0; i < 4; ++i) EXPECT_EQ(servo.getServoPulseUs(i), held[i]);
+    EXPECT_EQ(servo.getServoMinUs(), 900) << "the new timing must still be stored";
+    EXPECT_EQ(servo.getServoMaxUs(), 2100);
+}
+
+TEST_F(ServoControlTest, ChangedFrameRateRetimesWithoutAResetAndHoldsEveryPulse) {
+    int held[4];
+    for (int i = 0; i < 4; ++i) held[i] = servo.getServoPulseUs(i);
+    hostLedcLogReset();
+
+    ASSERT_TRUE(servo.setServoTiming(333, 1000, 2000));
+
+    const HostLedcLog& log = hostLedcLog();
+    EXPECT_EQ(log.timer_config_calls, 0)
+        << "ledc_timer_config() resets the counter mid-frame; use ledc_set_freq()";
+    EXPECT_EQ(log.set_freq_calls, 4);
+    for (int t = 0; t < 4; ++t) EXPECT_EQ(log.freq_hz[t], 333u);
+    // Duty is a count of the period, so each held width must be re-expressed
+    // at the new rate or the pulse on the pin changes by 333/50.
+    constexpr uint32_t kMaxDuty = (1u << LEDC_TIMER_12_BIT) - 1;   // the driver's resolution
+    EXPECT_EQ(log.set_duty_calls, 4);
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(servo.getServoPulseUs(i), held[i]) << "servo " << i << " moved";
+        EXPECT_EQ(log.duty[i], static_cast<uint32_t>(held[i]) * 333u * kMaxDuty / 1000000u)
+            << "servo " << i << " holds a different width at the new rate";
+    }
+}
+
+TEST_F(ServoControlTest, ATimingChangeNeverWakesARelaxedServo) {
+    // The boot path: setup_fc restores a non-default NVS timing right after
+    // begin(), before it has asked whether this boot is resuming a flight.
+    TR_ServoControl fresh{1, 2, 3, 4, 0, 0, 0, 0, 50, 1000, 2000,
+                          KP, KI, KD, MIN_CMD, MAX_CMD};
+    fresh.begin();
+    hostLedcLogReset();
+
+    ASSERT_TRUE(fresh.setServoTiming(333, 900, 2100));
+
+    EXPECT_TRUE(fresh.isIdle());
+    EXPECT_EQ(hostLedcLog().set_duty_calls, 0) << "setup_fc moved a fin";
+    for (int i = 0; i < 4; ++i) EXPECT_EQ(fresh.getServoPulseUs(i), 0);
+
+    // The pad relax: the same, after the pulse train was deliberately cut.
+    servo.idle();
+    hostLedcLogReset();
+    ASSERT_TRUE(servo.setServoTiming(333, 1000, 2000));
+    EXPECT_TRUE(servo.isIdle());
+    EXPECT_EQ(hostLedcLog().set_duty_calls, 0) << "a relaxed servo was re-energised";
+}
+
+TEST_F(ServoControlTest, ATimingChangeReexpressesOnlyTheChannelsBeingDriven) {
+    // The boot wiggle wakes one channel at a time, so "not idle" is not "all
+    // four driven" -- and last_pulse_us_ keeps its value through idle() as a
+    // diagnostic, so it cannot be the test either.  Re-expressing a channel
+    // that is relaxed would energise it.
+    servo.idle();
+    servo.beginWiggle(0);
+    servo.serviceWiggle(0);            // servo 1 to its min; 2-4 stay relaxed
+    ASSERT_FALSE(servo.isIdle());
+    hostLedcLogReset();
+
+    ASSERT_TRUE(servo.setServoTiming(333, 1000, 2000));
+
+    EXPECT_EQ(hostLedcLog().set_duty_calls, 1) << "a relaxed channel was driven";
+    EXPECT_NE(hostLedcLog().duty[0], 0u);
+}
+
+TEST_F(ServoControlTest, ATimingSetBeforeBeginIsAppliedByBegin) {
+    TR_ServoControl fresh{1, 2, 3, 4, 0, 0, 0, 0, 50, 1000, 2000,
+                          KP, KI, KD, MIN_CMD, MAX_CMD};
+    hostLedcLogReset();
+
+    ASSERT_TRUE(fresh.setServoTiming(333, 1000, 2000));
+    EXPECT_EQ(hostLedcLog().set_freq_calls, 0) << "no timers exist before begin()";
+
+    fresh.begin();
+    EXPECT_EQ(hostLedcLog().timer_config_calls, 4);
+    for (int t = 0; t < 4; ++t) EXPECT_EQ(hostLedcLog().freq_hz[t], 333u);
 }
 
 TEST_F(ServoControlTest, GainScheduleDoesNotLeakIntoTheRateNullFallback) {

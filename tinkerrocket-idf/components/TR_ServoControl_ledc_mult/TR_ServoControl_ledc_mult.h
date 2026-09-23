@@ -74,7 +74,7 @@ public:
     // low, no servo pulses).  A digital servo that honours signal loss goes
     // limp and stops drawing holding current; one that latches keeps holding.
     // Idempotent — only touches the hardware on the first call after a drive.
-    // Any drive command (control*/setServoAngles/stowControl/setPulse) resumes
+    // Any drive command (control*/setServoAngles/stowControl/the wiggle) resumes
     // PWM automatically, so call wake() implicitly just by commanding a pulse.
     void idle();
     // True while the pulse train is stopped via idle().
@@ -116,6 +116,24 @@ public:
     // product to an arbitrary value.  Both arrived straight off the wire.
     // Returns false and KEEPS the previous timing on rejection, so a caller
     // can decline to persist what the servo layer refused.
+    //
+    // Never moves a fin.  It used to re-run ledc_timer_config() on all four
+    // timers and then setPulse(0), on every call.  In IDF v6 that config call
+    // ends in ledc_timer_rst(), which restarts the counter mid-frame: a reset
+    // that lands while a pulse is high stretches it to (time already high + a
+    // full pulse), so every SERVO_CONFIG from the app -- even one that left hz
+    // alone -- could kick an energised fin for one frame toward the high-pulse
+    // side.  And the boot restore of a non-default NVS timing runs in setup_fc,
+    // where the trailing setPulse(0) powered all four fins to the raw midpoint
+    // before the firmware had asked whether it was resuming a flight.
+    //
+    // Now an unchanged hz touches no hardware at all.  A changed hz goes
+    // through ledc_set_freq() (divider only, latched at the period boundary,
+    // no counter reset) and re-expresses each pulse a channel is holding in the
+    // new period; a relaxed channel stays relaxed.  New min/max apply from the
+    // next command -- moving is the caller's decision (the SERVO_CONFIG trim
+    // preview makes it with beginNeutralSettle()).  Before begin() only the
+    // values are stored; begin() configures the timers from them.
     bool setServoTiming(int hz, int minUs, int maxUs);
 
     /// Pure predicate, exposed so a caller can decide whether to PERSIST a
@@ -246,11 +264,13 @@ private:
     // enabled; no-op otherwise.  Split out so controlAngle() can schedule
     // gains without routing through the persistent-setpoint control() path.
     void applyGainSchedule(float velocity_ms);
-    // update all four servos to a single nominal pulse
-    void setPulse(int base_pulse_us);
-    // drive ONE servo channel to a nominal pulse (bias applied); used by
-    // setPulse() and by wiggle() to sequence the servos one at a time
+    // drive ONE servo channel to a nominal pulse (bias applied); used by the
+    // boot wiggle to sequence the servos one at a time
     void setPulseChannel(int channel, int base_pulse_us);
+    // Write one channel's LEDC duty for a pulse width (us) at the current
+    // servo_hz, and mark the channel driven.  The one place the duty math
+    // lives; last_pulse_us_ stays the caller's bookkeeping.
+    void writePulseDuty(int channel, int pulse_us);
     int  saturateCommand(int command);
     // Map a physical fin angle (deg) to a servo pulse (us) via the fin
     // calibration (fin_min_deg_->servo_min_us, fin_max_deg_->servo_max_us). #267
@@ -309,9 +329,20 @@ private:
     void  restoreBaseGains();
 
     // True while idle() has stopped the pulse train.  Cleared by any drive
-    // (setPulse/setServoAngles), which re-asserts a real duty and so resumes
-    // PWM without an explicit wake step.
+    // (setServoAngles/setPulseChannel), which re-asserts a real duty and so
+    // resumes PWM without an explicit wake step.
     bool is_idle_ = false;
+
+    // Per channel: a pulse duty is live on the pin (set by writePulseDuty,
+    // cleared by idle()).  Not the same as !is_idle_ -- the boot wiggle wakes
+    // one channel at a time -- and not last_pulse_us_, which keeps its last
+    // value through idle() as a diagnostic.  setServoTiming() re-expresses
+    // exactly these channels after a frame-rate change and no others.
+    bool channel_driven_[4] = {false, false, false, false};
+
+    // begin() has configured the LEDC timers.  Until then setServoTiming()
+    // only records the timing (begin() applies servo_hz when it runs).
+    bool begun_ = false;
 
     // Anti-backlash neutral settle (#407): true between beginNeutralSettle()
     // (overshoot commanded) and serviceNeutralSettle() dropping to neutral.

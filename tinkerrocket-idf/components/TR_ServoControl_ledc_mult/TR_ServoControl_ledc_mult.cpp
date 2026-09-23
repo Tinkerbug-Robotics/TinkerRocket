@@ -95,6 +95,7 @@ void TR_ServoControl::begin() {
     // whether the vehicle was still airborne, and gated only on the pins being
     // mapped rather than on servo control being enabled at all.
     is_idle_ = true;
+    begun_   = true;
 }
 
 void TR_ServoControl::setSetpoint(float setpoint) {
@@ -217,8 +218,9 @@ void TR_ServoControl::serviceWiggle(uint32_t now_ms) {
 void TR_ServoControl::stowControl() {
     // #1141 item 1: the CALIBRATED fin-zero, not the raw pulse midpoint.
     //
-    // setPulse(0) fans out to servo_mid_us_, which is ((min_us+max_us)/2 +
-    // bias) and knows nothing about the #267 fin calibration.  usFromFinDeg(0)
+    // Stow used to be setPulse(0) (since removed), which fanned out to
+    // servo_mid_us_ = ((min_us+max_us)/2 + bias) -- a number that knows
+    // nothing about the #267 fin calibration.  usFromFinDeg(0)
     // only equals that midpoint when the calibration happens to be symmetric:
     // with 1000/2000 us and a [-10, +30] deg cal, fin-zero is 1250 us against
     // a 1500 us midpoint — a standing 25%-of-travel deflection on all four
@@ -247,10 +249,11 @@ void TR_ServoControl::idle() {
     // 0% duty holds the GPIO low for the whole period: no rising edge, so the
     // servo sees no pulse train and (if it honours signal loss) relaxes.  We
     // stay inside the normal LEDC duty API rather than ledc_stop(), so the next
-    // setPulse()/setServoAngles() resumes pulses through the identical path.
+    // setServoAngles()/setPulseChannel() resumes pulses through the identical path.
     for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
         ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[i], 0);
         ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[i]);
+        channel_driven_[i] = false;
     }
     is_idle_ = true;
 }
@@ -273,14 +276,18 @@ void TR_ServoControl::setServoAngles(const float angles[4]) {
         int pulse_us = usFromFinDeg(angle) + servo_bias_us_[i];
         pulse_us = saturateCommand(pulse_us);
         last_pulse_us_[i] = pulse_us;
-
-        uint32_t max_duty = (1u << LEDC_RESOLUTION) - 1;
-        uint32_t duty = (static_cast<uint32_t>(pulse_us)
-                        * static_cast<uint32_t>(servo_hz)
-                        * max_duty) / 1000000u;
-        ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[i], duty);
-        ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[i]);
+        writePulseDuty(i, pulse_us);
     }
+}
+
+void TR_ServoControl::writePulseDuty(int channel, int pulse_us) {
+    uint32_t max_duty = (1u << LEDC_RESOLUTION) - 1;
+    uint32_t duty = (static_cast<uint32_t>(pulse_us)
+                    * static_cast<uint32_t>(servo_hz)
+                    * max_duty) / 1000000u;
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[channel], duty);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[channel]);
+    channel_driven_[channel] = true;
 }
 
 void TR_ServoControl::beginNeutralSettle(uint32_t now_ms) {
@@ -324,8 +331,8 @@ int TR_ServoControl::saturateCommand(int command) {
 
 void TR_ServoControl::setPulseChannel(int channel, int base_pulse_us) {
     // Drive a single servo channel.  base_pulse_us is the nominal pulse, 0
-    // meaning “centre”; the per-servo bias is applied here exactly as setPulse
-    // does, so driving one channel matches driving all.
+    // meaning “centre” (servo_mid_us_, which already carries the bias); any
+    // other value gets the per-servo bias added here.
     if (channel < 0 || channel >= LEDC_CHANNEL_COUNT) return;
     is_idle_ = false;  // commanding a pulse resumes PWM after idle()
 
@@ -333,25 +340,10 @@ void TR_ServoControl::setPulseChannel(int channel, int base_pulse_us) {
                                         : base_pulse_us + servo_bias_us_[channel];
     pulse_us = saturateCommand(pulse_us);
     last_pulse_us_[channel] = pulse_us;
-
-    uint32_t max_duty = (1u << LEDC_RESOLUTION) - 1;
-    uint32_t duty     = (static_cast<uint32_t>(pulse_us)
-                        * static_cast<uint32_t>(servo_hz)
-                        * max_duty) / 1000000u;
-    ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[channel], duty);
-    ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[channel]);
+    writePulseDuty(channel, pulse_us);
 
     // record last command from servo0’s perspective
     if (channel == 0) roll_cmd_us = pulse_us;
-}
-
-void TR_ServoControl::setPulse(int base_pulse_us) {
-    // base_pulse_us is computed from control(), 0 means “centre”.  Drive all
-    // four channels (intentionally simultaneous — the flight control path
-    // updates every servo each tick).
-    for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
-        setPulseChannel(i, base_pulse_us);
-    }
 }
 
 float TR_ServoControl::getRollCmdDeg() {
@@ -388,6 +380,7 @@ bool TR_ServoControl::setServoTiming(int hz, int minUs, int maxUs) {
                  servo_hz, servo_min_us, servo_max_us);
         return false;
     }
+    const bool hz_changed = (hz != servo_hz);
     servo_hz = hz;
     servo_min_us = minUs;
     servo_max_us = maxUs;
@@ -395,27 +388,35 @@ bool TR_ServoControl::setServoTiming(int hz, int minUs, int maxUs) {
     for (int i = 0; i < 4; ++i) {
         servo_mid_us_[i] = ((minUs + maxUs) / 2) + servo_bias_us_[i];
     }
-    // Reconfigure all LEDC timers with new frequency
+    // No motion from here, and no timer work unless the frame rate moved --
+    // see the header for the stretched pulse and the setup_fc snap this used
+    // to cause.  Before begin() there are no timers to retime yet.
+    if (!hz_changed || !begun_) return true;
+
     for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
-        ledc_timer_config_t timer_conf = {};
-        timer_conf.speed_mode      = LEDC_MODE;
-        timer_conf.duty_resolution = LEDC_RESOLUTION;
-        timer_conf.timer_num       = LEDC_TIMERS[i];
-        timer_conf.freq_hz         = static_cast<uint32_t>(hz);
-        timer_conf.clk_cfg         = LEDC_AUTO_CLK;
-        // #1141 item 3: begin() shouts when this fails and says why — "a silent
-        // failure here leaves one servo dead with everything else healthy
-        // (command path fine, no pulse on the pad)".  The same call was
-        // discarded here, on the path an operator uses to change timing.
-        const esp_err_t terr = ledc_timer_config(&timer_conf);
-        if (terr != ESP_OK) {
-            ESP_LOGE("SERVO", "[TIMING] servo %d LEDC timer reconfig FAILED at "
+        // Divider only, taking effect at the next period boundary.  NOT
+        // ledc_timer_config(): its trailing ledc_timer_rst() restarts the
+        // counter wherever it is and corrupts the frame in flight.
+        // #1141 item 3: begin() shouts when a timer call fails and says why —
+        // "a silent failure here leaves one servo dead with everything else
+        // healthy (command path fine, no pulse on the pad)".  Same here.
+        const esp_err_t ferr = ledc_set_freq(LEDC_MODE, LEDC_TIMERS[i],
+                                             static_cast<uint32_t>(hz));
+        if (ferr != ESP_OK) {
+            ESP_LOGE("SERVO", "[TIMING] servo %d LEDC set_freq FAILED at "
                               "%d Hz: %s — that channel keeps the OLD period",
-                     i, hz, esp_err_to_name(terr));
+                     i, hz, esp_err_to_name(ferr));
+        }
+        // Duty is a count of the period, so the same count at the new rate is
+        // a different pulse width.  Re-express the pulse this channel is
+        // holding, written right behind its own divider so both latch at the
+        // same boundary.  A relaxed channel's duty is 0 at any rate: leave it.
+        // A channel whose divider did not change keeps the old period, where
+        // its current duty is still the right width: leave that one too.
+        if (ferr == ESP_OK && channel_driven_[i]) {
+            writePulseDuty(i, last_pulse_us_[i]);
         }
     }
-    // Re-center servos with new timing
-    setPulse(0);
     return true;
 }
 
