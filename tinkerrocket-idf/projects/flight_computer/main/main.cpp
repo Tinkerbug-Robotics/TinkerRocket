@@ -1175,6 +1175,18 @@ static bool readConfigFrame(uint8_t expected_type,
 // a genuine second chance; re-reading the same staged bytes ~1 ms later, as
 // the old `last_processed_cmd = 0` at every call site did, was not (see
 // oc_cmd_dedup.h for the storm that caused).
+//
+// A handler that reads a config frame must call this on a miss.  One that
+// does not keeps the command in the dedup key, so the OC's remaining repeats
+// — each still carrying the frame — are skipped as duplicates and the setting
+// is lost for good.  Where the app's readback is the OC's cache (IMU rate,
+// roll control) nothing even shows it.  #1117 fixed that for pyro and called
+// it the last handler with the gap; on 2026-09-22 orientation, IMU rate and
+// camera type were found with no else at all, and six more with an else that
+// only logged.  The shape now fails CI in
+// tinkerrocket-idf/tools/check_config_retry.py, which lists the few commands
+// that deliberately do not retry, each with its reason, and any gap still
+// being fixed.
 static void cfgRetryOnNextPoll(const char* what)
 {
     if (oc_cmd_dedup.armRetry())
@@ -8000,7 +8012,7 @@ static void loop_fc()
                     }
                     else
                     {
-                        ESP_LOGE(TAG, "[MAGCAL] APPLY payload read failed");
+                        cfgRetryOnNextPoll("MAGCAL APPLY");   // #1112
                     }
                 }
             }
@@ -8064,7 +8076,7 @@ static void loop_fc()
                     }
                     else
                     {
-                        ESP_LOGE(TAG, "[SENSORCAL] APPLY payload read failed");
+                        cfgRetryOnNextPoll("SENSORCAL APPLY");   // #1112
                     }
                 }
             }
@@ -8411,6 +8423,10 @@ static void loop_fc()
                                  orientCodeName(setting));
                     }
                 }
+                else
+                {
+                    cfgRetryOnNextPoll("ORIENT CFG");   // #1112
+                }
             }
             else if (out_pending_command == IMU_RATE_CONFIG_PENDING)
             {
@@ -8460,6 +8476,10 @@ static void loop_fc()
                                  (unsigned)rate_hz);
                     }
                 }
+                else
+                {
+                    cfgRetryOnNextPoll("IMU RATE CFG");   // #1112
+                }
             }
             else if (out_pending_command == PYRO_CONFIG_PENDING)
             {
@@ -8490,19 +8510,20 @@ static void loop_fc()
                 }
                 else
                 {
-                    // #1117: this handler was the only config-pending handler
-                    // with no else. The dedup consumed the command on the first
-                    // delivery, so the OC's two remaining repeats — still
-                    // carrying the frame — were skipped, and the deployment
-                    // configuration was dropped for good. The FC then flew on
-                    // whatever its own NVS held at boot, which on a freshly
-                    // flashed or NVS-erased board is all four channels
-                    // DISABLED: servicePyroChannels() leaves every channel in
-                    // Idle, neither drogue nor main fires, ballistic return.
-                    // Nothing revealed it either — the app's config_pyro
-                    // readback is the OC echoing its own cache, and the pyro
-                    // scorecard bits read SH_NA, which the app excludes from
-                    // go/no-go.
+                    // #1117: this handler had no else. The dedup consumed the
+                    // command on the first delivery, so the OC's two remaining
+                    // repeats — still carrying the frame — were skipped, and
+                    // the deployment configuration was dropped for good. The
+                    // FC then flew on whatever its own NVS held at boot, which
+                    // on a freshly flashed or NVS-erased board is all four
+                    // channels DISABLED: servicePyroChannels() leaves every
+                    // channel in Idle, neither drogue nor main fires, ballistic
+                    // return. Nothing revealed it either — the app's
+                    // config_pyro readback was the OC echoing its own cache
+                    // (until #1231), and the pyro scorecard bits read SH_NA,
+                    // which the app excludes from go/no-go. #1117 called this
+                    // the only config-pending handler with no else; it was not
+                    // (see cfgRetryOnNextPoll).
                     cfgRetryOnNextPoll("PYRO CFG");   // #1112
                 }
             }
@@ -8832,7 +8853,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    ESP_LOGW(TAG, "[ROLL CFG] readConfigFrame failed");
+                    cfgRetryOnNextPoll("ROLL CFG");   // #1112
                 }
             }
             else if (out_pending_command == GUIDANCE_CONFIG_PENDING)
@@ -8965,11 +8986,14 @@ static void loop_fc()
                     // firmware" path — a 36-byte-era app frame fails the
                     // cfg_len >= sizeof(GuidanceConfigData) gate.  Echo the
                     // lengths so a version skew is diagnosable from the log
-                    // instead of looking like an I2C fault.
+                    // instead of looking like an I2C fault.  A skewed frame
+                    // never matches, so its retries end with the OC's repeat
+                    // window — bounded, like any other miss.
                     ESP_LOGW(TAG, "[GUID CFG] readConfigFrame FAILED — got %u bytes, need %u. "
                                   "If the FC is healthy this is an OUT-OF-DATE APP: guidance "
                                   "config was NOT applied and the previous config still flies.",
                                   (unsigned)cfg_len, (unsigned)sizeof(GuidanceConfigData));
+                    cfgRetryOnNextPoll("GUID CFG");   // #1112
                 }
             }
             else if (out_pending_command == GUIDANCE_POINT_PENDING)
@@ -9044,6 +9068,7 @@ static void loop_fc()
                     ESP_LOGW(TAG, "[GUID PT] readConfigFrame FAILED — got %u bytes, "
                                   "need %u. Guidance point NOT applied.",
                                   (unsigned)cfg_len, (unsigned)sizeof(GuidancePointData));
+                    cfgRetryOnNextPoll("GUID PT");   // #1112
                 }
             }
             else if (out_pending_command == FIN_CONFIG_PENDING)
@@ -9093,7 +9118,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    ESP_LOGW(TAG, "[FIN CFG] readConfigFrame failed");
+                    cfgRetryOnNextPoll("FIN CFG");   // #1112
                 }
             }
             else if (out_pending_command == SERVO_REPLAY_PENDING)

@@ -67,6 +67,17 @@ jobs:
         if: '!cancelled()'
         run: python3 tinkerrocket-idf/tools/check_nvs_boot_order.py
 
+      # #1117, and again 2026-09-22. A flight-computer handler that reads a
+      # config frame with no retry on a miss loses the setting for good: the
+      # dedup key keeps the command and the OC's remaining repeats are
+      # skipped. #1117 fixed pyro and called it the only one; nine more turned
+      # up later. The handlers are branches of the main loop, out of reach of
+      # any host test, but the if/else around each readConfigFrame() is plain
+      # to see.
+      - name: Check every FC config-frame read retries on a miss
+        if: '!cancelled()'
+        run: python3 tinkerrocket-idf/tools/check_config_retry.py
+
       # Runs even if a generator check above failed, so one PR surfaces every
       # documentation problem at once instead of one per push.
       - name: Check the prose agrees with the source

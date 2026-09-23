@@ -1,0 +1,59 @@
+# #1211 — the two config handlers that had no else at all: IMU orientation
+# (BLE cmd 64) and IMU logging rate (cmd 67). Follow-up to #1112 / #1117: a
+# frame missing from one poll's read used to consume the command, so the OC's
+# two remaining deliveries were skipped as duplicates and the setting was lost.
+#
+# Rig: V9 pair, S1 -> F (FLIGHT COMPUTER console). OC on the "-cfgdrop" TEST
+# image (-DTR_TEST_CFG_DROP=1).
+#
+# cmd 200 = [count][type]: drop the first `count` deliveries of the next config
+# frame OF THAT TYPE. ORIENT_CONFIG_MSG = 0xEE, IMU_RATE_CONFIG_MSG = 0xF6. Arm
+# only after the previous command's three-delivery window has closed (the 3 s
+# sleeps): an arm spent on a leftover delivery disarms the hook first (#1231).
+#
+# BEFORE RUNNING: note the FC boot log's `IMU orientation setting:` and
+# `IMU logging rate:` lines. Steps C and D restore MANUAL +X (64 00) and
+# DYNAMIC (67 0000); edit them if the board held something else. AUTO is 64 ff.
+# Start from a fresh FC boot: `imu_q_drops=` on the 1 Hz [GAP DIAG] line is
+# cumulative, so drops left over from an earlier script would fail A and B.
+#
+# Three drops are deliberately not tested: the OC serves each command three
+# times, so they end at (3/3) with the setting lost and no give-up line. That
+# is #1112's window limit, measured in its #1211 item.
+
+note === A: one dropped ORIENTATION frame retries once, then applies ===
+mark
+send 200 01ee
+sleep 1
+send 64 01
+expect_serial 15 \[ORIENT CFG\] Config not in this read, will retry on next poll \(1/3\)
+expect_serial 15 \[CFG\] IMU orientation: MANUAL \+X r90
+refute_serial_since retry budget \(3\) is spent
+# #1112's point holds at the new sites too: one re-read per poll, no IMU loss.
+refute_serial_since imu_q_drops=[1-9]
+
+note === B: one dropped IMU RATE frame retries once, then applies ===
+sleep 3
+mark
+send 200 01f6
+sleep 1
+send 67 c003
+expect_serial 15 \[IMU RATE CFG\] Config not in this read, will retry on next poll \(1/3\)
+expect_serial 15 \[CFG\] IMU logging rate: 960 Hz \(persisted\)
+refute_serial_since retry budget \(3\) is spent
+refute_serial_since imu_q_drops=[1-9]
+
+note === C, regression + restore: orientation on a healthy link, no retry ===
+sleep 3
+mark
+send 64 00
+expect_serial 15 \[CFG\] IMU orientation: MANUAL \+X(?! r)
+refute_serial_since \[ORIENT CFG\] Config not in this read
+
+note === D, regression + restore: IMU rate on a healthy link, no retry ===
+sleep 3
+mark
+send 67 0000
+expect_serial 15 \[CFG\] IMU logging rate: DYNAMIC
+refute_serial_since \[IMU RATE CFG\] Config not in this read
+note === done ===
