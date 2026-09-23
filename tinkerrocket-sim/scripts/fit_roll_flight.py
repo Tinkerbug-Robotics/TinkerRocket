@@ -15,6 +15,11 @@ What comes out, in order of how well one flight constrains it:
      GAIN_SCHEDULE_SCALE_CAP, integral separation, +/-MAX_CMD clamp). Replaying the
      logged rate through the law and fitting Kp/Ki to the logged command recovers
      the flown gains to a fraction of a degree. This part is near-exact.
+     The I term has flown under two laws (--i-law): "scaled", Ki_eff * integral(e)
+     with a reset on a >0.1 scale step, which is every flight up to 2026-09-23;
+     and "held", I += Ki_eff * e * dt, which the firmware runs from then on. The
+     log does not say which, so the default fits both and keeps the one that
+     reproduces the command better (the laws part in coast, where the scale moves).
   2. The misalignment. In coast the controller holds a standing tab command that
      cancels the built-in roll trim; the open-loop coast fit pins it.
   3. The kick. The roll rate climbs against a pinned tab during the burn; the
@@ -82,8 +87,19 @@ def load_traces(bin_path):
                 speed=speed, vu=vu, t_apogee=float(t_apogee), imu_rate=float(imu_rate))
 
 
-def identify_controller(tr, t_end):
-    """Kp/Ki of the firmware rate-null law from the logged rate and command."""
+def identify_controller(tr, t_end, i_law="auto"):
+    """Kp/Ki of the firmware rate-null law from the logged rate and command.
+
+    i_law: "scaled" (the I term was Ki_eff times the error integral, reset on a
+    >0.1 scale step — every flight before 2026-09-23), "held" (the I term
+    accumulates Ki_eff * e * dt with no reset — the firmware since), or "auto"
+    (fit both, keep the better one; the other's result rides along under
+    "other_law" so a near-tie is visible)."""
+    if i_law == "auto":
+        fits = [identify_controller(tr, t_end, law) for law in ("scaled", "held")]
+        best, other = sorted(fits, key=lambda f: f["rms_deg"])
+        best["other_law"] = other
+        return best
     from scipy.optimize import least_squares
     m = (tr["t_ns"] >= 0.0) & (tr["t_ns"] < t_end)
     tn, cmd = tr["t_ns"][m], tr["rc"][m]
@@ -99,8 +115,8 @@ def identify_controller(tr, t_end):
         for i in range(tn.size):
             v = max(abs(V[i]), V_MIN)
             s = min((V_REF / v) ** 2, SCALE_CAP)
-            if prev_s is not None and abs(s - prev_s) > 0.1:
-                acc = 0.0                       # the firmware resets I on a scale step
+            if i_law == "scaled" and prev_s is not None and abs(s - prev_s) > 0.1:
+                acc = 0.0                       # that firmware reset I on a scale step
             prev_s = s
             e = p[i]                            # firmware passes -gyro_x; error = 0 - (-gx)
             dt = tn[i] - lt
@@ -109,17 +125,24 @@ def identify_controller(tr, t_end):
                 out[i] = 0.0
                 continue
             kp, ki = kp0 * s, ki0 * s
-            if INTEGRAL_SEP_DPS <= 0 or abs(e) <= INTEGRAL_SEP_DPS:
-                acc += e * dt
-            if ki > 0:
-                acc = float(np.clip(acc, -MAX_CMD / ki, MAX_CMD / ki))
-            out[i] = float(np.clip(kp * e + ki * acc, -MAX_CMD, MAX_CMD))
+            if i_law == "held":                 # acc IS the I term, deg
+                if INTEGRAL_SEP_DPS <= 0 or abs(e) <= INTEGRAL_SEP_DPS:
+                    acc += ki * e * dt
+                acc = float(np.clip(acc, -MAX_CMD, MAX_CMD))
+                i_term = acc
+            else:                               # acc is the error integral
+                if INTEGRAL_SEP_DPS <= 0 or abs(e) <= INTEGRAL_SEP_DPS:
+                    acc += e * dt
+                if ki > 0:
+                    acc = float(np.clip(acc, -MAX_CMD / ki, MAX_CMD / ki))
+                i_term = ki * acc
+            out[i] = float(np.clip(kp * e + i_term, -MAX_CMD, MAX_CMD))
         return out
 
     r = least_squares(lambda q: law(q) - cmd, [0.1, 0.05], bounds=([0, 0], [5, 5]),
                       xtol=1e-10, ftol=1e-10, max_nfev=300)
     rms = float(np.sqrt(np.mean(r.fun ** 2)))
-    return dict(kp=float(r.x[0]), ki=float(r.x[1]), kd=0.0, rms_deg=rms,
+    return dict(i_law=i_law, kp=float(r.x[0]), ki=float(r.x[1]), kd=0.0, rms_deg=rms,
                 cmd_rms_deg=float(np.sqrt(np.mean(cmd ** 2))), ticks=int(tn.size),
                 saturated_frac=float(np.mean(np.abs(cmd) >= MAX_CMD - 0.01)))
 
@@ -270,6 +293,9 @@ def main():
     ap.add_argument("--motor", default="F52C", help="motor in motors/*.eng the flight flew (default F52C)")
     ap.add_argument("--launch-angle", type=float, default=66.0,
                     help="sim launch angle from horizontal; pick it so the coast airspeed matches the flight's arc")
+    ap.add_argument("--i-law", choices=("auto", "scaled", "held"), default="auto",
+                    help="the I-term law the log flew: 'scaled' (before 2026-09-23), 'held' "
+                         "(after), or 'auto' to fit both and keep the better (default)")
     ap.add_argument("--no-closed-loop", action="store_true", help="skip the sim-in-the-loop stage")
     ap.add_argument("--max-evals", type=int, default=220)
     args = ap.parse_args()
@@ -277,9 +303,13 @@ def main():
 
     tr = load_traces(args.flight_bin)
     print(f"flight: IMU {tr['imu_rate']:.0f} Hz, apogee at T+{tr['t_apogee']:.2f} s")
-    gains = identify_controller(tr, min(7.7, tr["t_apogee"]))
+    gains = identify_controller(tr, min(7.7, tr["t_apogee"]), args.i_law)
     print(f"controller: Kp={gains['kp']:.4f} Ki={gains['ki']:.4f} Kd=0  ({gains['rms_deg']:.2f} deg RMS over "
-          f"{gains['ticks']} ticks; command RMS {gains['cmd_rms_deg']:.2f}, clamped {gains['saturated_frac'] * 100:.0f}%)")
+          f"{gains['ticks']} ticks; command RMS {gains['cmd_rms_deg']:.2f}, clamped {gains['saturated_frac'] * 100:.0f}%)"
+          f"  I law: {gains['i_law']}")
+    if "other_law" in gains:
+        o = gains["other_law"]
+        print(f"   ('{o['i_law']}' law fits worse: Kp={o['kp']:.4f} Ki={o['ki']:.4f}, {o['rms_deg']:.2f} deg RMS)")
     kk = kick(tr, 0.15, 0.62)
     kk["t_kick_s"] = round(0.5 * (kk["t_onset_s"] + kk["t_peak_s"]), 2)
     print(f"kick: peak {kk['peak_dps']:+.0f} dps at T+{kk['t_peak_s']:.2f} s (onset {kk['t_onset_s']:.2f} s) -> inject at {kk['t_kick_s']:.2f} s")
