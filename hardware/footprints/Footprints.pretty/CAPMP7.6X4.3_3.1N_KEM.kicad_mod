@@ -319,7 +319,7 @@
 		(uuid "1fe5a3d8-a99b-4cd1-aef0-dd619eaa6034")
 	)
 	(embedded_fonts no)
-	(model "${KIPRJMOD}/../3dmodels/TAJC337M006RNJ.step"
+	(model "${KICAD10_3DMODEL_DIR}/Capacitor_Tantalum_SMD.3dshapes/CP_EIA-7343-43_Kemet-X.step"
 		(offset
 			(xyz 0 0 0)
 		)
@@ -327,7 +327,7 @@
 			(xyz 1 1 1)
 		)
 		(rotate
-			(xyz -90 -0 -0)
+			(xyz 0 0 0)
 		)
 	)
 )
