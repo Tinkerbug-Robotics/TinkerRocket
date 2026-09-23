@@ -74,11 +74,7 @@ DELIBERATE = {
 
 # Real gaps whose fix is being done in other work. Delete the entry when that
 # fix lands; the check fails until you do.
-KNOWN_GAPS = {
-    "CAMERA_CONFIG_PENDING": (
-        "being fixed with the camera-type readback work (found 2026-09-22)"
-    ),
-}
+KNOWN_GAPS = {}
 
 CALL_RE = re.compile(r"\breadConfigFrame\s*\(")
 IF_OPEN_RE = re.compile(r"\bif\s*\(\s*$")

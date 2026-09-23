@@ -8396,7 +8396,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    // #1472: the #1117 defect, still present here.  With no
+                    // #1472: this handler had the #1117 defect too.  With no
                     // else, the dedup consumed the command on its first
                     // delivery and the OC's two repeats — still carrying the
                     // frame — were skipped, so one missed read lost the type
