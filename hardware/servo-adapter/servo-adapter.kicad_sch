@@ -2275,7 +2275,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1210_3225Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 165.4302 127 0)
 			(hide yes)
 			(show_name no)
@@ -2308,7 +2308,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL32B226KAJNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 164.465 123.19 0)
 			(hide yes)
 			(show_name no)
@@ -2330,7 +2330,7 @@
 				)
 			)
 		)
-		(property "MinVRating" "25 V"
+		(property "MinVRating" "16 V"
 			(at 164.465 123.19 0)
 			(hide yes)
 			(show_name no)
@@ -2468,7 +2468,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1210_3225Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 192.1002 127 0)
 			(hide yes)
 			(show_name no)
@@ -2501,7 +2501,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL32B226KAJNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 191.135 123.19 0)
 			(hide yes)
 			(show_name no)
@@ -2523,7 +2523,7 @@
 				)
 			)
 		)
-		(property "MinVRating" "25 V"
+		(property "MinVRating" "16 V"
 			(at 191.135 123.19 0)
 			(hide yes)
 			(show_name no)
@@ -3003,7 +3003,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1210_3225Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 178.7652 127 0)
 			(hide yes)
 			(show_name no)
@@ -3036,7 +3036,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL32B226KAJNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 177.8 123.19 0)
 			(hide yes)
 			(show_name no)
@@ -3058,7 +3058,7 @@
 				)
 			)
 		)
-		(property "MinVRating" "25 V"
+		(property "MinVRating" "16 V"
 			(at 177.8 123.19 0)
 			(hide yes)
 			(show_name no)
@@ -3777,7 +3777,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1210_3225Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 205.4352 127 0)
 			(hide yes)
 			(show_name no)
@@ -3810,7 +3810,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL32B226KAJNNNE"
+		(property "MPN" "CL21A226MOQNNNE"
 			(at 204.47 123.19 0)
 			(hide yes)
 			(show_name no)
@@ -3832,7 +3832,7 @@
 				)
 			)
 		)
-		(property "MinVRating" "25 V"
+		(property "MinVRating" "16 V"
 			(at 204.47 123.19 0)
 			(hide yes)
 			(show_name no)
