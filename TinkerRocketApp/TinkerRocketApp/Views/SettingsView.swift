@@ -1050,7 +1050,7 @@ struct SettingsView: View {
             HStack {
                 Text("Anti-Windup")
                 Spacer()
-                TextField("40", text: $sIntegralSep)
+                TextField("200", text: $sIntegralSep)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
                     .frame(width: 80)

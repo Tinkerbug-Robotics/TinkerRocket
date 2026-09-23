@@ -128,7 +128,7 @@ class DeviceSessionTest {
         // #253 sentinels: rcap <= 0, kpang <= 0, iwind < 0 → keep defaults.
         assertEquals(60f, cfg.rateCapDps)
         assertEquals(2.0f, cfg.kpAngle)
-        assertEquals(40f, cfg.integralSepThreshold)
+        assertEquals(200f, cfg.integralSepThreshold)
         assertEquals(915.5f, cfg.loraFreqMHz)
     }
 
