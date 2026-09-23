@@ -186,6 +186,32 @@ enum PyroConfigSource: String, Equatable {
     case flightComputer = "fc"
 }
 
+/// Where `RocketConfig.cameraType` came from (#1472).
+///
+/// The `config` frame's `"camt"` has no provenance, and on firmware before
+/// #1472 it was always the out computer's copy of the last cmd 33 it relayed —
+/// which the flight computer may never have applied.  The app adopted it into
+/// the profile on connect and "Send all" then wrote it to the FC, which is how
+/// a GoPro rocket could be switched to RunCam mode.  Since #1472 the camera
+/// type also rides `config_pyro` with a `"camsrc"` key, and only a
+/// flight-computer-sourced value is adopted.
+enum CameraTypeSource: Equatable {
+    /// The `config` frame's `"camt"`: no provenance, so never treated as the
+    /// flight computer's.  Also what a pre-#1472 out computer only ever sends.
+    case configFrame
+    case outComputerCache               // config_pyro "camsrc":"oc"
+    case flightComputer                 // config_pyro "camsrc":"fc"
+
+    /// The `"camsrc"` wire spelling; nil for anything else, including absence.
+    init?(wire: String?) {
+        switch wire {
+        case "fc": self = .flightComputer
+        case "oc": self = .outComputerCache
+        default:   return nil
+        }
+    }
+}
+
 struct RocketConfig {
     var servoBias1: Int16 = 0   // #561: match RocketProfile/config.h (was 85 → ~10° servo-1 trim)
     var servoHz: Int16 = 333
@@ -221,6 +247,10 @@ struct RocketConfig {
     var rollGainsReported: Bool = false
     var guidanceEnabled: Bool = false
     var cameraType: UInt8 = 2
+    /// Where `cameraType` came from (#1472).  nil = this rocket reports no
+    /// camera type at all (the mini, which has no camera) — `cameraType` is
+    /// then just the default and nothing about it is claimed.
+    var cameraSource: CameraTypeSource? = nil
     var imuOrientSetting: UInt8? = nil   // 0xFF auto / 0..23 manual (nil = not reported)
     var imuRateHz: UInt16? = nil         // ISM6 logging rate readback (nil = not reported)
     var loraFreqMHz: Float? = nil
@@ -275,9 +305,25 @@ struct RocketConfig {
     /// True when the pyro tiles show what the flight computer will fire on.
     var pyroIsFlightComputerSourced: Bool { pyroSource == .flightComputer }
 
+    /// True when `cameraType` is the mode the flight computer will drive
+    /// (#1472) — the only camera type the profile may adopt.
+    var cameraIsFlightComputerSourced: Bool { cameraSource == .flightComputer }
+
+    /// True while any of the three #915 config-report groups is still
+    /// missing.  The connect-time re-adopt waits on exactly this, NOT on
+    /// `unreportedGroups` being empty: that list also names the camera
+    /// (#1472), which an out computer that predates `"camsrc"` never
+    /// verifies — waiting on it would stop the fin layout, guidance and roll
+    /// groups from ever being re-adopted from such a rocket.
+    var configReportGroupsMissing: Bool {
+        servoExtras == nil || guidanceExtras == nil || rollWaypoints == nil
+    }
+
     /// Setting groups this rocket does not report back.  Empty once the
     /// config report has landed; the pre-#915 list on firmware that can't
-    /// send one.
+    /// send one.  "Camera" whenever the camera type the rocket reported is
+    /// not the flight computer's own (#1472): rail off, a pre-v3 flight
+    /// computer, or an out computer that predates the provenance key.
     var unreportedGroups: [String] {
         var out: [String] = []
         if servoExtras == nil {
@@ -285,6 +331,7 @@ struct RocketConfig {
         }
         if guidanceExtras == nil { out.append("Guidance parameters") }
         if rollWaypoints == nil  { out.append("Roll profile") }
+        if cameraSource != nil && !cameraIsFlightComputerSourced { out.append("Camera") }
         return out
     }
 }

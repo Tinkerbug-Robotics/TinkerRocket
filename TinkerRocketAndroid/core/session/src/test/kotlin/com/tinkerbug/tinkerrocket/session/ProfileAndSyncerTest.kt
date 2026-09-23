@@ -435,6 +435,117 @@ class ActiveRocketSyncerTest {
         )
     }
 
+    // -- #1472: the camera type is adopted only from the flight computer -----
+
+    /** config_pyro carrying the FC's camera type (or none, pre-#1472). */
+    private fun pyroJson(camTail: String): String =
+        """{"type":"config_pyro","p1e":true,"p1m":0,"p1v":1.0,"p2e":false,"p2m":1,""" +
+            """"p2v":100.0,"p3e":false,"p3m":0,"p3v":0.0,"p4e":false,"p4m":0,"p4v":0.0,""" +
+            """"src":"fc","fnv":true$camTail}"""
+
+    private fun configJson(camt: Int): String =
+        FakeFirmware.DEFAULT_CONFIG_JSON.replace("\"camt\":2", "\"camt\":$camt")
+
+    private fun Rig.adoptedGroups(): List<String> =
+        (syncer.syncState.value as? ActiveRocketSyncer.SyncState.Adopted)?.groups.orEmpty()
+
+    /**
+     * The 2026-09-22 bench state with the fix in both boards: the FC is in
+     * GoPro mode, the OC's cache says RunCam, the profile says GoPro.  The
+     * readback carries the FC's type, so the profile keeps it.
+     */
+    @Test
+    fun benchState_profileKeepsTheFlightComputersGoPro() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA", cameraType = 1) }
+        r.fw.configJson = configJson(camt = 1)   // the OC serves the FC's type now
+        r.fw.configPyroJson = pyroJson(""","camt":1,"camsrc":"fc","camfnv":true""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        assertEquals(1, r.store.activeProfile?.cameraType)
+        assertFalse(ActiveRocketSyncer.GROUP_CAMERA in r.adoptedGroups())
+        assertFalse("Camera" in r.syncer.unreportedGroups.value)
+    }
+
+    /**
+     * The same boards behind an out computer that predates #1472: its camt is
+     * the RunCam cache.  The old rule adopted it (the bug); now the profile
+     * keeps GoPro and the app says it cannot verify the camera.
+     */
+    @Test
+    fun preFixOutComputer_itsCachedCameraIsNotAdopted() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA", cameraType = 1) }
+        r.fw.configJson = configJson(camt = 2)
+        r.fw.configPyroJson = pyroJson("")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        assertEquals(1, r.store.activeProfile?.cameraType,
+            "the OC's cached RunCam must not overwrite the profile")
+        assertFalse(ActiveRocketSyncer.GROUP_CAMERA in r.adoptedGroups())
+        assertTrue("Camera" in r.syncer.unreportedGroups.value)
+    }
+
+    /**
+     * Connected with the rail off: only the OC's cache is on offer, so the
+     * profile keeps its own; when the FC's report lands the FC's type is
+     * adopted — and said so.
+     */
+    @Test
+    fun railOffAtConnect_theFlightComputersTypeIsAdoptedWhenItArrives() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA", cameraType = 1) }
+        r.fw.configJson = configJson(camt = 2)
+        r.fw.configPyroJson = pyroJson(""","camt":2,"camsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        assertEquals(1, r.store.activeProfile?.cameraType)
+        assertTrue("Camera" in r.syncer.unreportedGroups.value)
+
+        // Rail on: the FC boots, reports RunCam, the OC re-publishes.
+        r.fw.emitTelemetryJson(pyroJson(""","camt":2,"camsrc":"fc","camfnv":true"""))
+        runCurrent()
+
+        assertEquals(2, r.store.activeProfile?.cameraType,
+            "the flight computer's own type is the rocket's camera")
+        assertTrue(ActiveRocketSyncer.GROUP_CAMERA in r.adoptedGroups())
+        assertFalse("Camera" in r.syncer.unreportedGroups.value)
+    }
+
+    /**
+     * "Camera" can now sit in unreportedGroups for good (an OC that predates
+     * "camsrc"), so the #915 re-adopt must key on the report groups alone —
+     * otherwise the fin layout / guidance / roll groups would never be
+     * adopted from such a rocket.
+     */
+    @Test
+    fun reportGroupsAreStillReAdopted_whileTheCameraStaysUnverified() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA") }
+        r.fw.configPyroJson = pyroJson("")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertEquals(0, r.store.activeProfile?.servoBias2)
+
+        r.fw.emitTelemetryJson(
+            """{"type":"config_servo","sb2":40,"sb3":0,"sb4":0,"fmn":-60.00,"fmx":60.00,""" +
+                """"faz":[0.0,90.0,180.0,270.0],"frv":0,"frrv":0,"snd":true}""",
+        )
+        r.fw.emitTelemetryJson(
+            """{"type":"config_guid","gng":3.00,"gma":30.0,"gaf":0.50,"gmf":15.0,"gms":30.0,""" +
+                """"gcd":0,"gtm":0,"gte":0.0,"gtn":0.0,"gta":0.0,"gkp":0.00,"gkd":0.00,"glw":0}""",
+        )
+        r.fw.emitTelemetryJson("""{"type":"config_roll","n":0,"wp":[]}""")
+        runCurrent()
+
+        assertEquals(40, r.store.activeProfile?.servoBias2,
+            "the report groups are adopted even though the camera is unverified")
+        assertEquals(listOf("Camera"), r.syncer.unreportedGroups.value)
+    }
+
     @Test
     fun pushGroup_sendsOnlyThatGroup_andKeepsSynced() = runTest {
         val r = rig()
@@ -771,6 +882,8 @@ class ActiveRocketSyncerTest {
             integralSepThreshold = p.integralSepThreshold,
             rollGainsReported = true,
             guidanceEnabled = p.guidanceEnabled, cameraType = p.cameraType,
+            // #1472: current firmware with the rail up — the FC's own type.
+            cameraSource = com.tinkerbug.tinkerrocket.protocol.CameraTypeSource.FLIGHT_COMPUTER,
             imuOrientSetting = p.imuOrientSetting, imuRateHz = p.imuRateHz,
             pyro1Enabled = p.pyro1Enabled, pyro1TriggerMode = p.pyro1TriggerMode,
             pyro1TriggerValue = p.pyro1TriggerValue,

@@ -109,6 +109,11 @@ final class ActiveRocketSyncer: ObservableObject {
     /// Armed once per attach, for the same reason as orientAdoptArmed: the
     /// #915 config-report frames arrive after the main config readback.
     private var extrasAdoptArmed = false
+    /// Armed once per attach when the first adoption found a camera type the
+    /// flight computer had not vouched for (#1472) — typically a phone that
+    /// connected before power-on.  Fires when a flight-computer-sourced one
+    /// lands; never re-armed, so a later user edit isn't mistaken for a report.
+    private var cameraAdoptArmed = false
     /// The profile id THIS syncer made active while binding the board.  The
     /// active-profile subscription is delivered on a later main-queue turn,
     /// so it cannot tell our own bind from a user tap — without this, binding
@@ -201,6 +206,7 @@ final class ActiveRocketSyncer: ObservableObject {
         sensorCalReadPending = false
         orientAdoptArmed = false
         extrasAdoptArmed = false
+        cameraAdoptArmed = false
         selfSelectedProfileId = nil
         syncState = .idle
         magCalAdvisory = .none
@@ -320,6 +326,7 @@ final class ActiveRocketSyncer: ObservableObject {
 
         armOrientationAdoptIfNeeded(device: device, cfg: cfg)
         armExtrasAdoptIfNeeded(device: device, cfg: cfg)
+        armCameraAdoptIfNeeded(device: device, cfg: cfg)
 
         syncMagCal(profile: profile, device: device)
         syncSensorCal(profile: profile, device: device)
@@ -348,14 +355,36 @@ final class ActiveRocketSyncer: ObservableObject {
     /// also flows back through the report — isn't reported as the rocket
     /// disagreeing with the phone.
     private func armExtrasAdoptIfNeeded(device: BLEDevice, cfg: RocketConfig) {
-        guard !cfg.unreportedGroups.isEmpty, !extrasAdoptArmed else { return }
+        // Keyed on the three report groups, not on unreportedGroups: that list
+        // also names the camera (#1472), which an out computer predating
+        // "camsrc" never verifies — see configReportGroupsMissing.
+        guard cfg.configReportGroupsMissing, !extrasAdoptArmed else { return }
         extrasAdoptArmed = true
         device.$rocketConfig
             .compactMap { $0 }
-            .filter { $0.unreportedGroups.isEmpty }
+            .filter { !$0.configReportGroupsMissing }
             .first()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.adoptRocketConfig() }
+            .store(in: &cancellables)
+    }
+
+    /// The camera type is adopted only from the flight computer (#1472).  With
+    /// the rail off at connect the out computer can only offer its own copy, so
+    /// the first adoption leaves the profile's camera alone; adopt the flight
+    /// computer's once the rail comes up and its report lands.  Only while it
+    /// is unverified, only once, and only on a rocket that reports a camera at
+    /// all (the mini has none).
+    private func armCameraAdoptIfNeeded(device: BLEDevice, cfg: RocketConfig) {
+        guard cfg.cameraSource != nil, !cfg.cameraIsFlightComputerSourced,
+              !cameraAdoptArmed else { return }
+        cameraAdoptArmed = true
+        device.$rocketConfig
+            .compactMap { $0 }
+            .filter { $0.cameraIsFlightComputerSourced }
+            .first()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.adoptCameraOnly() }
             .store(in: &cancellables)
     }
 
@@ -371,6 +400,24 @@ final class ActiveRocketSyncer: ObservableObject {
         if case .adopted(let existing) = syncState { groups = existing }
         if !groups.contains(Self.groupImuOrientation) {
             groups.append(Self.groupImuOrientation)
+        }
+        syncState = .adopted(groups)
+    }
+
+    private func adoptCameraOnly() {
+        guard let device, let store, device.isConnected,
+              let cfg = device.rocketConfig, cfg.cameraIsFlightComputerSourced
+        else { return }
+        // The camera is verifiable now, whether or not the profile differs.
+        unreportedGroups = cfg.unreportedGroups
+        guard let profile = store.activeProfile, cfg.cameraType != profile.cameraType
+        else { return }
+        store.update(profile.id) { $0.cameraType = cfg.cameraType }
+        guard createdProfileName == nil else { return }
+        var groups: [String] = []
+        if case .adopted(let existing) = syncState { groups = existing }
+        if !groups.contains(Self.groupCamera) {
+            groups.append(Self.groupCamera)
         }
         syncState = .adopted(groups)
     }
@@ -558,7 +605,11 @@ final class ActiveRocketSyncer: ObservableObject {
             changed.append(groupGuidanceEnable)
         }
 
-        if p.cameraType != cfg.cameraType {
+        // #1472: only the flight computer's own camera type.  Anything else is
+        // the out computer's copy of the last cmd 33 it relayed, which the FC
+        // may never have applied — adopting it made the profile say RunCam
+        // for a GoPro rocket, and the next "Send all" then switched the FC.
+        if cfg.cameraIsFlightComputerSourced, p.cameraType != cfg.cameraType {
             p.cameraType = cfg.cameraType
             changed.append(groupCamera)
         }

@@ -320,6 +320,80 @@ class TelemetryDispatchTest {
         assertEquals(PyroConfigSource.UNKNOWN, PyroConfigSource.fromWire("bogus"))
     }
 
+    // ── #1472 camera-type provenance ──────────────────────────────────────
+
+    @Test
+    fun `the config frame's camt carries no provenance`() {
+        val cfg = config("""{"type":"config","camt":2}""", previous = null)
+        assertEquals(2, cfg.cameraType)
+        assertEquals(CameraTypeSource.CONFIG_FRAME, cfg.cameraSource)
+        assertFalse(cfg.cameraIsFlightComputerSourced)
+        assertTrue("Camera" in cfg.unreportedGroups)
+    }
+
+    @Test
+    fun `config_pyro sets the camera type with its own source`() {
+        var cfg = config("""{"type":"config","camt":2}""", previous = null)
+        cfg = pyro(
+            """{"type":"config_pyro","p1e":true,"src":"fc","fnv":true,"camt":1,"camsrc":"fc","camfnv":true}""",
+            cfg,
+        )
+        assertEquals(1, cfg.cameraType)
+        assertEquals(CameraTypeSource.FLIGHT_COMPUTER, cfg.cameraSource)
+        assertTrue(cfg.cameraIsFlightComputerSourced)
+        assertFalse("Camera" in cfg.unreportedGroups)
+
+        cfg = pyro("""{"type":"config_pyro","p1e":true,"camt":2,"camsrc":"oc"}""", cfg)
+        assertEquals(2, cfg.cameraType)
+        assertEquals(CameraTypeSource.OUT_COMPUTER_CACHE, cfg.cameraSource)
+        assertTrue("Camera" in cfg.unreportedGroups)
+    }
+
+    @Test
+    fun `a config rebuild keeps the camera type config_pyro vouched for`() {
+        var cfg = config("""{"type":"config","camt":1}""", previous = null)
+        cfg = pyro("""{"type":"config_pyro","camt":1,"camsrc":"fc"}""", cfg)
+        // A re-sent `config` frame (cmd 20) whose camt disagrees must not
+        // overwrite the sourced value, nor its source.
+        cfg = config("""{"type":"config","camt":2}""", cfg)
+        assertEquals(1, cfg.cameraType)
+        assertEquals(CameraTypeSource.FLIGHT_COMPUTER, cfg.cameraSource)
+    }
+
+    @Test
+    fun `an out computer that predates camsrc leaves the camera unverified`() {
+        var cfg = config("""{"type":"config","camt":2}""", previous = null)
+        cfg = pyro("""{"type":"config_pyro","p1e":true,"src":"fc","fnv":true}""", cfg)
+        assertEquals(2, cfg.cameraType)
+        assertEquals(CameraTypeSource.CONFIG_FRAME, cfg.cameraSource)
+        // A camt without a recognised source is ignored, not trusted.
+        cfg = pyro("""{"type":"config_pyro","camt":1,"camsrc":"xx"}""", cfg)
+        assertEquals(2, cfg.cameraType)
+        assertEquals(CameraTypeSource.CONFIG_FRAME, cfg.cameraSource)
+        assertNull(CameraTypeSource.fromWire(null))
+    }
+
+    @Test
+    fun `a rocket with no camera claims nothing`() {
+        // The mini has no camera: its config frame carries no camt.
+        val cfg = config("""{"type":"config","shz":333}""", previous = null)
+        assertNull(cfg.cameraSource)
+        assertFalse("Camera" in cfg.unreportedGroups)
+    }
+
+    @Test
+    fun `an unverified camera does not hold back the report groups`() {
+        // configReportGroupsMissing is what the #915 re-adopt waits on.
+        val cfg = RocketConfig(
+            cameraSource = CameraTypeSource.CONFIG_FRAME,
+            servoExtras = RocketServoExtras(0, 0, 0, -60f, 60f, listOf(0f, 90f, 180f, 270f), 0, 0, true),
+            guidanceExtras = RocketGuidanceExtras(3f, 30f, 0.5f, 15f, 30f, 0, 0, 0f, 0f, 0f, 0f, 0f, 0),
+            rollWaypoints = emptyList(),
+        )
+        assertFalse(cfg.configReportGroupsMissing)
+        assertEquals(listOf("Camera"), cfg.unreportedGroups)
+    }
+
     @Test
     fun `config then config_pyro then config keeps both sides`() {
         // The real connect-time sequence: OC pushes config, then config_pyro,

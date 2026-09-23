@@ -1447,6 +1447,10 @@ static float   cfg_kp_angle      = 0.0f;
 static float   cfg_iwind_dps     = -1.0f;  // <0 = firmware default (0 means "disabled")
 static bool    cfg_guidance_en  = false;
 static uint8_t cfg_camera_type  = CAM_TYPE_RUNCAM;  // default: RunCam
+static inline const char* cameraTypeName(uint8_t t)
+{
+    return t == CAM_TYPE_GOPRO ? "GoPro" : t == CAM_TYPE_RUNCAM ? "RunCam" : "None";
+}
 
 // IMU mounting orientation setting (#phase3): IMU_ORIENT_AUTO lets the
 // FC's pad-gravity detect drive the mapping; 0..23 pins a manual code.
@@ -1699,23 +1703,29 @@ static bool             fc_config_report_valid = false;
 // #1231: false for a v1 (#915) report, whose pyro block is absent — a v1
 // sender's zeroed `pyro` must never be served as "all four disabled".
 static bool             fc_config_report_has_pyro = false;
+// #1472: false for a v1/v2 report, which has no `camera_type` — its zero
+// would otherwise read as CAM_TYPE_NONE, a real camera setting.
+static bool             fc_config_report_has_camera = false;
 // #1149 item 3: the same treatment last_query_cfg got, for the same reason.
-// This 193-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
+// This 194-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
 // prio 6) and was read field-by-field by loop_oc (core 1, prio 5) through a
 // reference held across dozens of statements and three String builds. The
 // parser strictly preempts loopTask, so a config readback could mix two report
 // generations — servo trim from one, fin layout from the next.
 static portMUX_TYPE fc_config_report_mux = portMUX_INITIALIZER_UNLOCKED;
 static inline ConfigReportData snapshotConfigReport(bool* valid_out,
-                                                    bool* has_pyro_out = nullptr)
+                                                    bool* has_pyro_out = nullptr,
+                                                    bool* has_camera_out = nullptr)
 {
     portENTER_CRITICAL(&fc_config_report_mux);
     const ConfigReportData snap = fc_config_report;
     const bool valid = fc_config_report_valid;
     const bool has_pyro = fc_config_report_has_pyro;
+    const bool has_camera = fc_config_report_has_camera;
     portEXIT_CRITICAL(&fc_config_report_mux);
     if (valid_out) *valid_out = valid;
     if (has_pyro_out) *has_pyro_out = has_pyro;
+    if (has_camera_out) *has_camera_out = has_camera;
     return snap;
 }
 static volatile bool    fc_config_report_dirty = false;
@@ -4175,19 +4185,29 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     {
         // Version byte first, then the length that version implies.  v1
         // (#915, 169 bytes) is a byte-exact prefix of v2 (#1231, 193 bytes:
-        // + the live deployment configuration), so a v1 sender is still
-        // accepted — with no pyro block to serve — rather than refused.  The
-        // FC image is relayed through the OC, so an OC updated ahead of its
-        // FC is the normal OTA order; refusing v1 would put every #915 group
-        // back on the app's can't-verify list for that whole window.
+        // + the live deployment configuration), which is a prefix of v3
+        // (#1472, 194 bytes: + the camera type), so an older sender is still
+        // accepted — with nothing to serve for the blocks it lacks — rather
+        // than refused.  The FC image is relayed through the OC, so an OC
+        // updated ahead of its FC is the normal OTA order; refusing an older
+        // report would put every #915 group back on the app's can't-verify
+        // list for that whole window.
         constexpr size_t kV1Bytes   = offsetof(ConfigReportData, pyro);
+        constexpr size_t kV2Bytes   = offsetof(ConfigReportData, camera_type);
         constexpr size_t kVersionAt = offsetof(ConfigReportData, version);
         const uint8_t ver = (payload_len > kVersionAt) ? payload[kVersionAt] : 0xFF;
         ConfigReportData incoming = {};
         bool has_pyro = false;
+        bool has_camera = false;
         if (ver == ConfigReportData::VERSION && payload_len >= sizeof(ConfigReportData))
         {
             memcpy(&incoming, payload, sizeof(incoming));
+            has_pyro = true;
+            has_camera = true;
+        }
+        else if (ver == 2U && payload_len >= kV2Bytes)
+        {
+            memcpy(&incoming, payload, kV2Bytes);   // camera_type stays zeroed, and is never served
             has_pyro = true;
         }
         else if (ver == 1U && payload_len >= kV1Bytes)
@@ -4222,6 +4242,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         fc_config_report = incoming;
         fc_config_report_valid = true;
         fc_config_report_has_pyro = has_pyro;
+        fc_config_report_has_camera = has_camera;
         portEXIT_CRITICAL(&fc_config_report_mux);
         if (changed) fc_config_report_dirty = true;
 
@@ -4254,6 +4275,30 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 ESP_LOGI("CFG", "FC deployment config matches OC cache again");
             }
             diverged = differs;
+        }
+
+        // #1472: the same comparison for the camera type, and the same rule —
+        // the cache is not overwritten from here.  This is the line that
+        // would have named the 2026-09-22 bench state (FC GoPro, OC RunCam)
+        // on the first report instead of leaving it to be spotted across two
+        // boot logs.
+        if (has_camera)
+        {
+            static bool cam_diverged = false;
+            const uint8_t cache_type = cfg_camera_type;
+            const bool differs = incoming.camera_type != cache_type;
+            if (differs && (!cam_diverged || changed))
+            {
+                ESP_LOGW("CFG", "FC camera type differs from OC cache — "
+                                "FC(%s)=%s OC=%s; the app is shown the FC's",
+                         (incoming.flags & (1U << ConfigReportData::F_CAMERA_FROM_NVS)) ? "nvs" : "dflt",
+                         cameraTypeName(incoming.camera_type), cameraTypeName(cache_type));
+            }
+            else if (!differs && cam_diverged)
+            {
+                ESP_LOGI("CFG", "FC camera type matches OC cache again");
+            }
+            cam_diverged = differs;
         }
         return;
     }
@@ -6082,6 +6127,31 @@ static void sendConfigExtras()
              (unsigned)w.length(), (unsigned)n);
 }
 
+// #1472: the camera type the readback reports, and where it came from — the
+// FC's live runtime_camera_type whenever the FC is up and its report carries
+// one (v3), the OC's cache (what the phone last pushed, #1131) otherwise.
+// Same test as the pyro readback below, for the same reasons.  The cache used
+// to be the only answer, so a cmd 33 the FC never applied was reported as
+// the rocket's camera, the apps adopted it into the profile, and "Send all"
+// then wrote it to the FC.
+struct CameraReadback
+{
+    uint8_t type;
+    bool    from_fc;
+    bool    fnv;   // FC-sourced only: the FC's type is a stored record
+};
+static CameraReadback cameraReadback()
+{
+    bool valid = false, has_camera = false;
+    const ConfigReportData r = snapshotConfigReport(&valid, nullptr, &has_camera);
+    CameraReadback c;
+    c.from_fc = pwr_pin_on && valid && has_camera;
+    c.type    = c.from_fc ? r.camera_type : cfg_camera_type;
+    c.fnv     = c.from_fc &&
+                (r.flags & (1U << ConfigReportData::F_CAMERA_FROM_NVS)) != 0U;
+    return c;
+}
+
 // #1231: the deployment configuration readback.  Served from the FC's live
 // config report whenever the FC is up and has sent one that carries it (a
 // v2 report); the OC's own cache — what the phone last pushed, reloaded from
@@ -6122,10 +6192,27 @@ static void sendPyroConfigReadback()
         p += ",\"fnv\":";
         p += (r.flags & (1U << ConfigReportData::F_PYRO_FROM_NVS)) ? "true" : "false";
     }
+    // #1472: the camera type rides this frame, with its OWN provenance keys
+    // (a v2 FC reports pyro but not camera, so the two sources can differ).
+    // Not a frame of its own: both apps decode an unrecognised "type" as a
+    // TELEMETRY frame — every telemetry field is optional — so a new frame
+    // type would reach any app that predates it as a blank telemetry frame
+    // on every connect and every config change.  This frame already carries
+    // FC/OC provenance, goes out on connect and on every report change, and
+    // an older app ignores keys it does not know.
+    const CameraReadback cam = cameraReadback();
+    p += ",\"camt\":"; p += itos(cam.type);
+    p += ",\"camsrc\":\""; p += cam.from_fc ? "fc" : "oc"; p += "\"";
+    if (cam.from_fc) {
+        p += ",\"camfnv\":"; p += cam.fnv ? "true" : "false";
+    }
     p += "}";
     enqueueConfigReadback(p);   // #398 item 3
     ESP_LOGI("CFG", "Queued pyro config readback (%u bytes, from %s)",
              (unsigned)p.length(), from_fc ? "FC report" : "OC cache");
+    // Its own line: the bench scripts pin the one above to end at "from ...)".
+    ESP_LOGI("CFG", "Camera type readback: %s (from %s)",
+             cameraTypeName(cam.type), cam.from_fc ? "FC report" : "OC cache");
 }
 
 static void sendCurrentConfig()
@@ -6162,7 +6249,11 @@ static void sendCurrentConfig()
     j += ",\"kpang\":"; j += fmtf(cfg_kp_angle, 2);
     j += ",\"iwind\":"; j += fmtf(cfg_iwind_dps, 1);
     j += ",\"ge\":";  j += cfg_guidance_en ? "true" : "false";
-    j += ",\"camt\":"; j += itos(cfg_camera_type);
+    // #1472: the FC's type when it is reporting one, so an app that predates
+    // config_pyro's "camsrc" still adopts what the FC will actually drive.
+    // Current apps take the camera from config_pyro (which says where it came
+    // from) and treat this key as unverified.
+    j += ",\"camt\":"; j += itos(cameraReadback().type);
     j += ",\"irate\":"; j += itos(cfg_imu_rate);
     // LoRa settings
     j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
@@ -10947,6 +11038,7 @@ static void loop_oc()
         // #1231: the report carries the deployment configuration too, so a
         // pyro write the FC applied (or one it never received — the frame
         // then re-states the FC's previous values) reaches the tiles here.
+        // #1472: and the camera type, which rides the same frame.
         sendPyroConfigReadback();
     }
 
@@ -11900,9 +11992,10 @@ static void loop_oc()
                 // control the operator had deliberately disabled.
                 //
                 // Adoption from the FC is not available: ConfigReportData's
-                // flags are only F_SOUNDS, F_ORIENT_FROM_NVS and (#1231)
-                // F_PYRO_FROM_NVS, and the F_SERVO_ENABLED bit lives in
-                // FlightSettingsData, which the OC classifies log-only.
+                // flags are only F_SOUNDS, F_ORIENT_FROM_NVS, (#1231)
+                // F_PYRO_FROM_NVS and (#1472) F_CAMERA_FROM_NVS, and the
+                // F_SERVO_ENABLED bit lives in FlightSettingsData, which the
+                // OC classifies log-only.
                 prefs.begin("servo", false);
                 prefs.putBool("sen", enabled);
                 prefs.end();
