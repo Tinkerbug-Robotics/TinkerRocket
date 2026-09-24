@@ -46,10 +46,10 @@
 #include "board/board_v9.h"
 #define TR_BOARD_REV_STR "V9/V10"
 #elif TR_BOARD_V8
-#include "board/board_v8.h"
+#include "board/legacy/board_v8.h"
 #define TR_BOARD_REV_STR "V8"
 #else
-#include "board/board_v7.h"
+#include "board/legacy/board_v7.h"
 #define TR_BOARD_REV_STR "V7"
 #endif
 
@@ -67,7 +67,7 @@ static_assert(board_pins::PYRO_ARM_PIN   == 44 &&
               board_pins::PYRO3_FIRE_PIN == 34 && board_pins::PYRO3_CONT_PIN == 12 &&
               board_pins::PYRO4_FIRE_PIN == 33 && board_pins::PYRO4_CONT_PIN == 42,
               "board_m1.h pyro map changed — re-derive it from a netlist export of "
-              "hardware/rocket-computer-mini before editing this assert away");
+              "hardware/tinker-beetle before editing this assert away");
 // No pyro line may land on a strapping pad. GPIO45 sets the flash rail
 // voltage and GPIO46 is sampled at boot; a continuity input's level depends
 // on whether an igniter happens to be connected, which the design does not

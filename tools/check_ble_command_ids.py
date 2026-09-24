@@ -58,7 +58,7 @@ DISPATCHES = [
     ("Out Computer", REPO / "tinkerrocket-idf/projects/out_computer/main/main.cpp"),
     ("Base Station", REPO / "tinkerrocket-idf/projects/base_station/main/main.cpp"),
     ("Rocket Computer Mini",
-     REPO / "tinkerrocket-idf/projects/rocket_computer_mini/main/comms.cpp"),
+     REPO / "tinkerrocket-idf/projects/legacy/rocket_computer_mini/main/comms.cpp"),
 ]
 SWIFT_APP_DIR = REPO / "TinkerRocketApp/TinkerRocketApp"
 KOTLIN = (

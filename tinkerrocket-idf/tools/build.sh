@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # TinkerRocket ESP-IDF build helper
 # Usage: ./tools/build.sh <project> [command]
-#   project: out_computer | flight_computer | base_station
+#   project: out_computer | flight_computer | base_station | radio_board,
+#            or a path under projects/ for the rest: legacy/rocket_computer_mini,
+#            bench/pyro_channel_test, ... (see projects/README.md)
 #   command: build (default) | flash | monitor | menuconfig | fullclean
 #
 # Examples:

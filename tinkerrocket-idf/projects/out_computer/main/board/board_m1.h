@@ -5,7 +5,7 @@
 // rocket-computer-mini rev1 pin map for the OUT COMPUTER (ESP32-S3RH2, U15).
 // Selected with TR_BOARD_M1=1:  idf.py -B build_m1 -DTR_BOARD_M1=1 build
 //
-// Board files: hardware/rocket-computer-mini/. Every constant below was taken
+// Board files: hardware/tinker-beetle/ (Tinker-Beetle). Every constant below was taken
 // from a kicad-cli netlist export of that schematic at the merge of the
 // second-processor work, not from the design docs — walk U15's
 // pad -> pinfunction -> net if you need to re-derive it.

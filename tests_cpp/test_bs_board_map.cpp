@@ -4,7 +4,7 @@
 #include "config.h"
 
 // #835 items 1, 2 and 4 — board_v3.h described hardware that is not on the
-// board. Netlist-verified against hardware/base-station (rev V6, electrically
+// board. Netlist-verified against hardware/legacy/base-station (rev V6, electrically
 // identical to the base-station-v5.0.0 fab tag on every pin that matters).
 //
 // Each of the three was a claim no test could contradict, because nothing

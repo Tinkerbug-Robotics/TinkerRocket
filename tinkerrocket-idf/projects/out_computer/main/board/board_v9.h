@@ -5,7 +5,8 @@
 // V9/V10 PCB pin map + board topology for the out computer (ESP32-S3).
 // Selected with TR_BOARD_V9=1:  idf.py -B build_v9 -DTR_BOARD_V9=1 build
 //
-// This is the map of the board files in hardware/rocket-computer/ — the
+// This is the map of the board files in hardware/tinker-mantis/ (Tinker-Mantis;
+// the folder was hardware/rocket-computer/ until 2026-09-24) — the
 // .kicad_pcb title block reads V9 up to 25fb08d and V10 at HEAD.
 //
 // ### Every S3 GPIO here is identical to board_v8.h ###
@@ -63,7 +64,7 @@ struct board_pins
     static constexpr int NAND_CS = 36;       // M_FLASH_CS (CONFIRMED)
     // NO MRAM ON THIS BOARD. U12 (MR25H10) was deliberately deleted during the
     // V9 design, replaced by the S3RH2's in-package PSRAM — recorded in
-    // hardware/rocket-computer/prefab-review-2026-07-30.md ("I18. MRAM
+    // hardware/tinker-mantis/prefab-review-2026-07-30.md ("I18. MRAM
     // deletion fully implemented: no U12/MRAM in schematic, BOM, or PCB") and
     // confirmed from the netlist, where GPIO34 is
     // `unconnected-(U15-GPIO34-Pad39)` and `net 'MRAM'` returns nothing.

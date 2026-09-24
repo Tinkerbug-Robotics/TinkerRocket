@@ -1,49 +1,34 @@
-name: Firmware Release
+name: Firmware Release (legacy boards)
 
-# Firmware images and a manifest, attached to a GitHub release on tag push
-# (#773 step 3).  Tag scheme: fw-v<semver>, e.g. fw-v1.0.0.
+# Firmware for the boards that left the product line on 2026-09-24, published
+# on its own tag so that nothing is lost and nothing is offered by mistake.
+# Tag scheme: fw-legacy-v<semver>, e.g. fw-legacy-v1.0.0 — cut it at the same
+# commit as the fw-v tag it accompanies, when a legacy board needs an update.
 #
-# PRODUCT LINE ONLY (2026-09-24): Tinker-Mantis, Tinker-Beetle, Tinker-Base and
-# the LoRa daughterboard. Firmware for retired boards (V7/V8, the V1/V2 base
-# station, the single-MCU mini) is built by firmware-release-legacy.yml on its
-# own fw-legacy-v* tags, which neither app ever offers — both look for a tag
-# starting fw-v, and fw-legacy-v does not. Keep the two workflows' build,
-# manifest and publish steps in step; only the matrix and the release wording
-# differ. The matrix here must equal the product-line group of
-# firmware-build.yml.
+# The product release, firmware-release.yml, carries only Tinker-Mantis,
+# Tinker-Beetle, Tinker-Base and the LoRa daughterboard. Everything here runs
+# on hardware that is still in hand but no longer offered: the V7 and V8 rocket
+# computers, the V1/V2 base station, and the single-MCU mini firmware for a
+# shape that was never fabbed. The matrix must equal the legacy group of
+# firmware-build.yml, which keeps all of it compiling on every push.
 #
-# Why this exists: `firmware-build.yml` compiles every configuration and
-# uploads NOTHING — it ends at `idf.py build`.  So there has never been an
-# artifact to distribute, and anyone updating a board had to build it
-# themselves or be sent a file.  #773's acceptance line is "cutting a firmware
-# release is a tag push", and this is it.
+# Neither app ever offers these images: both look for releases whose tag
+# starts fw-v, and fw-legacy-v does not. To update a legacy board, download
+# its image from the release and flash it with the app's file picker — the
+# picker still refuses an image whose CMake project name is not the unit's.
+# The release is published with --latest=false so it never displaces the
+# product release on the repository's front page.
 #
-# What is published: the APP image per configuration, which is what OTA
-# flashes, named for the product it belongs to
-# (tinker-mantis-flight_computer-V9.bin). The CMake project names inside the
-# images did not change with the product rename, because both apps refuse an
-# image whose project name is not the unit's own.  Bootloader and partition
-# table are deliberately NOT here — those are a first-flash-over-USB concern
-# and shipping them beside an OTA image invites someone to push the wrong one
-# over the air.
-#
-# `pyro_channel_test` is excluded on purpose.  It drives squib FETs by hand
-# and is a bench tool, not a flight image; it has no business in a list an app
-# offers to flash.
-#
-# Also runnable by hand as a dry run, following android-release.yml: same
-# builds, same manifest, same verification, stopping before the release is
-# created.  A tag push is otherwise the only way this runs, which would leave
-# every change to it untested until the one moment it must not fail.
-
+# Keep the build, manifest and publish steps in step with firmware-release.yml;
+# only the matrix and the release wording differ.
 on:
   push:
     tags:
-      - 'fw-v*'
+      - 'fw-legacy-v*'
   workflow_dispatch:
     inputs:
       simulated_tag:
-        description: 'Tag to build the manifest against, e.g. fw-v1.0.0. Blank uses fw-v0.0.0-dryrun.'
+        description: 'Tag to build the manifest against, e.g. fw-legacy-v1.0.0. Blank uses fw-legacy-v0.0.0-dryrun.'
         required: false
         default: ''
 
@@ -58,34 +43,37 @@ jobs:
       fail-fast: true   # a release must be all-or-nothing
       matrix:
         include:
-          # Tinker-Mantis: both halves of the V9/V10 board.
-          - line: Tinker-Mantis
-            asset: tinker-mantis-flight_computer-V9
+          # V7 and V8 rocket computers — both halves of each pair. out_computer V7
+          # was never in the combined release this split replaced (the build
+          # matrix gained it in #1348, a day after that release workflow was
+          # written), so a V7 pair could not be updated as a pair until now.
+          - line: legacy
+            asset: legacy-flight_computer-V7
             project: flight_computer
-            flags: -B build_v9 -DTR_BOARD_V9=1
-          - line: Tinker-Mantis
-            asset: tinker-mantis-out_computer-V9
+            flags: -B build_v7 -DTR_BOARD_V7=1
+          - line: legacy
+            asset: legacy-out_computer-V7
             project: out_computer
-            flags: -B build_v9 -DTR_BOARD_V9=1
-          # Tinker-Beetle: both ESP32-S3s of the M1 board.
-          - line: Tinker-Beetle
-            asset: tinker-beetle-flight_computer-M1
+            flags: -B build_v7 -DTR_BOARD_V7=1
+          - line: legacy
+            asset: legacy-flight_computer-V8
             project: flight_computer
-            flags: -B build_m1 -DTR_BOARD_M1=1
-          - line: Tinker-Beetle
-            asset: tinker-beetle-out_computer-M1
+            flags: -B build_v8 -DTR_BOARD_V8=1
+          - line: legacy
+            asset: legacy-out_computer-V8
             project: out_computer
-            flags: -B build_m1 -DTR_BOARD_M1=1
-          # Tinker-Base: base_station's V3 build is the starting point until the
-          # Tinker-Base has a board map of its own (on-board SPI radio).
-          - line: Tinker-Base
-            asset: tinker-base-base_station-V3
+            flags: -B build_v8 -DTR_BOARD_V8=1
+          # The V2 base station. V1 was never in a release (build it by hand with
+          # -DTR_BS_BOARD=1); V3 is the product release's Tinker-Base slot.
+          - line: legacy
+            asset: legacy-base_station-V2
             project: base_station
-            flags: -B build_v3 -DTR_BS_BOARD=3
-          # The LoRa daughterboard that pairs with Tinker-Mantis.
-          - line: LoRa
-            asset: lora-daughterboard-radio_board
-            project: radio_board
+            flags: -B build_v2
+          # The single-MCU mini, for the S3-alone shape that was never fabbed.
+          - line: legacy
+            asset: legacy-rocket_computer_mini
+            project: rocket_computer_mini
+            path: legacy/rocket_computer_mini
             flags: -B build
 
     steps:
@@ -169,7 +157,7 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ inputs.simulated_tag }}"
-            [ -n "$TAG" ] || TAG="fw-v0.0.0-dryrun"
+            [ -n "$TAG" ] || TAG="fw-legacy-v0.0.0-dryrun"
           fi
           ls -l artifacts
           python3 tinkerrocket-idf/tools/image_info.py --manifest "$TAG" artifacts/*.bin \
@@ -195,7 +183,9 @@ jobs:
           # full release and every app in the field offers it as an update.
           # Both apps' FirmwareReleaseLocator skips prereleases unless asked, so
           # this is what makes a live release testable without shipping it.
-          VERSION="${GITHUB_REF_NAME#fw-v}"
+          # (The apps never read fw-legacy-v tags at all; the rule is kept so an
+          # -rc1 here is still labelled as what it is.)
+          VERSION="${GITHUB_REF_NAME#fw-legacy-v}"
           PRERELEASE=""
           case "$VERSION" in
             *-*) PRERELEASE="--prerelease"
@@ -203,15 +193,17 @@ jobs:
             *)   echo "tag $GITHUB_REF_NAME is a full release" ;;
           esac
           # --notes is prepended to the generated notes: which file is which.
+          # --latest=false: a legacy release must never become the repository's
+          # "Latest" release in place of the product one.
           gh release create "$GITHUB_REF_NAME" artifacts/*.bin artifacts/manifest.json \
-            --title "TinkerRocket firmware ${GITHUB_REF_NAME#fw-}" \
+            --title "TinkerRocket legacy firmware ${GITHUB_REF_NAME#fw-legacy-}" \
             --notes "$(printf '%s\n' \
-              '| Product | Images |' \
-              '|---|---|' \
-              '| Tinker-Mantis | `tinker-mantis-flight_computer-V9.bin`, `tinker-mantis-out_computer-V9.bin` |' \
-              '| Tinker-Beetle | `tinker-beetle-flight_computer-M1.bin`, `tinker-beetle-out_computer-M1.bin` |' \
-              '| Tinker-Base | `tinker-base-base_station-V3.bin` |' \
-              '| LoRa daughterboard | `lora-daughterboard-radio_board.bin` |' \
+              'Firmware for boards that are no longer part of the product line. The apps never offer these images; flash one with the app'"'"'s file picker or over USB.' \
               '' \
-              'Firmware for retired boards is published separately on `fw-legacy-v*` tags.')" \
-            --generate-notes $PRERELEASE
+              '| Board | Images |' \
+              '|---|---|' \
+              '| Rocket computer V7 | `legacy-flight_computer-V7.bin`, `legacy-out_computer-V7.bin` |' \
+              '| Rocket computer V8 | `legacy-flight_computer-V8.bin`, `legacy-out_computer-V8.bin` |' \
+              '| Base station V2 | `legacy-base_station-V2.bin` |' \
+              '| Single-MCU mini (never fabbed) | `legacy-rocket_computer_mini.bin` |')" \
+            --generate-notes --latest=false $PRERELEASE

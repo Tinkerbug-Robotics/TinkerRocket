@@ -53,8 +53,8 @@ FILES = [
     PROJECTS / "out_computer/main/main.cpp",
     PROJECTS / "flight_computer/main/main.cpp",
     PROJECTS / "base_station/main/main.cpp",
-    PROJECTS / "rocket_computer_mini/main/main.cpp",
-    PROJECTS / "rocket_computer_mini/main/flight.cpp",
+    PROJECTS / "legacy/rocket_computer_mini/main/main.cpp",
+    PROJECTS / "legacy/rocket_computer_mini/main/flight.cpp",
 ]
 
 INIT_RE = re.compile(r"\bnvs_flash_init\s*\(\s*\)")

@@ -32,7 +32,8 @@ idf_component_register(
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format)
 
 # Board revision selection (OC #411 pattern): `idf.py -DTR_BS_BOARD=<1|2|3>
-# build` compiles the matching main/board/board_v*.h pin map; default is V2.
+# build` compiles the matching pin map — main/board/board_v3.h, or
+# main/board/legacy/board_v{1,2}.h for the superseded revisions; default is V2.
 # Use a separate build dir per variant (e.g. -B build_v3) — the flag is
 # cached by CMake.
 #

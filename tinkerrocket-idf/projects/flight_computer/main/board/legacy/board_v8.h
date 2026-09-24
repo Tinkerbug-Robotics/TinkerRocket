@@ -12,7 +12,7 @@
 // THIS MAP IS V8-ONLY. It is bench-proven on the physical V8 boards
 // (2026-08-17: commanding channel 3 fires connector 3, channel 1 fires
 // connector 1), and the V8 PCB was never committed, so this header is its
-// only record — do not "correct" it against hardware/rocket-computer/, which
+// only record — do not "correct" it against hardware/tinker-mantis/, which
 // holds V9/V10. Those boards moved PYRO_ARM to 16, PYRO2_FIRE to 11 and
 // PYRO3_FIRE to 9, and gave GPIO5 to the power latch; build them with
 // -DTR_BOARD_V9=1 (board_v9.h), which explains what this map does to them.

@@ -1,11 +1,19 @@
 # rocket_computer_mini
 
-Firmware for [`hardware/rocket-computer-mini`](../../../hardware/rocket-computer-mini/):
+> **Legacy.** This project targets the single-S3 shape of the mini that was
+> never fabricated. The board that was built — the Tinker-Beetle,
+> [`hardware/tinker-beetle`](../../../../hardware/tinker-beetle/) — has two
+> ESP32-S3s and runs `flight_computer` + `out_computer` with `-DTR_BOARD_M1=1`
+> (#1188). Kept building in CI and published only on `fw-legacy-v*` tags; do
+> not flash it to a Tinker-Beetle. See [`../../README.md`](../../README.md).
+
+Firmware for the mini as it was then drawn (`hardware/rocket-computer-mini`, now
+[`hardware/tinker-beetle`](../../../../hardware/tinker-beetle/)):
 one ESP32-S3 doing both of the big rocket-computer's jobs. The board deleted
 the ESP32-P4, so this project is a merge of
-[`flight_computer`](../flight_computer/) (sensors, EKF, orientation, kinematic
+[`flight_computer`](../../flight_computer/) (sensors, EKF, orientation, kinematic
 detectors, four pyro channels, mag/sensor calibration, sim) and
-[`out_computer`](../out_computer/) (NAND flight logging, LoRa telemetry, BLE
+[`out_computer`](../../out_computer/) (NAND flight logging, LoRa telemetry, BLE
 to the app, battery monitoring, OTA, power modes) into one process.
 
 **Everything external stays fleet-compatible.** The NAND log stream is
@@ -96,7 +104,7 @@ retire the flag so they are not mistaken for an interrupted flight.
 ## GNSS: LC86G, not u-blox
 
 The mini's receiver is a Quectel LC86G (UART, NMEA + PAIR/PQTM). The new
-[`TR_GNSSReceiverLC86_Serial`](../../components/TR_GNSSReceiverLC86_Serial/)
+[`TR_GNSSReceiverLC86_Serial`](../../../components/TR_GNSSReceiverLC86_Serial/)
 component mirrors the u-blox driver's exact public surface;
 `TR_Sensor_Collector` selects it at compile time via
 `add_compile_definitions(TR_GNSS_DRIVER_LC86=1)` in this project's
@@ -147,7 +155,7 @@ Firmware identity (`PROJECT_VER` = git sha + build date) flows into the BLE
 `config_identity` "fw" field and OTA metadata, so releasing updates for this
 board and the big one is the same act: merge, let CI build both images, and
 ship each board its own `.bin` over BLE per
-[`docs/plans/08-ota-firmware-update.md`](../../../docs/plans/08-ota-firmware-update.md).
+[`docs/plans/08-ota-firmware-update.md`](../../../../docs/plans/08-ota-firmware-update.md).
 
 ## Hardware moved under this port (PR #797)
 
@@ -158,7 +166,7 @@ against a fresh netlist export), so the board map stands:
 - **BMP585 → BMP581**: no firmware change needed — the Bosch BMP5 driver
   accepts both chip IDs (0x50/0x51), and the register map is shared.
 - **IIS2MDC → QMC5883P**: driven by the
-  [`TR_QMC5883P`](../../components/TR_QMC5883P/) component through
+  [`TR_QMC5883P`](../../../components/TR_QMC5883P/) component through
   `TR_Sensor_Collector`'s `TR_MAG_DRIVER_QMC5883P` seam, which this project's
   CMakeLists defines (#1312). Same 100 Hz poll into the same IIS2MDC-named
   count stream; the hard-iron offset is subtracted in the driver, so logged

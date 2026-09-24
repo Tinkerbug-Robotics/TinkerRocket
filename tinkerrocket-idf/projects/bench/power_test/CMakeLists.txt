@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../../components")
+set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../../../components")
 set(EXCLUDE_COMPONENTS
     TR_I2C_Interface TR_I2S_Stream TR_LogToFlash
     TR_LoRa_Comms TR_ISM6HG256 TR_BMP585 TR_MMC5983MA

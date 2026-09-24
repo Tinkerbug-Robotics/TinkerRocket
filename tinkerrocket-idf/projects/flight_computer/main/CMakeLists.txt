@@ -66,8 +66,8 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 #
 #   idf.py -B build_v7 -DTR_BOARD_V7=1 build   # legacy V7 board
 #   idf.py -B build_v8 -DTR_BOARD_V8=1 build   # V8 bench boards
-#   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # V9/V10 (hardware/rocket-computer)
-#   idf.py -B build_m1 -DTR_BOARD_M1=1 build   # rocket-computer-mini rev1 (ESP32-S3 FC)
+#   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # Tinker-Mantis V9/V10 (hardware/tinker-mantis)
+#   idf.py -B build_m1 -DTR_BOARD_M1=1 build   # Tinker-Beetle rev1 (hardware/tinker-beetle, ESP32-S3 FC)
 #
 # Unlike the other projects there is no default here, because the failure is
 # silent and pyrotechnic: V8 and V9 disagree on PYRO_ARM (5 vs 16) and swap
@@ -89,8 +89,8 @@ if(_tr_board_flag_count EQUAL 0)
     message(FATAL_ERROR
         "flight_computer: no board revision selected. Pass exactly one of "
         "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / -DTR_BOARD_M1=1 "
-        "(V9 is the hardware/rocket-computer V9/V10 board; M1 is "
-        "hardware/rocket-computer-mini rev1, whose flight computer is an "
+        "(V9 is the Tinker-Mantis V9/V10 board, hardware/tinker-mantis; M1 is "
+        "the Tinker-Beetle rev1, hardware/tinker-beetle, whose flight computer is an "
         "ESP32-S3 rather than a P4). There is no default: the pyro maps all "
         "differ and a wrong map fires the wrong channel with no runtime "
         "symptom.")
@@ -108,7 +108,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE ${_tr_board_flags_set}=1)
 if(TR_BOARD_M1 AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32s3")
     message(FATAL_ERROR
         "flight_computer: -DTR_BOARD_M1=1 needs an esp32s3 target, but this build dir "
-        "is configured for '${CONFIG_IDF_TARGET}'. rocket-computer-mini's flight "
+        "is configured for '${CONFIG_IDF_TARGET}'. the Tinker-Beetle's flight "
         "computer is an ESP32-S3, not a P4. Use a FRESH build dir, or run "
         "`idf.py -B <dir> set-target esp32s3` first — idf.py fixes the target before "
         "sdkconfig.defaults.m1 is applied, so a reused P4 build dir silently keeps "
@@ -120,11 +120,11 @@ if(NOT TR_BOARD_M1 AND CONFIG_IDF_TARGET AND NOT "${CONFIG_IDF_TARGET}" STREQUAL
         "configured for '${CONFIG_IDF_TARGET}'. Use a fresh build dir per board.")
 endif()
 if(TR_BOARD_M1)
-    message(STATUS "flight_computer: board pin map M1 (main/board/board_m1.h, rocket-computer-mini rev1, ESP32-S3)")
+    message(STATUS "flight_computer: board pin map M1 (main/board/board_m1.h, Tinker-Beetle rev1, ESP32-S3)")
 elseif(TR_BOARD_V9)
     message(STATUS "flight_computer: board pin map V9/V10 (main/board/board_v9.h)")
 elseif(TR_BOARD_V8)
-    message(STATUS "flight_computer: board pin map V8 (main/board/board_v8.h)")
+    message(STATUS "flight_computer: board pin map V8 (main/board/legacy/board_v8.h)")
 else()
-    message(STATUS "flight_computer: board pin map V7 (main/board/board_v7.h)")
+    message(STATUS "flight_computer: board pin map V7 (main/board/legacy/board_v7.h)")
 endif()

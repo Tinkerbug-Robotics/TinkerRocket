@@ -5,7 +5,7 @@
 // rocket-computer-mini rev1 pin map for the FLIGHT COMPUTER (ESP32-S3RH2, U32).
 // Selected with TR_BOARD_M1=1:  idf.py -B build_m1 -DTR_BOARD_M1=1 build
 //
-// Board files: hardware/rocket-computer-mini/, sheet fc_esp32s3.kicad_sch.
+// Board files: hardware/tinker-beetle/ (Tinker-Beetle), sheet fc_esp32s3.kicad_sch.
 // Every constant below was taken from a kicad-cli netlist export of that
 // schematic at the merge of the second-processor work, not from the design
 // docs — walk U32's pad -> pinfunction -> net if you need to re-derive it.

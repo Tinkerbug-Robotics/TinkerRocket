@@ -119,7 +119,7 @@ static PyroChannel ch[4] = {
     { "PYRO4", GPIO_NUM_13, GPIO_NUM_14 },
 };
 #elif TR_BOARD_V8
-// V8 rocket computer (P4): mirror of projects/flight_computer/main/board/board_v8.h
+// V8 rocket computer (P4): mirror of projects/flight_computer/main/board/legacy/board_v8.h
 static constexpr gpio_num_t PYRO_ARM_PIN = GPIO_NUM_5;
 static PyroChannel ch[4] = {
     { "PYRO1", GPIO_NUM_6,  GPIO_NUM_7  },
@@ -128,7 +128,7 @@ static PyroChannel ch[4] = {
     { "PYRO4", GPIO_NUM_13, GPIO_NUM_14 },
 };
 #else
-// V7 rocket computer: mirror of .../board/board_v7.h
+// V7 rocket computer: mirror of .../board/legacy/board_v7.h
 static constexpr gpio_num_t PYRO_ARM_PIN = GPIO_NUM_14;
 static PyroChannel ch[4] = {
     { "PYRO1", GPIO_NUM_16, GPIO_NUM_15 },

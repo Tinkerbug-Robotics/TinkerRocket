@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../../components")
+set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../../../components")
 # The mini has no servos, so no control surfaces, so no guidance — exclude both
 # the real submodule and the stub so neither ends up in the component list
 # (same reasoning as out_computer).
