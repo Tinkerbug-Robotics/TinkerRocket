@@ -548,7 +548,7 @@ static TR_Coordinates coord;
 static i2c_master_bus_handle_t ina230_bus = nullptr;
 static TR_INA230 ina230(0x40);
 static bool ina230_ok = false;
-static bool ina_continuous = false;         // INA230 in continuous-averaging mode (low-power)
+static bool ina_continuous = false;         // INA230 in the low-power 1024-sample averaging config
 // Shunt resistor and current LSB
 static constexpr float INA230_R_SHUNT_OHM = 0.002f;     // 2 mOhm
 static constexpr float INA230_CURRENT_LSB_A = 0.001f;    // 1 mA/bit
@@ -1770,15 +1770,15 @@ static inline bool simStopIsStrayInflight()
 // ==========================================================================
 // Read INA230 and populate latest_power_raw so that the existing telemetry
 // pipeline (BLE, LoRa, web) picks up the values automatically.
-// Uses triggered mode: fires one conversion (~0.7ms with 1 avg × 332us × 2ch),
-// polls CVRF for completion, reads results, then INA returns to power-down.
+// With the rail on the part converts continuously (one 332 us shunt and bus
+// conversion every ~0.66 ms) and each read takes the newest sample, CVRF-checked.
 // Called inline from the main loop at ~100 Hz.
 // Plausible bus-voltage window from the INA230 — accept any real powered-board
 // reading and reject only a *failed* read.  The floor sits below USB (~5.2 V) so
 // USB-bench power is still reported: the operator wants to see the actual reading
 // (and knows it's USB) rather than have it suppressed to N/A, even though 5 V reads
 // BAD on the 2S scorecard.  A dropped/failed read (0 V — the failure sentinel
-// readINA230Power passes on I2C error / CVRF timeout) or NaN/+-Inf falls below the
+// readINA230Power passes on I2C error / no fresh conversion) or NaN/+-Inf falls below the
 // floor and is rejected.  Flight pack is 2S (6.6-8.4 V); shBatteryState classifies
 // the reading's health (#272/#303).
 static constexpr float   POWER_BUS_V_MIN      = 3.0f;   // below USB; still rejects 0 V failed reads
@@ -1894,6 +1894,9 @@ static void initRailCurrentAdc()
 // deliberately: a board with no monitor and a board whose ADC failed are both
 // "unknown", and packPowerData collapses both to 0 on the wire — but the SI
 // path keeps them distinguishable from a genuine measured zero.
+// How often commitPowerSample re-reads the rail currents (#1485: 10 Hz).
+static constexpr uint32_t RAIL_AMPS_PERIOD_MS = 100;
+
 static float readRailAmps(int gpio, float r_ohm)
 {
     if (!rail_adc_ready || gpio < 0 || r_ohm <= 0.0f) return NAN;
@@ -2121,13 +2124,46 @@ static bool commitPowerSample(float bus_v, float current_a)
     psi.current = -current_a * 1000.0f;
     psi.soc     = soc_pct;
     // #850: the two high-side-switch load currents ride the same sample so
-    // they share the INA230's timestamp and land in the same logged frame.
-    // NaN on boards without the monitors; packPowerData encodes that as 0.
-    psi.cam_current   = readRailAmps(config::CAM_IMON_GPIO, config::CAM_IMON_R_OHM);
-    psi.servo_current = readRailAmps(config::SERVO_IMON_GPIO, config::SERVO_IMON_R_OHM);
+    // they land in the same logged frame. NaN on boards without the monitors;
+    // packPowerData encodes that as 0.
+    //
+    // #1485: sampled at 10 Hz and held in between, not read on every 100 Hz
+    // sample: the eight ADC conversions per sample cost ~5 % of the loop core
+    // on the V9 (bench A/B), and 10 Hz is plenty for a camera or servo rail.
+    // The logged 100 Hz stream therefore repeats each value ~10 times.
+    static bool     rail_amps_read = false;
+    static uint32_t rail_amps_ms   = 0;
+    static float    cam_a = NAN, servo_a = NAN;
+    const uint32_t  rail_now_ms = millis();
+    if (!rail_amps_read || (uint32_t)(rail_now_ms - rail_amps_ms) >= RAIL_AMPS_PERIOD_MS)
+    {
+        rail_amps_read = true;
+        rail_amps_ms   = rail_now_ms;
+        cam_a   = readRailAmps(config::CAM_IMON_GPIO, config::CAM_IMON_R_OHM);
+        servo_a = readRailAmps(config::SERVO_IMON_GPIO, config::SERVO_IMON_R_OHM);
+    }
+    psi.cam_current   = cam_a;
+    psi.servo_current = servo_a;
     sensor_converter.packPowerData(psi, latest_power_raw);
     latest_power_valid = true;
     return true;
+}
+
+// Rail-on INA230 config: one 332 us shunt and one 332 us bus conversion,
+// repeated continuously, so the registers always hold a sample under a
+// millisecond old. #1485: this used to be power-down plus a triggered
+// conversion per read, polled for ready with 100 us busy-waits — six or seven
+// I2C transactions and ~1.7 ms of CPU a read, 17 % of the loop core at the
+// 100 Hz read rate on the V9. Power-down saves the part's ~0.3 mA, which only
+// matters with the rail off; low-power mode still switches to its own
+// continuous 1024-sample averaging (ina_continuous).
+static void ina230ConfigureForRailOn()
+{
+    ina230.setConfiguration(INA230_Avg::AVG_1,
+                            INA230_ConvTime::CT_332us,
+                            INA230_ConvTime::CT_332us,
+                            INA230_Mode::SHUNT_BUS_CONTINUOUS);
+    ina_continuous = false;
 }
 
 static void readINA230Power()
@@ -2138,27 +2174,17 @@ static void readINA230Power()
 
     if (!ina230_ok) return;
 
-    // Trigger a single shunt+bus conversion (INA auto-powers-down after)
-    ina230.setMode(INA230_Mode::SHUNT_BUS_TRIG);
-
-    // Poll CVRF (Conversion Ready Flag, bit 3 of Mask/Enable register)
-    // instead of a fixed delay.  Conversion takes ~0.7ms (1 avg × 332µs × 2ch).
-    bool cvrf = false;
-    for (int i = 0; i < 20; i++)  // max ~2ms total
-    {
-        delayMicroseconds(100);
-        uint16_t me = 0;
-        if (ina230.readMaskEnable(&me) == TR_INA230_OK && (me & (1 << 3)))
-        {
-            cvrf = true;
-            break;  // CVRF set — conversion complete
-        }
-    }
-
-    // A CVRF timeout means the conversion never completed, so any value read back
-    // would be stale — treat that (and any I2C read error) as a failed sample
-    // (#272) by passing 0 V, which commitPowerSample rejects.  NOTE: readMaskEnable
-    // clears CVRF, so we must capture it in the poll above, not re-read it here.
+    // The part converts continuously while the rail is up
+    // (ina230ConfigureForRailOn), finishing a sample every ~0.66 ms. CVRF
+    // (Conversion Ready Flag, bit 3 of Mask/Enable) is set by every finished
+    // conversion and cleared by this read, so between two reads 10 ms apart it
+    // is always set — unless the part has stopped converting, in which case
+    // the voltage and current below would be stale. Treat that (and any I2C
+    // read error) as a failed sample (#272) by passing 0 V, which
+    // commitPowerSample rejects, and put the conversions back.
+    uint16_t me = 0;
+    const bool cvrf = ina230.readMaskEnable(&me) == TR_INA230_OK && (me & (1 << 3));
+    if (!cvrf) ina230ConfigureForRailOn();
     float bus_v = 0.0f, current_a = 0.0f;
     const bool read_ok = cvrf
         && ina230.readBusVoltage_V(&bus_v) == TR_INA230_OK
@@ -10120,9 +10146,10 @@ static void setup_oc()
     }
     if (ina230_bus != nullptr && ina230.begin(ina230_bus, 400000) == TR_INA230_OK)
     {
-        // Start in power-down mode (0.5 uA) — we use triggered reads at 100 Hz.
-        // 1 average × 332us keeps each triggered measurement fast (~0.7ms).
-        // INA auto-powers-down after each trigger.
+        // Start in power-down mode (0.5 uA): the rail is off at boot, and
+        // low-power mode switches to its own 1024-sample averaging on its
+        // first pass. Powering the rail on selects the continuous rail-on
+        // config (ina230ConfigureForRailOn).
         ina230.setConfiguration(INA230_Avg::AVG_1,
                                 INA230_ConvTime::CT_332us,
                                 INA230_ConvTime::CT_332us,
@@ -10134,7 +10161,7 @@ static void setup_oc()
         {
             ina230.enableConversionReadyAlert(true);  // enable CVRF bit for polling
             ina230_ok = true;
-            ESP_LOGI("PWR", "INA230 OK (triggered mode, CVRF polling)");
+            ESP_LOGI("PWR", "INA230 OK (continuous while the rail is on, CVRF-checked)");
         }
         else
         {
@@ -10485,13 +10512,7 @@ static void loop_oc()
         boot_rail_restore_init_pending = false;
         vTaskDelay(1);  // feed watchdog before long init
         initPeripherals();
-        if (ina230_ok) {
-            ina230.setConfiguration(INA230_Avg::AVG_1,
-                                    INA230_ConvTime::CT_332us,
-                                    INA230_ConvTime::CT_332us,
-                                    INA230_Mode::POWER_DOWN);
-            ina_continuous = false;
-        }
+        if (ina230_ok) ina230ConfigureForRailOn();
         // #1129: the budget is NOT cleared here any more.
         //
         // This block is the first loop_oc pass, right after initPeripherals()
@@ -10886,7 +10907,7 @@ static void loop_oc()
                     const bool read_ok =
                         ina230.readBusVoltage_V(&bus_v) == TR_INA230_OK &&
                         ina230.readCurrent_A(&current_a) == TR_INA230_OK;
-                    // Same validity + SOC + commit policy as the triggered path
+                    // Same validity + SOC + commit policy as the rail-on path
                     // (#272).  Continuous mode is free-running — no CVRF to check.
                     commitPowerSample(read_ok ? bus_v : 0.0f, read_ok ? current_a : 0.0f);
                 }
@@ -11924,15 +11945,9 @@ static void loop_oc()
                 vTaskDelay(1);  // feed watchdog before long init
                 initPeripherals();  // Initialize SPI, NAND, LoRa, I2C
 
-                // Restore INA230 to fast single-shot config (low-power mode
-                // sets AVG_1024 which makes triggered reads take ~680ms).
-                if (ina230_ok) {
-                    ina230.setConfiguration(INA230_Avg::AVG_1,
-                                            INA230_ConvTime::CT_332us,
-                                            INA230_ConvTime::CT_332us,
-                                            INA230_Mode::POWER_DOWN);
-                    ina_continuous = false;
-                }
+                // Back to the fast rail-on config (low-power mode sets
+                // 1024-sample averaging, ~680 ms a sample).
+                if (ina230_ok) ina230ConfigureForRailOn();
 
                 // Restore fast BLE connection params for file transfer
                 if (ble_app.isConnected())
