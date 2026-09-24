@@ -2360,6 +2360,16 @@ static constexpr uint8_t RECOVERY_END_PENDING = 0x91;
 // shape.  At 5 Hz the same signal costs well under 100 B/s.
 static constexpr uint8_t FC_STATUS_MSG       = 0x92;
 
+// FC→OC over I2S: several IMU samples in one frame (#1485).  Sending one frame
+// per sample paid 8 bytes of framing on every 22-byte record and one queue
+// item, one CRC and one DMA write each, which the mini's ESP32-S3 could not
+// keep up with at 3,840 Hz.  The OC unpacks every batch into ordinary
+// ISM6HG256_MSG frames before its dedup and logger, so the flight log and
+// every .bin decoder keep seeing one 0xA2 record per sample.
+static constexpr uint8_t ISM6_BATCH_MSG      = 0x93;  // FC→OC over I2S: a count byte, then that many ISM6HG256Data records.
+                                                      // VARIABLE length: 1 + 22*count bytes (ism6BatchWireSize), count 1..ISM6_BATCH_MAX.
+static constexpr uint8_t ISM6_BATCH_MAX      = 10;
+
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
 static constexpr uint8_t ISM6HG256_MSG       = 0xA2;
@@ -3811,6 +3821,13 @@ static constexpr size_t MAX_PAYLOAD = (M_SENSOR_OR_PROFILE > P9 ? M_SENSOR_OR_PR
 // It is not in the max() chain above because it is variable-length and never
 // the largest; this pins that assumption so a bigger GNSS_SAT_MAX_BLOCKS or a
 // smaller snapshot cannot silently make enqueueI2STx() drop every epoch.
+// #1485: a full ISM6 batch fits one frame.
+static constexpr size_t ism6BatchWireSize(uint8_t count)
+{
+    return 1u + (size_t)count * sizeof(ISM6HG256Data);
+}
+static_assert(ism6BatchWireSize(ISM6_BATCH_MAX) <= MAX_PAYLOAD,
+              "ISM6_BATCH_MSG: ISM6_BATCH_MAX records must fit in MAX_PAYLOAD");
 static_assert(sizeof(GNSSSatData) <= MAX_PAYLOAD,
               "GNSSSatData must fit one I2S frame payload");
 

@@ -116,6 +116,7 @@ add_executable(test_crc16_compat test_crc16_compat.cpp
 target_include_directories(test_crc16_compat PRIVATE
     ${SHIM_DIR}   # Must come first so Arduino.h resolves to our shim
     ${LIB_DIR}/CRC
+    ${LIB_DIR}/TR_I2C_Interface
 )
 target_link_libraries(test_crc16_compat GTest::gtest_main)
 gtest_discover_tests(test_crc16_compat)
@@ -233,6 +234,29 @@ target_include_directories(test_iis2mdc_poll_gate PRIVATE
 )
 target_link_libraries(test_iis2mdc_poll_gate GTest::gtest_main)
 gtest_discover_tests(test_iis2mdc_poll_gate)
+
+# ---------- test_ism6_fifo_decoder ----------
+# The ISM6HG256X FIFO word decoder (#1485): three words per time slot (gyro,
+# low-g, high-g) grouped by the tag's slot counter, a slot split across two
+# bursts, incomplete slots and counter gaps counted. Header-only and IDF-free;
+# the SPI burst reads that feed it are bench-only.
+add_executable(test_ism6_fifo_decoder test_ism6_fifo_decoder.cpp)
+target_include_directories(test_ism6_fifo_decoder PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector
+)
+target_link_libraries(test_ism6_fifo_decoder GTest::gtest_main)
+gtest_discover_tests(test_ism6_fifo_decoder)
+
+# ---------- test_imu_sample_clock ----------
+# The FIFO sample clock (#1485): evenly spaced times steered toward the level
+# read, following a chip a few percent off nominal, re-anchoring after an
+# overflow, never running backwards, wrap-safe. Header-only and IDF-free.
+add_executable(test_imu_sample_clock test_imu_sample_clock.cpp)
+target_include_directories(test_imu_sample_clock PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector
+)
+target_link_libraries(test_imu_sample_clock GTest::gtest_main)
+gtest_discover_tests(test_imu_sample_clock)
 
 # ---------- test_qmc5883p_regs ----------
 # The mini's magnetometer (#1312): register packing pinned to the QMC5883P

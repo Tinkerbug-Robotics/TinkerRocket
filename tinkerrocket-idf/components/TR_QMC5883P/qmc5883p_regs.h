@@ -49,6 +49,19 @@ static constexpr uint8_t CHIP_ID = 0x80;       // 9.2.1: "The default value is 8
 static constexpr uint8_t STATUS_DRDY = 1u << 0;
 static constexpr uint8_t STATUS_OVFL = 1u << 1;
 
+// One burst from XOUT_L through STATUS: the six axis bytes, the two unmapped
+// bytes at 07H-08H (they read 0x00), then STATUS at index 8. The register
+// pointer runs on past 06H into STATUS, and a STATUS byte read this way clears
+// DRDY exactly as the single-register read does. Not stated by the datasheet,
+// which only shows 01H-06H bursts; bench-verified on the mini (#1485, 100
+// trials): the ninth byte equals a plain STATUS read, and a STATUS read right
+// after the burst finds DRDY clear. STATUS bits 3 and 4 are undocumented and
+// read 1 on that part (0x19 with DRDY, 0x18 without) — mask, never compare.
+static constexpr uint8_t BURST_WITH_STATUS_LEN = REG_STATUS - REG_XOUT_L + 1;   // 9
+static constexpr uint8_t BURST_STATUS_INDEX    = REG_STATUS - REG_XOUT_L;       // 8
+static_assert(BURST_WITH_STATUS_LEN == 9 && BURST_STATUS_INDEX == 8,
+              "the status byte is the ninth of a burst from XOUT_L");
+
 // --- CTRL1 (0x0A), Table 17 ---
 //   [7:6] OSR2  down-sampling depth   00=1  01=2  10=4  11=8
 //   [5:4] OSR1  over-sample ratio     00=8  01=4  10=2  11=1   (00 is the MOST filtering)

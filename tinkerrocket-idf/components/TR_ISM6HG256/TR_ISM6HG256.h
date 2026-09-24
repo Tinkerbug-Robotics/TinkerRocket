@@ -36,6 +36,21 @@ public:
     TR_ISM6HG256Status Enable_G();
     TR_ISM6HG256Status Route_DRDY_To_INT1();
 
+    // #1485: FIFO capture. The gyro and both accelerometers batched at
+    // rate_hz and nothing else, in stream mode; the FIFO threshold (in words)
+    // goes to INT1 in place of DRDY. TR_Sensor_Collector's ism6_fifo_decoder.h
+    // turns the words back into samples.
+    TR_ISM6HG256Status ConfigureFifo(float rate_hz, uint8_t watermark_words);
+    TR_ISM6HG256Status Route_FifoThreshold_To_INT1();
+    TR_ISM6HG256Status FlushFifo();
+    // Unread words (0-511), and whether the FIFO overran since the last call.
+    TR_ISM6HG256Status ReadFifoStatus(uint16_t *level, bool *overrun);
+    // n_words whole 7-byte words in one burst.
+    TR_ISM6HG256Status ReadFifoWords(uint8_t *buf, uint16_t n_words);
+    // The chip's own oscillator error: the effective ODR is the typical one
+    // times (1 + 0.0013 * freq_fine). ST trims each part and records it here.
+    TR_ISM6HG256Status ReadOdrTrim(int8_t *freq_fine);
+
     TR_ISM6HG256Status Set_X_OutputDataRate(float Odr);
     TR_ISM6HG256Status Set_HG_X_OutputDataRate(float Odr);
     TR_ISM6HG256Status Set_G_OutputDataRate(float Odr);

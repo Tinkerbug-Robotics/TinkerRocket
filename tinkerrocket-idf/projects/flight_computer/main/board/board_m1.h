@@ -99,6 +99,10 @@ struct board_pins
     static constexpr bool USE_MMC5983MA = false;  // not fitted
     static constexpr bool USE_GNSS = true;
     static constexpr bool USE_ISM6HG256 = true;
+    // #1485: read the ISM6 from its FIFO, not one sample per DRDY edge. On the
+    // mini the per-edge read lost ~25 % of the 3,840 Hz stream; other boards
+    // switch over once each is proven on the bench.
+    static constexpr bool ISM6_FIFO_CAPTURE = true;
     static constexpr bool USE_IIS2MDC = true;     // the mag slot; a QMC5883P behind it (#1312)
 
     // --- Sensor interrupts ---
