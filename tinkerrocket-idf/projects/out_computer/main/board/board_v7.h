@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 // V7 (current flight PCB) pin map + board topology for the out computer.
-// Selected when TR_BOARD_V8=0 (the default) — see config.h (#411).
+// Selected with TR_BOARD_V7=1:  idf.py -B build_v7 -DTR_BOARD_V7=1 build
 //
 // ONLY pins and peripheral-presence/topology flags live here. Logic and
 // protocol constants (I2S sample rate, I2C address/speeds, LoRa RF

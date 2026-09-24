@@ -8739,15 +8739,17 @@ static bool initLoggingSubsystem()
             if (config::RING_IN_PSRAM && psram_mb == 0)
             {
                 ESP_LOGE("PWR", "BOARD FLAG SAYS PSRAM, SILICON SAYS NONE — this is "
-                                "not a V9/V10 board, or it was built -DTR_BOARD_V9=1 "
-                                "by mistake. Ring falls back to internal RAM.");
+                                "not %s hardware, or it was built with the wrong "
+                                "-DTR_BOARD_* flag. Ring falls back to internal RAM.",
+                         TR_BOARD_REV_STR);
             }
             else if (!config::RING_IN_PSRAM && psram_mb > 0)
             {
                 ESP_LOGW("PWR", "This chip has %d MB of in-package PSRAM that the "
                                 "selected board map does not use. Expected on a V7/V8 "
-                                "board (MRAM is fitted); if this IS a V9/V10 board, it "
-                                "was built with the wrong -DTR_BOARD_* flag.", psram_mb);
+                                "board (MRAM is fitted); if this IS a V9/V10 board or "
+                                "the mini (M1), it was built with the wrong "
+                                "-DTR_BOARD_* flag.", psram_mb);
             }
         }
 
@@ -8763,8 +8765,8 @@ static bool initLoggingSubsystem()
             ESP_LOGW("PWR", "  In-flight reboot recovery (#104): RAM cache + NAND");
             ESP_LOGW("PWR", "  tail-scan (#846) — no longer MRAM-dependent.");
             ESP_LOGW("PWR", "  Dirty-ring replay (#274): UNAVAILABLE.");
-            ESP_LOGW("PWR", "  Expected on V9/V10. On a V8 board this means the");
-            ESP_LOGW("PWR", "  image was built with the wrong -DTR_BOARD_* flag.");
+            ESP_LOGW("PWR", "  Expected on V9/V10 and the mini (M1). On a V8 board this");
+            ESP_LOGW("PWR", "  means the image was built with the wrong -DTR_BOARD_* flag.");
             ESP_LOGW("PWR", "========================================");
             // #822: PSRAM is the ring's intended home on V9/V10. Landing on
             // internal RAM instead means either CONFIG_SPIRAM is off or the part
@@ -9780,23 +9782,12 @@ static void setup_oc()
     pwr_pin_on = boot_rail_restored || boot_token_restore;
 
     ESP_LOGI("OC", "Starting OutComputer (low-power mode)...");
-    // Names the board header config.h selected: one case per revision, and no
-    // fall-through. This used to end in a bare "V7", so an M1 image built on
-    // board_m1.h reported itself as V7 (#1316). V9 keeps V8's pins on this MCU
-    // (see config.h) but is named separately, so the boot log says which board
-    // the image was built for.
-#if TR_BOARD_M1
-    const char* const board_pin_map = "M1 (rocket-computer-mini)";
-#elif TR_BOARD_V9
-    const char* const board_pin_map = "V9/V10 (same pins as V8)";
-#elif TR_BOARD_V8
-    const char* const board_pin_map = "V8";
-#elif TR_BOARD_V7
-    const char* const board_pin_map = "V7";
-#else
-#error "No [BOARD] pin-map label for this board flag: add a case here rather than let it print another board's name (#1316)"
-#endif
-    ESP_LOGW("OC", "[BOARD] pin map: %s", board_pin_map);
+    // TR_BOARD_REV_STR comes from the chain in config.h that picks the board
+    // header, so this names the board the pins came from (#1316). V9 keeps
+    // V8's pins on this MCU (see config.h) but is named separately, so the
+    // boot log says which board the image was built for.
+    ESP_LOGW("OC", "[BOARD] pin map: %s%s", TR_BOARD_REV_STR,
+             TR_BOARD_V9 ? " (same pins as V8)" : "");
 
     // OTA boot-state check (#8). If this image was just OTA-installed it
     // boots PENDING_VERIFY; we hold off the "valid" mark until we've seen
