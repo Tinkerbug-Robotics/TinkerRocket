@@ -8551,6 +8551,22 @@ static void loadCachedPeripheralConfigFromNvs()
              cfg_pyro_enabled[3], cfg_pyro_trigger_mode[3], (double)cfg_pyro_trigger_value[3]);
 }
 
+// The memory bus (SPI2): the NAND's, and on the mini the radio's too (#1484).
+// Begun once, whichever user needs it first, so it always exists with the
+// NAND's 4 KB transfer size before a radio joins it; compat's SPIClass::begin()
+// only logs an already-initialised error on a second call. When the radio
+// shares it, the logger's transactions hold the bus across their manual
+// chip-select windows, and the radio's HAL already does the same for its own.
+static void beginMemoryBus()
+{
+    static bool begun = false;
+    if (begun) return;
+    SPI.setSharedBus(config::LORA_ON_MEMORY_BUS);
+    SPI.begin(config::SPI_SCK, config::SPI_MISO, config::SPI_MOSI);
+    delay(20);
+    begun = true;
+}
+
 // #1228: the logging half of initPeripherals(), on its own so it can be
 // retried without re-running the radio and link half.
 //
@@ -8571,16 +8587,7 @@ static void loadCachedPeripheralConfigFromNvs()
 // logger.begin() succeeded; oc_logger_ok mirrors it.
 static bool initLoggingSubsystem()
 {
-    // The bus is the logger's alone on this board (the V7 SPI LoRa has its own
-    // host), so it belongs here — begun once: compat's SPIClass::begin() just
-    // logs an already-initialised error on a second call.
-    static bool spi_bus_begun = false;
-    if (!spi_bus_begun)
-    {
-        SPI.begin(config::SPI_SCK, config::SPI_MISO, config::SPI_MOSI);
-        delay(20);
-        spi_bus_begun = true;
-    }
+    beginMemoryBus();
 
     TR_LogToFlashConfig log_cfg = {};
     log_cfg.nand_cs = config::NAND_CS;
@@ -9373,7 +9380,12 @@ void initPeripherals()
             lora_cfg.spi_sck = config::LORA_SPI_SCK;
             lora_cfg.spi_miso = config::LORA_SPI_MISO;
             lora_cfg.spi_mosi = config::LORA_SPI_MOSI;
-            lora_cfg.spi_host = SPI3_HOST;  // SPI2 used by NAND/MRAM
+            // #1484: a radio on the memory bus's pins joins that bus as a
+            // second device (EspHal::spiBegin() treats an already-initialised
+            // host as shared). A second host on the same pins would re-route
+            // the pads and cut the NAND off. V7's radio has pins of its own.
+            if (config::LORA_ON_MEMORY_BUS) beginMemoryBus();
+            lora_cfg.spi_host = config::LORA_ON_MEMORY_BUS ? SPI2_HOST : SPI3_HOST;
             lora_cfg.freq_mhz = lora_freq_mhz;
             lora_cfg.spreading_factor = lora_sf;
             lora_cfg.bandwidth_khz = lora_bw_khz;

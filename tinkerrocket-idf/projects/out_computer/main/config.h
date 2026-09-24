@@ -200,6 +200,17 @@ struct config : board_pins
     // this rate.  IMPORTANT: must match the FC — flash both together.
     static constexpr uint32_t I2S_SAMPLE_RATE = 44100;  // Must match FC
 
+    // #1484: the mini's E220 rides the memory bus (board_m1.h wires LORA_SPI_*
+    // to SPI_*). A radio there must join the NAND's host (SPI2) as a second
+    // device. Starting SPI3 on the same pins re-routes the pads and leaves the
+    // NAND's host with no clock, which silently drops every write after the
+    // radio starts. V7's SPI radio has pins of its own and keeps SPI3.
+    static constexpr bool LORA_ON_MEMORY_BUS =
+        !USE_UART_RADIO_MODEM && LORA_SPI_SCK == SPI_SCK;
+    static_assert((LORA_SPI_SCK == SPI_SCK) == (LORA_SPI_MISO == SPI_MISO) &&
+                      (LORA_SPI_SCK == SPI_SCK) == (LORA_SPI_MOSI == SPI_MOSI),
+                  "the radio shares all three memory-bus pins or none of them (#1484)");
+
     // --- LoRa RF parameters (radio presence + pins in board header) ---
     static constexpr float LORA_FREQ_MHZ = 915.0f;
     static constexpr uint8_t LORA_SF = 8;
