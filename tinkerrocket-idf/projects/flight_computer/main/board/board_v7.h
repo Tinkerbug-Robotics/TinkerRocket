@@ -85,7 +85,7 @@ struct board_pins
     static constexpr uint8_t SERVO_PIN_4 = 46;
 
     // ### Indicators ###
-    static constexpr uint8_t PIEZO_PIN = 53;
+    static constexpr int PIEZO_PIN = 53;
     static constexpr uint8_t RED_LED_PIN = 2;
     static constexpr uint8_t BLUE_LED_PIN = 29;
 

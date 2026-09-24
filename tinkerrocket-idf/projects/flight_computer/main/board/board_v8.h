@@ -148,7 +148,7 @@ struct board_pins
     static constexpr uint8_t SERVO_PIN_4 = 54;  // EXP_04, connector pin 6
 
     // ### Indicators ###
-    static constexpr uint8_t PIEZO_PIN = 17;      // PIEZZO
+    static constexpr int PIEZO_PIN = 17;          // PIEZZO
     // IND_1 = red, IND_2 = blue.  CONFIRMED on V9 hardware (bench 2026-08-24,
     // #847), which carries the SAME pins and the same IND_1/IND_2 nets — so this
     // is inferred here, not separately measured on a V8 board.  Good enough to
