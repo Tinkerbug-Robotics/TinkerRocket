@@ -1756,6 +1756,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         // block: 0xA0-0xFD is full (see RocketComputerTypes.h).
         MT(GNSS_SAT_MSG),
         MT(RECOVERY_END_PENDING),
+        // #1485: FC->OC IMU batch, unpacked by the OC into ISM6HG256_MSG frames.
+        MT(ISM6_BATCH_MSG),
         // #1156 item 7: the base station's own log records. They share the
         // one 8-bit `type` space and the same packMessage framing, and they
         // are what took 0xFC/0xFD — but they were never in this registry, so
@@ -1797,7 +1799,7 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //      log records that had taken "the last two free codes" without being
     //      registered (#1156 item 7). The 0xA0-0xFD space is FULL; new codes
     //      go in the 0x90 block.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 96u)
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 97u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

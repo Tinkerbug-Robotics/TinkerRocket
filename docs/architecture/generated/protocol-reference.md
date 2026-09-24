@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-96 codes. The dispatch on both ends is a flat first-match chain, so
+97 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -122,10 +122,11 @@ this list is CI-enforced for uniqueness.
 | `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 194-byte ConfigReportData, everything the app's config |
 | `0x90` | `GNSS_SAT_MSG` | FC → OC | FC→OC over I2S: GNSSSatData, per-satellite C/N0 at every GNSS |
 | `0x91` | `RECOVERY_END_PENDING` | OC → FC |  |
+| `0x93` | `ISM6_BATCH_MSG` | FC → OC | FC→OC over I2S: a count byte, then that many ISM6HG256Data records |
 | `0xFC` | `BS_LORA_RX_MSG` | FC → OC | BS→self: BsLoRaRxHeader + the raw LoRa frame, one per received packet |
 | `0xFD` | `BS_EVENT_MSG` | FC → OC | BS→self: BsEventHeader + UTF-8 text, one per hop/session event |
 
-> 54 of these 96 codes carry no comment in the header,
+> 54 of these 97 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant

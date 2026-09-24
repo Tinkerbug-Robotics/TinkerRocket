@@ -116,6 +116,7 @@ add_executable(test_crc16_compat test_crc16_compat.cpp
 target_include_directories(test_crc16_compat PRIVATE
     ${SHIM_DIR}   # Must come first so Arduino.h resolves to our shim
     ${LIB_DIR}/CRC
+    ${LIB_DIR}/TR_I2C_Interface
 )
 target_link_libraries(test_crc16_compat GTest::gtest_main)
 gtest_discover_tests(test_crc16_compat)
