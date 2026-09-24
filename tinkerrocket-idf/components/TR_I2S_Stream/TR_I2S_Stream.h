@@ -42,6 +42,18 @@ typedef bool (*i2s_recv_cb_t)(const uint8_t* buf, size_t len, void* user_ctx);
 class TR_I2S_Stream
 {
 public:
+    /** MCLK as a multiple of the sample rate on the master (#1485). 128, not
+     *  the IDF's usual 256: at the 88200 link rate 256x asks for a 22.6 MHz
+     *  MCLK, and an ESP32-P4 below rev 3 clocks I2S from its 40 MHz XTAL,
+     *  which the driver will not divide by less than 1.99 ("sample rate is
+     *  too large"); the FC then stops in setup with no link. 128x is 11.3 MHz:
+     *  a divide of 3.5 on the P4, 14.2 on the S3's 160 MHz PLL. BCLK is then
+     *  MCLK/4 (16-bit stereo, 32 bits a frame), which a master accepts; only
+     *  a slave needs MCLK >= 8x BCLK, and the driver sets that itself. */
+    static constexpr uint32_t MASTER_MCLK_MULTIPLE = 128;
+    /** The ESP32-P4 (below rev 3) I2S source clock, for build-time checks. */
+    static constexpr uint32_t P4_XTAL_HZ = 40000000;
+
     TR_I2S_Stream() = default;
     ~TR_I2S_Stream();
 

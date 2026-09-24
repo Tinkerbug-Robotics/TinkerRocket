@@ -148,6 +148,21 @@ fun SettingsScreen(
     }.collectAsState(initial = Pair(false, null))
     val haveConfig = loraTx.first
     val loraTxDisabled = loraTx.second
+    // #1485: the fastest IMU rate the connected rocket flies. null while there
+    // is nothing to go on (not connected, or no readback yet), so a profile
+    // can still be set up for its rocket offline; a readback without "irmax"
+    // is firmware from before the 8k rates.
+    val reportedImuRateMax: Int? by remember(session) {
+        val f: kotlinx.coroutines.flow.Flow<Int?> =
+            session?.rocketConfig
+                ?.map { it?.imuRateMaxHz }
+                ?.distinctUntilChanged()
+                ?: kotlinx.coroutines.flow.flowOf(null)
+        f
+    }.collectAsState(initial = null)
+    val imuRateMaxHz: Int? =
+        if (connected && haveConfig) reportedImuRateMax ?: RocketProfile.IMU_RATE_BASELINE_MAX_HZ
+        else null
     val inflight by remember(session) {
         session?.telemetry?.map { it.state == "INFLIGHT" }?.distinctUntilChanged()
             ?: kotlinx.coroutines.flow.flowOf(false)
@@ -482,23 +497,18 @@ fun SettingsScreen(
 
         // ── IMU Logging Rate (iOS General-tab section) ───────────────────
         Section("IMU Logging Rate") {
-            val rates = listOf(0, 960, 1920, 3840)   // Dynamic + ISM6HG256 ODR steps
-            val rateIdx = rates.indexOf(active.imuRateHz)
-            SegmentedPicker(listOf("Dynamic", "1k", "2k", "4k"), rateIdx) { i ->
-                edit(ConfigGroup.IMU_RATE) { it.copy(imuRateHz = rates[i]) }
+            // #1485: six choices no longer fit a segmented row, so a menu. The
+            // 8k ones only where the rocket can fly them, plus whatever the
+            // profile already holds so the field never reads "?".
+            val shown = IMU_RATE_CHOICES.filter { (_, setting) ->
+                setting == active.imuRateHz ||
+                    imuRateMaxHz?.let { RocketProfile.imuRatePeakHz(setting) <= it } ?: true
             }
-            Caption(
-                if (rateIdx == 0) {
-                    "Logs at 4k (3840 Hz) from the pad through boost and coast, then drops " +
-                        "to 1k (960 Hz) once the rocket detects its recovery deployment — " +
-                        "full shock and vibration detail where it matters, without filling " +
-                        "the log under canopy."
-                } else {
-                    "Samples logged per second from the IMU (actual: 960 / 1920 / 3840 Hz). " +
-                        "Higher rates capture faster shock and vibration detail; the control " +
-                        "loop is unaffected. Applies on the pad — never mid-flight."
-                },
+            DropdownField(
+                "Rate", shown.map { it.first }, shown.indexOfFirst { it.second == active.imuRateHz },
+                { i -> edit(ConfigGroup.IMU_RATE) { it.copy(imuRateHz = shown[i].second) } },
             )
+            Caption(imuRateCaption(active.imuRateHz, imuRateMaxHz))
         }
 
         // ── Camera (iOS Camera tab; raw-int field replaced by the picker) ─
@@ -1639,6 +1649,41 @@ private fun PyroTestControls(session: DeviceSession, channel: Int) {
                 color = tr.statusWarn,
             )
         }
+    }
+}
+
+/** Logging-rate choices in picker order (iOS `RocketProfile.imuRateChoices`). */
+private val IMU_RATE_CHOICES: List<Pair<String, Int>> = listOf(
+    "4k Dynamic" to RocketProfile.IMU_RATE_DYNAMIC,
+    "8k Dynamic" to RocketProfile.IMU_RATE_DYNAMIC_8K,
+    "1k" to 960,
+    "2k" to 1920,
+    "4k" to 3840,
+    "8k" to 7680,
+)
+
+/** iOS `SettingsView.imuRateFooter`. */
+private fun imuRateCaption(rate: Int, maxHz: Int?): String {
+    if (maxHz != null && RocketProfile.imuRatePeakHz(rate) > maxHz) {
+        return "This rocket logs at up to $maxHz Hz. It keeps its current rate until you " +
+            "pick one it can fly."
+    }
+    return when (rate) {
+        RocketProfile.IMU_RATE_DYNAMIC ->
+            "Logs at 4k (3840 Hz) from the pad through boost and coast, then drops " +
+                "to 1k (960 Hz) once the rocket detects its recovery deployment — " +
+                "full shock and vibration detail where it matters, without filling " +
+                "the log under canopy."
+        RocketProfile.IMU_RATE_DYNAMIC_8K ->
+            "Logs at 8k (7680 Hz) from the pad through boost and coast, then drops " +
+                "to 1k (960 Hz) once the rocket detects its recovery deployment. Twice " +
+                "the detail of 4k Dynamic through boost, and twice the log it fills " +
+                "until deployment."
+        else ->
+            "Samples logged per second from the IMU (actual: 960 / 1920 / 3840 / 7680 " +
+                "Hz). Higher rates capture faster shock and vibration detail; the control " +
+                "loop is unaffected. 8k fills the log twice as fast as 4k. Applies on the " +
+                "pad — never mid-flight."
     }
 }
 

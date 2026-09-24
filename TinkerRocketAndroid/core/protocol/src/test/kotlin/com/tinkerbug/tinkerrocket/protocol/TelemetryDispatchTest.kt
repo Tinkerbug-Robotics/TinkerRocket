@@ -197,6 +197,18 @@ class TelemetryDispatchTest {
     }
 
     @Test
+    fun `config irmax lands only when it fits u16`() {
+        // #1485: the fastest IMU rate the rocket flies. Absent on firmware
+        // from before the 8k rates, which the settings screen reads as 3840.
+        assertEquals(7680, config("""{"type":"config","irmax":7680}""").imuRateMaxHz)
+        assertEquals(3840, config("""{"type":"config","irmax":3840}""").imuRateMaxHz)
+        assertNull(config("""{"type":"config","irmax":70000}""").imuRateMaxHz)
+        assertNull(config("""{"type":"config"}""").imuRateMaxHz)
+        // "8k Dynamic" reads back as its sentinel.
+        assertEquals(1, config("""{"type":"config","irate":1}""").imuRateHz)
+    }
+
+    @Test
     fun `config absent lora keys read as null`() {
         val cfg = config("""{"type":"config","sb1":1}""")
         assertNull(cfg.loraFreqMHz)

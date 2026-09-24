@@ -94,6 +94,13 @@ struct board_pins
     // reboot recovery.
     static constexpr bool RING_IN_PSRAM = true;   // 2 MB in-package (CONFIRMED)
 
+    // #1485: the highest IMU logging rate this board flies (a fixed rate or a
+    // dynamic mode's boost rate). 7680 Hz needs the FC's FIFO capture, which
+    // its board_m1.h turns on; the FC derives its own limit from that, and
+    // test_imu_rate_board_parity pins the two equal. The OC rejects a setting
+    // above it and reports it to the apps as "irmax".
+    static constexpr uint16_t IMU_RATE_MAX_HZ = 7680;
+
     // --- Pyro arm consent (net OC_ARM_EN) ---
     // The out computer's half of a two-processor arm. The flight computer
     // drives FC_ARM, this drives the consent transistor in series with it,

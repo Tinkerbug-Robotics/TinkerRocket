@@ -1474,6 +1474,12 @@ static void stageImuOrientConfig()
 // IMU_RATE_DYNAMIC (the default) is a MODE, not a rate — the OC only relays
 // it; the step-down at deployment is entirely the FC's business.
 static uint16_t cfg_imu_rate = IMU_RATE_DYNAMIC;
+// #1485: the board's limit, reported to the apps as "irmax" so they offer the
+// 8k rates only where the FC can fly them. The FC derives the same number for
+// the same board (test_imu_rate_board_parity).
+static_assert(imuRateValid(config::IMU_RATE_MAX_HZ), "IMU_RATE_MAX_HZ must be an ODR step");
+static_assert(imuRateSettingValid(IMU_RATE_DYNAMIC, config::IMU_RATE_MAX_HZ),
+              "the default IMU logging rate must fit every board");
 
 static void stageImuRateConfig()
 {
@@ -3618,7 +3624,11 @@ static void ocOtaRelayClearPendingFlip();                                    // 
 // Boot and every recovery path must build the RX channel identically — see
 // the note in ocBeginSlaveRxLocked().
 static constexpr uint32_t kI2sRxDmaDescNum  = 4;
-static constexpr uint32_t kI2sRxDmaFrameNum = 128;   // 512 B ≈ 2.9 ms @ 44100
+// ~2.9 ms of link per descriptor, the callback cadence the parser was tuned
+// against (#104): 128 frames at 44100, 256 at 88200 (#1485). 4 B a frame.
+static constexpr uint32_t kI2sRxDmaFrameNum =
+    (uint32_t)(((uint64_t)config::I2S_SAMPLE_RATE * 29u + 5000u) / 10000u);
+static_assert(kI2sRxDmaFrameNum * 4u <= 4092u, "one I2S DMA descriptor holds at most 4092 B");
 
 // #834 items 6/7: (re)establish slave RX. Caller holds oc_i2s_mutex. Records
 // oc_i2s_rx_broken so loop_oc can keep retrying — losing the RX channel means
@@ -3626,12 +3636,12 @@ static constexpr uint32_t kI2sRxDmaFrameNum = 128;   // 512 B ≈ 2.9 ms @ 44100
 // downlinks, so it can never be left as a terminal state.
 static esp_err_t ocBeginSlaveRxLocked(const char* why)
 {
-    // dma_desc_num/dma_frame_num MUST match the boot init: 128 frames (512 B)
-    // spans ~2.9 ms at the 44100 link rate, which is the callback cadence the
-    // parser was tuned against (#104). The old revert path passed 64 — a
-    // leftover from the retired 22050 rate — which doubled the RX ISR cadence
-    // for the rest of the power cycle. Recovery must restore the link the
-    // parser expects, not a different one.
+    // dma_desc_num/dma_frame_num MUST match the boot init: kI2sRxDmaFrameNum
+    // spans ~2.9 ms of link, which is the callback cadence the parser was
+    // tuned against (#104). An old revert path passed 64 — a leftover from the
+    // retired 22050 rate — which doubled the RX ISR cadence for the rest of
+    // the power cycle. Recovery must restore the link the parser expects, not
+    // a different one.
     esp_err_t e = i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
                                           config::I2S_WS_PIN,
                                           config::I2S_DIN_PIN,
@@ -6290,6 +6300,9 @@ static void sendCurrentConfig()
     // from) and treat this key as unverified.
     j += ",\"camt\":"; j += itos(cameraReadback().type);
     j += ",\"irate\":"; j += itos(cfg_imu_rate);
+    // #1485: the fastest IMU rate this board flies. Absent from older
+    // firmware, which the apps read as 3840 (nothing older could do more).
+    j += ",\"irmax\":"; j += itos(config::IMU_RATE_MAX_HZ);
     // LoRa settings
     j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
     j += ",\"lsf\":"; j += itos(lora_sf);
@@ -8546,13 +8559,15 @@ static void loadCachedPeripheralConfigFromNvs()
         const uint16_t nvs_rate = prefs.getUShort("hz", cfg_imu_rate);
         // Whitelist on read: a corrupted value must not be relayed to the
         // FC or echoed to the app as if it were a real setting.
-        if (imuRateSettingValid(nvs_rate)) cfg_imu_rate = nvs_rate;
-        else ESP_LOGW("CFG", "NVS IMU logging rate %u invalid — keeping default",
-                      (unsigned)nvs_rate);
+        if (imuRateSettingValid(nvs_rate, config::IMU_RATE_MAX_HZ)) cfg_imu_rate = nvs_rate;
+        else ESP_LOGW("CFG", "NVS IMU logging rate %u invalid on this board (max %u Hz) "
+                             "— keeping default",
+                      (unsigned)nvs_rate, (unsigned)config::IMU_RATE_MAX_HZ);
     }
     prefs.end();
     if (imuRateIsDynamic(cfg_imu_rate))
-        ESP_LOGI("CFG", "NVS IMU logging rate: DYNAMIC");
+        ESP_LOGI("CFG", "NVS IMU logging rate: DYNAMIC (%u Hz boost)",
+                 (unsigned)imuRatePeakHz(cfg_imu_rate));
     else
         ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
 
@@ -9473,12 +9488,12 @@ void initPeripherals()
         oc_ota_tx_queue = xQueueCreate(16, sizeof(OcOtaTxFrame));
 
     // I2S telemetry stream from FlightComputer (DMA-based slave RX)
-    // Small DMA buffers (4 × 512 bytes = 2 KB) minimize latency.
+    // Small DMA buffers (4 descriptors of ~2.9 ms each) minimize latency.
     // FRAME_SYNC interrupt gating prevents stale replay regardless of
     // buffer count, but smaller buffers reduce read-to-parse latency.
-    // dma_frame_num doubled 64 -> 128 alongside the 22050 -> 44100 link rate
-    // so each descriptor still spans ~2.9 ms (512 B at 176 KB/s) — the same
-    // callback cadence the parser was tuned against at the old rate.
+    // dma_frame_num tracks the link rate (64 at 22050, 128 at 44100, 256 at
+    // 88200) so each descriptor still spans ~2.9 ms — the same callback
+    // cadence the parser was tuned against at the old rate.
     // #834 items 6/7 (review): go through the SAME helper the recovery paths use
     // so a boot failure sets oc_i2s_rx_broken and loop_oc's 1 Hz retry picks it
     // up. Open-coding begin+register here left the most consequential failure of
@@ -12311,17 +12326,18 @@ static void loop_oc()
         }
         else if (ble_cmd == 67)
         {
-            // IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0) or a
-            // whitelisted ISM6HG256 ODR (960/1920/3840).  Relayed to the FC,
+            // IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0, "4k
+            // Dynamic"), IMU_RATE_DYNAMIC_8K (1) or a whitelisted ISM6HG256
+            // ODR, up to this board's IMU_RATE_MAX_HZ.  Relayed to the FC,
             // which applies the ODR live (except INFLIGHT) and persists it in
-            // FC NVS.
+            // FC NVS.  The FC checks the same limit for the same board.
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 2)
             {
                 uint16_t rate_hz;
                 memcpy(&rate_hz, payload, sizeof(rate_hz));
-                if (imuRateSettingValid(rate_hz))
+                if (imuRateSettingValid(rate_hz, config::IMU_RATE_MAX_HZ))
                 {
                     cfg_imu_rate = rate_hz;
                     stageImuRateConfig();
@@ -12331,7 +12347,8 @@ static void loop_oc()
                     p2.end();
                     if (imuRateIsDynamic(rate_hz))
                     {
-                        ESP_LOGI("BLE", "IMU logging rate: DYNAMIC -> FlightComputer");
+                        ESP_LOGI("BLE", "IMU logging rate: DYNAMIC (%u Hz boost) -> FlightComputer",
+                                 (unsigned)imuRatePeakHz(rate_hz));
                     }
                     else
                     {
@@ -12341,9 +12358,9 @@ static void loop_oc()
                 }
                 else
                 {
-                    ESP_LOGW("BLE", "IMU logging rate %u Hz rejected "
-                                    "(not dynamic/960/1920/3840)",
-                             (unsigned)rate_hz);
+                    ESP_LOGW("BLE", "IMU logging rate setting %u rejected "
+                                    "(not dynamic or an ODR step up to %u Hz)",
+                             (unsigned)rate_hz, (unsigned)config::IMU_RATE_MAX_HZ);
                 }
             }
         }

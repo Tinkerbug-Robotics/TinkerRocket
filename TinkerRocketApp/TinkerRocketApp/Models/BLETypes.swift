@@ -253,6 +253,9 @@ struct RocketConfig {
     var cameraSource: CameraTypeSource? = nil
     var imuOrientSetting: UInt8? = nil   // 0xFF auto / 0..23 manual (nil = not reported)
     var imuRateHz: UInt16? = nil         // ISM6 logging rate readback (nil = not reported)
+    /// #1485: the fastest IMU rate this rocket flies ("irmax"). nil = firmware
+    /// from before the 8k rates, which tops out at 3840 Hz.
+    var imuRateMaxHz: UInt16? = nil
     var loraFreqMHz: Float? = nil
     var loraSF: UInt8? = nil
     var loraBwKHz: Float? = nil
