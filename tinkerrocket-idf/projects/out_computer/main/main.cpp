@@ -9530,7 +9530,10 @@ static void setup_oc()
     // single-processor arm the rework removed. Until that exists the mini
     // cannot fire a channel, which is the correct default and is what the M1
     // bench section of #1211 already assumes.
-    if (config::ARM_CONSENT_PIN >= 0)
+    //
+    // if constexpr, not if: every other board sets the pin to -1, and GCC
+    // warns about the 1ULL << -1 below even in a branch that can never run.
+    if constexpr (config::ARM_CONSENT_PIN >= 0)
     {
         gpio_set_level((gpio_num_t)config::ARM_CONSENT_PIN, 0);   // stage 0 first
         gpio_config_t arm_cfg = {};
