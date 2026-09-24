@@ -124,6 +124,12 @@ struct board_pins
     // Still volatile: this buys ring SIZE, never reboot recovery.
     static constexpr bool RING_IN_PSRAM = true;   // 2 MB in-package (CONFIRMED)
 
+    // #1485: the highest IMU logging rate this board flies (a fixed rate or a
+    // dynamic mode's boost rate). 7680 Hz needs the FC's FIFO capture, which
+    // its board_v9.h turns on; test_imu_rate_board_parity pins the two equal.
+    // The OC rejects a setting above it and reports it to the apps as "irmax".
+    static constexpr uint16_t IMU_RATE_MAX_HZ = 7680;
+
     // --- I2C slave (commands from FlightComputer) ---
     static constexpr int I2C_SDA_PIN = 5;    // ESP_SDA (CONFIRMED)
     static constexpr int I2C_SCL_PIN = 6;    // ESP_SCL (CONFIRMED)

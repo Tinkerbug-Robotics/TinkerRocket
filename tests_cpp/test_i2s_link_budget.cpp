@@ -39,14 +39,15 @@ double imuBatched(double rate_hz)
          + frames * (double)(1 + kFrameOverhead);          // count byte + framing, per frame
 }
 
-// The link is fixed: 44100 samples/s x 4 B.
+// The link: I2S_SAMPLE_RATE samples/s x 4 B (16-bit stereo).
 constexpr double kLinkBytesPerSec = (double)config::I2S_SAMPLE_RATE * 4.0;
 
-// Steady-state inflow during a GUIDED coast at the shipped IMU_RATE_DYNAMIC
-// boost rate — the worst case, and the phase guidance telemetry exists for.
+// Steady-state inflow during a GUIDED coast at the fastest IMU rate this board
+// flies (IMU_RATE_MAX_HZ: a fixed rate or a dynamic mode's boost) — the worst
+// case, and the phase guidance telemetry exists for. Built once per board.
 double guidedCoastInflow()
 {
-    return imuBatched((double)IMU_RATE_DYNAMIC_BOOST_HZ)
+    return imuBatched((double)config::IMU_RATE_MAX_HZ)
          + framed(sizeof(NonSensorData),   (double)config::NON_SENSOR_UPDATE_RATE)
          + framed(sizeof(BMP585Data),      (double)config::BMP585_UPDATE_RATE)
          + framed(sizeof(GuidanceTelemData), (double)config::GUIDANCE_TELEM_RATE_HZ)
@@ -83,7 +84,7 @@ TEST(I2SLinkBudget, TheDominantStreamIsTheIMU) {
     // Sanity on the shape of the budget: if anything ever outgrows the IMU
     // stream, the tuning advice in config.h (and the bench gauges it names)
     // is pointing at the wrong thing.
-    const double imu = imuBatched((double)IMU_RATE_DYNAMIC_BOOST_HZ);
+    const double imu = imuBatched((double)config::IMU_RATE_MAX_HZ);
     EXPECT_GT(imu, guidedCoastInflow() * 0.5);
 }
 
@@ -105,4 +106,11 @@ TEST(I2SLinkBudget, GuidanceRateDividesTheNonSensorRate) {
     // the consequence is a wrong number in the log, not a build error.
     EXPECT_EQ(config::NON_SENSOR_UPDATE_RATE % config::GUIDANCE_TELEM_RATE_HZ, 0u);
     EXPECT_LE(config::GUIDANCE_TELEM_RATE_HZ, config::NON_SENSOR_UPDATE_RATE);
+}
+
+TEST(I2SLinkBudget, TheFcRunsTheSharedLinkRate) {
+    // The OC takes its slave rate from I2S_LINK_SAMPLE_RATE_HZ directly; the
+    // FC spells the number out (its config.h is included without the shared
+    // header). main.cpp static_asserts the pair; pinned here too, per board.
+    EXPECT_EQ(config::I2S_SAMPLE_RATE, I2S_LINK_SAMPLE_RATE_HZ);
 }

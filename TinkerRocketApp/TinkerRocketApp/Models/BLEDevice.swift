@@ -1103,10 +1103,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    /// IMU logging rate — `RocketProfile.imuRateDynamic` (0) or a whitelisted
-    /// ISM6HG256 ODR (960/1920/3840). The FC applies it live on the pad and
-    /// persists it in FC NVS. In dynamic mode the FC owns the in-flight
-    /// step-down; the app sends the mode once and never revisits it.
+    /// IMU logging rate — `RocketProfile.imuRateDynamic` (0, "4k Dynamic"),
+    /// `RocketProfile.imuRateDynamic8k` (1) or a whitelisted ISM6HG256 ODR
+    /// (960/1920/3840/7680, the 8k ones only where the rocket reports
+    /// `irmax` 7680). The FC applies it live on the pad and persists it in FC
+    /// NVS. In dynamic mode the FC owns the in-flight step-down; the app sends
+    /// the mode once and never revisits it.
     func sendImuRateConfig(_ rateHz: UInt16) {
         var payload = Data()
         payload.append(UInt8(rateHz & 0xFF))
@@ -2267,6 +2269,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             }
             if let irate = dict["irate"] as? Int, let hz = UInt16(exactly: irate) {
                 cfg.imuRateHz = hz
+            }
+            if let irmax = dict["irmax"] as? Int, let hz = UInt16(exactly: irmax) {
+                cfg.imuRateMaxHz = hz
             }
             cfg.loraFreqMHz = parseFloat(dict["lf"])
             cfg.loraSF = (dict["lsf"] as? Int).map { UInt8($0) }

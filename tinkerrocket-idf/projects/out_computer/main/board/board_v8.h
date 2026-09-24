@@ -60,6 +60,11 @@ struct board_pins
     // no V8 artwork was ever committed, so its part is unproven either way.
     static constexpr bool RING_IN_PSRAM = false;
 
+    // #1485: the highest IMU logging rate this board flies. 3840 Hz until its
+    // FC reads the IMU from the FIFO (ISM6_FIFO_CAPTURE in the FC's board
+    // header), which 7680 Hz needs; test_imu_rate_board_parity pins the two.
+    static constexpr uint16_t IMU_RATE_MAX_HZ = 3840;
+
     // --- I2C slave (commands from FlightComputer) ---
     static constexpr int I2C_SDA_PIN = 5;    // ESP_SDA (CONFIRMED)
     static constexpr int I2C_SCL_PIN = 6;    // ESP_SCL (CONFIRMED)
