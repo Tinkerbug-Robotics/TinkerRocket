@@ -1,0 +1,71 @@
+# #1485 — "8k Dynamic": the IMU logs at 7,680 Hz to deployment, then 960 Hz.
+#
+# Rig: a board whose FC reads the IMU from its FIFO (the mini; V9/V10 once
+# benched), FC and OC both on the #1485 images (flash the OC first). S1 -> O:
+# every line quoted here is OC-side. USB power is enough.
+#
+# What it proves, end to end: the OC accepts the 8k Dynamic setting (cmd 67,
+# sentinel 1) and relays it; the FC captures ~7,300-7,600 samples/s (the
+# part's own rate, a few percent off the 7680 Hz step) and sends them ten to a
+# frame over the 88.2 kHz link; the OC unpacks every batch with none bad and
+# keeps up while logging. The deployment step-down to 960 Hz does NOT happen
+# in a sim flight: the sim drops straight from apogee into a steady descent,
+# with no shock or fall for the detector to see. The log's own IMU rate is the
+# final witness: download the flight and read its per-type rates (the .bin
+# should show the part's rate, ~7,300-7,600 Hz, of 0xA2 records).
+#
+# Watch the OC console's "[I2S] imu batches" line through the flight: the
+# part's rate at 8k, bad 0. The batch count runs above samples/10 (~900/s at a
+# ~300 Hz flight loop) because the FC flushes a partial batch every loop pass.
+# rx_ovf / ring_peak in the verbose stats say whether the parser and the NAND
+# flush keep up.
+
+note === clean start: power on, the FC starts streaming ===
+# Attaching the console resets the OC. A command sent while it is still
+# restoring the FC rail is lost, and the power-on below then finds the rail
+# already on and prints no start-up line — so let the boot finish first.
+sleep 10
+send 8 00
+disconnect
+sleep 5
+connect
+mark
+send 8 01
+# Board-neutral: the mini's radio start line differs from the V9's modem one.
+expect_serial 30 Peripherals initialized
+expect_serial 30 \[I2S\] imu batches
+
+note === select 8k Dynamic (cmd 67, rate_hz = 1, little-endian) ===
+sleep 8
+mark
+send 67 0100
+expect_serial 10 IMU logging rate: DYNAMIC \(7680 Hz boost\) -> FlightComputer
+refute_serial_since IMU logging rate setting .* rejected
+note === the FC applies it on its next poll; the batches roughly double ===
+sleep 10
+# 6,800-8,099/s: the 7680 Hz step runs a few percent off on each part (the
+# mini's measures ~7,300, a V9's ~7,560); the FC's boot line "ISM6 FIFO
+# capture: ... Hz on this part (trim N)" gives the exact figure.
+expect_serial 20 \[I2S\] imu batches [0-9]+/s -> samples ((6[89]|7[0-9])[0-9][0-9]|80[0-9][0-9])/s, bad 0
+
+note === sim flight: 883 g, 77 N for 1.5 s, 5 m/s descent (~546 m, lands in ~2 min) ===
+sleep 10
+send 5 00c05c4400009a420000c03f0000a040
+sleep 10
+mark
+send 6
+expect_tlm 40 fs.SIM_ACTIVE==1
+expect_tlm 40 st==INFLIGHT
+expect_tlm 40 fs.LOGGING_ACTIVE==1
+note === boost and coast at 8k: every batch good ===
+sleep 10
+refute_serial_since imu batches .* bad [1-9]
+expect_tlm 240 st==LANDED
+refute_serial_since imu batches .* bad [1-9]
+expect_serial_since finalizeFlight OK
+
+note === back to the default, 4k Dynamic (sentinel 0) ===
+sleep 20
+mark
+send 67 0000
+expect_serial 10 IMU logging rate: DYNAMIC \(3840 Hz boost\) -> FlightComputer

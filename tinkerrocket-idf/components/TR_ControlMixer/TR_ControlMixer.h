@@ -103,7 +103,6 @@ private:
     bool  gain_sched_enabled_;
     float v_ref_;
     float v_min_;
-    float prev_gain_scale_;
 
     void applyGainSchedule(float speed_mps);
 

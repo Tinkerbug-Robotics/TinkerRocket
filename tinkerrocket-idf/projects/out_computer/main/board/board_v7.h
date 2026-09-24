@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 // V7 (current flight PCB) pin map + board topology for the out computer.
-// Selected when TR_BOARD_V8=0 (the default) — see config.h (#411).
+// Selected with TR_BOARD_V7=1:  idf.py -B build_v7 -DTR_BOARD_V7=1 build
 //
 // ONLY pins and peripheral-presence/topology flags live here. Logic and
 // protocol constants (I2S sample rate, I2C address/speeds, LoRa RF
@@ -34,6 +34,11 @@ struct board_pins
     static constexpr int MRAM_CS = 34;
     // MRAM is fitted; the ring lives there. See board_v9.h.
     static constexpr bool RING_IN_PSRAM = false;
+
+    // #1485: the highest IMU logging rate this board flies. 3840 Hz until its
+    // FC reads the IMU from the FIFO (ISM6_FIFO_CAPTURE in the FC's board
+    // header), which 7680 Hz needs; test_imu_rate_board_parity pins the two.
+    static constexpr uint16_t IMU_RATE_MAX_HZ = 3840;
 
     // --- I2C slave (commands from FlightComputer) ---
     static constexpr int I2C_SDA_PIN = 4;

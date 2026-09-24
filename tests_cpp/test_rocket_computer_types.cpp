@@ -1266,28 +1266,34 @@ TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
 }
 
 // ============================================================================
-// Dynamic IMU logging rate (BLE cmd 67, IMU_RATE_DYNAMIC)
+// Dynamic IMU logging rate (BLE cmd 67, IMU_RATE_DYNAMIC / IMU_RATE_DYNAMIC_8K)
 // ============================================================================
-// The dynamic sentinel rides in the existing 2-byte rate_hz field. Two
+// The dynamic sentinels ride in the existing 2-byte rate_hz field. Two
 // validators exist on purpose and must NOT be conflated: imuRateValid() gates
 // what may be programmed as a chip ODR, imuRateSettingValid() gates what a
-// user may select.
-TEST(RocketComputerTypes, ImuRate_DynamicSentinel_IsNotAProgrammableOdr) {
-    EXPECT_TRUE(imuRateIsDynamic(IMU_RATE_DYNAMIC));
-    EXPECT_TRUE(imuRateSettingValid(IMU_RATE_DYNAMIC));
-    // Must stay false: SensorCollector::setIsm6Rate() is guarded by this, and
-    // handing it the mode sentinel would try to program a 0 Hz ODR.
-    EXPECT_FALSE(imuRateValid(IMU_RATE_DYNAMIC));
+// user may select — on a board that carries at most max_hz.
+TEST(RocketComputerTypes, ImuRate_DynamicSentinels_AreNotProgrammableOdrs) {
+    for (uint16_t mode : {IMU_RATE_DYNAMIC, IMU_RATE_DYNAMIC_8K}) {
+        EXPECT_TRUE(imuRateIsDynamic(mode)) << mode;
+        EXPECT_TRUE(imuRateSettingValid(mode, IMU_RATE_TOP_HZ)) << mode;
+        // Must stay false: SensorCollector::setIsm6Rate() is guarded by this,
+        // and handing it a mode sentinel would try to program a 0 or 1 Hz ODR.
+        EXPECT_FALSE(imuRateValid(mode)) << mode;
+        // Below every ODR step, so no sentinel can be mistaken for a rate.
+        EXPECT_LT(mode, IMU_RATE_OPTIONS_HZ[0]) << mode;
+    }
+    EXPECT_NE(IMU_RATE_DYNAMIC, IMU_RATE_DYNAMIC_8K);
 
     for (uint16_t hz : IMU_RATE_OPTIONS_HZ) {
         EXPECT_TRUE(imuRateValid(hz)) << hz;
-        EXPECT_TRUE(imuRateSettingValid(hz)) << hz;
+        EXPECT_TRUE(imuRateSettingValid(hz, IMU_RATE_TOP_HZ)) << hz;
         EXPECT_FALSE(imuRateIsDynamic(hz)) << hz;
     }
 
-    for (uint16_t hz : {1u, 500u, 1000u, 4000u, 7680u, 65535u}) {
+    for (uint16_t hz : {2u, 500u, 1000u, 4000u, 8000u, 65535u}) {
         EXPECT_FALSE(imuRateValid((uint16_t)hz)) << hz;
-        EXPECT_FALSE(imuRateSettingValid((uint16_t)hz)) << hz;
+        EXPECT_FALSE(imuRateSettingValid((uint16_t)hz, IMU_RATE_TOP_HZ)) << hz;
+        EXPECT_EQ(imuRatePeakHz((uint16_t)hz), 0u) << hz;
     }
 }
 
@@ -1296,19 +1302,46 @@ TEST(RocketComputerTypes, ImuRate_DynamicSentinel_IsNotAProgrammableOdr) {
 // the collector at whatever it was and the mode would silently do nothing.
 TEST(RocketComputerTypes, ImuRate_DynamicEndpoints_AreProgrammable) {
     EXPECT_TRUE(imuRateValid(IMU_RATE_DYNAMIC_BOOST_HZ));
+    EXPECT_TRUE(imuRateValid(IMU_RATE_DYNAMIC_8K_BOOST_HZ));
     EXPECT_TRUE(imuRateValid(IMU_RATE_DYNAMIC_POST_HZ));
     EXPECT_GT(IMU_RATE_DYNAMIC_BOOST_HZ, IMU_RATE_DYNAMIC_POST_HZ);
+    EXPECT_GT(IMU_RATE_DYNAMIC_8K_BOOST_HZ, IMU_RATE_DYNAMIC_BOOST_HZ);
+    EXPECT_EQ(IMU_RATE_DYNAMIC_8K_BOOST_HZ, IMU_RATE_TOP_HZ);
 }
 
 TEST(RocketComputerTypes, ImuRate_Resolve) {
-    // Dynamic: boost rate until deployment latches, post rate after.
+    // Dynamic: the mode's boost rate until deployment latches, post rate after.
     EXPECT_EQ(imuRateResolve(IMU_RATE_DYNAMIC, false), IMU_RATE_DYNAMIC_BOOST_HZ);
     EXPECT_EQ(imuRateResolve(IMU_RATE_DYNAMIC, true),  IMU_RATE_DYNAMIC_POST_HZ);
+    EXPECT_EQ(imuRateResolve(IMU_RATE_DYNAMIC_8K, false), IMU_RATE_DYNAMIC_8K_BOOST_HZ);
+    EXPECT_EQ(imuRateResolve(IMU_RATE_DYNAMIC_8K, true),  IMU_RATE_DYNAMIC_POST_HZ);
     // Fixed: the deployment latch must not move the rate.
     for (uint16_t hz : IMU_RATE_OPTIONS_HZ) {
         EXPECT_EQ(imuRateResolve(hz, false), hz);
         EXPECT_EQ(imuRateResolve(hz, true),  hz);
     }
+}
+
+// #1485: 7680 Hz — fixed or as 8k Dynamic's boost — needs a board that says
+// it can carry it. The default limit is where every board was before 7680
+// existed, so a caller that forgets to pass its board's limit refuses the 8k
+// settings rather than flying them on hardware that drops samples.
+TEST(RocketComputerTypes, ImuRate_BoardLimitGatesTheEightKSettings) {
+    for (uint16_t setting : {(uint16_t)7680u, IMU_RATE_DYNAMIC_8K}) {
+        EXPECT_FALSE(imuRateSettingValid(setting)) << setting;
+        EXPECT_FALSE(imuRateSettingValid(setting, IMU_RATE_BASELINE_MAX_HZ)) << setting;
+        EXPECT_TRUE(imuRateSettingValid(setting, IMU_RATE_TOP_HZ)) << setting;
+        EXPECT_EQ(imuRatePeakHz(setting), IMU_RATE_TOP_HZ) << setting;
+    }
+    // Everything that existed before 7680 stays valid on every board.
+    for (uint16_t setting : {IMU_RATE_DYNAMIC, (uint16_t)960u, (uint16_t)1920u, (uint16_t)3840u}) {
+        EXPECT_TRUE(imuRateSettingValid(setting)) << setting;
+        EXPECT_TRUE(imuRateSettingValid(setting, IMU_RATE_BASELINE_MAX_HZ)) << setting;
+    }
+    EXPECT_EQ(imuRatePeakHz(IMU_RATE_DYNAMIC), IMU_RATE_DYNAMIC_BOOST_HZ);
+    // The two limits a board can declare are themselves ODR steps.
+    EXPECT_TRUE(imuRateValid(IMU_RATE_BASELINE_MAX_HZ));
+    EXPECT_TRUE(imuRateValid(IMU_RATE_TOP_HZ));
 }
 
 // ============================================================================
@@ -1756,6 +1789,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         // block: 0xA0-0xFD is full (see RocketComputerTypes.h).
         MT(GNSS_SAT_MSG),
         MT(RECOVERY_END_PENDING),
+        // #1485: FC->OC IMU batch, unpacked by the OC into ISM6HG256_MSG frames.
+        MT(ISM6_BATCH_MSG),
         // #1156 item 7: the base station's own log records. They share the
         // one 8-bit `type` space and the same packMessage framing, and they
         // are what took 0xFC/0xFD — but they were never in this registry, so
@@ -1797,7 +1832,7 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //      log records that had taken "the last two free codes" without being
     //      registered (#1156 item 7). The 0xA0-0xFD space is FULL; new codes
     //      go in the 0x90 block.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 96u)
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 97u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

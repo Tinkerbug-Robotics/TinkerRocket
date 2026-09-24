@@ -136,6 +136,13 @@ RP54_V_REF = 95.0
 # anything about pitch/yaw — the flight arced to 24 deg off vertical by burnout
 # and the sim simply launches at that angle so the coast airspeed (hence the
 # V^2 authority) matches.
+#
+# The flight flew the "scaled" I-term law (Ki_eff * integral(e), reset on a scale
+# step), and the plant was fitted through it; since 2026-09-23 the firmware holds
+# the I term in fin degrees, and this scenario runs whatever the firmware runs.
+# With these P-dominant gains (Ki 0.01) the integrator is still catching the trim
+# at apogee, and the old law's rescaling happened to speed that up: late coast
+# is 3.5 dps RMS on the new law against 2.8 on the old (flown 2.8, residual 1.1).
 RP54_FLIGHT_20260829 = dict(
     pid_kp=0.1204, pid_ki=0.0100, pid_kd=0.0,          # identified
     A=-0.1220,                # deg/s^2 per deg of tab per (m/s)^2; negative = stabilising

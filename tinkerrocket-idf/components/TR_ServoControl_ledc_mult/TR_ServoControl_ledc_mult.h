@@ -230,9 +230,10 @@ public:
     int getServoHz() const { return servo_hz; }
     int getServoMinUs() const { return servo_min_us; }
     int getServoMaxUs() const { return servo_max_us; }
-    // Last pulse (µs) actually written to a channel's LEDC duty — diagnostic
-    // ground truth for "did the command reach the pin", per servo (the legacy
-    // getRollCmdUs only reports servo 0).  0 until first driven.
+    // Last pulse (µs) commanded on a channel — once begin() has run, the one
+    // written to its LEDC duty: diagnostic ground truth for "did the command
+    // reach the pin", per servo (the legacy getRollCmdUs only reports servo
+    // 0).  0 until first driven.
     int getServoPulseUs(int servoIndex) const {
         return (servoIndex >= 0 && servoIndex < 4) ? last_pulse_us_[servoIndex] : 0;
     }
@@ -261,15 +262,19 @@ private:
     // controlAngle() (per-tick rate command); does NOT touch pid_setpoint.
     void controlToSetpoint(float setpoint, float roll_rate);
     // Scale the PID gains by (V_ref/V)² (capped) when the gain schedule is
-    // enabled; no-op otherwise.  Split out so controlAngle() can schedule
-    // gains without routing through the persistent-setpoint control() path.
+    // enabled; no-op otherwise, and for a non-finite speed.  Split out so
+    // controlAngle() can schedule gains without routing through the
+    // persistent-setpoint control() path.  The I term is continuous across a
+    // scale change (TR_PID holds it in output units), so nothing is reset.
     void applyGainSchedule(float velocity_ms);
     // drive ONE servo channel to a nominal pulse (bias applied); used by the
     // boot wiggle to sequence the servos one at a time
     void setPulseChannel(int channel, int base_pulse_us);
     // Write one channel's LEDC duty for a pulse width (us) at the current
-    // servo_hz, and mark the channel driven.  The one place the duty math
-    // lives; last_pulse_us_ stays the caller's bookkeeping.
+    // servo_hz, and mark the channel driven.  Does nothing before begin().
+    // The one place the duty math lives; last_pulse_us_ stays the caller's
+    // bookkeeping, kept even before begin() because getRollCmdUs() reads it
+    // and the sim never calls begin().
     void writePulseDuty(int channel, int pulse_us);
     int  saturateCommand(int command);
     // Map a physical fin angle (deg) to a servo pulse (us) via the fin
@@ -321,8 +326,6 @@ private:
     // Cascaded angle control
     float kp_angle_;
 
-    // Previous gain schedule scale factor (for I-term reset on large changes)
-    float prev_gain_scale_ = 1.0f;
     // #1141 item 4: whether applyGainSchedule() has scaled the live PID gains
     // away from the base set, so the unscheduled paths can put them back.
     bool  schedule_applied_ = false;
@@ -341,7 +344,9 @@ private:
     bool channel_driven_[4] = {false, false, false, false};
 
     // begin() has configured the LEDC timers.  Until then setServoTiming()
-    // only records the timing (begin() applies servo_hz when it runs).
+    // only records the timing (begin() applies servo_hz when it runs), and
+    // writePulseDuty() and idle() touch no LEDC at all.  On a board with no
+    // servo pins begin() never runs.
     bool begun_ = false;
 
     // Anti-backlash neutral settle (#407): true between beginNeutralSettle()

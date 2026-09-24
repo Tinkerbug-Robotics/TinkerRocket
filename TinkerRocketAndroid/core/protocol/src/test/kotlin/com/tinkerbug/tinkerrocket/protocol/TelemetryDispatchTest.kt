@@ -183,7 +183,7 @@ class TelemetryDispatchTest {
     fun `config sentinel matrix - iwind gates on greater or equal zero`() {
         // 0 is a VALID value for iwind (disables integral separation) —
         // only negatives are the sentinel.
-        assertEquals(40f, config("""{"type":"config","iwind":-1}""").integralSepThreshold)
+        assertEquals(200f, config("""{"type":"config","iwind":-1}""").integralSepThreshold)
         assertEquals(0f, config("""{"type":"config","iwind":0}""").integralSepThreshold)
         assertEquals(25f, config("""{"type":"config","iwind":25.0}""").integralSepThreshold)
     }
@@ -194,6 +194,18 @@ class TelemetryDispatchTest {
         assertNull(config("""{"type":"config","irate":70000}""").imuRateHz)
         assertNull(config("""{"type":"config","irate":-1}""").imuRateHz)
         assertNull(config("""{"type":"config"}""").imuRateHz)
+    }
+
+    @Test
+    fun `config irmax lands only when it fits u16`() {
+        // #1485: the fastest IMU rate the rocket flies. Absent on firmware
+        // from before the 8k rates, which the settings screen reads as 3840.
+        assertEquals(7680, config("""{"type":"config","irmax":7680}""").imuRateMaxHz)
+        assertEquals(3840, config("""{"type":"config","irmax":3840}""").imuRateMaxHz)
+        assertNull(config("""{"type":"config","irmax":70000}""").imuRateMaxHz)
+        assertNull(config("""{"type":"config"}""").imuRateMaxHz)
+        // "8k Dynamic" reads back as its sentinel.
+        assertEquals(1, config("""{"type":"config","irate":1}""").imuRateHz)
     }
 
     @Test

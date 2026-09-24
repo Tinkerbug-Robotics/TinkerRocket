@@ -45,7 +45,7 @@ final class CameraReadbackProvenanceTests: XCTestCase {
     // Every value matches RocketProfile's defaults except the camera, so the
     // camera is the only thing adoption can change.
     private static func configFrame(camt: Int) -> String {
-        #"{"type":"config","sb1":0,"shz":333,"smn":1000,"smx":2000,"kp":0.1200,"ki":0.0100,"kd":0.0000,"pmn":-20.0,"pmx":20.0,"sen":true,"gs":true,"ac":false,"rdly":0,"rcap":60.0,"kpang":2.00,"iwind":40.0,"ge":false,"camt":\#(camt),"irate":0}"#
+        #"{"type":"config","sb1":0,"shz":333,"smn":1000,"smx":2000,"kp":0.1200,"ki":0.0100,"kd":0.0000,"pmn":-20.0,"pmx":20.0,"sen":true,"gs":true,"ac":false,"rdly":0,"rcap":60.0,"kpang":2.00,"iwind":200.0,"ge":false,"camt":\#(camt),"irate":0}"#
     }
     private static func pyroFrame(camTail: String) -> String {
         #"{"type":"config_pyro","p1e":false,"p1m":0,"p1v":1.0,"p2e":false,"p2m":0,"p2v":100.0,"p3e":false,"p3m":0,"p3v":0.0,"p4e":false,"p4m":0,"p4v":0.0,"src":"fc","fnv":true\#(camTail)}"#

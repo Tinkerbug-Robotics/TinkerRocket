@@ -76,6 +76,9 @@ struct board_pins
     static constexpr bool USE_MMC5983MA = false;  // not populated on V8
     static constexpr bool USE_GNSS = true;
     static constexpr bool USE_ISM6HG256 = true;
+    // #1485: FIFO capture is proven on the mini first; this board keeps
+    // one read per DRDY edge until it has been benched on the FIFO path.
+    static constexpr bool ISM6_FIFO_CAPTURE = false;
     static constexpr bool USE_IIS2MDC = true;
 
     // ### Sensor interrupt pins ###
@@ -148,7 +151,7 @@ struct board_pins
     static constexpr uint8_t SERVO_PIN_4 = 54;  // EXP_04, connector pin 6
 
     // ### Indicators ###
-    static constexpr uint8_t PIEZO_PIN = 17;      // PIEZZO
+    static constexpr int PIEZO_PIN = 17;          // PIEZZO
     // IND_1 = red, IND_2 = blue.  CONFIRMED on V9 hardware (bench 2026-08-24,
     // #847), which carries the SAME pins and the same IND_1/IND_2 nets — so this
     // is inferred here, not separately measured on a V8 board.  Good enough to

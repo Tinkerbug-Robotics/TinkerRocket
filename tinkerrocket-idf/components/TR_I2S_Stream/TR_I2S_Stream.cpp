@@ -114,10 +114,10 @@ esp_err_t TR_I2S_Stream::beginMasterTx(int bclk_pin,
     // ── Standard mode config ──
     i2s_std_config_t std_cfg = {};
 
-    // Clock
+    // Clock. MCLK at 128x, not 256x: see MASTER_MCLK_MULTIPLE (#1485).
     std_cfg.clk_cfg.sample_rate_hz = sample_rate;
     std_cfg.clk_cfg.clk_src = I2S_CLK_SRC_DEFAULT;
-    std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+    std_cfg.clk_cfg.mclk_multiple = static_cast<i2s_mclk_multiple_t>(MASTER_MCLK_MULTIPLE);
 
     // Slot — 16-bit stereo Philips (raw byte transport).
     // NOTE: Bandwidth = sample_rate * 4 bytes.  Must exceed total framed

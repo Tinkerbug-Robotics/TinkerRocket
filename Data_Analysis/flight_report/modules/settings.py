@@ -39,8 +39,8 @@ from ..units import Quantity
 
 Rows = list[tuple[str, Any]]
 
-# The app's picker words for the three fixed logging rates.
-_RATE_NAMES = {960: "1k", 1920: "2k", 3840: "4k"}
+# The app's picker words for the fixed logging rates (7680 since #1485).
+_RATE_NAMES = {960: "1k", 1920: "2k", 3840: "4k", 7680: "8k"}
 _CAMERA_LABELS = {0: "None", 1: "GoPro", 2: "RunCam"}
 _MOUNT_MODES = {
     0: "Default (+X nose, nothing configured)",

@@ -168,51 +168,37 @@ struct config : board_pins
     // 200 Hz is the highest step that fits within I2C budget.
     static constexpr uint16_t MMC5983MA_UPDATE_RATE = 200;
     // Collector-construction IMU rate.  No longer the effective default: the
-    // shipped default setting is IMU_RATE_DYNAMIC (3840 Hz to deployment, then
-    // 960 Hz), which setup() stages over this value before begin().  This
-    // constant is what the collector is built with and the fallback the NVS
-    // whitelist logs against.  The user can also select a FIXED 960/1920/3840
-    // Hz from the app (BLE cmd 67); the FC persists the choice in NVS
+    // shipped default setting is IMU_RATE_DYNAMIC ("4k Dynamic": 3840 Hz to
+    // deployment, then 960 Hz), which setup() stages over this value before
+    // begin().  This constant is what the collector is built with and the
+    // fallback the NVS whitelist logs against.  The user can also select
+    // "8k Dynamic" or a FIXED 960/1920/3840/7680 Hz from the app (BLE cmd
+    // 67), up to IMU_RATE_MAX_HZ below; the FC persists the choice in NVS
     // ("imu"/"rate") and stages it into the collector before begin().  The
-    // link budget below is unchanged — dynamic only ever runs at the 3840 and
-    // 960 endpoints already covered here.  The poll task's
-    // handoff queue + the loop's drain-all consumption log EVERY sample
-    // regardless of loop rate (~980/s); control/EKF/guidance still consume
-    // the freshest sample at loop rate.  Link budget on the 44100 Hz I2S
-    // (176.4 KB/s): ISM6 framed = rate x 30 B, so 1920 -> ~58 KB/s and
-    // 3840 -> ~115 KB/s.
+    // poll task's handoff queue + the loop's drain-all consumption log EVERY
+    // sample regardless of loop rate; control/EKF/guidance still consume the
+    // freshest sample at loop rate.
     //
-    // #1137 item 13: the old note here claimed "~156 KB/s (88%) at 3840" and
-    // was stale in two ways — it budgeted NonSensorData at 24 B (it is 52 B
-    // now, after #529's ekf_ticks and #1190's shock_gate_trips) and predated
-    // GuidanceTelem entirely.  Re-derived from the current wire sizes, at the
-    // shipped IMU_RATE_DYNAMIC boost rate of 3840 Hz, framed = payload + 8
-    // (MAX_FRAME = 4+1+1+payload+2), during a GUIDED coast:
+    // Link budget: tests_cpp/test_i2s_link_budget.cpp derives it from the
+    // real wire sizes, per board at that board's IMU_RATE_MAX_HZ, during a
+    // GUIDED coast (the worst case), and fails above 95 %.  The hand-kept
+    // copy of it that lived here went stale twice (#1137 item 13), so the
+    // numbers now live only in the test.  Frames past the limit are dropped
+    // silently by enqueueI2STx, so the failure mode is telemetry that thins
+    // out with no error anywhere.
     //
-    //   ISM6        (22+8) x 3840 = 115,200
-    //   NonSensor   (52+8) x  500 =  30,000
-    //   BMP585      (12+8) x  500 =  10,000
-    //   GuidanceTelem (19+8) x 250 =  6,750   <- was 13,500 at 500 Hz
-    //   FlightSnapshot (224+8) x 10 =  2,320
-    //   IIS2MDC     (10+8) x  100 =   1,800
-    //   GNSS        (42+8) x   18 =     900
-    //   POWER                     ~=     220
-    //                               -------
-    //                               167,190 B/s = 94.8% of 176,400
-    //
-    // At the previous GUIDANCE_TELEM_RATE_HZ of 500 that total was 173,940 B/s
-    // = 98.6%, i.e. under 1.5% of headroom on the one phase of flight the
-    // guidance data exists to record.  Frames past the limit are dropped
-    // silently by enqueueI2STx, so the failure mode is a guided coast whose
-    // telemetry thins out with no error anywhere.  Non-guided flight is
-    // unaffected either way (GuidanceTelem is not emitted).
-    //
-    // Verified against the post-#467/#469 OC budgets (parser ~10x headroom,
-    // MRAM staging ~8% duty, NAND flush ~50% duty at 3840).  Bench gauges for
-    // any new rate: [GAP DIAG] imu_q_drops, FC I2S enqueue drops, OC
-    // rx_ovf/ring_peak, and the .bin per-type rates.  RE-DERIVE THIS BLOCK
-    // whenever a struct on the link grows — that is exactly how it went stale.
+    // Bench gauges for any new rate: [GAP DIAG] imu_q_drops, [IMU FIFO],
+    // FC I2S enqueue drops, OC rx_ovf/ring_peak, the OC's "[I2S] imu
+    // batches" line, and the .bin per-type rates.
     static constexpr uint16_t ISM6HG256_UPDATE_RATE = 1920;
+
+    // #1485: the highest IMU logging rate this board can fly, fixed or as a
+    // dynamic mode's boost rate.  7680 Hz needs FIFO capture (board header):
+    // one read per data-ready edge cannot keep up with a 130 us period.  The
+    // OC's board header states the same number for the same board, and the
+    // apps offer the 8k rates only where the OC reports it ("irmax");
+    // test_imu_rate_board_parity pins the FC and OC values together.
+    static constexpr uint16_t IMU_RATE_MAX_HZ = ISM6_FIFO_CAPTURE ? 7680 : 3840;
     static constexpr uint16_t NON_SENSOR_UPDATE_RATE = 500;
 
     // #1154 item 4: FC_STATUS_MSG cadence.  5 Hz, sub-rated off the NonSensor
@@ -466,10 +452,17 @@ struct config : board_pins
 
     // Integral-separation anti-windup threshold (deg/s). The roll-rate PID
     // integrator is frozen while |rate error| exceeds this, so a launch roll
-    // transient can't wind it up — which, with the higher KI above, would
-    // otherwise overshoot hard on an opposing-sign kick. Validated at 40 via
-    // SIL (#170). Runtime-overridable via NVS "iwind" / the app. <=0 disables.
-    static constexpr float INTEGRAL_SEP_THRESHOLD_DPS = 40.0f;
+    // transient can't wind it up. Runtime-overridable via NVS "iwind" / the
+    // app. <=0 disables.
+    //
+    // 200, not the 40 #170 validated. Since TR_PID holds the I term in fin
+    // degrees, a kick wound up mid-burn keeps its angle while the speed, and
+    // so its torque, is still rising: with the gate off, a 900 dps kick at
+    // T+0.45 s on the 67 mm F67 rang at 126 dps RMS, 58 with the gate at 200.
+    // And the gate must sit above the error the loop runs before its
+    // integrator has caught the trim, or the integrator never starts: 40 kept
+    // it frozen for the whole 2026-07-05 flight (P-only error 20-70 dps).
+    static constexpr float INTEGRAL_SEP_THRESHOLD_DPS = 200.0f;
 
     static constexpr bool USE_SERVO_CONTROL = true;
     static constexpr bool SERVO_WIGGLE_ON_BOOT = true;
@@ -833,14 +826,16 @@ struct config : board_pins
 
     // ### I2S Parameters (high-frequency telemetry FC→OC; pins in board
     //     header) ###
-    // I2S bandwidth = sample_rate * 4 bytes (16-bit stereo).
-    // Higher rate = faster DMA buffer turnover = less stale data.
-    // 44100 Hz = 176 KB/s.  Raised from 22050 with the IMU 960 -> 1920 Hz
-    // step: at 22050 the link was already ~76% full (~67 KB/s) and doubling
-    // the IMU frames would not fit.  New steady-state budget ~97 KB/s (55%):
-    // IMU 58 K + NonSensor 24 K + baro 10 K + mag/GNSS/power/misc ~5 K.
-    // IMPORTANT: must match the OC's I2S_SAMPLE_RATE — flash both together.
-    static constexpr uint32_t I2S_SAMPLE_RATE = 44100;  // Must match OC
+    // I2S bandwidth = sample_rate * 4 bytes (16-bit stereo).  The rate is the
+    // shared I2S_LINK_SAMPLE_RATE_HZ (RocketComputerTypes.h, 88200 = 352.8
+    // KB/s), which the OC reads too, so the two ends cannot disagree.  The
+    // budget is computed, per board at its top IMU rate, by
+    // tests_cpp/test_i2s_link_budget.cpp — not written here, where it went
+    // stale twice.  Update the OC before the FC: an OC set for this rate reads
+    // an older FC's slower clock, but an older OC cannot read this one.
+    // Spelled out because this header is included without
+    // RocketComputerTypes.h; main.cpp static_asserts the two equal.
+    static constexpr uint32_t I2S_SAMPLE_RATE = 88200;
  
     // ### Execution Cores ###
 

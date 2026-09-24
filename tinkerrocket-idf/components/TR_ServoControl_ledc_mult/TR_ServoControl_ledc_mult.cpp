@@ -251,8 +251,10 @@ void TR_ServoControl::idle() {
     // stay inside the normal LEDC duty API rather than ledc_stop(), so the next
     // setServoAngles()/setPulseChannel() resumes pulses through the identical path.
     for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
-        ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[i], 0);
-        ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[i]);
+        if (begun_) {   // no LEDC before begin() -- see writePulseDuty()
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[i], 0);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[i]);
+        }
         channel_driven_[i] = false;
     }
     is_idle_ = true;
@@ -281,6 +283,13 @@ void TR_ServoControl::setServoAngles(const float angles[4]) {
 }
 
 void TR_ServoControl::writePulseDuty(int channel, int pulse_us) {
+    // No LEDC before begin().  On a board with no servo pins (the mini)
+    // setup_fc never calls begin(), so the driver is never set up and every
+    // ledc_* call fails with an error log -- a burst per servo test, replay
+    // or stow command, which reach here without asking about pins.  Nothing
+    // is marked driven either: begin() leaves every channel at duty 0,
+    // relaxed, whatever was commanded before it ran.
+    if (!begun_) return;
     uint32_t max_duty = (1u << LEDC_RESOLUTION) - 1;
     uint32_t duty = (static_cast<uint32_t>(pulse_us)
                     * static_cast<uint32_t>(servo_hz)
@@ -459,7 +468,7 @@ void TR_ServoControl::enableGainSchedule(float v_ref, float v_min) {
 void TR_ServoControl::disableGainSchedule() {
     gain_schedule_enabled = false;
     // Restore base gains (#1141 item 4: through the one restore path, so the
-    // schedule_applied_ latch and the integrator are handled consistently).
+    // schedule_applied_ latch is handled consistently).
     schedule_applied_ = true;
     restoreBaseGains();
 }
@@ -468,19 +477,29 @@ void TR_ServoControl::applyGainSchedule(float velocity_ms) {
     if (!gain_schedule_enabled) {
         return;
     }
+    // A non-finite speed has no scale.  std::max passes a NaN straight
+    // through, and +inf makes the scale 0, which zeroes Ki and with it the I
+    // term (TR_PID::setKi).  Keep the gains the last good tick set.
+    if (!std::isfinite(velocity_ms)) {
+        return;
+    }
     float v = std::max(std::fabs(velocity_ms), gain_schedule_v_min);
     float v_ratio = gain_schedule_v_ref / v;
     float scale = v_ratio * v_ratio;
     // Cap the scale factor so servo saturates at ~50 deg/s error, not gyro noise
     scale = std::min(scale, GAIN_SCHEDULE_SCALE_CAP);
 
-    // Reset I-term when gain scale changes significantly to prevent
-    // accumulated integral from spiking the output after a step change in Ki.
-    if (fabs(scale - prev_gain_scale_) > 0.1f) {
-        pid.resetIntegral();
-    }
-    prev_gain_scale_ = scale;
-
+    // No integrator reset on a scale change.  One used to fire whenever the
+    // scale moved by more than 0.1 in a tick, because the I term was Ki times
+    // the error integral and so jumped with Ki.  TR_PID now holds the I term
+    // itself and Ki sets only its rate, so the output is continuous and the
+    // integrator keeps the fin trim it has learned — a reset threw that away
+    // and cost a fresh transient while the loop re-learned it.
+    //
+    // Windup is held in fin degrees too: a kick integrated during the burn
+    // keeps its angle while the speed is still rising, so its torque grows as
+    // V², where Ki * sum(e*dt) used to shrink it as 1/V².  Bounding that is
+    // the integral-separation gate's job (setPIDIntegralSeparationThreshold).
     pid.setKp(kp_base * scale);
     pid.setKi(ki_base * scale);
     pid.setKd(kd_base * scale);
@@ -500,10 +519,11 @@ void TR_ServoControl::restoreBaseGains() {
     pid.setKp(kp_base);
     pid.setKi(ki_base);
     pid.setKd(kd_base);
-    prev_gain_scale_ = 1.0f;
-    // The schedule resets the integrator on a >0.1 scale change for the same
-    // reason: a term accumulated under one gain is meaningless under another.
-    pid.resetIntegral();
+    // The integrator is deliberately NOT reset here.  It holds the I term in
+    // fin degrees (TR_PID), which mean the same thing under any gain, and what
+    // it holds is mostly the airframe's roll trim.  Resetting it on the
+    // EKF-health fallback cost a spin-up transient at exactly the moment
+    // control degraded, while the loop re-learned a trim it already had.
     schedule_applied_ = false;
 }
 

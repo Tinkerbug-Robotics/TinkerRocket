@@ -4,9 +4,9 @@ Pybind11 PID controller tests.
 Mirrors the C++ test_pid.cpp test suite to ensure the simulation PID
 produces identical results to what the flight firmware uses.
 
-IMPORTANT: The sim PID uses derivative-on-ERROR (line 35 of pid_controller.h):
+IMPORTANT: The sim PID uses derivative-on-ERROR (pid_controller.h):
     D = Kd * (error - last_error) / dt
-while the flight PID uses derivative-on-MEASUREMENT (TR_PID.cpp line 74):
+while the flight PID uses derivative-on-MEASUREMENT (TR_PID.cpp):
     D = -Kd * (actual - last_measurement) / dt
 
 This means the D-term will differ when setpoint changes. Both behaviors
@@ -50,8 +50,7 @@ def test_integral_accumulation():
     out = 0.0
     for _ in range(10):
         out = pid.compute(5.0, 0.0, DT)
-    # cumulative_error = 5.0 * 0.01 * 10 = 0.5
-    # I = 1.0 * 0.5 = 0.5
+    # I accumulates Ki * error * dt = 1.0 * 5.0 * 0.01, ten times = 0.5
     assert abs(out - 0.5) < 0.05
 
 
@@ -121,7 +120,7 @@ def test_properties_readable():
     assert pid.kd == 3.0
     assert pid.min_cmd == -5.0
     assert pid.max_cmd == 5.0
-    assert pid.cumulative_error == 0.0
+    assert pid.integral == 0.0
     assert pid.last_error == 0.0
 
 
@@ -132,14 +131,14 @@ def test_integrator_accumulator_clamped_after_long_saturation():
     pid = PIDController(0.0, 0.5, 0.0, -10.0, 10.0)
     pid.compute(0.0, 0.0, DT)  # init
 
-    # 60 s of hard +10 error: unclamped accumulator would reach 6000;
-    # clamped it stops at max_cmd/Ki = 20.
+    # 60 s of hard +10 error: unclamped the I term would reach 3000;
+    # clamped it stops at max_cmd = 10.
     for _ in range(6000):
         pid.compute(10.0, 0.0, DT)
-    assert pid.cumulative_error <= 20.0 + 1e-3
+    assert pid.integral <= 10.0 + 1e-6
 
     # Reversal: output must leave the +10 rail immediately and cross zero
-    # within ~400 steps (pre-fix: ~59,800 steps pinned at the rail).
+    # within ~200 steps (pre-#386: ~59,800 steps pinned at the rail).
     steps_to_negative = None
     for i in range(1000):
         out = pid.compute(-10.0, 0.0, DT)
@@ -156,3 +155,29 @@ def test_accumulator_clamp_inert_below_saturation():
     for _ in range(100):
         out = pid.compute(1.0, 0.0, DT)
     assert math.isclose(out, 0.5, abs_tol=1e-4)
+
+
+def test_i_term_continuous_when_ki_changes():
+    """The I term is held in output units, as TR_PID holds it: a new Ki
+    changes how fast it integrates from there on, never its present value.
+    Mirrors PIDTest.KiRampHoldsALearnedTrimInsteadOfScalingIt."""
+    pid = PIDController(0.0, 0.06, 0.0, -20.0, 20.0)
+    pid.compute(0.0, 0.0, DT)
+    out = 0.0
+    for _ in range(100):
+        out = pid.compute(60.0, 0.0, DT)          # learn a 3.6 deg trim
+    assert math.isclose(out, 3.6, abs_tol=1e-3)
+    for i in range(1, 501):                       # the schedule: Ki 1x -> 3x
+        pid.set_ki(0.06 * (1.0 + 2.0 * i / 500))
+        out = pid.compute(0.0, 0.0, DT)
+    assert math.isclose(out, 3.6, abs_tol=1e-4)   # Ki * integral(e) gave 10.8
+
+
+def test_set_ki_zero_clears_the_i_term():
+    pid = PIDController(0.0, 0.5, 0.0, -10.0, 10.0)
+    pid.compute(0.0, 0.0, DT)
+    for _ in range(100):
+        pid.compute(1.0, 0.0, DT)
+    pid.set_ki(0.0)
+    assert pid.integral == 0.0
+    assert abs(pid.compute(0.0, 0.0, DT)) < 1e-6

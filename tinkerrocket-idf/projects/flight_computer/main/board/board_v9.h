@@ -105,6 +105,11 @@ struct board_pins
     static constexpr bool USE_MMC5983MA = false;  // no MMC5983MA net on this board
     static constexpr bool USE_GNSS = true;
     static constexpr bool USE_ISM6HG256 = true;
+    // #1485: read the ISM6 from its FIFO, a burst per threshold interrupt,
+    // not one sample per DRDY edge (which loses every sample the poll task
+    // is late for). Proven on the mini first, then benched on a V9 at 3,840
+    // and 7,680 Hz: every sample captured, none dropped.
+    static constexpr bool ISM6_FIFO_CAPTURE = true;
     static constexpr bool USE_IIS2MDC = true;
 
     // ### Sensor interrupt pins ###
@@ -199,7 +204,11 @@ struct board_pins
     static constexpr uint8_t SERVO_PIN_4 = 54;  // EXP_04, connector pin 6
 
     // ### Indicators ###
-    static constexpr uint8_t PIEZO_PIN = 17;      // PIEZZO
+    // An int, not a uint8_t: -1 is "no piezo on this board" and main.cpp
+    // skips it, where a uint8_t would turn it into GPIO 255. The mini says -1;
+    // V10, which builds from this header and moved PIEZZO to the out
+    // computer, will have to as well (#1409).
+    static constexpr int PIEZO_PIN = 17;          // PIEZZO
     // IND_1 = RED, IND_2 = BLUE — CONFIRMED on the V9 first article, bench
     // 2026-08-24 (#847).  The mapping below was a guess when this header was
     // written; it turned out correct, so nothing moved.  Recorded rather than

@@ -36,7 +36,7 @@ class FirmwareDefaultsTest {
         assertEquals(0.0f, p.pidKd)                  // config.h:160 KD
         assertEquals(-20.0f, p.pidMinCmd)            // config.h:161 MIN_CMD
         assertEquals(20.0f, p.pidMaxCmd)             // config.h:162 MAX_CMD
-        assertEquals(40f, p.integralSepThreshold)    // config.h:184 INTEGRAL_SEP_THRESHOLD_DPS
+        assertEquals(200f, p.integralSepThreshold)   // config.h INTEGRAL_SEP_THRESHOLD_DPS
     }
 
     @Test
@@ -186,6 +186,30 @@ class RocketProfileCodecTest {
         assertEquals(0xFF, decoded.imuOrientSetting)  // pad auto-detect
         assertEquals(3840, decoded.imuRateHz)
         assertEquals(0, decoded.pyro1TriggerMode)
+    }
+
+    @Test
+    fun eightKRates_surviveDecode() {
+        // #1485: "8k Dynamic" (sentinel 1) and a fixed 7680 Hz are settings
+        // now; a stored one must come back, not fall to the default.
+        for (rate in listOf(RocketProfile.IMU_RATE_DYNAMIC_8K, 7680)) {
+            val decoded = RocketProfileCodec.decode(
+                """{"name":"Eight","imuRateHz":$rate}""",
+                nowMs = 0,
+            )
+            assertNotNull(decoded)
+            assertEquals(rate, decoded.imuRateHz)
+        }
+    }
+
+    @Test
+    fun imuRatePeakHz_matchesTheFirmware() {
+        // RocketComputerTypes.h imuRatePeakHz(): a dynamic mode peaks at its
+        // boost rate, a fixed rate at itself, anything else is no setting.
+        assertEquals(3840, RocketProfile.imuRatePeakHz(RocketProfile.IMU_RATE_DYNAMIC))
+        assertEquals(7680, RocketProfile.imuRatePeakHz(RocketProfile.IMU_RATE_DYNAMIC_8K))
+        for (hz in listOf(960, 1920, 3840, 7680)) assertEquals(hz, RocketProfile.imuRatePeakHz(hz))
+        for (hz in listOf(2, 500, 4000, 8000)) assertEquals(0, RocketProfile.imuRatePeakHz(hz))
     }
 }
 

@@ -1,0 +1,66 @@
+# #1484 — on the mini, starting the radio must not take the log flash's SPI pins.
+#
+# Rig: rocket-computer-mini, S1 -> O (every line quoted here is OC-side). USB
+# power is enough; no battery, no supercap needed. Start in any rail state: the
+# first step restarts the OC. Needs a chip with NO flights on it (a fresh board),
+# or change the two counts below.
+#
+# Why this shape. The NAND's begin() and its recovery scan run BEFORE the radio
+# starts, so a power-on alone looks healthy even with the bug. The damage is to
+# everything after the radio start: the sim flight's pages and its index entry.
+# So: power on, fly, then restart the OC and let the next begin() read back what
+# the chip actually holds, before the radio can take the pins again.
+#
+# With the bug as filed: three "GPIO nn is conflict with others" lines at the
+# radio start, 40-odd "bad block N mid-flight" lines during the flight, and
+# after the restart the index still reads 0 flight(s) (bench 2026-09-24).
+# With the fix: none of that, and the index holds the flight.
+#
+# Reconnect quickly after each restart. Once the OC's 10 s USB grace ends and
+# light sleep unblocks, its console can go silent and miss the begin() line
+# below. The flight list over BLE is the independent witness:
+#   tools/ble_flight_download.py list   (set TARGET_NAME to this board's name)
+
+note === clean start: a deliberate power-off restarts the OC with the rail off ===
+send 8 00
+disconnect
+sleep 5
+connect
+
+note === power on: the NAND comes up, then the radio ===
+mark
+send 8 01
+expect_serial 30 FLIGHTLOG: up: 0 flight\(s\) in index
+expect_serial 30 LORA: LoRa radio initialized
+refute_serial_since is conflict with others and be overwritten
+expect_tlm 30 h.STORAGE==OK
+
+note === sim flight: 883 g, 77 N for 1.5 s, 5 m/s descent (about 546 m, lands in ~2 min) ===
+sleep 10
+send 5 00c05c4400009a420000c03f0000a040
+sleep 10
+send 6
+expect_tlm 40 fs.SIM_ACTIVE==1
+expect_tlm 40 st==INFLIGHT
+expect_tlm 40 fs.LOGGING_ACTIVE==1
+expect_tlm 240 st==LANDED
+refute_serial_since mid-flight: relocating
+note === let the flight close, so the index write is due ===
+# Searched from the power-on mark: it can print right at LANDED.
+expect_serial 120 finalizeFlight OK
+# Search from here: frames from before the flight also read LOGGING_ACTIVE==0.
+mark
+expect_tlm 120 fs.LOGGING_ACTIVE==0
+sleep 20
+
+note === restart the OC; begin() re-reads the index before the radio starts ===
+send 8 00
+disconnect
+sleep 5
+connect
+mark
+send 8 01
+expect_serial 30 FLIGHTLOG: up: 1 flight\(s\) in index
+refute_serial_since begin failed
+refute_serial_since is conflict with others and be overwritten
+note === done: download the flight separately and check its bytes ===

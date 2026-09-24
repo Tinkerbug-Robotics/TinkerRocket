@@ -116,6 +116,7 @@ add_executable(test_crc16_compat test_crc16_compat.cpp
 target_include_directories(test_crc16_compat PRIVATE
     ${SHIM_DIR}   # Must come first so Arduino.h resolves to our shim
     ${LIB_DIR}/CRC
+    ${LIB_DIR}/TR_I2C_Interface
 )
 target_link_libraries(test_crc16_compat GTest::gtest_main)
 gtest_discover_tests(test_crc16_compat)
@@ -233,6 +234,29 @@ target_include_directories(test_iis2mdc_poll_gate PRIVATE
 )
 target_link_libraries(test_iis2mdc_poll_gate GTest::gtest_main)
 gtest_discover_tests(test_iis2mdc_poll_gate)
+
+# ---------- test_ism6_fifo_decoder ----------
+# The ISM6HG256X FIFO word decoder (#1485): three words per time slot (gyro,
+# low-g, high-g) grouped by the tag's slot counter, a slot split across two
+# bursts, incomplete slots and counter gaps counted. Header-only and IDF-free;
+# the SPI burst reads that feed it are bench-only.
+add_executable(test_ism6_fifo_decoder test_ism6_fifo_decoder.cpp)
+target_include_directories(test_ism6_fifo_decoder PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector
+)
+target_link_libraries(test_ism6_fifo_decoder GTest::gtest_main)
+gtest_discover_tests(test_ism6_fifo_decoder)
+
+# ---------- test_imu_sample_clock ----------
+# The FIFO sample clock (#1485): evenly spaced times steered toward the level
+# read, following a chip a few percent off nominal, re-anchoring after an
+# overflow, never running backwards, wrap-safe. Header-only and IDF-free.
+add_executable(test_imu_sample_clock test_imu_sample_clock.cpp)
+target_include_directories(test_imu_sample_clock PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector
+)
+target_link_libraries(test_imu_sample_clock GTest::gtest_main)
+gtest_discover_tests(test_imu_sample_clock)
 
 # ---------- test_qmc5883p_regs ----------
 # The mini's magnetometer (#1312): register packing pinned to the QMC5883P
@@ -1216,20 +1240,63 @@ gtest_discover_tests(test_pwr_hold_release_policy)
 # The FC->OC link budget lived only in a config.h comment and went stale twice.
 # Derived here from the real sizeof()s and rates so a struct that grows on the
 # link fails a test instead of silently dropping frames in flight.
-add_executable(test_i2s_link_budget test_i2s_link_budget.cpp)
-target_include_directories(test_i2s_link_budget PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${SHIM_DIR}
-    ${LIB_DIR}/TR_RocketComputerTypes
-    ${LIB_DIR}/../projects/flight_computer/main
-)
-# config.h refuses to compile without a board revision (a wrong pyro map fires
-# the wrong channel silently, so there is deliberately no default). The link
-# budget is identical on every revision — the rates and wire sizes are shared —
-# so V9 is picked here simply because one has to be.
-target_compile_definitions(test_i2s_link_budget PRIVATE TR_BOARD_V9=1)
-target_link_libraries(test_i2s_link_budget GTest::gtest_main)
-gtest_discover_tests(test_i2s_link_budget)
+# Built once per board: the wire sizes and the link rate are shared, but the
+# fastest IMU rate is not (#1485: IMU_RATE_MAX_HZ, 7680 only where the FC
+# reads the IMU from its FIFO), and that is the stream that dominates.
+foreach(BOARD V7 V8 V9 M1)
+    add_executable(test_i2s_link_budget_${BOARD} test_i2s_link_budget.cpp)
+    target_include_directories(test_i2s_link_budget_${BOARD} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${SHIM_DIR}
+        ${LIB_DIR}/TR_RocketComputerTypes
+        ${LIB_DIR}/../projects/flight_computer/main
+    )
+    target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_BOARD_${BOARD}=1)
+    if(BOARD STREQUAL "M1")
+        target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE
+            TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
+    endif()
+    target_link_libraries(test_i2s_link_budget_${BOARD} GTest::gtest_main)
+    gtest_discover_tests(test_i2s_link_budget_${BOARD} TEST_PREFIX "${BOARD}.")
+endforeach()
+
+# ---------- test_imu_rate_board_parity (#1485) ----------
+# The FC and the OC each state the fastest IMU rate their board flies: the FC
+# derives it from its FIFO-capture flag, the OC's board header spells it out
+# (it reports it to the apps as "irmax" and refuses settings above it). If the
+# two disagree, the OC accepts and echoes a rate the FC then refuses — the
+# app shows 8k while the vehicle flies the old rate. The two config.h files
+# cannot share a translation unit (both declare `struct config`), so each is
+# compiled into its own small library and the test compares the answers.
+foreach(BOARD V7 V8 V9 M1)
+    add_library(imu_cap_fc_${BOARD} STATIC imu_rate_cap_fc.cpp)
+    target_include_directories(imu_cap_fc_${BOARD} PRIVATE
+        ${SHIM_DIR}
+        ${LIB_DIR}/TR_RocketComputerTypes
+        ${LIB_DIR}/../projects/flight_computer/main
+    )
+    target_compile_definitions(imu_cap_fc_${BOARD} PRIVATE TR_BOARD_${BOARD}=1)
+    if(BOARD STREQUAL "M1")
+        # The M1 header refuses a build without the driver seams its parts
+        # need (flight_computer/CMakeLists.txt sets them for the firmware).
+        target_compile_definitions(imu_cap_fc_${BOARD} PRIVATE
+            TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
+    endif()
+    add_library(imu_cap_oc_${BOARD} STATIC imu_rate_cap_oc.cpp)
+    target_include_directories(imu_cap_oc_${BOARD} PRIVATE
+        ${SHIM_DIR}
+        ${LIB_DIR}/TR_RocketComputerTypes
+        ${LIB_DIR}/../projects/out_computer/main
+    )
+    target_compile_definitions(imu_cap_oc_${BOARD} PRIVATE TR_BOARD_${BOARD}=1)
+    add_executable(test_imu_rate_board_parity_${BOARD} test_imu_rate_board_parity.cpp)
+    target_include_directories(test_imu_rate_board_parity_${BOARD} PRIVATE
+        ${LIB_DIR}/TR_RocketComputerTypes
+    )
+    target_link_libraries(test_imu_rate_board_parity_${BOARD}
+        imu_cap_fc_${BOARD} imu_cap_oc_${BOARD} GTest::gtest_main)
+    gtest_discover_tests(test_imu_rate_board_parity_${BOARD} TEST_PREFIX "${BOARD}.")
+endforeach()
 
 # ---------- test_test_mode_gate_policy (#1137 item 5) ----------
 add_executable(test_test_mode_gate_policy test_test_mode_gate_policy.cpp)
@@ -1264,6 +1331,18 @@ target_include_directories(test_roll_control_mode_policy PRIVATE
 )
 target_link_libraries(test_roll_control_mode_policy GTest::gtest_main)
 gtest_discover_tests(test_roll_control_mode_policy)
+
+# ---------- test_servo_pin_policy ----------
+# Pure header: servoPinsValid()'s rule. M1 spells its absent servo pins int -1,
+# and the old `!= 255U` comparison read that as four mapped servos.
+add_executable(test_servo_pin_policy test_servo_pin_policy.cpp)
+target_include_directories(test_servo_pin_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_servo_pin_policy GTest::gtest_main)
+gtest_discover_tests(test_servo_pin_policy)
 
 # ---------- test_sim_pad_align (#508) ----------
 # Header-only pure math (no ESP/Arduino deps), so there is no component .cpp to

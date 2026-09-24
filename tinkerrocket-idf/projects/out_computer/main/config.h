@@ -41,14 +41,24 @@
 #if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_M1) != 1
 #error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1 or -DTR_BOARD_M1=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, V9/V10 needs the sdkconfig overlay that enables its PSRAM log ring, and M1 (rocket-computer-mini) drives its radio over SPI where V8/V9 drive a UART daughterboard."
 #endif
+// TR_BOARD_REV_STR names the board in log lines. It sits next to the header it
+// describes, as in the flight computer's config.h, so the two cannot disagree.
+// V7 is a case of its own: a board flag with no branch here stops the build
+// instead of compiling V7's pins under V7's name (#1316).
 #if TR_BOARD_V8
 #include "board/board_v8.h"
+#define TR_BOARD_REV_STR "V8"
 #elif TR_BOARD_V9
 #include "board/board_v9.h"
+#define TR_BOARD_REV_STR "V9/V10"
 #elif TR_BOARD_M1
 #include "board/board_m1.h"
-#else
+#define TR_BOARD_REV_STR "M1 (rocket-computer-mini)"
+#elif TR_BOARD_V7
 #include "board/board_v7.h"
+#define TR_BOARD_REV_STR "V7"
+#else
+#error "This board flag selects no board header: add it to the chain in config.h."
 #endif
 
 // The one difference between the V8 and V9 maps, asserted rather than trusted.
@@ -182,13 +192,24 @@ struct config : board_pins
 
     // --- I2S (high-frequency telemetry RX from FlightComputer; pins in
     //     board header) ---
-    // I2S bandwidth = sample_rate * 4 bytes (16-bit stereo).
-    // Higher rate = faster DMA buffer turnover = less stale data.
-    // 44100 Hz = 176 KB/s.  Raised from 22050 with the FC's IMU 960 -> 1920 Hz
-    // logging step (the link was ~76% full at 22050).  RX DMA descriptors are
-    // sized in setup (dma_frame_num) to keep the callback cadence ~3 ms at
-    // this rate.  IMPORTANT: must match the FC — flash both together.
-    static constexpr uint32_t I2S_SAMPLE_RATE = 44100;  // Must match FC
+    // I2S bandwidth = sample_rate * 4 bytes (16-bit stereo).  The rate is the
+    // shared I2S_LINK_SAMPLE_RATE_HZ (RocketComputerTypes.h, 88200 = 352.8
+    // KB/s), which the FC's master clock reads too.  RX DMA descriptors are
+    // sized from it in setup (kI2sRxDmaFrameNum) to keep the callback cadence
+    // ~2.9 ms.  Update the OC before the FC: set for this rate, the slave
+    // still reads an older FC clocking at 44100; the reverse does not hold.
+    static constexpr uint32_t I2S_SAMPLE_RATE = I2S_LINK_SAMPLE_RATE_HZ;
+
+    // #1484: the mini's E220 rides the memory bus (board_m1.h wires LORA_SPI_*
+    // to SPI_*). A radio there must join the NAND's host (SPI2) as a second
+    // device. Starting SPI3 on the same pins re-routes the pads and leaves the
+    // NAND's host with no clock, which silently drops every write after the
+    // radio starts. V7's SPI radio has pins of its own and keeps SPI3.
+    static constexpr bool LORA_ON_MEMORY_BUS =
+        !USE_UART_RADIO_MODEM && LORA_SPI_SCK == SPI_SCK;
+    static_assert((LORA_SPI_SCK == SPI_SCK) == (LORA_SPI_MISO == SPI_MISO) &&
+                      (LORA_SPI_SCK == SPI_SCK) == (LORA_SPI_MOSI == SPI_MOSI),
+                  "the radio shares all three memory-bus pins or none of them (#1484)");
 
     // --- LoRa RF parameters (radio presence + pins in board header) ---
     static constexpr float LORA_FREQ_MHZ = 915.0f;

@@ -210,6 +210,7 @@ public:
 
     void end()
     {
+        if (held_) { spi_device_release_bus(held_); held_ = nullptr; }
         for (int i = 0; i < dev_count_; i++)
             spi_bus_remove_device(dev_cache_[i].handle);
         dev_count_ = 0;
@@ -217,7 +218,41 @@ public:
         if (bus_inited_) { spi_bus_free(host_); bus_inited_ = false; }
     }
 
+    /* #1484: another spi_master device shares this host (the mini's radio
+       joins the NAND's bus). Every caller frames its manual chip-select
+       window with beginTransaction()/endTransaction(), so on a shared bus
+       that pair holds the bus: the other device cannot clock while this
+       one's CS is low. Off by default, where the lock has no contender. */
+    void setSharedBus(bool shared) { shared_ = shared; }
+
     void beginTransaction(const SPISettings &s)
+    {
+        if (held_)
+        {
+            // A second begin without an end would wait on a bus this task
+            // already holds, and never return. Say so and let go instead.
+            ESP_LOGE("SPI", "beginTransaction without endTransaction — releasing the held bus (#1484)");
+            spi_device_release_bus(held_);
+            held_ = nullptr;
+        }
+        selectDevice(s);
+        if (shared_ && dev_)
+        {
+            spi_device_acquire_bus(dev_, portMAX_DELAY);
+            held_ = dev_;
+        }
+    }
+
+    void endTransaction()
+    {
+        /* The device stays cached either way. */
+        if (held_) { spi_device_release_bus(held_); held_ = nullptr; }
+    }
+
+private:
+    /* Point dev_ at a device configured for these settings, adding one to
+       the bus the first time a combination is seen. */
+    void selectDevice(const SPISettings &s)
     {
         /* Re-use the existing device handle when settings match */
         if (dev_ && s.clock == cur_.clock &&
@@ -257,8 +292,7 @@ public:
         dev_ = h;
     }
 
-    void endTransaction() { /* device stays cached */ }
-
+public:
     /* Single-byte transfer (full-duplex) — uses inline tx_data/rx_data (no DMA needed) */
     uint8_t transfer(uint8_t data)
     {
@@ -337,6 +371,8 @@ private:
     spi_host_device_t       host_;
     spi_device_handle_t     dev_       = nullptr;
     bool                    bus_inited_= false;
+    bool                    shared_    = false;    /* #1484 */
+    spi_device_handle_t     held_      = nullptr;  /* bus held since beginTransaction() */
     SPISettings             cur_;
     CachedDev               dev_cache_[MAX_CACHED_DEVS] = {};
     int                     dev_count_ = 0;

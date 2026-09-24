@@ -53,6 +53,7 @@
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
 #include "piezo_wave_policy.h"      // #732 item 3b: the square-wave table that cannot latch the coil on
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
+#include "servo_pin_policy.h"    // servoPinsValid(): an M1 int -1 pin is unmapped, not GPIO 0xFFFFFFFF
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
 #include <esp_private/gpio.h>      // gpio_func_sel
@@ -237,7 +238,6 @@ static int16_t pending_gyro_cal_x = 0, pending_gyro_cal_y = 0, pending_gyro_cal_
 static bool    pending_gyro_cal_apply = false;
 
 static ISM6HG256Data ism6hg256_data;
-static uint8_t ism6hg256_data_buffer[SIZE_OF_ISM6HG256_DATA];
 static BMP585Data bmp585_data;
 static uint8_t bmp585_data_buffer[SIZE_OF_BMP585_DATA];
 static MMC5983MAData mmc5983ma_data;
@@ -675,10 +675,29 @@ static uint16_t burnout_neg_count = 0;
 
 // --- Recovery deployment detection + dynamic logging rate ---
 // The user's logging-rate SETTING (BLE cmd 67, persisted in NVS "imu"/"rate").
-// IMU_RATE_DYNAMIC means "let the flight drive it"; anything else is a fixed
-// ODR.  Kept separate from the collector's live rate on purpose: in dynamic
-// mode the live rate changes mid-flight, and the setting must not.
+// IMU_RATE_DYNAMIC / IMU_RATE_DYNAMIC_8K mean "let the flight drive it";
+// anything else is a fixed ODR.  Kept separate from the collector's live rate
+// on purpose: in dynamic mode the live rate changes mid-flight, and the
+// setting must not.
 static uint16_t imu_rate_setting = IMU_RATE_DYNAMIC;
+
+// #1485: the board's limit must be a rate the chip can be set to, and the
+// default setting must fit under it, or a fresh board would refuse its own
+// default. The link rate is spelled out in config.h (it is included without
+// RocketComputerTypes.h); it must be the one the OC reads.
+static_assert(imuRateValid(config::IMU_RATE_MAX_HZ), "IMU_RATE_MAX_HZ must be an ODR step");
+static_assert(imuRateSettingValid(IMU_RATE_DYNAMIC, config::IMU_RATE_MAX_HZ),
+              "the default IMU logging rate must fit every board");
+static_assert(config::I2S_SAMPLE_RATE == I2S_LINK_SAMPLE_RATE_HZ,
+              "FC I2S link rate must be the shared I2S_LINK_SAMPLE_RATE_HZ");
+#if CONFIG_IDF_TARGET_ESP32P4
+// A P4 below rev 3 clocks I2S from its 40 MHz XTAL and needs MCLK under
+// XTAL/1.99. Past that, I2S init fails at boot and the FC stops in setup —
+// what the first 88200 image did on the V9 (#1485, 256x MCLK).
+static_assert((uint64_t)config::I2S_SAMPLE_RATE * TR_I2S_Stream::MASTER_MCLK_MULTIPLE * 199u
+                  < (uint64_t)TR_I2S_Stream::P4_XTAL_HZ * 100u,
+              "the I2S link rate is out of reach of the P4's XTAL-clocked I2S");
+#endif
 static tr::DeploymentState deployment_state;
 // Sticky per-flight latch mirroring deployment_state.detected, for the
 // telemetry bit and the rate step-down.  Cleared wherever burnout is cleared.
@@ -753,6 +772,15 @@ static uint32_t piezo_half_period_us = 0;
 // is not ours to write this transition".
 static inline void piezoApply(PiezoWavePolicy::PinAction a)
 {
+    // A negative PIEZO_PIN is a board with no piezo (the mini). Every write
+    // after setup comes through here, so this one guard keeps them all off a
+    // pin the GPIO driver would answer with an error log per call. It keys on
+    // the pin, not on piezo_pwm_ready: where there IS a coil, piezoStop()
+    // must still drive it low when the timer never initialised.
+    if (config::PIEZO_PIN < 0)
+    {
+        return;
+    }
     if (a == PiezoWavePolicy::PinAction::None)
     {
         return;
@@ -1035,12 +1063,15 @@ static void applyRollPidSepThreshold(float threshold)
     roll_rate_pid_standalone.setIntegralSeparationThreshold(threshold);
 }
 
+// Compared as int, not against 255U: M1 spells its absent servo pins int -1,
+// and -1 != 255U is true, which read the mini as having four servos
+// (servo_pin_policy.h).
 static bool servoPinsValid()
 {
-    return (config::SERVO_PIN_1 != 255U) &&
-           (config::SERVO_PIN_2 != 255U) &&
-           (config::SERVO_PIN_3 != 255U) &&
-           (config::SERVO_PIN_4 != 255U);
+    return ServoPinPolicy::allPinsMapped(config::SERVO_PIN_1,
+                                         config::SERVO_PIN_2,
+                                         config::SERVO_PIN_3,
+                                         config::SERVO_PIN_4);
 }
 
 // Read a config data frame from OutComputer's I2C slave TX buffer.
@@ -1662,6 +1693,7 @@ static inline void i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t
         switch (type)
         {
             case ISM6HG256_MSG: i2s_tx_ism6_ok++; break;
+            case ISM6_BATCH_MSG: i2s_tx_ism6_ok++; break;   // #1485: counts frames, not samples
             case BMP585_MSG: i2s_tx_bmp_ok++; break;
             case MMC5983MA_MSG: i2s_tx_mmc_ok++; break;
             case IIS2MDC_MSG: i2s_tx_iis2mdc_ok++; break;
@@ -1677,6 +1709,7 @@ static inline void i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t
         switch (type)
         {
             case ISM6HG256_MSG: i2s_tx_ism6_fail++; break;
+            case ISM6_BATCH_MSG: i2s_tx_ism6_fail++; break;
             case BMP585_MSG: i2s_tx_bmp_fail++; break;
             case MMC5983MA_MSG: i2s_tx_mmc_fail++; break;
             case IIS2MDC_MSG: i2s_tx_iis2mdc_fail++; break;
@@ -3395,6 +3428,16 @@ static void cameraStart(uint32_t now_ms)
     }
     else if (runtime_camera_type == CAM_TYPE_RUNCAM)
     {
+        // No RunCam UART on this board (negative pins; setup_fc never installed
+        // the driver). Refuse here, before anything is armed. Arming would walk
+        // the whole probe / power-cycle ladder, about 30 s, against a UART that
+        // never came up, report the camera engaged to the OC throughout, and
+        // end on a blind START_RECORDING that goes nowhere.
+        if ((config::RUNCAM_TX_PIN < 0) || (config::RUNCAM_RX_PIN < 0))
+        {
+            ESP_LOGW(TAG, "Camera START (RunCam) refused — this board has no RunCam UART");
+            return;
+        }
         // Attach the parked UART, power on, then poll for readiness from
         // serviceCameraStart so the flight task keeps feeding the watchdog
         // (#146).  The camera boots to IDLE and does NOT auto-record over
@@ -4202,7 +4245,7 @@ static void setup_fc()
     // FIRE 2/3 and move ARM, but keep all four CONT pins), so print the
     // numbers rather than just the revision — they can be checked against the
     // connector with a meter before anything is armed.
-    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V7/V8/V9=1; no default)",
+    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V7/V8/V9/M1=1; no default)",
              TR_BOARD_REV_STR);
     ESP_LOGW(TAG, "[BOARD] pyro: ARM=%d FIRE=%d/%d/%d/%d CONT=%d/%d/%d/%d",
              (int)config::PYRO_ARM_PIN,
@@ -4560,23 +4603,26 @@ static void setup_fc()
     if (prefs.isKey("rate"))
     {
         const uint16_t nvs_rate = prefs.getUShort("rate", config::ISM6HG256_UPDATE_RATE);
-        if (imuRateSettingValid(nvs_rate))
+        if (imuRateSettingValid(nvs_rate, config::IMU_RATE_MAX_HZ))
         {
             imu_rate_setting = nvs_rate;
         }
         else
         {
-            ESP_LOGW(TAG, "NVS IMU logging rate %u invalid — using default",
-                     (unsigned)nvs_rate);
+            ESP_LOGW(TAG, "NVS IMU logging rate %u invalid on this board (max %u Hz) "
+                          "— using default",
+                     (unsigned)nvs_rate, (unsigned)config::IMU_RATE_MAX_HZ);
         }
     }
     {
         const uint16_t boot_hz = imuRateResolve(imu_rate_setting, /*deployed=*/false);
         sensor_collector_hw.setIsm6Rate(boot_hz);
+        // #1485: FIFO capture where the board has been proven on it.
+        sensor_collector_hw.setIsm6FifoCapture(config::ISM6_FIFO_CAPTURE);
         if (imuRateIsDynamic(imu_rate_setting))
         {
             ESP_LOGI(TAG, "IMU logging rate: DYNAMIC (%u Hz to deployment, then %u Hz)",
-                     (unsigned)IMU_RATE_DYNAMIC_BOOST_HZ,
+                     (unsigned)imuRatePeakHz(imu_rate_setting),
                      (unsigned)IMU_RATE_DYNAMIC_POST_HZ);
         }
         else
@@ -4771,13 +4817,19 @@ static void setup_fc()
     }
     prefs.end();
 
-    // Always initialise piezo hardware so it's ready if enabled at runtime
-    gpio_set_direction((gpio_num_t)(config::PIEZO_PIN), GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)(config::PIEZO_PIN), 0);
-    piezo_pwm_ready = initPiezoTimer();
-    if (!piezo_pwm_ready)
+    // Initialise the piezo whatever the sounds setting, so it's ready if they
+    // are enabled at runtime. A negative PIEZO_PIN is a board with no piezo
+    // (the mini): no GPIO and no timer, and piezo_pwm_ready stays false so
+    // every beep returns early in piezoStart().
+    if (config::PIEZO_PIN >= 0)
     {
-        ESP_LOGE(TAG, "Piezo timer init failed; sounds disabled");
+        gpio_set_direction((gpio_num_t)(config::PIEZO_PIN), GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)(config::PIEZO_PIN), 0);
+        piezo_pwm_ready = initPiezoTimer();
+        if (!piezo_pwm_ready)
+        {
+            ESP_LOGE(TAG, "Piezo timer init failed; sounds disabled");
+        }
     }
 
     // Initialize sensor collector (including sensors) and start polling tasks
@@ -4986,7 +5038,13 @@ static void setup_fc()
     // prevent.  Camera type is a runtime property now.)
     cameraGateInit();
     goproShutterPark();
-    if (config::USE_RUNCAM)
+    // A negative RunCam pin is a board with no RunCam UART (the mini, which has
+    // no camera at all). No driver: runcam_uart_ready stays false, so
+    // runcamUartPark() never hands the GPIO driver a -1 (an error log per call,
+    // six per park) and every attach, probe and send returns early.
+    // cameraStart() refuses a RunCam start on the same pins.
+    if (config::USE_RUNCAM &&
+        (config::RUNCAM_TX_PIN >= 0) && (config::RUNCAM_RX_PIN >= 0))
     {
         initRunCam();
     }
@@ -5083,7 +5141,8 @@ static void setup_fc()
     else
     {
         servo_enabled = false;
-        ESP_LOGW(TAG, "Servo control disabled (set SERVO_PIN_* in config.h)");
+        ESP_LOGI(TAG, "Servo control disabled: no servo pins on this board "
+                      "(SERVO_PIN_* in its board header)");
     }
 
     // ── Inflight reboot recovery ────────────────────────────────────────────
@@ -6005,19 +6064,32 @@ static void loop_fc()
         // samples that arrived since the EKF last ran, which is what the -15 dB
         // figure in imu_drain_window.h describes.
         bool ism6_drained_this_pass = false;
+        // #1485: up to ISM6_BATCH_MAX samples per I2S frame, which the OC
+        // unpacks into per-sample records. One frame per sample cost 8 bytes of
+        // framing and a queue item, a CRC and a DMA write each. A partial batch
+        // goes out at the end of the pass, so no sample waits past one pass.
+        uint8_t ism6_batch[ism6BatchWireSize(ISM6_BATCH_MAX)];
+        uint8_t ism6_batch_n = 0;
         while (sensor_collector.getISM6HG256Data(ism6hg256_data))
         {
             dbg_ism6_reads++;
             fc_ism6_win.add(ism6hg256_data);
             ism6_drained_this_pass = true;
 
-            memcpy(ism6hg256_data_buffer,
+            memcpy(&ism6_batch[ism6BatchWireSize(ism6_batch_n)],
                    &ism6hg256_data,
                    SIZE_OF_ISM6HG256_DATA);
-
-            (void)enqueueI2STx(ISM6HG256_MSG,
-                               ism6hg256_data_buffer,
-                               SIZE_OF_ISM6HG256_DATA);
+            if (++ism6_batch_n == ISM6_BATCH_MAX)
+            {
+                ism6_batch[0] = ism6_batch_n;
+                (void)enqueueI2STx(ISM6_BATCH_MSG, ism6_batch, ism6BatchWireSize(ism6_batch_n));
+                ism6_batch_n = 0;
+            }
+        }
+        if (ism6_batch_n > 0)
+        {
+            ism6_batch[0] = ism6_batch_n;
+            (void)enqueueI2STx(ISM6_BATCH_MSG, ism6_batch, ism6BatchWireSize(ism6_batch_n));
         }
 
         if (ism6_drained_this_pass)
@@ -7407,15 +7479,28 @@ static void loop_fc()
             }
             else if (out_pending_command == SERVO_CTRL_ENABLE)
             {
-                if (!servo_enabled && servoPinsValid())
+                if (!servoPinsValid())
                 {
-                    servo_control.setSetpoint(config::ROLL_RATE_SET_POINT);
+                    // Same rule as setup_fc's else-branch: no servo pins, no
+                    // servo control. begin() never ran on this board, so
+                    // TR_ServoControl writes nothing, and a true servo_enabled
+                    // would run a control law that moves nothing while the
+                    // flight log records servo control as on. Not saved to NVS
+                    // either — boot forces the flag off here whatever NVS says.
+                    ESP_LOGW(TAG, "Servo control ENABLE ignored: no servo pins on this board");
                 }
-                servo_enabled = true;
-                prefs.begin("rocket", false);
-                prefs.putBool("servo_en", true);
-                prefs.end();
-                ESP_LOGI(TAG, "Servo control ENABLED (saved to NVS)");
+                else
+                {
+                    if (!servo_enabled)
+                    {
+                        servo_control.setSetpoint(config::ROLL_RATE_SET_POINT);
+                    }
+                    servo_enabled = true;
+                    prefs.begin("rocket", false);
+                    prefs.putBool("servo_en", true);
+                    prefs.end();
+                    ESP_LOGI(TAG, "Servo control ENABLED (saved to NVS)");
+                }
             }
             else if (out_pending_command == SERVO_CTRL_DISABLE)
             {
@@ -8481,7 +8566,7 @@ static void loop_fc()
                         // runs from the flight loop, not through here.
                         ESP_LOGW(TAG, "[CFG] IMU rate change ignored INFLIGHT");
                     }
-                    else if (imuRateSettingValid(rate_hz))
+                    else if (imuRateSettingValid(rate_hz, config::IMU_RATE_MAX_HZ))
                     {
                         imu_rate_setting = rate_hz;
                         applyImuRateForFlightPhase();
@@ -8492,7 +8577,7 @@ static void loop_fc()
                         {
                             ESP_LOGI(TAG, "[CFG] IMU logging rate: DYNAMIC "
                                           "(%u Hz to deployment, then %u Hz) (persisted)",
-                                     (unsigned)IMU_RATE_DYNAMIC_BOOST_HZ,
+                                     (unsigned)imuRatePeakHz(rate_hz),
                                      (unsigned)IMU_RATE_DYNAMIC_POST_HZ);
                         }
                         else
@@ -8503,9 +8588,11 @@ static void loop_fc()
                     }
                     else
                     {
-                        ESP_LOGW(TAG, "[CFG] IMU rate %u Hz rejected "
-                                      "(not dynamic/960/1920/3840)",
-                                 (unsigned)rate_hz);
+                        // A mode sentinel prints as its value (0/1), a rate
+                        // as Hz; either way it is not one this board flies.
+                        ESP_LOGW(TAG, "[CFG] IMU rate setting %u rejected "
+                                      "(not dynamic or an ODR step up to %u Hz)",
+                                 (unsigned)rate_hz, (unsigned)config::IMU_RATE_MAX_HZ);
                     }
                 }
                 else
@@ -11109,6 +11196,17 @@ static void loop_fc()
                           have_bmp_si ? (double)bmp_latest_si.pressure : 0.0,
                           have_ism6_si ? (double)ism6_latest_si.gyro_z : 0.0,
                           gpio_get_level((gpio_num_t)config::ISM6HG256_INT));
+            // #1485: FIFO capture health (cumulative). Overruns or counter gaps
+            // mean samples were lost; resyncs mean the sample clock re-anchored.
+            if (sensor_collector_hw.ism6FifoCapture())
+            {
+                SensorCollector::Ism6FifoStats fs = {};
+                sensor_collector_hw.getIsm6FifoStats(fs);
+                ESP_LOGI(TAG, "[IMU FIFO] bursts=%lu ovr=%lu incomplete=%lu gaps=%lu resync=%lu max_words=%lu period=%.2fus (cumulative)",
+                              (unsigned long)fs.bursts, (unsigned long)fs.overruns,
+                              (unsigned long)fs.incomplete_slots, (unsigned long)fs.counter_gaps,
+                              (unsigned long)fs.resyncs, (unsigned long)fs.max_words, (double)fs.period_us);
+            }
             dbg_ism6_reads = 0;
             dbg_ism6_passes = 0;
             dbg_ism6_win_max = 0;

@@ -51,7 +51,7 @@ flowchart LR
     BASE["<b>Base Station</b>"]
     APP["<b>iOS App</b>"]
 
-    FC -->|"I2S — telemetry, 22 kHz"| OC
+    FC -->|"I2S — telemetry, 88.2 kHz"| OC
     OC -->|"I2C — command poll, 1.2 MHz"| FC
     OC <-->|"LoRa 915 MHz, 2 Hz"| BASE
     OC <-->|"BLE GATT"| APP
@@ -62,10 +62,15 @@ Each link is shaped by a different constraint.
 
 ### FC ↔ OC — two links, on purpose
 
-**I2S carries telemetry from the FC to the OC** as a continuous byte stream at 22 kHz.
-It is one-directional and unacknowledged, because the FC must never block waiting for
+**I2S carries telemetry from the FC to the OC** as a continuous byte stream at 88.2 kHz
+(352.8 KB/s; the rate is `I2S_LINK_SAMPLE_RATE_HZ`, shared by both ends). It is
+one-directional and unacknowledged, because the FC must never block waiting for
 storage. Frames are self-delimiting: the receiver resynchronizes on the start-of-frame
-pattern and drops anything that fails CRC.
+pattern and drops anything that fails CRC. IMU samples travel ten to a frame
+(`ISM6_BATCH_MSG`, #1485); the OC unpacks them into one record per sample before it
+logs, so the flight log's format does not change. Update the OC before the FC: an OC
+set for 88.2 kHz still reads an older FC at 44.1 kHz, but an older OC cannot read the
+new rate or the batch frames.
 
 **I2C carries commands the other way** — and the FC is the master. The OC never
 initiates. It queues commands and answers when polled, with a combined

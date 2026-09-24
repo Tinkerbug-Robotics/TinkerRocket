@@ -89,8 +89,9 @@ public data class RocketProfile(
     // way the control surfaces point -- and servoControlEnabled defaults to
     // true, so a rocket flown on defaults IS roll-controlled.
     val imuOrientSetting: Int = 0xFF,      // IMU_ORIENT_AUTO (pad auto-detect)
-    // #1046: RocketComputerTypes.h IMU_RATE_DYNAMIC — the 3840 Hz-to-deployment
-    // then 960 Hz schedule the firmware and iOS both default to. This said a
+    // #1046: RocketComputerTypes.h IMU_RATE_DYNAMIC ("4k Dynamic") — the 3840
+    // Hz-to-deployment then 960 Hz schedule the firmware and iOS both default
+    // to (IMU_RATE_DYNAMIC_8K, 1, is "8k Dynamic"). This said a
     // fixed 1920 Hz, so a fresh Android profile pushed a rate no other side of
     // the six-way lockstep would have chosen, and the decode fallback below
     // turned a missing/off-whitelist stored value into 1920 as well.
@@ -119,7 +120,7 @@ public data class RocketProfile(
     val pidKd: Float = 0.0f,
     val pidMinCmd: Float = -20.0f,
     val pidMaxCmd: Float = 20.0f,
-    val integralSepThreshold: Float = 40f,
+    val integralSepThreshold: Float = 200f,
 
     // Roll profile
     val rollWaypoints: List<ProfileRollWaypoint> = emptyList(),
@@ -166,8 +167,32 @@ public data class RocketProfile(
         /** `IMU_ORIENT_AUTO` (RocketComputerTypes.h): pad auto-detect. */
         public const val IMU_ORIENT_AUTO: Int = 0xFF
 
-        /** Whitelisted ISM6HG256 log rates; 0 = the dynamic 4k→1k schedule. */
-        public val IMU_RATES_HZ: List<Int> = listOf(0, 960, 1920, 3840)
+        /** `IMU_RATE_DYNAMIC` (RocketComputerTypes.h): "4k Dynamic", 3840 Hz
+         *  to deployment then 960. */
+        public const val IMU_RATE_DYNAMIC: Int = 0
+
+        /** `IMU_RATE_DYNAMIC_8K` (#1485): "8k Dynamic", 7680 Hz to deployment
+         *  then 960. */
+        public const val IMU_RATE_DYNAMIC_8K: Int = 1
+
+        /** What a rocket flies when it doesn't say (no `irmax`): every board
+         *  before the 8k rates topped out here. */
+        public const val IMU_RATE_BASELINE_MAX_HZ: Int = 3840
+
+        /** Every logging-rate setting: the two dynamic modes, then the
+         *  whitelisted ISM6HG256 ODR steps. */
+        public val IMU_RATES_HZ: List<Int> =
+            listOf(IMU_RATE_DYNAMIC, IMU_RATE_DYNAMIC_8K, 960, 1920, 3840, 7680)
+
+        /** The fastest rate a setting ever runs (a dynamic mode's boost
+         *  rate) — what a rocket's `irmax` has to cover. 0 for a value that
+         *  is not a setting. `imuRatePeakHz()` in RocketComputerTypes.h. */
+        public fun imuRatePeakHz(setting: Int): Int = when (setting) {
+            IMU_RATE_DYNAMIC -> 3840
+            IMU_RATE_DYNAMIC_8K -> 7680
+            in IMU_RATES_HZ -> setting
+            else -> 0
+        }
 
         public fun standardFinTravelDeg(minUs: Int, maxUs: Int): Float =
             (maxUs - minUs) * STANDARD_FIN_DEG_PER_US

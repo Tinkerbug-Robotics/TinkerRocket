@@ -1474,6 +1474,12 @@ static void stageImuOrientConfig()
 // IMU_RATE_DYNAMIC (the default) is a MODE, not a rate — the OC only relays
 // it; the step-down at deployment is entirely the FC's business.
 static uint16_t cfg_imu_rate = IMU_RATE_DYNAMIC;
+// #1485: the board's limit, reported to the apps as "irmax" so they offer the
+// 8k rates only where the FC can fly them. The FC derives the same number for
+// the same board (test_imu_rate_board_parity).
+static_assert(imuRateValid(config::IMU_RATE_MAX_HZ), "IMU_RATE_MAX_HZ must be an ODR step");
+static_assert(imuRateSettingValid(IMU_RATE_DYNAMIC, config::IMU_RATE_MAX_HZ),
+              "the default IMU logging rate must fit every board");
 
 static void stageImuRateConfig()
 {
@@ -2781,6 +2787,8 @@ static uint32_t i2s_dma_reads = 0;
 static uint64_t i2s_dma_bytes = 0;
 static uint32_t msg_count_query = 0;
 static uint32_t msg_count_ism6 = 0;
+static uint32_t ism6_batches = 0;      // #1485: ISM6_BATCH_MSG frames unpacked
+static uint32_t ism6_batch_bad = 0;    // #1485: batches with a bad count or length (dropped)
 static uint32_t msg_count_bmp = 0;
 static uint32_t msg_count_mmc = 0;
 static uint32_t msg_count_iis2mdc = 0;
@@ -3616,7 +3624,11 @@ static void ocOtaRelayClearPendingFlip();                                    // 
 // Boot and every recovery path must build the RX channel identically — see
 // the note in ocBeginSlaveRxLocked().
 static constexpr uint32_t kI2sRxDmaDescNum  = 4;
-static constexpr uint32_t kI2sRxDmaFrameNum = 128;   // 512 B ≈ 2.9 ms @ 44100
+// ~2.9 ms of link per descriptor, the callback cadence the parser was tuned
+// against (#104): 128 frames at 44100, 256 at 88200 (#1485). 4 B a frame.
+static constexpr uint32_t kI2sRxDmaFrameNum =
+    (uint32_t)(((uint64_t)config::I2S_SAMPLE_RATE * 29u + 5000u) / 10000u);
+static_assert(kI2sRxDmaFrameNum * 4u <= 4092u, "one I2S DMA descriptor holds at most 4092 B");
 
 // #834 items 6/7: (re)establish slave RX. Caller holds oc_i2s_mutex. Records
 // oc_i2s_rx_broken so loop_oc can keep retrying — losing the RX channel means
@@ -3624,12 +3636,12 @@ static constexpr uint32_t kI2sRxDmaFrameNum = 128;   // 512 B ≈ 2.9 ms @ 44100
 // downlinks, so it can never be left as a terminal state.
 static esp_err_t ocBeginSlaveRxLocked(const char* why)
 {
-    // dma_desc_num/dma_frame_num MUST match the boot init: 128 frames (512 B)
-    // spans ~2.9 ms at the 44100 link rate, which is the callback cadence the
-    // parser was tuned against (#104). The old revert path passed 64 — a
-    // leftover from the retired 22050 rate — which doubled the RX ISR cadence
-    // for the rest of the power cycle. Recovery must restore the link the
-    // parser expects, not a different one.
+    // dma_desc_num/dma_frame_num MUST match the boot init: kI2sRxDmaFrameNum
+    // spans ~2.9 ms of link, which is the callback cadence the parser was
+    // tuned against (#104). An old revert path passed 64 — a leftover from the
+    // retired 22050 rate — which doubled the RX ISR cadence for the rest of
+    // the power cycle. Recovery must restore the link the parser expects, not
+    // a different one.
     esp_err_t e = i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
                                           config::I2S_WS_PIN,
                                           config::I2S_DIN_PIN,
@@ -4041,6 +4053,7 @@ static bool isKnownMessageType(uint8_t type)
         case OUT_STATUS_QUERY:
         case GNSS_MSG:
         case ISM6HG256_MSG:
+        case ISM6_BATCH_MSG:   // #1485: unpacked into ISM6HG256_MSG frames in processFrame
         case BMP585_MSG:
         case MMC5983MA_MSG:
         case IIS2MDC_MSG:
@@ -4149,6 +4162,38 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     // Reject unknown message types (CRC false positives from I2S noise)
     if (!isKnownMessageType(type))
         return;
+
+    // #1485: an IMU batch. Unpack it into ordinary ISM6HG256_MSG frames and
+    // run each one through this function, so the dedup, the logger and the
+    // latest-sample cache see exactly what a per-sample frame gave them: the
+    // flight log and every .bin decoder keep one 0xA2 record per sample. The
+    // batch frame itself never reaches the log. Depth is one: the frames it
+    // makes are ISM6HG256_MSG.
+    if (type == ISM6_BATCH_MSG)
+    {
+        const uint8_t count = (payload_len > 0) ? payload[0] : 0;
+        if (count == 0 || count > ISM6_BATCH_MAX || payload_len != ism6BatchWireSize(count))
+        {
+            ism6_batch_bad++;
+            return;
+        }
+        ism6_batches++;
+        for (uint8_t i = 0; i < count; ++i)
+        {
+            uint8_t sample_frame[MAX_FRAME];
+            size_t sample_len = 0;
+            if (!TR_I2C_Interface::packMessage(ISM6HG256_MSG, payload + ism6BatchWireSize(i),
+                                               sizeof(ISM6HG256Data), sample_frame,
+                                               sizeof(sample_frame), sample_len))
+            {
+                ism6_batch_bad++;
+                continue;
+            }
+            processFrame(sample_frame, sample_len, ISM6HG256_MSG,
+                         sample_frame + 6, sizeof(ISM6HG256Data));
+        }
+        return;
+    }
 
     // FC firmware-version push (#8 Phase 4): a version *string*, not timestamped
     // telemetry, so handle it before the time_us-based dedup below (which would
@@ -6255,6 +6300,9 @@ static void sendCurrentConfig()
     // from) and treat this key as unverified.
     j += ",\"camt\":"; j += itos(cameraReadback().type);
     j += ",\"irate\":"; j += itos(cfg_imu_rate);
+    // #1485: the fastest IMU rate this board flies. Absent from older
+    // firmware, which the apps read as 3840 (nothing older could do more).
+    j += ",\"irmax\":"; j += itos(config::IMU_RATE_MAX_HZ);
     // LoRa settings
     j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
     j += ",\"lsf\":"; j += itos(lora_sf);
@@ -7956,6 +8004,23 @@ static void printStats()
     const float hz_end_flight = (float)d_end_flight * hz_scale;
     const float hz_unknown = (float)d_unknown * hz_scale;
     const float hz_logonly = (float)d_logonly * hz_scale;   // #569
+    // #1485: IMU batches, and the samples they unpacked into. Not behind
+    // VERBOSE_DEBUG: it is the one line that says the batch path is alive,
+    // and it prints only while batches arrive.
+    {
+        static uint32_t prev_batches = 0;
+        static uint32_t prev_batch_bad = 0;
+        const uint32_t d_batches = ism6_batches - prev_batches;
+        const uint32_t d_batch_bad = ism6_batch_bad - prev_batch_bad;
+        prev_batches = ism6_batches;
+        prev_batch_bad = ism6_batch_bad;
+        if (d_batches > 0U || d_batch_bad > 0U)
+        {
+            ESP_LOGI("OC", "[I2S] imu batches %.0f/s -> samples %.0f/s, bad %lu",
+                     (double)((float)d_batches * hz_scale), (double)hz_ism6,
+                     (unsigned long)d_batch_bad);
+        }
+    }
     prev_msg_count_query = msg_count_query;
     prev_msg_count_ism6 = msg_count_ism6;
     prev_msg_count_bmp = msg_count_bmp;
@@ -8494,13 +8559,15 @@ static void loadCachedPeripheralConfigFromNvs()
         const uint16_t nvs_rate = prefs.getUShort("hz", cfg_imu_rate);
         // Whitelist on read: a corrupted value must not be relayed to the
         // FC or echoed to the app as if it were a real setting.
-        if (imuRateSettingValid(nvs_rate)) cfg_imu_rate = nvs_rate;
-        else ESP_LOGW("CFG", "NVS IMU logging rate %u invalid — keeping default",
-                      (unsigned)nvs_rate);
+        if (imuRateSettingValid(nvs_rate, config::IMU_RATE_MAX_HZ)) cfg_imu_rate = nvs_rate;
+        else ESP_LOGW("CFG", "NVS IMU logging rate %u invalid on this board (max %u Hz) "
+                             "— keeping default",
+                      (unsigned)nvs_rate, (unsigned)config::IMU_RATE_MAX_HZ);
     }
     prefs.end();
     if (imuRateIsDynamic(cfg_imu_rate))
-        ESP_LOGI("CFG", "NVS IMU logging rate: DYNAMIC");
+        ESP_LOGI("CFG", "NVS IMU logging rate: DYNAMIC (%u Hz boost)",
+                 (unsigned)imuRatePeakHz(cfg_imu_rate));
     else
         ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
 
@@ -8551,6 +8618,22 @@ static void loadCachedPeripheralConfigFromNvs()
              cfg_pyro_enabled[3], cfg_pyro_trigger_mode[3], (double)cfg_pyro_trigger_value[3]);
 }
 
+// The memory bus (SPI2): the NAND's, and on the mini the radio's too (#1484).
+// Begun once, whichever user needs it first, so it always exists with the
+// NAND's 4 KB transfer size before a radio joins it; compat's SPIClass::begin()
+// only logs an already-initialised error on a second call. When the radio
+// shares it, the logger's transactions hold the bus across their manual
+// chip-select windows, and the radio's HAL already does the same for its own.
+static void beginMemoryBus()
+{
+    static bool begun = false;
+    if (begun) return;
+    SPI.setSharedBus(config::LORA_ON_MEMORY_BUS);
+    SPI.begin(config::SPI_SCK, config::SPI_MISO, config::SPI_MOSI);
+    delay(20);
+    begun = true;
+}
+
 // #1228: the logging half of initPeripherals(), on its own so it can be
 // retried without re-running the radio and link half.
 //
@@ -8571,16 +8654,7 @@ static void loadCachedPeripheralConfigFromNvs()
 // logger.begin() succeeded; oc_logger_ok mirrors it.
 static bool initLoggingSubsystem()
 {
-    // The bus is the logger's alone on this board (the V7 SPI LoRa has its own
-    // host), so it belongs here — begun once: compat's SPIClass::begin() just
-    // logs an already-initialised error on a second call.
-    static bool spi_bus_begun = false;
-    if (!spi_bus_begun)
-    {
-        SPI.begin(config::SPI_SCK, config::SPI_MISO, config::SPI_MOSI);
-        delay(20);
-        spi_bus_begun = true;
-    }
+    beginMemoryBus();
 
     TR_LogToFlashConfig log_cfg = {};
     log_cfg.nand_cs = config::NAND_CS;
@@ -8739,15 +8813,17 @@ static bool initLoggingSubsystem()
             if (config::RING_IN_PSRAM && psram_mb == 0)
             {
                 ESP_LOGE("PWR", "BOARD FLAG SAYS PSRAM, SILICON SAYS NONE — this is "
-                                "not a V9/V10 board, or it was built -DTR_BOARD_V9=1 "
-                                "by mistake. Ring falls back to internal RAM.");
+                                "not %s hardware, or it was built with the wrong "
+                                "-DTR_BOARD_* flag. Ring falls back to internal RAM.",
+                         TR_BOARD_REV_STR);
             }
             else if (!config::RING_IN_PSRAM && psram_mb > 0)
             {
                 ESP_LOGW("PWR", "This chip has %d MB of in-package PSRAM that the "
                                 "selected board map does not use. Expected on a V7/V8 "
-                                "board (MRAM is fitted); if this IS a V9/V10 board, it "
-                                "was built with the wrong -DTR_BOARD_* flag.", psram_mb);
+                                "board (MRAM is fitted); if this IS a V9/V10 board or "
+                                "the mini (M1), it was built with the wrong "
+                                "-DTR_BOARD_* flag.", psram_mb);
             }
         }
 
@@ -8763,8 +8839,8 @@ static bool initLoggingSubsystem()
             ESP_LOGW("PWR", "  In-flight reboot recovery (#104): RAM cache + NAND");
             ESP_LOGW("PWR", "  tail-scan (#846) — no longer MRAM-dependent.");
             ESP_LOGW("PWR", "  Dirty-ring replay (#274): UNAVAILABLE.");
-            ESP_LOGW("PWR", "  Expected on V9/V10. On a V8 board this means the");
-            ESP_LOGW("PWR", "  image was built with the wrong -DTR_BOARD_* flag.");
+            ESP_LOGW("PWR", "  Expected on V9/V10 and the mini (M1). On a V8 board this");
+            ESP_LOGW("PWR", "  means the image was built with the wrong -DTR_BOARD_* flag.");
             ESP_LOGW("PWR", "========================================");
             // #822: PSRAM is the ring's intended home on V9/V10. Landing on
             // internal RAM instead means either CONFIG_SPIRAM is off or the part
@@ -9371,7 +9447,12 @@ void initPeripherals()
             lora_cfg.spi_sck = config::LORA_SPI_SCK;
             lora_cfg.spi_miso = config::LORA_SPI_MISO;
             lora_cfg.spi_mosi = config::LORA_SPI_MOSI;
-            lora_cfg.spi_host = SPI3_HOST;  // SPI2 used by NAND/MRAM
+            // #1484: a radio on the memory bus's pins joins that bus as a
+            // second device (EspHal::spiBegin() treats an already-initialised
+            // host as shared). A second host on the same pins would re-route
+            // the pads and cut the NAND off. V7's radio has pins of its own.
+            if (config::LORA_ON_MEMORY_BUS) beginMemoryBus();
+            lora_cfg.spi_host = config::LORA_ON_MEMORY_BUS ? SPI2_HOST : SPI3_HOST;
             lora_cfg.freq_mhz = lora_freq_mhz;
             lora_cfg.spreading_factor = lora_sf;
             lora_cfg.bandwidth_khz = lora_bw_khz;
@@ -9407,12 +9488,12 @@ void initPeripherals()
         oc_ota_tx_queue = xQueueCreate(16, sizeof(OcOtaTxFrame));
 
     // I2S telemetry stream from FlightComputer (DMA-based slave RX)
-    // Small DMA buffers (4 × 512 bytes = 2 KB) minimize latency.
+    // Small DMA buffers (4 descriptors of ~2.9 ms each) minimize latency.
     // FRAME_SYNC interrupt gating prevents stale replay regardless of
     // buffer count, but smaller buffers reduce read-to-parse latency.
-    // dma_frame_num doubled 64 -> 128 alongside the 22050 -> 44100 link rate
-    // so each descriptor still spans ~2.9 ms (512 B at 176 KB/s) — the same
-    // callback cadence the parser was tuned against at the old rate.
+    // dma_frame_num tracks the link rate (64 at 22050, 128 at 44100, 256 at
+    // 88200) so each descriptor still spans ~2.9 ms — the same callback
+    // cadence the parser was tuned against at the old rate.
     // #834 items 6/7 (review): go through the SAME helper the recovery paths use
     // so a boot failure sets oc_i2s_rx_broken and loop_oc's 1 Hz retry picks it
     // up. Open-coding begin+register here left the most consequential failure of
@@ -9444,7 +9525,9 @@ void initPeripherals()
         // misleading "round-robin" comment — the actual scheduling left
         // parser starved during high-throughput INFLIGHT, causing
         // rx_ring to fill until drop_oldest evicted bytes (#104).
-        xTaskCreatePinnedToCore(i2sParserTask, "I2S Parse", 4096,
+        // 6 KB (was 4 KB): processFrame unpacks an ISM6_BATCH_MSG by calling
+        // itself once per record with a MAX_FRAME buffer on the stack (#1485).
+        xTaskCreatePinnedToCore(i2sParserTask, "I2S Parse", 6144,
                                 nullptr, 6, &i2s_rx_task_handle, 1);
 
         // OTA image-pump feeder (Phase 4 Layer 3). Sole I2S writer during an FC
@@ -9530,7 +9613,10 @@ static void setup_oc()
     // single-processor arm the rework removed. Until that exists the mini
     // cannot fire a channel, which is the correct default and is what the M1
     // bench section of #1211 already assumes.
-    if (config::ARM_CONSENT_PIN >= 0)
+    //
+    // if constexpr, not if: every other board sets the pin to -1, and GCC
+    // warns about the 1ULL << -1 below even in a branch that can never run.
+    if constexpr (config::ARM_CONSENT_PIN >= 0)
     {
         gpio_set_level((gpio_num_t)config::ARM_CONSENT_PIN, 0);   // stage 0 first
         gpio_config_t arm_cfg = {};
@@ -9777,10 +9863,12 @@ static void setup_oc()
     pwr_pin_on = boot_rail_restored || boot_token_restore;
 
     ESP_LOGI("OC", "Starting OutComputer (low-power mode)...");
-    // V9 selects the same map as V8 on this MCU (see config.h) — reported
-    // separately so the boot log says which board the image was built for.
-    ESP_LOGW("OC", "[BOARD] pin map: %s",
-             TR_BOARD_V9 ? "V9/V10 (same pins as V8)" : (TR_BOARD_V8 ? "V8" : "V7"));
+    // TR_BOARD_REV_STR comes from the chain in config.h that picks the board
+    // header, so this names the board the pins came from (#1316). V9 keeps
+    // V8's pins on this MCU (see config.h) but is named separately, so the
+    // boot log says which board the image was built for.
+    ESP_LOGW("OC", "[BOARD] pin map: %s%s", TR_BOARD_REV_STR,
+             TR_BOARD_V9 ? " (same pins as V8)" : "");
 
     // OTA boot-state check (#8). If this image was just OTA-installed it
     // boots PENDING_VERIFY; we hold off the "valid" mark until we've seen
@@ -12238,17 +12326,18 @@ static void loop_oc()
         }
         else if (ble_cmd == 67)
         {
-            // IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0) or a
-            // whitelisted ISM6HG256 ODR (960/1920/3840).  Relayed to the FC,
+            // IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0, "4k
+            // Dynamic"), IMU_RATE_DYNAMIC_8K (1) or a whitelisted ISM6HG256
+            // ODR, up to this board's IMU_RATE_MAX_HZ.  Relayed to the FC,
             // which applies the ODR live (except INFLIGHT) and persists it in
-            // FC NVS.
+            // FC NVS.  The FC checks the same limit for the same board.
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 2)
             {
                 uint16_t rate_hz;
                 memcpy(&rate_hz, payload, sizeof(rate_hz));
-                if (imuRateSettingValid(rate_hz))
+                if (imuRateSettingValid(rate_hz, config::IMU_RATE_MAX_HZ))
                 {
                     cfg_imu_rate = rate_hz;
                     stageImuRateConfig();
@@ -12258,7 +12347,8 @@ static void loop_oc()
                     p2.end();
                     if (imuRateIsDynamic(rate_hz))
                     {
-                        ESP_LOGI("BLE", "IMU logging rate: DYNAMIC -> FlightComputer");
+                        ESP_LOGI("BLE", "IMU logging rate: DYNAMIC (%u Hz boost) -> FlightComputer",
+                                 (unsigned)imuRatePeakHz(rate_hz));
                     }
                     else
                     {
@@ -12268,9 +12358,9 @@ static void loop_oc()
                 }
                 else
                 {
-                    ESP_LOGW("BLE", "IMU logging rate %u Hz rejected "
-                                    "(not dynamic/960/1920/3840)",
-                             (unsigned)rate_hz);
+                    ESP_LOGW("BLE", "IMU logging rate setting %u rejected "
+                                    "(not dynamic or an ODR step up to %u Hz)",
+                             (unsigned)rate_hz, (unsigned)config::IMU_RATE_MAX_HZ);
                 }
             }
         }

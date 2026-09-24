@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-96 codes. The dispatch on both ends is a flat first-match chain, so
+97 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -122,10 +122,11 @@ this list is CI-enforced for uniqueness.
 | `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 194-byte ConfigReportData, everything the app's config |
 | `0x90` | `GNSS_SAT_MSG` | FC → OC | FC→OC over I2S: GNSSSatData, per-satellite C/N0 at every GNSS |
 | `0x91` | `RECOVERY_END_PENDING` | OC → FC |  |
+| `0x93` | `ISM6_BATCH_MSG` | FC → OC | FC→OC over I2S: a count byte, then that many ISM6HG256Data records |
 | `0xFC` | `BS_LORA_RX_MSG` | FC → OC | BS→self: BsLoRaRxHeader + the raw LoRa frame, one per received packet |
 | `0xFD` | `BS_EVENT_MSG` | FC → OC | BS→self: BsEventHeader + UTF-8 text, one per hop/session event |
 
-> 54 of these 96 codes carry no comment in the header,
+> 54 of these 97 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -259,7 +260,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 64 |  | IMU mounting orientation: [setting:1] — IMU_ORIENT_AUTO or a TR_Orientation code (0..23, manual incl. roll… |
 | 65 |  | Full guidance config (GuidanceConfigData): relay the whole struct to the FC |
 | 66 |  | Full fin layout (FinConfigData): relay the whole struct to the FC |
-| 67 |  | IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0) or a whitelisted ISM6HG256 ODR (960/1920/3840).… |
+| 67 |  | IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0, "4k Dynamic"), IMU_RATE_DYNAMIC_8K (1) or a… |
 | 68 | `LORA_CMD_SET_TX_DISABLED` | "LoRa off": [disabled:1] — 1 mutes every LoRa transmit, 0 resumes. Same constant (and therefore the same… |
 | 69 |  | #1176 step 6 — the operator's manual end of a restored flight. BLE ONLY, by decision: this number is… |
 | 73 |  | #1271 — the operator acknowledges the blind-window loss(es). BLE ONLY, and deliberately absent from… |

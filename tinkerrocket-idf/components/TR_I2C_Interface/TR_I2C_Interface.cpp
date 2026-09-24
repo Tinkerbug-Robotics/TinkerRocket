@@ -1,5 +1,6 @@
 #include <TR_I2C_Interface.h>
 #include <CRC.h>
+#include "crc16_fast.h"   // #1485: the same CRC, table-driven
 #include <cstring>
 #include <esp_log.h>
 #include <esp_idf_version.h>
@@ -668,8 +669,7 @@ bool TR_I2C_Interface::packMessage(uint8_t type,
         idx += len;
     }
 
-    const uint16_t crc = calcCRC16(frame_out + 4,
-                                   static_cast<int>(1 + 1 + len));
+    const uint16_t crc = crc16Frame(frame_out + 4, (size_t)(1 + 1 + len));
 
     frame_out[idx++] = static_cast<uint8_t>((crc >> 8) & 0xFF);
     frame_out[idx++] = static_cast<uint8_t>(crc & 0xFF);
@@ -730,8 +730,7 @@ bool TR_I2C_Interface::unpackMessage(const uint8_t *frame,
     {
         const uint16_t crc_expected = static_cast<uint16_t>((frame[expected_len - 2] << 8) |
                                                              frame[expected_len - 1]);
-        const uint16_t crc_actual = calcCRC16(frame + 4,
-                                              static_cast<int>(1 + 1 + payload_len));
+        const uint16_t crc_actual = crc16Frame(frame + 4, (size_t)(1 + 1 + payload_len));
         if (crc_actual != crc_expected)
         {
             return false;

@@ -551,6 +551,76 @@ TEST_F(ServoControlTest, ATimingSetBeforeBeginIsAppliedByBegin) {
     for (int t = 0; t < 4; ++t) EXPECT_EQ(hostLedcLog().freq_hz[t], 333u);
 }
 
+// ── Before begin(): no LEDC at all ──
+//
+// On a board with no servo pins (the mini) setup_fc never calls begin(), so
+// the LEDC driver is never set up there and every ledc_* call fails with an
+// error log.  The servo test, replay and stow commands reach the drive paths
+// without asking about pins, so the component itself has to hold back.
+
+TEST_F(ServoControlTest, NoDrivePathTouchesTheLedcBeforeBegin) {
+    TR_ServoControl fresh{1, 2, 3, 4, 0, 0, 0, 0, 50, 1000, 2000,
+                          KP, KI, KD, MIN_CMD, MAX_CMD};
+    hostLedcLogReset();
+
+    const float angles[4] = {10.0f, -10.0f, 5.0f, -5.0f};
+    fresh.setServoAngles(angles);                  // SERVO_TEST
+    fresh.beginNeutralSettle(0);                   // SERVO_TEST_STOP
+    fresh.serviceNeutralSettle(1000);
+    tick();
+    fresh.controlWithGainSchedule(-20.0f, 50.0f);  // SERVO_REPLAY
+    tick();
+    fresh.control(-20.0f);
+    tick();
+    fresh.controlAngle(10.0f, 0.0f, 0.0f, 50.0f, 4.0f, 360.0f);
+    fresh.stowControl();                           // SERVO_CTRL_DISABLE, replay stop
+    fresh.beginWiggle(0);                          // boot self-test
+    for (uint32_t t = 0; t <= 5000; t += 350) fresh.serviceWiggle(t);
+    ASSERT_FALSE(fresh.isIdle());
+    fresh.idle();                                  // pad relax
+
+    EXPECT_EQ(hostLedcLog().set_duty_calls, 0) << "a duty was written with no LEDC set up";
+    EXPECT_EQ(hostLedcLog().timer_config_calls, 0);
+    EXPECT_EQ(hostLedcLog().set_freq_calls, 0);
+
+    // The gate is begin() and nothing else: the same command writes after it.
+    fresh.begin();
+    hostLedcLogReset();
+    fresh.setServoAngles(angles);
+    EXPECT_EQ(hostLedcLog().set_duty_calls, 4);
+}
+
+TEST_F(ServoControlTest, TheCommandIsStillTrackedBeforeBegin) {
+    // Only the hardware write waits for begin().  The sim never calls begin()
+    // and reads roll_cmd_us, which the rate loop takes from the tracked pulse.
+    TR_ServoControl fresh{1, 2, 3, 4, 0, 0, 0, 0, 50, 1000, 2000,
+                          KP, KI, KD, MIN_CMD, MAX_CMD};
+    fresh.control(0.0f);       // TR_PID's first call returns 0 (dt bootstrap)
+    tick();
+    fresh.control(-20.0f);     // P-only: cmd = +20 deg
+    ASSERT_NEAR(fresh.getRollCmdDeg(), 20.0f, 1e-4f);
+
+    for (int i = 0; i < 4; ++i) EXPECT_EQ(fresh.getServoPulseUs(i), expectedPulseUs(20.0f));
+    EXPECT_EQ(fresh.getRollCmdUs(), expectedPulseUs(20.0f));
+}
+
+TEST_F(ServoControlTest, ACommandBeforeBeginLeavesNothingToReexpress) {
+    // begin() leaves every channel at duty 0.  A command issued before it was
+    // never written, so a later frame-rate change must not re-express it --
+    // that would energise a servo that is relaxed.
+    TR_ServoControl fresh{1, 2, 3, 4, 0, 0, 0, 0, 50, 1000, 2000,
+                          KP, KI, KD, MIN_CMD, MAX_CMD};
+    const float angles[4] = {10.0f, 10.0f, 10.0f, 10.0f};
+    fresh.setServoAngles(angles);
+    fresh.begin();
+    hostLedcLogReset();
+
+    ASSERT_TRUE(fresh.setServoTiming(333, 1000, 2000));
+
+    EXPECT_EQ(hostLedcLog().set_freq_calls, 4);
+    EXPECT_EQ(hostLedcLog().set_duty_calls, 0) << "a relaxed servo was re-energised";
+}
+
 TEST_F(ServoControlTest, GainScheduleDoesNotLeakIntoTheRateNullFallback) {
     // #1141 item 4. applyGainSchedule() mutates the live PID gains in place and
     // nothing on the unscheduled path put them back, so on the
@@ -588,4 +658,89 @@ TEST_F(ServoControlTest, ResetPidAlsoRestoresBaseGains) {
     tick();
     servo.control(10.0f);
     EXPECT_NEAR(std::fabs(servo.getRollCmdDeg()), 10.0f, 0.5f);
+}
+
+// ---------- The scheduled I term through coast ----------
+//
+// The V² schedule multiplies Ki by up to GAIN_SCHEDULE_SCALE_CAP as the rocket
+// slows.  TR_PID's I term used to be Ki times the error integral, so a fin
+// trim the loop had learned grew with the schedule and was unwound all through
+// coast — a standing roll error of ~10 dps (F67) to ~26 dps (G80) on the 67 mm
+// testbed.  The I term is now held in fin degrees and only its RATE follows
+// the schedule; nothing resets it when the scale moves.
+
+namespace {
+// I-only roll loop (Kp = Kd = 0), so the roll command IS the I term.
+TR_ServoControl makeIOnlyServo(float ki) {
+    return TR_ServoControl(1, 2, 3, 4, 0, 0, 0, 0, 50, 1000, 2000,
+                           0.0f, ki, 0.0f, -20.0f, 20.0f);
+}
+}  // namespace
+
+TEST_F(ServoControlTest, ScheduledITermHoldsItsTrimAsTheRocketSlows) {
+    TR_ServoControl s = makeIOnlyServo(0.06f);
+    s.begin();
+    s.enableGainSchedule(/*v_ref=*/50.0f, /*v_min=*/25.0f);
+    tick();
+    s.controlWithGainSchedule(0.0f, 60.0f);           // dt bootstrap
+
+    // Learn a 3.6 deg trim at 60 m/s: scale (50/60)^2, so each 2 ms tick of a
+    // 60 dps error adds 0.06 * 0.694 * 60 * 0.002 = 0.005 deg.
+    for (int i = 0; i < 720; ++i) {
+        tick();
+        s.controlWithGainSchedule(-60.0f, 60.0f);
+    }
+    const float trim = s.getRollCmdDeg();
+    ASSERT_NEAR(trim, 3.6f, 1e-3f);
+
+    // Coast from 60 to 25 m/s with the rate nulled: the scale climbs to its
+    // 3x cap, and the trim must stay put — it was 4.3x larger (15.6 deg) when
+    // the I term was Ki * sum(e*dt).
+    for (int i = 0; i <= 2000; ++i) {
+        tick();
+        s.controlWithGainSchedule(0.0f, 60.0f - 35.0f * (float)i / 2000.0f);
+    }
+    EXPECT_NEAR(s.getRollCmdDeg(), trim, 1e-3f);
+}
+
+TEST_F(ServoControlTest, TheEkfHealthFallbackKeepsTheLearnedTrim) {
+    // restoreBaseGains() used to reset the integrator, because a term held as
+    // Ki * sum(e*dt) meant something else under the base Ki.  Held in fin
+    // degrees it does not, and throwing the trim away cost a spin-up transient
+    // on the pure-gyro fallback — the path that runs when things are worst.
+    TR_ServoControl s = makeIOnlyServo(0.06f);
+    s.begin();
+    s.enableGainSchedule(50.0f, 25.0f);
+    tick();
+    s.controlWithGainSchedule(0.0f, 30.0f);           // dt bootstrap
+    // At 30 m/s the scale is 2.78: 0.06 * 2.78 * 60 * 0.002 = 0.02 deg a tick.
+    for (int i = 0; i < 180; ++i) {
+        tick();
+        s.controlWithGainSchedule(-60.0f, 30.0f);
+    }
+    const float trim = s.getRollCmdDeg();
+    ASSERT_NEAR(trim, 3.6f, 1e-3f);
+
+    tick();
+    s.control(0.0f);                                   // the fallback, base gains
+    EXPECT_NEAR(s.getRollCmdDeg(), trim, 1e-4f);
+}
+
+TEST_F(ServoControlTest, NonFiniteSpeedKeepsTheLastScheduledGains) {
+    // std::max passes a NaN speed straight through to the scale (NaN gains,
+    // NaN command), and +inf made the scale 0 — no control at all, and a zero
+    // Ki now also clears the I term.  Either way: hold the last good gains.
+    servo.enableGainSchedule(50.0f, 25.0f);
+    tick();
+    servo.controlWithGainSchedule(10.0f, 30.0f);      // P-only: -10 * 2.78
+    const float scheduled = servo.getRollCmdDeg();
+    ASSERT_NEAR(scheduled, -10.0f * (50.0f / 30.0f) * (50.0f / 30.0f), 1e-3f);
+
+    tick();
+    servo.controlWithGainSchedule(10.0f, std::numeric_limits<float>::quiet_NaN());
+    EXPECT_NEAR(servo.getRollCmdDeg(), scheduled, 1e-4f);
+
+    tick();
+    servo.controlWithGainSchedule(10.0f, std::numeric_limits<float>::infinity());
+    EXPECT_NEAR(servo.getRollCmdDeg(), scheduled, 1e-4f);
 }
