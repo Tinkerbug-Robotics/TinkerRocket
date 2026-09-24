@@ -132,14 +132,18 @@ Two references are generated from source and re-checked in CI, so they cannot dr
 
 | Sensor | Type | Interface | Rate | Range |
 |--------|------|-----------|------|-------|
-| **ISM6HG256** | 6-axis IMU | SPI @ 10 MHz | 960 / **1920** / 3840 Hz | Low-g: +/-16g, High-g: +/-256g, Gyro: +/-4000 dps |
+| **ISM6HG256** | 6-axis IMU | SPI @ 10 MHz | 960 / 1920 / 3840 / 7680 Hz | Low-g: +/-16g, High-g: +/-256g, Gyro: +/-4000 dps |
 | **BMP585** | Barometer | SPI | 500 Hz | 300-1250 hPa |
 | **IIS2MDCTR** | Magnetometer | I2C | 100 Hz | +/-50 Gauss |
 | **u-blox M10** | GNSS | UART 115200 | 18 Hz | GPS/GLONASS/Galileo/BeiDou |
 | **INA230** | Power monitor | I2C | 10 Hz | Voltage, current, SOC |
 
-**IMU logging rate is settable from the app** — nominally 1 kHz, 2 kHz, or 4 kHz, which
-land on the sensor's own output rates of 960, 1920 (default), and 3840 Hz.
+**IMU logging rate is settable from the app** — "4k Dynamic" (the default: 3840 Hz from
+the pad through boost and coast, then 960 Hz once the recovery deploys), "8k Dynamic"
+(the same with 7680 Hz), or a fixed 1k, 2k, 4k or 8k, which land on the sensor's own
+output rates of 960, 1920, 3840 and 7680 Hz. The 8k rates need a board whose flight
+computer reads the IMU from its FIFO (the mini so far); the app offers them only where
+the rocket reports it can fly them.
 
 ### Radios
 
@@ -480,7 +484,7 @@ does.
 
 ### I2S Telemetry Pipeline
 
-The flight computer streams sensor data to the out computer via I2S DMA at 22,050 Hz sample rate (88 KB/s bandwidth). Frames are zero-copy from ISR callbacks into an MRAM ring buffer, then flushed to NAND flash.
+The flight computer streams sensor data to the out computer via I2S DMA at an 88,200 Hz sample rate (352.8 KB/s bandwidth), IMU samples ten to a frame. Frames are zero-copy from ISR callbacks into a ring buffer (MRAM on V8, PSRAM on V9/V10 and the mini), then flushed to NAND flash.
 
 ## iOS App
 

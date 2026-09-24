@@ -109,6 +109,9 @@ public data class RocketConfig(
     val imuOrientSetting: Int? = null,          // u8?
     /** ISM6 logging rate readback (null = not reported). */
     val imuRateHz: Int? = null,                 // u16?, "irate"
+    /** #1485: the fastest IMU rate this rocket flies (null = firmware from
+     *  before the 8k rates, which tops out at 3840 Hz). */
+    val imuRateMaxHz: Int? = null,              // u16?, "irmax"
     val loraFreqMHz: Float? = null,             // "lf"
     val loraSF: Int? = null,                    // u8?, "lsf"
     val loraBwKHz: Float? = null,               // "lbw"
@@ -286,6 +289,7 @@ public data class ConfigMessage(
     val ge: Boolean? = null,
     val camt: Long? = null,
     val irate: Long? = null,
+    val irmax: Long? = null,
     val lf: Float? = null,
     val lsf: Long? = null,
     val lbw: Float? = null,
@@ -301,7 +305,8 @@ public data class ConfigMessage(
      * the default, never to [previous] — then:
      *  - #253 sentinels: `rcap`/`kpang` <= 0 and `iwind` < 0 mean "firmware
      *    default, keep the local value" → the field keeps the default;
-     *  - `irate` only lands when it fits u16 (iOS `UInt16(exactly:)`);
+     *  - `irate` and `irmax` only land when they fit u16 (iOS
+     *    `UInt16(exactly:)`);
      *  - LoRa fields are nullable pass-throughs (absent → null);
      *  - the pyro fields are copied from [previous] (a `config` frame never
      *    carries them — they arrive on `config_pyro`).
@@ -346,6 +351,7 @@ public data class ConfigMessage(
                 else if (camt != null) CameraTypeSource.CONFIG_FRAME else null,
             imuOrientSetting = d.imuOrientSetting,   // config never carries it (iOS: fresh nil)
             imuRateHz = irate?.takeIf { it in 0..0xFFFF }?.toInt(),
+            imuRateMaxHz = irmax?.takeIf { it in 0..0xFFFF }?.toInt(),
             loraFreqMHz = lf,
             loraSF = lsf?.coerceIn(0, 0xFF)?.toInt(),
             loraBwKHz = lbw,
@@ -405,6 +411,7 @@ public data class ConfigMessage(
             ge = JsonBridging.nsBool(json, "ge"),
             camt = JsonBridging.nsInt(json, "camt"),
             irate = JsonBridging.nsInt(json, "irate"),
+            irmax = JsonBridging.nsInt(json, "irmax"),
             lf = JsonBridging.parseFloatIos(json, "lf"),
             lsf = JsonBridging.nsInt(json, "lsf"),
             lbw = JsonBridging.parseFloatIos(json, "lbw"),

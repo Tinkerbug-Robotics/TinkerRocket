@@ -146,22 +146,47 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     // defaults to true, so a rocket flown on defaults IS roll-controlled.
     var imuOrientSetting: UInt8 = 0xFF   // IMU_ORIENT_AUTO (pad auto-detect)
 
-    /// IMU logging rate: `RocketProfile.imuRateDynamic` (0) for the dynamic
-    /// mode, or a fixed ISM6HG256 ODR of 960, 1920, or 3840 Hz. Logged samples
-    /// follow this rate; the control loop always consumes the freshest sample
-    /// regardless.
+    /// IMU logging rate: `RocketProfile.imuRateDynamic` (0, "4k Dynamic") or
+    /// `RocketProfile.imuRateDynamic8k` (1, "8k Dynamic") for the dynamic
+    /// modes, or a fixed ISM6HG256 ODR of 960, 1920, 3840 or 7680 Hz. Logged
+    /// samples follow this rate; the control loop always consumes the freshest
+    /// sample regardless.
     ///
-    /// Dynamic is the default: the rocket logs at 3840 Hz from the pad through
-    /// boost and coast, then drops to 960 Hz once its deployment detector sees
-    /// the recovery device come out. The switch happens entirely on the flight
-    /// computer — the app only selects the mode.
+    /// 4k Dynamic is the default: the rocket logs at 3840 Hz from the pad
+    /// through boost and coast, then drops to 960 Hz once its deployment
+    /// detector sees the recovery device come out (8k Dynamic: 7680 Hz, then
+    /// 960). The switch happens entirely on the flight computer — the app only
+    /// selects the mode.
     var imuRateHz: UInt16 = RocketProfile.imuRateDynamic
 
-    /// Sentinel for the dynamic logging rate, matching `IMU_RATE_DYNAMIC` in
-    /// RocketComputerTypes.h. Rides in the same 2-byte cmd-67 field as a fixed
-    /// rate; firmware predating dynamic mode rejects it and keeps its current
-    /// rate.
+    /// Sentinels for the dynamic logging rates, matching `IMU_RATE_DYNAMIC` and
+    /// `IMU_RATE_DYNAMIC_8K` in RocketComputerTypes.h. They ride in the same
+    /// 2-byte cmd-67 field as a fixed rate; firmware predating a mode rejects
+    /// it and keeps its current rate.
     static let imuRateDynamic: UInt16 = 0
+    static let imuRateDynamic8k: UInt16 = 1
+
+    /// #1485: what a rocket can fly when it doesn't say (no `irmax`): every
+    /// board before the 8k rates topped out here.
+    static let imuRateBaselineMaxHz: UInt16 = 3840
+
+    /// One logging-rate choice. `peakHz` is the fastest the choice ever runs
+    /// (a dynamic mode's boost rate) — what a rocket's `irmax` has to cover.
+    struct ImuRateChoice: Hashable {
+        let label: String
+        let setting: UInt16
+        let peakHz: UInt16
+    }
+
+    /// The logging-rate choices, in picker order.
+    static let imuRateChoices: [ImuRateChoice] = [
+        ImuRateChoice(label: "4k Dynamic", setting: imuRateDynamic, peakHz: 3840),
+        ImuRateChoice(label: "8k Dynamic", setting: imuRateDynamic8k, peakHz: 7680),
+        ImuRateChoice(label: "1k", setting: 960, peakHz: 960),
+        ImuRateChoice(label: "2k", setting: 1920, peakHz: 1920),
+        ImuRateChoice(label: "4k", setting: 3840, peakHz: 3840),
+        ImuRateChoice(label: "8k", setting: 7680, peakHz: 7680),
+    ]
 
     // MARK: Servo
     // #561: default 0 (neutral) to match config.h SERVO_BIAS_N and biases 2-4.
