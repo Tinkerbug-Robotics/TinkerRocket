@@ -53,6 +53,7 @@
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
 #include "piezo_wave_policy.h"      // #732 item 3b: the square-wave table that cannot latch the coil on
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
+#include "servo_pin_policy.h"    // servoPinsValid(): an M1 int -1 pin is unmapped, not GPIO 0xFFFFFFFF
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
 #include <esp_private/gpio.h>      // gpio_func_sel
@@ -1035,12 +1036,15 @@ static void applyRollPidSepThreshold(float threshold)
     roll_rate_pid_standalone.setIntegralSeparationThreshold(threshold);
 }
 
+// Compared as int, not against 255U: M1 spells its absent servo pins int -1,
+// and -1 != 255U is true, which read the mini as having four servos
+// (servo_pin_policy.h).
 static bool servoPinsValid()
 {
-    return (config::SERVO_PIN_1 != 255U) &&
-           (config::SERVO_PIN_2 != 255U) &&
-           (config::SERVO_PIN_3 != 255U) &&
-           (config::SERVO_PIN_4 != 255U);
+    return ServoPinPolicy::allPinsMapped(config::SERVO_PIN_1,
+                                         config::SERVO_PIN_2,
+                                         config::SERVO_PIN_3,
+                                         config::SERVO_PIN_4);
 }
 
 // Read a config data frame from OutComputer's I2C slave TX buffer.
@@ -5083,7 +5087,8 @@ static void setup_fc()
     else
     {
         servo_enabled = false;
-        ESP_LOGW(TAG, "Servo control disabled (set SERVO_PIN_* in config.h)");
+        ESP_LOGI(TAG, "Servo control disabled: no servo pins on this board "
+                      "(SERVO_PIN_* in its board header)");
     }
 
     // ── Inflight reboot recovery ────────────────────────────────────────────
@@ -7407,15 +7412,29 @@ static void loop_fc()
             }
             else if (out_pending_command == SERVO_CTRL_ENABLE)
             {
-                if (!servo_enabled && servoPinsValid())
+                if (!servoPinsValid())
                 {
-                    servo_control.setSetpoint(config::ROLL_RATE_SET_POINT);
+                    // Same rule as setup_fc's else-branch: no servo pins, no
+                    // servo control. begin() never ran on this board, so a
+                    // true servo_enabled would aim every flight-loop servo
+                    // write at LEDC channels nobody configured, and until
+                    // something sets up the LEDC driver each write fails with
+                    // an error log. Not saved to NVS either — boot forces the
+                    // flag off here whatever NVS says.
+                    ESP_LOGW(TAG, "Servo control ENABLE ignored: no servo pins on this board");
                 }
-                servo_enabled = true;
-                prefs.begin("rocket", false);
-                prefs.putBool("servo_en", true);
-                prefs.end();
-                ESP_LOGI(TAG, "Servo control ENABLED (saved to NVS)");
+                else
+                {
+                    if (!servo_enabled)
+                    {
+                        servo_control.setSetpoint(config::ROLL_RATE_SET_POINT);
+                    }
+                    servo_enabled = true;
+                    prefs.begin("rocket", false);
+                    prefs.putBool("servo_en", true);
+                    prefs.end();
+                    ESP_LOGI(TAG, "Servo control ENABLED (saved to NVS)");
+                }
             }
             else if (out_pending_command == SERVO_CTRL_DISABLE)
             {

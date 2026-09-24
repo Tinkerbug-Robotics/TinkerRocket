@@ -1265,6 +1265,18 @@ target_include_directories(test_roll_control_mode_policy PRIVATE
 target_link_libraries(test_roll_control_mode_policy GTest::gtest_main)
 gtest_discover_tests(test_roll_control_mode_policy)
 
+# ---------- test_servo_pin_policy ----------
+# Pure header: servoPinsValid()'s rule. M1 spells its absent servo pins int -1,
+# and the old `!= 255U` comparison read that as four mapped servos.
+add_executable(test_servo_pin_policy test_servo_pin_policy.cpp)
+target_include_directories(test_servo_pin_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_servo_pin_policy GTest::gtest_main)
+gtest_discover_tests(test_servo_pin_policy)
+
 # ---------- test_sim_pad_align (#508) ----------
 # Header-only pure math (no ESP/Arduino deps), so there is no component .cpp to
 # compile — the alignment solve was extracted out of SensorCollectorSim precisely
