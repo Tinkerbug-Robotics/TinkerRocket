@@ -37,6 +37,7 @@ public:
         HOLDUP_CHARGED      = 2,  // at or above the charged bar
         HOLDUP_NOT_CHARGING = 3,  // under the bar for the whole grace window — advisory
         HOLDUP_NO_READING   = 4,  // the sense exists but the ADC did not answer — advisory
+        HOLDUP_NOT_FITTED   = 5,  // the sense line moves faster than a capacitor can — advisory
     };
 
     struct TelemetryData

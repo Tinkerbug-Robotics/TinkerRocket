@@ -1943,11 +1943,15 @@ static adc_cali_handle_t      scap_adc_cali  = nullptr;
 static bool                   scap_adc_ready = false;
 static constexpr adc_atten_t  kScapAtten     = ADC_ATTEN_DB_6;
 static float                  holdup_scap_v  = NAN;     // latest cap voltage; NaN until read
-static holdup_policy::Tracker holdup_tracker;
+static holdup_policy::Tracker holdup_tracker =
+    holdup_policy::Tracker::withFitCheck(config::HOLDUP_JUMP_V,
+                                         config::HOLDUP_JUMPS_NOT_FITTED,
+                                         config::HOLDUP_CALM_TO_CLEAR);
 static_assert((uint8_t)holdup_policy::CHARGING     == (uint8_t)TR_BLE_To_APP::HOLDUP_CHARGING &&
               (uint8_t)holdup_policy::CHARGED      == (uint8_t)TR_BLE_To_APP::HOLDUP_CHARGED &&
               (uint8_t)holdup_policy::NOT_CHARGING == (uint8_t)TR_BLE_To_APP::HOLDUP_NOT_CHARGING &&
-              (uint8_t)holdup_policy::NO_READING   == (uint8_t)TR_BLE_To_APP::HOLDUP_NO_READING,
+              (uint8_t)holdup_policy::NO_READING   == (uint8_t)TR_BLE_To_APP::HOLDUP_NO_READING &&
+              (uint8_t)holdup_policy::NOT_FITTED   == (uint8_t)TR_BLE_To_APP::HOLDUP_NOT_FITTED,
               "holdup_policy::State must mirror TR_BLE_To_APP::HoldupState — it is the wire value");
 
 // ESP32-S3: ADC1_CHn is GPIO(n+1) for GPIO1-10 (the IMON helper above is the
@@ -2070,6 +2074,14 @@ static void serviceHoldup(uint32_t now_ms)
         {
             ESP_LOGW("OC", "[HOLDUP] +%lu s no reading from the hold-up cap sense (#1166)",
                      (unsigned long)(now_ms / 1000u));
+        }
+        else if (st == holdup_policy::NOT_FITTED)
+        {
+            ESP_LOGW("OC", "[HOLDUP] +%lu s V_SCAP=%.2f V — hold-up cap NOT FITTED: the sense "
+                           "line jumps more than %.2f V between readings, faster than a "
+                           "capacitor can move (#1166, #1485)",
+                     (unsigned long)(now_ms / 1000u), (double)holdup_scap_v,
+                     (double)config::HOLDUP_JUMP_V);
         }
         else if (st == holdup_policy::NOT_CHARGING)
         {
