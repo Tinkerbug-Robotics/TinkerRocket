@@ -187,8 +187,10 @@ idf.py -B build_v3 -DTR_BS_BOARD=3 build
 ```
 
 A plain `build/` defaults to board 2 — a superseded revision. Flashing it onto a V6
-hard-hangs at boot with `LoRa init FAILED!`, before BLE init and before the main
-loop (#837 item 15).
+boots without a radio: it logs `LoRa init FAILED — continuing radio-less` and
+`[STATS] RADIO DOWN`, and receives nothing. BLE still comes up, so the app can see the
+unit and its `-v2` version — but that image refuses an OTA stamped for another board,
+so the fix is a USB flash of the `-DTR_BS_BOARD=3` build.
 
 ### `sdkconfig` overrides `sdkconfig.defaults`
 

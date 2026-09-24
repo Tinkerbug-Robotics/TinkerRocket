@@ -262,14 +262,20 @@ but has not run on hardware; it drives the on-board E220 over SPI (the direct pa
 below), has no I²C bus, and reads its cell on V3's divider.
 
 A plain `build/` directory defaults to `TR_BS_BOARD=2`, a superseded board. Flashing
-that onto a V6 **hard-hangs at boot**: with `USE_UART_RADIO_MODEM=false` the direct-SPI
+that onto a V6 **boots without a radio**: with `USE_UART_RADIO_MODEM=false` the direct-SPI
 branch calls `lora_direct_backend.begin()`, and an absent LLCC68 on floating SPI pins is
-exactly what makes RadioLib's `begin()` fail — so it logs `LoRa init FAILED!` and sits in
-`while (true) { vTaskDelay(...); }`, before BLE init and before the main loop.
+exactly what makes RadioLib's `begin()` fail. It logs `LoRa init FAILED — continuing
+radio-less`, every `[STATS]` period adds `RADIO DOWN`, and nothing is received or sent.
+BLE comes up, so the app can see the unit and its `-v2` version string; the wrong image
+still refuses an OTA stamped for another board (`TR_OTA_Receiver` checks the suffix), so
+recovering from it is a USB flash of the right build.
 
-This paragraph used to say a wrong-flag build gave "a working boot with the wrong pin
-map — no error". It is the one paragraph an operator reads when the board will not
-work, and it described the opposite of what happens (#837 item 15).
+Until 2026-09-24 that failure stopped the boot in a `while (true)` loop before BLE init,
+exactly as a genuinely broken on-board radio did; neither does now. A unit running the
+right image with a radio that will not start stays reachable for an OTA of its own
+board's image, log download and diagnosis. (Before #837 item 15
+this paragraph claimed the opposite failure — "a working boot with the wrong pin map, no
+error" — which is not what happens either: the error is always logged.)
 
 **`sdkconfig` is generated and untracked, and it overrides `sdkconfig.defaults`.** Same
 trap as the other firmwares: editing the defaults file does nothing while a stale
