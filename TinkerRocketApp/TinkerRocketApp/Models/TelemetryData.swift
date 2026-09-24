@@ -275,7 +275,7 @@ struct TelemetryData: Codable {
     var gnssAbsentMode: Bool { shState(22) == .bad }
 
     // #1166: the out computer's verdict on the hold-up supercap ("hu").
-    enum HoldupState: Int { case charging = 1, charged = 2, notCharging = 3, noReading = 4 }
+    enum HoldupState: Int { case charging = 1, charged = 2, notCharging = 3, noReading = 4, notFitted = 5 }
     var holdupState: HoldupState? { holdup_state.flatMap(HoldupState.init(rawValue:)) }
     /// The one quiet advisory line, or nil when there is nothing to say: a
     /// cap that never charged speaks, and so does a sense that exists but
@@ -308,6 +308,10 @@ struct TelemetryData: Codable {
             return "Hold-up backup not charged"
         case .noReading:
             return "Hold-up backup sense — no reading"
+        case .notFitted:
+            // #1485: the sense line jumps faster than a capacitor can move —
+            // no cap, or an open joint. It used to read "charged".
+            return "Hold-up backup capacitor not detected"
         default:
             return nil
         }

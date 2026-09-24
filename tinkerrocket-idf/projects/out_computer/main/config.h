@@ -268,6 +268,16 @@ struct config : board_pins
     static constexpr float    HOLDUP_TRACE_DELTA_V    = 0.05f;
     static constexpr uint32_t HOLDUP_TRACE_PERIOD_MS  = 60000u;
     static constexpr int      HOLDUP_PIN_CEILING_MV   = 1600;
+    //   JUMP_V / JUMPS_NOT_FITTED / CALM_TO_CLEAR (#1485): is a capacitor on
+    //     the sense node at all? A fitted 5 F cap moves at most ~0.15 V/s
+    //     (the end of a full-load hold-up) and ~0.02 V/s charging; an empty
+    //     footprint's node jumped 0.4-0.8 V between one-second readings and
+    //     read CHARGED on voltage alone. JUMPS_NOT_FITTED of the last five
+    //     steps over JUMP_V report NOT_FITTED — one advisory line, like
+    //     NOT_CHARGING — and CALM_TO_CLEAR calm steps in a row withdraw it.
+    static constexpr float    HOLDUP_JUMP_V           = 0.3f;
+    static constexpr uint8_t  HOLDUP_JUMPS_NOT_FITTED = 3;
+    static constexpr uint8_t  HOLDUP_CALM_TO_CLEAR    = 10;
 };
 
 #endif

@@ -600,6 +600,10 @@ final class SizeDropDecodeTests: XCTestCase {
         let dead = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"hu": 4}"#.utf8))
         XCTAssertEqual(dead.holdupState, .noReading)
         XCTAssertEqual(dead.holdupAdvisoryText, "Hold-up backup sense — no reading")
+        // #1485: a sense line that jumps faster than a capacitor can move.
+        let missing = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"scap": 2.9, "hu": 5}"#.utf8))
+        XCTAssertEqual(missing.holdupState, .notFitted)
+        XCTAssertEqual(missing.holdupAdvisoryText, "Hold-up backup capacitor not detected")
         // An unknown future code is no verdict at all.
         let future = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"hu": 9}"#.utf8))
         XCTAssertNil(future.holdupState)

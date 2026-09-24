@@ -8,6 +8,7 @@
 #include <SPI.h>       // host shim: SPI_MODE0, which the OC config.h names
 #include "config.h"    // the SHIPPED HOLDUP_* constants (TR_BOARD_M1 from CMake)
 #include <cmath>
+#include <vector>
 
 using namespace holdup_policy;
 
@@ -213,4 +214,115 @@ TEST(HoldupPolicy1166, TracePeriodSurvivesUptimeWrap)
     const uint32_t last   = 0xFFFFFFFFu - 10u * kSecond;
     EXPECT_FALSE(traceDue(false, true, 2.5f, 2.5f, last + 30u * kSecond, last, 0.05f, period));  // wrapped, 30 s
     EXPECT_TRUE(traceDue(false, true, 2.5f, 2.5f, last + period, last, 0.05f, period));           // wrapped, 60 s
+}
+
+// ============================================================================
+// #1485: is a capacitor on the sense node at all? Every sequence below is a
+// 1 Hz trace measured on the mini's out computer on 2026-09-24.
+// ============================================================================
+namespace
+{
+Tracker fitted()
+{
+    return Tracker::withFitCheck(config::HOLDUP_JUMP_V, config::HOLDUP_JUMPS_NOT_FITTED,
+                                 config::HOLDUP_CALM_TO_CLEAR);
+}
+
+// Feed a 1 Hz trace starting at `t0_s`; return the verdict after each reading.
+std::vector<uint8_t> feed(Tracker& t, const std::vector<float>& volts, uint32_t t0_s = 10)
+{
+    std::vector<uint8_t> out;
+    for (size_t i = 0; i < volts.size(); ++i)
+        out.push_back(t.update(volts[i], (t0_s + (uint32_t)i) * kSecond,
+                               config::HOLDUP_CHARGED_V, config::HOLDUP_LOW_ADVISORY_MS));
+    return out;
+}
+}
+
+TEST(HoldupPolicy1485, AnEmptyFootprintReadsNotFittedNotCharged)
+{
+    // First mini, built without C130: the node swung like this, and the
+    // voltage rule alone called 18 of 21 readings CHARGED.
+    const std::vector<float> no_cap = {2.54f, 3.09f, 2.31f, 2.77f, 2.12f,
+                                       2.51f, 3.05f, 2.29f, 2.73f, 2.10f};
+    Tracker plain;   // the rule as it shipped
+    const auto before = feed(plain, no_cap);
+    EXPECT_EQ(before[1], CHARGED);
+
+    Tracker t = fitted();
+    const auto v = feed(t, no_cap);
+    // Three jumps take four readings; from then on it stays NOT_FITTED.
+    for (size_t i = 3; i < v.size(); ++i) EXPECT_EQ(v[i], NOT_FITTED) << i;
+}
+
+TEST(HoldupPolicy1485, TheMeasuredRechargeRampNeverReadsNotFitted)
+{
+    // 21 mV/s from 0.81 V after a hold-up drained the cap (4.7 F at 100 mA).
+    std::vector<float> ramp;
+    for (float v = 0.81f; v < 2.40f; v += 0.021f) ramp.push_back(v);
+    for (int i = 0; i < 20; ++i) ramp.push_back(2.40f);
+    Tracker t = fitted();
+    const auto v = feed(t, ramp);
+    for (size_t i = 0; i < v.size(); ++i) EXPECT_NE(v[i], NOT_FITTED) << i;
+    EXPECT_EQ(v.back(), CHARGED);
+}
+
+TEST(HoldupPolicy1485, AFullLoadHoldUpNeverReadsNotFitted)
+{
+    // USB pulled with both processors running: the fall steepens to
+    // ~0.15 V/s at the end, the fastest a real cap was seen to move.
+    const std::vector<float> hold = {2.40f, 2.35f, 2.29f, 2.23f, 2.18f, 2.11f, 2.05f, 1.99f,
+                                     1.92f, 1.85f, 1.78f, 1.70f, 1.63f, 1.55f, 1.46f, 1.37f,
+                                     1.27f, 1.16f, 1.03f, 0.88f};
+    Tracker t = fitted();
+    const auto v = feed(t, hold);
+    for (size_t i = 0; i < v.size(); ++i) EXPECT_NE(v[i], NOT_FITTED) << i;
+}
+
+TEST(HoldupPolicy1485, OneGlitchIsNotAMissingCap)
+{
+    // A single bad sample is two jumps (out and back), one short of the three.
+    Tracker t = fitted();
+    const auto v = feed(t, {2.40f, 2.40f, 2.90f, 2.40f, 2.40f, 2.40f, 2.40f});
+    for (size_t i = 0; i < v.size(); ++i) EXPECT_EQ(v[i], CHARGED) << i;
+}
+
+TEST(HoldupPolicy1485, CalmReadingsWithdrawTheVerdict)
+{
+    Tracker t = fitted();
+    feed(t, {2.54f, 3.09f, 2.31f, 2.77f});
+    EXPECT_EQ(t.state, NOT_FITTED);
+    // 2.77 -> 2.40 is itself a 0.37 V jump; the calm steps start after it.
+    std::vector<float> settle(1 + config::HOLDUP_CALM_TO_CLEAR - 1, 2.40f);
+    feed(t, settle, 20);
+    EXPECT_EQ(t.state, NOT_FITTED);   // one calm step short
+    EXPECT_EQ(t.update(2.40f, 40u * kSecond, config::HOLDUP_CHARGED_V,
+                       config::HOLDUP_LOW_ADVISORY_MS), CHARGED);
+}
+
+TEST(HoldupPolicy1485, AFailedReadNeitherJumpsNorCalms)
+{
+    Tracker t = fitted();
+    EXPECT_EQ(t.update(2.40f, 1u * kSecond, kBarV, kAdvisory), CHARGED);
+    EXPECT_EQ(t.update(NAN, 2u * kSecond, kBarV, kAdvisory), NO_READING);
+    // The step is measured from the next good reading, not across the gap.
+    EXPECT_EQ(t.update(0.90f, 3u * kSecond, kBarV, kAdvisory), CHARGING);
+    EXPECT_EQ(t.jump_history, 0u);
+}
+
+TEST(HoldupPolicy1485, ThePlainTrackerKeepsTheVoltageRuleAlone)
+{
+    Tracker t;
+    const auto v = feed(t, {2.54f, 3.09f, 2.31f, 2.77f, 2.12f, 2.51f});
+    for (uint8_t s : v) EXPECT_NE(s, NOT_FITTED);
+}
+
+TEST(HoldupPolicy1485, TheThresholdSitsBetweenARealCapAndAnEmptyNode)
+{
+    // Twice the steepest real change (0.15 V/s) and under the smallest empty-
+    // node swing (0.39 V) seen: the margin the constant is chosen for.
+    EXPECT_GT(config::HOLDUP_JUMP_V, 2.0f * 0.15f - 0.001f);
+    EXPECT_LT(config::HOLDUP_JUMP_V, 0.39f);
+    EXPECT_LE(config::HOLDUP_JUMPS_NOT_FITTED, FIT_WINDOW);
+    EXPECT_GT(config::HOLDUP_CALM_TO_CLEAR, FIT_WINDOW);   // the window empties before it clears
 }

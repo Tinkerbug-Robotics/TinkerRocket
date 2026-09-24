@@ -893,7 +893,7 @@ public data class TelemetryData(
  */
 /** #1166: the out computer's verdict on the hold-up supercap (telemetry key "hu"). */
 public enum class HoldupState(public val code: Int) {
-    CHARGING(1), CHARGED(2), NOT_CHARGING(3), NO_READING(4);
+    CHARGING(1), CHARGED(2), NOT_CHARGING(3), NO_READING(4), NOT_FITTED(5);
 
     public companion object {
         public fun fromCode(code: Int?): HoldupState? = values().firstOrNull { it.code == code }
@@ -932,6 +932,9 @@ public fun holdupAdvisoryText(state: Int?, scapVolts: Float?): String? = when (H
             "Hold-up backup not charged"
         }
     HoldupState.NO_READING -> "Hold-up backup sense — no reading"
+    // #1485: the sense line jumps faster than a capacitor can move — no cap,
+    // or an open joint. It used to read "charged".
+    HoldupState.NOT_FITTED -> "Hold-up backup capacitor not detected"
     else -> null
 }
 
