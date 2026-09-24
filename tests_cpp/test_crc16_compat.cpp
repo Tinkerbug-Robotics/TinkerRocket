@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "CRC.h"
+#include "crc16_fast.h"
 
 // The flight code uses calcCRC16() with default parameters:
 //   polynomial 0x8001, initial 0x0000, xorOut 0x0000,
@@ -74,4 +75,25 @@ TEST(CRC16Compat, ClassAPI_MatchesFreeFunction) {
     uint16_t class_crc = crc_obj.calc();
 
     EXPECT_EQ(free_crc, class_crc);
+}
+
+// #1485: the table-driven frame CRC must be bit-identical to the library's,
+// or every frame on the link and every record in the log stops matching.
+TEST(CRC16Compat, TheTableCrcMatchesTheLibraryOnEveryLength) {
+    uint32_t seed = 12345u;
+    uint8_t buf[300];
+    for (size_t len = 0; len <= sizeof(buf); ++len)
+    {
+        for (size_t i = 0; i < len; ++i)
+        {
+            seed = seed * 1664525u + 1013904223u;
+            buf[i] = (uint8_t)(seed >> 24);
+        }
+        ASSERT_EQ(crc16Frame(buf, len), calcCRC16(buf, (crc_size_t)len)) << "len " << len;
+    }
+}
+
+TEST(CRC16Compat, TheTableCrcMatchesOnTheStandardVector) {
+    const uint8_t data[] = {'1','2','3','4','5','6','7','8','9'};
+    EXPECT_EQ(crc16Frame(data, sizeof(data)), calcCRC16(data, sizeof(data)));
 }

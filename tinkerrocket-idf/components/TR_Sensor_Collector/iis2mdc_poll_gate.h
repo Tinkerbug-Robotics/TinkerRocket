@@ -65,6 +65,15 @@ struct Iis2mdcPollGate
         return (int32_t)(now_us - last_attempt_us) >= (int32_t)periodUs();
     }
 
+    // Microseconds until the next attempt is due; 0 when it is due now. The
+    // poll task sleeps this long rather than waking every millisecond to ask
+    // (#1485: 1,000 wakes a second cost ~4 % of the mini FC's sensor core).
+    uint32_t usUntilDue(uint32_t now_us) const
+    {
+        const int32_t left = (int32_t)periodUs() - (int32_t)(now_us - last_attempt_us);
+        return left > 0 ? (uint32_t)left : 0u;
+    }
+
     // Call before every transfer, whatever its outcome.
     void markAttempt(uint32_t now_us) { last_attempt_us = now_us; }
 

@@ -76,6 +76,9 @@ struct board_pins
     static constexpr bool USE_MMC5983MA = false;  // not populated on V8
     static constexpr bool USE_GNSS = true;
     static constexpr bool USE_ISM6HG256 = true;
+    // #1485: FIFO capture is proven on the mini first; this board keeps
+    // one read per DRDY edge until it has been benched on the FIFO path.
+    static constexpr bool ISM6_FIFO_CAPTURE = false;
     static constexpr bool USE_IIS2MDC = true;
 
     // ### Sensor interrupt pins ###

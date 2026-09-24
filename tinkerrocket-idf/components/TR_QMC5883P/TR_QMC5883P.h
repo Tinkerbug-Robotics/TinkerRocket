@@ -113,8 +113,8 @@ public:
     bool dataReady();
 
     /// One sample: hard iron subtracted, tear-checked (see the header note).
-    /// Up to four transfers, bailing at the first failure, so a wedged bus
-    /// costs one I2C timeout, not four.
+    /// Two transfers (three when a refresh lands mid-read), bailing at the
+    /// first failure, so a wedged bus costs one I2C timeout, not three.
     TR_QMC5883PStatus readRawXYZ(QMC5883P_RawData *out);
 
     /// Set the hard-iron offset the driver subtracts from every sample, in

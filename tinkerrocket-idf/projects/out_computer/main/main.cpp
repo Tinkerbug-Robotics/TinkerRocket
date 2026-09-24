@@ -2807,6 +2807,8 @@ static uint32_t i2s_dma_reads = 0;
 static uint64_t i2s_dma_bytes = 0;
 static uint32_t msg_count_query = 0;
 static uint32_t msg_count_ism6 = 0;
+static uint32_t ism6_batches = 0;      // #1485: ISM6_BATCH_MSG frames unpacked
+static uint32_t ism6_batch_bad = 0;    // #1485: batches with a bad count or length (dropped)
 static uint32_t msg_count_bmp = 0;
 static uint32_t msg_count_mmc = 0;
 static uint32_t msg_count_iis2mdc = 0;
@@ -4067,6 +4069,7 @@ static bool isKnownMessageType(uint8_t type)
         case OUT_STATUS_QUERY:
         case GNSS_MSG:
         case ISM6HG256_MSG:
+        case ISM6_BATCH_MSG:   // #1485: unpacked into ISM6HG256_MSG frames in processFrame
         case BMP585_MSG:
         case MMC5983MA_MSG:
         case IIS2MDC_MSG:
@@ -4175,6 +4178,38 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     // Reject unknown message types (CRC false positives from I2S noise)
     if (!isKnownMessageType(type))
         return;
+
+    // #1485: an IMU batch. Unpack it into ordinary ISM6HG256_MSG frames and
+    // run each one through this function, so the dedup, the logger and the
+    // latest-sample cache see exactly what a per-sample frame gave them: the
+    // flight log and every .bin decoder keep one 0xA2 record per sample. The
+    // batch frame itself never reaches the log. Depth is one: the frames it
+    // makes are ISM6HG256_MSG.
+    if (type == ISM6_BATCH_MSG)
+    {
+        const uint8_t count = (payload_len > 0) ? payload[0] : 0;
+        if (count == 0 || count > ISM6_BATCH_MAX || payload_len != ism6BatchWireSize(count))
+        {
+            ism6_batch_bad++;
+            return;
+        }
+        ism6_batches++;
+        for (uint8_t i = 0; i < count; ++i)
+        {
+            uint8_t sample_frame[MAX_FRAME];
+            size_t sample_len = 0;
+            if (!TR_I2C_Interface::packMessage(ISM6HG256_MSG, payload + ism6BatchWireSize(i),
+                                               sizeof(ISM6HG256Data), sample_frame,
+                                               sizeof(sample_frame), sample_len))
+            {
+                ism6_batch_bad++;
+                continue;
+            }
+            processFrame(sample_frame, sample_len, ISM6HG256_MSG,
+                         sample_frame + 6, sizeof(ISM6HG256Data));
+        }
+        return;
+    }
 
     // FC firmware-version push (#8 Phase 4): a version *string*, not timestamped
     // telemetry, so handle it before the time_us-based dedup below (which would
@@ -7982,6 +8017,23 @@ static void printStats()
     const float hz_end_flight = (float)d_end_flight * hz_scale;
     const float hz_unknown = (float)d_unknown * hz_scale;
     const float hz_logonly = (float)d_logonly * hz_scale;   // #569
+    // #1485: IMU batches, and the samples they unpacked into. Not behind
+    // VERBOSE_DEBUG: it is the one line that says the batch path is alive,
+    // and it prints only while batches arrive.
+    {
+        static uint32_t prev_batches = 0;
+        static uint32_t prev_batch_bad = 0;
+        const uint32_t d_batches = ism6_batches - prev_batches;
+        const uint32_t d_batch_bad = ism6_batch_bad - prev_batch_bad;
+        prev_batches = ism6_batches;
+        prev_batch_bad = ism6_batch_bad;
+        if (d_batches > 0U || d_batch_bad > 0U)
+        {
+            ESP_LOGI("OC", "[I2S] imu batches %.0f/s -> samples %.0f/s, bad %lu",
+                     (double)((float)d_batches * hz_scale), (double)hz_ism6,
+                     (unsigned long)d_batch_bad);
+        }
+    }
     prev_msg_count_query = msg_count_query;
     prev_msg_count_ism6 = msg_count_ism6;
     prev_msg_count_bmp = msg_count_bmp;
@@ -9484,7 +9536,9 @@ void initPeripherals()
         // misleading "round-robin" comment — the actual scheduling left
         // parser starved during high-throughput INFLIGHT, causing
         // rx_ring to fill until drop_oldest evicted bytes (#104).
-        xTaskCreatePinnedToCore(i2sParserTask, "I2S Parse", 4096,
+        // 6 KB (was 4 KB): processFrame unpacks an ISM6_BATCH_MSG by calling
+        // itself once per record with a MAX_FRAME buffer on the stack (#1485).
+        xTaskCreatePinnedToCore(i2sParserTask, "I2S Parse", 6144,
                                 nullptr, 6, &i2s_rx_task_handle, 1);
 
         // OTA image-pump feeder (Phase 4 Layer 3). Sole I2S writer during an FC
