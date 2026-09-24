@@ -1041,10 +1041,10 @@ void SensorCollector::pollIMUdata(void* parameter)
 }
 
 // #1485: the magnetometer's own poll task. Its I2C read is slow next to the
-// IMU's sample period (~1.6 ms on the mini's QMC5883P against 260 us at
-// 3,840 Hz), so it runs below the IMU task and the IMU preempts it. The mag
-// bus is private, so nothing else waits on it. The gate paces reads to the
-// ODR; a 1 ms wake is only a check.
+// IMU's sample period (~1.6 ms for the mini's QMC5883P when it was three
+// transactions, against 260 us at 3,840 Hz), so it runs below the IMU task,
+// which preempts it; the mag bus is private, so nothing else waits on it.
+// It sleeps until the gate's next read is due; the gate paces to the ODR.
 void SensorCollector::pollMagData(void* parameter)
 {
     SensorCollector* self = static_cast<SensorCollector*>(parameter);
