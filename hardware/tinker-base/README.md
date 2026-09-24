@@ -110,13 +110,13 @@ Two things were deliberately left behind at the fork:
 Not fabbed, no tag. Schematic and PCB are in sync and fully routed — 0 parity
 issues, 0 unconnected.
 
-**Firmware:** `tinkerrocket-idf/projects/base_station`, starting from its V3
-build — the full base station's. This board has no pin map of its own yet, and
-the V3 image does not run here: V3 drives a `lora-daughterboard` over UART,
-where this board has its radio on board over SPI. The firmware already has that
-direct-SPI path (the V1/V2 base stations use it), so the map this board needs
-starts from V3's, with the radio block taken from the pinout table above and
-the parts listed under *What it drops, and what it gains* taken out.
+**Firmware:** `tinkerrocket-idf/projects/base_station` built with
+`-DTR_BS_BOARD=4` — the pin map is `main/board/board_v4.h`, taken from this
+board's netlist: the radio over SPI on the pins in the table above, no I²C, no
+pack charger, the cell on V3's divider. It builds but has not run, because no
+board exists yet; the firmware release keeps shipping the full base station's
+V3 image in the Tinker-Base slot until a first article proves V4. The V3 image
+does not run on this board (it drives a `lora-daughterboard` over UART).
 
 Reviewed 2026-08-12: [`prefab-review-2026-08-12.md`](prefab-review-2026-08-12.md).
 Four items to close before fab, none of them blockers; the review's *Before fab*

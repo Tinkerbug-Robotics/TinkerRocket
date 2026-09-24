@@ -52,6 +52,7 @@ BUILDS = [
     ("out_computer M1", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("base_station V1/V2", "base_station", ["sdkconfig.defaults"]),
     ("base_station V3", "base_station", ["sdkconfig.defaults", "sdkconfig.defaults.v3"]),
+    ("base_station V4 (Tinker-Base)", "base_station", ["sdkconfig.defaults", "sdkconfig.defaults.v3"]),
     ("radio_board", "radio_board", ["sdkconfig.defaults"]),
     ("rocket_computer_mini", "legacy/rocket_computer_mini", ["sdkconfig.defaults"]),
 ]

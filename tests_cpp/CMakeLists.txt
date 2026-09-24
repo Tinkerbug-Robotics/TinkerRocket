@@ -708,9 +708,9 @@ gtest_discover_tests(test_bs_download_policy)
 # #835 items 1/2/4: board_v3.h claimed an external NAND, a fuel gauge and no
 # LoRa power gate — none of which match the netlist. Nothing asserted the board
 # headers against anything, so all three claims stood. Built once per board so a
-# claim has to survive being stated three times; TR_BS_BOARD picks the header
-# exactly as the firmware build does.
-foreach(BSREV 1 2 3)
+# claim has to survive being stated on every board (4 = the Tinker-Base);
+# TR_BS_BOARD picks the header exactly as the firmware build does.
+foreach(BSREV 1 2 3 4)
     add_executable(test_bs_board_map_v${BSREV} test_bs_board_map.cpp)
     target_compile_definitions(test_bs_board_map_v${BSREV} PRIVATE TR_BS_BOARD=${BSREV})
     target_include_directories(test_bs_board_map_v${BSREV} PRIVATE

@@ -76,8 +76,10 @@ jobs:
             asset: tinker-beetle-out_computer-M1
             project: out_computer
             flags: -B build_m1 -DTR_BOARD_M1=1
-          # Tinker-Base: base_station's V3 build is the starting point until the
-          # Tinker-Base has a board map of its own (on-board SPI radio).
+          # Tinker-Base: base_station's V3 build, the full base station's, until
+          # the Tinker-Base's own map (board_v4.h, -DTR_BS_BOARD=4) has run on a
+          # first article. Swap this entry to V4 then, and move V3 to the legacy
+          # release.
           - line: Tinker-Base
             asset: tinker-base-base_station-V3
             project: base_station

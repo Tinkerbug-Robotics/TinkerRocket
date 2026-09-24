@@ -67,13 +67,18 @@ jobs:
             project: out_computer
             board: M1
             flags: -B build_m1 -DTR_BOARD_M1=1
-          # Tinker-Base (hardware/tinker-base) runs base_station. It has no board
-          # map of its own yet, so the product build is the one it starts from:
-          # V3, the full base station (PCB V5/V6, now hardware/legacy/base-station),
-          # which drives a lora-daughterboard over UART where the Tinker-Base has
-          # its radio on board over SPI. V3 needs its own overlay:
-          # sdkconfig.defaults.v3 is 16 MB plus the partitions_v3.csv whose
-          # 9.94 MB spiffs does not fit an 8 MB part at all.
+          # Tinker-Base (hardware/tinker-base) runs base_station with its own map,
+          # board_v4.h (-DTR_BS_BOARD=4): the on-board radio over SPI, no I2C, no
+          # pack charger. Netlist-verified, not yet run on hardware — so until a
+          # first article proves it, the release's Tinker-Base slot still carries
+          # V3, the full base station it forked from (PCB V5/V6, now
+          # hardware/legacy/base-station), which is built here too. Both need
+          # the 16 MB overlay: sdkconfig.defaults.v3 plus the partitions_v3.csv
+          # whose 9.94 MB spiffs does not fit an 8 MB part at all.
+          - line: Tinker-Base
+            project: base_station
+            board: V4
+            flags: -B build_v4 -DTR_BS_BOARD=4
           - line: Tinker-Base
             project: base_station
             board: V3

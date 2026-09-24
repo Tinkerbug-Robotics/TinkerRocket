@@ -41,7 +41,8 @@ actually sent if that board is ever ordered.
 
 - **base-station** runs `tinkerrocket-idf/projects/base_station`. Its V1/V2 pin
   maps are in `main/board/legacy/`; the V3 map (this board, PCB V5/V6) stays in
-  `main/board/` because that build is also where the Tinker-Base's firmware
-  starts. The V2 image is published on `fw-legacy-v*` tags (a V1 board is
-  built by hand, `-DTR_BS_BOARD=1`), V3 on the product `fw-v*` tags.
+  `main/board/` because its image fills the product release's Tinker-Base slot
+  until the Tinker-Base's own map (`board_v4.h`) has run on hardware. The V2
+  image is published on `fw-legacy-v*` tags (a V1 board is built by hand,
+  `-DTR_BS_BOARD=1`), V3 on the product `fw-v*` tags.
 - **gnss-px1105r** and **servo-adapter** carry no firmware.

@@ -4279,6 +4279,14 @@ static void setup_bs()
 
     // Configure I2C and auto-detect the fuel gauge (one firmware, both PCBs):
     // probe the new-PCB BQ27Z746 (0x55) first, then the original MAX17205 (0x36).
+    // A board with no I2C bus at all (the Tinker-Base, board_v4.h) declares -1
+    // pins: skip the bring-up rather than hand the driver an invalid pin and log
+    // "battery readings unavailable" on a board that reads its cell by ADC.
+    if constexpr (config::I2C_SDA_PIN < 0 || config::I2C_SCL_PIN < 0)
+    {
+        ESP_LOGI(TAG, "No I2C bus on this board (no fuel gauge, no pack charger)");
+    }
+    else
     {
         i2c_master_bus_config_t bus_cfg = {};
         bus_cfg.i2c_port     = I2C_NUM_0;

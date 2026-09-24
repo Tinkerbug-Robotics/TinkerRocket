@@ -1,9 +1,10 @@
 # Name,   Type, SubType, Offset,  Size,    Flags
 #
-# 16 MB layout — V3 only (the PCB V5/V6 hardware, whose U1 is a
-# GD25Q128ESIG). Selected by sdkconfig.defaults.v3, which declares the 16 MB
-# flash in the same file; the two must move together. V1/V2 use partitions.csv
-# and its 8 MB layout — their U1 is a W25Q64 and this table does not fit.
+# 16 MB layout — V3 (the PCB V5/V6 hardware) and V4 (the Tinker-Base), whose
+# U1 is a GD25Q128ESIG on both. Selected by sdkconfig.defaults.v3, which
+# declares the 16 MB flash in the same file; the two must move together. V1/V2
+# use partitions.csv and its 8 MB layout — their U1 is a W25Q64 and this table
+# does not fit.
 #
 # #835 item 1: spiffs was 0x1F0000 (1.94 MB) on a board where it is the ONLY
 # log store — board_v3.h has HAS_EXT_NAND = false, there is no SD slot, and

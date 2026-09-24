@@ -39,7 +39,7 @@ entirely** so it can be tested without hardware.
 | **Listens** | LoRa 915 MHz, up to 4 rockets tracked simultaneously |
 | **Stores** | CSV per flight — on SPIFFS (9.94 MB of the 16 MB boot NOR) on the current board; the earlier boards mount an external NAND as FAT |
 | **Talks to your phone** | BLE GATT, 20 commands |
-| **Board** | **V6 hardware** — built as `TR_BS_BOARD=3`. Earlier revisions still build (1, 2) |
+| **Board** | **Tinker-Base** — built as `TR_BS_BOARD=4`, not yet run on hardware. The full base station it forked from (V6 hardware) is `TR_BS_BOARD=3`; earlier revisions still build (1, 2) |
 
 ## The policy headers
 
@@ -238,14 +238,28 @@ netid-matching packet, so a second rocket on the pad can answer on the new chann
 strand an airborne one on the old for the rest of its descent. Before shortening any
 guard, check what the guard was incidentally protecting.
 
-**The build flag does not match the board number on the silkscreen.** The current
-hardware is **V6** (the `.kicad_pcb` title block; V6 was the fixed-output TPS63021
-change), and it is built as **`TR_BS_BOARD=3`** — the two numbering schemes diverged
-and have not been reconciled. Build the current board with:
+**The build flag does not match the board number on the silkscreen.** The full
+base station's hardware is **V6** (the `.kicad_pcb` title block; V6 was the
+fixed-output TPS63021 change), and it is built as **`TR_BS_BOARD=3`** — the two
+numbering schemes diverged and have not been reconciled. The Tinker-Base, whose
+silkscreen reads V1, continues the flag sequence as **`TR_BS_BOARD=4`**:
+
+| Flag | Board | Map |
+|---|---|---|
+| 1 | the original PCB | `main/board/legacy/board_v1.h` |
+| 2 (default) | the V2 PCB, which predates the repo's hardware import | `main/board/legacy/board_v2.h` |
+| 3 | full base station, PCB V5/V6 (`hardware/legacy/base-station`) | `main/board/board_v3.h` |
+| 4 | Tinker-Base, silkscreen V1 (`hardware/tinker-base`) | `main/board/board_v4.h` |
+
+Build the full base station with:
 
 ```bash
 idf.py -B build_v3 -DTR_BS_BOARD=3 build
 ```
+
+and the Tinker-Base with `-B build_v4 -DTR_BS_BOARD=4`. Its map is netlist-verified
+but has not run on hardware; it drives the on-board E220 over SPI (the direct path
+below), has no I²C bus, and reads its cell on V3's divider.
 
 A plain `build/` directory defaults to `TR_BS_BOARD=2`, a superseded board. Flashing
 that onto a V6 **hard-hangs at boot**: with `USE_UART_RADIO_MODEM=false` the direct-SPI
