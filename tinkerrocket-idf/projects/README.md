@@ -16,19 +16,18 @@ find, verify and flash these.
 | | [`out_computer`](out_computer/) | `idf.py -B build_v9 -DTR_BOARD_V9=1 build` | ESP32-S3 | `tinker-mantis-out_computer-V9.bin` |
 | **Tinker-Beetle** | [`flight_computer`](flight_computer/) | `idf.py -B build_m1 -DTR_BOARD_M1=1 build` | ESP32-S3 | `tinker-beetle-flight_computer-M1.bin` |
 | | [`out_computer`](out_computer/) | `idf.py -B build_m1 -DTR_BOARD_M1=1 build` | ESP32-S3 | `tinker-beetle-out_computer-M1.bin` |
-| **Tinker-Base** | [`base_station`](base_station/) | `idf.py -B build_v3 -DTR_BS_BOARD=3 build` | ESP32-S3 | `tinker-base-base_station-V3.bin` |
+| **Tinker-Base** | [`base_station`](base_station/) | `idf.py -B build_v4 -DTR_BS_BOARD=4 build` | ESP32-S3 | `tinker-base-base_station-V3.bin` — the V3 image, until V4 has run on hardware |
 | LoRa daughterboard (Tinker-Mantis) | [`radio_board`](radio_board/) | `idf.py build` | ESP32-S3 | `lora-daughterboard-radio_board.bin` |
 
-**Tinker-Base has no board map of its own yet.** The V3 build — the full base
-station it forked from, now `hardware/legacy/base-station` — is where its
-firmware starts, and it is what the Tinker-Base release slot carries until the
-board's own map exists. That image does not run on a Tinker-Base: V3 talks to a
-`lora-daughterboard` over UART, and the Tinker-Base carries its radio on board
-over SPI. `base_station` already has that direct-SPI path — the V1/V2 boards
-use it (`main/board/legacy/board_v{1,2}.h`, `USE_UART_RADIO_MODEM = false`) — so
-the Tinker-Base map starts from `board_v3.h`, with the radio block swapped for
-the Tinker-Base's own pins and the parts it dropped (the external charger, the
-sensor I²C) taken out; `hardware/tinker-base/README.md` lists the differences.
+**The Tinker-Base's map is `main/board/board_v4.h`** (`-DTR_BS_BOARD=4`, stamped
+`-v4`): the on-board E220 radio over SPI — the direct path the V1/V2 boards
+already take, on the same GPIOs the `lora-daughterboard` uses — no I²C bus, no
+fuel gauge, no pack charger, and the cell read on V3's divider. It is
+netlist-verified and builds in CI, but no Tinker-Base has been built, so it has
+not run. Until a first article proves it, the release's Tinker-Base slot keeps
+carrying the V3 image — the full base station it forked from, now
+`hardware/legacy/base-station` — which does not run on a Tinker-Base; swap the
+release entry to V4 then.
 
 ## Why the project names did not change
 

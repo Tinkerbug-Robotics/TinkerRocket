@@ -36,7 +36,8 @@ string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
 # board" to the manifest, so the app's catalog could not tell them apart and
 # would offer a V3 base station the V2 image as its default.
 #
-# TR_BS_BOARD is 1, 2 or 3 and defaults to 2 in main/config.h; the default is
+# TR_BS_BOARD is 1, 2, 3 or 4 (4 = the Tinker-Base) and defaults to 2 in
+# main/config.h; the default is
 # repeated here rather than inferred, because a CMake variable that is simply
 # unset must stamp the same thing the compiler will build.
 if(TR_BS_BOARD)
@@ -80,7 +81,10 @@ add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
 # One-time effect on existing checkouts: the root projects/base_station/
 # sdkconfig is now ignored (it is untracked, so nothing is lost from git).
 # `idf.py -B <dir> reconfigure` re-seeds from these defaults.
-if(TR_BS_BOARD EQUAL 3)
+# The Tinker-Base (4) takes the same overlay: it forked from the V3 board with
+# the same 16 MB GD25Q128ESIG as U1 and, like V3, no NAND — spiffs on U1 is its
+# only log store too (board_v4.h).
+if(TR_BS_BOARD EQUAL 3 OR TR_BS_BOARD EQUAL 4)
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v3")
     message(STATUS "base_station: sdkconfig overlay sdkconfig.defaults.v3 (16 MB boot NOR, partitions_v3.csv)")
 endif()

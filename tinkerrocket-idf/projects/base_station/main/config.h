@@ -5,13 +5,15 @@
 
 // --- Board revision (OC #411 pattern) ---
 // Pins + peripheral-presence/topology flags live in the per-board headers
-// (main/board/board_v3.h, and main/board/legacy/board_v{1,2}.h for the two
+// (main/board/board_v4.h for the Tinker-Base, board_v3.h for the full base
+// station it forked from, and main/board/legacy/board_v{1,2}.h for the two
 // superseded revisions); everything below is board-independent policy
 // and must not fork per revision. Select with a separate build dir per
 // variant (the flag is cached by CMake):
 //   V2 (default): idf.py build
 //   V1 original:  idf.py -B build_v1 -DTR_BS_BOARD=1 build
 //   V3 new PCB:   idf.py -B build_v3 -DTR_BS_BOARD=3 build
+//   Tinker-Base:  idf.py -B build_v4 -DTR_BS_BOARD=4 build
 // The fuel gauge is still auto-detected at runtime on the board's I2C bus
 // (BQ27Z746 0x55, then MAX17205/MAX17303 0x36 split by DevName), so it does
 // NOT depend on this switch. Pins the silicon can't probe (LoRa topology,
@@ -19,14 +21,16 @@
 #ifndef TR_BS_BOARD
 #define TR_BS_BOARD 2
 #endif
-#if TR_BS_BOARD == 3
+#if TR_BS_BOARD == 4
+#include "board/board_v4.h"
+#elif TR_BS_BOARD == 3
 #include "board/board_v3.h"
 #elif TR_BS_BOARD == 2
 #include "board/legacy/board_v2.h"
 #elif TR_BS_BOARD == 1
 #include "board/legacy/board_v1.h"
 #else
-#error "TR_BS_BOARD must be 1, 2, or 3"
+#error "TR_BS_BOARD must be 1, 2, 3 or 4"
 #endif
 
 struct config : board_pins

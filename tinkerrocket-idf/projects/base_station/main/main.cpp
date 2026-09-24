@@ -2433,6 +2433,14 @@ static void printStats()
              (double)ls.last_snr,
              last_pkt_str);
 
+    // A board that came up without a working radio — a failed on-board init,
+    // or no daughterboard answering on V3 — otherwise prints the same zeros as
+    // a healthy radio with no rocket in range.
+    if (!ls.enabled)
+    {
+        ESP_LOGW(TAG, "[STATS] RADIO DOWN — no working LoRa radio; nothing can be received or sent");
+    }
+
     // Uplink airtime (#506).  The radio is half-duplex, so uplink time-on-air is
     // time we are deaf — and it used to be silently charged to the downlink loss
     // counters above, making a self-inflicted hole look like an RF problem. txwin
@@ -4279,6 +4287,14 @@ static void setup_bs()
 
     // Configure I2C and auto-detect the fuel gauge (one firmware, both PCBs):
     // probe the new-PCB BQ27Z746 (0x55) first, then the original MAX17205 (0x36).
+    // A board with no I2C bus at all (the Tinker-Base, board_v4.h) declares -1
+    // pins: skip the bring-up rather than hand the driver an invalid pin and log
+    // "battery readings unavailable" on a board that reads its cell by ADC.
+    if constexpr (config::I2C_SDA_PIN < 0 || config::I2C_SCL_PIN < 0)
+    {
+        ESP_LOGI(TAG, "No I2C bus on this board (no fuel gauge, no pack charger)");
+    }
+    else
     {
         i2c_master_bus_config_t bus_cfg = {};
         bus_cfg.i2c_port     = I2C_NUM_0;
@@ -4652,10 +4668,14 @@ static void setup_bs()
         radio_ok = lora_direct_backend.begin(lora_cfg, config::DEBUG);
         if (!radio_ok)
         {
-            // On-board radio is soldered to this PCB — a failed init is a
-            // hardware fault, keep the historical hard stop.
-            ESP_LOGE(TAG, "LoRa init FAILED!");
-            while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+            // The radio is soldered to this board, so a failed init is a
+            // hardware or assembly fault. This used to stop the boot here,
+            // before BLE, which left a unit with a bad radio unreachable: no
+            // OTA, no log download, nothing to diagnose it with. Carry on
+            // radio-less, as the UART path does. Every TR_LoRa_Comms call is a
+            // no-op while it is down, and [STATS] says RADIO DOWN.
+            ESP_LOGE(TAG, "LoRa init FAILED — continuing radio-less "
+                          "(on-board radio: a hardware fault; BLE stays up)");
         }
     }
 
@@ -4669,11 +4689,8 @@ static void setup_bs()
     // Start continuous receive mode
     if (radio_ok && !lora_comms.startReceive())
     {
-        ESP_LOGE(TAG, "LoRa startReceive FAILED!");
-        if (!config::USE_UART_RADIO_MODEM)
-        {
-            while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
-        }
+        // Same policy as a failed init: say so and keep the unit reachable.
+        ESP_LOGE(TAG, "LoRa startReceive FAILED — continuing without receive");
     }
 
     // Initialize BLE app interface

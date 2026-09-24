@@ -169,24 +169,28 @@ as V8 — pass it anyway so both halves of a pair are built with one flag. The s
 
 ### Building the base station
 
-`base_station` is the Tinker-Base's firmware. The Tinker-Base (`hardware/tinker-base/`) has
-no board map of its own yet, so the current build is the starting point: the full base
-station it grew from (`hardware/legacy/base-station/`). Its map will start from
-`board_v3.h` with the radio block changed — the Tinker-Base carries its LoRa radio on board
-over SPI, the direct path `base_station` already drives on the V1/V2 boards
-(`main/board/legacy/`), where V3 talks to a daughterboard over UART.
+`base_station` is the Tinker-Base's firmware. The build flag does not match the board
+number on the silkscreen — see [base-station.md](docs/architecture/base-station.md) for the
+flag-to-silkscreen mapping, which is the one place that tracks it. The Tinker-Base
+(`hardware/tinker-base/`, silkscreen V1) is board **4**:
 
-The build flag does not match the board number. That board is **V6**, built as
-`TR_BS_BOARD=3` — see [base-station.md](docs/architecture/base-station.md) for the
-flag-to-silkscreen mapping, which is the one place that tracks it:
+```bash
+idf.py -B build_v4 -DTR_BS_BOARD=4 build
+```
+
+Its map, `board_v4.h`, is netlist-verified but has not run — no Tinker-Base exists yet.
+The full base station it forked from (`hardware/legacy/base-station/`, silkscreen **V6**) is
+board **3**, and its image fills the release's Tinker-Base slot until V4 is proven:
 
 ```bash
 idf.py -B build_v3 -DTR_BS_BOARD=3 build
 ```
 
 A plain `build/` defaults to board 2 — a superseded revision. Flashing it onto a V6
-hard-hangs at boot with `LoRa init FAILED!`, before BLE init and before the main
-loop (#837 item 15).
+boots without a radio: it logs `LoRa init FAILED — continuing radio-less` and
+`[STATS] RADIO DOWN`, and receives nothing. BLE still comes up, so the app can see the
+unit and its `-v2` version — but that image refuses an OTA stamped for another board,
+so the fix is a USB flash of the `-DTR_BS_BOARD=3` build.
 
 ### `sdkconfig` overrides `sdkconfig.defaults`
 

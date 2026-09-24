@@ -1,6 +1,7 @@
-# sdkconfig overlay applied ONLY to -DTR_BS_BOARD=3 builds, on top of
-# sdkconfig.defaults. Selected by the project CMakeLists, not by the build-dir
-# name — see there.
+# sdkconfig overlay applied ONLY to -DTR_BS_BOARD=3 and -DTR_BS_BOARD=4 (the
+# Tinker-Base) builds, on top of sdkconfig.defaults. Selected by the project
+# CMakeLists, not by the build-dir name — see there. Both boards fit the same
+# 16 MB GD25Q128ESIG as U1 and neither has a NAND.
 #
 # Exists because the boot NOR size is a board fact and sdkconfig is
 # per-project. V1/V2 fit a W25Q64 (8 MB); V3 — the PCB V5/V6 hardware, fabbed
