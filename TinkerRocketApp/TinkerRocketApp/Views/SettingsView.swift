@@ -1042,7 +1042,7 @@ struct SettingsView: View {
                 .font(.caption).foregroundColor(.secondary)
 
             HStack {
-                Text("Min Speed")
+                Text("Activation Speed")
                 Spacer()
                 TextField("0", text: $sRollMinSpeed)
                     .keyboardType(.decimalPad)
@@ -1126,7 +1126,10 @@ struct SettingsView: View {
     // under SwiftUI's 10-subview ViewBuilder limit now that the law picker and
     // the per-law field set live here.
     private var guidanceSection: some View {
-        Section(header: configHeader("Guidance", applied: guidanceApplied)) {
+        // Activation Delay and Activation Speed below are Roll Control
+        // settings (they go out with the roll config), so either apply marks
+        // this header — Roll Control's own header is hidden in this mode.
+        Section(header: configHeader("Guidance", applied: guidanceApplied || rollControlApplied)) {
             guidanceIntroCopy
             guidanceLawFields
             guidanceSharedFields
@@ -1137,7 +1140,7 @@ struct SettingsView: View {
         Group {
             Text("Roll axis is rate-nulled (held at zero spin) \u{2014} the roll profile is not followed in Guidance mode.")
                 .font(.caption).foregroundColor(.secondary)
-            Text("Engages at the Activation Delay after launch (shared with roll control), not after burnout.")
+            Text("Engages once the Activation Delay and Activation Speed are both met (shared with roll control), not after burnout.")
                 .font(.caption).foregroundColor(.secondary)
 
             Picker("Guidance Law", selection: guidanceLawBinding) {
@@ -1240,13 +1243,22 @@ struct SettingsView: View {
             }
             Text("Milliseconds after launch before control activates \u{2014} roll-rate-null and guidance both engage at this delay, keeping fins neutral through initial boost.")
                 .font(.caption).foregroundColor(.secondary)
-            Text(profile.rollMinSpeedMps > 0
-                 ? "Roll Control also holds activation until \(formatDecimal(Double(profile.rollMinSpeedMps))) m/s. Guidance shares that gate, so it engages at whichever comes last."
-                 : "Roll Control can also hold activation until a minimum airspeed; that gate is off. Guidance shares it.")
+            // The same control-authority gate as Roll Control's field (one
+            // setting, sent with the roll config): until the EKF speed first
+            // reaches it every fin stays neutral, guidance included.
+            HStack {
+                Text("Activation Speed")
+                Spacer()
+                TextField("0", text: $sRollMinSpeed)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .rollMinSpeed)
+                Text("m/s").foregroundColor(.secondary)
+            }
+            Text("Airspeed the rocket must reach before any fin moves \u{2014} the same gate as Roll Control, applied on top of the Activation Delay. Once reached it stays open for the flight. 0 disables the speed gate.")
                 .font(.caption).foregroundColor(.secondary)
             Text(profile.pnGuidanceLaw == 0
-                 ? "Nav gain = PN aggressiveness (3\u{2013}5). Min speed gates guidance off below useful fin authority. Stored in the rocket profile."
-                 : "Min speed gates guidance off below useful fin authority. Stored in the rocket profile.")
+                 ? "Nav gain = PN aggressiveness (3\u{2013}5). Min speed turns steering off below useful fin authority, checked all flight; roll is still rate-nulled below it. Stored in the rocket profile."
+                 : "Min speed turns steering off below useful fin authority, checked all flight; roll is still rate-nulled below it. Stored in the rocket profile.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
