@@ -85,7 +85,7 @@ controller.
 | Task | Priority | Stack | When it runs |
 |---|---|---|---|
 | `oc_loop` | 5 | 12 KB | always — the `loop_oc()` body |
-| `I2S Parse` | 6 | 4 KB | woken by the I2S DMA callback |
+| `I2S Parse` | 6 | 6 KB | woken by the I2S DMA callback |
 | `OTA Feed` | 6 | 4 KB | only while relaying a firmware image to the FC |
 
 The parser outranks the main loop, so incoming telemetry preempts everything else on
@@ -130,7 +130,9 @@ flowchart TB
 The FC streams packed sensor frames over I2S as a continuous byte stream. On the OC
 side an ISR-context DMA callback pushes those bytes into a 64 KB ring and notifies the
 parser task; the parser pulls complete frames out, CRC-checks them, and dispatches on
-message type. Frames that survive land in two places — a cache of the latest sample per
+message type. An IMU batch (`ISM6_BATCH_MSG`, up to ten samples) is unpacked here into
+ordinary one-sample frames, so everything downstream — and the log — sees one record
+per sample. Frames that survive land in two places — a cache of the latest sample per
 type (which feeds LoRa and BLE) and, when logging is active, the flash logger.
 
 Two behaviors in this path are easy to misread as bugs:
