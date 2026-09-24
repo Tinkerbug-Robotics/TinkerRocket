@@ -251,8 +251,10 @@ void TR_ServoControl::idle() {
     // stay inside the normal LEDC duty API rather than ledc_stop(), so the next
     // setServoAngles()/setPulseChannel() resumes pulses through the identical path.
     for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
-        ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[i], 0);
-        ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[i]);
+        if (begun_) {   // no LEDC before begin() -- see writePulseDuty()
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[i], 0);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[i]);
+        }
         channel_driven_[i] = false;
     }
     is_idle_ = true;
@@ -281,6 +283,13 @@ void TR_ServoControl::setServoAngles(const float angles[4]) {
 }
 
 void TR_ServoControl::writePulseDuty(int channel, int pulse_us) {
+    // No LEDC before begin().  On a board with no servo pins (the mini)
+    // setup_fc never calls begin(), so the driver is never set up and every
+    // ledc_* call fails with an error log -- a burst per servo test, replay
+    // or stow command, which reach here without asking about pins.  Nothing
+    // is marked driven either: begin() leaves every channel at duty 0,
+    // relaxed, whatever was commanded before it ran.
+    if (!begun_) return;
     uint32_t max_duty = (1u << LEDC_RESOLUTION) - 1;
     uint32_t duty = (static_cast<uint32_t>(pulse_us)
                     * static_cast<uint32_t>(servo_hz)
