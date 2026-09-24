@@ -239,7 +239,7 @@ struct RocketConfig {
     var rollMinSpeedMps: Float = 0
     var rateCapDps: Float = 60
     var kpAngle: Float = 2.0               // outer angle-loop P-gain (cascaded angle control)
-    var integralSepThreshold: Float = 40   // PID integral-separation anti-windup threshold (deg/s); 0 disables
+    var integralSepThreshold: Float = 200  // PID integral-separation anti-windup threshold (deg/s); 0 disables
     /// True once the rocket reported real roll-control gains instead of the
     /// "use firmware default" sentinels (#253: rcap/kpang <= 0, iwind < 0).
     /// Until then the three fields above hold the APP's defaults, not the

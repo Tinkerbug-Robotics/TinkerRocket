@@ -1,5 +1,7 @@
 #include "TR_PID.h"
 
+#include <cmath>
+
 TR_PID::TR_PID(float kp,
                float ki,
                float kd,
@@ -15,8 +17,8 @@ TR_PID::TR_PID(float kp,
     max_cmd = max_in;
     min_cmd = min_in;
 
-    // Cumulative error starts at 0
-    cumulative_error = 0.0;
+    // I term starts at 0
+    integral_term = 0.0;
 
     // Initialize the last error to 0
     last_error = 0.0;
@@ -70,26 +72,40 @@ float TR_PID::computePID(float setpoint, float actual, float dt_seconds)
     // The accumulator holds its value through the transient and resumes near
     // the setpoint to reject steady disturbances. threshold <= 0 => always
     // integrate (original behavior).
+    //
+    // The accumulator is the I term itself: it sums Ki * error * dt, where
+    // this used to sum error * dt and multiply by the current Ki.  With a
+    // fixed Ki the two are the same controller.  They part when Ki moves,
+    // which the roll V² gain schedule does on every tick: Ki * sum(e*dt)
+    // rescales everything already integrated, so as a coasting rocket slows
+    // and Ki grows (up to 3x), a fin-trim offset held by the integrator grows
+    // with it and has to be unwound all the way to apogee — a standing roll
+    // error of about -trim * (dKi/dt) / Ki^2.  A trim built into the airframe
+    // scales with V² exactly as the fins' authority does, so what cancels it
+    // is one fin angle at every speed; summing Ki * e * dt holds that angle
+    // and lets Ki change only how fast the I term moves from here on.
     float abs_error = (error < 0.0f) ? -error : error;
     if (integral_sep_threshold <= 0.0f || abs_error <= integral_sep_threshold)
     {
-        cumulative_error += error * dt;
+        // Ki is inside the state now, so a non-finite gain or error would
+        // stick until the next reset (Ki * sum(e*dt) recovered on the next
+        // finite tick).  Skip the increment instead.
+        const float increment = Ki * error * dt;
+        if (std::isfinite(increment))
+        {
+            integral_term += increment;
+        }
     }
-    // #386: clamp the ACCUMULATOR, not just the I output below.  With only
-    // the output clamped, a long saturated stretch grows cumulative_error far
-    // past the value that already pins I at max_cmd; after the error
-    // reverses, all that surplus must be integrated back down before I (and
-    // the command) moves at all — fins held hard-over long past reversal.
-    // Bounding the accumulator at exactly the output-saturating value keeps
-    // steady-state behavior identical and makes recovery begin on the first
-    // post-reversal sample.  Ki > 0 guard: with Ki == 0 the I term is inert
-    // (and min/max divided by Ki would be undefined); the clamp then applies
-    // on the first compute after a runtime setKi() enables the term.
-    if (Ki > 0.0f)
-    {
-        cumulative_error = constrain(cumulative_error, min_cmd / Ki, max_cmd / Ki);
-    }
-    float I = constrain(Ki * cumulative_error, min_cmd, max_cmd);
+    // #386: clamp the ACCUMULATOR, not just the I output.  With only the
+    // output clamped, a long saturated stretch grows the accumulator far past
+    // the value that already pins I at max_cmd; after the error reverses, all
+    // that surplus must be integrated back down before I (and the command)
+    // moves at all — fins held hard-over long past reversal.  Held in output
+    // units, the output-saturating value is simply [min_cmd, max_cmd], so
+    // recovery begins on the first post-reversal sample and no Ki == 0 guard
+    // is needed.
+    integral_term = constrain(integral_term, min_cmd, max_cmd);
+    float I = integral_term;
 
     // Derivative-on-measurement to avoid kick on setpoint change.
     // Uses negative sign because d(measurement)/dt opposes d(error)/dt.
@@ -130,6 +146,13 @@ void TR_PID::setKp(float kp)
 void TR_PID::setKi(float ki)
 {
     Ki = ki;
+    // Ki = 0 is the operator saying "no integral action", and under
+    // Ki * sum(e*dt) it took the I term to zero at once.  Keep that: holding the
+    // I term in output units would otherwise freeze it at its last value.
+    if (ki == 0.0f)
+    {
+        integral_term = 0.0f;
+    }
 }
 
 void TR_PID::setKd(float kd)
@@ -160,7 +183,7 @@ void TR_PID::setMaxCmd(float max_in)
 
 void TR_PID::reset()
 {
-    cumulative_error = 0.0;
+    integral_term = 0.0;
     last_error = 0.0;
     last_measurement = 0.0;
     last_update_time = 0;
@@ -170,5 +193,5 @@ void TR_PID::reset()
 
 void TR_PID::resetIntegral()
 {
-    cumulative_error = 0.0;
+    integral_term = 0.0;
 }

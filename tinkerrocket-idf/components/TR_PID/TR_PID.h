@@ -24,7 +24,10 @@ public:
     // Set proportional gain
     void setKp(float Kp);
 
-    // Set integral gain
+    // Set integral gain.  The integral state is kept in OUTPUT units, so a new
+    // Ki changes only how fast the I term moves from here on, never its present
+    // value — the V² gain schedule calls this every tick.  Ki = 0 clears the I
+    // term (no integral action means none, not a frozen offset).
     void setKi(float Ki);
 
     // Set derivative gain
@@ -67,8 +70,11 @@ protected:
     // Derivative gain
     float Kd;
 
-    // Accumulate error for integral term
-    float cumulative_error;
+    // The I term itself, in output units: accumulates Ki * error * dt and is
+    // clamped to [min_cmd, max_cmd].  Holding the product (rather than the
+    // bare error integral, multiplied by whatever Ki is current) is what keeps
+    // the I term continuous when Ki changes.
+    float integral_term;
 
     uint32_t last_update_time = 0;
 

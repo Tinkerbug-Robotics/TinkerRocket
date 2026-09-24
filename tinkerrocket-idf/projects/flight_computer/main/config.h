@@ -466,10 +466,17 @@ struct config : board_pins
 
     // Integral-separation anti-windup threshold (deg/s). The roll-rate PID
     // integrator is frozen while |rate error| exceeds this, so a launch roll
-    // transient can't wind it up — which, with the higher KI above, would
-    // otherwise overshoot hard on an opposing-sign kick. Validated at 40 via
-    // SIL (#170). Runtime-overridable via NVS "iwind" / the app. <=0 disables.
-    static constexpr float INTEGRAL_SEP_THRESHOLD_DPS = 40.0f;
+    // transient can't wind it up. Runtime-overridable via NVS "iwind" / the
+    // app. <=0 disables.
+    //
+    // 200, not the 40 #170 validated. Since TR_PID holds the I term in fin
+    // degrees, a kick wound up mid-burn keeps its angle while the speed, and
+    // so its torque, is still rising: with the gate off, a 900 dps kick at
+    // T+0.45 s on the 67 mm F67 rang at 126 dps RMS, 58 with the gate at 200.
+    // And the gate must sit above the error the loop runs before its
+    // integrator has caught the trim, or the integrator never starts: 40 kept
+    // it frozen for the whole 2026-07-05 flight (P-only error 20-70 dps).
+    static constexpr float INTEGRAL_SEP_THRESHOLD_DPS = 200.0f;
 
     static constexpr bool USE_SERVO_CONTROL = true;
     static constexpr bool SERVO_WIGGLE_ON_BOOT = true;

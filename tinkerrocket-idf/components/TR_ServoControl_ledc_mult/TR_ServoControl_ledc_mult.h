@@ -261,8 +261,10 @@ private:
     // controlAngle() (per-tick rate command); does NOT touch pid_setpoint.
     void controlToSetpoint(float setpoint, float roll_rate);
     // Scale the PID gains by (V_ref/V)² (capped) when the gain schedule is
-    // enabled; no-op otherwise.  Split out so controlAngle() can schedule
-    // gains without routing through the persistent-setpoint control() path.
+    // enabled; no-op otherwise, and for a non-finite speed.  Split out so
+    // controlAngle() can schedule gains without routing through the
+    // persistent-setpoint control() path.  The I term is continuous across a
+    // scale change (TR_PID holds it in output units), so nothing is reset.
     void applyGainSchedule(float velocity_ms);
     // drive ONE servo channel to a nominal pulse (bias applied); used by the
     // boot wiggle to sequence the servos one at a time
@@ -321,8 +323,6 @@ private:
     // Cascaded angle control
     float kp_angle_;
 
-    // Previous gain schedule scale factor (for I-term reset on large changes)
-    float prev_gain_scale_ = 1.0f;
     // #1141 item 4: whether applyGainSchedule() has scaled the live PID gains
     // away from the base set, so the unscheduled paths can put them back.
     bool  schedule_applied_ = false;

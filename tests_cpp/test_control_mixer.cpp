@@ -285,3 +285,27 @@ TEST_F(ControlMixerTest, MixToFins_Clamps) {
         EXPECT_GE(d[i], -MAX_FIN);
     }
 }
+
+TEST_F(ControlMixerTest, GainSchedule_ITermContinuousAcrossASpeedStep) {
+    // The mixer used to reset both integrators whenever the schedule's scale
+    // moved by more than 0.1 in one update, because TR_PID's I term was Ki
+    // times the error integral and jumped with Ki.  It is held in output units
+    // now, so a speed step changes only how fast it integrates.
+    mixer.configure(0.0f, 0.05f, 0.0f,               // I-only pitch
+                    0.0f, 0.05f, 0.0f,
+                    MAX_FIN, 95.0f, 30.0f);
+    mixer.enableGainSchedule(95.0f, 30.0f);
+    mixer.reset();
+
+    float d[4];
+    updateAndGet(0, 0, 0, 0, 0, 0, 0, 95.0f, d);     // dt bootstrap
+    for (int i = 0; i < 500; i++) {                  // 10 deg pitch error at 95 m/s
+        updateAndGet(10.0f, 0, 0, 0, 0, 0, 0, 95.0f, d);
+    }
+    const float held = d[1];                         // pitch rides fin 1 (right)
+    ASSERT_GT(std::abs(held), 0.1f);
+
+    // Speed halves (scale 1 -> the 3x cap) with no error left: nothing moves.
+    updateAndGet(0, 0, 0, 0, 0, 0, 0, 47.5f, d);
+    EXPECT_NEAR(d[1], held, 1e-4f);
+}

@@ -119,7 +119,7 @@ public data class RocketProfile(
     val pidKd: Float = 0.0f,
     val pidMinCmd: Float = -20.0f,
     val pidMaxCmd: Float = 20.0f,
-    val integralSepThreshold: Float = 40f,
+    val integralSepThreshold: Float = 200f,
 
     // Roll profile
     val rollWaypoints: List<ProfileRollWaypoint> = emptyList(),

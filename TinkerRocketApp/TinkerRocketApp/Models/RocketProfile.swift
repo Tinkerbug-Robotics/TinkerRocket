@@ -211,7 +211,7 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var pidKd: Float = 0.0
     var pidMinCmd: Float = -20.0
     var pidMaxCmd: Float = 20.0
-    var integralSepThreshold: Float = 40   // PID integral-separation anti-windup threshold (deg/s); 0 disables
+    var integralSepThreshold: Float = 200  // PID integral-separation anti-windup threshold (deg/s); 0 disables
 
     // MARK: Roll profile
     var rollWaypoints: [RollWaypoint] = []

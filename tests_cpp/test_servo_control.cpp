@@ -589,3 +589,88 @@ TEST_F(ServoControlTest, ResetPidAlsoRestoresBaseGains) {
     servo.control(10.0f);
     EXPECT_NEAR(std::fabs(servo.getRollCmdDeg()), 10.0f, 0.5f);
 }
+
+// ---------- The scheduled I term through coast ----------
+//
+// The V² schedule multiplies Ki by up to GAIN_SCHEDULE_SCALE_CAP as the rocket
+// slows.  TR_PID's I term used to be Ki times the error integral, so a fin
+// trim the loop had learned grew with the schedule and was unwound all through
+// coast — a standing roll error of ~10 dps (F67) to ~26 dps (G80) on the 67 mm
+// testbed.  The I term is now held in fin degrees and only its RATE follows
+// the schedule; nothing resets it when the scale moves.
+
+namespace {
+// I-only roll loop (Kp = Kd = 0), so the roll command IS the I term.
+TR_ServoControl makeIOnlyServo(float ki) {
+    return TR_ServoControl(1, 2, 3, 4, 0, 0, 0, 0, 50, 1000, 2000,
+                           0.0f, ki, 0.0f, -20.0f, 20.0f);
+}
+}  // namespace
+
+TEST_F(ServoControlTest, ScheduledITermHoldsItsTrimAsTheRocketSlows) {
+    TR_ServoControl s = makeIOnlyServo(0.06f);
+    s.begin();
+    s.enableGainSchedule(/*v_ref=*/50.0f, /*v_min=*/25.0f);
+    tick();
+    s.controlWithGainSchedule(0.0f, 60.0f);           // dt bootstrap
+
+    // Learn a 3.6 deg trim at 60 m/s: scale (50/60)^2, so each 2 ms tick of a
+    // 60 dps error adds 0.06 * 0.694 * 60 * 0.002 = 0.005 deg.
+    for (int i = 0; i < 720; ++i) {
+        tick();
+        s.controlWithGainSchedule(-60.0f, 60.0f);
+    }
+    const float trim = s.getRollCmdDeg();
+    ASSERT_NEAR(trim, 3.6f, 1e-3f);
+
+    // Coast from 60 to 25 m/s with the rate nulled: the scale climbs to its
+    // 3x cap, and the trim must stay put — it was 4.3x larger (15.6 deg) when
+    // the I term was Ki * sum(e*dt).
+    for (int i = 0; i <= 2000; ++i) {
+        tick();
+        s.controlWithGainSchedule(0.0f, 60.0f - 35.0f * (float)i / 2000.0f);
+    }
+    EXPECT_NEAR(s.getRollCmdDeg(), trim, 1e-3f);
+}
+
+TEST_F(ServoControlTest, TheEkfHealthFallbackKeepsTheLearnedTrim) {
+    // restoreBaseGains() used to reset the integrator, because a term held as
+    // Ki * sum(e*dt) meant something else under the base Ki.  Held in fin
+    // degrees it does not, and throwing the trim away cost a spin-up transient
+    // on the pure-gyro fallback — the path that runs when things are worst.
+    TR_ServoControl s = makeIOnlyServo(0.06f);
+    s.begin();
+    s.enableGainSchedule(50.0f, 25.0f);
+    tick();
+    s.controlWithGainSchedule(0.0f, 30.0f);           // dt bootstrap
+    // At 30 m/s the scale is 2.78: 0.06 * 2.78 * 60 * 0.002 = 0.02 deg a tick.
+    for (int i = 0; i < 180; ++i) {
+        tick();
+        s.controlWithGainSchedule(-60.0f, 30.0f);
+    }
+    const float trim = s.getRollCmdDeg();
+    ASSERT_NEAR(trim, 3.6f, 1e-3f);
+
+    tick();
+    s.control(0.0f);                                   // the fallback, base gains
+    EXPECT_NEAR(s.getRollCmdDeg(), trim, 1e-4f);
+}
+
+TEST_F(ServoControlTest, NonFiniteSpeedKeepsTheLastScheduledGains) {
+    // std::max passes a NaN speed straight through to the scale (NaN gains,
+    // NaN command), and +inf made the scale 0 — no control at all, and a zero
+    // Ki now also clears the I term.  Either way: hold the last good gains.
+    servo.enableGainSchedule(50.0f, 25.0f);
+    tick();
+    servo.controlWithGainSchedule(10.0f, 30.0f);      // P-only: -10 * 2.78
+    const float scheduled = servo.getRollCmdDeg();
+    ASSERT_NEAR(scheduled, -10.0f * (50.0f / 30.0f) * (50.0f / 30.0f), 1e-3f);
+
+    tick();
+    servo.controlWithGainSchedule(10.0f, std::numeric_limits<float>::quiet_NaN());
+    EXPECT_NEAR(servo.getRollCmdDeg(), scheduled, 1e-4f);
+
+    tick();
+    servo.controlWithGainSchedule(10.0f, std::numeric_limits<float>::infinity());
+    EXPECT_NEAR(servo.getRollCmdDeg(), scheduled, 1e-4f);
+}

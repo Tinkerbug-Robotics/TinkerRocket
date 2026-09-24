@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include <cmath>
+#include <limits>
 #include "TR_PID.h"
 
 // ---------- Helpers ----------
@@ -46,8 +48,7 @@ TEST_F(PIDTest, IntegralAccumulation) {
     for (int i = 0; i < 10; i++) {
         out = i_only.computePID(5.0f, 0.0f, DT);
     }
-    // cumulative_error = 5.0 * 0.01 * 10 = 0.5
-    // I = Ki * cumulative_error = 1.0 * 0.5 = 0.5
+    // I accumulates Ki * error * dt = 1.0 * 5.0 * 0.01, ten times = 0.5
     EXPECT_NEAR(out, 0.5f, 1e-4f);
 }
 
@@ -216,30 +217,29 @@ TEST_F(PIDTest, DFilter_Reset_ClearsFilterState) {
 
 // ---------- #386: integrator ACCUMULATOR clamp ----------
 //
-// The I output was always clamped, but cumulative_error grew unbounded during
+// The I output was always clamped, but the accumulator grew unbounded during
 // a long saturated stretch; after the error reversed, all that surplus had to
 // integrate back down before the command moved at all — fins held hard-over
 // long past reversal.  The accumulator is now bounded at the value that
-// exactly saturates the output, so recovery begins on the first
-// post-reversal sample.
+// exactly saturates the output — [MIN, MAX] itself, since it holds the I term
+// in output units — so recovery begins on the first post-reversal sample.
 
 TEST_F(PIDTest, IntegratorRecoversPromptlyAfterLongSaturation) {
-    // I-only controller: Ki=0.5, output cap ±10 -> accumulator cap ±20.
+    // I-only controller: Ki=0.5, output cap ±10 -> I-term cap ±10.
     TR_PID i_pid(0.0f, KI, 0.0f, MAX, MIN);
     i_pid.computePID(0.0f, 0.0f, DT);  // init
 
-    // 60 simulated seconds of hard +10 error: unclamped accumulator would
-    // reach 6000 (I = 3000 pre-clamp); clamped it stops at 20.
+    // 60 simulated seconds of hard +10 error: unclamped the I term would
+    // reach 3000; clamped it stops at MAX.
     for (int i = 0; i < 6000; i++) {
         i_pid.computePID(10.0f, 0.0f, DT);
     }
 
-    // Error reverses to -10.  Pre-fix, unwinding 6000 -> 20 at 0.1/step took
-    // ~59800 steps (~10 minutes of flight) with the output pinned at MAX the
-    // whole time.  Post-fix the output must leave the +MAX rail within the
-    // steps it takes the accumulator to cross from +cap toward zero: at
-    // |error|*dt = 0.1 per step and cap 20, output < MAX within ~2 steps and
-    // negative within ~400.
+    // Error reverses to -10.  Pre-#386, unwinding the surplus took ~59800
+    // steps (~10 minutes of flight) with the output pinned at MAX the whole
+    // time.  Now the output must leave the +MAX rail at once and cross zero
+    // in the steps it takes Ki*|error|*dt = 0.05 per step to walk the I term
+    // down from +10: ~200.
     int steps_to_leave_rail = -1, steps_to_negative = -1;
     for (int i = 0; i < 1000; i++) {
         float out = i_pid.computePID(-10.0f, 0.0f, DT);
@@ -263,24 +263,130 @@ TEST_F(PIDTest, AccumulatorClampPreservesSteadyState) {
     EXPECT_NEAR(out, 0.5f, 1e-4f);
 }
 
-TEST_F(PIDTest, KiZeroAccumulatorHarmlessThenClampedOnEnable) {
-    // Ki = 0: the I term is inert and the clamp is skipped (min/Ki would be
-    // undefined).  Enabling Ki at runtime must clamp the stale accumulator on
-    // the next compute instead of pinning the output for minutes.
+TEST_F(PIDTest, KiZeroAccumulatesNothingSoEnablingKiDoesNotBump) {
+    // Ki = 0 integrates nothing — the increment is Ki * error * dt — so a
+    // minute of hard error with the I term off leaves nothing behind for a
+    // later setKi() to release.  (When the accumulator held the bare error
+    // integral, enabling Ki put a minute's worth of it on the fins at once,
+    // clamped only because #386 bounded it.)
     TR_PID pid_rt(0.0f, 0.0f, 0.0f, MAX, MIN);
     pid_rt.computePID(0.0f, 0.0f, DT);
     for (int i = 0; i < 6000; i++) pid_rt.computePID(10.0f, 0.0f, DT);
 
     pid_rt.setKi(KI);
-    // First compute after enable: accumulator (6000) clamps to 20 -> I = 10.
-    float out = pid_rt.computePID(0.0f, 0.0f, DT);
-    EXPECT_LE(out, MAX);
-    // Reversal releases promptly, proving the stale accumulator was clamped.
-    int steps_to_negative = -1;
-    for (int i = 0; i < 1000; i++) {
-        float o = pid_rt.computePID(-10.0f, 0.0f, DT);
-        if (o < 0.0f) { steps_to_negative = i; break; }
+    EXPECT_NEAR(pid_rt.computePID(0.0f, 0.0f, DT), 0.0f, 1e-6f);
+    // And it integrates from zero: one reversed step is already negative.
+    EXPECT_LT(pid_rt.computePID(-10.0f, 0.0f, DT), 0.0f);
+}
+
+// ---------- The I term is continuous when Ki changes ----------
+//
+// The accumulator holds Ki * error * dt summed — the I term in output units —
+// not the bare error integral multiplied by whatever Ki is current.  With a
+// fixed Ki those are the same controller; the roll V² gain schedule changes Ki
+// on every tick, and under Ki * sum(e*dt) a trim offset the integrator had
+// learned grew with Ki as the rocket slowed (up to 3x), which the loop then
+// had to unwind all through coast: a standing roll error of ~10 dps on the
+// 67 mm testbed's F67 flights, ~26 on a G80.
+
+namespace {
+// Drive an I-only PID at zero error for n steps while Ki ramps linearly from
+// ki0 to ki1 — the gain schedule on a decelerating rocket whose loop is
+// already holding its trim — and return the last output.
+float rampKiAtZeroError(TR_PID &pid, float ki0, float ki1, int n) {
+    float out = 0.0f;
+    for (int i = 1; i <= n; i++) {
+        pid.setKi(ki0 + (ki1 - ki0) * (float)i / (float)n);
+        out = pid.computePID(0.0f, 0.0f, DT);
     }
-    ASSERT_GE(steps_to_negative, 0);
-    EXPECT_LE(steps_to_negative, 450);
+    return out;
+}
+}  // namespace
+
+TEST_F(PIDTest, KiRampHoldsALearnedTrimInsteadOfScalingIt) {
+    TR_PID i_pid(0.0f, 0.06f, 0.0f, 20.0f, -20.0f);
+    i_pid.computePID(0.0f, 0.0f, DT);
+    // Learn a 3.6 deg trim: 0.06 * 60 dps * 0.01 s * 100 steps.
+    float trim = 0.0f;
+    for (int i = 0; i < 100; i++) trim = i_pid.computePID(60.0f, 0.0f, DT);
+    ASSERT_NEAR(trim, 3.6f, 1e-3f);
+
+    // Coast: the schedule takes Ki from 1x to its 3x cap.  At zero error the
+    // I term must not move — Ki * sum(e*dt) would have tripled it to 10.8.
+    EXPECT_NEAR(rampKiAtZeroError(i_pid, 0.06f, 0.18f, 500), trim, 1e-4f);
+}
+
+TEST_F(PIDTest, KiChangeSetsOnlyTheRateFromThereOn) {
+    TR_PID i_pid(0.0f, KI, 0.0f, MAX, MIN);
+    i_pid.computePID(0.0f, 0.0f, DT);
+    for (int i = 0; i < 100; i++) i_pid.computePID(1.0f, 0.0f, DT);   // I = 0.5
+
+    i_pid.setKi(3.0f * KI);
+    EXPECT_NEAR(i_pid.computePID(0.0f, 0.0f, DT), 0.5f, 1e-5f)
+        << "the I term jumped when Ki changed";
+    // Ten more steps of error 1.0 now add 1.5 * 1.0 * 0.01 each.
+    float out = 0.0f;
+    for (int i = 0; i < 10; i++) out = i_pid.computePID(1.0f, 0.0f, DT);
+    EXPECT_NEAR(out, 0.5f + 0.15f, 1e-4f);
+}
+
+TEST_F(PIDTest, FixedKiIsUnchangedFromKiTimesTheErrorIntegral) {
+    // Every PID that does not schedule its gains — the ground-test roll PID,
+    // roll control with the schedule off — must behave exactly as before.
+    // Reference: Ki * sum(e*dt) in double, with the old clamp and the
+    // separation gate, over an error sequence that saturates and reverses.
+    const float ki = 0.3f, sep = 25.0f;
+    TR_PID i_pid(0.0f, ki, 0.0f, MAX, MIN);
+    i_pid.setIntegralSeparationThreshold(sep);
+    i_pid.computePID(0.0f, 0.0f, DT);
+    double acc = 0.0;
+    for (int i = 0; i < 3000; i++) {
+        const float e = 30.0f * std::sin(0.013f * (float)i) + 4.0f;   // gated above 25
+        const float out = i_pid.computePID(e, 0.0f, DT);
+        if (std::fabs(e) <= sep) acc += (double)e * DT;
+        acc = std::fmin(std::fmax(acc, MIN / ki), MAX / ki);
+        ASSERT_NEAR(out, (float)(ki * acc), 2e-4f) << "step " << i;
+    }
+}
+
+TEST_F(PIDTest, SetKiZeroClearsTheIntegralTerm) {
+    // Ki = 0 is "no integral action": the I term goes to zero at once, as it
+    // did when it was Ki * sum(e*dt), rather than freezing at its last value.
+    TR_PID i_pid(0.0f, KI, 0.0f, MAX, MIN);
+    i_pid.computePID(0.0f, 0.0f, DT);
+    for (int i = 0; i < 100; i++) i_pid.computePID(1.0f, 0.0f, DT);   // I = 0.5
+    i_pid.setKi(0.0f);
+    EXPECT_NEAR(i_pid.computePID(0.0f, 0.0f, DT), 0.0f, 1e-6f);
+}
+
+TEST_F(PIDTest, OutputLimitChangeClampsTheIntegralTerm) {
+    TR_PID i_pid(0.0f, KI, 0.0f, MAX, MIN);
+    i_pid.computePID(0.0f, 0.0f, DT);
+    for (int i = 0; i < 1600; i++) i_pid.computePID(1.0f, 0.0f, DT);  // I = 8
+    i_pid.setMaxCmd(5.0f);
+    EXPECT_NEAR(i_pid.computePID(0.0f, 0.0f, DT), 5.0f, 1e-5f);
+    // Clamped, not merely hidden: one reversed step comes straight off 5.
+    EXPECT_LT(i_pid.computePID(-1.0f, 0.0f, DT), 5.0f);
+}
+
+TEST_F(PIDTest, NonFiniteGainOrErrorDoesNotPoisonTheIntegralTerm) {
+    // Ki now lives inside the state, so a NaN Ki or error folded in once
+    // would stay until the next reset.  The increment is skipped instead.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    TR_PID i_pid(0.0f, KI, 0.0f, MAX, MIN);
+    i_pid.computePID(0.0f, 0.0f, DT);
+    for (int i = 0; i < 100; i++) i_pid.computePID(1.0f, 0.0f, DT);   // I = 0.5
+
+    i_pid.setKi(nan);
+    i_pid.computePID(1.0f, 0.0f, DT);
+    i_pid.setKi(KI);
+    EXPECT_NEAR(i_pid.computePID(0.0f, 0.0f, DT), 0.5f, 1e-5f);
+
+    i_pid.computePID(nan, 0.0f, DT);          // this tick's output is NaN (P)
+    EXPECT_NEAR(i_pid.computePID(0.0f, 0.0f, DT), 0.5f, 1e-5f);
+
+    i_pid.setKi(std::numeric_limits<float>::infinity());
+    i_pid.computePID(0.0f, 0.0f, DT);         // inf * 0 = NaN
+    i_pid.setKi(KI);
+    EXPECT_NEAR(i_pid.computePID(0.0f, 0.0f, DT), 0.5f, 1e-5f);
 }

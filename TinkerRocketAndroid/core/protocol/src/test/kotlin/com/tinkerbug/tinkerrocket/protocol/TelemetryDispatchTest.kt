@@ -183,7 +183,7 @@ class TelemetryDispatchTest {
     fun `config sentinel matrix - iwind gates on greater or equal zero`() {
         // 0 is a VALID value for iwind (disables integral separation) —
         // only negatives are the sentinel.
-        assertEquals(40f, config("""{"type":"config","iwind":-1}""").integralSepThreshold)
+        assertEquals(200f, config("""{"type":"config","iwind":-1}""").integralSepThreshold)
         assertEquals(0f, config("""{"type":"config","iwind":0}""").integralSepThreshold)
         assertEquals(25f, config("""{"type":"config","iwind":25.0}""").integralSepThreshold)
     }

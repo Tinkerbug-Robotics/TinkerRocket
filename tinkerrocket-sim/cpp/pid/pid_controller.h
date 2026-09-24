@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 
 /// Platform-independent PID controller.
 /// Ported from TR_PID (Arduino), with explicit dt parameter.
@@ -10,7 +11,7 @@ public:
                   float min_cmd, float max_cmd)
         : Kp_(kp), Ki_(ki), Kd_(kd),
           min_cmd_(min_cmd), max_cmd_(max_cmd),
-          cumulative_error_(0.0f), last_error_(0.0f),
+          integral_(0.0f), last_error_(0.0f),
           first_call_(true) {}
 
     /// Compute PID output given setpoint, measurement, and timestep.
@@ -27,16 +28,18 @@ public:
         // Proportional
         float P = Kp_ * error;
 
-        // Integral with anti-windup.  #386: clamp the ACCUMULATOR, not just
-        // the I output — mirrors TR_PID.cpp.  With only the output clamped, a
-        // long saturated stretch grows cumulative_error_ unbounded and the
-        // command stays pinned long after the error reverses.
-        cumulative_error_ += error * dt;
-        if (Ki_ > 0.0f) {
-            cumulative_error_ = std::clamp(cumulative_error_,
-                                           min_cmd_ / Ki_, max_cmd_ / Ki_);
+        // Integral, held as the I term itself — mirrors TR_PID.cpp.  Summing
+        // Ki*e*dt (not Ki times the error integral) keeps the I term
+        // continuous when the gain schedule moves Ki, and skips a non-finite
+        // increment rather than keeping it.  #386: the accumulator is clamped,
+        // not just the output — at the output limits, since it is in output
+        // units — so the command releases as soon as the error reverses.
+        const float increment = Ki_ * error * dt;
+        if (std::isfinite(increment)) {
+            integral_ += increment;
         }
-        float I = std::clamp(Ki_ * cumulative_error_, min_cmd_, max_cmd_);
+        integral_ = std::clamp(integral_, min_cmd_, max_cmd_);
+        float I = integral_;
 
         // Derivative
         float D = Kd_ * ((error - last_error_) / dt);
@@ -48,14 +51,15 @@ public:
 
     /// Reset controller state.
     void reset() {
-        cumulative_error_ = 0.0f;
+        integral_ = 0.0f;
         last_error_ = 0.0f;
         first_call_ = true;
     }
 
     // Gain setters
     void setKp(float kp) { Kp_ = kp; }
-    void setKi(float ki) { Ki_ = ki; }
+    // Ki = 0 clears the I term, as TR_PID::setKi does.
+    void setKi(float ki) { Ki_ = ki; if (ki == 0.0f) integral_ = 0.0f; }
     void setKd(float kd) { Kd_ = kd; }
     void setMinCmd(float v) { min_cmd_ = v; }
     void setMaxCmd(float v) { max_cmd_ = v; }
@@ -66,13 +70,13 @@ public:
     float getKd() const { return Kd_; }
     float getMinCmd() const { return min_cmd_; }
     float getMaxCmd() const { return max_cmd_; }
-    float getCumulativeError() const { return cumulative_error_; }
+    float getIntegral() const { return integral_; }
     float getLastError() const { return last_error_; }
 
 private:
     float Kp_, Ki_, Kd_;
     float min_cmd_, max_cmd_;
-    float cumulative_error_;
+    float integral_;   // the I term, output units
     float last_error_;
     bool first_call_;
 };

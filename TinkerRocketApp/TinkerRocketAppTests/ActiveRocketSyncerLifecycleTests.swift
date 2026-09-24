@@ -185,7 +185,7 @@ final class ActiveRocketSyncerLifecycleTests: XCTestCase {
         }
         // Values chosen to match the profile so only orientation differs.
         feed("""
-            {"type":"config","sb1":0,"shz":333,"smn":1000,"smx":2000,            "kp":0.1200,"ki":0.0100,"kd":0.0000,"pmn":-20.0,"pmx":20.0,            "sen":true,"gs":true,"ac":false,"rdly":0,            "rcap":60.0,"kpang":2.00,"iwind":40.0,            "ge":false,"camt":2,"irate":0}
+            {"type":"config","sb1":0,"shz":333,"smn":1000,"smx":2000,            "kp":0.1200,"ki":0.0100,"kd":0.0000,"pmn":-20.0,"pmx":20.0,            "sen":true,"gs":true,"ac":false,"rdly":0,            "rcap":60.0,"kpang":2.00,"iwind":200.0,            "ge":false,"camt":2,"irate":0}
             """)
         feed("""
             {"type":"config_pyro","p1e":false,"p1m":0,"p1v":1.0,            "p2e":false,"p2m":0,"p2v":100.0,"p3e":false,"p3m":0,"p3v":0.0,            "p4e":false,"p4m":0,"p4v":0.0}

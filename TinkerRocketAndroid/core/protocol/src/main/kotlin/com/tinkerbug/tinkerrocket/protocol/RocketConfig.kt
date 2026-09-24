@@ -87,7 +87,7 @@ public data class RocketConfig(
     /** Outer angle-loop P-gain (cascaded angle control). */
     val kpAngle: Float = 2.0f,                  // "kpang" (#253 sentinel: <= 0 → keep default)
     /** PID integral-separation anti-windup threshold (deg/s); 0 disables. */
-    val integralSepThreshold: Float = 40f,      // "iwind" (#253 sentinel: < 0 → keep default)
+    val integralSepThreshold: Float = 200f,     // "iwind" (#253 sentinel: < 0 → keep default)
     /**
      * True once the rocket reported real roll-control gains rather than the
      * #253 "use firmware default" sentinels.  Until then the three fields

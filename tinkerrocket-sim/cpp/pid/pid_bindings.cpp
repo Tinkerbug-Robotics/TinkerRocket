@@ -27,6 +27,6 @@ PYBIND11_MODULE(_pid, m) {
         .def_property_readonly("kd", &PIDController::getKd)
         .def_property_readonly("min_cmd", &PIDController::getMinCmd)
         .def_property_readonly("max_cmd", &PIDController::getMaxCmd)
-        .def_property_readonly("cumulative_error", &PIDController::getCumulativeError)
+        .def_property_readonly("integral", &PIDController::getIntegral)
         .def_property_readonly("last_error", &PIDController::getLastError);
 }

@@ -36,7 +36,7 @@ class FirmwareDefaultsTest {
         assertEquals(0.0f, p.pidKd)                  // config.h:160 KD
         assertEquals(-20.0f, p.pidMinCmd)            // config.h:161 MIN_CMD
         assertEquals(20.0f, p.pidMaxCmd)             // config.h:162 MAX_CMD
-        assertEquals(40f, p.integralSepThreshold)    // config.h:184 INTEGRAL_SEP_THRESHOLD_DPS
+        assertEquals(200f, p.integralSepThreshold)   // config.h INTEGRAL_SEP_THRESHOLD_DPS
     }
 
     @Test
