@@ -650,6 +650,20 @@ target_include_directories(test_ble_chunk_size PRIVATE
 target_link_libraries(test_ble_chunk_size GTest::gtest_main)
 gtest_discover_tests(test_ble_chunk_size)
 
+# ---------- test_ble_adv_status ----------
+# The once-a-minute BLE status line. The rocket has gone missing over BLE with no
+# central connected; the line's job is to say, in any console capture, whether
+# the board is connected, advertising (fast or slow) or advertising NOTHING, and
+# why. BleAdvStatus.h is pure, so the verdicts (FAST_OVERDUE above all), their
+# wrap-safety and the line's text are tested on the host.
+add_executable(test_ble_adv_status test_ble_adv_status.cpp)
+target_include_directories(test_ble_adv_status PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_BLE_To_APP
+)
+target_link_libraries(test_ble_adv_status GTest::gtest_main)
+gtest_discover_tests(test_ble_adv_status)
+
 # ---------- test_ble_download_chunk ----------
 # #1160 / #1155 item 2: a log frame larger than the chunk capacity used to be
 # appended and sent whole at an empty stage — an over-MTU notification NimBLE

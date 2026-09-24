@@ -70,6 +70,14 @@ on, so a rail-off file list answers `[]` and a download is refused with `EOF|ABO
 In the **active** state the rail is closed, the FC boots, and the OC starts doing all
 four of its jobs at once.
 
+In both states the OC logs one `BLE: [STATUS]` line a minute. It says whether a central is
+connected, or which advertising phase is running: fast (152.5 ms) for 30 s after boot or a
+disconnect, then slow (1000 ms). It also carries the connect, disconnect and advertising-start
+counts. When nobody is connected and nothing is advertising, it warns `NOT ADVERTISING` and
+says why: the last start failed, a host reset stopped it, or the fast phase ended and the slow
+phase never started. A board that can't be found over BLE can then be diagnosed from the
+console as it stands, without the reset that would clear the cause (`BleAdvStatus.h`).
+
 The transition off is worth noting: **powering down is a reboot, not a teardown.**
 `esp_restart()` is called deliberately rather than unwinding each peripheral, because
 surgical teardown left residual state that broke the next power-on (a held I2S APB

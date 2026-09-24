@@ -69,6 +69,12 @@ static constexpr uint16_t kDleTxTime1MUs = 2120;
 // callback (runs on the NimBLE host task) and the main loop reading it.
 static portMUX_TYPE s_cmd_mux = portMUX_INITIALIZER_UNLOCKED;
 
+// Spinlock around adv_status_, the status line's inputs: written by the GAP
+// callbacks on the host task, copied whole by logStatus() on the loop task, so
+// the line never mixes one advertising start's phase with another's deadline.
+// Nothing logs while holding it.
+static portMUX_TYPE s_status_mux = portMUX_INITIALIZER_UNLOCKED;
+
 // ============================================================================
 // Static instance pointer (needed for C-style NimBLE callbacks)
 // ============================================================================
@@ -219,6 +225,15 @@ void TR_BLE_To_APP::setName(const char* name)
 void TR_BLE_To_APP::on_ble_hs_reset(int reason)
 {
     ESP_LOGW(BLE_TAG, "NimBLE host reset, reason=%d", reason);
+    if (s_instance_)
+    {
+        // A reset stops advertising; the next host sync starts it again.
+        portENTER_CRITICAL(&s_status_mux);
+        s_instance_->adv_status_.host_resets++;
+        s_instance_->adv_status_.last_host_reset_reason = reason;
+        s_instance_->adv_status_.adv_active = false;
+        portEXIT_CRITICAL(&s_status_mux);
+    }
 }
 
 void TR_BLE_To_APP::on_ble_hs_sync()
@@ -344,6 +359,9 @@ int TR_BLE_To_APP::gap_event_cb(struct ble_gap_event* event, void* arg)
         // phase's duration expiry — startAdvertising() then picks the slow
         // 1000 ms phase (deadline passed). Skip while connected: we advertise
         // for ONE central; re-advertising mid-connection would invite a second.
+        portENTER_CRITICAL(&s_status_mux);
+        self->adv_status_.adv_active = false;
+        portEXIT_CRITICAL(&s_status_mux);
         if (!self->device_connected_)
         {
             self->startAdvertising();
@@ -382,6 +400,13 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     // #524: latch the cadence the peer opened with. CONN_UPDATE only fires on a
     // CHANGE, so without this the initial parameters would never be recorded.
     eff_event_ms_ = (desc != nullptr) ? effFromDesc(*desc) : 30;
+
+    // A connection ends undirected advertising in the controller.
+    portENTER_CRITICAL(&s_status_mux);
+    adv_status_.adv_active         = false;
+    adv_status_.connects++;
+    adv_status_.connected_since_ms = (uint32_t)millis();
+    portEXIT_CRITICAL(&s_status_mux);
 
     ESP_LOGI(BLE_TAG, "Device connected! handle=%u", conn_handle);
 
@@ -627,6 +652,11 @@ void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
     // file_list_page / delete_name / download_name "clears after reading"
     // contract); drop it too so nothing from the dead link survives.
     consumed_ = tr_ble::PendingCommand{};
+
+    portENTER_CRITICAL(&s_status_mux);
+    adv_status_.disconnects++;
+    adv_status_.last_disconnect_reason = reason;
+    portEXIT_CRITICAL(&s_status_mux);
 
     ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d (%s)", reason, disconnectReasonName(reason));
     if (dropped > 0)
@@ -1094,6 +1124,27 @@ void TR_BLE_To_APP::startAdvertising()
 
     rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, nullptr, duration_ms,
                            &adv_params, gap_event_cb, this);
+
+    // For the status line. EALREADY leaves the running advertisement, and its
+    // phase, as they were.
+    portENTER_CRITICAL(&s_status_mux);
+    if (rc == 0)
+    {
+        adv_status_.adv_active    = true;
+        adv_status_.adv_fast      = fast;
+        adv_status_.adv_since_ms  = now_ms;
+        adv_status_.fast_until_ms = fast ? now_ms + (uint32_t)duration_ms : 0;
+        adv_status_.adv_starts++;
+        adv_status_.last_adv_rc   = 0;
+    }
+    else if (rc != BLE_HS_EALREADY)
+    {
+        adv_status_.adv_active    = false;
+        adv_status_.adv_start_fails++;
+        adv_status_.last_adv_rc   = rc;
+    }
+    portEXIT_CRITICAL(&s_status_mux);
+
     if (rc != 0 && rc != BLE_HS_EALREADY)
     {
         ESP_LOGE(BLE_TAG, "ble_gap_adv_start failed, rc=%d", rc);
@@ -1231,6 +1282,31 @@ void TR_BLE_To_APP::loop()
             esp_restart();
         }
     }
+
+    if (status_log_period_ms_ != 0)
+    {
+        const uint32_t now = (uint32_t)millis();
+        if ((uint32_t)(now - status_last_log_ms_) >= status_log_period_ms_)
+        {
+            status_last_log_ms_ = now;
+            logStatus(now);
+        }
+    }
+}
+
+void TR_BLE_To_APP::logStatus(uint32_t now_ms)
+{
+    portENTER_CRITICAL(&s_status_mux);
+    tr_ble::AdvStatus snap = adv_status_;
+    portEXIT_CRITICAL(&s_status_mux);
+    snap.connected = device_connected_;
+
+    char line[256];
+    tr_ble::formatStatus(snap, now_ms, line, sizeof line);
+    if (tr_ble::isAlarm(tr_ble::classify(snap, now_ms)))
+        ESP_LOGW(BLE_TAG, "%s", line);
+    else
+        ESP_LOGI(BLE_TAG, "%s", line);
 }
 
 // #283: authoritative current ATT MTU.  BLE_GAP_EVENT_MTU populates the

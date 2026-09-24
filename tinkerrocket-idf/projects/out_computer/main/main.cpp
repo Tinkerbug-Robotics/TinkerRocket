@@ -10205,6 +10205,12 @@ static void setup_oc()
     // relying on who gets there first.
     ble_app.setAutoConnParams(false);
 
+    // One BLE status line a minute: connected, advertising and in which phase, or
+    // NOT ADVERTISING and why (BleAdvStatus.h). The rocket has gone missing over
+    // BLE with no central connected, and a reset clears whatever caused it; with
+    // this line any console capture shows the state as it stands.
+    ble_app.setStatusLogPeriod(60000);
+
     // #541: must run BEFORE ble_app.begin() — the BT controller samples the
     // RTC slow-clock source once at init to choose its low-power clock.
     retry32kCrystal();
