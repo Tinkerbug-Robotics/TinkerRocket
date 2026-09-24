@@ -851,16 +851,14 @@ struct SettingsView: View {
         }
 
         Section("IMU Logging Rate") {
+            // Six choices no longer fit a segmented row, so a menu (#1485).
             Picker("Rate", selection: imuRateBinding) {
-                Text("Dynamic").tag(RocketProfile.imuRateDynamic)
-                Text("1k").tag(UInt16(960))
-                Text("2k").tag(UInt16(1920))
-                Text("4k").tag(UInt16(3840))
+                ForEach(imuRateChoicesShown, id: \.setting) { choice in
+                    Text(choice.label).tag(choice.setting)
+                }
             }
-            .pickerStyle(.segmented)
-            Text(profile.imuRateHz == RocketProfile.imuRateDynamic
-                ? "Logs at 4k (3840 Hz) from the pad through boost and coast, then drops to 1k (960 Hz) once the rocket detects its recovery deployment \u{2014} full shock and vibration detail where it matters, without filling the log under canopy."
-                : "Samples logged per second from the IMU (actual: 960 / 1920 / 3840 Hz). Higher rates capture faster shock and vibration detail; the control loop is unaffected. Applies on the pad \u{2014} never mid-flight.")
+            .pickerStyle(.menu)
+            Text(imuRateFooter)
                 .font(.caption).foregroundColor(.secondary)
         }
 
@@ -959,7 +957,41 @@ struct SettingsView: View {
         if device.isConnected { device.sendImuOrientationConfig(v) }
     }
 
-    // IMU logging rate: whitelisted ISM6HG256 ODR steps.
+    // #1485: the fastest IMU rate the connected rocket flies. nil when there
+    // is nothing to go on yet (not connected, or no readback so far), so the
+    // profile can still be set up for the rocket it belongs to; a readback
+    // without "irmax" is firmware from before the 8k rates.
+    private var imuRateMaxHz: UInt16? {
+        guard device.isConnected, let cfg = device.rocketConfig else { return nil }
+        return cfg.imuRateMaxHz ?? RocketProfile.imuRateBaselineMaxHz
+    }
+
+    // The choices this rocket can fly, plus whatever the profile already holds
+    // so the picker never shows a blank selection.
+    private var imuRateChoicesShown: [RocketProfile.ImuRateChoice] {
+        RocketProfile.imuRateChoices.filter { choice in
+            choice.setting == profile.imuRateHz
+                || imuRateMaxHz.map { choice.peakHz <= $0 } ?? true
+        }
+    }
+
+    private var imuRateFooter: String {
+        let rate = profile.imuRateHz
+        let peak = RocketProfile.imuRateChoices.first { $0.setting == rate }?.peakHz ?? 0
+        if let maxHz = imuRateMaxHz, peak > maxHz {
+            return "This rocket logs at up to \(maxHz) Hz. It keeps its current rate until you pick one it can fly."
+        }
+        switch rate {
+        case RocketProfile.imuRateDynamic:
+            return "Logs at 4k (3840 Hz) from the pad through boost and coast, then drops to 1k (960 Hz) once the rocket detects its recovery deployment \u{2014} full shock and vibration detail where it matters, without filling the log under canopy."
+        case RocketProfile.imuRateDynamic8k:
+            return "Logs at 8k (7680 Hz) from the pad through boost and coast, then drops to 1k (960 Hz) once the rocket detects its recovery deployment. Twice the detail of 4k Dynamic through boost, and twice the log it fills until deployment."
+        default:
+            return "Samples logged per second from the IMU (actual: 960 / 1920 / 3840 / 7680 Hz). Higher rates capture faster shock and vibration detail; the control loop is unaffected. 8k fills the log twice as fast as 4k. Applies on the pad \u{2014} never mid-flight."
+        }
+    }
+
+    // IMU logging rate: whitelisted ISM6HG256 ODR steps and the dynamic modes.
     private var imuRateBinding: Binding<UInt16> {
         Binding(
             get: { profile.imuRateHz },

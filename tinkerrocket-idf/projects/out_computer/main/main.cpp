@@ -548,7 +548,7 @@ static TR_Coordinates coord;
 static i2c_master_bus_handle_t ina230_bus = nullptr;
 static TR_INA230 ina230(0x40);
 static bool ina230_ok = false;
-static bool ina_continuous = false;         // INA230 in continuous-averaging mode (low-power)
+static bool ina_continuous = false;         // INA230 in the low-power 1024-sample averaging config
 // Shunt resistor and current LSB
 static constexpr float INA230_R_SHUNT_OHM = 0.002f;     // 2 mOhm
 static constexpr float INA230_CURRENT_LSB_A = 0.001f;    // 1 mA/bit
@@ -1474,6 +1474,12 @@ static void stageImuOrientConfig()
 // IMU_RATE_DYNAMIC (the default) is a MODE, not a rate — the OC only relays
 // it; the step-down at deployment is entirely the FC's business.
 static uint16_t cfg_imu_rate = IMU_RATE_DYNAMIC;
+// #1485: the board's limit, reported to the apps as "irmax" so they offer the
+// 8k rates only where the FC can fly them. The FC derives the same number for
+// the same board (test_imu_rate_board_parity).
+static_assert(imuRateValid(config::IMU_RATE_MAX_HZ), "IMU_RATE_MAX_HZ must be an ODR step");
+static_assert(imuRateSettingValid(IMU_RATE_DYNAMIC, config::IMU_RATE_MAX_HZ),
+              "the default IMU logging rate must fit every board");
 
 static void stageImuRateConfig()
 {
@@ -1764,15 +1770,15 @@ static inline bool simStopIsStrayInflight()
 // ==========================================================================
 // Read INA230 and populate latest_power_raw so that the existing telemetry
 // pipeline (BLE, LoRa, web) picks up the values automatically.
-// Uses triggered mode: fires one conversion (~0.7ms with 1 avg × 332us × 2ch),
-// polls CVRF for completion, reads results, then INA returns to power-down.
+// With the rail on the part converts continuously (one 332 us shunt and bus
+// conversion every ~0.66 ms) and each read takes the newest sample, CVRF-checked.
 // Called inline from the main loop at ~100 Hz.
 // Plausible bus-voltage window from the INA230 — accept any real powered-board
 // reading and reject only a *failed* read.  The floor sits below USB (~5.2 V) so
 // USB-bench power is still reported: the operator wants to see the actual reading
 // (and knows it's USB) rather than have it suppressed to N/A, even though 5 V reads
 // BAD on the 2S scorecard.  A dropped/failed read (0 V — the failure sentinel
-// readINA230Power passes on I2C error / CVRF timeout) or NaN/+-Inf falls below the
+// readINA230Power passes on I2C error / no fresh conversion) or NaN/+-Inf falls below the
 // floor and is rejected.  Flight pack is 2S (6.6-8.4 V); shBatteryState classifies
 // the reading's health (#272/#303).
 static constexpr float   POWER_BUS_V_MIN      = 3.0f;   // below USB; still rejects 0 V failed reads
@@ -1888,6 +1894,9 @@ static void initRailCurrentAdc()
 // deliberately: a board with no monitor and a board whose ADC failed are both
 // "unknown", and packPowerData collapses both to 0 on the wire — but the SI
 // path keeps them distinguishable from a genuine measured zero.
+// How often commitPowerSample re-reads the rail currents (#1485: 10 Hz).
+static constexpr uint32_t RAIL_AMPS_PERIOD_MS = 100;
+
 static float readRailAmps(int gpio, float r_ohm)
 {
     if (!rail_adc_ready || gpio < 0 || r_ohm <= 0.0f) return NAN;
@@ -2127,13 +2136,46 @@ static bool commitPowerSample(float bus_v, float current_a)
     psi.current = -current_a * 1000.0f;
     psi.soc     = soc_pct;
     // #850: the two high-side-switch load currents ride the same sample so
-    // they share the INA230's timestamp and land in the same logged frame.
-    // NaN on boards without the monitors; packPowerData encodes that as 0.
-    psi.cam_current   = readRailAmps(config::CAM_IMON_GPIO, config::CAM_IMON_R_OHM);
-    psi.servo_current = readRailAmps(config::SERVO_IMON_GPIO, config::SERVO_IMON_R_OHM);
+    // they land in the same logged frame. NaN on boards without the monitors;
+    // packPowerData encodes that as 0.
+    //
+    // #1485: sampled at 10 Hz and held in between, not read on every 100 Hz
+    // sample: the eight ADC conversions per sample cost ~5 % of the loop core
+    // on the V9 (bench A/B), and 10 Hz is plenty for a camera or servo rail.
+    // The logged 100 Hz stream therefore repeats each value ~10 times.
+    static bool     rail_amps_read = false;
+    static uint32_t rail_amps_ms   = 0;
+    static float    cam_a = NAN, servo_a = NAN;
+    const uint32_t  rail_now_ms = millis();
+    if (!rail_amps_read || (uint32_t)(rail_now_ms - rail_amps_ms) >= RAIL_AMPS_PERIOD_MS)
+    {
+        rail_amps_read = true;
+        rail_amps_ms   = rail_now_ms;
+        cam_a   = readRailAmps(config::CAM_IMON_GPIO, config::CAM_IMON_R_OHM);
+        servo_a = readRailAmps(config::SERVO_IMON_GPIO, config::SERVO_IMON_R_OHM);
+    }
+    psi.cam_current   = cam_a;
+    psi.servo_current = servo_a;
     sensor_converter.packPowerData(psi, latest_power_raw);
     latest_power_valid = true;
     return true;
+}
+
+// Rail-on INA230 config: one 332 us shunt and one 332 us bus conversion,
+// repeated continuously, so the registers always hold a sample under a
+// millisecond old. #1485: this used to be power-down plus a triggered
+// conversion per read, polled for ready with 100 us busy-waits — six or seven
+// I2C transactions and ~1.7 ms of CPU a read, 17 % of the loop core at the
+// 100 Hz read rate on the V9. Power-down saves the part's ~0.3 mA, which only
+// matters with the rail off; low-power mode still switches to its own
+// continuous 1024-sample averaging (ina_continuous).
+static void ina230ConfigureForRailOn()
+{
+    ina230.setConfiguration(INA230_Avg::AVG_1,
+                            INA230_ConvTime::CT_332us,
+                            INA230_ConvTime::CT_332us,
+                            INA230_Mode::SHUNT_BUS_CONTINUOUS);
+    ina_continuous = false;
 }
 
 static void readINA230Power()
@@ -2144,27 +2186,17 @@ static void readINA230Power()
 
     if (!ina230_ok) return;
 
-    // Trigger a single shunt+bus conversion (INA auto-powers-down after)
-    ina230.setMode(INA230_Mode::SHUNT_BUS_TRIG);
-
-    // Poll CVRF (Conversion Ready Flag, bit 3 of Mask/Enable register)
-    // instead of a fixed delay.  Conversion takes ~0.7ms (1 avg × 332µs × 2ch).
-    bool cvrf = false;
-    for (int i = 0; i < 20; i++)  // max ~2ms total
-    {
-        delayMicroseconds(100);
-        uint16_t me = 0;
-        if (ina230.readMaskEnable(&me) == TR_INA230_OK && (me & (1 << 3)))
-        {
-            cvrf = true;
-            break;  // CVRF set — conversion complete
-        }
-    }
-
-    // A CVRF timeout means the conversion never completed, so any value read back
-    // would be stale — treat that (and any I2C read error) as a failed sample
-    // (#272) by passing 0 V, which commitPowerSample rejects.  NOTE: readMaskEnable
-    // clears CVRF, so we must capture it in the poll above, not re-read it here.
+    // The part converts continuously while the rail is up
+    // (ina230ConfigureForRailOn), finishing a sample every ~0.66 ms. CVRF
+    // (Conversion Ready Flag, bit 3 of Mask/Enable) is set by every finished
+    // conversion and cleared by this read, so between two reads 10 ms apart it
+    // is always set — unless the part has stopped converting, in which case
+    // the voltage and current below would be stale. Treat that (and any I2C
+    // read error) as a failed sample (#272) by passing 0 V, which
+    // commitPowerSample rejects, and put the conversions back.
+    uint16_t me = 0;
+    const bool cvrf = ina230.readMaskEnable(&me) == TR_INA230_OK && (me & (1 << 3));
+    if (!cvrf) ina230ConfigureForRailOn();
     float bus_v = 0.0f, current_a = 0.0f;
     const bool read_ok = cvrf
         && ina230.readBusVoltage_V(&bus_v) == TR_INA230_OK
@@ -3630,7 +3662,11 @@ static void ocOtaRelayClearPendingFlip();                                    // 
 // Boot and every recovery path must build the RX channel identically — see
 // the note in ocBeginSlaveRxLocked().
 static constexpr uint32_t kI2sRxDmaDescNum  = 4;
-static constexpr uint32_t kI2sRxDmaFrameNum = 128;   // 512 B ≈ 2.9 ms @ 44100
+// ~2.9 ms of link per descriptor, the callback cadence the parser was tuned
+// against (#104): 128 frames at 44100, 256 at 88200 (#1485). 4 B a frame.
+static constexpr uint32_t kI2sRxDmaFrameNum =
+    (uint32_t)(((uint64_t)config::I2S_SAMPLE_RATE * 29u + 5000u) / 10000u);
+static_assert(kI2sRxDmaFrameNum * 4u <= 4092u, "one I2S DMA descriptor holds at most 4092 B");
 
 // #834 items 6/7: (re)establish slave RX. Caller holds oc_i2s_mutex. Records
 // oc_i2s_rx_broken so loop_oc can keep retrying — losing the RX channel means
@@ -3638,12 +3674,12 @@ static constexpr uint32_t kI2sRxDmaFrameNum = 128;   // 512 B ≈ 2.9 ms @ 44100
 // downlinks, so it can never be left as a terminal state.
 static esp_err_t ocBeginSlaveRxLocked(const char* why)
 {
-    // dma_desc_num/dma_frame_num MUST match the boot init: 128 frames (512 B)
-    // spans ~2.9 ms at the 44100 link rate, which is the callback cadence the
-    // parser was tuned against (#104). The old revert path passed 64 — a
-    // leftover from the retired 22050 rate — which doubled the RX ISR cadence
-    // for the rest of the power cycle. Recovery must restore the link the
-    // parser expects, not a different one.
+    // dma_desc_num/dma_frame_num MUST match the boot init: kI2sRxDmaFrameNum
+    // spans ~2.9 ms of link, which is the callback cadence the parser was
+    // tuned against (#104). An old revert path passed 64 — a leftover from the
+    // retired 22050 rate — which doubled the RX ISR cadence for the rest of
+    // the power cycle. Recovery must restore the link the parser expects, not
+    // a different one.
     esp_err_t e = i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
                                           config::I2S_WS_PIN,
                                           config::I2S_DIN_PIN,
@@ -6302,6 +6338,9 @@ static void sendCurrentConfig()
     // from) and treat this key as unverified.
     j += ",\"camt\":"; j += itos(cameraReadback().type);
     j += ",\"irate\":"; j += itos(cfg_imu_rate);
+    // #1485: the fastest IMU rate this board flies. Absent from older
+    // firmware, which the apps read as 3840 (nothing older could do more).
+    j += ",\"irmax\":"; j += itos(config::IMU_RATE_MAX_HZ);
     // LoRa settings
     j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
     j += ",\"lsf\":"; j += itos(lora_sf);
@@ -8558,13 +8597,15 @@ static void loadCachedPeripheralConfigFromNvs()
         const uint16_t nvs_rate = prefs.getUShort("hz", cfg_imu_rate);
         // Whitelist on read: a corrupted value must not be relayed to the
         // FC or echoed to the app as if it were a real setting.
-        if (imuRateSettingValid(nvs_rate)) cfg_imu_rate = nvs_rate;
-        else ESP_LOGW("CFG", "NVS IMU logging rate %u invalid — keeping default",
-                      (unsigned)nvs_rate);
+        if (imuRateSettingValid(nvs_rate, config::IMU_RATE_MAX_HZ)) cfg_imu_rate = nvs_rate;
+        else ESP_LOGW("CFG", "NVS IMU logging rate %u invalid on this board (max %u Hz) "
+                             "— keeping default",
+                      (unsigned)nvs_rate, (unsigned)config::IMU_RATE_MAX_HZ);
     }
     prefs.end();
     if (imuRateIsDynamic(cfg_imu_rate))
-        ESP_LOGI("CFG", "NVS IMU logging rate: DYNAMIC");
+        ESP_LOGI("CFG", "NVS IMU logging rate: DYNAMIC (%u Hz boost)",
+                 (unsigned)imuRatePeakHz(cfg_imu_rate));
     else
         ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
 
@@ -9485,12 +9526,12 @@ void initPeripherals()
         oc_ota_tx_queue = xQueueCreate(16, sizeof(OcOtaTxFrame));
 
     // I2S telemetry stream from FlightComputer (DMA-based slave RX)
-    // Small DMA buffers (4 × 512 bytes = 2 KB) minimize latency.
+    // Small DMA buffers (4 descriptors of ~2.9 ms each) minimize latency.
     // FRAME_SYNC interrupt gating prevents stale replay regardless of
     // buffer count, but smaller buffers reduce read-to-parse latency.
-    // dma_frame_num doubled 64 -> 128 alongside the 22050 -> 44100 link rate
-    // so each descriptor still spans ~2.9 ms (512 B at 176 KB/s) — the same
-    // callback cadence the parser was tuned against at the old rate.
+    // dma_frame_num tracks the link rate (64 at 22050, 128 at 44100, 256 at
+    // 88200) so each descriptor still spans ~2.9 ms — the same callback
+    // cadence the parser was tuned against at the old rate.
     // #834 items 6/7 (review): go through the SAME helper the recovery paths use
     // so a boot failure sets oc_i2s_rx_broken and loop_oc's 1 Hz retry picks it
     // up. Open-coding begin+register here left the most consequential failure of
@@ -10117,9 +10158,10 @@ static void setup_oc()
     }
     if (ina230_bus != nullptr && ina230.begin(ina230_bus, 400000) == TR_INA230_OK)
     {
-        // Start in power-down mode (0.5 uA) — we use triggered reads at 100 Hz.
-        // 1 average × 332us keeps each triggered measurement fast (~0.7ms).
-        // INA auto-powers-down after each trigger.
+        // Start in power-down mode (0.5 uA): the rail is off at boot, and
+        // low-power mode switches to its own 1024-sample averaging on its
+        // first pass. Powering the rail on selects the continuous rail-on
+        // config (ina230ConfigureForRailOn).
         ina230.setConfiguration(INA230_Avg::AVG_1,
                                 INA230_ConvTime::CT_332us,
                                 INA230_ConvTime::CT_332us,
@@ -10131,7 +10173,7 @@ static void setup_oc()
         {
             ina230.enableConversionReadyAlert(true);  // enable CVRF bit for polling
             ina230_ok = true;
-            ESP_LOGI("PWR", "INA230 OK (triggered mode, CVRF polling)");
+            ESP_LOGI("PWR", "INA230 OK (continuous while the rail is on, CVRF-checked)");
         }
         else
         {
@@ -10482,13 +10524,7 @@ static void loop_oc()
         boot_rail_restore_init_pending = false;
         vTaskDelay(1);  // feed watchdog before long init
         initPeripherals();
-        if (ina230_ok) {
-            ina230.setConfiguration(INA230_Avg::AVG_1,
-                                    INA230_ConvTime::CT_332us,
-                                    INA230_ConvTime::CT_332us,
-                                    INA230_Mode::POWER_DOWN);
-            ina_continuous = false;
-        }
+        if (ina230_ok) ina230ConfigureForRailOn();
         // #1129: the budget is NOT cleared here any more.
         //
         // This block is the first loop_oc pass, right after initPeripherals()
@@ -10883,7 +10919,7 @@ static void loop_oc()
                     const bool read_ok =
                         ina230.readBusVoltage_V(&bus_v) == TR_INA230_OK &&
                         ina230.readCurrent_A(&current_a) == TR_INA230_OK;
-                    // Same validity + SOC + commit policy as the triggered path
+                    // Same validity + SOC + commit policy as the rail-on path
                     // (#272).  Continuous mode is free-running — no CVRF to check.
                     commitPowerSample(read_ok ? bus_v : 0.0f, read_ok ? current_a : 0.0f);
                 }
@@ -11921,15 +11957,9 @@ static void loop_oc()
                 vTaskDelay(1);  // feed watchdog before long init
                 initPeripherals();  // Initialize SPI, NAND, LoRa, I2C
 
-                // Restore INA230 to fast single-shot config (low-power mode
-                // sets AVG_1024 which makes triggered reads take ~680ms).
-                if (ina230_ok) {
-                    ina230.setConfiguration(INA230_Avg::AVG_1,
-                                            INA230_ConvTime::CT_332us,
-                                            INA230_ConvTime::CT_332us,
-                                            INA230_Mode::POWER_DOWN);
-                    ina_continuous = false;
-                }
+                // Back to the fast rail-on config (low-power mode sets
+                // 1024-sample averaging, ~680 ms a sample).
+                if (ina230_ok) ina230ConfigureForRailOn();
 
                 // Restore fast BLE connection params for file transfer
                 if (ble_app.isConnected())
@@ -12323,17 +12353,18 @@ static void loop_oc()
         }
         else if (ble_cmd == 67)
         {
-            // IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0) or a
-            // whitelisted ISM6HG256 ODR (960/1920/3840).  Relayed to the FC,
+            // IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0, "4k
+            // Dynamic"), IMU_RATE_DYNAMIC_8K (1) or a whitelisted ISM6HG256
+            // ODR, up to this board's IMU_RATE_MAX_HZ.  Relayed to the FC,
             // which applies the ODR live (except INFLIGHT) and persists it in
-            // FC NVS.
+            // FC NVS.  The FC checks the same limit for the same board.
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 2)
             {
                 uint16_t rate_hz;
                 memcpy(&rate_hz, payload, sizeof(rate_hz));
-                if (imuRateSettingValid(rate_hz))
+                if (imuRateSettingValid(rate_hz, config::IMU_RATE_MAX_HZ))
                 {
                     cfg_imu_rate = rate_hz;
                     stageImuRateConfig();
@@ -12343,7 +12374,8 @@ static void loop_oc()
                     p2.end();
                     if (imuRateIsDynamic(rate_hz))
                     {
-                        ESP_LOGI("BLE", "IMU logging rate: DYNAMIC -> FlightComputer");
+                        ESP_LOGI("BLE", "IMU logging rate: DYNAMIC (%u Hz boost) -> FlightComputer",
+                                 (unsigned)imuRatePeakHz(rate_hz));
                     }
                     else
                     {
@@ -12353,9 +12385,9 @@ static void loop_oc()
                 }
                 else
                 {
-                    ESP_LOGW("BLE", "IMU logging rate %u Hz rejected "
-                                    "(not dynamic/960/1920/3840)",
-                             (unsigned)rate_hz);
+                    ESP_LOGW("BLE", "IMU logging rate setting %u rejected "
+                                    "(not dynamic or an ODR step up to %u Hz)",
+                             (unsigned)rate_hz, (unsigned)config::IMU_RATE_MAX_HZ);
                 }
             }
         }

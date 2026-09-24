@@ -35,7 +35,7 @@ phone at the pad.
 | **Entry point** | [`app_main`](../../tinkerrocket-idf/projects/out_computer/main/main.cpp) → `setup_oc()`, then an `oc_loop` task spinning `loop_oc()` |
 | **Source** | one file, [`projects/out_computer/main/main.cpp`](../../tinkerrocket-idf/projects/out_computer/main/main.cpp) (~7,500 lines) |
 | **Navigation** | [section map](generated/out-computer-map.md) — line ranges for all 29 regions |
-| **Talks to the FC** | I2S (telemetry in, 22 kHz DMA) + I2C (commands out, 1.2 MHz) |
+| **Talks to the FC** | I2S (telemetry in, 88.2 kHz DMA) + I2C (commands out, 1.2 MHz) |
 | **Talks to the ground** | LoRa 915 MHz at 2 Hz |
 | **Talks to your phone** | BLE GATT, 52 commands |
 | **Stores** | staging ring → NAND flash, via `TR_LogToFlash` and `TR_FlightLog`. The ring is **MRAM on V8**, **512 KB of in-package PSRAM on V9/V10 and the mini** (#822/#842), 64 KB of internal RAM if neither answers |
@@ -114,7 +114,7 @@ flowchart TB
     PHONE["<b>iOS app</b>"]
     GROUND["<b>Base Station</b>"]
 
-    FC -->|"I2S DMA, 22 kHz"| CB --> RING --> PARSE
+    FC -->|"I2S DMA, 88.2 kHz"| CB --> RING --> PARSE
     PARSE --> CACHE
     PARSE --> LOG
     CACHE -->|"LoRa 915 MHz, 2 Hz"| GROUND

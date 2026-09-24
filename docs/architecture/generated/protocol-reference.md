@@ -260,7 +260,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 64 |  | IMU mounting orientation: [setting:1] — IMU_ORIENT_AUTO or a TR_Orientation code (0..23, manual incl. roll… |
 | 65 |  | Full guidance config (GuidanceConfigData): relay the whole struct to the FC |
 | 66 |  | Full fin layout (FinConfigData): relay the whole struct to the FC |
-| 67 |  | IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0) or a whitelisted ISM6HG256 ODR (960/1920/3840).… |
+| 67 |  | IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0, "4k Dynamic"), IMU_RATE_DYNAMIC_8K (1) or a… |
 | 68 | `LORA_CMD_SET_TX_DISABLED` | "LoRa off": [disabled:1] — 1 mutes every LoRa transmit, 0 resumes. Same constant (and therefore the same… |
 | 69 |  | #1176 step 6 — the operator's manual end of a restored flight. BLE ONLY, by decision: this number is… |
 | 73 |  | #1271 — the operator acknowledges the blind-window loss(es). BLE ONLY, and deliberately absent from… |

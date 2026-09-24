@@ -650,6 +650,25 @@ def test_settings_use_the_apps_words(report_html: Path) -> None:
     assert "Gyroscope range" not in settings, "gyro full scale is not something the flyer set"
 
 
+def test_imu_rate_reads_in_the_apps_words() -> None:
+    """#1485: the 8k rates read as the app's picker names them.
+
+    "8k Dynamic" logs no sentinel of its own: the settings frame carries the
+    dynamic flag and the boost rate at the snapshot, 7680 Hz, which is how it
+    tells apart from 4k Dynamic.
+    """
+    from flight_report.modules import settings as report_settings
+
+    def rate(hz: int, dynamic: bool) -> str:
+        return report_settings._imu_rate({"ism6_update_rate_hz": hz, "imu_rate_dynamic": dynamic})
+
+    assert rate(7680, True) == ("Dynamic — 8k (7680 Hz) through boost and coast, "
+                                "1k (960 Hz) after deployment")
+    assert rate(3840, True).startswith("Dynamic — 4k (3840 Hz)")
+    assert rate(7680, False) == "8k (7680 Hz)"
+    assert rate(960, False) == "1k (960 Hz)"
+
+
 def test_flight_settings_frame_decodes_every_version() -> None:
     """The decoder reads what a frame's length covers and nothing more.
 

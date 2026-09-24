@@ -192,13 +192,13 @@ struct config : board_pins
 
     // --- I2S (high-frequency telemetry RX from FlightComputer; pins in
     //     board header) ---
-    // I2S bandwidth = sample_rate * 4 bytes (16-bit stereo).
-    // Higher rate = faster DMA buffer turnover = less stale data.
-    // 44100 Hz = 176 KB/s.  Raised from 22050 with the FC's IMU 960 -> 1920 Hz
-    // logging step (the link was ~76% full at 22050).  RX DMA descriptors are
-    // sized in setup (dma_frame_num) to keep the callback cadence ~3 ms at
-    // this rate.  IMPORTANT: must match the FC — flash both together.
-    static constexpr uint32_t I2S_SAMPLE_RATE = 44100;  // Must match FC
+    // I2S bandwidth = sample_rate * 4 bytes (16-bit stereo).  The rate is the
+    // shared I2S_LINK_SAMPLE_RATE_HZ (RocketComputerTypes.h, 88200 = 352.8
+    // KB/s), which the FC's master clock reads too.  RX DMA descriptors are
+    // sized from it in setup (kI2sRxDmaFrameNum) to keep the callback cadence
+    // ~2.9 ms.  Update the OC before the FC: set for this rate, the slave
+    // still reads an older FC clocking at 44100; the reverse does not hold.
+    static constexpr uint32_t I2S_SAMPLE_RATE = I2S_LINK_SAMPLE_RATE_HZ;
 
     // #1484: the mini's E220 rides the memory bus (board_m1.h wires LORA_SPI_*
     // to SPI_*). A radio there must join the NAND's host (SPI2) as a second

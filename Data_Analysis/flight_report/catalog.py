@@ -219,7 +219,9 @@ _P(
     unit="A",
     note=
         "Per-rail current draw on the camera switch, from the v2 (14-byte) POWER frame added in "
-        "#850. Logged as uint16 milliamps and divided by 1000 here, so this channel is AMPS.",
+        "#850. Logged as uint16 milliamps and divided by 1000 here, so this channel is AMPS. "
+        "Since #1485 the out computer samples it at 10 Hz and repeats the value on the 100 Hz "
+        "POWER stream in between, so it moves in steps of about 100 ms.",
     caution=
         "Note the unit disagreement with POWER.current on the same stream, which is milliamps: one "
         "is scaled here and one is not. None (not 0) on v1 logs that predate the rail monitors — a "
@@ -232,7 +234,8 @@ _P(
     unit="A",
     note=
         "Per-rail current draw on the servo supply, from the v2 (14-byte) POWER frame added in "
-        "#850. uint16 milliamps on the wire, divided by 1000 here — amps, like cam_a.",
+        "#850. uint16 milliamps on the wire, divided by 1000 here — amps, like cam_a. Sampled at "
+        "10 Hz and held between samples since #1485, like cam_a.",
     caution=
         "Same two traps as cam_a: amps while POWER.current beside it is milliamps, and None rather "
         "than 0 on pre-#850 logs. Empty on every fixture in the repo.",
