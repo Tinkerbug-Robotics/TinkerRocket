@@ -238,7 +238,6 @@ static int16_t pending_gyro_cal_x = 0, pending_gyro_cal_y = 0, pending_gyro_cal_
 static bool    pending_gyro_cal_apply = false;
 
 static ISM6HG256Data ism6hg256_data;
-static uint8_t ism6hg256_data_buffer[SIZE_OF_ISM6HG256_DATA];
 static BMP585Data bmp585_data;
 static uint8_t bmp585_data_buffer[SIZE_OF_BMP585_DATA];
 static MMC5983MAData mmc5983ma_data;
@@ -1675,6 +1674,7 @@ static inline void i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t
         switch (type)
         {
             case ISM6HG256_MSG: i2s_tx_ism6_ok++; break;
+            case ISM6_BATCH_MSG: i2s_tx_ism6_ok++; break;   // #1485: counts frames, not samples
             case BMP585_MSG: i2s_tx_bmp_ok++; break;
             case MMC5983MA_MSG: i2s_tx_mmc_ok++; break;
             case IIS2MDC_MSG: i2s_tx_iis2mdc_ok++; break;
@@ -1690,6 +1690,7 @@ static inline void i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t
         switch (type)
         {
             case ISM6HG256_MSG: i2s_tx_ism6_fail++; break;
+            case ISM6_BATCH_MSG: i2s_tx_ism6_fail++; break;
             case BMP585_MSG: i2s_tx_bmp_fail++; break;
             case MMC5983MA_MSG: i2s_tx_mmc_fail++; break;
             case IIS2MDC_MSG: i2s_tx_iis2mdc_fail++; break;
@@ -6043,19 +6044,32 @@ static void loop_fc()
         // samples that arrived since the EKF last ran, which is what the -15 dB
         // figure in imu_drain_window.h describes.
         bool ism6_drained_this_pass = false;
+        // #1485: up to ISM6_BATCH_MAX samples per I2S frame, which the OC
+        // unpacks into per-sample records. One frame per sample cost 8 bytes of
+        // framing and a queue item, a CRC and a DMA write each. A partial batch
+        // goes out at the end of the pass, so no sample waits past one pass.
+        uint8_t ism6_batch[ism6BatchWireSize(ISM6_BATCH_MAX)];
+        uint8_t ism6_batch_n = 0;
         while (sensor_collector.getISM6HG256Data(ism6hg256_data))
         {
             dbg_ism6_reads++;
             fc_ism6_win.add(ism6hg256_data);
             ism6_drained_this_pass = true;
 
-            memcpy(ism6hg256_data_buffer,
+            memcpy(&ism6_batch[ism6BatchWireSize(ism6_batch_n)],
                    &ism6hg256_data,
                    SIZE_OF_ISM6HG256_DATA);
-
-            (void)enqueueI2STx(ISM6HG256_MSG,
-                               ism6hg256_data_buffer,
-                               SIZE_OF_ISM6HG256_DATA);
+            if (++ism6_batch_n == ISM6_BATCH_MAX)
+            {
+                ism6_batch[0] = ism6_batch_n;
+                (void)enqueueI2STx(ISM6_BATCH_MSG, ism6_batch, ism6BatchWireSize(ism6_batch_n));
+                ism6_batch_n = 0;
+            }
+        }
+        if (ism6_batch_n > 0)
+        {
+            ism6_batch[0] = ism6_batch_n;
+            (void)enqueueI2STx(ISM6_BATCH_MSG, ism6_batch, ism6BatchWireSize(ism6_batch_n));
         }
 
         if (ism6_drained_this_pass)

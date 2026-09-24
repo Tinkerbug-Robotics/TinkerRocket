@@ -29,6 +29,16 @@ constexpr double framed(size_t payload, double rate_hz)
     return (double)(payload + kFrameOverhead) * rate_hz;
 }
 
+// #1485: the IMU goes as ISM6_BATCH_MSG, up to ISM6_BATCH_MAX records a frame.
+// The FC flushes a partial batch at the end of every loop pass, so a batch is
+// not always full; the budget allows for them being half full on average.
+double imuBatched(double rate_hz)
+{
+    const double frames = rate_hz / ((double)ISM6_BATCH_MAX / 2.0);
+    return rate_hz * (double)sizeof(ISM6HG256Data)       // the records
+         + frames * (double)(1 + kFrameOverhead);          // count byte + framing, per frame
+}
+
 // The link is fixed: 44100 samples/s x 4 B.
 constexpr double kLinkBytesPerSec = (double)config::I2S_SAMPLE_RATE * 4.0;
 
@@ -36,7 +46,7 @@ constexpr double kLinkBytesPerSec = (double)config::I2S_SAMPLE_RATE * 4.0;
 // boost rate — the worst case, and the phase guidance telemetry exists for.
 double guidedCoastInflow()
 {
-    return framed(sizeof(ISM6HG256Data),   (double)IMU_RATE_DYNAMIC_BOOST_HZ)
+    return imuBatched((double)IMU_RATE_DYNAMIC_BOOST_HZ)
          + framed(sizeof(NonSensorData),   (double)config::NON_SENSOR_UPDATE_RATE)
          + framed(sizeof(BMP585Data),      (double)config::BMP585_UPDATE_RATE)
          + framed(sizeof(GuidanceTelemData), (double)config::GUIDANCE_TELEM_RATE_HZ)
@@ -73,8 +83,7 @@ TEST(I2SLinkBudget, TheDominantStreamIsTheIMU) {
     // Sanity on the shape of the budget: if anything ever outgrows the IMU
     // stream, the tuning advice in config.h (and the bench gauges it names)
     // is pointing at the wrong thing.
-    const double imu = framed(sizeof(ISM6HG256Data),
-                              (double)IMU_RATE_DYNAMIC_BOOST_HZ);
+    const double imu = imuBatched((double)IMU_RATE_DYNAMIC_BOOST_HZ);
     EXPECT_GT(imu, guidedCoastInflow() * 0.5);
 }
 

@@ -62,10 +62,13 @@ Each link is shaped by a different constraint.
 
 ### FC ↔ OC — two links, on purpose
 
-**I2S carries telemetry from the FC to the OC** as a continuous byte stream at 22 kHz.
+**I2S carries telemetry from the FC to the OC** as a continuous byte stream at 44.1 kHz.
 It is one-directional and unacknowledged, because the FC must never block waiting for
 storage. Frames are self-delimiting: the receiver resynchronizes on the start-of-frame
-pattern and drops anything that fails CRC.
+pattern and drops anything that fails CRC. IMU samples travel ten to a frame
+(`ISM6_BATCH_MSG`, #1485); the OC unpacks them into one record per sample before it
+logs, so the flight log's format does not change. Update the OC before the FC: an older
+OC drops the batch frames, and with them every IMU sample.
 
 **I2C carries commands the other way** — and the FC is the master. The OC never
 initiates. It queues commands and answers when polled, with a combined

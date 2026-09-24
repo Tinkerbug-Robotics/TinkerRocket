@@ -87,10 +87,11 @@ in the telemetry flags so the drop is visible rather than inferred (#474).
 `loop_fc()` is half the file. It runs freely at whatever rate the hardware allows, but
 the flight logic inside is gated to `FLIGHT_LOOP_UPDATE_RATE` (1000 Hz).
 
-1. **Drain the sensors.** *All* pending IMU samples are pulled each pass — the chip runs
-   at 1920 Hz, about two samples per pass — and every one is forwarded to the I2S log so
-   the recorded rate follows the sensor's own output rate rather than the loop rate.
-   Only the freshest sample feeds the EKF and control path.
+1. **Drain the sensors.** *All* pending IMU samples are pulled each pass — at the
+   default 3840 Hz boost rate, about four samples per pass — and every one is forwarded
+   to the I2S log, ten to a frame, so the recorded rate follows the sensor's own output
+   rate rather than the loop rate. Only the freshest sample feeds the EKF and control
+   path.
 2. **Publish magnetometer calibration status**, if a calibration is running.
 3. **Compute pressure altitude.** The ground reference tracks continuously through the
    pre-flight states and then *freezes* at `PRELAUNCH` — see Gotchas.
