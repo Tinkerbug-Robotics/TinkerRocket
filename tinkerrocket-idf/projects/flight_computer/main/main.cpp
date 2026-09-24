@@ -754,6 +754,15 @@ static uint32_t piezo_half_period_us = 0;
 // is not ours to write this transition".
 static inline void piezoApply(PiezoWavePolicy::PinAction a)
 {
+    // A negative PIEZO_PIN is a board with no piezo (the mini). Every write
+    // after setup comes through here, so this one guard keeps them all off a
+    // pin the GPIO driver would answer with an error log per call. It keys on
+    // the pin, not on piezo_pwm_ready: where there IS a coil, piezoStop()
+    // must still drive it low when the timer never initialised.
+    if (config::PIEZO_PIN < 0)
+    {
+        return;
+    }
     if (a == PiezoWavePolicy::PinAction::None)
     {
         return;
@@ -4775,13 +4784,19 @@ static void setup_fc()
     }
     prefs.end();
 
-    // Always initialise piezo hardware so it's ready if enabled at runtime
-    gpio_set_direction((gpio_num_t)(config::PIEZO_PIN), GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)(config::PIEZO_PIN), 0);
-    piezo_pwm_ready = initPiezoTimer();
-    if (!piezo_pwm_ready)
+    // Initialise the piezo whatever the sounds setting, so it's ready if they
+    // are enabled at runtime. A negative PIEZO_PIN is a board with no piezo
+    // (the mini): no GPIO and no timer, and piezo_pwm_ready stays false so
+    // every beep returns early in piezoStart().
+    if (config::PIEZO_PIN >= 0)
     {
-        ESP_LOGE(TAG, "Piezo timer init failed; sounds disabled");
+        gpio_set_direction((gpio_num_t)(config::PIEZO_PIN), GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)(config::PIEZO_PIN), 0);
+        piezo_pwm_ready = initPiezoTimer();
+        if (!piezo_pwm_ready)
+        {
+            ESP_LOGE(TAG, "Piezo timer init failed; sounds disabled");
+        }
     }
 
     // Initialize sensor collector (including sensors) and start polling tasks

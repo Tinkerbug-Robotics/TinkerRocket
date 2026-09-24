@@ -3,7 +3,7 @@
 
 # Flight Computer -- `main.cpp` navigation map
 
-`tinkerrocket-idf/projects/flight_computer/main/main.cpp` is 11,310 lines in one translation unit. These are the
+`tinkerrocket-idf/projects/flight_computer/main/main.cpp` is 11,325 lines in one translation unit. These are the
 `// SECTION:` banners in it, in file order. Indented rows (↳) are regions
 inside a single large function. Line counts include each section's banner
 and leading comments.
@@ -15,45 +15,45 @@ and leading comments.
 | [**I2C link to the Out Computer**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L266-L370) | 105 | 266-370 |
 | [**Command lockout and flight-state flags**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L371-L525) | 155 | 371-525 |
 | [**Camera phase state machines**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L526-L619) | 94 | 526-619 |
-| [**Roll control: gains, PID, and roll profile**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L620-L781) | 162 | 620-781 |
-| [**Pyro channel state**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L782-L855) | 74 | 782-855 |
-| [**Flight snapshot (crash recovery)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L856-L974) | 119 | 856-974 |
-| [**Reset-reason reporting**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L975-L995) | 21 | 975-995 |
-| [**Servo control and config-frame reads**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L996-L1226) | 231 | 996-1226 |
-| [**Pyro channels: init, safing, and servicing**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L1227-L1583) | 357 | 1227-1583 |
-| [**Roll-profile waypoint lookup**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L1584-L1656) | 73 | 1584-1656 |
-| [**I2S transmit to the Out Computer**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L1657-L1727) | 71 | 1657-1727 |
-| [**OTA relay receiver (image in over I2S)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L1728-L2301) | 574 | 1728-2301 |
-| [**Board-to-rocket orientation**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2302-L2460) | 159 | 2302-2460 |
-| [**Guidance configuration and flight settings**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2461-L2642) | 182 | 2461-2642 |
-| [**Full config report (#915)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2643-L2773) | 131 | 2643-2773 |
-| [**I2S sender task**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2774-L2821) | 48 | 2774-2821 |
-| [**Status LED**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2822-L2854) | 33 | 2822-2854 |
-| [**Boot cue (#1188, #1176 decision 4)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2855-L2916) | 62 | 2855-2916 |
-| [**Calibration status publishing**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2917-L2986) | 70 | 2917-2986 |
-| [**Piezo buzzer**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2987-L3088) | 102 | 2987-3088 |
-| [**Camera control (GoPro pulse, RunCam serial)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L3089-L3812) | 724 | 3089-3812 |
-| [**Boot chirp and heartbeat beep**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L3813-L3901) | 89 | 3813-3901 |
-| [**Power hold latch (#848)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L3902-L3970) | 69 | 3902-3970 |
-| [**OTA boot validation**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L3971-L4014) | 44 | 3971-4014 |
-| [**Boot setup**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L4015-L5585) | 1,571 | 4015-5585 |
-| [**Simulator re-arm**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L5586-L5701) | 116 | 5586-5701 |
-| [**INFLIGHT entry**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L5702-L5921) | 220 | 5702-5921 |
-| [**Main loop**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L5922-L11295) | 5,374 | 5922-11295 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Sensor drain and conversion](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L5970-L6148) | 179 | 5970-6148 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Full config report (#915)](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L6149-L6156) | 8 | 6149-6156 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Magnetometer calibration status](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L6157-L6267) | 111 | 6157-6267 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Flight logic: pressure altitude and orientation](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L6268-L6448) | 181 | 6268-6448 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [EKF input, initialization, and update](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L6449-L6951) | 503 | 6449-6951 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [I2C status poll to the Out Computer](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L6952-L7188) | 237 | 6952-7188 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Command dispatch from the Out Computer](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L7189-L9280) | 2,092 | 7189-9280 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Pad calibration completion (#1114)](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L9281-L9345) | 65 | 9281-9345 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Kinematic checks and sensor health](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L9346-L9584) | 239 | 9346-9584 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Test modes (ground, servo, replay)](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L9585-L9766) | 182 | 9585-9766 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Flight state machine](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L9767-L10595) | 829 | 9767-10595 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Simulator re-arm and diagnostics](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L10596-L10671) | 76 | 10596-10671 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Telemetry packing (NonSensorData)](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L10672-L11049) | 378 | 10672-11049 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Periodic diagnostics](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L11050-L11295) | 246 | 11050-11295 |
-| [**FreeRTOS entry point**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L11296-L11310) | 15 | 11296-11310 |
+| [**Roll control: gains, PID, and roll profile**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L620-L790) | 171 | 620-790 |
+| [**Pyro channel state**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L791-L864) | 74 | 791-864 |
+| [**Flight snapshot (crash recovery)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L865-L983) | 119 | 865-983 |
+| [**Reset-reason reporting**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L984-L1004) | 21 | 984-1004 |
+| [**Servo control and config-frame reads**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L1005-L1235) | 231 | 1005-1235 |
+| [**Pyro channels: init, safing, and servicing**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L1236-L1592) | 357 | 1236-1592 |
+| [**Roll-profile waypoint lookup**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L1593-L1665) | 73 | 1593-1665 |
+| [**I2S transmit to the Out Computer**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L1666-L1736) | 71 | 1666-1736 |
+| [**OTA relay receiver (image in over I2S)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L1737-L2310) | 574 | 1737-2310 |
+| [**Board-to-rocket orientation**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2311-L2469) | 159 | 2311-2469 |
+| [**Guidance configuration and flight settings**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2470-L2651) | 182 | 2470-2651 |
+| [**Full config report (#915)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2652-L2782) | 131 | 2652-2782 |
+| [**I2S sender task**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2783-L2830) | 48 | 2783-2830 |
+| [**Status LED**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2831-L2863) | 33 | 2831-2863 |
+| [**Boot cue (#1188, #1176 decision 4)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2864-L2925) | 62 | 2864-2925 |
+| [**Calibration status publishing**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2926-L2995) | 70 | 2926-2995 |
+| [**Piezo buzzer**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L2996-L3097) | 102 | 2996-3097 |
+| [**Camera control (GoPro pulse, RunCam serial)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L3098-L3821) | 724 | 3098-3821 |
+| [**Boot chirp and heartbeat beep**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L3822-L3910) | 89 | 3822-3910 |
+| [**Power hold latch (#848)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L3911-L3979) | 69 | 3911-3979 |
+| [**OTA boot validation**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L3980-L4023) | 44 | 3980-4023 |
+| [**Boot setup**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L4024-L5600) | 1,577 | 4024-5600 |
+| [**Simulator re-arm**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L5601-L5716) | 116 | 5601-5716 |
+| [**INFLIGHT entry**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L5717-L5936) | 220 | 5717-5936 |
+| [**Main loop**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L5937-L11310) | 5,374 | 5937-11310 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Sensor drain and conversion](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L5985-L6163) | 179 | 5985-6163 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Full config report (#915)](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L6164-L6171) | 8 | 6164-6171 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Magnetometer calibration status](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L6172-L6282) | 111 | 6172-6282 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Flight logic: pressure altitude and orientation](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L6283-L6463) | 181 | 6283-6463 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [EKF input, initialization, and update](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L6464-L6966) | 503 | 6464-6966 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [I2C status poll to the Out Computer](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L6967-L7203) | 237 | 6967-7203 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Command dispatch from the Out Computer](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L7204-L9295) | 2,092 | 7204-9295 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Pad calibration completion (#1114)](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L9296-L9360) | 65 | 9296-9360 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Kinematic checks and sensor health](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L9361-L9599) | 239 | 9361-9599 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Test modes (ground, servo, replay)](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L9600-L9781) | 182 | 9600-9781 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Flight state machine](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L9782-L10610) | 829 | 9782-10610 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Simulator re-arm and diagnostics](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L10611-L10686) | 76 | 10611-10686 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Telemetry packing (NonSensorData)](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L10687-L11064) | 378 | 10687-11064 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [Periodic diagnostics](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L11065-L11310) | 246 | 11065-11310 |
+| [**FreeRTOS entry point**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/flight_computer/main/main.cpp#L11311-L11325) | 15 | 11311-11325 |
 
-Total: 31 sections (14 nested) across 11,310 lines.
+Total: 31 sections (14 nested) across 11,325 lines.
