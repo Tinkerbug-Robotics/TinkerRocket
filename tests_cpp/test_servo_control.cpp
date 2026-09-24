@@ -551,6 +551,76 @@ TEST_F(ServoControlTest, ATimingSetBeforeBeginIsAppliedByBegin) {
     for (int t = 0; t < 4; ++t) EXPECT_EQ(hostLedcLog().freq_hz[t], 333u);
 }
 
+// ── Before begin(): no LEDC at all ──
+//
+// On a board with no servo pins (the mini) setup_fc never calls begin(), so
+// the LEDC driver is never set up there and every ledc_* call fails with an
+// error log.  The servo test, replay and stow commands reach the drive paths
+// without asking about pins, so the component itself has to hold back.
+
+TEST_F(ServoControlTest, NoDrivePathTouchesTheLedcBeforeBegin) {
+    TR_ServoControl fresh{1, 2, 3, 4, 0, 0, 0, 0, 50, 1000, 2000,
+                          KP, KI, KD, MIN_CMD, MAX_CMD};
+    hostLedcLogReset();
+
+    const float angles[4] = {10.0f, -10.0f, 5.0f, -5.0f};
+    fresh.setServoAngles(angles);                  // SERVO_TEST
+    fresh.beginNeutralSettle(0);                   // SERVO_TEST_STOP
+    fresh.serviceNeutralSettle(1000);
+    tick();
+    fresh.controlWithGainSchedule(-20.0f, 50.0f);  // SERVO_REPLAY
+    tick();
+    fresh.control(-20.0f);
+    tick();
+    fresh.controlAngle(10.0f, 0.0f, 0.0f, 50.0f, 4.0f, 360.0f);
+    fresh.stowControl();                           // SERVO_CTRL_DISABLE, replay stop
+    fresh.beginWiggle(0);                          // boot self-test
+    for (uint32_t t = 0; t <= 5000; t += 350) fresh.serviceWiggle(t);
+    ASSERT_FALSE(fresh.isIdle());
+    fresh.idle();                                  // pad relax
+
+    EXPECT_EQ(hostLedcLog().set_duty_calls, 0) << "a duty was written with no LEDC set up";
+    EXPECT_EQ(hostLedcLog().timer_config_calls, 0);
+    EXPECT_EQ(hostLedcLog().set_freq_calls, 0);
+
+    // The gate is begin() and nothing else: the same command writes after it.
+    fresh.begin();
+    hostLedcLogReset();
+    fresh.setServoAngles(angles);
+    EXPECT_EQ(hostLedcLog().set_duty_calls, 4);
+}
+
+TEST_F(ServoControlTest, TheCommandIsStillTrackedBeforeBegin) {
+    // Only the hardware write waits for begin().  The sim never calls begin()
+    // and reads roll_cmd_us, which the rate loop takes from the tracked pulse.
+    TR_ServoControl fresh{1, 2, 3, 4, 0, 0, 0, 0, 50, 1000, 2000,
+                          KP, KI, KD, MIN_CMD, MAX_CMD};
+    fresh.control(0.0f);       // TR_PID's first call returns 0 (dt bootstrap)
+    tick();
+    fresh.control(-20.0f);     // P-only: cmd = +20 deg
+    ASSERT_NEAR(fresh.getRollCmdDeg(), 20.0f, 1e-4f);
+
+    for (int i = 0; i < 4; ++i) EXPECT_EQ(fresh.getServoPulseUs(i), expectedPulseUs(20.0f));
+    EXPECT_EQ(fresh.getRollCmdUs(), expectedPulseUs(20.0f));
+}
+
+TEST_F(ServoControlTest, ACommandBeforeBeginLeavesNothingToReexpress) {
+    // begin() leaves every channel at duty 0.  A command issued before it was
+    // never written, so a later frame-rate change must not re-express it --
+    // that would energise a servo that is relaxed.
+    TR_ServoControl fresh{1, 2, 3, 4, 0, 0, 0, 0, 50, 1000, 2000,
+                          KP, KI, KD, MIN_CMD, MAX_CMD};
+    const float angles[4] = {10.0f, 10.0f, 10.0f, 10.0f};
+    fresh.setServoAngles(angles);
+    fresh.begin();
+    hostLedcLogReset();
+
+    ASSERT_TRUE(fresh.setServoTiming(333, 1000, 2000));
+
+    EXPECT_EQ(hostLedcLog().set_freq_calls, 4);
+    EXPECT_EQ(hostLedcLog().set_duty_calls, 0) << "a relaxed servo was re-energised";
+}
+
 TEST_F(ServoControlTest, GainScheduleDoesNotLeakIntoTheRateNullFallback) {
     // #1141 item 4. applyGainSchedule() mutates the live PID gains in place and
     // nothing on the unscheduled path put them back, so on the

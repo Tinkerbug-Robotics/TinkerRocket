@@ -7415,12 +7415,11 @@ static void loop_fc()
                 if (!servoPinsValid())
                 {
                     // Same rule as setup_fc's else-branch: no servo pins, no
-                    // servo control. begin() never ran on this board, so a
-                    // true servo_enabled would aim every flight-loop servo
-                    // write at LEDC channels nobody configured, and until
-                    // something sets up the LEDC driver each write fails with
-                    // an error log. Not saved to NVS either — boot forces the
-                    // flag off here whatever NVS says.
+                    // servo control. begin() never ran on this board, so
+                    // TR_ServoControl writes nothing, and a true servo_enabled
+                    // would run a control law that moves nothing while the
+                    // flight log records servo control as on. Not saved to NVS
+                    // either — boot forces the flag off here whatever NVS says.
                     ESP_LOGW(TAG, "Servo control ENABLE ignored: no servo pins on this board");
                 }
                 else
