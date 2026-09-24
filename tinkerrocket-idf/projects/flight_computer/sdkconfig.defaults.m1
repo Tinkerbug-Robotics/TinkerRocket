@@ -40,6 +40,15 @@ CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 CONFIG_BT_ENABLED=n
 CONFIG_ESP_WIFI_ENABLED=n
 
+# === CPU clock: 240 MHz, not the S3's 160 MHz default (#1485) ===
+# Nothing set a clock, so this processor ran at 160 MHz. The flight code's
+# budgets were set on the P4 at 360 MHz: config.h fills the 44.1 kHz FC->OC
+# link to ~95 % at the 3,840 Hz boost rate, and i2sSenderTask's comment puts
+# core 0 at ~76 %. On the first mini at 160 MHz the sender managed ~1,450
+# frames/s against ~3,600 queued, so ~60 % of frames dropped at the queue.
+# The IMU read ~2,750 of its 3,840 samples/s. 240 MHz is the S3's ceiling.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
 # === Brownout: the selector is NOT the same voltage on both targets ===
 # sdkconfig.defaults pins CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5 and calls it "the
 # most-lenient level (2.42V)". That is true on the ESP32-P4 and FALSE here,
