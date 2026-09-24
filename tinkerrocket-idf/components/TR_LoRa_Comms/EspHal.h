@@ -142,16 +142,25 @@ public:
     // ── SPI (using ESP-IDF spi_master driver) ───────────────
 
     void spiBegin() {
-        spi_bus_config_t busCfg = {};
-        busCfg.mosi_io_num = spiMOSI;
-        busCfg.miso_io_num = spiMISO;
-        busCfg.sclk_io_num = spiSCK;
-        busCfg.quadwp_io_num = -1;
-        busCfg.quadhd_io_num = -1;
-        busCfg.max_transfer_sz = 256;
+        // A host that is already up belongs to another driver (the mini
+        // OC's NAND logger owns SPI2, #1484): join it as a second device
+        // and leave it for that owner to free. Look before initialising,
+        // because spi_bus_initialize() logs an E-level "SPI bus already
+        // initialized" on its way to ESP_ERR_INVALID_STATE, and
+        // LLCC68::begin() gets here twice on every power-on when the chip
+        // answers to "SX1261" instead of "LLCC68".
+        esp_err_t ret = ESP_ERR_INVALID_STATE;
+        if (!spiHostInitialized(spiHostDev)) {
+            spi_bus_config_t busCfg = {};
+            busCfg.mosi_io_num = spiMOSI;
+            busCfg.miso_io_num = spiMISO;
+            busCfg.sclk_io_num = spiSCK;
+            busCfg.quadwp_io_num = -1;
+            busCfg.quadhd_io_num = -1;
+            busCfg.max_transfer_sz = 256;
 
-        esp_err_t ret = spi_bus_initialize(spiHostDev, &busCfg,
-                                           SPI_DMA_CH_AUTO);
+            ret = spi_bus_initialize(spiHostDev, &busCfg, SPI_DMA_CH_AUTO);
+        }
         if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
             // ESP_ERR_INVALID_STATE means bus already initialized (shared bus)
             ESP_LOGE("EspHal", "SPI bus init failed: %s", esp_err_to_name(ret));
@@ -219,6 +228,11 @@ public:
     }
 
 private:
+    // Whether spi_bus_initialize() has already run on this host. Defined in
+    // TR_LoRa_Comms.cpp, which keeps the IDF's private SPI header out of
+    // everything that includes this one.
+    static bool spiHostInitialized(spi_host_device_t host);
+
     int8_t spiSCK;
     int8_t spiMISO;
     int8_t spiMOSI;

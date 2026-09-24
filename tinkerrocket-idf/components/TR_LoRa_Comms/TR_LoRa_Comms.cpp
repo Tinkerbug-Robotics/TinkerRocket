@@ -2,9 +2,18 @@
 #include "LoRaDio1Policy.h"   // #1155 item 7: who a DIO1 edge belongs to
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <esp_private/spi_common_internal.h>   // spi_bus_get_attr()
 #include <cmath>
 
 static const char* TAG = "LORA";
+
+// spi_bus_get_attr() is NULL until spi_bus_initialize() succeeds on the host,
+// and again after spi_bus_free(): the same test that refuses a second
+// spi_bus_initialize(), asked without its error log.
+bool EspHal::spiHostInitialized(spi_host_device_t host)
+{
+    return spi_bus_get_attr(host) != nullptr;
+}
 
 // SPI-bus / RadioLib stall instrumentation (#90 follow-up).  Bench logs
 // showed every-15 s, ~745 ms blocking on Core 1 with all six rocket sensor
