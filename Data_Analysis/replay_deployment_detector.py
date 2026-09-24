@@ -36,6 +36,14 @@ _REPO = _HERE.parent
 _DETECTOR_DIR = _REPO / "tinkerrocket-idf" / "components" / "TR_KinematicChecks"
 _FC_MAIN_DIR = _REPO / "tinkerrocket-idf" / "projects" / "flight_computer" / "main"
 _SHIM_SRC = _HERE / "_deployment_detector_shim.cpp"
+# config.h refuses to compile without a board revision (#808) — a wrong pyro
+# map fires the wrong channel silently, so there is deliberately no default.
+# Every value the shim reads (the DEPLOY_* tunables and FLIGHT_LOOP_UPDATE_RATE)
+# sits in config.h's board-independent half and comes out bit-identical on V7,
+# V8, V9 and M1; tests/unit/test_deployment_replay_shim.py builds all four and
+# compares. So V9 is picked simply because one has to be, and a log from any
+# board replays against that board's own shipped thresholds.
+_BOARD_DEFINES = ("-DTR_BOARD_V9=1",)
 
 G_MS2 = 9.80665
 NSF_BURNOUT = 1 << 4
@@ -59,23 +67,30 @@ def reason_names(mask: int) -> str:
 # Firmware binding
 # --------------------------------------------------------------------------
 
+def _shim_cmd(out: Path, board_defines: tuple[str, ...] = _BOARD_DEFINES) -> list[str]:
+    """The shim's build command; the unit test reuses it to build every board."""
+    return [
+        "c++", "-std=c++17", "-O2", "-shared", "-fPIC", *board_defines,
+        f"-I{_DETECTOR_DIR}", f"-I{_FC_MAIN_DIR}",
+        str(_SHIM_SRC), "-o", str(out),
+    ]
+
+
 def _build_shim() -> Path:
     """Compile the shim if it is older than any firmware source it pulls in.
 
     The staleness check is the no-drift guarantee: edit a DEPLOY_* threshold or
     the detector and the next replay rebuilds instead of quietly reporting the
-    previous build's answer.
+    previous build's answer. This file counts as a source too, because the
+    board flag that picks config.h's board header lives here.
     """
     out = _HERE / "_deployment_detector_shim.so"
-    deps = [_SHIM_SRC, _DETECTOR_DIR / "DeploymentDetector.h", _FC_MAIN_DIR / "config.h"]
+    deps = [Path(__file__).resolve(), _SHIM_SRC,
+            _DETECTOR_DIR / "DeploymentDetector.h", _FC_MAIN_DIR / "config.h"]
     deps += sorted((_FC_MAIN_DIR / "board").glob("*.h"))
     if out.exists() and all(out.stat().st_mtime >= d.stat().st_mtime for d in deps):
         return out
-    cmd = [
-        "c++", "-std=c++17", "-O2", "-shared", "-fPIC",
-        f"-I{_DETECTOR_DIR}", f"-I{_FC_MAIN_DIR}",
-        str(_SHIM_SRC), "-o", str(out),
-    ]
+    cmd = _shim_cmd(out)
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         sys.exit(f"failed to build {out.name}:\n{proc.stderr}\ncommand: {' '.join(cmd)}")

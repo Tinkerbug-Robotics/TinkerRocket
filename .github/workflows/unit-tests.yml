@@ -24,6 +24,11 @@ on:
       # still sends enough bytes to force an identity verdict.
       - 'tools/ota_probe.py'
       - 'tinkerrocket-idf/components/TR_OTA/**'
+      # test_deployment_replay_shim compiles the deployment replay against the
+      # FC's config.h and board headers; #808 broke that build with a
+      # config.h-only change, which would not have triggered this workflow.
+      - 'tinkerrocket-idf/projects/flight_computer/main/config.h'
+      - 'tinkerrocket-idf/projects/flight_computer/main/board/**'
       - '.github/workflows/unit-tests.yml'
   pull_request:
     paths:
@@ -34,6 +39,8 @@ on:
       - 'tinkerrocket-idf/components/TR_KinematicChecks/**'
       - 'tools/ota_probe.py'
       - 'tinkerrocket-idf/components/TR_OTA/**'
+      - 'tinkerrocket-idf/projects/flight_computer/main/config.h'
+      - 'tinkerrocket-idf/projects/flight_computer/main/board/**'
       - '.github/workflows/unit-tests.yml'
 
 jobs:
