@@ -27,6 +27,8 @@
 #include <TR_IIS2MDC.h>
 #endif
 #include "iis2mdc_poll_gate.h"
+#include "ism6_fifo_decoder.h"
+#include "imu_sample_clock.h"
 // GNSS driver is a compile-time seam: the rocket-computer boards carry a
 // u-blox receiver, the mini carries a Quectel LC86G. Both drivers expose the
 // identical begin/pollNewPVT/getGNSSData surface and produce the same
@@ -373,7 +375,7 @@ private:
     // consumer when it starts draining — the ~4 s of pre-loop boot produce
     // thousands of meaningless pre-consumer drops otherwise).
     QueueHandle_t ism6Queue = nullptr;
-    // 256 samples = ~67 ms of buffer at 3840 Hz (~133 ms at 1920) — sized to
+    // 512 samples = ~67 ms of buffer at 7680 Hz (~133 ms at 3840) — sized to
     // ABSORB the worst-case ground-state consumer stall, not merely tolerate a
     // fraction of it.  loop_fc() services the I2C command poll inline, and its
     // masterRead carries a 50 ms timeout (#399: aborting mid-read desyncs the OC
@@ -381,12 +383,15 @@ private:
     // retries — a ~65 ms stall.  The earlier depth-64 (33 ms @1920) let that
     // stall silently drop IMU samples at the logging handoff (#474: a 34.6 ms
     // all-stream hole at activateLogging with zero recorded counters); the
-    // 47.7 ms I2C-recovery stall overflowed even 64.  256 covers the full stall
-    // at every user-selectable rate, so the SPI-fed queue buffers straight
-    // through it and loop_fc drains the burst on the next pass (the 512-deep
-    // I2S TX queue absorbs it).  Witnesses: the [GAP DIAG] imu_q_drops serial
-    // gauge plus the logged NSF2_FC_IMU_DROP flag if any drop still occurs.
-    static constexpr UBaseType_t ISM6_QUEUE_DEPTH = 256;
+    // 47.7 ms I2C-recovery stall overflowed even 64.  The depth covers the full
+    // stall at every user-selectable rate, so the SPI-fed queue buffers
+    // straight through it and loop_fc drains the burst on the next pass (the
+    // 512-deep I2S TX queue absorbs it, ten samples a batch frame).  512 since
+    // #1485 added 7680 Hz, where the same 65 ms is ~500 samples; 256 was sized
+    // for 3840.  Costs ~11 KB of internal RAM.  Witnesses: the [GAP DIAG]
+    // imu_q_drops serial gauge plus the logged NSF2_FC_IMU_DROP flag if any
+    // drop still occurs.
+    static constexpr UBaseType_t ISM6_QUEUE_DEPTH = 512;
     volatile uint32_t ism6_queue_drops = 0;
 
     // #1140 item 2: BMP585 interrupts that arrived while this task was not
@@ -425,6 +430,25 @@ public:
     bool setIsm6Rate(uint16_t rate_hz);
     uint16_t ism6Rate() const { return ISM6HG256_UPDATE_RATE; }
 
+    // #1485: read the ISM6 from its FIFO instead of one sample per DRDY edge.
+    // DRDY is latched, so a sample the poll task is late for is overwritten
+    // without a trace; the FIFO keeps every sample until it is read. Call
+    // before Begin(). A board opts in once it has been proven on the bench.
+    void setIsm6FifoCapture(bool on) { ism6_fifo_ = on; }
+    bool ism6FifoCapture() const { return ism6_fifo_; }
+
+    struct Ism6FifoStats
+    {
+        uint32_t bursts;            // FIFO drains that read words
+        uint32_t overruns;          // drains that found the FIFO had overrun
+        uint32_t incomplete_slots;  // slots that ended without all three words
+        uint32_t counter_gaps;      // slot-counter jumps (slots lost)
+        uint32_t resyncs;           // sample-clock re-anchors
+        uint32_t max_words;         // largest single drain, in words
+        float period_us;            // the sample clock's current period
+    };
+    void getIsm6FifoStats(Ism6FifoStats &out) const;
+
 private:
 
     SemaphoreHandle_t bmp585DataSemaphore;
@@ -446,6 +470,7 @@ private:
     bool reviveIIS2MDC();
     TaskHandle_t pollIMUTaskHandle;
     TaskHandle_t pollGNSSTaskHandle = nullptr;
+    TaskHandle_t pollMagTaskHandle = nullptr;   // #1485
 
     uint32_t ism6hg256_update_period;
     uint32_t mmc_last_sample_time_us;
@@ -454,6 +479,27 @@ private:
     uint32_t mmc_recover_cooldown_us;
 
     volatile bool ism6_isr_fired;        // Set by ISR, cleared by poll loop
+
+    // #1485: FIFO capture (setIsm6FifoCapture).
+    bool ism6_fifo_ = false;
+    Ism6FifoDecoder ism6_fifo_dec_;
+    ImuSampleClock ism6_clock_;
+    // One drain reads at most this many words; the FIFO holds 511.
+    static constexpr uint16_t ISM6_FIFO_MAX_WORDS = 256;
+    uint8_t *ism6_fifo_buf_ = nullptr;   // ISM6_FIFO_MAX_WORDS whole words, DMA-capable
+    Ism6FifoSample ism6_fifo_samples_[ISM6_FIFO_MAX_WORDS / 3 + 1];
+    volatile uint32_t ism6_fifo_bursts_ = 0;
+    volatile uint32_t ism6_fifo_overruns_ = 0;
+    volatile uint32_t ism6_fifo_max_words_ = 0;
+    int8_t ism6_odr_trim_ = 0;           // INTERNAL_FREQ: effective ODR = nominal * (1 + 0.0013 * trim)
+    float ism6EffectiveRate(uint16_t rate_hz) const { return (float)rate_hz * (1.0f + 0.0013f * (float)ism6_odr_trim_); }
+    static uint8_t ism6FifoWatermarkWords(uint16_t rate_hz);
+    TR_ISM6HG256Status configureIsm6Fifo(uint16_t rate_hz);
+    bool drainIsm6Fifo();  // true: the read was capped and words remain
+    void publishIsm6Sample(const TR_ISM6HG256_AxesRaw_t &g_raw,
+                           const TR_ISM6HG256_AxesRaw_t &lg_raw,
+                           const TR_ISM6HG256_AxesRaw_t &hg_raw,
+                           uint32_t t_us, bool read_ok);
     volatile uint32_t ism6_isr_hits;
     volatile uint32_t ism6_notify_wakes;
     volatile uint32_t ism6_notify_timeouts;
@@ -504,6 +550,7 @@ private:
     void startPollingTask(uint8_t imu_execution_core);
     static void pollIMUdata(void *parameter);
     static void pollGNSSdata(void *parameter);
+    static void pollMagData(void *parameter);   // #1485
     // IDF gpio_isr_handler signature is void(*)(void*).  The arg is
     // unused — each trampoline dispatches via its sensor-specific
     // static *_instance pointer set in begin().

@@ -4596,6 +4596,8 @@ static void setup_fc()
     {
         const uint16_t boot_hz = imuRateResolve(imu_rate_setting, /*deployed=*/false);
         sensor_collector_hw.setIsm6Rate(boot_hz);
+        // #1485: FIFO capture where the board has been proven on it.
+        sensor_collector_hw.setIsm6FifoCapture(config::ISM6_FIFO_CAPTURE);
         if (imuRateIsDynamic(imu_rate_setting))
         {
             ESP_LOGI(TAG, "IMU logging rate: DYNAMIC (%u Hz to deployment, then %u Hz)",
@@ -11158,6 +11160,17 @@ static void loop_fc()
                           have_bmp_si ? (double)bmp_latest_si.pressure : 0.0,
                           have_ism6_si ? (double)ism6_latest_si.gyro_z : 0.0,
                           gpio_get_level((gpio_num_t)config::ISM6HG256_INT));
+            // #1485: FIFO capture health (cumulative). Overruns or counter gaps
+            // mean samples were lost; resyncs mean the sample clock re-anchored.
+            if (sensor_collector_hw.ism6FifoCapture())
+            {
+                SensorCollector::Ism6FifoStats fs = {};
+                sensor_collector_hw.getIsm6FifoStats(fs);
+                ESP_LOGI(TAG, "[IMU FIFO] bursts=%lu ovr=%lu incomplete=%lu gaps=%lu resync=%lu max_words=%lu period=%.2fus (cumulative)",
+                              (unsigned long)fs.bursts, (unsigned long)fs.overruns,
+                              (unsigned long)fs.incomplete_slots, (unsigned long)fs.counter_gaps,
+                              (unsigned long)fs.resyncs, (unsigned long)fs.max_words, (double)fs.period_us);
+            }
             dbg_ism6_reads = 0;
             dbg_ism6_passes = 0;
             dbg_ism6_win_max = 0;

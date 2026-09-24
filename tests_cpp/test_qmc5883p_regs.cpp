@@ -99,3 +99,12 @@ TEST(Qmc5883pRegs, OffsetSubtractionSaturatesLikeTheSTPart) {
     // (1875 counts) on top of it comes back as exactly the field.
     EXPECT_EQ(subtractSaturating(-7838 + 1875, -7838), 1875);
 }
+
+TEST(Qmc5883pRegs, OneBurstReachesStatusAtIndexEight)
+{
+    // #1485: readRawXYZ reads 01H through 09H in one transaction — the axes,
+    // the two unmapped bytes, then STATUS — instead of a separate status read.
+    EXPECT_EQ(BURST_WITH_STATUS_LEN, 9);
+    EXPECT_EQ(BURST_STATUS_INDEX, 8);
+    EXPECT_EQ(REG_XOUT_L + BURST_STATUS_INDEX, REG_STATUS);
+}

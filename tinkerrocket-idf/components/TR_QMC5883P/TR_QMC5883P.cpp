@@ -135,18 +135,23 @@ TR_QMC5883PStatus TR_QMC5883P::readRawXYZ(QMC5883P_RawData *out)
         return TR_QMC5883P_ERROR;
     bool ovfl = (status & STATUS_OVFL) != 0;
 
-    // 2. The sample.
-    int16_t x = 0, y = 0, z = 0;
-    if (readBurst(&x, &y, &z) != TR_QMC5883P_OK)
+    // 2. The sample and STATUS in one burst (BURST_WITH_STATUS_LEN): the
+    //    axes, two don't-care bytes, then STATUS. Reading STATUS inside the
+    //    burst saves the separate third transaction, which cost ~0.6 ms of
+    //    CPU a read on the mini FC's busy core (#1485).
+    uint8_t buf[BURST_WITH_STATUS_LEN] = {0};
+    if (readRegisters(REG_XOUT_L, buf, sizeof(buf)) != TR_QMC5883P_OK)
         return TR_QMC5883P_ERROR;
+    int16_t x = decodeAxis(&buf[0]);
+    int16_t y = decodeAxis(&buf[2]);
+    int16_t z = decodeAxis(&buf[4]);
 
-    // 3. Did the output registers refresh between 1 and now?  Then the burst
-    //    may have straddled it — read again.  The re-read cannot straddle:
-    //    the next refresh is a whole ODR period away (10 ms at 100 Hz, ~50x
-    //    the burst).  A refresh that landed AFTER the burst also trips this
-    //    and simply hands back the newer sample.
-    if (readRegister(REG_STATUS, &status) != TR_QMC5883P_OK)
-        return TR_QMC5883P_ERROR;
+    // 3. Did the output registers refresh between 1 and the end of the burst?
+    //    Then the burst may have straddled it — read again.  The re-read
+    //    cannot straddle: the next refresh is a whole ODR period away (10 ms
+    //    at 100 Hz, ~40x the burst).  A refresh that landed after the axis
+    //    bytes also trips this and simply hands back the newer sample.
+    status = buf[BURST_STATUS_INDEX];
     ovfl = ovfl || ((status & STATUS_OVFL) != 0);
     if (status & STATUS_DRDY)
     {

@@ -8,6 +8,7 @@
 #include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <esp_heap_caps.h>
 
 static const char* SC_TAG = "SENSORS";
 
@@ -588,7 +589,11 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         status = (TR_ISM6HG256Status)(status | ism6hg256.Enable_X());
         status = (TR_ISM6HG256Status)(status | ism6hg256.Enable_HG_X());
         status = (TR_ISM6HG256Status)(status | ism6hg256.Enable_G());
-        status = (TR_ISM6HG256Status)(status | ism6hg256.Route_DRDY_To_INT1());
+        // #1485: in FIFO mode INT1 carries the FIFO threshold instead (below).
+        if (!ism6_fifo_)
+        {
+            status = (TR_ISM6HG256Status)(status | ism6hg256.Route_DRDY_To_INT1());
+        }
 
         // Apply configured update rate.
         status = (TR_ISM6HG256Status)(status | ism6hg256.Set_X_OutputDataRate((float)ISM6HG256_UPDATE_RATE));
@@ -601,6 +606,20 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         status = (TR_ISM6HG256Status)(status | ism6hg256.Set_X_FullScale(ism6_low_g_fs_g_));
         status = (TR_ISM6HG256Status)(status | ism6hg256.Set_HG_X_FullScale(ism6_high_g_fs_g_));
         status = (TR_ISM6HG256Status)(status | ism6hg256.Set_G_FullScale(ism6_gyro_fs_dps_));
+
+        if (ism6_fifo_)
+        {
+            if (ism6_fifo_buf_ == nullptr)
+            {
+                ism6_fifo_buf_ = (uint8_t *)heap_caps_aligned_alloc(
+                    4, ((ISM6_FIFO_MAX_WORDS * Ism6FifoDecoder::WORD_BYTES) + 3u) & ~3u,
+                    MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+            }
+            if (ism6_fifo_buf_ == nullptr) status = TR_ISM6HG256_ERROR;
+            if (ism6hg256.ReadOdrTrim(&ism6_odr_trim_) != TR_ISM6HG256_OK) ism6_odr_trim_ = 0;
+            status = (TR_ISM6HG256Status)(status | configureIsm6Fifo(ISM6HG256_UPDATE_RATE));
+            status = (TR_ISM6HG256Status)(status | ism6hg256.Route_FifoThreshold_To_INT1());
+        }
 
         if (status != TR_ISM6HG256_OK)
         {
@@ -618,12 +637,20 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         // Without this, DRDY may already be HIGH before attachInterrupt
         // is called, meaning the first rising edge is missed and the
         // pin stays HIGH permanently (no more edges → no interrupts).
+        if (!ism6_fifo_)
         {
             TR_ISM6HG256_AxesRaw_t dummy_axes = {};
             ism6hg256.Get_X_AxesRaw(&dummy_axes);
             ism6hg256.Get_HG_X_AxesRaw(&dummy_axes);
             ism6hg256.Get_G_AxesRaw(&dummy_axes);
             ESP_LOGI(SC_TAG, "ISM6 DRDY flushed (pin=%d)", gpio_get_level((gpio_num_t)(ISM6HG256_INT)));
+        }
+        else
+        {
+            // configureIsm6Fifo() emptied the FIFO on its way into stream mode.
+            ESP_LOGI(SC_TAG, "ISM6 FIFO capture: %u Hz nominal, %.0f Hz on this part (trim %d), watermark %u words (#1485)",
+                     (unsigned)ISM6HG256_UPDATE_RATE, (double)ism6EffectiveRate(ISM6HG256_UPDATE_RATE),
+                     (int)ism6_odr_trim_, (unsigned)ism6FifoWatermarkWords(ISM6HG256_UPDATE_RATE));
         }
 
         gpio_set_intr_type((gpio_num_t)(ISM6HG256_INT), GPIO_INTR_POSEDGE);
@@ -685,6 +712,19 @@ void SensorCollector::startPollingTask(uint8_t imu_execution_core)
         3,                   // Priority (above I2C sender at 2, below IMU at 4)
         &pollGNSSTaskHandle, // Task handle
         imu_execution_core); // Same core — keeps Serial1 single-threaded
+
+    // #1485: the magnetometer off the IMU task's critical path (pollMagData).
+    if (iis2mdc_active)
+    {
+        xTaskCreatePinnedToCore(
+            pollMagData,         // Task function
+            "Poll Mag Data",     // Task name
+            4096,                // Stack size
+            this,                // Task parameter
+            3,                   // Below the IMU (4), which preempts a blocked I2C read
+            &pollMagTaskHandle,  // Task handle
+            imu_execution_core); // Same core as the other sensor tasks
+    }
 }
 
 void SensorCollector::pollIMUdata(void* parameter) 
@@ -698,7 +738,9 @@ void SensorCollector::pollIMUdata(void* parameter)
         const uint32_t iter_start_us = time_us();
 
         // Block for sensor interrupt to avoid busy-spinning and WDT starvation.
-        const uint32_t notify_count = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+        // #1485: in FIFO mode drain on a short timeout too, so a missed
+        // threshold edge costs 5 ms, not 100 (the FIFO holds ~44 ms at 3,840 Hz).
+        const uint32_t notify_count = ulTaskNotifyTake(pdTRUE, self->ism6_fifo_ ? pdMS_TO_TICKS(5) : pdMS_TO_TICKS(100));
         if (notify_count > 0)
         {
             self->ism6_notify_wakes += notify_count;
@@ -718,6 +760,8 @@ void SensorCollector::pollIMUdata(void* parameter)
             st = (TR_ISM6HG256Status)(st | self->ism6hg256.Set_X_OutputDataRate((float)new_rate));
             st = (TR_ISM6HG256Status)(st | self->ism6hg256.Set_HG_X_OutputDataRate((float)new_rate));
             st = (TR_ISM6HG256Status)(st | self->ism6hg256.Set_G_OutputDataRate((float)new_rate));
+            // #1485: the batch rate and the sample clock follow the ODR.
+            if (self->ism6_fifo_) st = (TR_ISM6HG256Status)(st | self->configureIsm6Fifo(new_rate));
             if (st == TR_ISM6HG256_OK)
             {
                 self->ISM6HG256_UPDATE_RATE = new_rate;
@@ -763,105 +807,51 @@ void SensorCollector::pollIMUdata(void* parameter)
         // Fallback: if the ISR didn't fire but the DRDY pin is HIGH,
         // treat it as if the ISR fired.  This handles the case where the
         // initial rising edge was missed before attachInterrupt was called.
-        if (self->use_ism6hg256 && !self->ism6_isr_fired &&
-            gpio_get_level((gpio_num_t)(self->ISM6HG256_INT)))
+        if (self->use_ism6hg256 && self->ism6_fifo_)
         {
-            self->ism6_isr_fired = true;
-        }
-
-        if (self->use_ism6hg256 && self->ism6_isr_fired)
-        {
-            self->ism6_isr_fired = false;
-
+            // #1485: drain whatever the FIFO holds; a late wake loses nothing.
+            // A read capped at the buffer leaves the threshold line high, and
+            // the edge-triggered wake never comes for a line already high, so
+            // drain again now rather than on the notify timeout.
             const uint32_t ism6_t0 = time_us();
-            self->ism6_drdy_triplet_hits++;
-
-            TR_ISM6HG256_AxesRaw_t lg_raw = {};
-            TR_ISM6HG256_AxesRaw_t hg_raw = {};
-            TR_ISM6HG256_AxesRaw_t g_raw = {};
-
-            // Bulk read: gyro + lg accel + hg accel in one 24-byte SPI transaction
-            const TR_ISM6HG256Status read_st =
-                self->ism6hg256.Get_AllAxesRaw(&g_raw, &lg_raw, &hg_raw);
-
-            {
-                self->start_time = time_us();
-                self->ism6hg256_data.time_us = self->start_time;
-
-                self->ism6hg256_data.acc_low_raw.x = lg_raw.x;
-                self->ism6hg256_data.acc_low_raw.y = lg_raw.y;
-                self->ism6hg256_data.acc_low_raw.z = lg_raw.z;
-
-                self->ism6hg256_data.acc_high_raw.x = hg_raw.x;
-                self->ism6hg256_data.acc_high_raw.y = hg_raw.y;
-                self->ism6hg256_data.acc_high_raw.z = hg_raw.z;
-
-                // #1154 item 10: saturate, do not wrap.  The operands are
-                // int16 and the difference is stored back into an int16, so a
-                // rail-pinned sample minus a positive offset used to wrap the
-                // SIGN — a full-negative rate reading as full-positive.  That
-                // is the worst possible failure for the one sample class the
-                // EKF shock gate cares about (#1190 gates on saturation
-                // precisely because a railed axis is uninformative), and a
-                // roll controller reading a sign-flipped rate would drive the
-                // wrong way.  Clamping keeps a railed sample railed.
-                self->ism6hg256_data.gyro_raw.x = satSubI16(g_raw.x, self->gyro_cal_x);
-                self->ism6hg256_data.gyro_raw.y = satSubI16(g_raw.y, self->gyro_cal_y);
-                self->ism6hg256_data.gyro_raw.z = satSubI16(g_raw.z, self->gyro_cal_z);
-
-                // Track ISM6 timestamp gaps
-                const uint32_t this_time = self->start_time;
-                const uint32_t prev_time = self->pt_last_ism6_time_us;
-                if (prev_time != 0)
-                {
-                    const uint32_t gap = this_time - prev_time;
-                    if (gap > GAP_THRESHOLD_US)
-                    {
-                        self->pt_gap_count++;
-                        if (gap > self->pt_gap_worst_us)
-                        {
-                            self->pt_gap_worst_us = gap;
-                        }
-                    }
-                }
-                self->pt_last_ism6_time_us = this_time;
-
-                if (self->cal_window_.active && read_st == TR_ISM6HG256_OK)
-                {
-                    // #1110/#1114: calibration window open — the calibrator
-                    // gets this sample TOO.  Sum the raw values (g_raw,
-                    // before the offset subtract above), and only a read the
-                    // driver accepted.  The queue still gets it below: the
-                    // flight loop keeps consuming through the window (#1114),
-                    // so the log, the EKF and launch detection see no hole.
-                    self->cal_sums_.g[0]  += g_raw.x;
-                    self->cal_sums_.g[1]  += g_raw.y;
-                    self->cal_sums_.g[2]  += g_raw.z;
-                    self->cal_sums_.lg[0] += lg_raw.x;
-                    self->cal_sums_.lg[1] += lg_raw.y;
-                    self->cal_sums_.lg[2] += lg_raw.z;
-                    self->cal_sums_.hg[0] += hg_raw.x;
-                    self->cal_sums_.hg[1] += hg_raw.y;
-                    self->cal_sums_.hg[2] += hg_raw.z;
-                    self->cal_sums_.count++;
-                }
-                // Enqueue the sample; on a full queue drop the OLDEST so the
-                // freshest data always lands (control reads the tail).  A
-                // nonzero drop counter means the consumer stalled for longer
-                // than ISM6_QUEUE_DEPTH samples — visible in [SENSOR] diag.
-                if (xQueueSend(self->ism6Queue, &self->ism6hg256_data, 0) != pdTRUE)
-                {
-                    ISM6HG256Data discard;
-                    (void)xQueueReceive(self->ism6Queue, &discard, 0);
-                    self->ism6_queue_drops++;
-                    (void)xQueueSend(self->ism6Queue, &self->ism6hg256_data, 0);
-                }
-            }
-
+            for (int pass = 0; pass < 4 && self->drainIsm6Fifo(); ++pass) {}
             const uint32_t ism6_elapsed = time_us() - ism6_t0;
             if (ism6_elapsed > self->pt_ism6_read_max_us)
             {
                 self->pt_ism6_read_max_us = ism6_elapsed;
+            }
+        }
+        else
+        {
+            if (self->use_ism6hg256 && !self->ism6_isr_fired &&
+                gpio_get_level((gpio_num_t)(self->ISM6HG256_INT)))
+            {
+                self->ism6_isr_fired = true;
+            }
+
+            if (self->use_ism6hg256 && self->ism6_isr_fired)
+            {
+                self->ism6_isr_fired = false;
+
+                const uint32_t ism6_t0 = time_us();
+                self->ism6_drdy_triplet_hits++;
+
+                TR_ISM6HG256_AxesRaw_t lg_raw = {};
+                TR_ISM6HG256_AxesRaw_t hg_raw = {};
+                TR_ISM6HG256_AxesRaw_t g_raw = {};
+
+                // Bulk read: gyro + lg accel + hg accel in one 24-byte SPI transaction
+                const TR_ISM6HG256Status read_st =
+                    self->ism6hg256.Get_AllAxesRaw(&g_raw, &lg_raw, &hg_raw);
+
+                self->publishIsm6Sample(g_raw, lg_raw, hg_raw, time_us(),
+                                        read_st == TR_ISM6HG256_OK);
+
+                const uint32_t ism6_elapsed = time_us() - ism6_t0;
+                if (ism6_elapsed > self->pt_ism6_read_max_us)
+                {
+                    self->pt_ism6_read_max_us = ism6_elapsed;
+                }
             }
         }
 
@@ -1035,6 +1025,43 @@ void SensorCollector::pollIMUdata(void* parameter)
         // configuration is re-applied on the way back so a chip that browned
         // out (CFG/OFFSET regs back at power-on defaults = idle mode) does
         // not return "answering" but parked.
+        // #1485: the magnetometer is polled by pollMagData(), not here. Its I2C
+        // read took this task ~1.6 ms on the mini (QMC5883P: status, burst,
+        // status, sometimes a re-read), long enough to lose IMU samples.
+
+        // Track total iteration time (excluding the notification wait)
+        const uint32_t iter_elapsed = time_us() - iter_start_us;
+        if (iter_elapsed > self->pt_iter_max_us)
+        {
+            self->pt_iter_max_us = iter_elapsed;
+        }
+
+        taskYIELD();
+    }
+}
+
+// #1485: the magnetometer's own poll task. Its I2C read is slow next to the
+// IMU's sample period (~1.6 ms on the mini's QMC5883P against 260 us at
+// 3,840 Hz), so it runs below the IMU task and the IMU preempts it. The mag
+// bus is private, so nothing else waits on it. The gate paces reads to the
+// ODR; a 1 ms wake is only a check.
+void SensorCollector::pollMagData(void* parameter)
+{
+    SensorCollector* self = static_cast<SensorCollector*>(parameter);
+    ESP_LOGI(SC_TAG, "Starting pollMagData");
+    while (true)
+    {
+        // #1485: sleep until the gate's next attempt is due — at least a tick,
+        // at most 100 ms so a sensor that comes up later is still noticed —
+        // rather than waking every millisecond to ask. Those 1,000 wakes a
+        // second cost ~4 % of core 0 on the mini (bench A/B), for reads that
+        // only happen every 10 ms. Waking up to a tick early just loops once.
+        uint32_t wait_us = self->iis2mdc_active ? self->iis2mdc_gate.usUntilDue(time_us())
+                                                : 100000u;
+        if (wait_us > 100000u) wait_us = 100000u;
+        TickType_t ticks = pdMS_TO_TICKS((wait_us + 999u) / 1000u);
+        if (ticks < 1) ticks = 1;
+        vTaskDelay(ticks);
         if (self->iis2mdc_active)
         {
             const uint32_t iis2_now_us = time_us();
@@ -1098,15 +1125,6 @@ void SensorCollector::pollIMUdata(void* parameter)
                 }
             }
         }
-
-        // Track total iteration time (excluding the notification wait)
-        const uint32_t iter_elapsed = time_us() - iter_start_us;
-        if (iter_elapsed > self->pt_iter_max_us)
-        {
-            self->pt_iter_max_us = iter_elapsed;
-        }
-
-        taskYIELD();
     }
 }
 
@@ -1573,6 +1591,161 @@ void IRAM_ATTR SensorCollector::onMMC5983MAInt()
     }
 }
 
+
+// One IMU sample into the handoff queue, whichever way it was read (DRDY or
+// FIFO, #1485): gyro offset, gap tracking, the pad-calibration sums, and the
+// drop-oldest enqueue. t_us is the sample's time; read_ok gates the
+// calibration sums to reads the driver accepted.
+void SensorCollector::publishIsm6Sample(const TR_ISM6HG256_AxesRaw_t &g_raw,
+                                        const TR_ISM6HG256_AxesRaw_t &lg_raw,
+                                        const TR_ISM6HG256_AxesRaw_t &hg_raw,
+                                        uint32_t t_us, bool read_ok)
+    {
+        start_time = t_us;
+        ism6hg256_data.time_us = start_time;
+
+        ism6hg256_data.acc_low_raw.x = lg_raw.x;
+        ism6hg256_data.acc_low_raw.y = lg_raw.y;
+        ism6hg256_data.acc_low_raw.z = lg_raw.z;
+
+        ism6hg256_data.acc_high_raw.x = hg_raw.x;
+        ism6hg256_data.acc_high_raw.y = hg_raw.y;
+        ism6hg256_data.acc_high_raw.z = hg_raw.z;
+
+        // #1154 item 10: saturate, do not wrap.  The operands are
+        // int16 and the difference is stored back into an int16, so a
+        // rail-pinned sample minus a positive offset used to wrap the
+        // SIGN — a full-negative rate reading as full-positive.  That
+        // is the worst possible failure for the one sample class the
+        // EKF shock gate cares about (#1190 gates on saturation
+        // precisely because a railed axis is uninformative), and a
+        // roll controller reading a sign-flipped rate would drive the
+        // wrong way.  Clamping keeps a railed sample railed.
+        ism6hg256_data.gyro_raw.x = satSubI16(g_raw.x, gyro_cal_x);
+        ism6hg256_data.gyro_raw.y = satSubI16(g_raw.y, gyro_cal_y);
+        ism6hg256_data.gyro_raw.z = satSubI16(g_raw.z, gyro_cal_z);
+
+        // Track ISM6 timestamp gaps
+        const uint32_t this_time = start_time;
+        const uint32_t prev_time = pt_last_ism6_time_us;
+        if (prev_time != 0)
+        {
+            const uint32_t gap = this_time - prev_time;
+            if (gap > GAP_THRESHOLD_US)
+            {
+                pt_gap_count++;
+                if (gap > pt_gap_worst_us)
+                {
+                    pt_gap_worst_us = gap;
+                }
+            }
+        }
+        pt_last_ism6_time_us = this_time;
+
+        if (cal_window_.active && read_ok)
+        {
+            // #1110/#1114: calibration window open — the calibrator
+            // gets this sample TOO.  Sum the raw values (g_raw,
+            // before the offset subtract above), and only a read the
+            // driver accepted.  The queue still gets it below: the
+            // flight loop keeps consuming through the window (#1114),
+            // so the log, the EKF and launch detection see no hole.
+            cal_sums_.g[0]  += g_raw.x;
+            cal_sums_.g[1]  += g_raw.y;
+            cal_sums_.g[2]  += g_raw.z;
+            cal_sums_.lg[0] += lg_raw.x;
+            cal_sums_.lg[1] += lg_raw.y;
+            cal_sums_.lg[2] += lg_raw.z;
+            cal_sums_.hg[0] += hg_raw.x;
+            cal_sums_.hg[1] += hg_raw.y;
+            cal_sums_.hg[2] += hg_raw.z;
+            cal_sums_.count++;
+        }
+        // Enqueue the sample; on a full queue drop the OLDEST so the
+        // freshest data always lands (control reads the tail).  A
+        // nonzero drop counter means the consumer stalled for longer
+        // than ISM6_QUEUE_DEPTH samples — visible in [SENSOR] diag.
+        if (xQueueSend(ism6Queue, &ism6hg256_data, 0) != pdTRUE)
+        {
+            ISM6HG256Data discard;
+            (void)xQueueReceive(ism6Queue, &discard, 0);
+            ism6_queue_drops++;
+            (void)xQueueSend(ism6Queue, &ism6hg256_data, 0);
+        }
+    }
+
+uint8_t SensorCollector::ism6FifoWatermarkWords(uint16_t rate_hz)
+{
+    // About 2 ms of samples per drain at any rate: 8 slots at 3,840 Hz, 16 at
+    // 7,680 Hz, never fewer than 2. Three words (gyro, low-g, high-g) a slot.
+    uint16_t slots = rate_hz / 480u;
+    if (slots < 2u) slots = 2u;
+    return (uint8_t)(slots * 3u);
+}
+
+TR_ISM6HG256Status SensorCollector::configureIsm6Fifo(uint16_t rate_hz)
+{
+    const TR_ISM6HG256Status st = ism6hg256.ConfigureFifo((float)rate_hz, ism6FifoWatermarkWords(rate_hz));
+    // The FIFO was emptied, so no half slot and no clock history survive.
+    ism6_fifo_dec_.reset();
+    // Seed the clock with the rate this part actually runs at (its trim is a
+    // few percent on some parts); the clock then only tracks what is left.
+    ism6_clock_.reset(1000000.0f / ism6EffectiveRate(rate_hz));
+    return st;
+}
+
+bool SensorCollector::drainIsm6Fifo()
+{
+    // The clock anchors the burst to this instant: the newest sample in the
+    // FIFO was produced within one period before the level was read.
+    const uint32_t t_read = time_us();
+    uint16_t level = 0;
+    bool overrun = false;
+    if (ism6hg256.ReadFifoStatus(&level, &overrun) != TR_ISM6HG256_OK) return false;
+    if (overrun) ism6_fifo_overruns_++;
+    if (level == 0) return false;
+    const uint16_t words = (level > ISM6_FIFO_MAX_WORDS) ? ISM6_FIFO_MAX_WORDS : level;
+    if (ism6hg256.ReadFifoWords(ism6_fifo_buf_, words) != TR_ISM6HG256_OK) return false;
+    ism6_fifo_bursts_++;
+    if (words > ism6_fifo_max_words_) ism6_fifo_max_words_ = words;
+
+    // Decode first: the clock needs the burst's sample count before it can
+    // time the first one.
+    uint32_t n = 0;
+    constexpr uint32_t cap = sizeof(ism6_fifo_samples_) / sizeof(ism6_fifo_samples_[0]);
+    ism6_fifo_dec_.feed(ism6_fifo_buf_, words, [&](const Ism6FifoSample &s) {
+        if (n < cap) ism6_fifo_samples_[n++] = s;
+    });
+    // The clock wants the time of the newest sample decoded here. That is the
+    // newest the chip produced only if nothing came after it: a slot the chip
+    // was still writing (finished by the next burst) is one more period, and
+    // a drain capped below the level (a stall at 7,680 Hz fills more than the
+    // buffer in ~11 ms) leaves whole slots unread, a period each.
+    const uint32_t later_slots = (uint32_t)(level - words) / 3u
+                               + (ism6_fifo_dec_.hasPartialSlot() ? 1u : 0u);
+    ism6_clock_.beginBurst(t_read - (uint32_t)((float)later_slots * ism6_clock_.period()), n);
+
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        const Ism6FifoSample &s = ism6_fifo_samples_[i];
+        const TR_ISM6HG256_AxesRaw_t g  = {s.g[0],  s.g[1],  s.g[2]};
+        const TR_ISM6HG256_AxesRaw_t lg = {s.lg[0], s.lg[1], s.lg[2]};
+        const TR_ISM6HG256_AxesRaw_t hg = {s.hg[0], s.hg[1], s.hg[2]};
+        publishIsm6Sample(g, lg, hg, ism6_clock_.next(), true);
+    }
+    return words < level;
+}
+
+void SensorCollector::getIsm6FifoStats(Ism6FifoStats &out) const
+{
+    out.bursts = ism6_fifo_bursts_;
+    out.overruns = ism6_fifo_overruns_;
+    out.incomplete_slots = ism6_fifo_dec_.incomplete_slots;
+    out.counter_gaps = ism6_fifo_dec_.counter_gaps;
+    out.resyncs = ism6_clock_.resyncs;
+    out.max_words = ism6_fifo_max_words_;
+    out.period_us = ism6_clock_.period();
+}
 
 bool SensorCollector::setIsm6Rate(uint16_t rate_hz)
 {
