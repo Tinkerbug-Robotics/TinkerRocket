@@ -69,6 +69,9 @@ WINDOWS = [("pad", -1.5, -0.1), ("boost", 0.0, 0.75), ("coast", 3.0, 10.0)]
 CHANNELS = [("high-g X", 3, "m/s2"), ("low-g X", 0, "m/s2"), ("gyro X", 6, "dps")]
 # Bands the filter is measured on; None means "the tick Nyquist to ODR/2".
 BANDS = [("tone 700-900 Hz", 700.0, 900.0), ("bending 25-35 Hz", 25.0, 35.0), ("above tick Nyquist", None, None)]
+# The ODR-rate PSD length the tone is read from, and the band it is looked for in.
+NPERSEG_ODR = 1024
+TONE_SEARCH_HZ = (500.0, 1000.0)
 
 # NumPy 2.4 dropped np.trapz; older installs lack np.trapezoid.
 _trapz = getattr(np, "trapezoid", None) or getattr(np, "trapz")
@@ -338,15 +341,32 @@ def analyse(d, replay):
         in_win[int(idx[0] - n[0] + 1) - i0:int(idx[-1]) + 1 - i0] = True
 
         nperseg = 1 << int(math.log2(max(16, min(256, sel.sum() // 2))))
+        # The ODR-rate PSD is NPERSEG_ODR points when the window holds that
+        # many samples, else shrunk to fit like the tick-rate one above, which
+        # keeps the plot's reference line.  The tone is named only from the
+        # full-length PSD, and only when the search band lies below the ODR
+        # Nyquist: an argmax over a band with no bins lands on bin 0, a 0 Hz
+        # "tone" nobody measured.
+        n_odr = int(in_win.sum())
+        nperseg_odr = NPERSEG_ODR if n_odr >= NPERSEG_ODR else 1 << int(math.log2(max(16, n_odr // 2)))
+        if odr / 2.0 < TONE_SEARCH_HZ[0]:
+            tone_na = (f"the {TONE_SEARCH_HZ[0]:.0f}-{TONE_SEARCH_HZ[1]:.0f} Hz search band is above "
+                       f"the ODR Nyquist ({odr / 2.0:.0f} Hz)")
+        elif nperseg_odr < NPERSEG_ODR:
+            tone_na = f"{n_odr} ODR samples in the window, short of one {NPERSEG_ODR}-point segment"
+        else:
+            tone_na = None
         row = dict(window=name, ticks=int(sel.sum()), n_mean=float(np.mean(n)), n_max=int(np.max(n)),
                    old_rail_duty=float(np.mean(old_rail[sel])),
-                   new_rail_duty=float(np.mean(r["near_rail"][sel])), channels=[])
+                   new_rail_duty=float(np.mean(r["near_rail"][sel])), tone_na=tone_na, channels=[])
         for cname, col, unit in CHANNELS:
             # --- the filter itself: band-passed full-rate, decimated both ways
             x = body_seg[:, col]
-            f_full, p_full = welch(x[in_win], odr, 1024)
-            hi_full = (f_full >= 500.0) & (f_full <= 1000.0)
-            f_tone = float(f_full[int(np.argmax(np.where(hi_full, p_full, -1.0)))])
+            f_full, p_full = welch(x[in_win], odr, nperseg_odr)
+            f_tone = None
+            if tone_na is None:
+                hi_full = (f_full >= TONE_SEARCH_HZ[0]) & (f_full <= TONE_SEARCH_HZ[1])
+                f_tone = float(f_full[int(np.argmax(np.where(hi_full, p_full, -1.0)))])
             cs_bands = []
             for bname, blo, bhi in BANDS:
                 blo_, bhi_ = (nyq, odr / 2.0) if blo is None else (blo, bhi)
@@ -372,7 +392,8 @@ def analyse(d, replay):
                 name=cname, unit=unit,
                 sigma_fresh=float(np.std(xf)), sigma_mean=float(np.std(xm)),
                 hi_rms_fresh=band_rms(f, pf, 100.0, nyq), hi_rms_mean=band_rms(f, pm, 100.0, nyq),
-                peak_hz=float(f[ipk]), tone_hz=f_tone, tone_alias_hz=alias_of(f_tone, fs),
+                peak_hz=float(f[ipk]), tone_hz=f_tone,
+                tone_alias_hz=alias_of(f_tone, fs) if f_tone is not None else None,
                 bands=cs_bands, f=f, pf=pf, pm=pm,
                 f_full=f_full[f_full <= nyq], p_full=p_full[f_full <= nyq]))
         rows.append(row)
@@ -392,17 +413,26 @@ def report(d, rows):
               f"{'100Hz-Nyq RMS':>14s} {'after':>7s} {'net dB':>7s} {'strongest line >100 Hz':>24s}")
         for c in row["channels"]:
             net = db(c["hi_rms_mean"] ** 2 / c["hi_rms_fresh"] ** 2) if c["hi_rms_fresh"] > 0 else float("nan")
+            tone = (f"ODR tone {c['tone_hz']:.0f} Hz folds to {c['tone_alias_hz']:.0f} Hz"
+                    if c["tone_hz"] is not None else "ODR tone n/a")
             print(f"    {c['name']:10s} {c['sigma_fresh']:9.2f} {c['unit']:>5s} {c['sigma_mean']:11.2f} "
                   f"{c['hi_rms_fresh']:14.2f} {c['hi_rms_mean']:7.2f} {net:7.1f} "
-                  f"{c['peak_hz']:8.0f} Hz (ODR tone {c['tone_hz']:.0f} Hz folds to {c['tone_alias_hz']:.0f} Hz)")
+                  f"{c['peak_hz']:8.0f} Hz ({tone})")
+        if row["tone_na"]:
+            print(f"    ODR tone n/a: {row['tone_na']}")
         print("  band-passed through the same windows: band RMS at the ODR, then what each")
         print("  decimation keeps of it (as-flown pick / window mean, relative to the ODR-rate RMS):")
         print(f"    {'channel':10s} " + " ".join(f"{b['name']:>40s}" for b in row["channels"][0]["bands"]))
         for c in row["channels"]:
             cells = []
             for b in c["bands"]:
-                cells.append(f"{b['full_rms']:8.2f}  pick x{b['pick']:.3f}  mean x{b['gain']:.3f} "
-                             f"({20*math.log10(b['gain']) if b['gain'] > 0 else float('-inf'):6.1f} dB)")
+                if b["lo"] >= d["odr"] / 2.0:
+                    # Nothing of the band exists at this ODR, so there is no
+                    # RMS to take a gain against (it is not a -inf dB cut).
+                    cells.append(f"n/a: above the {d['odr'] / 2.0:.0f} Hz ODR Nyquist")
+                else:
+                    cells.append(f"{b['full_rms']:8.2f}  pick x{b['pick']:.3f}  mean x{b['gain']:.3f} "
+                                 f"({20*math.log10(b['gain']) if b['gain'] > 0 else float('-inf'):6.1f} dB)")
             print(f"    {c['name']:10s} " + " ".join(f"{cell:>40s}" for cell in cells))
 
 
