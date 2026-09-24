@@ -37,6 +37,14 @@ CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=48
 CONFIG_PM_ENABLE=y
 CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
 
+# #1485: 240 MHz, the S3's ceiling, when the FC rail is up. exitLowPowerMode()
+# locks the CPU at this default; low-power mode still drops to 80/40 MHz DFS
+# with light sleep, so the idle draw is unchanged. At 160 MHz and the 7,680 Hz
+# IMU rate the V9's OC ran core 1 at 87 % while logging (the link parse task
+# 46 %, loop_oc 38 %), which left too little for the radio and the phone in
+# flight. Every OC board is an S3, so this is one setting for all of them.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
 # (#519) Light-sleep tick accounting. The first battery run panicked immediately:
 #
 #   assert failed: vTaskStepTick tasks.c:3068
