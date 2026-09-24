@@ -27,16 +27,29 @@ worked on; roll major only when a *previously fabricated* revision is superseded
 that cannot include it — the hash changes when you commit. Tags avoid that.
 
 ```
+tinker-mantis-v<semver>                      earlier revisions: rocket-computer-v9.0.0
+tinker-beetle-v<semver>                      earlier revisions: rocket-computer-mini-v1.0.1
+tinker-base-v<semver>                        never fabricated, no tag yet
 lora-daughterboard-v3.0.0
-rocket-computer-v9.0.0
-base-station-v5.0.0
 gnss-sam10m8-18mm-hv-v3.0.0
-gnss-px1105r-18mm-highpower-ext-ant-v1.0.0
-servo-adapter-v1.0.0
+base-station-v5.0.0                          hardware/legacy/
+gnss-px1105r-18mm-highpower-ext-ant-v1.1.0   hardware/legacy/
+servo-adapter-v1.0.0                         hardware/legacy/
 ```
 
-Per-board prefixes because the six boards revise independently. The format matches
-the existing `android-vX.Y.Z` convention: lightweight tags, `<board>-v<semver>`.
+Per-board prefixes because the boards revise independently. The format matches
+the existing `android-vX.Y.Z` convention: lightweight tags, `<board>-v<semver>`,
+where `<board>` is the folder name.
+
+**The product-line boards were renamed on 2026-09-24** — `rocket-computer` to
+`tinker-mantis`, `rocket-computer-mini` to `tinker-beetle`, `base-station-mini`
+to `tinker-base`. Tags are never renamed: a revision fabricated before that day
+keeps its tag under the old name, and at that tag the board is in the old
+folder (`git show rocket-computer-v9.0.0:hardware/rocket-computer/bom.csv`).
+The next fabrication of each gets the new prefix, continuing the same version
+numbers — the Tinker-Mantis's next major is `tinker-mantis-v10.0.0`, the V10 its
+title block already reads. `tools/plot_gerbers.sh` searches both prefixes, so
+provenance is unbroken across the rename.
 
 **The silkscreen carries the marketing version only** — `V3`, not a git hash.
 There is no room on a 22 × 27.5 mm board, and the fab does not need it there.
@@ -96,15 +109,15 @@ every earlier one is 8 MB.**
 
 | board | revision | boot NOR | fitted | evidence |
 |---|---|---|---|---|
-| rocket-computer | V7 | U13 / U16 `W25Q64` | 8 MB | **measured** 2026-08-24, `esptool flash-id` `ef 7017` on both MCUs (FC `30:ed:a0:e3:64:9c`, OC `e0:72:a1:ca:e1:50`) |
-| rocket-computer | V8 | `W25Q64` | 8 MB | predates the swap; confirmed by the board owner 2026-08-24 ("latest version only is 16 MB, others are 8"). No V8 artwork was ever committed, so there is no BOM to check it against |
-| rocket-computer | V9 / V10 | U13 / U16 `GD25Q128ESIG` | 16 MB | BOM; and a V9 FC logged `Detected size(16384k)` against an 8 MB header |
-| base-station | V1, V2 | `W25Q64` | 8 MB | BOM history + confirmed by the board owner 2026-08-24 ("latest version only is 16 MB, others are 8") |
-| base-station | V3 (PCB V5/V6) | U1 `GD25Q128ESIG` | 16 MB | BOM |
+| rocket-computer (legacy) | V7 | U13 / U16 `W25Q64` | 8 MB | **measured** 2026-08-24, `esptool flash-id` `ef 7017` on both MCUs (FC `30:ed:a0:e3:64:9c`, OC `e0:72:a1:ca:e1:50`) |
+| rocket-computer (legacy) | V8 | `W25Q64` | 8 MB | predates the swap; confirmed by the board owner 2026-08-24 ("latest version only is 16 MB, others are 8"). No V8 artwork was ever committed, so there is no BOM to check it against |
+| tinker-mantis (was rocket-computer) | V9 / V10 | U13 / U16 `GD25Q128ESIG` | 16 MB | BOM; and a V9 FC logged `Detected size(16384k)` against an 8 MB header |
+| base-station (legacy) | V1, V2 | `W25Q64` | 8 MB | BOM history + confirmed by the board owner 2026-08-24 ("latest version only is 16 MB, others are 8") |
+| base-station (legacy) | V3 (PCB V5/V6) | U1 `GD25Q128ESIG` | 16 MB | BOM |
 | lora-daughterboard | as-built V3 | U22 `W25Q64JVXGIQ` | 8 MB | the board the firmware was written against; **measured** on two articles — `E0:72:A1:CA:F6:7C` and `E0:72:A1:CA:F6:48`, both GigaDevice `c8:6517` |
 | lora-daughterboard | current artwork | U22 `GD25Q128ESIG` | 16 MB | **measured** 2026-08-27 — `E0:72:A1:CA:F6:40` flashed and booted `radio up, listening at 915.0 MHz SF8`. (The row used to say "first article is unflashable, so untested"; that article is one dead board, not the revision.) |
-| rocket-computer-mini | first article | U13 `GD25Q128ESIG` | 16 MB | BOM; board postdates the swap. **No hardware exists yet to measure** (2026-08-24) |
-| base-station-mini | first article | U1 `GD25Q128ESIG` | 16 MB | BOM; board postdates the swap. **Unmeasured** |
+| tinker-beetle (was rocket-computer-mini) | first article | U13 `GD25Q128ESIG` | 16 MB | BOM; board postdates the swap. **No hardware exists yet to measure** (2026-08-24) |
+| tinker-base (was base-station-mini) | first article | U1 `GD25Q128ESIG` | 16 MB | BOM; board postdates the swap. **Unmeasured** |
 
 **How firmware handles it — changed 2026-09-09 (#916).** Each project now
 declares the smallest standard flash size that fits **its own partition table**,
@@ -138,7 +151,7 @@ one `out_computer` uses for V9 PSRAM:
 | `out_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`, and M1) — PSRAM only since #916; the flash size stays the base 8 MB |
 | `base_station` | 8 MB + `partitions.csv` | `sdkconfig.defaults.v3` → 16 MB + `partitions_v3.csv` (`-DTR_BS_BOARD=3`) |
 | `radio_board` | 4 MB | none — table ends at 3.13 MB, and 4 MB is safe on both the 8 MB as-built and the 16 MB artwork |
-| `rocket_computer_mini` | 8 MB | none — table ends at 6.13 MB; the fitted part is 16 MB but nothing addresses the top half |
+| `legacy/rocket_computer_mini` | 8 MB | none — table ends at 6.13 MB; the fitted part is 16 MB but nothing addresses the top half |
 
 The base value is deliberately the safe one, so a forgotten or unsupported flag
 costs a big board the top of its part rather than costing a small board its
@@ -172,6 +185,12 @@ takes effect where someone would look for it. Any root `projects/*/sdkconfig`
 left over from before is now ignored and can be deleted.
 
 ## Current state
+
+**2026-09-24 — product line.** The boards offered are `tinker-mantis`,
+`tinker-beetle`, `tinker-base`, `lora-daughterboard` and `gnss-sam10m8-18mm-hv`;
+`base-station`, `gnss-px1105r-18mm-highpower-ext-ant` and `servo-adapter` moved
+to `hardware/legacy/`. No revision changed and nothing was re-tagged — the
+entries below use the names each board had when it was tagged.
 
 gnss-sam10m8-18mm-hv **v3.0.0**, 2026-09-02 — the carrier re-drawn around an
 ADP7142ARDZ-3.3 linear regulator after the 2026-08-29 side-by-side, where the
