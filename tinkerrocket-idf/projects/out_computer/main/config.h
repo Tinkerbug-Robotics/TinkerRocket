@@ -41,14 +41,24 @@
 #if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_M1) != 1
 #error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1 or -DTR_BOARD_M1=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, V9/V10 needs the sdkconfig overlay that enables its PSRAM log ring, and M1 (rocket-computer-mini) drives its radio over SPI where V8/V9 drive a UART daughterboard."
 #endif
+// TR_BOARD_REV_STR names the board in log lines. It sits next to the header it
+// describes, as in the flight computer's config.h, so the two cannot disagree.
+// V7 is a case of its own: a board flag with no branch here stops the build
+// instead of compiling V7's pins under V7's name (#1316).
 #if TR_BOARD_V8
 #include "board/board_v8.h"
+#define TR_BOARD_REV_STR "V8"
 #elif TR_BOARD_V9
 #include "board/board_v9.h"
+#define TR_BOARD_REV_STR "V9/V10"
 #elif TR_BOARD_M1
 #include "board/board_m1.h"
-#else
+#define TR_BOARD_REV_STR "M1 (rocket-computer-mini)"
+#elif TR_BOARD_V7
 #include "board/board_v7.h"
+#define TR_BOARD_REV_STR "V7"
+#else
+#error "This board flag selects no board header: add it to the chain in config.h."
 #endif
 
 // The one difference between the V8 and V9 maps, asserted rather than trusted.
