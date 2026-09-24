@@ -39,6 +39,9 @@ struct board_pins
     static constexpr bool USE_MMC5983MA = true;
     static constexpr bool USE_GNSS = true;
     static constexpr bool USE_ISM6HG256 = true;
+    // #1485: FIFO capture is proven on the mini first; this board keeps
+    // one read per DRDY edge until it has been benched on the FIFO path.
+    static constexpr bool ISM6_FIFO_CAPTURE = false;
     // When USE_MMC5983MA is true, the magnetometer slot first probes for an
     // IIS2MDC over I2C; if not detected, the MMC5983MA SPI path runs.
     static constexpr bool USE_IIS2MDC = true;

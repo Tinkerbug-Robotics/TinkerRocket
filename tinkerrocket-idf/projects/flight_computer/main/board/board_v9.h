@@ -105,6 +105,11 @@ struct board_pins
     static constexpr bool USE_MMC5983MA = false;  // no MMC5983MA net on this board
     static constexpr bool USE_GNSS = true;
     static constexpr bool USE_ISM6HG256 = true;
+    // #1485: read the ISM6 from its FIFO, a burst per threshold interrupt,
+    // not one sample per DRDY edge (which loses every sample the poll task
+    // is late for). Proven on the mini first, then benched on a V9 at 3,840
+    // and 7,680 Hz: every sample captured, none dropped.
+    static constexpr bool ISM6_FIFO_CAPTURE = true;
     static constexpr bool USE_IIS2MDC = true;
 
     // ### Sensor interrupt pins ###

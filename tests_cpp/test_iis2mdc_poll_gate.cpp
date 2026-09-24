@@ -182,3 +182,39 @@ TEST(Iis2mdcPollGate, SurvivesClockWrapMidStall)
     EXPECT_FALSE(g.due(last + 999 * MS));                    // wraps to a small number
     EXPECT_TRUE(g.due(last + 1 * S));
 }
+
+TEST(Iis2mdcPollGate, UsUntilDueCountsDownToTheNextAttempt)
+{
+    // #1485: the poll task sleeps this long instead of waking every 1 ms.
+    const uint32_t t0 = 5u * S;
+    Iis2mdcPollGate g;
+    g.reset(t0);
+    EXPECT_EQ(g.usUntilDue(t0), 0u);                         // due at once after reset
+    g.markAttempt(t0);
+    g.onResult(true);
+    EXPECT_EQ(g.usUntilDue(t0), Iis2mdcPollGate::PERIOD_US);
+    EXPECT_EQ(g.usUntilDue(t0 + 4 * MS), 6u * MS);
+    EXPECT_EQ(g.usUntilDue(t0 + 10 * MS), 0u);
+    EXPECT_EQ(g.usUntilDue(t0 + 25 * MS), 0u);              // overdue reads as due, not huge
+    EXPECT_EQ(g.usUntilDue(t0 + 4 * MS) == 0u, g.due(t0 + 4 * MS));
+    EXPECT_EQ(g.usUntilDue(t0 + 10 * MS) == 0u, g.due(t0 + 10 * MS));
+}
+
+TEST(Iis2mdcPollGate, UsUntilDueFollowsTheStallBackoff)
+{
+    uint32_t t = 7u * S;
+    Iis2mdcPollGate g = stalledGate(t);
+    const uint32_t last = g.last_attempt_us;
+    EXPECT_EQ(g.usUntilDue(last), g.periodUs());             // a probe period away
+    EXPECT_EQ(g.usUntilDue(last + g.periodUs()), 0u);
+}
+
+TEST(Iis2mdcPollGate, UsUntilDueSurvivesTheClockWrap)
+{
+    const uint32_t t0 = 0xFFFFFFFFu - 3u * MS;
+    Iis2mdcPollGate g;
+    g.reset(t0);
+    g.markAttempt(t0);
+    g.onResult(true);
+    EXPECT_EQ(g.usUntilDue(t0 + 6 * MS), 4u * MS);           // past the wrap
+}

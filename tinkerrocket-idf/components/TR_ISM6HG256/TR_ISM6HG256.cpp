@@ -147,6 +147,78 @@ TR_ISM6HG256Status TR_ISM6HG256::Route_DRDY_To_INT1()
     return TR_ISM6HG256_OK;
 }
 
+TR_ISM6HG256Status TR_ISM6HG256::ConfigureFifo(float rate_hz, uint8_t watermark_words)
+{
+    // One batch data rate for all three, matching the ODRs the collector sets.
+    const ism6hg256x_fifo_xl_batch_t xl =
+          (rate_hz <=  960.0f) ? ISM6HG256X_XL_BATCHED_AT_960Hz
+        : (rate_hz <= 1920.0f) ? ISM6HG256X_XL_BATCHED_AT_1920Hz
+        : (rate_hz <= 3840.0f) ? ISM6HG256X_XL_BATCHED_AT_3840Hz
+        :                        ISM6HG256X_XL_BATCHED_AT_7680Hz;
+    const ism6hg256x_fifo_gy_batch_t gy =
+          (rate_hz <=  960.0f) ? ISM6HG256X_GY_BATCHED_AT_960Hz
+        : (rate_hz <= 1920.0f) ? ISM6HG256X_GY_BATCHED_AT_1920Hz
+        : (rate_hz <= 3840.0f) ? ISM6HG256X_GY_BATCHED_AT_3840Hz
+        :                        ISM6HG256X_GY_BATCHED_AT_7680Hz;
+
+    // Bypass first: it empties the FIFO, so no word from an old configuration
+    // survives into the new one.
+    if (ism6hg256x_fifo_mode_set(&reg_ctx, ISM6HG256X_BYPASS_MODE) != 0) return TR_ISM6HG256_ERROR;
+    if (ism6hg256x_fifo_xl_batch_set(&reg_ctx, xl) != 0) return TR_ISM6HG256_ERROR;
+    if (ism6hg256x_fifo_gy_batch_set(&reg_ctx, gy) != 0) return TR_ISM6HG256_ERROR;
+    if (ism6hg256x_fifo_hg_xl_batch_set(&reg_ctx, PROPERTY_ENABLE) != 0) return TR_ISM6HG256_ERROR;
+    if (ism6hg256x_fifo_timestamp_batch_set(&reg_ctx, ISM6HG256X_TMSTMP_NOT_BATCHED) != 0) return TR_ISM6HG256_ERROR;
+    if (ism6hg256x_fifo_temp_batch_set(&reg_ctx, ISM6HG256X_TEMP_NOT_BATCHED) != 0) return TR_ISM6HG256_ERROR;
+    if (ism6hg256x_fifo_watermark_set(&reg_ctx, watermark_words) != 0) return TR_ISM6HG256_ERROR;
+    if (ism6hg256x_fifo_mode_set(&reg_ctx, ISM6HG256X_STREAM_MODE) != 0) return TR_ISM6HG256_ERROR;
+    return TR_ISM6HG256_OK;
+}
+
+TR_ISM6HG256Status TR_ISM6HG256::Route_FifoThreshold_To_INT1()
+{
+    // Everything else off: INT1 means "the FIFO reached its threshold".
+    ism6hg256x_pin_int_route_t route = {};
+    route.fifo_th = 1;
+    if (ism6hg256x_pin_int1_route_set(&reg_ctx, &route) != 0) return TR_ISM6HG256_ERROR;
+    if (ism6hg256x_pin_int1_route_hg_set(&reg_ctx, &route) != 0) return TR_ISM6HG256_ERROR;
+    return TR_ISM6HG256_OK;
+}
+
+TR_ISM6HG256Status TR_ISM6HG256::FlushFifo()
+{
+    if (ism6hg256x_fifo_mode_set(&reg_ctx, ISM6HG256X_BYPASS_MODE) != 0) return TR_ISM6HG256_ERROR;
+    if (ism6hg256x_fifo_mode_set(&reg_ctx, ISM6HG256X_STREAM_MODE) != 0) return TR_ISM6HG256_ERROR;
+    return TR_ISM6HG256_OK;
+}
+
+TR_ISM6HG256Status TR_ISM6HG256::ReadFifoStatus(uint16_t *level, bool *overrun)
+{
+    if (level == nullptr || overrun == nullptr) return TR_ISM6HG256_ERROR;
+    // FIFO_STATUS1 = level[7:0]; FIFO_STATUS2 bit 0 = level[8], bit 3 =
+    // overrun latched since the last read of this register, bit 6 = overrun now.
+    uint8_t b[2] = {};
+    if (IO_Read(b, ISM6HG256X_FIFO_STATUS1, 2) != 0) return TR_ISM6HG256_ERROR;
+    *level = (uint16_t)((uint16_t)b[0] | ((uint16_t)(b[1] & 0x01u) << 8));
+    *overrun = (b[1] & ((1u << 3) | (1u << 6))) != 0;
+    return TR_ISM6HG256_OK;
+}
+
+TR_ISM6HG256Status TR_ISM6HG256::ReadOdrTrim(int8_t *freq_fine)
+{
+    if (freq_fine == nullptr) return TR_ISM6HG256_ERROR;
+    return (ism6hg256x_odr_cal_reg_get(&reg_ctx, freq_fine) == 0) ? TR_ISM6HG256_OK : TR_ISM6HG256_ERROR;
+}
+
+TR_ISM6HG256Status TR_ISM6HG256::ReadFifoWords(uint8_t *buf, uint16_t n_words)
+{
+    if (buf == nullptr) return TR_ISM6HG256_ERROR;
+    if (n_words == 0) return TR_ISM6HG256_OK;
+    // One burst from FIFO_DATA_OUT_TAG: with auto-increment the address wraps
+    // from FIFO_DATA_OUT_Z_H back to the tag, so the words come out back to back.
+    return (IO_Read(buf, ISM6HG256X_FIFO_DATA_OUT_TAG, (uint16_t)(n_words * 7u)) == 0)
+               ? TR_ISM6HG256_OK : TR_ISM6HG256_ERROR;
+}
+
 TR_ISM6HG256Status TR_ISM6HG256::Set_X_OutputDataRate(float Odr)
 {
     return (acc_is_enabled == 1U) ? Set_X_OutputDataRate_When_Enabled(Odr)

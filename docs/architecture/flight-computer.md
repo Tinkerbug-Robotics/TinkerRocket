@@ -50,6 +50,7 @@ flowchart LR
         direction TB
         IMU["Poll IMU Data<br/>prio 4, 8 KB"]
         GNSS["Poll GNSS Data<br/>prio 3, 4 KB"]
+        MAG["Poll Mag Data<br/>prio 3, 4 KB"]
         SEND["I2S Sender<br/>prio 2, 4 KB"]
     end
     subgraph C1["Core 1 — flight core"]
@@ -59,6 +60,7 @@ flowchart LR
     end
     IMU -->|"queue"| FLIGHT
     GNSS -->|"queue"| FLIGHT
+    MAG -->|"queue"| FLIGHT
     FLIGHT -->|"queue"| SEND
 ```
 
@@ -66,6 +68,13 @@ The flight task runs at `configMAX_PRIORITIES - 1` — the highest priority in t
 system — and is subscribed to the task watchdog. Its 16 KB stack is not arbitrary: the
 EKF's `timeUpdate()` and `measUpdate()` allocate roughly 7.5 KB of temporary 15×15
 matrices on the stack per call.
+
+The IMU task reads the chip's FIFO where the board header turns that on
+(`ISM6_FIFO_CAPTURE`: the mini and V9/V10; #1485), a burst at a time on the FIFO-threshold
+interrupt, and times each sample from the burst's sample count (`imu_sample_clock.h`);
+elsewhere it reads one sample per data-ready edge. The magnetometer has its own task
+since #1485: its I2C read inside the IMU task was holding the IMU off for milliseconds
+at a time.
 
 The queues between the poll tasks and the flight loop are what make this work. They are
 also what a past bug ate through: when a blocking I2C poll stalled `loop_fc()`, samples
