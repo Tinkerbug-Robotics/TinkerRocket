@@ -4225,7 +4225,7 @@ static void setup_fc()
     // FIRE 2/3 and move ARM, but keep all four CONT pins), so print the
     // numbers rather than just the revision — they can be checked against the
     // connector with a meter before anything is armed.
-    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V7/V8/V9=1; no default)",
+    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V7/V8/V9/M1=1; no default)",
              TR_BOARD_REV_STR);
     ESP_LOGW(TAG, "[BOARD] pyro: ARM=%d FIRE=%d/%d/%d/%d CONT=%d/%d/%d/%d",
              (int)config::PYRO_ARM_PIN,

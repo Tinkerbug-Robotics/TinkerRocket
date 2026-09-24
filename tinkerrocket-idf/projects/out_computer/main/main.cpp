@@ -9777,10 +9777,23 @@ static void setup_oc()
     pwr_pin_on = boot_rail_restored || boot_token_restore;
 
     ESP_LOGI("OC", "Starting OutComputer (low-power mode)...");
-    // V9 selects the same map as V8 on this MCU (see config.h) — reported
-    // separately so the boot log says which board the image was built for.
-    ESP_LOGW("OC", "[BOARD] pin map: %s",
-             TR_BOARD_V9 ? "V9/V10 (same pins as V8)" : (TR_BOARD_V8 ? "V8" : "V7"));
+    // Names the board header config.h selected: one case per revision, and no
+    // fall-through. This used to end in a bare "V7", so an M1 image built on
+    // board_m1.h reported itself as V7 (#1316). V9 keeps V8's pins on this MCU
+    // (see config.h) but is named separately, so the boot log says which board
+    // the image was built for.
+#if TR_BOARD_M1
+    const char* const board_pin_map = "M1 (rocket-computer-mini)";
+#elif TR_BOARD_V9
+    const char* const board_pin_map = "V9/V10 (same pins as V8)";
+#elif TR_BOARD_V8
+    const char* const board_pin_map = "V8";
+#elif TR_BOARD_V7
+    const char* const board_pin_map = "V7";
+#else
+#error "No [BOARD] pin-map label for this board flag: add a case here rather than let it print another board's name (#1316)"
+#endif
+    ESP_LOGW("OC", "[BOARD] pin map: %s", board_pin_map);
 
     // OTA boot-state check (#8). If this image was just OTA-installed it
     // boots PENDING_VERIFY; we hold off the "valid" mark until we've seen
