@@ -53,13 +53,13 @@ BUILDS = [
     ("base_station V1/V2", "base_station", ["sdkconfig.defaults"]),
     ("base_station V3", "base_station", ["sdkconfig.defaults", "sdkconfig.defaults.v3"]),
     ("radio_board", "radio_board", ["sdkconfig.defaults"]),
-    ("rocket_computer_mini", "rocket_computer_mini", ["sdkconfig.defaults"]),
+    ("rocket_computer_mini", "legacy/rocket_computer_mini", ["sdkconfig.defaults"]),
 ]
 
 # Physical boards carrying two processors that boot from their own NOR parts.
-# rocket-computer-mini's BOM line 59 fits TWO W25Q128JVYIQ (U13 and U33), so
+# The Tinker-Beetle's BOM line 59 fits TWO W25Q128JVYIQ (U13 and U33), so
 # both are 16 MB and the two declarations must agree.
-BOARD_PAIRS = [("rocket-computer-mini", "flight_computer M1", "out_computer M1")]
+BOARD_PAIRS = [("tinker-beetle", "flight_computer M1", "out_computer M1")]
 
 # The sizes esptool/IDF can declare. The policy picks the smallest that fits.
 STANDARD_MB = (1, 2, 4, 8, 16, 32, 64)

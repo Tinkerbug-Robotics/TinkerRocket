@@ -46,7 +46,7 @@
 // V7 is a case of its own: a board flag with no branch here stops the build
 // instead of compiling V7's pins under V7's name (#1316).
 #if TR_BOARD_V8
-#include "board/board_v8.h"
+#include "board/legacy/board_v8.h"
 #define TR_BOARD_REV_STR "V8"
 #elif TR_BOARD_V9
 #include "board/board_v9.h"
@@ -55,7 +55,7 @@
 #include "board/board_m1.h"
 #define TR_BOARD_REV_STR "M1 (rocket-computer-mini)"
 #elif TR_BOARD_V7
-#include "board/board_v7.h"
+#include "board/legacy/board_v7.h"
 #define TR_BOARD_REV_STR "V7"
 #else
 #error "This board flag selects no board header: add it to the chain in config.h."

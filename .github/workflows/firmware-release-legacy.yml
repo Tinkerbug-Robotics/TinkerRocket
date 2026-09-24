@@ -1,0 +1,209 @@
+name: Firmware Release (legacy boards)
+
+# Firmware for the boards that left the product line on 2026-09-24, published
+# on its own tag so that nothing is lost and nothing is offered by mistake.
+# Tag scheme: fw-legacy-v<semver>, e.g. fw-legacy-v1.0.0 — cut it at the same
+# commit as the fw-v tag it accompanies, when a legacy board needs an update.
+#
+# The product release, firmware-release.yml, carries only Tinker-Mantis,
+# Tinker-Beetle, Tinker-Base and the LoRa daughterboard. Everything here runs
+# on hardware that is still in hand but no longer offered: the V7 and V8 rocket
+# computers, the V1/V2 base station, and the single-MCU mini firmware for a
+# shape that was never fabbed. The matrix must equal the legacy group of
+# firmware-build.yml, which keeps all of it compiling on every push.
+#
+# Neither app ever offers these images: both look for releases whose tag
+# starts fw-v, and fw-legacy-v does not. To update a legacy board, download
+# its image from the release and flash it with the app's file picker — the
+# picker still refuses an image whose CMake project name is not the unit's.
+# The release is published with --latest=false so it never displaces the
+# product release on the repository's front page.
+#
+# Keep the build, manifest and publish steps in step with firmware-release.yml;
+# only the matrix and the release wording differ.
+on:
+  push:
+    tags:
+      - 'fw-legacy-v*'
+  workflow_dispatch:
+    inputs:
+      simulated_tag:
+        description: 'Tag to build the manifest against, e.g. fw-legacy-v1.0.0. Blank uses fw-legacy-v0.0.0-dryrun.'
+        required: false
+        default: ''
+
+env:
+  HAS_GUIDANCE_TOKEN: ${{ secrets.TR_GUIDANCEPN_TOKEN != '' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.0.1
+    strategy:
+      fail-fast: true   # a release must be all-or-nothing
+      matrix:
+        include:
+          # V7 and V8 rocket computers — both halves of each pair. out_computer V7
+          # was never in the combined release this split replaced (the build
+          # matrix gained it in #1348, a day after that release workflow was
+          # written), so a V7 pair could not be updated as a pair until now.
+          - line: legacy
+            asset: legacy-flight_computer-V7
+            project: flight_computer
+            flags: -B build_v7 -DTR_BOARD_V7=1
+          - line: legacy
+            asset: legacy-out_computer-V7
+            project: out_computer
+            flags: -B build_v7 -DTR_BOARD_V7=1
+          - line: legacy
+            asset: legacy-flight_computer-V8
+            project: flight_computer
+            flags: -B build_v8 -DTR_BOARD_V8=1
+          - line: legacy
+            asset: legacy-out_computer-V8
+            project: out_computer
+            flags: -B build_v8 -DTR_BOARD_V8=1
+          # The V2 base station. V1 was never in a release (build it by hand with
+          # -DTR_BS_BOARD=1); V3 is the product release's Tinker-Base slot.
+          - line: legacy
+            asset: legacy-base_station-V2
+            project: base_station
+            flags: -B build_v2
+          # The single-MCU mini, for the S3-alone shape that was never fabbed.
+          - line: legacy
+            asset: legacy-rocket_computer_mini
+            project: rocket_computer_mini
+            path: legacy/rocket_computer_mini
+            flags: -B build
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Same force-checkout as firmware-build.yml: guidance is a private
+      # submodule marked `update = none`, and a release build must carry the
+      # real component rather than silently falling back to the stub (#255).
+      - name: Check out private TR_GuidancePN
+        if: ${{ env.HAS_GUIDANCE_TOKEN == 'true' }}
+        env:
+          TR_GUIDANCEPN_TOKEN: ${{ secrets.TR_GUIDANCEPN_TOKEN }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global url."https://x-access-token:${TR_GUIDANCEPN_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git -c submodule."tinkerrocket-idf/components/TR_GuidancePN".update=checkout \
+            submodule update --init --recursive tinkerrocket-idf/components/TR_GuidancePN
+
+      # A release image must NOT be built on a guidance stub. firmware-build.yml
+      # tolerates the stub so forks can build; a release cannot, because the
+      # resulting image would fly with guidance silently absent.
+      - name: Refuse to release a stubbed guidance build
+        if: ${{ matrix.project == 'flight_computer' && env.HAS_GUIDANCE_TOKEN != 'true' }}
+        run: |
+          echo "TR_GUIDANCEPN_TOKEN is not available — a flight_computer release" >&2
+          echo "image would carry the guidance STUB. Refusing." >&2
+          exit 1
+
+      - name: Build ${{ matrix.asset }}
+        working-directory: tinkerrocket-idf/projects/${{ matrix.path || matrix.project }}
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py ${{ matrix.flags }} build
+
+      # Name the artifact for the product it belongs to, not for the build dir.
+      # The image's own header still carries the authoritative project and
+      # version — the filename is a convenience, and the manifest is built by
+      # reading the header rather than by trusting this name.
+      - name: Stage the app image
+        shell: bash
+        run: |
+          cd tinkerrocket-idf/projects/${{ matrix.path || matrix.project }}
+          BUILD=$(echo "${{ matrix.flags }}" | sed -n 's/.*-B \([^ ]*\).*/\1/p')
+          mkdir -p "$GITHUB_WORKSPACE/staging"
+          cp "$BUILD/${{ matrix.project }}.bin" \
+             "$GITHUB_WORKSPACE/staging/${{ matrix.asset }}.bin"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fw-${{ matrix.asset }}
+          path: staging/*.bin
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: fw-*
+          merge-multiple: true
+
+      # The manifest is built by READING each image's esp_app_desc_t, not from
+      # the matrix. If a build ever produced an image for a different project
+      # than its directory implies, the manifest says what is actually in the
+      # file — and image_info.py refuses anything that is not an ESP-IDF image
+      # at all, so an empty or truncated artifact fails the release here rather
+      # than reaching a phone.
+      - name: Build the manifest
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.simulated_tag }}"
+            [ -n "$TAG" ] || TAG="fw-legacy-v0.0.0-dryrun"
+          fi
+          ls -l artifacts
+          python3 tinkerrocket-idf/tools/image_info.py --manifest "$TAG" artifacts/*.bin \
+            > artifacts/manifest.json
+          cat artifacts/manifest.json
+          # Every configuration in the matrix must be present. A partial
+          # release is worse than none: the app would offer a catalog with
+          # holes and no way to know they are holes.
+          COUNT=$(python3 -c "import json,sys; print(len(json.load(open('artifacts/manifest.json'))['images']))")
+          if [ "$COUNT" -ne 6 ]; then
+            echo "manifest has $COUNT images, expected 6 — refusing to publish" >&2
+            exit 1
+          fi
+
+      - name: Attach the images and manifest to the release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A tag with anything after the version — fw-v0.0.1-rc1, fw-v1.0.0-beta
+          # — publishes as a prerelease. `gh release create` does NOT infer this
+          # from the tag, so without the flag an -rc1 goes out as the newest
+          # full release and every app in the field offers it as an update.
+          # Both apps' FirmwareReleaseLocator skips prereleases unless asked, so
+          # this is what makes a live release testable without shipping it.
+          # (The apps never read fw-legacy-v tags at all; the rule is kept so an
+          # -rc1 here is still labelled as what it is.)
+          VERSION="${GITHUB_REF_NAME#fw-legacy-v}"
+          PRERELEASE=""
+          case "$VERSION" in
+            *-*) PRERELEASE="--prerelease"
+                 echo "tag $GITHUB_REF_NAME has a suffix — publishing as a PRERELEASE" ;;
+            *)   echo "tag $GITHUB_REF_NAME is a full release" ;;
+          esac
+          # --notes is prepended to the generated notes: which file is which.
+          # --latest=false: a legacy release must never become the repository's
+          # "Latest" release in place of the product one.
+          gh release create "$GITHUB_REF_NAME" artifacts/*.bin artifacts/manifest.json \
+            --title "TinkerRocket legacy firmware ${GITHUB_REF_NAME#fw-legacy-}" \
+            --notes "$(printf '%s\n' \
+              'Firmware for boards that are no longer part of the product line. The apps never offer these images; flash one with the app'"'"'s file picker or over USB.' \
+              '' \
+              '| Board | Images |' \
+              '|---|---|' \
+              '| Rocket computer V7 | `legacy-flight_computer-V7.bin`, `legacy-out_computer-V7.bin` |' \
+              '| Rocket computer V8 | `legacy-flight_computer-V8.bin`, `legacy-out_computer-V8.bin` |' \
+              '| Base station V2 | `legacy-base_station-V2.bin` |' \
+              '| Single-MCU mini (never fabbed) | `legacy-rocket_computer_mini.bin` |')" \
+            --generate-notes --latest=false $PRERELEASE

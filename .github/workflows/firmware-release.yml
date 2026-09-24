@@ -3,16 +3,29 @@ name: Firmware Release
 # Firmware images and a manifest, attached to a GitHub release on tag push
 # (#773 step 3).  Tag scheme: fw-v<semver>, e.g. fw-v1.0.0.
 #
-# Why this exists: `firmware-build.yml` compiles fourteen configurations and
+# PRODUCT LINE ONLY (2026-09-24): Tinker-Mantis, Tinker-Beetle, Tinker-Base and
+# the LoRa daughterboard. Firmware for retired boards (V7/V8, the V1/V2 base
+# station, the single-MCU mini) is built by firmware-release-legacy.yml on its
+# own fw-legacy-v* tags, which neither app ever offers — both look for a tag
+# starting fw-v, and fw-legacy-v does not. Keep the two workflows' build,
+# manifest and publish steps in step; only the matrix and the release wording
+# differ. The matrix here must equal the product-line group of
+# firmware-build.yml.
+#
+# Why this exists: `firmware-build.yml` compiles every configuration and
 # uploads NOTHING — it ends at `idf.py build`.  So there has never been an
 # artifact to distribute, and anyone updating a board had to build it
 # themselves or be sent a file.  #773's acceptance line is "cutting a firmware
 # release is a tag push", and this is it.
 #
 # What is published: the APP image per configuration, which is what OTA
-# flashes.  Bootloader and partition table are deliberately NOT here — those
-# are a first-flash-over-USB concern and shipping them beside an OTA image
-# invites someone to push the wrong one over the air.
+# flashes, named for the product it belongs to
+# (tinker-mantis-flight_computer-V9.bin). The CMake project names inside the
+# images did not change with the product rename, because both apps refuse an
+# image whose project name is not the unit's own.  Bootloader and partition
+# table are deliberately NOT here — those are a first-flash-over-USB concern
+# and shipping them beside an OTA image invites someone to push the wrong one
+# over the air.
 #
 # `pyro_channel_test` is excluded on purpose.  It drives squib FETs by hand
 # and is a bench tool, not a flight image; it has no business in a list an app
@@ -45,38 +58,34 @@ jobs:
       fail-fast: true   # a release must be all-or-nothing
       matrix:
         include:
-          - project: flight_computer
-            board: V7
-            flags: -B build_v7 -DTR_BOARD_V7=1
-          - project: flight_computer
-            board: V8
-            flags: -B build_v8 -DTR_BOARD_V8=1
-          - project: flight_computer
-            board: V9
+          # Tinker-Mantis: both halves of the V9/V10 board.
+          - line: Tinker-Mantis
+            asset: tinker-mantis-flight_computer-V9
+            project: flight_computer
             flags: -B build_v9 -DTR_BOARD_V9=1
-          - project: flight_computer
-            board: M1
-            flags: -B build_m1 -DTR_BOARD_M1=1
-          - project: out_computer
-            board: V8
-            flags: -B build_v8 -DTR_BOARD_V8=1
-          - project: out_computer
-            board: V9
+          - line: Tinker-Mantis
+            asset: tinker-mantis-out_computer-V9
+            project: out_computer
             flags: -B build_v9 -DTR_BOARD_V9=1
-          - project: out_computer
-            board: M1
+          # Tinker-Beetle: both ESP32-S3s of the M1 board.
+          - line: Tinker-Beetle
+            asset: tinker-beetle-flight_computer-M1
+            project: flight_computer
             flags: -B build_m1 -DTR_BOARD_M1=1
-          - project: base_station
-            board: V2
-            flags: -B build_v2
-          - project: base_station
-            board: V3
+          - line: Tinker-Beetle
+            asset: tinker-beetle-out_computer-M1
+            project: out_computer
+            flags: -B build_m1 -DTR_BOARD_M1=1
+          # Tinker-Base: base_station's V3 build is the starting point until the
+          # Tinker-Base has a board map of its own (on-board SPI radio).
+          - line: Tinker-Base
+            asset: tinker-base-base_station-V3
+            project: base_station
             flags: -B build_v3 -DTR_BS_BOARD=3
-          - project: radio_board
-            board: default
-            flags: -B build
-          - project: rocket_computer_mini
-            board: default
+          # The LoRa daughterboard that pairs with Tinker-Mantis.
+          - line: LoRa
+            asset: lora-daughterboard-radio_board
+            project: radio_board
             flags: -B build
 
     steps:
@@ -105,29 +114,29 @@ jobs:
           echo "image would carry the guidance STUB. Refusing." >&2
           exit 1
 
-      - name: Build ${{ matrix.project }} ${{ matrix.board }}
-        working-directory: tinkerrocket-idf/projects/${{ matrix.project }}
+      - name: Build ${{ matrix.asset }}
+        working-directory: tinkerrocket-idf/projects/${{ matrix.path || matrix.project }}
         shell: bash
         run: |
           . $IDF_PATH/export.sh
           idf.py ${{ matrix.flags }} build
 
-      # Name the artifact for the pair it belongs to, not for the build dir.
+      # Name the artifact for the product it belongs to, not for the build dir.
       # The image's own header still carries the authoritative project and
       # version — the filename is a convenience, and the manifest is built by
       # reading the header rather than by trusting this name.
       - name: Stage the app image
         shell: bash
         run: |
-          cd tinkerrocket-idf/projects/${{ matrix.project }}
+          cd tinkerrocket-idf/projects/${{ matrix.path || matrix.project }}
           BUILD=$(echo "${{ matrix.flags }}" | sed -n 's/.*-B \([^ ]*\).*/\1/p')
           mkdir -p "$GITHUB_WORKSPACE/staging"
           cp "$BUILD/${{ matrix.project }}.bin" \
-             "$GITHUB_WORKSPACE/staging/${{ matrix.project }}-${{ matrix.board }}.bin"
+             "$GITHUB_WORKSPACE/staging/${{ matrix.asset }}.bin"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: fw-${{ matrix.project }}-${{ matrix.board }}
+          name: fw-${{ matrix.asset }}
           path: staging/*.bin
           if-no-files-found: error
 
@@ -170,8 +179,8 @@ jobs:
           # release is worse than none: the app would offer a catalog with
           # holes and no way to know they are holes.
           COUNT=$(python3 -c "import json,sys; print(len(json.load(open('artifacts/manifest.json'))['images']))")
-          if [ "$COUNT" -ne 11 ]; then
-            echo "manifest has $COUNT images, expected 11 — refusing to publish" >&2
+          if [ "$COUNT" -ne 6 ]; then
+            echo "manifest has $COUNT images, expected 6 — refusing to publish" >&2
             exit 1
           fi
 
@@ -193,6 +202,16 @@ jobs:
                  echo "tag $GITHUB_REF_NAME has a suffix — publishing as a PRERELEASE" ;;
             *)   echo "tag $GITHUB_REF_NAME is a full release" ;;
           esac
+          # --notes is prepended to the generated notes: which file is which.
           gh release create "$GITHUB_REF_NAME" artifacts/*.bin artifacts/manifest.json \
             --title "TinkerRocket firmware ${GITHUB_REF_NAME#fw-}" \
+            --notes "$(printf '%s\n' \
+              '| Product | Images |' \
+              '|---|---|' \
+              '| Tinker-Mantis | `tinker-mantis-flight_computer-V9.bin`, `tinker-mantis-out_computer-V9.bin` |' \
+              '| Tinker-Beetle | `tinker-beetle-flight_computer-M1.bin`, `tinker-beetle-out_computer-M1.bin` |' \
+              '| Tinker-Base | `tinker-base-base_station-V3.bin` |' \
+              '| LoRa daughterboard | `lora-daughterboard-radio_board.bin` |' \
+              '' \
+              'Firmware for retired boards is published separately on `fw-legacy-v*` tags.')" \
             --generate-notes $PRERELEASE

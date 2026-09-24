@@ -32,7 +32,7 @@ target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format -Wno-narr
 #   idf.py -B build_v7 -DTR_BOARD_V7=1 build   # legacy V7 board
 #   idf.py -B build_v8 -DTR_BOARD_V8=1 build   # V8 bench boards (MRAM fitted)
 #   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # V9/V10 (no MRAM, PSRAM ring)
-#   idf.py -B build_m1 -DTR_BOARD_M1=1 build   # rocket-computer-mini rev1
+#   idf.py -B build_m1 -DTR_BOARD_M1=1 build   # Tinker-Beetle rev1
 #
 # There used to be a V7 default, i.e. `idf.py build` compiled the map of a
 # revision nobody owns, and did it silently. That was already a trap — V7's
@@ -56,8 +56,8 @@ if(_tr_oc_board_flag_count EQUAL 0)
     message(FATAL_ERROR
         "out_computer: no board revision selected. Pass exactly one of "
         "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / -DTR_BOARD_M1=1 "
-        "(V9 is the hardware/rocket-computer V9/V10 board; M1 is "
-        "hardware/rocket-computer-mini rev1). There is no default: the old "
+        "(V9 is the Tinker-Mantis V9/V10 board, hardware/tinker-mantis; M1 is "
+        "the Tinker-Beetle rev1, hardware/tinker-beetle). There is no default: the old "
         "one was V7, whose PWR_PIN (GPIO6) is ESP_SCL on every later board, and "
         "V9/V10 additionally needs the sdkconfig overlay that enables its PSRAM "
         "log ring.")
@@ -76,13 +76,13 @@ if(CONFIG_IDF_TARGET AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32s3")
         "configured for '${CONFIG_IDF_TARGET}'. Use a fresh build dir.")
 endif()
 if(TR_BOARD_M1)
-    message(STATUS "out_computer: board pin map M1 (main/board/board_m1.h, rocket-computer-mini rev1, on-board SPI radio)")
+    message(STATUS "out_computer: board pin map M1 (main/board/board_m1.h, Tinker-Beetle rev1, on-board SPI radio)")
 elseif(TR_BOARD_V9)
     message(STATUS "out_computer: board pin map V9/V10 (main/board/board_v9.h, no MRAM, PSRAM ring)")
 elseif(TR_BOARD_V8)
-    message(STATUS "out_computer: board pin map V8 (main/board/board_v8.h, MRAM fitted)")
+    message(STATUS "out_computer: board pin map V8 (main/board/legacy/board_v8.h, MRAM fitted)")
 else()
-    message(STATUS "out_computer: board pin map V7 (main/board/board_v7.h)")
+    message(STATUS "out_computer: board pin map V7 (main/board/legacy/board_v7.h)")
 endif()
 
 # Bench-debug image: `idf.py -B build_bench -DTR_OC_BENCH_DEBUG=1 build`.

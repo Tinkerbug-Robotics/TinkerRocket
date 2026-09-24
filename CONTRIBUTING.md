@@ -147,12 +147,13 @@ There is no default board revision, and the build fails without one:
 idf.py -B build_v9 -DTR_BOARD_V9=1 build
 ```
 
-`TR_BOARD_V9=1` is the board in `hardware/rocket-computer/` (its title block reads V9, V10
-at HEAD). `TR_BOARD_V8=1` is the older bench boards, whose PCB was never committed;
-`TR_BOARD_V7=1` is the legacy board. `TR_BOARD_M1=1` is `hardware/rocket-computer-mini/`,
-whose flight computer is an ESP32-S3 rather than a P4 — its overlay changes the chip
-target, so it needs a build dir of its own (`-B build_m1`) and rewrites
-`dependencies.lock` to `target: esp32s3`; revert that file after a local M1 build.
+`TR_BOARD_V9=1` is the Tinker-Mantis, `hardware/tinker-mantis/` (its title block reads V9,
+V10 at HEAD). `TR_BOARD_M1=1` is the Tinker-Beetle, `hardware/tinker-beetle/`, whose flight
+computer is an ESP32-S3 rather than a P4 — its overlay changes the chip target, so it needs
+a build dir of its own (`-B build_m1`) and rewrites `dependencies.lock` to
+`target: esp32s3`; revert that file after a local M1 build. `TR_BOARD_V8=1` and
+`TR_BOARD_V7=1` are legacy boards (the V8 bench boards, whose PCB was never committed, and
+the V7); their maps live in `main/board/legacy/`.
 
 The flag is mandatory here — and only here — because the failure mode is pyrotechnic and
 silent. V8 and V9 disagree on the ARM pin (5 vs 16) and swap the FIRE pins of channels 2
@@ -164,11 +165,18 @@ bleed that still lights a test LED. The boot log prints the map it was built wit
 
 The out computer takes `-DTR_BOARD_V9=1` too, though on that MCU it selects the same pins
 as V8 — pass it anyway so both halves of a pair are built with one flag. The same goes for
-`-DTR_BOARD_M1=1`: both halves of the mini are built with it.
+`-DTR_BOARD_M1=1`: both halves of the Tinker-Beetle are built with it.
 
 ### Building the base station
 
-The build flag does not match the board number. Current hardware is **V6**, built as
+`base_station` is the Tinker-Base's firmware. The Tinker-Base (`hardware/tinker-base/`) has
+no board map of its own yet, so the current build is the starting point: the full base
+station it grew from (`hardware/legacy/base-station/`). Its map will start from
+`board_v3.h` with the radio block changed — the Tinker-Base carries its LoRa radio on board
+over SPI, the direct path `base_station` already drives on the V1/V2 boards
+(`main/board/legacy/`), where V3 talks to a daughterboard over UART.
+
+The build flag does not match the board number. That board is **V6**, built as
 `TR_BS_BOARD=3` — see [base-station.md](docs/architecture/base-station.md) for the
 flag-to-silkscreen mapping, which is the one place that tracks it:
 

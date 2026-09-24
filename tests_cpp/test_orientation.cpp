@@ -550,7 +550,7 @@ TEST(Orientation, BoardDefaultIsAutoAndMatchesBothApps) {
            "(imuOrientSetting)\n"
         << "  TinkerRocketAndroid/core/session/.../RocketProfile.kt       "
            "(imuOrientSetting)\n"
-        << "  tinkerrocket-idf/projects/rocket_computer_mini/main/config_flight.inc\n"
+        << "  tinkerrocket-idf/projects/legacy/rocket_computer_mini/main/config_flight.inc\n"
         << "Auto resolves the NOSE AXIS only — roll clocking is unobservable "
            "from pad gravity, and a roll-controlled airframe needs a manual "
            "code 0..23.";

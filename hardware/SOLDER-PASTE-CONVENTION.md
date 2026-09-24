@@ -16,7 +16,7 @@ board states otherwise. Two boards do, and both say why in their own notes:
 
 | board | foil | why |
 |---|---|---|
-| `rocket-computer-mini` | **80 µm** | its 24-ball WLCSP flash is AR 0.64 at 100 µm |
+| `tinker-beetle` | **80 µm** | its 24-ball WLCSP flash is AR 0.64 at 100 µm |
 | `gnss-sam10m8-18mm-hv` | **120 µm** | u-blox requirement (UBX-22020019 R02 §4.4.1), not an area-ratio limit |
 
 **Area ratio ≥ 0.66** (IPC-7525) at the ordered thickness:
@@ -72,7 +72,7 @@ cold, profile to the joint before touching the artwork.
 
 ### Consequences already accepted (#906)
 
-- **Contact bottom-side preheat is off the table** on `rocket-computer-mini`:
+- **Contact bottom-side preheat is off the table** on `tinker-beetle`:
   the shadow under U5 stays populated (38 parts including the radio module), so
   the 357 mm² clear window is not available. Oven convection from below is
   unaffected. Heat is bought back through the stack instead — one via per

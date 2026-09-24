@@ -129,25 +129,30 @@ EXEMPT = {}
 
 def main() -> int:
     root = Path(__file__).resolve().parent.parent / 'hardware'
-    boards = sorted(d for d in root.iterdir()
-                    if d.is_dir() and any(d.glob('*.kicad_pcb')))
+    # Retired boards live one level down in hardware/legacy/ and are still gated:
+    # moving a board out of the product line must not quietly drop its check.
+    candidates = [*root.iterdir(), *(root / 'legacy').iterdir()]
+    boards = sorted((d for d in candidates
+                     if d.is_dir() and any(d.glob('*.kicad_pcb'))),
+                    key=lambda d: d.relative_to(root).as_posix())
     failed = False
     for board in boards:
+        label = board.relative_to(root).as_posix()
         sch, libs = schematic_refs(board)
         pcb = pcb_refs(board)
         missing = sorted(sch - pcb)
         if board.name in EXEMPT:
             note = f"{len(missing)} unplaced" if missing else "complete"
-            print(f"skip {board.name}: not gated ({note}) — {EXEMPT[board.name]}")
+            print(f"skip {label}: not gated ({note}) — {EXEMPT[board.name]}")
             continue
         if missing:
             failed = True
-            print(f"FAIL {board.name}: {len(missing)} symbol(s) marked for the board "
+            print(f"FAIL {label}: {len(missing)} symbol(s) marked for the board "
                   f"in the schematic, absent from the layout")
             for r in missing:
                 print(f"       {r}  ({libs.get(r, '?')})")
         else:
-            print(f"  ok {board.name}: {len(sch)} board symbols all present in the layout")
+            print(f"  ok {label}: {len(sch)} board symbols all present in the layout")
     if failed:
         print("\nA symbol marked for the board has no footprint in the layout, so its "
               "nets are unrouted copper. Place it, or set `on_board no` if it is "

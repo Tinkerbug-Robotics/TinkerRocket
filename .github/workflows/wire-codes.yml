@@ -18,7 +18,7 @@ on:
       # only the mini — which is the exact shape of the change that would introduce
       # a duplicate ble_cmd there, i.e. the #132/#148 failure the script exists to
       # make a hard error. Listing the file in DISPATCHES is not enough on its own.
-      - 'tinkerrocket-idf/projects/rocket_computer_mini/main/comms.cpp'
+      - 'tinkerrocket-idf/projects/legacy/rocket_computer_mini/main/comms.cpp'
       - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
       # The checker sweeps ALL app Swift files for send(Raw)Command literals
       # (SimulationView/DashboardView send commands directly), and diffs them
@@ -41,7 +41,7 @@ on:
       # only the mini — which is the exact shape of the change that would introduce
       # a duplicate ble_cmd there, i.e. the #132/#148 failure the script exists to
       # make a hard error. Listing the file in DISPATCHES is not enough on its own.
-      - 'tinkerrocket-idf/projects/rocket_computer_mini/main/comms.cpp'
+      - 'tinkerrocket-idf/projects/legacy/rocket_computer_mini/main/comms.cpp'
       - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
       # The checker sweeps ALL app Swift files for send(Raw)Command literals
       # (SimulationView/DashboardView send commands directly), and diffs them

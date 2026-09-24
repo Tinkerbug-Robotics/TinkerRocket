@@ -5,7 +5,8 @@
 
 // --- Board revision (OC #411 pattern) ---
 // Pins + peripheral-presence/topology flags live in the per-board headers
-// (main/board/board_v{1,2,3}.h); everything below is board-independent policy
+// (main/board/board_v3.h, and main/board/legacy/board_v{1,2}.h for the two
+// superseded revisions); everything below is board-independent policy
 // and must not fork per revision. Select with a separate build dir per
 // variant (the flag is cached by CMake):
 //   V2 (default): idf.py build
@@ -21,9 +22,9 @@
 #if TR_BS_BOARD == 3
 #include "board/board_v3.h"
 #elif TR_BS_BOARD == 2
-#include "board/board_v2.h"
+#include "board/legacy/board_v2.h"
 #elif TR_BS_BOARD == 1
-#include "board/board_v1.h"
+#include "board/legacy/board_v1.h"
 #else
 #error "TR_BS_BOARD must be 1, 2, or 3"
 #endif

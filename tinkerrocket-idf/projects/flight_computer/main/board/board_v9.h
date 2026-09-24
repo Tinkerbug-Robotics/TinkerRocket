@@ -6,7 +6,8 @@
 // Selected with TR_BOARD_V9=1:
 //   idf.py -B build_v9 -DTR_BOARD_V9=1 build
 //
-// This is the map of the board files in hardware/rocket-computer/ — the
+// This is the map of the board files in hardware/tinker-mantis/ (Tinker-Mantis;
+// the folder was hardware/rocket-computer/ until 2026-09-24) — the
 // .kicad_pcb title block reads V9 up to 25fb08d and V10 at HEAD. It is NOT
 // board_v8.h: no V8 PCB was ever committed (the physical V8 bench boards
 // predate the import), and three pyro pins moved between them.
