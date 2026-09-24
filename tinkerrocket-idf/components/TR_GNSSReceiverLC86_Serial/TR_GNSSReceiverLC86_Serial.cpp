@@ -66,7 +66,30 @@ static constexpr uint32_t kFirstPvtWaitMs = 1500U;
 // and then line reassembly continues across calls.
 static constexpr size_t kMaxBytesPerPoll = 512U;
 
+// How long checkGsvRate() counts GSV bursts before its one boot-log line.
+// At the 1 Hz begin() asks for, 5 s is ~5 bursts: enough to tell 1 Hz from
+// none and from the fix rate.
+static constexpr uint32_t kGsvCheckSeconds = 5U;
+
 static inline int64_t nowUs() { return esp_timer_get_time(); }
+
+// The $PAIR080 navigation mode begin() flies: 3 = Balloon (see begin()).
+static constexpr uint8_t kFlightNavMode = 3U;
+
+// $PAIR081 <NavMode> [A §2.4.25]; 2 and 6 are reserved.
+static const char* navModeName(uint8_t mode)
+{
+    switch (mode)
+    {
+        case 0: return "Normal";
+        case 1: return "Fitness";
+        case 3: return "Balloon";
+        case 4: return "Stationary";
+        case 5: return "Drone";
+        case 7: return "Swimming";
+        default: return "reserved";
+    }
+}
 
 // Constructor
 TR_GNSSReceiverLC86Serial::TR_GNSSReceiverLC86Serial(uart_port_t uart_port)
@@ -178,6 +201,10 @@ bool TR_GNSSReceiverLC86Serial::awaitEvent(AwaitKind kind, uint32_t timeout_ms,
 
                 case AwaitKind::PVT:
                     if (ev == lc86::Event::PVT) return true;
+                    break;
+
+                case AwaitKind::NAV_MODE:
+                    if (ev == lc86::Event::NAV_MODE) return true;
                     break;
             }
         }
@@ -342,10 +369,19 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
     // C/N0 to tell a LoRa/GNSS coexistence problem from a crystal-harmonic
     // one. It is enabled at a DIVISOR of the fix rate, not at the fix rate:
     // <Rate> in $PAIR062 is "output once every N fixes" [A §2.4.14], so N =
-    // update_rate_hz lands a burst at about 1 Hz whatever the fix rate, which
-    // is ~500 B/s of extra NMEA against a 512 B/poll drain running at twice
-    // the fix rate. The legal range is 1-20; a fix rate above 20 Hz would
-    // clamp and simply give a faster burst.
+    // update_rate_hz lands a burst at about 1 Hz whatever the fix rate. A
+    // burst is ~730 B on a four-constellation sky (the spec's own example),
+    // against a 512 B/poll drain running at twice the fix rate. The legal
+    // range is 1-20; a fix rate above 20 Hz would clamp and simply give a
+    // faster burst.
+    //
+    // The spec also says GSV is held to 1 Hz above a 1 Hz fix rate
+    // [A §2.4.10 note 1], without saying how that combines with N. Measured
+    // on the Beetle's module (firmware LC86GLANR12A03S, 10 Hz fix,
+    // 2026-09-24): exactly one burst every 10 fixes, 763 in 7633. N = 1
+    // would rest on that cap alone, and a module without it would put
+    // ~7 kB/s of GSV beside the PVT stream on a 11.5 kB/s line.
+    // checkGsvRate() logs the rate that actually arrives.
     const unsigned gsv_div = (update_rate_hz >= 1 && update_rate_hz <= 20)
                                  ? update_rate_hz : 1U;
     char gsv_body[20];
@@ -414,9 +450,9 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
 
     // ── Fix rate ($PAIR050 [A §2.4.10]) ─────────────────────────────────
     // Interval in ms, legal range 100–1000 (10 Hz → 100). At >1 Hz the
-    // module keeps only RMC/GGA/GNS at rate and pins GSA/GSV to 1 Hz — we
-    // already turned those off. LC86G (LA) supports this command (only the
-    // -T/PA variants don't).
+    // module keeps only RMC/GGA/GNS at rate and pins GSA/GSV to 1 Hz — GSA
+    // is off, and GSV is already asked for at 1 Hz above. LC86G (LA)
+    // supports this command (only the -T/PA variants don't).
     {
         char rate_body[24];
         const unsigned interval_ms = 1000U / update_rate_hz;
@@ -426,6 +462,50 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
             ESP_LOGW(TAG, "Fix-rate set failed — module stays at its prior "
                           "rate (data still flows, just slower)");
         }
+    }
+
+    // ── Navigation mode: Balloon ($PAIR080 [A §2.4.24]) ─────────────────
+    // Every mode but Balloon carries a 10 km altitude limitation, past which
+    // "the position calculation will be incorrect"; 10-50 km "cannot be
+    // guaranteed", and above 50 km the module stops ALL output [A §2.4.24
+    // notes 2-3, Tables 7-8]. Balloon moves the limit to 80 km, and the spec
+    // documents no other difference than "vertical movement has a greater
+    // impact on the position calculation". Owner's choice, 2026-09-24. RAM
+    // only, like everything else here. Not load-bearing: a module that
+    // refuses stays in its power-on Normal mode, which still navigates below
+    // 10 km, so this WARNs and carries on.
+    {
+        char mode_body[16];
+        snprintf(mode_body, sizeof(mode_body), "PAIR080,%u",
+                 (unsigned)kFlightNavMode);
+        if (!sendPairCommand(mode_body, 80))
+        {
+            ESP_LOGW(TAG, "%s mode refused — the module stays in its power-on "
+                          "mode (Normal: 10 km altitude limitation)",
+                     navModeName(kFlightNavMode));
+        }
+    }
+
+    // Read the mode back ($PAIR081 [A §2.4.25]) so the boot log says which
+    // one this unit actually flies, as the u-blox driver reads back its
+    // dynamic model (#242). One attempt: a module that does not answer
+    // costs 500 ms of boot, not three tries.
+    sendSentence("PAIR081");
+    if (!awaitEvent(AwaitKind::NAV_MODE, kAckTimeoutMs))
+    {
+        ESP_LOGW(TAG, "Navigation mode unknown: no $PAIR081 answer in %lu ms",
+                 (unsigned long)kAckTimeoutMs);
+    }
+    else if (parser_.navMode() != kFlightNavMode)
+    {
+        ESP_LOGW(TAG, "Navigation mode reads back %u (%s), not %u (%s)",
+                 parser_.navMode(), navModeName(parser_.navMode()),
+                 (unsigned)kFlightNavMode, navModeName(kFlightNavMode));
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Navigation mode %u (%s)", parser_.navMode(),
+                 navModeName(parser_.navMode()));
     }
 
     // Deliberately NO $PAIR513 / $PQTMSAVEPAR: config is reapplied on every
@@ -450,6 +530,13 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
                       "PQTM output at %u Hz",
                  (unsigned long)kFirstPvtWaitMs, update_rate_hz);
     }
+
+    // Arm the one-line GSV rate report (checkGsvRate) from here, so the
+    // configuration traffic above is not counted.
+    gsv_check_epochs0_ = pvt_epochs_;
+    gsv_check_bursts0_ = parser_.gsvBursts();
+    sat_records_       = 0;
+    gsv_checked_       = !sat_stream_ok_;   // nothing to report without GSV
 
     ESP_LOGI(TAG, "Configuration complete.");
     return true;
@@ -522,12 +609,54 @@ bool TR_GNSSReceiverLC86Serial::pollNewSat(GNSSSatData &out)
     // get here any GSV burst that arrived has already been folded in. Doing
     // a second read here would race the line reassembly for no gain.
     if (!sat_stream_ok_) return false;
+    checkGsvRate();
     if (!parser_.takeSat(out)) return false;
 
     // MCU sample time, same clock and same meaning as GNSSData.time_us; the
     // parser filled itow_ms from the epoch's $PQTMPVT so the two records pair.
     out.time_us = (uint32_t)esp_timer_get_time();
+    sat_records_++;
     return true;
+}
+
+void TR_GNSSReceiverLC86Serial::checkGsvRate()
+{
+    // One line per boot, kGsvCheckSeconds of fixes after begin(): how many
+    // GSV bursts actually arrived. begin() asks for one every
+    // update_rate_hz fixes, which the Beetle's module delivers at exactly
+    // 1 Hz; this is where a module or firmware that answers differently, or
+    // sends none, shows up without anyone reading a flight log. Bursts with
+    // no satellites in them count too (the module still sends a set per
+    // constellation, so a board indoors shows its rate); "with satellites"
+    // is how many became GNSS_SAT_MSG records. The one log call lands inside
+    // the collector's GNSS timing window, so its >1 ms counter may tick once.
+    if (gsv_checked_) return;
+    const uint32_t fixes = pvt_epochs_ - gsv_check_epochs0_;
+    if (fixes < kGsvCheckSeconds * update_rate_hz) return;
+    gsv_checked_ = true;
+
+    const uint32_t bursts  = parser_.gsvBursts() - gsv_check_bursts0_;
+    const uint32_t seconds = fixes / update_rate_hz;
+    if (bursts == 0)
+    {
+        ESP_LOGW(TAG, "GSV: no bursts in %lu fixes (~%lu s) — no per-satellite "
+                      "C/N0 is being logged",
+                 (unsigned long)fixes, (unsigned long)seconds);
+    }
+    else if (bursts > seconds + 2)
+    {
+        ESP_LOGW(TAG, "GSV: %lu bursts in %lu fixes (~%lu s) — faster than the "
+                      "1 Hz begin() asked for, at ~730 B of UART each",
+                 (unsigned long)bursts, (unsigned long)fixes,
+                 (unsigned long)seconds);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "GSV: %lu bursts in %lu fixes (~%lu s), %lu with "
+                      "satellites",
+                 (unsigned long)bursts, (unsigned long)fixes,
+                 (unsigned long)seconds, (unsigned long)sat_records_);
+    }
 }
 
 void TR_GNSSReceiverLC86Serial::getGNSSData(GNSSData &gnss_data)

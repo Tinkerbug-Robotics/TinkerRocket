@@ -1058,7 +1058,9 @@ typedef struct
 // receiver's table can exceed GNSS_SAT_MAX_BLOCKS because it lists satellites
 // it is merely searching for (cno 0); gnssSatSelect() keeps tracked entries
 // first, so truncation, when it happens, drops only entries with no signal.
-// u-blox only: the mini's LC86G has no NAV-SAT (see its driver's pollNewSat).
+// The mini's LC86G has no NAV-SAT: it fills this record from NMEA GSV about
+// once a second instead of every epoch, highest satellites first, with flags
+// always 0 (see Lc86Parser::takeSat).
 typedef struct __attribute__((packed))
 {
     uint8_t gnss_id;    // UBX gnssId: 0 GPS, 1 SBAS, 2 Galileo, 3 BeiDou, 5 QZSS, 6 GLONASS, 7 NavIC

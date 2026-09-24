@@ -32,6 +32,7 @@ enum class Event : uint8_t
     GSV,          // valid GSV — one sentence of a satellites-in-view burst
                   // folded into the table; see takeSat()
     PAIR_ACK,     // $PAIR001 — ackCommandId()/ackResult()
+    NAV_MODE,     // $PAIR081,<NavMode> — navMode()
     QTM_OK,       // $PQTMCFGMSGRATE,OK (write accepted)
     QTM_ERROR,    // $PQTMCFGMSGRATE,ERROR,<code> — qtmErrorCode()
     OTHER_VALID,  // any other sentence with a valid checksum (liveness proof)
@@ -74,6 +75,10 @@ public:
     // Valid after Event::QTM_ERROR.
     int qtmErrorCode() const { return qtm_err_; }
 
+    // Valid after Event::NAV_MODE: 0 Normal, 1 Fitness, 3 Balloon,
+    // 4 Stationary, 5 Drone, 7 Swimming (protocol spec §2.4.25).
+    uint8_t navMode() const { return nav_mode_; }
+
     // Per-satellite report (#1032): moves a completed satellites-in-view
     // burst into `out` and clears the ready flag; false when none is waiting.
     //
@@ -83,6 +88,14 @@ public:
     //   - cno_dbhz, elev_deg and azim_2deg are real, straight off the wire.
     //     An empty elevation/azimuth field (a satellite merely being searched
     //     for) lands as 0, not as a sentinel — GSV has none.
+    //   - One signal per satellite. BeiDou entries are B1I; a B1C set is
+    //     skipped and counted (gsvSkipped()), because nothing in the record
+    //     could say which signal a C/N0 came from.
+    //   - Entries are ordered highest elevation first, so when more satellites
+    //     have signal than the record holds, the lowest ones are cut, from
+    //     every constellation alike.
+    //   - QZSS arrives on the GP talker and is recorded as gnssId 5, as a
+    //     u-blox NAV-SAT would report it.
     //   - flags is ALWAYS 0.  GSV reports no used-in-solution bit, no quality
     //     indicator, no health and no ephemeris/almanac state; the used bit
     //     lives in GSA, which cannot be matched back to a GSV entry without
@@ -106,6 +119,8 @@ public:
     uint32_t truncatedLines() const { return truncated_lines_; } // resynced on '$'
     uint32_t gsvSentences() const { return gsv_sentences_; }    // GSV lines folded in
     uint32_t gsvOverflows() const { return gsv_overflows_; }    // entries dropped at kMaxSatBuild
+    uint32_t gsvSkipped() const { return gsv_skipped_; }        // BeiDou B1C lines left out
+    uint32_t gsvBursts() const { return gsv_bursts_; }          // bursts closed, empty ones too
 
 private:
     // NMEA 0183 caps sentences at 82 chars but Quectel's $PQTMPVT runs ~137;
@@ -117,6 +132,7 @@ private:
     Event parsePqtmPvt(const char* const* f, size_t n);
     Event parsePqtmEpe(const char* const* f, size_t n);
     Event parsePairAck(const char* const* f, size_t n);
+    Event parseNavMode(const char* const* f, size_t n);
     Event parseQtmCfgMsgRate(const char* const* f, size_t n);
     Event parseGga(const char* const* f, size_t n);
     Event parseGsv(const char* addr, const char* const* f, size_t n);
@@ -127,7 +143,7 @@ private:
     // emits GGA and $PQTMPVT at the fix rate, so a burst is never the tail of
     // the stream in practice.
     void finalizeGsv();
-    void dropTalker(uint8_t gnss_id);
+    void dropTalker(uint16_t talker);
 
     char   line_[kMaxLine + 1];
     size_t line_len_ = 0;
@@ -140,6 +156,7 @@ private:
     uint16_t ack_cmd_    = 0;
     uint8_t  ack_result_ = 0;
     int      qtm_err_    = 0;
+    uint8_t  nav_mode_   = 0xFF;  // 0xFF until a $PAIR081 answer arrives
     uint8_t  gga_quality_  = 0;
     uint8_t  gga_num_sats_ = 0;
 
@@ -150,6 +167,7 @@ private:
     static constexpr uint8_t kMaxSatBuild = 40;
 
     GNSSSatBlock build_[kMaxSatBuild] = {};
+    uint16_t    build_src_[kMaxSatBuild] = {};  // talker ID chars of each entry
     uint8_t     build_n_    = 0;
     bool        gsv_active_ = false;   // a burst is open, awaiting its closer
     GNSSSatData sat_        = {};
@@ -161,6 +179,8 @@ private:
     uint32_t truncated_lines_ = 0;
     uint32_t gsv_sentences_   = 0;
     uint32_t gsv_overflows_   = 0;
+    uint32_t gsv_skipped_     = 0;
+    uint32_t gsv_bursts_      = 0;
 };
 
 }  // namespace lc86

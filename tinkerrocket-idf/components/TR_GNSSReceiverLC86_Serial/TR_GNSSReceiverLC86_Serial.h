@@ -57,13 +57,15 @@ class TR_GNSSReceiverLC86Serial
         ///
         /// This part speaks NMEA plus Quectel's PAIR/PQTM, not UBX, so there
         /// is no NAV-SAT and GSV is the only C/N0 source.  begin() enables it
-        /// at roughly 1 Hz (a divisor of the fix rate), not at the fix rate:
-        /// the poll task's latency budget is why, and a coexistence or
-        /// interference question is answered by C/N0 trends, not by 18 Hz of
-        /// them.  So records arrive ~1/s while GNSSData arrives at the fix
-        /// rate — expect far fewer GNSS_SAT_MSG records in a mini log than in
-        /// a V9 one, and see Lc86Parser::takeSat for the fields GSV cannot
-        /// fill (flags is always 0).
+        /// at roughly 1 Hz (a divisor of the fix rate; exactly 1 Hz as
+        /// measured on the Beetle), not at the fix rate: the poll task's
+        /// latency budget is why, and a coexistence or interference question
+        /// is answered by C/N0 trends, not by 18 Hz of them.  So records
+        /// arrive ~1/s while GNSSData arrives at the fix rate — expect far
+        /// fewer GNSS_SAT_MSG records in a mini log than in a V9 one, and see
+        /// Lc86Parser::takeSat for the fields GSV cannot fill (flags is
+        /// always 0).  The first calls after begin() also log, once, how many
+        /// GSV bursts arrived (checkGsvRate).
         bool pollNewSat(GNSSSatData &out);
 
     private:
@@ -76,6 +78,7 @@ class TR_GNSSReceiverLC86Serial
             PAIR_ACK,    // $PAIR001 with a matching CommandID
             QTM_RESULT,  // $PQTMCFGMSGRATE,OK / ,ERROR
             PVT,         // a parsed $PQTMPVT epoch
+            NAV_MODE,    // a $PAIR081,<NavMode> answer
         };
 
         // Helper: install/reconfigure the UART driver at a given baud rate
@@ -106,6 +109,10 @@ class TR_GNSSReceiverLC86Serial
         // no-PVT-stream insurance latch.
         void publishFromParser();
 
+        // One boot-log line on how many GSV bursts arrived in the first few
+        // seconds of fixes after begin() (see the .cpp).
+        void checkGsvRate();
+
         lc86::Lc86Parser parser_;
 
         uart_port_t _uartPort;
@@ -125,6 +132,14 @@ class TR_GNSSReceiverLC86Serial
         bool sat_stream_ok_ = false;
 
         uint32_t pvt_epochs_ = 0;
+
+        // checkGsvRate(): the PVT epoch and GSV burst counts when begin()
+        // finished, records handed out since, and whether the line is done
+        // (true until a begin() that enabled GSV arms it).
+        uint32_t gsv_check_epochs0_ = 0;
+        uint32_t gsv_check_bursts0_ = 0;
+        uint32_t sat_records_       = 0;
+        bool     gsv_checked_       = true;
 };
 
 #endif

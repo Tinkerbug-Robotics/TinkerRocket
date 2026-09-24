@@ -1153,8 +1153,8 @@ void SensorCollector::pollGNSSdata(void* parameter)
         GNSSData gnss_sample = {};
         const bool have_new = self->gnss_receiver.pollNewPVT(gnss_sample);
 
-        // Per-satellite report for the same epoch (GNSS_SAT_MSG).  u-blox
-        // only — the LC86 driver's pollNewSat() is a constant false.  Inside
+        // Per-satellite report for the same epoch (GNSS_SAT_MSG): every epoch
+        // from the u-blox, about once a second from the LC86G.  Inside
         // the timing accounting on purpose: this is flight data now, so its
         // parse cost belongs in the GNSS budget the >1 ms counters watch.
         // Static, not a local: this task has a 4 KB stack and the record is
