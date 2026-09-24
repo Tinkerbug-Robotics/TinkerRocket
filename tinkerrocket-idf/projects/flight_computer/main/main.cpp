@@ -3408,6 +3408,16 @@ static void cameraStart(uint32_t now_ms)
     }
     else if (runtime_camera_type == CAM_TYPE_RUNCAM)
     {
+        // No RunCam UART on this board (negative pins; setup_fc never installed
+        // the driver). Refuse here, before anything is armed. Arming would walk
+        // the whole probe / power-cycle ladder, about 30 s, against a UART that
+        // never came up, report the camera engaged to the OC throughout, and
+        // end on a blind START_RECORDING that goes nowhere.
+        if ((config::RUNCAM_TX_PIN < 0) || (config::RUNCAM_RX_PIN < 0))
+        {
+            ESP_LOGW(TAG, "Camera START (RunCam) refused — this board has no RunCam UART");
+            return;
+        }
         // Attach the parked UART, power on, then poll for readiness from
         // serviceCameraStart so the flight task keeps feeding the watchdog
         // (#146).  The camera boots to IDLE and does NOT auto-record over
@@ -5005,7 +5015,13 @@ static void setup_fc()
     // prevent.  Camera type is a runtime property now.)
     cameraGateInit();
     goproShutterPark();
-    if (config::USE_RUNCAM)
+    // A negative RunCam pin is a board with no RunCam UART (the mini, which has
+    // no camera at all). No driver: runcam_uart_ready stays false, so
+    // runcamUartPark() never hands the GPIO driver a -1 (an error log per call,
+    // six per park) and every attach, probe and send returns early.
+    // cameraStart() refuses a RunCam start on the same pins.
+    if (config::USE_RUNCAM &&
+        (config::RUNCAM_TX_PIN >= 0) && (config::RUNCAM_RX_PIN >= 0))
     {
         initRunCam();
     }
