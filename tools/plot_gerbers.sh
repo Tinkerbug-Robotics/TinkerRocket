@@ -8,6 +8,9 @@
 #
 #   tools/plot_gerbers.sh <board> [--allow-dirty] [--outdir DIR]
 #
+# <board> is a folder under hardware/: a product-line board (tinker-mantis) or a
+# retired one under hardware/legacy/ (legacy/base-station, or just base-station).
+#
 # See docs/board-versioning.md for what major/minor/patch mean for a PCB.
 set -euo pipefail
 
@@ -26,15 +29,36 @@ done
 
 if [ -z "$board" ]; then
   echo "usage: $(basename "$0") <board> [--allow-dirty] [--outdir DIR]" >&2
-  echo "boards:" >&2; ls -1 "$REPO/hardware" | while read -r d; do
-    [ -f "$REPO/hardware/$d/$d.kicad_pcb" ] && echo "  $d" >&2; done
+  echo "boards:" >&2
+  for d in "$REPO"/hardware/*/ "$REPO"/hardware/legacy/*/; do
+    d="${d%/}"; n="$(basename "$d")"
+    [ -f "$d/$n.kicad_pcb" ] && echo "  ${d#"$REPO/hardware/"}" >&2
+  done
   exit 2
 fi
 
-pcb="$REPO/hardware/$board/$board.kicad_pcb"
+# A retired board can be named without its legacy/ prefix.
+board="${board%/}"
+if [ ! -d "$REPO/hardware/$board" ] && [ -d "$REPO/hardware/legacy/$board" ]; then
+  board="legacy/$board"
+fi
+name="$(basename "$board")"
+pcb="$REPO/hardware/$board/$name.kicad_pcb"
 [ -f "$pcb" ] || { echo "no such board: $board" >&2; exit 2; }
 [ -x "$KICAD_CLI" ] || { echo "kicad-cli not found at $KICAD_CLI" >&2; exit 2; }
 outdir="${outdir:-$REPO/hardware/$board/gerbers}"
+
+# Tags are <name>-v<semver>. The product-line boards were renamed on 2026-09-24
+# and their earlier revisions stay tagged under the old name, so provenance
+# searches both: rocket-computer-v9.0.0 is the V9 of what is now tinker-mantis.
+case "$name" in
+  tinker-mantis) prefixes="tinker-mantis rocket-computer" ;;
+  tinker-beetle) prefixes="tinker-beetle rocket-computer-mini" ;;
+  tinker-base)   prefixes="tinker-base base-station-mini" ;;
+  *)             prefixes="$name" ;;
+esac
+match=()
+for p in $prefixes; do match+=(--match "${p}-v*"); done
 
 cd "$REPO"
 
@@ -43,9 +67,9 @@ dirty=""
 if ! git diff --quiet -- "hardware/$board" || ! git diff --cached --quiet -- "hardware/$board"; then
   dirty="-dirty"
 fi
-describe="$(git describe --tags --match "${board}-v*" --always --dirty 2>/dev/null || git rev-parse --short HEAD)"
+describe="$(git describe --tags "${match[@]}" --always --dirty 2>/dev/null || git rev-parse --short HEAD)"
 commit="$(git rev-parse HEAD)"
-tag_ver="$(git describe --tags --match "${board}-v*" --abbrev=0 2>/dev/null || echo '<untagged>')"
+tag_ver="$(git describe --tags "${match[@]}" --abbrev=0 2>/dev/null || echo '<untagged>')"
 
 if [ -n "$dirty" ] && [ "$allow_dirty" -eq 0 ]; then
   echo "REFUSING: hardware/$board has uncommitted changes." >&2
@@ -60,7 +84,10 @@ if [ -z "$rev" ]; then
   echo "WARNING: $board has no (rev \"...\") in its title block — silkscreen \${REVISION} will be blank." >&2
 elif [ "$tag_ver" != "<untagged>" ]; then
   # tag  <board>-v3.1.0  should agree with rev  V3.1  (or V3)
-  semver="${tag_ver#${board}-v}"
+  semver="$tag_ver"
+  for p in $prefixes; do
+    case "$tag_ver" in "${p}-v"*) semver="${tag_ver#"${p}"-v}" ;; esac
+  done
   major="${semver%%.*}"; rest="${semver#*.}"; minor="${rest%%.*}"
   if [ "$rev" != "V${major}" ] && [ "$rev" != "V${major}.${minor}" ]; then
     echo "WARNING: title-block rev '$rev' disagrees with tag '$tag_ver'." >&2

@@ -18,26 +18,47 @@ board's `FABRICATION-NOTES.md` points there rather than restating them.
 The inter-board jumpers — which part to order and the catalogue-naming trap
 that once cooked a radio — are in [`cables.md`](cables.md) (#677).
 
-## Boards
+## Product line
 
-| Folder | Board | Firmware target |
-|---|---|---|
-| [`rocket-computer/`](rocket-computer/) | Flight computer + out computer, one board | `tinkerrocket-idf/projects/flight_computer` (ESP32-P4) and `.../out_computer` (ESP32-S3) |
-| [`rocket-computer-mini/`](rocket-computer-mini/) | Flight computer, reduced capability — single ESP32-S3, no P4. Forked from `rocket-computer`, no ongoing link | — (none yet) |
-| [`base-station/`](base-station/) | Ground station | `tinkerrocket-idf/projects/base_station` |
-| [`base-station-mini/`](base-station-mini/) | Ground station, reduced feature set — on-board LoRa, no external charger. Forked from `base-station`, no ongoing link | — (none yet) |
-| [`lora-daughterboard/`](lora-daughterboard/) | Swappable UART radio module | `tinkerrocket-idf/projects/radio_board` |
-| [`gnss-px1105r-18mm-highpower-ext-ant/`](gnss-px1105r-18mm-highpower-ext-ant/) | GNSS carrier, PX1105R, external antenna | — (module carrier) |
-| [`gnss-sam10m8-18mm-hv/`](gnss-sam10m8-18mm-hv/) | GNSS carrier, SAM-M10Q, high-voltage variant | — (module carrier) |
-| [`servo-adapter/`](servo-adapter/) | Cable-to-servo adapter with capacitor | — (passive) |
+The boards offered as products, and the firmware each runs. The product names
+replaced the engineering names on 2026-09-24; the old names still identify
+earlier revisions in git tags, issues and the dated review records, so both are
+listed.
 
-**Revision numbers are no longer in the filenames.** What was `TinkerRocket
-Full V9` is now `rocket-computer`. Git history and tags carry the revision
-instead — see *Sending a board to fab* below. Each project was renamed with
-KiCad's own internal references rewritten (`(project ...)` instance data,
-`(sheetfile ...)`, and `schematic.top_level_sheets`); the imported netlists
-were diffed against the originals and match exactly on component count,
-values, footprints, and full connectivity.
+| Folder | Product | Was | What it is | Firmware |
+|---|---|---|---|---|
+| [`tinker-mantis/`](tinker-mantis/) | **Tinker-Mantis** | `rocket-computer` | Full-size flight computer: ESP32-P4 flight computer and ESP32-S3 out computer on one board | `flight_computer` + `out_computer`, `-DTR_BOARD_V9=1` (V9/V10) |
+| [`lora-daughterboard/`](lora-daughterboard/) | LoRa daughterboard for Tinker-Mantis | — | Swappable UART radio module | `radio_board` |
+| [`gnss-sam10m8-18mm-hv/`](gnss-sam10m8-18mm-hv/) | GNSS carrier for Tinker-Mantis | — | SAM-M10Q carrier, pack-voltage input | — (module carrier) |
+| [`tinker-beetle/`](tinker-beetle/) | **Tinker-Beetle** | `rocket-computer-mini` | Reduced-capability flight computer: two ESP32-S3s, on-board LoRa and GNSS. Forked from `rocket-computer`, no ongoing link | `flight_computer` + `out_computer`, `-DTR_BOARD_M1=1` |
+| [`tinker-base/`](tinker-base/) | **Tinker-Base** | `base-station-mini` | Ground station with on-board LoRa, the one base station for both computers. Forked from the full base station, no ongoing link | `base_station` — its V3 build is the starting point; the board has no map of its own yet |
+
+Firmware project names are in `tinkerrocket-idf/projects/`; see
+[`tinkerrocket-idf/projects/README.md`](../tinkerrocket-idf/projects/README.md) for
+the product-to-build map and why the project names did not change.
+
+## Legacy boards
+
+[`legacy/`](legacy/) holds the boards that left the product line — the full
+base station, the PX1105R GNSS carrier and the servo adapter. They still open,
+still pass the parity gate and can still be plotted from their tags; see
+[`legacy/README.md`](legacy/README.md).
+
+## Names and revisions
+
+**Revision numbers are not in the filenames.** What was `TinkerRocket Full V9`
+became `rocket-computer`, and on 2026-09-24 `tinker-mantis`. Git history and
+tags carry the revision instead — see *Sending a board to fab* below. Both
+renames rewrote KiCad's own internal references (`(project ...)` instance data,
+`(sheetfile ...)`, and the `.kicad_pro` file names and `top_level_sheets`); the
+second also renamed the schematic title-block titles that carried the old
+project name (six sheets, all on the Tinker-Beetle). The first import's netlists were diffed against the originals and
+match exactly on component count, values, footprints, and full connectivity.
+The 2026-09-24 rename was checked the same way and further: netlist, BOM
+export, every gerber and drill file (timestamps and project name aside) and the
+DRC report are identical before and after, on all six boards it touched.
+Silkscreen text was not changed by it: the boards still read `Tinker Rocket`,
+`TR-Mini` and `TinkerRocket Base Station Mini` until someone edits the artwork.
 
 ## Working on these locally
 
@@ -60,7 +81,7 @@ So treat each board as **one writer at a time**:
   hand-resolve it.** Take one side whole and redo the other edit in KiCad:
 
 ```bash
-git checkout --ours hardware/rocket-computer/rocket-computer.kicad_pcb
+git checkout --ours hardware/tinker-mantis/tinker-mantis.kicad_pcb
 ```
 
 Sub-sheets are separate files, so two people *can* safely work on different
@@ -79,18 +100,18 @@ Nobody can review an S-expression diff. Generate something lookable-at and put
 it in the PR:
 
 ```bash
-kicad-cli sch export pdf -o /tmp/sch.pdf hardware/rocket-computer/rocket-computer.kicad_sch
+kicad-cli sch export pdf -o /tmp/sch.pdf hardware/tinker-mantis/tinker-mantis.kicad_sch
 ```
 
 ```bash
-kicad-cli pcb export svg --mode-single --layers F.Cu,F.Silkscreen,Edge.Cuts -o /tmp/pcb.svg hardware/rocket-computer/rocket-computer.kicad_pcb
+kicad-cli pcb export svg --mode-single --layers F.Cu,F.Silkscreen,Edge.Cuts -o /tmp/pcb.svg hardware/tinker-mantis/tinker-mantis.kicad_pcb
 ```
 
 A BOM/netlist diff is the highest-signal check for "did this change what I
 think it changed":
 
 ```bash
-kicad-cli sch export netlist -o /tmp/after.net hardware/rocket-computer/rocket-computer.kicad_sch
+kicad-cli sch export netlist -o /tmp/after.net hardware/tinker-mantis/tinker-mantis.kicad_sch
 ```
 
 ### 4. Sending a board to fab
@@ -105,17 +126,25 @@ plot a dirty tree, stamps the commit and tag into the package's `README.txt`, an
 when the title-block rev disagrees with the tag:
 
 ```bash
-tools/plot_gerbers.sh rocket-computer
+tools/plot_gerbers.sh tinker-mantis
 ```
+
+A legacy board is plotted the same way, as `legacy/base-station` or just
+`base-station`.
 
 Tag with the scheme in [docs/board-versioning.md](../docs/board-versioning.md) —
 lightweight, `<board>-v<major>.<minor>.<patch>`:
 
 ```bash
-git tag rocket-computer-v10.0.0
+git tag tinker-mantis-v10.0.0
 ```
 
-`git show rocket-computer-v9.0.0` gets you exactly what was fabbed.
+`git show rocket-computer-v9.0.0` gets you exactly what was fabbed — revisions
+fabbed before the 2026-09-24 rename keep the tag they were given, under the old
+name and the old folder (`hardware/rocket-computer/` at that tag).
+`plot_gerbers.sh` searches both names, so a Tinker-Mantis plot made before its
+first `tinker-mantis-v*` tag still records `rocket-computer-v9.0.0` as its
+lineage.
 
 This section used to give `git tag hw/rocket-computer/v10` and
 `git show hw/rocket-computer/v9`. That scheme does not exist: `git tag -l "hw/*"`
