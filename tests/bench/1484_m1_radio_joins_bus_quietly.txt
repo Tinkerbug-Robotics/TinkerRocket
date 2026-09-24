@@ -1,0 +1,40 @@
+# #1484 follow-up — the mini's radio joins the NAND's SPI bus without an error line.
+#
+# Rig: rocket-computer-mini, S1 -> O (every line quoted here is OC-side). USB
+# power is enough. Any number of flights on the chip.
+#
+# Since #1488 every power-on printed two of
+#   E (...) spi_common: spi_bus_initialize(895): SPI bus already initialized.
+# 151 ms apart, right before "LoRa radio initialized": EspHal::spiBegin() ran
+# once per LLCC68::begin() attempt, and the E220 needs two (it answers to
+# "SX1261", not "LLCC68"). With the fix: no such line, and the radio still
+# comes up on the bus the NAND owns.
+
+note === clean start: a deliberate power-off restarts the OC with the rail off ===
+send 8 00
+disconnect
+sleep 5
+connect
+
+note === power on: the NAND comes up, then the radio joins its bus ===
+mark
+send 8 01
+expect_serial 30 FLIGHTLOG: up: \d+ flight\(s\) in index
+expect_serial 30 LORA: LoRa radio initialized
+refute_serial_since SPI bus already initialized
+refute_serial_since EspHal: SPI (bus init|add device) failed
+refute_serial_since LoRa init failed
+refute_serial_since is conflict with others and be overwritten
+expect_tlm 30 h.STORAGE==OK
+
+note === second power cycle: the same again ===
+send 8 00
+disconnect
+sleep 5
+connect
+mark
+send 8 01
+expect_serial 30 LORA: LoRa radio initialized
+refute_serial_since SPI bus already initialized
+refute_serial_since EspHal: SPI (bus init|add device) failed
+expect_tlm 30 h.STORAGE==OK
