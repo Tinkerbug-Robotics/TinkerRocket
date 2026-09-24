@@ -18,6 +18,7 @@ using String = std::string;     // API-compatible subset used by callers
 #include <cmath>                 // #850: NAN defaults on the rail-current fields
 
 #include "BleCommandRing.h"      // #517: depth for the command intake
+#include "BleAdvStatus.h"        // the once-a-minute status line
 #include "TR_OTA_Receiver.h"
 #include "TR_OTA_Backend_esp.h"
 
@@ -255,6 +256,15 @@ public:
     // it lost, the idle link would have sat at 30 ms and thrown away most of #519's
     // power saving. So the OC turns this off and owns the policy end to end.
     void setAutoConnParams(bool enabled) { auto_conn_params_ = enabled; }
+
+    // Log a BLE status line from loop() every period_ms: connected, advertising
+    // (fast or slow phase), or NOT ADVERTISING and why (BleAdvStatus.h). 0, the
+    // default, is off. The first line comes one period after this call.
+    void setStatusLogPeriod(uint32_t period_ms)
+    {
+        status_log_period_ms_ = period_ms;
+        status_last_log_ms_   = (uint32_t)millis();
+    }
 
     // NimBLE's handle for the current connection; 0xFFFF when not connected.
     // #519: the out computer was calling ble_gap_update_params(0, ...) with a
@@ -664,6 +674,14 @@ private:
     void armFastAdvWindow();
     static constexpr uint32_t kFastAdvWindowMs = 30000;
     uint32_t fast_adv_until_ms_ = 0;   // 0 = window never armed (slow phase)
+
+    // The status line's inputs, recorded on the host task by the callbacks that
+    // start and end advertising and connections, and copied on the loop task.
+    // Both sides hold s_status_mux (TR_BLE_To_APP.cpp).
+    tr_ble::AdvStatus adv_status_{};
+    uint32_t status_log_period_ms_ = 0;   // 0 = no status line
+    uint32_t status_last_log_ms_   = 0;
+    void logStatus(uint32_t now_ms);
 
     // Register GATT services with the NimBLE host
     void registerGattServices();
