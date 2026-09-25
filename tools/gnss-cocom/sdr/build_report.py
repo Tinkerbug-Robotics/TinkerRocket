@@ -19,7 +19,6 @@ Placeholders in the text files are substituted, not formatted. Either page may
 use any of them; each must appear on at least one page:
 
     {{GATE_TABLE_ROWS}}    rows of the comparison table
-    {{FOOTNOTES}}          only the footnotes the current data actually uses
     {{RECEIVER_SECTIONS}}  a panel per receiver, blurb + measured figures + plots
     {{FIG_BLOCK_DIAGRAM}}  }
     {{FIG_M8T_ALTRAMP}}    }  inline SVG from results/figures/
@@ -62,7 +61,7 @@ PAGES = [
 ]
 
 sys.path.insert(0, str(HERE))
-from receiver_table import used_footnotes, bracket        # noqa: E402
+from receiver_table import bracket        # noqa: E402
 
 CAUSE_LABEL = {"not cocom": "not COCOM", "dyn model": "dynamic model",
                "nav mode": "navigation mode", "mute": "all output muted"}
@@ -206,13 +205,8 @@ def build(text_path: Path, title: str):
     table = subprocess.run([sys.executable, str(HERE / "receiver_table.py"), "--html"],
                            capture_output=True, text=True, check=True).stdout.strip()
     rows = table.split("\n", 1)[1].rsplit("\n", 1)[0]
-    notes_html = "\n".join(
-        f'        <p class="fn"><span class="mark">{m}</span>{t}</p>'
-        for m, t in used_footnotes(d))
-
     fills = {
         "{{GATE_TABLE_ROWS}}": rows,
-        "{{FOOTNOTES}}": notes_html,
         "{{RECEIVER_SECTIONS}}": receiver_sections(d, TEXT.read_text()),
         "{{FIG_BLOCK_DIAGRAM}}": fig("rig_block_diagram.svg"),
         "{{FIG_M8T_ALTRAMP}}": fig("neo_m8t_t2_altramp.svg"),

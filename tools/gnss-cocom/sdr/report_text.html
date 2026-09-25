@@ -53,7 +53,8 @@
       <p>Every receiver here was flown against the same two trajectories through
         the same signal generator. If those two trajectories did not fully characterize
         the limits, then additional excursions were run. The top-level summary of the results
-        is included in this table. What the boost itself does to tracking, on the same
+        is included in this table, rounded; each receiver's measured brackets are
+        in section 03. What the boost itself does to tracking, on the same
         flights, is in the companion report,
         <a href="boost_report.html">GNSS Under Boost</a>.</p>
     </div>
@@ -65,19 +66,14 @@
       </table>
     </div>
 
-    <div class="footnotes">
-        <p class="fn"><span class="mark">&nbsp;</span><span>Results are rounded slightly
-          here for the purpose of summarizing. The measured brackets are given per
-          receiver below, and in <code>results/receivers.json</code>.</span></p>
-{{FOOTNOTES}}
-    </div>
 
     <div class="prose">
       <h3>What the table says</h3>
       <p>Receivers do not implement the current MTCR 600 m/s limit. Most use the
         COCOM 515 m/s limit for speed; the Quectel LC86G stops at 500 m/s, which
         matches neither. Altitude limits vary significantly from 10 km to 80 km,
-        though several use the 80 km limit.</p>
+        though several use the 80 km limit. The Air530's 10&nbsp;km and the
+        NEO-M8T's 50&nbsp;km are not export limits; section 04 shows why.</p>
       <p>The LC86G is listed in Balloon mode, one of its navigation modes. The
         module powers up in Normal mode, and the setting lives in its RAM, so a
         host has to select Balloon again at every power-up. In Normal mode there

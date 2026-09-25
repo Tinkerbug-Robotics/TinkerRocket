@@ -195,7 +195,7 @@
   /* ---- receiver comparison ---- */
   table.cmp td.part { font-family: var(--f-display); font-weight: 600; color: var(--ink);
                       white-space: nowrap; }
-  table.cmp { min-width: 900px; }
+  table.cmp { min-width: 720px; }
   table.cmp tbody tr:hover { background: var(--rule); }
 
 
@@ -323,7 +323,8 @@
       <p>Every receiver here was flown against the same two trajectories through
         the same signal generator. If those two trajectories did not fully characterize
         the limits, then additional excursions were run. The top-level summary of the results
-        is included in this table. What the boost itself does to tracking, on the same
+        is included in this table, rounded; each receiver's measured brackets are
+        in section 03. What the boost itself does to tracking, on the same
         flights, is in the companion report,
         <a href="boost_report.html">GNSS Under Boost</a>.</p>
     </div>
@@ -333,7 +334,6 @@
         <caption>Measured gates, by receiver</caption>
   <thead><tr>
     <th>Receiver</th>
-    <th>Path</th>
     <th>Velocity gate</th>
     <th>Altitude gate</th>
     <th>Limits combined</th>
@@ -342,7 +342,6 @@
   <tbody>
     <tr>
       <td class="part">SkyTraq PX1125R</td>
-      <td>conducted</td>
       <td>515 m/s</td>
       <td>80 km</td>
       <td>independent</td>
@@ -350,7 +349,6 @@
     </tr>
     <tr>
       <td class="part">u-blox SAM-M10Q</td>
-      <td>radiated, Faraday cage</td>
       <td>515 m/s</td>
       <td>80 km</td>
       <td>independent</td>
@@ -358,49 +356,43 @@
     </tr>
     <tr>
       <td class="part">u-blox ZED-F9P (ArduSimple)</td>
-      <td>conducted</td>
       <td>515 m/s</td>
-      <td>80 km †</td>
+      <td>80 km</td>
       <td>independent</td>
       <td>0.1-1.0 s</td>
     </tr>
     <tr>
       <td class="part">Air530 (AT6558R)</td>
-      <td>conducted</td>
       <td>none to 900 m/s</td>
-      <td>10 km ‡</td>
+      <td>10 km</td>
       <td>n/a -- no velocity gate</td>
       <td>n/a</td>
     </tr>
     <tr>
       <td class="part">u-blox NEO-M8T</td>
-      <td>conducted</td>
       <td>515 m/s</td>
-      <td>50 km §</td>
+      <td>50 km</td>
       <td>independent</td>
       <td>0.9-3.1 s</td>
     </tr>
     <tr>
       <td class="part">Quescan M10</td>
-      <td>radiated, Faraday cage</td>
       <td>515 m/s</td>
-      <td>80 km †</td>
+      <td>80 km</td>
       <td>independent</td>
       <td>0.1-5.0 s</td>
     </tr>
     <tr>
       <td class="part">Beitian BN-182</td>
-      <td>radiated, Faraday cage</td>
-      <td>505 m/s ¶</td>
-      <td>80 km †</td>
+      <td>505 m/s</td>
+      <td>80 km</td>
       <td>independent</td>
       <td>0.5-11.3 s</td>
     </tr>
     <tr>
       <td class="part">Quectel LC86G, Balloon mode</td>
-      <td>radiated, Faraday cage</td>
-      <td>500 m/s ‖</td>
-      <td>81 km ‖</td>
+      <td>500 m/s</td>
+      <td>81 km</td>
       <td>independent</td>
       <td>0.0-0.6 s</td>
     </tr>
@@ -408,23 +400,14 @@
       </table>
     </div>
 
-    <div class="footnotes">
-        <p class="fn"><span class="mark">&nbsp;</span><span>Results are rounded slightly
-          here for the purpose of summarizing. The measured brackets are given per
-          receiver below, and in <code>results/receivers.json</code>.</span></p>
-        <p class="fn"><span class="mark">†</span>Slow to close: this part held a fix 2-3 s past the limit on both flights, about 400-600 m of overshoot above 80 km with position still being published. The threshold itself is normal.</p>
-        <p class="fn"><span class="mark">‡</span>Not an export gate. This ceiling sits below the COCOM altitude, and the receiver stops publishing there for reasons unrelated to export control.</p>
-        <p class="fn"><span class="mark">§</span>The u-blox dynamic model's own altitude ceiling, not an export gate. Airborne <4 g is specified at 50,000 m; no u-blox model goes higher, so this part's export behavior above it cannot be measured.</p>
-        <p class="fn"><span class="mark">¶</span>Rests on a single closing edge, so it is bracketed only to the width of one navigation epoch. This part was slow enough to re-open that the gate had not cleared before the next window, leaving no fix to close again.</p>
-        <p class="fn"><span class="mark">‖</span>Enforced by muting ALL output -- NMEA, acknowledgements and raw measurements -- rather than by withholding the position while satellites are still reported, so on the wire it looks like a dead receiver until it comes back. It acts on the receiver's own estimates, 500 m/s and 80.0 km, stopping within 0.1 s of passing either and returning within 0.1 s straight into a valid fix. Its own altitude read about 0.9 km low near 80 km on this bench, which puts the limit near 81 km against the injection.</p>
-    </div>
 
     <div class="prose">
       <h3>What the table says</h3>
       <p>Receivers do not implement the current MTCR 600 m/s limit. Most use the
         COCOM 515 m/s limit for speed; the Quectel LC86G stops at 500 m/s, which
         matches neither. Altitude limits vary significantly from 10 km to 80 km,
-        though several use the 80 km limit.</p>
+        though several use the 80 km limit. The Air530's 10&nbsp;km and the
+        NEO-M8T's 50&nbsp;km are not export limits; section 04 shows why.</p>
       <p>The LC86G is listed in Balloon mode, one of its navigation modes. The
         module powers up in Normal mode, and the setting lives in its RAM, so a
         host has to select Balloon again at every power-up. In Normal mode there
