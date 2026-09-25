@@ -27,7 +27,7 @@ from plot_flight_data_mini import get_array, gnss_to_enu, pressure_to_altitude  
 
 from markupsafe import Markup
 
-from .events import burnout_gap, launch_gap, measured, span as _span
+from .events import burnout_gap, ejection_channel, launch_gap, measured, span as _span
 from .imu import accel_magnitude
 from .units import q
 
@@ -53,19 +53,20 @@ def _event_times(flight) -> dict[str, Optional[float]]:
     return measured(flight)
 
 
-def _eject_hint(records) -> str:
-    """Where the ejection time came from: a channel that logged it, or the trace.
+def _eject_hint(flight) -> str:
+    """Where the ejection time came from: a channel that fired, or the trace.
 
     Worth saying on the card. A pyro time is recorded by the thing that fired;
     a motor ejection is inferred from the transient it leaves in the
     accelerometer, and a reader is entitled to know which they are looking at.
+
+    The channel measured() took, not any channel that fired. A pyro that fired
+    only the main, after a drogue on motor ejection, is not where the coast
+    ended, and with two channels fired the first to fire is not always the
+    lowest-numbered.
     """
-    ns = records.get("NonSensor") or []
-    for ch in (1, 2, 3, 4):
-        key = f"pyro{ch}_fired"
-        if ns and key in ns[0] and any(r.get(key) for r in ns):
-            return f"pyro {ch} firing"
-    return "ejection, found in the accelerometer"
+    ch = ejection_channel(flight)
+    return f"pyro {ch} firing" if ch is not None else "ejection, found in the accelerometer"
 
 
 def _baro_agl(records) -> Optional[np.ndarray]:
@@ -190,7 +191,7 @@ def compute_summary(flight) -> list[dict[str, Any]]:
 
     coast = _span(events, "burnout", "ejection")
     if coast is not None:
-        cells.append(_cell("Coast time", coast, "s", 2, f"burnout to {_eject_hint(recs)}"))
+        cells.append(_cell("Coast time", coast, "s", 2, f"burnout to {_eject_hint(flight)}"))
 
     to_apogee = _span(events, "launch", "apogee")
     if to_apogee is not None:

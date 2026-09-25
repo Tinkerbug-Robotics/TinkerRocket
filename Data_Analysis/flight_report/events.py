@@ -106,6 +106,10 @@ _EJECT_PEAK_S = 0.05
 # transient rather than the largest does.
 _EJECT_AFTER_BURNOUT_S = 0.2
 _EJECT_BEFORE_LANDING_S = 1.0
+# A pyro channel's fired bit rises when its firing pulse ends, this long after
+# the fire pin went high: PYRO_FIRE_DURATION_MS in the flight computer's
+# config.h, 200 ms since the first firmware. See pyro_fires().
+_PYRO_PULSE_S = 0.200
 
 # Below this the barometer is looking at weather, not a flight. Guards the
 # fallback peak: a log recorded on a bench has an argmax like any other, and
@@ -115,6 +119,7 @@ _MIN_FLIGHT_ALT_M = 20.0
 _CACHE_KEY = "_measured_events"
 _GAP_CACHE_KEY = "_launch_gap"
 _BURNOUT_GAP_CACHE_KEY = "_burnout_gap"
+_EJECTION_CHANNEL_KEY = "_ejection_channel"
 
 
 def _flags(recs) -> list:
@@ -329,13 +334,47 @@ def true_burnout(flight, t, g, ax) -> Optional[float]:
     return _burnout(flight, t, g, ax)[0]
 
 
-def ejection(flight, t, g, burnout: Optional[float], landed: Optional[float]) -> Optional[float]:
-    """When the recovery system was deployed.
+def pyro_fires(flight) -> dict[int, float]:
+    """{channel: when its charge was fired}, in seconds since t0, for each pyro
+    channel that fired.
 
-    A fired pyro channel records its own time, so that is used when there is
-    one. Otherwise the vehicle recovers on motor ejection, which logs nothing,
-    and the charge is found in the accelerometer: the first transient between
-    burnout and touchdown that clears both bars.
+    Not when the log's fired bit rose. The flight computer sets that bit when
+    the channel reaches Done, and it gets there only when the firing pulse ends:
+    ARM goes high, FIRE follows 10 ms later and is held for 200 ms
+    (servicePyroChannels in the flight computer's main.cpp). So the charge was
+    fired _PYRO_PULSE_S before the bit rose. The 2026-08-29 V9 nosecone's pyro 1
+    shows every step: ARM high at 41.676 s, the fire pin at 41.687 s as its
+    continuity dropped, the nosecone's first jolt at 41.697 s, the charge's
+    pressure on the barometer from 41.73 s, and the bit at 41.887 s.
+    """
+    ns = _flags(flight.records)
+    if flight.t0_us is None or not ns:
+        return {}
+    fires: dict[int, float] = {}
+    for ch in (1, 2, 3, 4):
+        key = f"pyro{ch}_fired"
+        if key in ns[0]:
+            done = _flag_time(flight.records, flight.t0_us, key)
+            if done is not None:
+                fires[ch] = done - _PYRO_PULSE_S
+    return fires
+
+
+def ejection(flight, t, g, burnout: Optional[float], landed: Optional[float]) -> Optional[float]:
+    """When the recovery system was first deployed: the earlier of the first pyro
+    channel to fire and the charge the accelerometer finds.
+
+    Both are looked for on every flight, because a pyro channel is not always
+    the first deployment. On the 2026-08-29 V9 nosecone the drogue went out on
+    motor ejection at 14.56 s, and pyro 1 fired only the main, at 41.69 s and
+    229 m. Taken whenever one had fired, the pyro made the 36.75 s from burnout
+    to the main a coast, and took the tilt at ejection with the airframe hanging
+    under the drogue. A pyro fire is dated when its charge was fired (see
+    pyro_fires), and ejection_channel() says which channel it was, when it was
+    one.
+
+    A motor ejection logs nothing, so its charge is found in the accelerometer:
+    the first transient between burnout and touchdown that clears both bars.
 
     The first, not the largest. What follows a charge can hit the airframe
     harder than the charge did: 211 g half a second after a 43 g charge on the
@@ -349,14 +388,22 @@ def ejection(flight, t, g, burnout: Optional[float], landed: Optional[float]) ->
     puts on the barometer on all 23 flights that show one, and within 9 ms of
     the flight computer's own deployment flag on the three that carry it.
     """
-    recs = flight.records
-    ns = _flags(recs)
-    fired = [_flag_time(recs, flight.t0_us, f"pyro{ch}_fired") for ch in (1, 2, 3, 4)
-             if ns and f"pyro{ch}_fired" in ns[0]]
-    fired = [f for f in fired if f is not None]
-    if fired:
-        return min(fired)
+    return _ejection(flight, t, g, burnout, landed)[0]
 
+
+def _ejection(flight, t, g, burnout, landed) -> tuple[Optional[float], Optional[int]]:
+    """(ejection, the pyro channel it was, or None when the accelerometer found it)."""
+    fires = pyro_fires(flight)
+    charge = _charge(t, g, burnout, landed)
+    if fires:
+        ch = min(fires, key=fires.get)
+        if charge is None or fires[ch] <= charge:
+            return fires[ch], ch
+    return charge, None
+
+
+def _charge(t, g, burnout, landed) -> Optional[float]:
+    """The first transient between burnout and touchdown that clears both bars."""
     if t is None or burnout is None:
         return None
     hi = (landed - _EJECT_BEFORE_LANDING_S) if landed is not None else float(t[-1])
@@ -459,7 +506,8 @@ def measured(flight) -> dict[str, Optional[float]]:
     Keys: launch, burnout, apogee, ejection, landed. A value of None means the
     flight does not contain that event — render nothing rather than a guess.
     Launch and burnout are also None when they fell in a hole in the log;
-    launch_gap() and burnout_gap() say where.
+    launch_gap() and burnout_gap() say where. ejection_channel() says which pyro
+    channel the ejection was, when it was one.
     """
     cached = flight.__dict__.get(_CACHE_KEY)
     if cached is not None:
@@ -480,11 +528,12 @@ def measured(flight) -> dict[str, Optional[float]]:
     # A burn that ended inside a hole was over by the time the log came back, so
     # the charge is looked for from there.
     coasting = out["burnout"] if burnout_hole is None else burnout_hole[1]
-    out["ejection"] = ejection(flight, t, g, coasting, out["landed"])
+    out["ejection"], channel = _ejection(flight, t, g, coasting, out["landed"])
     out["apogee"] = true_apogee(flight, out["launch"])
 
     flight.__dict__[_GAP_CACHE_KEY] = gap
     flight.__dict__[_BURNOUT_GAP_CACHE_KEY] = burnout_hole
+    flight.__dict__[_EJECTION_CHANNEL_KEY] = channel
     flight.__dict__[_CACHE_KEY] = out
     return out
 
@@ -511,6 +560,18 @@ def burnout_gap(flight) -> Optional[tuple[float, float]]:
     """
     measured(flight)
     return flight.__dict__.get(_BURNOUT_GAP_CACHE_KEY)
+
+
+def ejection_channel(flight) -> Optional[int]:
+    """The pyro channel whose fire measured() took as the ejection, or None.
+
+    None when the charge was found in the accelerometer, or no ejection was
+    found. A channel that fired is not always the one: a pyro that fired only
+    the main, after a drogue on motor ejection, is not the ejection. This is
+    what lets the card say where its coast time ends.
+    """
+    measured(flight)
+    return flight.__dict__.get(_EJECTION_CHANNEL_KEY)
 
 
 def markers(flight) -> dict[str, Optional[float]]:

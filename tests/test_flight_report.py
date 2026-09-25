@@ -946,6 +946,107 @@ def test_a_late_landed_flag_does_not_make_the_touchdown_the_ejection() -> None:
     assert stability.analyze(flight).metrics["Tilt at ejection"].value == tilt_before.value
 
 
+# ---------------------------------------------------------------------------
+# Pyro channels and the ejection
+#
+# A pyro channel is not always the first deployment: on the 2026-08-29 V9
+# nosecone the drogue went out on motor ejection and pyro 1 fired only the main.
+# And a pyro's fired bit rises when its 200 ms firing pulse ends, not when the
+# charge fires. The ejection is the earlier of the pyro and the accelerometer,
+# with the pyro dated back to its fire. No log small enough for the repo fired a
+# pyro, so these set the bits on the sample flight.
+# ---------------------------------------------------------------------------
+
+
+def _fire(flight, ch: int, bit_from: float) -> float:
+    """Set pyro `ch`'s fired bit on every NonSensor record from `bit_from` s on.
+
+    Returns where the bit rises in the log: the first record that carries it.
+    """
+    rise = None
+    for r in flight.records["NonSensor"]:
+        s = (r["time_us"] - flight.t0_us) / 1e6
+        r[f"pyro{ch}_fired"] = s >= bit_from
+        if rise is None and s >= bit_from:
+            rise = s
+    return rise
+
+
+def test_a_pyro_that_fired_only_the_main_is_not_the_ejection() -> None:
+    """A drogue on motor ejection, and a pyro on the main later.
+
+    That was the 2026-08-29 V9 nosecone: the drogue at 14.56 s and pyro 1 on the
+    main at 41.69 s. Taking the pyro whenever one had fired made the 36.75 s
+    from burnout to the main the coast. Here the sample flight, which ejected on
+    its motor, fires pyro 1 at 40 s on the way down. The ejection, the coast time
+    counted to it and its hint, and the tilt taken at it stay with the charge.
+    The deployment section still reports the fire, dated when it fired.
+    """
+    from flight_report import events
+    from flight_report.flight import Flight
+    from flight_report.modules import deployment, stability
+    from flight_report.summary import compute_summary
+
+    whole = Flight.from_bin(SAMPLE_BIN)
+    whole.load()
+    before = events.measured(whole)
+    coast_before = {c["label"]: c for c in compute_summary(whole)}["Coast time"]
+    tilt_before = stability.analyze(whole).metrics["Tilt at ejection"]
+
+    flight = Flight.from_bin(SAMPLE_BIN)
+    flight.load()
+    rise = _fire(flight, 1, 40.0)
+
+    ev = events.measured(flight)
+    assert ev["ejection"] == before["ejection"], "the main was taken for the ejection"
+    coast = {c["label"]: c for c in compute_summary(flight)}["Coast time"]
+    assert coast["q"].value == coast_before["q"].value
+    assert coast["hint"] == "burnout to ejection, found in the accelerometer"
+    assert stability.analyze(flight).metrics["Tilt at ejection"].value == tilt_before.value
+    assert events.ejection_channel(flight) is None
+
+    assert events.pyro_fires(flight) == pytest.approx({1: rise - 0.2})
+    assert deployment.analyze(flight).metrics["Pyro 1"].startswith(f"fired at {rise - 0.2:.2f} s")
+
+
+def test_a_pyro_fired_charge_is_dated_when_it_fired_not_when_its_pulse_ended() -> None:
+    """The fired bit rises as the 200 ms firing pulse ends, not as the charge fires.
+
+    The flight computer sets it when the channel reaches Done. Here the sample
+    flight's charge is fired by pyro 2 as the flight computer would log it: the
+    fire pin 30 ms before the charge's peak, and the bit 200 ms after that. Pyro
+    1 fires the main later. The ejection is pyro 2's fire: not its bit, 0.2 s
+    late, and not the accelerometer's peak. The card names pyro 2, where it used
+    to name the lowest-numbered channel that fired.
+    """
+    from flight_report import events
+    from flight_report.flight import Flight
+    from flight_report.modules import deployment
+    from flight_report.summary import compute_summary
+
+    whole = Flight.from_bin(SAMPLE_BIN)
+    whole.load()
+    peak = events.measured(whole)["ejection"]
+
+    flight = Flight.from_bin(SAMPLE_BIN)
+    flight.load()
+    rise2 = _fire(flight, 2, peak - 0.030 + 0.2)
+    rise1 = _fire(flight, 1, 40.0)
+
+    ev = events.measured(flight)
+    assert ev["ejection"] == pytest.approx(rise2 - 0.2)
+    assert ev["ejection"] < peak < rise2
+    assert events.ejection_channel(flight) == 2
+
+    coast = {c["label"]: c for c in compute_summary(flight)}["Coast time"]
+    assert coast["hint"] == "burnout to pyro 2 firing"
+    assert coast["q"].value == pytest.approx(ev["ejection"] - ev["burnout"])
+
+    metrics = deployment.analyze(flight).metrics
+    assert metrics["Pyro 2"].startswith(f"fired at {rise2 - 0.2:.2f} s")
+    assert metrics["Pyro 1"].startswith(f"fired at {rise1 - 0.2:.2f} s")
+
+
 def test_apogee_turnover_stays_zoomed_in(report_html: Path) -> None:
     """Recovery events belong on their own chart, not on the turnover's axis.
 
