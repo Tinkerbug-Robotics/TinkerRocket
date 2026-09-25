@@ -854,6 +854,98 @@ def test_a_burnout_in_a_logging_gap_is_blank_and_says_where() -> None:
     assert vibration.analyze(flight).error is None
 
 
+# ---------------------------------------------------------------------------
+# The ejection charge
+#
+# A motor ejection logs nothing, so the charge is found in the accelerometer as
+# the first transient after the burn that clears both bars. It used to be the
+# largest, and what follows a charge can hit harder than the charge did: a jolt
+# half a second later, or the ground itself when the landed flag trails
+# touchdown by 4-6 s. The largest was something other than the charge on nine
+# flights of 24.
+# ---------------------------------------------------------------------------
+
+
+def test_the_ejection_is_the_first_transient_not_the_largest() -> None:
+    """A harder jolt after the charge is not the charge, nor is a fast coast's drag.
+
+    The 2026-08-29 54 mm Rolly Polly took 211 g half a second after a 43 g
+    charge. The charge is dated at the peak of its own transient, not where it
+    first cleared the bars. The window's first sample has no coast before it to
+    be judged against, so the drag at the start of a fast coast is not taken
+    for the charge.
+    """
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from flight_report import events
+
+    no_pyro = SimpleNamespace(records={}, t0_us=0)
+    # 1 kHz from burnout at 2.000 s: a 0.3 g coast, and a charge that climbs to
+    # 30 g at 8.010 s and is back down by 8.020 s. It clears both bars at 8.002 s.
+    t = np.round(2.0 + np.arange(18000) * 1e-3, 6)
+    g = np.full(t.size, 0.3)
+    charge = (t >= 8.0) & (t <= 8.02)
+    g[charge] = 0.3 + 29.7 * (1.0 - np.abs(t[charge] - 8.01) / 0.01)
+    assert abs(events.ejection(no_pyro, t, g, 2.0, None) - 8.010) < 1e-6
+
+    # Half a second later, 100 g.
+    jolt = g.copy()
+    jolt[(t >= 8.5) & (t <= 8.505)] = 100.0
+    assert abs(events.ejection(no_pyro, t, jolt, 2.0, None) - 8.010) < 1e-6
+
+    # 7 g of drag at burnout, gone by 3.0 s. The window opens at 2.2 s, and its
+    # first sample reads 5.7 g, over 8 times the whole window's 0.3 g median.
+    drag = g.copy()
+    early = t < 3.0
+    drag[early] = 7.0 - 6.7 * (t[early] - 2.0)
+    assert abs(events.ejection(no_pyro, t, drag, 2.0, None) - 8.010) < 1e-6
+
+    # Nothing that clears both bars, no ejection.
+    assert events.ejection(no_pyro, t, np.full(t.size, 0.3), 2.0, None) is None
+
+
+def test_a_late_landed_flag_does_not_make_the_touchdown_the_ejection() -> None:
+    """The sample flight with no landed flag, so the search runs to the end of the log.
+
+    The flag closes the search a second before touchdown, but on five flights it
+    came 4-6 s after touchdown, and the landing was taken for the charge:
+    21.45 s against a charge at 6.90 s on 2026-03-14 F67. Here the log holds a
+    77 G landing, twice the charge. The charge, the coast time counted to it and
+    the tilt taken at it all stay where they were.
+    """
+    import numpy as np
+
+    from flight_report import events
+    from flight_report.flight import Flight
+    from flight_report.modules import stability
+    from flight_report.summary import compute_summary
+
+    whole = Flight.from_bin(SAMPLE_BIN)
+    whole.load()
+    before = events.measured(whole)
+    coast_before = {c["label"]: c for c in compute_summary(whole)}["Coast time"]
+    tilt_before = stability.analyze(whole).metrics["Tilt at ejection"]
+
+    flight = Flight.from_bin(SAMPLE_BIN)
+    flight.load()
+    for r in flight.records["NonSensor"]:
+        r["alt_landed"] = False
+    ev = events.measured(flight)
+    assert ev["landed"] is None
+
+    # The landing is inside the search now, and it is the harder hit.
+    t, g, _ax = events._accel_series(flight)
+    at_charge = float(g[np.argmin(np.abs(t - before["ejection"]))])
+    assert float(np.max(g[t > before["ejection"] + 1.0])) > 1.5 * at_charge
+
+    assert ev["ejection"] == before["ejection"], "the landing was taken for the charge"
+    coast = {c["label"]: c for c in compute_summary(flight)}["Coast time"]
+    assert coast["q"].value == coast_before["q"].value
+    assert stability.analyze(flight).metrics["Tilt at ejection"].value == tilt_before.value
+
+
 def test_apogee_turnover_stays_zoomed_in(report_html: Path) -> None:
     """Recovery events belong on their own chart, not on the turnover's axis.
 

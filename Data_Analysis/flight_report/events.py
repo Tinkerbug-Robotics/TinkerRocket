@@ -95,8 +95,15 @@ _SNAPSHOTS_READ = 5
 # its own noise promoted to an event.
 _EJECT_MIN_G = 4.0
 _EJECT_MIN_RATIO = 8.0
+# The charge is dated at the peak of its own transient: the largest sample this
+# soon after the first one over both bars. That peak comes 0-27 ms after it on
+# every flight in the archive, and nothing larger follows for 164 ms, so any
+# span from 30 to 160 ms dates every one of them the same.
+_EJECT_PEAK_S = 0.05
 # The charge cannot fire into the burn, and the touchdown impact is not an
-# ejection.
+# ejection. The landed flag that bounds the far end can trail touchdown by 4-6 s,
+# though, so this bound alone does not keep the landing out; taking the first
+# transient rather than the largest does.
 _EJECT_AFTER_BURNOUT_S = 0.2
 _EJECT_BEFORE_LANDING_S = 1.0
 
@@ -303,8 +310,8 @@ def true_burnout(flight, t, g, ax) -> Optional[float]:
     the drag on a slow coast.
 
     Walking forward from the burn rather than back from its peak, because the
-    largest acceleration in the flight is usually the ejection charge, not the
-    motor — 38 g against 9 g on the sample flight.
+    largest accelerations in a flight are the ejection charge and the landing,
+    not the motor — 38 g and 77 g against 9 g on the sample flight.
 
     Walking from the first unambiguous thrust sample, not from first motion,
     because the end of a burn can be in the log when its start is not:
@@ -326,9 +333,21 @@ def ejection(flight, t, g, burnout: Optional[float], landed: Optional[float]) ->
     """When the recovery system was deployed.
 
     A fired pyro channel records its own time, so that is used when there is
-    one. Otherwise the vehicle recovers on motor ejection, which logs nothing —
-    but the charge is the most violent thing that happens between burnout and
-    touchdown, so it is found as the dominant transient in that span.
+    one. Otherwise the vehicle recovers on motor ejection, which logs nothing,
+    and the charge is found in the accelerometer: the first transient between
+    burnout and touchdown that clears both bars.
+
+    The first, not the largest. What follows a charge can hit the airframe
+    harder than the charge did: 211 g half a second after a 43 g charge on the
+    2026-08-29 54 mm Rolly Polly, 63 g three seconds after a 33 g one on the
+    2026-05-09 67 mm GTV, and 47-53 g twice, 12-17 m up on the way down, after a
+    46 g one on the 2026-03-14 F67. The ground hits hardest of all, and the
+    landed flag that closes the search can trail touchdown by 4-6 s: on five
+    flights the landing was the largest transient left inside it. Taken as the
+    largest, the ejection was something other than the charge on nine flights
+    of 24. Taken first, it lands within 22 ms of the pressure pulse the charge
+    puts on the barometer on all 23 flights that show one, and within 9 ms of
+    the flight computer's own deployment flag on the three that carry it.
     """
     recs = flight.records
     ns = _flags(recs)
@@ -346,17 +365,20 @@ def ejection(flight, t, g, burnout: Optional[float], landed: Optional[float]) ->
         return None
 
     tw, gw = t[window], g[window]
-    i = int(np.argmax(gw))
-    peak = float(gw[i])
-    if peak < _EJECT_MIN_G:
-        return None
-    # Background is the coast before the peak, which is the quiet part; taking it
-    # after would include the canopy ringing the charge itself caused.
-    before = gw[:i]
-    background = float(np.median(before)) if before.size else float(np.median(gw))
-    if peak < _EJECT_MIN_RATIO * max(background, 0.05):
-        return None
-    return float(tw[i])
+    # Each sample over the floor is judged against the coast before it, which is
+    # the quiet part; a background taken after would include the canopy ringing
+    # the charge itself caused. The window's first sample has no coast before it,
+    # so it is not judged at all. Against the whole window's median instead, the
+    # drag at the start of a fast coast, over 4 g, could pass for the charge.
+    for i in np.flatnonzero(gw >= _EJECT_MIN_G):
+        i = int(i)
+        if i == 0:
+            continue
+        background = float(np.median(gw[:i]))
+        if gw[i] >= _EJECT_MIN_RATIO * max(background, 0.05):
+            transient = np.flatnonzero((tw >= tw[i]) & (tw <= tw[i] + _EJECT_PEAK_S))
+            return float(tw[transient[int(np.argmax(gw[transient]))]])
+    return None
 
 
 def gnss_vertical_zero(t, vu) -> Optional[float]:
