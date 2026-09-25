@@ -744,6 +744,116 @@ def test_the_burnout_flag_is_one_hold_after_measured_burnout() -> None:
         assert 0.045 < lag < 0.060, (path.name, lag)
 
 
+# ---------------------------------------------------------------------------
+# Burnout inside a hole in the log
+#
+# Measured burnout is interpolated between the last sample under thrust and the
+# first one coasting, and across a hole that is only where a straight line
+# happens to cut zero. 2026-03-14 224121 lost 990 ms with the motor still at
+# 8 g, and the line put burnout 96 per cent of the way across. The bar is first
+# motion's: 10 ms, the card's resolution.
+# ---------------------------------------------------------------------------
+
+
+def test_burnout_is_not_interpolated_across_a_hole() -> None:
+    """The body-X crossing is only interpolated across a step of 10 ms or less.
+
+    Only the step the crossing sits in is tested. A hole earlier in the burn,
+    with body X positive on both sides, cannot end it; a hole inside the 50 ms
+    hold, with body X negative on both sides, does not undo it.
+    """
+    from flight_report import events
+
+    # Body X steps from 6 g to -0.3 g at 2.000 s. 1.995 s -> 2.004 s: 9 ms
+    # across the crossing, still a measurement.
+    flight, t, g, ax = _ramp_flight((1.9955, 2.0035))
+    burnout, hole = events._burnout(flight, t, g, ax)
+    assert hole is None
+    assert 1.995 < burnout < 2.004, burnout
+
+    # 1.995 s -> 2.006 s: 11 ms, a hole. Blank, and the hole is named.
+    flight, t, g, ax = _ramp_flight((1.9955, 2.0055))
+    assert events.true_burnout(flight, t, g, ax) is None
+    assert events._burnout(flight, t, g, ax)[1] == (1.995, 2.006)
+
+    # A hole in the burn, and a hole in the hold, leave the crossing alone.
+    for drop in ((1.5, 1.9), (2.010, 2.100)):
+        flight, t, g, ax = _ramp_flight(drop)
+        assert abs(events.true_burnout(flight, t, g, ax) - 2.0) < 2e-3, drop
+
+
+def _cut(flight, lo: float, hi: float) -> None:
+    """Drop every record, in every stream, from `lo` to `hi` seconds since t0."""
+    for name, recs in flight.records.items():
+        if recs and "time_us" in recs[0]:
+            flight.records[name] = [r for r in recs
+                                    if not lo < (r["time_us"] - flight.t0_us) / 1e6 < hi]
+
+
+def test_a_burnout_in_a_logging_gap_is_blank_and_says_where() -> None:
+    """The sample flight, with a second cut out of every stream around burnout.
+
+    No log small enough for the repo lost its burnout, so this cuts one the way
+    2026-03-14 224121 lost it: every stream, from under thrust to coasting. Burn
+    time and coast time go blank and the card says why. Max acceleration keeps
+    the burn before the hole, the motor section refuses, stability leaves out
+    both figures taken at burnout, the vibration windows stop at the hole's
+    edges, and the ejection is still found after it.
+    """
+    from flight_report.events import burnout_gap, launch_gap, measured
+    from flight_report.flight import Flight
+    from flight_report.modules import motor, stability, vibration
+    from flight_report.registry import LEVEL_FLIGHT
+    from flight_report.render import render_report
+    from flight_report.summary import card_note, compute_summary
+
+    whole = Flight.from_bin(SAMPLE_BIN)
+    whole.load()
+    before = measured(whole)
+    peak_before = {c["label"]: c for c in compute_summary(whole)}["Max acceleration"]
+
+    flight = Flight.from_bin(SAMPLE_BIN)
+    flight.load()
+    _cut(flight, before["burnout"] - 0.5, before["burnout"] + 0.5)
+    ev = measured(flight)
+    hole = burnout_gap(flight)
+
+    assert ev["burnout"] is None, "burnout was interpolated across the gap again"
+    assert launch_gap(flight) is None
+    assert hole is not None and hole[0] < before["burnout"] < hole[1], hole
+    for key in ("launch", "apogee", "ejection", "landed"):
+        assert ev[key] == before[key], key
+
+    cells = {c["label"]: c for c in compute_summary(flight)}
+    for label in ("Burn time", "Coast time"):
+        assert label not in cells, f"{label} was measured from a guess"
+    assert "Time to apogee" in cells and "Flight time" in cells
+    # The sample flight peaks at 9.5 G early in the burn, well before the hole.
+    peak = cells["Max acceleration"]
+    assert peak["q"].value == peak_before["q"].value
+    assert "under thrust, before the gap" in str(peak["hint"])
+
+    note = card_note(flight)
+    assert note == ("Burnout fell in a 1001 ms gap in the log (1.36–2.36 s), "
+                    "so burn time and coast time are not shown."), note
+    assert note in render_report(flight, [], level=LEVEL_FLIGHT)
+
+    refused = motor.analyze(flight)
+    assert refused.error is None and not refused.metrics
+    assert refused.warnings and refused.warnings[0].startswith(
+        "Burnout fell in a 1001 ms gap in the log"), refused.warnings
+
+    tilt = stability.analyze(flight)
+    assert tilt.error is None
+    assert "Tilt at burnout" not in tilt.metrics and "Max tilt under thrust" not in tilt.metrics
+
+    windows = {name: (lo, hi, how) for name, lo, hi, how in vibration.phases(flight, 0.0, 80.0)}
+    assert windows["Boost"][1:] == (hole[0], "first motion to the gap in the log")
+    assert windows["Coast"][0] == hole[1]
+    assert windows["Coast"][2] == "the gap in the log to apogee"
+    assert vibration.analyze(flight).error is None
+
+
 def test_apogee_turnover_stays_zoomed_in(report_html: Path) -> None:
     """Recovery events belong on their own chart, not on the turnover's axis.
 

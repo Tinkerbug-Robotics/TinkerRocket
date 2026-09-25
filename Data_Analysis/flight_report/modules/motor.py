@@ -146,6 +146,20 @@ def analyze(flight: Flight) -> AnalysisResult:
             "motor cannot be characterised."
         )
         return result
+    # The motor burned out inside a hole in the log. The log holds the burn only
+    # up to the hole, and the window the numbers would be taken over ends at a
+    # guess: on 2026-03-14 224121 the log breaks off 0.69 s in with the motor
+    # still at 8 g and comes back coasting a second later, so the section once
+    # printed a 1.64 s burn beside an impulse integrated over its first 0.69 s.
+    burnout_hole = ev.burnout_gap(flight)
+    if burnout_hole is not None:
+        result.warnings.append(
+            f"Burnout fell in a {1e3 * (burnout_hole[1] - burnout_hole[0]):.0f} ms gap in the log "
+            f"({burnout_hole[0]:.2f}–{burnout_hole[1]:.2f} s). The end of the burn, and the impulse "
+            "the motor delivered inside the gap, are not in the record, so the motor cannot be "
+            "characterised."
+        )
+        return result
     if launch is None or burnout is None or burnout <= launch:
         result.warnings.append(
             "Launch and burnout were not both measurable from the acceleration "

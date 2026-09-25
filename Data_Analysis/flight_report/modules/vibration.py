@@ -43,7 +43,7 @@ if str(_PARENT) not in sys.path:
 from plot_flight_data_mini import get_array, quat_to_matrix  # noqa: E402
 
 from ..charts import COLORS, chart, trace
-from ..events import markers, measured
+from ..events import burnout_gap, markers, measured
 from ..flight import Flight
 from ..registry import AnalysisResult
 from ..units import q
@@ -279,10 +279,17 @@ def phases(flight: Flight, t_first: float, t_last: float) -> list[tuple[str, flo
     pad_lo, pad_hi = max(t_first, launch - _PAD_BEFORE_S), launch - _PAD_GUARD_S
     if pad_hi - pad_lo >= 0.3:
         out.append(("Pad", pad_lo, pad_hi, f"the 1.5 s before {start}"))
+    burnout_hole = burnout_gap(flight)
     if ev["burnout"] is not None:
         out.append(("Boost", launch, ev["burnout"], f"{start} to thrust ending"))
         if ev["apogee"] is not None and ev["apogee"] > ev["burnout"]:
             out.append(("Coast", ev["burnout"], ev["apogee"], "burnout to apogee"))
+    elif burnout_hole is not None:
+        # Burnout fell in a hole in the log. Each window stops at the hole's
+        # edge rather than at a burnout the log does not hold, and says so.
+        out.append(("Boost", launch, burnout_hole[0], f"{start} to the gap in the log"))
+        if ev["apogee"] is not None and ev["apogee"] > burnout_hole[1]:
+            out.append(("Coast", burnout_hole[1], ev["apogee"], "the gap in the log to apogee"))
     elif ev["apogee"] is not None:
         out.append(("Boost", launch, ev["apogee"], f"{start} to apogee (no burnout found)"))
     else:
@@ -541,7 +548,13 @@ def analyze(flight: Flight) -> AnalysisResult:
     launch = markers(flight).get("launch")
     if launch is not None:
         lo = max(t_first, launch - 0.5)
-        end = ev["burnout"] if ev["burnout"] is not None else (ev["apogee"] if ev["apogee"] is not None else t_last)
+        burnout_hole = burnout_gap(flight)
+        if ev["burnout"] is not None:
+            end = ev["burnout"]
+        elif burnout_hole is not None:
+            end = burnout_hole[1]
+        else:
+            end = ev["apogee"] if ev["apogee"] is not None else t_last
         hi = min(t_last, end + 0.5)
     else:
         lo, hi = t_first, t_last

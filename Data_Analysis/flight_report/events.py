@@ -24,9 +24,10 @@ is down, so `landed` is the declaration.
 
 Everything returned is seconds since `flight.t0_us`, or None when the flight
 does not contain the event. None is normal — a bench log has no launch — and
-callers must render a blank rather than a guess. A launch the log lost is None
-too: a motor can light inside a hole in the record, and launch_gap() says where
-the hole was so the blank can carry its reason.
+callers must render a blank rather than a guess. A launch or a burnout the log
+lost is None too: a motor can light, or burn out, inside a hole in the record,
+and launch_gap() and burnout_gap() say where the hole was so the blank can carry
+its reason.
 """
 
 from __future__ import annotations
@@ -74,6 +75,15 @@ _LAUNCH_SEARCH_AFTER_S = 1.0
 # its last digit. The widest step a clean walk-back crosses in the flight
 # archive is 4.2 ms; the two launches that fell in a gap sit in holes of 743
 # and 746 ms.
+#
+# Burnout is interpolated the same way, between the last sample under thrust
+# and the first one coasting, and holds to the same bar. On 2026-03-14 224121
+# the log lost 990 ms with body X still at 8.2 g and came back at -0.35 g, and
+# the line put burnout 96 per cent of the way across. The widest step a clean
+# burnout crosses is 3.1 ms. The March 2026 logs also stall for 10-20 ms at a
+# time, and some for longer, dozens to thousands of times a log. Those are
+# holes by this bar too, but only the step a crossing sits in is tested, and no
+# crossing in the archive sits in one.
 _GAP_S = 0.010
 # Snapshot frames read for the flight computer's own launch time. The median of
 # a few, because each frame's stamp and count are taken a few ms apart.
@@ -97,6 +107,7 @@ _MIN_FLIGHT_ALT_M = 20.0
 
 _CACHE_KEY = "_measured_events"
 _GAP_CACHE_KEY = "_launch_gap"
+_BURNOUT_GAP_CACHE_KEY = "_burnout_gap"
 
 
 def _flags(recs) -> list:
@@ -237,6 +248,31 @@ def true_launch(flight, t, g) -> Optional[float]:
     return _first_motion(flight, t, g)[0]
 
 
+def _burnout(flight, t, g, ax) -> tuple[Optional[float], Optional[tuple[float, float]]]:
+    """(burnout, the hole it fell in). At most one of the two is set."""
+    if ax is None:
+        return None, None
+    i0 = _first_thrust(flight, t, g)
+    if i0 is None:
+        return None, None
+    idx = np.flatnonzero((t > t[i0]) & (ax < _COAST_AXIAL_G))
+    for i in idx:
+        i = int(i)
+        if i == 0:
+            continue
+        held = (t >= t[i]) & (t <= t[i] + _COAST_HOLD_S)
+        if held.any() and float(np.max(ax[held])) < _COAST_AXIAL_G:
+            # Body X turned negative inside a hole in the log. Only this step
+            # matters, as for first motion. A hole inside the hold is not
+            # tested: the crossing before it is still a measurement, and on the
+            # two logs that have one (50 ms on 224121, 71 ms on 2026-05-03
+            # RolyPoly flight_recovered_4) body X is negative on both sides.
+            if t[i] - t[i - 1] > _GAP_S:
+                return None, (float(t[i - 1]), float(t[i]))
+            return _cross(t, ax, i, _COAST_AXIAL_G), None
+    return None, None
+
+
 def true_burnout(flight, t, g, ax) -> Optional[float]:
     """Thrust ends: the specific force along the body's long axis turns negative
     and stays there.
@@ -276,21 +312,14 @@ def true_burnout(flight, t, g, ax) -> Optional[float]:
     after the log came back. Nothing between the two can end a burn — that
     stretch is the thrust building to 2 g — so where both are known the answer
     is the same.
+
+    None when the log cannot say: body X turned negative inside a hole in the
+    log (see burnout_gap). 2026-03-14 224121 lost 990 ms with the motor still
+    at 8 g and came back coasting, so the burn ended somewhere in that second,
+    and a crossing drawn across it is only where a straight line happens to
+    cut zero.
     """
-    if ax is None:
-        return None
-    i0 = _first_thrust(flight, t, g)
-    if i0 is None:
-        return None
-    idx = np.flatnonzero((t > t[i0]) & (ax < _COAST_AXIAL_G))
-    for i in idx:
-        i = int(i)
-        if i == 0:
-            continue
-        held = (t >= t[i]) & (t <= t[i] + _COAST_HOLD_S)
-        if held.any() and float(np.max(ax[held])) < _COAST_AXIAL_G:
-            return _cross(t, ax, i, _COAST_AXIAL_G)
-    return None
+    return _burnout(flight, t, g, ax)[0]
 
 
 def ejection(flight, t, g, burnout: Optional[float], landed: Optional[float]) -> Optional[float]:
@@ -407,8 +436,8 @@ def measured(flight) -> dict[str, Optional[float]]:
 
     Keys: launch, burnout, apogee, ejection, landed. A value of None means the
     flight does not contain that event — render nothing rather than a guess.
-    Launch is also None when first motion fell in a hole in the log; launch_gap()
-    says where.
+    Launch and burnout are also None when they fell in a hole in the log;
+    launch_gap() and burnout_gap() say where.
     """
     cached = flight.__dict__.get(_CACHE_KEY)
     if cached is not None:
@@ -425,11 +454,15 @@ def measured(flight) -> dict[str, Optional[float]]:
     t, g, ax = _accel_series(flight)
     out["landed"] = _flag_time(flight.records, flight.t0_us, "alt_landed")
     out["launch"], gap = _first_motion(flight, t, g)
-    out["burnout"] = true_burnout(flight, t, g, ax)
-    out["ejection"] = ejection(flight, t, g, out["burnout"], out["landed"])
+    out["burnout"], burnout_hole = _burnout(flight, t, g, ax)
+    # A burn that ended inside a hole was over by the time the log came back, so
+    # the charge is looked for from there.
+    coasting = out["burnout"] if burnout_hole is None else burnout_hole[1]
+    out["ejection"] = ejection(flight, t, g, coasting, out["landed"])
     out["apogee"] = true_apogee(flight, out["launch"])
 
     flight.__dict__[_GAP_CACHE_KEY] = gap
+    flight.__dict__[_BURNOUT_GAP_CACHE_KEY] = burnout_hole
     flight.__dict__[_CACHE_KEY] = out
     return out
 
@@ -444,6 +477,18 @@ def launch_gap(flight) -> Optional[tuple[float, float]]:
     """
     measured(flight)
     return flight.__dict__.get(_GAP_CACHE_KEY)
+
+
+def burnout_gap(flight) -> Optional[tuple[float, float]]:
+    """The hole in the log that burnout fell in, or None if there was none.
+
+    (last sample under thrust, first sample coasting), in seconds since t0. When
+    it is set, measured() has no burnout, and burn time and coast time are
+    blank. Sections that bound a window by burnout stop it at the hole's edge
+    instead.
+    """
+    measured(flight)
+    return flight.__dict__.get(_BURNOUT_GAP_CACHE_KEY)
 
 
 def markers(flight) -> dict[str, Optional[float]]:
