@@ -104,12 +104,15 @@ unplaced).
 gives ~1.2–1.7 s @0.7 A — enough to ride any firing event, which is the hold-up's
 job on this board. Sheet note and bom updated; netlist/ERC verified.
 
-**2026-09-25 — the V10 (Tinker-Mantis) moved to a 3 F cell; the mini keeps the
+**2026-09-25 — the V10 (Tinker-Mantis) moved to a 2 F cell; the mini keeps the
 5 F (owner call).** The Mantis stands its `C130`, and a shorter can was wanted
-there: 3.0 F, 2.7 V, 8 × 16 mm on a 3.5 mm pitch, 195 mΩ DC, up to 17.5 mm tall
-against the 5 F cell's 22.3 mm. No 5 F cell comes in a shorter can. The 0.7 A
-used for the V10 above was never itemized: GNSS and LoRa are on `VBATT`, and
-the Mantis's `+3V3` carries about 0.15–0.35 A, where 3 F holds 4.4–15 s. Same
+there: 2.0 F, 2.7 V, 8 × 12 mm on a 3.5 mm pitch, 280 mΩ DC, up to 13.5 mm tall
+against the 5 F cell's 22.3 mm (a 3 F, 8 × 16 mm cell came first, #1516). No 5 F
+cell comes in a shorter can. The 0.7 A used for the V10 above was never
+itemized: GNSS and LoRa are on `VBATT`, and the Mantis's `+3V3` carries about
+0.15–0.35 A, where 2 F holds 2.7–9.6 s. The owner sized it for a rattled
+connector (under 0.27 s, when the eFuse stays on) and firing sags, which never
+reach the cap; it also rides the 4.3 s eFuse restart up to about 0.25 A. Same
 VCHG, ICHG and OSEL. Numbers in
 [`../tinker-mantis/v10-power-parity-2026-09-11.md`](../tinker-mantis/v10-power-parity-2026-09-11.md) §3.3.
 
