@@ -29,7 +29,7 @@ if str(_PARENT) not in sys.path:
 from plot_flight_data_mini import get_array, pressure_to_altitude  # noqa: E402
 
 from ..charts import COLORS, chart, trace
-from ..events import markers
+from ..events import markers, pyro_fires
 from ..flight import Flight
 from ..maps import track_map
 from ..registry import AnalysisResult
@@ -100,12 +100,17 @@ def _pyro_config(sidecar) -> dict[int, bool]:
     return enabled
 
 
-def _pyro_report(ns, t0_us, apogee_s, sidecar, result) -> dict[str, str]:
+def _pyro_report(ns, fires, apogee_s, sidecar, result) -> dict[str, str]:
     """Per-channel fire time and continuity, with warnings for real faults.
 
     Only an *enabled* channel that failed to fire is a fault. Disabled channels
     mean the vehicle recovers on motor ejection, which is the normal case for
     smaller rockets — warning about it would train people to ignore warnings.
+
+    `fires` is events.pyro_fires(): each channel's charge dated when it was
+    fired, not when the log's fired bit rose at the end of the 0.2 s firing
+    pulse. The card's coast time ends at the same instant when a pyro was the
+    ejection, so the two cannot disagree by the pulse.
     """
     out: dict[str, str] = {}
     if not ns:
@@ -118,11 +123,7 @@ def _pyro_report(ns, t0_us, apogee_s, sidecar, result) -> dict[str, str]:
         if fired_key not in ns[0]:
             continue
 
-        fire_t = None
-        for r in ns:
-            if r.get(fired_key):
-                fire_t = (r["time_us"] - t0_us) / 1e6
-                break
+        fire_t = fires.get(ch)
         had_continuity = any(bool(r.get(cont_key)) for r in ns)
         is_on = enabled.get(ch)
 
@@ -208,7 +209,7 @@ def analyze(flight: Flight) -> AnalysisResult:
             )
 
     # --- 2. What did the pyro channels do? ----------------------------------
-    metrics.update(_pyro_report(ns, t0, ev["apogee"], flight.sidecar, result))
+    metrics.update(_pyro_report(ns, pyro_fires(flight), ev["apogee"], flight.sidecar, result))
 
     # --- 3. How did it come down? -------------------------------------------
     if t is not None and ev["apogee"] is not None and ev["landed"] is not None:
