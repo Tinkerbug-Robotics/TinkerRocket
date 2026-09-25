@@ -9,7 +9,10 @@
 //   flight_computer/main/config.h — the shipped config::DEPLOY_* tunables.
 //                           The FC's config.h has no ESP-IDF dependency (pins
 //                           live in board/board_v*.h, which is plain constants
-//                           over <stdint.h>), so it compiles host-side as-is.
+//                           over <stdint.h>), so it compiles host-side given
+//                           the board flag it insists on (#808). Nothing read
+//                           here differs by board, so the driver passes V9's
+//                           flag — see _BOARD_DEFINES there.
 //
 // So a replay can never disagree with the vehicle because someone edited a
 // threshold and forgot the analysis tool: the driver rebuilds this shim
