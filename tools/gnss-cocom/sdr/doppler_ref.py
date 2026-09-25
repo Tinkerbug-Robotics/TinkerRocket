@@ -8,7 +8,7 @@ cause instead.
 
 Doppler comes from UBX-RXM-RAWX (0x02 0x15), which reports the receiver's own
 per-satellite Doppler in Hz. Only the NEO-M8T capture logged RXM, but that is
-enough for all four receivers: every spaceshot run replayed a byte-identical
+enough for all five receivers: every spaceshot run replayed a byte-identical
 scenario file -- same ephemeris, same start time, same trajectory -- so the
 Doppler a given satellite presents at a given moment is a property of the
 injected signal, not of the receiver listening to it. `--verify` re-checks that
@@ -37,7 +37,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SCENARIOS = ("spaceshot", "gentle_alt")
 RXM_RAWX = b"\x02\x15"
-PEERS = ["zed_f9p", "quescan_m10", "beitian_bn182"]
+PEERS = ["zed_f9p", "quescan_m10", "beitian_bn182", "ublox_m10"]
 MIN_IN_BURN = 5
 
 

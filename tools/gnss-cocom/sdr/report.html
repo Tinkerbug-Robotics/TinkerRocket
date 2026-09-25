@@ -334,6 +334,7 @@
         <caption>Measured gates, by receiver</caption>
   <thead><tr>
     <th>Receiver</th>
+    <th>Update rate</th>
     <th>Velocity gate</th>
     <th>Altitude gate</th>
     <th>Limits combined</th>
@@ -342,6 +343,7 @@
   <tbody>
     <tr>
       <td class="part">SkyTraq PX1125R</td>
+      <td>1 Hz</td>
       <td>515 m/s</td>
       <td>80 km</td>
       <td>independent</td>
@@ -349,6 +351,7 @@
     </tr>
     <tr>
       <td class="part">u-blox SAM-M10Q</td>
+      <td>18 Hz</td>
       <td>515 m/s</td>
       <td>80 km</td>
       <td>independent</td>
@@ -356,6 +359,7 @@
     </tr>
     <tr>
       <td class="part">u-blox ZED-F9P (ArduSimple)</td>
+      <td>1 Hz</td>
       <td>515 m/s</td>
       <td>80 km</td>
       <td>independent</td>
@@ -363,6 +367,7 @@
     </tr>
     <tr>
       <td class="part">Air530 (AT6558R)</td>
+      <td>1 Hz</td>
       <td>none to 900 m/s</td>
       <td>10 km</td>
       <td>n/a -- no velocity gate</td>
@@ -370,6 +375,7 @@
     </tr>
     <tr>
       <td class="part">u-blox NEO-M8T</td>
+      <td>1 Hz</td>
       <td>515 m/s</td>
       <td>50 km</td>
       <td>independent</td>
@@ -377,6 +383,7 @@
     </tr>
     <tr>
       <td class="part">Quescan M10</td>
+      <td>1 Hz</td>
       <td>515 m/s</td>
       <td>80 km</td>
       <td>independent</td>
@@ -384,6 +391,7 @@
     </tr>
     <tr>
       <td class="part">Beitian BN-182</td>
+      <td>1 Hz</td>
       <td>505 m/s</td>
       <td>80 km</td>
       <td>independent</td>
@@ -391,6 +399,7 @@
     </tr>
     <tr>
       <td class="part">Quectel LC86G, Balloon mode</td>
+      <td>10 Hz</td>
       <td>500 m/s</td>
       <td>81 km</td>
       <td>independent</td>
@@ -578,7 +587,9 @@
           </tbody>
         </table>
       </div>
-      <p><strong>Why two.</strong> At a 1&nbsp;Hz navigation rate a 15&nbsp;g boost
+      <p><strong>Why two.</strong> Six of the eight parts ran at 1&nbsp;Hz, and the
+        SAM-M10Q, though it ran at 18&nbsp;Hz, was logged once a second; only the
+        LC86G's 10&nbsp;Hz reached the analysis. At 1&nbsp;Hz a 15&nbsp;g boost
         covers 118&nbsp;m/s between one epoch and the next, so a fast flight can
         only ever bracket the velocity gate coarsely no matter how carefully it is
         flown. The 3&nbsp;g ascent crosses the same threshold slowly enough to pin

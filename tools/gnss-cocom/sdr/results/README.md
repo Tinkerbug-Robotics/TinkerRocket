@@ -268,16 +268,16 @@ plus the archived figures in `results/figures/`, and so is its companion on boos
 dynamics, `boost_report.html`. Edit the data and regenerate --
 neither table nor report should be hand-edited.
 
-| Receiver | Path | Velocity gate | Altitude gate | Limits combined | Re-open latency |
-|---|---|---|---|---|---|
-| SkyTraq PX1125R | conducted | 515 m/s | 80 km | independent | 0.0-1.5 s |
-| u-blox SAM-M10Q | radiated, Faraday cage | 515 m/s | 80 km | independent | 0.0-1.1 s |
-| u-blox ZED-F9P (ArduSimple) | conducted | 515 m/s | 80 km † | independent | 0.1-1.0 s |
-| Air530 (AT6558R) | conducted | none to 900 m/s | 10 km ‡ | n/a -- no velocity gate | n/a |
-| u-blox NEO-M8T | conducted | 515 m/s | 50 km § | independent | 0.9-3.1 s |
-| Quescan M10 | radiated, Faraday cage | 515 m/s | 80 km † | independent | 0.1-5.0 s |
-| Beitian BN-182 | radiated, Faraday cage | 505 m/s ¶ | 80 km † | independent | 0.5-11.3 s |
-| Quectel LC86G, Balloon mode | radiated, Faraday cage | 500 m/s ‖ | 81 km ‖ | independent | 0.0-0.6 s |
+| Receiver | Path | Update rate | Velocity gate | Altitude gate | Limits combined | Re-open latency |
+|---|---|---|---|---|---|---|
+| SkyTraq PX1125R | conducted | 1 Hz | 515 m/s | 80 km | independent | 0.0-1.5 s |
+| u-blox SAM-M10Q | radiated, Faraday cage | 18 Hz | 515 m/s | 80 km | independent | 0.0-1.1 s |
+| u-blox ZED-F9P (ArduSimple) | conducted | 1 Hz | 515 m/s | 80 km † | independent | 0.1-1.0 s |
+| Air530 (AT6558R) | conducted | 1 Hz | none to 900 m/s | 10 km ‡ | n/a -- no velocity gate | n/a |
+| u-blox NEO-M8T | conducted | 1 Hz | 515 m/s | 50 km § | independent | 0.9-3.1 s |
+| Quescan M10 | radiated, Faraday cage | 1 Hz | 515 m/s | 80 km † | independent | 0.1-5.0 s |
+| Beitian BN-182 | radiated, Faraday cage | 1 Hz | 505 m/s ¶ | 80 km † | independent | 0.5-11.3 s |
+| Quectel LC86G, Balloon mode | radiated, Faraday cage | 10 Hz | 500 m/s ‖ | 81 km ‖ | independent | 0.0-0.6 s |
 
 † Slow to close: this part held a fix 2-3 s past the limit on both flights, about 400-600 m of overshoot above 80 km with position still being published. The threshold itself is normal.
 
@@ -656,13 +656,12 @@ one receiver connects at a time.
 
 ## What this rig does not test: boost dynamics
 
-**No u-blox receiver loses its POSITION during the burn on this bench; the
-Quectel LC86G does, in both navigation modes -- see its section above.
+**None of the five UBX parts loses its POSITION during the burn on this bench;
+the Quectel LC86G does, in both navigation modes -- see its section above.
 Individual satellites are a different story, and the ones a receiver loses are
-exactly the ones carrying the most Doppler.** Measured on four receivers with
-`boost_sats.py`,
-against Doppler measured from RXM-RAWX by `doppler_ref.py`; written up as
-section 06 of the report.
+exactly the ones carrying the most Doppler.** Measured on five receivers with
+`boost_sats.py`, against Doppler measured from RXM-RAWX by `doppler_ref.py`;
+written up in `boost_report.html` (GNSS Under Boost).
 
 The elevation correlation below came first and is kept because it is what the
 per-satellite data supports on its own. It is a proxy: for a near-vertical boost
@@ -678,18 +677,21 @@ burn. What the Doppler axis adds that elevation cannot:
 | NEO-M8T | **-0.91** | -0.74 | -0.84 |
 | Quescan M10 | **-0.49** | -0.32 | -0.50 |
 | Beitian BN-182 | **-0.66** | -0.49 | -0.59 |
+| SAM-M10Q | **-0.63** | -0.44 | n/a: no elevation logged |
 
-**Rate beats shift on all four**, which names the mechanism: the loop failing to
+**Rate beats shift on all five**, which names the mechanism: the loop failing to
 slew, not the carrier sitting far off nominal. Peak shift is a real control, not
 a straw man -- it runs 1.2-6.9 kHz and is near-independent of elevation because
 it is set mostly by satellite motion, so GPS:5 at 28 deg carries the largest
 shift in the sky (6915 Hz) and barely suffers.
 
-Pooling both flights on the rate axis gives a dose-response: n=100, r=-0.62,
-median -14 dB above 300 Hz/s against 0 dB below 100 Hz/s. Only the NEO-M8T logged
-RXM, but every flight replayed a byte-identical scenario file (hash-checked by
-`doppler_ref.py --verify`), so the Doppler is a property of the injected signal
-and applies to all four parts.
+Pooling both flights on the rate axis gives a dose-response: n=125, r=-0.61,
+median -13.5 dB above 300 Hz/s against 0 dB below 100 Hz/s. Only the NEO-M8T
+logged RXM, but every flight replayed a byte-identical scenario file
+(hash-checked by `doppler_ref.py --verify`), so the Doppler is a property of the
+injected signal and applies to all five parts. Without the SAM-M10Q the archive
+gives n=100, r=-0.62 and -17 dB above 300 Hz/s; the -14 dB first written here
+for those four does not reproduce.
 
 GPS:11 is the sharpest single observation. At 70 deg it presents the steepest
 rate in the set; its raw measurement is steady at -98 Hz on the pad, reads
@@ -753,13 +755,15 @@ has to be receiver-side. This is Doppler-rate stress on the tracking loops, and
 the rig does reproduce it.
 
 The ranking is consistent even where the outcome is not. GPS:11 (70 deg) and
-GPS:24 (51 deg) are the two worst-hit satellites on all four parts -- -39/-38 on
+GPS:24 (51 deg) are the two worst-hit satellites on all five parts -- -39/-38 on
 the ZED-F9P, -16/-25 on the NEO-M8T, -15/-32 on the Quescan, -12/-26 on the
-Beitian -- but only the ZED-F9P actually drops any of them.
+Beitian, -20/-35 on the SAM-M10Q -- but only the ZED-F9P actually drops any of
+them.
 
 Caveats: n=2 in the >=45 deg band, because that geometry simply does not put
-many satellites overhead; all four parts are u-blox, spanning three generations
-(M8, M10, F9) but one vendor; and the result is sensitive to how the burn window
+many satellites overhead; the four parts with elevation are two u-blox modules
+(M8, F9) and two that speak its UBX interface, with the SAM-M10Q, an M10 module,
+added on the rate axis only; and the result is sensitive to how the burn window
 and baseline are chosen -- a first pass with a slightly different window showed
 no effect at all. `boost_sats.py` fixes the windows (baseline is the 60 s of pad
 time ending 5 s before ignition, burn starts 1 s after) so the choice is at least
@@ -831,8 +835,11 @@ The existing `spaceshot` captures already point one way. That flight holds
 
 | | n | median dC/N0 | elevations |
 |---|---|---|---|
-| below 206 Hz/s | 24 | **-4 dB** | 5-20 deg |
-| at or above 206 Hz/s | 24 | **-10 dB** | 26-51 deg |
+| below 206 Hz/s | 30 | **-3.5 dB** | 5-20 deg |
+| at or above 206 Hz/s | 30 | **-7.5 dB** | 26-51 deg |
+
+(All five rate-axis parts; the four without the SAM-M10Q gave -4 and -10 dB.
+The elevations are from the four that log them.)
 
 The only thing separating those groups is where the satellite sits in the sky,
 so acceleration by itself is not the variable. Binned further, the shape looks
@@ -840,11 +847,15 @@ like a knee rather than a slope:
 
 | rate, Hz/s | n | median dC/N0 |
 |---|---|---|
-| 0-100 | 60 | +0.0 |
-| 100-206 | 16 | -3.3 |
-| 260-320 | 16 | -5.5 |
-| 320-400 | 4 | -17.0 |
-| 400-520 | 4 | -29.0 |
+| 0-100 | 75 | +0.0 |
+| 100-206 | 20 | -3.5 |
+| 260-320 | 20 | -0.2 |
+| 320-400 | 5 | -14.0 |
+| 400-520 | 5 | -32.0 |
+
+The SAM-M10Q is flat through 312 Hz/s, which is what pulls the 260-320 bin from
+-5.5 dB (the four parts without it) to -0.2: the parts differ in where they
+start to fade, not only in how much.
 
 That is consistent with no meaningful loss below the 4 g-equivalent and
 progressive degradation above it, but it does not establish it: 206-260 Hz/s is
@@ -925,9 +936,35 @@ between, and `accel_stair_hi` adding 15 g if the 13.5 g result warrants it.
   is fine: NAV-SAT keeps reporting C/N0 and elevation while the gate withholds
   position, which is what the whole per-satellite analysis relies on.
 
-## Planned: does the SAM-M10Q lose its high-elevation satellites too?
+## Answered: the SAM-M10Q loses its high-rate satellites too
 
-**Status: ready to run, needs the receiver back on the bench.**
+**Status: answered 2026-09-25 from the archived captures; no bench run was
+needed.** The plan below assumed the archive could not answer, because the
+console diagnostic logged no elevation. The measured-Doppler reference does not
+need elevation: it is keyed by satellite, and the SAM-M10Q flew the same
+byte-identical files as the NEO-M8T (`doppler_ref.py --verify` now checks five).
+Its archive is stamped with the flight computer's uptime, which the altitude fit
+in `boost_sats.py` cannot reach, so the clock comes from the receiver's own
+iTOW instead (`align_by_tow`, -1635.5 s on `spaceshot`). It ran at 18 Hz; the
+console printed once a second.
+
+13.5 g, change from the pad to the burn, by measured Doppler rate:
+
+| satellite | rate, Hz/s | dC/N0 |
+|---|---|---|
+| GPS:29 ... GPS:6 (ten satellites) | 54-312 | -5 to +8 dB (median 0) |
+| GPS:21 | 378 | -13 dB |
+| GPS:24 | 501 | **-35 dB** (40 -> 5 dBHz) |
+| GPS:11 | not measurable | -20 dB |
+
+None of the 13 was lost outright; at 2.0 g none moved (median -1 dB). **The
+prediction held**: the satellites above 45 deg lost 20-35 dB (GPS:11 a little
+under the band), everything below 30 deg stayed within a few dB, and the effect
+vanished at 2.0 g. It is also the one part where the fade starts late: flat to
+312 Hz/s, half again the 206 Hz/s its 4 g rating implies overhead.
+
+The original plan follows, kept for a part whose archive has no per-satellite
+data.
 
 The elevation-dependent loss through the burn was measured on the ZED-F9P and
 NEO-M8T, which could be tapped directly for UBX. The SAM-M10Q is the part most

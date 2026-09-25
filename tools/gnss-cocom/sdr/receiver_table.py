@@ -188,6 +188,7 @@ def rows(d, plain=False):
         out.append({
             "part": r["part"],
             "path": r["path"],
+            "rate": f"{r['rate_hz']:g} Hz" if r.get("rate_hz") else "--",
             "runs": r["runs"],
             "vel": vel_cell(r) + (" " + FOOTNOTES[vel_marker(r)][0]
                                   if vel_marker(r) and not plain else ""),
@@ -205,7 +206,7 @@ def rows(d, plain=False):
 # Bands and run counts were receiver spec, not measurement, and the "18 km gate"
 # column read "none" for every part ever tested -- a whole column restating that
 # something does not exist.
-HEADS = [("part", "Receiver"), ("path", "Path"),
+HEADS = [("part", "Receiver"), ("path", "Path"), ("rate", "Update rate"),
          ("vel", "Velocity gate"), ("alt", "Altitude gate"),
          ("comb", "Limits combined"), ("rec", "Re-open latency")]
 
