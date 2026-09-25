@@ -111,9 +111,11 @@ struct board_pins
     // low.
     //
     // Drive it LOW explicitly and EARLY — before the FC rail comes up through
-    // PWR_PIN — and leave it low until flight software has a reason to arm.
-    // This pad floats from reset until we configure it, and a floating gate
-    // on a consent transistor is not a consent decision.
+    // PWR_PIN. This pad floats from reset until we configure it, and a
+    // floating gate on a consent transistor is not a consent decision. After
+    // that it goes high for exactly two reasons: a PYRO_FIRE_TEST being served
+    // to the FC, or a real (not simulated) flight in progress. The rule is in
+    // arm_consent_policy.h. Without it the board cannot fire a channel at all.
     //
     // This is a real vote, not a formality. Do not wire it to "always high at
     // boot" for bench convenience; that silently collapses the design back to

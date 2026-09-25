@@ -1139,6 +1139,21 @@ target_include_directories(test_inflight_refusal_policy PRIVATE
 target_link_libraries(test_inflight_refusal_policy GTest::gtest_main)
 gtest_discover_tests(test_inflight_refusal_policy)
 
+# ---------- test_arm_consent_policy (#1168) ----------
+# When the OC raises OC_ARM_EN, its half of the Beetle's two-processor pyro
+# arm: a window around each staged PYRO_FIRE_TEST, and a REAL flight held
+# through a silent FC (the #1162 hold, sims excluded). Load-bearing rows: the
+# window covers the FC's next-poll + 210 ms pulse even on the last delivery,
+# and the sim's give-up tick never reads as a real flight. Pure header in the
+# OC project.
+add_executable(test_arm_consent_policy test_arm_consent_policy.cpp)
+target_include_directories(test_arm_consent_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_arm_consent_policy GTest::gtest_main)
+gtest_discover_tests(test_arm_consent_policy)
+
 # ---------- test_flush_iter_ledger (#510) ----------
 # Host-side test for the flush-task per-iteration accounting: section sums,
 # clamped unaccounted/drain-other arithmetic, and the WARN/INFO classification
