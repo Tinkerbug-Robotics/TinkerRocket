@@ -168,9 +168,16 @@ def alt_cell(r):
     return txt, key
 
 
+def in_summary(d):
+    """The receivers the summary table lists. An entry marked "summary": false
+    keeps its receiver section and plots but has no row: a second mode of a part
+    that is already listed, compared in the report's own prose instead."""
+    return [r for r in d["receivers"] if r.get("summary", True)]
+
+
 def rows(d):
     out = []
-    for r in d["receivers"]:
+    for r in in_summary(d):
         out.append({
             "part": r["part"],
             "path": r["path"],
@@ -199,7 +206,7 @@ HEADS = [("part", "Receiver"), ("path", "Path"),
 def used_footnotes(d):
     """(marker, text) for the footnotes this table actually needs, in order."""
     seen, out = set(), []
-    for r in d["receivers"]:
+    for r in in_summary(d):
         for key in (alt_cell(r)[1], vel_marker(r)):
             if key and key not in seen:
                 seen.add(key)
@@ -217,7 +224,7 @@ def markdown(d) -> str:
     for mark, text in used_footnotes(d):
         out.append(f"{mark} {text}")
         out.append("")
-    for r, src in zip(rs, d["receivers"]):
+    for r, src in zip(rs, in_summary(d)):
         if r["notes"]:
             out.append(f"**{r['part']}** ({src['date']}, {src['rf']}): {r['notes']}")
             out.append("")

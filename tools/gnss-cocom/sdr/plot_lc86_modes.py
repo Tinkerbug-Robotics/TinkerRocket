@@ -8,7 +8,7 @@ Two panels on the one clock, each with a single y-axis, then both lock strips:
     lock state                     one strip per mode, the per-receiver states
 
 Only valid fixes are drawn as reported values -- PQTMPVT FixMode >= 2 with a
-nonzero <Quality>, which is what the Tinker-Beetle's driver accepts -- so a gap
+nonzero <Quality>, which is what a flight driver reading it accepts -- so a gap
 in a line is the receiver publishing nothing usable, and the strip says why.
 
     ./plot_lc86_modes.py        writes results/figures/lc86g_modes.svg
@@ -31,7 +31,7 @@ from correlate import (Truth, clock_outliers, collect, parse_start,  # noqa: E40
 from plot_flight import VERDICT_FILL, SILENT_FILL, silent_spans       # noqa: E402
 
 START = "2026/08/18,08:30:00"
-MODES = [("normal", "Normal (as tested)", "var(--mode-normal, #eb6834)"),
+MODES = [("normal", "Normal", "var(--mode-normal, #eb6834)"),
          ("balloon", "Balloon", "var(--mode-balloon, #2a78d6)")]
 TRUTH_INK = "var(--ink-2, #4A5261)"
 

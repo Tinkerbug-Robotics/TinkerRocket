@@ -130,7 +130,7 @@
   },
   {
    "id": "quescan_m10",
-   "part": "Quescan M10 (u-blox M10)",
+   "part": "Quescan M10",
    "bands": "L1 (GPS/GLO/GAL/BDS)",
    "protocol": "UBX @ 38400",
    "host": "standalone on a CP2102 USB-UART",
@@ -151,7 +151,7 @@
    ],
    "sats_p05": 12,
    "sats_median": 13,
-   "notes": "A bare u-blox M10 die on a third-party carrier: ROM SPG 5.10, hardware 000A0000, PROTVER 34.10, and it answers the full private protocol down to SEC-UNIQID. It reports no MOD= string, which is what a raw chip does rather than a u-blox-branded module. Gate behavior is in family -- velocity around 515, altitude at 80 km, limits independent -- but it is the slowest part measured on the ALTITUDE gate: +2.3 s to close and 4.7-5.0 s to re-open, against 0.7-1.7 s elsewhere, which is why both its brackets inverted. Flown on the same ephemeris, start time and launch site as the SAM-M10Q, ZED-F9P and NEO-M8T, so its satellite geometry is directly comparable rather than merely similar. One velocity edge closed a single epoch early, blocking at 510 m/s, while every other edge on this part is consistent with 515; at 29 m/s^2 an epoch is 29 m/s wide, so that is quantization rather than a lower threshold.",
+   "notes": "It answers u-blox's UBX interface down to SEC-UNIQID; its MON-VER reports ROM SPG 5.10, hardware 000A0000, PROTVER 34.10 and no MOD= string. Gate behavior is in family -- velocity around 515, altitude at 80 km, limits independent -- but it is the slowest part measured on the ALTITUDE gate: +2.3 s to close and 4.7-5.0 s to re-open, against 0.7-1.7 s elsewhere, which is why both its brackets inverted. Flown on the same ephemeris, start time and launch site as the SAM-M10Q, ZED-F9P and NEO-M8T, so its satellite geometry is directly comparable rather than merely similar. One velocity edge closed a single epoch early, blocking at 510 m/s, while every other edge on this part is consistent with 515; at 29 m/s^2 an epoch is 29 m/s wide, so that is quantization rather than a lower threshold.",
    "velocity_edges": {
     "fix": [
      512,
@@ -169,7 +169,7 @@
   },
   {
    "id": "beitian_bn182",
-   "part": "Beitian BN-182 (u-blox M10)",
+   "part": "Beitian BN-182",
    "bands": "L1 (GPS/GAL/BDS)",
    "protocol": "UBX @ 115200",
    "host": "standalone on a CP2102 USB-UART",
@@ -198,12 +198,12 @@
    ],
    "sats_p05": 8,
    "sats_median": 12,
-   "notes": "The same u-blox M10 die and firmware as the Quescan -- identical MON-VER, different chip serial (dee2c50fbf vs c8bf908e28) -- flown on the same ephemeris, start time and launch site. It behaves like its MIRROR IMAGE on recovery: fast on altitude (1.0 s) and slow on velocity (10.1 s), where the Quescan is slow on altitude (5.0 s) and fast on velocity (0.1 s). On three of four velocity windows it does not re-open when speed drops below 515 but waits until 328-410 m/s, with 9-13 satellites held throughout, so it is the gate rather than re-acquisition. Transmit level is NOT the cause: a control flight at gain 26, matching the Quescan, reproduced every latency to the tenth of a second (0.5 / 1.0 / 10.1 s) and every shut lag. What differs and was not controlled is configuration in the modules' own flash -- this one runs GPS+Galileo+BeiDou with GLONASS off, the Quescan has GLONASS enabled, and CFG-NAVSPG holds more than the dynamic model. The practical lesson is that the same chip does not predict gate behavior: two M10 modules from different vendors differ by two orders of magnitude on velocity-gate recovery, and no datasheet says which you are buying."
+   "notes": "It shares the Quescan's UBX interface -- its MON-VER answer is identical, its chip serial differs (dee2c50fbf vs c8bf908e28) -- but it is a different part, flown on the same ephemeris, start time and launch site. It behaves like its MIRROR IMAGE on recovery: fast on altitude (1.0 s) and slow on velocity (10.1 s), where the Quescan is slow on altitude (5.0 s) and fast on velocity (0.1 s). On three of four velocity windows it does not re-open when speed drops below 515 but waits until 328-410 m/s, with 9-13 satellites held throughout, so it is the gate rather than re-acquisition. Transmit level is NOT the cause: a control flight at gain 26, matching the Quescan, reproduced every latency to the tenth of a second (0.5 / 1.0 / 10.1 s) and every shut lag. Besides the part itself, what differs and was not controlled is configuration in the modules' own flash -- this one runs GPS+Galileo+BeiDou with GLONASS off, the Quescan has GLONASS enabled, and CFG-NAVSPG holds more than the dynamic model. The practical lesson is that a shared interface does not predict gate behavior: two modules that answer UBX identically differ by two orders of magnitude on velocity-gate recovery, and no datasheet says which you are buying."
   },
   {
    "bands": "L1 (GPS/GLO/GAL/BDS/QZSS)",
    "protocol": "NMEA + Quectel PQTM @ 115200, 10 Hz; RTCM3 MSM7 on the Balloon flights",
-   "host": "Tinker-Beetle flight computer, through a UART-to-USB bridge image",
+   "host": "a rocket flight computer board, through a UART-to-USB bridge image",
    "path": "radiated, Faraday cage",
    "rf": "on-board patch antenna in Faraday cage, TX gain 0",
    "date": "2026-09-24",
@@ -211,7 +211,7 @@
    "velocity_gate_present": true,
    "velocity_gate_mechanism": "mute",
    "id": "lc86g_normal",
-   "part": "Quectel LC86G, Normal mode (as tested on the Tinker-Beetle)",
+   "part": "Quectel LC86G, Normal mode",
    "velocity_fix_max_mps": 498.9,
    "velocity_blocked_min_mps": 500.3,
    "velocity_edges": {
@@ -232,12 +232,13 @@
    "recovery_note": "never (3 g)",
    "sats_median": 8,
    "sats_p05": 0,
-   "notes": "The LC86G in the navigation mode the Beetle's firmware left it in when tested (Normal; the driver never sent $PAIR080 -- PR #1500 changes begin() to select Balloon). Quectel gives Normal mode a 10 km altitude limitation and says output stops entirely above 50 km. Measured, the vertical solution does not follow a boost at all: through the 3 g ascent it reported a climb rate near zero for 18 s while the injection climbed to 320 m/s, with a valid 3-D fix, 13 satellites and small claimed accuracy, and at 210 s it read 4.3 km against 9.2 km. At 500 m/s on its own estimate it stopped ALL output for 56 s, and it never published a valid fix again before landing, although the same signal was tracked at 45 dBHz in Balloon mode. At 15 g it lost every satellite at ignition, then published valid-flagged fixes 18-80 km wrong (1.3 km at apogee against 82 km; -5 km against +13 km) and withheld with 13 satellites until the main parachute. Its UTC runs 18 s behind the injected clock (it applies leap seconds the simulation does not broadcast); PQTMPVT's GPS time of week is used instead."
+   "notes": "The LC86G in its power-up navigation mode, Normal, which a host flies in unless it sends $PAIR080. Left out of the summary table; the report compares it with Balloon mode instead. Quectel gives Normal mode a 10 km altitude limitation and says output stops entirely above 50 km. Measured, the vertical solution does not follow a boost at all: through the 3 g ascent it reported a climb rate near zero for 18 s while the injection climbed to 320 m/s, with a valid 3-D fix, 13 satellites and small claimed accuracy, and at 210 s it read 4.3 km against 9.2 km. At 500 m/s on its own estimate it stopped ALL output for 56 s, and it never published a valid fix again before landing, although the same signal was tracked at 45 dBHz in Balloon mode. At 15 g it lost every satellite at ignition, then published valid-flagged fixes 18-80 km wrong (1.3 km at apogee against 82 km; -5 km against +13 km) and withheld with 13 satellites until the main parachute. Its UTC runs 18 s behind the injected clock (it applies leap seconds the simulation does not broadcast); PQTMPVT's GPS time of week is used instead.",
+   "summary": false
   },
   {
    "bands": "L1 (GPS/GLO/GAL/BDS/QZSS)",
    "protocol": "NMEA + Quectel PQTM @ 115200, 10 Hz; RTCM3 MSM7 on the Balloon flights",
-   "host": "Tinker-Beetle flight computer, through a UART-to-USB bridge image",
+   "host": "a rocket flight computer board, through a UART-to-USB bridge image",
    "path": "radiated, Faraday cage",
    "rf": "on-board patch antenna in Faraday cage, TX gain 0",
    "date": "2026-09-24",
@@ -268,7 +269,7 @@
    ],
    "sats_median": 13,
    "sats_p05": 6,
-   "notes": "The same module after $PAIR080,3. The boost is tracked (climb rate within 1-2 m/s of the injection through the 3 g ascent) and the limits are clean and independent: ALL output stops at 500 m/s on its own speed estimate (fired at 9.3 km) and at 80.0 km on its own altitude (fired at 173 m/s), and returns within one 0.1 s epoch straight into a valid fix. Its own altitude reads about 0.9 km low near 80 km, so against the injection the altitude limit sits near 81 km. 500 m/s matches neither COCOM's 515, MTCR's 600 nor the datasheet's 490. At 15 g it still loses every channel at ignition; its RTCM MSM7 shows the four with a Doppler rate at or below 128 Hz/s re-locking within 2 s and every one at or above 171 Hz/s staying lost through the burn, so it has no fix until the descent brings the vehicle back under 500 m/s. Its altitude drifts low through the flight, 2.6 km by landing with velocity still right to 0.5 m/s; a u-blox M10 drifts 1.5 km on the same file, so most of that is the bench."
+   "notes": "The same module after $PAIR080,3. The boost is tracked (climb rate within 1-2 m/s of the injection through the 3 g ascent) and the limits are clean and independent: ALL output stops at 500 m/s on its own speed estimate (fired at 9.3 km) and at 80.0 km on its own altitude (fired at 173 m/s), and returns within one 0.1 s epoch straight into a valid fix. Its own altitude reads about 0.9 km low near 80 km, so against the injection the altitude limit sits near 81 km. 500 m/s matches neither COCOM's 515, MTCR's 600 nor the datasheet's 490. At 15 g it still loses every channel at ignition; its RTCM MSM7 shows the four with a Doppler rate at or below 128 Hz/s re-locking within 2 s and every one at or above 171 Hz/s staying lost through the burn, so it has no fix until the descent brings the vehicle back under 500 m/s. Its altitude drifts low through the flight, 2.6 km by landing with velocity still right to 0.5 m/s; the Quescan M10 drifts 1.5 km on the same file, so most of that is the bench."
   }
  ]
 }

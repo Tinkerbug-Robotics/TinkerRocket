@@ -308,7 +308,7 @@
       to them. Every flight replayed a byte-identical signal, so each satellite's
       measured Doppler applies to every receiver, and their tracking can be
       compared satellite by satellite. The loss follows how fast each satellite's
-      carrier slides, not how far it sits off nominal. Four u-blox receivers keep
+      carrier slides, not how far it sits off nominal. Four of the five keep
       tracking through a 13.5&nbsp;g burn at the cost of carrier on their steepest
       satellites; the Quectel LC86G loses every channel at ignition and has no fix
       again until the descent.</p>
@@ -387,7 +387,7 @@
       <p><strong>A g rating does not describe it.</strong> One acceleration presents
         a spread of rates across the sky, so a part flown under its rated limit is
         not automatically safe if something is overhead (section 04).</p>
-      <p><strong>The u-blox parts keep a fix; the LC86G does not.</strong> Losing
+      <p><strong>Four parts keep a fix; the LC86G does not.</strong> Losing
         three satellites out of thirteen costs the ZED-F9P geometry, not a
         position. The LC86G loses every channel at ignition, and the ones above
         its rate knee never come back during the burn (section 05).</p>
@@ -488,8 +488,8 @@
         and <code>doppler_ref.py --verify</code> checks that identity before they are
         used.</p>
       <p><strong>Carrier loss</strong> is each satellite's carrier-to-noise through
-        the burn against its own pad baseline, from each u-blox part's
-        <code>NAV-SAT</code>. The LC86G reports RTCM MSM7 instead: per-channel
+        the burn against its own pad baseline, from each part's UBX
+        <code>NAV-SAT</code> message. The LC86G reports RTCM MSM7 instead: per-channel
         carrier-to-noise, its own Doppler and a carrier-phase lock counter, once a
         second. Each channel is set against the NEO-M8T's rate for the same
         satellite.</p>
@@ -860,7 +860,8 @@
     <h2><span class="n">04</span>A g rating for a Hz/s problem</h2>
     <div class="prose">
       <p><strong>The published limit is a g number for a Hz/s problem.</strong>
-        u-blox rates the M10 to 4&nbsp;g, but a loop does not see acceleration, it
+        Datasheets rate dynamics in g: u-blox gives its M10 generation 4&nbsp;g, and
+        Quectel gives the LC86G the same. But a loop does not see acceleration, it
         sees how fast its carrier is sliding &mdash; and the same 4&nbsp;g produces
         206&nbsp;Hz/s on a satellite at zenith and 71&nbsp;Hz/s on one at 20&deg;.
         One acceleration is therefore not one condition; it is a spread. That is
@@ -890,7 +891,7 @@
         also, for that reason, the one satellite absent from the rate axis: the
         instrument that would measure the stimulus is the one the stimulus
         disabled.</p>
-      <p><strong>What actually dropped.</strong> Of the four u-blox parts, only the
+      <p><strong>What actually dropped.</strong> Of these four parts, only the
         ZED-F9P lost satellites outright, three of thirteen: GPS&nbsp;11 at 70&deg;,
         GPS&nbsp;24 at 51&deg; and GPS&nbsp;6 at 31&deg;, each from a healthy carrier
         to nothing. The other three leaned on the same satellites &mdash; 12 to
@@ -898,10 +899,11 @@
         ranking is consistent across parts even where the outcome is not.</p>
       <p><strong>What did not drop, on these four, is the position.</strong> None of
         them went to no-lock during either burn. Losing three satellites out of
-        thirteen costs geometry, not a fix. On the u-blox parts, the thing that
+        thirteen costs geometry, not a fix. On these four parts, the thing that
         stops a position is the export gate, not the dynamics.</p>
-      <p class="note">The four parts behind these curves are all u-blox, spanning
-        three generations (M8, M10, F9) but one vendor, and the LC86G in section 05
+      <p class="note">Two of the four parts behind these curves are u-blox
+        modules, the NEO-M8T and the ZED-F9P; the Quescan and the Beitian speak the
+        same UBX interface. The LC86G in section 05 comes from another vendor and
         fails differently. What makes the result credible is four receivers
         agreeing, the effect scaling with acceleration, and the rate beating the
         shift on every one of them.</p>
@@ -911,8 +913,7 @@
   <section>
     <h2><span class="n">05</span>The LC86G loses the position</h2>
     <div class="prose">
-      <p>The Quectel LC86G is the GNSS on the Tinker-Beetle rocket computer. It
-        reports its raw measurements as RTCM MSM7: per-satellite C/N&#8320;, its own
+      <p>The Quectel LC86G reports its raw measurements as RTCM MSM7: per-satellite C/N&#8320;, its own
         Doppler, and a carrier-phase lock counter, once a second. It was flown on
         the same byte-identical files, so each of its channels can be set against
         the Doppler rate the NEO-M8T measured for the same satellite. It fails in
@@ -1001,7 +1002,7 @@
         under the knee everywhere, and the channels show it. All thirteen held
         46&nbsp;dBHz through the burn, and only the three steepest, at 79, 66 and
         53&nbsp;Hz/s, slipped carrier phase at ignition. That is the same ranking the
-        u-blox parts show in carrier loss, visible here in phase, at an
+        other four parts show in carrier loss, visible here in phase, at an
         acceleration too low to cost any carrier at all.</p>
     </div>
 
@@ -1033,18 +1034,18 @@
         ignition. On a vehicle that boosts that hard it will not have a position
         until the descent, in either mode.</p>
       <p><strong>Its navigation mode is a second, separate failure.</strong>
-        Everything above is Balloon mode, which the Beetle's firmware is changing to
-        select at boot. In the module's default Normal mode, on the gentle flight,
+        Everything above is Balloon mode. In the module's power-up default, Normal
+        mode, on the gentle flight,
         the navigation solution did not follow the climb: for 18&nbsp;s it reported
         a climb rate of 1&ndash;6&nbsp;m/s with a valid 3-D fix from all 13
         satellites while the vehicle reached 320&nbsp;m/s. That is the navigation
         filter, not the tracking loops, and the companion report sets the two modes
         side by side (<a href="report.html">GNSS Receiver Limits</a>, section 04).
         After the 13.5&nbsp;g ignition Normal mode went further, publishing fixes
-        flagged valid that were 18&ndash;80&nbsp;km wrong. Replayed through the
-        Beetle's main-parachute logic, those fixes would have released the main
-        16&nbsp;km up
-        (<a href="https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1508">TinkerRocket#1508</a>).</p>
+        flagged valid that were 18&ndash;80&nbsp;km wrong. Nothing in those fixes
+        marks them as bad, so a flight computer that trusts the valid flag takes
+        them as they are, including one that falls back on GNSS altitude to deploy
+        a main parachute.</p>
     </div>
   </section>
 
