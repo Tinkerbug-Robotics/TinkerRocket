@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "TR_Sensor_Data_Converter.h"
+#include "SimSensorModel.h"   // the firmware sim's gyro LSB (#369)
 #include <cmath>
 #include <limits>   // #850: quiet_NaN in the rail-current tests
 #include <cstring>
@@ -90,6 +91,23 @@ TEST_F(SensorConverterTest, IMU_HighGBias_Subtracted) {
     EXPECT_NEAR(si.high_g_acc_x, -1.0, 0.01);
     EXPECT_NEAR(si.high_g_acc_y, -2.0, 0.01);
     EXPECT_NEAR(si.high_g_acc_z, -3.0, 0.01);
+}
+
+// The firmware sim encodes gyro counts for this converter to decode.  After
+// #369 corrected the decode to 0.140 dps/LSB the sim kept 4000/32768, so every
+// simulated rate reached the FC 14.7% high.  Encode as the sim does (lroundf
+// into an int16) and decode here: the rate must come back.
+TEST_F(SensorConverterTest, IMU_FirmwareSimGyroEncodingRoundTrips) {
+    const float lsb = sim_sensor_model::kIsm6GyroDpsPerLsb;
+    for (float rate : {1.0f, -250.0f, 1000.0f, 3999.0f}) {
+        ISM6HG256Data raw{};
+        raw.gyro_raw.z = (int16_t)lroundf(rate / lsb);
+        ISM6HG256DataSI si{};
+        conv.convertISM6HG256Data(raw, si);
+        EXPECT_NEAR(si.gyro_z, rate, 0.5 * lsb) << "rate=" << rate;
+    }
+    // So the sim's per-axis rail sits where the chip's word does, 32767 x 0.140.
+    EXPECT_NEAR(32767.0 * lsb, 4587.38, 0.01);
 }
 
 // ---------- Baro Conversion ----------

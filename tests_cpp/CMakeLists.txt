@@ -326,6 +326,7 @@ target_include_directories(test_sensor_data_converter PRIVATE
     ${LIB_DIR}/TR_Sensor_Data_Converter
     ${LIB_DIR}/TR_RocketComputerTypes
     ${LIB_DIR}/TR_Orientation
+    ${LIB_DIR}/TR_Sensor_Collector_Sim   # SimSensorModel.h: the sim's gyro LSB (#369)
 )
 target_link_libraries(test_sensor_data_converter GTest::gtest_main)
 gtest_discover_tests(test_sensor_data_converter)

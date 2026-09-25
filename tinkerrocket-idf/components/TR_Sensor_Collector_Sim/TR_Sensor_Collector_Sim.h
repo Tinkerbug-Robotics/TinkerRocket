@@ -18,6 +18,7 @@
 
 #include <TR_Sensor_Collector.h>
 #include <RocketComputerTypes.h>
+#include "SimSensorModel.h"
 #include "sim_landed_hold.h"
 
 class SensorCollectorSim
@@ -242,7 +243,7 @@ private:
     // ISM6 sensitivity constants (for ±16g low-G, ±256g high-G, ±4000dps gyro)
     static constexpr float ACC_LOW_MS2_PER_LSB  = (16.0f * 1000.0f / 32768.0f) * 1.0e-3f * GRAVITY;
     static constexpr float ACC_HIGH_MS2_PER_LSB = (256.0f * 1000.0f / 32768.0f) * 1.0e-3f * GRAVITY;
-    static constexpr float GYRO_DPS_PER_LSB     = (4000.0f * 1000.0f / 32768.0f) * 1.0e-3f;
+    static constexpr float GYRO_DPS_PER_LSB     = sim_sensor_model::kIsm6GyroDpsPerLsb;  // #369, not FS/32768
 
     // ========================================================================
     // Physics methods

@@ -83,4 +83,12 @@ inline void fieldInBody(float pitch_rad,
     out[2] = -b_north * sp - b_down * cp;
 }
 
+// Gyro LSB the sim encodes ISM6HG256 raw counts with (±4000 dps).  It must be
+// the exact inverse of SensorConverter::configureISM6HG256FullScale, written
+// the same way: the ST gyro has a FIXED 0.035 mdps/LSB per dps of full scale
+// (#369), 0.140 dps/LSB, not FS/32768.  The sim kept 4000/32768 after #369
+// fixed the converter, so every simulated rate reached the FC 14.7% high.
+// test_sensor_data_converter.cpp round-trips it through the converter.
+constexpr float kIsm6GyroDpsPerLsb = (4000.0f * 0.035f) * 1.0e-3f;
+
 }  // namespace sim_sensor_model
