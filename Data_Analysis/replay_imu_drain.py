@@ -34,6 +34,11 @@ gyro X = the roll-rate input), two tables:
   exactly the windows the accumulator formed.  Each decimation's RMS over the
   ODR-rate band RMS is its gain on that band alone: the acceptance numbers in
   #1191 (tone down >= 12 dB, 30 Hz within 1 %) are read from the mean's.
+  The band-pass is an FFT mask, which treats its segment as a circle, so each
+  window is band-passed with a quarter second of context on either side (its
+  margin) to keep the wrap and the edge ringing off the measured ticks.  The
+  margin is the window's own run wherever that has samples.  Where it has
+  none, the margin is made up and the row says how (band_segment).
 
 Plus the mean samples per tick (the N behind the boxcar) and the low-g
 near-rail duty: the old body-frame test on the freshest sample against the
@@ -371,13 +376,94 @@ def band_rms(f, psd, lo, hi):
 
 
 def bandpass(x, fs, lo, hi):
-    """Brick-wall band-pass by FFT masking; the segment carries margins so the
-    edge ringing stays outside the ticks that are measured."""
+    """Brick-wall band-pass by FFT masking; the segment carries margins
+    (band_segment) so the edge ringing stays outside the ticks that are measured."""
     x = np.asarray(x, dtype=float)
     spec = np.fft.rfft(x - x.mean())
     f = np.fft.rfftfreq(len(x), 1.0 / fs)
     spec[(f < lo) | (f > hi)] = 0.0
     return np.fft.irfft(spec, n=len(x))
+
+
+def across_step(d, k, before, count):
+    """Up to `count` samples continuing run k across its rate step, on run k's spacing.
+
+    The step changes the rate, not the signal, so the samples beyond it are
+    real context.  When they are the faster run they are first averaged over
+    the rate ratio, so the slower grid does not alias them; then they are
+    interpolated onto run k's spacing.  Only the grid points the neighbouring
+    run covers come back.
+    """
+    run, nb = d["runs"][k], d["runs"][k - 1 if before else k + 1]
+    t = d["t_us"][nb["i0"]:nb["i1"]].astype(float)
+    x = to_body(d["raw"][nb["i0"]:nb["i1"]], d["cm"])
+    w = int(round(nb["odr"] / run["odr"]))
+    if w > 1:
+        # A centred w-sample mean whose window shrinks at the ends, so the
+        # samples next to the step are not averaged with zeros.
+        cs = np.vstack([np.zeros((1, x.shape[1])), np.cumsum(x, axis=0)])
+        start = np.arange(len(x)) - w // 2
+        lo, hi = np.clip(start, 0, len(x)), np.clip(start + w, 0, len(x))
+        x = (cs[hi] - cs[lo]) / (hi - lo)[:, None]
+    dt = 1e6 / run["odr"]
+    if before:
+        tq = d["t_us"][run["i0"]] - dt * np.arange(count, 0, -1)
+        tq = tq[tq >= t[0]]
+    else:
+        tq = d["t_us"][run["i1"] - 1] + dt * np.arange(1, count + 1)
+        tq = tq[tq <= t[-1]]
+    return np.column_stack([np.interp(tq, t, x[:, c]) for c in range(x.shape[1])])
+
+
+def band_segment(d, run, a, b, margin, name, pre_launch):
+    """Samples [a, b) of `run` with `margin` samples of context each side, body frame.
+
+    Returns (seg, i0, notes): the rows, the stream index the first row stands
+    for, and a line for each side whose margin had to be made up.  The margin
+    is the run's own samples wherever it has them.  Where it does not:
+
+    - Past a rate step, the samples beyond it (across_step).  The FC steps the
+      ODR at deployment, so a run after a step starts on the ejection shock
+      (on 2026-08-29 its first samples are the 1102-1162 m/s2 peaks), and a
+      mirror image would double the shock.
+    - Past the log's first or last sample, the samples at the edge, mirrored.
+    - A pre-launch window takes none past its own end and mirrors instead.
+      What follows the pad is the motor start (the launch flag trails first
+      motion by up to 0.4 s), and in the pad's segment it put a 30-70 m/s2
+      step at the FFT's wrap, which rang into the pad's gains by up to 16 dB.
+    """
+    runs = d["runs"]
+    k = runs.index(run)
+    i0 = max(run["i0"], a - margin)
+    i1 = b if pre_launch else min(run["i1"], b + margin)
+    seg = to_body(d["raw"][i0:i1], d["cm"])
+    notes, mirror = [], [0, 0]
+    for side, have in (("before", a - i0), ("after", i1 - b)):
+        short = margin - have
+        if short <= 0:
+            continue
+        before = side == "before"
+        head = f"band-pass margin {side}: {have} of {margin} samples"
+        nb = k - 1 if before else k + 1          # the run beyond this edge, if there is one
+        if pre_launch and not before:
+            notes.append(f"band-pass margin after: none (past the {name} is the motor start); all mirrored")
+        elif 0 <= nb < len(runs):
+            fill = across_step(d, k, before, short)
+            seg = np.vstack([fill, seg] if before else [seg, fill])
+            if before:
+                i0 -= len(fill)
+            short -= len(fill)
+            step = runs[k if before else nb]["t0"]
+            notes.append(f"{head} (a rate step at T{step:+.3f} s); the rest from the {runs[nb]['odr']:.0f} Hz "
+                         f"run, resampled" + (f"; {short} more mirrored" if short else ""))
+        else:
+            edge = (d["t_us"][0 if before else -1] - d["t_launch"]) / 1e6
+            notes.append(f"{head} (no samples {side} T{edge:+.3f} s); {'the rest' if have else 'all'} mirrored")
+        mirror[0 if before else 1] = short
+    if any(mirror):
+        seg = np.pad(seg, (tuple(mirror), (0, 0)), mode="reflect")
+        i0 -= mirror[0]
+    return seg, i0, notes
 
 
 def rms(v):
@@ -457,17 +543,15 @@ def analyse(d, replay):
             if sel.sum() < MIN_TICKS:
                 continue
             odr = run["odr"]
-            margin = int(0.25 * odr)
             idx = r["last_idx"][sel].astype(np.int64)
             n = r["n"][sel].astype(np.int64)
-            # The band-pass segment ends where the run does, as it ends where
-            # the data does: past a rate step its FFT would take samples at two
-            # spacings for one.
-            i0 = max(run["i0"], int(idx[0] - n[0] + 1) - margin)
-            i1 = min(run["i1"], int(idx[-1]) + 1 + margin)
-            body_seg = to_body(d["raw"][i0:i1], d["cm"])
-            in_win = np.zeros(i1 - i0, dtype=bool)
-            in_win[int(idx[0] - n[0] + 1) - i0:int(idx[-1]) + 1 - i0] = True
+            a, b = int(idx[0] - n[0] + 1), int(idx[-1]) + 1
+            # The band-pass segment: the drained samples plus a quarter second
+            # of context each side, at this run's spacing only (a segment
+            # across a rate step would take samples at two spacings for one).
+            body_seg, i0, margin_notes = band_segment(d, run, a, b, int(0.25 * odr), name, hi <= 0.0)
+            in_win = np.zeros(len(body_seg), dtype=bool)
+            in_win[a - i0:b - i0] = True
 
             nperseg = 1 << int(math.log2(max(16, min(256, sel.sum() // 2))))
             # The ODR-rate PSD is NPERSEG_ODR points when the window holds that
@@ -488,7 +572,8 @@ def analyse(d, replay):
             row = dict(window=label, odr=odr, span=(t_rel[sel][0], t_rel[sel][-1]) if notes else None,
                        ticks=int(sel.sum()), n_mean=float(np.mean(n)), n_max=int(np.max(n)),
                        old_rail_duty=float(np.mean(old_rail[sel])),
-                       new_rail_duty=float(np.mean(r["near_rail"][sel])), tone_na=tone_na, channels=[])
+                       new_rail_duty=float(np.mean(r["near_rail"][sel])), tone_na=tone_na,
+                       margin_notes=margin_notes, channels=[])
             for cname, col, unit in CHANNELS:
                 # --- the filter itself: band-passed full-rate, decimated both ways
                 x = body_seg[:, col]
@@ -556,6 +641,8 @@ def report(d, rows):
             print(f"    ODR tone n/a: {row['tone_na']}")
         print("  band-passed through the same windows: band RMS at the ODR, then what each")
         print("  decimation keeps of it (as-flown pick / window mean, relative to the ODR-rate RMS):")
+        for note in row["margin_notes"]:
+            print(f"    {note}")
         print(f"    {'channel':10s} " + " ".join(f"{b['name']:>40s}" for b in row["channels"][0]["bands"]))
         for c in row["channels"]:
             cells = []
