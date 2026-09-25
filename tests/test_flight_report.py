@@ -460,6 +460,184 @@ def test_measured_events_beat_the_flags() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# First motion inside a hole in the log
+#
+# GAP_BIN lost 743 ms of every flight-computer stream around launch: the IMU
+# stops at 0.99 g and comes back at 5.2 g, and the first launch-flagged record
+# is the first one after the hole. First motion used to be interpolated
+# straight across it, to a time where the log holds no data.
+# ---------------------------------------------------------------------------
+
+GAP_BIN = REPO_ROOT / "examples" / "flights" / "flight_20260705_195028.bin"
+
+
+def _ramp_flight(drop: tuple[float, float] = (0.0, 0.0)):
+    """A 1 kHz pad-then-thrust trace with the samples inside `drop` removed.
+
+    |a| sits at 1 g, then climbs 20 g/s from 1.000 s: it crosses 1.2 g at
+    1.010 s and 2 g at 1.050 s, holds 6 g, and falls to 0.3 g at 2.000 s. The
+    launch flag is set at 1.200 s. Returns (flight, t, g) as events.py takes
+    them.
+    """
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    t = np.round(np.arange(3000) * 1e-3, 6)
+    g = np.where(t < 1.0, 1.0, np.minimum(1.0 + 20.0 * (t - 1.0), 6.0))
+    g = np.where(t >= 2.0, 0.3, g)
+    keep = ~((t > drop[0]) & (t < drop[1]))
+    ns = [{"time_us": int(round(s * 1e6)), "launch": s >= 1.2}
+          for s in np.round(np.arange(0.0, 3.0, 0.002), 6)]
+    flight = SimpleNamespace(records={"NonSensor": ns}, t0_us=0)
+    return flight, t[keep], g[keep]
+
+
+def test_first_motion_is_not_interpolated_across_a_hole() -> None:
+    """The pad crossing is only interpolated across a step of 10 ms or less.
+
+    10 ms is the card's resolution, so a step that wide cannot move a printed
+    burn time by more than its last digit. One step wider and the crossing is
+    wherever a straight line happens to cut 1.2 g, so there is no first motion.
+    """
+    from flight_report import events
+
+    # 1.005 s -> 1.014 s: 9 ms across the crossing, still a measurement.
+    flight, t, g = _ramp_flight((1.0055, 1.0135))
+    assert abs(events.true_launch(flight, t, g) - 1.010) < 1e-3
+    assert events._first_motion(flight, t, g)[1] is None
+
+    # 1.005 s -> 1.016 s: 11 ms, a hole. Blank, and the hole is named.
+    flight, t, g = _ramp_flight((1.0055, 1.0155))
+    assert events.true_launch(flight, t, g) is None
+    assert events._first_motion(flight, t, g)[1] == (1.005, 1.016)
+
+    # A hole further up the climb, with the trace above the pad band on both
+    # sides, does not touch the crossing.
+    flight, t, g = _ramp_flight((1.02, 1.5))
+    assert abs(events.true_launch(flight, t, g) - 1.010) < 1e-3
+
+
+def test_burnout_does_not_need_first_motion() -> None:
+    """The end of a burn is measured even when its start fell in a hole."""
+    from flight_report import events
+
+    flight, t, g = _ramp_flight((1.0055, 1.0155))
+    assert events.true_launch(flight, t, g) is None
+    assert abs(events.true_burnout(flight, t, g) - 2.0) < 2e-3
+
+
+def test_a_launch_in_a_logging_gap_is_blank_and_says_where() -> None:
+    """On the real log: no first motion, the hole named, the rest measured."""
+    from flight_report.events import launch_gap, measured
+    from flight_report.flight import Flight
+
+    flight = Flight.from_bin(GAP_BIN)
+    flight.load()
+    ev = measured(flight)
+    gap = launch_gap(flight)
+
+    assert ev["launch"] is None, "first motion was interpolated across the gap again"
+    assert gap is not None
+    assert 0.74 < gap[1] - gap[0] < 0.75, gap
+    # Burnout came half a second after the log resumed, and the ejection and
+    # the apogee after that: none of them needs first motion.
+    assert gap[1] < ev["burnout"] < ev["ejection"] < ev["apogee"] < ev["landed"]
+    assert 0.45 < ev["burnout"] - gap[1] < 0.50, ev["burnout"] - gap[1]
+
+    # A clean log has no gap, and its first motion is unchanged.
+    sample = Flight.from_bin(SAMPLE_BIN)
+    sample.load()
+    assert launch_gap(sample) is None
+    assert abs(measured(sample)["launch"] - 0.3159) < 1e-3
+
+
+def test_the_snapshot_times_a_launch_whose_flag_was_lost() -> None:
+    """The hole swallowed the first flagged records too, so the flag is late.
+
+    The Snapshot's stamp minus its flight_elapsed_ms is the flight computer's
+    own launch time. On GAP_BIN it lands 0.47 s before the first flagged record,
+    inside the hole; on a log that lost nothing the flag is used as it is.
+    """
+    from flight_report.events import _flag_time, declared_launch, launch_gap, markers
+    from flight_report.flight import Flight
+
+    flight = Flight.from_bin(GAP_BIN)
+    flight.load()
+    flag = _flag_time(flight.records, flight.t0_us, "launch")
+    call = declared_launch(flight)
+    gap = launch_gap(flight)
+    assert 0.46 < flag - call < 0.48, flag - call
+    assert gap[0] < call < gap[1]
+    assert markers(flight)["launch"] == call, "the charts must hang off the call, not the late flag"
+
+    sample = Flight.from_bin(SAMPLE_BIN)
+    sample.load()
+    assert declared_launch(sample) == _flag_time(sample.records, sample.t0_us, "launch")
+
+
+def test_the_card_says_why_it_has_no_burn_time() -> None:
+    """Three cells missing, one quiet line saying why, and no 146 G headline.
+
+    The cells that count from first motion are left off. Coast still counts
+    from burnout, which is measured. Max acceleration is taken over the part of
+    the burn the log kept, not over the whole flight: that would headline the
+    ejection and the landing, 146 G on this log.
+    """
+    from flight_report.flight import Flight
+    from flight_report.registry import LEVEL_FLIGHT
+    from flight_report.render import render_report
+    from flight_report.summary import card_note, compute_summary
+
+    flight = Flight.from_bin(GAP_BIN)
+    flight.load()
+    cells = {c["label"]: c for c in compute_summary(flight)}
+    for label in ("Burn time", "Time to apogee", "Flight time"):
+        assert label not in cells, f"{label} was measured from a guess"
+    assert "Coast time" in cells
+    peak = cells["Max acceleration"]
+    assert 4.0 < peak["q"].value < 6.0, peak["q"].value
+    assert "after the gap" in str(peak["hint"])
+
+    note = card_note(flight)
+    assert note.startswith("First motion fell in a 743 ms gap in the log"), note
+    assert "burn time, time to apogee and flight time are not shown" in note
+    assert note in render_report(flight, [], level=LEVEL_FLIGHT)
+
+    sample = Flight.from_bin(SAMPLE_BIN)
+    sample.load()
+    assert card_note(sample) == ""
+    assert "Burn time" in {c["label"] for c in compute_summary(sample)}
+
+
+def test_sections_anchor_on_the_launch_call_when_first_motion_is_blank() -> None:
+    """Motor refuses; stability and vibration anchor on the call, and say so.
+
+    The motor numbers are integrals and extremes over a burn whose opening is
+    not in the record, so the section refuses with the reason. The tilt needs
+    only a pad reference and the boost, both of which the log kept. The
+    vibration windows are named for what bounds them.
+    """
+    from flight_report.flight import Flight
+    from flight_report.modules import stability, vibration
+
+    result = _motor(GAP_BIN)
+    assert result.error is None
+    assert not result.metrics
+    assert result.warnings and "743 ms gap in the log" in result.warnings[0]
+
+    flight = Flight.from_bin(GAP_BIN)
+    flight.load()
+    tilt = stability.analyze(flight)
+    assert tilt.error is None
+    assert "Max tilt under thrust" in tilt.metrics, tilt.warnings
+
+    names = {name: how for name, _lo, _hi, how in vibration.phases(flight, 0.0, 20.0)}
+    assert names["Boost"] == "launch detection to thrust ending"
+    assert names["Pad"] == "the 1.5 s before launch detection"
+
+
 def test_apogee_turnover_stays_zoomed_in(report_html: Path) -> None:
     """Recovery events belong on their own chart, not on the turnover's axis.
 

@@ -132,6 +132,20 @@ def analyze(flight: Flight) -> AnalysisResult:
     # here — so the window and the quantity come from one source.
     marks = ev.measured(flight)
     launch, burnout = marks.get("launch"), marks.get("burnout")
+    # The motor lit inside a hole in the log. Every number below is an integral
+    # or an extreme over the burn, and the opening of the burn is not in the
+    # record: on 2026-07-05 195028 the logged part holds 18 N·s/kg of about 48,
+    # and the trace comes back at 5.2 g already falling. Refused rather than
+    # printed small.
+    gap = ev.launch_gap(flight)
+    if gap is not None:
+        result.warnings.append(
+            f"First motion fell in a {1e3 * (gap[1] - gap[0]):.0f} ms gap in the log "
+            f"({gap[0]:.2f}–{gap[1]:.2f} s). The start of the burn, and the impulse the "
+            "motor delivered before the log resumed, are not in the record, so the "
+            "motor cannot be characterised."
+        )
+        return result
     if launch is None or burnout is None or burnout <= launch:
         result.warnings.append(
             "Launch and burnout were not both measurable from the acceleration "

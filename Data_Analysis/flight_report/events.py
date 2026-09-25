@@ -24,7 +24,9 @@ is down, so `landed` is the declaration.
 
 Everything returned is seconds since `flight.t0_us`, or None when the flight
 does not contain the event. None is normal — a bench log has no launch — and
-callers must render a blank rather than a guess.
+callers must render a blank rather than a guess. A launch the log lost is None
+too: a motor can light inside a hole in the record, and launch_gap() says where
+the hole was so the blank can carry its reason.
 """
 
 from __future__ import annotations
@@ -61,6 +63,20 @@ _COAST_HOLD_S = 0.05
 # the rocket on the pad cannot be mistaken for ignition.
 _LAUNCH_SEARCH_BEFORE_S = 3.0
 _LAUNCH_SEARCH_AFTER_S = 1.0
+# Two consecutive records further apart than this have a hole between them, not
+# a sample step. First motion is interpolated between the last pad sample and
+# the first one off the pad, and across a hole that is wherever a straight line
+# happens to cut 1.2 g: on 2026-07-05 195028 the motor lit inside a 743 ms gap,
+# and the line put first motion 37 ms after the last pad sample, where the log
+# holds nothing at all. 10 ms is the card's resolution (burn time prints to
+# 0.01 s), so a step up to that wide cannot move a printed figure by more than
+# its last digit. The widest step a clean walk-back crosses in the flight
+# archive is 4.2 ms; the two launches that fell in a gap sit in holes of 743
+# and 746 ms.
+_GAP_S = 0.010
+# Snapshot frames read for the flight computer's own launch time. The median of
+# a few, because each frame's stamp and count are taken a few ms apart.
+_SNAPSHOTS_READ = 5
 
 # An ejection charge is impulsive and violent: 38 g against a 0.2 g coast on the
 # sample flight. Both bars must be cleared — an absolute floor so ordinary
@@ -79,6 +95,7 @@ _EJECT_BEFORE_LANDING_S = 1.0
 _MIN_FLIGHT_ALT_M = 20.0
 
 _CACHE_KEY = "_measured_events"
+_GAP_CACHE_KEY = "_launch_gap"
 
 
 def _flags(recs) -> list:
@@ -91,6 +108,56 @@ def _flag_time(recs, t0_us, name: str) -> Optional[float]:
         if r.get(name):
             return (r["time_us"] - t0_us) / 1e6
     return None
+
+
+def _snapshot_launch(recs, t0_us) -> Optional[float]:
+    """The flight computer's own launch time, from its Snapshot frames.
+
+    A Snapshot carries `flight_elapsed_ms`, counted from the moment the flight
+    computer declared launch, beside a stamp on the same clock as every other
+    stream. Stamp minus count is the declaration itself. It lands within 3 ms of
+    the launch flag on the logs that lost nothing.
+    """
+    snaps = [s for s in recs.get("Snapshot") or []
+             if s.get("flight_elapsed_ms") and s.get("time_us") is not None]
+    if not snaps:
+        return None
+    return float(np.median([(s["time_us"] - t0_us) / 1e6 - s["flight_elapsed_ms"] / 1e3
+                            for s in snaps[:_SNAPSHOTS_READ]]))
+
+
+def declared_launch(flight) -> Optional[float]:
+    """When the flight computer declared launch, in seconds since t0.
+
+    Normally the first record with the launch flag set. But records can be lost
+    on their way into the log, and when the first flagged ones are, the flag in
+    the log is late by however long the hole lasted. 2026-07-05 195028 lost
+    745 ms of every flight-computer stream, launch included: its first flagged
+    record comes 0.47 s after the flight computer called launch, by which time
+    the rocket was 7 m up and doing 24 m/s.
+
+    So when a hole sits right before the first flagged record and the
+    Snapshot's time falls inside it, the Snapshot is the answer. Everywhere else
+    it is the flag: no hole, no Snapshot (firmware before it had one), or a
+    Snapshot that disagrees with the log around it.
+    """
+    t0_us = flight.t0_us
+    if t0_us is None:
+        return None
+    ns = _flags(flight.records)
+    k = next((i for i, r in enumerate(ns) if r.get("launch")), None)
+    if k is None:
+        return None
+    flag = (ns[k]["time_us"] - t0_us) / 1e6
+    if k == 0:
+        return flag
+    before = (ns[k - 1]["time_us"] - t0_us) / 1e6
+    if flag - before <= _GAP_S:
+        return flag
+    snap = _snapshot_launch(flight.records, t0_us)
+    if snap is not None and before < snap < flag:
+        return snap
+    return flag
 
 
 def _accel_series(flight) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
@@ -115,25 +182,24 @@ def _cross(t, y, i, level) -> float:
     return float(t[i - 1] + f * (float(t[i]) - float(t[i - 1])))
 
 
-def true_launch(flight, t, g) -> Optional[float]:
-    """First motion: the moment the accelerometer leaves the pad band.
-
-    Found by locating an unambiguous thrust sample and walking *back* to where
-    the trace left 1 g, which is the instant the motor started pushing rather
-    than the instant it became obvious.
-    """
+def _first_thrust(flight, t, g) -> Optional[int]:
+    """Index of the first unambiguous thrust sample near the launch call."""
     if t is None:
         return None
-    flag = _flag_time(flight.records, flight.t0_us, "launch")
-    if flag is not None:
-        window = (t >= flag - _LAUNCH_SEARCH_BEFORE_S) & (t <= flag + _LAUNCH_SEARCH_AFTER_S)
+    call = declared_launch(flight)
+    if call is not None:
+        window = (t >= call - _LAUNCH_SEARCH_BEFORE_S) & (t <= call + _LAUNCH_SEARCH_AFTER_S)
     else:
         window = np.ones(t.size, dtype=bool)
     idx = np.flatnonzero(window & (g > _IGNITION_G))
-    if not idx.size:
-        return None
+    return int(idx[0]) if idx.size else None
 
-    i = int(idx[0])
+
+def _first_motion(flight, t, g) -> tuple[Optional[float], Optional[tuple[float, float]]]:
+    """(first motion, the hole it fell in). At most one of the two is set."""
+    i = _first_thrust(flight, t, g)
+    if i is None:
+        return None, None
     while i > 0 and g[i] > _PAD_G:
         i -= 1
     # Walked all the way to the start of the record and never found the pad: the
@@ -141,22 +207,48 @@ def true_launch(flight, t, g) -> Optional[float]:
     # before anything was written down and cannot be measured. One of the bench
     # logs is like this, opening at 8.1 g.
     if i == 0 and g[0] > _PAD_G:
-        return None
+        return None, None
     if i + 1 >= t.size:
-        return None
-    return _cross(t, g, i + 1, _PAD_G)
+        return None, None
+    # The pad band was left inside a hole in the log. Only this step matters: a
+    # hole further up the climb, with the trace above the band on both sides,
+    # does not move the crossing.
+    if t[i + 1] - t[i] > _GAP_S:
+        return None, (float(t[i]), float(t[i + 1]))
+    return _cross(t, g, i + 1, _PAD_G), None
 
 
-def true_burnout(flight, t, g, launch: Optional[float]) -> Optional[float]:
+def true_launch(flight, t, g) -> Optional[float]:
+    """First motion: the moment the accelerometer leaves the pad band.
+
+    Found by locating an unambiguous thrust sample and walking *back* to where
+    the trace left 1 g, which is the instant the motor started pushing rather
+    than the instant it became obvious.
+
+    None when the log cannot say: it opens already under thrust, or the trace
+    left the pad band inside a hole in the log (see launch_gap).
+    """
+    return _first_motion(flight, t, g)[0]
+
+
+def true_burnout(flight, t, g) -> Optional[float]:
     """Thrust ends: specific force falls back through 1 g and stays there.
 
-    Walking forward from launch rather than back from the burn's peak, because
-    the largest acceleration in the flight is usually the ejection charge, not
-    the motor — 38 g against 9 g on the sample flight.
+    Walking forward from the burn rather than back from its peak, because the
+    largest acceleration in the flight is usually the ejection charge, not the
+    motor — 38 g against 9 g on the sample flight.
+
+    Walking from the first unambiguous thrust sample, not from first motion,
+    because the end of a burn can be in the log when its start is not:
+    2026-07-05 195028 lit its motor inside a 743 ms hole and burned out half a
+    second after the log came back. Nothing between the two can end a burn —
+    every sample from first motion to the thrust sample is above the pad band —
+    so where both are known the answer is the same.
     """
-    if t is None or launch is None:
+    i0 = _first_thrust(flight, t, g)
+    if i0 is None:
         return None
-    idx = np.flatnonzero((t > launch) & (g < _COAST_G))
+    idx = np.flatnonzero((t > t[i0]) & (g < _COAST_G))
     for i in idx:
         i = int(i)
         if i == 0:
@@ -281,6 +373,8 @@ def measured(flight) -> dict[str, Optional[float]]:
 
     Keys: launch, burnout, apogee, ejection, landed. A value of None means the
     flight does not contain that event — render nothing rather than a guess.
+    Launch is also None when first motion fell in a hole in the log; launch_gap()
+    says where.
     """
     cached = flight.__dict__.get(_CACHE_KEY)
     if cached is not None:
@@ -296,31 +390,49 @@ def measured(flight) -> dict[str, Optional[float]]:
 
     t, g = _accel_series(flight)
     out["landed"] = _flag_time(flight.records, flight.t0_us, "alt_landed")
-    out["launch"] = true_launch(flight, t, g)
-    out["burnout"] = true_burnout(flight, t, g, out["launch"])
+    out["launch"], gap = _first_motion(flight, t, g)
+    out["burnout"] = true_burnout(flight, t, g)
     out["ejection"] = ejection(flight, t, g, out["burnout"], out["landed"])
     out["apogee"] = true_apogee(flight, out["launch"])
 
+    flight.__dict__[_GAP_CACHE_KEY] = gap
     flight.__dict__[_CACHE_KEY] = out
     return out
 
 
+def launch_gap(flight) -> Optional[tuple[float, float]]:
+    """The hole in the log that first motion fell in, or None if there was none.
+
+    (last sample on the pad, first sample off it), in seconds since t0. When it
+    is set, measured() has no launch and every figure that counts from first
+    motion is blank. This is what lets a caller say why, rather than leave the
+    reader to wonder what the report forgot.
+    """
+    measured(flight)
+    return flight.__dict__.get(_GAP_CACHE_KEY)
+
+
 def markers(flight) -> dict[str, Optional[float]]:
-    """Measured events, but with the launch flag standing in when first motion
-    cannot be measured.
+    """Measured events, but with the flight computer's launch call standing in
+    when first motion cannot be measured.
 
     For anchoring, not for quoting. Chart windows and the globe's pad reference
     are all pinned to launch, and a log that opens mid-boost has no measurable
     one — which would silently widen every window to the whole record and take
-    the pad datum from a second of powered flight. At chart scale the flag's
+    the pad datum from a second of powered flight. At chart scale the call's
     fifth of a second does not show, so it is the right answer there.
+
+    The call is declared_launch(), not simply the first flagged record. Where
+    records were lost ahead of the flag, the flag in the log is late by the
+    whole hole, and on 2026-07-05 195028 it would pin every window 0.47 s into
+    the boost.
 
     The summary card must NOT use this: a burn time started from a flag 0.2 s
     late is wrong by 13 per cent, which is the whole reason events.py exists.
     """
     out = dict(measured(flight))
     if out["launch"] is None:
-        out["launch"] = _flag_time(flight.records, flight.t0_us, "launch")
+        out["launch"] = declared_launch(flight)
     return out
 
 

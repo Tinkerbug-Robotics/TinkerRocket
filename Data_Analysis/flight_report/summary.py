@@ -27,7 +27,7 @@ from plot_flight_data_mini import get_array, gnss_to_enu, pressure_to_altitude  
 
 from markupsafe import Markup
 
-from .events import measured, span as _span
+from .events import launch_gap, measured, span as _span
 from .imu import accel_magnitude
 from .units import q
 
@@ -140,10 +140,19 @@ def compute_summary(flight) -> list[dict[str, Any]]:
     #
     # The bounds are the measured burn, not the flags, so the window no longer
     # opens 0.2 s after the motor lit.
+    #
+    # When the motor lit inside a hole in the log, the window is the burn from
+    # the end of the hole on: still thrust, and still clear of the ejection and
+    # the landing. The hint says so, because the motor may have pushed harder
+    # before the log came back — 2026-07-05 195028 resumes at 5.2 g and falls
+    # from there.
     imu = recs.get("ISM6HG256") or []
     if imu:
+        gap = launch_gap(flight)
         if events["launch"] is not None and events["burnout"] is not None:
             window, hint_window = (events["launch"], events["burnout"]), "under thrust"
+        elif gap is not None and events["burnout"] is not None:
+            window, hint_window = (gap[1], events["burnout"]), "under thrust, after the gap"
         elif events["launch"] is not None and events["apogee"] is not None:
             window, hint_window = (events["launch"], events["apogee"]), "launch to apogee (no burnout detected)"
         else:
@@ -161,7 +170,9 @@ def compute_summary(flight) -> list[dict[str, Any]]:
     # --- Timing --------------------------------------------------------------
     # Chronological: the burn, then the coast, then the top, then the whole
     # thing. Every one of them is measured off the sensor record and starts from
-    # the same instant of first motion, so they add up.
+    # the same instant of first motion, so they add up. When first motion fell
+    # in a hole in the log the ones that start from it are left off, and
+    # card_note() says why.
     burn = _span(events, "launch", "burnout")
     if burn is not None:
         cells.append(_cell("Burn time", burn, "s", 2, "first motion to thrust ending"))
@@ -212,3 +223,26 @@ def compute_summary(flight) -> list[dict[str, Any]]:
         cells.append(_cell("Boost vibration", vib["rms_hp_x"], "m/s²", 1, vib["hint"]))
 
     return cells
+
+
+def card_note(flight) -> str:
+    """One quiet line under the card: what it leaves blank, and why.
+
+    One case so far. When first motion fell in a hole in the log, every span
+    that counts from it is left off rather than measured from a guess, and a
+    card with three cells silently missing reads as a report that forgot them.
+    """
+    gap = launch_gap(flight)
+    if gap is None:
+        return ""
+    events = measured(flight)
+    blank = [name for key, name in (("burnout", "burn time"),
+                                    ("apogee", "time to apogee"),
+                                    ("landed", "flight time"))
+             if events[key] is not None]
+    a, b = gap
+    line = f"First motion fell in a {1e3 * (b - a):.0f} ms gap in the log ({a:.2f}–{b:.2f} s)"
+    if not blank:
+        return line + "."
+    listed = blank[0] if len(blank) == 1 else ", ".join(blank[:-1]) + " and " + blank[-1]
+    return f"{line}, so {listed} {'is' if len(blank) == 1 else 'are'} not shown."
