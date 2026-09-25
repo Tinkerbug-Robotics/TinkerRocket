@@ -2551,7 +2551,7 @@
 			(embedded_fonts no)
 		)
 	)
-	(text "Supervised arm:\nArming needs agreement of both MCUs. ARM_GATE is driven from VBAT_CON by Q13;\nQ13's base is pulled down only through Q14 and Q12 in series: Q14 from the OC's\nOC_ARM_EN, Q12 from the FC's FC_ARM via R132. Both must be driven high. An MCU\nthat is off, in reset, or high-Z holds its transistor off through the built-in\n47k base-emitter resistor, and R22 bleeds the gate in ~0.2 ms. GPIO44 has a weak\npull-up at reset, so the OC term is the fail-safe: OC firmware drops OC_ARM_EN\nwhen FC heartbeats stop. R139 limits Q13's collector current."
+	(text "Supervised arm:\nArming needs agreement of both MCUs. ARM_GATE is driven from VBAT_CON by Q13;\nQ13's base is pulled down only through Q14 and Q12 in series: Q14 from the OC's\nOC_ARM_EN, Q12 from the FC's FC_ARM via R132. Both must be driven high. An MCU\nthat is off, in reset, or high-Z holds its transistor off through the built-in\n47k base-emitter resistor, and R22 bleeds the gate in ~0.2 ms. GPIO44 has a weak\npull-up at reset, so the OC term is the fail-safe: OC firmware raises OC_ARM_EN\nonly during a fire test or real flight. R139 limits Q13's collector current."
 		(exclude_from_sim no)
 		(at 130.175 45.72 0)
 		(effects

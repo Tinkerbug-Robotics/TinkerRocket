@@ -76,6 +76,7 @@ static inline std::string itos(int v)
 #include "logger_retry_policy.h"      // #1228: retrying a flight logger that failed to come up
 #include "storage_health_policy.h"    // #281/#278, #1235 items 3/4: the storage go/no-go verdict
 #include "landed_lockout_policy.h"    // #317, #1235 item 5: no new log session after LANDED
+#include "arm_consent_policy.h"       // #1168: when the OC gives its half of the Beetle's pyro arm
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -1581,6 +1582,16 @@ static uint32_t latest_non_sensor_rx_ms = 0;
 // bounds the cmd-8 / self-OTA refusals through a SILENT FC — see
 // inflight_refusal_policy.h for why the first alone was a hole.
 static uint32_t inflight_entry_ms = 0;
+// Arm consent (arm_consent_policy.h): is the current INFLIGHT phase a
+// simulation? Stepped in processFrame on every NonSensorData frame, BEFORE
+// latest_rocket_state is published (the inflight_entry_ms ordering rule), and
+// read by serviceArmConsent() on loop_oc. The latch struct is the parse task's
+// alone; loop_oc reads only the bool.
+static ArmConsentPolicy::SimFlightLatch arm_consent_sim_latch;
+static volatile bool arm_consent_inflight_is_sim = false;
+// Defined after inflightHold(); queueOutStatusResponse() calls it the moment
+// it stages a PYRO_FIRE_TEST.
+static void armConsentFireTestStaged(uint8_t ch);
 
 // FC boot progress (FC_BOOT_STATUS_MSG), live only during the FC's setup_fc.
 // Deliberately NOT cleared when boot completes: the last frame carries the
@@ -3426,6 +3437,14 @@ static void queueOutStatusResponse(bool ready)
 
     const uint8_t cmd = pending_out_command;
 
+    // Arm consent: raise it BEFORE the FC can read a fire test, because the FC
+    // runs ARM -> settle -> FIRE as soon as it does. Every staging, repeats
+    // included, pushes the window's end out (arm_consent_policy.h).
+    if (cmd == PYRO_FIRE_TEST)
+    {
+        armConsentFireTestStaged((serving_cfg_len > 0) ? serving_cfg[0] : 0U);
+    }
+
     if (cmd != 0U)
     {
         ESP_LOGI("OC", "I2C TX StatusResponse: ready=%d cmd=0x%02X attempt=%u/%u (queued=%u)",
@@ -3948,6 +3967,102 @@ static InflightHold inflightHold()
     h.fc_age_ms    = fc_age_ms;
     h.hold_left_ms = InflightRefusalPolicy::holdRemainingMs(inflight_age);
     return h;
+}
+
+// Arm consent: the OC's half of the Beetle's two-processor pyro arm
+// (OC_ARM_EN -> Q14). The rule, what it covers and what it deliberately does
+// not are in arm_consent_policy.h. After setup_oc's boot-time LOW the pin has
+// ONE writer, loop_oc: every pass calls serviceArmConsent(), and
+// queueOutStatusResponse() — also loop_oc, the serving slot's only writer —
+// calls armConsentFireTestStaged() the moment it stages a PYRO_FIRE_TEST.
+// Every other board sets ARM_CONSENT_PIN to -1 and compiles this out.
+static ArmConsentPolicy::FireTestWindow arm_consent_fire_test;
+static uint8_t                          arm_consent_fire_test_ch = 0;
+static ArmConsentPolicy::Reason         arm_consent_reason = ArmConsentPolicy::Reason::None;
+static bool                             arm_consent_sim_noted = false;
+
+static void serviceArmConsent()
+{
+    if constexpr (config::ARM_CONSENT_PIN >= 0)
+    {
+        using ArmConsentPolicy::Reason;
+        const uint32_t now_ms    = millis();
+        const bool     test_open =
+            ArmConsentPolicy::fireTestWindowOpen(arm_consent_fire_test, now_ms);
+        const InflightHold hold  = inflightHold();
+        const bool     is_sim    = arm_consent_inflight_is_sim;
+        const Reason   why       = ArmConsentPolicy::decide(test_open, hold.refuse, is_sim);
+
+        // Say once per simulated flight why consent stayed low: on the bench
+        // that line is the evidence the sim ran with the arm stage shut.
+        if (hold.refuse && is_sim)
+        {
+            if (!arm_consent_sim_noted)
+            {
+                arm_consent_sim_noted = true;
+                ESP_LOGI("PYRO", "arm consent stays LOW (OC_ARM_EN, GPIO%d): this "
+                                 "INFLIGHT is a simulation, and the FC dry-fires a sim",
+                         (int)config::ARM_CONSENT_PIN);
+            }
+        }
+        else
+        {
+            arm_consent_sim_noted = false;
+        }
+
+        if (why == arm_consent_reason) return;
+        const Reason was   = arm_consent_reason;
+        arm_consent_reason = why;
+        if (ArmConsentPolicy::pinHigh(why) != ArmConsentPolicy::pinHigh(was))
+        {
+            gpio_set_level((gpio_num_t)config::ARM_CONSENT_PIN,
+                           ArmConsentPolicy::pinHigh(why) ? 1 : 0);
+        }
+
+        if (why == Reason::Flight)
+        {
+            ESP_LOGW("PYRO", "arm consent HIGH (OC_ARM_EN, GPIO%d): the FC reports "
+                             "INFLIGHT — held until it reports otherwise, and "
+                             "through a silent FC for up to %lu s more",
+                     (int)config::ARM_CONSENT_PIN,
+                     (unsigned long)(hold.hold_left_ms / 1000U));
+        }
+        else if (why == Reason::FireTest)
+        {
+            ESP_LOGW("PYRO", "arm consent HIGH (OC_ARM_EN, GPIO%d): fire test CH%u "
+                             "is being served to the FC — held %lu ms past its "
+                             "last delivery",
+                     (int)config::ARM_CONSENT_PIN, (unsigned)arm_consent_fire_test_ch,
+                     (unsigned long)ArmConsentPolicy::kFireTestHoldMs);
+        }
+        else if (was == Reason::Flight)
+        {
+            ESP_LOGW("PYRO", "arm consent LOW (OC_ARM_EN, GPIO%d): flight hold "
+                             "ended — FC state %u, last FC frame %lu ms ago",
+                     (int)config::ARM_CONSENT_PIN, (unsigned)latest_rocket_state,
+                     (unsigned long)hold.fc_age_ms);
+        }
+        else
+        {
+            ESP_LOGI("PYRO", "arm consent LOW (OC_ARM_EN, GPIO%d): fire-test window "
+                             "for CH%u closed",
+                     (int)config::ARM_CONSENT_PIN, (unsigned)arm_consent_fire_test_ch);
+        }
+    }
+}
+
+static void armConsentFireTestStaged(uint8_t ch)
+{
+    if constexpr (config::ARM_CONSENT_PIN >= 0)
+    {
+        ArmConsentPolicy::onFireTestStaged(arm_consent_fire_test, millis());
+        arm_consent_fire_test_ch = ch;
+        serviceArmConsent();   // up now, not on the next loop pass
+    }
+    else
+    {
+        (void)ch;
+    }
 }
 
 // #1106: the OC's veto on flashing ITS OWN image. OTA_BEGIN/OTA_FINISH for
@@ -4862,6 +4977,14 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             {
                 inflight_entry_ms = latest_non_sensor_rx_ms;
             }
+            // Arm consent: decide whether this INFLIGHT is a simulation before
+            // publishing it too, so loop_oc never pairs a sim's INFLIGHT with a
+            // previous phase's "real flight" verdict and raises consent for a
+            // pass (arm_consent_policy.h).
+            arm_consent_inflight_is_sim = ArmConsentPolicy::step(
+                arm_consent_sim_latch,
+                (RocketState)latest_non_sensor.rocket_state == INFLIGHT,
+                nsFlagSet(latest_non_sensor.flags, NSF_SIM_ACTIVE));
             latest_rocket_state = (RocketState)latest_non_sensor.rocket_state;
             // #1150: INFLIGHT with no pad reference means this OC joined the
             // flight in progress (an in-flight OC reset, or a both-MCU reset
@@ -9645,12 +9768,14 @@ static void setup_oc()
     // actively-pulled-high arm line: a single-fault-from-armed state on every
     // cold start.
     //
-    // Driven low here and left low. There is deliberately no path that raises
-    // it yet: consent belongs to flight software that has an actual reason to
-    // arm, and inventing one here would collapse the design back to the
-    // single-processor arm the rework removed. Until that exists the mini
-    // cannot fire a channel, which is the correct default and is what the M1
-    // bench section of #1211 already assumes.
+    // Driven low here. After this, serviceArmConsent() on loop_oc is the pin's
+    // only writer, and it raises consent for exactly two reasons: a
+    // PYRO_FIRE_TEST being served to the FC, or a real (not simulated) flight
+    // in progress. The rule is in arm_consent_policy.h. Until that existed
+    // nothing raised this pin, and the mini could not fire a channel at all,
+    // in a ground test or in flight. A bench LED on a channel still lit
+    // through R73's 2.2 k continuity path, which is how the gap was found
+    // (2026-09-24).
     //
     // if constexpr, not if: every other board sets the pin to -1, and GCC
     // warns about the 1ULL << -1 below even in a branch that can never run.
@@ -9666,8 +9791,8 @@ static void setup_oc()
         gpio_config(&arm_cfg);
         gpio_set_level((gpio_num_t)config::ARM_CONSENT_PIN, 0);
         ESP_LOGW("PYRO", "arm consent (OC_ARM_EN, GPIO%d) driven LOW at boot — "
-                         "the supervised arm needs both processors and nothing "
-                         "raises consent yet, so no channel can arm (#1168)",
+                         "raised only while a fire test is served to the FC or "
+                         "a real flight is in progress (#1168)",
                  (int)config::ARM_CONSENT_PIN);
     }
 
@@ -10616,6 +10741,12 @@ static void loop_oc()
                      (long long)_preempt_dt);
         }
     }
+
+    // Arm consent (arm_consent_policy.h), every pass: the flight hold follows
+    // the FC's reported state within one pass, and a fire-test window closes
+    // on time. Outside the pwr_pin_on gate so consent can drop whatever the
+    // rail is doing.
+    serviceArmConsent();
 
     // #398 item 3: drain one paced config-readback frame (if any) per pass.
     // Outside the pwr_pin_on gate so connect-time readback (low-power mode)

@@ -173,9 +173,28 @@ alone and a dead MCU disarms it.
 The out computer's term is the fail-safe, and it is there for a reason: GPIO44
 is the flight computer's U0RXD and carries a weak pull-up at and after reset, so
 the flight-computer term on its own is *not* a safe idle. The firmware contract
-that goes with the circuit: the out computer drives `OC_ARM_EN` low at boot,
-raises it only on an explicit arm, and drops it when flight-computer heartbeats
-stop. The flight computer keeps its own task watchdog for everything else.
+that goes with the circuit (the out computer's `arm_consent_policy.h`): the out
+computer drives `OC_ARM_EN` low at boot and raises it for exactly two reasons.
+The first is while it is serving a test-fire command to the flight computer,
+until 2 s after the last delivery. The second is while a real, not simulated,
+flight is in progress. The flight hold ends as soon as the flight computer
+reports anything other than `INFLIGHT`. It deliberately does **not** end when the
+flight computer goes quiet: it holds through a silent flight computer for up to
+10 minutes after the out computer first saw the flight, because dropping it
+would turn a link dropout or a flight-computer reboot near apogee into a lost
+deployment (owner decision, 2026-09-24). An out-computer reset drops it until
+the flight computer's frames reach the new session, and that is deliberate:
+nothing fires through a boot (owner decision, 2026-09-25). A flight-computer
+reset in flight keeps consent but cannot fire through that boot either, because
+the four fire pins have no pull at reset and each driver's built-in 47 kΩ holds
+its channel off. The flight computer keeps its own task watchdog for everything
+else.
+
+Until 2026-09-24 nothing raised `OC_ARM_EN`, so no channel could fire. An LED on
+a channel still lights during a test fire, through `R73`'s 2.2 kΩ continuity
+path at about 2 mA, so an LED cannot tell an armed channel from an unarmed one.
+Test with a real load and check that `PYRO_GND` (J2 pin 5) sits near 0 V during
+the pulse.
 
 **2026-09-02: the window watchdog is gone.** The 2026-08-28 rework had a
 supervisor on the flight computer's `CHIP_PU` that reset it whenever GPIO8

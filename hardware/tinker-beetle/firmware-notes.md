@@ -29,7 +29,9 @@ The hardware as fabricated:
   computer GPIO44) and `OC_ARM_EN` (out computer GPIO11), both of which must be high.
   There is no charge pump and no hardware one-shot ceiling; the windowed watchdog that
   briefly replaced them was itself removed on 2026-09-02 in favour of a firmware
-  heartbeat.
+  heartbeat. *(2026-09-24: when the out computer raises its consent is in the README's
+  "Arming needs both processors" and `arm_consent_policy.h`. In flight it is held
+  through a silent flight computer, not dropped on heartbeat loss.)*
 
 ---
 
@@ -95,8 +97,9 @@ catches a mismatch.
 > the IMU interrupt input** — configuring LEDC on it breaks the IMU and arms nothing.
 > The real path is two static consent lines, `FC_ARM` (FC GPIO44) and `OC_ARM_EN`
 > (OC GPIO11), both high to arm, with the out computer holding the veto; see
-> [`arm-watchdog-rework.md`](arm-watchdog-rework.md). Kept below only so the old
-> names stay searchable.
+> [`arm-watchdog-rework.md`](arm-watchdog-rework.md), and for when the out computer
+> gives consent, the README's *Arming needs both processors*. Kept below only so
+> the old names stay searchable.
 
 
 **`PYRO_ARM` no longer exists.** Arming is one operation: **run a 50% duty
