@@ -460,6 +460,52 @@ def test_measured_events_beat_the_flags() -> None:
     )
 
 
+def test_roll_control_marks_burnout_where_its_traces_have_it() -> None:
+    """The four roll-control panels put the burnout line on their traces' axis.
+
+    roll_series re-zeroes every trace to the first record with the launch flag
+    set, the clock the flight computer runs its roll profile on. The markers were
+    offset from measured first motion instead, 0.196 s earlier on the sample
+    flight, so all four panels drew burnout at 1.528 s on an axis where the
+    traces have it at 1.332 s.
+    """
+    import numpy as np
+
+    from flight_report.charts import _EVENT_STYLE
+    from flight_report.events import measured
+    from flight_report.flight import Flight
+    from flight_report.modules import roll
+
+    flight = Flight.from_bin(SAMPLE_BIN)
+    flight.load()
+    t0 = flight.t0_us
+    ev = measured(flight)
+    flag = next((r["time_us"] - t0) / 1e6
+                for r in flight.records["NonSensor"] if r.get("launch"))
+    # The two origins are far enough apart that a line offset from the wrong
+    # one cannot pass the 1 ms checks below.
+    assert flag - ev["launch"] > 0.1
+
+    panels = roll.analyze(flight).charts
+    assert [p["id"] for p in panels] == [
+        "chart-roll-angle", "chart-roll-error", "chart-roll-rate", "chart-roll-cmd"]
+
+    # The traces' axis, rebuilt from the log: each gyro sample at its own time
+    # since the flag.
+    gyro = next(t for t in panels[2]["traces"] if t["name"] == "Gyro X")
+    imu_t = np.array([(r["time_us"] - t0) / 1e6 for r in flight.records["ISM6HG256"]])
+    assert np.isin(gyro["x"], np.round(imu_t - flag, 6)).all()
+
+    burnout = ev["burnout"] - flag
+    color = _EVENT_STYLE["burnout"][0]
+    for p in panels:
+        lines = [s["x0"] for s in p["layout"]["shapes"]
+                 if s["type"] == "line" and s["xref"] == "x" and s["line"]["color"] == color]
+        assert len(lines) == 1 and abs(lines[0] - burnout) < 1e-3, (p["id"], lines, burnout)
+    label = next(a for a in panels[0]["layout"]["annotations"] if a["text"] == "Burnout")
+    assert abs(label["x"] - burnout) < 1e-3, (label["x"], burnout)
+
+
 # ---------------------------------------------------------------------------
 # First motion inside a hole in the log
 #

@@ -152,32 +152,37 @@ def _segmented(x, y, name, color, width) -> list[dict[str, Any]]:
     return out
 
 
-def _events_since_launch(flight, lo: float, hi: float) -> dict[str, float]:
+def _events_since_launch(flight, launch_t: float, lo: float, hi: float) -> dict[str, float]:
     """The measured events, on the launch-relative axis these charts use.
 
-    Filtered to the plotted window, as `roll_pid._event_list` is. Ejection is
-    often after the window ends — the window stops just before the charge fires —
-    and an event marker outside the range is not merely invisible: `chart()` gives
-    it a data-referenced shape, which drags every panel's autorange out to reach
-    it and leaves a second of dead space on the right of all four.
+    That axis is `roll_series`'s: seconds since its `launch_t`, the first record
+    with the launch flag set. The flight computer runs its roll profile on the
+    same clock, counting waypoint times from its launch call, so the traces stay
+    on it and the markers are offset from the same instant.
 
-    Two things used to be wrong here. The times came from the roll-PID replay's
+    Filtered to the plotted window. Ejection is often after the window ends — the
+    window stops just before the charge fires — and an event marker outside the
+    range is not merely invisible: `chart()` gives it a data-referenced shape,
+    which drags every panel's autorange out to reach it and leaves a second of
+    dead space on the right of all four.
+
+    Three things used to be wrong here. The times came from the roll-PID replay's
     own flag-derived values rather than the measured ones, so this section marked
     a burnout 71 ms away from the burnout line on every other chart in the report.
-    And the ejection was drawn under the key "apogee" — the charge, labelled as
-    the top of the flight, which on the sample flight is a second later and in
-    the other direction.
+    The ejection was drawn under the key "apogee" — the charge, labelled as the
+    top of the flight, which on the sample flight is a second later and in the
+    other direction. And the events were offset from measured first motion, which
+    comes 0.05-0.2 s before the flag on the roll-control flights logged so far, so
+    every marker sat that much late against the traces: burnout at 1.528 s on the
+    sample flight, where the traces have it at 1.332 s.
     """
     ev = markers(flight)
-    launch = ev.get("launch")
-    if launch is None:
-        return {}
     out: dict[str, float] = {}
     for key in ("burnout", "ejection", "apogee"):
         value = ev.get(key)
         if value is None or not np.isfinite(value):
             continue
-        rel = float(value) - launch
+        rel = float(value) - launch_t
         if lo <= rel <= hi:
             out[key] = round(rel, 3)
     return out
@@ -207,7 +212,7 @@ def _control_charts(flight, s: dict, facts: dict[str, Any]) -> list[dict[str, An
     x_pad = 0.05 * (x_hi - x_lo)
     x_range = [x_lo - x_pad, x_hi + x_pad]
 
-    events = _events_since_launch(flight, x_lo, x_hi)
+    events = _events_since_launch(flight, s["launch_t"], x_lo, x_hi)
     spans = _null_rate_segments(tw, s.get("track_is_ang"))
     specs: list[Optional[dict[str, Any]]] = []
     H = 260                      # one panel height, uniform across the stack
