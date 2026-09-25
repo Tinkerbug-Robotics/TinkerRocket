@@ -11,7 +11,7 @@
 10;"C28, C44, C50, C51, C57, C68, C95, C96, C97, C101, C104";"C_0402_1005Metric";11;"10 nF";"CL05B103KB5NNNC";"Samsung";"Fit"
 11;"C46";"C_0402_1005Metric";1;"2.2 nF";"CC0402KRX7R9BB222";"Yageo";"Fit"
 12;"C93";"C_0402_1005Metric";1;"22 pF";"CL05C220JB5NNNC";"Samsung";"DNP"
-13;"C130";"Supercap_Radial_D8.0mm_H16.0mm_P3.50mm";1;"CXHP2R7305R-TWX";"CXHP2R7305R-TWX";"CDA (Zhifengwei)";"Fit"
+13;"C130";"Supercap_Radial_D8.0mm_H12.0mm_P3.50mm";1;"CXHP2R7205R-TW";"CXHP2R7205R-TW";"CDA (Zhifengwei)";"Fit"
 14;"CR3";"TVS-SP05_LTF";1;"SP0503BAHTG";"SP0503BAHTG";"Littelfuse";"Fit"
 15;"D1, D2, D3, D4";"SOD-523_0P9X1P3_ONS";4;"BAT54XV2T1G";"BAT54XV2T1G";"onsemi";"Fit"
 16;"D6";"LED_0402_1005Metric";1;"Green";"XL-1005UGC";"Xinglight";"Fit"

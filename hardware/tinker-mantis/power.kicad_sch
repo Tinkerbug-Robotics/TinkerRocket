@@ -20589,7 +20589,7 @@
 				)
 			)
 		)
-		(property "Value" "CXHP2R7305R-TWX"
+		(property "Value" "CXHP2R7205R-TW"
 			(at 255.905 88.265 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20599,7 +20599,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:Supercap_Radial_D8.0mm_H16.0mm_P3.50mm"
+		(property "Footprint" "Footprints:Supercap_Radial_D8.0mm_H12.0mm_P3.50mm"
 			(at 252.73 88.265 0)
 			(hide yes)
 			(show_name no)
@@ -20632,7 +20632,7 @@
 				)
 			)
 		)
-		(property "MPN" "CXHP2R7305R-TWX"
+		(property "MPN" "CXHP2R7205R-TW"
 			(at 252.73 88.265 0)
 			(hide yes)
 			(show_name no)
