@@ -895,15 +895,18 @@ TEST(Lc86Gsv, EmptyBurstIsCountedButMakesNoRecord)
 
     feedAll(p, frame("GPGSV,1,1,00,1") + frame("GLGSV,1,1,00,1") + frame(kCloser));
     EXPECT_EQ(p.gsvBursts(), 1u);
+    EXPECT_EQ(p.gsvBurstsWithSats(), 0u);
     EXPECT_FALSE(p.takeSat(sat));
 
     feedAll(p, frame("GPGSV,1,1,01,01,40,083,42,1") + frame(kCloser));
     EXPECT_EQ(p.gsvBursts(), 2u);
+    EXPECT_EQ(p.gsvBurstsWithSats(), 1u);   // counted at the close, not the take
     EXPECT_TRUE(p.takeSat(sat));
 
     // A closer with no burst open is not a burst.
     feedAll(p, frame(kCloser));
     EXPECT_EQ(p.gsvBursts(), 2u);
+    EXPECT_EQ(p.gsvBurstsWithSats(), 1u);
 }
 
 TEST(Lc86Gsv, BeiDouB1cSetNeverReplacesTheB1iOne)

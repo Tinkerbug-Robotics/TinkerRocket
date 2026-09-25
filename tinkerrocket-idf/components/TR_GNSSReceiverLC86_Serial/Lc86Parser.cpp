@@ -444,6 +444,7 @@ void Lc86Parser::finalizeGsv()
     gsv_active_ = false;
     gsv_bursts_++;             // empty ones too: this is the GSV rate
     if (build_n_ == 0) return;
+    gsv_bursts_with_sats_++;   // this one becomes a record
 
     // Highest satellites first. A four-constellation sky can hold more
     // satellites with signal than the record's 32 slots, and gnssSatSelect()

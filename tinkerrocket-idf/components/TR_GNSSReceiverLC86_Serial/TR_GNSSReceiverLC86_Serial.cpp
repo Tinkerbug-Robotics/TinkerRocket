@@ -533,10 +533,10 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
 
     // Arm the one-line GSV rate report (checkGsvRate) from here, so the
     // configuration traffic above is not counted.
-    gsv_check_epochs0_ = pvt_epochs_;
-    gsv_check_bursts0_ = parser_.gsvBursts();
-    sat_records_       = 0;
-    gsv_checked_       = !sat_stream_ok_;   // nothing to report without GSV
+    gsv_check_epochs0_     = pvt_epochs_;
+    gsv_check_bursts0_     = parser_.gsvBursts();
+    gsv_check_sat_bursts0_ = parser_.gsvBurstsWithSats();
+    gsv_checked_           = !sat_stream_ok_;   // nothing to report without GSV
 
     ESP_LOGI(TAG, "Configuration complete.");
     return true;
@@ -615,7 +615,6 @@ bool TR_GNSSReceiverLC86Serial::pollNewSat(GNSSSatData &out)
     // MCU sample time, same clock and same meaning as GNSSData.time_us; the
     // parser filled itow_ms from the epoch's $PQTMPVT so the two records pair.
     out.time_us = (uint32_t)esp_timer_get_time();
-    sat_records_++;
     return true;
 }
 
@@ -628,8 +627,10 @@ void TR_GNSSReceiverLC86Serial::checkGsvRate()
     // sends none, shows up without anyone reading a flight log. Bursts with
     // no satellites in them count too (the module still sends a set per
     // constellation, so a board indoors shows its rate); "with satellites"
-    // is how many became GNSS_SAT_MSG records. The one log call lands inside
-    // the collector's GNSS timing window, so its >1 ms counter may tick once.
+    // is how many of those same bursts became GNSS_SAT_MSG records. Both are
+    // the parser's counts over one window: a record taken here can belong to
+    // a burst that closed inside begin(). The one log call lands inside the
+    // collector's GNSS timing window, so its >1 ms counter may tick once.
     if (gsv_checked_) return;
     const uint32_t fixes = pvt_epochs_ - gsv_check_epochs0_;
     if (fixes < kGsvCheckSeconds * update_rate_hz) return;
@@ -652,10 +653,12 @@ void TR_GNSSReceiverLC86Serial::checkGsvRate()
     }
     else
     {
+        const uint32_t with_sats =
+            parser_.gsvBurstsWithSats() - gsv_check_sat_bursts0_;
         ESP_LOGI(TAG, "GSV: %lu bursts in %lu fixes (~%lu s), %lu with "
                       "satellites",
                  (unsigned long)bursts, (unsigned long)fixes,
-                 (unsigned long)seconds, (unsigned long)sat_records_);
+                 (unsigned long)seconds, (unsigned long)with_sats);
     }
 }
 

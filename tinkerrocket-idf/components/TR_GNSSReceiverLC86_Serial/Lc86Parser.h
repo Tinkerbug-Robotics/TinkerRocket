@@ -121,6 +121,7 @@ public:
     uint32_t gsvOverflows() const { return gsv_overflows_; }    // entries dropped at kMaxSatBuild
     uint32_t gsvSkipped() const { return gsv_skipped_; }        // BeiDou B1C lines left out
     uint32_t gsvBursts() const { return gsv_bursts_; }          // bursts closed, empty ones too
+    uint32_t gsvBurstsWithSats() const { return gsv_bursts_with_sats_; } // ... that made a record
 
 private:
     // NMEA 0183 caps sentences at 82 chars but Quectel's $PQTMPVT runs ~137;
@@ -181,6 +182,7 @@ private:
     uint32_t gsv_overflows_   = 0;
     uint32_t gsv_skipped_     = 0;
     uint32_t gsv_bursts_      = 0;
+    uint32_t gsv_bursts_with_sats_ = 0;
 };
 
 }  // namespace lc86

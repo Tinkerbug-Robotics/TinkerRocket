@@ -134,12 +134,12 @@ class TR_GNSSReceiverLC86Serial
         uint32_t pvt_epochs_ = 0;
 
         // checkGsvRate(): the PVT epoch and GSV burst counts when begin()
-        // finished, records handed out since, and whether the line is done
-        // (true until a begin() that enabled GSV arms it).
-        uint32_t gsv_check_epochs0_ = 0;
-        uint32_t gsv_check_bursts0_ = 0;
-        uint32_t sat_records_       = 0;
-        bool     gsv_checked_       = true;
+        // finished, and whether the line is done (true until a begin() that
+        // enabled GSV arms it).
+        uint32_t gsv_check_epochs0_     = 0;
+        uint32_t gsv_check_bursts0_     = 0;
+        uint32_t gsv_check_sat_bursts0_ = 0;
+        bool     gsv_checked_           = true;
 };
 
 #endif
