@@ -38,6 +38,14 @@ gyro X = the roll-rate input), two tables:
 Plus the mean samples per tick (the N behind the boxcar) and the low-g
 near-rail duty: the old body-frame test on the freshest sample against the
 new per-sensor-axis test on the window's worst sample.
+
+Each window's ODR-rate work runs at that window's own ODR.  A log flown at
+the DYNAMIC IMU rate changes ODR in flight: the FC reprograms the chip at
+deployment (applyImuRateForFlightPhase), and the 2026-08-29 log steps from
+3817 Hz to 952 Hz at T+3.049 s.  So the stream is cut into runs at one rate,
+a window is analysed at the median-spacing ODR of the run it lies in, and a
+window that spans a step is split at it, with a note saying which parts were
+analysed and which were not.
 """
 
 import argparse
@@ -72,6 +80,14 @@ BANDS = [("tone 700-900 Hz", 700.0, 900.0), ("bending 25-35 Hz", 25.0, 35.0), ("
 # The ODR-rate PSD length the tone is read from, and the band it is looked for in.
 NPERSEG_ODR = 1024
 TONE_SEARCH_HZ = (500.0, 1000.0)
+# Fewest ticks a window, or the part of one at a single ODR, needs to be analysed.
+MIN_TICKS = 64
+# Rate runs: the ISM6HG256 ODR ladder (IMU_RATE_OPTIONS_HZ is 960 Hz x 2^k), the
+# intervals in the median that sets each interval's local rate, and the fewest
+# intervals a stretch on one rung needs to count as a rate, not the switch.
+ODR_LADDER_HZ = 960.0
+RATE_MEDIAN_W = 33
+RATE_RUN_MIN = 64
 
 # NumPy 2.4 dropped np.trapz; older installs lack np.trapezoid.
 _trapz = getattr(np, "trapezoid", None) or getattr(np, "trapz")
@@ -220,6 +236,110 @@ def recover_raw(imu, cm):
 
 
 # ----------------------------------------------------------------------------
+# Rate runs
+# ----------------------------------------------------------------------------
+
+def rate_runs(t_us, t_launch):
+    """Split the samples into runs at one ODR: [dict(i0, i1, odr, t0, t1)].
+
+    A run is samples [i0, i1), from T+t0 to T+t1 s, at the ODR its own median
+    spacing gives.  Each interval's local spacing is the median of the
+    RATE_MEDIAN_W around it, which a dropped sample or a late read does not
+    move, and it goes on the nearest rung of the ODR ladder.  The rungs are 2x
+    apart and the oscillator is within a few % of nominal, so a rate would have
+    to be ~30 % off its rung to land on the next.
+
+    A stretch on one rung shorter than RATE_RUN_MIN intervals is not a rate.
+    Between two runs on one rung it is a burst of drops and joins them, and at
+    either end of the span it joins the run beside it.  Between two rates it is
+    the switch (the 736 us gap at T+3.049 s on 2026-08-29) and belongs to
+    neither.  So a fixed-rate log is always one run over every interval, and its
+    ODR is the median over the whole span, as it always was.
+    """
+    t_us = np.asarray(t_us, dtype=np.int64)
+    dt = np.diff(t_us)
+    spans = [(0, len(dt))]
+    if len(dt) >= RATE_MEDIAN_W:
+        h = RATE_MEDIAN_W // 2
+        local = np.median(np.lib.stride_tricks.sliding_window_view(dt, RATE_MEDIAN_W), axis=1)
+        local = np.concatenate([np.full(h, local[0]), local, np.full(h, local[-1])])
+        rung = np.round(np.log2(1e6 / local / ODR_LADDER_HZ)).astype(int)
+        cuts = np.flatnonzero(np.diff(rung)) + 1
+        merged = []
+        for a, b in zip(np.concatenate([[0], cuts]), np.concatenate([cuts, [len(dt)]])):
+            if b - a < RATE_RUN_MIN:
+                continue
+            if merged and merged[-1][2] == rung[a]:
+                merged[-1][1] = b
+            else:
+                merged.append([a, b, rung[a]])
+        if merged:
+            merged[0][0], merged[-1][1] = 0, len(dt)
+            spans = [(a, b) for a, b, _ in merged]
+    # Intervals [a, b) join samples a..b.  A sample two runs share goes to the later one.
+    bounds = [[int(a), int(b) + 1] for a, b in spans]
+    for prev, nxt in zip(bounds, bounds[1:]):
+        prev[1] = min(prev[1], nxt[0])
+    return [dict(i0=i0, i1=i1, odr=1e6 / np.median(dt[a:b]),
+                 t0=(t_us[i0] - t_launch) / 1e6, t1=(t_us[i1 - 1] - t_launch) / 1e6)
+            for (i0, i1), (a, b) in zip(bounds, spans)]
+
+
+def runs_text(runs):
+    """'3817 Hz to T+3.048 s, 952 Hz from T+3.049 s'; a single run is its ODR alone."""
+    last = len(runs) - 1
+    return ", ".join(f"{run['odr']:.0f} Hz" + (f" from T+{run['t0']:.3f} s" if k else "")
+                     + (f" to T+{run['t1']:.3f} s" if k < last else "") for k, run in enumerate(runs))
+
+
+def tick_runs(r, runs):
+    """Per tick, the index of the run that holds every sample it drained, else -1."""
+    last = r["last_idx"].astype(np.int64)
+    first = last - r["n"].astype(np.int64) + 1
+    out = np.full(len(last), -1)
+    for k, run in enumerate(runs):
+        out[(r["n"] > 0) & (first >= run["i0"]) & (last < run["i1"])] = k
+    return out
+
+
+def split_at_rate_steps(name, win, r, tick_run, runs, t_rel):
+    """The window as parts at one ODR each, [(label, ticks, run)], and the notes to print.
+
+    A window inside one run comes back whole under its own name, whatever its
+    length.  One that spans a rate step is split there.  Each part with
+    MIN_TICKS ticks is analysed at its own ODR, under the window's name when it
+    is the only one, and the notes say which parts were analysed and which were
+    not.  A tick that drains samples from both sides of the step is in neither
+    part: its mean mixes two rates.
+    """
+    ids = tick_run[win]
+    if not win.any():
+        return [(name, win, None)], []
+    if ids[0] >= 0 and (ids == ids[0]).all():
+        return [(name, win, runs[ids[0]])], []
+    idx, n = r["last_idx"][win], r["n"][win]
+    a, b = int(idx[0]) - int(n[0]) + 1, int(idx[-1]) + 1
+    touched = [run for run in runs if run["i0"] < b and run["i1"] > a]
+    notes = [f"[{name}] spans an ODR step ({runs_text(touched)}): split there, each part at its own ODR"]
+    parts = []
+    for k in dict.fromkeys(ids[ids >= 0].tolist()):
+        sel = win & (tick_run == k)
+        t = t_rel[sel]
+        say = f"  T+{t[0]:.3f}..{t[-1]:.3f} s at {runs[k]['odr']:.0f} Hz: {len(t)} ticks, "
+        if len(t) < MIN_TICKS:
+            notes.append(say + f"too few to analyse (fewer than {MIN_TICKS})")
+        else:
+            notes.append(say + "analysed below")
+            parts.append((sel, runs[k]))
+    mixed = int((ids < 0).sum())
+    if mixed:
+        notes.append(f"  {mixed} tick{'s drain' if mixed > 1 else ' drains'} samples from both sides "
+                     f"of the step: in neither part")
+    labels = [name] if len(parts) == 1 else [f"{name}-{i + 1}" for i in range(len(parts))]
+    return [(label, sel, run) for label, (sel, run) in zip(labels, parts)], notes
+
+
+# ----------------------------------------------------------------------------
 # Spectra and bands
 # ----------------------------------------------------------------------------
 
@@ -307,9 +427,9 @@ def load(path, rate_override=None, span=(-2.0, 12.0)):
 
     n_ticks = int((hi_us - lo_us) * rate / 1e6)
     tick_us = lo_us + (np.arange(1, n_ticks + 1) * (1e6 / rate)).astype(np.int64)
-    odr = 1e6 / np.median(np.diff(t_sel))
     return dict(path=path, cfg=cfg, cm=cm, t_us=t_sel, raw=raw_sel,
-                tick_us=tick_us, t_launch=t_launch, rate=rate, odr=odr, n_imu=len(imu))
+                tick_us=tick_us, t_launch=t_launch, rate=rate, runs=rate_runs(t_sel, t_launch),
+                n_imu=len(imu))
 
 
 def analyse(d, replay):
@@ -318,9 +438,9 @@ def analyse(d, replay):
     fresh = to_body(r["last"], d["cm"])
     mean = to_body(r["mean"], d["cm"])
     t_rel = (d["tick_us"] - d["t_launch"]) / 1e6
-    fs, odr = d["rate"], d["odr"]
+    fs = d["rate"]
     nyq = fs / 2.0
-    margin = int(0.25 * odr)
+    tick_run = tick_runs(r, d["runs"])
 
     # The old verdict, exactly as flown: the body-frame low-g values of the
     # freshest sample against (FS - 0.5) g on any axis.
@@ -329,83 +449,97 @@ def analyse(d, replay):
 
     rows = []
     for name, lo, hi in WINDOWS:
-        sel = (t_rel >= lo) & (t_rel < hi) & (r["n"] > 0)
-        if sel.sum() < 64:
-            continue
-        idx = r["last_idx"][sel].astype(np.int64)
-        n = r["n"][sel].astype(np.int64)
-        i0 = max(0, int(idx[0] - n[0] + 1) - margin)
-        i1 = min(len(d["raw"]), int(idx[-1]) + 1 + margin)
-        body_seg = to_body(d["raw"][i0:i1], d["cm"])
-        in_win = np.zeros(i1 - i0, dtype=bool)
-        in_win[int(idx[0] - n[0] + 1) - i0:int(idx[-1]) + 1 - i0] = True
+        win = (t_rel >= lo) & (t_rel < hi) & (r["n"] > 0)
+        parts, notes = split_at_rate_steps(name, win, r, tick_run, d["runs"], t_rel)
+        if notes:
+            rows.append(dict(window=name, notes=notes))
+        for label, sel, run in parts:
+            if sel.sum() < MIN_TICKS:
+                continue
+            odr = run["odr"]
+            margin = int(0.25 * odr)
+            idx = r["last_idx"][sel].astype(np.int64)
+            n = r["n"][sel].astype(np.int64)
+            # The band-pass segment ends where the run does, as it ends where
+            # the data does: past a rate step its FFT would take samples at two
+            # spacings for one.
+            i0 = max(run["i0"], int(idx[0] - n[0] + 1) - margin)
+            i1 = min(run["i1"], int(idx[-1]) + 1 + margin)
+            body_seg = to_body(d["raw"][i0:i1], d["cm"])
+            in_win = np.zeros(i1 - i0, dtype=bool)
+            in_win[int(idx[0] - n[0] + 1) - i0:int(idx[-1]) + 1 - i0] = True
 
-        nperseg = 1 << int(math.log2(max(16, min(256, sel.sum() // 2))))
-        # The ODR-rate PSD is NPERSEG_ODR points when the window holds that
-        # many samples, else shrunk to fit like the tick-rate one above, which
-        # keeps the plot's reference line.  The tone is named only from the
-        # full-length PSD, and only when the search band lies below the ODR
-        # Nyquist: an argmax over a band with no bins lands on bin 0, a 0 Hz
-        # "tone" nobody measured.
-        n_odr = int(in_win.sum())
-        nperseg_odr = NPERSEG_ODR if n_odr >= NPERSEG_ODR else 1 << int(math.log2(max(16, n_odr // 2)))
-        if odr / 2.0 < TONE_SEARCH_HZ[0]:
-            tone_na = (f"the {TONE_SEARCH_HZ[0]:.0f}-{TONE_SEARCH_HZ[1]:.0f} Hz search band is above "
-                       f"the ODR Nyquist ({odr / 2.0:.0f} Hz)")
-        elif nperseg_odr < NPERSEG_ODR:
-            tone_na = f"{n_odr} ODR samples in the window, short of one {NPERSEG_ODR}-point segment"
-        else:
-            tone_na = None
-        row = dict(window=name, ticks=int(sel.sum()), n_mean=float(np.mean(n)), n_max=int(np.max(n)),
-                   old_rail_duty=float(np.mean(old_rail[sel])),
-                   new_rail_duty=float(np.mean(r["near_rail"][sel])), tone_na=tone_na, channels=[])
-        for cname, col, unit in CHANNELS:
-            # --- the filter itself: band-passed full-rate, decimated both ways
-            x = body_seg[:, col]
-            f_full, p_full = welch(x[in_win], odr, nperseg_odr)
-            f_tone = None
-            if tone_na is None:
-                hi_full = (f_full >= TONE_SEARCH_HZ[0]) & (f_full <= TONE_SEARCH_HZ[1])
-                f_tone = float(f_full[int(np.argmax(np.where(hi_full, p_full, -1.0)))])
-            cs_bands = []
-            for bname, blo, bhi in BANDS:
-                blo_, bhi_ = (nyq, odr / 2.0) if blo is None else (blo, bhi)
-                xbp = bandpass(x, odr, blo_, bhi_)
-                fresh_bp = xbp[idx - i0]
-                cs = np.concatenate([[0.0], np.cumsum(xbp)])
-                mean_bp = (cs[idx - i0 + 1] - cs[idx - i0 - n + 1]) / n
-                full = rms(xbp[in_win])
-                # Gains are referenced to the ODR-rate band RMS: the freshest
-                # pick of a line near a multiple of half the tick rate has a
-                # phase-dependent RMS, so it is not a fixed reference.
-                cs_bands.append(dict(name=bname, lo=blo_, hi=bhi_, full_rms=full,
-                                     fresh_rms=rms(fresh_bp), mean_rms=rms(mean_bp),
-                                     pick=(rms(fresh_bp) / full) if full > 0 else float("nan"),
-                                     gain=(rms(mean_bp) / full) if full > 0 else float("nan")))
-            # --- what the estimators see: the tick-rate streams
-            xf, xm = fresh[sel, col], mean[sel, col]
-            f, pf = welch(xf, fs, nperseg)
-            _, pm = welch(xm, fs, nperseg)
-            hi_band = (f >= 100.0) & (f <= nyq)
-            ipk = int(np.argmax(np.where(hi_band, pf, -1.0)))
-            row["channels"].append(dict(
-                name=cname, unit=unit,
-                sigma_fresh=float(np.std(xf)), sigma_mean=float(np.std(xm)),
-                hi_rms_fresh=band_rms(f, pf, 100.0, nyq), hi_rms_mean=band_rms(f, pm, 100.0, nyq),
-                peak_hz=float(f[ipk]), tone_hz=f_tone,
-                tone_alias_hz=alias_of(f_tone, fs) if f_tone is not None else None,
-                bands=cs_bands, f=f, pf=pf, pm=pm,
-                f_full=f_full[f_full <= nyq], p_full=p_full[f_full <= nyq]))
-        rows.append(row)
+            nperseg = 1 << int(math.log2(max(16, min(256, sel.sum() // 2))))
+            # The ODR-rate PSD is NPERSEG_ODR points when the window holds that
+            # many samples, else shrunk to fit like the tick-rate one above, which
+            # keeps the plot's reference line.  The tone is named only from the
+            # full-length PSD, and only when the search band lies below the ODR
+            # Nyquist: an argmax over a band with no bins lands on bin 0, a 0 Hz
+            # "tone" nobody measured.
+            n_odr = int(in_win.sum())
+            nperseg_odr = NPERSEG_ODR if n_odr >= NPERSEG_ODR else 1 << int(math.log2(max(16, n_odr // 2)))
+            if odr / 2.0 < TONE_SEARCH_HZ[0]:
+                tone_na = (f"the {TONE_SEARCH_HZ[0]:.0f}-{TONE_SEARCH_HZ[1]:.0f} Hz search band is above "
+                           f"the ODR Nyquist ({odr / 2.0:.0f} Hz)")
+            elif nperseg_odr < NPERSEG_ODR:
+                tone_na = f"{n_odr} ODR samples in the window, short of one {NPERSEG_ODR}-point segment"
+            else:
+                tone_na = None
+            row = dict(window=label, odr=odr, span=(t_rel[sel][0], t_rel[sel][-1]) if notes else None,
+                       ticks=int(sel.sum()), n_mean=float(np.mean(n)), n_max=int(np.max(n)),
+                       old_rail_duty=float(np.mean(old_rail[sel])),
+                       new_rail_duty=float(np.mean(r["near_rail"][sel])), tone_na=tone_na, channels=[])
+            for cname, col, unit in CHANNELS:
+                # --- the filter itself: band-passed full-rate, decimated both ways
+                x = body_seg[:, col]
+                f_full, p_full = welch(x[in_win], odr, nperseg_odr)
+                f_tone = None
+                if tone_na is None:
+                    hi_full = (f_full >= TONE_SEARCH_HZ[0]) & (f_full <= TONE_SEARCH_HZ[1])
+                    f_tone = float(f_full[int(np.argmax(np.where(hi_full, p_full, -1.0)))])
+                cs_bands = []
+                for bname, blo, bhi in BANDS:
+                    blo_, bhi_ = (nyq, odr / 2.0) if blo is None else (blo, bhi)
+                    xbp = bandpass(x, odr, blo_, bhi_)
+                    fresh_bp = xbp[idx - i0]
+                    cs = np.concatenate([[0.0], np.cumsum(xbp)])
+                    mean_bp = (cs[idx - i0 + 1] - cs[idx - i0 - n + 1]) / n
+                    full = rms(xbp[in_win])
+                    # Gains are referenced to the ODR-rate band RMS: the freshest
+                    # pick of a line near a multiple of half the tick rate has a
+                    # phase-dependent RMS, so it is not a fixed reference.
+                    cs_bands.append(dict(name=bname, lo=blo_, hi=bhi_, full_rms=full,
+                                         fresh_rms=rms(fresh_bp), mean_rms=rms(mean_bp),
+                                         pick=(rms(fresh_bp) / full) if full > 0 else float("nan"),
+                                         gain=(rms(mean_bp) / full) if full > 0 else float("nan")))
+                # --- what the estimators see: the tick-rate streams
+                xf, xm = fresh[sel, col], mean[sel, col]
+                f, pf = welch(xf, fs, nperseg)
+                _, pm = welch(xm, fs, nperseg)
+                hi_band = (f >= 100.0) & (f <= nyq)
+                ipk = int(np.argmax(np.where(hi_band, pf, -1.0)))
+                row["channels"].append(dict(
+                    name=cname, unit=unit,
+                    sigma_fresh=float(np.std(xf)), sigma_mean=float(np.std(xm)),
+                    hi_rms_fresh=band_rms(f, pf, 100.0, nyq), hi_rms_mean=band_rms(f, pm, 100.0, nyq),
+                    peak_hz=float(f[ipk]), tone_hz=f_tone,
+                    tone_alias_hz=alias_of(f_tone, fs) if f_tone is not None else None,
+                    bands=cs_bands, f=f, pf=pf, pm=pm,
+                    f_full=f_full[f_full <= nyq], p_full=p_full[f_full <= nyq]))
+            rows.append(row)
     return rows, dict(fresh=fresh, mean=mean, t_rel=t_rel, r=r)
 
 
 def report(d, rows):
-    print(f"{Path(d['path']).name}: {d['n_imu']} IMU records, ODR {d['odr']:.0f} Hz, "
+    print(f"{Path(d['path']).name}: {d['n_imu']} IMU records, ODR {runs_text(d['runs'])}, "
           f"EKF ticks {d['rate']:.1f} Hz (Nyquist {d['rate']/2:.0f} Hz), "
           f"low-g bar {near_rail_lsb(d['cfg']['low_g_fs_g'])} LSB")
     for row in rows:
-        print(f"\n[{row['window']}]  {row['ticks']} ticks, samples/tick mean {row['n_mean']:.2f} "
+        if "notes" in row:
+            print("\n" + "\n".join(row["notes"]))
+            continue
+        span = f" (T+{row['span'][0]:.3f}..{row['span'][1]:.3f} s at {row['odr']:.0f} Hz)" if row["span"] else ""
+        print(f"\n[{row['window']}]  {row['ticks']} ticks{span}, samples/tick mean {row['n_mean']:.2f} "
               f"max {row['n_max']}; low-g near-rail duty: old body-frame test {100*row['old_rail_duty']:.1f} %, "
               f"new worst-sample test {100*row['new_rail_duty']:.1f} %")
         print("  as the estimators see it (tick-rate streams):")
@@ -426,10 +560,10 @@ def report(d, rows):
         for c in row["channels"]:
             cells = []
             for b in c["bands"]:
-                if b["lo"] >= d["odr"] / 2.0:
+                if b["lo"] >= row["odr"] / 2.0:
                     # Nothing of the band exists at this ODR, so there is no
                     # RMS to take a gain against (it is not a -inf dB cut).
-                    cells.append(f"n/a: above the {d['odr'] / 2.0:.0f} Hz ODR Nyquist")
+                    cells.append(f"n/a: above the {row['odr'] / 2.0:.0f} Hz ODR Nyquist")
                 else:
                     cells.append(f"{b['full_rms']:8.2f}  pick x{b['pick']:.3f}  mean x{b['gain']:.3f} "
                                  f"({20*math.log10(b['gain']) if b['gain'] > 0 else float('-inf'):6.1f} dB)")
@@ -443,6 +577,8 @@ def plot(d, rows, plot_dir):
     plot_dir = Path(plot_dir)
     plot_dir.mkdir(parents=True, exist_ok=True)
     for row in rows:
+        if "notes" in row:
+            continue
         fig, axes = plt.subplots(1, len(row["channels"]), figsize=(5.2 * len(row["channels"]), 4.2))
         for ax, c in zip(np.atleast_1d(axes), row["channels"]):
             ax.semilogy(c["f_full"], c["p_full"], color="0.6", lw=0.8, label="true content (ODR-rate PSD)")
@@ -453,7 +589,8 @@ def plot(d, rows, plot_dir):
             ax.set_ylabel(f"PSD ({c['unit']})^2/Hz")
             ax.grid(True, which="both", alpha=0.3)
             ax.legend(fontsize=8)
-        fig.suptitle(f"{Path(d['path']).name} — what the EKF is fed, {row['window']} window")
+        span = f", T+{row['span'][0]:.3f}..{row['span'][1]:.3f} s at {row['odr']:.0f} Hz" if row["span"] else ""
+        fig.suptitle(f"{Path(d['path']).name} — what the EKF is fed, {row['window']} window{span}")
         fig.tight_layout()
         out = plot_dir / f"imu_drain_{row['window']}.png"
         fig.savefig(out, dpi=110)
