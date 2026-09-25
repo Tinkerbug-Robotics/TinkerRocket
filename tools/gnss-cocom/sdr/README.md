@@ -515,6 +515,12 @@ referenced but missing.
 Measured numbers are generated from `receivers.json`, so a figure typed into the
 prose will not stay in step with the data — change the JSON instead.
 
+Figures are inlined as SVG, and a `<style>` inside inline SVG applies to the
+whole page. The build therefore scopes each figure's rules to that figure, so
+two plot scripts can both define `.lbl` without the later one restyling the
+other. Before this, the last figure on the page set the label size for all of
+them.
+
 ### When a ramp cannot measure the receiver: dwell instead
 
 Every original scenario here is a ramp, and a ramp measures a slow receiver's

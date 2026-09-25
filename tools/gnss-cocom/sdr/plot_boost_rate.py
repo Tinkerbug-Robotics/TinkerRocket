@@ -21,8 +21,8 @@ PARTS = [("zed_f9p", "ZED-F9P", "var(--accent, #29457E)"),
          ("beitian_bn182", "Beitian BN-182", "var(--nolock, #9B3535)")]
 SCENARIOS = [("spaceshot", "13.5 g", True), ("gentle_alt", "2.0 g", False)]
 
-W, H = 900, 420
-PAD_L, PAD_R, PAD_T, PAD_B = 54, 18, 30, 92
+W, H = 900, 432
+PAD_L, PAD_R, PAD_T, PAD_B = 54, 18, 30, 104
 PW, PH = W - PAD_L - PAD_R, H - PAD_T - PAD_B
 X0, X1 = 0.0, 520.0
 Y0, Y1 = -50.0, 15.0
@@ -131,7 +131,7 @@ def main():
              f'all four receivers, both flights: n={len(allx)}, '
              f'r = {r:+.2f}</text>')
 
-    ly = H - 46
+    ly = H - 58
     lx = PAD_L
     for pid, lbl, col in PARTS:
         o.append(f'<circle cx="{lx+4:.1f}" cy="{ly-3:.1f}" r="3.2" fill="{col}" '
@@ -147,14 +147,14 @@ def main():
              f'M{lx+1:.1f},{ly+1:.1f} L{lx+9:.1f},{ly-7:.1f}" '
              f'stroke="var(--ink-3,#79808F)" stroke-width="1.8" fill="none"/>')
     o.append(f'<text class="lbl" x="{lx+14:.1f}" y="{ly:.1f}">lost lock</text>')
-    o.append(f'<text class="lbl" x="{PAD_L}" y="{H-26}">'
-             f'Every point is one satellite on one receiver. Doppler rate is measured '
-             f'from RXM-RAWX on a byte-identical scenario, so the same satellite '
-             f'presents the same rate in all four runs.</text>')
-    o.append(f'<text class="lbl" x="{PAD_L}" y="{H-14}">'
-             f'GPS:11 is absent: it presented the highest rate of any satellite and '
-             f'its raw measurement dropped out through the burn, so its rate cannot '
-             f'be measured.</text>')
+    for dy, line in ((38, 'Every point is one satellite on one receiver. Doppler rate is '
+                          'measured from RXM-RAWX on a byte-identical scenario, so the '
+                          'same satellite'),
+                     (26, 'presents the same rate in all four runs. GPS:11 is absent: it '
+                          'presented the highest rate of any satellite and its raw '
+                          'measurement dropped'),
+                     (14, 'out through the burn, so its rate cannot be measured.')):
+        o.append(f'<text class="lbl" x="{PAD_L}" y="{H-dy}">{line}</text>')
     o.append('</svg>')
 
     OUT.parent.mkdir(parents=True, exist_ok=True)

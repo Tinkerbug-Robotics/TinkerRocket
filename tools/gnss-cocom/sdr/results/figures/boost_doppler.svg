@@ -1,4 +1,4 @@
-<svg viewBox="0 0 900 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Carrier-to-noise change through the burn against measured Doppler rate and against peak Doppler shift. Loss tracks the rate on all four receivers and tracks the shift far more weakly.">
+<svg viewBox="0 0 900 422" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Carrier-to-noise change through the burn against measured Doppler rate and against peak Doppler shift. Loss tracks the rate on all four receivers and tracks the shift far more weakly.">
 <style>.ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}.gl{stroke:var(--rule,#DDE2E9);stroke-width:1;stroke-dasharray:3 3}.lbl{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-3,#79808F)}.ttl{font-family:var(--f-display,sans-serif);font-size:11px;font-weight:600;fill:var(--ink-2,#4A5261)}.rr{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-2,#4A5261)}</style>
 <text class="ttl" x="54" y="18">carrier loss vs Doppler RATE</text>
 <line class="gl" x1="54.0" y1="326.0" x2="443.0" y2="326.0"/>
@@ -157,6 +157,7 @@
 <text class="lbl" x="255.0" y="368.0">Beitian BN-182</text>
 <path d="M337.4,361.0 L345.4,369.0 M337.4,369.0 L345.4,361.0" stroke="var(--ink-3,#79808F)" stroke-width="1.8" fill="none"/>
 <text class="lbl" x="350.4" y="368.0">lost lock entirely</text>
-<text class="lbl" x="54.0" y="386.0">change in carrier-to-noise from the pad baseline to the burn, per satellite. Doppler measured from RXM-RAWX on a byte-identical scenario, so it is</text>
-<text class="lbl" x="54.0" y="398.0">the same injected signal in all four runs. GPS:11 (the highest rate of any satellite) is absent from the left panel: its raw measurement dropped out through the burn.</text>
+<text class="lbl" x="54.0" y="386.0">change in carrier-to-noise from the pad baseline to the burn, per satellite. Doppler measured from RXM-RAWX on a byte-identical scenario,</text>
+<text class="lbl" x="54.0" y="398.0">so it is the same injected signal in all four runs. GPS:11 (the highest rate of any satellite) is absent from the left panel: its raw</text>
+<text class="lbl" x="54.0" y="410.0">measurement dropped out through the burn.</text>
 </svg>

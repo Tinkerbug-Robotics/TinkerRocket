@@ -14,7 +14,7 @@ import json, math, subprocess, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-REF = HERE / "results" / "doppler_ref.json"
+REF = HERE / "results" / "doppler_ref_spaceshot.json"   # the 13.5 g flight
 OUT = HERE / "results" / "figures" / "boost_doppler.svg"
 
 PARTS = [("zed_f9p", "ZED-F9P", "var(--accent, #29457E)"),
@@ -22,8 +22,8 @@ PARTS = [("zed_f9p", "ZED-F9P", "var(--accent, #29457E)"),
          ("quescan_m10", "Quescan M10", "var(--fix, #0E7C66)"),
          ("beitian_bn182", "Beitian BN-182", "var(--nolock, #9B3535)")]
 
-W, H = 900, 410
-PAD_L, PAD_R, PAD_T, PAD_B = 54, 16, 46, 84
+W, H = 900, 422
+PAD_L, PAD_R, PAD_T, PAD_B = 54, 16, 46, 96
 GAP = 52
 PW = (W - PAD_L - PAD_R - GAP) / 2
 PH = H - PAD_T - PAD_B
@@ -44,7 +44,7 @@ def pearson(xs, ys):
 
 def main():
     if not REF.exists():
-        sys.exit("run doppler_ref.py first")
+        sys.exit(f"run doppler_ref.py first ({REF.name} missing)")
     ref = json.loads(REF.read_text())
     sats = ref["sats"]
 
@@ -128,7 +128,7 @@ def main():
                      f'text-anchor="end">{lbl}  '
                      f'{"r = n/a" if r is None else f"r = {r:+.2f}"}</text>')
 
-    ly = H - 42
+    ly = H - 54
     lx = PAD_L
     for pid, lbl, col in PARTS:
         o.append(f'<circle cx="{lx+4:.1f}" cy="{ly-3:.1f}" r="3" fill="{col}" '
@@ -139,14 +139,14 @@ def main():
              f'M{lx+1:.1f},{ly+1:.1f} L{lx+9:.1f},{ly-7:.1f}" '
              f'stroke="var(--ink-3,#79808F)" stroke-width="1.8" fill="none"/>')
     o.append(f'<text class="lbl" x="{lx+14:.1f}" y="{ly:.1f}">lost lock entirely</text>')
-    o.append(f'<text class="lbl" x="{PAD_L:.1f}" y="{H-24:.1f}">'
-             f'change in carrier-to-noise from the pad baseline to the burn, per '
-             f'satellite. Doppler measured from RXM-RAWX on a byte-identical '
-             f'scenario, so it is</text>')
-    o.append(f'<text class="lbl" x="{PAD_L:.1f}" y="{H-12:.1f}">'
-             f'the same injected signal in all four runs. GPS:11 (the highest rate '
-             f'of any satellite) is absent from the left panel: its raw measurement '
-             f'dropped out through the burn.</text>')
+    for dy, line in ((36, 'change in carrier-to-noise from the pad baseline to the burn, '
+                          'per satellite. Doppler measured from RXM-RAWX on a '
+                          'byte-identical scenario,'),
+                     (24, 'so it is the same injected signal in all four runs. GPS:11 '
+                          '(the highest rate of any satellite) is absent from the left '
+                          'panel: its raw'),
+                     (12, 'measurement dropped out through the burn.')):
+        o.append(f'<text class="lbl" x="{PAD_L:.1f}" y="{H-dy:.1f}">{line}</text>')
     o.append('</svg>')
 
     OUT.parent.mkdir(parents=True, exist_ok=True)

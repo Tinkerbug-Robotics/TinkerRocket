@@ -71,9 +71,40 @@ ORDER = ["px1125r", "sam_m10q", "quescan_m10", "beitian_bn182", "zed_f9p", "neo_
          "air530", "lc86g_normal", "lc86g_balloon"]
 
 
+def scoped(svg: str, scope: str) -> str:
+    """Confine an inline figure's <style> rules to that figure.
+
+    A <style> inside inline SVG is not scoped to the SVG: every rule applies to
+    the whole page. The figures reuse short class names (.lbl, .gl, .note) with
+    different values, so whichever figure came last restyled all the others.
+    Each rule is prefixed with the figure's own class inside :where(), which
+    leaves its specificity exactly as it was.
+    """
+    m = re.search(r'<svg\b[^>]*>', svg)
+    if not m:
+        return svg
+    tag = m.group(0)
+    tag = (tag.replace('class="', f'class="{scope} ', 1) if 'class="' in tag
+           else tag[:4] + f' class="{scope}"' + tag[4:])
+
+    def rule(r):
+        sels = ", ".join(f":where(svg.{scope}) {s.strip()}" for s in r.group(1).split(","))
+        return f"{sels}{{{r.group(2)}}}"
+
+    def style(s):
+        if "@" in s.group(1):        # an at-rule would need real parsing
+            raise SystemExit(f"  !! {scope}: at-rule in a figure's <style>, cannot scope it")
+        return f"<style>{re.sub(r'([^{}]+)\{([^}]*)\}', rule, s.group(1))}</style>"
+
+    svg = svg[:m.start()] + tag + svg[m.end():]
+    return re.sub(r'<style>(.*?)</style>', style, svg, flags=re.S)
+
+
 def fig(name: str) -> str:
     p = FIG / name
-    return p.read_text().strip() if p.exists() else f"<!-- missing {name} -->"
+    if not p.exists():
+        return f"<!-- missing {name} -->"
+    return scoped(p.read_text().strip(), "fig-" + re.sub(r'[^a-z0-9]+', '-', p.stem.lower()))
 
 
 def blurbs(text: str) -> dict:

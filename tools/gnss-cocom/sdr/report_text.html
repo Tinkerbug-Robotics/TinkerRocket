@@ -101,7 +101,9 @@
       <p>The Air530 is listed as not applicable because it has no speed limit to
         combine &mdash; only the altitude ceiling applies, so the question does
         not arise. The LC86G in Normal mode is not applicable for a different
-        reason: no valid fix ever reaches either limit.</p>
+        reason: no valid fix ever reaches either limit. Section 07 keeps the runs
+        that first established independence on the PX1125R, one limit at a
+        time.</p>
 
       <h3>Re-open latency</h3>
       <p>How long the receiver takes to publish a position again after the
@@ -633,6 +635,614 @@
           that.</p>
       </div>
     </section>
+
+  <section>
+    <h2><span class="n">07</span>Appendix: the first receiver, one limit at a time</h2>
+    <div class="prose">
+      <p>This report began on 19&ndash;20 August as one question about one part:
+        does the SkyTraq PX1125R withhold position when altitude <em>and</em> speed
+        are exceeded together, or whenever either one is? The runs that answered it
+        came before the standard flights of section 02. Each moved a single
+        variable on a cabled bench, and together they are the cleanest evidence
+        behind the <strong>independent</strong> entries in section 01. They were
+        first published as a report of their own, and are kept here with the
+        lessons that still govern how the rig is run.</p>
+      <p>SkyTraq documents the AND reading in two of its own publications, neither
+        of which names the Phoenix parts. The PX11xx datasheets state
+        <q>Operational Limits: Altitude &lt; 80,000 m and velocity &lt;
+        515 m/s</q>, which can be read either way, and the altitude figure
+        was itself unsettled: 18&nbsp;km in the FAQs, 80&nbsp;km on the datasheet.
+        Nothing published settled it, so it was measured.</p>
+    </div>
+
+    <figure>
+      <div class="panels">
+        <div class="panel">
+          <h4>If the gate is AND</h4>
+          <p>blocked only inside the intersection &mdash; ruled out</p>
+          <svg viewBox="0 0 346 290" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Altitude against speed. The blocked region is the intersection of speed above 515 meters per second and altitude above the gate, so it occupies only the upper-right corner. All four test trajectories stay outside it except t3a and t3b.">
+            <g transform="translate(38,12)">
+              <rect x="0" y="0" width="300" height="230" fill="var(--surface-2)"/>
+              <!-- blocked: speed>515 AND alt>18km -->
+              <rect x="154.5" y="0" width="145.5" height="188.6" fill="var(--shade-a)"/>
+              <!-- blocked: speed>515 AND alt>80km -->
+              <rect x="154.5" y="0" width="145.5" height="46" fill="var(--shade-a)"/>
+              <g stroke="var(--rule-strong)" stroke-width="1" stroke-dasharray="3 3">
+                <line x1="154.5" y1="0" x2="154.5" y2="230"/>
+                <line x1="0" y1="188.6" x2="300" y2="188.6"/>
+                <line x1="0" y1="46" x2="300" y2="46"/>
+              </g>
+              <g fill="none" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round">
+                <polyline points="0,218.5 270,218.5" stroke="var(--fix)"/>
+                <polyline points="15,218.5 30.7,218 51.1,216.8 77.1,214.3 106.1,210.4 106.1,120 106.1,34.1" stroke="var(--accent)"/>
+                <polyline points="0,218.5 25.5,218.3 51,217.6 76.6,216.5 106.3,214.6 130.4,201.2 160.3,190.2 195.5,178.9 233.5,167.7" stroke="var(--nolock)" stroke-dasharray="4 3"/>
+                <polyline points="0,69 30.6,68.6 60,67.5 90,65.6 96.8,54.6 110.4,46 130.8,36.4 160.4,24.8 201.2,10.4" stroke="var(--blocked)" stroke-dasharray="4 3"/>
+              </g>
+              <circle cx="15" cy="227.7" r="3" fill="var(--ink-2)"/>
+              <g class="measured">
+                <circle cx="154.5" cy="218.5" r="4.5" fill="var(--nolock)"/>
+                <circle cx="106.2" cy="46.0"  r="4.5" fill="var(--nolock)"/>
+              </g>
+
+              <g font-size="8" fill="var(--ink-3)">
+                <text x="158" y="252">515 m/s</text>
+                <text x="303" y="191" text-anchor="start" transform="rotate(-90 303 191)">18 km</text>
+                <text x="303" y="49" text-anchor="start" transform="rotate(-90 303 49)">80 km</text>
+              </g>
+              <g stroke="var(--rule-strong)" stroke-width="1">
+                <line x1="0" y1="230" x2="300" y2="230"/>
+                <line x1="0" y1="0" x2="0" y2="230"/>
+              </g>
+              <g font-size="8" fill="var(--ink-3)">
+                <text x="0" y="243">0</text>
+                <text x="296" y="243" text-anchor="end">1000</text>
+                <text x="130" y="266" font-size="8.5">speed (m/s)</text>
+                <text x="-8" y="230" text-anchor="end">0</text>
+                <text x="-8" y="6" text-anchor="end">100</text>
+                <text x="-8" y="118" text-anchor="end" transform="rotate(-90 -8 118)" font-size="8.5">altitude (km)</text>
+              </g>
+            </g>
+          </svg>
+        </div>
+
+        <div class="panel">
+          <h4>If the limits are independent <span class="badge">measured</span></h4>
+          <p>blocked across the union of both</p>
+          <svg viewBox="0 0 346 290" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Altitude against speed. The blocked region is the union of speed above 515 meters per second and altitude above the gate, forming an L shape. Trajectory t1 crosses into it at 515 meters per second and t2 crosses it at the altitude gate.">
+            <g transform="translate(38,12)">
+              <rect x="0" y="0" width="300" height="230" fill="var(--surface-2)"/>
+              <!-- velocity half-plane -->
+              <rect x="154.5" y="0" width="145.5" height="230" fill="var(--shade-b)"/>
+              <!-- altitude half-planes, nested -->
+              <rect x="0" y="0" width="300" height="188.6" fill="var(--shade-a)"/>
+              <rect x="0" y="0" width="300" height="46" fill="var(--shade-a)"/>
+              <g stroke="var(--rule-strong)" stroke-width="1" stroke-dasharray="3 3">
+                <line x1="154.5" y1="0" x2="154.5" y2="230"/>
+                <line x1="0" y1="188.6" x2="300" y2="188.6"/>
+                <line x1="0" y1="46" x2="300" y2="46"/>
+              </g>
+              <g fill="none" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round">
+                <polyline points="0,218.5 270,218.5" stroke="var(--fix)"/>
+                <polyline points="15,218.5 30.7,218 51.1,216.8 77.1,214.3 106.1,210.4 106.1,120 106.1,34.1" stroke="var(--accent)"/>
+                <polyline points="0,218.5 25.5,218.3 51,217.6 76.6,216.5 106.3,214.6 130.4,201.2 160.3,190.2 195.5,178.9 233.5,167.7" stroke="var(--nolock)" stroke-dasharray="4 3"/>
+                <polyline points="0,69 30.6,68.6 60,67.5 90,65.6 96.8,54.6 110.4,46 130.8,36.4 160.4,24.8 201.2,10.4" stroke="var(--blocked)" stroke-dasharray="4 3"/>
+              </g>
+              <circle cx="15" cy="227.7" r="3" fill="var(--ink-2)"/>
+              <g class="measured">
+                <circle cx="154.5" cy="218.5" r="4.5" fill="var(--nolock)"/>
+                <circle cx="106.2" cy="46.0"  r="4.5" fill="var(--nolock)"/>
+              </g>
+
+              <g font-size="8" fill="var(--ink-3)">
+                <text x="158" y="252">515 m/s</text>
+                <text x="303" y="191" text-anchor="start" transform="rotate(-90 303 191)">18 km</text>
+                <text x="303" y="49" text-anchor="start" transform="rotate(-90 303 49)">80 km</text>
+              </g>
+              <g stroke="var(--rule-strong)" stroke-width="1">
+                <line x1="0" y1="230" x2="300" y2="230"/>
+                <line x1="0" y1="0" x2="0" y2="230"/>
+              </g>
+              <g font-size="8" fill="var(--ink-3)">
+                <text x="0" y="243">0</text>
+                <text x="296" y="243" text-anchor="end">1000</text>
+                <text x="130" y="266" font-size="8.5">speed (m/s)</text>
+                <text x="-8" y="230" text-anchor="end">0</text>
+                <text x="-8" y="6" text-anchor="end">100</text>
+                <text x="-8" y="118" text-anchor="end" transform="rotate(-90 -8 118)" font-size="8.5">altitude (km)</text>
+              </g>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--fix)"></i>t1 velocity ramp</span>
+        <span><i class="swatch" style="background:var(--accent)"></i>t2 altitude ramp</span>
+        <span><i class="swatch" style="background:var(--nolock)"></i>t3a both, 18 km</span>
+        <span><i class="swatch" style="background:var(--blocked)"></i>t3b both, 80 km</span>
+        <span><i class="swatch" style="background:var(--ink-2);height:7px;width:7px;border-radius:50%"></i>t0 baseline</span>
+        <span><i class="swatch" style="background:var(--nolock);height:9px;width:9px;border-radius:50%"></i><strong>measured blocking point</strong></span>
+      </div>
+      <figcaption>The two hypotheses, drawn in the plane the gate acts on, with the
+        four moving test trajectories overlaid. Shading marks where position would be
+        withheld; the darker altitude band is the 80&nbsp;km reading nested inside
+        the 18&nbsp;km one. The test set was designed so that <strong>t1</strong>
+        and <strong>t2</strong> each enter the shaded region under exactly one
+        hypothesis, which is what makes a single capture decisive. The two red points
+        are where the receiver actually withheld position: 515&nbsp;m/s at
+        5&nbsp;km, and 80&nbsp;km at 354&nbsp;m/s. Both fall inside the union and
+        outside the intersection.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <h3>The test set</h3>
+      <p>Each run isolated one variable. The two confirmation runs were
+        alternatives: which one was worth flying depended on what t2 said the
+        altitude threshold was.</p>
+    </div>
+    <div class="scroll">
+      <table>
+        <caption>Trajectories, and what each outcome would mean</caption>
+        <thead>
+          <tr>
+            <th>Run</th><th>Profile</th><th class="num">Peak alt</th><th class="num">Peak speed</th>
+            <th>Exceeds</th><th>If AND</th><th>If independent</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="id">t0</td><td>1 km, 50 m/s, 60 s</td>
+            <td class="num">1.0 km</td><td class="num">50 m/s</td>
+            <td><span class="tag t-none">neither</span></td>
+            <td colspan="2">Validates chain, level and time mapping</td>
+          </tr>
+          <tr>
+            <td class="id">t1</td><td>5 km held, 0&rarr;900 m/s over 90 s</td>
+            <td class="num">5.0 km</td><td class="num">900 m/s</td>
+            <td><span class="tag t-fix">velocity</span></td>
+            <td>holds to 900 m/s</td><td>blanks at ~515 m/s</td>
+          </tr>
+          <tr>
+            <td class="id">t2</td><td>354 m/s held, 5&rarr;85 km over 240 s</td>
+            <td class="num">85.5 km</td><td class="num">354 m/s</td>
+            <td><span class="tag t-fix">altitude</span></td>
+            <td>holds to 85 km</td><td>blanks at 18 or 80 km</td>
+          </tr>
+          <tr>
+            <td class="id">t3a</td><td>5&rarr;27 km while 0&rarr;700 m/s, 70 s</td>
+            <td class="num">27.1 km</td><td class="num">778 m/s</td>
+            <td><span class="tag t-blocked">both</span></td>
+            <td>blanks</td><td>already blanked in t1</td>
+          </tr>
+          <tr>
+            <td class="id">t3b</td><td>70&rarr;95 km while 0&rarr;600 m/s, 110 s</td>
+            <td class="num">95.5 km</td><td class="num">671 m/s</td>
+            <td><span class="tag t-blocked">both</span></td>
+            <td>blanks</td><td>already blanked in t1</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <h3>The filed test 2 could not have worked</h3>
+      <div class="prose">
+        <p>As originally specified, the altitude run climbed from 10&nbsp;km to
+          85&nbsp;km in 120 seconds. That is a vertical velocity of 625&nbsp;m/s.
+          COCOM acts on three-dimensional speed, so the climb alone would have
+          carried the vehicle past the 515&nbsp;m/s limit &mdash; the run would have
+          exceeded <em>both</em> limits and settled nothing about an independent
+          altitude gate.</p>
+        <p>The trajectories are therefore defined by velocity functions that are
+          integrated into position, never by altitude curves that are
+          differentiated, and every scenario is checked against both limits before
+          it is written out. The run table above prints what each one actually
+          exceeds. The corrected t2 climbs at 350&nbsp;m/s &mdash; 354&nbsp;m/s in
+          three dimensions, 69% of the limit &mdash; and crosses both candidate
+          altitude gates in one continuous 240-second pass.</p>
+      </div>
+    </div>
+
+    <div class="prose">
+      <h3>Continuity is doing real work</h3>
+      <p>t2 starts at 5&nbsp;km, where t0 and t1 have already proved the receiver
+        fixes, and climbs without interruption through both candidate thresholds.
+        That matters because a receiver that simply never acquires at 70&nbsp;km is
+        indistinguishable from one that is gated there. Beginning inside known-good
+        territory and staying locked on the way up removes the ambiguity. t3b, which
+        has no choice but to start high, opens with a 20-second static hold so a
+        failure to acquire shows up as NO_LOCK from the first epoch rather than
+        masquerading as a gate.</p>
+
+      <h3>What the runs found</h3>
+      <p><strong>Velocity, at 5&nbsp;km altitude.</strong> Three independent runs:
+        normal 3-D fix at an injected 510&nbsp;m/s, position withheld at
+        520&nbsp;m/s, bracketing the documented 515&nbsp;m/s. Altitude sat at
+        5.00&nbsp;km throughout &mdash; below <em>both</em> candidate altitude
+        gates. Under AND logic nothing should have happened.</p>
+      <p><strong>Altitude, at 354&nbsp;m/s.</strong> A slow climb held a fix
+        continuously from 5&nbsp;km straight through <strong>18&nbsp;km with no
+        event whatsoever</strong>, and blanked between 79.55&nbsp;km and
+        79.90&nbsp;km. Speed never exceeded 354&nbsp;m/s, 69% of the velocity
+        limit.</p>
+      <p>Both transitions landed within about one second of where the trajectory
+        crossed the limit &mdash; the 80&nbsp;km crossing was predicted at
+        t=464.3&nbsp;s and observed between t=463 and t=464 &mdash; across two
+        different scenarios probing two different quantities. That is not
+        coincidence.</p>
+      <p><strong>The 18&nbsp;km figure is wrong for this engine, and the
+        datasheet's 80&nbsp;km is right.</strong> SkyTraq's published claim that
+        either limit may be exceeded alone is contradicted directly, with the
+        consequence section 01 draws: the gate closes partway up a boost, because
+        boost passes 515&nbsp;m/s far below 80&nbsp;km and the altitude does not
+        protect it.</p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>Results &mdash; every run, 2026-08-19</caption>
+        <thead>
+          <tr><th>Run</th><th>Exceeds</th><th>Verdict</th><th class="num">Last fix</th><th class="num">First block</th><th>Satellites across transition</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="id">t00 static</td><td><span class="tag t-none">neither</span></td>
+              <td><span class="tag t-fix">FIX</span></td>
+              <td class="num">&mdash;</td><td class="num">&mdash;</td>
+              <td>chain proven: 40.00000, &minus;119.00000 to &plusmn;1 m</td></tr>
+          <tr><td class="id">t0 baseline</td><td><span class="tag t-none">neither</span></td>
+              <td><span class="tag t-fix">FIX</span></td>
+              <td class="num">held to 50 m/s</td><td class="num">never blocked</td>
+              <td><strong>control</strong> &mdash; 7 sats, fix held throughout</td></tr>
+          <tr><td class="id">t1 &times;3</td><td><span class="tag t-fix">velocity</span></td>
+              <td><span class="tag t-blocked">BLOCKED</span></td>
+              <td class="num">510 m/s @ 5.00 km</td><td class="num">520 m/s @ 5.00 km</td>
+              <td>7 held at 38&ndash;41 dBHz, used_in_fix 7&rarr;0</td></tr>
+          <tr><td class="id">t2 &times;3</td><td><span class="tag t-fix">altitude</span></td>
+              <td><span class="tag t-blocked">BLOCKED</span></td>
+              <td class="num">79.55 km @ 354 m/s</td><td class="num">79.90 km @ 354 m/s</td>
+              <td>6 held at 35&ndash;48 dBHz, used_in_fix 6&rarr;0</td></tr>
+          <tr><td class="id">t3a</td><td><span class="tag t-blocked">both</span></td>
+              <td><span class="tag t-blocked">BLOCKED</span></td>
+              <td class="num">510 m/s @ 16.22 km</td><td class="num">517 m/s @ 16.56 km</td>
+              <td>velocity fired first, still below 18 km</td></tr>
+          <tr><td class="id">t3b</td><td><span class="tag t-blocked">both</span></td>
+              <td><span class="tag t-blocked">BLOCKED</span></td>
+              <td class="num">79.90 km @ 366 m/s</td><td class="num">80.20 km @ 371 m/s</td>
+              <td>altitude fired first, speed at 72% of limit</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>The two limits, as measured</caption>
+        <thead><tr><th>Limit</th><th class="num">Datasheet</th><th class="num">Measured bracket</th><th>Evidence</th></tr></thead>
+        <tbody>
+          <tr><td class="id">Velocity</td><td class="num">515 m/s</td>
+              <td class="num"><strong>510&ndash;517 m/s</strong></td>
+              <td>fired at 5.00 km and again at 16.22 km &mdash; altitude irrelevant</td></tr>
+          <tr><td class="id">Altitude</td><td class="num">80,000 m</td>
+              <td class="num"><strong>79.90&ndash;80.20 km</strong></td>
+              <td>fired at 354 m/s and 366 m/s &mdash; velocity irrelevant</td></tr>
+          <tr><td class="id">18 km gate</td><td class="num">claimed in FAQ</td>
+              <td class="num"><strong>does not exist</strong></td>
+              <td>fix held continuously through 18.30 km with no event</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <h3>The raw evidence</h3>
+      <p>The distinction the rig exists to draw is visible directly in the frames.
+        Across each transition the satellite set does not change at all &mdash; same
+        satellites, same C/N&#8320; to within 1&nbsp;dB. Only
+        <code>used_in_fix</code> collapses:</p>
+    </div>
+<pre><code>t1, velocity crossing            t2, altitude crossing
+  E7 used=7  3:39* 4:39* 16:39*     E7 used=6  3:35* 26:39* 9:41* 4:38* 31:36* 6:48*
+             9:39* 31:41* 26:40*    DF t=463.0 fix=Y        &lt;- injected 79.55 km
+  DF t=291.0 fix=Y  &lt;- 510 m/s
+                                    E7 used=0  3:35  26:38  9:40  4:37  31:36  6:48
+  E7 used=0  3:39  4:39  16:39      DF t=464.0 fix=N        &lt;- injected 79.90 km
+             9:39  31:41  26:39
+  DF t=292.0 fix=N  &lt;- 520 m/s</code></pre>
+    <div class="prose">
+      <p style="margin-top:1.1rem">Tracking is undisturbed; the receiver simply
+        stops using what it is still receiving. A loss of signal looks nothing like
+        this &mdash; satellites fall out first, which is exactly what the earlier
+        drop-outs in the same runs did, and why the classifier scores those
+        separately.</p>
+
+      <h3>One loose end</h3>
+      <p>Through the whole climb the receiver <em>reported</em> a frozen altitude of
+        4.94&nbsp;km &mdash; close to the value it was seeded with &mdash; while
+        reporting the climb velocity correctly at 354&nbsp;m/s. It evidently knew
+        its true altitude, since that is what it gated on, but did not publish it.
+        Whether that is an artifact of the seeded warm restart or a reporting clamp
+        in its own right is unresolved, and it matters for flight use independently
+        of COCOM. It does not affect the gate measurement: the blanking point is set
+        by the injected trajectory, and it landed on 80&nbsp;km.</p>
+
+      <h3>What it took to get a trustworthy run</h3>
+      <p>Four things had to be fixed first, each of which produced a plausible wrong
+        answer before it was found:</p>
+    </div>
+    <ul class="notes">
+      <li><strong>Seed the receiver, every run.</strong> Left alone it fought the
+        injection for minutes &mdash; clock 618&nbsp;s off, satellites tracked and
+        ephemeris decoded but never used. A seeded warm restart (<code>0x01</code>
+        with the scenario's time and position) cut time-to-first-fix to
+        43&ndash;63&nbsp;s.</li>
+      <li><strong>Give every scenario a stationary prologue.</strong>
+        Time-to-first-fix ran 63&ndash;186&nbsp;s, longer than the entire
+        90&nbsp;s velocity ramp. The 180&nbsp;s pad hold on every flight in section
+        02 comes from this.</li>
+      <li><strong>Less signal, not more.</strong> Solid lock at TX gain 22, never a
+        fix at 32 &mdash; the front end overdrives. Higher C/N&#8320; with
+        <em>fewer</em> satellites is the tell.</li>
+      <li><strong>The classifier was under-counting satellites.</strong> The PX1125R
+        reports one channel per signal, so a satellite appears several times in one
+        <code>0xE7</code> &mdash; strong primary, near-zero secondary. Keying the
+        C/N&#8320; map by satellite let the weak entry overwrite the strong one,
+        turning a gate closure with 7 satellites held into an apparent collapse to 3.
+        That is precisely the difference between BLOCKED and NO_LOCK.</li>
+    </ul>
+
+    <div class="prose">
+      <h3>The cabled bench</h3>
+      <p>The PX1125R was fed by cable, from a PortaPack playing the scenario off
+        its SD card. Nothing was radiated: L1 is a live, protected band, and a
+        transmitter at this power denies GPS to everything nearby, aircraft
+        included. Where a later part had to be radiated, it was inside the sealed
+        cage described in section 02.</p>
+    </div>
+    <div class="chain">
+      <div class="node"><b>Trajectory</b><span>lat/lon/height at 10 Hz, generated per test</span></div>
+      <div class="node"><b>gps-sdr-sim</b><span>RINEX ephemeris &rarr; 8-bit I/Q at 2.6 MSa/s</span></div>
+      <div class="node hot"><b>PortaPack</b><span>Mayhem GPS Sim, playing from SD at 1575.42 MHz</span></div>
+      <div class="node"><b>Pad + DC block</b><span>50&ndash;60 dB for these runs, ~70 dB for the flights; blocks the 3.3 V antenna bias</span></div>
+      <div class="node hot"><b>PX1125R</b><span>RF_IN, ~&minus;100 dBm</span></div>
+      <div class="node"><b>NMEA capture</b><span>USB passthrough, timestamped, GSV included</span></div>
+    </div>
+    <div class="prose">
+      <p style="margin-top:1.4rem">Trajectory time came from the receiver's own UTC
+        against the scenario's start time. The offset to the host clock was fitted
+        across every epoch that carried both, and a spread beyond about two seconds
+        meant the playback had underrun, so the run was discarded rather than
+        interpreted. Channel power was held constant rather than modeled for path
+        loss, so C/N&#8320; stayed flat from first sample to last and any collapse
+        was the receiver's own doing.</p>
+
+      <h3>Recovery: the gate re-opens in about an epoch</h3>
+      <p>Knowing where the gate closes says nothing about how long it stays shut,
+        and the matched pair in section 03 answered that. On the gentle flight the
+        receiver descended back through 80&nbsp;km at 217&nbsp;m/s and had a fix
+        again <strong>0.7&nbsp;s later</strong>. Closing is just as sharp in the
+        other direction: the fix disappeared between 0.3 and 0.9&nbsp;s after a
+        limit was first exceeded, every time. This is an output inhibit, not a
+        filter reset, which fits what the frames show: the receiver never stops
+        tracking across a gate transition.</p>
+    </div>
+    <div class="scroll">
+      <table>
+        <caption>Recovery latency, the PX1125R's matched pair</caption>
+        <thead><tr><th>Flight</th><th class="num">Boost</th><th>Gate</th><th class="num">Shut lag</th><th class="num">Re-open latency</th><th class="num">Sats in the wait</th></tr></thead>
+        <tbody>
+          <tr><td class="id">15 g, matched</td><td class="num">15 g</td><td>velocity</td>
+              <td class="num">+0.9 s</td><td class="num"><strong>1.5 s</strong></td><td class="num">9</td></tr>
+          <tr><td class="id">15 g, matched</td><td class="num">15 g</td><td>altitude</td>
+              <td class="num">+0.3 s</td><td class="num"><strong>0.0 s</strong></td><td class="num">7</td></tr>
+          <tr><td class="id">15 g, matched</td><td class="num">15 g</td><td>velocity</td>
+              <td class="num">+0.6 s</td><td class="num"><strong>1.1 s</strong></td><td class="num">6</td></tr>
+          <tr><td class="id">3 g, matched</td><td class="num">3 g</td><td>velocity</td>
+              <td class="num">+0.6 s</td><td class="num"><strong>1.3 s</strong></td><td class="num">5</td></tr>
+          <tr><td class="id">3 g, matched</td><td class="num">3 g</td><td>altitude</td>
+              <td class="num">+0.3 s</td><td class="num"><strong>0.7 s</strong></td><td class="num">6</td></tr>
+          <tr><td class="id">3 g, matched</td><td class="num">3 g</td><td>velocity</td>
+              <td class="num">+0.4 s</td><td class="num"><strong>0.9 s</strong></td><td class="num">6</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p style="margin-top:1.4rem"><strong>Every window with four or more
+        satellites re-opened in 0.0 to 1.5&nbsp;s &mdash; nought to two epochs
+        &mdash; on both gates, at 3&nbsp;g and at 15&nbsp;g.</strong> The windows
+        on other runs that took 12&ndash;33&nbsp;s all had two satellites, which is
+        re-acquisition rather than the gate. The two boost accelerations are
+        indistinguishable. The gate is not slow; losing the satellites is what costs
+        the time, and the two want opposite fixes.</p>
+
+      <h3>A hypothesis that did not survive its own test</h3>
+      <p>An early draft claimed a realistic 15&nbsp;g boost breaks the receiver's
+        tracking loops &mdash; 15&nbsp;g is 787&nbsp;Hz/s of Doppler rate on L1 at
+        zenith, and the first two flights shed five of seven satellites within a
+        second of ignition. An acceleration panel was added to the plots to test
+        that. The claim failed the test, twice:</p>
+    </div>
+    <div class="scroll">
+      <table>
+        <caption>Satellites held through the 15 g burn, 129 m/s&#178; peak</caption>
+        <thead><tr><th>Run</th><th class="num">Before ignition</th><th class="num">During the burn</th><th class="num">Post-burn coast</th></tr></thead>
+        <tbody>
+          <tr><td class="id">spaceshot v2</td><td class="num">6 sv @ 49 dBHz</td>
+              <td class="num"><strong>6 sv @ 49 dBHz</strong></td><td class="num">6 sv @ 48 dBHz</td></tr>
+          <tr><td class="id">spaceshot v3</td><td class="num">7 sv @ 48 dBHz</td>
+              <td class="num"><strong>7 sv @ 50 dBHz</strong></td><td class="num">7 sv @ 48 dBHz</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p style="margin-top:1.2rem">Two independent runs, no satellite lost, 0 to
+        1334&nbsp;m/s. The fix vanishing partway up the burn is the gate at
+        515&nbsp;m/s, not a lock failure; on the 3&nbsp;g flight the satellite
+        count swung between two and seven while acceleration sat flat, which
+        acceleration cannot explain either. What acceleration does to tracking was
+        left open here. Section 06 answers it on parts that report raw Doppler: it
+        is the Doppler rate at each satellite that matters, so the loss depends on
+        where a satellite sits in the sky. No raw Doppler was logged from the
+        PX1125R, so it is not part of that analysis.</p>
+
+      <h3>So why did the satellite count move?</h3>
+      <p>Not the injected signal, which transmits every visible satellite at equal,
+        constant power for the whole run, and not the trajectory, which was the
+        obvious suspect twice over. <strong>The cabled chain carried a periodic
+        oscillation in reported C/N&#8320; of about 15&nbsp;dB, with a period near
+        80&nbsp;s</strong>, and every satellite-count dip in every flight sat in
+        one of its troughs. In the two matched flights the epochs that fell below
+        four satellites sat 14&nbsp;dB and 38&nbsp;dB below their own run's median
+        C/N&#8320;. It was present under every condition tested, which is how it
+        was cornered:</p>
+    </div>
+    <div class="scroll">
+      <table>
+        <caption>Ruling out the candidates for the ~80 s C/N&#8320; oscillation</caption>
+        <thead><tr><th>Suspected cause</th><th>Test</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td>Flight dynamics</td><td>static scenario, vehicle stationary at 1.2 km</td>
+              <td>oscillation still present &mdash; <strong>ruled out</strong></td></tr>
+          <tr><td>Boost acceleration</td><td>3 g and 15 g prologues, identical content</td>
+              <td>identical sawtooth in both &mdash; <strong>ruled out</strong></td></tr>
+          <tr><td>Amplitude boost / clipping</td>
+              <td>same file at 12.6% clipping and at 0.04%</td>
+              <td>same 15 dB swing, same period &mdash; <strong>ruled out</strong></td></tr>
+          <tr><td>Transmit clock error</td>
+              <td>simulated GPS time against host time over 200&ndash;800 s</td>
+              <td>agree to the resolution of the test &mdash; <strong>no gross error</strong></td></tr>
+          <tr><td>Injection level</td><td>TX gain 22, 38, 47</td>
+              <td>present at every gain &mdash; <strong>ruled out</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p style="margin-top:1.2rem">What remained was the receiver's own AGC or
+        C/N&#8320; estimator, or something subtler in the chain. It was localized
+        but never identified. The radiated setup used for the later parts does not
+        show it. None of it touches the gate results: every threshold and every
+        recovery latency was measured across a transition where the satellites were
+        tracked either side, which is the condition the classifier requires before
+        it will call anything at all.</p>
+
+      <h3>Too few satellites to lose any</h3>
+      <p>A fix needs four, and the first sky had ten. Re-seating the SMA changed
+        nothing: median C/N&#8320; stayed at 44&nbsp;dBHz, and the run afterwards
+        spent <em>less</em> of its time above four satellites, 70% against 89%.
+        Moving the simulated launch site to the equator and the scenario to 08:30,
+        against a complete-day ephemeris, put fourteen in the sky instead, and that
+        changed everything:</p>
+    </div>
+    <div class="scroll">
+      <table style="min-width:900px">
+        <caption>Same 15 g flight, same receiver, more satellites in the sky</caption>
+        <thead><tr><th>Run</th><th class="num">SV transmitted</th><th class="num">Median tracked</th><th class="num">Median C/N&#8320;</th><th class="num">Epochs with &ge;4 SV</th><th>Recovery latencies</th></tr></thead>
+        <tbody>
+          <tr><td class="id">40&deg;N 22:30</td><td class="num">10</td><td class="num">6</td>
+              <td class="num">44 dBHz</td><td class="num">89%</td><td>1.5 s, 19.0 s, 1.1 s</td></tr>
+          <tr><td class="id">40&deg;N 22:30, re-seated</td><td class="num">10</td><td class="num">6</td>
+              <td class="num">44 dBHz</td><td class="num">70%</td><td>1.5 s, 1.0 s, <strong>146 s</strong></td></tr>
+          <tr><td class="id">equator 08:30</td><td class="num"><strong>14</strong></td><td class="num">7</td>
+              <td class="num">45 dBHz</td><td class="num"><strong>100%</strong></td>
+              <td><strong>1.5 s, 1.0 s, 1.1 s</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p style="margin-top:1.2rem">The equator run never once fell below four
+        satellites, and every window recovered in about a second. Signal level did
+        not move, so this is not a power effect. It is redundancy: with ten
+        satellites the receiver is one bad moment from dropping under the threshold,
+        and with fourteen it is not. GPS orbits at 55&deg; inclination, so low
+        latitudes see more of the constellation; counting only satellites above a
+        10&deg; mask, this ephemeris gives 12 at the equator against 10 at the
+        bench's nominal 40&deg;N. That is where section 02's choice of times and
+        places with 13&ndash;15 satellites comes from. With L1 GPS only, recovery
+        times on this bench are pessimistic; the thresholds are not affected.</p>
+
+      <h3>The simulator was hiding satellites at altitude</h3>
+      <p><code>gps-sdr-sim</code> decides visibility against the local
+        <em>horizontal plane</em>. From height h the horizon is depressed by
+        acos(R/(R+h)) &mdash; 9.2&deg; at 82.5&nbsp;km &mdash; so a vehicle up there
+        genuinely sees a band of satellites the simulator was withholding. Worse,
+        <code>allocateChannel</code> accepts an <code>elvMask</code> parameter and
+        ignores it, calling <code>checkSatVisibility</code> with a hardcoded 0.0, so
+        passing a correct mask in changes nothing until that is fixed too. With both
+        repaired (<code>patch_horizon.py</code>) the 40&deg;N site transmits 14
+        satellites at 82.5&nbsp;km against 11 on the ground, and the receiver tracked
+        a median of 8 rather than 7.</p>
+
+      <h3>A modeling error that looked like a tracking loss</h3>
+      <p>One early zero-satellite stretch was neither the gate nor the bench. The
+        first version of the descent deployed the main parachute at 3&nbsp;km while
+        still doing 560&nbsp;m/s, which produced about 7000&nbsp;m/s&#178; and, in an
+        explicit integrator, reversed the sign of the velocity and lofted the vehicle
+        back to 28&nbsp;km. The flight and the tracking loss were both artifacts.
+        The profiles now fly a drogue from apogee and the main at 600&nbsp;m AGL,
+        landing at 6&nbsp;m/s, and the drag term is clamped so it can bring a body to
+        rest but never push it backwards.</p>
+
+      <h3>Receiver settings worth knowing about</h3>
+      <p>The Phoenix protocol has no u-blox-style dynamics tuning. There is no
+        exposed tracking-loop bandwidth and no Doppler search window;
+        <em>Configure Parameter Search Engine Number</em>
+        (<code>0x64/0x0A</code>) was removed from the protocol in a later revision,
+        leaving only the query. Navigation mode is the only dynamics lever, and every
+        PX1125R run was made in a declared one, airborne (<code>0x64/0x17</code>
+        mode 5), because a receiver's own dynamics filter can withhold position for
+        reasons that have nothing to do with COCOM and produce the same output.
+        Section 04 shows that confound deciding everything on the LC86G. Two other
+        settings are worth knowing, and the bench firmware accepts both:</p>
+    </div>
+    <ul class="notes">
+      <li><strong>Power mode</strong> (<code>0x0C</code>, 0 = Normal). AN0037 states
+        power save is enabled <em>by default</em> &ldquo;to reduce current
+        consumption by the search engine&rdquo; &mdash; the same engine that has to
+        re-acquire after a boost.</li>
+      <li><strong>SLR, Speed Lag Reduced</strong> (<code>0x64/0x17</code> mode 9),
+        added in the same protocol revision as quadcopter mode, alongside airborne
+        (mode 5).</li>
+    </ul>
+    <div class="prose">
+      <p style="margin-top:1.2rem">Flown back to back on the 15&nbsp;g profile
+        against airborne with power save left at its default, neither changed
+        anything that matters for the gate:</p>
+    </div>
+    <div class="scroll">
+      <table style="min-width:900px">
+        <caption>SLR + power normal against the airborne baseline, 15 g flight</caption>
+        <thead><tr><th>Configuration</th><th class="num">TTFF</th><th class="num">Median sats</th><th class="num">Median C/N&#8320;</th><th class="num">Fix held when clear</th><th class="num">Velocity error, no lag</th></tr></thead>
+        <tbody>
+          <tr><td class="id">airborne, power save</td><td class="num">42 s</td><td class="num">6</td>
+              <td class="num">44 dBHz</td><td class="num">88%</td><td class="num">13.4 m/s</td></tr>
+          <tr><td class="id">SLR, power normal</td><td class="num">48 s</td><td class="num">6</td>
+              <td class="num">45 dBHz</td><td class="num">85%</td><td class="num"><strong>9.7 m/s</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p>Acquisition, satellite count, signal level and fix availability are the
+        same to within run-to-run scatter, and that scatter was large on this bench.
+        The one column that moved is the one SLR is named for: reported speed
+        compared against the injected speed <em>with no time shift applied</em> was
+        9.7&nbsp;m/s RMS against 13.4&nbsp;m/s. Allowing a best-fit shift collapses
+        the difference &mdash; 7.9 against 7.5&nbsp;m/s &mdash; so what changed is
+        the delay in the velocity output, not its noise, which is exactly what
+        &ldquo;speed lag reduced&rdquo; claims. That is one run each, on a path whose
+        C/N&#8320; was seen to vary by 14&nbsp;dB between runs: a lead, not a
+        result. If velocity lag matters to the flight computer &mdash; and for apogee
+        detection it does &mdash; it is worth repeating properly.</p>
+      <p>Results bind to the silicon and firmware on the bench, recorded with each
+        capture. SkyTraq has changed this behavior between engine generations
+        before, which is why its published FAQs could not be taken at face
+        value.</p>
+    </div>
+  </section>
+
+  <footer>
+    <span>Rig: <code>tools/gnss-cocom/</code></span>
+    <span><a href="https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/491">Issue #491</a></span>
+    <span><a href="https://github.com/osqzss/gps-sdr-sim">gps-sdr-sim</a></span>
+    <span><a href="https://github.com/portapack-mayhem/mayhem-firmware/wiki/GPS-Sim">Mayhem GPS Sim</a></span>
+    <span><a href="https://www.skytraq.com.tw/homesite/AN0037.pdf">SkyTraq AN0037</a></span>
+    <span>Cabled, or radiated only inside a sealed Faraday cage &mdash; never into open air</span>
+  </footer>
 
 </div>
 
