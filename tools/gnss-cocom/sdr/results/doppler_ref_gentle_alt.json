@@ -10,7 +10,8 @@
  "shared_with": [
   "zed_f9p",
   "quescan_m10",
-  "beitian_bn182"
+  "beitian_bn182",
+  "ublox_m10"
  ],
  "min_in_burn": 5,
  "dropped_out": [],

@@ -13,7 +13,7 @@ supports -- a 15 g boost covers 118 m/s between epochs, so a single fast run can
 only ever give a coarse answer no matter how carefully it is flown.
 
     ./receiver_table.py            # markdown, for results/README.md
-    ./receiver_table.py --html     # the block report.html embeds
+    ./receiver_table.py --html     # the summary table report.html embeds
 """
 
 from __future__ import annotations
@@ -168,16 +168,31 @@ def alt_cell(r):
     return txt, key
 
 
-def rows(d):
+def in_summary(d):
+    """The receivers the summary table lists. An entry marked "summary": false
+    keeps its receiver section and plots but has no row: a second mode of a part
+    that is already listed, compared in the report's own prose instead."""
+    return [r for r in d["receivers"] if r.get("summary", True)]
+
+
+def plain_alt(r):
+    """alt_cell without its footnote marker."""
+    txt, key = alt_cell(r)
+    return txt.rsplit(" ", 1)[0] if key else txt
+
+
+def rows(d, plain=False):
+    """Table rows. plain drops the footnote markers (the report's summary)."""
     out = []
-    for r in d["receivers"]:
+    for r in in_summary(d):
         out.append({
             "part": r["part"],
             "path": r["path"],
+            "rate": f"{r['rate_hz']:g} Hz" if r.get("rate_hz") else "--",
             "runs": r["runs"],
             "vel": vel_cell(r) + (" " + FOOTNOTES[vel_marker(r)][0]
-                                  if vel_marker(r) else ""),
-            "alt": alt_cell(r)[0],
+                                  if vel_marker(r) and not plain else ""),
+            "alt": plain_alt(r) if plain else alt_cell(r)[0],
             "comb": r["combination"],
             "rec": (f"{r['recovery_s'][0]:.1f}-{r['recovery_s'][1]:.1f} s"
                     if r.get("recovery_s") else r.get("recovery_note", "n/a")),
@@ -191,15 +206,20 @@ def rows(d):
 # Bands and run counts were receiver spec, not measurement, and the "18 km gate"
 # column read "none" for every part ever tested -- a whole column restating that
 # something does not exist.
-HEADS = [("part", "Receiver"), ("path", "Path"),
+HEADS = [("part", "Receiver"), ("path", "Path"), ("rate", "Update rate"),
          ("vel", "Velocity gate"), ("alt", "Altitude gate"),
          ("comb", "Limits combined"), ("rec", "Re-open latency")]
+
+# The report's table is a quick summary (owner, 2026-09-25): no Path column and
+# no footnote markers. The markdown table in results/README.md is the notebook
+# and keeps both, with the footnotes spelled out beneath it.
+SUMMARY_HEADS = [h for h in HEADS if h[0] != "path"]
 
 
 def used_footnotes(d):
     """(marker, text) for the footnotes this table actually needs, in order."""
     seen, out = set(), []
-    for r in d["receivers"]:
+    for r in in_summary(d):
         for key in (alt_cell(r)[1], vel_marker(r)):
             if key and key not in seen:
                 seen.add(key)
@@ -217,7 +237,7 @@ def markdown(d) -> str:
     for mark, text in used_footnotes(d):
         out.append(f"{mark} {text}")
         out.append("")
-    for r, src in zip(rs, d["receivers"]):
+    for r, src in zip(rs, in_summary(d)):
         if r["notes"]:
             out.append(f"**{r['part']}** ({src['date']}, {src['rf']}): {r['notes']}")
             out.append("")
@@ -225,15 +245,15 @@ def markdown(d) -> str:
 
 
 def html(d) -> str:
-    rs = rows(d)
+    rs = rows(d, plain=True)
     o = ['<table class="cmp">', "  <thead><tr>"]
-    for _, h in HEADS:
+    for _, h in SUMMARY_HEADS:
         o.append(f"    <th>{h}</th>")
     o.append("  </tr></thead>")
     o.append("  <tbody>")
     for r in rs:
         o.append("    <tr>")
-        for k, _ in HEADS:
+        for k, _ in SUMMARY_HEADS:
             cls = ' class="part"' if k == "part" else ""
             o.append(f"      <td{cls}>{r[k]}</td>")
         o.append("    </tr>")

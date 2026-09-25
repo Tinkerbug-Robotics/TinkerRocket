@@ -17,17 +17,23 @@ HERE = Path(__file__).resolve().parent
 REF = HERE / "results" / "doppler_ref_spaceshot.json"   # the 13.5 g flight
 OUT = HERE / "results" / "figures" / "boost_doppler.svg"
 
-PARTS = [("zed_f9p", "ZED-F9P", "var(--accent, #29457E)"),
-         ("neo_m8t", "NEO-M8T", "var(--blocked, #A2660A)"),
-         ("quescan_m10", "Quescan M10", "var(--fix, #0E7C66)"),
-         ("beitian_bn182", "Beitian BN-182", "var(--nolock, #9B3535)")]
+# One color for every receiver. The point of the figure is that they all fall
+# on one curve, and five categorical hues cannot be told apart in a scatter
+# (the palette check passes only three all-pairs); identity is in the r list.
+SERIES = "var(--accent, #29457E)"
+PARTS = [("zed_f9p", "ZED-F9P", SERIES),
+         ("neo_m8t", "NEO-M8T", SERIES),
+         ("quescan_m10", "Quescan M10", SERIES),
+         ("beitian_bn182", "Beitian BN-182", SERIES),
+         ("ublox_m10", "SAM-M10Q", SERIES)]
 
 W, H = 900, 422
 PAD_L, PAD_R, PAD_T, PAD_B = 54, 16, 46, 96
 GAP = 52
 PW = (W - PAD_L - PAD_R - GAP) / 2
 PH = H - PAD_T - PAD_B
-Y0, Y1 = -50.0, 15.0
+# Headroom above +15 dB holds the per-receiver r list clear of the points.
+Y0, Y1 = -50.0, 32.0
 
 
 def pearson(xs, ys):
@@ -65,7 +71,7 @@ def main():
     o = [f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" role="img" '
          f'aria-label="Carrier-to-noise change through the burn against measured '
          f'Doppler rate and against peak Doppler shift. Loss tracks the rate on '
-         f'all four receivers and tracks the shift far more weakly.">',
+         f'all five receivers and tracks the shift far more weakly.">',
          '<style>'
          '.ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}'
          '.gl{stroke:var(--rule,#DDE2E9);stroke-width:1;stroke-dasharray:3 3}'
@@ -130,11 +136,11 @@ def main():
 
     ly = H - 54
     lx = PAD_L
-    for pid, lbl, col in PARTS:
-        o.append(f'<circle cx="{lx+4:.1f}" cy="{ly-3:.1f}" r="3" fill="{col}" '
-                 f'fill-opacity="0.55" stroke="{col}"/>')
-        o.append(f'<text class="lbl" x="{lx+13:.1f}" y="{ly:.1f}">{lbl}</text>')
-        lx += 16 + len(lbl) * 5.6
+    o.append(f'<circle cx="{lx+4:.1f}" cy="{ly-3:.1f}" r="3" fill="{SERIES}" '
+             f'fill-opacity="0.55" stroke="{SERIES}"/>')
+    o.append(f'<text class="lbl" x="{lx+13:.1f}" y="{ly:.1f}">one satellite on one '
+             f'receiver</text>')
+    lx += 16 + 30 * 5.6
     o.append(f'<path d="M{lx+1:.1f},{ly-7:.1f} L{lx+9:.1f},{ly+1:.1f} '
              f'M{lx+1:.1f},{ly+1:.1f} L{lx+9:.1f},{ly-7:.1f}" '
              f'stroke="var(--ink-3,#79808F)" stroke-width="1.8" fill="none"/>')
@@ -142,7 +148,7 @@ def main():
     for dy, line in ((36, 'change in carrier-to-noise from the pad baseline to the burn, '
                           'per satellite. Doppler measured from RXM-RAWX on a '
                           'byte-identical scenario,'),
-                     (24, 'so it is the same injected signal in all four runs. GPS:11 '
+                     (24, 'so it is the same injected signal in all five runs. GPS:11 '
                           '(the highest rate of any satellite) is absent from the left '
                           'panel: its raw'),
                      (12, 'measurement dropped out through the burn.')):

@@ -14,7 +14,7 @@
   This file is read as plain text and never string-formatted, so braces,
   quotes and percent signs need no escaping. HTML entities work as normal.
 
-  The numbers in the summary table come from boost_sats.py (the u-blox parts)
+  The numbers in the summary table come from boost_sats.py (the five UBX parts)
   and msm_channels.py (the LC86G) on the archived captures; they are typed
   here, so re-derive them if a capture changes.
   ===========================================================================
@@ -33,11 +33,11 @@
       to them. Every flight replayed a byte-identical signal, so each satellite's
       measured Doppler applies to every receiver, and their tracking can be
       compared satellite by satellite. The loss follows how fast each satellite's
-      carrier slides, not how far it sits off nominal. Four u-blox receivers keep
+      carrier slides, not how far it sits off nominal. Five of the six keep
       tracking through a 13.5&nbsp;g burn at the cost of carrier on their steepest
       satellites; the Quectel LC86G loses every channel at ignition and has no fix
       again until the descent.</p>
-    <span class="status status-live">Five receivers on the rate axis</span>
+    <span class="status status-live">Six receivers on the rate axis</span>
   </header>
 
   <section>
@@ -66,6 +66,9 @@
               <td>kept</td><td>none&nbsp;lost</td></tr>
           <tr><td class="id">u-blox NEO-M8T<sup>*</sup></td><td>0 of 13</td>
               <td class="num">&minus;25 / &minus;16 dB</td><td class="num">&minus;7 dB</td>
+              <td>kept</td><td>none&nbsp;lost</td></tr>
+          <tr><td class="id">u-blox SAM-M10Q</td><td>0 of 13</td>
+              <td class="num">&minus;35 / &minus;20 dB</td><td class="num">0 dB</td>
               <td>kept</td><td>none&nbsp;lost</td></tr>
           <tr><td class="id">Quescan M10</td><td>0 of 13</td>
               <td class="num">&minus;32 / &minus;15 dB</td><td class="num">&minus;6 dB</td>
@@ -112,7 +115,7 @@
       <p><strong>A g rating does not describe it.</strong> One acceleration presents
         a spread of rates across the sky, so a part flown under its rated limit is
         not automatically safe if something is overhead (section 04).</p>
-      <p><strong>The u-blox parts keep a fix; the LC86G does not.</strong> Losing
+      <p><strong>Five parts keep a fix; the LC86G does not.</strong> Losing
         three satellites out of thirteen costs the ZED-F9P geometry, not a
         position. The LC86G loses every channel at ignition, and the ones above
         its rate knee never come back during the burn (section 05).</p>
@@ -155,8 +158,10 @@
         and <code>doppler_ref.py --verify</code> checks that identity before they are
         used.</p>
       <p><strong>Carrier loss</strong> is each satellite's carrier-to-noise through
-        the burn against its own pad baseline, from each u-blox part's
-        <code>NAV-SAT</code>. The LC86G reports RTCM MSM7 instead: per-channel
+        the burn against its own pad baseline, from each part's UBX
+        <code>NAV-SAT</code> message. The SAM-M10Q's reaches the bench through its
+        host computer's diagnostic console, once a second, placed in time by the
+        receiver's own GPS time of week. The LC86G reports RTCM MSM7 instead: per-channel
         carrier-to-noise, its own Doppler and a carrier-phase lock counter, once a
         second. Each channel is set against the NEO-M8T's rate for the same
         satellite.</p>
@@ -183,15 +188,16 @@
         onto one axis makes the gentle one the low end of a single curve rather
         than a separate condition: its satellites never exceed 79&nbsp;Hz/s and
         never lose carrier, while the same satellites on the same sky reach
-        501&nbsp;Hz/s under a real boost and shed 15 to 47&nbsp;dB. Above
-        300&nbsp;Hz/s the median satellite is down 14&nbsp;dB; below 100&nbsp;Hz/s
-        the median is unchanged.</p>
+        501&nbsp;Hz/s under a real boost and shed as much as 47&nbsp;dB. Above
+        300&nbsp;Hz/s the median satellite is down 13.5&nbsp;dB; below
+        100&nbsp;Hz/s the median is unchanged.</p>
     </div>
 
     <figure>
 {{FIG_BOOST_RATE}}
-      <figcaption>One hundred satellite-receiver pairs across two accelerations.
-        The relationship is the same curve throughout, which is what a
+      <figcaption>One hundred and twenty-five satellite-receiver pairs, five
+        receivers across two accelerations, drawn in one color because they fall
+        on one curve. The relationship is the same throughout, which is what a
         dose-response looks like.</figcaption>
     </figure>
 
@@ -202,7 +208,7 @@
         motion, and it ranges from 1.2 to 6.9&nbsp;kHz across this sky with no
         relation to how hard the loop is working. GPS&nbsp;5 sits at 28&deg;
         carrying the largest shift of any satellite, 6915&nbsp;Hz, and barely
-        suffers. On every one of the four the correlation against rate is the
+        suffers. On every one of the five the correlation against rate is the
         stronger one, and on the ZED-F9P the shift explains essentially
         nothing:</p>
     </div>
@@ -218,17 +224,22 @@
     <h2><span class="n">04</span>A g rating for a Hz/s problem</h2>
     <div class="prose">
       <p><strong>The published limit is a g number for a Hz/s problem.</strong>
-        u-blox rates the M10 to 4&nbsp;g, but a loop does not see acceleration, it
+        Datasheets rate dynamics in g: u-blox gives its M10 generation 4&nbsp;g, and
+        Quectel gives the LC86G the same. But a loop does not see acceleration, it
         sees how fast its carrier is sliding &mdash; and the same 4&nbsp;g produces
         206&nbsp;Hz/s on a satellite at zenith and 71&nbsp;Hz/s on one at 20&deg;.
         One acceleration is therefore not one condition; it is a spread. That is
         visible in the 13.5&nbsp;g flight, which holds 3.4&nbsp;times the rated
         limit at its peak: split its satellites at the 4&nbsp;g-equivalent rate and
-        the ones below it are down 4&nbsp;dB while the ones above are down
-        10&nbsp;dB &mdash; same vehicle, same instant, differing only in where they
+        the ones below it are down 3.5&nbsp;dB while the ones above are down
+        7.5&nbsp;dB &mdash; same vehicle, same instant, differing only in where they
         sit in the sky. A part flown past its rated acceleration does not fail all
         at once, and a part kept under it is not automatically safe if something is
         overhead.</p>
+      <p>The rating can also be conservative. The SAM-M10Q, a u-blox M10 module,
+        held every satellite within 5&nbsp;dB of its pad level up to 312&nbsp;Hz/s,
+        half again the 206&nbsp;Hz/s its 4&nbsp;g implies overhead. It lost
+        13&nbsp;dB at 378&nbsp;Hz/s and 35&nbsp;dB at 501.</p>
       <p>So the mechanism has a name: the tracking loop failing to slew, not the
         carrier sitting far off nominal. Elevation, which this analysis first used
         to argue from, turns out to have been a sound proxy rather than a wrong one
@@ -248,20 +259,22 @@
         also, for that reason, the one satellite absent from the rate axis: the
         instrument that would measure the stimulus is the one the stimulus
         disabled.</p>
-      <p><strong>What actually dropped.</strong> Of the four u-blox parts, only the
+      <p><strong>What actually dropped.</strong> Of these five parts, only the
         ZED-F9P lost satellites outright, three of thirteen: GPS&nbsp;11 at 70&deg;,
         GPS&nbsp;24 at 51&deg; and GPS&nbsp;6 at 31&deg;, each from a healthy carrier
-        to nothing. The other three leaned on the same satellites &mdash; 12 to
-        32&nbsp;dB off the two steepest &mdash; but held lock on all of them. The
-        ranking is consistent across parts even where the outcome is not.</p>
-      <p><strong>What did not drop, on these four, is the position.</strong> None of
+        to nothing. The other four leaned on the same satellites &mdash; 12 to
+        35&nbsp;dB off the two steepest &mdash; but held lock on all of them; the
+        SAM-M10Q's GPS&nbsp;24 hung on at 5&nbsp;dBHz. The ranking is consistent
+        across parts even where the outcome is not.</p>
+      <p><strong>What did not drop, on these five, is the position.</strong> None of
         them went to no-lock during either burn. Losing three satellites out of
-        thirteen costs geometry, not a fix. On the u-blox parts, the thing that
+        thirteen costs geometry, not a fix. On these five parts, the thing that
         stops a position is the export gate, not the dynamics.</p>
-      <p class="note">The four parts behind these curves are all u-blox, spanning
-        three generations (M8, M10, F9) but one vendor, and the LC86G in section 05
-        fails differently. What makes the result credible is four receivers
-        agreeing, the effect scaling with acceleration, and the rate beating the
+      <p class="note">Three of the five parts behind these curves are u-blox
+        modules, the NEO-M8T, the SAM-M10Q and the ZED-F9P; the Quescan and the
+        Beitian speak the same UBX interface. The LC86G in section 05 comes from
+        another vendor and fails differently. What makes the result credible is
+        five receivers agreeing, the effect scaling with acceleration, and the rate beating the
         shift on every one of them.</p>
     </div>
   </section>
@@ -269,8 +282,7 @@
   <section>
     <h2><span class="n">05</span>The LC86G loses the position</h2>
     <div class="prose">
-      <p>The Quectel LC86G is the GNSS on the Tinker-Beetle rocket computer. It
-        reports its raw measurements as RTCM MSM7: per-satellite C/N&#8320;, its own
+      <p>The Quectel LC86G reports its raw measurements as RTCM MSM7: per-satellite C/N&#8320;, its own
         Doppler, and a carrier-phase lock counter, once a second. It was flown on
         the same byte-identical files, so each of its channels can be set against
         the Doppler rate the NEO-M8T measured for the same satellite. It fails in
@@ -305,7 +317,7 @@
         under the knee everywhere, and the channels show it. All thirteen held
         46&nbsp;dBHz through the burn, and only the three steepest, at 79, 66 and
         53&nbsp;Hz/s, slipped carrier phase at ignition. That is the same ranking the
-        u-blox parts show in carrier loss, visible here in phase, at an
+        other five parts show in carrier loss, visible here in phase, at an
         acceleration too low to cost any carrier at all.</p>
     </div>
 
@@ -337,18 +349,18 @@
         ignition. On a vehicle that boosts that hard it will not have a position
         until the descent, in either mode.</p>
       <p><strong>Its navigation mode is a second, separate failure.</strong>
-        Everything above is Balloon mode, which the Beetle's firmware is changing to
-        select at boot. In the module's default Normal mode, on the gentle flight,
+        Everything above is Balloon mode. In the module's power-up default, Normal
+        mode, on the gentle flight,
         the navigation solution did not follow the climb: for 18&nbsp;s it reported
         a climb rate of 1&ndash;6&nbsp;m/s with a valid 3-D fix from all 13
         satellites while the vehicle reached 320&nbsp;m/s. That is the navigation
         filter, not the tracking loops, and the companion report sets the two modes
         side by side (<a href="report.html">GNSS Receiver Limits</a>, section 04).
         After the 13.5&nbsp;g ignition Normal mode went further, publishing fixes
-        flagged valid that were 18&ndash;80&nbsp;km wrong. Replayed through the
-        Beetle's main-parachute logic, those fixes would have released the main
-        16&nbsp;km up
-        (<a href="https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1508">TinkerRocket#1508</a>).</p>
+        flagged valid that were 18&ndash;80&nbsp;km wrong. Nothing in those fixes
+        marks them as bad, so a flight computer that trusts the valid flag takes
+        them as they are, including one that falls back on GNSS altitude to deploy
+        a main parachute.</p>
     </div>
   </section>
 

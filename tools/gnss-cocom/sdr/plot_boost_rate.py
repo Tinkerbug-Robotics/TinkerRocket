@@ -5,7 +5,7 @@ Pooling the 13.5 g and 2.0 g flights onto a single rate axis turns the
 acceleration control into a dose-response: the gentle flight is not a separate
 condition that happens to show nothing, it is the low end of the same curve.
 Its satellites never exceed 79 Hz/s and never lose carrier; the same satellites
-on the same sky reach 501 Hz/s under a real boost and shed 15-47 dB.
+on the same sky reach 501 Hz/s under a real boost and shed as much as 47 dB.
 
   python3 plot_boost_rate.py        # writes results/figures/boost_rate.svg
 """
@@ -15,10 +15,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "results" / "figures" / "boost_rate.svg"
 
-PARTS = [("zed_f9p", "ZED-F9P", "var(--accent, #29457E)"),
-         ("neo_m8t", "NEO-M8T", "var(--blocked, #A2660A)"),
-         ("quescan_m10", "Quescan M10", "var(--fix, #0E7C66)"),
-         ("beitian_bn182", "Beitian BN-182", "var(--nolock, #9B3535)")]
+# One color for every receiver. The point of the figure is that they all fall
+# on one curve, and five categorical hues cannot be told apart in a scatter
+# (the palette check passes only three all-pairs); identity is in the r list.
+SERIES = "var(--accent, #29457E)"
+PARTS = [("zed_f9p", "ZED-F9P", SERIES),
+         ("neo_m8t", "NEO-M8T", SERIES),
+         ("quescan_m10", "Quescan M10", SERIES),
+         ("beitian_bn182", "Beitian BN-182", SERIES),
+         ("ublox_m10", "SAM-M10Q", SERIES)]
 SCENARIOS = [("spaceshot", "13.5 g", True), ("gentle_alt", "2.0 g", False)]
 
 W, H = 900, 432
@@ -55,7 +60,7 @@ def main():
     o = [f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" role="img" '
          f'aria-label="Per-satellite carrier-to-noise change plotted against the '
          f'Doppler rate that satellite presented during the burn, pooling a 13.5 g '
-         f'and a 2.0 g flight across four receivers. Loss grows with rate; below '
+         f'and a 2.0 g flight across five receivers. Loss grows with rate; below '
          f'100 Hz per second there is none.">',
          '<style>'
          '.ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}'
@@ -128,21 +133,19 @@ def main():
 
     r = pearson(allx, ally)
     o.append(f'<text class="rr" x="{PAD_L+PW-2}" y="{PAD_T+13}" text-anchor="end">'
-             f'all four receivers, both flights: n={len(allx)}, '
+             f'all five receivers, both flights: n={len(allx)}, '
              f'r = {r:+.2f}</text>')
 
     ly = H - 58
     lx = PAD_L
-    for pid, lbl, col in PARTS:
-        o.append(f'<circle cx="{lx+4:.1f}" cy="{ly-3:.1f}" r="3.2" fill="{col}" '
-                 f'fill-opacity="0.6" stroke="{col}"/>')
-        o.append(f'<text class="lbl" x="{lx+13:.1f}" y="{ly:.1f}">{lbl}</text>')
-        lx += 16 + len(lbl) * 5.6
+    o.append(f'<circle cx="{lx+4:.1f}" cy="{ly-3:.1f}" r="3.2" fill="{SERIES}" '
+             f'fill-opacity="0.6" stroke="{SERIES}"/>')
+    o.append(f'<text class="lbl" x="{lx+13:.1f}" y="{ly:.1f}">13.5 g flight</text>')
+    lx += 16 + 13 * 5.6
     o.append(f'<circle cx="{lx+4:.1f}" cy="{ly-3:.1f}" r="3.2" fill="none" '
-             f'stroke="var(--ink-3,#79808F)"/>')
-    o.append(f'<text class="lbl" x="{lx+13:.1f}" y="{ly:.1f}">hollow = 2.0 g flight'
-             f'</text>')
-    lx += 16 + 21 * 5.6
+             f'stroke="{SERIES}" stroke-opacity="0.75"/>')
+    o.append(f'<text class="lbl" x="{lx+13:.1f}" y="{ly:.1f}">2.0 g flight</text>')
+    lx += 16 + 12 * 5.6
     o.append(f'<path d="M{lx+1:.1f},{ly-7:.1f} L{lx+9:.1f},{ly+1:.1f} '
              f'M{lx+1:.1f},{ly+1:.1f} L{lx+9:.1f},{ly-7:.1f}" '
              f'stroke="var(--ink-3,#79808F)" stroke-width="1.8" fill="none"/>')
@@ -150,7 +153,7 @@ def main():
     for dy, line in ((38, 'Every point is one satellite on one receiver. Doppler rate is '
                           'measured from RXM-RAWX on a byte-identical scenario, so the '
                           'same satellite'),
-                     (26, 'presents the same rate in all four runs. GPS:11 is absent: it '
+                     (26, 'presents the same rate in all five runs. GPS:11 is absent: it '
                           'presented the highest rate of any satellite and its raw '
                           'measurement dropped'),
                      (14, 'out through the burn, so its rate cannot be measured.')):

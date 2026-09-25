@@ -17,7 +17,7 @@ flights already flown rather than needing new ones.
   python3 boost_sats.py results/zed_f9p_spaceshot.log.gz \
                         results/zed_f9p_spaceshot.scenario.json
 """
-import argparse, gzip, json, math, statistics, struct, sys
+import argparse, datetime, gzip, json, math, statistics, struct, sys
 
 NAV_PVT = b"\x01\x07"
 NAV_SAT = b"\x01\x35"
@@ -37,7 +37,8 @@ def read_capture(path):
                 continue
             if b[:2] == NAV_PVT and len(b) >= 2 + 78:
                 pl = b[2:]
-                pvt.append((t, pl[21] & 1, struct.unpack_from("<i", pl, 36)[0] / 1000.0))
+                pvt.append((t, pl[21] & 1, struct.unpack_from("<i", pl, 36)[0] / 1000.0,
+                            struct.unpack_from("<I", pl, 0)[0] / 1000.0))
             elif b[:2] == NAV_SAT and len(b) >= 2 + 8:
                 pl = b[2:]
                 n = pl[5]
@@ -58,7 +59,7 @@ def align(pvt, truth):
     boost, so there is no single feature present in both series to anchor on.
     """
     tr = {round(s["t"], 1): s["alt_m"] for s in truth}
-    usable = [(t, a) for t, ok, a in pvt if ok]
+    usable = [(t, a) for t, ok, a, _tow in pvt if ok]
     if len(usable) < 20:
         return None
     best, best_err = None, None
@@ -75,6 +76,28 @@ def align(pvt, truth):
                 best, best_err = off, e
         off += 0.1
     return best if best_err is not None and best_err < 500.0 else None
+
+
+def align_by_tow(pvt, meta):
+    """Offset from the receiver's own GPS time of week, when the altitude fit
+    cannot reach.
+
+    The fit searches +/-60 s around the capture clock, which suits a capture
+    stamped from the start of transmission. A capture relayed through a flight
+    computer's console is stamped with that computer's uptime instead, minutes
+    away (the SAM-M10Q's sits 1635 s off). NAV-PVT's iTOW needs no search: the
+    scenario's start time is GPS time, so scenario_t = iTOW - start's TOW. Epochs
+    outside the flight -- a clock still running from the previous run -- are
+    left out, and the median of the rest is the offset.
+    """
+    try:
+        st = datetime.datetime.strptime(meta["start_time"], "%Y/%m/%d,%H:%M:%S")
+    except (KeyError, ValueError):
+        return None
+    tow0 = ((st.weekday() + 1) % 7) * 86400 + st.hour * 3600 + st.minute * 60 + st.second
+    span = meta.get("duration_s", 900.0)
+    offs = [(tow - tow0) - t for t, _ok, _a, tow in pvt if 0.0 <= tow - tow0 <= span]
+    return statistics.median(offs) if len(offs) >= 20 else None
 
 
 def phase_window(truth, name):
@@ -139,7 +162,11 @@ def main():
         sys.exit(f"{meta.get('scenario')}: no boost phase in the truth track")
     b0, b1 = boost
 
-    off = a.offset if a.offset is not None else align(pvt, truth)
+    off = a.offset
+    if off is None:
+        off = align(pvt, truth)
+    if off is None:
+        off = align_by_tow(pvt, meta)
     if off is None:
         sys.exit(f"{a.capture}: could not align to {meta.get('scenario')}; pass --offset")
 

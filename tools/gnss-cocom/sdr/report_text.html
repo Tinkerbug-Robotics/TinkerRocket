@@ -53,7 +53,8 @@
       <p>Every receiver here was flown against the same two trajectories through
         the same signal generator. If those two trajectories did not fully characterize
         the limits, then additional excursions were run. The top-level summary of the results
-        is included in this table. What the boost itself does to tracking, on the same
+        is included in this table, rounded; each receiver's measured brackets are
+        in section 03. What the boost itself does to tracking, on the same
         flights, is in the companion report,
         <a href="boost_report.html">GNSS Under Boost</a>.</p>
     </div>
@@ -65,26 +66,19 @@
       </table>
     </div>
 
-    <div class="footnotes">
-        <p class="fn"><span class="mark">&nbsp;</span><span>Results are rounded slightly
-          here for the purpose of summarizing. The measured brackets are given per
-          receiver below, and in <code>results/receivers.json</code>.</span></p>
-{{FOOTNOTES}}
-    </div>
 
     <div class="prose">
       <h3>What the table says</h3>
       <p>Receivers do not implement the current MTCR 600 m/s limit. Most use the
         COCOM 515 m/s limit for speed; the Quectel LC86G stops at 500 m/s, which
         matches neither. Altitude limits vary significantly from 10 km to 80 km,
-        though several use the 80 km limit.</p>
-      <p>The LC86G appears twice because one setting changes the answer
-        entirely. Its navigation mode lives in the module's RAM, and when these
-        flights were made the Tinker-Beetle's firmware left it at the default,
-        Normal; it is being changed to select Balloon at boot. In Normal mode
-        there is no altitude limit to report, because the fix is already wrong
-        partway up the boost. In Balloon mode its limits are as clean as any part
-        here. Section 04 sets the two side by side.</p>
+        though several use the 80 km limit. The Air530's 10&nbsp;km and the
+        NEO-M8T's 50&nbsp;km are not export limits; section 04 shows why.</p>
+      <p>The LC86G is listed in Balloon mode, one of its navigation modes. The
+        module powers up in Normal mode, and the setting lives in its RAM, so a
+        host has to select Balloon again at every power-up. In Normal mode there
+        is no altitude limit to report, because the fix is already wrong partway
+        up the boost. Section 04 sets the two side by side.</p>
 
       <h3>Limits combined</h3>
       <p>A receiver with both a speed and an altitude limit has to decide what to
@@ -102,10 +96,8 @@
         started.</p>
       <p>The Air530 is listed as not applicable because it has no speed limit to
         combine &mdash; only the altitude ceiling applies, so the question does
-        not arise. The LC86G in Normal mode is not applicable for a different
-        reason: no valid fix ever reaches either limit. Section 06 keeps the runs
-        that first established independence on the PX1125R, one limit at a
-        time.</p>
+        not arise. Section 06 keeps the runs that first established independence
+        on the PX1125R, one limit at a time.</p>
 
       <h3>Re-open latency</h3>
       <p>How long the receiver takes to publish a position again after the
@@ -114,12 +106,11 @@
       <p>The shorter the delay, the faster you get fix back after passing below
         a threshold. Since the receivers continue to operate and have a fix 
         internally when exceeding the limits, they should be able to report
-        their fix quickly once inside the limits again. Four configurations
-        recover in under 2 seconds: the PX1125R, SAM-M10Q and ZED-F9P, and the
-        LC86G in Balloon mode, which comes back straight into a valid fix within
-        0.1 s on the 3 g flight. The NEO-M8T recovers within 3.1 s, and the two
-        M10 modules take between 5 and 11 seconds. The LC86G in Normal mode never
-        re-opened on the 3 g flight.</p>
+        their fix quickly once inside the limits again. Four parts recover in
+        under 2 seconds: the PX1125R, SAM-M10Q, ZED-F9P and LC86G, which comes
+        back straight into a valid fix within 0.1 s on the 3 g flight. The
+        NEO-M8T recovers within 3.1 s, and the Quescan M10 and Beitian BN-182
+        take between 5 and 11 seconds.</p>
     </div>
   </section>
 
@@ -195,7 +186,9 @@
           </tbody>
         </table>
       </div>
-      <p><strong>Why two.</strong> At a 1&nbsp;Hz navigation rate a 15&nbsp;g boost
+      <p><strong>Why two.</strong> Six of the eight parts ran at 1&nbsp;Hz, and the
+        SAM-M10Q, though it ran at 18&nbsp;Hz, was logged once a second; only the
+        LC86G's 10&nbsp;Hz reached the analysis. At 1&nbsp;Hz a 15&nbsp;g boost
         covers 118&nbsp;m/s between one epoch and the next, so a fast flight can
         only ever bracket the velocity gate coarsely no matter how carefully it is
         flown. The 3&nbsp;g ascent crosses the same threshold slowly enough to pin
@@ -303,18 +296,16 @@
 
     <div class="prose">
       <h3>Normal vs Balloon: the Quectel LC86G</h3>
-      <p>The eighth part is the GNSS on the Tinker-Beetle, a Quectel LC86G on the
-        flight computer's own serial port. It was flown the way the Beetle runs
-        it. The flight computer was loaded with a bench image that passes the
-        module's serial output straight to USB, and the Beetle driver's own
-        configuration was replayed through it: 10&nbsp;Hz, the same sentences,
-        nothing saved to the module. Then the same two flights were flown again
-        with one setting changed.</p>
-      <p>That setting is the navigation mode. When these flights were made the
-        Beetle's firmware never sent <code>$PAIR080</code>, so the module ran in
-        its default, Normal. Because of what follows, it is being changed to
-        select Balloon mode at boot.
-        Quectel's protocol specification gives every mode but one a 10&nbsp;km
+      <p>The eighth part, a Quectel LC86G, was flown on a rocket flight computer
+        board, through a bench image that passes the module's serial output
+        straight to USB. It was configured the way a flight driver configures it:
+        10&nbsp;Hz, the position sentences a flight computer reads, nothing saved
+        to the module. The two standard flights were flown twice, once in each of
+        two navigation modes.</p>
+      <p>The navigation mode is set with <code>$PAIR080</code>. The module powers
+        up in Normal mode, so a host that never sends the command flies in Normal,
+        and the setting lives in RAM, so it has to be sent again at every
+        power-up. Quectel's protocol specification gives every mode but one a 10&nbsp;km
         altitude limitation. It calls 10&ndash;50&nbsp;km "cannot be guaranteed"
         and stops all output above 50&nbsp;km. Balloon mode moves the limit to
         80&nbsp;km. The datasheet adds a 490&nbsp;m/s maximum velocity and a
@@ -389,9 +380,10 @@
         <code>$PQTMPVT</code>'s GPS time of week instead. Through the 15&nbsp;g
         coast its <code>$GNGGA</code> claimed a three-satellite fix that
         <code>$PQTMPVT</code> reported as no fix. The analysis follows
-        <code>$PQTMPVT</code>, which is what the Beetle's driver reads. And on
+        <code>$PQTMPVT</code>, the sentence a flight computer reads for its fix.
+        And on
         this bench its altitude drifts low through a flight, 2.6&nbsp;km by
-        landing, with velocity still right to 0.5&nbsp;m/s. A u-blox M10 drifts
+        landing, with velocity still right to 0.5&nbsp;m/s. The Quescan M10 drifts
         1.5&nbsp;km on the same file, so most of that is the bench, not the
         receiver. The drift is also why the Balloon-mode altitude limit reads
         near 81&nbsp;km against the injection while the receiver itself stops at
@@ -1100,12 +1092,13 @@ The tightest data on the bench: never fewer than four satellites in either fligh
 <!--/blurb-->
 
 <!--#blurb beitian_bn182-->
-The same u-blox M10 die and firmware as the Quescan, on another vendor's board,
-flown on the same sky &mdash; and it behaves like its mirror image. Where the
-Quescan is slow on altitude and fast on velocity, this one is fast on altitude
-and takes ten seconds to re-open on velocity, waiting until the vehicle has shed
-another 180&nbsp;m/s. A control flight 6&nbsp;dB hotter reproduced every latency
-exactly, so it is not signal level. The same chip does not predict the gate.
+It shares the Quescan's UBX interface but is a different part, on another
+vendor's board, flown on the same sky &mdash; and it behaves like its mirror
+image. Where the Quescan is slow on altitude and fast on velocity, this one is
+fast on altitude and takes ten seconds to re-open on velocity, waiting until the
+vehicle has shed another 180&nbsp;m/s. A control flight 6&nbsp;dB hotter
+reproduced every latency exactly, so it is not signal level. A shared interface
+does not predict the gate.
 <!--/blurb-->
 
 <!--#blurb zed_f9p-->
@@ -1117,16 +1110,15 @@ Velocity gate normal at 510&ndash;524&nbsp;m/s, but it stops publishing at 50&nb
 <!--/blurb-->
 
 <!--#blurb quescan_m10-->
-A bare u-blox M10 die on a third-party carrier &mdash; it answers the full
-private protocol down to <code>SEC-UNIQID</code> but reports no module name,
-which is what a raw chip does. Gate behavior is in family, but it is the slowest
-part measured on the altitude gate: 2.3&nbsp;s to close and about 5&nbsp;s to
+It answers u-blox's UBX interface down to <code>SEC-UNIQID</code> but reports no
+module name. Gate behavior is in family, but it is the slowest part measured on
+the altitude gate: 2.3&nbsp;s to close and about 5&nbsp;s to
 re-open, against under two seconds everywhere else.
 <!--/blurb-->
 
 <!--#blurb lc86g_normal-->
-The GNSS on the Tinker-Beetle, flown the way the Beetle ran it when tested. Normal mode's
-vertical solution does not follow a boost. Through the 3&nbsp;g ascent it
+The module's power-up navigation mode, which a host flies in unless it sends
+<code>$PAIR080</code>. Normal mode's vertical solution does not follow a boost. Through the 3&nbsp;g ascent it
 reported a climb rate near zero for 18&nbsp;s with a valid fix, then stopped all
 output at 500&nbsp;m/s and never published a valid fix again. At 15&nbsp;g it
 published fixes 18&ndash;80&nbsp;km wrong. See section 04.
