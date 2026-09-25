@@ -67,6 +67,8 @@
     line-height: 1.15; margin: 1px 0 2px;
   }
   .card-grid .stat .h { font-size: 0.72rem; color: #888; }
+  /* A figure the card leaves blank, and why. One quiet line, set like a hint. */
+  .card .foot { color: #666; font-size: 0.8rem; margin-top: 14px; }
   /* Grouped tables (the settings snapshot): the app's own section headings,
      side by side, rather than one long table or a wall of JSON. Labels are the
      app's words, so they are set like prose, not like keys. */
@@ -182,6 +184,7 @@ details.explore > summary:hover { background: #f2f4f7; }
     {% endif %}
     {% endfor %}
   </div>
+  {% if summary_note %}<div class="foot">{{ summary_note }}</div>{% endif %}
 </div>
 {% endif %}
 

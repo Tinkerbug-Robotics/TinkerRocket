@@ -28,7 +28,7 @@ if str(_PARENT) not in sys.path:
 from plot_flight_data_mini import get_array  # noqa: E402
 
 from ..charts import COLORS, chart, trace
-from ..events import measured
+from ..events import markers
 from ..flight import Flight
 from ..registry import AnalysisResult
 from ..units import q
@@ -69,7 +69,12 @@ def analyze(flight: Flight) -> AnalysisResult:
         return result
 
     t = (get_array(ns, "time_us") - t0) / 1e6
-    ev = measured(flight)
+    # Launch is an anchor here, not a figure: the pad reference ends at it and
+    # the boost starts there. So the flight computer's launch call stands in
+    # when first motion cannot be measured. A motor that lit inside a hole in
+    # the log leaves the pad and the rest of the boost in the record, and this
+    # section would otherwise go blank on a flight whose tilt it can read.
+    ev = markers(flight)
     launch, burnout = ev["launch"], ev["burnout"]
     ejection, apogee = ev["ejection"], ev["apogee"]
 

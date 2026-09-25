@@ -272,17 +272,21 @@ def phases(flight: Flight, t_first: float, t_last: float) -> list[tuple[str, flo
     if launch is None:
         out.append(("Whole log", t_first, t_last, "no launch found, so the whole record"))
         return out
+    # Named for what anchors the windows. When first motion cannot be measured
+    # they hang off the flight computer's launch call instead, and a label
+    # saying "first motion" would name an instant the log never saw.
+    start = "first motion" if ev["launch"] is not None else "launch detection"
     pad_lo, pad_hi = max(t_first, launch - _PAD_BEFORE_S), launch - _PAD_GUARD_S
     if pad_hi - pad_lo >= 0.3:
-        out.append(("Pad", pad_lo, pad_hi, "the 1.5 s before first motion"))
+        out.append(("Pad", pad_lo, pad_hi, f"the 1.5 s before {start}"))
     if ev["burnout"] is not None:
-        out.append(("Boost", launch, ev["burnout"], "first motion to thrust ending"))
+        out.append(("Boost", launch, ev["burnout"], f"{start} to thrust ending"))
         if ev["apogee"] is not None and ev["apogee"] > ev["burnout"]:
             out.append(("Coast", ev["burnout"], ev["apogee"], "burnout to apogee"))
     elif ev["apogee"] is not None:
-        out.append(("Boost", launch, ev["apogee"], "first motion to apogee (no burnout found)"))
+        out.append(("Boost", launch, ev["apogee"], f"{start} to apogee (no burnout found)"))
     else:
-        out.append(("Boost", launch, t_last, "first motion to the end of the log (no burnout found)"))
+        out.append(("Boost", launch, t_last, f"{start} to the end of the log (no burnout found)"))
     top = ev["apogee"] if ev["apogee"] is not None else ev["burnout"]
     if top is not None and ev["landed"] is not None and ev["landed"] > top:
         out.append(("Descent", top, ev["landed"], "apogee to touchdown"))

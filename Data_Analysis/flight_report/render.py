@@ -183,7 +183,7 @@ def render_report(
     """
     from .cesium_bundle import cesium_css, cesium_source
     from .registry import LEVEL_FLIGHT
-    from .summary import compute_summary
+    from .summary import card_note, compute_summary
 
     template = _env.get_template("report.html.j2")
 
@@ -242,6 +242,7 @@ def render_report(
         # The flight report leads with the headline numbers; the detailed
         # report leads with parser/settings detail and doesn't repeat them.
         summary=compute_summary(flight) if is_flight else [],
+        summary_note=card_note(flight) if is_flight else "",
         has_charts=has_charts,
         plotly_js=Markup(_plotly_source()) if has_charts else "",
         has_datasets=has_datasets,
