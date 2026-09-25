@@ -1,0 +1,147 @@
+<svg viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Per-satellite carrier-to-noise change plotted against the Doppler rate that satellite presented during the burn, pooling a 13.5 g and a 2.0 g flight across four receivers. Loss grows with rate; below 100 Hz per second there is none.">
+<style>.ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}.gl{stroke:var(--rule,#DDE2E9);stroke-width:1;stroke-dasharray:3 3}.lbl{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-3,#79808F)}.rr{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-2,#4A5261)}.ttl{font-family:var(--f-display,sans-serif);font-size:11px;font-weight:600;fill:var(--ink-2,#4A5261)}</style>
+<line class="gl" x1="54" y1="328.0" x2="882" y2="328.0"/>
+<text class="lbl" x="48" y="331.0" text-anchor="end">-50</text>
+<line class="gl" x1="54" y1="282.2" x2="882" y2="282.2"/>
+<text class="lbl" x="48" y="285.2" text-anchor="end">-40</text>
+<line class="gl" x1="54" y1="236.3" x2="882" y2="236.3"/>
+<text class="lbl" x="48" y="239.3" text-anchor="end">-30</text>
+<line class="gl" x1="54" y1="190.5" x2="882" y2="190.5"/>
+<text class="lbl" x="48" y="193.5" text-anchor="end">-20</text>
+<line class="gl" x1="54" y1="144.6" x2="882" y2="144.6"/>
+<text class="lbl" x="48" y="147.6" text-anchor="end">-10</text>
+<line class="gl" x1="54" y1="98.8" x2="882" y2="98.8"/>
+<text class="lbl" x="48" y="101.8" text-anchor="end">+0</text>
+<line class="gl" x1="54" y1="52.9" x2="882" y2="52.9"/>
+<text class="lbl" x="48" y="55.9" text-anchor="end">+10</text>
+<line class="ax" x1="54" y1="98.8" x2="882" y2="98.8"/>
+<line class="ax" x1="54" y1="30" x2="54" y2="328"/>
+<text class="lbl" x="54.0" y="342" text-anchor="middle">0</text>
+<text class="lbl" x="157.5" y="342" text-anchor="middle">65</text>
+<text class="lbl" x="261.0" y="342" text-anchor="middle">130</text>
+<text class="lbl" x="364.5" y="342" text-anchor="middle">195</text>
+<text class="lbl" x="468.0" y="342" text-anchor="middle">260</text>
+<text class="lbl" x="571.5" y="342" text-anchor="middle">325</text>
+<text class="lbl" x="675.0" y="342" text-anchor="middle">390</text>
+<text class="lbl" x="778.5" y="342" text-anchor="middle">455</text>
+<text class="lbl" x="882.0" y="342" text-anchor="middle">520</text>
+<text class="lbl" x="468" y="357" text-anchor="middle">Doppler rate presented during the burn, Hz/s</text>
+<text class="lbl" transform="translate(14,179) rotate(-90)" text-anchor="middle">change in carrier-to-noise, dB</text>
+<line class="gl" x1="382.2" y1="30" x2="382.2" y2="328" stroke="var(--ink-3,#79808F)" stroke-dasharray="2 3"/>
+<text class="lbl" x="386.2" y="322">4 g at zenith = 206 Hz/s</text>
+<circle cx="509.1" cy="71.3" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<path d="M546.8,310.2 L554.8,318.2 M546.8,318.2 L554.8,310.2" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="209.9" cy="48.3" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="326.7" cy="103.4" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="371.2" cy="66.7" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="257.1" cy="103.4" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="544.5" cy="89.6" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="656.6" cy="107.9" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="469.1" cy="101.1" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<path d="M847.1,269.0 L855.1,277.0 M847.1,277.0 L855.1,269.0" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="140.2" cy="57.5" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="235.2" cy="133.2" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="509.1" cy="158.4" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="550.8" cy="130.9" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="209.9" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="326.7" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="371.2" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="257.1" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="544.5" cy="153.8" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="656.6" cy="190.5" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="469.1" cy="135.4" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="851.1" cy="213.4" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="140.2" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="235.2" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="509.1" cy="85.0" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="550.8" cy="85.0" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="209.9" cy="130.9" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="326.7" cy="126.3" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="371.2" cy="126.3" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="257.1" cy="135.4" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="544.5" cy="126.3" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="656.6" cy="163.0" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="469.1" cy="121.7" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="851.1" cy="245.5" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="140.2" cy="130.9" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="235.2" cy="126.3" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="509.1" cy="218.0" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="550.8" cy="236.3" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="209.9" cy="57.5" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="326.7" cy="80.4" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="371.2" cy="103.4" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="257.1" cy="57.5" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="544.5" cy="57.5" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="656.6" cy="222.6" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="469.1" cy="66.7" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="851.1" cy="218.0" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="140.2" cy="112.5" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="235.2" cy="112.5" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="118.6" cy="149.2" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="122.3" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="179.3" cy="75.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="76.9" cy="135.4" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="92.3" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="99.7" cy="94.2" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="83.0" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="115.4" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="137.7" cy="103.4" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="112.2" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="158.8" cy="94.2" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="66.1" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="79.2" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="118.6" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="122.3" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="179.3" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="76.9" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="92.3" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="99.7" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="83.0" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="115.4" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="137.7" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="112.2" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="158.8" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="66.1" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="79.2" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="118.6" cy="98.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="122.3" cy="107.9" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="179.3" cy="103.4" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="76.9" cy="98.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="92.3" cy="103.4" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="99.7" cy="43.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="83.0" cy="103.4" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="115.4" cy="103.4" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="137.7" cy="75.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="112.2" cy="103.4" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="158.8" cy="39.2" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="66.1" cy="98.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="79.2" cy="98.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="118.6" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="122.3" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="179.3" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="76.9" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="92.3" cy="112.5" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="99.7" cy="126.3" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="83.0" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="115.4" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="137.7" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="112.2" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="158.8" cy="62.1" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="66.1" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="79.2" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<text class="rr" x="880" y="43" text-anchor="end">all four receivers, both flights: n=100, r = -0.62</text>
+<circle cx="58.0" cy="371.0" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<text class="lbl" x="67.0" y="374.0">ZED-F9P</text>
+<circle cx="113.2" cy="371.0" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<text class="lbl" x="122.2" y="374.0">NEO-M8T</text>
+<circle cx="168.4" cy="371.0" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<text class="lbl" x="177.4" y="374.0">Quescan M10</text>
+<circle cx="246.0" cy="371.0" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<text class="lbl" x="255.0" y="374.0">Beitian BN-182</text>
+<circle cx="340.4" cy="371.0" r="3.2" fill="none" stroke="var(--ink-3,#79808F)"/>
+<text class="lbl" x="349.4" y="374.0">hollow = 2.0 g flight</text>
+<path d="M471.0,367.0 L479.0,375.0 M471.0,375.0 L479.0,367.0" stroke="var(--ink-3,#79808F)" stroke-width="1.8" fill="none"/>
+<text class="lbl" x="484.0" y="374.0">lost lock</text>
+<text class="lbl" x="54" y="394">Every point is one satellite on one receiver. Doppler rate is measured from RXM-RAWX on a byte-identical scenario, so the same satellite presents the same rate in all four runs.</text>
+<text class="lbl" x="54" y="406">GPS:11 is absent: it presented the highest rate of any satellite and its raw measurement dropped out through the burn, so its rate cannot be measured.</text>
+</svg>

@@ -276,6 +276,8 @@ neither table nor report should be hand-edited.
 | u-blox NEO-M8T | conducted | 515 m/s | 50 km § | independent | 0.9-3.1 s |
 | Quescan M10 (u-blox M10) | radiated, Faraday cage | 515 m/s | 80 km † | independent | 0.1-5.0 s |
 | Beitian BN-182 (u-blox M10) | radiated, Faraday cage | 505 m/s ¶ | 80 km † | independent | 0.5-11.3 s |
+| Quectel LC86G, Normal mode (as the Tinker-Beetle ships) | radiated, Faraday cage | 500 m/s ‖ | none usable ◊ | n/a -- no valid fix reaches either limit | never (3 g) |
+| Quectel LC86G, Balloon mode | radiated, Faraday cage | 500 m/s ‖ | 81 km ‖ | independent | 0.0-0.6 s |
 
 † Slow to close: this part held a fix 2-3 s past the limit on both flights, about 400-600 m of overshoot above 80 km with position still being published. The threshold itself is normal.
 
@@ -285,11 +287,15 @@ neither table nor report should be hand-edited.
 
 ¶ Rests on a single closing edge, so it is bracketed only to the width of one navigation epoch. This part was slow enough to re-open that the gate had not cleared before the next window, leaving no fix to close again.
 
+◊ No altitude limit could be measured: Normal mode's vertical solution does not follow a boost. The fix stayed valid-flagged while its climb rate read near zero through the 3 g ascent, and after stopping at 500 m/s it never published a valid fix again. Quectel documents a 10 km limitation for this mode and no output at all above 50 km.
+
+‖ Enforced by muting ALL output -- NMEA, acknowledgements and raw measurements -- rather than by withholding the position while satellites are still reported, so on the wire it looks like a dead receiver until it comes back. It acts on the receiver's own estimates, 500 m/s and 80.0 km, stopping within 0.1 s of passing either and returning within 0.1 s straight into a valid fix. Its own altitude read about 0.9 km low near 80 km on this bench, which puts the limit near 81 km against the injection.
+
 **SkyTraq PX1125R** (2026-08-19, ~70 dB pad + DC block into RF_IN, TX gain 44-47): Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified.
 
 **u-blox SAM-M10Q** (2026-08-20, 100 dB pad, L1 quarter-wave in Faraday cage, TX gain 12): Never fell below 4 satellites in either flight, so every withheld epoch is the gate rather than a link failure. No periodic C/N0 oscillation appeared (r = 0.02 and 0.11).
 
-**u-blox ZED-F9P (ArduSimple)** (2026-08-20, 70 dB pad, TX gain 38): Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. Uniquely among the three parts it is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. Its descending edges are crisp and agree at ~80.1 km.
+**u-blox ZED-F9P (ArduSimple)** (2026-08-20, 70 dB pad, TX gain 38): Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. It is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. It was the only one of the first three parts to do so; the Quescan M10, measured later, closes as slowly (+2.3 s). Its descending edges are crisp and agree at ~80.1 km.
 
 **Air530 (AT6558R)** (2026-08-20, 70 dB pad, TX gain 32): EVERYTHING FIRST RECORDED FOR THIS PART WAS WRONG, and dwell tests corrected it. It has NO velocity gate: it held a fix to 900 m/s at 5 km on t1_velramp (reporting 899), and 100% of epochs at every 90 s dwell from 495 to 530 m/s on vel_stair. What it has is an ALTITUDE ceiling at 10-11 km -- 100% fix at 8 km, 91% at 10 km, 0% at 11/12/13 km on 90 s dwells, and 9.90->10.25 km on a 354 m/s ramp with 11 satellites either side. That ceiling is far below the COCOM altitude, so it is not an export gate at all. The flight profiles read as a latent velocity gate only because they cross 10 km at high speed: the spaceshot transition happens while speed is DECREASING (1334 -> 1304 m/s) as altitude rises through 9.83 -> 11.15 km, which no velocity gate can do. Re-open latency is not defined for this part because there is no COCOM gate to re-open: on blockdur it held a fix at 560 m/s for 148 continuous seconds, dropping only 1 s at the sharp 130 m/s^2 transition. The 31-134 s 'recoveries' seen on flights were simply the vehicle descending back through the 10-11 km ceiling. The 18 s C/N0 blanking accompanies withholding (19/677 epochs while withholding vs 0/170 while publishing on gentle_alt).
 
@@ -299,14 +305,20 @@ neither table nor report should be hand-edited.
 
 **Beitian BN-182 (u-blox M10)** (2026-08-28, L1 antenna in Faraday cage, TX gain 20): The same u-blox M10 die and firmware as the Quescan -- identical MON-VER, different chip serial (dee2c50fbf vs c8bf908e28) -- flown on the same ephemeris, start time and launch site. It behaves like its MIRROR IMAGE on recovery: fast on altitude (1.0 s) and slow on velocity (10.1 s), where the Quescan is slow on altitude (5.0 s) and fast on velocity (0.1 s). On three of four velocity windows it does not re-open when speed drops below 515 but waits until 328-410 m/s, with 9-13 satellites held throughout, so it is the gate rather than re-acquisition. Transmit level is NOT the cause: a control flight at gain 26, matching the Quescan, reproduced every latency to the tenth of a second (0.5 / 1.0 / 10.1 s) and every shut lag. What differs and was not controlled is configuration in the modules' own flash -- this one runs GPS+Galileo+BeiDou with GLONASS off, the Quescan has GLONASS enabled, and CFG-NAVSPG holds more than the dynamic model. The practical lesson is that the same chip does not predict gate behavior: two M10 modules from different vendors differ by two orders of magnitude on velocity-gate recovery, and no datasheet says which you are buying.
 
-Across the four parts that implement a velocity gate at all the limit brackets
-to **(514, 516] m/s**, and wherever an altitude gate is genuinely COCOM it sits
-at **80 km**. The Air530 implements neither: no velocity gate to 900 m/s, and a
-10-11 km ceiling that is not an export limit
-anywhere and both limits always independent. What varies enormously is **re-open
-latency**: under 1.5 s on most parts, 31-134 s on the Air530.
+**Quectel LC86G, Normal mode (as the Tinker-Beetle ships)** (2026-09-24, on-board patch antenna in Faraday cage, TX gain 0): The LC86G in the navigation mode the Beetle's firmware leaves it in (Normal; the driver never sends $PAIR080). Quectel gives Normal mode a 10 km altitude limitation and says output stops entirely above 50 km. Measured, the vertical solution does not follow a boost at all: through the 3 g ascent it reported a climb rate near zero for 18 s while the injection climbed to 320 m/s, with a valid 3-D fix, 13 satellites and small claimed accuracy, and at 210 s it read 4.3 km against 9.2 km. At 500 m/s on its own estimate it stopped ALL output for 56 s, and it never published a valid fix again before landing, although the same signal was tracked at 45 dBHz in Balloon mode. At 15 g it lost every satellite at ignition, then published valid-flagged fixes 18-80 km wrong (1.3 km at apogee against 82 km; -5 km against +13 km) and withheld with 13 satellites until the main parachute. Its UTC runs 18 s behind the injected clock (it applies leap seconds the simulation does not broadcast); PQTMPVT's GPS time of week is used instead.
 
-More parts are planned against the same trajectories. To add one: fly
+**Quectel LC86G, Balloon mode** (2026-09-24, on-board patch antenna in Faraday cage, TX gain 0): The same module after $PAIR080,3. The boost is tracked (climb rate within 1-2 m/s of the injection through the 3 g ascent) and the limits are clean and independent: ALL output stops at 500 m/s on its own speed estimate (fired at 9.3 km) and at 80.0 km on its own altitude (fired at 173 m/s), and returns within one 0.1 s epoch straight into a valid fix. Its own altitude reads about 0.9 km low near 80 km, so against the injection the altitude limit sits near 81 km. 500 m/s matches neither COCOM's 515, MTCR's 600 nor the datasheet's 490. At 15 g it still loses every channel at ignition; its RTCM MSM7 shows the four with a Doppler rate at or below 128 Hz/s re-locking within 2 s and every one at or above 171 Hz/s staying lost through the burn, so it has no fix until the descent brings the vehicle back under 500 m/s. Its altitude drifts low through the flight, 2.6 km by landing with velocity still right to 0.5 m/s; a u-blox M10 drifts 1.5 km on the same file, so most of that is the bench.
+
+The u-blox and SkyTraq parts that implement a velocity gate bracket it to
+**(514, 516] m/s**, and wherever an altitude gate is genuinely COCOM it sits at
+**80 km**, with both limits always independent. The Quectel LC86G stops at
+**500 m/s** -- neither COCOM's 515 nor MTCR's 600 -- and does it by muting all
+output. The Air530 has no velocity gate to 900 m/s and a 10-11 km ceiling that is
+not an export limit. What varies enormously is **re-open latency**: under 1.5 s
+on most parts and 0.1 s on the LC86G in Balloon mode, but 5-11 s on the two M10
+modules, and never on the LC86G in Normal mode.
+
+To add another part: fly
 `spaceshot` and `gentle_alt`, archive the capture and its scenario here, add an
 entry to `receivers.json`, and regenerate. If a part stops publishing at an
 unexpected altitude, run `t2_altramp` and then change the dynamic model before
@@ -314,8 +326,8 @@ believing it is COCOM.
 
 ## Open questions, for whoever picks this up
 
-Three things the current data raises and does not settle. All three are visible
-in the archived captures; none needs new hardware.
+Things the current data raises and does not settle. All of them are visible in
+the archived captures; none needs new hardware.
 
 **1. The Air530 recovers below its ceiling on one flight and not the other.**
 On `spaceshot` it regains a fix at ~10.5 km on the way down and holds it solidly
@@ -345,6 +357,28 @@ reading anything into it.
 For contrast, the SAM-M10Q and NEO-M8T have **zero** in-envelope blocked epochs
 on descent (0/418 and 0/392), and the PX1125R's 57 are all at 2-4 satellites --
 the bench C/N0 oscillation, not the receiver.
+
+**4. Every receiver's altitude drifts low on these flight files.** Found checking
+the LC86G. On `gentle_alt` its Balloon-mode altitude is 0.05 km low on the pad,
+0.9 km low near 80 km, and 2.6 km low at landing -- while its vertical velocity
+stays within 0.5 m/s of the injection the whole way, and its east position drifts
+west by 1.6 km although the injected track has no east motion at all. The Quescan
+M10, a different vendor, drifts the same way on the same file: 0.57 km low near
+70 km, 1.5 km low at landing. The trajectory CSV that was transmitted matches the
+truth in the scenario JSON exactly (worst difference 0.000 m over 8,478 samples),
+so the truth is right; the position solution is being pulled against the Doppler
+somewhere between gps-sdr-sim and the receivers. gps-sdr-sim derives each
+channel's carrier from the same range difference as its code phase, so the
+obvious suspect is ruled out. Unexplained. It moves a gate quoted against the
+injection by up to ~1 km near 80 km (a receiver acting on its own altitude, low by
+that much, stops late against the truth); every velocity result is unaffected.
+
+**5. The LC86G in Normal mode never re-acquires after its mute.** 580 s of 3 g
+descent without a valid fix, on the same signal the module tracked at 45 dBHz in
+Balloon mode. The likely cause is its own navigation state -- it never believed
+the climb, so its predicted Doppler was off by kilohertz -- but that is inferred
+from the pattern. The Normal-mode flights had no RTCM MSM7 on; re-flying one with
+it would show each channel's measured Doppler against where it should have been.
 
 ## Quescan M10, radiated (2026-08-28)
 
@@ -470,6 +504,108 @@ The same reversion also invalidated the gain sweeps that chose the level: they
 had counted satellites from NMEA GSV rather than UBX NAV-SAT, which is why
 "14 satellites at gain 8" became 4 in flight.
 
+## Quectel LC86G on the Tinker-Beetle, radiated (2026-09-24)
+
+The GNSS on the Tinker-Beetle (rocket-computer-mini, M1): U5, a Quectel LC86G
+(LA), firmware `LC86GLANR12A03S` built 2025/04/11, on the flight computer's
+own UART. Nothing raw reaches USB in the flight image, so the flight computer
+was loaded with `../firmware/lc86_bridge`, a bench image that copies bytes
+between that UART and USB-Serial-JTAG, parks the pyro ARM/FIRE outputs low
+exactly as the flight image does, and prints `# lc86_bridge: LC86G silent N ms`
+whenever the module stops talking. The flight image was backed up first and
+written back byte-for-byte afterwards.
+
+**Configured as the Beetle flies it.** `lc86_config.py` replays the flight
+driver's `begin()` command for command -- GGA every fix, GSV every 10th,
+`$PQTMPVT` and `$PQTMEPE` every fix, 10 Hz -- and reads every setting back.
+Nothing is saved to the module's flash. The driver never sends `$PAIR080`, so
+the Beetle flies in **Normal** mode; `--navmode 3` sets **Balloon** for the
+control. `--rtcm msm7` adds RTCM3 raw measurements (per-satellite C/N0 to
+1/16 dB, the receiver's own Doppler, carrier-phase lock time, at 1 Hz), parsed by
+`../rtcm3.py` and tabulated per channel by `msm_channels.py`.
+
+Radiated in the Faraday cage from the board's own patch antenna, **TX gain 0**,
+the lowest the HackRF has. Cage floor with nothing transmitted: zero satellites
+in view. Gain sweep on `t00_static` (`results/lc86g_gain_sweep.txt`): 13
+satellites at 44 dBHz with a fix at gain 0, fewer at 6 and 12 (each step
+restarts the file, so part of that is the clock stepping back). Flown on the
+**same `.C8` files as the Quescan and Beitian** (built 2026-08-28 16:32-16:34,
+flown from 16:49 that day; scenario JSONs hash-identical to theirs and the
+NEO-M8T's). Every flight began with a cold start, `$PAIR006`, which is how a
+Beetle comes up on the pad: its V_BCKP rides the same switched rail.
+
+| Capture | Mode | Result |
+|---|---|---|
+| `lc86g_normal_spaceshot` | Normal | lost every satellite at ignition; valid-flagged fixes 18-80 km wrong near apogee and on the descent; withheld with 13 satellites until the main |
+| `lc86g_normal_gentle_alt` | Normal | climb rate near zero for 18 s of boost with a valid fix; **all output stopped at 500 m/s** (own estimate) for 56 s; no valid fix for the rest of the flight |
+| `lc86g_balloon_gentle_alt` | Balloon | boost tracked to 1-2 m/s; **silent above 500 m/s and above 80.0 km** (own estimates), each lifted within 0.1 s straight into a valid fix; limits independent |
+| `lc86g_balloon_spaceshot` | Balloon | lost every channel at ignition; the four at or below 128 Hz/s re-locked within 2 s, the rest stayed lost; no fix until the descent brought it under 500 m/s, then a valid one within 0.6 s |
+
+Each capture's `.runner.txt.gz` holds the preflight read-back that proves the
+module's configuration at transmit time.
+
+### Normal vs Balloon
+
+Quectel's protocol specification (LC26G/LC76G/LC86G V1.4, section 2.4.24,
+Tables 7 and 8) gives every navigation mode except Balloon a 10 km altitude
+limitation, calls 10-50 km "cannot be guaranteed", and stops all output above
+50 km; Balloon mode is limited to 80 km. The datasheet adds 490 m/s and 4 g.
+
+- **Normal mode cannot follow a boost.** On the 3 g flight the vertical solution
+  lagged from ignition: 1.23 km and 1.4 m/s reported at t=190 s against 2.17 km
+  and 190 m/s injected, 4.31 km against 9.18 km at 210 s, all with a valid 3-D
+  fix from 13 satellites. The correlator's guard flags 256 such epochs.
+- **Both modes mute at 500 m/s on their own speed estimate** -- last output at
+  498.7-499.6 m/s own (498.9 injected), first silent epoch 500.3 injected. The
+  datasheet says 490; COCOM says 515.
+- **Balloon mode also mutes above 80.0 km on its own altitude** (last output
+  80.009 km own, 80.94 injected), and returns at 80.016 own. Against the
+  injection that is ~81 km; see open question 4 for why the receiver's own
+  altitude reads low up there.
+- **Re-open:** Balloon mode comes back within one 0.1 s epoch straight into a
+  valid fix (0.6 s after the 15 g flight's no-fix spell). Normal mode never
+  re-opened on the 3 g flight (open question 5).
+
+### The ignition loss, per channel
+
+MSM7 on the Balloon flights, against the Doppler rates the NEO-M8T measured on
+the same file (`doppler_ref_spaceshot.json`):
+
+    held through the 13.5 g burn   G29 54, G12 98, G30 114 (phase slip), G19 128 Hz/s
+    lost for the rest of the burn  G14 171, G15 199, G22 261, G05 286, G20 308,
+                                   G06 312, G21 378, G24 501, G11 (steepest) Hz/s
+
+Every channel drops in the first second of the 13.5 g ignition, low and high
+alike -- a common-mode failure -- and then the rate decides which come back. The
+knee is **128-171 Hz/s**, below the 206 Hz/s its rated 4 g presents at zenith.
+At 2 g every channel held 46 dBHz; the three steepest (79, 66, 53 Hz/s) slipped
+carrier phase at ignition. Section 06 of the report has the figure.
+
+### Traps this part set
+
+- **Its UTC is 18 s behind the injection.** It applies leap seconds the
+  simulated signal does not broadcast (`<LeapS>` 18). `$PQTMPVT`'s `<TOW>` is GPS
+  time and is what `correlate.py` now uses when present.
+- **GGA and PQTMPVT disagree.** Through the 15 g coast GGA claimed a 3-satellite
+  fix at 18 km (29 km injected) that PQTMPVT reported as FixMode 0. The Beetle's
+  driver reads PQTMPVT, so the classifier now lets PQTMPVT decide.
+- **The clock survives a cold start.** The first seconds of each capture carry
+  the previous run's time and were drawn mid-flight until
+  `correlate.clock_outliers()` learned to spot them. The same fault was in the
+  archived Quescan captures: 9 pre-lock epochs sat at t=270-278 s in its
+  published figure, in the clear interval between two gates. Corrected; no
+  latency changed.
+- **Silence is a state.** A receiver that stops talking is not NO_LOCK. The
+  bridge's notes become a grey SILENT span in `plot_flight.py`; without them the
+  last epoch's colour was stretched across the gap.
+- **Configuration is RAM-only**, as in flight, and a rail cycle resets the module
+  to factory defaults (1 Hz, full NMEA, Normal, no PQTM). `run_radiated.py --lc86
+  MODE --rtcm msm7 --cold-start` reads everything back before transmitting and
+  refuses a mismatch.
+- **The rail needs the app.** The Beetle's flight-computer rail is switched by
+  the out computer on BLE command 8, which cannot reach it inside a closed cage:
+  power it before closing the lid.
+
 ## Experiments still owed on the first four receivers
 
 Only the Air530 was ever run against the dwell scenarios. Every other part's
@@ -519,10 +655,48 @@ one receiver connects at a time.
 
 ## What this rig does not test: boost dynamics
 
-**No receiver loses its POSITION during the burn on this bench. Individual
-satellites are a different story, and the ones it loses are exactly the ones
-carrying the most Doppler.** Measured on four receivers with `boost_sats.py`;
-written up as section 06 of the report.
+**No u-blox receiver loses its POSITION during the burn on this bench; the
+Quectel LC86G does, in both navigation modes -- see its section above.
+Individual satellites are a different story, and the ones a receiver loses are
+exactly the ones carrying the most Doppler.** Measured on four receivers with
+`boost_sats.py`,
+against Doppler measured from RXM-RAWX by `doppler_ref.py`; written up as
+section 06 of the report.
+
+The elevation correlation below came first and is kept because it is what the
+per-satellite data supports on its own. It is a proxy: for a near-vertical boost
+the Doppler rate goes as `a * sin(elev)`, so elevation stands in for the thing we
+think is the cause. `doppler_ref.py` measures the cause instead, and the two
+agree -- measured rate matches `a * sin(elev) * 5.25` to a factor of 0.82-0.98
+over twelve satellites, the residual being peak vs mean acceleration across the
+burn. What the Doppler axis adds that elevation cannot:
+
+| receiver | r(Doppler rate) | r(peak shift) | r(sin elev) |
+|---|---|---|---|
+| ZED-F9P | **-0.60** | -0.07 | -0.71 |
+| NEO-M8T | **-0.91** | -0.74 | -0.84 |
+| Quescan M10 | **-0.49** | -0.32 | -0.50 |
+| Beitian BN-182 | **-0.66** | -0.49 | -0.59 |
+
+**Rate beats shift on all four**, which names the mechanism: the loop failing to
+slew, not the carrier sitting far off nominal. Peak shift is a real control, not
+a straw man -- it runs 1.2-6.9 kHz and is near-independent of elevation because
+it is set mostly by satellite motion, so GPS:5 at 28 deg carries the largest
+shift in the sky (6915 Hz) and barely suffers.
+
+Pooling both flights on the rate axis gives a dose-response: n=100, r=-0.62,
+median -14 dB above 300 Hz/s against 0 dB below 100 Hz/s. Only the NEO-M8T logged
+RXM, but every flight replayed a byte-identical scenario file (hash-checked by
+`doppler_ref.py --verify`), so the Doppler is a property of the injected signal
+and applies to all four parts.
+
+GPS:11 is the sharpest single observation. At 70 deg it presents the steepest
+rate in the set; its raw measurement is steady at -98 Hz on the pad, reads
++483 Hz one second after ignition with carrier down 48->30 dBHz, vanishes from
+RXM entirely for ten seconds, and returns at +6302 Hz with carrier back to
+47 dBHz as the burn ends. Its rate is therefore unmeasurable and it is excluded
+from the rate axis: the instrument that would measure the stimulus is the one the
+stimulus disabled.
 
 The dynamics themselves are real and correctly injected. `spaceshot` peaks at
 132 m/s^2 (13.5 g), which is **695 Hz/s** of L1 Doppler rate against a peak shift
@@ -628,6 +802,127 @@ and it is the combination that costs a position fix rather than a few channels:
 Read the results accordingly: this bench characterizes **the export gate**, not
 the tracking loop. A part that sails through boost here may still drop lock on a
 real motor, and nothing measured here contradicts that.
+
+## Planned: where is the knee? Doppler rate vs C/N0 on a u-blox M10
+
+**Status: designed, needs an M10 on the bench and two new scenario files.** The
+LC86G has since given a knee for one part, 128-171 Hz/s, from its own RTCM MSM7
+on the existing `spaceshot` file -- a clean split rather than a gradual slope, so
+the hypothesis below now has one supporting case, from another vendor.
+
+u-blox publishes a 4 g dynamics limit for the M10. The tracking loop does not
+see g, it sees Hz/s, and the conversion is worst-case at zenith:
+
+    4 g = 39.23 m/s^2      x 5.255 Hz per m/s      = 206 Hz/s at zenith
+                                                   = 146 Hz/s at 45 deg
+                                                   =  71 Hz/s at 20 deg
+
+That single fact is the whole experiment. **One acceleration presents a whole
+spread of Doppler rates at once**, because each satellite is projected onto the
+velocity vector by its own elevation. If the receiver were acceleration-limited,
+every satellite would degrade together the moment the vehicle passed 4 g. If it
+is rate-limited, only the satellites above the knee degrade and the ones near
+the horizon are untouched at the same instant.
+
+The existing `spaceshot` captures already point one way. That flight holds
+13.5 g -- 3.4x the published limit -- and splitting its satellites at the
+4 g-equivalent rate gives, on the same vehicle at the same instant:
+
+| | n | median dC/N0 | elevations |
+|---|---|---|---|
+| below 206 Hz/s | 24 | **-4 dB** | 5-20 deg |
+| at or above 206 Hz/s | 24 | **-10 dB** | 26-51 deg |
+
+The only thing separating those groups is where the satellite sits in the sky,
+so acceleration by itself is not the variable. Binned further, the shape looks
+like a knee rather than a slope:
+
+| rate, Hz/s | n | median dC/N0 |
+|---|---|---|
+| 0-100 | 60 | +0.0 |
+| 100-206 | 16 | -3.3 |
+| 260-320 | 16 | -5.5 |
+| 320-400 | 4 | -17.0 |
+| 400-520 | 4 | -29.0 |
+
+That is consistent with no meaningful loss below the 4 g-equivalent and
+progressive degradation above it, but it does not establish it: 206-260 Hz/s is
+empty, the top two bins are n=4, and every point above 206 Hz/s comes from the
+same handful of high satellites, so rate and identity are confounded.
+
+### The design
+
+Fly an acceleration ladder and use the elevation spread within each flight. The
+point is not more points, it is **overlap**: with this sky every rate band up to
+460 Hz/s is reachable at three or more different accelerations.
+
+| accel | zenith-equivalent | rates this sky presents |
+|---|---|---|
+| 2 g | 103 Hz/s | 9-97 |
+| 4 g | 206 Hz/s | 18-194 |
+| 6 g | 309 Hz/s | 27-291 |
+| 9 g | 464 Hz/s | 40-436 |
+| 13.5 g | 696 Hz/s | 61-654 |
+| 15 g | 773 Hz/s | 67-726 |
+
+**The decisive comparison is vertical, not horizontal.** 250 Hz/s is reachable
+at 6 g (near zenith), at 9 g (~33 deg) and at 13.5 g (~21 deg). If loss depends
+only on rate, those three coincide. If acceleration matters on its own, they
+separate by acceleration -- and the direction of that separation says whether
+the extra term helps or hurts.
+
+Predictions worth writing down before running it, since they are distinguishable:
+
+* **Rate-limited with a knee** (the hypothesis): all accelerations fall on one
+  curve, flat below roughly 206 Hz/s and dropping above.
+* **Rate-limited, no knee:** one curve, but degradation is gradual from zero
+  with no threshold. The 100-206 band already shows -3.3 dB, which mildly
+  favours this over a hard knee.
+* **Acceleration-limited:** the curves separate by g at matched rate, and the
+  4 g flight is clean everywhere while the 13.5 g flight is degraded everywhere.
+
+### Trajectory
+
+A boost is a poor stimulus for this: it holds peak acceleration only briefly and
+gives about 12 samples at 1 Hz. Use a **velocity sawtooth** instead -- ramp at
++a, then -a, repeatedly -- which holds |acceleration| and therefore |Doppler
+rate| constant for as long as wanted while velocity stays bounded. The rig
+already has sawtooth scenarios (`saw_static_raw`, `saw_static_boosted`), so this
+is a parameter change rather than new machinery.
+
+Keep the peak velocity modest, around 1000 m/s (5.3 kHz of vehicle Doppler,
+about 9 kHz once satellite motion is included). Letting velocity run to several
+km/s would push total Doppler toward the edge of the acquisition search window
+and confound a rate result with a range result. At 13.5 g, 1000 m/s is a 7.6 s
+half-period, so a 60 s dwell gives four full cycles and roughly 60 epochs per
+acceleration.
+
+Two files: `accel_stair` stepping 2/4/6/9/13.5 g with 60 s at each and a coast
+between, and `accel_stair_hi` adding 15 g if the 13.5 g result warrants it.
+
+### Controls, and the traps this rig has already hit
+
+* **Check for C/N0 clamping first.** The NEO-M8T reports a flat 51 dBHz for all
+  13 satellites at the level used so far, which destroys the baseline and makes
+  its delta a ranking rather than a change. Run `gain_sweep.py` and pick the
+  lowest level that still tracks the full constellation *and* shows spread in
+  reported C/N0. Verify the spread before flying, not after.
+* **Doppler reference.** Try `CFG-MSGOUT-UBX_RXM_RAWX` on the M10 first; if it
+  refuses (raw measurements are a timing/high-precision feature and the M8T is
+  the part that has it here), fly each scenario on the NEO-M8T as well. The
+  scenario file is byte-identical across runs, so the M8T's measured Doppler is
+  the reference for the M10's C/N0 -- the pattern `doppler_ref.py` already uses
+  and `--verify` already hash-checks.
+* **Apply `patch_horizon.py`** so satellites below the horizon are not
+  transmitted; otherwise the elevation axis includes signals no real antenna
+  would see.
+* **Equal channel power** (`-p`) so no elevation-dependent level creeps in.
+* **`preflight()` before every run.** A Beitian M10 silently reverted to NMEA
+  with DYNMODEL=0 between its gain sweep and its flight. The same revert here
+  would substitute a different dynamic model mid-experiment.
+* **Expect the position to blank** each time the sawtooth crosses 515 m/s. That
+  is fine: NAV-SAT keeps reporting C/N0 and elevation while the gate withholds
+  position, which is what the whole per-satellite analysis relies on.
 
 ## Planned: does the SAM-M10Q lose its high-elevation satellites too?
 

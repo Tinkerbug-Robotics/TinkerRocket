@@ -123,8 +123,20 @@ def collect(log_path: Path):
     parser = Parser()
     out = []
     pending = None
+    pending_pvt = 0
+
+    def close_nmea(p):
+        # A $PQTMPVT between this GGA and the next one belongs to this epoch
+        # and carries GPS time of week; prefer it over the GGA's UTC, which on
+        # the LC86G runs 18 s behind the injected clock (leap seconds).
+        e = parser.epoch
+        if e.pvt_seq != pending_pvt and e.gps_tow_s is not None:
+            p = (p[0], (None, e.gps_tow_s), p[2], p[3])
+        return p
 
     for host_t, kind, data in replay_source(str(log_path)):
+        if kind == "rtcm":
+            continue                  # raw measurements; not an epoch marker
         if kind == "bin":
             marker = bool(data) and data[0] == MSG_RCV_STATE
         elif kind == "ubx":
@@ -143,6 +155,8 @@ def collect(log_path: Path):
         #   binary: 0xE7 leads, 0xDF trails   -> close the epoch AT the 0xDF
         if marker and kind != "bin" and pending is not None:
             e = parser.epoch
+            if kind == "nmea":
+                pending = close_nmea(pending)
             out.append((*pending, e.verdict(), e.snapshot()))
 
         if kind == "bin":
@@ -177,10 +191,11 @@ def collect(log_path: Path):
                 pending = None
             else:
                 pending = (host_t, None, utc_to_sod(parser.epoch.utc), "nmea")
+                pending_pvt = parser.epoch.pvt_seq
 
     if pending is not None:       # NMEA only; binary epochs close inline
         e = parser.epoch
-        out.append((*pending, e.verdict(), e.snapshot()))
+        out.append((*close_nmea(pending), e.verdict(), e.snapshot()))
     return out
 
 
@@ -202,6 +217,58 @@ def trajectory_time(sample, start, k):
         return t, "utc"
 
     return (host_t + k if k is not None else host_t), "host"
+
+
+def clock_outliers(samples, start, tol=5.0):
+    """Indices of epochs whose receiver clock is not yet the scenario's.
+
+    A receiver's clock only becomes the scenario's once it has decoded time
+    from the injected signal. Until then it reports whatever it last knew: the
+    LC86G keeps its RTC through a $PAIR006 cold start, so the first seconds of
+    a capture carry the PREVIOUS run's time and would be placed minutes away
+    from where they happened. Fit the host-to-trajectory offset by median over
+    every clocked epoch; an epoch more than `tol` seconds off that fit is not
+    on the scenario's clock. A capture whose clock was right throughout has no
+    outliers, so this changes nothing for it.
+    """
+    offs = []
+    for i, s in enumerate(samples):
+        t, src = trajectory_time(s, start, None)
+        if src != "host":
+            offs.append((i, t - s[0]))
+    if not offs:
+        return set()
+    k = statistics.median(o for _, o in offs)
+    return {i for i, o in offs if abs(o - k) > tol}
+
+
+def accel_at(truth, t, half=0.5):
+    """Injected acceleration magnitude around trajectory time t, in g."""
+    a, b = truth.at(t - half), truth.at(t + half)
+    if not a or not b or b["t"] == a["t"]:
+        return None
+    return abs(b["speed_mps"] - a["speed_mps"]) / (b["t"] - a["t"]) / 9.80665
+
+
+# A fix further than this from the injected truth is not a fix. Altitude alone
+# was the first rule (2 km), and it both missed and over-caught on the LC86G:
+# its Normal-mode boost fault reported a climb rate ~300 m/s wrong while the
+# altitude was only 2-5 km off, and on this rig every receiver's altitude
+# drifts low by 1.5-2.6 km over a flight while its velocity stays right (seen
+# identically on a u-blox M10 on the same file). Vertical velocity is the
+# sharper witness where the receiver reports it.
+WRONG_ALT_M = 5000.0
+WRONG_VD_MPS = 50.0
+
+
+def wrong_fix(e, tr) -> bool:
+    """True if a FIX epoch's position or climb rate is grossly off the truth."""
+    if tr is None:
+        return False
+    if e.alt_m is not None and abs(e.alt_m - tr["alt_m"]) > WRONG_ALT_M:
+        return True
+    vd = getattr(e, "vel_d_mps", None)
+    return vd is not None and abs(vd + tr["v_up_mps"]) > WRONG_VD_MPS
 
 
 def fmt(v, unit="", nd=1):
@@ -230,7 +297,12 @@ def main() -> int:
     start = parse_start(args.start)
 
     # Fit host-clock offset from every epoch that carried a receiver clock, so
-    # epochs that carried none can still be placed.
+    # epochs that carried none can still be placed. Epochs still on a stale
+    # receiver clock are left out of the fit and placed by host time instead.
+    stale_clock = clock_outliers(samples, start)
+    if stale_clock:
+        samples = [(s[0], None, None, *s[3:]) if i in stale_clock else s
+                   for i, s in enumerate(samples)]
     offsets = []
     for s in samples:
         t, src = trajectory_time(s, start, None)
@@ -255,6 +327,10 @@ def main() -> int:
                  if trajectory_time(s_, start, None)[1] == "host")
     print(f"clock fit : traj_t = host_t + {k:.2f}s   (spread {spread:.2f}s, "
           f"{n_host} epoch(s) needed it)")
+    if stale_clock:
+        print(f"  ({len(stale_clock)} epoch(s) carried a receiver clock more than "
+              f"5 s off the fit -- not yet\n   on the scenario's time -- and "
+              f"were placed by host time)")
     if spread > 2.0 and n_host:
         print("  WARNING: the receiver-to-host offset moved by more than 2 s "
               "across the run.\n           Suspect a playback underrun or a "
@@ -279,24 +355,22 @@ def main() -> int:
     # freeze-detector fires on perfectly good runs -- it did, on a run whose
     # reported speed tracked the injected ramp to within 5 m/s on 7 satellites.
     # Since the injected altitude is known exactly, compare against it.
-    ALT_TOL_M = 2000.0
     stale = [False] * len(rows)
     for i, (t, src, verdict, e, tr) in enumerate(rows):
-        if verdict != "FIX" or tr is None or e.alt_m is None:
-            continue
-        if abs(e.alt_m - tr["alt_m"]) > ALT_TOL_M:
+        if verdict == "FIX" and wrong_fix(e, tr):
             stale[i] = True
     n_stale = sum(stale)
     if n_stale:
         first = next(i for i, x in enumerate(stale) if x)
         r = rows[first]
-        print(f"\n  WARNING: {n_stale} epoch(s) claim a fix whose altitude has "
-              f"diverged from the\n           injected trajectory by more than "
-              f"{ALT_TOL_M/1000:.0f} km -- first at t={r[0]:.1f}s, reporting "
-              f"{r[3].alt_m/1000:.2f} km\n           against an injected "
-              f"{r[4]['alt_m']/1000:.2f} km. That is a stale solution being\n"
-              f"           republished, not a live fix. Do not read a gate "
-              f"result out of this run.")
+        print(f"\n  WARNING: {n_stale} epoch(s) claim a fix more than "
+              f"{WRONG_ALT_M/1000:.0f} km or {WRONG_VD_MPS:.0f} m/s\n"
+              f"           (vertical) from the injected trajectory -- first at "
+              f"t={r[0]:.1f}s, reporting {r[3].alt_m/1000:.2f} km\n"
+              f"           against an injected {r[4]['alt_m']/1000:.2f} km. "
+              f"A stale or wrong solution published as a\n"
+              f"           fix, not a live one. Do not read a gate result "
+              f"from those epochs.")
 
     # Drop epochs past the end of the scenario. The capture deliberately runs a
     # little longer than the file so the last seconds are not clipped, but once
@@ -407,9 +481,22 @@ def main() -> int:
                      if tr else "")
             print(f"VERDICT: INCONCLUSIVE -- the receiver lost lock at "
                   f"t={lost[0]:.1f}s{where}.")
-            print("         Satellites fell out with the position, so this is a "
-                  "signal problem, not\n         a COCOM gate. Raise the "
-                  "injection level or check the RF chain, then re-run.")
+            # Satellites falling out is a signal problem OR a tracking-loop
+            # one, and they call for opposite responses. Under several g the
+            # loop is the suspect, and raising the level would change nothing
+            # (the LC86G, rated 4 g, shed 13 satellites at 44 dBHz within
+            # half a second of a 13.5 g ignition).
+            g = max((accel_at(truth, lost[0] - d) or 0.0) for d in (0.0, 0.5, 1.0))
+            if g >= 2.0:
+                print(f"         Satellites fell out with the position while the "
+                      f"injected trajectory was\n         accelerating at "
+                      f"{g:.1f} g. That is the tracking loop failing under "
+                      f"dynamics, not\n         a COCOM gate and not a weak "
+                      f"signal: raising the level will not change it.")
+            else:
+                print("         Satellites fell out with the position, so this "
+                      "is a signal problem, not\n         a COCOM gate. Raise "
+                      "the injection level or check the RF chain, then re-run.")
             return 1
 
         peak_a = truth.meta["crossings"]["peak_alt_m"] / 1000

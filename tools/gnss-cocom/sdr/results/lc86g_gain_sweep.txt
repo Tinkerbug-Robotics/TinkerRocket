@@ -1,0 +1,11 @@
+# t00_static, 3 gain steps, 90s then 35s each
+
+   gain  sats>=30dB  median C/N0   fix
+  ----------------------------------------
+# receiver on /dev/cu.usbmodem101 @ 115200
+
+      0          13        43.8    yes
+      6           5        34.2    yes
+     12           1        23.2     no
+
+  best: gain 0 -- 13 satellites at 44 dBHz

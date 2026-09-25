@@ -23,7 +23,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from correlate import Truth, collect, parse_start, trajectory_time  # noqa: E402
+from correlate import (Truth, clock_outliers, collect,       # noqa: E402
+                       parse_start, trajectory_time, wrong_fix)
 
 W, H = 900, 596
 LEG_H = 76   # five stacked legend rows at 12 px, plus breathing room
@@ -34,7 +35,21 @@ GAP = 26
 
 VERDICT_FILL = {"FIX": "var(--fix, #0E7C66)",
                 "BLOCKED": "var(--blocked, #A2660A)",
-                "NO_LOCK": "var(--nolock, #9B3535)"}
+                "NO_LOCK": "var(--nolock, #9B3535)",
+                "WRONG": "var(--wrongfix, #6D3FA8)"}
+
+# A fix grossly off the injected truth is drawn as WRONG, by correlate.py's own
+# rule (wrong_fix: >5 km in altitude or >50 m/s in vertical velocity). The
+# LC86G in Normal mode published a valid-flagged 3-D fix at 1.3 km while the
+# injection sat at 80 km, and a climb rate near zero through a 3 g boost --
+# drawn as FIX, the strip would show exactly the wrong thing where it matters.
+
+# Drawn from lc86_bridge's own "# lc86_bridge: LC86G silent N ms" notes, so only
+# a capture that recorded a silence can show one; every earlier figure is
+# unchanged.
+# Pale on purpose: silence is the absence of every other state, and a mid-grey
+# sat within normal-vision reach of FIX green (dE 12.5, below the 15 floor).
+SILENT_FILL = "var(--rule-strong, #C3CAD5)"
 
 # Spelled out in the figure rather than left to a caption: the whole point of the
 # strip is telling a gate closure from a lost signal, and "BLOCKED" on its own
@@ -42,7 +57,13 @@ VERDICT_FILL = {"FIX": "var(--fix, #0E7C66)",
 VERDICT_MEANING = [
     ("FIX", "position reported"),
     ("BLOCKED", "position withheld, satellites still tracked  =  the gate"),
-    ("NO_LOCK", "satellites lost  =  a signal problem, not the gate"),
+    # Says what was observed, not why. The injected level is constant on this
+    # rig, so a lost satellite is the receiver's doing as often as the link's:
+    # a weak bench path early on, the LC86G's dynamics and its own stuck state
+    # later. "A signal problem" was the right guess for the first and wrong
+    # for the second.
+    ("NO_LOCK", "satellites not tracked  =  lost, not withheld by a gate"),
+    ("WRONG", "a fix reported, but > 5 km or > 50 m/s (vertical) off the truth"),
 ]
 
 
@@ -55,7 +76,7 @@ def esc(s):
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def build_svg(meta, rows, truth, vel_limit=515.0, alt_limit=80.0):
+def build_svg(meta, rows, truth, vel_limit=515.0, alt_limit=80.0, silent=()):
     dur = meta["duration_s"]
     # Begin a little before ignition. The prologue exists so the receiver can
     # acquire before the flight starts; on the plot it is 180 s of flat line
@@ -212,8 +233,15 @@ def build_svg(meta, rows, truth, vel_limit=515.0, alt_limit=80.0):
     # of markup for a 470 s flight, and it renders as hairline seams where
     # adjacent bars round to different pixels.
     spans = []
+    def cut(t, nxt):
+        """End of an epoch's bar: the next epoch, or where a silence starts."""
+        for s0, _s1 in silent:
+            if t < s0 < nxt:
+                return s0
+        return nxt
+
     for i, (t, verdict, _n) in enumerate(rows):
-        nxt = rows[i + 1][0] if i + 1 < len(rows) else min(t + 1.0, dur)
+        nxt = cut(t, rows[i + 1][0] if i + 1 < len(rows) else min(t + 1.0, dur))
         if spans and spans[-1][2] == verdict and abs(spans[-1][1] - t) < 3.0:
             spans[-1][1] = nxt
         else:
@@ -222,6 +250,15 @@ def build_svg(meta, rows, truth, vel_limit=515.0, alt_limit=80.0):
         out.append(f'<rect x="{x(a):.1f}" y="{y0_strip:.1f}" '
                    f'width="{max(1.0, x(b)-x(a)):.1f}" '
                    f'height="{STRIP_H}" fill="{VERDICT_FILL[verdict]}"/>')
+    # A receiver that has stopped talking altogether is not in any of the
+    # other states: there is no fix to be wrong, and no satellite list to say
+    # whether it is tracking. The bridge reports the silence itself.
+    for s0, s1 in silent:
+        a, b = max(s0, t0), min(s1, dur)
+        if b > a:
+            out.append(f'<rect x="{x(a):.1f}" y="{y0_strip:.1f}" '
+                       f'width="{max(1.0, x(b)-x(a)):.1f}" height="{STRIP_H}" '
+                       f'fill="{SILENT_FILL}"/>')
 
     # satellites actually tracked, under the lock strip. The generator always
     # transmits the same ~10 at equal power, so every dip here is the receiver
@@ -236,8 +273,18 @@ def build_svg(meta, rows, truth, vel_limit=515.0, alt_limit=80.0):
     y4 = y0_sat + SAT_H * (1 - 4.0 / sat_max)
     out.append(f'<line class="gl" x1="{PAD_L}" y1="{y4:.1f}" '
                f'x2="{W-PAD_R}" y2="{y4:.1f}"/>')
+    # One bar per RUN of equal counts, not per epoch. The count is taken from a
+    # satellite report that most receivers send once a second, so at a 10 Hz
+    # fix rate the same bar repeated ten times: identical pixels, and a 10 Hz
+    # capture's figure grew past half a megabyte.
+    bars = []
     for i, (t, _v, n) in enumerate(rows):
-        nx = rows[i + 1][0] if i + 1 < len(rows) else min(t + 1.0, dur)
+        nx = cut(t, rows[i + 1][0] if i + 1 < len(rows) else min(t + 1.0, dur))
+        if bars and bars[-1][2] == n and abs(bars[-1][1] - t) < 1e-6:
+            bars[-1][1] = nx
+        else:
+            bars.append([t, nx, n])
+    for t, nx, n in bars:
         h = SAT_H * (n / sat_max)
         if h <= 0:
             continue
@@ -270,8 +317,14 @@ def build_svg(meta, rows, truth, vel_limit=515.0, alt_limit=80.0):
     # Stacking removes the guess entirely -- nothing can overlap a column that
     # has nothing beside it -- at the cost of two rows of height.
     ly = H - LEG_H + 4
+    # WRONG is listed only where it occurs, so a figure without one is drawn
+    # exactly as it was before the state existed.
+    drawn = {v for _, v, _n in rows}
     rows = [(VERDICT_FILL[n], 1.0, f"{n} &#183; {esc(m)}")
-            for n, m in VERDICT_MEANING]
+            for n, m in VERDICT_MEANING if n != "WRONG" or n in drawn]
+    if silent:
+        rows.append((SILENT_FILL, 1.0,
+                     "SILENT &#183; no output at all -- the receiver muted itself"))
     # Only describe a band that is actually drawn. The altitude-ramp scenario
     # never reaches 515 m/s, so listing a speed band there advertised a colour
     # the reader would never find.
@@ -287,8 +340,54 @@ def build_svg(meta, rows, truth, vel_limit=515.0, alt_limit=80.0):
                    f'fill="{fill}" opacity="{op:.2f}"/>')
         out.append(f'<text class="lbl" x="{PAD_L+22}" y="{yy+1:.0f}">{label}</text>')
 
+    # LEG_H holds six rows. WRONG and SILENT can make it seven, and SVG clips
+    # rather than growing, so extend the canvas by exactly the overflow --
+    # a figure with six rows or fewer keeps its original size byte for byte.
+    extra = max(0, len(rows) - 6) * 12
+    if extra:
+        out[0] = out[0].replace(f'viewBox="0 0 {W} {H}"',
+                                f'viewBox="0 0 {W} {H + extra}"', 1)
+
     out.append('</svg>')
     return "\n".join(out)
+
+
+def silent_spans(capture, samples, start, stale):
+    """[(t0, t1)] in trajectory time where the bridge reported no output.
+
+    Each note says how long the receiver has been silent as of the moment it
+    was written, so a run of notes gives the silence's start directly; it ends
+    at the next epoch the receiver produced. Host time maps to trajectory time
+    by the same median offset correlate.py fits.
+    """
+    offs = [trajectory_time(s, start, None)[0] - s[0]
+            for i, s in enumerate(samples)
+            if i not in stale and trajectory_time(s, start, None)[1] != "host"]
+    if not offs:
+        return []
+    k = sorted(offs)[len(offs) // 2]
+    spans = []
+    for line in open(capture, errors="replace"):
+        ts, _, rest = line.partition(" ")
+        if "lc86_bridge: LC86G silent" not in rest:
+            continue
+        try:
+            host_end = float(ts)
+            ms = int(rest.split("silent")[1].split("ms")[0])
+        except ValueError:
+            continue
+        s0, s1 = host_end - ms / 1000.0 + k, host_end + k
+        if spans and s0 <= spans[-1][1] + 1.5:
+            spans[-1][1] = max(spans[-1][1], s1)
+        else:
+            spans.append([s0, s1])
+    # Close each silence at the first epoch after it.
+    times = sorted(trajectory_time(s, start, k)[0] for s in samples)
+    for sp in spans:
+        after = [t for t in times if t > sp[1]]
+        if after:
+            sp[1] = after[0]
+    return [tuple(sp) for sp in spans]
 
 
 def main() -> int:
@@ -312,11 +411,16 @@ def main() -> int:
 
 
     rows = []
-    for s in collect(args.capture):
+    samples = collect(args.capture)
+    stale = clock_outliers(samples, start)      # not yet on the scenario's clock
+    for i, s in enumerate(samples):
         t, src = trajectory_time(s, start, None)
-        if src == "host" or t < 0 or t > meta["duration_s"]:
+        if src == "host" or i in stale or t < 0 or t > meta["duration_s"]:
             continue
-        rows.append((t, s[4], s[5].tracked_sats()))
+        verdict, e = s[4], s[5]
+        if verdict == "FIX" and wrong_fix(e, truth.at(t)):
+            verdict = "WRONG"
+        rows.append((t, verdict, e.tracked_sats()))
     rows.sort()
     if not rows:
         raise SystemExit(f"no placeable epochs in {args.capture}")
@@ -336,7 +440,9 @@ def main() -> int:
             f"re-fly it.")
 
     args.out.write_text(build_svg(meta, rows, truth.samples,
-                                  args.vel_limit, args.alt_limit))
+                                  args.vel_limit, args.alt_limit,
+                                  silent=silent_spans(args.capture, samples,
+                                                      start, stale)))
     n = {v: sum(1 for _, x, _n in rows if x == v) for v in VERDICT_FILL}
     print(f"{args.out}  ({len(rows)} epochs: "
           + ", ".join(f"{k} {v}" for k, v in n.items() if v) + ")")

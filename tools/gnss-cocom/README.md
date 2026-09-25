@@ -21,6 +21,8 @@ the separate high-g/transonic dynamics problem (#174 / #249 / #262).
 | `gnss_nmea_monitor.py` | Host monitor: timestamps, checksums, and the FIX / BLOCKED / NO_LOCK classifier |
 | `skytraq_cmd.py` | Sends SkyTraq binary configuration frames through the bridge |
 | `skytraq_binary.py` | SkyTraq binary message parsing (AN0039): `0xDF` nav state, `0xE7` per-SV C/N0 |
+| `firmware/lc86_bridge/` | ESP-IDF image for the Tinker-Beetle's flight computer: its LC86G's UART on USB, pyro outputs parked low, silences reported |
+| `rtcm3.py` | RTCM3 framing (CRC-24Q) and MSM7 decoding: per-satellite C/N0, Doppler and lock time from the LC86G |
 
 Still to be written, once the RF side exists: the trajectory generator (the
 pyproj snippet in #491) and the capture-vs-trajectory correlation step.

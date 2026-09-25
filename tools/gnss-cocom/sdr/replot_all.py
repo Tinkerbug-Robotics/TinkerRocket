@@ -46,6 +46,10 @@ JOBS = [
     ("quescan_m10", "quescan_m10_gentle_alt", "quescan_m10_gentle_alt", "2026/08/18,08:30:00", "quescan_m10_gentle_alt.svg"),
     ("beitian_bn182", "beitian_bn182_spaceshot",  "beitian_bn182_spaceshot",  "2026/08/18,08:30:00", "beitian_bn182_spaceshot.svg"),
     ("beitian_bn182", "beitian_bn182_gentle_alt", "beitian_bn182_gentle_alt", "2026/08/18,08:30:00", "beitian_bn182_gentle_alt.svg"),
+    ("lc86g_normal",  "lc86g_normal_spaceshot",   "lc86g_normal_spaceshot",   "2026/08/18,08:30:00", "lc86g_normal_spaceshot.svg"),
+    ("lc86g_normal",  "lc86g_normal_gentle_alt",  "lc86g_normal_gentle_alt",  "2026/08/18,08:30:00", "lc86g_normal_gentle_alt.svg"),
+    ("lc86g_balloon", "lc86g_balloon_spaceshot",  "lc86g_balloon_spaceshot",  "2026/08/18,08:30:00", "lc86g_balloon_spaceshot.svg"),
+    ("lc86g_balloon", "lc86g_balloon_gentle_alt", "lc86g_balloon_gentle_alt", "2026/08/18,08:30:00", "lc86g_balloon_gentle_alt.svg"),
 ]
 
 

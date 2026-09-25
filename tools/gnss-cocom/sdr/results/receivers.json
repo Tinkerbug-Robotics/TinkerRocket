@@ -76,7 +76,7 @@
     1.0
    ],
    "sats_median": 13,
-   "notes": "Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. Uniquely among the three parts it is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. Its descending edges are crisp and agree at ~80.1 km.",
+   "notes": "Arrived configured as a fixed-position RTK base (CFG-TMODE-MODE=2) and therefore did not navigate at all: it tracked GPS at a median 41 dBHz with valid ephemeris, had four or more usable satellites in 335 of 420 epochs, and still reported used_in_fix=0 while holding its surveyed base coordinates. Disabling base mode fixed it immediately. It is slow to CLOSE the altitude gate -- +2.3 s and +3.3 s across the two flights, about 400-600 m of overshoot at climb speed -- which is why its altitude bracket inverts. It was the only one of the first three parts to do so; the Quescan M10, measured later, closes as slowly (+2.3 s). Its descending edges are crisp and agree at ~80.1 km.",
    "altitude_gate_cause": "cocom",
    "velocity_gate_present": true,
    "sats_p05": 10
@@ -199,6 +199,76 @@
    "sats_p05": 8,
    "sats_median": 12,
    "notes": "The same u-blox M10 die and firmware as the Quescan -- identical MON-VER, different chip serial (dee2c50fbf vs c8bf908e28) -- flown on the same ephemeris, start time and launch site. It behaves like its MIRROR IMAGE on recovery: fast on altitude (1.0 s) and slow on velocity (10.1 s), where the Quescan is slow on altitude (5.0 s) and fast on velocity (0.1 s). On three of four velocity windows it does not re-open when speed drops below 515 but waits until 328-410 m/s, with 9-13 satellites held throughout, so it is the gate rather than re-acquisition. Transmit level is NOT the cause: a control flight at gain 26, matching the Quescan, reproduced every latency to the tenth of a second (0.5 / 1.0 / 10.1 s) and every shut lag. What differs and was not controlled is configuration in the modules' own flash -- this one runs GPS+Galileo+BeiDou with GLONASS off, the Quescan has GLONASS enabled, and CFG-NAVSPG holds more than the dynamic model. The practical lesson is that the same chip does not predict gate behavior: two M10 modules from different vendors differ by two orders of magnitude on velocity-gate recovery, and no datasheet says which you are buying."
+  },
+  {
+   "bands": "L1 (GPS/GLO/GAL/BDS/QZSS)",
+   "protocol": "NMEA + Quectel PQTM @ 115200, 10 Hz; RTCM3 MSM7 on the Balloon flights",
+   "host": "Tinker-Beetle flight computer, through a UART-to-USB bridge image",
+   "path": "radiated, Faraday cage",
+   "rf": "on-board patch antenna in Faraday cage, TX gain 0",
+   "date": "2026-09-24",
+   "runs": 2,
+   "velocity_gate_present": true,
+   "velocity_gate_mechanism": "mute",
+   "id": "lc86g_normal",
+   "part": "Quectel LC86G, Normal mode (as the Tinker-Beetle ships)",
+   "velocity_fix_max_mps": 498.9,
+   "velocity_blocked_min_mps": 500.3,
+   "velocity_edges": {
+    "fix": [
+     498.9
+    ],
+    "blocked": [
+     500.3
+    ]
+   },
+   "altitude_fix_max_km": null,
+   "altitude_blocked_min_km": null,
+   "altitude_note": "none usable",
+   "altitude_note_key": "nav fail",
+   "altitude_gate_cause": "nav mode",
+   "combination": "n/a -- no valid fix reaches either limit",
+   "recovery_s": null,
+   "recovery_note": "never (3 g)",
+   "sats_median": 8,
+   "sats_p05": 0,
+   "notes": "The LC86G in the navigation mode the Beetle's firmware leaves it in (Normal; the driver never sends $PAIR080). Quectel gives Normal mode a 10 km altitude limitation and says output stops entirely above 50 km. Measured, the vertical solution does not follow a boost at all: through the 3 g ascent it reported a climb rate near zero for 18 s while the injection climbed to 320 m/s, with a valid 3-D fix, 13 satellites and small claimed accuracy, and at 210 s it read 4.3 km against 9.2 km. At 500 m/s on its own estimate it stopped ALL output for 56 s, and it never published a valid fix again before landing, although the same signal was tracked at 45 dBHz in Balloon mode. At 15 g it lost every satellite at ignition, then published valid-flagged fixes 18-80 km wrong (1.3 km at apogee against 82 km; -5 km against +13 km) and withheld with 13 satellites until the main parachute. Its UTC runs 18 s behind the injected clock (it applies leap seconds the simulation does not broadcast); PQTMPVT's GPS time of week is used instead."
+  },
+  {
+   "bands": "L1 (GPS/GLO/GAL/BDS/QZSS)",
+   "protocol": "NMEA + Quectel PQTM @ 115200, 10 Hz; RTCM3 MSM7 on the Balloon flights",
+   "host": "Tinker-Beetle flight computer, through a UART-to-USB bridge image",
+   "path": "radiated, Faraday cage",
+   "rf": "on-board patch antenna in Faraday cage, TX gain 0",
+   "date": "2026-09-24",
+   "runs": 2,
+   "velocity_gate_present": true,
+   "velocity_gate_mechanism": "mute",
+   "id": "lc86g_balloon",
+   "part": "Quectel LC86G, Balloon mode",
+   "velocity_fix_max_mps": 499.5,
+   "velocity_blocked_min_mps": 500.3,
+   "velocity_edges": {
+    "fix": [
+     498.9,
+     499.5
+    ],
+    "blocked": [
+     500.3,
+     500.4
+    ]
+   },
+   "altitude_fix_max_km": 80.94,
+   "altitude_blocked_min_km": 80.96,
+   "altitude_gate_cause": "mute",
+   "combination": "independent",
+   "recovery_s": [
+    0.0,
+    0.6
+   ],
+   "sats_median": 13,
+   "sats_p05": 6,
+   "notes": "The same module after $PAIR080,3. The boost is tracked (climb rate within 1-2 m/s of the injection through the 3 g ascent) and the limits are clean and independent: ALL output stops at 500 m/s on its own speed estimate (fired at 9.3 km) and at 80.0 km on its own altitude (fired at 173 m/s), and returns within one 0.1 s epoch straight into a valid fix. Its own altitude reads about 0.9 km low near 80 km, so against the injection the altitude limit sits near 81 km. 500 m/s matches neither COCOM's 515, MTCR's 600 nor the datasheet's 490. At 15 g it still loses every channel at ignition; its RTCM MSM7 shows the four with a Doppler rate at or below 128 Hz/s re-locking within 2 s and every one at or above 171 Hz/s staying lost through the burn, so it has no fix until the descent brings the vehicle back under 500 m/s. Its altitude drifts low through the flight, 2.6 km by landing with velocity still right to 0.5 m/s; a u-blox M10 drifts 1.5 km on the same file, so most of that is the bench."
   }
  ]
 }

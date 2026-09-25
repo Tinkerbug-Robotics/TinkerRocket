@@ -142,6 +142,77 @@ def preflight(port, baud, expect_dynmodel=8):
     return problems
 
 
+def preflight_lc86(port, navmode, cold_start=False, rtcm=None):
+    """The Tinker-Beetle's LC86G, through lc86_bridge: the same refusal.
+
+    Its configuration is RAM-only, exactly as in flight, and it is lost
+    whenever the flight computer's rail cycles -- after which the module
+    streams its factory set at 1 Hz in Normal mode and would fly a
+    different experiment without a word. So every setting is read back
+    against the flight configuration plus the navigation mode this run is
+    meant to measure, and a mismatch refuses the run.
+
+    cold_start sends $PAIR006 first: time, position, almanac and ephemeris
+    erased, configuration kept. That is how a Beetle comes up on the pad --
+    its V_BCKP rides the same switched rail, so nothing survives a power-up
+    -- and it stops a restarted scenario file from presenting the receiver
+    with its own clock running backwards.
+    """
+    from lc86_config import (Link, open_bridge, read_state, show_state,
+                             check_flight, FLIGHT_RATE_HZ)
+    try:
+        with open_bridge(port) as ser:
+            link = Link(ser)
+            if cold_start:
+                r, _ = link.pair("PAIR006", 6, timeout=3.0)
+                print(f"# cold start ($PAIR006): result {r}")
+                if r != 0:
+                    return [f"cold start not acknowledged (result {r})"]
+                time.sleep(2.0)
+            st = read_state(link)
+    except Exception as exc:
+        return [f"cannot open {port}: {exc}"]
+    show_state(st)
+    bad = check_flight(st, FLIGHT_RATE_HZ, navmode)
+    if rtcm is not None:
+        from lc86_config import RTCM_MODES
+        if st.get("rtcm") != RTCM_MODES[rtcm]:
+            bad.append(f"RTCM mode {st.get('rtcm')}, want {rtcm}")
+    return bad
+
+
+def reopen(ser, args, exc, fh, t):
+    """Reopen a port that dropped mid-capture; None if it does not come back.
+
+    Only a bridge found by identity is reopened -- a different device that
+    happens to take the same path must never be read as this receiver.
+    """
+    print(f"\n!! serial dropped at t={t:.1f}s ({exc}); reopening")
+    fh.write(f"{t:.3f} # host: serial dropped ({exc}); reopening\n")
+    try:
+        ser.close()
+    except Exception:
+        pass
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        time.sleep(0.5)
+        port = args.port
+        if args.lc86 is not None:
+            from lc86_config import find_bridge
+            port = find_bridge("auto")
+        if not port:
+            continue
+        try:
+            s = serial.Serial(port, args.baud, timeout=0.5)
+        except serial.SerialException:
+            continue
+        fh.write(f"{t:.3f} # host: reopened {port}\n")
+        print(f"# reopened {port}")
+        return s
+    fh.write(f"{t:.3f} # host: port did not come back in 20 s\n")
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -157,12 +228,29 @@ def main() -> int:
                     help="transmit without checking the receiver's output first")
     ap.add_argument("--listen-only", action="store_true",
                     help="tap the receiver without transmitting, to check wiring")
+    ap.add_argument("--lc86", type=int, metavar="NAVMODE",
+                    help="the Tinker-Beetle's LC86G through lc86_bridge, expected "
+                         "in this $PAIR080 navigation mode (0 = Normal, as flown; "
+                         "3 = Balloon). Finds the port by the flight computer's "
+                         "MAC and replaces the UBX preflight with a full read-back")
+    ap.add_argument("--cold-start", action="store_true",
+                    help="with --lc86: $PAIR006 before transmitting, as a Beetle "
+                         "powering up on the pad")
+    ap.add_argument("--rtcm", choices=["off", "msm4", "msm7"],
+                    help="with --lc86: the RTCM output mode the module must be "
+                         "in (set it with lc86_config.py --rtcm)")
+    ap.add_argument("--tag", help="capture name prefix, e.g. lc86g_normal; the "
+                         "capture is captures/TAG_SCENARIO.log")
     args = ap.parse_args()
 
     if args.list:
         list_candidate_ports()
         return 0
-    args.port = find_ublox(args.port)
+    if args.lc86 is not None:
+        from lc86_config import find_bridge
+        args.port = find_bridge(args.port)
+    else:
+        args.port = find_ublox(args.port)
     if not args.port:
         list_candidate_ports()
         return "\n--port is required (see the list above)"
@@ -179,7 +267,18 @@ def main() -> int:
 
     dur = args.seconds or (meta["duration_s"] + 15 if meta else 120)
 
-    if not args.listen_only and not args.skip_preflight:
+    if args.lc86 is not None and not args.listen_only and not args.skip_preflight:
+        bad = preflight_lc86(args.port, args.lc86, args.cold_start, args.rtcm)
+        if bad:
+            print("!! the LC86G is not configured for this measurement:")
+            for b in bad:
+                print(f"     {b}")
+            print("   Run lc86_config.py (add --navmode for anything but Normal).\n"
+                  "   The configuration is RAM-only and a rail cycle loses it.")
+            return 1
+        print("# preflight: LC86G in the flight configuration, nav mode "
+              f"{args.lc86} as expected")
+    elif not args.listen_only and not args.skip_preflight:
         bad = preflight(args.port, args.baud)
         if bad:
             print("!! the receiver is not configured for this measurement:")
@@ -206,8 +305,9 @@ def main() -> int:
     else:
         print("# listen-only: not transmitting")
 
-    cap = HERE / "captures" / (
-        f"{args.scenario}_radiated.log" if args.scenario else "tap_check.log")
+    name = (f"{args.tag}_{args.scenario}" if args.tag and args.scenario else
+            f"{args.scenario}_radiated" if args.scenario else "tap_check")
+    cap = HERE / "captures" / f"{name}.log"
     cap.parent.mkdir(exist_ok=True)
     print(f"# tap {args.port} @ {args.baud}, logging to {cap.name}\n")
     print(f"{'t':>6} {'fix':<10} {'verdict':<8} {'sats':>5} {'used':>5} "
@@ -219,19 +319,33 @@ def main() -> int:
     last = -99.0
     nbytes = nframes = 0
     try:
-        with serial.Serial(args.port, args.baud, timeout=0.5) as ser, \
-                open(cap, "w") as fh:
+        ser = serial.Serial(args.port, args.baud, timeout=0.5)
+        with open(cap, "w") as fh:
             buf = bytearray()
             t0 = time.time()
             while time.time() - t0 < dur:
-                chunk = ser.read(ser.in_waiting or 1)
+                try:
+                    chunk = ser.read(ser.in_waiting or 1)
+                except serial.SerialException as exc:
+                    # A native-USB bridge (lc86_bridge) re-enumerates if its
+                    # chip resets, and a port-state change can do that. The
+                    # receiver is not on that chip's reset and keeps running,
+                    # so reopen and carry on rather than abandon a flight --
+                    # and say so in the capture, where the gap will show.
+                    ser = reopen(ser, args, exc, fh, time.time() - t0)
+                    if ser is None:
+                        break
+                    continue
                 if not chunk:
                     continue
                 nbytes += len(chunk)
                 buf.extend(chunk)
-                for kind, data in _demux(buf):
+                for kind, data in _demux(buf, rtcm=args.lc86 is not None):
                     t = time.time() - t0
                     nframes += 1
+                    if kind == "rtcm":
+                        fh.write(f"{t:.3f} R {data.hex()}\n")
+                        continue
                     if kind == "ubx":
                         fh.write(f"{t:.3f} U {data.hex()}\n")
                         p.feed_ubx(data)
@@ -280,6 +394,10 @@ def main() -> int:
         print("\n# interrupted")
     finally:
         stop_tx(tx)
+        try:
+            ser.close()
+        except Exception:
+            pass
 
     print(f"\n# {nbytes} bytes, {nframes} frames -> {cap}")
     if nframes == 0:

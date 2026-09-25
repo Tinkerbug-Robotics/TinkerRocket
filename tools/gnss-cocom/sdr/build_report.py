@@ -20,7 +20,10 @@ Placeholders in report_text.html are substituted, not formatted:
     {{FIG_BLOCK_DIAGRAM}}  }
     {{FIG_M8T_ALTRAMP}}    }  inline SVG from results/figures/
     {{FIG_DIP}}            }
-    {{FIG_BOOST_ELEV}}     }
+    {{FIG_BOOST_RATE}}     }
+    {{FIG_BOOST_DOPPLER}}  }
+    {{FIG_LC86_MODES}}     }
+    {{FIG_LC86_KNEE}}      }
 
 Per-receiver blurbs are marked in report_text.html as
 
@@ -49,7 +52,8 @@ OUT = HERE / "report.html"
 sys.path.insert(0, str(HERE))
 from receiver_table import used_footnotes, bracket        # noqa: E402
 
-CAUSE_LABEL = {"not cocom": "not COCOM", "dyn model": "dynamic model"}
+CAUSE_LABEL = {"not cocom": "not COCOM", "dyn model": "dynamic model",
+               "nav mode": "navigation mode", "mute": "all output muted"}
 
 # Which figures illustrate each receiver, and the headline shown above them.
 PLOTS = {
@@ -60,8 +64,11 @@ PLOTS = {
     "air530":   ("air530_spaceshot.svg", "air530_gentle_alt.svg"),
     "quescan_m10": ("quescan_m10_spaceshot.svg", "quescan_m10_gentle_alt.svg"),
     "beitian_bn182": ("beitian_bn182_spaceshot.svg", "beitian_bn182_gentle_alt.svg"),
+    "lc86g_normal": ("lc86g_normal_spaceshot.svg", "lc86g_normal_gentle_alt.svg"),
+    "lc86g_balloon": ("lc86g_balloon_spaceshot.svg", "lc86g_balloon_gentle_alt.svg"),
 }
-ORDER = ["px1125r", "sam_m10q", "quescan_m10", "beitian_bn182", "zed_f9p", "neo_m8t", "air530"]
+ORDER = ["px1125r", "sam_m10q", "quescan_m10", "beitian_bn182", "zed_f9p", "neo_m8t",
+         "air530", "lc86g_normal", "lc86g_balloon"]
 
 
 def fig(name: str) -> str:
@@ -103,6 +110,8 @@ def receiver_sections(d, text) -> str:
                        r.get("velocity_blocked_min_mps"), "m/s"))
         alt = bracket(r.get("altitude_fix_max_km"),
                       r.get("altitude_blocked_min_km"), "km", "{:.2f}")
+        if alt == "--" and r.get("altitude_note"):
+            alt = r["altitude_note"]       # say why there is no bracket
         cause = (r.get("altitude_gate_cause") or "cocom").strip().lower()
         if cause != "cocom" and alt != "--":
             alt += f" <em>({CAUSE_LABEL.get(cause, cause)})</em>"
@@ -164,7 +173,10 @@ def build():
         "{{FIG_BLOCK_DIAGRAM}}": fig("rig_block_diagram.svg"),
         "{{FIG_M8T_ALTRAMP}}": fig("neo_m8t_t2_altramp.svg"),
         "{{FIG_DIP}}": fig("air530_dip_periodicity.svg"),
-        "{{FIG_BOOST_ELEV}}": fig("boost_elevation.svg"),
+        "{{FIG_BOOST_RATE}}": fig("boost_rate.svg"),
+        "{{FIG_BOOST_DOPPLER}}": fig("boost_doppler.svg"),
+        "{{FIG_LC86_MODES}}": fig("lc86g_modes.svg"),
+        "{{FIG_LC86_KNEE}}": fig("lc86g_knee.svg"),
     }
     missing = [k for k in fills if k not in text]
     for k, v in fills.items():
