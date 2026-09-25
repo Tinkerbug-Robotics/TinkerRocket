@@ -264,7 +264,8 @@ Its velocity gate sits far below the ceiling and is therefore measurable:
 
 Generated from `results/receivers.json` by `receiver_table.py`. The whole of
 `report.html` is likewise generated, by `build_report.py`, from that same JSON
-plus the archived figures in `results/figures/`. Edit the data and regenerate --
+plus the archived figures in `results/figures/`, and so is its companion on boost
+dynamics, `boost_report.html`. Edit the data and regenerate --
 neither table nor report should be hand-edited.
 
 | Receiver | Path | Velocity gate | Altitude gate | Limits combined | Re-open latency |

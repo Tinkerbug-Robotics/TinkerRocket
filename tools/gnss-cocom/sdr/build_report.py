@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Assemble report.html from the editable text, the receiver data and the figures.
+"""Assemble the two reports from the editable text, the receiver data and the figures.
+
+    report.html        GNSS Receiver Limits: where each receiver stops publishing
+    boost_report.html  GNSS Under Boost: what the boost itself does to tracking
 
 Three inputs, each owned by whoever should own it:
 
-    report_text.html   the words          -- edit freely
-    report_head.html   the stylesheet     -- edit rarely
+    report_text.html, boost_report_text.html   the words   -- edit freely
+    report_head.html   the stylesheet, shared by both     -- edit rarely
     results/receivers.json + results/figures/   the measurements
 
 The prose used to live in an f-string in this file, which meant a stray brace in
@@ -12,7 +15,8 @@ a sentence broke the build and anyone editing the page had to work inside Python
 quoting. It is now a plain HTML file, read as text and never string-formatted,
 so braces, quotes and percent signs in the copy need no escaping.
 
-Placeholders in report_text.html are substituted, not formatted:
+Placeholders in the text files are substituted, not formatted. Either page may
+use any of them; each must appear on at least one page:
 
     {{GATE_TABLE_ROWS}}    rows of the comparison table
     {{FOOTNOTES}}          only the footnotes the current data actually uses
@@ -29,7 +33,7 @@ Per-receiver blurbs are marked in report_text.html as
 
     <!--#blurb px1125r--> ... <!--/blurb-->
 
-    ./build_report.py            regenerate report.html
+    ./build_report.py            regenerate both pages
     ./build_report.py --check    verify inputs without writing
 """
 
@@ -48,6 +52,14 @@ TEXT = HERE / "report_text.html"
 HEAD = HERE / "report_head.html"
 DATA = HERE / "results" / "receivers.json"
 OUT = HERE / "report.html"
+
+# (words, page, <title>). The title goes into the head, where the first 8 kB of
+# the page -- all a gallery reads -- can see it. Per-receiver blurbs and figure
+# notes live in the first file only.
+PAGES = [
+    (TEXT, OUT, "GNSS Receiver Limits"),
+    (HERE / "boost_report_text.html", HERE / "boost_report.html", "GNSS Under Boost"),
+]
 
 sys.path.insert(0, str(HERE))
 from receiver_table import used_footnotes, bracket        # noqa: E402
@@ -182,9 +194,10 @@ def receiver_sections(d, text) -> str:
     return "".join(out)
 
 
-def build():
+def build(text_path: Path, title: str):
+    """One page: (html, placeholders it used, unknown ones left in it, all of them)."""
     d = json.loads(DATA.read_text())
-    text = TEXT.read_text()
+    text = text_path.read_text()
     # strip the editing instructions; keep any other comments the author wrote
     text = re.sub(r'<!--\s*=+\s*\n.*?=+\s*\n-->', '', text, flags=re.S)
     text = re.sub(r'<!--#blurb \w+-->.*?<!--/blurb-->', '', text, flags=re.S)
@@ -209,11 +222,12 @@ def build():
         "{{FIG_LC86_MODES}}": fig("lc86g_modes.svg"),
         "{{FIG_LC86_KNEE}}": fig("lc86g_knee.svg"),
     }
-    missing = [k for k in fills if k not in text]
+    used = {k for k in fills if k in text}
     for k, v in fills.items():
         text = text.replace(k, v)
     left = re.findall(r'\{\{[A-Z_]+\}\}', text)
-    return HEAD.read_text() + "\n" + text.strip() + "\n", missing, left
+    head = HEAD.read_text().replace("{{TITLE}}", title)
+    return head + "\n" + text.strip() + "\n", used, left, set(fills)
 
 
 def tag_balance(text: str):
@@ -242,30 +256,39 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true",
-                    help="verify the inputs without writing report.html")
+                    help="verify the inputs without writing either page")
     args = ap.parse_args()
 
-    html, missing, left = build()
-    unbalanced = tag_balance(TEXT.read_text())
-    for name, tag, o, c in unbalanced:
-        print(f"  !! section '{name}': {o} <{tag}> but {c} </{tag}> "
-              f"-- report_text.html has an unclosed or stray tag")
-    for k in missing:
-        print(f"  !! {k} is not present in report_text.html -- that content will "
-              f"not appear on the page")
-    for k in left:
-        print(f"  !! {k} is not a placeholder this script fills")
-    if s := html.count("<!-- missing "):
-        print(f"  !! {s} figure(s) referenced but not found in results/figures/")
+    bad = False
+    used_any, every = set(), set()
+    built = []
+    for text_path, out, title in PAGES:
+        html, used, left, every = build(text_path, title)
+        used_any |= used
+        for name, tag, o, c in tag_balance(text_path.read_text()):
+            print(f"  !! section '{name}': {o} <{tag}> but {c} </{tag}> "
+                  f"-- {text_path.name} has an unclosed or stray tag")
+            bad = True
+        for k in left:
+            print(f"  !! {k} in {text_path.name} is not a placeholder this script fills")
+            bad = True
+        if s := html.count("<!-- missing "):
+            print(f"  !! {s} figure(s) referenced in {text_path.name} but not found "
+                  f"in results/figures/")
+        built.append((text_path, out, html))
+    for k in sorted(every - used_any):
+        print(f"  !! {k} is on neither page -- that content will not appear")
+        bad = True
 
+    for text_path, out, html in built:
+        if args.check:
+            print(f"  {text_path.name} {text_path.stat().st_size} bytes")
+        else:
+            out.write_text(html)
+            print(f"  {out.name} rebuilt: {len(html)} bytes")
     if args.check:
-        print(f"  report_text.html {TEXT.stat().st_size} bytes, "
-              f"{len(blurbs(TEXT.read_text()))} receiver blurbs")
-        return 0 if not (missing or left or unbalanced) else 1
-
-    OUT.write_text(html)
-    print(f"  report.html rebuilt: {len(html)} bytes")
-    return 0 if not (missing or left or unbalanced) else 1
+        print(f"  {len(blurbs(TEXT.read_text()))} receiver blurbs")
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

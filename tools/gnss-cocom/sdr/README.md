@@ -37,8 +37,9 @@ variable at a time.
 | `serial_probe.py` | Diagnoses a silent UART: baud sweep plus an adapter loopback test |
 | `air530_config.py` | Raises an Air530/AT6558R off its 9600 default via `$PCAS01` |
 | `blanking.py` | Tests whether C/N&#8320; blanking tracks the gate or free-runs |
-| `report_text.html` | **The report's prose — edit this**, then run `build_report.py` |
-| `build_report.py` | Assembles `report.html` from the text, `receivers.json` and the figures |
+| `report_text.html` | **The export-limit report's prose — edit this**, then run `build_report.py` |
+| `boost_report_text.html` | **The boost-dynamics report's prose**, same workflow |
+| `build_report.py` | Assembles `report.html` and `boost_report.html` from the text, `receivers.json` and the figures |
 | `make_block_diagram.py` | Draws the rig block diagram used in the report |
 | `replot_all.py` | Regenerates every report figure, shading each at its own measured gate |
 
@@ -498,20 +499,25 @@ lines and `plot_flight.py` draws as a grey SILENT span.
 
 ### Editing the report
 
-`report.html` is **generated — do not edit it**, it is overwritten on every
-build. The words live in `report_text.html`:
+There are two reports, and both are **generated — do not edit them**; they are
+overwritten on every build. `report.html` (GNSS Receiver Limits) covers where each
+receiver stops publishing. `boost_report.html` (GNSS Under Boost) covers what the
+boost itself does to tracking. The words live in `report_text.html` and
+`boost_report_text.html`, and both pages share the stylesheet in
+`report_head.html`:
 
-    $EDITOR report_text.html
+    $EDITOR report_text.html boost_report_text.html
     ./build_report.py
 
-That file is read as plain text and never string-formatted, so braces, quotes
+Both files are read as plain text and never string-formatted, so braces, quotes
 and percent signs in the copy need no escaping. `{{PLACEHOLDERS}}` are filled
 from `results/receivers.json` and `results/figures/` — leave them in place and
-everything around them is free text. Per-receiver blurbs sit at the bottom
-between `<!--#blurb id-->` markers.
+everything around them is free text. Either page may use any placeholder. The
+per-receiver blurbs sit at the bottom of `report_text.html` between
+`<!--#blurb id-->` markers.
 
 `./build_report.py --check` verifies the inputs without writing, and reports a
-placeholder that has been deleted, an unknown one, or a figure that is
+placeholder that is on neither page, an unknown one, or a figure that is
 referenced but missing.
 
 Measured numbers are generated from `receivers.json`, so a figure typed into the

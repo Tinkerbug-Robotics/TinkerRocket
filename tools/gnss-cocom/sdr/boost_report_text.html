@@ -1,0 +1,381 @@
+<!--
+  ===========================================================================
+  EDITABLE TEXT FOR boost_report.html
+  ===========================================================================
+
+  The companion to report_text.html, built by the same script:
+
+      ./build_report.py
+
+  Do NOT edit boost_report.html directly -- it is overwritten on every build.
+  It shares report_head.html (the stylesheet) with report.html, and its
+  {{PLACEHOLDERS}} are filled from results/figures/ the same way.
+
+  This file is read as plain text and never string-formatted, so braces,
+  quotes and percent signs need no escaping. HTML entities work as normal.
+
+  The numbers in the summary table come from boost_sats.py (the u-blox parts)
+  and msm_channels.py (the LC86G) on the archived captures; they are typed
+  here, so re-derive them if a capture changes.
+  ===========================================================================
+-->
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="kicker">
+      <span>Bench report</span>
+      <span>24 Sep 2026</span>
+    </div>
+    <h1>What a Rocket Boost Costs Hobby Grade GNSS Receivers</h1>
+    <p class="standfirst">The simulated flights that measured where hobby-grade
+      GNSS receivers stop publishing position also show what the boost itself does
+      to them. Every flight replayed a byte-identical signal, so each satellite's
+      measured Doppler applies to every receiver, and their tracking can be
+      compared satellite by satellite. The loss follows how fast each satellite's
+      carrier slides, not how far it sits off nominal. Four u-blox receivers keep
+      tracking through a 13.5&nbsp;g burn at the cost of carrier on their steepest
+      satellites; the Quectel LC86G loses every channel at ignition and has no fix
+      again until the descent.</p>
+    <span class="status status-live">Five receivers on the rate axis</span>
+  </header>
+
+  <section>
+    <h2><span class="n">01</span>What the boost does</h2>
+    <div class="prose">
+      <p>The companion report, <a href="report.html">GNSS Receiver Limits</a>, is
+        about the export gate: the moment a receiver refuses to publish a position
+        it is perfectly capable of computing. This report is about a different kind
+        of loss, and one that is not a policy decision at all. Under acceleration a
+        receiver can stop tracking satellites, and which ones it loses is not
+        random.</p>
+      <p>Every receiver below flew the same two boosts to the same 82.5&nbsp;km
+        apogee: a real high-power burn peaking at 13.5&nbsp;g, and a gentle one
+        peaking at 2.0&nbsp;g. The companion report calls them the 15&nbsp;g and
+        3&nbsp;g flights; the figures here are the peak acceleration of the injected
+        trajectory.</p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>Tracking through the burn, by receiver</caption>
+        <thead><tr><th>Receiver</th><th>Lost at 13.5 g</th><th class="num">GPS 24 / GPS 11</th><th class="num">Median</th><th>Fix in the burn<sup>&Dagger;</sup></th><th>At 2.0 g</th></tr></thead>
+        <tbody>
+          <tr><td class="id">u-blox ZED-F9P</td><td>3 of 13</td>
+              <td class="num">lost / lost</td><td class="num">&minus;1 dB</td>
+              <td>kept</td><td>none&nbsp;lost</td></tr>
+          <tr><td class="id">u-blox NEO-M8T<sup>*</sup></td><td>0 of 13</td>
+              <td class="num">&minus;25 / &minus;16 dB</td><td class="num">&minus;7 dB</td>
+              <td>kept</td><td>none&nbsp;lost</td></tr>
+          <tr><td class="id">Quescan M10</td><td>0 of 13</td>
+              <td class="num">&minus;32 / &minus;15 dB</td><td class="num">&minus;6 dB</td>
+              <td>kept</td><td>none&nbsp;lost</td></tr>
+          <tr><td class="id">Beitian BN-182</td><td>0 of 13</td>
+              <td class="num">&minus;26 / &minus;12 dB</td><td class="num">&minus;3 dB</td>
+              <td>kept</td><td>none&nbsp;lost</td></tr>
+          <tr><td class="id">Quectel LC86G</td><td>13 of 13 at ignition, 9 for the burn</td>
+              <td class="num">lost / lost</td><td class="num">&mdash;</td>
+              <td><strong>none until the descent</strong></td><td>none&nbsp;lost</td></tr>
+          <tr><td class="id">SkyTraq PX1125R<sup>&dagger;</sup></td><td>0 of 6&ndash;7</td>
+              <td class="num">not known</td><td class="num">&mdash;</td>
+              <td>kept</td><td>&mdash;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="footnotes">
+      <p class="fn"><span class="mark">&nbsp;</span><span>Change in each satellite's
+        carrier-to-noise from the pad to the burn; the median is across all of a
+        receiver's satellites. GPS&nbsp;24 (51&deg;) and GPS&nbsp;11 (70&deg;) are the
+        two steepest satellites in this sky.</span></p>
+      <p class="fn"><span class="mark">*</span><span>The NEO-M8T reports a flat
+        51&nbsp;dBHz for every satellite on the pad, so its carrier is clamped at this
+        injection level and its changes rank the satellites rather than measure a
+        drop.</span></p>
+      <p class="fn"><span class="mark">&Dagger;</span><span>"Kept" means kept until
+        the export gate closes at 515&nbsp;m/s, partway up the burn: after that the
+        receiver still computes a fix but no longer publishes it. The companion report measures that
+        gate.</span></p>
+      <p class="fn"><span class="mark">&dagger;</span><span>The first part flown, on
+        an earlier ten-satellite sky and a cabled bench, before raw Doppler was
+        logged, so it is not on the rate axis below. The companion report's appendix
+        has the runs.</span></p>
+    </div>
+
+    <div class="prose">
+      <h3>What the table says</h3>
+      <p><strong>The loss follows the Doppler rate.</strong> Which satellites fade
+        is decided by how fast each one's carrier is sliding, and that is set by
+        where it sits relative to the velocity vector: overhead suffers, near the
+        horizon does not. How far the carrier sits off nominal does not predict it
+        (section 03).</p>
+      <p><strong>A g rating does not describe it.</strong> One acceleration presents
+        a spread of rates across the sky, so a part flown under its rated limit is
+        not automatically safe if something is overhead (section 04).</p>
+      <p><strong>The u-blox parts keep a fix; the LC86G does not.</strong> Losing
+        three satellites out of thirteen costs the ZED-F9P geometry, not a
+        position. The LC86G loses every channel at ignition, and the ones above
+        its rate knee never come back during the burn (section 05).</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>How this was measured</h2>
+    <div class="prose">
+      <p>The rig is the one in the companion report. A HackRF plays a simulated GPS
+        L1 C/A sky, made by <code>gps-sdr-sim</code> from the real broadcast
+        ephemeris, into each receiver: by cable where possible, otherwise inside a
+        sealed Faraday cage. Every satellite is transmitted at the same constant
+        power for the whole flight, so a satellite that fades was faded by the
+        receiver, not by the signal.</p>
+    </div>
+
+    <figure>
+      <div class="panels" style="grid-template-columns:1fr">
+        <div class="panel">
+{{FIG_BLOCK_DIAGRAM}}
+        </div>
+      </div>
+      <figcaption>The bench. The trajectory drives <code>gps-sdr-sim</code> and is
+        the ground truth every capture is compared against.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <p><strong>Two boosts, one sky.</strong> Both flights hold 180&nbsp;s on the
+        pad and then burn: 11.9&nbsp;s peaking at 13.5&nbsp;g, or 60.2&nbsp;s peaking
+        at 2.0&nbsp;g. Every receiver on the rate axis flew the same two files, with
+        the same ephemeris, start time and trajectory, so a given satellite presents
+        the same Doppler to all of them at a given moment.</p>
+      <p><strong>Measured Doppler, not modeled.</strong> The NEO-M8T logged
+        <code>RXM-RAWX</code>, which reports its own Doppler per satellite in hertz.
+        That gives two numbers per satellite: the <em>rate</em>, a least-squares
+        slope of Doppler through the burn, which is what a tracking loop has to slew
+        to follow; and the <em>peak shift</em>, how far off nominal the carrier sits.
+        Because the files are byte-identical, the same numbers apply to every part,
+        and <code>doppler_ref.py --verify</code> checks that identity before they are
+        used.</p>
+      <p><strong>Carrier loss</strong> is each satellite's carrier-to-noise through
+        the burn against its own pad baseline, from each u-blox part's
+        <code>NAV-SAT</code>. The LC86G reports RTCM MSM7 instead: per-channel
+        carrier-to-noise, its own Doppler and a carrier-phase lock counter, once a
+        second. Each channel is set against the NEO-M8T's rate for the same
+        satellite.</p>
+      <p class="note">Only GPS L1 C/A is injected, and every part here is
+        multi-constellation, so each is tracking fewer signals than it would in
+        flight. In flight each would have more satellites to lose before its fix
+        was at risk.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>Carrier loss follows the Doppler rate</h2>
+    <div class="prose">
+      <p><strong>Doppler rate is the suspect.</strong> An L1 carrier shifts
+        5.25&nbsp;Hz for every m/s of range rate, so under acceleration the shift is
+        not merely large, it is <em>moving</em>, and the tracking loop has to slew
+        to follow it. How fast it moves depends on where the satellite sits
+        relative to the velocity vector, which for a vertical boost means it scales
+        with elevation. That gives two candidate explanations worth separating,
+        because they are different failures: the carrier moving too <em>fast</em>
+        for the loop, or the carrier simply sitting too far <em>off
+        nominal</em>.</p>
+      <p><strong>Carrier loss scales with the rate.</strong> Pooling both flights
+        onto one axis makes the gentle one the low end of a single curve rather
+        than a separate condition: its satellites never exceed 79&nbsp;Hz/s and
+        never lose carrier, while the same satellites on the same sky reach
+        501&nbsp;Hz/s under a real boost and shed 15 to 47&nbsp;dB. Above
+        300&nbsp;Hz/s the median satellite is down 14&nbsp;dB; below 100&nbsp;Hz/s
+        the median is unchanged.</p>
+    </div>
+
+    <figure>
+{{FIG_BOOST_RATE}}
+      <figcaption>One hundred satellite-receiver pairs across two accelerations.
+        The relationship is the same curve throughout, which is what a
+        dose-response looks like.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <p><strong>And it is the rate, not the shift.</strong> Peak shift is a
+        genuine control here rather than a straw man, because it is close to
+        independent of elevation &mdash; it is set mostly by the satellite's own
+        motion, and it ranges from 1.2 to 6.9&nbsp;kHz across this sky with no
+        relation to how hard the loop is working. GPS&nbsp;5 sits at 28&deg;
+        carrying the largest shift of any satellite, 6915&nbsp;Hz, and barely
+        suffers. On every one of the four the correlation against rate is the
+        stronger one, and on the ZED-F9P the shift explains essentially
+        nothing:</p>
+    </div>
+
+    <figure>
+{{FIG_BOOST_DOPPLER}}
+      <figcaption>The same carrier losses plotted against each quantity. Rate on
+        the left, shift on the right, at 13.5&nbsp;g.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>A g rating for a Hz/s problem</h2>
+    <div class="prose">
+      <p><strong>The published limit is a g number for a Hz/s problem.</strong>
+        u-blox rates the M10 to 4&nbsp;g, but a loop does not see acceleration, it
+        sees how fast its carrier is sliding &mdash; and the same 4&nbsp;g produces
+        206&nbsp;Hz/s on a satellite at zenith and 71&nbsp;Hz/s on one at 20&deg;.
+        One acceleration is therefore not one condition; it is a spread. That is
+        visible in the 13.5&nbsp;g flight, which holds 3.4&nbsp;times the rated
+        limit at its peak: split its satellites at the 4&nbsp;g-equivalent rate and
+        the ones below it are down 4&nbsp;dB while the ones above are down
+        10&nbsp;dB &mdash; same vehicle, same instant, differing only in where they
+        sit in the sky. A part flown past its rated acceleration does not fail all
+        at once, and a part kept under it is not automatically safe if something is
+        overhead.</p>
+      <p>So the mechanism has a name: the tracking loop failing to slew, not the
+        carrier sitting far off nominal. Elevation, which this analysis first used
+        to argue from, turns out to have been a sound proxy rather than a wrong one
+        &mdash; the measured rate matches
+        <code>a &times; sin(elevation) &times; 5.25</code> to within a factor of
+        0.82 to 0.98 across twelve satellites, the residual being the difference
+        between peak and mean acceleration over the burn. That is why it
+        worked.</p>
+      <p><strong>The clearest single observation is a satellite that
+        disappears.</strong> GPS&nbsp;11 sits at 70&deg;, the highest in this sky
+        and the steepest Doppler rate of any satellite in the set. Its raw
+        measurement holds steady at &minus;98&nbsp;Hz on the pad; one second after
+        ignition it reads +483&nbsp;Hz and its carrier has fallen from 48 to
+        30&nbsp;dBHz; then it vanishes from the raw output entirely for ten seconds,
+        and returns at +6302&nbsp;Hz with its carrier back at 47&nbsp;dBHz the moment
+        the burn ends. It is bracketed by the acceleration on both sides. It is
+        also, for that reason, the one satellite absent from the rate axis: the
+        instrument that would measure the stimulus is the one the stimulus
+        disabled.</p>
+      <p><strong>What actually dropped.</strong> Of the four u-blox parts, only the
+        ZED-F9P lost satellites outright, three of thirteen: GPS&nbsp;11 at 70&deg;,
+        GPS&nbsp;24 at 51&deg; and GPS&nbsp;6 at 31&deg;, each from a healthy carrier
+        to nothing. The other three leaned on the same satellites &mdash; 12 to
+        32&nbsp;dB off the two steepest &mdash; but held lock on all of them. The
+        ranking is consistent across parts even where the outcome is not.</p>
+      <p><strong>What did not drop, on these four, is the position.</strong> None of
+        them went to no-lock during either burn. Losing three satellites out of
+        thirteen costs geometry, not a fix. On the u-blox parts, the thing that
+        stops a position is the export gate, not the dynamics.</p>
+      <p class="note">The four parts behind these curves are all u-blox, spanning
+        three generations (M8, M10, F9) but one vendor, and the LC86G in section 05
+        fails differently. What makes the result credible is four receivers
+        agreeing, the effect scaling with acceleration, and the rate beating the
+        shift on every one of them.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>The LC86G loses the position</h2>
+    <div class="prose">
+      <p>The Quectel LC86G is the GNSS on the Tinker-Beetle rocket computer. It
+        reports its raw measurements as RTCM MSM7: per-satellite C/N&#8320;, its own
+        Doppler, and a carrier-phase lock counter, once a second. It was flown on
+        the same byte-identical files, so each of its channels can be set against
+        the Doppler rate the NEO-M8T measured for the same satellite. It fails in
+        two stages. At the 13.5&nbsp;g ignition every channel drops within the first
+        second, low and high alike. That is a common-mode failure, not per-channel
+        stress, and it happens in both of its navigation modes. Then the
+        rate-limited picture reasserts itself. The channels whose Doppler rate is
+        low relock within two seconds and hold through the rest of the burn, and
+        the others do not.</p>
+    </div>
+
+    <figure>
+      <div class="panels" style="grid-template-columns:1fr">
+        <div class="panel">
+          <h4>Quectel LC86G &mdash; which channels survive the burn <span class="badge">MSM7</span></h4>
+          <p>each channel at the Doppler rate its satellite presented, measured from the same file</p>
+{{FIG_LC86_KNEE}}
+        </div>
+      </div>
+      <figcaption>At 13.5&nbsp;g the split is clean: every channel at or below
+        128&nbsp;Hz/s held, and every one at or above 171&nbsp;Hz/s was lost for the
+        rest of the burn. At 2&nbsp;g every channel held its carrier; the three
+        steepest slipped carrier phase at ignition.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <p>The knee sits between 128 and 171&nbsp;Hz/s. That is below the
+        206&nbsp;Hz/s its rated 4&nbsp;g would present straight overhead, so a
+        satellite near zenith is lost somewhere around 3&nbsp;g of sustained
+        acceleration. With only the four lowest satellites left, all under 13&deg;,
+        it has no fix for the rest of the burn and coast. The 2&nbsp;g flight sits
+        under the knee everywhere, and the channels show it. All thirteen held
+        46&nbsp;dBHz through the burn, and only the three steepest, at 79, 66 and
+        53&nbsp;Hz/s, slipped carrier phase at ignition. That is the same ranking the
+        u-blox parts show in carrier loss, visible here in phase, at an
+        acceleration too low to cost any carrier at all.</p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>LC86G channels through the burn (Balloon mode, MSM7)</caption>
+        <thead><tr><th>Satellite</th><th class="num">Elevation</th><th class="num">Rate at 13.5 g (Hz/s)</th><th>At 13.5 g</th><th class="num">Rate at 2 g (Hz/s)</th><th>At 2 g</th></tr></thead>
+        <tbody>
+          <tr><td>G29</td><td class="num">5&deg;</td><td class="num">54</td><td>held</td><td class="num">8</td><td>held</td></tr>
+          <tr><td>G12</td><td class="num">9&deg;</td><td class="num">98</td><td>held</td><td class="num">14</td><td>held</td></tr>
+          <tr><td>G30</td><td class="num">11&deg;</td><td class="num">114</td><td>held, phase slipped</td><td class="num">16</td><td>held</td></tr>
+          <tr><td>G19</td><td class="num">12&deg;</td><td class="num">128</td><td>held</td><td class="num">18</td><td>held</td></tr>
+          <tr><td>G14</td><td class="num">17&deg;</td><td class="num">171</td><td>lost</td><td class="num">24</td><td>held</td></tr>
+          <tr><td>G15</td><td class="num">20&deg;</td><td class="num">199</td><td>lost</td><td class="num">29</td><td>held</td></tr>
+          <tr><td>G22</td><td class="num">26&deg;</td><td class="num">261</td><td>lost</td><td class="num">37</td><td>held</td></tr>
+          <tr><td>G05</td><td class="num">28&deg;</td><td class="num">286</td><td>lost</td><td class="num">41</td><td>held</td></tr>
+          <tr><td>G20</td><td class="num">27&deg;</td><td class="num">308</td><td>lost</td><td class="num">39</td><td>held</td></tr>
+          <tr><td>G06</td><td class="num">31&deg;</td><td class="num">312</td><td>lost</td><td class="num">43</td><td>held</td></tr>
+          <tr><td>G21</td><td class="num">38&deg;</td><td class="num">378</td><td>lost</td><td class="num">53</td><td>held, phase slipped</td></tr>
+          <tr><td>G24</td><td class="num">51&deg;</td><td class="num">501</td><td>lost</td><td class="num">66</td><td>held, phase slipped</td></tr>
+          <tr><td>G11</td><td class="num">70&deg;</td><td class="num">not measurable</td><td>lost</td><td class="num">79</td><td>held, phase slipped</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>So the LC86G is the one part on this bench whose fix the boost costs. It
+        is not the export gate, which it never reached; it is the dynamics alone, at
+        ignition. On a vehicle that boosts that hard it will not have a position
+        until the descent, in either mode.</p>
+      <p><strong>Its navigation mode is a second, separate failure.</strong>
+        Everything above is Balloon mode, which the Beetle's firmware is changing to
+        select at boot. In the module's default Normal mode, on the gentle flight,
+        the navigation solution did not follow the climb: for 18&nbsp;s it reported
+        a climb rate of 1&ndash;6&nbsp;m/s with a valid 3-D fix from all 13
+        satellites while the vehicle reached 320&nbsp;m/s. That is the navigation
+        filter, not the tracking loops, and the companion report sets the two modes
+        side by side (<a href="report.html">GNSS Receiver Limits</a>, section 04).
+        After the 13.5&nbsp;g ignition Normal mode went further, publishing fixes
+        flagged valid that were 18&ndash;80&nbsp;km wrong. Replayed through the
+        Beetle's main-parachute logic, those fixes would have released the main
+        16&nbsp;km up
+        (<a href="https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1508">TinkerRocket#1508</a>).</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>What this bench cannot show</h2>
+    <div class="prose">
+      <p>One boundary decides how far this generalizes. The rig injects smooth,
+        clean, interpolated motion. A real motor adds broadband vibration that
+        modulates carrier phase directly, plume attenuation, body shadowing and
+        antenna-pattern nulls as the vehicle rolls, and a signal level well below
+        the 32&ndash;51&nbsp;dBHz delivered here &mdash; and loop stress multiplies
+        with low carrier. A loop that holds 500&nbsp;Hz/s at 45&nbsp;dBHz can fail
+        at 32. A part that sails through boost here may still drop lock on a real
+        motor, and nothing measured here contradicts that.</p>
+      <p>The rate axis is also one sky: the GPS satellites visible from one site
+        at one hour, the steepest at 70&deg;. A different sky puts different
+        satellites overhead, and the ranking follows the sky, not the satellite
+        numbers.</p>
+    </div>
+  </section>
+
+  <footer>
+    <span>Companion: <a href="report.html">GNSS Receiver Limits</a></span>
+    <span>Rig: <code>tools/gnss-cocom/</code></span>
+    <span><a href="https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/491">Issue #491</a></span>
+    <span><a href="https://github.com/osqzss/gps-sdr-sim">gps-sdr-sim</a></span>
+    <span>Cabled, or radiated only inside a sealed Faraday cage &mdash; never into open air</span>
+  </footer>
+
+</div>
