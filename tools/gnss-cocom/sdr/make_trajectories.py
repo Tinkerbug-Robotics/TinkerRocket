@@ -431,6 +431,8 @@ def isolation(cx: dict) -> str:
 
 
 def main() -> int:
+    # build() and the metadata read the module-level origin; --lat/--lon set it.
+    global LAT0_DEG, LON0_DEG
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-o", "--outdir", default="scenarios", type=Path,
@@ -440,7 +442,15 @@ def main() -> int:
     ap.add_argument("--sample-rate", type=float, default=2_600_000.0,
                     help="sample rate the .C8 will be built at, for the size "
                          "estimate only (default: 2.6e6)")
+    ap.add_argument("--lat", type=float, default=LAT0_DEG,
+                    help=f"launch latitude, deg (default {LAT0_DEG}). The flight "
+                         "profiles fly from the equator (make_flights.py --lat 0), "
+                         "where the 08:30 sky holds 14 satellites; build a ramp "
+                         "there too when its result is to be compared with them")
+    ap.add_argument("--lon", type=float, default=LON0_DEG,
+                    help=f"launch longitude, deg (default {LON0_DEG})")
     args = ap.parse_args()
+    LAT0_DEG, LON0_DEG = args.lat, args.lon
 
     names = args.only or list(SCENARIOS)
     unknown = [n for n in names if n not in SCENARIOS]

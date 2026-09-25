@@ -28,7 +28,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from correlate import Truth, collect, parse_start, trajectory_time  # noqa: E402
+from correlate import (Truth, clock_outliers, collect,       # noqa: E402
+                       parse_start, trajectory_time)
 
 
 def main() -> int:
@@ -52,9 +53,10 @@ def main() -> int:
     start = parse_start(args.start)
 
     rows = []
-    for s in samples:
+    stale = clock_outliers(samples, start)      # not yet on the scenario's clock
+    for i, s in enumerate(samples):
         t, src = trajectory_time(s, start, None)
-        if src == "host":
+        if src == "host" or i in stale:
             continue                      # unanchored epochs cannot be placed
         rows.append((t, s[4], s[5]))
     rows.sort(key=lambda r: r[0])

@@ -84,6 +84,8 @@ def velocity_threshold(r):
 
 def vel_marker(r):
     """Footnote key for a velocity estimate that needs qualifying, or None."""
+    if r.get("velocity_gate_mechanism") == "mute":
+        return "mute"
     e = r.get("velocity_edges")
     if e and len(e.get("fix", [])) < 2:
         return "few edges"
@@ -123,6 +125,22 @@ FOOTNOTES = {
                   "the width of one navigation epoch. This part was slow enough "
                   "to re-open that the gate had not cleared before the next "
                   "window, leaving no fix to close again."),
+    "mute": ("\u2016",
+             "Enforced by muting ALL output -- NMEA, acknowledgements and raw "
+             "measurements -- rather than by withholding the position while "
+             "satellites are still reported, so on the wire it looks like a dead "
+             "receiver until it comes back. It acts on the receiver's own "
+             "estimates, 500 m/s and 80.0 km, stopping within 0.1 s of passing "
+             "either and returning within 0.1 s straight into a valid fix. Its "
+             "own altitude read about 0.9 km low near 80 km on this bench, which "
+             "puts the limit near 81 km against the injection."),
+    "nav fail": ("\u25ca",
+                 "No altitude limit could be measured: Normal mode's vertical "
+                 "solution does not follow a boost. The fix stayed valid-flagged "
+                 "while its climb rate read near zero through the 3 g ascent, and "
+                 "after stopping at 500 m/s it never published a valid fix again. "
+                 "Quectel documents a 10 km limitation for this mode and no output "
+                 "at all above 50 km."),
     "dyn model": ("\u00a7",
                   "The u-blox dynamic model's own altitude ceiling, not an export "
                   "gate. Airborne <4 g is specified at 50,000 m; no u-blox model "
@@ -135,7 +153,10 @@ def alt_cell(r):
     """Altitude gate, rounded, with a footnote marker when it needs qualifying."""
     lo, hi = r.get("altitude_fix_max_km"), r.get("altitude_blocked_min_km")
     if lo is None or hi is None:
-        return r.get("altitude_note", "--"), None
+        key = r.get("altitude_note_key")
+        note = r.get("altitude_note", "--")
+        return (f"{note} {FOOTNOTES[key][0]}" if key in FOOTNOTES else note), \
+            (key if key in FOOTNOTES else None)
     inverted = lo > hi
     txt = f"{_round_to((lo + hi) / 2.0, 1):.0f} km"
     # Normalized: the JSON is hand-edited and has carried both "not COCOM" and
@@ -159,7 +180,7 @@ def rows(d):
             "alt": alt_cell(r)[0],
             "comb": r["combination"],
             "rec": (f"{r['recovery_s'][0]:.1f}-{r['recovery_s'][1]:.1f} s"
-                    if r.get("recovery_s") else "n/a"),
+                    if r.get("recovery_s") else r.get("recovery_note", "n/a")),
             "notes": r.get("notes", ""),
             "bands": r["bands"],
             "protocol": r["protocol"],

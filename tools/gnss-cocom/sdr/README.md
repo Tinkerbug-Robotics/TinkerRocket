@@ -37,8 +37,9 @@ variable at a time.
 | `serial_probe.py` | Diagnoses a silent UART: baud sweep plus an adapter loopback test |
 | `air530_config.py` | Raises an Air530/AT6558R off its 9600 default via `$PCAS01` |
 | `blanking.py` | Tests whether C/N&#8320; blanking tracks the gate or free-runs |
-| `report_text.html` | **The report's prose — edit this**, then run `build_report.py` |
-| `build_report.py` | Assembles `report.html` from the text, `receivers.json` and the figures |
+| `report_text.html` | **The export-limit report's prose — edit this**, then run `build_report.py` |
+| `boost_report_text.html` | **The boost-dynamics report's prose**, same workflow |
+| `build_report.py` | Assembles `report.html` and `boost_report.html` from the text, `receivers.json` and the figures |
 | `make_block_diagram.py` | Draws the rig block diagram used in the report |
 | `replot_all.py` | Regenerates every report figure, shading each at its own measured gate |
 
@@ -449,26 +450,84 @@ necessarily a receiver that has hit the export limit.** Dynamic models,
 base-station modes and firmware ceilings all produce the same silence. Change
 the suspected cause and watch whether the threshold moves.
 
+### The Tinker-Beetle's LC86G: bridged, NMEA + PQTM, and a mode that decides everything
+
+The Beetle keeps its Quectel LC86G on the flight computer's own UART and the
+flight image never puts raw bytes on USB, so a run needs the bench image in
+`../firmware/lc86_bridge` on that computer. **Identify it before flashing**: with
+S1 on `F` and the rail on (BLE command 8, sent before the cage lid closes), the
+flight computer enumerates with USB serial `9C:13:9E:28:9E:8C`; `9E:88` is the
+out computer. Back up the flash first and write it back afterwards:
+
+    python -m esptool --port PORT --after no-reset read-mac        # 9c:13:9e:28:9e:8c
+    python -m esptool --port PORT --before no-reset --after no-reset \
+        read-flash 0x0 0x610000 beetle_fc_backup.bin
+    idf.py -C ../firmware/lc86_bridge build && idf.py -C ../firmware/lc86_bridge -p PORT flash
+    ...
+    python -m esptool --chip esp32s3 --port PORT write-flash --flash-mode keep \
+        --flash-freq keep --flash-size keep 0x0 beetle_fc_backup.bin
+
+After a flash these S3s often sit in ROM download mode; pulse RTS with DTR low
+(or open the port and toggle it) to start the app. Opening the port with DTR and
+RTS already high leaves a running bridge alone.
+
+Then configure and fly:
+
+    ./lc86_config.py --identify                    # read-only: version, mode, rates
+    ./lc86_config.py --rtcm msm7                   # the flight set (Balloon), raw measurements on
+    ./lc86_config.py --navmode 0 --rtcm msm7       # the same in Normal, as flown before PR #1500
+    ./gain_sweep.py -p PORT -s t00_static -g 0,6,12
+    ./run_radiated.py -s gentle_alt --lc86 3 --rtcm msm7 --cold-start -x 0 --tag lc86g_balloon
+    ./msm_channels.py captures/lc86g_balloon_gentle_alt.log \
+        -s scenarios/gentle_alt.json -t 2026/08/18,08:30:00 --window 176 212
+
+`--lc86 MODE` finds the port by the flight computer's MAC and replaces the UBX
+preflight with a full read-back that must match the flight configuration plus
+that navigation mode. The flight configuration follows PR #1500, which selects
+Balloon (3) at boot; the Beetle flew in Normal (0) before it, so a Normal-mode
+repeat is `lc86_config.py --navmode 0` followed by `--lc86 0`. The configuration is RAM-only: a rail cycle returns the
+module to factory defaults (1 Hz, all NMEA, Normal, no PQTM), and the preflight
+is what catches it.
+
+**Read a capture of this part with three things in mind.** Its UTC is 18 s
+behind the injected clock (it applies leap seconds the simulation does not
+send), so `correlate.py` times it from `$PQTMPVT`'s GPS time of week. Its GGA
+and PQTMPVT can disagree about whether there is a fix; PQTMPVT is what the
+Beetle reads and what the classifier follows. And it enforces its limits by
+going completely quiet, which the bridge reports as `# lc86_bridge: LC86G silent`
+lines and `plot_flight.py` draws as a grey SILENT span.
+
 ### Editing the report
 
-`report.html` is **generated — do not edit it**, it is overwritten on every
-build. The words live in `report_text.html`:
+There are two reports, and both are **generated — do not edit them**; they are
+overwritten on every build. `report.html` (GNSS Receiver Limits) covers where each
+receiver stops publishing. `boost_report.html` (GNSS Under Boost) covers what the
+boost itself does to tracking. The words live in `report_text.html` and
+`boost_report_text.html`, and both pages share the stylesheet in
+`report_head.html`:
 
-    $EDITOR report_text.html
+    $EDITOR report_text.html boost_report_text.html
     ./build_report.py
 
-That file is read as plain text and never string-formatted, so braces, quotes
+Both files are read as plain text and never string-formatted, so braces, quotes
 and percent signs in the copy need no escaping. `{{PLACEHOLDERS}}` are filled
 from `results/receivers.json` and `results/figures/` — leave them in place and
-everything around them is free text. Per-receiver blurbs sit at the bottom
-between `<!--#blurb id-->` markers.
+everything around them is free text. Either page may use any placeholder. The
+per-receiver blurbs sit at the bottom of `report_text.html` between
+`<!--#blurb id-->` markers.
 
 `./build_report.py --check` verifies the inputs without writing, and reports a
-placeholder that has been deleted, an unknown one, or a figure that is
+placeholder that is on neither page, an unknown one, or a figure that is
 referenced but missing.
 
 Measured numbers are generated from `receivers.json`, so a figure typed into the
 prose will not stay in step with the data — change the JSON instead.
+
+Figures are inlined as SVG, and a `<style>` inside inline SVG applies to the
+whole page. The build therefore scopes each figure's rules to that figure, so
+two plot scripts can both define `.lbl` without the later one restyling the
+other. Before this, the last figure on the page set the label size for all of
+them.
 
 ### When a ramp cannot measure the receiver: dwell instead
 

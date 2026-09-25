@@ -1,0 +1,1077 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GNSS Under Boost</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+
+<style>
+  :root {
+    --ground:      #F6F7F9;
+    --surface:     #FFFFFF;
+    --surface-2:   #EFF2F6;
+    --ink:         #16181F;
+    --ink-2:       #4A5261;
+    --ink-3:       #79808F;
+    --rule:        #DDE2E9;
+    --rule-strong: #C3CAD5;
+    --accent:      #29457E;
+    --accent-soft: #E6ECF7;
+    --fix:         #0E7C66;
+    --blocked:     #A2660A;
+    --nolock:      #9B3535;
+    --wrongfix:    #6D3FA8;
+    --mode-normal: #eb6834;   /* LC86G Normal-mode series */
+    --mode-balloon:#2a78d6;   /* LC86G Balloon-mode series */
+    --shade-a:     rgba(41, 69, 126, 0.10);
+    --shade-b:     rgba(41, 69, 126, 0.24);
+
+    --f-display: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+    --f-body:    "IBM Plex Serif", Georgia, "Times New Roman", serif;
+    --f-mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+    --measure: 66ch;
+    --pad: clamp(1.25rem, 4vw, 3rem);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground:      #101218;
+      --surface:     #181B23;
+      --surface-2:   #1F232D;
+      --ink:         #E9EBF0;
+      --ink-2:       #A9B1C0;
+      --ink-3:       #78808F;
+      --rule:        #2A2F3A;
+      --rule-strong: #3B4250;
+      --accent:      #8DAEE2;
+      --accent-soft: #1B2432;
+      --fix:         #43C2A2;
+      --blocked:     #DFA23F;
+      --nolock:      #E07777;
+      --wrongfix:    #B592EE;
+      --mode-normal: #d95926;
+      --mode-balloon:#3987e5;
+      --shade-a:     rgba(141, 174, 226, 0.12);
+      --shade-b:     rgba(141, 174, 226, 0.28);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground:      #101218;
+    --surface:     #181B23;
+    --surface-2:   #1F232D;
+    --ink:         #E9EBF0;
+    --ink-2:       #A9B1C0;
+    --ink-3:       #78808F;
+    --rule:        #2A2F3A;
+    --rule-strong: #3B4250;
+    --accent:      #8DAEE2;
+    --accent-soft: #1B2432;
+    --fix:         #43C2A2;
+    --blocked:     #DFA23F;
+    --nolock:      #E07777;
+    --wrongfix:    #B592EE;
+    --mode-normal: #d95926;
+    --mode-balloon:#3987e5;
+    --shade-a:     rgba(141, 174, 226, 0.12);
+    --shade-b:     rgba(141, 174, 226, 0.28);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 1020px;
+    margin: 0 auto;
+    padding: 0 var(--pad) 6rem;
+  }
+
+  .prose { max-width: var(--measure); }
+
+  p { margin: 0 0 1.1em; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px;
+  }
+
+  /* ---- masthead ---- */
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding: clamp(2.5rem, 7vw, 4.5rem) 0 1.5rem;
+    display: flex; flex-direction: column; gap: 1.4rem;
+  }
+  .kicker {
+    font-family: var(--f-mono); font-size: 0.72rem; font-weight: 500;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    display: flex; flex-wrap: wrap; gap: 0.5rem 1.4rem;
+  }
+  h1 {
+    font-family: var(--f-display); font-weight: 700;
+    font-size: clamp(2.4rem, 7vw, 4rem); line-height: 1.02;
+    letter-spacing: -0.015em; margin: 0; text-wrap: balance;
+  }
+  .standfirst {
+    font-size: clamp(1.05rem, 2.2vw, 1.22rem); color: var(--ink-2);
+    max-width: 56ch; margin: 0; font-style: italic;
+  }
+  .status {
+    display: inline-flex; align-items: center; gap: 0.6rem; align-self: flex-start;
+    font-family: var(--f-mono); font-size: 0.74rem; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--blocked);
+    border: 1px solid currentColor; border-radius: 2px; padding: 0.35rem 0.7rem;
+  }
+  .status-live { color: var(--fix); }
+  .status::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: currentColor; flex: none;
+  }
+
+  /* ---- sections ---- */
+  section { padding-top: clamp(3rem, 7vw, 4.5rem); }
+  h2 {
+    font-family: var(--f-display); font-weight: 600;
+    font-size: clamp(1.5rem, 3.4vw, 2rem); line-height: 1.15;
+    letter-spacing: -0.01em; margin: 0 0 1rem; text-wrap: balance;
+    display: flex; align-items: baseline; gap: 0.85rem;
+  }
+  h2 .n {
+    font-family: var(--f-mono); font-size: 0.7rem; font-weight: 500;
+    letter-spacing: 0.1em; color: var(--accent); flex: none;
+    padding-top: 0.15rem;
+  }
+  h3 {
+    font-family: var(--f-display); font-weight: 600; font-size: 1.1rem;
+    letter-spacing: 0.01em; margin: 2rem 0 0.6rem;
+  }
+
+  /* ---- figure ---- */
+  figure { margin: 2rem 0 1.4rem; }
+  .panels {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem; background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 1.5rem;
+  }
+  .badge {
+    font-family: var(--f-mono); font-size: 0.6rem; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--surface); background: var(--fix);
+    border-radius: 2px; padding: 0.12rem 0.4rem; vertical-align: 0.15em;
+    margin-left: 0.4rem; font-weight: 500;
+  }
+  .panel h4 {
+    font-family: var(--f-display); font-size: 0.95rem; font-weight: 600;
+    margin: 0 0 0.15rem;
+  }
+  .panel p {
+    font-family: var(--f-mono); font-size: 0.72rem; line-height: 1.5;
+    color: var(--ink-3); margin: 0 0 0.9rem;
+  }
+  .panel svg { width: 100%; height: auto; display: block; }
+  .panel svg text { font-family: var(--f-mono); fill: var(--ink-3); }
+  figcaption {
+    font-size: 0.86rem; color: var(--ink-2); margin-top: 0.9rem;
+    max-width: var(--measure);
+  }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.3rem; margin-top: 1.1rem;
+    font-family: var(--f-mono); font-size: 0.7rem; color: var(--ink-2);
+    letter-spacing: 0.02em;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 0.45rem; }
+  .swatch { display: inline-block; width: 15px; height: 3px; border-radius: 1px; flex: none; }
+
+  /* ---- receiver comparison ---- */
+  table.cmp td.part { font-family: var(--f-display); font-weight: 600; color: var(--ink);
+                      white-space: nowrap; }
+  table.cmp { min-width: 900px; }
+  table.cmp tbody tr:hover { background: var(--rule); }
+
+
+  /* ---- table footnotes ---- */
+  .footnotes { margin: 0.9rem 0 0; display: flex; flex-direction: column; gap: 0.5rem; }
+  .footnotes .fn {
+    display: flex; gap: 0.55rem; margin: 0;
+    font-size: 0.78rem; line-height: 1.5; color: var(--ink-3);
+  }
+  .footnotes .mark {
+    flex: 0 0 1rem; font-family: var(--f-mono); color: var(--ink-2);
+  }
+
+  /* ---- tables ---- */
+  .scroll { overflow-x: auto; margin: 1.6rem 0 1.1rem; }
+  table {
+    border-collapse: collapse; width: 100%; min-width: 560px;
+    font-family: var(--f-mono); font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+  }
+  caption {
+    text-align: left; font-family: var(--f-display); font-size: 0.95rem;
+    font-weight: 600; color: var(--ink); padding-bottom: 0.6rem;
+  }
+  th, td {
+    text-align: left; padding: 0.55rem 0.9rem 0.55rem 0;
+    border-bottom: 1px solid var(--rule); vertical-align: top;
+  }
+  thead th {
+    font-weight: 500; font-size: 0.68rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--ink-3);
+    border-bottom: 1px solid var(--rule-strong); white-space: nowrap;
+  }
+  td.num { text-align: right; padding-right: 1.4rem; }
+  tbody tr:last-child td { border-bottom: none; }
+  .id { color: var(--accent); font-weight: 500; white-space: nowrap; }
+  .pending { color: var(--ink-3); }
+
+  .tag {
+    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 0.1rem 0.4rem; border-radius: 2px; white-space: nowrap;
+    border: 1px solid currentColor;
+  }
+  .t-fix { color: var(--fix); }
+  .t-blocked { color: var(--blocked); }
+  .t-nolock { color: var(--nolock); }
+  .t-none { color: var(--ink-3); }
+
+  /* ---- callout ---- */
+  .callout {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-left: 3px solid var(--blocked);
+    border-radius: 0 3px 3px 0; padding: 1.3rem 1.5rem; margin: 2rem 0 0;
+  }
+  .callout h3 { margin-top: 0; color: var(--blocked); }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .prose { max-width: 62ch; }
+
+  /* ---- code ---- */
+  pre {
+    background: var(--surface-2); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 1rem 1.1rem; overflow-x: auto; margin: 1.4rem 0 0;
+    font-family: var(--f-mono); font-size: 0.76rem; line-height: 1.7;
+    color: var(--ink-2);
+  }
+  code { font-family: var(--f-mono); font-size: 0.86em; color: var(--ink); }
+  pre code { color: inherit; font-size: inherit; }
+
+  /* ---- chain ---- */
+  .chain {
+    display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.5rem;
+    margin: 1.8rem 0 0; font-family: var(--f-mono); font-size: 0.72rem;
+  }
+  .node {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 0.7rem 0.9rem; flex: 1 1 130px; min-width: 130px;
+    display: flex; flex-direction: column; gap: 0.25rem;
+  }
+  .node b {
+    font-family: var(--f-display); font-size: 0.85rem; font-weight: 600;
+    color: var(--ink); letter-spacing: 0.01em;
+  }
+  .node span { color: var(--ink-3); line-height: 1.45; }
+  .node.hot { border-color: var(--rule-strong); background: var(--accent-soft); }
+
+  ul.notes {
+    max-width: var(--measure); padding-left: 1.1rem; margin: 1.2rem 0 0;
+  }
+  ul.notes li { margin-bottom: 0.6rem; }
+  ul.notes li::marker { color: var(--accent); }
+
+  footer {
+    margin-top: clamp(3.5rem, 8vw, 5rem); padding-top: 1.5rem;
+    border-top: 1px solid var(--rule);
+    font-family: var(--f-mono); font-size: 0.72rem; color: var(--ink-3);
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem;
+  }
+  footer a { color: var(--ink-2); }
+</style>
+<div class="page">
+
+  <header class="masthead">
+    <div class="kicker">
+      <span>Bench report</span>
+      <span>24 Sep 2026</span>
+    </div>
+    <h1>What a Rocket Boost Costs Hobby Grade GNSS Receivers</h1>
+    <p class="standfirst">The simulated flights that measured where hobby-grade
+      GNSS receivers stop publishing position also show what the boost itself does
+      to them. Every flight replayed a byte-identical signal, so each satellite's
+      measured Doppler applies to every receiver, and their tracking can be
+      compared satellite by satellite. The loss follows how fast each satellite's
+      carrier slides, not how far it sits off nominal. Four u-blox receivers keep
+      tracking through a 13.5&nbsp;g burn at the cost of carrier on their steepest
+      satellites; the Quectel LC86G loses every channel at ignition and has no fix
+      again until the descent.</p>
+    <span class="status status-live">Five receivers on the rate axis</span>
+  </header>
+
+  <section>
+    <h2><span class="n">01</span>What the boost does</h2>
+    <div class="prose">
+      <p>The companion report, <a href="report.html">GNSS Receiver Limits</a>, is
+        about the export gate: the moment a receiver refuses to publish a position
+        it is perfectly capable of computing. This report is about a different kind
+        of loss, and one that is not a policy decision at all. Under acceleration a
+        receiver can stop tracking satellites, and which ones it loses is not
+        random.</p>
+      <p>Every receiver below flew the same two boosts to the same 82.5&nbsp;km
+        apogee: a real high-power burn peaking at 13.5&nbsp;g, and a gentle one
+        peaking at 2.0&nbsp;g. The companion report calls them the 15&nbsp;g and
+        3&nbsp;g flights; the figures here are the peak acceleration of the injected
+        trajectory.</p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>Tracking through the burn, by receiver</caption>
+        <thead><tr><th>Receiver</th><th>Lost at 13.5 g</th><th class="num">GPS 24 / GPS 11</th><th class="num">Median</th><th>Fix in the burn<sup>&Dagger;</sup></th><th>At 2.0 g</th></tr></thead>
+        <tbody>
+          <tr><td class="id">u-blox ZED-F9P</td><td>3 of 13</td>
+              <td class="num">lost / lost</td><td class="num">&minus;1 dB</td>
+              <td>kept</td><td>none&nbsp;lost</td></tr>
+          <tr><td class="id">u-blox NEO-M8T<sup>*</sup></td><td>0 of 13</td>
+              <td class="num">&minus;25 / &minus;16 dB</td><td class="num">&minus;7 dB</td>
+              <td>kept</td><td>none&nbsp;lost</td></tr>
+          <tr><td class="id">Quescan M10</td><td>0 of 13</td>
+              <td class="num">&minus;32 / &minus;15 dB</td><td class="num">&minus;6 dB</td>
+              <td>kept</td><td>none&nbsp;lost</td></tr>
+          <tr><td class="id">Beitian BN-182</td><td>0 of 13</td>
+              <td class="num">&minus;26 / &minus;12 dB</td><td class="num">&minus;3 dB</td>
+              <td>kept</td><td>none&nbsp;lost</td></tr>
+          <tr><td class="id">Quectel LC86G</td><td>13 of 13 at ignition, 9 for the burn</td>
+              <td class="num">lost / lost</td><td class="num">&mdash;</td>
+              <td><strong>none until the descent</strong></td><td>none&nbsp;lost</td></tr>
+          <tr><td class="id">SkyTraq PX1125R<sup>&dagger;</sup></td><td>0 of 6&ndash;7</td>
+              <td class="num">not known</td><td class="num">&mdash;</td>
+              <td>kept</td><td>&mdash;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="footnotes">
+      <p class="fn"><span class="mark">&nbsp;</span><span>Change in each satellite's
+        carrier-to-noise from the pad to the burn; the median is across all of a
+        receiver's satellites. GPS&nbsp;24 (51&deg;) and GPS&nbsp;11 (70&deg;) are the
+        two steepest satellites in this sky.</span></p>
+      <p class="fn"><span class="mark">*</span><span>The NEO-M8T reports a flat
+        51&nbsp;dBHz for every satellite on the pad, so its carrier is clamped at this
+        injection level and its changes rank the satellites rather than measure a
+        drop.</span></p>
+      <p class="fn"><span class="mark">&Dagger;</span><span>"Kept" means kept until
+        the export gate closes at 515&nbsp;m/s, partway up the burn: after that the
+        receiver still computes a fix but no longer publishes it. The companion report measures that
+        gate.</span></p>
+      <p class="fn"><span class="mark">&dagger;</span><span>The first part flown, on
+        an earlier ten-satellite sky and a cabled bench, before raw Doppler was
+        logged, so it is not on the rate axis below. The companion report's appendix
+        has the runs.</span></p>
+    </div>
+
+    <div class="prose">
+      <h3>What the table says</h3>
+      <p><strong>The loss follows the Doppler rate.</strong> Which satellites fade
+        is decided by how fast each one's carrier is sliding, and that is set by
+        where it sits relative to the velocity vector: overhead suffers, near the
+        horizon does not. How far the carrier sits off nominal does not predict it
+        (section 03).</p>
+      <p><strong>A g rating does not describe it.</strong> One acceleration presents
+        a spread of rates across the sky, so a part flown under its rated limit is
+        not automatically safe if something is overhead (section 04).</p>
+      <p><strong>The u-blox parts keep a fix; the LC86G does not.</strong> Losing
+        three satellites out of thirteen costs the ZED-F9P geometry, not a
+        position. The LC86G loses every channel at ignition, and the ones above
+        its rate knee never come back during the burn (section 05).</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span>How this was measured</h2>
+    <div class="prose">
+      <p>The rig is the one in the companion report. A HackRF plays a simulated GPS
+        L1 C/A sky, made by <code>gps-sdr-sim</code> from the real broadcast
+        ephemeris, into each receiver: by cable where possible, otherwise inside a
+        sealed Faraday cage. Every satellite is transmitted at the same constant
+        power for the whole flight, so a satellite that fades was faded by the
+        receiver, not by the signal.</p>
+    </div>
+
+    <figure>
+      <div class="panels" style="grid-template-columns:1fr">
+        <div class="panel">
+<svg class="fig-rig-block-diagram" viewBox="0 0 900 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Block diagram of the GNSS receiver test rig: ephemeris and trajectory into gps-sdr-sim, baseband to a HackRF through attenuators into the receiver, then capture, classification and comparison against the injected trajectory">
+<defs>
+  <marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7"
+          markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 1 L 7 4 L 0 7 z" fill="var(--ink-3, #79808F)"/>
+  </marker>
+</defs>
+<style>:where(svg.fig-rig-block-diagram) .bl{font-family:var(--f-display,sans-serif);font-size:12.5px;font-weight:600;fill:var(--ink,#1B2230)}:where(svg.fig-rig-block-diagram) .sb{font-family:var(--f-mono,monospace);font-size:9.5px;fill:var(--ink-3,#79808F)}:where(svg.fig-rig-block-diagram) .lb{font-family:var(--f-mono,monospace);font-size:9.5px;fill:var(--ink-3,#79808F)}:where(svg.fig-rig-block-diagram) .hd{font-family:var(--f-display,sans-serif);font-size:10px;font-weight:600;
+      letter-spacing:.09em;text-transform:uppercase;fill:var(--ink-3,#79808F)}:where(svg.fig-rig-block-diagram) .ar{stroke:var(--ink-3,#79808F);stroke-width:1.3}
+</style>
+<text class="hd" x="36" y="16">Signal generation</text>
+<text class="hd" x="36" y="204">Measurement</text>
+<rect x="36" y="26" width="132" height="48" rx="5" fill="var(--surface-2, #EEF1F5)" stroke="var(--rule, #DDE2E9)" stroke-width="1"/>
+<text class="bl" x="102" y="46" text-anchor="middle">Ephemeris</text>
+<text class="sb" x="102" y="61" text-anchor="middle">BKG broadcast</text>
+<rect x="36" y="88" width="132" height="48" rx="5" fill="var(--surface-2, #EEF1F5)" stroke="var(--rule, #DDE2E9)" stroke-width="1"/>
+<text class="bl" x="102" y="108" text-anchor="middle">Trajectory</text>
+<text class="sb" x="102" y="123" text-anchor="middle">10 Hz lat/lon/alt</text>
+<rect x="198" y="57" width="104" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="250" y="77" text-anchor="middle">gps-sdr-sim</text>
+<text class="sb" x="250" y="92" text-anchor="middle">GPS L1 C/A</text>
+<rect x="332" y="57" width="109" height="48" rx="5" fill="var(--surface-2, #EEF1F5)" stroke="var(--rule, #DDE2E9)" stroke-width="1"/>
+<text class="bl" x="386" y="77" text-anchor="middle">Baseband</text>
+<text class="sb" x="386" y="92" text-anchor="middle">2.6 MSa/s .C8</text>
+<rect x="471" y="57" width="97" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="519" y="77" text-anchor="middle">HackRF One</text>
+<text class="sb" x="519" y="92" text-anchor="middle">1575.42 MHz</text>
+<rect x="598" y="57" width="104" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="650" y="77" text-anchor="middle">Attenuators</text>
+<text class="sb" x="650" y="92" text-anchor="middle">70 or 100 dB</text>
+<rect x="36" y="214" width="97" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="84" y="234" text-anchor="middle">Receiver</text>
+<text class="sb" x="84" y="249" text-anchor="middle">one of five</text>
+<rect x="163" y="214" width="97" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="211" y="234" text-anchor="middle">Capture</text>
+<text class="sb" x="211" y="249" text-anchor="middle">UART or USB</text>
+<rect x="290" y="214" width="167" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="373" y="234" text-anchor="middle">Classifier</text>
+<text class="sb" x="373" y="249" text-anchor="middle">FIX / BLOCKED / NO_LOCK</text>
+<rect x="487" y="214" width="162" height="48" rx="5" fill="var(--surface, #FFFFFF)" stroke="var(--rule-strong, #C3CAD5)" stroke-width="1"/>
+<text class="bl" x="568" y="234" text-anchor="middle">Compare</text>
+<text class="sb" x="568" y="249" text-anchor="middle">against the trajectory</text>
+<rect x="679" y="214" width="156" height="48" rx="5" fill="var(--accent-soft, #E7EDF6)" stroke="var(--accent, #2C5CA8)" stroke-width="1"/>
+<text class="bl" x="757" y="234" text-anchor="middle">Gate thresholds</text>
+<text class="sb" x="757" y="249" text-anchor="middle">velocity and altitude</text>
+<path class="ar" d="M 168 50 H 183 V 81 H 198" fill="none" marker-end="url(#ah)"/>
+<path class="ar" d="M 168 112 H 183 V 81 H 198" fill="none" marker-end="url(#ah)"/>
+<line class="ar" x1="302" y1="81" x2="332" y2="81" marker-end="url(#ah)"/>
+<line class="ar" x1="441" y1="81" x2="471" y2="81" marker-end="url(#ah)"/>
+<line class="ar" x1="568" y1="81" x2="598" y2="81" marker-end="url(#ah)"/>
+<line class="ar" x1="133" y1="238" x2="163" y2="238" marker-end="url(#ah)"/>
+<line class="ar" x1="260" y1="238" x2="290" y2="238" marker-end="url(#ah)"/>
+<line class="ar" x1="457" y1="238" x2="487" y2="238" marker-end="url(#ah)"/>
+<line class="ar" x1="649" y1="238" x2="679" y2="238" marker-end="url(#ah)"/>
+<path class="ar" d="M 650 105 V 147 H 84 V 214" fill="none" marker-end="url(#ah)"/>
+<text class="lb" x="367" y="140" text-anchor="middle">conducted (SMA), or radiated inside a Faraday cage</text>
+<path class="ar" d="M 36 112 H 15 V 296 H 568 V 262" fill="none" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+<text class="lb" x="291" y="310" text-anchor="middle">the same trajectory is the ground truth</text>
+</svg>
+        </div>
+      </div>
+      <figcaption>The bench. The trajectory drives <code>gps-sdr-sim</code> and is
+        the ground truth every capture is compared against.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <p><strong>Two boosts, one sky.</strong> Both flights hold 180&nbsp;s on the
+        pad and then burn: 11.9&nbsp;s peaking at 13.5&nbsp;g, or 60.2&nbsp;s peaking
+        at 2.0&nbsp;g. Every receiver on the rate axis flew the same two files, with
+        the same ephemeris, start time and trajectory, so a given satellite presents
+        the same Doppler to all of them at a given moment.</p>
+      <p><strong>Measured Doppler, not modeled.</strong> The NEO-M8T logged
+        <code>RXM-RAWX</code>, which reports its own Doppler per satellite in hertz.
+        That gives two numbers per satellite: the <em>rate</em>, a least-squares
+        slope of Doppler through the burn, which is what a tracking loop has to slew
+        to follow; and the <em>peak shift</em>, how far off nominal the carrier sits.
+        Because the files are byte-identical, the same numbers apply to every part,
+        and <code>doppler_ref.py --verify</code> checks that identity before they are
+        used.</p>
+      <p><strong>Carrier loss</strong> is each satellite's carrier-to-noise through
+        the burn against its own pad baseline, from each u-blox part's
+        <code>NAV-SAT</code>. The LC86G reports RTCM MSM7 instead: per-channel
+        carrier-to-noise, its own Doppler and a carrier-phase lock counter, once a
+        second. Each channel is set against the NEO-M8T's rate for the same
+        satellite.</p>
+      <p class="note">Only GPS L1 C/A is injected, and every part here is
+        multi-constellation, so each is tracking fewer signals than it would in
+        flight. In flight each would have more satellites to lose before its fix
+        was at risk.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span>Carrier loss follows the Doppler rate</h2>
+    <div class="prose">
+      <p><strong>Doppler rate is the suspect.</strong> An L1 carrier shifts
+        5.25&nbsp;Hz for every m/s of range rate, so under acceleration the shift is
+        not merely large, it is <em>moving</em>, and the tracking loop has to slew
+        to follow it. How fast it moves depends on where the satellite sits
+        relative to the velocity vector, which for a vertical boost means it scales
+        with elevation. That gives two candidate explanations worth separating,
+        because they are different failures: the carrier moving too <em>fast</em>
+        for the loop, or the carrier simply sitting too far <em>off
+        nominal</em>.</p>
+      <p><strong>Carrier loss scales with the rate.</strong> Pooling both flights
+        onto one axis makes the gentle one the low end of a single curve rather
+        than a separate condition: its satellites never exceed 79&nbsp;Hz/s and
+        never lose carrier, while the same satellites on the same sky reach
+        501&nbsp;Hz/s under a real boost and shed 15 to 47&nbsp;dB. Above
+        300&nbsp;Hz/s the median satellite is down 14&nbsp;dB; below 100&nbsp;Hz/s
+        the median is unchanged.</p>
+    </div>
+
+    <figure>
+<svg class="fig-boost-rate" viewBox="0 0 900 432" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Per-satellite carrier-to-noise change plotted against the Doppler rate that satellite presented during the burn, pooling a 13.5 g and a 2.0 g flight across four receivers. Loss grows with rate; below 100 Hz per second there is none.">
+<style>:where(svg.fig-boost-rate) .ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}:where(svg.fig-boost-rate) .gl{stroke:var(--rule,#DDE2E9);stroke-width:1;stroke-dasharray:3 3}:where(svg.fig-boost-rate) .lbl{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-3,#79808F)}:where(svg.fig-boost-rate) .rr{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-2,#4A5261)}:where(svg.fig-boost-rate) .ttl{font-family:var(--f-display,sans-serif);font-size:11px;font-weight:600;fill:var(--ink-2,#4A5261)}</style>
+<line class="gl" x1="54" y1="328.0" x2="882" y2="328.0"/>
+<text class="lbl" x="48" y="331.0" text-anchor="end">-50</text>
+<line class="gl" x1="54" y1="282.2" x2="882" y2="282.2"/>
+<text class="lbl" x="48" y="285.2" text-anchor="end">-40</text>
+<line class="gl" x1="54" y1="236.3" x2="882" y2="236.3"/>
+<text class="lbl" x="48" y="239.3" text-anchor="end">-30</text>
+<line class="gl" x1="54" y1="190.5" x2="882" y2="190.5"/>
+<text class="lbl" x="48" y="193.5" text-anchor="end">-20</text>
+<line class="gl" x1="54" y1="144.6" x2="882" y2="144.6"/>
+<text class="lbl" x="48" y="147.6" text-anchor="end">-10</text>
+<line class="gl" x1="54" y1="98.8" x2="882" y2="98.8"/>
+<text class="lbl" x="48" y="101.8" text-anchor="end">+0</text>
+<line class="gl" x1="54" y1="52.9" x2="882" y2="52.9"/>
+<text class="lbl" x="48" y="55.9" text-anchor="end">+10</text>
+<line class="ax" x1="54" y1="98.8" x2="882" y2="98.8"/>
+<line class="ax" x1="54" y1="30" x2="54" y2="328"/>
+<text class="lbl" x="54.0" y="342" text-anchor="middle">0</text>
+<text class="lbl" x="157.5" y="342" text-anchor="middle">65</text>
+<text class="lbl" x="261.0" y="342" text-anchor="middle">130</text>
+<text class="lbl" x="364.5" y="342" text-anchor="middle">195</text>
+<text class="lbl" x="468.0" y="342" text-anchor="middle">260</text>
+<text class="lbl" x="571.5" y="342" text-anchor="middle">325</text>
+<text class="lbl" x="675.0" y="342" text-anchor="middle">390</text>
+<text class="lbl" x="778.5" y="342" text-anchor="middle">455</text>
+<text class="lbl" x="882.0" y="342" text-anchor="middle">520</text>
+<text class="lbl" x="468" y="357" text-anchor="middle">Doppler rate presented during the burn, Hz/s</text>
+<text class="lbl" transform="translate(14,179) rotate(-90)" text-anchor="middle">change in carrier-to-noise, dB</text>
+<line class="gl" x1="382.2" y1="30" x2="382.2" y2="328" stroke="var(--ink-3,#79808F)" stroke-dasharray="2 3"/>
+<text class="lbl" x="386.2" y="322">4 g at zenith = 206 Hz/s</text>
+<circle cx="509.1" cy="71.3" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<path d="M546.8,310.2 L554.8,318.2 M546.8,318.2 L554.8,310.2" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="209.9" cy="48.3" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="326.7" cy="103.4" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="371.2" cy="66.7" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="257.1" cy="103.4" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="544.5" cy="89.6" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="656.6" cy="107.9" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="469.1" cy="101.1" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<path d="M847.1,269.0 L855.1,277.0 M847.1,277.0 L855.1,269.0" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="140.2" cy="57.5" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="235.2" cy="133.2" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<circle cx="509.1" cy="158.4" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="550.8" cy="130.9" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="209.9" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="326.7" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="371.2" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="257.1" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="544.5" cy="153.8" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="656.6" cy="190.5" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="469.1" cy="135.4" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="851.1" cy="213.4" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="140.2" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="235.2" cy="117.1" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<circle cx="509.1" cy="85.0" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="550.8" cy="85.0" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="209.9" cy="130.9" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="326.7" cy="126.3" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="371.2" cy="126.3" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="257.1" cy="135.4" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="544.5" cy="126.3" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="656.6" cy="163.0" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="469.1" cy="121.7" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="851.1" cy="245.5" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="140.2" cy="130.9" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="235.2" cy="126.3" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<circle cx="509.1" cy="218.0" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="550.8" cy="236.3" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="209.9" cy="57.5" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="326.7" cy="80.4" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="371.2" cy="103.4" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="257.1" cy="57.5" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="544.5" cy="57.5" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="656.6" cy="222.6" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="469.1" cy="66.7" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="851.1" cy="218.0" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="140.2" cy="112.5" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="235.2" cy="112.5" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<circle cx="118.6" cy="149.2" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="122.3" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="179.3" cy="75.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="76.9" cy="135.4" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="92.3" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="99.7" cy="94.2" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="83.0" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="115.4" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="137.7" cy="103.4" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="112.2" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="158.8" cy="94.2" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="66.1" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="79.2" cy="98.8" r="3.2" fill="none" stroke="var(--accent, #29457E)" stroke-opacity="0.75"/>
+<circle cx="118.6" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="122.3" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="179.3" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="76.9" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="92.3" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="99.7" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="83.0" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="115.4" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="137.7" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="112.2" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="158.8" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="66.1" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="79.2" cy="98.8" r="3.2" fill="none" stroke="var(--blocked, #A2660A)" stroke-opacity="0.75"/>
+<circle cx="118.6" cy="98.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="122.3" cy="107.9" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="179.3" cy="103.4" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="76.9" cy="98.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="92.3" cy="103.4" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="99.7" cy="43.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="83.0" cy="103.4" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="115.4" cy="103.4" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="137.7" cy="75.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="112.2" cy="103.4" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="158.8" cy="39.2" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="66.1" cy="98.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="79.2" cy="98.8" r="3.2" fill="none" stroke="var(--fix, #0E7C66)" stroke-opacity="0.75"/>
+<circle cx="118.6" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="122.3" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="179.3" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="76.9" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="92.3" cy="112.5" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="99.7" cy="126.3" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="83.0" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="115.4" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="137.7" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="112.2" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="158.8" cy="62.1" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="66.1" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<circle cx="79.2" cy="98.8" r="3.2" fill="none" stroke="var(--nolock, #9B3535)" stroke-opacity="0.75"/>
+<text class="rr" x="880" y="43" text-anchor="end">all four receivers, both flights: n=100, r = -0.62</text>
+<circle cx="58.0" cy="371.0" r="3.2" fill="var(--accent, #29457E)" fill-opacity="0.6" stroke="var(--accent, #29457E)"/>
+<text class="lbl" x="67.0" y="374.0">ZED-F9P</text>
+<circle cx="113.2" cy="371.0" r="3.2" fill="var(--blocked, #A2660A)" fill-opacity="0.6" stroke="var(--blocked, #A2660A)"/>
+<text class="lbl" x="122.2" y="374.0">NEO-M8T</text>
+<circle cx="168.4" cy="371.0" r="3.2" fill="var(--fix, #0E7C66)" fill-opacity="0.6" stroke="var(--fix, #0E7C66)"/>
+<text class="lbl" x="177.4" y="374.0">Quescan M10</text>
+<circle cx="246.0" cy="371.0" r="3.2" fill="var(--nolock, #9B3535)" fill-opacity="0.6" stroke="var(--nolock, #9B3535)"/>
+<text class="lbl" x="255.0" y="374.0">Beitian BN-182</text>
+<circle cx="340.4" cy="371.0" r="3.2" fill="none" stroke="var(--ink-3,#79808F)"/>
+<text class="lbl" x="349.4" y="374.0">hollow = 2.0 g flight</text>
+<path d="M471.0,367.0 L479.0,375.0 M471.0,375.0 L479.0,367.0" stroke="var(--ink-3,#79808F)" stroke-width="1.8" fill="none"/>
+<text class="lbl" x="484.0" y="374.0">lost lock</text>
+<text class="lbl" x="54" y="394">Every point is one satellite on one receiver. Doppler rate is measured from RXM-RAWX on a byte-identical scenario, so the same satellite</text>
+<text class="lbl" x="54" y="406">presents the same rate in all four runs. GPS:11 is absent: it presented the highest rate of any satellite and its raw measurement dropped</text>
+<text class="lbl" x="54" y="418">out through the burn, so its rate cannot be measured.</text>
+</svg>
+      <figcaption>One hundred satellite-receiver pairs across two accelerations.
+        The relationship is the same curve throughout, which is what a
+        dose-response looks like.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <p><strong>And it is the rate, not the shift.</strong> Peak shift is a
+        genuine control here rather than a straw man, because it is close to
+        independent of elevation &mdash; it is set mostly by the satellite's own
+        motion, and it ranges from 1.2 to 6.9&nbsp;kHz across this sky with no
+        relation to how hard the loop is working. GPS&nbsp;5 sits at 28&deg;
+        carrying the largest shift of any satellite, 6915&nbsp;Hz, and barely
+        suffers. On every one of the four the correlation against rate is the
+        stronger one, and on the ZED-F9P the shift explains essentially
+        nothing:</p>
+    </div>
+
+    <figure>
+<svg class="fig-boost-doppler" viewBox="0 0 900 422" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Carrier-to-noise change through the burn against measured Doppler rate and against peak Doppler shift. Loss tracks the rate on all four receivers and tracks the shift far more weakly.">
+<style>:where(svg.fig-boost-doppler) .ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}:where(svg.fig-boost-doppler) .gl{stroke:var(--rule,#DDE2E9);stroke-width:1;stroke-dasharray:3 3}:where(svg.fig-boost-doppler) .lbl{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-3,#79808F)}:where(svg.fig-boost-doppler) .ttl{font-family:var(--f-display,sans-serif);font-size:11px;font-weight:600;fill:var(--ink-2,#4A5261)}:where(svg.fig-boost-doppler) .rr{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-2,#4A5261)}</style>
+<text class="ttl" x="54" y="18">carrier loss vs Doppler RATE</text>
+<line class="gl" x1="54.0" y1="326.0" x2="443.0" y2="326.0"/>
+<text class="lbl" x="48.0" y="329.0" text-anchor="end">-50</text>
+<line class="gl" x1="54.0" y1="282.9" x2="443.0" y2="282.9"/>
+<text class="lbl" x="48.0" y="285.9" text-anchor="end">-40</text>
+<line class="gl" x1="54.0" y1="239.8" x2="443.0" y2="239.8"/>
+<text class="lbl" x="48.0" y="242.8" text-anchor="end">-30</text>
+<line class="gl" x1="54.0" y1="196.8" x2="443.0" y2="196.8"/>
+<text class="lbl" x="48.0" y="199.8" text-anchor="end">-20</text>
+<line class="gl" x1="54.0" y1="153.7" x2="443.0" y2="153.7"/>
+<text class="lbl" x="48.0" y="156.7" text-anchor="end">-10</text>
+<line class="gl" x1="54.0" y1="110.6" x2="443.0" y2="110.6"/>
+<text class="lbl" x="48.0" y="113.6" text-anchor="end">+0</text>
+<line class="gl" x1="54.0" y1="67.5" x2="443.0" y2="67.5"/>
+<text class="lbl" x="48.0" y="70.5" text-anchor="end">+10</text>
+<line class="ax" x1="54.0" y1="110.6" x2="443.0" y2="110.6"/>
+<line class="ax" x1="54.0" y1="46.0" x2="54.0" y2="326.0"/>
+<text class="lbl" x="54.0" y="340.0" text-anchor="middle">0</text>
+<text class="lbl" x="151.2" y="340.0" text-anchor="middle">140</text>
+<text class="lbl" x="248.5" y="340.0" text-anchor="middle">280</text>
+<text class="lbl" x="345.8" y="340.0" text-anchor="middle">420</text>
+<text class="lbl" x="443.0" y="340.0" text-anchor="middle">560</text>
+<text class="lbl" x="248.5" y="354.0" text-anchor="middle">Doppler rate through the burn, Hz/s</text>
+<circle cx="252.5" cy="84.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<path d="M266.7,309.1 L274.7,317.1 M266.7,317.1 L274.7,309.1" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="122.0" cy="63.2" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="173.0" cy="114.9" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="192.4" cy="80.5" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="142.6" cy="114.9" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="268.0" cy="102.0" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="316.9" cy="119.2" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="235.1" cy="112.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<path d="M397.8,270.3 L405.8,278.3 M397.8,278.3 L405.8,270.3" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="91.6" cy="71.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="133.0" cy="142.9" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<text class="rr" x="441.0" y="58.0" text-anchor="end">ZED-F9P  r = -0.60</text>
+<circle cx="252.5" cy="166.6" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="270.7" cy="140.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="122.0" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="173.0" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="192.4" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="142.6" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="268.0" cy="162.3" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="316.9" cy="196.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="235.1" cy="145.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="401.8" cy="218.3" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="91.6" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="133.0" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<text class="rr" x="441.0" y="70.0" text-anchor="end">NEO-M8T  r = -0.91</text>
+<circle cx="252.5" cy="97.7" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="270.7" cy="97.7" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="122.0" cy="140.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="173.0" cy="136.5" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="192.4" cy="136.5" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="142.6" cy="145.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="268.0" cy="136.5" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="316.9" cy="170.9" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="235.1" cy="132.2" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="401.8" cy="248.5" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="91.6" cy="140.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="133.0" cy="136.5" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<text class="rr" x="441.0" y="82.0" text-anchor="end">Quescan M10  r = -0.49</text>
+<circle cx="252.5" cy="222.6" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="270.7" cy="239.8" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="122.0" cy="71.8" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="173.0" cy="93.4" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="192.4" cy="114.9" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="142.6" cy="71.8" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="268.0" cy="71.8" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="316.9" cy="226.9" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="235.1" cy="80.5" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="401.8" cy="222.6" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="91.6" cy="123.5" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="133.0" cy="123.5" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<text class="rr" x="441.0" y="94.0" text-anchor="end">Beitian BN-182  r = -0.66</text>
+<text class="ttl" x="495" y="18">carrier loss vs Doppler SHIFT</text>
+<line class="gl" x1="495.0" y1="326.0" x2="884.0" y2="326.0"/>
+<line class="gl" x1="495.0" y1="282.9" x2="884.0" y2="282.9"/>
+<line class="gl" x1="495.0" y1="239.8" x2="884.0" y2="239.8"/>
+<line class="gl" x1="495.0" y1="196.8" x2="884.0" y2="196.8"/>
+<line class="gl" x1="495.0" y1="153.7" x2="884.0" y2="153.7"/>
+<line class="gl" x1="495.0" y1="110.6" x2="884.0" y2="110.6"/>
+<line class="gl" x1="495.0" y1="67.5" x2="884.0" y2="67.5"/>
+<line class="ax" x1="495.0" y1="110.6" x2="884.0" y2="110.6"/>
+<line class="ax" x1="495.0" y1="46.0" x2="495.0" y2="326.0"/>
+<text class="lbl" x="495.0" y="340.0" text-anchor="middle">0.0</text>
+<text class="lbl" x="592.2" y="340.0" text-anchor="middle">1.8</text>
+<text class="lbl" x="689.5" y="340.0" text-anchor="middle">3.6</text>
+<text class="lbl" x="786.8" y="340.0" text-anchor="middle">5.4</text>
+<text class="lbl" x="884.0" y="340.0" text-anchor="middle">7.2</text>
+<text class="lbl" x="689.5" y="354.0" text-anchor="middle">peak Doppler shift, kHz</text>
+<circle cx="868.6" cy="84.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<path d="M596.2,309.1 L604.2,317.1 M596.2,317.1 L604.2,309.1" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<path d="M831.5,274.6 L839.5,282.6 M831.5,282.6 L839.5,274.6" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="747.1" cy="63.2" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="627.9" cy="114.9" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="666.5" cy="80.5" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="561.7" cy="114.9" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="679.0" cy="102.0" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="862.1" cy="119.2" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="740.2" cy="112.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<path d="M783.8,270.3 L791.8,278.3 M783.8,278.3 L791.8,270.3" stroke="var(--accent, #29457E)" stroke-width="1.8" fill="none"/>
+<circle cx="633.0" cy="71.8" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<circle cx="618.1" cy="142.9" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<text class="rr" x="882.0" y="58.0" text-anchor="end">ZED-F9P  r = -0.07</text>
+<circle cx="868.6" cy="166.6" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="600.2" cy="140.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="835.5" cy="179.5" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="747.1" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="627.9" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="666.5" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="561.7" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="679.0" cy="162.3" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="862.1" cy="196.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="740.2" cy="145.1" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="787.8" cy="218.3" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="633.0" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<circle cx="618.1" cy="127.8" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<text class="rr" x="882.0" y="70.0" text-anchor="end">NEO-M8T  r = -0.74</text>
+<circle cx="868.6" cy="97.7" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="600.2" cy="97.7" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="835.5" cy="175.2" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="747.1" cy="140.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="627.9" cy="136.5" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="666.5" cy="136.5" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="561.7" cy="145.1" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="679.0" cy="136.5" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="862.1" cy="170.9" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="740.2" cy="132.2" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="787.8" cy="248.5" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="633.0" cy="140.8" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<circle cx="618.1" cy="136.5" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<text class="rr" x="882.0" y="82.0" text-anchor="end">Quescan M10  r = -0.32</text>
+<circle cx="868.6" cy="222.6" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="600.2" cy="239.8" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="835.5" cy="162.3" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="747.1" cy="71.8" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="627.9" cy="93.4" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="666.5" cy="114.9" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="561.7" cy="71.8" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="679.0" cy="71.8" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="862.1" cy="226.9" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="740.2" cy="80.5" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="787.8" cy="222.6" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="633.0" cy="123.5" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<circle cx="618.1" cy="123.5" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<text class="rr" x="882.0" y="94.0" text-anchor="end">Beitian BN-182  r = -0.49</text>
+<circle cx="58.0" cy="365.0" r="3" fill="var(--accent, #29457E)" fill-opacity="0.55" stroke="var(--accent, #29457E)"/>
+<text class="lbl" x="67.0" y="368.0">ZED-F9P</text>
+<circle cx="113.2" cy="365.0" r="3" fill="var(--blocked, #A2660A)" fill-opacity="0.55" stroke="var(--blocked, #A2660A)"/>
+<text class="lbl" x="122.2" y="368.0">NEO-M8T</text>
+<circle cx="168.4" cy="365.0" r="3" fill="var(--fix, #0E7C66)" fill-opacity="0.55" stroke="var(--fix, #0E7C66)"/>
+<text class="lbl" x="177.4" y="368.0">Quescan M10</text>
+<circle cx="246.0" cy="365.0" r="3" fill="var(--nolock, #9B3535)" fill-opacity="0.55" stroke="var(--nolock, #9B3535)"/>
+<text class="lbl" x="255.0" y="368.0">Beitian BN-182</text>
+<path d="M337.4,361.0 L345.4,369.0 M337.4,369.0 L345.4,361.0" stroke="var(--ink-3,#79808F)" stroke-width="1.8" fill="none"/>
+<text class="lbl" x="350.4" y="368.0">lost lock entirely</text>
+<text class="lbl" x="54.0" y="386.0">change in carrier-to-noise from the pad baseline to the burn, per satellite. Doppler measured from RXM-RAWX on a byte-identical scenario,</text>
+<text class="lbl" x="54.0" y="398.0">so it is the same injected signal in all four runs. GPS:11 (the highest rate of any satellite) is absent from the left panel: its raw</text>
+<text class="lbl" x="54.0" y="410.0">measurement dropped out through the burn.</text>
+</svg>
+      <figcaption>The same carrier losses plotted against each quantity. Rate on
+        the left, shift on the right, at 13.5&nbsp;g.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span>A g rating for a Hz/s problem</h2>
+    <div class="prose">
+      <p><strong>The published limit is a g number for a Hz/s problem.</strong>
+        u-blox rates the M10 to 4&nbsp;g, but a loop does not see acceleration, it
+        sees how fast its carrier is sliding &mdash; and the same 4&nbsp;g produces
+        206&nbsp;Hz/s on a satellite at zenith and 71&nbsp;Hz/s on one at 20&deg;.
+        One acceleration is therefore not one condition; it is a spread. That is
+        visible in the 13.5&nbsp;g flight, which holds 3.4&nbsp;times the rated
+        limit at its peak: split its satellites at the 4&nbsp;g-equivalent rate and
+        the ones below it are down 4&nbsp;dB while the ones above are down
+        10&nbsp;dB &mdash; same vehicle, same instant, differing only in where they
+        sit in the sky. A part flown past its rated acceleration does not fail all
+        at once, and a part kept under it is not automatically safe if something is
+        overhead.</p>
+      <p>So the mechanism has a name: the tracking loop failing to slew, not the
+        carrier sitting far off nominal. Elevation, which this analysis first used
+        to argue from, turns out to have been a sound proxy rather than a wrong one
+        &mdash; the measured rate matches
+        <code>a &times; sin(elevation) &times; 5.25</code> to within a factor of
+        0.82 to 0.98 across twelve satellites, the residual being the difference
+        between peak and mean acceleration over the burn. That is why it
+        worked.</p>
+      <p><strong>The clearest single observation is a satellite that
+        disappears.</strong> GPS&nbsp;11 sits at 70&deg;, the highest in this sky
+        and the steepest Doppler rate of any satellite in the set. Its raw
+        measurement holds steady at &minus;98&nbsp;Hz on the pad; one second after
+        ignition it reads +483&nbsp;Hz and its carrier has fallen from 48 to
+        30&nbsp;dBHz; then it vanishes from the raw output entirely for ten seconds,
+        and returns at +6302&nbsp;Hz with its carrier back at 47&nbsp;dBHz the moment
+        the burn ends. It is bracketed by the acceleration on both sides. It is
+        also, for that reason, the one satellite absent from the rate axis: the
+        instrument that would measure the stimulus is the one the stimulus
+        disabled.</p>
+      <p><strong>What actually dropped.</strong> Of the four u-blox parts, only the
+        ZED-F9P lost satellites outright, three of thirteen: GPS&nbsp;11 at 70&deg;,
+        GPS&nbsp;24 at 51&deg; and GPS&nbsp;6 at 31&deg;, each from a healthy carrier
+        to nothing. The other three leaned on the same satellites &mdash; 12 to
+        32&nbsp;dB off the two steepest &mdash; but held lock on all of them. The
+        ranking is consistent across parts even where the outcome is not.</p>
+      <p><strong>What did not drop, on these four, is the position.</strong> None of
+        them went to no-lock during either burn. Losing three satellites out of
+        thirteen costs geometry, not a fix. On the u-blox parts, the thing that
+        stops a position is the export gate, not the dynamics.</p>
+      <p class="note">The four parts behind these curves are all u-blox, spanning
+        three generations (M8, M10, F9) but one vendor, and the LC86G in section 05
+        fails differently. What makes the result credible is four receivers
+        agreeing, the effect scaling with acceleration, and the rate beating the
+        shift on every one of them.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">05</span>The LC86G loses the position</h2>
+    <div class="prose">
+      <p>The Quectel LC86G is the GNSS on the Tinker-Beetle rocket computer. It
+        reports its raw measurements as RTCM MSM7: per-satellite C/N&#8320;, its own
+        Doppler, and a carrier-phase lock counter, once a second. It was flown on
+        the same byte-identical files, so each of its channels can be set against
+        the Doppler rate the NEO-M8T measured for the same satellite. It fails in
+        two stages. At the 13.5&nbsp;g ignition every channel drops within the first
+        second, low and high alike. That is a common-mode failure, not per-channel
+        stress, and it happens in both of its navigation modes. Then the
+        rate-limited picture reasserts itself. The channels whose Doppler rate is
+        low relock within two seconds and hold through the rest of the burn, and
+        the others do not.</p>
+    </div>
+
+    <figure>
+      <div class="panels" style="grid-template-columns:1fr">
+        <div class="panel">
+          <h4>Quectel LC86G &mdash; which channels survive the burn <span class="badge">MSM7</span></h4>
+          <p>each channel at the Doppler rate its satellite presented, measured from the same file</p>
+<svg class="fig-lc86g-knee" viewBox="0 0 900 268" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Each LC86G channel plotted at the Doppler rate its satellite presented through the burn. At 13.5 g every channel at or below 128 Hz per second held and every one at or above 171 held lost. At 2 g every channel held; the three steepest slipped carrier phase at ignition.">
+<style>:where(svg.fig-lc86g-knee) .ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}:where(svg.fig-lc86g-knee) .lbl{font-family:var(--f-mono,monospace);font-size:10px;fill:var(--ink-3,#79808F);paint-order:stroke;stroke:var(--surface,#FFFFFF);stroke-width:3px}:where(svg.fig-lc86g-knee) .row{font-family:var(--f-display,sans-serif);font-size:12px;font-weight:600;fill:var(--ink-2,#4A5261)}:where(svg.fig-lc86g-knee) .note{font-family:var(--f-mono,monospace);font-size:10px;fill:var(--ink-2,#4A5261)}</style>
+<rect x="314.6" y="18" width="55.3" height="148" fill="var(--shade-b, rgba(41,69,126,0.24))"/>
+<text class="note" x="342.2" y="14" text-anchor="middle">knee 128-171 Hz/s</text>
+<line x1="414.9" y1="18" x2="414.9" y2="166" stroke="var(--ink-3,#79808F)" stroke-width="1" stroke-dasharray="3 3"/>
+<text class="note" x="419.9" y="28">rated 4 g, overhead: 206 Hz/s</text>
+<text class="row" x="136" y="65.0" text-anchor="end">13.5 g burn</text>
+<line class="ax" x1="150" y1="61.0" x2="870" y2="61.0"/>
+<g><title>G29 at 5&#176; elevation: 54 Hz/s -- held</title><circle cx="219.6" cy="61.0" r="12" fill="transparent"/><circle cx="219.6" cy="61.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G12 at 9&#176; elevation: 98 Hz/s -- held</title><circle cx="275.9" cy="61.0" r="12" fill="transparent"/><circle cx="275.9" cy="61.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G30 at 11&#176; elevation: 114 Hz/s -- held; carrier phase slipped at ignition</title><circle cx="296.3" cy="61.0" r="12" fill="transparent"/><circle cx="296.3" cy="61.0" r="8.5" fill="none" stroke="var(--ink-2, #4A5261)" stroke-width="1.5"/><circle cx="296.3" cy="61.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G19 at 12&#176; elevation: 128 Hz/s -- held</title><circle cx="314.0" cy="61.0" r="12" fill="transparent"/><circle cx="314.0" cy="61.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<text class="lbl" x="308.0" y="83.0" text-anchor="end">G19 12&#176; held</text>
+<g><title>G14 at 17&#176; elevation: 171 Hz/s -- lost for the rest of the burn</title><circle cx="370.2" cy="61.0" r="12" fill="transparent"/><circle cx="370.2" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<text class="lbl" x="376.2" y="83.0" text-anchor="start">G14 17&#176; lost</text>
+<g><title>G15 at 20&#176; elevation: 199 Hz/s -- lost for the rest of the burn</title><circle cx="406.1" cy="61.0" r="12" fill="transparent"/><circle cx="406.1" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G22 at 26&#176; elevation: 261 Hz/s -- lost for the rest of the burn</title><circle cx="485.2" cy="61.0" r="12" fill="transparent"/><circle cx="485.2" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G05 at 28&#176; elevation: 286 Hz/s -- lost for the rest of the burn</title><circle cx="517.4" cy="61.0" r="12" fill="transparent"/><circle cx="517.4" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G20 at 27&#176; elevation: 308 Hz/s -- lost for the rest of the burn</title><circle cx="546.1" cy="61.0" r="12" fill="transparent"/><circle cx="546.1" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G06 at 31&#176; elevation: 312 Hz/s -- lost for the rest of the burn</title><circle cx="551.1" cy="74.0" r="12" fill="transparent"/><circle cx="551.1" cy="74.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G21 at 38&#176; elevation: 378 Hz/s -- lost for the rest of the burn</title><circle cx="636.6" cy="61.0" r="12" fill="transparent"/><circle cx="636.6" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G24 at 51&#176; elevation: 501 Hz/s -- lost for the rest of the burn</title><circle cx="793.7" cy="61.0" r="12" fill="transparent"/><circle cx="793.7" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G11 at 70&#176; elevation: not measurable (steepest) -- lost for the rest of the burn</title><circle cx="864.0" cy="61.0" r="12" fill="transparent"/><circle cx="864.0" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<text class="lbl" x="864.0" y="83.0" text-anchor="end">G11 70&#176;</text>
+<text class="row" x="136" y="135.0" text-anchor="end">2 g burn</text>
+<line class="ax" x1="150" y1="131.0" x2="870" y2="131.0"/>
+<g><title>G29 at 5&#176; elevation: 8 Hz/s -- held</title><circle cx="159.7" cy="131.0" r="12" fill="transparent"/><circle cx="159.7" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G12 at 9&#176; elevation: 14 Hz/s -- held</title><circle cx="168.5" cy="144.0" r="12" fill="transparent"/><circle cx="168.5" cy="144.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G30 at 11&#176; elevation: 16 Hz/s -- held</title><circle cx="170.4" cy="118.0" r="12" fill="transparent"/><circle cx="170.4" cy="118.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G19 at 12&#176; elevation: 18 Hz/s -- held</title><circle cx="173.4" cy="131.0" r="12" fill="transparent"/><circle cx="173.4" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G14 at 17&#176; elevation: 24 Hz/s -- held</title><circle cx="180.9" cy="144.0" r="12" fill="transparent"/><circle cx="180.9" cy="144.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G15 at 20&#176; elevation: 29 Hz/s -- held</title><circle cx="186.9" cy="131.0" r="12" fill="transparent"/><circle cx="186.9" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G22 at 26&#176; elevation: 37 Hz/s -- held</title><circle cx="197.0" cy="144.0" r="12" fill="transparent"/><circle cx="197.0" cy="144.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G20 at 27&#176; elevation: 39 Hz/s -- held</title><circle cx="199.6" cy="131.0" r="12" fill="transparent"/><circle cx="199.6" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G05 at 28&#176; elevation: 41 Hz/s -- held</title><circle cx="202.2" cy="118.0" r="12" fill="transparent"/><circle cx="202.2" cy="118.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G06 at 31&#176; elevation: 43 Hz/s -- held</title><circle cx="205.2" cy="157.0" r="12" fill="transparent"/><circle cx="205.2" cy="157.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G21 at 38&#176; elevation: 53 Hz/s -- held; carrier phase slipped at ignition</title><circle cx="217.6" cy="131.0" r="12" fill="transparent"/><circle cx="217.6" cy="131.0" r="8.5" fill="none" stroke="var(--ink-2, #4A5261)" stroke-width="1.5"/><circle cx="217.6" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G24 at 51&#176; elevation: 66 Hz/s -- held; carrier phase slipped at ignition</title><circle cx="234.6" cy="131.0" r="12" fill="transparent"/><circle cx="234.6" cy="131.0" r="8.5" fill="none" stroke="var(--ink-2, #4A5261)" stroke-width="1.5"/><circle cx="234.6" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G11 at 70&#176; elevation: 79 Hz/s -- held; carrier phase slipped at ignition</title><circle cx="251.2" cy="131.0" r="12" fill="transparent"/><circle cx="251.2" cy="131.0" r="8.5" fill="none" stroke="var(--ink-2, #4A5261)" stroke-width="1.5"/><circle cx="251.2" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<line class="ax" x1="150" y1="172" x2="870" y2="172"/>
+<text class="lbl" x="150.0" y="186" text-anchor="middle">0</text>
+<text class="lbl" x="278.6" y="186" text-anchor="middle">100</text>
+<text class="lbl" x="407.1" y="186" text-anchor="middle">200</text>
+<text class="lbl" x="535.7" y="186" text-anchor="middle">300</text>
+<text class="lbl" x="664.3" y="186" text-anchor="middle">400</text>
+<text class="lbl" x="792.9" y="186" text-anchor="middle">500</text>
+<text class="lbl" x="868.0" y="186" text-anchor="end">off scale</text>
+<text class="lbl" x="150" y="202">measured Doppler rate through the burn (Hz/s)</text>
+<g><title>held through the burn</title><circle cx="156.0" cy="222.0" r="12" fill="transparent"/><circle cx="156.0" cy="222.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<text class="lbl" x="170" y="226">held through the burn</text>
+<g><title>lost for the rest of the burn</title><circle cx="386.0" cy="222.0" r="12" fill="transparent"/><circle cx="386.0" cy="222.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<text class="lbl" x="400" y="226">lost for the rest of the burn</text>
+<g><title>held, carrier phase slipped at ignition</title><circle cx="616.0" cy="222.0" r="12" fill="transparent"/><circle cx="616.0" cy="222.0" r="8.5" fill="none" stroke="var(--ink-2, #4A5261)" stroke-width="1.5"/><circle cx="616.0" cy="222.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<text class="lbl" x="630" y="226">held, carrier phase slipped at ignition</text>
+</svg>
+        </div>
+      </div>
+      <figcaption>At 13.5&nbsp;g the split is clean: every channel at or below
+        128&nbsp;Hz/s held, and every one at or above 171&nbsp;Hz/s was lost for the
+        rest of the burn. At 2&nbsp;g every channel held its carrier; the three
+        steepest slipped carrier phase at ignition.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <p>The knee sits between 128 and 171&nbsp;Hz/s. That is below the
+        206&nbsp;Hz/s its rated 4&nbsp;g would present straight overhead, so a
+        satellite near zenith is lost somewhere around 3&nbsp;g of sustained
+        acceleration. With only the four lowest satellites left, all under 13&deg;,
+        it has no fix for the rest of the burn and coast. The 2&nbsp;g flight sits
+        under the knee everywhere, and the channels show it. All thirteen held
+        46&nbsp;dBHz through the burn, and only the three steepest, at 79, 66 and
+        53&nbsp;Hz/s, slipped carrier phase at ignition. That is the same ranking the
+        u-blox parts show in carrier loss, visible here in phase, at an
+        acceleration too low to cost any carrier at all.</p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>LC86G channels through the burn (Balloon mode, MSM7)</caption>
+        <thead><tr><th>Satellite</th><th class="num">Elevation</th><th class="num">Rate at 13.5 g (Hz/s)</th><th>At 13.5 g</th><th class="num">Rate at 2 g (Hz/s)</th><th>At 2 g</th></tr></thead>
+        <tbody>
+          <tr><td>G29</td><td class="num">5&deg;</td><td class="num">54</td><td>held</td><td class="num">8</td><td>held</td></tr>
+          <tr><td>G12</td><td class="num">9&deg;</td><td class="num">98</td><td>held</td><td class="num">14</td><td>held</td></tr>
+          <tr><td>G30</td><td class="num">11&deg;</td><td class="num">114</td><td>held, phase slipped</td><td class="num">16</td><td>held</td></tr>
+          <tr><td>G19</td><td class="num">12&deg;</td><td class="num">128</td><td>held</td><td class="num">18</td><td>held</td></tr>
+          <tr><td>G14</td><td class="num">17&deg;</td><td class="num">171</td><td>lost</td><td class="num">24</td><td>held</td></tr>
+          <tr><td>G15</td><td class="num">20&deg;</td><td class="num">199</td><td>lost</td><td class="num">29</td><td>held</td></tr>
+          <tr><td>G22</td><td class="num">26&deg;</td><td class="num">261</td><td>lost</td><td class="num">37</td><td>held</td></tr>
+          <tr><td>G05</td><td class="num">28&deg;</td><td class="num">286</td><td>lost</td><td class="num">41</td><td>held</td></tr>
+          <tr><td>G20</td><td class="num">27&deg;</td><td class="num">308</td><td>lost</td><td class="num">39</td><td>held</td></tr>
+          <tr><td>G06</td><td class="num">31&deg;</td><td class="num">312</td><td>lost</td><td class="num">43</td><td>held</td></tr>
+          <tr><td>G21</td><td class="num">38&deg;</td><td class="num">378</td><td>lost</td><td class="num">53</td><td>held, phase slipped</td></tr>
+          <tr><td>G24</td><td class="num">51&deg;</td><td class="num">501</td><td>lost</td><td class="num">66</td><td>held, phase slipped</td></tr>
+          <tr><td>G11</td><td class="num">70&deg;</td><td class="num">not measurable</td><td>lost</td><td class="num">79</td><td>held, phase slipped</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>So the LC86G is the one part on this bench whose fix the boost costs. It
+        is not the export gate, which it never reached; it is the dynamics alone, at
+        ignition. On a vehicle that boosts that hard it will not have a position
+        until the descent, in either mode.</p>
+      <p><strong>Its navigation mode is a second, separate failure.</strong>
+        Everything above is Balloon mode, which the Beetle's firmware is changing to
+        select at boot. In the module's default Normal mode, on the gentle flight,
+        the navigation solution did not follow the climb: for 18&nbsp;s it reported
+        a climb rate of 1&ndash;6&nbsp;m/s with a valid 3-D fix from all 13
+        satellites while the vehicle reached 320&nbsp;m/s. That is the navigation
+        filter, not the tracking loops, and the companion report sets the two modes
+        side by side (<a href="report.html">GNSS Receiver Limits</a>, section 04).
+        After the 13.5&nbsp;g ignition Normal mode went further, publishing fixes
+        flagged valid that were 18&ndash;80&nbsp;km wrong. Replayed through the
+        Beetle's main-parachute logic, those fixes would have released the main
+        16&nbsp;km up
+        (<a href="https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1508">TinkerRocket#1508</a>).</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">06</span>What this bench cannot show</h2>
+    <div class="prose">
+      <p>One boundary decides how far this generalizes. The rig injects smooth,
+        clean, interpolated motion. A real motor adds broadband vibration that
+        modulates carrier phase directly, plume attenuation, body shadowing and
+        antenna-pattern nulls as the vehicle rolls, and a signal level well below
+        the 32&ndash;51&nbsp;dBHz delivered here &mdash; and loop stress multiplies
+        with low carrier. A loop that holds 500&nbsp;Hz/s at 45&nbsp;dBHz can fail
+        at 32. A part that sails through boost here may still drop lock on a real
+        motor, and nothing measured here contradicts that.</p>
+      <p>The rate axis is also one sky: the GPS satellites visible from one site
+        at one hour, the steepest at 70&deg;. A different sky puts different
+        satellites overhead, and the ranking follows the sky, not the satellite
+        numbers.</p>
+    </div>
+  </section>
+
+  <footer>
+    <span>Companion: <a href="report.html">GNSS Receiver Limits</a></span>
+    <span>Rig: <code>tools/gnss-cocom/</code></span>
+    <span><a href="https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/491">Issue #491</a></span>
+    <span><a href="https://github.com/osqzss/gps-sdr-sim">gps-sdr-sim</a></span>
+    <span>Cabled, or radiated only inside a sealed Faraday cage &mdash; never into open air</span>
+  </footer>
+
+</div>

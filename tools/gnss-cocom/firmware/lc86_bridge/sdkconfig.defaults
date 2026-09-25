@@ -1,0 +1,25 @@
+# The Tinker-Beetle's flight computer: an ESP32-S3RH2 booting from external
+# NOR. Flash settings follow projects/flight_computer (base 8 MB declaration,
+# 80 MHz, IDF default mode), so this image boots wherever the flight image does.
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# Console on USB-Serial-JTAG, as in the flight image. NEVER UART0 on this
+# board: its IO_MUX pins are GPIO43 (the red LED) and GPIO44 (FC_ARM), and a
+# UART0 console would drive the first and pull up the second.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# 1 kHz tick, as the flight image runs. At the IDF default of 100 Hz,
+# pdMS_TO_TICKS(5) is ZERO: the copy loop's UART read stops blocking, spins,
+# and starves IDLE0 until the task watchdog complains (seen on the first flash).
+CONFIG_FREERTOS_HZ=1000
+
+# Keep the byte stream clean: the host is reading NMEA off this port.
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+
+# No radio stacks: MINIMAL_BUILD leaves BT and WiFi out of the image entirely.
+
+# The S3's most lenient brownout level, as the flight image pins it.
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=y

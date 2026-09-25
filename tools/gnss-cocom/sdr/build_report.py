@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Assemble report.html from the editable text, the receiver data and the figures.
+"""Assemble the two reports from the editable text, the receiver data and the figures.
+
+    report.html        GNSS Receiver Limits: where each receiver stops publishing
+    boost_report.html  GNSS Under Boost: what the boost itself does to tracking
 
 Three inputs, each owned by whoever should own it:
 
-    report_text.html   the words          -- edit freely
-    report_head.html   the stylesheet     -- edit rarely
+    report_text.html, boost_report_text.html   the words   -- edit freely
+    report_head.html   the stylesheet, shared by both     -- edit rarely
     results/receivers.json + results/figures/   the measurements
 
 The prose used to live in an f-string in this file, which meant a stray brace in
@@ -12,7 +15,8 @@ a sentence broke the build and anyone editing the page had to work inside Python
 quoting. It is now a plain HTML file, read as text and never string-formatted,
 so braces, quotes and percent signs in the copy need no escaping.
 
-Placeholders in report_text.html are substituted, not formatted:
+Placeholders in the text files are substituted, not formatted. Either page may
+use any of them; each must appear on at least one page:
 
     {{GATE_TABLE_ROWS}}    rows of the comparison table
     {{FOOTNOTES}}          only the footnotes the current data actually uses
@@ -20,13 +24,16 @@ Placeholders in report_text.html are substituted, not formatted:
     {{FIG_BLOCK_DIAGRAM}}  }
     {{FIG_M8T_ALTRAMP}}    }  inline SVG from results/figures/
     {{FIG_DIP}}            }
-    {{FIG_BOOST_ELEV}}     }
+    {{FIG_BOOST_RATE}}     }
+    {{FIG_BOOST_DOPPLER}}  }
+    {{FIG_LC86_MODES}}     }
+    {{FIG_LC86_KNEE}}      }
 
 Per-receiver blurbs are marked in report_text.html as
 
     <!--#blurb px1125r--> ... <!--/blurb-->
 
-    ./build_report.py            regenerate report.html
+    ./build_report.py            regenerate both pages
     ./build_report.py --check    verify inputs without writing
 """
 
@@ -46,10 +53,19 @@ HEAD = HERE / "report_head.html"
 DATA = HERE / "results" / "receivers.json"
 OUT = HERE / "report.html"
 
+# (words, page, <title>). The title goes into the head, where the first 8 kB of
+# the page -- all a gallery reads -- can see it. Per-receiver blurbs and figure
+# notes live in the first file only.
+PAGES = [
+    (TEXT, OUT, "GNSS Receiver Limits"),
+    (HERE / "boost_report_text.html", HERE / "boost_report.html", "GNSS Under Boost"),
+]
+
 sys.path.insert(0, str(HERE))
 from receiver_table import used_footnotes, bracket        # noqa: E402
 
-CAUSE_LABEL = {"not cocom": "not COCOM", "dyn model": "dynamic model"}
+CAUSE_LABEL = {"not cocom": "not COCOM", "dyn model": "dynamic model",
+               "nav mode": "navigation mode", "mute": "all output muted"}
 
 # Which figures illustrate each receiver, and the headline shown above them.
 PLOTS = {
@@ -60,13 +76,47 @@ PLOTS = {
     "air530":   ("air530_spaceshot.svg", "air530_gentle_alt.svg"),
     "quescan_m10": ("quescan_m10_spaceshot.svg", "quescan_m10_gentle_alt.svg"),
     "beitian_bn182": ("beitian_bn182_spaceshot.svg", "beitian_bn182_gentle_alt.svg"),
+    "lc86g_normal": ("lc86g_normal_spaceshot.svg", "lc86g_normal_gentle_alt.svg"),
+    "lc86g_balloon": ("lc86g_balloon_spaceshot.svg", "lc86g_balloon_gentle_alt.svg"),
 }
-ORDER = ["px1125r", "sam_m10q", "quescan_m10", "beitian_bn182", "zed_f9p", "neo_m8t", "air530"]
+ORDER = ["px1125r", "sam_m10q", "quescan_m10", "beitian_bn182", "zed_f9p", "neo_m8t",
+         "air530", "lc86g_normal", "lc86g_balloon"]
+
+
+def scoped(svg: str, scope: str) -> str:
+    """Confine an inline figure's <style> rules to that figure.
+
+    A <style> inside inline SVG is not scoped to the SVG: every rule applies to
+    the whole page. The figures reuse short class names (.lbl, .gl, .note) with
+    different values, so whichever figure came last restyled all the others.
+    Each rule is prefixed with the figure's own class inside :where(), which
+    leaves its specificity exactly as it was.
+    """
+    m = re.search(r'<svg\b[^>]*>', svg)
+    if not m:
+        return svg
+    tag = m.group(0)
+    tag = (tag.replace('class="', f'class="{scope} ', 1) if 'class="' in tag
+           else tag[:4] + f' class="{scope}"' + tag[4:])
+
+    def rule(r):
+        sels = ", ".join(f":where(svg.{scope}) {s.strip()}" for s in r.group(1).split(","))
+        return f"{sels}{{{r.group(2)}}}"
+
+    def style(s):
+        if "@" in s.group(1):        # an at-rule would need real parsing
+            raise SystemExit(f"  !! {scope}: at-rule in a figure's <style>, cannot scope it")
+        return f"<style>{re.sub(r'([^{}]+)\{([^}]*)\}', rule, s.group(1))}</style>"
+
+    svg = svg[:m.start()] + tag + svg[m.end():]
+    return re.sub(r'<style>(.*?)</style>', style, svg, flags=re.S)
 
 
 def fig(name: str) -> str:
     p = FIG / name
-    return p.read_text().strip() if p.exists() else f"<!-- missing {name} -->"
+    if not p.exists():
+        return f"<!-- missing {name} -->"
+    return scoped(p.read_text().strip(), "fig-" + re.sub(r'[^a-z0-9]+', '-', p.stem.lower()))
 
 
 def blurbs(text: str) -> dict:
@@ -103,6 +153,8 @@ def receiver_sections(d, text) -> str:
                        r.get("velocity_blocked_min_mps"), "m/s"))
         alt = bracket(r.get("altitude_fix_max_km"),
                       r.get("altitude_blocked_min_km"), "km", "{:.2f}")
+        if alt == "--" and r.get("altitude_note"):
+            alt = r["altitude_note"]       # say why there is no bracket
         cause = (r.get("altitude_gate_cause") or "cocom").strip().lower()
         if cause != "cocom" and alt != "--":
             alt += f" <em>({CAUSE_LABEL.get(cause, cause)})</em>"
@@ -142,9 +194,10 @@ def receiver_sections(d, text) -> str:
     return "".join(out)
 
 
-def build():
+def build(text_path: Path, title: str):
+    """One page: (html, placeholders it used, unknown ones left in it, all of them)."""
     d = json.loads(DATA.read_text())
-    text = TEXT.read_text()
+    text = text_path.read_text()
     # strip the editing instructions; keep any other comments the author wrote
     text = re.sub(r'<!--\s*=+\s*\n.*?=+\s*\n-->', '', text, flags=re.S)
     text = re.sub(r'<!--#blurb \w+-->.*?<!--/blurb-->', '', text, flags=re.S)
@@ -164,13 +217,17 @@ def build():
         "{{FIG_BLOCK_DIAGRAM}}": fig("rig_block_diagram.svg"),
         "{{FIG_M8T_ALTRAMP}}": fig("neo_m8t_t2_altramp.svg"),
         "{{FIG_DIP}}": fig("air530_dip_periodicity.svg"),
-        "{{FIG_BOOST_ELEV}}": fig("boost_elevation.svg"),
+        "{{FIG_BOOST_RATE}}": fig("boost_rate.svg"),
+        "{{FIG_BOOST_DOPPLER}}": fig("boost_doppler.svg"),
+        "{{FIG_LC86_MODES}}": fig("lc86g_modes.svg"),
+        "{{FIG_LC86_KNEE}}": fig("lc86g_knee.svg"),
     }
-    missing = [k for k in fills if k not in text]
+    used = {k for k in fills if k in text}
     for k, v in fills.items():
         text = text.replace(k, v)
     left = re.findall(r'\{\{[A-Z_]+\}\}', text)
-    return HEAD.read_text() + "\n" + text.strip() + "\n", missing, left
+    head = HEAD.read_text().replace("{{TITLE}}", title)
+    return head + "\n" + text.strip() + "\n", used, left, set(fills)
 
 
 def tag_balance(text: str):
@@ -199,30 +256,39 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true",
-                    help="verify the inputs without writing report.html")
+                    help="verify the inputs without writing either page")
     args = ap.parse_args()
 
-    html, missing, left = build()
-    unbalanced = tag_balance(TEXT.read_text())
-    for name, tag, o, c in unbalanced:
-        print(f"  !! section '{name}': {o} <{tag}> but {c} </{tag}> "
-              f"-- report_text.html has an unclosed or stray tag")
-    for k in missing:
-        print(f"  !! {k} is not present in report_text.html -- that content will "
-              f"not appear on the page")
-    for k in left:
-        print(f"  !! {k} is not a placeholder this script fills")
-    if s := html.count("<!-- missing "):
-        print(f"  !! {s} figure(s) referenced but not found in results/figures/")
+    bad = False
+    used_any, every = set(), set()
+    built = []
+    for text_path, out, title in PAGES:
+        html, used, left, every = build(text_path, title)
+        used_any |= used
+        for name, tag, o, c in tag_balance(text_path.read_text()):
+            print(f"  !! section '{name}': {o} <{tag}> but {c} </{tag}> "
+                  f"-- {text_path.name} has an unclosed or stray tag")
+            bad = True
+        for k in left:
+            print(f"  !! {k} in {text_path.name} is not a placeholder this script fills")
+            bad = True
+        if s := html.count("<!-- missing "):
+            print(f"  !! {s} figure(s) referenced in {text_path.name} but not found "
+                  f"in results/figures/")
+        built.append((text_path, out, html))
+    for k in sorted(every - used_any):
+        print(f"  !! {k} is on neither page -- that content will not appear")
+        bad = True
 
+    for text_path, out, html in built:
+        if args.check:
+            print(f"  {text_path.name} {text_path.stat().st_size} bytes")
+        else:
+            out.write_text(html)
+            print(f"  {out.name} rebuilt: {len(html)} bytes")
     if args.check:
-        print(f"  report_text.html {TEXT.stat().st_size} bytes, "
-              f"{len(blurbs(TEXT.read_text()))} receiver blurbs")
-        return 0 if not (missing or left or unbalanced) else 1
-
-    OUT.write_text(html)
-    print(f"  report.html rebuilt: {len(html)} bytes")
-    return 0 if not (missing or left or unbalanced) else 1
+        print(f"  {len(blurbs(TEXT.read_text()))} receiver blurbs")
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

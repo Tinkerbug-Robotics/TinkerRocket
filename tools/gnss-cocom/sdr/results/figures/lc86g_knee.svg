@@ -1,0 +1,55 @@
+<svg viewBox="0 0 900 268" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Each LC86G channel plotted at the Doppler rate its satellite presented through the burn. At 13.5 g every channel at or below 128 Hz per second held and every one at or above 171 held lost. At 2 g every channel held; the three steepest slipped carrier phase at ignition.">
+<style>.ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}.lbl{font-family:var(--f-mono,monospace);font-size:10px;fill:var(--ink-3,#79808F);paint-order:stroke;stroke:var(--surface,#FFFFFF);stroke-width:3px}.row{font-family:var(--f-display,sans-serif);font-size:12px;font-weight:600;fill:var(--ink-2,#4A5261)}.note{font-family:var(--f-mono,monospace);font-size:10px;fill:var(--ink-2,#4A5261)}</style>
+<rect x="314.6" y="18" width="55.3" height="148" fill="var(--shade-b, rgba(41,69,126,0.24))"/>
+<text class="note" x="342.2" y="14" text-anchor="middle">knee 128-171 Hz/s</text>
+<line x1="414.9" y1="18" x2="414.9" y2="166" stroke="var(--ink-3,#79808F)" stroke-width="1" stroke-dasharray="3 3"/>
+<text class="note" x="419.9" y="28">rated 4 g, overhead: 206 Hz/s</text>
+<text class="row" x="136" y="65.0" text-anchor="end">13.5 g burn</text>
+<line class="ax" x1="150" y1="61.0" x2="870" y2="61.0"/>
+<g><title>G29 at 5&#176; elevation: 54 Hz/s -- held</title><circle cx="219.6" cy="61.0" r="12" fill="transparent"/><circle cx="219.6" cy="61.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G12 at 9&#176; elevation: 98 Hz/s -- held</title><circle cx="275.9" cy="61.0" r="12" fill="transparent"/><circle cx="275.9" cy="61.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G30 at 11&#176; elevation: 114 Hz/s -- held; carrier phase slipped at ignition</title><circle cx="296.3" cy="61.0" r="12" fill="transparent"/><circle cx="296.3" cy="61.0" r="8.5" fill="none" stroke="var(--ink-2, #4A5261)" stroke-width="1.5"/><circle cx="296.3" cy="61.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G19 at 12&#176; elevation: 128 Hz/s -- held</title><circle cx="314.0" cy="61.0" r="12" fill="transparent"/><circle cx="314.0" cy="61.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<text class="lbl" x="308.0" y="83.0" text-anchor="end">G19 12&#176; held</text>
+<g><title>G14 at 17&#176; elevation: 171 Hz/s -- lost for the rest of the burn</title><circle cx="370.2" cy="61.0" r="12" fill="transparent"/><circle cx="370.2" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<text class="lbl" x="376.2" y="83.0" text-anchor="start">G14 17&#176; lost</text>
+<g><title>G15 at 20&#176; elevation: 199 Hz/s -- lost for the rest of the burn</title><circle cx="406.1" cy="61.0" r="12" fill="transparent"/><circle cx="406.1" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G22 at 26&#176; elevation: 261 Hz/s -- lost for the rest of the burn</title><circle cx="485.2" cy="61.0" r="12" fill="transparent"/><circle cx="485.2" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G05 at 28&#176; elevation: 286 Hz/s -- lost for the rest of the burn</title><circle cx="517.4" cy="61.0" r="12" fill="transparent"/><circle cx="517.4" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G20 at 27&#176; elevation: 308 Hz/s -- lost for the rest of the burn</title><circle cx="546.1" cy="61.0" r="12" fill="transparent"/><circle cx="546.1" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G06 at 31&#176; elevation: 312 Hz/s -- lost for the rest of the burn</title><circle cx="551.1" cy="74.0" r="12" fill="transparent"/><circle cx="551.1" cy="74.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G21 at 38&#176; elevation: 378 Hz/s -- lost for the rest of the burn</title><circle cx="636.6" cy="61.0" r="12" fill="transparent"/><circle cx="636.6" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G24 at 51&#176; elevation: 501 Hz/s -- lost for the rest of the burn</title><circle cx="793.7" cy="61.0" r="12" fill="transparent"/><circle cx="793.7" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<g><title>G11 at 70&#176; elevation: not measurable (steepest) -- lost for the rest of the burn</title><circle cx="864.0" cy="61.0" r="12" fill="transparent"/><circle cx="864.0" cy="61.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<text class="lbl" x="864.0" y="83.0" text-anchor="end">G11 70&#176;</text>
+<text class="row" x="136" y="135.0" text-anchor="end">2 g burn</text>
+<line class="ax" x1="150" y1="131.0" x2="870" y2="131.0"/>
+<g><title>G29 at 5&#176; elevation: 8 Hz/s -- held</title><circle cx="159.7" cy="131.0" r="12" fill="transparent"/><circle cx="159.7" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G12 at 9&#176; elevation: 14 Hz/s -- held</title><circle cx="168.5" cy="144.0" r="12" fill="transparent"/><circle cx="168.5" cy="144.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G30 at 11&#176; elevation: 16 Hz/s -- held</title><circle cx="170.4" cy="118.0" r="12" fill="transparent"/><circle cx="170.4" cy="118.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G19 at 12&#176; elevation: 18 Hz/s -- held</title><circle cx="173.4" cy="131.0" r="12" fill="transparent"/><circle cx="173.4" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G14 at 17&#176; elevation: 24 Hz/s -- held</title><circle cx="180.9" cy="144.0" r="12" fill="transparent"/><circle cx="180.9" cy="144.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G15 at 20&#176; elevation: 29 Hz/s -- held</title><circle cx="186.9" cy="131.0" r="12" fill="transparent"/><circle cx="186.9" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G22 at 26&#176; elevation: 37 Hz/s -- held</title><circle cx="197.0" cy="144.0" r="12" fill="transparent"/><circle cx="197.0" cy="144.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G20 at 27&#176; elevation: 39 Hz/s -- held</title><circle cx="199.6" cy="131.0" r="12" fill="transparent"/><circle cx="199.6" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G05 at 28&#176; elevation: 41 Hz/s -- held</title><circle cx="202.2" cy="118.0" r="12" fill="transparent"/><circle cx="202.2" cy="118.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G06 at 31&#176; elevation: 43 Hz/s -- held</title><circle cx="205.2" cy="157.0" r="12" fill="transparent"/><circle cx="205.2" cy="157.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G21 at 38&#176; elevation: 53 Hz/s -- held; carrier phase slipped at ignition</title><circle cx="217.6" cy="131.0" r="12" fill="transparent"/><circle cx="217.6" cy="131.0" r="8.5" fill="none" stroke="var(--ink-2, #4A5261)" stroke-width="1.5"/><circle cx="217.6" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G24 at 51&#176; elevation: 66 Hz/s -- held; carrier phase slipped at ignition</title><circle cx="234.6" cy="131.0" r="12" fill="transparent"/><circle cx="234.6" cy="131.0" r="8.5" fill="none" stroke="var(--ink-2, #4A5261)" stroke-width="1.5"/><circle cx="234.6" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<g><title>G11 at 70&#176; elevation: 79 Hz/s -- held; carrier phase slipped at ignition</title><circle cx="251.2" cy="131.0" r="12" fill="transparent"/><circle cx="251.2" cy="131.0" r="8.5" fill="none" stroke="var(--ink-2, #4A5261)" stroke-width="1.5"/><circle cx="251.2" cy="131.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<line class="ax" x1="150" y1="172" x2="870" y2="172"/>
+<text class="lbl" x="150.0" y="186" text-anchor="middle">0</text>
+<text class="lbl" x="278.6" y="186" text-anchor="middle">100</text>
+<text class="lbl" x="407.1" y="186" text-anchor="middle">200</text>
+<text class="lbl" x="535.7" y="186" text-anchor="middle">300</text>
+<text class="lbl" x="664.3" y="186" text-anchor="middle">400</text>
+<text class="lbl" x="792.9" y="186" text-anchor="middle">500</text>
+<text class="lbl" x="868.0" y="186" text-anchor="end">off scale</text>
+<text class="lbl" x="150" y="202">measured Doppler rate through the burn (Hz/s)</text>
+<g><title>held through the burn</title><circle cx="156.0" cy="222.0" r="12" fill="transparent"/><circle cx="156.0" cy="222.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<text class="lbl" x="170" y="226">held through the burn</text>
+<g><title>lost for the rest of the burn</title><circle cx="386.0" cy="222.0" r="12" fill="transparent"/><circle cx="386.0" cy="222.0" r="5" fill="none" stroke="var(--nolock, #9B3535)" stroke-width="2"/></g>
+<text class="lbl" x="400" y="226">lost for the rest of the burn</text>
+<g><title>held, carrier phase slipped at ignition</title><circle cx="616.0" cy="222.0" r="12" fill="transparent"/><circle cx="616.0" cy="222.0" r="8.5" fill="none" stroke="var(--ink-2, #4A5261)" stroke-width="1.5"/><circle cx="616.0" cy="222.0" r="5" fill="var(--fix, #0E7C66)" stroke="var(--surface, #FFFFFF)" stroke-width="2"/></g>
+<text class="lbl" x="630" y="226">held, carrier phase slipped at ignition</text>
+</svg>

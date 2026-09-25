@@ -1,0 +1,91 @@
+{
+ "source": "neo_m8t_spaceshot.log.gz",
+ "scenario": "spaceshot",
+ "offset_s": 4.3,
+ "burn_s": [
+  180.0,
+  191.9
+ ],
+ "peak_accel_g": 13.5,
+ "shared_with": [
+  "zed_f9p",
+  "quescan_m10",
+  "beitian_bn182"
+ ],
+ "min_in_burn": 5,
+ "dropped_out": [
+  "0:11"
+ ],
+ "sats": {
+  "0:5": {
+   "rate_hzs": 285.78179024281485,
+   "peak_shift_hz": 6914.94921875,
+   "n_in_burn": 9
+  },
+  "0:6": {
+   "rate_hzs": 311.9947124275407,
+   "peak_shift_hz": 1948.017822265625,
+   "n_in_burn": 7
+  },
+  "0:11": {
+   "rate_hzs": null,
+   "peak_shift_hz": 6301.9375,
+   "n_in_burn": 3
+  },
+  "0:12": {
+   "rate_hzs": 97.8893891471478,
+   "peak_shift_hz": 4666.71044921875,
+   "n_in_burn": 12
+  },
+  "0:13": {
+   "rate_hzs": 122.29110067177555,
+   "peak_shift_hz": 5214.5556640625,
+   "n_in_burn": 12
+  },
+  "0:14": {
+   "rate_hzs": 171.24003474631488,
+   "peak_shift_hz": 2459.1689453125,
+   "n_in_burn": 11
+  },
+  "0:15": {
+   "rate_hzs": 199.22105960838763,
+   "peak_shift_hz": 3174.316162109375,
+   "n_in_burn": 11
+  },
+  "0:19": {
+   "rate_hzs": 127.57388378794498,
+   "peak_shift_hz": 1234.661865234375,
+   "n_in_burn": 12
+  },
+  "0:20": {
+   "rate_hzs": 308.0564237189382,
+   "peak_shift_hz": 3405.950927734375,
+   "n_in_burn": 5
+  },
+  "0:21": {
+   "rate_hzs": 378.45988916009753,
+   "peak_shift_hz": 6795.13134765625,
+   "n_in_burn": 5
+  },
+  "0:22": {
+   "rate_hzs": 260.68361051596276,
+   "peak_shift_hz": 4539.21630859375,
+   "n_in_burn": 8
+  },
+  "0:24": {
+   "rate_hzs": 500.6210676835515,
+   "peak_shift_hz": 5418.8916015625,
+   "n_in_burn": 5
+  },
+  "0:29": {
+   "rate_hzs": 54.12501256037869,
+   "peak_shift_hz": 2553.70849609375,
+   "n_in_burn": 12
+  },
+  "0:30": {
+   "rate_hzs": 113.77729431791178,
+   "peak_shift_hz": 2278.70361328125,
+   "n_in_burn": 12
+  }
+ }
+}

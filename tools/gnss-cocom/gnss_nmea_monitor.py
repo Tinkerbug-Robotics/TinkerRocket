@@ -63,6 +63,7 @@ from ublox_binary import (iter_frames as ubx_iter_frames,
                           MSG_NAV_SAT)
 from skytraq_binary import (MSG_RCV_STATE, MSG_SV_CH_STATUS, iter_frames, key,
                             parse_rcv_state, parse_sv_ch_status)
+import rtcm3
 
 # USB vendor IDs of the MCUs the passthrough firmware supports.  Espressif
 # covers the ESP32-S3/C3 builds; Raspberry Pi covers the RP2040 build, which is
@@ -147,6 +148,15 @@ class Epoch:
     rmc_status: str = ""       # 'A' valid, 'V' warning (no fix)
     speed_mps: float = None
 
+    # Quectel $PQTMPVT (the Tinker-Beetle's LC86G). Its <TOW> is GPS time of
+    # week in ms, which times the epoch exactly: this part's GGA/RMC UTC runs
+    # 18 s behind the injected clock, because it applies a leap-second count
+    # the simulated signal does not carry. pvt_seq counts PVT sentences so a
+    # consumer can tell whether one arrived for the current epoch.
+    gps_tow_s: float = None
+    pvt_seq: int = 0
+    vel_d_mps: float = None
+
     # Binary only: the receiver's stated navigation state, which is better
     # evidence than an inferred one -- NMEA leaves you guessing from empty
     # fields, while 0xDF says NO_FIX / FIX_2D / FIX_3D / FIX_DIFFERENTIAL.
@@ -210,6 +220,8 @@ class Parser:
 
     def feed(self, sentence: str) -> bool:
         """Parse one sentence. Returns True if the checksum was valid."""
+        if not isinstance(sentence, str):   # an RTCM body on the text path
+            return False
         sentence = sentence.strip()
         if not sentence.startswith("$"):
             return False
@@ -223,7 +235,9 @@ class Parser:
         talker, kind = fields[0][:2], fields[0][2:]
         self.counts[fields[0]] += 1
 
-        if kind == "GGA":
+        if fields[0] == "PQTMPVT":
+            self._pqtmpvt(fields)
+        elif kind == "GGA":
             self._gga(fields)
         elif kind == "RMC":
             self._rmc(fields)
@@ -368,6 +382,39 @@ class Parser:
         if len(f) < 3:
             return
         self.epoch.fix_type = _i(f[2]) or 0
+
+    def _pqtmpvt(self, f):
+        # $PQTMPVT,MsgVer,TOW(ms),Date,Time,Quality,FixMode,NumSatUsed,LeapS,
+        #          Lat,Lon,Alt,Sep,VelN,VelE,VelD,Spd,Heading,HDOP,PDOP
+        # (Quectel LC26G/LC76G/LC86G GNSS Protocol Specification V1.4, 2.3.8)
+        if len(f) < 16:
+            return
+        e = self.epoch
+        tow = _f(f[2])
+        if tow is not None:
+            e.gps_tow_s = tow / 1000.0
+            e.pvt_seq += 1
+        # The fix is PQTMPVT's to declare, not GGA's. On the LC86G the two
+        # disagree: through a 15 g coast GGA claimed a 3-satellite fix at
+        # 18 km (29 km injected) while PQTMPVT said FixMode 0 -- and the
+        # Tinker-Beetle's driver reads PQTMPVT, zeroing the fix when <Quality>
+        # is 0. PQTMPVT follows GGA within each epoch, so it has the last word.
+        quality, fix_mode = _i(f[5]) or 0, _i(f[6]) or 0
+        good = quality > 0 and fix_mode >= 2
+        e.fix_quality = quality if good else 0
+        e.fix_type = fix_mode if good else 1
+        e.lat = _f(f[9]) if good else None
+        e.lon = _f(f[10]) if good else None
+        e.alt_m = _f(f[11]) if good else None
+        e.sats_used = _i(f[7]) or 0
+        vn, ve, vd = _f(f[13]), _f(f[14]), _f(f[15])
+        e.vel_d_mps = vd
+        # 3-D speed, as the COCOM limit is: a rocket's velocity is almost all
+        # vertical, so RMC's ground speed reads near zero exactly where the
+        # limit applies. Empty fields (no fix) clear it rather than leave the
+        # last good value standing in every withheld epoch after it.
+        e.speed_mps = ((vn * vn + ve * ve + vd * vd) ** 0.5
+                       if None not in (vn, ve, vd) else None)
 
     def _gsv(self, talker, f):
         # $xxGSV,total,msg,inview,(prn,elev,az,cn0)*4
@@ -647,8 +694,14 @@ def run(source, args, log_fh):
     return parser, transitions, verdict_time, last_t
 
 
-def _demux(buf: bytearray):
+def _demux(buf: bytearray, rtcm: bool = False):
     """Split a raw stream into ('bin', payload) and ('nmea', line) events.
+
+    rtcm=True is the LC86G's stream: NMEA text plus RTCM3 frames (MSM7 raw
+    measurements), yielded as ('rtcm', body). That mode runs ONLY the RTCM
+    extractor -- an RTCM body can contain A0 A1 or B5 62, and the SkyTraq and
+    UBX extractors would then chew on it -- and the default leaves every other
+    receiver's stream handled exactly as before.
 
     Binary frames are extracted first because they are self-delimiting and end
     with 0D 0A -- split the stream on newlines first and every frame shatters
@@ -662,12 +715,16 @@ def _demux(buf: bytearray):
     # correct for a stream of their own protocol and catastrophic for the other
     # one's. Calling the SkyTraq extractor unconditionally on a pure-UBX stream
     # deletes every frame before the UBX extractor is even reached.
-    if buf.find(b"\xa0\xa1") >= 0:
-        for payload in iter_frames(buf):
-            yield "bin", payload
-    if buf.find(b"\xb5\x62") >= 0:
-        for cls, mid, payload in ubx_iter_frames(buf):
-            yield "ubx", bytes([cls, mid]) + payload
+    if rtcm:
+        for body in rtcm3.iter_frames(buf):
+            yield "rtcm", body
+    else:
+        if buf.find(b"\xa0\xa1") >= 0:
+            for payload in iter_frames(buf):
+                yield "bin", payload
+        if buf.find(b"\xb5\x62") >= 0:
+            for cls, mid, payload in ubx_iter_frames(buf):
+                yield "ubx", bytes([cls, mid]) + payload
     # Neither extractor ran and there is no line ending: bound the buffer so a
     # stream of pure noise cannot grow it without limit.
     if len(buf) > 65536 and b"\n" not in buf:
@@ -678,8 +735,11 @@ def _demux(buf: bytearray):
             break
         # Stop if a frame preamble begins before this newline: that frame is
         # still arriving, and its body may legitimately contain 0x0A.
-        pre = min((x for x in (buf.find(b"\xa0\xa1"), buf.find(b"\xb5\x62"))
-                   if x >= 0), default=-1)
+        if rtcm:
+            pre = rtcm3.pending_frame_start(buf)
+        else:
+            pre = min((x for x in (buf.find(b"\xa0\xa1"), buf.find(b"\xb5\x62"))
+                       if x >= 0), default=-1)
         if 0 <= pre < nl:
             break
         line = bytes(buf[:nl]).decode("ascii", errors="replace").strip()
@@ -716,7 +776,8 @@ def serial_source(ser, deadline):
 
 def replay_source(path):
     """Replay a capture. Lines are 'TS text', 'TS B <hex>' for SkyTraq frames,
-    or 'TS U <hex>' for UBX frames (class+id then payload)."""
+    'TS U <hex>' for UBX frames (class+id then payload), or 'TS R <hex>' for an
+    RTCM3 message body (the LC86G's MSM7)."""
     with open(path, "r", errors="replace") as fh:
         for raw in fh:
             raw = raw.rstrip("\n")
@@ -729,9 +790,9 @@ def replay_source(path):
                 # A capture without timestamps still replays, just untimed.
                 yield 0.0, "nmea", raw
                 continue
-            if rest[:2] in ("B ", "U "):
+            if rest[:2] in ("B ", "U ", "R "):
                 try:
-                    yield t, ("bin" if rest[0] == "B" else "ubx"), \
+                    yield t, {"B": "bin", "U": "ubx", "R": "rtcm"}[rest[0]], \
                         bytes.fromhex(rest[2:])
                 except ValueError:
                     pass

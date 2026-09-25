@@ -1,4 +1,7 @@
-<title>Phoenix COCOM Gate</title>
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
@@ -18,6 +21,9 @@
     --fix:         #0E7C66;
     --blocked:     #A2660A;
     --nolock:      #9B3535;
+    --wrongfix:    #6D3FA8;
+    --mode-normal: #eb6834;   /* LC86G Normal-mode series */
+    --mode-balloon:#2a78d6;   /* LC86G Balloon-mode series */
     --shade-a:     rgba(41, 69, 126, 0.10);
     --shade-b:     rgba(41, 69, 126, 0.24);
 
@@ -31,6 +37,7 @@
 
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
+      color-scheme: dark;
       --ground:      #101218;
       --surface:     #181B23;
       --surface-2:   #1F232D;
@@ -44,12 +51,16 @@
       --fix:         #43C2A2;
       --blocked:     #DFA23F;
       --nolock:      #E07777;
+      --wrongfix:    #B592EE;
+      --mode-normal: #d95926;
+      --mode-balloon:#3987e5;
       --shade-a:     rgba(141, 174, 226, 0.12);
       --shade-b:     rgba(141, 174, 226, 0.28);
     }
   }
 
   :root[data-theme="dark"] {
+    color-scheme: dark;
     --ground:      #101218;
     --surface:     #181B23;
     --surface-2:   #1F232D;
@@ -63,6 +74,9 @@
     --fix:         #43C2A2;
     --blocked:     #DFA23F;
     --nolock:      #E07777;
+    --wrongfix:    #B592EE;
+    --mode-normal: #d95926;
+    --mode-balloon:#3987e5;
     --shade-a:     rgba(141, 174, 226, 0.12);
     --shade-b:     rgba(141, 174, 226, 0.28);
   }
@@ -144,7 +158,7 @@
   }
 
   /* ---- figure ---- */
-  figure { margin: 2rem 0 0; }
+  figure { margin: 2rem 0 1.4rem; }
   .panels {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: 1.5rem; background: var(--surface); border: 1px solid var(--rule);
@@ -196,7 +210,7 @@
   }
 
   /* ---- tables ---- */
-  .scroll { overflow-x: auto; margin: 1.6rem 0 0; }
+  .scroll { overflow-x: auto; margin: 1.6rem 0 1.1rem; }
   table {
     border-collapse: collapse; width: 100%; min-width: 560px;
     font-family: var(--f-mono); font-size: 0.78rem;
