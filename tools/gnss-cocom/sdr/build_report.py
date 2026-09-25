@@ -77,9 +77,10 @@ PLOTS = {
     "beitian_bn182": ("beitian_bn182_spaceshot.svg", "beitian_bn182_gentle_alt.svg"),
     "lc86g_normal": ("lc86g_normal_spaceshot.svg", "lc86g_normal_gentle_alt.svg"),
     "lc86g_balloon": ("lc86g_balloon_spaceshot.svg", "lc86g_balloon_gentle_alt.svg"),
+    "lc86g_drone": ("lc86g_drone_spaceshot.svg", "lc86g_drone_gentle_alt.svg"),
 }
 ORDER = ["px1125r", "sam_m10q", "quescan_m10", "beitian_bn182", "zed_f9p", "neo_m8t",
-         "air530", "lc86g_normal", "lc86g_balloon"]
+         "air530", "lc86g_normal", "lc86g_balloon", "lc86g_drone"]
 
 
 def scoped(svg: str, scope: str) -> str:

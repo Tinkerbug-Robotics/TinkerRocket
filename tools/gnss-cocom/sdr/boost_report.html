@@ -24,6 +24,7 @@
     --wrongfix:    #6D3FA8;
     --mode-normal: #eb6834;   /* LC86G Normal-mode series */
     --mode-balloon:#2a78d6;   /* LC86G Balloon-mode series */
+    --mode-drone:  #1baf7a;   /* LC86G Drone-mode series */
     --shade-a:     rgba(41, 69, 126, 0.10);
     --shade-b:     rgba(41, 69, 126, 0.24);
 
@@ -54,6 +55,7 @@
       --wrongfix:    #B592EE;
       --mode-normal: #d95926;
       --mode-balloon:#3987e5;
+      --mode-drone:  #199e70;
       --shade-a:     rgba(141, 174, 226, 0.12);
       --shade-b:     rgba(141, 174, 226, 0.28);
     }
@@ -77,6 +79,7 @@
     --wrongfix:    #B592EE;
     --mode-normal: #d95926;
     --mode-balloon:#3987e5;
+    --mode-drone:  #199e70;
     --shade-a:     rgba(141, 174, 226, 0.12);
     --shade-b:     rgba(141, 174, 226, 0.28);
   }
@@ -230,6 +233,7 @@
     border-bottom: 1px solid var(--rule-strong); white-space: nowrap;
   }
   td.num { text-align: right; padding-right: 1.4rem; }
+  table.nowrap td { white-space: nowrap; }   /* "1.36 km, 78 m/s" stays one line; the table scrolls instead */
   tbody tr:last-child td { border-bottom: none; }
   .id { color: var(--accent); font-weight: 500; white-space: nowrap; }
   .pending { color: var(--ink-3); }
@@ -970,7 +974,7 @@
         the Doppler rate the NEO-M8T measured for the same satellite. It fails in
         two stages. At the 13.5&nbsp;g ignition every channel drops within the first
         second, low and high alike. That is a common-mode failure, not per-channel
-        stress, and it happens in both of its navigation modes. Then the
+        stress, and it happens in all three navigation modes flown. Then the
         rate-limited picture reasserts itself. The channels whose Doppler rate is
         low relock within two seconds and hold through the rest of the burn, and
         the others do not.</p>
@@ -1083,20 +1087,29 @@
       <p>So the LC86G is the one part on this bench whose fix the boost costs. It
         is not the export gate, which it never reached; it is the dynamics alone, at
         ignition. On a vehicle that boosts that hard it will not have a position
-        until the descent, in either mode.</p>
+        until the descent, whatever its navigation mode.</p>
       <p><strong>Its navigation mode is a second, separate failure.</strong>
         Everything above is Balloon mode. In the module's power-up default, Normal
         mode, on the gentle flight,
         the navigation solution did not follow the climb: for 18&nbsp;s it reported
         a climb rate of 1&ndash;6&nbsp;m/s with a valid 3-D fix from all 13
         satellites while the vehicle reached 320&nbsp;m/s. That is the navigation
-        filter, not the tracking loops, and the companion report sets the two modes
+        filter, not the tracking loops, and the companion report sets the modes
         side by side (<a href="report.html">GNSS Receiver Limits</a>, section 04).
         After the 13.5&nbsp;g ignition Normal mode went further, publishing fixes
         flagged valid that were 18&ndash;80&nbsp;km wrong. Nothing in those fixes
         marks them as bad, so a flight computer that trusts the valid flag takes
         them as they are, including one that falls back on GNSS altitude to deploy
         a main parachute.</p>
+      <p><strong>Drone mode, flown on a later day, relocked nothing during the burn.</strong> It
+        lost every channel at the 13.5&nbsp;g ignition like the other two modes,
+        but its raw measurements carry no channel at all from ignition until
+        242&nbsp;s, 50&nbsp;s after burnout, where Balloon mode had its four low
+        satellites back within 2&nbsp;s. That run's signal was about 3&nbsp;dB
+        weaker on the pad, 42 against 45&nbsp;dBHz, so it does not separate the
+        mode from the signal level. On the gentle flight Drone mode followed the
+        climb as closely as Balloon mode, but its altitude was about a second
+        old: 0.45&nbsp;km low at 496&nbsp;m/s.</p>
     </div>
   </section>
 

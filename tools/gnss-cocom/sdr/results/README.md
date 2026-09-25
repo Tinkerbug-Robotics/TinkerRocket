@@ -312,8 +312,8 @@ Every part that gates velocity at the COCOM figure brackets it to
 output. The Air530 has no velocity gate to 900 m/s and a 10-11 km ceiling that is
 not an export limit. What varies enormously is **re-open latency**: under 1.5 s
 on most parts and 0.1 s on the LC86G in Balloon mode, but 5-11 s on the Quescan
-and the Beitian. In Normal mode, which the table leaves out, the LC86G never
-re-opened at all.
+and the Beitian. In Normal and Drone mode, which the table leaves out, the LC86G
+never re-opened after its 500 m/s mute.
 
 To add another part: fly
 `spaceshot` and `gentle_alt`, archive the capture and its scenario here, add an
@@ -376,6 +376,12 @@ Balloon mode. The likely cause is its own navigation state -- it never believed
 the climb, so its predicted Doppler was off by kilohertz -- but that is inferred
 from the pattern. The Normal-mode flights had no RTCM MSM7 on; re-flying one with
 it would show each channel's measured Doppler against where it should have been.
+Drone mode fails the same way and that explanation does not cover it: it followed
+the climb, and after its mute it kept a median of 13 channels at 42 dBHz, yet
+reported no fix and no satellites used for the ten minutes to landing. Its
+flights had MSM7 on, so each channel's Doppler after the mute can be set against
+the NEO-M8T's RXM-RAWX on the same file, which `doppler_ref.py` already reads --
+no new hardware needed.
 
 ## Quescan M10, radiated (2026-08-28)
 
@@ -518,7 +524,7 @@ driver's `begin()` command for command -- GGA every fix, GSV every 10th,
 `$PQTMPVT` and `$PQTMEPE` every fix, 10 Hz -- and reads every setting back.
 Nothing is saved to the module's flash. When these flights were made the driver
 never sent `$PAIR080`, so the Beetle flew in **Normal** mode, with **Balloon** as
-the control. PR #1500 makes `begin()` send `$PAIR080,3` straight after the fix
+the control; **Drone** mode was added on 2026-09-25 (below). PR #1500 makes `begin()` send `$PAIR080,3` straight after the fix
 rate, and the tool now follows it: a plain `./lc86_config.py` leaves the module in
 Balloon, and `--navmode 0` puts it back in Normal to repeat these flights.
 `--rtcm msm7` adds RTCM3 raw measurements (per-satellite C/N0 to 1/16 dB, the
@@ -541,6 +547,8 @@ Beetle comes up on the pad: its V_BCKP rides the same switched rail.
 | `lc86g_normal_gentle_alt` | Normal | climb rate near zero for 18 s of boost with a valid fix; **all output stopped at 500 m/s** (own estimate) for 56 s; no valid fix for the rest of the flight |
 | `lc86g_balloon_gentle_alt` | Balloon | boost tracked to 1-2 m/s; **silent above 500 m/s and above 80.0 km** (own estimates), each lifted within 0.1 s straight into a valid fix; limits independent |
 | `lc86g_balloon_spaceshot` | Balloon | lost every channel at ignition; the four at or below 128 Hz/s re-locked within 2 s, the rest stayed lost; no fix until the descent brought it under 500 m/s, then a valid one within 0.6 s |
+| `lc86g_drone_gentle_alt` | Drone | climb rate within 1.3 m/s after the first 2 s of boost, altitude ~1 s late (0.45 km low at 496 m/s); **all output stopped at 500 m/s** (own estimate) for 51 s; no valid fix for the rest of the flight, with a median 13 satellites tracked |
+| `lc86g_drone_spaceshot` | Drone | lost every channel at ignition and none came back in MSM7 until 242 s; withheld with a median 8 satellites tracked until 571.4 s, 3.7 s after the descent passed 10 km; that fix and every one after it right |
 
 Each capture's `.runner.txt.gz` holds the preflight read-back that proves the
 module's configuration at transmit time.
@@ -566,6 +574,44 @@ limitation, calls 10-50 km "cannot be guaranteed", and stops all output above
 - **Re-open:** Balloon mode comes back within one 0.1 s epoch straight into a
   valid fix (0.6 s after the 15 g flight's no-fix spell). Normal mode never
   re-opened on the 3 g flight (open question 5).
+
+### Drone mode, and the missing Aviation mode (2026-09-25)
+
+Asked for an aviation mode. Older Quectel parts offered one as mode 2 of the same
+numbering; this specification marks mode 2 **reserved**, and the firmware refuses
+it: `$PAIR080,2` is answered `$PAIR001,080,4` (parameter error) and `$PAIR081`
+still reads the previous mode. So the third mode flown is **Drone** (5), which
+the specification describes for "vertical acceleration at different flight
+phases" and still limits to 10 km. `lc86_config.py --navmode` offers 0, 1, 3, 4,
+5 and 7 and nothing else.
+
+Same rig, same `.C8` files, same bridge image (the flight computer's MAC checked
+before flashing, its flight image backed up and written back byte-for-byte
+afterwards), `run_radiated.py --lc86 5 --rtcm msm7 --cold-start`, TX gain 0 in
+the sealed cage. The pad signal came in **about 3 dB weaker** than on
+2026-09-24 -- 42 dBHz median on GPS GSV and MSM7 against 45-46 -- at the same
+gain. The cage was opened and re-sealed between the sessions, and the board's
+placement in it is the likeliest difference.
+
+- **The boost is tracked, but the altitude is a second old.** The climb rate
+  lagged by up to 35 m/s for the first 1.8 s after liftoff (Balloon: 12 m/s)
+  and then held within 1.3 m/s to the mute. The altitude fell behind in step
+  with the climb rate -- 0.18 km low at 190 m/s, 0.45 km at 496 m/s -- and
+  shifted by 0.98 s it fits the injection to 11 m rms over 186-210 s (322 m
+  unshifted). Balloon's best shift is 0.22 s, the climb rate's 0.00 s in both.
+- **Mutes at 500 m/s** like the other two (last output at 499.4 m/s injected,
+  first silent epoch at 500.8), at 9.3 km.
+- **Never re-opens after the mute** (3 g): output returned at 261.2 s, 51 s
+  later, and every `$PQTMPVT` from there to the end of the flight has FixMode 0
+  and no satellites used, while GSV shows a median of 13 tracked at
+  42 dBHz. Normal mode held a median of 4 after its own mute. Open question 5.
+- **At 15 g**: every channel lost at ignition; MSM7 carries none until G13 at
+  242 s (50 s after burnout; GSV has single-satellite blips before that), where
+  Balloon kept its four low ones. With the 3 dB deficit this does not separate
+  mode from signal level. Withheld with a median of 8 tracked from 260 s until
+  571.4 s, 3.7 s after the descent passed 10 km (567.7 s), then 9.78 km
+  reported against 9.77 injected, and right to landing.
+- **No valid-flagged wrong fix** on either flight.
 
 ### The ignition loss, per channel
 
@@ -657,7 +703,7 @@ one receiver connects at a time.
 ## What this rig does not test: boost dynamics
 
 **None of the five UBX parts loses its POSITION during the burn on this bench;
-the Quectel LC86G does, in both navigation modes -- see its section above.
+the Quectel LC86G does, in all three navigation modes flown -- see its section above.
 Individual satellites are a different story, and the ones a receiver loses are
 exactly the ones carrying the most Doppler.** Measured on five receivers with
 `boost_sats.py`, against Doppler measured from RXM-RAWX by `doppler_ref.py`;

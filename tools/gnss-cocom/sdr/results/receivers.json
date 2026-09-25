@@ -279,6 +279,38 @@
    "sats_median": 13,
    "sats_p05": 6,
    "notes": "The same module after $PAIR080,3. The boost is tracked (climb rate within 1-2 m/s of the injection through the 3 g ascent) and the limits are clean and independent: ALL output stops at 500 m/s on its own speed estimate (fired at 9.3 km) and at 80.0 km on its own altitude (fired at 173 m/s), and returns within one 0.1 s epoch straight into a valid fix. Its own altitude reads about 0.9 km low near 80 km, so against the injection the altitude limit sits near 81 km. 500 m/s matches neither COCOM's 515, MTCR's 600 nor the datasheet's 490. At 15 g it still loses every channel at ignition; its RTCM MSM7 shows the four with a Doppler rate at or below 128 Hz/s re-locking within 2 s and every one at or above 171 Hz/s staying lost through the burn, so it has no fix until the descent brings the vehicle back under 500 m/s. Its altitude drifts low through the flight, 2.6 km by landing with velocity still right to 0.5 m/s; the Quescan M10 drifts 1.5 km on the same file, so most of that is the bench."
+  },
+  {
+   "bands": "L1 (GPS/GLO/GAL/BDS/QZSS)",
+   "protocol": "NMEA + Quectel PQTM @ 115200, 10 Hz; RTCM3 MSM7",
+   "host": "a rocket flight computer board, through a UART-to-USB bridge image",
+   "path": "radiated, Faraday cage",
+   "rf": "on-board patch antenna in Faraday cage, TX gain 0",
+   "rate_hz": 10,
+   "date": "2026-09-25",
+   "runs": 2,
+   "velocity_gate_present": true,
+   "velocity_gate_mechanism": "mute",
+   "id": "lc86g_drone",
+   "part": "Quectel LC86G, Drone mode",
+   "velocity_fix_max_mps": 499.4,
+   "velocity_blocked_min_mps": 500.8,
+   "velocity_edges": {
+    "fix": [
+     499.4
+    ],
+    "blocked": [
+     500.8
+    ]
+   },
+   "altitude_gate_cause": "nav mode",
+   "combination": "independent",
+   "sats_median": 12,
+   "sats_p05": 1,
+   "notes": "The same module after $PAIR080,5, flown on a later day with the pad signal about 3 dB weaker (42 against 45 dBHz, same TX gain). Flown because older Quectel parts offered an Aviation mode as mode 2, and this firmware refuses it: $PAIR080,2 is answered with result 4 (parameter error) and the module stays in its previous mode. Through the 3 g ascent the climb rate lagged by up to 35 m/s for the first 2 s after liftoff, then held within 1.3 m/s of the injection; the altitude is about 1.0 s late (0.45 km low at 496 m/s; shifted by 0.98 s it fits the injection to 11 m rms). ALL output stops at 500 m/s on its own speed estimate (fired at 9.3 km). After that mute the 3 g flight never published a valid fix again: output returned after 51 s with FixMode 0 and no satellites used, and stayed that way to landing while GSV showed a median of 13 satellites tracked at 42 dBHz. At 15 g every channel was lost at ignition and, unlike Balloon, its MSM7 carries no channel from ignition until 242 s, 50 s after burnout (GSV shows only brief single-satellite blips); with a median of 8 tracked from 260 s it withheld the fix until 571.4 s, 3.7 s after the descent passed 10 km, which fits Quectel's 10 km limitation for every mode but Balloon. That fix was right (9.78 km against 9.77). No valid-flagged wrong fix on either flight.",
+   "altitude_note": "about 10 km",
+   "recovery_note": "never after the 500 m/s mute (3 g); 3.7 s below 10 km (15 g)",
+   "summary": false
   }
  ]
 }

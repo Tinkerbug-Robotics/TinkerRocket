@@ -24,6 +24,7 @@
     --wrongfix:    #6D3FA8;
     --mode-normal: #eb6834;   /* LC86G Normal-mode series */
     --mode-balloon:#2a78d6;   /* LC86G Balloon-mode series */
+    --mode-drone:  #1baf7a;   /* LC86G Drone-mode series */
     --shade-a:     rgba(41, 69, 126, 0.10);
     --shade-b:     rgba(41, 69, 126, 0.24);
 
@@ -54,6 +55,7 @@
       --wrongfix:    #B592EE;
       --mode-normal: #d95926;
       --mode-balloon:#3987e5;
+      --mode-drone:  #199e70;
       --shade-a:     rgba(141, 174, 226, 0.12);
       --shade-b:     rgba(141, 174, 226, 0.28);
     }
@@ -77,6 +79,7 @@
     --wrongfix:    #B592EE;
     --mode-normal: #d95926;
     --mode-balloon:#3987e5;
+    --mode-drone:  #199e70;
     --shade-a:     rgba(141, 174, 226, 0.12);
     --shade-b:     rgba(141, 174, 226, 0.28);
   }
@@ -230,6 +233,7 @@
     border-bottom: 1px solid var(--rule-strong); white-space: nowrap;
   }
   td.num { text-align: right; padding-right: 1.4rem; }
+  table.nowrap td { white-space: nowrap; }   /* "1.36 km, 78 m/s" stays one line; the table scrolls instead */
   tbody tr:last-child td { border-bottom: none; }
   .id { color: var(--accent); font-weight: 500; white-space: nowrap; }
   .pending { color: var(--ink-3); }
