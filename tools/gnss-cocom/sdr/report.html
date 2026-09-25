@@ -4159,8 +4159,10 @@ published fixes 18&ndash;80&nbsp;km wrong. See section 04.</p>
     <div class="prose">
       <p class="note">Purple is a fix flagged valid but grossly off the truth; grey is no output at
 all. The amber from 524&nbsp;s on the 15&nbsp;g flight is not a gate: the
-vehicle is slow and low, and the receiver is tracking 13 satellites at
-45&nbsp;dBHz without publishing a fix until the main parachute opens.</p>
+vehicle is slow and low, and the receiver's GSV lists 13 satellites at
+45&nbsp;dBHz while it publishes no fix until the main parachute opens. These
+flights logged no raw measurements to confirm that those satellites were
+measured.</p>
     </div>
 
     <div class="prose">
@@ -4408,8 +4410,8 @@ valid fix.</p>
 refuses mode&nbsp;2, the Aviation mode of older Quectel parts. It follows the
 boost like Balloon mode, though its altitude runs a second late. It mutes at
 500&nbsp;m/s like the other two, and on the 3&nbsp;g flight never published a
-valid fix again, with 13 satellites tracked to landing. At 15&nbsp;g it withheld
-the fix until the descent passed 10&nbsp;km. See section 04.</p>
+valid fix again, though its GSV listed 13 satellites to landing. At 15&nbsp;g it
+had no fix until the descent passed 10&nbsp;km. See section 04.</p>
       <p><strong>Velocity gate</strong> 499-501 m/s &nbsp;&middot;&nbsp;
          <strong>Altitude gate</strong> about 10 km <em>(navigation mode)</em> &nbsp;&middot;&nbsp;
          <strong>Satellites</strong> median 12,
@@ -5066,12 +5068,12 @@ the fix until the descent passed 10&nbsp;km. See section 04.</p>
     </figure>
 
     <div class="prose">
-      <p class="note">Flown on a later day, with the signal about 3&nbsp;dB weaker on the pad. The
-amber after the 3&nbsp;g flight's grey mute is not the export gate: the vehicle
-is back under 500&nbsp;m/s from 291&nbsp;s and under 10&nbsp;km from 597&nbsp;s,
-and the receiver tracks a median of 13 satellites to landing without publishing
-a fix. On the 15&nbsp;g flight the amber lasts until the descent passes
-10&nbsp;km.</p>
+      <p class="note">Flown on a later day. The amber after the 3&nbsp;g flight's grey mute is not the
+export gate: the vehicle is back under 500&nbsp;m/s from 291&nbsp;s and under
+10&nbsp;km from 597&nbsp;s. The strip reads the receiver's GSV, which lists a
+median of 13 satellites to landing, but its raw measurements carry none of them
+after 464&nbsp;s. On the 15&nbsp;g flight the amber lasts until the descent
+passes 10&nbsp;km.</p>
     </div>
 
   </section>
@@ -5366,16 +5368,17 @@ a fix. On the 15&nbsp;g flight the amber lasts until the descent passes
         mode as mode&nbsp;2; this specification marks mode&nbsp;2 reserved, and the
         firmware refuses it with a parameter error. Drone mode is the one the
         specification describes for vertical acceleration, and it keeps the
-        10&nbsp;km limitation. Its two flights were made on a later day with the
-        signal about 3&nbsp;dB weaker at the receiver, 42 against 45&nbsp;dBHz on
-        the pad, at the same transmit gain.</p>
+        10&nbsp;km limitation. Its two flights were made on a later day. It
+        reported 3&nbsp;dB less C/N&#8320; on the pad, 42 against 45&nbsp;dBHz at
+        the same transmit gain, and it never held carrier phase even there
+        (<a href="boost_report.html">GNSS Under Boost</a> has the detail).</p>
     </div>
 
     <figure>
       <div class="panels" style="grid-template-columns:1fr">
         <div class="panel">
           <h4>Quectel LC86G &mdash; Normal, Balloon and Drone <span class="badge">gentle_alt</span></h4>
-          <p>same injected file, same cage, same 3 g flight; the Drone run's signal was 3 dB weaker</p>
+          <p>same injected file, same cage, same 3 g flight; Drone was flown on a later day</p>
 <svg class="fig-lc86g-modes" viewBox="0 0 900 602" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The LC86G on the same 3 g flight in Normal, Balloon and Drone mode. Balloon and Drone report the climb rate and altitude of the boost; Normal reports a climb rate near zero for the first eighteen seconds. All three stop all output at 500 meters per second; only Balloon publishes a valid fix again.">
 <style>:where(svg.fig-lc86g-modes) .ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}:where(svg.fig-lc86g-modes) .gl{stroke:var(--rule,#DDE2E9);stroke-width:1}:where(svg.fig-lc86g-modes) .lbl{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-3,#79808F);paint-order:stroke;stroke:var(--surface,#FFFFFF);stroke-width:3px}:where(svg.fig-lc86g-modes) .ttl{font-family:var(--f-display,sans-serif);font-size:11px;font-weight:600;fill:var(--ink-2,#4A5261)}:where(svg.fig-lc86g-modes) .note{font-family:var(--f-mono,monospace);font-size:9.5px;fill:var(--ink-2,#4A5261);paint-order:stroke;stroke:var(--surface,#FFFFFF);stroke-width:3px}:where(svg.fig-lc86g-modes) .tr{fill:none;stroke-width:1.8;stroke-linejoin:round}</style>
 <text class="ttl" x="62" y="20">climb rate through the 3 g boost (m/s)</text>
@@ -5595,28 +5598,31 @@ a fix. On the 15&nbsp;g flight the amber lasts until the descent passes
         predicted each satellite's Doppler kilohertz away from the truth when it
         tried to reacquire. That is an inference from the pattern, not a
         measurement.</p>
-      <p>Drone mode did not recover either, and it failed differently. It had
-        followed the climb, and it kept its channels: from the end of its mute to
-        landing it tracked a median of 13 satellites at 42&nbsp;dBHz, where Normal
-        mode held a median of four. Yet every position report it sent over those
-        ten minutes says no fix and no satellites used, long after the vehicle was
-        back inside both of the mode's limits, under 500&nbsp;m/s from 291&nbsp;s
-        and under 10&nbsp;km from 597&nbsp;s. The tracking came back; the solution
-        never did.</p>
+      <p>Drone mode did not recover either, although it had followed the climb,
+        so the explanation above does not obviously cover it. From the end of its
+        mute to landing its GSV listed a median of 13 satellites at 42&nbsp;dBHz,
+        where Normal mode's listed four. But its raw measurements carried almost
+        none of them, and none at all after 464&nbsp;s, and every position report
+        it sent over those ten minutes says no fix and no satellites used. That
+        held long after the vehicle was back inside both of the mode's limits,
+        under 500&nbsp;m/s from 291&nbsp;s and under 10&nbsp;km from 597&nbsp;s.
+        It reported signal from those satellites and never turned it into
+        measurements.</p>
       <p><strong>At 15&nbsp;g all three modes lose every satellite at ignition</strong>
         (<a href="boost_report.html">GNSS Under Boost</a> has the channel-by-channel
         picture). Normal mode then published valid-flagged fixes
         18&ndash;80&nbsp;km wrong: 1.3&nbsp;km at apogee against 82&nbsp;km, and
         &minus;5&nbsp;km against +13&nbsp;km on the descent. It then withheld,
-        with 13 satellites tracked, until the main parachute opened. Balloon mode
+        with 13 satellites in its GSV, until the main parachute opened. Balloon mode
         published nothing wrong. It had no fix until the descent brought the
         vehicle back under 500&nbsp;m/s, then a valid one within 0.6&nbsp;s.
         Drone mode published nothing wrong either, and nothing at all for longer.
         Its raw measurements carry no channel from ignition until 242&nbsp;s,
-        50&nbsp;s after burnout, and though it tracked a median of 8 satellites
-        from 260&nbsp;s, its first fix
-        came at 571.4&nbsp;s, 3.7&nbsp;s after the vehicle descended through
-        10&nbsp;km, the mode's documented limit. That fix was right.</p>
+        50&nbsp;s after burnout. After that they came back only in short bursts of
+        two to seven satellites, and not at all from 452&nbsp;s, though GSV listed
+        a median of eight. Ten returned together with its first fix, at
+        571.4&nbsp;s, 3.7&nbsp;s after the vehicle descended through 10&nbsp;km,
+        the mode's documented limit. That fix was right.</p>
       <p class="note">Three details matter to anyone reading this part's output.
         Its UTC runs 18&nbsp;s behind GPS time, because it applies leap seconds
         the simulation never broadcast; the analysis uses

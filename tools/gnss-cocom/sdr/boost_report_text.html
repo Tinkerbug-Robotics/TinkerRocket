@@ -288,8 +288,8 @@
         the Doppler rate the NEO-M8T measured for the same satellite. It fails in
         two stages. At the 13.5&nbsp;g ignition every channel drops within the first
         second, low and high alike. That is a common-mode failure, not per-channel
-        stress, and it happens in all three navigation modes flown. Then the
-        rate-limited picture reasserts itself. The channels whose Doppler rate is
+        stress, and it happens in all three navigation modes flown. Then, in
+        Balloon mode, the rate-limited picture reasserts itself. The channels whose Doppler rate is
         low relock within two seconds and hold through the rest of the burn, and
         the others do not.</p>
     </div>
@@ -365,11 +365,51 @@
         lost every channel at the 13.5&nbsp;g ignition like the other two modes,
         but its raw measurements carry no channel at all from ignition until
         242&nbsp;s, 50&nbsp;s after burnout, where Balloon mode had its four low
-        satellites back within 2&nbsp;s. That run's signal was about 3&nbsp;dB
-        weaker on the pad, 42 against 45&nbsp;dBHz, so it does not separate the
-        mode from the signal level. On the gentle flight Drone mode followed the
-        climb as closely as Balloon mode, but its altitude was about a second
+        satellites back within 2&nbsp;s. On the gentle flight Drone mode followed
+        the climb as closely as Balloon mode, but its altitude was about a second
         old: 0.45&nbsp;km low at 496&nbsp;m/s.</p>
+      <p>That run is not a clean comparison. It reported 3&nbsp;dB less
+        C/N&#8320; on the pad, 42 against 45&nbsp;dBHz at the same transmit gain,
+        and even standing still it never held carrier phase: its lock-time counter
+        never passed 10&nbsp;s where Balloon's ran to 176&nbsp;s by ignition, and
+        the half-cycle flag was set on over 90% of its measurements against about
+        1%. Its Doppler was no noisier, which points at how Drone mode tracks
+        rather than at a weaker signal, but only switching modes on one static
+        signal would prove it.</p>
+      <p>Channel by channel, only Balloon mode got any satellites back during the
+        burn:</p>
+    </div>
+
+    <div class="scroll">
+      <table class="nowrap">
+        <caption>LC86G channels through the 13.5 g burn, by navigation mode</caption>
+        <thead><tr><th>Satellite</th><th class="num">Elevation</th><th class="num">Rate (Hz/s)</th><th>Normal</th><th>Balloon</th><th>Drone</th></tr></thead>
+        <tbody>
+          <tr><td>G29</td><td class="num">5&deg;</td><td class="num">54</td><td>lost</td><td>held</td><td>lost</td></tr>
+          <tr><td>G12</td><td class="num">9&deg;</td><td class="num">98</td><td>lost</td><td>held</td><td>not tracked</td></tr>
+          <tr><td>G30</td><td class="num">11&deg;</td><td class="num">114</td><td>lost</td><td>held, phase slipped</td><td>lost</td></tr>
+          <tr><td>G19</td><td class="num">12&deg;</td><td class="num">128</td><td>lost</td><td>held</td><td>lost</td></tr>
+          <tr><td>G14</td><td class="num">17&deg;</td><td class="num">171</td><td>lost</td><td>lost</td><td>lost</td></tr>
+          <tr><td>G15</td><td class="num">20&deg;</td><td class="num">199</td><td>lost</td><td>lost</td><td>lost</td></tr>
+          <tr><td>G22</td><td class="num">26&deg;</td><td class="num">261</td><td>lost</td><td>lost</td><td>lost</td></tr>
+          <tr><td>G05</td><td class="num">28&deg;</td><td class="num">286</td><td>lost</td><td>lost</td><td>lost</td></tr>
+          <tr><td>G20</td><td class="num">27&deg;</td><td class="num">308</td><td>lost</td><td>lost</td><td>lost</td></tr>
+          <tr><td>G06</td><td class="num">31&deg;</td><td class="num">312</td><td>lost</td><td>lost</td><td>lost</td></tr>
+          <tr><td>G21</td><td class="num">38&deg;</td><td class="num">378</td><td>lost</td><td>lost</td><td>lost</td></tr>
+          <tr><td>G24</td><td class="num">51&deg;</td><td class="num">501</td><td>lost</td><td>lost</td><td>lost</td></tr>
+          <tr><td>G11</td><td class="num">70&deg;</td><td class="num">not measurable</td><td>lost</td><td>lost</td><td>lost</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p class="note">Rates are the same on all three flights: one injected file,
+        measured once from the NEO-M8T. Balloon and Drone are read from MSM7. The
+        Normal-mode flights logged no raw measurements, so that column is read
+        from GSV; on the two flights that logged both, GSV and MSM7 agree on every
+        channel that held. Normal mode's GSV shows a few one- and two-second
+        returns during the burn, none that held. Drone mode was not tracking G12
+        on the pad.</p>
     </div>
   </section>
 

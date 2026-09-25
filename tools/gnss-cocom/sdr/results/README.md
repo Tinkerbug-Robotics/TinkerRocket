@@ -376,12 +376,20 @@ Balloon mode. The likely cause is its own navigation state -- it never believed
 the climb, so its predicted Doppler was off by kilohertz -- but that is inferred
 from the pattern. The Normal-mode flights had no RTCM MSM7 on; re-flying one with
 it would show each channel's measured Doppler against where it should have been.
-Drone mode fails the same way and that explanation does not cover it: it followed
-the climb, and after its mute it kept a median of 13 channels at 42 dBHz, yet
-reported no fix and no satellites used for the ten minutes to landing. Its
-flights had MSM7 on, so each channel's Doppler after the mute can be set against
-the NEO-M8T's RXM-RAWX on the same file, which `doppler_ref.py` already reads --
-no new hardware needed.
+Drone mode fails the same way, and it did follow the climb. Its GSV lists a
+median of 13 satellites at 42 dBHz after its mute, but its MSM7 carries almost
+none of them and nothing after 464 s, so it reports signal it never turns into
+measurements. Whether that is a state problem like the one suspected here, or a
+consequence of question 6, is open.
+
+**6. Does Drone mode give up carrier-phase lock, or did the bench differ on
+2026-09-25?** The Drone flights' MSM7 never shows a lock time past 10 s on the
+pad, with the half-cycle flag set on over 90% of cells, where the Balloon
+flights the day before ran to 176 s with it set on about 1% -- at clean Doppler
+in both, and a reported C/N0 3 dB lower in Drone. The test is an A/B/A in one
+sealed session: `t00_static` with MSM7 on, `$PAIR080,3`, then `$PAIR080,5`, then
+`$PAIR080,3` again, a few minutes each. If the lock time and the 3 dB follow the
+command, it is the mode. Needs the bench.
 
 ## Quescan M10, radiated (2026-08-28)
 
@@ -543,12 +551,12 @@ Beetle comes up on the pad: its V_BCKP rides the same switched rail.
 
 | Capture | Mode | Result |
 |---|---|---|
-| `lc86g_normal_spaceshot` | Normal | lost every satellite at ignition; valid-flagged fixes 18-80 km wrong near apogee and on the descent; withheld with 13 satellites until the main |
+| `lc86g_normal_spaceshot` | Normal | lost every satellite at ignition; valid-flagged fixes 18-80 km wrong near apogee and on the descent; withheld with 13 satellites in GSV until the main |
 | `lc86g_normal_gentle_alt` | Normal | climb rate near zero for 18 s of boost with a valid fix; **all output stopped at 500 m/s** (own estimate) for 56 s; no valid fix for the rest of the flight |
 | `lc86g_balloon_gentle_alt` | Balloon | boost tracked to 1-2 m/s; **silent above 500 m/s and above 80.0 km** (own estimates), each lifted within 0.1 s straight into a valid fix; limits independent |
 | `lc86g_balloon_spaceshot` | Balloon | lost every channel at ignition; the four at or below 128 Hz/s re-locked within 2 s, the rest stayed lost; no fix until the descent brought it under 500 m/s, then a valid one within 0.6 s |
-| `lc86g_drone_gentle_alt` | Drone | climb rate within 1.3 m/s after the first 2 s of boost, altitude ~1 s late (0.45 km low at 496 m/s); **all output stopped at 500 m/s** (own estimate) for 51 s; no valid fix for the rest of the flight, with a median 13 satellites tracked |
-| `lc86g_drone_spaceshot` | Drone | lost every channel at ignition and none came back in MSM7 until 242 s; withheld with a median 8 satellites tracked until 571.4 s, 3.7 s after the descent passed 10 km; that fix and every one after it right |
+| `lc86g_drone_gentle_alt` | Drone | climb rate within 1.3 m/s after the first 2 s of boost, altitude ~1 s late (0.45 km low at 496 m/s); **all output stopped at 500 m/s** (own estimate) for 51 s; no valid fix for the rest of the flight -- GSV lists a median 13 satellites, MSM7 carries none after 464 s |
+| `lc86g_drone_spaceshot` | Drone | lost every channel at ignition and none came back in MSM7 until 242 s, then only bursts of 2-7 and none from 452 s; 10 returned with the first fix at 571.4 s, 3.7 s after the descent passed 10 km; that fix and every one after it right |
 
 Each capture's `.runner.txt.gz` holds the preflight read-back that proves the
 module's configuration at transmit time.
@@ -588,10 +596,18 @@ phases" and still limits to 10 km. `lc86_config.py --navmode` offers 0, 1, 3, 4,
 Same rig, same `.C8` files, same bridge image (the flight computer's MAC checked
 before flashing, its flight image backed up and written back byte-for-byte
 afterwards), `run_radiated.py --lc86 5 --rtcm msm7 --cold-start`, TX gain 0 in
-the sealed cage. The pad signal came in **about 3 dB weaker** than on
-2026-09-24 -- 42 dBHz median on GPS GSV and MSM7 against 45-46 -- at the same
-gain. The cage was opened and re-sealed between the sessions, and the board's
-placement in it is the likeliest difference.
+the sealed cage. The receiver reported **about 3 dB less C/N0** on the pad than
+on 2026-09-24 -- 42 dBHz median on GPS GSV and MSM7 against 45-46 -- and **it
+never held carrier phase, even on the pad**: MSM7 lock time never passed 10 s
+before ignition (Balloon: 176 s by ignition, 754 s by landing on the 3 g
+flight), and the
+half-cycle flag was set on over 90% of pad cells (Balloon about 1%). Its Doppler
+was no noisier -- second difference 0.33-0.34 Hz against 0.38-0.40 -- so this is
+not a degraded signal. The cage was opened and re-sealed between the sessions,
+which could explain the C/N0 but not phase lock lost at 42 dBHz with clean
+Doppler. That points at the mode, and a receiver that measures C/N0 on the
+in-phase arm alone would read 3 dB low without phase lock, but neither is proven:
+open question 6.
 
 - **The boost is tracked, but the altitude is a second old.** The climb rate
   lagged by up to 35 m/s for the first 1.8 s after liftoff (Balloon: 12 m/s)
@@ -603,14 +619,17 @@ placement in it is the likeliest difference.
   first silent epoch at 500.8), at 9.3 km.
 - **Never re-opens after the mute** (3 g): output returned at 261.2 s, 51 s
   later, and every `$PQTMPVT` from there to the end of the flight has FixMode 0
-  and no satellites used, while GSV shows a median of 13 tracked at
-  42 dBHz. Normal mode held a median of 4 after its own mute. Open question 5.
+  and no satellites used. GSV lists a median of 13 at 42 dBHz all the way down,
+  but MSM7 carries none of them after 263 s except three short bursts of 1-5
+  cells, and none after 464 s: signal seen, nothing measured. Normal mode's GSV
+  listed a median of 4 after its own mute. Open question 5.
 - **At 15 g**: every channel lost at ignition; MSM7 carries none until G13 at
   242 s (50 s after burnout; GSV has single-satellite blips before that), where
-  Balloon kept its four low ones. With the 3 dB deficit this does not separate
-  mode from signal level. Withheld with a median of 8 tracked from 260 s until
-  571.4 s, 3.7 s after the descent passed 10 km (567.7 s), then 9.78 km
-  reported against 9.77 injected, and right to landing.
+  Balloon kept its four low ones. With no carrier lock even on the pad, this
+  is not a clean comparison with Balloon. From 242 s MSM7 has only bursts of
+  2-7 cells (GSV lists a median of 8), and none at all from 452 s until 572 s,
+  when 10 return with the first fix: 571.4 s, 3.7 s after the descent passed
+  10 km (567.7 s), 9.78 km reported against 9.77 injected, and right to landing.
 - **No valid-flagged wrong fix** on either flight.
 
 ### The ignition loss, per channel
