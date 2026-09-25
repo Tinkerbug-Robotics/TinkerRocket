@@ -20589,7 +20589,7 @@
 				)
 			)
 		)
-		(property "Value" "HV1020-2R7505-R"
+		(property "Value" "CXHP2R7305R-TWX"
 			(at 255.905 88.265 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20599,7 +20599,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Capacitor_THT:CP_Radial_D10.0mm_P5.00mm"
+		(property "Footprint" "Footprints:Supercap_Radial_D8.0mm_H16.0mm_P3.50mm"
 			(at 252.73 88.265 0)
 			(hide yes)
 			(show_name no)
@@ -20632,7 +20632,7 @@
 				)
 			)
 		)
-		(property "MPN" "HV1020-2R7505-R"
+		(property "MPN" "CXHP2R7305R-TWX"
 			(at 252.73 88.265 0)
 			(hide yes)
 			(show_name no)
@@ -20643,7 +20643,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Eaton"
+		(property "Mfr" "CDA (Zhifengwei)"
 			(at 252.73 88.265 0)
 			(hide yes)
 			(show_name no)

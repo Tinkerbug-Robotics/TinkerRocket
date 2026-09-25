@@ -212,6 +212,42 @@ pack would end in a trip that does **not** self-clear (#1029: the eFuse waits
 for 6.91 V). A slow re-enable is the lesser evil, and firmware can ride it
 out. Revisit with the pack-yank bench data in #1211.
 
+**2026-09-25 — `C130` is now a 3 F cell, and the load above was never
+itemized.** The owner moved `C130` to a shorter can: 3.0 F, 2.7 V, ±20 %, an
+8 × 16 mm radial can on a 3.5 mm pitch with 0.6 mm leads, 130 mΩ at 1 kHz /
+195 mΩ DC. The maker's drawing allows D ±1.0 and L ±1.5, so it stands up to
+17.5 mm off the board where the 5 F cell stood up to 22.3 mm. No 5 F cell comes
+in a shorter can: in the current Eaton, Kyocera AVX, Samwha, Elna, CDA, Kamcap,
+Samxon, Würth, Vinatech and Cornell Dubilier ranges every 2.7 V cell near 5 F is
+10 × 20 mm or longer, and the wider cans start at 20 mm.
+
+The 0.5–0.8 A in the table is `power-eco.md`'s figure. None of the documents
+that quote it itemizes it, and it has not been measured. The loads in §3.1
+(less the buzzer, which #1469 removed) add up to about 0.15–0.35 A: the P4 at 360 MHz draws 35–123 mA typical (ESP32-P4
+v1.3 datasheet, Table 5-7), the S3 40–60 mA with ~130 mA BLE transmit bursts,
+the NAND and both NORs ~10–40 mA, and the sensors ~5 mA. GNSS and LoRa sit on
+`VBATT`, which is why this rail runs close to the mini's (~0.17 A, worked back
+from the 2026-09-24 hold-up run) rather than four times it.
+
+Same model as the table, which it reproduces within ~10 % at 0.75 A (worst
+corner = 0.8 × C at ILIM 1.7 A, typical = nominal C at 2.2 A, maximum ESR):
+
+| `+3V3` load | 5 F, worst / typical | 3 F, worst / typical |
+|---|---|---|
+| 0.15 A | 21 / 27 s | 12 / 15 s |
+| 0.20 A | 16 / 20 s | 8.7 / 10.9 s |
+| 0.25 A | 12.7 / 15.9 s | 6.8 / 8.5 s |
+| 0.30 A | 10.4 / 13.1 s | 5.4 / 6.8 s |
+| 0.35 A | 8.6 / 11.2 s | 4.4 / 5.7 s |
+
+The longest outage §3.2 names is a bounce long enough to trip the eFuse: the
+board is dark for the bounce plus the re-enable, 1.8–4.3 s with `C94` at 10 µF.
+The 3 F cell covers that at every corner up to 0.35 A, with almost nothing to
+spare at the top of the range and a second or more below ~0.3 A. It charges
+from empty in ~75 s at 100 mA instead of ~125 s. The top of the load range is
+the number to pin down: on a V9 with the GNSS, LoRa, camera and servos
+unplugged, the INA230's pack current × pack voltage × ~0.9 is this rail's load.
+
 ### 3.4 Every 3.3 V load at the 3.0 V hold-up level
 
 | part | minimum | at 3.0 V (via `U30` for the P4 domain: −~50 mV) |
