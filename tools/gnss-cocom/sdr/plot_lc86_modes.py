@@ -31,7 +31,7 @@ from correlate import (Truth, clock_outliers, collect, parse_start,  # noqa: E40
 from plot_flight import VERDICT_FILL, SILENT_FILL, silent_spans       # noqa: E402
 
 START = "2026/08/18,08:30:00"
-MODES = [("normal", "Normal (as shipped)", "var(--mode-normal, #eb6834)"),
+MODES = [("normal", "Normal (as tested)", "var(--mode-normal, #eb6834)"),
          ("balloon", "Balloon", "var(--mode-balloon, #2a78d6)")]
 TRUTH_INK = "var(--ink-2, #4A5261)"
 

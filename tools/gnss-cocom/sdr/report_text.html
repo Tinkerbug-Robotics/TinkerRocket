@@ -77,8 +77,9 @@
         matches neither. Altitude limits vary significantly from 10 km to 80 km,
         though several use the 80 km limit.</p>
       <p>The LC86G appears twice because one setting changes the answer
-        entirely. Its navigation mode lives in the module's RAM, and the
-        Tinker-Beetle's firmware leaves it at the default, Normal. In Normal mode
+        entirely. Its navigation mode lives in the module's RAM, and when these
+        flights were made the Tinker-Beetle's firmware left it at the default,
+        Normal; it is being changed to select Balloon at boot. In Normal mode
         there is no altitude limit to report, because the fix is already wrong
         partway up the boost. In Balloon mode its limits are as clean as any part
         here. Section 04 sets the two side by side.</p>
@@ -305,8 +306,10 @@
         configuration was replayed through it: 10&nbsp;Hz, the same sentences,
         nothing saved to the module. Then the same two flights were flown again
         with one setting changed.</p>
-      <p>That setting is the navigation mode. The Beetle's firmware never sends
-        <code>$PAIR080</code>, so the module runs in its default, Normal.
+      <p>That setting is the navigation mode. When these flights were made the
+        Beetle's firmware never sent <code>$PAIR080</code>, so the module ran in
+        its default, Normal. Because of what follows, it is being changed to
+        select Balloon mode at boot.
         Quectel's protocol specification gives every mode but one a 10&nbsp;km
         altitude limitation. It calls 10&ndash;50&nbsp;km "cannot be guaranteed"
         and stops all output above 50&nbsp;km. Balloon mode moves the limit to
@@ -707,7 +710,7 @@ re-open, against under two seconds everywhere else.
 <!--/blurb-->
 
 <!--#blurb lc86g_normal-->
-The GNSS on the Tinker-Beetle, flown the way the Beetle runs it. Normal mode's
+The GNSS on the Tinker-Beetle, flown the way the Beetle ran it when tested. Normal mode's
 vertical solution does not follow a boost. Through the 3&nbsp;g ascent it
 reported a climb rate near zero for 18&nbsp;s with a valid fix, then stopped all
 output at 500&nbsp;m/s and never published a valid fix again. At 15&nbsp;g it

@@ -16,8 +16,10 @@ cycles -- which is also when the Beetle's own firmware would re-apply it.
     ./lc86_config.py                     # the flight configuration
     ./lc86_config.py --navmode 3         # ... then Balloon mode
 
-**The navigation mode is the lever that matters.** The flight driver never
-sends $PAIR080, so the Beetle flies in the module's default, Normal mode.
+**The navigation mode is the lever that matters.** The flight driver as tested
+(2026-09-24) never sent $PAIR080, so the Beetle flew in the module's default,
+Normal mode; PR #1500 makes begin() send $PAIR080,3, after which the as-flown
+configuration is this tool with --navmode 3.
 Quectel's protocol spec (LC26G/LC76G/LC86G GNSS Protocol Specification V1.4,
 section 2.4.24, Tables 7 and 8) gives every mode but Balloon a 10 km altitude
 limitation, calls 10-50 km "cannot be guaranteed", and stops ALL output above
