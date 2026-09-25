@@ -230,9 +230,10 @@ def main() -> int:
                     help="tap the receiver without transmitting, to check wiring")
     ap.add_argument("--lc86", type=int, metavar="NAVMODE",
                     help="the Tinker-Beetle's LC86G through lc86_bridge, expected "
-                         "in this $PAIR080 navigation mode (0 = Normal, as flown; "
-                         "3 = Balloon). Finds the port by the flight computer's "
-                         "MAC and replaces the UBX preflight with a full read-back")
+                         "in this $PAIR080 navigation mode (3 = Balloon, as flown "
+                         "from PR #1500; 0 = Normal, as flown before it). Finds "
+                         "the port by the flight computer's MAC and replaces the "
+                         "UBX preflight with a full read-back")
     ap.add_argument("--cold-start", action="store_true",
                     help="with --lc86: $PAIR006 before transmitting, as a Beetle "
                          "powering up on the pad")
@@ -273,7 +274,8 @@ def main() -> int:
             print("!! the LC86G is not configured for this measurement:")
             for b in bad:
                 print(f"     {b}")
-            print("   Run lc86_config.py (add --navmode for anything but Normal).\n"
+            print("   Run lc86_config.py (add --navmode 0 for Normal; the default "
+                  "is the flight's Balloon).\n"
                   "   The configuration is RAM-only and a rail cycle loses it.")
             return 1
         print("# preflight: LC86G in the flight configuration, nav mode "

@@ -6,20 +6,23 @@ UART, so the rig reaches it through the bench image in
 ../firmware/lc86_bridge, which copies bytes between that UART and USB.
 
 The default action applies EXACTLY what the flight driver applies at boot
-(TR_GNSSReceiverLC86_Serial::begin(), at the M1's GNSS_UPDATE_RATE of 18
-clamped to the LC86G's 10 Hz ceiling), then reads every setting back. That is
-the receiver as it flies. Nothing is saved to the module's flash: this is RAM
-configuration, as in flight, and it lasts until the flight computer's rail
-cycles -- which is also when the Beetle's own firmware would re-apply it.
+(TR_GNSSReceiverLC86_Serial::begin() as of PR #1500, at the M1's
+GNSS_UPDATE_RATE of 18 clamped to the LC86G's 10 Hz ceiling), then reads every
+setting back. That is the receiver as it flies. Nothing is saved to the
+module's flash: this is RAM configuration, as in flight, and it lasts until the
+flight computer's rail cycles -- which is also when the Beetle's own firmware
+would re-apply it.
 
     ./lc86_config.py --identify          # read only: version, mode, rates
-    ./lc86_config.py                     # the flight configuration
-    ./lc86_config.py --navmode 3         # ... then Balloon mode
+    ./lc86_config.py                     # the flight configuration, Balloon mode
+    ./lc86_config.py --navmode 0         # ... in Normal mode instead
 
-**The navigation mode is the lever that matters.** The flight driver as tested
-(2026-09-24) never sent $PAIR080, so the Beetle flew in the module's default,
-Normal mode; PR #1500 makes begin() send $PAIR080,3, after which the as-flown
-configuration is this tool with --navmode 3.
+**The navigation mode is the lever that matters.** Until PR #1500 the flight
+driver never sent $PAIR080, so the Beetle flew in the module's default, Normal
+mode, and that is how the first flights here were made (2026-09-24). PR #1500
+makes begin() send $PAIR080,3 straight after the fix rate, so the flight
+configuration is now Balloon; --navmode 0 puts the module back in Normal to
+repeat the earlier measurements.
 Quectel's protocol spec (LC26G/LC76G/LC86G GNSS Protocol Specification V1.4,
 section 2.4.24, Tables 7 and 8) gives every mode but Balloon a 10 km altitude
 limitation, calls 10-50 km "cannot be guaranteed", and stops ALL output above
@@ -52,6 +55,9 @@ ESPRESSIF_VID = 0x303A
 # driver clamps to the LC86G's 10 Hz maximum. GSV goes out every N fixes with
 # N = the fix rate, i.e. about once a second.
 FLIGHT_RATE_HZ = 10
+# The $PAIR080 navigation mode begin() sends from PR #1500 on: 3 = Balloon.
+# Before it nothing set the mode, and the Beetle flew in Normal (0).
+FLIGHT_NAV_MODE = 3
 
 NAV_MODES = {0: "Normal", 1: "Fitness", 3: "Balloon", 4: "Stationary",
              5: "Drone", 7: "Swimming"}
@@ -80,6 +86,7 @@ def flight_plan(rate_hz: int = FLIGHT_RATE_HZ):
         ("PQTMCFGMSGRATE,W,PQTMPVT,1,1", "QTM", "PQTMPVT every fix"),
         ("PQTMCFGMSGRATE,W,PQTMEPE,1,2", "QTM", "PQTMEPE every fix"),
         (f"PAIR050,{1000 // rate_hz}", 50, f"fix interval {1000 // rate_hz} ms"),
+        (f"PAIR080,{FLIGHT_NAV_MODE}", 80, f"nav mode {NAV_MODES[FLIGHT_NAV_MODE]}"),
     ]
 
 
@@ -301,7 +308,7 @@ def check_flight(st: dict, rate_hz: int, navmode: int | None) -> list[str]:
             bad.append(f"{NMEA_TYPES[t]} rate {got}, want {want}")
     if st.get("PQTMPVT") != 1:
         bad.append(f"PQTMPVT rate {st.get('PQTMPVT')}, want 1")
-    want_nav = 0 if navmode is None else navmode
+    want_nav = FLIGHT_NAV_MODE if navmode is None else navmode
     if st.get("navmode") != want_nav:
         bad.append(f"nav mode {st.get('navmode')}, want {want_nav} "
                    f"({NAV_MODES.get(want_nav)})")
@@ -319,8 +326,9 @@ def main() -> int:
                     help="read the module's state; change nothing")
     ap.add_argument("--navmode", type=int, choices=sorted(NAV_MODES),
                     help="after the flight configuration, set this navigation "
-                         "mode ($PAIR080). Omit to leave the module's default "
-                         "(0, Normal), which is what the Beetle flies")
+                         "mode ($PAIR080) instead of the flight's 3 (Balloon, as "
+                         "flown from PR #1500). 0 = Normal repeats the "
+                         "measurements made before it")
     ap.add_argument("--rate", type=int, default=FLIGHT_RATE_HZ,
                     help=f"fix rate in Hz (default {FLIGHT_RATE_HZ}, as flown)")
     ap.add_argument("--rtcm", choices=sorted(RTCM_MODES),
@@ -389,7 +397,7 @@ def main() -> int:
             return 1
         print("# verified: flight configuration"
               + (f" + {NAV_MODES[args.navmode]} mode" if args.navmode is not None
-                 else " (Normal mode, as the Beetle flies)"))
+                 else f" ({NAV_MODES[FLIGHT_NAV_MODE]} mode, as the Beetle flies)"))
         return 0
 
 

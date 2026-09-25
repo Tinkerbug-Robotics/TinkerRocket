@@ -473,8 +473,8 @@ RTS already high leaves a running bridge alone.
 Then configure and fly:
 
     ./lc86_config.py --identify                    # read-only: version, mode, rates
-    ./lc86_config.py                               # the flight driver's own set, as flown
-    ./lc86_config.py --navmode 3 --rtcm msm7       # Balloon mode, raw measurements on
+    ./lc86_config.py --rtcm msm7                   # the flight set (Balloon), raw measurements on
+    ./lc86_config.py --navmode 0 --rtcm msm7       # the same in Normal, as flown before PR #1500
     ./gain_sweep.py -p PORT -s t00_static -g 0,6,12
     ./run_radiated.py -s gentle_alt --lc86 3 --rtcm msm7 --cold-start -x 0 --tag lc86g_balloon
     ./msm_channels.py captures/lc86g_balloon_gentle_alt.log \
@@ -482,7 +482,9 @@ Then configure and fly:
 
 `--lc86 MODE` finds the port by the flight computer's MAC and replaces the UBX
 preflight with a full read-back that must match the flight configuration plus
-that navigation mode. The configuration is RAM-only: a rail cycle returns the
+that navigation mode. The flight configuration follows PR #1500, which selects
+Balloon (3) at boot; the Beetle flew in Normal (0) before it, so a Normal-mode
+repeat is `lc86_config.py --navmode 0` followed by `--lc86 0`. The configuration is RAM-only: a rail cycle returns the
 module to factory defaults (1 Hz, all NMEA, Normal, no PQTM), and the preflight
 is what catches it.
 

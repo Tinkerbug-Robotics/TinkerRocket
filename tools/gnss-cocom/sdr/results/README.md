@@ -519,10 +519,12 @@ written back byte-for-byte afterwards.
 driver's `begin()` command for command -- GGA every fix, GSV every 10th,
 `$PQTMPVT` and `$PQTMEPE` every fix, 10 Hz -- and reads every setting back.
 Nothing is saved to the module's flash. When these flights were made the driver
-never sent `$PAIR080`, so the Beetle flew in **Normal** mode; `--navmode 3` sets
-**Balloon** for the control. PR #1500 makes `begin()` send `$PAIR080,3`, so after
-it merges the as-flown configuration is `./lc86_config.py --navmode 3`. `--rtcm msm7` adds RTCM3 raw measurements (per-satellite C/N0 to
-1/16 dB, the receiver's own Doppler, carrier-phase lock time, at 1 Hz), parsed by
+never sent `$PAIR080`, so the Beetle flew in **Normal** mode, with **Balloon** as
+the control. PR #1500 makes `begin()` send `$PAIR080,3` straight after the fix
+rate, and the tool now follows it: a plain `./lc86_config.py` leaves the module in
+Balloon, and `--navmode 0` puts it back in Normal to repeat these flights.
+`--rtcm msm7` adds RTCM3 raw measurements (per-satellite C/N0 to 1/16 dB, the
+receiver's own Doppler, carrier-phase lock time, at 1 Hz), parsed by
 `../rtcm3.py` and tabulated per channel by `msm_channels.py`.
 
 Radiated in the Faraday cage from the board's own patch antenna, **TX gain 0**,
