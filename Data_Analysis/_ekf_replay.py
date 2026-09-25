@@ -24,12 +24,12 @@ import numpy as np
 from tinkerrocket_sim._ekf import (GpsInsEKF, IMUData, GNSSDataLLA,
                                     MagData, BaroData)
 
+from plot_flight_data_mini import firmware_accel_xyz
+
 G_MS2 = 9.80665
 DEG2RAD = math.pi / 180.0
 RAD2DEG = 180.0 / math.pi
 R_EARTH_M = 6378137.0
-
-LOW_G_SAT_THRESH = 15.5 * G_MS2  # ±15.5g — matches ISM6 ±16g range minus margin
 
 
 @dataclass
@@ -278,13 +278,9 @@ def replay_binary(records, log_decimation: int = 20,
             if latest_gnss is None:
                 continue
 
-            # Pick accel source (low-g/high-g saturation switch)
-            lx, ly, lz = rec["low_acc_x"], rec["low_acc_y"], rec["low_acc_z"]
-            if (abs(lx) > LOW_G_SAT_THRESH or abs(ly) > LOW_G_SAT_THRESH or
-                    abs(lz) > LOW_G_SAT_THRESH):
-                ax, ay, az = rec["high_acc_x"], rec["high_acc_y"], rec["high_acc_z"]
-            else:
-                ax, ay, az = lx, ly, lz
+            # Accel source: the firmware's low-g/high-g switch, judged per
+            # sensor axis on raw counts by the parser (#1191).
+            ax, ay, az = firmware_accel_xyz(rec)
 
             # Board (FLU) → EKF body (FRD): Y and Z flip
             imu_d = IMUData()

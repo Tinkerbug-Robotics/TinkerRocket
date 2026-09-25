@@ -37,9 +37,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from plot_flight_data_mini import parse_binary_file  # noqa: E402
+from plot_flight_data_mini import firmware_accel_norm, parse_binary_file  # noqa: E402
 from replay_deployment_detector import (  # noqa: E402
-    accel_norm_firmware,
     estimate_ground_pressure,
     pressure_to_altitude_firmware,
 )
@@ -184,7 +183,6 @@ def build_ticks(records, loop_hz: int = 1000):
     if launch_us is None:
         return None, {"reason": "no launch in this log"}
 
-    low_g_fs = records.get("_low_g_fs_g", 16.0)
     min_dt_us = 1_000_000.0 / loop_hz
 
     events = ([(r["time_us"], 0, r) for r in baro] +
@@ -216,9 +214,7 @@ def build_ticks(records, loop_hz: int = 1000):
         if last_tick_us is not None and (t_us - last_tick_us) < min_dt_us:
             continue
         last_tick_us = t_us
-        acc = accel_norm_firmware(
-            (r["low_acc_x"], r["low_acc_y"], r["low_acc_z"]),
-            (r["high_acc_x"], r["high_acc_y"], r["high_acc_z"]), low_g_fs)
+        acc = firmware_accel_norm(r)
         # #257 baro health, as the FC computes it: a sample recently enough to
         # be believed. Range is implicit in the log (a stored sample was in
         # range when it was taken).
@@ -270,8 +266,7 @@ def _kill_baro(ticks):
 def replay_one(path: Path, gate: Gate, do_sweep: bool, step_s: float,
                gnss_cold_ms: int = 30000, no_baro: bool = False) -> dict:
     try:
-        records, _stats, cfg = parse_binary_file(str(path))
-        records["_low_g_fs_g"] = float(cfg.get("low_g_fs_g", 16))
+        records, _stats, _cfg = parse_binary_file(str(path))
     except Exception as exc:  # noqa: BLE001
         return {"path": path, "error": f"parse failed: {exc}"}
     ticks, meta = build_ticks(records)

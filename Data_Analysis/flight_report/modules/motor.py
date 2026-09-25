@@ -148,7 +148,7 @@ def analyze(flight: Flight) -> AnalysisResult:
 
     # Saturation is judged over the burn window only: a landing impact railing
     # the low-G part must not push the *motor* numbers onto the coarser sensor.
-    mag, sensor = accel_magnitude(recs, flight.sidecar, boost)
+    mag, sensor = accel_magnitude(recs, boost)
     if mag is None:
         result.warnings.append("No 3-axis accelerometer channel found.")
         return result

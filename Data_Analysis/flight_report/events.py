@@ -100,7 +100,7 @@ def _accel_series(flight) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     if not imu or flight.t0_us is None:
         return None, None
     t = (get_array(imu, "time_us") - flight.t0_us) / 1e6
-    mag, _which = accel_magnitude(recs, flight.sidecar, None)
+    mag, _which = accel_magnitude(recs, None)
     if mag is None or not mag.size or mag.size != t.size:
         return None, None
     return t, mag / G

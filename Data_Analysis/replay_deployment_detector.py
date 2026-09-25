@@ -22,14 +22,13 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-import math
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from plot_flight_data_mini import parse_binary_file  # noqa: E402
+from plot_flight_data_mini import firmware_accel_norm, parse_binary_file  # noqa: E402
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parent
@@ -171,18 +170,6 @@ def pressure_to_altitude_firmware(p_pa: float, p_ground: float) -> float:
     return 44330.0 * (1.0 - (p_pa / p_ground) ** (1.0 / 5.255))
 
 
-def accel_norm_firmware(low_xyz, high_xyz, low_g_fs_g: float) -> float:
-    """Mirror of the flight loop's channel pick, not of the detector.
-
-    The FC switches to the high-g accelerometer as any low-g axis nears
-    saturation, which is the only reason an ejection shock reads tens of g
-    instead of clipping at full scale.
-    """
-    sat = (low_g_fs_g - 0.5) * G_MS2
-    ax, ay, az = high_xyz if any(abs(v) > sat for v in low_xyz) else low_xyz
-    return math.sqrt(ax * ax + ay * ay + az * az)
-
-
 def estimate_ground_pressure(baro_recs, nonsensor_recs) -> float:
     """Pre-launch mean, matching replay_kinematic_checks.py."""
     if not baro_recs or not nonsensor_recs:
@@ -217,7 +204,6 @@ def build_ticks(records, loop_hz: int):
               [(r["time_us"], 2, r) for r in imu])
     events.sort(key=lambda e: (e[0], e[1]))
 
-    low_g_fs = records.get("_low_g_fs_g", 16.0)
     min_dt_us = 1_000_000.0 / loop_hz
 
     palt = 0.0
@@ -242,9 +228,7 @@ def build_ticks(records, loop_hz: int):
         if last_tick_us is not None and (t_us - last_tick_us) < min_dt_us:
             continue
         last_tick_us = t_us
-        acc = accel_norm_firmware(
-            (r["low_acc_x"], r["low_acc_y"], r["low_acc_z"]),
-            (r["high_acc_x"], r["high_acc_y"], r["high_acc_z"]), low_g_fs)
+        acc = firmware_accel_norm(r)
         rows.append(((t_us - launch_us) // 1000, acc, palt,
                      1 if new_baro else 0, rate, 1 if burnout else 0,
                      1 if landed else 0))
@@ -339,8 +323,7 @@ def sweep(det, ticks):
 
 
 def replay(path: str, loop_hz_override: int | None, do_sweep: bool, verbose: bool) -> bool:
-    records, _stats, cfg = parse_binary_file(path)
-    records["_low_g_fs_g"] = float(cfg.get("low_g_fs_g", 16))
+    records, _stats, _cfg = parse_binary_file(path)
 
     det = Detector()
     loop_hz = loop_hz_override or det.loop_hz

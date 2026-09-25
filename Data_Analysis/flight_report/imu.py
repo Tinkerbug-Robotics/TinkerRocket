@@ -4,18 +4,18 @@ The board carries a low-G part (±16 g typical) and a high-G part (±256 g). The
 low-G one is the better instrument — finer resolution and less noise — so it is
 what we report, and the high-G one is a backstop for when the low-G rails.
 
-Saturation is tested **per axis**, not on the magnitude. Each axis clips at its
-own full scale, so a vehicle pulling 20 g along a diagonal can read |a| = 20 g
-with no axis anywhere near its rail; testing the magnitude against the full
-scale would declare that saturated and needlessly fall back to the coarser
-sensor.
+The verdict is the flight computer's own: the parser's `low_g_near_rail`, set
+when any low-G SENSOR axis is past full scale less 0.5 g in raw counts (#1191).
+It cannot be taken from the body-frame values. The chip sits at 45° to the
+thrust axis, so a boost can read 20 g on body X with no sensor axis near its
+rail, while one railed sensor axis reads only 0.71× on two body axes.
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import numpy as np
 
@@ -26,12 +26,6 @@ if str(_PARENT) not in sys.path:
 from plot_flight_data_mini import get_array  # noqa: E402
 
 G = 9.80665
-
-# A reading this close to full scale is at the rail, not near it.
-_SATURATION_FRACTION = 0.99
-# With no declared full scale, a clipped signal shows as a plateau: the same
-# extreme value on consecutive samples. A genuine peak is one sample.
-_PLATEAU_SAMPLES = 3
 
 
 def _axes(imu, prefix: str, mask=None) -> Optional[list[np.ndarray]]:
@@ -44,54 +38,29 @@ def _axes(imu, prefix: str, mask=None) -> Optional[list[np.ndarray]]:
     return out if out[0].size else None
 
 
-def _declared_full_scale_mps2(sidecar, key: str) -> Optional[float]:
-    """Full scale in m/s² from the sidecar's IMU settings, if it recorded one."""
-    imu_cfg = ((sidecar or {}).get("settings") or {}).get("imu") or {}
-    try:
-        return float(imu_cfg[key]) * G
-    except (KeyError, TypeError, ValueError):
-        return None
+def _near_rail(imu, mask=None) -> bool:
+    """Did any low-G sensor axis reach the flight computer's switch bar?"""
+    flags = get_array(imu, "low_g_near_rail").astype(bool)
+    if mask is not None:
+        flags = flags[mask]
+    return bool(flags.any())
 
 
-def _is_saturated(axes: list[np.ndarray], full_scale: Optional[float]) -> bool:
-    for v in axes:
-        if not v.size:
-            continue
-        mag = np.abs(v)
-        if full_scale is not None:
-            if float(np.max(mag)) >= full_scale * _SATURATION_FRACTION:
-                return True
-            continue
-        # No declared range: look for a flat top at the extreme value.
-        peak = float(np.max(mag))
-        if peak <= 0:
-            continue
-        at_peak = np.isclose(mag, peak, rtol=1e-6)
-        run = 0
-        for hit in at_peak:
-            run = run + 1 if hit else 0
-            if run >= _PLATEAU_SAMPLES:
-                return True
-    return False
-
-
-def accel_magnitude(records, sidecar=None, mask=None) -> tuple[Optional[np.ndarray], str]:
+def accel_magnitude(records, mask=None) -> tuple[Optional[np.ndarray], str]:
     """|a| in m/s² over `mask`, preferring the low-G part. Returns (mag, source).
 
-    Falls back to the high-G part only when the low-G one saturates within the
-    window, and says so in the returned description.
+    Falls back to the high-G part only when the low-G one reaches its rail
+    within the window, and says so in the returned description.
     """
     imu = records.get("ISM6HG256") or []
 
     low = _axes(imu, "low_acc", mask)
-    if low is not None:
-        fs = _declared_full_scale_mps2(sidecar, "low_g_fs_g")
-        if not _is_saturated(low, fs):
-            return np.sqrt(sum(v ** 2 for v in low)), "low-G accelerometer"
+    if low is not None and not _near_rail(imu, mask):
+        return np.sqrt(sum(v ** 2 for v in low)), "low-G accelerometer"
 
     high = _axes(imu, "high_acc", mask)
     if high is not None:
-        why = "low-G accelerometer saturated" if low is not None else "no low-G channel"
+        why = "low-G accelerometer at its rail" if low is not None else "no low-G channel"
         return np.sqrt(sum(v ** 2 for v in high)), f"high-G accelerometer ({why})"
 
     if low is not None:

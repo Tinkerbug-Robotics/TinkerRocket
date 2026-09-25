@@ -40,7 +40,7 @@ _PARENT = Path(__file__).resolve().parent.parent.parent
 if str(_PARENT) not in sys.path:
     sys.path.insert(0, str(_PARENT))
 
-from plot_flight_data_mini import get_array  # noqa: E402
+from plot_flight_data_mini import get_array, quat_to_matrix  # noqa: E402
 
 from ..charts import COLORS, chart, trace
 from ..events import markers, measured
@@ -203,21 +203,36 @@ def envelope(x: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray]:
     return centre, rms
 
 
-def to_sensor_axes(bx: np.ndarray, by: np.ndarray, rot_z_deg: float) -> tuple[np.ndarray, np.ndarray]:
-    """Undo the converter's Z rotation so a rail test sees the chip's own
-    axes. The converter applies body = R(θ)·sensor with R = [[c,−s],[s,c]]."""
+def to_sensor_axes(bx: np.ndarray, by: np.ndarray, bz: np.ndarray, rot_z_deg: float,
+                   b2r=None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Undo the converter's two rotations so a rail test sees the chip's own
+    axes. The converter applies body = B2R·R(θ)·sensor with R = [[c,−s],[s,c]]
+    about Z, so sensor = R(θ)ᵀ·B2Rᵀ·body. `b2r` is the parser's row-major
+    board→rocket matrix; None is identity. Any mount but nose-on-board-X mixes
+    Z into X and Y, so the Z rotation alone would test the wrong axes."""
+    if b2r is not None:
+        r = b2r
+        bx, by, bz = (r[0][0] * bx + r[1][0] * by + r[2][0] * bz,
+                      r[0][1] * bx + r[1][1] * by + r[2][1] * bz,
+                      r[0][2] * bx + r[1][2] * by + r[2][2] * bz)
     th = math.radians(rot_z_deg)
     c, s = math.cos(th), math.sin(th)
-    return c * bx + s * by, -s * bx + c * by
+    return c * bx + s * by, -s * bx + c * by, bz
+
+
+def _b2r(config) -> Optional[list[list[float]]]:
+    """The board→rocket matrix the parser applied, or None for identity."""
+    quat = config.get("b2r_quat")
+    return quat_to_matrix(quat) if quat else None
 
 
 def rail_fraction(x: np.ndarray, y: np.ndarray, z: np.ndarray, full_scale: float,
-                  rot_z_deg: float, frac: float) -> tuple[float, str]:
+                  rot_z_deg: float, frac: float, b2r=None) -> tuple[float, str]:
     """Fraction of samples with any sensor axis at the rail, and which axis
     did it most."""
-    sx, sy = to_sensor_axes(x, y, rot_z_deg)
+    sx, sy, sz = to_sensor_axes(x, y, z, rot_z_deg, b2r)
     lim = full_scale * frac
-    hits = {"X": np.abs(sx) >= lim, "Y": np.abs(sy) >= lim, "Z": np.abs(z) >= lim}
+    hits = {"X": np.abs(sx) >= lim, "Y": np.abs(sy) >= lim, "Z": np.abs(sz) >= lim}
     any_hit = hits["X"] | hits["Y"] | hits["Z"]
     if x.size == 0:
         return 0.0, ""
@@ -415,7 +430,8 @@ def boost_summary(flight: Flight) -> Optional[dict[str, Any]]:
         fs_dps = float(flight.config.get("gyro_fs_dps") or 0)
         rot = float(flight.config.get("ism6_rot_z_deg") or 0.0)
         if fs_dps > 0:
-            frac, _ = rail_fraction(imu["gx"][m], imu["gy"][m], imu["gz"][m], fs_dps, rot, _RAIL_GYRO)
+            frac, _ = rail_fraction(imu["gx"][m], imu["gy"][m], imu["gz"][m], fs_dps, rot, _RAIL_GYRO,
+                                    _b2r(flight.config))
             if frac > 0:
                 hint += f" · gyro at full scale {frac * 100:.1f} % of samples"
     return {"rms_hp_x": ax["x"]["rms_hp"], "hint": hint}
@@ -437,6 +453,7 @@ def analyze(flight: Flight) -> AnalysisResult:
     metrics: dict[str, Any] = {}
     events = {k: round(v, 3) for k, v in markers(flight).items() if v is not None}
     rot = float(flight.config.get("ism6_rot_z_deg") or 0.0)
+    b2r = _b2r(flight.config)
 
     sensor = ("±256 g accelerometer" if imu["prefix"] == "high_acc"
               else "±16 g accelerometer only — content above its rail is clipped")
@@ -486,20 +503,21 @@ def analyze(flight: Flight) -> AnalysisResult:
         fs_g = float(flight.config.get("low_g_fs_g") or 0)
         if fs_g > 0:
             frac, worst = rail_fraction(imu["lx"][boost_mask], imu["ly"][boost_mask], imu["lz"][boost_mask],
-                                        fs_g * G, rot, _RAIL_LOW_G)
+                                        fs_g * G, rot, _RAIL_LOW_G, b2r)
             metrics["Boost · ±16 g accelerometer at its rail"] = (
                 f"{frac * 100:.1f} % of samples" + (f" (mostly {worst}, sensor axes)" if frac > 0 else ""))
     if all(f"g{a}" in imu for a in "xyz"):
         fs_dps = float(flight.config.get("gyro_fs_dps") or 0)
         if fs_dps > 0:
             frac, worst = rail_fraction(imu["gx"][boost_mask], imu["gy"][boost_mask], imu["gz"][boost_mask],
-                                        fs_dps, rot, _RAIL_GYRO)
+                                        fs_dps, rot, _RAIL_GYRO, b2r)
             metrics["Boost · gyro at full scale"] = (
                 f"{frac * 100:.2f} % of samples" + (f" (mostly {worst}, sensor axes)" if frac > 0 else ""))
             if frac > 0:
-                sx, sy = to_sensor_axes(imu["gx"][boost_mask], imu["gy"][boost_mask], rot)
+                sx, sy, sz = to_sensor_axes(imu["gx"][boost_mask], imu["gy"][boost_mask],
+                                            imu["gz"][boost_mask], rot, b2r)
                 lim = fs_dps * _RAIL_GYRO
-                hit = (np.abs(sx) >= lim) | (np.abs(sy) >= lim) | (np.abs(imu["gz"][boost_mask]) >= lim)
+                hit = (np.abs(sx) >= lim) | (np.abs(sy) >= lim) | (np.abs(sz) >= lim)
                 t_hit = float(imu["t"][boost_mask][int(np.argmax(hit))])
                 result.warnings.append(
                     f"The gyro hit full scale on {frac * 100:.2f} % of boost samples, first at "

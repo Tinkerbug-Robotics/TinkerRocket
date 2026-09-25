@@ -26,8 +26,8 @@ if str(_PARENT) not in sys.path:
     sys.path.insert(0, str(_PARENT))
 
 try:
+    from plot_flight_data_mini import firmware_accel_norm  # noqa: E402
     from replay_kinematic_checks import (  # noqa: E402
-        accel_norm_firmware,
         estimate_ground_pressure,
         build_events,
         logged_flag_times,
@@ -149,9 +149,7 @@ def _replay(records):
             continue
 
         # imu tick — drives kc.kinematic_checks()
-        low = (r["low_acc_x"], r["low_acc_y"], r["low_acc_z"])
-        high = (r["high_acc_x"], r["high_acc_y"], r["high_acc_z"])
-        latest_acc_mag = accel_norm_firmware(low, high)
+        latest_acc_mag = firmware_accel_norm(r)
         latest_roll_rate = r["gyro_x"]
 
         prev_rejects = kc._consec_baro_rejects

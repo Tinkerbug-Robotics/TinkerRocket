@@ -143,3 +143,49 @@ def test_the_accel_verdict_uses_the_high_g_channel(tmp_path):
     assert recs[0]["accel_railed"] is False
     recs = parse(tmp_path, ism6(1000, high=(0, 0, pfd.ISM6_ACCEL_RAIL_LSB)))
     assert recs[0]["accel_railed"] is True
+
+
+# ---- #1191: the low-g -> high-g switch, judged the same way ----------------
+#
+# The flight loop hands its estimators the high-g channel once any low-g SENSOR
+# axis passes full scale less 0.5 g.  The thrust axis sits between sensor X and
+# Y, so a body-frame test gets it wrong both ways: body X reaches sqrt(2)x a
+# sensor axis with nothing railed, and one railed axis reads ~11 g on body X/Y.
+
+def test_the_low_g_bar_matches_the_firmware():
+    # imu_drain_window.h nearRailLsb(fs, 0.5), with the full scale from the log.
+    assert pfd.low_g_near_rail_lsb(16) == 31744
+    assert pfd.low_g_near_rail_lsb(8) == 30720
+
+
+def test_the_low_g_flag_is_strictly_above_the_bar_on_any_axis(tmp_path):
+    bar = pfd.low_g_near_rail_lsb(16)
+    assert parse(tmp_path, ism6(1000, low=(bar, 0, 0)))[0]["low_g_near_rail"] is False
+    assert parse(tmp_path, ism6(1000, low=(0, -(bar + 1), 0)))[0]["low_g_near_rail"] is True
+    assert parse(tmp_path, ism6(1000, low=(0, 0, -32768)))[0]["low_g_near_rail"] is True
+
+
+def test_the_low_g_verdict_is_taken_before_rotation(tmp_path):
+    # 28000 LSB (13.7 g) on both sensor axes: 19.3 g on body X, nothing railed.
+    recs = parse(tmp_path, ism6(1000, low=(28000, 28000, 0), high=(1750, 1750, 0)))
+    assert recs[0]["low_acc_x"] > 15.5 * pfd.G_MS2, "must beat the old body-frame bar"
+    assert recs[0]["low_g_near_rail"] is False
+    assert pfd.firmware_accel_xyz(recs[0])[0] == recs[0]["low_acc_x"]
+    # Sensor X at the rail alone: under 11.4 g on each body axis, but railed.
+    recs = parse(tmp_path, ism6(1000, low=(32767, 0, 0), high=(2600, 0, 0)))
+    assert max(abs(recs[0]["low_acc_x"]), abs(recs[0]["low_acc_y"])) < 15.5 * pfd.G_MS2
+    assert recs[0]["low_g_near_rail"] is True
+    assert pfd.firmware_accel_xyz(recs[0])[0] == recs[0]["high_acc_x"]
+
+
+def test_the_report_picks_its_accelerometer_by_the_flag(tmp_path):
+    from flight_report.imu import accel_magnitude
+
+    clean = parse(tmp_path, ism6(1000, low=(28000, 28000, 0), high=(1750, 1750, 0)))
+    _, which = accel_magnitude({"ISM6HG256": clean})
+    assert which == "low-G accelerometer"
+
+    railed = parse(tmp_path, ism6(1000, low=(32767, 0, 0), high=(2600, 0, 0)))
+    mag, which = accel_magnitude({"ISM6HG256": railed})
+    assert which == "high-G accelerometer (low-G accelerometer at its rail)"
+    assert abs(mag[0] - 2600 * (256 / 32768) * pfd.G_MS2) < 1e-6
