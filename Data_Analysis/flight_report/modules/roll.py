@@ -168,13 +168,13 @@ def _events_since_launch(flight, launch_t: float, lo: float, hi: float) -> dict[
 
     Three things used to be wrong here. The times came from the roll-PID replay's
     own flag-derived values rather than the measured ones, so this section marked
-    a burnout 71 ms away from the burnout line on every other chart in the report.
+    a burnout 51 ms away from the burnout line on every other chart in the report.
     The ejection was drawn under the key "apogee" — the charge, labelled as the
     top of the flight, which on the sample flight is a second later and in the
     other direction. And the events were offset from measured first motion, which
     comes 0.05-0.2 s before the flag on the roll-control flights logged so far, so
-    every marker sat that much late against the traces: burnout at 1.528 s on the
-    sample flight, where the traces have it at 1.332 s.
+    every marker sat that much late against the traces: burnout at 1.548 s on the
+    sample flight, where the traces have it at 1.352 s.
     """
     ev = markers(flight)
     out: dict[str, float] = {}

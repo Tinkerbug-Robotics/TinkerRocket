@@ -3,7 +3,7 @@
 The flight computer's flags are *declarations*. Each one latches only after its
 detector is confident, so it lands a little after the thing it names: on the
 sample flight the launch flag is 0.20 s after the motor lit and the burnout flag
-is 0.07 s after thrust ended. That lag is correct for firing a charge and wrong
+is 0.05 s after thrust ended. That lag is correct for firing a charge and wrong
 for a report that quotes a burn time — a fifth of a second on a 1.5 s burn is 13
 per cent.
 
@@ -53,11 +53,12 @@ _PAD_G = 1.2
 # Unambiguously under thrust — used only to find the burn, never as the launch
 # instant itself, which is walked back to from here.
 _IGNITION_G = 2.0
-# Thrust has ended when specific force falls back through 1 g: the motor is no
-# longer holding the vehicle up against its own weight.
-_COAST_G = 1.0
+# Thrust has ended when the specific force along the body's long axis turns
+# negative: the air is pushing back harder than the motor pushes. The flight
+# computer's burnout detector watches the same sign (BurnoutDetector.h).
+_COAST_AXIAL_G = 0.0
 # ...and stays there. A momentary dip mid-burn (chuffing, a stager) is not
-# burnout.
+# burnout. The flight computer waits the same 50 ms, as 50 flight-loop ticks.
 _COAST_HOLD_S = 0.05
 # Search the launch flag's neighbourhood rather than the whole log, so handling
 # the rocket on the pad cannot be mistaken for ignition.
@@ -160,17 +161,22 @@ def declared_launch(flight) -> Optional[float]:
     return flag
 
 
-def _accel_series(flight) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-    """(seconds since t0, |a| in g) from the IMU, low-G unless it saturated."""
+def _accel_series(flight) -> tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+    """(seconds since t0, |a| in g, body X in g) from the IMU.
+
+    |a| is the low-G part's unless that saturated anywhere in the log. Body X is
+    always the low-G part's, for the reasons true_burnout gives.
+    """
     recs = flight.records
     imu = recs.get("ISM6HG256") or []
     if not imu or flight.t0_us is None:
-        return None, None
+        return None, None, None
     t = (get_array(imu, "time_us") - flight.t0_us) / 1e6
     mag, _which = accel_magnitude(recs, None)
     if mag is None or not mag.size or mag.size != t.size:
-        return None, None
-    return t, mag / G
+        return None, None, None
+    ax = get_array(imu, "low_acc_x") / G if "low_acc_x" in imu[0] else None
+    return t, mag / G, ax
 
 
 def _cross(t, y, i, level) -> float:
@@ -231,8 +237,34 @@ def true_launch(flight, t, g) -> Optional[float]:
     return _first_motion(flight, t, g)[0]
 
 
-def true_burnout(flight, t, g) -> Optional[float]:
-    """Thrust ends: specific force falls back through 1 g and stays there.
+def true_burnout(flight, t, g, ax) -> Optional[float]:
+    """Thrust ends: the specific force along the body's long axis turns negative
+    and stays there.
+
+    The accelerometer reads thrust minus drag, over the mass. Along the long
+    axis that is positive while the motor out-pushes the air and negative once
+    it does not. The flight computer's burnout detector watches exactly this,
+    the low-G part's body X below zero, so the two answer one question and
+    differ only in when they say so. The flag waits until the sign has held: for
+    50 flight-loop ticks since #197 (2026-05-23), which puts it 40-54 ms after
+    this crossing on every flight in the archive since; before that, for one
+    negative sample, which puts it within 6 ms of the crossing on ten flights of
+    eleven. The eleventh, 2026-05-09 Journey 75, hovered at zero for 0.1 s at
+    the end of a long tail, and the flag took the first dip.
+
+    The magnitude |a| used to be the test, against a 1 g bar, and it cannot see
+    the sign. After burnout it reads drag, and drag above 1 g held it over the
+    bar for seconds: 1.30 s late on the 2026-05-09 Goblin. It read a sideways
+    force as thrust: 3 g across the airframe as it swung at burnout put the
+    2026-05-17 54 mm Rolly Polly 0.28 s late. It read the high-G part's offset,
+    and |a| comes from the high-G part on most logs: 0.43 g on X put the
+    2026-05-17 65 mm RIM-66 2.81 s late. And it cut short every burn with a
+    sustain or a long tail, while the motor still pushed up to 1 g net: by
+    0.16-0.44 s on eight flights.
+
+    The low-G part, never the high-G: it is the finer instrument, a sign change
+    is nowhere near its rail, and the high-G part's X offset can be as large as
+    the drag on a slow coast.
 
     Walking forward from the burn rather than back from its peak, because the
     largest acceleration in the flight is usually the ejection charge, not the
@@ -240,22 +272,24 @@ def true_burnout(flight, t, g) -> Optional[float]:
 
     Walking from the first unambiguous thrust sample, not from first motion,
     because the end of a burn can be in the log when its start is not:
-    2026-07-05 195028 lit its motor inside a 743 ms hole and burned out half a
-    second after the log came back. Nothing between the two can end a burn —
-    every sample from first motion to the thrust sample is above the pad band —
-    so where both are known the answer is the same.
+    2026-07-05 195028 lit its motor inside a 743 ms hole and burned out 0.6 s
+    after the log came back. Nothing between the two can end a burn — that
+    stretch is the thrust building to 2 g — so where both are known the answer
+    is the same.
     """
+    if ax is None:
+        return None
     i0 = _first_thrust(flight, t, g)
     if i0 is None:
         return None
-    idx = np.flatnonzero((t > t[i0]) & (g < _COAST_G))
+    idx = np.flatnonzero((t > t[i0]) & (ax < _COAST_AXIAL_G))
     for i in idx:
         i = int(i)
         if i == 0:
             continue
         held = (t >= t[i]) & (t <= t[i] + _COAST_HOLD_S)
-        if held.any() and float(np.max(g[held])) < _COAST_G:
-            return _cross(t, g, i, _COAST_G)
+        if held.any() and float(np.max(ax[held])) < _COAST_AXIAL_G:
+            return _cross(t, ax, i, _COAST_AXIAL_G)
     return None
 
 
@@ -388,10 +422,10 @@ def measured(flight) -> dict[str, Optional[float]]:
         flight.__dict__[_CACHE_KEY] = out
         return out
 
-    t, g = _accel_series(flight)
+    t, g, ax = _accel_series(flight)
     out["landed"] = _flag_time(flight.records, flight.t0_us, "alt_landed")
     out["launch"], gap = _first_motion(flight, t, g)
-    out["burnout"] = true_burnout(flight, t, g)
+    out["burnout"] = true_burnout(flight, t, g, ax)
     out["ejection"] = ejection(flight, t, g, out["burnout"], out["landed"])
     out["apogee"] = true_apogee(flight, out["launch"])
 

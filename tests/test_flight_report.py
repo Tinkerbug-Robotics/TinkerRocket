@@ -466,8 +466,8 @@ def test_roll_control_marks_burnout_where_its_traces_have_it() -> None:
     roll_series re-zeroes every trace to the first record with the launch flag
     set, the clock the flight computer runs its roll profile on. The markers were
     offset from measured first motion instead, 0.196 s earlier on the sample
-    flight, so all four panels drew burnout at 1.528 s on an axis where the
-    traces have it at 1.332 s.
+    flight, so all four panels drew burnout at 1.548 s on an axis where the
+    traces have it at 1.352 s.
     """
     import numpy as np
 
@@ -522,9 +522,10 @@ def _ramp_flight(drop: tuple[float, float] = (0.0, 0.0)):
     """A 1 kHz pad-then-thrust trace with the samples inside `drop` removed.
 
     |a| sits at 1 g, then climbs 20 g/s from 1.000 s: it crosses 1.2 g at
-    1.010 s and 2 g at 1.050 s, holds 6 g, and falls to 0.3 g at 2.000 s. The
-    launch flag is set at 1.200 s. Returns (flight, t, g) as events.py takes
-    them.
+    1.010 s and 2 g at 1.050 s, holds 6 g, and falls to 0.3 g at 2.000 s. All of
+    it is along the body until then, and after it the 0.3 g is drag, so body X
+    reads -0.3 g. The launch flag is set at 1.200 s. Returns (flight, t, g, ax)
+    as events.py takes them.
     """
     from types import SimpleNamespace
 
@@ -532,12 +533,13 @@ def _ramp_flight(drop: tuple[float, float] = (0.0, 0.0)):
 
     t = np.round(np.arange(3000) * 1e-3, 6)
     g = np.where(t < 1.0, 1.0, np.minimum(1.0 + 20.0 * (t - 1.0), 6.0))
+    ax = np.where(t >= 2.0, -0.3, g)
     g = np.where(t >= 2.0, 0.3, g)
     keep = ~((t > drop[0]) & (t < drop[1]))
     ns = [{"time_us": int(round(s * 1e6)), "launch": s >= 1.2}
           for s in np.round(np.arange(0.0, 3.0, 0.002), 6)]
     flight = SimpleNamespace(records={"NonSensor": ns}, t0_us=0)
-    return flight, t[keep], g[keep]
+    return flight, t[keep], g[keep], ax[keep]
 
 
 def test_first_motion_is_not_interpolated_across_a_hole() -> None:
@@ -550,18 +552,18 @@ def test_first_motion_is_not_interpolated_across_a_hole() -> None:
     from flight_report import events
 
     # 1.005 s -> 1.014 s: 9 ms across the crossing, still a measurement.
-    flight, t, g = _ramp_flight((1.0055, 1.0135))
+    flight, t, g, _ax = _ramp_flight((1.0055, 1.0135))
     assert abs(events.true_launch(flight, t, g) - 1.010) < 1e-3
     assert events._first_motion(flight, t, g)[1] is None
 
     # 1.005 s -> 1.016 s: 11 ms, a hole. Blank, and the hole is named.
-    flight, t, g = _ramp_flight((1.0055, 1.0155))
+    flight, t, g, _ax = _ramp_flight((1.0055, 1.0155))
     assert events.true_launch(flight, t, g) is None
     assert events._first_motion(flight, t, g)[1] == (1.005, 1.016)
 
     # A hole further up the climb, with the trace above the pad band on both
     # sides, does not touch the crossing.
-    flight, t, g = _ramp_flight((1.02, 1.5))
+    flight, t, g, _ax = _ramp_flight((1.02, 1.5))
     assert abs(events.true_launch(flight, t, g) - 1.010) < 1e-3
 
 
@@ -569,9 +571,9 @@ def test_burnout_does_not_need_first_motion() -> None:
     """The end of a burn is measured even when its start fell in a hole."""
     from flight_report import events
 
-    flight, t, g = _ramp_flight((1.0055, 1.0155))
+    flight, t, g, ax = _ramp_flight((1.0055, 1.0155))
     assert events.true_launch(flight, t, g) is None
-    assert abs(events.true_burnout(flight, t, g) - 2.0) < 2e-3
+    assert abs(events.true_burnout(flight, t, g, ax) - 2.0) < 2e-3
 
 
 def test_a_launch_in_a_logging_gap_is_blank_and_says_where() -> None:
@@ -587,10 +589,10 @@ def test_a_launch_in_a_logging_gap_is_blank_and_says_where() -> None:
     assert ev["launch"] is None, "first motion was interpolated across the gap again"
     assert gap is not None
     assert 0.74 < gap[1] - gap[0] < 0.75, gap
-    # Burnout came half a second after the log resumed, and the ejection and
-    # the apogee after that: none of them needs first motion.
+    # Burnout came 0.6 s after the log resumed, and the ejection and the apogee
+    # after that: none of them needs first motion.
     assert gap[1] < ev["burnout"] < ev["ejection"] < ev["apogee"] < ev["landed"]
-    assert 0.45 < ev["burnout"] - gap[1] < 0.50, ev["burnout"] - gap[1]
+    assert 0.58 < ev["burnout"] - gap[1] < 0.63, ev["burnout"] - gap[1]
 
     # A clean log has no gap, and its first motion is unchanged.
     sample = Flight.from_bin(SAMPLE_BIN)
@@ -682,6 +684,64 @@ def test_sections_anchor_on_the_launch_call_when_first_motion_is_blank() -> None
     names = {name: how for name, _lo, _hi, how in vibration.phases(flight, 0.0, 20.0)}
     assert names["Boost"] == "launch detection to thrust ending"
     assert names["Pad"] == "the 1.5 s before launch detection"
+
+
+# ---------------------------------------------------------------------------
+# Burnout is the sign of body X
+#
+# The accelerometer reads thrust minus drag. Along the long axis that turns
+# negative when the motor stops out-pushing the air, which is the flight
+# computer's own burnout test. The magnitude cannot see the sign: the old 1 g
+# bar on |a| was late whenever drag stayed above 1 g after burnout, and early on
+# every motor with a sustain or a long tail.
+# ---------------------------------------------------------------------------
+
+
+def test_burnout_is_the_sign_of_body_x_not_the_size_of_a() -> None:
+    """Drag over 1 g does not hold the burn open, and a sustain does not end it.
+
+    Both happened: 1.46 g of drag held |a| over the old bar for 1.30 s after
+    the 2026-05-09 Goblin burned out, and a sustain near 1 g ended the
+    2026-06-14 Rolly Polly III's burn 0.17 s before its motor stopped.
+    """
+    import numpy as np
+
+    from flight_report import events
+
+    flight, t, g, ax = _ramp_flight()
+    after = t >= 2.0
+
+    # 1.5 g of drag once the motor stops: |a| never falls below 1 g again.
+    drag_g = np.where(after, 1.5, g)
+    drag_ax = np.where(after, -1.5, ax)
+    assert abs(events.true_burnout(flight, t, drag_g, drag_ax) - 2.0) < 2e-3
+
+    # A 0.3 s sustain at 0.8 g net: |a| is under 1 g from 2.0 s, but the motor
+    # out-pushes the air until 2.3 s.
+    sustain = after & (t < 2.3)
+    sus_g = np.where(sustain, 0.8, np.where(t >= 2.3, 0.3, g))
+    sus_ax = np.where(sustain, 0.8, np.where(t >= 2.3, -0.3, ax))
+    assert abs(events.true_burnout(flight, t, sus_g, sus_ax) - 2.3) < 2e-3
+
+
+def test_the_burnout_flag_is_one_hold_after_measured_burnout() -> None:
+    """Measured burnout starts the run of negative body X that the flag waits out.
+
+    The flight computer's detector (BurnoutDetector.h) tests the same sign on
+    the same channel, and since #197 (2026-05-23) latches only once the sign has
+    held for 50 flight-loop ticks. Every log in the repo was flown since, so on
+    each one the flag lands one hold after measured burnout: 51-54 ms.
+    """
+    from flight_report.events import _flag_time, measured
+    from flight_report.flight import Flight
+
+    examples = REPO_ROOT / "examples" / "flights"
+    for path in (SAMPLE_BIN, examples / "flight_20260705_183745.bin",
+                 examples / "flight_20260705_191300.bin", GAP_BIN, GOLDEN_BIN):
+        flight = Flight.from_bin(path)
+        flight.load()
+        lag = _flag_time(flight.records, flight.t0_us, "burnout") - measured(flight)["burnout"]
+        assert 0.045 < lag < 0.060, (path.name, lag)
 
 
 def test_apogee_turnover_stays_zoomed_in(report_html: Path) -> None:
