@@ -51,6 +51,12 @@ deployment (applyImuRateForFlightPhase), and the 2026-08-29 log steps from
 a window is analysed at the median-spacing ODR of the run it lies in, and a
 window that spans a step is split at it, with a note saying which parts were
 analysed and which were not.
+
+The pad window ends before first motion.  The launch flag trails it by
+0.07-0.37 s on the logs this was measured on, so a pad that ran to T-0.1 s
+held motor thrust on three of five.  First motion is where the low-g
+magnitude, averaged over 20 ms, leaves its rest level (first_motion); the
+pad stops 50 ms before it, with a note saying where.
 """
 
 import argparse
@@ -76,8 +82,17 @@ G_MS2 = 9.80665
 NEAR_RAIL_MARGIN_G = 0.5
 
 # Analysis windows in seconds since the launch flag (VIBRATION_ANALYSIS.md
-# table 1 uses the same boost and coast spans).
+# table 1 uses the same boost and coast spans).  A pre-launch window ends
+# PAD_GUARD_S before first motion instead, when that comes sooner.
 WINDOWS = [("pad", -1.5, -0.1), ("boost", 0.0, 0.75), ("coast", 3.0, 10.0)]
+# First motion: the low-g magnitude, averaged over REST_MEAN_S, is more than
+# REST_TOL_MS2 off its median over the pad's first REST_LEVEL_S.  That mean
+# stays within 0.01-0.07 m/s2 of the level on the pads it was set on (slow
+# rocking, 1-2 dps on the gyro, not sensor noise, sets the top of that).
+REST_LEVEL_S = 0.1
+REST_MEAN_S = 0.02
+REST_TOL_MS2 = 0.25
+PAD_GUARD_S = 0.05
 # (label, column in the 9-wide body-frame array, unit)
 CHANNELS = [("high-g X", 3, "m/s2"), ("low-g X", 0, "m/s2"), ("gyro X", 6, "dps")]
 # Bands the filter is measured on; None means "the tick Nyquist to ODR/2".
@@ -293,8 +308,8 @@ def rate_runs(t_us, t_launch):
 def runs_text(runs):
     """'3817 Hz to T+3.048 s, 952 Hz from T+3.049 s'; a single run is its ODR alone."""
     last = len(runs) - 1
-    return ", ".join(f"{run['odr']:.0f} Hz" + (f" from T+{run['t0']:.3f} s" if k else "")
-                     + (f" to T+{run['t1']:.3f} s" if k < last else "") for k, run in enumerate(runs))
+    return ", ".join(f"{run['odr']:.0f} Hz" + (f" from T{run['t0']:+.3f} s" if k else "")
+                     + (f" to T{run['t1']:+.3f} s" if k < last else "") for k, run in enumerate(runs))
 
 
 def tick_runs(r, runs):
@@ -330,7 +345,7 @@ def split_at_rate_steps(name, win, r, tick_run, runs, t_rel):
     for k in dict.fromkeys(ids[ids >= 0].tolist()):
         sel = win & (tick_run == k)
         t = t_rel[sel]
-        say = f"  T+{t[0]:.3f}..{t[-1]:.3f} s at {runs[k]['odr']:.0f} Hz: {len(t)} ticks, "
+        say = f"  T{t[0]:+.3f}..{t[-1]:.3f} s at {runs[k]['odr']:.0f} Hz: {len(t)} ticks, "
         if len(t) < MIN_TICKS:
             notes.append(say + f"too few to analyse (fewer than {MIN_TICKS})")
         else:
@@ -342,6 +357,41 @@ def split_at_rate_steps(name, win, r, tick_run, runs, t_rel):
                      f"of the step: in neither part")
     labels = [name] if len(parts) == 1 else [f"{name}-{i + 1}" for i in range(len(parts))]
     return [(label, sel, run) for label, (sel, run) in zip(labels, parts)], notes
+
+
+# ----------------------------------------------------------------------------
+# First motion
+# ----------------------------------------------------------------------------
+
+def first_motion(d, lo):
+    """(first motion in s since the launch flag, the rest level it left in m/s2).
+
+    Over the samples from T+lo up to the flag: the first at which the low-g
+    magnitude, averaged over REST_MEAN_S centred on it, is more than
+    REST_TOL_MS2 off its median over their first REST_LEVEL_S.  The mean is
+    taken in time, not in samples, so a gap in the log cannot pull the far side
+    of it in.  On 2026-07-05 195028 the motor starts inside a 743 ms gap, and
+    the first sample after it is the first that moved.  The time is None when
+    nothing moved before the flag.
+
+    This is stricter than the flight report's launch instant
+    (flight_report/events.py true_launch), which walks back from 2 g to where
+    |a| crossed 1.2 g.  That times the launch; this asks when the pad stopped
+    being at rest.  On 2026-08-29 the vehicle swings 7-15 m/s2 and turns at up
+    to 44 dps in the 0.2 s before its 1.2 g crossing.
+    """
+    t_rel = (d["t_us"] - d["t_launch"]) / 1e6
+    m = (t_rel >= lo) & (t_rel < 0.0)
+    if not m.any():
+        return None, None
+    t, s = d["t_us"][m], t_rel[m]
+    mag = np.linalg.norm(to_body(d["raw"][m], d["cm"])[:, 0:3], axis=1)
+    level = float(np.median(mag[s < s[0] + REST_LEVEL_S]))
+    cs = np.concatenate([[0.0], np.cumsum(mag)])
+    a = np.searchsorted(t, t - REST_MEAN_S / 2 * 1e6, side="left")
+    b = np.searchsorted(t, t + REST_MEAN_S / 2 * 1e6, side="right")
+    moved = np.flatnonzero(np.abs((cs[b] - cs[a]) / (b - a) - level) > REST_TOL_MS2)
+    return (float(s[moved[0]]) if len(moved) else None), level
 
 
 # ----------------------------------------------------------------------------
@@ -535,8 +585,21 @@ def analyse(d, replay):
 
     rows = []
     for name, lo, hi in WINDOWS:
+        cut = []
+        if hi <= 0.0:
+            # A pre-launch window stops before the motor starts, which the
+            # launch flag trails by up to 0.4 s.
+            t_move, level = first_motion(d, lo)
+            if t_move is not None and t_move - PAD_GUARD_S < hi:
+                hi = t_move - PAD_GUARD_S
+                cut = [f"[{name}] ends at T{hi:+.3f} s, {1e3 * PAD_GUARD_S:.0f} ms before first motion at "
+                       f"T{t_move:+.3f} s (the {1e3 * REST_MEAN_S:.0f} ms mean low-g magnitude leaves its "
+                       f"{level:.2f} m/s2 rest level by over {REST_TOL_MS2} m/s2)"]
         win = (t_rel >= lo) & (t_rel < hi) & (r["n"] > 0)
+        if cut and win.sum() < MIN_TICKS:
+            cut.append(f"  {int(win.sum())} ticks before it, too few to analyse (fewer than {MIN_TICKS})")
         parts, notes = split_at_rate_steps(name, win, r, tick_run, d["runs"], t_rel)
+        notes = cut + notes
         if notes:
             rows.append(dict(window=name, notes=notes))
         for label, sel, run in parts:
@@ -623,7 +686,7 @@ def report(d, rows):
         if "notes" in row:
             print("\n" + "\n".join(row["notes"]))
             continue
-        span = f" (T+{row['span'][0]:.3f}..{row['span'][1]:.3f} s at {row['odr']:.0f} Hz)" if row["span"] else ""
+        span = f" (T{row['span'][0]:+.3f}..{row['span'][1]:.3f} s at {row['odr']:.0f} Hz)" if row["span"] else ""
         print(f"\n[{row['window']}]  {row['ticks']} ticks{span}, samples/tick mean {row['n_mean']:.2f} "
               f"max {row['n_max']}; low-g near-rail duty: old body-frame test {100*row['old_rail_duty']:.1f} %, "
               f"new worst-sample test {100*row['new_rail_duty']:.1f} %")
@@ -676,7 +739,7 @@ def plot(d, rows, plot_dir):
             ax.set_ylabel(f"PSD ({c['unit']})^2/Hz")
             ax.grid(True, which="both", alpha=0.3)
             ax.legend(fontsize=8)
-        span = f", T+{row['span'][0]:.3f}..{row['span'][1]:.3f} s at {row['odr']:.0f} Hz" if row["span"] else ""
+        span = f", T{row['span'][0]:+.3f}..{row['span'][1]:.3f} s at {row['odr']:.0f} Hz" if row["span"] else ""
         fig.suptitle(f"{Path(d['path']).name} — what the EKF is fed, {row['window']} window{span}")
         fig.tight_layout()
         out = plot_dir / f"imu_drain_{row['window']}.png"
