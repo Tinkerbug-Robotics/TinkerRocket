@@ -461,8 +461,9 @@ _P(
         "High-range (±256 g) accelerometer on the long axis. Only the high-G axes have the logged "
         "bias subtracted; the low-G ones do not.",
     caution=
-        "16× coarser than low-G, so small accelerations here are mostly quantization. It is the only "
-        "channel that reads correctly above ~16 g.",
+        "16× coarser than low-G, so small accelerations here are mostly quantization. It is the "
+        "channel to read wherever low_g_near_rail is set; along the thrust axis the low-G part "
+        "reads to ~22.6 g before any of its sensor axes rails.",
     shown_in=("overview", "globe"),
 )
 _P(
@@ -533,8 +534,22 @@ _P(
         "True when any raw HIGH-G accelerometer axis sat at or above 95% of full scale (31129 "
         "counts, 243 g at ±256 g) before rotation. Same shock-gate role as gyro_railed.",
     caution=
-        "The high-g channel only. The low-g channel is expected to sit at its ±16 g rail through "
-        "any real boost, so it says nothing about shock.",
+        "The high-g channel only. The low-g part rails on any hard boost, so its rail says nothing "
+        "about shock — that verdict is low_g_near_rail, and it only switches channels.",
+    shown_in=(),
+)
+_P(
+    "ISM6HG256.low_g_near_rail", "Low-G Accel Near-Rail Flag (#1191)",
+    kind=KIND_BOOL,
+    note=
+        "True when any raw LOW-G accelerometer axis in this sample was past full scale less 0.5 g "
+        "(31744 counts, 15.5 g at ±16 g) before rotation — the flight computer's own test for "
+        "handing its estimators the high-G channel instead. The report's peak acceleration and "
+        "motor figures switch to high-G over any window where it is set.",
+    caution=
+        "Derived by the parser, not a logged field, and per SENSOR axis. It cannot be recomputed "
+        "from low_acc_x/y/z: with the chip at 45° to the thrust axis, body X reads up to ~22.6 g "
+        "with this clear, and one railed sensor axis shows only ~11.3 g on two body axes.",
     shown_in=(),
 )
 _P(

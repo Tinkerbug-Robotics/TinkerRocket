@@ -110,12 +110,28 @@ def test_rail_fraction_sees_through_the_45_degree_rotation() -> None:
 
 
 def test_to_sensor_axes_inverts_the_converter() -> None:
-    sx, sy = np.array([1.0, 0.0]), np.array([0.0, 1.0])
+    sx, sy, sz = np.array([1.0, 0.0]), np.array([0.0, 1.0]), np.array([0.5, -0.5])
     th = math.radians(-45.0)
     bx = math.cos(th) * sx - math.sin(th) * sy
     by = math.sin(th) * sx + math.cos(th) * sy
-    rx, ry = vib.to_sensor_axes(bx, by, -45.0)
-    assert rx == pytest.approx(sx) and ry == pytest.approx(sy)
+    rx, ry, rz = vib.to_sensor_axes(bx, by, sz, -45.0)
+    assert rx == pytest.approx(sx) and ry == pytest.approx(sy) and rz == pytest.approx(sz)
+
+
+def test_rail_fraction_undoes_the_board_mount_too() -> None:
+    """Nose along board +Z: the chip's Z axis is the thrust axis, so a railed
+    sensor Z reads on body X, and undoing only the chip's Z rotation spreads
+    it to 0.71x across sensor X and Y, where no rail test sees it."""
+    fs = 16.0 * vib.G
+    b2r = vib.quat_to_matrix((math.sqrt(0.5), 0.0, math.sqrt(0.5), 0.0))  # +90 deg about Y
+    assert b2r[0][2] == pytest.approx(1.0), "board +Z must map to rocket +X"
+    bx = np.array([fs, fs, 0.0, 0.0])      # sensor Z at its rail on half the samples
+    zeros = np.zeros(4)
+    frac, worst = vib.rail_fraction(bx, zeros, zeros, fs, -45.0, 0.99, b2r)
+    assert frac == pytest.approx(0.5)
+    assert worst == "Z"
+    frac_chip_only, _ = vib.rail_fraction(bx, zeros, zeros, fs, -45.0, 0.99)
+    assert frac_chip_only == 0.0
 
 
 # ---- the section on real flights -------------------------------------------

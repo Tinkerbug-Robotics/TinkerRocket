@@ -17,8 +17,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from plot_flight_data_mini import parse_binary_file
-from sim_kinematic_checks import KinematicChecks, G_MS2
+from plot_flight_data_mini import firmware_accel_norm, parse_binary_file
+from sim_kinematic_checks import KinematicChecks
 
 
 NSF_BURNOUT = 1 << 4
@@ -26,21 +26,9 @@ NSF_BURNOUT = 1 << 4
 BARO_MACH_LOCKOUT_ON  = 260.0
 BARO_MACH_LOCKOUT_OFF = 240.0
 
-LOW_G_FS_G = 16.0
-LOW_G_SAT_THRESH_MS2 = (LOW_G_FS_G - 0.5) * G_MS2
-
 
 def pressure_to_altitude_firmware(p_pa: float, p_ground: float) -> float:
     return 44330.0 * (1.0 - (p_pa / p_ground) ** (1.0 / 5.255))
-
-
-def accel_norm_firmware(low_xyz, high_xyz) -> float:
-    ax_l, ay_l, az_l = low_xyz
-    near_sat = (abs(ax_l) > LOW_G_SAT_THRESH_MS2
-                or abs(ay_l) > LOW_G_SAT_THRESH_MS2
-                or abs(az_l) > LOW_G_SAT_THRESH_MS2)
-    ax, ay, az = high_xyz if near_sat else low_xyz
-    return math.sqrt(ax*ax + ay*ay + az*az)
 
 
 def estimate_ground_pressure(baro_recs, nonsensor_recs) -> float:
@@ -181,9 +169,7 @@ def replay(binary_path: str) -> dict:
             continue
 
         # imu — main-loop tick
-        latest_low_xyz  = (r["low_acc_x"],  r["low_acc_y"],  r["low_acc_z"])
-        latest_high_xyz = (r["high_acc_x"], r["high_acc_y"], r["high_acc_z"])
-        latest_acc_mag = accel_norm_firmware(latest_low_xyz, latest_high_xyz)
+        latest_acc_mag = firmware_accel_norm(r)
         latest_roll_rate = r["gyro_x"]
 
         prev_rejects = kc._consec_baro_rejects

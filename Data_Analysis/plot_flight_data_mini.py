@@ -66,6 +66,17 @@ ISM6_ROT_Z_DEG    = -45.0  # sensor → board frame rotation about +Z
 EKF_SHOCK_RAIL_FRAC   = 0.95
 ISM6_GYRO_RAIL_LSB    = int(EKF_SHOCK_RAIL_FRAC * (1.0 / 0.035e-3))   # 27142
 ISM6_ACCEL_RAIL_LSB   = int(EKF_SHOCK_RAIL_FRAC * 32768.0)            # 31129
+
+# #1191: the flight loop's low-g -> high-g switch, mirroring imu_drain_window.h
+# nearRailLsb(fs, 0.5): the configured full scale less 0.5 g, in LSB (31744 =
+# 15.5 g at ±16 g), tested per SENSOR axis on the raw counts with a strict ">"
+# (anyAbove).  Like the shock-gate flags it can only be judged here: the chip
+# sits at 45 deg to the thrust axis, so a body-frame component reaches sqrt(2)x
+# a sensor axis without anything railing, while one railed axis reads 0.71x on
+# two body axes.  Not a fraction of the word: on 2026-06-24 (54 mm RP) a shock
+# read 15.66 g (97.9% of FS) on low-g sensor Y while high-g read 28.75 g.
+ISM6_LOW_G_RAIL_MARGIN_G = 0.5
+
 MMC_ROT_Z_DEG     = 180.0  # sensor → board frame rotation about +Z (old-PCB MMC5983MA)
 IIS2MDC_ROT_Z_DEG = 90.0   # sensor → board frame rotation about +Z (new-PCB IIS2MDC, #204)
 
@@ -77,6 +88,12 @@ def ism6_scales(low_g_fs=ISM6_LOW_G_FS_G, high_g_fs=ISM6_HIGH_G_FS_G,
     acc_high = (high_g_fs * 1000.0 / denom) * 1e-3 * G_MS2
     gyro     = (gyro_fs   * 0.035) * 1e-3  # #369: FS*0.035 mdps/LSB, NOT FS/32768
     return acc_low, acc_high, gyro
+
+
+def low_g_near_rail_lsb(low_g_fs_g):
+    """The low-g near-rail bar in raw LSB for a configured full scale in g."""
+    fs = float(low_g_fs_g or ISM6_LOW_G_FS_G)
+    return int(((fs - ISM6_LOW_G_RAIL_MARGIN_G) / fs) * 32768.0)
 
 # MMC5983MA: 18-bit centered, Gauss = centered * (8 / 131072), uT = Gauss * 100
 MMC_UT_PER_COUNT = (8.0 * 100.0) / 131072.0  # ≈ 0.006104
@@ -1113,6 +1130,7 @@ def parse_binary_file(filepath):
     rot_rad = math.radians(config["ism6_rot_z_deg"])
     c_rot, s_rot = math.cos(rot_rad), math.sin(rot_rad)
     hg_bx, hg_by, hg_bz = config["hg_bias"]
+    low_g_rail_lsb = low_g_near_rail_lsb(config["low_g_fs_g"])
 
     # Board→rocket mounting rotation (matches SensorConverter: applied LAST,
     # after the chip Z rotation and bias subtraction).  Identity when absent.
@@ -1162,11 +1180,17 @@ def parse_binary_file(filepath):
         accel_railed = (abs(r["hg_x"]) >= ISM6_ACCEL_RAIL_LSB or
                         abs(r["hg_y"]) >= ISM6_ACCEL_RAIL_LSB or
                         abs(r["hg_z"]) >= ISM6_ACCEL_RAIL_LSB)
+        # #1191: the same per-sensor-axis verdict for the low-g -> high-g
+        # switch (see ISM6_LOW_G_RAIL_MARGIN_G); firmware_accel_xyz reads it.
+        low_g_near_rail = (abs(r["lg_x"]) > low_g_rail_lsb or
+                           abs(r["lg_y"]) > low_g_rail_lsb or
+                           abs(r["lg_z"]) > low_g_rail_lsb)
 
         records["ISM6HG256"].append({
             "time_us":     r["time_us"],
             "gyro_railed":  gyro_railed,
             "accel_railed": accel_railed,
+            "low_g_near_rail": low_g_near_rail,
             "low_acc_x":   low[0],
             "low_acc_y":   low[1],
             "low_acc_z":   low[2],
@@ -1236,6 +1260,21 @@ def filter_records_by_time(records, t0_global, t_start, t_end):
 def get_array(record_list, key):
     """Extract array of a single key from record list."""
     return np.array([r[key] for r in record_list])
+
+
+def firmware_accel_xyz(rec):
+    """Body-frame specific force (m/s²) the flight loop would pick for one
+    ISM6HG256 record: the high-g channel while the low-g part is near its
+    rail (`low_g_near_rail`, per sensor axis on raw counts), else the low-g."""
+    if rec["low_g_near_rail"]:
+        return rec["high_acc_x"], rec["high_acc_y"], rec["high_acc_z"]
+    return rec["low_acc_x"], rec["low_acc_y"], rec["low_acc_z"]
+
+
+def firmware_accel_norm(rec):
+    """|a| of firmware_accel_xyz — the flight loop's accel_norm (m/s²)."""
+    ax, ay, az = firmware_accel_xyz(rec)
+    return math.sqrt(ax * ax + ay * ay + az * az)
 
 
 def mark_endpoints(ax, x, y):

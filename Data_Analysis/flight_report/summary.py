@@ -152,7 +152,7 @@ def compute_summary(flight) -> list[dict[str, Any]]:
         t = (get_array(imu, "time_us") - t0) / 1e6
         mask = None if window is None else (t >= window[0]) & (t <= window[1])
         # Low-G part unless it rails in this window; see units of imu.py.
-        mag, which = accel_magnitude(recs, flight.sidecar, mask)
+        mag, which = accel_magnitude(recs, mask)
         if mag is not None and mag.size:
             peak_g = float(np.max(mag)) / G
             cells.append(_cell("Max acceleration", peak_g, "G", 1,

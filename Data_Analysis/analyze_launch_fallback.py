@@ -46,8 +46,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-from plot_flight_data_mini import NSF_BURNOUT, parse_binary_file  # noqa: E402
-from replay_deployment_detector import accel_norm_firmware, estimate_ground_pressure  # noqa: E402
+from plot_flight_data_mini import NSF_BURNOUT, firmware_accel_norm, parse_binary_file  # noqa: E402
+from replay_deployment_detector import estimate_ground_pressure  # noqa: E402
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parent
@@ -65,15 +65,14 @@ LAUNCH_ACCEL_FALLBACK_COUNT = 250
 LOOP_TICK_US = 1000
 
 def load(path):
-    rec, _stats, cfg = parse_binary_file(str(path))
+    rec, _stats, _cfg = parse_binary_file(str(path))
     imu, ns = rec["ISM6HG256"], rec["NonSensor"]
     if not imu or not ns:
         return None
     t = np.array([r["time_us"] for r in imu], dtype=np.int64)
     low = np.array([[r["low_acc_x"], r["low_acc_y"], r["low_acc_z"]] for r in imu])
-    high = np.array([[r["high_acc_x"], r["high_acc_y"], r["high_acc_z"]] for r in imu])
     gyr = np.array([[r["gyro_x"], r["gyro_y"], r["gyro_z"]] for r in imu])
-    acc = np.array([accel_norm_firmware(l, h, cfg["low_g_fs_g"]) for l, h in zip(low, high)])
+    acc = np.array([firmware_accel_norm(r) for r in imu])
     # One tick per IMU sample, never faster than the loop (same rule as
     # replay_deployment_detector.build_ticks).
     keep = [0]

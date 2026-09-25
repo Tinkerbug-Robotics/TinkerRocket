@@ -15,13 +15,12 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-from plot_flight_data_mini import parse_binary_file, get_array, pressure_to_altitude
+from plot_flight_data_mini import (parse_binary_file, get_array, pressure_to_altitude,
+                                   firmware_accel_xyz)
 from tinkerrocket_sim._ekf import GpsInsEKF, IMUData, GNSSDataLLA, MagData, BaroData
 
-G = 9.80665
 DEG2RAD = math.pi / 180.0
 RAD2DEG = 180.0 / math.pi
-LOW_G_SAT = 15.5 * G
 
 
 def main(binpath):
@@ -83,11 +82,7 @@ def main(binpath):
         elif etype == "imu":
             if latest_gnss is None:
                 continue
-            lx, ly, lz = rec["low_acc_x"], rec["low_acc_y"], rec["low_acc_z"]
-            if abs(lx) > LOW_G_SAT or abs(ly) > LOW_G_SAT or abs(lz) > LOW_G_SAT:
-                ax, ay, az = rec["high_acc_x"], rec["high_acc_y"], rec["high_acc_z"]
-            else:
-                ax, ay, az = lx, ly, lz
+            ax, ay, az = firmware_accel_xyz(rec)
             imu = IMUData(); imu.time_us = time_us
             imu.acc_x = ax; imu.acc_y = -ay; imu.acc_z = -az
             imu.gyro_x = rec["gyro_x"]; imu.gyro_y = -rec["gyro_y"]; imu.gyro_z = -rec["gyro_z"]
