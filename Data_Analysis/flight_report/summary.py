@@ -27,7 +27,7 @@ from plot_flight_data_mini import get_array, gnss_to_enu, pressure_to_altitude  
 
 from markupsafe import Markup
 
-from .events import launch_gap, measured, span as _span
+from .events import burnout_gap, launch_gap, measured, span as _span
 from .imu import accel_magnitude
 from .units import q
 
@@ -146,13 +146,24 @@ def compute_summary(flight) -> list[dict[str, Any]]:
     # the landing. The hint says so, because the motor may have pushed harder
     # before the log came back — 2026-07-05 195028 resumes at 5.2 g and falls
     # from there.
+    #
+    # When the motor burned out inside one, the window is the burn up to the
+    # start of the hole, hinted the same way: the log does not hold the rest of
+    # the burn. 2026-03-14 224121 breaks off 0.69 s in, still at 8 g. A burn
+    # with a hole at each end keeps the part between them; one whose both ends
+    # fell in the same hole has no thrust in the record, and no cell.
     imu = recs.get("ISM6HG256") or []
     if imu:
         gap = launch_gap(flight)
+        burnout_hole = burnout_gap(flight)
         if events["launch"] is not None and events["burnout"] is not None:
             window, hint_window = (events["launch"], events["burnout"]), "under thrust"
         elif gap is not None and events["burnout"] is not None:
             window, hint_window = (gap[1], events["burnout"]), "under thrust, after the gap"
+        elif events["launch"] is not None and burnout_hole is not None:
+            window, hint_window = (events["launch"], burnout_hole[0]), "under thrust, before the gap"
+        elif gap is not None and burnout_hole is not None:
+            window, hint_window = (gap[1], burnout_hole[0]), "under thrust, between the gaps"
         elif events["launch"] is not None and events["apogee"] is not None:
             window, hint_window = (events["launch"], events["apogee"]), "launch to apogee (no burnout detected)"
         else:
@@ -170,9 +181,9 @@ def compute_summary(flight) -> list[dict[str, Any]]:
     # --- Timing --------------------------------------------------------------
     # Chronological: the burn, then the coast, then the top, then the whole
     # thing. Every one of them is measured off the sensor record and starts from
-    # the same instant of first motion, so they add up. When first motion fell
-    # in a hole in the log the ones that start from it are left off, and
-    # card_note() says why.
+    # the same instant of first motion, so they add up. When first motion or
+    # burnout fell in a hole in the log the ones that count from it are left
+    # off, and card_note() says why.
     burn = _span(events, "launch", "burnout")
     if burn is not None:
         cells.append(_cell("Burn time", burn, "s", 2, "first motion to thrust ending"))
@@ -228,20 +239,36 @@ def compute_summary(flight) -> list[dict[str, Any]]:
 def card_note(flight) -> str:
     """One quiet line under the card: what it leaves blank, and why.
 
-    One case so far. When first motion fell in a hole in the log, every span
-    that counts from it is left off rather than measured from a guess, and a
-    card with three cells silently missing reads as a report that forgot them.
+    First motion or burnout fell in a hole in the log. Every span that counts
+    from the lost event is left off rather than measured from a guess, and a
+    card with cells silently missing reads as a report that forgot them.
     """
-    gap = launch_gap(flight)
-    if gap is None:
+    holes = {"launch": launch_gap(flight), "burnout": burnout_gap(flight)}
+    if not any(holes.values()):
         return ""
     events = measured(flight)
-    blank = [name for key, name in (("burnout", "burn time"),
-                                    ("apogee", "time to apogee"),
-                                    ("landed", "flight time"))
-             if events[key] is not None]
-    a, b = gap
-    line = f"First motion fell in a {1e3 * (b - a):.0f} ms gap in the log ({a:.2f}–{b:.2f} s)"
+    # A cell is named only when a hole is what blanked it: each end it needs was
+    # either measured or lost in a hole, and at least one was lost.
+    cells = (("burn time", ("launch", "burnout")),
+             ("coast time", ("burnout", "ejection")),
+             ("time to apogee", ("launch", "apogee")),
+             ("flight time", ("launch", "landed")))
+    blank = [name for name, ends in cells
+             if all(events[e] is not None or holes.get(e) for e in ends)
+             and any(holes.get(e) for e in ends)]
+
+    def where(hole: tuple[float, float]) -> str:
+        a, b = hole
+        return f"a {1e3 * (b - a):.0f} ms gap in the log ({a:.2f}–{b:.2f} s)"
+
+    launch, burnout = holes["launch"], holes["burnout"]
+    if launch and burnout:
+        line = (f"First motion and burnout fell in {where(launch)}" if launch == burnout
+                else f"First motion fell in {where(launch)} and burnout in {where(burnout)}")
+    elif launch:
+        line = f"First motion fell in {where(launch)}"
+    else:
+        line = f"Burnout fell in {where(burnout)}"
     if not blank:
         return line + "."
     listed = blank[0] if len(blank) == 1 else ", ".join(blank[:-1]) + " and " + blank[-1]
