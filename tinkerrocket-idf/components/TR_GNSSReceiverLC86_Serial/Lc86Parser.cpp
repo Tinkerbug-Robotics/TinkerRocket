@@ -216,6 +216,7 @@ Event Lc86Parser::parseLine()
     if (strcmp(addr, "PQTMPVT") == 0)        return parsePqtmPvt(fields, nfields);
     if (strcmp(addr, "PQTMEPE") == 0)        return parsePqtmEpe(fields, nfields);
     if (strcmp(addr, "PAIR001") == 0)        return parsePairAck(fields, nfields);
+    if (strcmp(addr, "PAIR081") == 0)        return parseNavMode(fields, nfields);
     if (strcmp(addr, "PQTMCFGMSGRATE") == 0) return parseQtmCfgMsgRate(fields, nfields);
     if (strlen(addr) == 5 && strcmp(addr + 2, "GGA") == 0)
     {
@@ -348,6 +349,26 @@ Event Lc86Parser::parsePairAck(const char* const* f, size_t n)
     return Event::PAIR_ACK;
 }
 
+Event Lc86Parser::parseNavMode(const char* const* f, size_t n)
+{
+    // $PAIR081,<NavMode> — the answer to a $PAIR081 query (spec §2.4.25):
+    // 0 Normal, 1 Fitness, 3 Balloon, 4 Stationary, 5 Drone, 7 Swimming
+    // (2 and 6 reserved).
+    if (n < 2 || f[1][0] == '\0')
+    {
+        bad_lines_++;
+        return Event::BAD;
+    }
+    const long mode = fieldLong(f[1]);
+    if (mode < 0 || mode > 7)
+    {
+        bad_lines_++;
+        return Event::BAD;
+    }
+    nav_mode_ = (uint8_t)mode;
+    return Event::NAV_MODE;
+}
+
 Event Lc86Parser::parseQtmCfgMsgRate(const char* const* f, size_t n)
 {
     // Write acks: $PQTMCFGMSGRATE,OK / $PQTMCFGMSGRATE,ERROR,<ErrCode>.
@@ -383,7 +404,7 @@ static uint8_t gnssIdFromTalker(const char* addr)
 // NMEA hands out one flat PRN space; fold the blocks it reserves back into
 // each constellation's own numbering so sv_id means the same thing here as in
 // a u-blox record.  Anything outside a known block passes through unchanged.
-// `gnss_id` is in/out: the SBAS block re-homes a GP entry onto gnssId 1.
+// `gnss_id` is in/out: the SBAS and QZSS blocks re-home a GP entry.
 static uint8_t svIdFromPrn(uint8_t& gnss_id, long prn)
 {
     if (gnss_id == 0 && prn >= 33 && prn <= 64)    // SBAS rides the GP talker
@@ -391,18 +412,28 @@ static uint8_t svIdFromPrn(uint8_t& gnss_id, long prn)
         gnss_id = 1;
         return (uint8_t)(prn + 87);                // 33..64 → 120..151
     }
+    if (gnss_id == 0 && prn >= 193 && prn <= 202)  // and so does QZSS on this
+    {                                              // part [A Table 4, Table 13]
+        gnss_id = 5;
+        return (uint8_t)(prn - 192);               // 193..202 → 1..10
+    }
     if (gnss_id == 6 && prn >= 65 && prn <= 96)  return (uint8_t)(prn - 64);   // GLONASS slot
     if (gnss_id == 3 && prn >= 201 && prn <= 237) return (uint8_t)(prn - 200); // BeiDou
     if (gnss_id == 5 && prn >= 193 && prn <= 202) return (uint8_t)(prn - 192); // QZSS
     return (uint8_t)((prn > 0 && prn < 256) ? prn : 0);
 }
 
-void Lc86Parser::dropTalker(uint8_t gnss_id)
+void Lc86Parser::dropTalker(uint16_t talker)
 {
     uint8_t keep = 0;
     for (uint8_t i = 0; i < build_n_; i++)
     {
-        if (build_[i].gnss_id != gnss_id) build_[keep++] = build_[i];
+        if (build_src_[i] != talker)
+        {
+            build_[keep]     = build_[i];
+            build_src_[keep] = build_src_[i];
+            keep++;
+        }
     }
     build_n_ = keep;
 }
@@ -411,7 +442,33 @@ void Lc86Parser::finalizeGsv()
 {
     if (!gsv_active_) return;
     gsv_active_ = false;
+    gsv_bursts_++;             // empty ones too: this is the GSV rate
     if (build_n_ == 0) return;
+    gsv_bursts_with_sats_++;   // this one becomes a record
+
+    // Highest satellites first. A four-constellation sky can hold more
+    // satellites with signal than the record's 32 slots, and gnssSatSelect()
+    // cuts in list order, which would otherwise take the tail of whichever
+    // talker came last (BeiDou, on this part). Sorted, the cut takes the
+    // lowest satellites of every constellation. A satellite tracked before
+    // its elevation is known (empty field, common after a cold start or a
+    // reacquisition) is recorded at 0 and sorts with the horizon. Insertion
+    // sort: stable, so equal elevations keep receiver order, and n is at
+    // most kMaxSatBuild.
+    for (uint8_t i = 1; i < build_n_; i++)
+    {
+        const GNSSSatBlock b   = build_[i];
+        const uint16_t     src = build_src_[i];
+        uint8_t j = i;
+        while (j > 0 && build_[j - 1].elev_deg < b.elev_deg)
+        {
+            build_[j]     = build_[j - 1];
+            build_src_[j] = build_src_[j - 1];
+            j--;
+        }
+        build_[j]     = b;
+        build_src_[j] = src;
+    }
 
     GNSSSatData out = {};
     out.itow_ms = pvt_tow_ms_;   // time_us is the owner's to stamp
@@ -447,15 +504,30 @@ Event Lc86Parser::parseGsv(const char* addr, const char* const* f, size_t n)
     }
 
     const uint8_t talker_id = gnssIdFromTalker(addr);
+    // The talker itself, not its gnssId: GP supplies GPS, SBAS and QZSS
+    // entries, and an unknown talker must not share a key with another one.
+    const uint16_t talker = (uint16_t)(((uint8_t)addr[0] << 8) | (uint8_t)addr[1]);
 
-    // MsgNum 1 restarts THIS constellation's set. Without it a satellite that
-    // has set would linger in the table for as long as the receiver runs,
-    // because nothing else ever removes an entry.
-    if (msg_num == 1)
+    // This part tracks BeiDou on B1I and B1C [A Table 1], and GSV reports
+    // each signal as a set of its own [A Table 13: <SignalID> 1 = B1I,
+    // 3 = B1C], each starting again at MsgNum 1. The record has no signal
+    // field, so it carries B1I, the 1561 MHz band #1032's crystal harmonic
+    // falls in. Otherwise whichever set came last would win, and 1575 MHz
+    // C/N0 could sit under BeiDou with nothing to say so. <SignalID> is the
+    // field left over after the four-field blocks.
+    const bool has_signal_id = ((n - 4) % 4) == 1;
+    if (talker_id == 3 && has_signal_id && strcmp(f[n - 1], "3") == 0)
     {
-        dropTalker(talker_id);
-        if (talker_id == 0) dropTalker(1);  // SBAS rode in on the same talker
+        gsv_skipped_++;
+        gsv_active_ = true;   // still part of the burst; the closer is unchanged
+        return Event::GSV;
     }
+
+    // MsgNum 1 restarts THIS talker's set. The table is emptied when a burst
+    // closes, so this only matters when a talker's set starts again before
+    // anything has closed the burst: a closer lost to a bad checksum merges
+    // two bursts, for one.
+    if (msg_num == 1) dropTalker(talker);
 
     // Four satellites per sentence, four fields each, from f[4]. The guard
     // stops one field short of the end, so a trailing <SignalID> can never be
@@ -473,6 +545,7 @@ Event Lc86Parser::parseGsv(const char* addr, const char* const* f, size_t n)
 
         uint8_t gid = talker_id;
         GNSSSatBlock& b = build_[build_n_];
+        build_src_[build_n_] = talker;
         b.sv_id    = svIdFromPrn(gid, prn);
         b.gnss_id  = gid;
         // Elevation is 0..90 unsigned in GSV; an empty field (searching) is

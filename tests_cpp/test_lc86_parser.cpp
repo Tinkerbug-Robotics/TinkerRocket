@@ -288,6 +288,34 @@ TEST(Lc86Ack, QtmCfgMsgRateResponses)
     EXPECT_EQ(p.qtmErrorCode(), 2);
 }
 
+TEST(Lc86Ack, NavModeSetAndReadback)
+{
+    // begin() sets Balloon with $PAIR080 and waits for this ack: doc
+    // §2.4.24's published one, as printed.
+    Lc86Parser p;
+    const auto set_evs = feedAll(p, "$PAIR001,080,0*33\r\n");
+    ASSERT_EQ(count(set_evs, Event::PAIR_ACK), 1);
+    EXPECT_EQ(p.ackCommandId(), 80);
+    EXPECT_EQ(p.ackResult(), 0);
+
+    // Then reads the mode back: doc §2.4.25's exchange, as printed, the ack
+    // and then the answer (0 = Normal). begin() logs it on every boot.
+    EXPECT_EQ(p.navMode(), 0xFF);   // nothing read yet
+    const auto evs = feedAll(p, "$PAIR001,081,0*32\r\n$PAIR081,0*2F\r\n");
+    ASSERT_EQ(count(evs, Event::PAIR_ACK), 1);
+    EXPECT_EQ(p.ackCommandId(), 81);
+    ASSERT_EQ(count(evs, Event::NAV_MODE), 1);
+    EXPECT_EQ(p.navMode(), 0);
+
+    EXPECT_EQ(count(feedAll(p, frame("PAIR081,3")), Event::NAV_MODE), 1);
+    EXPECT_EQ(p.navMode(), 3);      // Balloon
+
+    // An empty or out-of-range mode is rejected and leaves the last answer.
+    EXPECT_EQ(count(feedAll(p, frame("PAIR081,")), Event::BAD), 1);
+    EXPECT_EQ(count(feedAll(p, frame("PAIR081,9")), Event::BAD), 1);
+    EXPECT_EQ(p.navMode(), 3);
+}
+
 // ───────────────────────── GGA (debug/liveness only) ─────────────────────────
 
 TEST(Lc86Gga, NumSatsAndQuality)
@@ -444,10 +472,12 @@ TEST(GnssDataPacking, FortyTwoByteLayout)
 // #1032's LoRa/GNSS coexistence test is answered by per-constellation C/N0.
 // What is pinned here: the talker → gnssId map and the NMEA extended-PRN
 // folding (so a mini record is comparable to a V9's NAV-SAT one field for
-// field), the burst framing (a burst is closed by the next non-GSV sentence,
-// and MsgNum 1 retires a constellation's stale entries), the itow_ms pairing
-// against the epoch's $PQTMPVT, and the truncation order that guarantees a
-// satellite with signal is never dropped in favour of one without.
+// field), anchored on the protocol doc's own GSV example, where QZSS rides
+// the GP talker; the burst framing (a burst is closed by the next non-GSV
+// sentence, and MsgNum 1 retires what that talker contributed); BeiDou
+// recorded on B1I only; the itow_ms pairing against the epoch's $PQTMPVT;
+// and the truncation order: a satellite with signal is never dropped in
+// favour of one without, and among those the lowest go first.
 
 namespace
 {
@@ -671,6 +701,262 @@ TEST(Lc86Gsv, BurstSurvivesBeingSplitAcrossFeeds)
     ASSERT_TRUE(p.takeSat(sat));
     EXPECT_EQ(sat.num_blocks, 5);
     EXPECT_EQ(p.badLines(), 0u);
+}
+
+namespace
+{
+
+// The protocol doc's own published GSV example (§2.2.3), byte for byte with
+// its printed checksums, so the talker map and the PRN folding are anchored
+// against the DOCUMENT, as the $PQTMPVT example is above. It was captured on
+// an LC76G (AB), which tracks the same signals as the LC86G (LA) (Table 1).
+// Two things in it that a generic NMEA table gets wrong: QZSS rides the GP
+// talker (Table 4) as PRNs 193-199 (Table 13), so 195, 194, 199 and 196 below
+// are QZSS, not GPS; and BeiDou is numbered 1-63 as-is.
+const char* kDocGsvBurst =
+    "$GPGSV,3,1,12,195,72,076,42,01,69,158,45,194,66,111,29,21,61,060,44,1*6D\r\n"
+    "$GPGSV,3,2,12,07,61,233,42,30,52,284,44,199,51,162,37,08,39,045,42,1*59\r\n"
+    "$GPGSV,3,3,12,14,29,312,29,196,20,148,36,17,18,258,36,27,07,061,36,1*53\r\n"
+    "$GLGSV,2,1,05,79,80,068,47,82,62,248,44,81,56,014,38,78,31,137,24,1*7F\r\n"
+    "$GLGSV,2,2,05,88,07,034,29,1*46\r\n"
+    "$GAGSV,2,1,06,26,80,095,42,01,69,353,13,21,49,106,26,33,42,207,41,7*72\r\n"
+    "$GAGSV,2,2,06,13,28,040,34,31,19,313,34,7*72\r\n"
+    "$GBGSV,4,1,16,46,81,194,38,07,68,349,31,40,61,016,40,30,60,259,43,1*71\r\n"
+    "$GBGSV,4,2,16,10,59,321,,03,51,192,36,36,41,314,38,02,37,229,32,1*71\r\n"
+    "$GBGSV,4,3,16,09,31,219,26,08,27,175,31,37,25,146,29,06,23,202,29,1*78\r\n"
+    "$GBGSV,4,4,16,16,20,199,31,13,17,186,26,39,12,192,29,28,09,048,30,1*7C\r\n";
+
+}  // namespace
+
+TEST(Lc86Gsv, DocExampleBurstPutsQzssOffTheGpTalker)
+{
+    Lc86Parser p;
+    GNSSSatData sat = {};
+
+    const auto evs = feedAll(p, std::string(kDocGsvBurst) + frame(kCloser));
+    EXPECT_EQ(count(evs, Event::GSV), 11);
+    EXPECT_EQ(p.badLines(), 0u);              // every printed checksum verifies
+    EXPECT_EQ(p.gsvSkipped(), 0u);            // B1I only: nothing to leave out
+    ASSERT_TRUE(p.takeSat(sat));
+
+    // QZSS lands as gnssId 5, svId = PRN - 192: what a u-blox NAV-SAT says
+    // for the same satellite. Never GPS with an svId of 195.
+    ASSERT_NE(findSat(sat, 5, 3), nullptr);   // PRN 195
+    EXPECT_EQ(findSat(sat, 5, 3)->cno_dbhz, 42);
+    EXPECT_EQ(findSat(sat, 5, 3)->elev_deg, 72);
+    EXPECT_NE(findSat(sat, 5, 2), nullptr);   // PRN 194
+    EXPECT_NE(findSat(sat, 5, 7), nullptr);   // PRN 199
+    EXPECT_NE(findSat(sat, 5, 4), nullptr);   // PRN 196
+    for (uint8_t i = 0; i < sat.num_blocks; i++)
+    {
+        if (sat.sat[i].gnss_id == 0)
+        {
+            EXPECT_LE(sat.sat[i].sv_id, 32) << "a GPS entry with svId "
+                                            << (int)sat.sat[i].sv_id;
+        }
+    }
+
+    // One satellite from each of the other constellations.
+    ASSERT_NE(findSat(sat, 0, 1), nullptr);   // GPS 01
+    EXPECT_EQ(findSat(sat, 0, 1)->cno_dbhz, 45);
+    ASSERT_NE(findSat(sat, 6, 15), nullptr);  // GLONASS 79 -> slot 15
+    EXPECT_EQ(findSat(sat, 6, 15)->cno_dbhz, 47);
+    ASSERT_NE(findSat(sat, 2, 26), nullptr);  // Galileo 26
+    EXPECT_EQ(findSat(sat, 2, 26)->elev_deg, 80);
+    ASSERT_NE(findSat(sat, 3, 46), nullptr);  // BeiDou 46, numbered as-is
+    EXPECT_EQ(findSat(sat, 3, 46)->cno_dbhz, 38);
+
+    // 39 in view and 38 with signal, on the doc's own sample sky: more than
+    // the record's 32 slots. The cut takes the six LOWEST satellites with
+    // signal, wherever they are listed: GPS 27 (7 deg), GLONASS 88 (7),
+    // BeiDou 28 (9), 39 (12) and 13 (17), GPS 17 (18). Galileo 31 at 19 deg
+    // is the lowest one kept. Cut in list order instead, all six would have
+    // come off BeiDou, the talker listed last.
+    EXPECT_EQ(sat.num_svs, 39);
+    EXPECT_EQ(sat.num_blocks, GNSS_SAT_MAX_BLOCKS);
+    int per_gnss[8] = {};
+    for (uint8_t i = 0; i < sat.num_blocks; i++)
+    {
+        EXPECT_GT(sat.sat[i].cno_dbhz, 0);
+        EXPECT_GE(sat.sat[i].elev_deg, 19);
+        if (sat.sat[i].gnss_id < 8) per_gnss[sat.sat[i].gnss_id]++;
+    }
+    EXPECT_EQ(findSat(sat, 0, 27), nullptr);
+    EXPECT_EQ(findSat(sat, 6, 24), nullptr);   // GLONASS 88 -> slot 24
+    EXPECT_EQ(findSat(sat, 3, 28), nullptr);
+    EXPECT_EQ(findSat(sat, 3, 39), nullptr);
+    EXPECT_EQ(findSat(sat, 3, 13), nullptr);
+    EXPECT_EQ(findSat(sat, 0, 17), nullptr);
+    EXPECT_NE(findSat(sat, 2, 31), nullptr);
+    EXPECT_EQ(per_gnss[0], 6);    // GPS: 8 in view
+    EXPECT_EQ(per_gnss[5], 4);    // QZSS: 4
+    EXPECT_EQ(per_gnss[6], 4);    // GLONASS: 5
+    EXPECT_EQ(per_gnss[2], 6);    // Galileo: 6
+    EXPECT_EQ(per_gnss[3], 12);   // BeiDou: 15 with signal
+}
+
+TEST(Lc86Gsv, TruncationTakesTheLowestSatellitesNotTheLastTalker)
+{
+    // 32 GPS satellites with signal at 11..42 degrees, then BeiDou: one with
+    // signal at 80 degrees and one being searched for at 85. Thirty-three
+    // have signal, so one must go: the lowest GPS satellite, not the BeiDou
+    // one listed last. And the silent BeiDou entry, although it is the
+    // highest of all, still loses to every satellite with signal.
+    Lc86Parser p;
+    GNSSSatData sat = {};
+    std::string burst;
+    for (int s = 0; s < 8; s++)
+    {
+        char body[128];
+        const int prn = s * 4 + 1;
+        snprintf(body, sizeof(body),
+                 "GPGSV,8,%d,32,%02d,%d,100,40,%02d,%d,100,40,%02d,%d,100,40,"
+                 "%02d,%d,100,40,1",
+                 s + 1, prn, 10 + prn, prn + 1, 11 + prn, prn + 2, 12 + prn,
+                 prn + 3, 13 + prn);
+        burst += frame(body);
+    }
+    burst += frame("GBGSV,1,1,02,05,80,200,35,06,85,210,,1");
+    feedAll(p, burst + frame(kCloser));
+    ASSERT_TRUE(p.takeSat(sat));
+
+    EXPECT_EQ(sat.num_svs, 34);
+    EXPECT_EQ(sat.num_blocks, GNSS_SAT_MAX_BLOCKS);
+    EXPECT_EQ(findSat(sat, 0, 1), nullptr);    // GPS 01 at 11 deg: the cut
+    EXPECT_NE(findSat(sat, 0, 2), nullptr);    // GPS 02 at 12 deg stays
+    EXPECT_NE(findSat(sat, 3, 5), nullptr);    // BeiDou, listed last, stays
+    EXPECT_EQ(findSat(sat, 3, 6), nullptr);    // silent, however high
+
+    // Highest first, which is what made the cut land on the lowest.
+    EXPECT_EQ(sat.sat[0].gnss_id, 3);
+    EXPECT_EQ(sat.sat[0].sv_id, 5);
+    for (uint8_t i = 1; i < sat.num_blocks; i++)
+    {
+        EXPECT_LE(sat.sat[i].elev_deg, sat.sat[i - 1].elev_deg) << "at " << (int)i;
+    }
+}
+
+TEST(Lc86Gsv, RealBeetleBurstParsesAsTheModuleSentIt)
+{
+    // One epoch captured 2026-09-24 from the Beetle's own LC86G (firmware
+    // LC86GLANR12A03S, the flight configuration at 10 Hz) on the SDR rig,
+    // byte for byte. The rig simulates GPS only, hence the three empty sets,
+    // which the module sends for every constellation it has nothing in. It
+    // also shows three satellites tracked before their elevation is known
+    // (21, 12, 11: empty elevation and azimuth, C/N0 44) and SBAS PRN 46 on
+    // the GP talker, predicted but not tracked. The burst follows the
+    // epoch's $PQTMPVT and is closed by its $PQTMEPE.
+    Lc86Parser p;
+    GNSSSatData sat = {};
+    const auto evs = feedAll(p,
+        "$PQTMPVT,1,203446300,20260818,083028.300,1,3,9,18,0.00004400,"
+        "-119.00005050,1199.039,-22.916,-0.004,-0.002,-0.009,0.005,0.00,"
+        "0.76,1.15*7A\r\n"
+        "$GPGSV,4,1,13,21,,,44,24,51,303,44,06,32,029,43,05,28,183,43,1*5B\r\n"
+        "$GPGSV,4,2,13,22,26,079,44,15,20,230,44,14,17,100,44,19,13,025,44,1*62\r\n"
+        "$GPGSV,4,3,13,30,12,147,43,29,05,259,44,12,,,44,11,,,44,1*67\r\n"
+        "$GPGSV,4,4,13,46,78,269,,1*56\r\n"
+        "$GLGSV,1,1,00,1*78\r\n"
+        "$GAGSV,1,1,00,7*73\r\n"
+        "$GBGSV,1,1,00,1*76\r\n"
+        "$PQTMEPE,2,1.593,1.295,3.759,2.053,4.283*54\r\n");
+    EXPECT_EQ(p.badLines(), 0u);
+    EXPECT_EQ(count(evs, Event::GSV), 7);
+    EXPECT_EQ(p.gsvBursts(), 1u);
+    ASSERT_TRUE(p.takeSat(sat));
+
+    EXPECT_EQ(sat.itow_ms, 203446300u);     // pairs with the $PQTMPVT above
+    EXPECT_EQ(sat.num_svs, 13);
+    EXPECT_EQ(sat.num_blocks, 13);
+    ASSERT_NE(findSat(sat, 0, 21), nullptr);
+    EXPECT_EQ(findSat(sat, 0, 21)->cno_dbhz, 44);
+    EXPECT_EQ(findSat(sat, 0, 21)->elev_deg, 0);   // not known yet: lands as 0
+    ASSERT_NE(findSat(sat, 1, 133), nullptr);      // SBAS 46 -> svId 133
+    EXPECT_EQ(findSat(sat, 1, 133)->cno_dbhz, 0);
+    EXPECT_EQ(findSat(sat, 1, 133)->elev_deg, 78);
+
+    // Tracked satellites highest first; the three with no elevation yet sit
+    // with the horizon, in the order the module sent them; the untracked
+    // SBAS entry comes last, however high it is.
+    const uint8_t want_sv[13] = {24, 6, 5, 22, 15, 14, 19, 30, 29, 21, 12, 11, 133};
+    for (uint8_t i = 0; i < 13; i++)
+    {
+        EXPECT_EQ(sat.sat[i].sv_id, want_sv[i]) << "at " << (int)i;
+    }
+}
+
+TEST(Lc86Gsv, EmptyBurstIsCountedButMakesNoRecord)
+{
+    // gsvBursts() is the GSV rate the driver reports at boot, so a burst with
+    // no satellites in it (a board indoors) must count, without producing a
+    // record that says nothing.
+    Lc86Parser p;
+    GNSSSatData sat = {};
+
+    feedAll(p, frame("GPGSV,1,1,00,1") + frame("GLGSV,1,1,00,1") + frame(kCloser));
+    EXPECT_EQ(p.gsvBursts(), 1u);
+    EXPECT_EQ(p.gsvBurstsWithSats(), 0u);
+    EXPECT_FALSE(p.takeSat(sat));
+
+    feedAll(p, frame("GPGSV,1,1,01,01,40,083,42,1") + frame(kCloser));
+    EXPECT_EQ(p.gsvBursts(), 2u);
+    EXPECT_EQ(p.gsvBurstsWithSats(), 1u);   // counted at the close, not the take
+    EXPECT_TRUE(p.takeSat(sat));
+
+    // A closer with no burst open is not a burst.
+    feedAll(p, frame(kCloser));
+    EXPECT_EQ(p.gsvBursts(), 2u);
+    EXPECT_EQ(p.gsvBurstsWithSats(), 1u);
+}
+
+TEST(Lc86Gsv, BeiDouB1cSetNeverReplacesTheB1iOne)
+{
+    // The LC86G (LA) tracks BeiDou on B1I and B1C (Table 1), and GSV reports
+    // each signal as its own set (Table 13: SignalID 1 = B1I, 3 = B1C), each
+    // starting at MsgNum 1. The record has no signal field, so it carries
+    // B1I, the 1561 MHz band #1032's crystal harmonic lands in. A B1C set
+    // must neither replace it nor mix into it, whichever set comes first.
+    for (int b1c_first = 0; b1c_first < 2; b1c_first++)
+    {
+        SCOPED_TRACE(b1c_first ? "B1C set first" : "B1I set first");
+        Lc86Parser p;
+        GNSSSatData sat = {};
+        const std::string b1i = frame("GBGSV,1,1,02,19,60,100,40,20,45,200,38,1");
+        const std::string b1c = frame("GBGSV,1,1,02,19,60,100,31,20,45,200,29,3");
+        feedAll(p, frame("GPGSV,1,1,01,01,40,083,42,1") +
+                   (b1c_first ? b1c + b1i : b1i + b1c) +
+                   frame(kCloser));
+        ASSERT_TRUE(p.takeSat(sat));
+
+        EXPECT_EQ(sat.num_blocks, 3);
+        ASSERT_NE(findSat(sat, 3, 19), nullptr);
+        EXPECT_EQ(findSat(sat, 3, 19)->cno_dbhz, 40);   // B1I's, not B1C's 31
+        ASSERT_NE(findSat(sat, 3, 20), nullptr);
+        EXPECT_EQ(findSat(sat, 3, 20)->cno_dbhz, 38);
+        EXPECT_EQ(p.gsvSkipped(), 1u);     // the B1C sentence, counted
+        EXPECT_EQ(p.gsvSentences(), 2u);   // GP and B1I folded in
+    }
+}
+
+TEST(Lc86Gsv, MsgNumOneRetiresEverythingItsTalkerContributed)
+{
+    // GP carries GPS, SBAS and QZSS. A GP set that starts again inside one
+    // burst retires all three, because the key is the talker that supplied an
+    // entry, not the gnssId its PRN folded to. Other talkers are untouched.
+    Lc86Parser p;
+    GNSSSatData sat = {};
+    feedAll(p, frame("GPGSV,1,1,03,01,40,083,42,40,20,200,35,195,60,090,36,1") +
+               frame("GAGSV,1,1,01,12,55,120,44,7") +
+               frame("GPGSV,1,1,01,01,41,084,43,1") +
+               frame(kCloser));
+    ASSERT_TRUE(p.takeSat(sat));
+
+    EXPECT_EQ(sat.num_blocks, 2);
+    ASSERT_NE(findSat(sat, 0, 1), nullptr);
+    EXPECT_EQ(findSat(sat, 0, 1)->cno_dbhz, 43);
+    EXPECT_EQ(findSat(sat, 1, 127), nullptr);  // SBAS went with its set
+    EXPECT_EQ(findSat(sat, 5, 3), nullptr);    // and so did QZSS
+    EXPECT_NE(findSat(sat, 2, 12), nullptr);   // Galileo stays
 }
 
 TEST(Lc86Gsv, SatRecordPackingMatchesTheWire)

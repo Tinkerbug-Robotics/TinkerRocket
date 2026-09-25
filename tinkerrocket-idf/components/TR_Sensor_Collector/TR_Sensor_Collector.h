@@ -202,9 +202,9 @@ public:
     bool getMMC5983MAData(MMC5983MAData &data_out);
     bool getIIS2MDCData(IIS2MDCData &data_out);
     bool getGNSSData(GNSSData &data_out);
-    // Per-satellite report for the latest GNSS epoch (GNSSSatData, u-blox
-    // only — the LC86 driver never produces one).  Same pop-once contract as
-    // getGNSSData(): true at most once per epoch.
+    // Per-satellite report for the latest GNSS epoch (GNSSSatData): every
+    // epoch from the u-blox, about once a second from the LC86G's GSV.  Same
+    // pop-once contract as getGNSSData(): true at most once per epoch.
     bool getGNSSSatData(GNSSSatData &data_out);
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const;
     void getMMC5983MADebugSnapshot(MMC5983MADebugSnapshot &snapshot_out) const;
