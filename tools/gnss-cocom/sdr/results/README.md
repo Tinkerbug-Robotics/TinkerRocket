@@ -927,6 +927,67 @@ The tightly-coupled/GNSS-only filter driver `tc_ekf_slr.py` lives on PR #1523 wi
 the EKF it uses. Captures: `results/px1105r_*` (gzip; the exploratory gain/level
 probes stayed local).
 
+
+### Restarting after burnout, and the elevation mask (2026-09-26)
+
+Can a hot start at burnout, seeded with the vehicle's state (the truth here, an IMU in
+flight), bring measurements back sooner after the 13.5 g boost? `px1105r_run.py
+--hot-start FILET` sends AN0037 `0x01` System Restart, built by
+`seed_restart.restart_payload`; `--restart-mode cold` sends a cold start instead. The
+seed's altitude is bounded to -1000..18,300 m (AN0037 p. 15) -- the 60,000 ft COCOM
+altitude -- so on the spaceshot an in-spec seed must go out within 6.8 s of burnout.
+Times below are seconds after ignition (burnout 12.1, 500 m/s crossing 82.2); "raw back"
+is 4+ measurements in every 0xE5 epoch for 5 s.
+
+With the receiver's default 15 degree elevation mask and a 360 s pad, restarts looked
+like they helped, sometimes:
+
+| Run (15 deg mask, 360 s pad) | Ephemeris at ignition | Raw back | First fix | Fix epochs |
+|---|---|---|---|---|
+| Baseline, no restart | 9 of 9 | 115.5 | 110.0 | 1245 |
+| Hot start at burnout, run 1 | 6 of 9 | 86.0 | 81.0 | 1860 |
+| Hot start at burnout, run 2 | 5 of 9 | 253.0 | 246.2 | 676 |
+| Cold start at burnout | 9 of 9 | 262.5 | 253.7 | 426 |
+| Hot start at 32 km (seed altitude out of spec) | 9 of 9 | 90.0 | 89.2 | 1710 |
+
+The spread came from the setup, not the restart:
+
+- **The ephemeris decoded by ignition varied from 5 to 9 of 9 on the same file.** A hot
+  start restarts with only what it holds; the pad's "measurements per epoch" is exactly
+  that count. A cold start throws it all away and was the worst.
+- **The PX1105R ships with a 15 degree elevation mask** (`0x2F` -> `0xB0`: select 1,
+  elevation 15, CNR 0). It kept the five lowest satellites (G12, G13, G19, G29, G30 at
+  5-13 degrees) out of its channel table entirely, although the IQ carried all 14 at
+  equal power. On a vertical flight those are the satellites that see the least boost
+  Doppler and acceleration -- both scale with sin(elevation) -- so the mask discarded the
+  most boost-robust part of the sky. (`sky_scan.py`: the scenario's origin and time are
+  already the best sky that day, 14 GPS above 5 degrees.)
+
+With the mask at 3 degrees (`--elev-mask 3`: AN0037 `0x2B`, p. 27, SRAM only -- a power
+cycle restores 15) and a 600 s pad (`pad_scenario.py`), every satellite had ephemeris at
+ignition, the baseline came back on its own at the first moment the speed limit allows,
+and the hot start added nothing:
+
+| Run (3 deg mask, 600 s pad) | Ephemeris at ignition | Raw back | First fix | Fix epochs |
+|---|---|---|---|---|
+| Baseline, no restart | 14 of 14 | 79.7 | 80.7 | 1831 |
+| Hot start at burnout | 14 of 14 | 82.0 | 80.8 | 1844 |
+
+Both now report a fix through every stretch where one is allowed -- between the 500 m/s
+crossing and 80 km, below 80 km before the descent speeds up, and after the descent's
+500 m/s crossing -- so what remains is the export limits themselves. Flight firmware that
+leaves the SkyTraq default of 15 degrees drops exactly the satellites that ride through a
+boost best.
+
+Caveats: one run per configuration so far. Channel status (0xE7) can show satellites
+locked at full strength while 0xE5 carries no measurements -- the receiver withholds raw
+output with its fix -- so "raw back" is read from 0xE5, not from 0xE7.
+
+Tools: `px_restart_compare.py` (runs side by side, seconds after ignition),
+`px_limits.py` (now marks any `# host:` event the runner logged), `sky_scan.py`,
+`pad_scenario.py`. Captures: `results/px1105r_spaceshot_pad360_*_{hot372_run1,
+hot372_run2,hot392,cold372}` and `results/px1105r_spaceshot_pad600_*_el3_{run1,hot612}`.
+
 ## Experiments still owed on the first four receivers
 
 Only the Air530 was ever run against the dwell scenarios. Every other part's

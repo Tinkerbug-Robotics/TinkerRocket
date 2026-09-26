@@ -57,8 +57,12 @@ def lla(x, y, z):
 
 
 e5, df = [], []           # (host t, file t, ...)
+events = []               # (host t, text): what the runner did mid-run, e.g. a hot start
 for line in open(cap, errors="replace"):
     p = line.split(" ", 2)
+    if len(p) >= 3 and p[1] == "#" and p[2].startswith("host: ") and not p[2].startswith("host: tx "):
+        events.append((float(p[0]), p[2][len("host: "):].strip()))
+        continue
     if len(p) < 3 or p[1] != "B":
         continue
     x = bytes.fromhex(p[2].strip())
@@ -80,6 +84,9 @@ for line in open(cap, errors="replace"):
 offs = sorted(h - f for h, f, *_ in e5 if f is not None) or sorted(h - f for h, f, *_ in df if f)
 off = offs[len(offs) // 2]
 print(f"capture {cap.name}: {len(e5)} raw epochs, {len(df)} fix frames; host - file = {off:.3f} s")
+events = [(h - off, txt.split(" sent")[0]) for h, txt in events]
+for ft, name in events:
+    print(f"  host event at file {ft:7.2f} s: {name}")
 
 
 def gaps(times, min_gap=0.5):
@@ -146,12 +153,18 @@ for a in axs:
     for t, _d in crossings("alt_m", 18000.0):
         a.axvline(t, color=INK3, lw=0.6, ls=(0, (1, 3)))
     a.axvline(IGN, color=INK3, lw=0.6)
+    for ft, _name in events:
+        a.axvline(ft, color=INK, lw=1.0, ls=(0, (4, 3)))
     a.tick_params(labelsize=7, colors=INK3)
     a.grid(color=RULE, lw=0.5)
     for sp in a.spines.values():
         sp.set_color(RULE)
+for ft, name in events:
+    axs[0].text(ft + 2, 9.2, f"{name} (file {ft:.1f} s)", fontsize=7.5, color=INK, va="top")
 axs[0].set_xlim(IGN - 80, max(h - off for h, *_ in df) if df else IGN + 300)
 axs[0].set_title(f"PX1105R (RTK kinematic base, raw 0xE5 at 20 Hz), smooth {SCEN}; "
-                 "amber = above 500 m/s, violet = above 80 km, dotted = 18 km", fontsize=9, color=INK, loc="left")
+                 "amber = above 500 m/s, violet = above 80 km, dotted = 18 km"
+                 + ("; dashed = " + ", ".join(n for _t, n in events) if events else ""),
+                 fontsize=9, color=INK, loc="left")
 fig.savefig(out, bbox_inches="tight")
 print("wrote", out)
