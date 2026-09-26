@@ -17,10 +17,11 @@ the separate high-g/transonic dynamics problem (#174 / #249 / #262).
 
 | Path | What it is |
 |---|---|
-| `firmware/gnss_passthrough/` | Byte-transparent USB ↔ receiver UART bridge. Builds for RP2040, ESP32-S3 and ESP32-C3 |
+| `firmware/gnss_passthrough/` | Byte-transparent USB ↔ receiver UART bridge. Builds for RP2040, ESP32-S3 and ESP32-C3. Locks on NMEA or SkyTraq binary frames; 16 KB buffers carry a 20 Hz raw stream at 921600 baud |
 | `gnss_nmea_monitor.py` | Host monitor: timestamps, checksums, and the FIX / BLOCKED / NO_LOCK classifier |
 | `skytraq_cmd.py` | Sends SkyTraq binary configuration frames through the bridge |
 | `skytraq_binary.py` | SkyTraq binary message parsing (AN0039): `0xDF` nav state, `0xE7` per-SV C/N0 |
+| `skytraq_raw.py` | Turns on and logs a SkyTraq RTK receiver's raw measurements (`0xE5`) and navigation data through the bridge: `--baud`, `--kinematic-base`, `--enable-bin`, `--rate` up to 20 Hz |
 | `firmware/lc86_bridge/` | ESP-IDF image for the Tinker-Beetle's flight computer: its LC86G's UART on USB, pyro outputs parked low, silences reported |
 | `rtcm3.py` | RTCM3 framing (CRC-24Q) and MSM7 decoding: per-satellite C/N0, Doppler and lock time from the LC86G |
 
@@ -36,6 +37,27 @@ This matters more than it sounds. The TinkerNav family splits into two shapes:
   the C3 is a companion radio. A passthrough flashed to the C3 finds nothing on
   every GPIO, because there is nothing there to find.
 - **Single-MCU boards** (V25): **ESP32-S3 + PX1105R**, one USB-C.
+
+**Raw measurements from the RTK receivers (PX1105R, PX1125R).** AN0037 marks
+`0x09` (message type) "not supported in RTK receivers": binary NACKs, and in
+rover mode `0x1E` is accepted but nothing binary comes out. Raw output is what
+the receiver sends in **RTK base mode**; the *kinematic* base function re-solves
+every epoch, so the antenna may move. 20 Hz needs `0x1E` rate 20 **and** `0x0E`
+position rate 20, and a UART above 115200: measured on a PX1105R outdoors
+(2026-09-26), 36 channels dual-frequency (GPS L1+L5, Galileo E1+E5a, BeiDou
+B1I+B2a) came to 23.4 kB/s, so 460800 baud is the minimum and 921600 leaves
+headroom. Everything goes to SRAM; a power cycle restores rover, NMEA and
+115200. The receiver steps its clock by whole milliseconds (the `0xE5`
+measurement indicator), which a filter has to absorb:
+
+```bash
+python3 tools/gnss-cocom/skytraq_raw.py -p /dev/cu.usbmodemXXXX --baud 921600
+python3 tools/gnss-cocom/skytraq_raw.py -p /dev/cu.usbmodemXXXX --kinematic-base --enable-bin --rate 20 \
+    --log raw.log --seconds 1200     # --enable-bin also sets the position rate to match
+```
+
+`tinkerrocket-sim/scripts/tc_ekf_capture.py` replays such a log through the
+standalone raw-measurement EKF.
 
 On a dual-MCU board, plugging into the "wrong" USB port gets you a working,
 enumerating MCU that simply cannot see the GNSS. Both ports appear as
