@@ -100,15 +100,26 @@ shopping list.
 
 In the V25 schematic the RF net has exactly two nodes, `J2.1` and `U2.11
 RF_IN`, with no bias tee, feed inductor, or series cap, and `U2.14 VCC_RF` is
-explicitly unconnected. On that evidence the SMA centre pin carries **no DC
-bias**, which would make the DC block in #491's parts list unnecessary *for this
-board* and the "antenna-open detection" gotcha moot.
+explicitly unconnected. That does **not** make the port cold: the bias is
+generated inside the module, which is why the board carries no bias tee. The
+[PX1105R datasheet](https://navspark.mybigcommerce.com/content/PX1105R_DS.pdf)
+(rev 2, 2024-12-27) describes pin 11 `RF_IN` as "RF input with 3.3V active
+antenna bias voltage" and pin 14 `VCC_RF` as an output, says an active antenna
+is required, and its application circuit (p. 7) wires the antenna straight to
+`RF_IN` with `VCC_RF` open — the same two-node net as the V25. So expect
+**~3.3 V DC on the SMA centre pin**: the DC block in #491's parts list is
+**required** when injecting from an SDR, not optional. The
+[PX1125R datasheet](https://navspark.mybigcommerce.com/content/PX1125R_DS.pdf)
+(rev 4, 2024-12-27) says the same of its `RF_IN`, and the rig's own PX1125R
+runs went through a DC block (`sdr/results/receivers.json`). #491's
+"antenna-open detection" gotcha applies — the block leaves the bias unloaded —
+though the PX1125R still acquired through one.
 
-**Verify with a DMM on the actual board before trusting that.** It is a
-ten-second measurement protecting a $150–300 SDR, the analysis above is of the
-V25 design rather than the board in your hand, and other GNSS boards here — the
-repo's own `gnss-px1105r-18mm-highpower-ext-ant`, by its name — may well bias
-their antenna port. Keep the DC block inline if there is any doubt; it costs a
+**Verify with a DMM on the actual board anyway.** It is a ten-second
+measurement protecting a $150–300 SDR, and the datasheet describes the module,
+not the board in your hand. Measure with the receiver powered: the bias comes
+from the module, so an unpowered board reads 0 V and proves nothing. Expect
+about 3.3 V, and keep the DC block inline whatever the meter says; it costs a
 fraction of a dB.
 
 **Conducted only.** GPS L1 is a live, protected band: cable, attenuators and a
