@@ -5,7 +5,7 @@ same error-state layout and frame conventions, same IMU mechanization, pad
 levelling, baro and GNSS-fix updates -- extended with two receiver-clock states
 so GNSS can enter as per-satellite measurements instead of a finished fix:
 
-    error state (17)
+    error state (24)
       0:3   position error, NED (m)
       3:6   velocity error, NED (m/s)
       6:9   attitude error, quaternion vector part (half-angle, as the C++)
@@ -27,6 +27,16 @@ Each constellation reaches the receiver through its own hardware delays and
 time scale, so its pseudoranges share the GPS clock bias plus a near-constant
 offset of a few to tens of metres. The Doppler shares one drift.
 
+      20:23 CLONE of the position error at the previous carrier epoch (NED)
+      23    CLONE of the clock bias at that epoch
+
+The clone is what makes the carrier-phase delta-range exact (stochastic
+cloning): a carrier phase is a range with an unknown whole-cycle offset, so only
+its change between two epochs is usable, and that change is predicted from the
+position NOW and the position THEN. The clone keeps "then" in the state with
+its full covariance, has no dynamics of its own, and is refreshed after every
+carrier epoch (``reclone``).
+
 ``update_gnss_fix`` is the loosely coupled path the flight code uses today;
 ``update_gnss_raw`` is the tightly coupled one. Keeping both in one class means
 a comparison between them changes nothing but the GNSS update.
@@ -46,7 +56,10 @@ ECC2 = 0.0066943799901
 EARTH_RADIUS = 6378137.0
 OMGE = 7.2921151467e-5
 C_LIGHT = 299792458.0
-N = 20
+N = 24
+N_CORE = 20
+CLONE = [20, 21, 22, 23]
+CLONED = [0, 1, 2, 15]      # what the clone copies: position, clock bias
 ISB_INDEX = {"E": 18, "C": 19}
 
 
@@ -160,6 +173,13 @@ def spp_fix(meas, x0=None, iters=10):
     return x[:3], v[:3], len(use)
 
 
+def chi2_999(n):
+    """0.999 quantile of chi-square with n degrees of freedom, Wilson-Hilferty
+    (11.2 at n = 1 where the exact value is 10.8, within 1 % from n = 5)."""
+    a = 2.0 / (9.0 * n)
+    return n * (1.0 - a + 3.090 * math.sqrt(a)) ** 3
+
+
 def corr_inflation(dt, tau):
     """Variance factor for a first-order Gauss-Markov error sampled every dt
     and fused as if white: successive samples correlate with rho = exp(-dt/tau),
@@ -246,6 +266,20 @@ class RawMeas:
     sigma_pr_corr: float = 0.0   # m
     tau_pr: float = 15.0         # s
     tau_rr: float = 0.1          # s
+    # Carrier range (lambda * accumulated cycles, corrected like the
+    # pseudorange but with the ionosphere's opposite sign). Its absolute value
+    # carries an unknown whole-cycle offset; only its change between epochs is
+    # used (update_carrier). cr_slip marks a possible break in the count.
+    cr: float | None = None      # m
+    cr_slip: bool = False
+    sigma_cr: float = 0.003      # m, white per-epoch phase noise
+    # Carrier errors that grow with the differencing interval (tracking noise
+    # correlated over a few tenths of a second, then a slow random walk:
+    # multipath, ionosphere): a difference over dt has variance
+    # 2 sigma_cr^2 + 2 sigma_cr_corr^2 (1 - exp(-dt/tau_cr)) + q_cr dt.
+    sigma_cr_corr: float = 0.0   # m
+    tau_cr: float = 0.3          # s
+    q_cr: float = 0.0            # m^2/s
 
 
 @dataclass
@@ -258,6 +292,12 @@ class RawStats:
     clock_jump_ms: int = 0
     nis_pr: list = field(default_factory=list)
     nis_rr: list = field(default_factory=list)
+    used_cr: int = 0
+    rejected_cr: int = 0
+    nis_cr: list = field(default_factory=list)
+    cr_clock_jump_ms: int = 0
+    cr_common_rejected: int = 0      # carrier dropped by the joint test (a shared error)
+    cr_joint: tuple = (0.0, 0)       # the joint test's (NIS, degrees of freedom)
 
 
 class TcEkf:
@@ -277,6 +317,11 @@ class TcEkf:
         self.clk_ready = False
         self._rejects = {}
         self._last_upd = {}                      # (sys, prn, kind) -> filter time of last update
+        self.clone_lla = None                    # nominal position at the clone epoch
+        self.clone_b = 0.0                       # nominal clock bias at the clone epoch
+        self.clone_t = 0.0                       # filter time of the clone epoch
+        self._clone_epoch = 0
+        self._prev_cr = {}                       # (sys, prn) -> (clone epoch, carrier range, RawMeas)
         self.t = 0.0                             # filter time, advanced by the propagations
         pp = self.p
         self.Rw = np.diag([pp.a_noise ** 2] * 3 + [pp.w_noise ** 2] * 3
@@ -294,10 +339,11 @@ class TcEkf:
                          + [pp.p0_att ** 2, pp.p0_att ** 2, pp.p0_hdg ** 2]
                          + [pp.p0_abias ** 2] * 3 + [pp.p0_wbias ** 2] * 3
                          + [pp.p0_clk_bias ** 2, pp.p0_clk_drift ** 2, pp.p0_clk_g ** 2]
-                         + [pp.p0_isb ** 2] * 2)
+                         + [pp.p0_isb ** 2] * 2 + [0.0] * (N - N_CORE))
         if clk_bias is not None:
             self.clk = np.array([clk_bias, clk_drift or 0.0, 0.0])
             self.clk_ready = True
+        self.reclone()
 
     def set_attitude_sigma(self, att_rad, hdg_rad):
         self.P[6, 6] = self.P[7, 7] = att_rad ** 2
@@ -395,7 +441,8 @@ class TcEkf:
 
     def _stabilize(self):
         self.P = 0.5 * (self.P + self.P.T)
-        caps = [1e8] * 3 + [1e4] * 3 + [10.0] * 3 + [10.0] * 3 + [1.0] * 3 + [1e12, 1e6, 100.0, 1e6, 1e6]
+        caps = ([1e8] * 3 + [1e4] * 3 + [10.0] * 3 + [10.0] * 3 + [1.0] * 3 + [1e12, 1e6, 100.0, 1e6, 1e6]
+                + [1e8] * 3 + [1e12])
         for i, c in enumerate(caps):
             if self.P[i, i] > c:
                 s = math.sqrt(c / self.P[i, i])
@@ -416,6 +463,12 @@ class TcEkf:
         self.clk += dx[15:18]
         self.isb["E"] += dx[18]
         self.isb["C"] += dx[19]
+        if self.clone_lla is not None:
+            rew_c, rns_c = earth_rad(self.clone_lla[0])
+            self.clone_lla[2] -= dx[22]
+            self.clone_lla[0] += dx[20] / (rns_c + self.clone_lla[2])
+            self.clone_lla[1] += dx[21] / ((rew_c + self.clone_lla[2]) * math.cos(self.clone_lla[0]))
+            self.clone_b += dx[23]
         dq = np.array([1.0, dx[6], dx[7], dx[8]])
         dq /= np.linalg.norm(dq)
         self.q = quat_mult(self.q, dq)
@@ -525,6 +578,7 @@ class TcEkf:
             self.P[i, :] = self.P[:, i] = 0.0
             self.P[i, i] = self.p.p0_isb ** 2
         self.clk_ready = True
+        self.reclone()
         return True
 
     def update_gnss_raw(self, meas: list[RawMeas]) -> RawStats:
@@ -588,6 +642,100 @@ class TcEkf:
                 else:
                     setattr(st, f"rejected_{kind}", getattr(st, f"rejected_{kind}") + 1)
                     st.rejected_prns.append((m.prn, kind))
+        return st
+
+    # ------------------------------------------------------------- carrier
+    def reclone(self):
+        """Copy position and clock bias into the clone, with their covariance:
+        the clone starts perfectly correlated with the state it copies."""
+        self.clone_lla = self.lla.copy()
+        self.clone_b = float(self.clk[0])
+        self.clone_t = self.t
+        P = self.P
+        P[CLONE, :] = P[CLONED, :]
+        P[:, CLONE] = P[:, CLONED]
+        P[np.ix_(CLONE, CLONE)] = P[np.ix_(CLONED, CLONED)]
+        self._clone_epoch += 1
+
+    def update_carrier(self, meas: list[RawMeas], stats: RawStats | None = None) -> RawStats:
+        """Carrier-phase delta-range: for every satellite whose count ran
+        unbroken since the clone epoch, fuse
+
+            cr(now) - cr(then) = [rho(now) + b(now)] - [rho(then) + b(then)]
+
+        with the geometry evaluated at the current position and at the clone.
+        The whole-cycle offset cancels, and so do inter-system biases. Its
+        noise grows with the time since the clone (RawMeas: white, correlated
+        and random-walk parts).
+
+        The epoch goes in as one vector update. A satellite-by-satellite gate
+        would let the first slipped satellite through: the clock can explain
+        19 cm on its own, and every clean satellite after it would then fail.
+        So the bad satellite is found first, with Baarda's w-test
+        w_i = (S^-1 y)_i / sqrt((S^-1)_ii), the worst removed while it fails,
+        and the gate is never relaxed. A slip is a one-epoch event in the
+        difference; the pair after it is clean again. An error shared by
+        every satellite passes that test (the clock would take it), so what is
+        left must also pass a joint chi-square test, or the epoch's carrier is
+        dropped. A whole-millisecond receiver clock step that the carrier did
+        not share is taken out before either. Ends by storing this epoch's
+        carrier and re-cloning."""
+        st = stats if stats is not None else RawStats()
+        rows = []
+        if self.clone_lla is not None and self.clk_ready:
+            r_now, _, T_now = self.receiver_state_ecef()
+            r_then = lla2ecef(self.clone_lla)
+            T_then = t_e2ned(self.clone_lla[0], self.clone_lla[1])
+            for m in meas:
+                if m.cr is None or m.cr_slip:
+                    continue
+                prev = self._prev_cr.get((m.sys, m.prn))
+                if prev is None or prev[0] != self._clone_epoch:
+                    continue
+                _, cr_then, m_then = prev
+                rho_now, _, u_now = self.predict_raw(m, r_now, np.zeros(3))
+                rho_then, _, u_then = self.predict_raw(m_then, r_then, np.zeros(3))
+                h = np.zeros(N)
+                h[0:3] = -(T_now @ u_now)
+                h[15] = 1.0
+                h[20:23] = T_then @ u_then
+                h[23] = -1.0
+                y = (m.cr - cr_then) - ((rho_now + self.clk[0]) - (rho_then + self.clone_b))
+                dt = self.t - self.clone_t
+                R = (m.sigma_cr ** 2 + m_then.sigma_cr ** 2 + m.q_cr * dt
+                     + 2.0 * m.sigma_cr_corr ** 2 * (1.0 - math.exp(-dt / max(m.tau_cr, 1e-6))))
+                rows.append((m, h, y, R))
+        if rows:
+            H = np.array([r[1] for r in rows])
+            y = np.array([r[2] for r in rows])
+            R = np.array([r[3] for r in rows])
+            k_ms = round(float(np.median(y)) / (C_LIGHT * 1e-3))
+            y = y - k_ms * C_LIGHT * 1e-3
+            st.cr_clock_jump_ms = k_ms
+            keep = np.ones(len(rows), bool)
+            gate = self.p.raw_gate_chi2
+            while keep.any():
+                idx = np.flatnonzero(keep)
+                Si = np.linalg.inv(H[idx] @ self.P @ H[idx].T + np.diag(R[idx]))
+                w2 = (Si @ y[idx]) ** 2 / np.diag(Si)
+                j = int(np.argmax(w2))
+                if w2[j] <= gate:
+                    break
+                keep[idx[j]] = False
+                st.rejected_cr += 1
+                st.rejected_prns.append((rows[idx[j]][0].prn, "cr"))
+            if keep.any():
+                st.cr_joint = (float(y[idx] @ Si @ y[idx]), len(idx))
+            if keep.any() and st.cr_joint[0] > chi2_999(len(idx)):
+                st.cr_common_rejected += len(idx)
+                st.rejected_cr += len(idx)
+            elif keep.any():
+                st.nis_cr.extend(w2.tolist())
+                self._update(H[keep], y[keep], np.diag(R[keep]), att_scale=self._att_gate())
+                st.used_cr += int(keep.sum())
+        nxt = self._clone_epoch + 1
+        self._prev_cr = {(m.sys, m.prn): (nxt, m.cr, m) for m in meas if m.cr is not None}
+        self.reclone()
         return st
 
     # ------------------------------------------------------------- outputs

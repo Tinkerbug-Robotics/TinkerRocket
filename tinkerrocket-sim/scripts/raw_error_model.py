@@ -9,10 +9,17 @@ per satellite arc:
   correlated     the rest: per-arc offset and wander (multipath, atmosphere,
                  orbit), with its 1/e correlation time from the autocorrelation
 
+  carrier        the change of each satellite's carrier range less the
+                 geometric change over 1 epoch to 10 s, the receiver clock
+                 taken out as the median over satellites. Its variance grows
+                 with the interval dt as 2 w^2 + 2 c^2 (1 - exp(-dt/0.3 s)) + q dt:
+                 white, correlated over tenths of a second, and a random walk
+
 then fits sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10) to each, which is the form
-``estimation/gnss_raw.py`` uses (PR_WHITE, PR_CORR, RR_WHITE). It also checks
-the Doppler against the carrier phase, which is how SkyTraq's whole-hertz,
-truncated-toward-zero Doppler was found.
+``estimation/gnss_raw.py`` uses (PR_WHITE, PR_CORR, RR_WHITE, CP_WHITE,
+CP_CORR, CP_RW). It
+also checks the Doppler against the carrier phase, which is how SkyTraq's
+whole-hertz, truncated-toward-zero Doppler was found.
 
     PYTHONPATH=src python3 scripts/raw_error_model.py static_20hz.log
 """
@@ -66,12 +73,13 @@ def residuals(path, doppler_fix=True):
         if len(m) < 5:
             continue
         cn0 = {(o[0], o[1]): o[4] for o in obs}
-        pr, rr, H, meta = [], [], [], []
+        pr, rr, cr, H, meta = [], [], [], [], []
         for mm in m:
             rho, rate, u = los_predict(mm, xref, np.zeros(3))
             meta.append(("GEC".index(mm.sys), mm.prn, cn0.get((mm.sys, mm.prn), 0), math.asin(-(T @ u)[2])))
             pr.append(mm.pr - rho)
             rr.append(np.nan if mm.rr is None else mm.rr - rate)
+            cr.append(np.nan if mm.cr is None or mm.cr_slip else mm.cr - rho)
             H.append([1.0, float(mm.sys == "E"), float(mm.sys == "C")])
         pr, rr, H = np.array(pr), np.array(rr), np.array(H)
         cols = [0] + [k for k in (1, 2) if H[:, k].any()]
@@ -79,8 +87,40 @@ def residuals(path, doppler_fix=True):
         ok = ~np.isnan(rr)
         rr = rr - (np.median(rr[ok]) if ok.any() else 0.0)
         for k, (si, prn, c, el) in enumerate(meta):
-            rows.append((tow, si, prn, c, el, pr[k], rr[k]))
+            rows.append((tow, si, prn, c, el, pr[k], rr[k], cr[k]))
     return np.array(rows, float), kind
+
+
+CP_TAU_S = 0.3
+CP_LAGS_S = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0)
+
+
+def carrier_growth(A, dt, bands):
+    """Robust variance of each satellite's carrier-range change over each lag
+    in CP_LAGS_S, the receiver clock removed as the median over satellites of
+    the same epoch pair, per C/N0 band. Returns {band: (median C/N0, n,
+    [variance per lag])} and the lags used (s)."""
+    tows = np.unique(A[:, 0])
+    ti = {t: i for i, t in enumerate(tows)}
+    keys = sorted(set(zip(A[:, 1].astype(int), A[:, 2].astype(int))))
+    ki = {k: i for i, k in enumerate(keys)}
+    X = np.full((len(keys), len(tows)), np.nan)
+    CN = np.full_like(X, np.nan)
+    for r in A:
+        i, j = ki[(int(r[1]), int(r[2]))], ti[r[0]]
+        X[i, j], CN[i, j] = r[7], r[3]
+    lags = sorted({max(1, int(round(s / dt))) for s in CP_LAGS_S})
+    out = {b: (float(np.nanmedian(CN[(CN >= b[0]) & (CN < b[1])])) if np.any((CN >= b[0]) & (CN < b[1])) else np.nan,
+               int(np.sum((CN >= b[0]) & (CN < b[1]))), []) for b in bands}
+    for L in lags:
+        D = X[:, L:] - X[:, :-L]
+        R = D - np.nanmedian(D, axis=0)
+        cn = CN[:, L:]
+        ok = ~np.isnan(R)
+        for b in bands:
+            m = ok & (cn >= b[0]) & (cn < b[1])
+            out[b][2].append(rsd(R[m]) ** 2 if m.sum() > 200 else np.nan)
+    return out, np.array(lags) * dt
 
 
 def arcs_of(A, min_len):
@@ -142,6 +182,31 @@ def main():
         y = np.array([s[key] for s in stats]); ok = ~np.isnan(y) & (y > 0)
         a, b = fit(cn0[ok], y[ok], w[ok])
         print(f"  fit {name:32s} a = {a:.3f}  b = {b:.3f}")
+    # carrier: how the noise of a difference grows with its interval
+    from scipy.optimize import nnls
+    bands = ((30, 35), (35, 40), (40, 45), (45, 99), (0, 99))
+    growth, lag_s = carrier_growth(A, dt, bands)
+    M = np.c_[np.ones_like(lag_s), 1 - np.exp(-lag_s / CP_TAU_S), lag_s]
+    print(f"\n  carrier change, clock removed: rsd (mm) over "
+          + ", ".join(f"{x:g}" for x in lag_s) + " s")
+    fits = []
+    for b in bands:
+        c, n, v = growth[b]
+        v = np.array(v)
+        if np.isnan(v).any():
+            continue
+        x = nnls(M / v[:, None], np.ones_like(v))[0]           # relative least squares
+        w_, c_, q_ = math.sqrt(x[0] / 2), math.sqrt(x[1] / 2), math.sqrt(x[2])
+        label = "all" if b == (0, 99) else f"{b[0]}-{b[1]}"
+        print(f"  {label:6s} " + " ".join(f"{1e3 * math.sqrt(y):5.2f}" for y in v)
+              + f"   white {1e3 * w_:.2f} mm, correlated {1e3 * c_:.2f} mm, random walk {1e3 * q_:.2f} mm/sqrt(s)")
+        if b != (0, 99):
+            fits.append((c, n, w_, c_, q_))
+    if len(fits) >= 2:
+        F = np.array(fits)
+        for name, k in (("CP_WHITE", 2), ("CP_CORR", 3), ("CP_RW (m/sqrt(s))", 4)):
+            a, b = fit(F[:, 0], F[:, k], np.sqrt(F[:, 1]))
+            print(f"  fit {name:32s} a = {a:.4f}  b = {b:.4f}")
     # Doppler vs carrier: resolution and truncation bias, per satellite
     ser = collections.defaultdict(list)
     for _t, k, d in replay_source(path):

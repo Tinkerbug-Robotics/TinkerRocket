@@ -9,7 +9,8 @@ twice, changing nothing but the GNSS input:
   lc       -- fixes formed each epoch from the SAME raw measurements the tc run
               gets (least squares, >= 4 satellites or no fix), fused as the
               flight filter fuses fixes -- so lc vs tc differs ONLY in coupling;
-  tc       -- the raw measurements themselves, one satellite at a time.
+  tc       -- the raw measurements themselves, one satellite at a time;
+  tc_cr    -- tc plus the carrier-phase change between epochs (--carrier).
 
 The flight filter's own logged estimate (C++ TR_GpsInsEKF, LC) rides along as a
 reference. Errors are against the sim's truth, per flight phase.
@@ -66,7 +67,10 @@ def run(df, cfg, mode, args):
                        ref_alt_m=cfg["ref_alt_m"], rate_hz=args.raw_rate,
                        lock_los_accel_mps2=args.lock, common_mode_jerk_mps3=args.cm_jerk,
                        seed=args.seed + 7)
-    ekf = TcEkf(TcEkfParams())
+    prm = TcEkfParams()
+    if args.a_noise is not None:
+        prm.a_noise = args.a_noise
+    ekf = TcEkf(prm)
     baro_mode = args.baro
     i0 = int(np.searchsorted(t, args.t_init))
     q0 = df[["ekf_q0", "ekf_q1", "ekf_q2", "ekf_q3"]].iloc[i0].to_numpy()
@@ -102,9 +106,11 @@ def run(df, cfg, mode, args):
         elif raw.due(t[i]):
             meas, diag = raw.measure(t[i], p_ned[i], v_ned[i], a_ned[i], sf_g[i])
             n_sats.append((t[i], diag["tracked"], diag["visible"]))
-            if mode == "tc":
+            if mode in ("tc", "tc_cr"):
                 st = ekf.update_gnss_raw(meas)
-                rej += st.rejected_pr + st.rejected_rr
+                if mode == "tc_cr":
+                    ekf.update_carrier(meas, st)
+                rej += st.rejected_pr + st.rejected_rr + st.rejected_cr
             else:
                 fx = spp_fix(meas, lla2ecef(ekf.lla))
                 fix_ok.append((t[i], fx is not None and fx[1] is not None))
@@ -155,6 +161,11 @@ def main():
                          "the sim flies without a parachute, so its descent is ballistic and "
                          "tumbling, and levelling there (the flight filter's PAD,DESCENT rule, "
                          "0.5-1.5 g gate) moved the tightly coupled position 11 m at apogee")
+    ap.add_argument("--carrier", action="store_true",
+                    help="also run tightly coupled with carrier-phase delta-range (tc_cr)")
+    ap.add_argument("--a-noise", dest="a_noise", type=float, default=None,
+                    help="the filter's accelerometer noise (default: the flight filter's 0.20, "
+                         "which is far above the sim IMU's own noise)")
     ap.add_argument("--save", help="write the per-step records here (pickle)")
     args = ap.parse_args()
     df, cfg = load(args)
@@ -185,8 +196,13 @@ def main():
         print("raw: tracked/visible satellites from launch: " +
               " ".join(f"{x[0]:.1f}:{x[1]}/{x[2]}" for x in fl[:40:2]))
     print(f"raw measurements rejected by the innovation gate: {rej}")
+    tc_cr = None
+    if args.carrier:
+        tc_cr, _, _, rej_cr = run(df, cfg, "tc_cr", args)
+        summarize("standalone EKF, tightly coupled + carrier delta-range", tc_cr)
+        print(f"raw measurements rejected by the innovation gate (with carrier): {rej_cr}")
     if args.save:
-        pickle.dump(dict(ref=ref_rows, lc_model=lcm, lc=lc, tc=tc, n_sats=n_sats, fix_ok=fix_ok,
+        pickle.dump(dict(ref=ref_rows, lc_model=lcm, lc=lc, tc=tc, tc_cr=tc_cr, n_sats=n_sats, fix_ok=fix_ok,
                          fix_model=fix_model, args=vars(args)), open(args.save, "wb"))
 
 

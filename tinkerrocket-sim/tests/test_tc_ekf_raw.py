@@ -194,3 +194,79 @@ def test_sim_pseudorange_error_wanders_like_the_measured_receiver():
     assert 1.0 < np.std(w) < 3.5
     one = [np.corrcoef(np.array(v)[:-10], np.array(v)[10:])[0, 1] for v in series.values() if len(v) == 600]
     assert np.median(one) > 0.8                     # 1 s apart: exp(-1/15) = 0.94
+
+
+# ---------------------------------------------------------------- carrier delta-range
+def _vel_err(ekf, v_ned_true):
+    """Against the sim's truth, which flies straight in the reference NED frame
+    (3 km out, the local frame has turned half a milliradian: 2 cm/s at 50 m/s)."""
+    _, v, _ = ekf.receiver_state_ecef()
+    return float(np.linalg.norm(v - t_e2ned(math.radians(REF[0]), math.radians(REF[1])).T @ np.asarray(v_ned_true)))
+
+
+def _run_moving(v_ned, carrier, n=60, slip_at=None, slip_prn=None, seed=6):
+    """GNSS-only, 1 Hz, flying straight at ``v_ned``. The process model says
+    so (1e-4 m^2/s^3): what the carrier pins is the AVERAGE velocity over each
+    second, and only a dynamics model that ties it to the velocity at the end
+    of the second (the truth here, an IMU in flight) turns that into a better
+    velocity. Returns the filter, its carrier stats and the velocity error
+    (m/s rms) over the last 40 epochs."""
+    m = RawGNSSModel(*REF, atmo_sigma_m=0.0, pr_wander_sigma_m=0.0, seed=seed)
+    v_ned = np.asarray(v_ned, float)
+    first, _ = m.measure(0.0, np.zeros(3), v_ned, np.zeros(3), 1.0)
+    ekf = _gnss_only_ekf(first)
+    ekf.update_carrier(first)                       # stores the first carrier epoch
+    stats, err = [], []
+    for t in range(1, n):
+        meas, _ = m.measure(float(t), v_ned * t, v_ned, np.zeros(3), 1.0)
+        if slip_at is not None and t >= slip_at:
+            for x in meas:
+                if slip_prn == "all":
+                    x.cr += 1.0                         # every satellite at once
+                elif x.prn == slip_prn:
+                    x.cr += 0.19029                     # one L1 cycle, not flagged
+        ekf.propagate_kinematic(1.0, 1e-4)
+        ekf.update_gnss_raw(meas)
+        if carrier:
+            stats.append(ekf.update_carrier(meas))
+        err.append(_vel_err(ekf, v_ned))
+    return ekf, stats, float(np.sqrt(np.mean(np.square(err[-40:]))))
+
+
+def test_carrier_delta_range_pins_a_static_velocity_to_millimetres():
+    _, st, err_c = _run_moving([0.0, 0.0, 0.0], carrier=True)
+    _, _, err_d = _run_moving([0.0, 0.0, 0.0], carrier=False)
+    assert sum(s.used_cr for s in st) > 50 * 5 and sum(s.rejected_cr for s in st) <= 2
+    assert 0.5 < np.mean(np.concatenate([s.nis_cr for s in st])) < 1.5
+    assert err_c < 0.012                             # ~8 mm/s vs ~21 mm/s on Doppler alone
+    assert err_c < 0.6 * err_d
+
+
+def test_carrier_delta_range_follows_a_moving_receiver():
+    v = [0.0, 50.0, -20.0]                           # 50 m/s east, climbing 20 m/s
+    ekf, _, err = _run_moving(v, carrier=True)
+    assert err < 0.012
+    r, _, _ = ekf.receiver_state_ecef()
+    truth = _truth() + t_e2ned(math.radians(REF[0]), math.radians(REF[1])).T @ (np.asarray(v) * 59)
+    assert np.linalg.norm(r - truth) < 5.0
+
+
+def test_an_unflagged_cycle_slip_is_gated_once_and_forgotten():
+    """The slip must be pinned on its own satellite: a satellite-by-satellite
+    gate lets it through on the clock and then rejects every clean one."""
+    prn = RawGNSSModel(*REF, seed=6).measure(0.0, np.zeros(3), np.zeros(3), np.zeros(3), 1.0)[0][0].prn
+    _, st, err = _run_moving([0.0, 0.0, 0.0], carrier=True, slip_at=30, slip_prn=prn)
+    hit = [k for k, s in enumerate(st, start=1) if (prn, "cr") in s.rejected_prns]
+    assert 30 in hit and 31 not in hit              # the jump epoch; the pair after is clean
+    assert sum(s.rejected_cr for s in st) <= 3      # the gate's 0.1 % on the rest, no pile-up
+    assert err < 0.012
+
+
+def test_a_carrier_jump_on_every_satellite_drops_the_epoch():
+    """A shared jump is invisible satellite by satellite -- the clock would
+    absorb it -- so the joint test has to drop the epoch."""
+    _, st, err = _run_moving([0.0, 0.0, 0.0], carrier=True, slip_at=30, slip_prn="all")
+    assert st[29].used_cr == 0 and st[29].cr_common_rejected >= 5
+    assert st[30].used_cr >= 5 and st[30].cr_common_rejected == 0
+    assert sum(s.cr_common_rejected > 0 for s in st) <= 2    # that epoch, and at most one chance drop
+    assert err < 0.012

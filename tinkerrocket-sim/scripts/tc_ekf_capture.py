@@ -4,7 +4,9 @@
 For receiver-only data -- a PX1105R on the bench, the COCOM rig's NEO-M8T --
 where there is no IMU: the filter propagates a constant-velocity model and
 takes every satellite's pseudorange and range rate as its own update
-(``TcEkf.update_gnss_raw``), initialised from a least-squares fix.
+(``TcEkf.update_gnss_raw``), initialised from a least-squares fix. With
+``--carrier`` it also fuses the carrier-phase change since the previous epoch
+(``TcEkf.update_carrier``).
 
 Input is the rig's capture format ('<t> B <hex>' SkyTraq binary, '<t> U <hex>'
 UBX), plain or .gz. It needs raw measurements AND navigation subframes: 0xE5 +
@@ -73,6 +75,25 @@ def open_capture(path):
     return path
 
 
+def thin(epochs, stride):
+    """Every ``stride``-th epoch, with the carrier's slip flag carried over
+    from the epochs skipped: a count that broke in between, or a satellite
+    that dropped out or lost its carrier, breaks the difference too."""
+    stride = max(1, stride)
+    if stride == 1:
+        return epochs
+    out, broke, last = [], set(), set()
+    for i, (tow, obs) in enumerate(epochs):
+        here = {(o[0], o[1]) for o in obs if len(o) >= 7 and o[5] is not None}
+        broke |= {(o[0], o[1]) for o in obs if len(o) >= 7 and o[6] & 1} | (last - here)
+        last = here
+        if i % stride == 0:
+            out.append((tow, [o[:6] + (o[6] | 1,) if len(o) >= 7 and (o[0], o[1]) in broke else o
+                              for o in obs]))
+            broke = set()
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("capture")
@@ -96,6 +117,8 @@ def main():
     ap.add_argument("--rr-tau", dest="rr_tau", type=float, help="override the range-rate correlation time (s)")
     ap.add_argument("--no-doppler-fix", dest="doppler_fix", action="store_false",
                     help="leave SkyTraq's truncated whole-hertz Doppler as reported")
+    ap.add_argument("--carrier", action="store_true",
+                    help="also fuse carrier-phase delta-range (time-differenced carrier)")
     ap.add_argument("--csv", help="write the filter track here")
     args = ap.parse_args()
 
@@ -106,7 +129,7 @@ def main():
         _gr.RR_TAU_S = args.rr_tau
     eph, epochs, own, kind = read_capture(open_capture(args.capture), replay_source, systems=args.systems,
                                           fix_doppler_truncation=args.doppler_fix)
-    epochs = epochs[::max(1, args.stride)]
+    epochs = thin(epochs, args.stride)
     print(f"{os.path.basename(args.capture)}: {kind}, {len(epochs)} raw epochs, ephemeris for "
           f"{len(eph.eph)} PRNs, iono model {'decoded' if eph.ion else 'absent'}, "
           f"{len(own)} own fixes")
@@ -119,7 +142,9 @@ def main():
         prm.clk_bias_psd = args.clk_bias_psd
     ekf = TcEkf(prm)
     started, t_prev, track, rejects = False, None, [], 0
-    nis_pr, nis_rr, sig = [], [], []
+    nis_pr, nis_rr, nis_cr, sig, sig_v = [], [], [], [], []
+    used_cr = rejected_cr = common_cr = 0
+    joint_cr = []
     for tow, obs in epochs:
         t_s = tow - args.tow0 if truth else tow
         if truth and (t_s < 0 or truth.blocked(t_s)):
@@ -137,6 +162,8 @@ def main():
             ekf.init(lla, t_e2ned(lla[0], lla[1]) @ fx[1], [1.0, 0.0, 0.0, 0.0])
             ekf.freeze_imu_states()
             ekf.init_clock_from(meas)
+            if args.carrier:
+                ekf.update_carrier(meas)               # stores the first carrier epoch
             started, t_prev = True, tow
             continue
         ekf.propagate_kinematic(tow - t_prev, args.accel_psd)
@@ -150,21 +177,35 @@ def main():
                 x.sigma_pr = _m.hypot(x.sigma_pr, x.sigma_pr_corr)
                 x.sigma_pr_corr, x.tau_rr = 0.0, 0.0
         st = ekf.update_gnss_raw(meas)
+        if args.carrier:
+            ekf.update_carrier(meas, st)
+            nis_cr += st.nis_cr; used_cr += st.used_cr; rejected_cr += st.rejected_cr
+            common_cr += st.cr_common_rejected
+            if st.cr_joint[1]:
+                joint_cr.append(st.cr_joint[0] / st.cr_joint[1])
         nis_pr += st.nis_pr; nis_rr += st.nis_rr
         rejects += st.rejected_pr + st.rejected_rr
         if st.clock_jump_ms:
-            print(f"  receiver clock stepped {st.clock_jump_ms:+d} ms at TOW {tow:.1f}; clock state shifted")
+            print(f"  receiver clock stepped {st.clock_jump_ms:+d} ms at TOW {tow:.1f}; clock state shifted"
+                  + (f"; the carrier moved {st.clock_jump_ms - st.cr_clock_jump_ms:+d} ms with it"
+                     if args.carrier else ""))
         r, v, _ = ekf.receiver_state_ecef()
         track.append((tow, t_s, r.copy(), v.copy(), len(meas), st.rejected_pr + st.rejected_rr))
         sig.append((math.hypot(math.sqrt(ekf.P[0, 0]), math.sqrt(ekf.P[1, 1])), math.sqrt(ekf.P[2, 2])))
+        sig_v.append((math.hypot(math.sqrt(ekf.P[3, 3]), math.sqrt(ekf.P[4, 4])), math.sqrt(ekf.P[5, 5])))
 
     if not track:
         sys.exit("never got a first fix: need >= 4 satellites with pseudorange, Doppler and ephemeris")
     print(f"filter ran {len(track)} epochs, {rejects} measurements gated out")
-    for name, v in (("pseudorange", nis_pr), ("range rate", nis_rr)):
+    if args.carrier:
+        print(f"  carrier delta-range: {used_cr} used, {rejected_cr} gated out "
+              f"({common_cr} of them in epochs dropped whole by the joint test); "
+              f"joint NIS per degree of freedom: mean {np.mean(joint_cr) if joint_cr else float('nan'):.2f} "
+              f"(1.0 if consistent)")
+    for name, v in (("pseudorange", nis_pr), ("range rate", nis_rr), ("carrier (w^2)", nis_cr)):
         if v:
             a = np.array(v)
-            print(f"  {name:11s} NIS: mean {a.mean():6.2f} (1.0 if consistent), median {np.median(a):5.2f} "
+            print(f"  {name:13s} NIS: mean {a.mean():6.2f} (1.0 if consistent), median {np.median(a):5.2f} "
                   f"(0.45), > 10.83: {100 * np.mean(a > 10.83):5.2f} % (0.1)")
 
     own_t = [o[0] for o in own]
@@ -218,6 +259,13 @@ def main():
         print(f"\nthe filter's own sigma (median): horiz {sh:.2f} m, vert {sv:.2f} m "
               f"(scatter/sigma: {np.sqrt(np.mean(sc[:,0]**2 + sc[:,1]**2)) / sh:.2f} horiz, "
               f"{np.sqrt(np.mean(sc[:,2]**2)) / sv:.2f} vert -- 1 if the filter's uncertainty is honest)")
+        V = np.array([T @ x[3] for x in track])
+        vh, vv = np.hypot(V[:, 0], V[:, 1]), np.abs(V[:, 2])
+        svh = np.median([x[0] for x in sig_v]); svv = np.median([x[1] for x in sig_v])
+        print(f"velocity about zero (the truth if the antenna was still): horiz rms "
+              f"{np.sqrt(np.mean(vh ** 2)) * 1e3:.1f} mm/s (p95 {np.percentile(vh, 95) * 1e3:.1f}), vert rms "
+              f"{np.sqrt(np.mean(vv ** 2)) * 1e3:.1f} mm/s (p95 {np.percentile(vv, 95) * 1e3:.1f}); "
+              f"filter's sigma {svh * 1e3:.1f} / {svv * 1e3:.1f} mm/s")
         print(f"scatter about the mean position (meaningful only if the antenna was still): "
               f"horiz rms {np.sqrt(np.mean(sc[:,0]**2 + sc[:,1]**2)):.2f} m, "
               f"vert rms {np.sqrt(np.mean(sc[:,2]**2)):.2f} m; mean lat/lon/h "

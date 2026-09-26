@@ -46,6 +46,7 @@ class RawGNSSModel:
                  rate_hz=10.0, el_mask_deg=10.0,
                  sigma_pr_m=0.1, sigma_rr_mps=0.05, atmo_sigma_m=1.5,
                  pr_wander_sigma_m=2.0, pr_wander_tau_s=15.0, doppler_step_hz=0.0,
+                 sigma_cr_m=0.0015, cr_corr_sigma_m=0.0018, cr_corr_tau_s=0.3, cr_rw_m=0.0015,
                  clk_bias0_m=None, clk_drift0_mps=None,
                  clk_h0=2e-19, clk_hm2=2e-20, clk_g_ppb=1.0,
                  lock_los_accel_mps2=30.0, relock_fraction=0.7,
@@ -62,6 +63,10 @@ class RawGNSSModel:
         self.sigma_pr, self.sigma_rr, self.atmo_sigma = sigma_pr_m, sigma_rr_mps, atmo_sigma_m
         self.wander_sigma, self.wander_tau = pr_wander_sigma_m, pr_wander_tau_s
         self.doppler_step = doppler_step_hz
+        self.sigma_cr = sigma_cr_m
+        # carrier noise as fitted to a PX1105R at ~42 dB-Hz (gnss_raw CP_*):
+        # white, a part correlated over tenths of a second, a slow random walk
+        self.cr_corr_sigma, self.cr_corr_tau, self.cr_rw = cr_corr_sigma_m, cr_corr_tau_s, cr_rw_m
         self.wander = {}                                   # prn -> (value m, time s)
         self.q_b = C_LIGHT ** 2 * clk_h0 / 2.0
         self.q_d = 2 * math.pi ** 2 * C_LIGHT ** 2 * clk_hm2
@@ -152,7 +157,7 @@ class RawGNSSModel:
             el = math.asin(-(T_local @ u)[2])
             st = self.state[prn]
             if el < self.el_mask:
-                st.update(locked=True, clear_since=None, relock_t=None)   # re-acquired on rise
+                st.update(locked=True, clear_since=None, relock_t=None, amb=None)   # re-acquired on rise
                 continue
             diag["visible"] += 1
             a_los = float(-u @ a)
@@ -165,7 +170,7 @@ class RawGNSSModel:
                         mu_, sd, lo = self.reacq
                         st["clear_since"], st["delay"] = t, max(lo, self.rng.normal(mu_, sd))
                     elif t - st["clear_since"] >= st["delay"]:
-                        st.update(locked=True, relock_t=t, clear_since=None)
+                        st.update(locked=True, relock_t=t, clear_since=None, amb=None)
                 else:
                     st["clear_since"] = None
             if not st["locked"]:
@@ -197,10 +202,28 @@ class RawGNSSModel:
                 d = d + 0.5 * math.copysign(1.0, d) if d != 0 else 0.0   # ... the reader re-centres
                 rr = -d * self.doppler_step * lam
                 s_rr = math.hypot(s_rr, lam * self.doppler_step / math.sqrt(12.0))
+            # carrier: the same range and clock, an unknown offset drawn afresh
+            # at every (re)lock -- the count restarts -- and millimetres of noise
+            slip = st.get("amb") is None
+            k = math.sqrt(obliq)                            # weaker signal low in the sky
+            if slip:
+                st.update(amb=self.rng.normal(0.0, 1e4), cr_gm=self.rng.normal(0.0, self.cr_corr_sigma * k),
+                          cr_rw=0.0, cr_t=t)
+            elif t > st["cr_t"]:
+                ddt = t - st["cr_t"]
+                phi = math.exp(-ddt / self.cr_corr_tau) if self.cr_corr_tau > 0 else 0.0
+                st["cr_gm"] = phi * st["cr_gm"] + self.rng.normal(0.0, self.cr_corr_sigma * k * math.sqrt(1 - phi * phi))
+                st["cr_rw"] += self.rng.normal(0.0, self.cr_rw * k * math.sqrt(ddt))
+                st["cr_t"] = t
+            cr = (rho + self.clk_bias + atmo + st["amb"] + st["cr_gm"] + st["cr_rw"]
+                  + self.rng.normal(0.0, self.sigma_cr * k))
             # the white part is fresh each epoch; the wander and the atmosphere
             # are not, and the filter is told so
             out.append(RawMeas(prn=prn, sat_pos=rs, sat_vel=vs, pr=pr, rr=rr,
                                sigma_pr=s_pr, sigma_rr=s_rr,
                                sigma_pr_corr=math.hypot(self.atmo_sigma * obliq, self.wander_sigma),
-                               tau_pr=self.wander_tau, tau_rr=0.0))
+                               tau_pr=self.wander_tau, tau_rr=0.0,
+                               cr=cr if self.sigma_cr >= 0 else None, cr_slip=slip,
+                               sigma_cr=max(self.sigma_cr * k, 1e-4), sigma_cr_corr=self.cr_corr_sigma * k,
+                               tau_cr=self.cr_corr_tau, q_cr=(self.cr_rw * k) ** 2))
         return out, diag

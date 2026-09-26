@@ -391,6 +391,16 @@ PR_CORR = (1.94, 3.5)           # m
 PR_TAU_S = 15.0
 RR_WHITE = (0.0, 0.2)           # m/s, tracking part (quantisation added separately)
 RR_TAU_S = 0.1
+# Carrier phase (m), fitted by scripts/raw_error_model.py to the same capture
+# from the change of each satellite's carrier range over 0.05-10 s. The noise
+# of a difference grows with its interval: white per epoch, plus a part
+# correlated over ~0.3 s (tracking), plus a slow random walk (multipath,
+# ionosphere). At 42 dB-Hz a 50 ms difference is 2.6 mm, 1 s 3.9 mm, 10 s
+# 6.0 mm; all three parts scale with C/N0 alike. No cycle slip in 20 min.
+CP_WHITE = (0.0, 0.0034)        # m
+CP_CORR = (0.0002, 0.0041)      # m, Gauss-Markov with CP_TAU_S
+CP_TAU_S = 0.3
+CP_RW = (0.0, 0.0033)           # m/sqrt(s): the random walk's q = sigma^2 per second
 
 
 def _cn0_sigma(ab, cn0):
@@ -417,7 +427,10 @@ def corrected(tow, obs, eph, r_approx, use_tropo=True, el_mask_deg=5.0, doppler_
         lat, lon, h = ecef2lla(np.asarray(r_approx, float))
         T = t_e2ned(lat, lon)
     for o in obs:
-        sys, prn, pr, dop, cn0 = o if len(o) == 5 else ("G",) + tuple(o)
+        if len(o) == 4:
+            o = ("G",) + tuple(o)
+        sys, prn, pr, dop, cn0 = o[:5]
+        cp, cp_flags = (o[5], o[6]) if len(o) >= 7 else (None, 0)
         if pr is None:
             continue
         e = eph.pick(sys, prn, tow)
@@ -432,6 +445,7 @@ def corrected(tow, obs, eph, r_approx, use_tropo=True, el_mask_deg=5.0, doppler_
         rs1, dts1 = sat_pos(e, tt - 0.5)
         vs = rs2 - rs1                      # ECEF-at-transmit velocity, 1 s central difference
         corr = C_LIGHT * dts
+        iono = trop = 0.0
         if have_pos:
             los = rs - np.asarray(r_approx, float)
             nu = T @ (los / np.linalg.norm(los))
@@ -439,16 +453,21 @@ def corrected(tow, obs, eph, r_approx, use_tropo=True, el_mask_deg=5.0, doppler_
             if math.degrees(el) < el_mask_deg:
                 continue
             az = math.atan2(nu[1], nu[0])
-            corr -= klobuchar(eph.ion, tow, lat, lon, az, el) * (1575.42e6 / f) ** 2
-            if use_tropo:
-                corr -= tropo(h, el)
+            iono = klobuchar(eph.ion, tow, lat, lon, az, el) * (1575.42e6 / f) ** 2
+            trop = tropo(h, el) if use_tropo else 0.0
+            corr -= iono + trop
         lam = C_LIGHT / f
         s_rr = math.hypot(_cn0_sigma(RR_WHITE, cn0), lam * doppler_step_hz / math.sqrt(12.0))
         rr = None if dop is None else -lam * dop + C_LIGHT * (dts2 - dts1)
+        # carrier range: same satellite clock and troposphere, but the
+        # ionosphere ADVANCES the carrier, so it is added back, not removed
+        cr = None if cp is None else lam * cp + C_LIGHT * dts + iono - trop
         out.append(RawMeas(prn=prn, sat_pos=rs, sat_vel=vs, pr=pr + corr, rr=rr,
                            sigma_pr=_cn0_sigma(PR_WHITE, cn0), sigma_rr=s_rr, sys=sys,
                            sigma_pr_corr=_cn0_sigma(PR_CORR, cn0), tau_pr=PR_TAU_S,
-                           tau_rr=RR_TAU_S))
+                           tau_rr=RR_TAU_S, cr=cr, cr_slip=bool(cp_flags & 1),
+                           sigma_cr=_cn0_sigma(CP_WHITE, cn0), sigma_cr_corr=_cn0_sigma(CP_CORR, cn0),
+                           tau_cr=CP_TAU_S, q_cr=_cn0_sigma(CP_RW, cn0) ** 2))
     return out
 
 
@@ -467,11 +486,13 @@ def skytraq_doppler_fix(dop_hz):
 def read_capture(path, replay_source, systems="GEC", fix_doppler_truncation=True):
     """COCOM-rig capture -> (EphStore, [(tow, obs)], own_fixes, kind).
 
-    obs = [(sys, prn, pr_m | None, doppler_hz | None, cn0)] for GPS L1 C/A,
+    obs = [(sys, prn, pr_m | None, doppler_hz | None, cn0, carrier_cycles | None,
+    flags)] for GPS L1 C/A,
     Galileo E1 and BeiDou B1I (SkyTraq; u-blox captures give GPS only here);
     own_fixes = [(tow, ecef, vel_ecef)] from the receiver's own solution.
     ``systems`` limits which are returned."""
     eph, epochs, own, kind = EphStore(), [], [], None
+    ublox_lock = {}                                    # RXM-RAWX lock time per PRN, for slips
     for _t, k, d in replay_source(path):
         if k == "bin" and d:
             kind = "skytraq"
@@ -495,8 +516,12 @@ def read_capture(path, replay_source, systems="GEC", fix_doppler_truncation=True
                     dop = struct.unpack_from(">f", r, 20)[0] if ind & 2 else None
                     if fix_doppler_truncation and dop is not None:
                         dop = skytraq_doppler_fix(dop)
+                    cp = struct.unpack_from(">d", r, 12)[0] if ind & 4 else None
+                    # flags: 1 = the count may have broken (0xE5 "cycle slip
+                    # possible"), 2 = half-cycle ambiguity unresolved
+                    flags = (1 if ind & 8 else 0) | (2 if ind & 32 else 0)
                     obs.append((sys, r[1], struct.unpack_from(">d", r, 4)[0] if ind & 1 else None,
-                                dop, r[3]))
+                                dop, r[3], cp, flags))
                 epochs.append((tow, obs))
             elif d[0] == 0xDF and len(d) >= 61 and d[2] >= 2:
                 own.append((struct.unpack_from(">d", d, 5)[0], np.array(struct.unpack_from(">ddd", d, 13)),
@@ -514,8 +539,13 @@ def read_capture(path, replay_source, systems="GEC", fix_doppler_truncation=True
                     b = p[16 + 32 * j: 16 + 32 * (j + 1)]
                     if len(b) < 32 or b[20] != 0 or "G" not in systems:
                         continue
-                    obs.append(("G", b[21], struct.unpack_from("<d", b, 0)[0] if b[30] & 1 else None,
-                                struct.unpack_from("<f", b, 16)[0], b[26]))
+                    trk, lock = b[30], struct.unpack_from("<H", b, 24)[0]
+                    cp = struct.unpack_from("<d", b, 8)[0] if trk & 2 else None
+                    prev = ublox_lock.get(b[21])
+                    ublox_lock[b[21]] = lock
+                    flags = (1 if prev is not None and lock < prev else 0) | (0 if trk & 4 else 2)
+                    obs.append(("G", b[21], struct.unpack_from("<d", b, 0)[0] if trk & 1 else None,
+                                struct.unpack_from("<f", b, 16)[0], b[26], cp, flags))
                 epochs.append((tow, obs))
             elif cid == b"\x01\x07" and len(p) >= 92 and (p[21] & 1) and p[20] >= 3:
                 from .tc_ekf import lla2ecef
