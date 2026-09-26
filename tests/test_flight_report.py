@@ -247,6 +247,25 @@ def test_report_has_interactive_charts(report_html: Path) -> None:
     )
 
 
+def test_osm_layer_survives_a_referrerless_page(report_html: Path) -> None:
+    """A report opened from disk must not paint OSM's "Access blocked" tile.
+
+    tile.openstreetmap.org answers a browser request that carries no Referer
+    with a notice tile under HTTP 200, which errorTileUrl cannot catch, and a
+    file:// page never sends one. The template's answer is a tile layer that
+    fetches with the X-Requested-With header OSM documents for referrer-less
+    clients, used only when the page has no http(s) origin. Guard both halves:
+    the header, and the gate that keeps served pages on the plain <img> path,
+    where a Referer goes out and no per-tile preflight is spent.
+    """
+    html = report_html.read_text(encoding="utf-8")
+    assert 'class="map-spec"' in html, "fixture report carries no ground-track map"
+    assert '"X-Requested-With": "XMLHttpRequest"' in html, "OSM layer lost its header fetch"
+    assert "!/^https?:$/.test(location.protocol)" in html, "referrer-less gate is gone"
+    assert "new HeaderTileLayer(OSM_URL, osmOptions)" in html
+    assert "L.tileLayer(OSM_URL, osmOptions)" in html, "served pages must keep the <img> path"
+
+
 def _globe_specs(html: str) -> list[tuple[str, dict]]:
     """Every embedded 3D-globe spec, decoded the same way chart specs are."""
     import base64

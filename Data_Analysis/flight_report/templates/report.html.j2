@@ -403,6 +403,86 @@ details.explore > summary:hover { background: #f2f4f7; }
   // instead of leaving a broken-image glyph on the grid.
   var BLANK = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
+  /* OpenStreetMap's tile CDN answers a browser request that carries no Referer
+     with an "Access blocked" notice tile: a valid PNG under HTTP 200, so
+     errorTileUrl never sees it and the notice is painted as imagery. A report
+     opened from disk is a file:// page, and browsers send no Referer from
+     file:// or blob: pages, so every OSM tile of a saved report came back
+     blocked while the same report served over http drew fine. OSM's documented
+     route for referrer-less clients is an X-Requested-With header. An <img>
+     cannot add headers, so on such pages the OSM layer fetches each tile itself
+     and hands the image an object URL. Served pages keep Leaflet's plain <img>
+     path: they send a Referer, and the header costs a CORS preflight per tile
+     that the volunteer servers should not pay for every reader.
+     Relies on TileLayer internals (_tiles, _tileZoom, _tileOnLoad, _tileOnError)
+     of the pinned vendor/leaflet.js, 1.9.4. */
+  var REFERRERLESS = !/^https?:$/.test(location.protocol);
+  var HeaderTileLayer = L.TileLayer.extend({
+    createTile: function (coords, done) {
+      var tile = document.createElement("img");
+      var self = this;
+      var ctrl = new AbortController();
+      tile.alt = "";
+      tile._trFetch = ctrl;
+      L.DomEvent.on(tile, "load", function () {
+        releaseTile(tile);
+        self._tileOnLoad(done, tile);
+      });
+      L.DomEvent.on(tile, "error", function (e) {
+        releaseTile(tile);
+        self._tileOnError(done, tile, e);
+      });
+      fetch(this.getTileUrl(coords), {
+        headers: {"X-Requested-With": "XMLHttpRequest"},
+        signal: ctrl.signal
+      }).then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.blob();
+      }).then(function (blob) {
+        tile._trFetch = null;
+        tile._trObjectUrl = URL.createObjectURL(blob);
+        tile.src = tile._trObjectUrl;
+      }).catch(function (err) {
+        tile._trFetch = null;
+        if (err && err.name === "AbortError") return;
+        self._tileOnError(done, tile, err);
+      });
+      return tile;
+    },
+    // Leaflet drops a stale-zoom tile by testing img.complete, which is true
+    // for an <img> that has no src yet, so a pending fetch is cancelled here.
+    _abortLoading: function () {
+      for (var key in this._tiles) {
+        var t = this._tiles[key];
+        if (t.coords.z !== this._tileZoom && t.el._trFetch) {
+          t.el._trFetch.abort();
+          t.el._trFetch = null;
+          L.DomUtil.remove(t.el);
+          delete this._tiles[key];
+          this.fire("tileabort", {tile: t.el, coords: t.coords});
+        }
+      }
+      L.TileLayer.prototype._abortLoading.call(this);
+    },
+    _removeTile: function (key) {
+      var t = this._tiles[key];
+      var el = t && t.el;
+      if (el && el._trFetch) {
+        el._trFetch.abort();
+        el._trFetch = null;
+      }
+      var r = L.TileLayer.prototype._removeTile.call(this, key);
+      if (el) releaseTile(el);
+      return r;
+    }
+  });
+  function releaseTile(tile) {
+    if (tile._trObjectUrl) {
+      URL.revokeObjectURL(tile._trObjectUrl);
+      tile._trObjectUrl = null;
+    }
+  }
+
   function readSpec(el) {
     if (el.dataset.encoding !== "gzip+base64") return Promise.resolve(JSON.parse(el.textContent));
     var raw = atob(el.textContent.trim());
@@ -443,14 +523,19 @@ details.explore > summary:hover { background: #f2f4f7; }
           });
         }
 
-        var streets = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        var OSM_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+        var osmOptions = {
           maxZoom: 19,
           errorTileUrl: BLANK,
           attribution:
             '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ' +
             'contributors &middot; <a href="https://www.openstreetmap.org/fixthemap">' +
             'Report a map issue</a>'
-        });
+        };
+        // A page with no Referer to send (file://, blob:) gets OSM's "Access
+        // blocked" tile through a plain <img>; see HeaderTileLayer above.
+        var streets = REFERRERLESS ? new HeaderTileLayer(OSM_URL, osmOptions)
+                                   : L.tileLayer(OSM_URL, osmOptions);
         /* Esri World Imagery: worldwide, keyless, and published to z19 against
            USGS's z16 — so it stays sharp at the scale you actually search a
            field at, where the USGS layer is upscaled and soft. */
