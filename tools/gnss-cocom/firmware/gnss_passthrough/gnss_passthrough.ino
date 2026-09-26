@@ -135,7 +135,7 @@ static const uint32_t kBaudCandidates[] = {115200, 9600, 38400, 57600,
                                            19200,  4800, 230400, 460800, 921600};
 static constexpr size_t kNumCandidates = sizeof(kBaudCandidates) / sizeof(kBaudCandidates[0]);
 
-static constexpr uint32_t kProbeWindowMs   = 500;   // listen per candidate
+static constexpr uint32_t kProbeWindowMs   = 1200;  // listen per candidate: > one 1 Hz epoch, so a binary-only receiver is caught
 static constexpr int      kProbeGoodEnough = 3;     // valid sentences => stop early
 static constexpr uint32_t kRelockSilenceMs = 5000;  // no valid NMEA => re-probe
 
@@ -162,6 +162,10 @@ static void gnssUartBegin(uint32_t baud, int rx, int tx)
     if (tx >= 0) Serial1.setTX((pin_size_t)tx);
     Serial1.begin(baud, SERIAL_8N1);
 #else
+    // Raw measurements at 20 Hz from a 36-channel receiver are ~31 kB/s, sent
+    // at 460800-921600 baud (92 kB/s on the wire).  The core's 256-byte default
+    // RX buffer fills in under 3 ms at 921600, so one slow USB write drops data.
+    Serial1.setRxBufferSize(16384);
     Serial1.begin(baud, SERIAL_8N1, rx, tx);
 #endif
 }
@@ -252,6 +256,54 @@ private:
 
 static NmeaScorer g_scorer;
 
+// ---- SkyTraq binary frame scoring ------------------------------------------
+//
+// An RTK-class SkyTraq receiver (PX1105R/PX1125R) cannot be switched to binary
+// with 0x09 -- AN0037 marks it "not supported in RTK receivers" -- and in RTK
+// base mode it streams ONLY binary: 0xDF/0xE7/0xE8, and the 0xE5 raw
+// measurements this rig now collects.  Scored on NMEA alone, such a stream
+// looked like a lost lock every kRelockSilenceMs and the re-probe dropped ~6 s
+// of every ~10 (measured 2026-09-26).  A frame counts when its XOR checksum and
+// its 0D 0A trailer both check:  A0 A1 | len(2, BE) | payload | XOR | 0D 0A.
+class StqScorer
+{
+public:
+    void reset() { state_ = kIdle; valid_ = 0; }
+    int valid() const { return valid_; }
+    bool feed(uint8_t b)
+    {
+        switch (state_)
+        {
+            case kIdle:  if (b == 0xA0) state_ = kA1; break;
+            case kA1:    state_ = (b == 0xA1) ? kLenHi : (b == 0xA0 ? kA1 : kIdle); break;
+            case kLenHi: len_ = (uint16_t)b << 8; state_ = kLenLo; break;
+            case kLenLo:
+                len_ |= b; got_ = 0; xor_ = 0;
+                state_ = (len_ > 0 && len_ <= 4096) ? kBody : kIdle;
+                break;
+            case kBody:
+                xor_ ^= b;
+                if (++got_ >= len_) state_ = kSum;
+                break;
+            case kSum:   state_ = (b == xor_) ? kCr : kIdle; break;
+            case kCr:    state_ = (b == 0x0D) ? kLf : kIdle; break;
+            case kLf:
+                state_ = kIdle;
+                if (b == 0x0A) { valid_++; return true; }
+                break;
+        }
+        return false;
+    }
+private:
+    enum State : uint8_t { kIdle, kA1, kLenHi, kLenLo, kBody, kSum, kCr, kLf };
+    State    state_ = kIdle;
+    uint16_t len_ = 0, got_ = 0;
+    uint8_t  xor_ = 0;
+    int      valid_ = 0;
+};
+
+static StqScorer g_stq;
+
 // ---- Baud probe ------------------------------------------------------------
 
 static int probeBaud(uint32_t baud)
@@ -264,17 +316,21 @@ static int probeBaud(uint32_t baud)
     while (Serial1.available()) Serial1.read();
 
     NmeaScorer probe;
+    StqScorer  probeBin;
     const uint32_t deadline = millis() + kProbeWindowMs;
     while ((int32_t)(millis() - deadline) < 0)
     {
         while (Serial1.available())
         {
-            probe.feed((uint8_t)Serial1.read());
-            if (probe.valid() >= kProbeGoodEnough) return probe.valid();
+            const uint8_t c = (uint8_t)Serial1.read();
+            probe.feed(c);
+            probeBin.feed(c);
+            if (probe.valid() + probeBin.valid() >= kProbeGoodEnough)
+                return probe.valid() + probeBin.valid();
         }
         delay(1);
     }
-    return probe.valid();
+    return probe.valid() + probeBin.valid();
 }
 
 static uint32_t detectBaud()
@@ -286,7 +342,7 @@ static uint32_t detectBaud()
     {
         setLed(0, 0, 24);  // blue: probing
         const int score = probeBaud(kBaudCandidates[i]);
-        Serial.printf("#   probe %7lu -> %d valid sentence(s)\n",
+        Serial.printf("#   probe %7lu -> %d valid NMEA sentence(s) / SkyTraq frame(s)\n",
                       (unsigned long)kBaudCandidates[i], score);
         if (score > bestScore)
         {
@@ -303,6 +359,7 @@ static void openGnss(uint32_t baud)
 {
     gnssUartBegin(baud, g_rxPin, g_txPin);
     g_scorer.reset();
+    g_stq.reset();
 }
 
 // ---- Pin scan --------------------------------------------------------------
@@ -463,6 +520,9 @@ static bool scanPins(int& foundPin, uint32_t& foundBaud)
 
 void setup()
 {
+#if defined(ARDUINO_ARCH_ESP32)
+    Serial.setTxBufferSize(16384);   // USB side of the high-rate raw stream
+#endif
     Serial.begin(115200);
 
     // Native USB CDC: wait briefly for the host to attach so the banner is not
@@ -549,7 +609,7 @@ void loop()
 
     // Receiver -> host.  Bulk-moved, never line-buffered, so binary responses
     // (0xA0 0xA1 ... 0x0D 0x0A ACK/NACK frames) survive intact.
-    uint8_t buf[256];
+    uint8_t buf[2048];
     int n = Serial1.available();
     if (n > 0)
     {
@@ -560,7 +620,9 @@ void loop()
             Serial.write(buf, n);
             for (int i = 0; i < n; i++)
             {
-                if (g_scorer.feed(buf[i]))
+                const bool nmeaOk = g_scorer.feed(buf[i]);
+                const bool binOk  = g_stq.feed(buf[i]);
+                if (nmeaOk || binOk)
                 {
                     lastValidMs = millis();
                     everValid   = true;
