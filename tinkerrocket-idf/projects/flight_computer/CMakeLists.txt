@@ -58,6 +58,18 @@ if(TR_GNSS_COCOM_DIAG)
     add_compile_definitions(TR_GNSS_COCOM_DIAG=1)
     message(STATUS "TR_GNSS_COCOM_DIAG=1 -- per-satellite GNSS diagnostic ENABLED")
 endif()
+# #491 bench: the u-blox navigation rate, to test whether it changes what a boost
+# costs. Unset, the flight's GNSS_UPDATE_RATE stands (18 Hz, config.h).
+if(TR_GNSS_RATE_HZ)
+    add_compile_definitions(TR_GNSS_RATE_HZ=${TR_GNSS_RATE_HZ})
+    message(STATUS "TR_GNSS_RATE_HZ=${TR_GNSS_RATE_HZ} -- bench GNSS rate override")
+endif()
+# #491 bench: cold-start the u-blox at every boot, so repeated runs of one file
+# start from the same state. Never set for flight.
+if(TR_GNSS_BENCH_COLD_START)
+    add_compile_definitions(TR_GNSS_BENCH_COLD_START=1)
+    message(STATUS "TR_GNSS_BENCH_COLD_START=1 -- u-blox cold start at every boot (bench)")
+endif()
 
 if(TR_BOARD_M1)
     set(TR_BOARD_SUFFIX "-m1")
