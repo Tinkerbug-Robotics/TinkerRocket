@@ -20,6 +20,11 @@ there a loop that is working holds phase, and a reset means the loop, not the sk
     ./lc86_tracking.py modes  results/lc86g_mode{3,0,1,4,5,7}_pad_static.log.gz
     ./lc86_tracking.py sky    results/lc86g_sky_20260925.log.gz
     ./lc86_tracking.py overnight captures/lc86g_sky_drone.log --csv OUT.csv
+    ./lc86_tracking.py boost  results/lc86g_20260926_smooth_run{1,2,3,4}_spaceshot.log.gz
+    ./lc86_tracking.py ignition results/lc86g_20260926_smooth_run1_spaceshot.log.gz
+
+MSM7 comes out once a second at every fix rate, so every "held" and every lock
+reset here has one-second resolution whatever the module's navigation rate.
 
 Everything runs on the capture's host clock, because GLONASS and BeiDou MSM7
 epochs keep their own time scales. A bench capture also gets the offset to its
@@ -300,6 +305,149 @@ def cmd_overnight(a):
         print(f"wrote {a.csv}")
 
 
+BURN = (180.0, 192.1)          # spaceshot: 13.5 g peak, file time
+PAD = (150.0, 179.0)
+
+
+def boost_run(path):
+    """Per GPS satellite through the spaceshot burn, on the file's own clock (MSM7
+    epochs carry GPS time), plus the run's fix availability from ignition on."""
+    ep = []
+    for _t, rest in _lines(path):          # gzip-aware, unlike msm_channels
+        if not rest.startswith("R "):
+            continue
+        try:
+            r = rtcm3.parse_msm7(bytes.fromhex(rest[2:]))
+        except ValueError:
+            continue
+        if r and r[0] == "GPS":
+            ft = r[1] / 1000.0 - TOW0
+            if 0 <= ft <= 900:              # a cold start's first frames carry an old clock
+                ep.append((ft, {c["prn"]: c for c in r[2]}))
+    ep.sort(key=lambda e: e[0])
+    sats = {}
+    for prn in sorted({p for _t, c in ep for p in c}):
+        pad = [c[prn]["cn0"] for t, c in ep if PAD[0] <= t < PAD[1] and prn in c
+               and c[prn].get("cn0")]
+        if len(pad) < 10:
+            continue                       # not tracked on the pad
+        after = [(t, c.get(prn)) for t, c in ep if t >= BURN[0]]
+        held = all(x is not None and x.get("cn0") for t, x in after
+                   if BURN[0] + 3 <= t < BURN[1])
+        lost = next((t for t, x in after if x is None or not x.get("cn0")), None)
+        back = next((t for t, x in after if lost is not None and t > lost
+                     and x is not None and x.get("cn0")), None)
+        burn = [x["cn0"] for t, x in after if t < BURN[1] and x and x.get("cn0")]
+        resets, prev = 0, None
+        for t, x in after:
+            if t >= BURN[1]:
+                break
+            if x is not None and prev is not None and x["lock_ms"] < prev:
+                resets += 1
+            prev = x["lock_ms"] if x is not None else None
+        sats[prn] = dict(pad=st.median(pad), held=held, lost=lost, back=back,
+                         dmin=(min(burn) - st.median(pad)) if burn else None, resets=resets)
+    import bisect
+    truth = json.loads((HERE / "scenarios" / "spaceshot.json").read_text())["truth"]
+    tt = [s["t"] for s in truth]
+
+    def at(x, k):
+        i = min(max(bisect.bisect_left(tt, x), 1), len(tt) - 1)
+        a_, b_ = truth[i - 1], truth[i]
+        fr = (x - a_["t"]) / (b_["t"] - a_["t"]) if b_["t"] > a_["t"] else 0.0
+        return a_[k] + fr * (b_[k] - a_[k])
+
+    pvt, wrong, worst = [], 0, 0.0
+    for _t, rest in _lines(path):
+        if rest.startswith("$PQTMPVT"):
+            f = rest.split("*")[0].split(",")
+            try:
+                ft, ok, fm = int(f[2]) / 1000.0 - TOW0, int(f[5] or 0), int(f[6] or 0)
+            except (ValueError, IndexError):
+                continue
+            valid = ok > 0 and fm >= 2
+            pvt.append((ft, valid))
+            # the reports' WRONG: valid-flagged and > 5 km or > 50 m/s off the truth
+            if valid and BURN[0] + 1 <= ft < 320 and f[11]:
+                da = abs(float(f[11]) - at(ft, "alt_m"))
+                dv = abs(-float(f[15] or 0) - at(ft, "v_up_mps")) if f[15] else 0.0
+                if da > 5000 or dv > 50:
+                    wrong += 1
+                    worst = max(worst, da)
+    P = [v for ft, v in pvt if BURN[0] + 1 <= ft < 320]
+    first = next((ft for ft, v in pvt if ft >= BURN[0] + 1 and v), None)
+    fixpct = 100 * sum(1 for v in P if v) / len(P) if P else 0.0
+    return sats, fixpct, first, wrong, worst
+
+
+def cmd_boost(a):
+    ref = json.loads((HERE / "results" / "doppler_ref_spaceshot.json").read_text())["sats"]
+    rate = {int(k.split(":")[1]): v.get("rate_hzs") for k, v in ref.items()
+            if k.startswith("0:")}
+    runs = [(Path(p).name.split("_spaceshot")[0], boost_run(p)) for p in a.capture]
+    prns = sorted({p for _n, (s, *_r) in runs for p in s},
+                  key=lambda p: (rate.get(p) is None, rate.get(p) or 0))
+    w = 17
+    print(f"{'sat':<5}{'Hz/s':>6}  " + "".join(f"{n[:w - 1]:<{w}}" for n, _ in runs))
+    for p in prns:
+        cells = []
+        for _n, (s, *_r) in runs:
+            x = s.get(p)
+            if x is None:
+                cells.append("not on pad")
+            elif x["held"]:
+                cells.append(f"held {x['dmin']:+.0f} dB" + (f" r{x['resets']}" if x["resets"] else ""))
+            else:
+                cells.append(f"lost {x['lost']:.0f}" + (f">{x['back']:.0f}" if x["back"] else ""))
+        r = rate.get(p)
+        print(f"G{p:02d}  {('-' if r is None else f'{r:.0f}'):>6}  " + "".join(f"{c:<{w}}" for c in cells))
+    print(f"{'pad C/N0':<13}" + "".join(f"{st.median(x['pad'] for x in s.values()):<{w}.1f}" for _n, (s, *_r) in runs))
+    print(f"{'held':<13}" + "".join(f"{sum(1 for x in s.values() if x['held']):<{w}}" for _n, (s, *_r) in runs))
+    print(f"{'fix% 181-320':<13}" + "".join(f"{r[0]:<{w}.1f}" for _n, (_s, *r) in runs))
+    print(f"{'1st fix >181':<13}" + "".join(f"{('-' if r[1] is None else f'{r[1]:.1f}'):<{w}}" for _n, (_s, *r) in runs))
+    print(f"{'WRONG fixes':<13}" + "".join(f"{(f'{r[2]} ({r[3]/1000:.1f} km)' if r[2] else '0'):<{w}}" for _n, (_s, *r) in runs))
+
+
+IGNITION_PRNS = (29, 12, 30, 19, 14, 15)   # the spaceshot burn's gentlest, 54-199 Hz/s
+
+
+def cmd_ignition(a):
+    """Second by second through ignition: the fix collapsing ($PQTMPVT fix mode /
+    satellites used, 180-181 s) and, for the satellites the burn moves least, each
+    MSM7 epoch as C/N0 / lock-time counter (s) / half-cycle flag."""
+    for path in a.capture:
+        ep, pvt, head = {}, [], ""
+        for _t, rest in _lines(path):
+            if rest.startswith("# host: tx"):
+                head = rest
+            elif rest.startswith("R "):
+                try:
+                    r = rtcm3.parse_msm7(bytes.fromhex(rest[2:]))
+                except ValueError:
+                    continue
+                if r and r[0] == "GPS":
+                    ft = round(r[1] / 1000.0 - TOW0, 1)
+                    if 179 <= ft <= 186:
+                        ep[ft] = {c["prn"]: c for c in r[2]}
+            elif rest.startswith("$PQTMPVT"):
+                f = rest.split("*")[0].split(",")
+                try:
+                    ft = int(f[2]) / 1000.0 - TOW0
+                except (ValueError, IndexError):
+                    continue
+                if 179.95 <= ft <= 181.05:
+                    pvt.append(f"{ft:.1f}:{f[6]}/{int(f[7] or 0)}")
+        print(f"== {Path(path).name}\n   {head[:170]}")
+        print("   fix/used " + " ".join(pvt))
+        for p in IGNITION_PRNS:
+            cells = []
+            for t in sorted(ep):
+                c = ep[t].get(p)
+                cells.append(f"{t:.0f}:" + ("  --  " if c is None else
+                             f"{c['cn0'] or 0:4.1f}/{c['lock_ms'] / 1000:5.1f}/{c['halfcyc']}"))
+            print(f"   G{p:02d} " + "  ".join(cells))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -315,6 +463,9 @@ def main() -> int:
     p.add_argument("--start-mode", type=int, default=5)
     p.add_argument("--step", type=float, default=1800.0); p.add_argument("--csv")
     p.set_defaults(fn=cmd_overnight)
+    p = sub.add_parser("boost"); p.add_argument("capture", nargs="+"); p.set_defaults(fn=cmd_boost)
+    p = sub.add_parser("ignition"); p.add_argument("capture", nargs="+")
+    p.set_defaults(fn=cmd_ignition)
     a = ap.parse_args()
     a.fn(a)
     return 0

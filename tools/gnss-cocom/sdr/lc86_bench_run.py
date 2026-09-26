@@ -2,13 +2,16 @@
 """Transmit a static .C8 into the sealed cage at gain 0 and log the LC86G through
 lc86_bridge, optionally switching its navigation mode on a schedule.
 
-Radiated only inside the sealed Faraday cage, and never above HackRF gain 0: the
-gain is fixed in the code, and a quieter level is made in the file instead
-(make_level_steps.py).
+Radiated only inside the sealed Faraday cage. Gain 0 by default; a quieter
+level is made in the file instead (make_level_steps.py), and a louder one only
+by an explicit --gain, capped at 6 dB (the owner asked for +1 and +3 dB runs).
 
     A/B/A:        --c8 c8/pad_static.C8 --seconds 730 --switch 240:5,480:3
     level sweep:  --c8 c8/pad_levels.C8 --seconds 1240
     one mode:     --c8 c8/pad_static.C8 --seconds 184 --start-mode 1
+    boost:        --c8 c8/spaceshot_smooth.C8 --seconds 320 --rate 10
+                  (spaceshot.C8 is the stock simulator's 0.1 s frequency staircase;
+                  the _smooth file sweeps it -- patch_smooth_carrier.py)
 
 c8/pad_static.C8 is the flights' own pad, extended to 25 minutes (its first 170 s
 are byte-identical to spaceshot.C8):
@@ -24,6 +27,7 @@ $PAIR081 read-back follows each one.
 from __future__ import annotations
 
 import argparse
+import shutil
 import statistics
 import sys
 import time
@@ -49,11 +53,17 @@ def main() -> int:
     ap.add_argument("--c8", required=True)
     ap.add_argument("--seconds", type=float, required=True)
     ap.add_argument("--start-mode", type=int, default=3)
+    ap.add_argument("--gain", type=int, default=0,
+                    help="HackRF TX gain, dB (0-6; only on the owner's say-so above 0)")
+    ap.add_argument("--rate", type=int, default=10,
+                    help="fix rate the module must already be at, Hz (lc86_config.py --rate)")
     ap.add_argument("--switch", default="", help="T:MODE,... host s after TX start")
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-cold-start", action="store_true")
     ap.add_argument("--dry", action="store_true", help="no transmission")
     a = ap.parse_args()
+    if not 0 <= a.gain <= 6:
+        return "--gain is capped at 6 dB for radiated runs"
 
     port = find_bridge("auto")
     if not port:
@@ -62,16 +72,19 @@ def main() -> int:
     link = Link(ser)
     st = read_state(link)
     show_state(st)
-    if st.get("fix_interval_ms") != 100 or st.get("rtcm") != 1 or st.get("PQTMPVT") != 1:
-        return "the LC86G is not at 10 Hz with MSM7 and PQTMPVT on"
+    if st.get("fix_interval_ms") != 1000 // a.rate or st.get("rtcm") != 1 or st.get("PQTMPVT") != 1:
+        return (f"the LC86G is not at {a.rate} Hz with MSM7 and PQTMPVT on "
+                f"(lc86_config.py --rate {a.rate} --navmode {a.start_mode} --rtcm msm7)")
     if st.get("navmode") != a.start_mode:
         r, _ = link.pair(f"PAIR080,{a.start_mode}", 80)
         r2, f = link.pair("PAIR081", 81, reply="PAIR081")
         print(f"# set nav mode {a.start_mode}: ack {r}, read back {f}")
         if r != 0 or not f or int(f[0]) != a.start_mode:
             return "could not set the starting navigation mode"
+    t_cold = None
     if not a.no_cold_start:
         r, _ = link.pair("PAIR006", 6, timeout=3.0)
+        t_cold = time.time()
         print(f"# cold start ($PAIR006): result {r}")
         if r != 0:
             return "cold start not acknowledged"
@@ -85,11 +98,18 @@ def main() -> int:
 
     tx = None
     if not a.dry:
-        tx = start_tx(Path(a.c8), 1575420000, 2600000, 0, "/tmp/hackrf_tx_lc86bench.err")
+        t_tx = time.time()
+        tx = start_tx(Path(a.c8), 1575420000, 2600000, a.gain, "/tmp/hackrf_tx_lc86bench.err",
+                      extra=("-B",))     # per-second buffer statistics: underruns show up
         if tx is None:
             return "hackrf_transfer did not start"
     t0 = time.time()
     lead = 0.0 if a.dry else 4.0          # start_tx waits 4 s before returning
+    # Where the cold start and the transmitter's launch fell, in host seconds before
+    # t0: the receiver restarts in silence and the signal arrives some seconds later,
+    # and that offset is not otherwise recorded anywhere.
+    stamps = (f"cold start {t0 - t_cold:.3f} s before t0; " if t_cold else "") + \
+             (f"TX launched {t0 - t_tx:.3f} s before t0; " if not a.dry else "")
 
     pending = list(sched)
     queries = []                          # host times to send $PAIR081
@@ -100,8 +120,9 @@ def main() -> int:
     cells = []
     try:
         with open(a.out, "w") as fh:
-            fh.write(f"0.000 # host: tx {Path(a.c8).name} gain 0 from {lead:.1f} s before "
-                     f"t=0; start mode {a.start_mode}; switch {a.switch or 'none'}\n")
+            fh.write(f"0.000 # host: tx {Path(a.c8).name} gain {a.gain} from {lead:.1f} s before "
+                     f"t=0; start mode {a.start_mode}; rate {a.rate} Hz; "
+                     f"switch {a.switch or 'none'}; {stamps}c8 {a.c8}\n")
             while time.time() - t0 < a.seconds:
                 t = time.time() - t0
                 if pending and t >= pending[0][0]:
@@ -170,6 +191,8 @@ def main() -> int:
     finally:
         stop_tx(tx)
         ser.close()
+        if tx is not None:                # the transmitter's own log, underruns and all
+            shutil.copyfile("/tmp/hackrf_tx_lc86bench.err", a.out + ".hackrf.txt")
     print(f"# capture -> {a.out}")
     return 0
 
