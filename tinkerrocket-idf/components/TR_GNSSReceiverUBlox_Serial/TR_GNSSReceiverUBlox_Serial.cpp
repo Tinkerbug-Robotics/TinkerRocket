@@ -610,6 +610,21 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         module_is_m10 = (strstr(gnss.getModuleName(), "M10") != nullptr);
     }
 
+#if defined(TR_GNSS_BENCH_COLD_START) && TR_GNSS_BENCH_COLD_START
+    // #491 bench only: start every run from nothing, as a receiver with no backup
+    // supply comes up, so runs of the same file are comparable. CFG-RST with
+    // navBbrMask 0xFFFF clears ephemeris, almanac, position, time and clock drift;
+    // resetMode 0x02 restarts only the GNSS tasks, so the link and the RAM
+    // configuration survive (hardReset() would reboot the module, baud and all).
+    // The receiver does not ACK a reset.
+    {
+        uint8_t cold_start[4] = {0xFF, 0xFF, 0x02, 0x00};
+        gnss.cfgRst(cold_start, sizeof(cold_start));
+        ESP_LOGW(TAG, "[BENCH] cold start sent (CFG-RST navBbrMask 0xFFFF, GNSS only)");
+        delay(1000);
+    }
+#endif
+
     // ── High performance navigation update rate (§2.1.5, UBX-22020019) ──
     // The high-clock configuration lives in OTP memory: programmed once,
     // applied automatically at every startup, PERMANENT.  Verify it at every

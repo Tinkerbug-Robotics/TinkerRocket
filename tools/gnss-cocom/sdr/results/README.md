@@ -312,8 +312,8 @@ Every part that gates velocity at the COCOM figure brackets it to
 output. The Air530 has no velocity gate to 900 m/s and a 10-11 km ceiling that is
 not an export limit. What varies enormously is **re-open latency**: under 1.5 s
 on most parts and 0.1 s on the LC86G in Balloon mode, but 5-11 s on the Quescan
-and the Beitian. In Normal mode, which the table leaves out, the LC86G never
-re-opened at all.
+and the Beitian. In Normal and Drone mode, which the table leaves out, the LC86G
+never re-opened after its 500 m/s mute.
 
 To add another part: fly
 `spaceshot` and `gentle_alt`, archive the capture and its scenario here, add an
@@ -376,6 +376,19 @@ Balloon mode. The likely cause is its own navigation state -- it never believed
 the climb, so its predicted Doppler was off by kilohertz -- but that is inferred
 from the pattern. The Normal-mode flights had no RTCM MSM7 on; re-flying one with
 it would show each channel's measured Doppler against where it should have been.
+Drone mode fails the same way, and it did follow the climb. Its GSV lists a
+median of 13 satellites at 42 dBHz after its mute, but its MSM7 carries almost
+none of them and nothing after 464 s, so it reports signal it never turns into
+measurements. Its GSV then runs a strict 12 s cycle: the same 7-9 satellites
+leave the list together for one second at 644, 656, 668, 680 and 692 s while the
+rest stay, which looks like a search restarting on channels it cannot use.
+Question 6 is answered -- Drone mode runs without carrier lock after a cold start
+-- but whether that is what keeps it from re-acquiring after the mute is open.
+
+**6. Answered 2026-09-25: Drone mode gives up carrier-phase lock itself; the
+3 dB was the bench.** An A/B/A on one static signal, a survey of every mode, and
+two sessions on the real sky -- see "Tracking by navigation mode" in the LC86G
+section.
 
 ## Quescan M10, radiated (2026-08-28)
 
@@ -518,7 +531,7 @@ driver's `begin()` command for command -- GGA every fix, GSV every 10th,
 `$PQTMPVT` and `$PQTMEPE` every fix, 10 Hz -- and reads every setting back.
 Nothing is saved to the module's flash. When these flights were made the driver
 never sent `$PAIR080`, so the Beetle flew in **Normal** mode, with **Balloon** as
-the control. PR #1500 makes `begin()` send `$PAIR080,3` straight after the fix
+the control; **Drone** mode was added on 2026-09-25 (below). PR #1500 makes `begin()` send `$PAIR080,3` straight after the fix
 rate, and the tool now follows it: a plain `./lc86_config.py` leaves the module in
 Balloon, and `--navmode 0` puts it back in Normal to repeat these flights.
 `--rtcm msm7` adds RTCM3 raw measurements (per-satellite C/N0 to 1/16 dB, the
@@ -537,10 +550,12 @@ Beetle comes up on the pad: its V_BCKP rides the same switched rail.
 
 | Capture | Mode | Result |
 |---|---|---|
-| `lc86g_normal_spaceshot` | Normal | lost every satellite at ignition; valid-flagged fixes 18-80 km wrong near apogee and on the descent; withheld with 13 satellites until the main |
+| `lc86g_normal_spaceshot` | Normal | lost every satellite at ignition; valid-flagged fixes 18-80 km wrong near apogee and on the descent; withheld with 13 satellites in GSV until the main |
 | `lc86g_normal_gentle_alt` | Normal | climb rate near zero for 18 s of boost with a valid fix; **all output stopped at 500 m/s** (own estimate) for 56 s; no valid fix for the rest of the flight |
 | `lc86g_balloon_gentle_alt` | Balloon | boost tracked to 1-2 m/s; **silent above 500 m/s and above 80.0 km** (own estimates), each lifted within 0.1 s straight into a valid fix; limits independent |
 | `lc86g_balloon_spaceshot` | Balloon | lost every channel at ignition; the four at or below 128 Hz/s re-locked within 2 s, the rest stayed lost; no fix until the descent brought it under 500 m/s, then a valid one within 0.6 s |
+| `lc86g_drone_gentle_alt` | Drone | climb rate within 1.3 m/s after the first 2 s of boost, altitude ~1 s late (0.45 km low at 496 m/s); **all output stopped at 500 m/s** (own estimate) for 51 s; no valid fix for the rest of the flight -- GSV lists a median 13 satellites, MSM7 carries none after 464 s |
+| `lc86g_drone_spaceshot` | Drone | lost every channel at ignition and none came back in MSM7 until 242 s, then only bursts of 2-7 and none from 452 s; 10 returned with the first fix at 571.4 s, 3.7 s after the descent passed 10 km; that fix and every one after it right |
 
 Each capture's `.runner.txt.gz` holds the preflight read-back that proves the
 module's configuration at transmit time.
@@ -566,6 +581,63 @@ limitation, calls 10-50 km "cannot be guaranteed", and stops all output above
 - **Re-open:** Balloon mode comes back within one 0.1 s epoch straight into a
   valid fix (0.6 s after the 15 g flight's no-fix spell). Normal mode never
   re-opened on the 3 g flight (open question 5).
+
+### Drone mode, and the missing Aviation mode (2026-09-25)
+
+Asked for an aviation mode. Quectel's L26/L76/L86/L96, LC86L and LG77L modules
+speak the PMTK protocol, and their specification (Lx6&LC86L&LG77L Series GNSS
+Protocol Specification v2.4, 2025-11-07, section 2.3.41, `$PMTK886`
+PMTK_FR_MODE) lists 0 Normal, 1 Fitness, **2 Aviation** (high dynamics, large
+accelerations weighted in the solution), 3 Balloon and 4 Stationary -- every mode
+but Balloon limited to 10 km, Aviation included. The LC86G's `$PAIR080` keeps 0,
+1, 3 and 4, marks 2 and 6 **reserved**, and adds 5 Drone and 7 Swimming. The
+firmware refuses both reserved values: `$PAIR080,2` and `$PAIR080,6` are answered
+`$PAIR001,080,4` (parameter error) and `$PAIR081` still reads the previous mode.
+So the third mode flown is **Drone** (5), which the specification describes for
+"vertical acceleration at different flight phases" and still limits to 10 km.
+`lc86_config.py --navmode` offers 0, 1, 3, 4, 5 and 7 and nothing else. Nor is
+there a back door through the PMTK protocol (tried 2026-09-26): `$PMTK886,2`,
+`$PMTK886,3` and even `$PMTK605`, the firmware query, are each answered
+`$<command>,ERROR,3`, and `$PAIR081` still reads the previous mode.
+
+Same rig, same `.C8` files, same bridge image (the flight computer's MAC checked
+before flashing, its flight image backed up and written back byte-for-byte
+afterwards), `run_radiated.py --lc86 5 --rtcm msm7 --cold-start`, TX gain 0 in
+the sealed cage. The receiver reported **about 3 dB less C/N0** on the pad than
+on 2026-09-24 -- 42 dBHz median on GPS GSV and MSM7 against 45-46 -- and **it
+never held carrier phase, even on the pad**: MSM7 lock time never passed 10 s
+before ignition (Balloon: 176 s by ignition, 754 s by landing on the 3 g
+flight), and the
+half-cycle flag was set on over 90% of pad cells (Balloon about 1%). Its Doppler
+was no noisier -- second difference 0.33-0.34 Hz against 0.38-0.40 -- so this is
+not a degraded signal. The tests in "Tracking by navigation mode" below settled
+both halves: **the lock loss is the mode, and the 3 dB is the bench** -- no mode
+changes the reported C/N0 (so the idea that a mode without phase lock reads 3 dB
+low was wrong), and at a fixed setting the level crept up 2.4 dB over the first
+hour of transmitting on 2026-09-25.
+
+- **The boost is tracked, but the altitude is a second old.** The climb rate
+  lagged by up to 35 m/s for the first 1.8 s after liftoff (Balloon: 12 m/s)
+  and then held within 1.3 m/s to the mute. The altitude fell behind in step
+  with the climb rate -- 0.18 km low at 190 m/s, 0.45 km at 496 m/s -- and
+  shifted by 0.98 s it fits the injection to 11 m rms over 186-210 s (322 m
+  unshifted). Balloon's best shift is 0.22 s, the climb rate's 0.00 s in both.
+- **Mutes at 500 m/s** like the other two (last output at 499.4 m/s injected,
+  first silent epoch at 500.8), at 9.3 km.
+- **Never re-opens after the mute** (3 g): output returned at 261.2 s, 51 s
+  later, and every `$PQTMPVT` from there to the end of the flight has FixMode 0
+  and no satellites used. GSV lists a median of 13 at 42 dBHz all the way down,
+  but MSM7 carries none of them after 263 s except three short bursts of 1-5
+  cells, and none after 464 s: signal seen, nothing measured. Normal mode's GSV
+  listed a median of 4 after its own mute. Open question 5.
+- **At 15 g**: every channel lost at ignition; MSM7 carries none until G13 at
+  242 s (50 s after burnout; GSV has single-satellite blips before that), where
+  Balloon kept its four low ones. With no carrier lock even on the pad -- the
+  mode's own weakness, see below -- this is not a clean comparison with Balloon. From 242 s MSM7 has only bursts of
+  2-7 cells (GSV lists a median of 8), and none at all from 452 s until 572 s,
+  when 10 return with the first fix: 571.4 s, 3.7 s after the descent passed
+  10 km (567.7 s), 9.78 km reported against 9.77 injected, and right to landing.
+- **No valid-flagged wrong fix** on either flight.
 
 ### The ignition loss, per channel
 
@@ -606,6 +678,186 @@ carrier phase at ignition. Section 06 of the report has the figure.
 - **The rail needs the app.** The Beetle's flight-computer rail is switched by
   the out computer on BLE command 8, which cannot reach it inside a closed cage:
   power it before closing the lid.
+
+### Tracking by navigation mode: bench, then sky (2026-09-25)
+
+Why Drone mode never held carrier phase, settled in one evening on the bench and
+one night outdoors. The evidence is the module's own RTCM MSM7: per satellite a
+lock-time counter that restarts when the carrier loop loses phase (a **reset**),
+and the half-cycle-ambiguity flag, which a loop holding phase clears within
+seconds (**half-cycle %** = share of measurements with it set). Tables report the
+**strong** satellites alone (median C/N0 >= 38 dBHz in the window) as well as all
+of them, because on a weak sky every mode loses lock on its weak satellites.
+Two readings to avoid: the lock counter reads 0 until the receiver has time, so
+nothing before the first fix counts; and GSV lists satellites MSM7 shows are not
+being measured, so only MSM7 says "tracked".
+
+Tools, all in this directory:
+
+    make_level_steps.py   stepped-level copy of a static .C8 (the level sweep)
+    lc86_bench_run.py     transmit a static .C8 at gain 0, log, switch modes on a schedule
+    lc86_sky_log.py       listen-only logger for the real sky; re-applies the mode after
+                          a power cycle, takes commands from a file while it logs
+    lc86_tracking.py      the tables below (aba, levels, modes, sky, overnight)
+    plot_lc86_tracking.py lc86g_mode_survey.svg, lc86g_sky_coldstart.svg, lc86g_level_sweep.svg
+
+The bench signal, `c8/pad_static.C8`, is the flights' own pad extended to 25
+minutes -- its first 170 s are byte-identical to `spaceshot.C8`:
+
+    gps-sdr-sim -e BRDC_2026230.rx2.n -l 0.0,-119.0,1200 -d 1500 -b 8 -s 2600000 \
+        -t 2026/08/18,08:30:00 -p -o pad_static.C8
+
+**A/B/A on one static signal** (`lc86g_aba_pad_static`, Balloon -> Drone -> Balloon
+at 244 and 484 s, gain 0, sealed cage). `./lc86_tracking.py aba`:
+
+| Window | Used | C/N0 | Resets / strong sat-min | Half-cycle | Drops/min |
+|---|---|---|---|---|---|
+| Balloon 66-244 s | 11 | 42.8 | 0.00 | 0.0% | 0.0 |
+| Drone 249-484 s | 11 | 42.6 | 3.60 | 60.2% | 13.3 |
+| Balloon 489-733 s | 10 | 43.1 | 0.02 | 4.7% | 6.4 |
+
+The lock loss follows the command; the C/N0 does not. Drone left damage that
+Balloon did not repair in four minutes: G30 lost for good, G15 lost later, and G06
+held for five minutes at 15-19 dBHz, 24 dB under its real level -- the C/A
+cross-correlation level, i.e. a false lock on another satellite's code.
+
+**Every mode** (`lc86g_mode{3,0,4,1,7,5}_pad_static`, each cold-started on the same
+first 184 s). `./lc86_tracking.py modes`:
+
+| Mode | First fix | Used | Carrier locked | Resets/min | Drops/min |
+|---|---|---|---|---|---|
+| Balloon (3) | 36 s | 11 | 99% | 0 | 0 |
+| Normal (0) | 36 s | 13 | 100% | 0 | 0 |
+| Stationary (4) | 42 s | 13 | 100% | 0 | 0.5 |
+| Fitness (1) | 36 s | 12 | 0% | 0 | 10.0 |
+| Swimming (7) | 36 s | 11 | 0% | 0 | 0 |
+| Drone (5) | 36 s | 10 | 9% | 75 | 11.8 |
+
+Fitness and Swimming never gain lock at all (the counter stays at 0, so they show
+no resets); Drone gains it and loses it. C/N0 43.1-44.9 dBHz in every mode, rising
+run to run with the transmitter's warm-up. Reserved 2 and 6 refused (result 4).
+
+**Level sweep** (`lc86g_levels_pad_static`, Balloon, the static signal scaled in the
+file 0 -> -36 -> 0 dB in 3 dB steps of 45 s; schedule
+`lc86g_levels_pad_static.schedule.json`). `./lc86_tracking.py levels`: C/N0 follows
+the level 1:1 (43.1, 40.6, 37.7, 34.8, 31.4, 28.4 ... dBHz), so gain 0 is not
+overdriving the receiver. Carrier lock holds to about 35 dBHz (-9 dB), is half
+gone at 31 (-12) and gone at 28 (-15). The fix holds to 28 dBHz, comes and goes
+from 26 to 21 (-18 to -24 dB), holds again on 6-7 satellites at 15-18 (-27, -30),
+and is lost at 13 (-33); stepping up, it returns at 18 dBHz (-27). The flights ran
+~9 dB above where carrier lock starts to go.
+
+**Real sky** (`lc86g_sky_20260925`, board out of the cage, partial sky: 24
+satellites over GPS, Galileo, BeiDou and GLONASS, median C/N0 30-35 dBHz;
+listen-only). `./lc86_tracking.py sky`:
+
+| Phase | TTFF | Used | C/N0 | Resets / strong sat-min | Strong half-cycle |
+|---|---|---|---|---|---|
+| Drone, cold (first record) | ~46 s | 9 | 34.8 | 3.75 | 65% |
+| Balloon, switched in | | 16 | 34.1 | 0.26 | 4% |
+| Drone, switched in | | 19 | 33.2 | 0.26 | 3% |
+| Balloon, cold | 42 s | 21 | 33.1 | 0.00 | 0% |
+| Drone, cold | 36 s | 16 | 32.9 | 3.70 | 50% |
+| Balloon, cold | 42 s | 21 | 33.2 | 0.05 | 1% |
+| Drone, cold | 42 s | 16 | 35.6 | 5.10 | 71% |
+
+Drone switched in from a settled Balloon fix holds lock like Balloon; Drone from a
+cold start never does, and uses fewer satellites (it picks up few Galileo in its
+first minutes). Left in Drone after the last cold start, it never settled: every
+30 minutes for 6.5 hours its strong satellites reset 1.6-7.6 times a sat-minute
+with a fix from 19-30 satellites (`lc86g_sky_20260925_overnight.csv`; the raw
+overnight log, 137 MB, was not archived -- the capture here is the first 50
+minutes, all four tests).
+
+**So:** the simulator aggravates Drone mode (switched in, it loses lock on the
+bench and keeps it on the sky) but did not invent its weakness. A module with no
+backup supply of its own comes up cold at every power-up, and Drone mode from a
+cold start tracks GPS and BeiDou without carrier lock. Balloon, Normal and
+Stationary hold lock from a cold start.
+
+**Traps:** `pgrep -f hackrf_transfer` matches any shell whose command line merely
+mentions the name -- a waiting loop tripped the runner's "is a transmitter still
+running?" guard; `pgrep -x` matches the process. NMEA numbers GLONASS satellites
+slot + 64, MSM7 by slot. The HackRF's delivered level drifts up while it warms, so
+compare levels only within a session.
+
+### Boost repeatability, and the stepped signal behind the scatter (2026-09-26)
+
+The same module in Balloon mode through the spaceshot to apogee (13.5 g burn
+180.0-192.1 s), sealed cage, a cold start before every run. Thirteen runs in
+three sets:
+
+| set | file | fix rate | HackRF gain | captures (`results/`) |
+|---|---|---|---|---|
+| rate | stepped | 10, 5, 1 Hz | 0 | `lc86g_20260926_rate10_run1`, `_rate5_run2`, `_rate1_run3` |
+| level | stepped | 10 Hz | 0, +1, +3, +3, +1, 0 | `lc86g_20260926_gain{0,1,3,3,1,0}_run{1..6}` |
+| smooth | smooth | 10 Hz | 0 | `lc86g_20260926_smooth_run{1..4}` |
+
+Each is `_spaceshot.log.gz` with its `.runner.txt.gz`; the smooth runs add
+`.hackrf.txt.gz`, the transmitter's own log with per-second underrun counts.
+"Held" below means measured in every MSM7 epoch 183-192.1 s.
+
+**On the stepped file the outcome was a coin flip.** Held through the burn: 1, 0,
+0, 0, 0, 4, 0 in the seven 10 Hz runs (in run order; the 2026-09-24 run held 4),
+0 at 5 Hz, 5 at 1 Hz. All or nothing: a run kept the gentlest four (G29, G12, G30,
+G19 at 54-128 Hz/s; G14 at 171 too at 1 Hz) or at most one. Every channel lost
+carrier lock within the first seconds of the burn in every run; "held" meant the
+gentle four came back within 1-2 s in frequency-only tracking. Level made no difference: both +3 dB runs
+lost everything, across pad levels of 41.9-45.9 dBHz.
+
+**The cause is the simulator.** Stock gps-sdr-sim holds each satellite's carrier
+constant for a 0.1 s block (the block's average range rate), so the burn arrives
+as a staircase: G24 jumps 54 Hz every 0.1 s (measured from the IQ file), G29
+about 5 Hz. A real flight slides. `patch_smooth_carrier.py` sweeps the frequency
+across each block instead, and `c8/spaceshot_smooth.C8` is the same flight built
+that way (the build command is in its docstring).
+
+**On the smooth file tracking repeats.** All four runs held the same five: G29 in
+unbroken phase lock; G12, G30 and G19 frequency-only at pad C/N0, with phase back
+by 188-195 s; G14 with a mean loss of 1.3-4.4 dB (2.8-8 dB peak), the only
+satellite whose C/N0 differs run to run. Nothing at 199 Hz/s or above held in any
+run. **Every earlier boost number in this README, and in both reports, came from
+the stepped file.**
+
+**The navigation solution does not repeat, and it goes wrong more often.** Wrong
+fixes (valid-flagged, more than 5 km or 50 m/s off, counted from 181 s): the seven
+stepped 10 Hz runs 689, 0, 60, 0, 0, 263, 1 in run order; the four smooth runs 1,
+618, 23 and 966. Two smooth runs stayed wrong to the end of the capture: one 26 km
+low from 6-7 satellites at PDOP ~3, velocity right to ~20 m/s and a `$PQTMEPE`
+vertical estimate of ~65 m; the other 65-70 km low from 4 satellites at PDOP ~20.
+Neither muted at 80 km. The satellites a vertical burn cannot shake are the low
+ones (G29 at 5 deg, G12 at 9 deg), so the fix it keeps rests on horizon geometry.
+The stepped file hid some of this: a run that lost everything published nothing.
+
+**Not the pad clock, the stream or the start.** `msm7_clock.py`: the LC86G takes
+its own clock drift out of MSM7 Doppler (0.0 +- 0.2 ppb in every run), and its
+pseudorange clock bias grows ~4 m/s after the first fix in held and lost runs
+alike. The HackRF streamed with no underruns, and the cold start and TX launch
+landed within 6 ms of the same point in every smooth run.
+
+**For finer tests:** satellites inside the limit now come out identical, so they
+say nothing about a setting; G14 does, with a spread of about +-1.3 dB in its mean
+loss over four runs, so a setting has to move it by roughly 2 dB to show with 3-4
+runs each. Smooth run 1 sat 1.3 dB low on every satellite after the HackRF had
+been idle ~50 minutes, most likely its level still warming up (it drifts up as it
+warms); back-to-back runs agree within 0.3 dB. Warm it on a pad file first.
+
+Tools, all in this directory:
+
+    lc86_boost_series.sh      the run series: blind cold start, configure, transmit, log
+    lc86_tracking.py boost    held / lost / first fix / WRONG, per satellite and run
+    lc86_tracking.py ignition second by second through ignition, fix collapse included
+    plot_boost_runs.py        one strip per run (C/N0 heatmap over the fix state), + _held.png
+    plot_boost_cn0.py         C/N0 run against run: pad levels, burn relative to each pad
+    msm7_clock.py             the pad clock: MSM7 Doppler offset and pseudorange bias
+    patch_smooth_carrier.py   the SMOOTH_CARRIER gps-sdr-sim build
+    m10_rate_series.sh        the same series for the SAM-M10Q on the V9 (staged, not yet run)
+
+**Traps:** MSM7 comes once a second at every fix rate, so "held" and lock resets
+have one-second resolution at 10 Hz too. Balloon's 80 km mute outlives the
+transmitter: the next run's configuration gets no answer unless a blind `$PAIR006`
+goes first. A single wrong epoch at ignition (the last pad fix still reading 0 m/s
+0.4 s into the burn) is latency, which is why WRONG counts from 181 s.
 
 ## Experiments still owed on the first four receivers
 
@@ -656,8 +908,14 @@ one receiver connects at a time.
 
 ## What this rig does not test: boost dynamics
 
+> **Caveat (2026-09-26):** every number in this section came from stock gps-sdr-sim,
+> which steps each carrier every 0.1 s, so the burn is a frequency staircase no real
+> flight produces. On the smoothly swept file the LC86G's losses repeat run to run and
+> sit higher up the Doppler-rate scale -- see its 2026-09-26 subsection. Re-running
+> these on `c8/spaceshot_smooth.C8` is owed.
+
 **None of the five UBX parts loses its POSITION during the burn on this bench;
-the Quectel LC86G does, in both navigation modes -- see its section above.
+the Quectel LC86G does, in all three navigation modes flown -- see its section above.
 Individual satellites are a different story, and the ones a receiver loses are
 exactly the ones carrying the most Doppler.** Measured on five receivers with
 `boost_sats.py`, against Doppler measured from RXM-RAWX by `doppler_ref.py`;

@@ -78,7 +78,8 @@
         module powers up in Normal mode, and the setting lives in its RAM, so a
         host has to select Balloon again at every power-up. In Normal mode there
         is no altitude limit to report, because the fix is already wrong partway
-        up the boost. Section 04 sets the two side by side.</p>
+        up the boost. Drone mode follows the boost, but once it reached 500&nbsp;m/s
+        it never published a fix again. Section 04 sets the three side by side.</p>
 
       <h3>Limits combined</h3>
       <p>A receiver with both a speed and an altitude limit has to decide what to
@@ -295,13 +296,13 @@
     </figure>
 
     <div class="prose">
-      <h3>Normal vs Balloon: the Quectel LC86G</h3>
+      <h3>Normal, Balloon and Drone: the Quectel LC86G</h3>
       <p>The eighth part, a Quectel LC86G, was flown on a rocket flight computer
         board, through a bench image that passes the module's serial output
         straight to USB. It was configured the way a flight driver configures it:
         10&nbsp;Hz, the position sentences a flight computer reads, nothing saved
-        to the module. The two standard flights were flown twice, once in each of
-        two navigation modes.</p>
+        to the module. The two standard flights were flown three times, once in
+        each of three navigation modes.</p>
       <p>The navigation mode is set with <code>$PAIR080</code>. The module powers
         up in Normal mode, so a host that never sends the command flies in Normal,
         and the setting lives in RAM, so it has to be sent again at every
@@ -312,45 +313,69 @@
         4&nbsp;g maximum acceleration. This is the NEO-M8T's situation again, a
         ceiling set by a mode rather than by export control, and the test is the
         same: change the mode and watch what moves.</p>
+      <p>The third mode flown is Drone. The mode a rocket wants is not on this
+        module's list. Quectel's L26, L76, L86, L96, LC86L and LG77L modules speak
+        a different protocol, and their specification (v2.4, section 2.3.41,
+        <code>$PMTK886</code>) numbers the modes 0 Normal, 1 Fitness, 2 Aviation,
+        3 Balloon and 4 Stationary. Aviation is the one meant for high dynamics,
+        where large accelerations weigh more in the position solution, and it
+        carries the same 10&nbsp;km limitation as every mode but Balloon. The
+        LC86G's <code>$PAIR080</code> keeps that numbering for the other four,
+        marks 2 reserved, and adds Drone (5) and Swimming (7). This firmware
+        refuses 2, and 6, with a parameter error, and it does not take the other
+        protocol's route either: every PMTK command, <code>$PMTK886</code> and even
+        a firmware query, is answered with an error. Drone mode is the one its
+        specification describes for vertical acceleration, and it keeps the
+        10&nbsp;km limitation. Its two flights were made on a later day, and it
+        never held carrier phase even standing on the pad. The tests at the end
+        of this section show why.</p>
     </div>
 
     <figure>
       <div class="panels" style="grid-template-columns:1fr">
         <div class="panel">
-          <h4>Quectel LC86G &mdash; Normal vs Balloon <span class="badge">gentle_alt</span></h4>
-          <p>same injected file, same cage, same 3 g flight; only the navigation mode differs</p>
+          <h4>Quectel LC86G &mdash; Normal, Balloon and Drone <span class="badge">gentle_alt</span></h4>
+          <p>same injected file, same cage, same 3 g flight; Drone was flown on a later day</p>
 {{FIG_LC86_MODES}}
         </div>
       </div>
       <figcaption>Reported values are drawn only where the receiver published a
         valid fix. Balloon mode (blue) sits on the injected climb rate and
-        altitude everywhere it publishes. Normal mode (orange) reads a climb rate
-        near zero for the first 18&nbsp;s of the boost and never publishes a
-        valid fix after its mute. The strips show the rest: purple where Normal
-        mode's fix is valid-flagged but wrong, grey where either mode stopped
-        talking altogether.</figcaption>
+        altitude everywhere it publishes. Drone mode (green, dashed) follows the
+        same climb rate up to its mute and publishes nothing valid after it.
+        Normal mode (orange) reads a climb rate near zero for the first
+        18&nbsp;s of the boost and never publishes a valid fix after its mute.
+        The strips show the rest: purple where Normal mode's fix is valid-flagged
+        but wrong, grey where a mode stopped talking altogether.</figcaption>
     </figure>
 
     <div class="prose">
       <p><strong>Normal mode cannot follow a boost.</strong> Through the first
         18&nbsp;s of the 3&nbsp;g ascent it reported a climb rate of
         1&ndash;6&nbsp;m/s while the injection climbed to 320&nbsp;m/s. All the
-        while it reported a valid 3-D fix from 13 satellites. Balloon mode, on the
-        same file, was within 2&nbsp;m/s throughout:</p>
+        while it reported a valid 3-D fix from 13 satellites. Balloon and Drone
+        modes, on the same file, lagged only in the first two seconds after
+        liftoff, by up to 12 and 35&nbsp;m/s, and then held within 2&nbsp;m/s to
+        the mute:</p>
       <div class="scroll">
-        <table>
+        <table class="nowrap">
           <caption>The 3 g boost, reported altitude and climb rate</caption>
-          <thead><tr><th class="num">t (s)</th><th class="num">Injected</th><th class="num">Normal mode</th><th class="num">Balloon mode</th></tr></thead>
+          <thead><tr><th class="num">t (s)</th><th class="num">Injected</th><th class="num">Normal mode</th><th class="num">Balloon mode</th><th class="num">Drone mode</th></tr></thead>
           <tbody>
-            <tr><td class="num">184</td><td class="num">1.36 km, 78 m/s</td><td class="num">1.20 km, 4 m/s</td><td class="num">1.30 km, 76 m/s</td></tr>
-            <tr><td class="num">190</td><td class="num">2.17 km, 190 m/s</td><td class="num">1.23 km, 1 m/s</td><td class="num">2.10 km, 189 m/s</td></tr>
-            <tr><td class="num">198</td><td class="num">4.24 km, 323 m/s</td><td class="num">1.26 km, 7 m/s</td><td class="num">4.16 km, 323 m/s</td></tr>
-            <tr><td class="num">205</td><td class="num">6.87 km, 426 m/s</td><td class="num">2.20 km, 248 m/s</td><td class="num">6.73 km, 426 m/s</td></tr>
-            <tr><td class="num">210</td><td class="num">9.18 km, 496 m/s</td><td class="num">4.31 km, 497 m/s</td><td class="num">8.94 km, 496 m/s</td></tr>
+            <tr><td class="num">184</td><td class="num">1.36 km, 78 m/s</td><td class="num">1.20 km, 4 m/s</td><td class="num">1.30 km, 76 m/s</td><td class="num">1.29 km, 79 m/s</td></tr>
+            <tr><td class="num">190</td><td class="num">2.17 km, 190 m/s</td><td class="num">1.23 km, 1 m/s</td><td class="num">2.10 km, 189 m/s</td><td class="num">1.99 km, 191 m/s</td></tr>
+            <tr><td class="num">198</td><td class="num">4.24 km, 323 m/s</td><td class="num">1.26 km, 7 m/s</td><td class="num">4.16 km, 323 m/s</td><td class="num">3.93 km, 324 m/s</td></tr>
+            <tr><td class="num">205</td><td class="num">6.87 km, 426 m/s</td><td class="num">2.20 km, 248 m/s</td><td class="num">6.73 km, 426 m/s</td><td class="num">6.47 km, 427 m/s</td></tr>
+            <tr><td class="num">210</td><td class="num">9.18 km, 496 m/s</td><td class="num">4.31 km, 497 m/s</td><td class="num">8.94 km, 496 m/s</td><td class="num">8.73 km, 497 m/s</td></tr>
           </tbody>
         </table>
       </div>
-      <p><strong>Both modes stop all output at 500&nbsp;m/s</strong>, measured on
+      <p>Drone mode's altitude falls further behind than Balloon's, 0.45&nbsp;km
+        low at 210&nbsp;s against 0.24&nbsp;km, because it is about a second old.
+        Its climb rate is current, but its altitude matches the injection of
+        0.98&nbsp;s earlier, to 11&nbsp;m rms over the boost. At 500&nbsp;m/s that
+        second is 500&nbsp;m.</p>
+      <p><strong>All three modes stop all output at 500&nbsp;m/s</strong>, measured on
         their own speed estimate. What happens next is the difference. Balloon
         mode came back within one 0.1&nbsp;s epoch of the vehicle slowing below
         500&nbsp;m/s, straight into a valid fix at 69.5&nbsp;km. It went quiet
@@ -366,14 +391,31 @@
         predicted each satellite's Doppler kilohertz away from the truth when it
         tried to reacquire. That is an inference from the pattern, not a
         measurement.</p>
-      <p><strong>At 15&nbsp;g both modes lose every satellite at ignition</strong>
+      <p>Drone mode did not recover either, although it had followed the climb,
+        so the explanation above does not obviously cover it. From the end of its
+        mute to landing its GSV listed a median of 13 satellites at 42&nbsp;dBHz,
+        where Normal mode's listed four. But its raw measurements carried almost
+        none of them, and none at all after 464&nbsp;s, and every position report
+        it sent over those ten minutes says no fix and no satellites used. That
+        held long after the vehicle was back inside both of the mode's limits,
+        under 500&nbsp;m/s from 291&nbsp;s and under 10&nbsp;km from 597&nbsp;s.
+        It reported signal from those satellites and never turned it into
+        measurements.</p>
+      <p><strong>At 15&nbsp;g all three modes lose every satellite at ignition</strong>
         (<a href="boost_report.html">GNSS Under Boost</a> has the channel-by-channel
         picture). Normal mode then published valid-flagged fixes
         18&ndash;80&nbsp;km wrong: 1.3&nbsp;km at apogee against 82&nbsp;km, and
         &minus;5&nbsp;km against +13&nbsp;km on the descent. It then withheld,
-        with 13 satellites tracked, until the main parachute opened. Balloon mode
+        with 13 satellites in its GSV, until the main parachute opened. Balloon mode
         published nothing wrong. It had no fix until the descent brought the
-        vehicle back under 500&nbsp;m/s, then a valid one within 0.6&nbsp;s.</p>
+        vehicle back under 500&nbsp;m/s, then a valid one within 0.6&nbsp;s.
+        Drone mode published nothing wrong either, and nothing at all for longer.
+        Its raw measurements carry no channel from ignition until 242&nbsp;s,
+        50&nbsp;s after burnout. After that they came back only in short bursts of
+        two to seven satellites, and not at all from 452&nbsp;s, though GSV listed
+        a median of eight. Ten returned together with its first fix, at
+        571.4&nbsp;s, 3.7&nbsp;s after the vehicle descended through 10&nbsp;km,
+        the mode's documented limit. That fix was right.</p>
       <p class="note">Three details matter to anyone reading this part's output.
         Its UTC runs 18&nbsp;s behind GPS time, because it applies leap seconds
         the simulation never broadcast; the analysis uses
@@ -388,6 +430,123 @@
         receiver. The drift is also why the Balloon-mode altitude limit reads
         near 81&nbsp;km against the injection while the receiver itself stops at
         80.0.</p>
+
+      <h3>What the mode does to tracking</h3>
+      <p>Drone mode's trouble on the pad sent the module back to the bench, and
+        then outdoors. The evidence is the module's own raw measurements, RTCM
+        MSM7. For each satellite they carry a lock-time counter that starts again
+        whenever the carrier loop loses phase, and a flag that stays set until the
+        loop has resolved the carrier's half-cycle ambiguity. A loop that holds
+        phase clears the flag within seconds and lets the counter run.</p>
+      <p><strong>On one static signal, the mode decides it.</strong> The flights'
+        own pad signal, extended to 25 minutes, was played at the flights' level
+        while the module was switched from Balloon to Drone and back. In Balloon
+        mode every satellite held carrier lock without a single restart. Within a
+        minute of the switch to Drone nearly every satellite was restarting,
+        3.6 times a satellite-minute, and some dropped out for seconds at a time. Back in
+        Balloon the restarts stopped. The reported C/N&#8320; did not move with the
+        mode: 42.6&ndash;43.1&nbsp;dBHz throughout, the level of Drone's flights.
+        Their 3&nbsp;dB deficit against the Balloon flights was the bench on the
+        day. At a fixed setting the level crept up 2.4&nbsp;dB over the first hour
+        of transmitting.</p>
+      <p><strong>Every mode on the same three minutes.</strong> Each of the six
+        valid modes was cold-started on the first three minutes of that signal, so
+        all six saw the same satellites at the same GPS times. Three held carrier
+        lock and three did not:</p>
+    </div>
+
+    <figure>
+      <div class="panels" style="grid-template-columns:1fr">
+        <div class="panel">
+          <h4>Quectel LC86G &mdash; carrier lock by navigation mode <span class="badge">bench</span></h4>
+          <p>each mode cold-started on the same first 3 minutes of the flights' pad signal</p>
+{{FIG_LC86_MODE_SURVEY}}
+        </div>
+      </div>
+      <figcaption>One row per satellite, drawn with its C/N&#8320;. The line is
+        solid while the carrier loop holds phase and dotted while it does not.
+        Every mode acquires in the same 36&ndash;42&nbsp;s. After that, Balloon,
+        Normal and Stationary lock every satellite. Fitness and Swimming never do,
+        and Fitness drops satellites. Drone restarts every satellite's lock many
+        times a minute and drops them too. G13, which no mode keeps after
+        acquisition, is left out.</figcaption>
+    </figure>
+
+    <div class="scroll">
+      <table class="nowrap">
+        <caption>Six navigation modes, cold-started on the same simulated sky</caption>
+        <thead><tr><th>Mode</th><th class="num">First fix</th><th class="num">Used</th><th class="num">Locked</th><th class="num">Restarts/min</th><th class="num">Drops/min</th></tr></thead>
+        <tbody>
+          <tr><td>Balloon (3)</td><td class="num">36 s</td><td class="num">11</td><td class="num">99%</td><td class="num">0</td><td class="num">0</td></tr>
+          <tr><td>Normal (0)</td><td class="num">36 s</td><td class="num">13</td><td class="num">100%</td><td class="num">0</td><td class="num">0</td></tr>
+          <tr><td>Stationary (4)</td><td class="num">42 s</td><td class="num">13</td><td class="num">100%</td><td class="num">0</td><td class="num">0.5</td></tr>
+          <tr><td>Fitness (1)</td><td class="num">36 s</td><td class="num">12</td><td class="num">0%</td><td class="num">0</td><td class="num">10</td></tr>
+          <tr><td>Swimming (7)</td><td class="num">36 s</td><td class="num">11</td><td class="num">0%</td><td class="num">0</td><td class="num">0</td></tr>
+          <tr><td>Drone (5)</td><td class="num">36 s</td><td class="num">10</td><td class="num">9%</td><td class="num">75</td><td class="num">12</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p><strong>On the real sky, it is a cold start that Drone mode cannot
+        survive.</strong> Out of the cage, with part of the sky in view (24
+        satellites over four constellations, median C/N&#8320; near 33&nbsp;dBHz),
+        Drone switched in from a settled Balloon fix held lock as well as Balloon
+        did: 0.26 restarts per satellite-minute on the strong satellites in both.
+        From a cold start it did not, in all three of its cold starts. The last
+        four, alternating the modes:</p>
+    </div>
+
+    <figure>
+      <div class="panels" style="grid-template-columns:1fr">
+        <div class="panel">
+          <h4>Quectel LC86G &mdash; cold starts on the real sky <span class="badge">sky</span></h4>
+          <p>the same place and hour, cold-started four times, 5 minutes each; GPS and BeiDou satellites</p>
+{{FIG_LC86_SKY_COLDSTART}}
+        </div>
+      </div>
+      <figcaption>Drawn as the bench figure above, on real signals. In both
+        Balloon phases the GPS and BeiDou satellites hold carrier lock, apart from
+        the weakest. In both Drone phases they restart it many times a minute,
+        C24 at 75&deg; and 40&nbsp;dBHz among them. Drone mode also uses 16
+        satellites to Balloon's 21, mostly because it picks up few of the Galileo
+        satellites in its first five minutes.</figcaption>
+    </figure>
+
+    <div class="scroll">
+      <table class="nowrap">
+        <caption>Cold starts on the real sky, 5 minutes each</caption>
+        <thead><tr><th>Phase</th><th class="num">First fix</th><th class="num">Used</th><th class="num">C/N0</th><th class="num">Restarts/sat-min</th><th class="num">Locked</th></tr></thead>
+        <tbody>
+          <tr><td>Balloon</td><td class="num">42 s</td><td class="num">21</td><td class="num">33.1 dBHz</td><td class="num">0.00</td><td class="num">100%</td></tr>
+          <tr><td>Drone</td><td class="num">36 s</td><td class="num">16</td><td class="num">32.9 dBHz</td><td class="num">3.70</td><td class="num">50%</td></tr>
+          <tr><td>Balloon</td><td class="num">42 s</td><td class="num">21</td><td class="num">33.2 dBHz</td><td class="num">0.05</td><td class="num">99%</td></tr>
+          <tr><td>Drone</td><td class="num">42 s</td><td class="num">16</td><td class="num">35.6 dBHz</td><td class="num">5.10</td><td class="num">29%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p class="note">C/N&#8320; is the median over every satellite. Restarts and
+        lock are for the strong satellites alone, those with a median of
+        38&nbsp;dBHz or more in the phase: on this sky every mode loses lock on its
+        weakest satellites, and the strong ones are where a working loop holds
+        it. "Locked" in both tables is the share of measurements without the
+        half-cycle flag.</p>
+    </div>
+
+    <div class="prose">
+      <p>Left running in Drone mode after the last cold start, it never settled.
+        In every half hour of the next six and a half, its strong satellites
+        restarted lock 1.6&ndash;7.6 times a satellite-minute, while it kept a fix
+        from 19&ndash;30 satellites.</p>
+      <p><strong>What it means.</strong> The simulator makes Drone mode worse:
+        switched in from a settled fix, it lost lock on the bench and kept it on
+        the sky. But the simulator did not invent the weakness. From a cold start,
+        which is how a module without its own backup supply comes up at every
+        power-up, Drone mode tracks GPS and BeiDou without carrier lock, and with
+        fewer satellites. Its flight results above describe that receiver. Balloon
+        mode holds lock from a cold start on the bench and on the sky.</p>
     </div>
   </section>
 
@@ -1052,8 +1211,10 @@
 <!--#fignote lc86g_normal-->
 Purple is a fix flagged valid but grossly off the truth; grey is no output at
 all. The amber from 524&nbsp;s on the 15&nbsp;g flight is not a gate: the
-vehicle is slow and low, and the receiver is tracking 13 satellites at
-45&nbsp;dBHz without publishing a fix until the main parachute opens.
+vehicle is slow and low, and the receiver's GSV lists 13 satellites at
+45&nbsp;dBHz while it publishes no fix until the main parachute opens. These
+flights logged no raw measurements to confirm that those satellites were
+measured.
 <!--/fignote-->
 
 <!--#fignote lc86g_balloon-->
@@ -1063,6 +1224,15 @@ After ignition only the four lowest satellites were tracked (see
 the receiver published no fix from them. Grey is the mute, at 500&nbsp;m/s and
 above 80&nbsp;km on the receiver's own estimates. Each one lifts straight into a
 valid fix.
+<!--/fignote-->
+
+<!--#fignote lc86g_drone-->
+Flown on a later day. The amber after the 3&nbsp;g flight's grey mute is not the
+export gate: the vehicle is back under 500&nbsp;m/s from 291&nbsp;s and under
+10&nbsp;km from 597&nbsp;s. The strip reads the receiver's GSV, which lists a
+median of 13 satellites to landing, but its raw measurements carry none of them
+after 464&nbsp;s. On the 15&nbsp;g flight the amber lasts until the descent
+passes 10&nbsp;km.
 <!--/fignote-->
 
 <!--#fignote px1125r-->
@@ -1130,6 +1300,17 @@ boost, and its limits are clean and independent: 500&nbsp;m/s and 80&nbsp;km on
 its own estimates, enforced by muting all output and lifted within 0.1&nbsp;s
 straight into a valid fix. It still loses its fix at a 15&nbsp;g ignition
 (see <a href="boost_report.html">GNSS Under Boost</a>).
+<!--/blurb-->
+
+<!--#blurb lc86g_drone-->
+The same module after <code>$PAIR080,5</code>, flown because this firmware
+refuses mode&nbsp;2, which is Aviation on Quectel's <code>$PMTK886</code>
+modules. It follows the boost like Balloon mode, though its altitude runs a
+second late. It mutes at 500&nbsp;m/s like the other two, and on the 3&nbsp;g
+flight never published a valid fix again, though its GSV listed 13 satellites to
+landing. At 15&nbsp;g it had no fix until the descent passed 10&nbsp;km. From a
+cold start it tracks without carrier lock, on the bench and on the real sky. See
+section 04.
 <!--/blurb-->
 
 <!--#blurb air530-->
