@@ -153,6 +153,14 @@ to work out which field to walk into. Notes:
   SVG); only the imagery is missing. The container is styled as graph paper and
   failed tiles resolve to a transparent pixel, so an offline map reads as a plot
   rather than a broken page.
+- **Opened from disk, the OSM layer fetches its own tiles.** OSM's tile CDN
+  answers a browser request that carries no Referer with an "Access blocked"
+  notice tile, served as a valid PNG under HTTP 200, so `errorTileUrl` never
+  sees it and the notice is painted as imagery. A `file://` or `blob:` page
+  never sends a Referer. On such pages the layer fetches each tile with the
+  `X-Requested-With` header the OSM wiki names for referrer-less clients and
+  hands the image an object URL. Served pages keep the plain `<img>` path: they
+  send a Referer, and the header costs a CORS preflight per tile.
 - **Tiles are deliberately not cached into the file.** The OSM tile policy
   forbids bulk downloading and states plainly that offline use of
   `tile.openstreetmap.org` is not permitted; a report with baked-in tiles is a
