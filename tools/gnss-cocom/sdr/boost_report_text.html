@@ -368,14 +368,16 @@
         satellites back within 2&nbsp;s. On the gentle flight Drone mode followed
         the climb as closely as Balloon mode, but its altitude was about a second
         old: 0.45&nbsp;km low at 496&nbsp;m/s.</p>
-      <p>That run is not a clean comparison. It reported 3&nbsp;dB less
-        C/N&#8320; on the pad, 42 against 45&nbsp;dBHz at the same transmit gain,
-        and even standing still it never held carrier phase: its lock-time counter
-        never passed 10&nbsp;s where Balloon's ran to 176&nbsp;s by ignition, and
-        the half-cycle flag was set on over 90% of its measurements against about
-        1%. Its Doppler was no noisier, which points at how Drone mode tracks
-        rather than at a weaker signal, but only switching modes on one static
-        signal would prove it.</p>
+      <p>That run is not a clean comparison with Balloon's, and the reason turned
+        out to be the mode's own. Drone mode never held carrier phase, even
+        standing on the pad: its lock-time counter never passed 10&nbsp;s where
+        Balloon's ran to 176&nbsp;s by ignition. Tests after the flights
+        (<a href="report.html">GNSS Receiver Limits</a>, section 04) settled it.
+        On one static signal, the lock loss follows the mode. On the real sky,
+        Drone mode loses lock the same way after every cold start and never
+        settles, though it holds lock when switched in from a settled Balloon fix.
+        The simulated signal makes it worse without inventing it. Its 3&nbsp;dB
+        lower C/N&#8320; was the bench on that day, not the mode.</p>
       <p>Channel by channel, only Balloon mode got any satellites back during the
         burn:</p>
     </div>
@@ -428,6 +430,34 @@
         at one hour, the steepest at 70&deg;. A different sky puts different
         satellites overhead, and the ranking follows the sky, not the satellite
         numbers.</p>
+      <p><strong>How much signal the bench delivers.</strong> Every radiated
+        flight used the HackRF's lowest transmit gain, so a quieter signal has to
+        be made in the file. Stepping the LC86G's pad signal down that way, 3&nbsp;dB
+        at a time and back up, shows what the flights had to spare:</p>
+    </div>
+
+    <figure>
+      <div class="panels" style="grid-template-columns:1fr">
+        <div class="panel">
+          <h4>Quectel LC86G &mdash; carrier lock and fix against signal level <span class="badge">Balloon</span></h4>
+          <p>the flights' pad signal, scaled in the file below HackRF gain 0; 45 s a step</p>
+{{FIG_LC86_LEVELS}}
+        </div>
+      </div>
+      <figcaption>Reported C/N&#8320; falls one decibel for each decibel removed,
+        so the flights were not overdriving the receiver. Carrier lock holds to
+        about 35&nbsp;dBHz and is gone by 28. The fix holds to about 28&nbsp;dBHz,
+        comes and goes from 26 to 21, holds again on six or seven satellites at
+        15&ndash;18, and is lost at 13. On the way back up it returns at
+        18&nbsp;dBHz.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <p>The flights ran at 42&ndash;45&nbsp;dBHz on this part, about 9&nbsp;dB
+        above the level where carrier lock starts to go, and that is standing
+        still. A boost spends that margin, because a loop tolerates less Doppler
+        rate as its carrier-to-noise falls. A motor's plume and a rolling body
+        spend it too.</p>
     </div>
   </section>
 

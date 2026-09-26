@@ -27,6 +27,9 @@ use any of them; each must appear on at least one page:
     {{FIG_BOOST_DOPPLER}}  }
     {{FIG_LC86_MODES}}     }
     {{FIG_LC86_KNEE}}      }
+    {{FIG_LC86_MODE_SURVEY}}    }
+    {{FIG_LC86_SKY_COLDSTART}}  }
+    {{FIG_LC86_LEVELS}}         }
 
 Per-receiver blurbs are marked in report_text.html as
 
@@ -216,6 +219,9 @@ def build(text_path: Path, title: str):
         "{{FIG_BOOST_DOPPLER}}": fig("boost_doppler.svg"),
         "{{FIG_LC86_MODES}}": fig("lc86g_modes.svg"),
         "{{FIG_LC86_KNEE}}": fig("lc86g_knee.svg"),
+        "{{FIG_LC86_MODE_SURVEY}}": fig("lc86g_mode_survey.svg"),
+        "{{FIG_LC86_SKY_COLDSTART}}": fig("lc86g_sky_coldstart.svg"),
+        "{{FIG_LC86_LEVELS}}": fig("lc86g_level_sweep.svg"),
     }
     used = {k for k in fills if k in text}
     for k, v in fills.items():
