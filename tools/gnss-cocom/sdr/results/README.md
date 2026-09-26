@@ -781,6 +781,84 @@ running?" guard; `pgrep -x` matches the process. NMEA numbers GLONASS satellites
 slot + 64, MSM7 by slot. The HackRF's delivered level drifts up while it warms, so
 compare levels only within a session.
 
+### Boost repeatability, and the stepped signal behind the scatter (2026-09-26)
+
+The same module in Balloon mode through the spaceshot to apogee (13.5 g burn
+180.0-192.1 s), sealed cage, a cold start before every run. Thirteen runs in
+three sets:
+
+| set | file | fix rate | HackRF gain | captures (`results/`) |
+|---|---|---|---|---|
+| rate | stepped | 10, 5, 1 Hz | 0 | `lc86g_20260926_rate10_run1`, `_rate5_run2`, `_rate1_run3` |
+| level | stepped | 10 Hz | 0, +1, +3, +3, +1, 0 | `lc86g_20260926_gain{0,1,3,3,1,0}_run{1..6}` |
+| smooth | smooth | 10 Hz | 0 | `lc86g_20260926_smooth_run{1..4}` |
+
+Each is `_spaceshot.log.gz` with its `.runner.txt.gz`; the smooth runs add
+`.hackrf.txt.gz`, the transmitter's own log with per-second underrun counts.
+"Held" below means measured in every MSM7 epoch 183-192.1 s.
+
+**On the stepped file the outcome was a coin flip.** Held through the burn: 1, 0,
+0, 0, 0, 4, 0 in the seven 10 Hz runs (in run order; the 2026-09-24 run held 4),
+0 at 5 Hz, 5 at 1 Hz. All or nothing: a run kept the gentlest four (G29, G12, G30,
+G19 at 54-128 Hz/s; G14 at 171 too at 1 Hz) or at most one. Every channel lost
+carrier lock within the first seconds of the burn in every run; "held" meant the
+gentle four came back within 1-2 s in frequency-only tracking. Level made no difference: both +3 dB runs
+lost everything, across pad levels of 41.9-45.9 dBHz.
+
+**The cause is the simulator.** Stock gps-sdr-sim holds each satellite's carrier
+constant for a 0.1 s block (the block's average range rate), so the burn arrives
+as a staircase: G24 jumps 54 Hz every 0.1 s (measured from the IQ file), G29
+about 5 Hz. A real flight slides. `patch_smooth_carrier.py` sweeps the frequency
+across each block instead, and `c8/spaceshot_smooth.C8` is the same flight built
+that way (the build command is in its docstring).
+
+**On the smooth file tracking repeats.** All four runs held the same five: G29 in
+unbroken phase lock; G12, G30 and G19 frequency-only at pad C/N0, with phase back
+by 188-195 s; G14 with a mean loss of 1.3-4.4 dB (2.8-8 dB peak), the only
+satellite whose C/N0 differs run to run. Nothing at 199 Hz/s or above held in any
+run. **Every earlier boost number in this README, and in both reports, came from
+the stepped file.**
+
+**The navigation solution does not repeat, and it goes wrong more often.** Wrong
+fixes (valid-flagged, more than 5 km or 50 m/s off, counted from 181 s): the seven
+stepped 10 Hz runs 689, 0, 60, 0, 0, 263, 1 in run order; the four smooth runs 1,
+618, 23 and 966. Two smooth runs stayed wrong to the end of the capture: one 26 km
+low from 6-7 satellites at PDOP ~3, velocity right to ~20 m/s and a `$PQTMEPE`
+vertical estimate of ~65 m; the other 65-70 km low from 4 satellites at PDOP ~20.
+Neither muted at 80 km. The satellites a vertical burn cannot shake are the low
+ones (G29 at 5 deg, G12 at 9 deg), so the fix it keeps rests on horizon geometry.
+The stepped file hid some of this: a run that lost everything published nothing.
+
+**Not the pad clock, the stream or the start.** `msm7_clock.py`: the LC86G takes
+its own clock drift out of MSM7 Doppler (0.0 +- 0.2 ppb in every run), and its
+pseudorange clock bias grows ~4 m/s after the first fix in held and lost runs
+alike. The HackRF streamed with no underruns, and the cold start and TX launch
+landed within 6 ms of the same point in every smooth run.
+
+**For finer tests:** satellites inside the limit now come out identical, so they
+say nothing about a setting; G14 does, with a spread of about +-1.3 dB in its mean
+loss over four runs, so a setting has to move it by roughly 2 dB to show with 3-4
+runs each. Smooth run 1 sat 1.3 dB low on every satellite after the HackRF had
+been idle ~50 minutes, most likely its level still warming up (it drifts up as it
+warms); back-to-back runs agree within 0.3 dB. Warm it on a pad file first.
+
+Tools, all in this directory:
+
+    lc86_boost_series.sh      the run series: blind cold start, configure, transmit, log
+    lc86_tracking.py boost    held / lost / first fix / WRONG, per satellite and run
+    lc86_tracking.py ignition second by second through ignition, fix collapse included
+    plot_boost_runs.py        one strip per run (C/N0 heatmap over the fix state), + _held.png
+    plot_boost_cn0.py         C/N0 run against run: pad levels, burn relative to each pad
+    msm7_clock.py             the pad clock: MSM7 Doppler offset and pseudorange bias
+    patch_smooth_carrier.py   the SMOOTH_CARRIER gps-sdr-sim build
+    m10_rate_series.sh        the same series for the SAM-M10Q on the V9 (staged, not yet run)
+
+**Traps:** MSM7 comes once a second at every fix rate, so "held" and lock resets
+have one-second resolution at 10 Hz too. Balloon's 80 km mute outlives the
+transmitter: the next run's configuration gets no answer unless a blind `$PAIR006`
+goes first. A single wrong epoch at ignition (the last pad fix still reading 0 m/s
+0.4 s into the burn) is latency, which is why WRONG counts from 181 s.
+
 ## Experiments still owed on the first four receivers
 
 Only the Air530 was ever run against the dwell scenarios. Every other part's
@@ -829,6 +907,12 @@ Best done as each part goes back on the bench alongside a new one, since only
 one receiver connects at a time.
 
 ## What this rig does not test: boost dynamics
+
+> **Caveat (2026-09-26):** every number in this section came from stock gps-sdr-sim,
+> which steps each carrier every 0.1 s, so the burn is a frequency staircase no real
+> flight produces. On the smoothly swept file the LC86G's losses repeat run to run and
+> sit higher up the Doppler-rate scale -- see its 2026-09-26 subsection. Re-running
+> these on `c8/spaceshot_smooth.C8` is owed.
 
 **None of the five UBX parts loses its POSITION during the burn on this bench;
 the Quectel LC86G does, in all three navigation modes flown -- see its section above.
