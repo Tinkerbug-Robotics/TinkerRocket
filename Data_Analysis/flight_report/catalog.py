@@ -1462,6 +1462,32 @@ _P(
         "safety property this field exists for.",
 )
 _P(
+    "Snapshot.gnss_admission", "GNSS admission to the EKF",
+    kind=KIND_ENUM,
+    note=
+        "Whether GNSS altitude and vertical velocity were feeding the flight filter, and GNSS "
+        "the apogee vote, at this frame (GnssAscentGate); horizontal GNSS is always fused. From "
+        "launch it is held_out; after burnout it is admitted once its altitude has agreed with "
+        "the barometer for a second (admitted_baro_agreed), with the filter's own IMU-carried "
+        "altitude when the barometer could not vouch (admitted_filter_agreed), or at once when "
+        "the barometer was judged stuck (admitted_baro_stuck). The receiver's own filter lags or "
+        "collapses in the vertical under boost while still flagging its fixes valid.",
+    caution=
+        "None on every log from firmware before the gate — that byte was padding, and those "
+        "flights fused GNSS from launch. Snapshots start at launch, so there is never a pad row.",
+)
+_P(
+    "Snapshot.gnss_baro_stuck", "Barometer judged stuck (ascent)",
+    kind=KIND_BOOL,
+    note=
+        "Set while the flight computer judged the barometer stuck on the climb — fresh, in range "
+        "and flat to 1 m/s while GNSS climbed faster than 1 m/s, for 2 s after burnout (a sealed "
+        "or taped static port). While set the EKF does not fuse it.",
+    caution=
+        "Leaky, not latched: it clears once the condition stops holding, and it only ever runs "
+        "between burnout and apogee. None on logs from firmware before the gate.",
+)
+_P(
     "Snapshot.flight_elapsed_ms", "Flight elapsed (snapshot)",
     unit="ms", kind=KIND_COUNTER,
     note="Milliseconds since launch detect, as the FC counted them when it built this frame.",

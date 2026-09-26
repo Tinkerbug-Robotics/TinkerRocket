@@ -235,3 +235,84 @@ TEST(EkfGnssFeed, FixArrivingOnAFrozenImuTickIsFusedNextTickNotNullIsland)
     EXPECT_NEAR(v[2], 20.0f, 0.05f);
     EXPECT_TRUE(rig.ekf.isHealthy());
 }
+
+// ---------------------------------------------------------------------------
+// GnssAscentGate: setGnssVerticalHeldOut().  From launch until the receiver
+// qualifies after burnout, its altitude and vertical velocity must not reach
+// the filter — the receiver's own solution lags or collapses in the vertical
+// under boost while flagging its fixes valid (Rolly Polly III 06-14: -38 m/s
+// while climbing at 60, altitude 300 m low).  Its horizontal solution keeps
+// feeding the filter: with the IMU alone that drifted a median 14 m/s by
+// admission on the historical flights.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Feed `seconds` of fixes that moved 3 m north (inside Gate 2, so the
+// horizontal update is the linear one) and carry the given vertical.
+void feedFixes(Rig& rig, int seconds, double alt_m, double vel_u)
+{
+    const double north3m_deg = 3.0 / 6371000.0 / DEG2RAD;
+    const int n = seconds * 1000000 / (int)TICK_US;
+    for (int i = 1; i <= n; i++)
+    {
+        rig.t += TICK_US;
+        if (i % TICKS_PER_FIX == 0) rig.fix_no++;
+        rig.feed.offer(record(rig.t, rig.fix_no, LAT_DEG + north3m_deg, LON_DEG,
+                              alt_m, 0.0, 0.0, vel_u), true);
+        rig.ekf.update(true, imuNoseUp(rig.t), rig.feed.current(), magNoseUp(rig.t));
+    }
+}
+
+}  // namespace
+
+TEST(EkfGnssVerticalHold, HeldOutVerticalIsIgnoredAndHorizontalIsUnchanged)
+{
+    // Held out: a receiver 200 m low and "descending" 50 m/s.
+    Rig held;
+    held.settle(30);
+    double p0[3]; held.ekf.getPosEst(p0);
+    float  v0[3]; held.ekf.getVelEst(v0);
+    held.ekf.setGnssVerticalHeldOut(true);
+    feedFixes(held, 3, ALT_M - 200.0, -50.0);
+    double p1[3]; held.ekf.getPosEst(p1);
+    float  v1[3]; held.ekf.getVelEst(v1);
+    EXPECT_NEAR(p1[2], p0[2], 0.5) << "altitude followed a held-out receiver";
+    EXPECT_NEAR(v1[2], v0[2], 0.2f) << "vertical velocity followed a held-out receiver";
+    EXPECT_TRUE(held.ekf.isHealthy());
+
+    // Baseline: the same horizontal move with a vertical that agrees, fused.
+    Rig base;
+    base.settle(30);
+    double b0[3]; base.ekf.getPosEst(b0);
+    feedFixes(base, 3, ALT_M, 0.0);
+    double b1[3]; base.ekf.getPosEst(b1);
+
+    const double dn_held = (p1[0] - p0[0]) * 6371000.0;
+    const double dn_base = (b1[0] - b0[0]) * 6371000.0;
+    // A converged filter closes a 3 m step slowly (0.8 m in 3 s here); what
+    // matters is that it closes it exactly as it would with the vertical fused.
+    EXPECT_GT(dn_held, 0.3) << "the horizontal fix must still be fused";
+    EXPECT_NEAR(dn_held, dn_base, 0.05 * dn_base + 0.02)
+        << "holding out the vertical changed the horizontal update ("
+        << dn_held << " m vs " << dn_base << " m)";
+}
+
+TEST(EkfGnssVerticalHold, ReleasedVerticalIsFusedAgain)
+{
+    Rig rig;
+    rig.settle(30);
+    double p0[3]; rig.ekf.getPosEst(p0);
+
+    rig.ekf.setGnssVerticalHeldOut(true);
+    rig.ekf.setGnssVerticalHeldOut(false);
+    feedFixes(rig, 3, ALT_M - 200.0, -50.0);
+
+    double p1[3]; rig.ekf.getPosEst(p1);
+    EXPECT_LT(p1[2] - p0[2], -20.0) << "a released vertical must pull the altitude";
+}
+
+TEST(EkfGnssVerticalHold, DefaultIsNotHeldOut)
+{
+    GpsInsEKF ekf;
+    EXPECT_FALSE(ekf.getGnssVerticalHeldOut());
+}

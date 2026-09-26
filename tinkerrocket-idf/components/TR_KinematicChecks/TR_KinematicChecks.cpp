@@ -422,7 +422,8 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                                          float gps_vel_u,
                                          bool  ekf_healthy,
                                          bool  baro_healthy,
-                                         bool  imu_healthy)
+                                         bool  imu_healthy,
+                                         bool  gnss_may_vote)
 {
     // Snapshot apogee_flag so the rising-edge reset below sees the
     // state *before* this tick's apogee voting fires (#192).
@@ -883,7 +884,18 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         // (Doppler) is real-time, so a sustained descent tracks true apogee.
         // Gated only on a fresh fix — NO gps-altitude gate, since that lag is
         // the bug.  Post-burnout only, so an ascent excursion can't fire it.
-        if (new_gps && gps_available_)
+        //
+        // GnssAscentGate: and only once GNSS has been admitted.  "Post-burnout"
+        // was not enough: Rolly Polly III's receiver read -38 m/s while the
+        // rocket climbed at 60, 1-2 s after burnout (#242), and the #262
+        // quorum is 2-of-4.  Until admission the counter is held at zero, so
+        // no pre-admission history can vote the moment it is admitted.
+        if (!gnss_may_vote)
+        {
+            gps_apogee_count_ = 0;
+            gps_apogee_flag   = false;
+        }
+        else if (new_gps && gps_available_)
         {
             const bool gps_pass = (gps_vel_u < -GPS_VEL_APOGEE_DESCENT_MPS);
             if (gps_pass) {
@@ -936,18 +948,23 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             }
 
             // GPS (Doppler) — non-EKF voter, available on a FRESH fix (#262).
-            // Re-enabled after the GNSS dynamic-model change fixed the boost
-            // corruption that originally forced its exclusion (#237/#242): the
-            // detector is post-burnout only, velocity-based (no laggy-altitude
-            // gate), and requires GPS_APOGEE_COUNT_HI sustained descending
-            // samples, so a transient can't fire it.  Being non-EKF, it restores
+            // Re-enabled on the premise that the GNSS dynamic-model change had
+            // fixed the boost corruption that forced its exclusion (#237/#242).
+            // It had not: Rolly Polly III (06-14) and V (08-29) both flew
+            // Airborne <4 g and were corrupted through boost and seconds past
+            // burnout.  So it also waits for GnssAscentGate's admission
+            // (gnss_may_vote).  The detector is post-burnout only, velocity-
+            // based (no laggy-altitude gate), and requires GPS_APOGEE_COUNT_HI
+            // sustained descending samples, so a transient can't fire it.  Being non-EKF, it restores
             // voter diversity exactly when the EKF voters and/or baro are at
             // risk — baro mach-locked-out (the #262 common-mode case) or a
             // degraded EKF.  Gated on GPS_APOGEE_FRESH_MS freshness (500 ms
             // since #262 — this comment used to claim 5 s).
             const bool gps_fresh = gps_available_ &&
                                    (millis() - last_gps_time_ms_) < GPS_APOGEE_FRESH_MS;
-            if (gps_fresh)
+            // Not admitted yet (GnssAscentGate): not a voter at all, so it
+            // neither passes nor raises the bar for the others.
+            if (gps_fresh && gnss_may_vote)
             {
                 available++;
                 if (gps_apogee_flag) passed++;
