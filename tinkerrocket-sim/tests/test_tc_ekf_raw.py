@@ -12,8 +12,9 @@ import struct
 import numpy as np
 
 from tinkerrocket_sim.estimation import gnss_raw as GR
-from tinkerrocket_sim.estimation.tc_ekf import (C_LIGHT, TcEkf, TcEkfParams, corr_inflation,
-                                                ecef2lla, lla2ecef, spp_fix, t_e2ned)
+from tinkerrocket_sim.estimation.tc_ekf import (C_LIGHT, G, TcEkf, TcEkfParams, corr_inflation,
+                                                ecef2lla, lla2ecef, quat2dcm, quat_from_accel_heading,
+                                                spp_fix, t_e2ned)
 from tinkerrocket_sim.sensors.raw_gnss_model import RawGNSSModel
 
 DATA = pathlib.Path(__file__).parent / "data" / "skytraq_nav_frames.txt"
@@ -270,3 +271,48 @@ def test_a_carrier_jump_on_every_satellite_drops_the_epoch():
     assert st[30].used_cr >= 5 and st[30].cr_common_rejected == 0
     assert sum(s.cr_common_rejected > 0 for s in st) <= 2    # that epoch, and at most one chance drop
     assert err < 0.012
+
+
+def _dcm_b2n(yaw_deg, pitch_deg, roll_deg):
+    """Body-to-NED DCM from ZYX Euler angles, built from plain rotations."""
+    y, p, r = np.radians([yaw_deg, pitch_deg, roll_deg])
+    Rz = np.array([[math.cos(y), -math.sin(y), 0], [math.sin(y), math.cos(y), 0], [0, 0, 1]])
+    Ry = np.array([[math.cos(p), 0, math.sin(p)], [0, 1, 0], [-math.sin(p), 0, math.cos(p)]])
+    Rx = np.array([[1, 0, 0], [0, math.cos(r), -math.sin(r)], [0, math.sin(r), math.cos(r)]])
+    return Rz @ Ry @ Rx
+
+
+def test_the_pad_seed_recovers_the_attitude_from_gravity_and_heading():
+    """quat_from_accel_heading is TR_Orientation's quatFromAccelHeading: pitch
+    and roll from a stationary specific force, yaw from the pad heading, and
+    roll left at zero within 10 deg of vertical, where it is ill-conditioned."""
+    for yaw, pitch, roll in ((30.0, 40.0, -20.0), (-100.0, -60.0, 150.0), (170.0, 5.0, 90.0)):
+        C = _dcm_b2n(yaw, pitch, roll)
+        f_b = C.T @ np.array([0.0, 0.0, -G])         # a still accelerometer reads -gravity
+        q = quat_from_accel_heading(f_b, math.radians(yaw))
+        assert np.allclose(quat2dcm(q), C.T, atol=1e-9)
+    f_b = _dcm_b2n(0.0, 87.0, 25.0).T @ np.array([0.0, 0.0, -G])
+    q = quat_from_accel_heading(f_b, 0.0)
+    assert np.allclose(quat2dcm(q), _dcm_b2n(0.0, 87.0, 0.0).T, atol=1e-9)
+
+
+def test_the_pad_seed_takes_the_attitude_as_known_like_the_flight_filter():
+    """TcEkf.set_quaternion is GpsInsEKF::setQuaternion, the flight computer's
+    pad seed: attitude variance 1e-6 and its cross-covariances zeroed, so the
+    first velocity updates cannot trade tilt for accelerometer bias."""
+    import pytest
+    ekf_cpp = pytest.importorskip("tinkerrocket_sim._ekf")
+    f_pad = _dcm_b2n(0.0, 87.0, 0.0).T @ np.array([0.0, 0.0, -G])
+    ekf = TcEkf()
+    ekf.init(np.array([math.radians(REF[0]), math.radians(REF[1]), REF[2]]), [0, 0, 0], [1.0, 0, 0, 0])
+    for _ in range(200):                              # builds attitude/velocity/bias cross-covariances
+        ekf.propagate(f_pad, np.zeros(3), 0.001)
+    assert np.abs(ekf.P[6:9, 3:6]).max() > 1e-6
+    q = quat_from_accel_heading(f_pad, math.radians(30.0))
+    ekf.set_quaternion(q)
+    assert np.allclose(np.diag(ekf.P)[6:9], 1e-6)
+    assert not np.delete(ekf.P[6:9], [6, 7, 8], axis=1).any()
+    cpp = ekf_cpp.GpsInsEKF()
+    cpp.set_quaternion(*q)
+    assert np.allclose(cpp.get_cov_orient(), np.diag(ekf.P)[6:9], rtol=1e-6)
+    assert np.allclose(cpp.get_quaternion(), ekf.q, atol=1e-6)

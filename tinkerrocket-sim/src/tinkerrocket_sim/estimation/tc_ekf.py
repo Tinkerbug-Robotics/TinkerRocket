@@ -87,6 +87,27 @@ def skew(v):
     return np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
 
 
+def quat_from_accel_heading(acc_frd, heading_rad):
+    """Pad attitude seed, as TR_Orientation's quatFromAccelHeading (the flight
+    computer's EKF init): pitch from the X component of a stationary specific
+    force, roll from Y/Z (left at zero within 10 deg of vertical, where it is
+    ill-conditioned), yaw from the known pad heading. Scalar-first, the
+    quaternion Quat2DCM takes."""
+    ax, ay, az = (float(a) for a in acc_frd)
+    g = math.sqrt(ax * ax + ay * ay + az * az)
+    if g < 0.1:
+        g = G
+    pitch = math.asin(min(1.0, max(-1.0, ax / g)))
+    roll = math.atan2(-ay, -az) if abs(pitch) < math.radians(80.0) else 0.0
+    cy, sy = math.cos(0.5 * heading_rad), math.sin(0.5 * heading_rad)
+    cp, sp = math.cos(0.5 * pitch), math.sin(0.5 * pitch)
+    cr, sr = math.cos(0.5 * roll), math.sin(0.5 * roll)
+    return np.array([cr * cp * cy + sr * sp * sy,
+                     sr * cp * cy - cr * sp * sy,
+                     cr * sp * cy + sr * cp * sy,
+                     cr * cp * sy - sr * sp * cy])
+
+
 def earth_rad(lat):
     d = abs(1.0 - ECC2 * math.sin(lat) ** 2)
     return EARTH_RADIUS / math.sqrt(d), EARTH_RADIUS * (1 - ECC2) / (d * math.sqrt(d))
@@ -345,9 +366,18 @@ class TcEkf:
             self.clk_ready = True
         self.reclone()
 
-    def set_attitude_sigma(self, att_rad, hdg_rad):
-        self.P[6, 6] = self.P[7, 7] = att_rad ** 2
-        self.P[8, 8] = hdg_rad ** 2
+    def set_quaternion(self, q):
+        """GpsInsEKF::setQuaternion: take the attitude as known. The attitude
+        variance goes to 1e-6 and its cross-covariances to zero, which is how
+        the flight computer seeds the filter on the pad (with
+        quat_from_accel_heading). Levelling can then only move the accelerometer
+        bias, so the unobservable pad split between tilt and horizontal bias is
+        settled by this seed, not by whatever noise the first velocity updates
+        carry."""
+        self.q = np.array(q, float) / np.linalg.norm(q)
+        self.P[6:9, :] = 0.0
+        self.P[:, 6:9] = 0.0
+        self.P[6, 6] = self.P[7, 7] = self.P[8, 8] = 1e-6
 
     # ------------------------------------------------------------- propagate
     def propagate(self, acc_frd, gyro_frd_rps, dt):
