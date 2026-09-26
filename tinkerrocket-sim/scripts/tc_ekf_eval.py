@@ -27,7 +27,8 @@ import sys
 
 import numpy as np
 
-from tinkerrocket_sim.estimation.tc_ekf import TcEkf, TcEkfParams, ecef2lla, lla2ecef, t_e2ned, G, spp_fix
+from tinkerrocket_sim.estimation.tc_ekf import (TcEkf, TcEkfParams, ecef2lla, lla2ecef, t_e2ned, G, spp_fix,
+                                                quat_from_accel_heading)
 from tinkerrocket_sim.sensors.gnss_model import GNSSModel
 from tinkerrocket_sim.sensors.raw_gnss_model import RawGNSSModel
 
@@ -73,11 +74,18 @@ def run(df, cfg, mode, args):
     ekf = TcEkf(prm)
     baro_mode = args.baro
     i0 = int(np.searchsorted(t, args.t_init))
-    q0 = df[["ekf_q0", "ekf_q1", "ekf_q2", "ekf_q3"]].iloc[i0].to_numpy()
+    # Seeded as the flight computer seeds its EKF on the pad: gyro bias = a
+    # short mean of the stationary gyro (#297), attitude from the mean specific
+    # force plus the known pad heading, taken as known (setQuaternion). A loose
+    # attitude sigma instead let the first velocity updates' noise set the
+    # tilt/accelerometer-bias split: 1.4 deg of pad tilt tightly coupled (#1525).
+    win = slice(max(i0 - 15, 0), i0 + 1)
+    q0 = quat_from_accel_heading(acc[win].mean(axis=0), math.radians(cfg.get("pad_heading_deg") or 0.0))
     # position from a fix, as a receiver would give it at power-up
     fix0 = gnss.measure(enu(p_ned[i0]), enu(v_ned[i0]))
     ekf.init(ecef2lla(np.array([fix0["ecef_x"], fix0["ecef_y"], fix0["ecef_z"]])), [0, 0, 0], q0)
-    ekf.set_attitude_sigma(math.radians(2.0), math.radians(5.0))   # q0 comes from a settled filter
+    ekf.wb = gyr[win].mean(axis=0)
+    ekf.set_quaternion(q0)
     gnss_dt, next_fix = 1.0 / gnss.rate_hz, t[i0]
     rec, n_sats, fix_ok, rej = [], [], [], 0
     last_baro = None

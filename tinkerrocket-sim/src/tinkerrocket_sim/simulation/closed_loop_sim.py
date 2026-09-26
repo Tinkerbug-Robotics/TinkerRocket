@@ -678,6 +678,15 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                         qz = cr*cp*sy - sr*sp*cy
                         ekf.set_quaternion(qw, qx, qy, qz)
 
+                # Magnetic declination, set where the flight computer sets it
+                # (after setQuaternion; there it is WMM at the pad). The sim's
+                # magnetometer reads MagModel.field_ned, so the filter gets that
+                # field's own declination: 12.8 deg east for the default field,
+                # WMM's 12.82 at the default pad. Without it the filter took
+                # magnetic north for true north, and every closed-loop flight
+                # carried ~15.6 deg of heading error, 1.1 m/s at burnout.
+                ekf.set_declination(math.atan2(mag.field_ned[1], mag.field_ned[0]))
+
                 ekf_initialized = True
                 next_baro = t  # sync baro timer with EKF init
 
