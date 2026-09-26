@@ -1480,6 +1480,20 @@ target_include_directories(test_main_deploy_gate PRIVATE
 target_link_libraries(test_main_deploy_gate GTest::gtest_main)
 gtest_discover_tests(test_main_deploy_gate)
 
+# ---------- test_gnss_ascent_gate (owner's rule 2026-09-26) ----------
+# GNSS is held out of the EKF and the apogee vote from launch until, after
+# burnout, its altitude has agreed with the barometer (or, when the barometer
+# cannot vouch, the EKF's IMU-carried altitude) for a sustained second; a
+# barometer flat while GNSS climbs is judged stuck.  Pure header in the shared
+# TR_KinematicChecks component.
+add_executable(test_gnss_ascent_gate test_gnss_ascent_gate.cpp)
+target_include_directories(test_gnss_ascent_gate PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/components/TR_KinematicChecks
+)
+target_link_libraries(test_gnss_ascent_gate GTest::gtest_main)
+gtest_discover_tests(test_gnss_ascent_gate)
+
 # ---------- test_ground_ref_freeze (#1108) ----------
 # May the barometric ground reference follow the current sample?  Before
 # PRELAUNCH the FC re-seeds the datum every pass; this helper holds it while

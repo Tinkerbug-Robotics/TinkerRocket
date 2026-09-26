@@ -180,6 +180,16 @@ public:
     void setGpsNoiseScale(float scale) { gpsNoiseScale_ = scale; }
     float getGpsNoiseScale() const { return gpsNoiseScale_; }
 
+    /// GnssAscentGate: while held out, the GNSS update fuses horizontal
+    /// position and velocity only — altitude and vertical velocity carry no
+    /// information.  The receiver's own filter lags or collapses in the
+    /// vertical under boost while flagging its fixes valid; the caller holds
+    /// the vertical out from launch until the receiver qualifies after
+    /// burnout.  Horizontal GNSS stays in: with the IMU alone the horizontal
+    /// velocity drifted a median 14 m/s by then on the historical flights.
+    void setGnssVerticalHeldOut(bool held) { gnssVerticalHeldOut_ = held; }
+    bool getGnssVerticalHeldOut() const { return gnssVerticalHeldOut_; }
+
     /// Magnetic declination (radians, EAST-positive) added to the measured
     /// magnetic heading so the filter tracks TRUE north.  0 = magnetic north.
     /// Set once from GPS lat/lon/date via the World Magnetic Model.
@@ -682,6 +692,9 @@ private:
 
     // GPS measurement noise scale (1.0 = nominal, >1 during recovery)
     float gpsNoiseScale_ = 1.0f;
+    // GnssAscentGate: GNSS altitude + vertical velocity not fused while set.
+    // Owned by the caller (set every tick), so init() leaves it alone.
+    bool  gnssVerticalHeldOut_ = false;
     // #1418: landed zero-velocity update — whether one has fired since the
     // verdict was raised, when the next may fire, and how many this run.
     bool     zupt_armed_   = false;

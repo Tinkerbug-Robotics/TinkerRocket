@@ -113,6 +113,10 @@ def build_event_list(records):
         events.append((r["time_us"], "mag", r))
     for r in records["IIS2MDC"]:
         events.append((r["time_us"], "mag", r))
+    # GnssAscentGate: whether the firmware had GNSS in its EKF, and whether it
+    # judged the barometer stuck, ride the 10 Hz flight snapshot.
+    for r in records.get("Snapshot") or []:
+        events.append((r["time_us"], "snap", r))
     events.sort(key=lambda e: e[0])
     return events
 
@@ -237,7 +241,21 @@ def replay_binary(records, log_decimation: int = 20,
 
     n_imu = 0
 
+    # GnssAscentGate, as the log recorded it: whether the GNSS vertical was in
+    # the firmware's EKF, and whether it judged the barometer stuck.  A log
+    # with no admission byte (every firmware before the gate) fused all of
+    # GNSS throughout and never judged the barometer stuck, which these
+    # defaults reproduce.  Horizontal GNSS is always fused.
+    gnss_admitted = True
+    baro_stuck = False
+    can_hold_vertical = hasattr(ekf, "set_gnss_vertical_held_out")
+
     for time_us, etype, rec in events:
+        if etype == "snap":
+            gnss_admitted = rec.get("gnss_admission") != "held_out"
+            baro_stuck = bool(rec.get("gnss_baro_stuck"))
+            continue
+
         if etype == "gnss":
             has_fix = rec.get("num_sats", 0) >= 4
             if has_fix:
@@ -270,7 +288,10 @@ def replay_binary(records, log_decimation: int = 20,
             alt = _pressure_to_altitude(rec["pressure_pa"], baro_ref_pa) + baro_alt_offset
             baro_t.append(time_us)
             baro_alt.append(alt)
-            if ekf_initialized:
+            # The firmware stops fusing a barometer outside 25-125 kPa (#257)
+            # or judged stuck on the climb (GnssAscentGate).
+            baro_fusable = (25000.0 < rec["pressure_pa"] < 125000.0) and not baro_stuck
+            if ekf_initialized and baro_fusable:
                 bd = BaroData(); bd.time_us = time_us; bd.altitude_m = alt
                 ekf.baro_meas_update(bd)
 
@@ -332,6 +353,8 @@ def replay_binary(records, log_decimation: int = 20,
             else:
                 use_ahrs_acc = True
 
+            if can_hold_vertical:
+                ekf.set_gnss_vertical_held_out(not gnss_admitted)
             ekf.update_lla(use_ahrs_acc, imu_d, gnss_d, mag_d)
             n_imu += 1
 
