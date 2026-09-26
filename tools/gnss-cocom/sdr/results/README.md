@@ -595,8 +595,10 @@ firmware refuses both reserved values: `$PAIR080,2` and `$PAIR080,6` are answere
 `$PAIR001,080,4` (parameter error) and `$PAIR081` still reads the previous mode.
 So the third mode flown is **Drone** (5), which the specification describes for
 "vertical acceleration at different flight phases" and still limits to 10 km.
-`lc86_config.py --navmode` offers 0, 1, 3, 4, 5 and 7 and nothing else. Whether
-this module still answers `$PMTK886` at all has not been tried.
+`lc86_config.py --navmode` offers 0, 1, 3, 4, 5 and 7 and nothing else. Nor is
+there a back door through the PMTK protocol (tried 2026-09-26): `$PMTK886,2`,
+`$PMTK886,3` and even `$PMTK605`, the firmware query, are each answered
+`$<command>,ERROR,3`, and `$PAIR081` still reads the previous mode.
 
 Same rig, same `.C8` files, same bridge image (the flight computer's MAC checked
 before flashing, its flight image backed up and written back byte-for-byte

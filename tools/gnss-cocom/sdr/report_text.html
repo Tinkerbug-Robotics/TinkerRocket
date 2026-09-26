@@ -322,7 +322,9 @@
         carries the same 10&nbsp;km limitation as every mode but Balloon. The
         LC86G's <code>$PAIR080</code> keeps that numbering for the other four,
         marks 2 reserved, and adds Drone (5) and Swimming (7). This firmware
-        refuses 2, and 6, with a parameter error. Drone mode is the one its
+        refuses 2, and 6, with a parameter error, and it does not take the other
+        protocol's route either: every PMTK command, <code>$PMTK886</code> and even
+        a firmware query, is answered with an error. Drone mode is the one its
         specification describes for vertical acceleration, and it keeps the
         10&nbsp;km limitation. Its two flights were made on a later day, and it
         never held carrier phase even standing on the pad. The tests at the end
