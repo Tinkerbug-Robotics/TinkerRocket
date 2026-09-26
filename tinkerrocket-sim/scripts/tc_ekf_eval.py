@@ -80,7 +80,7 @@ def run(df, cfg, mode, args):
     for i in range(i0 + 1, len(t)):
         dt = t[i] - t[i - 1]
         ekf.propagate(acc[i], gyr[i], dt)
-        if phase[i] in ("PAD", "DESCENT") and 0.5 <= sf_g[i] <= 1.5:
+        if phase[i] in args.level_phases and 0.5 <= sf_g[i] <= 1.5:
             ekf.update_accel_level(acc[i])
         if baro is not None and baro[i] == baro[i] and baro[i] != last_baro:
             last_baro = baro[i]
@@ -149,6 +149,12 @@ def main():
     ap.add_argument("--cm-jerk", dest="cm_jerk", type=float, default=None)
     ap.add_argument("--baro", choices=("all", "pad", "none"), default="all",
                     help="baro updates: whole flight, pad only (GNSS carries altitude), or none")
+    ap.add_argument("--level-phases", dest="level_phases", default="PAD",
+                    type=lambda x: tuple(x.split(",")),
+                    help="flight phases where the gravity-levelling update runs. Default PAD: "
+                         "the sim flies without a parachute, so its descent is ballistic and "
+                         "tumbling, and levelling there (the flight filter's PAD,DESCENT rule, "
+                         "0.5-1.5 g gate) moved the tightly coupled position 11 m at apogee")
     ap.add_argument("--save", help="write the per-step records here (pickle)")
     args = ap.parse_args()
     df, cfg = load(args)

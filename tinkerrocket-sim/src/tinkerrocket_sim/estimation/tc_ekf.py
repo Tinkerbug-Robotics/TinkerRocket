@@ -160,6 +160,17 @@ def spp_fix(meas, x0=None, iters=10):
     return x[:3], v[:3], len(use)
 
 
+def corr_inflation(dt, tau):
+    """Variance factor for a first-order Gauss-Markov error sampled every dt
+    and fused as if white: successive samples correlate with rho = exp(-dt/tau),
+    so each carries (1-rho)/(1+rho) of an independent sample's information.
+    ~2 tau/dt when sampled fast, -> 1 when samples are far apart."""
+    if tau <= 0 or dt <= 0:
+        return 1.0
+    rho = math.exp(-dt / tau)
+    return (1.0 + rho) / (1.0 - rho) if rho < 1.0 - 1e-12 else 1e12
+
+
 def nis_scale(ekf, H, R, y, key):
     """R inflation for a let-back-in measurement: NIS brought down to the gate."""
     if ekf._rejects.get(key, 0) < ekf.p.raw_reject_persist:
@@ -226,9 +237,15 @@ class RawMeas:
     sat_vel: np.ndarray
     pr: float | None             # m
     rr: float | None             # m/s, = -lambda * Doppler
-    sigma_pr: float = 3.0
-    sigma_rr: float = 0.1
+    sigma_pr: float = 3.0        # white part (m)
+    sigma_rr: float = 0.1        # white part (m/s)
     sys: str = "G"               # "G" GPS L1 C/A, "E" Galileo E1, "C" BeiDou B1I
+    # Time-correlated part, first-order Gauss-Markov: multipath, atmosphere and
+    # orbit errors wander over seconds to minutes, so successive epochs are not
+    # independent. 0 = treat as white (the default, and the sim model's case).
+    sigma_pr_corr: float = 0.0   # m
+    tau_pr: float = 15.0         # s
+    tau_rr: float = 0.1          # s
 
 
 @dataclass
@@ -239,6 +256,8 @@ class RawStats:
     rejected_rr: int = 0
     rejected_prns: list = field(default_factory=list)
     clock_jump_ms: int = 0
+    nis_pr: list = field(default_factory=list)
+    nis_rr: list = field(default_factory=list)
 
 
 class TcEkf:
@@ -257,6 +276,8 @@ class TcEkf:
         self.w_est_b = np.zeros(3)
         self.clk_ready = False
         self._rejects = {}
+        self._last_upd = {}                      # (sys, prn, kind) -> filter time of last update
+        self.t = 0.0                             # filter time, advanced by the propagations
         pp = self.p
         self.Rw = np.diag([pp.a_noise ** 2] * 3 + [pp.w_noise ** 2] * 3
                           + [2 * pp.a_markov_sigma ** 2 / pp.a_markov_tau] * 3
@@ -329,6 +350,7 @@ class TcEkf:
         Phi = np.eye(N) + F * dt
         self.P = Phi @ self.P @ Phi.T + Qd
         self.clk[0] += (self.clk[1] + self.clk[2] * self.g_excess) * dt
+        self.t += dt
         self._stabilize()
 
     def propagate_kinematic(self, dt, accel_psd=4.0):
@@ -360,6 +382,7 @@ class TcEkf:
         Phi = np.eye(N) + F * dt
         self.P = Phi @ self.P @ Phi.T + Qd
         self.clk[0] += self.clk[1] * dt
+        self.t += dt
         self._stabilize()
 
     def freeze_imu_states(self):
@@ -537,27 +560,30 @@ class TcEkf:
                 rho, rrate, u = self.predict_raw(m, r, vr)
                 u_ned = T @ u
                 H = np.zeros((1, N))
+                key = (m.sys, m.prn, kind)
+                dt_i = self.t - self._last_upd.get(key, -1e9)
                 if kind == "pr":
                     H[0, 0:3] = -u_ned
                     H[0, 15] = 1.0
                     if m.sys in ISB_INDEX:
                         H[0, ISB_INDEX[m.sys]] = 1.0
                     y = z - (rho + self.clk[0] + self.isb.get(m.sys, 0.0))
-                    R = m.sigma_pr ** 2
+                    R = m.sigma_pr ** 2 + m.sigma_pr_corr ** 2 * corr_inflation(dt_i, m.tau_pr)
                 else:
                     H[0, 3:6] = -u_ned
                     H[0, 16] = 1.0
                     H[0, 17] = self.g_excess
                     y = z - (rrate + self.clk[1] + self.clk[2] * self.g_excess)
-                    R = m.sigma_rr ** 2
-                key = (m.sys, m.prn, kind)
+                    R = m.sigma_rr ** 2 * corr_inflation(dt_i, m.tau_rr)
                 gate = self.p.raw_gate_chi2
                 if self._rejects.get(key, 0) >= self.p.raw_reject_persist:
                     gate = None          # persistent disagreement: the filter is the suspect
                 ok, nis = self._update(H, [y], [[R * (max(1.0, nis_scale(self, H, R, y, key)))]],
                                        att_scale=att, gate=gate)
                 self._rejects[key] = 0 if ok else self._rejects.get(key, 0) + 1
+                (st.nis_pr if kind == "pr" else st.nis_rr).append(nis)
                 if ok:
+                    self._last_upd[key] = self.t
                     setattr(st, f"used_{kind}", getattr(st, f"used_{kind}") + 1)
                 else:
                     setattr(st, f"rejected_{kind}", getattr(st, f"rejected_{kind}") + 1)

@@ -372,8 +372,33 @@ def tropo(h, el):
     return zd / max(math.sin(el), 0.1)
 
 
+# ------------------------------------------------------------------ error model
+# Fitted 2026-09-26 to a PX1105R, antenna outdoors, 20 min static at 20 Hz
+# (79 arcs, 384k residuals; tinkerrocket-sim/scripts/raw_error_model.py):
+#   pseudorange, white (epoch-to-epoch; the receiver smooths its code) 0.16 m at 35 dB-Hz
+#   pseudorange, correlated (multipath/atmosphere/orbit; tau ~15 s)    4.0 m at 35, 2.2 m at 45
+#   range rate, tracking noise                                        ~0.2 m/s at 35 dB-Hz
+# plus, for a receiver that reports Doppler in whole hertz (SkyTraq), the
+# quantisation: uniform over one step, lambda/sqrt(12) = 0.055 m/s at L1.
+PR_WHITE = (0.026, 0.157)       # m:   sigma^2 = a^2 + b^2 * 10^(-(CN0-35)/10)
+PR_CORR = (1.94, 3.5)           # m
+# One correlation time for every C/N0. The autocorrelation's 1/e time is
+# shorter for weak satellites (2-3 s below 40 dB-Hz, 10-13 s above), but a
+# weak satellite's error is mostly its offset over the whole arc (5 m rms at
+# 30-35 dB-Hz), which that measure misses; a per-C/N0 tau made the filter 1.7-1.9x
+# overconfident, a single 15 s left the reported sigma within 5 % of the actual
+# scatter at both 1 and 20 Hz.
+PR_TAU_S = 15.0
+RR_WHITE = (0.0, 0.2)           # m/s, tracking part (quantisation added separately)
+RR_TAU_S = 0.1
+
+
+def _cn0_sigma(ab, cn0):
+    return math.sqrt(ab[0] ** 2 + ab[1] ** 2 * 10 ** (-(cn0 - 35.0) / 10.0))
+
+
 # ------------------------------------------------------------------ epochs
-def corrected(tow, obs, eph, r_approx, use_tropo=True, el_mask_deg=5.0):
+def corrected(tow, obs, eph, r_approx, use_tropo=True, el_mask_deg=5.0, doppler_step_hz=0.0):
     """obs: [(sys, prn, pr_m | None, doppler_hz | None, cn0)] -> list[RawMeas]
     (a 4-tuple (prn, pr, dop, cn0) is taken as GPS).
 
@@ -383,7 +408,9 @@ def corrected(tow, obs, eph, r_approx, use_tropo=True, el_mask_deg=5.0):
     optionally the troposphere are removed, and Doppler becomes range rate at
     the signal's own wavelength with the satellite clock drift removed.
     ``r_approx`` (ECEF) sets elevation for the atmosphere models and the mask;
-    before the first fix pass None and nothing is masked."""
+    before the first fix pass None and nothing is masked. ``doppler_step_hz``
+    is the receiver's Doppler resolution (1.0 for SkyTraq), whose rounding
+    noise joins the range-rate sigma. Sigmas follow the C/N0 model above."""
     out = []
     have_pos = r_approx is not None and np.linalg.norm(r_approx) > 6.0e6
     if have_pos:
@@ -415,16 +442,29 @@ def corrected(tow, obs, eph, r_approx, use_tropo=True, el_mask_deg=5.0):
             corr -= klobuchar(eph.ion, tow, lat, lon, az, el) * (1575.42e6 / f) ** 2
             if use_tropo:
                 corr -= tropo(h, el)
-        s_pr = 2.0 if cn0 >= 40 else 3.5 if cn0 >= 33 else 6.0
-        s_rr = 0.08 if cn0 >= 40 else 0.15 if cn0 >= 33 else 0.4
-        rr = None if dop is None else -(C_LIGHT / f) * dop + C_LIGHT * (dts2 - dts1)
+        lam = C_LIGHT / f
+        s_rr = math.hypot(_cn0_sigma(RR_WHITE, cn0), lam * doppler_step_hz / math.sqrt(12.0))
+        rr = None if dop is None else -lam * dop + C_LIGHT * (dts2 - dts1)
         out.append(RawMeas(prn=prn, sat_pos=rs, sat_vel=vs, pr=pr + corr, rr=rr,
-                           sigma_pr=s_pr, sigma_rr=s_rr, sys=sys))
+                           sigma_pr=_cn0_sigma(PR_WHITE, cn0), sigma_rr=s_rr, sys=sys,
+                           sigma_pr_corr=_cn0_sigma(PR_CORR, cn0), tau_pr=PR_TAU_S,
+                           tau_rr=RR_TAU_S))
     return out
 
 
+def skytraq_doppler_fix(dop_hz):
+    """SkyTraq reports Doppler in whole hertz TRUNCATED toward zero: on average
+    0.5 Hz short of the truth in the direction of zero, +-0.095 m/s of range
+    rate at L1, which the carrier phase exposes (PX1105R, 2026-09-26). Move a
+    whole-hertz value to the middle of its step. Fractional values are left
+    alone (a receiver that does not quantise)."""
+    if dop_hz != int(dop_hz) or dop_hz == 0:
+        return dop_hz
+    return dop_hz + 0.5 * math.copysign(1.0, dop_hz)
+
+
 # ------------------------------------------------------------------ readers
-def read_capture(path, replay_source, systems="GEC"):
+def read_capture(path, replay_source, systems="GEC", fix_doppler_truncation=True):
     """COCOM-rig capture -> (EphStore, [(tow, obs)], own_fixes, kind).
 
     obs = [(sys, prn, pr_m | None, doppler_hz | None, cn0)] for GPS L1 C/A,
@@ -452,8 +492,11 @@ def read_capture(path, replay_source, systems="GEC"):
                     if sys is None or sys not in systems:
                         continue
                     ind = struct.unpack_from(">H", r, 27)[0]
+                    dop = struct.unpack_from(">f", r, 20)[0] if ind & 2 else None
+                    if fix_doppler_truncation and dop is not None:
+                        dop = skytraq_doppler_fix(dop)
                     obs.append((sys, r[1], struct.unpack_from(">d", r, 4)[0] if ind & 1 else None,
-                                struct.unpack_from(">f", r, 20)[0] if ind & 2 else None, r[3]))
+                                dop, r[3]))
                 epochs.append((tow, obs))
             elif d[0] == 0xDF and len(d) >= 61 and d[2] >= 2:
                 own.append((struct.unpack_from(">d", d, 5)[0], np.array(struct.unpack_from(">ddd", d, 13)),

@@ -89,10 +89,23 @@ def main():
     ap.add_argument("--stride", type=int, default=1,
                     help="use every Nth raw epoch (a 20 Hz hour is 72,000 epochs)")
     ap.add_argument("--systems", default="GEC", help="constellations to use: any of G, E, C")
+    ap.add_argument("--pr-model", dest="pr_model", choices=("tuned", "white"), default="tuned",
+                    help="tuned: white + correlated pseudorange error, inflated per update "
+                         "interval; white: the same total sigma fused as if independent")
+    ap.add_argument("--rr-b", dest="rr_b", type=float, help="override the range-rate C/N0 coefficient (m/s)")
+    ap.add_argument("--rr-tau", dest="rr_tau", type=float, help="override the range-rate correlation time (s)")
+    ap.add_argument("--no-doppler-fix", dest="doppler_fix", action="store_false",
+                    help="leave SkyTraq's truncated whole-hertz Doppler as reported")
     ap.add_argument("--csv", help="write the filter track here")
     args = ap.parse_args()
 
-    eph, epochs, own, kind = read_capture(open_capture(args.capture), replay_source, systems=args.systems)
+    import tinkerrocket_sim.estimation.gnss_raw as _gr
+    if args.rr_b is not None:
+        _gr.RR_WHITE = (_gr.RR_WHITE[0], args.rr_b)
+    if args.rr_tau is not None:
+        _gr.RR_TAU_S = args.rr_tau
+    eph, epochs, own, kind = read_capture(open_capture(args.capture), replay_source, systems=args.systems,
+                                          fix_doppler_truncation=args.doppler_fix)
     epochs = epochs[::max(1, args.stride)]
     print(f"{os.path.basename(args.capture)}: {kind}, {len(epochs)} raw epochs, ephemeris for "
           f"{len(eph.eph)} PRNs, iono model {'decoded' if eph.ion else 'absent'}, "
@@ -106,6 +119,7 @@ def main():
         prm.clk_bias_psd = args.clk_bias_psd
     ekf = TcEkf(prm)
     started, t_prev, track, rejects = False, None, [], 0
+    nis_pr, nis_rr, sig = [], [], []
     for tow, obs in epochs:
         t_s = tow - args.tow0 if truth else tow
         if truth and (t_s < 0 or truth.blocked(t_s)):
@@ -128,17 +142,30 @@ def main():
         ekf.propagate_kinematic(tow - t_prev, args.accel_psd)
         t_prev = tow
         r, _, _ = ekf.receiver_state_ecef()
-        meas = corrected(tow, obs, eph, r, use_tropo=args.tropo)
+        meas = corrected(tow, obs, eph, r, use_tropo=args.tropo,
+                         doppler_step_hz=1.0 if kind == "skytraq" else 0.0)
+        if args.pr_model == "white":
+            import math as _m
+            for x in meas:
+                x.sigma_pr = _m.hypot(x.sigma_pr, x.sigma_pr_corr)
+                x.sigma_pr_corr, x.tau_rr = 0.0, 0.0
         st = ekf.update_gnss_raw(meas)
+        nis_pr += st.nis_pr; nis_rr += st.nis_rr
         rejects += st.rejected_pr + st.rejected_rr
         if st.clock_jump_ms:
             print(f"  receiver clock stepped {st.clock_jump_ms:+d} ms at TOW {tow:.1f}; clock state shifted")
         r, v, _ = ekf.receiver_state_ecef()
         track.append((tow, t_s, r.copy(), v.copy(), len(meas), st.rejected_pr + st.rejected_rr))
+        sig.append((math.hypot(math.sqrt(ekf.P[0, 0]), math.sqrt(ekf.P[1, 1])), math.sqrt(ekf.P[2, 2])))
 
     if not track:
         sys.exit("never got a first fix: need >= 4 satellites with pseudorange, Doppler and ephemeris")
     print(f"filter ran {len(track)} epochs, {rejects} measurements gated out")
+    for name, v in (("pseudorange", nis_pr), ("range rate", nis_rr)):
+        if v:
+            a = np.array(v)
+            print(f"  {name:11s} NIS: mean {a.mean():6.2f} (1.0 if consistent), median {np.median(a):5.2f} "
+                  f"(0.45), > 10.83: {100 * np.mean(a > 10.83):5.2f} % (0.1)")
 
     own_t = [o[0] for o in own]
     def own_at(tow):
@@ -187,7 +214,11 @@ def main():
         R = np.array([x[2] for x in track]); mean = R.mean(axis=0)
         lla = ecef2lla(mean); T = t_e2ned(lla[0], lla[1])
         sc = np.array([T @ (x - mean) for x in R])
-        print(f"\nscatter about the mean position (meaningful only if the antenna was still): "
+        sh = np.median([x[0] for x in sig]); sv = np.median([x[1] for x in sig])
+        print(f"\nthe filter's own sigma (median): horiz {sh:.2f} m, vert {sv:.2f} m "
+              f"(scatter/sigma: {np.sqrt(np.mean(sc[:,0]**2 + sc[:,1]**2)) / sh:.2f} horiz, "
+              f"{np.sqrt(np.mean(sc[:,2]**2)) / sv:.2f} vert -- 1 if the filter's uncertainty is honest)")
+        print(f"scatter about the mean position (meaningful only if the antenna was still): "
               f"horiz rms {np.sqrt(np.mean(sc[:,0]**2 + sc[:,1]**2)):.2f} m, "
               f"vert rms {np.sqrt(np.mean(sc[:,2]**2)):.2f} m; mean lat/lon/h "
               f"{math.degrees(lla[0]):.7f} {math.degrees(lla[1]):.7f} {lla[2]:.1f} m")

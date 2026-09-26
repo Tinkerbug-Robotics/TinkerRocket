@@ -12,8 +12,8 @@ import struct
 import numpy as np
 
 from tinkerrocket_sim.estimation import gnss_raw as GR
-from tinkerrocket_sim.estimation.tc_ekf import (C_LIGHT, TcEkf, TcEkfParams, ecef2lla,
-                                                lla2ecef, spp_fix, t_e2ned)
+from tinkerrocket_sim.estimation.tc_ekf import (C_LIGHT, TcEkf, TcEkfParams, corr_inflation,
+                                                ecef2lla, lla2ecef, spp_fix, t_e2ned)
 from tinkerrocket_sim.sensors.raw_gnss_model import RawGNSSModel
 
 DATA = pathlib.Path(__file__).parent / "data" / "skytraq_nav_frames.txt"
@@ -91,7 +91,8 @@ def _gnss_only_ekf(first):
 
 
 def test_spp_recovers_a_static_position_and_zero_velocity():
-    m = RawGNSSModel(*REF, sigma_pr_m=0.05, sigma_rr_mps=0.005, atmo_sigma_m=0.0, seed=1)
+    m = RawGNSSModel(*REF, sigma_pr_m=0.05, sigma_rr_mps=0.005, atmo_sigma_m=0.0,
+                     pr_wander_sigma_m=0.0, seed=1)
     fx = spp_fix(_static(m, 100.0))
     assert fx is not None
     assert np.linalg.norm(fx[0] - _truth()) < 1.0
@@ -101,7 +102,7 @@ def test_spp_recovers_a_static_position_and_zero_velocity():
 def test_a_receiver_clock_step_is_absorbed_not_gated():
     """SkyTraq and u-blox step the receiver clock by whole milliseconds: every
     pseudorange jumps 299.8 km at once. The filter must shift its clock."""
-    m = RawGNSSModel(*REF, atmo_sigma_m=0.0, seed=2)
+    m = RawGNSSModel(*REF, atmo_sigma_m=0.0, pr_wander_sigma_m=0.0, seed=2)
     ekf = _gnss_only_ekf(_static(m, 0.0))
     steps, rejected = [], 0
     for t in range(1, 60):
@@ -120,7 +121,7 @@ def test_a_receiver_clock_step_is_absorbed_not_gated():
 
 def test_an_inter_system_bias_is_learned_without_moving_the_position():
     """Galileo/BeiDou pseudoranges carry their own constant offset from GPS."""
-    m = RawGNSSModel(*REF, atmo_sigma_m=0.0, seed=3)
+    m = RawGNSSModel(*REF, atmo_sigma_m=0.0, pr_wander_sigma_m=0.0, seed=3)
 
     def relabelled(t):
         meas = _static(m, t)
@@ -153,3 +154,43 @@ def test_line_of_sight_acceleration_drops_satellites_and_they_relock():
         _, d = m.measure(t, zero, zero, zero, 1.0)
         t += 0.1
     assert d["tracked"] == d["visible"]
+
+
+# ---------------------------------------------------------------- error model
+def test_correlated_errors_are_inflated_by_their_sampling_rate():
+    """A 15 s correlated error sampled at 20 Hz carries ~1/600 of an independent
+    sample's information each epoch; sampled a minute apart, nearly all of it."""
+    assert abs(corr_inflation(0.05, 15.0) - 2 * 15.0 / 0.05) / 600.0 < 0.01
+    assert 1.0 <= corr_inflation(60.0, 15.0) < 1.05
+    assert corr_inflation(1.0, 0.0) == 1.0
+
+
+def test_skytraq_whole_hertz_doppler_moves_to_the_middle_of_its_step():
+    assert GR.skytraq_doppler_fix(1605.0) == 1605.5       # truncated toward zero
+    assert GR.skytraq_doppler_fix(-751.0) == -751.5
+    assert GR.skytraq_doppler_fix(0.0) == 0.0
+    assert GR.skytraq_doppler_fix(123.25) == 123.25       # not quantised: untouched
+
+
+def test_sigmas_fall_with_cn0():
+    lo, hi = 32.0, 47.0
+    assert GR._cn0_sigma(GR.PR_CORR, hi) < GR._cn0_sigma(GR.PR_CORR, lo)
+    assert GR._cn0_sigma(GR.PR_WHITE, hi) < GR._cn0_sigma(GR.PR_WHITE, lo)
+    assert GR._cn0_sigma(GR.RR_WHITE, hi) < GR._cn0_sigma(GR.RR_WHITE, lo)
+
+
+def test_sim_pseudorange_error_wanders_like_the_measured_receiver():
+    """Gauss-Markov wander: ~2 m, still correlated after a second, gone after a minute."""
+    m = RawGNSSModel(*REF, sigma_pr_m=0.0, atmo_sigma_m=0.0, pr_wander_sigma_m=2.0,
+                     pr_wander_tau_s=15.0, clk_h0=0.0, clk_hm2=0.0, clk_bias0_m=0.0,
+                     clk_drift0_mps=0.0, seed=5)
+    zero = np.zeros(3)
+    series = {}
+    for k in range(600):
+        t = 0.1 * k
+        for x in m.measure(t, zero, zero, zero, 1.0)[0]:
+            series.setdefault(x.prn, []).append(m.wander[x.prn][0])
+    w = np.concatenate([np.array(v) for v in series.values() if len(v) == 600])
+    assert 1.0 < np.std(w) < 3.5
+    one = [np.corrcoef(np.array(v)[:-10], np.array(v)[10:])[0, 1] for v in series.values() if len(v) == 600]
+    assert np.median(one) > 0.8                     # 1 s apart: exp(-1/15) = 0.94

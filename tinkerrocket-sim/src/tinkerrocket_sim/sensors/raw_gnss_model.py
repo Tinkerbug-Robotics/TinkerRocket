@@ -22,6 +22,11 @@ What it models, and why:
     at a 13.5 g ignition, then re-locked by Doppler rate).
   * Re-acquisition after a randomized delay, with inflated noise just after.
   * Residual atmosphere/ephemeris error per satellite (slowly varying bias).
+  * The error structure measured on a PX1105R (20 min static, 20 Hz, 2026-09-26):
+    the receiver smooths its code, so epoch-to-epoch pseudorange noise is
+    centimetres and the metres are a per-satellite wander (Gauss-Markov,
+    ~2 m, tau ~15 s) plus a fixed offset; optionally the SkyTraq's whole-hertz,
+    truncated Doppler (``doppler_step_hz=1``), corrected as the reader does.
 """
 from __future__ import annotations
 
@@ -39,7 +44,8 @@ L1_WAVELENGTH = C_LIGHT / 1575.42e6
 class RawGNSSModel:
     def __init__(self, ref_lat_deg=38.0, ref_lon_deg=-122.0, ref_alt_m=0.0,
                  rate_hz=10.0, el_mask_deg=10.0,
-                 sigma_pr_m=1.0, sigma_rr_mps=0.05, atmo_sigma_m=1.5,
+                 sigma_pr_m=0.1, sigma_rr_mps=0.05, atmo_sigma_m=1.5,
+                 pr_wander_sigma_m=2.0, pr_wander_tau_s=15.0, doppler_step_hz=0.0,
                  clk_bias0_m=None, clk_drift0_mps=None,
                  clk_h0=2e-19, clk_hm2=2e-20, clk_g_ppb=1.0,
                  lock_los_accel_mps2=30.0, relock_fraction=0.7,
@@ -54,6 +60,9 @@ class RawGNSSModel:
         self.rate_hz = rate_hz
         self.el_mask = math.radians(el_mask_deg)
         self.sigma_pr, self.sigma_rr, self.atmo_sigma = sigma_pr_m, sigma_rr_mps, atmo_sigma_m
+        self.wander_sigma, self.wander_tau = pr_wander_sigma_m, pr_wander_tau_s
+        self.doppler_step = doppler_step_hz
+        self.wander = {}                                   # prn -> (value m, time s)
         self.q_b = C_LIGHT ** 2 * clk_h0 / 2.0
         self.q_d = 2 * math.pi ** 2 * C_LIGHT ** 2 * clk_hm2
         self.clk_g = C_LIGHT * clk_g_ppb * 1e-9            # m/s per g
@@ -174,8 +183,24 @@ class RawGNSSModel:
             s_pr = self.sigma_pr * math.sqrt(obliq) * scale
             s_rr = self.sigma_rr * math.sqrt(obliq) * math.sqrt(scale)
             atmo = self.atmo_sigma * self.atmo_unit[prn] * obliq
-            pr = rho + self.clk_bias + atmo + self.rng.normal(0.0, s_pr)
+            w, tw = self.wander.get(prn, (self.rng.normal(0.0, self.wander_sigma), t))
+            if self.wander_tau > 0 and t > tw:              # first-order Gauss-Markov step
+                phi = math.exp(-(t - tw) / self.wander_tau)
+                w = phi * w + self.rng.normal(0.0, self.wander_sigma * math.sqrt(1.0 - phi * phi))
+            self.wander[prn] = (w, t)
+            pr = rho + self.clk_bias + atmo + w + self.rng.normal(0.0, s_pr)
             rr = float(u @ (vs_r - v)) + drift + self.rng.normal(0.0, s_rr)
+            if self.doppler_step > 0:
+                lam = L1_WAVELENGTH
+                d = -rr / lam / self.doppler_step
+                d = math.trunc(d)                           # the receiver truncates toward zero
+                d = d + 0.5 * math.copysign(1.0, d) if d != 0 else 0.0   # ... the reader re-centres
+                rr = -d * self.doppler_step * lam
+                s_rr = math.hypot(s_rr, lam * self.doppler_step / math.sqrt(12.0))
+            # the white part is fresh each epoch; the wander and the atmosphere
+            # are not, and the filter is told so
             out.append(RawMeas(prn=prn, sat_pos=rs, sat_vel=vs, pr=pr, rr=rr,
-                               sigma_pr=math.hypot(s_pr, self.atmo_sigma * obliq), sigma_rr=s_rr))
+                               sigma_pr=s_pr, sigma_rr=s_rr,
+                               sigma_pr_corr=math.hypot(self.atmo_sigma * obliq, self.wander_sigma),
+                               tau_pr=self.wander_tau, tau_rr=0.0))
         return out, diag

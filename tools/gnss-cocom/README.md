@@ -48,7 +48,13 @@ position rate 20, and a UART above 115200: measured on a PX1105R outdoors
 B1I+B2a) came to 23.4 kB/s, so 460800 baud is the minimum and 921600 leaves
 headroom. Everything goes to SRAM; a power cycle restores rover, NMEA and
 115200. The receiver steps its clock by whole milliseconds (the `0xE5`
-measurement indicator), which a filter has to absorb:
+measurement indicator), which a filter has to absorb. Its Doppler is reported in
+**whole hertz, truncated toward zero**: 0.5 Hz short in the direction of zero on
+average (+-0.095 m/s of range rate at L1, exposed by the carrier phase) with
+lambda/sqrt(12) = 0.055 m/s of rounding noise; `gnss_raw.skytraq_doppler_fix`
+re-centres it. Its pseudoranges are smoothed: centimetres epoch to epoch, metres
+of per-satellite error correlated over ~15 s
+(`tinkerrocket-sim/scripts/raw_error_model.py` fits the model from a static log):
 
 ```bash
 python3 tools/gnss-cocom/skytraq_raw.py -p /dev/cu.usbmodemXXXX --baud 921600
