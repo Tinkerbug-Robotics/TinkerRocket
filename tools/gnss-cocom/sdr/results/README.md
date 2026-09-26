@@ -970,7 +970,8 @@ and the hot start added nothing:
 
 | Run (3 deg mask, 600 s pad) | Ephemeris at ignition | Raw back | First fix | Fix epochs |
 |---|---|---|---|---|
-| Baseline, no restart | 14 of 14 | 79.7 | 80.7 | 1831 |
+| Baseline, no restart, run 1 | 14 of 14 | 79.7 | 80.7 | 1831 |
+| Baseline, no restart, run 2 | 14 of 14 | 19.9 | 80.6 | 1833 |
 | Hot start at burnout | 14 of 14 | 82.0 | 80.8 | 1844 |
 
 Both now report a fix through every stretch where one is allowed -- between the 500 m/s
@@ -979,14 +980,22 @@ crossing and 80 km, below 80 km before the descent speeds up, and after the desc
 leaves the SkyTraq default of 15 degrees drops exactly the satellites that ride through a
 boost best.
 
-Caveats: one run per configuration so far. Channel status (0xE7) can show satellites
+The fix repeats to 0.2 s and 1% in fix count; raw output during the fast coast does not.
+Run 2 released 5-12 raw measurements from ~15 s after ignition (at ~1100 m/s, no fix of
+its own); run 1 released none until ~80 s, although 0xE7 shows 7-9 satellites locked
+through its whole coast. Neither had a fast fix before losing lock at ignition (both
+lost it within ~1 s, at 3 and 20 m/s of their own) and both pads were identical, so what
+decides it is not visible in these messages. A restart stops 0xE5 output entirely until
+the fix returns, so a filter built on raw measurements is better off without one.
+
+Caveats: two baselines and one hot start at 3 degrees. Channel status (0xE7) can show satellites
 locked at full strength while 0xE5 carries no measurements -- the receiver withholds raw
 output with its fix -- so "raw back" is read from 0xE5, not from 0xE7.
 
 Tools: `px_restart_compare.py` (runs side by side, seconds after ignition),
 `px_limits.py` (now marks any `# host:` event the runner logged), `sky_scan.py`,
 `pad_scenario.py`. Captures: `results/px1105r_spaceshot_pad360_*_{hot372_run1,
-hot372_run2,hot392,cold372}` and `results/px1105r_spaceshot_pad600_*_el3_{run1,hot612}`.
+hot372_run2,hot392,cold372}` and `results/px1105r_spaceshot_pad600_*_el3_{run1,run2,hot612}`.
 
 ## Experiments still owed on the first four receivers
 
