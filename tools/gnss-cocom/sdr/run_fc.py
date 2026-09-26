@@ -27,7 +27,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from ensure_hackrf import ensure_hackrf                    # noqa: E402
+from ensure_hackrf import ensure_hackrf, hackrf_idle       # noqa: E402
 
 TX_ERR = "/tmp/hackrf_tx_fc.err"
 
@@ -132,6 +132,7 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             tx.kill()
         shutil.copyfile(TX_ERR, str(out) + ".hackrf.txt")   # the transmitter's own log
+        hackrf_idle()                                      # radio idle between scenarios
 
     print(f"\n# {n} epochs, {fixes} with a fix -> {con}")
     r = subprocess.run([sys.executable, str(HERE / "cocom_fcdiag.py"),

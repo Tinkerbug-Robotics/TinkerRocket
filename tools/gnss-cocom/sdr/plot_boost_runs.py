@@ -31,15 +31,36 @@ from matplotlib.colors import ListedColormap                     # noqa: E402
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import rtcm3                                                      # noqa: E402
-from lc86_tracking import BURN, boost_run                         # noqa: E402
+from lc86_tracking import BURN, PAD, boost_run                    # noqa: E402
 
 TOW0 = 203400.0
 T_LO, T_HI = 170, 325
 INK, INK3, RULE = "#1d2129", "#6b7280", "#e3e6ea"
 HELD, SLIP, LOST = "#08519c", "#bcd4ec", "#dfe3e8"   # held; held but lock reset; lost
 FIX_COL = {0: "#ffffff", 1: "#dfe3e8", 2: "#0E7C66", 3: "#6D3FA8"}   # silent, no fix, fix, WRONG
-EVENTS = [(180.0, "ignition"), (192.1, "burnout"), (260.5, "< 500 m/s"),
-          (291.7, "80 km"), (314.4, "apogee")]
+EVENTS = [(180.0, "ignition"), (192.1, "burnout"), (314.4, "apogee")]
+# The receiver's own mutes, as spans: where the INJECTED flight is above 500 m/s and
+# above 80 km, found in the truth file (not the scenario's velocity_windows, which
+# are COCOM's 515 m/s). A receiver that knows where it is goes silent inside them.
+MUTES = [("speed_mps", 500.0, "above 500 m/s"), ("alt_m", 80000.0, "above 80 km")]
+
+
+def mute_windows():
+    tr = json.loads((HERE / "scenarios" / "spaceshot.json").read_text())["truth"]
+    out = []
+    for key, thr, name in MUTES:
+        t0 = None
+        for a, b in zip(tr, tr[1:]):
+            if (a[key] - thr) * (b[key] - thr) < 0:
+                t = a["t"] + (thr - a[key]) / (b[key] - a[key]) * (b["t"] - a["t"])
+                if b[key] > a[key]:
+                    t0 = t
+                elif t0 is not None:
+                    out.append((t0, t, name))
+                    t0 = None
+        if t0 is not None:
+            out.append((t0, tr[-1]["t"], name))
+    return out
 
 
 def truth_fn():
@@ -79,7 +100,7 @@ def load(path, at, order):
             for c in r[2]:
                 if not c.get("cn0"):
                     continue
-                if 120 <= ft < 179:
+                if PAD[0] <= ft < PAD[1]:
                     pad.append(c["cn0"])
                 j = int(round(ft)) - T_LO
                 if 0 <= j < n_t and c["prn"] in order:
@@ -115,12 +136,13 @@ def main() -> int:
     order = sorted(rate, key=lambda p: (rate[p] is None, rate[p] or 0))
     at = truth_fn()
     runs = [(label, *load(Path(p), at, order)) for label, p in specs]
+    windows = mute_windows()
 
     n = len(runs)
     fig_h = 1.2 + n * 1.3
     fig = plt.figure(figsize=(13, fig_h), dpi=130)
     gs = fig.add_gridspec(n * 2, 1, height_ratios=[1, 0.14] * n, hspace=0.0,
-                          left=0.19, right=0.955, top=1 - 0.95 / fig_h, bottom=0.45 / fig_h)
+                          left=0.19, right=0.955, top=1 - 1.15 / fig_h, bottom=0.45 / fig_h)
     cmap = plt.get_cmap("Blues")
     ext = [T_LO, T_HI, len(order), 0]
     for i, (label, cn, state, padcn) in enumerate(runs):
@@ -132,10 +154,13 @@ def main() -> int:
         axf.imshow(state[None, :], aspect="auto", extent=[T_LO, T_HI, 1, 0],
                    cmap=ListedColormap([FIX_COL[k] for k in range(4)]), vmin=-0.5, vmax=3.5,
                    interpolation="nearest")
-        for x, _name in EVENTS:
+        edges = [x for x, _n in EVENTS] + [x for w in windows for x in w[:2] if T_LO < x < T_HI]
+        for x in edges:
             for a in (ax, axf):
                 a.axvline(x, color=INK3, lw=0.6, ls=(0, (2, 2)))
-        held = sum(1 for k, p in enumerate(order) if np.all(~np.isnan(cn[k, 183 - T_LO:192 - T_LO])))
+        # the same count as the tables and the held matrix: every MSM7 epoch that
+        # exists 183-192.1 s (a muted receiver's missing epochs are not losses)
+        held = sum(1 for x in boost_run(Path(specs[i][1]))[0].values() if x["held"])
         wrong = int((state == 3).sum())
         ax.text(-0.012, 0.55, label, transform=ax.transAxes, ha="right", va="center",
                 fontsize=8.5, color=INK)
@@ -162,9 +187,20 @@ def main() -> int:
             axf.tick_params(axis="x", labelsize=7.5, colors=INK3)
             axf.set_xlabel("file time (s)", fontsize=8, color=INK3)
         if i == 0:
+            xt = ax.get_xaxis_transform()          # x in seconds, y in axes fractions
             for x, name in EVENTS:
-                ax.text(x, -0.6, name, ha="center", va="bottom", fontsize=7, color=INK3,
-                        transform=ax.get_xaxis_transform() if False else ax.transData)
+                ax.text(x, 1.01, name, ha="center", va="bottom", fontsize=7, color=INK3,
+                        transform=xt, clip_on=False)
+            for t0, t1, name in windows:
+                x0, x1 = max(t0, T_LO), min(t1, T_HI)
+                if x1 <= x0:
+                    continue
+                ax.plot([x0, x0, x1, x1] if t1 <= T_HI else [x0, x0, x1],
+                        [1.10, 1.14, 1.14, 1.10] if t1 <= T_HI else [1.10, 1.14, 1.14],
+                        color=INK3, lw=0.8, transform=xt, clip_on=False)
+                ax.text((x0 + x1) / 2, 1.16, name + ("" if t1 <= T_HI else f", to {t1:.0f} s"),
+                        ha="center", va="bottom", fontsize=7, color=INK3, transform=xt,
+                        clip_on=False)
     fig.text(0.19, 1 - 0.22 / fig_h, title, fontsize=11, fontweight="bold", color=INK, va="top")
     fig.text(0.19, 1 - 0.45 / fig_h,
              "heatmap: MSM7 C/N0 per satellite, rows ordered by the Doppler rate the burn gives "

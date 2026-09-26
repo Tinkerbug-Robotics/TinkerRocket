@@ -792,9 +792,12 @@ three sets:
 | rate | stepped | 10, 5, 1 Hz | 0 | `lc86g_20260926_rate10_run1`, `_rate5_run2`, `_rate1_run3` |
 | level | stepped | 10 Hz | 0, +1, +3, +3, +1, 0 | `lc86g_20260926_gain{0,1,3,3,1,0}_run{1..6}` |
 | smooth | smooth | 10 Hz | 0 | `lc86g_20260926_smooth_run{1..4}` |
+| smooth rate | smooth | 1, 10, 5, 1, 10, 5 Hz | 0 | `lc86g_20260926_smooth_rate{R}_run{1..6}` |
 
 Each is `_spaceshot.log.gz` with its `.runner.txt.gz`; the smooth runs add
-`.hackrf.txt.gz`, the transmitter's own log with per-second underrun counts.
+`.hackrf.txt.gz`, the transmitter's own log with per-second underrun counts, and
+the rate set `.config.txt.gz`. The rate set followed a 5 minute warm-up on
+`pad_static.C8` (`lc86_boost_series.sh smoothrate c8/spaceshot_smooth.C8 1 10 5 1 10 5`).
 "Held" below means measured in every MSM7 epoch 183-192.1 s.
 
 **On the stepped file the outcome was a coin flip.** Held through the burn: 1, 0,
@@ -829,6 +832,20 @@ Neither muted at 80 km. The satellites a vertical burn cannot shake are the low
 ones (G29 at 5 deg, G12 at 9 deg), so the fix it keeps rests on horizon geometry.
 The stepped file hid some of this: a run that lost everything published nothing.
 
+**The navigation rate does not change what the burn costs in tracking.** Over the
+ten smooth runs (1 Hz x2, 5 Hz x2, 10 Hz x6) G29, G12, G30 and G19 held every time
+at every rate. G14 dipped 5-9 dB at every rate and dropped for 5 s once (10 Hz).
+G15 (199 Hz/s) held twice, at 5 and 10 Hz -- both times it had locked only 17-22 s
+before ignition, and never when locked 43 s or more (six runs 164-176 s, one 43 s,
+one 3.4 s): a loop still wide after locking, not the rate, is the likelier reading,
+on two cases. **The navigation solution may differ by rate:** wrong fixes in all six
+10 Hz runs (1-105 s of them), one of the two 5 Hz runs (7 s), neither 1 Hz run --
+but the 1 Hz runs had no fix instead: none at all after ignition in one, one right
+fix at 292 s in the other. Two runs a rate does not settle it. The runs that came
+back right did so at ~262 s, as the 500 m/s mute lifted, from 9-12 satellites.
+The warm-up did not hold the level: pad C/N0 rose 43.2 -> 44.8 dBHz over the first
+three runs, then held 44.6-45.0. Each rate had one early and one late run.
+
 **Not the pad clock, the stream or the start.** `msm7_clock.py`: the LC86G takes
 its own clock drift out of MSM7 Doppler (0.0 +- 0.2 ppb in every run), and its
 pseudorange clock bias grows ~4 m/s after the first fix in held and lost runs
@@ -849,6 +866,7 @@ Tools, all in this directory:
     lc86_tracking.py ignition second by second through ignition, fix collapse included
     plot_boost_runs.py        one strip per run (C/N0 heatmap over the fix state), + _held.png
     plot_boost_cn0.py         C/N0 run against run: pad levels, burn relative to each pad
+                              (--group: runs sharing a label prefix, e.g. "5 Hz", share a colour)
     msm7_clock.py             the pad clock: MSM7 Doppler offset and pseudorange bias
     patch_smooth_carrier.py   the SMOOTH_CARRIER gps-sdr-sim build
     m10_rate_series.sh        the same series for the SAM-M10Q on the V9 (staged, not yet run)
@@ -858,6 +876,56 @@ have one-second resolution at 10 Hz too. Balloon's 80 km mute outlives the
 transmitter: the next run's configuration gets no answer unless a blind `$PAIR006`
 goes first. A single wrong epoch at ignition (the last pad fix still reading 0 m/s
 0.4 s into the burn) is latency, which is why WRONG counts from 181 s.
+
+
+## PX1105R (TinkerNav): where the withheld output goes, and what a filter recovers (2026-09-26)
+
+The SkyTraq PX1105R (TinkerNav board, ESP32-S3 bridge running `gnss_passthrough`,
+RTK **kinematic base** mode so it emits 0xE5 raw at 20 Hz; see the raw-measurement
+work on PR #1523) through the smooth spaceshot and gentle flights, radiated in the
+sealed cage. What this adds to the fix-level COCOM picture: the raw measurements
+themselves, and what a filter does with them.
+
+**The measurements are clean the whole flight, even where the receiver withholds
+its own fix.** A direct single-point solve from the raw pseudoranges (`px_validity.py`,
+and the `spp_fix` sweep) lands within 3-200 m at every point of both flights --
+992 m/s boost, 82 km apogee, 761 m/s descent. Where a measurement exists it is good;
+the export limit is enforced by *withholding output*, not by degrading it.
+
+**The gate is on the receiver's own solution, not the flight.** With no fix (it
+doesn't know it is fast) raw flows at 1300 m/s; once it has a fix above 500 m/s or
+80 km it goes silent, and the mute latches on its own state (it can stay muted well
+after the flight is back inside the limits). Its speed ceiling is ~514 m/s (1000 kn),
+not the LC86G's 500.
+
+**Navigation (dynamics) mode is the lever -- `nav_mode.py`, AN0037 0x64/0x17**
+(query 0x64/0x18 -> 0x64/0x8B; all eight modes ACK and read back even in RTK base).
+Earlier runs set no mode, so they ran the default low-dynamics filter -- much of the
+"lockout" was that filter failing, not a clean gate (the companion note warns of
+exactly this). On the 3 g gentle flight, pedestrian (1) loses its fix at ~480 s and
+never recovers; **SLR "speed-lag-reduced" (9)** tracks the true speed to 500 m/s on
+both ascent and descent and recovers repeatedly. A full mode sweep on the gentle
+flight is archived (nav1/4/5/7/9; auto/car/marine owed).
+
+**A GNSS-only filter follows the trajectory where measurements exist**
+(`tc_ekf_slr.py --gnss-only` on PR #1523's `tc_ekf`: constant-velocity kinematic
+model + `update_gnss_raw`). Gentle 3 g: tracks end to end, ~20-80 m horizontal,
+~75-285 m vertical (weak GPS-L1-only geometry), sub-m/s to 12 m/s velocity. High-g
+13.5 g: the ignition drops output from ~360 to ~470 s (burn + >500 m/s ascent, a
+real gap the receiver cannot bridge), so GNSS-only coasts and errs to tens of km
+there, then **snaps to truth on reacquisition** and tracks apogee and the whole
+descent to 40-150 m. Adding a simulated IMU + baro bridges the gentle flight but the
+INS vertical channel diverges through the high-speed descent once the BMP585 baro
+(spec 300 hPa ~ 9.16 km) is out of range -- a vertically-stabilized mechanization is
+needed, and that gap is exactly where the IMU earns its place.
+
+Tools (this directory): `px1105r_run.py` (cold start, set nav mode, transmit, log,
+idle the radio), `nav_mode.py` (0x64/0x17), `skytraq_raw.py` (kinematic-base + 0xE5,
+vendored from PR #1523), `px_limits.py` (raw + own-fix vs the injected limits),
+`px_validity.py` (per-satellite pseudorange/Doppler residuals against the truth).
+The tightly-coupled/GNSS-only filter driver `tc_ekf_slr.py` lives on PR #1523 with
+the EKF it uses. Captures: `results/px1105r_*` (gzip; the exploratory gain/level
+probes stayed local).
 
 ## Experiments still owed on the first four receivers
 

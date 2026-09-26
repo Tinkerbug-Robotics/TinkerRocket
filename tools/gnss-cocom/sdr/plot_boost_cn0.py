@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """C/N0 run against run through the spaceshot burn, from LC86G MSM7 captures.
 
-    ./plot_boost_cn0.py OUT.png LABEL=CAPTURE [LABEL=CAPTURE ...]     (up to 8 runs)
+    ./plot_boost_cn0.py OUT.png [--group] LABEL=CAPTURE [LABEL=CAPTURE ...]
+
+Up to 8 runs, one colour each. With --group, up to 8 groups of any size: runs
+whose labels share the text before the first " · " (e.g. "5 Hz · #3" and
+"5 Hz · #6") share a colour and differ by line style and pad marker, so a
+setting's runs read as one.
 
 Top: each run's pad level (150-179 s) by satellite, which shows a level offset
 between runs as a whole row sitting apart. Below: the six satellites the burn moves
@@ -66,19 +71,27 @@ def load(path):
 
 
 def main() -> int:
-    out, specs = sys.argv[1], [a.split("=", 1) for a in sys.argv[2:]]
-    if not specs or len(specs) > len(PALETTE):
-        raise SystemExit(f"1-{len(PALETTE)} LABEL=CAPTURE pairs")
+    out, rest = sys.argv[1], sys.argv[2:]
+    group = rest[:1] == ["--group"]
+    specs = [a.split("=", 1) for a in rest[1 if group else 0:]]
+    keys = [label.split(" · ")[0] if group else label for label, _ in specs]
+    if not specs or len(set(keys)) > len(PALETTE):
+        raise SystemExit(f"1-{len(PALETTE)} runs (with --group, 1-{len(PALETTE)} groups)")
+    order_keys = list(dict.fromkeys(keys))
+    STYLES, MARKS = ["-", "--", ":", "-."], ["o", "s", "^", "D"]
     ref = json.loads((HERE / "results" / "doppler_ref_spaceshot.json").read_text())["sats"]
     rate = {int(k.split(":")[1]): v.get("rate_hzs") for k, v in ref.items() if k.startswith("0:")}
     order = sorted(rate, key=lambda p: (rate[p] is None, rate[p] or 0))
     runs = []
     for i, (label, path) in enumerate(specs):
+        k = keys[i]
+        nth = keys[:i].count(k)
         ser = load(Path(path))
         pad = {p: st.median(v[0] for t, v in s.items() if 150 <= t < 179)
                for p, s in ser.items() if sum(1 for t in s if 150 <= t < 179) >= 10}
         allpad = st.median(v[0] for p in pad for t, v in ser[p].items() if 150 <= t < 179)
-        runs.append((label, PALETTE[i], ser, pad, allpad))
+        runs.append((label, PALETTE[order_keys.index(k)], ser, pad, allpad,
+                     STYLES[nth % 4], MARKS[nth % 4]))
 
     # the table
     print(f"{'sat':<4}{'Hz/s':>5} | pad C/N0 by run" + " " * max(0, 6 * len(runs) - 15) +
@@ -86,7 +99,7 @@ def main() -> int:
     for p in order:
         pads = [r[3].get(p) for r in runs]
         cells = []
-        for _l, _c, ser, pad, _a in runs:
+        for _l, _c, ser, pad, _a, _ls, _mk in runs:
             b = ([v[0] - pad[p] for t, v in ser.get(p, {}).items() if 183 <= t <= 192]
                  if p in pad else [])
             cells.append(f"{st.mean(b):+5.1f}({min(b):+4.1f})" if len(b) >= 9 else
@@ -96,15 +109,22 @@ def main() -> int:
               " ".join(f"{x:5.1f}" if x else "   --" for x in pads) +
               f"  {(max(ps) - min(ps)) if len(ps) > 1 else 0:4.1f} | " + " ".join(cells))
 
-    fig = plt.figure(figsize=(11.5, 8.4), dpi=150)
+    # legend rows decide how far down the panels start; the burn panels' floor comes
+    # from the data (a satellite at the limit can dip well past -9 dB)
+    ncol = 4 if len(runs) > 4 else len(runs) + 2
+    nrows = -(-(len(runs) + 2) // ncol)
+    low = min([v[0] - r[3][p] for r in runs for p in BURN_SATS if p in r[3]
+               for t, v in r[2].get(p, {}).items() if 176 <= t <= 200] + [-8.0])
+    ybot = min(-9.0, low - 1.0)
+    fig = plt.figure(figsize=(11.5, 8.4 + 0.25 * (nrows - 1)), dpi=150)
     gs = fig.add_gridspec(3, 3, height_ratios=[1.0, 1.25, 1.25], hspace=0.62, wspace=0.16,
-                          left=0.07, right=0.985, top=0.855, bottom=0.07)
+                          left=0.07, right=0.985, top=0.855 - 0.03 * (nrows - 1), bottom=0.07)
     ax = fig.add_subplot(gs[0, :])
     w = 0.14 * min(len(runs), 4) / max(len(runs) - 1, 1)
-    for i, (_l, col, _s, pad, _a) in enumerate(runs):
+    for i, (_l, col, _s, pad, _a, _ls, mk) in enumerate(runs):
         o = (i - (len(runs) - 1) / 2) * w
         pts = [(k + o, pad[p]) for k, p in enumerate(order) if p in pad]
-        ax.scatter([x for x, _ in pts], [y for _, y in pts], s=22, color=col,
+        ax.scatter([x for x, _ in pts], [y for _, y in pts], s=22, color=col, marker=mk,
                    edgecolor="#ffffff", linewidth=0.8, zorder=3)
     ax.set_xticks(range(len(order)))
     ax.set_xticklabels([f"G{p:02d}\n{('–' if rate[p] is None else f'{rate[p]:.0f}')}" for p in order],
@@ -120,14 +140,14 @@ def main() -> int:
 
     for k, p in enumerate(BURN_SATS):
         a = fig.add_subplot(gs[1 + k // 3, k % 3])
-        for _l, col, ser, pad, _a in runs:
+        for _l, col, ser, pad, _a, ls, _mk in runs:
             if p not in pad:
                 continue
             pts = sorted((t, v) for t, v in ser.get(p, {}).items() if 176 <= t <= 200)
             seg = []
             for t, v in pts + [(None, None)]:          # sentinel flushes the last segment
                 if seg and (t is None or t - seg[-1][0] > 1):
-                    a.plot([x for x, _ in seg], [y[0] - pad[p] for _, y in seg], color=col, lw=1.3)
+                    a.plot([x for x, _ in seg], [y[0] - pad[p] for _, y in seg], color=col, lw=1.3, ls=ls)
                     seg = []
                 if t is not None:
                     seg.append((t, v))
@@ -137,7 +157,7 @@ def main() -> int:
         for x in (180.0, 192.1):
             a.axvline(x, color=INK3, lw=0.7, ls=(0, (2, 2)))
         a.set_xlim(176, 200)
-        a.set_ylim(-9, 1.5)
+        a.set_ylim(ybot, 1.5)
         a.axhline(0, color=RULE, lw=0.8, zorder=0)
         a.set_title(f"G{p:02d} · {rate[p]:.0f} Hz/s", fontsize=8.5, color=INK, loc="left")
         a.tick_params(labelsize=7, colors=INK3)
@@ -159,12 +179,13 @@ def main() -> int:
              "between runs drops out. One MSM7 epoch per second; filled = carrier phase locked, "
              "open = half-cycle flag set (frequency-only tracking); a line ends where the satellite "
              "is no longer measured.", fontsize=7.3, color=INK3, va="top", wrap=True)
-    handles = [Line2D([], [], color=col, lw=1.6, marker="o", ms=4, label=f"{label} · pad {allpad:.1f} dBHz")
-               for label, col, _s, _p, allpad in runs]
+    handles = [Line2D([], [], color=col, lw=1.6, ls=ls, marker=mk, ms=4,
+                      label=f"{label} · pad {allpad:.1f} dBHz")
+               for label, col, _s, _p, allpad, ls, mk in runs]
     handles += [Line2D([], [], color=INK3, lw=0, marker="o", ms=4, mfc=INK3, label="phase locked"),
                 Line2D([], [], color=INK3, lw=0, marker="o", ms=4, mfc="#ffffff", label="half-cycle flag set")]
     fig.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.065, 0.92),
-               ncol=min(len(handles), 6), frameon=False, fontsize=7.5, handletextpad=0.4,
+               ncol=ncol, frameon=False, fontsize=7.5, handletextpad=0.4,
                columnspacing=1.4, labelcolor=INK2)
     fig.savefig(out)
     print("wrote", out)

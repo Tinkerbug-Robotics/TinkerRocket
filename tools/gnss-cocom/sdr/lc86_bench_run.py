@@ -43,6 +43,7 @@ from gnss_nmea_monitor import _demux                            # noqa: E402
 from lc86_config import (Link, NAV_MODES, find_bridge, frame,   # noqa: E402
                          open_bridge, read_state, show_state)
 from run_radiated import start_tx, stop_tx                      # noqa: E402
+from ensure_hackrf import hackrf_idle                           # noqa: E402
 
 T0_TOW = 203400.0      # 2026/08/18 08:30:00 GPS, the file's t = 0
 
@@ -193,6 +194,7 @@ def main() -> int:
         ser.close()
         if tx is not None:                # the transmitter's own log, underruns and all
             shutil.copyfile("/tmp/hackrf_tx_lc86bench.err", a.out + ".hackrf.txt")
+            hackrf_idle()                 # radio idle between scenarios (owner's rule)
     print(f"# capture -> {a.out}")
     return 0
 
