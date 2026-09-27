@@ -1167,9 +1167,17 @@ time by the header's "TX launched" delay plus ~1.4 s of HackRF start latency; `p
   varying run to run. The gentle flight never loses raw.
 - No capture has an IMU. `tc_ekf_slr.py` synthesizes one from truth.
 
+**Ephemeris.** The broadcast ephemeris the IQ files were built from is committed:
+- `results/BRDC_2026230.rx2.n.gz` is GPS-only RINEX 2, converted by `rinex3to2.py`. It covers
+  2026-08-18, the day of every scenario here.
+- `results/BRDC_2026230_MN.rnx.gz` is the original RINEX 3 download from CDDIS.
+- `BRDC_2026239.*` is 2026-08-27. No committed scenario uses it.
+
+Unpack into `c8/` before running `build_scenarios.sh` or gps-sdr-sim:
+`gzip -dc results/BRDC_2026230.rx2.n.gz > c8/BRDC_2026230.rx2.n`.
+
 **Left local on purpose:** the IQ files (`c8/`, rebuilt from `build_scenarios.sh` with the
-patch scripts here), the ephemeris downloads (`BRDC_2026230`, from CDDIS), the exploratory
-PX1105R probes, and the 137 MB overnight LC86G sky log.
+patch scripts here), the exploratory PX1105R probes, and the 137 MB overnight LC86G sky log.
 
 ## Experiments still owed on the first four receivers
 
