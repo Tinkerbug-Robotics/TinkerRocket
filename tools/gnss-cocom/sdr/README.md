@@ -23,6 +23,7 @@ variable at a time.
 | `rinex3to2.py` | Converts RINEX 3 mixed nav to the RINEX 2 GPS nav gps-sdr-sim requires |
 | `pick_start.py` | Picks a scenario start inside the ephemeris file's densest window |
 | `patch_horizon.py` | Fixes gps-sdr-sim's visibility mask so it follows the vehicle's altitude |
+| `patch_smooth_carrier.py` | Adds an opt-in `SMOOTH_CARRIER` build to gps-sdr-sim: each carrier swept across its 0.1 s block instead of held, so a burn is a ramp, not a staircase |
 | `best_geometry.py` | Scans latitude and hour for the most satellites above a given elevation |
 | `plot_flight.py` | Altitude, speed, acceleration, lock state and satellite count on one time axis |
 | `recovery.py` | Shut lag and re-open latency per blocked window, with satellites in the wait |

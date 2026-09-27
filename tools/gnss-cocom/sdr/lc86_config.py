@@ -68,8 +68,10 @@ NMEA_TYPES = {0: "GGA", 1: "GLL", 2: "GSA", 3: "GSV", 4: "RMC", 5: "VTG",
               6: "ZDA", 7: "GRS", 8: "GST", 9: "GNS"}
 
 # $PAIR432 <Mode>. MSM7 is the one worth having: per-satellite C/N0 to 1/16 dB,
-# the receiver's own Doppler (phase-range rate) and lock-time counters, at the
-# full fix rate. It changes what the module OUTPUTS, not how it navigates.
+# the receiver's own Doppler (phase-range rate) and lock-time counters. It comes
+# once a second whatever the fix rate (checked at 1, 5 and 10 Hz, 2026-09-26), and
+# its Doppler has the receiver's own clock drift already taken out. It changes
+# what the module OUTPUTS, not how it navigates.
 RTCM_MODES = {"off": -1, "msm4": 0, "msm7": 1}
 
 

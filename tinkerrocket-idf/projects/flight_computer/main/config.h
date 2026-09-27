@@ -162,7 +162,15 @@ struct config : board_pins
     // reached without the high clock, and the "~10 Hz with 4 constellations"
     // figure quoted in TR_GNSSReceiverUBlox_Serial.cpp was not what the
     // hardware does.  See the note above the OTP block there.
+#if defined(TR_GNSS_RATE_HZ)
+    // #491 bench only (-DTR_GNSS_RATE_HZ=N): does the navigation rate change
+    // what a boost costs? Never set for flight.
+    static constexpr uint16_t GNSS_UPDATE_RATE = TR_GNSS_RATE_HZ;
+    static_assert(TR_GNSS_RATE_HZ >= 1 && TR_GNSS_RATE_HZ <= 25,
+                  "TR_GNSS_RATE_HZ must be 1-25 Hz");
+#else
     static constexpr uint16_t GNSS_UPDATE_RATE = 18;
+#endif
     static constexpr uint16_t BMP585_UPDATE_RATE = 500;
     // MMC5983MA hardware supports 1/10/20/50/100/200/1000 Hz only.
     // 200 Hz is the highest step that fits within I2C budget.

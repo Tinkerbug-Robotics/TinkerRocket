@@ -1,0 +1,102 @@
+<svg viewBox="0 0 900 506" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The LC86G in Balloon mode as the transmitted level is stepped down from HackRF gain 0 and back up. Reported carrier-to-noise follows the level one for one. Carrier lock holds to about 35 dBHz and is gone by 28; the fix holds to about 28 dBHz, is intermittent from 26 to 21, and is lost at 13.">
+<style>.ax{stroke:var(--rule-strong,#C3CAD5);stroke-width:1}.gl{stroke:var(--rule,#DDE2E9);stroke-width:1}.lbl{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-3,#79808F)}.sat{font-family:var(--f-mono,monospace);font-size:9px;fill:var(--ink-2,#4A5261)}.ttl{font-family:var(--f-display,sans-serif);font-size:11px;font-weight:600;fill:var(--ink-2,#4A5261)}.hd{font-family:var(--f-display,sans-serif);font-size:11px;font-weight:600}.tr{fill:none;stroke:var(--ink-2,#4A5261);stroke-width:1.1;stroke-linejoin:round}.un{stroke-dasharray:1.2 2.2}.rs{fill:var(--nolock,#9B3535)}.gp{fill:var(--rule-strong,#C3CAD5)}</style>
+<text class="ttl" x="74" y="20">median C/N₀ (dBHz)</text>
+<line class="gl" x1="74" y1="140.5" x2="886" y2="140.5"/><text class="lbl" x="68" y="143.5" text-anchor="end">20</text>
+<line class="gl" x1="74" y1="101.1" x2="886" y2="101.1"/><text class="lbl" x="68" y="104.1" text-anchor="end">30</text>
+<line class="gl" x1="74" y1="61.6" x2="886" y2="61.6"/><text class="lbl" x="68" y="64.6" text-anchor="end">40</text>
+<polyline fill="none" stroke="var(--mode-balloon, #2a78d6)" stroke-width="1.8" points="854.8,49.5 792.3,59.4 729.8,70.7 667.4,82.3 604.9,95.4 542.5,107.2 480.0,116.6 417.5,125.7 355.1,138.2 292.6,149.9 230.2,159.8 167.7,166.9"/>
+<circle cx="854.8" cy="49.5" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>+0 dB, stepping down: 43.1</title></circle>
+<circle cx="792.3" cy="59.4" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-3 dB, stepping down: 40.6</title></circle>
+<circle cx="729.8" cy="70.7" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-6 dB, stepping down: 37.7</title></circle>
+<circle cx="667.4" cy="82.3" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-9 dB, stepping down: 34.8</title></circle>
+<circle cx="604.9" cy="95.4" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-12 dB, stepping down: 31.4</title></circle>
+<circle cx="542.5" cy="107.2" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-15 dB, stepping down: 28.4</title></circle>
+<circle cx="480.0" cy="116.6" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-18 dB, stepping down: 26.1</title></circle>
+<circle cx="417.5" cy="125.7" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-21 dB, stepping down: 23.8</title></circle>
+<circle cx="355.1" cy="138.2" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-24 dB, stepping down: 20.6</title></circle>
+<circle cx="292.6" cy="149.9" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-27 dB, stepping down: 17.6</title></circle>
+<circle cx="230.2" cy="159.8" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-30 dB, stepping down: 15.1</title></circle>
+<circle cx="167.7" cy="166.9" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-33 dB, stepping down: 13.3</title></circle>
+<polyline fill="none" stroke="var(--mode-normal, #eb6834)" stroke-width="1.8" stroke-dasharray="5 3" points="292.6,148.9 355.1,137.9 417.5,123.5 480.0,110.9 542.5,98.1 604.9,85.5 667.4,72.9 729.8,61.1 792.3,50.7 854.8,42.6"/>
+<circle cx="292.6" cy="148.9" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-27 dB, stepping up: 17.9</title></circle>
+<circle cx="355.1" cy="137.9" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-24 dB, stepping up: 20.7</title></circle>
+<circle cx="417.5" cy="123.5" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-21 dB, stepping up: 24.3</title></circle>
+<circle cx="480.0" cy="110.9" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-18 dB, stepping up: 27.5</title></circle>
+<circle cx="542.5" cy="98.1" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-15 dB, stepping up: 30.8</title></circle>
+<circle cx="604.9" cy="85.5" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-12 dB, stepping up: 33.9</title></circle>
+<circle cx="667.4" cy="72.9" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-9 dB, stepping up: 37.1</title></circle>
+<circle cx="729.8" cy="61.1" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-6 dB, stepping up: 40.1</title></circle>
+<circle cx="792.3" cy="50.7" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-3 dB, stepping up: 42.8</title></circle>
+<circle cx="854.8" cy="42.6" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-0 dB, stepping up: 44.8</title></circle>
+<text class="ttl" x="74" y="204">carrier locked (% of measurements)</text>
+<line class="gl" x1="74" y1="304.0" x2="886" y2="304.0"/><text class="lbl" x="68" y="307.0" text-anchor="end">0</text>
+<line class="gl" x1="74" y1="259.0" x2="886" y2="259.0"/><text class="lbl" x="68" y="262.0" text-anchor="end">50</text>
+<line class="gl" x1="74" y1="214.0" x2="886" y2="214.0"/><text class="lbl" x="68" y="217.0" text-anchor="end">100</text>
+<polyline fill="none" stroke="var(--mode-balloon, #2a78d6)" stroke-width="1.8" points="854.8,214.0 792.3,215.2 729.8,214.0 667.4,216.1 604.9,261.0 542.5,304.0 480.0,304.0 417.5,304.0 355.1,304.0 292.6,304.0 230.2,304.0 167.7,304.0 105.2,304.0"/>
+<circle cx="854.8" cy="214.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>+0 dB, stepping down: 100.0</title></circle>
+<circle cx="792.3" cy="215.2" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-3 dB, stepping down: 98.7</title></circle>
+<circle cx="729.8" cy="214.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-6 dB, stepping down: 100.0</title></circle>
+<circle cx="667.4" cy="216.1" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-9 dB, stepping down: 97.6</title></circle>
+<circle cx="604.9" cy="261.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-12 dB, stepping down: 47.8</title></circle>
+<circle cx="542.5" cy="304.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-15 dB, stepping down: 0.0</title></circle>
+<circle cx="480.0" cy="304.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-18 dB, stepping down: 0.0</title></circle>
+<circle cx="417.5" cy="304.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-21 dB, stepping down: 0.0</title></circle>
+<circle cx="355.1" cy="304.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-24 dB, stepping down: 0.0</title></circle>
+<circle cx="292.6" cy="304.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-27 dB, stepping down: 0.0</title></circle>
+<circle cx="230.2" cy="304.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-30 dB, stepping down: 0.0</title></circle>
+<circle cx="167.7" cy="304.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-33 dB, stepping down: 0.0</title></circle>
+<circle cx="105.2" cy="304.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-36 dB, stepping down: 0.0</title></circle>
+<polyline fill="none" stroke="var(--mode-normal, #eb6834)" stroke-width="1.8" stroke-dasharray="5 3" points="167.7,304.0 230.2,304.0 292.6,304.0 355.1,304.0 417.5,304.0 480.0,304.0 542.5,287.1 604.9,218.5 667.4,215.1 729.8,214.8 792.3,214.0 854.8,214.0"/>
+<circle cx="167.7" cy="304.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-33 dB, stepping up: 0.0</title></circle>
+<circle cx="230.2" cy="304.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-30 dB, stepping up: 0.0</title></circle>
+<circle cx="292.6" cy="304.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-27 dB, stepping up: 0.0</title></circle>
+<circle cx="355.1" cy="304.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-24 dB, stepping up: 0.0</title></circle>
+<circle cx="417.5" cy="304.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-21 dB, stepping up: 0.0</title></circle>
+<circle cx="480.0" cy="304.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-18 dB, stepping up: 0.0</title></circle>
+<circle cx="542.5" cy="287.1" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-15 dB, stepping up: 18.8</title></circle>
+<circle cx="604.9" cy="218.5" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-12 dB, stepping up: 95.0</title></circle>
+<circle cx="667.4" cy="215.1" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-9 dB, stepping up: 98.8</title></circle>
+<circle cx="729.8" cy="214.8" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-6 dB, stepping up: 99.1</title></circle>
+<circle cx="792.3" cy="214.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-3 dB, stepping up: 100.0</title></circle>
+<circle cx="854.8" cy="214.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-0 dB, stepping up: 100.0</title></circle>
+<text class="ttl" x="74" y="328">fix (% of epochs)</text>
+<line class="gl" x1="74" y1="428.0" x2="886" y2="428.0"/><text class="lbl" x="68" y="431.0" text-anchor="end">0</text>
+<line class="gl" x1="74" y1="383.0" x2="886" y2="383.0"/><text class="lbl" x="68" y="386.0" text-anchor="end">50</text>
+<line class="gl" x1="74" y1="338.0" x2="886" y2="338.0"/><text class="lbl" x="68" y="341.0" text-anchor="end">100</text>
+<polyline fill="none" stroke="var(--mode-balloon, #2a78d6)" stroke-width="1.8" points="854.8,338.0 792.3,338.0 729.8,338.0 667.4,338.0 604.9,338.0 542.5,338.0 480.0,368.3 417.5,391.0 355.1,381.3 292.6,340.1 230.2,338.0 167.7,397.4 105.2,428.0"/>
+<circle cx="854.8" cy="338.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>+0 dB, stepping down: 100.0</title></circle>
+<circle cx="792.3" cy="338.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-3 dB, stepping down: 100.0</title></circle>
+<circle cx="729.8" cy="338.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-6 dB, stepping down: 100.0</title></circle>
+<circle cx="667.4" cy="338.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-9 dB, stepping down: 100.0</title></circle>
+<circle cx="604.9" cy="338.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-12 dB, stepping down: 100.0</title></circle>
+<circle cx="542.5" cy="338.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-15 dB, stepping down: 100.0</title></circle>
+<circle cx="480.0" cy="368.3" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-18 dB, stepping down: 66.3</title></circle>
+<circle cx="417.5" cy="391.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-21 dB, stepping down: 41.1</title></circle>
+<circle cx="355.1" cy="381.3" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-24 dB, stepping down: 51.9</title></circle>
+<circle cx="292.6" cy="340.1" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-27 dB, stepping down: 97.7</title></circle>
+<circle cx="230.2" cy="338.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-30 dB, stepping down: 100.0</title></circle>
+<circle cx="167.7" cy="397.4" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-33 dB, stepping down: 34.0</title></circle>
+<circle cx="105.2" cy="428.0" r="2.6" fill="var(--mode-balloon, #2a78d6)"><title>-36 dB, stepping down: 0.0</title></circle>
+<polyline fill="none" stroke="var(--mode-normal, #eb6834)" stroke-width="1.8" stroke-dasharray="5 3" points="167.7,428.0 230.2,428.0 292.6,338.8 355.1,364.9 417.5,396.8 480.0,338.0 542.5,338.0 604.9,338.0 667.4,338.0 729.8,338.0 792.3,338.0 854.8,338.0"/>
+<circle cx="167.7" cy="428.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-33 dB, stepping up: 0.0</title></circle>
+<circle cx="230.2" cy="428.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-30 dB, stepping up: 0.0</title></circle>
+<circle cx="292.6" cy="338.8" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-27 dB, stepping up: 99.1</title></circle>
+<circle cx="355.1" cy="364.9" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-24 dB, stepping up: 70.1</title></circle>
+<circle cx="417.5" cy="396.8" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-21 dB, stepping up: 34.7</title></circle>
+<circle cx="480.0" cy="338.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-18 dB, stepping up: 100.0</title></circle>
+<circle cx="542.5" cy="338.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-15 dB, stepping up: 100.0</title></circle>
+<circle cx="604.9" cy="338.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-12 dB, stepping up: 100.0</title></circle>
+<circle cx="667.4" cy="338.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-9 dB, stepping up: 100.0</title></circle>
+<circle cx="729.8" cy="338.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-6 dB, stepping up: 100.0</title></circle>
+<circle cx="792.3" cy="338.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-3 dB, stepping up: 100.0</title></circle>
+<circle cx="854.8" cy="338.0" r="2.6" fill="var(--mode-normal, #eb6834)"><title>-0 dB, stepping up: 100.0</title></circle>
+<text class="lbl" x="105.2" y="442" text-anchor="middle">-36 dB</text>
+<text class="lbl" x="230.2" y="442" text-anchor="middle">-30 dB</text>
+<text class="lbl" x="355.1" y="442" text-anchor="middle">-24 dB</text>
+<text class="lbl" x="480.0" y="442" text-anchor="middle">-18 dB</text>
+<text class="lbl" x="604.9" y="442" text-anchor="middle">-12 dB</text>
+<text class="lbl" x="729.8" y="442" text-anchor="middle">-6 dB</text>
+<text class="lbl" x="854.8" y="442" text-anchor="middle">+0 dB</text>
+<text class="lbl" x="480.0" y="456" text-anchor="middle">transmitted level, relative to HackRF gain 0 (the level every radiated flight used)</text>
+<line x1="74" y1="471" x2="92" y2="471" stroke="var(--mode-balloon, #2a78d6)" stroke-width="1.8"/><text class="lbl" x="98" y="474">stepping down, 45 s a step</text><line x1="264" y1="471" x2="282" y2="471" stroke="var(--mode-normal, #eb6834)" stroke-width="1.8" stroke-dasharray="5 3"/><text class="lbl" x="288" y="474">stepping back up</text>
+</svg>

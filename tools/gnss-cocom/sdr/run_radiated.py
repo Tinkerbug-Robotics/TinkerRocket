@@ -60,7 +60,7 @@ def list_candidate_ports():
           "A u-blox on the rocket computer runs at 460800 (38400 factory default).")
 
 
-def start_tx(c8: Path, freq: int, rate: int, gain: int, errfile: str):
+def start_tx(c8: Path, freq: int, rate: int, gain: int, errfile: str, extra: tuple = ()):
     # The PortaPack boots into Mayhem and hides the radio; this is a no-op when
     # the HackRF is already there.
     if not ensure_hackrf():
@@ -68,7 +68,7 @@ def start_tx(c8: Path, freq: int, rate: int, gain: int, errfile: str):
     errf = open(errfile, "w")
     tx = subprocess.Popen(
         ["hackrf_transfer", "-t", str(c8), "-f", str(freq),
-         "-s", str(rate), "-a", "0", "-x", str(gain)],
+         "-s", str(rate), "-a", "0", "-x", str(gain), *extra],
         stdout=errf, stderr=subprocess.STDOUT)
     time.sleep(4.0)
     out = Path(errfile).read_text()

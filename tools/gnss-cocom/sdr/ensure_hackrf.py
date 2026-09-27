@@ -13,6 +13,7 @@ Rather than remember to do it by hand, every entry point that transmits calls
 ensure_hackrf() first. It is a no-op when the radio is already available.
 
 Run standalone to fix it once:   ./ensure_hackrf.py
+Leave it idle after a run:       ./ensure_hackrf.py --idle   (hackrf_idle())
 """
 
 from __future__ import annotations
@@ -86,7 +87,42 @@ def ensure_hackrf(timeout: float = 25.0, quiet: bool = False) -> bool:
     return False
 
 
+def hackrf_idle(quiet: bool = False) -> bool:
+    """Leave the radio idle between scenarios (owner's rule, 2026-09-26): reset the
+    HackRF so the PortaPack reboots into Mayhem -- no transfer, not in HackRF mode.
+    ensure_hackrf() switches it back before the next transmission. Refuses while a
+    hackrf_transfer is still running; True when the radio is idle afterwards."""
+    import ctypes
+    import ctypes.util
+
+    def say(msg):
+        if not quiet:
+            print(msg)
+
+    if subprocess.run(["pgrep", "-x", "hackrf_transfer"], capture_output=True).returncode == 0:
+        say("# a hackrf_transfer is still running; not resetting")
+        return False
+    path = ctypes.util.find_library("hackrf") or "/opt/homebrew/lib/libhackrf.0.dylib"
+    try:
+        lib = ctypes.CDLL(path)
+    except OSError:
+        say(f"# libhackrf not found ({path}); radio left as it is")
+        return False
+    dev = ctypes.c_void_p()
+    if lib.hackrf_init() != 0:
+        return False
+    if lib.hackrf_open(ctypes.byref(dev)) != 0:     # not in HackRF mode: already idle
+        lib.hackrf_exit()
+        return True
+    ok = lib.hackrf_reset(dev) == 0
+    lib.hackrf_exit()
+    say("# HackRF reset: PortaPack back in Mayhem, radio idle" if ok else "# hackrf_reset failed")
+    return ok
+
+
 def main() -> int:
+    if sys.argv[1:] == ["--idle"]:
+        return 0 if hackrf_idle() else 1
     ok = ensure_hackrf()
     if ok:
         r = subprocess.run(["hackrf_info"], capture_output=True, text=True)
