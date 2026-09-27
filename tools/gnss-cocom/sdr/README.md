@@ -29,7 +29,7 @@ variable at a time.
 | `best_geometry.py` | Scans latitude and hour for the most satellites above a given elevation |
 | `plot_flight.py` | Altitude, speed, acceleration, lock state and satellite count on one time axis |
 | `recovery.py` | Shut lag and re-open latency per blocked window, with satellites in the wait |
-| `make_flights.py` | Realistic flight profiles integrated from thrust, drag and gravity |
+| `make_flights.py` | Realistic flight profiles integrated from thrust, drag and gravity; the JSON truth carries the signal's velocity at each row, and `--retime` converts files made before 2026-09-27 |
 | `run_fc.py` | Transmits a scenario and records the rocket computer's console, in one command |
 | `cocom_flightlog.py` | Converts a rocket computer flight log (`.bin`) into the rig's capture format, so a real flight is analysed by the same scripts as a bench run |
 | `align_start.py` | Recovers a capture's scenario start time by matching reported to injected altitude |
@@ -538,7 +538,7 @@ Every original scenario here is a ramp, and a ramp measures a slow receiver's
 **latency**, not its threshold. On a 3 g climb the vehicle spends about one
 second within +/-15 m/s of the velocity limit; a receiver that reacts a few
 seconds late smears the bracket by hundreds of m/s. The Air530 came back as
-"538-1334 m/s" that way, which is not a threshold at all.
+"539-1339 m/s" that way, which is not a threshold at all.
 
 The dwell scenarios hold a value steady for far longer than any plausible lag:
 
