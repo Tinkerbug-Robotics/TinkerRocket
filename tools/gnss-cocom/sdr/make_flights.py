@@ -190,6 +190,93 @@ def windows(samples, limit_fn):
     return out
 
 
+def signal_velocity(truth):
+    """Rows with the velocity the transmitted signal has AT each row's time.
+
+    fly() integrates semi-implicit Euler (v += a dt, then h += v dt), so its v at a
+    row is the mean velocity over the 0.1 s block that ENDS there. gps-sdr-sim takes
+    one motion row per block and runs the code phase linearly between rows, so the
+    position is exact at every row; the carrier holds the block's average rate
+    (stock) or sweeps between block-edge rates (SMOOTH_CARRIER). Either way the
+    signal's velocity at a row is the mean of the blocks either side of it. Read
+    from the integrator instead, the velocity is half a block (0.05 s) late: 1 m/s
+    in the 3 g boost, 6.6 m/s at 13.5 g. Altitude is exact and is left alone, and so
+    is the CSV, and with it every IQ file already built. The NEO-M8T's Doppler
+    matches this timing to 0.02 m/s with no lag (2026-09-27).
+    """
+    out = []
+    for k, s in enumerate(truth):
+        s2 = dict(s)
+        if k + 1 < len(truth):
+            n = truth[k + 1]
+            ve = 0.5 * (s["v_east_mps"] + n["v_east_mps"])
+            vu = 0.5 * (s["v_up_mps"] + n["v_up_mps"])
+            s2.update(speed_mps=math.hypot(ve, vu), v_east_mps=ve, v_up_mps=vu)
+        out.append(s2)
+    return out
+
+
+def limits_meta(truth):
+    """crossings, exceeds and the three kinds of window, from a truth list."""
+    vel_w = windows(truth, lambda s: s["speed_mps"] > V_LIMIT_MPS)
+    alt_w = {int(c / 1000): windows(truth, lambda s, c=c: s["alt_m"] > c)
+             for c in ALT_LIMIT_CANDIDATES_M}
+    # A gate that is actually closed needs velocity OR altitude(80 km)
+    # exceeded, which is what the previous runs established.
+    blocked_w = windows(truth, lambda s: s["speed_mps"] > V_LIMIT_MPS
+                        or s["alt_m"] > 80_000.0)
+    return dict(
+        crossings=dict(
+            velocity_515=vel_w[0][0] if vel_w else None,
+            peak_speed_mps=max(s["speed_mps"] for s in truth),
+            peak_alt_m=max(s["alt_m"] for s in truth),
+            **{f"altitude_{k}km": (w[0][0] if w else None)
+               for k, w in alt_w.items()}),
+        exceeds=("BOTH" if vel_w and alt_w.get(80) else
+                 "VELOCITY only" if vel_w else
+                 "ALTITUDE only" if alt_w.get(80) else "NEITHER"),
+        velocity_windows=vel_w, altitude_80km_windows=alt_w.get(80, []),
+        blocked_windows=blocked_w)
+
+
+def block_timed(truth) -> bool:
+    """True if the rows carry the integrator's velocity (files made before
+    2026-09-27): then every row satisfies h_k = h_(k-1) + v_k dt to rounding. Rows
+    in signal timing miss it by up to half a block of acceleration (6.6 m/s at
+    13.5 g), so this tells the two apart from the numbers alone."""
+    worst = 0.0
+    for a, b in zip(truth, truth[1:]):
+        dt = b["t"] - a["t"]
+        if dt > 0:
+            worst = max(worst, abs((b["alt_m"] - a["alt_m"]) / dt - b["v_up_mps"]))
+    return worst < 1e-6
+
+
+def retime(path: Path) -> str:
+    """Bring a flight JSON written before 2026-09-27 to the signal timing, in place.
+
+    Only what derives from the velocity changes: each row's velocity and speed, the
+    windows, the crossings. Everything else (origin, start_time, purpose, key order)
+    stays as the capture's archive has it. Refuses a file that is not a make_flights
+    flight in the old timing: make_trajectories.py's ramps already carry the
+    instantaneous velocity at each row and must not be touched."""
+    meta = json.loads(path.read_text())
+    if meta.get("scenario") not in FLIGHTS:
+        raise SystemExit(f"{path}: scenario {meta.get('scenario')!r} is not a make_flights flight")
+    if not block_timed(meta["truth"]):
+        return f"{path.name}: already in signal timing, left alone"
+    old = limits_meta(meta["truth"])
+    if (old["velocity_windows"] != meta["velocity_windows"]
+            or old["blocked_windows"] != meta["blocked_windows"]):
+        raise SystemExit(f"{path}: its windows do not follow from its own rows; not retiming")
+    truth = signal_velocity(meta["truth"])
+    new_lim = limits_meta(truth)
+    out = {k: (truth if k == "truth" else new_lim.get(k, v)) for k, v in meta.items()}
+    path.write_text(json.dumps(out, indent=1))
+    return (f"{path.name}: >515 m/s windows {meta['velocity_windows']} -> "
+            f"{out['velocity_windows']}")
+
+
 def build(name: str, spec: dict):
     pro = spec["prologue_s"]
     flight = fly(spec["burn_s"], spec["accel_mps2"], spec["cd_a_over_m"],
@@ -219,7 +306,8 @@ def build(name: str, spec: dict):
                           phase="boost" if ft < spec["burn_s"] else
                                 ("coast" if v >= 0 else "descent")))
 
-    return rows, truth
+    # The phase labels above follow the integrator; the velocities follow the signal.
+    return rows, signal_velocity(truth)
 
 
 def main() -> int:
@@ -229,7 +317,15 @@ def main() -> int:
     ap.add_argument("--only", action="append", metavar="NAME")
     ap.add_argument("--lat", type=float, help="launch latitude (default 40)")
     ap.add_argument("--lon", type=float, help="launch longitude (default -119)")
+    ap.add_argument("--retime", nargs="+", type=Path, metavar="JSON",
+                    help="bring archived flight JSONs (results/*.scenario.json) made "
+                         "before 2026-09-27 to the signal timing, in place, and exit")
     args = ap.parse_args()
+
+    if args.retime:
+        for p in args.retime:
+            print(retime(p))
+        return 0
 
     global LAT0_DEG, LON0_DEG
     if args.lat is not None:
