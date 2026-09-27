@@ -46,12 +46,11 @@ def bracket(lo, hi, unit, fmt="{:.0f}"):
     return f"{fmt.format(lo)}-{fmt.format(hi)} {unit}"
 
 
-# The summary table rounds. Every part that gates velocity brackets it within a
-# few m/s of 515, and every altitude gate lands within a few hundred meters of a
-# round figure, so quoting 510-517 / 514-516 / 514-518 / 510-524 in a comparison
-# invites the reader to look for a difference between parts that the measurement
-# does not support. The precise brackets stay in receivers.json and in each
-# receiver's own section; this is the at-a-glance view.
+# Altitude cells round to the kilometre. Velocity cells show the measured
+# bracket instead (owner, 2026-09-27): rounding to 5 m/s manufactured
+# differences, since a 0.7 m/s correction to the truth moved the NEO-M8T's cell
+# from 515 to 520 while its bracket barely moved. velocity_threshold() still
+# gives the single estimate the figures are shaded at.
 def _round_to(x, step):
     return round(x / step) * step
 
@@ -82,29 +81,47 @@ def velocity_threshold(r):
     return _round_to((lo + hi) / 2.0, 5)
 
 
+def velocity_bracket(r):
+    """(highest speed that still held a fix, lowest that was withheld), or None.
+
+    From the closing edges when the part records them -- opening edges measure a
+    slow part's re-open latency, not its threshold (see velocity_threshold) --
+    otherwise the bracket stored with the part."""
+    if r.get("velocity_gate_present") is False:
+        return None
+    edges = r.get("velocity_edges")
+    if edges and edges.get("fix") and edges.get("blocked"):
+        return max(edges["fix"]), min(edges["blocked"])
+    lo, hi = r.get("velocity_fix_max_mps"), r.get("velocity_blocked_min_mps")
+    if lo is None or hi is None:
+        return None
+    return lo, hi
+
+
 def vel_marker(r):
-    """Footnote key for a velocity estimate that needs qualifying, or None."""
+    """Footnote key for a velocity bracket that needs qualifying, or None."""
     if r.get("velocity_gate_mechanism") == "mute":
         return "mute"
     e = r.get("velocity_edges")
     if e and len(e.get("fix", [])) < 2:
         return "few edges"
+    b = velocity_bracket(r)
+    if b and b[0] > b[1]:
+        return "vel inverted"
     return None
 
 
 def vel_cell(r):
-    """Rendered velocity-gate cell: the estimate, or a bound when there is no gate.
-
-    Calls velocity_threshold rather than repeating it. A second copy of this
-    rule has now drifted twice -- once between this file and replot_all.py, and
-    once between these two functions, printing 510 here while the estimator said
-    515. One implementation, called from everywhere.
-    """
+    """Rendered velocity-gate cell: the measured bracket, or a bound when there
+    is no gate. Whole m/s, or tenths for a part whose edges were measured finer."""
     if r.get("velocity_gate_present") is False:
         v = r.get("velocity_fix_max_mps")
         return f"none to {v:.0f} m/s" if v else "none observed"
-    est = velocity_threshold(r)
-    return f"{est:.0f} m/s" if est is not None else "--"
+    b = velocity_bracket(r)
+    if b is None:
+        return "--"
+    fmt = "{:.0f}" if all(float(x).is_integer() for x in b) else "{:.1f}"
+    return bracket(b[0], b[1], "m/s", fmt)
 
 
 # Footnote markers, in the order they are first used. Kept as markers rather
@@ -125,6 +142,13 @@ FOOTNOTES = {
                   "the width of one navigation epoch. This part was slow enough "
                   "to re-open that the gate had not cleared before the next "
                   "window, leaving no fix to close again."),
+    "vel inverted": ("*",
+                     "Inverted bracket: one edge held a fix at a higher speed than "
+                     "another edge withheld. One epoch at 13.5 g spans ~117 m/s, a "
+                     "part slow to close or re-open holds a fix past the limit or "
+                     "stays blocked below it, and a single edge can close an epoch "
+                     "early, so this is latency and epoch width, not a threshold "
+                     "below 515. The per-edge midpoints sit near 515."),
     "mute": ("\u2016",
              "Enforced by muting ALL output -- NMEA, acknowledgements and raw "
              "measurements -- rather than by withholding the position while "
