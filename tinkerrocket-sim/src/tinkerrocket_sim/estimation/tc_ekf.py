@@ -27,8 +27,21 @@ Each constellation reaches the receiver through its own hardware delays and
 time scale, so its pseudoranges share the GPS clock bias plus a near-constant
 offset of a few to tens of metres. The Doppler shares one drift.
 
-      20:23 CLONE of the position error at the previous carrier epoch (NED)
-      23    CLONE of the clock bias at that epoch
+      20    Doppler clock-rate offset (m/s)            <- off unless p0 > 0
+
+The rate the Doppler reports for the clock minus the rate at which the code's
+clock bias actually moves. One oscillator drives both in a receiver, so this is
+~0 on a real sky; the HackRF COCOM rig shifts the carrier alone (its LO and
+sample clock are synthesised separately): +4.2 m/s on the PX1105R, 2026-09-27.
+
+      21    Doppler lag (s)                            <- off unless p0 > 0
+
+How late the reported Doppler is: the range rate it reports is the one of that
+long before the epoch's tag (see below). A constant of the receiver's setup,
+but not the same in every setup, so it can be estimated.
+
+      22:25 CLONE of the position error at the previous carrier epoch (NED)
+      25    CLONE of the clock bias at that epoch
 
 The clone is what makes the carrier-phase delta-range exact (stochastic
 cloning): a carrier phase is a range with an unknown whole-cycle offset, so only
@@ -41,12 +54,31 @@ carrier epoch (``reclone``).
 ``update_gnss_raw`` is the tightly coupled one. Keeping both in one class means
 a comparison between them changes nothing but the GNSS update.
 
+Without an IMU (``propagate_kinematic``) the filter runs a constant-velocity
+model, or with ``enable_kinematic_acceleration`` a constant-acceleration one
+whose NED acceleration takes the accelerometer-bias rows 9:12 (unused without
+an IMU).
+
+A receiver may report its Doppler late: the PX1105R's is the range rate of
+~0.22 s before its time tag, while its pseudorange is on time (COCOM rig,
+2026-09-27; 0.05-0.2 s with its power save on). The Doppler is predicted at that
+earlier instant -- from the IMU-propagated velocity history, or from the
+kinematic acceleration -- with the lag fixed (``rr_lag_s``) or estimated
+(``p0_rr_lag`` > 0), observable whenever the vehicle accelerates.
+
+The mechanization mirrors the flight filter: constant gravity, no Earth rate.
+``gravity_model="wgs84"`` (normal gravity by latitude and height) and
+``earth_rate=True`` (Coriolis, transport rate, Earth rate on the gyros) are what
+a flight to 80 km needs: gravity is 2.5 % weaker there, and Coriolis at 1 km/s
+is 0.15 m/s^2.
+
 Body frame FRD, world frame NED, ``q`` scalar-first with Quat2DCM(q) = NED->body,
 exactly as TR_GpsInsEKF.h. Not flight code: numpy, float64, dense covariance.
 """
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -56,9 +88,12 @@ ECC2 = 0.0066943799901
 EARTH_RADIUS = 6378137.0
 OMGE = 7.2921151467e-5
 C_LIGHT = 299792458.0
-N = 24
-N_CORE = 20
-CLONE = [20, 21, 22, 23]
+N = 26
+N_CORE = 22
+RATE_OFS = 20               # Doppler clock-rate offset
+RR_LAG = 21                 # Doppler lag
+KIN_ACC = slice(9, 12)      # NED acceleration in the kinematic constant-acceleration mode
+CLONE = [22, 23, 24, 25]
 CLONED = [0, 1, 2, 15]      # what the clone copies: position, clock bias
 ISB_INDEX = {"E": 18, "C": 19}
 
@@ -138,11 +173,46 @@ def t_e2ned(lat, lon):
     return np.array([[-sl * co, -sl * so, cl], [-so, co, 0.0], [-cl * co, -cl * so, -sl]])
 
 
+def earth_rates_ned(lla, v_ned):
+    """(Earth rate, transport rate) in NED (rad/s): the rotation of the Earth,
+    and of the local NED frame as the vehicle moves over it."""
+    lat, h = lla[0], lla[2]
+    rew, rns = earth_rad(lat)
+    w_ie = OMGE * np.array([math.cos(lat), 0.0, -math.sin(lat)])
+    w_en = np.array([v_ned[1] / (rew + h), -v_ned[0] / (rns + h),
+                     -v_ned[1] * math.tan(lat) / (rew + h)])
+    return w_ie, w_en
+
+
+WGS84_GAMMA_E = 9.7803253359          # normal gravity on the equator, m/s^2
+WGS84_K = 0.00193185265241             # Somigliana's constant
+WGS84_F = 1.0 / 298.257223563          # flattening
+WGS84_M = 0.00344978650684             # omega^2 a^2 b / GM
+
+
+def gravity_wgs84(lat, h):
+    """WGS84 normal gravity (NED, m/s^2): gravitation plus the centrifugal part,
+    which is what a mechanization in the rotating Earth frame needs.
+    Somigliana's formula on the ellipsoid, the second-order height correction
+    (NIMA TR8350.2 eq. 4-1 and 4-3; the next term is ~1e-4 m/s^2 at 80 km),
+    and the small north component above the ellipsoid (Groves eq. 2.140)."""
+    s2 = math.sin(lat) ** 2
+    g0 = WGS84_GAMMA_E * (1.0 + WGS84_K * s2) / math.sqrt(1.0 - ECC2 * s2)
+    gd = g0 * (1.0 - 2.0 / EARTH_RADIUS * (1.0 + WGS84_F + WGS84_M - 2.0 * WGS84_F * s2) * h
+               + 3.0 / EARTH_RADIUS ** 2 * h * h)
+    return np.array([-8.08e-9 * h * math.sin(2.0 * lat), 0.0, gd])
+
+
 def los_predict(m: "RawMeas", r_rx, v_rx):
     """Predicted pseudorange (without receiver clock), range rate (without
     drift) and line-of-sight unit vector, with the Earth-rotation (Sagnac)
     correction: the satellite position is at transmit time in the ECEF frame
     of that instant, so it is turned by omega_e * travel time."""
+    rho, rate, u, _ = _los(m, r_rx, v_rx)
+    return rho, rate, u
+
+
+def _los(m, r_rx, v_rx):
     rs = np.asarray(m.sat_pos, float)
     vs = np.asarray(m.sat_vel, float)
     rho = np.linalg.norm(rs - r_rx)
@@ -153,7 +223,17 @@ def los_predict(m: "RawMeas", r_rx, v_rx):
         rho = np.linalg.norm(rs_r - r_rx)
     vs_r = np.array([c * vs[0] + s * vs[1], -s * vs[0] + c * vs[1], vs[2]])
     u = (rs_r - r_rx) / rho
-    return rho, float(u @ (vs_r - v_rx)), u
+    return rho, float(u @ (vs_r - v_rx)), u, vs_r
+
+
+def sat_range_accel(m: "RawMeas", r_rx, v_rx):
+    """The range acceleration a still receiver would see from the satellite's
+    own motion (m/s^2): its acceleration along the line of sight plus the
+    turning of the line of sight, (|dv|^2 - (u.dv)^2)/rho. Up to ~0.2 m/s^2."""
+    rho, rate, u, vs_r = _los(m, r_rx, v_rx)
+    dv = vs_r - np.asarray(v_rx, float)
+    a_s = np.zeros(3) if m.sat_acc is None else np.asarray(m.sat_acc, float)
+    return float(u @ a_s) + (float(dv @ dv) - rate * rate) / rho
 
 
 def spp_fix(meas, x0=None, iters=10):
@@ -253,8 +333,9 @@ class TcEkfParams:
     # inflated to the gate (the flight filter's own inflation rule) -- a
     # gate that keeps refusing every satellite means the state is wrong
     raw_reject_persist: int = 3
-    # Attitude gain gate on GNSS updates, as the flight filter (cos^4 pitch)
-    gnss_att_cos4_gate: bool = True
+    # How much of a GNSS update's correction reaches the attitude (_att_gate):
+    # "cos4" as the flight filter, "heading" all but the unobservable part, "none"
+    gnss_att_gate: str = "cos4"
     # initial sigmas
     p0_pos: float = 10.0
     p0_vel: float = 1.0
@@ -264,6 +345,25 @@ class TcEkfParams:
     p0_wbias: float = 0.01745
     p0_clk_bias: float = 30.0
     p0_clk_drift: float = 5.0
+    # Doppler clock-rate offset (state 20): 0 leaves the state out
+    p0_rate_ofs: float = 0.0         # m/s
+    rate_ofs_psd: float = 0.0        # (m/s)^2/s
+    # The reported Doppler is the range rate this long before the epoch's tag (s):
+    # the value, or the initial value when p0_rr_lag > 0 makes it a state
+    rr_lag_s: float = 0.0
+    p0_rr_lag: float = 0.0           # s
+    rr_lag_psd: float = 1e-6         # s^2/s
+    # Kinematic constant-acceleration mode: initial acceleration sigma (m/s^2).
+    # kin_gravity: the state is the non-gravitational acceleration and gravity
+    # (inverse-square) is added, so a gap is bridged ballistically;
+    # kin_acc_tau > 0 decays that acceleration (Singer) toward zero in a gap.
+    p0_kin_acc: float = 10.0
+    kin_gravity: bool = False
+    kin_acc_tau: float = 0.0
+    # INS mechanization. "const": the flight filter's fixed G. "wgs84": normal
+    # gravity by latitude and height (gravity_wgs84).
+    gravity_model: str = "const"
+    earth_rate: bool = False         # Coriolis, transport rate, Earth rate on the gyros
 
 
 @dataclass
@@ -301,6 +401,8 @@ class RawMeas:
     sigma_cr_corr: float = 0.0   # m
     tau_cr: float = 0.3          # s
     q_cr: float = 0.0            # m^2/s
+    # Satellite acceleration (ECEF, m/s^2), for predicting a late Doppler
+    sat_acc: np.ndarray | None = None
 
 
 @dataclass
@@ -331,10 +433,18 @@ class TcEkf:
         self.wb = np.zeros(3)
         self.clk = np.zeros(3)                   # bias m, drift at 1 g m/s, g-coef m/s/g
         self.isb = {"E": 0.0, "C": 0.0}          # Galileo/BeiDou minus GPS, m
+        self.rate_ofs = 0.0                      # Doppler clock rate minus code clock rate, m/s
+        self.rr_lag = self.p.rr_lag_s            # Doppler lag, s
         self.g_excess = 0.0                      # |f|/g - 1 at the last IMU step
         self.P = np.zeros((N, N))
         self.a_est_b = np.zeros(3)
         self.w_est_b = np.zeros(3)
+        self.a_ned = np.zeros(3)                 # kinematic acceleration at the last IMU step
+        self.f_b = np.zeros(3)                   # bias-corrected specific force at the last IMU step
+        self.kin_acc = False                     # rows 9:12 hold the kinematic acceleration
+        self.acc = np.zeros(3)                   # that acceleration, NED m/s^2
+        self._dv_sum = np.zeros(3)               # IMU velocity increments, summed (no updates)
+        self._dv_hist = deque(maxlen=8192)       # (t, _dv_sum) after each IMU step
         self.clk_ready = False
         self._rejects = {}
         self._last_upd = {}                      # (sys, prn, kind) -> filter time of last update
@@ -360,7 +470,9 @@ class TcEkf:
                          + [pp.p0_att ** 2, pp.p0_att ** 2, pp.p0_hdg ** 2]
                          + [pp.p0_abias ** 2] * 3 + [pp.p0_wbias ** 2] * 3
                          + [pp.p0_clk_bias ** 2, pp.p0_clk_drift ** 2, pp.p0_clk_g ** 2]
-                         + [pp.p0_isb ** 2] * 2 + [0.0] * (N - N_CORE))
+                         + [pp.p0_isb ** 2] * 2 + [pp.p0_rate_ofs ** 2, pp.p0_rr_lag ** 2]
+                         + [0.0] * (N - N_CORE))
+        self.rr_lag = pp.rr_lag_s
         if clk_bias is not None:
             self.clk = np.array([clk_bias, clk_drift or 0.0, 0.0])
             self.clk_ready = True
@@ -379,14 +491,46 @@ class TcEkf:
         self.P[:, 6:9] = 0.0
         self.P[6, 6] = self.P[7, 7] = self.P[8, 8] = 1e-6
 
+    def seed_gyro_bias(self, gyro_mean):
+        """Gyro bias from the mean of a still gyro, as the flight computer seeds
+        it on the pad (#297). A still gyro also reads the Earth's rotation; when
+        the mechanization models that (``earth_rate``), it is not bias and comes
+        out here -- otherwise it is subtracted twice. Call after the attitude
+        seed (set_quaternion)."""
+        wb = np.asarray(gyro_mean, float)
+        if self.p.earth_rate:
+            w_ie, _ = earth_rates_ned(self.lla, np.zeros(3))
+            wb = wb - quat2dcm(self.q) @ w_ie
+        self.wb = wb.copy()
+
     # ------------------------------------------------------------- propagate
+    def gravity_ned(self, model=None):
+        """Gravity (NED, m/s^2) the mechanization uses at the current position."""
+        if (model or self.p.gravity_model) == "wgs84":
+            return gravity_wgs84(self.lla[0], self.lla[2])
+        return np.array([0.0, 0.0, G])
+
+    def kin_total_acc(self):
+        """The kinematic mode's total NED acceleration: the state, plus gravity
+        when the state is the non-gravitational part."""
+        if not self.kin_acc:
+            return np.zeros(3)
+        if self.p.kin_gravity:
+            return self.acc + self.gravity_ned(model="wgs84")
+        return self.acc.copy()
+
     def propagate(self, acc_frd, gyro_frd_rps, dt):
         """IMU time update, mirroring GpsInsEKF::updateCore + timeUpdate."""
         pp = self.p
         T_ned2b = quat2dcm(self.q)
         T_b2ned = T_ned2b.T
+        g_ned = self.gravity_ned()
         self.w_est_b = np.asarray(gyro_frd_rps, float) - self.wb
-        self.a_est_b = np.asarray(acc_frd, float) + T_ned2b[:, 2] * G - self.ab
+        if pp.earth_rate:
+            w_ie, w_en = earth_rates_ned(self.lla, self.v)
+            self.w_est_b = self.w_est_b - T_ned2b @ (w_ie + w_en)
+        self.f_b = np.asarray(acc_frd, float) - self.ab
+        self.a_est_b = self.f_b + T_ned2b @ g_ned
         th = self.w_est_b * dt
         ang = np.linalg.norm(th)
         if ang > 1e-8:
@@ -395,14 +539,21 @@ class TcEkf:
             dq = np.concatenate(([1.0], 0.5 * th))
         self.q = quat_mult(self.q, dq)
         self.q /= np.linalg.norm(self.q)
-        self.v = self.v + T_b2ned @ self.a_est_b * dt
+        a_ned = T_b2ned @ self.a_est_b
+        if pp.earth_rate:
+            a_ned = a_ned - np.cross(2.0 * w_ie + w_en, self.v)
+        self.a_ned = a_ned
+        self.v = self.v + a_ned * dt
+        self._dv_sum = self._dv_sum + a_ned * dt
         rew, rns = earth_rad(self.lla[0])
         self.lla = self.lla + dt * np.array([self.v[0] / (rns + self.lla[2]),
                                              self.v[1] / ((rew + self.lla[2]) * math.cos(self.lla[0])),
                                              -self.v[2]])
         F = np.zeros((N, N))
         F[0:3, 3:6] = np.eye(3)
-        F[5, 2] = -2 * G / EARTH_RADIUS
+        F[5, 2] = +2 * g_ned[2] / EARTH_RADIUS    # x2 is delta(down): +2g/R, as the C++ since #1154
+        if pp.earth_rate:
+            F[3:6, 3:6] = -skew(2.0 * w_ie + w_en)
         F[3:6, 6:9] = -2 * T_b2ned @ skew(self.a_est_b)
         F[3:6, 9:12] = -T_b2ned
         F[6:9, 6:9] = -skew(self.w_est_b)
@@ -422,26 +573,51 @@ class TcEkf:
         Gm[17, 14] = 1.0
         Qc = Gm @ self.Rw @ Gm.T
         Qc[18, 18] = Qc[19, 19] = pp.isb_psd
+        Qc[RATE_OFS, RATE_OFS] = pp.rate_ofs_psd
+        if pp.p0_rr_lag > 0:
+            Qc[RR_LAG, RR_LAG] = pp.rr_lag_psd
         Qd = dt * Qc + 0.5 * dt * dt * (F @ Qc + Qc @ F.T)
         Phi = np.eye(N) + F * dt
         self.P = Phi @ self.P @ Phi.T + Qd
         self.clk[0] += (self.clk[1] + self.clk[2] * self.g_excess) * dt
         self.t += dt
+        self._dv_hist.append((self.t, self._dv_sum.copy()))
         self._stabilize()
 
-    def propagate_kinematic(self, dt, accel_psd=4.0):
-        """GNSS-only time update (no IMU): constant velocity driven by white
-        acceleration noise of ``accel_psd`` (m^2/s^3). Attitude and IMU biases
+    def enable_kinematic_acceleration(self, acc_ned=None):
+        """GNSS-only constant-acceleration mode: rows 9:12 carry the NED
+        acceleration (there are no accelerometer biases without an IMU). Call
+        after freeze_imu_states; then propagate_kinematic takes a jerk PSD."""
+        self.kin_acc = True
+        self.acc = np.zeros(3) if acc_ned is None else np.array(acc_ned, float)
+        self.P[KIN_ACC, :] = 0.0
+        self.P[:, KIN_ACC] = 0.0
+        for i in range(9, 12):
+            self.P[i, i] = self.p.p0_kin_acc ** 2
+
+    def propagate_kinematic(self, dt, accel_psd=4.0, jerk_psd=0.0):
+        """GNSS-only time update (no IMU). Constant velocity driven by white
+        acceleration noise of ``accel_psd`` (m^2/s^3); after
+        ``enable_kinematic_acceleration``, constant acceleration driven by
+        white jerk of ``jerk_psd`` (m^2/s^5) as well. Attitude and IMU biases
         are frozen and never observed, so their rows are left alone. For
         receiver-only captures (a bench PX1105R, the COCOM rig)."""
+        a = self.kin_total_acc()
+        dp = self.v * dt + 0.5 * a * dt * dt
         rew, rns = earth_rad(self.lla[0])
-        self.lla = self.lla + dt * np.array([self.v[0] / (rns + self.lla[2]),
-                                             self.v[1] / ((rew + self.lla[2]) * math.cos(self.lla[0])),
-                                             -self.v[2]])
+        self.lla = self.lla + np.array([dp[0] / (rns + self.lla[2]),
+                                        dp[1] / ((rew + self.lla[2]) * math.cos(self.lla[0])),
+                                        -dp[2]])
+        self.v = self.v + a * dt
+        self.a_ned = a
         self.g_excess = 0.0
-        F = np.zeros((N, N))
-        F[0:3, 3:6] = np.eye(3)
-        F[15, 16] = 1.0
+        Phi = np.eye(N)
+        Phi[0:3, 3:6] = dt * np.eye(3)
+        Phi[15, 16] = dt
+        if self.kin_acc and self.p.kin_acc_tau > 0:
+            decay = math.exp(-dt / self.p.kin_acc_tau)
+            self.acc = self.acc * decay
+            Phi[KIN_ACC, KIN_ACC] = decay * np.eye(3)
         # Exact discrete noise of an integrated random walk. The first-order
         # (dt*Qc + dt^2/2 ...) form the IMU path uses is fine at 1 ms but is
         # not positive definite at a 1 s GNSS epoch.
@@ -451,15 +627,45 @@ class TcEkf:
             Qd[i, i] = q * dt ** 3 / 3
             Qd[i, i + 3] = Qd[i + 3, i] = q * dt ** 2 / 2
             Qd[i + 3, i + 3] = q * dt
+        if self.kin_acc:
+            Phi[3:6, 9:12] = dt * np.eye(3)
+            Phi[0:3, 9:12] = 0.5 * dt * dt * np.eye(3)
+            j = jerk_psd
+            for i in range(3):
+                k = 9 + i
+                Qd[i, i] += j * dt ** 5 / 20
+                Qd[i, i + 3] += j * dt ** 4 / 8
+                Qd[i + 3, i] = Qd[i, i + 3]
+                Qd[i, k] = Qd[k, i] = j * dt ** 3 / 6
+                Qd[i + 3, i + 3] += j * dt ** 3 / 3
+                Qd[i + 3, k] = Qd[k, i + 3] = j * dt ** 2 / 2
+                Qd[k, k] = j * dt
         Qd[15, 15] = qb * dt + qd * dt ** 3 / 3
         Qd[15, 16] = Qd[16, 15] = qd * dt ** 2 / 2
         Qd[16, 16] = qd * dt
         Qd[18, 18] = Qd[19, 19] = self.p.isb_psd * dt
-        Phi = np.eye(N) + F * dt
+        Qd[RATE_OFS, RATE_OFS] = self.p.rate_ofs_psd * dt
+        if self.p.p0_rr_lag > 0:
+            Qd[RR_LAG, RR_LAG] = self.p.rr_lag_psd * dt
         self.P = Phi @ self.P @ Phi.T + Qd
         self.clk[0] += self.clk[1] * dt
         self.t += dt
         self._stabilize()
+
+    def velocity_change(self, tau):
+        """v(now) - v(now - tau), NED, for a measurement that is tau late: from
+        the IMU's own velocity increments when they reach back that far (no
+        filter corrections in them), else the acceleration estimate times tau.
+        Returns (dv, True if it came from the kinematic acceleration state)."""
+        h, t0 = self._dv_hist, self.t - tau
+        if len(h) > 1 and h[0][0] <= t0 and h[-1][0] >= self.t - 1e-9:
+            for k in range(len(h) - 1, 0, -1):
+                if h[k - 1][0] <= t0:
+                    (ta, sa), (tb, sb) = h[k - 1], h[k]
+                    w = (t0 - ta) / (tb - ta) if tb > ta else 0.0
+                    return h[-1][1] - (sa + w * (sb - sa)), False
+        a = self.kin_total_acc() if self.kin_acc else self.a_ned
+        return a * tau, self.kin_acc
 
     def freeze_imu_states(self):
         """Zero the attitude and IMU-bias covariance so GNSS-only updates
@@ -471,8 +677,8 @@ class TcEkf:
 
     def _stabilize(self):
         self.P = 0.5 * (self.P + self.P.T)
-        caps = ([1e8] * 3 + [1e4] * 3 + [10.0] * 3 + [10.0] * 3 + [1.0] * 3 + [1e12, 1e6, 100.0, 1e6, 1e6]
-                + [1e8] * 3 + [1e12])
+        caps = ([1e8] * 3 + [1e4] * 3 + [10.0] * 3 + ([1e5] if self.kin_acc else [10.0]) * 3 + [1.0] * 3
+                + [1e12, 1e6, 100.0, 1e6, 1e6, 1e4, 1.0] + [1e8] * 3 + [1e12])
         for i, c in enumerate(caps):
             if self.P[i, i] > c:
                 s = math.sqrt(c / self.P[i, i])
@@ -488,31 +694,52 @@ class TcEkf:
         self.lla[0] += dx[0] / (rns + self.lla[2])
         self.lla[1] += dx[1] / ((rew + self.lla[2]) * math.cos(self.lla[0]))
         self.v += dx[3:6]
-        self.ab += dx[9:12]
+        if self.kin_acc:
+            self.acc += dx[KIN_ACC]
+        else:
+            self.ab += dx[9:12]
         self.wb += dx[12:15]
         self.clk += dx[15:18]
         self.isb["E"] += dx[18]
         self.isb["C"] += dx[19]
+        self.rate_ofs += dx[RATE_OFS]
+        self.rr_lag += dx[RR_LAG]
         if self.clone_lla is not None:
+            cn, ce, cd, cb = CLONE
             rew_c, rns_c = earth_rad(self.clone_lla[0])
-            self.clone_lla[2] -= dx[22]
-            self.clone_lla[0] += dx[20] / (rns_c + self.clone_lla[2])
-            self.clone_lla[1] += dx[21] / ((rew_c + self.clone_lla[2]) * math.cos(self.clone_lla[0]))
-            self.clone_b += dx[23]
+            self.clone_lla[2] -= dx[cd]
+            self.clone_lla[0] += dx[cn] / (rns_c + self.clone_lla[2])
+            self.clone_lla[1] += dx[ce] / ((rew_c + self.clone_lla[2]) * math.cos(self.clone_lla[0]))
+            self.clone_b += dx[cb]
         dq = np.array([1.0, dx[6], dx[7], dx[8]])
         dq /= np.linalg.norm(dq)
         self.q = quat_mult(self.q, dq)
         self.q /= np.linalg.norm(self.q)
 
     def _att_gate(self):
-        if not self.p.gnss_att_cos4_gate:
-            return 1.0
+        """What a GNSS update may do to the attitude, as a 3x3 applied to the
+        attitude rows of its gain. GNSS sees attitude only through the specific
+        force: a tilt points thrust or drag sideways and the velocity drifts by
+        tilt x |f|. Rotation about f itself (heading, when the thrust is vertical)
+        it never sees, and in zero g it sees nothing.
+          "cos4"     the flight filter: everything scaled by cos^4 pitch, which
+                     is ~0 when vertical -- tilt included
+          "heading"  only the rotation about f (about the vertical near zero g)
+                     removed; tilt corrections kept
+          "none"     everything kept"""
+        mode = self.p.gnss_att_gate
+        if mode == "none":
+            return np.eye(3)
         T = quat2dcm(self.q)
+        if mode == "heading":
+            n = float(np.linalg.norm(self.f_b))
+            e = self.f_b / n if n > 0.5 * G else T[:, 2]
+            return np.eye(3) - np.outer(e, e)
         sp = -T[0, 2]                      # sin(pitch) for an FRD body in NED
         c2 = 1.0 - sp * sp
-        return c2 * c2
+        return c2 * c2 * np.eye(3)
 
-    def _update(self, H, y, R, att_scale=1.0, gate=None):
+    def _update(self, H, y, R, att_scale=None, gate=None):
         """Vector or scalar update, Joseph form. Returns (applied, nis)."""
         H = np.atleast_2d(H)
         y = np.atleast_1d(y)
@@ -524,7 +751,8 @@ class TcEkf:
         if gate is not None and nis > gate:
             return False, nis
         K = PHt @ Sinv
-        K[6:9, :] *= att_scale
+        if att_scale is not None:
+            K[6:9, :] = att_scale @ K[6:9, :]
         dx = K @ y
         IKH = np.eye(N) - K @ H
         self.P = IKH @ self.P @ IKH.T + K @ R @ K.T
@@ -534,9 +762,12 @@ class TcEkf:
 
     # ------------------------------------------------------------- aids
     def update_accel_level(self, acc_frd):
-        """Gravity-reference update (GpsInsEKF::accelMeasUpdate)."""
+        """Gravity-reference update (GpsInsEKF::accelMeasUpdate). Referenced to
+        the mechanization's own gravity: levelling against a constant G while
+        propagating with WGS84 parks the difference (0.03 m/s^2 at the equator)
+        in the accelerometer bias, which then acts as a real acceleration."""
         T = quat2dcm(self.q)
-        ag = T[:, 2] * G
+        ag = T @ self.gravity_ned()
         y = (np.asarray(acc_frd, float) - self.ab) + ag
         H = np.zeros((3, N))
         H[0, 7], H[0, 8] = 2 * ag[2], -2 * ag[1]
@@ -635,13 +866,29 @@ class TcEkf:
                 self.clk[0] += k * ms
                 st.clock_jump_ms = k
         att = self._att_gate()
+        # A late Doppler is the range rate at t - tau: the receiver velocity
+        # then, and the satellite's own range acceleration backed out.
+        tau = max(0.0, self.rr_lag)
+        lag_state = self.p.p0_rr_lag > 0
+        dv_lag, lag_on_acc = self.velocity_change(tau) if tau > 0 else (np.zeros(3), False)
+        a_rx = None                              # receiver acceleration, ECEF, for the lag state's row
+        if lag_state:
+            _, _, T_now = self.receiver_state_ecef()
+            a_rx = T_now.T @ (self.kin_total_acc() if self.kin_acc else self.a_ned)
         for m in meas:
             for kind in ("pr", "rr"):
                 z = m.pr if kind == "pr" else m.rr
                 if z is None:
                     continue
                 r, vr, T = self.receiver_state_ecef()
-                rho, rrate, u = self.predict_raw(m, r, vr)
+                rdd_sat = 0.0
+                if kind == "rr" and (tau > 0 or lag_state):
+                    v_lag = vr - T.T @ dv_lag
+                    rho, rrate, u = self.predict_raw(m, r, v_lag)
+                    rdd_sat = sat_range_accel(m, r, v_lag)
+                    rrate -= tau * rdd_sat
+                else:
+                    rho, rrate, u = self.predict_raw(m, r, vr)
                 u_ned = T @ u
                 H = np.zeros((1, N))
                 key = (m.sys, m.prn, kind)
@@ -655,9 +902,14 @@ class TcEkf:
                     R = m.sigma_pr ** 2 + m.sigma_pr_corr ** 2 * corr_inflation(dt_i, m.tau_pr)
                 else:
                     H[0, 3:6] = -u_ned
+                    if lag_on_acc:
+                        H[0, KIN_ACC] = tau * u_ned
                     H[0, 16] = 1.0
                     H[0, 17] = self.g_excess
-                    y = z - (rrate + self.clk[1] + self.clk[2] * self.g_excess)
+                    H[0, RATE_OFS] = 1.0
+                    if lag_state:            # d(range rate at t - tau)/d tau = -range acceleration
+                        H[0, RR_LAG] = -(rdd_sat - float(u @ a_rx))
+                    y = z - (rrate + self.clk[1] + self.clk[2] * self.g_excess + self.rate_ofs)
                     R = m.sigma_rr ** 2 * corr_inflation(dt_i, m.tau_rr)
                 gate = self.p.raw_gate_chi2
                 if self._rejects.get(key, 0) >= self.p.raw_reject_persist:
@@ -725,13 +977,15 @@ class TcEkf:
                 _, cr_then, m_then = prev
                 rho_now, _, u_now = self.predict_raw(m, r_now, np.zeros(3))
                 rho_then, _, u_then = self.predict_raw(m_then, r_then, np.zeros(3))
+                dt = self.t - self.clone_t
                 h = np.zeros(N)
                 h[0:3] = -(T_now @ u_now)
                 h[15] = 1.0
-                h[20:23] = T_then @ u_then
-                h[23] = -1.0
-                y = (m.cr - cr_then) - ((rho_now + self.clk[0]) - (rho_then + self.clone_b))
-                dt = self.t - self.clone_t
+                h[CLONE[:3]] = T_then @ u_then
+                h[CLONE[3]] = -1.0
+                h[RATE_OFS] = dt             # the carrier runs on the Doppler's clock rate
+                y = (m.cr - cr_then) - ((rho_now + self.clk[0]) - (rho_then + self.clone_b)
+                                        + self.rate_ofs * dt)
                 R = (m.sigma_cr ** 2 + m_then.sigma_cr ** 2 + m.q_cr * dt
                      + 2.0 * m.sigma_cr_corr ** 2 * (1.0 - math.exp(-dt / max(m.tau_cr, 1e-6))))
                 rows.append((m, h, y, R))
