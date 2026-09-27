@@ -81,12 +81,29 @@ KEYS = {
     "CFG-USBOUTPROT-RTCM3X":    0x10780004,
     "CFG-MSGOUT-UBX_NAV_PVT_USB": 0x20910009,
     "CFG-MSGOUT-UBX_NAV_SAT_USB": 0x20910018,
+    # raw measurements and navigation subframes (--raw); ids as in the flight
+    # firmware's u-blox library (TR_GNSSReceiverUBlox_Serial)
+    "CFG-MSGOUT-UBX_RXM_RAWX_USB": 0x209102a7,
+    "CFG-MSGOUT-UBX_RXM_SFRBX_USB": 0x20910234,
+    "CFG-MSGOUT-UBX_MON_COMMS_USB": 0x20910352,
     # --- UART1 (the receiver is behind a USB-UART bridge) ---
     "CFG-UART1OUTPROT-UBX":     0x10740001,
     "CFG-UART1OUTPROT-NMEA":    0x10740002,
     "CFG-UART1OUTPROT-RTCM3X":  0x10740004,
     "CFG-MSGOUT-UBX_NAV_PVT_UART1": 0x20910007,
     "CFG-MSGOUT-UBX_NAV_SAT_UART1": 0x20910016,
+    "CFG-MSGOUT-UBX_RXM_RAWX_UART1": 0x209102a5,
+    "CFG-MSGOUT-UBX_RXM_SFRBX_UART1": 0x20910232,
+    "CFG-MSGOUT-UBX_MON_COMMS_UART1": 0x20910350,
+    # constellations and signals (--gps-only); ids from the same library
+    "CFG-SIGNAL-GPS_ENA":       0x1031001f,
+    "CFG-SIGNAL-GPS_L1CA_ENA":  0x10310001,
+    "CFG-SIGNAL-GPS_L2C_ENA":   0x10310003,
+    "CFG-SIGNAL-SBAS_ENA":      0x10310020,
+    "CFG-SIGNAL-GAL_ENA":       0x10310021,
+    "CFG-SIGNAL-BDS_ENA":       0x10310022,
+    "CFG-SIGNAL-QZSS_ENA":      0x10310024,
+    "CFG-SIGNAL-GLO_ENA":       0x10310025,
     # dynamics: 8 = airborne <4 g, matching the rocket computer's receiver
     "CFG-NAVSPG-DYNMODEL":      0x20110021,
     # navigation rate, ms between solutions
@@ -151,6 +168,12 @@ def cfg_msg(cls: int, mid: int, rate: int, port: int = 1) -> bytes:
     return frame(CLS_CFG, MSG_CFG_MSG, bytes(p))
 
 
+def cfg_rate(meas_ms: int) -> bytes:
+    """Legacy CFG-RATE (0x06 0x08): measurement period, one solution per measurement,
+    aligned to GPS time. The legacy path never set a rate before, so an M8 stayed at 1 Hz."""
+    return frame(CLS_CFG, 0x08, struct.pack("<HHH", meas_ms, 1, 1))
+
+
 def cfg_nav5_dynmodel(model: int) -> bytes:
     """Legacy CFG-NAV5, applying the dynamic model and nothing else."""
     p = bytearray(36)
@@ -198,6 +221,18 @@ def collect(buf: bytearray):
     return list(iter_frames(buf))
 
 
+def poll(ser, cls: int, mid: int, payload: bytes = b"", seconds: float = 1.5):
+    """Send a UBX poll and return the first answer's payload, or None. Tried three
+    times: a receiver streaming at 20 Hz drops some of what it is sent."""
+    for _ in range(3):
+        ser.reset_input_buffer()
+        ser.write(frame(cls, mid, payload))
+        for c, m, pl in collect(read_for(ser, seconds)):
+            if c == cls and m == mid:
+                return pl
+    return None
+
+
 def parse_valget(payload: bytes):
     """CFG-VALGET response -> {key: value}."""
     out = {}
@@ -228,6 +263,25 @@ def main() -> int:
                          "a serial bridge")
     ap.add_argument("--keep-nmea", action="store_true",
                     help="leave NMEA on; the capture then carries both protocols")
+    ap.add_argument("--raw", action="store_true",
+                    help="also output UBX-RXM-RAWX every epoch and RXM-SFRBX: the raw "
+                         "pseudorange/carrier/Doppler and the navigation subframes "
+                         "tc_ekf_capture.py builds its ephemeris from")
+    ap.add_argument("--gps-only", action="store_true",
+                    help="track GPS alone (GLONASS, Galileo, BeiDou, QZSS and SBAS off; "
+                         "an F9P keeps L2C, it NAKs turning it off) -- all the simulator "
+                         "injects is GPS L1. At 20 Hz with four "
+                         "constellations on, an F9P delivered only ~8%% of its RAWX epochs "
+                         "(2026-09-27); this is the lighter load")
+    ap.add_argument("--mon-comms", action="store_true",
+                    help="also output UBX-MON-COMMS about once a second: the port's transmit "
+                         "buffer usage and peak, pending and skipped bytes, and the TX-buffer-"
+                         "full error flag -- whether dropped RAWX epochs were built and not sent")
+    ap.add_argument("--set-baud", type=int, metavar="BAUD",
+                    help="M8 (legacy) UART only: move the receiver's UART1 to BAUD (RAM), UBX "
+                         "output only, and follow it. The runners then need -b BAUD; a power "
+                         "cycle restores the old rate. 115200 carries ~11.5 kB/s, which 20 Hz "
+                         "RAWX fills")
     ap.add_argument("--identify-only", action="store_true")
     ap.add_argument("--cold-start", action="store_true",
                     help="clear position/time/ephemeris/almanac before configuring")
@@ -246,8 +300,14 @@ def main() -> int:
         ser.reset_input_buffer()
 
         # --- identify -------------------------------------------------------
-        ser.write(frame(CLS_MON, MSG_MON_VER, b""))
-        buf = read_for(ser, 2.0)
+        # Poll up to three times: an F9P already streaming RAWX + NAV-PVT at 20 Hz
+        # answered one MON-VER poll in three (2026-09-27), dropping the others.
+        buf = bytearray()
+        for _attempt in range(3):
+            ser.write(frame(CLS_MON, MSG_MON_VER, b""))
+            buf = read_for(ser, 2.0)
+            if any(c == CLS_MON and m == MSG_MON_VER for c, m, _ in collect(bytearray(buf))):
+                break
         protver = None
         for cls, mid, pl in collect(buf):
             if cls == CLS_MON and mid == MSG_MON_VER:
@@ -284,35 +344,103 @@ def main() -> int:
             if args.persist:
                 print("  note: --persist has no effect on a legacy part here; "
                       "CFG-CFG\n     would be needed to save, and is not sent.")
+            if args.gps_only:
+                # CFG-GNSS (0x06 0x3E): read the table and flip only the enable bits, GPS
+                # on and everything else off. u-blox rates the M8 at 18 Hz on one GNSS
+                # and 10 Hz on several. The receiver restarts its GNSS on the change.
+                gn = poll(ser, CLS_CFG, 0x3E)
+                if gn is None or len(gn) < 4:
+                    print("  !! no CFG-GNSS answer; GPS-only not applied")
+                    return 1
+                tbl = bytearray(gn)
+                for k in range(tbl[3]):
+                    o = 4 + 8 * k
+                    if len(tbl) < o + 8:
+                        break
+                    fl = struct.unpack_from("<I", tbl, o + 4)[0]
+                    struct.pack_into("<I", tbl, o + 4, (fl | 1) if tbl[o] == 0 else (fl & ~1))
+                ser.write(frame(CLS_CFG, 0x3E, bytes(tbl)))
+                time.sleep(1.5)
+                back = poll(ser, CLS_CFG, 0x3E)
+                on = [tbl[4 + 8 * k] for k in range(tbl[3])
+                      if back and len(back) >= 12 + 8 * k and back[4 + 8 * k + 4] & 1]
+                print(f"  gnss     : enabled gnssIds now {on} (0 = GPS)")
             ser.reset_input_buffer()
-            for cls, mid, name in ((CLS_NAV, MSG_NAV_PVT_L, "NAV-PVT"),
-                                   (CLS_NAV, MSG_NAV_SAT_L, "NAV-SAT")):
-                ser.write(cfg_msg(cls, mid, 1))
+            sat_every = max(1, int(round(args.rate_hz))) if args.raw else 1
+            msgs = [(CLS_NAV, MSG_NAV_PVT_L, "NAV-PVT", 1), (CLS_NAV, MSG_NAV_SAT_L, "NAV-SAT", sat_every)]
+            if args.raw:                       # RXM-RAWX 0x02 0x15, RXM-SFRBX 0x02 0x13
+                msgs += [(0x02, 0x15, "RXM-RAWX", 1), (0x02, 0x13, "RXM-SFRBX", 1)]
+            if args.mon_comms:                 # an M8 has no MON-COMMS; MON-TXBUF 0x0A 0x08 instead
+                msgs.append((0x0A, 0x08, "MON-TXBUF", sat_every))
+            for cls, mid, name, every in msgs:
+                ser.write(cfg_msg(cls, mid, every))
                 time.sleep(0.25)
+            if args.rate_hz != 1.0:
+                ser.write(cfg_rate(int(round(1000.0 / args.rate_hz))))
+                time.sleep(0.4)
+            # Switch off every other UBX output this unit was left streaming. The
+            # NEO-M8T here (2026-09-27) carried a timing setup's RXM-SVSI (~1.2 kB at
+            # every epoch), RXM-MEASX and 02-61 -- 10 kB/s on a 115200 line that
+            # holds 11.5 before a single RAWX measurement.
+            wanted = {(c, m) for c, m, _n, _e in msgs}
+            ser.reset_input_buffer()
+            seen = {(c, m) for c, m, _ in collect(read_for(ser, 2.0))}
+            extra = sorted(k for k in seen - wanted if k[0] != 0x05)
+            for c, m in extra:
+                ser.write(cfg_msg(c, m, 0))
+                time.sleep(0.12)
+            if extra:
+                print("  silenced : " + ", ".join(f"{c:02x}-{m:02x}" for c, m in extra))
             ser.write(cfg_nav5_dynmodel(args.dynmodel))
             time.sleep(0.4)
             if not args.keep_nmea:
-                # Silence the standard NMEA set message by message. CFG-PRT
+                # Silence every NMEA output sentence message by message. CFG-PRT
                 # would do it with one frame by clearing the output protocol
                 # mask, but that frame also carries the baud rate, and getting
-                # it wrong takes the receiver off the wire mid-session.
-                for mid in range(0x00, 0x06):    # GGA GLL GSA GSV RMC VTG
+                # it wrong takes the receiver off the wire mid-session. Not just
+                # the standard six: the NEO-M8T here (2026-09-27) had been set up
+                # for timing with GRS, GST, ZDA, GBS, DTM, GNS and VLW on at every
+                # epoch, which at 10 Hz filled its 115200 line completely.
+                for mid in (0x00, 0x01, 0x02, 0x03, 0x04, 0x05,    # GGA GLL GSA GSV RMC VTG
+                            0x06, 0x07, 0x08, 0x09, 0x0A,          # GRS GST ZDA GBS DTM
+                            0x0D, 0x0E, 0x0F):                     # GNS THS VLW
                     ser.write(cfg_msg(0xF0, mid, 0))
                     time.sleep(0.12)
             acks = [(c, m) for c, m, _ in collect(read_for(ser, 1.5)) if c == 0x05]
             n_ack = sum(1 for c, m in acks if m == 0x01)
             n_nak = sum(1 for c, m in acks if m == 0x00)
             print(f"  CFG-MSG/NAV5: {n_ack} ACK, {n_nak} NAK")
+            if args.set_baud:
+                # CFG-PRT (0x06 0x00) for UART1: read it, change only the baud and make the
+                # output UBX-only, write it, then follow the receiver to the new rate. RAM
+                # only: a power cycle puts the port back where it was.
+                prt = poll(ser, CLS_CFG, 0x00, bytes([1]))
+                if prt is None or len(prt) < 20:
+                    print("  !! no CFG-PRT answer; baud left alone")
+                    return 1
+                prt = bytearray(prt[:20])
+                struct.pack_into("<I", prt, 8, args.set_baud)
+                struct.pack_into("<H", prt, 14, 0x0001)
+                ser.write(frame(CLS_CFG, 0x00, bytes(prt)))
+                ser.flush()
+                time.sleep(0.3)
+                ser.baudrate = args.set_baud
+                time.sleep(0.5)
+                print(f"  baud     : UART1 -> {args.set_baud} (RAM), UBX output only")
             ser.reset_input_buffer()
             raw = bytes(read_for(ser, 3.0))
-            n_ubx = len(collect(bytearray(raw)))
+            frames = collect(bytearray(raw))
+            n_ubx = len(frames)
             print(f"  stream   : {len(raw)} B in 3 s -- {n_ubx} UBX frames, "
                   f"{raw.count(b'$G')} NMEA sentences")
+            # no VALGET on a legacy part: the rates actually arriving are the check
+            rate = {name: sum(1 for c, m, _ in frames if (c, m) == (cls, mid)) / 3.0
+                    for cls, mid, name, _every in msgs}
+            print("  rates    : " + ", ".join(f"{k} {v:.1f}/s" for k, v in rate.items()))
             if n_ubx == 0:
-                print("  !! no UBX on the wire; NAV-PVT/NAV-SAT did not take")
+                print("  !! no UBX on the wire; NAV-PVT/NAV-SAT did not take"
+                      + (" (or the port did not follow the baud change)" if args.set_baud else ""))
                 return 1
-            # NMEA is left on deliberately: an M8T carries both without trouble
-            # at 9600, and the shared demuxer reads either.
             return 0
 
         # --- what mode did we find it in? -----------------------------------
@@ -343,13 +471,29 @@ def main() -> int:
         OUT = "CFG-USBOUTPROT" if iface == "usb" else "CFG-UART1OUTPROT"
         print(f"  iface    : {P}"
               f"{'  (auto-detected)' if args.iface == 'auto' else ''}")
+        # With --raw, RAWX carries every satellite's C/N0 each epoch, so NAV-SAT (the
+        # biggest message) drops to about once a second -- enough for the runners'
+        # preflight and status line.
+        sat_every = max(1, int(round(args.rate_hz))) if args.raw else 1
         items = [
             (KEYS[f"{OUT}-UBX"], 1),
             (KEYS[f"CFG-MSGOUT-UBX_NAV_PVT_{P}"], 1),
-            (KEYS[f"CFG-MSGOUT-UBX_NAV_SAT_{P}"], 1),
+            (KEYS[f"CFG-MSGOUT-UBX_NAV_SAT_{P}"], sat_every),
             (KEYS["CFG-NAVSPG-DYNMODEL"], args.dynmodel),
             (KEYS["CFG-RATE-MEAS"], int(round(1000.0 / args.rate_hz))),
         ]
+        if args.raw:
+            items += [(KEYS[f"CFG-MSGOUT-UBX_RXM_RAWX_{P}"], 1),
+                      (KEYS[f"CFG-MSGOUT-UBX_RXM_SFRBX_{P}"], 1)]
+        if args.mon_comms:
+            items.append((KEYS[f"CFG-MSGOUT-UBX_MON_COMMS_{P}"], max(1, int(round(args.rate_hz)))))
+        if args.gps_only:
+            # GPS L2C stays on: the F9P (HPG 1.13) NAKs CFG-SIGNAL-GPS_L2C_ENA = 0. The
+            # simulator sends no L2, so it only searches there.
+            items += [(KEYS["CFG-SIGNAL-GPS_ENA"], 1), (KEYS["CFG-SIGNAL-GPS_L1CA_ENA"], 1),
+                      (KEYS["CFG-SIGNAL-GLO_ENA"], 0), (KEYS["CFG-SIGNAL-GAL_ENA"], 0),
+                      (KEYS["CFG-SIGNAL-BDS_ENA"], 0), (KEYS["CFG-SIGNAL-QZSS_ENA"], 0),
+                      (KEYS["CFG-SIGNAL-SBAS_ENA"], 0)]
         if not args.keep_nmea:
             items.append((KEYS[f"{OUT}-NMEA"], 0))
 
@@ -406,13 +550,17 @@ def main() -> int:
                   "what counts)")
 
         # --- verify by reading it back --------------------------------------
-        ser.reset_input_buffer()
-        ser.write(valget([k for k, _ in items]))
-        buf = read_for(ser, 1.5)
+        # Retried like MON-VER: at a 20 Hz output rate the receiver drops polls.
         got = {}
-        for cls, mid, pl in collect(buf):
-            if cls == CLS_CFG and mid == MSG_VALGET:
-                got.update(parse_valget(pl))
+        for _attempt in range(3):
+            ser.reset_input_buffer()
+            ser.write(valget([k for k, _ in items]))
+            buf = read_for(ser, 1.5)
+            for cls, mid, pl in collect(buf):
+                if cls == CLS_CFG and mid == MSG_VALGET:
+                    got.update(parse_valget(pl))
+            if got:
+                break
         names = {v: k for k, v in KEYS.items()}
         bad = 0
         for key, want in items:
