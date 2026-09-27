@@ -1444,12 +1444,13 @@ two kinds apart from the rows, so the numbers below hold with either.
 - **The pseudoranges carry the receiver's smoothing.** 5-7 m RMS on the pad and in the boost,
   10-13 m in the coast and descent, where the two highest satellites drift to -20 to -30 m. About
   40 % of it follows the low-passed range acceleration, the signature of smoothing the code with a
-  late carrier. Every (re)lock starts 30-40 m off and decays over 10-20 s. That part is the rig,
-  not the receiver: a carrier-smoothed pseudorange restarts at the raw code while settled channels
-  sit the rig's 4.19 m/s carrier-vs-code split times the smoothing time below it, and the real sky
-  shows no such offset (PR #1534). On the spaceshot the two highest satellites drop and re-lock
-  again and again through the coast and descent. In power
-  save every channel re-syncs every ~12 s and the pad alone is 33 m RMS.
+  late carrier. Every (re)lock starts high -- +7 to +15 m at the median, 30-45 m in a fifth to a
+  third of them -- and decays over 10-20 s. That part is the rig, not the receiver: a
+  carrier-smoothed pseudorange restarts at the raw code while settled channels sit the rig's
+  4.19 m/s carrier-vs-code split times the smoothing time below it, and the real sky shows no such
+  offset (PR #1534). On the spaceshot the two highest satellites drop and re-lock again and again
+  through the coast and descent. In power save every channel re-syncs every ~12 s and the pad
+  alone is 33 m RMS.
 - **The rig's carrier runs 4.2 m/s off its code clock**: the clock rate the Doppler reports minus
   the rate at which the pseudoranges' clock bias moves. One oscillator drives both in a receiver
   (0.22 m/s on the real sky); here the HackRF shifts the carrier alone, and a filter state takes it.

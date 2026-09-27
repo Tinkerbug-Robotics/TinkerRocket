@@ -26,12 +26,14 @@ Modes (--mode, repeatable):
 The PX1105R's Doppler is the range rate ~0.22 s before its time tag (power
 normal; 0.05-0.2 s in power save) while its pseudorange is on time: --rr-lag.
 Its pseudoranges are receiver-smoothed, wander ~2x the still-antenna fit in
-flight (--pr-corr-scale) and start 30-40 m off after every (re)lock
-(--relock-sigma) -- on this rig only: a carrier-smoothed pseudorange restarts at
-the raw code while settled channels sit the rig's 4.19 m/s carrier-vs-code split
-times the smoothing time below it, and on the real sky there is no such offset. The IMU modes mirror the flight filter's mechanization unless
-told otherwise: --gravity wgs84 --earth-rate --no-att-gate is the one a
-flight to 80 km wants (see the results README, 2026-09-27).
+flight (--pr-corr-scale) and start high after every (re)lock, +7 to +15 m at
+the median and 30-45 m in a fifth to a third of them (--relock-sigma). That is
+this rig only: a carrier-smoothed pseudorange restarts at the raw code while
+settled channels sit the rig's 4.19 m/s carrier-vs-code split times the
+smoothing time below it, and on the real sky there is no such offset. The IMU
+modes mirror the flight filter's mechanization unless told otherwise: --gravity
+wgs84 --earth-rate --no-att-gate is the one a flight to 80 km wants (see the
+results README, 2026-09-27).
 
 Truth. gps-sdr-sim takes one motion row per 0.1 s: the code phase runs linearly
 between rows, and the smooth-carrier build sweeps the carrier between block-edge
@@ -219,8 +221,9 @@ def load_capture(path, systems="G"):
 
 class RelockAge:
     """Seconds since each satellite last (re)appeared in the raw output: the
-    PX1105R's smoothed pseudorange starts 20-40 m off after a (re)lock and
-    decays over ~10-20 s (COCOM rig, 2026-09-27). That offset is the rig's
+    PX1105R's smoothed pseudorange starts high after a (re)lock (+7 to +15 m at
+    the median, up to 30-45 m) and decays over ~10-20 s (COCOM rig,
+    2026-09-27). That offset is the rig's
     4.19 m/s carrier-vs-code split times the receiver's smoothing time; the real
     sky shows none."""
 
