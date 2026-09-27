@@ -923,9 +923,9 @@ Tools (this directory): `px1105r_run.py` (cold start, set nav mode, transmit, lo
 idle the radio), `nav_mode.py` (0x64/0x17), `skytraq_raw.py` (kinematic-base + 0xE5,
 vendored from PR #1523), `px_limits.py` (raw + own-fix vs the injected limits),
 `px_validity.py` (per-satellite pseudorange/Doppler residuals against the truth).
-The tightly-coupled/GNSS-only filter driver `tc_ekf_slr.py` lives on PR #1523 with
-the EKF it uses. Captures: `results/px1105r_*` (gzip; the exploratory gain/level
-probes stayed local).
+The tightly-coupled/GNSS-only filter driver is `tinkerrocket-sim/scripts/tc_ekf_slr.py`
+(committed 2026-09-27; the EKF it uses came in with PR #1523). Captures:
+`results/px1105r_*` (gzip; the exploratory gain/level probes stayed local).
 
 
 ### Restarting after burnout, and the elevation mask (2026-09-26)
@@ -1099,7 +1099,7 @@ raw measurements never stop:
 |---|---|---|
 | 631.5-710.1 | speed over ~515 m/s | 11 / 13 / 13 |
 | 740.4-786.6 | above 80 km | 6 / 9 / 13 |
-| 818.5-875.5 | speed over ~515 m/s | 6 / 9 / 13 |
+| 818.5-875.5 | speed over ~515 m/s | 7 / 9 / 13 |
 
 Outside those windows it holds a fix from ignition to the end of the file, apart from 0.3 s at
 605.8 s just after ignition and 0.1 s at 881.1 s. On the descent, 900-1260 s, the median is
@@ -1115,6 +1115,61 @@ PX1125R stock run -- and they do not explain the collapses: the runs with 30 col
 Tools: `skytraq_collapses.py T0 T1 CAP...`; `px_restart_compare.py` now titles each row with only
 the settings that differ between rows (shared ones go in the figure title) and labels captures
 made before `--power-mode` existed as factory power save. Captures: `results/px1105r_*_pmnormal*`.
+
+### Data for filter work (2026-09-27)
+
+Everything a tracking-filter study needs from this rig is committed here or regenerates exactly.
+
+**Captures** (`results/*.log.gz`): one line per message, `<host s> B <hex>` for SkyTraq
+binary (message id first) or `<host s> U <hex>` for UBX, plus `#` comments. The first line
+is the runner's `# host:` header with the settings.
+
+| Receiver | What it logs | Runs to start from |
+|---|---|---|
+| PX1105R | 0xE5 raw at 20 Hz, 0xE0 subframes, 0xDF own fix, 0xE7 channels | gentle: `px1105r_gentle_alt_pad600_smooth_gain3_nav9_el3_pmnormal_run2` (the reference); spaceshot: `px1105r_spaceshot_pad600_smooth_gain3_nav9_el3_{run1,run2,pmnormal,hot612}`; nav-mode sweep: `px1105r_gentle_alt_pad360_smooth_gain3_nav{1,4,5,7,9}` |
+| PX1125R | the same set; raw passes both gates | `px1125r_spaceshot_pad600_smooth_gain2_nav9_el3_pmnormal_flight`, `px1125r_spaceshot_pad600_stock_gain2_nav9_el3` |
+| NEO-M8T | UBX RXM-RAWX (~1 Hz) + RXM-SFRBX; RAWX flowed while NAV-PVT was withheld | `neo_m8t_gentle_alt`, `neo_m8t_spaceshot`, `neo_m8t_t2_altramp` |
+| LC86G | fix level (NMEA, PQTM) | `lc86g_{normal,balloon,drone}_{gentle_alt,spaceshot}`, the `lc86g_20260926_*` boost series, `lc86g_sky_20260925` (real sky) |
+
+**Truth.** `scenarios/` is gitignored, but the flights regenerate byte for byte:
+`./make_flights.py --lat 0 --lon -119 --only spaceshot --only gentle_alt`, then
+`./pad_scenario.py NAME PAD [END]` for the padded CSVs. The JSONs (10 Hz truth, `blocked_windows`,
+`start_time`) are already committed as `results/<receiver>_spaceshot.scenario.json` and
+`results/<receiver>_gentle_alt.scenario.json`: every copy is identical, e.g. `neo_m8t_*`. The
+`_v2`, `_eq` and `_horizon` ones are older flights.
+
+**Clocks.** Every IQ file here starts at 2026/08/18 08:30:00 GPS, TOW 203400 (checked on five
+captures). So file time = the receiver's TOW - 203400, and ignition is at 600 s (pad600), 360 s
+(pad360) or 180 s (no pad). Scenario time is file time - (pad - 180). Host timestamps lag file
+time by the header's "TX launched" delay plus ~1.4 s of HackRF start latency; `px_limits.py` and
+`px_restart_compare.py` align by the median host - TOW offset instead. `tc_ekf_capture.py` takes
+`--tow0 203400 + (pad - 180)`; `tc_ekf_slr.py` takes `--tow0 203400 --pad-shift <pad - 180>`.
+
+**Filter code** (tinkerrocket-sim, from PR #1523 on main):
+- `estimation/tc_ekf.py`: `TcEkf`, with `update_gnss_raw`, `update_carrier` and `propagate_kinematic`.
+- `estimation/gnss_raw.py`: `read_capture` builds the ephemeris from the capture's own
+  subframes, so no RINEX file is needed.
+- `scripts/tc_ekf_capture.py`: GNSS-only, scored against a scenario. It **skips every epoch
+  inside `blocked_windows`**, which throws away the raw measurements that flow through the gate.
+  Drop that skip to track through the windows.
+- `scripts/tc_ekf_slr.py`: tightly coupled with a synthesized IMU and baro, or `--gnss-only`. Its
+  scoring phases are hard-coded for gentle_alt on the 360 s pad.
+
+**Caveats:**
+- Gentle run 1 (`..._pmnormal`, no `_run2`) is void after 373 s: the HackRF underrun.
+- PX1105R captures without `pmnormal` ran factory power save, with ~1 s fix dropouts every
+  11-13 s on the pad; raw keeps flowing.
+- Captures without `_el3` ran the factory 15 degree mask, 9 of 14 satellites.
+- Measurements are 0xE5; 0xE7 channel lock is not a measurement.
+- The simulated sky is GPS L1 C/A only, noiseless, ~37-40 dB-Hz at +3 dB. The vertical geometry
+  is weak: GNSS-only vertical errors were 75-285 m in the study above.
+- On the 13.5 g spaceshot the PX1105R's raw output stops at ignition and returns 20-80 s later,
+  varying run to run. The gentle flight never loses raw.
+- No capture has an IMU. `tc_ekf_slr.py` synthesizes one from truth.
+
+**Left local on purpose:** the IQ files (`c8/`, rebuilt from `build_scenarios.sh` with the
+patch scripts here), the ephemeris downloads (`BRDC_2026230`, from CDDIS), the exploratory
+PX1105R probes, and the 137 MB overnight LC86G sky log.
 
 ## Experiments still owed on the first four receivers
 
