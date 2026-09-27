@@ -169,8 +169,27 @@ A 15-state error-state EKF fuses IMU, barometer, magnetometer, and GNSS. The IMU
 converted from the sensor library's FLU convention (X forward, Y left, Z up) to the
 filter's FRD (X forward, Y right, Z down) on the way in.
 
-Two gates are worth knowing:
+Three gates are worth knowing:
 
+- **The GNSS vertical is held out of the filter from launch until it qualifies**
+  (`GnssAscentGate.h`). The receiver runs its own navigation filter, and under boost that
+  filter lags or collapses in the vertical while still flagging its fixes valid. On the
+  historical flights every boost put the vertical velocity 5–25 m/s behind the IMU, most
+  left the altitude 10–50 m low through the coast, and three low-satellite, high-g flights
+  reported a frozen or reversed climb and altitudes 70–380 m off, at 1–2 m reported
+  accuracy. So from launch the filter's vertical flies on IMU and barometer; GNSS altitude
+  and vertical velocity are admitted, once, after burnout, when the altitude has agreed
+  with the barometer for a second — within 15 m or 10 % of the height, whichever is
+  larger (the 10 % is the barometer's own ISA error on a hot or cold day), after removing
+  the GNSS-minus-baro offset learned on the pad. **Horizontal GNSS keeps flowing**: the
+  corruption measured is vertical, and with the IMU alone the horizontal velocity drifted
+  a median 14 m/s by admission. When the barometer cannot vouch — stale, outside
+  25–125 kPa, or in the transonic lockout — the filter does not fuse it either, and GNSS
+  is judged against the filter's own IMU-carried altitude instead. A barometer that stays
+  flat after burnout while GNSS climbs is judged stuck (a sealed port): it stops being
+  fused and GNSS is admitted at once. Until admission GNSS also has **no apogee vote**.
+  The state rides the flight snapshot (`gnss_admission`), so the log shows when and why
+  the GNSS vertical came back.
 - **GNSS acceptance** requires a 3D fix, a minimum satellite count, a horizontal-accuracy
   bound, and a genuinely new fix timestamp. Initialization applies tighter accuracy plus
   a low-velocity check, since the filter's init assumes a stationary pad.

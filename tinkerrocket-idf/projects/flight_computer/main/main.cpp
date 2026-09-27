@@ -20,6 +20,7 @@
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
+#include <GnssAscentGate.h>    // GNSS held out of the EKF + apogee vote until it qualifies after burnout
 #include <landing_transition_policy.h> // #1137 items 7-8: the LANDED dwell and bounded gyro veto
 #include <sensor_staleness_policy.h> // #1137 items 10/12: debounced scorecard staleness
 #include <GroundRefFreeze.h>   // #1108: hold the ground datum while the vehicle is moving
@@ -484,6 +485,14 @@ static OrientationEstimator orient_estimator;
 static ThrustAxisCheck      orient_thrust_check;
 static bool                 orient_thrust_mismatch = false;
 static float ground_pressure_pa = 101325.0f;
+// #257 barometer plausibility window.  BMP585/581 are specified 30-125 kPa;
+// the 25 kPa floor is margin below spec (~10.4 km ISA).  One definition for
+// the health test, the operator scorecard and the EKF's baro fusion.  NaN/Inf
+// compare false, so they are out of range too.
+static inline bool baroPressureInRange(float pa)
+{
+    return pa > 25000.0f && pa < 125000.0f;
+}
 static float pressure_alt_m = 0.0f;
 static float pressure_alt_rate_mps = 0.0f;
 // #834 item 4: pressure_alt_m/_rate come from a KF that FREE-RUNS at a
@@ -495,6 +504,15 @@ static float pressure_alt_rate_mps = 0.0f;
 static MainDeployGate::State  main_deploy_state;
 static MainDeployGate::Inputs main_deploy_in;
 static MainDeployGate::Source main_deploy_last_src = MainDeployGate::Source::None;
+// GnssAscentGate (owner's rule 2026-09-26): the receiver's own filter lags or
+// collapses in the vertical under boost while still flagging its fixes valid,
+// so from launch its altitude and vertical velocity are held out of the EKF,
+// and GNSS out of the apogee vote, until after burnout its altitude has agreed
+// with the barometer for a second (full rationale and the flight numbers in
+// GnssAscentGate.h).  Stepped in the kinematics block, where baro_healthy is
+// in scope; the EKF block reads it on the next pass, which can only delay an
+// admission by one tick, never advance it.
+static GnssAscentGate::State gnss_admit_state;
 static float max_alt_m = 0.0f;
 static float max_speed_mps = 0.0f;
 static GpsInsEKF ekf;
@@ -906,6 +924,9 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     // already false, FC still INFLIGHT) cannot stamp a real-flight snapshot.
     snap.sim_flight   = sim_flight::simulated(sim_flight_latched,
                                               sensor_collector.isSimActive()) ? 1 : 0;
+    // Whether GNSS is feeding the EKF yet, and why: logged at 10 Hz, and a
+    // mid-flight reboot keeps an admission rather than re-qualifying.
+    snap.gnss_admission = GnssAscentGate::encode(gnss_admit_state);
 
     snap.flight_elapsed_ms  = now_ms - launch_time_millis;
     snap.apogee_elapsed_ms  = pyro_apogee_detected
@@ -5382,6 +5403,15 @@ static void setup_fc()
             // never had. Without this the first post-reboot tick can fire.
             MainDeployGate::reset(main_deploy_state, now_ms, /*after_reboot=*/true);
 
+            // GNSS keeps an admission it had earned before the reboot; anything
+            // else (held out, or a snapshot that predates the byte) qualifies
+            // again after burnout, which was restored just above.
+            GnssAscentGate::restore(gnss_admit_state, snap.gnss_admission, now_ms);
+            ESP_LOGW(TAG, "[RECOVERY] GNSS %s",
+                     GnssAscentGate::gnssVerticalToEkf(gnss_admit_state)
+                         ? "vertical was admitted before the reboot: stays in the EKF"
+                         : "vertical held out of the EKF and the apogee vote until it qualifies");
+
             ESP_LOGW(TAG, "[RECOVERY] Pyro: apogee=%d fired=[%d,%d,%d,%d]",
                      pyro_apogee_detected,
                      snap.pyro1_fired, snap.pyro2_fired,
@@ -5698,6 +5728,7 @@ static void resetFlightStateForSim(const char* edge)
     ref_pos_count = 0;
     ref_pos_first_time_ms = 0;
     ekf_gnss_feed.reset();
+    GnssAscentGate::reset(gnss_admit_state);   // back on the pad: GNSS flows, pad offset relearned
     gnss_started = false;
     have_gnss_si = false;
     // #557: a sim injects synthetic GNSS, so re-evaluate the degraded path from
@@ -5811,6 +5842,15 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // re-acquire dwell opens no window the legacy predicate did not have.
     MainDeployGate::reset(main_deploy_state, now_ms, /*after_reboot=*/false);
     main_deploy_last_src = MainDeployGate::Source::None;
+    // GnssAscentGate: from here the receiver's altitude and vertical velocity
+    // are held out of the EKF, and GNSS out of the apogee vote, until it
+    // qualifies after burnout.  The GNSS-minus-baro pad offset it will be
+    // judged against is frozen now.
+    GnssAscentGate::onLaunch(gnss_admit_state, now_ms);
+    ESP_LOGI(TAG, "[GNSS] Vertical held out of the EKF and the apogee vote until it "
+                  "agrees with the barometer after burnout (pad offset %+.1f m%s)",
+             (double)gnss_admit_state.pad_offset_m,
+             gnss_admit_state.pad_offset_valid ? "" : ", not learned");
     // Orientation is now latched (estimator only runs in
     // READY/PRELAUNCH).  Start the boost-phase thrust-axis
     // cross-check on what was latched.
@@ -6597,6 +6637,9 @@ static void loop_fc()
 
             // ── Build EKF input: GNSS in LLA + NED ──
             // Layered quality gating:
+            //   Ascent: GnssAscentGate holds the receiver's ALTITUDE and VERTICAL
+            //           VELOCITY out from launch until it qualifies after burnout
+            //           (ekf.setGnssVerticalHeldOut below); horizontal flows
             //   Gate 1: fix >= 3, sats >= MIN, h_acc < MAX, and a newly arrived fix
             //   Gate 3: init requires h_acc < INIT_MAX and vel < INIT_MAX_VEL
             // Gate 2 (chi-squared innovation test) lives inside EKF::measUpdate.
@@ -6867,6 +6910,14 @@ static void loop_fc()
                 // ends at apogee (canopy from here on). The filter cannot see
                 // that; this can.
                 ekf.setNoseFirstFlight(!post_apogee);
+                // GnssAscentGate: from launch until the receiver qualifies after
+                // burnout, its altitude and vertical velocity are not fused —
+                // its own filter lags or collapses in the vertical under boost
+                // while flagging its fixes valid (GnssAscentGate.h has the
+                // flights).  Its horizontal solution keeps feeding the filter:
+                // with the IMU alone that drifted a median 14 m/s by admission.
+                ekf.setGnssVerticalHeldOut(
+                    !GnssAscentGate::gnssVerticalToEkf(gnss_admit_state));
                 ekf.update(use_ahrs_acc, ekf_imu, ekf_gnss, ekf_mag);
                 // #1418: once the landing detector has called it, the rocket
                 // is a measurement of zero velocity.  Soft and rate-limited
@@ -6928,11 +6979,20 @@ static void loop_fc()
                         baro_locked = mach_locked_out;
                     }
 
+                    // GnssAscentGate: nor does the EKF fuse a barometer that
+                    // cannot vouch for itself — outside 25-125 kPa (#257), or
+                    // judged stuck on the climb (fresh, in range and flat while
+                    // GNSS climbs: a sealed port).  While GNSS is held out that
+                    // leaves the filter's altitude on the IMU, which is the
+                    // reference the gate then judges GNSS against.
+                    const bool baro_unfusable = !GnssAscentGate::baroFusable(
+                        gnss_admit_state, baroPressureInRange(bmp_latest_si.pressure));
+
                     static BaroGatePolicy baro_gate;
                     const BaroGatePolicy::Decision gate =
                         baro_gate.evaluate(bmp_latest_si.time_us,
                                            pressure_altitude_m,
-                                           baro_locked,
+                                           baro_locked || baro_unfusable,
                                            config::BARO_SPIKE_THRESH_M,
                                            config::BARO_SPIKE_RATE_MPS,
                                            config::BARO_FUSE_MIN_INTERVAL_US);
@@ -9434,8 +9494,7 @@ static void loop_fc()
             constexpr uint32_t BARO_STALE_TIMEOUT_US = 500000u;  // 0.5 s -> dead
             const bool baro_healthy =
                 have_bmp_si &&
-                bmp_latest_si.pressure > 25000.0f &&   // BMP585 valid 30-125 kPa;
-                bmp_latest_si.pressure < 125000.0f &&  // 25 kPa floor = margin below spec
+                baroPressureInRange(bmp_latest_si.pressure) &&  // 25-125 kPa (#257)
                 (uint32_t)(time_us() - bmp_latest_si.time_us) < BARO_STALE_TIMEOUT_US;
             const bool ekf_healthy = ekf_initialized && ekf.isHealthy();
 
@@ -9460,6 +9519,80 @@ static void loop_fc()
             const bool ism6_fresh_kc = have_ism6_si &&
                 (uint32_t)(time_us() - ism6_latest_si.time_us) < IMU_STALE_TIMEOUT_US;
 
+            // GnssAscentGate: has GNSS qualified yet?  Decided here, before the
+            // apogee vote below reads it.  Inputs: the receiver's latest record
+            // (whatever the EKF does with it), the barometer this block just
+            // judged, and the filter's own altitude above the same datum.
+            {
+                constexpr uint32_t GNSS_ADMIT_STALE_US = 2000000u;  // as the deploy backstop
+                GnssAscentGate::Inputs ga;
+                ga.now_ms         = now_ms;
+                ga.in_flight      = (rocket_state == INFLIGHT);
+                ga.burnout        = burnout_detected;
+                ga.apogee         = kinematics.apogee_flag || pyro_apogee_detected;
+                ga.gnss_fix_ok    = have_gnss_si &&
+                                    gnss_latest_si.fix_mode >= 3U &&
+                                    gnss_latest_si.num_sats >= config::GNSS_MIN_SATS &&
+                                    (uint32_t)(time_us() - gnss_latest_si.time_us) <
+                                        GNSS_ADMIT_STALE_US;
+                // The receiver's own fix time names a fix (the loop re-reads the
+                // same one ~25 times, as EkfGnssFeed keys on); +1 keeps 0 = none.
+                ga.gnss_fix_id    = ((uint32_t)gnss_latest_si.minute * 60u +
+                                     gnss_latest_si.second) * 1000u +
+                                    gnss_latest_si.milli_second + 1u;
+                ga.gnss_agl_m     = (float)(gnss_latest_si.alt - ref_alt_m);
+                ga.gnss_vel_u_mps = (float)gnss_latest_si.vel_u;
+                ga.baro_healthy   = baro_healthy;
+                ga.baro_locked    = mach_locked_out;
+                ga.baro_agl_m     = pressure_altitude_m;
+                ga.baro_rate_mps  = kinematics.d_alt_est_;
+                ga.ekf_valid      = ekf_healthy;
+                ga.ekf_agl_m      = imu_pos[2];
+
+                const GnssAscentGate::Phase was_phase = gnss_admit_state.phase;
+                const bool was_stuck = gnss_admit_state.baro_stuck;
+                GnssAscentGate::step(gnss_admit_state, ga);
+
+                const float t_flight_s = (float)(now_ms - launch_time_millis) * 1e-3f;
+                if (was_stuck != gnss_admit_state.baro_stuck)
+                {
+                    if (gnss_admit_state.baro_stuck)
+                        ESP_LOGW(TAG, "[BARO] Judged stuck at T+%.2f s: flat while GNSS "
+                                      "climbs at %.1f m/s — the EKF stops fusing it",
+                                 (double)t_flight_s, (double)ga.gnss_vel_u_mps);
+                    else
+                        ESP_LOGI(TAG, "[BARO] No longer judged stuck at T+%.2f s — "
+                                      "fused again", (double)t_flight_s);
+                }
+                if (was_phase != gnss_admit_state.phase &&
+                    gnss_admit_state.phase == GnssAscentGate::Phase::Admitted)
+                {
+                    switch (gnss_admit_state.reason)
+                    {
+                        case GnssAscentGate::Reason::BaroStuck:
+                            ESP_LOGW(TAG, "[GNSS] Vertical admitted to the EKF at T+%.2f s: "
+                                          "the barometer is stuck, GNSS is the reference",
+                                     (double)t_flight_s);
+                            break;
+                        case GnssAscentGate::Reason::FilterAgreed:
+                            ESP_LOGI(TAG, "[GNSS] Vertical admitted to the EKF at T+%.2f s: "
+                                          "agreed with the filter's own altitude for 1 s "
+                                          "(%+.1f m, band %.1f m; barometer could not vouch)",
+                                     (double)t_flight_s,
+                                     (double)gnss_admit_state.admitted_diff_m,
+                                     (double)gnss_admit_state.admitted_band_m);
+                            break;
+                        default:
+                            ESP_LOGI(TAG, "[GNSS] Vertical admitted to the EKF at T+%.2f s: "
+                                          "agreed with the barometer for 1 s (%+.1f m, band %.1f m)",
+                                     (double)t_flight_s,
+                                     (double)gnss_admit_state.admitted_diff_m,
+                                     (double)gnss_admit_state.admitted_band_m);
+                            break;
+                    }
+                }
+            }
+
             kinematics.kinematicChecks(pressure_altitude_m,
                                        ism6_fresh_kc ? accel_norm : 0.0f,
                                        imu_pos,
@@ -9474,7 +9607,9 @@ static void loop_fc()
                                        (float)gnss_latest_si.vel_u,
                                        ekf_healthy,
                                        baro_healthy,
-                                       ism6_fresh_kc);   // #1108 imu_healthy
+                                       ism6_fresh_kc,    // #1108 imu_healthy
+                                       // GnssAscentGate: no apogee vote until admitted
+                                       GnssAscentGate::gnssVotes(gnss_admit_state));
 
             // #834 item 4: step the main-deploy gate here, where baro_healthy
             // is in scope.  servicePyroChannels() runs LATER in this same pass
@@ -10866,8 +11001,7 @@ static void loop_fc()
             if (have_bmp_si) {
                 const bool fresh = (uint32_t)(now_us_h - bmp_latest_si.time_us) < 500000u;
                 const bool stale = sensor_staleness::step(baro_stale_dbnc, fresh, now_ms);
-                const bool inrange = bmp_latest_si.pressure > 25000.0f &&
-                                     bmp_latest_si.pressure < 125000.0f;
+                const bool inrange = baroPressureInRange(bmp_latest_si.pressure);
                 baro_st = (inrange && !stale) ? SH_OK : SH_BAD;
             }
             sh = shSet(sh, SH_BARO_SHIFT, baro_st);

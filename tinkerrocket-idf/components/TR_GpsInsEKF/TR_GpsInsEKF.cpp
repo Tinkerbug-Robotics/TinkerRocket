@@ -1299,6 +1299,21 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
     for (int i=0;i<3;i++) { R_scaled[i][i]     = R_[i][i]     * pos_scale2;
                             R_scaled[i+3][i+3] = R_[i+3][i+3] * vel_scale; }
 
+    // GnssAscentGate: a held-out vertical carries no information.  A zero
+    // innovation and an effectively infinite variance on the two Down rows is
+    // the horizontal-only update in the limit: K's Down columns vanish, the
+    // horizontal gain is the 4-row optimum, and the one 6x6 path, Gate 2 below
+    // (whose vertical terms then read zero) and the Joseph form stay as they
+    // are.  1e12 is 6+ orders above any P the filter carries, and the pivoted
+    // inversion takes it without trouble.
+    if (gnssVerticalHeldOut_) {
+        static constexpr float HELD_OUT_VAR = 1e12f;
+        y[2] = 0.0f;
+        y[5] = 0.0f;
+        R_scaled[2][2] = HELD_OUT_VAR;
+        R_scaled[5][5] = HELD_OUT_VAR;
+    }
+
     // S = H * P * H^T + R_scaled.  H = [I6 | 0] (position rows read states
     // 0-2, velocity rows states 3-5), so H*P is just the first six ROWS of P
     // and H*P*H^T its top-left 6x6 block — no dense products needed.

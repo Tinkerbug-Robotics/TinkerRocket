@@ -30,6 +30,7 @@ try:
     from replay_kinematic_checks import (  # noqa: E402
         estimate_ground_pressure,
         build_events,
+        gnss_may_vote_from,
         logged_flag_times,
         pressure_to_altitude_firmware,
         BARO_MACH_LOCKOUT_ON,
@@ -100,6 +101,7 @@ def _replay(records):
     latest_pitch_rad = math.pi / 2
     burnout = False
     mach_locked_out = False
+    gnss_may_vote = True   # GnssAscentGate; logs without the byte vote as before
     new_baro = False
     new_gps = False
     gvu_t: list[float] = []   # GNSS Doppler vert-velocity (for true-apogee xing)
@@ -147,6 +149,10 @@ def _replay(records):
             elif mach_locked_out and speed < BARO_MACH_LOCKOUT_OFF:
                 mach_locked_out = False
             continue
+        if kind == "snap":
+            # GnssAscentGate: GNSS votes only once the firmware admitted it.
+            gnss_may_vote = gnss_may_vote_from(r)
+            continue
 
         # imu tick — drives kc.kinematic_checks()
         latest_acc_mag = firmware_accel_norm(r)
@@ -167,6 +173,7 @@ def _replay(records):
             burnout_detected=burnout,
             baro_locked_out=mach_locked_out,
             now_ms=now_ms,
+            gnss_may_vote=gnss_may_vote,
         )
         if kc._consec_baro_rejects > prev_rejects:
             baro_reject_t.append(now_s)

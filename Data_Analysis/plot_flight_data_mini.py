@@ -306,6 +306,17 @@ FMT_LOG_BUFFER_STATS = '<I IIIIII'
 FMT_SNAPSHOT = ('<I BBBB III BBBBB BBB f ddd BBBB 3d 3f 4f 3f 3f 15f I 3f 4h I')
 SNAPSHOT_LEN = 224
 SNAPSHOT_MAGIC = 0xF1A75A7E
+# FlightSnapshotData.gnss_admission low nibble (GnssAscentGate.h): whether GNSS
+# altitude + vertical velocity were feeding the EKF (and GNSS the apogee vote)
+# at this snapshot and, once admitted, on what evidence.  Horizontal GNSS is
+# always fused.
+SNAPSHOT_GNSS_ADMISSION = {
+    1: "pad",
+    2: "held_out",
+    3: "admitted_baro_agreed",
+    4: "admitted_filter_agreed",
+    5: "admitted_baro_stuck",
+}
 # The EKF's 15 error states, in P_diag order (TR_GpsInsEKF.cpp:96-108): position,
 # velocity, attitude, accel bias, gyro bias — three each.  Named here so the
 # covariance diagonal arrives as fifteen meaningful channels rather than p[0..14].
@@ -1000,6 +1011,10 @@ def parse_binary_file(filepath):
                         ekf_pitch = math.degrees(f[57])
                         ekf_yaw   = math.degrees(f[58])
                         snap_max_alt_m = snap_max_speed_mps = None
+                    # GnssAscentGate (reclaimed from pad, no version bump): 0 is
+                    # every older writer's padding and means "not recorded" —
+                    # None, not "held out".  See SNAPSHOT_GNSS_ADMISSION below.
+                    gnss_code = f[4]
                     records["Snapshot"].append({
                         # ekf_t_prev_us, the EKF's last time-update stamp. Verified
                         # against this log's NonSensor span: same micros() origin as
@@ -1010,6 +1025,9 @@ def parse_binary_file(filepath):
                         "version":              version,
                         "rocket_state":         f[2],
                         "sim_flight":           sim_flight,
+                        "gnss_admission":       (SNAPSHOT_GNSS_ADMISSION.get(gnss_code & 0x0F, "unknown")
+                                                 if gnss_code else None),
+                        "gnss_baro_stuck":      (bool(gnss_code & 0x80) if gnss_code else None),
                         "flight_elapsed_ms":    f[5],
                         "apogee_elapsed_ms":    f[6],
                         "burnout_elapsed_ms":   f[7],

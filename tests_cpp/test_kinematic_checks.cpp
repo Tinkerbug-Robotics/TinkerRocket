@@ -35,12 +35,12 @@ protected:
                     float gps_alt = 0.0f, bool new_gps = false,
                     float pitch_rad = 1.57f, bool burnout = false, bool baro_lockout = false,
                     float gps_vel_u = 0.0f, bool ekf_healthy = true, bool baro_healthy = true,
-                    bool imu_healthy = true) {
+                    bool imu_healthy = true, bool gnss_may_vote = true) {
         float pos[3] = {0, 0, alt};
         float vel[3] = {0, 0, vel_u};
         kc.kinematicChecks(alt, acc_mag, pos, vel, roll_rate, true, gps_alt, new_gps,
                            pitch_rad, burnout, baro_lockout, gps_vel_u, ekf_healthy, baro_healthy,
-                           imu_healthy);
+                           imu_healthy, gnss_may_vote);
     }
 };
 
@@ -638,6 +638,55 @@ TEST_F(KinematicChecksTest, Apogee_MachLockout_OneEKFFault_NoGPS_DoesNotFire) {
     }
     EXPECT_TRUE(kc.pitch_apogee_flag);
     EXPECT_FALSE(kc.apogee_flag) << "without GPS, lockout+vel-fault leaves 1-of-2 — no fire";
+}
+
+// GnssAscentGate: until GNSS is admitted it is not a voter.  Same lockout +
+// faulted-velocity scenario as the #262 rescue above, where GPS + pitch carry
+// it — here GPS is held out, so it must not.  Rolly Polly III's receiver read
+// -38 m/s while the rocket climbed at 60, 1-2 s after burnout (#242).
+TEST_F(KinematicChecksTest, Apogee_GnssNotAdmitted_DoesNotVote) {
+    for (int i = 0; i < 80; i++) {           // launch
+        setMockMillis(i * 2);
+        callFlight(0.5f * i, 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callFlight(/*alt*/100.0f, 5.0f, /*vel_u*/+5.0f, 0.0f, /*gps_alt*/100.0f,
+                   /*new_gps*/true, /*pitch*/-0.5f, /*burnout*/true,
+                   /*baro_lockout*/true, /*gps_vel_u*/-10.0f, true, true, true,
+                   /*gnss_may_vote*/false);
+    }
+    EXPECT_FALSE(kc.gps_apogee_flag) << "a held-out receiver must not even accumulate";
+    EXPECT_TRUE(kc.pitch_apogee_flag);
+    EXPECT_FALSE(kc.apogee_flag) << "held-out GNSS must not make pitch a 2-of-2";
+}
+
+// ...and its history does not vote the moment it is admitted: the counter was
+// held at zero, so it has to earn GPS_APOGEE_COUNT_HI (4) descending fixes.
+TEST_F(KinematicChecksTest, Apogee_GnssAdmission_StartsFromZero) {
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(0.5f * i, 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    uint32_t t = 200;
+    for (int i = 0; i < 40; i++, t += 2) {   // held out, descending fixes
+        setMockMillis(t);
+        callFlight(100.0f, 5.0f, +5.0f, 0.0f, 100.0f, true, 1.0f, true, false,
+                   -10.0f, true, true, true, /*gnss_may_vote*/false);
+    }
+    ASSERT_FALSE(kc.gps_apogee_flag);
+    for (int i = 0; i < 3; i++, t += 2) {    // admitted: three fixes are not enough
+        setMockMillis(t);
+        callFlight(100.0f, 5.0f, +5.0f, 0.0f, 100.0f, true, 1.0f, true, false,
+                   -10.0f, true, true, true, /*gnss_may_vote*/true);
+    }
+    EXPECT_FALSE(kc.gps_apogee_flag);
+    setMockMillis(t);
+    callFlight(100.0f, 5.0f, +5.0f, 0.0f, 100.0f, true, 1.0f, true, false,
+               -10.0f, true, true, true, /*gnss_may_vote*/true);
+    EXPECT_TRUE(kc.gps_apogee_flag) << "the fourth descending fix after admission";
 }
 
 // #262 freshness gate: a GPS apogee flag latched from earlier fixes must NOT

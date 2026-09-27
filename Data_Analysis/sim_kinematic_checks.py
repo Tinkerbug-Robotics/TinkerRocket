@@ -232,7 +232,12 @@ class KinematicChecks:
         now_ms: int,
         gps_vel_u: float = 0.0,
         baro_healthy: bool = True,
+        gnss_may_vote: bool = True,
     ) -> None:
+        """``gnss_may_vote`` mirrors the firmware's GnssAscentGate: False
+        until GNSS has been admitted after burnout, and while False the GPS
+        voter neither counts nor accumulates.  Default True replays every log
+        that predates the gate exactly as before."""
         self._now_ms = now_ms
 
         # Snapshot apogee_flag so the rising-edge reset below sees the
@@ -475,7 +480,12 @@ class KinematicChecks:
             # GPS position lags ~4 s & dives during boost; Doppler velocity is
             # real-time, so descending vel_u tracks true apogee.  No altitude
             # gate (that lag is the bug); fresh-fix gated; post-burnout only.
-            if new_gps and self.gps_available_:
+            # GnssAscentGate: and only once GNSS has been admitted; until then
+            # the counter is held at zero (TRKC.cpp, Test 3).
+            if not gnss_may_vote:
+                self.gps_apogee_count_ = 0
+                self.gps_apogee_flag = False
+            elif new_gps and self.gps_available_:
                 gps_pass = gps_vel_u < -GPS_VEL_APOGEE_DESCENT_MPS
                 self.last_gps_pass = gps_pass
                 if gps_pass:
@@ -516,11 +526,13 @@ class KinematicChecks:
                     available += 1
                     if self.alt_apogee_flag: passed += 1
 
-                # GPS (Doppler) — non-EKF voter on a fresh fix (#262).  Re-added
-                # after the GNSS dynamic-model change fixed the boost corruption
-                # that forced its exclusion; restores non-EKF diversity during
-                # mach lockout / degraded EKF.  5 s freshness gate, as firmware.
-                if (self.gps_available_
+                # GPS (Doppler) — non-EKF voter on a fresh fix (#262), restoring
+                # non-EKF diversity during mach lockout / degraded EKF.  Only once
+                # admitted (GnssAscentGate): the dynamic-model change did NOT cure
+                # the boost corruption — Rolly Polly III (06-14) and V (08-29)
+                # both flew Airborne <4 g and were corrupted.  Freshness gate
+                # GPS_APOGEE_FRESH_MS, as firmware.
+                if (gnss_may_vote and self.gps_available_
                         and (self._now_ms - self.last_gps_time_ms_) < GPS_APOGEE_FRESH_MS):
                     available += 1
                     if self.gps_apogee_flag: passed += 1

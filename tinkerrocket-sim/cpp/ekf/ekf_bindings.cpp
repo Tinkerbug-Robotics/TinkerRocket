@@ -136,6 +136,10 @@ PYBIND11_MODULE(_ekf, m) {
         .def("set_gps_noise_scale", &GpsInsEKF::setGpsNoiseScale,
              py::arg("scale"))
         .def("get_gps_noise_scale", &GpsInsEKF::getGpsNoiseScale)
+        // GnssAscentGate: GNSS altitude + vertical velocity not fused while set.
+        .def("set_gnss_vertical_held_out", &GpsInsEKF::setGnssVerticalHeldOut,
+             py::arg("held"))
+        .def("get_gnss_vertical_held_out", &GpsInsEKF::getGnssVerticalHeldOut)
         // #1190 shock gate: the settle window and its counters.
         .def("set_shock_gate_settle", &GpsInsEKF::setShockGateSettle, py::arg("settle_us"))
         .def("shock_gate_trips", &GpsInsEKF::shockGateTrips)

@@ -54,8 +54,18 @@ def build_events(records):
     for r in records["BMP585"]:    events.append((r["time_us"], "baro", r))
     for r in records["GNSS"]:      events.append((r["time_us"], "gnss", r))
     for r in records["NonSensor"]: events.append((r["time_us"], "ns",   r))
+    # GnssAscentGate: the firmware's admission state rides the 10 Hz snapshot.
+    for r in records.get("Snapshot") or []: events.append((r["time_us"], "snap", r))
     events.sort(key=lambda e: (e[0], 0 if e[1] != "imu" else 1))
     return events
+
+
+def gnss_may_vote_from(snap) -> bool:
+    """The firmware's GnssAscentGate verdict as the log recorded it: False
+    while GNSS was held out of the EKF and the apogee vote.  A log with no
+    admission byte (every firmware before the gate) keeps GNSS eligible,
+    which is exactly how that firmware voted."""
+    return snap.get("gnss_admission") != "held_out"
 
 
 def logged_flag_times(nonsensor_recs, t0_us):
@@ -105,6 +115,7 @@ def replay(binary_path: str) -> dict:
     latest_pitch_rad: float = math.pi / 2
     burnout: bool = False
     mach_locked_out: bool = False
+    gnss_may_vote: bool = True
 
     new_baro = False
     new_gps = False
@@ -168,6 +179,10 @@ def replay(binary_path: str) -> dict:
                 mach_locked_out = False
             continue
 
+        if kind == "snap":
+            gnss_may_vote = gnss_may_vote_from(r)
+            continue
+
         # imu — main-loop tick
         latest_acc_mag = firmware_accel_norm(r)
         latest_roll_rate = r["gyro_x"]
@@ -188,6 +203,7 @@ def replay(binary_path: str) -> dict:
             burnout_detected=burnout,
             baro_locked_out=mach_locked_out,
             now_ms=now_ms,
+            gnss_may_vote=gnss_may_vote,
         )
         new_baro = False
         new_gps = False

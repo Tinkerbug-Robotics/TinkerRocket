@@ -1220,6 +1220,10 @@ TEST(RocketComputerTypes, FlightSnapshotData_Layout) {
     EXPECT_EQ(offsetof(FlightSnapshotData, version),             4u);
     EXPECT_EQ(offsetof(FlightSnapshotData, rocket_state),        5u);
     EXPECT_EQ(offsetof(FlightSnapshotData, sim_flight),          6u);
+    // GnssAscentGate: reclaimed from pad[1] — same offset, same size, so no
+    // VERSION bump; 0 (every older writer) reads "not recorded" = requalify.
+    EXPECT_EQ(offsetof(FlightSnapshotData, gnss_admission),      7u);
+    EXPECT_EQ(sizeof(FlightSnapshotData::gnss_admission),        1u);
     EXPECT_EQ(offsetof(FlightSnapshotData, flight_elapsed_ms),   8u);
     EXPECT_EQ(offsetof(FlightSnapshotData, apogee_elapsed_ms),  12u);
     EXPECT_EQ(offsetof(FlightSnapshotData, burnout_elapsed_ms), 16u);

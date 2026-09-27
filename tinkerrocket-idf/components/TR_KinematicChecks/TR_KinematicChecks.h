@@ -27,7 +27,13 @@ public:
                          float gps_vel_u = 0.0f,
                          bool  ekf_healthy = true,
                          bool  baro_healthy = true,
-                         bool  imu_healthy = true);
+                         bool  imu_healthy = true,
+                         // GnssAscentGate: GNSS may cast an apogee vote only
+                         // once it has been admitted after burnout.  While
+                         // false the GPS voter neither counts toward the
+                         // quorum nor accumulates.  Default keeps every
+                         // caller that predates the gate unchanged.
+                         bool  gnss_may_vote = true);
 
     bool launch_flag;
     // #1102: which detector latched launch_flag, and what the barometer claimed
