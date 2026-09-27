@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import signal
 import subprocess
 import sys
@@ -301,7 +302,8 @@ def main() -> int:
         print(f"# {args.scenario}: {c8.stat().st_size/1e9:.2f} GB, "
               f"{span}, gain {args.gain}")
         tx = start_tx(c8, args.freq, args.rate, args.gain,
-                      tx_err_path(args.scenario))
+                      tx_err_path(args.scenario),
+                      extra=("-B",))     # per-second buffer statistics: underruns show up
         if tx is None:
             return 1
     else:
@@ -402,7 +404,8 @@ def main() -> int:
             ser.close()
         except Exception:
             pass
-        if tx is not None:
+        if tx is not None:               # the transmitter's own log, underruns and all
+            shutil.copyfile(tx_err_path(args.scenario), str(cap) + ".hackrf.txt")
             hackrf_idle()                # radio idle between scenarios (owner's rule)
 
     print(f"\n# {nbytes} bytes, {nframes} frames -> {cap}")

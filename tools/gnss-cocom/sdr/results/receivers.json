@@ -268,8 +268,8 @@
      500.9
     ]
    },
-   "altitude_fix_max_km": 80.94,
-   "altitude_blocked_min_km": 80.96,
+   "altitude_fix_max_km": 79.98,
+   "altitude_blocked_min_km": 80.01,
    "altitude_gate_cause": "mute",
    "combination": "independent",
    "recovery_s": [
@@ -278,7 +278,7 @@
    ],
    "sats_median": 13,
    "sats_p05": 6,
-   "notes": "The same module after $PAIR080,3. The boost is tracked (climb rate within 3 m/s of the injection through the 3 g ascent) and the limits are clean and independent: ALL output stops at 500 m/s on its own speed estimate (fired at 9.3 km) and at 80.0 km on its own altitude (fired at 172 m/s), and returns within one 0.1 s epoch straight into a valid fix. Its own altitude reads about 0.9 km low near 80 km, so against the injection the altitude limit sits near 81 km. 500 m/s matches neither COCOM's 515, MTCR's 600 nor the datasheet's 490. At 15 g it still loses every channel at ignition; its RTCM MSM7 shows the four with a Doppler rate at or below 128 Hz/s re-locking within 2 s and every one at or above 171 Hz/s staying lost through the burn, so it has no fix until the descent brings the vehicle back under 500 m/s. Its altitude drifts low through the flight, 2.6 km by landing with velocity still right to 0.9 m/s; the Quescan M10 drifts 1.5 km on the same file, so most of that is the bench."
+   "notes": "The same module after $PAIR080,3. The boost is tracked (climb rate within 3 m/s of the injection through the 3 g ascent) and the limits are clean and independent: ALL output stops at 500 m/s on its own speed estimate (fired at 9.3 km) and at 80.0 km on its own altitude, and returns within one 0.1 s epoch straight into a valid fix. The altitude bracket comes from the carrier-corrected gentle flight of 2026-09-27, where its own altitude matched the injection to 2-5 m at both edges (last fix 79.98 km, first silent epoch 80.01). On the 2026-09-24 flights its own altitude read about 0.9 km low near 80 km, which put the limit near 81 km against the injection; that was the rig's 22 Hz carrier offset, not the receiver. 500 m/s matches neither COCOM's 515, MTCR's 600 nor the datasheet's 490. At 15 g it still loses every channel at ignition; its RTCM MSM7 shows the four with a Doppler rate at or below 128 Hz/s re-locking within 2 s and every one at or above 171 Hz/s staying lost through the burn, so it has no fix until the descent brings the vehicle back under 500 m/s. On those flights its altitude drifted low, 2.6 km by landing with velocity still right to 0.9 m/s; on the corrected file it stays within 14 m of the injection on the pad, through the coast and down the descent (5-95 %; 48 m low at worst early in the 3 g boost), so the drift was the bench."
   },
   {
    "bands": "L1 (GPS/GLO/GAL/BDS/QZSS)",

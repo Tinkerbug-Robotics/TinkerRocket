@@ -424,16 +424,15 @@
         <code>$PQTMPVT</code> reported as no fix. The analysis follows
         <code>$PQTMPVT</code>, the sentence a flight computer reads for its fix.
         And on
-        this bench its altitude drifts low through a flight, 2.6&nbsp;km by
-        landing, with velocity still right to 0.9&nbsp;m/s. The Quescan M10 drifts
-        1.5&nbsp;km on the same file, so most of that is the bench, not the
-        receiver. A least-squares fix from the module's own pseudoranges stays
-        within 7&nbsp;m of the truth all the way down, so the measurements are
-        right and the drift is in its navigation filter; the leading suspect is
-        the transmitter's carrier running 22&nbsp;Hz off its code (see the
-        results README). The drift is also why the Balloon-mode altitude limit
-        reads near 81&nbsp;km against the injection while the receiver itself
-        stops at 80.0.</p>
+        the original flight files its altitude drifted low, 2.6&nbsp;km by
+        landing, with velocity still right to 0.9&nbsp;m/s, while a least-squares
+        fix from the module's own pseudoranges stayed within 7&nbsp;m of the
+        truth. That was the bench: the transmitter's carrier ran 22&nbsp;Hz off
+        its code. Flown again on a file built to cancel the offset, the same
+        flight kept its altitude within 14&nbsp;m of the injection on 96% of its
+        fixes (60&nbsp;m at worst), and the Balloon-mode mute fell on the
+        injection's 80.0&nbsp;km, where the drift had put it near 81&nbsp;km
+        (see the results README).</p>
 
       <h3>What the mode does to tracking</h3>
       <p>Drone mode's trouble on the pad sent the module back to the bench, and
