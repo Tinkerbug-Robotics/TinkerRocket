@@ -1015,7 +1015,8 @@ three consecutive subframes (1-2-3) from any satellite, so it never assembled an
 Underneath: every ~15 s, three or more channels lose frame sync at once. Both SkyTraq parts do
 this on the bench (the PX1105R too, on its own board), in every IQ build and at every gain; the
 LC86G on the same transmit chain shows no common-mode lock resets at all. Real-sky data never
-shows it, so it is a bench effect that only SkyTraq reacts to -- open, and next.
+shows it, so it is a bench effect that only SkyTraq reacts to -- open, and next. (On the
+PX1105R they turned out to be power save; see the next section.)
 
 First fix from a cold start on the same pad, cold / 20 Hz / kinematic / SLR / 3 degrees:
 
@@ -1045,8 +1046,8 @@ The 13.5 g spaceshot, seconds after ignition (500 m/s crossings 82.2 and 246.6):
 | PX1125R, smooth, normal | 13 of 13 | 91.0 | 91.1 | 1634 |
 
 The PX1125R comes back ~10 s after the PX1105R on the ascent, and at the same moment on the
-descent once power save is off (the stock/power-save run was ~13 s late there). A PX1105R rerun
-with power save off is next, to make the comparison exact.
+descent once power save is off (the stock/power-save run was ~13 s late there). The PX1105R
+rerun with power save off is in the next section.
 
 **Flight software driving a SkyTraq receiver must, at every boot:** turn power save off
 (`0x0C 00`), set the elevation mask to 3-5 degrees (`0x2B`), and set a dynamics mode
@@ -1056,6 +1057,64 @@ Tools: `px1105r_run.py --power-mode normal|save`, `--pad-restart warm|hot|cold` 
 the scenario start), `--rx NAME --mac SERIAL|--port DEV`; `patch_smooth_fixed.py`;
 `px_restart_compare.py` rows now name the receiver, IQ build and power mode. Captures:
 `results/px1125r_spaceshot_pad600_*` (sweep, the diagnostic static runs, both flights).
+
+### PX1105R with power save off, and the gentle flight for filter work (2026-09-26)
+
+The PX1105R's spaceshot again with power save off (`--power-mode normal`), everything else as in
+runs 1 and 2. Seconds after ignition:
+
+| Receiver, IQ, power | Ephemeris at ignition | Raw back | First fix | Fix epochs |
+|---|---|---|---|---|
+| PX1105R, smooth, factory (run 1) | 14 of 14 | 79.7 | 80.7 | 1831 |
+| PX1105R, smooth, factory (run 2) | 14 of 14 | 19.9 | 80.6 | 1833 |
+| PX1105R, smooth, normal | 14 of 14 | 61.5 | 80.8 | 1923 |
+
+The first fix does not move: the gate sets it, at the 82.2 s crossing. Raw return at 61.5 s is
+inside the power-save spread, so one run shows no effect there. The extra 5 % of fix epochs is
+continuity: in power save the fix dropped for ~1 s every 11-13 s on the pad and a few times in
+flight; in normal it never dropped.
+
+**On the PX1105R the ~15 s collapses are power save.** Epochs where three or more GPS channels
+lose frame sync together, over the pad (100-595 s host time), with `skytraq_collapses.py`:
+
+| Receiver, power | Runs | Collapses | Median interval | Fix dropouts > 0.3 s |
+|---|---|---|---|---|
+| PX1105R, factory save | 3 | 30, 32, 36 | 11-12 s | 6, 10, 13 |
+| PX1105R, normal | 2 | 1, 2 | -- | 0, 2 |
+| PX1125R, save (stock IQ) | 1 | 29 | 15 s | 4 |
+| PX1125R, normal (smooth IQ) | 2 | 25, 30 | 15 s | 13, 0 |
+
+So the PX1105R's collapses are its own power-save search cycle, not the bench. The PX1125R's
+persist in normal, ~15 s apart, and stay open. The LC86G shows none.
+
+**The gentle flight, for filter work.** The 82.5 km, 3 g profile (peak 997 m/s) through the
+PX1105R with every current setting: +3 dB, SLR, 3 degree mask, power normal, cold start on a
+600 s pad, raw 0xE5 and nav 0xDF at 20 Hz, no underruns. Capture
+`results/px1105r_gentle_alt_pad600_smooth_gain3_nav9_el3_pmnormal_run2.log.gz`; truth
+`scenarios/gentle_alt_pad600.csv` (10 Hz, file time, ignition at 600 s). The receiver withholds
+its own fix in three windows (file time), each edge within ~1 s of the injected crossing, and
+raw measurements never stop:
+
+| Fix withheld (s) | Why | Raw per epoch: min / median / max |
+|---|---|---|
+| 631.5-710.1 | speed over ~515 m/s | 11 / 13 / 13 |
+| 740.4-786.6 | above 80 km | 6 / 9 / 13 |
+| 818.5-875.5 | speed over ~515 m/s | 6 / 9 / 13 |
+
+Outside those windows it holds a fix from ignition to the end of the file, apart from 0.3 s at
+605.8 s just after ignition and 0.1 s at 881.1 s. On the descent, 900-1260 s, the median is
+13 raw measurements per epoch.
+
+Gentle run 1 (the same name without `_run2`) is void from file time 373 s. One 27 ms HackRF
+underrun (140,224 bytes) time-shifted the whole simulated sky on the pad; every channel dropped,
+and the receiver never regained frame sync or a fix in the remaining 900 s, though the IQ file
+was intact. Underruns are rare -- 2 of 19 runs on the 600 s pad; the other was 3.6 ms on the
+PX1125R stock run -- and they do not explain the collapses: the runs with 30 collapses had none.
+`skytraq_collapses.py` prints each capture's underrun count; check it before trusting a run.
+
+Tools: `skytraq_collapses.py T0 T1 CAP...`; `px_restart_compare.py` now titles each row with only
+the settings that differ between rows (shared ones go in the figure title) and labels captures
+made before `--power-mode` existed as factory power save. Captures: `results/px1105r_*_pmnormal*`.
 
 ## Experiments still owed on the first four receivers
 

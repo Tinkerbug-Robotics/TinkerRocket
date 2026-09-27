@@ -65,7 +65,7 @@ def load(cap: Path, prologue: float):
     mm = re.search(r"elev mask (\d+) deg", header)
     mask = f"{mm.group(1)} deg mask" if mm else "mask not recorded"
     pw = re.search(r"power (normal|save)", header)
-    power = f"power {pw.group(1)}" if pw else "power not recorded"
+    power = f"power {pw.group(1)}" if pw else "factory power save"     # before --power-mode: never set, and SkyTraq ships in save
     iq = re.search(r"tx (\S+)\.C8", header)
     build = ("stock IQ" if "stock" in iq.group(1) else "smooth IQ" if "smooth" in iq.group(1) else iq.group(1)) if iq else "IQ ?"
     off = stt.median(offs)
@@ -85,7 +85,7 @@ def load(cap: Path, prologue: float):
     rn = re.search(r"_run(\d+)\.log$", cap.name)
     label = f"{cap.name.split('_')[0].upper()}: {kind}" + (f", run {rn.group(1)}" if rn else "")
     return dict(e5=e5, fixes=fixes, bands=bands, events=events, label=label,
-                note=f"{build}, {mask}, {power}", e7=e7, off=off, ign=ign)
+                note=f"{build}, {mask}, {power}", setup=(build, mask, power), e7=e7, off=off, ign=ign)
 
 
 def summarise(d, burn, end):
@@ -142,10 +142,10 @@ def main() -> int:
         summarise(d, burn, end)
         rows.append(d)
     fmt = lambda v: "   -  " if v is None else f"{v:6.1f}"
-    print(f"{'run':<32}{'setup':<40}{'sats':>5}{'eph':>5}{'raw back':>10}{'1st fix':>9}{'fix epochs':>12}"
+    print(f"{'run':<32}{'setup':<46}{'sats':>5}{'eph':>5}{'raw back':>10}{'1st fix':>9}{'fix epochs':>12}"
           f"   (s after ignition; burnout {burn:.1f})")
     for d in rows:
-        print(f"{d['label']:<32}{d['note']:<40}{d['seen']:>5}{d['eph']:>5}{fmt(d['held']):>10}"
+        print(f"{d['label']:<32}{d['note']:<46}{d['seen']:>5}{d['eph']:>5}{fmt(d['held']):>10}"
               f"{fmt(d['fix1']):>9}{d['nfix']:>12}")
 
     t0, t1 = -20.0, end
@@ -154,6 +154,8 @@ def main() -> int:
     axs = list(axs) if len(rows) > 1 else [axs]
     v500, a80 = spans("speed_mps", 500.0), spans("alt_m", 80000.0)
     ymax = max([n for d in rows for _t, n in d["e5"]] + [8]) + 2
+    same = [len({d["setup"][k] for d in rows}) == 1 for k in range(3)]
+    shared = ", ".join(v for v, s in zip(rows[0]["setup"], same) if s)
     for ax, d in zip(axs, rows):
         for a, b in v500:
             ax.axvspan(a, b, color="#eda100", alpha=0.10, lw=0)
@@ -173,7 +175,8 @@ def main() -> int:
         for sp in ax.spines.values():
             sp.set_color(RULE)
         f1 = lambda v: "-" if v is None else f"{v:.1f} s"
-        ax.set_title(f"{d['label']}  ({d['note']})", fontsize=8.5, color=INK, loc="left", pad=3)
+        own = ", ".join(v for v, s in zip(d["setup"], same) if not s)
+        ax.set_title(d["label"] + (f"  ({own})" if own else ""), fontsize=8.5, color=INK, loc="left", pad=3)
         ax.text(1.0, 1.02, f"ephemeris at ignition {d['eph']} of {d['seen']}   raw back {f1(d['held'])}   "
                 f"first fix {f1(d['fix1'])}   fix epochs {d['nfix']}", transform=ax.transAxes, ha="right",
                 va="bottom", fontsize=7.5, color=INK3)
@@ -185,7 +188,8 @@ def main() -> int:
                        fontsize=7.5, color=INK3)
     rxs = " vs ".join(sorted({c.name.split("_")[0].upper() for c in caps}))
     fig.suptitle(f"{rxs}, 13.5 g spaceshot: raw measurements per epoch (blue), own fix (green band), "
-                 "restart (dashed); amber > 500 m/s, violet > 80 km", fontsize=9, color=INK, x=0.07, ha="left", y=0.995)
+                 "restart (dashed); amber > 500 m/s, violet > 80 km" + (f"\nall rows: {shared}" if shared else ""),
+                 fontsize=9, color=INK, x=0.07, ha="left", y=0.995)
     fig.savefig(out, bbox_inches="tight")
     print("wrote", out, "with", len(rows), "rows")
     return 0
