@@ -110,7 +110,7 @@
         their fix quickly once inside the limits again. Four parts recover in
         under 2 seconds: the PX1125R, SAM-M10Q, ZED-F9P and LC86G, which comes
         back straight into a valid fix within 0.1 s on the 3 g flight. The
-        NEO-M8T recovers within 3.1 s, and the Quescan M10 and Beitian BN-182
+        NEO-M8T recovers within 3.2 s, and the Quescan M10 and Beitian BN-182
         take between 5 and 11 seconds.</p>
     </div>
   </section>
@@ -182,7 +182,7 @@
         <table>
           <thead><tr><th>Scenario</th><th class="num">Boost</th><th class="num">Peak speed</th><th class="num">Apogee</th><th>Purpose</th></tr></thead>
           <tbody>
-            <tr><td><code>spaceshot</code></td><td class="num">15 g</td><td class="num">1343 m/s</td><td class="num">82.5 km</td><td>realistic high-power flight; hardest case for tracking</td></tr>
+            <tr><td><code>spaceshot</code></td><td class="num">15 g</td><td class="num">1341 m/s</td><td class="num">82.5 km</td><td>realistic high-power flight; hardest case for tracking</td></tr>
             <tr><td><code>gentle_alt</code></td><td class="num">3 g</td><td class="num">997 m/s</td><td class="num">82.5 km</td><td>same envelope crossed slowly &mdash; this is what brackets the thresholds</td></tr>
           </tbody>
         </table>
@@ -190,7 +190,7 @@
       <p><strong>Why two.</strong> Six of the eight parts ran at 1&nbsp;Hz, and the
         SAM-M10Q, though it ran at 18&nbsp;Hz, was logged once a second; only the
         LC86G's 10&nbsp;Hz reached the analysis. At 1&nbsp;Hz a 15&nbsp;g boost
-        covers 118&nbsp;m/s between one epoch and the next, so a fast flight can
+        covers 117&nbsp;m/s between one epoch and the next, so a fast flight can
         only ever bracket the velocity gate coarsely no matter how carefully it is
         flown. The 3&nbsp;g ascent crosses the same threshold slowly enough to pin
         it. Both are integrated from thrust, drag and gravity rather than drawn as
@@ -267,8 +267,8 @@
       <p class="note">On a flight profile the ceiling and the velocity limit fire
         within moments of each other, because a rocket crosses 10&nbsp;km while
         traveling fast. The distinguishing observation is on <code>spaceshot</code>,
-        where the fix stops while speed is <em>falling</em> (1334 &rarr;
-        1304&nbsp;m/s) as altitude rises through 9.83&nbsp;km. No velocity gate
+        where the fix stops while speed is <em>falling</em> (1339 &rarr;
+        1302&nbsp;m/s) as altitude rises through 9.83&nbsp;km. No velocity gate
         fires on decreasing speed.</p>
 
       <h3>The same trap on the NEO-M8T</h3>
@@ -355,18 +355,18 @@
         1&ndash;6&nbsp;m/s while the injection climbed to 320&nbsp;m/s. All the
         while it reported a valid 3-D fix from 13 satellites. Balloon and Drone
         modes, on the same file, lagged only in the first two seconds after
-        liftoff, by up to 12 and 35&nbsp;m/s, and then held within 2&nbsp;m/s to
+        liftoff, by up to 13 and 36&nbsp;m/s, and then held within 3&nbsp;m/s to
         the mute:</p>
       <div class="scroll">
         <table class="nowrap">
           <caption>The 3 g boost, reported altitude and climb rate</caption>
           <thead><tr><th class="num">t (s)</th><th class="num">Injected</th><th class="num">Normal mode</th><th class="num">Balloon mode</th><th class="num">Drone mode</th></tr></thead>
           <tbody>
-            <tr><td class="num">184</td><td class="num">1.36 km, 78 m/s</td><td class="num">1.20 km, 4 m/s</td><td class="num">1.30 km, 76 m/s</td><td class="num">1.29 km, 79 m/s</td></tr>
-            <tr><td class="num">190</td><td class="num">2.17 km, 190 m/s</td><td class="num">1.23 km, 1 m/s</td><td class="num">2.10 km, 189 m/s</td><td class="num">1.99 km, 191 m/s</td></tr>
+            <tr><td class="num">184</td><td class="num">1.36 km, 79 m/s</td><td class="num">1.20 km, 4 m/s</td><td class="num">1.30 km, 76 m/s</td><td class="num">1.29 km, 79 m/s</td></tr>
+            <tr><td class="num">190</td><td class="num">2.17 km, 191 m/s</td><td class="num">1.23 km, 1 m/s</td><td class="num">2.10 km, 189 m/s</td><td class="num">1.99 km, 191 m/s</td></tr>
             <tr><td class="num">198</td><td class="num">4.24 km, 323 m/s</td><td class="num">1.26 km, 7 m/s</td><td class="num">4.16 km, 323 m/s</td><td class="num">3.93 km, 324 m/s</td></tr>
-            <tr><td class="num">205</td><td class="num">6.87 km, 426 m/s</td><td class="num">2.20 km, 248 m/s</td><td class="num">6.73 km, 426 m/s</td><td class="num">6.47 km, 427 m/s</td></tr>
-            <tr><td class="num">210</td><td class="num">9.18 km, 496 m/s</td><td class="num">4.31 km, 497 m/s</td><td class="num">8.94 km, 496 m/s</td><td class="num">8.73 km, 497 m/s</td></tr>
+            <tr><td class="num">205</td><td class="num">6.87 km, 427 m/s</td><td class="num">2.20 km, 248 m/s</td><td class="num">6.73 km, 426 m/s</td><td class="num">6.47 km, 427 m/s</td></tr>
+            <tr><td class="num">210</td><td class="num">9.18 km, 497 m/s</td><td class="num">4.31 km, 497 m/s</td><td class="num">8.94 km, 496 m/s</td><td class="num">8.73 km, 497 m/s</td></tr>
           </tbody>
         </table>
       </div>
@@ -425,11 +425,15 @@
         <code>$PQTMPVT</code>, the sentence a flight computer reads for its fix.
         And on
         this bench its altitude drifts low through a flight, 2.6&nbsp;km by
-        landing, with velocity still right to 0.5&nbsp;m/s. The Quescan M10 drifts
+        landing, with velocity still right to 0.9&nbsp;m/s. The Quescan M10 drifts
         1.5&nbsp;km on the same file, so most of that is the bench, not the
-        receiver. The drift is also why the Balloon-mode altitude limit reads
-        near 81&nbsp;km against the injection while the receiver itself stops at
-        80.0.</p>
+        receiver. A least-squares fix from the module's own pseudoranges stays
+        within 7&nbsp;m of the truth all the way down, so the measurements are
+        right and the drift is in its navigation filter; the leading suspect is
+        the transmitter's carrier running 22&nbsp;Hz off its code (see the
+        results README). The drift is also why the Balloon-mode altitude limit
+        reads near 81&nbsp;km against the injection while the receiver itself
+        stops at 80.0.</p>
 
       <h3>What the mode does to tracking</h3>
       <p>Drone mode's trouble on the pad sent the module back to the bench, and
@@ -970,7 +974,7 @@
         and the matched pair in section 03 answered that. On the gentle flight the
         receiver descended back through 80&nbsp;km at 217&nbsp;m/s and had a fix
         again <strong>0.7&nbsp;s later</strong>. Closing is just as sharp in the
-        other direction: the fix disappeared between 0.3 and 0.9&nbsp;s after a
+        other direction: the fix disappeared between 0.3 and 1.0&nbsp;s after a
         limit was first exceeded, every time. This is an output inhibit, not a
         filter reset, which fits what the frames show: the receiver never stops
         tracking across a gate transition.</p>
@@ -981,17 +985,17 @@
         <thead><tr><th>Flight</th><th class="num">Boost</th><th>Gate</th><th class="num">Shut lag</th><th class="num">Re-open latency</th><th class="num">Sats in the wait</th></tr></thead>
         <tbody>
           <tr><td class="id">15 g, matched</td><td class="num">15 g</td><td>velocity</td>
-              <td class="num">+0.9 s</td><td class="num"><strong>1.5 s</strong></td><td class="num">9</td></tr>
+              <td class="num">+1.0 s</td><td class="num"><strong>1.5 s</strong></td><td class="num">9</td></tr>
           <tr><td class="id">15 g, matched</td><td class="num">15 g</td><td>altitude</td>
               <td class="num">+0.3 s</td><td class="num"><strong>0.0 s</strong></td><td class="num">7</td></tr>
           <tr><td class="id">15 g, matched</td><td class="num">15 g</td><td>velocity</td>
-              <td class="num">+0.6 s</td><td class="num"><strong>1.1 s</strong></td><td class="num">6</td></tr>
+              <td class="num">+0.6 s</td><td class="num"><strong>1.2 s</strong></td><td class="num">6</td></tr>
           <tr><td class="id">3 g, matched</td><td class="num">3 g</td><td>velocity</td>
-              <td class="num">+0.6 s</td><td class="num"><strong>1.3 s</strong></td><td class="num">5</td></tr>
+              <td class="num">+0.7 s</td><td class="num"><strong>1.3 s</strong></td><td class="num">5</td></tr>
           <tr><td class="id">3 g, matched</td><td class="num">3 g</td><td>altitude</td>
               <td class="num">+0.3 s</td><td class="num"><strong>0.7 s</strong></td><td class="num">6</td></tr>
           <tr><td class="id">3 g, matched</td><td class="num">3 g</td><td>velocity</td>
-              <td class="num">+0.4 s</td><td class="num"><strong>0.9 s</strong></td><td class="num">6</td></tr>
+              <td class="num">+0.5 s</td><td class="num"><strong>1.0 s</strong></td><td class="num">6</td></tr>
         </tbody>
       </table>
     </div>
@@ -1025,7 +1029,7 @@
     </div>
     <div class="prose">
       <p style="margin-top:1.2rem">Two independent runs, no satellite lost, 0 to
-        1334&nbsp;m/s. The fix vanishing partway up the burn is the gate at
+        1339&nbsp;m/s. The fix vanishing partway up the burn is the gate at
         515&nbsp;m/s, not a lock failure; on the 3&nbsp;g flight the satellite
         count swung between two and seven while acceleration sat flat, which
         acceleration cannot explain either. What acceleration does to tracking was
@@ -1068,9 +1072,18 @@
     </div>
     <div class="prose">
       <p style="margin-top:1.2rem">What remained was the receiver's own AGC or
-        C/N&#8320; estimator, or something subtler in the chain. It was localized
-        but never identified. The radiated setup used for the later parts does not
-        show it. None of it touches the gate results: every threshold and every
+        C/N&#8320; estimator, or something subtler in the chain. <strong>Identified
+        on 2026-09-27: it was the transmitter's carrier running 22&nbsp;Hz off its
+        own code.</strong> The HackRF synthesizes its carrier in fractional steps
+        while its sample clock, and with it the code, comes out exact. This
+        receiver, as configured, drove its code with its carrier, so every
+        channel's code walked off the true code at 4.2&nbsp;m/s, reached
+        0.83&ndash;0.97 of a chip and re-acquired, every 65&ndash;78&nbsp;s. A
+        one-chip correlation peak loses 15&ndash;18&nbsp;dB at that misalignment,
+        which is the swing that was seen. The test above compared the
+        transmitter's clock with the host's, not its carrier with its code. The
+        parts measured later track their code directly and do not show it.
+        None of it touches the gate results: every threshold and every
         recovery latency was measured across a transition where the satellites were
         tracked either side, which is the condition the classifier requires before
         it will call anything at all.</p>
@@ -1089,12 +1102,12 @@
         <thead><tr><th>Run</th><th class="num">SV transmitted</th><th class="num">Median tracked</th><th class="num">Median C/N&#8320;</th><th class="num">Epochs with &ge;4 SV</th><th>Recovery latencies</th></tr></thead>
         <tbody>
           <tr><td class="id">40&deg;N 22:30</td><td class="num">10</td><td class="num">6</td>
-              <td class="num">44 dBHz</td><td class="num">89%</td><td>1.5 s, 19.0 s, 1.1 s</td></tr>
+              <td class="num">44 dBHz</td><td class="num">89%</td><td>1.5 s, 19.0 s, 1.2 s</td></tr>
           <tr><td class="id">40&deg;N 22:30, re-seated</td><td class="num">10</td><td class="num">6</td>
               <td class="num">44 dBHz</td><td class="num">70%</td><td>1.5 s, 1.0 s, <strong>146 s</strong></td></tr>
           <tr><td class="id">equator 08:30</td><td class="num"><strong>14</strong></td><td class="num">7</td>
               <td class="num">45 dBHz</td><td class="num"><strong>100%</strong></td>
-              <td><strong>1.5 s, 1.0 s, 1.1 s</strong></td></tr>
+              <td><strong>1.5 s, 1.0 s, 1.2 s</strong></td></tr>
         </tbody>
       </table>
     </div>
@@ -1237,10 +1250,11 @@ passes 10&nbsp;km.
 
 <!--#fignote px1125r-->
 The satellite count on the 3 g run dips between roughly 420 and 540&nbsp;s,
-bottoming at two. That is the bench's own ~82&nbsp;s C/N&#8320; oscillation
-rather than anything the receiver did &mdash; it appears on static scenarios and
-unboosted files at every injection level, and the radiated setup used for the
-later parts does not show it. It falls after the last gate window has already
+bottoming at two. That is the bench's ~80&nbsp;s C/N&#8320; oscillation: the
+transmitter's carrier runs 22&nbsp;Hz off its code, and this receiver, as
+configured, drove its code with its carrier, so each channel walked off the
+correlation peak and re-acquired about every 70&ndash;80&nbsp;s (identified
+2026-09-27). It falls after the last gate window has already
 closed and re-opened, so none of the thresholds or latencies measured here
 depend on it.
 <!--/fignote-->
@@ -1276,7 +1290,7 @@ Same thresholds as the others, but 2&ndash;3&nbsp;s slow to <em>close</em> the a
 <!--/blurb-->
 
 <!--#blurb neo_m8t-->
-Velocity gate normal at 510&ndash;524&nbsp;m/s, but it stops publishing at 50&nbsp;km &mdash; the u-blox dynamic-model ceiling, not an export limit. Its true altitude behavior is therefore unmeasurable.
+Velocity gate normal at 511&ndash;525&nbsp;m/s, but it stops publishing at 50&nbsp;km &mdash; the u-blox dynamic-model ceiling, not an export limit. Its true altitude behavior is therefore unmeasurable.
 <!--/blurb-->
 
 <!--#blurb quescan_m10-->

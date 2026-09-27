@@ -6,7 +6,7 @@ UART, so the rig reaches it through the bench image in
 ../firmware/lc86_bridge, which copies bytes between that UART and USB.
 
 The default action applies EXACTLY what the flight driver applies at boot
-(TR_GNSSReceiverLC86_Serial::begin() as of PR #1500, at the M1's
+(TR_GNSSReceiverLC86_Serial::begin() as of PR #1527, at the M1's
 GNSS_UPDATE_RATE of 18 clamped to the LC86G's 10 Hz ceiling), then reads every
 setting back. That is the receiver as it flies. Nothing is saved to the
 module's flash: this is RAM configuration, as in flight, and it lasts until the
@@ -58,6 +58,11 @@ FLIGHT_RATE_HZ = 10
 # The $PAIR080 navigation mode begin() sends from PR #1500 on: 3 = Balloon.
 # Before it nothing set the mode, and the Beetle flew in Normal (0).
 FLIGHT_NAV_MODE = 3
+# From PR #1527 begin() also sends $PAIR732,0 -- leave ALP, the module's adaptive
+# low-power mode -- between the fix rate and the navigation mode: flight firmware
+# turns receiver power saving off explicitly at every boot (owner rule
+# 2026-09-26). The module powers up in Continuous mode anyway; there is no
+# read-back for it, so the ack is the check.
 
 NAV_MODES = {0: "Normal", 1: "Fitness", 3: "Balloon", 4: "Stationary",
              5: "Drone", 7: "Swimming"}
@@ -88,6 +93,7 @@ def flight_plan(rate_hz: int = FLIGHT_RATE_HZ):
         ("PQTMCFGMSGRATE,W,PQTMPVT,1,1", "QTM", "PQTMPVT every fix"),
         ("PQTMCFGMSGRATE,W,PQTMEPE,1,2", "QTM", "PQTMEPE every fix"),
         (f"PAIR050,{1000 // rate_hz}", 50, f"fix interval {1000 // rate_hz} ms"),
+        ("PAIR732,0", 732, "power mode Continuous"),
         (f"PAIR080,{FLIGHT_NAV_MODE}", 80, f"nav mode {NAV_MODES[FLIGHT_NAV_MODE]}"),
     ]
 

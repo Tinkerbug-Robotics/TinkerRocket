@@ -24,10 +24,12 @@ variable at a time.
 | `pick_start.py` | Picks a scenario start inside the ephemeris file's densest window |
 | `patch_horizon.py` | Fixes gps-sdr-sim's visibility mask so it follows the vehicle's altitude |
 | `patch_smooth_carrier.py` | Adds an opt-in `SMOOTH_CARRIER` build to gps-sdr-sim: each carrier swept across its 0.1 s block instead of held, so a burn is a ramp, not a staircase |
+| `patch_carrier_offset.py` | Adds an opt-in `CARR_OFFSET_HZ` build to gps-sdr-sim: a carrier-only offset, code untouched, to cancel the HackRF's 22 Hz carrier-vs-code error |
+| `code_carrier.py` | Reads the carrier-vs-code rate from any raw capture (code-minus-carrier per satellite, no truth needed): +4.19 m/s on the rig as it was, 0.00 on the real sky |
 | `best_geometry.py` | Scans latitude and hour for the most satellites above a given elevation |
 | `plot_flight.py` | Altitude, speed, acceleration, lock state and satellite count on one time axis |
 | `recovery.py` | Shut lag and re-open latency per blocked window, with satellites in the wait |
-| `make_flights.py` | Realistic flight profiles integrated from thrust, drag and gravity |
+| `make_flights.py` | Realistic flight profiles integrated from thrust, drag and gravity; the JSON truth carries the signal's velocity at each row, and `--retime` converts files made before 2026-09-27 |
 | `run_fc.py` | Transmits a scenario and records the rocket computer's console, in one command |
 | `cocom_flightlog.py` | Converts a rocket computer flight log (`.bin`) into the rig's capture format, so a real flight is analysed by the same scripts as a bench run |
 | `align_start.py` | Recovers a capture's scenario start time by matching reported to injected altitude |
@@ -536,7 +538,7 @@ Every original scenario here is a ramp, and a ramp measures a slow receiver's
 **latency**, not its threshold. On a 3 g climb the vehicle spends about one
 second within +/-15 m/s of the velocity limit; a receiver that reacts a few
 seconds late smears the bracket by hundreds of m/s. The Air530 came back as
-"538-1334 m/s" that way, which is not a threshold at all.
+"539-1339 m/s" that way, which is not a threshold at all.
 
 The dwell scenarios hold a value steady for far longer than any plausible lag:
 
