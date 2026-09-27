@@ -427,9 +427,13 @@
         this bench its altitude drifts low through a flight, 2.6&nbsp;km by
         landing, with velocity still right to 0.5&nbsp;m/s. The Quescan M10 drifts
         1.5&nbsp;km on the same file, so most of that is the bench, not the
-        receiver. The drift is also why the Balloon-mode altitude limit reads
-        near 81&nbsp;km against the injection while the receiver itself stops at
-        80.0.</p>
+        receiver. A least-squares fix from the module's own pseudoranges stays
+        within 7&nbsp;m of the truth all the way down, so the measurements are
+        right and the drift is in its navigation filter; the leading suspect is
+        the transmitter's carrier running 22&nbsp;Hz off its code (see the
+        results README). The drift is also why the Balloon-mode altitude limit
+        reads near 81&nbsp;km against the injection while the receiver itself
+        stops at 80.0.</p>
 
       <h3>What the mode does to tracking</h3>
       <p>Drone mode's trouble on the pad sent the module back to the bench, and
@@ -1068,9 +1072,18 @@
     </div>
     <div class="prose">
       <p style="margin-top:1.2rem">What remained was the receiver's own AGC or
-        C/N&#8320; estimator, or something subtler in the chain. It was localized
-        but never identified. The radiated setup used for the later parts does not
-        show it. None of it touches the gate results: every threshold and every
+        C/N&#8320; estimator, or something subtler in the chain. <strong>Identified
+        on 2026-09-27: it was the transmitter's carrier running 22&nbsp;Hz off its
+        own code.</strong> The HackRF synthesizes its carrier in fractional steps
+        while its sample clock, and with it the code, comes out exact. This
+        receiver, as configured, drove its code with its carrier, so every
+        channel's code walked off the true code at 4.2&nbsp;m/s, reached
+        0.83&ndash;0.97 of a chip and re-acquired, every 65&ndash;78&nbsp;s. A
+        one-chip correlation peak loses 15&ndash;18&nbsp;dB at that misalignment,
+        which is the swing that was seen. The test above compared the
+        transmitter's clock with the host's, not its carrier with its code. The
+        parts measured later track their code directly and do not show it.
+        None of it touches the gate results: every threshold and every
         recovery latency was measured across a transition where the satellites were
         tracked either side, which is the condition the classifier requires before
         it will call anything at all.</p>
@@ -1237,10 +1250,11 @@ passes 10&nbsp;km.
 
 <!--#fignote px1125r-->
 The satellite count on the 3 g run dips between roughly 420 and 540&nbsp;s,
-bottoming at two. That is the bench's own ~82&nbsp;s C/N&#8320; oscillation
-rather than anything the receiver did &mdash; it appears on static scenarios and
-unboosted files at every injection level, and the radiated setup used for the
-later parts does not show it. It falls after the last gate window has already
+bottoming at two. That is the bench's ~80&nbsp;s C/N&#8320; oscillation: the
+transmitter's carrier runs 22&nbsp;Hz off its code, and this receiver, as
+configured, drove its code with its carrier, so each channel walked off the
+correlation peak and re-acquired about every 70&ndash;80&nbsp;s (identified
+2026-09-27). It falls after the last gate window has already
 closed and re-opened, so none of the thresholds or latencies measured here
 depend on it.
 <!--/fignote-->

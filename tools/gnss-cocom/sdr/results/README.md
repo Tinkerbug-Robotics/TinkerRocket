@@ -103,6 +103,20 @@ transmits 14 satellites at 82.5 km against 11 on the ground.
 
 ## The bench carries a ~15 dB, ~80 s C/N0 oscillation
 
+**Explained (2026-09-27): the HackRF's carrier runs 22 Hz off its own code, and the
+PX1125R, as configured in August, drove its code with its carrier.** Each channel's
+pseudorange walked off the true code at 4.0-4.7 m/s, reached 0.83-0.97 of a chip
+(243-285 m), and snapped back as the channel re-acquired, every 65-78 s. A one-chip
+correlation peak loses 15-18 dB at that misalignment, and 15-18 dB is what each
+channel's C/N0 lost: it follows the channel's code error with a correlation of +0.90 to
++0.98 on all six captures (`saw_static_raw`, `saw_static_boosted`, `gentle_alt_eq`,
+`gentle_alt_eq2`, `spaceshot_eq`, `spaceshot_horizon`). The elimination below missed it
+because it compared the transmitter's clock with the host's, not the carrier with the
+code. The satellite-count dips, and with them the PX1125R's 12-33 s and 146 s
+recoveries, came from the rig. See [the next section](#the-hackrfs-carrier-runs-22-hz-off-its-own-code-2026-09-27).
+
+The original analysis, kept as it was:
+
 Asked what reduced the satellite count in the 3 g run when the 15 g run at the
 same site and hour held 15 satellites throughout. The answer is neither flight.
 
@@ -124,6 +138,71 @@ chain: localised, not identified.
 It does not touch the gate results. Every threshold and latency was measured
 across a transition with satellites tracked either side, which is what the
 classifier requires before calling anything.
+
+## The HackRF's carrier runs 22 Hz off its own code (2026-09-27)
+
+Every receiver on this rig sees a carrier that disagrees with its code.
+Code-minus-carrier (pseudorange minus carrier phase, per satellite) grows at
++4.19 m/s, so the carrier sits 22.0 Hz above where its own code says it should be.
+`code_carrier.py` reads it from any raw capture, with no truth or ephemeris needed:
+
+| Receiver | Capture | Code-minus-carrier |
+|---|---|---|
+| PX1105R, power normal | `px1105r_gentle_alt_pad600_smooth_gain3_nav9_el3_pmnormal_run2` | +4.185 m/s (59 arcs) |
+| PX1125R, September setup | `px1125r_spaceshot_pad600_smooth_gain2_nav9_el3_pmnormal_flight` | +4.189 m/s |
+| NEO-M8T, 2026-08-20 | `neo_m8t_gentle_alt`, `neo_m8t_spaceshot` | +4.186, +4.188 m/s |
+| LC86G, MSM7 | `lc86g_balloon_gentle_alt`, `lc86g_20260927_gentle_alt_pad600_smooth_balloon_msm7` | +4.176, +4.176 m/s |
+| PX1105R, real sky | the two static captures kept outside the repo (window, outdoor) | -0.011, +0.002 m/s |
+
+Against the truth on the pad it is the same split: the clock drift the Doppler
+reports runs 3.9-4.5 m/s below the rate at which the pseudoranges' clock bias moves,
+on 15 PX1105R pads, on the PX1125R with every IQ build (stock, float, fixed-point
+ramp, smooth) and on the NEO-M8T. The PX1105R's own solution (0xDF) carries the same
+two clocks, 3.7-4.4 m/s apart (median 4.2). The LC86G takes its own clock drift out
+of its MSM7 Doppler, which is why its pseudorange bias was seen to "grow ~4 m/s"
+(`msm7_clock.py`): its carrier phase shows the same -4.3 m/s against its code.
+
+**Where it comes from: the HackRF, not gps-sdr-sim.** gps-sdr-sim derives each
+channel's code rate from the same range difference as its carrier (`f_code =
+CODE_FREQ + f_carr / 1540`), and a static file it writes is code/carrier-consistent
+to 0.08 m/s on four satellites, measured from the IQ. Every runner transmits with
+`hackrf_transfer -f 1575420000 -s 2600000` and no crystal correction. By the
+firmware's arithmetic the HackRF's 2.6 MHz sample clock is an exact fraction of its
+reference (no rounding in the divider), while its 1575.42 MHz LO is synthesized in
+fractional-N steps; a reconstruction of that tuning arithmetic puts the carrier
++17 Hz high, the same sign and scale as the measured +22.0 Hz. The exact figure
+depends on the firmware in the PortaPack's HackRF mode, which was not read. It was
+the same from 2026-08-20 to 2026-09-27.
+
+**What it does to receivers:**
+- **A receiver that drives its code with its carrier walks off the code** at
+  4.2 m/s: the August PX1125R, 0.83-0.97 chip and 15-18 dB of C/N0 (the section
+  above); in September the PX1125R in both power modes and the PX1105R in power save,
+  ramps of 40-130 m. The PX1105R in power normal, the NEO-M8T and the LC86G track the
+  code and show none.
+- **Carrier-smoothed pseudoranges restart off-level at every (re)lock.** Smoothing
+  with time constant tau holds a settled channel r x tau below its raw code (r =
+  4.19 m/s). A channel that has just locked starts at the raw code, so it reads high by
+  up to r x tau and settles over tau. PX1105R in flight: +7 to +15 m median at lock,
+  +17 to +30 m in the upper quartile, settling over 10-20 s. The PX1105R on the real
+  sky shows no systematic offset (medians within 3 m, scatter 5-9 m); the NEO-M8T
+  shows none on the rig.
+- **The receivers' own altitude, probably:** see open question 4.
+- **Not the own velocity:** its bias is 0.00 m/s on the pad on all four receivers,
+  so the speed gate and every velocity result are unaffected. **Not acquisition:**
+  22 Hz against the 1.1-2.0 kHz clock offsets these receivers already search.
+- **Not the ~15 s SkyTraq collapses,** as far as the data can say: averaged over every
+  collapse, the channels' code shows no re-alignment at them, and the PX1125R's
+  power-normal flight collapses 25 times while most of its channels track the code.
+
+**The fix, built and checked offline:** `patch_carrier_offset.py` adds an opt-in
+`-DCARR_OFFSET_HZ` to gps-sdr-sim that offsets the carrier alone. Built with -22.0
+it writes every carrier 22.0 Hz low and leaves the code untouched (from the IQ: carrier
+-22.01 to -22.03 Hz, code drift under 0.0001 chip/s); built without it, the patched
+source reproduces `spaceshot_pad600_stock.C8` byte for byte. On air the HackRF's
++22.0 Hz should bring the carrier back onto the code, and `code_carrier.py` should
+read about 0. That check, and an A/B of the PX1125R's pad and the LC86G's gentle
+flight on the corrected files, are still to be run.
 
 ## u-blox SAM-M10Q, radiated (2026-08-20)
 
@@ -289,7 +368,7 @@ neither table nor report should be hand-edited.
 
 ‖ Enforced by muting ALL output -- NMEA, acknowledgements and raw measurements -- rather than by withholding the position while satellites are still reported, so on the wire it looks like a dead receiver until it comes back. It acts on the receiver's own estimates, 500 m/s and 80.0 km, stopping within 0.1 s of passing either and returning within 0.1 s straight into a valid fix. Its own altitude read about 0.9 km low near 80 km on this bench, which puts the limit near 81 km against the injection.
 
-**SkyTraq PX1125R** (2026-08-19, ~70 dB pad + DC block into RF_IN, TX gain 44-47): Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified.
+**SkyTraq PX1125R** (2026-08-19, ~70 dB pad + DC block into RF_IN, TX gain 44-47): Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. The starvation came from a ~15 dB, ~70-80 s C/N0 oscillation that was the rig, not the part (identified 2026-09-27): in its August configuration this receiver drove its code with its carrier, and the HackRF's carrier runs 22 Hz off its code, so every channel's code walked 0.83-0.97 chip off the correlation peak and re-acquired about every 70 s.
 
 **u-blox SAM-M10Q** (2026-08-20, 100 dB pad, L1 quarter-wave in Faraday cage, TX gain 12): Never fell below 4 satellites in either flight, so every withheld epoch is the gate rather than a link failure. No periodic C/N0 oscillation appeared (r = 0.02 and 0.11).
 
@@ -299,7 +378,7 @@ neither table nor report should be hand-edited.
 
 **u-blox NEO-M8T** (2026-08-20, 70 dB pad, TX gain 38): Position is gated at 50 km, but by the u-blox DYNAMIC MODEL rather than by COCOM: airborne <4g is specified at 50,000 m and measured here at 49.80-50.15 km on an altitude-only ramp at 354 m/s. Proved by moving the model -- switching to portable dropped the same ceiling to 5.04 km. No u-blox model goes above 50 km, and airborne <4g is already both the highest ceiling and the highest velocity limit, so this part cannot be made to navigate higher. The ceiling is real for flight use and is recorded as such, but it is NOT an export gate, and its true COCOM altitude behavior is unmeasurable because the model stops it first. Note the SAM-M10Q and ZED-F9P held fixes at 68.8 km on the same model 8, so this is an M8-generation behavior. It also explains what looked like two failed recoveries on gentle_alt: those gaps sit at 68-80 km, above the ceiling, while the window that cleared at 29 km recovered in 0.9 s.
 
-**Quescan M10** (2026-08-28, L1 antenna in Faraday cage, TX gain 26): It answers u-blox's UBX interface down to SEC-UNIQID; its MON-VER reports ROM SPG 5.10, hardware 000A0000, PROTVER 34.10 and no MOD= string. Gate behavior is in family -- velocity around 515, altitude at 80 km, limits independent -- but it is the slowest part measured on the ALTITUDE gate: +2.3 s to close and 4.7-5.0 s to re-open, against 0.7-1.7 s elsewhere, which is why both its brackets inverted. Flown on the same ephemeris, start time and launch site as the SAM-M10Q, ZED-F9P and NEO-M8T, so its satellite geometry is directly comparable rather than merely similar. One velocity edge closed a single epoch early, blocking at 510 m/s, while every other edge on this part is consistent with 515; at 29 m/s^2 an epoch is 29 m/s wide, so that is quantization rather than a lower threshold.
+**Quescan M10** (2026-08-28, L1 antenna in Faraday cage, TX gain 26): It answers u-blox's UBX interface down to SEC-UNIQID; its MON-VER reports ROM SPG 5.10, hardware 000A0000, PROTVER 34.10 and no MOD= string. Gate behavior is in family -- velocity around 515, altitude at 80 km, limits independent -- but it is the slowest part measured on the ALTITUDE gate: +2.3 s to close and 4.7-5.0 s to re-open, against 0.7-1.7 s elsewhere, which is why both its brackets inverted. Flown on the same ephemeris, start time and launch site as the SAM-M10Q, ZED-F9P and NEO-M8T, so its satellite geometry is directly comparable rather than merely similar. One velocity edge closed a single epoch early, blocking at 510 m/s, while every other edge on this part is consistent with 515; at the crossing's net 14 m/s^2 an epoch is 14 m/s wide, so on that edge the part stopped a few m/s below 515 by the injection, and one edge cannot say whether its threshold or its own speed estimate is the reason.
 
 **Beitian BN-182** (2026-08-28, L1 antenna in Faraday cage, TX gain 20): It shares the Quescan's UBX interface -- its MON-VER answer is identical, its chip serial differs (dee2c50fbf vs c8bf908e28) -- but it is a different part, flown on the same ephemeris, start time and launch site. It behaves like its MIRROR IMAGE on recovery: fast on altitude (1.0 s) and slow on velocity (10.1 s), where the Quescan is slow on altitude (5.0 s) and fast on velocity (0.1 s). On three of four velocity windows it does not re-open when speed drops below 515 but waits until 328-410 m/s, with 9-13 satellites held throughout, so it is the gate rather than re-acquisition. Transmit level is NOT the cause: a control flight at gain 26, matching the Quescan, reproduced every latency to the tenth of a second (0.5 / 1.0 / 10.1 s) and every shut lag. Besides the part itself, what differs and was not controlled is configuration in the modules' own flash -- this one runs GPS+Galileo+BeiDou with GLONASS off, the Quescan has GLONASS enabled, and CFG-NAVSPG holds more than the dynamic model. The practical lesson is that a shared interface does not predict gate behavior: two modules that answer UBX identically differ by two orders of magnitude on velocity-gate recovery, and no datasheet says which you are buying.
 
@@ -370,6 +449,29 @@ obvious suspect is ruled out. Unexplained. It moves a gate quoted against the
 injection by up to ~1 km near 80 km (a receiver acting on its own altitude, low by
 that much, stops late against the truth); every velocity result is unaffected.
 
+**Update (2026-09-27): the measurements are right and the receivers' own filters
+drift; the rig's code/carrier split is the leading suspect.** A least-squares fix
+from each receiver's own pseudoranges, solved epoch by epoch with its own clock,
+stays on the truth while the receiver's fix walks away:
+
+| Capture | Own fix, altitude (east) | Least squares from its own pseudoranges |
+|---|---|---|
+| `lc86g_balloon_gentle_alt` (stock IQ) | -59 m on the pad -> -2.5 km (-1.5 km) at landing | +2 to +7 m (-1 to -3 m) |
+| `lc86g_20260927_gentle_alt_pad600_smooth_balloon_msm7` | -133 m on the pad -> -2.7 km (-2.2 km) on the descent, -65 m under the main | +0.3 to +6.5 m (within 2 m) |
+| `neo_m8t_spaceshot` | -17 m on the pad, -40 to -370 m under the main | +0.7 m |
+
+It is not every receiver: at 1-10 km on the descent the SAM-M10Q and the Beitian
+stay within tens of metres, while the LC86G (2.3 km) and the Quescan (0.85-0.97 km)
+drift most. gps-sdr-sim is still cleared; the HackRF was not, and its carrier runs
+4.19 m/s off its code ("The HackRF's carrier runs 22 Hz off its own code", above). A
+clock propagated with the carrier's drift falls behind the code's, and a receiver
+that lets part of that common error into its position moves the fix down: on this
+sky 1.85 m of altitude per metre of range the clock does not absorb. The SkyTraq
+parts show exactly that on the pad, their own clock-bias state 9-12 m below the
+pseudoranges' common bias and their own altitude 8-17 m low. The westward part of
+the drift is not explained that way. The test is the A/B on the carrier-corrected
+file (`patch_carrier_offset.py`).
+
 **5. The LC86G in Normal mode never re-acquires after its mute.** 580 s of 3 g
 descent without a valid fix, on the same signal the module tracked at 45 dBHz in
 Balloon mode. The likely cause is its own navigation state -- it never believed
@@ -427,11 +529,14 @@ acceleration control holds here too: at 2.0 g, r = **+0.31** and >=45 deg at
 **+7 dB** -- the effect vanishes, as on the other two.
 
 One velocity edge closed a single epoch early, blocking at 510 m/s while every
-other edge on this part is consistent with 515. At 29 m/s^2 an epoch is 29 m/s
-wide, so that is quantization rather than a lower threshold -- and it is why
-`receiver_table.py` now estimates the threshold from the **median of every
-measured edge** instead of `max(fix)`/`min(blocked)`, which one sample can drag
-a whole rounding step.
+other edge on this part is consistent with 515. At the net 14 m/s^2 of that crossing
+an epoch is 14 m/s wide (corrected 2026-09-27: this said 29 m/s, the boost's thrust),
+so this is not quantization, which can only make a gate look late: an exact 515 gate
+would have blocked one epoch later. On that edge the part stopped a few m/s below
+515 by the injection, and one edge cannot say whether its threshold or its own speed
+estimate is the reason. It is why `receiver_table.py` now estimates the threshold
+from the **median of every measured edge** instead of `max(fix)`/`min(blocked)`,
+which one sample can drag a whole rounding step.
 
 ## Beitian BN-182, radiated (2026-08-28)
 
@@ -497,8 +602,9 @@ fixed once between this file and `replot_all.py`. `vel_cell` now delegates to
 
 The Beitian's 505 carries a footnote: it rests on a **single closing edge**,
 because on the other windows the gate had not re-opened and there was no fix
-left to close. One epoch at that boost is 29 m/s wide, so it is consistent with
-515 but not independently resolved.
+left to close. One epoch at that boost is 14 m/s wide (corrected 2026-09-27: this
+said 29), and the edge, blocked at 510 m/s, sits a few m/s below 515 like the
+Quescan's early one, so it is not independently resolved.
 
 ### A guard the runner now has
 
@@ -1197,6 +1303,17 @@ time by the header's "TX launched" delay plus ~1.4 s of HackRF start latency; `p
 
 **Caveats:**
 - Gentle run 1 (`..._pmnormal`, no `_run2`) is void after 373 s: the HackRF underrun.
+- `px1105r_gentle_alt_pad360_smooth_gain3_nav4` had a 73 ms underrun (378,656 bytes) at file
+  time ~240 s. Every channel was lost for ~40 s, and it re-fixed on the time-shifted sky before
+  ignition, so its pad is not comparable with the other nav-mode runs.
+- Every capture carries the rig's 22 Hz carrier-vs-code offset: code-minus-carrier grows at
+  4.19 m/s, and the clock drift the Doppler reports sits 4.2 m/s off the pseudoranges' clock-bias
+  rate, so a filter needs a clock-rate offset state. Carrier-smoothed pseudoranges also restart
+  +7 to +15 m high at every (re)lock; that is the rig, not the receiver (see "The HackRF's
+  carrier runs 22 Hz off its own code").
+- The archived truth velocities are the 0.1 s block ending at each row, so they read 0.05 s late:
+  take a row's velocity as the signal's at t - 0.05 s (1 m/s in the 3 g boost, 6.6 m/s at
+  13.5 g). Altitude is exact at the rows.
 - PX1105R captures without `pmnormal` ran factory power save, with ~1 s fix dropouts every
   11-13 s on the pad; raw keeps flowing.
 - Captures without `_el3` ran the factory 15 degree mask, 9 of 14 satellites.
@@ -1233,20 +1350,23 @@ applied to the Air530 and not carried back.
     Air530    11 captures   all five
 
 **How much it matters.** Measured shut lags on `gentle_alt`, converted into the
-units of the window they occur in (w1/w3 cross velocity at ~29 m/s^2, w2 crosses
-altitude at ~200 m/s):
+units of the window they occur in (w1 crosses velocity at a net 14.1 m/s^2, w3 at
+9.4 m/s^2, w2 crosses altitude at 218 m/s):
 
-| | w1 vel | w2 alt | w3 vel | velocity smear | altitude smear |
+| | w1 vel | w2 alt | w3 vel | velocity smear, w1 / w3 | altitude smear |
 |---|---|---|---|---|---|
-| PX1125R | 0.6 s | 0.3 s | 0.4 s | 18 m/s | 60 m |
-| SAM-M10Q | 0.3 s | 0.7 s | 0.8 s | 24 m/s | 140 m |
-| ZED-F9P | 0.6 s | **3.3 s** | 0.4 s | 18 m/s | **660 m** |
-| NEO-M8T | 0.6 s | 0.3 s | 0.4 s | 18 m/s | 60 m |
+| PX1125R | 0.6 s | 0.3 s | 0.4 s | 8 / 4 m/s | 65 m |
+| SAM-M10Q | 0.3 s | 0.7 s | 0.8 s | 4 / 8 m/s | 150 m |
+| ZED-F9P | 0.6 s | **3.3 s** | 0.4 s | 8 / 4 m/s | **720 m** |
+| NEO-M8T | 0.6 s | 0.3 s | 0.4 s | 8 / 4 m/s | 65 m |
 
-The reported velocity brackets are 8-14 m/s wide, so 18-24 m/s of lag is larger
-than the bracket itself -- and it biases **both** edges the same way, because the
-receiver holds a fix past the true threshold and then blocks late. The numbers
-are shifted up, not merely uncertain. The combined `(514, 516]` bracket is real
+Corrected 2026-09-27: this table first converted with 29.4 m/s^2, the boost's
+thrust rather than its net acceleration, and gave 18-24 m/s and 60-660 m.
+
+The reported velocity brackets are 8-14 m/s wide, so 4-8 m/s of lag is about half a
+bracket -- and it biases **both** edges the same way, because the receiver holds a
+fix past the true threshold and then blocks late. The numbers may sit a few m/s
+high, not merely uncertain. The combined `(514, 516]` bracket is real
 arithmetic across the edges but is tighter than the method supports for the four
 ramp-measured parts.
 
@@ -1254,14 +1374,17 @@ In priority order, all scenarios already built in `c8/` (21 GB, no regeneration)
 
 1. **`vel_stair` on the four ramp-measured parts.** 90 s dwells at 495-530 m/s
    remove the lag entirely. ~16 min each. Either confirms 514-516 or shows the
-   true threshold is ~20 m/s lower. Run the staircase descending as well as
+   true threshold is up to ~8 m/s lower. Run the staircase descending as well as
    ascending and it also gives hysteresis, which nothing has tested.
 2. **`alt_stair` on the PX1125R, SAM-M10Q and ZED-F9P.** Their 80 km figures come
    from flight profiles only. The F9P matters most: its 3.3 s altitude lag is
-   660 m of smear, which is exactly why its bracket inverts and carries a footnote.
+   720 m of smear, which is exactly why its bracket inverts and carries a footnote.
 3. **Re-run the PX1125R entirely.** Its 19 captures all predate the link being
    fixed -- 5th-percentile 4 satellites and median 7, against 10-14 for
-   everything measured since. It is the least trustworthy row in the table.
+   everything measured since. It is the least trustworthy row in the table. Most
+   of that starvation was its C/N0 walking 15-18 dB down and back every ~70 s
+   with the rig's carrier-vs-code offset (see the C/N0 oscillation section), so
+   re-run it on a carrier-corrected file (`patch_carrier_offset.py`).
 
 Best done as each part goes back on the bench alongside a new one, since only
 one receiver connects at a time.

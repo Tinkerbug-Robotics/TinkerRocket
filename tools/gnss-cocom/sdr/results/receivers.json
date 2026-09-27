@@ -27,7 +27,7 @@
     1.5
    ],
    "sats_median": 7,
-   "notes": "Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. Also carried a ~15 dB, ~82 s C/N0 oscillation that was never identified.",
+   "notes": "Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. The starvation came from a ~15 dB, ~70-80 s C/N0 oscillation that was the rig, not the part (identified 2026-09-27): in its August configuration this receiver drove its code with its carrier, and the HackRF's carrier runs 22 Hz off its code, so every channel's code walked 0.83-0.97 chip off the correlation peak and re-acquired about every 70 s.",
    "altitude_gate_cause": "cocom",
    "velocity_gate_present": true,
    "sats_p05": 4
@@ -157,7 +157,7 @@
    ],
    "sats_p05": 12,
    "sats_median": 13,
-   "notes": "It answers u-blox's UBX interface down to SEC-UNIQID; its MON-VER reports ROM SPG 5.10, hardware 000A0000, PROTVER 34.10 and no MOD= string. Gate behavior is in family -- velocity around 515, altitude at 80 km, limits independent -- but it is the slowest part measured on the ALTITUDE gate: +2.3 s to close and 4.7-5.0 s to re-open, against 0.7-1.7 s elsewhere, which is why both its brackets inverted. Flown on the same ephemeris, start time and launch site as the SAM-M10Q, ZED-F9P and NEO-M8T, so its satellite geometry is directly comparable rather than merely similar. One velocity edge closed a single epoch early, blocking at 510 m/s, while every other edge on this part is consistent with 515; at 29 m/s^2 an epoch is 29 m/s wide, so that is quantization rather than a lower threshold.",
+   "notes": "It answers u-blox's UBX interface down to SEC-UNIQID; its MON-VER reports ROM SPG 5.10, hardware 000A0000, PROTVER 34.10 and no MOD= string. Gate behavior is in family -- velocity around 515, altitude at 80 km, limits independent -- but it is the slowest part measured on the ALTITUDE gate: +2.3 s to close and 4.7-5.0 s to re-open, against 0.7-1.7 s elsewhere, which is why both its brackets inverted. Flown on the same ephemeris, start time and launch site as the SAM-M10Q, ZED-F9P and NEO-M8T, so its satellite geometry is directly comparable rather than merely similar. One velocity edge closed a single epoch early, blocking at 510 m/s, while every other edge on this part is consistent with 515; at the crossing's net 14 m/s^2 an epoch is 14 m/s wide, so on that edge the part stopped a few m/s below 515 by the injection, and one edge cannot say whether its threshold or its own speed estimate is the reason.",
    "velocity_edges": {
     "fix": [
      512,
