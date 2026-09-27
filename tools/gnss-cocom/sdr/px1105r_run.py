@@ -16,7 +16,11 @@ from skytraq_raw import Link                                     # noqa: E402
 from nav_mode import cold_start, set_mode, read_mode, MODES     # noqa: E402
 from serial.tools import list_ports                              # noqa: E402
 
-PX_MAC = "9C:13:9E:A2:F8:CC"
+# Which receiver: "--mac MAC" (the bridge's USB serial number; default the TinkerNav PX1105R)
+# or "--port DEV"; "--rx NAME" names the captures (px1105r_..., px1125r_...).
+PX_MAC = (sys.argv[sys.argv.index("--mac") + 1] if "--mac" in sys.argv else "9C:13:9E:A2:F8:CC").upper()
+PORT_ARG = sys.argv[sys.argv.index("--port") + 1] if "--port" in sys.argv else None
+RX = sys.argv[sys.argv.index("--rx") + 1].lower() if "--rx" in sys.argv else "px1105r"
 GAIN = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 if not 0 <= GAIN <= 6:
     sys.exit("gain is capped at 6 dB for radiated runs")
@@ -46,36 +50,65 @@ PAD_SHIFT = float(sys.argv[sys.argv.index("--pad-shift") + 1]) if "--pad-shift" 
 RUN_TAG = sys.argv[sys.argv.index("--tag") + 1] if "--tag" in sys.argv else None
 tag = ((f"_nav{NAV}" if NAV is not None else "") + (f"_el{ELEV}" if ELEV is not None else "")
        + (f"_{RESTART}{HOT_T:.0f}" if HOT_T is not None else "") + (f"_{RUN_TAG}" if RUN_TAG else ""))
-if (SDR / "captures" / f"px1105r_{C8.stem}_gain{GAIN}{tag}.log").exists():
-    sys.exit(f"!! capture px1105r_{C8.stem}_gain{GAIN}{tag}.log exists; pass --tag to keep it")
-OUT = SDR / "captures" / (f"px1105r_{C8.stem}_gain{GAIN}{tag}.log" if (GAIN or len(sys.argv) > 2) else "px1105r_smooth460_spaceshot.log")
+if (SDR / "captures" / f"{RX}_{C8.stem}_gain{GAIN}{tag}.log").exists():
+    sys.exit(f"!! capture {RX}_{C8.stem}_gain{GAIN}{tag}.log exists; pass --tag to keep it")
+OUT = SDR / "captures" / (f"{RX}_{C8.stem}_gain{GAIN}{tag}.log" if (GAIN or len(sys.argv) > 2) else f"{RX}_smooth460_spaceshot.log")
 ERR = "/tmp/hackrf_tx_px1105r.err"
 
-port = next((p.device for p in list_ports.comports() if (p.serial_number or "").upper() == PX_MAC), None)
+port = PORT_ARG or next((p.device for p in list_ports.comports() if (p.serial_number or "").upper() == PX_MAC), None)
 if not port:
-    sys.exit(f"!! the TinkerNav ({PX_MAC}) is not on USB")
+    sys.exit(f"!! no receiver on USB with serial {PX_MAC} (pass --mac or --port)")
 link = Link(port)
 time.sleep(0.3)
 link.frames()
 navname = "as-is"
+# "--pad-restart warm|hot|cold" picks the restart before transmitting (default cold). warm/hot
+# are seeded with the scenario's start time and origin -- the August PX1125R procedure
+# (seed_restart.py via batch_run.py), for a receiver that fights the injected signal.
+PAD_RESTART = sys.argv[sys.argv.index("--pad-restart") + 1] if "--pad-restart" in sys.argv else "cold"
 if NAV is not None:
-    cold_start(link)                                      # clears time/pos/eph, keeps SRAM config
+    if PAD_RESTART == "cold":
+        cold_start(link)                                  # clears time/pos/eph, keeps SRAM config
+    else:
+        import json as _json
+        from seed_restart import restart_payload as _rp
+        _sc = _json.loads((SDR / "scenarios" / "spaceshot.json").read_text())
+        _o, _alt0 = _sc["origin"], _sc["truth"][0]["alt_m"]
+        _ack, _ = link.command(_rp({"hot": 1, "warm": 2}[PAD_RESTART], (2026, 8, 18, 8, 30, 0),
+                                   _o["lat_deg"], _o["lon_deg"], _alt0), timeout=3.0)
+        if not _ack:
+            link.close(); sys.exit(f"!! receiver refused the seeded {PAD_RESTART} restart")
+        time.sleep(3.0); link.frames()
+        print(f"# seeded {PAD_RESTART} restart: 2026-08-18 08:30:00, {_o['lat_deg']:.2f}, {_o['lon_deg']:.2f}, {_alt0:.0f} m")
     if not set_mode(link, NAV):
         link.close(); sys.exit(f"!! receiver refused nav mode {NAV}")
     rb = read_mode(link)
     if rb != NAV:
         link.close(); sys.exit(f"!! nav mode set {NAV} but reads back {rb}")
     navname = f"{NAV} {MODES.get(NAV, '?')}"
-    print(f"# nav mode {navname}, cold started")
+    print(f"# nav mode {navname}, {PAD_RESTART} restart on the pad")
 if ELEV is not None:
     ack, _ = link.command(bytes([0x2B, 0x01, ELEV, 0, 0]), timeout=3.0)     # elevation + CNR, CNR 0, SRAM
     if not ack:
         link.close(); sys.exit(f"!! receiver refused elevation mask {ELEV}")
+# "--power-mode normal|save" (AN0037 0x0C, SRAM). SkyTraq ships in Power Save, which throttles the
+# search engine; with it on, the PX1125R never re-assembled an ephemeris on the bench.
+PMODE = sys.argv[sys.argv.index("--power-mode") + 1] if "--power-mode" in sys.argv else None
+if PMODE is not None:
+    if PMODE not in ("normal", "save"):
+        link.close(); sys.exit("--power-mode is normal or save")
+    _pa, _ = link.command(bytes([0x0C, 0 if PMODE == "normal" else 1, 0x00]), timeout=3.0)
+    if not _pa:
+        link.close(); sys.exit(f"!! receiver refused power mode {PMODE}")
+_pack, _pr = link.command(bytes([0x15]), want_reply=0xB9, timeout=3.0)
+powername = ("power " + {0: "normal", 1: "save"}.get(_pr[1], str(_pr[1]))) if _pr else "power mode unknown"
+if PMODE is not None and powername != f"power {PMODE}":
+    link.close(); sys.exit(f"!! power mode set {PMODE} but reads back {powername}")
 _mack, _mr = link.command(bytes([0x2F]), want_reply=0xB0, timeout=3.0)
 maskname = f"elev mask {_mr[2]} deg, CNR mask {_mr[3]} dB-Hz" if _mr else "mask unknown"
 if ELEV is not None and (not _mr or _mr[2] != ELEV):
     link.close(); sys.exit(f"!! elevation mask set {ELEV} but reads back {maskname}")
-print(f"# {maskname}")
+print(f"# {maskname}; {powername}")
 hot_frame = None
 if HOT_T is not None:
     import json, struct, bisect, datetime
@@ -106,7 +139,7 @@ ids, n_e5 = {}, 0
 try:
     with open(OUT, "w") as f:
         f.write(f"0.000 # host: tx {C8.name} gain {GAIN}; TX launched {t_tx:.3f} s after the link opened "
-                f"(start_tx returns 4 s later); PX1105R {PX_MAC} RTK kinematic base, 0xE5 20 Hz; nav mode {navname}; {maskname}\n")
+                f"(start_tx returns 4 s later); {RX.upper()} {PORT_ARG or PX_MAC} RTK kinematic base, 0xE5 20 Hz; nav mode {navname}; {maskname}; {powername}\n")
         t_end = time.time() + SECONDS
         last = 0.0
         hot_sent = False

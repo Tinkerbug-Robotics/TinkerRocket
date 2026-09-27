@@ -56,6 +56,10 @@ def lla(x, y, z):
     return math.degrees(lat), math.degrees(lon), h
 
 
+import re as _re
+_hdr = open(cap, errors="replace").readline()
+_m = _re.search(r"tx (\S+)\.C8", _hdr)
+IQNAME = _m.group(1) if _m else f"smooth {SCEN}"      # the IQ file this capture played
 e5, df = [], []           # (host t, file t, ...)
 events = []               # (host t, text): what the runner did mid-run, e.g. a hot start
 for line in open(cap, errors="replace"):
@@ -162,7 +166,7 @@ for a in axs:
 for ft, name in events:
     axs[0].text(ft + 2, 9.2, f"{name} (file {ft:.1f} s)", fontsize=7.5, color=INK, va="top")
 axs[0].set_xlim(IGN - 80, max(h - off for h, *_ in df) if df else IGN + 300)
-axs[0].set_title(f"PX1105R (RTK kinematic base, raw 0xE5 at 20 Hz), smooth {SCEN}; "
+axs[0].set_title(f"{cap.name.split('_')[0].upper()} (RTK kinematic base, raw 0xE5 at 20 Hz), {IQNAME}; "
                  "amber = above 500 m/s, violet = above 80 km, dotted = 18 km"
                  + ("; dashed = " + ", ".join(n for _t, n in events) if events else ""),
                  fontsize=9, color=INK, loc="left")

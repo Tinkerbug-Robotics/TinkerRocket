@@ -997,6 +997,66 @@ Tools: `px_restart_compare.py` (runs side by side, seconds after ignition),
 `pad_scenario.py`. Captures: `results/px1105r_spaceshot_pad360_*_{hot372_run1,
 hot372_run2,hot392,cold372}` and `results/px1105r_spaceshot_pad600_*_el3_{run1,run2,hot612}`.
 
+
+### PX1125R: power save, and the carrier build (2026-09-26)
+
+The older SkyTraq, on the dual-MCU TinkerNav (RP2040 + ESP32-C3 + PX1125R). The receiver hangs
+off the **RP2040**; the C3 is only the radio. The RP2040 needs main's `gnss_passthrough`, which
+scores SkyTraq binary frames as a live link -- this branch's copy is the older NMEA-only one and
+cannot follow the receiver to a new baud rate. Firmware kernel 3.0.1 / ODM 1.7.33, built
+2022-08-22. Factory state: RTK base (survey), 1 Hz, 115200, auto dynamics, 15 degree mask,
+**power save**. Gain sweep 0/2/4/6 dB -> 37/39/41/43 dB-Hz; +2 dB matches the PX1105R's
+37-40 dB-Hz at +3. Configured like the PX1105R for the flights: kinematic base, 20 Hz, 921600,
+SLR, 3 degree mask.
+
+**On the smooth-carrier IQ, in power save, it never fixed** -- five runs up to 420 s, with 13-14
+satellites tracked at 39-41 dB-Hz, frame sync reached and ~160 subframes decoded. It never got
+three consecutive subframes (1-2-3) from any satellite, so it never assembled an ephemeris.
+Underneath: every ~15 s, three or more channels lose frame sync at once. Both SkyTraq parts do
+this on the bench (the PX1105R too, on its own board), in every IQ build and at every gain; the
+LC86G on the same transmit chain shows no common-mode lock resets at all. Real-sky data never
+shows it, so it is a bench effect that only SkyTraq reacts to -- open, and next.
+
+First fix from a cold start on the same pad, cold / 20 Hz / kinematic / SLR / 3 degrees:
+
+| IQ build (gps-sdr-sim) | Power save (factory) | Power normal |
+|---|---|---|
+| stock (fixed-point carrier) | ~136 s | -- |
+| float-only (`FLOAT_CARR_PHASE`) | ~326 s | -- |
+| fixed-point ramp (`patch_smooth_fixed.py`) | ~290 s | -- |
+| smooth (`patch_smooth_carrier.py`: float + ramp) | never (5 runs) | **~53 s** |
+
+The smooth file differs from stock mostly through gps-sdr-sim's floating-point carrier path, not
+the ramp: today's source built fixed-point reproduces the stock file byte for byte, and on a
+static pad smooth and float-only IQ are 68 % bit-identical (correlation 0.9995) against 10 %
+(0.997) for stock and float-only. One satellite at a time, all builds track the same (Doppler,
+amplitude, phase continuity, code). Power save -- which AN0037 says throttles the search engine
+-- is what turned slow into never: with it off (`0x0C 00`, SRAM) the smooth file fixes in ~53 s
+and the collapses no longer stop decoding. **Every PX1105R and PX1125R run before this one was
+in power save.**
+
+The 13.5 g spaceshot, seconds after ignition (500 m/s crossings 82.2 and 246.6):
+
+| Receiver, IQ, power | Ephemeris at ignition | Raw back | First fix | Fix epochs |
+|---|---|---|---|---|
+| PX1105R, smooth, factory (run 1) | 14 of 14 | 79.7 | 80.7 | 1831 |
+| PX1105R, smooth, factory (run 2) | 14 of 14 | 19.9 | 80.6 | 1833 |
+| PX1125R, stock, save | 13 of 13 | 67.6 | 85.8 | 1520 |
+| PX1125R, smooth, normal | 13 of 13 | 91.0 | 91.1 | 1634 |
+
+The PX1125R comes back ~10 s after the PX1105R on the ascent, and at the same moment on the
+descent once power save is off (the stock/power-save run was ~13 s late there). A PX1105R rerun
+with power save off is next, to make the comparison exact.
+
+**Flight software driving a SkyTraq receiver must, at every boot:** turn power save off
+(`0x0C 00`), set the elevation mask to 3-5 degrees (`0x2B`), and set a dynamics mode
+(`0x64/0x17`). All three are SRAM settings that revert on a power cycle.
+
+Tools: `px1105r_run.py --power-mode normal|save`, `--pad-restart warm|hot|cold` (seeded from
+the scenario start), `--rx NAME --mac SERIAL|--port DEV`; `patch_smooth_fixed.py`;
+`px_restart_compare.py` rows now name the receiver, IQ build and power mode. Captures:
+`results/px1125r_spaceshot_pad600_*` (sweep, the diagnostic static runs, both flights).
+
 ## Experiments still owed on the first four receivers
 
 Only the Air530 was ever run against the dwell scenarios. Every other part's

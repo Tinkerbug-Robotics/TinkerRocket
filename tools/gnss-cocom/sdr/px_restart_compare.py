@@ -64,6 +64,10 @@ def load(cap: Path, prologue: float):
     ign = float(m.group(1)) if m else prologue
     mm = re.search(r"elev mask (\d+) deg", header)
     mask = f"{mm.group(1)} deg mask" if mm else "mask not recorded"
+    pw = re.search(r"power (normal|save)", header)
+    power = f"power {pw.group(1)}" if pw else "power not recorded"
+    iq = re.search(r"tx (\S+)\.C8", header)
+    build = ("stock IQ" if "stock" in iq.group(1) else "smooth IQ" if "smooth" in iq.group(1) else iq.group(1)) if iq else "IQ ?"
     off = stt.median(offs)
     e5 = [(ft - ign, n) for ft, n in e5]
     fixes = sorted(h - off - ign for h, st in df if st >= 2)
@@ -79,9 +83,9 @@ def load(cap: Path, prologue: float):
     events = [(h - off - ign, nm) for h, nm in ev]
     kind = events[0][1].split("-START")[0].lower() + f" start at {events[0][0]:+.1f} s" if events else "no restart"
     rn = re.search(r"_run(\d+)\.log$", cap.name)
-    label = kind + (f", run {rn.group(1)}" if rn else "")
+    label = f"{cap.name.split('_')[0].upper()}: {kind}" + (f", run {rn.group(1)}" if rn else "")
     return dict(e5=e5, fixes=fixes, bands=bands, events=events, label=label,
-                note=f"{mask}, {ign:.0f} s pad", e7=e7, off=off, ign=ign)
+                note=f"{build}, {mask}, {power}", e7=e7, off=off, ign=ign)
 
 
 def summarise(d, burn, end):
@@ -138,10 +142,10 @@ def main() -> int:
         summarise(d, burn, end)
         rows.append(d)
     fmt = lambda v: "   -  " if v is None else f"{v:6.1f}"
-    print(f"{'run':<30}{'setup':<22}{'sats':>5}{'eph':>5}{'raw back':>10}{'1st fix':>9}{'fix epochs':>12}"
+    print(f"{'run':<32}{'setup':<40}{'sats':>5}{'eph':>5}{'raw back':>10}{'1st fix':>9}{'fix epochs':>12}"
           f"   (s after ignition; burnout {burn:.1f})")
     for d in rows:
-        print(f"{d['label']:<30}{d['note']:<22}{d['seen']:>5}{d['eph']:>5}{fmt(d['held']):>10}"
+        print(f"{d['label']:<32}{d['note']:<40}{d['seen']:>5}{d['eph']:>5}{fmt(d['held']):>10}"
               f"{fmt(d['fix1']):>9}{d['nfix']:>12}")
 
     t0, t1 = -20.0, end
@@ -179,7 +183,8 @@ def main() -> int:
     axs[-1].set_xlabel(f"seconds after ignition (burnout {burn:.1f}; 500 m/s crossings {v500[0][1]:.1f}"
                        + (f" and {cross}" if cross else "") + f"; 80 km {a80[0][0]:.1f}-{a80[0][1]:.1f})",
                        fontsize=7.5, color=INK3)
-    fig.suptitle("PX1105R, 13.5 g spaceshot: raw measurements per epoch (blue), own fix (green band), "
+    rxs = " vs ".join(sorted({c.name.split("_")[0].upper() for c in caps}))
+    fig.suptitle(f"{rxs}, 13.5 g spaceshot: raw measurements per epoch (blue), own fix (green band), "
                  "restart (dashed); amber > 500 m/s, violet > 80 km", fontsize=9, color=INK, x=0.07, ha="left", y=0.995)
     fig.savefig(out, bbox_inches="tight")
     print("wrote", out, "with", len(rows), "rows")
