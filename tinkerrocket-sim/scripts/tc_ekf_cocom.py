@@ -27,15 +27,20 @@ The PX1105R's Doppler is the range rate ~0.22 s before its time tag (power
 normal; 0.05-0.2 s in power save) while its pseudorange is on time: --rr-lag.
 Its pseudoranges are receiver-smoothed, wander ~2x the still-antenna fit in
 flight (--pr-corr-scale) and start 30-40 m off after every (re)lock
-(--relock-sigma). The IMU modes mirror the flight filter's mechanization unless
+(--relock-sigma) -- on this rig only: a carrier-smoothed pseudorange restarts at
+the raw code while settled channels sit the rig's 4.19 m/s carrier-vs-code split
+times the smoothing time below it, and on the real sky there is no such offset. The IMU modes mirror the flight filter's mechanization unless
 told otherwise: --gravity wgs84 --earth-rate --no-att-gate is the one a
 flight to 80 km wants (see the results README, 2026-09-27).
 
 Truth. gps-sdr-sim takes one motion row per 0.1 s: the code phase runs linearly
 between rows, and the smooth-carrier build sweeps the carrier between block-edge
 rates. make_flights.py integrates h_k = h_(k-1) + v_k dt, so its v_k is the mean
-velocity over the block before t_k: the signal's velocity at t_k - 0.05 s, which
-is where it is placed here (the scenario JSON's v_up at t_k is half a block late).
+velocity over the block before t_k: the signal's velocity at t_k - 0.05 s. Scenario
+JSONs written before 2026-09-27 carry that v_k at t_k, half a block late; newer ones,
+and the archive since PR #1534, carry the signal's velocity at t_k. RigTruth tells
+the two apart from the rows (h_k = h_(k-1) + v_k dt holds exactly only for the old
+kind) and places the velocity where the signal had it.
 
     PYTHONPATH=src python3 scripts/tc_ekf_cocom.py CAPTURE.log.gz SCENARIO.json \\
         --pad 600 --mode own --mode ca --mode ins --gravity wgs84 --earth-rate --no-att-gate
@@ -88,7 +93,15 @@ class RigTruth:
             tk, h, vu = (np.concatenate([tp, tk]), np.concatenate([np.full(len(tp), h[0]), h]),
                          np.concatenate([np.zeros(len(tp)), vu]))
         self.tk, self.h, self.vu = tk, h, vu
-        self.tv = tk - 0.05                    # v_k is the signal's velocity half a block early
+        # Old JSONs give each row the 0.1 s block ENDING there (the signal had it half a
+        # block earlier); newer ones give the signal's velocity at the row. See the docstring.
+        t0 = np.array([s["t"] for s in tr])
+        h0 = np.array([s["alt_m"] for s in tr])
+        v0 = np.array([s["v_up_mps"] for s in tr])
+        dt = np.diff(t0)
+        ok = dt > 0
+        block = bool(ok.any()) and float(np.max(np.abs(np.diff(h0)[ok] / dt[ok] - v0[1:][ok]))) < 1e-6
+        self.tv = tk - (0.05 if block else 0.0)
         self.lat0 = math.radians(S["origin"]["lat_deg"])
         self.lon0 = math.radians(S["origin"]["lon_deg"])
         self.T = t_e2ned(self.lat0, self.lon0)
@@ -207,7 +220,9 @@ def load_capture(path, systems="G"):
 class RelockAge:
     """Seconds since each satellite last (re)appeared in the raw output: the
     PX1105R's smoothed pseudorange starts 20-40 m off after a (re)lock and
-    decays over ~10-20 s (COCOM rig, 2026-09-27)."""
+    decays over ~10-20 s (COCOM rig, 2026-09-27). That offset is the rig's
+    4.19 m/s carrier-vs-code split times the receiver's smoothing time; the real
+    sky shows none."""
 
     def __init__(self, gap_s=0.5):
         self.first, self.last, self.gap = {}, {}, gap_s
@@ -649,7 +664,7 @@ def build_parser():
     ap.add_argument("--rr-scale", dest="rr_scale", type=float, default=1.0, help="scale the Doppler sigma")
     ap.add_argument("--relock-sigma", dest="relock_sigma", type=float, default=40.0,
                     help="extra correlated pseudorange sigma right after a (re)lock, m, decaying "
-                         "over --relock-tau (0 = off)")
+                         "over --relock-tau (0 = off). A COCOM-rig artifact: use 0 on real-sky data")
     ap.add_argument("--relock-tau", dest="relock_tau", type=float, default=10.0)
     ap.add_argument("--gate", type=float, default=10.83, help="chi-square gate per measurement")
     ap.add_argument("--no-kin-gravity", dest="kin_gravity", action="store_false",

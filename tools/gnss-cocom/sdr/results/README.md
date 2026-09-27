@@ -1193,8 +1193,10 @@ raw measurements have been flowing for a while; right after the spaceshot's gap 
 
 **Truth, first.** gps-sdr-sim takes one motion row per 0.1 s, and `make_flights.py` integrates
 h_k = h_(k-1) + v_k dt, so v_k is the mean velocity over the block *before* t_k: the smooth-carrier
-build puts it at t_k - 0.05 s. Read at t_k, as the JSON gives it, the truth velocity is half a
-block late -- 1 m/s in the gentle boost, 6.6 m/s at 13.5 g.
+build puts it at t_k - 0.05 s. Read at t_k, as the scenario JSONs gave it, the truth velocity was
+half a block late -- 1 m/s in the gentle boost, 6.6 m/s at 13.5 g. `make_flights.py` now writes the
+signal's velocity at each row and the archived JSONs are retimed (PR #1534); `RigTruth` tells the
+two kinds apart from the rows, so the numbers below hold with either.
 
 **The measurements**, against the truth, each epoch's common part removed
 (`figures/px1105r_raw_errors.svg`):
@@ -1209,8 +1211,11 @@ block late -- 1 m/s in the gentle boost, 6.6 m/s at 13.5 g.
 - **The pseudoranges carry the receiver's smoothing.** 5-7 m RMS on the pad and in the boost,
   10-13 m in the coast and descent, where the two highest satellites drift to -20 to -30 m. About
   40 % of it follows the low-passed range acceleration, the signature of smoothing the code with a
-  late carrier. Every (re)lock starts 30-40 m off and decays over 10-20 s, and on the spaceshot the
-  two highest satellites drop and re-lock again and again through the coast and descent. In power
+  late carrier. Every (re)lock starts 30-40 m off and decays over 10-20 s. That part is the rig,
+  not the receiver: a carrier-smoothed pseudorange restarts at the raw code while settled channels
+  sit the rig's 4.19 m/s carrier-vs-code split times the smoothing time below it, and the real sky
+  shows no such offset (PR #1534). On the spaceshot the two highest satellites drop and re-lock
+  again and again through the coast and descent. In power
   save every channel re-syncs every ~12 s and the pad alone is 33 m RMS.
 - **The rig's carrier runs 4.2 m/s off its code clock**: the clock rate the Doppler reports minus
   the rate at which the pseudoranges' clock bias moves. One oscillator drives both in a receiver
@@ -1336,7 +1341,8 @@ flight that logs the PX1105R's raw data (#1528).
 Caveats: one run per configuration, on a GPS-L1-only, noiseless simulated sky. The IMU is
 synthetic -- no vibration, spin or misalignment; a worse one (5 mg turn-on bias, 0.1 deg/s gyro
 bias, 0.3 % scale factor) moves the spaceshot's W1 from 16 to 20 m. The lag and the pseudorange
-artifacts are this receiver's, measured on this rig; the 4.2 m/s rate offset is the rig's. A
+smoothing are this receiver's, measured on this rig; the 4.2 m/s rate offset, and the re-lock
+transients it causes, are the rig's. A
 Doppler-lag state (`--p0-rr-lag`) exists but was left off: GNSS alone cannot separate it from the
 pseudorange errors.
 
