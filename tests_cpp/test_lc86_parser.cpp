@@ -76,8 +76,9 @@ const char* kDocPvtLine =
 
 TEST(Lc86Checksum, MatchesProtocolDocExamples)
 {
-    // Every expected value below is printed verbatim in the protocol doc —
-    // these anchor the XOR-between-$-and-* rule (commas included) externally.
+    // Every expected value below is printed verbatim in the protocol doc (or,
+    // where marked, the hardware design) — these anchor the XOR-between-$-
+    // and-* rule (commas included) externally.
     struct { const char* body; uint8_t cs; } cases[] = {
         {"PAIR050,1000",        0x12},  // §2.4.10
         {"PAIR001,004,0",       0x3F},  // §2.4.1
@@ -86,6 +87,7 @@ TEST(Lc86Checksum, MatchesProtocolDocExamples)
         {"PAIR066,1,1,1,1,0,0", 0x3A},  // §2.4.16
         {"PAIR513",             0x3D},  // §2.4.49
         {"PAIR864,0,0,115200",  0x1B},  // §2.4.69
+        {"PAIR732,0",           0x20},  // hardware design V1.5 §3.3.3 (ALP exit)
     };
     for (const auto& c : cases)
     {

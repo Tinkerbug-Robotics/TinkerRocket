@@ -7,7 +7,9 @@
 // absent — see the port notes in scratchpad/report-lc86g-research.md.
 //
 // Protocol references in comments are to the Quectel LC26G/LC76G/LC86G GNSS
-// Protocol Specification V1.4 [A] and the LC86G Hardware Design V1.1 [B].
+// Protocol Specification V1.4 [A] and the LC86G Hardware Design V1.1 [B];
+// [B5] is Hardware Design V1.5 (hardware/datasheets/), which documents the
+// ALP low-power mode (added in V1.2).
 #include "TR_GNSSReceiverLC86_Serial.h"
 
 #include <esp_log.h>
@@ -462,6 +464,29 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
             ESP_LOGW(TAG, "Fix-rate set failed — module stays at its prior "
                           "rate (data still flows, just slower)");
         }
+    }
+
+    // ── Power mode: Continuous ($PAIR732,0 [B5 §3.3.3]) ─────────────────
+    // Owner rule 2026-09-26: flight firmware turns receiver power saving off
+    // explicitly at every boot instead of trusting the default. The module
+    // powers up in Continuous mode [B5 §3.3.2] and nothing here enters ALP
+    // (Adaptive Low Power, $PAIR732,1/2) or saves config, so this only bites
+    // on a module someone put in ALP and $PAIR513-saved on the bench — but
+    // ALP trades tracking for current (12-26 mA against 35 mA on the LA
+    // variant [B5 Table 3]), and on the COCOM bench a receiver's factory
+    // power save is what cost it reacquisition after the boost. Sent before
+    // the navigation mode because ALP can only run in Normal mode
+    // [B5 §3.3.3]: a module that refuses Balloon below stays in Normal,
+    // where a saved ALP would still apply. Not load-bearing: a refusal
+    // WARNs and carries on.
+    if (sendPairCommand("PAIR732,0", 732))
+    {
+        ESP_LOGI(TAG, "Power mode Continuous (ALP off)");
+    }
+    else
+    {
+        ESP_LOGW(TAG, "ALP exit ($PAIR732,0) refused — power mode unconfirmed "
+                      "(the power-on default is Continuous)");
     }
 
     // ── Navigation mode: Balloon ($PAIR080 [A §2.4.24]) ─────────────────
