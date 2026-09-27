@@ -1,0 +1,16 @@
+# t00_static, 5 gain steps, 75s then 35s each
+
+   gain  sats>=30dB  median C/N0   fix
+  ----------------------------------------
+# receiver on /dev/cu.usbserial-0001 @ 115200
+
+      8          14        48.0    yes
+     14          15        45.3    yes
+     20          13        51.0    yes
+     26          13        47.6    yes
+     32          14        40.9    yes
+# HackRF reset: PortaPack back in Mayhem, radio idle
+
+  best: gain 14 -- 15 satellites at 45 dBHz
+  note: gain 20 reported a higher C/N0 (51 dBHz) with 13 satellites.
+        Higher level, fewer satellites is the compression signature -- do not use it.

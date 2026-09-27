@@ -39,7 +39,7 @@ from gnss_nmea_monitor import Parser, _demux           # noqa: E402
 from ublox_binary import (CLS_NAV, MSG_NAV_PVT, MSG_NAV_SAT,   # noqa: E402
                           parse_nav_pvt, parse_nav_sat)
 sys.path.insert(0, str(HERE))
-from ensure_hackrf import ensure_hackrf                    # noqa: E402
+from ensure_hackrf import ensure_hackrf, hackrf_idle       # noqa: E402
 from find_ublox import find_ublox                          # noqa: E402
 
 # Per-scenario, not shared: an orphaned hackrf_transfer from an earlier run
@@ -323,6 +323,8 @@ def main() -> int:
     try:
         ser = serial.Serial(args.port, args.baud, timeout=0.5)
         with open(cap, "w") as fh:
+            if c8 is not None:           # what was flown, for the readers (px_limits-style)
+                fh.write(f"0.000 # host: tx {c8.name} gain {args.gain}; port {args.port}\n")
             buf = bytearray()
             t0 = time.time()
             while time.time() - t0 < dur:
@@ -400,6 +402,8 @@ def main() -> int:
             ser.close()
         except Exception:
             pass
+        if tx is not None:
+            hackrf_idle()                # radio idle between scenarios (owner's rule)
 
     print(f"\n# {nbytes} bytes, {nframes} frames -> {cap}")
     if nframes == 0:

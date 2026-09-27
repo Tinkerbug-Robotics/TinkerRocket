@@ -1031,6 +1031,72 @@ Capture: `results/lc86g_20260927_gentle_alt_pad600_smooth_balloon_msm7.log.gz`.
 PR #1527. This firmware's answer to it is not yet measured: the module was off USB when the
 tool changed.
 
+### u-blox raw measurements through the gentle flight: ZED-F9P and NEO-M8T (2026-09-27)
+
+Both u-blox parts flew the same `gentle_alt_pad600_smooth` file as the PX1105R and the LC86G,
+on the conducted chain (HackRF cabled into the receiver, no cage). They logged UBX RXM-RAWX
+(pseudorange, carrier phase, Doppler, C/N0 per satellite) and RXM-SFRBX (subframes, for the
+ephemeris) next to NAV-PVT.
+
+**Level.** This chain has less loss than August's 70 dB pad. `gain_sweep.py` on the static
+scene found:
+- **ZED-F9P:** best at gain 20, with 13 satellites at 48 dB-Hz; 42.5 at gain 26.
+- **NEO-M8T:** best at gain 14, with 15 satellites at 45 dB-Hz; 41 at gain 32.
+
+Higher gains compress both front ends: the F9P flown at 38 and 44 read a median 34 and 29
+dB-Hz. The sweeps are in `results/*_20260927_gain_sweep.txt`. At 20 Hz the F9P stops sending
+NAV-SAT a minute or two in, so only the first steps of its sweep are valid.
+
+**Rates.** What each setting actually delivered:
+
+| Receiver, setting | NAV-PVT | RXM-RAWX | Notes |
+|---|---|---|---|
+| ZED-F9P (HPG 1.13, USB), 20 Hz, 4 GNSS | 20.0/s | ~8 % of epochs, in bursts | raw only while few satellites are tracked; NAV-SAT ~0.2/s |
+| ZED-F9P, 20 Hz, GPS only | 20.0/s | ~5 % of epochs | not the link (USB, 2.2 kB/s average); it also drops two polls in three |
+| ZED-F9P, 10 Hz, GPS only | 10.0/s | 10 Hz, continuous | its practical raw rate |
+| NEO-M8T (TIM 1.10, UART), 10 Hz, 4 GNSS, 115200 baud | 10.0/s | 10.0/s | transmit buffer peaked at 6 % |
+| NEO-M8T, 18 Hz, GPS only, 460800 baud | 13-16.5/s | 17.7-17.9/s | skips fixes, never raw epochs; 20 Hz is not accepted and it runs at 10 |
+
+**When raw data flows**, against the three COCOM windows (file time):
+
+| Receiver | Raw in the speed windows (631-710, 818-875 s) | Raw in the 80 km window | Own fix |
+|---|---|---|---|
+| PX1105R | yes | yes | withheld above ~515 m/s and 80 km |
+| LC86G | no: all output stops | no: all output stops | its own 500 m/s and 80 km |
+| ZED-F9P | no: RAWX stops within 0.1 s of the fix | yes, 423 epochs | its own 514.3-515.0 m/s and 80.04-80.08 km |
+| NEO-M8T | no | yes | lost at 513.6 m/s; its 50 km airborne ceiling keeps it off until 875 s |
+
+The NEO-M8T also flew at 18 Hz (GPS only, 460800 baud, gain 14). That is the highest-rate raw
+capture of the four receivers: 20,362 RAWX epochs at 17.9 Hz with 14 GPS satellites, gapped
+only in the speed windows (631.4-709.9 and 817.6-875.3 s). It kept the full rate through the 80
+km window and through its 50 km no-fix span. The fix edges match the 10 Hz flight (lost at
+514.6 m/s, back at 875.2 s), and the transmit buffer stayed at or below 4 %.
+
+**Open:** the F9P's fix drops for a few seconds 20-27 times a flight, at every gain, and on the
+static pad (every ~80-100 s at first). Its raw data flows straight through the dropouts. No
+clock reset (one `clkReset`, at the first fix) and no pseudorange jump lines up with them. The
+NEO-M8T on the same file never dropped, so it is the F9P, not the signal. The August F9P gentle
+capture had a fix in only 517 of 812 epochs, fewer than its gate windows explain.
+
+**Setup quirks:**
+- The NEO-M8T had been left in a timing setup. At 115200 baud, seven extra NMEA sentences plus
+  RXM-SVSI (~1.2 kB at every epoch), RXM-MEASX and 02-61 filled the line completely.
+- The M8 path of `ubx_config.py` never set a rate, so an M8 stayed at 1 Hz.
+- The F9P NAKs `CFG-SIGNAL-GPS_L2C_ENA = 0`, so its L2C stays on.
+
+**Tools:**
+- `ubx_config.py` gains `--raw` (RAWX + SFRBX; NAV-SAT drops to once a second), `--gps-only`
+  (CFG-SIGNAL on F9, CFG-GNSS on M8), `--mon-comms` (MON-COMMS on F9, MON-TXBUF on M8) and
+  `--set-baud` (M8 UART1, RAM only), with polls retried three times.
+- Its M8 path now sets the rate, silences every NMEA sentence and any leftover UBX output, and
+  reports the rates that actually arrive.
+- `run_radiated.py` writes a `# host: tx` header and idles the radio at the end;
+  `gain_sweep.py` idles it too.
+- `ubx_limits.py` plots GPS satellites per RAWX epoch against the NAV-PVT fix and the
+  injection, and summarizes MON-COMMS.
+
+Captures: `results/zed_f9p_20260927_*` and `results/neo_m8t_20260927_*`.
+
 
 ## PX1105R (TinkerNav): where the withheld output goes, and what a filter recovers (2026-09-26)
 

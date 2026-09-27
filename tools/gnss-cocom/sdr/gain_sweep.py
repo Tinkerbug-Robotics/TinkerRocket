@@ -35,7 +35,7 @@ sys.path.insert(0, str(HERE))
 # for every receiver on this bench rather than one variant per protocol -- and
 # it applies the same FIX / BLOCKED / NO_LOCK classifier the measurement uses.
 from gnss_nmea_monitor import Parser, _demux                           # noqa: E402
-from ensure_hackrf import ensure_hackrf                                # noqa: E402
+from ensure_hackrf import ensure_hackrf, hackrf_idle                   # noqa: E402
 
 TX_ERR = "/tmp/hackrf_gain_sweep.err"
 
@@ -143,6 +143,7 @@ def main() -> int:
                 stop_tx(tx)
             rows.append((g, n, med, fix))
             print(f"  {g:>5} {n:>11} {med:>11.1f}  {'yes' if fix else 'no':>5}")
+    hackrf_idle()                    # radio idle between scenarios (owner's rule)
 
     if not rows:
         return 1
