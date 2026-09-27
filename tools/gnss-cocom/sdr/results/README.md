@@ -868,6 +868,8 @@ Tools, all in this directory:
     plot_boost_cn0.py         C/N0 run against run: pad levels, burn relative to each pad
                               (--group: runs sharing a label prefix, e.g. "5 Hz", share a colour)
     msm7_clock.py             the pad clock: MSM7 Doppler offset and pseudorange bias
+    lc86_limits.py            through a flight: GPS satellites per MSM7 epoch, the own fix
+                              against the injection, and the spans with no output at all
     patch_smooth_carrier.py   the SMOOTH_CARRIER gps-sdr-sim build
     m10_rate_series.sh        the same series for the SAM-M10Q on the V9 (staged, not yet run)
 
@@ -876,6 +878,44 @@ have one-second resolution at 10 Hz too. Balloon's 80 km mute outlives the
 transmitter: the next run's configuration gets no answer unless a blind `$PAIR006`
 goes first. A single wrong epoch at ignition (the last pad fix still reading 0 m/s
 0.4 s into the burn) is latency, which is why WRONG counts from 181 s.
+
+### When the LC86G gives measurements: the gentle flight with MSM7 on (2026-09-27)
+
+The 3 g gentle flight (82.5 km apogee, 997 m/s peak) through the LC86G in its flight
+configuration (Balloon, 10 Hz) with RTCM MSM7 on. It is the same IQ file as the
+PX1105R's gentle reference, `gentle_alt_pad600_smooth`, at gain 0 and ~36 dB-Hz: 13 GPS
+satellites, with no underruns. File time, from `lc86_limits.py`:
+
+| No output at all | Injected at the edges | What stops it |
+|---|---|---|
+| 630.2-711.4 s (81 s) | 498.9 -> 499.6 m/s | its own speed over 500 m/s, ascent |
+| 745.1-780.4 s (35 s) | 80.9 -> 81.1 km | its own altitude over 80 km (reads ~0.9 km low) |
+| 816.0-875.9 s (60 s) | 500.1 -> 499.3 m/s | its own speed over 500 m/s, descent |
+
+- **Everywhere else there is raw data:** 12-13 GPS satellites in every once-a-second
+  MSM7 epoch, the 3 g boost included, with carrier lock held through the burn.
+- **Inside the three windows there is nothing:** no fix and no MSM7, only a once-a-minute
+  `$PAIR010` (the module asking for aiding: GPS week and time only).
+- **The module keeps tracking while muted.** The MSM7 lock-time indicator on either side of each
+  window shows carrier lock kept on all 12 satellites through the 81 s ascent mute, on all 12
+  through the 80 km mute (a 13th, G17, left the list), and on 10 of 12 through the 60 s descent
+  mute (G11 and G24 re-locked). The indicator is quantized to 1/64-1/32 of its value, so the
+  comparison allows one step.
+- **Output returns within one 0.1 s epoch,** straight into a valid fix.
+
+**Against the PX1105R on the same file:** the PX1105R withholds only its own fix, and its raw
+0xE5 keeps flowing through all three windows (median 13, 9 and 9 measurements per epoch). The
+LC86G gives nothing, raw data included. A filter on the LC86G coasts across 81, 35 and 60 s
+gaps and picks up with carrier lock intact.
+
+Also seen:
+- As before, its own altitude runs low on the descent, ~2-3 km by landing.
+- The fix drops for 2.8 s at 1182.7 s, where the injected speed steps from ~40 to ~6 m/s.
+
+Capture: `results/lc86g_20260927_gentle_alt_pad600_smooth_balloon_msm7.log.gz`.
+`lc86_config.py` now also sends `$PAIR732,0` (ALP off), matching the flight driver since
+PR #1527. This firmware's answer to it is not yet measured: the module was off USB when the
+tool changed.
 
 
 ## PX1105R (TinkerNav): where the withheld output goes, and what a filter recovers (2026-09-26)
