@@ -187,7 +187,8 @@ the same from 2026-08-20 to 2026-09-27.
   +17 to +30 m in the upper quartile, settling over 10-20 s. The PX1105R on the real
   sky shows no systematic offset (medians within 3 m, scatter 5-9 m); the NEO-M8T
   shows none on the rig.
-- **The receivers' own altitude, probably:** see open question 4.
+- **The receivers' own altitude:** on the LC86G, yes -- its 2.5 km descent drift is
+  gone on the corrected file (below, and open question 4).
 - **Not the own velocity:** its bias is 0.00 m/s on the pad on all four receivers,
   so the speed gate and every velocity result are unaffected. **Not acquisition:**
   22 Hz against the 1.1-2.0 kHz clock offsets these receivers already search.
@@ -201,8 +202,53 @@ it writes every carrier 22.0 Hz low and leaves the code untouched (from the IQ: 
 -22.01 to -22.03 Hz, code drift under 0.0001 chip/s); built without it, the patched
 source reproduces `spaceshot_pad600_stock.C8` byte for byte. On air the HackRF's
 +22.0 Hz should bring the carrier back onto the code, and `code_carrier.py` should
-read about 0. That check, and an A/B of the PX1125R's pad and the LC86G's gentle
-flight on the corrected files, are still to be run.
+read about 0.
+
+**Checked on air (2026-09-27): it does, and the LC86G's altitude drift goes with it.**
+Same receivers, same settings, same trajectory; only the IQ file changed, to the
+`*_cofs.C8` built with `-DCARR_OFFSET_HZ=-22.0`:
+
+| Receiver | Run | Code-minus-carrier, original -> corrected | Own height against the truth, original -> corrected |
+|---|---|---|---|
+| NEO-M8T, conducted, GPS at 18 Hz | 330 s of the `gentle_alt_pad600_smooth` pad | +4.188 -> +0.002 m/s (14 arcs each) | -16 -> -17 m on the pad |
+| LC86G, Balloon, radiated | the whole `gentle_alt_pad600_smooth` flight | +4.176 -> +0.001 m/s (37 and 34 arcs) | the table below |
+
+The LC86G's own fix against the injection, from `own_fix.py` (median, and the 5-95 %
+spread; fixes from the first 30 s after the first fix left out):
+
+| Phase | Height, original | Height, corrected | East, original | East, corrected |
+|---|---|---|---|---|
+| Pad | -123 m (-136 to -108) | -11 m (-12 to -10) | -57 m | -1 m |
+| Boost, 3 g | -196 m (-229 to -149) | -17 m (-47 to -12) | -67 m | 0 m |
+| Coast, 69-80 km | -727 m (-861 to -618) | +2 m (+2 to +3) | -306 m | +1 m |
+| Descent | -2.5 km (-2.7 km to -45 m) | -6 m (-14 to 0) | -1.8 km | -1 m |
+
+- **The drift was the rig.** Corrected, the LC86G's altitude stays within 14 m of the
+  injection on 96 % of its fixes, where the original ran 2.3-2.6 km low from 20 km down
+  to 2 km. The westward drift goes with it: east within 3.4 m (5-95 %), against 1.8 km.
+  The worst corrected fixes are transients: 48 m low 6 s into the 3 g boost, and 60 m
+  low just after the model's main-deploy step (open question 3).
+- **Its 80 km mute falls on the injection's 80 km.** Silent from 740.6 to 786.5 s,
+  against injected 80 km crossings at 740.7 and 786.4 s; last fix 79.985 km own and
+  79.983 injected. On the original file it went silent at 80.87 km injected (own
+  79.998). The speed mutes are the same on both files to the 0.1 s epoch (630.2-711.4 s
+  and 816.0-875.9 s). `receivers.json` now takes the LC86G's altitude bracket from this
+  run, 79.98-80.01 km, so the report and the table above say 80 km where they said 81.
+- **Level:** 43-45 dB-Hz against 36 in the original run, at the same TX gain. The files
+  carry the same level (the NEO-M8T, on its cable, reads 48.0 dB-Hz on both), so that is
+  where the board sat in the cage. Neither run had an underrun.
+- **What remains follows altitude:** -11 m on the pad, -13 m at 2 km, -9 m at 5 km,
+  -5 m at 10 km, -3 m at 20 km, 0 to +3 m above 69 km. The NEO-M8T's -16 to -17 m on
+  the pad did not move with the correction either. That is the shape of a troposphere
+  delay taken out that was never put in: gps-sdr-sim adds an ionospheric delay
+  (`ionosphericDelay` in `gpssim.c`) and no tropospheric one, and a receiver's
+  troposphere model shrinks with altitude the same way. Inferred, not tested.
+- **Still to run:** the PX1125R's pad on `spaceshot_pad600_stock_cofs.C8`.
+
+Captures: `results/lc86g_20260927_gentle_alt_pad600_smooth_cofs_balloon_msm7.log.gz`
+(against `lc86g_20260927_gentle_alt_pad600_smooth_balloon_msm7`) and
+`results/neo_m8t_20260927_gps_18hz_gain14_gentle_alt_pad600_smooth_cofs_pad.log.gz`
+(against `neo_m8t_20260927_gps_18hz_gain14_gentle_alt_pad600_smooth`).
 
 ## u-blox SAM-M10Q, radiated (2026-08-20)
 
@@ -362,7 +408,7 @@ neither table nor report should be hand-edited.
 | u-blox NEO-M8T | conducted | 1 Hz | 511-525 m/s | 50 km § | independent | 1.0-3.2 s |
 | Quescan M10 | radiated, Faraday cage | 1 Hz | 511-518 m/s * | 80 km † | independent | 0.2-5.0 s |
 | Beitian BN-182 | radiated, Faraday cage | 1 Hz | 497-511 m/s ¶ | 80 km † | independent | 0.5-11.3 s |
-| Quectel LC86G, Balloon mode | radiated, Faraday cage | 10 Hz | 499.9-500.9 m/s ‖ | 81 km ‖ | independent | 0.0-0.6 s |
+| Quectel LC86G, Balloon mode | radiated, Faraday cage | 10 Hz | 499.9-500.9 m/s ‖ | 80 km ‖ | independent | 0.0-0.6 s |
 
 † Slow to close: this part held a fix 2-3 s past the limit on both flights, about 400-600 m of overshoot above 80 km with position still being published. The threshold itself is normal.
 
@@ -374,7 +420,7 @@ neither table nor report should be hand-edited.
 
 ¶ Rests on a single closing edge, so it is bracketed only to the width of one navigation epoch. This part was slow enough to re-open that the gate had not cleared before the next window, leaving no fix to close again.
 
-‖ Enforced by muting ALL output -- NMEA, acknowledgements and raw measurements -- rather than by withholding the position while satellites are still reported, so on the wire it looks like a dead receiver until it comes back. It acts on the receiver's own estimates, 500 m/s and 80.0 km, stopping within 0.1 s of passing either and returning within 0.1 s straight into a valid fix. Its own altitude read about 0.9 km low near 80 km on this bench, which puts the limit near 81 km against the injection.
+‖ Enforced by muting ALL output -- NMEA, acknowledgements and raw measurements -- rather than by withholding the position while satellites are still reported, so on the wire it looks like a dead receiver until it comes back. It acts on the receiver's own estimates, 500 m/s and 80.0 km, stopping within 0.1 s of passing either and returning within 0.1 s straight into a valid fix. On the carrier-corrected file its own altitude is right and the mute falls on the injection's 80.0 km as well; on the original files it read about 0.9 km low near 80 km, which put the limit near 81 km.
 
 **SkyTraq PX1125R** (2026-08-19, ~70 dB pad + DC block into RF_IN, TX gain 44-47): Satellite starvation was the dominant confound: windows that took 12-33 s all had two satellites, which is re-acquisition rather than the gate. The starvation came from a ~15 dB, ~70-80 s C/N0 oscillation that was the rig, not the part (identified 2026-09-27): in its August configuration this receiver drove its code with its carrier, and the HackRF's carrier runs 22 Hz off its code, so every channel's code walked 0.83-0.97 chip off the correlation peak and re-acquired about every 70 s.
 
@@ -390,7 +436,7 @@ neither table nor report should be hand-edited.
 
 **Beitian BN-182** (2026-08-28, L1 antenna in Faraday cage, TX gain 20): It shares the Quescan's UBX interface -- its MON-VER answer is identical, its chip serial differs (dee2c50fbf vs c8bf908e28) -- but it is a different part, flown on the same ephemeris, start time and launch site. It behaves like its MIRROR IMAGE on recovery: fast on altitude (1.0 s) and slow on velocity (10.2 s), where the Quescan is slow on altitude (5.0 s) and fast on velocity (0.2 s). On three of four velocity windows it does not re-open when speed drops below 515 but waits until 327-410 m/s, with 9-13 satellites held throughout, so it is the gate rather than re-acquisition. Transmit level is NOT the cause: a control flight at gain 26, matching the Quescan, reproduced every latency to the tenth of a second (0.5 / 1.0 / 10.2 s) and every shut lag. Besides the part itself, what differs and was not controlled is configuration in the modules' own flash -- this one runs GPS+Galileo+BeiDou with GLONASS off, the Quescan has GLONASS enabled, and CFG-NAVSPG holds more than the dynamic model. The practical lesson is that a shared interface does not predict gate behavior: two modules that answer UBX identically differ by two orders of magnitude on velocity-gate recovery, and no datasheet says which you are buying.
 
-**Quectel LC86G, Balloon mode** (2026-09-24, on-board patch antenna in Faraday cage, TX gain 0): The same module after $PAIR080,3. The boost is tracked (climb rate within 3 m/s of the injection through the 3 g ascent) and the limits are clean and independent: ALL output stops at 500 m/s on its own speed estimate (fired at 9.3 km) and at 80.0 km on its own altitude (fired at 172 m/s), and returns within one 0.1 s epoch straight into a valid fix. Its own altitude reads about 0.9 km low near 80 km, so against the injection the altitude limit sits near 81 km. 500 m/s matches neither COCOM's 515, MTCR's 600 nor the datasheet's 490. At 15 g it still loses every channel at ignition; its RTCM MSM7 shows the four with a Doppler rate at or below 128 Hz/s re-locking within 2 s and every one at or above 171 Hz/s staying lost through the burn, so it has no fix until the descent brings the vehicle back under 500 m/s. Its altitude drifts low through the flight, 2.6 km by landing with velocity still right to 0.9 m/s; the Quescan M10 drifts 1.5 km on the same file, so most of that is the bench.
+**Quectel LC86G, Balloon mode** (2026-09-24, on-board patch antenna in Faraday cage, TX gain 0): The same module after $PAIR080,3. The boost is tracked (climb rate within 3 m/s of the injection through the 3 g ascent) and the limits are clean and independent: ALL output stops at 500 m/s on its own speed estimate (fired at 9.3 km) and at 80.0 km on its own altitude, and returns within one 0.1 s epoch straight into a valid fix. The altitude bracket comes from the carrier-corrected gentle flight of 2026-09-27, where its own altitude matched the injection to 2-5 m at both edges (last fix 79.98 km, first silent epoch 80.01). On the 2026-09-24 flights its own altitude read about 0.9 km low near 80 km, which put the limit near 81 km against the injection; that was the rig's 22 Hz carrier offset, not the receiver. 500 m/s matches neither COCOM's 515, MTCR's 600 nor the datasheet's 490. At 15 g it still loses every channel at ignition; its RTCM MSM7 shows the four with a Doppler rate at or below 128 Hz/s re-locking within 2 s and every one at or above 171 Hz/s staying lost through the burn, so it has no fix until the descent brings the vehicle back under 500 m/s. On those flights its altitude drifted low, 2.6 km by landing with velocity still right to 0.9 m/s; on the corrected file it stays within 14 m of the injection on the pad, through the coast and down the descent (5-95 %; 48 m low at worst early in the 3 g boost), so the drift was the bench.
 
 Every part that gates velocity at the COCOM figure brackets it within a few m/s of 515 -- the tightest, the SAM-M10Q's, is
 **(514, 515] m/s** -- and wherever an altitude gate is genuinely COCOM it sits at
@@ -479,6 +525,13 @@ parts show exactly that on the pad, their own clock-bias state 9-12 m below the
 pseudoranges' common bias and their own altitude 8-17 m low. The westward part of
 the drift is not explained that way. The test is the A/B on the carrier-corrected
 file (`patch_carrier_offset.py`).
+
+**Answered for the LC86G (2026-09-27): it was the rig.** Flown again on the
+carrier-corrected file, the same flight keeps its own altitude within 14 m of the
+injection on 96 % of its fixes, and the westward drift goes too: east within 3.4 m
+(5-95 %). What is left, -11 m on the pad shrinking to 0 to +3 m above 69 km, follows
+altitude the way an unmodeled troposphere would. Numbers in "The HackRF's carrier runs
+22 Hz off its own code". The Quescan M10 and the SkyTraq parts have not been re-flown.
 
 **5. The LC86G in Normal mode never re-acquires after its mute.** 580 s of 3 g
 descent without a valid fix, on the same signal the module tracked at 45 dBHz in
@@ -691,7 +744,9 @@ limitation, calls 10-50 km "cannot be guaranteed", and stops all output above
 - **Balloon mode also mutes above 80.0 km on its own altitude** (last output
   80.009 km own, 80.94 injected), and returns at 80.016 own. Against the
   injection that is ~81 km; see open question 4 for why the receiver's own
-  altitude reads low up there.
+  altitude reads low up there. On the carrier-corrected file (2026-09-27) the mute
+  falls on the injection's 80.0 km (last output 79.985 km own, 79.983 injected), so
+  the ~0.9 km was the rig.
 - **Re-open:** Balloon mode comes back within one 0.1 s epoch straight into a
   valid fix (0.6 s after the 15 g flight's no-fix spell). Normal mode never
   re-opened on the 3 g flight (open question 5).
@@ -1023,13 +1078,18 @@ LC86G gives nothing, raw data included. A filter on the LC86G coasts across 81, 
 gaps and picks up with carrier lock intact.
 
 Also seen:
-- As before, its own altitude runs low on the descent, ~2-3 km by landing.
+- As before, its own altitude runs low on the descent, ~2-3 km by landing. That, and
+  the 80 km mute firing at 80.9 km injected, were the rig's carrier offset: on the
+  carrier-corrected file both go (see "The HackRF's carrier runs 22 Hz off its own code").
 - The fix drops for 2.8 s at 1182.7 s, where the injected speed steps from ~40 to ~6 m/s.
 
 Capture: `results/lc86g_20260927_gentle_alt_pad600_smooth_balloon_msm7.log.gz`.
 `lc86_config.py` now also sends `$PAIR732,0` (ALP off), matching the flight driver since
-PR #1527. This firmware's answer to it is not yet measured: the module was off USB when the
-tool changed.
+PR #1527. This module's firmware, LC86GLANR12A03S, refuses it: `$PAIR001,732,2` (result 2,
+failed) within 0.05 s, on every try, in Normal and in Balloon mode. `lc86_config.py`
+reports it as not applied and carries on; the flight driver sends it three times, logs a
+WARN for each and one for the refusal, and carries on too. The module powers up in
+Continuous mode, so nothing is lost but ~0.15 s of boot.
 
 ### u-blox raw measurements through the gentle flight: ZED-F9P and NEO-M8T (2026-09-27)
 

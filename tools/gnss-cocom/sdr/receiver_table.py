@@ -155,9 +155,10 @@ FOOTNOTES = {
              "satellites are still reported, so on the wire it looks like a dead "
              "receiver until it comes back. It acts on the receiver's own "
              "estimates, 500 m/s and 80.0 km, stopping within 0.1 s of passing "
-             "either and returning within 0.1 s straight into a valid fix. Its "
-             "own altitude read about 0.9 km low near 80 km on this bench, which "
-             "puts the limit near 81 km against the injection."),
+             "either and returning within 0.1 s straight into a valid fix. On "
+             "the carrier-corrected file its own altitude is right and the mute "
+             "falls on the injection's 80.0 km as well; on the original files it "
+             "read about 0.9 km low near 80 km, which put the limit near 81 km."),
     "nav fail": ("\u25ca",
                  "No altitude limit could be measured: Normal mode's vertical "
                  "solution does not follow a boost. The fix stayed valid-flagged "
