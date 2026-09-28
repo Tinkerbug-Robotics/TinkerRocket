@@ -22,6 +22,10 @@ the shape a real flight has:
                 while the boost phase still exceeds 515 earlier in the same
                 flight, giving both recoveries in one run.
 
+  traveler      Higher: Traveler IV's 103.6 km space shot (see FLIGHTS), where
+                the velocity and altitude gates overlap and the receiver is blind
+                from the boost into re-entry, as that flight's GPS was.
+
 Atmosphere is the US Standard piecewise fit up to 32 km and an exponential
 continuation above, which is far more than the drag above 30 km deserves but
 keeps the ascent shape honest lower down.
@@ -75,8 +79,12 @@ def gravity(h: float) -> float:
 def fly(burn_s: float, accel_mps2: float, cd_a_over_m: float,
         alt0_m: float, stop_alt_m: float, max_s: float,
         chute_alt_m: float = 0.0, chute_cd_a_over_m: float = 0.0,
-        drogue_cd_a_over_m: float = 0.0):
+        drogue_cd_a_over_m: float = 0.0, accel_end_mps2: float | None = None):
     """Integrate a vertical flight. Returns [(t, alt, v_up)] at RATE_HZ.
+
+    Thrust acceleration is accel_mps2 throughout the burn, or, with accel_end_mps2,
+    ramps linearly from accel_mps2 to accel_end_mps2: a motor of near-constant thrust
+    pushing a vehicle that loses its propellant mass as it burns.
 
     cd_a_over_m is the inverse ballistic coefficient, Cd*A/m [m^2/kg]: the only
     aerodynamic parameter that matters for a 1-D flight, so there is no point
@@ -88,7 +96,12 @@ def fly(burn_s: float, accel_mps2: float, cd_a_over_m: float,
     apogee_seen = False
 
     while t < max_s:
-        thrust_a = accel_mps2 if t < burn_s else 0.0
+        if t >= burn_s:
+            thrust_a = 0.0
+        elif accel_end_mps2 is None:
+            thrust_a = accel_mps2
+        else:
+            thrust_a = accel_mps2 + (accel_end_mps2 - accel_mps2) * t / burn_s
         # A real flight does not stop at apogee, and the descent is where the
         # receiver gets its satellites back after a boost that broke tracking.
         # Truncating there hides the whole re-acquisition.
@@ -169,6 +182,29 @@ FLIGHTS = {
                 "the way down, which is the window the altitude recovery has "
                 "to be measured in. Boost exceeds 515 m/s earlier, so one "
                 "flight gives both recoveries: velocity, then altitude.",
+    ),
+    # Higher: a real student space shot, USC RPL's Traveler IV (2019; "Traveler IV
+    # Apogee Analysis"). Its numbers: 13 s burn, felt acceleration peaking at 18.8 g,
+    # 4966 ft/s (1514 m/s), apogee 339,800 ft (103.57 km) at T+151 s, re-entry near
+    # 250 kft (76 km) at T+230 s, touchdown T+658 s on the drogue alone. The thrust
+    # ramps 5.6 -> 23.2 g as the propellant burns off, which puts the felt peak at
+    # 18.8 g at burnout. Drag and the drogue are tuned to the apogee and touchdown.
+    # The drogue opens at apogee here, not at T+173 s as flown: at 100 km that makes
+    # no difference. Its Cd*A/m with Traveler's measured 7.73 ft2 implies 45 kg down.
+    "traveler": dict(
+        prologue_s=180.0,
+        burn_s=13.0, accel_mps2=54.5, accel_end_mps2=227.5, cd_a_over_m=8.28e-5,
+        alt0_m=1_200.0, stop_alt_m=1_250.0, max_s=900.0,
+        drogue_cd_a_over_m=0.01575,
+        purpose="Apogee 103.6 km, modeled on Traveler IV (USC RPL, 2019): 13 s "
+                "burn to 1514 m/s with the felt acceleration peaking at 18.8 g, "
+                "apogee at T+153 s, re-entry through 75 km at T+230 s, drogue "
+                "only, touchdown T+658 s. Above 100 km the gates overlap: over "
+                "515 m/s from 3 s into the burn until ~90 km, over 80 km across "
+                "apogee, and over 515 m/s again from ~90 km down until the "
+                "re-entry drag slows it, so a receiver that honors both limits is "
+                "blind from the boost into the re-entry: here from T+6 s to T+284 s, "
+                "clearing at 30 km. Traveler IV's GPS units came back at T+278 s.",
     ),
 }
 
@@ -283,7 +319,8 @@ def build(name: str, spec: dict):
                  spec["alt0_m"], spec["stop_alt_m"], spec["max_s"],
                  spec.get("chute_alt_m", 0.0),
                  spec.get("chute_cd_a_over_m", 0.0),
-                 spec.get("drogue_cd_a_over_m", 0.0))
+                 spec.get("drogue_cd_a_over_m", 0.0),
+                 spec.get("accel_end_mps2"))
 
     rows, truth = [], []
     east_m = 0.0
