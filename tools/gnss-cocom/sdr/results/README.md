@@ -274,6 +274,52 @@ time, 921600 before: the bridge's baud probe kept missing 921600 that day, and t
 stream needs 9.5 kB/s. `own_fix.py --from 300` gives its pad numbers over the same stretch
 on both runs.
 
+## A higher flight: `traveler`, modeled on Traveler IV (2026-09-27)
+
+`make_flights.py`'s `traveler` flies the numbers of USC RPL's Traveler IV (2019), from its
+"Traveler IV Apogee Analysis": a 13 s burn, felt acceleration peaking at 18.8 g, 4966 ft/s,
+apogee 339,800 ft at T+151 s, re-entry near 250 kft at T+230 s, touchdown at T+658 s under
+the drogue alone. Read from `scenarios/traveler.json`:
+
+| | Traveler IV | `traveler` |
+|---|---|---|
+| Burn | 13 s | 13 s; thrust 5.6 g ramping to 23.2 g as the propellant burns off |
+| Peak felt acceleration | 18.8 g | 18.9 g, at burnout |
+| Peak speed | 1514 m/s at T+11.5 s | 1511 m/s at T+13.1 s |
+| Apogee | 103.6 km at T+151 s | 103.5 km at T+153 s |
+| Re-entry | ~76 km at ~T+230 s | 75.4 km at T+230 s, falling at 732 m/s |
+| Touchdown | T+658 s | T+658 s |
+
+The drag and the drogue are tuned to the apogee and the touchdown. The drogue's Cd·A/m,
+0.0158 m²/kg, against Traveler IV's measured 7.73 ft² of Cd·A implies 45 kg on the way
+down. Not modeled: the 6-8 Hz spin, the drogue opening at T+173 s instead of at apogee (no
+difference at 100 km), the tumbling re-entry (one drag coefficient throughout), and the
+peak speed coming 1.5 s before burnout.
+
+**The gates overlap.** `spaceshot` puts its apogee just above 80 km so each gate can be
+measured on its own. Here the flight is over 515 m/s from T+6.2 s until 90 km (T+99 s),
+over 80 km from T+83 s to T+223 s, and over 515 m/s again from T+207 s until the
+re-entry drag slows it at 30 km (T+284 s). A receiver that honors both limits is blind
+from the boost into the re-entry, 278 s, and has to come back falling through 30 km on
+a vehicle decelerating at up to 3.9 g. Traveler IV's first GPS came back at T+278 s, the
+second a few seconds later. In between it falls at up to 954 m/s (49 km).
+
+IQ file: `c8/traveler_pad600_smooth_cofs.C8`, 1258 s (the 600 s pad, then the flight to
+touchdown), from the smooth-carrier, carrier-corrected build. It has 12,580 motion rows, so
+the build needs `-DUSER_MOTION_SIZE` of at least that (20000 here). File time maps to the
+scenario by SHIFT 420, as for every `*_pad600` file:
+
+```bash
+./make_flights.py --lat 0 --lon -119 --only traveler
+./pad_scenario.py traveler 600 1258
+cd c8 && gps-sdr-sim-smooth-cofs -e BRDC_2026230.rx2.n -x ../scenarios/traveler_pad600.csv \
+    -b 8 -s 2600000 -t 2026/08/18,08:30:00 -p -d 1258 -o traveler_pad600_smooth_cofs.C8
+```
+
+For the PX1125R in power save, build the stock carrier too (`gps-sdr-sim-stock-cofs`): on
+the uncorrected smooth-carrier files it never assembled an ephemeris. Untested on a
+corrected one.
+
 ## u-blox SAM-M10Q, radiated (2026-08-20)
 
 Flown against the same two trajectories to separate what is a rule from what

@@ -30,7 +30,7 @@ variable at a time.
 | `best_geometry.py` | Scans latitude and hour for the most satellites above a given elevation |
 | `plot_flight.py` | Altitude, speed, acceleration, lock state and satellite count on one time axis |
 | `recovery.py` | Shut lag and re-open latency per blocked window, with satellites in the wait |
-| `make_flights.py` | Realistic flight profiles integrated from thrust, drag and gravity; the JSON truth carries the signal's velocity at each row, and `--retime` converts files made before 2026-09-27 |
+| `make_flights.py` | Realistic flight profiles integrated from thrust, drag and gravity (`traveler`: a 103.6 km space shot on Traveler IV's numbers); the JSON truth carries the signal's velocity at each row, and `--retime` converts files made before 2026-09-27 |
 | `run_fc.py` | Transmits a scenario and records the rocket computer's console, in one command |
 | `cocom_flightlog.py` | Converts a rocket computer flight log (`.bin`) into the rig's capture format, so a real flight is analysed by the same scripts as a bench run |
 | `align_start.py` | Recovers a capture's scenario start time by matching reported to injected altitude |
