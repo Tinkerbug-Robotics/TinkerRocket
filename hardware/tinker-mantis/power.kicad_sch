@@ -10059,7 +10059,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:L_XGL4020_4.0x4.0mm"
+		(property "Footprint" "Footprints:IND_SRP4020FA-2R2M"
 			(at 240.03 74.93 0)
 			(hide yes)
 			(show_name no)
@@ -10092,7 +10092,7 @@
 				)
 			)
 		)
-		(property "MPN" "XGL4020-222ME"
+		(property "MPN" "SRP4020FA-2R2M"
 			(at 240.03 74.93 0)
 			(hide yes)
 			(show_name no)
@@ -10103,7 +10103,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Coilcraft"
+		(property "Mfr" "Bourns"
 			(at 240.03 74.93 0)
 			(hide yes)
 			(show_name no)
