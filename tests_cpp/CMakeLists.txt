@@ -247,6 +247,17 @@ target_include_directories(test_ism6_fifo_decoder PRIVATE
 target_link_libraries(test_ism6_fifo_decoder GTest::gtest_main)
 gtest_discover_tests(test_ism6_fifo_decoder)
 
+# ---------- test_ism6_whoami ----------
+# The WHO_AM_I values the IMU driver accepts: the ISM6HG256X (0x73) and the
+# ISM6HGK256X (0x75), which shares its pinout, register map and scaling.
+# Header-only and IDF-free.
+add_executable(test_ism6_whoami test_ism6_whoami.cpp)
+target_include_directories(test_ism6_whoami PRIVATE
+    ${LIB_DIR}/TR_ISM6HG256
+)
+target_link_libraries(test_ism6_whoami GTest::gtest_main)
+gtest_discover_tests(test_ism6_whoami)
+
 # ---------- test_imu_sample_clock ----------
 # The FIFO sample clock (#1485): evenly spaced times steered toward the level
 # read, following a chip a few percent off nominal, re-anchoring after an

@@ -9,6 +9,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_heap_caps.h>
+#include "ism6_whoami.h"
 
 static const char* SC_TAG = "SENSORS";
 
@@ -577,11 +578,13 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             ESP_LOGE(SC_TAG, "ISM6HG256 WHOAMI read failed, stopping.");
             while (1) { delay_ms(1000); }
         }
-        if (whoami != ISM6HG256X_ID)
+        if (!ism6_whoami::supported(whoami))
         {
-            ESP_LOGE(SC_TAG, "ISM6HG256 WHOAMI mismatch, got 0x%02X expected 0x%02X", whoami, ISM6HG256X_ID);
+            ESP_LOGE(SC_TAG, "ISM6HG256 WHOAMI mismatch, got 0x%02X expected 0x%02X or 0x%02X",
+                     whoami, ism6_whoami::WHOAMI_ISM6HG256X, ism6_whoami::WHOAMI_ISM6HGK256X);
             while (1) { delay_ms(1000); }
         }
+        ESP_LOGI(SC_TAG, "IMU is an %s (WHOAMI 0x%02X)", ism6_whoami::part_name(whoami), whoami);
 
         // Initialize and configure ISM6HG256 (low-g + high-g + gyro)
         TR_ISM6HG256Status status = TR_ISM6HG256_OK;
