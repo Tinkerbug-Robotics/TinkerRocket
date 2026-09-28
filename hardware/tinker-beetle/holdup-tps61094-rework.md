@@ -27,7 +27,8 @@ Deleted per board: U40, U42, U44, U45, R120 (V10 also R128 — its second 33 R),
 R127 (ST pullup), C134, C136 (CT caps), C137, C138 (V_HOLD decoupling); nets
 V_HOLD and V_UVLO_EN are gone. Added: U47 TPS61094DSSR (WSON-12), the boost
 inductor — drawn as `L7`, **`L11` on the board and in the netlist** — 2.2 µH
-(XGL4020-222ME class, Isat ≥ 4 A), R134 3.09 k (OSEL → VOUT 3.0 V), R135 6.65 k
+(XGL4020-222ME class, Isat ≥ 4 A — *now the SRP4020FA-2R2M, see* L11 inductor
+*below*), R134 3.09 k (OSEL → VOUT 3.0 V), R135 6.65 k
 (VCHG → 2.5 V), R136 22.1 k (ICHG → 100 mA) — all three 1%, values straight from
 the datasheet §8.2.4 reference design — C141 10 µF at VIN, C142 10 µF ceramic at
 V_SCAP (the prismatic cap's ~190 mΩ ESR needs a local ceramic for the 1 MHz boost
@@ -63,7 +64,8 @@ lose the first-boot-blip special case.
   V10 floor. XGL4020-222: Isat 2.7 A (10% drop) / 4.4 A (20%), soft-sat, DCR
   21.5 mΩ max — fine. The stocked VLS3012CX line was REJECTED: its 30%-drop saturation is 1.7 A max-spec / 1.89 A typ (TDK) against a converter current limit of up to 2.6 A + ripple, exercised by design during backup at load.
   Footprint drawn to Coilcraft doc 1529: pads 0.98×3.4 mm, 2.37 mm gap
-  (`Footprints:L_XGL4020_4.0x4.0mm`).
+  (`Footprints:L_XGL4020_4.0x4.0mm`) *(a misreading — 2.37 mm is the pad pitch;
+  the land is redrawn and the part changed, see* L11 inductor *below)*.
 - **Charge current**: ICHG 100 mA against the TPS62152's 1 A budget (worst
   concurrent system load ~0.45 A) — full charge in ~52 s/cap-bank vs ~200 s with
   the old 33 R. ICHG_PRE ≤ 250 mA below VSUP 0.85 V, bounded.
@@ -146,6 +148,8 @@ VCHG, ICHG and OSEL. Numbers in
 - TPS61094DSSR: LCSC C3034939, 1114 stock, $2.55@100 (~$2.42@500).
 - XGL4020-222ME: Coilcraft — check DK/Mouser at buy time; LCSC-friendly 4020-size
   2.2 µH ≥4 A substitutes exist (sourcing pass, land is compatible-generic).
+  *Superseded 2026-09-27: L11 is the Bourns SRP4020FA-2R2M — see* L11 inductor
+  *below.*
 - R134/R135/R136: Yageo RC0402FR 1% E96 values — three new (cheap) BOM lines.
 - Deleted line value ≈ $1.24/board silicon+passives; net chain delta ≈ +$2.0/board
   before any cap change; the single-cell cap swaps flip the total to ≈ −$1 (mini)
@@ -176,6 +180,7 @@ VCHG, ICHG and OSEL. Numbers in
 4. WSON-12 EP paste/mask on first article (stock KiCad land used:
    WSON-12-1EP_3x2mm — verify against TI DSS0012A before fab).
 5. Inductor substitute (if not XGL4020): verify Isat ≥ 4 A class and land fit.
+   *Done for the SRP4020FA-2R2M on 2026-09-27 — see* L11 inductor *below.*
 
 ## OSEL lowered to 3.0 V (2026-09-03 — drawn on the mini and, the same day, on the V10)
 
@@ -407,4 +412,41 @@ pad**. Grounding the pad gives an immediate rail-off and a code refresh.
 **Do not put this on an out-computer GPIO.** EN low with MODE still high is *true
 shutdown* — it drops `+3V3` and takes both processors down. That is not a power
 firmware should hold in flight. A pad a human has to touch is the right shape.
+
+## L11 inductor: Bourns SRP4020FA-2R2M on a corrected land (2026-09-27 — both boards, schematic only)
+
+**Why it changed.** The Coilcraft 4020 family is hard to buy. Mouser does not
+list the XGL4020 at all, and its XFL4020-222MEC had 132 pieces on a 40-week lead
+(2026-09-27). Digi-Key carries the family only as marketplace listings with no
+stock. The Bourns part is a catalogue item: Mouser had 11,042 in stock.
+
+**The requirement it has to meet.** In backup the boost runs into its valley
+current limit by design (V10/Mantis at 0.7 A near the cap floor). Peak inductor
+current is then the limit plus the full ripple: 2.6 A max + ~0.5 A at L −30 %,
+1 MHz, 3.0 V out ≈ **3.1 A**. The core has to saturate softly, which is why the
+ferrite VLS3012CX was rejected.
+
+| | XGL4020-222ME (was) | SRP4020FA-2R2M (now) |
+|---|---|---|
+| DCR max | 21.5 mΩ | 23.5 mΩ |
+| Isat at 10 / 20 / 30 % drop | 2.7 / 4.4 / 6.2 A | 3.1 / 3.8 / 6.0 A |
+| Irms at 20 / 40 °C rise | 6.7 / 8.9 A | 6.0 / 8.0 A |
+| Body | 4.0 × 4.0 × 2.1 mm | 4.1 × 4.1 × 1.9 mm |
+
+At 3.1 A the Bourns part is down ~10 % and the XGL4020 ~12 %. Both use
+metal-powder cores that saturate softly. The Bourns part is 0.2 mm lower.
+
+**The old land was wrong.** In Coilcraft doc 1529, 2.37 mm is the distance
+between the pad centre lines, not the gap. `L_XGL4020_4.0x4.0mm` therefore put
+its pads at ±1.675 mm instead of ±1.185 mm. Only about half of each bottom
+terminal landed on copper: 0.42 of 0.82 mm for the XGL4020, 0.50 of 0.88 mm for
+the SRP4020FA. That footprint and its model are deleted.
+
+**The new land.** `IND_SRP4020FA-2R2M` is Bourns's Recommended Layout: 1.4 ×
+3.4 mm pads, 3.8 mm overall, 1.0 mm gap. The Bourns terminals (0.88 × 3.4 mm,
+1.6 mm gap) sit fully on it. So do the Coilcraft XGL4020/XFL4020 terminals
+(0.82 × 3.25 mm, 1.57 mm gap), so either part can be fitted.
+
+**Built boards.** The mini V1.0.0/V1.0.1 artwork carries the old land.
+Inspect L11's joints on any of those boards that were assembled.
 

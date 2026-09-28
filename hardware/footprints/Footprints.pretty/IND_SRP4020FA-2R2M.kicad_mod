@@ -1,13 +1,13 @@
-(footprint "L_XGL4020_4.0x4.0mm"
+(footprint "IND_SRP4020FA-2R2M"
 	(version 20240108)
 	(generator "manual")
 	(generator_version "1.0")
 	(layer "F.Cu")
-	(descr "Coilcraft XGL4020 shielded power inductor, 4.0x4.0x2.1mm; land per Coilcraft doc 1529: pads 0.98x3.4mm, 2.37mm gap")
-	(tags "inductor XGL4020 Coilcraft")
+	(descr "Bourns SRP4020FA shielded power inductor, 4.1x4.1x1.9mm, bottom terminals 0.88x3.4mm with a 1.6mm gap; land per the Bourns SRP4020FA datasheet Recommended Layout: pads 1.4x3.4mm, 3.8mm overall (1.0mm gap). Coilcraft XGL4020/XFL4020 terminals (0.82x3.25mm, 1.57mm gap) also sit fully on these pads")
+	(tags "inductor SRP4020FA Bourns")
 	(attr smd)
 	(fp_text reference "REF**"
-		(at 0 -2.9 0)
+		(at 0 -3.1 0)
 		(layer "F.SilkS")
 		(effects
 			(font
@@ -16,8 +16,8 @@
 			)
 		)
 	)
-	(fp_text value "L_XGL4020"
-		(at 0 2.9 0)
+	(fp_text value "IND_SRP4020FA-2R2M"
+		(at 0 3.1 0)
 		(layer "F.Fab")
 		(effects
 			(font
@@ -27,8 +27,8 @@
 		)
 	)
 	(fp_line
-		(start -2 -2)
-		(end 2 -2)
+		(start -2.05 -2.05)
+		(end 2.05 -2.05)
 		(stroke
 			(width 0.1)
 			(type solid)
@@ -36,8 +36,8 @@
 		(layer "F.Fab")
 	)
 	(fp_line
-		(start 2 -2)
-		(end 2 2)
+		(start 2.05 -2.05)
+		(end 2.05 2.05)
 		(stroke
 			(width 0.1)
 			(type solid)
@@ -45,8 +45,8 @@
 		(layer "F.Fab")
 	)
 	(fp_line
-		(start 2 2)
-		(end -2 2)
+		(start 2.05 2.05)
+		(end -2.05 2.05)
 		(stroke
 			(width 0.1)
 			(type solid)
@@ -54,8 +54,8 @@
 		(layer "F.Fab")
 	)
 	(fp_line
-		(start -2 2)
-		(end -2 -2)
+		(start -2.05 2.05)
+		(end -2.05 -2.05)
 		(stroke
 			(width 0.1)
 			(type solid)
@@ -63,8 +63,8 @@
 		(layer "F.Fab")
 	)
 	(fp_line
-		(start -2.1 -2.1)
-		(end 2.1 -2.1)
+		(start -2.16 -2.16)
+		(end 2.16 -2.16)
 		(stroke
 			(width 0.12)
 			(type solid)
@@ -72,8 +72,8 @@
 		(layer "F.SilkS")
 	)
 	(fp_line
-		(start -2.1 2.1)
-		(end 2.1 2.1)
+		(start -2.16 2.16)
+		(end 2.16 2.16)
 		(stroke
 			(width 0.12)
 			(type solid)
@@ -91,16 +91,16 @@
 		(layer "F.CrtYd")
 	)
 	(pad "1" smd rect
-		(at -1.675 0)
-		(size 0.98 3.4)
+		(at -1.2 0)
+		(size 1.4 3.4)
 		(layers "F.Cu" "F.Paste" "F.Mask")
 	)
 	(pad "2" smd rect
-		(at 1.675 0)
-		(size 0.98 3.4)
+		(at 1.2 0)
+		(size 1.4 3.4)
 		(layers "F.Cu" "F.Paste" "F.Mask")
 	)
-	(model "${KIPRJMOD}/../3dmodels/L_XGL4020_4.0x4.0mm.step"
+	(model "${KIPRJMOD}/../3dmodels/IND_SRP4020FA-2R2M.step"
 		(offset
 			(xyz 0 0 0)
 		)
