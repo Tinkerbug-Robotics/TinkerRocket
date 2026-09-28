@@ -178,8 +178,8 @@ the same from 2026-08-20 to 2026-09-27.
 - **A receiver that drives its code with its carrier walks off the code** at
   4.2 m/s: the August PX1125R, 0.83-0.97 chip and 15-18 dB of C/N0 (the section
   above); in September the PX1125R in both power modes and the PX1105R in power save,
-  ramps of 40-130 m. The PX1105R in power normal, the NEO-M8T and the LC86G track the
-  code and show none.
+  ramps of 40-130 m (gone on the carrier-corrected file: the PX1125R, below). The PX1105R
+  in power normal, the NEO-M8T and the LC86G track the code and show none.
 - **Carrier-smoothed pseudoranges restart off-level at every (re)lock.** Smoothing
   with time constant tau holds a settled channel r x tau below its raw code (r =
   4.19 m/s). A channel that has just locked starts at the raw code, so it reads high by
@@ -212,6 +212,7 @@ Same receivers, same settings, same trajectory; only the IQ file changed, to the
 |---|---|---|---|
 | NEO-M8T, conducted, GPS at 18 Hz | 330 s of the `gentle_alt_pad600_smooth` pad | +4.188 -> +0.002 m/s (14 arcs each) | -16 -> -17 m on the pad |
 | LC86G, Balloon, radiated | the whole `gentle_alt_pad600_smooth` flight | +4.176 -> +0.001 m/s (37 and 34 arcs) | the table below |
+| PX1125R, radiated, power save | the whole `spaceshot_pad600_stock` file (15 g) | not readable: in power save its code follows its carrier. Its Doppler's clock rate against its pseudoranges': -4.18 -> -0.00 m/s | pad -14 m with a tail to -62 m -> -18 m steady; the PX1125R bullets below |
 
 The LC86G's own fix against the injection, from `own_fix.py` (median, and the 5-95 %
 spread; fixes from the first 30 s after the first fix left out):
@@ -238,17 +239,40 @@ spread; fixes from the first 30 s after the first fix left out):
   carry the same level (the NEO-M8T, on its cable, reads 48.0 dB-Hz on both), so that is
   where the board sat in the cage. Neither run had an underrun.
 - **What remains follows altitude:** -11 m on the pad, -13 m at 2 km, -9 m at 5 km,
-  -5 m at 10 km, -3 m at 20 km, 0 to +3 m above 69 km. The NEO-M8T's -16 to -17 m on
-  the pad did not move with the correction either. That is the shape of a troposphere
-  delay taken out that was never put in: gps-sdr-sim adds an ionospheric delay
-  (`ionosphericDelay` in `gpssim.c`) and no tropospheric one, and a receiver's
-  troposphere model shrinks with altitude the same way. Inferred, not tested.
-- **Still to run:** the PX1125R's pad on `spaceshot_pad600_stock_cofs.C8`.
+  -5 m at 10 km, -3 m at 20 km, 0 to +3 m above 69 km. The NEO-M8T's -16 to -17 m and
+  the PX1125R's -18 m on the pad did not go with the correction either. That is the
+  shape of a troposphere delay taken out that was never put in: gps-sdr-sim adds an
+  ionospheric delay (`ionosphericDelay` in `gpssim.c`) and no tropospheric one, and a
+  receiver's troposphere model shrinks with altitude the same way. Inferred, not tested.
+- **PX1125R: the walk-off is gone.** Same settings as the original run (TinkerNav,
+  radiated at gain 2, RTK kinematic base with raw at 20 Hz, nav mode 9, 3 deg mask, power
+  save), on the stock-build space-shot file with and without the correction. On the last
+  300 s of pad its pseudoranges against the truth, each epoch's median removed (the
+  residuals of `raw_residuals_cocom.py`, PR #1532): p90 6.5 m, p99 7.6 m, every satellite
+  within 4-7 m except two brief re-lock transients. The original gave p90 44 m, p99 97 m
+  and 44-168 m per satellite. Its own fix on the pad is a steady -17.9 m (5-95 %: -18.1 to
+  -17.7) and -1.3 m east, where the original read -14 m with tails to -62 m and 29 m west.
+  It fixed first at 48 s instead of 130 s, and came back 12.5 s sooner after the descent's
+  speed window. Neither file gave a collapse on this pad or in the flight, and neither run
+  had an underrun while transmitting.
+- **But the PX1125R's own altitude is off higher up.** It reads +0.5 m growing to +25 m
+  through the coast at 69-80 km, +39 to +53 m just below 80 km after apogee, and +13 to
+  +19 m by 20 km. The original read +4 to +6 m, -56 to -61 m and about -4 m at the same
+  points. Its raw pseudoranges up there agree with the truth (p90 7.7 m, every satellite
+  within 6-10 m, where the original's were off by up to 686 m). A 40 m height error would
+  put a 30-40 m spread between high and low satellites, so the error is in its own
+  solution, not the signal. The LC86G, on the gentle file, stays within 3 m at the same
+  altitudes. Not explained.
 
 Captures: `results/lc86g_20260927_gentle_alt_pad600_smooth_cofs_balloon_msm7.log.gz`
-(against `lc86g_20260927_gentle_alt_pad600_smooth_balloon_msm7`) and
+(against `lc86g_20260927_gentle_alt_pad600_smooth_balloon_msm7`),
 `results/neo_m8t_20260927_gps_18hz_gain14_gentle_alt_pad600_smooth_cofs_pad.log.gz`
-(against `neo_m8t_20260927_gps_18hz_gain14_gentle_alt_pad600_smooth`).
+(against `neo_m8t_20260927_gps_18hz_gain14_gentle_alt_pad600_smooth`) and
+`results/px1125r_spaceshot_pad600_stock_cofs_gain2_nav9_el3.log.gz` (against
+`px1125r_spaceshot_pad600_stock_gain2_nav9_el3`). The PX1125R's UART ran at 460800 this
+time, 921600 before: the bridge's baud probe kept missing 921600 that day, and the raw
+stream needs 9.5 kB/s. `own_fix.py --from 300` gives its pad numbers over the same stretch
+on both runs.
 
 ## u-blox SAM-M10Q, radiated (2026-08-20)
 
@@ -531,7 +555,10 @@ carrier-corrected file, the same flight keeps its own altitude within 14 m of th
 injection on 96 % of its fixes, and the westward drift goes too: east within 3.4 m
 (5-95 %). What is left, -11 m on the pad shrinking to 0 to +3 m above 69 km, follows
 altitude the way an unmodeled troposphere would. Numbers in "The HackRF's carrier runs
-22 Hz off its own code". The Quescan M10 and the SkyTraq parts have not been re-flown.
+22 Hz off its own code". The Quescan M10 has not been re-flown. The PX1125R has: its
+walk-off goes, but its pad altitude stays -18 m, so the SkyTraq pad offset above was not
+the split. Higher up it reads 13-53 m high while its pseudoranges agree with the truth,
+an error of its own solution that this file does not explain.
 
 **5. The LC86G in Normal mode never re-acquires after its mute.** 580 s of 3 g
 descent without a valid fix, on the same signal the module tracked at 45 dBHz in
