@@ -4,7 +4,7 @@ ellipsoidal height minus the truth's) and its east/north offset from the injecte
 which climbs straight up over the scenario origin. Written for A/B runs of one trajectory,
 first the carrier-corrected IQ files (patch_carrier_offset.py) against the originals.
 
-    ./own_fix.py SHIFT SCENARIO CAPTURE [CAPTURE ...]       # captures plain or .gz
+    ./own_fix.py SHIFT SCENARIO CAPTURE [CAPTURE ...] [--from T]   # captures plain or .gz
     ./own_fix.py 420 gentle_alt results/lc86g_20260927_gentle_alt_pad600_smooth_balloon_msm7.log.gz \\
         results/lc86g_20260927_gentle_alt_pad600_smooth_cofs_balloon_msm7.log.gz
 
@@ -13,7 +13,9 @@ u-blox's UBX NAV-PVT (run_radiated.py) or a SkyTraq's 0xDF (px1105r_run.py). Fil
 GPS TOW - 203400 and truth time = file time - SHIFT (420 for *_pad600), as in
 lc86_limits.py. The scenario JSON comes from scenarios/ (gitignored: ./make_flights.py
 --lat 0 --lon -119 --only NAME, then --retime for signal timing). Fixes from the first 30 s
-after the first 3-D fix are left out while the solution settles.
+after the first 3-D fix are left out while the solution settles, and with --from T every fix
+before file time T too: a receiver that is still pulling in satellites (the PX1125R's first
+fix comes 100+ s into its pad) is compared over the same stretch of pad on both runs.
 """
 import bisect
 import gzip
@@ -83,11 +85,17 @@ def own_fixes(path):
 
 
 def main() -> int:
-    if len(sys.argv) < 4:
+    args = sys.argv[1:]
+    t_from = float("-inf")
+    if "--from" in args:
+        i = args.index("--from")
+        t_from = float(args[i + 1])
+        del args[i:i + 2]
+    if len(args) < 3:
         print(__doc__)
         return 2
-    shift = float(sys.argv[1])
-    sc = json.loads((SDR / "scenarios" / f"{sys.argv[2]}.json").read_text())
+    shift = float(args[0])
+    sc = json.loads((SDR / "scenarios" / f"{args[1]}.json").read_text())
     tr = sc["truth"]
     tt = [s["t"] for s in tr]
     lat0, lon0 = sc["origin"]["lat_deg"], sc["origin"]["lon_deg"]
@@ -104,7 +112,7 @@ def main() -> int:
     print(f"apogee {shift + tr[apo]['t']:.1f} s ({tr[apo]['alt_m'] / 1000:.1f} km), "
           f"landing {landing:.1f} s (file time)")
 
-    for path in sys.argv[3:]:
+    for path in args[2:]:
         rows = []
         for ft, lat, lon, h in own_fixes(path):
             alt, phase = sample(ft)
@@ -121,7 +129,7 @@ def main() -> int:
               f"  {'median':>7} {'p5':>6} {'p95':>6}  {'median':>7}")
         for phase, label in (("prologue", "pad"), ("boost", "boost"), ("coast", "coast"),
                              ("descent", "descent")):
-            rr = [r for r in rows if r[5] == phase and r[0] >= first + SETTLE_S]
+            rr = [r for r in rows if r[5] == phase and r[0] >= max(first + SETTLE_S, t_from)]
             if not rr:
                 print(f"  {label:9} {0:6d}  no fix")
                 continue
