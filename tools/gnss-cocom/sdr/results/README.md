@@ -1429,11 +1429,12 @@ time by the header's "TX launched" delay plus ~1.4 s of HackRF start latency; `p
 - `estimation/tc_ekf.py`: `TcEkf`, with `update_gnss_raw`, `update_carrier` and `propagate_kinematic`.
 - `estimation/gnss_raw.py`: `read_capture` builds the ephemeris from the capture's own
   subframes, so no RINEX file is needed.
-- `scripts/tc_ekf_capture.py`: GNSS-only, scored against a scenario. It **skips every epoch
-  inside `blocked_windows`**, which throws away the raw measurements that flow through the gate.
-  Drop that skip to track through the windows.
+- `scripts/tc_ekf_capture.py`: GNSS-only, scored against a scenario. It now tracks straight
+  through `blocked_windows` (it used to skip every epoch inside them; `--skip-blocked` still does).
 - `scripts/tc_ekf_slr.py`: tightly coupled with a synthesized IMU and baro, or `--gnss-only`. Its
   scoring phases are hard-coded for gentle_alt on the 360 s pad.
+- `scripts/tc_ekf_cocom.py` (2026-09-27): both, on any pad, scored per phase against the truth;
+  the results and the models it needs are in the next section.
 
 **Caveats:**
 - Gentle run 1 (`..._pmnormal`, no `_run2`) is void after 373 s: the HackRF underrun.
@@ -1454,8 +1455,9 @@ time by the header's "TX launched" delay plus ~1.4 s of HackRF start latency; `p
   11-13 s on the pad; raw keeps flowing.
 - Captures without `_el3` ran the factory 15 degree mask, 9 of 14 satellites.
 - Measurements are 0xE5; 0xE7 channel lock is not a measurement.
-- The simulated sky is GPS L1 C/A only, noiseless, ~37-40 dB-Hz at +3 dB. The vertical geometry
-  is weak: GNSS-only vertical errors were 75-285 m in the study above.
+- The simulated sky is GPS L1 C/A only, noiseless, ~37-40 dB-Hz at +3 dB. GNSS-only vertical
+  errors were 75-285 m in the study above; that was mostly the PX1105R's late Doppler under a
+  constant-velocity model, not the geometry (next section).
 - On the 13.5 g spaceshot the PX1105R's raw output stops at ignition and returns 20-80 s later,
   varying run to run. The gentle flight never loses raw.
 - No capture has an IMU. `tc_ekf_slr.py` synthesizes one from truth.
@@ -1471,6 +1473,191 @@ Unpack into `c8/` before running `build_scenarios.sh` or gps-sdr-sim:
 
 **Left local on purpose:** the IQ files (`c8/`, rebuilt from `build_scenarios.sh` with the
 patch scripts here), the exploratory PX1105R probes, and the 137 MB overnight LC86G sky log.
+
+### Filtering the PX1105R's raw data: GNSS only, then with an IMU (2026-09-27)
+
+What a filter gets from the PX1105R's raw pseudorange and Doppler on the two power-normal
+flights -- gentle (`px1105r_gentle_alt_pad600_smooth_gain3_nav9_el3_pmnormal_run2`) and spaceshot
+(`px1105r_spaceshot_pad600_smooth_gain3_nav9_el3_pmnormal`) -- first GNSS only, then tightly
+coupled with an IMU synthesized from the truth. Driver: `tinkerrocket-sim/scripts/tc_ekf_cocom.py`.
+IMU runs used three noise seeds; the tables give the median. The seeds agree within 10 % wherever
+raw measurements have been flowing for a while; right after the spaceshot's gap they spread
+(W1: 12-17 m altitude, 8-21 m horizontal).
+
+**Truth, first.** gps-sdr-sim takes one motion row per 0.1 s, and `make_flights.py` integrates
+h_k = h_(k-1) + v_k dt, so v_k is the mean velocity over the block *before* t_k: the smooth-carrier
+build puts it at t_k - 0.05 s. Read at t_k, as the scenario JSONs gave it, the truth velocity was
+half a block late -- 1 m/s in the gentle boost, 6.6 m/s at 13.5 g. `make_flights.py` now writes the
+signal's velocity at each row and the archived JSONs are retimed (PR #1534); `RigTruth` tells the
+two kinds apart from the rows, so the numbers below hold with either.
+
+**The measurements**, against the truth, each epoch's common part removed
+(`figures/px1105r_raw_errors.svg`):
+
+- **The Doppler is 0.22 s late; the pseudorange is on time.** Each satellite's range-rate error is
+  lag x acceleration x sin(elevation). Fitted phase by phase over a grid of lags, the lag is
+  0.22-0.23 s on the gentle flight (0.15-0.25 s on the spaceshot's coarser grid), and the carrier
+  phase is ~0.20 s late too. Taken as the range rate 0.22 s earlier, the in-flight residual falls
+  from 0.6-1.6 m/s to about 0.3 m/s (0.13 on the pad). gps-sdr-sim injects code and carrier with no
+  lag between them, so this is the receiver. In factory power save the lag is 0.05-0.2 s and moves
+  with the dynamics.
+- **The pseudoranges carry the receiver's smoothing.** 5-7 m RMS on the pad and in the boost,
+  10-13 m in the coast and descent, where the two highest satellites drift to -20 to -30 m. About
+  40 % of it follows the low-passed range acceleration, the signature of smoothing the code with a
+  late carrier. Every (re)lock starts high -- +7 to +15 m at the median, 30-45 m in a fifth to a
+  third of them -- and decays over 10-20 s. That part is the rig, not the receiver: a
+  carrier-smoothed pseudorange restarts at the raw code while settled channels sit the rig's
+  4.19 m/s carrier-vs-code split times the smoothing time below it, and the real sky shows no such
+  offset (PR #1534). On the spaceshot the two highest satellites drop and re-lock again and again
+  through the coast and descent. In power save every channel re-syncs every ~12 s and the pad
+  alone is 33 m RMS.
+- **The rig's carrier runs 4.2 m/s off its code clock**: the clock rate the Doppler reports minus
+  the rate at which the pseudoranges' clock bias moves. One oscillator drives both in a receiver
+  (0.22 m/s on the real sky); here the HackRF shifts the carrier alone, and a filter state takes it.
+
+**GNSS only.** Each cell is the RMS altitude error in metres / the RMS vertical velocity error in
+m/s over that phase. Phases, in seconds after ignition -- gentle: pad -60-0, boost 0-60, W1 31-110,
+coast 110-141, W2 141-186, descent 186-218, W3 218-275, to main 275-582; spaceshot: boost 0-12,
+W1 4-81, coast 81-112, W2 112-157, descent 157-188, W3 188-246 (W1 starts inside the boost).
+Gentle flight -- raw never stops:
+
+| RMS error: altitude (m) / vertical velocity (m/s) | pad | boost | W1 >515 m/s up | coast | W2 >80 km | descent | W3 >515 m/s down | to main |
+|---|---|---|---|---|---|---|---|---|
+| Receiver's own fix | 11.5 / 0.05 | 49 / 11.1 | -- | 47 / 3.4 | -- | 35 / 3.8 | -- | 14 / 1.8 |
+| Epoch least squares | 9.3 / 0.15 | 26 / 3.9 | 23 / 2.9 | 34 / 2.4 | 38 / 2.1 | 29 / 2.2 | 24 / 2.4 | 11 / 1.0 |
+| EKF, constant velocity | 2.4 / 0.11 | 117 / 3.9 | 134 / 2.9 | 20 / 2.1 | 79 / 2.1 | 146 / 2.1 | 192 / 2.3 | 24 / 1.0 |
+| EKF, constant acceleration, late Doppler modelled | 2.1 / 0.11 | 10 / 0.46 | 14 / 0.37 | 6.2 / 0.52 | 5.5 / 0.38 | 2.8 / 0.50 | 15 / 0.73 | 12 / 0.24 |
+
+The constant-velocity EKF is `tc_ekf_capture.py`'s model and the source of the 75-285 m above. It
+cannot say where the vehicle was 0.22 s ago, so every Doppler reads off by lag x acceleration and
+the error integrates into altitude. Carrying the acceleration as a state lets the filter predict
+each range rate at t - 0.22 s; the constant-acceleration model without the lag is no better than
+constant velocity (27-199 m by phase). The gates reject 0.01 % of the measurements.
+
+Spaceshot, power normal: raw stops at ignition for 61 s (bar a 0.6 s burst of five satellites at
+13 s), so GNSS alone never sees the burn -- 1.5 km of altitude error in the boost, 2.8 km in W1.
+When raw returns, the filter restarts on a checked least-squares fix if its prediction disagrees
+with one: within 100 m 2 s later, within 30 m after 12 s. Then: coast 11 / 0.47, W2 28 / 1.3,
+descent 40 / 0.63, W3 55 / 1.0.
+
+**With an IMU.** A body-frame IMU synthesized from the truth: nose up, not rotating, with the
+sim's `IMUModel` noise and bias (its ISM6HG256X numbers), in a real-Earth world -- WGS84 gravity,
+the Earth's rate on the gyros, and the Coriolis force a vertical ground track needs.
+(`make_flights.py` integrated the trajectory with a spherical 9.80665 m/s^2 gravity, so in this
+world the coast reads ~0.03 m/s^2 of non-gravitational force, as a whisper of drag would.) The pad
+is seeded as the flight computer does it (attitude from gravity and heading, gyro bias from the
+stationary mean, levelling until ignition).
+The tightly coupled filter fuses the same raw pseudorange and Doppler, predicting each late
+Doppler from the IMU's own velocity history. No barometer: with raw measurements flowing, the
+vertical channel needs none, and nothing diverges in the fast descent.
+
+Gentle flight:
+
+| RMS error: altitude (m) / vertical velocity (m/s) | boost | W1 >515 m/s up | coast | W2 >80 km | descent | W3 >515 m/s down | to main |
+|---|---|---|---|---|---|---|---|
+| IMU + receiver's own fix (the flight filter today) | 178 / 8.1 | 404 / 7.6 | 101 / 3.4 | 134 / 2.7 | 62 / 3.5 | 230 / 4.1 | 34 / 1.8 |
+| IMU + raw, flight filter's mechanization | 8.8 / 0.29 | 14 / 0.20 | 10 / 0.24 | 13 / 0.27 | 15 / 0.23 | 27 / 0.60 | 19 / 0.19 |
+| IMU + raw, WGS84 gravity + Earth rotation, no pitch gate | 8.7 / 0.28 | 13 / 0.18 | 7.6 / 0.17 | 9.2 / 0.11 | 9.3 / 0.17 | 21 / 0.51 | 15 / 0.19 |
+| IMU alone after ignition (same mechanization) | 4.5 / 0.10 | 10 / 0.21 | 25 / 0.44 | 45 / 0.69 | 75 / 0.92 | 118 / 0.97 | 321 / 4.4 |
+
+Spaceshot, power normal:
+
+| RMS error: altitude (m) / vertical velocity (m/s) | boost | W1 >515 m/s up | coast | W2 >80 km | descent | W3 >515 m/s down |
+|---|---|---|---|---|---|---|
+| IMU + receiver's own fix (the flight filter today) | 41 / 4.5 | 315 / 8.2 | 77 / 2.9 | 63 / 3.6 | 56 / 3.5 | 135 / 1.8 |
+| IMU + raw, flight filter's mechanization | 3.0 / 0.02 | 26 / 2.2 | 13 / 0.30 | 24 / 1.5 | 37 / 0.38 | 53 / 0.92 |
+| IMU + raw, WGS84 gravity + Earth rotation, no pitch gate | 3.1 / 0.04 | 16 / 0.48 | 11 / 0.16 | 28 / 0.84 | 40 / 0.23 | 54 / 0.70 |
+| IMU alone after ignition (same mechanization) | 3.0 / 0.03 | 7.2 / 0.18 | 19 / 0.44 | 40 / 0.65 | 69 / 0.95 | 118 / 1.2 |
+
+Trajectories with each filter's estimate, the signed errors, and the satellites reported:
+`figures/px1105r_track_gentle.svg` and `figures/px1105r_track_spaceshot.svg`
+(`tc_ekf_cocom.py --plot`; off-scale excursions are named with their peak).
+
+What the IMU adds:
+
+- **It carries the 13.5 g ignition gap**: 16 m of altitude and 0.5 m/s through W1, horizontal
+  10 m, where GNSS alone is kilometres off.
+- **Velocity**: 0.1-0.8 m/s vertically, against 0.4-1.3 m/s from GNSS alone.
+- **Not altitude, once raw flows.** The 10-55 m floor (a bias of -30 to -50 m through the spaceshot's
+  descent) is the smoothed pseudoranges' own error, and both filters sit on it. For the first
+  80-110 s after ignition the IMU alone holds altitude better (3-10 m) than either.
+
+The flight filter's mechanization, which TcEkf mirrors, meets three things on this flight:
+
+- **Constant gravity (#1530) and no Earth rotation (#1529).** Gravity at 80 km is 2.5 % weaker
+  than on the pad, and Coriolis at 1 km/s is 0.15 m/s^2. Each fix has its own channel -- through
+  the spaceshot's 61 s gap (W1, RMS, median of 3 seeds):
+
+  | W1 through the 61 s gap | altitude (m) | vertical velocity (m/s) | horizontal (m) | horizontal velocity (m/s) |
+  |---|---|---|---|---|
+  | as flown: constant G, no Earth rotation | 25.9 | 2.25 | 67.7 | 3.52 |
+  | WGS84 gravity (`--gravity wgs84`) | 16.5 | 0.49 | 67.7 | 3.52 |
+  | Earth rotation (`--earth-rate`) | 25.6 | 2.23 | 17.6 | 1.11 |
+  | both | 16.7 | 0.49 | 17.8 | 1.12 |
+  | both, no pitch gate (`--no-att-gate`) | 16.3 | 0.48 | 9.8 | 0.92 |
+
+  Both need a matching change elsewhere. The pad levelling must use the same gravity: levelled
+  against a constant 9.807 while propagating WGS84, the filter parks the difference (0.03 m/s^2 at
+  the equator) in its accelerometer bias, and it acts for the whole flight -- a 2 m/s, 68 m ramp
+  through this gap before the fix. And the pad's stationary-mean gyro seed must leave the Earth's
+  rate out once the mechanization models it (`TcEkf.seed_gyro_bias`); levelling hides the
+  horizontal part of a double count, not the part about the vertical.
+- **The cos^4(pitch) gate on GNSS attitude corrections** (#1531) is zero when the vehicle is vertical,
+  so no GNSS update ever corrects its tilt. On the gentle flight the tilt drifted to 4-6 degrees, the
+  filter parked it in its accelerometer-bias states (0.05-0.26 m/s^2 against a true 0.01), and with
+  13 satellites in view the horizontal error reached 12-19 m and 0.5 m/s late in the flight. With
+  the gate off (`--no-att-gate`), 3-4 m and under 0.1 m/s, and the spaceshot's W1 horizontal goes
+  from 18 to 10 m. The synthetic vehicle stays nose-up all the way down, which a real one does not,
+  so the late numbers overstate it; the drift starts in the coast. GNSS never measures attitude:
+  a tilt error points the thrust or drag slightly sideways, the horizontal velocity drifts by
+  tilt x specific force (0.5 m/s per second for 1 degree at 3 g), the Doppler sees the drift, and
+  the covariance built up by the propagation maps the velocity correction back onto the tilt. Only
+  tilt across the specific force is observable, and only while there is some: heading about a
+  vertical thrust axis never is, and nothing is in the zero-g coast. The gate removes the
+  unobservable heading and the observable tilt alike. Removing only the rotation about the specific
+  force (`--att-gate heading`, the fix proposed in #1531) keeps nearly all of the benefit: 3.6 and
+  4.3 m late in the gentle flight, 8.5 m through the spaceshot's gap, against 2.7, 4.2 and 9.8 m
+  with no gate at all.
+
+The receiver's own fix, fused as the flight filter does today, is the worst of the lot: 60-400 m
+in the windows, where there is nothing to fuse, and 180 m and 8 m/s through the gentle boost,
+because the fix itself lags there (49 m and 11 m/s on its own). Its pad height is 11.6 m low.
+
+**Power save** (spaceshot runs 1 and 2, `--rr-lag 0.08`): 15-74 m of altitude on the pad, and a
+vertical velocity of 0.5-0.8 m/s in the coast and descent but 1.2-3.9 m/s in W3, where the lag
+moves -- power save costs the raw data as well as the fix.
+
+Next, for the altitude floor: a per-satellite pseudorange-bias state (the smoothing error and the
+re-lock transients are per satellite and slow), or the carrier delta-range TcEkf already has, once
+its ~0.2 s lag is modelled like the Doppler's. The lag itself is to be re-measured on the first
+flight that logs the PX1105R's raw data (#1528).
+
+Caveats: one run per configuration, on a GPS-L1-only, noiseless simulated sky. The IMU is
+synthetic -- no vibration, spin or misalignment; a worse one (5 mg turn-on bias, 0.1 deg/s gyro
+bias, 0.3 % scale factor) moves the spaceshot's W1 from 16 to 20 m. The lag and the pseudorange
+smoothing are this receiver's, measured on this rig; the 4.2 m/s rate offset, and the re-lock
+transients it causes, are the rig's. A
+Doppler-lag state (`--p0-rr-lag`) exists but was left off: GNSS alone cannot separate it from the
+pseudorange errors.
+
+    cd tinkerrocket-sim
+    PYTHONPATH=src python3 scripts/tc_ekf_cocom.py \
+        ../tools/gnss-cocom/sdr/results/px1105r_gentle_alt_pad600_smooth_gain3_nav9_el3_pmnormal_run2.log.gz \
+        ../tools/gnss-cocom/sdr/results/neo_m8t_gentle_alt.scenario.json \
+        --mode ins --mode ca --mode own --gravity wgs84 --earth-rate --no-att-gate \
+        --plot-lims 100,5,25 --plot ../tools/gnss-cocom/sdr/results/figures/px1105r_track_gentle.svg
+
+(`--mode ins-lc` adds the "today" row; it always runs the flight filter's own mechanization. The
+spaceshot figure is the same with its capture and scenario and `--plot-lims 100,5,30`; the tables
+are medians over `--seed 1..3`. The raw-measurement figure and the lag fits:
+`scripts/raw_residuals_cocom.py CAPTURE SCENARIO --plot figures/px1105r_raw_errors.svg`.)
+
+In `TcEkf` (defaults unchanged, so `tc_ekf_eval.py` and the other scripts behave as before):
+`rr_lag_s` (and an optional lag state), a Doppler clock-rate offset state (`p0_rate_ofs`), the
+constant-acceleration GNSS-only model (`enable_kinematic_acceleration`, `kin_gravity`,
+`kin_acc_tau`), `gravity_model="wgs84"` (`gravity_wgs84`, also used by the levelling update) and
+`earth_rate=True` for the IMU mechanization, and `seed_gyro_bias`. The gravity-gradient Jacobian
+term now has the C++'s sign (+2g/R, #1154).
 
 ## Experiments still owed on the first four receivers
 

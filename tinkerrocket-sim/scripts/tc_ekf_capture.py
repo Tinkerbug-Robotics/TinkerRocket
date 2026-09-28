@@ -16,10 +16,14 @@ UBX), plain or .gz. It needs raw measurements AND navigation subframes: 0xE5 +
     PYTHONPATH=src python3 scripts/tc_ekf_capture.py rig.log.gz \\
         --scenario rig.scenario.json --tow0 203400 --accel-psd 400 --no-tropo
 
-With a scenario (the rig's truth), errors are scored against it and the
-scenario's COCOM-blocked windows are skipped entirely. Without one, the filter
-is compared with the receiver's own fix, and a static capture reports its
-scatter about the mean.
+With a scenario (the rig's truth), errors are scored against it, straight
+through the scenario's COCOM-blocked windows: the receiver withholds its fix
+there, not its raw measurements (``--skip-blocked`` drops those epochs, as this
+script did before). Without one, the filter is compared with the receiver's own
+fix, and a static capture reports its scatter about the mean.
+
+For the rig's flights, scripts/tc_ekf_cocom.py is the fuller tool: the
+constant-acceleration model, the PX1105R's late Doppler, an IMU, per-phase scores.
 """
 from __future__ import annotations
 
@@ -119,6 +123,8 @@ def main():
                     help="leave SkyTraq's truncated whole-hertz Doppler as reported")
     ap.add_argument("--carrier", action="store_true",
                     help="also fuse carrier-phase delta-range (time-differenced carrier)")
+    ap.add_argument("--skip-blocked", dest="skip_blocked", action="store_true",
+                    help="with --scenario: drop every epoch inside its COCOM-blocked windows")
     ap.add_argument("--csv", help="write the filter track here")
     args = ap.parse_args()
 
@@ -147,8 +153,8 @@ def main():
     joint_cr = []
     for tow, obs in epochs:
         t_s = tow - args.tow0 if truth else tow
-        if truth and (t_s < 0 or truth.blocked(t_s)):
-            continue                                   # COCOM-blocked windows: not processed
+        if truth and (t_s < 0 or (args.skip_blocked and truth.blocked(t_s))):
+            continue
         if not started:
             meas = corrected(tow, obs, eph, None, use_tropo=False)
             fx = spp_fix(meas)
@@ -239,7 +245,8 @@ def main():
             if o is not None:
                 do = T @ (o[1] - xt); dvo = np.linalg.norm(T @ o[2] - vt_ned)
                 segs_own[seg].append((do[1], do[0], -do[2], dvo))
-        print("\nagainst the scenario truth (COCOM-blocked windows skipped):")
+        print("\nagainst the scenario truth" + (" (COCOM-blocked windows skipped):" if args.skip_blocked
+                                                 else ", through the COCOM-blocked windows:"))
         for seg in ("pad", "flight"):
             stats(f"{seg}: standalone EKF (raw)", segs[seg])
             stats(f"{seg}: receiver's own fix", segs_own[seg])

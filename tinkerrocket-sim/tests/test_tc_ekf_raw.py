@@ -316,3 +316,169 @@ def test_the_pad_seed_takes_the_attitude_as_known_like_the_flight_filter():
     cpp.set_quaternion(*q)
     assert np.allclose(cpp.get_cov_orient(), np.diag(ekf.P)[6:9], rtol=1e-6)
     assert np.allclose(cpp.get_quaternion(), ekf.q, atol=1e-6)
+
+
+
+# ---------------------------------------------------------------- late Doppler, clock-rate offset
+def _climbing(rr_lag_s, lag_in_filter, a_up=20.0, secs=10.0, rate=20.0, rate_ofs=0.0, p0_rate_ofs=0.0):
+    """GNSS-only constant-acceleration filter on a receiver climbing at a_up
+    from rest, 20 Hz. The Doppler is the range rate ``rr_lag_s`` before the
+    epoch, built with the filter's own geometry so only the lag is under test
+    (a PX1105R reports it ~0.22 s late); ``rate_ofs`` is added to every range
+    rate, as the COCOM rig's carrier shift does. Returns (filter, vertical
+    velocity error at the end, m/s)."""
+    from tinkerrocket_sim.estimation.tc_ekf import los_predict, sat_range_accel
+    m = RawGNSSModel(*REF, atmo_sigma_m=0.0, pr_wander_sigma_m=0.0, lock_los_accel_mps2=1e3, seed=9)
+    acc = np.array([0.0, 0.0, -a_up])
+    T = t_e2ned(math.radians(REF[0]), math.radians(REF[1]))
+
+    def at(t):
+        p, v = 0.5 * acc * t * t, acc * t
+        meas, _ = m.measure(t, p, v, acc, 1.0 + a_up / G)
+        r, a_e = _truth() + T.T @ p, T.T @ acc
+        v_lag = T.T @ (acc * max(0.0, t - rr_lag_s))
+        for x in meas:
+            u = los_predict(x, r, T.T @ v)[2]
+            x.rr += float(u @ (T.T @ v - v_lag)) - rr_lag_s * sat_range_accel(x, r, v_lag) + rate_ofs
+        return meas
+    first = at(0.0)
+    fx = spp_fix(first)
+    lla = ecef2lla(fx[0])
+    ekf = TcEkf(TcEkfParams(rr_lag_s=rr_lag_s if lag_in_filter else 0.0, p0_rate_ofs=p0_rate_ofs))
+    ekf.init(lla, t_e2ned(lla[0], lla[1]) @ fx[1], [1.0, 0.0, 0.0, 0.0])
+    ekf.freeze_imu_states()
+    ekf.enable_kinematic_acceleration()
+    ekf.init_clock_from(first)
+    n = int(secs * rate)
+    for k in range(1, n + 1):
+        ekf.propagate_kinematic(1.0 / rate, 0.01, 1.0)
+        ekf.update_gnss_raw(at(k / rate))
+    _, v_e, _ = ekf.receiver_state_ecef()
+    return ekf, float((T @ v_e)[2] - acc[2] * n / rate)
+
+
+def test_a_late_doppler_is_predicted_at_its_own_instant():
+    """Under 2 g a Doppler 0.2 s late reads a*tau = 4 m/s slow along the line of
+    sight. Predicted at t - tau from the acceleration state, it is right (to
+    tau times the acceleration estimate's noise: a steady climb here)."""
+    _, err_model = _climbing(0.2, True)
+    _, err_naive = _climbing(0.2, False)
+    assert abs(err_model) < 0.4                      # the filter's own sigma is ~0.15
+    assert abs(err_naive) > 3.0
+
+
+def test_a_doppler_clock_rate_offset_is_learned():
+    """The COCOM rig shifts the carrier alone: every range rate reads 4.2 m/s
+    off the rate the code's clock bias moves at. The offset state takes it."""
+    ekf, err = _climbing(0.0, True, a_up=0.0, secs=60.0, rate=2.0, rate_ofs=4.2, p0_rate_ofs=10.0)
+    assert abs(ekf.rate_ofs - 4.2) < 0.2
+    assert abs(err) < 0.2
+
+
+# ---------------------------------------------------------------- Earth model in the mechanization
+def _coast_ins(lat_deg, v_ned, f_ned, w_ned, secs, **prm):
+    """Unaided IMU propagation, body = NED (level), constant specific force and
+    rate as the IMU would read them. Returns the final velocity error (NED)."""
+    ekf = TcEkf(TcEkfParams(**prm))
+    ekf.init(np.array([math.radians(lat_deg), 0.0, 1000.0]), v_ned, [1.0, 0.0, 0.0, 0.0])
+    for _ in range(int(secs * 100)):
+        ekf.propagate(f_ned, w_ned, 0.01)
+    return ekf.v - np.asarray(v_ned, float)
+
+
+def test_the_earth_rate_is_not_a_gyro_bias_when_modelled():
+    """A still IMU at 38 N reads the Earth's rotation. The flight filter's
+    mechanization takes it as vehicle rotation, tilts, and gravity leaks into
+    the horizontal (tens of m/s in 5 min); with the Earth rate it stays still."""
+    from tinkerrocket_sim.estimation.tc_ekf import OMGE
+    lat = math.radians(38.0)
+    w = OMGE * np.array([math.cos(lat), 0.0, -math.sin(lat)])
+    f = np.array([0.0, 0.0, -G])
+    assert np.linalg.norm(_coast_ins(38.0, [0, 0, 0], f, w, 300.0, earth_rate=True)) < 0.05
+    assert np.linalg.norm(_coast_ins(38.0, [0, 0, 0], f, w, 300.0)) > 5.0
+    # ... and the pad's stationary-mean gyro bias seed must not take it as bias too
+    for er, expect in ((True, np.zeros(3)), (False, w)):
+        ekf = TcEkf(TcEkfParams(earth_rate=er))
+        ekf.init(np.array([math.radians(38.0), 0.0, 1000.0]), [0, 0, 0], [1.0, 0.0, 0.0, 0.0])
+        ekf.seed_gyro_bias(w)                     # body = NED: the still gyro reads w
+        assert np.allclose(ekf.wb, expect, atol=1e-12)
+
+
+def test_coriolis_is_in_the_mechanization_when_modelled():
+    """Climbing straight up at 1 km/s on the equator, the vehicle must push
+    east with 2 Omega v = 0.15 m/s^2 to stay on its ground track; the IMU reads
+    that, and a mechanization without Coriolis turns it into 8.75 m/s of east
+    velocity in a minute -- 10.0 with the Earth rate tilting the platform too."""
+    from tinkerrocket_sim.estimation.tc_ekf import OMGE
+    v = np.array([0.0, 0.0, -1000.0])
+    w = OMGE * np.array([1.0, 0.0, 0.0])
+    f = np.array([0.0, 0.0, -G]) + np.cross(2.0 * w, v)
+    assert abs(_coast_ins(0.0, v, f, w, 60.0, earth_rate=True)[1]) < 0.05
+    assert abs(_coast_ins(0.0, v, f, w, 60.0)[1] - 10.04) < 0.3
+
+
+def test_wgs84_normal_gravity_matches_the_published_values():
+    """Somigliana on the ellipsoid (NIMA TR8350.2): 9.7803253359 on the equator,
+    9.8321849378 at the pole, 9.8061978 at 45 deg; the free-air gradient on the
+    equator is -2 gamma/a (1 + f + m) = -3.0877e-6 s^-2, so 80 km up is 2.5 % lighter."""
+    from tinkerrocket_sim.estimation.tc_ekf import gravity_wgs84
+    assert abs(gravity_wgs84(0.0, 0.0)[2] - 9.7803253359) < 1e-9
+    assert abs(gravity_wgs84(math.pi / 2, 0.0)[2] - 9.8321849378) < 1e-8
+    assert abs(gravity_wgs84(math.pi / 4, 0.0)[2] - 9.8061978) < 1e-6
+    grad = (gravity_wgs84(0.0, 100.0)[2] - gravity_wgs84(0.0, 0.0)[2]) / 100.0
+    assert abs(grad + 3.0877e-6) < 0.001e-6
+    assert 0.974 < gravity_wgs84(0.0, 80_000.0)[2] / gravity_wgs84(0.0, 0.0)[2] < 0.976
+
+
+def test_wgs84_gravity_follows_a_free_fall_from_80_km():
+    """In vacuum the accelerometer reads zero. Gravity at 80 km is 2.5 % weaker
+    than on the pad: a constant-G mechanization falls ~430 m too far in a minute
+    (the WGS84 model's few metres are the 100 Hz Euler step)."""
+    from tinkerrocket_sim.estimation.tc_ekf import gravity_wgs84
+    lat, h0, secs = 0.3, 80_000.0, 60.0
+    h, v = h0, 0.0
+    for _ in range(int(secs * 1000)):              # the truth, finely integrated
+        v -= gravity_wgs84(lat, h)[2] * 1e-3
+        h += v * 1e-3
+    out = {}
+    for model in ("wgs84", "const"):
+        ekf = TcEkf(TcEkfParams(gravity_model=model))
+        ekf.init(np.array([lat, 0.0, h0]), [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0])
+        for _ in range(int(secs * 100)):
+            ekf.propagate(np.zeros(3), np.zeros(3), 0.01)
+        out[model] = ekf.lla[2] - h
+    assert abs(out["wgs84"]) < 5.0
+    assert out["const"] < -300.0
+
+
+def test_pad_levelling_uses_the_mechanization_gravity():
+    """Levelled against the gravity it propagates with, a still IMU leaves the
+    accelerometer bias alone; the flight filter's constant G on the equator
+    (WGS84 9.780 m/s^2) parks 0.027 m/s^2 of it there instead."""
+    from tinkerrocket_sim.estimation.tc_ekf import gravity_wgs84
+    lat, h = 0.0, 1200.0
+    f = np.array([0.0, 0.0, -gravity_wgs84(lat, h)[2]])        # body = NED, level and still
+    out = {}
+    for model in ("wgs84", "const"):
+        ekf = TcEkf(TcEkfParams(gravity_model=model))
+        ekf.init(np.array([lat, 0.0, h]), [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0])
+        for _ in range(3000):
+            ekf.propagate(f, np.zeros(3), 0.01)
+            ekf.update_accel_level(f)
+        out[model] = ekf.ab[2]
+    assert abs(out["wgs84"]) < 0.003
+    assert abs(out["const"] - (G - gravity_wgs84(lat, h)[2])) < 0.005
+
+
+def test_the_heading_gate_keeps_tilt_and_drops_rotation_about_the_thrust():
+    """Nose up under 3 g, a GNSS update may correct the tilt (rotation about the
+    body's Y and Z, across the thrust) but not the rotation about the thrust
+    axis, which it cannot see. The flight filter's cos^4 pitch gate drops both."""
+    ekf = TcEkf(TcEkfParams(gnss_att_gate="heading"))
+    ekf.init(np.array([0.3, 0.0, 100.0]), [0, 0, 0], quat_from_accel_heading([G, 0.0, 0.0], 0.0))
+    ekf.f_b = np.array([3.0 * G, 0.0, 0.0])                    # thrust along the nose (body X)
+    A = ekf._att_gate()
+    assert np.allclose(A @ [1.0, 0.0, 0.0], 0.0)
+    assert np.allclose(A @ [0.0, 1.0, 0.0], [0.0, 1.0, 0.0]) and np.allclose(A @ [0.0, 0.0, 1.0], [0.0, 0.0, 1.0])
+    ekf.p.gnss_att_gate = "cos4"
+    assert np.abs(ekf._att_gate()).max() < 1e-6

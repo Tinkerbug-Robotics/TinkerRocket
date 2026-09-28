@@ -444,6 +444,7 @@ def corrected(tow, obs, eph, r_approx, use_tropo=True, el_mask_deg=5.0, doppler_
         rs2, dts2 = sat_pos(e, tt + 0.5)
         rs1, dts1 = sat_pos(e, tt - 0.5)
         vs = rs2 - rs1                      # ECEF-at-transmit velocity, 1 s central difference
+        acs = (rs2 - 2.0 * rs + rs1) / 0.25  # and acceleration, for a late Doppler
         corr = C_LIGHT * dts
         iono = trop = 0.0
         if have_pos:
@@ -467,7 +468,7 @@ def corrected(tow, obs, eph, r_approx, use_tropo=True, el_mask_deg=5.0, doppler_
                            sigma_pr_corr=_cn0_sigma(PR_CORR, cn0), tau_pr=PR_TAU_S,
                            tau_rr=RR_TAU_S, cr=cr, cr_slip=bool(cp_flags & 1),
                            sigma_cr=_cn0_sigma(CP_WHITE, cn0), sigma_cr_corr=_cn0_sigma(CP_CORR, cn0),
-                           tau_cr=CP_TAU_S, q_cr=_cn0_sigma(CP_RW, cn0) ** 2))
+                           tau_cr=CP_TAU_S, q_cr=_cn0_sigma(CP_RW, cn0) ** 2, sat_acc=acs))
     return out
 
 
