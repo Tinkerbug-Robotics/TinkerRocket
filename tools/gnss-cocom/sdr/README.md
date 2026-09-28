@@ -27,6 +27,7 @@ variable at a time.
 | `patch_carrier_offset.py` | Adds an opt-in `CARR_OFFSET_HZ` build to gps-sdr-sim: a carrier-only offset, code untouched, to cancel the HackRF's 22 Hz carrier-vs-code error |
 | `code_carrier.py` | Reads the carrier-vs-code rate from any raw capture (code-minus-carrier per satellite, no truth needed): +4.19 m/s on the rig as it was, 0.00 on the real sky |
 | `own_fix.py` | A receiver's own fix against the injection by flight phase (height error, east/north offset), for A/B runs of one trajectory; reads LC86G, u-blox and SkyTraq captures |
+| `plot_carrier_ab.py` | A SkyTraq receiver on an original and a carrier-corrected IQ file: each satellite's pseudorange error on one scale, and both runs' own height |
 | `best_geometry.py` | Scans latitude and hour for the most satellites above a given elevation |
 | `plot_flight.py` | Altitude, speed, acceleration, lock state and satellite count on one time axis |
 | `recovery.py` | Shut lag and re-open latency per blocked window, with satellites in the wait |
