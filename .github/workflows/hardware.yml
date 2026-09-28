@@ -1,6 +1,6 @@
 name: hardware
 
-# Scoped to hardware/ on purpose. The gate below is currently RED on
+# Scoped to hardware/ on purpose. The gate below was born RED on
 # rocket-computer (#833: Q11 is in the schematic and not in the layout), and
 # firmware/app work should not be blocked by a board defect it cannot fix.
 on:
@@ -11,11 +11,15 @@ on:
 
 jobs:
   board-parity:
-    # Nothing in CI validated hardware/ before this. docs/board-versioning.md
-    # names `kicad-cli pcb drc --schematic-parity` as the only gate, and that
-    # command does NOT notice a footprint missing from the layout entirely —
-    # it reconciles what IS on the board. #833 shipped that far: the flight
-    # battery's positive terminal reached nothing but a floating pour.
+    # Nothing in CI validated hardware/ before this, and
+    # `kicad-cli pcb drc --schematic-parity` looks footprints up by reference,
+    # so it misses both things checked here:
+    # - a footprint missing from the layout entirely. #833 shipped that far:
+    #   the flight battery's positive terminal reached nothing but a floating
+    #   pour.
+    # - a footprint whose (path ...) does not lead back to its symbol. Update
+    #   PCB links by path, so on 2026-09-28 it replaced tinker-base's J2, R13
+    #   and R16 with fresh copies off the board edge, their tracks dangling.
     #
     # Pure Python, no KiCad on the runner, so it costs seconds.
     runs-on: ubuntu-latest
@@ -24,5 +28,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Every board-bound symbol has a footprint
+      - name: Every board-bound symbol has a footprint, linked to it by path
         run: python3 tools/check_board_parity.py

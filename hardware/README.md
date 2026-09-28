@@ -40,9 +40,9 @@ the product-to-build map and why the project names did not change.
 ## Legacy boards
 
 [`legacy/`](legacy/) holds the boards that left the product line — the full
-base station, the PX1105R GNSS carrier and the servo adapter. They still open,
-still pass the parity gate and can still be plotted from their tags; see
-[`legacy/README.md`](legacy/README.md).
+base station, the PX1105R GNSS carrier and the servo adapter. They still open
+and can still be plotted from their tags, and all but the base station pass
+the parity gate; see [`legacy/README.md`](legacy/README.md).
 
 ## Names and revisions
 

@@ -2,9 +2,10 @@
 
 Boards that are no longer part of the product line (see
 [`../README.md`](../README.md#product-line)), kept whole so that nothing is lost.
-Each one still opens in KiCad, still passes the parity gate
-(`tools/check_board_parity.py` scans this folder too) and can still be
-re-plotted.
+Each one still opens in KiCad and can still be re-plotted.
+`tools/check_board_parity.py` scans this folder too, and passes all but
+`base-station`, which it exempts: R13 and R16, the TPS63020 feedback divider,
+left the schematic in 0f721aa6, and the V6 layout was never synced to match.
 
 | Folder | Board | Latest tag | Tree | Why it left the line |
 |---|---|---|---|---|
