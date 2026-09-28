@@ -585,7 +585,7 @@
     "netclass_patterns": [
       {
         "netclass": "RF",
-        "pattern": "Net-(U15-Feed)"
+        "pattern": "Net-(C5-Pad1)"
       },
       {
         "netclass": "RF",

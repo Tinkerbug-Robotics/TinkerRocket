@@ -11,12 +11,13 @@ brevity as "the rest is default".
 
 | Item | Value | Why |
 |---|---|---|
-| Stencil | **100 µm (4 mil)**, flat, no step. Laser cut, electropolished and nano-coated. | Repo default set 2026-09-09 (#959). Tightest aperture on this board is F.Cu U3 0.65 x 0.22 mm at **AR 0.82** on a 100 µm foil, against the IPC-7525 floor of 0.66. Nothing here needs a foil thinner than **125 µm**, so 100 µm is the fleet default rather than a board constraint. |
+| Stencil | **80 µm (3 mil)**, flat, no step. Laser cut, electropolished and nano-coated. A deliberate exception to the 100 µm repo default (#959), and the same foil as the Tinker-Beetle. | The finest aperture is now the 24-ball WLCSP boot flash (`U1`): 0.254 mm round pads at **AR 0.64** on a 100 µm foil, below the IPC-7525 floor of 0.66, and **0.79** at 80 µm. Next come the chip antenna's 0.30 × 0.30 mm pads (`U15`, 0.94 at 80 µm) and the ESP32-S3's 0.65 × 0.22 mm pins (`U3`, 1.03 at 80 µm, 0.82 at 100 µm). No through-hole pad carries paste. All of these figures are measured from the board's paste layer, where each aperture matches its pad 1:1. |
 
 ## The rule
 
 Stencil thickness, the area-ratio floor and the paste-coverage convention are
 repo-wide and live in one place: **[`hardware/SOLDER-PASTE-CONVENTION.md`](../SOLDER-PASTE-CONVENTION.md)**
-(#959, #906). The short version is that this board takes the 100 µm default,
-apertures must clear AR 0.66 at that thickness, and coverage stays at full pad
-unless a named mechanism justifies reducing it.
+(#959, #906). The short version: this board takes an 80 µm foil instead of the
+100 µm default because of `U1`, apertures must clear AR 0.66 at that
+thickness, and coverage stays at full pad unless a named mechanism justifies
+reducing it.

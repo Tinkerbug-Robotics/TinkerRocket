@@ -51,7 +51,8 @@ struct board_pins
     static constexpr int LORA_ACT_PIN     = -1;
 
     // --- Storage: the boot NOR only, as on V3 ---
-    // U1 is a GD25Q128ESIG (16 MB) on the S3's dedicated SPI0 pins; there is no
+    // U1 is a W25Q128JVYIQ (16 MB, WLCSP, VCC on +3V3; a GD25Q128ESIG on VDD_SPI
+    // until 2026-09-27) on the S3's dedicated SPI0 pins; there is no
     // NAND and no SD slot (GPIO4-7 are unconnected pads). Logs go to spiffs on
     // U1, laid out by the same 16 MB overlay V3 uses (sdkconfig.defaults.v3,
     // partitions_v3.csv).
