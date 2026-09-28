@@ -71,8 +71,13 @@ commit produced it, and says `-dirty` if the tree had uncommitted changes.
 
 ## Releasing a board
 
-1. Clear DRC (`--severity-error --schematic-parity`). Nothing in CI validates
-   `hardware/`, so this is the only gate.
+1. Clear DRC (`--severity-error --schematic-parity`) and
+   `tools/check_board_parity.py`, which CI also runs on every change to
+   `hardware/`. DRC parity looks footprints up by reference, so it cannot see
+   the two things the script checks: a board symbol with no footprint at all
+   (#833), and a footprint whose `(path …)` does not lead back to its symbol,
+   which the next Update PCB replaces with a fresh copy off the board edge
+   (tinker-base, 2026-09-28).
 2. Bump `(rev "...")` in the PCB title block if the marketing version changed.
 3. Commit, then tag: `git tag <board>-v<major>.<minor>.<patch>`
 4. `tools/plot_gerbers.sh <board>` — refuses on a dirty tree unless `--allow-dirty`,
