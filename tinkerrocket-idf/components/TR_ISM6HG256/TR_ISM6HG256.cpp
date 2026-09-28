@@ -2,6 +2,10 @@
 #include <cstring>
 #include <esp_log.h>
 #include <esp_rom_sys.h>
+#include "ism6_whoami.h"
+
+static_assert(ism6_whoami::WHOAMI_ISM6HG256X == ISM6HG256X_ID,
+              "ism6_whoami.h must agree with ST's ISM6HG256X_ID");
 
 static const char* ISM6_TAG = "TR_ISM6HG256";
 
@@ -82,7 +86,7 @@ TR_ISM6HG256Status TR_ISM6HG256::begin()
     if (!ensureSpiDevice_()) return TR_ISM6HG256_ERROR;
 
     if (ReadWhoAmI(&whoami) != TR_ISM6HG256_OK) return TR_ISM6HG256_ERROR;
-    if (whoami != ISM6HG256X_ID) return TR_ISM6HG256_ERROR;
+    if (!ism6_whoami::supported(whoami)) return TR_ISM6HG256_ERROR;
 
     if (ism6hg256x_mem_bank_set(&reg_ctx, ISM6HG256X_MAIN_MEM_BANK) != 0) return TR_ISM6HG256_ERROR;
     if (ism6hg256x_auto_increment_set(&reg_ctx, PROPERTY_ENABLE) != 0) return TR_ISM6HG256_ERROR;
