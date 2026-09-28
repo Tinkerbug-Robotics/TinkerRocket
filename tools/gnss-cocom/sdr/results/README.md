@@ -274,6 +274,11 @@ time, 921600 before: the bridge's baud probe kept missing 921600 that day, and t
 stream needs 9.5 kB/s. `own_fix.py --from 300` gives its pad numbers over the same stretch
 on both runs.
 
+Figures: `figures/px1125r_carrier_ab.svg` (`plot_carrier_ab.py`: each satellite's
+pseudorange error on both files, and both runs' own height) and
+`figures/px1125r_spaceshot_cofs_limits.svg` (`px_limits.py` on the corrected run: raw
+measurements through every window, the own fix withheld inside them).
+
 ## A higher flight: `traveler`, modeled on Traveler IV (2026-09-27)
 
 `make_flights.py`'s `traveler` flies the numbers of USC RPL's Traveler IV (2019), from its

@@ -3,6 +3,7 @@
 (measurement count, C/N0) and its own 0xDF fix (state, speed, altitude) per second,
 the gaps in each, and a timeline figure."""
 import bisect
+import gzip
 import json
 import math
 import struct
@@ -57,12 +58,14 @@ def lla(x, y, z):
 
 
 import re as _re
-_hdr = open(cap, errors="replace").readline()
+_open = (lambda: gzip.open(cap, "rt", errors="replace")) if cap.suffix == ".gz" else \
+    (lambda: open(cap, errors="replace"))     # results/ keeps the captures gzip'd
+_hdr = _open().readline()
 _m = _re.search(r"tx (\S+)\.C8", _hdr)
 IQNAME = _m.group(1) if _m else f"smooth {SCEN}"      # the IQ file this capture played
 e5, df = [], []           # (host t, file t, ...)
 events = []               # (host t, text): what the runner did mid-run, e.g. a hot start
-for line in open(cap, errors="replace"):
+for line in _open():
     p = line.split(" ", 2)
     if len(p) >= 3 and p[1] == "#" and p[2].startswith("host: ") and not p[2].startswith("host: tx "):
         events.append((float(p[0]), p[2][len("host: "):].strip()))
@@ -129,18 +132,21 @@ fig, axs = plt.subplots(3, 1, figsize=(11, 7.6), dpi=140, sharex=True,
                         gridspec_kw=dict(height_ratios=[1.0, 1.0, 1.0], hspace=0.12))
 INK, INK3, RULE = "#1d2129", "#6b7280", "#e3e6ea"
 ax = axs[0]
-ax.plot([f for _h, f, n, _c in e5], [n for _h, _f, n, _c in e5], ".", ms=1.5, color="#2a78d6")
+ax.plot([f for _h, f, n, _c in e5], [n for _h, _f, n, _c in e5], ".", ms=1.5, color="#2a78d6",
+        rasterized=True)          # dense point clouds rasterize, so an .svg stays small
 ax.set_ylabel("raw measurements\nper 0xE5 epoch", fontsize=8, color=INK3)
 ax = axs[1]
 ok = [(h - off, sp, a) for h, _f, st, sp, a in df if st >= 2]     # only while it has a fix
-ax.plot([t for t, _s, _a in ok], [sp for _t, sp, _a in ok], ".", ms=1.2, color="#eb6834", label="own speed while fixed (0xDF)")
+ax.plot([t for t, _s, _a in ok], [sp for _t, sp, _a in ok], ".", ms=1.2, color="#eb6834", label="own speed while fixed (0xDF)",
+        rasterized=True)
 tx = [t / 10 for t in range(int(10 * (IGN - 80)), int(10 * (IGN + 480)))]
 ax.plot(tx, [at(t, "speed_mps") for t in tx], color=INK3, lw=1.0, label="injected")
 ax.axhline(500, color=INK3, lw=0.6, ls=(0, (2, 2)))
 ax.set_ylabel("speed, m/s", fontsize=8, color=INK3)
 ax.legend(fontsize=7, frameon=False, loc="upper right")
 ax = axs[2]
-ax.plot([t for t, _s, _a in ok], [a / 1000 for _t, _s, a in ok], ".", ms=1.2, color="#1baf7a", label="own altitude while fixed (0xDF)")
+ax.plot([t for t, _s, _a in ok], [a / 1000 for _t, _s, a in ok], ".", ms=1.2, color="#1baf7a", label="own altitude while fixed (0xDF)",
+        rasterized=True)
 ax.plot(tx, [at(t, "alt_m") / 1000 for t in tx], color=INK3, lw=1.0, label="injected")
 ax.axhline(80, color=INK3, lw=0.6, ls=(0, (2, 2)))
 ax.axhline(18, color=INK3, lw=0.6, ls=(0, (1, 3)))
