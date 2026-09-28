@@ -1,8 +1,10 @@
 # LoRa daughterboard — fabrication notes
 
-**Paste the block below into the fab's order notes verbatim.** The same text is on the `Dwgs.User` layer, which plots as `User_Drawings.gbr`.
+**Paste the block below into the fab's order notes verbatim.** The order notes are its only route to the fab: the board file carries no copy of it, and its `Dwgs.User` layer is empty.
 
 This file exists because **none of it can travel in the design files.** Via protection, surface finish and the deliberate plane void were each verified absent from the gerbers, the `.gbrjob`, the Excellon drill file, IPC-2581 *and* ODB++. Written text is the only channel to the fab.
+
+**Status 2026-09-28: V4, not yet built.** V4 moves the boot flash `U22` to the 16 MB quad-SPI NOR in a 24-ball WLCSP that the Tinker-Beetle and Tinker-Mantis carry. It sits on B.Cu where the SOIC-8 was, with its 100 nF (`C18`) beside it. `R79` (GPIO0 pull-up) and `R80` (radio receive-enable pull-down) are new. All of it is placed and routed, and no V4 board has been built yet. The via counts and the stencil note in the block below describe V4.
 
 ---
 
@@ -18,7 +20,7 @@ BOARD 22.0 x 27.5 mm, 6 LAYER, 1.6 mm NOMINAL.
    THE EDGE-LAUNCH SMA (J8) AND THE USB-C CONNECTOR (J2).
 
 3. VIAS: FILLED WITH NON-CONDUCTIVE EPOXY AND PLATED OVER (CAPPED),
-   IPC-4761 TYPE VII. 66 VIAS FALL INSIDE SMD LANDS, INCLUDING SIX IN THE
+   IPC-4761 TYPE VII. 64 VIAS OVERLAP SMD LANDS, INCLUDING SEVEN IN THE
    QFN-56 THERMAL PAD (U28). VIA-IN-PAD PROCESS IS REQUIRED.
    ALL OTHER VIAS TENTED BOTH SIDES.
 
@@ -31,20 +33,21 @@ BOARD 22.0 x 27.5 mm, 6 LAYER, 1.6 mm NOMINAL.
 5. SOLDER MASK: MINIMUM DAM 0.08 mm AT U28 (0.4 mm PITCH). IF THAT CANNOT
    BE HELD, GANG THE OPENING RATHER THAN SHRINKING THE PADS.
 
-6. MINIMUM ANNULAR RING IS 0.050 mm - 194 VIAS ARE 0.40 mm PAD ON 0.30 mm
+6. MINIMUM ANNULAR RING IS 0.050 mm - 195 VIAS ARE 0.40 mm PAD ON 0.30 mm
    DRILL. CONFIRM THIS IS WITHIN CAPABILITY BEFORE BUILDING.
 
 7. MINIMUM TRACK AND SPACING: 0.10 mm.
 
 ASSEMBLY - STENCIL
-STENCIL FOIL 0.10 mm (4 mil), FLAT - NO STEP.
+STENCIL FOIL 0.08 mm (3 mil), FLAT - NO STEP.
+A DELIBERATE EXCEPTION TO THE 0.10 mm FLEET DEFAULT.
 LASER CUT, ELECTROPOLISHED AND NANO-COATED.
 BOTH SIDES CARRY PASTE - TOP AND BOTTOM STENCILS REQUIRED.
-TIGHTEST APERTURE: F.Cu U3 TPS62913RPUR 0.65 x 0.20 (AR 0.76),
-B.Cu U28 ESP32-S3RH2 0.65 x 0.22 (AR 0.82). IPC-7525 FLOOR
-IS 0.66; BOTH CLEAR. NOTHING ON THIS BOARD NEEDS A FOIL
-THINNER THAN 0.116 mm, SO 0.10 mm IS THE FLEET DEFAULT
-RATHER THAN A BOARD CONSTRAINT. SEE
+THE FINEST APERTURES ARE THE 24-BALL WLCSP BOOT FLASH (U22,
+B.Cu): 0.254 mm ROUND PADS, AREA RATIO 0.64 AT A 0.10 mm
+FOIL - BELOW THE IPC-7525 FLOOR OF 0.66 - AND 0.79 AT
+0.08 mm. THE NEXT TIGHTEST, U3 0.65 x 0.20 (F.Cu) AND
+U28 0.65 x 0.22 (B.Cu), ARE 0.96 AND 1.03 AT 0.08 mm. SEE
 hardware/SOLDER-PASTE-CONVENTION.md (#959, #906).
 ```
 

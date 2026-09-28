@@ -12,11 +12,12 @@ restating them.
 ## 1. Stencil thickness: size to the table, not to the part
 
 **100 µm (4 mil), flat, laser cut, electropolished and nano-coated**, unless a
-board states otherwise. Two boards do, and both say why in their own notes:
+board states otherwise. Three boards do, and each says why in its own notes:
 
 | board | foil | why |
 |---|---|---|
 | `tinker-beetle` | **80 µm** | its 24-ball WLCSP flash is AR 0.64 at 100 µm |
+| `lora-daughterboard` | **80 µm** | the same 24-ball WLCSP flash, AR 0.64 at 100 µm |
 | `gnss-sam10m8-18mm-hv` | **120 µm** | u-blox requirement (UBX-22020019 R02 §4.4.1), not an area-ratio limit |
 
 **Area ratio ≥ 0.66** (IPC-7525) at the ordered thickness:

@@ -30,7 +30,7 @@ that cannot include it — the hash changes when you commit. Tags avoid that.
 tinker-mantis-v<semver>                      earlier revisions: rocket-computer-v9.0.0
 tinker-beetle-v<semver>                      earlier revisions: rocket-computer-mini-v1.0.1
 tinker-base-v<semver>                        never fabricated, no tag yet
-lora-daughterboard-v3.0.0
+lora-daughterboard-v<semver>                 v3.0.0 fabricated; V4 laid out, not yet tagged
 gnss-sam10m8-18mm-hv-v3.0.0
 base-station-v5.0.0                          hardware/legacy/
 gnss-px1105r-18mm-highpower-ext-ant-v1.1.0   hardware/legacy/
@@ -115,7 +115,8 @@ every earlier one is 8 MB.**
 | base-station (legacy) | V1, V2 | `W25Q64` | 8 MB | BOM history + confirmed by the board owner 2026-08-24 ("latest version only is 16 MB, others are 8") |
 | base-station (legacy) | V3 (PCB V5/V6) | U1 `GD25Q128ESIG` | 16 MB | BOM |
 | lora-daughterboard | as-built V3 | U22 `W25Q64JVXGIQ` | 8 MB | the board the firmware was written against; **measured** on two articles — `E0:72:A1:CA:F6:7C` and `E0:72:A1:CA:F6:48`, both GigaDevice `c8:6517` |
-| lora-daughterboard | current artwork | U22 `GD25Q128ESIG` | 16 MB | **measured** 2026-08-27 — `E0:72:A1:CA:F6:40` flashed and booted `radio up, listening at 915.0 MHz SF8`. (The row used to say "first article is unflashable, so untested"; that article is one dead board, not the revision.) |
+| lora-daughterboard | V3 SOIC-8 artwork | U22 `GD25Q128ESIG` | 16 MB | **measured** 2026-08-27 — `E0:72:A1:CA:F6:40` flashed and booted `radio up, listening at 915.0 MHz SF8`. (The row used to say "first article is unflashable, so untested"; that article is one dead board, not the revision.) |
+| lora-daughterboard | V4 (2026-09-28) | U22 `W25Q128JVYIQ` | 16 MB | BOM and layout; the Beetle/Mantis 24-ball WLCSP part, placed and routed. No V4 board has been built yet. **Unmeasured** |
 | tinker-beetle (was rocket-computer-mini) | first article | U13 `GD25Q128ESIG` | 16 MB | BOM; board postdates the swap. **No hardware exists yet to measure** (2026-08-24) |
 | tinker-base (was base-station-mini) | first article | U1 `GD25Q128ESIG` | 16 MB | BOM; board postdates the swap. **Unmeasured** |
 
@@ -185,6 +186,15 @@ takes effect where someone would look for it. Any root `projects/*/sdkconfig`
 left over from before is now ignored and can be deleted.
 
 ## Current state
+
+**2026-09-28 — lora-daughterboard V4, laid out, not yet tagged.** The boot
+flash moved from the SOIC-8 to the Beetle/Mantis 24-ball WLCSP, and two pull
+resistors were added. Copper changed and V3 was fabricated, so this is a major
+bump. The next fabrication is tagged `lora-daughterboard-v4.0.0`. The title
+block and silkscreen already read V4, which ends the mismatch with the v3.0.0
+tag. DRC (`--severity-all --schematic-parity`): 0 unconnected, 0 parity. The 13
+items left are the three waived courtyard overlaps from v3.0.0 plus silkscreen
+and library warnings.
 
 **2026-09-24 — product line.** The boards offered are `tinker-mantis`,
 `tinker-beetle`, `tinker-base`, `lora-daughterboard` and `gnss-sam10m8-18mm-hv`;
