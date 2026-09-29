@@ -37,6 +37,12 @@ Firmware project names are in `tinkerrocket-idf/projects/`; see
 [`tinkerrocket-idf/projects/README.md`](../tinkerrocket-idf/projects/README.md) for
 the product-to-build map and why the project names did not change.
 
+## In development
+
+| Folder | Board | What it is | State |
+|---|---|---|---|
+| [`space-bug-m8t/`](space-bug-m8t/) | **Space Bug M8T** | The Space Bug ([`legacy/gnss-px1105r-18mm-highpower-ext-ant/`](legacy/gnss-px1105r-18mm-highpower-ext-ant/)) redrawn around the u-blox NEO-M8T timing receiver, with a one-stage L1 front end and an L1 patch antenna, on the same 35 × 35 mm, 8-layer outline | Schematic done 2026-09-29; the layout is being re-placed around the larger module |
+
 ## Legacy boards
 
 [`legacy/`](legacy/) holds the boards that left the product line — the full
