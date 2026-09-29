@@ -52,8 +52,8 @@ plotted from exactly these files.
 | L2 | The F.Cu window keeps the feed notch; a second rule area covers In1/In2/B.Cu without it. The window was trimmed to 4.6 × 3.0 mm. Six fence vias at x 51.40 and three at y 152.55 replace (51.9, 151.75/152.6). Nothing sits under U15's feed pads on any layer now. |
 | L3 | Eight GND vias beside signal vias, plus the one L13 adds; signal vias over 1 mm from a ground via: 14 → 5. The remaining five are Q1-G1 and CHIP_PU (static), L_BUSY at 1.17 mm, and the two SPI hop vias, which have no legal site. |
 | L4 | Nine GND vias in U3's exposed pad, in the paste-window gaps. |
-| L5 | A GND via at (54.20, 149.55) for C16/C24. |
-| L7 | GND vias at (70.50, 109.00) and (75.25, 116.98) for U16's ground pads. |
+| L5 | A GND via for C16/C24, now at (53.52, 149.60) with a stub to the C24.2–C16.2 strap. It also serves C8.2 (see *Found at packaging*). |
+| L7 | GND vias at (70.97, 109.045) and (75.25, 116.98) for U16's ground pads; the first has a stub to pad 2. |
 | L8 (part) | `C25` 100 nF V_SWITCH→GND at (48.85, 171.8), grounded to U9 pin 13, which sits in the PowerPAD pour. |
 | L9 | J8 moved to (62.885, 105.695); its pads start 0.30 mm inside the edge. |
 | L10 | J2's 16 signal pads trimmed at the rear to HRO's land, in the library and on the board: BT2.P to J2 is now 0.84 mm, was 0.40. |
@@ -98,8 +98,20 @@ vias whose rings overlap the edge of an SMD land. Each hole stays outside the la
 | (70.50, 109.00) | GND | C20.1 | 0.058 mm outside | added for finding L7 |
 | (51.16, 178.13) | VCC | U22.1 | 0.06 mm inside the pad's 0.10 mm mask margin | original layout |
 
-The V1 package was plotted with these vias where they are. Solder can wick down the first and third, so inspect C24 and
-U22 pin 1 on the first article. A 0.1–0.2 mm nudge clears each one; whether to make it is the owner's call.
+**Fixed the same evening** (owner: "address the vias and any other issues you found"):
+- The first moves to (53.52, 149.60), the pocket between C8.1, C8.2, C24.2 and C16.2, with a 0.2 mm stub to the strap.
+  GPIO0's B.Cu diagonal, a static strap line, moves 0.5 mm down-right to free that pocket.
+- The second moves to (70.97, 109.045) with a 0.25 mm stub to U16 pad 2.
+- The third moves to (50.44, 178.25) beside the trace, with a 0.25 mm F.Cu stub to it. The In2 VCC track, which carries
+  µA, drops straight down to it.
+
+Afterwards no via ring touches an SMD pad's mask opening except U3's nine. The closest via hole is 0.10 mm from one,
+at C88.
+DRC is unchanged (0 errors, 26 warnings), with 0 unconnected, 0 parity, and fills equal to a fresh refill.
+
+**Also found at packaging:** BT2's flat base ends at y 187.72, over the first 0.27 mm of J2's two rear shell-leg pads
+(y 187.45–189.55). Those legs are soldered from the bottom, so a domed fillet props up that end of the holder. The fab
+notes now say to keep those two fillets flat. Check the holder sits flat on the first article.
 
 ---
 

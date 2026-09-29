@@ -52,7 +52,8 @@ ASSEMBLY - PLACEMENT
 
 ASSEMBLY - THROUGH-HOLE AND HAND WORK
 - J2 (USB-C): SOLDER THE FOUR SHELL LEGS BY HAND OR SELECTIVE SOLDER AND
-  FILL THE BARRELS. THEY CARRY NO PASTE.
+  FILL THE BARRELS. THEY CARRY NO PASTE. KEEP THE BOTTOM FILLETS OF THE
+  TWO REAR LEGS, NEAREST BT2, FLAT: THE HOLDER'S END SITS OVER THEM.
 - J8 (EDGE SMA): FIT AFTER REFLOW, FLANGE AGAINST THE BOARD EDGE, CENTRE
   PIN AND BOTH GROUND LEGS SOLDERED.
 - S1 (PANEL PUSHBUTTON), D6 AND D9 (3 mm LEDs): TOP SIDE, THROUGH-HOLE.
@@ -95,7 +96,8 @@ ground pads, and J8 is hand-fitted, so no bottom stencil is needed.
 **Assembly.**
 - **U1:** its orientation is a known failure class on this fleet. A rotated WLCSP powers the flash backwards.
 - **J2:** the shell legs are plated slots with no paste. An SMT-only build would leave the charging port held by its
-  0.3 mm signal pads alone.
+  0.3 mm signal pads alone. The holder's flat base ends 0.07 mm past the two rear slots, over the first 0.27 mm of their
+  bottom pads, so a domed fillet there props up that end of BT2.
 - **S1:** its posts land inside the battery holder's outline. DRC is silent because `npth_inside_courtyard` is ignored
   on this board.
 - **BT2:** a holder fitted backwards reverses the cell onto the protection circuit.
