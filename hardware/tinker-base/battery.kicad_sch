@@ -4,6 +4,12 @@
 	(generator_version "10.0")
 	(uuid "77e9150e-8caa-4c16-973f-5ccc7ea24d36")
 	(paper "A4")
+	(title_block
+		(title "tinker-base: Battery")
+		(date "2026-09-28")
+		(rev "V1")
+		(company "TinkerRocket")
+	)
 	(lib_symbols
 		(symbol "Custom:BH-18650-A5BJ001-2D"
 			(pin_names
@@ -5785,7 +5791,7 @@
 				)
 			)
 		)
-		(property "Value" "680"
+		(property "Value" "1.2 k"
 			(at 95.885 81.915 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5828,7 +5834,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-07680RL"
+		(property "MPN" "RC0402FR-071K2L"
 			(at 98.425 81.915 0)
 			(hide yes)
 			(show_name no)

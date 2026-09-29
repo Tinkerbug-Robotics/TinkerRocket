@@ -31,7 +31,7 @@ listed.
 | [`lora-daughterboard/`](lora-daughterboard/) | LoRa daughterboard for Tinker-Mantis | — | Swappable UART radio module | `radio_board` |
 | [`gnss-sam10m8-18mm-hv/`](gnss-sam10m8-18mm-hv/) | GNSS carrier for Tinker-Mantis | — | SAM-M10Q carrier, pack-voltage input | — (module carrier) |
 | [`tinker-beetle/`](tinker-beetle/) | **Tinker-Beetle** | `rocket-computer-mini` | Reduced-capability flight computer: two ESP32-S3s, on-board LoRa and GNSS. Forked from `rocket-computer`, no ongoing link | `flight_computer` + `out_computer`, `-DTR_BOARD_M1=1` |
-| [`tinker-base/`](tinker-base/) | **Tinker-Base** | `base-station-mini` | Ground station with on-board LoRa, the one base station for both computers. Forked from the full base station, no ongoing link | `base_station` — its V3 build is the starting point; the board has no map of its own yet |
+| [`tinker-base/`](tinker-base/) | **Tinker-Base** | `base-station-mini` | Ground station with on-board LoRa, the one base station for both computers. Forked from the full base station, no ongoing link | `base_station`, `-DTR_BS_BOARD=4` (`main/board/board_v4.h`) |
 
 Firmware project names are in `tinkerrocket-idf/projects/`; see
 [`tinkerrocket-idf/projects/README.md`](../tinkerrocket-idf/projects/README.md) for
@@ -57,8 +57,9 @@ match exactly on component count, values, footprints, and full connectivity.
 The 2026-09-24 rename was checked the same way and further: netlist, BOM
 export, every gerber and drill file (timestamps and project name aside) and the
 DRC report are identical before and after, on all six boards it touched.
-Silkscreen text was not changed by it: the boards still read `Tinker Rocket`,
-`TR-Mini` and `TinkerRocket Base Station Mini` until someone edits the artwork.
+Silkscreen text was not changed by it: the boards still read `Tinker Rocket` and
+`TR-Mini` until someone edits the artwork. The Tinker-Base's silk was edited on
+2026-09-28 and now reads `TinkerRocket Base Station` plus the revision.
 
 ## Working on these locally
 
