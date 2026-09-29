@@ -40,7 +40,7 @@ as saved at 16:17 on 2026-09-28.
 All of it went into the owner's checkout on 2026-09-28 and is committed with this review. The V1 JLC package was
 plotted from exactly these files.
 - **Checks on the result:** DRC 0 errors, 26 warnings (was 41; all silk plus the logo's library nickname),
-  0 unconnected, 0 parity. All 90 schematic parts' footprints are linked by path. A fresh `kicad-cli` refill
+  0 unconnected, 0 parity. All 91 schematic parts' footprints are linked by path (90 before C26). A fresh `kicad-cli` refill
   reproduces the stored fills exactly.
 - **Method:** each layout edit was applied to an unfilled copy, filled in a separate process and DRC'd.
 
@@ -54,7 +54,7 @@ plotted from exactly these files.
 | L4 | Nine GND vias in U3's exposed pad, in the paste-window gaps. |
 | L5 | A GND via for C16/C24, now at (53.52, 149.60) with a stub to the C24.2–C16.2 strap. It also serves C8.2 (see *Found at packaging*). |
 | L7 | GND vias at (70.97, 109.045) and (75.25, 116.98) for U16's ground pads; the first has a stub to pad 2. |
-| L8 (part) | `C25` 100 nF V_SWITCH→GND at (48.85, 171.8), grounded to U9 pin 13, which sits in the PowerPAD pour. |
+| L8 | `C25` 100 nF V_SWITCH→GND at (48.85, 171.8), grounded to U9 pin 13, which sits in the PowerPAD pour. `C26` 100 nF +3V3→GND at (54.68, 171.48), added at the owner's word: its +3V3 pad sits on the output pour beside VOUT, U9's FB line runs under its body between the pads, and its GND pad links to U9 pin 2's via, moved to (53.77, 172.12). |
 | L9 | J8 moved to (62.885, 105.695); its pads start 0.30 mm inside the edge. |
 | L10 | J2's 16 signal pads trimmed at the rear to HRO's land, in the library and on the board: BT2.P to J2 is now 0.84 mm, was 0.40. |
 | L12 (part) | J2's shell legs and D6's cathode connect to GND through thermal reliefs. |
@@ -82,7 +82,6 @@ plotted from exactly these files.
 | S3 (UART test pads) | Pins 49/50 sit between the crystal lines, R2 and pin 46's decoupling. Any route to a pad crosses Y2's ground ring or the B.Cu LoRa diagonals, and Espressif asks to keep TX away from the crystal. |
 | S4 (SPI_CLK series part) | No room between pin 33 and the flash lanes. |
 | L6 (C1 next to the flash) | The SPI_HD escape (x 69.07, then y 154.02) boxes in the flash's VCC via. |
-| L8, output cap | Every legal site straddled U9's FB trace or put a ground via under the pad. C26 was drawn and then removed. |
 | L12, SMD reliefs | That is a board-wide zone setting; accepted, as on the Beetle. |
 | L14 (In2 VCC slot) | Moving the line to B.Cu would cross the LoRa bundle. |
 | F6 (logo strokes) | Withdrawn: the owner says the logo prints fine. |

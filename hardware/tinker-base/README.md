@@ -85,6 +85,10 @@ From the 2026-09-28 [design review](design-review-2026-09-28.md):
   input pins. That gives the input a short high-frequency loop. The bulk input
   cap can't provide one, because its ground pad is walled off by the
   switch-node pours.
+- **`U9`'s output** gains `C26`, 100 nF from `+3V3` to ground beside the output
+  pins, for the same reason on the output side: the 22 µF caps' ground pads
+  return around the switch-node pour. `U9`'s FB line runs under its body,
+  between the pads. Its ground pad shares a via with `U9` pin 2.
 - **Charge current:** `R52` 680 Ω → **1.2 kΩ**, about 0.45 A (0.40–0.50 A)
   instead of 0.79 A. The old value sat at the charger's 0.8 A limit, and it made
   the charger heat the board past its own thermistor's trip point; see the next

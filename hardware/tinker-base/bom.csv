@@ -1,6 +1,6 @@
 "Id";"Designator";"Footprint";"Quantity";"Designation";"MPN";"Mfr";"Fit"
 1;"BT2";"BAT_BH-18650-A5BJ001-2D";1;"BH-18650-A5BJ001-2D";"BH-18650-A5BJ001-2D";"MYOUNG";"Fit"
-2;"C1, C9, C12, C14, C16, C17, C22, C23, C25, C29, C30, C33";"C_0402_1005Metric";12;"100 nF";"CL05B104KO5NNNC";"Samsung";"Fit"
+2;"C1, C9, C12, C14, C16, C17, C22, C23, C25, C26, C29, C30, C33";"C_0402_1005Metric";13;"100 nF";"CL05B104KO5NNNC";"Samsung";"Fit"
 3;"C2, C4";"C_0402_1005Metric";2;"22 pF";"CL05C220JB5NNNC";"Samsung";"Fit"
 4;"C3, C6";"C_0402_1005Metric";2;"12 pF";"CL05C120JB5NNNC";"Samsung";"Fit"
 5;"C5";"C_0402_1005Metric";1;"DNP";"";"";"DNP"
