@@ -60,6 +60,14 @@ D5 is the commit that carries this board. The parity gap it named was closed by 
 After the fixes: DRC 0 errors and 0 unconnected; the zone fills equal a fresh kicad-cli refill; the parity gate
 passes (128 symbols linked by path).
 
+**V3, 2026-09-29: six layers.** V2 (8 layers) was ordered; V3 is the same board on JLC06161H-3313, for cost, in the
+order sig/gnd/sig/gnd/pwr/sig. Each old layer's copper moved whole: In5's routing became In2; In2's (the MCU pour, the
+power tracks and nine signals) and In3's receiver plane became In4; In4's ground became In3; In6 was dropped. The
+receiver's and the processor's 3.3 V now sit side by side on In4, which settles L1 by construction, and the lines
+that cross that split return in the bottom pour 0.10 mm below. The RF traces are 0.16 mm (50 Ω on this stack) and
+the RF netclass matches, which settles D4's width. DRC 0 errors, 0 unconnected; the fills are a kicad-cli fixed
+point; 128 symbols linked by path.
+
 ---
 
 ## Verdict

@@ -571,7 +571,7 @@
         "pcb_color": "rgba(255, 140, 0, 0.600)",
         "priority": 0,
         "schematic_color": "rgba(0, 0, 0, 0.000)",
-        "track_width": 0.34,
+        "track_width": 0.16,
         "tuning_profile": "",
         "via_diameter": 0.6,
         "via_drill": 0.3,

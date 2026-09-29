@@ -1,6 +1,7 @@
 # Space Bug — fabrication and assembly notes
 
-This folder's board is the Space Bug, V2: the GNSS receiver with its own processor and IMU, 8 layers.
+This folder's board is the Space Bug, V3: the GNSS receiver with its own processor and IMU, 6 layers. V2, the 8-layer
+build ordered on 2026-09-29, keeps its notes at the tag `gnss-px1105r-18mm-highpower-ext-ant-v2.0.0`.
 
 **Paste the block below into the fab's order notes verbatim.**
 
@@ -12,13 +13,15 @@ Stencil thickness, the area-ratio floor and the paste-coverage convention are re
 ---
 
 ```
-TINKERROCKET SPACE BUG V2 - FABRICATION AND ASSEMBLY NOTES
-BOARD 35.0 x 35.0 mm, 8 LAYER, 1.63 mm STACK.
+TINKERROCKET SPACE BUG V3 - FABRICATION AND ASSEMBLY NOTES
+BOARD 35.0 x 35.0 mm, 6 LAYER, 1.6 mm NOMINAL.
 
-1. STACKUP: JLCPCB JLC08161H-2116, 1 oz OUTER / 0.5 oz INNER.
+1. STACKUP: JLCPCB JLC06161H-3313, 1 oz OUTER / 0.5 oz INNER.
    BUILD TO THIS TEMPLATE; THE RF TRACE WIDTH IS DRAWN FOR IT.
-   OUTER PREPREG 2116 AT 0.1164 mm (er 4.16), CORES 0.300 mm
-   (er 4.41), INNER PREPREG 1080 x2 AT 0.1528 mm (er 3.91).
+   OUTER PREPREGS 3313 AT 0.0994 mm (er 4.05), CORES 0.55 mm
+   (er 4.38), MIDDLE PREPREG 2116 AT 0.1088 mm (er 4.16).
+   LAYERS: F.Cu SIGNAL, In1 GND, In2 SIGNAL, In3 GND, In4 POWER,
+   B.Cu GROUND POUR.
 
 2. SURFACE FINISH: ENIG. REQUIRED FOR THE 0.35 mm PITCH QFN-104
    PROCESSOR (U6), THE 0.5 mm PITCH 24-BALL WLCSP FLASH (U7), THE
@@ -32,7 +35,7 @@ BOARD 35.0 x 35.0 mm, 8 LAYER, 1.63 mm STACK.
    THEM IN U6'S EXPOSED PAD AND 9 IN U2'S. ***
    OUTSIDE THE LANDS, ALL VIAS ARE TENTED BOTH SIDES.
 
-4. RF TRACES: 0.18 mm ON F.Cu WITH A 0.20 mm GAP TO THE GROUND
+4. RF TRACES: 0.16 mm ON F.Cu WITH A 0.20 mm GAP TO THE GROUND
    POUR, OVER In1.Cu GROUND: 50 OHM ON THIS STACKUP. DO NOT ADJUST
    THE WIDTHS. THE LONGEST RUN IS 6.5 mm (ABOUT 22 DEGREES AT
    1.6 GHz), SO IMPEDANCE TESTING IS OPTIONAL.
@@ -70,7 +73,7 @@ ONE PASS, TOP SIDE ONLY.
 AND 60-80 s ABOVE 220 C, MEASURED AT U1. ITS MAKER SAYS THESE
 SHOULD NOT BE EXCEEDED. *** THE NEXT LOWEST LIMIT IS THE SAW
 FILTERS (FL4, FL5) AT 250 C.
-THE BOARD IS HEAVY FOR ITS SIZE (SIX GROUND PLANES): PROFILE TO
+TWO SOLID GROUND PLANES AND A NEAR-SOLID BOTTOM POUR: PROFILE TO
 235-240 C AT U1 AND CHECK IT WITH A THERMOCOUPLE ON THE FIRST
 ARTICLE.
 U1 IS MSL 4: 72 h FLOOR LIFE, THEN BAKE AT 85 C FOR 8-12 h.
@@ -100,12 +103,15 @@ ASSEMBLY - HAND WORK
 
 ## Why each item is here
 
-Every figure in the block was measured from the board file on 2026-09-28, after the design review's fixes
+Every figure in the block was measured from the board file on 2026-09-29, after the 6-layer conversion and the design review's fixes
 ([`design-review-2026-09-27.md`](design-review-2026-09-27.md), D1 and D7).
 
-**1 — stackup.** The RF line is grounded coplanar waveguide over 0.1164 mm of 2116 prepreg. A 2-D field solve puts
-the drawn 0.18 mm track with its 0.20 mm gaps at 50 Ω under mask and 52 Ω bare. On JLC's standard 4-layer stack
-(0.2104 mm of 7628 prepreg) the same copper would be 63–65 Ω, so the template is part of the design.
+**1 — stackup.** The RF line is grounded coplanar waveguide over 0.0994 mm of 3313 prepreg. A 2-D field solve puts
+the drawn 0.16 mm track with its 0.20 mm gaps at 49 Ω under mask and 51 Ω bare; V2's 0.18 mm would be 47–48 Ω here, and
+on JLC's standard 4-layer stack (0.2104 mm of 7628 prepreg) this copper would be over 60 Ω, so the template is part of
+the design. The layer order puts every signal layer next to ground: In2 sits 0.11 mm over In3, and the power layer
+(In4) sits 0.10 mm over the bottom pour, which is ground under the patch. Lines that cross In4's split between the
+receiver's and the processor's 3.3 V therefore return in the bottom pour, not across the split.
 
 **2 — finish.** The finish reaches the `.gbrjob` only as a string that is easy to miss. HASL's coplanarity is wrong for
 the 0.35 mm QFN and the WLCSP.
@@ -145,9 +151,9 @@ Everything else is at area ratio 1.9 or more. The exposed-pad windows follow the
 footprint, U9's from 4078070b, and U2's from review S11. U1 prints at full pad (review S8). Nothing on the bottom
 takes paste: the patch antenna's pin is soldered by hand and the six test pads stay bare.
 
-**Reflow.** U1's limits come from its datasheet, which says they should not be exceeded. An 8-layer board with six
-ground planes and a 7.5 mm exposed pad under the processor tempts a hotter profile, so the usable window at U1 is
-narrow: 235–240 °C. The SAW filters' datasheet allows 250 °C and rates them 250 V HBM.
+**Reflow.** U1's limits come from its datasheet, which says they should not be exceeded. Two solid ground planes, a
+near-solid bottom pour and a 7.5 mm exposed pad under the processor tempt a hotter profile, so the usable window at
+U1 is narrow: 235–240 °C. The SAW filters' datasheet allows 250 °C and rates them 250 V HBM.
 
 **Placement.**
 - **U6:** the revision cannot be read from the footprint, and the Tinker-Mantis's fab notes (B8) ask for the opposite

@@ -6,8 +6,8 @@
 	(paper "A3")
 	(title_block
 		(title "Space Bug: ESP32-P4")
-		(date "2026-09-28")
-		(rev "V2")
+		(date "2026-09-29")
+		(rev "V3")
 		(company "TinkerRocket")
 	)
 	(lib_symbols
