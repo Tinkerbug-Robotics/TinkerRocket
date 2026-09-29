@@ -1,0 +1,215 @@
+(footprint "FIL_SAW-5_1.4x1.1mm_RF360"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "Qualcomm RF360 5-terminal SAW filter package, 1.4x1.1x0.45 mm (B39162B8389P810 B8389 L1/L5 double-hump filter). Land pattern per data sheet fig. 2: 0.3x0.375 mm lands, 0.5 mm column pitch, rows at +/-0.2875 mm")
+	(tags "SAW filter RF360 Qualcomm B8389 GNSS")
+	(property "Reference" "REF**"
+		(at 0 -1.6 0)
+		(layer "F.SilkS")
+		(uuid "1b3e4e96-b7b1-44cf-8657-35fbc928c48b")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "FIL_SAW-5_1.4x1.1mm_RF360"
+		(at 0 1.6 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "45de1044-f71c-4a2c-bc9d-985645289e9a")
+		(effects
+			(font
+				(size 0.5 0.5)
+				(thickness 0.075)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "7c926f30-138a-4940-858d-378f97fbdd89")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "7c33833a-a32e-4cea-af3c-9374c0260840")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -0.8 -0.7)
+		(end 0.8 -0.7)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "bb0a10fa-2601-4182-9c62-9c0462181f76")
+	)
+	(fp_line
+		(start -0.8 0.7)
+		(end 0.8 0.7)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "0b3b8f21-eee5-4d2f-bad1-a1ac14970f7c")
+	)
+	(fp_circle
+		(center -1.0 0)
+		(end -0.95 0)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.SilkS")
+		(uuid "487e79b5-a105-4fc3-a1c6-d43dfe4d6c65")
+	)
+	(fp_line
+		(start -0.7 -0.55)
+		(end 0.7 -0.55)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "df9e3e07-f979-4017-a32a-2b2c7bb3f930")
+	)
+	(fp_line
+		(start 0.7 -0.55)
+		(end 0.7 0.55)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "907048a6-8afb-424c-9b1a-0bc8de2861ea")
+	)
+	(fp_line
+		(start 0.7 0.55)
+		(end -0.45 0.55)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "3cc0989f-8402-4219-a365-b7ab6ba349d6")
+	)
+	(fp_line
+		(start -0.45 0.55)
+		(end -0.7 0.3)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "1e9f7b4a-185a-445d-af76-4f7ca445e0da")
+	)
+	(fp_line
+		(start -0.7 0.3)
+		(end -0.7 -0.55)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "92fc7822-cf75-4a30-90a1-b7114d688ebe")
+	)
+	(fp_rect
+		(start -1.2 -0.95)
+		(end 0.95 0.95)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "df63fa9f-1bde-4259-ab7f-96736ca63e44")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(uuid "4f8ed5fd-a3cc-404c-b892-2166662e6c3e")
+		(effects
+			(font
+				(size 0.3 0.3)
+				(thickness 0.045)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -0.5 0)
+		(size 0.3 0.375)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "dd0537ee-fadc-412e-b376-b7fbf23aef5e")
+	)
+	(pad "2" smd rect
+		(at 0 0.2875)
+		(size 0.3 0.375)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "5d40f7fd-ae8c-4240-ac1c-eaee7f57344a")
+	)
+	(pad "3" smd rect
+		(at 0.5 0.2875)
+		(size 0.3 0.375)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "a25e9826-6425-40c2-a16e-09677fbe361a")
+	)
+	(pad "4" smd rect
+		(at 0.5 -0.2875)
+		(size 0.3 0.375)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "eb21f84b-614d-49c7-b592-9c47892a000a")
+	)
+	(pad "5" smd rect
+		(at 0 -0.2875)
+		(size 0.3 0.375)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "b694f0ba-0c0d-4b3e-8d5b-077c284f6aef")
+	)
+	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/FIL_SAW-5_1.4x1.1mm_RF360.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+	(model "${KIPRJMOD}/../../3dmodels/FIL_SAW-5_1.4x1.1mm_RF360.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)
