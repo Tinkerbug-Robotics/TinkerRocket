@@ -24,9 +24,51 @@ Against [`base-station/`](../legacy/base-station/):
   outright on 2026-08-12 rather than left orphaned on disk.
 - **No sensor I²C.** `SDA_SENS`/`SCL_SENS` are gone, which is what freed GPIO33
   and GPIO34 for the radio.
-- **`+3V3` comes from a fixed-output TPS63021** buck-boost rather than the
-  adjustable TPS63020 and its feedback divider. base-station moved to the same
-  part at V6.
+- **`+3V3` comes from the adjustable TPS63020** and its feedback divider,
+  `R13` 1 MΩ over `R16` 180 kΩ for 3.28 V. base-station moved to the
+  fixed-output TPS63021 at V6; this board went back to the adjustable part on
+  2026-08-16. The two share a footprint, and the divider is what tells them
+  apart. With the divider, the fixed part would drive about 21 V.
+
+## Parts and patterns taken from the Beetle and Mantis
+
+On 2026-09-27 the ESP32-S3 sheet took on the newer parts the Beetle and Mantis
+carry, plus the decoupling Espressif's hardware checklist asks for. The layout
+followed on 2026-09-28; see *Status*.
+
+- **BLE antenna.** `U15` is now the edge-mounted 2.4 GHz loop chip antenna
+  (1.0 × 0.5 mm) that both flight computers use, with the same pi match: `C7`
+  (5.1 pF) in series, `L4` (2.2 nH) to ground on the radio side, and `C5`, an
+  unfitted shunt on the antenna side kept for tuning. `L4` was the old antenna's
+  4.3 nH shunt and keeps its footprint. The old antenna worked on top of the
+  ground plane; this one needs a keep-out. It sits in a narrow ground band along
+  the board edge, 0.5 mm deep, with its ground pads in the band. Inboard of the
+  band, a 4.6 × 3.5 mm area stays clear of copper on every layer, stitched with
+  ground vias around its edge.
+- **Boot flash.** `U1` is the Beetle and Mantis's 16 MB quad-SPI NOR in a
+  24-ball WLCSP. It is fed from `+3V3`, with `C1` (100 nF) beside it, instead of
+  from the S3's `VDD_SPI` pin. The full base-station's V5 showed why.
+  `VDD_SPI` sits behind a switch inside the S3. With an in-package-PSRAM S3 on
+  the same pin, the flash's supply budget fails, and every other board already
+  feeds its NOR from the 3.3 V rail. The balls are on a 0.5 mm pitch, but every
+  signal is in the two middle columns. The traces escape through the 0.55 mm
+  gaps beside them at 0.1 mm track and space, below this board's 0.2 mm
+  default. Keep vias out of the ball pads; JLCPCB queried exactly that on the
+  Beetle.
+- **`VDD_SPI`** keeps `C9` (100 nF) and `C10` (10 µF). Espressif asks for
+  1 µF here, and the Mantis fits that. But the pin is fed through the S3's
+  internal switch (about 14 Ω), which makes it the board's highest-impedance
+  rail, so the extra bulk helps. Espressif's reasons for a small cap don't
+  apply here: the rail still settles well before `CHIP_PU` releases, and the
+  board never light-sleeps. The LoRa daughterboard's review keeps 10 µF for the
+  same reason ([finding 4a](../lora-daughterboard/prefab-review-2026-07-30.md)).
+- **`VDD3P3`** (pins 2 and 3, behind `L3`) gains `C24`, 10 µF, beside `C16`, as
+  on the Mantis.
+- **`GPIO0`** gains `R5`, 10 kΩ to `+3V3`, on top of the S3's weak internal
+  pull-up, as on the Mantis.
+- **`L_RXEN`** gains `R6`, 100 kΩ to ground. GPIO35 has no reset pull, so the
+  radio's receive enable used to float through every reset. Now it is held off
+  until firmware drives it, which is the Beetle's fix for the same line.
 
 ## The battery thermistor is board-mounted, and that is a compromise
 
@@ -107,8 +149,15 @@ Two things were deliberately left behind at the fork:
 
 ## Status
 
-Not fabbed, no tag. Schematic and PCB are in sync and fully routed — 0 parity
-issues, 0 unconnected.
+Not fabbed, no tag. Schematic and PCB are in sync and fully routed, with 0
+parity issues, 0 unconnected and no DRC errors. That was checked on 2026-09-28,
+after the parts above were placed and routed. Two layout details came with them:
+
+- `R1`, the `CHIP_PU` pull-up, moved beside `C8` to free the spot above `C16`
+  for `C24`.
+- `CLK` and `WP` cross the other flash lines on `B.Cu`, through four vias. The
+  flash's ball order and the ESP32's SPI pin order leave no arrangement without
+  a crossing.
 
 **Firmware:** `tinkerrocket-idf/projects/base_station` built with
 `-DTR_BS_BOARD=4` — the pin map is `main/board/board_v4.h`, taken from this

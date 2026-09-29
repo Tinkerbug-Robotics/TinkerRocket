@@ -211,10 +211,6 @@ EXEMPT = {
                     "0f721aa6 took out of the schematic, and the V6 layout was never "
                     "synced. Remove after an Update PCB on it, plus the short FB "
                     "trace 0f721aa6 describes",
-    'tinker-base': "J2/R13/R16 are unlinked on main (d927e188's board: J2 has no "
-                   "path, R13/R16 carry the root sheet's uuid). The relinked board "
-                   "is in the owner's uncommitted Tinker-Base work; delete this "
-                   "entry in the commit that lands it",
 }
 
 
