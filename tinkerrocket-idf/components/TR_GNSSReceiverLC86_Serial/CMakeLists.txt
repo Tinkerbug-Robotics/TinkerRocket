@@ -3,4 +3,5 @@
 # it directly. Keep ESP-only code in TR_GNSSReceiverLC86_Serial.cpp.
 idf_component_register(SRCS "TR_GNSSReceiverLC86_Serial.cpp" "Lc86Parser.cpp"
                        INCLUDE_DIRS "."
-                       REQUIRES esp_driver_uart TR_RocketComputerTypes driver esp_timer)
+                       REQUIRES esp_driver_uart TR_RocketComputerTypes driver esp_timer
+                       PRIV_REQUIRES esp_driver_gpio)

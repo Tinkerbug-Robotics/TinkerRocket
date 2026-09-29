@@ -23,6 +23,7 @@ the separate high-g/transonic dynamics problem (#174 / #249 / #262).
 | `skytraq_binary.py` | SkyTraq binary message parsing (AN0039): `0xDF` nav state, `0xE7` per-SV C/N0 |
 | `skytraq_raw.py` | Turns on and logs a SkyTraq RTK receiver's raw measurements (`0xE5`) and navigation data through the bridge: `--baud`, `--kinematic-base`, `--enable-bin`, `--rate` up to 20 Hz |
 | `firmware/lc86_bridge/` | ESP-IDF image for the Tinker-Beetle's flight computer: its LC86G's UART on USB, pyro outputs parked low, silences reported |
+| `firmware/px1105r_p4_bridge/` | ESP-IDF image for the PX1105R board's ESP32-P4 (`hardware/legacy/gnss-px1105r-18mm-highpower-ext-ant`), its first image: the receiver's UART on USB and on the host UART (J4), 115200. A bootloader hook pulls the two UART outputs up a few ms after reset so neither line floats while the P4 boots |
 | `rtcm3.py` | RTCM3 framing (CRC-24Q) and MSM7 decoding: per-satellite C/N0, Doppler and lock time from the LC86G |
 
 Still to be written, once the RF side exists: the trajectory generator (the
