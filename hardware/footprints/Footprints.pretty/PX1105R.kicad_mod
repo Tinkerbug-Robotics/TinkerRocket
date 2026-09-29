@@ -3,6 +3,7 @@
 	(generator "pcbnew")
 	(generator_version "10.0")
 	(layer "F.Cu")
+	(descr "SkyTraq PX1105R GNSS module, castellated. Paste: full pad per SOLDER-PASTE-CONVENTION section 2. It is the heaviest part on its board, so standoff matters, and 1.1 mm pitch with 0.4 mm gaps is no bridging risk. The -0.1 paste ratio carried since the #600 import was removed 2026-09-28.")
 	(property "Reference" "REF**"
 		(at -0.04 -9.53 0)
 		(unlocked yes)
@@ -53,7 +54,6 @@
 			)
 		)
 	)
-	(solder_paste_margin_ratio -0.1)
 	(attr smd)
 	(duplicate_pad_numbers_are_jumpers no)
 	(fp_line
@@ -266,4 +266,26 @@
 		(uuid "efd79691-6f7d-4046-9721-5c68ec6e1a27")
 	)
 	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/PX1105R.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+	(model "${KIPRJMOD}/../../3dmodels/PX1105R.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
 )

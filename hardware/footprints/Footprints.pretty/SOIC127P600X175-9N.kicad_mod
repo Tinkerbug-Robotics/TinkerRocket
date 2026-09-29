@@ -3,6 +3,7 @@
 	(generator "pcbnew")
 	(generator_version "10.0")
 	(layer "F.Cu")
+	(descr "SOIC-8 with exposed pad, 1.27 mm pitch. The 2.41 x 3.05 mm land is larger than the package's 2.29 x 2.29 mm exposed pad and is kept for heat spreading. Exposed-pad paste: 2 x 2 roundrect panes, 1.0 mm on 1.25 mm pitch, centred on the package pad, about 3.8 mm2 (72 % of the package pad) with 0.25 mm gaps so flux can escape. Paste over the whole land printed 1.4 x the package pad's area; replaced 2026-09-28.")
 	(property "Reference" "REF**"
 		(at -0.72391 -4.48097 0)
 		(layer "F.SilkS")
@@ -238,9 +239,37 @@
 	(pad "9" smd rect
 		(at 0 0)
 		(size 2.41 3.05)
-		(layers "F.Cu" "F.Mask" "F.Paste")
+		(layers "F.Cu" "F.Mask")
 		(solder_mask_margin 0.102)
 		(uuid "5d0beccd-7d6f-4c90-8fb8-e1b6319ba7aa")
+	)
+	(pad "" smd roundrect
+		(at -0.625 -0.625)
+		(size 1 1)
+		(layers "F.Paste")
+		(roundrect_rratio 0.25)
+		(uuid "d63696f1-02ca-4e54-baad-79936eb970a8")
+	)
+	(pad "" smd roundrect
+		(at 0.625 -0.625)
+		(size 1 1)
+		(layers "F.Paste")
+		(roundrect_rratio 0.25)
+		(uuid "98df40de-cd8e-4333-a69e-0015b6c96afd")
+	)
+	(pad "" smd roundrect
+		(at -0.625 0.625)
+		(size 1 1)
+		(layers "F.Paste")
+		(roundrect_rratio 0.25)
+		(uuid "bbb40aea-34c2-46e2-86b5-8b930e566af0")
+	)
+	(pad "" smd roundrect
+		(at 0.625 0.625)
+		(size 1 1)
+		(layers "F.Paste")
+		(roundrect_rratio 0.25)
+		(uuid "19febdb2-bd80-4c52-bc99-4fe6e6e042e7")
 	)
 	(embedded_fonts no)
 	(model "${KIPRJMOD}/../3dmodels/ADP7142ARDZ.step"

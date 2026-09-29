@@ -1,0 +1,25 @@
+(version 1)
+
+# BGA855N6 LNAs (U3, U4) are TSNP-6-10: 0.4 mm pitch with 0.25 mm pads leaves 0.15 mm
+# between pads, so tracks landing on neighbouring pins sit 0.15-0.2 mm apart inside the
+# part. Both footprints already carry a 0.15 mm local clearance for pad-to-pad; this rule
+# gives the tracks and vias inside each courtyard the same allowance. Zone fills keep the
+# board default. Values need their unit: a bare number here silently disables the rule.
+(rule "TSNP-6-10 LNA pin fan-out"
+	(constraint clearance (min 0.15mm))
+	(condition "A.Type != 'Zone' && B.Type != 'Zone' && ((A.intersectsCourtyard('U3') && B.intersectsCourtyard('U3')) || (A.intersectsCourtyard('U4') && B.intersectsCourtyard('U4')))"))
+
+# ESP32-P4 (U6, 0.35 mm pitch QFN: 0.17 mm between pads), boot flash (U7, 0.5 mm WLCSP),
+# P4 buck (U9) and IMU (U10): pads, fan-out tracks and the vias between the P4's pin ring
+# and its exposed pad sit 0.1 mm apart inside each courtyard, as on Mantis. Zone fills keep
+# the board default.
+(rule "Fine-pitch parts: pad and fan-out clearance"
+	(constraint clearance (min 0.1mm))
+	(condition "A.Type != 'Zone' && B.Type != 'Zone' && ((A.intersectsCourtyard('U6') && B.intersectsCourtyard('U6')) || (A.intersectsCourtyard('U7') && B.intersectsCourtyard('U7')) || (A.intersectsCourtyard('U9') && B.intersectsCourtyard('U9')) || (A.intersectsCourtyard('U10') && B.intersectsCourtyard('U10')))"))
+
+# Different-net hole-to-hole wall, as on Beetle (this repo's other 8-layer board). KiCad measures hole_to_hole edge to
+# edge, so 0.25 mm is 0.55 mm centre to centre on the 0.30 mm drills. The project-wide min_hole_to_hole stays 0.20 and
+# covers same-net holes. The margin is for the 8-layer, 1.6 mm stack; it is not a quoted fab capability.
+(rule "hole_to_hole_different_nets"
+	(constraint hole_to_hole (min 0.25mm))
+	(condition "A.Net != B.Net"))

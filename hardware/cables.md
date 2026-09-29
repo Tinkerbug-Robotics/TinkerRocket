@@ -31,14 +31,30 @@ the radio. The board got hot immediately; the processor survived, the E220
 radio did not. Swapping the wires end-for-end made the board power up
 normally.
 
-## Why the 5-pin GNSS link fails silently instead
+## What a reversed 5-pin GNSS cable does
 
-Power is on pin 3, the centre pin of five, so it self-aligns under reversal:
-the module gets its supply and looks alive. Everything else moves — the
-module's ground reference becomes the host's TX line, which idles high and
-then swings the moment the host transmits. A reversed GNSS cable presents as a
-module that answers once and then stops parsing, not as a dead board. When a
-GNSS carrier is "deaf" on the bench, check the cable before the firmware.
+Power is on pin 3, the centre pin of five, so it self-aligns under reversal and
+the carrier still gets its supply. Everything else moves, and the move that
+matters is ground: the carrier's ground (pin 4) lands on the rocket's pin 2,
+GNSS_TX. On the rocket that pin is the host P4's UART **receive** input
+(GPIO3), with no series resistor, so the carrier's whole supply return goes
+through that pin's ESD clamp into the host's 3.3 V rail, and the carrier's
+ground floats about 4 V above the host's.
+
+- **A light carrier** (a bare receiver module, tens of mA) keeps running on
+  what is left and can present as a module that answers once and then stops
+  parsing, not as a dead board. When a GNSS carrier is "deaf" on the bench,
+  check the cable before the firmware.
+- **The PX1105R carrier** (`legacy/gnss-px1105r-18mm-highpower-ext-ant`) draws
+  about 0.2 A, and all of it goes into that clamp. Expect a damaged GPIO3 pad on
+  a chip-down P4 that cannot be reworked, and a host 3.3 V rail pushed up if the
+  host draws less than the injected current. This failure is not silent.
+
+The carrier cannot guard against this: the fault arrives on its ground pin,
+which carries the full supply current and cannot take a series resistor (its
+signal pins already have 1 kΩ). The connectors are keyed, so a cable cannot go
+in rotated; only the wrong cable type causes this, and the rule above is the
+protection.
 
 ## Before every bench session and every airframe build
 
@@ -56,7 +72,8 @@ GNSS carrier is "deaf" on the bench, check the cable before the firmware.
 
 ## Future spin, for consideration
 
-Putting the supply on the centre pin of an odd-count connector — the accident
-the 5-pin GNSS link already enjoys — or using a 5-pin part with ground on both
-ends would make the LoRa link tolerant of a reversed cable. Not planned; the
-cable rule above is the mitigation in force.
+Putting the supply on the centre pin of an odd-count connector and ground on
+both end pins would make the LoRa link tolerant of a reversed cable. Centre
+power alone is not enough: on the 5-pin GNSS link the supply self-aligns, but
+ground still lands on a signal pin (above). Not planned; the cable rule above
+is the mitigation in force.

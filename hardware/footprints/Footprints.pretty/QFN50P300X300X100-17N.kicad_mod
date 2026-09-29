@@ -3,6 +3,7 @@
 	(generator "pcbnew")
 	(generator_version "10.0")
 	(layer "F.Cu")
+	(descr "QFN-16, 3 x 3 mm, 0.5 mm pitch, 1.68 mm exposed pad. Exposed-pad paste: 2 x 2 roundrect panes, 0.65 mm on 0.84 mm pitch, about 57 % coverage with 0.19 mm gaps so flux can escape and the part neither floats nor voids (4078070b). The older 1.06 mm square paste polygon, which merged the panes into one 1.49 mm blob, was removed 2026-09-28.")
 	(property "Reference" "REF**"
 		(at -0.165 -3.24 0)
 		(layer "F.SilkS")
@@ -139,18 +140,6 @@
 		(fill no)
 		(layer "F.SilkS")
 		(uuid "13164a50-a13e-4840-bd9e-4cc99dc8459b")
-	)
-	(fp_poly
-		(pts
-			(xy -0.53 -0.53) (xy 0.53 -0.53) (xy 0.53 0.53) (xy -0.53 0.53)
-		)
-		(stroke
-			(width 0.01)
-			(type solid)
-		)
-		(fill yes)
-		(layer "F.Paste")
-		(uuid "155dbfb2-0d68-44db-9098-ac39d8885e81")
 	)
 	(fp_line
 		(start -2.115 -2.115)

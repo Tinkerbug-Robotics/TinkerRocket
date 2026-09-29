@@ -1,0 +1,299 @@
+(footprint "ANT_GVLB258.A_TAOGLAS"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "Taoglas GVLB258.A single-feed stacked L1/L5 ceramic patch, 25x25x8.12 mm, feed pin 0.8 mm on the centre line 2.5 mm off centre. Land and clearances per datasheet SPE-21-8-082-G sec. 4.2-4.3: 1.0 mm plated hole, 1.2 mm top pad, 2.2 mm bottom pad; no copper within 3.0 mm dia on the top and inner layers, 3.5 mm dia on the bottom. Tuned by Taoglas on a 70x70 mm ground plane (https://www.taoglas.com/datasheets/GVLB258.A.pdf)")
+	(tags "GNSS L1 L5 patch antenna stacked Taoglas")
+	(property "Reference" "REF**"
+		(at 0 -14.2 0)
+		(layer "F.SilkS")
+		(uuid "bad75edf-a600-457d-874b-5b143f182883")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "ANT_GVLB258.A_TAOGLAS"
+		(at 0 14.2 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "89d52754-b4e4-463b-8d2f-8f99b00c42c8")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" "https://www.taoglas.com/datasheets/GVLB258.A.pdf"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "ee5c4b05-3e01-44a0-9ead-a3bd55760716")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" "GNSS L1/L5 single-feed stacked ceramic patch antenna"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "c65b5270-93c8-4334-bb1b-c7fae4489d9d")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr through_hole)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -12.9 -12.9)
+		(end 12.9 -12.9)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "4af3fccd-7bb3-4a3a-a432-bd8ca8b572f7")
+	)
+	(fp_line
+		(start 12.9 -12.9)
+		(end 12.9 12.9)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "5974688e-d5b6-46a7-9042-564f451fc147")
+	)
+	(fp_line
+		(start 12.9 12.9)
+		(end -12.9 12.9)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "ca3a2a9b-65f7-42bd-98b2-a93cb4f1985f")
+	)
+	(fp_line
+		(start -12.9 12.9)
+		(end -12.9 -12.9)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "04672499-54a8-49bb-b637-1b47b106e416")
+	)
+	(fp_line
+		(start 0 12.9)
+		(end 0 11.9)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "e657cd53-cfbf-4a2c-a2c3-b6b6cfe00946")
+	)
+	(fp_rect
+		(start -12.5 -12.5)
+		(end 12.5 12.5)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "a7ee4f2a-06c4-4d6b-988d-866a970695ab")
+	)
+	(fp_line
+		(start -9 -9)
+		(end 7.5 -9)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "1e7dcaa4-5c92-47eb-a0f6-8cc438eb7f52")
+	)
+	(fp_line
+		(start 7.5 -9)
+		(end 9 -7.5)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "5b316411-3f32-4e4a-90e7-f7bcd1fd5388")
+	)
+	(fp_line
+		(start 9 -7.5)
+		(end 9 9)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "4f7cd6c7-9853-42a6-9bc4-f1fca4957255")
+	)
+	(fp_line
+		(start 9 9)
+		(end -9 9)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "f44e03f7-d65c-4e68-889a-21ad52c86795")
+	)
+	(fp_line
+		(start -9 9)
+		(end -9 -9)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "4700c063-e487-4570-8565-53f193d29acf")
+	)
+	(fp_rect
+		(start -13.2 -13.2)
+		(end 13.2 13.2)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "f9abd3d5-3078-4222-a811-62238fafed33")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 -10.5 0)
+		(layer "F.Fab")
+		(uuid "b9d1befd-b716-4596-bfb2-bf93dafd3dd9")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(zone
+		(layers "F.Cu" "In1.Cu" "In2.Cu" "In3.Cu" "In4.Cu" "In5.Cu" "In6.Cu" "In7.Cu"
+			"In8.Cu" "In9.Cu" "In10.Cu" "In11.Cu" "In12.Cu" "In13.Cu" "In14.Cu" "In15.Cu"
+			"In16.Cu" "In17.Cu" "In18.Cu" "In19.Cu" "In20.Cu" "In21.Cu" "In22.Cu" "In23.Cu"
+			"In24.Cu" "In25.Cu" "In26.Cu" "In27.Cu" "In28.Cu" "In29.Cu" "In30.Cu")
+		(uuid "e1c99e0c-046d-4412-a17e-1992fa2b1b36")
+		(name "GVLB258.A feed clearance, top and inner")
+		(hatch edge 0.5)
+		(connect_pads
+			(clearance 0)
+		)
+		(min_thickness 0.25)
+		(keepout
+			(tracks not_allowed)
+			(vias not_allowed)
+			(pads allowed)
+			(copperpour not_allowed)
+			(footprints allowed)
+		)
+		(placement
+			(enabled no)
+			(sheetname "")
+		)
+		(fill
+			(thermal_gap 0.5)
+			(thermal_bridge_width 0.5)
+			(island_removal_mode 0)
+		)
+		(polygon
+			(pts
+				(xy 1.5 2.6477) (xy 1.4424 2.9375) (xy 1.3293 3.2105) (xy 1.1651 3.4562) (xy 0.9562 3.6651) (xy 0.7105 3.8293) (xy 0.4375 3.9424) (xy 0.1477 4) (xy -0.1477 4) (xy -0.4375 3.9424) (xy -0.7105 3.8293) (xy -0.9562 3.6651) (xy -1.1651 3.4562) (xy -1.3293 3.2105) (xy -1.4424 2.9375) (xy -1.5 2.6477) (xy -1.5 2.3523) (xy -1.4424 2.0625) (xy -1.3293 1.7895) (xy -1.1651 1.5438) (xy -0.9562 1.3349) (xy -0.7105 1.1707) (xy -0.4375 1.0576) (xy -0.1477 1) (xy 0.1477 1) (xy 0.4375 1.0576) (xy 0.7105 1.1707) (xy 0.9562 1.3349) (xy 1.1651 1.5438) (xy 1.3293 1.7895) (xy 1.4424 2.0625) (xy 1.5 2.3523)
+			)
+		)
+	)
+	(zone
+		(layers "B.Cu")
+		(uuid "bd39fe9a-a783-4260-b9a7-bf77a852fd56")
+		(name "GVLB258.A feed clearance, bottom")
+		(hatch edge 0.5)
+		(connect_pads
+			(clearance 0)
+		)
+		(min_thickness 0.25)
+		(keepout
+			(tracks allowed)
+			(vias not_allowed)
+			(pads allowed)
+			(copperpour not_allowed)
+			(footprints allowed)
+		)
+		(placement
+			(enabled no)
+			(sheetname "")
+		)
+		(fill
+			(thermal_gap 0.5)
+			(thermal_bridge_width 0.5)
+			(island_removal_mode 0)
+		)
+		(polygon
+			(pts
+				(xy 1.75 2.6724) (xy 1.6827 3.0105) (xy 1.5508 3.3289) (xy 1.3593 3.6156) (xy 1.1156 3.8593) (xy 0.8289 4.0508) (xy 0.5105 4.1827) (xy 0.1724 4.25) (xy -0.1724 4.25) (xy -0.5105 4.1827) (xy -0.8289 4.0508) (xy -1.1156 3.8593) (xy -1.3593 3.6156) (xy -1.5508 3.3289) (xy -1.6827 3.0105) (xy -1.75 2.6724) (xy -1.75 2.3276) (xy -1.6827 1.9895) (xy -1.5508 1.6711) (xy -1.3593 1.3844) (xy -1.1156 1.1407) (xy -0.8289 0.9492) (xy -0.5105 0.8173) (xy -0.1724 0.75) (xy 0.1724 0.75) (xy 0.5105 0.8173) (xy 0.8289 0.9492) (xy 1.1156 1.1407) (xy 1.3593 1.3844) (xy 1.5508 1.6711) (xy 1.6827 1.9895) (xy 1.75 2.3276)
+			)
+		)
+	)
+	(pad "1" thru_hole circle
+		(at 0 2.5)
+		(size 1.2 1.2)
+		(drill 1)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "f6d7f9ad-61a2-4653-bf6d-dd45f316f62f")
+		(padstack
+			(mode front_inner_back)
+			(layer "Inner"
+				(shape circle)
+				(size 1.2 1.2)
+			)
+			(layer "B.Cu"
+				(shape circle)
+				(size 2.2 2.2)
+			)
+		)
+	)
+	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/ANT_GVLB258.A_TAOGLAS.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+	(model "${KIPRJMOD}/../../3dmodels/ANT_GVLB258.A_TAOGLAS.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)
