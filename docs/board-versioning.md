@@ -33,7 +33,7 @@ tinker-base-v<semver>                        never fabricated, no tag yet
 lora-daughterboard-v<semver>                 v3.0.0 fabricated; V4 laid out, not yet tagged
 gnss-sam10m8-18mm-hv-v3.0.0
 base-station-v5.0.0                          hardware/legacy/
-gnss-px1105r-18mm-highpower-ext-ant-v1.1.0   hardware/legacy/; V2 redrawn, not yet tagged
+gnss-px1105r-18mm-highpower-ext-ant-v2.0.0   hardware/legacy/; the Space Bug
 servo-adapter-v1.0.0                         hardware/legacy/
 ```
 
@@ -193,16 +193,18 @@ left over from before is now ignored and can be deleted.
 
 ## Current state
 
-**2026-09-28 — gnss-px1105r-18mm-highpower-ext-ant V2, redrawn, not yet
-tagged.** The folder now holds a new 8-layer board, the Space Bug: the same
-receiver with its own processor and IMU. The v1.0.0 and v1.1.0 tags stay on the
-4-layer carrier they describe. The board keeps V2 because the 4-layer V2 of
-2026-08-15 (ee41b18c, the refill and stackup changes) was never fabricated, so
-there is no fabricated revision to supersede. The first fabrication is tagged
-`gnss-px1105r-18mm-highpower-ext-ant-v2.0.0` on the commit actually plotted.
-Until then `tools/plot_gerbers.sh` warns that rev V2 disagrees with the v1.1.0
-tag, which is expected. The PCB title block and silkscreen read V2, and the four
-schematic sheets carry title blocks at V2.
+**2026-09-29 — gnss-px1105r-18mm-highpower-ext-ant v2.0.0, ordered.** The
+folder holds a new 8-layer board, the Space Bug: the same receiver with its own
+processor and IMU. The v1.0.0 and v1.1.0 tags stay on the 4-layer carrier they
+describe. It is V2 because the 4-layer V2 of 2026-08-15 (ee41b18c, the refill
+and stackup changes) was never fabricated, so there was no fabricated revision
+to supersede. Ordered from JLCPCB on 2026-09-29 with the package plotted from
+7654e58c (#1547), which carries the tag; the tag's board file is the one that
+was plotted. DRC at tagging (`--severity-all --schematic-parity`): 0 errors,
+0 unconnected; 10 silkscreen and library warnings, and 8 parity warnings that
+are MPN fields waiting for Update PCB. The stored zone fills are a kicad-cli
+fixed point. Fabrication and assembly constraints that do not fit on the board
+live in its `FABRICATION-NOTES.md`.
 
 **2026-09-28 — lora-daughterboard V4, laid out, not yet tagged.** The boot
 flash moved from the SOIC-8 to the Beetle/Mantis 24-ball WLCSP, and two pull

@@ -10,7 +10,7 @@ left the schematic in 0f721aa6, and the V6 layout was never synced to match.
 | Folder | Board | Latest tag | Tree | Why it left the line |
 |---|---|---|---|---|
 | [`base-station/`](base-station/) | Full ground station, paired with a [`lora-daughterboard`](../lora-daughterboard/) over UART | `base-station-v5.0.0` | V6 | Replaced by [Tinker-Base](../tinker-base/), which carries its radio on board |
-| [`gnss-px1105r-18mm-highpower-ext-ant/`](gnss-px1105r-18mm-highpower-ext-ant/) | GNSS carrier, PX1105R, external antenna | `gnss-px1105r-18mm-highpower-ext-ant-v1.1.0` | V2 | Superseded by the SAM-M10Q carrier, [`gnss-sam10m8-18mm-hv`](../gnss-sam10m8-18mm-hv/) |
+| [`gnss-px1105r-18mm-highpower-ext-ant/`](gnss-px1105r-18mm-highpower-ext-ant/) | The Space Bug: the GNSS receiver with its own processor and IMU, patch antenna on the back, 8 layers | `gnss-px1105r-18mm-highpower-ext-ant-v2.0.0` | V2 | The 4-layer carrier (v1.x) was superseded by the SAM-M10Q carrier, [`gnss-sam10m8-18mm-hv`](../gnss-sam10m8-18mm-hv/); the folder now holds the Space Bug, ordered 2026-09-29 |
 | [`servo-adapter/`](servo-adapter/) | Passive cable-to-servo adapter with a capacitor, for the rocket computer's expansion port | `servo-adapter-v1.0.0` | no rev in the title block | Not offered |
 
 ## What moving them changed
@@ -29,10 +29,11 @@ tools/plot_gerbers.sh legacy/base-station
 
 (`tools/plot_gerbers.sh base-station` finds it too.) Tags keep their names —
 `<board>-v<semver>` as in [docs/board-versioning.md](../../docs/board-versioning.md) —
-and every tag predates the move, so at a tag the board is still at
-`hardware/<board>/`, and that tag's own `tools/plot_gerbers.sh` is the one to use.
+and every tag except `gnss-px1105r-18mm-highpower-ext-ant-v2.0.0` predates the
+move, so at those tags the board is still at `hardware/<board>/`, and that tag's
+own `tools/plot_gerbers.sh` is the one to use.
 
-**Do not plot the PX1105R carrier from `gnss-px1105r-18mm-highpower-ext-ant-v1.1.0`.**
+**Do not plot the 4-layer PX1105R carrier from `gnss-px1105r-18mm-highpower-ext-ant-v1.1.0`.**
 That tag sits on 5e3a426, whose stored zone fills (left stale by 8f87aa0) short
 +3V3 to two GND vias. They were refilled in 8a95e02, the next commit to touch
 the board; plot from there or later, and re-point the tag to whatever commit is
@@ -46,4 +47,6 @@ actually sent if that board is ever ordered.
   until the Tinker-Base's own map (`board_v4.h`) has run on hardware. The V2
   image is published on `fw-legacy-v*` tags (a V1 board is built by hand,
   `-DTR_BS_BOARD=1`), V3 on the product `fw-v*` tags.
-- **gnss-px1105r** and **servo-adapter** carry no firmware.
+- **gnss-px1105r** (the Space Bug): its processor runs the bridge image in
+  [`tools/gnss-cocom/firmware/px1105r_p4_bridge`](../../tools/gnss-cocom/firmware/px1105r_p4_bridge/).
+- **servo-adapter** carries no firmware.
