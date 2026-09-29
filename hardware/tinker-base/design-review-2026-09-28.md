@@ -85,7 +85,7 @@ plotted from exactly these files.
 | L8, output cap | Every legal site straddled U9's FB trace or put a ground via under the pad. C26 was drawn and then removed. |
 | L12, SMD reliefs | That is a board-wide zone setting; accepted, as on the Beetle. |
 | L14 (In2 VCC slot) | Moving the line to B.Cu would cross the LoRa bundle. |
-| F6 (logo strokes) | The owner's artwork: it needs re-tracing at ≥ 0.15 mm, or scaling up. |
+| F6 (logo strokes) | Withdrawn: the owner says the logo prints fine. |
 | S7 FET, S8, S9, VBUS sense | Optional design changes, left for discussion. |
 | D4 (ERC hygiene), F8/F9 (lands), D5 (BOM) | Notes only. |
 
@@ -491,9 +491,9 @@ Everything else is minor or a note.
     U22 (51.16, 177.34), CR1 (68.14, 180.93), U16 near (75.2, 109.0).
 - **F5. No fiducials — minor.** The board carries a 0.4 mm-pitch QFN and a 0.5 mm WLCSP. Three are free at
   (53.9, 108.1), (74.4, 121.6) and (51.4, 187.6), clear of copper, silk and edge; DRC them after placing.
-- **F6. The new logo mostly won't print — minor.** Its median stroke is 0.03 mm, and only 18 % of its area is in features
-  ≥ 0.15 mm (JLC's silk minimum). Scale it about 3× or re-trace at ≥ 0.15 mm strokes. It also names a library nickname
-  `footprints` that isn't in fp-lib-table, which is the `lib_footprint_issues` warning. Harmless, but re-point it.
+- **F6. The logo — withdrawn.** This flagged the logo's fine strokes against JLC's 0.15 mm silk minimum. The owner says
+  the logo prints fine (2026-09-28). Its library nickname `footprints` isn't in fp-lib-table; that is the harmless
+  `lib_footprint_issues` warning.
 - **F7. Silk warnings that matter — minor.**
   - R13 and R16 show their references on their own pads and on each other. The fab will clip them to fragments; hide
     them, as the rest of the board does.
