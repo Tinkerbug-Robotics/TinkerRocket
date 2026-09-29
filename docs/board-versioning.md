@@ -33,7 +33,7 @@ tinker-base-v<semver>                        never fabricated, no tag yet
 lora-daughterboard-v<semver>                 v3.0.0 fabricated; V4 laid out, not yet tagged
 gnss-sam10m8-18mm-hv-v3.0.0
 base-station-v5.0.0                          hardware/legacy/
-gnss-px1105r-18mm-highpower-ext-ant-v2.0.0   hardware/legacy/; the Space Bug
+gnss-px1105r-18mm-highpower-ext-ant-v2.0.0   hardware/legacy/; the Space Bug; V3 laid out, not yet tagged
 servo-adapter-v1.0.0                         hardware/legacy/
 ```
 
@@ -192,6 +192,12 @@ takes effect where someone would look for it. Any root `projects/*/sdkconfig`
 left over from before is now ignored and can be deleted.
 
 ## Current state
+
+**2026-09-29 — gnss-px1105r-18mm-highpower-ext-ant V3, laid out, not yet
+tagged.** The Space Bug redone on 6 layers (JLC06161H-3313) for cost, after V2
+(8 layers) was ordered. Copper changed and V2 was fabricated, so this is a major
+bump: the next fabrication is tagged `gnss-px1105r-18mm-highpower-ext-ant-v3.0.0`.
+The title block, silkscreen and sheet title blocks already read V3.
 
 **2026-09-29 — gnss-px1105r-18mm-highpower-ext-ant v2.0.0, ordered.** The
 folder holds a new 8-layer board, the Space Bug: the same receiver with its own

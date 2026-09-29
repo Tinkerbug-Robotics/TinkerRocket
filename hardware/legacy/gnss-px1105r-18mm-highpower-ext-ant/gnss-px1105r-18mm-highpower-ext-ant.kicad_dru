@@ -17,9 +17,9 @@
 	(constraint clearance (min 0.1mm))
 	(condition "A.Type != 'Zone' && B.Type != 'Zone' && ((A.intersectsCourtyard('U6') && B.intersectsCourtyard('U6')) || (A.intersectsCourtyard('U7') && B.intersectsCourtyard('U7')) || (A.intersectsCourtyard('U9') && B.intersectsCourtyard('U9')) || (A.intersectsCourtyard('U10') && B.intersectsCourtyard('U10')))"))
 
-# Different-net hole-to-hole wall, as on Beetle (this repo's other 8-layer board). KiCad measures hole_to_hole edge to
-# edge, so 0.25 mm is 0.55 mm centre to centre on the 0.30 mm drills. The project-wide min_hole_to_hole stays 0.20 and
-# covers same-net holes. The margin is for the 8-layer, 1.6 mm stack; it is not a quoted fab capability.
+# Different-net hole-to-hole wall, as on Beetle. KiCad measures hole_to_hole edge to edge, so 0.25 mm is 0.55 mm
+# centre to centre on the 0.30 mm drills. The project-wide min_hole_to_hole stays 0.20 and covers same-net holes. The
+# margin was set for the 8-layer V2 and is kept on the 6-layer V3; it is not a quoted fab capability.
 (rule "hole_to_hole_different_nets"
 	(constraint hole_to_hole (min 0.25mm))
 	(condition "A.Net != B.Net"))

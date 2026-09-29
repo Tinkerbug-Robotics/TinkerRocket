@@ -10,7 +10,7 @@ left the schematic in 0f721aa6, and the V6 layout was never synced to match.
 | Folder | Board | Latest tag | Tree | Why it left the line |
 |---|---|---|---|---|
 | [`base-station/`](base-station/) | Full ground station, paired with a [`lora-daughterboard`](../lora-daughterboard/) over UART | `base-station-v5.0.0` | V6 | Replaced by [Tinker-Base](../tinker-base/), which carries its radio on board |
-| [`gnss-px1105r-18mm-highpower-ext-ant/`](gnss-px1105r-18mm-highpower-ext-ant/) | The Space Bug: the GNSS receiver with its own processor and IMU, patch antenna on the back, 8 layers | `gnss-px1105r-18mm-highpower-ext-ant-v2.0.0` | V2 | The 4-layer carrier (v1.x) was superseded by the SAM-M10Q carrier, [`gnss-sam10m8-18mm-hv`](../gnss-sam10m8-18mm-hv/); the folder now holds the Space Bug, ordered 2026-09-29 |
+| [`gnss-px1105r-18mm-highpower-ext-ant/`](gnss-px1105r-18mm-highpower-ext-ant/) | The Space Bug: the GNSS receiver with its own processor and IMU, patch antenna on the back, 6 layers (V2 was 8) | `gnss-px1105r-18mm-highpower-ext-ant-v2.0.0` | V3 | The 4-layer carrier (v1.x) was superseded by the SAM-M10Q carrier, [`gnss-sam10m8-18mm-hv`](../gnss-sam10m8-18mm-hv/); the folder now holds the Space Bug: V2 ordered 2026-09-29, V3 laid out |
 | [`servo-adapter/`](servo-adapter/) | Passive cable-to-servo adapter with a capacitor, for the rocket computer's expansion port | `servo-adapter-v1.0.0` | no rev in the title block | Not offered |
 
 ## What moving them changed
