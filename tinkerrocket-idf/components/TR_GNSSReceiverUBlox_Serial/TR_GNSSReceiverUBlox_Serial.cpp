@@ -1,5 +1,6 @@
 #include "TR_GNSSReceiverUBlox_Serial.h"
 #include <esp_log.h>
+#include <driver/gpio.h>
 #include <driver/uart.h>
 #include <cstring>
 #include <TR_NVS.h>  // Preferences — once-ever OTP write guard
@@ -32,6 +33,11 @@ void TR_GNSSReceiverUBloxSerial::uartBegin(uint32_t baud, uint8_t rx_pin, uint8_
     ESP_ERROR_CHECK(uart_param_config(_uartPort, &uart_cfg));
     ESP_ERROR_CHECK(uart_set_pin(_uartPort, (int)tx_pin, (int)rx_pin,
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    // Hold RX idle-high while nothing drives it. The pin has no pull after reset and uart_set_pin() adds none, so a
+    // receiver that is unpowered, still booting, or behind a carrier MCU that has not started its UART yet (the
+    // PX1105R board's P4) would leave it floating and feed noise to the parser. Follows rx_pin through the
+    // orientation probe; a pull left on the other pin is harmless once it drives as TX.
+    gpio_pullup_en((gpio_num_t)rx_pin);
     ESP_ERROR_CHECK(uart_driver_install(_uartPort, GNSS_UART_RX_BUF,
                                         GNSS_UART_TX_BUF, 0, NULL, 0));
 }

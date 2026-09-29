@@ -12,6 +12,7 @@
 // ALP low-power mode (added in V1.2).
 #include "TR_GNSSReceiverLC86_Serial.h"
 
+#include <driver/gpio.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
@@ -115,6 +116,10 @@ void TR_GNSSReceiverLC86Serial::uartBegin(uint32_t baud, uint8_t rx_pin, uint8_t
     ESP_ERROR_CHECK(uart_param_config(_uartPort, &uart_cfg));
     ESP_ERROR_CHECK(uart_set_pin(_uartPort, (int)tx_pin, (int)rx_pin,
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    // Hold RX idle-high while nothing drives it: the pin has no pull after reset and uart_set_pin() adds none, so a
+    // receiver that is unpowered or still booting would leave it floating and feed noise to the parser. Same fix as
+    // the u-blox driver.
+    gpio_pullup_en((gpio_num_t)rx_pin);
     ESP_ERROR_CHECK(uart_driver_install(_uartPort, GNSS_UART_RX_BUF,
                                         GNSS_UART_TX_BUF, 0, NULL, 0));
 
