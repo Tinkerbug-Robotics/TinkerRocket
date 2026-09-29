@@ -124,7 +124,7 @@ every earlier one is 8 MB.**
 | lora-daughterboard | V3 (tag `lora-daughterboard-v3.0.0`) | U22 `W25Q128JVSIQ` | 16 MB | U22 at the tag. **Measured** on `E0:72:A1:CA:F6:40`, a board from this fab: `flash-id` read `ef:4018` (Winbond, 16 MB) on 2026-08-23, and on 2026-08-27 it flashed and booted `radio up, listening at 915.0 MHz SF8`. (The row used to name `GD25Q128ESIG`, a BOM-only change on 2026-08-15, after this fab. It also used to say "first article is unflashable, so untested"; that article is one dead board, not the revision.) |
 | lora-daughterboard | V4 (2026-09-28) | U22 `W25Q128JVYIQ` | 16 MB | BOM and layout; the Beetle/Mantis 24-ball WLCSP part, placed and routed. No V4 board has been built yet. **Unmeasured** |
 | tinker-beetle (was rocket-computer-mini) | V1 (tag `rocket-computer-mini-v1.0.1`) | U13 / U33 `W25Q128JVYIQ` | 16 MB | BOM, the 24-ball WLCSP. **Measured** 2026-09-23 on the second board's out computer (`9C:13:9E:28:9E:88`): `esptool flash-id` reads JEDEC `EF 4018` (Winbond, 16 MB). The flight computer's `U33` has not been read. (The row used to name `GD25Q128ESIG` on `U13` alone and say no hardware existed.) |
-| tinker-base (was base-station-mini) | first article | U1 `W25Q128JVYIQ` | 16 MB | BOM; the Beetle/Mantis WLCSP part since 2026-09-27 (was `GD25Q128ESIG`). **Unmeasured** |
+| tinker-base (was base-station-mini) | V1 (not fabricated) | U1 `W25Q128JVYIQ` | 16 MB | BOM; the Beetle/Mantis WLCSP part since 2026-09-27 (was `GD25Q128ESIG`). **Unmeasured** |
 
 **How firmware handles it — changed 2026-09-09 (#916).** Each project now
 declares the smallest standard flash size that fits **its own partition table**,

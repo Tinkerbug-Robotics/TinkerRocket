@@ -3,7 +3,7 @@
 	(generator "pcbnew")
 	(generator_version "10.0")
 	(layer "F.Cu")
-	(descr "Abracon AANI-CH-0070 2.4 GHz loop chip antenna, 1.00 x 0.50 x 0.40 mm, edge-mounted. Pads 1+4 = FEED (tie together), pads 2+3 = GND. Land 0.30 x 0.30, 0.25 mm column gap, 0.10 mm row gap (derived from the part terminal drawing and cross-checked against the datasheet's recommended-layout dimensions). The 4.60 x 3.50 mm rectangle on Dwgs.User is the required ground clearance - it must be reproduced as an all-layer keep-out on the board, and the part sits at the PCB edge.")
+	(descr "Abracon AANI-CH-0070 2.4 GHz loop chip antenna, 1.00 x 0.50 x 0.40 mm, edge-mounted. Pads 1+4 = FEED (tie together), pads 2+3 = GND. Land 0.30 x 0.30, 0.25 mm column gap, 0.10 mm row gap (derived from the part terminal drawing and cross-checked against the datasheet's recommended-layout dimensions). Required ground clearance (Abracon rev A p.4): a copper-free window 4.60 mm along the board edge by 3.00 mm inboard of a 0.50 mm edge ground band (3.50 mm from the band's outer edge), on every layer, with the feed pads inside it. The part sits at the PCB edge with its GND pads in the band. Draw the window as board rule areas: the feed-trace notch on F.Cu only, and a second rule area without the notch on every other copper layer.")
 	(tags "antenna chip loop 2.4GHz BLE Abracon AANI-CH-0070")
 	(property "Reference" "REF**"
 		(at 0 -0.95 0)

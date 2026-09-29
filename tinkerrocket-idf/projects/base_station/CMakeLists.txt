@@ -81,9 +81,9 @@ add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
 # One-time effect on existing checkouts: the root projects/base_station/
 # sdkconfig is now ignored (it is untracked, so nothing is lost from git).
 # `idf.py -B <dir> reconfigure` re-seeds from these defaults.
-# The Tinker-Base (4) takes the same overlay: it forked from the V3 board with
-# the same 16 MB GD25Q128ESIG as U1 and, like V3, no NAND — spiffs on U1 is its
-# only log store too (board_v4.h).
+# The Tinker-Base (4) takes the same overlay: it forked from the V3 board, has
+# a 16 MB boot NOR as U1 (a W25Q128JVYIQ since 2026-09-27) and, like V3, no
+# NAND — spiffs on U1 is its only log store too (board_v4.h).
 if(TR_BS_BOARD EQUAL 3 OR TR_BS_BOARD EQUAL 4)
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v3")
     message(STATUS "base_station: sdkconfig overlay sdkconfig.defaults.v3 (16 MB boot NOR, partitions_v3.csv)")

@@ -41,10 +41,16 @@ followed on 2026-09-28; see *Status*.
   (5.1 pF) in series, `L4` (2.2 nH) to ground on the radio side, and `C5`, an
   unfitted shunt on the antenna side kept for tuning. `L4` was the old antenna's
   4.3 nH shunt and keeps its footprint. The old antenna worked on top of the
-  ground plane; this one needs a keep-out. It sits in a narrow ground band along
-  the board edge, 0.5 mm deep, with its ground pads in the band. Inboard of the
-  band, a 4.6 × 3.5 mm area stays clear of copper on every layer, stitched with
-  ground vias around its edge.
+  ground plane; this one needs a keep-out.
+  - It sits in a ground band along the board edge (copper from 0.3 to 0.75 mm in
+    from the edge), with its ground pads in the band.
+  - Inboard of the band, a window 4.6 mm along the edge and 3.0 mm deep is clear
+    of copper on every layer, including under the feed pads. Only F.Cu has a notch
+    in it, for the feed trace. That is Abracon's evaluation-board layout (rev A
+    p.4), and the Beetle's.
+  - Ground vias stitch the far side and both ends.
+  - The first layout, on 2026-09-28, cut the notch on every layer and left planes
+    under the feed pads. The design review caught it (L2).
 - **Boot flash.** `U1` is the Beetle and Mantis's 16 MB quad-SPI NOR in a
   24-ball WLCSP. It is fed from `+3V3`, with `C1` (100 nF) beside it, instead of
   from the S3's `VDD_SPI` pin. The full base-station's V5 showed why.
@@ -70,6 +76,24 @@ followed on 2026-09-28; see *Status*.
   radio's receive enable used to float through every reset. Now it is held off
   until firmware drives it, which is the Beetle's fix for the same line.
 
+From the 2026-09-28 [design review](design-review-2026-09-28.md):
+
+- **LoRa antenna port** gains `L5`, 330 nH from the SMA line to ground. It is the
+  protective shunt Ebyte's manual asks for (§5.1). `J8` moved 1.14 mm to the
+  edge, so the connector's centre pin now covers its whole pad.
+- **`U9`** gains `C25`, 100 nF from `V_SWITCH` to the ground pin beside the
+  input pins. That gives the input a short high-frequency loop. The bulk input
+  cap can't provide one, because its ground pad is walled off by the
+  switch-node pours.
+- **`U9`'s output** gains `C26`, 100 nF from `+3V3` to ground beside the output
+  pins, for the same reason on the output side: the 22 µF caps' ground pads
+  return around the switch-node pour. `U9`'s FB line runs under its body,
+  between the pads. Its ground pad shares a via with `U9` pin 2.
+- **Charge current:** `R52` 680 Ω → **1.2 kΩ**, about 0.45 A (0.40–0.50 A)
+  instead of 0.79 A. The old value sat at the charger's 0.8 A limit, and it made
+  the charger heat the board past its own thermistor's trip point; see the next
+  section.
+
 ## The battery thermistor is board-mounted, and that is a compromise
 
 `TH1` feeds the BQ21040's `TS` pin, which gates charging on temperature. It is a
@@ -93,8 +117,9 @@ warmer than it is.
   prevent.
 
 Placement mitigates this; it does not remove it. `TH1` sits 25 mm from the
-charger — the dominant heat source while charging, dissipating on the order of
-1 W as a linear regulator at the ~0.79 A `R52` programs — 27 mm from the
+charger — the dominant heat source while charging, dissipating up to about
+0.7 W as a linear regulator at the ~0.45 A `R52` programs (up to 1.6 W at the
+original 0.79 A) — 27 mm from the
 buck-boost and 15 mm from the ESP32-S3. Weighted by dissipation over distance
 that is about 37 % less coupling than the old land, which sat 8.6 mm from the
 buck-boost and 13.5 mm from the charger. A solid inner ground plane keeps the
@@ -106,9 +131,26 @@ threaded through the ESP32-S3 fanout or the chip antenna's ground-via fence;
 neither is worth it for a few degrees. The route as built is 19 mm on `F.Cu`
 with no vias.
 
+**Charging heat reaches `TH1` anyway.** The solid planes spread the charger's
+heat, so `TH1` reads roughly the board's mean temperature: about +19 K per watt
+of charger dissipation in still air. The design review modelled this (±25 %).
+- **At the original 0.79 A:** the charger folds back to about 0.9 W, which trips
+  the 40.6 °C hot threshold from about 25 °C ambient.
+- **At 1.2 kΩ:** it stays out of thermal regulation, and `TH1` rises 11–14 K.
+- **With the base station on:** its own ~0.3 W adds about 6 K.
+- **No power path:** the load hangs on the cell node, so while charging is
+  suspended it drains the cell even with USB plugged in.
+
+Two consequences:
+- USB charges the cell; it does not run the base station. Charge with `S1`
+  off.
+- The charger's 10-hour safety timer ends a charge that never terminates,
+  because a running board keeps the current above the termination threshold.
+  Only unplugging USB re-arms it.
+
 **Open at first article:** with the board charging, compare the `TS` node
-against a reference probe on the cell at room temperature and near 0 °C, and
-confirm the offset is small enough to accept. If it is not, the fix is a wired
+against a reference probe on the cell at room temperature, near 0 °C and at
+35 °C, with `S1` off and on, and confirm the offset is small enough to accept. If it is not, the fix is a wired
 probe on a connector, not a different chip.
 
 ## The radio pinout is deliberately identical to lora-daughterboard
@@ -150,14 +192,23 @@ Two things were deliberately left behind at the fork:
 ## Status
 
 Not fabbed, no tag. Schematic and PCB are in sync and fully routed, with 0
-parity issues, 0 unconnected and no DRC errors. That was checked on 2026-09-28,
-after the parts above were placed and routed. Two layout details came with them:
+parity issues, 0 unconnected, no DRC errors and zone fills that match a fresh
+refill. That was checked on 2026-09-28, after the design review's fixes. The
+remaining 26 DRC warnings are silkscreen and the logo's library nickname.
+Layout details worth knowing:
 
 - `R1`, the `CHIP_PU` pull-up, moved beside `C8` to free the spot above `C16`
   for `C24`.
 - `CLK` and `WP` cross the other flash lines on `B.Cu`, through four vias. The
   flash's ball order and the ESP32's SPI pin order leave no arrangement without
   a crossing.
+- **Ground vias:** `U3`'s exposed pad has nine, in the gaps between its paste
+  windows (Espressif asks for at least nine). Nine more sit beside signal vias.
+- **`S3`**'s body area has no top copper (Mitsumi's "no pattern" zone). Its
+  `GPIO0` via moved out from under the switch.
+- **`J2`**'s signal pads are trimmed at the rear to HRO's own land, which keeps
+  0.84 mm between the battery's + pad and the connector.
+- **Fiducials** `FID1`–`FID3` are on the top side.
 
 **Firmware:** `tinkerrocket-idf/projects/base_station` built with
 `-DTR_BS_BOARD=4` — the pin map is `main/board/board_v4.h`, taken from this
@@ -168,6 +219,11 @@ V3 image in the Tinker-Base slot until a first article proves V4. The V3 image
 does not run on this board (it drives a `lora-daughterboard` over UART).
 
 Reviewed 2026-08-12: [`prefab-review-2026-08-12.md`](prefab-review-2026-08-12.md).
-Four items to close before fab, none of them blockers; the review's *Before fab*
-section is the checklist. See also *Sending a board to fab* in
+Its "Verified correct" section is superseded: the Molex antenna and the
+fixed-output regulator it describes are gone.
+
+Reviewed again 2026-09-28: [`design-review-2026-09-28.md`](design-review-2026-09-28.md).
+Its *Fixes applied* section lists what was done and what was left, and why.
+The fabrication and assembly steps are in
+[`FABRICATION-NOTES.md`](FABRICATION-NOTES.md). See also *Sending a board to fab* in
 [`../README.md`](../README.md).
