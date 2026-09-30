@@ -4,6 +4,7 @@
 #include <cstring>
 #include <esp_log.h>
 #include <esp_idf_version.h>
+#include <hal/i2c_ll.h>   // #1556: slave glitch filter (see createSlaveDevice)
 
 // This component targets the ESP-IDF V2 I2C slave driver (on_receive /
 // on_request + i2c_slave_write). Pre-6.0 it is opt-in, and a *missing* flag
@@ -28,6 +29,11 @@ static const char *TAG = "I2C_IF";
 static constexpr uint32_t    SLAVE_TX_TASK_STACK       = 3072;
 static constexpr UBaseType_t SLAVE_TX_TASK_PRIO        = 20;
 static constexpr int         SLAVE_TX_WRITE_TIMEOUT_MS = 20;
+
+// SCL/SDA glitch filter, in I2C source-clock cycles (the 40 MHz XTAL by
+// default: 7 = 175 ns, well inside the 400 kHz bit timing). Both ends use it:
+// the master through glitch_ignore_cnt, the slave by register (#1556).
+static constexpr uint8_t     I2C_GLITCH_FILTER_CYCLES  = 7;
 
 TR_I2C_Interface::TR_I2C_Interface(uint8_t device_address_7bit)
     : device_address(device_address_7bit),
@@ -55,7 +61,7 @@ esp_err_t TR_I2C_Interface::beginMaster(int sda_pin,
     bus_cfg.sda_io_num = static_cast<gpio_num_t>(sda_pin);
     bus_cfg.scl_io_num = static_cast<gpio_num_t>(scl_pin);
     bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
-    bus_cfg.glitch_ignore_cnt = 7;
+    bus_cfg.glitch_ignore_cnt = I2C_GLITCH_FILTER_CYCLES;
     bus_cfg.flags.enable_internal_pullup = enable_internal_pullups;
 
     esp_err_t err = i2c_new_master_bus(&bus_cfg, &_master_bus);
@@ -204,6 +210,17 @@ esp_err_t TR_I2C_Interface::createSlaveDevice()
         _slave_dev = nullptr;
         return err;
     }
+
+    // #1556 S2: the V2 slave driver never programs the glitch filter, and the
+    // S3 resets it to 0 cycles, so every pulse on SCL counts. On the
+    // Tinker-Mantis the I2S BCLK (2.8 MHz) runs 36 mm beside SCL on In2; a
+    // coupled spike on SCL's slow open-drain edge could clock the slave one
+    // extra bit. Give the slave the master's filter. i2c_new_slave_device()
+    // is the only place the driver re-inits the controller, so this holds
+    // until the next re-create, which runs this function again.
+    i2c_dev_t *i2c_hw = I2C_LL_GET_HW(slave_cfg.i2c_port);
+    i2c_ll_master_set_filter(i2c_hw, I2C_GLITCH_FILTER_CYCLES);   // FILTER_CFG serves both roles
+    i2c_ll_update(i2c_hw);
 
     i2c_slave_event_callbacks_t cbs = {};
     cbs.on_receive = slaveReceiveISR;

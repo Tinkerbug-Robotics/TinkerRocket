@@ -144,7 +144,7 @@
 			(type solid)
 		)
 		(fill no)
-		(layer "B.SilkS")
+		(layer "F.SilkS")
 		(uuid "814f3ac1-77b6-4b3e-9e6e-71e4908b21ce")
 	)
 	(fp_line

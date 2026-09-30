@@ -112,6 +112,13 @@ its own label and ground — the TPS61094 wants 20 µF minimum / 30 µF nominal
 placed beside `C17` at pins 9/10 when the hold-up block is placed; anywhere else
 it adds nameplate and fixes nothing.
 
+> **Correction, 2026-09-30 (layout review, #1556).** The layout did not put
+> the two together. `C144` is the one 22 µF at `U47` pins 9/10; `C17` sits at
+> `U30`'s input, about 25 mm away. Through the In3 `+3V3` plane, the aggregate
+> output capacitance still meets the TPS61094's minimum, so the placement is
+> accepted for V10. The "anywhere else" sentence above no longer describes
+> the board. If this area is re-laid, put the second 22 µF back at pins 9/10.
+
 ### 1.5 The BOM was two edits behind the schematic
 
 Reconciling `bom.csv` against the netlist designator-for-designator found the
@@ -297,7 +304,8 @@ it stays on `VBATT` as accepted. GNSS stays on `VBATT` by decision (§1.3).
 > is the list to work from.
 
 - `R140` 0402 across `V_BUCK` — beside `R137`/`R138`.
-- `C144` 0805 — beside `C17` at `U47` pins 9/10.
+- `C144` 0805 — beside `C17` at `U47` pins 9/10. *(As laid out: `C144` at
+  pins 9/10, `C17` at `U30`'s input; accepted for V10, see §1.4.)*
 - The hold-up block still sits off the A4 page at x ≈ 300–440 mm; the
   new parts are drawn there too (`R140` at 311, 56; `C144` at 397.5, 38). The
   DEF pin's `V_BUCK` label at (106.68, 118.745) sits under the "USB power input

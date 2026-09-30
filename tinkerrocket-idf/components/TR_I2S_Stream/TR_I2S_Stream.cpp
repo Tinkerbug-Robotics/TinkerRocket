@@ -6,6 +6,21 @@
 
 static const char* TAG = "I2S_STREAM";
 
+// #1556 S2: the master's outputs (BCLK, WS, DOUT, FRAME_SYNC) run the length of
+// the Tinker-Mantis's In2 ribbon beside the inter-MCU I2C; BCLK sits 0.10 mm
+// from SCL for 36 mm. A 2.8 MHz link needs nothing like the default ~20 mA
+// edge, and the weakest drive slows the edges that couple into SCL.
+static constexpr gpio_drive_cap_t MASTER_OUT_DRIVE = GPIO_DRIVE_CAP_0;
+
+static void weakenDrive(int pin)
+{
+    if (pin < 0)
+        return;
+    esp_err_t err = gpio_set_drive_capability(static_cast<gpio_num_t>(pin), MASTER_OUT_DRIVE);
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "GPIO%d drive capability: %s", pin, esp_err_to_name(err));
+}
+
 TR_I2S_Stream::~TR_I2S_Stream()
 {
     end();
@@ -90,6 +105,7 @@ esp_err_t TR_I2S_Stream::beginMasterTx(int bclk_pin,
             return err;
         }
         gpio_set_level(static_cast<gpio_num_t>(frame_sync_pin_), 0);
+        weakenDrive(frame_sync_pin_);
     }
 
     // ── I2S channel ──
@@ -144,6 +160,11 @@ esp_err_t TR_I2S_Stream::beginMasterTx(int bclk_pin,
         chan_handle_ = nullptr;
         return err;
     }
+
+    // After init_std_mode, which routes the pins; it does not set their drive.
+    weakenDrive(bclk_pin);
+    weakenDrive(ws_pin);
+    weakenDrive(dout_pin);
 
     err = i2s_channel_enable(chan_handle_);
     if (err != ESP_OK)
