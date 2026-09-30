@@ -232,7 +232,7 @@ Nothing that affects a fab order. #1556 tracks the items left for a future revis
 
 - **#1556 layout pass, 2026-09-30.**
   - **F4:** pin-1 dots were added to the board copies of U17, U15, U23, U1, U6, U7, U8, U10, U9, J1 and J3; the library footprints are unchanged. U26's and U28's dots moved clear of R86's pad and the board edge. U2's pin-1 circle moved to the top silkscreen, on the board and in the library.
-  - **F5:** the "F" legend moved clear of C44 to S1's inner end. The two orphan "+" marks were deleted. The "O" stays where it is (the owner's call): no clean site fits near its end of the switch, and the fab clips the part that sits over R52's and R63's pads.
+  - **F5:** the "F" legend moved clear of C44 to S1's inner end. The two orphan "+" marks were deleted. The owner then moved the "O" off R52/R63 to (92.64, 142.29), below R134 and beside R135. That clears its six silk warnings.
   - **F6:** R41.1, R47.2 and R22.2 connect to the pour through thermal relief.
   - **F7:** the OC_ARM_EN via moved clear of J2's pad. The VDDO_PSRAM ring, 0.008 mm outside J4's mask opening, stays as it is.
   - **F8:** FID3 moved to the top-left corner of the bottom side. The bottom pair is now 35.3 mm apart on the diagonal.

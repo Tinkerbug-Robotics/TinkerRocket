@@ -87,8 +87,9 @@ ST's IMU land-pattern notes would not download; the IMU item uses ST's community
     and the raised severities add 4 warnings.
   - The fab package is re-plotted.
   - **The owner's calls on the last three:**
-    - S1's "O" legend stays where it is. There is no clean site near its end of the switch, and the fab clips the part
-      that sits over R52's and R63's pads.
+    - S1's "O" legend: the owner first chose to leave it, then moved it to (92.64, 142.29), below R134 and beside
+      R135. That spot is clear of pads and silk, but it is 3.8 mm from the switch end. The move clears the "O"'s six
+      silk warnings, so DRC is now 1 error, 40 warnings, 0 unconnected, 0 parity.
     - S3 is accepted as it is.
     - S2 is handled in firmware. There is no board change; the re-route waits for the next layout. The S3 I2C slave
       gets the master's 7-cycle glitch filter, set by register because the IDF slave driver has none. The I2S
@@ -585,7 +586,7 @@ This is the cause of 4 of the 6 lib_footprint_mismatch warnings.
   - Move U26's and U28's dots clear.
   - Check the result against the mask plot, or plot with "subtract soldermask from silkscreen", which is off today.
 
-### F5 [done 2026-09-30; the "O" stays, the owner's call] S1's "F"/"O" legends print over pads, and two "+" marks are orphans
+### F5 [done 2026-09-30; the owner moved the "O" to (92.64, 142.29)] S1's "F"/"O" legends print over pads, and two "+" marks are orphans
 
 - The owner's F/O convention stays; only the placement is a problem. The B-side "F" (83.8–85.1, 135.2–137.1) is 56% over
   C44's pad openings, and the "O" (92.7–94.2, 133.8–135.6) is 34% over R52/R63.
