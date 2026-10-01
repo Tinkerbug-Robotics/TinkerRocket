@@ -2593,6 +2593,65 @@
 			)
 		)
 	)
+	(text "From the Tinker-Mantis: 2 Gbit SPI NAND for flight\nlogging, on the P4's four free GPIOs"
+		(exclude_from_sim no)
+		(at 158.75 213.36 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+			)
+			(justify left bottom)
+		)
+		(uuid "c7ca11fb-829d-48e1-b18c-88a07becfaa8")
+	)
+	(sheet
+		(at 154.94 203.2)
+		(size 101.6 27.94)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "0c458f4f-ab57-4652-b6ad-df072ea95d29")
+		(property "Sheetname" "Data flash"
+			(at 154.94 201.9 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 2.5 2.5)
+					(thickness 0.6)
+					(bold yes)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "flash.kicad_sch"
+			(at 154.94 232.44 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
+					(page "12")
+				)
+			)
+		)
+	)
 	(sheet_instances
 		(path "/"
 			(page "1")

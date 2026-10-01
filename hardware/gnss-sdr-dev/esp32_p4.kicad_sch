@@ -5445,20 +5445,8 @@
 		(uuid "ffeae8d6-73dd-4801-b8b8-84f0c54c05f8")
 	)
 	(no_connect
-		(at 78.74 153.67)
-		(uuid "01302feb-fcc5-44f6-a56f-96d82a004aa0")
-	)
-	(no_connect
 		(at 124.46 118.11)
 		(uuid "0f4d956f-b1d7-4a09-b5ac-d934c104abd1")
-	)
-	(no_connect
-		(at 124.46 146.05)
-		(uuid "108ba30f-419f-42e3-a247-bf60f002bfd8")
-	)
-	(no_connect
-		(at 124.46 148.59)
-		(uuid "180b6341-4f3d-4618-b78c-9ec7213b05f4")
 	)
 	(no_connect
 		(at 124.46 125.73)
@@ -5479,10 +5467,6 @@
 	(no_connect
 		(at 78.74 113.03)
 		(uuid "74dd5213-aac9-4623-bda0-c39de5c0b212")
-	)
-	(no_connect
-		(at 78.74 130.81)
-		(uuid "889e9ab5-cf9b-459d-b97e-04203d382ca1")
 	)
 	(no_connect
 		(at 78.74 115.57)
@@ -20347,6 +20331,142 @@
 		(uuid "1a0be540-9c1e-44e5-a4d2-b969ad3eddaa")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 129.54 90.17 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 78.74 130.81) (xy 73.66 130.81)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c9da9364-9bdd-4052-8f7b-dbcb086c9d62")
+	)
+	(global_label "NAND_CS"
+		(shape output)
+		(at 73.66 130.81 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "70a0ec06-2dce-4b0f-9847-08b00b3c4612")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 73.66 130.81 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 78.74 153.67) (xy 73.66 153.67)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7a9bc3e5-c502-4d66-b351-bca232c9bf63")
+	)
+	(global_label "NAND_MISO"
+		(shape input)
+		(at 73.66 153.67 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "f80933e9-96e7-4b0f-be6d-f802aee05ea5")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 73.66 153.67 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 124.46 146.05) (xy 137.16 146.05)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "028a74ff-5cb4-49e9-9c11-130014aaeb90")
+	)
+	(global_label "NAND_SCK"
+		(shape output)
+		(at 137.16 146.05 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "42680a3f-f8e0-48c5-be9c-3fb51edf3bd1")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 137.16 146.05 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 124.46 148.59) (xy 137.16 148.59)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4e166a7b-4a9b-4cb6-acd4-1e387397fad6")
+	)
+	(global_label "NAND_MOSI"
+		(shape output)
+		(at 137.16 148.59 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "21797d68-7c38-4f94-8217-339a90f177cf")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 137.16 148.59 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)

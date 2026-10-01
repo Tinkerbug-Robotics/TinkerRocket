@@ -889,6 +889,10 @@
     [
       "ebe8985f-054b-42ea-8c33-d916c783b295",
       "Power"
+    ],
+    [
+      "0c458f4f-ab57-4652-b6ad-df072ea95d29",
+      "Data flash"
     ]
   ],
   "text_variables": {},
