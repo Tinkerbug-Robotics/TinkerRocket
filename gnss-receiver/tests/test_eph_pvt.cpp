@@ -318,3 +318,36 @@ TEST(Pvt, WeighsAWeakSatelliteLightly)
     EXPECT_NEAR(pvt_sigma_dop(43.0f, 0, 10.0f) / d10, 5.0, 1e-9);
     EXPECT_GT(pvt_sigma_dop(31.0f, 1, 10.0f), 3.5 * d10);
 }
+
+// Coarse-time navigation (milestone 7, the seed): every transmit time 0.3 s late, as when the
+// receiver's milliseconds come from a seed whose clock is that far out (PSAS's TeleMetrum time
+// was 0.6 s out). The plain solve puts the satellites where they will be 0.3 s on (hundreds of
+// metres); the fifth unknown finds the 0.3 s and the position.
+TEST(Pvt, CoarseTimeSolvesLateTransmitTimes)
+{
+    /* A seed clock 0.61 s out (PSAS's TeleMetrum time) leaves every transmit time that late. */
+    for (const double tau : {0.0, 0.005, 0.610}) {
+        StaticSky s;
+        ASSERT_GE(s.m.size(), 8u);
+        for (auto &q : s.m) {
+            q.t_sv += tau;
+        }
+        pvt_opt_t opt;
+        pvt_default_opt(&opt);
+        opt.use_iono = opt.use_tropo = 0;
+        pvt_sol_t plain;
+        const int r = pvt_solve(s.m.data(), int(s.m.size()), s.eph, nullptr, &opt, nullptr, &plain);
+        if (tau > 0.1) {
+            EXPECT_TRUE(r == -2 || s.err(plain) > 10.0) << "the plain solve should not survive " << tau << " s";
+        }
+        opt.coarse_time = 1;
+        pvt_sol_t sol;
+        ASSERT_EQ(pvt_solve(s.m.data(), int(s.m.size()), s.eph, nullptr, &opt, nullptr, &sol), 0) << tau;
+        EXPECT_NEAR(sol.time_offset, tau, 1e-6) << tau;
+        EXPECT_LT(s.err(sol), 0.01) << tau;
+        /* Half-metre ranges against a few hundred m/s of range-rate spread: a millisecond or so. */
+        EXPECT_GT(sol.time_sigma, 1e-4) << tau;
+        EXPECT_LT(sol.time_sigma, 5e-3) << tau;
+        EXPECT_EQ(sol.nexcl, 0) << tau;
+    }
+}

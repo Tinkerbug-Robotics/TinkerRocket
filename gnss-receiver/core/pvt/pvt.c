@@ -18,6 +18,7 @@ void pvt_default_opt(pvt_opt_t *o)
     o->raim = 1;
     o->raim_pfa = 1e-4;
     o->raim_max_excl = 2;
+    o->coarse_time = 0;
 }
 
 void geo_to_ecef(double lat, double lon, double h, double x[3])
@@ -170,6 +171,18 @@ typedef struct {
     double clk, clk_rate;    /* s, s/s */
 } sat_t;
 
+/* A satellite at transmit time t_sv on its own clock: its state, and the time in its system. */
+static void sat_state(const gps_eph_t *e, double t_sv, sat_t *s, double *t_sys)
+{
+    const double dt = gps_sat_clock(e, t_sv);
+    *t_sys = t_sv - dt;  /* the system's own time; Klobuchar only needs seconds of day */
+    double c0, c1, p1[3];
+    gps_sat_pos(e, *t_sys, s->pos, s->vel, &c0);
+    gps_sat_pos(e, *t_sys + 1.0, p1, NULL, &c1);
+    s->clk = c0;
+    s->clk_rate = c1 - c0;
+}
+
 double pvt_sigma_pr(float cn0, float smooth_s)
 {
     /*
@@ -227,12 +240,13 @@ static int solve_position(const pvt_meas_t *m, int n, const sat_t *sat, const do
             col[m[i].sys] = nx++;
         }
     }
+    const int ct = opt->coarse_time ? nx++ : -1;
     for (int k = 4; k < PVT_MAX_X; k++) {
         if (k >= nx) {
             x[k] = 0.0;
         }
     }
-    double lat = 0.0, lon = 0.0, h = -WGS84_A;
+    double lat = 0.0, lon = 0.0, h = -WGS84_A, var_t = 0.0;
     int nused = 0;
     for (int it = 0; it < 12; it++) {
         double ata[PVT_MAX_X * PVT_MAX_X] = {0}, atb[PVT_MAX_X] = {0};
@@ -277,6 +291,13 @@ static int solve_position(const pvt_meas_t *m, int n, const sat_t *sat, const do
             if (sys != GNSS_SYS_GPS) {
                 hrow[cs] = 1.0;
             }
+            if (ct >= 0) {
+                /* Satellites read at transmit times running x[ct] late sit where the satellite
+                 * will be: the computed range runs over by the satellite's own range rate times
+                 * that, so the model takes it back off. */
+                hrow[ct] = -(sat[i].vel[0] * d[0] + sat[i].vel[1] * d[1] + sat[i].vel[2] * d[2]) / rho;
+                res -= hrow[ct] * x[ct];
+            }
             for (int r = 0; r < nx; r++) {
                 atb[r] += w[i] * hrow[r] * res;
                 for (int c = 0; c < nx; c++) {
@@ -295,6 +316,7 @@ static int solve_position(const pvt_meas_t *m, int n, const sat_t *sat, const do
         for (int k = 0; k < nx; k++) {
             x[k] += atb[k];
         }
+        var_t = ct >= 0 ? ata[ct * nx + ct] : 0.0;
         sol->iter = it + 1;
         sol->resid_rms = sqrt(ss / nused);
         *chi2 = sw;
@@ -306,6 +328,8 @@ static int solve_position(const pvt_meas_t *m, int n, const sat_t *sat, const do
     for (int s = 1; s < GNSS_SYS_COUNT; s++) {
         sol->isb[s] = col[s] ? x[col[s]] : 0.0;
     }
+    sol->time_offset = ct >= 0 ? x[ct] : 0.0;
+    sol->time_sigma = sqrt(var_t);
     *nx_out = nx;
     return 0;
 }
@@ -319,27 +343,24 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t (*eph)[GNSS_MAX_PRN + 
     }
     sat_t sat[PVT_MAX_SAT];
     double t_gps[PVT_MAX_SAT], w[PVT_MAX_SAT];
-    int ok[PVT_MAX_SAT];
+    int ok[PVT_MAX_SAT], ok0[PVT_MAX_SAT];
     for (int i = 0; i < n; i++) {
         const int sys = m[i].sys;
         ok[i] = sys >= 0 && sys < GNSS_SYS_COUNT && m[i].prn >= 1 && m[i].prn <= GNSS_MAX_PRN;
         const gps_eph_t *e = ok[i] ? &eph[sys][m[i].prn] : NULL;
-        ok[i] = ok[i] && e->valid && e->health == 0;
+        ok0[i] = ok[i] = ok[i] && e->valid && e->health == 0;
         if (!ok[i]) {
             continue;
         }
-        double dt = gps_sat_clock(e, m[i].t_sv);
-        t_gps[i] = m[i].t_sv - dt;  /* the system's own time; Klobuchar only needs seconds of day */
-        double c0, c1, p1[3];
-        gps_sat_pos(e, t_gps[i], sat[i].pos, sat[i].vel, &c0);
-        gps_sat_pos(e, t_gps[i] + 1.0, p1, NULL, &c1);
-        sat[i].clk = c0;
-        sat[i].clk_rate = c1 - c0;
+        sat_state(e, m[i].t_sv, &sat[i], &t_gps[i]);
         const double sg = m[i].sigma > 0.0f ? (double)m[i].sigma : pvt_sigma_pr(m[i].cn0, 0.0f);
         w[i] = 1.0 / (sg * sg);
     }
 
-    /* Position, then the residual test, leaving out the worst measurement while it fails. */
+    /* Position, then the residual test, leaving out the worst measurement while it fails. With
+     * coarse time an offset over a millisecond puts the satellites where it says and solves
+     * again: the range-rate partial alone leaves a few cm, and the satellites' velocities up to
+     * 0.3 m/s out, per 0.6 s. */
     double x[PVT_MAX_X] = {0.0};
     if (pos0) {
         x[0] = pos0[0];
@@ -347,32 +368,49 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t (*eph)[GNSS_MAX_PRN + 
         x[2] = pos0[2];
     }
     int nx = 4;
-    for (;;) {
-        double chi2 = 0.0;
-        if (solve_position(m, n, sat, t_gps, ok, w, iono, opt, x, &nx, &chi2, sol) != 0) {
-            return -1;
+    double t_shift = 0.0;
+    for (int pass = 0;; pass++) {
+        for (;;) {
+            double chi2 = 0.0;
+            if (solve_position(m, n, sat, t_gps, ok, w, iono, opt, x, &nx, &chi2, sol) != 0) {
+                return -1;
+            }
+            const int dof = sol->nsat - nx;
+            sol->chi2 = chi2;
+            sol->chi2_lim = dof > 0 ? chi2_line(dof, opt->raim_pfa) : 0.0;
+            if (!opt->raim || dof < 1 || chi2 <= sol->chi2_lim) {
+                break;
+            }
+            if (dof < 2 || sol->nexcl >= opt->raim_max_excl) {
+                return -2;  /* inconsistent, and no single measurement to blame */
+            }
+            int worst = -1;
+            double zw = 0.0;
+            for (int i = 0; i < n; i++) {
+                const double z = sol->used[i] ? fabs(sol->resid[i]) * sqrt(w[i]) : 0.0;
+                if (z > zw) {
+                    zw = z;
+                    worst = i;
+                }
+            }
+            ok[worst] = 0;
+            sol->excluded[worst] |= 1;
+            sol->nexcl++;
         }
-        const int dof = sol->nsat - nx;
-        sol->chi2 = chi2;
-        sol->chi2_lim = dof > 0 ? chi2_line(dof, opt->raim_pfa) : 0.0;
-        if (!opt->raim || dof < 1 || chi2 <= sol->chi2_lim) {
+        if (!opt->coarse_time || pass > 0 || fabs(sol->time_offset) < 1e-3) {
+            sol->time_offset += t_shift;
             break;
         }
-        if (dof < 2 || sol->nexcl >= opt->raim_max_excl) {
-            return -2;  /* inconsistent, and no single measurement to blame */
-        }
-        int worst = -1;
-        double zw = 0.0;
+        t_shift = sol->time_offset;
         for (int i = 0; i < n; i++) {
-            const double z = sol->used[i] ? fabs(sol->resid[i]) * sqrt(w[i]) : 0.0;
-            if (z > zw) {
-                zw = z;
-                worst = i;
+            if (ok0[i]) {
+                sat_state(&eph[m[i].sys][m[i].prn], m[i].t_sv - t_shift, &sat[i], &t_gps[i]);
             }
+            ok[i] = ok0[i];
         }
-        ok[worst] = 0;
-        sol->excluded[worst] |= 1;
-        sol->nexcl++;
+        memset(sol->excluded, 0, sizeof(sol->excluded));
+        sol->nexcl = 0;
+        x[nx - 1] = 0.0;  /* the offset's column is the last */
     }
     double lat, lon, h;
     ecef_to_geo(x, &lat, &lon, &h);
@@ -393,6 +431,7 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t (*eph)[GNSS_MAX_PRN + 
                 col[m[i].sys] = ng++;
             }
         }
+        const int ct = opt->coarse_time ? ng++ : -1;  /* the offset widens the DOP it costs */
         for (int i = 0; i < n; i++) {
             if (!sol->used[i]) {
                 continue;
@@ -400,6 +439,10 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t (*eph)[GNSS_MAX_PRN + 
             double hrow[PVT_MAX_X] = {-sol->los[i][0], -sol->los[i][1], -sol->los[i][2], 1.0};
             if (m[i].sys != GNSS_SYS_GPS) {
                 hrow[col[m[i].sys]] = 1.0;
+            }
+            if (ct >= 0) {
+                hrow[ct] = -(sat[i].vel[0] * sol->los[i][0] + sat[i].vel[1] * sol->los[i][1] +
+                             sat[i].vel[2] * sol->los[i][2]) / 1000.0;  /* km/s: scale leaves the rest alone */
             }
             for (int r = 0; r < ng; r++) {
                 for (int c = 0; c < ng; c++) {

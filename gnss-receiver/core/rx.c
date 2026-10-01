@@ -88,6 +88,9 @@ void rx_set_boost(rx_t *rx, int on)
     rx->boost = on != 0;
 }
 
+static void predict_at(const rx_t *rx, const pvt_sol_t *s, const gps_eph_t *e, double t_rx, double *t_sv, double *dop,
+                       double *el, double los[3]);
+
 static int cmp_double(const void *a, const void *b)
 {
     const double x = *(const double *)a, y = *(const double *)b;
@@ -97,6 +100,187 @@ static int cmp_double(const void *a, const void *b)
 void rx_set_week_ref(rx_t *rx, int week)
 {
     rx->week_ref = week;
+}
+
+void rx_set_seed(rx_t *rx, const double pos_ecef[3], double pos_sigma_m, int week, double tow, double tow_sigma_s,
+                 uint64_t t)
+{
+    pvt_sol_t *s = &rx->seed;
+    memset(s, 0, sizeof(*s));
+    memcpy(s->pos, pos_ecef, sizeof(s->pos));
+    ecef_to_geo(s->pos, &s->lat, &s->lon, &s->h);
+    rx->seed_pos_sigma = pos_sigma_m;
+    rx->seed_tow_sigma = tow_sigma_s;
+    rx->seed_valid = 1;
+    if (!rx->clk_valid) {
+        rx->clk_t = tow;
+        rx->clk_n = t;
+        rx->clk_valid = 1;
+        /* Good to 0.125 ms, prediction errors included, the millisecond rounds safely (4 sigma). */
+        rx->time_coarse = tow_sigma_s + pos_sigma_m / GNSS_C > 1.25e-4;
+    }
+    rx->week_ref = week;
+    if (rx->week < 0) {
+        rx->week = week;
+    }
+}
+
+/*
+ * GPS channels' whole milliseconds from a prediction (the code phase gives the rest):
+ *   - before the first fix, from the seed. Differences against a reference satellite (one already
+ *     resolved, else the first) are what is rounded, so the seed clock's error, common to all,
+ *     cancels; a channel keeps its millisecond once set. A coarse seed time leaves them all one
+ *     whole-millisecond offset out together, which the fixes solve;
+ *   - after it, against the fix's own position and time (the clock steering keeps a coarse
+ *     offset in the receiver time too, so the rounding returns the same milliseconds).
+ * Then the navigation messages vote: where two or more satellites' message times agree on an
+ * offset from these milliseconds, and outnumber those that agree with them, the offset is the
+ * receiver's, and every channel and the clock move by it (the pseudoranges stay as they are);
+ * this settles coarse time. Once the time is settled a satellite whose message time still
+ * disagrees has its bit sync wrong (it decodes, shifted), so its bit sync and decoder restart.
+ * Lines of sight for the aiding come from the seed until there is a fix.
+ */
+static void resolve_ms(rx_t *rx, uint64_t t)
+{
+    const int have_fix = rx->sol.valid;
+    if (!rx->clk_valid || (!have_fix && !rx->seed_valid)) {
+        return;
+    }
+    const pvt_sol_t *st = have_fix ? &rx->sol : &rx->seed;
+    const double t_rx = rx_time(rx, t) - (have_fix ? rx->sol.clk_bias / GNSS_C : 0.0);
+    const double week_ms = 604800000.0;
+    int have_ref = 0;
+    double ref_d = 0.0;
+    int64_t ref_n = 0;
+    double dms[CORR_MAX_CH];
+    int ok[CORR_MAX_CH];
+    for (int ch = 0; ch < rx->cfg.max_ch; ch++) {
+        ok[ch] = 0;
+        trk_ch_t *c = &rx->ch[ch];
+        rx_nco_t *n = &rx->nco[ch];
+        if (c->state == TRK_OFF || n->sec_len > 0 || !n->have_dump || sys_of(c->sig) != GNSS_SYS_GPS) {
+            continue;
+        }
+        const gps_eph_t *e = &rx->eph[GNSS_SYS_GPS][c->prn];
+        if (!e->valid) {
+            continue;
+        }
+        double t_sv, dop, el;
+        predict_at(rx, st, e, t_rx, &t_sv, &dop, &el, have_fix ? NULL : n->los);
+        if (!have_fix) {
+            n->have_los = 1;
+        }
+        if (!c->locked_once || c->t_tracked < 1.0f || c->cn0_lin < 1000.0f) {
+            continue;  /* the code must sit on its peak: a confirmed PLL, a second, 30 dB-Hz */
+        }
+        const double chips = ((double)n->last_code_phase + (double)(t - n->last_t) * (double)n->cur_code) / CODE_ONE;
+        dms[ch] = (t_sv - chips / 1.023e6) * 1000.0 - (double)c->period;
+        ok[ch] = 1;
+        if (!have_fix && n->ms_valid && !have_ref) {
+            have_ref = 1;
+            ref_d = dms[ch];
+            ref_n = n->n1;
+        }
+    }
+    for (int ch = 0; ch < rx->cfg.max_ch; ch++) {
+        if (!ok[ch]) {
+            continue;
+        }
+        rx_nco_t *n = &rx->nco[ch];
+        int64_t n1;
+        if (have_fix) {
+            n1 = llround(dms[ch]);
+        } else {
+            if (n->ms_valid) {
+                continue;
+            }
+            if (!have_ref) {
+                have_ref = 1;
+                ref_d = dms[ch];
+                ref_n = llround(dms[ch]);
+            }
+            double dd = dms[ch] - ref_d;
+            if (dd > 0.5 * week_ms) {
+                dd -= week_ms;
+            } else if (dd < -0.5 * week_ms) {
+                dd += week_ms;
+            }
+            n1 = ref_n + llround(dd);
+        }
+        if (!n->ms_valid || n->n1 != n1) {
+            n->n1 = n1;
+            n->t_code = 1e-3;
+            n->ms_valid = 1;
+            rx->n_ms_fixed++;
+        }
+    }
+
+    /* The vote: each decoded message's offset from the resolved millisecond. */
+    int64_t dn[CORR_MAX_CH];
+    int vch[CORR_MAX_CH], nv = 0;
+    for (int ch = 0; ch < rx->cfg.max_ch; ch++) {
+        const rx_nco_t *n = &rx->nco[ch];
+        const lnav_t *l = &rx->nav[ch];
+        if (rx->ch[ch].state == TRK_OFF || n->sec_len > 0 || !n->ms_valid || !l->synced) {
+            continue;
+        }
+        const int64_t wk = (int64_t)week_ms;
+        int64_t d = (llround(l->sf_tow * 1000.0) + 1 - (int64_t)l->sf_period - n->n1) % wk;
+        d = d >= wk / 2 ? d - wk : (d < -wk / 2 ? d + wk : d);
+        dn[nv] = d;
+        vch[nv++] = ch;
+    }
+    int64_t mode = 0;
+    int n_mode = 0, n_zero = 0;
+    for (int i = 0; i < nv; i++) {
+        int cnt = 0;
+        for (int j = 0; j < nv; j++) {
+            cnt += dn[j] == dn[i];
+        }
+        n_zero += dn[i] == 0;
+        if (cnt > n_mode) {
+            n_mode = cnt;
+            mode = dn[i];
+        }
+    }
+    /* A coarse time takes two agreeing satellites; a settled one, three and twice those
+     * against (a seed that claimed better than it was). */
+    if (mode != 0 && (rx->time_coarse ? n_mode >= 2 && n_mode > n_zero : n_mode >= 3 && n_mode > 2 * n_zero)) {
+        for (int ch = 0; ch < rx->cfg.max_ch; ch++) {
+            if (rx->nco[ch].ms_valid && rx->nco[ch].sec_len == 0) {
+                rx->nco[ch].n1 += mode;
+            }
+        }
+        rx->clk_t = fmod(rx->clk_t + 1e-3 * (double)mode + 604800.0, 604800.0);
+        rx->anchor_ms += mode;
+        rx->retimed = 1;  /* (a pilot started on the old time has its code and secondary code out) */
+        for (int i = 0; i < nv; i++) {
+            dn[i] -= mode;
+        }
+        rx->time_coarse = 0;
+        rx->t_anchor = t;
+    } else if (rx->time_coarse && mode == 0 && n_mode >= 2) {
+        rx->time_coarse = 0;  /* the seed's millisecond was right */
+        rx->t_anchor = t;
+    }
+    if (rx->time_coarse) {
+        return;
+    }
+    for (int i = 0; i < nv; i++) {
+        if (dn[i] == 0) {
+            continue;
+        }
+        const int ch = vch[i];
+        trk_ch_t *c = &rx->ch[ch];
+        lnav_t *l = &rx->nav[ch];
+        const int prn = l->prn, ref = rx->week_ref;
+        lnav_init(l, prn);
+        l->week_ref = ref;
+        c->bit_sync = 0;
+        memset(c->hist, 0, sizeof(c->hist));
+        c->n_trans = 0;
+        rx->n_nav_reset++;
+    }
 }
 
 void rx_set_accel(rx_t *rx, const double acc_ecef[3], int valid)
@@ -186,6 +370,13 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
         touched[ch] = 1;
     }
 
+    if (rx->retimed) {
+        for (int ch = 0; ch < rx->cfg.max_ch; ch++) {
+            if (rx->ch[ch].prn != 0 && rx->nco[ch].sec_len > 0) {
+                rx->ch[ch].state = TRK_OFF;
+            }
+        }
+    }
     int nc = 0;
     for (int ch = 0; ch < rx->cfg.max_ch && nc < ncap; ch++) {
         trk_ch_t *c = &rx->ch[ch];
@@ -237,6 +428,17 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
             n->pend_carr[n->npend] = cw;
             n->pend_code[n->npend] = kw;
             n->npend++;
+        }
+    }
+    if (rx->retimed) {
+        /* Once every pilot is stopped, the holds their failures set on the old time go too. */
+        int left = 0;
+        for (int ch = 0; ch < rx->cfg.max_ch; ch++) {
+            left += rx->ch[ch].prn != 0 && rx->nco[ch].sec_len > 0;
+        }
+        if (!left) {
+            memset(rx->aid_hold, 0, sizeof(rx->aid_hold));
+            rx->retimed = 0;
         }
     }
     return nc;
@@ -335,6 +537,7 @@ int rx_acquire(rx_t *rx, uint64_t t_now, uint64_t t0, const float *iq, size_t n,
 
 int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
 {
+    resolve_ms(rx, t);
     int no = 0;
     double t_tx[CORR_MAX_CH];  /* in GPS time */
     for (int ch = 0; ch < rx->cfg.max_ch && no < max; ch++) {
@@ -359,12 +562,22 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
              * began at code period n1 + c->period of the week. */
             tt = (double)(n->n1 + (int64_t)c->period) * n->t_code + chips / 1.023e6;
         } else {
-            if (!l->synced) {
-                continue;
+            /* The period opened by the last dump is c->period + 1. Its start: from the seed's or a
+             * fix's millisecond when resolved (resolve_ms keeps the message honest), else from
+             * the navigation message, whole periods since its subframe began. */
+            int64_t n1;
+            if (n->ms_valid) {
+                n1 = n->n1;
+            } else if (l->synced && !rx->time_coarse) {
+                n1 = llround(l->sf_tow * 1000.0) + 1 - (int64_t)l->sf_period;
+            } else {
+                continue;  /* (a message's time is true; a coarse receiver's is offset) */
             }
-            /* The period opened by the last dump is c->period + 1; whole periods since the subframe began. */
-            int64_t periods = (int64_t)c->period + 1 - (int64_t)l->sf_period;
-            tt = l->sf_tow + (double)periods * 1e-3 + chips / 1.023e6;
+            tt = (double)(n1 + (int64_t)c->period) * 1e-3 + chips / 1.023e6;
+            tt = fmod(tt, 604800.0);
+            if (tt < 0.0) {
+                tt += 604800.0;
+            }
         }
         if (tt >= 604800.0) {
             tt -= 604800.0;
@@ -497,8 +710,10 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
         m[nm].sigma_dop = rx->cfg.pvt_weights ? (float)pvt_sigma_dop(obs[k].cn0, locked, bw) : 1.0f;
         nm++;
     }
-    const double *pos0 = rx->sol.valid ? rx->sol.pos : NULL;
-    const int fix = pvt_solve(m, nm, rx->eph, &rx->iono, &rx->pvt_opt, pos0, sol);
+    const double *pos0 = rx->sol.valid ? rx->sol.pos : (rx->seed_valid ? rx->seed.pos : NULL);
+    pvt_opt_t opt = rx->pvt_opt;
+    opt.coarse_time = rx->time_coarse;
+    const int fix = pvt_solve(m, nm, rx->eph, &rx->iono, &opt, pos0, sol);
     if (rx->cfg.adapt_tau_s > 0.0f && rx->sol.valid && fix != -1) {
         /* Learn each satellite's residual spread against its model sigma. One left out by the
          * test counts with the residual it was left out for. */
@@ -553,9 +768,9 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
 
 /* What the fix predicts for satellite e at GPS time t_rx (s of week, true): the transmit time on
  * the satellite's clock (its system's time), the Doppler (Hz) and the elevation (rad). */
-static void predict(const rx_t *rx, const gps_eph_t *e, double t_rx, double *t_sv, double *dop, double *el)
+static void predict_at(const rx_t *rx, const pvt_sol_t *s, const gps_eph_t *e, double t_rx, double *t_sv, double *dop,
+                       double *el, double los[3])
 {
-    const pvt_sol_t *s = &rx->sol;
     const double toff = e->sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0;
     double tau = 0.075, pos[3], vel[3], clk = 0.0, c1, p1[3], t_sys = t_rx;
     double az = 0.0, d[3] = {0.0, 0.0, 0.0}, rho = 1.0;
@@ -594,12 +809,20 @@ static void predict(const rx_t *rx, const gps_eph_t *e, double t_rx, double *t_s
     if (*t_sv < 0.0) {
         *t_sv += 604800.0;
     }
+    if (los) {
+        memcpy(los, u, sizeof(u));
+    }
+}
+
+static void predict(const rx_t *rx, const gps_eph_t *e, double t_rx, double *t_sv, double *dop, double *el)
+{
+    predict_at(rx, &rx->sol, e, t_rx, t_sv, dop, el, NULL);
 }
 
 int rx_aid(rx_t *rx, uint64_t t_now, corr_cmd_t *cmds, int ncap)
 {
-    if (!rx->sol.valid || !rx->clk_valid || t_now < rx->next_aid) {
-        return 0;
+    if (!rx->sol.valid || !rx->clk_valid || rx->time_coarse || t_now < rx->next_aid) {
+        return 0;  /* (a coarse time puts a pilot's code whole milliseconds out) */
     }
     rx->next_aid = t_now + (uint64_t)llround(rx->cfg.fs);
     const uint64_t t_start = t_now + (uint64_t)llround(rx->cfg.fs * 1e-3);

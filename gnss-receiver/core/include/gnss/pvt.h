@@ -49,6 +49,8 @@ typedef struct {
     int nexcl;
     double chi2, chi2_lim;
     int vel_valid;
+    double time_offset;       /* coarse_time: how late the transmit times ran (s), solved */
+    double time_sigma;        /* and its formal 1-sigma (s), from the weights */
 } pvt_sol_t;
 
 typedef struct {
@@ -60,6 +62,11 @@ typedef struct {
     int raim;
     double raim_pfa;          /* false-alarm probability per epoch */
     int raim_max_excl;
+    /* Coarse-time navigation: the transmit times may all run late by one unknown offset (the
+     * receiver's time not yet known, its milliseconds resolved from a seed): solved as one more
+     * unknown whose partial is each satellite's own range rate, and the satellites then placed
+     * at the times it gives. Needs one more measurement. */
+    int coarse_time;
 } pvt_opt_t;
 
 /*

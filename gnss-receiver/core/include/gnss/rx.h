@@ -100,10 +100,12 @@ typedef struct {
     int hatch_inv;
     float res_var;              /* its squared normalized pseudorange residual, low-passed (0: none yet) */
     uint64_t res_t;             /* and the sample it was last updated at */
-    /* Pilot channels (aided starts, rx_aid): code period, the week's count of code periods at
-     * the epoch that opened period 1, and the secondary code, one chip per period. */
+    /* Pilot channels (aided starts, rx_aid), and GPS channels timed from the seed (ms_valid):
+     * code period, the week's count of code periods at the epoch that opened period 1, and the
+     * secondary code, one chip per period. */
     double t_code;
     int64_t n1;
+    int ms_valid;               /* GPS: n1 resolved from the seed or a fix (not the navigation message) */
     uint16_t sec_len;
     uint8_t sec[BDS_B1C_SEC_LEN];
 } rx_nco_t;
@@ -135,6 +137,21 @@ typedef struct {
     double clk_t;
     uint64_t clk_n;
     pvt_sol_t sol;
+    /* The flight computer's prior (rx_set_seed): a position and time, held as a solution-shaped
+     * state for prediction until the first fix. */
+    int seed_valid;
+    pvt_sol_t seed;
+    double seed_pos_sigma, seed_tow_sigma;
+    /* Coarse time: the seed's time was not good to a fraction of a millisecond, so the receiver
+     * time and every seed-resolved transmit time share an unknown whole-millisecond offset. Fixes
+     * solve it (pvt_opt_t.coarse_time) until two satellites' navigation messages agree on it;
+     * then everything moves by it together (anchor_ms, at sample t_anchor). */
+    int time_coarse;
+    int64_t anchor_ms;
+    uint64_t t_anchor;
+    int retimed;                    /* the time moved: pilots started on the old one stop, holds clear */
+    uint32_t n_ms_fixed;            /* GPS channels whose millisecond the seed or a fix resolved */
+    uint32_t n_nav_reset;           /* channels whose navigation-message time the rest contradicted */
     pvt_opt_t pvt_opt;
     int boost;                      /* the boost profile is the target */
     trk_profile_t prof;             /* the loops in force, moving toward the target (trk_profile_step) */
@@ -158,6 +175,22 @@ void rx_set_accel(rx_t *rx, const double acc_ecef[3], int valid);
 /* A full GPS week near today's (the flight computer's clock, a file's date): the navigation
  * message's 10-bit week resolves to the nearest. Default LNAV_WEEK_REF (2019-2038). */
 void rx_set_week_ref(rx_t *rx, int week);
+
+/*
+ * The flight computer's prior: an ECEF position (m), and the GPS week and time of week (s) at
+ * sample t, with how far each may be off (1-sigma, m and s). With it the receiver:
+ *   - times each GPS satellite from its code phase alone, resolving the millisecond the code
+ *     leaves open from the predicted range, so it fixes without waiting for the navigation
+ *     message (the position must be good to tens of km);
+ *   - when the time is not good to a fraction of a millisecond, carries its whole-millisecond
+ *     error as one more unknown in the fix (coarse time, five satellites or more) until the
+ *     navigation messages settle it;
+ *   - aids the loops from launch, the lines of sight coming from the seed until the first fix;
+ *   - checks each satellite's navigation-message time against the rest, and restarts the bit
+ *     sync of one that is whole milliseconds out.
+ */
+void rx_set_seed(rx_t *rx, const double pos_ecef[3], double pos_sigma_m, int week, double tow,
+                 double tow_sigma_s, uint64_t t);
 
 /* The 1 ms tick at sample t_now. Returns the number of commands written. */
 int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *cmds, int ncap);

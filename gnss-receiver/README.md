@@ -123,12 +123,14 @@ How each stage works:
   - A whole subframe that arrived before that confirmation is held, and its data is used once
     confirmed.
   - The receiver also drops any satellite whose time disagrees with the others' by more than 0.1 s.
+  - Where a seed or a fix has resolved the milliseconds, the decoded message times vote against
+    them; see [Seeded starts and coarse time](#seeded-starts-and-coarse-time).
   - The 10-bit week resolves against a reference week (`rx_set_week_ref`; gnssrx takes it from the
     file's date).
 - **Observables and PVT:** observables come from the exact integer NCO state.
   - Doppler is the NCO's mean frequency over the last 20 ms, moved forward by the loop's rate.
-  - Pseudoranges are carrier-smoothed (Hatch, 100 s, `rx_cfg_t.hatch_s`) while the PLL holds,
-    and restart when it lets go.
+  - Pseudoranges are carrier-smoothed (Hatch, 100 s, `rx_cfg_t.hatch_s`; `gnssrx --hatch S`, 0
+    off) while the PLL holds, and restart when it lets go.
   - PVT is weighted least squares with Sagnac, Klobuchar and Saastamoinen corrections, plus
     Doppler velocity. It tests its own residuals; see [The fix's weights and residual test](#the-fixs-weights-and-residual-test).
 
@@ -224,6 +226,60 @@ Through the boosts (`runs/m7c`, `runs/m7g`; 54 runs, compared with the same runs
 - **Velocity at the edge.** IMU + 20 Hz loops at 29.3 dB-Hz: 0.80 → 0.42 m/s rms (hotshot) and
   0.79 → 0.39 (traveler). The 50 Hz fallback at 31.4 dB-Hz: 2.2 → 1.5 and 1.8 → 1.2 m/s.
 - At 33.4 dB-Hz and above, the aided runs were already clean, and they stay the same.
+
+### Seeded starts and coarse time
+
+The flight computer can hand the receiver a position and a time (`rx_set_seed`), each with a
+1-sigma (owner, 2026-10-01). With it:
+- **Each GPS satellite is timed from its code phase alone.** The code leaves the millisecond open;
+  the predicted range settles it. The rounding is done on differences against a reference
+  satellite, so an error in the seed's time, common to all of them, cancels. The position must be
+  good to tens of km.
+- **A time good to 0.125 ms** (prediction errors included) gives the absolute millisecond. The fix
+  is ordinary from the first epoch, and Galileo and BeiDou start aided at once.
+- **A coarser time** leaves every transmit time, and the receiver's clock, one whole number of
+  milliseconds out together. The fix then solves that offset as one more unknown
+  (`pvt_opt_t.coarse_time`, five satellites or more). The unknown's partial is each satellite's own
+  range rate, and the satellites are placed at the time it gives. Aided starts wait, since a
+  pilot's code would be whole milliseconds out.
+- **The navigation messages settle it.** When two satellites' decoded times agree on an offset from
+  the resolved milliseconds, and outnumber those that agree with them, every channel and the clock
+  move by it; the pseudoranges stay as they are. Since all satellites' subframes arrive together,
+  the second comes with the first.
+- **A seed that claimed better than it had** is overruled by three satellites agreeing. Galileo
+  restarts once the time moves.
+- **Once settled,** a satellite whose message time still disagrees has its bit sync wrong (it
+  decodes, shifted), and it restarts.
+- **The offset is not rounded from the fixes.** Its sd is 0.25 ms on the static file, but it reads
+  2–5 ms high in flight (below).
+
+`gnssrx --prior ERR_M,ERR_MS[,SIGMA_MS]` seeds from the manifest's static truth and start time,
+moved by those errors. `pvt.csv` records `coarse` and `time_off_ms` per fix, and the run ends with
+a line on when the time settled and by how much.
+
+The SignalSim static file, GPS + Galileo, orbits preloaded (`runs/seed`):
+
+| Seed | First fix | Time settled | Worst error before then |
+|---|---|---|---|
+| None | 13.3 s | — | — |
+| True time | 1.1 s | — (Galileo in at 1.5 s) | 1.5 m |
+| 0.3 ms out, claimed 10 µs | 1.1 s | — (the rounding absorbs it) | 1.5 m |
+| 5 ms or 0.61 s out | 1.1 s, 122 coarse-time fixes | 13.3 s, moved −5 or −610 ms | 1.4 m |
+| 3 ms out, claimed 10 µs | 1.1 s | 13.3 s, moved −3 ms | 2.8 m; Galileo back at 14.5 s |
+| 5 ms out, orbits not preloaded | 36.1 s (the ephemerides first) | at the first fix | — |
+
+From 20 s on, the seeded runs with preloaded orbits match the unseeded one to a few cm: sd E
+0.02–0.04, N 0.03–0.04, U 0.03–0.05 m, against 0.02, 0.03 and 0.07. The solved offset starts
+within 0.8 ms of the truth and is within 0.15 ms by 6 s.
+
+On PSAS's flight (`runs/psas81`; below), with the 50 Hz boost loops:
+- **First fix at T+2.1 s** with a seed, true time or the TeleMetrum's (0.53 s early), against
+  T+25.9 s without.
+- **The coarse-time fixes** sit within 2.0 m of the true-time fixes (median; 95 % 7.2 m, worst
+  16 m, at the join). The time settled at T+25.8 s, moved +530 ms.
+- **The offset reads 2–5 ms high after the join**, smoothing on or off: about 2 m of error that
+  follows each satellite's range rate, from the real sky and antenna.
+- **The seed found the files' join 80 ms off** (below).
 
 ## The FPGA correlator model (milestone 4)
 
@@ -607,16 +663,22 @@ file:
 
 Without the inversion fixed, carrier-aided code tracking runs the wrong way.
 
-**The gap between the two files**, from six satellites' code phase, is a whole number of
-milliseconds plus 296 samples (0.0723 ms), against the 73.166 ms the file names imply. For the
-whole milliseconds:
-- the receiver's C/N0 estimate, which needs its blocks inside data bits, runs smoothly through a
-  1 ms join (PSAS's README says "about 1 ms") and dips at 72, 73 and 74 ms;
-- a direct bit-edge search was too noisy to decide.
+**The gap between the two files is 81 ms + 296 samples** (81.072 ms), against the 73.166 ms the
+file names imply:
+- **The 296 samples** (0.0723 ms) come from six satellites' code phase.
+- **The bit alignment narrows the whole milliseconds** to 1, 21, 41, 61 or 81. The receiver's C/N0
+  estimate, which needs its blocks inside data bits, runs smoothly through any of those and dips
+  at 72, 73 and 74 ms. PSAS's README says "about 1 ms", and the first join used 1 ms.
+- **Coarse time settled the 80.** The first file alone, seeded with the time the second file's
+  fixes give (carried back across a 1 ms join), solves its offset at +78.7 ± 0.9 ms. Its plain fixes
+  fail the residual test, or come out 4 m rms on 5–6 satellites. With the start 80 ms earlier the
+  offset reads −1.3 ms, and all 25 fixes pass at 1.1 m rms on 7–9 satellites.
+- **On the 1 ms join** the carrier also missed 80 ms of range change. The smoothed pseudoranges
+  carried that through the second file, decaying over 20 s.
 
-`PSAS_L12_cond_g1.C8` joins them at 1 ms + 296 samples. Tracking carries through the join.
+`PSAS_L12_cond_g81.C8` joins them at 81 ms + 296 samples of zeros, and the loops coast through.
 
-**What our receiver does with it** (`gnssrx PSAS_L12_cond_g1.C8 --if 0 --preload-gps --acq-interval 1`;
+**What our receiver does with it** (`gnssrx PSAS_L12_cond_g81.C8 --if 0 --preload-gps --acq-interval 1`;
 `--if 0` because the 4 MHz-wide band would alias at the plan's IF):
 - **On the pad the antenna saw almost nothing.** A 200 ms search reads 1.4–2.8 against a noise
   floor of 1.35. At liftoff every satellite comes up about 10 dB within a second.
@@ -625,10 +687,11 @@ whole milliseconds:
   flicker in and out of lock.
 - **C/N0 falls 4–6 dB at the join of the files.** The second file's interference is stronger:
   17 bins excised against 7.5.
-- **The first fix comes at T+25.7 s** with the boost loops kept for the whole flight; the first
-  confirmed time is at T+19.7 s.
-- **Near apogee the height reads about 230 m above the barometric altimeter.** The accelerometer's
-  integration gives 5,091 m. A barometer reads low on a hot day by about that much.
+- **Without a seed, the first fix comes at T+25.9 s** with the boost loops kept for the whole
+  flight; the first confirmed time is at T+19.8 s.
+- **Near apogee the height reads about 270 m above the barometric altimeter** (5,053 m above the
+  pad against its 4,781). The accelerometer's integration gives 5,091 m. A barometer reads low on
+  a hot day by about that much.
 - **The vertical velocity follows the TeleMetrum's integrated accelerometer.**
 
 **What holds the fix back is time.** The receiver gets time only from the navigation message,
@@ -637,12 +700,10 @@ which needs two clean subframe headers 6 s apart. That is rare in flight.
 **IMU aiding needs a line of sight**, which needs a fix. With the pad blocked, neither came until
 T+25 s.
 
-The owner chose (2026-10-01) to let the flight computer seed position and time. With a seed, the
-receiver can:
-- fix right after acquisition, by resolving each satellite's millisecond from the seed;
-- aid the loops from launch;
-- check each satellite's decoded time and bit sync against the seed. G24 here was 7 ms off,
-  its bit sync off by 7 ms; the residual test refused those fixes rather than report them.
+The owner chose (2026-10-01) to let the flight computer seed position and time; see
+[Seeded starts and coarse time](#seeded-starts-and-coarse-time). With the seed the first fix
+comes at T+2.1 s, even from the TeleMetrum's time, 0.53 s early. One or two satellites per run
+decode a time the rest contradict (their bit sync off by whole milliseconds), and restart.
 
 **Also fixed for it:**
 - GPS ephemerides can be preloaded (`--preload-gps`), as the flight computer could hand them over.
@@ -651,9 +712,9 @@ receiver can:
 - RINEX 2 broadcast files (the IGS's for that day) load in C and Python.
 - PSAS's packed 2-bit format reads directly (`format = max2769_2bit`).
 
-**Next** (owner, 2026-10-01): the seed; then how much a narrowband interferer costs our 2-bit chain,
-and what an FPGA notch or excision stage would buy, studied in software before anything goes to
-the hardware session.
+**Next** (owner, 2026-10-01): how much a narrowband interferer costs our 2-bit chain, and what an
+FPGA notch or excision stage would buy, studied in software before anything goes to the hardware
+session.
 
 ## Galileo E1 and BeiDou B1C (milestone 6)
 

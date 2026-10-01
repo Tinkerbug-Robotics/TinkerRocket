@@ -57,6 +57,7 @@ static void usage(void)
             "                            as the P4's processing would deliver them\n"
             "  --acq-threshold M         acquisition detection threshold\n"
             "  --acq-interval S          seconds between searches for satellites not in a channel (default 5)\n"
+            "  --hatch S                 carrier smoothing of the pseudoranges over S seconds (default 100; 0 off)\n"
             "  --iono A0,A1,A2,A3,B0,B1,B2,B3   preload Klobuchar parameters (default: the manifest's)\n"
             "  --no-iono --no-tropo      leave the atmosphere uncorrected\n"
             "  --no-raim                 skip the fix's residual test\n"
@@ -80,7 +81,12 @@ static void usage(void)
             "  --nav FILE | --no-nav     RINEX navigation file to preload Galileo and BeiDou ephemerides\n"
             "                            from, for aided starts (default: the manifest's nav)\n"
             "  --preload-gps             preload GPS ephemerides from it too, as the flight computer could\n"
-            "                            hand them over (decoded ones replace them)\n");
+            "                            hand them over (decoded ones replace them)\n"
+            "  --prior ERR_M,ERR_MS[,SIGMA_MS]\n"
+            "                            seed the receiver (rx_set_seed) at the run's start with the manifest's\n"
+            "                            static truth moved ERR_M east and its start_gpst ERR_MS late, as the\n"
+            "                            flight computer would from the pad and its clock; it claims the time\n"
+            "                            good to SIGMA_MS (default |ERR_MS|, at least 0.001)\n");
     src_usage();
 }
 
@@ -278,8 +284,9 @@ int main(int argc, char **argv)
     src_default_opts(&so);
     const char *out_dir = "runs/gnssrx", *corr_arg = NULL, *vec_dir = NULL, *truth_arg = NULL;
     double meas_hz = 10.0, vec_ms = 50.0, lut_amp = 0.0, p4_latency_us = 0.0;
-    float acq_thr = -1.0f, acq_interval = -1.0f;
-    int no_iono = 0, no_tropo = 0, lut_bits = 0, no_raim = 0, pvt_unweighted = 0, preload_gps = 0;
+    float acq_thr = -1.0f, acq_interval = -1.0f, hatch_s = -1.0f;
+    int no_iono = 0, no_tropo = 0, lut_bits = 0, no_raim = 0, pvt_unweighted = 0, preload_gps = 0, seed = 0;
+    double seed_err_m = 0.0, seed_err_ms = 0.0, seed_sigma_ms = -1.0;
     double pvt_adapt_tau = -1.0;
     gps_iono_t iono_aid;
     memset(&iono_aid, 0, sizeof(iono_aid));
@@ -318,8 +325,16 @@ int main(int argc, char **argv)
             acq_thr = (float)atof(argv[++i]);
         } else if (!strcmp(a, "--acq-interval") && v) {
             acq_interval = (float)atof(argv[++i]);
+        } else if (!strcmp(a, "--hatch") && v) {
+            hatch_s = (float)atof(argv[++i]);
         } else if (!strcmp(a, "--preload-gps")) {
             preload_gps = 1;
+        } else if (!strcmp(a, "--prior") && v) {
+            if (sscanf(argv[++i], "%lf,%lf,%lf", &seed_err_m, &seed_err_ms, &seed_sigma_ms) < 2) {
+                fprintf(stderr, "gnssrx: --prior takes POS_ERR_M,TIME_ERR_MS[,SIGMA_MS]\n");
+                return 2;
+            }
+            seed = 1;
         } else if (!strcmp(a, "--no-raim")) {
             no_raim = 1;
         } else if (!strcmp(a, "--pvt-unweighted")) {
@@ -453,6 +468,9 @@ int main(int argc, char **argv)
     if (acq_thr > 0.0f) {
         rc.acq_threshold = acq_thr;
     }
+    if (hatch_s >= 0.0f) {
+        rc.hatch_s = hatch_s;
+    }
     if (acq_interval > 0.0f) {
         rc.acq_interval_s = acq_interval;
     }
@@ -485,6 +503,24 @@ int main(int argc, char **argv)
         if (gpst_parse(src.meta.start_gpst, &t0) == 0) {
             rx_set_week_ref(rx, (int)floor(t0 / 604800.0));
         }
+    }
+    if (seed) {
+        double t0, pos[3], la, lo;
+        if (gpst_parse(src.meta.start_gpst, &t0) != 0 || !static_truth(src.meta.truth, pos, &la, &lo)) {
+            fprintf(stderr, "gnssrx: --prior needs the manifest's start_gpst and a static truth\n");
+            return 2;
+        }
+        pos[0] += -sin(lo) * seed_err_m;  /* east */
+        pos[1] += cos(lo) * seed_err_m;
+        const double t = t0 + so.start_s + 1e-3 * seed_err_ms;
+        const int wk = (int)floor(t / 604800.0);
+        if (seed_sigma_ms < 0.0) {
+            seed_sigma_ms = fabs(seed_err_ms) > 0.001 ? fabs(seed_err_ms) : 0.001;
+        }
+        rx_set_seed(rx, pos, fabs(seed_err_m) > 100.0 ? fabs(seed_err_m) : 100.0, wk, t - wk * 604800.0,
+                    1e-3 * seed_sigma_ms, 0);
+        printf("gnssrx: seeded with the truth %.0f m east and the time %+.3f ms out (claimed good to %.3f ms%s)\n",
+               seed_err_m, seed_err_ms, seed_sigma_ms, rx->time_coarse ? ": coarse time" : "");
     }
     rx->pvt_opt.use_tropo = !no_tropo && !src.meta.tropo_none;
     /* Galileo and BeiDou ephemerides from the generator's RINEX, as the flight computer could
@@ -522,7 +558,7 @@ int main(int argc, char **argv)
                           "t_s,rx_tow,prn,pr_m,adr_cyc,dop_hz,cn0,lock_s,el_deg,resid_m,pr_raw_m,excl");
     FILE *fpvt = open_csv(out_dir, "pvt.csv",
                           "t_s,rx_tow,week,lat_deg,lon_deg,h_m,x,y,z,vx,vy,vz,clk_bias_m,clk_drift_mps,nsat,pdop,"
-                          "resid_rms,e_m,n_m,u_m,nexcl,chi2,chi2_lim,vel_valid");
+                          "resid_rms,e_m,n_m,u_m,nexcl,chi2,chi2_lim,vel_valid,coarse,time_off_ms");
     FILE *feph = open_csv(out_dir, "eph.csv",
                           "t_s,prn,week,toe,toc,iode,iodc,health,sqrt_a,e,i0,omega0,omega,m0,delta_n,idot,"
                           "omega_dot,cuc,cus,crc,crs,cic,cis,af0,af1,af2,tgd");
@@ -574,8 +610,11 @@ int main(int argc, char **argv)
         for (int k = 0; k < so.nsteps; k++) {
             fprintf(fini, "cn0_at = %.3f:%.2f\n", so.step_t[k], so.step_cn0[k]);
         }
-        fprintf(fini, "p4_latency_us = %.1f\ncmd_lead = %u\nloops_quiet = %s\nloops_boost = %s\n", p4_latency_us,
-                rc.cmd_lead, q, b);
+        fprintf(fini, "p4_latency_us = %.1f\ncmd_lead = %u\nloops_quiet = %s\nloops_boost = %s\nhatch_s = %g\n",
+                p4_latency_us, rc.cmd_lead, q, b, (double)rc.hatch_s);
+        if (seed) {
+            fprintf(fini, "prior = %g,%g,%g\n", seed_err_m, seed_err_ms, seed_sigma_ms);
+        }
         if (boost0 < boost1) {
             fprintf(fini, "boost_at = %.3f,%.3f\n", boost0, boost1);
         }
@@ -603,7 +642,9 @@ int main(int argc, char **argv)
     }
     double wall0 = now_s();
     double sum_e[3] = {0}, sum_e2[3] = {0};
-    long n_fix = 0, n_withheld = 0, n_excl_fix = 0, n_vel_fail = 0;
+    long n_fix = 0, n_withheld = 0, n_excl_fix = 0, n_vel_fail = 0, n_coarse_fix = 0;
+    double t_first_fix = 0.0;
+    int t_first_fix_set = 0;
     for (;;) {
         if (two_bit) {
             if (src_read_codes(&src, cblk, spms) < spms) {
@@ -727,6 +768,7 @@ int main(int argc, char **argv)
             double ts = (double)t_now / fs;
             pvt_sol_t sol;
             int no = rx_measure(rx, t_now, obs, CORR_MAX_CH, &sol);
+            const int coarse_fix = rx->time_coarse;  /* as the solve had it (an anchor comes first) */
             double rtow = rx->clk_valid ? rx_time(rx, t_now) : 0.0;
             for (int k = 0; k < no && rx->clk_valid; k++) {
                 /* prn: 100 x system + PRN (GPS 0, Galileo 1, BeiDou 2), so GPS rows read as before. */
@@ -746,11 +788,16 @@ int main(int argc, char **argv)
                     n_fix++;
                 }
                 fprintf(fpvt, "%.3f,%.9f,%d,%.9f,%.9f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%d,%.3f,%.4f,%.4f,%.4f,%.4f,"
-                              "%d,%.2f,%.2f,%d\n",
+                              "%d,%.2f,%.2f,%d,%d,%.4f\n",
                         ts, rx_time(rx, t_now), rx->week, sol.lat * 180.0 / PI, sol.lon * 180.0 / PI, sol.h,
                         sol.pos[0], sol.pos[1], sol.pos[2], sol.vel[0], sol.vel[1], sol.vel[2], sol.clk_bias,
                         sol.clk_drift, sol.nsat, sol.pdop, sol.resid_rms, e[0], e[1], e[2], sol.nexcl, sol.chi2,
-                        sol.chi2_lim, sol.vel_valid);
+                        sol.chi2_lim, sol.vel_valid, coarse_fix, 1e3 * sol.time_offset);
+                n_coarse_fix += coarse_fix;
+                if (!t_first_fix_set) {
+                    t_first_fix = ts;
+                    t_first_fix_set = 1;
+                }
                 n_excl_fix += sol.nexcl > 0;
                 n_vel_fail += !sol.vel_valid;
             } else if (sol.chi2_lim > 0.0 && sol.chi2 > sol.chi2_lim) {
@@ -839,6 +886,22 @@ int main(int argc, char **argv)
     }
     printf("  residual test: %ld fixes left a measurement out, %ld withheld; velocity failed it on %ld\n",
            n_excl_fix, n_withheld, n_vel_fail);
+    if (t_first_fix_set) {
+        printf("  first fix at %.3f s", t_first_fix);
+        if (seed) {
+            printf("; %ld coarse-time fixes; ", n_coarse_fix);
+            if (rx->time_coarse) {
+                printf("the navigation messages never settled the time");
+            } else if (rx->t_anchor) {
+                printf("time settled at %.3f s by the navigation messages, moved %+lld ms", (double)rx->t_anchor / fs,
+                       (long long)rx->anchor_ms);
+            } else {
+                printf("the seed's time was good to start with");
+            }
+            printf("; %u milliseconds resolved, %u messages restarted", rx->n_ms_fixed, rx->n_nav_reset);
+        }
+        printf("\n");
+    }
     fclose(ftrk);
     if (fimu) {
         fclose(fimu);
