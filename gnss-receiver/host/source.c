@@ -29,6 +29,13 @@ void src_usage(void)
             "  --cn0 DBHZ | --noise-sigma X  added noise (C/N0 needs the manifest's sig_power)\n"
             "  --cn0-at S:DBHZ             C/N0 from file second S on (repeatable, with --cn0)\n"
             "  --seed N --if-order N --if-bw HZ --mag-density D --decim subsample|sum4\n"
+            "  --jam cw:F_HZ:JNR_DB | nb:F_HZ:JNR_DB:BW_HZ | chirp:F_HZ:JNR_DB:SPAN_HZ:PERIOD_S\n"
+            "                              interference ahead of the IF filter (repeatable, up to 4); F from\n"
+            "                              L1, JNR against the noise in the IF bandwidth (needs --cn0 or\n"
+            "                              the manifest's noise_density); --jam-at S starts it S into the run\n"
+            "  --mitig none | anf[:N[:K[:MU]]] | fde[:N[:K[:TAU_S]]]\n"
+            "                              a stage on the 2-bit samples: adaptive notches or frequency-\n"
+            "                              domain excision, requantized to 2 bits (host/mitig.h)\n"
             "  --dc auto|none|I,Q --carrier-fix HZ --fs HZ --fc HZ --manifest PATH\n");
 }
 
@@ -96,6 +103,17 @@ int src_parse_opt(src_opts_t *o, int argc, char **argv, int *i)
         o->fe.mag_density = atof(VAL());
     } else if (!strcmp(a, "--decim")) {
         o->fe.decim_mode = !strcmp(VAL(), "sum4") ? DECIM_SUM4 : DECIM_SUBSAMPLE;
+    } else if (!strcmp(a, "--jam")) {
+        if (o->fe.n_jam >= FE_MAX_JAM || jam_parse(VAL(), &o->fe.jam[o->fe.n_jam]) != 0) {
+            return -1;
+        }
+        o->fe.n_jam++;
+    } else if (!strcmp(a, "--jam-at")) {
+        o->fe.jam_t0_s = atof(VAL());
+    } else if (!strcmp(a, "--mitig")) {
+        if (mit_parse(VAL(), &o->fe.mit) != 0) {
+            return -1;
+        }
     } else if (!strcmp(a, "--dc")) {
         o->dc_arg = VAL();
     } else if (!strcmp(a, "--carrier-fix")) {
@@ -200,6 +218,17 @@ int src_open(src_t *s, src_opts_t *o)
     }
     if (o->nsteps > 0 && !o->have_cn0) {
         fprintf(stderr, "source: --cn0-at needs --cn0\n");
+        return -1;
+    }
+    /* The noise the interference's power is set against: what the file carries plus what is added. */
+    c->jam_n0 = o->have_cn0 ? s->meta.sig_power / pow(10.0, o->cn0 / 10.0)
+                            : s->meta.noise_density + 2.0 * c->noise_sigma * c->noise_sigma / fs_add;
+    if (c->n_jam > 0 && (c->mode == FE_MODE_NATIVE || !(c->jam_n0 > 0.0))) {
+        fprintf(stderr, "source: --jam needs a 2-bit mode and a known noise level (--cn0, or noise_density)\n");
+        return -1;
+    }
+    if (c->mit.type != MIT_NONE && c->mode == FE_MODE_NATIVE) {
+        fprintf(stderr, "source: --mitig works on 2-bit samples, not in native mode\n");
         return -1;
     }
     if (c->mode != FE_MODE_NATIVE && c->if_order > 0) {

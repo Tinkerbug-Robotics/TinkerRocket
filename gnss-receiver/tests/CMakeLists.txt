@@ -30,6 +30,7 @@ add_executable(gnss_tests
     test_iir.cpp
     test_ini.cpp
     test_iq_file.cpp
+    test_mitig.cpp
     test_mix.cpp
     test_quant.cpp
     test_resamp.cpp

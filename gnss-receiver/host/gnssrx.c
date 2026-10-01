@@ -622,6 +622,15 @@ int main(int argc, char **argv)
             fprintf(fini, "imu = %s\nimu_err = %g,%g,%g,%g,%g\n", imu_path, imu_lag_ms, imu_sf, imu_bias, imu_noise,
                     imu_tilt);
         }
+        for (int k = 0; k < so.fe.n_jam; k++) {
+            const jam_cfg_t *j = &so.fe.jam[k];
+            fprintf(fini, "jam = %s,%.1f,%.1f,%g,%g,%g\n", j->type == JAM_CW ? "cw" : (j->type == JAM_NB ? "nb" : "chirp"),
+                    j->f_hz, j->jnr_db, j->bw_hz, j->period_s, so.fe.jam_t0_s);
+        }
+        if (so.fe.mit.type != MIT_NONE) {
+            fprintf(fini, "mitig = %s,%d,%g,%g,%d,%g,%g\n", so.fe.mit.type == MIT_ANF ? "anf" : "fde", so.fe.mit.n_notch,
+                    so.fe.mit.anf_k, so.fe.mit.anf_mu, so.fe.mit.fde_n, so.fe.mit.fde_k, so.fe.mit.fde_tau_s);
+        }
         fclose(fini);
     }
 
@@ -886,6 +895,12 @@ int main(int argc, char **argv)
     }
     printf("  residual test: %ld fixes left a measurement out, %ld withheld; velocity failed it on %ld\n",
            n_excl_fix, n_withheld, n_vel_fail);
+    if (so.fe.n_jam > 0 || so.fe.mit.type != MIT_NONE) {
+        char line[512];
+        mit_report(&src.fe.mit, line, sizeof(line));
+        printf("  front end: %d interferer(s); magnitude density %.3f; mitigation %s\n", so.fe.n_jam,
+               quant2_density(&src.fe.q), line);
+    }
     if (t_first_fix_set) {
         printf("  first fix at %.3f s", t_first_fix);
         if (seed) {

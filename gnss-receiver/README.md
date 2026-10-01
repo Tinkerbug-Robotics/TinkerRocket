@@ -67,6 +67,9 @@ The other modes:
   keeps every 4th sample (owner decision, 2026-10-01); sum-of-4 stays for comparison.
 - **`native`** keeps the file's rate in float.
 
+`--jam` adds an interferer and `--mitig` a stage against it; see
+[Narrowband interference](#narrowband-interference-milestone-7).
+
 ```bash
 export GNSS_IQ_DIR=.../tools/gnss-cocom/sdr/c8
 build/host/iqtool info signalsim_static_gpsgal_2026_45_n.C8
@@ -712,9 +715,120 @@ decode a time the rest contradict (their bit sync off by whole milliseconds), an
 - RINEX 2 broadcast files (the IGS's for that day) load in C and Python.
 - PSAS's packed 2-bit format reads directly (`format = max2769_2bit`).
 
-**Next** (owner, 2026-10-01): how much a narrowband interferer costs our 2-bit chain, and what an
-FPGA notch or excision stage would buy, studied in software before anything goes to the hardware
-session.
+**The on-board carrier through our own stages:** see
+[Narrowband interference](#narrowband-interference-milestone-7). Either stage gives back what the
+offline excision did.
+
+## Narrowband interference (milestone 7)
+
+The owner's question (2026-10-01): what does a narrowband interferer cost our 2-bit chain, and what
+would an FPGA notch or excision stage buy? It is studied here in software, before anything goes to
+the hardware session.
+
+**The model.**
+- **`--jam`** adds the interferer at complex baseband, together with the thermal noise and ahead of
+  the IF filter and the MAX2769B's 2-bit AGC quantizer, where a real one arrives (`host/jam.c`):
+  - a carrier, `cw:F_HZ:JNR_DB`;
+  - band-limited noise, `nb:F_HZ:JNR_DB:BW_HZ`;
+  - a swept carrier, `chirp:F_HZ:JNR_DB:SPAN_HZ:PERIOD_S`.
+
+  JNR is its power over the noise in the 4.2 MHz IF band; 0 dB is a tone of about −106 dBm at
+  the LNA. `--jam-at S` switches it on S seconds into the run.
+- **`--mitig`** runs float models of two candidate FPGA stages (`host/mitig.c`). Both sit on the
+  2-bit samples after the decimator and requantize to 2 bits with their own AGC, so the
+  correlators stay as they are:
+  - `anf`: adaptive notches in cascade. A complex zero is adapted by normalized LMS onto the
+    interferer, with a pole at 0.99 times it (about 20 kHz wide).
+  - `fde`: frequency-domain excision. It takes 1024-point sqrt-Hann frames at 50 % overlap and
+    zeroes the bins whose power, averaged over 50 ms, stands 8 times over the median.
+- **The test:**
+  - the gps-sdr-sim hotshot pad: 14 GPS satellites at 42.7 dB-Hz, 30 s, judged over 15–30 s;
+  - "locked" means a real satellite at its true Doppler, PLL locked;
+  - the direct 6.75 MS/s path. The 27 MS/s chain with its decimator agrees: with a notch at 20 dB,
+    36.5 dB-Hz both ways.
+  - Runs are in `runs/jam`; the figure is `runs/jam/interference_study.png`.
+
+**An unmitigated tone near L1 captures the receiver at about the noise power.**
+- The C/A code's spectrum is a comb of 1 kHz lines, the strongest only about 20 dB below the
+  code's whole power. A tone leaks through them into every PRN's acquisition, at some Doppler.
+- 300 kHz from L1:
+  - false channels appear from −5 dB JNR;
+  - at 0 dB, 11 of 14 satellites lock, with 19 false channels;
+  - at +5 dB, none.
+- Placement matters:
+  - 20 kHz from L1 leaves 2 of 14 at 0 dB;
+  - at 700 kHz all 14 hold, with 3 false channels;
+  - at 1 MHz (the C/A spectrum's first null) and at 1.9 MHz, nothing happens.
+
+**Once the tone is removed, what remains is the 2-bit quantizer's loss.** The tone holds the AGC's
+thresholds, and the weak signal crosses them less often. No stage after the ADC recovers it.
+- Either stage measures the same loss, and it follows the theory: the quantizer's small-signal
+  gain and noise, averaged over the tone's phase.
+- The loss is 0.4 dB at 0 dB JNR, 2.3 at 10, 6.1 at 20 and 11 at 30.
+
+**The AGC target sets that loss above 20 dB.**
+- The MAX2769B holds its magnitude bits at a target density: 33 %, its GAINREF register.
+- Under a strong tone, a lower target puts the thresholds where the tone crosses them slowly. At
+  30 dB JNR, a 0.10 target gives 34.7 dB-Hz, matching the theory's 34.3.
+- It costs 0.3 dB with no tone (theory) and measured 0.7 dB at 15 dB JNR, so it belongs only
+  where a tone is detected.
+
+**Tracking holds further than acquisition.** Our 10 ms snapshots need about 36 dB-Hz.
+- With the tone present from the start, the notch acquires to 20 dB JNR (excision to 15).
+- Switched on after every satellite was locked:
+
+| JNR | No stage | Notch | Notch, AGC target 0.10 | Excision | 100 kHz noise, excision |
+|---|---|---|---|---|---|
+| 15 dB | 3 of 14; 26 false | 14 at 39.2 dB-Hz | 14 at 38.5 | 14 at 39.0 | 14 at 36.6 (no stage: none) |
+| 20 dB | none | 14 at 36.5 | 14 at 37.5 | 14 at 35.0 | 14 at 32.8 |
+| 25 dB | none | 14 at 32.6 | 14 at 36.3 | 14 at 30.9 | 6 at 28.0 |
+| 30 dB | none | 6 at 28.6 | 14 at 34.7 | none | none |
+| 35 dB | none | none | 14 at 32.7 | none | none |
+| 40 dB | none | none | 10 at 29.6 | none | none |
+
+**Wider and moving interference:**
+- **100 kHz-wide noise raises the noise floor.** It doesn't leak through lines: there are no false
+  channels, but at 5 dB JNR every satellite goes. A 20 kHz notch can't cover it; excision holds to
+  15 dB from the start and to 20 dB after lock.
+- **A swept carrier** (±1 MHz every 10 µs, 20 dB) defeats the notch. Excision keeps 7 of 14.
+- **More notches or slower adaptation don't move the limits.** Four notches catch the quantizer's
+  images of the tone too: one sits 1.09 MHz below L1 for a tone 300 kHz above. Neither that nor
+  a step four times smaller moves the 20–25 dB limit; the quantizer sets it.
+
+**On real data: PSAS's on-board carrier.**
+- It sits 411–419 kHz below L1, at −4 to +4 dB JNR in their 2-bit recording. That is the regime
+  where an unmitigated receiver is captured.
+- **Left in, ours locks nothing in flight.** On the pad, where the antenna saw no real satellite,
+  it reported 56 fixes, 95–5,126 km off (median 4,791). They came from 4–6 false satellites,
+  leaving the residual test 0–2 degrees of freedom: little or nothing to test.
+- **One notch finds the carrier unaided** (−416.7 kHz) and gives back what the offline float
+  excision did: 9 satellites against 10, 32.8 dB-Hz against 33.5, all 327 fixes, 3.5 m (median)
+  from those fixes.
+- **Excision:** 10 satellites, 33.2 dB-Hz.
+
+**FPGA cost** *(estimates)*, against the ECP5-25's 28 multipliers and 24k LUTs:
+- **The notch, per notch:**
+  - two complex multiplies per sample at 6.75 MS/s;
+  - the pole factor is a shift (k = 1 − 2⁻⁷), and so is the step: the AGC holds the input power,
+    so there is no normalizing divide;
+  - at 108 MHz one 18×18 multiplier covers it in 8 of the 16 cycles per sample, and the
+    recursion's one-multiply latency fits;
+  - with the requantizer's comparators and density counter: about 1–2 multipliers and 0.5k LUTs.
+- **Excision, 1024 points:**
+  - forward and inverse transforms, each at 13.5 MS/s with the overlap: about 135 M butterflies
+    a second, two memory-based butterfly units at 108 MHz (6–8 multipliers);
+  - 150–200 kbit of block RAM: frames, twiddles, overlap and averaged bin powers, with a running
+    threshold in place of a median;
+  - 3–5k LUTs.
+
+**Open:**
+- **A captured receiver's fixes need a gate.** Two would serve: a Doppler check against the seed or
+  fix (false locks sit at Dopplers unrelated to their satellite's), and an interference flag from
+  the stage's input-to-output power.
+- **The notch's depth is no detector.** With no interferer it settles on the IF passband's hump
+  near L1 (|z| 0.99). That is harmless (42.68 dB-Hz either way), but the depth can't flag a tone;
+  the power ratio can.
+- **Longer acquisition snapshots** would let acquisition reach as far as tracking under a tone.
 
 ## Galileo E1 and BeiDou B1C (milestone 6)
 

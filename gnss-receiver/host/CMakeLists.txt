@@ -8,6 +8,8 @@ add_library(gnss_host STATIC
     iir.c
     rng.c
     quant.c
+    jam.c
+    mitig.c
     fe_emul.c
     corr_float.c
     source.c

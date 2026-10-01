@@ -21,6 +21,8 @@
 
 #include "decim.h"
 #include "iir.h"
+#include "jam.h"
+#include "mitig.h"
 #include "mix.h"
 #include "quant.h"
 #include "resamp.h"
@@ -29,6 +31,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define FE_MAX_JAM 4
 
 typedef enum {
     FE_MODE_NATIVE = 0,
@@ -53,6 +57,13 @@ typedef struct {
     double agc_tau_s;
     decim_mode_t decim_mode; /* ADC27 */
     int decim_phase;
+    /* Interference, added with the noise ahead of the IF filter; its power is set against
+     * jam_n0 (the complex noise density, LSB^2/Hz) over if_bw_hz. */
+    int n_jam;
+    jam_cfg_t jam[FE_MAX_JAM];
+    double jam_n0;
+    double jam_t0_s;         /* the interference starts this long into the run */
+    mit_cfg_t mit;           /* a mitigation stage on the output codes (not NATIVE) */
 } fe_cfg_t;
 
 typedef struct {
@@ -65,11 +76,14 @@ typedef struct {
     rng_t rng;
     quant2_t q;
     decim_t dec;
+    jam_t jam[FE_MAX_JAM];
+    mit_t mit;
     float *work;
     size_t work_cap;
     uint8_t *codes;
     size_t codes_cap;
     int64_t n_in, n_out;
+    int64_t n_int;           /* internal-rate samples so far */
     double sumsq;            /* power into the quantizer, per component */
     uint64_t n_sumsq;
 } fe_t;

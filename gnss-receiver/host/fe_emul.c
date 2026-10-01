@@ -27,6 +27,7 @@ void fe_cfg_default(fe_cfg_t *c)
     c->mag_density = 0.33;
     c->agc_tau_s = 0.01;
     c->decim_mode = DECIM_SUBSAMPLE;
+    mit_cfg_default(&c->mit);
 }
 
 static int grow(void **p, size_t *cap, size_t need, size_t elem)
@@ -95,6 +96,14 @@ int fe_init(fe_t *fe, const fe_cfg_t *cfg)
     mix_init(&fe->mix2, c->if_hz, fe->fs_int, 0);
     quant2_init(&fe->q, c->mag_density, c->agc_tau_s * fe->fs_int, AGC_CHUNK);
     decim_init(&fe->dec, c->decim_mode, c->decim_phase);
+    for (int k = 0; k < c->n_jam && k < FE_MAX_JAM; k++) {
+        if (jam_init(&fe->jam[k], &c->jam[k], fe->fs_int, c->jam_n0, c->if_bw_hz, c->seed + 1000u + (uint64_t)k) != 0) {
+            return -1;
+        }
+    }
+    if (c->mit.type != MIT_NONE && mit_init(&fe->mit, &c->mit, fe_out_rate(fe)) != 0) {
+        return -1;
+    }
     return 0;
 }
 
@@ -144,6 +153,14 @@ size_t fe_process(fe_t *fe, float *in, size_t n, float *out_iq, uint8_t *out_cod
     if (c->noise_sigma > 0.0) {
         rng_add_noise(&fe->rng, fe->work, m, c->noise_sigma);
     }
+    const int64_t j0 = (int64_t)llround(c->jam_t0_s * fe->fs_int);
+    if (fe->n_int + (int64_t)m > j0) {
+        const size_t skip = fe->n_int >= j0 ? 0 : (size_t)(j0 - fe->n_int);
+        for (int k = 0; k < c->n_jam && k < FE_MAX_JAM; k++) {
+            jam_add(&fe->jam[k], fe->work + 2 * skip, m - skip);
+        }
+    }
+    fe->n_int += (int64_t)m;
     if (c->if_order > 0) {
         iir_apply(&fe->lpf, fe->work, m);
     }
@@ -160,6 +177,9 @@ size_t fe_process(fe_t *fe, float *in, size_t n, float *out_iq, uint8_t *out_cod
     } else {
         quant2_apply(&fe->q, fe->work, m, fe->codes);
         nout = decim_process(&fe->dec, fe->codes, m, out_codes);
+    }
+    if (c->mit.type != MIT_NONE) {
+        mit_apply(&fe->mit, out_codes, out_codes, nout);
     }
     fe->n_out += (int64_t)nout;
     return nout;
@@ -208,6 +228,10 @@ void fe_free(fe_t *fe)
     if (fe->cfg.mode != FE_MODE_NATIVE) {
         resamp_free(&fe->rs);
     }
+    for (int k = 0; k < FE_MAX_JAM; k++) {
+        jam_free(&fe->jam[k]);
+    }
+    mit_free(&fe->mit);
     free(fe->work);
     free(fe->codes);
     memset(fe, 0, sizeof(*fe));
