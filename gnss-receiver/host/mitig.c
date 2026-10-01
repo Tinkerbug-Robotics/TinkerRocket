@@ -40,6 +40,10 @@ int mit_parse(const char *s, mit_cfg_t *c)
     if (n < 1) {
         return -1;
     }
+    if (!strcmp(t, "notch")) {
+        c->type = MIT_NOTCH;
+        return 0;
+    }
     if (!strcmp(t, "anfq")) {
         c->type = MIT_ANFQ;
         if (n >= 2) {
@@ -110,6 +114,7 @@ int mit_init(mit_t *m, const mit_cfg_t *c, double fs)
     m->cfg = *c;
     m->fs = fs;
     quant2_init(&m->q, c->mag_density, AGC_TAU_S * fs, AGC_CHUNK);
+    notch_init(&m->notch_fx);
     if (c->type != MIT_FDE) {
         return 0;
     }
@@ -281,12 +286,98 @@ static void anfq_step(const mit_cfg_t *c, mit_notch_t *a, int64_t *xr, int64_t *
     *xi = yi;
 }
 
+static void vec_nibble(FILE *f, uint8_t *hi, uint64_t k, uint8_t code)
+{
+    if ((k & 1) == 0) {
+        *hi = (uint8_t)(code << 4);
+    } else {
+        const uint8_t b = (uint8_t)(*hi | (code & 0xF));
+        fwrite(&b, 1, 1, f);
+    }
+}
+
+int mit_set_vectors(mit_t *m, const char *dir, uint64_t n_samples, uint64_t ms_len)
+{
+    if (m->cfg.type != MIT_NOTCH) {
+        return -1;
+    }
+    char p[4096];
+    snprintf(p, sizeof(p), "%s/notch_in.u2", dir);
+    m->vec_in = fopen(p, "wb");
+    snprintf(p, sizeof(p), "%s/notch_out.u2", dir);
+    m->vec_out = fopen(p, "wb");
+    snprintf(p, sizeof(p), "%s/notch_power.csv", dir);
+    m->vec_pow = fopen(p, "w");
+    if (!m->vec_in || !m->vec_out || !m->vec_pow) {
+        return -1;
+    }
+    snprintf(p, sizeof(p), "%s/notch.ini", dir);
+    FILE *fi = fopen(p, "w");
+    if (fi) {
+        fprintf(fi, "[notch]\nms_samples = %llu\nn = %d\nk = %d\nm = %d\nfz = %d\ng = %d\nfa = %d\nia = %d\n"
+                    "pleak = %d\ntf = %d\nchunk = %d\ntarget = %d\nagc_shift = %d\nt0 = %d\n",
+                (unsigned long long)ms_len, NOTCH_N, NOTCH_K, NOTCH_M, NOTCH_FZ, NOTCH_G, NOTCH_FA, NOTCH_IA, NOTCH_PLEAK,
+                NOTCH_TF, NOTCH_CHUNK, NOTCH_TARGET, NOTCH_AGC_SHIFT, NOTCH_T0);
+        fclose(fi);
+    }
+    fprintf(m->vec_pow, "ms,pin,pout,t");
+    for (int s = 0; s < NOTCH_N; s++) {
+        fprintf(m->vec_pow, ",zr%d,zi%d", s, s);
+    }
+    fprintf(m->vec_pow, "\n");
+    m->vec_end = n_samples & ~(uint64_t)1;
+    m->vec_ms_len = ms_len;
+    m->vec_n = 0;
+    return 0;
+}
+
+static void vec_close(mit_t *m)
+{
+    if (m->vec_in) {
+        fclose(m->vec_in);
+        fclose(m->vec_out);
+        fclose(m->vec_pow);
+        m->vec_in = m->vec_out = NULL;
+        m->vec_pow = NULL;
+    }
+}
+
 void mit_apply(mit_t *m, const uint8_t *in, uint8_t *out, size_t n)
 {
     if (m->cfg.type == MIT_NONE) {
         if (out != in) {
             memcpy(out, in, n);
         }
+        return;
+    }
+    if (m->cfg.type == MIT_NOTCH) {
+        /* The FPGA's stage itself: integer in, integer out. The host's power sums follow its
+         * counters (weights in, y out), for the interference flag. */
+        for (size_t k = 0; k < n; k++) {
+            const uint8_t c = in[k];
+            const uint8_t o = notch_sample(&m->notch_fx, c);
+            out[k] = o;
+            if (m->vec_in && m->vec_n < m->vec_end) {
+                vec_nibble(m->vec_in, &m->vec_hi_in, m->vec_n, c);
+                vec_nibble(m->vec_out, &m->vec_hi_out, m->vec_n, o);
+                if ((m->vec_n + 1) % m->vec_ms_len == 0) {
+                    uint64_t pi, po;
+                    notch_take_power(&m->notch_fx, &pi, &po);
+                    m->pin += (double)pi;
+                    m->pout += (double)po;
+                    fprintf(m->vec_pow, "%llu,%llu,%llu,%lld", (unsigned long long)((m->vec_n + 1) / m->vec_ms_len),
+                            (unsigned long long)pi, (unsigned long long)po, (long long)m->notch_fx.t);
+                    for (int s = 0; s < NOTCH_N; s++) {
+                        fprintf(m->vec_pow, ",%lld,%lld", (long long)m->notch_fx.s[s].zr, (long long)m->notch_fx.s[s].zi);
+                    }
+                    fprintf(m->vec_pow, "\n");
+                }
+                if (++m->vec_n == m->vec_end) {
+                    vec_close(m);
+                }
+            }
+        }
+        m->n += n;
         return;
     }
     if (n > m->y_cap) {
@@ -364,6 +455,12 @@ void mit_apply(mit_t *m, const uint8_t *in, uint8_t *out, size_t n)
 
 double mit_take_suppression_db(mit_t *m)
 {
+    if (m->cfg.type == MIT_NOTCH && !m->vec_in) {
+        uint64_t pi, po;
+        notch_take_power(&m->notch_fx, &pi, &po);
+        m->pin += (double)pi;
+        m->pout += (double)po;
+    }
     const double r = m->pin > 0.0 && m->pout > 0.0 ? 10.0 * log10(m->pin / m->pout) : 0.0;
     m->pin = m->pout = 0.0;
     return r;
@@ -388,6 +485,13 @@ void mit_report(const mit_t *m, char *buf, size_t len)
                           atan2(zi, zr) / TWO_PI * m->fs / 1e3,
                           sqrt(zr * zr + zi * zi) / (double)((int64_t)1 << (m->cfg.q_fz + m->cfg.q_g)));
         }
+    } else if (m->cfg.type == MIT_NOTCH) {
+        int w = snprintf(buf, len, "NOTCH (bit exact, %d in cascade):", NOTCH_N);
+        for (int s = 0; s < NOTCH_N && w > 0 && (size_t)w < len; s++) {
+            double f, d;
+            notch_zero(&m->notch_fx, s, &f, &d);
+            w += snprintf(buf + w, len - (size_t)w, " notch %d at %+.1f kHz, |z| %.3f;", s, f * m->fs / 1e3, d);
+        }
     } else if (m->cfg.type == MIT_FDE) {
         snprintf(buf, len, "FDE %d points (%.2f kHz bins), k %g, tau %g s: %.2f bins excised per frame", m->cfg.fde_n,
                  m->fs / m->cfg.fde_n / 1e3, m->cfg.fde_k, m->cfg.fde_tau_s,
@@ -399,6 +503,7 @@ void mit_report(const mit_t *m, char *buf, size_t len)
 
 void mit_free(mit_t *m)
 {
+    vec_close(m);
     free(m->tw);
     free(m->win);
     free(m->hist);

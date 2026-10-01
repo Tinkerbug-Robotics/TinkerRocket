@@ -972,7 +972,22 @@ thresholds, and the weak signal crosses them less often. No stage after the ADC 
 - the pole state is 16 bits (11.4), saturating.
 
 In the receiver it matches the float notch: C/N0 within 0.05 dB and the same locks, from no tone
-to 25 dB JNR after lock. The bit-exact model and its test vectors follow.
+to 25 dB JNR after lock.
+
+**The bit-exact model** is `fpga/model/notch.{c,h}`. The header spells out every operation and
+its rounding for the HDL.
+- **What it has:** two notches in cascade; the requantizer, with an integer AGC
+  (T += T·(bits − 169) >> 16 per 256 samples, the MAX2769B's third at a 10 ms time constant); and
+  the power counters the P4 reads each millisecond.
+- **How it's checked:** `Notch.EqualsTheWordLengthStudy` holds its output to the study's sample
+  for sample, and `Notch.OutputIsPinned` pins a checksum over an integer-only input.
+- **Running it:** `gnssrx --mitig notch` runs it. With `--vectors DIR` it writes its own vectors
+  beside the correlator's: `notch_in.u2`, `notch_out.u2`, `notch_power.csv` (counters, threshold
+  and each zacc, per ms) and `notch.ini`. `vecreplay` checks both sets: 300 ms, 2,025,000
+  samples, 0 mismatches each.
+- **In the receiver:** it gives the float notch's C/N0 within 0.1 dB. At 20 dB JNR it gives
+  0.5 dB more (14 satellites, not 13, from the start), because the second notch takes the
+  quantizer's image of the tone.
 
 **The interference flag** is the stage's power in over power out.
 - With no interferer, either stage takes out 0.02 dB. The notch's own depth can't serve as the

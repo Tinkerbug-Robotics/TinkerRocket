@@ -570,6 +570,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "gnssrx: cannot write vectors into %s\n", vec_dir);
             return 1;
         }
+        /* With the notch stage, its own vectors too (the correlators' samples.u2 is its output). */
+        if (so.fe.mit.type == MIT_NOTCH &&
+            mit_set_vectors(&src.fe.mit, vec_dir, bank.v_end, (uint64_t)llround(1e-3 * fs)) != 0) {
+            fprintf(stderr, "gnssrx: cannot write the notch's vectors into %s\n", vec_dir);
+            return 1;
+        }
     }
 
     rx_cfg_t rc;
@@ -748,7 +754,7 @@ int main(int argc, char **argv)
                     j->f_hz, j->jnr_db, j->bw_hz, j->period_s, so.fe.jam_t0_s);
         }
         if (so.fe.mit.type != MIT_NONE) {
-            fprintf(fini, "mitig = %s,%d,%g,%g,%d,%g,%g\n", so.fe.mit.type == MIT_ANF ? "anf" : (so.fe.mit.type == MIT_ANFQ ? "anfq" : "fde"), so.fe.mit.n_notch,
+            fprintf(fini, "mitig = %s,%d,%g,%g,%d,%g,%g\n", so.fe.mit.type == MIT_ANF ? "anf" : (so.fe.mit.type == MIT_ANFQ ? "anfq" : (so.fe.mit.type == MIT_NOTCH ? "notch" : "fde")), so.fe.mit.n_notch,
                     so.fe.mit.anf_k, so.fe.mit.anf_mu, so.fe.mit.fde_n, so.fe.mit.fde_k, so.fe.mit.fde_tau_s);
         }
         fclose(fini);

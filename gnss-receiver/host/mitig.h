@@ -15,7 +15,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <stdio.h>
+
 #include "gnss/fft.h"
+#include "notch.h"
 #include "quant.h"
 
 #ifdef __cplusplus
@@ -26,7 +29,8 @@ typedef enum {
     MIT_NONE = 0,
     MIT_ANF = 1,
     MIT_FDE = 2,
-    MIT_ANFQ = 3    /* the notch in fixed point, as the FPGA would run it (a word-length study) */
+    MIT_ANFQ = 3,   /* the notch in fixed point, as the FPGA would run it (a word-length study) */
+    MIT_NOTCH = 4   /* the FPGA's notch stage itself, bit exact (fpga/model/notch.h) */
 } mit_type_t;
 
 #define MIT_MAX_NOTCH 4
@@ -69,12 +73,18 @@ typedef struct {
     size_t y_cap;
     uint64_t n;
     double pin, pout;     /* power in and out (before the requantizer), since the last take */
+    notch_t notch_fx;     /* MIT_NOTCH */
+    /* MIT_NOTCH test vectors: input and output codes packed two a byte (earlier high), and the
+     * power counters each vec_ms_len samples, for the first vec_end samples. */
+    FILE *vec_in, *vec_out, *vec_pow;
+    uint64_t vec_end, vec_ms_len, vec_n;
+    uint8_t vec_hi_in, vec_hi_out;
 } mit_t;
 
 void mit_cfg_default(mit_cfg_t *c);
 
-/* "none", "anf[:N[:K[:MU]]]", "fde[:N[:K[:TAU_S]]]" or "anfq[:N[:QK[:QM[:QFZ[:QFA[:QIA[:QG]]]]]]]";
- * 0 on success. */
+/* "none", "anf[:N[:K[:MU]]]", "fde[:N[:K[:TAU_S]]]", "anfq[:N[:QK[:QM[:QFZ[:QFA[:QIA[:QG]]]]]]]"
+ * or "notch" (the bit-exact stage); 0 on success. */
 int mit_parse(const char *s, mit_cfg_t *c);
 
 int mit_init(mit_t *m, const mit_cfg_t *c, double fs);
@@ -85,6 +95,10 @@ void mit_apply(mit_t *m, const uint8_t *in, uint8_t *out, size_t n);
 /* What the stage took out since the last call, dB (power in over power out; 0 if nothing ran):
  * the interference detector. */
 double mit_take_suppression_db(mit_t *m);
+
+/* MIT_NOTCH: write HDL test vectors into dir (notch_in.u2, notch_out.u2, notch_power.csv) for the
+ * first n_samples, with the power counters latched every ms_len samples. 0 on success. */
+int mit_set_vectors(mit_t *m, const char *dir, uint64_t n_samples, uint64_t ms_len);
 
 /* One line on what it did: the notches' frequencies and depths, or the bins excised. */
 void mit_report(const mit_t *m, char *buf, size_t len);

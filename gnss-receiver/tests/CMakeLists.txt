@@ -32,6 +32,7 @@ add_executable(gnss_tests
     test_iq_file.cpp
     test_mitig.cpp
     test_mix.cpp
+    test_notch.cpp
     test_quant.cpp
     test_resamp.cpp
     test_rinex_nav.cpp

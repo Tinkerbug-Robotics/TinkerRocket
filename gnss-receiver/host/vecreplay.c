@@ -8,12 +8,19 @@
  *                  with the START's signal and second tap offset in the last two columns
  *   dumps.csv      the dumps the correlator must produce, in order per channel: the six
  *                  I/Q pairs are early, prompt, late, very early, very late and data
+ * and, when the run had the notch stage (gnssrx --mitig notch), its own vectors, checked first
+ * against a fresh fpga/model/notch.c:
+ *   notch_in.u2       the stage's input codes, packed as samples.u2
+ *   notch_out.u2      its output codes (the correlators' input: samples.u2 again)
+ *   notch_power.csv   each millisecond: the power counters as the P4 reads them, the requantizer's
+ *                     threshold, and each notch's zacc
  *
  *   vecreplay DIR
  */
 #define _POSIX_C_SOURCE 200809L
 
 #include "corr_model.h"
+#include "notch.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -71,12 +78,121 @@ static long read_cmds(const char *path, timed_cmd_t **out)
     return n;
 }
 
+static uint8_t *read_u2(const char *path, size_t *n)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    const long nb = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t *raw = (uint8_t *)malloc((size_t)nb), *c = (uint8_t *)malloc((size_t)nb * 2);
+    if (!raw || !c || fread(raw, 1, (size_t)nb, f) != (size_t)nb) {
+        fclose(f);
+        free(raw);
+        free(c);
+        return NULL;
+    }
+    fclose(f);
+    for (long k = 0; k < nb; k++) {
+        c[2 * k] = raw[k] >> 4;
+        c[2 * k + 1] = raw[k] & 0xF;
+    }
+    free(raw);
+    *n = (size_t)nb * 2;
+    return c;
+}
+
+/* The notch stage's vectors, if the directory has them: -1 if not, else the mismatches. The
+ * counters latch every ms_samples (notch.ini; 6750 by default, 1 ms at 6.75 MS/s). */
+static long replay_notch(const char *dir)
+{
+    char p[4200], line[1024];
+    size_t n_in = 0, n_out = 0;
+    snprintf(p, sizeof(p), "%s/notch_in.u2", dir);
+    uint8_t *in = read_u2(p, &n_in);
+    if (!in) {
+        return -1;
+    }
+    snprintf(p, sizeof(p), "%s/notch_out.u2", dir);
+    uint8_t *out = read_u2(p, &n_out);
+    size_t ms_samples = 6750;
+    snprintf(p, sizeof(p), "%s/notch.ini", dir);
+    FILE *fi = fopen(p, "r");
+    if (fi) {
+        while (fgets(line, sizeof(line), fi)) {
+            unsigned long v;
+            if (sscanf(line, "ms_samples = %lu", &v) == 1 && v > 0) {
+                ms_samples = (size_t)v;
+            }
+        }
+        fclose(fi);
+    }
+    snprintf(p, sizeof(p), "%s/notch_power.csv", dir);
+    FILE *fp = fopen(p, "r");
+    if (!out || !fp || n_out != n_in || !fgets(line, sizeof(line), fp)) {
+        fprintf(stderr, "vecreplay: %s: notch vectors incomplete\n", dir);
+        free(in);
+        free(out);
+        if (fp) {
+            fclose(fp);
+        }
+        return 1;
+    }
+    notch_t nt;
+    notch_init(&nt);
+    long rows = 0, bad = 0;
+    for (size_t k = 0; k < n_in; k++) {
+        const uint8_t o = notch_sample(&nt, in[k]);
+        if (o != out[k]) {
+            if (bad < 5) {
+                fprintf(stderr, "notch mismatch: sample %zu: model %x, vector %x\n", k, o, out[k]);
+            }
+            bad++;
+        }
+        if ((k + 1) % ms_samples != 0) {
+            continue;
+        }
+        unsigned long long ms, pin, pout;
+        long long t, z[2 * NOTCH_N];
+        if (!fgets(line, sizeof(line), fp) ||
+            sscanf(line, "%llu,%llu,%llu,%lld,%lld,%lld,%lld,%lld", &ms, &pin, &pout, &t, &z[0], &z[1], &z[2], &z[3]) <
+                4 + 2 * NOTCH_N) {
+            if (bad < 5) {
+                fprintf(stderr, "notch: counter row missing at sample %zu\n", k + 1);
+            }
+            bad++;
+            continue;
+        }
+        uint64_t mi, mo;
+        notch_take_power(&nt, &mi, &mo);
+        int ok = mi == pin && mo == pout && nt.t == t;
+        for (int s2 = 0; ok && s2 < NOTCH_N; s2++) {
+            ok = nt.s[s2].zr == z[2 * s2] && nt.s[s2].zi == z[2 * s2 + 1];
+        }
+        if (!ok) {
+            if (bad < 5) {
+                fprintf(stderr, "notch mismatch: ms %llu: counters or state\n", ms);
+            }
+            bad++;
+        }
+        rows++;
+    }
+    fclose(fp);
+    printf("vecreplay %s: notch stage, %zu samples, %ld ms of counters, %ld mismatches\n", dir, n_in, rows, bad);
+    free(in);
+    free(out);
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2) {
         fprintf(stderr, "usage: vecreplay DIR\n");
         return 2;
     }
+    const long bad_notch = replay_notch(argv[1]);
     char p[4200];
     snprintf(p, sizeof(p), "%s/samples.u2", argv[1]);
     FILE *fs = fopen(p, "rb");
@@ -180,5 +296,5 @@ int main(int argc, char **argv)
     free(m);
     free(got);
     free(cmds);
-    return bad || nwant == 0 ? 1 : 0;
+    return bad || nwant == 0 || bad_notch > 0 ? 1 : 0;
 }
