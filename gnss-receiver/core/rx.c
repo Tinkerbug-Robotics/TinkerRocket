@@ -44,6 +44,7 @@ void rx_init(rx_t *rx, const rx_cfg_t *cfg)
     rx->week_ref = LNAV_WEEK_REF;
     rx->prof = cfg->quiet;
     pvt_default_opt(&rx->pvt_opt);
+    rx->seed_vel_sigma = 1000.0;  /* unknown until rx_set_seed_vel */
 }
 
 double rx_time(const rx_t *rx, uint64_t t)
@@ -102,6 +103,17 @@ void rx_set_week_ref(rx_t *rx, int week)
     rx->week_ref = week;
 }
 
+void rx_set_seed_vel(rx_t *rx, const double vel_ecef[3], double vel_sigma_mps)
+{
+    memcpy(rx->seed.vel, vel_ecef, sizeof(rx->seed.vel));
+    rx->seed_vel_sigma = vel_sigma_mps;
+}
+
+void rx_set_interference(rx_t *rx, int flag)
+{
+    rx->interference = flag != 0;
+}
+
 void rx_set_seed(rx_t *rx, const double pos_ecef[3], double pos_sigma_m, int week, double tow, double tow_sigma_s,
                  uint64_t t)
 {
@@ -111,6 +123,7 @@ void rx_set_seed(rx_t *rx, const double pos_ecef[3], double pos_sigma_m, int wee
     ecef_to_geo(s->pos, &s->lat, &s->lon, &s->h);
     rx->seed_pos_sigma = pos_sigma_m;
     rx->seed_tow_sigma = tow_sigma_s;
+    rx->seed_vel_sigma = 1000.0;  /* until rx_set_seed_vel */
     rx->seed_valid = 1;
     if (!rx->clk_valid) {
         rx->clk_t = tow;
@@ -125,14 +138,29 @@ void rx_set_seed(rx_t *rx, const double pos_ecef[3], double pos_sigma_m, int wee
     }
 }
 
+/* The integrity gate (rx_set_interference has the summary). */
+#define GATE_EL_MIN (-5.0 * 3.14159265358979 / 180.0)
+#define GATE_DROP_S 2.0f
+#define GATE_HOLD_S 10.0
+#define GATE_CODE_US_FIX 5.0
+#define GATE_DOP_HZ_FIX 100.0
+#define GATE_ACCEL 300.0  /* m/s^2 the vehicle may have reached since the fix (a boost: 30 g) */
+#define GATE_MIN_GROUP 3
+
 /*
  * GPS channels' whole milliseconds from a prediction (the code phase gives the rest):
- *   - before the first fix, from the seed. Differences against a reference satellite (one already
- *     resolved, else the first) are what is rounded, so the seed clock's error, common to all,
- *     cancels; a channel keeps its millisecond once set. A coarse seed time leaves them all one
- *     whole-millisecond offset out together, which the fixes solve;
+ *   - before the first fix, from the seed. Differences against a reference satellite are what
+ *     is rounded, so the seed clock's error, common to all, cancels; a channel keeps its
+ *     millisecond once set. A coarse seed time leaves them all one whole-millisecond offset out
+ *     together, which the fixes solve;
  *   - after it, against the fix's own position and time (the clock steering keeps a coarse
  *     offset in the receiver time too, so the rounding returns the same milliseconds).
+ * Only channels the gate passes get one. Before a fix that is the largest group of three or
+ * more whose code phases (less whole milliseconds) and Dopplers agree pairwise, within windows
+ * from the seed's sigmas: the seed's own time and clock-rate errors are common and cancel.
+ * After a fix, each channel's code phase and Doppler must agree with the fix's prediction.
+ * A tone leaking through a code line gives a channel a code phase and a Doppler unrelated to
+ * its satellite's, and nothing to agree with.
  * Then the navigation messages vote: where two or more satellites' message times agree on an
  * offset from these milliseconds, and outnumber those that agree with them, the offset is the
  * receiver's, and every channel and the clock move by it (the pseudoranges stay as they are);
@@ -143,19 +171,20 @@ void rx_set_seed(rx_t *rx, const double pos_ecef[3], double pos_sigma_m, int wee
 static void resolve_ms(rx_t *rx, uint64_t t)
 {
     const int have_fix = rx->sol.valid;
+    const double dt_gate = rx->t_gate && t > rx->t_gate ? (double)(t - rx->t_gate) / rx->cfg.fs : 0.0;
+    rx->t_gate = t;
     if (!rx->clk_valid || (!have_fix && !rx->seed_valid)) {
         return;
     }
     const pvt_sol_t *st = have_fix ? &rx->sol : &rx->seed;
+    /* The horizon is trusted from a fix, or from a seed good to 100 km and a minute. */
+    const int trust_el = have_fix || (rx->seed_pos_sigma < 1e5 && rx->seed_tow_sigma < 60.0);
     const double t_rx = rx_time(rx, t) - (have_fix ? rx->sol.clk_bias / GNSS_C : 0.0);
     const double week_ms = 604800000.0;
-    int have_ref = 0;
-    double ref_d = 0.0;
-    int64_t ref_n = 0;
-    double dms[CORR_MAX_CH];
-    int ok[CORR_MAX_CH];
+    double dms[CORR_MAX_CH], dres[CORR_MAX_CH];
+    int ok[CORR_MAX_CH], bad[CORR_MAX_CH], group[CORR_MAX_CH];
     for (int ch = 0; ch < rx->cfg.max_ch; ch++) {
-        ok[ch] = 0;
+        ok[ch] = bad[ch] = group[ch] = 0;
         trk_ch_t *c = &rx->ch[ch];
         rx_nco_t *n = &rx->nco[ch];
         if (c->state == TRK_OFF || n->sec_len > 0 || !n->have_dump || sys_of(c->sig) != GNSS_SYS_GPS) {
@@ -170,23 +199,96 @@ static void resolve_ms(rx_t *rx, uint64_t t)
         if (!have_fix) {
             n->have_los = 1;
         }
+        const int synced = rx->nav[ch].synced;  /* a decoded message: the satellite is real */
+        if (trust_el && el < GATE_EL_MIN && !synced) {
+            bad[ch] = 1;
+            continue;
+        }
         if (!c->locked_once || c->t_tracked < 1.0f || c->cn0_lin < 1000.0f) {
             continue;  /* the code must sit on its peak: a confirmed PLL, a second, 30 dB-Hz */
         }
         const double chips = ((double)n->last_code_phase + (double)(t - n->last_t) * (double)n->cur_code) / CODE_ONE;
         dms[ch] = (t_sv - chips / 1.023e6) * 1000.0 - (double)c->period;
+        dres[ch] = (double)(n->cur_carr - rx->if_word) * rx->cfg.fs / TWO_POW_32 - dop;
         ok[ch] = 1;
-        if (!have_fix && n->ms_valid && !have_ref) {
-            have_ref = 1;
-            ref_d = dms[ch];
-            ref_n = n->n1;
+    }
+    if (have_fix) {
+        /* The fix ages: the vehicle moves on and may accelerate, so the windows widen with it. */
+        const double age = t > rx->t_sol ? (double)(t - rx->t_sol) / rx->cfg.fs : 0.0;
+        const double v = sqrt(rx->sol.vel[0] * rx->sol.vel[0] + rx->sol.vel[1] * rx->sol.vel[1] +
+                              rx->sol.vel[2] * rx->sol.vel[2]);
+        const double w_us = GATE_CODE_US_FIX + 2e6 * (v * age + 0.5 * GATE_ACCEL * age * age) / GNSS_C;
+        const double w_hz = GATE_DOP_HZ_FIX + GATE_ACCEL * age / (GNSS_C / GNSS_FREQ_L1_HZ);
+        for (int ch = 0; ch < rx->cfg.max_ch; ch++) {
+            if (!ok[ch]) {
+                continue;
+            }
+            const double frac_us = (dms[ch] - (double)llround(dms[ch])) * 1000.0;
+            if (fabs(frac_us) <= w_us && fabs(dres[ch]) <= w_hz) {
+                group[ch] = 1;
+            } else if (!rx->nav[ch].synced) {
+                bad[ch] = 1;
+            }
+        }
+    } else {
+        const double lambda = GNSS_C / GNSS_FREQ_L1_HZ;
+        const double w_us = 6.0 * rx->seed_pos_sigma / GNSS_C * 1e6 + 3.0;
+        const double w_hz = 6.0 * rx->seed_vel_sigma / lambda + 30.0;
+        int best = -1, best_n = 0;
+        for (int i = 0; i < rx->cfg.max_ch; i++) {
+            if (!ok[i]) {
+                continue;
+            }
+            int m = 0;
+            for (int j = 0; j < rx->cfg.max_ch; j++) {
+                if (!ok[j]) {
+                    continue;
+                }
+                const double dd = dms[i] - dms[j];
+                m += fabs(dd - (double)llround(dd)) * 1000.0 <= w_us && fabs(dres[i] - dres[j]) <= w_hz;
+            }
+            if (m > best_n) {
+                best_n = m;
+                best = i;
+            }
+        }
+        if (best_n >= GATE_MIN_GROUP) {
+            for (int j = 0; j < rx->cfg.max_ch; j++) {
+                if (!ok[j]) {
+                    continue;
+                }
+                const double dd = dms[best] - dms[j];
+                if (fabs(dd - (double)llround(dd)) * 1000.0 <= w_us && fabs(dres[best] - dres[j]) <= w_hz) {
+                    group[j] = 1;
+                } else if (!rx->nav[j].synced) {
+                    bad[j] = 1;
+                }
+            }
+        }
+    }
+
+    /* Milliseconds for the group. Before a fix, against a reference: one of the group already
+     * resolved, else the first of it. */
+    int have_ref = 0;
+    double ref_d = 0.0;
+    int64_t ref_n = 0;
+    if (!have_fix) {
+        for (int ch = 0; ch < rx->cfg.max_ch && !have_ref; ch++) {
+            if (group[ch] && rx->nco[ch].ms_valid) {
+                have_ref = 1;
+                ref_d = dms[ch];
+                ref_n = rx->nco[ch].n1;
+            }
         }
     }
     for (int ch = 0; ch < rx->cfg.max_ch; ch++) {
-        if (!ok[ch]) {
+        rx_nco_t *n = &rx->nco[ch];
+        if (bad[ch]) {
+            n->ms_valid = 0;  /* (it needs the gate again before it ranges) */
+        }
+        if (!group[ch]) {
             continue;
         }
-        rx_nco_t *n = &rx->nco[ch];
         int64_t n1;
         if (have_fix) {
             n1 = llround(dms[ch]);
@@ -215,12 +317,30 @@ static void resolve_ms(rx_t *rx, uint64_t t)
         }
     }
 
+    /* Channels out of agreement for a while, or under the horizon, go; their PRNs rest. */
+    for (int ch = 0; ch < rx->cfg.max_ch; ch++) {
+        trk_ch_t *c = &rx->ch[ch];
+        rx_nco_t *n = &rx->nco[ch];
+        if (c->state == TRK_OFF || n->sec_len > 0 || sys_of(c->sig) != GNSS_SYS_GPS) {
+            continue;
+        }
+        n->gate_ok = (uint8_t)group[ch];
+        n->gate_bad_s = bad[ch] ? n->gate_bad_s + (float)dt_gate : 0.0f;
+        if (n->gate_bad_s >= GATE_DROP_S) {
+            c->state = TRK_OFF;  /* rx_tick stops and frees it */
+            rx->aid_hold[GNSS_SYS_GPS][c->prn] = t + (uint64_t)llround(GATE_HOLD_S * rx->cfg.fs);
+            rx->n_gate_drop++;
+            n->gate_bad_s = 0.0f;
+        }
+    }
+
     /* The vote: each decoded message's offset from the resolved millisecond. */
     int64_t dn[CORR_MAX_CH];
     int vch[CORR_MAX_CH], nv = 0;
     for (int ch = 0; ch < rx->cfg.max_ch; ch++) {
-        const rx_nco_t *n = &rx->nco[ch];
+        rx_nco_t *n = &rx->nco[ch];
         const lnav_t *l = &rx->nav[ch];
+        n->nav_ok = 0;
         if (rx->ch[ch].state == TRK_OFF || n->sec_len > 0 || !n->ms_valid || !l->synced) {
             continue;
         }
@@ -267,10 +387,11 @@ static void resolve_ms(rx_t *rx, uint64_t t)
         return;
     }
     for (int i = 0; i < nv; i++) {
+        const int ch = vch[i];
+        rx->nco[ch].nav_ok = (uint8_t)(dn[i] == 0);
         if (dn[i] == 0) {
             continue;
         }
-        const int ch = vch[i];
         trk_ch_t *c = &rx->ch[ch];
         lnav_t *l = &rx->nav[ch];
         const int prn = l->prn, ref = rx->week_ref;
@@ -473,10 +594,23 @@ int rx_acquire(rx_t *rx, uint64_t t_now, uint64_t t0, const float *iq, size_t n,
     if (acq_prepare(&a, &ac, iq, n, work) != 0) {
         return 0;
     }
+    /* With a fix, or a seed good to 100 km and a minute, satellites under the horizon aren't
+     * searched: whatever is found there is not them. */
+    const int have_fix = rx->sol.valid;
+    const int trust_el = rx->clk_valid && (have_fix || (rx->seed_valid && rx->seed_pos_sigma < 1e5 &&
+                                                        rx->seed_tow_sigma < 60.0));
+    const double t_rx = rx_time(rx, t_now) - (have_fix ? rx->sol.clk_bias / GNSS_C : 0.0);
     int nc = 0;
     for (int prn = 1; prn <= GPS_MAX_PRN && nc < ncap; prn++) {
-        if (rx->sat_ch[GNSS_SYS_GPS][prn] >= 0) {
+        if (rx->sat_ch[GNSS_SYS_GPS][prn] >= 0 || t_now < rx->aid_hold[GNSS_SYS_GPS][prn]) {
             continue;
+        }
+        if (trust_el && rx->eph[GNSS_SYS_GPS][prn].valid) {
+            double t_sv, dop, el;
+            predict_at(rx, have_fix ? &rx->sol : &rx->seed, &rx->eph[GNSS_SYS_GPS][prn], t_rx, &t_sv, &dop, &el, NULL);
+            if (el < GATE_EL_MIN) {
+                continue;
+            }
         }
         int ch = -1;
         for (int k = 0; k < rx->cfg.max_ch; k++) {
@@ -731,6 +865,25 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
         }
     }
     if (fix == 0) {
+        /* Ranges no navigation message has confirmed (the seed's or a fix's millisecond), or an
+         * interference flag: the fix must have a degree of freedom to test in its position and in
+         * its velocity, and pass both, or it is withheld. A handful of false channels can always
+         * be solved exactly; they can't also agree with each other's Dopplers. */
+        int unconf = 0;
+        for (int k = 0; k < no; k++) {
+            /* Confirmed: a pilot (started aided from a fix), a channel timed by its own message, or
+             * one whose resolved millisecond its message agreed with in the vote. */
+            const rx_nco_t *n = &rx->nco[obs[k].ch];
+            const int conf = n->sec_len > 0 || (n->ms_valid ? n->nav_ok : rx->nav[obs[k].ch].synced);
+            unconf += sol->used[k] && !conf;
+        }
+        if ((unconf > 0 || rx->interference) && (sol->dof < 1 || sol->vdof < 1 || !sol->vel_valid)) {
+            sol->valid = 0;
+            rx->n_gate_withheld++;
+            return no;
+        }
+    }
+    if (fix == 0) {
         /* Steer the receiver clock onto GPS time when it is off by more than a microsecond. */
         if (fabs(sol->clk_bias) > 300.0) {
             double dt = sol->clk_bias / GNSS_C;
@@ -743,6 +896,7 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
             sol->clk_bias = 0.0;
         }
         rx->sol = *sol;
+        rx->t_sol = t;
         for (int k = 0; k < no; k++) {
             rx_nco_t *n = &rx->nco[obs[k].ch];
             const gps_eph_t *e = &rx->eph[obs[k].sys][obs[k].prn];

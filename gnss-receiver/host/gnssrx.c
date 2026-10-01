@@ -82,11 +82,13 @@ static void usage(void)
             "                            from, for aided starts (default: the manifest's nav)\n"
             "  --preload-gps             preload GPS ephemerides from it too, as the flight computer could\n"
             "                            hand them over (decoded ones replace them)\n"
-            "  --prior ERR_M,ERR_MS[,SIGMA_MS]\n"
+            "  --prior ERR_M,ERR_MS[,SIGMA_MS[,VEL_SIGMA[,POS_SIGMA]]]\n"
             "                            seed the receiver (rx_set_seed) at the run's start with the manifest's\n"
             "                            static truth moved ERR_M east and its start_gpst ERR_MS late, as the\n"
             "                            flight computer would from the pad and its clock; it claims the time\n"
-            "                            good to SIGMA_MS (default |ERR_MS|, at least 0.001)\n");
+            "                            good to SIGMA_MS (default |ERR_MS|, at least 0.001), zero velocity\n"
+            "                            good to VEL_SIGMA m/s (default 1) and the position good to POS_SIGMA m\n"
+            "                            (default |ERR_M|, at least 100)\n");
     src_usage();
 }
 
@@ -286,7 +288,7 @@ int main(int argc, char **argv)
     double meas_hz = 10.0, vec_ms = 50.0, lut_amp = 0.0, p4_latency_us = 0.0;
     float acq_thr = -1.0f, acq_interval = -1.0f, hatch_s = -1.0f;
     int no_iono = 0, no_tropo = 0, lut_bits = 0, no_raim = 0, pvt_unweighted = 0, preload_gps = 0, seed = 0;
-    double seed_err_m = 0.0, seed_err_ms = 0.0, seed_sigma_ms = -1.0;
+    double seed_err_m = 0.0, seed_err_ms = 0.0, seed_sigma_ms = -1.0, seed_vel_sigma = 1.0, seed_pos_sigma = -1.0;
     double pvt_adapt_tau = -1.0;
     gps_iono_t iono_aid;
     memset(&iono_aid, 0, sizeof(iono_aid));
@@ -330,8 +332,9 @@ int main(int argc, char **argv)
         } else if (!strcmp(a, "--preload-gps")) {
             preload_gps = 1;
         } else if (!strcmp(a, "--prior") && v) {
-            if (sscanf(argv[++i], "%lf,%lf,%lf", &seed_err_m, &seed_err_ms, &seed_sigma_ms) < 2) {
-                fprintf(stderr, "gnssrx: --prior takes POS_ERR_M,TIME_ERR_MS[,SIGMA_MS]\n");
+            if (sscanf(argv[++i], "%lf,%lf,%lf,%lf,%lf", &seed_err_m, &seed_err_ms, &seed_sigma_ms, &seed_vel_sigma,
+                       &seed_pos_sigma) < 2) {
+                fprintf(stderr, "gnssrx: --prior takes POS_ERR_M,TIME_ERR_MS[,SIGMA_MS[,VEL_SIGMA[,POS_SIGMA]]]\n");
                 return 2;
             }
             seed = 1;
@@ -517,10 +520,16 @@ int main(int argc, char **argv)
         if (seed_sigma_ms < 0.0) {
             seed_sigma_ms = fabs(seed_err_ms) > 0.001 ? fabs(seed_err_ms) : 0.001;
         }
-        rx_set_seed(rx, pos, fabs(seed_err_m) > 100.0 ? fabs(seed_err_m) : 100.0, wk, t - wk * 604800.0,
-                    1e-3 * seed_sigma_ms, 0);
-        printf("gnssrx: seeded with the truth %.0f m east and the time %+.3f ms out (claimed good to %.3f ms%s)\n",
-               seed_err_m, seed_err_ms, seed_sigma_ms, rx->time_coarse ? ": coarse time" : "");
+        if (seed_pos_sigma < 0.0) {
+            seed_pos_sigma = fabs(seed_err_m) > 100.0 ? fabs(seed_err_m) : 100.0;
+        }
+        rx_set_seed(rx, pos, seed_pos_sigma, wk, t - wk * 604800.0, 1e-3 * seed_sigma_ms, 0);
+        const double v0[3] = {0.0, 0.0, 0.0};
+        rx_set_seed_vel(rx, v0, seed_vel_sigma);
+        printf("gnssrx: seeded with the truth %.0f m east (claimed good to %.0f m, at rest to %.0f m/s) and the time "
+               "%+.3f ms out (claimed good to %.3f ms%s)\n",
+               seed_err_m, seed_pos_sigma, seed_vel_sigma, seed_err_ms, seed_sigma_ms,
+               rx->time_coarse ? ": coarse time" : "");
     }
     rx->pvt_opt.use_tropo = !no_tropo && !src.meta.tropo_none;
     /* Galileo and BeiDou ephemerides from the generator's RINEX, as the flight computer could
@@ -558,7 +567,7 @@ int main(int argc, char **argv)
                           "t_s,rx_tow,prn,pr_m,adr_cyc,dop_hz,cn0,lock_s,el_deg,resid_m,pr_raw_m,excl");
     FILE *fpvt = open_csv(out_dir, "pvt.csv",
                           "t_s,rx_tow,week,lat_deg,lon_deg,h_m,x,y,z,vx,vy,vz,clk_bias_m,clk_drift_mps,nsat,pdop,"
-                          "resid_rms,e_m,n_m,u_m,nexcl,chi2,chi2_lim,vel_valid,coarse,time_off_ms");
+                          "resid_rms,e_m,n_m,u_m,nexcl,chi2,chi2_lim,vel_valid,coarse,time_off_ms,dof,vdof,jam");
     FILE *feph = open_csv(out_dir, "eph.csv",
                           "t_s,prn,week,toe,toc,iode,iodc,health,sqrt_a,e,i0,omega0,omega,m0,delta_n,idot,"
                           "omega_dot,cuc,cus,crc,crs,cic,cis,af0,af1,af2,tgd");
@@ -613,7 +622,8 @@ int main(int argc, char **argv)
         fprintf(fini, "p4_latency_us = %.1f\ncmd_lead = %u\nloops_quiet = %s\nloops_boost = %s\nhatch_s = %g\n",
                 p4_latency_us, rc.cmd_lead, q, b, (double)rc.hatch_s);
         if (seed) {
-            fprintf(fini, "prior = %g,%g,%g\n", seed_err_m, seed_err_ms, seed_sigma_ms);
+            fprintf(fini, "prior = %g,%g,%g,%g,%g\n", seed_err_m, seed_err_ms, seed_sigma_ms, seed_vel_sigma,
+                    seed_pos_sigma);
         }
         if (boost0 < boost1) {
             fprintf(fini, "boost_at = %.3f,%.3f\n", boost0, boost1);
@@ -651,7 +661,8 @@ int main(int argc, char **argv)
     }
     double wall0 = now_s();
     double sum_e[3] = {0}, sum_e2[3] = {0};
-    long n_fix = 0, n_withheld = 0, n_excl_fix = 0, n_vel_fail = 0, n_coarse_fix = 0;
+    long n_fix = 0, n_withheld = 0, n_excl_fix = 0, n_vel_fail = 0, n_coarse_fix = 0, n_jam_epochs = 0;
+    double sup_max = 0.0;
     double t_first_fix = 0.0;
     int t_first_fix_set = 0;
     for (;;) {
@@ -776,6 +787,16 @@ int main(int argc, char **argv)
         if (t_now % meas_step == 0) {
             double ts = (double)t_now / fs;
             pvt_sol_t sol;
+            if (so.fe.mit.type != MIT_NONE) {
+                /* The stage's power in over power out is the interference flag (0.5 dB: a tone ~10 dB
+                 * under the noise, where unmitigated channels start to go false). */
+                const double sup = mit_take_suppression_db(&src.fe.mit);
+                rx_set_interference(rx, sup > 0.5);
+                if (sup > sup_max) {
+                    sup_max = sup;
+                }
+                n_jam_epochs += rx->interference;
+            }
             int no = rx_measure(rx, t_now, obs, CORR_MAX_CH, &sol);
             const int coarse_fix = rx->time_coarse;  /* as the solve had it (an anchor comes first) */
             double rtow = rx->clk_valid ? rx_time(rx, t_now) : 0.0;
@@ -797,11 +818,12 @@ int main(int argc, char **argv)
                     n_fix++;
                 }
                 fprintf(fpvt, "%.3f,%.9f,%d,%.9f,%.9f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%d,%.3f,%.4f,%.4f,%.4f,%.4f,"
-                              "%d,%.2f,%.2f,%d,%d,%.4f\n",
+                              "%d,%.2f,%.2f,%d,%d,%.4f,%d,%d,%d\n",
                         ts, rx_time(rx, t_now), rx->week, sol.lat * 180.0 / PI, sol.lon * 180.0 / PI, sol.h,
                         sol.pos[0], sol.pos[1], sol.pos[2], sol.vel[0], sol.vel[1], sol.vel[2], sol.clk_bias,
                         sol.clk_drift, sol.nsat, sol.pdop, sol.resid_rms, e[0], e[1], e[2], sol.nexcl, sol.chi2,
-                        sol.chi2_lim, sol.vel_valid, coarse_fix, 1e3 * sol.time_offset);
+                        sol.chi2_lim, sol.vel_valid, coarse_fix, 1e3 * sol.time_offset, sol.dof, sol.vdof,
+                        rx->interference);
                 n_coarse_fix += coarse_fix;
                 if (!t_first_fix_set) {
                     t_first_fix = ts;
@@ -900,7 +922,12 @@ int main(int argc, char **argv)
         mit_report(&src.fe.mit, line, sizeof(line));
         printf("  front end: %d interferer(s); magnitude density %.3f; mitigation %s\n", so.fe.n_jam,
                quant2_density(&src.fe.q), line);
+        if (so.fe.mit.type != MIT_NONE) {
+            printf("  interference flag on %ld epochs (the stage took out up to %.2f dB)\n", n_jam_epochs, sup_max);
+        }
     }
+    printf("  integrity gate: %u channels dropped (under the horizon, or out of agreement), %u fixes withheld for "
+           "want of redundancy\n", rx->n_gate_drop, rx->n_gate_withheld);
     if (t_first_fix_set) {
         printf("  first fix at %.3f s", t_first_fix);
         if (seed) {

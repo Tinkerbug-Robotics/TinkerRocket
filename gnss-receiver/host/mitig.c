@@ -203,6 +203,7 @@ void mit_apply(mit_t *m, const uint8_t *in, uint8_t *out, size_t n)
         const double xi0 = (c & FE_CODE_I_MAG) ? FE_WEIGHT_LARGE : FE_WEIGHT_SMALL;
         const double xq0 = (c & FE_CODE_Q_MAG) ? FE_WEIGHT_LARGE : FE_WEIGHT_SMALL;
         double xr = (c & FE_CODE_I_SIGN) ? -xi0 : xi0, xi = (c & FE_CODE_Q_SIGN) ? -xq0 : xq0;
+        m->pin += xr * xr + xi * xi;
         if (m->cfg.type == MIT_ANF) {
             for (int s = 0; s < m->cfg.n_notch; s++) {
                 mit_notch_t *a = &m->notch[s];
@@ -245,8 +246,18 @@ void mit_apply(mit_t *m, const uint8_t *in, uint8_t *out, size_t n)
             m->fifo_n--;
         }
     }
+    for (size_t k = 0; k < n; k++) {
+        m->pout += (double)m->y[2 * k] * m->y[2 * k] + (double)m->y[2 * k + 1] * m->y[2 * k + 1];
+    }
     quant2_apply(&m->q, m->y, n, out);
     m->n += n;
+}
+
+double mit_take_suppression_db(mit_t *m)
+{
+    const double r = m->pin > 0.0 && m->pout > 0.0 ? 10.0 * log10(m->pin / m->pout) : 0.0;
+    m->pin = m->pout = 0.0;
+    return r;
 }
 
 void mit_report(const mit_t *m, char *buf, size_t len)

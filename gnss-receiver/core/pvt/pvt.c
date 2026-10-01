@@ -376,6 +376,7 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t (*eph)[GNSS_MAX_PRN + 
                 return -1;
             }
             const int dof = sol->nsat - nx;
+            sol->dof = dof;
             sol->chi2 = chi2;
             sol->chi2_lim = dof > 0 ? chi2_line(dof, opt->raim_pfa) : 0.0;
             if (!opt->raim || dof < 1 || chi2 <= sol->chi2_lim) {
@@ -537,6 +538,7 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t (*eph)[GNSS_MAX_PRN + 
             }
         }
         const int dof = nv - 4;
+        sol->vdof = dof;
         if (!opt->raim || dof < 1 || chi2 <= chi2_line(dof, opt->raim_pfa)) {
             sol->vel_valid = 1;
             break;

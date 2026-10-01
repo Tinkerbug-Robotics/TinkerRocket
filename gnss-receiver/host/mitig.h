@@ -62,6 +62,7 @@ typedef struct {
     float *y;
     size_t y_cap;
     uint64_t n;
+    double pin, pout;     /* power in and out (before the requantizer), since the last take */
 } mit_t;
 
 void mit_cfg_default(mit_cfg_t *c);
@@ -73,6 +74,10 @@ int mit_init(mit_t *m, const mit_cfg_t *c, double fs);
 
 /* n 2-bit codes (fe_format.h) in, n out; in and out may be the same buffer. */
 void mit_apply(mit_t *m, const uint8_t *in, uint8_t *out, size_t n);
+
+/* What the stage took out since the last call, dB (power in over power out; 0 if nothing ran):
+ * the interference detector. */
+double mit_take_suppression_db(mit_t *m);
 
 /* One line on what it did: the notches' frequencies and depths, or the bins excised. */
 void mit_report(const mit_t *m, char *buf, size_t len);

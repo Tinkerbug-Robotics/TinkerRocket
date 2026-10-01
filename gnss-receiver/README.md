@@ -255,10 +255,29 @@ The flight computer can hand the receiver a position and a time (`rx_set_seed`),
   decodes, shifted), and it restarts.
 - **The offset is not rounded from the fixes.** Its sd is 0.25 ms on the static file, but it reads
   2–5 ms high in flight (below).
+- **Only channels that agree get a millisecond (the integrity gate).** A tone near L1 leaks
+  through the C/A code's spectral lines into channels that track nothing real. A seed's
+  millisecond would turn them into ranges; the navigation message never would, since they decode
+  nothing. So, with a seed or a fix:
+  - satellites predicted below −5° aren't searched;
+  - before a fix, a channel is resolved only within a group of three or more whose code phases
+    (less whole milliseconds) and Dopplers agree pairwise. The windows come from the seed's
+    position and velocity sigmas (`rx_set_seed_vel`; unknown velocity means no Doppler window);
+    the seed's own time and clock-rate errors are common and cancel;
+  - after a fix, each channel's code phase and Doppler must agree with the fix's prediction:
+    5 µs and 100 Hz, widening with the fix's age at up to 30 g;
+  - a channel failing for 2 s is dropped, and its PRN rests 10 s;
+  - a fix using ranges no navigation message has confirmed needs a spare degree of freedom in
+    its position and in its velocity, and must pass both tests. Otherwise it is withheld. Any
+    handful of false channels solves exactly; it can't also agree on Doppler.
+  - `rx_set_interference` (the stage's power in over out; gnssrx flags over 0.5 dB) applies that
+    rule to every fix. `pvt.csv` records `dof`, `vdof` and `jam`.
 
-`gnssrx --prior ERR_M,ERR_MS[,SIGMA_MS]` seeds from the manifest's static truth and start time,
-moved by those errors. `pvt.csv` records `coarse` and `time_off_ms` per fix, and the run ends with
-a line on when the time settled and by how much.
+`gnssrx --prior ERR_M,ERR_MS[,SIGMA_MS[,VEL_SIGMA[,POS_SIGMA]]]` seeds from the manifest's static
+truth and start time, moved by those errors. It claims the time good to SIGMA_MS, rest good to
+VEL_SIGMA m/s (default 1) and the position good to POS_SIGMA m. PSAS, seeded on the pad but
+acquiring in flight, takes `--prior 0,0,0.001,400,1000`. `pvt.csv` records `coarse` and
+`time_off_ms` per fix, and the run ends with a line on when the time settled and by how much.
 
 The SignalSim static file, GPS + Galileo, orbits preloaded (`runs/seed`):
 
@@ -800,7 +819,9 @@ thresholds, and the weak signal crosses them less often. No stage after the ADC 
   where an unmitigated receiver is captured.
 - **Left in, ours locks nothing in flight.** On the pad, where the antenna saw no real satellite,
   it reported 56 fixes, 95–5,126 km off (median 4,791). They came from 4–6 false satellites,
-  leaving the residual test 0–2 degrees of freedom: little or nothing to test.
+  leaving the residual test 0–2 degrees of freedom: little or nothing to test. With the
+  integrity gate (see [Seeded starts](#seeded-starts-and-coarse-time)) it reports none. Only
+  satellites above the horizon are searched, and their captured channels never agree.
 - **One notch finds the carrier unaided** (−416.7 kHz) and gives back what the offline float
   excision did: 9 satellites against 10, 32.8 dB-Hz against 33.5, all 327 fixes, 3.5 m (median)
   from those fixes.
@@ -821,14 +842,16 @@ thresholds, and the weak signal crosses them less often. No stage after the ADC 
     threshold in place of a median;
   - 3–5k LUTs.
 
+**The interference flag** is the stage's power in over power out.
+- With no interferer, either stage takes out 0.02 dB. The notch's own depth can't serve as the
+  detector: with nothing to remove it settles on the IF passband's hump near L1 (|z| 0.99), which
+  is harmless (42.68 dB-Hz either way).
+- A tone at −10 dB JNR takes out 0.33 dB, and PSAS's carrier up to 8.2 dB. gnssrx flags over
+  0.5 dB, and the flag makes every fix meet the gate's redundancy rule.
+
 **Open:**
-- **A captured receiver's fixes need a gate.** Two would serve: a Doppler check against the seed or
-  fix (false locks sit at Dopplers unrelated to their satellite's), and an interference flag from
-  the stage's input-to-output power.
-- **The notch's depth is no detector.** With no interferer it settles on the IF passband's hump
-  near L1 (|z| 0.99). That is harmless (42.68 dB-Hz either way), but the depth can't flag a tone;
-  the power ratio can.
 - **Longer acquisition snapshots** would let acquisition reach as far as tracking under a tone.
+- **The AGC-target policy** (lower it while the flag holds) is the P4's, not yet emulated here.
 
 ## Galileo E1 and BeiDou B1C (milestone 6)
 

@@ -108,6 +108,12 @@ typedef struct {
     int ms_valid;               /* GPS: n1 resolved from the seed or a fix (not the navigation message) */
     uint16_t sec_len;
     uint8_t sec[BDS_B1C_SEC_LEN];
+    /* The integrity gate (GPS): whether the channel's code phase and Doppler agree with the
+     * others' and the seed's or fix's prediction, how long it has failed, and whether its own
+     * navigation message has confirmed its millisecond. */
+    uint8_t gate_ok;
+    uint8_t nav_ok;
+    float gate_bad_s;
 } rx_nco_t;
 
 typedef struct {
@@ -152,6 +158,13 @@ typedef struct {
     int retimed;                    /* the time moved: pilots started on the old one stop, holds clear */
     uint32_t n_ms_fixed;            /* GPS channels whose millisecond the seed or a fix resolved */
     uint32_t n_nav_reset;           /* channels whose navigation-message time the rest contradicted */
+    /* The integrity gate: the seed's velocity uncertainty (rx_set_seed_vel; 1 km/s until told),
+     * the platform's interference flag (rx_set_interference), and what the gate did. */
+    double seed_vel_sigma;
+    int interference;
+    uint64_t t_gate, t_sol;         /* the gate's last check; the sample of the last fix */
+    uint32_t n_gate_drop;           /* channels dropped: below the horizon, or out of agreement */
+    uint32_t n_gate_withheld;       /* fixes withheld for want of redundancy */
     pvt_opt_t pvt_opt;
     int boost;                      /* the boost profile is the target */
     trk_profile_t prof;             /* the loops in force, moving toward the target (trk_profile_step) */
@@ -191,6 +204,28 @@ void rx_set_week_ref(rx_t *rx, int week);
  */
 void rx_set_seed(rx_t *rx, const double pos_ecef[3], double pos_sigma_m, int week, double tow,
                  double tow_sigma_s, uint64_t t);
+
+/* The seed's velocity (ECEF, m/s) and its 1-sigma: it narrows the gate's Doppler window before
+ * the first fix (on the pad, zero and about 1 m/s). Call after rx_set_seed. */
+void rx_set_seed_vel(rx_t *rx, const double vel_ecef[3], double vel_sigma_mps);
+
+/*
+ * The platform's interference flag (the FPGA stage's input-to-output power, say): while it is
+ * set, every fix needs the redundancy the gate otherwise asks only of unconfirmed ranges, and
+ * fixes carry the flag.
+ *
+ * The integrity gate itself needs no call. A tone near L1 leaks through the C/A code's spectral
+ * lines into channels that track nothing real, and a seed's millisecond would turn them into
+ * ranges. So, with a seed or a fix:
+ *   - satellites predicted below -5 deg are not searched, and channels on them are dropped;
+ *   - a channel gets its millisecond from the seed only in a group of three or more whose code
+ *     phases and Dopplers agree, within windows from the seed's position and velocity sigmas;
+ *     after a fix, only if its own agree with the fix's prediction (5 us, 100 Hz). One that
+ *     fails for 2 s is dropped, and its PRN rests 10 s;
+ *   - a fix using ranges no navigation message has confirmed needs a spare degree of freedom,
+ *     and a velocity that passes its own test with one; otherwise it is withheld.
+ */
+void rx_set_interference(rx_t *rx, int flag);
 
 /* The 1 ms tick at sample t_now. Returns the number of commands written. */
 int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *cmds, int ncap);

@@ -51,6 +51,7 @@ typedef struct {
     int vel_valid;
     double time_offset;       /* coarse_time: how late the transmit times ran (s), solved */
     double time_sigma;        /* and its formal 1-sigma (s), from the weights */
+    int dof, vdof;            /* degrees of freedom left in the position and the velocity */
 } pvt_sol_t;
 
 typedef struct {
