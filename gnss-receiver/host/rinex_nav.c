@@ -56,9 +56,30 @@ int rinex_nav_load(const char *path, unsigned sys_mask, int week, double tow, gp
         memset(iono, 0, sizeof(*iono));
     }
     int have_a = 0, have_b = 0;
+    double version = 3.0;
     while (fgets(line, sizeof(line), f)) {
         if (strstr(line, "END OF HEADER")) {
             break;
+        }
+        if (strstr(line, "RINEX VERSION / TYPE")) {
+            version = atof(line);
+        }
+        if (iono && (strstr(line, "ION ALPHA") || strstr(line, "ION BETA"))) {
+            /* RINEX 2: four D12.4 fields from column 2. */
+            double *v = strstr(line, "ALPHA") ? iono->alpha : iono->beta;
+            for (int k = 0; k < 4; k++) {
+                char buf[13];
+                memcpy(buf, line + 2 + 12 * k, 12);
+                buf[12] = 0;
+                for (int j = 0; j < 12; j++) {
+                    if (buf[j] == 'D' || buf[j] == 'd') {
+                        buf[j] = 'E';
+                    }
+                }
+                v[k] = atof(buf);
+            }
+            have_a |= strstr(line, "ALPHA") != NULL;
+            have_b |= strstr(line, "BETA") != NULL;
         }
         if (iono && strstr(line, "IONOSPHERIC CORR") && (!strncmp(line, "GPSA", 4) || !strncmp(line, "GPSB", 4))) {
             double *v = line[3] == 'A' ? iono->alpha : iono->beta;
@@ -81,9 +102,12 @@ int rinex_nav_load(const char *path, unsigned sys_mask, int week, double tow, gp
         iono->valid = have_a && have_b;
     }
     const double t_target_gps = (double)week * 604800.0 + tow;
+    /* RINEX 2 (GPS only) lays each record out one column left of RINEX 3, with a two-digit PRN and
+     * year and no system letter. */
+    const int v2 = version < 3.0, o = v2 ? -1 : 0;
     int loaded = 0;
     while (fgets(rec[0], sizeof(rec[0]), f)) {
-        char sysc = rec[0][0];
+        char sysc = v2 ? 'G' : rec[0][0];
         int ncont = (sysc == 'R' || sysc == 'S') ? 3 : 7;
         int ok = 1;
         for (int k = 1; k <= ncont; k++) {
@@ -98,15 +122,25 @@ int rinex_nav_load(const char *path, unsigned sys_mask, int week, double tow, gp
         if (sys < 0 || !(sys_mask & (1u << sys))) {
             continue;
         }
-        int prn = atoi((char[3]){rec[0][1], rec[0][2], 0});
+        int prn = v2 ? atoi((char[3]){rec[0][0], rec[0][1], 0}) : atoi((char[3]){rec[0][1], rec[0][2], 0});
         int y, mo, d, hh, mi, ss;
-        if (prn < 1 || prn > GNSS_MAX_PRN || sscanf(rec[0] + 4, "%d %d %d %d %d %d", &y, &mo, &d, &hh, &mi, &ss) != 6) {
+        if (v2) {
+            double fs;
+            if (sscanf(rec[0] + 2, "%d %d %d %d %d %lf", &y, &mo, &d, &hh, &mi, &fs) != 6) {
+                continue;
+            }
+            y += y < 80 ? 2000 : 1900;
+            ss = (int)fs;
+        } else if (sscanf(rec[0] + 4, "%d %d %d %d %d %d", &y, &mo, &d, &hh, &mi, &ss) != 6) {
+            continue;
+        }
+        if (prn < 1 || prn > GNSS_MAX_PRN) {
             continue;
         }
         if (sys == GNSS_SYS_BDS && (prn <= 5 || prn >= 59)) {
             continue;  /* GEO */
         }
-        double src = field(rec[5], 23);
+        double src = field(rec[5], 23 + o);
         if (sys == GNSS_SYS_GAL && !(((long)src & 1) || ((long)src & 4))) {
             continue;  /* F/NAV: its clock is for E5a */
         }
@@ -116,35 +150,35 @@ int rinex_nav_load(const char *path, unsigned sys_mask, int week, double tow, gp
         e.prn = prn;
         long days = days_from_1980(y, mo, d);
         e.toc = (double)(days % 7) * 86400.0 + hh * 3600.0 + mi * 60.0 + ss;
-        e.af0 = field(rec[0], 23);
-        e.af1 = field(rec[0], 42);
-        e.af2 = field(rec[0], 61);
-        e.iode = (int)field(rec[1], 4);
-        e.crs = field(rec[1], 23);
-        e.delta_n = field(rec[1], 42);
-        e.m0 = field(rec[1], 61);
-        e.cuc = field(rec[2], 4);
-        e.e = field(rec[2], 23);
-        e.cus = field(rec[2], 42);
-        e.sqrt_a = field(rec[2], 61);
-        e.toe = field(rec[3], 4);
-        e.cic = field(rec[3], 23);
-        e.omega0 = field(rec[3], 42);
-        e.cis = field(rec[3], 61);
-        e.i0 = field(rec[4], 4);
-        e.crc = field(rec[4], 23);
-        e.omega = field(rec[4], 42);
-        e.omega_dot = field(rec[4], 61);
-        e.idot = field(rec[5], 4);
-        e.week = (int)field(rec[5], 42);
-        e.health = (int)field(rec[6], 23);
+        e.af0 = field(rec[0], 23 + o);
+        e.af1 = field(rec[0], 42 + o);
+        e.af2 = field(rec[0], 61 + o);
+        e.iode = (int)field(rec[1], 4 + o);
+        e.crs = field(rec[1], 23 + o);
+        e.delta_n = field(rec[1], 42 + o);
+        e.m0 = field(rec[1], 61 + o);
+        e.cuc = field(rec[2], 4 + o);
+        e.e = field(rec[2], 23 + o);
+        e.cus = field(rec[2], 42 + o);
+        e.sqrt_a = field(rec[2], 61 + o);
+        e.toe = field(rec[3], 4 + o);
+        e.cic = field(rec[3], 23 + o);
+        e.omega0 = field(rec[3], 42 + o);
+        e.cis = field(rec[3], 61 + o);
+        e.i0 = field(rec[4], 4 + o);
+        e.crc = field(rec[4], 23 + o);
+        e.omega = field(rec[4], 42 + o);
+        e.omega_dot = field(rec[4], 61 + o);
+        e.idot = field(rec[5], 4 + o);
+        e.week = (int)field(rec[5], 42 + o);
+        e.health = (int)field(rec[6], 23 + o);
         if (sys == GNSS_SYS_GPS) {
-            e.tgd = field(rec[6], 42);
-            e.iodc = (int)field(rec[6], 61);
+            e.tgd = field(rec[6], 42 + o);
+            e.iodc = (int)field(rec[6], 61 + o);
         } else if (sys == GNSS_SYS_GAL) {
-            e.tgd = field(rec[6], 61);  /* BGD(E1,E5b): the I/NAV clock's single-frequency E1 term */
+            e.tgd = field(rec[6], 61 + o);  /* BGD(E1,E5b): the I/NAV clock's single-frequency E1 term */
         } else {
-            e.tgd = field(rec[6], 42);  /* TGD1 (B1): SignalSim delays B1C by it */
+            e.tgd = field(rec[6], 42 + o);  /* TGD1 (B1): SignalSim delays B1C by it */
         }
         double t_rec = (double)e.week * 604800.0 + e.toe;
         double t_want = sys == GNSS_SYS_BDS

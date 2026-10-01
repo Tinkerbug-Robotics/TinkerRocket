@@ -56,6 +56,7 @@ static void usage(void)
             "  --p4-latency-us T         commands reach the correlator T us after the tick (< 1000),\n"
             "                            as the P4's processing would deliver them\n"
             "  --acq-threshold M         acquisition detection threshold\n"
+            "  --acq-interval S          seconds between searches for satellites not in a channel (default 5)\n"
             "  --iono A0,A1,A2,A3,B0,B1,B2,B3   preload Klobuchar parameters (default: the manifest's)\n"
             "  --no-iono --no-tropo      leave the atmosphere uncorrected\n"
             "  --no-raim                 skip the fix's residual test\n"
@@ -77,8 +78,26 @@ static void usage(void)
             "  --pilot-dumps             write pilot channels' raw dumps (before secondary-code wipe-off)\n"
             "                            to pilot_dumps.csv, for checking the wipe-off\n"
             "  --nav FILE | --no-nav     RINEX navigation file to preload Galileo and BeiDou ephemerides\n"
-            "                            from, for aided starts (default: the manifest's nav)\n");
+            "                            from, for aided starts (default: the manifest's nav)\n"
+            "  --preload-gps             preload GPS ephemerides from it too, as the flight computer could\n"
+            "                            hand them over (decoded ones replace them)\n");
     src_usage();
+}
+
+/* "YYYY-MM-DD HH:MM:SS" (GPS time) to seconds since the GPS epoch, 1980-01-06; returns -1 if unparsed. */
+static int gpst_parse(const char *s, double *t)
+{
+    int y, mo, d, hh, mi;
+    double ss;
+    if (!s || sscanf(s, "%d-%d-%d %d:%d:%lf", &y, &mo, &d, &hh, &mi, &ss) != 6) {
+        return -1;
+    }
+    int yy = y - (mo <= 2), mm = mo;
+    long era = (yy >= 0 ? yy : yy - 399) / 400, yoe = yy - era * 400;
+    long doy = (153 * (mm + (mm > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    long days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468 - 3657;
+    *t = (double)days * 86400.0 + hh * 3600.0 + mi * 60.0 + ss;
+    return 0;
 }
 
 static FILE *open_csv(const char *dir, const char *name, const char *header)
@@ -259,8 +278,8 @@ int main(int argc, char **argv)
     src_default_opts(&so);
     const char *out_dir = "runs/gnssrx", *corr_arg = NULL, *vec_dir = NULL, *truth_arg = NULL;
     double meas_hz = 10.0, vec_ms = 50.0, lut_amp = 0.0, p4_latency_us = 0.0;
-    float acq_thr = -1.0f;
-    int no_iono = 0, no_tropo = 0, lut_bits = 0, no_raim = 0, pvt_unweighted = 0;
+    float acq_thr = -1.0f, acq_interval = -1.0f;
+    int no_iono = 0, no_tropo = 0, lut_bits = 0, no_raim = 0, pvt_unweighted = 0, preload_gps = 0;
     double pvt_adapt_tau = -1.0;
     gps_iono_t iono_aid;
     memset(&iono_aid, 0, sizeof(iono_aid));
@@ -297,6 +316,10 @@ int main(int argc, char **argv)
             meas_hz = atof(argv[++i]);
         } else if (!strcmp(a, "--acq-threshold") && v) {
             acq_thr = (float)atof(argv[++i]);
+        } else if (!strcmp(a, "--acq-interval") && v) {
+            acq_interval = (float)atof(argv[++i]);
+        } else if (!strcmp(a, "--preload-gps")) {
+            preload_gps = 1;
         } else if (!strcmp(a, "--no-raim")) {
             no_raim = 1;
         } else if (!strcmp(a, "--pvt-unweighted")) {
@@ -430,6 +453,9 @@ int main(int argc, char **argv)
     if (acq_thr > 0.0f) {
         rc.acq_threshold = acq_thr;
     }
+    if (acq_interval > 0.0f) {
+        rc.acq_interval_s = acq_interval;
+    }
     if ((loops_quiet && loops_arg_parse(loops_quiet, &rc.quiet) != 0) ||
         (loops_boost && loops_arg_parse(loops_boost, &rc.boost) != 0)) {
         fprintf(stderr, "gnssrx: a loop profile is PF,PP,PD/LF,LP,LD[:MS]\n");
@@ -452,33 +478,32 @@ int main(int argc, char **argv)
     }
     rx->pvt_opt.use_iono = !no_iono;
     rx->pvt_opt.raim = !no_raim;
+    {
+        /* The file's date settles the navigation message's 10-bit week (a 2015 recording reads
+         * 1024 weeks late otherwise). */
+        double t0;
+        if (gpst_parse(src.meta.start_gpst, &t0) == 0) {
+            rx_set_week_ref(rx, (int)floor(t0 / 604800.0));
+        }
+    }
     rx->pvt_opt.use_tropo = !no_tropo && !src.meta.tropo_none;
     /* Galileo and BeiDou ephemerides from the generator's RINEX, as the flight computer could
      * preload them: the records nearest the run's middle, from the manifest's start_gpst. */
     const char *nav = no_nav ? NULL : (nav_arg ? nav_arg : (src.meta.nav[0] ? src.meta.nav : NULL));
     if (nav) {
         char nav_path[4096];
-        int y, mo, d, hh, mi;
-        double ss;
-        if (manifest_resolve_iq(nav, nav_path, sizeof(nav_path)) != 0 ||
-            sscanf(src.meta.start_gpst, "%d-%d-%d %d:%d:%lf", &y, &mo, &d, &hh, &mi, &ss) != 6) {
+        double t0;
+        if (manifest_resolve_iq(nav, nav_path, sizeof(nav_path)) != 0 || gpst_parse(src.meta.start_gpst, &t0) != 0) {
             fprintf(stderr, "gnssrx: cannot preload %s (needs the file and the manifest's start_gpst)\n", nav);
             return 1;
         }
         /* GPS week and second of the run's middle. */
-        long days = 0;
-        {
-            int yy = y - (mo <= 2), mm = mo;
-            long era = (yy >= 0 ? yy : yy - 399) / 400, yoe = yy - era * 400;
-            long doy = (153 * (mm + (mm > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-            days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468 - 3657;
-        }
-        double t_mid = (double)days * 86400.0 + hh * 3600.0 + mi * 60.0 + ss + so.start_s +
-                       (so.dur_s > 0 ? 0.5 * so.dur_s : 0.0);
+        double t_mid = t0 + so.start_s + (so.dur_s > 0 ? 0.5 * so.dur_s : 0.0);
         int week = (int)floor(t_mid / 604800.0);
-        int n_eph = rinex_nav_load(nav_path, (1u << GNSS_SYS_GAL) | (1u << GNSS_SYS_BDS), week,
-                                   t_mid - week * 604800.0, rx->eph, NULL);
-        printf("gnssrx: preloaded %d Galileo/BeiDou ephemerides from %s\n", n_eph, nav);
+        const unsigned mask = (1u << GNSS_SYS_GAL) | (1u << GNSS_SYS_BDS) | (preload_gps ? 1u << GNSS_SYS_GPS : 0u);
+        int n_eph = rinex_nav_load(nav_path, mask, week, t_mid - week * 604800.0, rx->eph, NULL);
+        printf("gnssrx: preloaded %d %s ephemerides from %s\n", n_eph,
+               preload_gps ? "GPS/Galileo/BeiDou" : "Galileo/BeiDou", nav);
     }
 
     const int acq_ms = rc.acq_ms;

@@ -128,7 +128,7 @@ int src_open(src_t *s, src_opts_t *o)
     }
     fs = o->have_fs ? o->fs : fs;
     fc = o->have_fc ? o->fc : (fc > 0.0 ? fc : GNSS_FREQ_L1_HZ);
-    if (!(fs > 0.0) || iqf_open(&s->f, s->path, IQF_CS8, fs, fc) != 0) {
+    if (!(fs > 0.0) || iqf_open(&s->f, s->path, (iqf_format_t)s->meta.format, fs, fc) != 0) {
         fprintf(stderr, "source: cannot open %s (rate unknown? add it to the manifest or pass --fs)\n", s->path);
         return -1;
     }

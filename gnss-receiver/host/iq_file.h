@@ -11,7 +11,10 @@ extern "C" {
 #endif
 
 typedef enum {
-    IQF_CS8 = 0  /* int8 I, int8 Q interleaved, sample = I + jQ (HackRF, gps-sdr-sim, SignalSim .C8) */
+    IQF_CS8 = 0,     /* int8 I, int8 Q interleaved, sample = I + jQ (HackRF, gps-sdr-sim, SignalSim .C8) */
+    IQF_MAX2769_2B   /* MAX2769 2-bit sign/magnitude I and Q, two samples a byte, the older in the high
+                        nibble, each nibble I-mag, I-sign, Q-mag, Q-sign from the top (PSAS's jGPS);
+                        read as levels +-1 and +-3 */
 } iqf_format_t;
 
 typedef struct {

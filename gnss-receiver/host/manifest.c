@@ -2,6 +2,8 @@
 
 #include "manifest.h"
 
+#include "iq_file.h"
+
 #include "ini.h"
 
 #include <stdio.h>
@@ -72,6 +74,8 @@ int manifest_lookup(const char *manifest_path, const char *basename, iq_meta_t *
     get_str(&ini, basename, "start_gpst", m->start_gpst, sizeof(m->start_gpst));
     get_str(&ini, basename, "truth", m->truth, sizeof(m->truth));
     get_str(&ini, basename, "nav", m->nav, sizeof(m->nav));
+    get_str(&ini, basename, "format", s, sizeof(s));
+    m->format = strcmp(s, "max2769_2bit") == 0 ? IQF_MAX2769_2B : IQF_CS8;
     ini_free(&ini);
     return 0;
 }

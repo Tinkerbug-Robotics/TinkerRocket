@@ -126,6 +126,7 @@ typedef struct {
     uint64_t next_acq;              /* sample count of the next search */
     uint64_t next_aid;              /* and of the next aided start */
     uint64_t aid_hold[GNSS_SYS_COUNT][GNSS_MAX_PRN + 1];  /* no aided start for this satellite before */
+    int week_ref;                   /* rx_set_week_ref */
     int acc_valid;                  /* IMU aiding: the vehicle's acceleration (rx_set_accel) */
     double acc[3];
 
@@ -153,6 +154,10 @@ void rx_set_boost(rx_t *rx, int on);
  * feed-forward, so they track only what the IMU misses and can stay narrow through a boost.
  */
 void rx_set_accel(rx_t *rx, const double acc_ecef[3], int valid);
+
+/* A full GPS week near today's (the flight computer's clock, a file's date): the navigation
+ * message's 10-bit week resolves to the nearest. Default LNAV_WEEK_REF (2019-2038). */
+void rx_set_week_ref(rx_t *rx, int week);
 
 /* The 1 ms tick at sample t_now. Returns the number of commands written. */
 int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *cmds, int ncap);

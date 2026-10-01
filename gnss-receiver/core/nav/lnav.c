@@ -45,6 +45,14 @@ void lnav_init(lnav_t *l, int prn)
     memset(l, 0, sizeof(*l));
     l->prn = prn;
     l->week = -1;
+    l->week_ref = LNAV_WEEK_REF;
+}
+
+int lnav_resolve_week(int wn10, int ref)
+{
+    /* The one week in [ref - 512, ref + 512) whose low 10 bits are wn10. */
+    const int base = ref - 512;
+    return base + (((wn10 - base) % 1024) + 1024) % 1024;
 }
 
 /* Field of n bits starting at subframe bit a (1-based, as in IS-GPS-200), within one word's data. */
@@ -77,7 +85,7 @@ static void decode_eph(lnav_t *l)
     gps_eph_t *e = &l->eph;
     const double P = GPS_PI_ICD;
     e->prn = l->prn;
-    e->week = (int)get(s1, 61, 10) + 2048;  /* second rollover era: 2019-04-07 to 2038 */
+    e->week = lnav_resolve_week((int)get(s1, 61, 10), l->week_ref);
     e->ura = (int)get(s1, 73, 4);
     e->health = (int)get(s1, 77, 6);
     e->iodc = iodc;
@@ -122,6 +130,8 @@ static void decode_iono(lnav_t *l, const uint32_t *dw)
     io->valid = 1;
 }
 
+static int take_data(lnav_t *l, const uint32_t *dw, int id);
+
 /* Tries the 302 buffered bits as [D29*, D30*, subframe]. Returns the subframe ID, or 0. */
 static int try_subframe(lnav_t *l)
 {
@@ -142,7 +152,7 @@ static int try_subframe(lnav_t *l)
         b[k] = (uint8_t)(l->bits[k] ^ inv);
     }
     uint32_t dw[10];
-    int d29 = b[0], d30 = b[1];
+    int d29 = b[0], d30 = b[1], how_tail = 0;
     for (int w = 0; w < 10; w++) {
         uint32_t word = 0;
         for (int k = 0; k < 30; k++) {
@@ -154,34 +164,111 @@ static int try_subframe(lnav_t *l)
         }
         d29 = (int)((word >> 1) & 1u);
         d30 = (int)(word & 1u);
+        if (w == 1) {
+            how_tail = (int)(word & 3u);
+        }
     }
     int id = (int)((dw[1] >> 2) & 7u);
-    uint32_t tow_count = dw[1] >> 7;
-    if (id < 1 || id > 5) {
+    if (id < 1 || id > 5 || how_tail != 0) {
         return 0;
     }
-    l->synced = 1;
-    l->inverted = inv;
-    l->sf_period = l->period[2];
-    l->sf_tow = (double)tow_count * 6.0 - 6.0;  /* HOW gives the start of the next subframe */
-    if (l->sf_tow < 0.0) {
-        l->sf_tow += 604800.0;
+    /* Data only on the confirmed subframe grid (try_timing); anything else is a window across two
+     * subframes whose words all pass parity. Before the grid is confirmed, hold the subframe. */
+    if (!l->synced) {
+        l->pend_period = l->period[2];
+        l->pend_id = id;
+        l->pend_inv = inv;
+        memcpy(l->pend_dw, dw, sizeof(dw));
+        return 0;
     }
+    if (inv != l->inverted || (uint32_t)(l->period[2] - l->sf_period) % 6000u != 0u) {
+        return 0;
+    }
+    return take_data(l, dw, id);
+}
+
+/* A subframe on the confirmed grid: count it, and keep its data. Returns its ID. */
+static int take_data(lnav_t *l, const uint32_t *dw, int id)
+{
     l->n_subframes++;
     if (id <= 3) {
-        memcpy(l->sf_data[id - 1], dw, sizeof(dw));
+        memcpy(l->sf_data[id - 1], dw, sizeof(l->sf_data[0]));
         l->have_sf |= 1 << (id - 1);
         if (l->have_sf == 7) {
             decode_eph(l);
             l->have_sf = 0;
         }
         if (id == 1) {
-            l->week = (int)get(dw, 61, 10) + 2048;
+            l->week = lnav_resolve_week((int)get(dw, 61, 10), l->week_ref);
         }
     } else if (id == 4 && get(dw, 63, 6) == 56) {
         decode_iono(l, dw);
     }
     return id;
+}
+
+/*
+ * Timing from a subframe's first two words: the newest 62 bits as [D29*, D30*, TLM, HOW]. The
+ * HOW carries the time of week, so 1.2 s of clean bits after a preamble set the time; the whole
+ * subframe (6 s) is only needed for its data.
+ */
+static void try_timing(lnav_t *l)
+{
+    const int w0 = l->nbits - 62;
+    if (w0 < 0) {
+        return;
+    }
+    const uint8_t *b = l->bits + w0;
+    uint32_t pre = 0;
+    for (int k = 0; k < 8; k++) {
+        pre = (pre << 1) | b[2 + k];
+    }
+    int inv;
+    if (pre == PREAMBLE) {
+        inv = 0;
+    } else if (pre == (~PREAMBLE & 0xFFu)) {
+        inv = 1;
+    } else {
+        return;
+    }
+    uint32_t dw[2];
+    int d29 = b[0] ^ inv, d30 = b[1] ^ inv;
+    for (int w = 0; w < 2; w++) {
+        uint32_t word = 0;
+        for (int k = 0; k < 30; k++) {
+            word = (word << 1) | (uint32_t)(b[2 + 30 * w + k] ^ inv);
+        }
+        if (!lnav_parity(word, d29, d30, &dw[w])) {
+            return;
+        }
+        d29 = (int)((word >> 1) & 1u);
+        d30 = (int)(word & 1u);
+    }
+    const int id = (int)((dw[1] >> 2) & 7u);
+    const uint32_t tow_count = dw[1] >> 7;
+    /* Two real words in a row always pass parity, so a data word that happens to begin with the
+     * preamble would pass too: the HOW's last two bits, solved to zero by the satellite, and a
+     * plausible ID and count screen most of that out (rx then votes on the time across satellites). */
+    if (id < 1 || id > 5 || tow_count == 0 || tow_count > 100800u || (d29 | d30) != 0) {
+        return;
+    }
+    const uint32_t period = l->period[w0 + 2];
+    if (l->cand_valid && inv == l->cand_inv && period - l->cand_period == 6000u &&
+        tow_count == l->cand_tow % 100800u + 1u) {
+        const int was = l->synced;
+        l->synced = 1;
+        l->inverted = inv;
+        l->sf_period = period;
+        l->sf_tow = (double)tow_count * 6.0 - 6.0;  /* HOW gives the start of the next subframe */
+        if (!was && l->pend_id && l->pend_period == l->cand_period && l->pend_inv == inv) {
+            l->ready_id = take_data(l, l->pend_dw, l->pend_id);  /* the subframe the first HOW opened */
+        }
+        l->pend_id = 0;
+    }
+    l->cand_valid = 1;
+    l->cand_inv = inv;
+    l->cand_period = period;
+    l->cand_tow = tow_count;
 }
 
 int lnav_push(lnav_t *l, int bit, uint32_t period)
@@ -195,6 +282,11 @@ int lnav_push(lnav_t *l, int bit, uint32_t period)
     l->bits[l->nbits] = (uint8_t)(bit > 0);
     l->period[l->nbits] = period;
     l->nbits++;
+    l->ready_id = 0;
+    try_timing(l);
+    if (l->ready_id) {
+        return l->ready_id;
+    }
     if (l->nbits < cap) {
         return 0;
     }

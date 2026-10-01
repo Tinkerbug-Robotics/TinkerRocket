@@ -6,10 +6,10 @@
 #include <string.h>
 #include <sys/types.h>
 
-static size_t sample_bytes(iqf_format_t fmt)
+/* Bytes per complex sample, times two (the packed 2-bit format holds two samples a byte). */
+static int64_t half_bytes(iqf_format_t fmt)
 {
-    (void)fmt;
-    return 2;
+    return fmt == IQF_MAX2769_2B ? 1 : 4;
 }
 
 int iqf_open(iqf_t *f, const char *path, iqf_format_t fmt, double fs, double fc)
@@ -29,7 +29,7 @@ int iqf_open(iqf_t *f, const char *path, iqf_format_t fmt, double fs, double fc)
     f->fmt = fmt;
     f->fs = fs;
     f->fc = fc;
-    f->nsamp = (int64_t)bytes / (int64_t)sample_bytes(fmt);
+    f->nsamp = (int64_t)bytes * 2 / half_bytes(fmt);
     f->pos = 0;
     return 0;
 }
@@ -39,15 +39,54 @@ int iqf_seek(iqf_t *f, int64_t sample)
     if (sample < 0 || sample > f->nsamp) {
         return -1;
     }
-    if (fseeko(f->fp, (off_t)(sample * (int64_t)sample_bytes(f->fmt)), SEEK_SET) != 0) {
+    if (fseeko(f->fp, (off_t)(sample * half_bytes(f->fmt) / 2), SEEK_SET) != 0) {
         return -1;
     }
     f->pos = sample;
     return 0;
 }
 
+/* The packed MAX2769 format: whole bytes from the one holding sample pos, skipping its first
+ * nibble when pos is odd. */
+static size_t read_max2769(iqf_t *f, float *iq, size_t n)
+{
+    const int odd = (int)(f->pos & 1);
+    const size_t nbytes = (n + (size_t)odd + 1) / 2;
+    if (nbytes > f->raw_cap * 2) {
+        int8_t *p = (int8_t *)realloc(f->raw, nbytes);
+        if (!p) {
+            return 0;
+        }
+        f->raw = p;
+        f->raw_cap = (nbytes + 1) / 2;
+    }
+    if (fseeko(f->fp, (off_t)(f->pos / 2), SEEK_SET) != 0) {
+        return 0;
+    }
+    const size_t got_bytes = fread(f->raw, 1, nbytes, f->fp);
+    size_t got = 0;
+    for (size_t b = 0; b < got_bytes && got < n; b++) {
+        const unsigned byte = (uint8_t)f->raw[b];
+        for (int j = (b == 0 ? odd : 0); j < 2 && got < n; j++) {
+            const unsigned nib = (byte >> (4 - 4 * j)) & 0xFu;
+            const float i = (nib & 8u) ? 3.0f : 1.0f, q = (nib & 2u) ? 3.0f : 1.0f;
+            iq[2 * got] = (nib & 4u) ? -i : i;
+            iq[2 * got + 1] = (nib & 1u) ? -q : q;
+            got++;
+        }
+    }
+    if (f->pos + (int64_t)got > f->nsamp) {
+        got = (size_t)(f->nsamp - f->pos);
+    }
+    f->pos += (int64_t)got;
+    return got;
+}
+
 size_t iqf_read(iqf_t *f, float *iq, size_t n)
 {
+    if (f->fmt == IQF_MAX2769_2B) {
+        return read_max2769(f, iq, n);
+    }
     if (n > f->raw_cap) {
         int8_t *p = (int8_t *)realloc(f->raw, n * 2);
         if (!p) {

@@ -1,6 +1,7 @@
 #include "gnss/rx.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define TWO_POW_32 4294967296.0
@@ -40,6 +41,7 @@ void rx_init(rx_t *rx, const rx_cfg_t *cfg)
         }
     }
     rx->week = -1;
+    rx->week_ref = LNAV_WEEK_REF;
     rx->prof = cfg->quiet;
     pvt_default_opt(&rx->pvt_opt);
 }
@@ -84,6 +86,17 @@ static void free_channel(rx_t *rx, int ch)
 void rx_set_boost(rx_t *rx, int on)
 {
     rx->boost = on != 0;
+}
+
+static int cmp_double(const void *a, const void *b)
+{
+    const double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+void rx_set_week_ref(rx_t *rx, int week)
+{
+    rx->week_ref = week;
 }
 
 void rx_set_accel(rx_t *rx, const double acc_ecef[3], int valid)
@@ -284,6 +297,7 @@ int rx_acquire(rx_t *rx, uint64_t t_now, uint64_t t0, const float *iq, size_t n,
         trk_start(c, prn, (float)r.dop_hz, rx->cfg.tap_chips, rx->if_word, rx->code_word0, rx->carr_k, rx->code_k);
         c->acq_metric = r.metric;
         lnav_init(&rx->nav[ch], prn);
+        rx->nav[ch].week_ref = rx->week_ref;
         rx->sat_ch[GNSS_SYS_GPS][prn] = ch;
         int32_t cw;
         uint64_t kw;
@@ -384,6 +398,30 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
         /* BDT runs 14 s behind GPST; GST's seconds of week track GPST's. */
         t_tx[no] = sys == GNSS_SYS_BDS ? tt - BDT_MINUS_GPST : tt;
         no++;
+    }
+    if (no >= 3) {
+        /* Every satellite's transmit time lies within ~0.1 s of the others' (paths differ by under
+         * 30 ms); one far off took its time from a false frame sync (a data word that began like a
+         * preamble). Unsync it and leave it out. */
+        double d[CORR_MAX_CH], srt[CORR_MAX_CH];
+        for (int k = 0; k < no; k++) {
+            d[k] = srt[k] = gps_time_diff(t_tx[k], t_tx[0]);
+        }
+        qsort(srt, (size_t)no, sizeof(double), cmp_double);
+        const double med = (no & 1) ? srt[no / 2] : 0.5 * (srt[no / 2 - 1] + srt[no / 2]);
+        int w = 0;
+        for (int k = 0; k < no; k++) {
+            if (fabs(d[k] - med) > 0.1) {
+                if (rx->nco[obs[k].ch].sec_len == 0) {
+                    rx->nav[obs[k].ch].synced = 0;
+                }
+                continue;
+            }
+            obs[w] = obs[k];
+            t_tx[w] = t_tx[k];
+            w++;
+        }
+        no = w;
     }
     memset(sol, 0, sizeof(*sol));
     if (no < 4) {

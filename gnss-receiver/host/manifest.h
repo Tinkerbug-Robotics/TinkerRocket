@@ -22,6 +22,7 @@ typedef struct {
     char start_gpst[64];
     char truth[256];
     char nav[256];           /* RINEX navigation file the generator used (in $GNSS_IQ_DIR), for aiding */
+    int format;              /* iqf_format_t: format = cs8 (the default) or max2769_2bit */
 } iq_meta_t;
 
 /* Fills m for the entry named basename (the file name without directories). Returns 0 if found. */

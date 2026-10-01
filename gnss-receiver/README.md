@@ -116,6 +116,15 @@ How each stage works:
   loops; see [Boost dynamics](#boost-dynamics-milestone-5).
 - **Navigation data:** bit sync by a transition histogram, then LNAV with parity, ephemeris and
   page 18.
+  - The time of week comes from a subframe's first two words (TLM, HOW: 1.2 s of clean bits).
+  - It counts only once the next subframe's HOW lands 6 s later with the count one up. Two real
+    words in a row always pass parity. On PSAS's flight, an almanac page (the same on every
+    satellite) began a word like a preamble, and every satellite took the same wrong time from it.
+  - A whole subframe that arrived before that confirmation is held, and its data is used once
+    confirmed.
+  - The receiver also drops any satellite whose time disagrees with the others' by more than 0.1 s.
+  - The 10-bit week resolves against a reference week (`rx_set_week_ref`; gnssrx takes it from the
+    file's date).
 - **Observables and PVT:** observables come from the exact integer NCO state.
   - Doppler is the NCO's mean frequency over the last 20 ms, moved forward by the loop's rate.
   - Pseudoranges are carrier-smoothed (Hatch, 100 s, `rx_cfg_t.hatch_s`) while the PLL holds,
@@ -572,6 +581,79 @@ past burnout:
   Both are configurations nothing flies. A lock-quality term in the sigma would cover them.
 - **Real motors add what the files lack.** Vibration on the oscillator, plume, spin and antenna
   phase are milestone 7.
+
+## Real flight data: PSAS Launch-12 (milestone 7)
+
+Portland State Aerospace Society's LV2 flew on 2015-07-19 at Brothers, Oregon. Its jGPS v3 recorded
+the raw signal: a passive antenna, SAW filters, a MAX2769B at 4.092 MS/s, zero IF, 2-bit. The
+recording runs from T−32 s to T+34.7 s ([psas/Launch-12](https://github.com/psas/Launch-12),
+`data/GPS`). The flight:
+- 33 g peak;
+- burnout at T+5.7 s and 378 m/s (Mach 1.1);
+- apogee 4,781 m above the pad at T+30.7 s, by the TeleMetrum altimeter on the same rocket.
+
+The data stays outside the repo. The manifest describes the files; point `$GNSS_IQ_DIR` at them.
+
+**What kept receivers off it.** PSAS's own software never tracked it, and their COTS receiver
+called it "pretty much garbage". `py/psas_condition.py` fixes four things and writes an 8-bit
+file:
+
+| Impairment | Measured | Done |
+|---|---|---|
+| An on-board carrier near +418 kHz, drifting a few kHz | 39 dB over the noise in a 250 Hz bin, with the 2-bit quantizer's harmonics at 832 kHz and 1.26 MHz | Excised: 4096-point sqrt-Hann frames, bins standing 8× over the median zeroed (7.5 to 17 per frame) |
+| DC on Q | −0.14 to −0.20 | Removed |
+| I/Q imbalance | I and Q correlated +0.17 to +0.26, 0.4–0.5 dB apart | Balanced |
+| The spectrum inverted against ours | Each satellite at minus its predicted Doppler | Conjugated |
+
+Without the inversion fixed, carrier-aided code tracking runs the wrong way.
+
+**The gap between the two files**, from six satellites' code phase, is a whole number of
+milliseconds plus 296 samples (0.0723 ms), against the 73.166 ms the file names imply. For the
+whole milliseconds:
+- the receiver's C/N0 estimate, which needs its blocks inside data bits, runs smoothly through a
+  1 ms join (PSAS's README says "about 1 ms") and dips at 72, 73 and 74 ms;
+- a direct bit-edge search was too noisy to decide.
+
+`PSAS_L12_cond_g1.C8` joins them at 1 ms + 296 samples. Tracking carries through the join.
+
+**What our receiver does with it** (`gnssrx PSAS_L12_cond_g1.C8 --if 0 --preload-gps --acq-interval 1`;
+`--if 0` because the 4 MHz-wide band would alias at the plan's IF):
+- **On the pad the antenna saw almost nothing.** A 200 ms search reads 1.4–2.8 against a noise
+  floor of 1.35. At liftoff every satellite comes up about 10 dB within a second.
+- **All 9 visible satellites are acquired by T+1–2 s,** in the middle of the burn.
+- **The 50 Hz boost loops hold carrier through the burn** at 37–41 dB-Hz, where the quiet loops
+  flicker in and out of lock.
+- **C/N0 falls 4–6 dB at the join of the files.** The second file's interference is stronger:
+  17 bins excised against 7.5.
+- **The first fix comes at T+25.7 s** with the boost loops kept for the whole flight; the first
+  confirmed time is at T+19.7 s.
+- **Near apogee the height reads about 230 m above the barometric altimeter.** The accelerometer's
+  integration gives 5,091 m. A barometer reads low on a hot day by about that much.
+- **The vertical velocity follows the TeleMetrum's integrated accelerometer.**
+
+**What holds the fix back is time.** The receiver gets time only from the navigation message,
+which needs two clean subframe headers 6 s apart. That is rare in flight.
+
+**IMU aiding needs a line of sight**, which needs a fix. With the pad blocked, neither came until
+T+25 s.
+
+The owner chose (2026-10-01) to let the flight computer seed position and time. With a seed, the
+receiver can:
+- fix right after acquisition, by resolving each satellite's millisecond from the seed;
+- aid the loops from launch;
+- check each satellite's decoded time and bit sync against the seed. G24 here was 7 ms off,
+  its bit sync off by 7 ms; the residual test refused those fixes rather than report them.
+
+**Also fixed for it:**
+- GPS ephemerides can be preloaded (`--preload-gps`), as the flight computer could hand them over.
+- `--acq-interval` sets how often the receiver searches.
+- The week rollover is resolved: a 2015 recording read 1024 weeks late.
+- RINEX 2 broadcast files (the IGS's for that day) load in C and Python.
+- PSAS's packed 2-bit format reads directly (`format = max2769_2bit`).
+
+**Next** (owner, 2026-10-01): the seed; then how much a narrowband interferer costs our 2-bit chain,
+and what an FPGA notch or excision stage would buy, studied in software before anything goes to
+the hardware session.
 
 ## Galileo E1 and BeiDou B1C (milestone 6)
 

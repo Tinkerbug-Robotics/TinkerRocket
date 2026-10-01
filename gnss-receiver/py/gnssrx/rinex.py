@@ -64,8 +64,11 @@ def read_gps(path: str | Path) -> list[Eph]:
 
 
 def read_nav(path: str | Path, systems: str = "GE") -> list[Eph]:
-    """The records of the given systems (G, E); Galileo's F/NAV records (an E5a clock) are left out."""
+    """The records of the given systems (G, E); Galileo's F/NAV records (an E5a clock) are left out.
+    RINEX 2 files (GPS only) are read too."""
     lines = Path(path).read_text().splitlines()
+    if lines and lines[0][:9].strip() and float(lines[0][:9]) < 3.0:
+        return _read_nav_v2(lines) if "G" in systems else []
     i = 0
     while "END OF HEADER" not in lines[i]:
         i += 1
@@ -100,6 +103,37 @@ def read_nav(path: str | Path, systems: str = "GE") -> list[Eph]:
         out.append(Eph(prn, _gps_sow(y, mo, d, h, mi, s), af0, af1, af2, int(iode), crs, dn, m0, cuc, e, cus, sqa, toe,
                        cic, om0, cis, i0, crc, om, omd, idot, int(week), int(health), tgd, int(iodc), sys))
         i += nrec
+    return out
+
+
+def _read_nav_v2(lines: list[str]) -> list[Eph]:
+    """RINEX 2 GPS navigation: each record one column left of RINEX 3, with a two-digit PRN and year."""
+    i = 0
+    while "END OF HEADER" not in lines[i]:
+        i += 1
+    i += 1
+    out = []
+    while i + 7 < len(lines):
+        ln = lines[i]
+        if not ln.strip():
+            i += 1
+            continue
+        prn = int(ln[0:2])
+        y, mo, d, h, mi = (int(ln[c:c + 3]) for c in (2, 5, 8, 11, 14))
+        s = float(ln[17:22])
+        y += 2000 if y < 80 else 1900
+        vals = [_num(ln[22 + 19 * k: 41 + 19 * k]) for k in range(3)]
+        for r in range(1, 8):
+            row = lines[i + r]
+            for k in range(4):
+                f = row[3 + 19 * k: 22 + 19 * k]
+                vals.append(_num(f) if f.strip() else 0.0)
+        af0, af1, af2 = vals[0:3]
+        (iode, crs, dn, m0, cuc, e, cus, sqa, toe, cic, om0, cis, i0, crc, om, omd, idot, _l2, week, _l2p,
+         _sva, health, tgd, iodc) = vals[3:27]
+        out.append(Eph(prn, _gps_sow(y, mo, d, h, mi, s), af0, af1, af2, int(iode), crs, dn, m0, cuc, e, cus, sqa, toe,
+                       cic, om0, cis, i0, crc, om, omd, idot, int(week), int(health), tgd, int(iodc), "G"))
+        i += 8
     return out
 
 

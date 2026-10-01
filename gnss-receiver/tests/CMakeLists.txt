@@ -29,9 +29,11 @@ add_executable(gnss_tests
     test_if_plan.cpp
     test_iir.cpp
     test_ini.cpp
+    test_iq_file.cpp
     test_mix.cpp
     test_quant.cpp
     test_resamp.cpp
+    test_rinex_nav.cpp
     test_rng.cpp
 )
 target_link_libraries(gnss_tests PRIVATE gnss_host GTest::gtest_main)
