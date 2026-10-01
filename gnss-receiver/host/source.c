@@ -217,7 +217,7 @@ static int grow(void **p, size_t *cap, size_t need, size_t elem)
     return 0;
 }
 
-/* Produces more output samples into the buffer; returns 0 at the end of the segment. */
+/* Produces more output into the buffer (codes, or floats in native mode); returns 0 at the end. */
 static int refill(src_t *s)
 {
     if (s->eof) {
@@ -241,37 +241,74 @@ static int refill(src_t *s)
         return 0;
     }
     size_t mo = fe_max_out(&s->fe, got);
-    /* Compact what is left, then append. */
-    if (s->head > 0) {
-        memmove(s->buf, s->buf + 2 * s->head, sizeof(float) * 2 * (s->nbuf - s->head));
-        s->nbuf -= s->head;
-        s->head = 0;
+    if (s->fe.cfg.mode == FE_MODE_NATIVE) {
+        if (s->head > 0) {
+            memmove(s->buf, s->buf + 2 * s->head, sizeof(float) * 2 * (s->nbuf - s->head));
+            s->nbuf -= s->head;
+            s->head = 0;
+        }
+        if (grow((void **)&s->buf, &s->buf_cap, 2 * (s->nbuf + mo), sizeof(float)) != 0) {
+            return 0;
+        }
+        s->nbuf += fe_process(&s->fe, s->in, got, s->buf + 2 * s->nbuf, NULL, mo);
+    } else {
+        if (s->chead > 0) {
+            memmove(s->codes, s->codes + s->chead, s->ncodes - s->chead);
+            s->ncodes -= s->chead;
+            s->chead = 0;
+        }
+        if (grow((void **)&s->codes, &s->codes_cap, s->ncodes + mo, 1) != 0) {
+            return 0;
+        }
+        s->ncodes += fe_process(&s->fe, s->in, got, NULL, s->codes + s->ncodes, mo);
     }
-    if (grow((void **)&s->buf, &s->buf_cap, 2 * (s->nbuf + mo), sizeof(float)) != 0 ||
-        grow((void **)&s->codes, &s->codes_cap, mo, 1) != 0) {
+    return 1;
+}
+
+size_t src_read_codes(src_t *s, uint8_t *codes, size_t n)
+{
+    if (s->fe.cfg.mode == FE_MODE_NATIVE) {
         return 0;
     }
-    float *dst = s->buf + 2 * s->nbuf;
-    size_t m;
-    if (s->fe.cfg.mode == FE_MODE_NATIVE) {
-        m = fe_process(&s->fe, s->in, got, dst, NULL, mo);
-    } else {
-        m = fe_process(&s->fe, s->in, got, NULL, s->codes, mo);
-        for (size_t k = 0; k < m; k++) {
-            unsigned x = s->codes[k];
-            float i = (x & FE_CODE_I_MAG) ? (float)FE_WEIGHT_LARGE : (float)FE_WEIGHT_SMALL;
-            float q = (x & FE_CODE_Q_MAG) ? (float)FE_WEIGHT_LARGE : (float)FE_WEIGHT_SMALL;
-            dst[2 * k] = (x & FE_CODE_I_SIGN) ? -i : i;
-            dst[2 * k + 1] = (x & FE_CODE_Q_SIGN) ? -q : q;
+    size_t got = 0;
+    while (got < n) {
+        size_t avail = s->ncodes - s->chead;
+        if (avail == 0) {
+            if (!refill(s)) {
+                break;
+            }
+            continue;
         }
+        size_t take = n - got < avail ? n - got : avail;
+        memcpy(codes + got, s->codes + s->chead, take);
+        s->chead += take;
+        got += take;
     }
-    s->nbuf += m;
-    return 1;
+    return got;
 }
 
 size_t src_read(src_t *s, float *iq, size_t n)
 {
     size_t got = 0;
+    if (s->fe.cfg.mode != FE_MODE_NATIVE) {
+        uint8_t tmp[4096];
+        while (got < n) {
+            size_t want = n - got < sizeof(tmp) ? n - got : sizeof(tmp);
+            size_t m = src_read_codes(s, tmp, want);
+            for (size_t k = 0; k < m; k++) {
+                unsigned x = tmp[k];
+                float i = (x & FE_CODE_I_MAG) ? (float)FE_WEIGHT_LARGE : (float)FE_WEIGHT_SMALL;
+                float q = (x & FE_CODE_Q_MAG) ? (float)FE_WEIGHT_LARGE : (float)FE_WEIGHT_SMALL;
+                iq[2 * (got + k)] = (x & FE_CODE_I_SIGN) ? -i : i;
+                iq[2 * (got + k) + 1] = (x & FE_CODE_Q_SIGN) ? -q : q;
+            }
+            got += m;
+            if (m < want) {
+                break;
+            }
+        }
+        return got;
+    }
     while (got < n) {
         size_t avail = s->nbuf - s->head;
         if (avail == 0) {

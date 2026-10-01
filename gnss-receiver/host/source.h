@@ -37,10 +37,10 @@ typedef struct {
     int64_t end;
     float *in;
     size_t in_cap;
-    float *buf;                     /* produced, not yet consumed (interleaved) */
+    float *buf;                     /* native mode: produced, not yet consumed (interleaved) */
     size_t nbuf, buf_cap, head;
-    uint8_t *codes;
-    size_t codes_cap;
+    uint8_t *codes;                 /* 2-bit modes: produced codes, not yet consumed */
+    size_t ncodes, codes_cap, chead;
     double fs_out, if_out;
     int eof;
 } src_t;
@@ -56,8 +56,12 @@ void src_usage(void);
 
 int src_open(src_t *s, src_opts_t *o);
 
-/* Reads up to n samples at the output rate; returns how many (fewer only at the end). */
+/* Reads up to n samples at the output rate; returns how many (fewer only at the end).
+ * 2-bit modes deliver their codes' weights (+-1, +-3). */
 size_t src_read(src_t *s, float *iq, size_t n);
+
+/* 2-bit modes only: reads up to n sample codes (fe_format.h nibbles). */
+size_t src_read_codes(src_t *s, uint8_t *codes, size_t n);
 
 void src_close(src_t *s);
 

@@ -1,8 +1,14 @@
 /*
- * The FPGA's 27 -> 6.75 MS/s step, bit-exact on sample codes. PROVISIONAL: the
- * hardware session has not chosen the decimator yet, so the variants are
- * swappable and the stage-0 default path (host/fe_emul.c, FE_MODE_DIRECT)
- * does not use this at all.
+ * The FPGA's 27 -> 6.75 MS/s step, bit-exact on sample codes. The hardware
+ * design has not chosen the decimator yet; the variants are swappable, and the
+ * stage-0 default path (host/fe_emul.c, FE_MODE_DIRECT) quantizes at 6.75 MS/s
+ * directly. Measured 2026-09-30 (golden correlator, SignalSim static file, C/N0
+ * against a float correlator on the direct stream):
+ *   direct 6.75 MS/s                  -0.10 dB (the carrier table alone)
+ *   SUBSAMPLE, IF 1.2 / 3.9 MHz       -0.04 / -0.05 dB: costs nothing; recommended
+ *   SUM4 to 2-bit, IF 1.2 / 3.9 MHz   -0.47 / -0.50 dB: the second quantization costs 0.4 dB
+ * Caveat: the emulation carries little noise far outside the IF band, so real
+ * folded noise could add up to ~0.1 dB to SUBSAMPLE.
  */
 #ifndef GNSS_FPGA_DECIM_H
 #define GNSS_FPGA_DECIM_H

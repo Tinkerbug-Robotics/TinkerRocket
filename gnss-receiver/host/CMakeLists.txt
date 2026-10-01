@@ -24,3 +24,7 @@ target_compile_options(iqtool PRIVATE ${GNSS_C_WARNINGS})
 add_executable(gnssrx gnssrx.c)
 target_link_libraries(gnssrx PRIVATE gnss_host)
 target_compile_options(gnssrx PRIVATE ${GNSS_C_WARNINGS})
+
+add_executable(vecreplay vecreplay.c)
+target_link_libraries(vecreplay PRIVATE gnss_host)
+target_compile_options(vecreplay PRIVATE ${GNSS_C_WARNINGS})

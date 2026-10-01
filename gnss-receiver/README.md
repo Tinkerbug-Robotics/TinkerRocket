@@ -137,6 +137,46 @@ Known limits:
   longer snapshots.
 - **Speed:** one core, about 1.9× real time with 13 channels.
 
+## The FPGA correlator model (milestone 4)
+
+`fpga/model/corr_model.c` is the correlator bank bit for bit: 2-bit sign/magnitude codes in, integer
+carrier table and accumulators, the contract's integer NCOs and epoch latching. Every width lives in
+`core/include/gnss/corr_params.h`. `gnssrx` uses it by default on 2-bit streams (`--corr float` for the
+float bank), so the receiver core already runs against the FPGA's arithmetic.
+
+| Proposed | Value | Why |
+|---|---|---|
+| Sample input | 2-bit sign/magnitude, weights 1 and 3, 6.75 MS/s | The MAX2769B's output |
+| Carrier NCO | 32-bit phase; signed 32-bit word | 1.6 mHz steps |
+| Code NCO | chip index plus a 40-bit fraction | 2 mm/s steps: no DLL bias from carrier aiding |
+| Carrier mixer | 3-bit phase, 8 sectors, levels 1 and 2 (the GP2021's) | −0.10 dB; 16 sectors buys only 0.03 dB more |
+| Taps | early/prompt/late at ±0.25 chip | As tracked |
+| Accumulators | 24-bit signed | 1 ms needs 18 bits, 10 ms B1C 21; the largest seen is 4,058 |
+| Dump and tick | at each code epoch; a 1 ms tick reads them | As tracked |
+| NCO commands | latched, applied at the channel's next code epoch | See "open" below |
+| Decimator 27 → 6.75 | every 4th sample | Costs nothing measurable; sum-of-4 to 2-bit costs 0.4 dB |
+
+**Test vectors for the HDL.**
+
+```bash
+gnssrx FILE --dur 0.3 --vectors DIR --vectors-ms 300
+vecreplay DIR
+```
+
+The vectors are three files:
+- `samples.u2`: the correlator input;
+- `commands.csv`: every command, with the sample at which it is presented;
+- `dumps.csv`: every dump the correlator must produce.
+
+`vecreplay` feeds a fresh model only those files and checks every dump bit for bit, the same job an
+HDL testbench does. 300 ms of the static file gives 3,757 dumps with no mismatches.
+
+**Open: command latency.** A command from the P4 takes effect at the channel's next code epoch after it
+arrives. The P4 reads dumps on a 1 ms tick that is not aligned to any channel's epochs, so the delay from
+a measurement to its correction is one period or two. Which one depends on where the tick falls and on
+the P4's processing time. The alternative is to tag each command with the period it is meant for. That
+gives a fixed delay the loop design (milestone 5) can count on.
+
 ## Pocket SDR as the cross-check
 
 - **Build:** a source-only checkout at `~/Projects/ModelRockets/bench-backups/pocketsdr/` (commit

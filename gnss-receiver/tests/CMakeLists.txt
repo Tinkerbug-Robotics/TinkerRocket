@@ -4,6 +4,7 @@ include(FetchContent)
 FetchContent_Declare(
     googletest
     URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
@@ -14,6 +15,7 @@ add_executable(gnss_tests
     test_acq.cpp
     test_core_basics.cpp
     test_corr_float.cpp
+    test_corr_model.cpp
     test_decim.cpp
     test_eph_pvt.cpp
     test_lnav.cpp
