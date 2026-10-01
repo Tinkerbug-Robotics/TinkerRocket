@@ -198,6 +198,8 @@ tagged.** The Space Bug redone on 6 layers (JLC06161H-3313) for cost, after V2
 (8 layers) was ordered. Copper changed and V2 was fabricated, so this is a major
 bump: the next fabrication is tagged `gnss-px1105r-18mm-highpower-ext-ant-v3.0.0`.
 The title block, silkscreen and sheet title blocks already read V3.
+On 2026-10-01 the parts were re-placed to match the Space Bug M8T and the board
+was routed again; nothing has been fabricated since V2, so it stays V3.
 
 **2026-09-29 — gnss-px1105r-18mm-highpower-ext-ant v2.0.0, ordered.** The
 folder holds a new 8-layer board, the Space Bug: the same receiver with its own
