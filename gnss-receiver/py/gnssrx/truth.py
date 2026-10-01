@@ -78,10 +78,11 @@ def _doppler(e: rinex.Eph, traj: Trajectory, tf: float, tg: float):
 def los(nav: list[rinex.Eph], prn: int, traj: Trajectory, t_file, t0_gps: float, dt: float = 0.05):
     """Per sample time t_file: geometric range (m), Doppler (Hz), Doppler rate (Hz/s), elevation (deg).
 
-    t0_gps is the GPS time (s of week) of file second 0.
+    t0_gps is the GPS time (s of week) of file second 0; prn as gnssrx numbers it (Galileo + 100).
     """
     t_file = np.atleast_1d(t_file)
-    cands = [e for e in nav if e.prn == prn]
+    sys, num = ("E", prn - 100) if prn >= 100 else ("G", prn)  # gnssrx numbers Galileo 101-163
+    cands = [e for e in nav if e.prn == num and e.sys == sys]
     if not cands:
         raise KeyError(f"no ephemeris for PRN {prn}")
     out = np.zeros((t_file.size, 4))

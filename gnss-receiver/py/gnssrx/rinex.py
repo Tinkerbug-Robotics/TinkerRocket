@@ -1,7 +1,9 @@
-"""RINEX 3 navigation file reader (GPS records), and GPS satellite positions from it.
+"""RINEX 3 navigation file reader (GPS records, and Galileo I/NAV on request), and satellite
+positions from it.
 
-An independent Python implementation of IS-GPS-200's ephemeris model, to check
-the C decoder and orbit code against the broadcast files the simulators used.
+An independent Python implementation of IS-GPS-200's ephemeris model (Galileo's is the same
+with its own GM), to check the C decoder and orbit code against the broadcast files the
+simulators used.
 """
 from __future__ import annotations
 
@@ -10,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 GPS_MU = 3.986005e14
+GAL_MU = 3.986004418e14
 OMEGA_E = 7.2921151467e-5
 F_REL = -4.442807633e-10
 C = 299792458.0
@@ -41,8 +44,9 @@ class Eph:
     idot: float
     week: int
     health: int
-    tgd: float
+    tgd: float             # GPS TGD; Galileo BGD(E1,E5b), the I/NAV clock's E1 term
     iodc: int
+    sys: str = "G"         # "G" or "E"; Galileo's week and toe are GST, which runs with GPST
 
 
 def _num(s: str) -> float:
@@ -56,6 +60,11 @@ def _gps_sow(y, mo, d, h, mi, s) -> float:
 
 
 def read_gps(path: str | Path) -> list[Eph]:
+    return read_nav(path, "G")
+
+
+def read_nav(path: str | Path, systems: str = "GE") -> list[Eph]:
+    """The records of the given systems (G, E); Galileo's F/NAV records (an E5a clock) are left out."""
     lines = Path(path).read_text().splitlines()
     i = 0
     while "END OF HEADER" not in lines[i]:
@@ -69,7 +78,7 @@ def read_gps(path: str | Path) -> list[Eph]:
             continue
         sys = ln[0]
         nrec = {"G": 8, "E": 8, "C": 8, "J": 8, "I": 8, "R": 4, "S": 4}.get(sys, 8)
-        if sys != "G":
+        if sys not in "GE" or sys not in systems:
             i += nrec
             continue
         prn = int(ln[1:3])
@@ -81,10 +90,15 @@ def read_gps(path: str | Path) -> list[Eph]:
                 f = row[4 + 19 * k: 23 + 19 * k]
                 vals.append(_num(f) if f.strip() else 0.0)
         af0, af1, af2 = vals[0:3]
-        (iode, crs, dn, m0, cuc, e, cus, sqa, toe, cic, om0, cis, i0, crc, om, omd, idot, _l2, week, _l2p,
+        (iode, crs, dn, m0, cuc, e, cus, sqa, toe, cic, om0, cis, i0, crc, om, omd, idot, l2, week, _l2p,
          _sva, health, tgd, iodc) = vals[3:27]
+        if sys == "E":
+            if not (int(l2) & 5):
+                i += nrec
+                continue
+            tgd, iodc = iodc, 0  # BGD(E1,E5b) sits where GPS keeps IODC
         out.append(Eph(prn, _gps_sow(y, mo, d, h, mi, s), af0, af1, af2, int(iode), crs, dn, m0, cuc, e, cus, sqa, toe,
-                       cic, om0, cis, i0, crc, om, omd, idot, int(week), int(health), tgd, int(iodc)))
+                       cic, om0, cis, i0, crc, om, omd, idot, int(week), int(health), tgd, int(iodc), sys))
         i += nrec
     return out
 
@@ -102,7 +116,7 @@ def sat_pos(e: Eph, t: float) -> tuple[tuple[float, float, float], float]:
     """ECEF position at GPS time t (s of week) and the L1 C/A clock correction (s)."""
     a = e.sqrt_a ** 2
     tk = tdiff(t, e.toe)
-    n = math.sqrt(GPS_MU / a ** 3) + e.delta_n
+    n = math.sqrt((GAL_MU if e.sys == "E" else GPS_MU) / a ** 3) + e.delta_n
     m = e.m0 + n * tk
     ek = m
     for _ in range(30):

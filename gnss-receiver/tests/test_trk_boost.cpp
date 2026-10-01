@@ -20,7 +20,10 @@ struct Sim {
     std::function<double(double)> dop;  // true Doppler (Hz) at time t (s)
     double cn0 = 45.0;
     std::function<bool(double)> signal = [](double) { return true; };
+    std::function<double(double)> amp = [](double) { return 1.0; };    // signal amplitude scale
+    std::function<double(double)> noise = [](double) { return 1.0; };  // noise sigma scale
     std::function<const trk_profile_t *(double)> prof = [](double) { return &trk_profile_quiet; };
+    std::function<double(double)> aid;  // IMU aiding: the line of sight's Doppler rate (Hz/s) the loop is given
 
     trk_ch_t ch{};
     trk_profile_t cur = trk_profile_quiet;
@@ -57,8 +60,8 @@ struct Sim {
         if (k % 20 == 0 && rng_uniform(&rng) < 0.5) {
             bit = -bit;
         }
-        const double a = signal(t) ? bit : 0.0;
-        const double sig = std::sqrt(1.0 / (2.0 * std::pow(10.0, cn0 / 10.0) * kT));
+        const double a = signal(t) ? bit * amp(t) : 0.0;
+        const double sig = noise(t) * std::sqrt(1.0 / (2.0 * std::pow(10.0, cn0 / 10.0) * kT));
         double n[6];
         rng_gauss2(&rng, &n[0], &n[1]);
         rng_gauss2(&rng, &n[2], &n[3]);
@@ -75,6 +78,10 @@ struct Sim {
         int b;
         uint32_t bp;
         trk_update(&ch, &cur, &d, float(kT), &b, &bp);
+        if (aid) {
+            ch.ff_rate = float(aid(t + kT));
+            ch.ff_lead = float(3.0 * kT);  // as rx_tick sets it: the words land three periods on
+        }
         int32_t cw;
         uint64_t kw;
         trk_words(&ch, &cw, &kw);
@@ -117,6 +124,28 @@ TEST(TrkBoost, LockIndicatorReadsOneAtLowCn0)
     EXPECT_EQ(s.ch.state, TRK_LOCKED);
     EXPECT_GT(s.ch.pll_lock, 0.75f);
     EXPECT_NEAR(s.ch.cn0, 32.0f, 1.5f);
+}
+
+// A 14 dB step in the noise floor under a strong signal, as the front end's AGC passes it on: 10 ms
+// of the new noise at the old scale, then everything scaled down to the old noise (45 -> 31 dB-Hz).
+// The C/N0 estimate whose 0.2 s window straddles the step gets the noise power wrong until the next
+// one; the channel must ride that out locked.
+TEST(TrkBoost, StaysLockedThroughANoiseStep)
+{
+    for (uint64_t seed = 1; seed <= 16; seed++) {
+        const double t_step = 5.0 + 0.0125 * double(seed);  // across the estimate's window
+        Sim s([](double) { return 1234.0; }, seed);
+        s.cn0 = 45.0;
+        s.amp = [t_step](double t) { return t < t_step + 0.01 ? 1.0 : 0.2; };
+        s.noise = [t_step](double t) { return t >= t_step && t < t_step + 0.01 ? 5.0 : 1.0; };
+        int unlocked = 0;
+        for (int k = 0; k < 8000; k++) {
+            s.step();
+            unlocked += s.t > 4.0 && s.ch.state != TRK_LOCKED;
+        }
+        EXPECT_EQ(unlocked, 0) << "seed " << seed;
+        EXPECT_NEAR(s.ch.cn0, 31.0f, 1.5f) << "seed " << seed;
+    }
 }
 
 TEST(TrkBoost, DropsALostSignalAndKeepsBitSyncThroughAShortFade)
@@ -188,4 +217,44 @@ TEST(TrkBoost, BoostProfileRidesTheBurnoutTheQuietLoopsSlipOn)
     EXPECT_GT(qu, 100);
     EXPECT_EQ(bs, 0);
     EXPECT_EQ(bu, 0);
+}
+
+// IMU aiding (milestone 7). Exact aiding leaves the quiet loops nothing to track through a burnout.
+// An IMU 5 ms late and 3 % off leaves ~50-100 Hz/s at the step: a 10 Hz loop holds +-45 deg against
+// only ~20 Hz/s (an acceleration step's phase error is about its size over wn^2) and slips, where
+// the 20 Hz loops the aided boost profile runs (~80 Hz/s) do not.
+TEST(TrkBoost, ImuAidingCarriesTheBurnout)
+{
+    static const trk_profile_t aided20 = {{10.0f, 20.0f, 2.0f}, {0.0f, 20.0f, 0.5f}, 2};
+    auto run = [](const trk_profile_t *prof, double lag, double scale, double cn0) {
+        Sim s(burnout_dop);
+        s.cn0 = cn0;
+        s.prof = [prof](double t) { return t >= 2.0 && t < 7.0 ? prof : &trk_profile_quiet; };
+        s.aid = [lag, scale](double t) {
+            const double dt = 1e-4;
+            return scale * (burnout_dop(t - lag + dt) - burnout_dop(t - lag - dt)) / (2.0 * dt);
+        };
+        double e_ref = 0.0;
+        int slips = 0, unlocked = 0;
+        for (int k = 0; k < 10000; k++) {
+            double e = s.step();
+            if (s.t < 2.5) {
+                e_ref = e;
+                continue;
+            }
+            slips = std::max(slips, int(std::lround(std::fabs(e - e_ref) * 2.0)));
+            unlocked += s.ch.state != TRK_LOCKED;
+        }
+        return std::make_pair(slips, unlocked);
+    };
+    for (double cn0 : {42.0, 33.0}) {
+        auto [es, eu] = run(&trk_profile_quiet, 0.0, 1.0, cn0);
+        EXPECT_EQ(es, 0) << cn0;
+        EXPECT_EQ(eu, 0) << cn0;
+        auto [qs, qu] = run(&trk_profile_quiet, 0.005, 1.03, cn0);
+        EXPECT_GT(qs, 0) << cn0 << ": the quiet loops were expected to slip on the IMU's errors";
+        auto [bs, bu] = run(&aided20, 0.005, 1.03, cn0);
+        EXPECT_EQ(bs, 0) << cn0;
+        EXPECT_EQ(bu, 0) << cn0;
+    }
 }

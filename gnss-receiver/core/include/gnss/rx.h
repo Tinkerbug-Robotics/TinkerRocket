@@ -86,6 +86,8 @@ typedef struct {
     uint64_t pend_code[4];
     int npend;
     int have_dump;
+    double los[3];              /* unit vector receiver -> satellite from the last fix (aiding) */
+    int have_los;
     /* Carrier smoothing (Hatch filter): the smoothed pseudorange, the carrier phase (m) and
      * sample it was last updated at, samples in it, and the half-cycle state it assumed. */
     double hatch_pr, hatch_adr;
@@ -118,6 +120,8 @@ typedef struct {
     uint64_t next_acq;              /* sample count of the next search */
     uint64_t next_aid;              /* and of the next aided start */
     uint64_t aid_hold[GNSS_SYS_COUNT][GNSS_MAX_PRN + 1];  /* no aided start for this satellite before */
+    int acc_valid;                  /* IMU aiding: the vehicle's acceleration (rx_set_accel) */
+    double acc[3];
 
     /* Receiver time: GPS time (s of week) of sample clk_n is clk_t. */
     int clk_valid;
@@ -135,6 +139,14 @@ void rx_init(rx_t *rx, const rx_cfg_t *cfg);
 
 /* Selects the boost loop profile (on) or the quiet one; the flight computer's phase decides. */
 void rx_set_boost(rx_t *rx, int on);
+
+/*
+ * IMU aiding: the vehicle's acceleration (kinematic, ECEF, m/s^2: the IMU's specific force
+ * rotated by the attitude, plus gravity) for the ticks that follow; valid = 0 stops aiding.
+ * Each channel's loops get the line-of-sight Doppler rate it predicts, a.u / lambda, as
+ * feed-forward, so they track only what the IMU misses and can stay narrow through a boost.
+ */
+void rx_set_accel(rx_t *rx, const double acc_ecef[3], int valid);
 
 /* The 1 ms tick at sample t_now. Returns the number of commands written. */
 int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *cmds, int ncap);

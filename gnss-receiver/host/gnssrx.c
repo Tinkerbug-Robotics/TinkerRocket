@@ -18,6 +18,7 @@
 #include "gnss/rx.h"
 #include "loops_arg.h"
 #include "manifest.h"
+#include "rng.h"
 #include "rinex_nav.h"
 #include "source.h"
 
@@ -62,6 +63,13 @@ static void usage(void)
             "                            pull-in / locked FLL,PLL,DLL bandwidths (Hz), FLL block (ms)\n"
             "  --boost-at S0,S1          the boost profile from file second S0 to S1, as the flight\n"
             "                            computer would call it (default: never)\n"
+            "  --imu SCEN.csv            IMU aiding emulated from a scenario trajectory (10 Hz t,lat,lon,h;\n"
+            "                            file seconds): its acceleration, as the generator's carrier sees it\n"
+            "  --imu-err LAG,SF,BIAS,NOISE[,TILT]   the IMU's faults: latency ms, scale error (fraction),\n"
+            "                            bias m/s^2 along local up, white noise m/s^2 per axis, and an attitude\n"
+            "                            error in degrees that tips the acceleration from up toward east\n"
+            "                            (default 5,0.03,0.5,0.1,0)\n"
+            "  --imu-at S0,S1            aid only from file second S0 to S1 (default: all the run)\n"
             "  --pilot-dumps             write pilot channels' raw dumps (before secondary-code wipe-off)\n"
             "                            to pilot_dumps.csv, for checking the wipe-off\n"
             "  --nav FILE | --no-nav     RINEX navigation file to preload Galileo and BeiDou ephemerides\n"
@@ -91,6 +99,90 @@ static int static_truth(const char *truth, double ref[3], double *lat, double *l
     *lon = lo * PI / 180.0;
     geo_to_ecef(*lat, *lon, h, ref);
     return 1;
+}
+
+/*
+ * IMU emulation from a scenario trajectory (10 Hz t,lat,lon,h, file seconds). gps-sdr-sim's
+ * smoothed carrier ramps between the central-difference velocities at the samples, so the
+ * acceleration the signal shows is constant over each 0.1 s step: that is the "true" IMU.
+ */
+typedef struct {
+    int n;
+    double *t;
+    double (*acc)[3];      /* over [t[k], t[k+1]) */
+    double up[3];          /* local up at the first sample, for the bias */
+} imu_traj_t;
+
+static int imu_load(const char *path, imu_traj_t *m)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        return -1;
+    }
+    int cap = 1024, n = 0;
+    double *t = malloc(sizeof(double) * (size_t)cap), (*p)[3] = malloc(sizeof(double[3]) * (size_t)cap);
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        double tt, la, lo, h;
+        if (sscanf(line, "%lf,%lf,%lf,%lf", &tt, &la, &lo, &h) != 4) {
+            continue;
+        }
+        if (n == cap) {
+            cap *= 2;
+            t = realloc(t, sizeof(double) * (size_t)cap);
+            p = realloc(p, sizeof(double[3]) * (size_t)cap);
+        }
+        t[n] = tt;
+        geo_to_ecef(la * PI / 180.0, lo * PI / 180.0, h, p[n]);
+        if (n == 0) {
+            m->up[0] = cos(la * PI / 180.0) * cos(lo * PI / 180.0);
+            m->up[1] = cos(la * PI / 180.0) * sin(lo * PI / 180.0);
+            m->up[2] = sin(la * PI / 180.0);
+        }
+        n++;
+    }
+    fclose(f);
+    if (n < 3) {
+        free(t);
+        free(p);
+        return -1;
+    }
+    double(*v)[3] = malloc(sizeof(double[3]) * (size_t)n);
+    for (int k = 0; k < n; k++) {
+        int a = k > 0 ? k - 1 : 0, b = k < n - 1 ? k + 1 : n - 1;
+        for (int j = 0; j < 3; j++) {
+            v[k][j] = (p[b][j] - p[a][j]) / (t[b] - t[a]);
+        }
+    }
+    m->acc = malloc(sizeof(double[3]) * (size_t)n);
+    for (int k = 0; k < n; k++) {
+        for (int j = 0; j < 3; j++) {
+            m->acc[k][j] = k < n - 1 ? (v[k + 1][j] - v[k][j]) / (t[k + 1] - t[k]) : 0.0;
+        }
+    }
+    free(v);
+    free(p);
+    m->t = t;
+    m->n = n;
+    return 0;
+}
+
+static void imu_at(const imu_traj_t *m, double t, double acc[3])
+{
+    int lo = 0, hi = m->n - 1;
+    if (t < m->t[0] || t >= m->t[m->n - 1]) {
+        acc[0] = acc[1] = acc[2] = 0.0;
+        return;
+    }
+    while (hi - lo > 1) {
+        int mid = (lo + hi) / 2;
+        if (m->t[mid] <= t) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    memcpy(acc, m->acc[lo], sizeof(double[3]));
 }
 
 static void enu(const double x[3], const double ref[3], double lat, double lon, double out[3])
@@ -167,8 +259,10 @@ int main(int argc, char **argv)
     int no_iono = 0, no_tropo = 0, lut_bits = 0;
     gps_iono_t iono_aid;
     memset(&iono_aid, 0, sizeof(iono_aid));
-    const char *loops_quiet = NULL, *loops_boost = NULL, *nav_arg = NULL;
+    const char *loops_quiet = NULL, *loops_boost = NULL, *nav_arg = NULL, *imu_path = NULL;
     int no_nav = 0, pilot_dumps = 0;
+    double imu_lag_ms = 5.0, imu_sf = 0.03, imu_bias = 0.5, imu_noise = 0.1, imu_tilt = 0.0, imu0 = -INFINITY,
+           imu1 = INFINITY;
     double boost0 = INFINITY, boost1 = -INFINITY;
     for (int i = 1; i < argc; i++) {
         int r = src_parse_opt(&so, argc, argv, &i);
@@ -210,6 +304,18 @@ int main(int argc, char **argv)
             no_nav = 1;
         } else if (!strcmp(a, "--pilot-dumps")) {
             pilot_dumps = 1;
+        } else if (!strcmp(a, "--imu") && v) {
+            imu_path = argv[++i];
+        } else if (!strcmp(a, "--imu-err") && v) {
+            if (sscanf(argv[++i], "%lf,%lf,%lf,%lf,%lf", &imu_lag_ms, &imu_sf, &imu_bias, &imu_noise, &imu_tilt) < 4) {
+                fprintf(stderr, "gnssrx: --imu-err takes LAG_MS,SF,BIAS,NOISE[,TILT_DEG]\n");
+                return 2;
+            }
+        } else if (!strcmp(a, "--imu-at") && v) {
+            if (sscanf(argv[++i], "%lf,%lf", &imu0, &imu1) != 2) {
+                fprintf(stderr, "gnssrx: --imu-at takes S0,S1\n");
+                return 2;
+            }
         } else if (!strcmp(a, "--loops-quiet") && v) {
             loops_quiet = argv[++i];
         } else if (!strcmp(a, "--loops-boost") && v) {
@@ -379,6 +485,19 @@ int main(int argc, char **argv)
                           "t_s,prn,week,toe,toc,iode,iodc,health,sqrt_a,e,i0,omega0,omega,m0,delta_n,idot,"
                           "omega_dot,cuc,cus,crc,crs,cic,cis,af0,af1,af2,tgd");
     FILE *fpd = pilot_dumps ? open_csv(out_dir, "pilot_dumps.csv", "ch,sat,seq,t_samp,n1,sec_len,ip,qp,id,qd") : NULL;
+    FILE *fimu = NULL;  /* opened with the trajectory below */
+    imu_traj_t imu;
+    memset(&imu, 0, sizeof(imu));
+    rng_t imu_rng;
+    rng_seed(&imu_rng, 77);
+    if (imu_path && imu_load(imu_path, &imu) != 0) {
+        fprintf(stderr, "gnssrx: cannot read the trajectory %s\n", imu_path);
+        return 1;
+    }
+    if (imu.n > 0) {
+        /* What the aiding was given, at 10 Hz: the true and the emulated acceleration along local up. */
+        fimu = open_csv(out_dir, "imu.csv", "t_s,acc_up_true,acc_up_imu,aiding");
+    }
     if (!ftrk || !fobs || !fpvt || !feph) {
         fprintf(stderr, "gnssrx: cannot write into %s\n", out_dir);
         return 1;
@@ -417,6 +536,10 @@ int main(int argc, char **argv)
                 rc.cmd_lead, q, b);
         if (boost0 < boost1) {
             fprintf(fini, "boost_at = %.3f,%.3f\n", boost0, boost1);
+        }
+        if (imu_path) {
+            fprintf(fini, "imu = %s\nimu_err = %g,%g,%g,%g,%g\n", imu_path, imu_lag_ms, imu_sf, imu_bias, imu_noise,
+                    imu_tilt);
         }
         fclose(fini);
     }
@@ -493,6 +616,37 @@ int main(int argc, char **argv)
         }
         const double t_file = so.start_s + (double)t_now / fs;
         rx_set_boost(rx, t_file >= boost0 && t_file < boost1);
+        if (imu.n > 0) {
+            /* The IMU as the P4 would see it: imu_lag_ms late, scaled, biased along local up, noisy. */
+            int on = t_file >= imu0 && t_file < imu1;
+            double a[3], nz[4];
+            imu_at(&imu, t_file - 1e-3 * imu_lag_ms, a);
+            rng_gauss2(&imu_rng, &nz[0], &nz[1]);
+            rng_gauss2(&imu_rng, &nz[2], &nz[3]);
+            if (imu_tilt != 0.0) {
+                /* An attitude error: the acceleration turned by imu_tilt in the up-east plane. */
+                const double east[3] = {-imu.up[1] / hypot(imu.up[0], imu.up[1]), imu.up[0] / hypot(imu.up[0], imu.up[1]),
+                                        0.0};
+                const double au = a[0] * imu.up[0] + a[1] * imu.up[1] + a[2] * imu.up[2];
+                const double ae = a[0] * east[0] + a[1] * east[1];
+                const double c = cos(imu_tilt * PI / 180.0), sn = sin(imu_tilt * PI / 180.0);
+                const double du = au * c - ae * sn - au, de = au * sn + ae * c - ae;
+                for (int j = 0; j < 3; j++) {
+                    a[j] += du * imu.up[j] + de * east[j];
+                }
+            }
+            for (int j = 0; j < 3; j++) {
+                a[j] = a[j] * (1.0 + imu_sf) + imu_bias * imu.up[j] + imu_noise * nz[j];
+            }
+            rx_set_accel(rx, a, on);
+            if (fimu && (t_now / spms) % 100 == 0) {
+                double at[3];
+                imu_at(&imu, t_file, at);
+                fprintf(fimu, "%.3f,%.4f,%.4f,%d\n", (double)t_now / fs,
+                        at[0] * imu.up[0] + at[1] * imu.up[1] + at[2] * imu.up[2],
+                        a[0] * imu.up[0] + a[1] * imu.up[1] + a[2] * imu.up[2], on);
+            }
+        }
         int nc = rx_tick(rx, t_now, dumps, nd, cmds, MAX_CMDS);
         for (int k = 0; k < nc && nheld < 2 * MAX_CMDS; k++) {
             held[nheld++] = cmds[k];
@@ -636,6 +790,9 @@ int main(int argc, char **argv)
         printf("  test vectors: %s (%.0f ms)\n", vec_dir, vec_ms);
     }
     fclose(ftrk);
+    if (fimu) {
+        fclose(fimu);
+    }
     fclose(fobs);
     fclose(fpvt);
     fclose(feph);

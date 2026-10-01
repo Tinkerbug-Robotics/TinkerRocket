@@ -37,6 +37,7 @@ typedef struct {
     double resid_rms;         /* m */
     double resid[PVT_MAX_SAT];
     double el[PVT_MAX_SAT], az[PVT_MAX_SAT];  /* rad, per input measurement */
+    double los[PVT_MAX_SAT][3];               /* unit vector receiver -> satellite, ECEF */
     int used[PVT_MAX_SAT];
     int iter;
 } pvt_sol_t;
@@ -63,7 +64,7 @@ void geo_to_ecef(double lat, double lon, double h, double x[3]);
 /* Klobuchar delay on L1 (m) for a receiver at lat/lon (rad), satellite at az/el (rad), GPS time t (s of week). */
 double iono_klobuchar(const gps_iono_t *io, double lat, double lon, double az, double el, double t);
 
-/* Saastamoinen delay (m) with a standard atmosphere, for height h (m) and elevation el (rad). */
+/* Saastamoinen delay (m) with a standard atmosphere, for height h (m, up to 40 km) and elevation el (rad). */
 double tropo_saastamoinen(double lat, double h, double el);
 
 #ifdef __cplusplus

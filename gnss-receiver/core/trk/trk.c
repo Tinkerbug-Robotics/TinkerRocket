@@ -41,6 +41,9 @@ void trk_profile_step(trk_profile_t *cur, const trk_profile_t *target, float dt)
 #define LOCK_IN   0.85f
 #define LOCK_OUT  0.4f
 #define LOCK_TAU  0.1f   /* lock indicator time constant, s */
+/* ...and LOCKED falls back only once it has stayed below LOCK_OUT this long: after a step in the
+ * noise floor, the noise power it subtracts is wrong until the next C/N0 estimate. */
+#define LOCK_HOLD 0.1f
 #define MIN_PULLIN_S 0.3f
 /* Bit sync: transitions needed, and the share the winning bin must hold. */
 #define SYNC_TRANS 30
@@ -86,6 +89,7 @@ static void enter(trk_ch_t *c, trk_state_t s)
 {
     c->state = s;
     c->t_state = 0.0f;
+    c->t_low = 0.0f;
 }
 
 /*
@@ -383,9 +387,12 @@ int trk_update(trk_ch_t *c, const trk_profile_t *p, const corr_dump_t *d, float 
     if (c->state == TRK_PULLIN && c->t_state > MIN_PULLIN_S && c->pll_lock > LOCK_IN && pilot_ok) {
         enter(c, TRK_LOCKED);
         c->locked_once = 1;
-    } else if (c->state == TRK_LOCKED && c->pll_lock < LOCK_OUT) {
-        /* Bit sync stays: bit edges follow the code, which the FLL and DLL still hold. */
-        enter(c, TRK_PULLIN);
+    } else if (c->state == TRK_LOCKED) {
+        c->t_low = c->pll_lock < LOCK_OUT ? c->t_low + T : 0.0f;
+        if (c->t_low >= LOCK_HOLD) {
+            /* Bit sync stays: bit edges follow the code, which the FLL and DLL still hold. */
+            enter(c, TRK_PULLIN);
+        }
     }
     if (c->t_weak >= TRK_LOSS_S) {
         enter(c, TRK_OFF);
@@ -396,8 +403,12 @@ int trk_update(trk_ch_t *c, const trk_profile_t *p, const corr_dump_t *d, float 
 
 void trk_words(const trk_ch_t *c, int32_t *carr_word, uint64_t *code_word)
 {
-    *carr_word = c->if_word + (int32_t)lrintf(c->dop_hz * c->carr_k);
-    float rate = c->dop_hz * CHIP_PER_HZ + c->dll_rate;  /* chips/s beyond nominal */
+    float dop = c->dop_hz;
+    if (c->ff_rate != 0.0f) {
+        dop += c->ff_rate * c->ff_lead;  /* aided: where the Doppler will be when the words land */
+    }
+    *carr_word = c->if_word + (int32_t)lrintf(dop * c->carr_k);
+    float rate = dop * CHIP_PER_HZ + c->dll_rate;  /* chips/s beyond nominal */
     if (c->code_jump != 0.0f) {
         /* A side-peak jump: the half chip over one code period (its length from the code). */
         const float period = (c->sig == GNSS_SIG_GAL_E1C ? 4092.0f : 10230.0f) / 1.023e6f;

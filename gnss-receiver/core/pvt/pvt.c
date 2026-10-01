@@ -92,7 +92,10 @@ double iono_klobuchar(const gps_iono_t *io, double lat, double lon, double az, d
 
 double tropo_saastamoinen(double lat, double h, double el)
 {
-    if (h < -100.0 || h > 1e4 || el <= 0.0) {
+    /* No ceiling at 10 km, where the delay is still 0.6 m at the zenith: a rocket climbs through
+     * the rest of it. The troposphere's pressure law carried on upward stays within a few cm of the
+     * standard atmosphere's stratosphere, and reaches nothing by 40 km. */
+    if (h < -100.0 || h > 4e4 || el <= 0.0) {
         return 0.0;
     }
     double hh = h < 0.0 ? 0.0 : h;
@@ -240,6 +243,9 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t (*eph)[GNSS_MAX_PRN + 
                 }
             }
             const int sys = m[i].sys, cs = col[sys];
+            sol->los[i][0] = d[0] / rho;
+            sol->los[i][1] = d[1] / rho;
+            sol->los[i][2] = d[2] / rho;
             double res = m[i].pr + GNSS_C * sat[i].clk - (rho + x[3] + (sys != GNSS_SYS_GPS ? x[cs] : 0.0) + corr);
             double hrow[PVT_MAX_X] = {-d[0] / rho, -d[1] / rho, -d[2] / rho, 1.0};
             if (sys != GNSS_SYS_GPS) {
@@ -299,6 +305,7 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t (*eph)[GNSS_MAX_PRN + 
 
     /* Velocity and clock drift from Doppler: range rate = -lambda * D. */
     const double lambda = GNSS_C / 1575.42e6;
+    const double up[3] = {cos(lat) * cos(lon), cos(lat) * sin(lon), sin(lat)};
     double ata[16] = {0}, atb[4] = {0};
     int nv = 0;
     for (int i = 0; i < n; i++) {
@@ -310,8 +317,17 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t (*eph)[GNSS_MAX_PRN + 
         double u[3] = {d[0] / rho, d[1] / rho, d[2] / rho};
         double rate = -lambda * m[i].dop + GNSS_C * sat[i].clk_rate;
         double vs = sat[i].vel[0] * u[0] + sat[i].vel[1] * u[1] + sat[i].vel[2] * u[2];
-        double res = rate - vs;  /* = -v_rx . u + drift */
+        double res = rate - vs;  /* = -v_rx . u + dT/dh v_up + drift */
         double hrow[4] = {-u[0], -u[1], -u[2], 1.0};
+        if (opt->use_tropo && sol->el[i] > 0.0) {
+            /* The troposphere thins as the receiver climbs: at 1 km/s through 5 km its delay falls
+             * by ~0.15 m/s at the zenith, over 0.4 m/s at 20 deg. */
+            const double g = 0.5 * (tropo_saastamoinen(lat, h + 1.0, sol->el[i]) -
+                                    tropo_saastamoinen(lat, h - 1.0, sol->el[i]));
+            hrow[0] += g * up[0];
+            hrow[1] += g * up[1];
+            hrow[2] += g * up[2];
+        }
         for (int r = 0; r < 4; r++) {
             atb[r] += hrow[r] * res;
             for (int c = 0; c < 4; c++) {

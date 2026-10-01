@@ -234,6 +234,8 @@ truth is in the rig's `scenarios/`:
 | `py/trk_sweep.py` | Sweeps `trksim` over loop profiles, C/N0, satellites and seeds; tabulates the worst satellite |
 | `gnssrx --boost-at S0,S1` | The boost profile over those file seconds, as the flight computer would call it. With `--loops-quiet` and `--loops-boost` (bandwidths), `--cn0-at S:DBHZ` (a level change mid-file) and `run.ini` (what made the run) |
 | `py/boost_track.py` | A run against truth, per satellite: frequency error, unlock time, carrier slips, code error, losses as the bench counts them (no pseudorange for 0.5 s), and the fix |
+| `gnssrx --imu SCEN.csv` | IMU aiding from the scenario's trajectory, with the IMU's faults (`--imu-err`); see [IMU aiding](#imu-aiding-milestone-7) |
+| `py/boost_plots.py` | The figures, drawn like the rig's reports on the bought receivers. `rates` draws each satellite's line-of-sight Doppler rate through the burn, by what the receiver delivered, as a grid of runs (signal levels × loop configurations). `timeline` draws one run in full: speed, altitude and acceleration (with the IMU's input), per-satellite output, measurements per epoch, pseudorange and range-rate errors, and the fix's errors |
 
 `boost_track.py` judges the carrier against the integral of the true Doppler. That integral is how
 the rig's smoothed gps-sdr-sim builds the carrier. Range from linearly interpolated positions differs
@@ -290,7 +292,7 @@ wrong, all fixed in `core/trk` for every profile:
 
 The P4 detects launch and burnout from the dev board's own IMU, which sits on its SPI with
 data-ready stamped by the FPGA on the sample counter. It feeds the loops the predicted
-line-of-sight Doppler rate (see "Next: IMU feed-forward" below), so they can stay narrow. The
+line-of-sight Doppler rate (see [IMU aiding](#imu-aiding-milestone-7) below), so they can stay narrow. The
 boost profile is the fallback when there is no aiding. Profiles:
 
 | Profile | Pull-in FLL / PLL / DLL | Locked FLL / PLL / DLL | FLL block | When |
@@ -350,24 +352,156 @@ The two C/N0 scales are not the same instrument:
 The comparison that holds is in kind. Ours, like the NEO-M8T, follows every satellite on the
 bench, and it does so through the whole burn and burnout, carrier phase included.
 
-### Next: IMU feed-forward
+### IMU aiding (milestone 7)
 
-`trk_ch_t.ff_rate` takes a predicted line-of-sight Doppler rate. It drives the frequency directly,
-so the loop tracks only what the prediction misses. `trksim --aid` tests it with an IMU's typical
-faults: 5 ms late, 3 % scale error, and a 1 g bias along the line of sight. With those, the quiet
-10 Hz loops ride both boosts:
-- no slips at 45 dB-Hz, 0.3 at 40, 2.7 at 35;
-- a quarter of the boost profile's frequency noise.
+The owner's design (2026-10-01): the P4 hands each loop the line-of-sight Doppler rate it
+predicts from the board's IMU. The loops then track only what the prediction misses, and can
+stay narrow through the burn.
 
-Feed-forward makes the wide loops unnecessary, and with them most of the boost's C/N0 cost. It
-needs two things on the P4:
-- the flight computer's acceleration and attitude, to project onto each line of sight;
-- the oscillator's g-sensitivity (milestone 7), to correct the clock.
+**In the receiver:**
+- `rx_set_accel(rx, acc, valid)` takes the acceleration in ECEF (m/s², gravity taken out) at each
+  tick.
+- Each tracked satellite's line of sight comes from the last fix. That includes satellites the
+  fix leaves out: the rig's PRN 13 is flagged unhealthy, so it never enters the fix, and it went
+  unaided until this was fixed.
+- The loop gets `ff_rate` = a·u / λ, in Hz/s. It drives the loop's frequency directly. Each
+  command carries the frequency predicted for when it lands, three periods on. The Doppler
+  observable's lag correction counts it too.
+
+**The emulated IMU.** `gnssrx --imu SCEN.csv` takes the acceleration from the scenario's
+trajectory, constant over each 0.1 s step, as the smoothed carrier shows it. `--imu-err
+LAG,SF,BIAS,NOISE[,TILT]` adds the faults:
+- latency, ms;
+- scale error, as a fraction;
+- bias along local up, m/s²;
+- white noise per axis, m/s²;
+- an attitude error, in degrees, that tips the acceleration from up toward east.
+
+The default is 5 ms, 3 %, 0.5 m/s², 0.1 m/s² and 0°. `--imu-at S0,S1` limits the aiding to a
+window. `imu.csv` logs what the loops were given.
+
+**Why 20 Hz loops and not the quiet 10 Hz ones.** At burnout, an IMU 5 ms late and 3 % off leaves
+the loop 50–100 Hz/s that it was not told about. An acceleration step's phase error is about its
+size over ωn². So a 10 Hz PLL stays within ±45° only up to about 20 Hz/s, while a 20 Hz PLL
+manages about 80 Hz/s. `TrkBoost.ImuAidingCarriesTheBurnout` shows all three cases:
+- exact aiding carries the quiet loops;
+- the realistic IMU makes them slip;
+- 20 Hz loops ride the realistic IMU.
+
+| Profile | Pull-in FLL / PLL / DLL | Locked FLL / PLL / DLL | FLL block | When |
+|---|---|---|---|---|
+| aided boost | 10 / 20 / 2 Hz | — / 20 / 0.5 Hz | 2 ms | with the IMU: from T−5 s to 2 s after burnout |
+
+**Results through the boost** (`runs/m7c`; figures from `py/boost_plots.py`). The set-up is the
+one above: the IQ chain, the signal stepped down 10 s before liftoff, C/N0 as our receiver measures
+it. Each cell gives the satellites (of 14) whose PLL let go between ignition and 2.5 s past
+burnout, with the unlocked satellite-seconds. No run lost a pseudorange, and the fix never gapped.
+
+Hotshot:
+
+| C/N0 (measured) | Quiet loops | 50 Hz boost loops | Quiet loops + IMU | IMU + 20 Hz loops |
+|---|---|---|---|---|
+| 42.6 | 14 (27 s) | 0 | 3 (1.0 s) | 0 |
+| 36.4 | 14 (39 s) | 0 | 3 (1.2 s) | 0 |
+| 33.4 | 14 (53 s) | 2 (0.7 s) | 5 (8.9 s) | 0 |
+| 31.4 | 14 (68 s) | 9 (6.0 s) | 8 (17 s) | 0 |
+| 29.3 | 14 (77 s) | 14 (45 s) | 10 (23 s) | 6 (8.6 s) |
+
+Traveler:
+
+| C/N0 (measured) | Quiet loops | 50 Hz boost loops | Quiet loops + IMU | IMU + 20 Hz loops |
+|---|---|---|---|---|
+| 42.6 | 14 (13 s) | 0 | 0 | 0 |
+| 36.4 | 14 (20 s) | 0 | 0 | 0 |
+| 33.4 | 14 (42 s) | 0 | 2 (3.2 s) | 0 |
+| 31.4 | 14 (46 s) | 10 (9.8 s) | 2 (3.7 s) | 0 |
+| 29.3 | 14 (180 s) | 14 (121 s) | 6 (12 s) | 5 (13 s) |
+
+The fix through the same window, 50 Hz boost loops against IMU + 20 Hz loops:
+
+| C/N0 (measured) | Hotshot: vertical velocity rms (max), m/s | Hotshot: height error max | Traveler: vertical velocity rms (max) | Traveler: height error max |
+|---|---|---|---|---|
+| 42.6 | 0.22 (1.0) → 0.07 (0.21) | 0.6 → 0.7 m | 0.21 (0.59) → 0.08 (0.23) | 0.5 → 0.5 m |
+| 36.4 | 0.38 (0.91) → 0.13 (0.38) | 0.6 → 0.6 m | 0.43 (1.2) → 0.16 (0.47) | 0.5 → 0.7 m |
+| 33.4 | 0.68 (2.0) → 0.23 (0.68) | 2.8 → 1.1 m | 0.68 (1.9) → 0.24 (0.79) | 1.0 → 1.1 m |
+| 31.4 | 2.2 (12) → 0.31 (0.86) | 9.4 → 0.9 m | 1.8 (11) → 0.31 (0.87) | 14.5 → 1.1 m |
+| 29.3 | 3.7 (18) → 0.80 (3.7) | 16.5 → 10.1 m | 2.8 (10) → 0.79 (5.6) | 17.1 → 9.7 m |
+
+So aiding with 20 Hz loops keeps carrier phase on every satellite through both burns down to
+31.4 dB-Hz, where the unaided boost profile holds only to 36.4 (hotshot) and 33.4 (traveler).
+The vertical velocity is three to seven times better.
+
+**How good the IMU must be** (`runs/m7i`; IMU + 20 Hz loops at 31.4 dB-Hz; satellites that let go):
+
+| IMU | Hotshot | Traveler |
+|---|---|---|
+| Ideal | 0 | 0 |
+| 5 ms, 3 %, 0.5 m/s², 0.1 m/s² (the default) | 0 | 0 |
+| The default, plus a 2° attitude error | 0 | 0 |
+| The default, plus a 5° attitude error | 5 (5.0 s), all back within 1 s | 0 |
+| 20 ms, 10 %, 2 m/s², 0.5 m/s² | 8 (9.4 s), 2 not back | 4 (6.8 s), 2 not back |
+
+What the P4 needs from the board:
+- the IMU's samples stamped on the sample counter, with latency under about 5 ms;
+- its scale factor good to about 3 %;
+- the attitude good to about 2° through the burn. A wrong attitude turns part of the thrust
+  sideways: 5° of the hotshot's 35 g is 3 g.
+
+**Galileo through the boost** (`runs/m7g`): the SignalSim traveler with GPS and Galileo
+(`signalsim_traveler_gpsgal_2026_50e_n_cofs.C8`). Its sky is 46.5 dB-Hz at the zenith, faded by
+elevation. The table gives each Galileo satellite's PLL-unlocked time, from ignition to 2.5 s
+past burnout:
+
+| Satellite | Pad C/N0 (E1-C) | Quiet loops | 50 Hz boost loops | Quiet loops + IMU | IMU + 20 Hz loops |
+|---|---|---|---|---|---|
+| E26 | 41.1 | 3.1 s, not back | 1.5 s | 0.3 s | 0 |
+| E13 | 39.6 | 3.0 s, not back | 1.1 s | 0 | 0 |
+| E29 | 36.5 | 0.9 s | 1.0 s | 0.3 s | 0 |
+| E27 | 35.2 | 0.9 s | 0.9 s | 0 | 0 |
+| E21 | 33.9 | 0.9 s | 1.1 s | 0.3 s | 0 |
+| E19 | 32.0 | 2.8 s | 2.3 s | 0.8 s | 1.2 s |
+| E07 | 31.6 | 6.7 s | 4.6 s | 3.3 s | 3.7 s |
+| E33 | 30.7 | lost | 10.0 s | 5.7 s | lost |
+
+- **The 50 Hz fallback cannot help Galileo.** A pilot's 4 ms dumps and the three-dump command
+  delay cap its loops at 12.5 Hz, so every Galileo satellite lets go at burnout for about a
+  second.
+- **With aiding**, the five Galileo satellites at 34 dB-Hz and above hold carrier through the burn
+  and burnout. The three weak ones flicker on the pad already.
+- **GPS** holds carrier on all 8 satellites in every configuration but the quiet loops.
+- **The fix**, ignition to 2.5 s past burnout: the vertical velocity error is 0.18 m/s rms with
+  IMU + 20 Hz loops, against 0.89 with the boost profile and 5.8 with quiet loops. The height
+  error peaks at 2.9 m, where one weak Galileo satellite's code runs 7.5 m off (see Limits).
+
+**Fixed on the way:**
+- **A noise step unlocked the PLL** (`TrkBoost.StaysLockedThroughANoiseStep`). A 14 dB step in
+  the noise floor, as the AGC passes it on, puts the lock indicator's noise power wrong until the
+  next C/N0 estimate, up to 0.2 s later. At 31 dB-Hz that dropped 12 of 14 channels into pull-in,
+  where they took seconds to relock. LOCKED now falls back only after 0.1 s below the line.
+- **The troposphere moves when the receiver climbs** (`Pvt.TroposphereAboveAClimbingReceiver`).
+  Found on SignalSim, which has a troposphere; gps-sdr-sim has none. Two changes:
+  - The velocity solution now carries the delay's change with height. At 1 km/s through 5 km the
+    delay falls by 0.15 m/s at the zenith and 0.4 m/s at 20°. The boost's vertical velocity error
+    on SignalSim falls from 0.38 to 0.18 m/s rms.
+  - The model no longer stops at 10 km, where the zenith delay is still 0.6 m. It now runs to
+    40 km. SignalSim's troposphere, like the real one, carries on.
+- **Satellites outside the fix went unaided.** The rig's PRN 13 is flagged unhealthy, so the fix
+  leaves it out, and it got no line of sight. Every tracked satellite now gets one.
+
 
 ### Limits
 
 - **Static sensitivity ends near 31 dB-Hz.** Pull-in fails below about 32 dB-Hz, boost or not.
   Weaker signals need longer coherent integration with data wipe-off and a two-stage pull-in.
+  Even aided, the burn costs carrier at 29 dB-Hz: with an ideal IMU and quiet loops, 5 of 14 on
+  the hotshot.
+- **The fix has no integrity check and no weighting yet.** Two cases:
+  - With quiet loops and no aiding, every channel's NCO ran away together after the hotshot's
+    burnout (`runs/m7c/Q_hot_38`). The fix climbed 97 m in 0.6 s while its residuals reached
+    only 33 m rms.
+  - On SignalSim, one weak Galileo satellite's 7.5 m code error moved the fix 3 m.
+
+  Weighting by C/N0, plus a residual test, would catch both.
 - **Real motors add what the files lack.** Vibration on the oscillator, plume, spin and antenna
   phase are milestone 7.
 

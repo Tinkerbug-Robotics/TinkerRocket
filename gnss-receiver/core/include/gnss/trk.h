@@ -100,6 +100,8 @@ typedef struct {
     float dop_hz;               /* carrier frequency relative to the IF */
     float ff_rate;              /* aiding: the line of sight's predicted Doppler rate, Hz/s (0 = none). It
                                    drives the frequency directly, so the loop tracks only what it misses */
+    float ff_lead;              /* and how far ahead of the dump the commanded words take effect, s: the
+                                   commands carry the predicted frequency for when they land */
     float x1, x2;               /* carrier filter: frequency rate (rad/s^2), frequency (rad/s) */
     float dll_rate;             /* DLL correction, chips/s */
     float prev_ip, prev_qp;
@@ -112,6 +114,7 @@ typedef struct {
 
     /* Lock and C/N0. */
     float pll_lock;             /* cos(2 * phase error), low-passed and noise-corrected */
+    float t_low;                /* seconds it has read below the unlock line while LOCKED */
     float nbd, nbp;             /* low-passed I^2 - Q^2 and I^2 + Q^2 */
     float pn;                   /* noise power per dump, from the last C/N0 estimate (0 before it) */
     float nw_i, nw_q, nw_wp;    /* narrowband/wideband C/N0 (after bit sync): this bit's sums */

@@ -84,6 +84,14 @@ void rx_set_boost(rx_t *rx, int on)
     rx->boost = on != 0;
 }
 
+void rx_set_accel(rx_t *rx, const double acc_ecef[3], int valid)
+{
+    rx->acc_valid = valid != 0;
+    if (valid) {
+        memcpy(rx->acc, acc_ecef, sizeof(rx->acc));
+    }
+}
+
 int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *cmds, int ncap)
 {
     trk_profile_step(&rx->prof, rx->boost ? &rx->cfg.boost : &rx->cfg.quiet,
@@ -143,6 +151,15 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
                 x.ie = -x.ie, x.qe = -x.qe, x.ip = -x.ip, x.qp = -x.qp, x.il = -x.il, x.ql = -x.ql;
                 x.ive = -x.ive, x.qve = -x.qve, x.ivl = -x.ivl, x.qvl = -x.qvl;
             }
+        }
+        if (rx->acc_valid && n->have_los) {
+            /* The acceleration along the line of sight closes the range: +a.u / lambda Hz/s. The
+             * commands from this dump land cmd_lead + 1 periods on. */
+            const double a_los = rx->acc[0] * n->los[0] + rx->acc[1] * n->los[1] + rx->acc[2] * n->los[2];
+            c->ff_rate = (float)(a_los / (GNSS_C / GNSS_FREQ_L1_HZ));
+            c->ff_lead = (float)(rx->cfg.cmd_lead + 1) * T;
+        } else {
+            c->ff_rate = 0.0f;
         }
         int bit;
         uint32_t bit_period;
@@ -350,7 +367,10 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
             const uint64_t t0 = n->hist_t[n->hist_head];
             const double span = (double)(t - t0) / rx->cfg.fs;
             if (span > 0.0) {
-                o->dop = (double)(adr_fx - a0) / TWO_POW_32 / span + (double)c->x1 / TWO_PI * 0.5 * span;
+                /* The loop's own rate, plus the IMU's feed-forward when aided (x1 then holds only the
+                 * residual). */
+                const double rate = (double)c->x1 / TWO_PI + (double)c->ff_rate;
+                o->dop = (double)(adr_fx - a0) / TWO_POW_32 / span + rate * 0.5 * span;
             }
         }
         /* RINEX phase grows with range: the negative of the NCO's accumulated Doppler phase; the
@@ -429,6 +449,25 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
             sol->clk_bias = 0.0;
         }
         rx->sol = *sol;
+        for (int k = 0; k < no; k++) {
+            rx_nco_t *n = &rx->nco[obs[k].ch];
+            const gps_eph_t *e = &rx->eph[obs[k].sys][obs[k].prn];
+            if (sol->used[k]) {
+                memcpy(n->los, sol->los[k], sizeof(n->los));
+                n->have_los = 1;
+            } else if (e->valid) {
+                /* Left out of the fix (unhealthy, under the mask, rejected), a satellite is still
+                 * tracked, and its line of sight from the fix still carries the aiding. */
+                double p[3], clk;
+                gps_sat_pos(e, obs[k].t_sv, p, NULL, &clk);
+                const double d[3] = {p[0] - sol->pos[0], p[1] - sol->pos[1], p[2] - sol->pos[2]};
+                const double r = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+                for (int j = 0; j < 3; j++) {
+                    n->los[j] = d[j] / r;
+                }
+                n->have_los = 1;
+            }
+        }
     }
     return no;
 }

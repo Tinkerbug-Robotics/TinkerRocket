@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+"""Figures of gnssrx runs through a boost, drawn like the rig's reports on the bought receivers.
+
+  rates     each satellite's line-of-sight Doppler rate from ignition to past burnout, drawn by
+            what the receiver delivered at each 0.1 s epoch: carrier-locked observables, code and
+            Doppler only (PLL in pull-in), or nothing. One panel per run, in a grid (rows: signal
+            levels, columns: loop configurations).
+  timeline  one run in full: speed and altitude (truth and fix), vertical acceleration (and what
+            the IMU aiding was given), per-satellite output, measurements per epoch, pseudorange
+            and range-rate errors per satellite, and the fix's errors; over the whole run and
+            zoomed on the boost.
+
+    boost_plots.py rates --traj SCEN.csv --nav BRDC.rnx --liftoff 600.0 --burnout 613.0 \\
+        --rows 45,38,35,33,31 --cols Q,B,QA,BA --run 'runs/m7c/{col}_trav_{row}' -o rates.png
+    boost_plots.py timeline RUN --traj SCEN.csv --nav BRDC.rnx --liftoff 600.0 --burnout 613.0 -o run.png
+
+Times are file seconds; the run's t_s plus its start (run.ini). Errors are judged as
+boost_track.py judges them: each satellite's own pre-launch level taken out, then the per-epoch
+median over satellites (the receiver clock).
+"""
+from __future__ import annotations
+
+import argparse
+import math
+import sys
+import textwrap
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from boost_track import enu_basis, read_csv, single_diff  # noqa: E402
+from gnssrx import rinex, truth  # noqa: E402
+
+SYS_COLOR = {"G": "#1f6fd1", "E": "#c0561e", "C": "#1e7b3c"}
+SYS_NAME = {"G": "GPS", "E": "Galileo", "C": "BeiDou"}
+GRAY = "#d3d9de"
+COCOM_V, COCOM_H = 515.0, 80e3
+LAM = truth.LAMBDA_L1
+
+plt.rcParams.update({
+    "font.size": 8, "axes.titlesize": 8, "axes.labelsize": 8, "xtick.labelsize": 7, "ytick.labelsize": 7,
+    "axes.spines.top": False, "axes.spines.right": False, "axes.grid": True, "grid.color": "#e4e7ea",
+    "grid.linewidth": 0.6, "axes.edgecolor": "#9aa3ab", "axes.titlelocation": "left",
+})
+
+
+def sys_of(prn: int) -> str:
+    return "C" if prn >= 200 else ("E" if prn >= 100 else "G")
+
+
+def sat_name(prn: int) -> str:
+    return f"{sys_of(prn)}{prn % 100:02d}"
+
+
+def key(t) -> np.ndarray:
+    """0.1 s epoch index of file time(s) t."""
+    return np.round(np.asarray(t) * 10.0).astype(np.int64)
+
+
+class Run:
+    """A gnssrx output directory, its times in file seconds."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.ini = {}
+        for line in (path / "run.ini").read_text().splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                self.ini[k.strip()] = v.strip()
+        self.start = float(self.ini["start_s"])
+        self.trk = read_csv(path / "trk.csv")
+        self.obs = read_csv(path / "obs.csv")
+        self.pvt = read_csv(path / "pvt.csv")
+        self.imu = read_csv(path / "imu.csv") if (path / "imu.csv").exists() else None
+        self.tf_trk = self.trk["t_s"] + self.start
+        self.tf_obs = self.obs["t_s"] + self.start
+        self.tf_pvt = self.pvt["t_s"] + self.start
+        # Satellites that delivered something at some point; BeiDou (201-263) has no orbits here yet.
+        self.prns = sorted({int(p) for p in self.obs["prn"] if int(p) < 200})
+        self.t0 = float(np.round(self.obs["rx_tow"][0] - self.obs["t_s"][0] - self.start, 3))
+        b = self.ini.get("boost_at")
+        self.boost = tuple(float(x) for x in b.split(",")) if b else None
+
+    def status(self, prn: int, keys: np.ndarray) -> np.ndarray:
+        """Per epoch: 2 carrier-locked observables, 1 code and Doppler only, 0 nothing."""
+        m = self.obs["prn"] == prn
+        ko = key(self.tf_obs[m])
+        lock = self.obs["lock_s"][m] > 0
+        out = np.zeros(keys.size, dtype=int)
+        pos = {int(k): (2 if l else 1) for k, l in zip(ko, lock)}
+        for j, k in enumerate(keys):
+            out[j] = pos.get(int(k), 0)
+        return out
+
+    def pad_cn0(self, prn: int, t0: float, t1: float) -> float:
+        m = (self.trk["prn"] == prn) & (self.tf_trk >= t0) & (self.tf_trk < t1) & (self.trk["state"] == 2)
+        return float(np.median(self.trk["cn0"][m])) if m.any() else float("nan")
+
+
+class Truth:
+    """Line-of-sight truth per satellite on the 0.1 s grid, computed once per flight."""
+
+    def __init__(self, traj: Path, nav: Path):
+        self.traj = truth.Trajectory(traj)
+        self.nav = rinex.read_nav(nav)
+        self.cache: dict[tuple[int, float], dict[int, np.ndarray]] = {}
+
+    def los(self, prn: int, keys: np.ndarray, t0: float) -> np.ndarray:
+        """(range, Doppler, Doppler rate, elevation) at the epochs `keys` (file s * 10)."""
+        c = self.cache.setdefault((prn, t0), {})
+        need = [int(k) for k in keys if int(k) not in c]
+        if need:
+            vals = truth.los(self.nav, prn, self.traj, np.array(need) / 10.0, t0)
+            for k, v in zip(need, vals):
+                c[k] = v
+        return np.array([c[int(k)] for k in keys]) if len(keys) else np.zeros((0, 4))
+
+
+def gapped(t: np.ndarray, y: np.ndarray, gap: float = 0.15):
+    """t, y with a NaN wherever the samples are more than `gap` apart, so a line breaks there."""
+    if t.size < 2:
+        return t, y
+    cut = np.where(np.diff(t) > gap)[0] + 1
+    return np.insert(t.astype(float), cut, np.nan), np.insert(y.astype(float), cut, np.nan)
+
+
+def segments(x: np.ndarray, cat: np.ndarray):
+    """(category, start, stop) for each run of equal category; stop is exclusive."""
+    out, s = [], 0
+    for j in range(1, cat.size + 1):
+        if j == cat.size or cat[j] != cat[s]:
+            out.append((int(cat[s]), s, j))
+            s = j
+    return out
+
+
+# ------------------------------------------------------------------------------------------- rates
+
+def panel_rates(ax, run: Run, tr: Truth, liftoff: float, burnout: float, t_end: float, label: str):
+    keys = np.arange(key(liftoff - 0.5), key(t_end) + 1)
+    x = keys / 10.0 - liftoff
+    k_end = key(t_end)
+    counts = {"carrier": {}, "code": {}, "n": {}}
+    kb = key(burnout + 1.0)
+    lost = []
+    for prn in run.prns:
+        s = sys_of(prn)
+        L = tr.los(prn, keys, run.t0)
+        rate = L[:, 2]
+        st = run.status(prn, keys)
+        col = SYS_COLOR[s]
+        for cat, a, b in segments(x, st):
+            b1 = min(b + 1, x.size)  # join the next run's first point
+            xs, ys = x[a:b1], rate[a:b1]
+            if cat == 2:
+                ax.plot(xs, ys, color=col, lw=1.1, zorder=3, solid_capstyle="butt")
+            elif cat == 1:
+                ax.plot(xs, ys, color=col, lw=3.0, alpha=0.28, zorder=2, solid_capstyle="butt")
+            else:
+                ax.plot(xs, ys, color=GRAY, lw=1.0, zorder=1)
+        # Markers on carrier lock, from ignition to the end of the panel.
+        after = keys >= key(liftoff)
+        locked = st[after] == 2
+        xa, ra = x[after], rate[after]
+        drops = np.where(locked[:-1] & ~locked[1:])[0]
+        if locked.all():
+            ax.plot(xa[-1], ra[-1], marker="^", ms=4.5, mfc="white", mec=col, mew=1.0, zorder=4)
+        elif locked[-1]:
+            j = drops[0] if drops.size else 0
+            ax.plot(xa[j + 1], ra[j + 1], marker="o", ms=4.5, mfc="white", mec=col, mew=1.0, zorder=4)
+        else:
+            j = drops[-1] + 1 if drops.size else 0
+            ax.plot(xa[j], ra[j], marker="x", ms=5, color=col, mew=1.3, zorder=4)
+            lost.append(sat_name(prn))
+        jb = int(np.searchsorted(keys, kb))
+        jb = min(jb, keys.size - 1)
+        counts["n"][s] = counts["n"].get(s, 0) + 1
+        counts["carrier"][s] = counts["carrier"].get(s, 0) + int(st[jb] == 2)
+        counts["code"][s] = counts["code"].get(s, 0) + int(st[jb] >= 1)
+    ax.axvline(burnout - liftoff, color="#555", ls=":", lw=0.9)
+    ax.axvline(0.0, color="#555", ls=":", lw=0.6)
+    yl = ax.get_ylim()
+    ax.text(burnout - liftoff - 0.08, yl[0] + 0.03 * (yl[1] - yl[0]), "burnout", ha="right", va="bottom",
+            fontsize=7, color="#555")
+    pad = {s: np.nanmedian([run.pad_cn0(p, liftoff - 6, liftoff - 1) for p in run.prns if sys_of(p) == s])
+           for s in counts["n"]}
+    sys_list = [s for s in "GEC" if s in counts["n"]]
+    pad_txt = ", ".join(f"{SYS_NAME[s]} {pad[s]:.0f}" for s in sys_list)
+    at_txt = ";  ".join(f"{SYS_NAME[s]} carrier {counts['carrier'][s]}/{counts['n'][s]}, code "
+                        f"{counts['code'][s]}/{counts['n'][s]}" for s in sys_list)
+    unl = 0.0
+    for prn in run.prns:
+        m = (run.trk["prn"] == prn) & (run.tf_trk >= liftoff) & (run.tf_trk <= t_end)
+        unl += float(np.sum(run.trk["state"][m] != 2)) / 10.0
+    gap = np.diff(np.sort(run.tf_pvt[(run.tf_pvt >= liftoff - 1) & (run.tf_pvt <= t_end)]))
+    fix_txt = f"fix every epoch" if gap.size and gap.max() < 0.15 else (
+        f"longest fix gap {gap.max():.1f} s" if gap.size else "no fix")
+    ax.set_title(f"{label}\npad C/N0 (median, measured) {pad_txt} dB-Hz\n"
+                 f"at burnout+1 s: {at_txt}\n"
+                 f"PLL unlocked {unl:.1f} sat-s after ignition; {len(lost)} not back by T+{t_end - liftoff:.1f}; "
+                 f"{fix_txt}", fontsize=6.6)
+    ax.set_xlim(x[0], x[-1] + 0.03 * (x[-1] - x[0]))
+
+
+def cmd_rates(a) -> int:
+    tr = Truth(a.traj, a.nav)
+    rows, cols = a.rows.split(","), a.cols.split(",")
+    rlab = dict(zip(rows, a.row_labels.split("|"))) if a.row_labels else {r: r for r in rows}
+    clab = dict(zip(cols, a.col_labels.split("|"))) if a.col_labels else {c: c for c in cols}
+    t_end = a.burnout + a.after
+    fig, axs = plt.subplots(len(rows), len(cols), figsize=(4.3 * len(cols), 3.0 * len(rows) + 1.2),
+                            sharex=True, sharey=True, squeeze=False)
+    for i, r in enumerate(rows):
+        for j, c in enumerate(cols):
+            p = Path(a.run.format(row=r, col=c))
+            ax = axs[i][j]
+            if not (p / "trk.csv").exists():
+                ax.set_visible(False)
+                continue
+            label = clab[c] if len(rows) == 1 else f"{clab[c]}  ·  {rlab[r]}"
+            panel_rates(ax, Run(p), tr, a.liftoff, a.burnout, t_end, textwrap.fill(label, 78))
+            if j == 0:
+                ax.set_ylabel("line-of-sight Doppler rate, Hz/s")
+            if i == len(rows) - 1:
+                ax.set_xlabel("time from ignition, s")
+    fig.suptitle(a.title + (f"\n{rlab[rows[0]]}" if len(rows) == 1 else ""), x=0.01, ha="left", fontsize=10)
+    handles = [Line2D([], [], color=SYS_COLOR["G"], lw=1.1, label="GPS: carrier-locked observables"),
+               Line2D([], [], color=SYS_COLOR["E"], lw=1.1, label="Galileo: carrier-locked"),
+               Line2D([], [], color=SYS_COLOR["G"], lw=3, alpha=0.28, label="code and Doppler only (PLL pulling in)"),
+               Line2D([], [], color=GRAY, lw=1.0, label="nothing delivered"),
+               Line2D([], [], ls="", marker="x", color="#333", label="carrier lock lost here, not back by the panel's end"),
+               Line2D([], [], ls="", marker="o", mfc="white", mec="#333", label="carrier lock lost here, back later"),
+               Line2D([], [], ls="", marker="^", mfc="white", mec="#333", label="never lost carrier lock")]
+    if not any(sys_of(k[0]) == "E" for k in tr.cache):
+        handles = [h for h in handles if "Galileo" not in h.get_label()]
+    H = fig.get_figheight()
+    fig.legend(handles=handles, loc="lower left", ncol=4, frameon=False, fontsize=7.5, bbox_to_anchor=(0.01, 0.0))
+    if a.note:
+        fig.text(0.01, 0.42 / H, textwrap.fill(a.note, 230), fontsize=7, color="#555", va="bottom")
+    fig.tight_layout(rect=(0, 0.75 / H, 1, 1 - 0.55 / H))
+    fig.savefig(a.o, dpi=a.dpi)
+    print(f"wrote {a.o}")
+    return 0
+
+
+# ---------------------------------------------------------------------------------------- timeline
+
+def errors(run: Run, tr: Truth, liftoff: float):
+    """Per satellite: (t, code error m, raw code error m, range-rate error m/s), as boost_track judges them."""
+    o, tf = run.obs, run.tf_obs
+    rng = np.full(tf.size, np.nan)
+    dop = np.full(tf.size, np.nan)
+    for p in np.unique(o["prn"]).astype(int):
+        m = o["prn"] == p
+        L = tr.los(p, key(tf[m]), run.t0)
+        rng[m], dop[m] = L[:, 0], L[:, 1]
+    out = {}
+    for name, x in (("code", o["pr_m"] - rng), ("raw", o["pr_raw_m"] - rng), ("rate", -(o["dop_hz"] - dop) * LAM)):
+        x = x.copy()
+        for p in np.unique(o["prn"]):
+            m = o["prn"] == p
+            ref = m & (tf > liftoff - 30) & (tf < liftoff - 1)
+            x[m] -= np.median(x[ref]) if ref.any() else x[m][0]
+        out[name] = single_diff(tf, o["prn"], x, np.isfinite(x))
+    return out
+
+
+def cmd_timeline(a) -> int:
+    run = Run(a.run)
+    tr = Truth(a.traj, a.nav)
+    L0, B = a.liftoff, a.burnout
+    t_all = np.arange(key(run.tf_trk.min()), key(run.tf_trk.max()) + 1) / 10.0
+    tp, tv = tr.traj.state(t_all)
+    speed = np.linalg.norm(tv, axis=1)
+    h_true = np.interp(t_all, tr.traj.t, tr.traj.h)
+    acc_up = tr.traj.up_accel(t_all)
+    err = errors(run, tr, L0)
+    prns = run.prns
+    has = {s: any(sys_of(p) == s for p in prns) for s in "GEC"}
+
+    rows = ["speed", "alt", "acc", "sats", "count", "codeG"] + (["codeE"] if has["E"] else []) + ["rate", "pos", "vel"]
+    hr = {"speed": 1, "alt": 1, "acc": 1, "sats": 0.13 * len(prns) + 0.4, "count": 1, "codeG": 1.1, "codeE": 1.1,
+          "rate": 1.1, "pos": 1.1, "vel": 1.1}
+    fig, axs = plt.subplots(len(rows), 2, figsize=(15, 2.0 * sum(hr[r] for r in rows) + 0.8),
+                            gridspec_kw={"height_ratios": [hr[r] for r in rows], "width_ratios": [1.5, 1]},
+                            sharex="col")
+    zoom = (-2.0, B - L0 + a.after)
+    full = (t_all[0] - L0, t_all[-1] - L0)
+    xs = t_all - L0
+    cocom = (speed > COCOM_V) | (h_true > COCOM_H)
+    R = enu_basis(float(tr.traj.lat[0]), float(tr.traj.lon[0]))
+    pos = np.stack([run.pvt["x"], run.pvt["y"], run.pvt["z"]], axis=-1)
+    vel = np.stack([run.pvt["vx"], run.pvt["vy"], run.pvt["vz"]], axis=-1)
+    ptp, ptv = tr.traj.state(run.tf_pvt)
+    dpos = (pos - ptp) @ R.T
+    dvel = (vel - ptv) @ R.T
+    xp = run.tf_pvt - L0
+
+    for col, xl in ((0, full), (1, zoom)):
+        A = {r: axs[i][col] for i, r in enumerate(rows)}
+        for ax in A.values():
+            # Amber where the bought receivers' export limits apply; the boost profile's window; ignition/burnout.
+            on = False
+            for j in range(xs.size):
+                if cocom[j] and not on:
+                    j0, on = j, True
+                if on and (not cocom[j] or j == xs.size - 1):
+                    ax.axvspan(xs[j0], xs[j], color="#f7efd9", lw=0, zorder=0)
+                    on = False
+            ax.axvline(0.0, color="#555", ls=":", lw=0.8)
+            ax.axvline(B - L0, color="#555", ls=":", lw=0.8)
+        ax = A["speed"]
+        ax.plot(xs, speed, color="#222", lw=1.2, label="true speed")
+        ax.plot(xp, np.linalg.norm(vel, axis=1), ".", ms=1.6, color=SYS_COLOR["G"], label="receiver's own speed (fix)")
+        ax.axhline(COCOM_V, color="#b08a18", ls="--", lw=0.8)
+        ax.set_ylabel("speed, m/s")
+        ax = A["alt"]
+        ax.plot(xs, h_true / 1e3, color="#222", lw=1.2, label="true altitude")
+        ax.plot(xp, run.pvt["h_m"] / 1e3, ".", ms=1.6, color=SYS_COLOR["G"], label="receiver's own altitude (fix)")
+        ax.set_ylabel("altitude, km")
+        ax = A["acc"]
+        ax.plot(xs, acc_up, color="#7a4fd0", lw=1.0, label="true vertical acceleration")
+        if run.imu is not None:
+            ti = run.imu["t_s"] + run.start - L0
+            on = run.imu["aiding"] > 0
+            ax.plot(ti[on], run.imu["acc_up_imu"][on], ".", ms=1.5, color="#e08a00", label="IMU aiding input (emulated)")
+        if run.boost:
+            ax.axvspan(run.boost[0] - L0, run.boost[1] - L0, color="#e8f1fb", lw=0, zorder=0,
+                       label="boost loop profile")
+        ax.set_ylabel("vertical accel., m/s²")
+        # Per-satellite output.
+        ax = A["sats"]
+        for i, p in enumerate(prns):
+            ks = key(np.arange(run.tf_trk.min(), run.tf_trk.max() + 0.05, 0.1))
+            st = run.status(p, ks)
+            xk = ks / 10.0 - L0
+            for cat, s0, s1 in segments(xk, st):
+                if cat == 0:
+                    continue
+                ax.fill_between([xk[s0] - 0.05, xk[s1 - 1] + 0.05], i - 0.38, i + 0.38, lw=0,
+                                color=SYS_COLOR[sys_of(p)], alpha=1.0 if cat == 2 else 0.3)
+        ax.set_yticks(range(len(prns)))
+        ax.set_yticklabels([sat_name(p) for p in prns], fontsize=6)
+        ax.set_ylim(len(prns) - 0.5, -0.5)
+        ax.grid(False)
+        if col == 0:
+            ax.set_ylabel("observables per satellite\n(solid: carrier; pale: code only)")
+        # Measurements per epoch.
+        ax = A["count"]
+        ko = key(run.tf_obs)
+        ks = np.unique(ko)
+        for s in "GEC":
+            if not has[s]:
+                continue
+            ms = np.array([sys_of(int(p)) == s for p in run.obs["prn"]])
+            car = np.array([np.sum((ko == k) & ms & (run.obs["lock_s"] > 0)) for k in ks])
+            allm = np.array([np.sum((ko == k) & ms) for k in ks])
+            ax.step(ks / 10.0 - L0, car, where="mid", color=SYS_COLOR[s], lw=1.0)
+            ax.step(ks / 10.0 - L0, allm, where="mid", color=SYS_COLOR[s], lw=2.2, alpha=0.3)
+        kf = key(run.tf_pvt)
+        ax.scatter(kf / 10.0 - L0, np.full(kf.size, -0.6), marker="|", s=12, color="#2e9b4b", lw=0.8)
+        ax.set_ylim(-1.2, None)
+        ax.set_ylabel("measurements\nper epoch")
+        if col == 0:
+            ax.text(0.005, 0.93, "thin: carrier-locked; pale: all observables; green ticks: a fix", fontsize=6.5,
+                    color="#555", transform=ax.transAxes, va="top")
+        # Code and range-rate errors.
+        for r, sysw in (("codeG", "G"), ("codeE", "E")):
+            if r not in A:
+                continue
+            ax = A[r]
+            for p, (tt, x) in err["raw"].items():
+                if sys_of(p) == sysw:
+                    ax.plot(tt - L0, x, ".", ms=0.8, color=SYS_COLOR[sysw], alpha=0.25)
+            for p, (tt, x) in err["code"].items():
+                if sys_of(p) == sysw:
+                    ax.plot(*gapped(tt - L0, x), "-", lw=0.7, color=SYS_COLOR[sysw])
+            ax.set_ylabel(f"{SYS_NAME[sysw]} pseudorange\nerror, m")
+            ax.set_ylim(-a.code_ylim, a.code_ylim)
+        ax = A["rate"]
+        for p, (tt, x) in err["rate"].items():
+            ax.plot(tt - L0, x, ".", ms=0.9, color=SYS_COLOR[sys_of(p)])
+        ax.set_ylim(-a.rate_ylim, a.rate_ylim)
+        ax.set_ylabel("range-rate error\n(Doppler), m/s")
+        ax = A["pos"]
+        for k, c, n in ((0, "#7aa6d8", "E"), (1, "#9bc59d", "N"), (2, "#222", "U")):
+            ax.plot(*gapped(xp, dpos[:, k]), lw=0.8, color=c, label=n)
+        ax.set_ylim(-a.pos_ylim, a.pos_ylim)
+        ax.set_ylabel("fix position\nerror, m")
+        ax = A["vel"]
+        for k, c, n in ((0, "#7aa6d8", "E"), (1, "#9bc59d", "N"), (2, "#222", "U")):
+            ax.plot(*gapped(xp, dvel[:, k]), lw=0.8, color=c, label=n)
+        ax.set_ylim(-a.vel_ylim, a.vel_ylim)
+        ax.set_ylabel("fix velocity\nerror, m/s")
+        axs[-1][col].set_xlim(*xl)
+        if col == 0:
+            for r in ("speed", "alt", "acc", "pos", "vel"):
+                A[r].legend(loc="upper left", fontsize=6.5, frameon=False, ncol=3)
+    axs[-1][0].set_xlabel("time from ignition, s  (dotted: ignition and burnout; amber: over 515 m/s or 80 km; "
+                          "green ticks: a fix)")
+    axs[-1][1].set_xlabel(f"the boost: T{zoom[0]:+.0f} to T+{zoom[1]:.0f} s")
+    fig.suptitle(a.title, x=0.01, ha="left", fontsize=10)
+    fig.tight_layout(rect=(0, 0, 1, 0.985))
+    fig.savefig(a.o, dpi=a.dpi)
+    print(f"wrote {a.o}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("rates", "timeline"):
+        p = sub.add_parser(name)
+        p.add_argument("--traj", type=Path, required=True)
+        p.add_argument("--nav", type=Path, required=True)
+        p.add_argument("--liftoff", type=float, required=True, help="file s")
+        p.add_argument("--burnout", type=float, required=True, help="file s")
+        p.add_argument("--after", type=float, default=2.5, help="s past burnout to show")
+        p.add_argument("--title", default="")
+        p.add_argument("--dpi", type=int, default=130)
+        p.add_argument("-o", type=Path, required=True)
+        if name == "rates":
+            p.add_argument("--rows", required=True)
+            p.add_argument("--cols", required=True)
+            p.add_argument("--row-labels")
+            p.add_argument("--col-labels")
+            p.add_argument("--run", required=True, help="run directory pattern with {row} and {col}")
+            p.add_argument("--note", default="")
+        else:
+            p.add_argument("run", type=Path)
+            p.add_argument("--code-ylim", type=float, default=10.0)
+            p.add_argument("--rate-ylim", type=float, default=3.0)
+            p.add_argument("--pos-ylim", type=float, default=5.0)
+            p.add_argument("--vel-ylim", type=float, default=2.0)
+    a = ap.parse_args()
+    return cmd_rates(a) if a.cmd == "rates" else cmd_timeline(a)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
