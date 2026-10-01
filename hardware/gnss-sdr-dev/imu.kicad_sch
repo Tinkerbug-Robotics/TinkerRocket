@@ -1429,7 +1429,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/788a77da-dab6-4085-aa73-87ff6f2c34aa"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/611b2d29-f0c1-4061-82fd-edb8bc73bcd5"
 					(reference "U10")
 					(unit 1)
 				)
@@ -1532,7 +1532,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/788a77da-dab6-4085-aa73-87ff6f2c34aa"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/611b2d29-f0c1-4061-82fd-edb8bc73bcd5"
 					(reference "C70")
 					(unit 1)
 				)
@@ -1609,7 +1609,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/788a77da-dab6-4085-aa73-87ff6f2c34aa"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/611b2d29-f0c1-4061-82fd-edb8bc73bcd5"
 					(reference "#PWR0253")
 					(unit 1)
 				)
@@ -1712,7 +1712,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/788a77da-dab6-4085-aa73-87ff6f2c34aa"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/611b2d29-f0c1-4061-82fd-edb8bc73bcd5"
 					(reference "R19")
 					(unit 1)
 				)
@@ -1789,7 +1789,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/788a77da-dab6-4085-aa73-87ff6f2c34aa"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/611b2d29-f0c1-4061-82fd-edb8bc73bcd5"
 					(reference "#PWR0251")
 					(unit 1)
 				)
@@ -1866,7 +1866,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/788a77da-dab6-4085-aa73-87ff6f2c34aa"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/611b2d29-f0c1-4061-82fd-edb8bc73bcd5"
 					(reference "#PWR0254")
 					(unit 1)
 				)
@@ -1943,7 +1943,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/788a77da-dab6-4085-aa73-87ff6f2c34aa"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/611b2d29-f0c1-4061-82fd-edb8bc73bcd5"
 					(reference "#PWR0252")
 					(unit 1)
 				)
@@ -2046,7 +2046,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/788a77da-dab6-4085-aa73-87ff6f2c34aa"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/611b2d29-f0c1-4061-82fd-edb8bc73bcd5"
 					(reference "C72")
 					(unit 1)
 				)
@@ -2149,7 +2149,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/788a77da-dab6-4085-aa73-87ff6f2c34aa"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/611b2d29-f0c1-4061-82fd-edb8bc73bcd5"
 					(reference "C71")
 					(unit 1)
 				)

@@ -111498,7 +111498,7 @@
 		(in_pos_files yes)
 		(duplicate_pin_numbers_are_jumpers no)
 		(property "Reference" "U"
-			(at -20.32 26.67 0)
+			(at -20.32 34.29 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -111509,7 +111509,7 @@
 			)
 		)
 		(property "Value" "MAX2769B"
-			(at -20.32 -26.67 0)
+			(at -20.32 -34.29 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -111620,8 +111620,8 @@
 		)
 		(symbol "MAX2769B_0_1"
 			(rectangle
-				(start -20.32 22.86)
-				(end 20.32 -22.86)
+				(start -20.32 30.48)
+				(end 20.32 -30.48)
 				(stroke
 					(width 0.254)
 					(type default)
@@ -111632,296 +111632,8 @@
 			)
 		)
 		(symbol "MAX2769B_1_1"
-			(pin input line
-				(at -22.86 10.16 0)
-				(length 2.54)
-				(name "LNA1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "27"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -22.86 7.62 0)
-				(length 2.54)
-				(name "LNA2"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "25"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -22.86 2.54 0)
-				(length 2.54)
-				(name "XTAL"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "15"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -22.86 -2.54 0)
-				(length 2.54)
-				(name "~{CS}"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "10"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -22.86 -5.08 0)
-				(length 2.54)
-				(name "SCLK"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "9"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -22.86 -7.62 0)
-				(length 2.54)
-				(name "SDATA"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "8"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -22.86 -12.7 0)
-				(length 2.54)
-				(name "~{SHDN}"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "7"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -22.86 -15.24 0)
-				(length 2.54)
-				(name "~{IDLE}"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "24"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 22.86 10.16 180)
-				(length 2.54)
-				(name "CLKOUT"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "16"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 22.86 5.08 180)
-				(length 2.54)
-				(name "LNAOUT"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "2"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at 22.86 -2.54 180)
-				(length 2.54)
-				(name "MIXIN"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "5"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 22.86 -7.62 180)
-				(length 2.54)
-				(name "LD"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "6"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 22.86 -12.7 180)
-				(length 2.54)
-				(name "I1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "21"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 22.86 -15.24 180)
-				(length 2.54)
-				(name "I0"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "20"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 22.86 -17.78 180)
-				(length 2.54)
-				(name "Q1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "17"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 22.86 -20.32 180)
-				(length 2.54)
-				(name "Q0"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "18"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
 			(pin power_in line
-				(at -6.35 25.4 270)
+				(at -22.86 27.94 0)
 				(length 2.54)
 				(name "VCC_RF"
 					(effects
@@ -111939,7 +111651,7 @@
 				)
 			)
 			(pin power_in line
-				(at -3.81 25.4 270)
+				(at -22.86 25.4 0)
 				(length 2.54)
 				(name "VCC_VCO"
 					(effects
@@ -111957,7 +111669,7 @@
 				)
 			)
 			(pin power_in line
-				(at -1.27 25.4 270)
+				(at -22.86 22.86 0)
 				(length 2.54)
 				(name "VCC_CP"
 					(effects
@@ -111975,7 +111687,7 @@
 				)
 			)
 			(pin power_in line
-				(at 1.27 25.4 270)
+				(at -22.86 20.32 0)
 				(length 2.54)
 				(name "VCCD"
 					(effects
@@ -111993,7 +111705,7 @@
 				)
 			)
 			(pin power_in line
-				(at 3.81 25.4 270)
+				(at -22.86 17.78 0)
 				(length 2.54)
 				(name "VCC_ADC"
 					(effects
@@ -112011,7 +111723,7 @@
 				)
 			)
 			(pin power_in line
-				(at 6.35 25.4 270)
+				(at -22.86 15.24 0)
 				(length 2.54)
 				(name "VCC_IF"
 					(effects
@@ -112029,7 +111741,295 @@
 				)
 			)
 			(pin input line
-				(at -10.16 -25.4 90)
+				(at -22.86 7.62 0)
+				(length 2.54)
+				(name "LNA1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "27"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -22.86 5.08 0)
+				(length 2.54)
+				(name "LNA2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "25"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -22.86 0 0)
+				(length 2.54)
+				(name "~{CS}"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "10"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -22.86 -2.54 0)
+				(length 2.54)
+				(name "SCLK"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "9"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -22.86 -5.08 0)
+				(length 2.54)
+				(name "SDATA"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "8"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -22.86 -10.16 0)
+				(length 2.54)
+				(name "~{SHDN}"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "7"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -22.86 -12.7 0)
+				(length 2.54)
+				(name "~{IDLE}"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "24"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -22.86 -17.78 0)
+				(length 2.54)
+				(name "XTAL"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "15"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 27.94 180)
+				(length 2.54)
+				(name "CLKOUT"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "16"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 22.86 180)
+				(length 2.54)
+				(name "LNAOUT"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 22.86 15.24 180)
+				(length 2.54)
+				(name "MIXIN"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "5"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 10.16 180)
+				(length 2.54)
+				(name "LD"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "6"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 5.08 180)
+				(length 2.54)
+				(name "I1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "21"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 2.54 180)
+				(length 2.54)
+				(name "I0"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "20"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 0 180)
+				(length 2.54)
+				(name "Q1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "17"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 -2.54 180)
+				(length 2.54)
+				(name "Q0"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "18"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -10.16 -33.02 90)
 				(length 2.54)
 				(name "PGM"
 					(effects
@@ -112047,7 +112047,7 @@
 				)
 			)
 			(pin power_in line
-				(at -7.62 -25.4 90)
+				(at -7.62 -33.02 90)
 				(length 2.54)
 				(name "GND"
 					(effects
@@ -112065,7 +112065,7 @@
 				)
 			)
 			(pin no_connect line
-				(at -2.54 -25.4 90)
+				(at -2.54 -33.02 90)
 				(length 2.54)
 				(name "NC"
 					(effects
@@ -112083,7 +112083,7 @@
 				)
 			)
 			(pin no_connect line
-				(at 0 -25.4 90)
+				(at 0 -33.02 90)
 				(length 2.54)
 				(name "NC"
 					(effects
@@ -112101,7 +112101,7 @@
 				)
 			)
 			(pin power_out line
-				(at 2.54 -25.4 90)
+				(at 2.54 -33.02 90)
 				(length 2.54)
 				(name "ANTBIAS"
 					(effects
@@ -112119,7 +112119,7 @@
 				)
 			)
 			(pin output line
-				(at 5.08 -25.4 90)
+				(at 5.08 -33.02 90)
 				(length 2.54)
 				(name "ANTFLAG"
 					(effects
@@ -112137,7 +112137,7 @@
 				)
 			)
 			(pin passive line
-				(at 10.16 -25.4 90)
+				(at 10.16 -33.02 90)
 				(length 2.54)
 				(name "CPOUT"
 					(effects
@@ -112167,7 +112167,7 @@
 		(in_pos_files yes)
 		(duplicate_pin_numbers_are_jumpers no)
 		(property "Reference" "U"
-			(at -25.4 26.67 0)
+			(at -25.4 36.83 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -112178,7 +112178,7 @@
 			)
 		)
 		(property "Value" "MAX2771"
-			(at -25.4 -26.67 0)
+			(at -25.4 -36.83 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -112289,8 +112289,8 @@
 		)
 		(symbol "MAX2771_0_1"
 			(rectangle
-				(start -25.4 22.86)
-				(end 25.4 -22.86)
+				(start -25.4 33.02)
+				(end 25.4 -33.02)
 				(stroke
 					(width 0.254)
 					(type default)
@@ -112301,260 +112301,8 @@
 			)
 		)
 		(symbol "MAX2771_1_1"
-			(pin input line
-				(at -27.94 12.7 0)
-				(length 2.54)
-				(name "XTAL"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "3"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -27.94 10.16 0)
-				(length 2.54)
-				(name "ADC_CLKIN"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "5"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -27.94 5.08 0)
-				(length 2.54)
-				(name "CSN"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "9"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -27.94 2.54 0)
-				(length 2.54)
-				(name "SCLK"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "8"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin bidirectional line
-				(at -27.94 0 0)
-				(length 2.54)
-				(name "SDATA"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "7"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -27.94 -5.08 0)
-				(length 2.54)
-				(name "~{SHDN}"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "18"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -27.94 -12.7 0)
-				(length 2.54)
-				(name "LNAIN_LO"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "20"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 27.94 12.7 180)
-				(length 2.54)
-				(name "LNAOUT_LO"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "23"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at 27.94 5.08 180)
-				(length 2.54)
-				(name "MIXIN_LO"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "26"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 27.94 0 180)
-				(length 2.54)
-				(name "LD"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "17"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 27.94 -5.08 180)
-				(length 2.54)
-				(name "I1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "13"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 27.94 -7.62 180)
-				(length 2.54)
-				(name "I0"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "12"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 27.94 -10.16 180)
-				(length 2.54)
-				(name "Q1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "10"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 27.94 -12.7 180)
-				(length 2.54)
-				(name "Q0"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "11"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
 			(pin power_in line
-				(at -6.35 25.4 270)
+				(at -27.94 30.48 0)
 				(length 2.54)
 				(name "VCCRF"
 					(effects
@@ -112572,7 +112320,7 @@
 				)
 			)
 			(pin power_in line
-				(at -3.81 25.4 270)
+				(at -27.94 27.94 0)
 				(length 2.54)
 				(name "VCCVCO"
 					(effects
@@ -112590,7 +112338,7 @@
 				)
 			)
 			(pin power_in line
-				(at -1.27 25.4 270)
+				(at -27.94 25.4 0)
 				(length 2.54)
 				(name "VCCCP"
 					(effects
@@ -112608,7 +112356,7 @@
 				)
 			)
 			(pin power_in line
-				(at 1.27 25.4 270)
+				(at -27.94 22.86 0)
 				(length 2.54)
 				(name "VCCD"
 					(effects
@@ -112626,7 +112374,7 @@
 				)
 			)
 			(pin power_in line
-				(at 3.81 25.4 270)
+				(at -27.94 20.32 0)
 				(length 2.54)
 				(name "VCCADC"
 					(effects
@@ -112644,7 +112392,7 @@
 				)
 			)
 			(pin power_in line
-				(at 6.35 25.4 270)
+				(at -27.94 17.78 0)
 				(length 2.54)
 				(name "VCCIF"
 					(effects
@@ -112661,8 +112409,260 @@
 					)
 				)
 			)
+			(pin input line
+				(at -27.94 10.16 0)
+				(length 2.54)
+				(name "XTAL"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "3"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -27.94 7.62 0)
+				(length 2.54)
+				(name "ADC_CLKIN"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "5"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -27.94 2.54 0)
+				(length 2.54)
+				(name "CSN"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "9"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -27.94 0 0)
+				(length 2.54)
+				(name "SCLK"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "8"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at -27.94 -2.54 0)
+				(length 2.54)
+				(name "SDATA"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "7"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -27.94 -7.62 0)
+				(length 2.54)
+				(name "~{SHDN}"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "18"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at -27.94 -15.24 0)
+				(length 2.54)
+				(name "LNAIN_LO"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "20"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 27.94 30.48 180)
+				(length 2.54)
+				(name "LNAOUT_LO"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "23"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 27.94 22.86 180)
+				(length 2.54)
+				(name "MIXIN_LO"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "26"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 27.94 17.78 180)
+				(length 2.54)
+				(name "LD"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "17"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 27.94 12.7 180)
+				(length 2.54)
+				(name "I1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "13"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 27.94 10.16 180)
+				(length 2.54)
+				(name "I0"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "12"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 27.94 7.62 180)
+				(length 2.54)
+				(name "Q1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "10"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 27.94 5.08 180)
+				(length 2.54)
+				(name "Q0"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "11"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
 			(pin power_in line
-				(at -12.7 -25.4 90)
+				(at -12.7 -35.56 90)
 				(length 2.54)
 				(name "GND"
 					(effects
@@ -112680,7 +112680,7 @@
 				)
 			)
 			(pin no_connect line
-				(at -7.62 -25.4 90)
+				(at -7.62 -35.56 90)
 				(length 2.54)
 				(name "NC"
 					(effects
@@ -112698,7 +112698,7 @@
 				)
 			)
 			(pin input line
-				(at -5.08 -25.4 90)
+				(at -5.08 -35.56 90)
 				(length 2.54)
 				(name "LNAIN_HI"
 					(effects
@@ -112716,7 +112716,7 @@
 				)
 			)
 			(pin input line
-				(at -2.54 -25.4 90)
+				(at -2.54 -35.56 90)
 				(length 2.54)
 				(name "MIXIN_HI"
 					(effects
@@ -112734,7 +112734,7 @@
 				)
 			)
 			(pin output line
-				(at 0 -25.4 90)
+				(at 0 -35.56 90)
 				(length 2.54)
 				(name "LNAOUT_HI"
 					(effects
@@ -112752,7 +112752,7 @@
 				)
 			)
 			(pin output line
-				(at 2.54 -25.4 90)
+				(at 2.54 -35.56 90)
 				(length 2.54)
 				(name "CLKOUT"
 					(effects
@@ -112770,7 +112770,7 @@
 				)
 			)
 			(pin output line
-				(at 5.08 -25.4 90)
+				(at 5.08 -35.56 90)
 				(length 2.54)
 				(name "ANAIPOUT"
 					(effects
@@ -112788,7 +112788,7 @@
 				)
 			)
 			(pin output line
-				(at 7.62 -25.4 90)
+				(at 7.62 -35.56 90)
 				(length 2.54)
 				(name "ANAINOUT"
 					(effects
@@ -112806,7 +112806,7 @@
 				)
 			)
 			(pin passive line
-				(at 12.7 -25.4 90)
+				(at 12.7 -35.56 90)
 				(length 2.54)
 				(name "CPOUT"
 					(effects

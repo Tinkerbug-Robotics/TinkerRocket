@@ -2,7 +2,7 @@
 	(version 20260306)
 	(generator "eeschema")
 	(generator_version "10.0")
-	(uuid "91b413ca-c387-441b-9025-28bbc3ef09b0")
+	(uuid "6b3f9783-73d6-443c-93a6-e6ebbbb93628")
 	(paper "A3")
 	(title_block
 		(title "gnss-sdr-dev: ECP5 supplies, one decoupling cap per ball")
@@ -5697,7 +5697,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "ee9296ed-3c5b-41ca-9cc9-1f94e890a6e3")
+		(uuid "7b9a61ac-2b1b-42bc-ab1e-b96b8bfa5cff")
 	)
 	(text "VCC 1.1 V core, VCCAUX 2.5 V (PLLs, isolated by FB501), VCCIO 3.3 V on every bank. Bulk: C507/C508 core, C511 VCCAUX, C525/C526 VCCIO"
 		(exclude_from_sim no)
@@ -5708,7 +5708,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "b47db6e7-8e70-4cd6-b202-442d8f4dfe55")
+		(uuid "4bd7c3ab-9974-4078-93dd-bb742e9c60e8")
 	)
 	(global_label "+1V1_FPGA"
 		(shape input)
@@ -5720,7 +5720,7 @@
 			)
 			(justify left)
 		)
-		(uuid "3dfed15f-1721-4ddb-9691-129b5ee4cbf7")
+		(uuid "3507704b-dec6-4092-ae04-8f125d3e4c99")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 73.66 91.44 0)
 			(hide yes)
@@ -5744,7 +5744,7 @@
 			)
 			(justify left)
 		)
-		(uuid "6f625016-7286-4598-bd2f-480d6daf1f72")
+		(uuid "584971bc-667f-4a59-bece-0f9f549b84ce")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 104.14 93.98 0)
 			(hide yes)
@@ -5768,7 +5768,7 @@
 			)
 			(justify left)
 		)
-		(uuid "ac831904-8b19-49e5-a261-748e71112b8f")
+		(uuid "efc3780b-7715-41cd-bb24-c024f4a176f6")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 121.92 96.52 0)
 			(hide yes)
@@ -5792,7 +5792,7 @@
 			)
 			(justify left)
 		)
-		(uuid "19383da4-a6fe-40dc-a6a7-e228b2c98290")
+		(uuid "5dffb87e-f9bd-4c2d-85cf-7ef298b2a059")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 139.7 99.06 0)
 			(hide yes)
@@ -5816,7 +5816,7 @@
 			)
 			(justify left)
 		)
-		(uuid "ea3a9464-c503-4de1-9040-bfaa67ded6c7")
+		(uuid "dcc1faaa-3ee1-4bc1-b8b1-c3b7992876ac")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 157.48 101.6 0)
 			(hide yes)
@@ -5840,7 +5840,7 @@
 			)
 			(justify left)
 		)
-		(uuid "047ac9e5-661b-4bd3-8588-16423c172cd5")
+		(uuid "a1c4e43e-5bcc-4882-822c-ed4f15b2690f")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 175.26 104.14 0)
 			(hide yes)
@@ -5864,7 +5864,7 @@
 			)
 			(justify left)
 		)
-		(uuid "1b801a5f-b722-414a-83ec-c2a06f56ab29")
+		(uuid "fc243c38-1b5c-4a85-8f40-c530ec8d09e6")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 205.74 109.22 0)
 			(hide yes)
@@ -5888,7 +5888,7 @@
 			)
 			(justify left)
 		)
-		(uuid "4c780585-237e-4baf-93ca-92d5f9077d78")
+		(uuid "156d04ee-5553-4cd1-8e80-fc31bccc1c1a")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 236.22 111.76 0)
 			(hide yes)
@@ -5912,7 +5912,7 @@
 			)
 			(justify left)
 		)
-		(uuid "df658b0e-37e9-4883-92bc-fb7481091e07")
+		(uuid "0166389f-80a9-42ee-9d8c-b78586794590")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 312.42 116.84 0)
 			(hide yes)
@@ -5936,7 +5936,7 @@
 			)
 			(justify left)
 		)
-		(uuid "26c7eac7-f358-4e0c-958c-e6e88c27a50a")
+		(uuid "4b6c1063-2ec6-40f1-ab1e-e3c3f179a157")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 294.64 119.38 0)
 			(hide yes)
@@ -5960,7 +5960,7 @@
 			)
 			(justify left)
 		)
-		(uuid "d22bed32-5f5c-4712-a4aa-4c37331f71ca")
+		(uuid "fcc5d947-09fd-4c22-85b1-2173feadddcf")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 276.86 124.46 0)
 			(hide yes)
@@ -5984,7 +5984,7 @@
 			)
 			(justify left)
 		)
-		(uuid "fa5850e9-0c26-4834-ada2-7cee4b710197")
+		(uuid "9b0c4566-aacb-42cb-b5c8-08ed1f62af28")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 259.08 127 0)
 			(hide yes)
@@ -6008,7 +6008,7 @@
 			)
 			(justify left)
 		)
-		(uuid "7420c046-6d82-400a-8268-65bf8f70850d")
+		(uuid "d06d1171-f551-4faf-8508-a7af38b1539d")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 228.6 132.08 0)
 			(hide yes)
@@ -6032,7 +6032,7 @@
 			)
 			(justify left)
 		)
-		(uuid "51bb7989-5103-40be-8b12-4e0d004b274e")
+		(uuid "1dfe01ba-fefb-4dc8-a455-948c9375c867")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 210.82 134.62 0)
 			(hide yes)
@@ -6056,7 +6056,7 @@
 			)
 			(justify left)
 		)
-		(uuid "1fa3b8c2-93fc-4f0e-9c44-91a3533268ad")
+		(uuid "9dbf2286-2474-447f-98cf-04af23fc7ed9")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 193.04 139.7 0)
 			(hide yes)
@@ -6080,7 +6080,7 @@
 			)
 			(justify left)
 		)
-		(uuid "cc6f4426-2d72-4dd6-888d-3ba6e0e9e6e3")
+		(uuid "a1310c95-4eeb-4bfd-b879-6dd5b576a68f")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 175.26 142.24 0)
 			(hide yes)
@@ -6104,7 +6104,7 @@
 			)
 			(justify left)
 		)
-		(uuid "9aad8d47-b933-464f-9e2a-6280c1a0443f")
+		(uuid "d7360d63-a859-41f4-b60c-c2c381ee5472")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 144.78 147.32 0)
 			(hide yes)
@@ -6128,7 +6128,7 @@
 			)
 			(justify left)
 		)
-		(uuid "1bf8a1ec-ca24-4692-9617-32e2e267e5fc")
+		(uuid "bc53e3e8-2d08-4826-b597-e3f247ea7aaf")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 127 149.86 0)
 			(hide yes)
@@ -6152,7 +6152,7 @@
 			)
 			(justify left)
 		)
-		(uuid "c718c1c6-bd57-425c-b0ee-36e5b9f8bdd2")
+		(uuid "73a7e2de-d1e1-431e-984d-36f590509351")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 109.22 154.94 0)
 			(hide yes)
@@ -6176,7 +6176,7 @@
 			)
 			(justify left)
 		)
-		(uuid "2056a713-5836-4f4d-bda8-da9688f17770")
+		(uuid "e13fd9c7-79c5-4926-a00b-d3d72bf4b880")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 91.44 157.48 0)
 			(hide yes)
@@ -6200,7 +6200,7 @@
 			)
 			(justify left)
 		)
-		(uuid "789acd6e-d274-4179-bf33-f7b4b3979fa4")
+		(uuid "3d546a0c-c202-4d65-8bb3-8835404dd646")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 73.66 162.56 0)
 			(hide yes)
@@ -6222,7 +6222,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "db9420d8-2ece-45c1-bc19-4baeda5c98cc")
+		(uuid "12ef5271-6f09-4558-a84d-b3bd2e44a79b")
 	)
 	(wire
 		(pts
@@ -6232,7 +6232,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "933024d7-35fe-4c7c-b53d-fe8e1519023d")
+		(uuid "92368789-ee1b-4cc8-8ae6-aac7a6360d04")
 	)
 	(wire
 		(pts
@@ -6242,7 +6242,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "2665cd33-7bd0-4391-bae8-bb3f52e06868")
+		(uuid "bb0affda-7dc0-47c1-9c83-06ee64343bab")
 	)
 	(wire
 		(pts
@@ -6252,7 +6252,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "1253fc48-35c6-4631-84fc-56ee14aee71c")
+		(uuid "9b5dccce-ef2b-4bc8-9865-971ba95b4349")
 	)
 	(wire
 		(pts
@@ -6262,7 +6262,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "f802e71b-45c7-4780-8ebf-7bfcf2e6c3bc")
+		(uuid "f00338b6-ff5a-4d55-bbac-ba8c9b737d5b")
 	)
 	(wire
 		(pts
@@ -6272,7 +6272,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "8cb58744-1128-4bf0-91c3-dd0a8958beb3")
+		(uuid "5b482bf6-ac32-4613-b4a3-b0f9341cebe8")
 	)
 	(wire
 		(pts
@@ -6282,7 +6282,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "e71542a7-8d02-452f-b22a-284cff15359d")
+		(uuid "0f46a3f9-5483-4d6a-a9c1-e1bf1ebea032")
 	)
 	(wire
 		(pts
@@ -6292,7 +6292,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "ce73f4e1-e103-44fd-ac62-c0c3fdb49cb8")
+		(uuid "b96e7c41-99da-48aa-9afd-b6057fdb4233")
 	)
 	(wire
 		(pts
@@ -6302,7 +6302,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "76d3e9b8-7159-4ab2-ab97-2740b8680052")
+		(uuid "736c6aba-6852-4c83-9185-ba9c0f9cea13")
 	)
 	(wire
 		(pts
@@ -6312,7 +6312,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "b9a5fab5-db7e-43c3-aa84-8fe610354e9e")
+		(uuid "4455dbe1-27a9-4970-ad6d-9cbcf0729723")
 	)
 	(wire
 		(pts
@@ -6322,7 +6322,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "f48c3ee9-a8b1-43a9-9f9b-ae5848b74d9a")
+		(uuid "71f8dafd-2a76-4c58-bbce-8423296d07de")
 	)
 	(wire
 		(pts
@@ -6332,7 +6332,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "e5b319bb-6f32-4fe9-8ebc-2797ad3d61d6")
+		(uuid "6fd35a0b-6cb0-4798-9b6a-5c594b73f501")
 	)
 	(wire
 		(pts
@@ -6342,7 +6342,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "f4b97e3d-7cde-4160-9009-4b967eb77a19")
+		(uuid "78acf5c7-87a2-47ae-b8b2-6aea8eb99889")
 	)
 	(wire
 		(pts
@@ -6352,7 +6352,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "3b42dea5-fa46-4d7b-b4eb-7063294a7ce0")
+		(uuid "d0ac27b5-1c37-40b6-99d4-834fc56e1dfb")
 	)
 	(wire
 		(pts
@@ -6362,7 +6362,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "d6e33980-849b-44ad-83bc-86e5af550f38")
+		(uuid "0874da05-065c-4e75-b14a-b6a4ba49bce7")
 	)
 	(wire
 		(pts
@@ -6372,7 +6372,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "5e232a5a-7903-4f94-b90b-c283e09b69ab")
+		(uuid "392e848f-e99c-4bef-8432-8591d3e89b3b")
 	)
 	(wire
 		(pts
@@ -6382,7 +6382,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "633f8b30-0339-4b40-a3dc-ed082a0925bf")
+		(uuid "7444a41c-e966-457d-899c-f89d94d0863e")
 	)
 	(wire
 		(pts
@@ -6392,7 +6392,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "ca02cc89-9431-4fb4-9eeb-1051144c9cb3")
+		(uuid "f8d739a3-eed8-4082-b47c-74c0e281da54")
 	)
 	(wire
 		(pts
@@ -6402,7 +6402,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "18f22b32-f267-400b-be78-31ccfb40efad")
+		(uuid "9bc0f654-244d-406c-9f03-07dc20bad502")
 	)
 	(wire
 		(pts
@@ -6412,7 +6412,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "64664f5d-3116-4123-bcd1-c3693182d10f")
+		(uuid "44104f5f-3951-48bf-9bab-9b3cdf33679c")
 	)
 	(wire
 		(pts
@@ -6422,7 +6422,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "0dfb71ef-494d-4c47-92ab-d3d8629993de")
+		(uuid "fcd523f5-1dd9-4877-b9b3-6fb105ec34d7")
 	)
 	(wire
 		(pts
@@ -6432,7 +6432,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "fbdf70bb-e4b5-4d7f-8ecb-4af1cc2e39d5")
+		(uuid "c588f30e-5b82-4a87-94af-9515a9d96162")
 	)
 	(wire
 		(pts
@@ -6442,7 +6442,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "df5f968a-84c0-49d9-bb3c-46d0983304de")
+		(uuid "ef3ef6cb-89c7-4e06-9c2e-17e6ec469c92")
 	)
 	(wire
 		(pts
@@ -6452,7 +6452,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "d519bcc9-06ad-4565-8119-69b045e9f273")
+		(uuid "9c2b0273-66e1-472c-9dec-3e7fe6ff6705")
 	)
 	(wire
 		(pts
@@ -6462,7 +6462,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "9e339cce-4322-4211-b6e4-40b61282e7c9")
+		(uuid "8a266e51-06ce-4692-a950-04440250544b")
 	)
 	(wire
 		(pts
@@ -6472,7 +6472,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "3c232281-8163-4c8d-92f7-c83f55a99d59")
+		(uuid "f79cb0e3-51a7-42dd-8428-537796d0872c")
 	)
 	(wire
 		(pts
@@ -6482,7 +6482,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "7c24e2cd-41c4-48f9-ae1a-a55c78369ea8")
+		(uuid "c943d770-64c9-4efd-98ed-d3c2e958b514")
 	)
 	(wire
 		(pts
@@ -6492,7 +6492,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "e0f275db-710a-4dbb-b2d5-49ab234aa850")
+		(uuid "fb6d95c9-4c25-4d6b-8a49-6379fb5df78d")
 	)
 	(wire
 		(pts
@@ -6502,7 +6502,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "69b6a5a5-a957-40d3-abad-68aa14a0bb4c")
+		(uuid "99526f27-e7de-46d8-b352-12dbd4f70817")
 	)
 	(wire
 		(pts
@@ -6512,7 +6512,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "b1db47c4-4937-4846-847e-ecb3a8b321ef")
+		(uuid "f7c1bcba-d404-4a67-abd2-cb27a55ae02c")
 	)
 	(wire
 		(pts
@@ -6522,7 +6522,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "6b6b9364-ab75-4db2-9c80-7c3a2c0e8392")
+		(uuid "cbf1a539-daca-4b9b-9ae2-8f0a079af433")
 	)
 	(wire
 		(pts
@@ -6532,7 +6532,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "dff3f092-5575-4b71-9295-0c766d5f8b42")
+		(uuid "22a5eba8-f0fe-43e2-99ff-ab78418e3fa5")
 	)
 	(wire
 		(pts
@@ -6542,7 +6542,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "eaa4b65c-4fe9-46c8-a58e-f48618d601ff")
+		(uuid "78eebf7f-af8f-484f-bb70-72f2c78e2a9a")
 	)
 	(wire
 		(pts
@@ -6552,7 +6552,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "a49b9b94-051b-4753-8a17-8d449d6718ee")
+		(uuid "fa693690-0a2d-4421-95bb-096525d0277d")
 	)
 	(wire
 		(pts
@@ -6562,7 +6562,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "bad57cd6-c675-479f-97a3-a5f615607821")
+		(uuid "fc5e635e-b398-4c36-931a-05219ad13bfb")
 	)
 	(wire
 		(pts
@@ -6572,7 +6572,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "acf00f86-5a0f-4630-990a-133da906e20f")
+		(uuid "be40c1be-b61b-495e-a4c6-e406552c8242")
 	)
 	(wire
 		(pts
@@ -6582,7 +6582,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "56bb48c1-97c4-47f9-bb5a-369837026222")
+		(uuid "4a746584-3602-42f8-8011-32d06cfadeda")
 	)
 	(wire
 		(pts
@@ -6592,7 +6592,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "9ef2f5e0-aaef-4d18-91c3-a8fedded388b")
+		(uuid "b25613cf-0f64-4647-8ea5-2690e6c6b15e")
 	)
 	(wire
 		(pts
@@ -6602,7 +6602,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "cdf638d4-9282-4012-b89b-03008fb8ea9e")
+		(uuid "0d80c0c2-dd83-48fc-9004-2af3b5e57b49")
 	)
 	(wire
 		(pts
@@ -6612,7 +6612,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "6ba0aca7-143c-4119-965b-71e5f847db25")
+		(uuid "39d07825-d00b-42e7-a58f-81c0cff2b608")
 	)
 	(wire
 		(pts
@@ -6622,7 +6622,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "20c921dd-e9a3-4cbd-b6f5-3837a0696b0d")
+		(uuid "d8982471-adfc-4b9d-a4e2-8118bf085ad3")
 	)
 	(wire
 		(pts
@@ -6632,7 +6632,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "c18dafaf-40f4-477d-8133-6f59069c7fd0")
+		(uuid "7c1ea730-5913-403d-ad14-a587255da751")
 	)
 	(wire
 		(pts
@@ -6642,7 +6642,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "bbaf5a89-ea66-48d2-bd98-5f7ec009ce3f")
+		(uuid "24b6cbca-7c70-4448-b8c0-cd332d26d51c")
 	)
 	(wire
 		(pts
@@ -6652,7 +6652,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "2b1f74f3-f85a-4f29-a85b-efcf5faf73a8")
+		(uuid "71ed1654-dd03-4e53-84ce-9acae33c8b7f")
 	)
 	(wire
 		(pts
@@ -6662,7 +6662,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "13a596cc-9a55-4f2d-8901-3d26f5a26a9c")
+		(uuid "182721d7-7b2a-4a14-ba85-cbe5cc22e4c4")
 	)
 	(wire
 		(pts
@@ -6672,7 +6672,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "62a3cc7c-eb38-4aeb-b4d5-3e5116564714")
+		(uuid "11111276-6347-4d25-911b-d676494ad95b")
 	)
 	(wire
 		(pts
@@ -6682,7 +6682,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "8217b633-8b28-4a8a-832b-d24b9417ce09")
+		(uuid "29c21c7f-a2ac-4482-b3d6-161893abd396")
 	)
 	(wire
 		(pts
@@ -6692,7 +6692,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "237dd3bf-bdf0-4a80-8e2c-4fd26344f150")
+		(uuid "12e3896e-7538-4ab2-8916-77f72b0c9886")
 	)
 	(wire
 		(pts
@@ -6702,7 +6702,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "642f82de-c9dd-43f8-bae0-a9563468c2a6")
+		(uuid "86f56d09-621d-4525-b32b-531be9fa799d")
 	)
 	(wire
 		(pts
@@ -6712,7 +6712,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "77862282-e849-49f9-a453-6e15aeab765d")
+		(uuid "66ddfec9-8878-4621-9955-05b55a524e13")
 	)
 	(wire
 		(pts
@@ -6722,7 +6722,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "10382ba4-0aa7-47d3-a601-6436910d7a72")
+		(uuid "549949d3-a214-4947-915a-a3a5dfb71ca4")
 	)
 	(wire
 		(pts
@@ -6732,7 +6732,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "45b57ef5-1f5b-4848-99af-261f5e816a9e")
+		(uuid "8b106097-c385-45ce-8c40-7e8294f5a26f")
 	)
 	(wire
 		(pts
@@ -6742,7 +6742,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "3ba007cd-4c7e-46c7-ba70-80d8e175e920")
+		(uuid "056b7048-85b3-48d1-bf50-b30afb87280d")
 	)
 	(wire
 		(pts
@@ -6752,7 +6752,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "877474f4-0487-49d0-ad9e-48e3102c35aa")
+		(uuid "e28ce0ae-2716-4dfe-919b-192ecd9d7130")
 	)
 	(wire
 		(pts
@@ -6762,7 +6762,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "6364d4ff-c65e-4cce-9dac-532ced4ee1c3")
+		(uuid "41111a77-7f30-453a-a55d-e1e87fde67df")
 	)
 	(wire
 		(pts
@@ -6772,7 +6772,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "0bd9236f-0039-4fcd-9e73-96fd382a0f3d")
+		(uuid "28a635ca-d4fe-460c-a340-0799a97fe9c4")
 	)
 	(wire
 		(pts
@@ -6782,7 +6782,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "88f05b06-fb28-4897-9875-5ec7c2a30ae2")
+		(uuid "907cac0d-3a44-4902-8424-f8f89ff98a8e")
 	)
 	(wire
 		(pts
@@ -6792,7 +6792,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "59d888ec-96cc-4bfb-9a49-b89aca8c411f")
+		(uuid "2759ec32-81ba-492d-913f-64f67e6cb132")
 	)
 	(wire
 		(pts
@@ -6802,7 +6802,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "133b7fc0-b4fc-4f49-be44-505d31df66b8")
+		(uuid "3126f990-77d5-4e4c-8858-30c65bb1fdde")
 	)
 	(wire
 		(pts
@@ -6812,7 +6812,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "4c2beee4-6dcf-4f2a-9009-73a1d0216d44")
+		(uuid "c0c6e96b-5080-45ea-9b86-f3818d4c9911")
 	)
 	(wire
 		(pts
@@ -6822,7 +6822,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "6abfa771-a0af-425e-9d30-880aee9e5542")
+		(uuid "265fa914-ccde-4292-bd6e-5ff3624babbb")
 	)
 	(wire
 		(pts
@@ -6832,7 +6832,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "9681dcaf-1e28-4370-8099-f26d1560fc86")
+		(uuid "8bd82a3d-c713-452f-8202-aefd9a553d88")
 	)
 	(wire
 		(pts
@@ -6842,7 +6842,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "99e3ff2c-1ab6-409c-a5a3-cf62cecc5bff")
+		(uuid "01876f1e-3b31-4181-9596-4bc08e401d84")
 	)
 	(wire
 		(pts
@@ -6852,7 +6852,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "6c8d7491-80df-4e46-8992-9c2cf53827dc")
+		(uuid "7b9463d7-832c-46dd-bf5e-f44b3c52dfd4")
 	)
 	(wire
 		(pts
@@ -6862,7 +6862,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "7e4707f6-a5f8-44ae-9a49-74796db0ab07")
+		(uuid "06cc636a-1caf-4b9f-b3f8-aee0095e09c8")
 	)
 	(wire
 		(pts
@@ -6872,7 +6872,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "e7a2f53d-1c77-4a44-8138-53976e1d5133")
+		(uuid "e2e86dad-bbd8-43cf-9a94-d507de4a7ab3")
 	)
 	(wire
 		(pts
@@ -6882,7 +6882,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "c525aa37-51e6-4335-8697-a51c0128e535")
+		(uuid "374ee5ae-7bf0-4e86-80d5-3c613e1594c7")
 	)
 	(wire
 		(pts
@@ -6892,7 +6892,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "1f65c9ce-f0a9-49a2-ace6-21451f885f30")
+		(uuid "b0b6dbd5-7316-49b1-8326-4cb090667feb")
 	)
 	(wire
 		(pts
@@ -6902,7 +6902,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "d17f8924-c3cc-4253-a966-fd18fec99c58")
+		(uuid "59b84f3c-fc83-43ed-b9e5-56da3fc3dbc8")
 	)
 	(wire
 		(pts
@@ -6912,7 +6912,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "2a6a5630-ffd5-4743-998c-2a34ed9beb3c")
+		(uuid "bf02b3ae-5745-4deb-85e9-0cd3aa749841")
 	)
 	(wire
 		(pts
@@ -6922,7 +6922,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "7414b7ab-7de1-421d-8f4c-710a2fe150d2")
+		(uuid "d2cb1653-6ebf-4b0f-b344-41ab55b84fa3")
 	)
 	(wire
 		(pts
@@ -6932,7 +6932,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "3b4ad48d-b5b9-444a-8e22-6e807a75dced")
+		(uuid "6996bab9-1396-430d-93df-1affad0e80ca")
 	)
 	(wire
 		(pts
@@ -6942,7 +6942,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "afd8435b-65ad-4871-864a-54ee8b23197f")
+		(uuid "7d6a9142-e448-4ed8-903a-90afa2bb2fcc")
 	)
 	(wire
 		(pts
@@ -6952,7 +6952,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "d76f3906-405b-4c49-8c2a-b803bf22dec7")
+		(uuid "daceb2b1-ea93-4e36-8199-75ba455d9e03")
 	)
 	(wire
 		(pts
@@ -6962,7 +6962,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "7c69dcfa-f60c-4781-8bcc-441b2ae1b8eb")
+		(uuid "34b28308-c950-4f95-a594-c41895b9721c")
 	)
 	(wire
 		(pts
@@ -6972,7 +6972,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "c7cf1012-db51-492a-9380-5f8c145ecc25")
+		(uuid "cf841271-8b28-4c71-98ea-82bbae9636f4")
 	)
 	(wire
 		(pts
@@ -6982,7 +6982,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "ee765643-7e66-4bd1-a135-5d9314db9b8a")
+		(uuid "08a048f9-9345-48d5-931f-c4531f6af28f")
 	)
 	(wire
 		(pts
@@ -6992,7 +6992,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "4784bccc-ef59-4423-a87b-ccd202f1a75a")
+		(uuid "5c67623b-a9ad-42f8-a117-972c369e7e8c")
 	)
 	(wire
 		(pts
@@ -7002,7 +7002,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "21c37dc8-7df4-49ee-bf2e-9bc31103cde8")
+		(uuid "aa8a4da5-21df-4565-813f-d65dd29a9442")
 	)
 	(wire
 		(pts
@@ -7012,7 +7012,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "c566828f-e56b-48b2-85e5-c8945594dc09")
+		(uuid "af7cc9ef-d4e1-4e43-a82a-cb1c687b4c14")
 	)
 	(wire
 		(pts
@@ -7022,7 +7022,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "37dd07e5-e924-4ae2-9e0f-0e64ea41c420")
+		(uuid "036cfcf8-3ddc-4a5b-a5f7-5c498584792f")
 	)
 	(wire
 		(pts
@@ -7032,7 +7032,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "53ddda8d-2372-4558-beee-308b4d65d575")
+		(uuid "35396e4d-cf9c-4dad-aa7d-b468512ec2fc")
 	)
 	(wire
 		(pts
@@ -7042,7 +7042,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "a6e33538-c26b-4654-b1b3-640e20531bb6")
+		(uuid "0184766a-cd17-40e5-a740-5356f5bfcaaa")
 	)
 	(wire
 		(pts
@@ -7052,7 +7052,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "82a50cbd-ced5-4b93-95c1-1c9b8d6e8fa7")
+		(uuid "20dedc74-5fc1-45f6-a3f5-aab373fcadf6")
 	)
 	(wire
 		(pts
@@ -7062,7 +7062,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "f54505f6-a99e-4921-bc48-81719fc00013")
+		(uuid "d6bde8b4-1b54-4c2e-91c3-0671dd1156dd")
 	)
 	(wire
 		(pts
@@ -7072,7 +7072,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "ca7b0c25-65ab-414a-ba8e-95dd1cce5074")
+		(uuid "0e029a2d-c42b-4bd5-9b0a-b918190b47dd")
 	)
 	(wire
 		(pts
@@ -7082,7 +7082,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "2dee66bc-a3bd-46cb-bace-5a135abb8ec4")
+		(uuid "a69c6d74-caf5-4aee-b367-efff0a5b3d4f")
 	)
 	(wire
 		(pts
@@ -7092,7 +7092,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "7de61e6e-5012-4ed4-8afa-7d38d1c6e7e7")
+		(uuid "0df3883c-0860-4ab4-8266-6d6c3d733165")
 	)
 	(wire
 		(pts
@@ -7102,7 +7102,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "fd872699-6c9f-4f58-8455-cb0800cefcfe")
+		(uuid "3aca7080-ee7c-4b4f-b58d-78c40e14142e")
 	)
 	(wire
 		(pts
@@ -7112,7 +7112,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "ac29d715-250c-4229-8b65-6e772c89ab2e")
+		(uuid "3dfcf97d-5880-4a71-a77b-bfcd752dcc06")
 	)
 	(wire
 		(pts
@@ -7122,7 +7122,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "4f9261ce-fc83-4100-aa96-1679a8213c56")
+		(uuid "0f85b1de-a2b2-478f-b2e1-92b58435a82a")
 	)
 	(wire
 		(pts
@@ -7132,7 +7132,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "85708f6e-a886-4ed6-9b22-be8d3f6be6d7")
+		(uuid "3e02e136-4948-4125-a052-1a930602b574")
 	)
 	(wire
 		(pts
@@ -7142,7 +7142,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "f82f898b-fd62-4628-8526-25ede61585dd")
+		(uuid "961c8169-68e4-41a5-be94-a17d4012cd5d")
 	)
 	(wire
 		(pts
@@ -7152,7 +7152,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "4626c2d6-d353-4331-9746-73eee99d69ff")
+		(uuid "c1c41fb1-7ec5-4daf-a343-c0d6151969c1")
 	)
 	(wire
 		(pts
@@ -7162,7 +7162,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "4535a7fc-4524-4216-a563-81c84c44fa90")
+		(uuid "d5a5ab11-923b-47c9-bc04-57f0db6783b1")
 	)
 	(wire
 		(pts
@@ -7172,7 +7172,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "a6b1c458-6e8b-4ba9-8494-e359a5970359")
+		(uuid "31116414-e0ce-41f2-ba43-8cf2fdd7cce4")
 	)
 	(wire
 		(pts
@@ -7182,7 +7182,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "2c1cd73a-4184-439f-97c0-252096d503f9")
+		(uuid "6594a1d4-2a96-45a8-b2fa-8da2d88f5155")
 	)
 	(wire
 		(pts
@@ -7192,43 +7192,43 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "be3c8f12-0a50-4263-b436-3b9844197c21")
+		(uuid "0e88bb4d-7c5c-4ef9-90f5-a52c045d3bdc")
 	)
 	(junction
 		(at 59.69 55.88)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "b971989c-6482-4ccd-b598-64f43a0e16f2")
+		(uuid "a15fa7cb-14cb-4a43-b631-39c247a78255")
 	)
 	(junction
 		(at 78.74 66.04)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "6da90f42-9c15-46d6-9418-3e324e7eb4b9")
+		(uuid "7ba14881-7a04-4d13-9001-5f86f1cd119a")
 	)
 	(junction
 		(at 149.86 177.8)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "e710409d-1d6e-4a6c-905c-44d84be73b26")
+		(uuid "9765d76a-19b8-4291-ab55-922538925b4b")
 	)
 	(junction
 		(at 180.34 66.04)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "877e3ec6-30bb-449e-9f1d-82252f4279f9")
+		(uuid "1bb0257e-a59e-4f44-9a9c-59c28b22be4d")
 	)
 	(junction
 		(at 210.82 66.04)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "140d6db6-60c9-4581-b3be-8b3e30842422")
+		(uuid "c7a9eabd-754f-49f9-8816-e9a621bb67dc")
 	)
 	(junction
 		(at 233.68 177.8)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "0cc1b26e-1fe6-4f51-af20-95cd472f7ad8")
+		(uuid "6fdd9072-716d-4076-9d37-6c9ba7be4e4f")
 	)
 	(symbol
 		(lib_id "Custom:LFE5U-25F-6BG256")
@@ -7241,7 +7241,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "df9a4c15-8ac9-4f98-a806-268484feb07e")
+		(uuid "b614bf98-aac7-443b-8054-2c789f1f69e2")
 		(property "Reference" "U501"
 			(at 43.18 83.82 0)
 			(show_name no)
@@ -7320,152 +7320,152 @@
 			)
 		)
 		(pin "A1"
-			(uuid "a69635f5-e2cf-45a7-a0c1-061b5a66df59")
+			(uuid "f1388efc-b270-42d0-a822-44fef71504f3")
 		)
 		(pin "D2"
-			(uuid "160cad59-6b7f-44f2-9c6b-fd210d4e746f")
+			(uuid "31cd5706-41f7-4db1-982c-fe9b186b4c64")
 		)
 		(pin "F6"
-			(uuid "05c9a896-7a77-41d4-84a1-bd93ef410ab2")
+			(uuid "a8ca2e1b-36c8-4f09-8ef7-bd39a327d015")
 		)
 		(pin "F7"
-			(uuid "8bc051c9-d076-44ab-9720-ca049babbbae")
+			(uuid "3b5771a6-14c8-4b0d-8620-ce229075cbc7")
 		)
 		(pin "F8"
-			(uuid "92c697e2-fb6b-4a0b-9994-88f63fb9fd18")
+			(uuid "5da394b5-9230-4179-b13c-2508926f696c")
 		)
 		(pin "F9"
-			(uuid "e3f419aa-161d-45c2-96aa-9e9b0a8eae62")
+			(uuid "9e9e39e4-fd09-4451-823f-5be2e3d62952")
 		)
 		(pin "G6"
-			(uuid "f7fc27c6-0dde-4d2d-9a67-6fda23b0525b")
+			(uuid "9bdd1771-eed4-4e1b-bec6-804ee4544c31")
 		)
 		(pin "G7"
-			(uuid "a4f33405-a80e-49ad-bc46-150cf7ba119a")
+			(uuid "f18ce88b-f6fe-42f5-a47b-fdad7c6c7efb")
 		)
 		(pin "G8"
-			(uuid "25850d00-a17b-4a4b-977d-80c13224e12a")
+			(uuid "f8ea6e62-4ef1-4154-846f-2ac33333684a")
 		)
 		(pin "G9"
-			(uuid "032865d5-d32a-4eec-a27a-77f39fa01e76")
+			(uuid "9558644a-423f-4b45-9504-3d6b37756e4d")
 		)
 		(pin "H1"
-			(uuid "d7e1c6cb-fb71-46b5-b0c9-5fe58702b869")
+			(uuid "b5a35709-4cd8-4c8a-a190-4e41e46d922a")
 		)
 		(pin "H6"
-			(uuid "541678a5-0458-401f-95d1-0b16009bc547")
+			(uuid "8dd975f1-a23a-4487-81c9-8f08a81f5ad0")
 		)
 		(pin "H7"
-			(uuid "69340a5c-9606-4c9e-b9a9-cd7cbb35a88b")
+			(uuid "117028b0-ee80-4489-98e6-53396940ec9a")
 		)
 		(pin "H8"
-			(uuid "6834aa3e-4deb-4dd2-a92d-007130435dec")
+			(uuid "9e7a1eac-23f9-4991-aa2b-34fd4e17687b")
 		)
 		(pin "H9"
-			(uuid "e861a331-7bb3-4394-b4ab-75cc9569765c")
+			(uuid "fa23dae5-4542-454d-a1df-70f9d2366fe3")
 		)
 		(pin "J6"
-			(uuid "aa941665-c541-4fcc-a2ee-d802b2c0db96")
+			(uuid "840f0583-5e19-4321-a98a-29816b20114b")
 		)
 		(pin "J7"
-			(uuid "665c4714-6308-4af0-82a2-7a110ac32390")
+			(uuid "ccb531f4-f2f6-46c8-b211-329bc35f742a")
 		)
 		(pin "J8"
-			(uuid "001599b3-6565-4b7c-88ef-e82da97d8192")
+			(uuid "1c9dbace-f204-46c4-8c6a-fe1212f0dbdd")
 		)
 		(pin "J9"
-			(uuid "bf68d342-5e00-4d1f-9d53-04b6ea16628f")
+			(uuid "c71b6b1e-b655-4709-b128-23ef06f5f6b9")
 		)
 		(pin "K6"
-			(uuid "9f3640b6-f936-45ce-b145-1eb537636fc3")
+			(uuid "296e10fb-d822-48c9-8f34-691353b2a30e")
 		)
 		(pin "K7"
-			(uuid "27ca12f5-6569-4540-9d0c-0830ec62fd56")
+			(uuid "e39344de-4bce-45b8-9698-3ff62f94087c")
 		)
 		(pin "K8"
-			(uuid "ace9dc3c-3540-4881-9fe4-a26665fd62d5")
+			(uuid "ceef6317-70d8-48bd-b861-b9ea27c3cdf9")
 		)
 		(pin "K9"
-			(uuid "f78c7812-f8ee-4b99-ad32-0c30c1fed778")
+			(uuid "0bfc9d78-3f8d-4cf4-9b89-72b7308d562a")
 		)
 		(pin "L6"
-			(uuid "fb919158-57c5-4a59-a529-bc9ee9c5b3ef")
+			(uuid "8696cddc-8b06-49df-af75-a2a56b3b0265")
 		)
 		(pin "L7"
-			(uuid "6779750a-5280-4027-84d1-ac911386488b")
+			(uuid "af47ea38-50e6-456c-aa46-5427bd929d1a")
 		)
 		(pin "L8"
-			(uuid "48304722-262a-42e5-8a59-f4f8cbd9bd07")
+			(uuid "87abd6bc-7e7b-448b-9b0a-0b4b29a73564")
 		)
 		(pin "L9"
-			(uuid "dbce6a92-bcc2-4fe1-a643-c048fc05187f")
+			(uuid "4bf8f06f-69b4-4a21-9421-4dee453946b4")
 		)
 		(pin "N2"
-			(uuid "acbf0549-edc4-4422-9213-c541bbc9d359")
+			(uuid "00c9c109-ea31-4369-a47e-b82c235540a0")
 		)
 		(pin "T1"
-			(uuid "182c4d10-bc89-4940-8bc4-88f0ad94176f")
+			(uuid "a8960f9f-eab2-4c31-b22d-ae0d18f93a67")
 		)
 		(pin "T5"
-			(uuid "51476438-5662-4192-9079-7b7c43aa4816")
+			(uuid "50592a9f-c967-4143-a1f5-d13ba5650883")
 		)
 		(pin "A16"
-			(uuid "8f0843ff-2f56-417f-b007-573a739d5429")
+			(uuid "5a49094c-43e8-4f94-aea2-0df9bd71f2af")
 		)
 		(pin "D15"
-			(uuid "6df32bd1-cc0c-4fd1-aa38-82c50d6e0668")
+			(uuid "8e2c8182-68a6-4158-b47f-e06198ab922b")
 		)
 		(pin "F10"
-			(uuid "ae773c02-76c2-4a0d-842a-f567f526c0af")
+			(uuid "2a94dee1-c974-4d9f-9452-029d2766835e")
 		)
 		(pin "F11"
-			(uuid "9796fdcc-e7d0-4cc3-8ada-58ee0c59f4c7")
+			(uuid "9d6ab656-4d7d-44f1-be70-8846c7b6a2a4")
 		)
 		(pin "G10"
-			(uuid "90c7de98-3b6e-4fb6-b82a-05bb0edc483d")
+			(uuid "d5eb7457-4b81-4f3d-9f3a-4a0f52723986")
 		)
 		(pin "G11"
-			(uuid "525a43d9-28d4-44f4-ad9b-af4daf823f84")
+			(uuid "eee21fdf-81df-446c-8800-28fd77ba1201")
 		)
 		(pin "H10"
-			(uuid "5993a02b-8145-43f2-94bd-c0cadfe2f60c")
+			(uuid "0b031d75-04b3-4dbe-859f-968d2ceecf26")
 		)
 		(pin "H11"
-			(uuid "2620b84b-7721-4e8e-8e08-7469ed96a4a3")
+			(uuid "4449ba91-0a2c-4617-b997-62ccad77db37")
 		)
 		(pin "H16"
-			(uuid "d76c12e3-311a-4901-b9f2-0bd05d75f7c8")
+			(uuid "e0d899d1-1017-460e-a692-f572e9d62bff")
 		)
 		(pin "J10"
-			(uuid "745289ef-a474-4f4f-b976-87fd927e2f70")
+			(uuid "86a9b61a-ad05-4c23-9cd8-302210da236f")
 		)
 		(pin "J11"
-			(uuid "5afe93d5-9035-4949-9dd2-bb40ef8b900b")
+			(uuid "6c0d0c78-da8c-496a-b879-1a7a19d5929b")
 		)
 		(pin "K10"
-			(uuid "412a8ebb-8c8d-4062-8a6f-6cbd957cb4ac")
+			(uuid "a7e14e49-737a-462d-8b82-b13d6be9aa8e")
 		)
 		(pin "K11"
-			(uuid "27ece253-6a93-4e0a-aa70-f59e94d3b251")
+			(uuid "afe4cd92-7f66-42f1-aece-30ea753ee269")
 		)
 		(pin "L10"
-			(uuid "3f69231a-0d11-4da6-b78b-29f4efc7830c")
+			(uuid "c5852b02-212a-4f8b-877f-e5230d0b7d84")
 		)
 		(pin "L11"
-			(uuid "79ec1d51-0a72-4eac-b95c-a59185ebd06a")
+			(uuid "5e04b66e-9961-400d-a8ea-dd2adee5a48c")
 		)
 		(pin "N15"
-			(uuid "768c2b33-94b8-4b0c-924d-233220541969")
+			(uuid "c60f8938-b532-4e7b-9db0-feb778a81b07")
 		)
 		(pin "T12"
-			(uuid "3f3020df-d5bd-4af2-96bc-604e37fcfb02")
+			(uuid "10a95081-85cb-494f-8aac-d70ecc008101")
 		)
 		(pin "T16"
-			(uuid "17f4378e-9be5-40ad-8bfa-13d8147eb1f5")
+			(uuid "7711b722-660b-4799-a973-a99ec76ab5e1")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "U501")
 					(unit 1)
 				)
@@ -7483,7 +7483,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "dfc3bfd8-5af1-4d6d-9eca-84ea91b6b29a")
+		(uuid "956346f6-713a-4c9f-851b-164ca7346bc3")
 		(property "Reference" "#PWR_FPGA power_1"
 			(at 50.8 184.15 0)
 			(hide yes)
@@ -7539,11 +7539,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "32ad0a37-0a1b-42fa-82b3-ee6109741c0c")
+			(uuid "104cc10e-abdd-4cef-8957-ff409e41b760")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_1")
 					(unit 1)
 				)
@@ -7561,7 +7561,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "63dc6fb5-5964-4233-b13d-7b32411e94bc")
+		(uuid "af8c5748-64ff-4b83-ab96-23c8dd352452")
 		(property "Reference" "#PWR_FPGA power_2"
 			(at 22.86 62.23 0)
 			(hide yes)
@@ -7617,11 +7617,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "09c0353f-8d3b-4545-88d1-b30be7867d60")
+			(uuid "abe3f274-fc22-48d3-af1d-a35f5d367435")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_2")
 					(unit 1)
 				)
@@ -7639,7 +7639,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "6cdc91c7-5d3a-4ae5-b78b-c22957fc10ea")
+		(uuid "0ad464df-c0b4-4561-b1eb-e5e55f4ade20")
 		(property "Reference" "FB501"
 			(at 43.18 52.705 0)
 			(show_name no)
@@ -7716,14 +7716,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "41642fa4-055f-48ec-8dbf-99ddff9cfcdd")
+			(uuid "d8b8549d-925d-44a0-819f-c8709fe7f056")
 		)
 		(pin "2"
-			(uuid "58e28305-9f6f-4fb7-9a05-c6847ee0d881")
+			(uuid "7042fbf2-b26b-478d-bd3e-d6af4a0e46d3")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "FB501")
 					(unit 1)
 				)
@@ -7741,7 +7741,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "a0a73d0f-cc19-4806-b2f8-af8d9bc55f2b")
+		(uuid "b260234e-ba19-4f9d-9be9-f82377bbaf6b")
 		(property "Reference" "#FLG_FPGA power_3"
 			(at 59.69 62.23 0)
 			(hide yes)
@@ -7797,11 +7797,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "224e22c6-6c4c-4561-920a-7f74ec8bf182")
+			(uuid "a3147b2c-f4ac-48dc-97a5-6c41e024cbb5")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#FLG_FPGA power_3")
 					(unit 1)
 				)
@@ -7819,7 +7819,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "213f572d-c0c6-4a51-bbba-51d7a2645379")
+		(uuid "aa753203-3ba3-4365-8df0-4e0fd030271e")
 		(property "Reference" "#PWR_FPGA power_4"
 			(at 72.39 62.23 0)
 			(hide yes)
@@ -7875,11 +7875,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "1e787138-c99b-44fc-b4d7-3bcdfdaf2524")
+			(uuid "97582af7-f9fa-4d11-a8ed-3cee0976d774")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_4")
 					(unit 1)
 				)
@@ -7897,7 +7897,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "0953e118-46d8-482d-9cb5-f647281de32f")
+		(uuid "90c045ef-3410-4a11-b992-a17e84445ebf")
 		(property "Reference" "C501"
 			(at 81.28 68.58 0)
 			(show_name no)
@@ -7976,14 +7976,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "fcff93b5-72a9-488f-b44f-9af4a6550f79")
+			(uuid "1ecf3163-c9ab-4d87-827f-f39652762b3c")
 		)
 		(pin "2"
-			(uuid "3ae92bd3-9d3b-448c-a91c-c63440f22088")
+			(uuid "a7b225c7-0d6a-4aab-9c70-2dd65c846588")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C501")
 					(unit 1)
 				)
@@ -8001,7 +8001,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "23b546f8-82ed-4b51-8f04-cbd856142484")
+		(uuid "cb1832ec-d5fc-4cc1-9420-5ff2bea822d0")
 		(property "Reference" "#PWR_FPGA power_5"
 			(at 78.74 82.55 0)
 			(hide yes)
@@ -8057,11 +8057,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "e4d783af-4724-40bb-8e28-5573034267c6")
+			(uuid "405d7986-cbd5-4083-a7e0-7285b308ea76")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_5")
 					(unit 1)
 				)
@@ -8079,7 +8079,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "5d8139da-f6bb-4f36-8ed2-a51f8ae54714")
+		(uuid "a9d8b09c-8187-40d9-baea-d97695b381c4")
 		(property "Reference" "C507"
 			(at 93.98 68.58 0)
 			(show_name no)
@@ -8158,14 +8158,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "98145de4-f499-44d7-a557-b887bfc459cd")
+			(uuid "1ecb736d-095c-4531-8b6f-afc734d1afbc")
 		)
 		(pin "2"
-			(uuid "1026e582-35c0-4589-bbd0-d730ff8b95cd")
+			(uuid "bb705344-f95d-4411-b686-0929125cb4ce")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C507")
 					(unit 1)
 				)
@@ -8183,7 +8183,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "d7c708fb-8edf-489d-a51a-ba11a695b973")
+		(uuid "88505896-a78b-4d5c-886b-d0d04f4c6bf8")
 		(property "Reference" "#PWR_FPGA power_6"
 			(at 91.44 82.55 0)
 			(hide yes)
@@ -8239,11 +8239,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "a000eea9-8312-40f2-9496-846d3c72e4ce")
+			(uuid "daa2224b-d35e-4125-b52e-711e26160f5c")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_6")
 					(unit 1)
 				)
@@ -8261,7 +8261,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "b0a0e59b-aa02-47af-b4e3-816bfd010c08")
+		(uuid "d77d62fc-7f95-4dd9-8468-c779e2119566")
 		(property "Reference" "C502"
 			(at 111.76 68.58 0)
 			(show_name no)
@@ -8340,14 +8340,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "05271b8d-4168-4f50-a46c-22f0805d0c58")
+			(uuid "feb0f3c1-c196-4377-9996-6584aeeaaaf7")
 		)
 		(pin "2"
-			(uuid "0ea65ebb-4ee7-462b-8f91-8f745373a3b3")
+			(uuid "ba4a7ae8-a79d-426e-bc64-99cc3c68f880")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C502")
 					(unit 1)
 				)
@@ -8365,7 +8365,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "54665c6e-9b68-461b-8a73-97d53ead52bb")
+		(uuid "3680f079-a914-456d-acbc-7c20e239b8fb")
 		(property "Reference" "#PWR_FPGA power_7"
 			(at 109.22 82.55 0)
 			(hide yes)
@@ -8421,11 +8421,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "c956c219-8752-4d59-82e6-906bfaa1f418")
+			(uuid "e1fcf63a-e3b4-4e40-b3ac-62ec1d8e0311")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_7")
 					(unit 1)
 				)
@@ -8443,7 +8443,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "59001d1e-d1ff-400d-a262-8facfb9af7c5")
+		(uuid "81cf7ed4-90b0-44cc-9377-1082b30b9a55")
 		(property "Reference" "C503"
 			(at 129.54 68.58 0)
 			(show_name no)
@@ -8522,14 +8522,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "ed74657c-b1b3-46cf-965e-9d6712955c8c")
+			(uuid "7264a9c7-0f67-42c5-916f-df91eb5df236")
 		)
 		(pin "2"
-			(uuid "646ee79e-34e9-4589-b244-430d39cefef0")
+			(uuid "1ee85d0b-0b9c-4d75-b4a8-3bf1f8ef66f9")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C503")
 					(unit 1)
 				)
@@ -8547,7 +8547,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "bba27e6d-31c8-464c-9b81-5f1d7dc578a5")
+		(uuid "620b4690-4d78-49eb-9f49-43f5a1adaf3f")
 		(property "Reference" "#PWR_FPGA power_8"
 			(at 127 82.55 0)
 			(hide yes)
@@ -8603,11 +8603,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "daa5ed72-a465-4461-9c9a-815aa8180563")
+			(uuid "56e2dd23-1067-40b0-b79f-5fc3fe5cd01f")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_8")
 					(unit 1)
 				)
@@ -8625,7 +8625,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "f3a42265-0c0e-4278-9517-04a56cee801b")
+		(uuid "20d34adb-7617-42f8-8b51-7e8ab9f4eb73")
 		(property "Reference" "C504"
 			(at 147.32 68.58 0)
 			(show_name no)
@@ -8704,14 +8704,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "f59b9595-2327-48d0-8a15-41105f9a9abd")
+			(uuid "e38c4b55-eff5-42f3-bbf8-ce8aa0e1c0d4")
 		)
 		(pin "2"
-			(uuid "5ead1b37-f403-47ad-b1c3-c3ddfd45abf4")
+			(uuid "e76339dd-2e2d-4015-bda3-f7ef4f2d995c")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C504")
 					(unit 1)
 				)
@@ -8729,7 +8729,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "9302bc31-8567-4534-bbea-e90186e57cac")
+		(uuid "4444adab-b7a7-4cd5-8941-0585b92004db")
 		(property "Reference" "#PWR_FPGA power_9"
 			(at 144.78 82.55 0)
 			(hide yes)
@@ -8785,11 +8785,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "9edaee62-c1d2-4208-9c11-1c49384bde35")
+			(uuid "0a78837f-ae82-47f8-bb88-4cbca8e96422")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_9")
 					(unit 1)
 				)
@@ -8807,7 +8807,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "dd55913b-fa69-4e35-8c62-aac7ab751219")
+		(uuid "c06fa253-e698-4558-9c6b-5c9442cec0b4")
 		(property "Reference" "C505"
 			(at 165.1 68.58 0)
 			(show_name no)
@@ -8886,14 +8886,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "93bde639-330c-4e70-aace-372951f2a650")
+			(uuid "89874393-bcfd-48be-b9fd-6316c93d9019")
 		)
 		(pin "2"
-			(uuid "a87ad81a-a1ae-4771-8dd7-7de66c1cb34d")
+			(uuid "872f6d92-bdb1-4b22-b95a-e04a0fa621da")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C505")
 					(unit 1)
 				)
@@ -8911,7 +8911,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "efdf5046-a72b-450f-af44-73055a55478a")
+		(uuid "d9a62a82-c0cd-4ab2-9142-276908742491")
 		(property "Reference" "#PWR_FPGA power_10"
 			(at 162.56 82.55 0)
 			(hide yes)
@@ -8967,11 +8967,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "f557d604-f9bb-4a21-878f-e54d8cb63f39")
+			(uuid "759ed101-0efd-48f6-a479-4fc9d91fe538")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_10")
 					(unit 1)
 				)
@@ -8989,7 +8989,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "aa396319-9ab3-4501-9b39-8291bd89e5cf")
+		(uuid "501a63f1-28b7-49bc-a961-e78d56d9235c")
 		(property "Reference" "C506"
 			(at 182.88 68.58 0)
 			(show_name no)
@@ -9068,14 +9068,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "e979181c-c4a4-45f9-bf30-1e5bad9e30a2")
+			(uuid "b15bfd02-e252-4c37-8b6e-bd3213deb8ee")
 		)
 		(pin "2"
-			(uuid "f0ba7622-ee25-4dd2-b67e-9c20e33605aa")
+			(uuid "d665041a-23e6-45de-b398-f1b8bf9a017b")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C506")
 					(unit 1)
 				)
@@ -9093,7 +9093,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "35f21018-0af2-4de2-b6d7-527984ba8493")
+		(uuid "76cf0526-b757-4118-9e2d-83574185a429")
 		(property "Reference" "#PWR_FPGA power_11"
 			(at 180.34 82.55 0)
 			(hide yes)
@@ -9149,11 +9149,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "4f6e446b-48c9-4ea3-b6ff-748580f1be95")
+			(uuid "25604184-d640-4398-9c08-0ee825201c2d")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_11")
 					(unit 1)
 				)
@@ -9171,7 +9171,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "9910796a-3aed-4f7f-8d84-1577954a8f7c")
+		(uuid "494731c0-d250-4a24-b18f-4687cfda1281")
 		(property "Reference" "C508"
 			(at 195.58 68.58 0)
 			(show_name no)
@@ -9250,14 +9250,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "bd77077f-4b35-4777-95a4-021e0623783a")
+			(uuid "ef8a3150-c15f-44aa-99fc-0a3a406b6c99")
 		)
 		(pin "2"
-			(uuid "19c9369a-adc3-4f06-9e2c-04046ba0646f")
+			(uuid "e9c24bc5-067f-4725-b310-c057cab5a381")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C508")
 					(unit 1)
 				)
@@ -9275,7 +9275,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "1afab4a5-d7b0-4151-951b-a576fc81b3ed")
+		(uuid "44bc30a6-7948-4319-82f0-abe092043173")
 		(property "Reference" "#PWR_FPGA power_12"
 			(at 193.04 82.55 0)
 			(hide yes)
@@ -9331,11 +9331,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "37561a00-09c1-4ac3-826e-392f55cae40b")
+			(uuid "a92d1bb5-a74e-413e-bdfb-de4cd2ad5f16")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_12")
 					(unit 1)
 				)
@@ -9353,7 +9353,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "3127fbef-c062-4430-a471-595b64a3bcfd")
+		(uuid "5ef79efa-1797-4d32-b5a3-d36fca442e1a")
 		(property "Reference" "C509"
 			(at 213.36 68.58 0)
 			(show_name no)
@@ -9432,14 +9432,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "a09979ef-d595-40be-9625-bfcb4c7b3d25")
+			(uuid "596531a3-99b2-47d6-9bc6-aedd4e6df391")
 		)
 		(pin "2"
-			(uuid "2df1a7f7-89b2-4ab6-9cdf-df8b4bc1e62e")
+			(uuid "4f4a44dc-8b78-409d-903a-6ba3d656017f")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C509")
 					(unit 1)
 				)
@@ -9457,7 +9457,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "e795ff42-ef14-4488-bd85-012be5160062")
+		(uuid "d812c66b-534d-4a49-9ef7-2df3f655849c")
 		(property "Reference" "#PWR_FPGA power_13"
 			(at 210.82 82.55 0)
 			(hide yes)
@@ -9513,11 +9513,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "61a52fa1-4198-4fc9-bb2b-008ff1cd6f93")
+			(uuid "c4cee1ba-dc3f-4266-8dd3-4630be555783")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_13")
 					(unit 1)
 				)
@@ -9535,7 +9535,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "6928a2b0-ddc4-448f-bc40-bee9228383e5")
+		(uuid "ab85d62c-0364-4c8d-abac-e8739ad0ea8d")
 		(property "Reference" "C511"
 			(at 226.06 68.58 0)
 			(show_name no)
@@ -9614,14 +9614,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "5ce0c16b-a7a7-4b4f-9a6d-6f63219027d2")
+			(uuid "d77dc7b2-2a77-44ee-8303-e088cb2167ad")
 		)
 		(pin "2"
-			(uuid "da9a795b-04dd-4ad4-9fba-c6b98f5574c7")
+			(uuid "f01fa776-0cf7-4589-8b49-c9c5c52972aa")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C511")
 					(unit 1)
 				)
@@ -9639,7 +9639,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "506cd10e-5037-4037-b4f9-eae376c2af9a")
+		(uuid "0d30125c-c600-4c55-9235-cdd38ebb9966")
 		(property "Reference" "#PWR_FPGA power_14"
 			(at 223.52 82.55 0)
 			(hide yes)
@@ -9695,11 +9695,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "471c097b-eae3-4249-95b3-119138cbabea")
+			(uuid "c0ac7787-364b-4295-8c5e-262a0b59ec76")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_14")
 					(unit 1)
 				)
@@ -9717,7 +9717,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "c864fe2f-652c-4e70-8a9e-c4b900c0f2f5")
+		(uuid "39ae77c2-485d-45d9-aaf0-ba284aac0c46")
 		(property "Reference" "C510"
 			(at 243.84 68.58 0)
 			(show_name no)
@@ -9796,14 +9796,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "d8c72649-1025-4901-b7b0-858872f0d123")
+			(uuid "edfbc014-a461-42ee-a9d0-c831f9f748d7")
 		)
 		(pin "2"
-			(uuid "19f5c48e-7dcf-48d9-8667-68a3e3efa7f4")
+			(uuid "9d5f5ca9-0f91-4590-913e-ca29849d9d2b")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C510")
 					(unit 1)
 				)
@@ -9821,7 +9821,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "54995629-117c-49c0-b291-5bf796e6542a")
+		(uuid "850bfc3c-1bac-43ed-9d5a-06f9f8aa2dce")
 		(property "Reference" "#PWR_FPGA power_15"
 			(at 241.3 82.55 0)
 			(hide yes)
@@ -9877,11 +9877,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "a8e8ac93-3882-4869-95bc-686a5b4603f1")
+			(uuid "ea2a58e7-c1fe-4615-ba85-d09ac110b4ca")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_15")
 					(unit 1)
 				)
@@ -9899,7 +9899,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "6cfe187c-3d24-4ade-9c6c-82154e3b83ab")
+		(uuid "e5cbbcc8-641c-4b6a-ba1b-53c4367983b5")
 		(property "Reference" "C512"
 			(at 320.04 180.34 0)
 			(show_name no)
@@ -9978,14 +9978,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "25e9f9d3-1757-48d9-83c2-42ee80d4627e")
+			(uuid "57b9e6d6-d4c6-4c99-88cb-dbb5ee504232")
 		)
 		(pin "2"
-			(uuid "755302d7-b741-48f0-a313-10af047123f8")
+			(uuid "317aabfc-9c57-4db2-8cb5-9f8062d0e5bc")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C512")
 					(unit 1)
 				)
@@ -10003,7 +10003,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "8c5e0177-9b2e-4e9d-b1f5-22ad62907abd")
+		(uuid "35bf2189-4519-4c13-9aa3-320c4cf9f73b")
 		(property "Reference" "#PWR_FPGA power_16"
 			(at 317.5 194.31 0)
 			(hide yes)
@@ -10059,11 +10059,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "c371f520-5b2c-495b-818a-4c60465e3998")
+			(uuid "e93e7221-40bd-4c98-a940-3ed8a4134c3e")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_16")
 					(unit 1)
 				)
@@ -10081,7 +10081,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "23b052da-459d-49ef-a56f-4d5bb3495031")
+		(uuid "2b90c29c-6323-4cf2-9ecb-900236154261")
 		(property "Reference" "C513"
 			(at 302.26 180.34 0)
 			(show_name no)
@@ -10160,14 +10160,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "00f741aa-ce13-4be5-82d4-df487a2554a4")
+			(uuid "8310493e-2581-446b-ab9e-be3fe9b8079a")
 		)
 		(pin "2"
-			(uuid "f763981f-66ae-48ea-85bf-841c19d166f9")
+			(uuid "c8ae15de-b0e8-435e-8040-3f34be70c144")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C513")
 					(unit 1)
 				)
@@ -10185,7 +10185,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "d1a9a9b7-2b66-4ab5-9848-f5e74aea36f3")
+		(uuid "0974cc42-d038-4892-a5f9-9d97c9c95458")
 		(property "Reference" "#PWR_FPGA power_17"
 			(at 299.72 194.31 0)
 			(hide yes)
@@ -10241,11 +10241,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "88c72d24-c04d-49cb-81b3-65057eb857ec")
+			(uuid "7b594a19-2901-4448-b0cd-20732db94eea")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_17")
 					(unit 1)
 				)
@@ -10263,7 +10263,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "906af3b6-9ea1-450e-bdab-c26b9ac22c22")
+		(uuid "43cceb71-54c4-49bb-b044-f9fbc4458c05")
 		(property "Reference" "C514"
 			(at 284.48 180.34 0)
 			(show_name no)
@@ -10342,14 +10342,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "062dfd65-2fea-4471-94d4-90cd943f5221")
+			(uuid "3fab9444-f47f-4e2a-866b-67b4668735b6")
 		)
 		(pin "2"
-			(uuid "58d24579-bbfc-42af-9ed0-8608aa811bb1")
+			(uuid "535b81a9-0b10-490f-804d-5c293edbfe0e")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C514")
 					(unit 1)
 				)
@@ -10367,7 +10367,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "396858ed-799c-4af8-b5c8-6bea900fcedf")
+		(uuid "e3e0ef42-29da-45fc-9f52-46fbe7c0d018")
 		(property "Reference" "#PWR_FPGA power_18"
 			(at 281.94 194.31 0)
 			(hide yes)
@@ -10423,11 +10423,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "42bc5de0-ef4b-467f-b223-0470ce4b5b00")
+			(uuid "4598819a-8c65-43b9-bc01-4247a73b9633")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_18")
 					(unit 1)
 				)
@@ -10445,7 +10445,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "c6066e11-2379-4135-86c2-0a2345ee921c")
+		(uuid "769e24d3-06cb-4273-8f37-34eb70557104")
 		(property "Reference" "C515"
 			(at 266.7 180.34 0)
 			(show_name no)
@@ -10524,14 +10524,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "c84734a3-adc7-4a9b-b469-487c7f6e3414")
+			(uuid "ed9215ef-9b57-40e0-aa1e-90d6bd3d4edf")
 		)
 		(pin "2"
-			(uuid "a5d1a09a-f4ab-4837-b768-1da8c7b8c563")
+			(uuid "4f6dd76d-30fb-4c1c-b116-ae9a444576b2")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C515")
 					(unit 1)
 				)
@@ -10549,7 +10549,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "a4a86a81-b7f2-413e-8b3f-749f649fca54")
+		(uuid "0e39e49e-3ef3-4ce3-8f12-7c0a41513252")
 		(property "Reference" "#PWR_FPGA power_19"
 			(at 264.16 194.31 0)
 			(hide yes)
@@ -10605,11 +10605,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "ce30a48e-47ed-4e35-af08-71dcbadfd240")
+			(uuid "d3357308-b2fa-4d24-b091-d1a03677aa31")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_19")
 					(unit 1)
 				)
@@ -10627,7 +10627,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "825222eb-7e51-4b9c-b502-8926361429de")
+		(uuid "a04e50e0-62e1-4bae-89fb-bc81805eb051")
 		(property "Reference" "C516"
 			(at 236.22 180.34 0)
 			(show_name no)
@@ -10706,14 +10706,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "ee26cce7-b1f0-4ee8-8294-f2a8dcae5962")
+			(uuid "9a84a80f-dc51-4c3f-a21f-4a327ffcaa82")
 		)
 		(pin "2"
-			(uuid "dac93aca-4b5d-48f3-be22-87f1be85e285")
+			(uuid "b3feddc3-f3ad-4a13-836c-e5712221935d")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C516")
 					(unit 1)
 				)
@@ -10731,7 +10731,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "696181b8-7da9-49da-ba46-aa26defa0ea8")
+		(uuid "e1804178-e664-4ed5-9407-a6530fe97247")
 		(property "Reference" "#PWR_FPGA power_20"
 			(at 233.68 194.31 0)
 			(hide yes)
@@ -10787,11 +10787,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "1eefca4d-f8cc-42c3-87cf-65356a55aeb0")
+			(uuid "745ea7f4-d8eb-46dc-9b2b-23cb246511b9")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_20")
 					(unit 1)
 				)
@@ -10809,7 +10809,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "d95a05cb-67d1-495d-930a-a878c4653bde")
+		(uuid "8db96807-182f-4171-8815-d3e0f4d8f911")
 		(property "Reference" "C525"
 			(at 248.92 180.34 0)
 			(show_name no)
@@ -10888,14 +10888,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "3c2b4c2b-8313-43cd-a217-a4dea32301b5")
+			(uuid "d3d6a5b5-b09a-403a-bd74-7e3c0098c5af")
 		)
 		(pin "2"
-			(uuid "6d93f6bf-5bb0-4d02-9e0a-b78d99fa22a8")
+			(uuid "6e553a61-4f6f-4076-a5db-6bce4a7d5209")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C525")
 					(unit 1)
 				)
@@ -10913,7 +10913,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "9568f4dc-ed81-487e-9ee2-7eafbea56325")
+		(uuid "ae04c3ba-e6e7-45cf-9717-77f6031cf431")
 		(property "Reference" "#PWR_FPGA power_21"
 			(at 246.38 194.31 0)
 			(hide yes)
@@ -10969,11 +10969,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "34f956e3-06bb-420a-b775-47fda90588a2")
+			(uuid "e21aa592-a510-4898-972f-990f0e34cf4c")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_21")
 					(unit 1)
 				)
@@ -10991,7 +10991,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "e4893063-cf5a-4b2d-bd15-713332d163c4")
+		(uuid "238bff0d-00b6-4334-8b44-a064c3949ee3")
 		(property "Reference" "C517"
 			(at 218.44 180.34 0)
 			(show_name no)
@@ -11070,14 +11070,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "c99f2260-162d-4c8e-9a6f-98f6a45cda69")
+			(uuid "e1055dd5-e6bd-4e6e-95f3-56610f8b1b90")
 		)
 		(pin "2"
-			(uuid "98180571-cfc2-4e93-9a1c-75c765eb60e6")
+			(uuid "13ea5804-f137-4b56-b15c-746dc0499459")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C517")
 					(unit 1)
 				)
@@ -11095,7 +11095,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "9755c464-ae71-4776-bba7-a4516d721fac")
+		(uuid "5f8719fa-95fc-42a0-92da-226b6d0bcd00")
 		(property "Reference" "#PWR_FPGA power_22"
 			(at 215.9 194.31 0)
 			(hide yes)
@@ -11151,11 +11151,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "1ecf238c-7ec4-46f6-98dd-607302032341")
+			(uuid "006bb9d6-2f86-47ec-9cf8-469b94051a87")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_22")
 					(unit 1)
 				)
@@ -11173,7 +11173,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "c70ee71f-c30b-4574-a1be-520c45525433")
+		(uuid "6ad596ee-7340-4cee-94b8-56b3fd514719")
 		(property "Reference" "C518"
 			(at 200.66 180.34 0)
 			(show_name no)
@@ -11252,14 +11252,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "9fc43435-5a37-4e5f-9893-854cdb541300")
+			(uuid "1b3901b3-d59c-4783-9c4b-0d5d4e2d355d")
 		)
 		(pin "2"
-			(uuid "4076c9f9-bbb9-4e47-816a-4474e78dd522")
+			(uuid "9b045b6f-1765-4ea9-80cb-536f8dd8bd68")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C518")
 					(unit 1)
 				)
@@ -11277,7 +11277,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "b505a431-8f82-4d1d-a557-703297253bd8")
+		(uuid "24f7ec7e-3ddb-41dc-b867-732435eacc24")
 		(property "Reference" "#PWR_FPGA power_23"
 			(at 198.12 194.31 0)
 			(hide yes)
@@ -11333,11 +11333,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "4f871d75-6985-40bd-8ab0-2660cd9a169d")
+			(uuid "4595a778-9de0-4714-9248-2f0f806f9a20")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_23")
 					(unit 1)
 				)
@@ -11355,7 +11355,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "cea693a3-ef07-4f00-814a-4436c44f1d67")
+		(uuid "a0bac5e7-18d9-45ff-8602-1e3d3fe287c3")
 		(property "Reference" "C519"
 			(at 182.88 180.34 0)
 			(show_name no)
@@ -11434,14 +11434,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "099eb340-771a-45f6-96d8-563ec2805dbb")
+			(uuid "7269181f-3307-4948-bc65-0501ed2cbc5a")
 		)
 		(pin "2"
-			(uuid "55870529-15ed-44a9-ba81-560567179fca")
+			(uuid "f4753f38-08e1-4180-99ac-fb72326865d8")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C519")
 					(unit 1)
 				)
@@ -11459,7 +11459,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "78bdcdcf-53b7-498e-9cb3-55029a9a7e68")
+		(uuid "db04102b-ce23-4c5e-be62-8a78cc2eecac")
 		(property "Reference" "#PWR_FPGA power_24"
 			(at 180.34 194.31 0)
 			(hide yes)
@@ -11515,11 +11515,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "7ba000c4-bb2f-41b0-8f1b-213817273de8")
+			(uuid "fcc13cf8-a700-47b8-886e-11ec55335634")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_24")
 					(unit 1)
 				)
@@ -11537,7 +11537,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "a7cb90c8-c4d8-4c63-b854-fec08cc0cbd0")
+		(uuid "436fda1d-587c-40ac-a199-c9b396d6b443")
 		(property "Reference" "C520"
 			(at 152.4 180.34 0)
 			(show_name no)
@@ -11616,14 +11616,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "cfd47681-3f32-435b-81b9-3b770ae0729e")
+			(uuid "be42e3e6-8a39-4c8d-98d7-2945c2f0f228")
 		)
 		(pin "2"
-			(uuid "163c13d4-ebbd-4e58-a324-7a2504e207d1")
+			(uuid "7e6c6f5c-3730-437b-9ad1-1f7f94d89dc0")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C520")
 					(unit 1)
 				)
@@ -11641,7 +11641,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "1b65d97d-5b99-4342-9281-b5fd7fad2d0e")
+		(uuid "1dc4317c-e3ab-4576-869d-67b7ceec7dd2")
 		(property "Reference" "#PWR_FPGA power_25"
 			(at 149.86 194.31 0)
 			(hide yes)
@@ -11697,11 +11697,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "5c880548-b6d2-4c6a-871d-dba7dbb48a1e")
+			(uuid "b922a180-5e7e-4afc-b034-6348f45975ed")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_25")
 					(unit 1)
 				)
@@ -11719,7 +11719,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "f7ef3019-3273-4afe-b10e-f4999a2633f0")
+		(uuid "d30f0126-6ccc-4b3e-88aa-252d5a3c6a2c")
 		(property "Reference" "C526"
 			(at 165.1 180.34 0)
 			(show_name no)
@@ -11798,14 +11798,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "61797079-52d7-42f7-981c-86c39743d573")
+			(uuid "5207b94b-1be8-40b9-8c08-c8325f1e0ad4")
 		)
 		(pin "2"
-			(uuid "0da14837-759b-459a-a7b6-1b5e7df3805c")
+			(uuid "db40f964-92aa-4041-9830-5ad5880a2d89")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C526")
 					(unit 1)
 				)
@@ -11823,7 +11823,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "00f62a9a-265d-4d8e-abf8-0c7d8494eae1")
+		(uuid "f2a69e17-2ef1-4580-a733-bfbdd2afe59c")
 		(property "Reference" "#PWR_FPGA power_26"
 			(at 162.56 194.31 0)
 			(hide yes)
@@ -11879,11 +11879,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "15fa36a8-6e1e-4424-aca4-81686d292d76")
+			(uuid "5d209fe7-7557-4301-9e45-b676d7e9cc80")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_26")
 					(unit 1)
 				)
@@ -11901,7 +11901,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "650f7bbd-3099-4a7d-a6e3-d45cbd374c9b")
+		(uuid "752f7dbd-d178-4caa-9ad8-cb71918b460b")
 		(property "Reference" "C521"
 			(at 134.62 180.34 0)
 			(show_name no)
@@ -11980,14 +11980,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "e9c32c61-e1c4-4f1e-ab96-f1a4147ccf0a")
+			(uuid "e2034d21-e0dd-4c71-847b-0aba6b79d5c4")
 		)
 		(pin "2"
-			(uuid "d726a294-3733-4b23-89c2-e4653fa06aa9")
+			(uuid "ee78ae99-572c-426f-903c-ed43e5b52a5c")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C521")
 					(unit 1)
 				)
@@ -12005,7 +12005,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "2b932b0b-5855-4999-a2c4-6719e072806d")
+		(uuid "71760c4d-1d5e-457c-96af-94ac59eaf609")
 		(property "Reference" "#PWR_FPGA power_27"
 			(at 132.08 194.31 0)
 			(hide yes)
@@ -12061,11 +12061,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "9250da69-d6cf-4706-be9b-da79feff0166")
+			(uuid "e55a49f0-8876-471d-bad2-e4be2ba6a30d")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_27")
 					(unit 1)
 				)
@@ -12083,7 +12083,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "1dbb734a-0ba6-46cf-b02a-6afec615bcc0")
+		(uuid "0fb272e2-9ace-48be-815a-25db9691b854")
 		(property "Reference" "C522"
 			(at 116.84 180.34 0)
 			(show_name no)
@@ -12162,14 +12162,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "3934debc-f382-4545-ba7e-d4700350dd73")
+			(uuid "a4188be1-028f-4c1a-b170-b0210c872456")
 		)
 		(pin "2"
-			(uuid "b65e9006-186f-440f-89a0-9476c1cf276f")
+			(uuid "504c5df1-057e-4c47-80d7-efa4cbc15921")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C522")
 					(unit 1)
 				)
@@ -12187,7 +12187,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "09d18b6d-96e5-4b03-884f-b4e6ab809f11")
+		(uuid "af85750c-70d2-4ffe-a109-e92632871098")
 		(property "Reference" "#PWR_FPGA power_28"
 			(at 114.3 194.31 0)
 			(hide yes)
@@ -12243,11 +12243,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "28e6cf0c-43a7-4daf-84c9-2dc2148281b9")
+			(uuid "e92291d1-5974-4bd6-b84a-46cb6ebdfbf5")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_28")
 					(unit 1)
 				)
@@ -12265,7 +12265,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "12f3f9a7-e2d1-49ef-85f2-83f2184a69a7")
+		(uuid "db394702-996d-4c0f-9745-b66e4d6c88ce")
 		(property "Reference" "C523"
 			(at 99.06 180.34 0)
 			(show_name no)
@@ -12344,14 +12344,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "da79be6d-58d4-4376-a419-52e43f3312ce")
+			(uuid "904ddeaf-f7fa-4473-8241-f2defb188c97")
 		)
 		(pin "2"
-			(uuid "c838d6aa-07a6-48d5-84f7-650a7b18767e")
+			(uuid "006995a0-5cfd-4f19-bd29-9783f5b37084")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C523")
 					(unit 1)
 				)
@@ -12369,7 +12369,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "9d7dfbfd-5b66-4831-a86c-c713cdb1206e")
+		(uuid "856a8c04-4d48-4c02-952b-c231591f3754")
 		(property "Reference" "#PWR_FPGA power_29"
 			(at 96.52 194.31 0)
 			(hide yes)
@@ -12425,11 +12425,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "21c667fa-9797-4908-ac3e-cdc856a64ecc")
+			(uuid "37b08740-b5bb-4d53-a7fd-45879568715f")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_29")
 					(unit 1)
 				)
@@ -12447,7 +12447,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "8075ffc8-e4c5-416d-9eeb-f4e07c4cd352")
+		(uuid "064edaa6-49f9-4422-943e-5c9645089f30")
 		(property "Reference" "C524"
 			(at 81.28 180.34 0)
 			(show_name no)
@@ -12526,14 +12526,14 @@
 			)
 		)
 		(pin "1"
-			(uuid "719b6a03-0a4c-41c6-8bfb-aed763e1f8a8")
+			(uuid "dbac473e-373e-46c0-9261-1ea4c91e82ae")
 		)
 		(pin "2"
-			(uuid "64e578c9-f937-44e4-ba67-96e44a5b1f15")
+			(uuid "60a2e801-3278-43c8-ade5-d6f10935c0bd")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "C524")
 					(unit 1)
 				)
@@ -12551,7 +12551,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "58e5f33d-4af1-4765-b4c7-ffb2936fd2d5")
+		(uuid "0f651501-4254-4ecb-b483-fe07ed0271b6")
 		(property "Reference" "#PWR_FPGA power_30"
 			(at 78.74 194.31 0)
 			(hide yes)
@@ -12607,11 +12607,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "c0e79deb-a52f-4a56-9a81-c12ced7522d5")
+			(uuid "35f33fcb-a767-42a5-b11a-2d0b72761d24")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d/d3bb94a5-a58e-42e4-8abc-fc95f89086d0"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/91dfda58-ce7a-42c6-81b3-11a8fb74bb5e"
 					(reference "#PWR_FPGA power_30")
 					(unit 1)
 				)

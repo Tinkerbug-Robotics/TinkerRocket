@@ -2,7 +2,7 @@
 	(version 20260306)
 	(generator "eeschema")
 	(generator_version "10.0")
-	(uuid "082d5750-d4fd-4322-9ab0-321fc3dbef2d")
+	(uuid "18c5be81-d8c2-4b08-92bf-000bb4e79507")
 	(paper "A3")
 	(title_block
 		(title "gnss-sdr-dev: GNSS receiver development board")
@@ -1169,7 +1169,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "ba53c8ee-2806-4898-8f0d-269c3b830e33")
+		(uuid "63b9c4c6-f9e3-4573-8958-f6c183be3bba")
 	)
 	(text "SMA, ESD, switchable antenna bias, 2-way divider,\nL1 and L5 SAW + LNA chains"
 		(exclude_from_sim no)
@@ -1180,7 +1180,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "2cc4f968-fad7-4eb0-a48e-ad5c82fc4024")
+		(uuid "701cc372-43a2-4dd4-89b4-3390604f8281")
 	)
 	(text "MAX2769B, 27 MHz TCXO (also the sample clock),\nsample-clock fan-out"
 		(exclude_from_sim no)
@@ -1191,7 +1191,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "6d517c5b-55c0-44ac-8098-6233fd36c738")
+		(uuid "50986a1e-829e-4cd1-8cf5-7cb3b68c8677")
 	)
 	(text "MAX2771 low band, populate-optional\n(owner stock, hand-fit)"
 		(exclude_from_sim no)
@@ -1202,7 +1202,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "ebabbc94-622e-45cd-945c-29531be00440")
+		(uuid "00be99f7-a7ef-49d3-8d2e-f53c73d309f2")
 	)
 	(text "ECP5 correlators: slave-SPI configuration from the P4,\nJTAG, logic-analyzer header, LEDs"
 		(exclude_from_sim no)
@@ -1213,7 +1213,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "28e5f296-2baf-4c2d-96df-438d84e2d02d")
+		(uuid "a27d1dc3-365b-47ae-8823-dbaca8e7439f")
 	)
 	(text "ECP5 supplies: each ball with its own decoupling,\nVCCAUX ferrite"
 		(exclude_from_sim no)
@@ -1224,7 +1224,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "8a82bec0-efdb-4f1b-8217-4ff6b3e10e08")
+		(uuid "8abff4f8-3aca-43d5-a18c-0ef60cb7acc0")
 	)
 	(text "From the Space Bug M8T: FPGA configuration, QSPI\nregister link, PARLIO, front-end SPI and control"
 		(exclude_from_sim no)
@@ -1235,7 +1235,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "e99bb1dc-8249-4561-b792-a34d586bd2b7")
+		(uuid "1104a05a-8342-4929-ba2c-a86b5943d1bb")
 	)
 	(text "From the Space Bug M8T: ISM6HG256X"
 		(exclude_from_sim no)
@@ -1246,7 +1246,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "7a47d426-effa-4223-9fba-f0605338d5f3")
+		(uuid "80c4e2f4-93d6-4030-b412-9132af1bbacb")
 	)
 	(text "From the Space Bug M8T: USB-C #1, USB-Serial/JTAG\n(flashing), VBUS into VSYS"
 		(exclude_from_sim no)
@@ -1257,7 +1257,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "14883d71-9b7b-4bfc-a006-23379ed78238")
+		(uuid "83cbba1b-3fe2-4cf1-a1f2-5c4ba1103bbb")
 	)
 	(text "USB-C #2 on the P4 high-speed PHY:\nsample streaming"
 		(exclude_from_sim no)
@@ -1268,7 +1268,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "02219351-ff29-4577-9fe4-a82ddffd3727")
+		(uuid "1f8c1e81-0708-4508-876a-b6d2df66427d")
 	)
 	(text "Host link J401, input filter, GNSS LDO and 1.8 V LNA\nrail, FPGA 1.1 V core and 2.5 V VCCAUX"
 		(exclude_from_sim no)
@@ -1279,7 +1279,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "cc5f3901-d2f7-4e64-b81b-a7d4b234e66b")
+		(uuid "91acbed3-f262-4dec-a321-07485f3aedfa")
 	)
 	(text "Mechanical: mounting holes, fiducials, RF shield (frame SH1 + removable cover SH2)"
 		(exclude_from_sim no)
@@ -1292,7 +1292,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "9ae0c8bf-e75e-4d01-b614-716a5d84c4cc")
+		(uuid "90e3532c-4f0b-47e1-8c3e-d9bae42b6a7d")
 	)
 	(wire
 		(pts
@@ -1302,7 +1302,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "9edf9cb0-8ab0-4fb0-8dd2-5e462dfd8009")
+		(uuid "133bbf26-2d38-452e-82e9-850576ed3562")
 	)
 	(symbol
 		(lib_id "Mechanical:MountingHole")
@@ -1315,7 +1315,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "71f9103c-b9fb-46a3-b642-a4c49adac91d")
+		(uuid "ad3464a3-dd70-4fca-b436-39727af1fd9c")
 		(property "Reference" "H1"
 			(at 43.18 262.89 0)
 			(show_name no)
@@ -1373,7 +1373,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(reference "H1")
 					(unit 1)
 				)
@@ -1391,7 +1391,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "0c352323-1429-4f21-af5e-51b77b652b5c")
+		(uuid "e7811341-0d16-4e39-a0fd-a2a411259bd9")
 		(property "Reference" "H2"
 			(at 63.5 262.89 0)
 			(show_name no)
@@ -1449,7 +1449,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(reference "H2")
 					(unit 1)
 				)
@@ -1467,7 +1467,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "b72264be-e127-4e4d-a963-aa3e60eec768")
+		(uuid "c648acca-1fd1-42af-9865-44327478a6ed")
 		(property "Reference" "H3"
 			(at 83.82 262.89 0)
 			(show_name no)
@@ -1525,7 +1525,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(reference "H3")
 					(unit 1)
 				)
@@ -1543,7 +1543,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "781fedc8-592f-4492-b883-5fe605ea7d27")
+		(uuid "a8ae9cfe-ec59-4a2c-8409-0159e057668f")
 		(property "Reference" "H4"
 			(at 104.14 262.89 0)
 			(show_name no)
@@ -1601,7 +1601,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(reference "H4")
 					(unit 1)
 				)
@@ -1619,7 +1619,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "f7159e2f-cebf-4cf6-8716-0f7f3eafc915")
+		(uuid "2c65dfed-df03-4493-9de5-43411e1f96b5")
 		(property "Reference" "FID1"
 			(at 142.24 262.89 0)
 			(show_name no)
@@ -1677,7 +1677,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(reference "FID1")
 					(unit 1)
 				)
@@ -1695,7 +1695,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "bbdb5eb1-9479-4c8f-b448-bc3e723a07bc")
+		(uuid "81cfdf74-6d84-4e81-bd73-7803a868caf6")
 		(property "Reference" "FID2"
 			(at 162.56 262.89 0)
 			(show_name no)
@@ -1753,7 +1753,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(reference "FID2")
 					(unit 1)
 				)
@@ -1771,7 +1771,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "1b60ce45-f889-4abf-a329-aadd69af30e3")
+		(uuid "c1fe3e18-1d3d-4151-b6b1-f160820e2b1b")
 		(property "Reference" "FID3"
 			(at 182.88 262.89 0)
 			(show_name no)
@@ -1829,7 +1829,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(reference "FID3")
 					(unit 1)
 				)
@@ -1847,7 +1847,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "5e23b93d-1988-4714-b41a-6ede7dc77bce")
+		(uuid "8c0ffdec-51c2-4880-a551-2752dd86e790")
 		(property "Reference" "SH1"
 			(at 212.09 262.89 0)
 			(show_name no)
@@ -1926,11 +1926,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "6c10c7c3-6030-4d45-a489-b7d5911b026c")
+			(uuid "e75d98e6-8680-4e82-842c-419da612e9f7")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(reference "SH1")
 					(unit 1)
 				)
@@ -1948,7 +1948,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "a2f7ac5a-9aec-4bd5-a07c-10e2e101a417")
+		(uuid "19cc66af-e853-4bfe-8ff7-e65101c94fb1")
 		(property "Reference" "#PWR_gnss-sdr-dev_1"
 			(at 200.66 278.13 0)
 			(hide yes)
@@ -2004,11 +2004,11 @@
 			)
 		)
 		(pin "1"
-			(uuid "74ef63ba-42c2-491a-a356-35cb3d9fa511")
+			(uuid "1f42340e-ff6a-4437-92f4-0559cff58980")
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(reference "#PWR_gnss-sdr-dev_1")
 					(unit 1)
 				)
@@ -2026,7 +2026,7 @@
 		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "ba26a31e-f754-48d5-8d58-2993efbad8bf")
+		(uuid "c20c41c8-522e-4969-a1d5-47c2c5535f61")
 		(property "Reference" "SH2"
 			(at 252.73 262.89 0)
 			(show_name no)
@@ -2106,7 +2106,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(reference "SH2")
 					(unit 1)
 				)
@@ -2128,7 +2128,7 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "6eba71f9-de0c-4520-89c4-caad83c80cda")
+		(uuid "9862fae8-abaa-404c-a0ad-f75002780277")
 		(property "Sheetname" "RF front end"
 			(at 30.48 49.5 0)
 			(show_name no)
@@ -2155,7 +2155,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "2")
 				)
 			)
@@ -2176,7 +2176,7 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "43d8ea8a-439d-46e0-a5ab-6d7e1bf0126a")
+		(uuid "dc448d51-b0f7-41ba-be81-091c65e9f885")
 		(property "Sheetname" "L1 receiver"
 			(at 154.94 49.5 0)
 			(show_name no)
@@ -2203,7 +2203,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "3")
 				)
 			)
@@ -2224,7 +2224,7 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "9374561c-3edf-4251-b89e-c60222b429ba")
+		(uuid "d325dd23-705e-4c58-ac41-a39ce79b29c5")
 		(property "Sheetname" "L5 receiver"
 			(at 279.4 49.5 0)
 			(show_name no)
@@ -2251,7 +2251,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "4")
 				)
 			)
@@ -2272,7 +2272,7 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "e0dfee36-4a67-4104-9746-656452751102")
+		(uuid "5f9f73c7-2415-4d85-a269-421976d4637c")
 		(property "Sheetname" "FPGA"
 			(at 30.48 100.3 0)
 			(show_name no)
@@ -2299,7 +2299,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "5")
 				)
 			)
@@ -2320,7 +2320,7 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "d3bb94a5-a58e-42e4-8abc-fc95f89086d0")
+		(uuid "91dfda58-ce7a-42c6-81b3-11a8fb74bb5e")
 		(property "Sheetname" "FPGA power"
 			(at 154.94 100.3 0)
 			(show_name no)
@@ -2347,7 +2347,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "6")
 				)
 			)
@@ -2368,7 +2368,7 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "713c98d0-ec04-4c06-9db4-1ddaf207f980")
+		(uuid "d6c2a5da-3aac-40a9-a9cc-5cd1a12cd40d")
 		(property "Sheetname" "ESP32-P4"
 			(at 279.4 100.3 0)
 			(show_name no)
@@ -2395,7 +2395,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "7")
 				)
 			)
@@ -2416,7 +2416,7 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "788a77da-dab6-4085-aa73-87ff6f2c34aa")
+		(uuid "611b2d29-f0c1-4061-82fd-edb8bc73bcd5")
 		(property "Sheetname" "IMU"
 			(at 30.48 151.1 0)
 			(show_name no)
@@ -2443,7 +2443,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "8")
 				)
 			)
@@ -2464,7 +2464,7 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "a5a34c3a-3087-448c-9396-ee8b6e3ff31e")
+		(uuid "74c275a3-4952-4517-9f3b-231375c0a451")
 		(property "Sheetname" "USB"
 			(at 154.94 151.1 0)
 			(show_name no)
@@ -2491,7 +2491,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "9")
 				)
 			)
@@ -2512,7 +2512,7 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "83272e5a-d4de-40a0-a516-cbfad4ac5146")
+		(uuid "367af93b-a6f9-4cd1-8549-9bf4d2215494")
 		(property "Sheetname" "USB HS"
 			(at 279.4 151.1 0)
 			(show_name no)
@@ -2539,7 +2539,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "10")
 				)
 			)
@@ -2560,7 +2560,7 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "111adb6e-7713-42bc-b3d8-057a34ecb0d8")
+		(uuid "ebe8985f-054b-42ea-8c33-d916c783b295")
 		(property "Sheetname" "Power"
 			(at 30.48 201.9 0)
 			(show_name no)
@@ -2587,7 +2587,7 @@
 		)
 		(instances
 			(project "gnss-sdr-dev"
-				(path "/082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "11")
 				)
 			)

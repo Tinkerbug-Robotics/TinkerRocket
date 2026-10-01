@@ -839,7 +839,7 @@
       {
         "filename": "gnss-sdr-dev.kicad_sch",
         "name": "gnss-sdr-dev",
-        "uuid": "082d5750-d4fd-4322-9ab0-321fc3dbef2d"
+        "uuid": "18c5be81-d8c2-4b08-92bf-000bb4e79507"
       }
     ],
     "used_designators": "",
@@ -847,47 +847,47 @@
   },
   "sheets": [
     [
-      "082d5750-d4fd-4322-9ab0-321fc3dbef2d",
+      "18c5be81-d8c2-4b08-92bf-000bb4e79507",
       "gnss-sdr-dev"
     ],
     [
-      "6eba71f9-de0c-4520-89c4-caad83c80cda",
+      "9862fae8-abaa-404c-a0ad-f75002780277",
       "RF front end"
     ],
     [
-      "43d8ea8a-439d-46e0-a5ab-6d7e1bf0126a",
+      "dc448d51-b0f7-41ba-be81-091c65e9f885",
       "L1 receiver"
     ],
     [
-      "9374561c-3edf-4251-b89e-c60222b429ba",
+      "d325dd23-705e-4c58-ac41-a39ce79b29c5",
       "L5 receiver"
     ],
     [
-      "e0dfee36-4a67-4104-9746-656452751102",
+      "5f9f73c7-2415-4d85-a269-421976d4637c",
       "FPGA"
     ],
     [
-      "d3bb94a5-a58e-42e4-8abc-fc95f89086d0",
+      "91dfda58-ce7a-42c6-81b3-11a8fb74bb5e",
       "FPGA power"
     ],
     [
-      "713c98d0-ec04-4c06-9db4-1ddaf207f980",
+      "d6c2a5da-3aac-40a9-a9cc-5cd1a12cd40d",
       "ESP32-P4"
     ],
     [
-      "788a77da-dab6-4085-aa73-87ff6f2c34aa",
+      "611b2d29-f0c1-4061-82fd-edb8bc73bcd5",
       "IMU"
     ],
     [
-      "a5a34c3a-3087-448c-9396-ee8b6e3ff31e",
+      "74c275a3-4952-4517-9f3b-231375c0a451",
       "USB"
     ],
     [
-      "83272e5a-d4de-40a0-a516-cbfad4ac5146",
+      "367af93b-a6f9-4cd1-8549-9bf4d2215494",
       "USB HS"
     ],
     [
-      "111adb6e-7713-42bc-b3d8-057a34ecb0d8",
+      "ebe8985f-054b-42ea-8c33-d916c783b295",
       "Power"
     ]
   ],
