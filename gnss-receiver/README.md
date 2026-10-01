@@ -381,8 +381,8 @@ truth is in the rig's `scenarios/`:
 
 | Tool | What it does |
 |---|---|
-| `py/los_truth.py` | Each satellite's line-of-sight truth along a scenario: Doppler, Doppler rate, elevation |
-| `trksim` | One channel's real tracking code (`core/trk`) against that truth, at the level of correlator dumps. It includes the contract's command delay, data bits, and correlated early/prompt/late noise at any C/N0, and runs about 1000× real time. On the IQ files it matches `gnssrx` channel for channel: unlock time within 0.1 s, the same slips |
+| `py/los_truth.py` | Each satellite's line-of-sight truth along a scenario: Doppler, Doppler rate, elevation, azimuth |
+| `trksim` | One channel's real tracking code (`core/trk`) against that truth, at the level of correlator dumps. It includes the contract's command delay, data bits, and correlated early/prompt/late noise at any C/N0, and runs about 1000× real time. On the IQ files it matches `gnssrx` channel for channel: unlock time within 0.1 s, the same slips. With `--spin`, the rolling antenna's phase and gain; see [Spin and the antenna](#spin-and-the-antenna-milestone-7) |
 | `py/trk_sweep.py` | Sweeps `trksim` over loop profiles, C/N0, satellites and seeds; tabulates the worst satellite |
 | `gnssrx --boost-at S0,S1` | The boost profile over those file seconds, as the flight computer would call it. With `--loops-quiet` and `--loops-boost` (bandwidths), `--cn0-at S:DBHZ` (a level change mid-file) and `run.ini` (what made the run) |
 | `py/boost_track.py` | A run against truth, per satellite: frequency error, unlock time, carrier slips, code error, losses as the bench counts them (no pseudorange for 0.5 s), and the fix |
@@ -708,6 +708,48 @@ state takes it.
   (2 g flips on each axis) would cover ignition too, should a part near the bound turn up.
 - **Vibration needs nothing.**
 
+### Spin and the antenna (milestone 7)
+
+A spinning rocket turns its antenna. The received carrier of the right-hand circular signal turns
+with it, a cycle a revolution (the antenna's wind-up), and its amplitude follows the antenna's
+pattern toward each satellite.
+
+**The model** is `trksim`, per satellite:
+- `--spin HZ[,T0,T1]` sets the roll rate, ramping up through the burn;
+- `--antenna nose|side` puts the patch in the nose, looking up the roll axis, or on the side,
+  looking out;
+- the patch is two crossed dipoles fed 90° apart, the second weaker by the axial ratio (`--ar`, on
+  the boresight and 90° off it). The signal's voltage on them gives the carrier its phase and
+  amplitude, pattern included;
+- behind a side patch the body blocks it (`--floor`);
+- `--aid-spin` feeds the predicted wind-up forward, as the gyro and attitude would.
+
+`py/los_truth.py` now gives each satellite's azimuth for this. The runs use the hotshot and
+traveler skies, IMU-aided 20 Hz loops, and spin ramping up through the burn. The figure is
+`runs/spin/fig/spin_antenna.png`.
+
+**On the roll axis, spin costs nothing at good signal.**
+- A perfect patch there sees exactly a cycle a revolution from every satellite at every
+  elevation, at a steady gain. That is a common frequency offset of the spin rate. Every loop
+  tracks it, and the fix's clock drift takes it: 8 Hz is 1.5 m/s of drift, and the velocity is
+  untouched.
+- A real patch (axial ratio 1 dB on axis, 8 dB at the horizon) ripples at twice the spin rate for
+  low satellites: ±28° and 5 dB at 10° elevation.
+- At 45 dB-Hz all 14 satellites track clean through 8 and 20 Hz of spin, on both flights.
+- At 35 dB-Hz on the boresight, the low satellites are already marginal from the pattern: 6 of
+  14 are clean without spin, and the ripple leaves 2–3.
+
+**On the side, spin is fatal.**
+- The patch faces each satellite for only part of each turn: fades of 15–40 dB, and phase swings
+  of up to ±170° a revolution.
+- Without spin it already loses the 6 satellites behind the body.
+- At 2 Hz it loses all 14, even at 45 dB-Hz. Feeding the wind-up forward from the gyro doesn't
+  help through the fades.
+
+**For the vehicle:** the GNSS antenna belongs on the roll axis (in the nose, looking up), with as
+good an axial ratio toward the horizon as can be had. A side mount would need an array around the
+body, which isn't studied here. Traveler IV's 6–8 Hz spin is no problem for a nose patch.
+
 ### Limits
 
 - **Static sensitivity ends near 31 dB-Hz.** Pull-in fails below about 32 dB-Hz, boost or not.
@@ -720,8 +762,8 @@ state takes it.
   - The quiet loops without aiding run 0.5–2 m/s worse in velocity than unweighted.
 
   Both are configurations nothing flies. A lock-quality term in the sigma would cover them.
-- **Real motors add what the files lack.** The oscillator's g-sensitivity and vibration are
-  covered above. Plume, spin and antenna phase remain for milestone 7.
+- **Real motors add what the files lack.** The oscillator's g-sensitivity, vibration, spin and
+  antenna phase are covered above. The plume's attenuation is not.
 
 ## Real flight data: PSAS Launch-12 (milestone 7)
 

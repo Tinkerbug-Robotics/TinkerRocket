@@ -75,8 +75,10 @@ def _doppler(e: rinex.Eph, traj: Trajectory, tf: float, tg: float):
     return -float((vs - v) @ u) / LAMBDA_L1, float(np.linalg.norm(s - p)), u, p
 
 
-def los(nav: list[rinex.Eph], prn: int, traj: Trajectory, t_file, t0_gps: float, dt: float = 0.05):
-    """Per sample time t_file: geometric range (m), Doppler (Hz), Doppler rate (Hz/s), elevation (deg).
+def los(nav: list[rinex.Eph], prn: int, traj: Trajectory, t_file, t0_gps: float, dt: float = 0.05,
+        with_az: bool = False):
+    """Per sample time t_file: geometric range (m), Doppler (Hz), Doppler rate (Hz/s), elevation (deg),
+    and with with_az the azimuth (deg from north, east positive) as a fifth column.
 
     t0_gps is the GPS time (s of week) of file second 0; prn as gnssrx numbers it (Galileo + 100).
     """
@@ -85,7 +87,7 @@ def los(nav: list[rinex.Eph], prn: int, traj: Trajectory, t_file, t0_gps: float,
     cands = [e for e in nav if e.prn == num and e.sys == sys]
     if not cands:
         raise KeyError(f"no ephemeris for PRN {prn}")
-    out = np.zeros((t_file.size, 4))
+    out = np.zeros((t_file.size, 5 if with_az else 4))
     for i, tf in enumerate(t_file):
         tg = t0_gps + tf
         e = min(cands, key=lambda c: abs(rinex.tdiff(tg, c.toe)))
@@ -95,5 +97,9 @@ def los(nav: list[rinex.Eph], prn: int, traj: Trajectory, t_file, t0_gps: float,
         lat = math.atan2(p[2], math.hypot(p[0], p[1]))
         lon = math.atan2(p[1], p[0])
         up = np.array([math.cos(lat) * math.cos(lon), math.cos(lat) * math.sin(lon), math.sin(lat)])
-        out[i] = (rng, d0, (dp - dm) / (2 * dt), math.degrees(math.asin(float(u @ up))))
+        out[i, :4] = (rng, d0, (dp - dm) / (2 * dt), math.degrees(math.asin(float(u @ up))))
+        if with_az:
+            east = np.array([-math.sin(lon), math.cos(lon), 0.0])
+            north = np.cross(up, east)
+            out[i, 4] = math.degrees(math.atan2(float(u @ east), float(u @ north))) % 360.0
     return out

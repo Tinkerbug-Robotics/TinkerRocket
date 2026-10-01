@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Each satellite's line-of-sight truth along a scenario, for trksim: one CSV per PRN with
-t_s, dop_hz, rate_hz_s, el_deg at the trajectory's own sample times.
+t_s, dop_hz, rate_hz_s, el_deg, az_deg at the trajectory's own sample times.
 
     los_truth.py --traj SCEN.csv --nav BRDC.rnx --t0-gps 203400 --from 570 --to 650 --out DIR
 
@@ -38,12 +38,12 @@ def main() -> int:
         el0 = truth.los(nav, prn, traj, t[:1], a.t0_gps)[0, 3]
         if el0 < a.min_el:
             continue
-        L = truth.los(nav, prn, traj, t, a.t0_gps)
+        L = truth.los(nav, prn, traj, t, a.t0_gps, with_az=True)
         path = a.out / f"prn{prn:02d}.csv"
         with open(path, "w") as f:
-            f.write("t_s,dop_hz,rate_hz_s,el_deg\n")
+            f.write("t_s,dop_hz,rate_hz_s,el_deg,az_deg\n")
             for k in range(t.size):
-                f.write(f"{t[k]:.3f},{L[k, 1]:.4f},{L[k, 2]:.3f},{L[k, 3]:.3f}\n")
+                f.write(f"{t[k]:.3f},{L[k, 1]:.4f},{L[k, 2]:.3f},{L[k, 3]:.3f},{L[k, 4]:.3f}\n")
         print(f"PRN {prn:2d}: el {L[0, 3]:5.1f} deg, |rate| max {np.abs(L[:, 2]).max():7.1f} Hz/s -> {path}")
     return 0
 
