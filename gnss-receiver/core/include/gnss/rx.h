@@ -38,6 +38,8 @@ typedef struct {
     float tap_chips;            /* early/late offset */
     int max_ch;                 /* channels to use, <= CORR_MAX_CH */
     uint32_t cmd_lead;          /* NCO commands computed from dump s are tagged s + cmd_lead (corr_if.h) */
+    trk_profile_t quiet;        /* tracking loops at rest */
+    trk_profile_t boost;        /* and under the boost's dynamics (rx_set_boost) */
 } rx_cfg_t;
 
 /* Per-satellite record of an epoch (what goes to RINEX and the logs). */
@@ -49,9 +51,16 @@ typedef struct {
     double dop;                 /* Hz */
     double t_sv;                /* transmit time, s of week (satellite clock) */
     float cn0;                  /* dB-Hz */
-    float lock_s;               /* time since the PLL locked */
+    float lock_s;               /* time since the PLL locked; 0 when it is not (the carrier phase is void) */
     int half_cycle;             /* the Costas half-cycle ambiguity is resolved */
 } rx_obs_t;
+
+/*
+ * The Doppler observable is the NCO's mean frequency over the last RX_DOP_DUMPS code periods,
+ * from the exact phase, moved forward by the loop's own rate for the half window it lags. A
+ * wide boost loop jitters its NCO word by tens of hertz; the phase it holds is far steadier.
+ */
+#define RX_DOP_DUMPS 20
 
 typedef struct {
     uint64_t t_start;           /* sample the channel started at */
@@ -61,6 +70,9 @@ typedef struct {
     uint32_t last_carr_phase;
     uint32_t last_carr_cycles;
     int64_t adr_fx;             /* carrier phase relative to the IF since START, cycles * 2^32 (exact) */
+    int64_t hist_adr[RX_DOP_DUMPS];  /* adr_fx and t_samp at the last RX_DOP_DUMPS epochs (Doppler) */
+    uint64_t hist_t[RX_DOP_DUMPS];
+    int hist_head, hist_n;
     int32_t cur_carr;           /* words in force since last_t */
     uint64_t cur_code;
     int32_t sent_carr;          /* the last command sent */
@@ -95,10 +107,16 @@ typedef struct {
     uint64_t clk_n;
     pvt_sol_t sol;
     pvt_opt_t pvt_opt;
+    int boost;                      /* the boost profile is the target */
+    trk_profile_t prof;             /* the loops in force, moving toward the target (trk_profile_step) */
+    uint64_t t_tick;                /* the last tick's sample */
 } rx_t;
 
 void rx_default_cfg(rx_cfg_t *c, double fs, double if_hz);
 void rx_init(rx_t *rx, const rx_cfg_t *cfg);
+
+/* Selects the boost loop profile (on) or the quiet one; the flight computer's phase decides. */
+void rx_set_boost(rx_t *rx, int on);
 
 /* The 1 ms tick at sample t_now. Returns the number of commands written. */
 int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *cmds, int ncap);

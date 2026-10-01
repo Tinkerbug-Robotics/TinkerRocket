@@ -112,12 +112,13 @@ How each stage works:
   250 Hz. A fine stage on the full-rate snapshot then hands over within ~0.05 chip and ~20 Hz.
 - **Tracking:** Costas 3rd-order PLL, assisted by a 2nd-order FLL during pull-in (15 Hz PLL,
   10 Hz FLL), then 10 Hz once locked. The DLL is 1st order and carrier aided, with early/late at
-  ±0.25 chip: 2 Hz in pull-in, 0.25 Hz once locked. These are static settings; the boost loops are
-  milestone 5.
+  ±0.25 chip: 2 Hz in pull-in, 0.25 Hz once locked. Under a boost the receiver switches to wider
+  loops; see [Boost dynamics](#boost-dynamics-milestone-5).
 - **Navigation data:** bit sync by a transition histogram, then LNAV with parity, ephemeris and
   page 18.
-- **Observables and PVT:** observables come from the exact integer NCO state. PVT is least
-  squares with Sagnac, Klobuchar and Saastamoinen corrections, plus Doppler velocity.
+- **Observables and PVT:** observables come from the exact integer NCO state. Doppler is the NCO's
+  mean frequency over the last 20 ms, moved forward by the loop's rate. PVT is least squares with
+  Sagnac, Klobuchar and Saastamoinen corrections, plus Doppler velocity.
 
 Results, 2026-09-30, on the 2-bit 6.75 MS/s stream:
 
@@ -207,6 +208,153 @@ around −2.658 MHz in 100 Hz steps.
   wide.
 - Inside the ±15 kHz that satellites occupy (Doppler, vehicle velocity and the reference's
   ±0.5 ppm), the leakage stays below −44 dB.
+
+## Boost dynamics (milestone 5)
+
+The question: where does our tracking hold through a rocket boost, and with which loops? The two
+test flights are the rig's files, the ones the bought receivers flew in the rig's reports. Their
+truth is in the rig's `scenarios/`:
+- **traveler** (`traveler_soft25`): a 13 s burn, 6 → 18 g, 0.25 s soft start. The steepest
+  satellite slides at 835 Hz/s.
+- **hotshot:** a 4 s burn, 10 → 40 g. The steepest satellite slides at 1,638 Hz/s, then drops to
+  −190 Hz/s within 0.2 s at burnout.
+
+### Tools
+
+| Tool | What it does |
+|---|---|
+| `py/los_truth.py` | Each satellite's line-of-sight truth along a scenario: Doppler, Doppler rate, elevation |
+| `trksim` | One channel's real tracking code (`core/trk`) against that truth, at the level of correlator dumps. It includes the contract's command delay, data bits, and correlated early/prompt/late noise at any C/N0, and runs about 1000× real time. On the IQ files it matches `gnssrx` channel for channel: unlock time within 0.1 s, the same slips |
+| `py/trk_sweep.py` | Sweeps `trksim` over loop profiles, C/N0, satellites and seeds; tabulates the worst satellite |
+| `gnssrx --boost-at S0,S1` | The boost profile over those file seconds, as the flight computer would call it. With `--loops-quiet` and `--loops-boost` (bandwidths), `--cn0-at S:DBHZ` (a level change mid-file) and `run.ini` (what made the run) |
+| `py/boost_track.py` | A run against truth, per satellite: frequency error, unlock time, carrier slips, code error, losses as the bench counts them (no pseudorange for 0.5 s), and the fix |
+
+`boost_track.py` judges the carrier against the integral of the true Doppler. That integral is how
+the rig's smoothed gps-sdr-sim builds the carrier. Range from linearly interpolated positions differs
+from it by a·dt²/8 inside a 0.1 s trajectory step, which at burnout is whole cycles.
+
+### What the stage-0 loops did
+
+On the hotshot at 42.6 dB-Hz, every channel's PLL let go at liftoff and at burnout:
+- unlocked 0.6–3.5 s per satellite;
+- 1–3 cycles slipped.
+
+The FLL held code and frequency, so no satellite was lost and the fix never gapped more than
+0.1 s.
+
+Below about 37 dB-Hz the stage-0 machinery failed on the pad, before any boost. Five things were
+wrong, all fixed in `core/trk` for every profile:
+- **The lock indicator read SNR / (SNR + 1).** It was a per-dump cos 2φ, which never reaches its
+  0.85 threshold below 38 dB-Hz. It now takes the noise power out (1 in lock at any C/N0).
+- **Pull-in channels gave no measurements.** A channel whose PLL lets go now still reports
+  pseudorange and Doppler, with `lock_s` = 0 to void its carrier phase.
+- **Bit sync was dropped with PLL lock.** Bit edges follow the code, so it now stays.
+- **The 1 ms FLL was too noisy below 37 dB-Hz.** At 35 dB-Hz it was about ±20 Hz. The FLL now
+  compares 2 ms blocks:
+  - folded before bit sync;
+  - inside a data bit with a full atan2 after it (±250 Hz).
+- **The C/N0 estimate could not see a lost signal.** The 200-dump moments estimate reads about
+  27 dB-Hz on noise alone. So a loop that lost its signal at burnout ramped its NCO away (11 kHz off
+  in one run) and was never dropped. Three changes:
+  - After bit sync the estimate is narrowband over wideband power in 5 ms blocks. It reads near
+    zero on noise. A 50 Hz frequency error pulls it down (45 reads 35) but nowhere near the
+    25 dB-Hz loss threshold, where 20 ms blocks would read nothing.
+  - The loops' rate state is clamped at 3 kHz/s.
+  - A channel whose signal has gone coasts on its last frequency until it is dropped.
+
+### Findings
+
+- **The fixed command delay costs nothing.** Period s steers period s + 3. Every design tried gave
+  the same result with a delay of 1 as with 3, up to a 50 Hz PLL.
+- **Unaided, the burnout needs a ≥ 40 Hz PLL** (review §7's figure). On the hotshot's steepest
+  satellite:
+  - 20–30 Hz loops slip 10–16 half cycles in the 0.2 s of burnout;
+  - 40 Hz slips none at 45 dB-Hz;
+  - 50 Hz slips none at 45 or 40 dB-Hz, and one at 35.
+- **Narrowing must be gradual.** Stepping a wide loop straight into a narrow one hands it the wide
+  loop's frequency noise. The 10 Hz PLL slipped on it at 606 s, 2 s after burnout. The receiver
+  now widens at once and narrows with a 0.5 s time constant (`trk_profile_step`).
+- **Doppler from the phase, not the NCO word.** A 50 Hz loop jitters its NCO word by tens of hertz,
+  while the phase it holds stays steady. The Doppler observable is now the mean NCO frequency
+  over 20 ms from the exact phase, moved forward by the loop's own rate:
+  - the boost's vertical velocity error falls four- to sixfold, to 0.19 m/s rms at 42.6 dB-Hz;
+  - the static velocity error falls 4.5-fold, to 0.02–0.05 m/s rms per axis.
+
+### The proposed design (under discussion with the owner)
+
+| Profile | Pull-in FLL / PLL / DLL | Locked FLL / PLL / DLL | FLL block | When |
+|---|---|---|---|---|
+| quiet | 10 / 15 / 2 Hz | — / 10 / 0.25 Hz | 2 ms | pad, coast, descent |
+| boost | 10 / 50 / 2 Hz | 5 / 50 / 1 Hz | 2 ms | from the flight computer's launch arming (or launch detect) to 2 s after burnout |
+
+The P4 calls `rx_set_boost()` from the flight computer's phase. Narrowing back tapers over about
+1 s.
+
+### Results through the boost
+
+On the IQ chain: `gnssrx`, the golden correlator, the 2-bit 6.75 MS/s stream. The signal is
+stepped down from 45 to the level shown 10 s before liftoff. C/N0 is what our receiver measures.
+"Lost" is the bench's rule: no pseudorange for 0.5 s or more, from ignition to 0.5 s past burnout.
+
+| C/N0 (measured) | Hotshot, boost profile | Hotshot, quiet loops only | Traveler, boost profile | Traveler, quiet loops only |
+|---|---|---|---|---|
+| 42.6 | 0 lost; 0 of 14 lost carrier lock | 0 lost; 14 of 14 lost carrier lock | 0 lost; 0 of 14 | 0 lost; 14 of 14 |
+| 36.4 | 0 lost; 0 of 14 | 0 lost; 14 of 14 | 0 lost; 0 of 14 | 0 lost; 14 of 14 |
+| 33.4 | 0 lost; 3 of 14 | 0 lost; 14 of 14 | 0 lost; 1 of 14 | 0 lost; 14 of 14 |
+| 31.4 | 0 lost; 13 of 14 | 0 lost; 14 of 14 | 0 lost; 14 of 14 | 0 lost; 14 of 14 |
+| 29.3 | 0 lost; 14 of 14 | 0 lost; 14 of 14 | 0 lost; 14 of 14 | 0 lost; 14 of 14 |
+
+The fix never gapped more than 0.1 s.
+
+Fix errors through the hotshot burn with the boost profile:
+
+| C/N0 (measured) | Height error, max | Vertical velocity error, rms (max) |
+|---|---|---|
+| 42.6 | 3.4 m | 0.19 m/s (1.0) |
+| 36.4 | 8.3 m | 0.33 m/s (1.1) |
+| 33.4 | 9.7 m | 0.59 m/s (1.8) |
+| 31.4 | 14.5 m | — |
+| 29.3 | 21.5 m | — |
+
+`trksim` agrees, and says the same for every satellite in the sky. With the boost profile, all 14
+keep carrier phase through the traveler at 45, 40 and 35 dB-Hz, and through the hotshot at 45 and
+40. At 35 only the overhead PRN 11 (1,638 Hz/s) slips, once.
+
+**Against the bought receivers** (the rig's C/N0 boost report, the same files):
+
+| Receiver | Hotshot | Traveler |
+|---|---|---|
+| SkyTraq PX1105R (SLR mode) | 10–13 of 13 lost by T+2.8 s at every level flown | Half lost by 135–145 Hz/s at 35–38 expected dB-Hz, by 330 Hz/s at 48 |
+| u-blox NEO-M8T (airborne) | None lost before its 515 m/s cutoff (T+2.8 s) down to 18 expected dB-Hz, where it reads 29. Raw withheld after | The same |
+| Ours, boost profile | None lost through the whole burn and burnout down to 29.3 dB-Hz. Carrier phase on all 14 at ≥ 36 dB-Hz | The same |
+
+The two C/N0 scales are not the same instrument:
+- the bench quotes an "expected" level calibrated on the PX1105R;
+- ours is our own estimate on the emulated stream.
+
+The comparison that holds is in kind. Ours, like the NEO-M8T, follows every satellite on the
+bench, and it does so through the whole burn and burnout, carrier phase included.
+
+### Next: IMU feed-forward
+
+`trk_ch_t.ff_rate` takes a predicted line-of-sight Doppler rate. It drives the frequency directly,
+so the loop tracks only what the prediction misses. `trksim --aid` tests it with an IMU's typical
+faults: 5 ms late, 3 % scale error, and a 1 g bias along the line of sight. With those, the quiet
+10 Hz loops ride both boosts:
+- no slips at 45 dB-Hz, 0.3 at 40, 2.7 at 35;
+- a quarter of the boost profile's frequency noise.
+
+Feed-forward makes the wide loops unnecessary, and with them most of the boost's C/N0 cost. It
+needs two things on the P4:
+- the flight computer's acceleration and attitude, to project onto each line of sight;
+- the oscillator's g-sensitivity (milestone 7), to correct the clock.
+
+### Limits
+
+- **Static sensitivity ends near 31 dB-Hz.** Pull-in fails below about 32 dB-Hz, boost or not.
+  Weaker signals need longer coherent integration with data wipe-off and a two-stage pull-in.
+- **Real motors add what the files lack.** Vibration on the oscillator, plume, spin and antenna
+  phase are milestone 7.
 
 ## Pocket SDR as the cross-check
 

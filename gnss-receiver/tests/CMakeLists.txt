@@ -21,6 +21,7 @@ add_executable(gnss_tests
     test_eph_pvt.cpp
     test_lnav.cpp
     test_trk.cpp
+    test_trk_boost.cpp
     test_fe_emul.cpp
     test_if_plan.cpp
     test_iir.cpp

@@ -27,6 +27,8 @@ typedef struct {
     const char *dc_arg, *carrier_arg;
     double cn0, noise_sigma;
     int have_cn0, have_noise;
+    double step_t[8], step_cn0[8];  /* --cn0-at: C/N0 from file second step_t on */
+    int nsteps;
 } src_opts_t;
 
 typedef struct {
@@ -43,6 +45,8 @@ typedef struct {
     size_t ncodes, codes_cap, chead;
     double fs_out, if_out;
     int eof;
+    double step_t[8], step_sigma[8];  /* noise from file second step_t on */
+    int nsteps, next_step;
 } src_t;
 
 void src_default_opts(src_opts_t *o);

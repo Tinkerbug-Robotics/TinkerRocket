@@ -6,6 +6,7 @@
 #define TWO_POW_32 4294967296.0
 #define CODE_ONE   ((double)((uint64_t)1 << CORR_CODE_FRAC_BITS))
 #define CHIP_PER_HZ (1.023e6 / GNSS_FREQ_L1_HZ)
+#define TWO_PI     6.283185307179586476925286766559
 
 void rx_default_cfg(rx_cfg_t *c, double fs, double if_hz)
 {
@@ -18,6 +19,8 @@ void rx_default_cfg(rx_cfg_t *c, double fs, double if_hz)
     c->tap_chips = 0.25f;
     c->max_ch = CORR_MAX_CH;
     c->cmd_lead = 2;
+    c->quiet = trk_profile_quiet;
+    c->boost = trk_profile_boost;
 }
 
 void rx_init(rx_t *rx, const rx_cfg_t *cfg)
@@ -32,6 +35,7 @@ void rx_init(rx_t *rx, const rx_cfg_t *cfg)
         rx->prn_ch[p] = -1;
     }
     rx->week = -1;
+    rx->prof = cfg->quiet;
     pvt_default_opt(&rx->pvt_opt);
 }
 
@@ -66,8 +70,17 @@ static void free_channel(rx_t *rx, int ch)
     memset(&rx->nco[ch], 0, sizeof(rx->nco[ch]));
 }
 
+void rx_set_boost(rx_t *rx, int on)
+{
+    rx->boost = on != 0;
+}
+
 int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *cmds, int ncap)
 {
+    trk_profile_step(&rx->prof, rx->boost ? &rx->cfg.boost : &rx->cfg.quiet,
+                     (float)((double)(t_now - rx->t_tick) / rx->cfg.fs));
+    rx->t_tick = t_now;
+    const trk_profile_t *prof = &rx->prof;
     uint8_t touched[CORR_MAX_CH] = {0};
     for (int k = 0; k < nd; k++) {
         int ch = d[k].ch;
@@ -86,6 +99,10 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
         float T = (float)((double)(x.t_samp - t_prev) / rx->cfg.fs);
         /* Carrier phase relative to the IF, exact: words in force times samples. */
         n->adr_fx += (int64_t)(x.t_samp - t_prev) * (int64_t)(x.carr_word - rx->if_word);
+        n->hist_adr[n->hist_head] = n->adr_fx;
+        n->hist_t[n->hist_head] = x.t_samp;
+        n->hist_head = (n->hist_head + 1) % RX_DOP_DUMPS;
+        n->hist_n += n->hist_n < RX_DOP_DUMPS;
         n->last_t = x.t_samp;
         n->last_code_phase = x.code_phase;
         n->last_carr_phase = x.carr_phase;
@@ -109,7 +126,7 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
         }
         int bit;
         uint32_t bit_period;
-        if (trk_update(c, &x, T, &bit, &bit_period)) {
+        if (trk_update(c, prof, &x, T, &bit, &bit_period)) {
             if (lnav_push(&rx->nav[ch], bit, bit_period)) {
                 take_nav(rx, &rx->nav[ch]);
             }
@@ -267,7 +284,9 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
         const trk_ch_t *c = &rx->ch[ch];
         const rx_nco_t *n = &rx->nco[ch];
         const lnav_t *l = &rx->nav[ch];
-        if (c->state != TRK_LOCKED || !l->synced || !n->have_dump || !rx->eph[c->prn].valid) {
+        /* A channel the PLL has let go of still measures: its code and frequency hold under the
+         * FLL. Only its carrier phase is void, and lock_s = 0 says so. */
+        if (c->state == TRK_OFF || !l->synced || !n->have_dump || !rx->eph[c->prn].valid) {
             continue;
         }
         /* The period opened by the last dump is c->period + 1; whole periods since the subframe began. */
@@ -283,11 +302,20 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
         o->ch = ch;
         o->t_sv = tt;
         o->dop = (double)(n->cur_carr - rx->if_word) * rx->cfg.fs / TWO_POW_32;
+        if (n->hist_n == RX_DOP_DUMPS) {
+            /* The oldest epoch in the history is where the ring's head points. */
+            const int64_t a0 = n->hist_adr[n->hist_head];
+            const uint64_t t0 = n->hist_t[n->hist_head];
+            const double span = (double)(t - t0) / rx->cfg.fs;
+            if (span > 0.0) {
+                o->dop = (double)(adr_fx - a0) / TWO_POW_32 / span + (double)c->x1 / TWO_PI * 0.5 * span;
+            }
+        }
         /* RINEX phase grows with range: the negative of the NCO's accumulated Doppler phase; the
          * Costas half cycle is resolved by the preamble's polarity. */
         o->adr = -(double)adr_fx / TWO_POW_32 + (l->inverted ? 0.5 : 0.0);
         o->cn0 = c->cn0;
-        o->lock_s = c->t_state;
+        o->lock_s = c->state == TRK_LOCKED ? c->t_state : 0.0f;
         o->half_cycle = 1;
         t_tx[no] = tt;
         no++;

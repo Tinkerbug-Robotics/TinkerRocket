@@ -27,6 +27,7 @@ void src_usage(void)
             "  --fs-out HZ                 direct mode's output rate (default 6.75e6)\n"
             "  --if HZ                     where L1 sits (default: the plan's, fe_format.h)\n"
             "  --cn0 DBHZ | --noise-sigma X  added noise (C/N0 needs the manifest's sig_power)\n"
+            "  --cn0-at S:DBHZ             C/N0 from file second S on (repeatable, with --cn0)\n"
             "  --seed N --if-order N --if-bw HZ --mag-density D --decim subsample|sum4\n"
             "  --dc auto|none|I,Q --carrier-fix HZ --fs HZ --fc HZ --manifest PATH\n");
 }
@@ -76,6 +77,12 @@ int src_parse_opt(src_opts_t *o, int argc, char **argv, int *i)
     } else if (!strcmp(a, "--cn0")) {
         o->cn0 = atof(VAL());
         o->have_cn0 = 1;
+    } else if (!strcmp(a, "--cn0-at")) {
+        const char *v2 = VAL();
+        if (!v2 || o->nsteps >= 8 || sscanf(v2, "%lf:%lf", &o->step_t[o->nsteps], &o->step_cn0[o->nsteps]) != 2) {
+            return -1;
+        }
+        o->nsteps++;
     } else if (!strcmp(a, "--noise-sigma")) {
         o->noise_sigma = atof(VAL());
         o->have_noise = 1;
@@ -179,8 +186,21 @@ int src_open(src_t *s, src_opts_t *o)
             fprintf(stderr, "source: the file is already below %.1f dB-Hz\n", o->cn0);
             return -1;
         }
+        for (int k = 0; k < o->nsteps; k++) {
+            s->step_t[k] = o->step_t[k];
+            s->step_sigma[k] = fe_sigma_for_cn0(o->step_cn0[k], s->meta.sig_power, s->meta.noise_density, fs_add);
+            if (s->step_sigma[k] < 0.0) {
+                fprintf(stderr, "source: the file is already below %.1f dB-Hz\n", o->step_cn0[k]);
+                return -1;
+            }
+        }
+        s->nsteps = o->nsteps;
     } else if (o->have_noise) {
         c->noise_sigma = o->noise_sigma;
+    }
+    if (o->nsteps > 0 && !o->have_cn0) {
+        fprintf(stderr, "source: --cn0-at needs --cn0\n");
+        return -1;
     }
     if (c->mode != FE_MODE_NATIVE && c->if_order > 0) {
         double rate = (c->mode == FE_MODE_ADC27) ? FE_FS_ADC_HZ : c->fs_out;
@@ -234,6 +254,9 @@ static int refill(src_t *s)
     }
     if (grow((void **)&s->in, &s->in_cap, 2 * blk, sizeof(float)) != 0) {
         return 0;
+    }
+    while (s->next_step < s->nsteps && (double)s->f.pos / s->f.fs >= s->step_t[s->next_step]) {
+        s->fe.cfg.noise_sigma = s->step_sigma[s->next_step++];  /* --cn0-at: a new level from here */
     }
     size_t got = iqf_read(&s->f, s->in, blk);
     if (got == 0) {

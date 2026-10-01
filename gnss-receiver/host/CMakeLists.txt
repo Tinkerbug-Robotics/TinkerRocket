@@ -28,3 +28,8 @@ target_compile_options(gnssrx PRIVATE ${GNSS_C_WARNINGS})
 add_executable(vecreplay vecreplay.c)
 target_link_libraries(vecreplay PRIVATE gnss_host)
 target_compile_options(vecreplay PRIVATE ${GNSS_C_WARNINGS})
+
+# Loop design on synthetic dumps: one tracking channel against a satellite's true Doppler.
+add_executable(trksim trksim.c)
+target_link_libraries(trksim PRIVATE gnss_host)
+target_compile_options(trksim PRIVATE ${GNSS_C_WARNINGS})

@@ -55,7 +55,7 @@ TEST(Trk, PullsInLocksAndReadsTheBits)
             }
             int bit;
             uint32_t bp;
-            if (trk_update(&c, &d[k], T, &bit, &bp)) {
+            if (trk_update(&c, &trk_profile_quiet, &d[k], T, &bit, &bp)) {
                 if (nbits > 0 && bit != prev_bit) {
                     alternations++;
                 }

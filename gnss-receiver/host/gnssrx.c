@@ -16,6 +16,7 @@
 #include "corr_model.h"
 #include "fe_format.h"
 #include "gnss/rx.h"
+#include "loops_arg.h"
 #include "source.h"
 
 #include <errno.h>
@@ -54,7 +55,11 @@ static void usage(void)
             "  --acq-threshold M         acquisition detection threshold\n"
             "  --iono A0,A1,A2,A3,B0,B1,B2,B3   preload Klobuchar parameters (default: the manifest's)\n"
             "  --no-iono --no-tropo      leave the atmosphere uncorrected\n"
-            "  --truth static:LAT,LON,H  truth for the error statistics (default: the manifest's)\n");
+            "  --truth static:LAT,LON,H  truth for the error statistics (default: the manifest's)\n"
+            "  --loops-quiet SPEC --loops-boost SPEC   tracking loop profiles, PF,PP,PD/LF,LP,LD[:MS]:\n"
+            "                            pull-in / locked FLL,PLL,DLL bandwidths (Hz), FLL block (ms)\n"
+            "  --boost-at S0,S1          the boost profile from file second S0 to S1, as the flight\n"
+            "                            computer would call it (default: never)\n");
     src_usage();
 }
 
@@ -153,6 +158,8 @@ int main(int argc, char **argv)
     int no_iono = 0, no_tropo = 0, lut_bits = 0;
     gps_iono_t iono_aid;
     memset(&iono_aid, 0, sizeof(iono_aid));
+    const char *loops_quiet = NULL, *loops_boost = NULL;
+    double boost0 = INFINITY, boost1 = -INFINITY;
     for (int i = 1; i < argc; i++) {
         int r = src_parse_opt(&so, argc, argv, &i);
         if (r == 1) {
@@ -187,6 +194,15 @@ int main(int argc, char **argv)
             no_tropo = 1;
         } else if (!strcmp(a, "--truth") && v) {
             truth_arg = argv[++i];
+        } else if (!strcmp(a, "--loops-quiet") && v) {
+            loops_quiet = argv[++i];
+        } else if (!strcmp(a, "--loops-boost") && v) {
+            loops_boost = argv[++i];
+        } else if (!strcmp(a, "--boost-at") && v) {
+            if (sscanf(argv[++i], "%lf,%lf", &boost0, &boost1) != 2) {
+                fprintf(stderr, "gnssrx: --boost-at takes S0,S1\n");
+                return 2;
+            }
         } else if (!strcmp(a, "--iono") && v) {
             double *al = iono_aid.alpha, *be = iono_aid.beta;
             if (sscanf(argv[++i], "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf", &al[0], &al[1], &al[2], &al[3], &be[0], &be[1],
@@ -279,6 +295,11 @@ int main(int argc, char **argv)
     if (acq_thr > 0.0f) {
         rc.acq_threshold = acq_thr;
     }
+    if ((loops_quiet && loops_arg_parse(loops_quiet, &rc.quiet) != 0) ||
+        (loops_boost && loops_arg_parse(loops_boost, &rc.boost) != 0)) {
+        fprintf(stderr, "gnssrx: a loop profile is PF,PP,PD/LF,LP,LD[:MS]\n");
+        return 2;
+    }
     rx_init(rx, &rc);
     /* The generator's own ionosphere and troposphere, from the manifest (page 18 repeats only every
      * 12.5 min, so short files never deliver it); the options override. */
@@ -329,6 +350,30 @@ int main(int argc, char **argv)
         printf(")");
     }
     printf(" -> %s\n", out_dir);
+    FILE *fini = open_csv(out_dir, "run.ini", NULL);
+    if (fini) {
+        /* What made this run, for the analysis scripts (py/boost_track.py) and for the record. */
+        char q[96], b[96];
+        loops_arg_format(&rc.quiet, q, sizeof(q));
+        loops_arg_format(&rc.boost, b, sizeof(b));
+        fprintf(fini, "[run]\nsource = %s\nstart_s = %.6f\ndur_s = %.6f\nfs = %.3f\nif_hz = %.3f\nmode = %s\n"
+                      "corr = %s\n",
+                src.path, so.start_s, so.dur_s, fs, src.if_out,
+                so.fe.mode == FE_MODE_ADC27 ? "adc27" : (so.fe.mode == FE_MODE_NATIVE ? "native" : "direct"),
+                bank.golden ? "golden" : "float");
+        if (so.have_cn0) {
+            fprintf(fini, "cn0 = %.2f\n", so.cn0);
+        }
+        for (int k = 0; k < so.nsteps; k++) {
+            fprintf(fini, "cn0_at = %.3f:%.2f\n", so.step_t[k], so.step_cn0[k]);
+        }
+        fprintf(fini, "p4_latency_us = %.1f\ncmd_lead = %u\nloops_quiet = %s\nloops_boost = %s\n", p4_latency_us,
+                rc.cmd_lead, q, b);
+        if (boost0 < boost1) {
+            fprintf(fini, "boost_at = %.3f,%.3f\n", boost0, boost1);
+        }
+        fclose(fini);
+    }
 
     corr_dump_t dumps[MAX_DUMPS];
     corr_cmd_t cmds[MAX_CMDS], held[2 * MAX_CMDS];
@@ -389,6 +434,8 @@ int main(int argc, char **argv)
             vec_dumps(&bank, dumps, nd);
         }
         uint64_t t_now = t0 + spms;
+        const double t_file = so.start_s + (double)t_now / fs;
+        rx_set_boost(rx, t_file >= boost0 && t_file < boost1);
         int nc = rx_tick(rx, t_now, dumps, nd, cmds, MAX_CMDS);
         for (int k = 0; k < nc && nheld < 2 * MAX_CMDS; k++) {
             held[nheld++] = cmds[k];
