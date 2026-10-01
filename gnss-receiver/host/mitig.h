@@ -25,7 +25,8 @@ extern "C" {
 typedef enum {
     MIT_NONE = 0,
     MIT_ANF = 1,
-    MIT_FDE = 2
+    MIT_FDE = 2,
+    MIT_ANFQ = 3    /* the notch in fixed point, as the FPGA would run it (a word-length study) */
 } mit_type_t;
 
 #define MIT_MAX_NOTCH 4
@@ -39,12 +40,17 @@ typedef struct {
     double fde_k;         /* FDE: threshold over the median bin power */
     double fde_tau_s;     /* FDE: bin power averaging */
     double mag_density;   /* the requantizer's AGC target */
+    /* ANFQ: k = 1 - 2^-q_k, step 2^-q_m normalized by the power's leading bit, z in Q1.q_fz at
+     * the multiplier (accumulated with q_g guard bits more), the pole state with q_fa fraction
+     * bits saturating at 2^q_ia. */
+    int q_k, q_m, q_fz, q_fa, q_ia, q_g;
 } mit_cfg_t;
 
 typedef struct {
     double zr, zi;        /* the zero */
     double ar, ai;        /* the pole section's last output */
     double p;             /* its power, averaged */
+    int64_t qzr, qzi, qar, qai, qp;  /* ANFQ: the same in fixed point */
 } mit_notch_t;
 
 typedef struct {
@@ -67,7 +73,8 @@ typedef struct {
 
 void mit_cfg_default(mit_cfg_t *c);
 
-/* "none", "anf[:N[:K[:MU]]]" or "fde[:N[:K[:TAU_S]]]"; 0 on success. */
+/* "none", "anf[:N[:K[:MU]]]", "fde[:N[:K[:TAU_S]]]" or "anfq[:N[:QK[:QM[:QFZ[:QFA[:QIA[:QG]]]]]]]";
+ * 0 on success. */
 int mit_parse(const char *s, mit_cfg_t *c);
 
 int mit_init(mit_t *m, const mit_cfg_t *c, double fs);

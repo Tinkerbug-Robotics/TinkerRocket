@@ -748,7 +748,7 @@ int main(int argc, char **argv)
                     j->f_hz, j->jnr_db, j->bw_hz, j->period_s, so.fe.jam_t0_s);
         }
         if (so.fe.mit.type != MIT_NONE) {
-            fprintf(fini, "mitig = %s,%d,%g,%g,%d,%g,%g\n", so.fe.mit.type == MIT_ANF ? "anf" : "fde", so.fe.mit.n_notch,
+            fprintf(fini, "mitig = %s,%d,%g,%g,%d,%g,%g\n", so.fe.mit.type == MIT_ANF ? "anf" : (so.fe.mit.type == MIT_ANFQ ? "anfq" : "fde"), so.fe.mit.n_notch,
                     so.fe.mit.anf_k, so.fe.mit.anf_mu, so.fe.mit.fde_n, so.fe.mit.fde_k, so.fe.mit.fde_tau_s);
         }
         fclose(fini);

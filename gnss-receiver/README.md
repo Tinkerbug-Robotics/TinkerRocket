@@ -544,6 +544,22 @@ manages about 80 Hz/s. `TrkBoost.ImuAidingCarriesTheBurnout` shows all three cas
 |---|---|---|---|---|
 | aided boost | 10 / 20 / 2 Hz | — / 20 / 0.5 Hz | 2 ms | with the IMU: from T−5 s to 2 s after burnout |
 
+**What aiding buys, in short.** The 40 runs were repeated on 2026-10-01 with today's receiver
+(`runs/aid`). They reproduce the tables below, except one cell, now updated.
+- **Sensitivity:** carrier on every satellite through both burns down to 31.4 dB-Hz. Without
+  aiding, the 50 Hz boost loops manage that only to 36.4 (hotshot) and 33.4 (traveler): aiding is
+  worth 5 and 2 dB. At 31.4 dB-Hz the unaided loops keep 5 and 4 satellites of 14.
+- **Vertical velocity:** three times better from 42.6 to 33.4 dB-Hz, four to five times at 31.4,
+  eleven at 29.3.
+- **Height:** at 31.4 dB-Hz the worst error halves on the hotshot (2.6 → 1.2 m) and falls fivefold
+  on the traveler (6.0 → 1.2 m).
+- **Narrow loops need both:** the quiet loops without aiding lose carrier on every satellite at
+  every level, and aiding alone doesn't rescue them; the IMU's residual needs 20 Hz loops.
+- **Figures** (`runs/aid/fig`):
+  - `aid_summary.png`: satellites kept, velocity, height and unlocked time, against C/N0;
+  - `aid_velocity_35.png`: the velocity error through each burn at 33.4 dB-Hz;
+  - `rates_hotshot.png` and `rates_traveler.png`: per satellite.
+
 **Results through the boost** (`runs/m7c`; figures from `py/boost_plots.py`). The set-up is the
 one above: the IQ chain, the signal stepped down 10 s before liftoff, C/N0 as our receiver measures
 it. Each cell gives the satellites (of 14) whose PLL let go between ignition and 2.5 s past
@@ -557,7 +573,7 @@ Hotshot:
 | 36.4 | 14 (39 s) | 0 | 3 (1.2 s) | 0 |
 | 33.4 | 14 (53 s) | 2 (0.7 s) | 5 (9.8 s) | 0 |
 | 31.4 | 14 (68 s) | 9 (6.0 s) | 8 (11 s) | 0 |
-| 29.3 | 14 (77 s) | 14 (45 s) | 9 (22 s) | 7 (9.4 s) |
+| 29.3 | 14 (77 s) | 14 (45 s) | 10 (24 s) | 7 (9.4 s) |
 
 Traveler:
 
@@ -946,6 +962,17 @@ thresholds, and the weak signal crosses them less often. No stage after the ADC 
   - 150–200 kbit of block RAM: frames, twiddles, overlap and averaged bin powers, with a running
     threshold in place of a median;
   - 3–5k LUTs.
+
+**In fixed point** (`--mitig anfq`; formats approved by the owner, 2026-10-01):
+- the pole factor 1 − 2⁻⁷ and the step 2⁻¹⁰ are shifts;
+- the step is normalized by the leading bit of the pole state's power (no divider);
+- the zero is accumulated in Q1.28 and multiplied as Q1.16, so it fits the ECP5's 18×18
+  multipliers. The 12 guard bits matter: without them, updates under one bit of z were lost and
+  the notch stalled against strong tones;
+- the pole state is 16 bits (11.4), saturating.
+
+In the receiver it matches the float notch: C/N0 within 0.05 dB and the same locks, from no tone
+to 25 dB JNR after lock. The bit-exact model and its test vectors follow.
 
 **The interference flag** is the stage's power in over power out.
 - With no interferer, either stage takes out 0.02 dB. The notch's own depth can't serve as the

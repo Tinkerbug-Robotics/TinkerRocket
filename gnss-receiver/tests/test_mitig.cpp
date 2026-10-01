@@ -130,6 +130,36 @@ TEST(Mitig, NotchFindsTheToneAndTakesItOut)
     mit_free(&m);
 }
 
+TEST(Mitig, FixedPointNotchMatchesTheFloatOne)
+{
+    // The word-length study's candidate: the tone found and taken out within 3 dB of the float
+    // notch's depth (in the receiver the two give the same C/N0 to 0.05 dB through 25 dB JNR).
+    const double fs = 6.75e6, f = -412.5e3;
+    const size_t n = 1u << 18;
+    for (const double jnr : {0.0, 10.0, 30.0}) {
+        const auto in = two_bit(fs, f, jnr, n);
+        double depth[2], fz[2];
+        for (int q = 0; q < 2; q++) {
+            mit_cfg_t c;
+            ASSERT_EQ(mit_parse(q ? "anfq" : "anf", &c), 0);
+            mit_t m;
+            ASSERT_EQ(mit_init(&m, &c, fs), 0);
+            std::vector<uint8_t> out(n);
+            mit_apply(&m, in.data(), out.data(), n);
+            fz[q] = q ? std::atan2((double)m.notch[0].qzi, (double)m.notch[0].qzr) / (2.0 * M_PI) * fs
+                      : std::atan2(m.notch[0].zi, m.notch[0].zr) / (2.0 * M_PI) * fs;
+            const auto wi = weights(in), wo = weights(out);
+            depth[q] = 10.0 * std::log10((tone_power(wo, n / 4, f, fs) / mean_power(wo)) /
+                                         (tone_power(wi, n / 4, f, fs) / mean_power(wi)));
+            mit_free(&m);
+        }
+        EXPECT_NEAR(fz[1], f, 500.0) << jnr;
+        EXPECT_LT(depth[1], -20.0) << jnr;
+        EXPECT_LT(depth[1], depth[0] + 3.0) << "fixed point " << depth[1] << " dB against float " << depth[0] << " at "
+                                            << jnr;
+    }
+}
+
 TEST(Mitig, ExcisionTakesTheToneOutAndLeavesNoiseAlone)
 {
     const double fs = 6.75e6, f = 300e3;

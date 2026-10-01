@@ -23,16 +23,50 @@ void mit_cfg_default(mit_cfg_t *c)
     c->fde_k = 8.0;
     c->fde_tau_s = 0.05;
     c->mag_density = 0.33;
+    c->q_k = 7;
+    c->q_m = 10;
+    c->q_fz = 16;
+    c->q_fa = 4;
+    c->q_ia = 11;
+    c->q_g = 12;
 }
 
 int mit_parse(const char *s, mit_cfg_t *c)
 {
     mit_cfg_default(c);
     char t[8];
-    double a = 0.0, b = 0.0, d = 0.0;
-    const int n = sscanf(s, "%7[a-z]:%lf:%lf:%lf", t, &a, &b, &d);
+    double a = 0.0, b = 0.0, d = 0.0, e = 0.0, f = 0.0, g = 0.0, h = 0.0;
+    const int n = sscanf(s, "%7[a-z]:%lf:%lf:%lf:%lf:%lf:%lf:%lf", t, &a, &b, &d, &e, &f, &g, &h);
     if (n < 1) {
         return -1;
+    }
+    if (!strcmp(t, "anfq")) {
+        c->type = MIT_ANFQ;
+        if (n >= 2) {
+            c->n_notch = (int)a;
+        }
+        if (n >= 3) {
+            c->q_k = (int)b;
+        }
+        if (n >= 4) {
+            c->q_m = (int)d;
+        }
+        if (n >= 5) {
+            c->q_fz = (int)e;
+        }
+        if (n >= 6) {
+            c->q_fa = (int)f;
+        }
+        if (n >= 7) {
+            c->q_ia = (int)g;
+        }
+        if (n >= 8) {
+            c->q_g = (int)h;
+        }
+        return c->n_notch < 1 || c->n_notch > MIT_MAX_NOTCH || c->q_k < 2 || c->q_k > 12 || c->q_fz < 8 ||
+                       c->q_fz > 24 || c->q_fa < 0 || c->q_fa > 12 || c->q_ia < 6 || c->q_ia > 16
+                   ? -1
+                   : 0;
     }
     if (!strcmp(t, "none")) {
         c->type = MIT_NONE;
@@ -182,6 +216,71 @@ static void fde_frame(mit_t *m)
     memset(m->ola + 2 * (n - hop), 0, 2 * hop * sizeof(float));
 }
 
+/* Arithmetic shift right by s with rounding (s >= 0), or left. */
+static inline int64_t q_shr(int64_t x, int s)
+{
+    if (s <= 0) {
+        return x * ((int64_t)1 << -s);
+    }
+    return (x + ((int64_t)1 << (s - 1))) >> s;
+}
+
+static inline int64_t q_sat(int64_t x, int64_t lim)
+{
+    return x > lim ? lim : (x < -lim ? -lim : x);
+}
+
+static inline int q_msb(uint64_t x)
+{
+    int b = -1;
+    while (x) {
+        x >>= 1;
+        b++;
+    }
+    return b;
+}
+
+/*
+ * One sample through a fixed-point notch: x (the sample weight, integer) in, y out with q_fa
+ * fraction bits. Integers throughout; every product fits an 18 x 18 multiplier for the default
+ * widths (z: 1 + 1 + 16 bits; the pole state: 1 + 11 + 4).
+ *   pole:  p = z ar[-1] (>> fz);  ar = x << fa + p - (p >> k);  y = ar - p
+ *   zero:  z += y conj(ar[-1]) >> (m + msb(P) - fz), P the pole state's power, leaky (2^-8)
+ *   |z| held under 1 + 2^-(k+1), so k |z| < 1 and the pole stays inside the circle
+ */
+static void anfq_step(const mit_cfg_t *c, mit_notch_t *a, int64_t *xr, int64_t *xi, int in_frac)
+{
+    const int fz = c->q_fz, fa = c->q_fa, g = c->q_g;
+    const int64_t lim = ((int64_t)1 << (c->q_ia + fa)) - 1;
+    const int64_t zr = q_shr(a->qzr, g), zi = q_shr(a->qzi, g);  /* the multiplier's z: Q1.fz */
+    const int64_t pr = q_shr(zr * a->qar - zi * a->qai, fz);
+    const int64_t pi = q_shr(zr * a->qai + zi * a->qar, fz);
+    const int64_t xin_r = q_shr(*xr, in_frac - fa), xin_i = q_shr(*xi, in_frac - fa);
+    const int64_t ar = q_sat(xin_r + pr - q_shr(pr, c->q_k), lim);
+    const int64_t ai = q_sat(xin_i + pi - q_shr(pi, c->q_k), lim);
+    const int64_t yr = q_sat(ar - pr, lim), yi = q_sat(ai - pi, lim);
+    /* The pole state's power (2 fa fraction bits), leaky, for the step's normalization. */
+    const int64_t pw = a->qar * a->qar + a->qai * a->qai;
+    a->qp += q_shr(pw - a->qp, 8);
+    if (a->qp < 1) {
+        a->qp = 1;
+    }
+    const int sh = c->q_m + q_msb((uint64_t)a->qp) - fz - g;
+    a->qzr += q_shr(yr * a->qar + yi * a->qai, sh);
+    a->qzi += q_shr(yi * a->qar - yr * a->qai, sh);
+    /* Hold |z| under 1 + 2^-(k+1): shrink it by 2^-8 when over (tested on the multiplier's z). */
+    const int64_t one = (int64_t)1 << fz, m2 = zr * zr + zi * zi;
+    const int64_t cap = one + (one >> (c->q_k + 1));
+    if (m2 > cap * cap) {
+        a->qzr -= q_shr(a->qzr, 8);
+        a->qzi -= q_shr(a->qzi, 8);
+    }
+    a->qar = ar;
+    a->qai = ai;
+    *xr = yr;
+    *xi = yi;
+}
+
 void mit_apply(mit_t *m, const uint8_t *in, uint8_t *out, size_t n)
 {
     if (m->cfg.type == MIT_NONE) {
@@ -204,7 +303,17 @@ void mit_apply(mit_t *m, const uint8_t *in, uint8_t *out, size_t n)
         const double xq0 = (c & FE_CODE_Q_MAG) ? FE_WEIGHT_LARGE : FE_WEIGHT_SMALL;
         double xr = (c & FE_CODE_I_SIGN) ? -xi0 : xi0, xi = (c & FE_CODE_Q_SIGN) ? -xq0 : xq0;
         m->pin += xr * xr + xi * xi;
-        if (m->cfg.type == MIT_ANF) {
+        if (m->cfg.type == MIT_ANFQ) {
+            int64_t qr = (int64_t)xr, qi = (int64_t)xi;
+            int frac = 0;
+            for (int s2 = 0; s2 < m->cfg.n_notch; s2++) {
+                anfq_step(&m->cfg, &m->notch[s2], &qr, &qi, frac);
+                frac = m->cfg.q_fa;
+            }
+            const double sc = 1.0 / (double)((int64_t)1 << m->cfg.q_fa);
+            m->y[2 * k] = (float)((double)qr * sc);
+            m->y[2 * k + 1] = (float)((double)qi * sc);
+        } else if (m->cfg.type == MIT_ANF) {
             for (int s = 0; s < m->cfg.n_notch; s++) {
                 mit_notch_t *a = &m->notch[s];
                 /* Pole section, then the zero: y = x_ar - z x_ar[-1], x_ar = x + k z x_ar[-1]. */
@@ -268,6 +377,16 @@ void mit_report(const mit_t *m, char *buf, size_t len)
             const mit_notch_t *a = &m->notch[s];
             w += snprintf(buf + w, len - (size_t)w, " notch %d at %+.1f kHz, |z| %.3f;", s,
                           atan2(a->zi, a->zr) / TWO_PI * m->fs / 1e3, sqrt(a->zr * a->zr + a->zi * a->zi));
+        }
+    } else if (m->cfg.type == MIT_ANFQ) {
+        int w = snprintf(buf, len, "ANFQ k 1-2^-%d step 2^-%d z Q1.%d state %d.%d:", m->cfg.q_k, m->cfg.q_m, m->cfg.q_fz,
+                         m->cfg.q_ia, m->cfg.q_fa);
+        for (int s = 0; s < m->cfg.n_notch && w > 0 && (size_t)w < len; s++) {
+            const mit_notch_t *a = &m->notch[s];
+            const double zr = (double)a->qzr, zi = (double)a->qzi;
+            w += snprintf(buf + w, len - (size_t)w, " notch %d at %+.1f kHz, |z| %.3f;", s,
+                          atan2(zi, zr) / TWO_PI * m->fs / 1e3,
+                          sqrt(zr * zr + zi * zi) / (double)((int64_t)1 << (m->cfg.q_fz + m->cfg.q_g)));
         }
     } else if (m->cfg.type == MIT_FDE) {
         snprintf(buf, len, "FDE %d points (%.2f kHz bins), k %g, tau %g s: %.2f bins excised per frame", m->cfg.fde_n,
