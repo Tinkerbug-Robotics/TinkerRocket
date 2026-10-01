@@ -120,8 +120,8 @@ How each stage works:
   - Doppler is the NCO's mean frequency over the last 20 ms, moved forward by the loop's rate.
   - Pseudoranges are carrier-smoothed (Hatch, 100 s, `rx_cfg_t.hatch_s`) while the PLL holds,
     and restart when it lets go.
-  - PVT is least squares with Sagnac, Klobuchar and Saastamoinen corrections, plus Doppler
-    velocity.
+  - PVT is weighted least squares with Sagnac, Klobuchar and Saastamoinen corrections, plus
+    Doppler velocity. It tests its own residuals; see [The fix's weights and residual test](#the-fixs-weights-and-residual-test).
 
 Results, 2026-09-30, on the 2-bit 6.75 MS/s stream, before carrier smoothing:
 
@@ -150,6 +150,71 @@ Known limits:
 - **The 4.5 detection threshold is set for 10 ms snapshots at ~40 dB-Hz.** Weaker signals need
   longer snapshots.
 - **Speed:** one core, about 1.9× real time with 13 channels.
+
+### The fix's weights and residual test
+
+Each measurement carries a 1-sigma, and the fix weighs it by 1/σ²:
+- **Pseudorange** (`pvt_sigma_pr`): a 0.2 m floor, plus the code's thermal noise from C/N0. That
+  is 0.6 m at 40 dB-Hz on one epoch, and it climbs faster below 32 dB-Hz as the squaring loss sets
+  in. Carrier smoothing averages it down over the smoothing's age; the code noise decorrelates in
+  about 2 s.
+- **Range rate** (`pvt_sigma_dop`): 0.06 m/s at 43 dB-Hz behind a 10 Hz PLL, scaling with the
+  carrier's phase noise. It grows as (bandwidth / 10 Hz)^0.75 for wider loops, because their rate
+  state feeds the observable's lag correction. Measured on the pad, 20 Hz loops are 1.2–1.3 times
+  noisier and 50 Hz loops 3.1–3.6 times. It is five times larger for a channel whose PLL is
+  pulling in, since its Doppler is the FLL's.
+- **Each satellite's own spread** (`rx_cfg_t.adapt_tau_s`, 30 s). The receiver low-passes each
+  satellite's squared normalized residual. Where that runs above 1, the satellite's sigma grows
+  with it, up to five times. A satellite worse than its C/N0 suggests then counts for less, instead
+  of being left out one epoch and back in the next. The case in point is E19 on the SignalSim
+  static files: its code wanders with the sample phase.
+
+The model comes from the residuals of the boost runs on the pad, set a little on the safe side:
+
+| Pseudorange | Measured rms |
+|---|---|
+| Raw, 33 dB-Hz | 1.1 m |
+| Raw, 31 dB-Hz | 2.4 m |
+| Raw, 29 dB-Hz | 4.9 m |
+| Smoothed 10–40 s | 0.3–0.7 m |
+| Smoothed over 40 s | 0.12–0.28 m |
+
+The test is a chi-square on the weighted residuals, at a false-alarm probability of 10⁻⁴ per
+epoch (`pvt_opt_t.raim_pfa`):
+- When it fails, the measurement with the largest normalized residual is left out and the fix
+  solved again, up to twice.
+- A fix that still fails is withheld: `pvt_solve` returns −2, and the receiver keeps its last good
+  fix for aiding.
+- The velocity is tested the same way. A failure there leaves the position standing, with
+  `vel_valid` = 0.
+
+`pvt.csv` records `nexcl`, `chi2`, `chi2_lim` and `vel_valid` per fix. `obs.csv` records `excl`
+(bit 0 the range, bit 1 the Doppler).
+
+On the static files, the same code with each layer added in turn (sd E / N / U; mean in brackets):
+
+| Fix | GPS + Galileo, 240 s | GPS + Galileo + BeiDou, 90 s |
+|---|---|---|
+| Unweighted, no test (before) | 0.22 / 0.05 / 0.19 m (U −0.23) | 0.18 / 0.10 / 0.19 m (U +0.20) |
+| Weighted by C/N0 and smoothing age | 0.17 / 0.05 / 0.15 m | 0.13 / 0.10 / 0.16 m |
+| + the residual test | 0.11 / 0.04 / 0.15 m; E19 left out in 719 of 2039 fixes | 0.10 / 0.08 / 0.17 m; 70 of 539 |
+| + each satellite's own spread (the default) | **0.06 / 0.07 / 0.11 m (U −0.08)**; nothing left out | **0.09 / 0.07 / 0.10 m (U +0.03)**; 1 fix |
+
+`--no-raim`, `--pvt-unweighted` and `--pvt-adapt-tau 0` turn the layers off for comparisons.
+
+Through the boosts (`runs/m7c`, `runs/m7g`; 54 runs, compared with the same runs unweighted):
+- **No false alarms on the pad** in any configuration at 31.4 dB-Hz and above. At 29 dB-Hz, only
+  the configurations past their limit flag anything: the 50 Hz loops (4 fixes with a measurement
+  left out) and the quiet loops (1 velocity).
+- **The runaway is caught.** With quiet loops and no aiding, every channel's NCO ran away
+  together after the hotshot's burnout (`Q_hot_38`). Unweighted, the fix climbed 97 m in 0.6 s
+  while its residuals reached only 33 m rms. Now the worst height error is 12 m, the vertical
+  velocity 1.2 m/s rms (from 58), and the epochs that can't be mended are withheld.
+- **Weak satellites stop moving the fix.** On SignalSim, one weak Galileo satellite's 7.5 m code
+  error moved the aided fix 2.9 m. Now the worst height error through the burn is 0.3 m.
+- **Velocity at the edge.** IMU + 20 Hz loops at 29.3 dB-Hz: 0.80 → 0.42 m/s rms (hotshot) and
+  0.79 → 0.39 (traveler). The 50 Hz fallback at 31.4 dB-Hz: 2.2 → 1.5 and 1.8 → 1.2 m/s.
+- At 33.4 dB-Hz and above, the aided runs were already clean, and they stay the same.
 
 ## The FPGA correlator model (milestone 4)
 
@@ -403,9 +468,9 @@ Hotshot:
 |---|---|---|---|---|
 | 42.6 | 14 (27 s) | 0 | 3 (1.0 s) | 0 |
 | 36.4 | 14 (39 s) | 0 | 3 (1.2 s) | 0 |
-| 33.4 | 14 (53 s) | 2 (0.7 s) | 5 (8.9 s) | 0 |
-| 31.4 | 14 (68 s) | 9 (6.0 s) | 8 (17 s) | 0 |
-| 29.3 | 14 (77 s) | 14 (45 s) | 10 (23 s) | 6 (8.6 s) |
+| 33.4 | 14 (53 s) | 2 (0.7 s) | 5 (9.8 s) | 0 |
+| 31.4 | 14 (68 s) | 9 (6.0 s) | 8 (11 s) | 0 |
+| 29.3 | 14 (77 s) | 14 (45 s) | 9 (22 s) | 7 (9.4 s) |
 
 Traveler:
 
@@ -414,22 +479,24 @@ Traveler:
 | 42.6 | 14 (13 s) | 0 | 0 | 0 |
 | 36.4 | 14 (20 s) | 0 | 0 | 0 |
 | 33.4 | 14 (42 s) | 0 | 2 (3.2 s) | 0 |
-| 31.4 | 14 (46 s) | 10 (9.8 s) | 2 (3.7 s) | 0 |
-| 29.3 | 14 (180 s) | 14 (121 s) | 6 (12 s) | 5 (13 s) |
+| 31.4 | 14 (46 s) | 10 (9.8 s) | 2 (3.5 s) | 0 |
+| 29.3 | 14 (180 s) | 14 (121 s) | 6 (12 s) | 7 (19 s) |
 
 The fix through the same window, 50 Hz boost loops against IMU + 20 Hz loops:
 
 | C/N0 (measured) | Hotshot: vertical velocity rms (max), m/s | Hotshot: height error max | Traveler: vertical velocity rms (max) | Traveler: height error max |
 |---|---|---|---|---|
-| 42.6 | 0.22 (1.0) → 0.07 (0.21) | 0.6 → 0.7 m | 0.21 (0.59) → 0.08 (0.23) | 0.5 → 0.5 m |
-| 36.4 | 0.38 (0.91) → 0.13 (0.38) | 0.6 → 0.6 m | 0.43 (1.2) → 0.16 (0.47) | 0.5 → 0.7 m |
-| 33.4 | 0.68 (2.0) → 0.23 (0.68) | 2.8 → 1.1 m | 0.68 (1.9) → 0.24 (0.79) | 1.0 → 1.1 m |
-| 31.4 | 2.2 (12) → 0.31 (0.86) | 9.4 → 0.9 m | 1.8 (11) → 0.31 (0.87) | 14.5 → 1.1 m |
-| 29.3 | 3.7 (18) → 0.80 (3.7) | 16.5 → 10.1 m | 2.8 (10) → 0.79 (5.6) | 17.1 → 9.7 m |
+| 42.6 | 0.22 (1.0) → 0.07 (0.22) | 0.7 → 0.7 m | 0.21 (0.59) → 0.08 (0.22) | 0.5 → 0.5 m |
+| 36.4 | 0.38 (0.91) → 0.13 (0.39) | 0.7 → 0.6 m | 0.43 (1.2) → 0.16 (0.46) | 0.5 → 0.6 m |
+| 33.4 | 0.67 (2.0) → 0.23 (0.74) | 1.4 → 1.1 m | 0.69 (1.9) → 0.24 (0.79) | 0.8 → 1.1 m |
+| 31.4 | 1.5 (5.3) → 0.32 (0.89) | 2.6 → 1.2 m | 1.2 (4.9) → 0.31 (0.85) | 6.0 → 1.2 m |
+| 29.3 | 4.7 (17) → 0.42 (1.3) | 15.5 → 5.0 m | 4.6 (18) → 0.39 (1.2) | 24.1 → 5.4 m |
 
 So aiding with 20 Hz loops keeps carrier phase on every satellite through both burns down to
 31.4 dB-Hz, where the unaided boost profile holds only to 36.4 (hotshot) and 33.4 (traveler).
-The vertical velocity is three to seven times better.
+The vertical velocity is three to twelve times better. Both columns use the weighted, tested fix
+([The fix's weights and residual test](#the-fixs-weights-and-residual-test)); velocities the fix's
+own test rejected are not counted.
 
 **How good the IMU must be** (`runs/m7i`; IMU + 20 Hz loops at 31.4 dB-Hz; satellites that let go):
 
@@ -438,8 +505,8 @@ The vertical velocity is three to seven times better.
 | Ideal | 0 | 0 |
 | 5 ms, 3 %, 0.5 m/s², 0.1 m/s² (the default) | 0 | 0 |
 | The default, plus a 2° attitude error | 0 | 0 |
-| The default, plus a 5° attitude error | 5 (5.0 s), all back within 1 s | 0 |
-| 20 ms, 10 %, 2 m/s², 0.5 m/s² | 8 (9.4 s), 2 not back | 4 (6.8 s), 2 not back |
+| The default, plus a 5° attitude error | 3 (2.7 s), all back within 1 s | 0 |
+| 20 ms, 10 %, 2 m/s², 0.5 m/s² | 9 (9.7 s), 2 not back | 4 (4.8 s), 1 not back |
 
 What the P4 needs from the board:
 - the IMU's samples stamped on the sample counter, with latency under about 5 ms;
@@ -454,14 +521,14 @@ past burnout:
 
 | Satellite | Pad C/N0 (E1-C) | Quiet loops | 50 Hz boost loops | Quiet loops + IMU | IMU + 20 Hz loops |
 |---|---|---|---|---|---|
-| E26 | 41.1 | 3.1 s, not back | 1.5 s | 0.3 s | 0 |
+| E26 | 41.2 | 3.1 s, not back | 1.5 s | 0.3 s | 0 |
 | E13 | 39.6 | 3.0 s, not back | 1.1 s | 0 | 0 |
 | E29 | 36.5 | 0.9 s | 1.0 s | 0.3 s | 0 |
 | E27 | 35.2 | 0.9 s | 0.9 s | 0 | 0 |
-| E21 | 33.9 | 0.9 s | 1.1 s | 0.3 s | 0 |
-| E19 | 32.0 | 2.8 s | 2.3 s | 0.8 s | 1.2 s |
-| E07 | 31.6 | 6.7 s | 4.6 s | 3.3 s | 3.7 s |
-| E33 | 30.7 | lost | 10.0 s | 5.7 s | lost |
+| E21 | 34.0 | 0.9 s | 1.1 s | 0.3 s | 0 |
+| E19 | 32.0 | 3.1 s | 2.5 s | 0.6 s | 1.2 s |
+| E07 | 31.6 | 5.5 s, not back | 5.7 s | 3.8 s | 5.3 s |
+| E33 | 30.6 | 9.9 s | 10.0 s | 7.4 s | lost |
 
 - **The 50 Hz fallback cannot help Galileo.** A pilot's 4 ms dumps and the three-dump command
   delay cap its loops at 12.5 Hz, so every Galileo satellite lets go at burnout for about a
@@ -469,9 +536,11 @@ past burnout:
 - **With aiding**, the five Galileo satellites at 34 dB-Hz and above hold carrier through the burn
   and burnout. The three weak ones flicker on the pad already.
 - **GPS** holds carrier on all 8 satellites in every configuration but the quiet loops.
-- **The fix**, ignition to 2.5 s past burnout: the vertical velocity error is 0.18 m/s rms with
-  IMU + 20 Hz loops, against 0.89 with the boost profile and 5.8 with quiet loops. The height
-  error peaks at 2.9 m, where one weak Galileo satellite's code runs 7.5 m off (see Limits).
+- **The fix**, ignition to 2.5 s past burnout, weighted and tested:
+  - The vertical velocity error is 0.15 m/s rms with IMU + 20 Hz loops, against 0.21 with the
+    boost profile and 3.1 with quiet loops.
+  - The height error peaks at 0.3 m. Unweighted, it reached 2.9 m, where one weak Galileo
+    satellite's code ran 7.5 m off.
 
 **Fixed on the way:**
 - **A noise step unlocked the PLL** (`TrkBoost.StaysLockedThroughANoiseStep`). A 14 dB step in
@@ -495,13 +564,12 @@ past burnout:
   Weaker signals need longer coherent integration with data wipe-off and a two-stage pull-in.
   Even aided, the burn costs carrier at 29 dB-Hz: with an ideal IMU and quiet loops, 5 of 14 on
   the hotshot.
-- **The fix has no integrity check and no weighting yet.** Two cases:
-  - With quiet loops and no aiding, every channel's NCO ran away together after the hotshot's
-    burnout (`runs/m7c/Q_hot_38`). The fix climbed 97 m in 0.6 s while its residuals reached
-    only 33 m rms.
-  - On SignalSim, one weak Galileo satellite's 7.5 m code error moved the fix 3 m.
+- **The fix's sigmas know noise, not tracking stress.** Two cases follow:
+  - With the 50 Hz loops at 29 dB-Hz (all 14 satellites already losing carrier), the weighted
+    fix trusts the wrong channels: worst height error 15–24 m, against 16–17 m unweighted.
+  - The quiet loops without aiding run 0.5–2 m/s worse in velocity than unweighted.
 
-  Weighting by C/N0, plus a residual test, would catch both.
+  Both are configurations nothing flies. A lock-quality term in the sigma would cover them.
 - **Real motors add what the files lack.** Vibration on the oscillator, plume, spin and antenna
   phase are milestone 7.
 

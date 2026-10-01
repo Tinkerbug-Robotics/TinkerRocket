@@ -58,6 +58,10 @@ static void usage(void)
             "  --acq-threshold M         acquisition detection threshold\n"
             "  --iono A0,A1,A2,A3,B0,B1,B2,B3   preload Klobuchar parameters (default: the manifest's)\n"
             "  --no-iono --no-tropo      leave the atmosphere uncorrected\n"
+            "  --no-raim                 skip the fix's residual test\n"
+            "  --pvt-unweighted          equal weights in the fix (with --no-raim; for comparisons)\n"
+            "  --pvt-adapt-tau S         learn each satellite's residual spread over S seconds (default 30;\n"
+            "                            0 = the C/N0 model alone)\n"
             "  --truth static:LAT,LON,H  truth for the error statistics (default: the manifest's)\n"
             "  --loops-quiet SPEC --loops-boost SPEC   tracking loop profiles, PF,PP,PD/LF,LP,LD[:MS]:\n"
             "                            pull-in / locked FLL,PLL,DLL bandwidths (Hz), FLL block (ms)\n"
@@ -256,7 +260,8 @@ int main(int argc, char **argv)
     const char *out_dir = "runs/gnssrx", *corr_arg = NULL, *vec_dir = NULL, *truth_arg = NULL;
     double meas_hz = 10.0, vec_ms = 50.0, lut_amp = 0.0, p4_latency_us = 0.0;
     float acq_thr = -1.0f;
-    int no_iono = 0, no_tropo = 0, lut_bits = 0;
+    int no_iono = 0, no_tropo = 0, lut_bits = 0, no_raim = 0, pvt_unweighted = 0;
+    double pvt_adapt_tau = -1.0;
     gps_iono_t iono_aid;
     memset(&iono_aid, 0, sizeof(iono_aid));
     const char *loops_quiet = NULL, *loops_boost = NULL, *nav_arg = NULL, *imu_path = NULL;
@@ -292,6 +297,12 @@ int main(int argc, char **argv)
             meas_hz = atof(argv[++i]);
         } else if (!strcmp(a, "--acq-threshold") && v) {
             acq_thr = (float)atof(argv[++i]);
+        } else if (!strcmp(a, "--no-raim")) {
+            no_raim = 1;
+        } else if (!strcmp(a, "--pvt-unweighted")) {
+            pvt_unweighted = 1;
+        } else if (!strcmp(a, "--pvt-adapt-tau") && v) {
+            pvt_adapt_tau = atof(argv[++i]);
         } else if (!strcmp(a, "--no-iono")) {
             no_iono = 1;
         } else if (!strcmp(a, "--no-tropo")) {
@@ -424,6 +435,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "gnssrx: a loop profile is PF,PP,PD/LF,LP,LD[:MS]\n");
         return 2;
     }
+    rc.pvt_weights = !pvt_unweighted;
+    if (pvt_adapt_tau >= 0.0) {
+        rc.adapt_tau_s = (float)pvt_adapt_tau;
+    }
     rx_init(rx, &rc);
     /* The generator's own ionosphere and troposphere, from the manifest (page 18 repeats only every
      * 12.5 min, so short files never deliver it); the options override. */
@@ -436,6 +451,7 @@ int main(int argc, char **argv)
         rx->iono = iono_aid;
     }
     rx->pvt_opt.use_iono = !no_iono;
+    rx->pvt_opt.raim = !no_raim;
     rx->pvt_opt.use_tropo = !no_tropo && !src.meta.tropo_none;
     /* Galileo and BeiDou ephemerides from the generator's RINEX, as the flight computer could
      * preload them: the records nearest the run's middle, from the manifest's start_gpst. */
@@ -477,10 +493,11 @@ int main(int argc, char **argv)
     int ring_head = 0, ring_count = 0;
 
     FILE *ftrk = open_csv(out_dir, "trk.csv", "t_s,ch,prn,state,cn0,dop_hz,pll_lock,bit_sync,frame_sync,subframes,parity_fail");
-    FILE *fobs = open_csv(out_dir, "obs.csv", "t_s,rx_tow,prn,pr_m,adr_cyc,dop_hz,cn0,lock_s,el_deg,resid_m,pr_raw_m");
+    FILE *fobs = open_csv(out_dir, "obs.csv",
+                          "t_s,rx_tow,prn,pr_m,adr_cyc,dop_hz,cn0,lock_s,el_deg,resid_m,pr_raw_m,excl");
     FILE *fpvt = open_csv(out_dir, "pvt.csv",
                           "t_s,rx_tow,week,lat_deg,lon_deg,h_m,x,y,z,vx,vy,vz,clk_bias_m,clk_drift_mps,nsat,pdop,"
-                          "resid_rms,e_m,n_m,u_m");
+                          "resid_rms,e_m,n_m,u_m,nexcl,chi2,chi2_lim,vel_valid");
     FILE *feph = open_csv(out_dir, "eph.csv",
                           "t_s,prn,week,toe,toc,iode,iodc,health,sqrt_a,e,i0,omega0,omega,m0,delta_n,idot,"
                           "omega_dot,cuc,cus,crc,crs,cic,cis,af0,af1,af2,tgd");
@@ -561,7 +578,7 @@ int main(int argc, char **argv)
     }
     double wall0 = now_s();
     double sum_e[3] = {0}, sum_e2[3] = {0};
-    long n_fix = 0;
+    long n_fix = 0, n_withheld = 0, n_excl_fix = 0, n_vel_fail = 0;
     for (;;) {
         if (two_bit) {
             if (src_read_codes(&src, cblk, spms) < spms) {
@@ -688,10 +705,10 @@ int main(int argc, char **argv)
             double rtow = rx->clk_valid ? rx_time(rx, t_now) : 0.0;
             for (int k = 0; k < no && rx->clk_valid; k++) {
                 /* prn: 100 x system + PRN (GPS 0, Galileo 1, BeiDou 2), so GPS rows read as before. */
-                fprintf(fobs, "%.3f,%.9f,%d,%.4f,%.4f,%.4f,%.2f,%.2f,%.3f,%.4f,%.4f\n", ts, rtow,
+                fprintf(fobs, "%.3f,%.9f,%d,%.4f,%.4f,%.4f,%.2f,%.2f,%.3f,%.4f,%.4f,%d\n", ts, rtow,
                         100 * obs[k].sys + obs[k].prn, obs[k].pr, obs[k].adr, obs[k].dop, (double)obs[k].cn0,
                         (double)obs[k].lock_s, sol.valid ? sol.el[k] * 180.0 / PI : 0.0,
-                        sol.valid && sol.used[k] ? sol.resid[k] : 0.0, obs[k].pr_raw);
+                        sol.valid && sol.used[k] ? sol.resid[k] : 0.0, obs[k].pr_raw, sol.excluded[k]);
             }
             if (sol.valid) {
                 double e[3] = {0, 0, 0};
@@ -703,10 +720,16 @@ int main(int argc, char **argv)
                     }
                     n_fix++;
                 }
-                fprintf(fpvt, "%.3f,%.9f,%d,%.9f,%.9f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%d,%.3f,%.4f,%.4f,%.4f,%.4f\n",
+                fprintf(fpvt, "%.3f,%.9f,%d,%.9f,%.9f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%d,%.3f,%.4f,%.4f,%.4f,%.4f,"
+                              "%d,%.2f,%.2f,%d\n",
                         ts, rx_time(rx, t_now), rx->week, sol.lat * 180.0 / PI, sol.lon * 180.0 / PI, sol.h,
                         sol.pos[0], sol.pos[1], sol.pos[2], sol.vel[0], sol.vel[1], sol.vel[2], sol.clk_bias,
-                        sol.clk_drift, sol.nsat, sol.pdop, sol.resid_rms, e[0], e[1], e[2]);
+                        sol.clk_drift, sol.nsat, sol.pdop, sol.resid_rms, e[0], e[1], e[2], sol.nexcl, sol.chi2,
+                        sol.chi2_lim, sol.vel_valid);
+                n_excl_fix += sol.nexcl > 0;
+                n_vel_fail += !sol.vel_valid;
+            } else if (sol.chi2_lim > 0.0 && sol.chi2 > sol.chi2_lim) {
+                n_withheld++;  /* the residual test failed and nothing could be left out to mend it */
             }
             for (int ch = 0; ch < rc.max_ch; ch++) {
                 const trk_ch_t *c = &rx->ch[ch];
@@ -789,6 +812,8 @@ int main(int argc, char **argv)
         fclose(bank.v_dumps);
         printf("  test vectors: %s (%.0f ms)\n", vec_dir, vec_ms);
     }
+    printf("  residual test: %ld fixes left a measurement out, %ld withheld; velocity failed it on %ld\n",
+           n_excl_fix, n_withheld, n_vel_fail);
     fclose(ftrk);
     if (fimu) {
         fclose(fimu);

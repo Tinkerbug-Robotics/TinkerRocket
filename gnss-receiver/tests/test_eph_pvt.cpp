@@ -203,3 +203,118 @@ TEST(Pvt, TroposphereAboveAClimbingReceiver)
     }
     EXPECT_NEAR(sol.clk_drift, drift, 0.01);
 }
+
+namespace {
+
+// A static receiver and its satellites (PRN 5's orbit rotated), with exact pseudoranges.
+struct StaticSky {
+    double lat = 0.0, lon = -119.0 * M_PI / 180.0, h = 1200.0, rx[3];
+    const double t_rx = 210630.0, bias = 1234.5;
+    gps_eph_t eph[GNSS_SYS_COUNT][GNSS_MAX_PRN + 1] = {};
+    std::vector<pvt_meas_t> m;
+
+    StaticSky()
+    {
+        geo_to_ecef(lat, lon, h, rx);
+        int prn = 1;
+        for (int k = 0; k < 96 && prn <= 12; k++) {
+            gps_eph_t e = prn5();
+            e.prn = prn;
+            e.omega0 += k * 2.0 * M_PI / 6.0;
+            e.m0 += k * 0.37;
+            double tau = 0.07, sp[3] = {0, 0, 0}, clk = 0.0;
+            for (int it = 0; it < 5; it++) {
+                double p[3];
+                gps_sat_pos(&e, t_rx - tau, p, nullptr, &clk);
+                double a = GPS_OMEGA_E * tau;
+                sp[0] = std::cos(a) * p[0] + std::sin(a) * p[1];
+                sp[1] = -std::sin(a) * p[0] + std::cos(a) * p[1];
+                sp[2] = p[2];
+                tau = std::sqrt(std::pow(sp[0] - rx[0], 2) + std::pow(sp[1] - rx[1], 2) +
+                                std::pow(sp[2] - rx[2], 2)) / GNSS_C;
+            }
+            double up = (std::cos(lat) * std::cos(lon) * (sp[0] - rx[0]) +
+                         std::cos(lat) * std::sin(lon) * (sp[1] - rx[1]) + std::sin(lat) * (sp[2] - rx[2])) /
+                        (tau * GNSS_C);
+            if (up < std::sin(10.0 * M_PI / 180.0)) {
+                continue;
+            }
+            eph[GNSS_SYS_GPS][prn] = e;
+            pvt_meas_t q{};
+            q.sys = GNSS_SYS_GPS;
+            q.prn = prn;
+            q.pr = tau * GNSS_C + bias - GNSS_C * clk;
+            q.t_sv = t_rx - tau + clk;
+            q.cn0 = 45.0f;
+            q.sigma = 0.5f;
+            m.push_back(q);
+            prn++;
+        }
+    }
+
+    int solve(pvt_sol_t *sol) const
+    {
+        pvt_opt_t opt;
+        pvt_default_opt(&opt);
+        opt.use_iono = opt.use_tropo = 0;
+        return pvt_solve(m.data(), int(m.size()), eph, nullptr, &opt, nullptr, sol);
+    }
+
+    double err(const pvt_sol_t &sol) const
+    {
+        return std::sqrt(std::pow(sol.pos[0] - rx[0], 2) + std::pow(sol.pos[1] - rx[1], 2) +
+                         std::pow(sol.pos[2] - rx[2], 2));
+    }
+};
+
+}  // namespace
+
+// The residual test (milestone 7): one bad range is found and left out.
+TEST(Pvt, LeavesOutAFaultyRange)
+{
+    StaticSky s;
+    ASSERT_GE(s.m.size(), 8u);
+    s.m[3].pr += 30.0;
+    pvt_sol_t sol;
+    ASSERT_EQ(s.solve(&sol), 0);
+    EXPECT_EQ(sol.nexcl, 1);
+    EXPECT_EQ(sol.excluded[3] & 1, 1);
+    EXPECT_EQ(sol.used[3], 0);
+    EXPECT_LT(s.err(sol), 0.01);
+    EXPECT_LE(sol.chi2, sol.chi2_lim);
+}
+
+// Three bad ranges are more than it may leave out (two): the fix is withheld, not reported wrong.
+TEST(Pvt, WithholdsAFixItCannotMend)
+{
+    StaticSky s;
+    ASSERT_GE(s.m.size(), 8u);
+    s.m[1].pr += 40.0;
+    s.m[4].pr -= 35.0;
+    s.m[6].pr += 50.0;
+    pvt_sol_t sol;
+    EXPECT_EQ(s.solve(&sol), -2);
+    EXPECT_EQ(sol.valid, 0);
+}
+
+// Weights follow each measurement's sigma: a weak satellite's 5 m error barely moves the fix,
+// where with equal weights it would move it metres.
+TEST(Pvt, WeighsAWeakSatelliteLightly)
+{
+    StaticSky s;
+    ASSERT_GE(s.m.size(), 8u);
+    s.m[2].pr += 5.0;
+    s.m[2].sigma = pvt_sigma_pr(30.0f, 0.0f);  // raw, at 30 dB-Hz: ~3 m
+    pvt_sol_t sol;
+    ASSERT_EQ(s.solve(&sol), 0);
+    EXPECT_EQ(sol.nexcl, 0);
+    EXPECT_LT(s.err(sol), 0.3);
+    EXPECT_GT(pvt_sigma_pr(30.0f, 0.0f), 2.5);
+    EXPECT_LT(pvt_sigma_pr(45.0f, 100.0f), 0.25);
+    // Range rates: wider loops and pulling-in channels count for less.
+    const double d10 = pvt_sigma_dop(43.0f, 1, 10.0f);
+    EXPECT_NEAR(d10, 0.063, 0.005);
+    EXPECT_NEAR(pvt_sigma_dop(43.0f, 1, 50.0f) / d10, std::pow(5.0, 0.75), 1e-9);
+    EXPECT_NEAR(pvt_sigma_dop(43.0f, 0, 10.0f) / d10, 5.0, 1e-9);
+    EXPECT_GT(pvt_sigma_dop(31.0f, 1, 10.0f), 3.5 * d10);
+}

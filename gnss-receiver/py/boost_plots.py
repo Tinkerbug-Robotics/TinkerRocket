@@ -301,6 +301,9 @@ def cmd_timeline(a) -> int:
     dpos = (pos - ptp) @ R.T
     dvel = (vel - ptv) @ R.T
     xp = run.tf_pvt - L0
+    # Velocities the fix's own residual test rejected (vel_valid = 0) are not drawn as velocities.
+    vbad = (run.pvt["vel_valid"] == 0) if "vel_valid" in run.pvt else np.zeros(xp.size, dtype=bool)
+    dvel[vbad] = np.nan
 
     for col, xl in ((0, full), (1, zoom)):
         A = {r: axs[i][col] for i, r in enumerate(rows)}
@@ -317,7 +320,8 @@ def cmd_timeline(a) -> int:
             ax.axvline(B - L0, color="#555", ls=":", lw=0.8)
         ax = A["speed"]
         ax.plot(xs, speed, color="#222", lw=1.2, label="true speed")
-        ax.plot(xp, np.linalg.norm(vel, axis=1), ".", ms=1.6, color=SYS_COLOR["G"], label="receiver's own speed (fix)")
+        ax.plot(xp[~vbad], np.linalg.norm(vel[~vbad], axis=1), ".", ms=1.6, color=SYS_COLOR["G"],
+                label="receiver's own speed (fix)")
         ax.axhline(COCOM_V, color="#b08a18", ls="--", lw=0.8)
         ax.set_ylabel("speed, m/s")
         ax = A["alt"]
@@ -396,6 +400,9 @@ def cmd_timeline(a) -> int:
         ax = A["vel"]
         for k, c, n in ((0, "#7aa6d8", "E"), (1, "#9bc59d", "N"), (2, "#222", "U")):
             ax.plot(*gapped(xp, dvel[:, k]), lw=0.8, color=c, label=n)
+        if vbad.any():
+            ax.plot(xp[vbad], np.full(vbad.sum(), -0.92 * a.vel_ylim), "x", ms=3, color="#c03030",
+                    label="velocity failed the fix's residual test")
         ax.set_ylim(-a.vel_ylim, a.vel_ylim)
         ax.set_ylabel("fix velocity\nerror, m/s")
         axs[-1][col].set_xlim(*xl)

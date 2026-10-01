@@ -39,6 +39,9 @@ typedef struct {
     int max_ch;                 /* channels to use, <= CORR_MAX_CH */
     uint32_t cmd_lead;          /* NCO commands computed from dump s are tagged s + cmd_lead (corr_if.h) */
     float hatch_s;              /* carrier smoothing of pseudoranges: time constant, s (0 = off) */
+    int pvt_weights;            /* 1: weigh the fix by each measurement's sigma; 0: equal weights */
+    float adapt_tau_s;          /* each satellite's own residual spread, learnt over this long, inflates
+                                   its sigma (up to 5x) where the model is too kind to it (0 = off) */
     trk_profile_t quiet;        /* tracking loops at rest */
     trk_profile_t boost;        /* and under the boost's dynamics (rx_set_boost) */
 } rx_cfg_t;
@@ -89,11 +92,14 @@ typedef struct {
     double los[3];              /* unit vector receiver -> satellite from the last fix (aiding) */
     int have_los;
     /* Carrier smoothing (Hatch filter): the smoothed pseudorange, the carrier phase (m) and
-     * sample it was last updated at, samples in it, and the half-cycle state it assumed. */
+     * sample it was last updated at, samples in it, the half-cycle state it assumed, and the
+     * sample it last restarted at (its age sets the pseudorange's weight in the fix). */
     double hatch_pr, hatch_adr;
-    uint64_t hatch_t;
+    uint64_t hatch_t, hatch_t0;
     uint32_t hatch_n;
     int hatch_inv;
+    float res_var;              /* its squared normalized pseudorange residual, low-passed (0: none yet) */
+    uint64_t res_t;             /* and the sample it was last updated at */
     /* Pilot channels (aided starts, rx_aid): code period, the week's count of code periods at
      * the epoch that opened period 1, and the secondary code, one chip per period. */
     double t_code;

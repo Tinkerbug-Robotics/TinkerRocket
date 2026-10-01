@@ -18,6 +18,8 @@ void rx_default_cfg(rx_cfg_t *c, double fs, double if_hz)
     c->acq_interval_s = 5.0f;
     c->tap_chips = 0.25f;
     c->hatch_s = 100.0f;
+    c->pvt_weights = 1;
+    c->adapt_tau_s = 30.0f;
     c->max_ch = CORR_MAX_CH;
     c->cmd_lead = 2;
     c->quiet = trk_profile_quiet;
@@ -401,6 +403,7 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
     }
     double t_rx = rx_time(rx, t);
     pvt_meas_t m[PVT_MAX_SAT];
+    float sig_model[PVT_MAX_SAT];
     int nm = 0;
     const double lambda = GNSS_C / GNSS_FREQ_L1_HZ;
     for (int k = 0; k < no && nm < PVT_MAX_SAT; k++) {
@@ -420,12 +423,15 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
         } else {
             n->hatch_pr = obs[k].pr;
             n->hatch_n = obs[k].lock_s > 0.0f ? 1 : 0;
+            n->hatch_t0 = t;
         }
         n->hatch_adr = adr_m;
         n->hatch_t = t;
         n->hatch_inv = inv;
+        float smooth_s = 0.0f;
         if (rx->cfg.hatch_s > 0.0f && n->hatch_n > 0) {
             obs[k].pr = n->hatch_pr;
+            smooth_s = (float)((double)(t - n->hatch_t0) / rx->cfg.fs);
         }
         m[nm].sys = obs[k].sys;
         m[nm].prn = obs[k].prn;
@@ -433,10 +439,45 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
         m[nm].dop = obs[k].dop;
         m[nm].t_sv = obs[k].t_sv;
         m[nm].cn0 = obs[k].cn0;
+        /* Weights for the fix: the code's noise at this C/N0, as far as smoothing has brought it
+         * down; the Doppler's, from the loop it came through (a pilot's capped as trk caps it). */
+        const trk_ch_t *c = &rx->ch[obs[k].ch];
+        const int locked = obs[k].lock_s > 0.0f;
+        float bw = locked ? rx->prof.locked.pll_bw : rx->prof.pullin.pll_bw;
+        if (c->pilot) {
+            const float cap = 0.05f / (c->sig == GNSS_SIG_GAL_E1C ? 0.004f : 0.010f);
+            bw = bw < cap ? bw : cap;
+        }
+        float sg = (float)pvt_sigma_pr(obs[k].cn0, smooth_s);
+        sig_model[nm] = sg;
+        if (rx->cfg.adapt_tau_s > 0.0f && n->res_var > 1.0f) {
+            /* A satellite whose residuals run larger than its model (a code that wanders with the
+             * sample phase, say) counts for less, rather than being left out one epoch in three. */
+            sg *= n->res_var < 25.0f ? sqrtf(n->res_var) : 5.0f;
+        }
+        m[nm].sigma = rx->cfg.pvt_weights ? sg : 1.0f;
+        m[nm].sigma_dop = rx->cfg.pvt_weights ? (float)pvt_sigma_dop(obs[k].cn0, locked, bw) : 1.0f;
         nm++;
     }
     const double *pos0 = rx->sol.valid ? rx->sol.pos : NULL;
-    if (pvt_solve(m, nm, rx->eph, &rx->iono, &rx->pvt_opt, pos0, sol) == 0) {
+    const int fix = pvt_solve(m, nm, rx->eph, &rx->iono, &rx->pvt_opt, pos0, sol);
+    if (rx->cfg.adapt_tau_s > 0.0f && rx->sol.valid && fix != -1) {
+        /* Learn each satellite's residual spread against its model sigma. One left out by the
+         * test counts with the residual it was left out for. */
+        for (int k = 0; k < nm; k++) {
+            if (!sol->used[k] && !(sol->excluded[k] & 1)) {
+                continue;
+            }
+            rx_nco_t *n = &rx->nco[obs[k].ch];
+            const double dt = (double)(t - n->res_t) / rx->cfg.fs, tau = (double)rx->cfg.adapt_tau_s;
+            const float a = n->res_var > 0.0f && dt > 0.0 && dt < tau ? (float)(dt / tau) : 1.0f;
+            const float z = (float)(sol->resid[k] / (double)sig_model[k]);
+            const float z2 = z * z < 100.0f ? z * z : 100.0f;
+            n->res_var = n->res_var > 0.0f ? n->res_var + a * (z2 - n->res_var) : (z2 > 1.0f ? z2 : 1.0f);
+            n->res_t = t;
+        }
+    }
+    if (fix == 0) {
         /* Steer the receiver clock onto GPS time when it is off by more than a microsecond. */
         if (fabs(sol->clk_bias) > 300.0) {
             double dt = sol->clk_bias / GNSS_C;
