@@ -79,12 +79,14 @@ def gravity(h: float) -> float:
 def fly(burn_s: float, accel_mps2: float, cd_a_over_m: float,
         alt0_m: float, stop_alt_m: float, max_s: float,
         chute_alt_m: float = 0.0, chute_cd_a_over_m: float = 0.0,
-        drogue_cd_a_over_m: float = 0.0, accel_end_mps2: float | None = None):
+        drogue_cd_a_over_m: float = 0.0, accel_end_mps2: float | None = None,
+        ignition_ramp_s: float = 0.0):
     """Integrate a vertical flight. Returns [(t, alt, v_up)] at RATE_HZ.
 
     Thrust acceleration is accel_mps2 throughout the burn, or, with accel_end_mps2,
     ramps linearly from accel_mps2 to accel_end_mps2: a motor of near-constant thrust
-    pushing a vehicle that loses its propellant mass as it burns.
+    pushing a vehicle that loses its propellant mass as it burns. With ignition_ramp_s the
+    thrust also rises linearly from zero over that time instead of stepping on at T+0.
 
     cd_a_over_m is the inverse ballistic coefficient, Cd*A/m [m^2/kg]: the only
     aerodynamic parameter that matters for a 1-D flight, so there is no point
@@ -102,6 +104,8 @@ def fly(burn_s: float, accel_mps2: float, cd_a_over_m: float,
             thrust_a = accel_mps2
         else:
             thrust_a = accel_mps2 + (accel_end_mps2 - accel_mps2) * t / burn_s
+        if ignition_ramp_s > 0.0 and t < ignition_ramp_s:
+            thrust_a *= t / ignition_ramp_s
         # A real flight does not stop at apogee, and the descent is where the
         # receiver gets its satellites back after a boost that broke tracking.
         # Truncating there hides the whole re-acquisition.
@@ -122,6 +126,8 @@ def fly(burn_s: float, accel_mps2: float, cd_a_over_m: float,
         if abs(drag_a) * dt > abs(v):
             drag_a = math.copysign(abs(v) / dt, drag_a)
         a = thrust_a - gravity(h) - drag_a       # drag opposes motion via v*|v|
+        if not apogee_seen and h <= alt0_m and v <= 0.0 and a < 0.0:
+            a = 0.0                              # on the pad until thrust beats weight
         v += a * dt
         h += v * dt
         t += dt
@@ -191,6 +197,34 @@ FLIGHTS = {
     # 18.8 g at burnout. Drag and the drogue are tuned to the apogee and touchdown.
     # The drogue opens at apogee here, not at T+173 s as flown: at 100 km that makes
     # no difference. Its Cd*A/m with Traveler's measured 7.73 ft2 implies 45 kg down.
+    # The ignition-step test (2026-09-28): traveler with the thrust rising over 0.5 s instead of
+    # stepping on at T+0, to see whether the step drives the earliest boost losses on the bench.
+    "traveler_soft": dict(
+        prologue_s=180.0,
+        burn_s=13.0, accel_mps2=54.5, accel_end_mps2=227.5, cd_a_over_m=8.28e-5,
+        alt0_m=1_200.0, stop_alt_m=1_250.0, max_s=900.0,
+        drogue_cd_a_over_m=0.01575, ignition_ramp_s=0.5,
+        purpose="traveler with a 0.5 s thrust ramp at ignition instead of a step: isolates the "
+                "ignition step's jerk from the steady boost acceleration.",
+    ),
+    "traveler_soft25": dict(
+        prologue_s=180.0,
+        burn_s=13.0, accel_mps2=54.5, accel_end_mps2=227.5, cd_a_over_m=8.28e-5,
+        alt0_m=1_200.0, stop_alt_m=1_250.0, max_s=900.0,
+        drogue_cd_a_over_m=0.01575, ignition_ramp_s=0.25,
+        purpose="traveler with a 0.25 s thrust ramp at ignition instead of a step.",
+    ),
+    "hotshot": dict(
+        prologue_s=180.0,
+        burn_s=4.0, accel_mps2=98.1, accel_end_mps2=392.3, cd_a_over_m=8.28e-5,
+        alt0_m=1_200.0, stop_alt_m=1_250.0, max_s=900.0,
+        drogue_cd_a_over_m=0.01575, ignition_ramp_s=0.25,
+        purpose="A hard boost for receivers that withhold raw above 515 m/s (the NEO-M8T): "
+                "thrust ramping from 10 g to 40 g over a 4 s burn (0.25 s soft start), the "
+                "traveler's aero and drogue. ~2.7 s of 10-30 g boost stays below 515 m/s, "
+                "so the steepest satellite's Doppler rate sweeps ~470 to ~1400 Hz/s while "
+                "the receiver still reports it.",
+    ),
     "traveler": dict(
         prologue_s=180.0,
         burn_s=13.0, accel_mps2=54.5, accel_end_mps2=227.5, cd_a_over_m=8.28e-5,
@@ -320,7 +354,8 @@ def build(name: str, spec: dict):
                  spec.get("chute_alt_m", 0.0),
                  spec.get("chute_cd_a_over_m", 0.0),
                  spec.get("drogue_cd_a_over_m", 0.0),
-                 spec.get("accel_end_mps2"))
+                 spec.get("accel_end_mps2"),
+                 spec.get("ignition_ramp_s", 0.0))
 
     rows, truth = [], []
     east_m = 0.0

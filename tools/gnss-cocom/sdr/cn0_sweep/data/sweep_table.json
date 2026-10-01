@@ -1,0 +1,134 @@
+{
+ "keys": [
+  [
+   "pad C/N0 as read, dB-Hz",
+   "pad"
+  ],
+  [
+   "listed at ignition",
+   "ign"
+  ],
+  [
+   "locked at burnout",
+   "lock"
+  ],
+  [
+   "delivering raw at burnout",
+   "raw"
+  ],
+  [
+   "last fix after ignition (own/true)",
+   "last"
+  ],
+  [
+   "fix back",
+   "back"
+  ],
+  [
+   "fix held (descent)",
+   "held"
+  ],
+  [
+   "fewest in re-entry T+255-300",
+   "mins"
+  ],
+  [
+   "descent pseudorange RMS, m",
+   "prd"
+  ],
+  [
+   "descent Doppler RMS, m/s",
+   "rrd"
+  ],
+  [
+   "raw gaps / underruns",
+   "gaps"
+  ]
+ ],
+ "rows": [
+  {
+   "label": "+12 dB (57 dB-Hz file)",
+   "pad": "GPS 47, BDS 50, GAL 44",
+   "ign": "GPS 12 GAL 6 BDS 4",
+   "lock": "GPS 11/12, BDS 4/4, GAL 2/6",
+   "raw": "GPS 11/12, BDS 4/4, GAL 2/6",
+   "last": "T+6.25 (513/515 m/s)",
+   "back": "T+282.1",
+   "held": "T+282.1-360.1",
+   "mins": "GPS 13, GAL 8, BDS 5",
+   "prd": "GPS 1.1, Galileo 1.6, BeiDou 0.8",
+   "rrd": "GPS 0.12, Galileo 0.06, BeiDou 0.06",
+   "gaps": "2 gaps, 3 underruns"
+  },
+  {
+   "label": "+6 dB (51 dB-Hz file)",
+   "pad": "GPS 44, BDS 46, GAL 41",
+   "ign": "GPS 13 GAL 7 BDS 8",
+   "lock": "GPS 9/13, BDS 7/8, GAL 1/7",
+   "raw": "GPS 10/13, BDS 7/8, GAL 1/7",
+   "last": "T+6.25 (514/515 m/s)",
+   "back": "T+282.1",
+   "held": "T+282.1-346.1 (2 pieces)",
+   "mins": "GPS 12, GAL 8, BDS 3",
+   "prd": "GPS 0.8, Galileo 1.8, BeiDou 0.9",
+   "rrd": "GPS 0.27, Galileo 0.14, BeiDou 0.07",
+   "gaps": "0 gaps, 3 underruns"
+  },
+  {
+   "label": "0 dB (45 dB-Hz file)",
+   "pad": "GPS 38, BDS 39, GAL 34",
+   "ign": "GPS 13 GAL 2 BDS 7",
+   "lock": "GPS 1/13, BDS 7/7, GAL 0/2",
+   "raw": "GPS 2/13, BDS 7/7, GAL 0/2",
+   "last": "T+6.45 (513/539 m/s)",
+   "back": "T+282.1",
+   "held": "T+282.1-360.1",
+   "mins": "GPS 10, GAL 2, BDS 6",
+   "prd": "GPS 4.3, Galileo 3.8, BeiDou 0.9",
+   "rrd": "GPS 0.24, Galileo 0.21, BeiDou 0.10",
+   "gaps": "0 gaps, 0 underruns"
+  },
+  {
+   "label": "-3 dB",
+   "pad": "GPS 36, BDS 37, GAL 32",
+   "ign": "GPS 12 GAL 1 BDS 9",
+   "lock": "GPS 1/12, BDS 6/9, GAL 0/1",
+   "raw": "GPS 2/12, BDS 6/9, GAL 0/1",
+   "last": "T+6.30 (506/521 m/s)",
+   "back": "T+285.7",
+   "held": "T+285.7-360.1",
+   "mins": "GPS 0, GAL 0, BDS 0",
+   "prd": "GPS 0.9, BeiDou 0.8",
+   "rrd": "GPS 0.12, BeiDou 0.12",
+   "gaps": "1 gaps, 3 underruns"
+  },
+  {
+   "label": "-6 dB",
+   "pad": "GPS 33, BDS 34",
+   "ign": "GPS 13 BDS 7",
+   "lock": "GPS 1/13, BDS 1/7",
+   "raw": "GPS 0/13, BDS 0/7",
+   "last": "T+6.20 (345/509 m/s)",
+   "back": "T+282.4",
+   "held": "T+282.4-360.1 (3 pieces)",
+   "mins": "GPS 0, GAL 0, BDS 4",
+   "prd": "GPS 2.1, BeiDou 20.7",
+   "rrd": "GPS 0.42, BeiDou 0.46",
+   "gaps": "2 gaps, 2 underruns"
+  },
+  {
+   "label": "-9 dB",
+   "pad": "GPS 31, BDS 31",
+   "ign": "GPS 6 BDS 1",
+   "lock": "GPS 0/6, BDS 0/1",
+   "raw": "GPS 0/6, BDS 0/1",
+   "last": "T+2.00 (68/109 m/s)",
+   "back": "T+282.2",
+   "held": "T+282.2-360.0 (3 pieces)",
+   "mins": "GPS 4, GAL 0, BDS 3",
+   "prd": "GPS 1.9, BeiDou 13.8",
+   "rrd": "GPS 0.31, BeiDou 0.38",
+   "gaps": "2 gaps, 1 underruns"
+  }
+ ]
+}
