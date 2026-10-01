@@ -1,7 +1,7 @@
 # GNSS receiver: architecture proposal (v0)
 
 **Date:** 2026-09-30.
-**Status:** proposal for discussion; nothing is drawn yet.
+**Status:** decisions recorded below. The dev board's schematic is in `hardware/gnss-sdr-dev` (PR #1561).
 **Builds on:** [gnss-receiver-review.md](gnss-receiver-review.md), referred to below as "the review".
 
 **How to read it.**
@@ -17,6 +17,7 @@
 5. **Size the FPGA for 32 channels.**
 6. **Our own code, with Pocket SDR as the reference.** Stage 0 runs in its own session.
 7. **27 MHz reference.** Every vibration-sensitive part is chosen for vibration load. The oscillator, loop-filter capacitors and mounting searches are running.
+8. **L1 IF 4.092 MHz, decimated by keeping every 4th sample** (2026-10-01). See the sample-clock and L1 IF paragraphs below.
 
 ## What those decisions settle
 
@@ -88,7 +89,11 @@ Why 27 MHz, compared with common reference frequencies:
 | 30 / 32 MHz | 14.6 / 7.4 MHz | **6.5 / 7.6 MHz, in band** | |
 | 40 MHz | 15.4 MHz | 16.5 MHz | Cleanest, and the P4's own crystal. Above the MAX2769B's 32 MHz reference limit *(to confirm; 8–32 MHz per the MAX2769-family sheets)* |
 
-**Sample clock.** Both front ends sample at 27 MS/s. The FPGA decimates L1 by 4 to 6.75 MS/s for correlation. Why run the ADC at 27 and decimate, rather than sample slower:
+**Sample clock.** Both front ends sample at 27 MS/s. The FPGA decimates L1 by 4 to 6.75 MS/s for correlation, by keeping every 4th sample *(decided 2026-10-01)*:
+- the receiver model measured a 0.04–0.05 dB loss for it, because the 4.2 MHz IF filter has already removed what lies outside the band;
+- summing four samples and re-rounding to 2 bits measured about 0.5 dB, and costs adders and a requantizer.
+
+Why run the ADC at 27 and decimate, rather than sample slower:
 - A 9 MHz sample clock would put its 175th harmonic at 1575.0 MHz, 0.42 MHz from L1.
 - 13.5 and 6.75 MHz clear L1 but land inside L5.
 - 6.75 MS/s is 6.6 samples per chip, not commensurate with the code rate (review §4.3).
@@ -98,7 +103,12 @@ Why 27 MHz, compared with common reference frequencies:
 - The P4's 40 MHz crystal and its derived clocks (360/400 MHz CPU, PSRAM, USB) put harmonics at 1560/1600 MHz and 1160/1200 MHz. Those are ≥ 15 MHz from L1 and ≥ 16 MHz from L5.
 - **Any other clock on the board** (IMU SPI, UART) must keep its harmonics > 2.1 MHz from L1 (> 10.2 MHz from L5 later), or be edge-rate limited. A 10 MHz SPI clock, for example, has harmonics 4.6 MHz from L1: fine now, but it would hit L5.
 
-**L1 IF.** Low-IF complex I/Q with the 4.2 MHz filter. The exact IF is chosen during the schematic stage, so the synthesizer's fractional spurs stay out of the passband. Holme's fs/4 lesson applies (review §4.3).
+**L1 IF** *(decided 2026-10-01)*. Low-IF complex I/Q with the 4.2 MHz filter, IF = **4.092 MHz**:
+- the LO is fractional-N from the 27 MHz reference: LO = 27 MHz × (58 + 206921 / 2²⁰) = 1571.328052 MHz, so the IF is 4.091948 MHz, the chip's default filter centre;
+- the filter passes about 2–6 MHz, which holds the L1 main lobes (about ±2 MHz) clear of DC;
+- after keep-every-4th the IF sits at 4.091948 − 6.75 = **−2.658052 MHz** at the correlators. With complex samples the wrap is harmless: the 4.2 MHz band fits inside 6.75 MHz without overlapping itself;
+- Holme's fs/4 lesson (review §4.3): the nearest simple ratio of 6.75 MS/s (2fs/5) is 42 kHz away, outside any flight Doppler, and the receiver's ±100 kHz sweep through its 8-sector mixer was clean;
+- the sign of the IF depends on the I/Q convention and is set at first light. The IF is a register setting, so a later change needs no board change.
 
 ## Clocking and synchronization
 
