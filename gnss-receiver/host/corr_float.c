@@ -121,7 +121,7 @@ static int run(corr_float_t *c, cf_ch_t *h, uint64_t t0, const float *iq, size_t
                 d->flags = flags;
                 d->ch = ch;
                 d->seq = h->seq;
-                d->t_samp = t0 + k + 1;
+                d->t_samp = (t0 + k + 1) & CORR_TSAMP_MASK;
                 d->code_phase = cp;
                 d->carr_phase = ph;
                 d->carr_cycles = cyc;
@@ -134,7 +134,7 @@ static int run(corr_float_t *c, cf_ch_t *h, uint64_t t0, const float *iq, size_t
                 d->il = il;
                 d->ql = ql;
             }
-            h->seq++;
+            h->seq = (h->seq + 1) & CORR_SEQ_MASK;
             ie = qe = ip = qp = il = ql = 0.0f;
             h->carr_word = next_carr;
             h->code_word = next_code;
@@ -159,10 +159,11 @@ int corr_float_process(corr_float_t *c, uint64_t t0, const float *iq, size_t n, 
         cf_ch_t *h = &c->ch[ch];
         size_t k0 = 0;
         if (h->start_pending) {
-            if (h->start.t_start >= t0 + n) {
+            int64_t dt = corr_tsamp_diff(h->start.t_start, t0);
+            if (dt >= (int64_t)n) {
                 continue;  /* starts in a later block */
             }
-            k0 = h->start.t_start > t0 ? (size_t)(h->start.t_start - t0) : 0;
+            k0 = dt > 0 ? (size_t)dt : 0;
             begin(c, h);
         }
         if (!h->active) {

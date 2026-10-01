@@ -45,8 +45,8 @@ TEST(FeEmul, DirectModePutsL1AtTheIf)
     EXPECT_NEAR(double(m), n * FE_FS_CORR_HZ / fs_in, 40.0);
     auto y = weights(codes);
     // The tone now sits at IF + 500 kHz in the 6.75 MS/s stream.
-    auto f = tone::fit(y.data(), 1000, m, c.if_hz + f_rel, FE_FS_CORR_HZ);
-    auto off = tone::fit(y.data(), 1000, m, -c.if_hz - f_rel, FE_FS_CORR_HZ);
+    auto f = tone::fit(y.data(), 1000, m, fe_out_if(&fe) + f_rel, FE_FS_CORR_HZ);
+    auto off = tone::fit(y.data(), 1000, m, -fe_out_if(&fe) - f_rel, FE_FS_CORR_HZ);
     EXPECT_GT(std::abs(f.amp), 0.3);
     EXPECT_LT(std::abs(off.amp), 0.02);  // no image: the stream is complex
     EXPECT_NEAR(quant2_density(&fe.q), 0.33, 0.01);

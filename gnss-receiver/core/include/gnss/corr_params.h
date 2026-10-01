@@ -2,7 +2,9 @@
  * The correlator's parameters: the one header both sides of the FPGA <-> P4
  * contract read, and the bit-exact model (fpga/model/corr_model.c) implements.
  * PROPOSED in milestone 4 (2026-09-30), for the owner and the hardware design
- * to confirm. Measured on the SignalSim static file against a float correlator:
+ * to confirm; the hardware session reports that they all fit the ECP5 plan
+ * (time-multiplexed engines, channel state in EBR) and set the counter widths.
+ * Measured on the SignalSim static file against a float correlator:
  * - carrier table: 4 sectors -0.55 dB, 8 sectors (below) -0.10 dB, 16 sectors
  *   -0.07 dB, 32 sectors -0.015 dB;
  * - accumulators: the largest 1 ms value seen is 4,058 against 2^23.
@@ -30,6 +32,17 @@ extern "C" {
  * code-rate bias the DLL has to absorb.
  */
 #define CORR_CODE_FRAC_BITS 40
+
+/*
+ * Counters, set by the hardware session (2026-09-30). The sample counter
+ * (t_samp, t_start) is 48 bits: it wraps after 1.3 years at 6.75 MS/s. A
+ * channel's period count (dump seq, command apply_seq) is 16 bits: it wraps
+ * every 65.5 s of 1 ms periods. The P4 extends both (core/rx.c), and every
+ * comparison of two counts is a signed difference modulo the width
+ * (corr_if.h).
+ */
+#define CORR_TSAMP_BITS 48
+#define CORR_SEQ_BITS   16
 
 /* Pending NCO commands per channel (corr_if.h): commands tagged two periods ahead need two. */
 #define CORR_CMD_QUEUE 2

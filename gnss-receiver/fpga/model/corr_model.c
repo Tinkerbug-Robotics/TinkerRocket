@@ -176,7 +176,7 @@ static int run(corr_model_t *m, cm_ch_t *h, uint64_t t0, const uint8_t *codes, s
                 d->flags = flags;
                 d->ch = ch;
                 d->seq = h->seq;
-                d->t_samp = t0 + k + 1;
+                d->t_samp = (t0 + k + 1) & CORR_TSAMP_MASK;
                 d->code_phase = cp;
                 d->carr_phase = ph;
                 d->carr_cycles = cyc;
@@ -189,7 +189,7 @@ static int run(corr_model_t *m, cm_ch_t *h, uint64_t t0, const uint8_t *codes, s
                 d->il = (float)il;
                 d->ql = (float)ql;
             }
-            h->seq++;
+            h->seq = (h->seq + 1) & CORR_SEQ_MASK;
             ie = qe = ip = qp = il = ql = 0;
             h->carr_word = next_carr;
             h->code_word = next_code;
@@ -214,10 +214,11 @@ int corr_model_process(corr_model_t *m, uint64_t t0, const uint8_t *codes, size_
         cm_ch_t *h = &m->ch[ch];
         size_t k0 = 0;
         if (h->start_pending) {
-            if (h->start.t_start >= t0 + n) {
-                continue;
+            int64_t dt = corr_tsamp_diff(h->start.t_start, t0);
+            if (dt >= (int64_t)n) {
+                continue;  /* starts in a later block */
             }
-            k0 = h->start.t_start > t0 ? (size_t)(h->start.t_start - t0) : 0;
+            k0 = dt > 0 ? (size_t)dt : 0;
             begin(m, h);
         }
         if (!h->active) {

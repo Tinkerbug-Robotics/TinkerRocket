@@ -43,7 +43,8 @@ typedef struct {
     double dc_i, dc_q;       /* offsets removed first, LSB */
     double carrier_fix_hz;   /* carrier-only shift (+22.0 for the rig's _cofs files) */
     double fs_out;           /* DIRECT: the correlator rate */
-    double if_hz;            /* where L1 sits: in the output (DIRECT, NATIVE) or at the ADC (ADC27) */
+    double if_hz;            /* where L1 sits: in the output (DIRECT, NATIVE) or at the ADC (ADC27);
+                                NAN (the default) = the frequency plan's, fe_format.h (NATIVE: 0) */
     double noise_sigma;      /* per-component noise added after resampling, file LSB; 0 = none */
     uint64_t seed;
     int if_order;            /* IF filter order, 0 = none */

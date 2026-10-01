@@ -62,7 +62,7 @@ static void usage(void)
         "  --mode direct|adc27|native  direct: 2-bit at 6.75 MS/s (default); adc27: 2-bit at 27 MS/s\n"
         "                              then the FPGA decimator model; native: float at the file's rate\n"
         "  --start S --dur S           segment of the file, seconds (default: all)\n"
-        "  --if HZ                     IF of the output stream (default 1.2e6, a placeholder)\n"
+        "  --if HZ                     where L1 sits (default: the plan's, fe_format.h)\n"
         "  --fs-out HZ                 direct mode's output rate (default 6.75e6)\n"
         "  --cn0 DBHZ                  add noise so each satellite sits at this C/N0 (manifest sig_power)\n"
         "  --noise-sigma X             or add this per-component noise, file LSB\n"

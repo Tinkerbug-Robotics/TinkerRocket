@@ -25,7 +25,7 @@ void src_usage(void)
             "  --start S --dur S           segment of the file, seconds (default: all)\n"
             "  --mode direct|adc27|native  front-end emulation (default direct: 2-bit at 6.75 MS/s)\n"
             "  --fs-out HZ                 direct mode's output rate (default 6.75e6)\n"
-            "  --if HZ                     IF of the output stream (default 1.2e6, a placeholder)\n"
+            "  --if HZ                     where L1 sits (default: the plan's, fe_format.h)\n"
             "  --cn0 DBHZ | --noise-sigma X  added noise (C/N0 needs the manifest's sig_power)\n"
             "  --seed N --if-order N --if-bw HZ --mag-density D --decim subsample|sum4\n"
             "  --dc auto|none|I,Q --carrier-fix HZ --fs HZ --fc HZ --manifest PATH\n");

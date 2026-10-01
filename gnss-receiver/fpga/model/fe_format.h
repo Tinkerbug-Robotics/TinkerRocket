@@ -16,6 +16,21 @@ extern "C" {
 #define FE_FS_CORR_HZ  (FE_FS_ADC_HZ / FE_DECIM)  /* 6.75 MS/s into the correlators */
 
 /*
+ * Frequency plan (hardware session, 2026-09-30; PROVISIONAL until the owner
+ * confirms it against the MAX2769B Rev 2 filter-centre settings). Low-IF complex
+ * I/Q with the LO below L1, so L1 sits at +IF in the ADC stream: the MAX2769B's
+ * default 4.092 MHz centre, from a fractional-N synthesizer on the 27 MHz
+ * reference (N = 58, F = 206921 / 2^20): LO 1571.328052 MHz, IF 4.091948 MHz.
+ * Keeping every 4th sample folds it to 4.091948 - 6.75 = -2.658052 MHz in the
+ * correlators' stream, 42 kHz from 2 fs / 5 and clear of the other simple ratios
+ * of 6.75 MS/s. The sign depends on the I/Q assignment and the chip's mixer
+ * convention, and first light settles it: every tool takes the IF as a parameter.
+ */
+#define FE_LO_HZ       (FE_FS_ADC_HZ * (58.0 + 206921.0 / 1048576.0))
+#define FE_IF_ADC_HZ   (1575.42e6 - FE_LO_HZ)          /* +4.091948 MHz at 27 MS/s */
+#define FE_IF_HZ       (FE_IF_ADC_HZ - FE_FS_CORR_HZ)  /* -2.658052 MHz at 6.75 MS/s */
+
+/*
  * One complex sample = one nibble: 2-bit sign/magnitude on each of I and Q, as
  * the MAX2769B drives its I1 I0 Q1 Q0 pins. Sign 1 = negative; magnitude 1 =
  * the large level. Packed files carry two samples per byte, the earlier sample

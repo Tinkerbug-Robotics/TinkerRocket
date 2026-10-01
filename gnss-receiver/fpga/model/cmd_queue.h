@@ -34,9 +34,13 @@ static inline void cmdq_clear(cmdq_t *q)
     q->flags = 0;
 }
 
-/* Queues a command: same tag replaces; else a free slot; else replace the later-tagged entry. */
+/*
+ * Queues a command: same tag replaces; else a free slot; else replace the later-tagged entry.
+ * Tags are CORR_SEQ_BITS wide and compare modulo that width.
+ */
 static inline void cmdq_push(cmdq_t *q, uint32_t apply_seq, int32_t carr_word, uint64_t code_word)
 {
+    apply_seq &= CORR_SEQ_MASK;
     int slot = -1;
     for (int k = 0; k < CORR_CMD_QUEUE; k++) {
         if (q->e[k].valid && q->e[k].apply_seq == apply_seq) {
@@ -51,7 +55,7 @@ static inline void cmdq_push(cmdq_t *q, uint32_t apply_seq, int32_t carr_word, u
     if (slot < 0) {
         slot = 0;
         for (int k = 1; k < CORR_CMD_QUEUE; k++) {
-            if (q->e[k].apply_seq > q->e[slot].apply_seq) {
+            if (corr_seq_diff(q->e[k].apply_seq, q->e[slot].apply_seq) > 0) {
                 slot = k;
             }
         }
@@ -72,7 +76,8 @@ static inline uint8_t cmdq_epoch(cmdq_t *q, uint32_t seq, int32_t *carr_word, ui
 {
     int best = -1;
     for (int k = 0; k < CORR_CMD_QUEUE; k++) {
-        if (q->e[k].valid && q->e[k].apply_seq <= seq && (best < 0 || q->e[k].apply_seq > q->e[best].apply_seq)) {
+        if (q->e[k].valid && corr_seq_diff(q->e[k].apply_seq, seq) <= 0 &&
+            (best < 0 || corr_seq_diff(q->e[k].apply_seq, q->e[best].apply_seq) > 0)) {
             best = k;
         }
     }
@@ -81,11 +86,11 @@ static inline uint8_t cmdq_epoch(cmdq_t *q, uint32_t seq, int32_t *carr_word, ui
     if (best >= 0) {
         *carr_word = q->e[best].carr_word;
         *code_word = q->e[best].code_word;
-        if (q->e[best].apply_seq < seq) {
+        if (corr_seq_diff(q->e[best].apply_seq, seq) < 0) {
             flags |= CORR_DUMP_LATE;
         }
         for (int k = 0; k < CORR_CMD_QUEUE; k++) {
-            if (q->e[k].valid && q->e[k].apply_seq <= seq) {
+            if (q->e[k].valid && corr_seq_diff(q->e[k].apply_seq, seq) <= 0) {
                 q->e[k].valid = 0;
             }
         }

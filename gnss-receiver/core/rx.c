@@ -68,7 +68,6 @@ static void free_channel(rx_t *rx, int ch)
 
 int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *cmds, int ncap)
 {
-    (void)t_now;  /* the tick's sample is part of the interface; tagged commands need only the dumps */
     uint8_t touched[CORR_MAX_CH] = {0};
     for (int k = 0; k < nd; k++) {
         int ch = d[k].ch;
@@ -77,18 +76,24 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
         if (c->state == TRK_OFF) {
             continue;
         }
+        /* Extend the correlator's wrapping counters: the sample to 64 bits (a dump is never
+         * newer than the tick), the period to 32. Everything below works in the extended counts. */
+        corr_dump_t x = d[k];
+        x.t_samp = t_now - ((t_now - d[k].t_samp) & CORR_TSAMP_MASK);
+        x.seq = n->have_dump ? n->period + (uint32_t)corr_seq_diff(d[k].seq, n->period) : d[k].seq;
+        n->period = x.seq;
         uint64_t t_prev = n->have_dump ? n->last_t : n->t_start;
-        float T = (float)((double)(d[k].t_samp - t_prev) / rx->cfg.fs);
+        float T = (float)((double)(x.t_samp - t_prev) / rx->cfg.fs);
         /* Carrier phase relative to the IF, exact: words in force times samples. */
-        n->adr_fx += (int64_t)(d[k].t_samp - t_prev) * (int64_t)(d[k].carr_word - rx->if_word);
-        n->last_t = d[k].t_samp;
-        n->last_code_phase = d[k].code_phase;
-        n->last_carr_phase = d[k].carr_phase;
-        n->last_carr_cycles = d[k].carr_cycles;
+        n->adr_fx += (int64_t)(x.t_samp - t_prev) * (int64_t)(x.carr_word - rx->if_word);
+        n->last_t = x.t_samp;
+        n->last_code_phase = x.code_phase;
+        n->last_carr_phase = x.carr_phase;
+        n->last_carr_cycles = x.carr_cycles;
         /* Words for the period this epoch opens: the dump's own, unless a command's tag has come. */
-        n->cur_carr = d[k].carr_word;
-        n->cur_code = d[k].code_word;
-        while (n->npend > 0 && n->pend_seq[0] <= d[k].seq) {
+        n->cur_carr = x.carr_word;
+        n->cur_code = x.code_word;
+        while (n->npend > 0 && n->pend_seq[0] <= x.seq) {
             n->cur_carr = n->pend_carr[0];
             n->cur_code = n->pend_code[0];
             for (int j = 1; j < n->npend; j++) {
@@ -99,12 +104,12 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
             n->npend--;
         }
         n->have_dump = 1;
-        if (d[k].seq == 0) {
+        if (x.seq == 0) {
             continue;  /* the partial first period */
         }
         int bit;
         uint32_t bit_period;
-        if (trk_update(c, &d[k], T, &bit, &bit_period)) {
+        if (trk_update(c, &x, T, &bit, &bit_period)) {
             if (lnav_push(&rx->nav[ch], bit, bit_period)) {
                 take_nav(rx, &rx->nav[ch]);
             }
@@ -141,7 +146,7 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
             s->ch = (uint8_t)ch;
             s->carr_word = cw;
             s->code_word = kw;
-            s->apply_seq = tag;
+            s->apply_seq = tag & CORR_SEQ_MASK;
             n->sent_carr = cw;
             n->sent_code = kw;
             /* Same tag replaces (as the correlator does); else append, oldest dropped if full. */
@@ -245,7 +250,7 @@ int rx_acquire(rx_t *rx, uint64_t t_now, uint64_t t0, const float *iq, size_t n,
         s->ch = (uint8_t)ch;
         s->sig = GNSS_SIG_GPS_L1CA;
         s->prn = (uint8_t)prn;
-        s->t_start = t_start;
+        s->t_start = t_start & CORR_TSAMP_MASK;
         s->code_phase = (uint64_t)llround(ph * CODE_ONE);
         s->tap_offset = (uint64_t)llround((double)rx->cfg.tap_chips * CODE_ONE);
         s->carr_word = cw;

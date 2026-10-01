@@ -20,7 +20,7 @@ void fe_cfg_default(fe_cfg_t *c)
     c->mode = FE_MODE_DIRECT;
     c->fs_out = FE_FS_CORR_HZ;
     c->fc_in = GNSS_FREQ_L1_HZ;
-    c->if_hz = 1.2e6;          /* placeholder until the hardware session picks the IF */
+    c->if_hz = NAN;            /* the frequency plan's, for the mode (fe_init) */
     c->seed = 1;
     c->if_order = 5;
     c->if_bw_hz = 4.2e6;
@@ -51,6 +51,11 @@ int fe_init(fe_t *fe, const fe_cfg_t *cfg)
 {
     memset(fe, 0, sizeof(*fe));
     fe->cfg = *cfg;
+    if (isnan(fe->cfg.if_hz)) {
+        /* The frequency plan (fe_format.h): L1 at the ADC's IF before the 27 MS/s stream is
+         * decimated, at the correlators' IF in a stream made at their rate, at 0 Hz in a native one. */
+        fe->cfg.if_hz = cfg->mode == FE_MODE_ADC27 ? FE_IF_ADC_HZ : (cfg->mode == FE_MODE_NATIVE ? 0.0 : FE_IF_HZ);
+    }
     const fe_cfg_t *c = &fe->cfg;
     if (!(c->fs_in > 0.0)) {
         return -1;

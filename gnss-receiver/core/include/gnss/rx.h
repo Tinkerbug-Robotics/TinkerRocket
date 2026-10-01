@@ -55,7 +55,8 @@ typedef struct {
 
 typedef struct {
     uint64_t t_start;           /* sample the channel started at */
-    uint64_t last_t;            /* t_samp of the last dump */
+    uint64_t last_t;            /* t_samp of the last dump, extended to 64 bits */
+    uint32_t period;            /* seq of the last dump, extended to 32 bits */
     uint64_t last_code_phase;
     uint32_t last_carr_phase;
     uint32_t last_carr_cycles;
@@ -64,7 +65,7 @@ typedef struct {
     uint64_t cur_code;
     int32_t sent_carr;          /* the last command sent */
     uint64_t sent_code;
-    uint32_t pend_seq[4];       /* commands sent and not yet applied: their tags and words, oldest first */
+    uint32_t pend_seq[4];       /* commands sent and not yet applied: their (extended) tags and words, oldest first */
     int32_t pend_carr[4];
     uint64_t pend_code[4];
     int npend;

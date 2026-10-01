@@ -79,8 +79,15 @@ Every output gets a `.ini` beside it giving its rate, IF, source segment and sam
 - **`cs8`:** the ±1/±3 weights as int8, readable by Pocket SDR;
 - **`cf32`:** float.
 
-The IF of the 6.75 MS/s stream defaults to +1.2 MHz. **That is a placeholder until the hardware design
-sets the IF.**
+**The IF follows the hardware session's frequency plan (provisional until the owner confirms it):**
+- The MAX2769B's LO sits at 1571.328052 MHz (fractional-N from 27 MHz). That puts L1 at +4.091948 MHz
+  in the 27 MS/s ADC stream.
+- Keeping every 4th sample folds it to −2.658052 MHz at 6.75 MS/s. That is the default for streams
+  made at the correlators' rate. `--mode adc27` places L1 at +4.092 MHz and folds it the same way.
+- The IF's sign rests on the chip's I/Q convention, and first light settles it. Every tool takes
+  `--if`.
+- At the correlators, the plan's IF costs nothing measurable against the old +1.2 MHz placeholder.
+  The static file gives 40.76 against 40.80 dB-Hz and the same 239 fixes in 60 s.
 
 Measured on the SignalSim static file, the 2-bit 6.75 MS/s stream costs 0.43 dB of C/N0 against the
 native file. Doppler is unchanged to 0.01 Hz on every satellite.
@@ -149,11 +156,12 @@ float bank), so the receiver core already runs against the FPGA's arithmetic.
 | Sample input | 2-bit sign/magnitude, weights 1 and 3, 6.75 MS/s | The MAX2769B's output |
 | Carrier NCO | 32-bit phase; signed 32-bit word | 1.6 mHz steps |
 | Code NCO | chip index plus a 40-bit fraction | 2 mm/s steps: no DLL bias from carrier aiding |
-| Carrier mixer | 3-bit phase, 8 sectors, levels 1 and 2 (the GP2021's) | −0.10 dB; 16 sectors buys only 0.03 dB more |
+| Carrier mixer | 3-bit phase, 8 sectors, levels 1 and 2 (the GP2021's) | −0.10 dB on 2-bit samples (−0.25 dB on white noise); 16 sectors buys only 0.03 dB more |
 | Taps | early/prompt/late at ±0.25 chip | As tracked |
 | Accumulators | 24-bit signed | 1 ms needs 18 bits, 10 ms B1C 21; the largest seen is 4,058 |
 | Dump and tick | at each code epoch; a 1 ms tick reads them | As tracked |
 | NCO commands | tagged with the period they take effect after; 2 pending per channel | A fixed loop delay; see below |
+| Counters | sample count 48-bit, period count (`seq`, `apply_seq`) 16-bit, both compared modulo | The hardware session's widths; the P4 extends them |
 | Decimator 27 → 6.75 | every 4th sample | Costs nothing measurable; sum-of-4 to 2-bit costs 0.4 dB |
 
 **Test vectors for the HDL.**
@@ -169,7 +177,7 @@ The vectors are three files:
 - `dumps.csv`: every dump the correlator must produce.
 
 `vecreplay` feeds a fresh model only those files and checks every dump bit for bit, the same job an
-HDL testbench does. 300 ms of the static file gives 3,757 dumps with no mismatches.
+HDL testbench does. 300 ms of the static file gives 3,744 dumps with no mismatches, with or without the P4's latency.
 
 **Tagged commands (owner decision, 2026-09-30).**
 - Each NCO command names the period whose closing code epoch switches the channel to its words.
@@ -180,6 +188,25 @@ HDL testbench does. 300 ms of the static file gives 3,757 dumps with no mismatch
 - A command that arrives after its tagged epoch applies at the next epoch and sets `CORR_DUMP_LATE`.
 - `gnssrx --p4-latency-us T` delivers commands T µs after each tick. With 0 and 600 µs the dumps,
   observables and PVT are byte-identical, and a unit test holds that.
+
+**Counters (hardware session, 2026-09-30).**
+- The FPGA's sample counter is 48 bits, and each channel's period count is 16 bits. Both wrap: the
+  sample counter after 1.3 years, the period count every 65.5 s.
+- The model wraps them as the HDL will. The P4 code (`rx_tick`) extends them to 64 and 32 bits.
+- Two tests guard this:
+  - A unit test runs a stream across the sample-counter wrap and gets identical dumps.
+  - A 140 s `gnssrx` run, in which every channel's period count wraps twice, is byte-identical to
+    the same run before the change.
+
+**The carrier mixer around the IF** (`IfPlan.MixerAroundTheIf`). The 8-sector table was swept ±100 kHz
+around −2.658 MHz in 100 Hz steps.
+- Against white noise it loses 0.246 dB everywhere, flat to 0.001 dB.
+- A DC offset in the samples can reach the correlators unspread only where a table harmonic folds it
+  onto 0 Hz. That is the simple ratios of 6.75 MS/s.
+- The nearest is 2 fs / 5, 42 kHz from the IF. Its leakage is −21 dB, a feature a few hundred hertz
+  wide.
+- Inside the ±15 kHz that satellites occupy (Doppler, vehicle velocity and the reference's
+  ±0.5 ppm), the leakage stays below −44 dB.
 
 ## Pocket SDR as the cross-check
 
