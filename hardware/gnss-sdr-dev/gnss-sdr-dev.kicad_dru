@@ -10,12 +10,13 @@
 	(constraint clearance (min 0.15mm))
 	(condition "A.Type != 'Zone' && B.Type != 'Zone' && ((A.intersectsCourtyard('U101') && B.intersectsCourtyard('U101')) || (A.intersectsCourtyard('U102') && B.intersectsCourtyard('U102')))"))
 
-# ESP32-P4 (U6, 0.35 mm pitch QFN: 0.17 mm between pads), boot flash (U7, 0.5 mm WLCSP), P4 buck (U9) and
-# IMU (U10): pads, fan-out tracks and the vias between the P4's pin ring and its exposed pad sit 0.1 mm apart
-# inside each courtyard, as on the Space Bug and Mantis. Zone fills keep the board default.
+# ESP32-P4 (U6, 0.35 mm pitch QFN: 0.17 mm between pads), boot flash (U7) and FPGA configuration flash (U502),
+# both 0.5 mm WLCSP, P4 buck (U9) and IMU (U10): pads, fan-out tracks and the vias between the P4's pin ring and
+# its exposed pad sit 0.1 mm apart inside each courtyard, as on the Space Bug and Mantis. Zone fills keep the
+# board default.
 (rule "Fine-pitch parts: pad and fan-out clearance"
 	(constraint clearance (min 0.1mm))
-	(condition "A.Type != 'Zone' && B.Type != 'Zone' && ((A.intersectsCourtyard('U6') && B.intersectsCourtyard('U6')) || (A.intersectsCourtyard('U7') && B.intersectsCourtyard('U7')) || (A.intersectsCourtyard('U9') && B.intersectsCourtyard('U9')) || (A.intersectsCourtyard('U10') && B.intersectsCourtyard('U10')))"))
+	(condition "A.Type != 'Zone' && B.Type != 'Zone' && ((A.intersectsCourtyard('U6') && B.intersectsCourtyard('U6')) || (A.intersectsCourtyard('U7') && B.intersectsCourtyard('U7')) || (A.intersectsCourtyard('U502') && B.intersectsCourtyard('U502')) || (A.intersectsCourtyard('U9') && B.intersectsCourtyard('U9')) || (A.intersectsCourtyard('U10') && B.intersectsCourtyard('U10')))"))
 
 # ECP5 caBGA256 (U501, 0.8 mm pitch, 0.35 mm balls): 0.45 mm between ball pads and 0.4 mm between the
 # via-in-pad vias, so fan-out tracks between balls and between vias sit 0.1 mm from them, inside the
