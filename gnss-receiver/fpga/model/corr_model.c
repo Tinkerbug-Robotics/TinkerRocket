@@ -43,9 +43,6 @@ void corr_model_init(corr_model_t *m, const corr_model_cfg_t *cfg)
 {
     memset(m, 0, sizeof(*m));
     m->cfg = *cfg;
-    for (int prn = 1; prn <= GPS_MAX_PRN; prn++) {
-        gps_ca_code(prn, m->ca[prn - 1]);
-    }
     int ns = 1 << cfg->lut_bits;
     for (unsigned nib = 0; nib < 16; nib++) {
         int wi = weight(nib & FE_CODE_I_SIGN, nib & FE_CODE_I_MAG);
@@ -66,7 +63,7 @@ int corr_model_command(corr_model_t *m, const corr_cmd_t *cmd)
     cm_ch_t *h = &m->ch[cmd->ch];
     switch (cmd->type) {
     case CORR_CMD_START:
-        if (cmd->sig != GNSS_SIG_GPS_L1CA || cmd->prn < 1 || cmd->prn > GPS_MAX_PRN) {
+        if (!corr_model_sig_ok(cmd->sig, cmd->prn)) {
             return -1;
         }
         h->start = *cmd;
@@ -85,14 +82,53 @@ int corr_model_command(corr_model_t *m, const corr_cmd_t *cmd)
     }
 }
 
+int corr_model_sig_ok(int sig, int prn)
+{
+    switch (sig) {
+    case GNSS_SIG_GPS_L1CA:
+        return prn >= 1 && prn <= GPS_MAX_PRN;
+    case GNSS_SIG_GAL_E1C:
+        return prn >= 1 && prn <= GAL_MAX_PRN;
+    case GNSS_SIG_BDS_B1CP:
+        return prn >= 1 && prn <= BDS_MAX_PRN;
+    default:
+        return 0;
+    }
+}
+
+/* The channel's codes for its signal (the HDL reads them from block RAM or generates them). */
+static int load_codes(cm_ch_t *h, int sig, int prn)
+{
+    switch (sig) {
+    case GNSS_SIG_GPS_L1CA:
+        gps_ca_code(prn, h->code);
+        h->has_data = 0;
+        h->boc = 0;
+        return GPS_CA_LEN;
+    case GNSS_SIG_GAL_E1C:
+        gal_e1_code(prn, GNSS_SIG_GAL_E1C, h->code);
+        gal_e1_code(prn, GNSS_SIG_GAL_E1B, h->dcode);
+        h->has_data = 1;
+        h->boc = 1;
+        return GAL_E1_LEN;
+    default:  /* GNSS_SIG_BDS_B1CP: corr_model_sig_ok checked it */
+        bds_b1c_code(prn, GNSS_SIG_BDS_B1CP, h->code);
+        bds_b1c_code(prn, GNSS_SIG_BDS_B1CD, h->dcode);
+        h->has_data = 1;
+        h->boc = 1;
+        return BDS_B1C_LEN;
+    }
+}
+
 static void begin(corr_model_t *m, cm_ch_t *h)
 {
+    (void)m;
     const corr_cmd_t *s = &h->start;
-    h->code = m->ca[s->prn - 1];
-    h->code_mod = (uint64_t)GPS_CA_LEN << CORR_CODE_FRAC_BITS;
+    h->code_mod = (uint64_t)load_codes(h, s->sig, s->prn) << CORR_CODE_FRAC_BITS;
     h->code_phase = s->code_phase % h->code_mod;
     h->code_word = s->code_word;
     h->tap = s->tap_offset;
+    h->tap2 = s->tap_offset2;
     h->carr_word = s->carr_word;
     h->carr_phase = 0;
     h->carr_cycles = 0;
@@ -107,7 +143,7 @@ static void check_acc(corr_model_t *m, const int32_t *acc)
 {
     const int32_t lim = (int32_t)1 << (m->cfg.acc_bits - 1);
     int over = 0;
-    for (int k = 0; k < 6; k++) {
+    for (int k = 0; k < 2 * CM_NTAPS; k++) {
         int32_t a = acc[k] < 0 ? -acc[k] : acc[k];
         if (a > m->acc_peak) {
             m->acc_peak = a;
@@ -117,44 +153,55 @@ static void check_acc(corr_model_t *m, const int32_t *acc)
     m->acc_overflows += (uint32_t)over;
 }
 
+/* The replica chip at code phase x: the code, flipped in the second half of each chip for BOC(1,1). */
+static inline unsigned chip_at(const uint8_t *code, uint64_t x, int boc)
+{
+    unsigned c = code[x >> CORR_CODE_FRAC_BITS];
+    return boc ? c ^ (unsigned)((x >> (CORR_CODE_FRAC_BITS - 1)) & 1u) : c;
+}
+
+static inline void acc_add(int32_t *a, unsigned chip, int32_t mi, int32_t mq)
+{
+    if (chip) {
+        a[0] -= mi;
+        a[1] -= mq;
+    } else {
+        a[0] += mi;
+        a[1] += mq;
+    }
+}
+
 static int run(corr_model_t *m, cm_ch_t *h, uint64_t t0, const uint8_t *codes, size_t k0, size_t n,
                corr_dump_t *dumps, int max, uint8_t ch)
 {
     const int shift = 32 - m->cfg.lut_bits;
-    const uint8_t *code = h->code;
-    const uint64_t mod = h->code_mod, tap = h->tap;
+    const uint8_t *code = h->code, *dcode = h->dcode;
+    const uint64_t mod = h->code_mod, tap = h->tap, tap2 = h->tap2;
+    const int boc = h->boc, has_data = h->has_data;
     uint32_t ph = h->carr_phase, cyc = h->carr_cycles;
     uint64_t cp = h->code_phase;
-    int32_t ie = h->acc[0], qe = h->acc[1], ip = h->acc[2], qp = h->acc[3], il = h->acc[4], ql = h->acc[5];
+    int32_t acc[2 * CM_NTAPS];
+    memcpy(acc, h->acc, sizeof(acc));
     int nd = 0;
     for (size_t k = k0; k < n; k++) {
         unsigned nib = codes[k] & 0xFu, sec = ph >> shift;
         int32_t mi = m->mix_i[nib][sec], mq = m->mix_q[nib][sec];
-        uint64_t ce = cp + tap;
-        if (ce >= mod) {
-            ce -= mod;
+        uint64_t xe = cp + tap, xve = cp + tap2;
+        if (xe >= mod) {
+            xe -= mod;
         }
-        uint64_t cl = (cp >= tap) ? cp - tap : cp + mod - tap;
-        if (code[ce >> CORR_CODE_FRAC_BITS]) {
-            ie -= mi;
-            qe -= mq;
-        } else {
-            ie += mi;
-            qe += mq;
+        if (xve >= mod) {
+            xve -= mod;
         }
-        if (code[cp >> CORR_CODE_FRAC_BITS]) {
-            ip -= mi;
-            qp -= mq;
-        } else {
-            ip += mi;
-            qp += mq;
-        }
-        if (code[cl >> CORR_CODE_FRAC_BITS]) {
-            il -= mi;
-            ql -= mq;
-        } else {
-            il += mi;
-            ql += mq;
+        uint64_t xl = (cp >= tap) ? cp - tap : cp + mod - tap;
+        uint64_t xvl = (cp >= tap2) ? cp - tap2 : cp + mod - tap2;
+        acc_add(&acc[2 * CM_E], chip_at(code, xe, boc), mi, mq);
+        acc_add(&acc[2 * CM_P], chip_at(code, cp, boc), mi, mq);
+        acc_add(&acc[2 * CM_L], chip_at(code, xl, boc), mi, mq);
+        acc_add(&acc[2 * CM_VE], chip_at(code, xve, boc), mi, mq);
+        acc_add(&acc[2 * CM_VL], chip_at(code, xvl, boc), mi, mq);
+        if (has_data) {
+            acc_add(&acc[2 * CM_D], chip_at(dcode, cp, boc), mi, mq);
         }
         uint32_t old = ph;
         ph += (uint32_t)h->carr_word;
@@ -166,7 +213,6 @@ static int run(corr_model_t *m, cm_ch_t *h, uint64_t t0, const uint8_t *codes, s
         cp += h->code_word;
         if (cp >= mod) {
             cp -= mod;
-            int32_t acc[6] = {ie, qe, ip, qp, il, ql};
             check_acc(m, acc);
             int32_t next_carr = h->carr_word;
             uint64_t next_code = h->code_word;
@@ -182,15 +228,21 @@ static int run(corr_model_t *m, cm_ch_t *h, uint64_t t0, const uint8_t *codes, s
                 d->carr_cycles = cyc;
                 d->carr_word = h->carr_word;
                 d->code_word = h->code_word;
-                d->ie = (float)ie;
-                d->qe = (float)qe;
-                d->ip = (float)ip;
-                d->qp = (float)qp;
-                d->il = (float)il;
-                d->ql = (float)ql;
+                d->ie = (float)acc[2 * CM_E];
+                d->qe = (float)acc[2 * CM_E + 1];
+                d->ip = (float)acc[2 * CM_P];
+                d->qp = (float)acc[2 * CM_P + 1];
+                d->il = (float)acc[2 * CM_L];
+                d->ql = (float)acc[2 * CM_L + 1];
+                d->ive = (float)acc[2 * CM_VE];
+                d->qve = (float)acc[2 * CM_VE + 1];
+                d->ivl = (float)acc[2 * CM_VL];
+                d->qvl = (float)acc[2 * CM_VL + 1];
+                d->id = (float)acc[2 * CM_D];
+                d->qd = (float)acc[2 * CM_D + 1];
             }
             h->seq = (h->seq + 1) & CORR_SEQ_MASK;
-            ie = qe = ip = qp = il = ql = 0;
+            memset(acc, 0, sizeof(acc));
             h->carr_word = next_carr;
             h->code_word = next_code;
         }
@@ -198,12 +250,7 @@ static int run(corr_model_t *m, cm_ch_t *h, uint64_t t0, const uint8_t *codes, s
     h->carr_phase = ph;
     h->carr_cycles = cyc;
     h->code_phase = cp;
-    h->acc[0] = ie;
-    h->acc[1] = qe;
-    h->acc[2] = ip;
-    h->acc[3] = qp;
-    h->acc[4] = il;
-    h->acc[5] = ql;
+    memcpy(h->acc, acc, sizeof(acc));
     return nd;
 }
 

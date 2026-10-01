@@ -31,8 +31,10 @@ void rx_init(rx_t *rx, const rx_cfg_t *cfg)
     rx->code_word0 = (uint64_t)llround(1.023e6 / cfg->fs * CODE_ONE);
     rx->carr_k = (float)(TWO_POW_32 / cfg->fs);
     rx->code_k = (float)(CODE_ONE / cfg->fs);
-    for (int p = 0; p <= GPS_MAX_PRN; p++) {
-        rx->prn_ch[p] = -1;
+    for (int sys = 0; sys < GNSS_SYS_COUNT; sys++) {
+        for (int p = 0; p <= GNSS_MAX_PRN; p++) {
+            rx->sat_ch[sys][p] = -1;
+        }
     }
     rx->week = -1;
     rx->prof = cfg->quiet;
@@ -47,7 +49,7 @@ double rx_time(const rx_t *rx, uint64_t t)
 static void take_nav(rx_t *rx, const lnav_t *l)
 {
     if (l->eph.valid) {
-        gps_eph_t *e = &rx->eph[l->prn];
+        gps_eph_t *e = &rx->eph[GNSS_SYS_GPS][l->prn];
         if (!e->valid || e->iode != l->eph.iode || e->toe != l->eph.toe) {
             *e = l->eph;
         }
@@ -60,11 +62,17 @@ static void take_nav(rx_t *rx, const lnav_t *l)
     }
 }
 
+static int sys_of(int sig)
+{
+    return sig == GNSS_SIG_GAL_E1C ? GNSS_SYS_GAL : (sig == GNSS_SIG_BDS_B1CP ? GNSS_SYS_BDS : GNSS_SYS_GPS);
+}
+
 static void free_channel(rx_t *rx, int ch)
 {
     trk_ch_t *c = &rx->ch[ch];
-    if (c->prn >= 1 && c->prn <= GPS_MAX_PRN && rx->prn_ch[c->prn] == ch) {
-        rx->prn_ch[c->prn] = -1;
+    const int sys = sys_of(c->sig);
+    if (c->prn >= 1 && c->prn <= GNSS_MAX_PRN && rx->sat_ch[sys][c->prn] == ch) {
+        rx->sat_ch[sys][c->prn] = -1;
     }
     memset(c, 0, sizeof(*c));
     memset(&rx->nco[ch], 0, sizeof(rx->nco[ch]));
@@ -124,6 +132,17 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
         if (x.seq == 0) {
             continue;  /* the partial first period */
         }
+        if (n->sec_len > 0 && !c->locked_once && c->t_tracked > 5.0f) {
+            c->state = TRK_OFF;  /* an aided start that never locked: no signal where predicted */
+            continue;
+        }
+        if (n->sec_len > 0) {
+            /* A pilot: period k (k >= 1) carries secondary chip (n1 + k - 1) mod its length. */
+            if (n->sec[(uint64_t)(n->n1 + (int64_t)x.seq - 1) % n->sec_len]) {
+                x.ie = -x.ie, x.qe = -x.qe, x.ip = -x.ip, x.qp = -x.qp, x.il = -x.il, x.ql = -x.ql;
+                x.ive = -x.ive, x.qve = -x.qve, x.ivl = -x.ivl, x.qvl = -x.qvl;
+            }
+        }
         int bit;
         uint32_t bit_period;
         if (trk_update(c, prof, &x, T, &bit, &bit_period)) {
@@ -145,6 +164,10 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
             memset(s, 0, sizeof(*s));
             s->type = CORR_CMD_STOP;
             s->ch = (uint8_t)ch;
+            if (rx->nco[ch].sec_len > 0) {
+                /* An aided start that found no signal (or lost it): leave it 30 s before the next. */
+                rx->aid_hold[sys_of(c->sig)][c->prn] = t_now + (uint64_t)llround(30.0 * rx->cfg.fs);
+            }
             free_channel(rx, ch);
             continue;
         }
@@ -217,7 +240,7 @@ int rx_acquire(rx_t *rx, uint64_t t_now, uint64_t t0, const float *iq, size_t n,
     }
     int nc = 0;
     for (int prn = 1; prn <= GPS_MAX_PRN && nc < ncap; prn++) {
-        if (rx->prn_ch[prn] >= 0) {
+        if (rx->sat_ch[GNSS_SYS_GPS][prn] >= 0) {
             continue;
         }
         int ch = -1;
@@ -241,7 +264,7 @@ int rx_acquire(rx_t *rx, uint64_t t_now, uint64_t t0, const float *iq, size_t n,
         trk_start(c, prn, (float)r.dop_hz, rx->cfg.tap_chips, rx->if_word, rx->code_word0, rx->carr_k, rx->code_k);
         c->acq_metric = r.metric;
         lnav_init(&rx->nav[ch], prn);
-        rx->prn_ch[prn] = ch;
+        rx->sat_ch[GNSS_SYS_GPS][prn] = ch;
         int32_t cw;
         uint64_t kw;
         trk_words(c, &cw, &kw);
@@ -279,25 +302,41 @@ int rx_acquire(rx_t *rx, uint64_t t_now, uint64_t t0, const float *iq, size_t n,
 int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
 {
     int no = 0;
-    double t_tx[CORR_MAX_CH];
+    double t_tx[CORR_MAX_CH];  /* in GPS time */
     for (int ch = 0; ch < rx->cfg.max_ch && no < max; ch++) {
         const trk_ch_t *c = &rx->ch[ch];
         const rx_nco_t *n = &rx->nco[ch];
         const lnav_t *l = &rx->nav[ch];
+        const int sys = sys_of(c->sig);
         /* A channel the PLL has let go of still measures: its code and frequency hold under the
          * FLL. Only its carrier phase is void, and lock_s = 0 says so. */
-        if (c->state == TRK_OFF || !l->synced || !n->have_dump || !rx->eph[c->prn].valid) {
+        if (c->state == TRK_OFF || !n->have_dump || !rx->eph[sys][c->prn].valid) {
             continue;
         }
-        /* The period opened by the last dump is c->period + 1; whole periods since the subframe began. */
-        int64_t periods = (int64_t)c->period + 1 - (int64_t)l->sf_period;
         double chips = ((double)n->last_code_phase + (double)(t - n->last_t) * (double)n->cur_code) / CODE_ONE;
-        double tt = l->sf_tow + (double)periods * 1e-3 + chips / 1.023e6;
+        double tt;
+        if (n->sec_len > 0) {
+            if (!c->locked_once) {
+                continue;  /* an aided start counts only once its PLL has confirmed the signal */
+            }
+            /* A pilot started by rx_aid: the period opened by the last dump, c->period + 1,
+             * began at code period n1 + c->period of the week. */
+            tt = (double)(n->n1 + (int64_t)c->period) * n->t_code + chips / 1.023e6;
+        } else {
+            if (!l->synced) {
+                continue;
+            }
+            /* The period opened by the last dump is c->period + 1; whole periods since the subframe began. */
+            int64_t periods = (int64_t)c->period + 1 - (int64_t)l->sf_period;
+            tt = l->sf_tow + (double)periods * 1e-3 + chips / 1.023e6;
+        }
         if (tt >= 604800.0) {
             tt -= 604800.0;
         }
         int64_t adr_fx = n->adr_fx + (int64_t)(t - n->last_t) * (int64_t)(n->cur_carr - rx->if_word);
         rx_obs_t *o = &obs[no];
+        o->sys = sys;
+        o->sig = c->sig;
         o->prn = c->prn;
         o->ch = ch;
         o->t_sv = tt;
@@ -312,12 +351,13 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
             }
         }
         /* RINEX phase grows with range: the negative of the NCO's accumulated Doppler phase; the
-         * Costas half cycle is resolved by the preamble's polarity. */
-        o->adr = -(double)adr_fx / TWO_POW_32 + (l->inverted ? 0.5 : 0.0);
+         * Costas half cycle is resolved by the preamble's polarity (a pilot has none). */
+        o->adr = -(double)adr_fx / TWO_POW_32 + (n->sec_len == 0 && l->inverted ? 0.5 : 0.0);
         o->cn0 = c->cn0;
         o->lock_s = c->state == TRK_LOCKED ? c->t_state : 0.0f;
         o->half_cycle = 1;
-        t_tx[no] = tt;
+        /* BDT runs 14 s behind GPST; GST's seconds of week track GPST's. */
+        t_tx[no] = sys == GNSS_SYS_BDS ? tt - BDT_MINUS_GPST : tt;
         no++;
     }
     memset(sol, 0, sizeof(*sol));
@@ -326,7 +366,7 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
     }
     if (!rx->clk_valid) {
         /* First fix: guess the receiver clock from the latest transmit time plus a typical 75 ms. */
-        double mx = t_tx[0];
+        double mx = t_tx[0];  /* GPS time */
         for (int k = 1; k < no; k++) {
             if (gps_time_diff(t_tx[k], mx) > 0.0) {
                 mx = t_tx[k];
@@ -340,7 +380,8 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
     pvt_meas_t m[PVT_MAX_SAT];
     int nm = 0;
     for (int k = 0; k < no && nm < PVT_MAX_SAT; k++) {
-        obs[k].pr = gps_time_diff(t_rx, obs[k].t_sv) * GNSS_C;
+        obs[k].pr = gps_time_diff(t_rx, t_tx[k]) * GNSS_C;
+        m[nm].sys = obs[k].sys;
         m[nm].prn = obs[k].prn;
         m[nm].pr = obs[k].pr;
         m[nm].dop = obs[k].dop;
@@ -362,4 +403,128 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
         rx->sol = *sol;
     }
     return no;
+}
+
+/* What the fix predicts for satellite e at GPS time t_rx (s of week, true): the transmit time on
+ * the satellite's clock (its system's time), the Doppler (Hz) and the elevation (rad). */
+static void predict(const rx_t *rx, const gps_eph_t *e, double t_rx, double *t_sv, double *dop, double *el)
+{
+    const pvt_sol_t *s = &rx->sol;
+    const double toff = e->sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0;
+    double tau = 0.075, pos[3], vel[3], clk = 0.0, c1, p1[3], t_sys = t_rx;
+    double az = 0.0, d[3] = {0.0, 0.0, 0.0}, rho = 1.0;
+    *el = 0.0;
+    for (int it = 0; it < 4; it++) {
+        t_sys = t_rx - tau + toff;
+        gps_sat_pos(e, t_sys, pos, vel, &clk);
+        double a = GPS_OMEGA_E * tau, ca = cos(a), sa = sin(a);
+        double sp[3] = {ca * pos[0] + sa * pos[1], -sa * pos[0] + ca * pos[1], pos[2]};
+        for (int k = 0; k < 3; k++) {
+            d[k] = sp[k] - s->pos[k];
+        }
+        rho = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        double up[3] = {cos(s->lat) * cos(s->lon), cos(s->lat) * sin(s->lon), sin(s->lat)};
+        double east[3] = {-sin(s->lon), cos(s->lon), 0.0};
+        double north[3] = {-sin(s->lat) * cos(s->lon), -sin(s->lat) * sin(s->lon), cos(s->lat)};
+        double de = (d[0] * east[0] + d[1] * east[1]) / rho;
+        double dn = (d[0] * north[0] + d[1] * north[1] + d[2] * north[2]) / rho;
+        double du = (d[0] * up[0] + d[1] * up[1] + d[2] * up[2]) / rho;
+        *el = asin(du);
+        az = atan2(de, dn);
+        double delay = 0.0;
+        if (rx->iono.valid && rx->pvt_opt.use_iono) {
+            delay += iono_klobuchar(&rx->iono, s->lat, s->lon, az, *el, t_rx);
+        }
+        if (rx->pvt_opt.use_tropo && *el > 0.0) {
+            delay += tropo_saastamoinen(s->lat, s->h, *el);
+        }
+        tau = (rho + delay) / GNSS_C;
+    }
+    gps_sat_pos(e, t_sys + 1.0, p1, NULL, &c1);
+    double u[3] = {d[0] / rho, d[1] / rho, d[2] / rho};
+    double rr = (vel[0] - s->vel[0]) * u[0] + (vel[1] - s->vel[1]) * u[1] + (vel[2] - s->vel[2]) * u[2];
+    *dop = -(rr + s->clk_drift - GNSS_C * (c1 - clk)) / (GNSS_C / GNSS_FREQ_L1_HZ);
+    *t_sv = t_sys + clk;
+    if (*t_sv < 0.0) {
+        *t_sv += 604800.0;
+    }
+}
+
+int rx_aid(rx_t *rx, uint64_t t_now, corr_cmd_t *cmds, int ncap)
+{
+    if (!rx->sol.valid || !rx->clk_valid || t_now < rx->next_aid) {
+        return 0;
+    }
+    rx->next_aid = t_now + (uint64_t)llround(rx->cfg.fs);
+    const uint64_t t_start = t_now + (uint64_t)llround(rx->cfg.fs * 1e-3);
+    const double t_rx = rx_time(rx, t_start) - rx->sol.clk_bias / GNSS_C;
+    const double tap = 0.1, tap2 = 0.5;  /* BOC(1,1): +-0.1 chip on the steep peak, +-0.5 on the side peaks */
+    int nc = 0;
+    for (int sys = GNSS_SYS_GAL; sys <= GNSS_SYS_BDS && nc < ncap; sys++) {
+        for (int prn = 1; prn <= GNSS_MAX_PRN && nc < ncap; prn++) {
+            const gps_eph_t *e = &rx->eph[sys][prn];
+            if (!e->valid || e->health != 0 || rx->sat_ch[sys][prn] >= 0 || t_now < rx->aid_hold[sys][prn]) {
+                continue;
+            }
+            int ch = -1;
+            for (int k = 0; k < rx->cfg.max_ch; k++) {
+                if (rx->ch[k].prn == 0) {
+                    ch = k;
+                    break;
+                }
+            }
+            if (ch < 0) {
+                return nc;
+            }
+            double t_sv, dop, el;
+            predict(rx, e, t_rx, &t_sv, &dop, &el);
+            if (el < 10.0 * 3.14159265358979 / 180.0) {
+                continue;
+            }
+            const int sig = sys == GNSS_SYS_GAL ? GNSS_SIG_GAL_E1C : GNSS_SIG_BDS_B1CP;
+            const int len = sys == GNSS_SYS_GAL ? GAL_E1_LEN : BDS_B1C_LEN;
+            const double t_code = (double)len / 1.023e6;
+            const double periods = floor(t_sv / t_code);
+            const double ph = (t_sv - periods * t_code) / t_code * (double)len;  /* chips at t_start */
+
+            trk_ch_t *c = &rx->ch[ch];
+            trk_start(c, prn, (float)dop, (float)tap, rx->if_word, rx->code_word0, rx->carr_k, rx->code_k);
+            trk_set_signal(c, sig);
+            memset(&rx->nav[ch], 0, sizeof(rx->nav[ch]));
+            rx->sat_ch[sys][prn] = ch;
+            int32_t cw;
+            uint64_t kw;
+            trk_words(c, &cw, &kw);
+            rx_nco_t *nn = &rx->nco[ch];
+            memset(nn, 0, sizeof(*nn));
+            nn->t_start = t_start;
+            nn->sent_carr = cw;
+            nn->sent_code = kw;
+            nn->cur_carr = cw;
+            nn->cur_code = kw;
+            nn->t_code = t_code;
+            nn->n1 = (int64_t)periods + 1;
+            if (sys == GNSS_SYS_GAL) {
+                gal_e1c_secondary(nn->sec);
+                nn->sec_len = GAL_E1C_SEC_LEN;
+            } else {
+                bds_b1c_secondary(prn, nn->sec);
+                nn->sec_len = BDS_B1C_SEC_LEN;
+            }
+
+            corr_cmd_t *s = &cmds[nc++];
+            memset(s, 0, sizeof(*s));
+            s->type = CORR_CMD_START;
+            s->ch = (uint8_t)ch;
+            s->sig = (uint8_t)sig;
+            s->prn = (uint8_t)prn;
+            s->t_start = t_start & CORR_TSAMP_MASK;
+            s->code_phase = (uint64_t)llround(ph * CODE_ONE);
+            s->tap_offset = (uint64_t)llround(tap * CODE_ONE);
+            s->tap_offset2 = (uint64_t)llround(tap2 * CODE_ONE);
+            s->carr_word = cw;
+            s->code_word = kw;
+        }
+    }
+    return nc;
 }

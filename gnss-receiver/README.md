@@ -361,6 +361,75 @@ needs two things on the P4:
 - **Real motors add what the files lack.** Vibration on the oscillator, plume, spin and antenna
   phase are milestone 7.
 
+## Galileo E1 and BeiDou B1C (milestone 6, in progress)
+
+```bash
+build/host/gnssrx signalsim_static_gpsgalb1c_2026_45_n.C8 --dur 90 --out runs/m6
+```
+
+**Codes** (`core/sig/`):
+- **B1C:** the data, pilot and pilot-secondary codes are Weil codes generated here. All 189 match
+  the ICD's printed first and last 24 chips.
+- **E1:** the E1-B and E1-C memory codes come from the Galileo ICD's attachments. They are not
+  under this repository's licence: see [Licences](#licences).
+
+**Correlator** (corr_if.h, the golden model and the float bank):
+- A START names the tracked signal: L1 C/A, E1-C or the B1C pilot.
+- E1 and B1C replicas carry sine-phased BOC(1,1).
+- Each channel has five taps on the tracked code (very early, early, prompt, late, very late)
+  plus a prompt on the data code.
+- Code periods are 1, 4 or 10 ms.
+- Secondary codes are wiped off on the P4, one chip per period.
+- Measured on synthetic signals, against the theory:
+  - E1: early/prompt 0.698 (theory 0.700); very early −0.501 (−0.5); E1-B at E1-C's power, in
+    phase.
+  - B1C: data/pilot 0.613 (0.616), in quadrature as SignalSim builds it.
+- The GPS path is unchanged: a 65 s boost run is byte-identical, and the HDL vectors replay with
+  no mismatches.
+
+**Aided starts** (`rx_aid`):
+- Galileo and BeiDou ephemerides are preloaded from the generator's RINEX (the manifest's `nav`),
+  as the flight computer could provide them. Their navigation messages are not decoded yet.
+- After the first GPS fix, every Galileo and BeiDou satellite above 10° gets a channel started
+  at the predicted code phase and Doppler. The predicted B1C Dopplers match SignalSim's within
+  1 Hz.
+- The transmit time comes from the prediction rounded to the code epoch, and the secondary-code
+  phase from it. On the file, Galileo's CS25 alignment agrees on every dump.
+- A start that never locks is dropped after 5 s and held off for 30 s. Until a pilot has locked
+  (lock indicator and 30 dB-Hz), it gives no measurements.
+
+**Tracking a pilot:**
+- full-range PLL and FLL discriminators;
+- the BOC(1,1) DLL gain;
+- C/N0 by moments over 0.2 s;
+- loop bandwidths capped at Bn·T ≤ 0.05 (12.5 Hz for E1, 5 Hz for B1C). With 10 ms dumps and
+  the three-period command delay, the 15 Hz pull-in PLL could not lock B1C.
+
+**PVT:** one time offset per extra system. A GPS-only solve does the same arithmetic as before.
+
+Results, static file, 40–90 s (GPS 13, Galileo 8, BeiDou 8 satellites):
+
+| | GPS only (regression file) | GPS + Galileo + BeiDou |
+|---|---|---|
+| Satellites, PDOP | 13, 1.34 | 29, 0.92 |
+| Position sd E / N / U | 0.43 / 0.28 / 0.81 m | 0.95 / 0.25 / 0.93 m |
+| Pseudorange residual sd | 0.45–1.3 m | GPS 0.55–1.5 m; Galileo 0.55–1.7 m (E19 7.2 m, below); B1C 0.35–1.1 m |
+| C/N0 | 40.3 dB-Hz | GPS 40.3; E1-C 37.0; B1C pilot 38.4 (SignalSim predicts 39.2) |
+
+Galileo and BeiDou time offsets solve to about +1.5 m against GPS, steady to a few decimetres.
+
+**Known limits:**
+- **Low code Doppler.** E19 (+9 Hz) wanders ±11 m with a 25 s period. That is the time its code
+  takes to slide one sample spacing (0.15 chip) at 0.006 chips/s. The code tracking error
+  repeats with the sample phase, which faster satellites average out and this one follows.
+  Its wander is what makes east worse than GPS alone. Carrier smoothing of the pseudoranges
+  (the pilots hold phase throughout) is the fix.
+- **Bump-jump detection.** The very early and very late taps exist, but nothing acts on them
+  yet. Aided starts land within 0.1 chip, so side peaks have not been met.
+- **C/N0 on a pilot.** The 0.2 s moments estimate reads up to 28 dB-Hz on noise. A
+  narrowband/wideband estimate on the wiped pilot would read zero.
+- **Navigation messages.** E1-B I/NAV and B-CNAV1 are not decoded; ephemerides are preloaded.
+
 ## Pocket SDR as the cross-check
 
 - **Build:** a source-only checkout at `~/Projects/ModelRockets/bench-backups/pocketsdr/` (commit

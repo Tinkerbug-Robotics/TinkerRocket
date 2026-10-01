@@ -44,12 +44,14 @@ typedef struct {
 
 /* Per-satellite record of an epoch (what goes to RINEX and the logs). */
 typedef struct {
+    int sys;                    /* gnss_sys_t */
+    int sig;                    /* gnss_sig_t tracked */
     int prn;
     int ch;
     double pr;                  /* m */
     double adr;                 /* carrier phase, cycles, RINEX sign (grows with range) */
     double dop;                 /* Hz */
-    double t_sv;                /* transmit time, s of week (satellite clock) */
+    double t_sv;                /* transmit time, s of week (satellite clock, in its system's time) */
     float cn0;                  /* dB-Hz */
     float lock_s;               /* time since the PLL locked; 0 when it is not (the carrier phase is void) */
     int half_cycle;             /* the Costas half-cycle ambiguity is resolved */
@@ -82,6 +84,12 @@ typedef struct {
     uint64_t pend_code[4];
     int npend;
     int have_dump;
+    /* Pilot channels (aided starts, rx_aid): code period, the week's count of code periods at
+     * the epoch that opened period 1, and the secondary code, one chip per period. */
+    double t_code;
+    int64_t n1;
+    uint16_t sec_len;
+    uint8_t sec[BDS_B1C_SEC_LEN];
 } rx_nco_t;
 
 typedef struct {
@@ -93,13 +101,15 @@ typedef struct {
     trk_ch_t ch[CORR_MAX_CH];
     rx_nco_t nco[CORR_MAX_CH];
     lnav_t nav[CORR_MAX_CH];
-    int prn_ch[GPS_MAX_PRN + 1];    /* channel tracking each PRN, -1 none */
+    int sat_ch[GNSS_SYS_COUNT][GNSS_MAX_PRN + 1];  /* channel tracking each satellite, -1 none */
 
-    gps_eph_t eph[GPS_MAX_PRN + 1];
+    gps_eph_t eph[GNSS_SYS_COUNT][GNSS_MAX_PRN + 1];  /* GPS decoded; others preloaded (rx_aid) */
     gps_iono_t iono;
     int week;
 
     uint64_t next_acq;              /* sample count of the next search */
+    uint64_t next_aid;              /* and of the next aided start */
+    uint64_t aid_hold[GNSS_SYS_COUNT][GNSS_MAX_PRN + 1];  /* no aided start for this satellite before */
 
     /* Receiver time: GPS time (s of week) of sample clk_n is clk_t. */
     int clk_valid;
@@ -131,6 +141,14 @@ int rx_wants_snapshot(const rx_t *rx, uint64_t t_now, int *ms);
  */
 int rx_acquire(rx_t *rx, uint64_t t_now, uint64_t t0, const float *iq, size_t n, float *work, corr_cmd_t *cmds,
                int ncap);
+
+/*
+ * Aided starts (milestone 6): once GPS has a fix, starts a channel on the pilot of every
+ * Galileo and BeiDou satellite with a preloaded ephemeris (rx->eph) above 10 degrees, at the
+ * code phase and Doppler the fix predicts for sample t_now + 1 ms: E1-C with E1-B beside it,
+ * or the B1C pilot with its data. Acts at most once a second. Returns the commands written.
+ */
+int rx_aid(rx_t *rx, uint64_t t_now, corr_cmd_t *cmds, int ncap);
 
 /* Observables and PVT at sample t (the latest tick). Returns the number of observables. */
 int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol);

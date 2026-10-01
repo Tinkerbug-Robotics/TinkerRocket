@@ -17,6 +17,8 @@
 #include "fe_format.h"
 #include "gnss/rx.h"
 #include "loops_arg.h"
+#include "manifest.h"
+#include "rinex_nav.h"
 #include "source.h"
 
 #include <errno.h>
@@ -59,7 +61,11 @@ static void usage(void)
             "  --loops-quiet SPEC --loops-boost SPEC   tracking loop profiles, PF,PP,PD/LF,LP,LD[:MS]:\n"
             "                            pull-in / locked FLL,PLL,DLL bandwidths (Hz), FLL block (ms)\n"
             "  --boost-at S0,S1          the boost profile from file second S0 to S1, as the flight\n"
-            "                            computer would call it (default: never)\n");
+            "                            computer would call it (default: never)\n"
+            "  --pilot-dumps             write pilot channels' raw dumps (before secondary-code wipe-off)\n"
+            "                            to pilot_dumps.csv, for checking the wipe-off\n"
+            "  --nav FILE | --no-nav     RINEX navigation file to preload Galileo and BeiDou ephemerides\n"
+            "                            from, for aided starts (default: the manifest's nav)\n");
     src_usage();
 }
 
@@ -115,9 +121,10 @@ static void apply(bank_t *b, uint64_t t_now, const corr_cmd_t *c)
         corr_float_command(b->cf, c);
     }
     if (b->v_cmds && t_now < b->v_end) {
-        fprintf(b->v_cmds, "%llu,%d,%d,%d,%llu,%llu,%llu,%d,%llu,%u\n", (unsigned long long)t_now, c->type, c->ch,
-                c->prn, (unsigned long long)c->t_start, (unsigned long long)c->code_phase,
-                (unsigned long long)c->tap_offset, c->carr_word, (unsigned long long)c->code_word, c->apply_seq);
+        fprintf(b->v_cmds, "%llu,%d,%d,%d,%llu,%llu,%llu,%d,%llu,%u,%d,%llu\n", (unsigned long long)t_now, c->type,
+                c->ch, c->prn, (unsigned long long)c->t_start, (unsigned long long)c->code_phase,
+                (unsigned long long)c->tap_offset, c->carr_word, (unsigned long long)c->code_word, c->apply_seq, c->sig,
+                (unsigned long long)c->tap_offset2);
     }
 }
 
@@ -141,10 +148,12 @@ static void vec_dumps(bank_t *b, const corr_dump_t *d, int nd)
         if (d[k].t_samp > b->v_end) {
             continue;
         }
-        fprintf(b->v_dumps, "%d,%u,%llu,%llu,%u,%u,%d,%llu,%u,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n", d[k].ch, d[k].seq,
-                (unsigned long long)d[k].t_samp, (unsigned long long)d[k].code_phase, d[k].carr_phase,
-                d[k].carr_cycles, d[k].carr_word, (unsigned long long)d[k].code_word, d[k].flags, (double)d[k].ie,
-                (double)d[k].qe, (double)d[k].ip, (double)d[k].qp, (double)d[k].il, (double)d[k].ql);
+        fprintf(b->v_dumps, "%d,%u,%llu,%llu,%u,%u,%d,%llu,%u,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n",
+                d[k].ch, d[k].seq, (unsigned long long)d[k].t_samp, (unsigned long long)d[k].code_phase,
+                d[k].carr_phase, d[k].carr_cycles, d[k].carr_word, (unsigned long long)d[k].code_word, d[k].flags,
+                (double)d[k].ie, (double)d[k].qe, (double)d[k].ip, (double)d[k].qp, (double)d[k].il, (double)d[k].ql,
+                (double)d[k].ive, (double)d[k].qve, (double)d[k].ivl, (double)d[k].qvl, (double)d[k].id,
+                (double)d[k].qd);
     }
 }
 
@@ -158,7 +167,8 @@ int main(int argc, char **argv)
     int no_iono = 0, no_tropo = 0, lut_bits = 0;
     gps_iono_t iono_aid;
     memset(&iono_aid, 0, sizeof(iono_aid));
-    const char *loops_quiet = NULL, *loops_boost = NULL;
+    const char *loops_quiet = NULL, *loops_boost = NULL, *nav_arg = NULL;
+    int no_nav = 0, pilot_dumps = 0;
     double boost0 = INFINITY, boost1 = -INFINITY;
     for (int i = 1; i < argc; i++) {
         int r = src_parse_opt(&so, argc, argv, &i);
@@ -194,6 +204,12 @@ int main(int argc, char **argv)
             no_tropo = 1;
         } else if (!strcmp(a, "--truth") && v) {
             truth_arg = argv[++i];
+        } else if (!strcmp(a, "--nav") && v) {
+            nav_arg = argv[++i];
+        } else if (!strcmp(a, "--no-nav")) {
+            no_nav = 1;
+        } else if (!strcmp(a, "--pilot-dumps")) {
+            pilot_dumps = 1;
         } else if (!strcmp(a, "--loops-quiet") && v) {
             loops_quiet = argv[++i];
         } else if (!strcmp(a, "--loops-boost") && v) {
@@ -280,9 +296,11 @@ int main(int argc, char **argv)
         snprintf(p, sizeof(p), "%s/samples.u2", vec_dir);
         bank.v_samples = fopen(p, "wb");
         bank.v_cmds = open_csv(vec_dir, "commands.csv",
-                               "t_sample,type,ch,prn,t_start,code_phase,tap_offset,carr_word,code_word,apply_seq");
+                               "t_sample,type,ch,prn,t_start,code_phase,tap_offset,carr_word,code_word,apply_seq,sig,"
+                               "tap_offset2");
         bank.v_dumps = open_csv(vec_dir, "dumps.csv",
-                                "ch,seq,t_samp,code_phase,carr_phase,carr_cycles,carr_word,code_word,flags,ie,qe,ip,qp,il,ql");
+                                "ch,seq,t_samp,code_phase,carr_phase,carr_cycles,carr_word,code_word,flags,ie,qe,ip,qp,"
+                                "il,ql,ive,qve,ivl,qvl,id,qd");
         bank.v_end = (uint64_t)llround(vec_ms * 1e-3 * fs);
         if (!bank.v_samples || !bank.v_cmds || !bank.v_dumps) {
             fprintf(stderr, "gnssrx: cannot write vectors into %s\n", vec_dir);
@@ -313,6 +331,33 @@ int main(int argc, char **argv)
     }
     rx->pvt_opt.use_iono = !no_iono;
     rx->pvt_opt.use_tropo = !no_tropo && !src.meta.tropo_none;
+    /* Galileo and BeiDou ephemerides from the generator's RINEX, as the flight computer could
+     * preload them: the records nearest the run's middle, from the manifest's start_gpst. */
+    const char *nav = no_nav ? NULL : (nav_arg ? nav_arg : (src.meta.nav[0] ? src.meta.nav : NULL));
+    if (nav) {
+        char nav_path[4096];
+        int y, mo, d, hh, mi;
+        double ss;
+        if (manifest_resolve_iq(nav, nav_path, sizeof(nav_path)) != 0 ||
+            sscanf(src.meta.start_gpst, "%d-%d-%d %d:%d:%lf", &y, &mo, &d, &hh, &mi, &ss) != 6) {
+            fprintf(stderr, "gnssrx: cannot preload %s (needs the file and the manifest's start_gpst)\n", nav);
+            return 1;
+        }
+        /* GPS week and second of the run's middle. */
+        long days = 0;
+        {
+            int yy = y - (mo <= 2), mm = mo;
+            long era = (yy >= 0 ? yy : yy - 399) / 400, yoe = yy - era * 400;
+            long doy = (153 * (mm + (mm > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+            days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468 - 3657;
+        }
+        double t_mid = (double)days * 86400.0 + hh * 3600.0 + mi * 60.0 + ss + so.start_s +
+                       (so.dur_s > 0 ? 0.5 * so.dur_s : 0.0);
+        int week = (int)floor(t_mid / 604800.0);
+        int n_eph = rinex_nav_load(nav_path, (1u << GNSS_SYS_GAL) | (1u << GNSS_SYS_BDS), week,
+                                   t_mid - week * 604800.0, rx->eph, NULL);
+        printf("gnssrx: preloaded %d Galileo/BeiDou ephemerides from %s\n", n_eph, nav);
+    }
 
     const int acq_ms = rc.acq_ms;
     float *ring = (float *)malloc(sizeof(float) * 2 * spms * (size_t)acq_ms);
@@ -333,6 +378,7 @@ int main(int argc, char **argv)
     FILE *feph = open_csv(out_dir, "eph.csv",
                           "t_s,prn,week,toe,toc,iode,iodc,health,sqrt_a,e,i0,omega0,omega,m0,delta_n,idot,"
                           "omega_dot,cuc,cus,crc,crs,cic,cis,af0,af1,af2,tgd");
+    FILE *fpd = pilot_dumps ? open_csv(out_dir, "pilot_dumps.csv", "ch,sat,seq,t_samp,n1,sec_len,ip,qp,id,qd") : NULL;
     if (!ftrk || !fobs || !fpvt || !feph) {
         fprintf(stderr, "gnssrx: cannot write into %s\n", out_dir);
         return 1;
@@ -434,11 +480,33 @@ int main(int argc, char **argv)
             vec_dumps(&bank, dumps, nd);
         }
         uint64_t t_now = t0 + spms;
+        if (fpd) {
+            for (int k = 0; k < nd; k++) {
+                const rx_nco_t *pn = &rx->nco[dumps[k].ch];
+                if (pn->sec_len > 0) {
+                    fprintf(fpd, "%d,%d,%u,%llu,%lld,%u,%.0f,%.0f,%.0f,%.0f\n", dumps[k].ch, rx->ch[dumps[k].ch].prn +
+                            100 * (rx->ch[dumps[k].ch].sig == GNSS_SIG_GAL_E1C ? 1 : 2), dumps[k].seq,
+                            (unsigned long long)dumps[k].t_samp, (long long)pn->n1, pn->sec_len, (double)dumps[k].ip,
+                            (double)dumps[k].qp, (double)dumps[k].id, (double)dumps[k].qd);
+                }
+            }
+        }
         const double t_file = so.start_s + (double)t_now / fs;
         rx_set_boost(rx, t_file >= boost0 && t_file < boost1);
         int nc = rx_tick(rx, t_now, dumps, nd, cmds, MAX_CMDS);
         for (int k = 0; k < nc && nheld < 2 * MAX_CMDS; k++) {
             held[nheld++] = cmds[k];
+        }
+        /* Galileo and BeiDou channels from the GPS fix and the preloaded ephemerides. */
+        nc = rx_aid(rx, t_now, cmds, MAX_CMDS);
+        for (int k = 0; k < nc; k++) {
+            if (nheld < 2 * MAX_CMDS) {
+                held[nheld++] = cmds[k];
+            }
+            if (cmds[k].type == CORR_CMD_START) {
+                printf("  %7.3f s  ch %2d  %c%02d    aided start, Doppler %+7.1f Hz\n", (double)t_now / fs, cmds[k].ch,
+                       cmds[k].sig == GNSS_SIG_GAL_E1C ? 'E' : 'C', cmds[k].prn, (double)rx->ch[cmds[k].ch].dop_hz);
+            }
         }
         int ms;
         if (rx_wants_snapshot(rx, t_now, &ms) && ring_count >= ms) {
@@ -465,7 +533,9 @@ int main(int argc, char **argv)
             int no = rx_measure(rx, t_now, obs, CORR_MAX_CH, &sol);
             double rtow = rx->clk_valid ? rx_time(rx, t_now) : 0.0;
             for (int k = 0; k < no && rx->clk_valid; k++) {
-                fprintf(fobs, "%.3f,%.9f,%d,%.4f,%.4f,%.4f,%.2f,%.2f,%.3f,%.4f\n", ts, rtow, obs[k].prn, obs[k].pr,
+                /* prn: 100 x system + PRN (GPS 0, Galileo 1, BeiDou 2), so GPS rows read as before. */
+                fprintf(fobs, "%.3f,%.9f,%d,%.4f,%.4f,%.4f,%.2f,%.2f,%.3f,%.4f\n", ts, rtow,
+                        100 * obs[k].sys + obs[k].prn, obs[k].pr,
                         obs[k].adr, obs[k].dop, (double)obs[k].cn0, (double)obs[k].lock_s,
                         sol.valid ? sol.el[k] * 180.0 / PI : 0.0, sol.valid && sol.used[k] ? sol.resid[k] : 0.0);
             }
@@ -489,12 +559,14 @@ int main(int argc, char **argv)
                 if (c->prn == 0) {
                     continue;
                 }
-                fprintf(ftrk, "%.3f,%d,%d,%d,%.2f,%.3f,%.3f,%d,%d,%u,%u\n", ts, ch, c->prn, c->state, (double)c->cn0,
+                const int sys = c->sig == GNSS_SIG_GAL_E1C ? 1 : (c->sig == GNSS_SIG_BDS_B1CP ? 2 : 0);
+                fprintf(ftrk, "%.3f,%d,%d,%d,%.2f,%.3f,%.3f,%d,%d,%u,%u\n", ts, ch, 100 * sys + c->prn, c->state,
+                        (double)c->cn0,
                         (double)c->dop_hz, (double)c->pll_lock, c->bit_sync, rx->nav[ch].synced,
                         rx->nav[ch].n_subframes, rx->nav[ch].n_parity_fail);
             }
             for (int p = 1; p <= GPS_MAX_PRN; p++) {
-                const gps_eph_t *e = &rx->eph[p];
+                const gps_eph_t *e = &rx->eph[GNSS_SYS_GPS][p];
                 if (e->valid && e->toe != eph_toe[p]) {
                     eph_toe[p] = e->toe;
                     fprintf(feph,
@@ -514,6 +586,9 @@ int main(int argc, char **argv)
                 printf("  %7.1f s  locked %2d  frame-synced %2d  obs %2d", ts, locked, sync, no);
                 if (sol.valid) {
                     printf("  fix %d sats, pdop %.1f, resid %.2f m", sol.nsat, sol.pdop, sol.resid_rms);
+                    if (sol.isb[GNSS_SYS_GAL] != 0.0 || sol.isb[GNSS_SYS_BDS] != 0.0) {
+                        printf(", GAL/BDS time %+.1f/%+.1f m", sol.isb[GNSS_SYS_GAL], sol.isb[GNSS_SYS_BDS]);
+                    }
                     if (have_truth) {
                         double e[3];
                         enu(sol.pos, ref, rlat, rlon, e);

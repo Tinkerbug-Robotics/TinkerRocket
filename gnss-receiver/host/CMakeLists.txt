@@ -11,6 +11,7 @@ add_library(gnss_host STATIC
     fe_emul.c
     corr_float.c
     source.c
+    rinex_nav.c
 )
 target_include_directories(gnss_host PUBLIC .)
 target_link_libraries(gnss_host PUBLIC gnss_core gnss_fpga_model m)

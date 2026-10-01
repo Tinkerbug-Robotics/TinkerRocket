@@ -1,5 +1,7 @@
 #include "corr_float.h"
 
+#include "corr_model.h"
+
 #include <math.h>
 #include <string.h>
 
@@ -9,13 +11,6 @@ void corr_float_init(corr_float_t *c, double fs)
 {
     memset(c, 0, sizeof(*c));
     c->fs = fs;
-    uint8_t chips[GPS_CA_LEN];
-    for (int prn = 1; prn <= GPS_MAX_PRN; prn++) {
-        gps_ca_code(prn, chips);
-        for (int k = 0; k < GPS_CA_LEN; k++) {
-            c->ca[prn - 1][k] = chips[k] ? -1.0f : 1.0f;
-        }
-    }
     /* Entry j is the phase at the centre of its bin, so the table has no half-bin bias. */
     for (int j = 0; j < (1 << CF_LUT_BITS); j++) {
         double ph = TWO_PI * ((double)j + 0.5) / (double)(1 << CF_LUT_BITS);
@@ -32,7 +27,7 @@ int corr_float_command(corr_float_t *c, const corr_cmd_t *cmd)
     cf_ch_t *h = &c->ch[cmd->ch];
     switch (cmd->type) {
     case CORR_CMD_START:
-        if (cmd->sig != GNSS_SIG_GPS_L1CA || cmd->prn < 1 || cmd->prn > GPS_MAX_PRN) {
+        if (!corr_model_sig_ok(cmd->sig, cmd->prn)) {
             return -1;
         }
         h->start = *cmd;
@@ -51,14 +46,43 @@ int corr_float_command(corr_float_t *c, const corr_cmd_t *cmd)
     }
 }
 
+/* The channel's codes as +-1, the same chips the bit-exact model uses. */
+static int load_codes(cf_ch_t *h, int sig, int prn)
+{
+    static uint8_t chips[CORR_MAX_CODE_LEN], dchips[CORR_MAX_CODE_LEN];
+    int len;
+    h->has_data = 0;
+    h->boc = 0;
+    if (sig == GNSS_SIG_GPS_L1CA) {
+        gps_ca_code(prn, chips);
+        len = GPS_CA_LEN;
+    } else if (sig == GNSS_SIG_GAL_E1C) {
+        gal_e1_code(prn, GNSS_SIG_GAL_E1C, chips);
+        gal_e1_code(prn, GNSS_SIG_GAL_E1B, dchips);
+        h->has_data = h->boc = 1;
+        len = GAL_E1_LEN;
+    } else {
+        bds_b1c_code(prn, GNSS_SIG_BDS_B1CP, chips);
+        bds_b1c_code(prn, GNSS_SIG_BDS_B1CD, dchips);
+        h->has_data = h->boc = 1;
+        len = BDS_B1C_LEN;
+    }
+    for (int k = 0; k < len; k++) {
+        h->code[k] = chips[k] ? -1.0f : 1.0f;
+        h->dcode[k] = h->has_data && dchips[k] ? -1.0f : 1.0f;
+    }
+    return len;
+}
+
 static void begin(corr_float_t *c, cf_ch_t *h)
 {
+    (void)c;
     const corr_cmd_t *s = &h->start;
-    h->code = c->ca[s->prn - 1];
-    h->code_mod = (uint64_t)GPS_CA_LEN << CORR_CODE_FRAC_BITS;
+    h->code_mod = (uint64_t)load_codes(h, s->sig, s->prn) << CORR_CODE_FRAC_BITS;
     h->code_phase = s->code_phase % h->code_mod;
     h->code_word = s->code_word;
     h->tap = s->tap_offset;
+    h->tap2 = s->tap_offset2;
     h->carr_word = s->carr_word;
     h->carr_phase = 0;
     h->carr_cycles = 0;
@@ -69,16 +93,25 @@ static void begin(corr_float_t *c, cf_ch_t *h)
     h->start_pending = 0;
 }
 
+/* The replica at code phase x: +-1, negated in the second half of each chip for BOC(1,1). */
+static inline float rep_at(const float *code, uint64_t x, int boc)
+{
+    float v = code[x >> CORR_CODE_FRAC_BITS];
+    return (boc && ((x >> (CORR_CODE_FRAC_BITS - 1)) & 1u)) ? -v : v;
+}
+
 /* Runs one channel over samples [k0, n) of the block; returns dumps written. */
 static int run(corr_float_t *c, cf_ch_t *h, uint64_t t0, const float *iq, size_t k0, size_t n, corr_dump_t *dumps,
                int max, uint8_t ch)
 {
     const int shift = 32 - CF_LUT_BITS;
-    const float *code = h->code;
-    const uint64_t mod = h->code_mod, tap = h->tap;
+    const float *code = h->code, *dcode = h->dcode;
+    const uint64_t mod = h->code_mod, tap = h->tap, tap2 = h->tap2;
+    const int boc = h->boc, has_data = h->has_data;
     uint32_t ph = h->carr_phase, cyc = h->carr_cycles;
     uint64_t cp = h->code_phase;
-    float ie = h->acc[0], qe = h->acc[1], ip = h->acc[2], qp = h->acc[3], il = h->acc[4], ql = h->acc[5];
+    float a[2 * CF_NTAPS];
+    memcpy(a, h->acc, sizeof(a));
     int nd = 0;
     for (size_t k = k0; k < n; k++) {
         uint32_t j = ph >> shift;
@@ -87,20 +120,22 @@ static int run(corr_float_t *c, cf_ch_t *h, uint64_t t0, const float *iq, size_t
         /* (i + jq) * exp(-j*phase) */
         float xr = i * co + q * si;
         float xi = q * co - i * si;
-        uint64_t ce = cp + tap;
-        if (ce >= mod) {
-            ce -= mod;
+        uint64_t xe = cp + tap, xve = cp + tap2;
+        if (xe >= mod) {
+            xe -= mod;
         }
-        uint64_t cl = (cp >= tap) ? cp - tap : cp + mod - tap;
-        float e = code[ce >> CORR_CODE_FRAC_BITS];
-        float p = code[cp >> CORR_CODE_FRAC_BITS];
-        float l = code[cl >> CORR_CODE_FRAC_BITS];
-        ie += xr * e;
-        qe += xi * e;
-        ip += xr * p;
-        qp += xi * p;
-        il += xr * l;
-        ql += xi * l;
+        if (xve >= mod) {
+            xve -= mod;
+        }
+        uint64_t xl = (cp >= tap) ? cp - tap : cp + mod - tap;
+        uint64_t xvl = (cp >= tap2) ? cp - tap2 : cp + mod - tap2;
+        const float r[CF_NTAPS] = {rep_at(code, xe, boc), rep_at(code, cp, boc), rep_at(code, xl, boc),
+                                   rep_at(code, xve, boc), rep_at(code, xvl, boc),
+                                   has_data ? rep_at(dcode, cp, boc) : 0.0f};
+        for (int t = 0; t < CF_NTAPS; t++) {
+            a[2 * t] += xr * r[t];
+            a[2 * t + 1] += xi * r[t];
+        }
 
         uint32_t old = ph;
         ph += (uint32_t)h->carr_word;
@@ -127,15 +162,21 @@ static int run(corr_float_t *c, cf_ch_t *h, uint64_t t0, const float *iq, size_t
                 d->carr_cycles = cyc;
                 d->carr_word = h->carr_word;
                 d->code_word = h->code_word;
-                d->ie = ie;
-                d->qe = qe;
-                d->ip = ip;
-                d->qp = qp;
-                d->il = il;
-                d->ql = ql;
+                d->ie = a[2 * CF_E];
+                d->qe = a[2 * CF_E + 1];
+                d->ip = a[2 * CF_P];
+                d->qp = a[2 * CF_P + 1];
+                d->il = a[2 * CF_L];
+                d->ql = a[2 * CF_L + 1];
+                d->ive = a[2 * CF_VE];
+                d->qve = a[2 * CF_VE + 1];
+                d->ivl = a[2 * CF_VL];
+                d->qvl = a[2 * CF_VL + 1];
+                d->id = a[2 * CF_D];
+                d->qd = a[2 * CF_D + 1];
             }
             h->seq = (h->seq + 1) & CORR_SEQ_MASK;
-            ie = qe = ip = qp = il = ql = 0.0f;
+            memset(a, 0, sizeof(a));
             h->carr_word = next_carr;
             h->code_word = next_code;
         }
@@ -143,12 +184,7 @@ static int run(corr_float_t *c, cf_ch_t *h, uint64_t t0, const float *iq, size_t
     h->carr_phase = ph;
     h->carr_cycles = cyc;
     h->code_phase = cp;
-    h->acc[0] = ie;
-    h->acc[1] = qe;
-    h->acc[2] = ip;
-    h->acc[3] = qp;
-    h->acc[4] = il;
-    h->acc[5] = ql;
+    memcpy(h->acc, a, sizeof(a));
     return nd;
 }
 

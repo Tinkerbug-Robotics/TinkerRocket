@@ -106,10 +106,13 @@ double tropo_saastamoinen(double lat, double h, double el)
     return dry + wet;
 }
 
+/* Unknowns at most: position, the GPS clock, and an offset for each other system. */
+#define PVT_MAX_X (4 + GNSS_SYS_COUNT)
+
 /* Solves the n x n normal equations a x = b in place by Cholesky; a is replaced by its inverse. */
 static int solve_spd(double *a, double *b, int n)
 {
-    double l[16] = {0}, inv[16] = {0};
+    double l[PVT_MAX_X * PVT_MAX_X] = {0}, inv[PVT_MAX_X * PVT_MAX_X] = {0};
     for (int i = 0; i < n; i++) {
         for (int j = 0; j <= i; j++) {
             double s = a[i * n + j];
@@ -128,7 +131,7 @@ static int solve_spd(double *a, double *b, int n)
     }
     /* Inverse column by column; the solution is inv * b. */
     for (int c = 0; c < n; c++) {
-        double y[4];
+        double y[PVT_MAX_X];
         for (int i = 0; i < n; i++) {
             double s = (i == c) ? 1.0 : 0.0;
             for (int k = 0; k < i; k++) {
@@ -144,7 +147,7 @@ static int solve_spd(double *a, double *b, int n)
             inv[i * n + c] = s / l[i * n + i];
         }
     }
-    double x[4];
+    double x[PVT_MAX_X];
     for (int i = 0; i < n; i++) {
         x[i] = 0.0;
         for (int k = 0; k < n; k++) {
@@ -161,8 +164,8 @@ typedef struct {
     double clk, clk_rate;    /* s, s/s */
 } sat_t;
 
-int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t *eph, const gps_iono_t *iono, const pvt_opt_t *opt,
-              const double *pos0, pvt_sol_t *sol)
+int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t (*eph)[GNSS_MAX_PRN + 1], const gps_iono_t *iono,
+              const pvt_opt_t *opt, const double *pos0, pvt_sol_t *sol)
 {
     memset(sol, 0, sizeof(*sol));
     if (n > PVT_MAX_SAT) {
@@ -171,14 +174,22 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t *eph, const gps_iono_t
     sat_t sat[PVT_MAX_SAT];
     double t_gps[PVT_MAX_SAT];
     int ok[PVT_MAX_SAT];
+    /* Unknowns: x, y, z, the GPS clock, then one offset per other system present. */
+    int col[GNSS_SYS_COUNT] = {3, 0, 0, 0};
+    int nx = 4;
     for (int i = 0; i < n; i++) {
-        const gps_eph_t *e = &eph[m[i].prn];
-        ok[i] = e->valid && e->health == 0;
+        const int sys = m[i].sys;
+        ok[i] = sys >= 0 && sys < GNSS_SYS_COUNT && m[i].prn >= 1 && m[i].prn <= GNSS_MAX_PRN;
+        const gps_eph_t *e = ok[i] ? &eph[sys][m[i].prn] : NULL;
+        ok[i] = ok[i] && e->valid && e->health == 0;
         if (!ok[i]) {
             continue;
         }
+        if (sys != GNSS_SYS_GPS && col[sys] == 0) {
+            col[sys] = nx++;
+        }
         double dt = gps_sat_clock(e, m[i].t_sv);
-        t_gps[i] = m[i].t_sv - dt;
+        t_gps[i] = m[i].t_sv - dt;  /* the system's own time; Klobuchar only needs seconds of day */
         double c0, c1, p1[3];
         gps_sat_pos(e, t_gps[i], sat[i].pos, sat[i].vel, &c0);
         gps_sat_pos(e, t_gps[i] + 1.0, p1, NULL, &c1);
@@ -186,16 +197,16 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t *eph, const gps_iono_t
         sat[i].clk_rate = c1 - c0;
     }
 
-    double x[4] = {0.0, 0.0, 0.0, 0.0};
+    double x[PVT_MAX_X] = {0.0};
     if (pos0) {
         x[0] = pos0[0];
         x[1] = pos0[1];
         x[2] = pos0[2];
     }
-    double lat = 0.0, lon = 0.0, h = -WGS84_A, q[16];
+    double lat = 0.0, lon = 0.0, h = -WGS84_A, q[PVT_MAX_X * PVT_MAX_X];
     int nused = 0;
     for (int it = 0; it < 12; it++) {
-        double ata[16] = {0}, atb[4] = {0};
+        double ata[PVT_MAX_X * PVT_MAX_X] = {0}, atb[PVT_MAX_X] = {0};
         int near_earth = sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]) > 6.0e6;
         if (near_earth) {
             ecef_to_geo(x, &lat, &lon, &h);
@@ -228,12 +239,16 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t *eph, const gps_iono_t
                     corr += tropo_saastamoinen(lat, h, sol->el[i]);
                 }
             }
-            double res = m[i].pr + GNSS_C * sat[i].clk - (rho + x[3] + corr);
-            double hrow[4] = {-d[0] / rho, -d[1] / rho, -d[2] / rho, 1.0};
-            for (int r = 0; r < 4; r++) {
+            const int sys = m[i].sys, cs = col[sys];
+            double res = m[i].pr + GNSS_C * sat[i].clk - (rho + x[3] + (sys != GNSS_SYS_GPS ? x[cs] : 0.0) + corr);
+            double hrow[PVT_MAX_X] = {-d[0] / rho, -d[1] / rho, -d[2] / rho, 1.0};
+            if (sys != GNSS_SYS_GPS) {
+                hrow[cs] = 1.0;
+            }
+            for (int r = 0; r < nx; r++) {
                 atb[r] += hrow[r] * res;
-                for (int c = 0; c < 4; c++) {
-                    ata[r * 4 + c] += hrow[r] * hrow[c];
+                for (int c = 0; c < nx; c++) {
+                    ata[r * nx + c] += hrow[r] * hrow[c];
                 }
             }
             sol->resid[i] = res;
@@ -241,13 +256,13 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t *eph, const gps_iono_t
             ss += res * res;
             nused++;
         }
-        if (nused < 4 || solve_spd(ata, atb, 4) != 0) {
+        if (nused < nx || solve_spd(ata, atb, nx) != 0) {
             return -1;
         }
-        for (int k = 0; k < 4; k++) {
+        for (int k = 0; k < nx; k++) {
             x[k] += atb[k];
         }
-        memcpy(q, ata, sizeof(q));
+        memcpy(q, ata, sizeof(double) * (size_t)(nx * nx));
         sol->iter = it + 1;
         sol->resid_rms = sqrt(ss / nused);
         if (sqrt(atb[0] * atb[0] + atb[1] * atb[1] + atb[2] * atb[2]) < 1e-4 && it > 3) {
@@ -259,6 +274,9 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t *eph, const gps_iono_t
     sol->pos[1] = x[1];
     sol->pos[2] = x[2];
     sol->clk_bias = x[3];
+    for (int s = 1; s < GNSS_SYS_COUNT; s++) {
+        sol->isb[s] = col[s] ? x[col[s]] : 0.0;
+    }
     sol->lat = lat;
     sol->lon = lon;
     sol->h = h;
@@ -271,7 +289,7 @@ int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t *eph, const gps_iono_t
     for (int r = 0; r < 3; r++) {
         for (int a = 0; a < 3; a++) {
             for (int b = 0; b < 3; b++) {
-                qe[r] += rot[r][a] * q[a * 4 + b] * rot[r][b];
+                qe[r] += rot[r][a] * q[a * nx + b] * rot[r][b];
             }
         }
     }

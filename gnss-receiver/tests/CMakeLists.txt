@@ -17,6 +17,7 @@ add_executable(gnss_tests
     test_codes_multi.cpp
     test_core_basics.cpp
     test_corr_float.cpp
+    test_corr_boc.cpp
     test_corr_model.cpp
     test_decim.cpp
     test_eph_pvt.cpp

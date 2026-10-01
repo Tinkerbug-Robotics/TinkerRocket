@@ -75,6 +75,12 @@ void trk_profile_step(trk_profile_t *cur, const trk_profile_t *target, float dt)
 typedef struct {
     trk_state_t state;
     uint8_t prn;
+    uint8_t sig;                /* gnss_sig_t tracked: GPS L1 C/A, or a pilot (E1-C, B1C pilot) */
+    uint8_t pilot;              /* a pilot: no data on the tracked code once rx wipes its secondary code */
+    uint8_t boc;                /* BOC(1,1): the correlation peak is three times as steep */
+    uint16_t cn0_n;             /* dumps per C/N0 estimate */
+    uint8_t locked_once;        /* the PLL has locked at least once since the start */
+    float t_tracked;            /* seconds since the start */
     float acq_metric;           /* the detection's peak / grid mean, for logs */
     float tap_chips;            /* early/late offset from prompt */
     float t_state;              /* seconds in the current state */
@@ -109,6 +115,7 @@ typedef struct {
     float nw_mu, nw_wsum;       /* and the bits averaged so far */
     int nw_k;
     float cn0;                  /* dB-Hz; 0 until the first estimate */
+    float cn0_lin;              /* the same, linear (Hz), for thresholds */
     float m2, m4;
     int nm;
     float t_weak;
@@ -134,6 +141,13 @@ void trk_start(trk_ch_t *c, int prn, float dop_hz, float tap_chips, int32_t if_w
  * period) when a data bit completes, else 0.
  */
 int trk_update(trk_ch_t *c, const trk_profile_t *p, const corr_dump_t *d, float T, int *bit, uint32_t *bit_period);
+
+/*
+ * Makes a started channel track a pilot (GNSS_SIG_GAL_E1C, GNSS_SIG_BDS_B1CP; milestone 6):
+ * full-range PLL and FLL discriminators on the wiped pilot, the BOC(1,1) DLL gain, C/N0 by
+ * moments over 0.2 s, and no bit sync (the data code's symbols are its own prompt's).
+ */
+void trk_set_signal(trk_ch_t *c, int sig);
 
 /* The NCO words the loops want next. */
 void trk_words(const trk_ch_t *c, int32_t *carr_word, uint64_t *code_word);

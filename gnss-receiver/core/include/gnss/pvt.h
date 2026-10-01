@@ -6,6 +6,7 @@
 #define GNSS_PVT_H
 
 #include "gnss/eph.h"
+#include "gnss/types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,10 +16,11 @@ extern "C" {
 
 /* One satellite's measurements at an epoch. */
 typedef struct {
+    int sys;          /* gnss_sys_t */
     int prn;
-    double pr;        /* pseudorange, m */
+    double pr;        /* pseudorange, m: GPS receive time less the transmit time in GPS time */
     double dop;       /* Doppler, Hz (positive approaching) */
-    double t_sv;      /* transmit time on the satellite's clock, s of week */
+    double t_sv;      /* transmit time on the satellite's clock, s of week in its own system's time */
     float cn0;        /* dB-Hz */
 } pvt_meas_t;
 
@@ -28,7 +30,8 @@ typedef struct {
     double pos[3];            /* ECEF, m */
     double vel[3];            /* ECEF, m/s */
     double lat, lon, h;       /* rad, rad, m (WGS 84 ellipsoid) */
-    double clk_bias;          /* receiver clock, m (positive: the receiver clock is ahead) */
+    double clk_bias;          /* receiver clock against GPS time, m (positive: the receiver clock is ahead) */
+    double isb[GNSS_SYS_COUNT];  /* each other system's time against GPS's, as solved, m (0 if absent) */
     double clk_drift;         /* m/s */
     double pdop, hdop, vdop;
     double resid_rms;         /* m */
@@ -46,12 +49,12 @@ typedef struct {
 void pvt_default_opt(pvt_opt_t *o);
 
 /*
- * Solves for position, clock, velocity and clock drift. eph is indexed by PRN
- * (eph[prn]); iono may be NULL. pos0 seeds the iteration (NULL: Earth's
- * centre). Returns 0 on success.
+ * Solves for position, clock, velocity and clock drift, plus one time offset per system
+ * other than GPS that has measurements. eph is indexed [sys][prn]; iono may be NULL. pos0
+ * seeds the iteration (NULL: Earth's centre). Returns 0 on success.
  */
-int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t *eph, const gps_iono_t *iono, const pvt_opt_t *opt,
-              const double *pos0, pvt_sol_t *sol);
+int pvt_solve(const pvt_meas_t *m, int n, const gps_eph_t (*eph)[GNSS_MAX_PRN + 1], const gps_iono_t *iono,
+              const pvt_opt_t *opt, const double *pos0, pvt_sol_t *sol);
 
 /* WGS 84 ECEF <-> geodetic (rad, rad, m). */
 void ecef_to_geo(const double x[3], double *lat, double *lon, double *h);

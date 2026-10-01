@@ -71,6 +71,7 @@ int manifest_lookup(const char *manifest_path, const char *basename, iq_meta_t *
     get_str(&ini, basename, "generator", m->generator, sizeof(m->generator));
     get_str(&ini, basename, "start_gpst", m->start_gpst, sizeof(m->start_gpst));
     get_str(&ini, basename, "truth", m->truth, sizeof(m->truth));
+    get_str(&ini, basename, "nav", m->nav, sizeof(m->nav));
     ini_free(&ini);
     return 0;
 }

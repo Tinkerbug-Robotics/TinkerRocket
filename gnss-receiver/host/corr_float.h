@@ -22,25 +22,29 @@ extern "C" {
 
 #define CF_LUT_BITS 12
 
+/* Accumulator pairs in a channel, in dump order (as corr_model.h). */
+enum { CF_E = 0, CF_P, CF_L, CF_VE, CF_VL, CF_D, CF_NTAPS };
+
 typedef struct {
     int active;
     int start_pending;
     corr_cmd_t start;
     cmdq_t q;                              /* tagged NCO commands */
-    const float *code;      /* +-1 per chip */
+    float code[CORR_MAX_CODE_LEN];         /* the tracked code, +-1 per chip */
+    float dcode[CORR_MAX_CODE_LEN];        /* the data code, where the signal has one */
+    int has_data, boc;
     uint64_t code_mod;      /* code length << CORR_CODE_FRAC_BITS */
     uint32_t carr_phase;
     uint32_t carr_cycles;
     int32_t carr_word;
-    uint64_t code_phase, code_word, tap;
-    float acc[6];           /* ie qe ip qp il ql */
+    uint64_t code_phase, code_word, tap, tap2;
+    float acc[2 * CF_NTAPS];               /* [tap][i, q] */
     uint32_t seq;
 } cf_ch_t;
 
 typedef struct {
     double fs;
     cf_ch_t ch[CORR_MAX_CH];
-    float ca[GPS_MAX_PRN][GPS_CA_LEN];
     float cos_lut[1 << CF_LUT_BITS], sin_lut[1 << CF_LUT_BITS];
 } corr_float_t;
 

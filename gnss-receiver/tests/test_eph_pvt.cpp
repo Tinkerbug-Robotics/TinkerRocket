@@ -65,7 +65,7 @@ TEST(Pvt, RecoversAKnownPositionAndClock)
     geo_to_ecef(lat, lon, h, rx);
     const double t_rx = 210630.0, bias = 1234.5, vel_rx[3] = {0.0, 0.0, 0.0};
     (void)vel_rx;
-    std::vector<gps_eph_t> eph(GPS_MAX_PRN + 1);
+    static gps_eph_t eph[GNSS_SYS_COUNT][GNSS_MAX_PRN + 1];
     std::vector<pvt_meas_t> m;
     int prn = 1;
     for (int k = 0; k < 24 && prn <= 10; k++) {
@@ -91,8 +91,9 @@ TEST(Pvt, RecoversAKnownPositionAndClock)
         if (up < std::sin(10.0 * M_PI / 180.0)) {
             continue;
         }
-        eph[prn] = e;
+        eph[GNSS_SYS_GPS][prn] = e;
         pvt_meas_t q{};
+        q.sys = GNSS_SYS_GPS;
         q.prn = prn;
         q.pr = tau * GNSS_C + bias - GNSS_C * clk;
         q.t_sv = t_rx - tau + clk;  // the satellite's clock reading at transmission
@@ -105,7 +106,7 @@ TEST(Pvt, RecoversAKnownPositionAndClock)
     pvt_default_opt(&opt);
     opt.use_iono = opt.use_tropo = 0;
     pvt_sol_t sol;
-    ASSERT_EQ(pvt_solve(m.data(), int(m.size()), eph.data(), nullptr, &opt, nullptr, &sol), 0);
+    ASSERT_EQ(pvt_solve(m.data(), int(m.size()), eph, nullptr, &opt, nullptr, &sol), 0);
     EXPECT_NEAR(sol.pos[0], rx[0], 1e-3);
     EXPECT_NEAR(sol.pos[1], rx[1], 1e-3);
     EXPECT_NEAR(sol.pos[2], rx[2], 1e-3);

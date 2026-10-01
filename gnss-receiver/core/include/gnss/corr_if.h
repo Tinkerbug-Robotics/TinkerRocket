@@ -46,14 +46,25 @@ typedef enum {
     CORR_CMD_STOP  = 3
 } corr_cmd_type_t;
 
+/*
+ * Signals a channel can track (START's sig), and what it correlates (milestone 6):
+ *   GNSS_SIG_GPS_L1CA   the C/A code, BPSK; no data code (the data prompt reads 0)
+ *   GNSS_SIG_GAL_E1C    the E1-C pilot code with the E1-B data code beside it
+ *   GNSS_SIG_BDS_B1CP   the B1C pilot code with the B1C data code beside it
+ * E1 and B1C replicas carry a sine-phased BOC(1,1) subcarrier: within each chip, +1 for the
+ * first half and -1 for the second (the chip fraction's top bit flips the chip). Secondary
+ * codes (E1-C CS25, the B1C pilot's 1800 chips) are not in the correlator: the P4 wipes them
+ * off its dumps, one secondary chip per primary period.
+ */
 typedef struct {
     uint8_t type;           /* corr_cmd_type_t */
     uint8_t ch;
-    uint8_t sig;            /* gnss_sig_t (START) */
+    uint8_t sig;            /* gnss_sig_t (START): GPS_L1CA, GAL_E1C or BDS_B1CP */
     uint8_t prn;            /* (START) */
     uint64_t t_start;       /* START: sample at which the channel starts (CORR_TSAMP_BITS) */
     uint64_t code_phase;    /* START: prompt code phase at t_start, chips << CORR_CODE_FRAC_BITS */
     uint64_t tap_offset;    /* START: early/late offset from prompt, same units */
+    uint64_t tap_offset2;   /* START: very early/very late offset (0 makes them the prompt) */
     int32_t carr_word;      /* START, NCO: carrier increment per sample, cycles * 2^32 */
     uint64_t code_word;     /* START, NCO: code increment per sample, chips << CORR_CODE_FRAC_BITS */
     uint32_t apply_seq;     /* NCO: the period whose closing epoch switches to these words (CORR_SEQ_BITS) */
@@ -90,6 +101,8 @@ typedef struct {
     uint64_t code_word;
     uint8_t flags;          /* CORR_DUMP_* */
     float ie, qe, ip, qp, il, ql;  /* early, prompt, late sums over the period */
+    float ive, qve, ivl, qvl;      /* very early, very late */
+    float id, qd;                  /* prompt on the data code (0 where the signal has none) */
 } corr_dump_t;
 
 #ifdef __cplusplus

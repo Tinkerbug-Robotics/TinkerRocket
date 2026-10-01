@@ -4,8 +4,10 @@
  * reference for the HDL testbench, which does the same with the FPGA design:
  *
  *   samples.u2     correlator input, two sample codes per byte, earlier in the high nibble
- *   commands.csv   each command and the sample (t_sample) at which the P4 presents it
- *   dumps.csv      the dumps the correlator must produce, in order per channel
+ *   commands.csv   each command and the sample (t_sample) at which the P4 presents it,
+ *                  with the START's signal and second tap offset in the last two columns
+ *   dumps.csv      the dumps the correlator must produce, in order per channel: the six
+ *                  I/Q pairs are early, prompt, late, very early, very late and data
  *
  *   vecreplay DIR
  */
@@ -38,11 +40,11 @@ static long read_cmds(const char *path, timed_cmd_t **out)
         return -1;
     }
     while (fgets(line, sizeof(line), f)) {
-        unsigned long long t, ts, cp, tap, cw;
+        unsigned long long t, ts, cp, tap, cw, tap2;
         unsigned tag;
-        int type, ch, prn, carr;
-        if (sscanf(line, "%llu,%d,%d,%d,%llu,%llu,%llu,%d,%llu,%u", &t, &type, &ch, &prn, &ts, &cp, &tap, &carr, &cw,
-                   &tag) != 10) {
+        int type, ch, prn, carr, sig;
+        if (sscanf(line, "%llu,%d,%d,%d,%llu,%llu,%llu,%d,%llu,%u,%d,%llu", &t, &type, &ch, &prn, &ts, &cp, &tap, &carr,
+                   &cw, &tag, &sig, &tap2) != 12) {
             continue;
         }
         if (n == cap) {
@@ -53,7 +55,8 @@ static long read_cmds(const char *path, timed_cmd_t **out)
         v[n].t = t;
         v[n].c.type = (uint8_t)type;
         v[n].c.ch = (uint8_t)ch;
-        v[n].c.sig = GNSS_SIG_GPS_L1CA;
+        v[n].c.sig = (uint8_t)sig;
+        v[n].c.tap_offset2 = tap2;
         v[n].c.prn = (uint8_t)prn;
         v[n].c.t_start = ts;
         v[n].c.code_phase = cp;
@@ -137,9 +140,10 @@ int main(int argc, char **argv)
         unsigned long long ts, cp, cw;
         unsigned seq, ph, cyc, flags;
         int ch, carr;
-        double v[6];
-        if (sscanf(line, "%d,%u,%llu,%llu,%u,%u,%d,%llu,%u,%lf,%lf,%lf,%lf,%lf,%lf", &ch, &seq, &ts, &cp, &ph, &cyc,
-                   &carr, &cw, &flags, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 15) {
+        double v[12];
+        if (sscanf(line, "%d,%u,%llu,%llu,%u,%u,%d,%llu,%u,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf", &ch, &seq,
+                   &ts, &cp, &ph, &cyc, &carr, &cw, &flags, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7],
+                   &v[8], &v[9], &v[10], &v[11]) != 21) {
             continue;
         }
         nwant++;
@@ -150,13 +154,14 @@ int main(int argc, char **argv)
                 break;
             }
         }
-        double gv[6] = {0};
+        double gv[12] = {0};
         if (g) {
             gv[0] = g->ie, gv[1] = g->qe, gv[2] = g->ip, gv[3] = g->qp, gv[4] = g->il, gv[5] = g->ql;
+            gv[6] = g->ive, gv[7] = g->qve, gv[8] = g->ivl, gv[9] = g->qvl, gv[10] = g->id, gv[11] = g->qd;
         }
         int ok = g && g->code_phase == cp && g->carr_phase == ph && g->carr_cycles == cyc && g->carr_word == carr &&
                  g->code_word == cw && g->flags == flags;
-        for (int k = 0; ok && k < 6; k++) {
+        for (int k = 0; ok && k < 12; k++) {
             ok = gv[k] == v[k];
         }
         if (!ok) {

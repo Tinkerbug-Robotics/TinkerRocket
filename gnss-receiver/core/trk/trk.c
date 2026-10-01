@@ -1,6 +1,7 @@
 #include "gnss/trk.h"
 
 #include "gnss/gmath.h"
+#include "gnss/types.h"
 
 #include <math.h>
 #include <string.h>
@@ -61,6 +62,8 @@ void trk_start(trk_ch_t *c, int prn, float dop_hz, float tap_chips, int32_t if_w
     memset(c, 0, sizeof(*c));
     c->state = TRK_PULLIN;
     c->prn = (uint8_t)prn;
+    c->sig = GNSS_SIG_GPS_L1CA;
+    c->cn0_n = TRK_CN0_N;
     c->tap_chips = tap_chips;
     c->if_word = if_word;
     c->code_word0 = code_word0;
@@ -68,6 +71,15 @@ void trk_start(trk_ch_t *c, int prn, float dop_hz, float tap_chips, int32_t if_w
     c->code_k = code_k;
     c->dop_hz = dop_hz;
     c->x2 = TWO_PI_F * dop_hz;
+}
+
+void trk_set_signal(trk_ch_t *c, int sig)
+{
+    c->sig = (uint8_t)sig;
+    c->pilot = sig == GNSS_SIG_GAL_E1C || sig == GNSS_SIG_BDS_B1CP;
+    c->boc = c->pilot;
+    /* 0.2 s of dumps: 50 of E1's 4 ms, 20 of B1C's 10 ms. */
+    c->cn0_n = sig == GNSS_SIG_GAL_E1C ? 50 : (sig == GNSS_SIG_BDS_B1CP ? 20 : TRK_CN0_N);
 }
 
 static void enter(trk_ch_t *c, trk_state_t s)
@@ -86,6 +98,20 @@ static void enter(trk_ch_t *c, trk_state_t s)
 static float fll_error(trk_ch_t *c, int fll_ms, uint32_t p, float ip, float qp, float T, float *t_meas)
 {
     *t_meas = 0.0f;
+    if (c->pilot) {
+        /* A wiped pilot carries no data: consecutive dumps (4 or 10 ms) with a full atan2. */
+        float ef = 0.0f;
+        if (c->blk_have_prev) {
+            float cross = c->blk_prev_i * qp - c->blk_prev_q * ip;
+            float dot = c->blk_prev_i * ip + c->blk_prev_q * qp;
+            ef = gnss_atan2f(cross, dot) / T;
+            *t_meas = T;
+        }
+        c->blk_prev_i = ip;
+        c->blk_prev_q = qp;
+        c->blk_have_prev = 1;
+        return ef;
+    }
     const uint32_t n = fll_ms > 1 ? (uint32_t)fll_ms : 1u;
     const int aligned = c->bit_sync && n > 1;
     if (aligned != c->blk_aligned) {
@@ -123,7 +149,8 @@ static float fll_error(trk_ch_t *c, int fll_ms, uint32_t p, float ip, float qp, 
 
 static void carrier_loop(trk_ch_t *c, const trk_bw_t *bw, int fll_ms, uint32_t p, float ip, float qp, float T)
 {
-    float ep = gnss_atan_halff(qp, ip);  /* Costas: data-insensitive, rad */
+    /* Costas on a data-modulated code; full range on a wiped pilot. */
+    float ep = c->pilot ? gnss_atan2f(qp, ip) : gnss_atan_halff(qp, ip);
     float ef = 0.0f, tf = 0.0f;
     if (bw->fll_bw > 0.0f) {
         ef = fll_error(c, fll_ms, p, ip, qp, T, &tf);
@@ -157,8 +184,10 @@ static void code_loop(trk_ch_t *c, const trk_bw_t *bw, const corr_dump_t *d)
     float e = sqrtf(d->ie * d->ie + d->qe * d->qe);
     float l = sqrtf(d->il * d->il + d->ql * d->ql);
     float s = e + l;
-    /* Normalized envelope: error in chips for a triangle, spacing 2 * tap. */
-    float err = s > 0.0f ? (e - l) / s * (1.0f - c->tap_chips) : 0.0f;
+    /* Normalized envelope: error in chips for a peak of slope k (1 for BPSK's triangle, 3 for
+     * BOC(1,1)), spacing 2 * tap. */
+    const float k = c->boc ? 3.0f : 1.0f;
+    float err = s > 0.0f ? (e - l) / s * (1.0f - k * c->tap_chips) / k : 0.0f;
     c->dll_rate = 4.0f * bw->dll_bw * err;
 }
 
@@ -166,6 +195,7 @@ static void code_loop(trk_ch_t *c, const trk_bw_t *bw, const corr_dump_t *d)
 static void cn0_estimate(trk_ch_t *c, float snr, float span)
 {
     c->cn0 = snr > 0.0f ? 10.0f * log10f(snr) : 0.0f;
+    c->cn0_lin = snr;
     /* Thresholds compare in the linear domain, so no libm result decides anything. */
     if (snr < 316.22777f) {  /* 25 dB-Hz */
         c->t_weak += span;
@@ -185,8 +215,13 @@ static void lock_and_cn0(trk_ch_t *c, uint32_t p, float ip, float qp, float T)
     c->nbp += k * (p2 - c->nbp);
     float pd_lp = c->nbp - c->pn;
     c->pll_lock = pd_lp > 0.0f ? c->nbd / pd_lp : 0.0f;
+    if (c->pilot && pd_lp < 0.1f * c->nbp) {
+        /* Next to no signal in the prompt: the ratio above is noise over noise, and an aided
+         * start on an empty sky must not read as locked. */
+        c->pll_lock = 0.0f;
+    }
 
-    if (c->bit_sync) {
+    if (c->bit_sync && !c->pilot) {
         /*
          * Narrowband over wideband power (Van Dierendonck), in blocks of M dumps inside a bit:
          * mean(NP / WP) = mu gives the SNR per dump (mu - 1) / (M - mu). Unlike the moments
@@ -223,15 +258,16 @@ static void lock_and_cn0(trk_ch_t *c, uint32_t p, float ip, float qp, float T)
     c->nw_mu = c->nw_wsum = 0.0f;
     c->m2 += p2;
     c->m4 += p2 * p2;
-    if (++c->nm == TRK_CN0_N) {
-        float m2 = c->m2 / TRK_CN0_N, m4 = c->m4 / TRK_CN0_N;
+    if (++c->nm == c->cn0_n) {
+        const float nn = (float)c->cn0_n;
+        float m2 = c->m2 / nn, m4 = c->m4 / nn;
         float pd2 = 2.0f * m2 * m2 - m4;
         float pd = pd2 > 0.0f ? sqrtf(pd2) : 0.0f;
         float pn = m2 - pd;
         if (pn > 0.0f) {
             c->pn = pn;
         }
-        cn0_estimate(c, (pn > 0.0f) ? pd / (pn * T) : 0.0f, T * TRK_CN0_N);
+        cn0_estimate(c, (pn > 0.0f) ? pd / (pn * T) : 0.0f, T * nn);
         c->m2 = c->m4 = 0.0f;
         c->nm = 0;
     }
@@ -239,6 +275,9 @@ static void lock_and_cn0(trk_ch_t *c, uint32_t p, float ip, float qp, float T)
 
 static int bits(trk_ch_t *c, uint32_t p, float ip, int *bit, uint32_t *bit_period)
 {
+    if (c->pilot) {
+        return 0;  /* no bits on a pilot; its data code's symbols are read elsewhere */
+    }
     float sign = ip >= 0.0f ? 1.0f : -1.0f;
     if (!c->bit_sync) {
         if (c->state == TRK_LOCKED && c->t_state > 0.1f) {
@@ -290,6 +329,17 @@ int trk_update(trk_ch_t *c, const trk_profile_t *p, const corr_dump_t *d, float 
         return 0;
     }
     const trk_bw_t *bw = (c->state == TRK_LOCKED) ? &p->locked : &p->pullin;
+    trk_bw_t pilot_bw;
+    if (c->pilot) {
+        /* A pilot's dump lasts 4 or 10 ms, and its correction lands three dumps later: keep every
+         * loop at Bn * T <= 0.05 (12.5 Hz for E1, 5 Hz for B1C), where the discrete loop with that
+         * delay is still well damped. */
+        const float cap = 0.05f / T;
+        pilot_bw = *bw;
+        pilot_bw.fll_bw = pilot_bw.fll_bw < cap ? pilot_bw.fll_bw : cap;
+        pilot_bw.pll_bw = pilot_bw.pll_bw < cap ? pilot_bw.pll_bw : cap;
+        bw = &pilot_bw;
+    }
     c->period = d->seq;
     if (c->t_weak > 0.0f) {
         coast(c, T);  /* the last C/N0 estimate saw no signal */
@@ -303,8 +353,13 @@ int trk_update(trk_ch_t *c, const trk_profile_t *p, const corr_dump_t *d, float 
     c->have_prev = 1;
     c->t_state += T;
 
-    if (c->state == TRK_PULLIN && c->t_state > MIN_PULLIN_S && c->pll_lock > LOCK_IN) {
+    c->t_tracked += T;
+    /* A pilot's 0.2 s moments estimate reads up to 28 dB-Hz on noise alone, so a pilot must also
+     * show 30 dB-Hz (1000 Hz, compared in the linear domain) before it counts as locked. */
+    const int pilot_ok = !c->pilot || (c->cn0_lin >= 1000.0f);
+    if (c->state == TRK_PULLIN && c->t_state > MIN_PULLIN_S && c->pll_lock > LOCK_IN && pilot_ok) {
         enter(c, TRK_LOCKED);
+        c->locked_once = 1;
     } else if (c->state == TRK_LOCKED && c->pll_lock < LOCK_OUT) {
         /* Bit sync stays: bit edges follow the code, which the FLL and DLL still hold. */
         enter(c, TRK_PULLIN);

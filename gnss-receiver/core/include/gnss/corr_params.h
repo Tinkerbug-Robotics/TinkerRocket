@@ -47,8 +47,16 @@ extern "C" {
 /* Pending NCO commands per channel (corr_if.h): commands tagged two periods ahead need two. */
 #define CORR_CMD_QUEUE 2
 
-/* Correlator taps per channel: early, prompt, late, at +-tap offset from prompt. */
-#define CORR_NTAPS 3
+/*
+ * Correlator taps per channel (milestone 6): very early, early, prompt, late and very late
+ * on the tracked code (+-tap_offset2, +-tap_offset from prompt), and a prompt on the data
+ * code where the signal has one (Galileo E1-B beside E1-C, B1C data beside pilot). Each tap is
+ * one I/Q accumulator pair; the hardware session confirmed 6 pairs fit the LFE5U-25F.
+ */
+#define CORR_NTAPS 6
+
+/* Longest primary code, chips: B1C's 10230 (10 ms). E1 is 4092 (4 ms), L1 C/A 1023 (1 ms). */
+#define CORR_MAX_CODE_LEN 10230
 
 /*
  * Carrier mixer (fpga/model/corr_model.c): the top CORR_CARR_LUT_BITS of the
