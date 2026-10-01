@@ -69,7 +69,7 @@ static void usage(void)
         "  --seed N                    noise seed (default 1)\n"
         "  --if-order N --if-bw HZ     IF filter (default 5th order, 4.2e6 two-sided; order 0 = off)\n"
         "  --mag-density D             AGC target (default 0.33)\n"
-        "  --decim subsample|sum4      adc27 decimator (provisional)\n"
+        "  --decim subsample|sum4      adc27 decimator (default subsample, the design's)\n"
         "  --format u2|cs8|cf32        u2: packed nibbles (default for 2-bit); cs8: int8 I,Q (2-bit as\n"
         "                              +-1/+-3, readable by Pocket SDR -fmt CS8); cf32: float (native)\n"
         "  --native-scale K            cs8 from native mode: multiply by K before rounding (default 1)\n"

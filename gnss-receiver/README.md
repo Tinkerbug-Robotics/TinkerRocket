@@ -14,8 +14,8 @@ input, and none of its code is copied here (see [Licences](#licences)).
 
 | Path | What | Runs on |
 |---|---|---|
-| `core/` | The P4 firmware-to-be. Portable C99: no OS calls, no malloc after init. Only the signal/band IDs exist so far | Host now; an ESP-IDF component later |
-| `fpga/model/` | Bit-exact C model of the FPGA: the sample format (`fe_format.h`), the 27 → 6.75 MS/s decimator (provisional), and later the correlator bank with every width in `corr_params.h`. The HDL will be verified against it | Host only |
+| `core/` | The P4 firmware-to-be. Portable C99: no OS calls, no malloc after init | Host now; an ESP-IDF component later |
+| `fpga/model/` | Bit-exact C model of the FPGA: the sample format (`fe_format.h`), the 27 → 6.75 MS/s decimator (keep every 4th sample), and later the correlator bank with every width in `corr_params.h`. The HDL will be verified against it | Host only |
 | `host/` | IQ files, the front-end emulation, the CLI tools | Host only |
 | `py/` | Analysis: readers, a reference acquisition and C/N0 estimator, comparison scripts | Host only |
 | `tests/` | Unit tests (GoogleTest, fetched as `tests_cpp/` does) | Host |
@@ -63,8 +63,8 @@ Things about the files that are not obvious, all measured 2026-09-30:
 7. 2-bit sign/magnitude with an AGC holding 33 % magnitude bits.
 
 The other modes:
-- **`adc27`** does the quantization at 27 MS/s and then applies an FPGA decimator model. It is
-  provisional until the hardware design picks the decimator.
+- **`adc27`** does the quantization at 27 MS/s and then applies an FPGA decimator model. The design
+  keeps every 4th sample (owner decision, 2026-10-01); sum-of-4 stays for comparison.
 - **`native`** keeps the file's rate in float.
 
 ```bash
@@ -79,7 +79,7 @@ Every output gets a `.ini` beside it giving its rate, IF, source segment and sam
 - **`cs8`:** the ±1/±3 weights as int8, readable by Pocket SDR;
 - **`cf32`:** float.
 
-**The IF follows the hardware session's frequency plan (provisional until the owner confirms it):**
+**The IF follows the hardware session's frequency plan (owner decision, 2026-10-01):**
 - The MAX2769B's LO sits at 1571.328052 MHz (fractional-N from 27 MHz). That puts L1 at +4.091948 MHz
   in the 27 MS/s ADC stream.
 - Keeping every 4th sample folds it to −2.658052 MHz at 6.75 MS/s. That is the default for streams
@@ -280,15 +280,20 @@ wrong, all fixed in `core/trk` for every profile:
   - the boost's vertical velocity error falls four- to sixfold, to 0.19 m/s rms at 42.6 dB-Hz;
   - the static velocity error falls 4.5-fold, to 0.02–0.05 m/s rms per axis.
 
-### The proposed design (under discussion with the owner)
+### The design (owner decision, 2026-10-01)
+
+The P4 detects launch and burnout from the dev board's own IMU, which sits on its SPI with
+data-ready stamped by the FPGA on the sample counter. It feeds the loops the predicted
+line-of-sight Doppler rate (see "Next: IMU feed-forward" below), so they can stay narrow. The
+boost profile is the fallback when there is no aiding. Profiles:
 
 | Profile | Pull-in FLL / PLL / DLL | Locked FLL / PLL / DLL | FLL block | When |
 |---|---|---|---|---|
 | quiet | 10 / 15 / 2 Hz | — / 10 / 0.25 Hz | 2 ms | pad, coast, descent |
-| boost | 10 / 50 / 2 Hz | 5 / 50 / 1 Hz | 2 ms | from the flight computer's launch arming (or launch detect) to 2 s after burnout |
+| boost | 10 / 50 / 2 Hz | 5 / 50 / 1 Hz | 2 ms | without aiding: from launch to 2 s after burnout |
 
-The P4 calls `rx_set_boost()` from the flight computer's phase. Narrowing back tapers over about
-1 s.
+Without aiding, the P4 calls `rx_set_boost()` from the launch and burnout it detects. Narrowing
+back tapers over about 1 s.
 
 ### Results through the boost
 
@@ -387,7 +392,20 @@ decision. C builds with `-ffp-contract=off` so that host and P4 float results ca
 
 ## Licences
 
-- **This directory** is GPL-3.0 like the rest of the repository's software.
+- **This directory** is GPL-3.0 like the rest of the repository's software, except
+  `core/sig/gal_e1_codes.c`.
+- **Galileo E1 codes** (`core/sig/gal_e1_codes.c`):
+  - The codes are Technical Data of the Galileo OS SIS ICD (© European Union), from the
+    attachments of Issue 2.0's PDF. They are unchanged in Issue 2.1.
+  - The ICD's Authorisation lets anyone store them, with the source acknowledged, and build
+    them into receivers.
+  - That Authorisation is "non-transferable and non-licensable", so the file is not under
+    GPL-3.0. Each user holds the Authorisation directly from the EU, and the file's header
+    says so.
+  - `py/gen_codes.py` regenerates the file from the ICD.
+- **BeiDou B1C codes** are generated here from the ICD's formula. Only the per-PRN parameters
+  (`core/sig/b1c_params.c`) and the test values come from BDS-SIS-ICD-B1C-1.0, which sets no
+  terms on their use.
 - **Pocket SDR:**
   - It is BSD-2, but its README adds an export notice outside the licence: no military, WMD or
     delivery-system development use.

@@ -8,6 +8,8 @@ add_library(gnss_core STATIC
     pvt/pvt.c
     rx.c
     sig/codes.c
+    sig/gal_e1_codes.c
+    sig/b1c_params.c
     trk/trk.c
     util/gmath.c
 )

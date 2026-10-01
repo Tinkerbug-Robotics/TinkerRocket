@@ -1,8 +1,9 @@
 /*
  * The sample stream the FPGA receives from the MAX2769B and hands to its
- * correlators. Every number here is a hardware-session decision; the values are
- * the stage-0 defaults until that session settles them (the correlator's own
- * widths go in corr_params.h, milestone 4).
+ * correlators. Every number here is a hardware decision; the owner settled the IF
+ * and the decimation on 2026-10-01 (decision 8 of
+ * docs/plans/gnss-receiver-architecture.md). The correlator's own widths go in
+ * corr_params.h.
  */
 #ifndef GNSS_FPGA_FE_FORMAT_H
 #define GNSS_FPGA_FE_FORMAT_H
@@ -16,8 +17,8 @@ extern "C" {
 #define FE_FS_CORR_HZ  (FE_FS_ADC_HZ / FE_DECIM)  /* 6.75 MS/s into the correlators */
 
 /*
- * Frequency plan (hardware session, 2026-09-30; PROVISIONAL until the owner
- * confirms it against the MAX2769B Rev 2 filter-centre settings). Low-IF complex
+ * Frequency plan (the hardware session's; the owner's decision, 2026-10-01).
+ * Low-IF complex
  * I/Q with the LO below L1, so L1 sits at +IF in the ADC stream: the MAX2769B's
  * default 4.092 MHz centre, from a fractional-N synthesizer on the 27 MHz
  * reference (N = 58, F = 206921 / 2^20): LO 1571.328052 MHz, IF 4.091948 MHz.

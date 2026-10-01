@@ -1,7 +1,7 @@
 /*
- * The FPGA's 27 -> 6.75 MS/s step, bit-exact on sample codes. The hardware
- * design has not chosen the decimator yet; the variants are swappable, and the
- * stage-0 default path (host/fe_emul.c, FE_MODE_DIRECT) quantizes at 6.75 MS/s
+ * The FPGA's 27 -> 6.75 MS/s step, bit-exact on sample codes. The design keeps
+ * every 4th sample at a fixed phase (owner decision 2026-10-01); sum-of-4 stays
+ * for comparison. The stage-0 default path (host/fe_emul.c, FE_MODE_DIRECT) quantizes at 6.75 MS/s
  * directly. Measured 2026-09-30 (golden correlator, SignalSim static file, C/N0
  * against a float correlator on the direct stream):
  *   direct 6.75 MS/s                  -0.10 dB (the carrier table alone)

@@ -55,7 +55,7 @@ typedef struct {
 
 /* A receiver at rest: the stage-0 settings, with a 2 ms FLL block. */
 extern const trk_profile_t trk_profile_quiet;
-/* Under a boost (PROPOSED, milestone 5): a 50 Hz PLL rides a burnout's step in Doppler rate. */
+/* Under a boost without IMU aiding (milestone 5): a 50 Hz PLL rides a burnout's step in Doppler rate. */
 extern const trk_profile_t trk_profile_boost;
 
 /*

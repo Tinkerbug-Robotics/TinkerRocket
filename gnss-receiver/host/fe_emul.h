@@ -6,8 +6,8 @@
  *                     add noise to a set C/N0, the MAX2769B's IF filter,
  *                     L1 to the IF, 2-bit sign/magnitude with AGC.
  *   ADC27             the same at the MAX2769B's own 27 MS/s, then the FPGA's
- *                     decimator model (provisional until the hardware session
- *                     settles it).
+ *                     decimator model (keep every 4th sample, as designed;
+ *                     sum-of-4 for comparison).
  *   NATIVE            float at the file's own rate: the fixes and optional
  *                     noise only, no filter, no quantization.
  *

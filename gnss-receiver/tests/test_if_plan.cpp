@@ -1,4 +1,4 @@
-// The provisional frequency plan (fpga/model/fe_format.h) through the correlator's carrier mixer.
+// The frequency plan (fpga/model/fe_format.h) through the correlator's carrier mixer.
 
 extern "C" {
 #include "corr_model.h"
