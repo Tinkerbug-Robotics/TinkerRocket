@@ -68,6 +68,13 @@ that cross that split return in the bottom pour 0.10 mm below. The RF traces are
 the RF netclass matches, which settles D4's width. DRC 0 errors, 0 unconnected; the fills are a kicad-cli fixed
 point; 128 symbols linked by path.
 
+**V3 re-placed and re-routed, 2026-10-01.** Every part outside the RF chain moved to its position on the Space Bug
+M8T, and the board was routed again, so the layout findings below describe the earlier placement. The test pads gave
+way to a boot button with a series resistor, as on Mantis, and the P4's decoupling follows the Espressif hardware
+design guide pin by pin. The design rules now follow Mantis: 0.1 mm clearance, 0.2 mm hole to hole and copper to
+edge, with the RF class kept at 0.2 mm for the coplanar line. The board-level minimums are set, which settles D3.
+DRC 0 errors, 0 unconnected; the fills are a kicad-cli fixed point; the schematic and board agree.
+
 ---
 
 ## Verdict
