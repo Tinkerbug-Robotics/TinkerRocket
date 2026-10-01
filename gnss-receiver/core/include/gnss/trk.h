@@ -80,6 +80,10 @@ typedef struct {
     uint8_t boc;                /* BOC(1,1): the correlation peak is three times as steep */
     uint16_t cn0_n;             /* dumps per C/N0 estimate */
     uint8_t locked_once;        /* the PLL has locked at least once since the start */
+    float bj_ve, bj_vl, bj_p;   /* BOC: very early, very late and prompt power summed for the side-peak check */
+    uint16_t bj_n;
+    float code_jump;            /* chips to move the code by over the next commanded period (side peak) */
+    uint16_t n_jumps;
     float t_tracked;            /* seconds since the start */
     float acq_metric;           /* the detection's peak / grid mean, for logs */
     float tap_chips;            /* early/late offset from prompt */

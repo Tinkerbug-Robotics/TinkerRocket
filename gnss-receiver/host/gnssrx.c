@@ -371,7 +371,7 @@ int main(int argc, char **argv)
     int ring_head = 0, ring_count = 0;
 
     FILE *ftrk = open_csv(out_dir, "trk.csv", "t_s,ch,prn,state,cn0,dop_hz,pll_lock,bit_sync,frame_sync,subframes,parity_fail");
-    FILE *fobs = open_csv(out_dir, "obs.csv", "t_s,rx_tow,prn,pr_m,adr_cyc,dop_hz,cn0,lock_s,el_deg,resid_m");
+    FILE *fobs = open_csv(out_dir, "obs.csv", "t_s,rx_tow,prn,pr_m,adr_cyc,dop_hz,cn0,lock_s,el_deg,resid_m,pr_raw_m");
     FILE *fpvt = open_csv(out_dir, "pvt.csv",
                           "t_s,rx_tow,week,lat_deg,lon_deg,h_m,x,y,z,vx,vy,vz,clk_bias_m,clk_drift_mps,nsat,pdop,"
                           "resid_rms,e_m,n_m,u_m");
@@ -534,10 +534,10 @@ int main(int argc, char **argv)
             double rtow = rx->clk_valid ? rx_time(rx, t_now) : 0.0;
             for (int k = 0; k < no && rx->clk_valid; k++) {
                 /* prn: 100 x system + PRN (GPS 0, Galileo 1, BeiDou 2), so GPS rows read as before. */
-                fprintf(fobs, "%.3f,%.9f,%d,%.4f,%.4f,%.4f,%.2f,%.2f,%.3f,%.4f\n", ts, rtow,
-                        100 * obs[k].sys + obs[k].prn, obs[k].pr,
-                        obs[k].adr, obs[k].dop, (double)obs[k].cn0, (double)obs[k].lock_s,
-                        sol.valid ? sol.el[k] * 180.0 / PI : 0.0, sol.valid && sol.used[k] ? sol.resid[k] : 0.0);
+                fprintf(fobs, "%.3f,%.9f,%d,%.4f,%.4f,%.4f,%.2f,%.2f,%.3f,%.4f,%.4f\n", ts, rtow,
+                        100 * obs[k].sys + obs[k].prn, obs[k].pr, obs[k].adr, obs[k].dop, (double)obs[k].cn0,
+                        (double)obs[k].lock_s, sol.valid ? sol.el[k] * 180.0 / PI : 0.0,
+                        sol.valid && sol.used[k] ? sol.resid[k] : 0.0, obs[k].pr_raw);
             }
             if (sol.valid) {
                 double e[3] = {0, 0, 0};

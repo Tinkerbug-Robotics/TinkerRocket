@@ -196,8 +196,9 @@ static void cn0_estimate(trk_ch_t *c, float snr, float span)
 {
     c->cn0 = snr > 0.0f ? 10.0f * log10f(snr) : 0.0f;
     c->cn0_lin = snr;
-    /* Thresholds compare in the linear domain, so no libm result decides anything. */
-    if (snr < 316.22777f) {  /* 25 dB-Hz */
+    /* Thresholds compare in the linear domain, so no libm result decides anything. A pilot's
+     * moments estimate reads up to 28 dB-Hz on noise, so its loss line is 30 dB-Hz. */
+    if (snr < (c->pilot ? 1000.0f : 316.22777f)) {  /* 30 or 25 dB-Hz */
         c->t_weak += span;
     } else {
         c->t_weak = 0.0f;
@@ -348,6 +349,28 @@ int trk_update(trk_ch_t *c, const trk_profile_t *p, const corr_dump_t *d, float 
         code_loop(c, bw, d);
     }
     lock_and_cn0(c, d->seq, d->ip, d->qp, T);
+    c->code_jump = 0.0f;  /* a jump lasts the one period trk_words commanded it for */
+    if (c->boc && c->state == TRK_LOCKED) {
+        /*
+         * Side-peak check (BOC(1,1), "bump jumping"): locked on a side peak, the prompt sits
+         * 0.5 chip off the main peak and sees a quarter of its power, while the very early or
+         * very late tap sits on it. Over 0.2 s, a very early or late tap with more power than
+         * the prompt moves the code half a chip its way.
+         */
+        c->bj_ve += d->ive * d->ive + d->qve * d->qve;
+        c->bj_vl += d->ivl * d->ivl + d->qvl * d->qvl;
+        c->bj_p += d->ip * d->ip + d->qp * d->qp;
+        if (++c->bj_n >= c->cn0_n) {
+            if (c->bj_ve > c->bj_p && c->bj_ve > c->bj_vl) {
+                c->code_jump = 0.5f;
+            } else if (c->bj_vl > c->bj_p) {
+                c->code_jump = -0.5f;
+            }
+            c->n_jumps += c->code_jump != 0.0f;
+            c->bj_ve = c->bj_vl = c->bj_p = 0.0f;
+            c->bj_n = 0;
+        }
+    }
     c->prev_ip = d->ip;
     c->prev_qp = d->qp;
     c->have_prev = 1;
@@ -375,5 +398,10 @@ void trk_words(const trk_ch_t *c, int32_t *carr_word, uint64_t *code_word)
 {
     *carr_word = c->if_word + (int32_t)lrintf(c->dop_hz * c->carr_k);
     float rate = c->dop_hz * CHIP_PER_HZ + c->dll_rate;  /* chips/s beyond nominal */
+    if (c->code_jump != 0.0f) {
+        /* A side-peak jump: the half chip over one code period (its length from the code). */
+        const float period = (c->sig == GNSS_SIG_GAL_E1C ? 4092.0f : 10230.0f) / 1.023e6f;
+        rate += c->code_jump / period;
+    }
     *code_word = c->code_word0 + (uint64_t)(int64_t)lrintf(rate * c->code_k);
 }

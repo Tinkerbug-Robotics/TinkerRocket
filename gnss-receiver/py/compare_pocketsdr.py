@@ -4,10 +4,12 @@
     compare_pocketsdr.py RUN_DIR POCKET_TRK_LOG [--truth LAT,LON,H] [--from S]
 
 Positions are compared with the truth. Observables are compared at common
-epochs. Each receiver labels epochs with its own clock, so the two "same"
-epochs are slightly different instants: per epoch, the pseudorange
-differences are fitted as a + (range rate) * dt (a: the clocks, dt: the
-label offset) and the residuals are compared. Also Doppler and C/N0.
+epochs, for GPS, Galileo and BeiDou (satellites numbered as gnssrx logs them:
+100 x system + PRN). Each receiver labels epochs with its own clock, so the two
+"same" epochs are slightly different instants: per epoch, the pseudorange
+differences are fitted as a_system + (range rate) * dt (a: the clocks and each
+system's time, dt: the label offset) and the residuals are compared. gnssrx's
+raw (unsmoothed) pseudoranges are used when it logs them. Also Doppler and C/N0.
 """
 from __future__ import annotations
 
@@ -65,15 +67,17 @@ def main():
         if f[0] == "$POS":
             t = sow(int(f[2]), int(f[3]), int(f[4]), int(f[5]), int(f[6]), float(f[7]))
             p_pos.append((t, float(f[8]), float(f[9]), float(f[10])))
-        elif f[0] == "$OBS" and f[8].startswith("G"):
+        elif f[0] == "$OBS" and f[8][0] in "GEC":
             t = sow(int(f[2]), int(f[3]), int(f[4]), int(f[5]), int(f[6]), float(f[7]))
-            p_obs[round(t, 3)][int(f[8][1:])] = (float(f[11]), float(f[13]), float(f[10]))  # pr, dop, cn0
+            sat = "GEC".index(f[8][0]) * 100 + int(f[8][1:])
+            p_obs[round(t, 3)][sat] = (float(f[11]), float(f[13]), float(f[10]))  # pr, dop, cn0
     # gnssrx
     g_pos = [(float(r["rx_tow"]), float(r["lat_deg"]), float(r["lon_deg"]), float(r["h_m"]))
              for r in csv.DictReader(open(f"{a.run}/pvt.csv"))]
     g_obs = defaultdict(dict)
     for r in csv.DictReader(open(f"{a.run}/obs.csv")):
-        g_obs[round(float(r["rx_tow"]), 3)][int(r["prn"])] = (float(r["pr_m"]), float(r["dop_hz"]), float(r["cn0"]))
+        pr = float(r["pr_raw_m"]) if r.get("pr_raw_m") else float(r["pr_m"])
+        g_obs[round(float(r["rx_tow"]), 3)][int(r["prn"])] = (pr, float(r["dop_hz"]), float(r["cn0"]))
 
     print("Position error vs truth (m): mean (sd)")
     for name, pos in (("gnssrx", g_pos), ("Pocket SDR", p_pos)):
@@ -106,9 +110,10 @@ def main():
             continue
         d = np.array([g_obs[tg][s][0] - p_obs[tp][s][0] for s in sats])
         rate = np.array([-lam * g_obs[tg][s][1] for s in sats])  # range rate, m/s
-        h = np.column_stack([np.ones_like(rate), rate])
+        systems = sorted({s // 100 for s in sats})
+        h = np.column_stack([np.array([1.0 if s // 100 == y else 0.0 for s in sats]) for y in systems] + [rate])
         coef, *_ = np.linalg.lstsq(h, d, rcond=None)
-        offsets.append(coef[1])
+        offsets.append(coef[-1])
         res = d - h @ coef
         for k, s in enumerate(sats):
             dpr[s].append(float(res[k]))

@@ -17,6 +17,7 @@ void rx_default_cfg(rx_cfg_t *c, double fs, double if_hz)
     c->acq_ms = 10;
     c->acq_interval_s = 5.0f;
     c->tap_chips = 0.25f;
+    c->hatch_s = 100.0f;
     c->max_ch = CORR_MAX_CH;
     c->cmd_lead = 2;
     c->quiet = trk_profile_quiet;
@@ -316,8 +317,10 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
         double chips = ((double)n->last_code_phase + (double)(t - n->last_t) * (double)n->cur_code) / CODE_ONE;
         double tt;
         if (n->sec_len > 0) {
-            if (!c->locked_once) {
-                continue;  /* an aided start counts only once its PLL has confirmed the signal */
+            if (!c->locked_once || c->cn0_lin < 1000.0f) {
+                /* An aided start counts once its PLL has confirmed the signal, and while the
+                 * signal stays above the moments estimate's noise floor (30 dB-Hz). */
+                continue;
             }
             /* A pilot started by rx_aid: the period opened by the last dump, c->period + 1,
              * began at code period n1 + c->period of the week. */
@@ -379,8 +382,31 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
     double t_rx = rx_time(rx, t);
     pvt_meas_t m[PVT_MAX_SAT];
     int nm = 0;
+    const double lambda = GNSS_C / GNSS_FREQ_L1_HZ;
     for (int k = 0; k < no && nm < PVT_MAX_SAT; k++) {
-        obs[k].pr = gps_time_diff(t_rx, t_tx[k]) * GNSS_C;
+        obs[k].pr_raw = obs[k].pr = gps_time_diff(t_rx, t_tx[k]) * GNSS_C;
+        /* Carrier smoothing: the code's noise averaged over hatch_s, the carrier carrying the
+         * range change between epochs. Restarted whenever the PLL lets go or the Costas half
+         * cycle is resolved afresh. */
+        rx_nco_t *n = &rx->nco[obs[k].ch];
+        const double adr_m = obs[k].adr * lambda;
+        const int inv = n->sec_len == 0 && rx->nav[obs[k].ch].inverted;
+        if (rx->cfg.hatch_s > 0.0f && obs[k].lock_s > 0.0f && n->hatch_n > 0 && inv == n->hatch_inv) {
+            double dt = (double)(t - n->hatch_t) / rx->cfg.fs;
+            double mx = dt > 0.0 ? (double)rx->cfg.hatch_s / dt : 1.0;
+            double w = (double)(n->hatch_n + 1) < mx ? (double)(n->hatch_n + 1) : mx;
+            n->hatch_pr = obs[k].pr / w + (1.0 - 1.0 / w) * (n->hatch_pr + (adr_m - n->hatch_adr));
+            n->hatch_n++;
+        } else {
+            n->hatch_pr = obs[k].pr;
+            n->hatch_n = obs[k].lock_s > 0.0f ? 1 : 0;
+        }
+        n->hatch_adr = adr_m;
+        n->hatch_t = t;
+        n->hatch_inv = inv;
+        if (rx->cfg.hatch_s > 0.0f && n->hatch_n > 0) {
+            obs[k].pr = n->hatch_pr;
+        }
         m[nm].sys = obs[k].sys;
         m[nm].prn = obs[k].prn;
         m[nm].pr = obs[k].pr;
@@ -397,6 +423,8 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
             rx->clk_t = fmod(rx->clk_t - dt + 604800.0, 604800.0);
             for (int k = 0; k < no; k++) {
                 obs[k].pr -= sol->clk_bias;
+                obs[k].pr_raw -= sol->clk_bias;
+                rx->nco[obs[k].ch].hatch_pr -= sol->clk_bias;  /* the smoothing follows the step */
             }
             sol->clk_bias = 0.0;
         }

@@ -38,6 +38,7 @@ typedef struct {
     float tap_chips;            /* early/late offset */
     int max_ch;                 /* channels to use, <= CORR_MAX_CH */
     uint32_t cmd_lead;          /* NCO commands computed from dump s are tagged s + cmd_lead (corr_if.h) */
+    float hatch_s;              /* carrier smoothing of pseudoranges: time constant, s (0 = off) */
     trk_profile_t quiet;        /* tracking loops at rest */
     trk_profile_t boost;        /* and under the boost's dynamics (rx_set_boost) */
 } rx_cfg_t;
@@ -48,7 +49,8 @@ typedef struct {
     int sig;                    /* gnss_sig_t tracked */
     int prn;
     int ch;
-    double pr;                  /* m */
+    double pr;                  /* m, carrier-smoothed while the PLL holds (rx_cfg_t.hatch_s) */
+    double pr_raw;              /* m, as measured */
     double adr;                 /* carrier phase, cycles, RINEX sign (grows with range) */
     double dop;                 /* Hz */
     double t_sv;                /* transmit time, s of week (satellite clock, in its system's time) */
@@ -84,6 +86,12 @@ typedef struct {
     uint64_t pend_code[4];
     int npend;
     int have_dump;
+    /* Carrier smoothing (Hatch filter): the smoothed pseudorange, the carrier phase (m) and
+     * sample it was last updated at, samples in it, and the half-cycle state it assumed. */
+    double hatch_pr, hatch_adr;
+    uint64_t hatch_t;
+    uint32_t hatch_n;
+    int hatch_inv;
     /* Pilot channels (aided starts, rx_aid): code period, the week's count of code periods at
      * the epoch that opened period 1, and the secondary code, one chip per period. */
     double t_code;

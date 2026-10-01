@@ -24,6 +24,7 @@ add_executable(gnss_tests
     test_lnav.cpp
     test_trk.cpp
     test_trk_boost.cpp
+    test_trk_pilot.cpp
     test_fe_emul.cpp
     test_if_plan.cpp
     test_iir.cpp

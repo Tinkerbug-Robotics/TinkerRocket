@@ -116,11 +116,14 @@ How each stage works:
   loops; see [Boost dynamics](#boost-dynamics-milestone-5).
 - **Navigation data:** bit sync by a transition histogram, then LNAV with parity, ephemeris and
   page 18.
-- **Observables and PVT:** observables come from the exact integer NCO state. Doppler is the NCO's
-  mean frequency over the last 20 ms, moved forward by the loop's rate. PVT is least squares with
-  Sagnac, Klobuchar and Saastamoinen corrections, plus Doppler velocity.
+- **Observables and PVT:** observables come from the exact integer NCO state.
+  - Doppler is the NCO's mean frequency over the last 20 ms, moved forward by the loop's rate.
+  - Pseudoranges are carrier-smoothed (Hatch, 100 s, `rx_cfg_t.hatch_s`) while the PLL holds,
+    and restart when it lets go.
+  - PVT is least squares with Sagnac, Klobuchar and Saastamoinen corrections, plus Doppler
+    velocity.
 
-Results, 2026-09-30, on the 2-bit 6.75 MS/s stream:
+Results, 2026-09-30, on the 2-bit 6.75 MS/s stream, before carrier smoothing:
 
 | File | Result |
 |---|---|
@@ -128,6 +131,9 @@ Results, 2026-09-30, on the 2-bit 6.75 MS/s stream:
 | Same stream, Pocket SDR | 191 fixes: E +0.04, N −0.03, U −0.01 m; sd 0.25, 0.29, 0.87 m |
 | Ours against Pocket SDR | Pseudoranges agree to 0.62 m rms (after fitting the two receivers' epoch-label offset); Doppler to 0.2 Hz; C/N0 to 0.3 dB |
 | gps-sdr-sim hotshot pad, `--cn0 45` | 14/14 locked; E +0.03, N −0.04, U −0.41 m; sd 0.20, 0.15, 0.45 m |
+
+With carrier smoothing (2026-10-01), the SignalSim static file's GPS gives 2039 fixes with mean
+error E +0.02, N +0.05, U −0.08 m and sd 0.05, 0.06, 0.14 m.
 
 Other checks:
 - **Ephemerides:** every decoded ephemeris equals the RINEX broadcast record to print precision.
@@ -321,6 +327,10 @@ Fix errors through the hotshot burn with the boost profile:
 | 31.4 | 14.5 m | — |
 | 29.3 | 21.5 m | — |
 
+With carrier smoothing (milestone 6), the PLL holds through the burn and smoothing never restarts.
+At 42.6 dB-Hz the hotshot's position error falls to rms 0.17 / 0.11 / 0.28 m, with a worst height
+error of 0.6 m (from 3.4 m).
+
 `trksim` agrees, and says the same for every satellite in the sky. With the boost profile, all 14
 keep carrier phase through the traveler at 45, 40 and 35 dB-Hz, and through the hotshot at 45 and
 40. At 35 only the overhead PRN 11 (1,638 Hz/s) slips, once.
@@ -361,7 +371,7 @@ needs two things on the P4:
 - **Real motors add what the files lack.** Vibration on the oscillator, plume, spin and antenna
   phase are milestone 7.
 
-## Galileo E1 and BeiDou B1C (milestone 6, in progress)
+## Galileo E1 and BeiDou B1C (milestone 6)
 
 ```bash
 build/host/gnssrx signalsim_static_gpsgalb1c_2026_45_n.C8 --dur 90 --out runs/m6
@@ -407,28 +417,43 @@ build/host/gnssrx signalsim_static_gpsgalb1c_2026_45_n.C8 --dur 90 --out runs/m6
 
 **PVT:** one time offset per extra system. A GPS-only solve does the same arithmetic as before.
 
-Results, static file, 40–90 s (GPS 13, Galileo 8, BeiDou 8 satellites):
+Results on the static files (GPS 13, Galileo 8, BeiDou 8 satellites):
 
-| | GPS only (regression file) | GPS + Galileo + BeiDou |
-|---|---|---|
-| Satellites, PDOP | 13, 1.34 | 29, 0.92 |
-| Position sd E / N / U | 0.43 / 0.28 / 0.81 m | 0.95 / 0.25 / 0.93 m |
-| Pseudorange residual sd | 0.45–1.3 m | GPS 0.55–1.5 m; Galileo 0.55–1.7 m (E19 7.2 m, below); B1C 0.35–1.1 m |
-| C/N0 | 40.3 dB-Hz | GPS 40.3; E1-C 37.0; B1C pilot 38.4 (SignalSim predicts 39.2) |
+| | GPS only | GPS + Galileo + BeiDou, raw | GPS + Galileo + BeiDou, carrier-smoothed |
+|---|---|---|---|
+| Satellites, PDOP | 13, 1.34 | 29, 0.92 | 29, 0.92 |
+| Position sd E / N / U | 0.43 / 0.28 / 0.81 m (raw); 0.05 / 0.06 / 0.14 m (smoothed) | 0.95 / 0.25 / 0.93 m | 0.15 / 0.03 / 0.17 m (mean within 0.1 m) |
+| Pseudorange residual sd | 0.45–1.3 m (raw) | GPS 0.55–1.5; Galileo 0.55–1.7 (E19 7.2); B1C 0.35–1.1 m | E19 1.3 m |
+| C/N0 | 40.3 dB-Hz | GPS 40.3; E1-C 37.0; B1C pilot 38.4 (SignalSim predicts 39.2) | |
 
 Galileo and BeiDou time offsets solve to about +1.5 m against GPS, steady to a few decimetres.
 
-**Known limits:**
-- **Low code Doppler.** E19 (+9 Hz) wanders ±11 m with a 25 s period. That is the time its code
-  takes to slide one sample spacing (0.15 chip) at 0.006 chips/s. The code tracking error
-  repeats with the sample phase, which faster satellites average out and this one follows.
-  Its wander is what makes east worse than GPS alone. Carrier smoothing of the pseudoranges
-  (the pilots hold phase throughout) is the fix.
-- **Bump-jump detection.** The very early and very late taps exist, but nothing acts on them
-  yet. Aided starts land within 0.1 chip, so side peaks have not been met.
-- **C/N0 on a pilot.** The 0.2 s moments estimate reads up to 28 dB-Hz on noise. A
-  narrowband/wideband estimate on the wiped pilot would read zero.
-- **Navigation messages.** E1-B I/NAV and B-CNAV1 are not decoded; ephemerides are preloaded.
+**Fixed since the first runs:**
+- **Low code Doppler.** E19 (+9 Hz) wandered ±11 m with a 25 s period. That is the time its code
+  takes to slide one sample spacing (0.15 chip) at 0.006 chips/s, so the code tracking error
+  repeats with the sample phase. Faster satellites average it out; this one followed it.
+  Carrier smoothing over 100 s cuts it to 1.3 m sd, and the position sd from 0.95 / 0.25 / 0.93
+  to 0.15 / 0.03 / 0.17 m.
+- **Side peaks** (`TrkPilot.JumpsOffASidePeak`). On a BOC channel, a very early or very late tap
+  with more power than the prompt over 0.2 s moves the code half a chip its way, over one
+  commanded period. A channel parked on either side peak finds the main peak; one near the main
+  peak never jumps.
+- **A pilot's C/N0** comes from 0.2 s of moments, which read up to 28 dB-Hz on noise. So a pilot
+  measures, and counts as locked, only at 30 dB-Hz or more, and is dropped below it.
+  Narrowband/wideband on the wiped pilot would allow a lower line.
+
+**Against Pocket SDR on the same stream** (150 s; its E1-B against our E1-C pilot):
+- **Position:** ours sd 0.15 / 0.03 / 0.17 m; Pocket SDR's 0.32 / 0.23 / 0.68 m.
+- **Raw pseudoranges, ours minus Pocket SDR's:** GPS sd 0.5–0.7 m, Galileo 1.2–1.7 m. E19's 8.7 m
+  is our low-Doppler wander, before smoothing.
+- **C/N0** agrees within 0.5 dB on every satellite. Doppler has a common −0.4 Hz, which is the
+  rounding of the oscillator frequency Pocket SDR was given.
+- **B1C:** Pocket SDR found no B1C signal in 150 s, on its own pilot and data searches or beside
+  GPS. Ours tracks all nine with ICD-checked codes, a correlation shape that matches the theory,
+  and SignalSim's documented data/pilot ratio. The cause is on Pocket SDR's side, and as a black
+  box it isn't examined further.
+
+**Limit:** E1-B I/NAV and B-CNAV1 are not decoded; ephemerides are preloaded.
 
 ## Pocket SDR as the cross-check
 
