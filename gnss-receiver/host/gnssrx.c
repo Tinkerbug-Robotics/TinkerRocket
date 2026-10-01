@@ -49,6 +49,8 @@ static void usage(void)
             "                            round(A * cos), for trade studies (default: corr_params.h)\n"
             "  --vectors DIR --vectors-ms N   write HDL test vectors for the first N ms (golden only)\n"
             "  --meas-hz N               observables and PVT rate (default 10)\n"
+            "  --p4-latency-us T         commands reach the correlator T us after the tick (< 1000),\n"
+            "                            as the P4's processing would deliver them\n"
             "  --acq-threshold M         acquisition detection threshold\n"
             "  --iono A0,A1,A2,A3,B0,B1,B2,B3   preload Klobuchar parameters (default: the manifest's)\n"
             "  --no-iono --no-tropo      leave the atmosphere uncorrected\n"
@@ -108,9 +110,9 @@ static void apply(bank_t *b, uint64_t t_now, const corr_cmd_t *c)
         corr_float_command(b->cf, c);
     }
     if (b->v_cmds && t_now < b->v_end) {
-        fprintf(b->v_cmds, "%llu,%d,%d,%d,%llu,%llu,%llu,%d,%llu\n", (unsigned long long)t_now, c->type, c->ch, c->prn,
-                (unsigned long long)c->t_start, (unsigned long long)c->code_phase, (unsigned long long)c->tap_offset,
-                c->carr_word, (unsigned long long)c->code_word);
+        fprintf(b->v_cmds, "%llu,%d,%d,%d,%llu,%llu,%llu,%d,%llu,%u\n", (unsigned long long)t_now, c->type, c->ch,
+                c->prn, (unsigned long long)c->t_start, (unsigned long long)c->code_phase,
+                (unsigned long long)c->tap_offset, c->carr_word, (unsigned long long)c->code_word, c->apply_seq);
     }
 }
 
@@ -134,9 +136,9 @@ static void vec_dumps(bank_t *b, const corr_dump_t *d, int nd)
         if (d[k].t_samp > b->v_end) {
             continue;
         }
-        fprintf(b->v_dumps, "%d,%u,%llu,%llu,%u,%u,%d,%llu,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n", d[k].ch, d[k].seq,
+        fprintf(b->v_dumps, "%d,%u,%llu,%llu,%u,%u,%d,%llu,%u,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n", d[k].ch, d[k].seq,
                 (unsigned long long)d[k].t_samp, (unsigned long long)d[k].code_phase, d[k].carr_phase,
-                d[k].carr_cycles, d[k].carr_word, (unsigned long long)d[k].code_word, (double)d[k].ie,
+                d[k].carr_cycles, d[k].carr_word, (unsigned long long)d[k].code_word, d[k].flags, (double)d[k].ie,
                 (double)d[k].qe, (double)d[k].ip, (double)d[k].qp, (double)d[k].il, (double)d[k].ql);
     }
 }
@@ -146,7 +148,7 @@ int main(int argc, char **argv)
     src_opts_t so;
     src_default_opts(&so);
     const char *out_dir = "runs/gnssrx", *corr_arg = NULL, *vec_dir = NULL, *truth_arg = NULL;
-    double meas_hz = 10.0, vec_ms = 50.0, lut_amp = 0.0;
+    double meas_hz = 10.0, vec_ms = 50.0, lut_amp = 0.0, p4_latency_us = 0.0;
     float acq_thr = -1.0f;
     int no_iono = 0, no_tropo = 0, lut_bits = 0;
     gps_iono_t iono_aid;
@@ -173,6 +175,8 @@ int main(int argc, char **argv)
             vec_dir = argv[++i];
         } else if (!strcmp(a, "--vectors-ms") && v) {
             vec_ms = atof(argv[++i]);
+        } else if (!strcmp(a, "--p4-latency-us") && v) {
+            p4_latency_us = atof(argv[++i]);
         } else if (!strcmp(a, "--meas-hz") && v) {
             meas_hz = atof(argv[++i]);
         } else if (!strcmp(a, "--acq-threshold") && v) {
@@ -260,9 +264,9 @@ int main(int argc, char **argv)
         snprintf(p, sizeof(p), "%s/samples.u2", vec_dir);
         bank.v_samples = fopen(p, "wb");
         bank.v_cmds = open_csv(vec_dir, "commands.csv",
-                               "t_sample,type,ch,prn,t_start,code_phase,tap_offset,carr_word,code_word");
+                               "t_sample,type,ch,prn,t_start,code_phase,tap_offset,carr_word,code_word,apply_seq");
         bank.v_dumps = open_csv(vec_dir, "dumps.csv",
-                                "ch,seq,t_samp,code_phase,carr_phase,carr_cycles,carr_word,code_word,ie,qe,ip,qp,il,ql");
+                                "ch,seq,t_samp,code_phase,carr_phase,carr_cycles,carr_word,code_word,flags,ie,qe,ip,qp,il,ql");
         bank.v_end = (uint64_t)llround(vec_ms * 1e-3 * fs);
         if (!bank.v_samples || !bank.v_cmds || !bank.v_dumps) {
             fprintf(stderr, "gnssrx: cannot write vectors into %s\n", vec_dir);
@@ -327,7 +331,13 @@ int main(int argc, char **argv)
     printf(" -> %s\n", out_dir);
 
     corr_dump_t dumps[MAX_DUMPS];
-    corr_cmd_t cmds[MAX_CMDS];
+    corr_cmd_t cmds[MAX_CMDS], held[2 * MAX_CMDS];
+    int nheld = 0;
+    const uint64_t lat = (uint64_t)llround(p4_latency_us * 1e-6 * fs);
+    if (lat >= spms) {
+        fprintf(stderr, "gnssrx: --p4-latency-us must be under one tick (1000 us)\n");
+        return 2;
+    }
     rx_obs_t obs[CORR_MAX_CH];
     uint64_t t0 = 0;
     const uint64_t meas_step = (uint64_t)llround(fs / meas_hz);
@@ -357,8 +367,22 @@ int main(int argc, char **argv)
         ring_head = (ring_head + 1) % acq_ms;
         ring_count = ring_count < acq_ms ? ring_count + 1 : acq_ms;
 
-        int nd = bank.golden ? corr_model_process(bank.cm, t0, cblk, spms, dumps, MAX_DUMPS)
-                             : corr_float_process(bank.cf, t0, blk, spms, dumps, MAX_DUMPS);
+        /* Commands from the last tick reach the correlator `lat` samples into this block. */
+        int nd = 0;
+        uint64_t split = nheld > 0 ? lat : 0;
+        if (split > 0) {
+            nd += bank.golden ? corr_model_process(bank.cm, t0, cblk, (size_t)split, dumps, MAX_DUMPS)
+                              : corr_float_process(bank.cf, t0, blk, (size_t)split, dumps, MAX_DUMPS);
+        }
+        for (int k = 0; k < nheld; k++) {
+            apply(&bank, t0 + split, &held[k]);
+        }
+        nheld = 0;
+        nd += bank.golden
+                  ? corr_model_process(bank.cm, t0 + split, cblk + split, (size_t)(spms - split), dumps + nd,
+                                       MAX_DUMPS - nd)
+                  : corr_float_process(bank.cf, t0 + split, blk + 2 * split, (size_t)(spms - split), dumps + nd,
+                                       MAX_DUMPS - nd);
         if (bank.v_samples && t0 < bank.v_end) {
             uint64_t m = bank.v_end - t0 < spms ? bank.v_end - t0 : spms;
             vec_samples(&bank, cblk, (size_t)m);
@@ -366,8 +390,8 @@ int main(int argc, char **argv)
         }
         uint64_t t_now = t0 + spms;
         int nc = rx_tick(rx, t_now, dumps, nd, cmds, MAX_CMDS);
-        for (int k = 0; k < nc; k++) {
-            apply(&bank, t_now, &cmds[k]);
+        for (int k = 0; k < nc && nheld < 2 * MAX_CMDS; k++) {
+            held[nheld++] = cmds[k];
         }
         int ms;
         if (rx_wants_snapshot(rx, t_now, &ms) && ring_count >= ms) {
@@ -378,7 +402,9 @@ int main(int argc, char **argv)
             uint64_t t_snap = t_now - spms * (uint64_t)ms;
             nc = rx_acquire(rx, t_now, t_snap, snap, spms * (size_t)ms, work, cmds, MAX_CMDS);
             for (int k = 0; k < nc; k++) {
-                apply(&bank, t_now, &cmds[k]);
+                if (nheld < 2 * MAX_CMDS) {
+                    held[nheld++] = cmds[k];
+                }
                 if (cmds[k].type == CORR_CMD_START) {
                     printf("  %7.3f s  ch %2d  PRN %2d  acquired, Doppler %+7.1f Hz, metric %.1f\n", (double)t_now / fs,
                            cmds[k].ch, cmds[k].prn, (double)rx->ch[cmds[k].ch].dop_hz,

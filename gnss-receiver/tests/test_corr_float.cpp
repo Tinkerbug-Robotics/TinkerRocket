@@ -102,7 +102,7 @@ TEST(CorrFloat, EarlyWinsWhenTheReplicaLags)
     EXPECT_NEAR(l / (kFs * 1e-3), 0.3, 0.03);
 }
 
-TEST(CorrFloat, NcoCommandsTakeEffectAtTheNextEpoch)
+TEST(CorrFloat, NcoCommandsTakeEffectAtTheirTaggedEpoch)
 {
     siggen::Sat s;
     s.prn = 3;
@@ -123,13 +123,15 @@ TEST(CorrFloat, NcoCommandsTakeEffectAtTheNextEpoch)
     nco.ch = 3;
     nco.carr_word = carr_word(kIf + 100.0);
     nco.code_word = st.code_word;
+    nco.apply_seq = 2;  // switch at the epoch closing period 2, the one in progress
     corr_float_command(c.get(), &nco);
     int nd2 = corr_float_process(c.get(), half, x.data() + 2 * half, n - half, d + nd, 8 - nd);
     ASSERT_GE(nd2, 3);
-    // The period in progress when the command arrived finishes on the old word.
+    // Period 2 finishes on the old word; period 3 runs on the new one; on time, so no flags.
     EXPECT_EQ(d[2].carr_word, st.carr_word);
     EXPECT_EQ(d[3].carr_word, nco.carr_word);
     EXPECT_EQ(d[4].carr_word, nco.carr_word);
+    EXPECT_EQ(d[2].flags | d[3].flags | d[4].flags, 0);
 }
 
 TEST(CorrFloat, CarrierCyclesCountBothWays)

@@ -73,14 +73,12 @@ int corr_model_command(corr_model_t *m, const corr_cmd_t *cmd)
         h->start_pending = 1;
         return 0;
     case CORR_CMD_NCO:
-        h->carr_word_next = cmd->carr_word;
-        h->code_word_next = cmd->code_word;
-        h->nco_pending = 1;
+        cmdq_push(&h->q, cmd->apply_seq, cmd->carr_word, cmd->code_word);
         return 0;
     case CORR_CMD_STOP:
         h->active = 0;
         h->start_pending = 0;
-        h->nco_pending = 0;
+        cmdq_clear(&h->q);
         return 0;
     default:
         return -1;
@@ -98,7 +96,7 @@ static void begin(corr_model_t *m, cm_ch_t *h)
     h->carr_word = s->carr_word;
     h->carr_phase = 0;
     h->carr_cycles = 0;
-    h->nco_pending = 0;
+    cmdq_clear(&h->q);
     memset(h->acc, 0, sizeof(h->acc));
     h->seq = 0;
     h->active = 1;
@@ -170,8 +168,12 @@ static int run(corr_model_t *m, cm_ch_t *h, uint64_t t0, const uint8_t *codes, s
             cp -= mod;
             int32_t acc[6] = {ie, qe, ip, qp, il, ql};
             check_acc(m, acc);
+            int32_t next_carr = h->carr_word;
+            uint64_t next_code = h->code_word;
+            uint8_t flags = cmdq_epoch(&h->q, h->seq, &next_carr, &next_code);
             if (nd < max) {
                 corr_dump_t *d = &dumps[nd++];
+                d->flags = flags;
                 d->ch = ch;
                 d->seq = h->seq;
                 d->t_samp = t0 + k + 1;
@@ -189,11 +191,8 @@ static int run(corr_model_t *m, cm_ch_t *h, uint64_t t0, const uint8_t *codes, s
             }
             h->seq++;
             ie = qe = ip = qp = il = ql = 0;
-            if (h->nco_pending) {
-                h->carr_word = h->carr_word_next;
-                h->code_word = h->code_word_next;
-                h->nco_pending = 0;
-            }
+            h->carr_word = next_carr;
+            h->code_word = next_code;
         }
     }
     h->carr_phase = ph;

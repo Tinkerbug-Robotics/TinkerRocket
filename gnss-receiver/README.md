@@ -153,7 +153,7 @@ float bank), so the receiver core already runs against the FPGA's arithmetic.
 | Taps | early/prompt/late at ±0.25 chip | As tracked |
 | Accumulators | 24-bit signed | 1 ms needs 18 bits, 10 ms B1C 21; the largest seen is 4,058 |
 | Dump and tick | at each code epoch; a 1 ms tick reads them | As tracked |
-| NCO commands | latched, applied at the channel's next code epoch | See "open" below |
+| NCO commands | tagged with the period they take effect after; 2 pending per channel | A fixed loop delay; see below |
 | Decimator 27 → 6.75 | every 4th sample | Costs nothing measurable; sum-of-4 to 2-bit costs 0.4 dB |
 
 **Test vectors for the HDL.**
@@ -171,11 +171,15 @@ The vectors are three files:
 `vecreplay` feeds a fresh model only those files and checks every dump bit for bit, the same job an
 HDL testbench does. 300 ms of the static file gives 3,757 dumps with no mismatches.
 
-**Open: command latency.** A command from the P4 takes effect at the channel's next code epoch after it
-arrives. The P4 reads dumps on a 1 ms tick that is not aligned to any channel's epochs, so the delay from
-a measurement to its correction is one period or two. Which one depends on where the tick falls and on
-the P4's processing time. The alternative is to tag each command with the period it is meant for. That
-gives a fixed delay the loop design (milestone 5) can count on.
+**Tagged commands (owner decision, 2026-09-30).**
+- Each NCO command names the period whose closing code epoch switches the channel to its words.
+- The P4 tags a command computed from dump s with s + 2. That leaves at least a full period for its
+  own latency. Each channel holds two pending commands (`CORR_CMD_QUEUE`).
+- The delay from a measurement to its correction is then fixed: period s steers period s + 3,
+  whatever the 1 ms tick's phase against the channel's epochs.
+- A command that arrives after its tagged epoch applies at the next epoch and sets `CORR_DUMP_LATE`.
+- `gnssrx --p4-latency-us T` delivers commands T µs after each tick. With 0 and 600 µs the dumps,
+  observables and PVT are byte-identical, and a unit test holds that.
 
 ## Pocket SDR as the cross-check
 

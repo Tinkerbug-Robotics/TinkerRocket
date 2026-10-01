@@ -37,6 +37,7 @@ typedef struct {
     float acq_interval_s;       /* how often to search for satellites not in a channel */
     float tap_chips;            /* early/late offset */
     int max_ch;                 /* channels to use, <= CORR_MAX_CH */
+    uint32_t cmd_lead;          /* NCO commands computed from dump s are tagged s + cmd_lead (corr_if.h) */
 } rx_cfg_t;
 
 /* Per-satellite record of an epoch (what goes to RINEX and the logs). */
@@ -61,9 +62,12 @@ typedef struct {
     int64_t adr_fx;             /* carrier phase relative to the IF since START, cycles * 2^32 (exact) */
     int32_t cur_carr;           /* words in force since last_t */
     uint64_t cur_code;
-    int32_t sent_carr;          /* the last command sent, and the tick it was sent on */
+    int32_t sent_carr;          /* the last command sent */
     uint64_t sent_code;
-    uint64_t sent_t;
+    uint32_t pend_seq[4];       /* commands sent and not yet applied: their tags and words, oldest first */
+    int32_t pend_carr[4];
+    uint64_t pend_code[4];
+    int npend;
     int have_dump;
 } rx_nco_t;
 

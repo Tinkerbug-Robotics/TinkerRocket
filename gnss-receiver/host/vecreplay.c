@@ -39,8 +39,10 @@ static long read_cmds(const char *path, timed_cmd_t **out)
     }
     while (fgets(line, sizeof(line), f)) {
         unsigned long long t, ts, cp, tap, cw;
+        unsigned tag;
         int type, ch, prn, carr;
-        if (sscanf(line, "%llu,%d,%d,%d,%llu,%llu,%llu,%d,%llu", &t, &type, &ch, &prn, &ts, &cp, &tap, &carr, &cw) != 9) {
+        if (sscanf(line, "%llu,%d,%d,%d,%llu,%llu,%llu,%d,%llu,%u", &t, &type, &ch, &prn, &ts, &cp, &tap, &carr, &cw,
+                   &tag) != 10) {
             continue;
         }
         if (n == cap) {
@@ -58,6 +60,7 @@ static long read_cmds(const char *path, timed_cmd_t **out)
         v[n].c.tap_offset = tap;
         v[n].c.carr_word = carr;
         v[n].c.code_word = cw;
+        v[n].c.apply_seq = tag;
         n++;
     }
     fclose(f);
@@ -132,11 +135,11 @@ int main(int argc, char **argv)
     long nwant = 0, bad = 0;
     while (fgets(line, sizeof(line), fd)) {
         unsigned long long ts, cp, cw;
-        unsigned seq, ph, cyc;
+        unsigned seq, ph, cyc, flags;
         int ch, carr;
         double v[6];
-        if (sscanf(line, "%d,%u,%llu,%llu,%u,%u,%d,%llu,%lf,%lf,%lf,%lf,%lf,%lf", &ch, &seq, &ts, &cp, &ph, &cyc, &carr,
-                   &cw, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 14) {
+        if (sscanf(line, "%d,%u,%llu,%llu,%u,%u,%d,%llu,%u,%lf,%lf,%lf,%lf,%lf,%lf", &ch, &seq, &ts, &cp, &ph, &cyc,
+                   &carr, &cw, &flags, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 15) {
             continue;
         }
         nwant++;
@@ -152,7 +155,7 @@ int main(int argc, char **argv)
             gv[0] = g->ie, gv[1] = g->qe, gv[2] = g->ip, gv[3] = g->qp, gv[4] = g->il, gv[5] = g->ql;
         }
         int ok = g && g->code_phase == cp && g->carr_phase == ph && g->carr_cycles == cyc && g->carr_word == carr &&
-                 g->code_word == cw;
+                 g->code_word == cw && g->flags == flags;
         for (int k = 0; ok && k < 6; k++) {
             ok = gv[k] == v[k];
         }

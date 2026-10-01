@@ -17,6 +17,7 @@ void rx_default_cfg(rx_cfg_t *c, double fs, double if_hz)
     c->acq_interval_s = 5.0f;
     c->tap_chips = 0.25f;
     c->max_ch = CORR_MAX_CH;
+    c->cmd_lead = 2;
 }
 
 void rx_init(rx_t *rx, const rx_cfg_t *cfg)
@@ -67,6 +68,7 @@ static void free_channel(rx_t *rx, int ch)
 
 int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *cmds, int ncap)
 {
+    (void)t_now;  /* the tick's sample is part of the interface; tagged commands need only the dumps */
     uint8_t touched[CORR_MAX_CH] = {0};
     for (int k = 0; k < nd; k++) {
         int ch = d[k].ch;
@@ -83,8 +85,19 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
         n->last_code_phase = d[k].code_phase;
         n->last_carr_phase = d[k].carr_phase;
         n->last_carr_cycles = d[k].carr_cycles;
-        n->cur_carr = n->sent_carr;
-        n->cur_code = n->sent_code;
+        /* Words for the period this epoch opens: the dump's own, unless a command's tag has come. */
+        n->cur_carr = d[k].carr_word;
+        n->cur_code = d[k].code_word;
+        while (n->npend > 0 && n->pend_seq[0] <= d[k].seq) {
+            n->cur_carr = n->pend_carr[0];
+            n->cur_code = n->pend_code[0];
+            for (int j = 1; j < n->npend; j++) {
+                n->pend_seq[j - 1] = n->pend_seq[j];
+                n->pend_carr[j - 1] = n->pend_carr[j];
+                n->pend_code[j - 1] = n->pend_code[j];
+            }
+            n->npend--;
+        }
         n->have_dump = 1;
         if (d[k].seq == 0) {
             continue;  /* the partial first period */
@@ -119,16 +132,33 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
         int32_t cw;
         uint64_t kw;
         trk_words(c, &cw, &kw);
-        if (cw != rx->nco[ch].sent_carr || kw != rx->nco[ch].sent_code) {
+        rx_nco_t *n = &rx->nco[ch];
+        if (cw != n->sent_carr || kw != n->sent_code) {
+            uint32_t tag = c->period + rx->cfg.cmd_lead;
             corr_cmd_t *s = &cmds[nc++];
             memset(s, 0, sizeof(*s));
             s->type = CORR_CMD_NCO;
             s->ch = (uint8_t)ch;
             s->carr_word = cw;
             s->code_word = kw;
-            rx->nco[ch].sent_carr = cw;
-            rx->nco[ch].sent_code = kw;
-            rx->nco[ch].sent_t = t_now;
+            s->apply_seq = tag;
+            n->sent_carr = cw;
+            n->sent_code = kw;
+            /* Same tag replaces (as the correlator does); else append, oldest dropped if full. */
+            if (n->npend > 0 && n->pend_seq[n->npend - 1] == tag) {
+                n->npend--;
+            } else if (n->npend == 4) {
+                for (int j = 1; j < 4; j++) {
+                    n->pend_seq[j - 1] = n->pend_seq[j];
+                    n->pend_carr[j - 1] = n->pend_carr[j];
+                    n->pend_code[j - 1] = n->pend_code[j];
+                }
+                n->npend--;
+            }
+            n->pend_seq[n->npend] = tag;
+            n->pend_carr[n->npend] = cw;
+            n->pend_code[n->npend] = kw;
+            n->npend++;
         }
     }
     return nc;
@@ -193,18 +223,19 @@ int rx_acquire(rx_t *rx, uint64_t t_now, uint64_t t0, const float *iq, size_t n,
         int32_t cw;
         uint64_t kw;
         trk_words(c, &cw, &kw);
-        /* Carry the code phase from the snapshot's first sample to the start sample. */
+        /* Start a whole tick ahead, so the command arrives in time whatever the P4's latency, and
+         * carry the code phase from the snapshot's first sample to that start sample. */
+        uint64_t t_start = t_now + (uint64_t)llround(rx->cfg.fs * 1e-3);
         double rate = 1.023e6 * (1.0 + r.dop_hz / GNSS_FREQ_L1_HZ) / rx->cfg.fs;
-        double ph = fmod(r.code_phase + (double)(t_now - t0) * rate, (double)GPS_CA_LEN);
+        double ph = fmod(r.code_phase + (double)(t_start - t0) * rate, (double)GPS_CA_LEN);
         if (ph < 0.0) {
             ph += GPS_CA_LEN;
         }
         rx_nco_t *nn = &rx->nco[ch];
         memset(nn, 0, sizeof(*nn));
-        nn->t_start = t_now;
+        nn->t_start = t_start;
         nn->sent_carr = cw;
         nn->sent_code = kw;
-        nn->sent_t = t_now;
         nn->cur_carr = cw;
         nn->cur_code = kw;
 
@@ -214,7 +245,7 @@ int rx_acquire(rx_t *rx, uint64_t t_now, uint64_t t0, const float *iq, size_t n,
         s->ch = (uint8_t)ch;
         s->sig = GNSS_SIG_GPS_L1CA;
         s->prn = (uint8_t)prn;
-        s->t_start = t_now;
+        s->t_start = t_start;
         s->code_phase = (uint64_t)llround(ph * CODE_ONE);
         s->tap_offset = (uint64_t)llround((double)rx->cfg.tap_chips * CODE_ONE);
         s->carr_word = cw;

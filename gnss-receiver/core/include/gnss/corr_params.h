@@ -31,6 +31,9 @@ extern "C" {
  */
 #define CORR_CODE_FRAC_BITS 40
 
+/* Pending NCO commands per channel (corr_if.h): commands tagged two periods ahead need two. */
+#define CORR_CMD_QUEUE 2
+
 /* Correlator taps per channel: early, prompt, late, at +-tap offset from prompt. */
 #define CORR_NTAPS 3
 

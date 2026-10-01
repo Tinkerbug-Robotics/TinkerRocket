@@ -24,6 +24,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "cmd_queue.h"
 #include "gnss/corr_if.h"
 #include "gnss/sig.h"
 
@@ -50,9 +51,7 @@ typedef struct {
     int active;
     int start_pending;
     corr_cmd_t start;
-    int nco_pending;
-    int32_t carr_word_next;
-    uint64_t code_word_next;
+    cmdq_t q;                              /* tagged NCO commands */
     const uint8_t *code;                   /* chips, 0/1 */
     uint64_t code_mod;
     uint32_t carr_phase, carr_cycles;
