@@ -103,6 +103,12 @@ void rx_set_week_ref(rx_t *rx, int week)
     rx->week_ref = week;
 }
 
+void rx_set_clock_rate(rx_t *rx, double hz_per_s, int valid)
+{
+    rx->clk_rate_valid = valid != 0;
+    rx->clk_rate = valid ? hz_per_s : 0.0;
+}
+
 void rx_set_seed_vel(rx_t *rx, const double vel_ecef[3], double vel_sigma_mps)
 {
     memcpy(rx->seed.vel, vel_ecef, sizeof(rx->seed.vel));
@@ -472,15 +478,17 @@ int rx_tick(rx_t *rx, uint64_t t_now, const corr_dump_t *d, int nd, corr_cmd_t *
                 x.ive = -x.ive, x.qve = -x.qve, x.ivl = -x.ivl, x.qvl = -x.qvl;
             }
         }
+        c->ff_rate = 0.0f;
         if (rx->acc_valid && n->have_los) {
-            /* The acceleration along the line of sight closes the range: +a.u / lambda Hz/s. The
-             * commands from this dump land cmd_lead + 1 periods on. */
+            /* The acceleration along the line of sight closes the range: +a.u / lambda Hz/s. */
             const double a_los = rx->acc[0] * n->los[0] + rx->acc[1] * n->los[1] + rx->acc[2] * n->los[2];
             c->ff_rate = (float)(a_los / (GNSS_C / GNSS_FREQ_L1_HZ));
-            c->ff_lead = (float)(rx->cfg.cmd_lead + 1) * T;
-        } else {
-            c->ff_rate = 0.0f;
         }
+        if (rx->clk_rate_valid) {
+            c->ff_rate += (float)rx->clk_rate;  /* the shared oscillator */
+        }
+        /* The commands from this dump land cmd_lead + 1 periods on. */
+        c->ff_lead = (float)(rx->cfg.cmd_lead + 1) * T;
         int bit;
         uint32_t bit_period;
         if (trk_update(c, prof, &x, T, &bit, &bit_period)) {

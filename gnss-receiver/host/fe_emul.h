@@ -64,6 +64,12 @@ typedef struct {
     double jam_n0;
     double jam_t0_s;         /* the interference starts this long into the run */
     mit_cfg_t mit;           /* a mitigation stage on the output codes (not NATIVE) */
+    /* The reference oscillator's fractional frequency error at file second t (its g-sensitivity
+     * times the specific force, say), or NULL. The LO and the sample clock share it; the LO's
+     * share dominates, so everything received turns by -2 pi f_L1 times its integral. */
+    double (*osc_eps)(void *ctx, double t_s);
+    void *osc_ctx;
+    double t0_s;             /* file second of the first input sample (for osc_eps) */
 } fe_cfg_t;
 
 typedef struct {
@@ -84,6 +90,7 @@ typedef struct {
     size_t codes_cap;
     int64_t n_in, n_out;
     int64_t n_int;           /* internal-rate samples so far */
+    double osc_ph;           /* the oscillator's accumulated phase at L1, cycles (mod 1) */
     double sumsq;            /* power into the quantizer, per component */
     uint64_t n_sumsq;
 } fe_t;

@@ -69,6 +69,8 @@ static void usage(void)
             "                            pull-in / locked FLL,PLL,DLL bandwidths (Hz), FLL block (ms)\n"
             "  --boost-at S0,S1          the boost profile from file second S0 to S1, as the flight\n"
             "                            computer would call it (default: never)\n"
+            );
+    fprintf(stderr,
             "  --imu SCEN.csv            IMU aiding emulated from a scenario trajectory (10 Hz t,lat,lon,h;\n"
             "                            file seconds): its acceleration, as the generator's carrier sees it\n"
             "  --imu-err LAG,SF,BIAS,NOISE[,TILT]   the IMU's faults: latency ms, scale error (fraction),\n"
@@ -76,6 +78,15 @@ static void usage(void)
             "                            error in degrees that tips the acceleration from up toward east\n"
             "                            (default 5,0.03,0.5,0.1,0)\n"
             "  --imu-at S0,S1            aid only from file second S0 to S1 (default: all the run)\n"
+            "  --osc-g GAMMA[,COMP]      the reference oscillator's g-sensitivity along the thrust axis, ppb/g:\n"
+            "                            its frequency follows the specific force of the trajectory (--osc-traj,\n"
+            "                            default the --imu one), and COMP of it (0..1, default 0) is fed forward\n"
+            "                            to every channel from the IMU (rx_set_clock_rate), as a calibrated\n"
+            "                            sensitivity would be. COMP -1: the P4 learns it in flight, from the\n"
+            "                            fixes' clock drift against the IMU's specific force since the pad\n"
+            "  --osc-vib F_HZ,A_G[,S0,S1]   a vibration tone along the thrust axis, A_G peak, from file second S0\n"
+            "                            to S1 (default the --boost-at window), through the same sensitivity\n"
+            "  --osc-traj SCEN.csv       the trajectory for --osc-g\n"
             "  --pilot-dumps             write pilot channels' raw dumps (before secondary-code wipe-off)\n"
             "                            to pilot_dumps.csv, for checking the wipe-off\n"
             "  --nav FILE | --no-nav     RINEX navigation file to preload Galileo and BeiDou ephemerides\n"
@@ -216,6 +227,62 @@ static void imu_at(const imu_traj_t *m, double t, double acc[3])
     memcpy(acc, m->acc[lo], sizeof(double[3]));
 }
 
+/* The reference oscillator under acceleration: its fractional frequency error is gamma (per g) times
+ * the specific force along the thrust axis (local up: these flights go straight up), linear between
+ * the trajectory's interval midpoints, plus a vibration tone. */
+typedef struct {
+    int n;
+    double *tm, *fa;       /* midpoints, and the specific force along up there (m/s^2) */
+    double gamma;          /* per g */
+    double vib_hz, vib_g, vib0, vib1;
+} osc_model_t;
+
+#define G0 9.80665
+
+static void osc_build(osc_model_t *o, const imu_traj_t *m)
+{
+    o->n = m->n - 1;
+    o->tm = malloc(sizeof(double) * (size_t)o->n);
+    o->fa = malloc(sizeof(double) * (size_t)o->n);
+    for (int k = 0; k < o->n; k++) {
+        o->tm[k] = 0.5 * (m->t[k] + m->t[k + 1]);
+        o->fa[k] = m->acc[k][0] * m->up[0] + m->acc[k][1] * m->up[1] + m->acc[k][2] * m->up[2] + G0;
+    }
+}
+
+/* The specific force along up at t (m/s^2), and its rate (m/s^3). */
+static double osc_force(const osc_model_t *o, double t, double *rate)
+{
+    *rate = 0.0;
+    if (o->n < 2 || t <= o->tm[0]) {
+        return o->n ? o->fa[0] : G0;
+    }
+    if (t >= o->tm[o->n - 1]) {
+        return o->fa[o->n - 1];
+    }
+    int lo = 0, hi = o->n - 1;
+    while (hi - lo > 1) {
+        const int mid = (lo + hi) / 2;
+        if (o->tm[mid] <= t) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    *rate = (o->fa[hi] - o->fa[lo]) / (o->tm[hi] - o->tm[lo]);
+    return o->fa[lo] + *rate * (t - o->tm[lo]);
+}
+
+static double osc_eps(void *ctx, double t)
+{
+    const osc_model_t *o = (const osc_model_t *)ctx;
+    double rate, f = osc_force(o, t, &rate);
+    if (o->vib_g != 0.0 && t >= o->vib0 && t < o->vib1) {
+        f += o->vib_g * G0 * sin(2.0 * PI * o->vib_hz * t);
+    }
+    return o->gamma * f / G0;
+}
+
 static void enu(const double x[3], const double ref[3], double lat, double lon, double out[3])
 {
     double d[3] = {x[0] - ref[0], x[1] - ref[1], x[2] - ref[2]};
@@ -292,7 +359,8 @@ int main(int argc, char **argv)
     double pvt_adapt_tau = -1.0;
     gps_iono_t iono_aid;
     memset(&iono_aid, 0, sizeof(iono_aid));
-    const char *loops_quiet = NULL, *loops_boost = NULL, *nav_arg = NULL, *imu_path = NULL;
+    const char *loops_quiet = NULL, *loops_boost = NULL, *nav_arg = NULL, *imu_path = NULL, *osc_traj = NULL;
+    double osc_gamma_ppb = 0.0, osc_comp = 0.0, vib_hz = 0.0, vib_g = 0.0, vib0 = -1.0, vib1 = -1.0;
     int no_nav = 0, pilot_dumps = 0;
     double imu_lag_ms = 5.0, imu_sf = 0.03, imu_bias = 0.5, imu_noise = 0.1, imu_tilt = 0.0, imu0 = -INFINITY,
            imu1 = INFINITY;
@@ -358,6 +426,18 @@ int main(int argc, char **argv)
             pilot_dumps = 1;
         } else if (!strcmp(a, "--imu") && v) {
             imu_path = argv[++i];
+        } else if (!strcmp(a, "--osc-g") && v) {
+            if (sscanf(argv[++i], "%lf,%lf", &osc_gamma_ppb, &osc_comp) < 1) {
+                fprintf(stderr, "gnssrx: --osc-g takes GAMMA_PPB_PER_G[,COMP]\n");
+                return 2;
+            }
+        } else if (!strcmp(a, "--osc-vib") && v) {
+            if (sscanf(argv[++i], "%lf,%lf,%lf,%lf", &vib_hz, &vib_g, &vib0, &vib1) < 2) {
+                fprintf(stderr, "gnssrx: --osc-vib takes F_HZ,A_G[,S0,S1]\n");
+                return 2;
+            }
+        } else if (!strcmp(a, "--osc-traj") && v) {
+            osc_traj = argv[++i];
         } else if (!strcmp(a, "--imu-err") && v) {
             if (sscanf(argv[++i], "%lf,%lf,%lf,%lf,%lf", &imu_lag_ms, &imu_sf, &imu_bias, &imu_noise, &imu_tilt) < 4) {
                 fprintf(stderr, "gnssrx: --imu-err takes LAG_MS,SF,BIAS,NOISE[,TILT_DEG]\n");
@@ -394,6 +474,32 @@ int main(int argc, char **argv)
     if (!so.file) {
         usage();
         return 2;
+    }
+    /* The oscillator's g-sensitivity: the front end turns everything by its phase. */
+    osc_model_t osc;
+    memset(&osc, 0, sizeof(osc));
+    /* COMP -1: the P4's estimate, by least squares of the fixes' clock drift on the IMU's specific
+     * force, both less their pad values (averaged until ignition shows as 2 g over them). */
+    double est_pad_f = 0.0, est_pad_d = 0.0, est_sff = 0.0, est_sfd = 0.0, est_gamma = 0.0;
+    long est_npad = 0, est_n = 0;
+    if (osc_gamma_ppb != 0.0 || vib_g != 0.0) {
+        const char *tp = osc_traj ? osc_traj : imu_path;
+        imu_traj_t ot;
+        memset(&ot, 0, sizeof(ot));
+        if (!tp || imu_load(tp, &ot) != 0) {
+            fprintf(stderr, "gnssrx: --osc-g and --osc-vib need a trajectory (--osc-traj or --imu)\n");
+            return 2;
+        }
+        osc_build(&osc, &ot);
+        free(ot.t);
+        free(ot.acc);
+        osc.gamma = osc_gamma_ppb * 1e-9;
+        osc.vib_hz = vib_hz;
+        osc.vib_g = vib_g;
+        osc.vib0 = vib0 < vib1 ? vib0 : (boost0 < boost1 ? boost0 : -INFINITY);
+        osc.vib1 = vib0 < vib1 ? vib1 : (boost0 < boost1 ? boost1 : INFINITY);
+        so.fe.osc_eps = osc_eps;
+        so.fe.osc_ctx = &osc;
     }
     src_t src;
     if (src_open(&src, &so) != 0) {
@@ -632,6 +738,10 @@ int main(int argc, char **argv)
             fprintf(fini, "imu = %s\nimu_err = %g,%g,%g,%g,%g\n", imu_path, imu_lag_ms, imu_sf, imu_bias, imu_noise,
                     imu_tilt);
         }
+        if (osc.n > 0) {
+            fprintf(fini, "osc_g = %g,%g\nosc_vib = %g,%g,%g,%g\n", osc_gamma_ppb, osc_comp, vib_hz, vib_g, osc.vib0,
+                    osc.vib1);
+        }
         for (int k = 0; k < so.fe.n_jam; k++) {
             const jam_cfg_t *j = &so.fe.jam[k];
             fprintf(fini, "jam = %s,%.1f,%.1f,%g,%g,%g\n", j->type == JAM_CW ? "cw" : (j->type == JAM_NB ? "nb" : "chirp"),
@@ -750,6 +860,15 @@ int main(int argc, char **argv)
                         a[0] * imu.up[0] + a[1] * imu.up[1] + a[2] * imu.up[2], on);
             }
         }
+        if (osc.n > 0 && osc_comp != 0.0) {
+            /* The P4 feeds the oscillator forward from the IMU's specific force (as late and as
+             * scaled as the IMU) through its sensitivity: osc_comp of the true one, or its own
+             * estimate once it has one (osc_comp -1). */
+            double rate;
+            osc_force(&osc, t_file - 1e-3 * imu_lag_ms, &rate);
+            const double gam = osc_comp > 0.0 ? osc_comp * osc.gamma : est_gamma;
+            rx_set_clock_rate(rx, -GNSS_FREQ_L1_HZ * gam * rate * (1.0 + imu_sf) / G0, gam != 0.0);
+        }
         int nc = rx_tick(rx, t_now, dumps, nd, cmds, MAX_CMDS);
         for (int k = 0; k < nc && nheld < 2 * MAX_CMDS; k++) {
             held[nheld++] = cmds[k];
@@ -799,6 +918,24 @@ int main(int argc, char **argv)
             }
             int no = rx_measure(rx, t_now, obs, CORR_MAX_CH, &sol);
             const int coarse_fix = rx->time_coarse;  /* as the solve had it (an anchor comes first) */
+            if (osc.n > 0 && osc_comp < 0.0 && sol.valid && sol.vel_valid) {
+                double r;
+                const double tfx = so.start_s + ts;
+                const double f = osc_force(&osc, tfx - 1e-3 * imu_lag_ms, &r) * (1.0 + imu_sf);
+                if (est_n == 0 && (est_npad == 0 || f - est_pad_f / (double)est_npad < 2.0 * G0)) {
+                    est_pad_f += f;  /* on the pad */
+                    est_pad_d += sol.clk_drift;
+                    est_npad++;
+                } else if (est_npad > 0) {
+                    const double df = f - est_pad_f / (double)est_npad, dd = sol.clk_drift - est_pad_d / (double)est_npad;
+                    est_sff += df * df;
+                    est_sfd += df * dd;
+                    est_n++;
+                    if (est_n >= 5 && est_sff > 5.0 * (3.0 * G0) * (3.0 * G0)) {
+                        est_gamma = est_sfd / est_sff * G0 / GNSS_C;  /* per g */
+                    }
+                }
+            }
             double rtow = rx->clk_valid ? rx_time(rx, t_now) : 0.0;
             for (int k = 0; k < no && rx->clk_valid; k++) {
                 /* prn: 100 x system + PRN (GPS 0, Galileo 1, BeiDou 2), so GPS rows read as before. */
@@ -925,6 +1062,10 @@ int main(int argc, char **argv)
         if (so.fe.mit.type != MIT_NONE) {
             printf("  interference flag on %ld epochs (the stage took out up to %.2f dB)\n", n_jam_epochs, sup_max);
         }
+    }
+    if (osc.n > 0 && osc_comp < 0.0) {
+        printf("  oscillator: learnt %.3f ppb/g in flight (true %.3f) from %ld fixes over the pad's %ld\n",
+               est_gamma * 1e9, osc.gamma * 1e9, est_n, est_npad);
     }
     printf("  integrity gate: %u channels dropped (under the horizon, or out of agreement), %u fixes withheld for "
            "want of redundancy\n", rx->n_gate_drop, rx->n_gate_withheld);

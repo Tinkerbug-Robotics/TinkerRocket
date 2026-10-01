@@ -11,6 +11,7 @@
 #define RS_PASS_MARGIN_HZ 100e3
 #define RS_TRANSITION_HZ  1.6e6
 #define RS_ATTEN_DB       80.0
+#define PI_D 3.14159265358979323846
 /* AGC update interval (samples at the quantizer's rate) */
 #define AGC_CHUNK         256
 
@@ -152,6 +153,26 @@ size_t fe_process(fe_t *fe, float *in, size_t n, float *out_iq, uint8_t *out_cod
     size_t m = resamp_process(&fe->rs, in, n, fe->work, cap_int);
     if (c->noise_sigma > 0.0) {
         rng_add_noise(&fe->rng, fe->work, m, c->noise_sigma);
+    }
+    if (c->osc_eps) {
+        /* Per 64 samples: the error held, the phase carried exactly from block to block. */
+        for (size_t k0 = 0; k0 < m; k0 += 64) {
+            const size_t nn = m - k0 < 64 ? m - k0 : 64;
+            const double ts = c->t0_s + (double)(fe->n_int + (int64_t)k0) / fe->fs_int;
+            const double dph = -GNSS_FREQ_L1_HZ * c->osc_eps(c->osc_ctx, ts) / fe->fs_int;  /* cycles/sample */
+            double zr = cos(2.0 * PI_D * fe->osc_ph), zi = sin(2.0 * PI_D * fe->osc_ph);
+            const double wr = cos(2.0 * PI_D * dph), wi = sin(2.0 * PI_D * dph);
+            for (size_t k = k0; k < k0 + nn; k++) {
+                const double xr = fe->work[2 * k], xi = fe->work[2 * k + 1];
+                fe->work[2 * k] = (float)(xr * zr - xi * zi);
+                fe->work[2 * k + 1] = (float)(xr * zi + xi * zr);
+                const double tr = zr * wr - zi * wi;
+                zi = zr * wi + zi * wr;
+                zr = tr;
+            }
+            fe->osc_ph += (double)nn * dph;
+            fe->osc_ph -= floor(fe->osc_ph);
+        }
     }
     const int64_t j0 = (int64_t)llround(c->jam_t0_s * fe->fs_int);
     if (fe->n_int + (int64_t)m > j0) {

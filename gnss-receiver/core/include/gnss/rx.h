@@ -137,6 +137,8 @@ typedef struct {
     int week_ref;                   /* rx_set_week_ref */
     int acc_valid;                  /* IMU aiding: the vehicle's acceleration (rx_set_accel) */
     double acc[3];
+    int clk_rate_valid;             /* and the reference oscillator's predicted rate (rx_set_clock_rate) */
+    double clk_rate;
 
     /* Receiver time: GPS time (s of week) of sample clk_n is clk_t. */
     int clk_valid;
@@ -184,6 +186,15 @@ void rx_set_boost(rx_t *rx, int on);
  * feed-forward, so they track only what the IMU misses and can stay narrow through a boost.
  */
 void rx_set_accel(rx_t *rx, const double acc_ecef[3], int valid);
+
+/*
+ * The reference oscillator's predicted frequency rate, Hz/s at L1 (valid = 0 stops it): its
+ * g-sensitivity times the rate of the specific force the IMU measures, -f_L1 Gamma.(df/dt).
+ * Every channel shares the oscillator, so every channel gets it as feed-forward, with the line
+ * of sight's own from rx_set_accel. The words stay on the same IF, so the observables keep the
+ * clock's true drift and the fix's drift state takes it.
+ */
+void rx_set_clock_rate(rx_t *rx, double hz_per_s, int valid);
 
 /* A full GPS week near today's (the flight computer's clock, a file's date): the navigation
  * message's 10-bit week resolves to the nearest. Default LNAV_WEEK_REF (2019-2038). */

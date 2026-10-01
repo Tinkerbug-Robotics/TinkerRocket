@@ -645,6 +645,69 @@ past burnout:
   leaves it out, and it got no line of sight. Every tracked satellite now gets one.
 
 
+### Oscillator g-sensitivity (milestone 7)
+
+The 27 MHz TCXO (Epson TG2520SMN) moves with acceleration. Its sensitivity is 0.07 ppb/g typical
+on Y and Z, 0.4 on X, and 2 ppb/g the spec bound. The LO and the sample clock share it, so every
+satellite's carrier shifts together, by −f_L1 times Γ times the specific force.
+
+**How big it is.** At the hotshot's burnout the specific force falls 34 g in 0.3 s, up to 147 g/s.
+That adds a Doppler rate to every channel, on top of its line of sight's:
+
+| Sensitivity | Hotshot burnout (147 g/s) | Traveler burnout (86 g/s) |
+|---|---|---|
+| 2 ppb/g | 463 Hz/s | 271 Hz/s |
+| 0.4 ppb/g | 93 Hz/s | 54 Hz/s |
+| 0.07 ppb/g | 16 Hz/s | 9.5 Hz/s |
+
+The aided 20 Hz loops hold about 80 Hz/s.
+
+**The emulation.** `--osc-g GAMMA[,COMP]` turns everything received by the oscillator's phase. That
+phase follows the trajectory's specific force along the thrust axis (1 g on the pad), and
+`--osc-vib F_HZ,A_G` adds a vibration tone. The fix's clock drift moves by c·Γ·f as it should: at
+2 ppb/g, 0.607 m/s at 1 g and 18.587 m/s at 31 g.
+
+**Results.** IMU-aided 20 Hz loops, the realistic IMU. Each cell is the number of satellites that
+lost carrier between liftoff and burnout + 2.5 s, of 14. "33" is set at 33 dB-Hz and measures 31.
+Runs are in `runs/osc`; the figure is `runs/osc/fig/osc_hot_33.png`.
+
+| Sensitivity | Hotshot 45 | Traveler 45 | Hotshot 33 | Traveler 33 |
+|---|---|---|---|---|
+| 0 or 0.07 ppb/g (typical: thrust on Y or Z) | 0 | 0 | 0 | 0 |
+| 0.4 ppb/g (thrust on X) | 0 | 0 | 14, 2 not back | 6 |
+| 1 ppb/g | 14 | 14 | 14 | 14, 2 not back |
+| 2 ppb/g (the bound) | 14 | 14 | 14, 3 not back | 14 |
+| 2 ppb/g, fed forward exactly | 0 | 0 | 0 | 0 |
+| 2 ppb/g, fed forward at 80 % | 0 | 0 | 11 | 4 |
+| 2 ppb/g, fed forward at 50 % | 14 | 14 | 14 | 14 |
+| 2 ppb/g, learnt in flight | 0 | 0 | 9, at ignition | 1 |
+| 0.4 or 1 ppb/g, learnt in flight | — | — | 0 | 0 |
+
+- **The 50 Hz fallback without aiding** loses nothing at 45 dB-Hz, even at 2 ppb/g. At 33 dB-Hz it
+  is at its own limit, losing 9–10 of 14 with no oscillator at all.
+- **Vibration does nothing.** An 800 Hz tone of 30 g peak (Rolly Polly V's boost) through 2 ppb/g
+  swings the carrier 95 Hz, 0.12 rad. Nothing was lost, aided or on the fallback.
+
+**The feed-forward.** `rx_set_clock_rate(rx, hz_per_s, valid)` adds the oscillator's predicted
+rate, −f_L1 Γ·(df/dt), to every channel's feed-forward. The P4 has the specific force from the
+IMU. The words stay on the same IF, so the observables keep the true drift and the fix's drift
+state takes it.
+
+**Learning Γ in flight.** Once the burn starts, the fix's clock drift follows Γ·c·f.
+- A least-squares fit against the IMU's specific force, both less their pad values, finds Γ
+  within 0.5 s of ignition: 2.000 for 2 ppb/g at 45 dB-Hz, 0.066 for 0.07, and within 3.5 % at
+  33 dB-Hz.
+- `--osc-g GAMMA,-1` emulates the P4 doing this. It carries burnout completely.
+- At 33 dB-Hz, a hotshot-like ignition (35 g/s) at 2 ppb/g still costs carrier before the
+  estimate exists.
+
+**Findings:**
+- **The TCXO's X axis must stay across the thrust axis** (the board's layout rule). At 33 dB-Hz it
+  is the difference between losing nothing and losing every satellite.
+- **The P4 should feed the oscillator forward**, with Γ learnt in flight. A bench calibration
+  (2 g flips on each axis) would cover ignition too, should a part near the bound turn up.
+- **Vibration needs nothing.**
+
 ### Limits
 
 - **Static sensitivity ends near 31 dB-Hz.** Pull-in fails below about 32 dB-Hz, boost or not.
@@ -657,8 +720,8 @@ past burnout:
   - The quiet loops without aiding run 0.5–2 m/s worse in velocity than unweighted.
 
   Both are configurations nothing flies. A lock-quality term in the sigma would cover them.
-- **Real motors add what the files lack.** Vibration on the oscillator, plume, spin and antenna
-  phase are milestone 7.
+- **Real motors add what the files lack.** The oscillator's g-sensitivity and vibration are
+  covered above. Plume, spin and antenna phase remain for milestone 7.
 
 ## Real flight data: PSAS Launch-12 (milestone 7)
 

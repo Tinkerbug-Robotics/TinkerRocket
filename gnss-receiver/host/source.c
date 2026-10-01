@@ -192,6 +192,7 @@ int src_open(src_t *s, src_opts_t *o)
         iqf_seek(&s->f, start);
     }
     c->carrier_fix_hz = o->carrier_arg ? atof(o->carrier_arg) : s->meta.carrier_fix_hz;
+    c->t0_s = (double)start / fs;
 
     double fs_add = (c->mode == FE_MODE_NATIVE) ? fs : (c->mode == FE_MODE_ADC27 ? FE_FS_ADC_HZ : c->fs_out);
     if (o->have_cn0) {
