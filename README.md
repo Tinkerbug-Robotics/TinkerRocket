@@ -318,6 +318,12 @@ TinkerRocket/
 │   ├── cpp/                    # pybind11 bindings for EKF, PID, mixer, guidance
 │   └── tests/                  # Pytest regression suite
 │
+├── gnss-receiver/              # Our own GNSS receiver, stage 0: software on IQ files
+│   ├── core/                   # The P4 firmware-to-be: acquisition, loops, LNAV, PVT (C99)
+│   ├── fpga/model/             # Bit-exact C model of the FPGA side
+│   ├── host/                   # Front-end emulation, float correlator, gnssrx/iqtool
+│   └── py/                     # Analysis and Pocket SDR cross-checks
+│
 ├── examples/flights/           # Four real flight logs, for the report tooling
 ├── tests/integration/          # Binary log replay integration tests
 ├── preflight/                  # Pre-flight go/no-go checklist
