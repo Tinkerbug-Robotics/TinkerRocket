@@ -38,6 +38,7 @@ add_executable(gnss_tests
     test_resamp.cpp
     test_rinex_nav.cpp
     test_rng.cpp
+    test_smooth.cpp
 )
 target_link_libraries(gnss_tests PRIVATE gnss_host GTest::gtest_main)
 gtest_discover_tests(gnss_tests)

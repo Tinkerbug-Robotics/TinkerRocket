@@ -19,6 +19,8 @@ void rx_default_cfg(rx_cfg_t *c, double fs, double if_hz)
     c->acq_interval_s = 5.0f;
     c->tap_chips = 0.25f;
     c->hatch_s = 100.0f;
+    c->slip_k = 4.0f;
+    c->slip_tau_s = 8.0f;
     c->pvt_weights = 1;
     c->adapt_tau_s = 30.0f;
     c->max_ch = CORR_MAX_CH;
@@ -798,34 +800,14 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
     pvt_meas_t m[PVT_MAX_SAT];
     float sig_model[PVT_MAX_SAT];
     int nm = 0;
-    const double lambda = GNSS_C / GNSS_FREQ_L1_HZ;
-    for (int k = 0; k < no && nm < PVT_MAX_SAT; k++) {
+    for (int k = 0; k < no; k++) {
         obs[k].pr_raw = obs[k].pr = gps_time_diff(t_rx, t_tx[k]) * GNSS_C;
-        /* Carrier smoothing: the code's noise averaged over hatch_s, the carrier carrying the
-         * range change between epochs. Restarted whenever the PLL lets go or the Costas half
-         * cycle is resolved afresh. */
-        rx_nco_t *n = &rx->nco[obs[k].ch];
-        const double adr_m = obs[k].adr * lambda;
-        const int inv = n->sec_len == 0 && rx->nav[obs[k].ch].inverted;
-        if (rx->cfg.hatch_s > 0.0f && obs[k].lock_s > 0.0f && n->hatch_n > 0 && inv == n->hatch_inv) {
-            double dt = (double)(t - n->hatch_t) / rx->cfg.fs;
-            double mx = dt > 0.0 ? (double)rx->cfg.hatch_s / dt : 1.0;
-            double w = (double)(n->hatch_n + 1) < mx ? (double)(n->hatch_n + 1) : mx;
-            n->hatch_pr = obs[k].pr / w + (1.0 - 1.0 / w) * (n->hatch_pr + (adr_m - n->hatch_adr));
-            n->hatch_n++;
-        } else {
-            n->hatch_pr = obs[k].pr;
-            n->hatch_n = obs[k].lock_s > 0.0f ? 1 : 0;
-            n->hatch_t0 = t;
-        }
-        n->hatch_adr = adr_m;
-        n->hatch_t = t;
-        n->hatch_inv = inv;
-        float smooth_s = 0.0f;
-        if (rx->cfg.hatch_s > 0.0f && n->hatch_n > 0) {
-            obs[k].pr = n->hatch_pr;
-            smooth_s = (float)((double)(t - n->hatch_t0) / rx->cfg.fs);
-        }
+    }
+    float smooth[CORR_MAX_CH];
+    rx_smooth(rx, t, obs, no, smooth);
+    for (int k = 0; k < no && nm < PVT_MAX_SAT; k++) {
+        const rx_nco_t *n = &rx->nco[obs[k].ch];
+        const float smooth_s = smooth[k];
         m[nm].sys = obs[k].sys;
         m[nm].prn = obs[k].prn;
         m[nm].pr = obs[k].pr;
@@ -926,6 +908,73 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
         }
     }
     return no;
+}
+
+void rx_smooth(rx_t *rx, uint64_t t, rx_obs_t *obs, int no, float *smooth_s)
+{
+    const double lambda = GNSS_C / GNSS_FREQ_L1_HZ;
+    double walk[CORR_MAX_CH], sorted[CORR_MAX_CH];
+    int carry[CORR_MAX_CH], nw = 0;
+    no = no < CORR_MAX_CH ? no : CORR_MAX_CH;
+    /* Which channels carry on, and how far each one's raw code is from its smoothed code carried on
+     * by the carrier. */
+    for (int k = 0; k < no; k++) {
+        const rx_nco_t *n = &rx->nco[obs[k].ch];
+        const int inv = n->sec_len == 0 && rx->nav[obs[k].ch].inverted;
+        carry[k] = rx->cfg.hatch_s > 0.0f && obs[k].lock_s > 0.0f && n->hatch_n > 0 && inv == n->hatch_inv;
+        walk[k] = 0.0;
+        if (carry[k] && t > n->hatch_t) {
+            walk[k] = obs[k].pr_raw - (n->hatch_pr + (obs[k].adr * lambda - n->hatch_adr));
+            sorted[nw++] = walk[k];
+        }
+    }
+    /* What every channel shares the fix absorbs into its clock; each channel is held against the rest. */
+    const int check = rx->cfg.slip_k > 0.0f && nw >= 4;
+    double common = 0.0;
+    if (check) {
+        qsort(sorted, (size_t)nw, sizeof(double), cmp_double);
+        common = nw % 2 ? sorted[nw / 2] : 0.5 * (sorted[nw / 2 - 1] + sorted[nw / 2]);
+    }
+    for (int k = 0; k < no; k++) {
+        rx_nco_t *n = &rx->nco[obs[k].ch];
+        const double adr_m = obs[k].adr * lambda;
+        int slipped = 0;
+        if (carry[k] && check && t > n->hatch_t) {
+            const double dt = (double)(t - n->hatch_t) / rx->cfg.fs;
+            const double a = dt < (double)rx->cfg.slip_tau_s ? dt / (double)rx->cfg.slip_tau_s : 1.0;
+            n->hatch_walk += a * ((walk[k] - common) - n->hatch_walk);
+            if (fabs(n->hatch_walk) > (double)rx->cfg.slip_k * pvt_sigma_pr(obs[k].cn0, 0.0f)) {
+                slipped = 1;
+                rx->n_slip++;
+            }
+        }
+        if (slipped) {
+            n->hatch_pr = obs[k].pr_raw - common;
+            n->hatch_n = 1;
+            n->hatch_t0 = t;
+            n->hatch_walk = 0.0;
+        } else if (carry[k]) {
+            double dt = (double)(t - n->hatch_t) / rx->cfg.fs;
+            double mx = dt > 0.0 ? (double)rx->cfg.hatch_s / dt : 1.0;
+            double w = (double)(n->hatch_n + 1) < mx ? (double)(n->hatch_n + 1) : mx;
+            n->hatch_pr = obs[k].pr_raw / w + (1.0 - 1.0 / w) * (n->hatch_pr + (adr_m - n->hatch_adr));
+            n->hatch_n++;
+        } else {
+            n->hatch_pr = obs[k].pr_raw;
+            n->hatch_n = obs[k].lock_s > 0.0f ? 1 : 0;
+            n->hatch_t0 = t;
+            n->hatch_walk = 0.0;
+        }
+        n->hatch_adr = adr_m;
+        n->hatch_t = t;
+        n->hatch_inv = n->sec_len == 0 && rx->nav[obs[k].ch].inverted;
+        obs[k].pr = obs[k].pr_raw;
+        smooth_s[k] = 0.0f;
+        if (rx->cfg.hatch_s > 0.0f && n->hatch_n > 0) {
+            obs[k].pr = n->hatch_pr;
+            smooth_s[k] = (float)((double)(t - n->hatch_t0) / rx->cfg.fs);
+        }
+    }
 }
 
 /* What the fix predicts for satellite e at GPS time t_rx (s of week, true): the transmit time on

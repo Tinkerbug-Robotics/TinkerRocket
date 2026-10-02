@@ -65,8 +65,9 @@ typedef struct {
     double jam_t0_s;         /* the interference starts this long into the run */
     mit_cfg_t mit;           /* a mitigation stage on the output codes (not NATIVE) */
     /* The reference oscillator's fractional frequency error at file second t (its g-sensitivity
-     * times the specific force, say), or NULL. The LO and the sample clock share it; the LO's
-     * share dominates, so everything received turns by -2 pi f_L1 times its integral. */
+     * times the specific force, say), or NULL. The LO and the sample clock share it: everything
+     * received turns by -2 pi f_L1 times its integral, and the sample clock runs at (1 + eps), so
+     * the code reads the same clock error as the carrier (c times the integral, on every channel). */
     double (*osc_eps)(void *ctx, double t_s);
     void *osc_ctx;
     double t0_s;             /* file second of the first input sample (for osc_eps) */

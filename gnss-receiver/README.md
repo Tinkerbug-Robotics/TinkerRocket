@@ -139,7 +139,9 @@ How each stage works:
 - **Observables and PVT:** observables come from the exact integer NCO state.
   - Doppler is the NCO's mean frequency over the last 20 ms, moved forward by the loop's rate.
   - Pseudoranges are carrier-smoothed (Hatch, 100 s, `rx_cfg_t.hatch_s`; `gnssrx --hatch S`, 0
-    off) while the PLL holds, and restart when it lets go.
+    off) while the PLL holds. They restart when it lets go, and when the code walks away from the
+    carrier: a slip the lock detector missed (`rx_smooth`; `--hatch-slip K,TAU_S`, 0 off). See
+    [The smoothing's slip check](#the-smoothings-slip-check-milestone-7).
   - PVT is weighted least squares with Sagnac, Klobuchar and Saastamoinen corrections, plus
     Doppler velocity. It tests its own residuals; see [The fix's weights and residual test](#the-fixs-weights-and-residual-test).
 
@@ -218,9 +220,12 @@ On the static files, the same code with each layer added in turn (sd E / N / U; 
 | Unweighted, no test (before) | 0.22 / 0.05 / 0.19 m (U −0.23) | 0.18 / 0.10 / 0.19 m (U +0.20) |
 | Weighted by C/N0 and smoothing age | 0.17 / 0.05 / 0.15 m | 0.13 / 0.10 / 0.16 m |
 | + the residual test | 0.11 / 0.04 / 0.15 m; E19 left out in 719 of 2039 fixes | 0.10 / 0.08 / 0.17 m; 70 of 539 |
-| + each satellite's own spread (the default) | **0.06 / 0.07 / 0.11 m (U −0.08)**; nothing left out | **0.09 / 0.07 / 0.10 m (U +0.03)**; 1 fix |
+| + each satellite's own spread | 0.06 / 0.07 / 0.11 m (U −0.08); nothing left out | 0.08 / 0.07 / 0.10 m (U +0.03); 1 fix |
+| + the smoothing's slip check (the default) | **0.05 / 0.07 / 0.12 m (U −0.07)**; E19 left out of 169 | **0.09 / 0.07 / 0.10 m (U +0.02)**; 1 fix |
 
-`--no-raim`, `--pvt-unweighted` and `--pvt-adapt-tau 0` turn the layers off for comparisons.
+`--no-raim`, `--pvt-unweighted`, `--pvt-adapt-tau 0` and `--hatch-slip 0` turn the layers off for
+comparisons. The slip check restarts E19's smoothing on its code's wander, 14 times in the 240 s;
+it is then left out of fixes it disagrees with, at no cost to the position.
 
 Through the boosts (`runs/m7c`, `runs/m7g`; 54 runs, compared with the same runs unweighted):
 - **No false alarms on the pad** in any configuration at 31.4 dB-Hz and above. At 29 dB-Hz, only
@@ -800,9 +805,9 @@ design from 60 s before ignition to each file's end (`runs/wide/full_BA_*`, figu
 
 | Flight, level | Delivered | Over 10 m | Fix withheld | Height error, ignition to 10 km / after |
 |---|---|---|---|---|
-| Hotshot, +12 dB | all 13 GPS and 8 Galileo, throughout | none (worst 4.7 m) | 3.9 s at T+25 s | 0.7 / 1.3 m |
+| Hotshot, +12 dB | all 13 GPS and 8 Galileo, throughout | none (worst 4.7 m) | 2.0 s at T+25 s | 0.7 / 1.3 m |
 | Hotshot, −6 dB | all 13 GPS; Galileo in and out at about 30 dB-Hz | none (6.1 m) | none | 0.9 / 2.0 m |
-| Traveler, +12 dB | all 13 GPS and 8 Galileo, throughout | none (4.7 m) | 3.9 s at T+25 s | 0.3 / 2.1 m |
+| Traveler, +12 dB | all 13 GPS and 8 Galileo, throughout | none (4.7 m) | none | 0.3 / 1.8 m |
 | Traveler, −6 dB | all 13 GPS; Galileo in and out | none (8.2 m) | none | 0.6 / 3.7 m |
 
 - **Every error over a metre and every gap comes after 10 km,** where SignalSim's troposphere ends
@@ -843,11 +848,13 @@ What the step does to our receiver (hotshot, +12 dB):
 - **Every channel but one holds lock;** E29 lets go and relocks within half a second. The carrier
   doesn't follow the step: it slips the same distance in whole cycles, up to about 30, inside a
   few dumps, and the PLL can't tell that from no slip.
-- **The carrier smoothing carries the step.** It restarts only when the PLL lets go, so each
-  smoothed pseudorange keeps the old delay and lets it go over its 100 s: up to 4.7 m on the lowest
-  satellite. Where the step left a channel on the other half cycle, its next navigation words read
-  inverted and restart its smoothing: seven GPS channels at T+25.3 s. The fix is withheld for
-  3.9 s while their ranges are confirmed again.
+- **The carrier smoothing carries the step.** Each smoothed pseudorange keeps the old delay and
+  lets it go over its 100 s: up to 4.7 m on the lowest satellite. The slip check
+  ([below](#the-smoothings-slip-check-milestone-7)) now restarts the two or three lowest within
+  3.5–6 s; the 1–3 m steps on the rest stay under its threshold. Where the step left a channel on
+  the other half cycle, its next navigation words read inverted and restart its smoothing: seven
+  GPS channels at T+25.3 s on the hotshot. The fix is withheld for 2.0 s while their ranges are
+  confirmed again (3.9 s before the slip check; on the traveler, not at all now).
 - **The fix keeps modelling the air above 10 km,** as a real flight needs, and the file has none:
   0.3 m/s of vertical velocity error on the hotshot and 0.6 on the traveler, fading over half a
   minute, and 1–4 m of height.
@@ -859,10 +866,54 @@ above 10 km. No count of pseudoranges over 10 m changes. The tables above judge 
 traveler only to 0.5 s past burnout: the quiet loops + IMU's "burnout" losses there all start at
 T+13.8 s, 0.2 s after the crossing, and so did the design's three GPS losses at −9 dB.
 
-Two changes would make the receiver ride it, and a real carrier slip like it (neither done):
-- a code–carrier check on the smoothing, restarting it when the code walks away from the carrier;
-- for test runs only, the receiver told the file's ceiling, as `tropo = none` already tells it a
-  gps-sdr-sim file has no troposphere.
+The slip check below catches the largest steps. Telling the receiver the file's ceiling, for test
+runs only (as `tropo = none` tells it a gps-sdr-sim file has no troposphere), is not done.
+
+### The smoothing's slip check (milestone 7)
+
+The carrier smoothing restarts when the PLL lets go. A carrier that skips whole cycles and keeps
+lock leaves the smoothed pseudorange carrying the jump for its 100 s: a jerk the loop rides with a
+slip, or, in SignalSim's files, the troposphere stepping off at 10 km. The check (`rx_smooth`;
+`rx_cfg_t.slip_k`, `slip_tau_s`; `gnssrx --hatch-slip K,TAU_S`):
+- each epoch, the raw code less the smoothed code carried on by the carrier: code noise, unless
+  code and carrier have parted;
+- less the median of that over the channels. What every channel shares is a clock effect, which the
+  fix takes as clock; a slip is one satellite's;
+- averaged over 8 s, so a code that wanders and comes back doesn't trip it: the DLL's lag through
+  burnout, or a code beating with the sample phase;
+- past 4 times the raw code's noise at the channel's C/N0 (1.6 m at 45 dB-Hz, 5.3 m at 35), the
+  channel restarts from its raw code, less the shared part.
+
+**How it was set.** It was replayed on the measurements of every run in `runs/` before it was
+written (scratchpad replay of `obs.csv`: raw code, carrier phase, C/N0, lock):
+- At 3 times the noise over 1 s it fired about 2,300 times, nearly all on code wander: the DLL's
+  ±1.5 m through the traveler's burnout at 43 dB-Hz, ±7 m at 32, and E19's ±3–4 m on the SignalSim
+  static file.
+- At 4 times over 8 s: no restart in any boost-window run (`runs/aid`, `m7i`, `m7g`, at every
+  level), and those runs come out byte-identical. In the receiver it fires on the traveler sweep
+  files' 10 km step (1–4 restarts a run, G29 and G30 first, 2.5–6 s after the crossing), and on
+  E19's wander, two to four times a minute, on the static files. Nowhere else: none of the 123
+  oscillator runs, and not on PSAS. On the static files the position is unchanged, and the seeded
+  starts come out the same ([The fix's weights](#the-fixs-weights-and-residual-test)).
+
+**What it found in the emulator.** The oscillator's emulation turned only the carrier: code and
+carrier walked apart by c·Γ·f, the same on every channel, up to 11 m/s at 2 ppb/g in the burn. The
+fix took it as clock, so the published oscillator results stood; but a channel restarting under it
+would part from the others by tens of metres. The emulator now runs the sample clock with the
+oscillator too (see [Oscillator g-sensitivity](#oscillator-g-sensitivity-milestone-7)). Rerun,
+the oscillator's results move by a satellite or two and none of its conclusions change; the median
+keeps any such shared walk out of the check.
+
+**On the whole flights** (+12 dB): the check restarts the two or three lowest satellites 3.5–6 s
+after the 10 km crossing. Their drag of up to 4.7 m is gone in seconds instead of 100 s: no
+satellite stays more than 1 m off for over 12 s after the crossing, where G29 stayed so for 100 s. The fix is
+withheld for 2.0 s on the hotshot (3.9 before) and not at all on the traveler (3.9 before). The
+restarted channels, right now, disagree with the smaller steps the check can't see on the rest,
+and are left out of more fixes for a few seconds (77 on the hotshot, against 29). At −6 dB the step
+stays under the threshold (5.3 m at 35 dB-Hz) and nothing restarts.
+
+Tests: `Smooth.*` (a slip the lock missed restarts that channel alone; what every channel shares,
+and a code that only wanders, are left alone) and `FeEmul.TheOscillatorRunsTheSampleClockToo`.
 
 ### Oscillator g-sensitivity (milestone 7)
 
@@ -881,25 +932,29 @@ That adds a Doppler rate to every channel, on top of its line of sight's:
 
 The aided 20 Hz loops hold about 80 Hz/s.
 
-**The emulation.** `--osc-g GAMMA[,COMP]` turns everything received by the oscillator's phase. That
-phase follows the trajectory's specific force along the thrust axis (1 g on the pad), and
+**The emulation.** `--osc-g GAMMA[,COMP]` turns everything received by the oscillator's phase, and
+runs the sample clock at (1 + its fractional error), so the code reads the same clock error as the
+carrier. (Until 2026-10-02 only the carrier turned: code and carrier walked apart by c·Γ·f on every
+channel. The fix took it as clock, but the smoothing's slip check would not have.) That phase
+follows the trajectory's specific force along the thrust axis (1 g on the pad), and
 `--osc-vib F_HZ,A_G` adds a vibration tone. The fix's clock drift moves by c·Γ·f as it should: at
 2 ppb/g, 0.607 m/s at 1 g and 18.587 m/s at 31 g.
 
 **Results.** IMU-aided 20 Hz loops, the realistic IMU. Each cell is the number of satellites that
 lost carrier between liftoff and burnout + 2.5 s, of 14. "33" is set at 33 dB-Hz and measures 31.
-Runs are in `runs/osc`; the figure is `runs/osc/fig/osc_hot_33.png`.
+Runs are in `runs/osc` (rerun 2026-10-02 with the oscillator on the sample clock too); the figure
+is `runs/osc/fig/osc_hot_33.png`.
 
 | Sensitivity | Hotshot 45 | Traveler 45 | Hotshot 33 | Traveler 33 |
 |---|---|---|---|---|
 | 0 or 0.07 ppb/g (typical: thrust on Y or Z) | 0 | 0 | 0 | 0 |
-| 0.4 ppb/g (thrust on X) | 0 | 0 | 14, 2 not back | 7 |
-| 1 ppb/g | 14 | 14 | 14 | 14, 1 not back |
-| 2 ppb/g (the bound) | 14 | 14 | 14, 5 not back | 14 |
+| 0.4 ppb/g (thrust on X) | 0 | 0 | 14, 1 not back | 6, 1 not back |
+| 1 ppb/g | 14 | 14 | 14, 1 not back | 14 |
+| 2 ppb/g (the bound) | 14 | 14 | 14, 1 not back | 14, 1 not back |
 | 2 ppb/g, fed forward exactly | 0 | 0 | 0 | 0 |
-| 2 ppb/g, fed forward at 80 % | 0 | 0 | 12 | 2 |
-| 2 ppb/g, fed forward at 50 % | 14 | 14 | 14, 2 not back | 14 |
-| 2 ppb/g, learnt in flight | 0 | 0 | 8, at ignition | 12, at ignition |
+| 2 ppb/g, fed forward at 80 % | 0 | 0 | 12, 2 not back | 4, 1 not back |
+| 2 ppb/g, fed forward at 50 % | 14 | 14 | 14, 2 not back | 14, 1 not back |
+| 2 ppb/g, learnt in flight | 0 | 0 | 11: 10 at ignition | 11, at ignition |
 | 0.4 or 1 ppb/g, learnt in flight | — | — | 0 | 0 |
 
 - **The 50 Hz fallback without aiding** loses nothing at 45 dB-Hz, even at 2 ppb/g. At 33 dB-Hz it
@@ -918,7 +973,7 @@ state takes it.
   33 dB-Hz.
 - `--osc-g GAMMA,-1` emulates the P4 doing this. It carries burnout completely.
 - At 33 dB-Hz an ignition at 2 ppb/g still costs carrier before the estimate exists, 0.3–0.5 s
-  in: 8 of 14 on the hotshot and 12 on the traveler. On the traveler's softer start the trigger
+  in: 10 of 14 on the hotshot and 11 on the traveler. On the traveler's softer start the trigger
   fires 0.12 s in, and the loops spend that narrow.
 
 **Findings:**
@@ -1000,7 +1055,7 @@ velocity rms:
   burnout, so the 20 Hz loops meet burnout barely settled, and whatever the feed-forward misses
   there costs more. With the poor IMU (20 ms, 10 %) at 31.4 dB-Hz: 6 lost on the traveler against
   5, two of them over 10 m; on the hotshot 9 either way, 5 not back against 3. With the
-  oscillator's 2 ppb/g fed forward at 80 %: 14 lost against 12 on the hotshot, 9 against 2 on the
+  oscillator's 2 ppb/g fed forward at 80 %: 14 lost against 12 on the hotshot, 10 against 4 on the
   traveler, all just after burnout. Fed forward exactly, or with the typical part, nothing is lost
   either way.
 - **On the sweep files and Galileo it matches the design:** the same satellites, up to 0.08 m/s

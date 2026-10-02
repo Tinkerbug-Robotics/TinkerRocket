@@ -49,6 +49,15 @@ static int grow(void **p, size_t *cap, size_t need, size_t elem)
     return 0;
 }
 
+/* The oscillator on the sample clock: it runs at (1 + eps), so each sample comes sooner and the code
+ * reads the clock's error as the carrier does. Without it the carrier alone moved, and code and carrier
+ * walked apart at c eps on every channel (resamp's warp; fe must not move after fe_init). */
+static double osc_warp(void *ctx, double t_out)
+{
+    const fe_cfg_t *c = &((const fe_t *)ctx)->cfg;
+    return -c->osc_eps(c->osc_ctx, c->t0_s + t_out);
+}
+
 int fe_init(fe_t *fe, const fe_cfg_t *cfg)
 {
     memset(fe, 0, sizeof(*fe));
@@ -89,6 +98,10 @@ int fe_init(fe_t *fe, const fe_cfg_t *cfg)
     }
     if (resamp_init(&fe->rs, c->fs_in, fe->fs_int, f_pass, f_stop, RS_ATTEN_DB, c->start) != 0) {
         return -1;
+    }
+    if (c->osc_eps) {
+        fe->rs.warp = osc_warp;
+        fe->rs.warp_ctx = fe;
     }
     if (c->if_order > 0 && iir_butter_lowpass(&fe->lpf, c->if_order, 0.5 * c->if_bw_hz, fe->fs_int) != 0) {
         resamp_free(&fe->rs);

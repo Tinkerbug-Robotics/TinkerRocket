@@ -105,3 +105,37 @@ TEST(FeEmul, Adc27SubsamplesToTheCorrelatorRate)
     EXPECT_GT(std::abs(f.amp), 0.3);
     fe_free(&fe);
 }
+
+TEST(FeEmul, TheOscillatorRunsTheSampleClockToo)
+{
+    // A TCXO 1 ppm fast: the receiver takes each sample sooner, so after a second of the file it has
+    // read 1 ppm fewer input samples per output, and its code reads the clock's error as the carrier.
+    const double fs_in = 2.6e6;
+    const size_t n = 2600000;
+    std::vector<float> x(2 * n, 0.0f);
+    auto run = [&](bool osc) {
+        fe_cfg_t c;
+        fe_cfg_default(&c);
+        c.fs_in = fs_in;
+        c.fc_in = GNSS_FREQ_L1_HZ;
+        if (osc) {
+            c.osc_eps = [](void *, double) { return 1e-6; };
+        }
+        fe_t fe;
+        EXPECT_EQ(fe_init(&fe, &c), 0);
+        std::vector<float> in(x);
+        std::vector<uint8_t> codes(fe_max_out(&fe, n));
+        size_t m = fe_process(&fe, in.data(), n, nullptr, codes.data(), codes.size());
+        const double pos = resamp_position(&fe.rs);
+        fe_free(&fe);
+        return std::make_pair(m, pos);
+    };
+    auto plain = run(false), warped = run(true);
+    EXPECT_GE(warped.first, plain.first);  // more output samples for the same stretch of file
+    // Per output sample the input advances by step (1 - 1e-6): after m outputs, ~1e-6 m step behind.
+    const double behind = 1e-6 * double(warped.first) * fs_in / FE_FS_CORR_HZ;
+    const double per_out = fs_in / FE_FS_CORR_HZ;
+    EXPECT_NEAR(plain.second - per_out * double(plain.first) - (warped.second - per_out * (1.0 - 1e-6) * double(warped.first)),
+                0.0, 1e-3);
+    EXPECT_GT(behind, 2.0);
+}

@@ -39,6 +39,9 @@ typedef struct {
     int max_ch;                 /* channels to use, <= CORR_MAX_CH */
     uint32_t cmd_lead;          /* NCO commands computed from dump s are tagged s + cmd_lead (corr_if.h) */
     float hatch_s;              /* carrier smoothing of pseudoranges: time constant, s (0 = off) */
+    float slip_k;               /* the smoothing restarts when the code walks this many times its own
+                                   noise away from the carrier, against the other channels (0 = never) ... */
+    float slip_tau_s;           /* ... averaged over this long (rx_smooth) */
     int pvt_weights;            /* 1: weigh the fix by each measurement's sigma; 0: equal weights */
     float adapt_tau_s;          /* each satellite's own residual spread, learnt over this long, inflates
                                    its sigma (up to 5x) where the model is too kind to it (0 = off) */
@@ -98,6 +101,7 @@ typedef struct {
     uint64_t hatch_t, hatch_t0;
     uint32_t hatch_n;
     int hatch_inv;
+    double hatch_walk;          /* the code's walk from the carrier, against the other channels, averaged (m) */
     float res_var;              /* its squared normalized pseudorange residual, low-passed (0: none yet) */
     uint64_t res_t;             /* and the sample it was last updated at */
     /* Pilot channels (aided starts, rx_aid), and GPS channels timed from the seed (ms_valid):
@@ -167,6 +171,7 @@ typedef struct {
     uint64_t t_gate, t_sol;         /* the gate's last check; the sample of the last fix */
     uint32_t n_gate_drop;           /* channels dropped: below the horizon, or out of agreement */
     uint32_t n_gate_withheld;       /* fixes withheld for want of redundancy */
+    uint32_t n_slip;                /* smoothing restarts where the code walked away from the carrier */
     pvt_opt_t pvt_opt;
     int boost;                      /* the boost profile is the target */
     trk_profile_t prof;             /* the loops in force, moving toward the target (trk_profile_step) */
@@ -262,6 +267,19 @@ int rx_aid(rx_t *rx, uint64_t t_now, corr_cmd_t *cmds, int ncap);
 
 /* Observables and PVT at sample t (the latest tick). Returns the number of observables. */
 int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol);
+
+/*
+ * Carrier smoothing (Hatch) of the epoch's no observables at sample t, in place: obs[k].pr from
+ * obs[k].pr_raw and the carrier phase obs[k].adr, over hatch_s. A channel restarts where its PLL let go,
+ * where the Costas half cycle was resolved afresh, and where its code walked away from its carrier: a
+ * slip the lock detector missed, or a step in the code the carrier didn't follow. The walk is each
+ * epoch's raw code less the smoothed one carried on by the carrier, less the median of that over the
+ * channels (what they all share, the receiver clock's, the fix absorbs), averaged over slip_tau_s. Past
+ * slip_k times the raw code's noise at the channel's C/N0 it restarts, from its raw code less that
+ * shared part (rx->n_slip). Needs four channels carrying on. smooth_s[k]: how long each has been smoothed.
+ * rx_measure calls it.
+ */
+void rx_smooth(rx_t *rx, uint64_t t, rx_obs_t *obs, int no, float *smooth_s);
 
 /* GPS time (s of week) of sample t, once the clock is set. */
 double rx_time(const rx_t *rx, uint64_t t);

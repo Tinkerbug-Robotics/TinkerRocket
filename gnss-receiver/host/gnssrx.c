@@ -59,6 +59,8 @@ static void usage(void)
             "  --acq-threshold M         acquisition detection threshold\n"
             "  --acq-interval S          seconds between searches for satellites not in a channel (default 5)\n"
             "  --hatch S                 carrier smoothing of the pseudoranges over S seconds (default 100; 0 off)\n"
+            "  --hatch-slip K[,TAU_S]    restart a channel's smoothing when its code walks K times its noise\n"
+            "                            from its carrier, against the others, averaged over TAU_S (4,8; 0 off)\n"
             "  --iono A0,A1,A2,A3,B0,B1,B2,B3   preload Klobuchar parameters (default: the manifest's)\n"
             "  --no-iono --no-tropo      leave the atmosphere uncorrected\n"
             "  --no-raim                 skip the fix's residual test\n"
@@ -364,7 +366,7 @@ int main(int argc, char **argv)
     src_default_opts(&so);
     const char *out_dir = "runs/gnssrx", *corr_arg = NULL, *vec_dir = NULL, *truth_arg = NULL;
     double meas_hz = 10.0, vec_ms = 50.0, lut_amp = 0.0, p4_latency_us = 0.0;
-    float acq_thr = -1.0f, acq_interval = -1.0f, hatch_s = -1.0f;
+    float acq_thr = -1.0f, acq_interval = -1.0f, hatch_s = -1.0f, slip_k = -1.0f, slip_tau = -1.0f;
     int no_iono = 0, no_tropo = 0, lut_bits = 0, no_raim = 0, pvt_unweighted = 0, preload_gps = 0, seed = 0;
     double seed_err_m = 0.0, seed_err_ms = 0.0, seed_sigma_ms = -1.0, seed_vel_sigma = 1.0, seed_pos_sigma = -1.0;
     double pvt_adapt_tau = -1.0;
@@ -412,6 +414,11 @@ int main(int argc, char **argv)
             acq_interval = (float)atof(argv[++i]);
         } else if (!strcmp(a, "--hatch") && v) {
             hatch_s = (float)atof(argv[++i]);
+        } else if (!strcmp(a, "--hatch-slip") && v) {
+            if (sscanf(argv[++i], "%f,%f", &slip_k, &slip_tau) < 1) {
+                fprintf(stderr, "gnssrx: --hatch-slip takes K[,TAU_S]\n");
+                return 2;
+            }
         } else if (!strcmp(a, "--preload-gps")) {
             preload_gps = 1;
         } else if (!strcmp(a, "--prior") && v) {
@@ -640,6 +647,12 @@ int main(int argc, char **argv)
     if (hatch_s >= 0.0f) {
         rc.hatch_s = hatch_s;
     }
+    if (slip_k >= 0.0f) {
+        rc.slip_k = slip_k;
+    }
+    if (slip_tau > 0.0f) {
+        rc.slip_tau_s = slip_tau;
+    }
     if (acq_interval > 0.0f) {
         rc.acq_interval_s = acq_interval;
     }
@@ -792,6 +805,7 @@ int main(int argc, char **argv)
         }
         fprintf(fini, "p4_latency_us = %.1f\ncmd_lead = %u\nloops_quiet = %s\nloops_boost = %s\nhatch_s = %g\n",
                 p4_latency_us, rc.cmd_lead, q, b, (double)rc.hatch_s);
+        fprintf(fini, "hatch_slip = %g,%g\n", (double)rc.slip_k, (double)rc.slip_tau_s);
         if (seed) {
             fprintf(fini, "prior = %g,%g,%g,%g,%g\n", seed_err_m, seed_err_ms, seed_sigma_ms, seed_vel_sigma,
                     seed_pos_sigma);
@@ -1149,6 +1163,7 @@ int main(int argc, char **argv)
     }
     printf("  residual test: %ld fixes left a measurement out, %ld withheld; velocity failed it on %ld\n",
            n_excl_fix, n_withheld, n_vel_fail);
+    printf("  carrier smoothing: restarted %u times where the code walked away from the carrier\n", rx->n_slip);
     if (so.fe.n_jam > 0 || so.fe.mit.type != MIT_NONE) {
         char line[512];
         mit_report(&src.fe.mit, line, sizeof(line));
