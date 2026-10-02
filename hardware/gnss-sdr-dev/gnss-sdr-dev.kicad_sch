@@ -1248,7 +1248,7 @@
 		)
 		(uuid "80c4e2f4-93d6-4030-b412-9132af1bbacb")
 	)
-	(text "From the Space Bug M8T: USB-C #1, USB-Serial/JTAG\n(flashing), VBUS into VSYS"
+	(text "From the Space Bug M8T: battery OR into VSYS"
 		(exclude_from_sim no)
 		(at 158.75 162.56 0)
 		(effects
@@ -1259,7 +1259,7 @@
 		)
 		(uuid "83cbba1b-3fe2-4cf1-a1f2-5c4ba1103bbb")
 	)
-	(text "USB-C #2 on the P4 high-speed PHY:\nsample streaming"
+	(text "USB-C through an FSUSB63 switch: USB-Serial/JTAG\n(flashing) or the HS PHY (sample streaming)"
 		(exclude_from_sim no)
 		(at 283.21 162.56 0)
 		(effects
