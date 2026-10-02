@@ -1,35 +1,9 @@
 (version 1)
 
-# Rules carried over from the Space Bug V3 (same stackup and the same P4 / IMU parts), re-pointed at this
-# board's references. Values need their unit: a bare number here silently disables the rule.
-
-# BGA524N6 / BGA855N6 LNAs (U101, U102) are TSNP-6-10: 0.4 mm pitch with 0.25 mm pads leaves 0.15 mm between
-# pads, so tracks landing on neighbouring pins sit 0.15-0.2 mm apart inside the part. Zone fills keep the
-# board default.
-(rule "TSNP-6-10 LNA pin fan-out"
-	(constraint clearance (min 0.15mm))
-	(condition "A.Type != 'Zone' && B.Type != 'Zone' && ((A.intersectsCourtyard('U101') && B.intersectsCourtyard('U101')) || (A.intersectsCourtyard('U102') && B.intersectsCourtyard('U102')))"))
-
-# ESP32-P4 (U6, 0.35 mm pitch QFN: 0.17 mm between pads), boot flash (U7) and FPGA configuration flash (U502),
-# both 0.5 mm WLCSP, P4 buck (U9) and IMU (U10): pads, fan-out tracks and the vias between the P4's pin ring and
-# its exposed pad sit 0.1 mm apart inside each courtyard, as on the Space Bug and Mantis. Zone fills keep the
-# board default.
-(rule "Fine-pitch parts: pad and fan-out clearance"
-	(constraint clearance (min 0.1mm))
-	(condition "A.Type != 'Zone' && B.Type != 'Zone' && ((A.intersectsCourtyard('U6') && B.intersectsCourtyard('U6')) || (A.intersectsCourtyard('U7') && B.intersectsCourtyard('U7')) || (A.intersectsCourtyard('U502') && B.intersectsCourtyard('U502')) || (A.intersectsCourtyard('U9') && B.intersectsCourtyard('U9')) || (A.intersectsCourtyard('U10') && B.intersectsCourtyard('U10')))"))
-
-# ECP5 caBGA256 (U501, 0.8 mm pitch, 0.35 mm balls): 0.45 mm between ball pads and 0.4 mm between the
-# via-in-pad vias, so fan-out tracks between balls and between vias sit 0.1 mm from them, inside the
-# courtyard only. Zone fills keep the board default.
-(rule "BGA fan-out: ball and via clearance"
-	(constraint clearance (min 0.1mm))
-	(condition "A.Type != 'Zone' && B.Type != 'Zone' && A.intersectsCourtyard('U501') && B.intersectsCourtyard('U501')"))
-
-# Different-net hole-to-hole wall, as on Beetle and the Space Bug. KiCad measures hole_to_hole edge to edge,
-# so 0.25 mm is 0.55 mm centre to centre on the 0.30 mm drills. Same-net holes keep the project's 0.20 mm.
-(rule "hole_to_hole_different_nets"
-	(constraint hole_to_hole (min 0.25mm))
-	(condition "A.Net != B.Net"))
+# Clearances follow the Tinker-Mantis and live in Board Setup, as on the Space Bug M8T: 0.1 mm net-class clearance
+# everywhere (the 0.35 mm-pitch P4, the 0.4 mm-pitch LNAs and the 0.8 mm-pitch BGA need nothing tighter), 0.09 mm
+# minimum track, 0.1 mm hole clearance, 0.2 mm hole-to-hole and copper-to-edge. Every copper pour sets its own 0.2 mm
+# clearance: that is the RF lines' ground gap, so it must not follow the net classes down.
 
 # J101 is an edge-launch SMA: its centre and ground pads run to the board edge by design.
 (rule "Edge-launch SMA pads meet the board edge"

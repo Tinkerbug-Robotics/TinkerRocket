@@ -1158,6 +1158,50 @@
 			(embedded_fonts no)
 		)
 	)
+	(text "MAX2771 low band, populate-optional\n(owner stock, hand-fit)"
+		(exclude_from_sim no)
+		(at 283.21 60.96 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+			)
+			(justify left bottom)
+		)
+		(uuid "00be99f7-a7ef-49d3-8d2e-f53c73d309f2")
+	)
+	(text "From the Space Bug M8T: FPGA configuration, QSPI\nregister link, PARLIO, front-end SPI and control"
+		(exclude_from_sim no)
+		(at 283.21 111.76 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+			)
+			(justify left bottom)
+		)
+		(uuid "1104a05a-8342-4929-ba2c-a86b5943d1bb")
+	)
+	(text "USB-C through an FSUSB63 switch: USB-Serial/JTAG\n(flashing) or the HS PHY (sample streaming)"
+		(exclude_from_sim no)
+		(at 283.21 162.56 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+			)
+			(justify left bottom)
+		)
+		(uuid "1f8c1e81-0708-4508-876a-b6d2df66427d")
+	)
+	(text "MAX2769B, 27 MHz TCXO (also the sample clock),\nsample-clock fan-out"
+		(exclude_from_sim no)
+		(at 158.75 60.96 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+			)
+			(justify left bottom)
+		)
+		(uuid "50986a1e-829e-4cd1-8cf5-7cb3b68c8677")
+	)
 	(text "gnss-sdr-dev: MAX2769B L1 (+ optional MAX2771 L5) -> ECP5 correlators -> ESP32-P4"
 		(exclude_from_sim no)
 		(at 20.32 25.4 0)
@@ -1182,61 +1226,6 @@
 		)
 		(uuid "701cc372-43a2-4dd4-89b4-3390604f8281")
 	)
-	(text "MAX2769B, 27 MHz TCXO (also the sample clock),\nsample-clock fan-out"
-		(exclude_from_sim no)
-		(at 158.75 60.96 0)
-		(effects
-			(font
-				(size 1.5 1.5)
-			)
-			(justify left bottom)
-		)
-		(uuid "50986a1e-829e-4cd1-8cf5-7cb3b68c8677")
-	)
-	(text "MAX2771 low band, populate-optional\n(owner stock, hand-fit)"
-		(exclude_from_sim no)
-		(at 283.21 60.96 0)
-		(effects
-			(font
-				(size 1.5 1.5)
-			)
-			(justify left bottom)
-		)
-		(uuid "00be99f7-a7ef-49d3-8d2e-f53c73d309f2")
-	)
-	(text "ECP5 correlators: slave-SPI configuration from the P4,\nJTAG, logic-analyzer header, LEDs"
-		(exclude_from_sim no)
-		(at 34.29 111.76 0)
-		(effects
-			(font
-				(size 1.5 1.5)
-			)
-			(justify left bottom)
-		)
-		(uuid "a27d1dc3-365b-47ae-8823-dbaca8e7439f")
-	)
-	(text "ECP5 supplies: each ball with its own decoupling,\nVCCAUX ferrite"
-		(exclude_from_sim no)
-		(at 158.75 111.76 0)
-		(effects
-			(font
-				(size 1.5 1.5)
-			)
-			(justify left bottom)
-		)
-		(uuid "8abff4f8-3aca-43d5-a18c-0ef60cb7acc0")
-	)
-	(text "From the Space Bug M8T: FPGA configuration, QSPI\nregister link, PARLIO, front-end SPI and control"
-		(exclude_from_sim no)
-		(at 283.21 111.76 0)
-		(effects
-			(font
-				(size 1.5 1.5)
-			)
-			(justify left bottom)
-		)
-		(uuid "1104a05a-8342-4929-ba2c-a86b5943d1bb")
-	)
 	(text "From the Space Bug M8T: ISM6HG256X"
 		(exclude_from_sim no)
 		(at 34.29 162.56 0)
@@ -1259,27 +1248,16 @@
 		)
 		(uuid "83cbba1b-3fe2-4cf1-a1f2-5c4ba1103bbb")
 	)
-	(text "USB-C through an FSUSB63 switch: USB-Serial/JTAG\n(flashing) or the HS PHY (sample streaming)"
+	(text "ECP5 supplies: each ball with its own decoupling,\nVCCAUX ferrite"
 		(exclude_from_sim no)
-		(at 283.21 162.56 0)
+		(at 158.75 111.76 0)
 		(effects
 			(font
 				(size 1.5 1.5)
 			)
 			(justify left bottom)
 		)
-		(uuid "1f8c1e81-0708-4508-876a-b6d2df66427d")
-	)
-	(text "Host link J401, input filter, GNSS LDO and 1.8 V LNA\nrail, FPGA 1.1 V core and 2.5 V VCCAUX"
-		(exclude_from_sim no)
-		(at 34.29 213.36 0)
-		(effects
-			(font
-				(size 1.5 1.5)
-			)
-			(justify left bottom)
-		)
-		(uuid "91acbed3-f262-4dec-a321-07485f3aedfa")
+		(uuid "8abff4f8-3aca-43d5-a18c-0ef60cb7acc0")
 	)
 	(text "Mechanical: mounting holes, fiducials, RF shield (frame SH1 + removable cover SH2)"
 		(exclude_from_sim no)
@@ -1294,6 +1272,39 @@
 		)
 		(uuid "90e3532c-4f0b-47e1-8c3e-d9bae42b6a7d")
 	)
+	(text "Host link J401, input filter, GNSS LDO and 1.8 V LNA\nrail, FPGA 1.1 V core and 2.5 V VCCAUX"
+		(exclude_from_sim no)
+		(at 34.29 213.36 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+			)
+			(justify left bottom)
+		)
+		(uuid "91acbed3-f262-4dec-a321-07485f3aedfa")
+	)
+	(text "ECP5 correlators: slave-SPI configuration from the P4,\nJTAG, logic-analyzer header, LEDs"
+		(exclude_from_sim no)
+		(at 34.29 111.76 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+			)
+			(justify left bottom)
+		)
+		(uuid "a27d1dc3-365b-47ae-8823-dbaca8e7439f")
+	)
+	(text "From the Tinker-Mantis: 2 Gbit SPI NAND for flight\nlogging, on the P4's four free GPIOs"
+		(exclude_from_sim no)
+		(at 158.75 213.36 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+			)
+			(justify left bottom)
+		)
+		(uuid "c7ca11fb-829d-48e1-b18c-88a07becfaa8")
+	)
 	(wire
 		(pts
 			(xy 200.66 269.24) (xy 200.66 271.78)
@@ -1305,41 +1316,40 @@
 		(uuid "133bbf26-2d38-452e-82e9-850576ed3562")
 	)
 	(symbol
-		(lib_id "Mechanical:MountingHole")
-		(at 40.64 264.16 0)
+		(lib_id "power:GND")
+		(at 200.66 271.78 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
 		(in_bom no)
-		(on_board yes)
-		(in_pos_files yes)
+		(on_board no)
+		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "ad3464a3-dd70-4fca-b436-39727af1fd9c")
-		(property "Reference" "H1"
-			(at 43.18 262.89 0)
+		(uuid "19cc66af-e853-4bfe-8ff7-e65101c94fb1")
+		(property "Reference" "#PWR_gnss-sdr-dev_1"
+			(at 200.66 278.13 0)
+			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
 			)
 		)
-		(property "Value" "MountingHole"
-			(at 43.18 265.43 0)
+		(property "Value" "GND"
+			(at 200.66 275.59 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
 			)
 		)
-		(property "Footprint" "MountingHole:MountingHole_2.2mm_M2_DIN965_Pad"
-			(at 40.64 264.16 0)
+		(property "Footprint" ""
+			(at 200.66 271.78 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1350,7 +1360,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 40.64 264.16 0)
+			(at 200.66 271.78 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1361,7 +1371,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 40.64 264.16 0)
+			(at 200.66 271.78 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1370,239 +1380,14 @@
 					(size 1.27 1.27)
 				)
 			)
+		)
+		(pin "1"
+			(uuid "1f42340e-ff6a-4437-92f4-0559cff58980")
 		)
 		(instances
 			(project "gnss-sdr-dev"
 				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(reference "H1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Mechanical:MountingHole")
-		(at 60.96 264.16 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "e7811341-0d16-4e39-a0fd-a2a411259bd9")
-		(property "Reference" "H2"
-			(at 63.5 262.89 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "MountingHole"
-			(at 63.5 265.43 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "MountingHole:MountingHole_2.2mm_M2_DIN965_Pad"
-			(at 60.96 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 60.96 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 60.96 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(instances
-			(project "gnss-sdr-dev"
-				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(reference "H2")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Mechanical:MountingHole")
-		(at 81.28 264.16 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "c648acca-1fd1-42af-9865-44327478a6ed")
-		(property "Reference" "H3"
-			(at 83.82 262.89 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "MountingHole"
-			(at 83.82 265.43 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "MountingHole:MountingHole_2.2mm_M2_DIN965_Pad"
-			(at 81.28 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 81.28 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 81.28 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(instances
-			(project "gnss-sdr-dev"
-				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(reference "H3")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Mechanical:MountingHole")
-		(at 101.6 264.16 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "a8ae9cfe-ec59-4a2c-8409-0159e057668f")
-		(property "Reference" "H4"
-			(at 104.14 262.89 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "MountingHole"
-			(at 104.14 265.43 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "MountingHole:MountingHole_2.2mm_M2_DIN965_Pad"
-			(at 101.6 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 101.6 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 101.6 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(instances
-			(project "gnss-sdr-dev"
-				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(reference "H4")
+					(reference "#PWR_gnss-sdr-dev_1")
 					(unit 1)
 				)
 			)
@@ -1761,82 +1546,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Mechanical:Fiducial")
-		(at 180.34 264.16 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "c1fe3e18-1d3d-4151-b6b1-f160820e2b1b")
-		(property "Reference" "FID3"
-			(at 182.88 262.89 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "Fiducial"
-			(at 182.88 265.43 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Fiducial:Fiducial_0.5mm_Mask1mm"
-			(at 180.34 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 180.34 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 180.34 264.16 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(instances
-			(project "gnss-sdr-dev"
-				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(reference "FID3")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Mechanical:Housing_Pad")
 		(at 205.74 264.16 0)
 		(unit 1)
@@ -1938,40 +1647,41 @@
 		)
 	)
 	(symbol
-		(lib_id "power:GND")
-		(at 200.66 271.78 0)
+		(lib_id "Mechanical:MountingHole")
+		(at 101.6 264.16 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
 		(in_bom no)
-		(on_board no)
-		(in_pos_files no)
+		(on_board yes)
+		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "19cc66af-e853-4bfe-8ff7-e65101c94fb1")
-		(property "Reference" "#PWR_gnss-sdr-dev_1"
-			(at 200.66 278.13 0)
-			(hide yes)
+		(uuid "a8ae9cfe-ec59-4a2c-8409-0159e057668f")
+		(property "Reference" "H4"
+			(at 104.14 262.89 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify left)
 			)
 		)
-		(property "Value" "GND"
-			(at 200.66 275.59 0)
+		(property "Value" "MountingHole"
+			(at 104.14 265.43 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify left)
 			)
 		)
-		(property "Footprint" ""
-			(at 200.66 271.78 0)
+		(property "Footprint" "MountingHole:MountingHole_2.2mm_M2_DIN965_Pad"
+			(at 101.6 264.16 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1982,7 +1692,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 200.66 271.78 0)
+			(at 101.6 264.16 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1993,7 +1703,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 200.66 271.78 0)
+			(at 101.6 264.16 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2003,13 +1713,162 @@
 				)
 			)
 		)
-		(pin "1"
-			(uuid "1f42340e-ff6a-4437-92f4-0559cff58980")
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
+					(reference "H4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Mechanical:MountingHole")
+		(at 40.64 264.16 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "ad3464a3-dd70-4fca-b436-39727af1fd9c")
+		(property "Reference" "H1"
+			(at 43.18 262.89 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "MountingHole"
+			(at 43.18 265.43 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "MountingHole:MountingHole_2.2mm_M2_DIN965_Pad"
+			(at 40.64 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 40.64 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 40.64 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
 		(instances
 			(project "gnss-sdr-dev"
 				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(reference "#PWR_gnss-sdr-dev_1")
+					(reference "H1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Mechanical:Fiducial")
+		(at 180.34 264.16 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "c1fe3e18-1d3d-4151-b6b1-f160820e2b1b")
+		(property "Reference" "FID3"
+			(at 182.88 262.89 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "Fiducial"
+			(at 182.88 265.43 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Fiducial:Fiducial_0.5mm_Mask1mm"
+			(at 180.34 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 180.34 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 180.34 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
+					(reference "FID3")
 					(unit 1)
 				)
 			)
@@ -2113,56 +1972,160 @@
 			)
 		)
 	)
-	(sheet
-		(at 30.48 50.8)
-		(size 101.6 27.94)
+	(symbol
+		(lib_id "Mechanical:MountingHole")
+		(at 81.28 264.16 0)
+		(unit 1)
+		(body_style 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
+		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(stroke
-			(width 0.1524)
-			(type solid)
-		)
-		(fill
-			(color 0 0 0 0)
-		)
-		(uuid "9862fae8-abaa-404c-a0ad-f75002780277")
-		(property "Sheetname" "RF front end"
-			(at 30.48 49.5 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 2.5 2.5)
-					(thickness 0.6)
-					(bold yes)
-				)
-				(justify left bottom)
-			)
-		)
-		(property "Sheetfile" "rf_frontend.kicad_sch"
-			(at 30.48 80.04 0)
+		(uuid "c648acca-1fd1-42af-9865-44327478a6ed")
+		(property "Reference" "H3"
+			(at 83.82 262.89 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left top)
+				(justify left)
+			)
+		)
+		(property "Value" "MountingHole"
+			(at 83.82 265.43 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "MountingHole:MountingHole_2.2mm_M2_DIN965_Pad"
+			(at 81.28 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 81.28 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 81.28 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
 			)
 		)
 		(instances
 			(project "gnss-sdr-dev"
 				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(page "2")
+					(reference "H3")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Mechanical:MountingHole")
+		(at 60.96 264.16 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "e7811341-0d16-4e39-a0fd-a2a411259bd9")
+		(property "Reference" "H2"
+			(at 63.5 262.89 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "MountingHole"
+			(at 63.5 265.43 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "MountingHole:MountingHole_2.2mm_M2_DIN965_Pad"
+			(at 60.96 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 60.96 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 60.96 264.16 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
+					(reference "H2")
+					(unit 1)
 				)
 			)
 		)
 	)
 	(sheet
-		(at 154.94 50.8)
+		(at 154.94 203.2)
 		(size 101.6 27.94)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -2176,9 +2139,9 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "dc448d51-b0f7-41ba-be81-091c65e9f885")
-		(property "Sheetname" "L1 receiver"
-			(at 154.94 49.5 0)
+		(uuid "0c458f4f-ab57-4652-b6ad-df072ea95d29")
+		(property "Sheetname" "Data flash"
+			(at 154.94 201.9 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2190,8 +2153,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "Sheetfile" "gnss_l1.kicad_sch"
-			(at 154.94 80.04 0)
+		(property "Sheetfile" "flash.kicad_sch"
+			(at 154.94 232.44 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2204,13 +2167,13 @@
 		(instances
 			(project "gnss-sdr-dev"
 				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(page "3")
+					(page "12")
 				)
 			)
 		)
 	)
 	(sheet
-		(at 279.4 50.8)
+		(at 279.4 152.4)
 		(size 101.6 27.94)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -2224,9 +2187,9 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "d325dd23-705e-4c58-ac41-a39ce79b29c5")
-		(property "Sheetname" "L5 receiver"
-			(at 279.4 49.5 0)
+		(uuid "367af93b-a6f9-4cd1-8549-9bf4d2215494")
+		(property "Sheetname" "USB HS"
+			(at 279.4 151.1 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2238,8 +2201,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "Sheetfile" "gnss_l5.kicad_sch"
-			(at 279.4 80.04 0)
+		(property "Sheetfile" "usb_hs.kicad_sch"
+			(at 279.4 181.64 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2252,7 +2215,7 @@
 		(instances
 			(project "gnss-sdr-dev"
 				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(page "4")
+					(page "10")
 				)
 			)
 		)
@@ -2301,102 +2264,6 @@
 			(project "gnss-sdr-dev"
 				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "5")
-				)
-			)
-		)
-	)
-	(sheet
-		(at 154.94 101.6)
-		(size 101.6 27.94)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(stroke
-			(width 0.1524)
-			(type solid)
-		)
-		(fill
-			(color 0 0 0 0)
-		)
-		(uuid "91dfda58-ce7a-42c6-81b3-11a8fb74bb5e")
-		(property "Sheetname" "FPGA power"
-			(at 154.94 100.3 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 2.5 2.5)
-					(thickness 0.6)
-					(bold yes)
-				)
-				(justify left bottom)
-			)
-		)
-		(property "Sheetfile" "fpga_power.kicad_sch"
-			(at 154.94 130.84 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left top)
-			)
-		)
-		(instances
-			(project "gnss-sdr-dev"
-				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(page "6")
-				)
-			)
-		)
-	)
-	(sheet
-		(at 279.4 101.6)
-		(size 101.6 27.94)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(stroke
-			(width 0.1524)
-			(type solid)
-		)
-		(fill
-			(color 0 0 0 0)
-		)
-		(uuid "d6c2a5da-3aac-40a9-a9cc-5cd1a12cd40d")
-		(property "Sheetname" "ESP32-P4"
-			(at 279.4 100.3 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 2.5 2.5)
-					(thickness 0.6)
-					(bold yes)
-				)
-				(justify left bottom)
-			)
-		)
-		(property "Sheetfile" "esp32_p4.kicad_sch"
-			(at 279.4 130.84 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left top)
-			)
-		)
-		(instances
-			(project "gnss-sdr-dev"
-				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(page "7")
 				)
 			)
 		)
@@ -2498,7 +2365,7 @@
 		)
 	)
 	(sheet
-		(at 279.4 152.4)
+		(at 154.94 101.6)
 		(size 101.6 27.94)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -2512,9 +2379,9 @@
 		(fill
 			(color 0 0 0 0)
 		)
-		(uuid "367af93b-a6f9-4cd1-8549-9bf4d2215494")
-		(property "Sheetname" "USB HS"
-			(at 279.4 151.1 0)
+		(uuid "91dfda58-ce7a-42c6-81b3-11a8fb74bb5e")
+		(property "Sheetname" "FPGA power"
+			(at 154.94 100.3 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2526,8 +2393,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "Sheetfile" "usb_hs.kicad_sch"
-			(at 279.4 181.64 0)
+		(property "Sheetfile" "fpga_power.kicad_sch"
+			(at 154.94 130.84 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2540,7 +2407,199 @@
 		(instances
 			(project "gnss-sdr-dev"
 				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(page "10")
+					(page "6")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 30.48 50.8)
+		(size 101.6 27.94)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "9862fae8-abaa-404c-a0ad-f75002780277")
+		(property "Sheetname" "RF front end"
+			(at 30.48 49.5 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 2.5 2.5)
+					(thickness 0.6)
+					(bold yes)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "rf_frontend.kicad_sch"
+			(at 30.48 80.04 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
+					(page "2")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 279.4 50.8)
+		(size 101.6 27.94)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "d325dd23-705e-4c58-ac41-a39ce79b29c5")
+		(property "Sheetname" "L5 receiver"
+			(at 279.4 49.5 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 2.5 2.5)
+					(thickness 0.6)
+					(bold yes)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "gnss_l5.kicad_sch"
+			(at 279.4 80.04 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
+					(page "4")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 279.4 101.6)
+		(size 101.6 27.94)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "d6c2a5da-3aac-40a9-a9cc-5cd1a12cd40d")
+		(property "Sheetname" "ESP32-P4"
+			(at 279.4 100.3 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 2.5 2.5)
+					(thickness 0.6)
+					(bold yes)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "esp32_p4.kicad_sch"
+			(at 279.4 130.84 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
+					(page "7")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 154.94 50.8)
+		(size 101.6 27.94)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "dc448d51-b0f7-41ba-be81-091c65e9f885")
+		(property "Sheetname" "L1 receiver"
+			(at 154.94 49.5 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 2.5 2.5)
+					(thickness 0.6)
+					(bold yes)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "gnss_l1.kicad_sch"
+			(at 154.94 80.04 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
+					(page "3")
 				)
 			)
 		)
@@ -2589,65 +2648,6 @@
 			(project "gnss-sdr-dev"
 				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
 					(page "11")
-				)
-			)
-		)
-	)
-	(text "From the Tinker-Mantis: 2 Gbit SPI NAND for flight\nlogging, on the P4's four free GPIOs"
-		(exclude_from_sim no)
-		(at 158.75 213.36 0)
-		(effects
-			(font
-				(size 1.5 1.5)
-			)
-			(justify left bottom)
-		)
-		(uuid "c7ca11fb-829d-48e1-b18c-88a07becfaa8")
-	)
-	(sheet
-		(at 154.94 203.2)
-		(size 101.6 27.94)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(stroke
-			(width 0.1524)
-			(type solid)
-		)
-		(fill
-			(color 0 0 0 0)
-		)
-		(uuid "0c458f4f-ab57-4652-b6ad-df072ea95d29")
-		(property "Sheetname" "Data flash"
-			(at 154.94 201.9 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 2.5 2.5)
-					(thickness 0.6)
-					(bold yes)
-				)
-				(justify left bottom)
-			)
-		)
-		(property "Sheetfile" "flash.kicad_sch"
-			(at 154.94 232.44 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left top)
-			)
-		)
-		(instances
-			(project "gnss-sdr-dev"
-				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507"
-					(page "12")
 				)
 			)
 		)

@@ -746,129 +746,225 @@
 			(embedded_fonts no)
 		)
 	)
-	(global_label "NAND_CS"
-		(shape input)
-		(at 86.36 88.9 180)
-		(fields_autoplaced yes)
+	(text "Flight-data log: the Tinker-Mantis SPI NAND (U11 there), on the four ESP32-P4 GPIOs this board left free:\nGPIO0 = CS (R701 keeps it deselected through reset and boot), GPIO9 = MISO, GPIO33 = SCK,\nGPIO34 = MOSI (GPIO34 is the P4's JTAG-source strap: a NAND input, no pull on it).\nWP# and HOLD# pulled up as on the Mantis: plain 1-bit SPI."
+		(exclude_from_sim no)
+		(at 60.96 50.8 0)
 		(effects
 			(font
-				(size 1.27 1.27)
+				(size 1.5 1.5)
 			)
-			(justify right)
+			(justify left bottom)
 		)
-		(uuid "f741f79f-e0fb-40bd-8d15-ce2eb1240653")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 86.36 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
+		(uuid "a9c25bfa-3357-4a6d-b4fe-c7f55b7223ca")
 	)
-	(global_label "NAND_SCK"
-		(shape input)
-		(at 86.36 92.71 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "c61cc4de-3969-46db-bcda-e34b82d13fde")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 86.36 92.71 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
+	(junction
+		(at 144.78 102.87)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "a8e7e2a0-b8e5-49ca-8d97-3834a6fe932c")
 	)
-	(global_label "NAND_MOSI"
-		(shape input)
-		(at 86.36 97.79 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
+	(wire
+		(pts
+			(xy 86.36 92.71) (xy 101.6 92.71)
 		)
-		(uuid "523174d3-5a2b-4f64-b886-73917112f040")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 86.36 97.79 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
+		(stroke
+			(width 0)
+			(type default)
 		)
+		(uuid "05f694e7-55ab-42d3-b2bf-369e1f7b3154")
 	)
-	(global_label "NAND_MISO"
-		(shape output)
-		(at 86.36 101.6 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
+	(wire
+		(pts
+			(xy 86.36 101.6) (xy 101.6 101.6)
 		)
-		(uuid "ea7d77e6-5aad-4764-b7b6-06bc0e93bf0e")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 86.36 101.6 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
+		(stroke
+			(width 0)
+			(type default)
 		)
+		(uuid "0995c652-94da-4bfc-8624-ee938ac2666c")
 	)
-	(global_label "+3V3_MCU"
-		(shape input)
-		(at 147.32 88.9 0)
-		(fields_autoplaced yes)
+	(wire
+		(pts
+			(xy 144.78 100.33) (xy 144.78 102.87)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "19702c25-178c-42ad-bff0-10634ca35e8c")
+	)
+	(wire
+		(pts
+			(xy 142.24 102.87) (xy 144.78 102.87)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5fea207a-6367-476d-b35e-b7537a216f7e")
+	)
+	(wire
+		(pts
+			(xy 142.24 100.33) (xy 144.78 100.33)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "645a4eb4-0533-416a-8025-e5b017a062b9")
+	)
+	(wire
+		(pts
+			(xy 86.36 88.9) (xy 101.6 88.9)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "68436251-b95e-4e94-a632-3fc4f5b69c28")
+	)
+	(wire
+		(pts
+			(xy 99.06 129.54) (xy 99.06 132.08)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6f123300-6529-4516-a784-d2ab166a5457")
+	)
+	(wire
+		(pts
+			(xy 144.78 102.87) (xy 147.32 102.87)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "899362fc-0cb5-443f-9cf1-faa0193e0462")
+	)
+	(wire
+		(pts
+			(xy 160.02 129.54) (xy 160.02 132.08)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "950e52c7-da8e-4023-b13c-0caeba185472")
+	)
+	(wire
+		(pts
+			(xy 160.02 119.38) (xy 160.02 121.92)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "98d5c34f-13c0-4834-9105-ee72b003d416")
+	)
+	(wire
+		(pts
+			(xy 142.24 96.52) (xy 147.32 96.52)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9e74fe15-460f-458b-a7fd-2293c66a1a6c")
+	)
+	(wire
+		(pts
+			(xy 119.38 119.38) (xy 119.38 121.92)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b5c992f4-c2cc-4509-8a31-4c0054168776")
+	)
+	(wire
+		(pts
+			(xy 142.24 92.71) (xy 147.32 92.71)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "bcf82773-9595-43aa-9306-d5808b024f50")
+	)
+	(wire
+		(pts
+			(xy 139.7 119.38) (xy 139.7 121.92)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c2c4df7d-710c-4129-afac-217bbf223a2c")
+	)
+	(wire
+		(pts
+			(xy 99.06 119.38) (xy 99.06 121.92)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c6c4a1d3-45fe-405f-8c53-a62d76c4bc7d")
+	)
+	(wire
+		(pts
+			(xy 139.7 129.54) (xy 139.7 132.08)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "cada2b03-b644-4398-a198-4c92715381ef")
+	)
+	(wire
+		(pts
+			(xy 142.24 88.9) (xy 147.32 88.9)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d8d9ce31-a948-4daf-b0ad-38b737ff1ea7")
+	)
+	(wire
+		(pts
+			(xy 86.36 97.79) (xy 101.6 97.79)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e1136f91-3e6c-4845-9d3a-a3bd82f9bc72")
+	)
+	(wire
+		(pts
+			(xy 119.38 129.54) (xy 119.38 132.08)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f2dc92de-2194-4a8f-91d9-65b0c887d9a2")
+	)
+	(label "NAND_HOLD_N"
+		(at 119.38 132.08 270)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
-			(justify left)
+			(justify right bottom)
 		)
-		(uuid "fd260625-3f35-4068-909a-5ccaa394ffa2")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 147.32 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
+		(uuid "32e68713-21a2-4dda-a6d2-67f1425ceb21")
 	)
 	(label "NAND_HOLD_N"
 		(at 147.32 92.71 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -878,8 +974,17 @@
 		(uuid "406cb736-66fb-446a-bc07-8e6bea231926")
 	)
 	(label "NAND_WP_N"
+		(at 139.7 132.08 270)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "8af617e2-2e34-4a0d-a32e-fcbd6c11eded")
+	)
+	(label "NAND_WP_N"
 		(at 147.32 96.52 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -890,7 +995,7 @@
 	)
 	(global_label "+3V3_MCU"
 		(shape input)
-		(at 99.06 119.38 90)
+		(at 119.38 119.38 90)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -898,9 +1003,9 @@
 			)
 			(justify left)
 		)
-		(uuid "ca065961-d496-497a-bf63-614daa351a15")
+		(uuid "00686571-ee48-4c47-8945-0321ef32e619")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 99.06 119.38 0)
+			(at 119.38 119.38 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -938,7 +1043,7 @@
 	)
 	(global_label "+3V3_MCU"
 		(shape input)
-		(at 119.38 119.38 90)
+		(at 160.02 119.38 90)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -946,9 +1051,9 @@
 			)
 			(justify left)
 		)
-		(uuid "00686571-ee48-4c47-8945-0321ef32e619")
+		(uuid "4404e25e-a01c-4dca-a033-fd499c37bca0")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 119.38 119.38 0)
+			(at 160.02 119.38 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -960,16 +1065,29 @@
 			)
 		)
 	)
-	(label "NAND_HOLD_N"
-		(at 119.38 132.08 270)
+	(global_label "NAND_MOSI"
+		(shape input)
+		(at 86.36 97.79 180)
 		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
-			(justify right bottom)
+			(justify right)
 		)
-		(uuid "32e68713-21a2-4dda-a6d2-67f1425ceb21")
+		(uuid "523174d3-5a2b-4f64-b886-73917112f040")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 86.36 97.79 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
 	)
 	(global_label "+3V3_MCU"
 		(shape input)
@@ -995,20 +1113,33 @@
 			)
 		)
 	)
-	(label "NAND_WP_N"
-		(at 139.7 132.08 270)
+	(global_label "NAND_SCK"
+		(shape input)
+		(at 86.36 92.71 180)
 		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
-			(justify right bottom)
+			(justify right)
 		)
-		(uuid "8af617e2-2e34-4a0d-a32e-fcbd6c11eded")
+		(uuid "c61cc4de-3969-46db-bcda-e34b82d13fde")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 86.36 92.71 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
 	)
 	(global_label "+3V3_MCU"
 		(shape input)
-		(at 160.02 119.38 90)
+		(at 99.06 119.38 90)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -1016,9 +1147,9 @@
 			)
 			(justify left)
 		)
-		(uuid "4404e25e-a01c-4dca-a033-fd499c37bca0")
+		(uuid "ca065961-d496-497a-bf63-614daa351a15")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 160.02 119.38 0)
+			(at 99.06 119.38 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1030,212 +1161,441 @@
 			)
 		)
 	)
-	(text "Flight-data log: the Tinker-Mantis SPI NAND (U11 there), on the four ESP32-P4 GPIOs this board left free:\nGPIO0 = CS (R701 keeps it deselected through reset and boot), GPIO9 = MISO, GPIO33 = SCK,\nGPIO34 = MOSI (GPIO34 is the P4's JTAG-source strap: a NAND input, no pull on it).\nWP# and HOLD# pulled up as on the Mantis: plain 1-bit SPI."
-		(exclude_from_sim no)
-		(at 60.96 50.8 0)
+	(global_label "NAND_MISO"
+		(shape output)
+		(at 86.36 101.6 180)
+		(fields_autoplaced yes)
 		(effects
 			(font
-				(size 1.5 1.5)
+				(size 1.27 1.27)
 			)
-			(justify left bottom)
+			(justify right)
 		)
-		(uuid "a9c25bfa-3357-4a6d-b4fe-c7f55b7223ca")
+		(uuid "ea7d77e6-5aad-4764-b7b6-06bc0e93bf0e")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 86.36 101.6 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
 	)
-	(wire
-		(pts
-			(xy 86.36 88.9) (xy 101.6 88.9)
+	(global_label "NAND_CS"
+		(shape input)
+		(at 86.36 88.9 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
 		)
-		(stroke
-			(width 0)
-			(type default)
+		(uuid "f741f79f-e0fb-40bd-8d15-ce2eb1240653")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 86.36 88.9 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
 		)
-		(uuid "68436251-b95e-4e94-a632-3fc4f5b69c28")
 	)
-	(wire
-		(pts
-			(xy 86.36 92.71) (xy 101.6 92.71)
+	(global_label "+3V3_MCU"
+		(shape input)
+		(at 147.32 88.9 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
 		)
-		(stroke
-			(width 0)
-			(type default)
+		(uuid "fd260625-3f35-4068-909a-5ccaa394ffa2")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 147.32 88.9 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
 		)
-		(uuid "05f694e7-55ab-42d3-b2bf-369e1f7b3154")
 	)
-	(wire
-		(pts
-			(xy 86.36 97.79) (xy 101.6 97.79)
+	(symbol
+		(lib_id "power:GND")
+		(at 160.02 132.08 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board no)
+		(in_pos_files no)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "187f5642-6e37-4947-a227-36ff2bc32d36")
+		(property "Reference" "#PWR_Data flash_2"
+			(at 160.02 138.43 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
-		(stroke
-			(width 0)
-			(type default)
+		(property "Value" "GND"
+			(at 160.02 135.89 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
-		(uuid "e1136f91-3e6c-4845-9d3a-a3bd82f9bc72")
+		(property "Footprint" ""
+			(at 160.02 132.08 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 160.02 132.08 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 160.02 132.08 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "2b8b6fa2-1436-4ea4-bddb-cc0a235d5953")
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/0c458f4f-ab57-4652-b6ad-df072ea95d29"
+					(reference "#PWR_Data flash_2")
+					(unit 1)
+				)
+			)
+		)
 	)
-	(wire
-		(pts
-			(xy 86.36 101.6) (xy 101.6 101.6)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 99.06 125.73 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "2ee9c1e1-97dd-4d1f-bbaa-a4d64a1bcf80")
+		(property "Reference" "R701"
+			(at 101.6 124.46 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
 		)
-		(stroke
-			(width 0)
-			(type default)
+		(property "Value" "10 k"
+			(at 101.6 127 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
 		)
-		(uuid "0995c652-94da-4bfc-8624-ee938ac2666c")
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 99.06 125.73 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 99.06 125.73 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor 10 k"
+			(at 99.06 125.73 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 99.06 125.73 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 99.06 125.73 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "8f211181-1434-4a59-b129-e7d887a6a805")
+		)
+		(pin "2"
+			(uuid "f5287f27-e4a3-40bc-ad88-58a7aa6035d7")
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/0c458f4f-ab57-4652-b6ad-df072ea95d29"
+					(reference "R701")
+					(unit 1)
+				)
+			)
+		)
 	)
-	(wire
-		(pts
-			(xy 142.24 88.9) (xy 147.32 88.9)
+	(symbol
+		(lib_id "power:GND")
+		(at 147.32 102.87 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board no)
+		(in_pos_files no)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "518ca796-9a85-4a69-86b9-810413feaf7a")
+		(property "Reference" "#PWR_Data flash_1"
+			(at 147.32 109.22 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
-		(stroke
-			(width 0)
-			(type default)
+		(property "Value" "GND"
+			(at 147.32 106.68 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
-		(uuid "d8d9ce31-a948-4daf-b0ad-38b737ff1ea7")
+		(property "Footprint" ""
+			(at 147.32 102.87 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 147.32 102.87 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 147.32 102.87 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "6fdbd143-d85f-4416-8dd2-6a0c3e9f48c8")
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/0c458f4f-ab57-4652-b6ad-df072ea95d29"
+					(reference "#PWR_Data flash_1")
+					(unit 1)
+				)
+			)
+		)
 	)
-	(wire
-		(pts
-			(xy 142.24 92.71) (xy 147.32 92.71)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 119.38 125.73 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "76977938-ce69-4bd2-b0bb-531946641108")
+		(property "Reference" "R702"
+			(at 121.92 124.46 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
 		)
-		(stroke
-			(width 0)
-			(type default)
+		(property "Value" "10 k"
+			(at 121.92 127 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
 		)
-		(uuid "bcf82773-9595-43aa-9306-d5808b024f50")
-	)
-	(wire
-		(pts
-			(xy 142.24 96.52) (xy 147.32 96.52)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 119.38 125.73 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
-		(stroke
-			(width 0)
-			(type default)
+		(property "Datasheet" ""
+			(at 119.38 125.73 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
-		(uuid "9e74fe15-460f-458b-a7fd-2293c66a1a6c")
-	)
-	(wire
-		(pts
-			(xy 142.24 100.33) (xy 144.78 100.33)
+		(property "Description" "Resistor 10 k"
+			(at 119.38 125.73 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
-		(stroke
-			(width 0)
-			(type default)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 119.38 125.73 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
-		(uuid "645a4eb4-0533-416a-8025-e5b017a062b9")
-	)
-	(wire
-		(pts
-			(xy 142.24 102.87) (xy 144.78 102.87)
+		(property "Mfr" "Yageo"
+			(at 119.38 125.73 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
-		(stroke
-			(width 0)
-			(type default)
+		(pin "1"
+			(uuid "ed6db703-3864-4229-9455-2043f8bc0539")
 		)
-		(uuid "5fea207a-6367-476d-b35e-b7537a216f7e")
-	)
-	(wire
-		(pts
-			(xy 144.78 100.33) (xy 144.78 102.87)
+		(pin "2"
+			(uuid "63307346-374e-49c2-aee2-cf1ea9c1b479")
 		)
-		(stroke
-			(width 0)
-			(type default)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/0c458f4f-ab57-4652-b6ad-df072ea95d29"
+					(reference "R702")
+					(unit 1)
+				)
+			)
 		)
-		(uuid "19702c25-178c-42ad-bff0-10634ca35e8c")
-	)
-	(wire
-		(pts
-			(xy 144.78 102.87) (xy 147.32 102.87)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "899362fc-0cb5-443f-9cf1-faa0193e0462")
-	)
-	(wire
-		(pts
-			(xy 99.06 119.38) (xy 99.06 121.92)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c6c4a1d3-45fe-405f-8c53-a62d76c4bc7d")
-	)
-	(wire
-		(pts
-			(xy 99.06 129.54) (xy 99.06 132.08)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "6f123300-6529-4516-a784-d2ab166a5457")
-	)
-	(wire
-		(pts
-			(xy 119.38 119.38) (xy 119.38 121.92)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "b5c992f4-c2cc-4509-8a31-4c0054168776")
-	)
-	(wire
-		(pts
-			(xy 119.38 129.54) (xy 119.38 132.08)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "f2dc92de-2194-4a8f-91d9-65b0c887d9a2")
-	)
-	(wire
-		(pts
-			(xy 139.7 119.38) (xy 139.7 121.92)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c2c4df7d-710c-4129-afac-217bbf223a2c")
-	)
-	(wire
-		(pts
-			(xy 139.7 129.54) (xy 139.7 132.08)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "cada2b03-b644-4398-a198-4c92715381ef")
-	)
-	(wire
-		(pts
-			(xy 160.02 119.38) (xy 160.02 121.92)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "98d5c34f-13c0-4834-9105-ee72b003d416")
-	)
-	(wire
-		(pts
-			(xy 160.02 129.54) (xy 160.02 132.08)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "950e52c7-da8e-4023-b13c-0caeba185472")
-	)
-	(junction
-		(at 144.78 102.87)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "a8e7e2a0-b8e5-49ca-8d97-3834a6fe932c")
 	)
 	(symbol
 		(lib_id "Custom:MX35UF4G24AD-Z4I8")
@@ -1361,86 +1721,8 @@
 		)
 	)
 	(symbol
-		(lib_id "power:GND")
-		(at 147.32 102.87 90)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board no)
-		(in_pos_files no)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "518ca796-9a85-4a69-86b9-810413feaf7a")
-		(property "Reference" "#PWR_Data flash_1"
-			(at 147.32 109.22 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 147.32 106.68 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 147.32 102.87 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 147.32 102.87 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 147.32 102.87 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "6fdbd143-d85f-4416-8dd2-6a0c3e9f48c8")
-		)
-		(instances
-			(project "gnss-sdr-dev"
-				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/0c458f4f-ab57-4652-b6ad-df072ea95d29"
-					(reference "#PWR_Data flash_1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 99.06 125.73 0)
+		(lib_id "Device:C")
+		(at 160.02 125.73 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -1449,9 +1731,9 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "2ee9c1e1-97dd-4d1f-bbaa-a4d64a1bcf80")
-		(property "Reference" "R701"
-			(at 101.6 124.46 0)
+		(uuid "da066575-67aa-43ae-8866-81eb88626117")
+		(property "Reference" "C701"
+			(at 162.56 124.46 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -1461,8 +1743,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "10 k"
-			(at 101.6 127 0)
+		(property "Value" "100 nF"
+			(at 162.56 127 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -1472,8 +1754,8 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 99.06 125.73 0)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 160.02 125.73 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1484,7 +1766,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 99.06 125.73 0)
+			(at 160.02 125.73 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1494,8 +1776,8 @@
 				)
 			)
 		)
-		(property "Description" "Resistor 10 k"
-			(at 99.06 125.73 0)
+		(property "Description" "Capacitor 100 nF X7R"
+			(at 160.02 125.73 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1505,8 +1787,8 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0710KL"
-			(at 99.06 125.73 0)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 160.02 125.73 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1516,112 +1798,8 @@
 				)
 			)
 		)
-		(property "Mfr" "Yageo"
-			(at 99.06 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "8f211181-1434-4a59-b129-e7d887a6a805")
-		)
-		(pin "2"
-			(uuid "f5287f27-e4a3-40bc-ad88-58a7aa6035d7")
-		)
-		(instances
-			(project "gnss-sdr-dev"
-				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/0c458f4f-ab57-4652-b6ad-df072ea95d29"
-					(reference "R701")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 119.38 125.73 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "76977938-ce69-4bd2-b0bb-531946641108")
-		(property "Reference" "R702"
-			(at 121.92 124.46 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "10 k"
-			(at 121.92 127 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 119.38 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 119.38 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor 10 k"
-			(at 119.38 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-0710KL"
-			(at 119.38 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 119.38 125.73 0)
+		(property "Mfr" "Samsung"
+			(at 160.02 125.73 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1632,15 +1810,15 @@
 			)
 		)
 		(pin "1"
-			(uuid "ed6db703-3864-4229-9455-2043f8bc0539")
+			(uuid "107215ed-10ab-4795-8c0a-9cf68fce602e")
 		)
 		(pin "2"
-			(uuid "63307346-374e-49c2-aee2-cf1ea9c1b479")
+			(uuid "95e9f6d6-d1dc-4c49-8e4e-e7be3c706f53")
 		)
 		(instances
 			(project "gnss-sdr-dev"
 				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/0c458f4f-ab57-4652-b6ad-df072ea95d29"
-					(reference "R702")
+					(reference "C701")
 					(unit 1)
 				)
 			)
@@ -1750,187 +1928,4 @@
 			)
 		)
 	)
-	(symbol
-		(lib_id "Device:C")
-		(at 160.02 125.73 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "da066575-67aa-43ae-8866-81eb88626117")
-		(property "Reference" "C701"
-			(at 162.56 124.46 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "100 nF"
-			(at 162.56 127 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 160.02 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 160.02 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Capacitor 100 nF X7R"
-			(at 160.02 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CL05B104KO5NNNC"
-			(at 160.02 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Samsung"
-			(at 160.02 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "107215ed-10ab-4795-8c0a-9cf68fce602e")
-		)
-		(pin "2"
-			(uuid "95e9f6d6-d1dc-4c49-8e4e-e7be3c706f53")
-		)
-		(instances
-			(project "gnss-sdr-dev"
-				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/0c458f4f-ab57-4652-b6ad-df072ea95d29"
-					(reference "C701")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 160.02 132.08 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board no)
-		(in_pos_files no)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "187f5642-6e37-4947-a227-36ff2bc32d36")
-		(property "Reference" "#PWR_Data flash_2"
-			(at 160.02 138.43 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 160.02 135.89 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 160.02 132.08 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 160.02 132.08 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 160.02 132.08 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "2b8b6fa2-1436-4ea4-bddb-cc0a235d5953")
-		)
-		(instances
-			(project "gnss-sdr-dev"
-				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/0c458f4f-ab57-4652-b6ad-df072ea95d29"
-					(reference "#PWR_Data flash_2")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(embedded_fonts no)
 )
