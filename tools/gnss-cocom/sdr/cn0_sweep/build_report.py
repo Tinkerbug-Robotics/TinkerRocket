@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The C/N0 report page in four parts (intro, PX1105R, NEO-M8T, conclusions), from report_text.json: EYEBROW, LEDE and
+"""The C/N0 report page in parts (intro, PX1105R, NEO-M8T, ZED-F9P, conclusions), from report_text.json: EYEBROW, LEDE and
 PARTS, each part {id, title, blocks}. Blocks render in order; types: h3 / h4 (text, optional id), p, lede (a part's
 opening paragraph), findings, notes, key (GPS/BeiDou/Galileo colours), table {head, rows}, figure {file, name, alt,
 caption}, levels {flights: [[name, boost JSON]], sky: {G|C|E: [median, above 60] or null}}, drops (a boost_traces_wide.py
@@ -22,6 +22,17 @@ show_rules = []
 
 def levels(b):
     sky = b["sky"]
+    if sky is None:                                 # no roof log for this receiver: its pad readings alone
+        head = "<thead><tr><th>Run</th>" + "".join(f"<th class=num>{NAME[c]}</th>" for c in "GCE") + "</tr></thead>"
+        rows = []
+        for name, fn in b["flights"]:
+            rows.append(f"<tr class=group><th colspan=4 scope=rowgroup>{e(name)}</th></tr>")
+            for r in json.load(open(DATA / fn)):
+                pc = r["pad_cn0"]
+                rows.append(f"<tr><th scope=row>{e(r['label'])}</th>" + "".join(
+                    f"<td class=num>{pc[c]:.0f}</td>" if c in pc else "<td class=num>&ndash;</td>" for c in "GCE")
+                    + "</tr>")
+        return f"<div class=\"tablewrap\"><table>{head}<tbody>{''.join(rows)}</tbody></table></div>"
     head = ("<thead><tr><th>Run</th>" + "".join(
         f"<th class=num>{NAME[c]}</th><th class=num>vs median</th><th class=num>vs &gt;60&deg;</th>" for c in "GCE")
         + "</tr></thead>")

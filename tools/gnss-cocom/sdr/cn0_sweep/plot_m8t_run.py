@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One NEO-M8T flight (ignition at 2026-08-18 08:40:00 GPST, TOW 204000), drawn like plot_traveler_run.py's PX1105R
+"""One NEO-M8T or ZED-F9P flight (ignition at 2026-08-18 08:40:00 GPST, TOW 204000), drawn like plot_traveler_run.py's PX1105R
 flights: the flight on the left, the boost on the right. Rows: speed (truth, and the receiver's own speed whenever
 NAV-PVT has a gnssFixOK 2D/3D fix, with the 515 m/s limit), altitude (truth and the receiver's own height while fixed,
 18 and 80 km), acceleration (from the injected vertical velocity), when each satellite's valid raw pseudorange
@@ -55,9 +55,11 @@ for line in open(cap, errors="replace"):
     if h.startswith("0215") and len(b) >= 16:
         t = struct.unpack_from("<d", b, 0)[0] - TOW0 - IGN
         n = {"GPS": 0, "GAL": 0, "BDS": 0}
+        seen = set()                                 # one signal per satellite (a ZED-F9P can report several)
         for j in range(b[11]):
             m = b[16 + 32 * j: 48 + 32 * j]
-            if len(m) == 32 and m[20] in G and m[30] & 1:
+            if len(m) == 32 and m[20] in G and m[30] & 1 and (m[20], m[21]) not in seen:
+                seen.add((m[20], m[21]))
                 sysn = G[m[20]]
                 meas.setdefault((sysn, m[21]), []).append(t)
                 n[sysn] += 1

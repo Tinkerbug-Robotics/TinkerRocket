@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The C/N0 sweep report, end to end.   make_report.sh [STEP ...]   (default: page)
 #   scenarios the two flights' truth -> ../scenarios (gitignored; accuracy, table and charts make them if missing)
-#   accuracy  pseudorange/Doppler errors per run -> work/acc_*.npz (PX1105R), work/m8tacc_*.npz (NEO-M8T)
+#   accuracy  pseudorange/Doppler errors per run -> work/acc_*.npz (PX1105R), work/m8tacc_*.npz (NEO-M8T),
+#             work/f9pacc_*.npz (ZED-F9P)
 #   table     the traveler flight table -> data/sweep_table.json (needs accuracy)
 #   charts    boost charts and their data -> figures/, data/; error-vs-rate charts; run plots (needs accuracy)
 #   page      page/index.html from report_template.html, report_text.json, data/ and figures/
@@ -21,6 +22,8 @@ PX_TRAV="wp12 wp6b wcr wn3t wn6 wn9"
 PX_HOT="hs12 hs6 hs0 hsn6"
 M8T_TRAV="mtr12 mtr6 mtr0 mtrn6b"
 M8T_HOT="mhs12 mhs6 mhs0 mhsn6"
+F9P_TRAV="ftr12b ftr6b ftr0b ftrn6b"         # second F9P sweep; cap() names the flight kept for each level
+F9P_HOT="fhs12b fhs6b fhs0b fhsn6b"
 
 cap() {     # run tag -> its capture
   case $1 in
@@ -36,17 +39,25 @@ cap() {     # run tag -> its capture
     mhs12) echo "$C/neo_m8t_widemhs12_signalsim_hotshot_all_2026_57_w_p180.log" ;;
     mhs6) echo "$C/neo_m8t_widemhs6_signalsim_hotshot_all_2026_51_w_p180.log" ;;
     mhs0|mhsn6) echo "$C/neo_m8t_wide$1_signalsim_hotshot_all_2026_45_w_p180.log" ;;
+    ftr12b) echo "$C/zed_f9p_wideftr12b_signalsim_traveler_all_2026_57_w_p180.log" ;;
+    ftr6b) echo "$C/zed_f9p_wideftr6br_signalsim_traveler_all_2026_51_w_p180.log" ;;
+    ftr0b) echo "$C/zed_f9p_wideftr0br_signalsim_traveler_all_2026_45_w_p180_cofs.log" ;;
+    ftrn6b) echo "$C/zed_f9p_wideftrn6b_signalsim_traveler_all_2026_45_w_p180_cofs.log" ;;
+    fhs12b) echo "$C/zed_f9p_widefhs12br_signalsim_hotshot_all_2026_57_w_p180.log" ;;
+    fhs6b) echo "$C/zed_f9p_widefhs6br_signalsim_hotshot_all_2026_51_w_p180.log" ;;
+    fhs0b) echo "$C/zed_f9p_widefhs0brr_signalsim_hotshot_all_2026_45_w_p180.log" ;;
+    fhsn6b) echo "$C/zed_f9p_widefhsn6br_signalsim_hotshot_all_2026_45_w_p180.log" ;;
     *) echo "unknown run $1" >&2; exit 1 ;;
   esac
 }
 
 level() {   # run tag -> "level:how the level was made"
   case $1 in
-    wp12|hs12|mtr12|mhs12) echo "+12:file generated at 57 dB-Hz" ;;
-    wp6b|hs6|mtr6|mhs6) echo "+6:file generated at 51 dB-Hz" ;;
-    wcr|hs0|mtr0|mhs0) echo "0:file generated at 45 dB-Hz" ;;
+    wp12|hs12|mtr12|mhs12|ftr12b|fhs12b) echo "+12:file generated at 57 dB-Hz" ;;
+    wp6b|hs6|mtr6|mhs6|ftr6b|fhs6b) echo "+6:file generated at 51 dB-Hz" ;;
+    wcr|hs0|mtr0|mhs0|ftr0b|fhs0b) echo "0:file generated at 45 dB-Hz" ;;
     wn3t) echo "-3:45 dB-Hz file with 3 dB of added noise" ;;
-    wn6|hsn6|mtrn6b|mhsn6) echo "-6:45 dB-Hz file with 6 dB of added noise" ;;
+    wn6|hsn6|mtrn6b|mhsn6|ftrn6b|fhsn6b) echo "-6:45 dB-Hz file with 6 dB of added noise" ;;
     wn9) echo "-9:45 dB-Hz file with 9 dB of added noise" ;;
   esac
 }
@@ -72,6 +83,13 @@ accuracy() {
   done
   for t in $M8T_TRAV; do python3 m8t_accuracy.py "$(cap $t)" "$W/m8tacc_$t.npz" --scenario traveler > "$W/m8t_runs_$t.out"; done
   for t in $M8T_HOT; do python3 m8t_accuracy.py "$(cap $t)" "$W/m8tacc_$t.npz" --scenario hotshot > "$W/m8t_runs_$t.out"; done
+  # the ZED-F9P's Doppler fits the truth with no delay (m8t_timing_scan.py on the traveler burn)
+  for t in $F9P_TRAV; do
+    python3 m8t_accuracy.py "$(cap $t)" "$W/f9pacc_$t.npz" --scenario traveler --rr-lag 0.0 > "$W/f9p_acc_$t.out"
+  done
+  for t in $F9P_HOT; do
+    python3 m8t_accuracy.py "$(cap $t)" "$W/f9pacc_$t.npz" --scenario hotshot --rr-lag 0.0 > "$W/f9p_acc_$t.out"
+  done
 }
 
 table() {
@@ -111,8 +129,19 @@ charts() {
     "0 dB=$(cap mtr0)=$W/m8tacc_mtr0.npz" "-6 dB=$(cap mtrn6b)=$W/m8tacc_mtrn6b.npz"
   mv "$W/m8t_boost.json" "$W/m8t_trav_boost.json" "$D/"
   mv "$W/m8t_boost.png" "$W/m8t_boost_compare.png" "$W/m8t_trav_boost.png" "$W/m8t_trav_boost_compare.png" "$F/"
+  RX=ZED-F9P BOOST_SCEN=hotshot python3 m8t_boost_traces.py "$W/f9p_boost" "$D/hot_boost.json" \
+    "+12 dB=$(cap fhs12b)=$W/f9pacc_fhs12b.npz" "+6 dB=$(cap fhs6b)=$W/f9pacc_fhs6b.npz" \
+    "0 dB=$(cap fhs0b)=$W/f9pacc_fhs0b.npz" "-6 dB=$(cap fhsn6b)=$W/f9pacc_fhsn6b.npz"
+  RX=ZED-F9P BOOST_SCEN=traveler_soft25 python3 m8t_boost_traces.py "$W/f9p_trav_boost" "$D/boost_final.json" \
+    "+12 dB=$(cap ftr12b)=$W/f9pacc_ftr12b.npz" "+6 dB=$(cap ftr6b)=$W/f9pacc_ftr6b.npz" \
+    "0 dB=$(cap ftr0b)=$W/f9pacc_ftr0b.npz" "-6 dB=$(cap ftrn6b)=$W/f9pacc_ftrn6b.npz"
+  mv "$W/f9p_boost.json" "$W/f9p_trav_boost.json" "$D/"
+  mv "$W/f9p_boost.png" "$W/f9p_boost_compare.png" "$W/f9p_trav_boost.png" "$W/f9p_trav_boost_compare.png" "$F/"
   python3 px_err_rate.py "$F/px_err_rate.png"
   python3 m8t_err_rate.py "$F/m8t_err_rate.png"
+  python3 m8t_err_rate.py "$F/f9p_err_rate.png" "$D/f9p_boost.json" "$D/f9p_trav_boost.json" ZED-F9P
+  python3 cmp3_boost.py "$F/cmp3_boost.png" "$D/hot_boost.json" "$D/m8t_boost.json" "$D/f9p_boost.json" \
+    "$D/boost_final.json" "$D/m8t_trav_boost.json" "$D/f9p_trav_boost.json"
   for t in $PX_TRAV; do
     IFS=: read -r lab how <<< "$(level $t)"
     python3 plot_traveler_run.py "$(cap $t)" "$F/traveler_acc_$t.png" \
@@ -135,6 +164,16 @@ charts() {
       "NEO-M8T, SignalSim ${scen%%_*}, C/N0 $lab dB ($how), carrier corrected, buffered transmitter: GPS + Galileo + BeiDou, wide, 180 s pad, file ends T+$end" \
       "$scen" "$W/m8tacc_$t.npz" "end=$end" "xmax=$xm"
   done
+  for t in $F9P_TRAV $F9P_HOT; do
+    IFS=: read -r lab how <<< "$(level $t)"
+    case $t in
+      ftr*) scen=traveler_soft25; end=360; xm=375 ;;
+      *) scen=hotshot; end=120; xm=125 ;;
+    esac
+    python3 plot_m8t_run.py "$(cap $t)" "$F/f9p_run_$t.png" \
+      "ZED-F9P, SignalSim ${scen%%_*}, C/N0 $lab dB ($how), carrier corrected, buffered transmitter: GPS + Galileo + BeiDou, wide, 180 s pad, file ends T+$end" \
+      "$scen" "$W/f9pacc_$t.npz" "end=$end" "xmax=$xm"
+  done
 }
 
 page() {
@@ -143,7 +182,7 @@ page() {
 
 export_html() {
   mkdir -p "$HERE/export"
-  python3 export_standalone.py "$HERE/export/px1105r-neo-m8t-cn0-sweep.html"
+  python3 export_standalone.py "$HERE/export/px1105r-neo-m8t-zed-f9p-cn0-sweep.html"
 }
 
 for step in ${@:-page}; do

@@ -38,14 +38,14 @@ def spread(A):
 
 
 print("pseudorange spread, m (GPS / Galileo / BeiDou), truth at tag minus DELTA:")
-for d_ms in (-6, -4, -2, -1, 0, 1, 2, 3, 4, 6):
+for d_ms in (-16, -12, -10, -8, -6, -4, -2, -1, 0, 1, 2, 3, 4, 6):
     M.SHIFT = (np.array([0.0, 5000.0]), np.array([d_ms / 1e3, d_ms / 1e3]))
     A = P.rows_for(M.ShiftedTruth(str(csv)), eph, ep, keys, {}, 0.0)
     s = spread(A)
     print(f"  DELTA {d_ms:+3d} ms: {s[0]:.3f} / {s[1]:.3f} / {s[2]:.3f}")
 M.SHIFT = None
 print("Doppler: range-rate error RMS, m/s (epoch median removed), truth LAG earlier:")
-for lag_ms in (0, 10, 20, 30, 40, 50, 60, 80):
+for lag_ms in (-20, -10, -5, 0, 5, 10, 20, 30, 40, 50, 60, 80):
     A = P.rows_for(M.ShiftedTruth(str(csv)), eph, ep, keys, {}, lag_ms / 1e3)
     ut, groups = P.by_epoch(A)
     e = []

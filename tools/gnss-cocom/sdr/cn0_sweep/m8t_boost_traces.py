@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The NEO-M8T's hotshot boost chart, in the style of boost_traces_wide.py (the PX1105R's): each satellite's
+"""A u-blox receiver's boost chart (the NEO-M8T; RX=ZED-F9P for that one), in the style of boost_traces_wide.py
+(the PX1105R's): each satellite's
 line-of-sight Doppler rate through the burn (vertical acceleration x sin(elevation) / wavelength; B1I's own for BeiDou),
 in its system's colour while the M8T reports a valid pseudorange (RXM-RAWX prValid, 10 Hz), grey where not. The M8T
 withholds ALL raw measurements above 515 m/s, so the chart is shaded from its last raw epoch to burnout. Elevations
@@ -32,6 +33,8 @@ SYS = {0: "G", 2: "E", 3: "C"}
 NAME = {"G": "GPS", "E": "Galileo", "C": "BeiDou"}
 AB = {"G": "GPS", "E": "GAL", "C": "BDS"}
 SCEN = os.environ.get("BOOST_SCEN", "hotshot")
+RX = os.environ.get("RX", "NEO-M8T")                        # the receiver the captures came from (RX=ZED-F9P)
+RX_SHORT = RX.split("-")[-1]                                # "M8T", "F9P"
 BURN_NAME = {"hotshot": "the hotshot burn (4 s, 10 to 40 g)", "traveler_soft25": "the traveler burn (13 s)"}
 sc = json.loads((SDR / "scenarios" / f"{SCEN}.json").read_text())
 PRO = sc["prologue_s"]
@@ -76,7 +79,9 @@ def parse(cap):
             for j in range(b[11]):
                 m = b[16 + 32 * j: 48 + 32 * j]
                 if len(m) == 32 and m[20] in SYS:
-                    obs[(SYS[m[20]], m[21])] = (bool(m[30] & 1), m[26])
+                    k, v = (SYS[m[20]], m[21]), (bool(m[30] & 1), m[26])
+                    if k not in obs or (v[0] and not obs[k][0]):     # one signal per satellite (F9P: several)
+                        obs[k] = v
             raw.append((t, obs))
         elif h.startswith("0135") and len(b) >= 8:
             t = struct.unpack("<I", b[0:4])[0] / 1000.0 - IGN_TOW
@@ -249,13 +254,13 @@ if any_err:
 one_row = nrow == 1
 fig.legend(handles=h, loc="lower center", ncol=4 if any_err else 3, frameon=False, fontsize=8.5,
            bbox_to_anchor=(0.5, -0.13 if one_row else -0.04))
-fig.text(0.06, -0.22 if one_row else -0.085, "The NEO-M8T sits behind 10 dB more attenuation than the PX1105R on the "
+fig.text(0.06, -0.22 if one_row else -0.085, f"The {RX} sits behind 10 dB more attenuation than the PX1105R on the "
          f"same files (wide SignalSim {SCEN.split('_')[0]}, carrier corrected, 180 s pad)."
          + (" Pseudorange errors from m8t_accuracy.py (truth, solved clock)." if any_err else ""),
          fontsize=8.5, color=MUTED, ha="left")
 fig.subplots_adjust(hspace=0.78 if any_err else 0.62, wspace=0.12, bottom=0.2 if one_row else 0.12,
                     top=0.78 if one_row else 0.85)
-fig.suptitle(f"NEO-M8T through {BURN_NAME.get(SCEN, 'the burn')}, by signal level: each satellite's line-of-sight "
+fig.suptitle(f"{RX} through {BURN_NAME.get(SCEN, 'the burn')}, by signal level: each satellite's line-of-sight "
              "Doppler rate", x=0.06, y=1.0, ha="left", fontsize=10.5)
 fig.savefig(out + ".png", dpi=140, bbox_inches="tight", facecolor="white")
 print("wrote", out + ".png")
@@ -265,9 +270,10 @@ px = {r["label"].split(" (")[0]: r for r in json.loads(Path(px_json).read_text()
 levels = [r["label"] for r in runs]
 TCMP = math.floor(OVER) + (1.0 if OVER % 1.0 < 0.85 else 2.0)   # after the PX's first 1 Hz status past 515 m/s
 PX_STATUS = TCMP - 0.1                                            # (statuses land at about x.9 s)
-REC = {"PX1105R": ("#6639ba", "o"), "NEO-M8T": ("#bf8700", "s")}
+RX_COL = {"NEO-M8T": "#bf8700", "ZED-F9P": "#0f7b6c"}.get(RX, "#bf8700")
+REC = {"PX1105R": ("#6639ba", "o"), RX: (RX_COL, "s")}
 if any_err:
-    REC["NEO-M8T within 10 m"] = ("#bf8700", "s")
+    REC[f"{RX} within 10 m"] = (RX_COL, "s")
 fig, axs = plt.subplots(1, 3, sharey=True, figsize=(11.5, 3.6))
 table = []
 for ax, c in zip(axs, "GEC"):
@@ -282,7 +288,7 @@ for ax, c in zip(axs, "GEC"):
                 tot = [q for q in r["recs"] if q["sys"] == c]
                 kept = [q for q in tot if [s for s in q["series"] if s[0] <= TCMP] and
                         [s for s in q["series"] if s[0] <= TCMP][-1][4]]
-            elif rec == "NEO-M8T":                  # no sustained loss up to its raw cut-off (T+2.9-3.0), as in
+            elif rec == RX:                  # no sustained loss up to its raw cut-off (T+2.9-3.0), as in
                 r = runs[i]                         # its own chart (a drop in the very last epoch is not a loss)
                 tot = [q for q in r["recs"] if q["sys"] == c]
                 kept = [q for q in tot if not q["lost"]]
@@ -296,15 +302,15 @@ for ax, c in zip(axs, "GEC"):
             ys.append(100.0 * len(kept) / len(tot))
             labs.append(f"{len(kept)}/{len(tot)}")
             table.append((rec, lv, NAME[c], len(kept), len(tot)))
-        dashed = rec == "NEO-M8T within 10 m"
+        dashed = rec == f"{RX} within 10 m"
         ax.plot(xs, ys, color=col, lw=1.6, marker=mk, ms=6, label=rec, zorder=3 if not dashed else 4,
                 ls="--" if dashed else "-", markerfacecolor="white" if dashed else col)
         for x, y, lab in zip(xs, ys, labs):
-            if rec == "NEO-M8T":
+            if rec == RX:
                 solid[x] = lab
             if dashed and solid.get(x) == lab:      # same as the solid line: one label is enough
                 continue
-            ax.annotate(lab, (x, y), xytext=(0, 7 if rec == "NEO-M8T" else -13), textcoords="offset points",
+            ax.annotate(lab, (x, y), xytext=(0, 7 if rec == RX else -13), textcoords="offset points",
                         ha="center", fontsize=8, color=col, style="italic" if dashed else "normal")
     ax.set_title(NAME[c], loc="left", fontsize=10)
     ax.set_xticks(range(len(levels)), levels)
@@ -317,13 +323,13 @@ for ax, c in zip(axs, "GEC"):
 axs[0].set_ylabel("still tracked just after 515 m/s, %")
 axs[2].legend(frameon=False, fontsize=8.5, loc="upper left", bbox_to_anchor=(1.03, 1.0))   # clear of the labels
 fig.suptitle(f"{SCEN.split('_')[0].capitalize()} burn: share of the satellites tracked at ignition still tracked just "
-             f"after 515 m/s (T+{PX_STATUS:.1f}), PX1105R vs NEO-M8T", x=0.06, ha="left", fontsize=10.5)
+             f"after 515 m/s (T+{PX_STATUS:.1f}), PX1105R vs {RX}", x=0.06, ha="left", fontsize=10.5)
 cuts = [r["cut"] for r in runs]
 fig.text(0.06, -0.06, f"515 m/s is reached at T+{OVER:.1f}. PX1105R: lock in its 1 Hz channel status at T+{PX_STATUS:.1f} "
-         "(dropped-and-relocked counts as tracked). NEO-M8T: no gap >= 0.5 s in valid raw pseudoranges up to where it "
+         f"(dropped-and-relocked counts as tracked). {RX}: no gap >= 0.5 s in valid raw pseudoranges up to where it "
          f"withholds raw (T+{min(cuts):.1f} to T+{max(cuts):.1f})."
          + (f" Dashed: of those, the ones still within {WRONG_M:.0f} m of the truth there." if any_err else "")
-         + "\nNeither receiver can be compared past this point: the M8T reports nothing above 515 m/s. The M8T has 10 dB "
+         + f"\nNeither receiver can be compared past this point: the {RX_SHORT} reports nothing above 515 m/s. The {RX_SHORT} has 10 dB "
          "more attenuation.", fontsize=8.3, color=MUTED, ha="left")
 fig.subplots_adjust(top=0.82, bottom=0.2, wspace=0.2)
 fig.savefig(out + "_compare.png", dpi=140, bbox_inches="tight", facecolor="white")

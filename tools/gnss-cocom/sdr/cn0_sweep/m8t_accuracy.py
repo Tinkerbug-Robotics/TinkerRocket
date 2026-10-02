@@ -60,7 +60,8 @@ def pooled_eph():
 
 
 def m8t_epochs(cap):
-    """RXM-RAWX -> {k: (rcvTow, [(sys, prn, pr, doppler, cn0, None, 0)])}, valid pseudoranges only, in log order."""
+    """RXM-RAWX -> {k: (rcvTow, [(sys, prn, pr, doppler, cn0, None, 0)])}, valid pseudoranges only, in log order;
+    one signal per satellite, the first valid one (a ZED-F9P can report several signals of a satellite)."""
     ep = {}
     for line in open(cap, errors="replace"):
         p = line.split(" ", 2)
@@ -72,10 +73,11 @@ def m8t_epochs(cap):
             continue
         if len(b) < 16:
             continue
-        obs = []
+        obs, seen = [], set()
         for j in range(b[11]):
             m = b[16 + 32 * j: 48 + 32 * j]
-            if len(m) == 32 and m[20] in GNSS and m[30] & 1:
+            if len(m) == 32 and m[20] in GNSS and m[30] & 1 and (m[20], m[21]) not in seen:
+                seen.add((m[20], m[21]))
                 obs.append((GNSS[m[20]], m[21], struct.unpack_from("<d", m, 0)[0],
                             float(struct.unpack_from("<f", m, 16)[0]), m[26], None, 0))
         if obs:
@@ -113,7 +115,7 @@ def main():
     seen = {(o[0], o[1]) for _, obs in ep.values() for o in obs}
     t_mid = ep[len(ep) // 2][0]
     missing = sorted(k for k in seen if eph.pick(k[0], k[1], t_mid) is None)
-    print(f"M8T epochs {len(ep)}, satellites {len(seen)}; no ephemeris for {missing or 'none'}")
+    print(f"RAWX epochs {len(ep)}, satellites {len(seen)}; no ephemeris for {missing or 'none'}")
     P.load_capture = lambda path, systems="GEC": (eph, ep, {}, "ubx")
     P.SignalSimTruth = ShiftedTruth
     argv = [a.capture, a.out, "--csv", str(P.SDR / "scenarios" / csv), "--scenario", str(P.SDR / "scenarios" / scen),
