@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Figures of gnssrx runs through a boost, drawn like the rig's reports on the bought receivers.
 
-  rates     each satellite's line-of-sight Doppler rate from ignition to past burnout, drawn by
-            what the receiver delivered at each 0.1 s epoch: carrier-locked observables, code and
-            Doppler only (PLL in pull-in), or nothing. One panel per run, in a grid (rows: signal
-            levels, columns: loop configurations).
+  rates     each satellite's line-of-sight Doppler rate from ignition to past burnout, on the rig's
+            key for the bought receivers: coloured by constellation where a pseudorange was
+            delivered, magenta where it was over 10 m off the truth, markers on carrier lock. One
+            panel per run, in a grid (rows: signal levels, columns: loop configurations).
   timeline  one run in full: speed and altitude (truth and fix), vertical acceleration (and what
             the IMU aiding was given), per-satellite output, measurements per epoch, pseudorange
             and range-rate errors per satellite, and the fix's errors; over the whole run and
@@ -35,11 +35,15 @@ from matplotlib.lines import Line2D  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from boost_track import enu_basis, read_csv, single_diff  # noqa: E402
-from gnssrx import rinex, truth  # noqa: E402
+from gnssrx import iqio, rinex, truth  # noqa: E402
 
-SYS_COLOR = {"G": "#1f6fd1", "E": "#c0561e", "C": "#1e7b3c"}
+# The rig's palette and trace style (its C/N0 sweep report, cn0_sweep/boost_traces_wide.py).
+SYS_COLOR = {"G": "#1f6feb", "E": "#c4561a", "C": "#1a7f37"}
 SYS_NAME = {"G": "GPS", "E": "Galileo", "C": "BeiDou"}
-GRAY = "#d3d9de"
+GRAY = "#d8dee4"
+INK = "#1f2328"
+WRONG_M, WRONG = 10.0, "#bf3989"  # a delivered pseudorange this far off the truth is wrong (the rig's magenta)
+SYS_ABBR = {"G": "GPS", "E": "GAL", "C": "BDS"}
 COCOM_V, COCOM_H = 515.0, 80e3
 LAM = truth.LAMBDA_L1
 
@@ -98,6 +102,12 @@ class Run:
             out[j] = pos.get(int(k), 0)
         return out
 
+    def locked(self, prn: int, keys: np.ndarray) -> np.ndarray:
+        """Per epoch: the channel's PLL in lock (trk.csv state 2), whether or not it delivered."""
+        m = self.trk["prn"] == prn
+        on = {int(k) for k, st in zip(key(self.tf_trk[m]), self.trk["state"][m]) if st == 2}
+        return np.array([int(k) in on for k in keys], dtype=bool)
+
     def pad_cn0(self, prn: int, t0: float, t1: float) -> float:
         m = (self.trk["prn"] == prn) & (self.tf_trk >= t0) & (self.tf_trk < t1) & (self.trk["state"] == 2)
         return float(np.median(self.trk["cn0"][m])) if m.any() else float("nan")
@@ -142,58 +152,98 @@ def segments(x: np.ndarray, cat: np.ndarray):
 
 # ------------------------------------------------------------------------------------------- rates
 
+def judged(run: Run, tr: Truth, liftoff: float, t_end: float) -> dict[int, dict[int, float]]:
+    """Each delivered pseudorange's error (m), per satellite and epoch key, from 30 s before liftoff to t_end:
+    the smoothed pseudorange less the geometric range (and the troposphere where the file carries one), each
+    satellite's own pre-launch level taken out, then the per-epoch median over satellites (the receiver
+    clock). A satellite with no pre-launch level is not judged."""
+    try:
+        tropo = iqio.manifest(Path(run.ini.get("source", "")).name).tropo != "none"
+    except KeyError:
+        tropo = False
+    o, tf = run.obs, run.tf_obs
+    w = (tf >= liftoff - 30.0) & (tf <= t_end + 0.05) & (o["prn"] < 200)
+    prn, k, x = o["prn"][w].astype(int), key(tf[w]), o["pr_m"][w].astype(float)
+    for p in np.unique(prn):
+        m = prn == p
+        L = tr.los(int(p), k[m], run.t0)
+        ref = L[:, 0]
+        if tropo:
+            lat, h = tr.traj.lat_h(k[m] / 10.0)
+            ref = ref + truth.tropo_saastamoinen(lat, h, np.radians(L[:, 3]))
+        x[m] -= ref
+        pre = m & (k < key(liftoff - 1.0))
+        x[m] -= np.median(x[pre]) if pre.any() else np.nan
+    out: dict[int, dict[int, float]] = {}
+    for ke in np.unique(k):
+        m = (k == ke) & np.isfinite(x)
+        if m.sum() >= 4:
+            med = np.median(x[m])
+            for p, v in zip(prn[m], x[m]):
+                out.setdefault(int(p), {})[int(ke)] = float(v - med)
+    return out
+
+
 def panel_rates(ax, run: Run, tr: Truth, liftoff: float, burnout: float, t_end: float, label: str):
+    """One run on the rig's key: solid where a pseudorange was delivered, a pale tint where the channel
+    held lock but delivered nothing, grey where it delivered nothing; magenta where what it delivered
+    was over WRONG_M off the truth; markers on carrier lock."""
     keys = np.arange(key(liftoff - 0.5), key(t_end) + 1)
     x = keys / 10.0 - liftoff
-    k_end = key(t_end)
-    counts = {"carrier": {}, "code": {}, "n": {}}
-    kb = key(burnout + 1.0)
+    jb = min(int(np.searchsorted(keys, key(burnout + 1.0))), keys.size - 1)
+    after = keys >= key(liftoff)
+    err = judged(run, tr, liftoff, t_end)
+    n, locked_b, raw_b, bad = {}, {}, {}, {}
     lost = []
     for prn in run.prns:
         s = sys_of(prn)
-        L = tr.los(prn, keys, run.t0)
-        rate = L[:, 2]
-        st = run.status(prn, keys)
+        rate = tr.los(prn, keys, run.t0)[:, 2]
+        st = run.status(prn, keys)  # 2 carrier-locked, 1 code and Doppler only, 0 nothing
+        delivered = st >= 1
+        withheld = run.locked(prn, keys) & ~delivered
+        e = err.get(prn, {})
+        wrong = delivered & (np.abs(np.array([e.get(int(k), np.nan) for k in keys])) > WRONG_M)
         col = SYS_COLOR[s]
-        for cat, a, b in segments(x, st):
-            b1 = min(b + 1, x.size)  # join the next run's first point
-            xs, ys = x[a:b1], rate[a:b1]
-            if cat == 2:
-                ax.plot(xs, ys, color=col, lw=1.1, zorder=3, solid_capstyle="butt")
-            elif cat == 1:
-                ax.plot(xs, ys, color=col, lw=3.0, alpha=0.28, zorder=2, solid_capstyle="butt")
-            else:
-                ax.plot(xs, ys, color=GRAY, lw=1.0, zorder=1)
+        ax.plot(x, rate, color=GRAY, lw=0.9, zorder=1)
+        ax.plot(x, np.where(withheld, rate, np.nan), color=col, lw=2.6, alpha=0.28, solid_capstyle="butt", zorder=2)
+        ax.plot(x, np.where(delivered, rate, np.nan), color=col, lw=1.3, zorder=3)
+        if wrong.any():  # a magenta band under the trace
+            ax.plot(x, np.where(wrong, rate, np.nan), color=WRONG, lw=6.5, alpha=0.30, solid_capstyle="butt",
+                    zorder=2)
+            jw = np.flatnonzero(wrong & after)
+            if jw.size:
+                ax.plot(x[jw[0]], rate[jw[0]], ls="", marker="D", ms=4.7, color=WRONG, zorder=6)
+                bad[s] = bad.get(s, 0) + 1
         # Markers on carrier lock, from ignition to the end of the panel.
-        after = keys >= key(liftoff)
         locked = st[after] == 2
         xa, ra = x[after], rate[after]
         drops = np.where(locked[:-1] & ~locked[1:])[0]
         if locked.all():
-            ax.plot(xa[-1], ra[-1], marker="^", ms=4.5, mfc="white", mec=col, mew=1.0, zorder=4)
+            ax.plot(xa[-1], ra[-1], marker="^", ms=5.3, mfc="none", mec=col, mew=1.1, zorder=5)
         elif locked[-1]:
             j = drops[0] if drops.size else 0
-            ax.plot(xa[j + 1], ra[j + 1], marker="o", ms=4.5, mfc="white", mec=col, mew=1.0, zorder=4)
+            ax.plot(xa[j + 1], ra[j + 1], marker="o", ms=5.5, mfc="none", mec=col, mew=1.4, zorder=5)
         else:
             j = drops[-1] + 1 if drops.size else 0
-            ax.plot(xa[j], ra[j], marker="x", ms=5, color=col, mew=1.3, zorder=4)
+            ax.plot(xa[j], ra[j], marker="x", ms=5.8, color=col, mew=1.6, zorder=5)
             lost.append(sat_name(prn))
-        jb = int(np.searchsorted(keys, kb))
-        jb = min(jb, keys.size - 1)
-        counts["n"][s] = counts["n"].get(s, 0) + 1
-        counts["carrier"][s] = counts["carrier"].get(s, 0) + int(st[jb] == 2)
-        counts["code"][s] = counts["code"].get(s, 0) + int(st[jb] >= 1)
+        n[s] = n.get(s, 0) + 1
+        locked_b[s] = locked_b.get(s, 0) + int(st[jb] == 2)
+        raw_b[s] = raw_b.get(s, 0) + int(st[jb] >= 1)
     ax.axvline(burnout - liftoff, color="#555", ls=":", lw=0.9)
     ax.axvline(0.0, color="#555", ls=":", lw=0.6)
     yl = ax.get_ylim()
     ax.text(burnout - liftoff - 0.08, yl[0] + 0.03 * (yl[1] - yl[0]), "burnout", ha="right", va="bottom",
-            fontsize=7, color="#555")
-    pad = {s: np.nanmedian([run.pad_cn0(p, liftoff - 6, liftoff - 1) for p in run.prns if sys_of(p) == s])
-           for s in counts["n"]}
-    sys_list = [s for s in "GEC" if s in counts["n"]]
-    pad_txt = ", ".join(f"{SYS_NAME[s]} {pad[s]:.0f}" for s in sys_list)
-    at_txt = ";  ".join(f"{SYS_NAME[s]} carrier {counts['carrier'][s]}/{counts['n'][s]}, code "
-                        f"{counts['code'][s]}/{counts['n'][s]}" for s in sys_list)
+            fontsize=8, color="#555")
+    sys_list = [s for s in "GEC" if s in n]
+    pad = {}
+    for s in sys_list:
+        v = [c for c in (run.pad_cn0(p, liftoff - 6, liftoff - 1) for p in run.prns if sys_of(p) == s) if np.isfinite(c)]
+        pad[s] = f"{np.median(v):.0f}" if v else "-"  # "-": none of them locked on the pad
+    pad_txt = ", ".join(f"{SYS_ABBR[s]} {pad[s]}" for s in sys_list)
+    locked_txt = ", ".join(f"{SYS_ABBR[s]} {locked_b[s]}/{n[s]}" for s in sys_list)
+    raw_txt = ", ".join(f"{SYS_ABBR[s]} {raw_b[s]}/{n[s]}" for s in sys_list)
+    bad_txt = ", ".join(f"{SYS_ABBR[s]} {bad[s]}" for s in sys_list if s in bad) or "none"
     unl = 0.0
     for prn in run.prns:
         m = (run.trk["prn"] == prn) & (run.tf_trk >= liftoff) & (run.tf_trk <= t_end)
@@ -201,10 +251,11 @@ def panel_rates(ax, run: Run, tr: Truth, liftoff: float, burnout: float, t_end: 
     gap = np.diff(np.sort(run.tf_pvt[(run.tf_pvt >= liftoff - 1) & (run.tf_pvt <= t_end)]))
     fix_txt = f"fix every epoch" if gap.size and gap.max() < 0.15 else (
         f"longest fix gap {gap.max():.1f} s" if gap.size else "no fix")
-    ax.set_title(f"{label}\npad C/N0 (median, measured) {pad_txt} dB-Hz\n"
-                 f"at burnout+1 s: {at_txt}\n"
+    ax.set_title(f"{label}\npad C/N0 {pad_txt} dB-Hz (median, measured)\n"
+                 f"at burnout+1 s: locked {locked_txt};  raw {raw_txt}\n"
+                 f"over {WRONG_M:.0f} m off while delivered: {bad_txt}\n"
                  f"PLL unlocked {unl:.1f} sat-s after ignition; {len(lost)} not back by T+{t_end - liftoff:.1f}; "
-                 f"{fix_txt}", fontsize=6.6)
+                 f"{fix_txt}", fontsize=8.4)
     ax.set_xlim(x[0], x[-1] + 0.03 * (x[-1] - x[0]))
 
 
@@ -214,8 +265,10 @@ def cmd_rates(a) -> int:
     rlab = dict(zip(rows, a.row_labels.split("|"))) if a.row_labels else {r: r for r in rows}
     clab = dict(zip(cols, a.col_labels.split("|"))) if a.col_labels else {c: c for c in cols}
     t_end = a.burnout + a.after
-    fig, axs = plt.subplots(len(rows), len(cols), figsize=(4.3 * len(cols), 3.0 * len(rows) + 1.2),
+    # The rig report's panel size, so its line widths read the same.
+    fig, axs = plt.subplots(len(rows), len(cols), figsize=(6.2 * len(cols), 4.4 * len(rows) + 1.9),
                             sharex=True, sharey=True, squeeze=False)
+    systems = set()
     for i, r in enumerate(rows):
         for j, c in enumerate(cols):
             p = Path(a.run.format(row=r, col=c))
@@ -223,27 +276,36 @@ def cmd_rates(a) -> int:
             if not (p / "trk.csv").exists():
                 ax.set_visible(False)
                 continue
+            run = Run(p)
+            systems |= {sys_of(q) for q in run.prns}
             label = clab[c] if len(rows) == 1 else f"{clab[c]}  ·  {rlab[r]}"
-            panel_rates(ax, Run(p), tr, a.liftoff, a.burnout, t_end, textwrap.fill(label, 78))
+            panel_rates(ax, run, tr, a.liftoff, a.burnout, t_end, textwrap.fill(label, 78))
             if j == 0:
                 ax.set_ylabel("line-of-sight Doppler rate, Hz/s")
             if i == len(rows) - 1:
                 ax.set_xlabel("time from ignition, s")
-    fig.suptitle(a.title + (f"\n{rlab[rows[0]]}" if len(rows) == 1 else ""), x=0.01, ha="left", fontsize=10)
-    handles = [Line2D([], [], color=SYS_COLOR["G"], lw=1.1, label="GPS: carrier-locked observables"),
-               Line2D([], [], color=SYS_COLOR["E"], lw=1.1, label="Galileo: carrier-locked"),
-               Line2D([], [], color=SYS_COLOR["G"], lw=3, alpha=0.28, label="code and Doppler only (PLL pulling in)"),
-               Line2D([], [], color=GRAY, lw=1.0, label="nothing delivered"),
-               Line2D([], [], ls="", marker="x", color="#333", label="carrier lock lost here, not back by the panel's end"),
-               Line2D([], [], ls="", marker="o", mfc="white", mec="#333", label="carrier lock lost here, back later"),
-               Line2D([], [], ls="", marker="^", mfc="white", mec="#333", label="never lost carrier lock")]
-    if not any(sys_of(k[0]) == "E" for k in tr.cache):
-        handles = [h for h in handles if "Galileo" not in h.get_label()]
+    fig.suptitle(a.title + (f"\n{rlab[rows[0]]}" if len(rows) == 1 else ""), x=0.01, ha="left", fontsize=10.5)
+    # The rig's key (cn0_sweep/boost_traces_wide.py), its lock read as our PLL's.
+    names = {"G": "GPS: raw pseudorange delivered", "C": "BeiDou: delivered", "E": "Galileo: delivered"}
+    handles = [Line2D([], [], color=SYS_COLOR[s], lw=1.4, label=names[s]) for s in "GCE" if s in systems]
+    handles += [Line2D([], [], color=INK, lw=2.6, alpha=0.28, solid_capstyle="butt",
+                       label="locked (channel status), measurement withheld"),
+                Line2D([], [], color=GRAY, lw=2, label="lock lost, nothing delivered"),
+                Line2D([], [], ls="", marker="x", color=INK, label="carrier lock lost here, for good"),
+                Line2D([], [], ls="", marker="o", mfc="none", mec=INK,
+                       label="carrier lock lost here, back by the panel's end"),
+                Line2D([], [], ls="", marker="^", mfc="none", mec=INK, label="never lost carrier lock"),
+                Line2D([], [], color=WRONG, lw=6.5, alpha=0.30, solid_capstyle="butt",
+                       label=f"delivered but over {WRONG_M:.0f} m off the truth"),
+                Line2D([], [], ls="", marker="D", color=WRONG, label=f"where it first goes over {WRONG_M:.0f} m")]
     H = fig.get_figheight()
-    fig.legend(handles=handles, loc="lower left", ncol=4, frameon=False, fontsize=7.5, bbox_to_anchor=(0.01, 0.0))
-    if a.note:
-        fig.text(0.01, 0.42 / H, textwrap.fill(a.note, 230), fontsize=7, color="#555", va="bottom")
-    fig.tight_layout(rect=(0, 0.75 / H, 1, 1 - 0.55 / H))
+    fig.legend(handles=handles, loc="lower left", ncol=4, frameon=False, fontsize=8.5, bbox_to_anchor=(0.01, 0.0))
+    note = (a.note + " " if a.note else "") + (
+        "Pseudorange errors against the truth: the smoothed pseudorange less the geometric range (and the "
+        "troposphere where the file carries one), each satellite's pre-launch level and the per-epoch median over "
+        "satellites (the receiver clock) taken out.")
+    fig.text(0.01, 0.78 / H, textwrap.fill(note, 230), fontsize=8.5, color="#555", va="bottom")
+    fig.tight_layout(rect=(0, 1.2 / H, 1, 1 - 0.6 / H))
     fig.savefig(a.o, dpi=a.dpi)
     print(f"wrote {a.o}")
     return 0

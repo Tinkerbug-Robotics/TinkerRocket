@@ -40,6 +40,7 @@ class Meta:
     noise: bool
     truth: str
     start_gpst: str
+    tropo: str = "saastamoinen"  # "none" where the generator applied no troposphere (gps-sdr-sim)
 
 
 def manifest(name: str, path: Path | None = None) -> Meta:
@@ -50,7 +51,7 @@ def manifest(name: str, path: Path | None = None) -> Meta:
     dcv = None if dc == "auto" else tuple(float(v) for v in (dc.split(",") * 2)[:2])
     return Meta(name, float(s["fs"]), float(s.get("fc", L1_HZ)), dcv, float(s.get("carrier_fix_hz", 0)),
                 float(s.get("sig_power", 0)), float(s.get("noise_density", 0)), s.get("noise", "no") == "yes",
-                s.get("truth", ""), s.get("start_gpst", ""))
+                s.get("truth", ""), s.get("start_gpst", ""), s.get("tropo", "saastamoinen").lower())
 
 
 def iq_path(name: str) -> Path:

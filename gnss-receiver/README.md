@@ -49,6 +49,12 @@ Things about the files that are not obvious, all measured 2026-09-30:
   - They also carry −0.47 LSB of DC from truncation (`dc = auto`).
 - **The `_cofs` files have their carrier 22.0 Hz below their code.** That cancels the HackRF on the rig.
   Read directly, they need `carrier_fix_hz = 22.0`.
+- **The rig's C/N0 sweep files** (`signalsim_*_all_2026_*_w_p180*.C8`) carry GPS, Galileo and
+  BeiDou B1I at 18.48 MS/s centred on 1568.286 MHz, every satellite at one level.
+  - They hold the pad for 180 s, not 600. Ignition is at file second 180, so their truth is the
+    scenarios shifted 420 s earlier.
+  - Their 45, 51 and 57 dB-Hz files measure 41.3, 45.8 and 48.5 dB-Hz.
+  - Only the traveler's 45 has the carrier offset in the file: 23.0 Hz at this centre.
 - **Sample convention:** I + jQ, with Doppler signs as the generators log them.
 
 ## Front-end emulation
@@ -387,11 +393,20 @@ truth is in the rig's `scenarios/`:
 | `gnssrx --boost-at S0,S1` | The boost profile over those file seconds, as the flight computer would call it. With `--loops-quiet` and `--loops-boost` (bandwidths), `--cn0-at S:DBHZ` (a level change mid-file) and `run.ini` (what made the run) |
 | `py/boost_track.py` | A run against truth, per satellite: frequency error, unlock time, carrier slips, code error, losses as the bench counts them (no pseudorange for 0.5 s), and the fix |
 | `gnssrx --imu SCEN.csv` | IMU aiding from the scenario's trajectory, with the IMU's faults (`--imu-err`); see [IMU aiding](#imu-aiding-milestone-7) |
-| `py/boost_plots.py` | The figures, drawn like the rig's reports on the bought receivers. `rates` draws each satellite's line-of-sight Doppler rate through the burn, by what the receiver delivered, as a grid of runs (signal levels × loop configurations). `timeline` draws one run in full: speed, altitude and acceleration (with the IMU's input), per-satellite output, measurements per epoch, pseudorange and range-rate errors, and the fix's errors |
+| `py/boost_plots.py` | The figures, drawn like the rig's reports on the bought receivers. `rates` draws each satellite's line-of-sight Doppler rate through the burn on the rig's key, as a grid of runs (signal levels × loop configurations): coloured by constellation where a pseudorange was delivered, magenta where one was over 10 m off the truth, markers on carrier lock. `timeline` draws one run in full: speed, altitude and acceleration (with the IMU's input), per-satellite output, measurements per epoch, pseudorange and range-rate errors, and the fix's errors |
 
 `boost_track.py` judges the carrier against the integral of the true Doppler. That integral is how
 the rig's smoothed gps-sdr-sim builds the carrier. Range from linearly interpolated positions differs
 from it by a·dt²/8 inside a 0.1 s trajectory step, which at burnout is whole cycles.
+
+`boost_plots.py` judges each delivered pseudorange by the rig's rule for the bought receivers: over
+10 m off the truth is wrong.
+- **The truth:** the geometric range, plus the troposphere where the manifest says the file carries
+  one (`tropo`; the receiver's own Saastamoinen model).
+- **Taken out:** each satellite's pre-launch level, then the per-epoch median over satellites (the
+  receiver clock).
+- **The troposphere term matters on SignalSim:** it takes the aided traveler's burn from 0.93 to
+  0.67 m rms.
 
 ### What the stage-0 loops did
 
@@ -544,6 +559,24 @@ manages about 80 Hz/s. `TrkBoost.ImuAidingCarriesTheBurnout` shows all three cas
 |---|---|---|---|---|
 | aided boost | 10 / 20 / 2 Hz | — / 20 / 0.5 Hz | 2 ms | with the IMU: from T−5 s to 2 s after burnout |
 
+**The four configurations compared.** Every comparison below runs these:
+
+| Configuration | Pull-in FLL / PLL / DLL | Locked FLL / PLL / DLL | IMU feed-forward | When |
+|---|---|---|---|---|
+| quiet loops | 10 / 15 / 2 Hz | — / 10 / 0.25 Hz | none | throughout |
+| 50 Hz boost loops (the fallback) | 10 / 50 / 2 Hz | 5 / 50 / 1 Hz | none | T−5 s to 2 s past burnout |
+| quiet loops + IMU | 10 / 15 / 2 Hz | — / 10 / 0.25 Hz | throughout | throughout |
+| IMU + 20 Hz loops (the design) | 10 / 20 / 2 Hz | — / 20 / 0.5 Hz | throughout | T−5 s to 2 s past burnout |
+
+- **The loops.** The carrier loop is a 3rd-order Costas PLL with a 2nd-order FLL to help it. The
+  code loop is a carrier-aided 1st-order DLL (`core/include/gnss/trk.h`).
+- **The states.** A channel pulls in with both carrier loops wide, and narrows once its PLL locks.
+  If the PLL lets go, it falls back to the FLL and keeps delivering pseudorange and Doppler.
+- **The trade.** Within its 45° a 3rd-order PLL rides a Doppler-rate step of about 20 Hz/s at
+  10 Hz, 80 at 20 Hz and 500 at 50 Hz. Its 3σ phase noise at 31.4 dB-Hz is 17°, 24° and 38°.
+  - The fallback buys the burnout with noise.
+  - The design lets the IMU predict the dynamics, and keeps the noise of a 20 Hz loop.
+
 **What aiding buys, in short.** The 40 runs were repeated on 2026-10-01 with today's receiver
 (`runs/aid`). They reproduce the tables below, except one cell, now updated.
 - **Sensitivity:** carrier on every satellite through both burns down to 31.4 dB-Hz. Without
@@ -555,6 +588,13 @@ manages about 80 Hz/s. `TrkBoost.ImuAidingCarriesTheBurnout` shows all three cas
   on the traveler (6.0 → 1.2 m).
 - **Narrow loops need both:** the quiet loops without aiding lose carrier on every satellite at
   every level, and aiding alone doesn't rescue them; the IMU's residual needs 20 Hz loops.
+- **Measurement integrity** (a delivered pseudorange over 10 m off the truth is wrong):
+  - The aided design delivers nothing over 1.6 m down to 31.4 dB-Hz on both flights.
+  - At 29.3 dB-Hz, 5 and 7 satellites go 10–18 m off. Every one had lost carrier lock first, and
+    unsmoothed code at 27–31 dB-Hz is that noisy.
+  - The 50 Hz loops stay clean to 33.4 dB-Hz. They go over on 1 and 7 satellites at 31.4, and on
+    13 and 14 at 29.3.
+  - On the SignalSim traveler, only the quiet loops without aiding go over.
 - **Figures** (`runs/aid/fig`):
   - `aid_summary.png`: satellites kept, velocity, height and unlocked time, against C/N0;
   - `aid_velocity_35.png`: the velocity error through each burn at 33.4 dB-Hz;
@@ -660,6 +700,65 @@ past burnout:
 - **Satellites outside the fix went unaided.** The rig's PRN 13 is flagged unhealthy, so the fix
   leaves it out, and it got no line of sight. Every tracked satellite now gets one.
 
+
+### On the bought receivers' files (milestone 7)
+
+The rig's C/N0 sweep (report "PX1105R and NEO-M8T C/N0 Sweep", 2026-09-30 and 10-01) flew the
+PX1105R through both boosts on SignalSim files.
+- **The files:** GPS, Galileo and BeiDou B1I, from 12 dB over to 9 dB under the 45 dB-Hz file.
+- **Our runs:** `gnssrx` ran the same files in the four loop configurations (`runs/wide`), judged by
+  the same truth and rule.
+- **What we see:** their GPS and Galileo. Their BeiDou is B1I, outside the L1 front end's band.
+
+The table gives the satellites locked at burnout (the PX1105R) or 1 s after it (ours). Each cell is
+GPS · Galileo, plus the PX1105R's BeiDou. The "over 10 m" columns count the satellites that
+delivered a pseudorange that far off.
+
+| Flight, level | PX1105R | Over 10 m | IMU + 20 Hz loops | Over 10 m | 50 Hz boost loops | Over 10 m |
+|---|---|---|---|---|---|---|
+| Traveler, +12 dB | 11/12 · 2/6 · 4/4 | GPS 5, GAL 1, BDS 1 | 13/13 · 8/8 | none | 13/13 · 7/8 | none |
+| Traveler, +6 dB | 9/13 · 1/7 · 7/8 | GPS 5, GAL 1, BDS 3 | 13/13 · 8/8 | none | 13/13 · 6/8 | none |
+| Traveler, 0 dB | 1/13 · 0/2 · 7/7 | GPS 4, BDS 3 | 13/13 · 7/8 | none | 13/13 · 8/8 | none |
+| Traveler, −3 dB | 1/12 · 0/1 · 6/9 | GPS 3, BDS 6 | 13/13 · 6/8 | none | 13/13 · 8/8 | none |
+| Traveler, −6 dB | 1/13 · – · 1/7 | GPS 3 | 13/13 · 4/8 | none | 13/13 · 3/8 | none |
+| Traveler, −9 dB | 0/6 · – · 0/1 | none | 11/13 · 0/8 | GPS 1 | 12/13 · 0/8 | GPS 8 |
+| Hotshot, +12 dB | 5/13 · 0/7 · 6/6 | GPS 2, BDS 3 | 13/13 · 8/8 | none | 13/13 · 8/8 | none |
+| Hotshot, +6 dB | 4/13 · 0/6 · 6/6 | GPS 1, GAL 1, BDS 2 | 13/13 · 8/8 | none | 13/13 · 8/8 | none |
+| Hotshot, 0 dB | 0/13 · 0/4 · 5/6 | GPS 2, GAL 1, BDS 2 | 13/13 · 8/8 | none | 13/13 · 8/8 | none |
+| Hotshot, −3 dB | not flown | | 13/13 · 8/8 | none | 13/13 · 8/8 | none |
+| Hotshot, −6 dB | 0/9 · – · 0/8 | none | 13/13 · 6/8 | none | 13/13 · 3/8 | none |
+| Hotshot, −9 dB | not flown | | 12/13 · 0/8 | GPS 2 | 11/13 · 0/8 | GPS 2 |
+
+- **Every GPS satellite through both burns to −6 dB,** aided or on the 50 Hz loops. The PX1105R
+  keeps 11 of 12 at best on the traveler and 5 of 13 on the hotshot, and from 0 dB down 1 and none.
+- **No wrong pseudorange from either to −6 dB.** The PX1105R delivered them on 3–9 satellites at
+  every level where it still held any. Its strength is BeiDou B1I, which it keeps where it loses
+  GPS.
+- **Aiding shows here as on our own files.** Count the satellites that never lost carrier from
+  ignition to 2.5 s past burnout:
+  - both configurations keep all 13 GPS satellites to −6 dB;
+  - at −9 dB (31 dB-Hz) the aided design keeps 11 and 10, the 50 Hz loops none and 3;
+  - only the aided design carries Galileo through either burn: 6–8 of 8 down to −3 dB, against
+    none.
+- **What differs:**
+  - the PX1105R took the files as RF through the HackRF, and at 0 dB reads about 2 dB less C/N0
+    than ours (38–39 against 40.4);
+  - the rig attenuated whole files for −3 to −9 dB. We add noise from T−10 s, so acquisition there
+    isn't tested;
+  - its counts are at burnout, ours 1 s later, through the burnout transient.
+- **Figures:** `runs/wide/fig/rates_wide_traveler.png` and `rates_wide_hotshot.png`.
+
+One run, from `gnss-receiver` with `GNSS_IQ_DIR` at the rig's `c8/` (the truth shifted to the
+180 s pad first):
+
+```bash
+SC=.../tools/gnss-cocom/sdr/scenarios
+awk -F, -v OFS=, '$1 >= 420 { $1 = sprintf("%.1f", $1 - 420); print }' $SC/hotshot_pad600.csv \
+    > runs/wide/hotshot_pad180.csv
+build/host/gnssrx signalsim_hotshot_all_2026_45_w_p180.C8 --start 80 --dur 110 \
+    --cn0 41.0 --cn0-at 170:35.3 --imu runs/wide/hotshot_pad180.csv --boost-at 175,186 \
+    --loops-boost 10,20,2/0,20,0.5:2 --out runs/wide/BA_hot_m6
+```
 
 ### Oscillator g-sensitivity (milestone 7)
 

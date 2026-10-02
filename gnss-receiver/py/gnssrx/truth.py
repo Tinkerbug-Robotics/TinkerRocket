@@ -51,6 +51,25 @@ class Trajectory:
         up = np.stack([np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)], axis=-1)
         return np.sum(a * up, axis=-1)
 
+    def lat_h(self, t):
+        """Geodetic latitude (rad) and height (m) at times t."""
+        t = np.atleast_1d(t)
+        return np.radians(np.interp(t, self.t, self.lat)), np.interp(t, self.t, self.h)
+
+
+def tropo_saastamoinen(lat, h, el):
+    """Saastamoinen delay (m) with a standard atmosphere, as the receiver models it (core/pvt/pvt.c):
+    lat and el in radians, h in metres, up to 40 km. SignalSim's files carry a troposphere like it."""
+    lat, h, el = np.broadcast_arrays(np.asarray(lat, float), np.asarray(h, float), np.asarray(el, float))
+    hh = np.clip(h, 0.0, None)
+    p = 1013.25 * (1.0 - 2.2557e-5 * hh) ** 5.2568
+    tk = 15.0 - 6.5e-3 * hh + 273.16
+    e = 6.108 * 0.7 * np.exp((17.15 * tk - 4684.0) / (tk - 38.45))
+    cz = np.cos(np.pi / 2.0 - el)
+    dry = 0.0022768 * p / (1.0 - 0.00266 * np.cos(2.0 * lat) - 0.00028 * hh / 1e3) / cz
+    wet = 0.002277 * (1255.0 / tk + 0.05) * e / cz
+    return np.where((h < -100.0) | (h > 4e4) | (el <= 0.0), 0.0, dry + wet)
+
 
 def _sat_rx_frame(e: rinex.Eph, t_rx_gps: float, rx: np.ndarray):
     """Satellite position (receive-time ECEF frame) for a signal received at t_rx_gps by rx."""
