@@ -10,6 +10,7 @@ add_library(gnss_core STATIC
     sig/codes.c
     sig/gal_e1_codes.c
     sig/b1c_params.c
+    trk/boost_detect.c
     trk/trk.c
     util/gmath.c
 )

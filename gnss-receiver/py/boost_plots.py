@@ -89,7 +89,9 @@ class Run:
         self.prns = sorted({int(p) for p in self.obs["prn"] if int(p) < 200})
         self.t0 = float(np.round(self.obs["rx_tow"][0] - self.obs["t_s"][0] - self.start, 3))
         b = self.ini.get("boost_at")
-        self.boost = tuple(float(x) for x in b.split(",")) if b else None
+        d = self.ini.get("boost_detected")  # on, burnout, off: what the emulated IMU detected
+        self.boost = (tuple(float(x) for x in b.split(",")) if b else
+                      tuple(float(x) for x in d.split(","))[0::2] if d else None)
 
     def status(self, prn: int, keys: np.ndarray) -> np.ndarray:
         """Per epoch: 2 carrier-locked observables, 1 code and Doppler only, 0 nothing."""

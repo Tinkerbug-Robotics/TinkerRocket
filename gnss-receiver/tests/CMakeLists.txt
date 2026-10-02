@@ -13,6 +13,7 @@ include(GoogleTest)
 
 add_executable(gnss_tests
     test_acq.cpp
+    test_boost_detect.cpp
     test_cmd_tags.cpp
     test_codes_multi.cpp
     test_core_basics.cpp

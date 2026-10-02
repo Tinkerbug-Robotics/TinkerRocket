@@ -15,6 +15,7 @@
 #include "corr_float.h"
 #include "corr_model.h"
 #include "fe_format.h"
+#include "gnss/boost_detect.h"
 #include "gnss/rx.h"
 #include "loops_arg.h"
 #include "manifest.h"
@@ -71,6 +72,12 @@ static void usage(void)
             "                            computer would call it (default: never)\n"
             );
     fprintf(stderr,
+            "  --boost-detect default|fc|LAUNCH,LAUNCH_MS,BURNOUT_MS,HOLD_S[,REST,REST_MS]   the boost profile\n"
+            "                            from the launch the emulated IMU detects (--imu) to HOLD_S past the\n"
+            "                            burnout it detects: the axial specific force over LAUNCH m/s^2 for\n"
+            "                            LAUNCH_MS, then below zero for BURNOUT_MS; within REST of 1 g for\n"
+            "                            REST_MS is a false start. default: the receiver's fast trigger,\n"
+            "                            20,20,50,2,5,500; fc: the flight computer's rules, 30,250,50,2, no rest\n"
             "  --imu SCEN.csv            IMU aiding emulated from a scenario trajectory (10 Hz t,lat,lon,h;\n"
             "                            file seconds): its acceleration, as the generator's carrier sees it\n"
             "  --imu-err LAG,SF,BIAS,NOISE[,TILT]   the IMU's faults: latency ms, scale error (fraction),\n"
@@ -78,6 +85,7 @@ static void usage(void)
             "                            error in degrees that tips the acceleration from up toward east\n"
             "                            (default 5,0.03,0.5,0.1,0)\n"
             "  --imu-at S0,S1            aid only from file second S0 to S1 (default: all the run)\n"
+            "  --imu-no-aid              the IMU only detects launch and burnout (--boost-detect); no feed-forward\n"
             "  --osc-g GAMMA[,COMP]      the reference oscillator's g-sensitivity along the thrust axis, ppb/g:\n"
             "                            its frequency follows the specific force of the trajectory (--osc-traj,\n"
             "                            default the --imu one), and COMP of it (0..1, default 0) is fed forward\n"
@@ -365,6 +373,9 @@ int main(int argc, char **argv)
     double imu_lag_ms = 5.0, imu_sf = 0.03, imu_bias = 0.5, imu_noise = 0.1, imu_tilt = 0.0, imu0 = -INFINITY,
            imu1 = INFINITY;
     double boost0 = INFINITY, boost1 = -INFINITY;
+    int boost_detect = 0, imu_no_aid = 0;
+    boost_detect_cfg_t bdc;
+    boost_detect_default(&bdc);
     for (int i = 1; i < argc; i++) {
         int r = src_parse_opt(&so, argc, argv, &i);
         if (r == 1) {
@@ -457,6 +468,24 @@ int main(int argc, char **argv)
                 fprintf(stderr, "gnssrx: --boost-at takes S0,S1\n");
                 return 2;
             }
+        } else if (!strcmp(a, "--boost-detect") && v) {
+            const char *bs = argv[++i];
+            if (!strcmp(bs, "fc")) {
+                boost_detect_fc(&bdc);
+            } else if (strcmp(bs, "default") != 0) {
+                unsigned lms = bdc.launch_ms, bms = bdc.burnout_ms, rms = bdc.rest_ms;
+                if (sscanf(bs, "%f,%u,%u,%f,%f,%u", &bdc.launch_ms2, &lms, &bms, &bdc.hold_s, &bdc.rest_ms2, &rms) < 4) {
+                    fprintf(stderr, "gnssrx: --boost-detect takes default, fc or "
+                                    "LAUNCH_MS2,LAUNCH_MS,BURNOUT_MS,HOLD_S[,REST_MS2,REST_MS]\n");
+                    return 2;
+                }
+                bdc.launch_ms = (uint16_t)lms;
+                bdc.burnout_ms = (uint16_t)bms;
+                bdc.rest_ms = (uint16_t)rms;
+            }
+            boost_detect = 1;
+        } else if (!strcmp(a, "--imu-no-aid")) {
+            imu_no_aid = 1;
         } else if (!strcmp(a, "--iono") && v) {
             double *al = iono_aid.alpha, *be = iono_aid.beta;
             if (sscanf(argv[++i], "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf", &al[0], &al[1], &al[2], &al[3], &be[0], &be[1],
@@ -518,6 +547,15 @@ int main(int argc, char **argv)
     if (fabs(fs / 1000.0 - (double)spms) > 1e-6) {
         fprintf(stderr, "gnssrx: the stream rate must be a whole number of samples per ms\n");
         return 1;
+    }
+    if (boost_detect && !imu_path) {
+        fprintf(stderr, "gnssrx: --boost-detect needs --imu, the trajectory the IMU is emulated from "
+                        "(with --imu-no-aid for loops without the feed-forward)\n");
+        return 2;
+    }
+    if (boost_detect && boost0 < boost1) {
+        fprintf(stderr, "gnssrx: --boost-detect and --boost-at are alternatives\n");
+        return 2;
     }
     if (mkdir(out_dir, 0755) != 0 && errno != EEXIST) {
         fprintf(stderr, "gnssrx: cannot create %s\n", out_dir);
@@ -689,13 +727,18 @@ int main(int argc, char **argv)
     memset(&imu, 0, sizeof(imu));
     rng_t imu_rng;
     rng_seed(&imu_rng, 77);
+    boost_detect_t bd;
+    boost_detect_init(&bd, &bdc);
+    double bd_on[4], bd_burnout[4], bd_off[4];  /* what it detected, file seconds */
+    int bd_n = 0, bd_prev = 0;
+    boost_phase_t bd_phase_prev = BOOST_PAD;
     if (imu_path && imu_load(imu_path, &imu) != 0) {
         fprintf(stderr, "gnssrx: cannot read the trajectory %s\n", imu_path);
         return 1;
     }
     if (imu.n > 0) {
         /* What the aiding was given, at 10 Hz: the true and the emulated acceleration along local up. */
-        fimu = open_csv(out_dir, "imu.csv", "t_s,acc_up_true,acc_up_imu,aiding");
+        fimu = open_csv(out_dir, "imu.csv", "t_s,acc_up_true,acc_up_imu,aiding,boost");
     }
     if (!ftrk || !fobs || !fpvt || !feph) {
         fprintf(stderr, "gnssrx: cannot write into %s\n", out_dir);
@@ -743,6 +786,13 @@ int main(int argc, char **argv)
         if (imu_path) {
             fprintf(fini, "imu = %s\nimu_err = %g,%g,%g,%g,%g\n", imu_path, imu_lag_ms, imu_sf, imu_bias, imu_noise,
                     imu_tilt);
+        }
+        if (imu_no_aid) {
+            fprintf(fini, "imu_aid = 0\n");
+        }
+        if (boost_detect) {
+            fprintf(fini, "boost_detect = %g,%u,%u,%u,%g,%g,%u\n", (double)bdc.launch_ms2, bdc.launch_ms,
+                    bdc.lockout_ms, bdc.burnout_ms, (double)bdc.hold_s, (double)bdc.rest_ms2, bdc.rest_ms);
         }
         if (osc.n > 0) {
             fprintf(fini, "osc_g = %g,%g\nosc_vib = %g,%g,%g,%g\n", osc_gamma_ppb, osc_comp, vib_hz, vib_g, osc.vib0,
@@ -834,7 +884,7 @@ int main(int argc, char **argv)
             }
         }
         const double t_file = so.start_s + (double)t_now / fs;
-        rx_set_boost(rx, t_file >= boost0 && t_file < boost1);
+        int boost_on = t_file >= boost0 && t_file < boost1;
         if (imu.n > 0) {
             /* The IMU as the P4 would see it: imu_lag_ms late, scaled, biased along local up, noisy. */
             int on = t_file >= imu0 && t_file < imu1;
@@ -857,15 +907,35 @@ int main(int argc, char **argv)
             for (int j = 0; j < 3; j++) {
                 a[j] = a[j] * (1.0 + imu_sf) + imu_bias * imu.up[j] + imu_noise * nz[j];
             }
-            rx_set_accel(rx, a, on);
+            if (boost_detect) {
+                /* The P4's launch and burnout detection on the same samples: the specific force along the
+                 * thrust axis (these flights go straight up, so the pad's up). */
+                const double f_ax = a[0] * imu.up[0] + a[1] * imu.up[1] + a[2] * imu.up[2] + G0;
+                boost_on = boost_detect_step(&bd, (float)f_ax);
+                if (boost_on && !bd_prev && bd_n < 4) {
+                    bd_on[bd_n] = t_file;
+                    bd_burnout[bd_n] = bd_off[bd_n] = NAN;
+                    bd_n++;
+                }
+                if (bd.phase == BOOST_HOLD && bd_phase_prev == BOOST_BURN && bd_n > 0) {
+                    bd_burnout[bd_n - 1] = t_file;
+                }
+                if (!boost_on && bd_prev && bd_n > 0) {
+                    bd_off[bd_n - 1] = t_file;
+                }
+                bd_prev = boost_on;
+                bd_phase_prev = bd.phase;
+            }
+            rx_set_accel(rx, a, on && !imu_no_aid);
             if (fimu && (t_now / spms) % 100 == 0) {
                 double at[3];
                 imu_at(&imu, t_file, at);
-                fprintf(fimu, "%.3f,%.4f,%.4f,%d\n", (double)t_now / fs,
+                fprintf(fimu, "%.3f,%.4f,%.4f,%d,%d\n", (double)t_now / fs,
                         at[0] * imu.up[0] + at[1] * imu.up[1] + at[2] * imu.up[2],
-                        a[0] * imu.up[0] + a[1] * imu.up[1] + a[2] * imu.up[2], on);
+                        a[0] * imu.up[0] + a[1] * imu.up[1] + a[2] * imu.up[2], on && !imu_no_aid, boost_on);
             }
         }
+        rx_set_boost(rx, boost_on);
         if (osc.n > 0 && osc_comp != 0.0) {
             /* The P4 feeds the oscillator forward from the IMU's specific force (as late and as
              * scaled as the IMU) through its sensitivity: osc_comp of the true one, or its own
@@ -1072,6 +1142,24 @@ int main(int argc, char **argv)
     if (osc.n > 0 && osc_comp < 0.0) {
         printf("  oscillator: learnt %.3f ppb/g in flight (true %.3f) from %ld fixes over the pad's %ld\n",
                est_gamma * 1e9, osc.gamma * 1e9, est_n, est_npad);
+    }
+    if (boost_detect) {
+        char ip[1024];
+        snprintf(ip, sizeof(ip), "%s/run.ini", out_dir);
+        FILE *fa = fopen(ip, "a");
+        if (bd_n == 0) {
+            printf("  boost detection: no launch detected\n");
+        }
+        for (int k = 0; k < bd_n; k++) {
+            printf("  boost detected: on at %.3f s, burnout at %.3f s, off at %.3f s (file seconds)\n", bd_on[k],
+                   bd_burnout[k], bd_off[k]);
+            if (fa) {
+                fprintf(fa, "boost_detected = %.3f,%.3f,%.3f\n", bd_on[k], bd_burnout[k], bd_off[k]);
+            }
+        }
+        if (fa) {
+            fclose(fa);
+        }
     }
     printf("  integrity gate: %u channels dropped (under the horizon, or out of agreement), %u fixes withheld for "
            "want of redundancy\n", rx->n_gate_drop, rx->n_gate_withheld);

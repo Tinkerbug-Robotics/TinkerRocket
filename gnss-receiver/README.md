@@ -303,7 +303,7 @@ within 0.8 ms of the truth and is within 0.15 ms by 6 s.
 On PSAS's flight (`runs/psas81`; below), with the 50 Hz boost loops:
 - **First fix at T+2.1 s** with a seed, true time or the TeleMetrum's (0.53 s early), against
   T+25.9 s without.
-- **The coarse-time fixes** sit within 2.0 m of the true-time fixes (median; 95 % 7.2 m, worst
+- **The coarse-time fixes** sit within 2.0 m of the true-time fixes (median; 95 % 7.3 m, worst
   16 m, at the join). The time settled at T+25.8 s, moved +530 ms.
 - **The offset reads 2–5 ms high after the join**, smoothing on or off: about 2 m of error that
   follows each satellite's range rate, from the real sky and antenna.
@@ -391,6 +391,7 @@ truth is in the rig's `scenarios/`:
 | `trksim` | One channel's real tracking code (`core/trk`) against that truth, at the level of correlator dumps. It includes the contract's command delay, data bits, and correlated early/prompt/late noise at any C/N0, and runs about 1000× real time. On the IQ files it matches `gnssrx` channel for channel: unlock time within 0.1 s, the same slips. With `--spin`, the rolling antenna's phase and gain; see [Spin and the antenna](#spin-and-the-antenna-milestone-7) |
 | `py/trk_sweep.py` | Sweeps `trksim` over loop profiles, C/N0, satellites and seeds; tabulates the worst satellite |
 | `gnssrx --boost-at S0,S1` | The boost profile over those file seconds, as the flight computer would call it. With `--loops-quiet` and `--loops-boost` (bandwidths), `--cn0-at S:DBHZ` (a level change mid-file) and `run.ini` (what made the run) |
+| `gnssrx --boost-detect default` | The boost profile from the launch the emulated IMU detects to 2 s past the burnout it detects, as the P4 will switch it (`core/trk/boost_detect.c`; `fc` for the flight computer's slower rules). Needs `--imu SCEN.csv`; `--imu-no-aid` keeps the IMU for detection only. `run.ini` records what it detected (`boost_detected`) |
 | `py/boost_track.py` | A run against truth, per satellite: frequency error, unlock time, carrier slips, code error, losses as the bench counts them (no pseudorange for 0.5 s), and the fix |
 | `gnssrx --imu SCEN.csv` | IMU aiding from the scenario's trajectory, with the IMU's faults (`--imu-err`); see [IMU aiding](#imu-aiding-milestone-7) |
 | `py/boost_plots.py` | The figures, drawn like the rig's reports on the bought receivers. `rates` draws each satellite's line-of-sight Doppler rate through the burn on the rig's key, as a grid of runs (signal levels × loop configurations): coloured by constellation where a pseudorange was delivered, magenta where one was over 10 m off the truth, markers on carrier lock. `timeline` draws one run in full: speed, altitude and acceleration (with the IMU's input), per-satellite output, measurements per epoch, pseudorange and range-rate errors, and the fix's errors |
@@ -469,6 +470,28 @@ boost profile is the fallback when there is no aiding. Profiles:
 
 Without aiding, the P4 calls `rx_set_boost()` from the launch and burnout it detects. Narrowing
 back tapers over about 1 s.
+
+**Switching on the launch the IMU detects** (owner decision, 2026-10-02). The P4 can't know when the
+motor lights, so every boost run switches on what its emulated IMU reports (`--boost-detect`;
+`core/trk/boost_detect.c`), from the same samples the feed-forward uses, at 1 kHz:
+- **Launch:** the specific force along the thrust axis over 20 m/s² for 20 ms. The loops widen about
+  20 ms into the burn.
+- **Burnout:** below zero for 50 ms, once 200 ms past launch. The profile holds 2 s more.
+- **A false start,** a knock on the pad, ends after 500 ms within 5 m/s² of 1 g. A rocket in flight
+  never reads that: thrust while it burns, drag (backwards) after.
+- **Not the flight computer's rule.** Its 3 g for 250 ms is slow on purpose, since its false launch
+  must never arm anything. Through those 0.35 s the unaided loops sit narrow at ignition.
+  Satellites keeping carrier from ignition to 2.5 s past burnout, of 14:
+
+  | | Known window (T−5 s) | Flight computer's rule (T+0.35 s) | This trigger (T+0.02 s) |
+  |---|---|---|---|
+  | 50 Hz boost loops, hotshot, 42.6 / 36.4 / 33.4 dB-Hz | 14 / 14 / 12 | 1 / 1 / 0 | 14 / 14 / 12 |
+  | 50 Hz boost loops, traveler, 42.6 to 33.4 dB-Hz | 14 | 4–5 | 14 |
+  | IMU + 20 Hz loops, both flights, to 31.4 dB-Hz | 14 | 14 | 14 |
+
+  The aided loops barely notice: the feed-forward runs from the pad and never waits for a trigger.
+- **On PSAS** the drogue's ejection after apogee trips it too, and the loops widen for 2.5 s. That
+  is harmless, and the shock is a dynamic event of its own.
 
 ### Results through the boost
 
@@ -557,16 +580,16 @@ manages about 80 Hz/s. `TrkBoost.ImuAidingCarriesTheBurnout` shows all three cas
 
 | Profile | Pull-in FLL / PLL / DLL | Locked FLL / PLL / DLL | FLL block | When |
 |---|---|---|---|---|
-| aided boost | 10 / 20 / 2 Hz | — / 20 / 0.5 Hz | 2 ms | with the IMU: from T−5 s to 2 s after burnout |
+| aided boost | 10 / 20 / 2 Hz | — / 20 / 0.5 Hz | 2 ms | with the IMU: from launch to 2 s after burnout |
 
 **The four configurations compared.** Every comparison below runs these:
 
 | Configuration | Pull-in FLL / PLL / DLL | Locked FLL / PLL / DLL | IMU feed-forward | When |
 |---|---|---|---|---|
 | quiet loops | 10 / 15 / 2 Hz | — / 10 / 0.25 Hz | none | throughout |
-| 50 Hz boost loops (the fallback) | 10 / 50 / 2 Hz | 5 / 50 / 1 Hz | none | T−5 s to 2 s past burnout |
+| 50 Hz boost loops (the fallback) | 10 / 50 / 2 Hz | 5 / 50 / 1 Hz | none | launch to 2 s past burnout |
 | quiet loops + IMU | 10 / 15 / 2 Hz | — / 10 / 0.25 Hz | throughout | throughout |
-| IMU + 20 Hz loops (the design) | 10 / 20 / 2 Hz | — / 20 / 0.5 Hz | throughout | T−5 s to 2 s past burnout |
+| IMU + 20 Hz loops (the design) | 10 / 20 / 2 Hz | — / 20 / 0.5 Hz | throughout | launch to 2 s past burnout |
 
 - **The loops.** The carrier loop is a 3rd-order Costas PLL with a 2nd-order FLL to help it. The
   code loop is a carrier-aided 1st-order DLL (`core/include/gnss/trk.h`).
@@ -577,30 +600,31 @@ manages about 80 Hz/s. `TrkBoost.ImuAidingCarriesTheBurnout` shows all three cas
   - The fallback buys the burnout with noise.
   - The design lets the IMU predict the dynamics, and keeps the noise of a 20 Hz loop.
 
-**What aiding buys, in short.** The 40 runs were repeated on 2026-10-01 with today's receiver
-(`runs/aid`). They reproduce the tables below, except one cell, now updated.
+**What aiding buys, in short.** The 40 runs (`runs/aid`), rerun 2026-10-02 with the boost profiles
+switched on the launch and burnout the IMU detects:
 - **Sensitivity:** carrier on every satellite through both burns down to 31.4 dB-Hz. Without
   aiding, the 50 Hz boost loops manage that only to 36.4 (hotshot) and 33.4 (traveler): aiding is
-  worth 5 and 2 dB. At 31.4 dB-Hz the unaided loops keep 5 and 4 satellites of 14.
-- **Vertical velocity:** three times better from 42.6 to 33.4 dB-Hz, four to five times at 31.4,
-  eleven at 29.3.
-- **Height:** at 31.4 dB-Hz the worst error halves on the hotshot (2.6 → 1.2 m) and falls fivefold
-  on the traveler (6.0 → 1.2 m).
+  worth 5 and 2 dB. At 31.4 dB-Hz the unaided loops keep 5 and 3 satellites of 14.
+- **Vertical velocity:** about three times better from 42.6 to 33.4 dB-Hz, 3.5 to 4 times at 31.4,
+  10 to 13 times at 29.3.
+- **Height:** at 31.4 dB-Hz the worst error falls fourfold on both flights (4.5 → 1.1 m and
+  4.2 → 1.1 m).
 - **Narrow loops need both:** the quiet loops without aiding lose carrier on every satellite at
   every level, and aiding alone doesn't rescue them; the IMU's residual needs 20 Hz loops.
 - **Measurement integrity** (a delivered pseudorange over 10 m off the truth is wrong):
-  - The aided design delivers nothing over 1.6 m down to 31.4 dB-Hz on both flights.
-  - At 29.3 dB-Hz, 5 and 7 satellites go 10–18 m off. Every one had lost carrier lock first, and
+  - The aided design delivers nothing over 1.4 m down to 31.4 dB-Hz on both flights.
+  - At 29.3 dB-Hz, 3 and 5 satellites go 10–20 m off. Every one had lost carrier lock first, and
     unsmoothed code at 27–31 dB-Hz is that noisy.
-  - The 50 Hz loops stay clean to 33.4 dB-Hz. They go over on 1 and 7 satellites at 31.4, and on
-    13 and 14 at 29.3.
+  - The 50 Hz loops stay clean to 36.4 dB-Hz on the hotshot (one satellite reaches 11 m at 33.4)
+    and to 33.4 on the traveler. They go over on 2 and 5 satellites at 31.4, and on all 14 at 29.3.
   - On the SignalSim traveler, only the quiet loops without aiding go over.
 - **Figures** (`runs/aid/fig`):
   - `aid_summary.png`: satellites kept, velocity, height and unlocked time, against C/N0;
   - `aid_velocity_35.png`: the velocity error through each burn at 33.4 dB-Hz;
   - `rates_hotshot.png` and `rates_traveler.png`: per satellite.
 
-**Results through the boost** (`runs/m7c`; figures from `py/boost_plots.py`). The set-up is the
+**Results through the boost** (`runs/aid`, the boost detected by the IMU; figures from
+`py/boost_plots.py`). The set-up is the
 one above: the IQ chain, the signal stepped down 10 s before liftoff, C/N0 as our receiver measures
 it. Each cell gives the satellites (of 14) whose PLL let go between ignition and 2.5 s past
 burnout, with the unlocked satellite-seconds. No run lost a pseudorange, and the fix never gapped.
@@ -611,9 +635,9 @@ Hotshot:
 |---|---|---|---|---|
 | 42.6 | 14 (27 s) | 0 | 3 (1.0 s) | 0 |
 | 36.4 | 14 (39 s) | 0 | 3 (1.2 s) | 0 |
-| 33.4 | 14 (53 s) | 2 (0.7 s) | 5 (9.8 s) | 0 |
-| 31.4 | 14 (68 s) | 9 (6.0 s) | 8 (11 s) | 0 |
-| 29.3 | 14 (77 s) | 14 (45 s) | 10 (24 s) | 7 (9.4 s) |
+| 33.4 | 14 (53 s) | 2 (0.6 s) | 5 (9.8 s) | 0 |
+| 31.4 | 14 (68 s) | 9 (7.9 s) | 8 (11 s) | 0 |
+| 29.3 | 14 (77 s) | 14 (48 s) | 10 (24 s) | 5 (8.5 s) |
 
 Traveler:
 
@@ -622,22 +646,22 @@ Traveler:
 | 42.6 | 14 (13 s) | 0 | 0 | 0 |
 | 36.4 | 14 (20 s) | 0 | 0 | 0 |
 | 33.4 | 14 (42 s) | 0 | 2 (3.2 s) | 0 |
-| 31.4 | 14 (46 s) | 10 (9.8 s) | 2 (3.5 s) | 0 |
-| 29.3 | 14 (180 s) | 14 (121 s) | 6 (12 s) | 7 (19 s) |
+| 31.4 | 14 (46 s) | 11 (9.1 s) | 2 (3.5 s) | 0 |
+| 29.3 | 14 (180 s) | 14 (127 s) | 6 (12 s) | 9 (27 s) |
 
 The fix through the same window, 50 Hz boost loops against IMU + 20 Hz loops:
 
 | C/N0 (measured) | Hotshot: vertical velocity rms (max), m/s | Hotshot: height error max | Traveler: vertical velocity rms (max) | Traveler: height error max |
 |---|---|---|---|---|
 | 42.6 | 0.22 (1.0) → 0.07 (0.22) | 0.7 → 0.7 m | 0.21 (0.59) → 0.08 (0.22) | 0.5 → 0.5 m |
-| 36.4 | 0.38 (0.91) → 0.13 (0.39) | 0.7 → 0.6 m | 0.43 (1.2) → 0.16 (0.46) | 0.5 → 0.6 m |
-| 33.4 | 0.67 (2.0) → 0.23 (0.74) | 1.4 → 1.1 m | 0.69 (1.9) → 0.24 (0.79) | 0.8 → 1.1 m |
-| 31.4 | 1.5 (5.3) → 0.32 (0.89) | 2.6 → 1.2 m | 1.2 (4.9) → 0.31 (0.85) | 6.0 → 1.2 m |
-| 29.3 | 4.7 (17) → 0.42 (1.3) | 15.5 → 5.0 m | 4.6 (18) → 0.39 (1.2) | 24.1 → 5.4 m |
+| 36.4 | 0.39 (0.96) → 0.13 (0.39) | 0.6 → 0.6 m | 0.43 (1.2) → 0.17 (0.47) | 0.6 → 0.6 m |
+| 33.4 | 0.77 (3.5) → 0.23 (0.70) | 0.8 → 0.9 m | 0.71 (2.0) → 0.25 (0.77) | 0.9 → 0.9 m |
+| 31.4 | 1.1 (3.9) → 0.31 (0.80) | 4.5 → 1.1 m | 1.1 (4.0) → 0.28 (0.77) | 4.2 → 1.1 m |
+| 29.3 | 5.0 (20) → 0.40 (1.5) | 19.0 → 3.9 m | 4.6 (22) → 0.46 (2.2) | 18.0 → 9.6 m |
 
 So aiding with 20 Hz loops keeps carrier phase on every satellite through both burns down to
 31.4 dB-Hz, where the unaided boost profile holds only to 36.4 (hotshot) and 33.4 (traveler).
-The vertical velocity is three to twelve times better. Both columns use the weighted, tested fix
+The vertical velocity is three to thirteen times better. Both columns use the weighted, tested fix
 ([The fix's weights and residual test](#the-fixs-weights-and-residual-test)); velocities the fix's
 own test rejected are not counted.
 
@@ -648,8 +672,8 @@ own test rejected are not counted.
 | Ideal | 0 | 0 |
 | 5 ms, 3 %, 0.5 m/s², 0.1 m/s² (the default) | 0 | 0 |
 | The default, plus a 2° attitude error | 0 | 0 |
-| The default, plus a 5° attitude error | 3 (2.7 s), all back within 1 s | 0 |
-| 20 ms, 10 %, 2 m/s², 0.5 m/s² | 9 (9.7 s), 2 not back | 4 (4.8 s), 1 not back |
+| The default, plus a 5° attitude error | 2 (0.9 s), all back within 1 s | 0 |
+| 20 ms, 10 %, 2 m/s², 0.5 m/s² | 9 (11.5 s), 3 not back | 5 (5.8 s), all back |
 
 What the P4 needs from the board:
 - the IMU's samples stamped on the sample counter, with latency under about 5 ms;
@@ -668,10 +692,10 @@ past burnout:
 | E13 | 39.6 | 3.0 s, not back | 1.1 s | 0 | 0 |
 | E29 | 36.5 | 0.9 s | 1.0 s | 0.3 s | 0 |
 | E27 | 35.2 | 0.9 s | 0.9 s | 0 | 0 |
-| E21 | 34.0 | 0.9 s | 1.1 s | 0.3 s | 0 |
+| E21 | 34.0 | 0.9 s | 1.0 s | 0.3 s | 0 |
 | E19 | 32.0 | 3.1 s | 2.5 s | 0.6 s | 1.2 s |
-| E07 | 31.6 | 5.5 s, not back | 5.7 s | 3.8 s | 5.3 s |
-| E33 | 30.6 | 9.9 s | 10.0 s | 7.4 s | lost |
+| E07 | 31.6 | 5.5 s, not back | 6.1 s | 3.8 s | 4.2 s |
+| E33 | 30.6 | 9.9 s | 8.5 s | 7.4 s | 9.7 s |
 
 - **The 50 Hz fallback cannot help Galileo.** A pilot's 4 ms dumps and the three-dump command
   delay cap its loops at 12.5 Hz, so every Galileo satellite lets go at burnout for about a
@@ -680,7 +704,7 @@ past burnout:
   and burnout. The three weak ones flicker on the pad already.
 - **GPS** holds carrier on all 8 satellites in every configuration but the quiet loops.
 - **The fix**, ignition to 2.5 s past burnout, weighted and tested:
-  - The vertical velocity error is 0.15 m/s rms with IMU + 20 Hz loops, against 0.21 with the
+  - The vertical velocity error is 0.15 m/s rms with IMU + 20 Hz loops, against 0.22 with the
     boost profile and 3.1 with quiet loops.
   - The height error peaks at 0.3 m. Unweighted, it reached 2.9 m, where one weak Galileo
     satellite's code ran 7.5 m off.
@@ -720,24 +744,24 @@ delivered a pseudorange that far off.
 | Traveler, +6 dB | 9/13 · 1/7 · 7/8 | GPS 5, GAL 1, BDS 3 | 13/13 · 8/8 | none | 13/13 · 6/8 | none |
 | Traveler, 0 dB | 1/13 · 0/2 · 7/7 | GPS 4, BDS 3 | 13/13 · 7/8 | none | 13/13 · 8/8 | none |
 | Traveler, −3 dB | 1/12 · 0/1 · 6/9 | GPS 3, BDS 6 | 13/13 · 6/8 | none | 13/13 · 8/8 | none |
-| Traveler, −6 dB | 1/13 · – · 1/7 | GPS 3 | 13/13 · 4/8 | none | 13/13 · 3/8 | none |
-| Traveler, −9 dB | 0/6 · – · 0/1 | none | 11/13 · 0/8 | GPS 1 | 12/13 · 0/8 | GPS 8 |
+| Traveler, −6 dB | 1/13 · – · 1/7 | GPS 3 | 13/13 · 4/8 | none | 13/13 · 2/8 | none |
+| Traveler, −9 dB | 0/6 · – · 0/1 | none | 10/13 · 0/8 | none | 9/13 · 0/8 | GPS 8 |
 | Hotshot, +12 dB | 5/13 · 0/7 · 6/6 | GPS 2, BDS 3 | 13/13 · 8/8 | none | 13/13 · 8/8 | none |
 | Hotshot, +6 dB | 4/13 · 0/6 · 6/6 | GPS 1, GAL 1, BDS 2 | 13/13 · 8/8 | none | 13/13 · 8/8 | none |
 | Hotshot, 0 dB | 0/13 · 0/4 · 5/6 | GPS 2, GAL 1, BDS 2 | 13/13 · 8/8 | none | 13/13 · 8/8 | none |
 | Hotshot, −3 dB | not flown | | 13/13 · 8/8 | none | 13/13 · 8/8 | none |
-| Hotshot, −6 dB | 0/9 · – · 0/8 | none | 13/13 · 6/8 | none | 13/13 · 3/8 | none |
-| Hotshot, −9 dB | not flown | | 12/13 · 0/8 | GPS 2 | 11/13 · 0/8 | GPS 2 |
+| Hotshot, −6 dB | 0/9 · – · 0/8 | none | 13/13 · 4/8 | none | 13/13 · 3/8 | none |
+| Hotshot, −9 dB | not flown | | 13/13 · 0/8 | none | 13/13 · 0/8 | GPS 1 |
 
 - **Every GPS satellite through both burns to −6 dB,** aided or on the 50 Hz loops. The PX1105R
   keeps 11 of 12 at best on the traveler and 5 of 13 on the hotshot, and from 0 dB down 1 and none.
-- **No wrong pseudorange from either to −6 dB.** The PX1105R delivered them on 3–9 satellites at
-  every level where it still held any. Its strength is BeiDou B1I, which it keeps where it loses
+- **No wrong pseudorange from either to −6 dB,** and none from the aided design at −9. The PX1105R
+  delivered them on 3–9 satellites at every level where it still held any. Its strength is BeiDou B1I, which it keeps where it loses
   GPS.
 - **Aiding shows here as on our own files.** Count the satellites that never lost carrier from
   ignition to 2.5 s past burnout:
-  - both configurations keep all 13 GPS satellites to −6 dB;
-  - at −9 dB (31 dB-Hz) the aided design keeps 11 and 10, the 50 Hz loops none and 3;
+  - both configurations keep all 13 GPS satellites to −3 dB, and 12 or 13 at −6;
+  - at −9 dB (31 dB-Hz) the aided design keeps 10 and 11, the 50 Hz loops none and 2;
   - only the aided design carries Galileo through either burn: 6–8 of 8 down to −3 dB, against
     none.
 - **What differs:**
@@ -756,7 +780,7 @@ SC=.../tools/gnss-cocom/sdr/scenarios
 awk -F, -v OFS=, '$1 >= 420 { $1 = sprintf("%.1f", $1 - 420); print }' $SC/hotshot_pad600.csv \
     > runs/wide/hotshot_pad180.csv
 build/host/gnssrx signalsim_hotshot_all_2026_45_w_p180.C8 --start 80 --dur 110 \
-    --cn0 41.0 --cn0-at 170:35.3 --imu runs/wide/hotshot_pad180.csv --boost-at 175,186 \
+    --cn0 41.0 --cn0-at 170:35.3 --imu runs/wide/hotshot_pad180.csv --boost-detect default \
     --loops-boost 10,20,2/0,20,0.5:2 --out runs/wide/BA_hot_m6
 ```
 
@@ -789,17 +813,17 @@ Runs are in `runs/osc`; the figure is `runs/osc/fig/osc_hot_33.png`.
 | Sensitivity | Hotshot 45 | Traveler 45 | Hotshot 33 | Traveler 33 |
 |---|---|---|---|---|
 | 0 or 0.07 ppb/g (typical: thrust on Y or Z) | 0 | 0 | 0 | 0 |
-| 0.4 ppb/g (thrust on X) | 0 | 0 | 14, 2 not back | 6 |
-| 1 ppb/g | 14 | 14 | 14 | 14, 2 not back |
-| 2 ppb/g (the bound) | 14 | 14 | 14, 3 not back | 14 |
+| 0.4 ppb/g (thrust on X) | 0 | 0 | 14, 2 not back | 7 |
+| 1 ppb/g | 14 | 14 | 14 | 14, 1 not back |
+| 2 ppb/g (the bound) | 14 | 14 | 14, 5 not back | 14 |
 | 2 ppb/g, fed forward exactly | 0 | 0 | 0 | 0 |
-| 2 ppb/g, fed forward at 80 % | 0 | 0 | 11 | 4 |
-| 2 ppb/g, fed forward at 50 % | 14 | 14 | 14 | 14 |
-| 2 ppb/g, learnt in flight | 0 | 0 | 9, at ignition | 1 |
+| 2 ppb/g, fed forward at 80 % | 0 | 0 | 12 | 2 |
+| 2 ppb/g, fed forward at 50 % | 14 | 14 | 14, 2 not back | 14 |
+| 2 ppb/g, learnt in flight | 0 | 0 | 8, at ignition | 12, at ignition |
 | 0.4 or 1 ppb/g, learnt in flight | — | — | 0 | 0 |
 
 - **The 50 Hz fallback without aiding** loses nothing at 45 dB-Hz, even at 2 ppb/g. At 33 dB-Hz it
-  is at its own limit, losing 9–10 of 14 with no oscillator at all.
+  is at its own limit, losing 9–11 of 14 with no oscillator at all.
 - **Vibration does nothing.** An 800 Hz tone of 30 g peak (Rolly Polly V's boost) through 2 ppb/g
   swings the carrier 95 Hz, 0.12 rad. Nothing was lost, aided or on the fallback.
 
@@ -813,8 +837,9 @@ state takes it.
   within 0.5 s of ignition: 2.000 for 2 ppb/g at 45 dB-Hz, 0.066 for 0.07, and within 3.5 % at
   33 dB-Hz.
 - `--osc-g GAMMA,-1` emulates the P4 doing this. It carries burnout completely.
-- At 33 dB-Hz, a hotshot-like ignition (35 g/s) at 2 ppb/g still costs carrier before the
-  estimate exists.
+- At 33 dB-Hz an ignition at 2 ppb/g still costs carrier before the estimate exists, 0.3–0.5 s
+  in: 8 of 14 on the hotshot and 12 on the traveler. On the traveler's softer start the trigger
+  fires 0.12 s in, and the loops spend that narrow.
 
 **Findings:**
 - **The TCXO's X axis must stay across the thrust axis** (the board's layout rule). At 33 dB-Hz it
@@ -920,8 +945,15 @@ file names imply:
 
 `PSAS_L12_cond_g81.C8` joins them at 81 ms + 296 samples of zeros, and the loops coast through.
 
-**What our receiver does with it** (`gnssrx PSAS_L12_cond_g81.C8 --if 0 --preload-gps --acq-interval 1`;
-`--if 0` because the 4 MHz-wide band would alias at the plan's IF):
+**What our receiver does with it** (`gnssrx PSAS_L12_cond_g81.C8 --if 0 --preload-gps --acq-interval 1
+--imu psas_l12_accel.csv --imu-no-aid --boost-detect 20,20,50,30,5,500`; `--if 0` because the 4 MHz-wide
+band would alias at the plan's IF):
+- **The boost profile holds to the recording's end, on PSAS only.** The IMU's trigger detects its
+  launch 0.02 s in and its burnout at T+5.9 s, but the profile holds 30 s past burnout, not the
+  design's 2. Its antenna saw nothing on the pad, so the receiver starts from scratch mid-burn,
+  which a flight with pad data never does. With the 2 s hold its unaided quiet loops can't hold the
+  coast, and the unseeded run never reads a time. On our own flights, which track from the pad,
+  every configuration holds the coast on its quiet loops.
 - **On the pad the antenna saw almost nothing.** A 200 ms search reads 1.4–2.8 against a noise
   floor of 1.35. At liftoff every satellite comes up about 10 dB within a second.
 - **All 9 visible satellites are acquired by T+1–2 s,** in the middle of the burn.
@@ -1043,7 +1075,7 @@ thresholds, and the weak signal crosses them less often. No stage after the ADC 
   integrity gate (see [Seeded starts](#seeded-starts-and-coarse-time)) it reports none. Only
   satellites above the horizon are searched, and their captured channels never agree.
 - **One notch finds the carrier unaided** (−416.7 kHz) and gives back what the offline float
-  excision did: 9 satellites against 10, 32.8 dB-Hz against 33.5, all 327 fixes, 3.5 m (median)
+  excision did: 9 satellites against 10, 32.8 dB-Hz against 33.5, all 325 fixes, 3.5 m (median)
   from those fixes.
 - **Excision:** 10 satellites, 33.2 dB-Hz.
 
