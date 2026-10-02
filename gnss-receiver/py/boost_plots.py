@@ -73,10 +73,14 @@ class Run:
     def __init__(self, path: Path):
         self.path = path
         self.ini = {}
+        spans = []  # (on, off) for each span the boost profile was on; the gated profile logs two
         for line in (path / "run.ini").read_text().splitlines():
             if "=" in line:
                 k, v = line.split("=", 1)
                 self.ini[k.strip()] = v.strip()
+                if k.strip() == "boost_detected":
+                    on, _, off = (float(x) for x in v.split(","))
+                    spans.append((on, off))
         self.start = float(self.ini["start_s"])
         self.trk = read_csv(path / "trk.csv")
         self.obs = read_csv(path / "obs.csv")
@@ -92,6 +96,7 @@ class Run:
         d = self.ini.get("boost_detected")  # on, burnout, off: what the emulated IMU detected
         self.boost = (tuple(float(x) for x in b.split(",")) if b else
                       tuple(float(x) for x in d.split(","))[0::2] if d else None)
+        self.boost_spans = [self.boost] if b else spans
 
     def status(self, prn: int, keys: np.ndarray) -> np.ndarray:
         """Per epoch: 2 carrier-locked observables, 1 code and Doppler only, 0 nothing."""
@@ -154,26 +159,54 @@ def segments(x: np.ndarray, cat: np.ndarray):
 
 # ------------------------------------------------------------------------------------------- rates
 
+def file_tropo(run: Run) -> float | None:
+    """Where the troposphere the run's file carries stops (m; the manifest's tropo_top_m), None for none."""
+    try:
+        m = iqio.manifest(Path(run.ini.get("source", "")).name)
+    except KeyError:
+        return None
+    return None if m.tropo == "none" else m.tropo_top_m
+
+
+def pr_truth(run: Run, tr: Truth, prn: int, k: np.ndarray, tropo: float | None) -> np.ndarray:
+    """What a perfect receiver's pseudorange would read at epoch keys k, less its clock: the geometric range,
+    the troposphere where the file carries one (up to its ceiling, tropo), less the satellite's clock (which
+    drifts by metres over a flight). What stays is constant per satellite (the ionosphere, the generator's
+    offsets)."""
+    L = tr.los(int(prn), k, run.t0)
+    ref = L[:, 0] - truth.C * truth.sat_clock(tr.nav, int(prn), run.t0 + k / 10.0)
+    if tropo is not None:
+        lat, h = tr.traj.lat_h(k / 10.0)
+        ref = ref + truth.tropo_saastamoinen(lat, h, np.radians(L[:, 3]), tropo)
+    return ref
+
+
+def tropo_rate(run: Run, tr: Truth, prn: int, k: np.ndarray, tropo: float | None) -> np.ndarray:
+    """The troposphere's part of the range rate (m/s) at epoch keys k: its delay thins as the rocket climbs.
+    Below a ceiling only; the step there is the pseudorange's, not a rate."""
+    if tropo is None:
+        return np.zeros(k.size)
+    t = k / 10.0
+    lat, h = tr.traj.lat_h(t)
+    el = np.radians(tr.los(int(prn), k, run.t0)[:, 3])
+    up = 0.5 * (np.interp(t + 0.05, tr.traj.t, tr.traj.h) - np.interp(t - 0.05, tr.traj.t, tr.traj.h)) / 0.05
+    g = 0.5 * (truth.tropo_saastamoinen(lat, np.minimum(h + 1.0, tropo), el, tropo) -
+               truth.tropo_saastamoinen(lat, np.minimum(h - 1.0, tropo), el, tropo))
+    return np.where(h < tropo, g * up, 0.0)
+
+
 def judged(run: Run, tr: Truth, liftoff: float, t_end: float) -> dict[int, dict[int, float]]:
     """Each delivered pseudorange's error (m), per satellite and epoch key, from 30 s before liftoff to t_end:
     the smoothed pseudorange less the geometric range (and the troposphere where the file carries one), each
     satellite's own pre-launch level taken out, then the per-epoch median over satellites (the receiver
     clock). A satellite with no pre-launch level is not judged."""
-    try:
-        tropo = iqio.manifest(Path(run.ini.get("source", "")).name).tropo != "none"
-    except KeyError:
-        tropo = False
+    tropo = file_tropo(run)
     o, tf = run.obs, run.tf_obs
     w = (tf >= liftoff - 30.0) & (tf <= t_end + 0.05) & (o["prn"] < 200)
     prn, k, x = o["prn"][w].astype(int), key(tf[w]), o["pr_m"][w].astype(float)
     for p in np.unique(prn):
         m = prn == p
-        L = tr.los(int(p), k[m], run.t0)
-        ref = L[:, 0]
-        if tropo:
-            lat, h = tr.traj.lat_h(k[m] / 10.0)
-            ref = ref + truth.tropo_saastamoinen(lat, h, np.radians(L[:, 3]))
-        x[m] -= ref
+        x[m] -= pr_truth(run, tr, p, k[m], tropo)
         pre = m & (k < key(liftoff - 1.0))
         x[m] -= np.median(x[pre]) if pre.any() else np.nan
     out: dict[int, dict[int, float]] = {}
@@ -186,13 +219,14 @@ def judged(run: Run, tr: Truth, liftoff: float, t_end: float) -> dict[int, dict[
     return out
 
 
-def panel_rates(ax, run: Run, tr: Truth, liftoff: float, burnout: float, t_end: float, label: str):
+def panel_rates(ax, run: Run, tr: Truth, liftoff: float, burnout: float, t_end: float, label: str,
+                count_after: float = 1.0):
     """One run on the rig's key: solid where a pseudorange was delivered, a pale tint where the channel
     held lock but delivered nothing, grey where it delivered nothing; magenta where what it delivered
     was over WRONG_M off the truth; markers on carrier lock."""
     keys = np.arange(key(liftoff - 0.5), key(t_end) + 1)
     x = keys / 10.0 - liftoff
-    jb = min(int(np.searchsorted(keys, key(burnout + 1.0))), keys.size - 1)
+    jb = min(int(np.searchsorted(keys, key(burnout + count_after))), keys.size - 1)
     after = keys >= key(liftoff)
     err = judged(run, tr, liftoff, t_end)
     n, locked_b, raw_b, bad = {}, {}, {}, {}
@@ -237,6 +271,15 @@ def panel_rates(ax, run: Run, tr: Truth, liftoff: float, burnout: float, t_end: 
     yl = ax.get_ylim()
     ax.text(burnout - liftoff - 0.08, yl[0] + 0.03 * (yl[1] - yl[0]), "burnout", ha="right", va="bottom",
             fontsize=8, color="#555")
+    top = file_tropo(run)
+    if top is not None and top < 4e4:
+        # Where the file's troposphere stops (SignalSim's 10 km): every satellite's code steps there.
+        th = keys / 10.0
+        up = np.flatnonzero(np.diff((np.interp(th, tr.traj.t, tr.traj.h) > top).astype(int)) != 0)
+        for j in up:
+            ax.axvline(th[j + 1] - liftoff, color="#1a7f8a", ls="-.", lw=0.9)
+            ax.text(th[j + 1] - liftoff + 0.08, yl[0] + 0.03 * (yl[1] - yl[0]), "10 km", ha="left", va="bottom",
+                    fontsize=8, color="#1a7f8a")
     sys_list = [s for s in "GEC" if s in n]
     pad = {}
     for s in sys_list:
@@ -254,7 +297,7 @@ def panel_rates(ax, run: Run, tr: Truth, liftoff: float, burnout: float, t_end: 
     fix_txt = f"fix every epoch" if gap.size and gap.max() < 0.15 else (
         f"longest fix gap {gap.max():.1f} s" if gap.size else "no fix")
     ax.set_title(f"{label}\npad C/N0 {pad_txt} dB-Hz (median, measured)\n"
-                 f"at burnout+1 s: locked {locked_txt};  raw {raw_txt}\n"
+                 f"at burnout+{count_after:g} s: locked {locked_txt};  raw {raw_txt}\n"
                  f"over {WRONG_M:.0f} m off while delivered: {bad_txt}\n"
                  f"PLL unlocked {unl:.1f} sat-s after ignition; {len(lost)} not back by T+{t_end - liftoff:.1f}; "
                  f"{fix_txt}", fontsize=8.4)
@@ -281,7 +324,7 @@ def cmd_rates(a) -> int:
             run = Run(p)
             systems |= {sys_of(q) for q in run.prns}
             label = clab[c] if len(rows) == 1 else f"{clab[c]}  ·  {rlab[r]}"
-            panel_rates(ax, run, tr, a.liftoff, a.burnout, t_end, textwrap.fill(label, 78))
+            panel_rates(ax, run, tr, a.liftoff, a.burnout, t_end, textwrap.fill(label, 78), a.count_after)
             if j == 0:
                 ax.set_ylabel("line-of-sight Doppler rate, Hz/s")
             if i == len(rows) - 1:
@@ -303,11 +346,12 @@ def cmd_rates(a) -> int:
     H = fig.get_figheight()
     fig.legend(handles=handles, loc="lower left", ncol=4, frameon=False, fontsize=8.5, bbox_to_anchor=(0.01, 0.0))
     note = (a.note + " " if a.note else "") + (
-        "Pseudorange errors against the truth: the smoothed pseudorange less the geometric range (and the "
-        "troposphere where the file carries one), each satellite's pre-launch level and the per-epoch median over "
-        "satellites (the receiver clock) taken out.")
-    fig.text(0.01, 0.78 / H, textwrap.fill(note, 230), fontsize=8.5, color="#555", va="bottom")
-    fig.tight_layout(rect=(0, 1.2 / H, 1, 1 - 0.6 / H))
+        "Pseudorange errors against the truth (the geometric range, the troposphere where the file carries one, and "
+        "the satellite's clock), each satellite's pre-launch level and the per-epoch median over satellites (the "
+        "receiver clock) taken out.")
+    note = textwrap.fill(note, 58 * len(cols))
+    fig.text(0.01, 0.78 / H, note, fontsize=8.5, color="#555", va="bottom")
+    fig.tight_layout(rect=(0, (0.95 + 0.145 * (note.count("\n") + 1)) / H, 1, 1 - 0.6 / H))
     fig.savefig(a.o, dpi=a.dpi)
     print(f"wrote {a.o}")
     return 0
@@ -320,10 +364,13 @@ def errors(run: Run, tr: Truth, liftoff: float):
     o, tf = run.obs, run.tf_obs
     rng = np.full(tf.size, np.nan)
     dop = np.full(tf.size, np.nan)
+    tropo = file_tropo(run)
     for p in np.unique(o["prn"]).astype(int):
+        if p >= 200:  # no BeiDou orbits here
+            continue
         m = o["prn"] == p
-        L = tr.los(p, key(tf[m]), run.t0)
-        rng[m], dop[m] = L[:, 0], L[:, 1]
+        rng[m] = pr_truth(run, tr, p, key(tf[m]), tropo)
+        dop[m] = tr.los(p, key(tf[m]), run.t0)[:, 1] - tropo_rate(run, tr, p, key(tf[m]), tropo) / LAM
     out = {}
     for name, x in (("code", o["pr_m"] - rng), ("raw", o["pr_raw_m"] - rng), ("rate", -(o["dop_hz"] - dop) * LAM)):
         x = x.copy()
@@ -354,10 +401,17 @@ def cmd_timeline(a) -> int:
     fig, axs = plt.subplots(len(rows), 2, figsize=(15, 2.0 * sum(hr[r] for r in rows) + 0.8),
                             gridspec_kw={"height_ratios": [hr[r] for r in rows], "width_ratios": [1.5, 1]},
                             sharex="col")
-    zoom = (-2.0, B - L0 + a.after)
+    zoom = tuple(float(v) for v in a.zoom.split(",")) if a.zoom else (-2.0, B - L0 + a.after)
     full = (t_all[0] - L0, t_all[-1] - L0)
     xs = t_all - L0
     cocom = (speed > COCOM_V) | (h_true > COCOM_H)
+    # Where the flight crosses the height the file's troposphere stops at (SignalSim's 10 km): every
+    # satellite's code steps there, and the carrier slips with it.
+    top = file_tropo(run)
+    top_cross = []
+    if top is not None and top < 4e4:
+        above = h_true > top
+        top_cross = list(t_all[1:][np.diff(above.astype(int)) != 0])
     R = enu_basis(float(tr.traj.lat[0]), float(tr.traj.lon[0]))
     pos = np.stack([run.pvt["x"], run.pvt["y"], run.pvt["z"]], axis=-1)
     vel = np.stack([run.pvt["vx"], run.pvt["vy"], run.pvt["vz"]], axis=-1)
@@ -382,6 +436,8 @@ def cmd_timeline(a) -> int:
                     on = False
             ax.axvline(0.0, color="#555", ls=":", lw=0.8)
             ax.axvline(B - L0, color="#555", ls=":", lw=0.8)
+            for tc in top_cross:
+                ax.axvline(tc - L0, color="#1a7f8a", ls="-.", lw=0.8)
         ax = A["speed"]
         ax.plot(xs, speed, color="#222", lw=1.2, label="true speed")
         ax.plot(xp[~vbad], np.linalg.norm(vel[~vbad], axis=1), ".", ms=1.6, color=SYS_COLOR["G"],
@@ -398,27 +454,35 @@ def cmd_timeline(a) -> int:
             ti = run.imu["t_s"] + run.start - L0
             on = run.imu["aiding"] > 0
             ax.plot(ti[on], run.imu["acc_up_imu"][on], ".", ms=1.5, color="#e08a00", label="IMU aiding input (emulated)")
-        if run.boost:
-            ax.axvspan(run.boost[0] - L0, run.boost[1] - L0, color="#e8f1fb", lw=0, zorder=0,
-                       label="boost loop profile")
+        for j, (on, off) in enumerate(run.boost_spans):
+            off = off if np.isfinite(off) else t_all[-1]
+            ax.axvspan(on - L0, off - L0, color="#e8f1fb", lw=0, zorder=0, label="boost loop profile" if j == 0 else None)
         ax.set_ylabel("vertical accel., m/s²")
-        # Per-satellite output.
+        # Per-satellite output, on the rig's key: solid where a pseudorange was delivered, magenta where it
+        # was over WRONG_M off the truth.
         ax = A["sats"]
+        ks = key(np.arange(run.tf_trk.min(), run.tf_trk.max() + 0.05, 0.1))
+        xk = ks / 10.0 - L0
         for i, p in enumerate(prns):
-            ks = key(np.arange(run.tf_trk.min(), run.tf_trk.max() + 0.05, 0.1))
             st = run.status(p, ks)
-            xk = ks / 10.0 - L0
-            for cat, s0, s1 in segments(xk, st):
-                if cat == 0:
+            cat = (st >= 1).astype(int)
+            if p in err["code"]:
+                tt, x = err["code"][p]
+                bad = set(key(tt[np.abs(x) > WRONG_M]).tolist())
+                cat[np.array([int(k) in bad for k in ks]) & (cat == 1)] = 2
+            for c, s0, s1 in segments(xk, cat):
+                if c == 0:
                     continue
                 ax.fill_between([xk[s0] - 0.05, xk[s1 - 1] + 0.05], i - 0.38, i + 0.38, lw=0,
-                                color=SYS_COLOR[sys_of(p)], alpha=1.0 if cat == 2 else 0.3)
+                                color=SYS_COLOR[sys_of(p)] if c == 1 else WRONG)
         ax.set_yticks(range(len(prns)))
         ax.set_yticklabels([sat_name(p) for p in prns], fontsize=6)
         ax.set_ylim(len(prns) - 0.5, -0.5)
         ax.grid(False)
         if col == 0:
-            ax.set_ylabel("observables per satellite\n(solid: carrier; pale: code only)")
+            ax.set_ylabel("raw measurement output,\nper satellite")
+            ax.text(1.0, 1.01, f"magenta: delivered but over {WRONG_M:.0f} m off the truth", transform=ax.transAxes,
+                    ha="right", va="bottom", fontsize=7, color=WRONG)
         # Measurements per epoch.
         ax = A["count"]
         ko = key(run.tf_obs)
@@ -450,34 +514,42 @@ def cmd_timeline(a) -> int:
                 if sys_of(p) == sysw:
                     ax.plot(*gapped(tt - L0, x), "-", lw=0.7, color=SYS_COLOR[sysw])
             ax.set_ylabel(f"{SYS_NAME[sysw]} pseudorange\nerror, m")
-            ax.set_ylim(-a.code_ylim, a.code_ylim)
+            ax.set_yscale("symlog", linthresh=a.code_ylim)
+            ax.set_ylim(-1000, 1000)
+            for v in (-WRONG_M, WRONG_M):
+                ax.axhline(v, color=WRONG, ls="--", lw=0.7)
         ax = A["rate"]
         for p, (tt, x) in err["rate"].items():
             ax.plot(tt - L0, x, ".", ms=0.9, color=SYS_COLOR[sys_of(p)])
-        ax.set_ylim(-a.rate_ylim, a.rate_ylim)
+        ax.set_yscale("symlog", linthresh=a.rate_ylim)
+        ax.set_ylim(-100, 100)
         ax.set_ylabel("range-rate error\n(Doppler), m/s")
         ax = A["pos"]
         for k, c, n in ((0, "#7aa6d8", "E"), (1, "#9bc59d", "N"), (2, "#222", "U")):
             ax.plot(*gapped(xp, dpos[:, k]), lw=0.8, color=c, label=n)
-        ax.set_ylim(-a.pos_ylim, a.pos_ylim)
+        ax.set_yscale("symlog", linthresh=a.pos_ylim)
+        ax.set_ylim(-1000, 1000)
         ax.set_ylabel("fix position\nerror, m")
         ax = A["vel"]
         for k, c, n in ((0, "#7aa6d8", "E"), (1, "#9bc59d", "N"), (2, "#222", "U")):
             ax.plot(*gapped(xp, dvel[:, k]), lw=0.8, color=c, label=n)
         if vbad.any():
-            ax.plot(xp[vbad], np.full(vbad.sum(), -0.92 * a.vel_ylim), "x", ms=3, color="#c03030",
+            ax.plot(xp[vbad], np.full(vbad.sum(), -50.0), "x", ms=3, color="#c03030",
                     label="velocity failed the fix's residual test")
-        ax.set_ylim(-a.vel_ylim, a.vel_ylim)
+        ax.set_yscale("symlog", linthresh=a.vel_ylim)
+        ax.set_ylim(-100, 100)
         ax.set_ylabel("fix velocity\nerror, m/s")
         axs[-1][col].set_xlim(*xl)
         if col == 0:
             for r in ("speed", "alt", "acc", "pos", "vel"):
                 A[r].legend(loc="upper left", fontsize=6.5, frameon=False, ncol=3)
-    axs[-1][0].set_xlabel("time from ignition, s  (dotted: ignition and burnout; amber: over 515 m/s or 80 km; "
-                          "green ticks: a fix)")
+    axs[-1][0].set_xlabel("time from ignition, s  (dotted: ignition and burnout; amber: over 515 m/s or 80 km, where a "
+                          "bought receiver stops;\ngreen ticks: a fix; errors linear near zero, logarithmic beyond"
+                          + ("; dash-dot: 10 km, where the file's troposphere stops)" if top_cross else ")"))
     axs[-1][1].set_xlabel(f"the boost: T{zoom[0]:+.0f} to T+{zoom[1]:.0f} s")
-    fig.suptitle(a.title, x=0.01, ha="left", fontsize=10)
-    fig.tight_layout(rect=(0, 0, 1, 0.985))
+    title = textwrap.fill(a.title, 190)
+    fig.suptitle(title, x=0.01, ha="left", fontsize=10)
+    fig.tight_layout(rect=(0, 0, 1, 1.0 - (0.15 + 0.17 * (title.count("\n") + 1)) / fig.get_figheight()))
     fig.savefig(a.o, dpi=a.dpi)
     print(f"wrote {a.o}")
     return 0
@@ -493,6 +565,8 @@ def main() -> int:
         p.add_argument("--liftoff", type=float, required=True, help="file s")
         p.add_argument("--burnout", type=float, required=True, help="file s")
         p.add_argument("--after", type=float, default=2.5, help="s past burnout to show")
+        p.add_argument("--count-after", type=float, default=1.0,
+                       help="rates: s past burnout the panel titles count locked satellites at")
         p.add_argument("--title", default="")
         p.add_argument("--dpi", type=int, default=130)
         p.add_argument("-o", type=Path, required=True)
@@ -505,10 +579,12 @@ def main() -> int:
             p.add_argument("--note", default="")
         else:
             p.add_argument("run", type=Path)
-            p.add_argument("--code-ylim", type=float, default=10.0)
-            p.add_argument("--rate-ylim", type=float, default=3.0)
-            p.add_argument("--pos-ylim", type=float, default=5.0)
-            p.add_argument("--vel-ylim", type=float, default=2.0)
+            # The error panels are linear within these and logarithmic beyond.
+            p.add_argument("--code-ylim", type=float, default=5.0)
+            p.add_argument("--rate-ylim", type=float, default=0.5)
+            p.add_argument("--pos-ylim", type=float, default=2.0)
+            p.add_argument("--vel-ylim", type=float, default=0.5)
+            p.add_argument("--zoom", help="the right-hand column's window, S0,S1 in seconds from ignition")
     a = ap.parse_args()
     return cmd_rates(a) if a.cmd == "rates" else cmd_timeline(a)
 

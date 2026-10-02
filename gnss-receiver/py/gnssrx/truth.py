@@ -57,18 +57,36 @@ class Trajectory:
         return np.radians(np.interp(t, self.t, self.lat)), np.interp(t, self.t, self.h)
 
 
-def tropo_saastamoinen(lat, h, el):
+def sat_clock(nav: list[rinex.Eph], prn: int, t_gps) -> np.ndarray:
+    """Each satellite's clock offset (s; broadcast polynomial, relativistic term and group delay) at GPS
+    times t_gps; prn as gnssrx numbers it. Over a whole flight some drift by metres."""
+    sys_, num = ("E", prn - 100) if prn >= 100 else ("G", prn)
+    cands = [e for e in nav if e.prn == num and e.sys == sys_]
+    t_gps = np.atleast_1d(t_gps)
+    out = np.zeros(t_gps.size)
+    for i, tg in enumerate(t_gps):
+        e = min(cands, key=lambda c: abs(rinex.tdiff(tg, c.toe)))
+        out[i] = rinex.sat_pos(e, tg - 0.075)[1]
+    return out
+
+
+def tropo_saastamoinen(lat, h, el, top=4e4):
     """Saastamoinen delay (m) with a standard atmosphere, as the receiver models it (core/pvt/pvt.c):
-    lat and el in radians, h in metres, up to 40 km. SignalSim's files carry a troposphere like it."""
+    lat and el in radians, h in metres, up to top (the receiver's 40 km). SignalSim's files carry one like
+    it that stops at 10 km, all at once (the manifest's tropo_top_m)."""
     lat, h, el = np.broadcast_arrays(np.asarray(lat, float), np.asarray(h, float), np.asarray(el, float))
     hh = np.clip(h, 0.0, None)
     p = 1013.25 * (1.0 - 2.2557e-5 * hh) ** 5.2568
     tk = 15.0 - 6.5e-3 * hh + 273.16
-    e = 6.108 * 0.7 * np.exp((17.15 * tk - 4684.0) / (tk - 38.45))
+    # Above the tropopause the water holds its temperature and thins with the pressure (the lapse rate
+    # carried on divides by zero at 38.4 km).
+    tw = np.where(hh > 11000.0, 15.0 - 6.5e-3 * 11000.0 + 273.16, tk)
+    pw = np.where(hh > 11000.0, p / (1013.25 * (1.0 - 2.2557e-5 * 11000.0) ** 5.2568), 1.0)
+    e = 6.108 * 0.7 * np.exp((17.15 * tw - 4684.0) / (tw - 38.45)) * pw
     cz = np.cos(np.pi / 2.0 - el)
     dry = 0.0022768 * p / (1.0 - 0.00266 * np.cos(2.0 * lat) - 0.00028 * hh / 1e3) / cz
-    wet = 0.002277 * (1255.0 / tk + 0.05) * e / cz
-    return np.where((h < -100.0) | (h > 4e4) | (el <= 0.0), 0.0, dry + wet)
+    wet = 0.002277 * (1255.0 / tw + 0.05) * e / cz
+    return np.where((h < -100.0) | (h > top) | (el <= 0.0), 0.0, dry + wet)
 
 
 def _sat_rx_frame(e: rinex.Eph, t_rx_gps: float, rx: np.ndarray):

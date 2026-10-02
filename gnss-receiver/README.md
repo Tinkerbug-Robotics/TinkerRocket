@@ -391,7 +391,7 @@ truth is in the rig's `scenarios/`:
 | `trksim` | One channel's real tracking code (`core/trk`) against that truth, at the level of correlator dumps. It includes the contract's command delay, data bits, and correlated early/prompt/late noise at any C/N0, and runs about 1000× real time. On the IQ files it matches `gnssrx` channel for channel: unlock time within 0.1 s, the same slips. With `--spin`, the rolling antenna's phase and gain; see [Spin and the antenna](#spin-and-the-antenna-milestone-7) |
 | `py/trk_sweep.py` | Sweeps `trksim` over loop profiles, C/N0, satellites and seeds; tabulates the worst satellite |
 | `gnssrx --boost-at S0,S1` | The boost profile over those file seconds, as the flight computer would call it. With `--loops-quiet` and `--loops-boost` (bandwidths), `--cn0-at S:DBHZ` (a level change mid-file) and `run.ini` (what made the run) |
-| `gnssrx --boost-detect default` | The boost profile from the launch the emulated IMU detects to 2 s past the burnout it detects, as the P4 will switch it (`core/trk/boost_detect.c`; `fc` for the flight computer's slower rules). Needs `--imu SCEN.csv`; `--imu-no-aid` keeps the IMU for detection only. `run.ini` records what it detected (`boost_detected`) |
+| `gnssrx --boost-detect default` | The boost profile from the launch the emulated IMU detects to 2 s past the burnout it detects, as the P4 will switch it (`core/trk/boost_detect.c`; `fc` for the flight computer's slower rules). Needs `--imu SCEN.csv`; `--imu-no-aid` keeps the IMU for detection only. `run.ini` records what it detected (`boost_detected`, a line per span). `--boost-gate IGN_S,TAIL_FRAC,TAIL_MS` gates the profile to the transitions; see [A gated profile](#a-gated-profile-milestone-7) |
 | `py/boost_track.py` | A run against truth, per satellite: frequency error, unlock time, carrier slips, code error, losses as the bench counts them (no pseudorange for 0.5 s), and the fix |
 | `gnssrx --imu SCEN.csv` | IMU aiding from the scenario's trajectory, with the IMU's faults (`--imu-err`); see [IMU aiding](#imu-aiding-milestone-7) |
 | `py/boost_plots.py` | The figures, drawn like the rig's reports on the bought receivers. `rates` draws each satellite's line-of-sight Doppler rate through the burn on the rig's key, as a grid of runs (signal levels × loop configurations): coloured by constellation where a pseudorange was delivered, magenta where one was over 10 m off the truth, markers on carrier lock. `timeline` draws one run in full: speed, altitude and acceleration (with the IMU's input), per-satellite output, measurements per epoch, pseudorange and range-rate errors, and the fix's errors |
@@ -403,7 +403,8 @@ from it by a·dt²/8 inside a 0.1 s trajectory step, which at burnout is whole c
 `boost_plots.py` judges each delivered pseudorange by the rig's rule for the bought receivers: over
 10 m off the truth is wrong.
 - **The truth:** the geometric range, plus the troposphere where the manifest says the file carries
-  one (`tropo`; the receiver's own Saastamoinen model).
+  one (`tropo`; the receiver's own Saastamoinen model), less the satellite's clock. Over a whole
+  flight some satellites' clocks drift 5–15 m.
 - **Taken out:** each satellite's pre-launch level, then the per-epoch median over satellites (the
   receiver clock).
 - **The troposphere term matters on SignalSim:** it takes the aided traveler's burn from 0.93 to
@@ -683,29 +684,30 @@ What the P4 needs from the board:
 
 **Galileo through the boost** (`runs/m7g`): the SignalSim traveler with GPS and Galileo
 (`signalsim_traveler_gpsgal_2026_50e_n_cofs.C8`). Its sky is 46.5 dB-Hz at the zenith, faded by
-elevation. The table gives each Galileo satellite's PLL-unlocked time, from ignition to 2.5 s
-past burnout:
+elevation. The table gives each Galileo satellite's time without a carrier-locked measurement (its
+PLL unlocked, or its measurement withheld) from ignition to 0.5 s past burnout. The window stops there: 0.6 s past burnout the flight crosses 10 km, where SignalSim's
+troposphere ends ([below](#signalsims-troposphere-ends-at-10-km-milestone-7)).
 
 | Satellite | Pad C/N0 (E1-C) | Quiet loops | 50 Hz boost loops | Quiet loops + IMU | IMU + 20 Hz loops |
 |---|---|---|---|---|---|
-| E26 | 41.2 | 3.1 s, not back | 1.5 s | 0.3 s | 0 |
-| E13 | 39.6 | 3.0 s, not back | 1.1 s | 0 | 0 |
-| E29 | 36.5 | 0.9 s | 1.0 s | 0.3 s | 0 |
-| E27 | 35.2 | 0.9 s | 0.9 s | 0 | 0 |
-| E21 | 34.0 | 0.9 s | 1.0 s | 0.3 s | 0 |
-| E19 | 32.0 | 3.1 s | 2.5 s | 0.6 s | 1.2 s |
-| E07 | 31.6 | 5.5 s, not back | 6.1 s | 3.8 s | 4.2 s |
-| E33 | 30.6 | 9.9 s | 8.5 s | 7.4 s | 9.7 s |
+| E26 | 41.2 | 1.1 s | 0.8 s | 0 | 0 |
+| E13 | 39.6 | 1.0 s | 0.8 s | 0 | 0 |
+| E29 | 36.5 | 0.6 s | 0.7 s | 0 | 0 |
+| E27 | 35.2 | 0.6 s | 0.6 s | 0 | 0 |
+| E21 | 34.0 | 0.6 s | 0.7 s | 0 | 0 |
+| E19 | 32.0 | 2.3 s | 1.9 s | 0.4 s | 0.6 s |
+| E07 | 31.6 | 4.8 s | 5.4 s | 3.4 s | 3.6 s |
+| E33 | 30.6 | 9.1 s | 6.8 s | 6.6 s | 8.9 s |
 
 - **The 50 Hz fallback cannot help Galileo.** A pilot's 4 ms dumps and the three-dump command
   delay cap its loops at 12.5 Hz, so every Galileo satellite lets go at burnout for about a
-  second.
+  second; 0.5 s past burnout none is back.
 - **With aiding**, the five Galileo satellites at 34 dB-Hz and above hold carrier through the burn
   and burnout. The three weak ones flicker on the pad already.
 - **GPS** holds carrier on all 8 satellites in every configuration but the quiet loops.
-- **The fix**, ignition to 2.5 s past burnout, weighted and tested:
-  - The vertical velocity error is 0.15 m/s rms with IMU + 20 Hz loops, against 0.22 with the
-    boost profile and 3.1 with quiet loops.
+- **The fix**, ignition to 0.5 s past burnout, weighted and tested:
+  - The vertical velocity error is 0.10 m/s rms with IMU + 20 Hz loops, against 0.20 with the
+    boost profile and 3.3 with quiet loops.
   - The height error peaks at 0.3 m. Unweighted, it reached 2.9 m, where one weak Galileo
     satellite's code ran 7.5 m off.
 
@@ -720,7 +722,8 @@ past burnout:
     delay falls by 0.15 m/s at the zenith and 0.4 m/s at 20°. The boost's vertical velocity error
     on SignalSim falls from 0.38 to 0.18 m/s rms.
   - The model no longer stops at 10 km, where the zenith delay is still 0.6 m. It now runs to
-    40 km. SignalSim's troposphere, like the real one, carries on.
+    40 km, as the real troposphere does. SignalSim's own stops at 10 km, all at once
+    ([below](#signalsims-troposphere-ends-at-10-km-milestone-7)).
 - **Satellites outside the fix went unaided.** The rig's PRN 13 is flagged unhealthy, so the fix
   leaves it out, and it got no line of sight. Every tracked satellite now gets one.
 
@@ -734,18 +737,20 @@ PX1105R through both boosts on SignalSim files.
   the same truth and rule.
 - **What we see:** their GPS and Galileo. Their BeiDou is B1I, outside the L1 front end's band.
 
-The table gives the satellites locked at burnout (the PX1105R) or 1 s after it (ours). Each cell is
-GPS · Galileo, plus the PX1105R's BeiDou. The "over 10 m" columns count the satellites that
-delivered a pseudorange that far off.
+The table gives the satellites locked at burnout (the PX1105R) or after it (ours: 1 s on the
+hotshot; 0.5 s on the traveler, which crosses 10 km 0.6 s after burnout, where SignalSim's
+troposphere ends). Each cell is GPS · Galileo, plus the PX1105R's BeiDou. The "over 10 m" columns
+count the satellites that delivered a pseudorange that far off, from ignition to 2.5 s past
+burnout (the traveler: 0.5 s).
 
 | Flight, level | PX1105R | Over 10 m | IMU + 20 Hz loops | Over 10 m | 50 Hz boost loops | Over 10 m |
 |---|---|---|---|---|---|---|
-| Traveler, +12 dB | 11/12 · 2/6 · 4/4 | GPS 5, GAL 1, BDS 1 | 13/13 · 8/8 | none | 13/13 · 7/8 | none |
-| Traveler, +6 dB | 9/13 · 1/7 · 7/8 | GPS 5, GAL 1, BDS 3 | 13/13 · 8/8 | none | 13/13 · 6/8 | none |
-| Traveler, 0 dB | 1/13 · 0/2 · 7/7 | GPS 4, BDS 3 | 13/13 · 7/8 | none | 13/13 · 8/8 | none |
-| Traveler, −3 dB | 1/12 · 0/1 · 6/9 | GPS 3, BDS 6 | 13/13 · 6/8 | none | 13/13 · 8/8 | none |
-| Traveler, −6 dB | 1/13 · – · 1/7 | GPS 3 | 13/13 · 4/8 | none | 13/13 · 2/8 | none |
-| Traveler, −9 dB | 0/6 · – · 0/1 | none | 10/13 · 0/8 | none | 9/13 · 0/8 | GPS 8 |
+| Traveler, +12 dB | 11/12 · 2/6 · 4/4 | GPS 5, GAL 1, BDS 1 | 13/13 · 8/8 | none | 13/13 · 0/8 | none |
+| Traveler, +6 dB | 9/13 · 1/7 · 7/8 | GPS 5, GAL 1, BDS 3 | 13/13 · 8/8 | none | 13/13 · 0/8 | none |
+| Traveler, 0 dB | 1/13 · 0/2 · 7/7 | GPS 4, BDS 3 | 13/13 · 8/8 | none | 13/13 · 0/8 | none |
+| Traveler, −3 dB | 1/12 · 0/1 · 6/9 | GPS 3, BDS 6 | 13/13 · 8/8 | none | 13/13 · 0/8 | none |
+| Traveler, −6 dB | 1/13 · – · 1/7 | GPS 3 | 13/13 · 6/8 | none | 13/13 · 0/8 | none |
+| Traveler, −9 dB | 0/6 · – · 0/1 | none | 13/13 · 0/8 | none | 9/13 · 0/8 | GPS 7 |
 | Hotshot, +12 dB | 5/13 · 0/7 · 6/6 | GPS 2, BDS 3 | 13/13 · 8/8 | none | 13/13 · 8/8 | none |
 | Hotshot, +6 dB | 4/13 · 0/6 · 6/6 | GPS 1, GAL 1, BDS 2 | 13/13 · 8/8 | none | 13/13 · 8/8 | none |
 | Hotshot, 0 dB | 0/13 · 0/4 · 5/6 | GPS 2, GAL 1, BDS 2 | 13/13 · 8/8 | none | 13/13 · 8/8 | none |
@@ -759,9 +764,11 @@ delivered a pseudorange that far off.
   delivered them on 3–9 satellites at every level where it still held any. Its strength is BeiDou B1I, which it keeps where it loses
   GPS.
 - **Aiding shows here as on our own files.** Count the satellites that never lost carrier from
-  ignition to 2.5 s past burnout:
-  - both configurations keep all 13 GPS satellites to −3 dB, and 12 or 13 at −6;
-  - at −9 dB (31 dB-Hz) the aided design keeps 10 and 11, the 50 Hz loops none and 2;
+  ignition to 2.5 s past burnout (the traveler: 0.5 s):
+  - both configurations keep all 13 GPS satellites to −3 dB; at −6 the aided design keeps all 13
+    on both flights, the 50 Hz loops 12 (traveler) and 13;
+  - at −9 dB (31 dB-Hz) the aided design keeps all 13 on the traveler and 11 on the hotshot, the
+    50 Hz loops none and 2;
   - only the aided design carries Galileo through either burn: 6–8 of 8 down to −3 dB, against
     none.
 - **What differs:**
@@ -769,7 +776,7 @@ delivered a pseudorange that far off.
     than ours (38–39 against 40.4);
   - the rig attenuated whole files for −3 to −9 dB. We add noise from T−10 s, so acquisition there
     isn't tested;
-  - its counts are at burnout, ours 1 s later, through the burnout transient.
+  - its counts are at burnout, ours 0.5–1 s later, through the burnout transient.
 - **Figures:** `runs/wide/fig/rates_wide_traveler.png` and `rates_wide_hotshot.png`.
 
 One run, from `gnss-receiver` with `GNSS_IQ_DIR` at the rig's `c8/` (the truth shifted to the
@@ -783,6 +790,79 @@ build/host/gnssrx signalsim_hotshot_all_2026_45_w_p180.C8 --start 80 --dur 110 \
     --cn0 41.0 --cn0-at 170:35.3 --imu runs/wide/hotshot_pad180.csv --boost-detect default \
     --loops-boost 10,20,2/0,20,0.5:2 --out runs/wide/BA_hot_m6
 ```
+
+### Whole flights (milestone 7)
+
+The rig draws the PX1105R through whole flights; these are ours on the same sweep files, the aided
+design from 60 s before ignition to each file's end (`runs/wide/full_BA_*`, figures
+`runs/wide/fig/timeline_full_BA_*.png`): the hotshot to T+120 s, falling through 22 km after a
+27 km apogee; the traveler to T+360 s, up to 102 km and back down to 17 km.
+
+| Flight, level | Delivered | Over 10 m | Fix withheld | Height error, ignition to 10 km / after |
+|---|---|---|---|---|
+| Hotshot, +12 dB | all 13 GPS and 8 Galileo, throughout | none (worst 4.7 m) | 3.9 s at T+25 s | 0.7 / 1.3 m |
+| Hotshot, −6 dB | all 13 GPS; Galileo in and out at about 30 dB-Hz | none (6.1 m) | none | 0.9 / 2.0 m |
+| Traveler, +12 dB | all 13 GPS and 8 Galileo, throughout | none (4.7 m) | 3.9 s at T+25 s | 0.3 / 2.1 m |
+| Traveler, −6 dB | all 13 GPS; Galileo in and out | none (8.2 m) | none | 0.6 / 3.7 m |
+
+- **Every error over a metre and every gap comes after 10 km,** where SignalSim's troposphere ends
+  ([below](#signalsims-troposphere-ends-at-10-km-milestone-7)).
+- **The launch detector fires again at re-entry.** Falling back from 102 km, the traveler's drag
+  reads over 2 g along its axis from T+264 s. The loops widen through the deceleration, and the
+  rest test closes them at T+309 s, when terminal speed brings the specific force back to 1 g.
+  That is what the loops should do there. It rests on the emulated IMU keeping the axis vertical: a
+  rocket falling nose first reads its drag backwards and would not trigger.
+
+**Found on the way:** the troposphere model divided by zero from 38.4 to 40 km
+(`Pvt.TroposphereAboveAClimbingReceiver`). Carried above the tropopause, its temperature falls to
+38 K at 38.4 km, where the vapour pressure's formula has a pole; the delay was infinite from there to
+the model's 40 km ceiling. The traveler lost the fix for 1.6 s climbing through that band and
+2.0 s coming back down; a rocket peaking there would have lost it at apogee. Above 11 km the water
+now holds the tropopause's temperature and thins with the pressure, and the delay thins smoothly
+to 40 km. The traveler runs in the table are the reruns: the fix holds through the band both ways.
+
+One run and its figure:
+
+```bash
+build/host/gnssrx signalsim_traveler_all_2026_57_w_p180.C8 --start 120 --dur 419.5 \
+    --imu runs/wide/traveler_soft25_pad180.csv --boost-detect default \
+    --loops-boost 10,20,2/0,20,0.5:2 --out runs/wide/full_BA_trav_p12
+python3 py/boost_plots.py timeline runs/wide/full_BA_trav_p12 --traj runs/wide/traveler_soft25_pad180.csv \
+    --nav BRDC_2026230_MN.rnx --liftoff 180 --burnout 193 --zoom=-5,30 -o timeline_full_BA_trav_p12.png
+```
+
+### SignalSim's troposphere ends at 10 km (milestone 7)
+
+SignalSim models the troposphere (Saastamoinen) up to 10 km and not at all above it. A flight that
+crosses 10 km sees every satellite's delay vanish at once. Measured on the hotshot, at T+14.05 s:
+each satellite's code steps by 1.04 times the model's delay at 10 km, 0.6 m at the zenith and 6 m
+at 6° (`tropo_top_m = 10000` in `data/iq_files.ini`). Real air thins smoothly; 0.6 m of zenith
+delay is still above 10 km. The traveler crosses 10 km at T+13.6 s, 0.6 s after its burnout.
+
+What the step does to our receiver (hotshot, +12 dB):
+- **Every channel but one holds lock;** E29 lets go and relocks within half a second. The carrier
+  doesn't follow the step: it slips the same distance in whole cycles, up to about 30, inside a
+  few dumps, and the PLL can't tell that from no slip.
+- **The carrier smoothing carries the step.** It restarts only when the PLL lets go, so each
+  smoothed pseudorange keeps the old delay and lets it go over its 100 s: up to 4.7 m on the lowest
+  satellite. Where the step left a channel on the other half cycle, its next navigation words read
+  inverted and restart its smoothing: seven GPS channels at T+25.3 s. The fix is withheld for
+  3.9 s while their ranges are confirmed again.
+- **The fix keeps modelling the air above 10 km,** as a real flight needs, and the file has none:
+  0.3 m/s of vertical velocity error on the hotshot and 0.6 on the traveler, fading over half a
+  minute, and 1–4 m of height.
+
+The truth check now models the file's own troposphere, and the rate of its delay through the climb
+(`tropo_rate` in `py/boost_plots.py`). Before, the Doppler truth had no troposphere rate, which
+read as range-rate errors up to 2 m/s through the climb, and the pseudorange truth kept the delay
+above 10 km. No count of pseudoranges over 10 m changes. The tables above judge the SignalSim
+traveler only to 0.5 s past burnout: the quiet loops + IMU's "burnout" losses there all start at
+T+13.8 s, 0.2 s after the crossing, and so did the design's three GPS losses at −9 dB.
+
+Two changes would make the receiver ride it, and a real carrier slip like it (neither done):
+- a code–carrier check on the smoothing, restarting it when the code walks away from the carrier;
+- for test runs only, the receiver told the file's ceiling, as `tropo = none` already tells it a
+  gps-sdr-sim file has no troposphere.
 
 ### Oscillator g-sensitivity (milestone 7)
 
@@ -889,6 +969,48 @@ traveler skies, IMU-aided 20 Hz loops, and spin ramping up through the burn. The
 **For the vehicle:** the GNSS antenna belongs on the roll axis (in the nose, looking up), with as
 good an axial ratio toward the horizon as can be had. A side mount would need an array around the
 body, which isn't studied here. Traveler IV's 6–8 Hz spin is no problem for a nose patch.
+
+### A gated profile (milestone 7)
+
+At 29 dB-Hz the quiet loops + IMU keep the traveler's burn better than the design, then lose
+carrier at burnout. A gated profile tries both (`boost_detect_gate()`, `--boost-gate 1,0.9,10`):
+the IMU fed forward throughout, the 20 Hz loops only where the feed-forward misses most, the quiet
+loops between:
+- for 1 s after the launch the IMU detects;
+- from the thrust's tail-off, the axial force under 90 % of its peak in the burn for 10 ms, to 2 s
+  past burnout.
+
+Every case set ran with it (`runs/*/BG_*`). Through the boost (`runs/aid`), the satellites that
+let go between ignition and 2.5 s past burnout (unlocked satellite-seconds), and the vertical
+velocity rms:
+
+| C/N0 (measured) | Hotshot: design | Hotshot: gated | Traveler: design | Traveler: gated |
+|---|---|---|---|---|
+| 42.6 | 0; 0.07 m/s | 0; 0.06 | 0; 0.08 | 0; 0.05 |
+| 36.4 | 0; 0.13 | 0; 0.11 | 0; 0.17 | 0; 0.11 |
+| 33.4 | 0; 0.23 | 0; 0.17 | 0; 0.25 | 0; 0.16 |
+| 31.4 | 0; 0.31 | 0; 0.24 | 0; 0.28 | 0; 0.19 |
+| 29.3 | 5 (8.5 s); 0.40 | 3 (4.7 s); 0.54 | 9 (27 s); 0.46 | 1 (1.5 s); 0.23 |
+
+- **Through the burn it is quieter:** 20–35 % less vertical velocity noise down to 31.4 dB-Hz,
+  with no satellite lost by either.
+- **At 29.3 dB-Hz it keeps more:** on the traveler 1 satellite lost, against the design's 9 and
+  the quiet loops + IMU's 6; on the hotshot 3 against 5, though its velocity is noisier there.
+- **It leans harder on the IMU and the oscillator.** These motors tail off only 0.14 s before
+  burnout, so the 20 Hz loops meet burnout barely settled, and whatever the feed-forward misses
+  there costs more. With the poor IMU (20 ms, 10 %) at 31.4 dB-Hz: 6 lost on the traveler against
+  5, two of them over 10 m; on the hotshot 9 either way, 5 not back against 3. With the
+  oscillator's 2 ppb/g fed forward at 80 %: 14 lost against 12 on the hotshot, 9 against 2 on the
+  traveler, all just after burnout. Fed forward exactly, or with the typical part, nothing is lost
+  either way.
+- **On the sweep files and Galileo it matches the design:** the same satellites, up to 0.08 m/s
+  less velocity noise.
+- **On PSAS it is the design.** That motor's thrust peaks early, so the tail-off rule fires in the
+  first second and the loops stay at 20 Hz to the end.
+
+So the gate pays only at the weakest signals, and only with an IMU and an oscillator feed-forward as
+good as the defaults; at burnout it gives margin away. It is worth another look once the board's IMU
+and TCXO are measured, or with burnout predicted from the burn's progress so the loops widen sooner.
 
 ### Limits
 

@@ -106,10 +106,18 @@ double tropo_saastamoinen(double lat, double h, double el)
     /* Standard atmosphere, 70 % relative humidity. */
     double p = 1013.25 * pow(1.0 - 2.2557e-5 * hh, 5.2568);
     double tk = 15.0 - 6.5e-3 * hh + 273.16;
-    double e = 6.108 * 0.7 * exp((17.15 * tk - 4684.0) / (tk - 38.45));
+    /* Above the tropopause (11 km) the water holds the tropopause's temperature and thins with the
+     * pressure. The lapse rate carried on up would reach 38 K at 38.4 km, where the vapour pressure's
+     * formula divides by zero: the delay was infinite from there to 40 km. */
+    double tw = tk, pw = 1.0;
+    if (hh > 11000.0) {
+        tw = 15.0 - 6.5e-3 * 11000.0 + 273.16;
+        pw = p / (1013.25 * pow(1.0 - 2.2557e-5 * 11000.0, 5.2568));
+    }
+    double e = 6.108 * 0.7 * exp((17.15 * tw - 4684.0) / (tw - 38.45)) * pw;
     double z = PI / 2.0 - el;
     double dry = 0.0022768 * p / (1.0 - 0.00266 * cos(2.0 * lat) - 0.00028 * hh / 1e3) / cos(z);
-    double wet = 0.002277 * (1255.0 / tk + 0.05) * e / cos(z);
+    double wet = 0.002277 * (1255.0 / tw + 0.05) * e / cos(z);
     return dry + wet;
 }
 

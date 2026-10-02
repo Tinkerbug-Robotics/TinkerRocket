@@ -138,6 +138,16 @@ TEST(Pvt, TroposphereAboveAClimbingReceiver)
     EXPECT_GT(tropo_saastamoinen(0.0, 30000.0, M_PI / 2.0), 0.0);
     EXPECT_LT(tropo_saastamoinen(0.0, 30000.0, M_PI / 2.0), 0.02);
     EXPECT_EQ(tropo_saastamoinen(0.0, 41000.0, M_PI / 2.0), 0.0);
+    // Finite and thinning all the way up: the wet term once divided by zero at 38.4 km.
+    for (const double el : {M_PI / 2.0, z30, 5.0 * M_PI / 180.0}) {
+        double last = tropo_saastamoinen(0.0, 0.0, el);
+        for (double hh = 10.0; hh <= 40000.0; hh += 10.0) {
+            const double d = tropo_saastamoinen(0.0, hh, el);
+            ASSERT_TRUE(std::isfinite(d)) << hh;
+            ASSERT_LE(d, last + 1e-12) << hh;
+            last = d;
+        }
+    }
 
     double lat = 0.0, lon = -119.0 * M_PI / 180.0, h = 5000.0, rx[3];
     geo_to_ecef(lat, lon, h, rx);

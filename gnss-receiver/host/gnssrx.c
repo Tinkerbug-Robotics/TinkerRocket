@@ -78,6 +78,9 @@ static void usage(void)
             "                            LAUNCH_MS, then below zero for BURNOUT_MS; within REST of 1 g for\n"
             "                            REST_MS is a false start. default: the receiver's fast trigger,\n"
             "                            20,20,50,2,5,500; fc: the flight computer's rules, 30,250,50,2, no rest\n"
+            "  --boost-gate IGN_S,TAIL_FRAC,TAIL_MS   with --boost-detect, the profile wide only around the\n"
+            "                            transitions: IGN_S after launch, and from the tail-off (the axial force\n"
+            "                            under TAIL_FRAC of its peak for TAIL_MS) to the hold past burnout\n"
             "  --imu SCEN.csv            IMU aiding emulated from a scenario trajectory (10 Hz t,lat,lon,h;\n"
             "                            file seconds): its acceleration, as the generator's carrier sees it\n"
             "  --imu-err LAG,SF,BIAS,NOISE[,TILT]   the IMU's faults: latency ms, scale error (fraction),\n"
@@ -374,6 +377,7 @@ int main(int argc, char **argv)
            imu1 = INFINITY;
     double boost0 = INFINITY, boost1 = -INFINITY;
     int boost_detect = 0, imu_no_aid = 0;
+    double gate_ign = -1.0, gate_frac = 0.9, gate_ms = 10.0;
     boost_detect_cfg_t bdc;
     boost_detect_default(&bdc);
     for (int i = 1; i < argc; i++) {
@@ -484,6 +488,11 @@ int main(int argc, char **argv)
                 bdc.rest_ms = (uint16_t)rms;
             }
             boost_detect = 1;
+        } else if (!strcmp(a, "--boost-gate") && v) {
+            if (sscanf(argv[++i], "%lf,%lf,%lf", &gate_ign, &gate_frac, &gate_ms) != 3) {
+                fprintf(stderr, "gnssrx: --boost-gate takes IGN_S,TAIL_FRAC,TAIL_MS\n");
+                return 2;
+            }
         } else if (!strcmp(a, "--imu-no-aid")) {
             imu_no_aid = 1;
         } else if (!strcmp(a, "--iono") && v) {
@@ -547,6 +556,13 @@ int main(int argc, char **argv)
     if (fabs(fs / 1000.0 - (double)spms) > 1e-6) {
         fprintf(stderr, "gnssrx: the stream rate must be a whole number of samples per ms\n");
         return 1;
+    }
+    if (gate_ign >= 0.0) {
+        if (!boost_detect) {
+            fprintf(stderr, "gnssrx: --boost-gate needs --boost-detect\n");
+            return 2;
+        }
+        boost_detect_gate(&bdc, (float)gate_ign, (float)gate_frac, (uint16_t)gate_ms);
     }
     if (boost_detect && !imu_path) {
         fprintf(stderr, "gnssrx: --boost-detect needs --imu, the trajectory the IMU is emulated from "
@@ -793,6 +809,9 @@ int main(int argc, char **argv)
         if (boost_detect) {
             fprintf(fini, "boost_detect = %g,%u,%u,%u,%g,%g,%u\n", (double)bdc.launch_ms2, bdc.launch_ms,
                     bdc.lockout_ms, bdc.burnout_ms, (double)bdc.hold_s, (double)bdc.rest_ms2, bdc.rest_ms);
+            if (bdc.gate) {
+                fprintf(fini, "boost_gate = %g,%g,%u\n", (double)bdc.ign_s, (double)bdc.tail_frac, bdc.tail_ms);
+            }
         }
         if (osc.n > 0) {
             fprintf(fini, "osc_g = %g,%g\nosc_vib = %g,%g,%g,%g\n", osc_gamma_ppb, osc_comp, vib_hz, vib_g, osc.vib0,

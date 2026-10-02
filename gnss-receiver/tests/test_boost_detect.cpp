@@ -126,3 +126,30 @@ TEST(BoostDetect, DragInTheCoastIsNotABurnButASecondStageIs)
     EXPECT_EQ(t.run(20, 8.0f * G), 1);     // a second motor lights
     EXPECT_EQ(t.d.phase, BOOST_BURN);
 }
+
+TEST(BoostDetect, GatedWideOnlyAtTheTransitions)
+{
+    boost_detect_cfg_t c;
+    boost_detect_default(&c);
+    boost_detect_gate(&c, 1.0f, 0.9f, 10);
+    boost_detect_t d;
+    boost_detect_init(&d, &c);
+    auto run = [&d](int n, float f) {
+        int on = 0;
+        for (int k = 0; k < n; k++) {
+            on += boost_detect_step(&d, f);
+        }
+        return on;
+    };
+    EXPECT_EQ(run(1000, G), 0);
+    EXPECT_EQ(run(20, 10.0f * G), 1);       // launch: wide ...
+    EXPECT_EQ(run(1000, 10.0f * G), 1000);  // ... for 1 s
+    EXPECT_EQ(run(2000, 10.0f * G), 0);     // narrow through the steady burn
+    EXPECT_EQ(run(9, 8.5f * G), 0);         // the tail-off: under 90 % of the peak ...
+    EXPECT_EQ(run(1, 8.5f * G), 1);         // ... for 10 samples: wide again
+    EXPECT_EQ(run(50, -3.0f * G), 50);      // burnout
+    EXPECT_EQ(d.phase, BOOST_HOLD);
+    EXPECT_EQ(run(1999, -3.0f * G), 1999);  // the 2 s hold
+    EXPECT_EQ(run(1, -3.0f * G), 0);
+    EXPECT_EQ(d.phase, BOOST_COAST);
+}

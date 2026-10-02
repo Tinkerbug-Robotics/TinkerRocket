@@ -17,6 +17,11 @@
  * 250 ms, no rest exit) are slower on purpose, since its false launch must never arm anything; at 250 ms
  * the unaided loops lose carrier at ignition. boost_detect_fc() gives them, for comparison.
  *
+ * Gated (gate = 1): with the IMU feeding the loops forward, what they miss is concentrated at the
+ * transitions, so the profile is wide only there: for ign_s after launch, and from the thrust's tail-off
+ * (the axial force below tail_frac of its peak in the burn for tail_ms) to hold_s past burnout. Through
+ * the steady burn the loops stay narrow, and pass less noise. A false tail-off only widens them early.
+ *
  * The flight computer's launch test reads the force's magnitude. This one reads the axial component:
  * after burnout, drag reads up to several g along the axis, backwards, and must not count as a new burn.
  * From the pad the two are the same. A second burn after the hold (a staged motor) is detected as the
@@ -39,6 +44,10 @@ typedef struct {
     float hold_s;          /* the boost profile stays on this long past burnout */
     float rest_ms2;        /* a false start: within this of 1 g ... */
     uint16_t rest_ms;      /* ... for this many samples after the lockout (0: no rest exit) */
+    uint8_t gate;          /* 1: wide only around ignition and burnout */
+    float ign_s;           /* gated: wide this long after launch */
+    float tail_frac;       /* gated: the tail-off, the axial force below this fraction of its peak ... */
+    uint16_t tail_ms;      /* ... for this many samples */
 } boost_detect_cfg_t;
 
 typedef enum {
@@ -54,6 +63,9 @@ typedef struct {
     uint32_t count;        /* consecutive samples passing the phase's test */
     uint32_t rest;         /* consecutive samples at rest, in the burn */
     uint32_t ms;           /* samples since the phase began */
+    float peak;            /* the axial force's peak in the burn */
+    uint32_t tail;         /* consecutive samples under tail_frac of it */
+    int tailing;           /* gated: the tail-off seen */
 } boost_detect_t;
 
 /* The receiver's fast trigger: 20 m/s^2 for 20 samples, a 200 ms lockout, below zero for 50, a 2 s
@@ -62,6 +74,10 @@ void boost_detect_default(boost_detect_cfg_t *c);
 
 /* The flight computer's IMU-only rules: 30 m/s^2 for 250 samples, the same burnout and hold, no rest exit. */
 void boost_detect_fc(boost_detect_cfg_t *c);
+
+/* Gates the profile to the transitions: wide for ign_s after launch and from the tail-off to hold_s past
+ * burnout (1 s; 90 % of the peak for 10 samples). */
+void boost_detect_gate(boost_detect_cfg_t *c, float ign_s, float tail_frac, uint16_t tail_ms);
 
 void boost_detect_init(boost_detect_t *d, const boost_detect_cfg_t *c);
 
