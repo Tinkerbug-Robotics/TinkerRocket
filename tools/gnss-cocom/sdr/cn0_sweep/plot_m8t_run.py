@@ -8,7 +8,11 @@ GPS pseudorange error, Galileo/BeiDou pseudorange error, range-rate error -- on 
 logarithmic beyond) so that errors of hundreds of metres stay on the chart -- and the raster marks in magenta where a
 satellite was flagged valid but more than WRONG_M (10 m) off the truth.
 
-    plot_m8t_run.py CAPTURE OUT.png "TITLE" [SCENARIO] [ACC.npz] [end=T] [xmax=T]
+A mosaic-G5 capture (SBF 't S <hex>' lines) is read the same way: MeasEpoch thinned to 10 Hz with the files' signals
+(GPS L1 C/A, Galileo E1, BeiDou B1I), PVTGeodetic for the fix, its speed (3-D) and its height. limit=600 draws and
+shades the receiver's own export limit instead of the scenario's 515 m/s and 80 km windows.
+
+    plot_m8t_run.py CAPTURE OUT.png "TITLE" [SCENARIO] [ACC.npz] [end=T] [xmax=T] [limit=V]
 """
 import json
 import struct
@@ -28,6 +32,7 @@ acc_path = next((a for a in extra if a.endswith(".npz")), None)
 file_end = next((float(a[4:]) for a in extra if a.startswith("end=")), None)
 x_max = next((float(a[5:]) for a in extra if a.startswith("xmax=")), 375.0)
 scen = next((a for a in extra if not a.endswith(".npz") and "=" not in a), "traveler_soft25")
+limit = next((float(a[6:]) for a in extra if a.startswith("limit=")), None)
 acc = np.load(acc_path) if acc_path else None
 sc = json.loads((SDR / "scenarios" / f"{scen}.json").read_text())
 PRO = sc.get("prologue_s", 180.0)
@@ -43,7 +48,47 @@ A_UP = np.convolve(A_UP, np.ones(3) / 3, mode="same")
 
 # valid raw pseudoranges (RXM-RAWX) and the receiver's own navigation (NAV-PVT), times from ignition
 meas, counts, nav = {}, [], []
-for line in open(cap, errors="replace"):
+
+
+def read_sbf(path):
+    """A mosaic-G5 capture into meas/counts/nav (fix 3 while PVTGeodetic has a position, speed 3-D, height km)."""
+    sys.path.insert(0, str(SDR.parent))
+    import septentrio_sbf as sbf
+    sig = {"GPS L1CA": "GPS", "GAL E1": "GAL", "BDS B1I": "BDS"}
+    for line in open(path, errors="replace"):
+        p = line.split(" ", 2)
+        if len(p) < 3 or p[1] != "S" or len(p[2]) < 24:
+            continue
+        h = p[2].strip()
+        bid = int(h[10:12] + h[8:10], 16) & 0x1FFF
+        if bid not in (sbf.MEAS_EPOCH, sbf.PVT_GEODETIC):
+            continue
+        tow = int.from_bytes(bytes.fromhex(h[16:24]), "little")
+        if tow == 0xFFFFFFFF or (bid == sbf.MEAS_EPOCH and tow % 100):
+            continue
+        t = tow / 1000.0 - TOW0 - IGN
+        try:
+            b = bytes.fromhex(h)
+        except ValueError:
+            continue
+        if bid == sbf.MEAS_EPOCH:
+            n = {"GPS": 0, "GAL": 0, "BDS": 0}
+            for x in sbf.meas_epoch(b)["meas"]:
+                if x["signal"] in sig and x["pr"] is not None and x["sv"][1:].isdigit():
+                    meas.setdefault((sig[x["signal"]], int(x["sv"][1:])), []).append(t)
+                    n[sig[x["signal"]]] += 1
+            counts.append((t, n))
+        else:
+            q = sbf.pvt_geodetic(b)
+            if q["mode"] and q["vn"] is not None:
+                nav.append((t, 3, (q["vn"] ** 2 + q["ve"] ** 2 + q["vu"] ** 2) ** 0.5, q["h"] / 1000.0))
+            else:
+                nav.append((t, 0, 0.0, 0.0))
+
+
+with open(cap, errors="replace") as fh:
+    kind = next((p[1] for p in (ln.split(" ", 2) for ln in fh) if len(p) == 3 and p[1] in ("S", "U")), "U")
+for line in (open(cap, errors="replace") if kind == "U" else []):
     p = line.split(" ", 2)
     if len(p) < 3 or p[1] != "U":
         continue
@@ -70,6 +115,8 @@ for line in open(cap, errors="replace"):
         vn, ve, vd = struct.unpack_from("<iii", b, 48)
         nav.append((t, fix, (vn * vn + ve * ve + vd * vd) ** 0.5 / 1000.0,
                     struct.unpack_from("<i", b, 32)[0] / 1e6))
+if kind == "S":
+    read_sbf(cap)
 counts.sort(key=lambda c: c[0])
 nav.sort()
 
@@ -121,7 +168,18 @@ fig, axs = plt.subplots(NR, 2, figsize=(13.5, 10.5 * sum(HR) / 4.8), sharex="col
                         gridspec_kw={"width_ratios": [1.7, 1], "height_ratios": HR,
                                      "hspace": 0.12 * 4.8 / sum(HR) * 1.6, "wspace": 0.14})
 fixes = [(t, v, hh) for t, st, v, hh in nav if st >= 2]
-windows = [(a - PRO, b - PRO) for a, b in sc.get("blocked_windows", [])]
+if limit is None:
+    windows = [(a - PRO, b - PRO) for a, b in sc.get("blocked_windows", [])]
+else:                                            # the receiver's own export limit: over `limit` m/s in the truth
+    windows, w0 = [], None
+    for s in tr:
+        over = s["speed_mps"] > limit
+        if over and w0 is None:
+            w0 = s["t"] - PRO
+        elif not over and w0 is not None:
+            windows.append((w0, s["t"] - PRO))
+            w0 = None
+LIMIT_V = 515 if limit is None else limit
 t_last = file_end if file_end is not None else max(t for t, n in counts if sum(n.values()) > 0)
 for col, (x0, x1) in enumerate(((-60, x_max), (-5, 30))):
     for r in range(NR):
@@ -143,8 +201,8 @@ for col, (x0, x1) in enumerate(((-60, x_max), (-5, 30))):
     ax.plot(T_TR, [s["speed_mps"] for s in tr], color=INK, lw=1.2, label="true speed")
     ax.plot([f[0] for f in fixes], [f[1] for f in fixes], ".", ms=2.2, color=COL["GPS"], alpha=0.8,
             label="receiver's own speed (while fixed)")
-    ax.axhline(515, color=LIM, lw=0.9, ls="--")
-    ax.text(x1, 515, " 515 m/s", color=LIM, va="bottom", ha="right", fontsize=8)
+    ax.axhline(LIMIT_V, color=LIM, lw=0.9, ls="--")
+    ax.text(x1, LIMIT_V, f" {LIMIT_V:.0f} m/s", color=LIM, va="bottom", ha="right", fontsize=8)
     ax.set_ylim(-50, 1650)
     ax.grid(axis="y", color=GRID, lw=0.6)
     if col == 0:
@@ -259,8 +317,9 @@ for col, (x0, x1) in enumerate(((-60, x_max), (-5, 30))):
             ax.text(0.005, 0.04, "linear within ±0.5 m/s, logarithmic beyond", transform=ax.transAxes,
                     fontsize=7.5, color=MUTED)
     if col == 0:
-        axs[NR - 1][col].set_xlabel(f"time from ignition, s   (dotted: ignition and burnout T+{BURN:.1f}; amber: over "
-                                    f"515 m/s or 80 km; green strip: receiver has a fix)")
+        amber = "over 515 m/s or 80 km" if limit is None else f"over {limit:.0f} m/s"
+        axs[NR - 1][col].set_xlabel(f"time from ignition, s   (dotted: ignition and burnout T+{BURN:.1f}; amber: "
+                                    f"{amber}; green strip: receiver has a fix)")
     else:
         axs[NR - 1][col].set_xlabel("boost: T-5 to T+30 s")
 fig.subplots_adjust(top=1.0 - 0.45 / fig.get_figheight())

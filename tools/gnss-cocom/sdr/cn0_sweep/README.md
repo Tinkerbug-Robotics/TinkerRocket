@@ -1,10 +1,11 @@
-# C/N0 sweep: PX1105R, NEO-M8T and ZED-F9P through two boosts
+# C/N0 sweep: PX1105R, NEO-M8T, ZED-F9P and mosaic-G5 through two boosts
 
-The report "PX1105R, NEO-M8T and ZED-F9P C/N0 Sweep" (COCOM bench, #491, flown 2026-09-30 and 10-01): how each
+The report "PX1105R, NEO-M8T, ZED-F9P and mosaic-G5 C/N0 Sweep" (COCOM bench, #491, flown 2026-09-30 to 10-02): how each
 receiver keeps tracking through a simulated rocket boost, and how much that depends on signal strength. Two SignalSim
 flights -- the traveler (space shot, burnout T+13 at 1498 m/s, apogee 102 km) and the hotshot (thrust 10 to 40 g over
-4 s) -- were played into the PX1105R, the NEO-M8T and the ZED-F9P at levels from 9 dB under to 12 dB over the file's
-own.
+4 s) -- were played into the PX1105R, the NEO-M8T, the ZED-F9P and the Septentrio mosaic-G5 at levels from 9 dB under to
+12 dB over the file's own. The mosaic-G5 also flew the rig's two 82 km flights (`gentle_alt`, `spaceshot`), rebuilt in
+the same format, which place its export limit (600 m/s, no altitude term).
 
 ## What is here
 
@@ -20,9 +21,11 @@ own.
 | `pr_accuracy.py` | PX1105R pseudorange and Doppler errors against the SignalSim truth, receiver clock solved per epoch |
 | `m8t_accuracy.py` | the same for a u-blox receiver's RXM-RAWX (NEO-M8T, ZED-F9P; one signal per satellite); ephemerides from PX1105R captures of the same scenarios |
 | `boost_traces_wide.py` | PX1105R boost chart: each satellite's line-of-sight Doppler rate, lock, delivery, wrong measurements |
-| `m8t_boost_traces.py` | u-blox boost chart (`RX=ZED-F9P` for the F9P), and its comparison with the PX1105R at 515 m/s |
-| `cmp3_boost.py` | all three receivers: satellites still tracked and within 10 m at 515 m/s, both flights |
-| `plot_traveler_run.py`, `plot_m8t_run.py` | full-run plots (PX1105R; NEO-M8T and ZED-F9P) |
+| `m8t_boost_traces.py` | u-blox boost chart (`RX=ZED-F9P` for the F9P; `RX=mosaic-G5 RX_LIMIT=600` reads the mosaic's SBF and cuts at its 600 m/s), and its comparison with the PX1105R at 515 m/s |
+| `cmp3_boost.py` | all four receivers: satellites still tracked and within 10 m at 515 m/s, both flights (the mosaic-G5 at the PX1105R's moment) |
+| `plot_traveler_run.py`, `plot_m8t_run.py` | full-run plots (PX1105R; NEO-M8T, ZED-F9P, and the mosaic-G5 with `limit=600`) |
+| `mosaic_accuracy.py` | `m8t_accuracy.py` on the mosaic-G5's MeasEpoch (10 Hz, the files' signals); errors over 100 km, channels a transmitter underrun left on the old clock, set to NaN |
+| `mosaic_gate_chart.py` | the mosaic-G5's fix against its export limit on four flights (speed, altitude, blocked spans, underruns), and the edge table `data/mos_gate.json` |
 | `px_err_rate.py`, `m8t_err_rate.py` | pseudorange error against line-of-sight Doppler rate, all runs (the latter takes the receiver's JSONs) |
 | `build_report.py`, `export_standalone.py` | the page, and the page as one HTML file with its images inlined |
 | `traveler_summary.py`, `fix_runs.py`, `gaps.py`, `reentry_check.py`, `underrun_lines.py`, `sweep_table.py` | the traveler flight table |
@@ -40,16 +43,19 @@ CAPTURES=/path/to/captures ./make_report.sh accuracy charts page
 
 Inputs: the flight captures (`../captures`, gitignored; archived with the bench data) and the two flights' truth in
 `../scenarios` (gitignored), which `make_report.sh scenarios` regenerates byte for byte from `../make_flights.py`
-(`traveler_soft25`, `hotshot`; origin 0 N, 119 W) and `../pad_scenario.py`. The accuracy step takes a minute or two
+(`traveler_soft25`, `hotshot`, and for the mosaic-G5 `gentle_alt`, `spaceshot`; origin 0 N, 119 W) and
+`../pad_scenario.py`. The accuracy step takes a minute or two
 per run; `table` and `charts` read its output from `work/`.
 
-| Flight | PX1105R runs | NEO-M8T runs | ZED-F9P runs |
-| --- | --- | --- | --- |
-| traveler | `wp12` +12, `wp6b` +6, `wcr` 0, `wn3t` -3, `wn6` -6, `wn9` -9 dB | `mtr12`, `mtr6`, `mtr0`, `mtrn6b` (+12 to -6 dB) | `ftr12b`, `ftr6b`, `ftr0b`, `ftrn6b` |
-| hotshot | `hs12`, `hs6`, `hs0`, `hsn6` (+12 to -6 dB) | `mhs12`, `mhs6`, `mhs0`, `mhsn6` (+12 to -6 dB) | `fhs12b`, `fhs6b`, `fhs0b`, `fhsn6b` |
+| Flight | PX1105R runs | NEO-M8T runs | ZED-F9P runs | mosaic-G5 runs |
+| --- | --- | --- | --- | --- |
+| traveler | `wp12` +12, `wp6b` +6, `wcr` 0, `wn3t` -3, `wn6` -6, `wn9` -9 dB | `mtr12`, `mtr6`, `mtr0`, `mtrn6b` (+12 to -6 dB) | `ftr12b`, `ftr6b`, `ftr0b`, `ftrn6b` | `g5tr12`, `g5tr6`, `g5tr0`, `g5trn6` |
+| hotshot | `hs12`, `hs6`, `hs0`, `hsn6` (+12 to -6 dB) | `mhs12`, `mhs6`, `mhs0`, `mhsn6` (+12 to -6 dB) | `fhs12b`, `fhs6b`, `fhs0b`, `fhsn6b` | `g5hs12`, `g5hs6`, `g5hs0`, `g5hsn6` |
+| 82 km | | | | `g5ga6` (`gentle_alt`), `g5ss6` (`spaceshot`), +6 dB |
 
 The ZED-F9P names are its second sweep's levels; `make_report.sh`'s `cap()` gives the flight kept for each (a trailing
-`r` or `rr` on the capture is a re-flight).
+`r` or `rr` on the capture is a re-flight). The mosaic-G5's report names (`g5...`) map to its captures the same way
+(`mosaic_g5_wide<tag>_...`).
 
 ## Choices worth knowing
 
@@ -70,7 +76,16 @@ The ZED-F9P names are its second sweep's levels; `make_report.sh`'s `cap()` give
   that.
 - The sky reference levels (C/N0 on the roof antenna) are quoted in `report_text.json`; the roof logs behind them are
   not committed, because their satellite geometry is enough to locate the antenna.
+- The mosaic-G5 withholds above 600 m/s, so its charts follow it to its own cut-off (`RX_LIMIT=600`) while its
+  comparison with the PX1105R stays just after 515 m/s, where it is still reporting. Its errors use no Doppler delay.
+- Its elevations come from the accuracy NPZ (broadcast ephemeris and the true position): after a cold start on the rig
+  it reports elevations only for satellites in its almanac, GPS and a few Galileo.
+- Underruns hit the mosaic-G5 harder: each drops every channel, and channels that miss the clock step stay hundreds of
+  km off. `mosaic_accuracy.py` sets errors over 100 km to NaN (none come from tracking), and at +12 dB both kept
+  flights lost exactly the GPS satellites a pad underrun had left on the old clock.
 
-Not here: the SignalSim files and the bench tooling that flew them (the buffered transmitter with noise injection and
-carrier correction, and the flight queues). `f9p_signals.py` and `f9p_ports.py` are here because the F9P's results
-depend on them.
+Not here: the SignalSim files and the bench tooling that flew the PX1105R, NEO-M8T and ZED-F9P (the buffered transmitter
+with noise injection and carrier correction, and their flight queues). `f9p_signals.py` and `f9p_ports.py` are here
+because the F9P's results depend on them. The mosaic-G5's runner and queues are one folder up (`mosaic_run.py`,
+`mosaic_sweep.sh`, `mosaic_82km.sh`, `signalsim_wide_flight.py`); they use the same buffered transmitter, named by
+`HACKRF_TX_RAM`.

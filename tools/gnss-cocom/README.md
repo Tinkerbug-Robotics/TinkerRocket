@@ -25,6 +25,7 @@ the separate high-g/transonic dynamics problem (#174 / #249 / #262).
 | `firmware/lc86_bridge/` | ESP-IDF image for the Tinker-Beetle's flight computer: its LC86G's UART on USB, pyro outputs parked low, silences reported |
 | `firmware/px1105r_p4_bridge/` | ESP-IDF image for the PX1105R board's ESP32-P4 (`hardware/legacy/gnss-px1105r-18mm-highpower-ext-ant`), its first image: the receiver's UART on USB and on the host UART (J4), 115200. A bootloader hook pulls the two UART outputs up a few ms after reset so neither line floats while the P4 boots |
 | `rtcm3.py` | RTCM3 framing (CRC-24Q) and MSM7 decoding: per-satellite C/N0, Doppler and lock time from the LC86G |
+| `septentrio_sbf.py` | Septentrio SBF framing (CRC-CCITT) and decoding for the mosaic-G5: MeasEpoch (pseudorange, carrier, Doppler, C/N0, lock per signal), PVTGeodetic, ReceiverStatus, SatVisibility, ChannelStatus |
 
 Still to be written, once the RF side exists: the trajectory generator (the
 pyproj snippet in #491) and the capture-vs-trajectory correlation step.

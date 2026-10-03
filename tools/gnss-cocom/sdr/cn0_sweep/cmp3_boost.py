@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Three receivers through both boosts on one chart: of the satellites each tracked at ignition, the share still
+"""The receivers through both boosts on one chart: of the satellites each tracked at ignition, the share still
 tracked AND within 10 m of the truth at its last raw output before 515 m/s -- the PX1105R at its first channel status
 after 515 m/s (lock, and the error of what it then delivers), the NEO-M8T and ZED-F9P at their raw cut-off (no
-sustained loss, last valid error within 10 m). Rows: hotshot, traveler; columns: GPS, Galileo, BeiDou; x: signal level.
-From the boost charts' JSONs (boost_traces_wide.py for the PX1105R, m8t_boost_traces.py for the u-blox parts).
-    cmp3_boost.py OUT.png PX_HOT M8T_HOT F9P_HOT PX_TRAV M8T_TRAV F9P_TRAV"""
+sustained loss, last valid error within 10 m). With the mosaic-G5's JSONs as a fourth pair it is drawn too, judged at
+the PX1105R's moment just after 515 m/s, since it keeps reporting to 600 m/s. Rows: hotshot, traveler; columns: GPS,
+Galileo, BeiDou; x: signal level. From the boost charts' JSONs (boost_traces_wide.py for the PX1105R,
+m8t_boost_traces.py for the others).
+    cmp3_boost.py OUT.png PX_HOT M8T_HOT F9P_HOT [MOS_HOT] PX_TRAV M8T_TRAV F9P_TRAV [MOS_TRAV]"""
 import json
 import math
 import sys
@@ -17,10 +19,11 @@ import matplotlib.pyplot as plt                                         # noqa: 
 WRONG_M = 10.0
 SDR = Path(__file__).resolve().parents[1]
 out = sys.argv[1]
-files = {"hotshot": sys.argv[2:5], "traveler_soft25": sys.argv[5:8]}
-RX = ("PX1105R", "NEO-M8T", "ZED-F9P")
+n_rx = (len(sys.argv) - 2) // 2                              # 3, or 4 with the mosaic-G5
+files = {"hotshot": sys.argv[2:2 + n_rx], "traveler_soft25": sys.argv[2 + n_rx:2 + 2 * n_rx]}
+RX = ("PX1105R", "NEO-M8T", "ZED-F9P", "mosaic-G5")[:n_rx]
 STYLE = {"PX1105R": ("#6639ba", "o", (0, -13)), "NEO-M8T": ("#bf8700", "s", (0, 7)),
-         "ZED-F9P": ("#0f7b6c", "D", (13, -3))}
+         "ZED-F9P": ("#0f7b6c", "D", (13, -3)), "mosaic-G5": ("#a40e26", "v", (13, 5))}
 NAME = {"G": "GPS", "E": "Galileo", "C": "BeiDou"}
 LEVELS = ["+12 dB", "+6 dB", "0 dB", "-6 dB"]
 INK, MUTED, GRID = "#1f2328", "#59636e", "#d8dee4"
@@ -50,6 +53,28 @@ def px_counts(runs, scen):
     return res
 
 
+def tcmp_of(scen):
+    o = over_s(scen)
+    return math.floor(o) + (1.0 if o % 1.0 < 0.85 else 2.0)
+
+
+def mosaic_counts(runs, scen):
+    """Still reporting at 515 m/s: no sustained loss before the PX1105R's moment, last valid error there within 10 m."""
+    tc = tcmp_of(scen)
+    res = {}
+    for r in runs:
+        for c in "GEC":
+            tot = [q for q in r["recs"] if q["sys"] == c]
+            kept = 0
+            for q in tot:
+                ev = [x for t, ok, v, x in q["series"] if ok and t <= tc]
+                if (not q["lost"] or q["t"] > tc) and (not ev or ev[-1] is None or abs(ev[-1]) <= WRONG_M):
+                    kept += 1
+            if tot:
+                res.setdefault(r["label"], {})[c] = (kept, len(tot))
+    return res
+
+
 def ublox_counts(runs):
     res = {}
     for r in runs:
@@ -64,9 +89,11 @@ plt.rcParams.update({"font.size": 9, "text.color": INK, "axes.labelcolor": INK, 
                      "ytick.color": MUTED, "axes.edgecolor": GRID})
 fig, axs = plt.subplots(2, 3, sharex=True, sharey=True, figsize=(12.2, 7.4))
 table = []
-for row, (scen, (fpx, fm8, ff9)) in enumerate(files.items()):
-    counts = {"PX1105R": px_counts(json.load(open(fpx)), scen), "NEO-M8T": ublox_counts(json.load(open(fm8))),
-              "ZED-F9P": ublox_counts(json.load(open(ff9)))}
+for row, (scen, fs) in enumerate(files.items()):
+    counts = {"PX1105R": px_counts(json.load(open(fs[0])), scen), "NEO-M8T": ublox_counts(json.load(open(fs[1]))),
+              "ZED-F9P": ublox_counts(json.load(open(fs[2])))}
+    if n_rx > 3:
+        counts["mosaic-G5"] = mosaic_counts(json.load(open(fs[3])), scen)
     for col, c in enumerate("GEC"):
         ax = axs[row][col]
         pts = {}                                    # level index -> [(y, rx, label)]
@@ -110,11 +137,13 @@ for ax in axs[1]:
 axs[0][2].legend(frameon=False, fontsize=8.5, loc="upper left", bbox_to_anchor=(1.02, 1.0))
 fig.suptitle("Of the satellites tracked at ignition, the share still tracked and within 10 m of the truth at the last "
              "raw output before 515 m/s", x=0.06, ha="left", fontsize=10.5)
+mos = ("\nmosaic-G5: the same at the PX1105R's moment just after 515 m/s (it reports on to 600 m/s)."
+       if n_rx > 3 else "")
 fig.text(0.06, 0.005, "PX1105R: locked in its first 1 Hz channel status after 515 m/s, and what it then delivers within "
          "10 m. NEO-M8T and ZED-F9P: no gap >= 0.5 s in valid raw pseudoranges up to their raw cut-off at 515 m/s, and "
-         "the last one within 10 m.\nThe u-blox parts sit behind 10 dB more attenuation than the PX1105R on the same "
-         "files; the levels are the files' (SignalSim C/N0 setting, added noise for -6 dB).", fontsize=8, color=MUTED,
-         ha="left")
+         f"the last one within 10 m.{mos}\nThe {'other parts' if n_rx > 3 else 'u-blox parts'} sit behind 10 dB more "
+         "attenuation than the PX1105R on the same files; the levels are the files' (SignalSim C/N0 setting, added "
+         "noise for -6 dB).", fontsize=8, color=MUTED, ha="left")
 fig.subplots_adjust(top=0.9, bottom=0.12, wspace=0.08, hspace=0.18, right=0.86)
 fig.savefig(out, dpi=140, bbox_inches="tight", facecolor="white")
 print("wrote", out)

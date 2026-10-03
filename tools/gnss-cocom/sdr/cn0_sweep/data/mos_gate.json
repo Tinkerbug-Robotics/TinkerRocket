@@ -1,0 +1,152 @@
+[
+ {
+  "flight": "Hotshot (10 to 40 g), +6 dB",
+  "start": 3.09,
+  "end": 15.99,
+  "up_t": 3.04,
+  "up_rx": 585.1,
+  "up_truth": 585.0,
+  "up_blocked_truth": 599.9,
+  "up_alt": 1.94,
+  "down_t": 16.04,
+  "down_rx": 596.8,
+  "down_truth": 596.9,
+  "down_blocked_truth": 597.6,
+  "down_alt": 11.22
+ },
+ {
+  "flight": "Hotshot (10 to 40 g), +6 dB",
+  "fixes_above_80km": 0,
+  "top_fix_km": 0.0,
+  "tie_s": -0.01,
+  "underruns": [
+   -147.2,
+   -91.2,
+   -89.2,
+   85.8,
+   108.8
+  ]
+ },
+ {
+  "flight": "Traveler (102 km), +12 dB",
+  "start": 6.99,
+  "end": 89.49,
+  "up_t": 6.94,
+  "up_rx": 597.8,
+  "up_truth": 598.3,
+  "up_blocked_truth": 604.5,
+  "up_alt": 2.96,
+  "down_t": 89.54,
+  "down_rx": 595.1,
+  "down_truth": 595.2,
+  "down_blocked_truth": 595.7,
+  "down_alt": 83.63
+ },
+ {
+  "flight": "Traveler (102 km), +12 dB",
+  "start": 215.19,
+  "end": 278.99,
+  "up_t": 215.14,
+  "up_rx": 599.9,
+  "up_truth": 599.8,
+  "up_blocked_truth": 600.3,
+  "up_alt": 83.29,
+  "down_t": 279.04,
+  "down_rx": 594.1,
+  "down_truth": 594.4,
+  "down_blocked_truth": 595.8,
+  "down_alt": 31.94
+ },
+ {
+  "flight": "Traveler (102 km), +12 dB",
+  "fixes_above_80km": 2347,
+  "top_fix_km": 102.22,
+  "tie_s": -0.01,
+  "underruns": [
+   -57.2,
+   -11.2,
+   184.8
+  ]
+ },
+ {
+  "flight": "gentle_alt (3 g, 82.5 km), +6 dB",
+  "start": 37.17,
+  "end": 100.97,
+  "up_t": 37.12,
+  "up_rx": 599.3,
+  "up_truth": 598.9,
+  "up_blocked_truth": 599.6,
+  "up_alt": 13.11,
+  "down_t": 101.02,
+  "down_rx": 598.3,
+  "down_truth": 598.6,
+  "down_blocked_truth": 599.1,
+  "down_alt": 63.81
+ },
+ {
+  "flight": "gentle_alt (3 g, 82.5 km), +6 dB",
+  "start": 226.62,
+  "end": 271.47,
+  "up_t": 226.57,
+  "up_rx": 600.0,
+  "up_truth": 599.7,
+  "up_blocked_truth": 600.2,
+  "up_alt": 63.49,
+  "down_t": 271.52,
+  "down_rx": 589.6,
+  "down_truth": 590.2,
+  "down_blocked_truth": 591.2,
+  "down_alt": 31.49
+ },
+ {
+  "flight": "gentle_alt (3 g, 82.5 km), +6 dB",
+  "fixes_above_80km": 914,
+  "top_fix_km": 82.49,
+  "tie_s": -0.03,
+  "underruns": [
+   122.8,
+   125.8,
+   295.8
+  ]
+ },
+ {
+  "flight": "spaceshot (15 g, 82.5 km), +6 dB",
+  "start": 4.74,
+  "end": 71.99,
+  "up_t": 4.69,
+  "up_rx": 598.9,
+  "up_truth": 599.1,
+  "up_blocked_truth": 604.8,
+  "up_alt": 2.68,
+  "down_t": 72.04,
+  "down_rx": 596.6,
+  "down_truth": 596.7,
+  "down_blocked_truth": 597.2,
+  "down_alt": 63.89
+ },
+ {
+  "flight": "spaceshot (15 g, 82.5 km), +6 dB",
+  "start": 197.49,
+  "end": 241.99,
+  "up_t": 197.44,
+  "up_rx": 600.0,
+  "up_truth": 600.1,
+  "up_blocked_truth": 600.6,
+  "up_alt": 63.43,
+  "down_t": 242.04,
+  "down_rx": 595.8,
+  "down_truth": 595.5,
+  "down_blocked_truth": 596.5,
+  "down_alt": 31.65
+ },
+ {
+  "flight": "spaceshot (15 g, 82.5 km), +6 dB",
+  "fixes_above_80km": 704,
+  "top_fix_km": 82.46,
+  "tie_s": -0.01,
+  "underruns": [
+   -113.2,
+   115.8
+  ]
+ }
+]

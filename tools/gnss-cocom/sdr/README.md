@@ -41,6 +41,13 @@ variable at a time.
 | `gain_sweep.py` | Finds the working TX gain for a receiver, ranking satellites over C/N&#8320; |
 | `serial_probe.py` | Diagnoses a silent UART: baud sweep plus an adapter loopback test |
 | `air530_config.py` | Raises an Air530/AT6558R off its 9600 default via `$PCAS01` |
+| `mosaic_log.py` | Logs a Septentrio mosaic-G5 on USB: sets 20 Hz SBF (MeasEpoch, MeasExtra, PVTGeodetic) and receiver dynamics High/Unlimited on every connection, saves nothing to the receiver, writes rig-format `S` lines plus a `.sbf` copy; survives unplug and replug |
+| `mosaic_run.py` | Flies one scenario into the mosaic-G5 (`run_radiated.py` for SBF): cold start, the test setup, Galileo OSNMA off, the buffered transmitter (`HACKRF_TX_RAM`, `TX_NOISE_DB`, `TX_CARRIER_HZ`; IQ files from `C8_DIR`); `--listen-only` times cold starts on the sky |
+| `mosaic_sweep.sh` | The C/N0 sweep's eight flights on the mosaic-G5, with the F9P sweep's checks and one re-flight on an underrun in T&minus;60..T+30 |
+| `mosaic_82km.sh` | `gentle_alt` and `spaceshot` on the mosaic-G5: builds their wide SignalSim files once the transmitter is idle, flies each, re-flies once on any underrun from T&minus;60 |
+| `signalsim_wide_flight.py` | SignalSim configs for a rig flight in the C/N0 sweep's wide format (GPS L1 C/A, Galileo E1, BeiDou B1I at 18.48 Msps, 180 s pad, ignition 2026-08-18 08:40:00 GPST); run in the SignalSim working folder |
+| `mosaic_gate.py` | Where the mosaic-G5 withholds its fix and raw measurements in one flight, against the truth (time tied by its own climb rate), with pad C/N0 and underrun times |
+| `mosaic_sky_levels.py` | The mosaic-G5's C/N0 on the real sky by system, signal and elevation; writes `sky_px.json`-style rows, to keep local (they locate the antenna) |
 | `blanking.py` | Tests whether C/N&#8320; blanking tracks the gate or free-runs |
 | `report_text.html` | **The export-limit report's prose — edit this**, then run `build_report.py` |
 | `boost_report_text.html` | **The boost-dynamics report's prose**, same workflow |

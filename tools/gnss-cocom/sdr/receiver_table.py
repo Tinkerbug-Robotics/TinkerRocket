@@ -102,6 +102,8 @@ def vel_marker(r):
     """Footnote key for a velocity bracket that needs qualifying, or None."""
     if r.get("velocity_gate_mechanism") == "mute":
         return "mute"
+    if r.get("velocity_gate_mechanism") == "own speed":
+        return "own speed"
     e = r.get("velocity_edges")
     if e and len(e.get("fix", [])) < 2:
         return "few edges"
@@ -149,6 +151,10 @@ FOOTNOTES = {
                      "stays blocked below it, and a single edge can close an epoch "
                      "early, so this is latency and epoch width, not a threshold "
                      "below 515. The per-edge midpoints sit near 515."),
+    "own speed": ("\u2020\u2020",
+                  "Acts on the receiver's own speed, which runs within about 0.5 m/s of the truth: the brackets, "
+                  "taken against the truth, overlap by that much. Every closing edge on the slow crossings (3 g "
+                  "climb, re-entry) falls within 599.6-600.6 m/s."),
     "mute": ("\u2016",
              "Enforced by muting ALL output -- NMEA, acknowledgements and raw "
              "measurements -- rather than by withholding the position while "
