@@ -1,12 +1,17 @@
 # gnss-sdr-dev: development board spec (v0)
 
 **Date:** 2026-09-30.
-**Status:** approved by the owner 2026-09-30. Schematic captured the same day in `hardware/gnss-sdr-dev/` (ERC clean, no layout yet); awaiting owner review.
+**Status:** approved by the owner 2026-09-30.
+- Schematic captured the same day in `hardware/gnss-sdr-dev/` (ERC clean).
+- Board placed by the owner, and routed on eight layers 2026-10-01/02.
+- Review pass 2026-10-02: DRC clean.
+- Awaiting the owner's review before fab.
+
 **Parents:**
 - [gnss-receiver-architecture.md](gnss-receiver-architecture.md)
 - [gnss-receiver-review.md](gnss-receiver-review.md)
 
-**Project folder:** `hardware/gnss-sdr-dev/` (not created yet).
+**Project folder:** `hardware/gnss-sdr-dev/`.
 
 ## What the board is for
 
@@ -29,7 +34,7 @@ It is the first hardware for our own GNSS receiver.
 | IMU | The Space Bug's ISM6HG256X |
 | Host link | The Space Bug's host connector: J4, 5-pin JST-SH, pin-for-pin with the Mantis J1 |
 | Power | USB-C 5 V + pack input. GNSS RF on its own LDO |
-| Board | 6 layers, JLC06161H-3313 (sig/gnd/sig/gnd/pwr/sig), relaxed outline ~80 × 60 mm, mounting holes |
+| Board | 8 layers, JLC08161H-2116 (sig/gnd/sig/gnd/pwr/sig/sig/gnd), the Beetle and Mantis stack. Outline ~80 × 60 mm, mounting holes. The board started on 6 layers (JLC06161H-3313); the owner allowed 8 on 2026-10-01 so the P4's pins could fan out |
 | Dev features | FPGA JTAG header + SPI configuration-flash footprint; logic-analyzer header (sample bus, sample clock, 1 ms tick) |
 | Shielding | Solderable fence + removable lid over the RF section |
 | Software | Our own code, with Pocket SDR as the reference (separate session) |
@@ -130,6 +135,13 @@ SMA ─ ESD ─ bias tee (switchable, current-limited) ─ 2-way divider ─┬�
   - host UART on J4 (HOST_TX, HOST_RX, HOST_TX2 as on the Space Bug);
   - IMU on SPI as on the Space Bug.
 - **J4:** 5-pin JST-SH, pin-for-pin with the Mantis J1 and the Space Bug. PPS and event also go to the logic-analyzer/debug header.
+- **USB (owner, 2026-10-01):**
+  - One USB-C, behind its ESD and common-mode choke, feeds a USB 2.0 switch as on the Mantis.
+  - A slide switch picks the P4's USB-Serial/JTAG (flashing, console) or its high-speed PHY (sample streaming).
+  - The second USB-C port was removed.
+  - The pairs are routed to 90 Ω differential.
+- **Boot button (owner, 2026-10-02):** on GPIO35, as on the Space Bug.
+- **Data flash (owner, 2026-10-01):** the Mantis's flight-data NAND, on the P4's four free GPIOs, so a flight on this board can be recorded.
 
 ### Power
 
@@ -166,5 +178,11 @@ SMA ─ ESD ─ bias tee (switchable, current-limited) ─ 2-way divider ─┬�
 
 1. ~~Owner approves or edits this spec.~~ Approved 2026-09-30.
 2. ~~Create `hardware/gnss-sdr-dev/`: a KiCad 10 project with the shared libraries, the reused P4/IMU/USB sheets, and new RF, front-end, clock, FPGA and power sheets.~~ Done 2026-09-30.
-3. Schematic capture and ERC: done 2026-09-30 (0 errors). Owner review is next.
-4. The owner places and routes. A design review follows, before fab.
+3. ~~Schematic capture and ERC.~~ Done 2026-09-30 (0 errors).
+4. ~~Placement and routing.~~ Placed by the owner; routed on eight layers 2026-10-01/02 at the owner's request.
+5. ~~Design-review pass.~~ Done 2026-10-02:
+   - DRC clean;
+   - return vias added;
+   - the USB pairs re-routed to 90 Ω;
+   - 3D models for every part.
+6. The owner's review, then the fab package.
