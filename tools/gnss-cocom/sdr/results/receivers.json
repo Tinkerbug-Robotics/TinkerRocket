@@ -311,6 +311,70 @@
    "altitude_note": "about 10 km",
    "recovery_note": "never after the 500 m/s mute (3 g); 3.7 s below 10 km (15 g)",
    "summary": false
+  },
+  {
+   "id": "mosaic_g5",
+   "part": "Septentrio mosaic-G5 P3",
+   "bands": "L1 + L2 + L5 + E6 (L1 used here)",
+   "protocol": "SBF",
+   "host": "standalone on its own USB CDC (152A:8231)",
+   "path": "conducted",
+   "rf": "SignalSim wide files (GPS + Galileo + BeiDou), +12 to 0 dB, TX gain 3, the C/N0 sweep's u-blox path",
+   "rate_hz": 20,
+   "date": "2026-10-02",
+   "runs": 11,
+   "velocity_edges": {
+    "fix": [
+     587.9,
+     585.0,
+     598.3,
+     599.8,
+     598.3,
+     599.8,
+     598.3,
+     597.0,
+     599.2,
+     599.8,
+     598.9,
+     599.7,
+     599.1,
+     600.1,
+     599.8
+    ],
+    "blocked": [
+     602.9,
+     599.9,
+     604.5,
+     600.3,
+     604.5,
+     600.3,
+     604.5,
+     603.2,
+     599.7,
+     600.3,
+     599.6,
+     600.2,
+     604.8,
+     600.6,
+     600.2
+    ]
+   },
+   "velocity_gate_mechanism": "own speed",
+   "velocity_fix_max_mps": 600.1,
+   "velocity_blocked_min_mps": 599.6,
+   "altitude_fix_max_km": 102.22,
+   "altitude_blocked_min_km": null,
+   "altitude_note": "none to 102 km",
+   "altitude_gate_cause": "none",
+   "combination": "speed only",
+   "recovery_s": [
+    0.1,
+    0.4
+   ],
+   "sats_median": 13,
+   "sats_p05": 10,
+   "velocity_gate_present": true,
+   "notes": "Flown on the C/N0 sweep's SignalSim files rather than August's gps-sdr-sim ones: 11 flights (hotshot, traveler, gentle_alt, spaceshot) from +12 to 0 dB, 20 Hz, receiver dynamics High/Unlimited, cold start each flight. It withholds its fix and its raw measurements together whenever its own speed passes 600 m/s, the speed in the current EU and US dual-use rule, and re-opens 0.1-0.4 s after the speed falls back, a few m/s under the limit. No altitude gate: a fix through apogee on every flight past 80 km (102.2 km on the traveler), unbroken through both 80 km crossings on the 3 g climb. Firmware 1.0.0; its permission file lists No NATO limits as not permitted. Satellite counts are GPS L1 C/A tracked on gentle_alt and spaceshot. The rig's transmitter underruns hit it hardest of any part: each drops every channel, and channels left on the old clock keep it from a fix (outlier rejection) for up to 70 s."
   }
  ]
 }

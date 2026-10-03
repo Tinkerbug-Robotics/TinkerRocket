@@ -2,7 +2,7 @@
 # The C/N0 sweep report, end to end.   make_report.sh [STEP ...]   (default: page)
 #   scenarios the two flights' truth -> ../scenarios (gitignored; accuracy, table and charts make them if missing)
 #   accuracy  pseudorange/Doppler errors per run -> work/acc_*.npz (PX1105R), work/m8tacc_*.npz (NEO-M8T),
-#             work/f9pacc_*.npz (ZED-F9P)
+#             work/f9pacc_*.npz (ZED-F9P), work/mosacc_*.npz (mosaic-G5)
 #   table     the traveler flight table -> data/sweep_table.json (needs accuracy)
 #   charts    boost charts and their data -> figures/, data/; error-vs-rate charts; run plots (needs accuracy)
 #   page      page/index.html from report_template.html, report_text.json, data/ and figures/
@@ -24,6 +24,9 @@ M8T_TRAV="mtr12 mtr6 mtr0 mtrn6b"
 M8T_HOT="mhs12 mhs6 mhs0 mhsn6"
 F9P_TRAV="ftr12b ftr6b ftr0b ftrn6b"         # second F9P sweep; cap() names the flight kept for each level
 F9P_HOT="fhs12b fhs6b fhs0b fhsn6b"
+MOS_TRAV="g5tr12 g5tr6 g5tr0 g5trn6"            # mosaic-G5 (2026-10-02); cap() names the flight kept for each level
+MOS_HOT="g5hs12 g5hs6 g5hs0 g5hsn6"
+MOS_82="g5ga6 g5ss6"                             # the two 82 km flights, +6 dB
 
 cap() {     # run tag -> its capture
   case $1 in
@@ -47,29 +50,44 @@ cap() {     # run tag -> its capture
     fhs6b) echo "$C/zed_f9p_widefhs6br_signalsim_hotshot_all_2026_51_w_p180.log" ;;
     fhs0b) echo "$C/zed_f9p_widefhs0brr_signalsim_hotshot_all_2026_45_w_p180.log" ;;
     fhsn6b) echo "$C/zed_f9p_widefhsn6br_signalsim_hotshot_all_2026_45_w_p180.log" ;;
+    g5tr12) echo "$C/mosaic_g5_widemtr12_signalsim_traveler_all_2026_57_w_p180.log" ;;
+    g5tr6) echo "$C/mosaic_g5_widemtr6_signalsim_traveler_all_2026_51_w_p180.log" ;;
+    g5tr0) echo "$C/mosaic_g5_widemtr0r_signalsim_traveler_all_2026_45_w_p180_cofs.log" ;;
+    g5trn6) echo "$C/mosaic_g5_widemtrn6b_signalsim_traveler_all_2026_45_w_p180_cofs.log" ;;
+    g5trg) echo "$C/mosaic_g5_widemtr12r_signalsim_traveler_all_2026_57_w_p180.log" ;;     # the gate chart's traveler
+    g5hs12) echo "$C/mosaic_g5_widemhs12_signalsim_hotshot_all_2026_57_w_p180.log" ;;
+    g5hs6) echo "$C/mosaic_g5_widemhs6_signalsim_hotshot_all_2026_51_w_p180.log" ;;
+    g5hs0) echo "$C/mosaic_g5_widemhs0r_signalsim_hotshot_all_2026_45_w_p180.log" ;;
+    g5hsn6) echo "$C/mosaic_g5_widemhsn6r_signalsim_hotshot_all_2026_45_w_p180.log" ;;
+    g5ga6) echo "$C/mosaic_g5_widemga6_signalsim_gentle_alt_all_2026_51_w_p180.log" ;;
+    g5ss6) echo "$C/mosaic_g5_widemss6_signalsim_spaceshot_all_2026_51_w_p180.log" ;;
     *) echo "unknown run $1" >&2; exit 1 ;;
   esac
 }
 
 level() {   # run tag -> "level:how the level was made"
   case $1 in
-    wp12|hs12|mtr12|mhs12|ftr12b|fhs12b) echo "+12:file generated at 57 dB-Hz" ;;
-    wp6b|hs6|mtr6|mhs6|ftr6b|fhs6b) echo "+6:file generated at 51 dB-Hz" ;;
-    wcr|hs0|mtr0|mhs0|ftr0b|fhs0b) echo "0:file generated at 45 dB-Hz" ;;
+    wp12|hs12|mtr12|mhs12|ftr12b|fhs12b|g5tr12|g5hs12) echo "+12:file generated at 57 dB-Hz" ;;
+    wp6b|hs6|mtr6|mhs6|ftr6b|fhs6b|g5tr6|g5hs6|g5ga6|g5ss6) echo "+6:file generated at 51 dB-Hz" ;;
+    wcr|hs0|mtr0|mhs0|ftr0b|fhs0b|g5tr0|g5hs0) echo "0:file generated at 45 dB-Hz" ;;
     wn3t) echo "-3:45 dB-Hz file with 3 dB of added noise" ;;
-    wn6|hsn6|mtrn6b|mhsn6|ftrn6b|fhsn6b) echo "-6:45 dB-Hz file with 6 dB of added noise" ;;
+    wn6|hsn6|mtrn6b|mhsn6|ftrn6b|fhsn6b|g5trn6|g5hsn6) echo "-6:45 dB-Hz file with 6 dB of added noise" ;;
     wn9) echo "-9:45 dB-Hz file with 9 dB of added noise" ;;
   esac
 }
 
 scenarios() {   # the files SignalSim was given and the truth every script reads (origin 0 N, 119 W)
-  python3 ../make_flights.py -o "$SC" --only traveler_soft25 --only hotshot --lat 0 --lon -119 > "$W/make_flights.log"
+  python3 ../make_flights.py -o "$SC" --only traveler_soft25 --only hotshot --only gentle_alt --only spaceshot \
+    --lat 0 --lon -119 > "$W/make_flights.log"
   python3 ../pad_scenario.py traveler_soft25 600 >> "$W/make_flights.log"
   python3 ../pad_scenario.py hotshot 600 1060 >> "$W/make_flights.log"     # the flown file stops at 1060 s
+  python3 ../pad_scenario.py gentle_alt 600 >> "$W/make_flights.log"
+  python3 ../pad_scenario.py spaceshot 600 >> "$W/make_flights.log"
 }
 
 need_scenarios() {
-  [ -e "$SC/traveler_soft25_pad600.csv" ] && [ -e "$SC/hotshot_pad600.csv" ] || scenarios
+  [ -e "$SC/traveler_soft25_pad600.csv" ] && [ -e "$SC/hotshot_pad600.csv" ] && [ -e "$SC/gentle_alt_pad600.csv" ] \
+    && [ -e "$SC/spaceshot_pad600.csv" ] || scenarios
 }
 
 accuracy() {
@@ -90,6 +108,11 @@ accuracy() {
   for t in $F9P_HOT; do
     python3 m8t_accuracy.py "$(cap $t)" "$W/f9pacc_$t.npz" --scenario hotshot --rr-lag 0.0 > "$W/f9p_acc_$t.out"
   done
+  # the mosaic-G5: errors over 100 km (channels left on a clock step by a transmitter underrun) set to NaN
+  for t in $MOS_TRAV; do python3 mosaic_accuracy.py "$(cap $t)" "$W/mosacc_$t.npz" --scenario traveler > "$W/mosacc_$t.out"; done
+  for t in $MOS_HOT; do python3 mosaic_accuracy.py "$(cap $t)" "$W/mosacc_$t.npz" --scenario hotshot > "$W/mosacc_$t.out"; done
+  python3 mosaic_accuracy.py "$(cap g5ga6)" "$W/mosacc_g5ga6.npz" --scenario gentle_alt > "$W/mosacc_g5ga6.out"
+  python3 mosaic_accuracy.py "$(cap g5ss6)" "$W/mosacc_g5ss6.npz" --scenario spaceshot > "$W/mosacc_g5ss6.out"
 }
 
 table() {
@@ -137,11 +160,24 @@ charts() {
     "0 dB=$(cap ftr0b)=$W/f9pacc_ftr0b.npz" "-6 dB=$(cap ftrn6b)=$W/f9pacc_ftrn6b.npz"
   mv "$W/f9p_boost.json" "$W/f9p_trav_boost.json" "$D/"
   mv "$W/f9p_boost.png" "$W/f9p_boost_compare.png" "$W/f9p_trav_boost.png" "$W/f9p_trav_boost_compare.png" "$F/"
+  RX=mosaic-G5 RX_LIMIT=600 BOOST_SCEN=hotshot python3 m8t_boost_traces.py "$W/mos_boost" "$D/hot_boost.json" \
+    "+12 dB=$(cap g5hs12)=$W/mosacc_g5hs12.npz" "+6 dB=$(cap g5hs6)=$W/mosacc_g5hs6.npz" \
+    "0 dB=$(cap g5hs0)=$W/mosacc_g5hs0.npz" "-6 dB=$(cap g5hsn6)=$W/mosacc_g5hsn6.npz"
+  RX=mosaic-G5 RX_LIMIT=600 BOOST_SCEN=traveler_soft25 python3 m8t_boost_traces.py "$W/mos_trav_boost" "$D/boost_final.json" \
+    "+12 dB=$(cap g5tr12)=$W/mosacc_g5tr12.npz" "+6 dB=$(cap g5tr6)=$W/mosacc_g5tr6.npz" \
+    "0 dB=$(cap g5tr0)=$W/mosacc_g5tr0.npz" "-6 dB=$(cap g5trn6)=$W/mosacc_g5trn6.npz"
+  mv "$W/mos_boost.json" "$W/mos_trav_boost.json" "$D/"
+  mv "$W/mos_boost.png" "$W/mos_boost_compare.png" "$W/mos_trav_boost.png" "$W/mos_trav_boost_compare.png" "$F/"
+  python3 mosaic_gate_chart.py "$F/mos_gate.png" "$D/mos_gate.json" \
+    "Hotshot (10 to 40 g), +6 dB=$(cap g5hs6)=hotshot=120" "Traveler (102 km), +12 dB=$(cap g5trg)=traveler_soft25=360" \
+    "gentle_alt (3 g, 82.5 km), +6 dB=$(cap g5ga6)=gentle_alt=300" \
+    "spaceshot (15 g, 82.5 km), +6 dB=$(cap g5ss6)=spaceshot=280"
   python3 px_err_rate.py "$F/px_err_rate.png"
   python3 m8t_err_rate.py "$F/m8t_err_rate.png"
   python3 m8t_err_rate.py "$F/f9p_err_rate.png" "$D/f9p_boost.json" "$D/f9p_trav_boost.json" ZED-F9P
+  python3 m8t_err_rate.py "$F/mos_err_rate.png" "$D/mos_boost.json" "$D/mos_trav_boost.json" mosaic-G5 600
   python3 cmp3_boost.py "$F/cmp3_boost.png" "$D/hot_boost.json" "$D/m8t_boost.json" "$D/f9p_boost.json" \
-    "$D/boost_final.json" "$D/m8t_trav_boost.json" "$D/f9p_trav_boost.json"
+    "$D/mos_boost.json" "$D/boost_final.json" "$D/m8t_trav_boost.json" "$D/f9p_trav_boost.json" "$D/mos_trav_boost.json"
   for t in $PX_TRAV; do
     IFS=: read -r lab how <<< "$(level $t)"
     python3 plot_traveler_run.py "$(cap $t)" "$F/traveler_acc_$t.png" \
@@ -174,6 +210,18 @@ charts() {
       "ZED-F9P, SignalSim ${scen%%_*}, C/N0 $lab dB ($how), carrier corrected, buffered transmitter: GPS + Galileo + BeiDou, wide, 180 s pad, file ends T+$end" \
       "$scen" "$W/f9pacc_$t.npz" "end=$end" "xmax=$xm"
   done
+  for t in $MOS_TRAV $MOS_HOT $MOS_82; do
+    IFS=: read -r lab how <<< "$(level $t)"
+    case $t in
+      g5tr*) scen=traveler_soft25; end=360; xm=375 ;;
+      g5ga6) scen=gentle_alt; end=300; xm=310 ;;
+      g5ss6) scen=spaceshot; end=280; xm=290 ;;
+      *) scen=hotshot; end=120; xm=125 ;;
+    esac
+    python3 plot_m8t_run.py "$(cap $t)" "$F/mos_run_$t.png" \
+      "mosaic-G5, SignalSim ${scen%%_soft25}, C/N0 $lab dB ($how), carrier corrected, buffered transmitter: GPS + Galileo + BeiDou, wide, 180 s pad, file ends T+$end" \
+      "$scen" "$W/mosacc_$t.npz" "end=$end" "xmax=$xm" limit=600
+  done
 }
 
 page() {
@@ -182,7 +230,7 @@ page() {
 
 export_html() {
   mkdir -p "$HERE/export"
-  python3 export_standalone.py "$HERE/export/px1105r-neo-m8t-zed-f9p-cn0-sweep.html"
+  python3 export_standalone.py "$HERE/export/px1105r-neo-m8t-zed-f9p-mosaic-g5-cn0-sweep.html"
 }
 
 for step in ${@:-page}; do

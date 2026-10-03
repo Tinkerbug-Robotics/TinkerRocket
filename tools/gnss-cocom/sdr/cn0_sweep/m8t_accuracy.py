@@ -12,7 +12,7 @@ that clock makes the burn residuals worse (the pseudoranges fit best ~5 ms AFTER
 taken at the time tags, as pr_accuracy does for the PX1105R (--retime does the clock-based second pass anyway). The
 Doppler fits the truth 0.01 s earlier (the PX1105R's: 0.03 s).
 
-    m8t_accuracy.py CAPTURE OUT.npz [--scenario traveler|hotshot] [--rr-lag 0.01] [--retime]
+    m8t_accuracy.py CAPTURE OUT.npz [--scenario traveler|hotshot|gentle_alt|spaceshot] [--rr-lag 0.01] [--retime]
 """
 import argparse
 import os
@@ -103,12 +103,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("capture")
     ap.add_argument("out")
-    ap.add_argument("--scenario", default="traveler", choices=("traveler", "hotshot"))
+    ap.add_argument("--scenario", default="traveler", choices=("traveler", "hotshot", "gentle_alt", "spaceshot"))
     ap.add_argument("--rr-lag", dest="rr_lag", default="0.01")
     ap.add_argument("--retime", action="store_true")
     a = ap.parse_args()
-    csv, scen = (("traveler_soft25_pad600.csv", "traveler_soft25.json") if a.scenario == "traveler" else
-                 ("hotshot_pad600.csv", "hotshot.json"))
+    name = "traveler_soft25" if a.scenario == "traveler" else a.scenario     # the 82 km flights: same ephemeris day
+    csv, scen = f"{name}_pad600.csv", f"{name}.json"
     eph = pooled_eph()
     print("pooled ephemerides:", {s: sorted(p for (q, p) in eph.eph if q == s) for s in "GEC"})
     ep = m8t_epochs(a.capture)

@@ -13,6 +13,13 @@ epoch more than WRONG_M (10 m) off is WRONG: flagged valid by the receiver but n
 band under the trace (a diamond where it first goes wrong), the panel titles count them, and the comparison adds a dashed
 M8T line for the satellites still flagged valid AND within WRONG_M at the cut-off.
 
+A Septentrio mosaic-G5 capture (mosaic_run.py, SBF 't S <hex>' lines; RX=mosaic-G5 RX_LIMIT=600) is read the same
+way: MeasEpoch thinned to 10 Hz, the files' signals only (GPS L1 C/A, Galileo E1, BeiDou B1I), elevations from
+ChannelStatus or SatVisibility where the receiver has them, the fix from PVTGeodetic. After a cold start on the rig
+the mosaic knows the elevation only of the satellites in its almanac (GPS and a few Galileo); the rest come from the
+accuracy NPZ, which has every satellite's elevation from the broadcast ephemeris and the true position. It withholds above 600 m/s, not 515, so its cut-off and shading follow
+RX_LIMIT while the comparison with the PX1105R stays just after 515 m/s, where it is still reporting.
+
     m8t_boost_traces.py OUT_STEM PX_BOOST_JSON LABEL=CAPTURE[=ACC.npz] [...]  -> OUT_STEM.png/.json, OUT_STEM_compare.png
     (BOOST_SCEN=traveler_soft25 for the traveler runs; default hotshot)
 """
@@ -34,7 +41,8 @@ NAME = {"G": "GPS", "E": "Galileo", "C": "BeiDou"}
 AB = {"G": "GPS", "E": "GAL", "C": "BDS"}
 SCEN = os.environ.get("BOOST_SCEN", "hotshot")
 RX = os.environ.get("RX", "NEO-M8T")                        # the receiver the captures came from (RX=ZED-F9P)
-RX_SHORT = RX.split("-")[-1]                                # "M8T", "F9P"
+RX_SHORT = "mosaic" if RX.startswith("mosaic") else RX.split("-")[-1]   # "M8T", "F9P", "mosaic"
+LIMIT = float(os.environ.get("RX_LIMIT", "515"))            # the speed above which the receiver withholds raw
 BURN_NAME = {"hotshot": "the hotshot burn (4 s, 10 to 40 g)", "traveler_soft25": "the traveler burn (13 s)"}
 sc = json.loads((SDR / "scenarios" / f"{SCEN}.json").read_text())
 PRO = sc["prologue_s"]
@@ -42,6 +50,12 @@ TR = [(s["t"] - PRO, s["v_up_mps"]) for s in sc["truth"]]
 BURN = next(s["t"] for s in sc["truth"] if s["phase"] == "coast") - PRO
 OVER = sc["velocity_windows"][0][0] - PRO                     # 515 m/s on the way up (T+2.8)
 UNDER = sc["velocity_windows"][0][1] - PRO
+if LIMIT == 515:
+    OVER_CUT, UNDER_CUT = OVER, UNDER
+else:                                                         # the receiver's own limit, crossed in the truth
+    _sp = [(s["t"] - PRO, s["speed_mps"]) for s in sc["truth"]]
+    OVER_CUT = next(t for t, v in _sp if t >= 0 and v > LIMIT)
+    UNDER_CUT = next(t for t, v in _sp if t > OVER_CUT and v <= LIMIT)
 
 
 def v_up(t):
@@ -62,7 +76,60 @@ def a_up(t):
     return (v_up(t + 0.1) - v_up(t - 0.1)) / 0.2
 
 
+def parse_sbf(cap):
+    """A mosaic-G5 capture -> the same (raw, el, fixes) as parse(): raw at 10 Hz, one signal per satellite."""
+    sys.path.insert(0, str(SDR.parent))
+    import septentrio_sbf as sbf
+    sig = {"GPS L1CA": "G", "GAL E1": "E", "BDS B1I": "C"}
+    raw, el, el_ch, fixes = [], {}, {}, []
+    for line in open(cap, errors="replace"):
+        p = line.split(" ", 2)
+        if len(p) < 3 or p[1] != "S" or len(p[2]) < 24:
+            continue
+        h = p[2].strip()
+        bid = int(h[10:12] + h[8:10], 16) & 0x1FFF
+        if bid not in (sbf.MEAS_EPOCH, sbf.SAT_VISIBILITY, sbf.CHANNEL_STATUS, sbf.PVT_GEODETIC):
+            continue
+        tow = int.from_bytes(bytes.fromhex(h[16:24]), "little")
+        if tow == 0xFFFFFFFF:
+            continue
+        t = round(tow / 1000.0 - IGN_TOW, 2)
+        try:
+            b = bytes.fromhex(h)
+        except ValueError:
+            continue
+        if bid == sbf.MEAS_EPOCH:
+            if tow % 100:
+                continue
+            obs = {}
+            for x in sbf.meas_epoch(b)["meas"]:
+                if x["signal"] in sig and x["sv"][1:].isdigit():
+                    obs[(sig[x["signal"]], int(x["sv"][1:]))] = (x["pr"] is not None, x["cn0"] or 0.0)
+            raw.append((t, obs))
+        elif bid == sbf.CHANNEL_STATUS:
+            if -6.0 <= t <= 0.5:
+                for s in sbf.channel_status(b):
+                    if s["sv"][0] in "GEC" and s["sv"][1:].isdigit() and s["el"] is not None and s["el"] > 0:
+                        el_ch[(s["sv"][0], int(s["sv"][1:]))] = s["el"]
+        elif bid == sbf.SAT_VISIBILITY:
+            if -6.0 <= t <= 0.5:
+                for name, (e, a) in sbf.sat_visibility(b).items():
+                    if name[0] in "GEC" and name[1:].isdigit() and e > 0:
+                        el[(name[0], int(name[1:]))] = int(round(e))
+        elif sbf.pvt_geodetic(b)["mode"]:
+            fixes.append(t)
+    el.update(el_ch)                                # ChannelStatus wins where both have one
+    return raw, el, fixes
+
+
 def parse(cap):
+    with open(cap, errors="replace") as fh:
+        for line in fh:
+            p = line.split(" ", 2)
+            if len(p) == 3 and p[1] in ("S", "U"):
+                if p[1] == "S":
+                    return parse_sbf(cap)
+                break
     raw, el, fixes = [], {}, []
     for line in open(cap, errors="replace"):
         p = line.split(" ", 2)
@@ -119,20 +186,36 @@ def err_at(e, t):
     import numpy as np
     i = int(np.clip(np.searchsorted(e[0], t), 1, len(e[0]) - 1))
     j = i - 1 if abs(e[0][i - 1] - t) <= abs(e[0][i] - t) else i
-    return float(e[1][j]) if abs(e[0][j] - t) <= 0.03 else None
+    v = float(e[1][j])
+    return v if abs(e[0][j] - t) <= 0.03 and math.isfinite(v) else None   # NaN: a rig clock step, not an error
+
+
+def el_from_acc(acc, el):
+    """Fill missing ignition elevations from the accuracy NPZ (ephemeris and truth, T-6 to T+0.5)."""
+    if not acc:
+        return el
+    import numpy as np
+    z = np.load(acc)
+    m = (z["t"] >= -6.0) & (z["t"] <= 0.5)
+    for i, c in enumerate("GEC"):
+        for p in set(int(x) for x in z["prn"][m & (z["sys"] == i)]):
+            if (c, p) not in el:
+                el[(c, p)] = int(round(float(np.median(z["el"][m & (z["sys"] == i) & (z["prn"] == p)]))))
+    return el
 
 
 def run(label, cap, acc=None):
     raw, el, fixes = parse(cap)
+    el = el_from_acc(acc, el)
     errs = errors(acc)
     pad = {c: [v[1] for t, o in raw if -60 <= t <= -5 for k, v in o.items() if k[0] == c and v[0]] for c in "GEC"}
     pad_cn0 = {c: st.median(v) for c, v in pad.items() if v}
-    during = [(t, o) for t, o in raw if -1.0 <= t <= UNDER - 1.0]
-    last_raw = max((t for t, o in during if 0 <= t <= OVER + 1.0 and any(v[0] for v in o.values())),
-                   default=0.0)                             # last raw epoch before the first 515 m/s crossing
-    # raw that stops at 515 m/s is the receiver withholding it; raw that stops well before is the receiver losing
-    # every satellite, and those are losses (judged up to the 515 m/s crossing)
-    cut = last_raw if last_raw >= OVER - 0.4 else OVER
+    during = [(t, o) for t, o in raw if -1.0 <= t <= UNDER_CUT - 1.0]
+    last_raw = max((t for t, o in during if 0 <= t <= OVER_CUT + 1.0 and any(v[0] for v in o.values())),
+                   default=0.0)                             # last raw epoch before the first crossing of the limit
+    # raw that stops at the limit is the receiver withholding it; raw that stops well before is the receiver losing
+    # every satellite, and those are losses (judged up to the crossing)
+    cut = last_raw if last_raw >= OVER_CUT - 0.4 else OVER_CUT
     recs = []
     for key in sorted({k for t, o in during for k in o}):
         pre = [o.get(key, (False, 0))[0] for t, o in during if -0.5 <= t < 0.0]
@@ -158,7 +241,7 @@ def run(label, cap, acc=None):
                          series=series, wrong=bool(bad), wrong_t=bad[0][0] if bad else None,
                          wrong_rate=bad[0][1] if bad else None, err_max=max((abs(x) for x in ev), default=None),
                          wrong_end=bool(ev) and abs(ev[-1]) > WRONG_M))
-    last_fix = max((t for t in fixes if 0.0 <= t <= OVER + 1.0), default=None)
+    last_fix = max((t for t in fixes if 0.0 <= t <= OVER_CUT + 1.0), default=None)
     return dict(label=label, recs=recs, cut=cut, fix_end=last_fix, pad_cn0=pad_cn0, has_err=bool(errs))
 
 
@@ -188,7 +271,7 @@ for ax, r in zip(axs.flat, runs):
     rs = r["recs"]
     cut = r["cut"]
     ax.axvspan(cut, BURN, color=SHADE, zorder=0)
-    ax.annotate("raw withheld\nabove 515 m/s", ((cut + BURN) / 2, 0.97), xycoords=("data", "axes fraction"),
+    ax.annotate(f"raw withheld\nabove {LIMIT:.0f} m/s", ((cut + BURN) / 2, 0.97), xycoords=("data", "axes fraction"),
                 ha="center", va="top", fontsize=7.8, color=MUTED)
     for q in sorted(rs, key=lambda q: q["el"]):
         s = math.sin(math.radians(q["el"]))
@@ -270,10 +353,16 @@ px = {r["label"].split(" (")[0]: r for r in json.loads(Path(px_json).read_text()
 levels = [r["label"] for r in runs]
 TCMP = math.floor(OVER) + (1.0 if OVER % 1.0 < 0.85 else 2.0)   # after the PX's first 1 Hz status past 515 m/s
 PX_STATUS = TCMP - 0.1                                            # (statuses land at about x.9 s)
-RX_COL = {"NEO-M8T": "#bf8700", "ZED-F9P": "#0f7b6c"}.get(RX, "#bf8700")
+RX_COL = {"NEO-M8T": "#bf8700", "ZED-F9P": "#0f7b6c", "mosaic-G5": "#a40e26"}.get(RX, "#bf8700")
 REC = {"PX1105R": ("#6639ba", "o"), RX: (RX_COL, "s")}
 if any_err:
     REC[f"{RX} within 10 m"] = (RX_COL, "s")
+def ok_at(q, t_cmp):
+    """The last valid epoch at or before t_cmp is within WRONG_M (or has no truth to judge it by)."""
+    ev = [x for t, ok, v, x in q["series"] if ok and t <= t_cmp]
+    return not ev or ev[-1] is None or abs(ev[-1]) <= WRONG_M
+
+
 fig, axs = plt.subplots(1, 3, sharey=True, figsize=(11.5, 3.6))
 table = []
 for ax, c in zip(axs, "GEC"):
@@ -291,11 +380,14 @@ for ax, c in zip(axs, "GEC"):
             elif rec == RX:                  # no sustained loss up to its raw cut-off (T+2.9-3.0), as in
                 r = runs[i]                         # its own chart (a drop in the very last epoch is not a loss)
                 tot = [q for q in r["recs"] if q["sys"] == c]
-                kept = [q for q in tot if not q["lost"]]
+                kept = [q for q in tot if not q["lost"] or (LIMIT != 515 and q["t"] > TCMP)]
             else:                                   # still flagged valid AND within WRONG_M at its last epoch
                 r = runs[i]
                 tot = [q for q in r["recs"] if q["sys"] == c]
-                kept = [q for q in tot if not q["lost"] and not q.get("wrong_end")]
+                if LIMIT == 515:
+                    kept = [q for q in tot if not q["lost"] and not q.get("wrong_end")]
+                else:                               # still reporting at 515 m/s: judged at TCMP, like the PX1105R
+                    kept = [q for q in tot if (not q["lost"] or q["t"] > TCMP) and ok_at(q, TCMP)]
             if not tot:
                 continue
             xs.append(i)
@@ -325,12 +417,18 @@ axs[2].legend(frameon=False, fontsize=8.5, loc="upper left", bbox_to_anchor=(1.0
 fig.suptitle(f"{SCEN.split('_')[0].capitalize()} burn: share of the satellites tracked at ignition still tracked just "
              f"after 515 m/s (T+{PX_STATUS:.1f}), PX1105R vs {RX}", x=0.06, ha="left", fontsize=10.5)
 cuts = [r["cut"] for r in runs]
+if LIMIT == 515:
+    rx_how = (f"{RX}: no gap >= 0.5 s in valid raw pseudoranges up to where it withholds raw "
+              f"(T+{min(cuts):.1f} to T+{max(cuts):.1f})."
+              + (f" Dashed: of those, the ones still within {WRONG_M:.0f} m of the truth there." if any_err else "")
+              + f"\nNeither receiver can be compared past this point: the {RX_SHORT} reports nothing above 515 m/s.")
+else:
+    rx_how = (f"{RX}: no gap >= 0.5 s in valid raw pseudoranges up to T+{TCMP:.1f}; it keeps reporting to "
+              f"{LIMIT:.0f} m/s (T+{min(cuts):.1f} to T+{max(cuts):.1f})."
+              + (f"\nDashed: of those, the ones within {WRONG_M:.0f} m of the truth at T+{TCMP:.1f}." if any_err else "\n"))
 fig.text(0.06, -0.06, f"515 m/s is reached at T+{OVER:.1f}. PX1105R: lock in its 1 Hz channel status at T+{PX_STATUS:.1f} "
-         f"(dropped-and-relocked counts as tracked). {RX}: no gap >= 0.5 s in valid raw pseudoranges up to where it "
-         f"withholds raw (T+{min(cuts):.1f} to T+{max(cuts):.1f})."
-         + (f" Dashed: of those, the ones still within {WRONG_M:.0f} m of the truth there." if any_err else "")
-         + f"\nNeither receiver can be compared past this point: the {RX_SHORT} reports nothing above 515 m/s. The {RX_SHORT} has 10 dB "
-         "more attenuation.", fontsize=8.3, color=MUTED, ha="left")
+         f"(dropped-and-relocked counts as tracked). " + rx_how + f" The {RX_SHORT} has 10 dB more attenuation.",
+         fontsize=8.3, color=MUTED, ha="left")
 fig.subplots_adjust(top=0.82, bottom=0.2, wspace=0.2)
 fig.savefig(out + "_compare.png", dpi=140, bbox_inches="tight", facecolor="white")
 print("wrote", out + "_compare.png")
