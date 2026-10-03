@@ -33,7 +33,7 @@ BOARD 30.3 x 90.5 mm, 4 LAYER, 1.6 mm NOMINAL.
 5. SOLDER MASK: THE DAM BETWEEN U3'S 0.4 mm PITCH PINS IS 0.07 mm. IF THAT
    CANNOT BE HELD, GANG THE OPENING RATHER THAN SHRINKING THE PADS.
 
-6. MINIMUM ANNULAR RING: VIAS 0.075 mm (0.45 / 0.30); J2 SHELL SLOTS 0.20 mm.
+6. MINIMUM ANNULAR RING: VIAS 0.075 mm (0.45 / 0.30).
 
 7. MINIMUM TRACK AND SPACING: 0.10 mm (U1 ESCAPE).
 
@@ -49,11 +49,10 @@ ASSEMBLY - PLACEMENT
   PUTS VCC ON THE GROUND BALL. CHECK THE PLACEMENT PREVIEW: BALL A1 IS THE
   CORNER NEAREST THE SILK DOT.
 - C5 IS DO-NOT-FIT.
+- J2 (USB-C, GCT USB4110-GF-A) IS FULLY SMT: ITS FOUR SHELL TABS ARE
+  PASTED PADS AND REFLOW WITH THE SIGNAL PADS. NOTHING OF IT IS HAND-FITTED.
 
 ASSEMBLY - THROUGH-HOLE AND HAND WORK
-- J2 (USB-C): SOLDER THE FOUR SHELL LEGS BY HAND OR SELECTIVE SOLDER AND
-  FILL THE BARRELS. THEY CARRY NO PASTE. KEEP THE BOTTOM FILLETS OF THE
-  TWO REAR LEGS, NEAREST BT2, FLAT: THE HOLDER'S END SITS OVER THEM.
 - J8 (EDGE SMA): FIT AFTER REFLOW, FLANGE AGAINST THE BOARD EDGE, CENTRE
   PIN AND BOTH GROUND LEGS SOLDERED.
 - S1 (PANEL PUSHBUTTON), D6 AND D9 (3 mm LEDs): TOP SIDE, THROUGH-HOLE.
@@ -95,9 +94,11 @@ ground pads, and J8 is hand-fitted, so no bottom stencil is needed.
 
 **Assembly.**
 - **U1:** its orientation is a known failure class on this fleet. A rotated WLCSP powers the flash backwards.
-- **J2:** the shell legs are plated slots with no paste. An SMT-only build would leave the charging port held by its
-  0.3 mm signal pads alone. The holder's flat base ends 0.07 mm past the two rear slots, over the first 0.27 mm of their
-  bottom pads, so a domed fillet there props up that end of BT2.
+- **J2:** since 2026-10-03 it is the GCT USB4110-GF-A the other boards use. Its shell tabs are SMD pads with paste, so
+  it reflows with everything else and nothing of it reaches the bottom side; two ground vias between the tabs tie the
+  shell to the In1.Cu and B.Cu ground. The V1 boards carry the HRO TYPE-C-31-M-12 instead, whose shell legs are plated
+  slots with no paste: those are soldered by hand, and the bottom fillets of the two rear legs must stay flat because
+  the end of BT2's flat base sits over them.
 - **S1:** its posts land inside the battery holder's outline. DRC is silent because `npth_inside_courtyard` is ignored
   on this board.
 - **BT2:** a holder fitted backwards reverses the cell onto the protection circuit.
