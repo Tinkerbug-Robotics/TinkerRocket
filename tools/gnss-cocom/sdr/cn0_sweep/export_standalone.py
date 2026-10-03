@@ -23,7 +23,7 @@ def inline(m):
 body = re.sub(r"src=(['\"])([\w.-]+\.png)\1", inline, src)
 left = re.findall(r"src=['\"](?!data:)[^'\"]+['\"]", body)
 assert not left, f"not inlined: {left}"
-body = re.sub(r"<footer>.*?</footer>", "<footer>Bench data from the TinkerRocket COCOM rig, 2026-09-30 and 10-01.</footer>",
+body = re.sub(r"<footer>.*?</footer>", "<footer>Bench data from the TinkerRocket COCOM rig, 2026-09-30 to 10-02.</footer>",
               body, flags=re.S)
 head_end = body.index("</style>") + len("</style>")
 doc = ("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
