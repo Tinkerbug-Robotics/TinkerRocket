@@ -191,10 +191,20 @@ Two things were deliberately left behind at the fork:
 
 ## Status
 
-Not fabbed, no tag. Schematic and PCB are in sync and fully routed, with 0
-parity issues, 0 unconnected, no DRC errors and zone fills that match a fresh
-refill. That was checked on 2026-09-28, after the design review's fixes. The
-remaining 26 DRC warnings are silkscreen and the logo's library nickname.
+**2026-10-03: `J2` is now the GCT `USB4110-GF-A`** that the Mantis, Beetle, LoRa
+and Space Bug boards use, in place of the HRO `TYPE-C-31-M-12`. The symbol and
+its pin numbers are unchanged; only the footprint and part fields moved, so the
+netlist is identical. On the PCB it sits where the HRO did, front face 1.11 mm
+past the board edge, so its signal pads, pegs and every existing track line up.
+DRC still shows 0 errors, 0 unconnected and 0 parity issues, and the fills match
+a fresh refill. The V1 boards ordered on 2026-09-29 still take a
+`TYPE-C-31-M-12`.
+
+V1 was ordered on 2026-09-29 (tag `tinker-base-v1.0.0`). Schematic and PCB are
+in sync and fully routed, with 0 parity issues, 0 unconnected, no DRC errors
+and zone fills that match a fresh refill. That was checked on 2026-09-28, after
+the design review's fixes, and again on 2026-10-03 after the `J2` change. The
+remaining 24 DRC warnings are silkscreen and the logo's library nickname.
 Layout details worth knowing:
 
 - `R1`, the `CHIP_PU` pull-up, moved beside `C8` to free the spot above `C16`
@@ -206,8 +216,9 @@ Layout details worth knowing:
   windows (Espressif asks for at least nine). Nine more sit beside signal vias.
 - **`S3`**'s body area has no top copper (Mitsumi's "no pattern" zone). Its
   `GPIO0` via moved out from under the switch.
-- **`J2`**'s signal pads are trimmed at the rear to HRO's own land, which keeps
-  0.84 mm between the battery's + pad and the connector.
+- **`J2`** (GCT `USB4110-GF-A`) keeps 0.84 mm between the battery's + pad and its
+  nearest pad. Its shell tabs are SMD pads; two ground vias between them tie the
+  shell to the planes.
 - **Fiducials** `FID1`–`FID3` are on the top side.
 
 **Firmware:** `tinkerrocket-idf/projects/base_station` built with
