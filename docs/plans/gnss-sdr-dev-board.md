@@ -5,7 +5,7 @@
 - Schematic captured the same day in `hardware/gnss-sdr-dev/` (ERC clean).
 - Board placed by the owner, and routed on eight layers 2026-10-01/02.
 - Review pass 2026-10-02: DRC clean.
-- Awaiting the owner's review before fab.
+- Ordered from JLCPCB 2026-10-04, tagged `gnss-sdr-dev-v0.0.0`. Fabrication notes: `hardware/gnss-sdr-dev/FABRICATION-NOTES.md`.
 
 **Parents:**
 - [gnss-receiver-architecture.md](gnss-receiver-architecture.md)
@@ -185,4 +185,5 @@ SMA ─ ESD ─ bias tee (switchable, current-limited) ─ 2-way divider ─┬�
    - return vias added;
    - the USB pairs re-routed to 90 Ω;
    - 3D models for every part.
-6. The owner's review, then the fab package.
+6. ~~The owner's review, then the fab package.~~ Ordered 2026-10-04 (tag `gnss-sdr-dev-v0.0.0`).
+7. Bring-up.
