@@ -134,7 +134,7 @@ final class CameraReadbackProvenanceTests: XCTestCase {
         cfg.servoExtras = RocketServoExtras(
             bias2: 0, bias3: 0, bias4: 0, finMinDeg: -60, finMaxDeg: 60,
             finAzimuths: [0, 90, 180, 270], finReverseMask: 0,
-            finRollReverseMask: 0, soundsEnabled: true)
+            finRollReverseMask: 0)
         cfg.guidanceExtras = RocketGuidanceExtras(
             navGain: 3, maxAccel: 30, accelToFin: 0.5, maxFinDeg: 15,
             minSpeed: 30, coastDelayMs: 0, targetMode: 0,
@@ -240,7 +240,7 @@ final class CameraReadbackProvenanceTests: XCTestCase {
         settleMainQueue()
         XCTAssertEqual(store.activeProfile?.servoBias2, 0)
 
-        feed(rocket, #"{"type":"config_servo","sb2":40,"sb3":0,"sb4":0,"fmn":-60.00,"fmx":60.00,"faz":[0.0,90.0,180.0,270.0],"frv":0,"frrv":0,"snd":true}"#)
+        feed(rocket, #"{"type":"config_servo","sb2":40,"sb3":0,"sb4":0,"fmn":-60.00,"fmx":60.00,"faz":[0.0,90.0,180.0,270.0],"frv":0,"frrv":0}"#)
         feed(rocket, #"{"type":"config_guid","gng":3.00,"gma":30.0,"gaf":0.50,"gmf":15.0,"gms":30.0,"gcd":0,"gtm":0,"gte":0.0,"gtn":0.0,"gta":0.0,"gkp":0.00,"gkd":0.00,"glw":0}"#)
         feed(rocket, #"{"type":"config_roll","n":0,"wp":[]}"#)
         settleMainQueue()

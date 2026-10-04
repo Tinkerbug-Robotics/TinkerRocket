@@ -420,8 +420,6 @@ class CommandsGoldenTest {
 
     @Test
     fun `single byte payload commands`() {
-        assertEquals(listOf(11, 1), Commands.soundsEnable(true).map { it.toInt() })
-        assertEquals(listOf(11, 0), Commands.soundsEnable(false).map { it.toInt() })
         assertEquals(listOf(14, 1), Commands.servoEnable(true).map { it.toInt() })
         assertEquals(listOf(17, 1), Commands.loraHopDisabled(true).map { it.toInt() })
         // "LoRa off" — both directions pinned: an encoder that only ever

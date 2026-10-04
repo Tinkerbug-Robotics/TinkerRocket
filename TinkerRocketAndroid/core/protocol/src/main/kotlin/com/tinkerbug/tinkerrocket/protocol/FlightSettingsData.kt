@@ -144,7 +144,6 @@ public data class FlightSettingsData(
     public val imuRateDynamic: Boolean get() = flags and (1 shl F_IMU_RATE_DYNAMIC) != 0
     public val servoEnabled: Boolean get() = flags and (1 shl F_SERVO_ENABLED) != 0
     public val fwDirty: Boolean get() = flags and (1 shl F_FW_DIRTY) != 0
-    public val soundsEnabled: Boolean get() = flags and (1 shl F_SOUNDS) != 0
 
     /** "−Z r90"-style mounting name; null on pre-v2 frames. */
     public val b2rDisplayName: String? get() = b2rCode?.let { b2rName(it) }
@@ -156,7 +155,7 @@ public data class FlightSettingsData(
         public const val F_GUIDANCE: Int = 2
         public const val F_SERVO_ENABLED: Int = 3
         public const val F_FW_DIRTY: Int = 4
-        public const val F_SOUNDS: Int = 5
+        // bit 5 was piezo sounds — retired, never set by current firmware; do not reuse.
         public const val F_IMU_RATE_DYNAMIC: Int = 7
 
         public const val MIN_SIZE: Int = 188

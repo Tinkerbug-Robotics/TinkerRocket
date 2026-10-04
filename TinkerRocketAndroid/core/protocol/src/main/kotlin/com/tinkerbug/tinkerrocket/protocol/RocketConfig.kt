@@ -20,7 +20,7 @@ import kotlinx.serialization.json.JsonObject
  *    config (or of a fresh default when none exists yet).
  */
 /**
- * Servo trim 2-4, fin travel, fin layout and sounds, from the rocket's own
+ * Servo trim 2-4, fin travel and fin layout, from the rocket's own
  * `config_servo` readback (#915) — port of iOS [RocketServoExtras].  Grouped
  * so "did this rocket report them?" is one null check instead of nine.
  * Absent on firmware that predates the config report, and on the mini, which
@@ -35,7 +35,6 @@ public data class RocketServoExtras(
     val finAzimuths: List<Float>,   // 4, per-servo ring-position azimuth
     val finReverseMask: Int,        // bit i ⇒ servo i pitch/yaw reversed
     val finRollReverseMask: Int,    // bit i ⇒ servo i roll reversed (independent)
-    val soundsEnabled: Boolean,
 )
 
 /** The PN / station-keep parameters behind the guidance on/off flag (#915). */
@@ -199,7 +198,7 @@ public data class RocketConfig(
     public val unreportedGroups: List<String>
         get() = buildList {
             if (servoExtras == null) {
-                addAll(listOf("Servo trim 2-4", "Fin travel", "Fin layout", "Sounds"))
+                addAll(listOf("Servo trim 2-4", "Fin travel", "Fin layout"))
             }
             if (guidanceExtras == null) add("Guidance parameters")
             if (rollWaypoints == null) add("Roll profile")
@@ -511,10 +510,11 @@ public data class ConfigPyroMessage(
 }
 
 /**
- * Parsed `"type":"config_servo"` readback (#915) — servo trim 2-4, fin travel,
- * fin layout and sounds.  Port of the iOS handler in BLEDevice: every key is
+ * Parsed `"type":"config_servo"` readback (#915) — servo trim 2-4, fin travel
+ * and fin layout.  Port of the iOS handler in BLEDevice: every key is
  * required, and a frame missing any of them leaves the group null ("not
- * reported") rather than half-filled.  A half-filled group would be shown as
+ * reported") rather than half-filled.  The legacy `snd` key (piezo sounds,
+ * retired) is still sent by some firmware for older apps and is ignored.  A half-filled group would be shown as
  * VERIFIED, which is worse than admitting we cannot see it.
  */
 public object ConfigServoMessage {
@@ -528,7 +528,6 @@ public object ConfigServoMessage {
         val fmx = JsonBridging.parseFloatIos(json, "fmx") ?: return null
         val frv = JsonBridging.nsInt(json, "frv") ?: return null
         val frrv = JsonBridging.nsInt(json, "frrv") ?: return null
-        val snd = JsonBridging.nsBool(json, "snd") ?: return null
         return RocketServoExtras(
             bias2 = b2.coerceIn(-32768, 32767).toInt(),
             bias3 = b3.coerceIn(-32768, 32767).toInt(),
@@ -537,7 +536,6 @@ public object ConfigServoMessage {
             finAzimuths = az,
             finReverseMask = frv.coerceIn(0, 0xFF).toInt(),
             finRollReverseMask = frrv.coerceIn(0, 0xFF).toInt(),
-            soundsEnabled = snd,
         )
     }
 }

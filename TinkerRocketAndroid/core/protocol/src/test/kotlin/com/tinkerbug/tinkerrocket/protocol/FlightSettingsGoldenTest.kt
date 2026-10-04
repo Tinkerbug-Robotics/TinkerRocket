@@ -173,7 +173,8 @@ class FlightSettingsGoldenTest {
 
     @Test
     fun `flags accessors decode the golden flags byte`() {
-        // Golden flags = 79 = 0b1001111: bits 0..3 + 6 set, bit 4/5 clear.
+        // Golden flags = 79 = 0b1001111: bits 0..3 + 6 set, bit 4/5 clear
+        // (bit 5 was piezo sounds — retired, no accessor).
         val s = FlightSettingsData.decode(
             WireFixtures.bytes("logframes/flightsettings_v6_219.bin"))!!
         assertEquals(79, s.flags)
@@ -182,7 +183,6 @@ class FlightSettingsGoldenTest {
         assertEquals(true, s.guidanceEnabled)      // bit 2
         assertEquals(true, s.servoEnabled)         // bit 3
         assertEquals(false, s.fwDirty)             // bit 4
-        assertEquals(false, s.soundsEnabled)       // bit 5
     }
 
     @Test

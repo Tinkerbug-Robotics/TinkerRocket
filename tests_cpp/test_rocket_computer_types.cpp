@@ -91,7 +91,7 @@ TEST(RocketComputerTypes, OneShotActuatingSet) {
     const uint8_t not_in_set[] = {0, SERVO_TEST_STOP, SERVO_REPLAY_STOP, GROUND_TEST_STOP,
                                   SIM_STOP_CMD, SERVO_CONFIG_PENDING, PID_CONFIG_PENDING,
                                   SIM_CONFIG_PENDING, PYRO_CONFIG_PENDING, ROLL_PROFILE_PENDING,
-                                  CAMERA_START, CAMERA_STOP, SOUNDS_ENABLE, GYRO_CAL_CMD,
+                                  CAMERA_START, CAMERA_STOP, GYRO_CAL_CMD,
                                   MAG_CAL_START, OTA_BEGIN_PENDING, RECOVERY_END_PENDING};
     for (uint8_t c : not_in_set) {
         EXPECT_FALSE(cmdIsOneShotActuating(c)) << "cmd 0x" << std::hex << (unsigned)c;
@@ -1116,7 +1116,7 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     // relays F_PYRO_FROM_NVS to the app as "fnv" so an all-disabled report
     // can be told apart from a board that has never been configured, and
     // F_CAMERA_FROM_NVS (#1472) as "camfnv" for the same reason.
-    EXPECT_EQ(ConfigReportData::F_SOUNDS,           0u);
+    // Bit 0 was F_SOUNDS; retired with the piezo and left unassigned.
     EXPECT_EQ(ConfigReportData::F_ORIENT_FROM_NVS,  1u);
     EXPECT_EQ(ConfigReportData::F_PYRO_FROM_NVS,    2u);
     EXPECT_EQ(ConfigReportData::F_CAMERA_FROM_NVS,  3u);
@@ -1263,7 +1263,7 @@ TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
                             (1u << FlightSettingsData::F_GUIDANCE) |
                             (1u << FlightSettingsData::F_SERVO_ENABLED) |
                             (1u << FlightSettingsData::F_FW_DIRTY) |
-                            (1u << FlightSettingsData::F_SOUNDS) |
+                            (1u << 5) |   // retired F_SOUNDS, still reserved
                             (1u << FlightSettingsData::F_GUIDANCE_STATION_KEEP) |
                             (1u << FlightSettingsData::F_IMU_RATE_DYNAMIC));
     EXPECT_EQ(all, 0xFFu);  // bits 0-7, no overlap — the flags byte is now FULL
@@ -1731,7 +1731,10 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(POWER_MSG),                MT(START_LOGGING),
         MT(END_FLIGHT),               MT(OUT_STATUS_RESPONSE),
         MT(CAMERA_START),             MT(CAMERA_STOP),
-        MT(SOUNDS_ENABLE),            MT(SOUNDS_DISABLE),
+        // Retired with the piezo; kept here so neither code is reassigned
+        // while a down-level OC can still serve them.
+        MsgType{ 0xAC, "SOUNDS_ENABLE (retired)" },
+        MsgType{ 0xAD, "SOUNDS_DISABLE (retired)" },
         MT(SERVO_CONFIG_PENDING),     MT(PID_CONFIG_PENDING),
         MT(SERVO_CONFIG_MSG),         MT(PID_CONFIG_MSG),
         MT(SERVO_CTRL_ENABLE),        MT(SERVO_CTRL_DISABLE),

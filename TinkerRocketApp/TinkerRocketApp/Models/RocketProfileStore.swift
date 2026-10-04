@@ -249,9 +249,6 @@ final class RocketProfileStore: ObservableObject {
 
         var p = RocketProfile.makeDefault(name: "Default")
 
-        if defaults.object(forKey: "rocketSoundsEnabled") != nil {
-            p.soundsEnabled = defaults.bool(forKey: "rocketSoundsEnabled")
-        }
         if defaults.object(forKey: "servoControlEnabled") != nil {
             p.servoControlEnabled = defaults.bool(forKey: "servoControlEnabled")
         }

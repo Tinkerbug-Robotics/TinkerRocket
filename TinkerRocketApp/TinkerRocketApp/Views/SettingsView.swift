@@ -785,11 +785,6 @@ struct SettingsView: View {
                 Spacer()
                 Text(profile.name).foregroundColor(.secondary)
             }
-            Toggle("Enable Sounds", isOn: bind(\.soundsEnabled) {
-                device.sendSoundConfig(enabled: $0)
-            })
-            Text("Stored in the rocket profile. Persists across reboots.")
-                .font(.caption).foregroundColor(.secondary)
         }
 
         Section("Calibration") {

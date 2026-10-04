@@ -1240,10 +1240,10 @@ def test_settings_use_the_apps_words(report_html: Path) -> None:
     """
     html = report_html.read_text(encoding="utf-8")
     settings = _section(html, "settings")
-    for heading in ("Rocket", "IMU Mounting", "Servo Control", "PID Gains", "Servo",
+    for heading in ("IMU Mounting", "Servo Control", "PID Gains", "Servo",
                     "Control Mode", "Camera", "Pyro Channel 1", "Pyro Channel 4"):
         assert f"<h3>{heading}</h3>" in settings, f"settings section lacks the app's {heading!r} group"
-    for label in ("Enable Sounds", "Enable Servo Control", "Max Deflection", "Min Pulse",
+    for label in ("Enable Servo Control", "Max Deflection", "Min Pulse",
                   "Camera Type", "Nose axis"):
         assert f"<td>{label}</td>" in settings, f"settings section lacks the app's {label!r} row"
     for raw in ("gyro_fs_dps", "max_cmd_deg", "trigger_mode", "pyro.ch1"):
@@ -1286,7 +1286,7 @@ def test_flight_settings_frame_decodes_every_version() -> None:
 
     from flight_report import flight_settings as fs
 
-    flags = (1 << fs.F_SERVO_ENABLED) | (1 << fs.F_GAIN_SCHEDULE) | (1 << fs.F_SOUNDS) \
+    flags = (1 << fs.F_SERVO_ENABLED) | (1 << fs.F_GAIN_SCHEDULE) | (1 << 5) \
         | (1 << fs.F_IMU_RATE_DYNAMIC)
     head = struct.pack("<IBBH6f2f3ffBHH4hhhhB",
                        123456, 9, flags, 500,
@@ -1310,7 +1310,9 @@ def test_flight_settings_frame_decodes_every_version() -> None:
 
     d = fs.decode(frame)
     assert d["version"] == 9 and d["servo_enabled"] and d["gain_schedule_enabled"]
-    assert d["sounds_enabled"] and d["imu_rate_dynamic"] and not d["guidance_enabled"]
+    # Bit 5 (retired F_SOUNDS) is set above: an old log must still decode.
+    assert d["imu_rate_dynamic"] and not d["guidance_enabled"]
+    assert "sounds_enabled" not in d
     assert d["roll_delay_ms"] == 500 and abs(d["kp"] - 0.12) < 1e-6
     assert d["servo_bias_us"] == [5, -5, 0, 0] and d["servo_hz"] == 333
     assert d["camera_type"] == 2 and d["fw_git_sha"] == "d7017c0"

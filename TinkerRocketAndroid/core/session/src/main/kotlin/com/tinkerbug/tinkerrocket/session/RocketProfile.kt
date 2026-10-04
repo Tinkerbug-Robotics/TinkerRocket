@@ -51,7 +51,6 @@ public data class RocketProfile(
     val lastUsedUnitID: String? = null,
 
     // Rocket toggles
-    val soundsEnabled: Boolean = false,
     val servoControlEnabled: Boolean = true,
     val gainScheduleEnabled: Boolean = true,
     val useAngleControl: Boolean = false,
@@ -257,7 +256,6 @@ public object RocketProfileCodec {
         put("createdAt", appleDate(p.createdAtMs))
         put("updatedAt", appleDate(p.updatedAtMs))
         p.lastUsedUnitID?.let { put("lastUsedUnitID", JsonPrimitive(it)) }
-        put("soundsEnabled", JsonPrimitive(p.soundsEnabled))
         put("servoControlEnabled", JsonPrimitive(p.servoControlEnabled))
         put("gainScheduleEnabled", JsonPrimitive(p.gainScheduleEnabled))
         put("useAngleControl", JsonPrimitive(p.useAngleControl))
@@ -390,7 +388,6 @@ public object RocketProfileCodec {
             createdAtMs = o.dateMs("createdAt", d.createdAtMs),
             updatedAtMs = o.dateMs("updatedAt", d.updatedAtMs),
             lastUsedUnitID = o.str("lastUsedUnitID"),
-            soundsEnabled = o.bool("soundsEnabled") ?: d.soundsEnabled,
             servoControlEnabled = o.bool("servoControlEnabled") ?: d.servoControlEnabled,
             gainScheduleEnabled = o.bool("gainScheduleEnabled") ?: d.gainScheduleEnabled,
             useAngleControl = o.bool("useAngleControl") ?: d.useAngleControl,

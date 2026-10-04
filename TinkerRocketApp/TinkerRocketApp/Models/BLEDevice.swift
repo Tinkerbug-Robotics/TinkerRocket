@@ -848,10 +848,6 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    func sendSoundConfig(enabled: Bool) {
-        sendRawCommand(11, payload: Data([enabled ? 0x01 : 0x00]))
-    }
-
     /// Disable / re-enable LoRa frequency hopping (#106).  Only meaningful
     /// when sent to the base station — the BS persists the new value, hands
     /// off to the rocket via the corresponding uplink cmd, and restores
@@ -2360,7 +2356,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // rocket had never agreed to.  Defensive per the MTU-budget rule
         // (#282): every key individually optional, and a frame that arrives
         // malformed leaves the group nil (= "not reported") rather than
-        // half-filled.
+        // half-filled.  "snd" (piezo sounds, retired) may still be present
+        // from out-computer firmware kept compatible with older apps; it is
+        // deliberately not read.
         if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            dict["type"] as? String == "config_servo" {
             var cfg = self.rocketConfig ?? RocketConfig()
@@ -2369,16 +2367,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                let b4 = dict["sb4"] as? Int,
                let fmn = parseFloat(dict["fmn"]), let fmx = parseFloat(dict["fmx"]),
                az.count == 4,
-               let frv = dict["frv"] as? Int, let frrv = dict["frrv"] as? Int,
-               let snd = dict["snd"] as? Bool {
+               let frv = dict["frv"] as? Int, let frrv = dict["frrv"] as? Int {
                 cfg.servoExtras = RocketServoExtras(
                     bias2: Int16(clamping: b2), bias3: Int16(clamping: b3),
                     bias4: Int16(clamping: b4),
                     finMinDeg: fmn, finMaxDeg: fmx,
                     finAzimuths: az,
                     finReverseMask: UInt8(clamping: frv),
-                    finRollReverseMask: UInt8(clamping: frrv),
-                    soundsEnabled: snd)
+                    finRollReverseMask: UInt8(clamping: frrv))
                 self.rocketConfig = cfg
             }
             return

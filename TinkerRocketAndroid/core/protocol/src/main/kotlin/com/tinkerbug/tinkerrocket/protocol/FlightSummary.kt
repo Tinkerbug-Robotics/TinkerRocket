@@ -128,7 +128,6 @@ public data class FlightSummary(
 public data class FlightSettings(
     val fwGitSha: String,
     val fwDirty: Boolean,
-    val soundsEnabled: Boolean,
     val rollControl: RollControlSettings,
     val servo: ServoSettings,
     val camera: CameraSettings,
@@ -138,7 +137,6 @@ public data class FlightSettings(
     public fun toJsonObject(): JsonObject = jsonObj(
         "fw_git_sha" to JsonPrimitive(fwGitSha),
         "fw_dirty" to JsonPrimitive(fwDirty),
-        "sounds_enabled" to JsonPrimitive(soundsEnabled),
         "roll_control" to rollControl.toJsonObject(),
         "servo" to servo.toJsonObject(),
         "camera" to camera.toJsonObject(),
@@ -150,7 +148,6 @@ public data class FlightSettings(
         public fun from(raw: FlightSettingsData): FlightSettings = FlightSettings(
             fwGitSha = raw.fwGitSha,
             fwDirty = raw.fwDirty,
-            soundsEnabled = raw.soundsEnabled,
             rollControl = RollControlSettings.from(raw),
             servo = ServoSettings.from(raw),
             camera = CameraSettings(type = CameraSettings.label(raw.cameraType)),

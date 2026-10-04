@@ -136,14 +136,12 @@ final class ActiveRocketSyncerTests: XCTestCase {
         p.servoBias2 = 40
         p.finTravelDeg = 90
         p.finRingMode = 1
-        p.soundsEnabled = true
         p.pnNavGain = 9
         p.rollWaypoints = [RollWaypoint(timeSeconds: 1, angleDeg: 90)]
         _ = ActiveRocketSyncer.adopt(&p, from: matchingConfig())
         XCTAssertEqual(p.servoBias2, 40)
         XCTAssertEqual(p.finTravelDeg, 90)
         XCTAssertEqual(p.finRingMode, 1)
-        XCTAssertTrue(p.soundsEnabled)
         XCTAssertEqual(p.pnNavGain, 9)
         XCTAssertEqual(p.rollWaypoints.count, 1)
     }
@@ -175,8 +173,7 @@ final class ActiveRocketSyncerTests: XCTestCase {
         RocketServoExtras(bias2: 0, bias3: 0, bias4: 0,
                           finMinDeg: -60, finMaxDeg: 60,
                           finAzimuths: [0, 90, 180, 270],
-                          finReverseMask: 0, finRollReverseMask: 0,
-                          soundsEnabled: false)
+                          finReverseMask: 0, finRollReverseMask: 0)
     }
 
     private func guidanceExtras() -> RocketGuidanceExtras {
@@ -221,20 +218,15 @@ final class ActiveRocketSyncerTests: XCTestCase {
         XCTAssertEqual(p.finRingMode, 1, "the 45°-rotated ring reads as ×")
     }
 
-    func testServoTrimAndFinTravelAndSoundsAreAdopted() {
+    func testServoTrimAndFinTravelAreAdopted() {
         var p = RocketProfile.makeDefault(name: "x")
         p.servoBias3 = 55
         p.finTravelDeg = 90
-        p.soundsEnabled = true
-        var cfg = fullyReportingConfig()
-        cfg.servoExtras?.soundsEnabled = false
-        let changed = ActiveRocketSyncer.adopt(&p, from: cfg)
+        let changed = ActiveRocketSyncer.adopt(&p, from: fullyReportingConfig())
         XCTAssertEqual(changed, [ActiveRocketSyncer.groupServoTrim24,
-                                 ActiveRocketSyncer.groupFinTravel,
-                                 ActiveRocketSyncer.groupSounds])
+                                 ActiveRocketSyncer.groupFinTravel])
         XCTAssertEqual(p.servoBias3, 0)
         XCTAssertEqual(p.finTravelDeg, 120, "travel is the reported span")
-        XCTAssertFalse(p.soundsEnabled)
     }
 
     func testGuidanceParametersAreAdopted() {
@@ -288,7 +280,7 @@ final class ActiveRocketSyncerTests: XCTestCase {
         XCTAssertEqual(p.servoBias2, 40)
         XCTAssertEqual(p.pnNavGain, 9)
         XCTAssertEqual(cfg.unreportedGroups,
-                       ["Servo trim 2-4", "Fin travel", "Fin layout", "Sounds",
+                       ["Servo trim 2-4", "Fin travel", "Fin layout",
                         "Guidance parameters", "Roll profile"])
         XCTAssertEqual(fullyReportingConfig().unreportedGroups, [],
                        "a reporting rocket leaves nothing unverifiable")

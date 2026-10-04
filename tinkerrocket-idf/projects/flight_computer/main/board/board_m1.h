@@ -45,7 +45,6 @@
 // ### What this board does not have ###
 //   * no camera        — no CAM_SHUTTER, no RunCam UART, no camera rail
 //   * no servos        — no fin control, no SERVO_ACT
-//   * no piezo         — no sounds
 //   * no separate GNSS rail — the receiver is on V_MCU_SWTCH with us
 //   * two indicator LEDs: IND_1 on GPIO43 (U0TXD) and IND_2 on GPIO45 (a
 //     strapping pad) — see RED_LED_PIN / BLUE_LED_PIN
@@ -172,12 +171,11 @@ struct board_pins
     static constexpr int PYRO4_FIRE_PIN = 33;  // PYRO4_FIRE (pad 38)
     static constexpr int PYRO4_CONT_PIN = 42;  // PYRO4_CONT (CONFIRMED; MTMS)
 
-    // --- No servos, no piezo on this board ---
+    // --- No servos on this board ---
     static constexpr int SERVO_PIN_1 = -1;
     static constexpr int SERVO_PIN_2 = -1;
     static constexpr int SERVO_PIN_3 = -1;
     static constexpr int SERVO_PIN_4 = -1;
-    static constexpr int PIEZO_PIN = -1;
 
     // --- Indicators ---
     // TWO LEDs, both cathode-to-GND through 10 k, both driven high to light:

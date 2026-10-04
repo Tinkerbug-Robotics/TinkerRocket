@@ -96,10 +96,6 @@ public object Commands {
         f32(freqMHz); f32(bwKHz); u8(sf); u8(cr); i8(txPowerDbm)
     }
 
-    /** cmd 11 — sounds on/off. `[bool]`. */
-    public fun soundsEnable(enabled: Boolean): ByteArray =
-        frame(BleCommandId.SOUNDS_ENABLE) { bool(enabled) }
-
     /** cmd 17 (BS only) — disable/re-enable LoRa frequency hopping. `[bool]`. */
     public fun loraHopDisabled(disabled: Boolean): ByteArray =
         frame(BleCommandId.HOP_DISABLE_BS) { bool(disabled) }

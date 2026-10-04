@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-97 codes. The dispatch on both ends is a flat first-match chain, so
+95 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -40,8 +40,6 @@ this list is CI-enforced for uniqueness.
 | `0xA9` | `OUT_STATUS_RESPONSE` | — |  |
 | `0xAA` | `CAMERA_START` | — |  |
 | `0xAB` | `CAMERA_STOP` | — |  |
-| `0xAC` | `SOUNDS_ENABLE` | — |  |
-| `0xAD` | `SOUNDS_DISABLE` | — |  |
 | `0xAE` | `SERVO_CONFIG_PENDING` | OC → FC |  |
 | `0xAF` | `PID_CONFIG_PENDING` | OC → FC |  |
 | `0xB0` | `SERVO_CONFIG_MSG` | FC → OC |  |
@@ -126,7 +124,7 @@ this list is CI-enforced for uniqueness.
 | `0xFC` | `BS_LORA_RX_MSG` | FC → OC | BS→self: BsLoRaRxHeader + the raw LoRa frame, one per received packet |
 | `0xFD` | `BS_EVENT_MSG` | FC → OC | BS→self: BsEventHeader + UTF-8 text, one per hop/session event |
 
-> 54 of these 97 codes carry no comment in the header,
+> 52 of these 95 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -219,7 +217,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 8 |  | Power rail: payload[0] = desired state (1 = on, 0 = off), same semantics as cmds 1/23. A blind toggle inverts… |
 | 9 |  | Phone time sync: [year_lo][year_hi][month][day][hour][minute][second] |
 | 10 |  | Direct LoRa reconfig over BLE is no longer accepted on the rocket side (#106). LoRa link parameters are owned… |
-| 11 |  | Rocket computer sound enable/disable: [enabled:1] |
+| 11 |  | Retired: sounds enable/disable. The piezo is gone; an older app may still send this, so swallow it rather… |
 | 12 |  | Servo config: [bias1:2][bias2:2][bias3:2][bias4:2][hz:2][min:2][max:2][fin_min:4][fin_max:4] = 22 bytes |
 | 13 |  | PID configuration: [kp:4f][ki:4f][kd:4f][min_cmd:4f][max_cmd:4f] = 20 bytes |
 | 14 |  | Servo control enable/disable: [enabled:1] |

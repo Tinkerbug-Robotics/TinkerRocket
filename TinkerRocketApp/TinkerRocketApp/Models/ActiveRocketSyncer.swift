@@ -25,7 +25,7 @@
 //  What the app can't see is FIRMWARE-DEPENDENT, not a fixed list (corrected
 //  #1101 — this used to say the readback echoes "about half the editable
 //  surface" and named servo trim 2-4, fin travel, fin layout, roll waypoints,
-//  the PN guidance parameters and sounds as permanently unreported). Since
+//  the PN guidance parameters as permanently unreported). Since
 //  dd659b6 the readback carries the servo, guidance and roll groups, so
 //  `unreportedGroups` is empty against current firmware.
 //
@@ -477,7 +477,6 @@ final class ActiveRocketSyncer: ObservableObject {
         device.sendCameraConfig(cameraType: profile.cameraType)
         device.sendImuOrientationConfig(profile.imuOrientSetting)
         device.sendImuRateConfig(profile.imuRateHz)
-        device.sendSoundConfig(enabled: profile.soundsEnabled)
         device.sendPyroConfig(channels: [
             (profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
             (profile.pyro2Enabled, profile.pyro2TriggerMode, profile.pyro2TriggerValue),
@@ -519,7 +518,6 @@ final class ActiveRocketSyncer: ObservableObject {
     static let groupServoTrim24    = "Servo trim 2-4"
     static let groupFinTravel      = "Fin travel"
     static let groupFinLayout      = "Fin layout"
-    static let groupSounds         = "Sounds"
     static let groupGuidanceParams = "Guidance parameters"
     static let groupRollProfile    = "Roll profile"
 
@@ -686,11 +684,6 @@ final class ActiveRocketSyncer: ObservableObject {
                 p.finRollReverse = rollReverse
                 p.finRingMode = ringMode
                 changed.append(groupFinLayout)
-            }
-
-            if p.soundsEnabled != e.soundsEnabled {
-                p.soundsEnabled = e.soundsEnabled
-                changed.append(groupSounds)
             }
         }
 

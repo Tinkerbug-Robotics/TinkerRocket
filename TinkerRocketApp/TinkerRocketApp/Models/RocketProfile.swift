@@ -94,7 +94,6 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var lastUsedUnitID: String? = nil
 
     // MARK: Rocket toggles
-    var soundsEnabled: Bool = false
     var servoControlEnabled: Bool = true
     var gainScheduleEnabled: Bool = true
     var useAngleControl: Bool = false
@@ -358,7 +357,6 @@ extension RocketProfile {
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? defaults.updatedAt
         lastUsedUnitID = try c.decodeIfPresent(String.self, forKey: .lastUsedUnitID)
 
-        soundsEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundsEnabled) ?? defaults.soundsEnabled
         servoControlEnabled = try c.decodeIfPresent(Bool.self, forKey: .servoControlEnabled) ?? defaults.servoControlEnabled
         gainScheduleEnabled = try c.decodeIfPresent(Bool.self, forKey: .gainScheduleEnabled) ?? defaults.gainScheduleEnabled
         useAngleControl = try c.decodeIfPresent(Bool.self, forKey: .useAngleControl) ?? defaults.useAngleControl
