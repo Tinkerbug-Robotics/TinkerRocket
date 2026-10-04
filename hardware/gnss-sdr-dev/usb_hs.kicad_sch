@@ -3367,12 +3367,11 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "Device:D_TVS"
+		(symbol "Diode:ESD5Zxx"
 			(pin_numbers
 				(hide yes)
 			)
 			(pin_names
-				(offset 1.016)
 				(hide yes)
 			)
 			(exclude_from_sim no)
@@ -3390,7 +3389,7 @@
 					)
 				)
 			)
-			(property "Value" "D_TVS"
+			(property "Value" "ESD5Zxx"
 				(at 0 -2.54 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3400,7 +3399,18 @@
 					)
 				)
 			)
-			(property "Footprint" ""
+			(property "Footprint" "Diode_SMD:D_SOD-523"
+				(at 0 -4.445 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" "https://www.onsemi.com/pdf/datasheet/esd5z2.5t1-d.pdf"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3411,7 +3421,7 @@
 					)
 				)
 			)
-			(property "Datasheet" ""
+			(property "Description" "ESD Protection Diode, SOD-523"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3422,7 +3432,7 @@
 					)
 				)
 			)
-			(property "Description" "Bidirectional transient-voltage-suppression diode"
+			(property "ki_keywords" "esd tvs unidirectional diode"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3433,7 +3443,7 @@
 					)
 				)
 			)
-			(property "ki_keywords" "diode TVS thyrector"
+			(property "ki_fp_filters" "D?SOD?523*"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3444,33 +3454,10 @@
 					)
 				)
 			)
-			(property "ki_fp_filters" "TO-???* *_Diode_* *SingleDiode* D_*"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(symbol "D_TVS_0_1"
+			(symbol "ESD5Zxx_0_1"
 				(polyline
 					(pts
-						(xy -2.54 1.27) (xy -2.54 -1.27) (xy 2.54 1.27) (xy 2.54 -1.27) (xy -2.54 1.27)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0.508 1.27) (xy 0 1.27) (xy 0 -1.27) (xy -0.508 -1.27)
+						(xy -1.27 -1.27) (xy -1.27 1.27) (xy -0.762 1.27)
 					)
 					(stroke
 						(width 0.254)
@@ -3492,12 +3479,24 @@
 						(type none)
 					)
 				)
+				(polyline
+					(pts
+						(xy 1.27 -1.27) (xy 1.27 1.27) (xy -1.27 0) (xy 1.27 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
 			)
-			(symbol "D_TVS_1_1"
+			(symbol "ESD5Zxx_1_1"
 				(pin passive line
 					(at -3.81 0 0)
 					(length 2.54)
-					(name "A1"
+					(name "K"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -3515,7 +3514,7 @@
 				(pin passive line
 					(at 3.81 0 180)
 					(length 2.54)
-					(name "A2"
+					(name "A"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -7238,8 +7237,8 @@
 		(uuid "9b94619e-2841-4553-9ad8-10177d8d043d")
 	)
 	(symbol
-		(lib_id "Device:D_TVS")
-		(at 165.1 62.23 90)
+		(lib_id "Diode:ESD5Zxx")
+		(at 165.1 62.23 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -7256,10 +7255,10 @@
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
+				(justify right)
 			)
 		)
-		(property "Value" "LESD5D5.0CT1G"
+		(property "Value" "ESD5V0D5-TP"
 			(at 162.56 63.5 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7267,7 +7266,7 @@
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
+				(justify right)
 			)
 		)
 		(property "Footprint" "Diode_SMD:D_SOD-523"
@@ -7281,7 +7280,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.lcsc.com/datasheet/C5274290.pdf"
+		(property "Datasheet" "https://www.mccsemi.com/pdf/Products/ESD3V3D5_ESD12VD5(SOD-523).pdf"
 			(at 165.1 62.23 0)
 			(hide yes)
 			(show_name no)
@@ -7292,7 +7291,7 @@
 				)
 			)
 		)
-		(property "Description" "5 V bidirectional ESD TVS on USB HS VBUS, as on the ESP32-P4-Function-EV-Board"
+		(property "Description" "5 V unidirectional ESD TVS on USB HS VBUS: IEC 61000-4-2 30 kV, 174 W; cathode on VBUS"
 			(at 165.1 62.23 0)
 			(hide yes)
 			(show_name no)
@@ -7303,7 +7302,7 @@
 				)
 			)
 		)
-		(property "MPN" "LESD5D5.0CT1G"
+		(property "MPN" "ESD5V0D5-TP"
 			(at 165.1 62.23 0)
 			(hide yes)
 			(show_name no)
@@ -7314,7 +7313,7 @@
 				)
 			)
 		)
-		(property "Mfr" "LRC"
+		(property "Mfr" "MCC"
 			(at 165.1 62.23 0)
 			(hide yes)
 			(show_name no)
