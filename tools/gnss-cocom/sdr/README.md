@@ -47,6 +47,13 @@ variable at a time.
 | `build_report.py` | Assembles `report.html` and `boost_report.html` from the text, `receivers.json` and the figures |
 | `make_block_diagram.py` | Draws the rig block diagram used in the report |
 | `replot_all.py` | Regenerates every report figure, shading each at its own measured gate |
+| `regen_c8.py`, `c8_manifest.json` | Every IQ file the bench work kept, with its recipe and SHA-256: rebuilds one byte for byte, or proves its recipe on a short prefix, so `c8/` can be cleared without losing anything |
+| `hackrf_tx_ram/` | The buffered transmitter: `hackrf_transfer -t` with the file read ahead into memory, so the wide SignalSim files replay without disk underruns ([README](hackrf_tx_ram/README.md)) |
+| `px_run_ram.py`, `px_fly_ram.sh` | `px1105r_run.py` through `hackrf_tx_ram`, and SignalSim flights through it (narrow, wide or L5 band) |
+| `px_run_fed.py`, `c8_feeder.py` | The earlier fix: `hackrf_transfer` fed from a read-ahead pipe |
+| `tx_only.py` | Transmits a file exactly as a flight does with no receiver on the Mac, for underrun tests |
+| `caff_flights.sh` | The keep-awake A/B of 2026-10-01: wide traveler flights with the power assertions and powerd's events logged |
+| `signalsim/` | Configs and tools for the multi-GNSS SignalSim files; SignalSim itself is never in the repository ([README](signalsim/README.md)) |
 
 ## Quick start
 

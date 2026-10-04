@@ -1,0 +1,73 @@
+{
+	"version": 1.0,
+	"description": "TinkerRocket bench: static rig origin, 2026-08-18 08:30 GPST, GPS L5 + GAL E5a + BDS B2a at 1176.45 MHz, 18.48 Msps, 240 s, 45 dB-Hz",
+	"time": {
+		"type": "UTC",
+		"year": 2026,
+		"month": 8,
+		"day": 18,
+		"hour": 8,
+		"minute": 29,
+		"second": 42
+	},
+	"trajectory": {
+		"name": "static_l5_2026_45",
+		"initPosition": {
+			"type": "LLA",
+			"format": "d",
+			"longitude": -119.0,
+			"latitude": 0.0,
+			"altitude": 1200
+		},
+		"initVelocity": {
+			"type": "SCU",
+			"speed": 0,
+			"course": 0
+		},
+		"trajectoryList": [
+			{
+				"type": "Const",
+				"time": 240.0
+			}
+		]
+	},
+	"ephemeris": {
+		"type": "RINEX",
+		"name": "EphData/BRDC_2026230_MN.rnx"
+	},
+	"output": {
+		"type": "IFdata",
+		"format": "IQ8",
+		"sampleFreq": 18.48,
+		"centerFreq": 1176.45,
+		"name": "c8/signalsim_static_l5_2026_45.C8",
+		"config": {
+			"elevationMask": 5
+		},
+		"systemSelect": [
+			{
+				"system": "GPS",
+				"signal": "L5",
+				"enable": true
+			},
+			{
+				"system": "Galileo",
+				"signal": "E5a",
+				"enable": true
+			},
+			{
+				"system": "BDS",
+				"signal": "B2a",
+				"enable": true
+			}
+		]
+	},
+	"power": {
+		"noiseFloor": -172,
+		"initPower": {
+			"unit": "dBHz",
+			"value": 45
+		},
+		"elevationAdjust": false
+	}
+}

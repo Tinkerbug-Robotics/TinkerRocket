@@ -1,0 +1,279 @@
+{
+  "about": "The rig's IQ files (c8/, never in git): how each was made and its SHA-256. regen_c8.py rebuilds or checks them. Hashes measured 2026-10-04 on the files the bench runs used.",
+  "gps_sdr_sim_dir": "~/Projects/ModelRockets/bench-backups/gps-sdr-sim-builds/2026-09-27_carrier-offset",
+  "signalsim": "~/Projects/ModelRockets/bench-backups/signalsim-builds/2026-09-30_gps-almanac-fix/globsky-SignalSim-c83ae92/build/IFdataGen",
+  "scenarios": {
+    "traveler_pad600": {
+      "make_flights": [
+        "--lat",
+        "0",
+        "--lon",
+        "-119",
+        "--only",
+        "traveler"
+      ],
+      "pad": [
+        "traveler",
+        "600",
+        "1258"
+      ],
+      "sha256": "9502707d73607e5834b3c55d6c201445284b074721c8f00b7a094bc45f20ef01"
+    },
+    "traveler_soft25_pad600": {
+      "make_flights": [
+        "--lat",
+        "0",
+        "--lon",
+        "-119",
+        "--only",
+        "traveler_soft25"
+      ],
+      "pad": [
+        "traveler_soft25",
+        "600",
+        "1258"
+      ],
+      "sha256": "ba4f65fe64d8f5ae0ebe91ca1afb12a0393dd7f55238547d7cce763e9e402020"
+    },
+    "hotshot_pad600": {
+      "make_flights": [
+        "--lat",
+        "0",
+        "--lon",
+        "-119",
+        "--only",
+        "hotshot"
+      ],
+      "pad": [
+        "hotshot",
+        "600",
+        "1060"
+      ],
+      "sha256": "b4e7e0a28f4df4d513b0a2d2017d6f4dfe512845acc8f16ee998a773579e8ef4"
+    }
+  },
+  "files": {
+    "cal_g1.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "traveler_pad600",
+      "gain": 1,
+      "seconds": 150,
+      "rate": 2600000,
+      "bytes": 779480000,
+      "sha256": "50231ba2af5621653c69da4eac11ef3070097a198680326e7ec143c2e6387dd7",
+      "note": "C/N0 calibration pad (2026-09-28): the traveler's first 150 s, static, at gps-sdr-sim fixed gain 1"
+    },
+    "cal_g2.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "traveler_pad600",
+      "gain": 2,
+      "seconds": 150,
+      "rate": 2600000,
+      "bytes": 779480000,
+      "sha256": "5582f8c1a80b7b2f967d8638ec8b844b5385996f54d6490202df2a95b1373207",
+      "note": "C/N0 calibration pad (2026-09-28): the traveler's first 150 s, static, at gps-sdr-sim fixed gain 2"
+    },
+    "cal_g4.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "traveler_pad600",
+      "gain": 4,
+      "seconds": 150,
+      "rate": 2600000,
+      "bytes": 779480000,
+      "sha256": "744f5d994ad2f4b49a7b5a4b11802211b0dbc60b5a0e3a247d4523ad990aea79",
+      "note": "C/N0 calibration pad (2026-09-28): the traveler's first 150 s, static, at gps-sdr-sim fixed gain 4"
+    },
+    "cal_g8.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "traveler_pad600",
+      "gain": 8,
+      "seconds": 150,
+      "rate": 2600000,
+      "bytes": 779480000,
+      "sha256": "f2321d6663b57885b52213874faef9111d1511693cd2b8fec3624654144777b9",
+      "note": "C/N0 calibration pad (2026-09-28): the traveler's first 150 s, static, at gps-sdr-sim fixed gain 8"
+    },
+    "cal_g16.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "traveler_pad600",
+      "gain": 16,
+      "seconds": 150,
+      "rate": 2600000,
+      "bytes": 779480000,
+      "sha256": "6751d0fc0659e1664e92dc34e1ae3d19ee1d3b0087e57f5b53336cce4b4645e8",
+      "note": "C/N0 calibration pad (2026-09-28): the traveler's first 150 s, static, at gps-sdr-sim fixed gain 16"
+    },
+    "cal_g32.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "traveler_pad600",
+      "gain": 32,
+      "seconds": 150,
+      "rate": 2600000,
+      "bytes": 779480000,
+      "sha256": "149d6f2d5618221f3f2913b019738ab66e366c2104be646e1c60f6fa76eef73b",
+      "note": "C/N0 calibration pad (2026-09-28): the traveler's first 150 s, static, at gps-sdr-sim fixed gain 32"
+    },
+    "cal_g64.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "traveler_pad600",
+      "gain": 64,
+      "seconds": 150,
+      "rate": 2600000,
+      "bytes": 779480000,
+      "sha256": "66b7172fdb5cdd9d487156226eb1b3d590a4c92dd28a6ad4eb7e9b77134520e4",
+      "note": "C/N0 calibration pad (2026-09-28): the traveler's first 150 s, static, at gps-sdr-sim fixed gain 64"
+    },
+    "cal_g128.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "traveler_pad600",
+      "gain": 128,
+      "seconds": 150,
+      "rate": 2600000,
+      "bytes": 779480000,
+      "sha256": "99b45e8df858cfb833fcf10518ba4b95c0f47c3421f5d4fc3bc2cb9d144a21ca",
+      "note": "C/N0 calibration pad (2026-09-28): the traveler's first 150 s, static, at gps-sdr-sim fixed gain 128"
+    },
+    "traveler_soft25_pad600_smooth_cofs_g8.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "traveler_soft25_pad600",
+      "gain": 8,
+      "seconds": 1258,
+      "rate": 2600000,
+      "bytes": 6530680000,
+      "sha256": "05e0229f1291a7c4821bd5d4774fb58dec1cd2c0de90546f2a562d02a9577b2f",
+      "note": "traveler with the 0.25 s soft start, 600 s pad, smooth carrier, -22 Hz carrier correction, fixed gain 8"
+    },
+    "hotshot_pad600_smooth_cofs_g8.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "hotshot_pad600",
+      "gain": 8,
+      "seconds": 900,
+      "rate": 2600000,
+      "bytes": 4679480000,
+      "sha256": "63a5a39af5bc9efd86f1d9de42a2c21a437fd40f5a066b250ae334361fcbf193",
+      "note": "hotshot (10 to 40 g over 4 s), 600 s pad, smooth carrier, -22 Hz carrier correction, fixed gain 8"
+    },
+    "traveler_soft25_pad600_smooth_cofs_g11.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "traveler_soft25_pad600",
+      "gain": 11,
+      "seconds": 1258,
+      "rate": 2600000,
+      "bytes": 6530680000,
+      "sha256": "886e553b37daace74a89d1f0438c0022945a194af2b4dfe034cc76032d39b079",
+      "note": "traveler with the 0.25 s soft start, 600 s pad, smooth carrier, -22 Hz carrier correction, fixed gain 11"
+    },
+    "hotshot_pad600_smooth_cofs_g11.C8": {
+      "tool": "gps-sdr-sim",
+      "binary": "gps-sdr-sim-smooth-cofs",
+      "scenario": "hotshot_pad600",
+      "gain": 11,
+      "seconds": 900,
+      "rate": 2600000,
+      "bytes": 4679480000,
+      "sha256": "e8b2a1035898633c53c8ba3f9e60f2b1085fd3537493544ff7ceea5741769ba1",
+      "note": "hotshot (10 to 40 g over 4 s), 600 s pad, smooth carrier, -22 Hz carrier correction, fixed gain 11"
+    },
+    "signalsim_static_gpsgal_2026_45_n.C8": {
+      "tool": "signalsim",
+      "config": "static_gpsgal_2026_45_n",
+      "rate": 8184000,
+      "bytes": 3928303632,
+      "sha256": "9eb2948a782b38a8776656d1d39c954f9bd8a69a89f3b5f246dfdbd2ff019871",
+      "note": "static 240 s, GPS L1CA + Galileo E1, narrow, 45 dB-Hz, raw (no carrier correction)"
+    },
+    "signalsim_static_gpsgalb1c_2026_45_n.C8": {
+      "tool": "signalsim",
+      "config": "static_gpsgalb1c_2026_45_n",
+      "rate": 8184000,
+      "bytes": 4910400000,
+      "sha256": "e30231018ff0ae805c414942bde6970f2ad7e8764087c31107272db6f5f58613",
+      "note": "static 300 s, GPS L1CA + Galileo E1 + BeiDou B1C, narrow, 45 dB-Hz, raw; made for the stage-0 software receiver"
+    },
+    "signalsim_static_l5_2026_45.C8": {
+      "tool": "signalsim",
+      "config": "static_l5_2026_45",
+      "rate": 18480000,
+      "bytes": 8870363040,
+      "sha256": "163b9e16ad50eb0457815ebc7f989e22aba4845a6da17b8c29b632005edd52e5",
+      "note": "static 240 s, GPS L5 + Galileo E5a + BeiDou B2a at 1176.45 MHz, 45 dB-Hz"
+    },
+    "signalsim_static_l5w_2026_45.C8": {
+      "tool": "signalsim",
+      "config": "static_l5w_2026_45",
+      "rate": 18480000,
+      "bytes": 8870363040,
+      "sha256": "711482e2266ea7bb031cca115c0c2933aafa32d8e43beb74d8136411cd46f023",
+      "note": "the warm-start L5 half: as static_l5, starting 160 s after the hotshot wide L1 file"
+    },
+    "signalsim_hotshot_all_2026_45_w_p180.C8": {
+      "tool": "signalsim",
+      "config": "hotshot_all_2026_45_w_p180",
+      "rate": 18480000,
+      "bytes": 11087963040,
+      "sha256": "1b5a4d6334eab704ea08b265a473021d4fdb4ae1c5c19a8f437260385da6f1c4",
+      "note": "hotshot, 180 s pad, to T+120, GPS + Galileo + BeiDou B1I, wide, 45 dB-Hz; fly with a -23 Hz carrier shift (hackrf_tx_ram -C)"
+    },
+    "signalsim_hotshot_all_2026_51_w_p180.C8": {
+      "tool": "signalsim",
+      "config": "hotshot_all_2026_51_w_p180",
+      "rate": 18480000,
+      "bytes": 11087963040,
+      "sha256": "10a435d05f93b6698d38bf2809bae88b2ee5c65b7bf3ad7f11fdc21d0fd5fdf2",
+      "note": "hotshot, 180 s pad, to T+120, GPS + Galileo + BeiDou B1I, wide, 51 dB-Hz; fly with a -23 Hz carrier shift (hackrf_tx_ram -C)"
+    },
+    "signalsim_hotshot_all_2026_57_w_p180.C8": {
+      "tool": "signalsim",
+      "config": "hotshot_all_2026_57_w_p180",
+      "rate": 18480000,
+      "bytes": 11087963040,
+      "sha256": "3f2c67c9ceaa1f2bef52c7e42dc22bd73b2069690ade5addbc30a146af27326f",
+      "note": "hotshot, 180 s pad, to T+120, GPS + Galileo + BeiDou B1I, wide, 57 dB-Hz; fly with a -23 Hz carrier shift (hackrf_tx_ram -C)"
+    },
+    "signalsim_traveler_all_2026_51_w_p180.C8": {
+      "tool": "signalsim",
+      "config": "traveler_all_2026_51_w_p180",
+      "rate": 18480000,
+      "bytes": 19958363040,
+      "sha256": "2a8a551a1b7a8373eab2fddc6af60354e7dac5627df3bdaaba398f0fa5aaa779",
+      "note": "traveler, 180 s pad, to T+360, GPS + Galileo + BeiDou B1I, wide, 51 dB-Hz; fly with a -23 Hz carrier shift (hackrf_tx_ram -C)"
+    },
+    "signalsim_traveler_all_2026_57_w_p180.C8": {
+      "tool": "signalsim",
+      "config": "traveler_all_2026_57_w_p180",
+      "rate": 18480000,
+      "bytes": 19958363040,
+      "sha256": "3e009f1c66edd1b60e3755ee7a3592f83d4a3b9046cc7410eb2b12776ec0202b",
+      "note": "traveler, 180 s pad, to T+360, GPS + Galileo + BeiDou B1I, wide, 57 dB-Hz; fly with a -23 Hz carrier shift (hackrf_tx_ram -C)"
+    },
+    "signalsim_traveler_all_2026_45_w_p180_cofs.C8": {
+      "tool": "signalsim",
+      "config": "traveler_all_2026_45_w_p180",
+      "rate": 18480000,
+      "carrier_shift_hz": -23.0,
+      "bytes": 19958363040,
+      "sha256": "dbb6ed5571b70b2fe12ce089fd941d6493a0be84541504e88a64435c3f203aea",
+      "note": "traveler, 180 s pad, to T+360, GPS + Galileo + BeiDou B1I, wide, 45 dB-Hz, carrier shifted -23 Hz"
+    },
+    "signalsim_traveler_gpsgal_2026_50e_n_cofs.C8": {
+      "tool": "signalsim",
+      "config": "traveler_gpsgal_2026_50e_n",
+      "rate": 8184000,
+      "carrier_shift_hz": -22.0,
+      "bytes": 20556571200,
+      "sha256": "f54f801d2ea339473d37551591d5a15d25af271b69b5cecaf260664a340ba202",
+      "note": "traveler, 600 s pad, GPS + Galileo, narrow, 50 dB-Hz at the zenith scaled by elevation, carrier shifted -22 Hz"
+    }
+  }
+}
