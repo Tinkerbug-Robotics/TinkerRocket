@@ -1,0 +1,6 @@
+# Made on first use by gen.sh / ../regen_c8.py: the unpacked broadcast file, the link to ../c8, the generation logs
+# and the working copy of a config
+EphData/
+c8
+logs/
+run.json
