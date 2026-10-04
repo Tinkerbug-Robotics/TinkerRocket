@@ -241,6 +241,10 @@ static void usage(void)
             "  --split T1,T2              also report the window's parts before T1, T1-T2 and after T2\n"
             "  --aid LAG_MS,SF,BIAS       feed the loop the true Doppler rate as an IMU would: LAG_MS late,\n"
             "                             scaled by 1 + SF, plus BIAS Hz/s (51.5 Hz/s is 1 g)\n"
+            "  --aid-imu ODR,FEED,SF,NOISE  the same as IMU samples: taken at ODR Hz through LPF1 (a sample late),\n"
+            "                             at the P4 0.2 ms later and held, scaled by 1 + SF, NOISE Hz/s per sample.\n"
+            "                             FEED: raw; lp:HZ (a first-order low-pass on the P4); mean:N (the mean of\n"
+            "                             N samples); predict (each sample extrapolated to now from the last two)\n"
             "  --spin HZ[,T0,T1]          the vehicle rolls about up, the rate ramping from 0 at T0 to HZ at T1\n"
             "                             (default: HZ throughout)\n"
             "  --antenna nose|side        the patch in the nose looking up the roll axis (default), or on the\n"
@@ -258,6 +262,9 @@ int main(int argc, char **argv)
     double t_from = NAN, t_to = NAN, score_from = NAN, boost0 = INFINITY, boost1 = -INFINITY, dop_err = 30.0;
     double split1 = INFINITY, split2 = INFINITY;
     double aid_lag = -1.0, aid_sf = 0.0, aid_bias = 0.0, aid_spin_lag = -1.0;
+    /* --aid-imu: the rate, the feed (0 raw, 1 low-pass, 2 mean, 3 predict) and its parameter, scale, noise. */
+    double im_odr = 0.0, im_param = 0.0, im_sf = 0.0, im_noise = 0.0;
+    int im_feed = 0;
     spin_t sp;
     memset(&sp, 0, sizeof(sp));
     sp.t0 = sp.t1 = -INFINITY;
@@ -314,6 +321,24 @@ int main(int argc, char **argv)
             seed = strtoull(v, NULL, 10);
         } else if (!strcmp(a, "--aid")) {
             if (sscanf(v, "%lf,%lf,%lf", &aid_lag, &aid_sf, &aid_bias) != 3) {
+                usage();
+                return 2;
+            }
+        } else if (!strcmp(a, "--aid-imu")) {
+            char feed[32];
+            if (sscanf(v, "%lf,%31[^,],%lf,%lf", &im_odr, feed, &im_sf, &im_noise) != 4 || im_odr <= 0.0) {
+                usage();
+                return 2;
+            }
+            if (!strcmp(feed, "raw")) {
+                im_feed = 0;
+            } else if (sscanf(feed, "lp:%lf", &im_param) == 1 && im_param > 0.0) {
+                im_feed = 1;
+            } else if (sscanf(feed, "mean:%lf", &im_param) == 1 && im_param >= 1.0 && im_param <= 64.0) {
+                im_feed = 2;
+            } else if (!strcmp(feed, "predict")) {
+                im_feed = 3;
+            } else {
                 usage();
                 return 2;
             }
@@ -412,6 +437,12 @@ int main(int argc, char **argv)
     double e10 = 0.0;
     int n10 = 0;
 
+    /* --aid-imu: the next sample's time, the last two samples and their time, the feed's output. */
+    double im_next = t_from, im_v = 0.0, im_vp = 0.0, im_y = 0.0, im_te = t_from, im_buf[64] = {0};
+    int im_n = 0;
+    rng_t im_rng;
+    rng_seed(&im_rng, seed + 1000);
+
     const long nper = (long)floor((t_to - t_from) / T_PER);
     for (long k = 0; k < nper; k++) {
         const double t0 = t_from + (double)k * T_PER;
@@ -485,6 +516,40 @@ int main(int argc, char **argv)
         d.ql = (float)(al * ci + sig * nl_q);
         int b;
         uint32_t bp;
+        if (im_odr > 0.0) {
+            const double tn = t0 + 0.5 * T_PER, dti = 1.0 / im_odr;
+            while (im_next + 0.2e-3 <= tn) {
+                /* A sample taken at im_next through LPF1 (a sample late), at the P4 0.2 ms later. */
+                size_t h2 = hint;
+                const double ts = im_next - dti;
+                double z0, z1;
+                rng_gauss2(&im_rng, &z0, &z1);
+                const double r = (dop_at(&tr, ts + 0.5e-3, &h2) - dop_at(&tr, ts - 0.5e-3, &h2)) / 1e-3;
+                const double x = r * (1.0 + im_sf) + im_noise * z0;
+                im_vp = im_v;
+                im_v = x;
+                im_te = ts;
+                if (im_feed == 1) {
+                    im_y += (1.0 - exp(-TWO_PI * im_param * dti)) * (x - im_y);
+                } else if (im_feed == 2) {
+                    const int m = (int)im_param;
+                    im_buf[im_n % m] = x;
+                    im_n++;
+                    double s = 0.0;
+                    const int c = im_n < m ? im_n : m;
+                    for (int j = 0; j < c; j++) {
+                        s += im_buf[j];
+                    }
+                    im_y = s / c;
+                } else {
+                    im_y = x;
+                }
+                im_next += dti;
+            }
+            /* predict: carry the last sample to now along the slope of the last two. */
+            ch.ff_rate = (float)(im_feed == 3 ? im_v + (im_v - im_vp) * (tn - im_te) * im_odr : im_y);
+            ch.ff_lead = (float)(delay * T_PER);
+        }
         if (aid_lag >= 0.0 || aid_spin_lag >= 0.0) {
             double ff = 0.0;
             if (aid_lag >= 0.0) {
@@ -504,6 +569,7 @@ int main(int argc, char **argv)
                 ff += (wrap_half(wp - w0) - wrap_half(w0 - wm)) / (h * h);
             }
             ch.ff_rate = (float)ff;
+            ch.ff_lead = (float)(delay * T_PER);  /* as rx_tick sets it: the words land `delay` periods on */
         }
         trk_profile_step(&cur, boosting ? &boost : &quiet, (float)T_PER);
         trk_update(&ch, &cur, &d, (float)T_PER, &b, &bp);

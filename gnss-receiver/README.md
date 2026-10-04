@@ -396,7 +396,7 @@ truth is in the rig's `scenarios/`:
 | Tool | What it does |
 |---|---|
 | `py/los_truth.py` | Each satellite's line-of-sight truth along a scenario: Doppler, Doppler rate, elevation, azimuth |
-| `trksim` | One channel's real tracking code (`core/trk`) against that truth, at the level of correlator dumps. It includes the contract's command delay, data bits, and correlated early/prompt/late noise at any C/N0, and runs about 1000× real time. On the IQ files it matches `gnssrx` channel for channel: unlock time within 0.1 s, the same slips. With `--spin`, the rolling antenna's phase and gain; see [Spin and the antenna](#spin-and-the-antenna-milestone-7) |
+| `trksim` | One channel's real tracking code (`core/trk`) against that truth, at the level of correlator dumps. It includes the contract's command delay, data bits, and correlated early/prompt/late noise at any C/N0, and runs about 1000× real time. On the IQ files it matches `gnssrx` channel for channel: unlock time within 0.1 s, the same slips. With `--spin`, the rolling antenna's phase and gain; see [Spin and the antenna](#spin-and-the-antenna-milestone-7). Aided, it predicts each command's frequency for when it lands, as `rx_tick` does (from 2026-10-04; before, an aided run's feed-forward landed three periods late). `--aid-imu` feeds the IMU as samples, raw, filtered or predicted forward |
 | `py/trk_sweep.py` | Sweeps `trksim` over loop profiles, C/N0, satellites and seeds; tabulates the worst satellite |
 | `gnssrx --boost-at S0,S1` | The boost profile over those file seconds, as the flight computer would call it. With `--loops-quiet` and `--loops-boost` (bandwidths), `--cn0-at S:DBHZ` (a level change mid-file) and `run.ini` (what made the run) |
 | `gnssrx --boost-detect default` | The boost profile from the launch the emulated IMU detects to 2 s past the burnout it detects, as the P4 will switch it (`core/trk/boost_detect.c`; `fc` for the flight computer's slower rules). Needs `--imu SCEN.csv`; `--imu-no-aid` keeps the IMU for detection only. `run.ini` records what it detected (`boost_detected`, a line per span). `--boost-gate IGN_S,TAIL_FRAC,TAIL_MS` gates the profile to the transitions; see [A gated profile](#a-gated-profile-milestone-7) |
@@ -1016,7 +1016,7 @@ traveler skies, IMU-aided 20 Hz loops, and spin ramping up through the burn. The
   low satellites: ±28° and 5 dB at 10° elevation.
 - At 45 dB-Hz all 14 satellites track clean through 8 and 20 Hz of spin, on both flights.
 - At 35 dB-Hz on the boresight, the low satellites are already marginal from the pattern: 6 of
-  14 are clean without spin, and the ripple leaves 2–3.
+  14 are clean without spin, and the ripple leaves 4.
 
 **On the side, spin is fatal.**
 - The patch faces each satellite for only part of each turn: fades of 15–40 dB, and phase swings
@@ -1181,24 +1181,53 @@ typical, 1.8 % worst) applied throughout. Slips / unlocked seconds in the boost:
 
 | IMU, as the loops are given it (delay; scale error) | Hotshot, 36 dB-Hz | 33 | 32 | Traveler, 33 | 32 |
 |---|---|---|---|---|---|
-| exact | 0 | 0 | 0 | 0 | 4 (1.0 s) |
+| exact | 0 | 0 | 0 | 0 | 6 (0.6 s) |
 | ISM6HG256X at 1920 Hz (1.0 ms; 1.1 %) | 0 | 0 | 0 | 0 | 6 (0.6 s) |
-| at 960 Hz (1.8 ms; 1.1 %) | 0 | 0 | 15 (1.4 s) | 0 | 10 (1.5 s) |
-| at 960 Hz, worst part (1.8 ms; 1.8 %) | 0 | 0 | 15 (1.4 s) | 0 | 10 (1.5 s) |
-| at 480 Hz (3.3 ms; 1.1 %) | 0 | 23 (3.1 s) | 118 (13.3 s) | 0 | 8 (1.9 s) |
-| old model (5 ms; 3 %; 0.5 m/s²) | 0 | 109 (13.9 s) | 379 (35.6 s) | 0 | 53 (5.3 s) |
+| at 960 Hz (1.8 ms; 1.1 %) | 0 | 0 | 0 | 0 | 12 (1.1 s) |
+| at 960 Hz, worst part (1.8 ms; 1.8 %) | 0 | 0 | 0 | 0 | 16 (1.5 s) |
+| at 480 Hz (3.3 ms; 1.1 %) | 0 | 0 | 0 | 0 | 10 (1.5 s) |
+| old model (5 ms; 3 %; 0.5 m/s²) | 0 | 0 (0.6 s) | 53 (6.0 s) | 0 | 4 (0.9 s) |
 
-- **The delay is what counts, at the hotshot's burnout.** The force drops 39.5 g in one trajectory
-  step there, and the IMU hands the loop that step late. At 32 dB-Hz with the scale held at 1.1 %:
-  no slips at 1.0 ms, 15 at 1.76, 67 at 2.5, 118 at 3.33 and 303 at 5 ms. At 1.76 ms with no scale
-  error, none; with 3 %, 88.
-- **So 960 Hz or faster.** 480 Hz, the high-g channel's slowest rate, slips at 33 dB-Hz where 960 does
-  not, and 1920 Hz (a rate the flight computer already runs) is clean to 32. A real motor tails off
-  over tens of milliseconds, which softens the step the files have.
-- **The traveler's burnout is gentler** (23 g): every rate is clean to 33 dB-Hz. At 32 the old model
-  slips 53 times, the board's IMU 6 to 10.
-- **The quiet loops still need widening.** With quiet loops and the board's IMU at 960 Hz, the hotshot
-  slips 71 times at 36 dB-Hz, where the design slips none.
+Each seed's noise is shared by the 13 satellites, so a count can be one unlucky draw 13 times; the
+hotshot, where each satellite's dynamics differ, is the one to read. On the traveler at 32 dB-Hz a
+few draws slip with or without the IMU's errors.
+
+- **The design doesn't need a fast IMU.** Every rate the part offers, 480 to 1920 Hz, leaves it as
+  clean as exact aiding down to 32 dB-Hz on the hotshot; only the old model's 5 ms slips there.
+  With the scale held at 1.1 %, the hotshot at 32 dB-Hz slips none up to 3.3 ms of delay and 17
+  times at 5 ms.
+- **This corrects the first version of this section** (2026-10-04, commit f1cad469), which said 960 Hz
+  or faster. `trksim` did not predict an aided command's frequency for when it lands, as `rx_tick`
+  does, so every delay it tested acted three periods (3 ms) longer. The full receiver always had
+  the lead, which is why its runs below showed no difference between the IMUs.
+
+**Filtering, and the rate it takes** (`trksim --aid-imu`: the IMU as samples, a sample late
+through LPF1, at the P4 0.2 ms later and held, with the high-g channel's noise of 1.13 Hz/s a
+sample). Slips in the hotshot's boost, of 260 satellite-runs:
+
+| Feed | Design, 33 dB-Hz | Design, 32 | Quiet loops, 36 | Quiet loops, 33 | Quiet loops, 32 |
+|---|---|---|---|---|---|
+| 1920 Hz, raw | 0 | 0 | 0 | 0 | 0 |
+| 960 Hz, raw | 0 | 0 | 0 | 2 | 196 |
+| 960 Hz, 50 Hz low-pass on the P4 | 0 | 0 | 36 | 317 | 966 |
+| 960 Hz, mean of 8 samples | 2 | 21 | 85 | 400 | 1270 |
+| 960 Hz, predicted to now | 0 | 0 | 0 | 0 | 32 |
+| 480 Hz, raw | 0 | 0 | 9 | 155 | 433 |
+| 480 Hz, 50 Hz low-pass on the P4 | 2 | 50 | 97 | 414 | 1234 |
+| 480 Hz, predicted to now | 0 | 0 | 0 | 0 | 35 |
+
+- **Don't filter.** The loops never see the IMU's noise: they integrate the feed-forward twice
+  before it becomes phase, and the high-g channel's noise at 960 Hz comes out at about 0.002° of
+  phase. A filter only adds delay, which is what the burnout punishes: a 50 Hz low-pass (3 ms) or a
+  mean of 8 samples makes slips where raw samples make none, most of all for the quiet loops.
+- **A slower rate wants the opposite: each sample predicted forward.** Its delay is known (a sample
+  through LPF1, then the transport), so the P4 can carry the latest sample to now along the slope
+  of the last two. At 480 Hz that matches 1920 Hz raw down to 33 dB-Hz, quiet loops included.
+- **The quiet loops come back into play** at 1920 Hz or with the prediction: they ride the hotshot's
+  burn as cleanly as the design down to 33 dB-Hz. In the full receiver, with the board's IMU at
+  960 Hz, they already gave the lowest vertical velocity on the B1C files: 0.09 m/s at 32.2 dB-Hz on
+  the hotshot, against the design's 0.17. That reopens the gated profile's question, and the design
+  stays until it is decided.
 
 **Through the whole receiver** (`gnssrx` on the B1C files, the design, pilots by moments). Each cell:
 GPS satellites whose PLL let go from ignition to 2.5 s past burnout (unlocked satellite-seconds);
@@ -1225,8 +1254,9 @@ vertical velocity rms, m/s:
 - **The high-g range doesn't matter here**: ±64 and ±256 g give the same runs. ±256 g has a coarser
   LSB (10.4 mg) but, by the datasheet's %FS, less nonlinearity at these loads.
 
-For the board: run the accelerometer at 960 Hz or faster (1920 Hz is the margin), read both
-channels, and take their offsets on the pad.
+For the board: any rate from 480 to 1920 Hz carries the design, raw, with no filter on the P4. Read
+both channels and take their offsets on the pad. If the quiet loops are to carry the burn, run
+1920 Hz, or predict the samples forward.
 
 ### Limits
 
