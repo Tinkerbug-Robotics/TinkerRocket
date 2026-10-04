@@ -451,7 +451,7 @@ Validates sensor rates, frame integrity, timestamp health, and data completeness
 
 ### CI/CD
 
-Fourteen GitHub Actions workflows run automatically, each path-filtered to what it covers:
+Fifteen GitHub Actions workflows run automatically, each path-filtered to what it covers:
 
 | Workflow | What it does |
 |----------|--------------|
@@ -468,7 +468,8 @@ Fourteen GitHub Actions workflows run automatically, each path-filtered to what 
 | **pages.yml** | Publishes the browser-based analysis tool to GitHub Pages on pushes to `main`. Builds `Data_Analysis/webtool/payload/` rather than shipping it — it is gitignored, and a committed copy would drift from the source the browser actually runs |
 | **wire-codes.yml** | Fails on duplicate BLE command numbers — the dispatch is a first-match chain, so a duplicate silently makes the later handler dead code |
 | **hardware.yml** | Every symbol the schematic marks `on_board` must have a footprint in the layout, and every footprint's `(path …)` must lead back to a symbol with its reference — on changes to `hardware/`. `kicad-cli pcb drc --schematic-parity` sees neither, because it looks footprints up by reference. #833 got as far as a fab-ready V10 whose flight-battery positive terminal reached nothing but a floating pour; on 2026-09-28 three tinker-base footprints with broken paths passed DRC, and the next Update PCB replaced them with fresh copies off the board edge, every track to them left dangling |
-| **docs.yml** | Fails if a generated section map or the protocol reference disagrees with its source, or if the prose contradicts it — broken links, a stale ESP-IDF version, a missing workflow, a wrong struct size. The only workflow with **no path filter**: it runs on every push and PR, because docs drift as a side effect of changes anywhere |
+| **ci-gate.yml** | The one check branch protection requires on `main`. Not path-filtered: on every PR it waits for whichever other checks the head commit triggered and fails if any failed, so auto-merge waits for all of CI. Requiring the real checks instead would strand any PR that does not trigger one of them. Re-running a failed check does not re-run the gate; re-run it too |
+| **docs.yml** | Fails if a generated section map or the protocol reference disagrees with its source, or if the prose contradicts it — broken links, a stale ESP-IDF version, a missing workflow, a wrong struct size. Like `ci-gate.yml` it has **no path filter**: it runs on every push and PR, because docs drift as a side effect of changes anywhere |
 
 ## Communication Protocols
 
