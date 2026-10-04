@@ -1,0 +1,191 @@
+(footprint "FIL_SRF3225TP"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "Bourns SRF3225TP shielded common-mode choke for DC power lines, 3.2 x 2.5 x 2.2 mm body, Bourns recommended layout (4.4 x 3.5 overall, 2.3 column gap, 0.8 row gap: 1.05 x 1.35 pads). Pads 1-2 and 4-3 are the two windings, dots on 1 and 4 (https://www.bourns.com/docs/Product-Datasheets/SRF3225TP.pdf)")
+	(tags "common mode choke filter power line Bourns SRF3225TP")
+	(property "Reference" "REF**"
+		(at 0 -2.6 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "a21c44d9-d59d-44b5-aa14-7acaaaa4da0d")
+		(effects
+			(font
+				(size 0.64 0.64)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "FIL_SRF3225TP"
+		(at 0 2.6 0)
+		(layer "F.Fab")
+		(uuid "52f43568-2bf5-4ae6-98f4-71f5436a6a99")
+		(effects
+			(font
+				(size 0.64 0.64)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" "https://www.bourns.com/docs/Product-Datasheets/SRF3225TP.pdf"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "180dfaf2-a7d0-497f-9f25-4ae29645d036")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "c405ec0a-9345-4784-9ac2-6942e374fbcc")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(attr smd)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -0.95 -1.36)
+		(end 0.95 -1.36)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "f3ca69bb-1862-48d1-a8e5-15bd5207bc70")
+	)
+	(fp_line
+		(start -0.95 1.36)
+		(end 0.95 1.36)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "944a4eda-39b5-47e6-9794-588a95f37e4f")
+	)
+	(fp_line
+		(start -2.45 -2.0)
+		(end 2.45 -2.0)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "1aec896d-853f-4dd4-8e7b-c4ddf80adb8c")
+	)
+	(fp_line
+		(start 2.45 -2.0)
+		(end 2.45 2.0)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "8cf6293f-6962-4f6f-9725-c30d50c30e00")
+	)
+	(fp_line
+		(start 2.45 2.0)
+		(end -2.45 2.0)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "d30696ac-5000-4cd0-8644-e99011895541")
+	)
+	(fp_line
+		(start -2.45 2.0)
+		(end -2.45 -2.0)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "3e29e7d9-011d-4705-b066-0bc2694cbf83")
+	)
+	(fp_line
+		(start -1.6 -1.25)
+		(end 1.6 -1.25)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "5cf915ee-910e-4c8b-b586-6787a9a54791")
+	)
+	(fp_line
+		(start 1.6 -1.25)
+		(end 1.6 1.25)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "2c34f37c-e73e-4cb7-b639-a001ad995770")
+	)
+	(fp_line
+		(start 1.6 1.25)
+		(end -1.6 1.25)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "81213ff0-6f18-4aa5-9faa-3a83b055676d")
+	)
+	(fp_line
+		(start -1.6 1.25)
+		(end -1.6 -1.25)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "4fe660cf-4aa3-4e7e-8dd5-7055b64dfb99")
+	)
+	(pad "1" smd rect
+		(at -1.675 1.075)
+		(size 1.05 1.35)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "b0087d4f-6db8-4bb1-ad71-a6907f34a7cb")
+	)
+	(pad "2" smd rect
+		(at 1.675 1.075)
+		(size 1.05 1.35)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "24dd4770-630b-4813-90a3-340bdbcf1a25")
+	)
+	(pad "3" smd rect
+		(at 1.675 -1.075)
+		(size 1.05 1.35)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "9f0cbd97-951d-4a8c-9a6a-22b8ef5e2df6")
+	)
+	(pad "4" smd rect
+		(at -1.675 -1.075)
+		(size 1.05 1.35)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "d56967a4-e2f2-44bf-bc14-867d93d20ac3")
+	)
+	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/FIL_SRF3225TP.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

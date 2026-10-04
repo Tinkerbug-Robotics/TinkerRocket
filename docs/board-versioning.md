@@ -35,6 +35,7 @@ gnss-sam10m8-18mm-hv-v3.0.0
 base-station-v5.0.0                          hardware/legacy/
 gnss-px1105r-18mm-highpower-ext-ant-v2.0.0   hardware/legacy/; the Space Bug; V3 laid out, not yet tagged
 servo-adapter-v1.0.0                         hardware/legacy/
+gnss-sdr-dev-v0.0.0                          the GNSS SDR development board; ordered 2026-10-04
 ```
 
 Per-board prefixes because the boards revise independently. The format matches
@@ -193,11 +194,28 @@ left over from before is now ignored and can be deleted.
 
 ## Current state
 
+**2026-10-04 — gnss-sdr-dev v0.0.0, ordered.** The GNSS SDR development board:
+L1 and L5 front ends, an ECP5 FPGA and the ESP32-P4, 8 layers (JLC08161H-2116),
+80 × 60 mm. It is the board's first fabrication, so it stays at 0.0.0 and the
+title block and silkscreen read V0. Ordered from JLCPCB on 2026-10-04.
+
+The package was plotted from the owner's 2026-10-03 05:30 save, committed as
+7029917e, which carries the tag. The tag's board file is the plotted one, byte
+for byte.
+
+DRC at tagging (`--severity-all --schematic-parity`): 0 errors, 0 unconnected,
+0 parity, and 5 silkscreen and library warnings. `tools/check_board_parity.py`
+passes with all 276 board symbols linked. The stored zone fills are a kicad-cli
+fixed point. Fabrication and assembly constraints that do not fit on the board
+live in its `FABRICATION-NOTES.md`.
+
 **2026-09-29 — gnss-px1105r-18mm-highpower-ext-ant V3, laid out, not yet
 tagged.** The Space Bug redone on 6 layers (JLC06161H-3313) for cost, after V2
 (8 layers) was ordered. Copper changed and V2 was fabricated, so this is a major
 bump: the next fabrication is tagged `gnss-px1105r-18mm-highpower-ext-ant-v3.0.0`.
 The title block, silkscreen and sheet title blocks already read V3.
+On 2026-10-01 the parts were re-placed to match the Space Bug M8T and the board
+was routed again; nothing has been fabricated since V2, so it stays V3.
 
 **2026-09-29 — gnss-px1105r-18mm-highpower-ext-ant v2.0.0, ordered.** The
 folder holds a new 8-layer board, the Space Bug: the same receiver with its own

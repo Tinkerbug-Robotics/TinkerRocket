@@ -1103,7 +1103,7 @@
 			(roundrect_rratio 0.5)
 			(net "unconnected-(U5-AADET_N-Pad8)")
 			(pinfunction "AADET_N_8")
-			(pintype "output")
+			(pintype "output+no_connect")
 			(uuid "5263711f-5b18-4cdb-94d7-c815acf78873")
 		)
 		(pad "9" smd roundrect
@@ -1123,7 +1123,7 @@
 			(roundrect_rratio 0.5)
 			(net "unconnected-(U5-RESET_N-Pad10)")
 			(pinfunction "RESET_N_10")
-			(pintype "input")
+			(pintype "input+no_connect")
 			(uuid "32af945b-6860-4caf-9079-0edc821fe19a")
 		)
 		(pad "11" smd roundrect
@@ -1133,7 +1133,7 @@
 			(roundrect_rratio 0.5)
 			(net "unconnected-(U5-EX_ANT-Pad11)")
 			(pinfunction "EX_ANT_11")
-			(pintype "bidirectional")
+			(pintype "bidirectional+no_connect")
 			(uuid "647e688a-a2ea-45d7-b970-7d39937d642d")
 		)
 		(pad "12" smd rect
@@ -6682,7 +6682,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "unconnected-(J6-SBU1-PadA8)")
 			(pinfunction "SBU1_A8")
-			(pintype "bidirectional")
+			(pintype "bidirectional+no_connect")
 			(solder_mask_margin 0.05)
 			(uuid "40e1e82f-84c3-4232-8713-55be1fa29ea9")
 		)
@@ -6742,7 +6742,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "unconnected-(J6-SBU2-PadB8)")
 			(pinfunction "SBU2_B8")
-			(pintype "bidirectional")
+			(pintype "bidirectional+no_connect")
 			(solder_mask_margin 0.05)
 			(uuid "2fc86fd0-8252-4d68-8f37-e29d2c4b0792")
 		)
@@ -11613,7 +11613,7 @@
 			(layers "F.Cu" "F.Paste")
 			(net "unconnected-(U15-SPICS1-Pad28)")
 			(pinfunction "SPICS1_28")
-			(pintype "bidirectional")
+			(pintype "bidirectional+no_connect")
 			(uuid "55b32075-b572-4c07-9dad-1530f6d4e08f")
 		)
 		(pad "29" smd rect
@@ -11622,7 +11622,7 @@
 			(layers "F.Cu" "F.Paste")
 			(net "OC_VDD_SPI")
 			(pinfunction "VDD_SPI_29")
-			(pintype "power_in")
+			(pintype "power_out")
 			(uuid "9ce68b44-8d57-4d66-8dfb-96481ae896b2")
 		)
 		(pad "30" smd rect
@@ -11685,7 +11685,7 @@
 			(layers "F.Cu" "F.Paste")
 			(net "unconnected-(U15-SPICLK_N-Pad36)")
 			(pinfunction "SPICLK_N_36")
-			(pintype "bidirectional")
+			(pintype "bidirectional+no_connect")
 			(uuid "c871b73c-7b0a-4536-ab43-06af82da6ab2")
 		)
 		(pad "37" smd rect
@@ -11694,7 +11694,7 @@
 			(layers "F.Cu" "F.Paste")
 			(net "unconnected-(U15-SPICLK_P-Pad37)")
 			(pinfunction "SPICLK_P_37")
-			(pintype "bidirectional")
+			(pintype "bidirectional+no_connect")
 			(uuid "5ea69817-da4a-41fc-8c6a-3923bd7dcce7")
 		)
 		(pad "38" smd rect
@@ -16545,7 +16545,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "GND")
 			(pinfunction "VSS_3")
-			(pintype "power_out")
+			(pintype "power_in")
 			(uuid "a9a087d8-1775-4457-a41e-68f4f3f981c9")
 		)
 		(pad "4" smd rect
@@ -16590,7 +16590,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "GND")
 			(pinfunction "VSS_8")
-			(pintype "power_out")
+			(pintype "power_in")
 			(uuid "a92d51b3-7cde-45a4-afe3-4f84678ae7b6")
 		)
 		(pad "9" smd rect
@@ -16599,7 +16599,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "GND")
 			(pinfunction "VSS_9")
-			(pintype "power_out")
+			(pintype "power_in")
 			(uuid "d22fcfcf-03f5-4210-b788-dc256bdf24eb")
 		)
 		(pad "10" smd rect
@@ -18760,7 +18760,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "GND")
 			(pinfunction "GND_9")
-			(pintype "power_out")
+			(pintype "power_in")
 			(uuid "c8219fde-4bdf-4fe2-9b98-23eaf70bfba6")
 		)
 		(pad "10" smd rect
@@ -18778,7 +18778,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "GND")
 			(pinfunction "GND_11")
-			(pintype "power_out")
+			(pintype "power_in")
 			(uuid "2d097146-4db0-4ad2-a0d0-e16e6c98dd2b")
 		)
 		(pad "12" smd rect
@@ -19229,7 +19229,7 @@
 				)
 			)
 		)
-		(property "Value" "GD5F1GQ5UEYIGR"
+		(property "Value" "GD5F2GQ5UEYIGR"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -19647,7 +19647,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "M_FLASH_CS")
 			(pinfunction "CS#_1")
-			(pintype "unspecified")
+			(pintype "input")
 			(uuid "4ea80f79-745b-41db-ba7d-bafe7ef672db")
 		)
 		(pad "2" smd rect
@@ -19674,7 +19674,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "GND")
 			(pinfunction "GND_4")
-			(pintype "power_out")
+			(pintype "power_in")
 			(uuid "1dac2fc1-dade-4380-b35e-3c0aa311dbe9")
 		)
 		(pad "5" smd rect
@@ -19719,7 +19719,7 @@
 			(layers "F.Cu" "F.Mask")
 			(net "GND")
 			(pinfunction "Pad_9")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "896d33e7-912e-4c03-ae05-19362a46b3d4")
 		)
 		(embedded_fonts no)
@@ -20567,7 +20567,7 @@
 		(units
 			(unit
 				(name "A")
-				(pins "1" "2" "3" "4" "9" "8" "7" "6" "5")
+				(pins "1" "2" "3" "4" "5" "8" "7" "6")
 			)
 		)
 		(attr smd)
@@ -23339,7 +23339,7 @@
 			(layers "F.Cu" "F.Paste")
 			(net "unconnected-(U32-SPICS1-Pad28)")
 			(pinfunction "SPICS1_28")
-			(pintype "bidirectional")
+			(pintype "bidirectional+no_connect")
 			(uuid "4c1186d8-37f5-44d9-bafb-061a82afc9c5")
 		)
 		(pad "29" smd rect
@@ -23348,7 +23348,7 @@
 			(layers "F.Cu" "F.Paste")
 			(net "FC_VDD_SPI")
 			(pinfunction "VDD_SPI_29")
-			(pintype "power_in")
+			(pintype "power_out")
 			(uuid "f183f07f-57b7-4e84-98d2-4d702ff617b0")
 		)
 		(pad "30" smd rect
@@ -23411,7 +23411,7 @@
 			(layers "F.Cu" "F.Paste")
 			(net "unconnected-(U32-SPICLK_N-Pad36)")
 			(pinfunction "SPICLK_N_36")
-			(pintype "bidirectional")
+			(pintype "bidirectional+no_connect")
 			(uuid "a8f004e2-d7c2-46e3-a132-5565fb792fc8")
 		)
 		(pad "37" smd rect
@@ -23420,7 +23420,7 @@
 			(layers "F.Cu" "F.Paste")
 			(net "unconnected-(U32-SPICLK_P-Pad37)")
 			(pinfunction "SPICLK_P_37")
-			(pintype "bidirectional")
+			(pintype "bidirectional+no_connect")
 			(uuid "810dbb91-55af-4404-abfe-bcdec9b9858d")
 		)
 		(pad "38" smd rect
@@ -29390,7 +29390,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "GND")
 			(pinfunction "GND_6")
-			(pintype "power_out")
+			(pintype "power_in")
 			(uuid "e5959ef0-83b7-4abc-bc6e-c2885bc7f7b2")
 		)
 		(pad "7" smd rect
@@ -29399,7 +29399,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "GND")
 			(pinfunction "GND_7")
-			(pintype "power_out")
+			(pintype "power_in")
 			(uuid "76b1054f-93ee-4568-91d7-7eb0b0993b4e")
 		)
 		(pad "8" smd rect
@@ -29417,7 +29417,7 @@
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(net "unconnected-(U2-INT2-Pad9)")
 			(pinfunction "INT2_9")
-			(pintype "output")
+			(pintype "output+no_connect")
 			(uuid "5281da06-00a3-488f-a8a5-7015fbd1201c")
 		)
 		(pad "10" smd rect
@@ -36898,7 +36898,7 @@
 			(roundrect_rratio 0.125)
 			(net "GND")
 			(pinfunction "PGND_16")
-			(pintype "power_in")
+			(pintype "passive")
 			(solder_mask_margin 0.05)
 			(uuid "b7e09be9-a36d-4ade-9198-b4136a593277")
 		)
@@ -41598,7 +41598,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_1")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "f02004f2-d4e9-4158-afca-72d06400a3e8")
 		)
 		(pad "2" smd rect
@@ -41607,7 +41607,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_2")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "d8f30816-c082-4878-a029-3431d8e83261")
 		)
 		(pad "3" smd rect
@@ -41616,7 +41616,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_3")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "ce4a3486-565a-4070-b9a9-781e511237dc")
 		)
 		(pad "4" smd rect
@@ -41625,7 +41625,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "Net-(Q5-C)")
 			(pinfunction "GATE_4")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "471cfc50-1ae0-49e1-acc6-42bb64d6ffe1")
 		)
 		(pad "5" smd rect
@@ -41634,7 +41634,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO1_EXT")
 			(pinfunction "DRAIN_5")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "cf630e9f-b6a5-4887-a749-440936f2b83c")
 		)
 		(pad "5" smd rect
@@ -41643,7 +41643,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO1_EXT")
 			(pinfunction "DRAIN_5")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "b858a2d0-8ba8-4ca7-8b89-ecc4972180d3")
 		)
 		(pad "6" smd rect
@@ -41652,7 +41652,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO1_EXT")
 			(pinfunction "DRAIN_6")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "fb649ae6-d92b-4317-9649-52807f9d159e")
 		)
 		(pad "7" smd rect
@@ -41661,7 +41661,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO1_EXT")
 			(pinfunction "DRAIN_7")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "f85b0644-e202-4e84-b3eb-e06f9b8e96c6")
 		)
 		(pad "8" smd rect
@@ -41670,7 +41670,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO1_EXT")
 			(pinfunction "DRAIN_8")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "43b57ba9-177f-4895-8e49-d327b829344b")
 		)
 		(embedded_fonts no)
@@ -42268,16 +42268,15 @@
 			)
 		)
 	)
-	(footprint "Footprints:L_XGL4020_4.0x4.0mm"
+	(footprint "Footprints:IND_SRP4020FA-2R2M"
 		(layer "B.Cu")
 		(uuid "6c43acf2-4760-452c-808f-bdd8c01b3cb0")
 		(at 80.55 133.16 90)
-		(descr "Coilcraft XGL4020 shielded power inductor, 4.0x4.0x2.1mm; land per Coilcraft doc 1529: pads 0.98x3.4mm, 2.37mm gap")
-		(tags "inductor XGL4020 Coilcraft")
+		(descr "Bourns SRP4020FA shielded power inductor, 4.1x4.1x1.9mm, bottom terminals 0.88x3.4mm with a 1.6mm gap; land per the Bourns SRP4020FA datasheet Recommended Layout: pads 1.4x3.4mm, 3.8mm overall (1.0mm gap). Coilcraft XGL4020/XFL4020 terminals (0.82x3.25mm, 1.57mm gap) also sit fully on these pads")
+		(tags "inductor SRP4020FA Bourns")
 		(property "Reference" "L11"
-			(at 0 2.9 90)
+			(at 0 3.1 270)
 			(layer "B.SilkS")
-			(hide yes)
 			(uuid "6ed5830d-21d4-44c3-a80a-dcfa32b6f66f")
 			(effects
 				(font
@@ -42288,9 +42287,8 @@
 			)
 		)
 		(property "Value" "2.2 uH"
-			(at 0 -2.9 90)
+			(at 0 -3.1 270)
 			(layer "B.Fab")
-			(hide yes)
 			(uuid "9abbe367-50b6-457f-bf37-ea477e5f6b82")
 			(effects
 				(font
@@ -42301,7 +42299,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 0 0 90)
+			(at 0 0 270)
 			(layer "B.Fab")
 			(hide yes)
 			(uuid "8e41c512-2b17-4c47-9fde-2985d172b56a")
@@ -42313,7 +42311,7 @@
 			)
 		)
 		(property "Description" "Isat >= 4 A class"
-			(at 0 0 90)
+			(at 0 0 270)
 			(layer "B.Fab")
 			(hide yes)
 			(uuid "09379a47-84d0-409e-a69d-4e3c711dac4c")
@@ -42324,12 +42322,12 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "XGL4020-222ME"
-			(at 0 0 270)
+		(property "MPN" "SRP4020FA-2R2M"
+			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
 			(hide yes)
-			(uuid "941c77a2-1c0d-4080-8ac5-44a56941195e")
+			(uuid "bc2702a1-25fe-414f-9d47-43403e72b163")
 			(effects
 				(font
 					(size 1 1)
@@ -42338,12 +42336,12 @@
 				(justify mirror)
 			)
 		)
-		(property "Mfr" "Coilcraft"
-			(at 0 0 270)
+		(property "Mfr" "Bourns"
+			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
 			(hide yes)
-			(uuid "db533660-e6f1-4e9a-8856-ea716f37bc21")
+			(uuid "ad4abe39-4791-40a6-9935-1286d0cefc82")
 			(effects
 				(font
 					(size 1 1)
@@ -42364,8 +42362,8 @@
 		(attr smd)
 		(duplicate_pad_numbers_are_jumpers no)
 		(fp_line
-			(start -2.1 -2.1)
-			(end 2.1 -2.1)
+			(start -2.16 -2.16)
+			(end 2.16 -2.16)
 			(stroke
 				(width 0.12)
 				(type solid)
@@ -42374,8 +42372,8 @@
 			(uuid "c650e251-b301-4faa-b2a2-12ed55cf577f")
 		)
 		(fp_line
-			(start -2.1 2.1)
-			(end 2.1 2.1)
+			(start -2.16 2.16)
+			(end 2.16 2.16)
 			(stroke
 				(width 0.12)
 				(type solid)
@@ -42395,18 +42393,8 @@
 			(uuid "d96cfa80-d272-4d9f-be84-ba68ff4cca78")
 		)
 		(fp_line
-			(start 2 -2)
-			(end -2 -2)
-			(stroke
-				(width 0.1)
-				(type solid)
-			)
-			(layer "B.Fab")
-			(uuid "41fe5b85-80af-4c2a-98ce-2ee444be7803")
-		)
-		(fp_line
-			(start -2 -2)
-			(end -2 2)
+			(start 2.05 -2.05)
+			(end -2.05 -2.05)
 			(stroke
 				(width 0.1)
 				(type solid)
@@ -42415,18 +42403,18 @@
 			(uuid "8b6ac628-ecb8-4d6b-8642-6f78439c0105")
 		)
 		(fp_line
-			(start 2 2)
-			(end 2 -2)
+			(start -2.05 -2.05)
+			(end -2.05 2.05)
 			(stroke
 				(width 0.1)
 				(type solid)
 			)
 			(layer "B.Fab")
-			(uuid "53f1ecae-17b2-4249-9725-07b5b0bf8e17")
+			(uuid "41fe5b85-80af-4c2a-98ce-2ee444be7803")
 		)
 		(fp_line
-			(start -2 2)
-			(end 2 2)
+			(start 2.05 2.05)
+			(end 2.05 -2.05)
 			(stroke
 				(width 0.1)
 				(type solid)
@@ -42434,24 +42422,34 @@
 			(layer "B.Fab")
 			(uuid "c6aff883-1372-4806-b726-7cb513119ce4")
 		)
+		(fp_line
+			(start -2.05 2.05)
+			(end 2.05 2.05)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "B.Fab")
+			(uuid "53f1ecae-17b2-4249-9725-07b5b0bf8e17")
+		)
 		(pad "1" smd rect
-			(at -1.675 0 90)
-			(size 0.98 3.4)
+			(at -1.2 0 90)
+			(size 1.4 3.4)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "SCAP_SW")
 			(pintype "passive")
 			(uuid "860f8efa-adee-4a70-bb38-ca1db29d9be5")
 		)
 		(pad "2" smd rect
-			(at 1.675 0 90)
-			(size 0.98 3.4)
+			(at 1.2 0 90)
+			(size 1.4 3.4)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "V_SCAP")
 			(pintype "passive")
 			(uuid "f4830c07-478e-42d2-ab77-e8066288a727")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../3dmodels/L_XGL4020_4.0x4.0mm.step"
+		(model "${KIPRJMOD}/../3dmodels/IND_SRP4020FA-2R2M.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -42816,7 +42814,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_Terminal")
 			(pinfunction "S_1")
-			(pintype "bidirectional")
+			(pintype "passive")
 			(uuid "9fcd9f63-6a00-4efc-9a4a-c7636aa59352")
 		)
 		(pad "2" smd rect
@@ -42825,7 +42823,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_Terminal")
 			(pinfunction "S_2")
-			(pintype "bidirectional")
+			(pintype "passive")
 			(uuid "30b21723-48e4-454f-bea7-1fb85a6f7281")
 		)
 		(pad "3" smd rect
@@ -42843,7 +42841,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "GND")
 			(pinfunction "G_4")
-			(pintype "bidirectional")
+			(pintype "passive")
 			(uuid "e3e47461-370b-42e9-9461-ba37ebb4b19a")
 		)
 		(pad "5" smd rect
@@ -42852,7 +42850,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_J8")
 			(pinfunction "D_5")
-			(pintype "input")
+			(pintype "passive")
 			(uuid "f7eb31c2-c9c3-40db-bdc7-e72597f7b682")
 		)
 		(pad "6" smd rect
@@ -42861,7 +42859,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_J8")
 			(pinfunction "D_6")
-			(pintype "input")
+			(pintype "passive")
 			(uuid "2827e06d-5615-438d-982f-0374a974d01e")
 		)
 		(pad "7" smd rect
@@ -42870,7 +42868,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_J8")
 			(pinfunction "D_7")
-			(pintype "input")
+			(pintype "passive")
 			(uuid "1171ab11-6241-48df-89fe-aa2cb7a5d6e1")
 		)
 		(pad "8" smd rect
@@ -45268,7 +45266,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_1")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "e96751b9-2549-4cb2-8f85-7b149c620962")
 		)
 		(pad "2" smd rect
@@ -45277,7 +45275,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_2")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "1d7432b9-6ac8-4d3d-ae58-d5cbfad036f0")
 		)
 		(pad "3" smd rect
@@ -45286,7 +45284,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_3")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "585ac164-302d-4422-a80f-34448c481846")
 		)
 		(pad "4" smd rect
@@ -45295,7 +45293,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "Net-(Q3-C)")
 			(pinfunction "GATE_4")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "cbba63e3-d1b2-4952-95b8-aa409f586f69")
 		)
 		(pad "5" smd rect
@@ -45304,7 +45302,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO2_EXT")
 			(pinfunction "DRAIN_5")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "64ac5753-3865-4435-a473-5df998053bfa")
 		)
 		(pad "5" smd rect
@@ -45313,7 +45311,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO2_EXT")
 			(pinfunction "DRAIN_5")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "54c9f558-b9de-47fa-af7b-548e2740a510")
 		)
 		(pad "6" smd rect
@@ -45322,7 +45320,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO2_EXT")
 			(pinfunction "DRAIN_6")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "91284e8b-e746-4891-b2ce-c1c6b6184001")
 		)
 		(pad "7" smd rect
@@ -45331,7 +45329,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO2_EXT")
 			(pinfunction "DRAIN_7")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "c3110641-4728-4c1e-bf5c-463c77ab637e")
 		)
 		(pad "8" smd rect
@@ -45340,7 +45338,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO2_EXT")
 			(pinfunction "DRAIN_8")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "674e4266-0482-48e3-9f14-54f23ab7491f")
 		)
 		(embedded_fonts no)
@@ -46099,7 +46097,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_1")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "bd47703a-c35b-4c04-919a-cecd75732194")
 		)
 		(pad "2" smd rect
@@ -46108,7 +46106,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_2")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "d2cd5776-25e9-441d-9f7a-deb3f93b4dba")
 		)
 		(pad "3" smd rect
@@ -46117,7 +46115,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_3")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "f606e433-5eef-40db-865b-520a03d00cc0")
 		)
 		(pad "4" smd rect
@@ -46126,7 +46124,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "Net-(Q4-C)")
 			(pinfunction "GATE_4")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "479c1cfc-060b-43d0-a4ad-674216924992")
 		)
 		(pad "5" smd rect
@@ -46135,7 +46133,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO3_EXT")
 			(pinfunction "DRAIN_5")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "af7cdf1b-292c-4e2e-ac44-cd07432d0317")
 		)
 		(pad "5" smd rect
@@ -46144,7 +46142,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO3_EXT")
 			(pinfunction "DRAIN_5")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "1a2ea795-6525-44f4-ad47-1dd4ccab3306")
 		)
 		(pad "6" smd rect
@@ -46153,7 +46151,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO3_EXT")
 			(pinfunction "DRAIN_6")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "ee98cc03-5e5c-41ff-a44d-42e76c8209f0")
 		)
 		(pad "7" smd rect
@@ -46162,7 +46160,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO3_EXT")
 			(pinfunction "DRAIN_7")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "f971724a-84cc-4207-a3a6-b82f51f4c069")
 		)
 		(pad "8" smd rect
@@ -46171,7 +46169,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO3_EXT")
 			(pinfunction "DRAIN_8")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "998fedda-f923-412c-b324-602f6b1010b4")
 		)
 		(embedded_fonts no)
@@ -46926,7 +46924,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "unconnected-(U16-DIO3-Pad18)")
 			(pinfunction "DIO3_18")
-			(pintype "bidirectional")
+			(pintype "bidirectional+no_connect")
 			(uuid "e7d00171-8e1d-466e-9ea9-7a46b31c1fff")
 		)
 		(pad "19" smd rect
@@ -50667,7 +50665,7 @@
 			(layers "B.Cu" "B.Mask")
 			(net "unconnected-(U23-ALERT-Pad3)")
 			(pinfunction "ALERT_3")
-			(pintype "output")
+			(pintype "output+no_connect")
 			(uuid "3745853a-2d6b-4982-90f6-e3dcbc5283b6")
 		)
 		(pad "4" smd rect
@@ -51730,7 +51728,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "RT0402BRD07100KL"
+		(property "MPN" "RC0402FR-07100KL"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -54846,7 +54844,7 @@
 			(roundrect_rratio 0.25)
 			(net "GND")
 			(pinfunction "ST_9")
-			(pintype "output")
+			(pintype "passive")
 			(uuid "243ac851-5855-4d4d-8760-42cce964bb42")
 		)
 		(pad "10" smd roundrect
@@ -54961,7 +54959,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "CL05C391JB5NNNC"
+		(property "MPN" "GRM1555C1H391JA01D"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -56204,7 +56202,7 @@
 			(roundrect_rratio 0.25)
 			(net "+3V3")
 			(pinfunction "VOUT_10")
-			(pintype "power_out")
+			(pintype "passive")
 			(uuid "126c171a-7b3f-4175-a7d4-e5656d8269f9")
 		)
 		(pad "11" smd roundrect
@@ -56992,7 +56990,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_1")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "1571c557-634a-4dd2-9140-0a69107cd7cb")
 		)
 		(pad "2" smd rect
@@ -57001,7 +56999,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_2")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "f8b4c6b8-839e-4be2-a111-9560b252938f")
 		)
 		(pad "3" smd rect
@@ -57010,7 +57008,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "VBAT_CON")
 			(pinfunction "SOURCE_3")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "1f3f4a01-5161-4174-84b2-5c3be7ca1a2f")
 		)
 		(pad "4" smd rect
@@ -57019,7 +57017,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "Net-(Q6-C)")
 			(pinfunction "GATE_4")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "da715b07-ecbe-4262-80a9-e30f88433895")
 		)
 		(pad "5" smd rect
@@ -57028,7 +57026,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO4_EXT")
 			(pinfunction "DRAIN_5")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "c807c3b7-fe7c-42bb-a8d9-5c316af67368")
 		)
 		(pad "5" smd rect
@@ -57037,7 +57035,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO4_EXT")
 			(pinfunction "DRAIN_5")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "37a9ff06-3c8a-4c94-89f4-b49bb4f0e17e")
 		)
 		(pad "6" smd rect
@@ -57046,7 +57044,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO4_EXT")
 			(pinfunction "DRAIN_6")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "42f422ee-0054-497b-8470-4d67f99c6b1d")
 		)
 		(pad "7" smd rect
@@ -57055,7 +57053,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO4_EXT")
 			(pinfunction "DRAIN_7")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "b5b9dba3-cf9c-43bd-8892-d4ea4d5c3331")
 		)
 		(pad "8" smd rect
@@ -57064,7 +57062,7 @@
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO4_EXT")
 			(pinfunction "DRAIN_8")
-			(pintype "unspecified")
+			(pintype "passive")
 			(uuid "632f7800-9df2-49ca-9bb9-dc3ef1c61e7a")
 		)
 		(embedded_fonts no)

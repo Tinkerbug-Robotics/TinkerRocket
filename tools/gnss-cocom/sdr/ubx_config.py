@@ -273,6 +273,10 @@ def main() -> int:
                          "injects is GPS L1. At 20 Hz with four "
                          "constellations on, an F9P delivered only ~8%% of its RAWX epochs "
                          "(2026-09-27); this is the lighter load")
+    ap.add_argument("--gnss-ids", metavar="IDS",
+                    help="M8 (legacy) only: comma-separated u-blox gnssIds to track, all others off "
+                         "(0 GPS, 1 SBAS, 2 Galileo, 3 BeiDou, 5 QZSS, 6 GLONASS; at most three major "
+                         "systems), e.g. 0,2,3 for a SignalSim GPS + Galileo + BeiDou B1I file. RAM only")
     ap.add_argument("--mon-comms", action="store_true",
                     help="also output UBX-MON-COMMS about once a second: the port's transmit "
                          "buffer usage and peak, pending and skipped bytes, and the TX-buffer-"
@@ -344,13 +348,15 @@ def main() -> int:
             if args.persist:
                 print("  note: --persist has no effect on a legacy part here; "
                       "CFG-CFG\n     would be needed to save, and is not sent.")
-            if args.gps_only:
-                # CFG-GNSS (0x06 0x3E): read the table and flip only the enable bits, GPS
-                # on and everything else off. u-blox rates the M8 at 18 Hz on one GNSS
-                # and 10 Hz on several. The receiver restarts its GNSS on the change.
+            if args.gps_only or args.gnss_ids:
+                # CFG-GNSS (0x06 0x3E): read the table and flip only the enable bits, the
+                # wanted gnssIds on (GPS alone for --gps-only) and everything else off. u-blox
+                # rates the M8 at 18 Hz on one GNSS and 10 Hz on several, and at most three
+                # major systems at once. The receiver restarts its GNSS on the change.
+                want = {0} if args.gps_only else {int(g) for g in args.gnss_ids.split(",")}
                 gn = poll(ser, CLS_CFG, 0x3E)
                 if gn is None or len(gn) < 4:
-                    print("  !! no CFG-GNSS answer; GPS-only not applied")
+                    print("  !! no CFG-GNSS answer; GNSS selection not applied")
                     return 1
                 tbl = bytearray(gn)
                 for k in range(tbl[3]):
@@ -358,7 +364,11 @@ def main() -> int:
                     if len(tbl) < o + 8:
                         break
                     fl = struct.unpack_from("<I", tbl, o + 4)[0]
-                    struct.pack_into("<I", tbl, o + 4, (fl | 1) if tbl[o] == 0 else (fl & ~1))
+                    # enabling a system whose sigCfgMask is 0 NAKs the whole message: give it
+                    # its L1-band signal (0x01: L1C/A, E1OS, B1I) -- BeiDou ships with none
+                    if tbl[o] in want and ((fl >> 16) & 0xFF) == 0:
+                        fl |= 0x01 << 16
+                    struct.pack_into("<I", tbl, o + 4, (fl | 1) if tbl[o] in want else (fl & ~1))
                 ser.write(frame(CLS_CFG, 0x3E, bytes(tbl)))
                 time.sleep(1.5)
                 back = poll(ser, CLS_CFG, 0x3E)

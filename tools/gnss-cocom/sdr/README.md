@@ -44,9 +44,22 @@ variable at a time.
 | `blanking.py` | Tests whether C/N&#8320; blanking tracks the gate or free-runs |
 | `report_text.html` | **The export-limit report's prose — edit this**, then run `build_report.py` |
 | `boost_report_text.html` | **The boost-dynamics report's prose**, same workflow |
-| `build_report.py` | Assembles `report.html` and `boost_report.html` from the text, `receivers.json` and the figures |
+| `cn0_boost_report_text.html` | **The boost-versus-signal report's prose** (PX1105R and NEO-M8T through both boosts, and both on the real sky), same workflow |
+| `plot_trajectories.py` | Altitude, speed and acceleration of the two boosts, from the scenario truth |
+| `cn0_figures.sh`, `plot_doppler_traces.py` | Each satellite's Doppler rate through a boost, dark while the receiver reports it: the report's trace figures, from the bench captures |
+| `plot_own_lag.py` | A SkyTraq receiver's own speed against the truth through a boost, over how many GPS channels it lists |
+| `px1105r_sky_log.py`, `sky_cn0.py`, `plot_sky_cn0.py` | The real-sky comparison: log the PX1105R on an outdoor antenna, C/N0 against elevation per receiver, the figure. The captures hold the antenna's position and stay in `captures/` |
+| `pair_watch.py` | Whether a SkyTraq receiver on the real sky tracks both members of a same-number GPS / BeiDou (or Galileo) pair |
+| `build_report.py` | Assembles `report.html`, `boost_report.html` and `cn0_boost_report.html` from the text, `receivers.json` and the figures |
 | `make_block_diagram.py` | Draws the rig block diagram used in the report |
 | `replot_all.py` | Regenerates every report figure, shading each at its own measured gate |
+| `regen_c8.py`, `c8_manifest.json` | Every IQ file the bench work kept, with its recipe and SHA-256: rebuilds one byte for byte, or proves its recipe on a short prefix, so `c8/` can be cleared without losing anything |
+| `hackrf_tx_ram/` | The buffered transmitter: `hackrf_transfer -t` with the file read ahead into memory, so the wide SignalSim files replay without disk underruns ([README](hackrf_tx_ram/README.md)) |
+| `px_run_ram.py`, `px_fly_ram.sh` | `px1105r_run.py` through `hackrf_tx_ram`, and SignalSim flights through it (narrow, wide or L5 band) |
+| `px_run_fed.py`, `c8_feeder.py` | The earlier fix: `hackrf_transfer` fed from a read-ahead pipe |
+| `tx_only.py` | Transmits a file exactly as a flight does with no receiver on the Mac, for underrun tests |
+| `caff_flights.sh` | The keep-awake A/B of 2026-10-01: wide traveler flights with the power assertions and powerd's events logged |
+| `signalsim/` | Configs and tools for the multi-GNSS SignalSim files; SignalSim itself is never in the repository ([README](signalsim/README.md)) |
 
 ## Quick start
 
