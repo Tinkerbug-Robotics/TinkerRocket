@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import signal
 import subprocess
@@ -50,6 +51,26 @@ from find_ublox import find_ublox                          # noqa: E402
 # transmitter and a failed one in the same breath.
 def tx_err_path(scenario):
     return f"/tmp/hackrf_tx_{scenario or 'probe'}.err"
+
+
+def keep_awake(seconds: float):
+    """Hold the Mac awake and user-active for a flight; None without caffeinate.
+
+    Idle and locked, macOS's powerd switches performance mode (Restricted <->
+    Unrestricted), and 2 of the 45 HackRF underruns in the 2026-09-30 study
+    (37 MB/s, 18.48 Msps) fell within 0.4 s of such a switch. A user-activity
+    assertion held for the whole flight removes the switches. -t is not
+    optional: without it caffeinate's -u (UserIsActive) lapses after 5 s.
+    Checked 2026-10-01 with pmset -g assertions: with -t 60 -w PID all five --
+    PreventUserIdleSystemSleep, PreventUserIdleDisplaySleep, PreventSystemSleep,
+    UserIsActive, PreventDiskIdle -- stay up, and caffeinate exits when the
+    process does.
+    """
+    if not shutil.which("caffeinate"):
+        return None
+    return subprocess.Popen(
+        ["caffeinate", "-dimsu", "-t", str(int(seconds) + 600), "-w", str(os.getpid())],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def list_candidate_ports():
@@ -224,6 +245,10 @@ def main() -> int:
     ap.add_argument("-x", "--gain", type=int, default=40, help="HackRF TX gain 0-47")
     ap.add_argument("--freq", type=int, default=1575420000)
     ap.add_argument("--rate", type=int, default=2600000)
+    ap.add_argument("--bb-filter", type=int, metavar="HZ",
+                    help="HackRF baseband filter (hackrf_transfer -b); left alone it follows the "
+                         "rate down to ~0.75x, which clips a SignalSim L1+B1I file (18.48 Msps) "
+                         "at its band edges -- use 20000000 there")
     ap.add_argument("--seconds", type=float, help="override capture length")
     ap.add_argument("--skip-preflight", action="store_true",
                     help="transmit without checking the receiver's output first")
@@ -268,6 +293,9 @@ def main() -> int:
         meta = json.loads(sc.read_text()) if sc.exists() else None
 
     dur = args.seconds or (meta["duration_s"] + 15 if meta else 120)
+    awake = keep_awake(dur + 60)          # the capture plus preflight, TX start and stop
+    print(f"# caffeinate pid {awake.pid}: awake and user-active until this run exits"
+          if awake else "# caffeinate not found: running without a keep-awake")
 
     if args.lc86 is not None and not args.listen_only and not args.skip_preflight:
         bad = preflight_lc86(args.port, args.lc86, args.cold_start, args.rtcm)
@@ -303,7 +331,7 @@ def main() -> int:
               f"{span}, gain {args.gain}")
         tx = start_tx(c8, args.freq, args.rate, args.gain,
                       tx_err_path(args.scenario),
-                      extra=("-B",))     # per-second buffer statistics: underruns show up
+                      extra=("-B",) + (("-b", str(args.bb_filter)) if args.bb_filter else ()))     # -B: per-second buffer statistics, underruns show up
         if tx is None:
             return 1
     else:
@@ -329,6 +357,7 @@ def main() -> int:
                 fh.write(f"0.000 # host: tx {c8.name} gain {args.gain}; port {args.port}\n")
             buf = bytearray()
             t0 = time.time()
+            last_rx = time.time()
             while time.time() - t0 < dur:
                 try:
                     chunk = ser.read(ser.in_waiting or 1)
@@ -341,9 +370,20 @@ def main() -> int:
                     ser = reopen(ser, args, exc, fh, time.time() - t0)
                     if ser is None:
                         break
+                    last_rx = time.time()
                     continue
                 if not chunk:
+                    # The tap can also go silent with no error at all (the NEO-M8T's
+                    # CP2102, twice on 2026-09-28/29, the receiver fine afterwards).
+                    # A streaming receiver is never quiet this long (the M8T at 18 Hz sends
+                    # ~36 frames/s), so reopen; 1 s keeps a stall in the boost short.
+                    if time.time() - last_rx > 1.0:
+                        ser = reopen(ser, args, "no data for 1 s", fh, time.time() - t0)
+                        if ser is None:
+                            break
+                        last_rx = time.time()
                     continue
+                last_rx = time.time()
                 nbytes += len(chunk)
                 buf.extend(chunk)
                 for kind, data in _demux(buf, rtcm=args.lc86 is not None):
