@@ -53,13 +53,10 @@ GpsInsEKF::GpsInsEKF() {
     // -delta(altitude).  With g(h) = g0(1 - 2h/R) and h = -D, g(D) =
     // g0(1 + 2D/R), hence d(vdot_D)/d(D) = +2g0/R.
     //
-    // Kept rather than deleted, though the state propagation uses a CONSTANT G
-    // with no altitude dependence, so a gravity gradient that exists only in
-    // the Jacobian is inconsistent either way.  At +3.07e-6 s^-2 the time
-    // constant is ~570 s against a 60 s flight with baro and GNSS aiding, so
-    // this changes no flight outcome; it is fixed because a wrong sign in a
-    // covariance model is a trap for whoever reads it next.
-    Fs_[5][2]=+2.0f*G/EARTH_RADIUS;
+    // #1530: the propagation now uses WGS84 normal gravity, which carries this
+    // gradient, so the Jacobian and the state agree.  refreshGravity() keeps
+    // it at +2γ/R for the current γ; this is the value before the first fix.
+    Fs_[5][2]=+2.0f*g_mps2_/EARTH_RADIUS;
     Fs_[6][12]=-0.5f; Fs_[7][13]=-0.5f; Fs_[8][14]=-0.5f;
     Fs_[9][9]=-1.0f/aMarkovTau_s;
     Fs_[10][10]=-1.0f/aMarkovTau_s;
@@ -179,6 +176,7 @@ void GpsInsEKF::initCore(EkfIMUData imu_data,
 
     pEst_D_rrm_[0]=pMeas_D_rrm[0]; pEst_D_rrm_[1]=pMeas_D_rrm[1]; pEst_D_rrm_[2]=pMeas_D_rrm[2];
     vEst_NED_mps_[0]=vMeas_NED[0]; vEst_NED_mps_[1]=vMeas_NED[1]; vEst_NED_mps_[2]=vMeas_NED[2];
+    refreshGravity();
 
     // Coarse "assume stationary" seed: whatever the gyro reads at init IS the
     // bias. #508: that is unbounded — init while the vehicle is being handled or
@@ -284,7 +282,7 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
     bool accel_valid = use_ahrs_acc;
     if (accel_valid) {
         float sf_sq = aMeas[0]*aMeas[0] + aMeas[1]*aMeas[1] + aMeas[2]*aMeas[2];
-        float g = 9.807f;
+        const float g = G_NOMINAL;   // a window, not the mechanization (#1530)
         if (sf_sq < (0.5f*g)*(0.5f*g) || sf_sq > (1.5f*g)*(1.5f*g)) {
             accel_valid = false;
         }
@@ -315,8 +313,12 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
     for (int i=0;i<3;i++)
         wEst_B_rps_[i] = shock_hold_active_ ? 0.0f : (wMeas[i] - wBias_rps_[i]);
 
-    // 6. Compute gravity in body frame and accel estimate using current quaternion
+    // 6. Compute gravity in body frame and accel estimate using current quaternion.
+    //    #1530: WGS84 normal gravity at the current position estimate, so it
+    //    follows the propagated altitude through a GNSS outage.
+    refreshGravity();
     {
+        const float G = g_mps2_;
         float T_NED2B_local[3][3];
         Quat2DCM(T_NED2B_local, quat_BL_);
         float aGrav_B[3] = {T_NED2B_local[0][2]*G, T_NED2B_local[1][2]*G, T_NED2B_local[2][2]*G};
@@ -417,6 +419,7 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
         float T_NED2B_local[3][3];
         Quat2DCM(T_NED2B_local, quat_BL_);
         for (int i=0;i<3;i++) for (int j=0;j<3;j++) T_B2NED[j][i] = T_NED2B_local[i][j];
+        const float G = g_mps2_;
         float aGrav_B[3] = {T_NED2B_local[0][2]*G, T_NED2B_local[1][2]*G, T_NED2B_local[2][2]*G};
         for (int i=0;i<3;i++) {
             aEst_B_mps2_[i] = aMeas[i] + aGrav_B[i] - aBias_mps2_[i];
@@ -895,8 +898,17 @@ void GpsInsEKF::landedZeroVelocityUpdate(bool landed, uint32_t now_us) {
     zupt_next_us_ = now_us + ZUPT_INTERVAL_US;
 }
 
+void GpsInsEKF::refreshGravity() {
+    g_mps2_   = normalGravity(pEst_D_rrm_[0], pEst_D_rrm_[2]);
+    Fs_[5][2] = +2.0f*g_mps2_/EARTH_RADIUS;
+}
+
 void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
-    // Compute gravity in body frame from current quaternion
+    // Compute gravity in body frame from current quaternion.  #1530: the SAME
+    // gravity the propagation uses.  Levelling against a different constant
+    // would park the difference (0.03 m/s² on the equator against 9.807) in
+    // the accel bias, which then acts as a real acceleration all flight.
+    const float G = g_mps2_;
     float T_NED2B[3][3];
     Quat2DCM(T_NED2B, quat_BL_);
     float aGrav_B[3] = {T_NED2B[0][2]*G, T_NED2B[1][2]*G, T_NED2B[2][2]*G};
@@ -1062,7 +1074,7 @@ void GpsInsEKF::setMagReference(const float ned_uT[3]) {
 
 void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3],
                               bool accel_is_gravity) {
-    // Body-down unit vector from the current attitude (= aGrav_B / G); this is
+    // Body-down unit vector from the current attitude (= aGrav_B / g); this is
     // both the leveling reference and the heading-error axis (H below).
     float T_NED2B[3][3];
     Quat2DCM(T_NED2B, quat_BL_);

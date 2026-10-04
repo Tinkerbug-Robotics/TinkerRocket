@@ -10,12 +10,16 @@ static constexpr double LON_DEG = -118.4;
 static constexpr double ALT_M   = 100.0;
 static constexpr double LAT_RAD = LAT_DEG * M_PI / 180.0;
 static constexpr double LON_RAD = LON_DEG * M_PI / 180.0;
+// #1530: the specific force at rest at the fixture site, from the same WGS84
+// model the filter mechanizes (9.7964, not 9.807).  A constant here would be
+// a 0.011 m/s² acceleration the filter has to explain.
+static const double G_SITE = GpsInsEKF::normalGravity(LAT_RAD, ALT_M);
 
 // Build stationary IMU data: gravity in FRD body frame pointing nose-up (+Z = down = +9.81)
 static EkfIMUData makeStationaryIMU(uint32_t time_us) {
     EkfIMUData imu;
     imu.time_us = time_us;
-    imu.acc_x = 0.0; imu.acc_y = 0.0; imu.acc_z = 9.807;
+    imu.acc_x = 0.0; imu.acc_y = 0.0; imu.acc_z = G_SITE;
     imu.gyro_x = 0.0; imu.gyro_y = 0.0; imu.gyro_z = 0.0;
     return imu;
 }
@@ -45,7 +49,7 @@ static EkfMagData makeStationaryMag(uint32_t time_us) {
 static EkfIMUData makeNoseUpIMU(uint32_t time_us) {
     EkfIMUData imu;
     imu.time_us = time_us;
-    imu.acc_x = 9.807; imu.acc_y = 0.0; imu.acc_z = 0.0;   // specific force up = +X (nose)
+    imu.acc_x = G_SITE; imu.acc_y = 0.0; imu.acc_z = 0.0;  // specific force up = +X (nose)
     imu.gyro_x = 0.0; imu.gyro_y = 0.0; imu.gyro_z = 0.0;
     return imu;
 }
@@ -817,7 +821,7 @@ TEST_F(EKFTest, BaroJosephGoldenTrajectory) {
         EkfIMUData imu = makeStationaryIMU(t);
         imu.acc_x = 0.3f * std::sin(0.004 * i);
         imu.acc_y = 0.2f * std::cos(0.003 * i);
-        imu.acc_z = 9.807 + 0.5 * std::sin(0.002 * i);
+        imu.acc_z = G_SITE + 0.5 * std::sin(0.002 * i);   // #1530: was 9.807
         imu.gyro_z = 3.0f * std::sin(0.001 * i);   // slow yaw wobble, dps
         EkfGNSSDataLLA gnss = makeStationaryGNSS(t);
         gnss.alt_m = ALT_M + 1.5 * std::sin(0.0005 * i);
@@ -1934,3 +1938,106 @@ TEST(EKFBiasInjection, TheGyroBiasClampStillApplies) {
     EXPECT_NEAR(gb[1], -max_rps, 1e-6f);
 }
 
+
+// ---------- #1530: WGS84 normal gravity ----------
+//
+// The filter used to mechanize a constant 9.807 m/s².  Gravity falls by
+// 3.09e-6 s⁻² per metre, 0.25 m/s² at 80 km, and through a GNSS outage the
+// filter integrated that as a real acceleration.  Mirrors the Python
+// TcEkf tests (tests/test_tc_ekf_raw.py in tinkerrocket-sim).
+
+namespace gravity1530 {
+
+constexpr uint32_t G_TICK_US = 2000;
+
+static EkfGNSSDataLLA fixAt(uint32_t t, double lat_rad, double alt_m) {
+    EkfGNSSDataLLA g = makeStationaryGNSS(t);
+    g.lat_rad = lat_rad;
+    g.alt_m   = alt_m;
+    return g;
+}
+
+static EkfIMUData noseUp(uint32_t t, double ax_mps2) {
+    EkfIMUData d = makeNoseUpIMU(t);
+    d.acc_x = ax_mps2;
+    return d;
+}
+
+}  // namespace gravity1530
+
+TEST(EkfGravity1530, NormalGravityMatchesThePublishedValues) {
+    // NIMA TR8350.2: γ_e and γ_p, and the free-air gradient on the equator.
+    EXPECT_NEAR(GpsInsEKF::normalGravity(0.0, 0.0),       9.7803253359, 2e-6);
+    EXPECT_NEAR(GpsInsEKF::normalGravity(M_PI / 2, 0.0),  9.8321849378, 2e-6);
+    const double grad = (GpsInsEKF::normalGravity(0.0, 1000.0)
+                       - GpsInsEKF::normalGravity(0.0, 0.0)) / 1000.0;
+    EXPECT_NEAR(grad, -3.0877e-6, 5e-9);
+    // And the size of what a constant got wrong at the top of a space shot.
+    EXPECT_NEAR(GpsInsEKF::normalGravity(0.0, 80000.0), 9.5379, 1e-3);
+}
+
+TEST(EkfGravity1530, TheFilterMechanizesGravityAtItsOwnPosition) {
+    using namespace gravity1530;
+    GpsInsEKF ekf;
+    const double lat = 38.0 * M_PI / 180.0;
+    ekf.init(noseUp(0, 9.8), fixAt(0, lat, 30000.0), makeNoseUpMag(0));
+    EXPECT_FLOAT_EQ(ekf.getGravity(), GpsInsEKF::normalGravity(lat, 30000.0));
+    EXPECT_NEAR(ekf.getGravity(), 9.7076, 1e-3);   // not 9.807
+}
+
+TEST(EkfGravity1530, FreeFallFrom80kmFollowsWgs84Gravity) {
+    // A GNSS outage at 80 km: the fix is frozen at its init stamp so it is
+    // never fused again, accel/mag levelling is off (in flight), and the IMU
+    // reads zero specific force.  Truth is the same free fall integrated
+    // against WGS84 gravity.  A constant 9.807 ends ~430 m low after 60 s.
+    using namespace gravity1530;
+    const double lat = 0.0, h0 = 80000.0;
+    GpsInsEKF ekf;
+    ekf.init(noseUp(0, 0.0), fixAt(0, lat, h0), makeNoseUpMag(0));
+
+    double h = h0, v_up = 0.0;
+    uint32_t t = 0;
+    const int n = 60 * 1000000 / (int)G_TICK_US;
+    for (int i = 0; i < n; i++) {
+        t += G_TICK_US;
+        ekf.update(false, noseUp(t, 0.0), fixAt(0, lat, h0), makeNoseUpMag(t));
+        // Truth: midpoint integration at a 10x finer step.
+        for (int k = 0; k < 10; k++) {
+            const double dt = G_TICK_US * 1e-7;
+            const double vm = v_up - 0.5 * dt * GpsInsEKF::normalGravity(lat, h);
+            h    += dt * vm;
+            v_up -= dt * GpsInsEKF::normalGravity(lat, h - 0.5 * dt * vm);
+        }
+    }
+
+    double pos[3]; ekf.getPosEst(pos);
+    float  vel[3]; ekf.getVelEst(vel);
+    EXPECT_NEAR(pos[2], h, 5.0) << "truth " << h << " m";
+    EXPECT_NEAR(-vel[2], v_up, 0.5);
+    // The constant it replaced would be far outside that.
+    const double h_const = h0 - 0.5 * 9.807 * 60.0 * 60.0;
+    EXPECT_GT(h - h_const, 300.0);
+    // And the gravity followed the altitude down.
+    EXPECT_NEAR(ekf.getGravity(), GpsInsEKF::normalGravity(lat, pos[2]), 1e-4);
+}
+
+TEST(EkfGravity1530, PadLevellingUsesTheMechanizationGravity) {
+    // On the equator the accelerometer at rest reads γ = 9.7803, 0.027 m/s²
+    // short of 9.807.  Levelling against 9.807 while propagating with γ
+    // would park that in the accel bias, where it then acts as a real
+    // acceleration all flight.  Referenced to the same γ, the bias stays 0.
+    using namespace gravity1530;
+    const double lat = 0.0, alt = 0.0;
+    const double g = GpsInsEKF::normalGravity(lat, alt);
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    ekf.init(noseUp(t, g), fixAt(t, lat, alt), makeNoseUpMag(t));
+    for (int i = 0; i < 30 * 500; i++) {
+        t += G_TICK_US;
+        ekf.update(true, noseUp(t, g), fixAt(t, lat, alt), makeNoseUpMag(t));
+    }
+    float ab[3]; ekf.getAccelBias(ab);
+    EXPECT_LT(std::fabs(ab[0]), 0.003f) << "nose-axis accel bias " << ab[0];
+    float ae[3]; ekf.getAccelEst(ae);
+    EXPECT_LT(std::fabs(ae[0]), 0.003f) << "residual acceleration " << ae[0];
+}

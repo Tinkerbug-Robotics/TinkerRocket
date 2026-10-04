@@ -359,6 +359,28 @@ public:
     void getCovAccelBias(float (&r)[3]) const { r[0]=P_[9][9]; r[1]=P_[10][10]; r[2]=P_[11][11]; }
     void getCovRotRateBias(float (&r)[3]) const { r[0]=P_[12][12]; r[1]=P_[13][13]; r[2]=P_[14][14]; }
 
+    // ─── #1530: WGS84 normal gravity ────────────────────────────────
+    //
+    // Magnitude of normal gravity (m/s², positive down) at geodetic latitude
+    // lat_rad and ellipsoidal height h_m: Somigliana's formula (NIMA TR8350.2
+    // eq. 4-1) with the second-order height expansion (eq. 4-3).  The next
+    // term is ~1e-4 m/s² at 80 km.  The small north component of the normal
+    // gravity vector (7e-4 m/s² at 80 km, 45°) is left out.
+    // Float throughout: it runs every tick on a single-precision FPU, and
+    // float holds it to ~1e-6 m/s².
+    static float normalGravity(double lat_rad, double h_m) {
+        const float sl = std::sin((float)lat_rad);
+        const float s2 = sl * sl;
+        const float h  = (float)h_m;
+        const float g0 = (float)WGS84_GE * (1.0f + (float)WGS84_K * s2)
+                       / std::sqrt(1.0f - (float)ECC2 * s2);
+        const float c1 = (2.0f / EARTH_RADIUS)
+                       * ((float)(1.0 + WGS84_F + WGS84_M) - (float)(2.0 * WGS84_F) * s2);
+        return g0 * (1.0f - c1 * h + 3.0f * h * h / (EARTH_RADIUS * EARTH_RADIUS));
+    }
+    /// Gravity the filter is currently mechanizing with (m/s²).
+    float getGravity() const { return g_mps2_; }
+
     // ─── #508: gyro-bias health, for the pre-launch go/no-go ───────
     //
     // These exist because accel/mag updates are gated OFF for the whole flight:
@@ -519,6 +541,8 @@ private:
     void timeUpdate();
     void measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]);
     void accelMeasUpdate(const float aMeas[3]);
+    /// #1530: set g_mps2_ and the gravity gradient Fs_[5][2] from pEst_D_rrm_.
+    void refreshGravity();
     /// #1304: `accel_is_gravity` says whether aMeas may be used as the tilt
     /// reference.  When false the tilt comes from the filter's own attitude
     /// instead, so the mag no longer needs the accelerometer to be in its
@@ -681,7 +705,15 @@ private:
     float Fs_[15][15];
 
     // Constants
-    static constexpr float G = 9.807f;
+    // Nominal 1 g, for the accel-validity window only.  The mechanization and
+    // the levelling reference use g_mps2_ (#1530).
+    static constexpr float G_NOMINAL = 9.807f;
+    // WGS84 normal-gravity parameters (NIMA TR8350.2): equatorial gravity,
+    // Somigliana constant, flattening, and m = w²a²b/GM.
+    static constexpr double WGS84_GE = 9.7803253359;
+    static constexpr double WGS84_K  = 0.00193185265241;
+    static constexpr double WGS84_F  = 1.0 / 298.257223563;
+    static constexpr double WGS84_M  = 0.00344978650684;
     static constexpr double ECC2 = 0.0066943799901;
     static constexpr float EARTH_RADIUS = 6378137.0f;
     static constexpr float RAD2DEG = 180.0f / M_PI;
@@ -689,6 +721,12 @@ private:
 
     // Baro measurement noise variance (2m sigma)^2
     float R_baro_ = 4.0f;
+
+    // #1530: WGS84 normal gravity at the current position estimate, refreshed
+    // every tick by refreshGravity().  Used by the propagation, the levelling
+    // reference (accelMeasUpdate) and the gravity gradient Fs_[5][2] alike, so
+    // the pad levelling cannot park a gravity mismatch in the accel bias.
+    float g_mps2_ = G_NOMINAL;
 
     // GPS measurement noise scale (1.0 = nominal, >1 during recovery)
     float gpsNoiseScale_ = 1.0f;
